@@ -114,7 +114,17 @@ impl X11App {
                     backdrop.width, backdrop.height, self.width, self.height
                 )
             });
-            return Ok(());
+            // A resized window keeps the last snapshot where it still covers the scene (until the
+            // settled capture lands), so the translucent fill never shows raw transparent pixels.
+            let is_window = self.surface_backdrop.is_none();
+            if !is_window {
+                return Ok(());
+            }
+            let (w, h) = (backdrop.width.min(self.width), backdrop.height.min(self.height));
+            let Some(xrender) = self.xrender.as_mut() else {
+                return Ok(());
+            };
+            return unsafe { xrender.blit_argb32_over(backdrop.pixmap, 0, 0, w, h) };
         }
         let Some(xrender) = self.xrender.as_mut() else {
             trace_paint(|| "no-xrender".to_string());

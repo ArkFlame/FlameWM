@@ -330,7 +330,27 @@ impl X11App {
                     // state (recreate backbuffer, mark Full, shape follows).
                     // No XMoveResizeWindow echo: the native move is owned by
                     // SurfaceController::move_resize only.
-                    let configure = unsafe { event.xconfigure };
+                    let mut configure = unsafe { event.xconfigure };
+                    // Coalesce: a drag queues many ConfigureNotify; only the newest size is adopted.
+                    while unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } > 0 {
+                        let mut peeked = MaybeUninit::<XEvent>::uninit();
+                        // SAFETY: XPeekEvent initializes the supplied XEvent storage.
+                        unsafe { XPeekEvent(self.display, peeked.as_mut_ptr()) };
+                        // SAFETY: XPeekEvent wrote a complete XEvent into the storage.
+                        let peeked = unsafe { peeked.assume_init() };
+                        // SAFETY: type_ and xany are the common XEvent prefix.
+                        if unsafe { peeked.type_ } != CONFIGURE_NOTIFY
+                            // SAFETY: xany is valid after checking the common prefix.
+                            || unsafe { peeked.xany.window } != self.window
+                        {
+                            break;
+                        }
+                        let mut queued = MaybeUninit::<XEvent>::uninit();
+                        // SAFETY: XNextEvent removes the exact event XPeekEvent reported.
+                        unsafe { XNextEvent(self.display, queued.as_mut_ptr()) };
+                        // SAFETY: the removed event was checked as CONFIGURE_NOTIFY above.
+                        configure = unsafe { queued.assume_init().xconfigure };
+                    }
                     let width = configure.width.max(1) as u32;
                     let height = configure.height.max(1) as u32;
                     if self.window_backdrop.is_some() {
@@ -846,11 +866,21 @@ impl X11App {
             unsafe { self.sync_raw_press_observer(press_watch) };
             // XNextEvent can leave already-read events in Xlib's queue after
             // single_event returns. Avoid blocking on the fd reactor in that case.
-            let timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
+            let mut timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
                 .then_some(std::time::Duration::ZERO);
+            // A throttled window snapshot wakes at its trailing edge, even when nothing else arrives.
+            if let Some(deadline) = self.backdrop_deadline {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                timeout = Some(timeout.map_or(remaining, |t| t.min(remaining)));
+            }
             reactor
                 .dispatch(timeout)
                 .map_err(|error| error.to_string())?;
+            if self.backdrop_deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                self.backdrop_deadline = None;
+                self.mark_window_backdrop_stale();
+                self.mark_full();
+            }
             on_reactor(document)?;
             // Pending geometry request (if any) is applied before the damage
             // gate so the resized window repaints in this same wake.

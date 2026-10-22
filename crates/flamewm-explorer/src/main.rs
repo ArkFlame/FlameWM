@@ -1751,6 +1751,12 @@ fn packaged_root()->PathBuf {
 }
 fn main(){if let Err(error)=run(){eprintln!("flamewm-explorer: {error}");std::process::exit(1);}}
 fn run()->Result<(),String>{
+    flamewm_profiler::init_process("flamewm-explorer");
+    if flamewm_profiler::enabled() {
+        // No reactor timer in this process: a plain thread drains the span window every interval.
+        let interval=std::time::Duration::from_secs(flamewm_profiler::profile_interval_secs());
+        std::thread::spawn(move||loop{std::thread::sleep(interval);let _=flamewm_profiler::report_window();});
+    }
     let args=std::env::args_os().skip(1).collect::<Vec<_>>();
     if args.iter().any(|a|matches!(a.to_string_lossy().as_ref(),"--help"|"-h")) {println!("FlameWM Explorer — usage: flamewm-explorer [DIRECTORY]");return Ok(());}
     let path=args.first().map(PathBuf::from).unwrap_or_else(home_dir);
@@ -1830,6 +1836,12 @@ fn run()->Result<(),String>{
         },notifications,
         move |event,document|{
             let mut app=event_app.borrow_mut();
+            let _event_span=flamewm_profiler::start(match event {
+                UiControllerEvent::Resized{..}=>"explorer.event.resized",
+                UiControllerEvent::Action(_)=>"explorer.event.action",
+                UiControllerEvent::Key(_)=>"explorer.event.key",
+                _=>"explorer.event.other",
+            });
             match event {
                 UiControllerEvent::Action(action)=>{app.event(action);app.sync_scroll();},
                 UiControllerEvent::Key(key)=>{app.key(key);app.sync_scroll();},
@@ -1845,9 +1857,15 @@ fn run()->Result<(),String>{
         },
         move |document|{
             let mut app=wake_app.borrow_mut();
-            if let Some(snapshot)=wake_snapshots.borrow_mut().take(){app.theme=ExplorerTheme::from_snapshot(&snapshot);}
-            while let Ok(message)=results.try_recv(){app.wake(message);}
+            let snapshot_changed=match wake_snapshots.borrow_mut().take(){Some(snapshot)=>{app.theme=ExplorerTheme::from_snapshot(&snapshot);true},None=>false};
+            // Every X wake (a pure window move included) lands here. Project only when something this
+            // closure owns changed: a worker message, a settings snapshot, the list origin, or a running glide.
+            let origin=app.scroll_origin;
+            let mut changed=snapshot_changed;
+            while let Ok(message)=results.try_recv(){app.wake(message);changed=true;}
             app.sync_scroll();
+            changed|=app.scroll_origin!=origin||app.glide.is_animating(Instant::now());
+            if !changed {return Ok(());}
             app.project(document)
         },
     )

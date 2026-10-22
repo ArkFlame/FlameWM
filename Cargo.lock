@@ -300,6 +300,7 @@ dependencies = [
  "flamewm-dbus-reactor",
  "flamewm-desktop-core",
  "flamewm-image-core",
+ "flamewm-profiler",
  "flamewm-reactor",
  "flamewm-render-compiler",
  "flamewm-ui-core",

@@ -4,6 +4,8 @@
 //! lives in its own slot so the popup mask (which keys off `surface_backdrop`) keeps its shape.
 //! Paint falls back to this slot only when no popup backdrop is installed.
 
+use std::time::{Duration, Instant};
+
 use flamewm_image_core::RgbaImage;
 
 use super::X11App;
@@ -11,12 +13,19 @@ use crate::backdrop::{WindowBackdrop, blurred_argb_words, recapture_due, wallpap
 use crate::xlib::*;
 use crate::xlib_ext::XTranslateCoordinates;
 
+/// Smallest interval between two window snapshot captures. A drag re-captures at most this
+/// often and a trailing capture lands once the pointer stops (see `arm_backdrop_deadline`).
+pub(crate) const CAPTURE_INTERVAL: Duration = Duration::from_millis(250);
+
 /// Per-window state: the spec, the decoded wallpaper cache, and whether a capture is due.
 #[derive(Debug)]
 pub(crate) struct WindowBackdropState {
     pub(crate) spec: WindowBackdrop,
     natural: Option<RgbaImage>,
+    /// Wallpaper composed over the whole root for (root w, root h, fit); a capture crops it.
+    canvas: Option<(u32, u32, String, RgbaImage)>,
     pub(crate) stale: bool,
+    last_capture: Option<Instant>,
 }
 
 impl WindowBackdropState {
@@ -24,7 +33,9 @@ impl WindowBackdropState {
         Self {
             spec,
             natural: None,
+            canvas: None,
             stale: true,
+            last_capture: None,
         }
     }
 }
@@ -56,9 +67,18 @@ impl X11App {
         if !recapture_due(snapshot_size, (self.width, self.height), queued) {
             return;
         }
-        if let Some(state) = self.window_backdrop.as_mut() {
-            state.stale = false;
+        let now = Instant::now();
+        let Some(state) = self.window_backdrop.as_mut() else {
+            return;
+        };
+        if let Some(last) = state.last_capture.filter(|last| now.duration_since(*last) < CAPTURE_INTERVAL) {
+            // Throttled: keep the snapshot stale and wake again at the trailing edge.
+            self.backdrop_deadline = Some(last + CAPTURE_INTERVAL);
+            return;
         }
+        state.stale = false;
+        state.last_capture = Some(now);
+        self.backdrop_deadline = None;
         if let Err(error) = unsafe { self.capture_window_backdrop() } {
             eprintln!("FLAMEWM_WINDOW_BACKDROP degraded reason={error}");
             self.clear_window_backdrop();
@@ -67,6 +87,7 @@ impl X11App {
 
     /// Wallpaper under the window's root rect, blurred and uploaded as the window snapshot.
     unsafe fn capture_window_backdrop(&mut self) -> Result<(), String> {
+        let _capture_span = flamewm_profiler::start("render.backdrop.capture");
         let (root_w, root_h) = (
             unsafe { XDisplayWidth(self.display, self.screen) }.max(0) as u32,
             unsafe { XDisplayHeight(self.display, self.screen) }.max(0) as u32,
@@ -102,9 +123,30 @@ impl X11App {
             .natural
             .as_ref()
             .ok_or("window backdrop: wallpaper missing")?;
-        let snapshot =
-            flamewm_image_core::wallpaper::compose_region(natural, root_w, root_h, fit, anchor)
-                .ok_or("window backdrop: wallpaper region unavailable")?;
+        let compose_span = flamewm_profiler::start("render.backdrop.compose");
+        // The composed root canvas depends only on the wallpaper, the root size and the fit, so it is
+        // built once and each capture crops it (the per-pixel resample is the expensive part).
+        let canvas_fresh = state
+            .canvas
+            .as_ref()
+            .is_some_and(|(w, h, f, _)| (*w, *h, f) == (root_w, root_h, &state.spec.fit));
+        if !canvas_fresh {
+            let full = flamewm_image_core::wallpaper::compose_region(
+                natural,
+                root_w,
+                root_h,
+                fit,
+                (0, 0, root_w, root_h),
+            )
+            .ok_or("window backdrop: wallpaper canvas unavailable")?;
+            state.canvas = Some((root_w, root_h, state.spec.fit.clone(), full));
+        }
+        let snapshot = crop_rgba(
+            &state.canvas.as_ref().expect("canvas built above").3,
+            anchor,
+        )
+        .ok_or("window backdrop: wallpaper region unavailable")?;
+        drop(compose_span);
         let shift = (
             i64::from(rx) - i64::from(anchor.0),
             i64::from(ry) - i64::from(anchor.1),
@@ -117,11 +159,15 @@ impl X11App {
             shift,
             (width, height),
         );
+        let blur_span = flamewm_profiler::start("render.backdrop.blur");
         let words = blurred_argb_words(width, height, pixels, 0, state.spec.blur_percent);
+        drop(blur_span);
         if words.len() != width as usize * height as usize {
             return Err("window backdrop: snapshot size mismatch".to_string());
         }
+        let upload_span = flamewm_profiler::start("render.backdrop.upload");
         let pixmap = unsafe { self.upload_argb_pixmap(&words, width, height)? };
+        drop(upload_span);
         if let Some(old) =
             self.window_backdrop_pixmap
                 .replace(super::surface_backdrop::SurfaceBackdrop {
@@ -142,3 +188,21 @@ impl X11App {
         }
     }
 }
+
+/// Crop `rect` out of a root-sized RGBA image; `None` when the rect leaves the image.
+fn crop_rgba(image: &RgbaImage, rect: (i32, i32, u32, u32)) -> Option<RgbaImage> {
+    let (x, y, w, h) = rect;
+    let (x, y) = (u32::try_from(x).ok()?, u32::try_from(y).ok()?);
+    if x.checked_add(w)? > image.width || y.checked_add(h)? > image.height {
+        return None;
+    }
+    let stride = image.width as usize * 4;
+    let row = w as usize * 4;
+    let mut pixels = Vec::with_capacity(row * h as usize);
+    for line in y as usize..(y + h) as usize {
+        let start = line * stride + x as usize * 4;
+        pixels.extend_from_slice(&image.pixels[start..start + row]);
+    }
+    Some(RgbaImage { width: w, height: h, pixels })
+}
+

@@ -54,12 +54,16 @@ fn image_lru_touch(lru: &mut VecDeque<ExternalImageKey>, key: ExternalImageKey) 
 }
 
 fn external_content_hash(rgba8: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    hash ^= rgba8.len() as u64;
-    hash = hash.wrapping_mul(0x100000001b3);
-    for &byte in rgba8 {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x100000001b3);
+    // Word-at-a-time FNV-style mix: one multiply per 8 bytes instead of per byte.
+    const PRIME: u64 = 0x100000001b3;
+    let mut hash: u64 = 0xcbf29ce484222325 ^ rgba8.len() as u64;
+    let mut chunks = rgba8.chunks_exact(8);
+    for chunk in &mut chunks {
+        let word = u64::from_le_bytes(chunk.try_into().expect("8-byte chunk"));
+        hash = (hash ^ word).wrapping_mul(PRIME);
+    }
+    for &byte in chunks.remainder() {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(PRIME);
     }
     hash
 }
