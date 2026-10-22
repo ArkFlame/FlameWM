@@ -85,6 +85,7 @@ button:active { background:var(--hover); }
 .dialog-button { height:31px; padding:0 12px; border-radius:6px; }
 .dialog-button:hover { background:var(--hover); }
 
+.list-surface { position:absolute; }
 .selection-rectangle { position:absolute; background:var(--accent-soft); border:1px solid var(--accent); border-radius:3px; }
 
 /* Header dividers: 1px light overlay between cells, with a wider invisible grip centred on each line. */

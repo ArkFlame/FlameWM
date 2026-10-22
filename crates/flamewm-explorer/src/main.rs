@@ -859,6 +859,14 @@ impl ExplorerApp {
     }
     fn spawn_terminal(&mut self) {
         let directory=self.model.tab().path().to_path_buf();
+        // FlameWM's own terminal first (next to this binary, else on PATH); the system terminal is the fallback.
+        if let Some(binary)=flamewm_terminal_binary() {
+            self.model.status=match Command::new(&binary).arg("--working-directory").arg(&directory).spawn() {
+                Ok(_)=>"Opened FlameWM Terminal".into(),
+                Err(e)=>format!("Terminal failed: {e}"),
+            };
+            return;
+        }
         for program in ["x-terminal-emulator","konsole","xfce4-terminal","xterm"] {
             match Command::new(program).current_dir(&directory).spawn() {
                 Ok(_)=>return,
@@ -922,7 +930,10 @@ impl ExplorerApp {
             Some((sources,cut))=>{
                 // A system cut becomes the in-app cut, so completion and partial-retry follow the normal path.
                 if cut {self.model.clipboard=Some((sources.clone(),true));}
-                self.start_transfer(sources,cut);
+                // Copying into the folder the items already live in is a duplicate: a fresh `name (copy)`, no prompt.
+                let here=self.model.tab().path().to_path_buf();
+                if !cut && sources.iter().all(|s|s.parent()==Some(here.as_path())) {self.start_duplicate(sources);}
+                else {self.start_transfer(sources,cut);}
             },
             None=>self.model.status="Nothing to paste".into(),
         }
@@ -944,7 +955,7 @@ impl ExplorerApp {
             return;
         }
         match cmd {
-            "open"=>if let Some(path)=selected {self.open(&path)},
+            "open"=>if let Some(index)=self.context_place {self.activate_place(index)} else if let Some(path)=selected {self.open(&path)},
             "openwith"=>if let Some(path)=selected {self.request_open_with(path)},
             "copy"|"cut"=>{
                 if !paths.is_empty() {
@@ -969,9 +980,14 @@ impl ExplorerApp {
                 // Ark opens a destination dialog; no implicit overwrites in Explorer.
                 self.spawn_ark(&["--batch","--dialog"],path);
             },
-            "newtab"=>if self.model.tabs.len()<5 {self.model.new_tab();self.scan();},
+            "newtab"=>if self.model.tabs.len()<5 {
+                // From the sidebar menu the new tab opens that place; from a file or background menu it repeats the folder.
+                let target=self.context_place_path();
+                self.model.new_tab();self.scan();
+                if let Some(path)=target {self.navigate(path);}
+            },
             "bookmark"=>{let path=self.model.tab().path().to_path_buf();match add_bookmark(&path,&home_dir()) {Ok(())=>{self.reload_places();self.model.status="Added to Places".into();},Err(e)=>self.model.status=format!("Bookmark failed: {e}")}},
-            "properties"=>if let Some(path)=selected {self.open_properties(path)},
+            "properties"=>if let Some(path)=self.context_place_path().or(selected) {self.open_properties(path)},
             "opencontaining"=>if let Some(path)=selected {self.open_containing(path)},
             "restore"=>if let Some(path)=selected {
                 if self.tx.send(WorkerJob::Restore{base:self.trash_base.clone(),stored:path}).is_ok() {
@@ -1740,6 +1756,12 @@ impl ExplorerApp {
                 doc.background("selection-rectangle",self.theme.selection_fill())?;
             }
         } else {doc.visible("selection-rectangle",false)?;}
+        // Empty list space under the rows is the background context surface (rubber band and background menu).
+        doc.visible("list-surface",true)?;
+        let surface_top=list_top(self.model.tabs.len()>1);
+        let surface_bottom=self.window.1-STATUS_STRIP_HEIGHT;
+        doc.position("list-surface",SIDEBAR_WIDTH,surface_top)?;
+        doc.size("list-surface",(self.window.0-SIDEBAR_WIDTH).max(1.0),(surface_bottom-surface_top).max(1.0))?;
         let status=if self.row_drag.as_ref().is_some_and(|drag|drag.dragging) {
             if let Some(folder)=self.drop_folder.as_deref() {
                 format!("Drop into {} · Move (Ctrl to copy)",folder.file_name().unwrap_or_default().to_string_lossy())
@@ -1779,6 +1801,8 @@ impl ExplorerApp {
                 match item {
                     "placerename"|"placeremove"=>self.context_place.is_some_and(|i|self.is_bookmark(i)),
                     "unmount"|"eject"=>self.context_place.is_some_and(|i|self.places.get(i).is_some_and(|p|p.removable && p.mounted())),
+                    "open"|"newtab"|"properties"=>self.context_place.is_some(),
+                    "emptytrash"=>self.context_place_path().is_some_and(|path|path==self.trash_base.join("files")),
                     _=>false,
                 }
             } else {match item {
@@ -2247,4 +2271,12 @@ fn forward_download(local:PathBuf,transfers:Receiver<TransferEvent>,tx:Sender<Wo
     }));
     let result=outcome.unwrap_or_else(|_|Err("Download failed internally".into()));
     send_wake(&mut wake,&tx,WorkerResult::RemoteDownloaded(result));
+}
+
+/// `flamewm-terminal` beside this executable, else the first match on PATH.
+fn flamewm_terminal_binary()->Option<PathBuf>{
+    let sibling=std::env::current_exe().ok().and_then(|exe|exe.parent().map(|dir|dir.join("flamewm-terminal")));
+    sibling.filter(|path|path.is_file()).or_else(||{
+        std::env::var_os("PATH")?.to_string_lossy().split(':').map(|dir|Path::new(dir).join("flamewm-terminal")).find(|path|path.is_file())
+    })
 }
