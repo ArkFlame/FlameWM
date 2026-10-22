@@ -1,4 +1,3 @@
-
 :root { --accent:#ef4048; --surface:#202326; --card:#272a2e; --line:#363b41; --sidebar:#1b1e20; --text:#f1f2f3; --muted:#9ca3ab; --accent-soft:#ef404830; }
 * { box-sizing:border-box; }
 html { width:100%; height:100%; }
@@ -9,17 +8,29 @@ button:active { background:#424950; }
 
 /* Flow chrome: fixed heights so the list geometry in main.rs matches exactly. */
 .toolbar { width:100%; height:45px; flex-grow:0; padding:0 10px; display:flex; flex-direction:row; align-items:center; gap:6px; background:var(--surface); }
-.tool { height:30px; min-width:30px; padding:0 9px; border-radius:6px; color:#dfe3e7; }
-.tool-sep { width:1px; height:20px; background:var(--line); }
-.address { justify-content:flex-start; height:30px; flex-grow:1; min-width:120px; padding:0 12px; display:flex; align-items:center; white-space:nowrap; overflow:hidden; background:#15181b; border:1px solid #4a5058; border-radius:6px; }
-.address:hover { border-color:var(--accent); }
+.tool { height:30px; min-width:30px; padding:0 7px; border-radius:6px; }
+.tool:hover { background:#353a41; }
+.tool-ico { width:16px; height:16px; flex-grow:0; }
+.tool-sep { width:1px; height:20px; flex-grow:0; background:var(--line); margin:0 4px; }
+.field { height:30px; padding:0 9px; gap:8px; border-radius:6px; background:#2a2e33; border:1px solid #3d434b; justify-content:flex-start; display:flex; flex-direction:row; align-items:center; overflow:hidden; }
+.field:hover { border-color:var(--accent); background:#2a2e33; }
+.address { flex-grow:1; min-width:120px; }
+.search { width:230px; flex-grow:0; color:#9ca3ab; }
+.field-ico { width:16px; height:16px; flex-grow:0; }
+.field-text { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; font-size:13px; }
 .tabs { width:100%; height:36px; flex-grow:0; display:flex; flex-direction:row; align-items:center; padding-left:10px; gap:2px; background:var(--surface); }
 .tab { min-width:96px; max-width:164px; height:28px; padding:0 10px; white-space:nowrap; overflow:hidden; background:#252a2f; border-radius:6px; }
 .tab-add,.tab-close { height:28px; width:30px; }
 .body { width:100%; flex-grow:1; min-height:0; display:flex; flex-direction:row; overflow:hidden; }
-.places { flex-grow:0; width:201px; padding:10px 8px; display:flex; flex-direction:column; gap:2px; overflow:hidden; background:var(--sidebar); }
-.section { height:24px; padding-left:10px; color:var(--muted); font-size:11px; }
-.place { justify-content:flex-start; width:100%; height:30px; padding:0 10px; display:flex; align-items:center; overflow:hidden; white-space:nowrap; border-radius:6px; }
+.places { flex-grow:0; width:201px; padding:8px 8px; display:flex; flex-direction:column; gap:1px; overflow:hidden; background:var(--sidebar); }
+.section { height:26px; padding-left:10px; color:var(--muted); font-size:12px; }
+.place-row { width:100%; height:30px; flex-grow:0; display:flex; flex-direction:row; align-items:center; }
+.place { justify-content:flex-start; flex-grow:1; min-width:0; height:30px; padding:0 8px; gap:10px; display:flex; flex-direction:row; align-items:center; overflow:hidden; white-space:nowrap; border-radius:6px; }
+.place-ico { width:16px; height:16px; flex-grow:0; }
+.place-label { flex-grow:1; min-width:0; overflow:hidden; white-space:nowrap; }
+.place-dot { width:6px; height:6px; flex-grow:0; border-radius:3px; background:var(--accent); margin:0 4px 0 2px; }
+.place-act { width:26px; height:26px; flex-grow:0; border-radius:5px; }
+.act-ico { width:14px; height:14px; flex-grow:0; }
 .hairline { width:100%; height:1px; flex-grow:0; background:var(--line); }
 .vline { width:1px; flex-grow:0; background:var(--line); }
 .files { flex-grow:1; min-width:0; }
@@ -29,16 +40,21 @@ button:active { background:#424950; }
 .entry { justify-content:flex-start; position:absolute; height:35px; display:flex; flex-direction:row; align-items:center; overflow:hidden; border-radius:0px; }
 .entry:hover { background:var(--accent-soft); }
 .head { color:#c9ced4; font-size:12px; }
-.cell-name { flex-grow:1; min-width:0; padding-left:12px; white-space:nowrap; overflow:hidden; }
-.cell-mod { width:150px; min-width:150px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
+.cell-name { flex-grow:1; min-width:0; padding-left:14px; display:flex; flex-direction:row; align-items:center; gap:12px; white-space:nowrap; overflow:hidden; }
+.row-ico { width:18px; height:18px; flex-grow:0; }
+.name-text { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; }
+.cell-mod { width:120px; min-width:120px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
 .cell-size { width:100px; min-width:100px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
 .cell-kind { width:130px; min-width:130px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
 
-/* Status strip: message, then item/selection counts and free space. */
-.status { width:100%; height:30px; flex-grow:0; display:flex; flex-direction:row; align-items:center; gap:12px; padding:0 12px; background:var(--surface); color:#c3c9cf; font-size:11px; }
-.status-message { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; }
-.status-count { white-space:nowrap; overflow:hidden; }
+/* Status strip: item count, activity message, free space and a usage bar in the accent colour. */
+.status { width:100%; height:31px; flex-grow:0; display:flex; flex-direction:row; align-items:center; gap:12px; padding:0 14px; background:var(--surface); color:#c3c9cf; font-size:12px; }
+.status-count { white-space:nowrap; overflow:hidden; flex-grow:0; }
+.status-message { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; color:#aeb5bd; }
+.status-free { white-space:nowrap; overflow:hidden; flex-grow:0; color:#c3c9cf; }
 .job-progress { white-space:nowrap; overflow:hidden; }
+.usage-track { width:114px; height:4px; flex-grow:0; background:#3a3f46; border-radius:2px; }
+.usage-fill { width:0px; height:4px; background:var(--accent); border-radius:2px; }
 
 .context { position:absolute; top:105px; left:330px; width:210px; padding:5px; display:flex; flex-direction:column; background:#232629; border:1px solid #51565c; border-radius:11px; }
 .menu-row { justify-content:flex-start; width:198px; height:31px; padding-left:11px; border-radius:3px; }

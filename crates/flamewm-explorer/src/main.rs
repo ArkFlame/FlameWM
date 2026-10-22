@@ -43,8 +43,13 @@ const WHEEL_ROWS:isize=3;
 const SIDEBAR_WIDTH:f32=201.0;
 const DRAG_THRESHOLD_PX:f32=7.0;
 // Maximum window size; the actual size is clamped to 90% of the root (see `window_size`).
-const WINDOW_WIDTH:u32=1060;
-const WINDOW_HEIGHT:u32=720;
+const WINDOW_WIDTH:u32=1250;
+const WINDOW_HEIGHT:u32=740;
+/// Icon families compiled into the template; each slot toggles the one it needs (`pico-<slot>-<kind>`, `ico-<slot>-<kind>`).
+const PLACE_ICONS:[&str;11]=["home","desktop","documents","downloads","music","pictures","videos","trash","folder","drive","usb"];
+const ROW_ICONS:[&str;4]=["folder","pdf","source","file"];
+/// Width of the status-strip usage track (`.usage-track` in explorer.css).
+const USAGE_TRACK_WIDTH:f32=114.0;
 
 /// Window size: the maximum size, clamped to 90% of the root so small screens still fit.
 fn window_size(root:(u32,u32))->(u32,u32) {
@@ -54,14 +59,6 @@ fn window_size(root:(u32,u32))->(u32,u32) {
 fn header_top(tab_strip:bool)->f32 {TOOLBAR_HEIGHT+if tab_strip {TABBAR_HEIGHT} else {0.0}}
 /// Top of the first row, directly below the column header.
 fn list_top(tab_strip:bool)->f32 {header_top(tab_strip)+HEADER_HEIGHT}
-fn kind_label(entry:&Entry)->String {
-    if entry.directory {return "Folder".into();}
-    if entry.symlink {return "Link".into();}
-    match Path::new(&entry.name).extension().and_then(|e|e.to_str()) {
-        Some(ext) if !ext.is_empty()=>format!("{} file",ext.to_uppercase()),
-        _=>"File".into(),
-    }
-}
 const ICON_COLUMNS:usize=4;
 const ICON_WIDTH:f32=200.0;
 const ICON_HEIGHT:f32=28.0;
@@ -129,6 +126,10 @@ enum WorkerResult {
     DefaultSaved(Result<(), String>),
     BatchCompleted {report:BatchReport,action:&'static str,cut_sources:Option<Vec<PathBuf>>},
     Completed(Result<String,String>),
+    /// Unmounted removable filesystems from lsblk.
+    Devices(Vec<bookmarks::BlockDevice>),
+    /// Outcome of a udisks2 mount/unmount/eject, already worded for the status strip.
+    DeviceDone(Result<String,String>),
 }
 fn send_wake(wake:&mut UnixStream, result:&Sender<WorkerResult>, message:WorkerResult) {
     if result.send(message).is_ok() {let _=wake.write_all(&[1]);}
@@ -281,6 +282,8 @@ struct ExplorerApp {
     dialog:Option<Dialog>, ark:bool, search:Option<SearchWorker>, search_id:u64,
     search_rows:Option<Vec<Entry>>, watch:Option<DirWatch>, watched:Option<PathBuf>,
     context_place:Option<usize>, progress_total:u64, trash_base:PathBuf,
+    /// Removable filesystems that are present but unmounted; merged into the sidebar's Devices group.
+    unmounted:Vec<bookmarks::BlockDevice>,
     /// Wake channel for background threads (watcher, search, size). Set once in `run`.
     events:Option<(Sender<WorkerResult>,UnixStream)>,
 }
@@ -289,18 +292,28 @@ impl ExplorerApp {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
         let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,cancel:CancellationToken::new(),view:ViewMode::Details,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
-            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,events:None};
+            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None};
         app.reload_places();
         app
     }
     /// Built-in and bookmark places, plus the Trash folder just before mounted devices.
     fn reload_places(&mut self) {
         let home=home_dir();
-        let mut list=places(&home);
-        let trash=Place{name:"Trash".into(),path:self.trash_base.join("files"),removable:false,group:PlaceGroup::Devices};
-        let at=list.iter().position(|p|p.removable).unwrap_or(list.len());
+        let mut list=places(&home,&self.unmounted);
+        // Trash sits at the end of the Favorites group, as in the mock.
+        let trash=Place{name:"Trash".into(),path:self.trash_base.join("files"),removable:false,group:PlaceGroup::Favorites,icon:"trash",device:None};
+        let at=list.iter().rposition(|p|p.group==PlaceGroup::Favorites).map_or(0,|i|i+1);
         list.insert(at,trash);
         self.places=list;
+    }
+    /// Runs `job` on its own thread and wakes the UI with its result. Used for lsblk and udisks2, which can block.
+    fn spawn_background(&self,job:impl FnOnce()->WorkerResult+Send+'static) {
+        let Some((tx,wake))=self.events.as_ref() else {return};
+        let (tx,Ok(mut wake))=(tx.clone(),wake.try_clone()) else {return};
+        std::thread::spawn(move||{if tx.send(job()).is_ok() {let _=wake.write_all(&[1]);}});
+    }
+    fn refresh_devices(&self) {
+        self.spawn_background(||WorkerResult::Devices(bookmarks::unmounted_devices()));
     }
     fn clear_search(&mut self) {
         self.search_rows=None;
@@ -611,7 +624,9 @@ impl ExplorerApp {
                 self.edit=Some(EditMode::PlaceName);self.buffer=place.name.clone();
             },
             "placeremove"=>if let Some(path)=self.context_place_path() {self.mutate_bookmark(&path,|items,index|bookmarks::remove(items,index).is_some());},
-            "unmount"|"eject"=>if let Some(path)=self.context_place_path() {self.device_action(cmd,&path);},
+            "unmount"|"eject"=>if let Some(place)=self.context_place.and_then(|i|self.places.get(i)).cloned() {
+                if let Some(device)=place.device {self.device_action(if cmd=="eject"{"eject"}else{"unmount"},device,place.name);}
+            },
             _=>{}
         }
         self.context=None;
@@ -635,15 +650,25 @@ impl ExplorerApp {
             Err(error)=>self.model.status=format!("Places not saved: {error}"),
         }
     }
-    /// Unmount or eject a mounted removable device found through mountinfo.
-    fn device_action(&mut self,verb:&str,mount_point:&Path) {
-        let source=fs::read_to_string("/proc/self/mountinfo").ok()
-            .and_then(|text|bookmarks::parse_mountinfo(&text).into_iter().find(|d|d.mount_point==mount_point).map(|d|d.source));
-        let Some(source)=source else {self.model.status="Device is no longer mounted".into();self.reload_places();return;};
-        match bookmarks::udisks_action(verb,&source) {
-            Ok(_)=>{self.model.status=format!("{} {}",if verb=="eject"{"Ejected"}else{"Unmounted"},mount_point.display());self.reload_places();},
-            Err(error)=>self.model.status=format!("{verb} failed: {error}"),
-        }
+    /// Mount, unmount or eject a removable device through udisks2 on a worker thread; the outcome is shown in the status strip.
+    fn device_action(&mut self,verb:&'static str,device:String,label:String) {
+        self.model.status=format!("{} {label}…",match verb {"mount"=>"Mounting","unmount"=>"Unmounting",_=>"Ejecting"});
+        self.spawn_background(move||WorkerResult::DeviceDone(match bookmarks::udisks_action(verb,&device) {
+            Ok(_)=>Ok(format!("{} {label}",match verb {"mount"=>"Mounted","unmount"=>"Unmounted",_=>"Ejected"})),
+            Err(error)=>Err(format!("{verb} {label} failed: {error}")),
+        }));
+    }
+    /// Opens a place, or mounts a removable device that is present but not mounted.
+    fn activate_place(&mut self,index:usize) {
+        let Some(place)=self.places.get(index).cloned() else {return};
+        if place.mounted() {self.navigate(place.path);}
+        else if let Some(device)=place.device {self.device_action("mount",device,place.name);}
+    }
+    /// Sidebar button at the right of a device row: eject when mounted, mount when not.
+    fn place_button(&mut self,index:usize) {
+        let Some(place)=self.places.get(index).cloned() else {return};
+        let Some(device)=place.device.clone() else {return};
+        if place.mounted() {self.device_action("eject",device,place.name);} else {self.device_action("mount",device,place.name);}
     }
     fn open_containing(&mut self,path:PathBuf) {
         let Some(parent)=path.parent().map(Path::to_path_buf) else {return};
@@ -855,8 +880,12 @@ impl ExplorerApp {
                     self.context_on_entry=false;
                     self.context_place=Some(index);
                     self.context=Some((e.x,e.y));
-                } else if let Some(place)=self.places.get(index) {self.navigate(place.path.clone());}
+                } else {self.activate_place(index);}
             }
+            return;
+        }
+        if let Some(row)=action.strip_prefix("explorer.placeact.").and_then(|v|v.parse::<usize>().ok()) {
+            if let Some(SidebarRow::Place(index))=sidebar_rows(&self.places).get(row).copied() {self.place_button(index);}
             return;
         }
         if let Some(slot)=action.strip_prefix("explorer.tab.").and_then(|v|v.parse::<usize>().ok()) {
@@ -867,13 +896,15 @@ impl ExplorerApp {
             "explorer.back"=>{if self.model.tab_mut().back(){self.scan();}},
             "explorer.forward"=>{if self.model.tab_mut().forward(){self.scan();}},
             "explorer.up"=>{if self.model.tab_mut().up(){self.scan();}},
-            "explorer.reload"=>{self.reload_places();self.scan();},
+            "explorer.reload"=>{self.reload_places();self.refresh_devices();self.scan();},
+            "explorer.hidden"=>{self.model.hidden=!self.model.hidden;self.scan();},
             "explorer.search"=>{self.edit=Some(EditMode::Search);self.buffer=self.model.tab().search.clone();},
             "explorer.address"=>{self.edit=Some(EditMode::Path);self.buffer=self.model.tab().path().to_string_lossy().into_owned();},
             "explorer.tab.new"=>{if self.model.tabs.len()<5 {self.model.new_tab();self.scan();}},
             "explorer.tab.close"=>{self.model.close_tab();self.scan();},
             "explorer.view.icons"=>self.view=ViewMode::Icons,
             "explorer.view.details"=>self.view=ViewMode::Details,
+            "explorer.view.compact"=>self.view=ViewMode::Compact,
             "explorer.sort.name"=>self.sort_by(Column::Name),
             "explorer.sort.size"=>self.sort_by(Column::Size),
             "explorer.sort.modified"=>self.sort_by(Column::Modified),
@@ -1046,6 +1077,16 @@ impl ExplorerApp {
                     if props.path==path {*size=Some(bytes.unwrap_or(0));}
                 }
             },
+            WorkerResult::Devices(devices)=>{
+                if self.unmounted!=devices {self.unmounted=devices;self.reload_places();}
+            },
+            WorkerResult::DeviceDone(outcome)=>{
+                let message=outcome.unwrap_or_else(|error|error);
+                self.model.status=message.clone();
+                self.activity=Some(message);
+                self.reload_places();
+                self.refresh_devices();
+            },
             WorkerResult::Progress(bytes)=>{self.progress=Some(bytes);},
             WorkerResult::Total(bytes)=>{self.progress_total=bytes;},
             WorkerResult::BatchCompleted{report,action,cut_sources}=>{
@@ -1089,7 +1130,13 @@ impl ExplorerApp {
         self.theme.project(doc)?;
         let tab=self.model.tab();
         let address=match self.edit {Some(EditMode::Path)=>format!("{}|",self.buffer),Some(EditMode::Search)=>format!("Search: {}|",self.buffer),Some(EditMode::Rename)=>format!("Rename: {}|",self.buffer),Some(EditMode::Mode)=>format!("Permissions: {}|",self.buffer),Some(EditMode::PlaceName)=>format!("Place name: {}|",self.buffer),None=>display_location(tab.path(),&home_dir())};
-        doc.text("address",address)?;
+        doc.text("address-text",address)?;
+        let folder=if tab.path()==home_dir().as_path() {"Home".to_owned()} else {tab.path().file_name().unwrap_or_default().to_string_lossy().into_owned()};
+        let search=match self.edit {Some(EditMode::Search)=>format!("Search: {}|",self.buffer),_=>format!("Search {folder}")};
+        doc.text("search-text",search)?;
+        for (id,active) in [("view-icons",self.view==ViewMode::Icons),("view-details",self.view==ViewMode::Details),("view-compact",self.view==ViewMode::Compact),("toggle-hidden",self.model.hidden)] {
+            if active {doc.background(id,self.theme.selected())?;} else {doc.background_clear(id)?;}
+        }
         doc.foreground("nav-back",if tab.can_back(){WHITE}else{MUTED})?;
         doc.foreground("nav-forward",if tab.can_forward(){WHITE}else{MUTED})?;
         // Native Finder-style chrome: a single tab has no visible tab strip.
@@ -1111,17 +1158,30 @@ impl ExplorerApp {
                 Some(SidebarRow::Heading(title)) => {
                     doc.visible(&format!("sb-head-{slot}"),true)?;
                     doc.text(&format!("sb-head-label-{slot}"),(*title).to_owned())?;
+                    doc.visible(&format!("prow-{slot}"),false)?;
                     doc.visible(&format!("place-{slot}"),false)?;
                 }
                 Some(SidebarRow::Place(index)) => {
                     let place=&self.places[*index];
+                    let selected=!place.path.as_os_str().is_empty() && place.path==tab.path();
+                    let unmounted=!place.mounted();
                     doc.visible(&format!("sb-head-{slot}"),false)?;
+                    doc.visible(&format!("prow-{slot}"),true)?;
                     doc.visible(&format!("place-{slot}"),true)?;
+                    for kind in PLACE_ICONS {doc.visible(&format!("pico-{slot}-{kind}"),kind==place.icon)?;}
                     doc.text(&format!("place-label-{slot}"),place.name.clone())?;
-                    doc.background(&format!("place-{slot}"),if place.path==tab.path(){self.theme.selected()}else{self.theme.sidebar()})?;
+                    doc.foreground(&format!("place-label-{slot}"),if unmounted && place.device.is_some() {MUTED} else {WHITE})?;
+                    doc.background(&format!("place-{slot}"),if selected {self.theme.selected()} else {self.theme.sidebar()})?;
+                    doc.visible(&format!("pdot-{slot}"),selected)?;
+                    // Device rows get a Dolphin-style button: eject while mounted, mount while not.
+                    let device=place.device.is_some();
+                    doc.visible(&format!("pact-{slot}"),device)?;
+                    doc.visible(&format!("pact-eject-{slot}"),device && place.mounted())?;
+                    doc.visible(&format!("pact-mount-{slot}"),device && unmounted)?;
                 }
                 None => {
                     doc.visible(&format!("sb-head-{slot}"),false)?;
+                    doc.visible(&format!("prow-{slot}"),false)?;
                     doc.visible(&format!("place-{slot}"),false)?;
                 }
             }
@@ -1150,7 +1210,9 @@ impl ExplorerApp {
                 doc.text(&format!("name-{slot}"),entry.name.clone())?;
                 doc.text(&format!("size-{slot}"),entry.size_label())?;
                 doc.text(&format!("modified-{slot}"),entry.modified_label())?;
-                doc.text(&format!("kind-{slot}"),kind_label(entry))?;
+                doc.text(&format!("kind-{slot}"),view::kind_name(entry))?;
+                let icon=view::file_icon(entry);
+                for kind in ROW_ICONS {doc.visible(&format!("ico-{slot}-{kind}"),kind==icon)?;}
                 doc.visible(&format!("size-{slot}"),details)?;
                 doc.visible(&format!("modified-{slot}"),details)?;
                 doc.visible(&format!("kind-{slot}"),details)?;
@@ -1176,8 +1238,12 @@ impl ExplorerApp {
             } else {"Drag onto a folder to move · Hold Ctrl to copy".into()}
         } else {self.activity.as_ref().unwrap_or(&self.model.status).clone()};
         doc.text("status-message",status)?;
-        let selected_bytes=tab.entries.iter().filter(|e|tab.selected_paths.contains(&e.path)).map(|e|e.size).sum::<u64>();
-        doc.text("status-count",view::status_text(tab.selected_paths.len(),selected_bytes,tab.entries.len(),view::free_space(tab.path())))?;
+        doc.text("status-count",view::items_text(tab.entries.len(),tab.selected_paths.len()))?;
+        // Free space and usage come from statvfs; the bar fills by the share of the filesystem in use.
+        let space=view::fs_space(tab.path());
+        doc.text("status-free",space.map_or(String::new(),|(free,_)|format!("{} left",view::human_size(free))))?;
+        let used=space.map_or(0.0,|(free,total)|if total>0 {1.0-free as f32/total as f32} else {0.0});
+        doc.size("usage-fill",USAGE_TRACK_WIDTH*used.clamp(0.0,1.0),4.0)?;
         // Determinate when the worker counted the batch; otherwise the fill stays empty.
         let total=self.progress_total;
         let done=self.progress.unwrap_or(0);
@@ -1204,7 +1270,7 @@ impl ExplorerApp {
                 // Sidebar menu: bookmarks can be renamed or removed, mounted devices unmounted or ejected.
                 match item {
                     "placerename"|"placeremove"=>self.context_place.is_some_and(|i|self.is_bookmark(i)),
-                    "unmount"|"eject"=>self.context_place.is_some_and(|i|self.places.get(i).is_some_and(|p|p.removable)),
+                    "unmount"|"eject"=>self.context_place.is_some_and(|i|self.places.get(i).is_some_and(|p|p.removable && p.mounted())),
                     _=>false,
                 }
             } else {match item {

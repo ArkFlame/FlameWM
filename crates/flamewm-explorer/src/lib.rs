@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::os::unix::fs::symlink;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 pub mod archive;
 pub mod places;
@@ -35,25 +35,11 @@ pub struct Entry {
 }
 impl Entry {
     pub fn size_label(&self) -> String {
-        if self.directory { return "Folder".into(); }
+        if self.directory { return "—".into(); }
         view::human_size(self.size)
     }
     pub fn modified_label(&self) -> String {
-        self.modified.and_then(|m| m.duration_since(UNIX_EPOCH).ok())
-            .map(|d| {
-                // Civil date from days since 1970-01-01 (Gregorian); no per-row subprocess.
-                let days=(d.as_secs()/86_400) as i64 + 719468;
-                let era=days.div_euclid(146097);
-                let doe=days-era*146097;
-                let yoe=(doe-doe/1460+doe/36524-doe/146096)/365;
-                let mut year=yoe+era*400;
-                let doy=doe-(365*yoe+yoe/4-yoe/100);
-                let mp=(5*doy+2)/153;
-                let day=doy-(153*mp+2)/5+1;
-                let month=mp+if mp<10 {3}else{-9};
-                if month<=2 {year+=1;}
-                format!("{year:04}-{month:02}-{day:02}")
-            }).unwrap_or_else(|| "—".into())
+        self.modified.map_or_else(|| "—".into(), |m| view::date_label(m, chrono::Local::now()))
     }
 }
 
@@ -228,7 +214,8 @@ impl Explorer {
         if generation!=self.generation || self.tab().path()!=dir { return false; }
         match listing {
             Ok(items) => {
-                self.status=format!("{} items", items.len());
+                // The status strip shows the count itself (view::items_text), so the message stays free for results.
+                self.status.clear();
                 let tab=self.tab_mut();
                 if !tab.selected_paths.is_empty() {
                     let present=items.iter().map(|e|e.path.as_path()).collect::<HashSet<_>>();
@@ -257,7 +244,20 @@ impl PlaceGroup {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Place { pub name:String, pub path:PathBuf, pub removable:bool, pub group:PlaceGroup }
+pub struct Place {
+    pub name:String,
+    /// Empty for an unmounted device: activating it mounts the device instead of navigating.
+    pub path:PathBuf,
+    pub removable:bool,
+    pub group:PlaceGroup,
+    /// Line-icon family for the sidebar (`ui/explorer/icons/<icon>.svg`).
+    pub icon:&'static str,
+    /// Block device (`/dev/sdb1`) for removable media, mounted or not; drives udisks2 actions.
+    pub device:Option<String>,
+}
+impl Place {
+    pub fn mounted(&self)->bool {!self.path.as_os_str().is_empty()}
+}
 
 /// One sidebar row: a group heading, or an index into the places list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -314,19 +314,24 @@ fn unescape_uri(raw:&str)->Option<PathBuf>{
     }
     String::from_utf8(result).ok().map(PathBuf::from)
 }
-pub fn places(home:&Path) -> Vec<Place> {
-    let mut places=vec![Place{name:"Home".into(),path:home.to_path_buf(),removable:false,group:PlaceGroup::Favorites}];
-    for (id,name,dir) in [("DESKTOP","Desktop","Desktop"),("DOCUMENTS","Documents","Documents"),("DOWNLOAD","Downloads","Downloads"),("MUSIC","Music","Music"),("PICTURES","Pictures","Pictures"),("VIDEOS","Videos","Videos")] {
-        let path=user_dir(id,dir,home); places.push(Place{name:name.into(),path,removable:false,group:PlaceGroup::Favorites});
+fn favorite(name:&str,path:PathBuf,icon:&'static str)->Place {
+    Place{name:name.into(),path,removable:false,group:PlaceGroup::Favorites,icon,device:None}
+}
+/// Sidebar places: built-in folders, bookmarks, mounted removable media (from mountinfo) and
+/// removable block devices that are present but not mounted (from `lsblk`, passed in by the caller).
+pub fn places(home:&Path,unmounted:&[places::BlockDevice]) -> Vec<Place> {
+    let mut places=vec![favorite("Home",home.to_path_buf(),"home")];
+    for (id,name,dir,icon) in [("DESKTOP","Desktop","Desktop","desktop"),("DOCUMENTS","Documents","Documents","documents"),("DOWNLOAD","Downloads","Downloads","downloads"),("MUSIC","Music","Music","music"),("PICTURES","Pictures","Pictures","pictures"),("VIDEOS","Videos","Videos","videos")] {
+        places.push(favorite(name,user_dir(id,dir,home),icon));
     }
-    places.push(Place{name:"System".into(),path:PathBuf::from("/"),removable:false,group:PlaceGroup::Devices});
+    places.push(Place{name:"Local Disk".into(),path:PathBuf::from("/"),removable:false,group:PlaceGroup::Devices,icon:"drive",device:None});
     let base=std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".config"));
     if let Ok(source)=fs::read_to_string(base.join("gtk-3.0/bookmarks")) {
         for line in source.lines().take(128) {
             let mut words=line.splitn(2,' ');
             if let Some(path)=words.next().and_then(unescape_uri).filter(|p|p.is_dir()) {
                 let name=words.next().map(str::to_owned).unwrap_or_else(||path.file_name().unwrap_or_default().to_string_lossy().into_owned());
-                places.push(Place{name,path,removable:false,group:PlaceGroup::Pinned});
+                places.push(Place{name,path,removable:false,group:PlaceGroup::Pinned,icon:"folder",device:None});
             }
         }
     }
@@ -334,9 +339,12 @@ pub fn places(home:&Path) -> Vec<Place> {
         for device in places::parse_mountinfo(&contents) {
             if device.mount_point.is_dir() {
                 let name=places::sanitize_label(&device.mount_point.file_name().unwrap_or_default().to_string_lossy());
-                places.push(Place{name,path:device.mount_point,removable:true,group:PlaceGroup::Devices});
+                places.push(Place{name,path:device.mount_point,removable:true,group:PlaceGroup::Devices,icon:"usb",device:Some(format!("/dev/{}",device.block_name))});
             }
         }
+    }
+    for device in unmounted {
+        places.push(Place{name:device.label.clone(),path:PathBuf::new(),removable:true,group:PlaceGroup::Devices,icon:"usb",device:Some(device.device.clone())});
     }
     places
 }
@@ -466,6 +474,7 @@ pub fn is_archive(path:&Path)->bool {
 }
 #[cfg(test)]
 mod tests {
+    use std::time::UNIX_EPOCH;
     use super::*;
     #[test] fn home_alias_and_remote_protocols_do_not_confuse_native_paths() {
         let home=Path::new("/home/demo");
@@ -654,11 +663,11 @@ mod tests {
 
     #[test]
     fn sidebar_rows_group_places_and_hide_empty_headings() {
-        let place = |name: &str, group: PlaceGroup| Place { name: name.into(), path: PathBuf::from("/x"), removable: false, group };
+        let place = |name: &str, group: PlaceGroup| Place { name: name.into(), path: PathBuf::from("/x"), removable: false, group, icon: "folder", device: None };
         let places = vec![
             place("Home", PlaceGroup::Favorites),
             place("Docs", PlaceGroup::Favorites),
-            place("System", PlaceGroup::Devices),
+            place("Local Disk", PlaceGroup::Devices),
             place("Work", PlaceGroup::Pinned),
         ];
         assert_eq!(

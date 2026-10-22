@@ -186,22 +186,246 @@ pub fn valid_device_path(device: &str) -> bool {
     })
 }
 
-/// Runs `udisksctl` for one device operation. Returns trimmed stdout on success, a bounded stderr message on failure.
-pub fn udisks_action(action: &str, device: &str) -> Result<String, String> {
+/// A removable filesystem that is present but not mounted, as reported by `lsblk`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockDevice {
+    /// `/dev/sdb1`
+    pub device: String,
+    /// Filesystem label, or the kernel name when the filesystem has none.
+    pub label: String,
+}
+
+/// Minimal JSON value: just enough to read `lsblk -J` without a serialization dependency.
+#[derive(Debug, PartialEq)]
+enum Json {
+    Null,
+    Bool(bool),
+    Num(f64),
+    Str(String),
+    Arr(Vec<Json>),
+    Obj(Vec<(String, Json)>),
+}
+
+impl Json {
+    fn get(&self, key: &str) -> Option<&Json> {
+        match self {
+            Json::Obj(fields) => fields.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+    fn items(&self) -> &[Json] {
+        match self {
+            Json::Arr(items) => items,
+            _ => &[],
+        }
+    }
+    fn text(&self) -> Option<&str> {
+        match self {
+            Json::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+    /// lsblk prints flags as booleans in recent releases and as "0"/"1" strings in older ones.
+    fn flag(&self) -> bool {
+        match self {
+            Json::Bool(b) => *b,
+            Json::Num(n) => *n != 0.0,
+            Json::Str(s) => s == "1" || s == "true",
+            _ => false,
+        }
+    }
+    fn parse(text: &str) -> Option<Json> {
+        let mut parser = JsonParser { bytes: text.as_bytes(), at: 0 };
+        let value = parser.value(0)?;
+        parser.skip_space();
+        (parser.at == parser.bytes.len()).then_some(value)
+    }
+}
+
+struct JsonParser<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl JsonParser<'_> {
+    fn skip_space(&mut self) {
+        while self.bytes.get(self.at).is_some_and(|b| b.is_ascii_whitespace()) {
+            self.at += 1;
+        }
+    }
+    fn eat(&mut self, byte: u8) -> bool {
+        let found = self.bytes.get(self.at) == Some(&byte);
+        if found {
+            self.at += 1;
+        }
+        found
+    }
+    fn value(&mut self, depth: usize) -> Option<Json> {
+        if depth > 64 {
+            return None;
+        }
+        self.skip_space();
+        match *self.bytes.get(self.at)? {
+            b'{' => {
+                self.at += 1;
+                let mut fields = Vec::new();
+                self.skip_space();
+                if !self.eat(b'}') {
+                    loop {
+                        self.skip_space();
+                        let key = self.string()?;
+                        self.skip_space();
+                        if !self.eat(b':') {
+                            return None;
+                        }
+                        fields.push((key, self.value(depth + 1)?));
+                        self.skip_space();
+                        if self.eat(b'}') {
+                            break;
+                        }
+                        if !self.eat(b',') {
+                            return None;
+                        }
+                    }
+                }
+                Some(Json::Obj(fields))
+            }
+            b'[' => {
+                self.at += 1;
+                let mut items = Vec::new();
+                self.skip_space();
+                if !self.eat(b']') {
+                    loop {
+                        items.push(self.value(depth + 1)?);
+                        self.skip_space();
+                        if self.eat(b']') {
+                            break;
+                        }
+                        if !self.eat(b',') {
+                            return None;
+                        }
+                    }
+                }
+                Some(Json::Arr(items))
+            }
+            b'"' => self.string().map(Json::Str),
+            b't' => self.literal("true", Json::Bool(true)),
+            b'f' => self.literal("false", Json::Bool(false)),
+            b'n' => self.literal("null", Json::Null),
+            _ => {
+                let start = self.at;
+                while self.bytes.get(self.at).is_some_and(|b| b"+-.eE0123456789".contains(b)) {
+                    self.at += 1;
+                }
+                std::str::from_utf8(&self.bytes[start..self.at]).ok()?.parse::<f64>().ok().map(Json::Num)
+            }
+        }
+    }
+    fn literal(&mut self, word: &str, value: Json) -> Option<Json> {
+        if self.bytes[self.at..].starts_with(word.as_bytes()) {
+            self.at += word.len();
+            Some(value)
+        } else {
+            None
+        }
+    }
+    fn string(&mut self) -> Option<String> {
+        if !self.eat(b'"') {
+            return None;
+        }
+        let mut out = Vec::new();
+        loop {
+            let byte = *self.bytes.get(self.at)?;
+            self.at += 1;
+            match byte {
+                b'"' => return String::from_utf8(out).ok(),
+                b'\\' => {
+                    let escaped = *self.bytes.get(self.at)?;
+                    self.at += 1;
+                    let decoded = match escaped {
+                        b'n' => '\n',
+                        b't' => '\t',
+                        b'r' => '\r',
+                        b'b' => '\u{8}',
+                        b'f' => '\u{c}',
+                        b'u' => {
+                            let hex = std::str::from_utf8(self.bytes.get(self.at..self.at + 4)?).ok()?;
+                            self.at += 4;
+                            char::from_u32(u32::from_str_radix(hex, 16).ok()?).unwrap_or('\u{fffd}')
+                        }
+                        other => other as char,
+                    };
+                    let mut buf = [0_u8; 4];
+                    out.extend_from_slice(decoded.encode_utf8(&mut buf).as_bytes());
+                }
+                other => out.push(other),
+            }
+        }
+    }
+}
+
+/// Unmounted removable filesystems from `lsblk -J` output. Partitions of a removable disk are listed one by one;
+/// a removable disk without partitions is listed itself. Mounted, swap, unformatted and invalid nodes are skipped.
+pub fn parse_lsblk(text: &str) -> Vec<BlockDevice> {
+    let Some(root) = Json::parse(text) else { return Vec::new() };
+    let mut out = Vec::new();
+    for disk in root.get("blockdevices").map_or(&[][..], Json::items) {
+        let removable = disk.get("rm").is_some_and(Json::flag) || disk.get("hotplug").is_some_and(Json::flag);
+        if !removable {
+            continue;
+        }
+        let partitions = disk.get("children").map_or(&[][..], Json::items);
+        let nodes: Vec<&Json> = if partitions.is_empty() { vec![disk] } else { partitions.iter().collect() };
+        out.extend(nodes.into_iter().filter_map(unmounted_filesystem));
+    }
+    out
+}
+
+fn unmounted_filesystem(node: &Json) -> Option<BlockDevice> {
+    let name = node.get("name")?.text()?;
+    let fstype = node.get("fstype").and_then(Json::text).unwrap_or("");
+    if fstype.is_empty() || fstype == "swap" {
+        return None;
+    }
+    let mounted = node.get("mountpoint").and_then(Json::text).is_some_and(|m| !m.is_empty())
+        || node.get("mountpoints").is_some_and(|list| list.items().iter().any(|m| m.text().is_some()));
+    let device = format!("/dev/{name}");
+    if mounted || !valid_device_path(&device) {
+        return None;
+    }
+    let label = node.get("label").and_then(Json::text).map(sanitize_label).filter(|l| !l.is_empty());
+    Some(BlockDevice { device, label: label.unwrap_or_else(|| name.to_owned()) })
+}
+
+/// Runs `lsblk` and returns unmounted removable filesystems. A missing or failing lsblk yields no devices.
+pub fn unmounted_devices() -> Vec<BlockDevice> {
+    let Ok(output) = Command::new("lsblk").args(["-J", "-o", "NAME,RM,HOTPLUG,FSTYPE,MOUNTPOINT,LABEL"]).output() else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    parse_lsblk(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Argument vector for one `udisksctl` call. Eject is a power-off of the device; no shell is involved.
+pub fn udisks_args(action: &str, device: &str) -> Result<Vec<String>, String> {
     if !matches!(action, "mount" | "unmount" | "eject" | "power-off") {
         return Err(format!("Unsupported device action {action}"));
     }
     if !valid_device_path(device) {
         return Err("Refusing invalid device path".into());
     }
-    let subcommand = match action {
-        "eject" => "power-off",
-        other => other,
-    };
+    let subcommand = if action == "eject" { "power-off" } else { action };
+    Ok(vec![subcommand.to_owned(), "-b".to_owned(), device.to_owned()])
+}
+
+/// Runs `udisksctl` for one device operation. Returns trimmed stdout on success, a bounded stderr message on failure.
+/// Callers run this on a worker thread: udisks can block while a filesystem is flushed.
+pub fn udisks_action(action: &str, device: &str) -> Result<String, String> {
+    let args = udisks_args(action, device)?;
     let output = Command::new("udisksctl")
-        .arg(subcommand)
-        .arg("-b")
-        .arg(device)
+        .args(&args)
         .output()
         .map_err(|error| format!("udisksctl unavailable: {error}"))?;
     if output.status.success() {
@@ -284,6 +508,42 @@ mod tests {
         assert!(!is_removable_in(&root, "sdb1"));
         assert!(!is_removable_in(&root, "missing"));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn udisks_commands_are_built_as_argument_vectors() {
+        assert_eq!(udisks_args("mount", "/dev/sdb1").unwrap(), ["mount", "-b", "/dev/sdb1"]);
+        assert_eq!(udisks_args("unmount", "/dev/sdb1").unwrap(), ["unmount", "-b", "/dev/sdb1"]);
+        assert_eq!(udisks_args("eject", "/dev/sdb").unwrap(), ["power-off", "-b", "/dev/sdb"]);
+        assert!(udisks_args("format", "/dev/sdb1").is_err());
+        assert!(udisks_args("mount", "/dev/sdb1; rm -rf ~").is_err());
+        assert!(udisks_args("mount", "sdb1").is_err());
+    }
+
+    #[test]
+    fn lsblk_json_lists_only_unmounted_removable_filesystems() {
+        let sample = r#"{"blockdevices": [
+            {"name":"sda","rm":false,"hotplug":false,"fstype":null,"mountpoint":null,"label":null,
+             "children":[{"name":"sda1","rm":false,"hotplug":false,"fstype":"ext4","mountpoint":"/","label":null}]},
+            {"name":"sdb","rm":true,"hotplug":true,"fstype":null,"mountpoint":null,"label":null,
+             "children":[
+                {"name":"sdb1","rm":true,"hotplug":true,"fstype":"vfat","mountpoint":"/run/media/u/Backup","label":"Backup"},
+                {"name":"sdb2","rm":true,"hotplug":true,"fstype":"vfat","mountpoint":null,"label":"Stick \u00e9\n"},
+                {"name":"sdb3","rm":true,"hotplug":true,"fstype":"swap","mountpoint":null,"label":null}]},
+            {"name":"sdc","rm":"1","hotplug":"1","fstype":"exfat","mountpoint":null,"label":null},
+            {"name":"sdd","rm":true,"hotplug":true,"fstype":null,"mountpoint":null,"label":null},
+            {"name":"sde","rm":true,"hotplug":true,"fstype":"vfat","mountpoints":[null],"label":"Camera","children":null}
+        ]}"#;
+        assert_eq!(
+            parse_lsblk(sample),
+            vec![
+                BlockDevice { device: "/dev/sdb2".into(), label: "Stick é".into() },
+                BlockDevice { device: "/dev/sdc".into(), label: "sdc".into() },
+                BlockDevice { device: "/dev/sde".into(), label: "Camera".into() },
+            ]
+        );
+        assert!(parse_lsblk("not json").is_empty());
+        assert!(parse_lsblk(r#"{"blockdevices": [{"name":"sdf","rm":true,"fstype":"vfat"}"#).is_empty());
     }
 
     #[test]

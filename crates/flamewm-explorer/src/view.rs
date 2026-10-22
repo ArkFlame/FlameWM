@@ -1,6 +1,9 @@
 //! Pure view logic for the explorer: view modes, column sorting, type-ahead, status text.
 //! No UI or filesystem writes here; callers pass in already-listed entries.
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use chrono::{DateTime, TimeZone};
 
 use crate::Entry;
 
@@ -88,22 +91,67 @@ pub fn human_size(bytes: u64) -> String {
     if unit == "B" { format!("{bytes} B") } else { format!("{n:.1} {unit}") }
 }
 
-/// Status bar text: selection count and total size, plus free space when the filesystem reports it.
-pub fn status_text(selected: usize, selected_bytes: u64, total: usize, free_bytes: Option<u64>) -> String {
-    let mut text = format!("{selected} of {total} selected");
-    if selected > 0 {
-        text.push_str(&format!(" · {}", human_size(selected_bytes)));
-    }
-    if let Some(free) = free_bytes {
-        text.push_str(&format!(" · {} free", human_size(free)));
-    }
-    text
+/// Status strip count: "12 items", plus the selection count when something is selected.
+pub fn items_text(total: usize, selected: usize) -> String {
+    let noun = if total == 1 { "item" } else { "items" };
+    if selected == 0 { format!("{total} {noun}") } else { format!("{total} {noun} · {selected} selected") }
 }
 
-/// Free bytes available to unprivileged users on the filesystem holding `path`.
-pub fn free_space(path: &Path) -> Option<u64> {
+/// Free and total bytes of the filesystem holding `path`. Free counts only space open to unprivileged users.
+pub fn fs_space(path: &Path) -> Option<(u64, u64)> {
     let stat = rustix::fs::statvfs(path).ok()?;
-    Some(stat.f_bavail.saturating_mul(stat.f_frsize))
+    Some((stat.f_bavail.saturating_mul(stat.f_frsize), stat.f_blocks.saturating_mul(stat.f_frsize)))
+}
+
+/// Extensions shown as "Source file" with the code icon.
+const SOURCE_EXTENSIONS: [&str; 30] = [
+    "c", "h", "cc", "cpp", "cxx", "hpp", "rs", "go", "java", "kt", "swift", "py", "rb", "php", "lua", "js", "mjs",
+    "ts", "tsx", "jsx", "sh", "bash", "zsh", "fish", "toml", "yaml", "yml", "json", "html", "md",
+];
+
+fn extension_lower(path: &Path) -> Option<String> {
+    path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase)
+}
+
+/// Row icon family: folder, pdf, source or generic file. Names match `ui/explorer/icons/row-*.svg`.
+pub fn file_icon(entry: &Entry) -> &'static str {
+    if entry.directory { return "folder"; }
+    match extension_lower(&entry.path) {
+        Some(ext) if ext == "pdf" => "pdf",
+        Some(ext) if SOURCE_EXTENSIONS.contains(&ext.as_str()) => "source",
+        _ => "file",
+    }
+}
+
+/// Kind column text, matching the icon family.
+pub fn kind_name(entry: &Entry) -> String {
+    if entry.directory { return "Folder".into(); }
+    if entry.symlink { return "Link".into(); }
+    match file_icon(entry) {
+        "pdf" => "PDF Document".into(),
+        "source" => "Source file".into(),
+        _ => match extension_lower(&entry.path) {
+            Some(ext) => format!("{} File", ext.to_ascii_uppercase()),
+            None => "File".into(),
+        },
+    }
+}
+
+/// Modified column: "Today, 10:24", "Yesterday", or an ISO date. `now` carries the local zone.
+pub fn date_label<Tz: TimeZone>(modified: SystemTime, now: DateTime<Tz>) -> String
+where Tz::Offset: std::fmt::Display {
+    let Ok(since) = modified.duration_since(UNIX_EPOCH) else { return "—".into() };
+    let Some(utc) = DateTime::from_timestamp(since.as_secs() as i64, since.subsec_nanos()) else { return "—".into() };
+    let when = utc.with_timezone(&now.timezone());
+    let day = when.date_naive();
+    let today = now.date_naive();
+    if day == today {
+        format!("Today, {}", when.format("%H:%M"))
+    } else if Some(day) == today.pred_opt() {
+        "Yesterday".into()
+    } else {
+        day.format("%Y-%m-%d").to_string()
+    }
 }
 
 #[cfg(test)]
@@ -169,10 +217,32 @@ mod tests {
     }
 
     #[test]
-    fn status_text_reports_selection_and_free_space() {
-        assert_eq!(status_text(0, 0, 12, None), "0 of 12 selected");
-        assert_eq!(status_text(2, 2048, 12, Some(3 * 1024 * 1024)),
-            "2 of 12 selected · 2.0 KiB · 3.0 MiB free");
+    fn items_text_counts_items_and_selection() {
+        assert_eq!(items_text(12, 0), "12 items");
+        assert_eq!(items_text(12, 1), "12 items · 1 selected");
+        assert_eq!(items_text(1, 1), "1 item · 1 selected");
+    }
+
+    #[test]
+    fn file_icons_and_kind_names_follow_extension() {
+        assert_eq!(file_icon(&entry("Design", true, 0, 0)), "folder");
+        assert_eq!(file_icon(&entry("Roadmap.PDF", false, 0, 0)), "pdf");
+        assert_eq!(file_icon(&entry("README.md", false, 0, 0)), "source");
+        assert_eq!(file_icon(&entry("photo.jpg", false, 0, 0)), "file");
+        assert_eq!(kind_name(&entry("Roadmap.pdf", false, 0, 0)), "PDF Document");
+        assert_eq!(kind_name(&entry("README.md", false, 0, 0)), "Source file");
+        assert_eq!(kind_name(&entry("photo.jpg", false, 0, 0)), "JPG File");
+        assert_eq!(kind_name(&entry("LICENSE", false, 0, 0)), "File");
+    }
+
+    #[test]
+    fn modified_labels_are_relative_for_today_and_yesterday() {
+        use chrono::{Duration as ChronoDuration, Utc};
+        let now = Utc.with_ymd_and_hms(2026, 10, 21, 12, 0, 0).unwrap();
+        let at = |t: DateTime<Utc>| -> SystemTime { t.into() };
+        assert_eq!(date_label(at(Utc.with_ymd_and_hms(2026, 10, 21, 10, 24, 0).unwrap()), now), "Today, 10:24");
+        assert_eq!(date_label(at(now - ChronoDuration::days(1)), now), "Yesterday");
+        assert_eq!(date_label(at(Utc.with_ymd_and_hms(2026, 10, 1, 9, 0, 0).unwrap()), now), "2026-10-01");
     }
 
     #[test]
