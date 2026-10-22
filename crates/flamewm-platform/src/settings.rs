@@ -280,6 +280,8 @@ pub struct ProductSettings {
     pub lock_background_dim_percent: u16,
     /// Lock-screen profile picture path; empty selects the built-in ring icon.
     pub avatar_image: String,
+    /// Terminal for FlameWM launches: a bare command name or absolute path. Empty selects FlameWM Terminal.
+    pub default_terminal: String,
     pub lock_clock_format: LockClockFormat,
     pub lock_show_date: bool,
     pub lock_show_username: bool,
@@ -383,6 +385,7 @@ impl Default for ProductSettings {
             lock_background_blur_percent: 40,
             lock_background_dim_percent: 25,
             avatar_image: String::new(),
+            default_terminal: String::new(),
             lock_clock_format: LockClockFormat::TwentyFour,
             lock_show_date: true,
             lock_show_username: true,
@@ -561,6 +564,7 @@ impl ProductSettings {
         validate_color(&self.lock_background_color, false, "lockBackgroundColor")?;
         validate_lock_image_path(&self.lock_background_image, "lockBackgroundImage")?;
         validate_lock_image_path(&self.avatar_image, "avatarImage")?;
+        validate_terminal_program(&self.default_terminal)?;
         if !matches!(self.weather_units.as_str(), "celsius" | "fahrenheit") {
             return invalid("weatherUnits must be celsius or fahrenheit");
         }
@@ -1038,6 +1042,7 @@ stable_settings! {
     (false, desktop, "wallpaperMode", wallpaper_mode),
     (false, desktop, "wallpaperColor", wallpaper_color),
     (false, desktop, "shareWallpaper", share_wallpaper),
+    (false, desktop, "defaultTerminal", default_terminal),
     (true, desktop, "DesktopSelectionFillOpacity", desktop_selection_fill_opacity),
     (true, desktop, "DesktopEntryScalePercent", desktop_entry_scale_percent),
     (true, windows, "WindowSnapPreviewFillOpacity", window_snap_preview_fill_opacity),
@@ -1209,6 +1214,20 @@ fn validate_lock_image_path(value: &str, name: &str) -> FlameResult<()> {
         return invalid_owned(format!(
             "{name} must be empty or an absolute path of at most 4096 bytes"
         ));
+    }
+    Ok(())
+}
+
+/// Empty, a bare command name, or an absolute path with no whitespace or control characters.
+fn validate_terminal_program(value: &str) -> FlameResult<()> {
+    if value.is_empty() {
+        return Ok(());
+    }
+    if value.len() > 255
+        || value.chars().any(|c| c.is_whitespace() || c.is_control())
+        || value.contains('/') && !value.starts_with('/')
+    {
+        return invalid("defaultTerminal must be a command name or absolute path without spaces");
     }
     Ok(())
 }
@@ -1407,6 +1426,31 @@ mod tests {
             settings.validate().expect_err("invalid scale").code,
             ErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn default_terminal_defaults_empty_and_round_trips() {
+        let defaults = ProductSettings::default();
+        assert_eq!(defaults.default_terminal, "");
+        assert!(!ConfigStore::serialize(&defaults).contains("defaultTerminal"));
+        let parsed = load("revision=2\ndefaultTerminal=kitty\n").expect("bare command");
+        assert_eq!(parsed.default_terminal, "kitty");
+        assert!(ConfigStore::serialize(&parsed).contains("defaultTerminal=kitty"));
+        let absolute =
+            load("revision=2\ndefaultTerminal=/usr/bin/alacritty\n").expect("absolute path");
+        assert_eq!(absolute.default_terminal, "/usr/bin/alacritty");
+    }
+
+    #[test]
+    fn invalid_default_terminal_values_are_rejected() {
+        for value in ["kit ty", "bin/term", "a\tb", "../term"] {
+            assert!(
+                load(&format!("revision=2\ndefaultTerminal={value}\n")).is_err(),
+                "{value:?} must be rejected"
+            );
+        }
+        let long = "x".repeat(256);
+        assert!(load(&format!("revision=2\ndefaultTerminal={long}\n")).is_err());
     }
 
     #[test]

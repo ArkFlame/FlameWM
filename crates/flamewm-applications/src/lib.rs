@@ -1,4 +1,5 @@
 pub mod launch_feedback;
+pub mod terminal;
 mod directory_open;
 pub use directory_open::{DirectoryHandler, DirectorySpawner, decide_directory_handler, open_directory, route_directory};
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
@@ -14,6 +15,8 @@ pub struct DesktopEntry {
     pub path: PathBuf,
     exec: String,
     startup_notify: Option<bool>,
+    /// `Terminal=true`: the argv runs inside the resolved terminal.
+    terminal: bool,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -154,7 +157,12 @@ impl DesktopEntry {
     }
 
     pub fn argv(&self, options: &ApplicationLaunchOptions) -> FlameResult<Vec<String>> {
-        expand_exec_with_path(&self.exec, &self.application, &self.path, options)
+        let argv = expand_exec_with_path(&self.exec, &self.application, &self.path, options)?;
+        if self.terminal {
+            terminal::wrap_terminal_entry(&argv)
+        } else {
+            Ok(argv)
+        }
     }
 
     pub fn launch(&self, options: &ApplicationLaunchOptions) -> FlameResult<()> {
@@ -305,7 +313,7 @@ impl ApplicationCatalog {
 
     pub fn launch(&self, id: &DesktopAppId, options: &ApplicationLaunchOptions) -> FlameResult<()> {
         let entry = self.find(id)?;
-        let argv = expand_exec_with_path(&entry.exec, &entry.application, &entry.path, options)?;
+        let argv = entry.argv(options)?;
         launch_argv_for_app(&argv, &entry.application, entry.startup_notify)
     }
 }
@@ -872,6 +880,7 @@ fn parse_desktop_entry(
         application: app,
         path: path.to_owned(),
         exec: exec.clone(),
+        terminal: is_true(values.get("Terminal")),
         startup_notify: values
             .get("StartupNotify")
             .map(|value| is_true(Some(value))),
@@ -1086,6 +1095,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn terminal_true_entries_are_marked_for_terminal_wrapping() {
+        let root = std::env::temp_dir().join(format!("flamewm-term-entry-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let term = write_entry(
+            &root,
+            "htop.desktop",
+            "[Desktop Entry]\nType=Application\nName=htop\nExec=htop %U\nTerminal=true\n",
+        );
+        let gui = write_entry(
+            &root,
+            "gui.desktop",
+            "[Desktop Entry]\nType=Application\nName=gui\nExec=gui\nTerminal=false\n",
+        );
+        assert!(DesktopEntry::from_file(&term).unwrap().unwrap().terminal);
+        assert!(!DesktopEntry::from_file(&gui).unwrap().unwrap().terminal);
+        let gui_entry = DesktopEntry::from_file(&gui).unwrap().unwrap();
+        assert_eq!(
+            gui_entry
+                .argv(&ApplicationLaunchOptions::default())
+                .unwrap(),
+            vec!["gui"]
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     fn write_entry(root: &Path, name: &str, body: &str) -> PathBuf {
         let path = root.join(name);
         fs::write(&path, body).unwrap();
@@ -1204,6 +1239,7 @@ mod tests {
                 path: PathBuf::from(format!("/tmp/{id}")),
                 exec: exec.into(),
                 startup_notify: None,
+                terminal: false,
             }
         }
         let mut catalog = ApplicationCatalog {
