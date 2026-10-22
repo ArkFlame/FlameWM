@@ -1,4 +1,6 @@
 pub mod launch_feedback;
+mod directory_open;
+pub use directory_open::{DirectoryHandler, DirectorySpawner, decide_directory_handler, open_directory, route_directory};
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
 use flamewm_api::{DesktopAppId, ErrorCode, FlameError, FlameResult};
 use std::fs;
@@ -499,6 +501,12 @@ pub fn open_target(target: &std::ffi::OsStr) -> FlameResult<()> {
             return Ok(());
         }
         *last = Some((target.to_os_string(), now));
+    }
+    // Folders are FlameWM's own decision (explorer or the user's chosen entry),
+    // never a KDE/XDG opener call: those ignore nested mimeapps and open Dolphin.
+    let folder = Path::new(target);
+    if folder.is_dir() {
+        return directory_open::open_directory(folder);
     }
     let (program, prefix) = preferred_file_opener(|name| {
         let Some(path) = std::env::var_os("PATH") else {
