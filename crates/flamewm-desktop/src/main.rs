@@ -63,6 +63,7 @@ macro_rules! point_fn {
 }
 
 mod convert_wheel;
+mod downloads;
 mod projection;
 mod sticky;
 #[path = "../ui_contract.rs"]
@@ -312,6 +313,7 @@ struct DesktopState {
     workspace_present_span: Option<flamewm_profiler::SpanGuard>,
     settings: SettingsSnapshot,
     settings_visual_dirty: bool,
+    downloads: downloads::Organizer,
     /// Resolved cursor theme last loaded into the live cursor owners.
     applied_cursor_theme: Option<String>,
     /// Last `iconTheme` applied from the settings snapshot.
@@ -416,6 +418,13 @@ fn main() -> Result<(), String> {
     let sticky = sticky_persistence::load(&sticky_path).map_err(|error| format!("{error:?}"))?;
     let dirty = Arc::new(AtomicBool::new(false));
     let icons_pending = Arc::new(AtomicBool::new(false));
+    let downloads_dir = flamewm_downloads_core::downloads_dir(&home, user_dirs.as_deref());
+    let mut downloads = downloads::Organizer::new(
+        downloads_dir,
+        state_path("flamewm-downloads-organizer.state")?,
+    )
+    .map_err(|error| format!("init downloads organizer: {error}"))?;
+    downloads.set_enabled(setting_bool(&settings, "organizeDownloads", true));
     let inotify = inotify::Inotify::init().map_err(|error| format!("init inotify: {error}"))?;
     inotify
         .watches()
@@ -468,6 +477,7 @@ fn main() -> Result<(), String> {
             workspace_present_span: None,
             settings,
             settings_visual_dirty: false,
+            downloads,
             applied_cursor_theme: None,
             icon_theme: String::new(),
             icon_theme_pending: false,
@@ -675,6 +685,22 @@ fn main() -> Result<(), String> {
             FdAction::Continue
         })
         .map_err(|error| format!("register inotify: {error}"))?;
+    // Downloads organizer: the same reactor owns its watch fd; the wake slot is shared with
+    // sticky persistence, so the organizer only ever publishes its own settle deadline.
+    let downloads_source = {
+        let mut state = state_cell.borrow_mut();
+        state.downloads.attach_wake(reactor.wake_deadline());
+        state.downloads.take_source()
+    };
+    if let Some(source) = downloads_source {
+        let downloads_queue = state_cell.borrow().downloads.queue();
+        reactor
+            .register_fd_with_source_action(source, calloop::Interest::READ, move |_, source, _| {
+                downloads::read_events(source, &downloads_queue);
+                FdAction::Continue
+            })
+            .map_err(|error| format!("register downloads organizer: {error}"))?;
+    }
     // IconService wake FD: worker completions only set the pending flag;
     // the next event/flush tick drains and repaints affected tiles.
     if let Some(icon_fd) = state_cell.borrow().icons.wake_fd() {
@@ -802,6 +828,15 @@ fn main() -> Result<(), String> {
                 let state_cell = &flush_cell;
                 let mut state = state_cell.borrow_mut();
                 reactor_watch.set(menus_open(&state.menu_rects));
+                // Live toggle: the setting snapshot is the authority; watch add/remove follows it.
+                let organize_wanted = setting_bool(&state.settings, "organizeDownloads", true);
+                state.downloads.set_enabled(organize_wanted);
+                state.downloads.tick(std::time::Instant::now());
+                if state.downloads.take_notice()
+                    && let Err(error) = show_downloads_notice(document, &mut state)
+                {
+                    eprintln!("desktop: downloads notice failed: {error}");
+                }
                 let _completed_workspace_present = state.workspace_present_span.take();
                 if let Err(error) = refresh_all(document, &mut state) {
                     eprintln!("desktop: refresh failed (continuing): {error}");
@@ -1903,6 +1938,9 @@ fn handle_event(
     if action.action == "desktop.surface" {
         return handle_surface(action, document, state);
     }
+    if action.action == "downloads.notice.ok" {
+        return document.visible("downloads-notice", false);
+    }
     if action.action.starts_with("sticky.") {
         return sticky::handle_action(action, document, state);
     }
@@ -2833,6 +2871,25 @@ fn hide_confirm(
     menu_rects.clear();
     document.visible("desktop-confirm", false)?;
     projection::clear_menu_backdrop(document, "desktop-confirm")
+}
+
+/// One-time notice after the first organized download. The latch is persisted before this runs.
+fn show_downloads_notice(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    let bounds = state.grid.work_area;
+    let (width, height) = (420, 150);
+    let x = bounds.x + (bounds.width - width) / 2;
+    let y = bounds.y + (bounds.height - height) / 2;
+    document.text(
+        "downloads-notice-text",
+        flamewm_downloads_core::NOTICE_TEXT.to_owned(),
+    )?;
+    document.position("downloads-notice", x as f32, y as f32)?;
+    document.size("downloads-notice", width as f32, height as f32)?;
+    projection::project_menu_surface(document, "downloads-notice", &state.settings)?;
+    document.visible("downloads-notice", true)
 }
 
 fn show_confirm(

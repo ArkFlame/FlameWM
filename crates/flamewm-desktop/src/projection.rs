@@ -155,12 +155,13 @@ fn project_wallpaper_image(
 /// Semantic layer assignment, run once at document init. Static ids plus the
 /// generated item slots; never called per-frame so visibility math stays raw.
 /// Desktop context-menu roots whose surface follows the Surfaces settings.
-pub const MENU_SURFACE_IDS: [&str; 5] = [
+pub const MENU_SURFACE_IDS: [&str; 6] = [
     "desktop-menu",
     "desktop-entry-menu",
     "desktop-convert-wheel",
     "sticky-menu",
     "desktop-confirm",
+    "downloads-notice",
 ];
 
 /// Projects `surfaceColor` / `surfaceOpacity` fill and the `decoration` corner radius
@@ -224,12 +225,13 @@ pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<()
     document.layer("sticky-menu", UiLayer::Popover)?;
     document.layer("desktop-rename", UiLayer::Popover)?;
     document.layer("desktop-confirm", UiLayer::Modal)?;
+    document.layer("downloads-notice", UiLayer::Modal)?;
     Ok(())
 }
 
 const SLOT_COUNT: usize = 128;
 
-pub const TRANSIENT_HIDDEN_IDS: [&str; 9] = [
+pub const TRANSIENT_HIDDEN_IDS: [&str; 10] = [
     "desktop-convert-preview",
     "desktop-drag-ghost",
     "desktop-selection",
@@ -239,6 +241,7 @@ pub const TRANSIENT_HIDDEN_IDS: [&str; 9] = [
     "desktop-convert-wheel",
     "sticky-menu",
     "desktop-confirm",
+    "downloads-notice",
 ];
 
 /// Runtime-owned first-paint guard: hides selection/sticky/menus/confirm via

@@ -252,6 +252,7 @@ dependencies = [
  "flamewm-dbus-reactor",
  "flamewm-debug",
  "flamewm-desktop-core",
+ "flamewm-downloads-core",
  "flamewm-image-core",
  "flamewm-integrations-linux",
  "flamewm-profiler",
@@ -273,9 +274,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-downloads-core"
+version = "0.1.1"
+dependencies = [
+ "rustix",
+]
+
+[[package]]
 name = "flamewm-explorer"
 version = "0.1.1"
 dependencies = [
+ "chrono",
  "flamewm-api",
  "flamewm-applications",
  "flamewm-control-core",

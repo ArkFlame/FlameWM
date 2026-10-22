@@ -52,6 +52,7 @@ const ACCENT_NODE_IDS: &[&str] = &[
     "lock-username-on",
     "lock-suspend-on",
     "sticky-toggle-on",
+    "downloads-organize-on",
     "focus-mouse-on",
     "snap-preview-on",
     "taskbar-seconds-on",
@@ -100,6 +101,12 @@ const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "taskbarShowNetwork",
         "taskbar-network-on",
         "taskbar-network-off",
+        true,
+    ),
+    (
+        "organizeDownloads",
+        "downloads-organize-on",
+        "downloads-organize-off",
         true,
     ),
     (
@@ -1936,6 +1943,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("lockShowDate", "lock-date-on", "lock-date-off"),
             ("lockShowUsername", "lock-username-on", "lock-username-off"),
             ("lockOnSuspend", "lock-suspend-on", "lock-suspend-off"),
+            ("organizeDownloads", "downloads-organize-on", "downloads-organize-off"),
             (
                 "taskbarShowSeconds",
                 "taskbar-seconds-on",
@@ -3194,8 +3202,9 @@ fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-const TOGGLE_KEYS: [&str; 26] = [
+const TOGGLE_KEYS: [&str; 27] = [
     "stickyNotesEnabled",
+    "organizeDownloads",
     "fontBold",
     "animationsEnabled",
     "startAnimationEnabled",
