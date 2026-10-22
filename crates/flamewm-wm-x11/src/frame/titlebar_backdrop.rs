@@ -350,8 +350,16 @@ fn titlebar_in(
         return None;
     }
     if kept.key != key {
-        state.retained = None;
-        return None;
+        // Same place, same wallpaper and radius, different size (a resize just released): serve
+        // the kept blur mirror-extended. A full wallpaper blur here stalls the release paint.
+        let same_place = (kept.key.0, kept.key.1, kept.key.4, kept.key.5)
+            == (key.0, key.1, key.4, key.5);
+        if !same_place {
+            state.retained = None;
+            return None;
+        }
+        let crop = slice_region_clamped(kept, origin, width, height);
+        return Some(compose_rgba(&crop, rgb, alpha));
     }
     let crop = slice_region(
         &kept.region,
@@ -1250,6 +1258,29 @@ mod tests {
             state.drag.as_ref().unwrap().blurred.as_ref().unwrap().cell,
             (DRAG_SLACK_X as i32, 0)
         );
+    }
+
+    #[test]
+    fn released_resize_serves_kept_blur_without_wallpaper_fallback() {
+        let mut state = State {
+            source: Some(WallpaperSource::Solid([9, 9, 9])),
+            ..State::default()
+        };
+        state.drag = build_drag(
+            &mut state,
+            3,
+            (8, 8),
+            Some([200, 0, 0, 255].repeat(8 * 8)),
+            (0, 0, 0, 0),
+        );
+        titlebar_in(&mut state, 3, (2, 2), (3, 2), (0, 0, 0), 0, 0).unwrap();
+        end_drag_in(&mut state, 3);
+        // Size changed at the same origin: kept blur served, kept crop survives.
+        let resized = titlebar_in(&mut state, 3, (2, 2), (5, 2), (0, 0, 0), 0, 0).unwrap();
+        assert_eq!(resized.len(), 5 * 2 * 4);
+        assert!(state.retained.is_some(), "kept crop survives a resized paint");
+        // Moved origin still falls back (wallpaper path).
+        assert!(titlebar_in(&mut state, 3, (5, 2), (3, 2), (0, 0, 0), 0, 0).is_none());
     }
 
     #[test]
