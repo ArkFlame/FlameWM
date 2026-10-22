@@ -104,7 +104,11 @@ impl ExplorerTheme {
     pub fn hover(&self)->UiColor {white(HOVER_ALPHA)}
     /// Menus and dialogs: the surface colour, opaque enough to read over busy wallpaper.
     pub fn menu(&self)->UiColor {UiColor{a:self.surface_alpha.max(MENU_MIN_ALPHA),..self.surface}}
-    pub fn muted(&self)->UiColor {white(MUTED_ALPHA)}
+    /// Secondary text. Text colour ignores alpha, so this is white blended over the surface, opaque.
+    pub fn muted(&self)->UiColor {
+        let mix=|c:u8|->u8 {((u16::from(c)*(255-u16::from(MUTED_ALPHA))+255*u16::from(MUTED_ALPHA))/255) as u8};
+        UiColor{r:mix(self.surface.r),g:mix(self.surface.g),b:mix(self.surface.b),a:255}
+    }
     pub fn selection_fill(&self)->UiColor {UiColor{a:self.accent_alpha,..self.accent}}
     pub fn selected(&self)->UiColor {
         // Accent blended over the surface colour, opaque: the selected row stays readable at any opacity.
@@ -126,6 +130,11 @@ impl ExplorerTheme {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn muted_text_is_opaque_and_dimmer_than_full_white() {
+        let muted=ExplorerTheme::default().muted();
+        assert_eq!(muted.a,255);
+        assert!(muted.r<245 && muted.r>ExplorerTheme::default().surface.r);
+    }
     #[test] fn unknown_values_preserve_defaults() {
         let mut settings=SettingsSnapshot::new(1);
         settings.values.insert("surfaceColor".into(),SettingValue::Text("oops".into()));

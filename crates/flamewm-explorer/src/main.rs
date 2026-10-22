@@ -13,6 +13,8 @@ use std::rc::Rc;
 use std::sync::mpsc::{self,Receiver,Sender};
 use std::time::{Duration,Instant};
 
+use flamewm_clipboard::{Clipboard,FileOp};
+use flamewm_explorer::clipboard::{resolve_paste,settle_cut};
 use flamewm_explorer::{prefs,AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,SortBy,sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places};
 use flamewm_explorer::view::{self,Column,ColumnSort};
 use flamewm_explorer::{archive,properties,refresh::DirWatch,search::{SearchEvent,SearchWorker},trash,places as bookmarks};
@@ -146,6 +148,8 @@ enum WorkerResult {
     Devices(Vec<bookmarks::BlockDevice>),
     /// Outcome of a udisks2 mount/unmount/eject, already worded for the status strip.
     DeviceDone(Result<String,String>),
+    /// Paste decision from the system clipboard read; `None` means nothing to paste.
+    PasteResolved(Option<(Vec<PathBuf>,bool)>),
 }
 fn send_wake(wake:&mut UnixStream, result:&Sender<WorkerResult>, message:WorkerResult) {
     if result.send(message).is_ok() {let _=wake.write_all(&[1]);}
@@ -316,13 +320,15 @@ struct ExplorerApp {
     unmounted:Vec<bookmarks::BlockDevice>,
     /// Wake channel for background threads (watcher, search, size). Set once in `run`.
     events:Option<(Sender<WorkerResult>,UnixStream)>,
+    /// Cut sources the explorer already moved; the system clipboard still lists them, so they are not pasted twice.
+    system_spent:Option<Vec<PathBuf>>,
 }
 impl ExplorerApp {
     fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
         let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,cancel:CancellationToken::new(),menu_overflow:false,scroll_offset:0.0,scroll_origin:0,scroll_ticking:false,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
-            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None};
+            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None,system_spent:None};
         app.reload_places();
         app
     }
@@ -368,7 +374,7 @@ impl ExplorerApp {
             match event {
                 SearchEvent::Batch{hits,..}=>{
                     let rows=self.search_rows.get_or_insert_with(Vec::new);
-                    rows.extend(hits.into_iter().map(|hit|Entry{path:hit.path,name:hit.name,directory:hit.directory,symlink:false,size:0,modified:None}));
+                    rows.extend(hits.into_iter().map(|hit|Entry{path:hit.path,name:hit.name,directory:hit.directory,symlink:false,size:hit.size,modified:hit.modified}));
                     self.model.status=format!("Searching… {} found",rows.len());
                 },
                 SearchEvent::Done{truncated,cancelled,..}=>{
@@ -490,6 +496,11 @@ impl ExplorerApp {
     fn navigate(&mut self,path:PathBuf) {
         if path.is_dir() {self.clear_search();self.model.tab_mut().visit(path);self.scan();} else {self.model.status="Directory does not exist".into();}
         self.context=None;
+    }
+    /// Entry behind DOM row `explorer.row.<slot>`. Paint places slot k at window row k-1 (the
+    /// glide keeps one buffer slot above the window), so hit-testing must use the same mapping.
+    fn row_entry(&self,slot:usize) -> Option<&Entry> {
+        self.entry_at(flamewm_explorer::row_slot_index(self.origin(self.visible_rows()),slot))
     }
     fn chosen(&self,slot:usize) -> Option<&Entry> {
         self.visible_entries().get(slot).copied()
@@ -654,6 +665,44 @@ impl ExplorerApp {
         if self.tx.send(job).is_ok() {self.busy=true;self.model.status=if undoing {"Undoing…"} else {"Redoing…"}.into();}
         else {self.model.status="File worker unavailable".into();}
     }
+    /// Publishes a file list to the system CLIPBOARD on a detached thread, so the UI never waits on it.
+    fn publish_system_clipboard(&mut self,paths:Vec<PathBuf>,cut:bool) {
+        self.system_spent=None;
+        std::thread::spawn(move||{
+            let op=if cut {FileOp::Cut} else {FileOp::Copy};
+            match Clipboard::connect() {
+                Ok(clipboard)=>{let _=clipboard.set_files(&paths,op);},
+                Err(e)=>eprintln!("flamewm-explorer: system clipboard unavailable: {e}"),
+            }
+        });
+    }
+    /// Reads the system clipboard on a worker thread; the result comes back as `PasteResolved`.
+    fn request_paste(&mut self) {
+        let in_app=self.model.clipboard.clone();
+        let spent=self.system_spent.clone();
+        let Some((tx,mut wake))=self.events.as_ref().and_then(|(tx,wake)|Some((tx.clone(),wake.try_clone().ok()?))) else {
+            self.apply_paste(resolve_paste(None,in_app.as_ref(),spent.as_deref()));
+            return;
+        };
+        self.model.status="Reading clipboard…".into();
+        std::thread::spawn(move||{
+            // Connect failures and a silent owner (500 ms timeout) both fall back to the in-app clipboard.
+            let system=Clipboard::connect().ok().and_then(|clipboard|clipboard.get_files().ok().flatten())
+                .map(|(paths,op)|(paths,op==FileOp::Cut));
+            let resolved=resolve_paste(system,in_app.as_ref(),spent.as_deref());
+            if tx.send(WorkerResult::PasteResolved(resolved)).is_ok() {let _=wake.write_all(&[1]);}
+        });
+    }
+    fn apply_paste(&mut self,resolved:Option<(Vec<PathBuf>,bool)>) {
+        match resolved {
+            Some((sources,cut))=>{
+                // A system cut becomes the in-app cut, so completion and partial-retry follow the normal path.
+                if cut {self.model.clipboard=Some((sources.clone(),true));}
+                self.start_transfer(sources,cut);
+            },
+            None=>self.model.status="Nothing to paste".into(),
+        }
+    }
     fn action_menu(&mut self,cmd:&str) {
         if self.busy && ["paste","duplicate","trash","newfolder","rename"].contains(&cmd) {
             self.model.status="File operation already in progress".into();self.context=None;return;
@@ -671,10 +720,11 @@ impl ExplorerApp {
             "copy"|"cut"=>{
                 if !paths.is_empty() {
                     self.model.status=format!("{} {} item(s)",if cmd=="cut"{"Cut"}else{"Copied"},paths.len());
-                    self.model.clipboard=Some((paths,cmd=="cut"));
+                    self.model.clipboard=Some((paths.clone(),cmd=="cut"));
+                    self.publish_system_clipboard(paths,cmd=="cut");
                 }
             },
-            "paste"=>if let Some((sources,cut))=self.model.clipboard.clone() {self.start_transfer(sources,cut);},
+            "paste"=>self.request_paste(),
             "duplicate"=>self.start_transfer(paths,false),
             "newfolder"=>{
                 let directory=self.model.tab().path().to_path_buf();
@@ -868,7 +918,7 @@ impl ExplorerApp {
             match e.phase {
                 UiActionPhase::Press if e.button==1 && e.inside && !e.shift_down()
                     && !e.ctrl_down() && !self.busy => {
-                    if let Some(entry)=self.chosen(slot) {
+                    if let Some(entry)=self.row_entry(slot) {
                         self.row_drag=Some(RowDrag::new(entry.path.clone(),e.x,e.y));
                     }
                     return;
@@ -929,7 +979,7 @@ impl ExplorerApp {
         }
         if e.phase!=UiActionPhase::Release || !e.inside {return;}
         if let Some(slot)=action.strip_prefix("explorer.row.").and_then(|v|v.parse::<usize>().ok()) {
-            if let Some(entry)=self.chosen(slot).cloned() {
+            if let Some(entry)=self.row_entry(slot).cloned() {
                 let path=entry.path;
                 if e.button == 3 {
                     // Context-click on a selected file preserves the full batch selection.
@@ -1182,11 +1232,9 @@ impl ExplorerApp {
                 self.busy=false;
                 self.cancel=CancellationToken::new();
                 if let Some(sources)=cut_sources.as_ref() {
-                    if self.model.clipboard.as_ref().is_some_and(|(paths,cut)| *cut && paths==sources) {
-                        // For a partial move, keep only the failed sources for a safe retry.
-                        self.model.clipboard=(!report.failed_sources.is_empty())
-                            .then(||(report.failed_sources.clone(),true));
-                    }
+                    // Partial moves keep only the failed sources for a safe retry; the system list is spent.
+                    self.model.clipboard=settle_cut(self.model.clipboard.take(),sources,report.failed_sources.clone());
+                    self.system_spent=Some(sources.clone());
                 }
                 self.progress=None;
                 if report.completed>0 {self.scan();}
@@ -1199,6 +1247,7 @@ impl ExplorerApp {
                         .arg(title).arg(format!("{} succeeded, {} failed",report.completed,report.failed)).spawn();
                 }
             }
+            WorkerResult::PasteResolved(resolved)=>self.apply_paste(resolved),
             WorkerResult::Completed(result)=>{
                 self.busy=false;
                 let good=result.is_ok();
@@ -1299,7 +1348,7 @@ impl ExplorerApp {
         let bottom=self.window.1-STATUS_STRIP_HEIGHT;
         for slot in 0..ROW_SLOTS {
             let row=format!("row-{slot}");
-            let index=origin as isize+slot as isize-1;
+            let index=flamewm_explorer::row_slot_index(origin,slot);
             let y=top+(slot as f32-1.0+self.scroll_offset)*ROW_HEIGHT;
             let entry=if slot<=rows+1 {self.entry_at(index)} else {None};
             if let (Some(entry),true)=(entry,y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5) {
@@ -1377,7 +1426,7 @@ impl ExplorerApp {
                 }
             } else {match item {
                 "terminal"|"newtab"|"newfolder"|"bookmark"=>true,
-                "paste"=>self.model.clipboard.is_some(),
+                "paste"=>true,
                 "emptytrash"=>in_trash,
                 "extract"=>self.ark && self.context_on_entry && !many && selected_path.as_deref().is_some_and(is_archive),
                 "compress"=>self.ark && self.context_on_entry && selected_path.is_some(),

@@ -287,6 +287,27 @@ pub fn plan_resize(req: &GeometryRequest<'_>) -> GeometryPlan {
     }
     .max(1);
 
+    // The dragged edge stops at the work-area edge (dock struts excluded), so a resize never
+    // extends under a dock. The fixed edge never moves. A fixed edge already outside the work
+    // area leaves no span to cap against.
+    let wa = req.work_area;
+    let span_w = if req.edges.left {
+        fixed_right.saturating_sub(wa.x)
+    } else if req.edges.right {
+        wa.x.saturating_add(wa.w).saturating_sub(fixed_left)
+    } else {
+        i32::MAX
+    };
+    let span_h = if req.edges.top {
+        fixed_bottom.saturating_sub(wa.y)
+    } else if req.edges.bottom {
+        wa.y.saturating_add(wa.h).saturating_sub(fixed_top)
+    } else {
+        i32::MAX
+    };
+    let raw_w = if span_w > 0 { raw_w.min(span_w) } else { raw_w };
+    let raw_h = if span_h > 0 { raw_h.min(span_h) } else { raw_h };
+
     // Frame domain -> client domain -> hints -> frame domain.
     let raw_cw = raw_w.saturating_sub(dw).max(1) as u32;
     let raw_ch = raw_h.saturating_sub(dh).max(1) as u32;
@@ -853,24 +874,51 @@ mod tests {
     }
 
     #[test]
-    fn resize_top_left_past_bounds_keeps_fixed_corner_and_quarter_visible() {
+    fn resize_top_left_past_work_area_stops_at_work_area_edge() {
         let mut r = req(ResizeEdges::top_left(), (-5000, -5000), free());
         r.outputs = OUTS;
         let p = plan_resize(&r);
-        // Fixed bottom-right corner is (500, 400); left and top stop at 3/4 outside.
-        assert_eq!(p.frame, RootRect::new(-1500, -1200, 2000, 1600));
+        // Fixed bottom-right corner is (500, 400); left and top stop at the work area's 0,0 edge.
+        assert_eq!(p.frame, RootRect::new(0, 0, 500, 400));
         assert_eq!(p.frame.x + p.frame.w, 500);
         assert_eq!(p.frame.y + p.frame.h, 400);
     }
 
     #[test]
-    fn resize_moving_edge_constrained_by_outputs_bounds() {
+    fn resize_stops_at_work_area_edge_not_output_edge() {
+        // 56 px taskbar reserve: the work area ends at y=1024 while the output ends at 1080.
+        let mut r = req(ResizeEdges::bottom_right(), (5000, 5000), free());
+        r.work_area = RootRect::new(0, 0, 1920, 1024);
+        let outputs = [RootRect::new(0, 0, 1920, 1080)];
+        r.outputs = &outputs;
+        let p = plan_resize(&r);
+        // Fixed top-left corner is (100, 100); the frame fills the work area to its right/bottom edges.
+        assert_eq!(p.frame, RootRect::new(100, 100, 1820, 924));
+        assert!(p.frame.y + p.frame.h <= 1024);
+    }
+
+    #[test]
+    fn resize_fixed_edge_outside_work_area_is_not_capped() {
+        // Fixed left edge already right of the work area: no span to cap against, so the
+        // raw resize result stands (the output-bounds rule still applies).
+        let mut r = req(ResizeEdges::right(), (100, 0), free());
+        r.start.rect = RootRect::new(2000, 100, 400, 300);
+        r.work_area = RootRect::new(0, 0, 1920, 1024);
+        let outputs = [RootRect::new(0, 0, 1920, 1080)];
+        r.outputs = &outputs;
+        let p = plan_resize(&r);
+        assert_eq!(p.frame.x, 2000);
+        assert!(p.frame.w > 0);
+    }
+
+    #[test]
+    fn resize_moving_edge_stops_at_work_area_edge() {
         let mut r = req(ResizeEdges::right(), (5000, 0), free());
         r.start.rect = RootRect::new(1500, 100, 400, 300);
         r.outputs = OUTS;
         let p = plan_resize(&r);
-        // Left edge fixed at 1500; 1/4 of the 1680 px width (420) stays on the 1920 px output.
-        assert_eq!(p.frame, RootRect::new(1500, 100, 1680, 300));
+        // Left edge fixed at 1500; the right edge stops at the 1920 px work-area edge.
+        assert_eq!(p.frame, RootRect::new(1500, 100, 420, 300));
     }
 
     #[test]

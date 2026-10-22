@@ -294,6 +294,7 @@ dependencies = [
  "chrono",
  "flamewm-api",
  "flamewm-applications",
+ "flamewm-clipboard",
  "flamewm-control-core",
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// Walker threads per search job.
 const MAX_THREADS: usize = 4;
@@ -25,6 +25,8 @@ pub struct SearchHit {
     pub name: String,
     pub parent: PathBuf,
     pub directory: bool,
+    pub size: u64,
+    pub modified: Option<SystemTime>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -110,7 +112,7 @@ fn walk(root: &Path, query: &str, show_hidden: bool, cancel: &AtomicBool, thread
                                     truncated.store(true, Ordering::Relaxed);
                                     break;
                                 }
-                                batch.push(SearchHit { parent: dir.clone(), path: path.clone(), name, directory });
+                                batch.push(SearchHit { parent: dir.clone(), path: path.clone(), name, directory, size: meta.len(), modified: meta.modified().ok() });
                                 if batch.len() >= BATCH {
                                     sink(std::mem::take(&mut batch));
                                 }

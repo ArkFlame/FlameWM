@@ -10,6 +10,7 @@ description = "FlameWM native file explorer"
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
 flamewm-applications = { path = "../flamewm-applications" }
+flamewm-clipboard = { path = "../flamewm-clipboard" }
 flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }

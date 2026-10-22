@@ -10,6 +10,7 @@ use std::os::unix::fs::symlink;
 use std::time::SystemTime;
 
 pub mod archive;
+pub mod clipboard;
 pub mod places;
 pub mod prefs;
 pub mod properties;
@@ -21,6 +22,12 @@ pub mod view;
 pub mod jobs;
 /// Row widgets in the template. The list viewport decides how many of them are shown.
 pub const ROW_SLOTS: usize = 24;
+
+/// Window row shown by DOM list slot `slot`. The smooth-scroll glide keeps slot 0 as a buffer above
+/// the window, so slot k shows window row k-1. Paint and hit-testing both use this mapping.
+pub fn row_slot_index(origin: usize, slot: usize) -> isize {
+    origin as isize + slot as isize - 1
+}
 pub const MAX_LISTED_ENTRIES: usize = 100_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -489,6 +496,12 @@ pub fn is_archive(path:&Path)->bool {
 mod tests {
     use std::time::UNIX_EPOCH;
     use super::*;
+    #[test] fn row_slot_index_matches_paint_mapping() {
+        // Slot 1 is the first window row; slot 0 is the glide buffer above it.
+        assert_eq!(row_slot_index(0, 1), 0);
+        assert_eq!(row_slot_index(0, 0), -1);
+        assert_eq!(row_slot_index(5, 3), 7);
+    }
     #[test] fn lsblk_unmounted_partition_maps_to_unmounted_device_place() {
         let sample = r#"{"blockdevices":[{"name":"sdb","rm":true,"hotplug":true,"children":[
             {"name":"sdb1","rm":true,"hotplug":true,"fstype":"vfat","mountpoint":null,"label":"Backup"}]}]}"#;
