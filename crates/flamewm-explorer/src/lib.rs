@@ -11,6 +11,7 @@ use std::time::SystemTime;
 
 pub mod archive;
 pub mod places;
+pub mod prefs;
 pub mod properties;
 pub mod refresh;
 pub mod search;
@@ -165,7 +166,7 @@ impl Tab {
             .collect()
     }
     /// Scroll offset clamped to the filtered list, so a shorter list never shows blank space.
-    fn window_start(&self, rows: usize) -> usize {
+    pub fn window_start(&self, rows: usize) -> usize {
         self.scroll.min(self.filtered_count().saturating_sub(rows))
     }
     /// Move the window by whole rows; the offset stays within the list.
@@ -339,14 +340,19 @@ pub fn places(home:&Path,unmounted:&[places::BlockDevice]) -> Vec<Place> {
         for device in places::parse_mountinfo(&contents) {
             if device.mount_point.is_dir() {
                 let name=places::sanitize_label(&device.mount_point.file_name().unwrap_or_default().to_string_lossy());
+                // Nameless mounts are not listed, matching Dolphin's sidebar.
+                if name.is_empty() {continue;}
                 places.push(Place{name,path:device.mount_point,removable:true,group:PlaceGroup::Devices,icon:"usb",device:Some(format!("/dev/{}",device.block_name))});
             }
         }
     }
-    for device in unmounted {
-        places.push(Place{name:device.label.clone(),path:PathBuf::new(),removable:true,group:PlaceGroup::Devices,icon:"usb",device:Some(device.device.clone())});
-    }
+    places.extend(unmounted.iter().map(unmounted_place));
     places
+}
+
+/// Sidebar row for a present but unmounted removable filesystem: no path, so `mounted()` is false.
+pub fn unmounted_place(device:&places::BlockDevice)->Place {
+    Place{name:device.label.clone(),path:PathBuf::new(),removable:true,group:PlaceGroup::Devices,icon:"usb",device:Some(device.device.clone())}
 }
 
 /// Crash-safe copy owned by `jobs`; never overwrites an existing entry.
@@ -476,6 +482,32 @@ pub fn is_archive(path:&Path)->bool {
 mod tests {
     use std::time::UNIX_EPOCH;
     use super::*;
+    #[test] fn lsblk_unmounted_partition_maps_to_unmounted_device_place() {
+        let sample = r#"{"blockdevices":[{"name":"sdb","rm":true,"hotplug":true,"children":[
+            {"name":"sdb1","rm":true,"hotplug":true,"fstype":"vfat","mountpoint":null,"label":"Backup"}]}]}"#;
+        let devices = places::parse_lsblk(sample);
+        let rows: Vec<Place> = devices.iter().map(unmounted_place).collect();
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].mounted());
+        assert_eq!(rows[0].name, "Backup");
+        assert_eq!(rows[0].device.as_deref(), Some("/dev/sdb1"));
+        assert_eq!(rows[0].group, PlaceGroup::Devices);
+    }
+    #[test] fn flamewm_explorer_desktop_entry_is_listed_in_system_menu_bucket() {
+        let dir = std::env::temp_dir().join(format!("flamewm-explorer-xdg-{}", std::process::id()));
+        let apps = dir.join("applications");
+        std::fs::create_dir_all(&apps).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let text = include_str!("../../../packaging/flamewm-explorer.desktop")
+            .replace("Exec=flamewm-explorer", &format!("Exec={}", exe.display()))
+            .replace("TryExec=flamewm-explorer", &format!("TryExec={}", exe.display()));
+        std::fs::write(apps.join("flamewm-explorer.desktop"), text).unwrap();
+        let catalog = flamewm_applications::ApplicationCatalog::from_dirs(&[apps]).unwrap();
+        let app = catalog.all().into_iter().find(|a| a.name == "FlameWM Explorer");
+        std::fs::remove_dir_all(&dir).unwrap();
+        let app = app.expect("explorer entry must survive NoDisplay/TryExec filtering");
+        assert_eq!(app.categories.first().map(String::as_str), Some("System"));
+    }
     #[test] fn home_alias_and_remote_protocols_do_not_confuse_native_paths() {
         let home=Path::new("/home/demo");
         assert_eq!(display_location(home,home),"~");

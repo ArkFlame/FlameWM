@@ -13,8 +13,8 @@ use std::rc::Rc;
 use std::sync::mpsc::{self,Receiver,Sender};
 use std::time::{Duration,Instant};
 
-use flamewm_explorer::{AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,SortBy,sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places};
-use flamewm_explorer::view::{self,Column,ColumnSort,ViewMode};
+use flamewm_explorer::{prefs,AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,SortBy,sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places};
+use flamewm_explorer::view::{self,Column,ColumnSort};
 use flamewm_explorer::{archive,properties,refresh::DirWatch,search::SearchWorker,trash,places as bookmarks};
 use std::sync::atomic::{AtomicBool,Ordering};
 use std::sync::Arc;
@@ -28,7 +28,7 @@ use flamewm_desktop_core::{file_actions::create_new_folder,trash::Trash};
 use flamewm_ui_x11::{UiActionEvent,UiActionPhase,UiColor,UiControllerEvent,UiDocumentAccess,UiKeyEvent,UiKeyPhase,UiWakeDrain,UiWindowConfig,UiWindowRole,run_with_controller_events_role_and_two_readable_fds,decode_document};
 
 const UI: &[u8]=include_bytes!(concat!(env!("OUT_DIR"),"/flamewm-explorer.rwr"));
-const MENU_ITEMS: [&str;22]=["open","openwith","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject"];
+const MENU_ITEMS: [&str;23]=["open","openwith","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject","hidden"];
 /// Sidebar rows (group headings plus places) that the template provides; extra rows are not drawn.
 const SIDEBAR_SLOTS:usize=32;
 // Canonical geometry: paint (project) and hit-testing (cell_rect, folder_at, select bands) all derive from these.
@@ -69,10 +69,9 @@ fn window_frame(root:(u32,u32))->(u32,u32,i32) {
 fn header_top(tab_strip:bool)->f32 {TOOLBAR_HEIGHT+if tab_strip {TABBAR_HEIGHT} else {0.0}}
 /// Top of the first row, directly below the column header.
 fn list_top(tab_strip:bool)->f32 {header_top(tab_strip)+HEADER_HEIGHT}
-const ICON_COLUMNS:usize=4;
-const ICON_WIDTH:f32=200.0;
-const ICON_HEIGHT:f32=28.0;
-const ICON_GAP:f32=8.0;
+/// Glide frame interval and per-frame retention for sub-row scroll animation (about 150 ms to settle).
+const SCROLL_FRAME:Duration=Duration::from_millis(16);
+const SCROLL_EASE:f32=0.6;
 /// Typing pauses longer than this start a fresh type-ahead prefix.
 const TYPEAHEAD_RESET:Duration=Duration::from_millis(800);
 
@@ -128,6 +127,8 @@ enum WorkerResult {
     Total(u64),
     /// Recursive size of a folder shown in Properties; `path` identifies the dialog it belongs to.
     SizeReady {path:PathBuf,bytes:std::io::Result<u64>},
+    /// One frame of the list scroll glide.
+    ScrollTick,
     /// Search worker has a new poll result; the app drains it on the UI thread.
     SearchTick,
     /// Directory watcher saw a change in the listed folder.
@@ -288,7 +289,8 @@ struct ExplorerApp {
     last_click:Option<(PathBuf,Instant)>, progress:Option<u64>,
     context_on_entry:bool, rubber:Option<((f32,f32),(f32,f32))>, activity:Option<String>, busy:bool,
     row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, cancel:CancellationToken,
-    view:ViewMode, column_sort:ColumnSort, typed:String, typed_at:Option<Instant>,
+    menu_overflow:bool, scroll_offset:f32, scroll_origin:usize, scroll_ticking:bool,
+    column_sort:ColumnSort, typed:String, typed_at:Option<Instant>,
     dialog:Option<Dialog>, ark:bool, search:Option<SearchWorker>, search_id:u64,
     search_rows:Option<Vec<Entry>>, watch:Option<DirWatch>, watched:Option<PathBuf>,
     context_place:Option<usize>, progress_total:u64, trash_base:PathBuf,
@@ -301,7 +303,7 @@ impl ExplorerApp {
     fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
-        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,cancel:CancellationToken::new(),view:ViewMode::Details,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
+        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,cancel:CancellationToken::new(),menu_overflow:false,scroll_offset:0.0,scroll_origin:0,scroll_ticking:false,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
             dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None};
         app.reload_places();
         app
@@ -348,6 +350,49 @@ impl ExplorerApp {
         self.search_rows=Some(rows);
     }
     /// Entries shown in the file pane: search results replace the folder listing while active.
+    /// First window row: the search-result window when searching, else the folder window.
+    fn origin(&self,rows:usize)->usize {
+        match self.search_rows.as_ref() {
+            Some(results)=>self.model.tab().scroll.min(results.len().saturating_sub(rows)),
+            None=>self.model.tab().window_start(rows),
+        }
+    }
+    fn entry_at(&self,index:isize)->Option<&Entry> {
+        let index=usize::try_from(index).ok()?;
+        match self.search_rows.as_ref() {
+            Some(results)=>results.get(index),
+            None=>self.model.tab().visible_nth(index),
+        }
+    }
+    /// Tracks the window origin after every input or wake. A small step glides from the old position;
+    /// a folder change or a jump larger than the window snaps.
+    fn sync_scroll(&mut self) {
+        let origin=self.origin(self.visible_rows());
+        if origin!=self.scroll_origin {
+            let step=origin as f32-self.scroll_origin as f32;
+            self.scroll_offset=retarget_offset(self.scroll_offset,step,self.visible_rows());
+            self.scroll_origin=origin;
+        }
+        if self.scroll_offset!=0.0 {self.schedule_scroll_tick();}
+    }
+    fn schedule_scroll_tick(&mut self) {
+        if self.scroll_ticking {return;}
+        self.scroll_ticking=true;
+        self.spawn_background(||{std::thread::sleep(SCROLL_FRAME);WorkerResult::ScrollTick});
+    }
+    fn step_scroll(&mut self) {
+        self.scroll_ticking=false;
+        self.scroll_offset=ease_offset(self.scroll_offset);
+        if self.scroll_offset!=0.0 {self.schedule_scroll_tick();}
+    }
+    /// Show or hide dot files, persisting the choice for the next Explorer window.
+    fn toggle_hidden(&mut self) {
+        self.model.hidden=!self.model.hidden;
+        if let Err(error)=prefs::save(&prefs::config_dir(),&prefs::Prefs{show_hidden:self.model.hidden}) {
+            self.model.status=format!("Could not save Explorer settings: {error}");
+        }
+        self.scan();
+    }
     fn visible_entries(&self)->Vec<&Entry> {
         let rows=self.visible_rows();
         if let Some(results)=self.search_rows.as_ref() {
@@ -413,22 +458,11 @@ impl ExplorerApp {
     fn chosen(&self,slot:usize) -> Option<&Entry> {
         self.visible_entries().get(slot).copied()
     }
-    /// Window-space rectangle of one file slot. Details and Compact are list rows; Icons is a grid.
-    fn cell_rect(&self,slot:usize)->(f32,f32,f32,f32) {
-        let list_top=list_top(self.model.tabs.len()>1);
-        if self.view==ViewMode::Icons {
-            let column=(slot%ICON_COLUMNS) as f32;
-            let row=(slot/ICON_COLUMNS) as f32;
-            return (SIDEBAR_WIDTH+ICON_GAP+column*(ICON_WIDTH+ICON_GAP),list_top+ICON_GAP+row*(ICON_HEIGHT+ICON_GAP),ICON_WIDTH,ICON_HEIGHT);
-        }
-        (SIDEBAR_WIDTH,list_top+ROW_HEIGHT*slot as f32,self.window.0-SIDEBAR_WIDTH,ROW_HEIGHT)
-    }
     fn selected(&self) -> Option<PathBuf> {self.model.tab().selected.clone()}
     /// Drop coordinates belong to the Explorer surface. Only visible folder rows
     /// inside the file pane are eligible; no guessed external-window targets.
     fn folder_at(&self,x:f32,y:f32)->Option<PathBuf> {
-        // Icon-grid cells are not rows, so only the list layouts map pointer y to a slot.
-        if self.view==ViewMode::Icons || !x.is_finite() || !y.is_finite() || !(SIDEBAR_WIDTH..self.window.0).contains(&x) {return None;}
+        if !x.is_finite() || !y.is_finite() || !(SIDEBAR_WIDTH..self.window.0).contains(&x) {return None;}
         let top=list_top(self.model.tabs.len()>1);
         if y<top || y>=top+ROW_HEIGHT*self.visible_rows() as f32 {return None;}
         let slot=((y-top)/ROW_HEIGHT) as usize;
@@ -634,7 +668,8 @@ impl ExplorerApp {
                 self.edit=Some(EditMode::PlaceName);self.buffer=place.name.clone();
             },
             "placeremove"=>if let Some(path)=self.context_place_path() {self.mutate_bookmark(&path,|items,index|bookmarks::remove(items,index).is_some());},
-            "unmount"|"eject"=>if let Some(place)=self.context_place.and_then(|i|self.places.get(i)).cloned() {
+            "hidden"=>self.toggle_hidden(),
+                "unmount"|"eject"=>if let Some(place)=self.context_place.and_then(|i|self.places.get(i)).cloned() {
                 if let Some(device)=place.device {self.device_action(if cmd=="eject"{"eject"}else{"unmount"},device,place.name);}
             },
             _=>{}
@@ -819,11 +854,11 @@ impl ExplorerApp {
         if action=="explorer.surface" {
             if e.button==3 && e.phase==UiActionPhase::Release && e.inside {
                 self.context_on_entry=false;
-                self.context=Some((e.x,e.y));
+                self.context=Some((e.x,e.y));self.menu_overflow=false;
                 self.rubber=None;
             } else {
                 match e.phase {
-                    UiActionPhase::Press if e.button==1 && e.inside && self.view!=ViewMode::Icons => {
+                    UiActionPhase::Press if e.button==1 && e.inside => {
                         self.context=None;
                         self.rubber=Some(((e.x,e.y),(e.x,e.y)));
                     },
@@ -860,7 +895,7 @@ impl ExplorerApp {
                     self.last_click=None;
                     self.context_on_entry=true;
                     self.context_place=None;
-                    self.context=Some((e.x,e.y));
+                    self.context=Some((e.x,e.y));self.menu_overflow=false;
                 } else if e.button == 1 && e.shift_down() {
                     // Shift selects a contiguous range using the existing anchor.
                     // Ctrl+Shift adds that range to the current selection.
@@ -889,7 +924,7 @@ impl ExplorerApp {
                     // Right-click on a sidebar item opens the place menu instead of navigating.
                     self.context_on_entry=false;
                     self.context_place=Some(index);
-                    self.context=Some((e.x,e.y));
+                    self.context=Some((e.x,e.y));self.menu_overflow=false;
                 } else {self.activate_place(index);}
             }
             return;
@@ -907,19 +942,16 @@ impl ExplorerApp {
             "explorer.forward"=>{if self.model.tab_mut().forward(){self.scan();}},
             "explorer.up"=>{if self.model.tab_mut().up(){self.scan();}},
             "explorer.reload"=>{self.reload_places();self.refresh_devices();self.scan();},
-            "explorer.hidden"=>{self.model.hidden=!self.model.hidden;self.scan();},
+            "explorer.hidden"=>self.toggle_hidden(),
             "explorer.search"=>{self.edit=Some(EditMode::Search);self.buffer=self.model.tab().search.clone();},
             "explorer.address"=>{self.edit=Some(EditMode::Path);self.buffer=self.model.tab().path().to_string_lossy().into_owned();},
             "explorer.tab.new"=>{if self.model.tabs.len()<5 {self.model.new_tab();self.scan();}},
             "explorer.tab.close"=>{self.model.close_tab();self.scan();},
-            "explorer.view.icons"=>self.view=ViewMode::Icons,
-            "explorer.view.details"=>self.view=ViewMode::Details,
-            "explorer.view.compact"=>self.view=ViewMode::Compact,
             "explorer.sort.name"=>self.sort_by(Column::Name),
             "explorer.sort.size"=>self.sort_by(Column::Size),
             "explorer.sort.modified"=>self.sort_by(Column::Modified),
             "explorer.sort.kind"=>self.sort_by(Column::Type),
-            "explorer.menu"=>{self.context_on_entry=false;self.context=Some((725.0,53.0));},
+            "explorer.menu"=>{self.context_on_entry=false;self.menu_overflow=true;self.context=Some((self.window.0-8.0,53.0));},
             "explorer.cancel"=>if self.busy {self.cancel.cancel();self.model.status="Cancelling…".into();},
             _=>{}
         }
@@ -1017,8 +1049,7 @@ impl ExplorerApp {
             "f" if ctrl=>{self.edit=Some(EditMode::Search);self.buffer=self.model.tab().search.clone();},
             "t" if ctrl=>{if self.model.tabs.len()<5{self.model.new_tab();self.scan();}},
             "w" if ctrl=>{self.model.close_tab();self.scan();},
-            "h" if ctrl=>{self.model.hidden=!self.model.hidden;self.scan();},
-            "1"|"2"|"3" if ctrl=>self.view=ViewMode::from_shortcut(name.as_bytes()[0]-b'0').unwrap_or(self.view),
+            "h" if ctrl=>self.toggle_hidden(),
             "a" if ctrl=>self.model.tab_mut().select_all_filtered(),
             "space"|" " if ctrl=>if let Some(path)=self.selected() {self.model.tab_mut().toggle_selection(path)},
             "c" if ctrl=>self.action_menu("copy"),
@@ -1081,6 +1112,7 @@ impl ExplorerApp {
             WorkerResult::DirChanged=>{
                 if !self.busy && self.dialog.is_none() {self.request_listing();}
             },
+            WorkerResult::ScrollTick=>self.step_scroll(),
             WorkerResult::SearchTick=>self.take_search_results(),
             WorkerResult::SizeReady{path,bytes}=>{
                 if let Some(Dialog::Properties{props,size,..})=self.dialog.as_mut() {
@@ -1139,14 +1171,13 @@ impl ExplorerApp {
     fn project(&self, doc:&mut impl UiDocumentAccess)->Result<(),String>{
         self.theme.project(doc)?;
         let tab=self.model.tab();
-        let address=match self.edit {Some(EditMode::Path)=>format!("{}|",self.buffer),Some(EditMode::Search)=>format!("Search: {}|",self.buffer),Some(EditMode::Rename)=>format!("Rename: {}|",self.buffer),Some(EditMode::Mode)=>format!("Permissions: {}|",self.buffer),Some(EditMode::PlaceName)=>format!("Place name: {}|",self.buffer),None=>display_location(tab.path(),&home_dir())};
+        // The path bar always shows the folder; search text belongs to the search field only.
+        let address=match self.edit {Some(EditMode::Path)=>format!("{}|",self.buffer),Some(EditMode::Rename)=>format!("Rename: {}|",self.buffer),Some(EditMode::Mode)=>format!("Permissions: {}|",self.buffer),Some(EditMode::PlaceName)=>format!("Place name: {}|",self.buffer),_=>display_location(tab.path(),&home_dir())};
         doc.text("address-text",address)?;
         let folder=if tab.path()==home_dir().as_path() {"Home".to_owned()} else {tab.path().file_name().unwrap_or_default().to_string_lossy().into_owned()};
         let search=match self.edit {Some(EditMode::Search)=>format!("Search: {}|",self.buffer),_=>format!("Search {folder}")};
         doc.text("search-text",search)?;
-        for (id,active) in [("view-icons",self.view==ViewMode::Icons),("view-details",self.view==ViewMode::Details),("view-compact",self.view==ViewMode::Compact),("toggle-hidden",self.model.hidden)] {
-            if active {doc.background(id,self.theme.selected())?;} else {doc.background_clear(id)?;}
-        }
+        doc.text("menu-hidden",format!("Show Hidden Files: {}",if self.model.hidden {"On"} else {"Off"}))?;
         doc.foreground("nav-back",if tab.can_back(){WHITE}else{MUTED})?;
         doc.foreground("nav-forward",if tab.can_forward(){WHITE}else{MUTED})?;
         // Native Finder-style chrome: a single tab has no visible tab strip.
@@ -1182,7 +1213,6 @@ impl ExplorerApp {
                     doc.text(&format!("place-label-{slot}"),place.name.clone())?;
                     doc.foreground(&format!("place-label-{slot}"),if unmounted && place.device.is_some() {MUTED} else {WHITE})?;
                     doc.background(&format!("place-{slot}"),if selected {self.theme.selected()} else {self.theme.sidebar()})?;
-                    doc.visible(&format!("pdot-{slot}"),selected)?;
                     // Device rows get a Dolphin-style button: eject while mounted, mount while not.
                     let device=place.device.is_some();
                     doc.visible(&format!("pact-{slot}"),device)?;
@@ -1196,40 +1226,46 @@ impl ExplorerApp {
                 }
             }
         }
-        let entries=self.visible_entries();
         // Only Details shows the metadata columns; Icons shows names alone.
-        let details=self.view==ViewMode::Details;
-        let arrow=|column:Column,label:&str|if self.column_sort.column==column {
-            format!("{label} {}",if self.column_sort.descending{"v"}else{"^"})
-        } else {label.to_owned()};
         // The header and every row share one geometry: flow cells with identical fixed widths.
         doc.position("columns",SIDEBAR_WIDTH,header_top(tab_strip))?;
         doc.size("columns",self.window.0-SIDEBAR_WIDTH,HEADER_HEIGHT)?;
-        doc.visible("columns",details)?;
-        doc.text("col-name",arrow(Column::Name,"Name"))?;
-        doc.text("col-mod",arrow(Column::Modified,"Date modified"))?;
-        doc.text("col-size",arrow(Column::Size,"Size"))?;
-        doc.text("col-kind",arrow(Column::Type,"Kind"))?;
+        doc.visible("columns",true)?;
+        // Sort direction is a drawn triangle per column; only the active column shows one.
+        for (column,key) in [(Column::Name,"name"),(Column::Modified,"mod"),(Column::Size,"size"),(Column::Type,"kind")] {
+            let active=self.column_sort.column==column;
+            doc.visible(&format!("sort-{key}-asc"),active&&!self.column_sort.descending)?;
+            doc.visible(&format!("sort-{key}-desc"),active&&self.column_sort.descending)?;
+        }
+        // List rows glide: slot k draws window row k-1 at its eased offset; the outer slots are off-window until they settle.
+        let rows=self.visible_rows();
+        let origin=self.origin(rows);
+        let top=list_top(self.model.tabs.len()>1);
+        let bottom=self.window.1-STATUS_STRIP_HEIGHT;
         for slot in 0..ROW_SLOTS {
             let row=format!("row-{slot}");
-            if let Some(entry)=entries.get(slot) {
+            let index=origin as isize+slot as isize-1;
+            let y=top+(slot as f32-1.0+self.scroll_offset)*ROW_HEIGHT;
+            let entry=if slot<=rows+1 {self.entry_at(index)} else {None};
+            if let (Some(entry),true)=(entry,y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5) {
                 doc.visible(&row,true)?;
-                let (left,top,width,height)=self.cell_rect(slot);
-                doc.position(&row,left,top)?;
-                doc.size(&row,width,height)?;
+                doc.position(&row,SIDEBAR_WIDTH,y)?;
+                doc.size(&row,self.window.0-SIDEBAR_WIDTH,ROW_HEIGHT)?;
                 doc.text(&format!("name-{slot}"),entry.name.clone())?;
                 doc.text(&format!("size-{slot}"),entry.size_label())?;
                 doc.text(&format!("modified-{slot}"),entry.modified_label())?;
                 doc.text(&format!("kind-{slot}"),view::kind_name(entry))?;
+                // Dot files are dimmed (text only; the icon raster is shared and stays full strength).
+                let dim=entry.name.starts_with('.');
+                for id in [format!("name-{slot}"),format!("size-{slot}"),format!("modified-{slot}"),format!("kind-{slot}")] {
+                    if dim {doc.foreground(&id,UiColor{r:0xb4,g:0xba,b:0xc1,a:110})?;} else {doc.foreground_clear(&id)?;}
+                }
                 let icon=view::file_icon(entry);
                 for kind in ROW_ICONS {doc.visible(&format!("ico-{slot}-{kind}"),kind==icon)?;}
-                doc.visible(&format!("size-{slot}"),details)?;
-                doc.visible(&format!("modified-{slot}"),details)?;
-                doc.visible(&format!("kind-{slot}"),details)?;
                 doc.background(&row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) {
                     self.theme.selected()
                 } else if tab.selected_paths.contains(&entry.path){self.theme.selected()}
-                    else if slot%2==0{self.theme.surface()}else{self.theme.row_alternate()})?;
+                    else if index%2==0{self.theme.surface()}else{self.theme.row_alternate()})?;
             } else {doc.visible(&row,false)?;}
         }
         if let Some(((x0,y0),(x1,y1)))=self.rubber {
@@ -1293,6 +1329,7 @@ impl ExplorerApp {
                 "open"|"openwith"|"rename"|"properties"=>self.context_on_entry && !many && selected_path.is_some(),
                 "opencontaining"=>searching && self.context_on_entry && !many && selected_path.is_some(),
                 "restore"=>in_trash && self.context_on_entry && selected_path.is_some(),
+                "hidden"=>self.menu_overflow,
                 _=>false,
             }};
             doc.visible(&format!("menu-{item}"),enabled)?;
@@ -1302,7 +1339,9 @@ impl ExplorerApp {
             // Shared desktop context-menu metrics; hidden actions consume no space.
             let metrics=flamewm_ui_core::context_menu::MenuMetrics::canonical();
             let height=visible_rows as f32*metrics.row_height as f32+2.0*metrics.padding as f32;
-            doc.position("context-popup",x.min(self.window.0-210.0).max(0.0),y.min(self.window.1-height).max(0.0))?;
+            // The overflow menu hangs from the right edge of its button; other menus open at the pointer.
+            let left=if self.menu_overflow {x-210.0} else {x};
+            doc.position("context-popup",left.min(self.window.0-210.0).max(0.0),y.min(self.window.1-height).max(0.0))?;
         }
         Ok(())
     }
@@ -1430,8 +1469,11 @@ fn run()->Result<(),String>{
         app.events=Some(app_events);
         app.search=Some(search);
         app.theme=initial_theme();
+        app.model.hidden=prefs::load(&prefs::config_dir()).show_hidden;
     }
     app.borrow_mut().scan();
+    // Present-but-unmounted devices arrive from lsblk on a worker; without this they only show after a reload.
+    app.borrow().refresh_devices();
     let mut doc=decode_document(UI)?;
     app.borrow().project(&mut doc)?;
     let event_app=Rc::clone(&app);
@@ -1461,16 +1503,27 @@ fn run()->Result<(),String>{
         },notifications,
         move |event,document|{
             let mut app=event_app.borrow_mut();
-            match event {UiControllerEvent::Action(action)=>app.event(action),UiControllerEvent::Key(key)=>app.key(key)}
+            match event {UiControllerEvent::Action(action)=>{app.event(action);app.sync_scroll();},UiControllerEvent::Key(key)=>{app.key(key);app.sync_scroll();}}
             app.project(document)
         },
         move |document|{
             let mut app=wake_app.borrow_mut();
             if let Some(snapshot)=wake_snapshots.borrow_mut().take(){app.theme=ExplorerTheme::from_snapshot(&snapshot);}
             while let Ok(message)=results.try_recv(){app.wake(message);}
+            app.sync_scroll();
             app.project(document)
         },
     )
+}
+
+/// Offset after a window-origin change: small steps accumulate, a folder change or a jump past the window snaps.
+fn retarget_offset(offset:f32,step:f32,rows:usize)->f32 {
+    if step.abs()>rows as f32 {0.0} else {offset+step}
+}
+/// One eased frame toward rest; values under 0.01 row settle to exactly zero.
+fn ease_offset(offset:f32)->f32 {
+    let next=offset*SCROLL_EASE;
+    if next.abs()<0.01 {0.0} else {next}
 }
 
 #[cfg(test)]
@@ -1517,28 +1570,19 @@ mod window_frame_tests {
     }
 }
 #[cfg(test)]
-mod layout_tests {
+mod glide_tests {
     use super::*;
-    fn app(view:ViewMode) -> ExplorerApp {
-        let (tx,_rx)=mpsc::channel();
-        let (scan_tx,_scan_rx)=mpsc::channel();
-        let (chooser_tx,_chooser_rx)=mpsc::channel();
-        let mut app=ExplorerApp::new(PathBuf::from("/"),tx,scan_tx,chooser_tx);
-        app.view=view;
-        app
+    #[test]
+    fn small_steps_glide_and_big_jumps_snap() {
+        assert_eq!(retarget_offset(0.0,1.0,10),1.0);
+        assert_eq!(retarget_offset(0.5,-1.0,10),-0.5);
+        assert_eq!(retarget_offset(0.5,25.0,10),0.0);
     }
     #[test]
-    fn icon_grid_wraps_after_four_cells_and_list_rows_stack() {
-        let icons=app(ViewMode::Icons);
-        let (x0,y0,_,_)=icons.cell_rect(0);
-        let (x4,y4,_,_)=icons.cell_rect(4);
-        assert_eq!(x4,x0);
-        assert!(y4>y0);
-        assert!(icons.cell_rect(3).0>x0);
-        let list=app(ViewMode::Compact);
-        let (_,a,_,h)=list.cell_rect(0);
-        let (_,b,_,_)=list.cell_rect(1);
-        assert_eq!(b-a,ROW_HEIGHT);
-        assert_eq!(h,ROW_HEIGHT);
+    fn ease_settles_within_about_150ms() {
+        let mut offset=1.0_f32;
+        let mut frames=0;
+        while offset!=0.0 {offset=ease_offset(offset);frames+=1;assert!(frames<=12,"glide too long");}
+        assert!(frames>=6,"glide too short to read as motion");
     }
 }

@@ -364,6 +364,9 @@ impl JsonParser<'_> {
     }
 }
 
+/// Filesystems smaller than this are system partitions, not user media.
+const MIN_DEVICE_BYTES: f64 = (64u64 << 20) as f64;
+
 /// Unmounted removable filesystems from `lsblk -J` output. Partitions of a removable disk are listed one by one;
 /// a removable disk without partitions is listed itself. Mounted, swap, unformatted and invalid nodes are skipped.
 pub fn parse_lsblk(text: &str) -> Vec<BlockDevice> {
@@ -384,7 +387,21 @@ pub fn parse_lsblk(text: &str) -> Vec<BlockDevice> {
 fn unmounted_filesystem(node: &Json) -> Option<BlockDevice> {
     let name = node.get("name")?.text()?;
     let fstype = node.get("fstype").and_then(Json::text).unwrap_or("");
-    if fstype.is_empty() || fstype == "swap" {
+    if fstype.is_empty() || fstype == "swap" || name.starts_with("loop") || name.starts_with("ram") || name.starts_with("zram") {
+        return None;
+    }
+    // Dolphin hides tiny system partitions; lsblk -b reports sizes in bytes.
+    let size = match node.get("size") {
+        Some(Json::Num(n)) => Some(*n),
+        Some(Json::Str(s)) => s.parse::<f64>().ok(),
+        _ => None,
+    };
+    if size.is_some_and(|bytes| bytes < MIN_DEVICE_BYTES) {
+        return None;
+    }
+    // Boot partitions (EFI, Ventoy's VTOYEFI) are firmware media, not user storage.
+    let label_text = node.get("label").and_then(Json::text).unwrap_or("");
+    if label_text.eq_ignore_ascii_case("EFI") || label_text.eq_ignore_ascii_case("VTOYEFI") {
         return None;
     }
     let mounted = node.get("mountpoint").and_then(Json::text).is_some_and(|m| !m.is_empty())
@@ -400,7 +417,11 @@ fn unmounted_filesystem(node: &Json) -> Option<BlockDevice> {
 
 /// Runs `lsblk` and returns unmounted removable filesystems. A missing or failing lsblk yields no devices.
 pub fn unmounted_devices() -> Vec<BlockDevice> {
-    let Ok(output) = Command::new("lsblk").args(["-J", "-o", "NAME,RM,HOTPLUG,FSTYPE,MOUNTPOINT,LABEL"]).output() else {
+    // Dev-only hook: a saved `lsblk -J` sample stands in for hardware, so screenshots need no real device.
+    if let Some(path) = std::env::var_os("FLAMEWM_EXPLORER_FAKE_DEVICES") {
+        return fs::read_to_string(path).map(|text| parse_lsblk(&text)).unwrap_or_default();
+    }
+    let Ok(output) = Command::new("lsblk").args(["-J", "-b", "-o", "NAME,RM,HOTPLUG,FSTYPE,MOUNTPOINT,LABEL,SIZE"]).output() else {
         return Vec::new();
     };
     if !output.status.success() {
@@ -528,6 +549,16 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].device, "/dev/sdb1");
         assert_eq!(devices[0].label, "Removable Device (sdb1)");
+    }
+
+    #[test]
+    fn lsblk_hides_loop_and_tiny_system_partitions() {
+        let sample = r#"{"blockdevices":[
+            {"name":"loop0","rm":true,"hotplug":true,"children":[{"name":"loop0p1","fstype":"squashfs","mountpoint":null,"label":null,"size":104857600}]},
+            {"name":"sdq","rm":true,"hotplug":true,"children":[
+                {"name":"sdq1","rm":true,"fstype":"vfat","mountpoint":null,"label":"EFI","size":104857600},
+                {"name":"sdq2","rm":true,"fstype":"exfat","mountpoint":null,"label":"Big","size":8000000000}]}]}"#;
+        assert_eq!(parse_lsblk(sample), vec![BlockDevice { device: "/dev/sdq2".into(), label: "Big".into() }]);
     }
 
     #[test]

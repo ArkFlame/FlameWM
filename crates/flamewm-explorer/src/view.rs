@@ -8,21 +8,6 @@ use chrono::{DateTime, TimeZone};
 use crate::Entry;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ViewMode { Details, Icons, Compact }
-
-impl ViewMode {
-    /// Ctrl+1 / Ctrl+2 / Ctrl+3 mapping.
-    pub fn from_shortcut(digit: u8) -> Option<Self> {
-        match digit {
-            1 => Some(Self::Details),
-            2 => Some(Self::Icons),
-            3 => Some(Self::Compact),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Column { Name, Size, Modified, Type }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,14 +150,6 @@ mod tests {
             path: PathBuf::from(name), name: name.into(), directory, symlink: false,
             size, modified: Some(UNIX_EPOCH + Duration::from_secs(secs)),
         }
-    }
-
-    #[test]
-    fn shortcut_maps_digits_to_modes() {
-        assert_eq!(ViewMode::from_shortcut(1), Some(ViewMode::Details));
-        assert_eq!(ViewMode::from_shortcut(2), Some(ViewMode::Icons));
-        assert_eq!(ViewMode::from_shortcut(3), Some(ViewMode::Compact));
-        assert_eq!(ViewMode::from_shortcut(4), None);
     }
 
     #[test]
