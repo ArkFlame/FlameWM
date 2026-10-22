@@ -118,6 +118,17 @@ impl ControllerState {
         self
     }
 
+    /// An XP outline move/resize is in progress: the committed frame stays put until release.
+    #[must_use]
+    pub fn outline_drag(&self) -> bool {
+        !self.contents_while_dragging
+            && match self.session {
+                InteractionSession::Move(m) => m.anchor.is_activated(),
+                InteractionSession::Resize(_) => true,
+                InteractionSession::ControlPress(_) | InteractionSession::Idle => false,
+            }
+    }
+
     #[must_use]
     pub fn with_screen_rect(mut self, screen_rect: RootRect) -> Self {
         self.screen_rect = screen_rect;
@@ -933,6 +944,18 @@ mod tests {
                 | FrameEffect::ConfigureClientLocal { .. }
                 | FrameEffect::NotifyClientRoot { .. }
         )));
+    }
+
+    #[test]
+    fn outline_drag_predicate_tracks_only_outline_sessions() {
+        let idle = outline_state();
+        assert!(!idle.outline_drag());
+        let (resizing, _) = reduce(&idle, press(2, 500, 400));
+        assert!(resizing.outline_drag());
+        let (contents, _) = reduce(&floating_state(), press(2, 500, 400));
+        assert!(!contents.outline_drag());
+        let (after_release, _) = reduce(&resizing, release(550, 460));
+        assert!(!after_release.outline_drag());
     }
 
     #[test]

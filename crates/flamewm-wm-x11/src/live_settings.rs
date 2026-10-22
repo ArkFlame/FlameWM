@@ -49,6 +49,14 @@ fn show_content_from_snapshot(snapshot: &SettingsSnapshot) -> bool {
     )
 }
 
+/// Pure mapping from a settings snapshot to the `defaultTerminal` override; empty when unset.
+fn terminal_from_snapshot(snapshot: &SettingsSnapshot) -> String {
+    match snapshot.values.get("defaultTerminal") {
+        Some(SettingValue::Text(value)) => value.clone(),
+        _ => String::new(),
+    }
+}
+
 /// Pure mapping from a settings snapshot to the `accent` colour. Accepts `#RRGGBB` and bare
 /// `RRGGBB`, the same forms the shell accepts; invalid or missing values keep the neutral default.
 fn accent_from_snapshot(snapshot: &SettingsSnapshot) -> (u8, u8, u8) {
@@ -68,6 +76,7 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     FOCUS_FOLLOWS_MOUSE.store(focus_follows_mouse, Ordering::Relaxed);
     SHOW_CONTENT_WHILE_DRAGGING.store(show_content_from_snapshot(snapshot), Ordering::Relaxed);
     ACCENT_RGB.store(pack_rgb(accent_from_snapshot(snapshot)), Ordering::Relaxed);
+    flamewm_applications::terminal::set_configured_terminal(&terminal_from_snapshot(snapshot));
 }
 
 /// Live system accent as `(r, g, b)`; neutral default before the first snapshot.
@@ -137,6 +146,16 @@ mod tests {
             ("focusFollowsMouse", SettingValue::Boolean(true)),
         ]));
         assert_eq!(mapped, (false, true));
+    }
+
+    #[test]
+    fn default_terminal_maps_text_and_defaults_empty() {
+        assert_eq!(terminal_from_snapshot(&SettingsSnapshot::new(1)), "");
+        let configured = snapshot(&[(
+            "defaultTerminal",
+            SettingValue::Text("kitty".into()),
+        )]);
+        assert_eq!(terminal_from_snapshot(&configured), "kitty");
     }
 
     #[test]

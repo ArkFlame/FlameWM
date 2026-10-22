@@ -230,6 +230,28 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
         let mode_before = self.clients.get(&client_id).map(|s| s.placement.mode);
+        // A layout zone wins over the free move: end the drag without moving the frame to the
+        // pointer first, then apply only the layout.
+        if release_from_move {
+            let fallback = self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer);
+            let target = self.snap_target_at(event.root_x, event.root_y, fallback);
+            let action = release_action_for_move(release_move, mode_before, target);
+            if action != ReleaseAction::None {
+                self.reduce_and_execute(client_id, FrameEvent::Cancel)?;
+                self.edge_drag = None;
+                move_counters().record_snap_target(snap_target_bits(target));
+                match action {
+                    ReleaseAction::None => {}
+                    ReleaseAction::Maximize => self.toggle_maximize(client_id)?,
+                    ReleaseAction::Snap(target) => {
+                        self.reduce_and_execute(client_id, FrameEvent::Snap { target })?;
+                        self.mark_windows();
+                        self.publish_window_state(client_id)?;
+                    }
+                }
+                return Ok(());
+            }
+        }
         let _ = self.reduce_and_execute(
             client_id,
             FrameEvent::Release {
@@ -275,30 +297,6 @@ impl<'a, C: Connection> Wm<'a, C> {
                 move_counters().record_resize_snap_blocked();
             }
             return Ok(());
-        }
-        let target = {
-            let _guard = flamewm_profiler::start("wm.move.snap_target");
-            self.snap_target_at(
-                event.root_x,
-                event.root_y,
-                self.clients
-                    .get(&client_id)
-                    .map_or(self.work_area(), |s| s.outer),
-            )
-        };
-        move_counters().record_snap_target(snap_target_bits(target));
-        let placement = self
-            .clients
-            .get(&client_id)
-            .map(|state| state.placement.mode);
-        match release_action_for_move(release_move, placement, target) {
-            ReleaseAction::None => {}
-            ReleaseAction::Maximize => self.toggle_maximize(client_id)?,
-            ReleaseAction::Snap(target) => {
-                self.reduce_and_execute(client_id, FrameEvent::Snap { target })?;
-                self.mark_windows();
-                self.publish_window_state(client_id)?;
-            }
         }
         Ok(())
     }
@@ -361,6 +359,19 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .map(|(target, _)| target as &dyn std::fmt::Debug),
                 motion_snap.map(|(target, _)| target != SnapTarget::None),
             );
+            // Layout wins over the free move: inside a snap zone the frame stays where the
+            // drag started and only the zone preview shows; release applies the layout.
+            if let Some((target, work)) = motion_snap {
+                if zone_preview_holds(
+                    activated_move(move_session).is_some(),
+                    target,
+                    crate::live_settings::snap_preview_enabled(),
+                ) {
+                    self.update_snap_preview(target, work, client_id);
+                    self.evaluate_edge_drag(client_id, pointer, std::time::Instant::now())?;
+                    return Ok(());
+                }
+            }
             {
                 let _guard = if move_active {
                     Some(flamewm_profiler::start("wm.move.total"))
@@ -533,5 +544,24 @@ impl<'a, C: Connection> Wm<'a, C> {
                 )
             }
         }
+    }
+}
+
+/// An activated move inside a snap zone shows that zone's preview instead of following the
+/// pointer. Leaving the zone (`SnapTarget::None`) hands the drag back to the free move.
+fn zone_preview_holds(activated: bool, target: SnapTarget, preview_enabled: bool) -> bool {
+    activated && preview_enabled && target != SnapTarget::None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zone_preview_only_for_activated_move_in_a_zone() {
+        assert!(zone_preview_holds(true, SnapTarget::LeftHalf, true));
+        assert!(!zone_preview_holds(true, SnapTarget::None, true));
+        assert!(!zone_preview_holds(false, SnapTarget::LeftHalf, true));
+        assert!(!zone_preview_holds(true, SnapTarget::LeftHalf, false));
     }
 }

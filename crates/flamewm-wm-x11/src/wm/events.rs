@@ -119,15 +119,10 @@ impl<'a, C: Connection> Wm<'a, C> {
                 }
             }
             ACTION_OPEN_TERMINAL_SUPER | ACTION_OPEN_TERMINAL_CTRL_ALT => {
-                // Default terminal first, then the Debian x-terminal-emulator
-                // alternative if Konsole is not installed.
-                if let Err(error) = std::process::Command::new("konsole").spawn() {
-                    if let Err(fallback) = std::process::Command::new("x-terminal-emulator").spawn()
-                    {
-                        eprintln!(
-                            "flamewm: terminal shortcut failed: {error}; fallback: {fallback}"
-                        );
-                    }
+                // The resolver owns the choice: `defaultTerminal` override, else FlameWM Terminal.
+                let program = flamewm_applications::terminal::terminal_program();
+                if let Err(error) = std::process::Command::new(&program).spawn() {
+                    eprintln!("flamewm: terminal shortcut failed: {program}: {error}");
                 }
             }
             ACTION_SCREENSHOT_FULL | ACTION_SCREENSHOT_REGION | ACTION_SCREENSHOT_WINDOW => {

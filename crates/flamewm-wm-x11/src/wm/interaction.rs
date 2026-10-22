@@ -101,7 +101,13 @@ pub fn store_controller(
     entry.placement = next.placement;
     entry.last_title_click = next.last_title_click;
     if let Some(state) = client_state {
-        state.apply_placement(next.placement);
+        if next.outline_drag() {
+            // The native frame keeps its committed rect until release; paint and shape read
+            // `outer`, so only the placement tracks the outline.
+            state.placement = next.placement;
+        } else {
+            state.apply_placement(next.placement);
+        }
     }
 }
 
