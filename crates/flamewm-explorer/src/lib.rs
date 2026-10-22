@@ -18,7 +18,8 @@ pub mod trash;
 pub mod view;
 
 pub mod jobs;
-pub const PAGE_ROWS: usize = 12;
+/// Row widgets in the template. The list viewport decides how many of them are shown.
+pub const ROW_SLOTS: usize = 24;
 pub const MAX_LISTED_ENTRIES: usize = 100_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,12 +89,13 @@ pub struct Tab {
     pub entries: Vec<Entry>,
     pub selected: Option<PathBuf>,
     anchor: Option<PathBuf>,
-    pub page: usize,
+    /// Index of the first filtered row in the window.
+    pub scroll: usize,
     pub search: String,
     pub loading: bool,
 }
 impl Tab {
-    pub fn new(path: PathBuf) -> Self { Self { selected_paths:HashSet::new(), history: vec![path], cursor:0, entries:Vec::new(), selected:None, anchor:None, page:0, search:String::new(), loading:true } }
+    pub fn new(path: PathBuf) -> Self { Self { selected_paths:HashSet::new(), history: vec![path], cursor:0, entries:Vec::new(), selected:None, anchor:None, scroll:0, search:String::new(), loading:true } }
     pub fn path(&self) -> &Path { &self.history[self.cursor] }
     pub fn visit(&mut self, path: PathBuf) {
         self.history.truncate(self.cursor + 1);
@@ -104,7 +106,7 @@ impl Tab {
     pub fn up(&mut self) -> bool { if let Some(p)=self.path().parent().map(Path::to_path_buf) { if p != self.path() { self.visit(p); return true; } } false }
     pub fn can_back(&self) -> bool { self.cursor > 0 }
     pub fn can_forward(&self) -> bool { self.cursor + 1 < self.history.len() }
-    fn reset(&mut self) { self.entries.clear(); self.selected_paths.clear(); self.selected=None; self.anchor=None; self.page=0; self.search.clear(); self.loading=true; }
+    fn reset(&mut self) { self.entries.clear(); self.selected_paths.clear(); self.selected=None; self.anchor=None; self.scroll=0; self.search.clear(); self.loading=true; }
     /// Filter once per request, retaining at most the currently rendered page.
     /// Avoid allocating a Vec of every match on each UI projection.
     pub fn select_one(&mut self, path: PathBuf) {
@@ -157,23 +159,38 @@ impl Tab {
         paths.sort();paths
     }
     pub fn clear_selection(&mut self) { self.selected_paths.clear();self.selected=None;self.anchor=None; }
-    pub fn select_vertical_band(&mut self, from_row: usize, to_row: usize) {
+    /// Select the window rows `from_row..=to_row` (slots relative to the scroll offset).
+    pub fn select_vertical_band(&mut self, from_row: usize, to_row: usize, rows: usize) {
         let (lo,hi)=(from_row.min(to_row),from_row.max(to_row));
-        let paths=self.visible_page_at(self.page).into_iter().enumerate()
+        let paths=self.visible_window(rows).into_iter().enumerate()
             .filter(|(i,_)| (lo..=hi).contains(i))
             .map(|(_,entry)|entry.path.clone()).collect::<Vec<_>>();
         self.selected_paths=paths.iter().cloned().collect();
         self.selected=paths.first().cloned();
         self.anchor=self.selected.clone();
     }
-    pub fn visible_page(&self) -> Vec<&Entry> { self.visible_page_at(self.page) }
-    pub fn visible_page_at(&self, page:usize) -> Vec<&Entry> {
+    /// Filtered rows starting at the scroll offset, at most `rows` of them.
+    pub fn visible_window(&self, rows: usize) -> Vec<&Entry> {
         let query=self.search.to_lowercase();
         self.entries.iter()
             .filter(|entry| query.is_empty() || entry.name.to_lowercase().contains(&query))
-            .skip(page.saturating_mul(PAGE_ROWS))
-            .take(PAGE_ROWS)
+            .skip(self.window_start(rows))
+            .take(rows)
             .collect()
+    }
+    /// Scroll offset clamped to the filtered list, so a shorter list never shows blank space.
+    fn window_start(&self, rows: usize) -> usize {
+        self.scroll.min(self.filtered_count().saturating_sub(rows))
+    }
+    /// Move the window by whole rows; the offset stays within the list.
+    pub fn scroll_by(&mut self, delta: isize, rows: usize) {
+        let max=self.filtered_count().saturating_sub(rows) as isize;
+        self.scroll=(self.window_start(rows) as isize + delta).clamp(0,max) as usize;
+    }
+    /// Scroll the minimum amount that keeps filtered row `index` inside the window. `rows >= 1`.
+    pub fn reveal(&mut self, index: usize, rows: usize) {
+        let start=self.window_start(rows);
+        self.scroll=if index<start {index} else if index>=start+rows {index+1-rows} else {start};
     }
     pub fn visible_nth(&self, index:usize) -> Option<&Entry> {
         let query=self.search.to_lowercase();
@@ -193,7 +210,6 @@ impl Tab {
             .filter(|entry| query.is_empty() || entry.name.to_lowercase().contains(&query))
             .count()
     }
-    pub fn page_count(&self) -> usize { self.filtered_count().div_ceil(PAGE_ROWS).max(1) }
 }
 #[derive(Debug)]
 pub struct Explorer {
@@ -442,7 +458,7 @@ mod tests {
         assert!(!is_archive(Path::new("photo.png")));
         let mut tab=Tab::new(PathBuf::from("/tmp"));
         tab.entries=(0..6).map(|i|Entry{path:PathBuf::from(format!("/tmp/file{i}")),name:format!("file{i}"),directory:false,symlink:false,size:0,modified:None}).collect();
-        tab.select_vertical_band(1,3);
+        tab.select_vertical_band(1,3,ROW_SLOTS);
         assert_eq!(tab.selected_paths.len(),3);
         assert!(tab.selected_paths.contains(Path::new("/tmp/file2")));
         tab.select_one(PathBuf::from("/tmp/file4"));
@@ -480,26 +496,39 @@ mod tests {
         assert_eq!(tab.ordered_selection(),vec![item(0),item(3),item(4),item(5)]);
     }
 
-    #[test] fn filtered_page_is_bounded_without_losing_selection_indices() {
+    #[test] fn scroll_window_follows_viewport_and_keeps_indices() {
         let mut tab=Tab::new(PathBuf::from("/tmp"));
         tab.loading=false;
         tab.entries=(0..100).map(|n| Entry {
             path:PathBuf::from(format!("/tmp/item-{n:03}")), name:format!("item-{n:03}"),
             directory:false,symlink:false,size:n,modified:None,
         }).collect();
-        tab.page=2;
-        let page=tab.visible_page();
-        assert_eq!(page.len(), PAGE_ROWS);
-        // Page 2 starts at 2*PAGE_ROWS, whatever the page size is.
-        let first=2*PAGE_ROWS;
-        assert_eq!(page[0].name, format!("item-{first:03}"));
-        assert_eq!(tab.visible_nth(first).unwrap().name,format!("item-{first:03}"));
-        assert_eq!(tab.visible_index_of(&page[0].path),Some(first));
-        assert_eq!(tab.page_count(),100usize.div_ceil(PAGE_ROWS));
-        tab.search="item-09".into();tab.page=0;
+        let rows=12;
+        tab.scroll_by(20,rows);
+        assert_eq!(tab.scroll,20);
+        let window=tab.visible_window(rows);
+        assert_eq!(window.len(),rows);
+        assert_eq!(window[0].name,"item-020");
+        assert_eq!(tab.visible_index_of(&window[0].path),Some(20));
+        // Keyboard reveal scrolls only as far as needed: index 31 is one past the window.
+        tab.reveal(31,rows);
+        assert_eq!(tab.scroll,20);
+        tab.reveal(32,rows);
+        assert_eq!(tab.scroll,21);
+        tab.reveal(0,rows);
+        assert_eq!(tab.scroll,0);
+        // Scrolling clamps at the last full window.
+        tab.scroll_by(1000,rows);
+        assert_eq!(tab.scroll,88);
+        assert_eq!(tab.visible_window(rows)[rows-1].name,"item-099");
+        tab.scroll_by(-1000,rows);
+        assert_eq!(tab.scroll,0);
+        // A filter that shrinks the list pulls a stale offset back into range.
+        tab.scroll=50;
+        tab.search="item-09".into();
         assert_eq!(tab.filtered_count(),10);
-        assert_eq!(tab.visible_page().len(),10);
-        assert_eq!(tab.page_count(),1);
+        assert_eq!(tab.visible_window(rows).len(),10);
+        assert_eq!(tab.visible_window(rows)[0].name,"item-090");
     }
     #[test] fn stale_worker_reply_is_discarded() {
         let mut model=Explorer::new(PathBuf::from("/tmp"));let old=model.generation;model.next_generation();

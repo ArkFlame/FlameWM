@@ -34,13 +34,11 @@ button:active { background:#424950; }
 .cell-size { width:100px; min-width:100px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
 .cell-kind { width:130px; min-width:130px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
 
-/* Status strip: message, optional pager, then item/selection counts and free space. */
+/* Status strip: message, then item/selection counts and free space. */
 .status { width:100%; height:30px; flex-grow:0; display:flex; flex-direction:row; align-items:center; gap:12px; padding:0 12px; background:var(--surface); color:#c3c9cf; font-size:11px; }
 .status-message { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; }
 .status-count { white-space:nowrap; overflow:hidden; }
 .job-progress { white-space:nowrap; overflow:hidden; }
-.file-pager { height:24px; flex-grow:0; display:flex; flex-direction:row; align-items:center; gap:6px; }
-.file-pager button { height:24px; min-width:28px; padding:0 6px; }
 
 .context { position:absolute; top:105px; left:330px; width:210px; padding:5px; display:flex; flex-direction:column; background:#232629; border:1px solid #51565c; border-radius:11px; }
 .menu-row { justify-content:flex-start; width:198px; height:31px; padding-left:11px; border-radius:3px; }

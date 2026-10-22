@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{self,Receiver,Sender};
 use std::time::{Duration,Instant};
 
-use flamewm_explorer::{AddressTarget,BatchReport,Entry,Explorer,Place,SortBy,PAGE_ROWS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places};
+use flamewm_explorer::{AddressTarget,BatchReport,Entry,Explorer,Place,SortBy,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places};
 use flamewm_explorer::view::{self,Column,ColumnSort,ViewMode};
 use flamewm_explorer::{archive,properties,refresh::DirWatch,search::SearchWorker,trash,places as bookmarks};
 use std::sync::atomic::{AtomicBool,Ordering};
@@ -36,6 +36,10 @@ const TOOLBAR_HEIGHT:f32=45.0;
 const TABBAR_HEIGHT:f32=36.0;
 const HEADER_HEIGHT:f32=29.0;
 const ROW_HEIGHT:f32=35.0;
+/// Status strip (30px) plus the hairline above it; the file rows fill the space above.
+const STATUS_STRIP_HEIGHT:f32=31.0;
+/// Rows moved by one wheel notch.
+const WHEEL_ROWS:isize=3;
 const SIDEBAR_WIDTH:f32=201.0;
 const DRAG_THRESHOLD_PX:f32=7.0;
 // Maximum window size; the actual size is clamped to 90% of the root (see `window_size`).
@@ -322,10 +326,18 @@ impl ExplorerApp {
     }
     /// Entries shown in the file pane: search results replace the folder listing while active.
     fn visible_entries(&self)->Vec<&Entry> {
-        if let Some(rows)=self.search_rows.as_ref() {return rows.iter().take(PAGE_ROWS).collect();}
-        let tab=self.model.tab();
-        let page=tab.page.min(tab.filtered_count().saturating_sub(1)/PAGE_ROWS);
-        tab.visible_page_at(page)
+        let rows=self.visible_rows();
+        if let Some(results)=self.search_rows.as_ref() {
+            let start=self.model.tab().scroll.min(results.len().saturating_sub(rows));
+            return results.iter().skip(start).take(rows).collect();
+        }
+        self.model.tab().visible_window(rows)
+    }
+    /// Rows that fit between the column header and the status strip. Paint, hit-testing and keys all use this.
+    fn visible_rows(&self)->usize {
+        let bottom=self.window.1 as f32-STATUS_STRIP_HEIGHT;
+        let fit=((bottom-list_top(self.model.tabs.len()>1))/ROW_HEIGHT).floor();
+        fit.clamp(1.0,ROW_SLOTS as f32) as usize
     }
     fn sort_by(&mut self,column:Column) {
         self.column_sort=self.column_sort.click(column);
@@ -343,9 +355,10 @@ impl ExplorerApp {
         let from=self.selected().as_ref().and_then(|p|tab.visible_index_of(p)).unwrap_or(0);
         if let Some(index)=view::typeahead_match(&refs,&self.typed,from) {
             let path=tab.visible_nth(index).expect("index from typeahead").path.clone();
+            let rows=self.visible_rows();
             let tab=self.model.tab_mut();
             tab.select_one(path);
-            tab.page=index/PAGE_ROWS;
+            tab.reveal(index,rows);
         }
     }
     fn scan(&mut self) {
@@ -394,7 +407,7 @@ impl ExplorerApp {
         // Icon-grid cells are not rows, so only the list layouts map pointer y to a slot.
         if self.view==ViewMode::Icons || !x.is_finite() || !y.is_finite() || !(SIDEBAR_WIDTH..self.window.0).contains(&x) {return None;}
         let top=list_top(self.model.tabs.len()>1);
-        if y<top || y>=top+ROW_HEIGHT*PAGE_ROWS as f32 {return None;}
+        if y<top || y>=top+ROW_HEIGHT*self.visible_rows() as f32 {return None;}
         let slot=((y-top)/ROW_HEIGHT) as usize;
         self.chosen(slot).filter(|entry|entry.directory).map(|entry|entry.path.clone())
     }
@@ -759,6 +772,15 @@ impl ExplorerApp {
                 _=>{},
             }
         }
+        // Wheel notches arrive as the render layer's "scroll" action; text is "dx,dy" with dy<0 for up.
+        if action=="scroll" {
+            let dy=e.text.as_deref().and_then(|t|t.split_once(',')).and_then(|(_,dy)|dy.parse::<f32>().ok()).unwrap_or(0.0);
+            if e.inside && dy!=0.0 && (SIDEBAR_WIDTH..self.window.0).contains(&e.x) {
+                let rows=self.visible_rows();
+                self.model.tab_mut().scroll_by(dy.signum() as isize*WHEEL_ROWS,rows);
+            }
+            return;
+        }
         if action=="explorer.surface" {
             if e.button==3 && e.phase==UiActionPhase::Release && e.inside {
                 self.context_on_entry=false;
@@ -779,8 +801,8 @@ impl ExplorerApp {
                             if (x1-x0).abs()>5.0 || (y1-y0).abs()>5.0 {
                                 let start=((y0.min(y1)-top)/ROW_HEIGHT).floor().max(0.0) as usize;
                                 let end=((y0.max(y1)-top)/ROW_HEIGHT).floor().max(0.0) as usize;
-                                let tab=self.model.tab_mut();
-                                tab.select_vertical_band(start.min(PAGE_ROWS),end.min(PAGE_ROWS));
+                                let rows=self.visible_rows();
+                                self.model.tab_mut().select_vertical_band(start.min(rows),end.min(rows),rows);
                             } else {
                                 self.model.tab_mut().clear_selection();
                             }
@@ -847,8 +869,6 @@ impl ExplorerApp {
             "explorer.address"=>{self.edit=Some(EditMode::Path);self.buffer=self.model.tab().path().to_string_lossy().into_owned();},
             "explorer.tab.new"=>{if self.model.tabs.len()<5 {self.model.new_tab();self.scan();}},
             "explorer.tab.close"=>{self.model.close_tab();self.scan();},
-            "explorer.page.prev"=>{let tab=self.model.tab_mut();tab.page=tab.page.saturating_sub(1);},
-            "explorer.page.next"=>{let tab=self.model.tab_mut();tab.page=(tab.page+1).min(tab.page_count()-1);},
             "explorer.view.icons"=>self.view=ViewMode::Icons,
             "explorer.view.details"=>self.view=ViewMode::Details,
             "explorer.sort.name"=>self.sort_by(Column::Name),
@@ -962,6 +982,11 @@ impl ExplorerApp {
             "z" if ctrl=>self.undo_last(),
             "up"=>self.step_selection(-1,shift),
             "down"=>self.step_selection(1,shift),
+            // PageUp, PageDown, Home and End have no named keysym in the UI key table, so they arrive as Keysym(0x...).
+            "keysym(0xff55)"=>self.step_selection(-(self.visible_rows() as isize),shift),
+            "keysym(0xff56)"=>self.step_selection(self.visible_rows() as isize,shift),
+            "keysym(0xff50)"=>self.select_index(0,shift),
+            "keysym(0xff57)"=>{let count=self.model.tab().filtered_count();if count>0{self.select_index(count-1,shift);}},
             _=>{}
         }
     }
@@ -971,11 +996,16 @@ impl ExplorerApp {
         if count==0{return;}
         let current=self.selected().as_ref().and_then(|p|tab.visible_index_of(p)).unwrap_or(0);
         let next=(current as isize+delta).clamp(0,count as isize-1) as usize;
-        let path=tab.visible_nth(next).expect("index within filtered count").path.clone();
-        let page=next/PAGE_ROWS;
+        self.select_index(next,extend);
+    }
+    /// Select the filtered row at `index` and scroll the window just enough to show it.
+    fn select_index(&mut self,index:usize,extend:bool){
+        let rows=self.visible_rows();
+        let tab=self.model.tab();
+        let Some(path)=tab.visible_nth(index).map(|entry|entry.path.clone()) else {return};
         let tab=self.model.tab_mut();
         if extend {tab.select_range_to(path)}else{tab.select_one(path)}
-        tab.page=page;
+        tab.reveal(index,rows);
     }
     fn wake(&mut self,event:WorkerResult){
         match event {
@@ -1061,7 +1091,6 @@ impl ExplorerApp {
         // Native Finder-style chrome: a single tab has no visible tab strip.
         let tab_strip=self.model.tabs.len()>1;
         doc.visible("tabs",tab_strip)?;
-        doc.visible("file-pager",tab.page_count()>1)?;
         for i in 0..5 {
             let exists=tab_strip && i<self.model.tabs.len();
             doc.visible(&format!("tab-{i}"),exists)?;
@@ -1078,8 +1107,6 @@ impl ExplorerApp {
                 doc.background(&format!("place-{i}"),if place.path==tab.path(){self.theme.selected()}else{self.theme.sidebar()})?;
             } else {doc.visible(&format!("place-{i}"),false)?;}
         }
-        let count=tab.filtered_count();
-        let page=tab.page.min(count.saturating_sub(1)/PAGE_ROWS);
         let entries=self.visible_entries();
         // Only Details shows the metadata columns; Icons shows names alone.
         let details=self.view==ViewMode::Details;
@@ -1094,7 +1121,7 @@ impl ExplorerApp {
         doc.text("col-mod",arrow(Column::Modified,"Date modified"))?;
         doc.text("col-size",arrow(Column::Size,"Size"))?;
         doc.text("col-kind","Kind".to_owned())?;
-        for slot in 0..PAGE_ROWS {
+        for slot in 0..ROW_SLOTS {
             let row=format!("row-{slot}");
             if let Some(entry)=entries.get(slot) {
                 doc.visible(&row,true)?;
@@ -1124,7 +1151,6 @@ impl ExplorerApp {
                 doc.background("selection-rectangle",self.theme.selection_fill())?;
             }
         } else {doc.visible("selection-rectangle",false)?;}
-        doc.text("page-label",format!("{} / {}",page+1,tab.page_count()))?;
         let status=if self.row_drag.as_ref().is_some_and(|drag|drag.dragging) {
             if let Some(folder)=self.drop_folder.as_deref() {
                 format!("Drop into {} · Move (Ctrl to copy)",folder.file_name().unwrap_or_default().to_string_lossy())
