@@ -11,10 +11,12 @@ use std::time::SystemTime;
 
 pub mod archive;
 pub mod clipboard;
+pub mod dndext;
 pub mod columns;
 pub mod ops;
 pub mod places;
 pub mod prefs;
+pub mod remote;
 pub mod properties;
 pub mod refresh;
 pub mod scroll;
@@ -101,7 +103,11 @@ impl Tab {
     }
     pub fn back(&mut self) -> bool { if self.cursor == 0 { return false; } self.cursor -= 1; self.reset(); true }
     pub fn forward(&mut self) -> bool { if self.cursor + 1 >= self.history.len() { return false; } self.cursor += 1; self.reset(); true }
-    pub fn up(&mut self) -> bool { if let Some(p)=self.path().parent().map(Path::to_path_buf) { if p != self.path() { self.visit(p); return true; } } false }
+    pub fn up(&mut self) -> bool {
+        if let Some(url)=remote::url_of(self.path()) {
+            return match url.parent() { Some(parent) if remote::to_path(&parent)!=self.path() => { self.visit(remote::to_path(&parent)); true }, _ => false };
+        }
+        if let Some(p)=self.path().parent().map(Path::to_path_buf) { if p != self.path() { self.visit(p); return true; } } false }
     pub fn can_back(&self) -> bool { self.cursor > 0 }
     pub fn can_forward(&self) -> bool { self.cursor + 1 < self.history.len() }
     fn reset(&mut self) { self.entries.clear(); self.selected_paths.clear(); self.selected=None; self.anchor=None; self.scroll=0; self.search.clear(); self.loading=true; }
@@ -222,6 +228,19 @@ impl Explorer {
     pub fn close_tab(&mut self) { if self.tabs.len()>1 {self.tabs.remove(self.active);self.active=self.active.min(self.tabs.len()-1);} }
     pub fn new_tab(&mut self) { let path=self.tab().path().to_path_buf(); self.tabs.push(Tab::new(path)); self.active=self.tabs.len()-1; self.generation+=1; }
     pub fn next_generation(&mut self) -> u64 { self.generation+=1; self.tab_mut().loading=true; self.generation }
+    /// Appends one streamed remote chunk when the listing is still the current one.
+    pub fn append_listing(&mut self, generation:u64, dir:&Path, items:Vec<Entry>) -> bool {
+        if generation!=self.generation || self.tab().path()!=dir { return false; }
+        self.tab_mut().entries.extend(items);
+        true
+    }
+    /// Ends a streamed remote listing; false when the listing is stale.
+    pub fn finish_listing(&mut self, generation:u64, dir:&Path) -> bool {
+        if generation!=self.generation || self.tab().path()!=dir { return false; }
+        self.tab_mut().loading=false;
+        self.status.clear();
+        true
+    }
     pub fn apply_listing(&mut self, generation:u64, dir:&Path, listing:io::Result<Vec<Entry>>) -> bool {
         if generation!=self.generation || self.tab().path()!=dir { return false; }
         match listing {
@@ -502,7 +521,7 @@ pub fn display_location(path:&Path, home:&Path)->String {
     if let Ok(rest)=path.strip_prefix(home) {return format!("~/{}",rest.display());}
     path.display().to_string()
 }
-pub enum AddressTarget { Local(PathBuf), ExternalUri(String) }
+pub enum AddressTarget { Local(PathBuf), Remote(flamewm_remote_fs::Url), ExternalUri(String) }
 pub fn parse_address(text:&str, home:&Path)->Result<AddressTarget,String> {
     let trimmed=text.trim();
     if trimmed=="~" {return Ok(AddressTarget::Local(home.to_path_buf()));}
@@ -512,6 +531,9 @@ pub fn parse_address(text:&str, home:&Path)->Result<AddressTarget,String> {
             .map(AddressTarget::Local).ok_or_else(||"Invalid file URI".to_owned());
     }
     if let Some((scheme,tail))=trimmed.split_once("://") {
+        if remote::is_remote_scheme(scheme) {
+            return flamewm_remote_fs::Url::parse(trimmed).map(AddressTarget::Remote).map_err(|e|e.to_string());
+        }
         if ["sftp","ssh","smb","ftp","ftps","dav","davs","mtp","nfs"].contains(&scheme.to_ascii_lowercase().as_str())
             && !tail.is_empty() && !tail.chars().any(char::is_whitespace) {
             return Ok(AddressTarget::ExternalUri(trimmed.to_owned()));
@@ -568,7 +590,9 @@ mod tests {
         assert_eq!(display_location(&home.join("Documents"),home),"~/Documents");
         assert_eq!(display_location(Path::new("/etc"),home),"/etc");
         assert!(matches!(parse_address("~",home),Ok(AddressTarget::Local(p)) if p==home));
-        assert!(matches!(parse_address("sftp://host/home/demo",home),Ok(AddressTarget::ExternalUri(_))));
+        assert!(matches!(parse_address("sftp://host/home/demo",home),Ok(AddressTarget::Remote(_))));
+        assert!(matches!(parse_address("fish://host/~/x",home),Ok(AddressTarget::Remote(_))));
+        assert!(parse_address("sftp://user:secret@host/",home).is_err());
         assert!(matches!(parse_address("smb://server/share",home),Ok(AddressTarget::ExternalUri(_))));
         assert!(parse_address("javascript://evil",home).is_err());
         assert!(parse_address("sftp://",home).is_err());

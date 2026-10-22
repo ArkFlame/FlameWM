@@ -302,6 +302,7 @@ dependencies = [
  "flamewm-image-core",
  "flamewm-profiler",
  "flamewm-reactor",
+ "flamewm-remote-fs",
  "flamewm-render-compiler",
  "flamewm-ui-core",
  "flamewm-ui-x11",
@@ -380,6 +381,10 @@ version = "0.1.1"
 dependencies = [
  "calloop",
 ]
+
+[[package]]
+name = "flamewm-remote-fs"
+version = "0.1.1"
 
 [[package]]
 name = "flamewm-render-compiler"
@@ -488,6 +493,21 @@ dependencies = [
 [[package]]
 name = "flamewm-skin"
 version = "0.1.1"
+
+[[package]]
+name = "flamewm-terminal"
+version = "0.1.1"
+dependencies = [
+ "flamewm-api",
+ "flamewm-clipboard",
+ "flamewm-control-core",
+ "flamewm-control-dbus",
+ "flamewm-dbus-reactor",
+ "flamewm-render-compiler",
+ "flamewm-ui-core",
+ "flamewm-ui-x11",
+ "rustix",
+]
 
 [[package]]
 name = "flamewm-ui"

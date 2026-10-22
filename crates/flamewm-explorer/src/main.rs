@@ -25,6 +25,8 @@ use flamewm_explorer::{archive,properties,refresh::DirWatch,search::{SearchEvent
 use std::sync::atomic::{AtomicBool,Ordering};
 use std::sync::Arc;
 use flamewm_explorer::jobs::{self,CancellationToken,Conflict,Undo};
+use flamewm_explorer::remote;
+use flamewm_remote_fs::{Cancel as RemoteCancel,Config as RemoteConfig,ListEvent,RemoteFs,TransferEvent,Url as RemoteUrl};
 use theme::ExplorerTheme;
 use flamewm_control_core::{ControlRequest,ControlResponse};
 use flamewm_control_dbus::{ControlClient,ControlSignal,ControlSignalClient};
@@ -34,6 +36,8 @@ use flamewm_desktop_core::{file_actions::create_new_folder,trash::Trash};
 use flamewm_ui_x11::{UiActionEvent,UiActionPhase,UiColor,UiControllerEvent,UiDocumentAccess,UiDragEvent,UiKeyEvent,UiKeyPhase,UiWakeDrain,UiWindowConfig,UiWindowRole,run_with_controller_events_role_and_two_readable_fds,decode_document};
 
 const UI: &[u8]=include_bytes!(concat!(env!("OUT_DIR"),"/flamewm-explorer.rwr"));
+/// Menu commands that also work in remote folders; every other command is refused there until its remote path exists.
+const REMOTE_ACTIONS: [&str;3]=["open","showtype","hidden"];
 const MENU_ITEMS: [&str;24]=["showtype","open","openwith","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject","hidden"];
 /// Sidebar rows (group headings plus places) that the template provides; extra rows are not drawn.
 const SIDEBAR_SLOTS:usize=32;
@@ -165,6 +169,12 @@ enum WorkerResult {
     Thumbnail{key:ThumbKey,pixels:Option<Vec<u8>>},
     /// Trailing-edge timer for held resize sizes.
     ResizeFlush,
+    /// Streamed remote listing chunk, converted off the UI thread.
+    RemoteRows {generation:u64,path:PathBuf,rows:Vec<Entry>},
+    /// End of a remote listing; `failure` is worded for the status strip.
+    RemoteDone {generation:u64,path:PathBuf,failure:Option<String>},
+    /// Remote file downloaded to the cache (`Ok`) or failed (`Err`).
+    RemoteDownloaded(Result<PathBuf,String>),
 }
 /// Decodes queued image keys one at a time; the UI reads results from the cache, never waits on this thread.
 fn thumb_worker(rx:Receiver<ThumbKey>, result:Sender<WorkerResult>, mut wake:UnixStream) {
@@ -355,13 +365,19 @@ struct ExplorerApp {
     events:Option<(Sender<WorkerResult>,UnixStream)>,
     /// Cut sources the explorer already moved; the system clipboard still lists them, so they are not pasted twice.
     system_spent:Option<Vec<PathBuf>>,
+    /// One remote client per process; listings and downloads run on its workers.
+    remote:RemoteFs,
+    /// Cancels the streaming listing that is still running; replaced on the next listing.
+    remote_cancel:Option<RemoteCancel>,
+    /// Recently visited remote URLs (no secrets), newest first, persisted in explorer.toml.
+    remote_recent:Vec<String>,
 }
 impl ExplorerApp {
     fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
         let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,cancel:CancellationToken::new(),menu_overflow:false,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
-            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None,system_spent:None};
+            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
         app.reload_places();
         app
     }
@@ -389,6 +405,10 @@ impl ExplorerApp {
         if let Some(search)=self.search.as_mut() {search.cancel();}
     }
     fn start_search(&mut self,query:String) {
+        if remote::is_remote(self.model.tab().path()) {
+            self.model.status="Search is not available in remote folders yet".into();
+            return;
+        }
         if query.trim().is_empty() {self.clear_search();self.model.status="Search cleared".into();return;}
         let root=self.model.tab().path().to_path_buf();
         let hidden=self.model.hidden;
@@ -545,6 +565,13 @@ impl ExplorerApp {
     fn request_listing(&mut self) {
         let generation=self.model.next_generation();
         let path=self.model.tab().path().to_path_buf();
+        if let Some(previous)=self.remote_cancel.take() {previous.cancel();}
+        if let Some(url)=remote::url_of(&path) {
+            self.watch=None;
+            self.watched=None;
+            self.start_remote_listing(generation,url);
+            return;
+        }
         if self.watched.as_ref()!=Some(&path) {
             self.watched=Some(path.clone());
             self.watch=self.events.as_ref().and_then(|(tx,wake)|{
@@ -557,7 +584,50 @@ impl ExplorerApp {
             self.model.status="File worker unavailable".into();
         }
     }
+    /// Streams a remote folder: the worker converts each chunk and the UI loop appends it. The UI never waits on ssh.
+    fn start_remote_listing(&mut self,generation:u64,url:RemoteUrl) {
+        let cancel=RemoteCancel::new();
+        self.remote_cancel=Some(cancel.clone());
+        self.model.tab_mut().entries.clear();
+        self.model.status="Loading…".into();
+        let path=remote::to_path(&url);
+        let events=self.remote.list_dir(&url,&cancel);
+        let Some((tx,wake))=self.events.as_ref().and_then(|(tx,wake)|Some((tx.clone(),wake.try_clone().ok()?))) else {
+            self.model.status="Remote listing needs the event loop".into();
+            return;
+        };
+        std::thread::spawn(move||forward_listing(generation,path,url,events,tx,wake));
+    }
+    fn save_remote_recent(&mut self) {
+        if let Err(error)=prefs::save_recent(&prefs::config_dir(),&self.remote_recent) {
+            self.model.status=format!("Recent servers not saved: {error}");
+        }
+    }
+    /// Downloads a remote file into the cache, then opens the local copy with the default application.
+    fn download_and_open(&mut self,url:RemoteUrl) {
+        let Some((tx,wake))=self.events.as_ref().and_then(|(tx,wake)|Some((tx.clone(),wake.try_clone().ok()?))) else {
+            self.model.status="Remote open needs the event loop".into();
+            return;
+        };
+        let local=remote::cache_path(&remote::cache_root(),&url,url.file_name());
+        if let Some(parent)=local.parent() {
+            if let Err(error)=fs::create_dir_all(parent) {
+                self.model.status=format!("Cannot create download cache: {error}");
+                return;
+            }
+        }
+        let transfer=self.remote.download(&url,&local,&RemoteCancel::new());
+        self.model.status=format!("Downloading {}…",url.file_name());
+        std::thread::spawn(move||forward_download(local,transfer,tx,wake));
+    }
     fn navigate(&mut self,path:PathBuf) {
+        if remote::is_remote(&path) {
+            self.clear_search();
+            self.model.tab_mut().visit(path);
+            self.scan();
+            self.context=None;
+            return;
+        }
         // Opening Trash creates the XDG layout (files/ and info/) when it is missing; it never errors on a fresh home.
         if path==self.trash_base.join("files") {
             if let Err(e)=fs::create_dir_all(&path).and_then(|()|fs::create_dir_all(self.trash_base.join("info"))) {
@@ -592,6 +662,10 @@ impl ExplorerApp {
     }
     /// Files dropped from another application copy into the current folder. XDND only offers copy here.
     fn external_drop(&mut self,paths:Vec<PathBuf>) {
+        if remote::is_remote(self.model.tab().path()) {
+            self.model.status="Drops into remote folders are not available yet".into();
+            return;
+        }
         let destination=self.model.tab().path().to_path_buf();
         if flamewm_explorer::drop_is_noop(&paths,&destination) {
             self.model.status="Drop cancelled (nothing to copy)".into();
@@ -612,6 +686,10 @@ impl ExplorerApp {
         let Some(drag)=self.row_drag.take() else {return false;};
         self.drop_folder=None;
         if !drag.dragging {return false;}
+        if remote::is_remote(&drag.source) || remote::is_remote(self.model.tab().path()) || self.folder_at(e.x,e.y).is_some_and(|folder|remote::is_remote(&folder)) {
+            self.model.status="Moves involving remote folders are not available yet".into();
+            return true;
+        }
         self.last_click=None;
         self.context=None;
         let Some(destination)=self.folder_at(e.x,e.y) else {
@@ -642,6 +720,11 @@ impl ExplorerApp {
         true
     }
     fn open(&mut self, path:&Path) {
+        if let Some(url)=remote::url_of(path) {
+            if self.model.tab().entries.iter().any(|entry|entry.path==path && entry.directory) {self.navigate(path.to_path_buf());}
+            else {self.download_and_open(url);}
+            return;
+        }
         if path.is_dir() {self.navigate(path.to_path_buf());return;}
         // A .desktop file is not executed as a shell script. XDG application handlers own launch policy.
         if is_archive(path) {
@@ -821,6 +904,11 @@ impl ExplorerApp {
         }
     }
     fn action_menu(&mut self,cmd:&str) {
+        if remote::is_remote(self.model.tab().path()) && !REMOTE_ACTIONS.contains(&cmd) {
+            self.model.status="Not available in remote folders yet".into();
+            self.context=None;
+            return;
+        }
         if self.busy && ["paste","duplicate","trash","newfolder","rename"].contains(&cmd) {
             self.model.status="File operation already in progress".into();self.context=None;return;
         }
@@ -1290,6 +1378,7 @@ impl ExplorerApp {
                 match edit {
                     EditMode::Path=>match parse_address(&content,&home_dir()) {
                         Ok(AddressTarget::Local(path))=>self.navigate(path),
+                        Ok(AddressTarget::Remote(url))=>self.navigate(remote::to_path(&url)),
                         Ok(AddressTarget::ExternalUri(uri))=>{
                             match Command::new("xdg-open").arg(&uri).spawn() {
                                 Ok(_)=>self.model.status="Remote URL passed to the installed system handler".into(),
@@ -1415,6 +1504,28 @@ impl ExplorerApp {
                     self.model.tab_mut().visit(home);
                     self.scan();
                 }
+            },
+            WorkerResult::RemoteRows{generation,path,mut rows}=>{
+                // Local listings filter hidden names in `list_directory`; remote chunks are filtered here.
+                if !self.model.hidden {rows.retain(|entry|!entry.name.starts_with('.'));}
+                if self.model.append_listing(generation,&path,rows) {
+                    view::sort_entries(&mut self.model.tab_mut().entries,self.column_sort);
+                }
+            },
+            WorkerResult::RemoteDone{generation,path,failure}=>{
+                if self.model.finish_listing(generation,&path) {
+                    match failure {
+                        Some(message)=>self.model.status=message,
+                        None=>if let Some(url)=remote::url_of(&path) {
+                            remote::remember(&mut self.remote_recent,&url);
+                            self.save_remote_recent();
+                        },
+                    }
+                }
+            },
+            WorkerResult::RemoteDownloaded(result)=>match result {
+                Ok(local)=>self.open(&local),
+                Err(message)=>self.model.status=message,
             },
             WorkerResult::DirChanged=>{
                 if !self.busy && self.dialog.is_none() {self.request_listing();}
@@ -1742,6 +1853,7 @@ impl ExplorerApp {
     }
     /// Cached thumbnail for an image row. A cache miss queues one decode and shows the type icon meanwhile.
     fn row_thumbnail(&self, entry:&Entry)->Option<(u64,Arc<Vec<u8>>)> {
+        if remote::is_remote(&entry.path) {return None;}
         let key=ThumbKey::of(entry)?;
         let mut cache=self.thumbs.borrow_mut();
         match cache.lookup(&key) {
@@ -2045,4 +2157,51 @@ fn source_facts(paths:&[PathBuf])->Vec<ops::Source> {
 /// Parent directory of the first path, used as the location line of a confirmation.
 fn parent_dir(paths:&[PathBuf])->PathBuf {
     paths.first().and_then(|p|p.parent()).unwrap_or(Path::new("/")).to_path_buf()
+}
+
+/// Converts `flamewm-remote-fs` listing chunks on this thread and forwards them to the UI loop. A panic
+/// becomes a visible failure instead of a silent stop.
+fn forward_listing(generation:u64,path:PathBuf,url:RemoteUrl,events:Receiver<ListEvent>,tx:Sender<WorkerResult>,mut wake:UnixStream) {
+    let outcome=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+        loop {
+            match events.recv() {
+                Ok(ListEvent::Chunk(items))=>{
+                    let rows=items.iter().map(|item|remote::entry_of(&url,item)).collect();
+                    send_wake(&mut wake,&tx,WorkerResult::RemoteRows{generation,path:path.clone(),rows});
+                },
+                Ok(ListEvent::Done{..})=>{
+                    send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path:path.clone(),failure:None});
+                    return;
+                },
+                Ok(ListEvent::Failed(flamewm_remote_fs::Error::Cancelled))=>return,
+                Ok(ListEvent::Failed(error))=>{
+                    send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path:path.clone(),failure:Some(remote::describe(&error))});
+                    return;
+                },
+                Err(_)=>{
+                    send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path:path.clone(),failure:Some("Remote listing ended unexpectedly".into())});
+                    return;
+                },
+            }
+        }
+    }));
+    if outcome.is_err() {
+        send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path,failure:Some("Remote listing failed internally".into())});
+    }
+}
+
+/// Waits for a remote download and reports the local cache path, or the error, to the UI loop.
+fn forward_download(local:PathBuf,transfers:Receiver<TransferEvent>,tx:Sender<WorkerResult>,mut wake:UnixStream) {
+    let outcome=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<PathBuf,String>{
+        loop {
+            match transfers.recv() {
+                Ok(TransferEvent::Done{..})=>return Ok(local.clone()),
+                Ok(TransferEvent::Progress{..})=>{},
+                Ok(TransferEvent::Failed(error))=>return Err(remote::describe(&error)),
+                Err(_)=>return Err("Download ended unexpectedly".into()),
+            }
+        }
+    }));
+    let result=outcome.unwrap_or_else(|_|Err("Download failed internally".into()));
+    send_wake(&mut wake,&tx,WorkerResult::RemoteDownloaded(result));
 }

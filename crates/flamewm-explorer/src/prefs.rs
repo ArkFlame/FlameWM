@@ -55,15 +55,48 @@ pub fn render(prefs: &Prefs) -> String {
     )
 }
 
+/// Recent remote locations (`remote_recent = sftp://...` lines). URLs never carry passwords; the parser rejects them.
+pub fn recent_remotes(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| line.split_once('=').filter(|(key, _)| key.trim() == "remote_recent").map(|(_, value)| value.trim()))
+        .filter(|value| flamewm_remote_fs::Url::parse(value).is_ok_and(|url| url.to_string() == *value))
+        .take(crate::remote::RECENT_LIMIT)
+        .map(str::to_owned)
+        .collect()
+}
+
+pub fn render_with_recent(prefs: &Prefs, recent: &[String]) -> String {
+    let mut text = render(prefs);
+    for url in recent {
+        text.push_str(&format!("remote_recent = {url}\n"));
+    }
+    text
+}
+
+pub fn load_recent(dir: &Path) -> Vec<String> {
+    fs::read_to_string(dir.join("explorer.toml")).map(|text| recent_remotes(&text)).unwrap_or_default()
+}
+
+/// Replaces the recent remote list and keeps the stored view preferences.
+pub fn save_recent(dir: &Path, recent: &[String]) -> io::Result<()> {
+    let prefs = fs::read_to_string(dir.join("explorer.toml")).map(|text| parse(&text)).unwrap_or_default();
+    write_atomic(dir, &render_with_recent(&prefs, recent))
+}
+
 pub fn load(dir: &Path) -> Prefs {
     fs::read_to_string(dir.join("explorer.toml")).map(|text| parse(&text)).unwrap_or_default()
 }
 
 /// Writes through a temporary file so a crash never leaves a half-written preference file.
 pub fn save(dir: &Path, prefs: &Prefs) -> io::Result<()> {
+    let recent = load_recent(dir);
+    write_atomic(dir, &render_with_recent(prefs, &recent))
+}
+
+fn write_atomic(dir: &Path, text: &str) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     let temp = dir.join("explorer.toml.tmp");
-    fs::write(&temp, render(prefs))?;
+    fs::write(&temp, text)?;
     fs::rename(temp, dir.join("explorer.toml"))
 }
 
@@ -80,6 +113,19 @@ mod tests {
         assert_eq!(load(&dir), custom);
         save(&dir, &Prefs { show_hidden: false, ..Prefs::default() }).unwrap();
         assert!(!load(&dir).show_hidden);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn recent_remotes_survive_preference_saves_and_reject_secrets() {
+        let dir = std::env::temp_dir().join(format!("flamewm-explorer-recent-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        save_recent(&dir, &["sftp://ubuntu@play.arkflame.com:22/".into()]).unwrap();
+        save(&dir, &Prefs { show_hidden: true, ..Prefs::default() }).unwrap();
+        assert_eq!(load_recent(&dir), vec!["sftp://ubuntu@play.arkflame.com:22/".to_owned()]);
+        assert!(load(&dir).show_hidden);
+        let text = "remote_recent = sftp://u:secret@h:22/\nremote_recent = fish://h:22/~/x\nremote_recent = ftp://h/\nremote_recent = sftp://h/x\n";
+        assert_eq!(recent_remotes(text), vec!["fish://h:22/~/x".to_owned()]);
         fs::remove_dir_all(&dir).unwrap();
     }
 
