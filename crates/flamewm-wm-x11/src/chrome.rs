@@ -1026,6 +1026,8 @@ fn wallpaper_source_from_settings(
                 String::new()
             },
             fit: flamewm_image_core::wallpaper::parse(text("wallpaperFit")),
+            // The output layout is published by the WM once its outputs are known.
+            outputs: Vec::new(),
         },
     }
 }

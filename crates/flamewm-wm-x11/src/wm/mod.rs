@@ -1941,6 +1941,16 @@ impl<'a, C: Connection> Wm<'a, C> {
         if self.output_work_areas != next {
             self.finish_all_transitions()?;
             self.output_work_areas = next;
+            // The wallpaper behind titlebars is laid out per output, as the desktop draws it.
+            let geometries = self
+                .output_work_areas
+                .iter()
+                .map(|output| {
+                    let rect = output.geometry;
+                    (rect.x, rect.y, rect.width, rect.height)
+                })
+                .collect::<Vec<_>>();
+            crate::frame::titlebar_backdrop::set_wallpaper_outputs(&geometries);
             self.reconcile_work_area()?;
         }
         Ok(())

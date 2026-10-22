@@ -32,8 +32,8 @@ pub const FALLBACK_BACKDROP: [u8; 3] = [0x1b, 0x1e, 0x20];
 const DRAG_SLACK_X: u32 = 512;
 const DRAG_SLACK_Y: u32 = 32;
 /// Frame rows the drag snapshot masks with wallpaper. Titlebars are at most 72px (config clamp),
-/// the cell slack adds `DRAG_SLACK_Y` and the blur pad is at most 24px per side
-/// (`MAX_BLUR_RADIUS_PX`), so 160 rows cover every row a titlebar blur reads from the frame.
+/// the cell slack adds `DRAG_SLACK_Y` and the blur pad at most 24px per side (`MAX_BLUR_RADIUS_PX`),
+/// so 160 rows cover every row a titlebar blur reads from the frame.
 const DRAG_MASK_BAND_Y: u32 = 160;
 
 /// Wallpaper the desktop owner paints, as named by the settings.
@@ -220,7 +220,9 @@ pub fn set_wallpaper_source(mut source: WallpaperSource) -> u32 {
         // Decode now, not on the first drag press: a full wallpaper decode there cost ~280ms CPU.
         if let Some(WallpaperSource::Image { path, .. }) = state.source.as_ref() {
             let file = wallpaper_file(path);
-            state.natural = wallpaper::decode_file(&file).ok().map(|image| (file, image));
+            state.natural = wallpaper::decode_file(&file)
+                .ok()
+                .map(|image| (file, image));
         }
     }
     state.generation
@@ -419,8 +421,8 @@ fn titlebar_in(
     if kept.key != key {
         // Same place, same wallpaper and radius, different size (a resize just released): serve
         // the kept blur mirror-extended. A full wallpaper blur here stalls the release paint.
-        let same_place = (kept.key.0, kept.key.1, kept.key.4, kept.key.5)
-            == (key.0, key.1, key.4, key.5);
+        let same_place =
+            (kept.key.0, kept.key.1, kept.key.4, kept.key.5) == (key.0, key.1, key.4, key.5);
         if !same_place {
             state.retained = None;
             return None;
@@ -1251,7 +1253,12 @@ mod tests {
         let root = (1280u32, 900u32);
         let captured: Vec<u8> = (0..root.0 * root.1)
             .flat_map(|i| {
-                [(i * 7 % 251) as u8, (i * 13 % 239) as u8, (i * 3 % 233) as u8, 255]
+                [
+                    (i * 7 % 251) as u8,
+                    (i * 13 % 239) as u8,
+                    (i * 3 % 233) as u8,
+                    255,
+                ]
             })
             .collect();
         let frame = (100i32, 200i32, 1152u32, 726u32);
@@ -1263,21 +1270,20 @@ mod tests {
             state.drag = build_drag(&mut state, 1, root, Some(captured.clone()), mask);
             titlebar_in(&mut state, 1, origin, (frame.2, h), (0, 0, 0), 40, blur)
         };
-        let origins = [
-            (frame.0, frame.1),
-            (frame.0 + 3, frame.1 + 17),
-            (frame.0 - 5, frame.1 + 31),
-        ];
         for h in [20u32, 40, 72] {
             for blur in [30u8, 100] {
-                for origin in origins {
+                for origin in [
+                    (frame.0, frame.1),
+                    (frame.0 + 3, frame.1 + 17),
+                    (frame.0 - 5, frame.1 + 31),
+                ] {
                     let full = titlebar(frame, h, blur, origin);
                     let band = titlebar(band_mask(frame), h, blur, origin);
                     assert_eq!(band, full, "h {h} blur {blur} origin {origin:?}");
                 }
             }
         }
-        assert_eq!(band_mask(frame).3, DRAG_MASK_BAND_Y);
+        assert!(band_mask(frame).3 == DRAG_MASK_BAND_Y);
     }
 
     #[test]
@@ -1364,7 +1370,16 @@ mod tests {
             state.drag.as_ref().unwrap().blurred.as_ref().unwrap().cell,
             (0, 0)
         );
-        titlebar_in(&mut state, 5, (DRAG_SLACK_X as i32 + 1, 17), (w, h), rgb, alpha, 30).unwrap();
+        titlebar_in(
+            &mut state,
+            5,
+            (DRAG_SLACK_X as i32 + 1, 17),
+            (w, h),
+            rgb,
+            alpha,
+            30,
+        )
+        .unwrap();
         assert_eq!(
             state.drag.as_ref().unwrap().blurred.as_ref().unwrap().cell,
             (DRAG_SLACK_X as i32, 0)
@@ -1389,7 +1404,10 @@ mod tests {
         // Size changed at the same origin: kept blur served, kept crop survives.
         let resized = titlebar_in(&mut state, 3, (2, 2), (5, 2), (0, 0, 0), 0, 0).unwrap();
         assert_eq!(resized.len(), 5 * 2 * 4);
-        assert!(state.retained.is_some(), "kept crop survives a resized paint");
+        assert!(
+            state.retained.is_some(),
+            "kept crop survives a resized paint"
+        );
         // Moved origin still falls back (wallpaper path).
         assert!(titlebar_in(&mut state, 3, (5, 2), (3, 2), (0, 0, 0), 0, 0).is_none());
     }
@@ -1397,7 +1415,14 @@ mod tests {
     #[test]
     fn frozen_resize_serves_the_drag_blur_without_reblurring() {
         let captured: Vec<u8> = (0..96 * 80u32)
-            .flat_map(|i| [(i * 37 % 251) as u8, (i * 91 % 253) as u8, (i * 13 % 247) as u8, 255])
+            .flat_map(|i| {
+                [
+                    (i * 37 % 251) as u8,
+                    (i * 91 % 253) as u8,
+                    (i * 13 % 247) as u8,
+                    255,
+                ]
+            })
             .collect();
         let mut state = State {
             source: Some(WallpaperSource::Solid([0; 3])),
@@ -1703,8 +1728,14 @@ mod tests {
                     let old = wallpaper_rect(Some(&source), &mut old_canvas, mask, root);
                     let mut new_canvas = None;
                     let mut natural = None;
-                    let new =
-                        mask_pixels(Some(&source), &mut new_canvas, &mut natural, mask, root, true);
+                    let new = mask_pixels(
+                        Some(&source),
+                        &mut new_canvas,
+                        &mut natural,
+                        mask,
+                        root,
+                        true,
+                    );
                     assert_eq!(new, old, "root {root:?} {fit:?} mask {mask:?}");
                     assert!(
                         new_canvas.is_none(),
