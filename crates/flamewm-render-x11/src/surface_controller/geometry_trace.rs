@@ -225,7 +225,7 @@ impl SurfaceController {
 
     /// DEBUG/TEST-ONLY stacking canary over retained role order.
     /// Checks bottom-to-top creation order satisfies desktop < normal <
-    /// dock < popup via [`stack_order_ok`]. Zero X sync in all modes;
+    /// popup < dock via [`stack_order_ok`]. Zero X sync in all modes;
     /// a live QueryTree roundtrip stays in the nested-X harness, never on
     /// this path. Returns `Ok(true)` when the order holds, `Ok(false)`
     /// on inversion. Refuses (zero work) outside debug/test. Never

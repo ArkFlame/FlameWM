@@ -337,29 +337,29 @@ mod tests {
     }
 
     #[test]
-    fn stack_order_predicate_desktop_normal_dock_popup() {
+    fn stack_order_predicate_desktop_normal_popup_dock() {
         assert!(stack_order_ok(&[
             SurfaceRole::Desktop,
             SurfaceRole::Normal,
-            SurfaceRole::Dock,
             SurfaceRole::PopupMenu,
+            SurfaceRole::Dock,
         ]));
         assert!(stack_order_ok(&[
             SurfaceRole::Desktop,
             SurfaceRole::Normal,
             SurfaceRole::Normal,
-            SurfaceRole::Dock,
             SurfaceRole::DropdownMenu,
             SurfaceRole::Overlay,
+            SurfaceRole::Dock,
         ]));
         // Empty/single are trivially ordered.
         assert!(stack_order_ok(&[]));
         assert!(stack_order_ok(&[SurfaceRole::Dock]));
-        // Inversions fail: popup below dock/normal, dock below normal,
+        // Inversions fail: flyout above the taskbar, dock below normal,
         // normal below desktop.
         assert!(!stack_order_ok(&[
-            SurfaceRole::PopupMenu,
             SurfaceRole::Dock,
+            SurfaceRole::PopupMenu,
         ]));
         assert!(!stack_order_ok(&[SurfaceRole::Dock, SurfaceRole::Normal,]));
         assert!(!stack_order_ok(&[

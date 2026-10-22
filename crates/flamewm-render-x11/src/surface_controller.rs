@@ -81,16 +81,29 @@ pub fn debug_enabled() -> bool {
     std::env::var_os("FLAMEWM_DEBUG").is_some_and(|v| v == "1")
 }
 
+/// Raises `window` (a flyout or any shell surface) and then every taskbar window above it, so
+/// the taskbar covers whatever part of a flyout overlaps it. Returns the raise's X status.
+fn raise_above_taskbars(display: *mut Display, window: Window, taskbars: &[Window]) -> std::os::raw::c_int {
+    // SAFETY: display and every window id are live surfaces owned by the caller's controller.
+    unsafe {
+        let status = XRaiseWindow(display, window);
+        for bar in taskbars {
+            XRaiseWindow(display, *bar);
+        }
+        status
+    }
+}
+
 /// DEBUG-ONLY pure stack-order predicate (no X): bottom-to-top roles must
-/// satisfy desktop < normal < dock < popup (popup covers menu/dropdown/
-/// overlay). Test/canary use only.
+/// satisfy desktop < normal < popup (menu/dropdown/overlay) < dock. The taskbar
+/// stays above flyouts. Test/canary use only.
 pub fn stack_order_ok(bottom_to_top: &[SurfaceRole]) -> bool {
     fn rank(role: SurfaceRole) -> u8 {
         match role {
             SurfaceRole::Desktop => 0,
             SurfaceRole::Normal => 1,
-            SurfaceRole::Dock => 2,
-            SurfaceRole::PopupMenu | SurfaceRole::DropdownMenu | SurfaceRole::Overlay => 3,
+            SurfaceRole::PopupMenu | SurfaceRole::DropdownMenu | SurfaceRole::Overlay => 2,
+            SurfaceRole::Dock => 3,
         }
     }
     let mut last: Option<u8> = None;
@@ -306,7 +319,7 @@ impl SurfaceController {
         unsafe {
             XMapWindow(self.display, window);
             if surface_role_needs_popup_raise(role) {
-                XRaiseWindow(self.display, window);
+                raise_above_taskbars(self.display, window, &self.taskbar_windows());
             }
             instance.app.present_scene().map_err(mark_x_error)?;
             XFlush(self.display);
@@ -385,6 +398,7 @@ impl SurfaceController {
         // and maps/presents without repainting.
         let role = self.surface_role(id)?;
         let display = self.display;
+        let taskbars = self.taskbar_windows();
         let key = id.get();
         let now = Instant::now();
         let (slide, shown, size, origin, window) = {
@@ -482,7 +496,7 @@ impl SurfaceController {
             XMapWindow(display, window);
             // Slides stack above application windows; the panel clip keeps the emerging part hidden.
             if emerging.is_some() || surface_role_needs_popup_raise(role) {
-                XRaiseWindow(display, window);
+                raise_above_taskbars(display, window, &taskbars);
             }
         }
         cycle.advance("map_raise")?;
@@ -619,9 +633,19 @@ impl SurfaceController {
     }
 
     pub fn raise(&self, id: SurfaceId) -> Result<(), String> {
-        self.with_window(id, |display, window| unsafe {
-            XRaiseWindow(display, window)
+        let taskbars = self.taskbar_windows();
+        self.with_window(id, |display, window| {
+            raise_above_taskbars(display, window, &taskbars)
         })
+    }
+
+    /// Windows of every taskbar (Dock role) this controller owns.
+    fn taskbar_windows(&self) -> Vec<Window> {
+        self.surfaces
+            .values()
+            .filter(|instance| instance.role == SurfaceRole::Dock)
+            .map(|instance| instance.app.window)
+            .collect()
     }
 
     /// Publishes window-relative pager cell rects on a surface's X window
@@ -1138,6 +1162,7 @@ impl SurfaceController {
         let display = self.display;
         let root = self.root_window();
         let dock = self.dock_rect();
+        let taskbars = self.taskbar_windows();
         for (id, instance) in self.surfaces.iter_mut() {
             let key = id.get();
             let (Some(active), Some(progress)) =
@@ -1158,10 +1183,8 @@ impl SurfaceController {
                 if active.opening {
                     // Map and present the real popup, then drop the overlay: same turn, no gap.
                     // SAFETY: the window is this controller's live child of the root.
-                    unsafe {
-                        XMapWindow(display, instance.app.window);
-                        XRaiseWindow(display, instance.app.window);
-                    }
+                    unsafe { XMapWindow(display, instance.app.window) };
+                    raise_above_taskbars(display, instance.app.window, &taskbars);
                     let _ = unsafe { instance.app.present_scene() };
                     instance.shown = true;
                     if std::mem::take(&mut instance.grab_pending) {
@@ -1196,7 +1219,7 @@ impl SurfaceController {
             if active.opening {
                 // The full mask is visible only at the anchored, fully opened position.
                 unsafe { instance.app.refresh_shape_mask(&instance.document) };
-                unsafe { XRaiseWindow(display, window) };
+                raise_above_taskbars(display, window, &taskbars);
             } else {
                 // Never restore the full shape while still mapped: that exposes a final
                 // un-clipped frame in front of the dock for one X server composite.
