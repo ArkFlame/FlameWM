@@ -31,6 +31,10 @@ pub const FALLBACK_BACKDROP: [u8; 3] = [0x1b, 0x1e, 0x20];
 /// to the right and bottom, so every origin inside the cell crops from one blur.
 const DRAG_SLACK_X: u32 = 512;
 const DRAG_SLACK_Y: u32 = 32;
+/// Frame rows the drag snapshot masks with wallpaper. Titlebars are at most 72px (config clamp),
+/// the cell slack adds `DRAG_SLACK_Y` and the blur pad is at most 24px per side
+/// (`MAX_BLUR_RADIUS_PX`), so 160 rows cover every row a titlebar blur reads from the frame.
+const DRAG_MASK_BAND_Y: u32 = 160;
 
 /// Wallpaper the desktop owner paints, as named by the settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,7 +189,15 @@ pub fn begin_drag(
     let state = guard.get_or_insert_with(State::default);
     let captured = raw_root.map(bgrx_to_rgba);
     state.retained = None;
-    state.drag = build_drag(state, owner, root, captured, mask);
+    state.drag = build_drag(state, owner, root, captured, band_mask(mask));
+}
+
+/// The part of the frame `mask` the titlebar can read: its top [`DRAG_MASK_BAND_Y`] rows. A
+/// titlebar blur reads the snapshot only to `titlebar + DRAG_SLACK_Y + padding` below the frame
+/// top, so the rest of the frame never needs wallpaper composed for it. Composing the whole frame
+/// cost ~50ms of CPU at every drag start.
+fn band_mask(mask: (i32, i32, u32, u32)) -> (i32, i32, u32, u32) {
+    (mask.0, mask.1, mask.2, mask.3.min(DRAG_MASK_BAND_Y))
 }
 
 /// Freezes (or thaws) the drag backdrop of `owner`. While frozen, titlebar pixels come from the
@@ -1172,6 +1184,41 @@ mod tests {
         assert_eq!(drag.snapshot.crop(1, 1, 1, 1), vec![9, 9, 9, 255]);
         assert_eq!(drag.snapshot.crop(2, 2, 1, 1), vec![9, 9, 9, 255]);
         assert_eq!(drag.snapshot.crop(3, 3, 1, 1), captured[60..64].to_vec());
+    }
+
+    #[test]
+    fn drag_mask_band_matches_full_frame_mask_for_titlebar_reads() {
+        // A titlebar blur reads only the band; a full-frame mask must give identical titlebars.
+        let root = (1280u32, 900u32);
+        let captured: Vec<u8> = (0..root.0 * root.1)
+            .flat_map(|i| {
+                [(i * 7 % 251) as u8, (i * 13 % 239) as u8, (i * 3 % 233) as u8, 255]
+            })
+            .collect();
+        let frame = (100i32, 200i32, 1152u32, 726u32);
+        let titlebar = |mask: (i32, i32, u32, u32), h: u32, blur: u8, origin: (i32, i32)| {
+            let mut state = State {
+                source: Some(WallpaperSource::Solid([10, 20, 30])),
+                ..State::default()
+            };
+            state.drag = build_drag(&mut state, 1, root, Some(captured.clone()), mask);
+            titlebar_in(&mut state, 1, origin, (frame.2, h), (0, 0, 0), 40, blur)
+        };
+        let origins = [
+            (frame.0, frame.1),
+            (frame.0 + 3, frame.1 + 17),
+            (frame.0 - 5, frame.1 + 31),
+        ];
+        for h in [20u32, 40, 72] {
+            for blur in [30u8, 100] {
+                for origin in origins {
+                    let full = titlebar(frame, h, blur, origin);
+                    let band = titlebar(band_mask(frame), h, blur, origin);
+                    assert_eq!(band, full, "h {h} blur {blur} origin {origin:?}");
+                }
+            }
+        }
+        assert_eq!(band_mask(frame).3, DRAG_MASK_BAND_Y);
     }
 
     #[test]
