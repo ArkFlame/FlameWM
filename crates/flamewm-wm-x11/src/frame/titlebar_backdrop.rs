@@ -105,6 +105,9 @@ struct DragBackdrop {
     owner: u64,
     snapshot: DragSnapshot,
     blurred: Option<Blurred>,
+    /// Interactive resize: the blurred region is served as-is (edge-clamped) for every size until
+    /// the drag ends, so a resize step never re-blurs. The final size is blurred after release.
+    frozen: bool,
     /// Blur work buffers reused by every move step of this drag.
     scratch: BlurScratch,
     /// Padded crop reused by every blur of this drag.
@@ -122,6 +125,9 @@ struct Blurred {
     cell: (i32, i32),
     /// `(w + DRAG_SLACK) x (h + DRAG_SLACK)` straight RGBA blurred at `cell`.
     region: Vec<u8>,
+    /// Width and height of `region` in pixels.
+    region_w: u32,
+    region_h: u32,
 }
 
 #[derive(Default)]
@@ -136,6 +142,9 @@ struct State {
     /// Final blurred crop of the last drag, kept per owner after release. No full-root snapshot
     /// is retained.
     retained: Option<(u64, Blurred)>,
+    /// Decoded natural wallpaper image for the masked drag path, kept per file so a drag start
+    /// does not decode the wallpaper again. Dropped when the wallpaper source changes.
+    natural: Option<(PathBuf, RgbaImage)>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -150,6 +159,7 @@ pub fn set_wallpaper_source(source: WallpaperSource) -> u32 {
         state.source = Some(source);
         state.generation = state.generation.wrapping_add(1);
         state.canvas = None;
+        state.natural = None;
         state.cache.clear();
         state.retained = None;
     }
@@ -170,6 +180,22 @@ pub fn begin_drag(
     let captured = raw_root.map(bgrx_to_rgba);
     state.retained = None;
     state.drag = build_drag(state, owner, root, captured, mask);
+}
+
+/// Freezes (or thaws) the drag backdrop of `owner`. While frozen, titlebar pixels come from the
+/// blur already taken for the drag, clamped to its extent, so a resize never re-blurs. Thawing
+/// does not blur: the next paint computes the blur for the size it is actually painting.
+pub fn set_drag_frozen(owner: u64, frozen: bool) {
+    let Ok(mut guard) = STATE.lock() else { return };
+    if let Some(state) = guard.as_mut() {
+        set_drag_frozen_in(state, owner, frozen);
+    }
+}
+
+fn set_drag_frozen_in(state: &mut State, owner: u64, frozen: bool) {
+    if let Some(drag) = state.drag.as_mut().filter(|drag| drag.owner == owner) {
+        drag.frozen = frozen;
+    }
 }
 
 /// Ends the drag of `owner`: the snapshot is dropped and its final blurred crop is kept.
@@ -270,6 +296,13 @@ fn titlebar_in(
     let generation = state.generation;
     let key = (origin.0, origin.1, width, height, radius_tenths, generation);
     if let Some(drag) = state.drag.as_mut().filter(|drag| drag.owner == owner) {
+        if drag.frozen {
+            if let Some(blurred) = drag.blurred.as_ref() {
+                // Interactive resize: reuse the blur taken at drag start; no recompute.
+                let crop = slice_region_clamped(blurred, origin, width, height);
+                return Some(compose_rgba(&crop, rgb, alpha));
+            }
+        }
         let cell = drag_cell(origin);
         let reusable = drag.blurred.as_ref().is_some_and(|blurred| {
             blurred.cell == cell
@@ -292,7 +325,13 @@ fn titlebar_in(
                 radius,
                 &mut drag.crop,
             );
-            drag.blurred = Some(Blurred { key, cell, region });
+            drag.blurred = Some(Blurred {
+                key,
+                cell,
+                region,
+                region_w,
+                region_h,
+            });
         }
         let blurred = drag.blurred.as_ref()?;
         let crop = slice_region(
@@ -349,6 +388,24 @@ fn slice_region(
     for row in 0..h as usize {
         let start = ((oy + row) * region_w as usize + ox) * 4;
         out.extend_from_slice(&region[start..start + w as usize * 4]);
+    }
+    out
+}
+
+/// `w x h` crop at `origin` out of a blurred region, edge-clamped: pixels outside the region
+/// repeat its nearest edge pixel. Never fails, so a resize past the blurred extent still paints.
+fn slice_region_clamped(blurred: &Blurred, origin: (i32, i32), w: u32, h: u32) -> Vec<u8> {
+    let (rw, rh) = (blurred.region_w as i32, blurred.region_h as i32);
+    let ox = origin.0 - blurred.cell.0;
+    let oy = origin.1 - blurred.cell.1;
+    let mut out = Vec::with_capacity(w as usize * h as usize * 4);
+    for row in 0..h as i32 {
+        let sy = (oy + row).clamp(0, rh - 1) as usize;
+        for col in 0..w as i32 {
+            let sx = (ox + col).clamp(0, rw - 1) as usize;
+            let at = (sy * rw as usize + sx) * 4;
+            out.extend_from_slice(&blurred.region[at..at + 4]);
+        }
     }
     out
 }
@@ -422,6 +479,7 @@ fn build_drag(
     let masked = mask_pixels(
         state.source.as_ref(),
         &mut state.canvas,
+        &mut state.natural,
         mask,
         root,
         captured.is_some(),
@@ -441,6 +499,7 @@ fn build_drag(
             owner,
             snapshot,
             blurred: None,
+            frozen: false,
             scratch: BlurScratch::new(),
             crop: Vec::new(),
         })
@@ -485,15 +544,22 @@ fn wallpaper_base(
 fn mask_pixels(
     source: Option<&WallpaperSource>,
     canvas: &mut Option<((u32, u32), Option<RgbaImage>)>,
+    natural: &mut Option<(PathBuf, RgbaImage)>,
     mask: (i32, i32, u32, u32),
     root: (u32, u32),
     has_capture: bool,
 ) -> Vec<u8> {
     if has_capture {
         if let Some(WallpaperSource::Image { path, fit }) = source {
-            let natural = wallpaper::decode_file(&wallpaper_file(path)).ok();
-            if let Some(pixels) =
-                natural.and_then(|natural| masked_from_natural(&natural, *fit, mask, root))
+            let file = wallpaper_file(path);
+            if natural.as_ref().is_none_or(|(kept, _)| *kept != file) {
+                *natural = wallpaper::decode_file(&file)
+                    .ok()
+                    .map(|image| (file.clone(), image));
+            }
+            if let Some(pixels) = natural
+                .as_ref()
+                .and_then(|(_, image)| masked_from_natural(image, *fit, mask, root))
             {
                 return pixels;
             }
@@ -1141,6 +1207,54 @@ mod tests {
     }
 
     #[test]
+    fn frozen_resize_serves_the_drag_blur_without_reblurring() {
+        let captured: Vec<u8> = (0..96 * 80u32)
+            .flat_map(|i| [(i * 37 % 251) as u8, (i * 91 % 253) as u8, (i * 13 % 247) as u8, 255])
+            .collect();
+        let mut state = State {
+            source: Some(WallpaperSource::Solid([0; 3])),
+            ..State::default()
+        };
+        state.drag = build_drag(&mut state, 5, (96, 80), Some(captured), (0, 0, 0, 0));
+        let (rgb, alpha) = ((10u8, 20u8, 30u8), 60u8);
+        let origin = (10, 3);
+        let first = titlebar_in(&mut state, 5, origin, (20, 12), rgb, alpha, 30).unwrap();
+        set_drag_frozen_in(&mut state, 5, true);
+        let blurred_before = state.drag.as_ref().unwrap().blurred.clone();
+
+        // Growing and shrinking the frame during the resize never touches the blur.
+        let grown = titlebar_in(&mut state, 5, origin, (30, 20), rgb, alpha, 30).unwrap();
+        let shrunk = titlebar_in(&mut state, 5, origin, (8, 6), rgb, alpha, 30).unwrap();
+        assert_eq!(grown.len(), 30 * 20 * 4);
+        assert_eq!(shrunk.len(), 8 * 6 * 4);
+        assert_eq!(state.drag.as_ref().unwrap().blurred, blurred_before);
+        // The overlapping pixels are the same as before the resize started.
+        assert_eq!(&grown[..20 * 4], &first[..20 * 4]);
+        assert_eq!(&shrunk[..8 * 4], &first[..8 * 4]);
+
+        // Thaw: the next paint at a new key blurs again for the size it paints.
+        set_drag_frozen_in(&mut state, 5, false);
+        titlebar_in(&mut state, 5, origin, (30, 20), rgb, alpha, 30).unwrap();
+        assert_ne!(state.drag.as_ref().unwrap().blurred, blurred_before);
+    }
+
+    #[test]
+    fn clamped_slice_repeats_region_edges_and_never_fails() {
+        let blurred = Blurred {
+            key: (0, 0, 0, 0, 0, 0),
+            cell: (0, 0),
+            // 2x2 region: pixel values 1..=4 in the red channel.
+            region: vec![1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0],
+            region_w: 2,
+            region_h: 2,
+        };
+        // Origin left/up of the region clamps to its first pixel; beyond clamps to the last.
+        let crop = slice_region_clamped(&blurred, (-1, -1), 3, 3);
+        let reds: Vec<u8> = crop.chunks_exact(4).map(|px| px[0]).collect();
+        assert_eq!(reds, vec![1, 1, 2, 1, 1, 2, 3, 3, 4]);
+    }
+
+    #[test]
     fn kept_crop_survives_release_and_drops_on_move_wallpaper_or_forget() {
         let mut state = State {
             source: Some(WallpaperSource::Solid([9, 9, 9])),
@@ -1397,7 +1511,9 @@ mod tests {
                     let mut old_canvas = None;
                     let old = wallpaper_rect(Some(&source), &mut old_canvas, mask, root);
                     let mut new_canvas = None;
-                    let new = mask_pixels(Some(&source), &mut new_canvas, mask, root, true);
+                    let mut natural = None;
+                    let new =
+                        mask_pixels(Some(&source), &mut new_canvas, &mut natural, mask, root, true);
                     assert_eq!(new, old, "root {root:?} {fit:?} mask {mask:?}");
                     assert!(
                         new_canvas.is_none(),

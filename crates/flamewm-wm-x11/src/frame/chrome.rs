@@ -292,12 +292,16 @@ pub fn render(
     // (`draw_title` records them before touching the display) even on
     // headless hosts where retarget/fill already failed. Live behavior is
     // unchanged: any failure is still returned as an error.
-    let retarget_result = renderer.retarget(frame_xid, scene.frame_w, scene.frame_h);
+    let retarget_result = {
+        let _guard = flamewm_profiler::start("wm.chrome.render.retarget");
+        renderer.retarget(frame_xid, scene.frame_w, scene.frame_h)
+    };
     let titlebar_h = f32::from(scene.titlebar_height);
     // No compositor: the surface material (`surfaceColor` @ `surfaceOpacity` over the blurred
     // wallpaper behind the frame) is baked into opaque pixels and blitted. An opaque blit needs
     // no XRender, so hosts without it paint the same fill.
     let fill_result = {
+        let _guard = flamewm_profiler::start("wm.chrome.render.fill");
         let mut pixels = titlebar_fill_pixels(renderer, frame_xid, scene, titlebar_h as u32);
         let plates = crate::chrome::control_backplates_for(
             scene.frame_w,
@@ -325,6 +329,7 @@ pub fn render(
             },
         )
     };
+    let _icon_guard = flamewm_profiler::start("wm.chrome.render.icon");
     let icon_result = match (&scene.icon, scene.icon_dest) {
         (Some(icon), Some((dest_x, dest_y, dest_edge))) => {
             match crate::chrome::native_icon_rgba(icon, u32::from(scene.icon_edge)) {
@@ -344,6 +349,7 @@ pub fn render(
         }
         _ => Ok(()),
     };
+    let _title_guard = flamewm_profiler::start("wm.chrome.render.title");
     let draw_result = if !scene.title.is_empty() {
         renderer.draw_title(
             &scene.title,
@@ -362,6 +368,7 @@ pub fn render(
     } else {
         Ok(())
     };
+    let _controls_guard = flamewm_profiler::start("wm.chrome.render.controls");
     let controls_result = crate::chrome::control_blits_for_height(
         scene.frame_w,
         scene.titlebar_height,
@@ -385,7 +392,10 @@ pub fn render(
             },
         )
     });
+    let shape_guard = flamewm_profiler::start("wm.chrome.render.shape");
     let shape_result = renderer.apply_shape(u32::from(scene.radius));
+    drop(shape_guard);
+    let _flush_guard = flamewm_profiler::start("wm.chrome.render.flush");
     renderer.flush();
     retarget_result?;
     fill_result?;

@@ -1,9 +1,87 @@
 use super::*;
 
+/// Titlebar repaint cadence during an interactive move (about 60 Hz). The frame still follows
+/// every motion; only the chrome repaint is paced.
+pub(super) const MOVE_CHROME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// Pure pacing decision: a paint is due when none ran yet or the interval has elapsed.
+#[must_use]
+pub(crate) fn chrome_paint_due(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last.is_none_or(|last| now.saturating_duration_since(last) >= MOVE_CHROME_INTERVAL)
+}
+
+/// Caps `wait` at the time left until the next chrome paint is due.
+#[must_use]
+pub(crate) fn chrome_wait_cap(
+    last: Option<std::time::Instant>,
+    now: std::time::Instant,
+    wait: Option<std::time::Duration>,
+) -> Option<std::time::Duration> {
+    let remaining = last.map_or(std::time::Duration::ZERO, |last| {
+        (last + MOVE_CHROME_INTERVAL).saturating_duration_since(now)
+    });
+    Some(wait.map_or(remaining, |wait| wait.min(remaining)))
+}
+
 impl<'a, C: Connection> Wm<'a, C> {
+    /// True while `client` has an activated move; its titlebar repaints are paced.
+    fn is_moving(&self, client: Window) -> bool {
+        matches!(
+            self.session_of(client),
+            InteractionSession::Move(session) if session.anchor.is_activated()
+        )
+    }
+
+    /// `PaintChrome` executor. During a move, a repaint inside the interval is deferred to
+    /// `flush_deferred_chrome`; resize and release paint immediately so no exposed titlebar stays
+    /// unpainted.
+    pub(super) fn paint_chrome_paced(
+        &mut self,
+        client: Window,
+        now: std::time::Instant,
+    ) -> Result<(), ReplyError> {
+        if self.is_moving(client) && !chrome_paint_due(self.chrome_paint_at, now) {
+            self.chrome_deferred = Some(client);
+            return Ok(());
+        }
+        self.chrome_deferred = None;
+        self.paint_chrome(client)?;
+        self.chrome_paint_at = Some(now);
+        Ok(())
+    }
+
+    /// Paints a deferred titlebar once its interval elapsed, or at once when the move has ended.
+    pub(super) fn flush_deferred_chrome(
+        &mut self,
+        now: std::time::Instant,
+    ) -> Result<(), ReplyError> {
+        let Some(client) = self.chrome_deferred else {
+            return Ok(());
+        };
+        if self.is_moving(client) && !chrome_paint_due(self.chrome_paint_at, now) {
+            return Ok(());
+        }
+        self.chrome_deferred = None;
+        self.paint_chrome(client)?;
+        self.chrome_paint_at = Some(now);
+        Ok(())
+    }
+
+    /// Caps the reactor wait so a deferred titlebar paint runs on its frame tick.
+    pub(super) fn deferred_chrome_wait(
+        &self,
+        wait: Option<std::time::Duration>,
+    ) -> Option<std::time::Duration> {
+        if self.chrome_deferred.is_none() {
+            return wait;
+        }
+        chrome_wait_cap(self.chrome_paint_at, std::time::Instant::now(), wait)
+    }
+
     /// Captures the root once (24-bit LSB only; otherwise the wallpaper is used) and freezes
     /// the backdrop for the dragged frame.
     pub(super) fn begin_drag_backdrop(&self, client: Window) {
+        let _drag_guard = flamewm_profiler::start("wm.drag.begin_backdrop");
         let Some((frame, outer)) = self
             .clients
             .get(&client)
@@ -117,6 +195,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         }) else {
             return Ok(());
         };
+        let _paint_guard = flamewm_profiler::start("wm.chrome.paint");
         let runtime = self.chrome_runtimes.entry(client).or_default();
         runtime.scene_for(&identity, chrome_state, icon);
         // The renderer reads the frame origin on its own Xlib connection; sync so the
@@ -196,5 +275,53 @@ impl<'a, C: Connection> Wm<'a, C> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod chrome_pacing_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn first_paint_is_always_due_and_later_ones_wait_one_interval() {
+        let t0 = Instant::now();
+        assert!(chrome_paint_due(None, t0));
+        assert!(!chrome_paint_due(Some(t0), t0 + Duration::from_millis(15)));
+        assert!(chrome_paint_due(Some(t0), t0 + MOVE_CHROME_INTERVAL));
+    }
+
+    #[test]
+    fn a_burst_of_motions_paints_once_per_interval() {
+        // 1000 motions at 1 kHz over one second: only ~60 paints fall due.
+        let t0 = Instant::now();
+        let mut last = None;
+        let mut paints = 0;
+        for step in 0..1000u64 {
+            let now = t0 + Duration::from_millis(step);
+            if chrome_paint_due(last, now) {
+                last = Some(now);
+                paints += 1;
+            }
+        }
+        assert!((60..=63).contains(&paints), "paints={paints}");
+    }
+
+    #[test]
+    fn wait_is_capped_to_the_next_tick_and_never_extended() {
+        let t0 = Instant::now();
+        let now = t0 + Duration::from_millis(5);
+        assert_eq!(
+            chrome_wait_cap(Some(t0), now, None),
+            Some(Duration::from_millis(11))
+        );
+        assert_eq!(
+            chrome_wait_cap(Some(t0), now, Some(Duration::from_millis(2))),
+            Some(Duration::from_millis(2))
+        );
+        assert_eq!(
+            chrome_wait_cap(Some(t0), t0 + Duration::from_millis(40), None),
+            Some(Duration::ZERO)
+        );
     }
 }

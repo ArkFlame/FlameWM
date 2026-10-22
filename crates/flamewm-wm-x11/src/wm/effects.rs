@@ -128,7 +128,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                         self.layout_input_children(client)?;
                     }
                     FrameEffect::PaintChrome => {
-                        self.paint_chrome(client)?;
+                        self.paint_chrome_paced(client, std::time::Instant::now())?;
                     }
                     FrameEffect::ApplyShape => {
                         let (frame, floating, outer) = match self.clients.get(&client) {
@@ -435,6 +435,12 @@ impl<'a, C: Connection> Wm<'a, C> {
         let now_dragging = drag_activated(&next.session);
         if !was_dragging && now_dragging {
             self.begin_drag_backdrop(client);
+            if matches!(next.session, InteractionSession::Resize(_)) {
+                // Resize reuses the blur taken here for every step; it is recomputed after release.
+                if let Some(frame) = self.clients.get(&client).map(|state| state.frame) {
+                    crate::frame::titlebar_backdrop::set_drag_frozen(u64::from(frame), true);
+                }
+            }
         } else if was_dragging && !now_dragging {
             if let Some(frame) = self.clients.get(&client).map(|state| state.frame) {
                 crate::frame::titlebar_backdrop::end_drag(u64::from(frame));

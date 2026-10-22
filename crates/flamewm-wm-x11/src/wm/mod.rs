@@ -925,7 +925,11 @@ enum ReleaseAction {
 }
 
 fn drag_activated(session: &InteractionSession) -> bool {
-    matches!(session, InteractionSession::Move(move_session) if move_session.anchor.is_activated())
+    match session {
+        InteractionSession::Move(move_session) => move_session.anchor.is_activated(),
+        InteractionSession::Resize(_) => true,
+        _ => false,
+    }
 }
 
 fn activated_move(session: Option<MoveSession>) -> Option<MoveSession> {
@@ -1297,12 +1301,14 @@ where
         // the hook flushes them to snapshots/signals exactly once.
         let changes = wm.take_changes();
         wm.pump_transitions(std::time::Instant::now())?;
+        wm.flush_deferred_chrome(std::time::Instant::now())?;
         let wait = hook(&mut wm, &conn, screen_num, changes)?;
         drain_pumped_events(&mut wm, &mut pump, conn.as_ref())?;
         wm.commit_super_tap();
         wm.tick_edge_drag()?;
         // After the drain: an effect begun by a drained event (e.g. try_start_open) must cap the wait.
         let wait = wm.transition_wait(wait);
+        let wait = wm.deferred_chrome_wait(wait);
         let wait = drag_edge_wait(
             wm.edge_drag,
             wm.mouse_workspace_cooldowns,
@@ -1492,6 +1498,10 @@ pub(crate) struct Wm<'a, C: Connection> {
     resize_probe: Option<ResizeProbe>,
     edge_drag: Option<EdgeDragPending>,
     mouse_workspace_cooldowns: MouseWorkspaceCooldowns,
+    /// Client whose titlebar repaint is paced to the frame interval during a move.
+    chrome_deferred: Option<Window>,
+    /// When the titlebar was last painted by the paced path.
+    chrome_paint_at: Option<std::time::Instant>,
 }
 
 fn icon_completion_matches(
@@ -1659,6 +1669,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             resize_probe: None,
             edge_drag: None,
             mouse_workspace_cooldowns: MouseWorkspaceCooldowns::default(),
+            chrome_deferred: None,
+            chrome_paint_at: None,
         })
     }
 
