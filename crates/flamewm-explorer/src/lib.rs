@@ -18,7 +18,7 @@ pub mod trash;
 pub mod view;
 
 pub mod jobs;
-pub const PAGE_ROWS: usize = 22;
+pub const PAGE_ROWS: usize = 12;
 pub const MAX_LISTED_ENTRIES: usize = 100_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -490,10 +490,12 @@ mod tests {
         tab.page=2;
         let page=tab.visible_page();
         assert_eq!(page.len(), PAGE_ROWS);
-        assert_eq!(page[0].name, "item-044");
-        assert_eq!(tab.visible_nth(44).unwrap().name,"item-044");
-        assert_eq!(tab.visible_index_of(&page[0].path),Some(44));
-        assert_eq!(tab.page_count(),5);
+        // Page 2 starts at 2*PAGE_ROWS, whatever the page size is.
+        let first=2*PAGE_ROWS;
+        assert_eq!(page[0].name, format!("item-{first:03}"));
+        assert_eq!(tab.visible_nth(first).unwrap().name,format!("item-{first:03}"));
+        assert_eq!(tab.visible_index_of(&page[0].path),Some(first));
+        assert_eq!(tab.page_count(),100usize.div_ceil(PAGE_ROWS));
         tab.search="item-09".into();tab.page=0;
         assert_eq!(tab.filtered_count(),10);
         assert_eq!(tab.visible_page().len(),10);

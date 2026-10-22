@@ -1,42 +1,52 @@
 
-:root { --accent:#ef4048; --surface:#202326; --card:#232629; --line:#3a3f45; --sidebar:#1b1e20; --text:#f1f2f3; --muted:#aeb4bb; --accent-soft:#ef404830; }
+:root { --accent:#ef4048; --surface:#202326; --card:#272a2e; --line:#363b41; --sidebar:#1b1e20; --text:#f1f2f3; --muted:#9ca3ab; --accent-soft:#ef404830; }
 * { box-sizing:border-box; }
 html { width:100%; height:100%; }
 body { width:100%; height:100%; margin:0; color:var(--text); background:var(--surface); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
-button { background:transparent; color:var(--text); cursor:default; font-size:13px; }
-button:hover { background:#333840; }
+button { background:transparent; color:var(--text); cursor:default; font-size:13px; border-width:0px; padding:0px; display:flex; align-items:center; justify-content:center; }
+button:hover { background:#33383f; }
 button:active { background:#424950; }
-.top { width:100%; flex-grow:0; display:flex; flex-direction:column; background:var(--surface); }
-.toolbar { width:100%; height:48px; padding:6px 12px; display:flex; align-items:center; gap:5px; }
-.nav { width:38px; height:34px; border-radius:6px; font-size:17px; }
-.address { height:34px; flex-grow:1; min-width:100px; padding:0 12px; display:flex; align-items:center; white-space:nowrap; overflow:hidden; background:#15181b; border:1px solid #51575f; border-radius:5px; }
+
+/* Flow chrome: fixed heights so the list geometry in main.rs matches exactly. */
+.toolbar { width:100%; height:45px; flex-grow:0; padding:0 10px; display:flex; flex-direction:row; align-items:center; gap:6px; background:var(--surface); }
+.tool { height:30px; min-width:30px; padding:0 9px; border-radius:6px; color:#dfe3e7; }
+.tool-sep { width:1px; height:20px; background:var(--line); }
+.address { justify-content:flex-start; height:30px; flex-grow:1; min-width:120px; padding:0 12px; display:flex; align-items:center; white-space:nowrap; overflow:hidden; background:#15181b; border:1px solid #4a5058; border-radius:6px; }
 .address:hover { border-color:var(--accent); }
-.tabs { display:flex; align-items:center; height:36px;  padding-left:12px; gap:2px; }
-.tab { min-width:96px; max-width:164px; height:31px; padding:0 10px; white-space:nowrap; overflow:hidden; background:#252a2f; border-radius:6px; }
-.tab-add,.tab-close { height:30px; width:32px; }
-.main { flex-grow:1; display:flex; min-height:0; overflow:hidden; }
-.places { flex-grow:0; width:204px; padding:12px 4px; display:flex; flex-direction:column; gap:2px; overflow:hidden; background:var(--sidebar);  }
-.section { height:26px; padding-left:13px; color:var(--muted); font-size:11px; }
-.place { width:100%; height:32px; padding:0 14px;  display:flex; align-items:center; overflow:hidden; white-space:nowrap; border-radius:4px; }
-.files { flex-grow:1; min-width:0; display:flex; flex-direction:column; overflow:hidden; }
-.columns { width:100%; height:30px; flex-grow:0; display:flex; align-items:center;  background:#25282c; }
-.columns button { height:29px; color:#dce0e4;  padding-left:12px;  }
-.col-name { flex-grow:1; }.col-size { width:125px; }.col-mod { width:128px; }
-.entries { width:100%; flex-grow:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
-/* Rows are placed by absolute geometry (list rows or icon-grid cells), so one pool serves every view. */
-.entry { position:absolute; height:26px; display:flex; align-items:center; overflow:hidden; border-radius:4px; }
+.tabs { width:100%; height:36px; flex-grow:0; display:flex; flex-direction:row; align-items:center; padding-left:10px; gap:2px; background:var(--surface); }
+.tab { min-width:96px; max-width:164px; height:28px; padding:0 10px; white-space:nowrap; overflow:hidden; background:#252a2f; border-radius:6px; }
+.tab-add,.tab-close { height:28px; width:30px; }
+.body { width:100%; flex-grow:1; min-height:0; display:flex; flex-direction:row; overflow:hidden; }
+.places { flex-grow:0; width:201px; padding:10px 8px; display:flex; flex-direction:column; gap:2px; overflow:hidden; background:var(--sidebar); }
+.section { height:24px; padding-left:10px; color:var(--muted); font-size:11px; }
+.place { justify-content:flex-start; width:100%; height:30px; padding:0 10px; display:flex; align-items:center; overflow:hidden; white-space:nowrap; border-radius:6px; }
+.hairline { width:100%; height:1px; flex-grow:0; background:var(--line); }
+.vline { width:1px; flex-grow:0; background:var(--line); }
+.files { flex-grow:1; min-width:0; }
+
+/* Column header and rows are absolute siblings of body, so their coordinates are window coordinates. */
+.columns { position:absolute; left:201px; top:81px; width:200px; height:29px; display:flex; flex-direction:row; align-items:center; background:#23262a; overflow:hidden; }
+.entry { justify-content:flex-start; position:absolute; height:35px; display:flex; flex-direction:row; align-items:center; overflow:hidden; border-radius:0px; }
 .entry:hover { background:var(--accent-soft); }
+.head { color:#c9ced4; font-size:12px; }
 .cell-name { flex-grow:1; min-width:0; padding-left:12px; white-space:nowrap; overflow:hidden; }
-.cell-size { width:125px; min-width:125px; color:#bbc1c8; white-space:nowrap; overflow:hidden; }
-.cell-mod { width:128px; min-width:128px; color:#bbc1c8; white-space:nowrap; overflow:hidden; }
-.file-pager { height:32px; display:flex; align-items:center; justify-content:space-between;  padding:0 12px; }
-.file-pager button { height:29px; min-width:70px; }
-.status { height:28px; flex-grow:0; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:0 12px;  color:#c8cdd2; font-size:11px; }
+.cell-mod { width:150px; min-width:150px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
+.cell-size { width:100px; min-width:100px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
+.cell-kind { width:130px; min-width:130px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
+
+/* Status strip: message, optional pager, then item/selection counts and free space. */
+.status { width:100%; height:30px; flex-grow:0; display:flex; flex-direction:row; align-items:center; gap:12px; padding:0 12px; background:var(--surface); color:#c3c9cf; font-size:11px; }
+.status-message { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; }
+.status-count { white-space:nowrap; overflow:hidden; }
+.job-progress { white-space:nowrap; overflow:hidden; }
+.file-pager { height:24px; flex-grow:0; display:flex; flex-direction:row; align-items:center; gap:6px; }
+.file-pager button { height:24px; min-width:28px; padding:0 6px; }
+
 .context { position:absolute; top:105px; left:330px; width:210px; padding:5px; display:flex; flex-direction:column; background:#232629; border:1px solid #51565c; border-radius:11px; }
-.menu-row { width:198px; height:31px;  padding-left:11px; border-radius:3px; }
+.menu-row { justify-content:flex-start; width:198px; height:31px; padding-left:11px; border-radius:3px; }
 .menu-row:hover { background:var(--accent-soft); }
 
-.progress-popup { position:absolute; bottom:45px; right:18px; width:290px; height:140px; padding:13px; border:1px solid var(--line); border-radius:9px; background:var(--card); display:flex; flex-direction:column; gap:11px; }
+.progress-popup { position:absolute; bottom:42px; right:18px; width:290px; height:140px; padding:13px; border:1px solid var(--line); border-radius:9px; background:var(--card); display:flex; flex-direction:column; gap:11px; }
 .progress-title { color:var(--text); font-size:14px; }
 .progress-track { width:262px; height:7px; background:var(--sidebar); border-radius:4px; }
 .progress-fill { width:0px; height:7px; background:var(--accent); border-radius:4px; }
@@ -46,11 +56,10 @@ button:active { background:#424950; }
 .dialog { position:absolute; left:300px; top:150px; width:460px; padding:16px; display:flex; flex-direction:column; gap:8px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
 .dialog-title { font-size:16px; color:var(--text); }
 .dialog-line { font-size:12px; color:var(--muted); }
-.dialog-actions { display:flex; justify-content:flex-end; gap:6px; padding-top:8px; }
+.dialog-actions { display:flex; flex-direction:row; justify-content:flex-end; gap:6px; padding-top:8px; }
 .dialog-button { height:31px; padding:0 12px; border-radius:6px; }
 .dialog-button:hover { background:var(--accent-soft); }
 
-/* One canvas: quiet Finder-style selection and no extra chrome when unused. */
 .selection-rectangle { position:absolute; background:var(--accent-soft); border:1px solid var(--accent); border-radius:3px; }
 
 /* Native modal chooser: no new configuration or external GTK dialog. */
@@ -59,8 +68,8 @@ button:active { background:#424950; }
 .openwith-title { font-size:16px; color:var(--text); }
 .openwith-hint { font-size:11px; color:var(--muted); }
 .openwith-apps { height:252px; padding:8px 12px; display:flex; flex-direction:column; gap:2px; }
-.openwith-choice { width:100%; height:37px; padding-left:12px; display:flex; align-items:center; white-space:nowrap; overflow:hidden; border-radius:5px; }
-.openwith-pages { height:35px; display:flex; align-items:center; justify-content:space-between; padding:0 14px; }
-.openwith-actions { height:85px; padding:9px 12px; display:flex; align-items:center; justify-content:flex-end; gap:6px; }
+.openwith-choice { justify-content:flex-start; width:100%; height:37px; padding-left:12px; display:flex; align-items:center; white-space:nowrap; overflow:hidden; border-radius:5px; }
+.openwith-pages { height:35px; display:flex; flex-direction:row; align-items:center; justify-content:space-between; padding:0 14px; }
+.openwith-actions { height:85px; padding:9px 12px; display:flex; flex-direction:row; align-items:center; justify-content:flex-end; gap:6px; }
 .openwith-small { height:31px; padding:0 11px; border-radius:6px; }
 .openwith-primary { height:31px; padding:0 12px; border-radius:6px; color:var(--text); background:var(--accent); }
