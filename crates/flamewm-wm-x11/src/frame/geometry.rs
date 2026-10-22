@@ -305,8 +305,18 @@ pub fn plan_resize(req: &GeometryRequest<'_>) -> GeometryPlan {
     } else {
         i32::MAX
     };
-    let raw_w = if span_w > 0 { raw_w.min(span_w) } else { raw_w };
-    let raw_h = if span_h > 0 { raw_h.min(span_h) } else { raw_h };
+    // The cap stops growth past the work area; it must not shrink a frame that already overhangs
+    // it, so it never falls below the frame's current size on that axis.
+    let raw_w = if span_w > 0 {
+        raw_w.min(span_w.max(s.w))
+    } else {
+        raw_w
+    };
+    let raw_h = if span_h > 0 {
+        raw_h.min(span_h.max(s.h))
+    } else {
+        raw_h
+    };
 
     // Frame domain -> client domain -> hints -> frame domain.
     let raw_cw = raw_w.saturating_sub(dw).max(1) as u32;
@@ -909,6 +919,36 @@ mod tests {
         let p = plan_resize(&r);
         assert_eq!(p.frame.x, 2000);
         assert!(p.frame.w > 0);
+    }
+
+    #[test]
+    fn resize_bottom_overhanging_work_area_does_not_shrink_on_zero_motion() {
+        // Frame already extends 20 px below the work area: the work-area cap must stop growth,
+        // never pull the frame back to the cap on the first motion (251 -> 223 regression).
+        let mut r = req(ResizeEdges::bottom(), (0, 0), free());
+        r.start.rect = RootRect::new(100, 800, 400, 300);
+        r.outputs = OUTS;
+        let p = plan_resize(&r);
+        assert_eq!(p.frame, RootRect::new(100, 800, 400, 300));
+    }
+
+    #[test]
+    fn resize_bottom_overhanging_work_area_does_not_shrink_on_outward_motion() {
+        let mut r = req(ResizeEdges::bottom(), (0, 15), free());
+        r.start.rect = RootRect::new(100, 800, 400, 300);
+        r.outputs = OUTS;
+        let p = plan_resize(&r);
+        assert_eq!(p.frame.h, 300);
+        assert_eq!(p.frame.y, 800);
+    }
+
+    #[test]
+    fn resize_bottom_overhanging_work_area_still_shrinks_inward() {
+        let mut r = req(ResizeEdges::bottom(), (0, -40), free());
+        r.start.rect = RootRect::new(100, 800, 400, 300);
+        r.outputs = OUTS;
+        let p = plan_resize(&r);
+        assert_eq!(p.frame.h, 260);
     }
 
     #[test]
