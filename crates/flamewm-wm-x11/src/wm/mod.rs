@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::rc::Rc;
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -1494,6 +1494,11 @@ pub(crate) struct Wm<'a, C: Connection> {
     decoration_tokens: flamewm_skin::recipes::decoration::ChromeTokens,
     /// Shadow strips per floating frame (`wm/shadow.rs`).
     frame_shadows: HashMap<Window, shadow::FrameShadow>,
+    /// Clients whose bottom corners were clipped to a rounded frame; used to
+    /// restore the unshaped client when the decoration turns square.
+    rounded_clients: HashSet<Window>,
+    /// Root generation and staleness stamps that decide when a strip re-shades.
+    shadow_scene: shadow::ShadowScene,
     changes: WmChangeSet,
     /// Bare-Super tap state; see `SuperTap`. Start toggles only through it.
     super_tap: SuperTap,
@@ -1668,6 +1673,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             chrome_runtimes: HashMap::new(),
             decoration_tokens: flamewm_skin::recipes::decoration::ChromeTokens::default(),
             frame_shadows: HashMap::new(),
+            rounded_clients: HashSet::new(),
+            shadow_scene: shadow::ShadowScene::default(),
             changes: WmChangeSet::default(),
             super_tap: SuperTap::default(),
             pointer_ingress_probe: PointerIngressProbe::default(),

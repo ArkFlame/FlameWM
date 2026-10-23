@@ -91,6 +91,12 @@ impl PtyProcess {
         tcsetwinsize(&self.master, winsize(size)).map_err(io::Error::from)
     }
 
+    /// The kernel's window size for this terminal, which is what the child sees.
+    pub fn winsize(&self) -> io::Result<PtySize> {
+        let size = rustix::termios::tcgetwinsize(&self.master)?;
+        Ok(PtySize { cols: size.ws_col, rows: size.ws_row, pixel_width: size.ws_xpixel, pixel_height: size.ws_ypixel })
+    }
+
     /// Exit status once the child has finished; `None` while it runs.
     pub fn try_exit(&mut self) -> io::Result<Option<i32>> {
         Ok(self.child.try_wait()?.map(|status| status.code().unwrap_or(-1)))

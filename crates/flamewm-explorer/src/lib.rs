@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::os::unix::fs::symlink;
 use std::time::SystemTime;
 
+pub mod appicon;
 pub mod archive;
 pub mod clipboard;
 pub mod dndext;
@@ -410,9 +411,12 @@ fn network_place(name:String,path:PathBuf)->Place {
     Place{name,path,removable:false,group:PlaceGroup::Network,icon:"drive",device:None}
 }
 
-/// Sidebar row for a present but unmounted removable filesystem: no path, so `mounted()` is false.
+/// Sidebar row for a present but unmounted filesystem: no path, so `mounted()` is false.
+/// The drive/removable distinction comes from `lsblk`: an internal partition is listed too, but keeps
+/// the internal-drive glyph and is not presented as removable media.
 pub fn unmounted_place(device:&places::BlockDevice)->Place {
-    Place{name:device.label.clone(),path:PathBuf::new(),removable:true,group:PlaceGroup::Devices,icon:"usb",device:Some(device.device.clone())}
+    let icon=if device.removable {"usb"} else {"drive"};
+    Place{name:device.label.clone(),path:PathBuf::new(),removable:device.removable,group:PlaceGroup::Devices,icon,device:Some(device.device.clone())}
 }
 
 /// Crash-safe copy owned by `jobs`; never overwrites an existing entry.
@@ -587,6 +591,19 @@ mod tests {
         assert_eq!(rows[0].name, "Backup");
         assert_eq!(rows[0].device.as_deref(), Some("/dev/sdb1"));
         assert_eq!(rows[0].group, PlaceGroup::Devices);
+        // Removable media keeps the drive's removable flag and the USB glyph.
+        assert!(rows[0].removable);
+        assert_eq!(rows[0].icon, "usb");
+        // An unmounted internal partition is still offered, but not as removable media.
+        let internal = places::parse_lsblk(
+            r#"{"blockdevices":[{"name":"nvme0n1","rm":false,"children":[
+                {"name":"nvme0n1p6","fstype":"ext4","mountpoint":null,"label":"Data","size":17179869184}]}]}"#,
+        );
+        let internal: Vec<Place> = internal.iter().map(unmounted_place).collect();
+        assert_eq!(internal.len(), 1);
+        assert_eq!(internal[0].name, "Data");
+        assert!(!internal[0].removable);
+        assert_eq!(internal[0].icon, "drive");
     }
     #[test] fn flamewm_explorer_desktop_entry_is_listed_in_system_menu_bucket() {
         let dir = std::env::temp_dir().join(format!("flamewm-explorer-xdg-{}", std::process::id()));

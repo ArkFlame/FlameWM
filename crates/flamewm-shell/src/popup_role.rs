@@ -123,9 +123,13 @@ mod popup_contract_tests {
         }
     }
 
+    /// Real CSS intrinsic for each role. Start is `.start-menu`
+    /// (`width:550px`) by the tallest child box, `.start-content-pane`
+    /// (`min-height:420px`): the pre-A12-3 `292x380` was the left-pane width
+    /// and a stale height, so the surface was mapped ~250px too narrow.
     fn expected_intrinsic(role: PopupRole) -> Size {
         match role {
-            PopupRole::Start => Size::new(292, 380),
+            PopupRole::Start => Size::new(550, 420),
             PopupRole::Media => Size::new(310, 200),
             PopupRole::Audio => Size::new(310, 220),
             PopupRole::Network => Size::new(310, 260),
@@ -203,6 +207,16 @@ mod popup_contract_tests {
         )
         .expect("start placement");
         assert!(start.rect.bottom() <= 597, "start {:?}", start.rect);
+        // A12-3: at 1350x641 the real CSS intrinsic (550x420) fits, so Start
+        // must open at it uncapped. A stale 292x380 fails this pin.
+        let start_intrinsic = expected_intrinsic(PopupRole::Start);
+        assert_eq!(
+            (start.rect.width, start.rect.height),
+            (start_intrinsic.width, start_intrinsic.height),
+            "start must open at its real CSS intrinsic size: {:?}",
+            start.rect
+        );
+        assert!(!start.content_was_capped, "start fits at 1350x641");
 
         let slots = [
             (PopupRole::Media, Rect::new(1350 - 220, 597, 30, 44)),

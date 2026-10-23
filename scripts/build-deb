@@ -63,9 +63,16 @@ actual_arch="$(dpkg-deb --field "$DEB" Architecture)"
     sha256sum --check SHA256SUMS
 )
 # Read the full dpkg-deb listing: grep -q may SIGPIPE its producer under pipefail.
-dpkg-deb --contents "$DEB" | grep -F './usr/share/xsessions/flamewm.desktop' >/dev/null \
+deb_contents="$(dpkg-deb --contents "$DEB")"
+grep -F './usr/share/xsessions/flamewm.desktop' <<<"$deb_contents" >/dev/null \
     || fail 'X11 SDDM session entry missing from package'
+# The native Terminal payload must ship in the .deb: a nested Xephyr entry in
+# scripts/xephyr hides this, so assert both the binary and its launcher here.
+for required in './usr/bin/flamewm-terminal' './usr/share/applications/flamewm-terminal.desktop'; do
+    grep -F "$required" <<<"$deb_contents" >/dev/null \
+        || fail "native Terminal payload missing from package: $required"
+done
 
 printf '\nFLAMEWM-DEB-READY: %s\n' "$DEB"
-printf 'FLAMEWM-DEB-READY: Architecture=amd64, checksums=verified, X11 session=present\n'
+printf 'FLAMEWM-DEB-READY: Architecture=amd64, checksums=verified, X11 session=present, terminal=present\n'
 printf 'To install: sudo apt install "%s"\n' "$DEB"

@@ -48,10 +48,17 @@ wire_enum!("image treatment" ImageTreatment { Original = 0, SymbolicForeground =
 wire_enum!("text wrap" TextWrap { NoWrap = 0, Wrap = 1 });
 
 pub fn encode(document: &CompiledDocument) -> Result<Vec<u8>, String> {
+    encode_version(document, FORMAT_VERSION)
+}
+
+/// Encodes at an explicit `version`, so tests can rebuild pre-v8 wire layouts.
+/// Only fields added in a newer revision are gated on `version`; the reader in
+/// [`decode_with`] is the mirror image of these gates.
+fn encode_version(document: &CompiledDocument, version: u16) -> Result<Vec<u8>, String> {
     document.validate()?;
     let mut writer = Writer { bytes: Vec::new() };
     writer.bytes.extend_from_slice(&FORMAT_MAGIC);
-    writer.u16(FORMAT_VERSION);
+    writer.u16(version);
     writer.u16(0);
     writer.u64(document.source_fingerprint);
     writer.u32(document.root);
@@ -81,9 +88,9 @@ pub fn encode(document: &CompiledDocument) -> Result<Vec<u8>, String> {
         writer.string(&node.action)?;
         writer.string(&node.text)?;
         writer.opt_u16(node.image);
-        writer.style(&node.style);
-        writer.opt_style(node.hover_style.as_deref());
-        writer.opt_style(node.active_style.as_deref());
+        writer.style(&node.style, version);
+        writer.opt_style(node.hover_style.as_deref(), version);
+        writer.opt_style(node.active_style.as_deref(), version);
     }
 
     Ok(writer.bytes)
@@ -111,6 +118,7 @@ fn decode_with(bytes: &[u8], borrow: Option<&'static [u8]>) -> Result<CompiledDo
     // rejected explicitly; no silent reinterpretation of pixel bytes.
     let bytes_per_pixel: u32 = match version {
         FORMAT_VERSION
+        | FORMAT_VERSION_BLUR_LEGACY
         | FORMAT_VERSION_SHADOW_LEGACY
         | FORMAT_VERSION_TEXT_WRAP_LEGACY
         | FORMAT_VERSION_TREATMENT_LEGACY
@@ -267,10 +275,10 @@ impl Writer {
     fn tag<T: Wire>(&mut self, value: T) {
         self.u8(value.to_wire());
     }
-    fn opt_style(&mut self, style: Option<&Style>) {
+    fn opt_style(&mut self, style: Option<&Style>, version: u16) {
         self.u8(style.is_some() as u8);
         if let Some(style) = style {
-            self.style(style);
+            self.style(style, version);
         }
     }
     fn color(&mut self, value: Color) {
@@ -313,7 +321,7 @@ impl Writer {
         self.f32(value.bottom);
         self.f32(value.left);
     }
-    fn style(&mut self, style: &Style) {
+    fn style(&mut self, style: &Style, version: u16) {
         self.tag(style.display);
         self.tag(style.flex_direction);
         self.tag(style.justify_content);
@@ -351,6 +359,10 @@ impl Writer {
         self.tag(style.image_treatment);
         self.tag(style.text_wrap);
         self.u8(u8::from(style.break_anywhere));
+        // v8-only field: pre-v8 documents have no hide-scrollbars byte.
+        if version > FORMAT_VERSION_BLUR_LEGACY {
+            self.u8(u8::from(style.hide_scrollbars));
+        }
         match style.text_shadow {
             Some(shadow) => {
                 self.u8(1);
@@ -544,6 +556,15 @@ impl<'a> Reader<'a> {
             } else {
                 false
             },
+            hide_scrollbars: if version > FORMAT_VERSION_BLUR_LEGACY {
+                match self.u8()? {
+                    0 => false,
+                    1 => true,
+                    v => return Err(format!("invalid hide scrollbars {v}")),
+                }
+            } else {
+                false
+            },
             text_shadow: if version >= FORMAT_VERSION_SHADOW_LEGACY {
                 match self.u8()? {
                     0 => None,
@@ -569,6 +590,12 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds the newest pre-v8 wire layout (no hide-scrollbars byte), so the
+    /// legacy tests can strip the remaining v8 additions themselves.
+    fn encode_pre_v8(document: &CompiledDocument) -> Vec<u8> {
+        encode_version(document, FORMAT_VERSION_BLUR_LEGACY).expect("encode pre-v8")
+    }
 
     #[test]
     fn codec_round_trip() {
@@ -763,11 +790,11 @@ mod tests {
     #[test]
     fn v3_style_decodes_with_original_treatment_default() {
         let document = roundtrip_node(ImageTreatment::SymbolicForeground);
-        let mut bytes = encode(&document).unwrap();
+        let mut bytes = encode_pre_v8(&document);
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_RGBA8_LEGACY.to_le_bytes());
         // v6 adds one shadow-presence byte in addition to the v5
         // treatment+wrap+break fields. Strip four bytes for v3.
-        assert_eq!(FORMAT_VERSION, 7);
+        assert_eq!(FORMAT_VERSION, 8);
         let tail = bytes.len() - 6;
         bytes.drain(tail..tail + 4);
         let decoded = decode(&bytes).unwrap();
@@ -784,8 +811,8 @@ mod tests {
     #[test]
     fn v4_style_decodes_with_wrap_defaults() {
         let document = roundtrip_node(ImageTreatment::SymbolicForeground);
-        let mut bytes = encode(&document).unwrap();
-        assert_eq!(FORMAT_VERSION, 7);
+        let mut bytes = encode_pre_v8(&document);
+        assert_eq!(FORMAT_VERSION, 8);
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_TREATMENT_LEGACY.to_le_bytes());
         // Strip v5 wrap+break and v6 shadow flag after treatment.
         let tail = bytes.len() - 5;
@@ -830,7 +857,7 @@ mod tests {
                 a: 200,
             }),
         });
-        let mut bytes = encode(&doc).unwrap();
+        let mut bytes = encode_pre_v8(&doc);
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_SHADOW_LEGACY.to_le_bytes());
         // Last four style bytes are the newly appended blur radius for this one-node fixture.
         let at = bytes.len() - 6;
@@ -843,7 +870,7 @@ mod tests {
     #[test]
     fn v5_style_decodes_without_text_shadow() {
         let document = roundtrip_node(ImageTreatment::Original);
-        let mut bytes = encode(&document).unwrap();
+        let mut bytes = encode_pre_v8(&document);
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_TEXT_WRAP_LEGACY.to_le_bytes());
         // The last two bytes are the optional hover/active style flags.
         // The v6 shadow flag appears immediately before them.
@@ -855,8 +882,8 @@ mod tests {
     #[test]
     fn v2_style_decodes_with_original_treatment_and_overflow_defaults() {
         let document = roundtrip_node(ImageTreatment::Original);
-        let mut bytes = encode(&document).unwrap();
-        assert_eq!(FORMAT_VERSION, 7);
+        let mut bytes = encode_pre_v8(&document);
+        assert_eq!(FORMAT_VERSION, 8);
         // Convert to v2: strip treatment, wrap, break, shadow, and two
         // overflow bytes from the single-node style.
         let style_tail = bytes.len() - 8;
@@ -869,5 +896,28 @@ mod tests {
         );
         assert_eq!(decoded.nodes[0].style.overflow_x, Overflow::Visible);
         assert_eq!(decoded.nodes[0].style.overflow_y, Overflow::Visible);
+    }
+
+    #[test]
+    fn v8_roundtrip_preserves_hide_scrollbars() {
+        let mut document = roundtrip_node(ImageTreatment::Original);
+        document.nodes[0].style.hide_scrollbars = true;
+        let decoded = decode(&encode(&document).unwrap()).unwrap();
+        assert!(decoded.nodes[0].style.hide_scrollbars);
+        assert_eq!(decoded, document);
+    }
+
+    #[test]
+    fn v7_style_decodes_without_hide_scrollbars() {
+        let mut document = roundtrip_node(ImageTreatment::Original);
+        document.nodes[0].style.hide_scrollbars = true;
+        let mut bytes = encode(&document).unwrap();
+        bytes[4..6].copy_from_slice(&FORMAT_VERSION_BLUR_LEGACY.to_le_bytes());
+        // The v7 layout has no hide-scrollbars byte, and it sits immediately
+        // before the text-shadow flag on this one-node default-style fixture.
+        let at = bytes.len() - 4;
+        bytes.remove(at);
+        let decoded = decode(&bytes).unwrap();
+        assert!(!decoded.nodes[0].style.hide_scrollbars);
     }
 }

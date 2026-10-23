@@ -256,6 +256,111 @@ fn clamp_start(pos: i32, len: i32, area_pos: i32, area_end: i32) -> i32 {
     }
 }
 
+/// Bottom-pinned Start action row footprint: `.start-search` height (45px)
+/// plus its 6px bottom margin (`ui/shell/flamewm.css`:
+/// `.start-search { height:45px; margin:0px 6px 6px 6px; }`). That row is the
+/// last child of `.start-left-pane` (`justify-content:flex-end`), so it always
+/// sits on the popup's bottom edge; a capped Start surface keeps at least this
+/// extent whenever the work area allows it, so the row stays reachable.
+pub const START_ACTION_ROW_HEIGHT: i32 = 51;
+
+/// Bounded small-work-area fallback for [`fitted_start_placement`] (A12-2).
+///
+/// The fitted engine refuses (`PendingLayout`) when the work area leaves no
+/// room for the `gap` between the popup and the panel — which a 320x240 or
+/// 520x420 work area reaches at some anchors. Refusing there leaves Start
+/// unmapped, so this fallback never fails:
+/// - clamps the popup inside `work_area`, which already excludes the panel
+///   strip, so the surface always stays on its own output;
+/// - keeps the panel-adjacent edge `gap` away from the panel whenever that
+///   fits (the bottom-pinned action row then sits just above the panel);
+/// - floors the opening extent at [`START_ACTION_ROW_HEIGHT`] (never more than
+///   the work area) so the action row cannot be squeezed out entirely.
+#[must_use]
+pub fn bounded_start_placement(
+    anchor: Rect,
+    intrinsic: Size,
+    panel_edge: PanelEdge,
+    work_area: Rect,
+    gap: i32,
+) -> StartPlacement {
+    let area = Rect::new(
+        work_area.x,
+        work_area.y,
+        work_area.width.max(0),
+        work_area.height.max(0),
+    );
+    let gap = gap.max(0);
+    let wanted_w = intrinsic.width.max(1);
+    let wanted_h = intrinsic.height.max(1);
+    // Opening-axis floor: the action row, capped by the work area itself.
+    let floor_h = START_ACTION_ROW_HEIGHT.min(area.height).max(1);
+    let fit = |available: i32, wanted: i32| wanted.min(available.max(0)).max(1);
+    let (x, y, width, height) = match panel_edge {
+        PanelEdge::Bottom => {
+            let limit = anchor.y.clamp(area.y, area.bottom());
+            let available = (limit - area.y - gap).max(0);
+            let height = fit(available, wanted_h)
+                .max(floor_h)
+                .min(area.height.max(1));
+            let width = wanted_w.min(area.width.max(1));
+            let y = (limit - gap - height).clamp(area.y, (area.bottom() - height).max(area.y));
+            (
+                clamp_start(anchor.x, width, area.x, area.right()),
+                y,
+                width,
+                height,
+            )
+        }
+        PanelEdge::Top => {
+            let limit = anchor.bottom().clamp(area.y, area.bottom());
+            let available = (area.bottom() - limit - gap).max(0);
+            let height = fit(available, wanted_h)
+                .max(floor_h)
+                .min(area.height.max(1));
+            let width = wanted_w.min(area.width.max(1));
+            let y = (limit + gap).clamp(area.y, (area.bottom() - height).max(area.y));
+            (
+                clamp_start(anchor.x, width, area.x, area.right()),
+                y,
+                width,
+                height,
+            )
+        }
+        PanelEdge::Left => {
+            let limit = anchor.right().clamp(area.x, area.right());
+            let available = (area.right() - limit - gap).max(0);
+            let width = fit(available, wanted_w).min(area.width.max(1));
+            let height = wanted_h.min(area.height.max(1));
+            let x = (limit + gap).clamp(area.x, (area.right() - width).max(area.x));
+            (
+                x,
+                clamp_start(anchor.y, height, area.y, area.bottom()),
+                width,
+                height,
+            )
+        }
+        PanelEdge::Right => {
+            let limit = anchor.x.clamp(area.x, area.right());
+            let available = (limit - area.x - gap).max(0);
+            let width = fit(available, wanted_w).min(area.width.max(1));
+            let height = wanted_h.min(area.height.max(1));
+            let x = (limit - gap - width).clamp(area.x, (area.right() - width).max(area.x));
+            (
+                x,
+                clamp_start(anchor.y, height, area.y, area.bottom()),
+                width,
+                height,
+            )
+        }
+    };
+    let rect = Rect::new(x, y, width, height);
+    StartPlacement {
+        rect,
+        content_was_capped: rect.width != intrinsic.width || rect.height != intrinsic.height,
+    }
+}
+
 #[cfg(test)]
 mod work_area_tests {
     use super::*;
@@ -547,6 +652,106 @@ mod fitted_start_tests {
                 .expect("placed");
             assert_eq!(q.rect.y, anchor_t.bottom() + 8, "{w}x{h}");
         }
+    }
+}
+
+/// A12-2: bounded small-work-area fallback. Both 320x240 and 520x420 work
+/// areas are smaller than the real Start intrinsic (550x420), so the fitted
+/// engine caps — or, with no room for the gap, refuses. The fallback must
+/// still produce an on-output rect inside the work area whose bottom-pinned
+/// action row is reachable.
+#[cfg(test)]
+mod bounded_small_work_area_tests {
+    use super::*;
+
+    const SMALL_WORK_AREAS: [(i32, i32); 2] = [(320, 240), (520, 420)];
+
+    fn assert_inside_work_area(rect: Rect, area: Rect) {
+        assert!(rect.width > 0 && rect.height > 0, "{rect:?}");
+        assert!(
+            rect.x >= area.x && rect.right() <= area.right(),
+            "{rect:?} must stay on output {area:?}"
+        );
+        assert!(
+            rect.y >= area.y && rect.bottom() <= area.bottom(),
+            "{rect:?} must stay inside the work area {area:?}"
+        );
+    }
+
+    #[test]
+    fn fitted_engine_caps_but_stays_on_output_and_keeps_the_action_row() {
+        for (w, h) in SMALL_WORK_AREAS {
+            let area = Rect::new(0, 0, w, h);
+            // Start button on a bottom panel: its top edge is the work-area
+            // bottom, so nothing is subtracted from the opening space except
+            // the gap.
+            let anchor = Rect::new(0, h, 43, 44);
+            let placement =
+                fitted_start_placement(anchor, Size::new(550, 420), PanelEdge::Bottom, area, 8)
+                    .expect("small work area must still place");
+            assert!(placement.content_was_capped, "{w}x{h}");
+            assert_inside_work_area(placement.rect, area);
+            // Bottom-pinned: the row sits `gap` above the panel, reachable.
+            assert_eq!(placement.rect.bottom(), h - 8, "{w}x{h}");
+            assert!(
+                placement.rect.height >= START_ACTION_ROW_HEIGHT.min(h),
+                "{w}x{h}: {} cannot hold the action row",
+                placement.rect.height
+            );
+            assert!(placement.rect.right() <= area.right(), "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn bounded_fallback_survives_a_work_area_with_no_room_for_the_gap() {
+        for (w, h) in SMALL_WORK_AREAS {
+            let area = Rect::new(0, 0, w, h);
+            // Hostile anchor: the panel edge is the work-area top, so the
+            // fitted engine has zero opening space and refuses.
+            let anchor = Rect::new(0, area.y, 43, 44);
+            assert!(
+                fitted_start_placement(anchor, Size::new(550, 420), PanelEdge::Bottom, area, 8)
+                    .is_err(),
+                "{w}x{h}: fitted engine refuses without gap room"
+            );
+            let bounded =
+                bounded_start_placement(anchor, Size::new(550, 420), PanelEdge::Bottom, area, 8);
+            assert!(bounded.content_was_capped, "{w}x{h}");
+            assert_inside_work_area(bounded.rect, area);
+            // Bounded floor: never a degenerate sliver, never taller than the
+            // work area, and the action row still fits.
+            assert!(
+                bounded.rect.height >= START_ACTION_ROW_HEIGHT.min(h),
+                "{w}x{h}: {} cannot hold the action row",
+                bounded.rect.height
+            );
+            assert!(bounded.rect.height <= h, "{w}x{h}");
+            assert_eq!(bounded.rect.width, w.min(550), "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn bounded_fallback_matches_the_fitted_rect_when_there_is_room() {
+        for (w, h) in SMALL_WORK_AREAS {
+            let area = Rect::new(0, 0, w, h);
+            let anchor = Rect::new(0, h, 43, 44);
+            let fitted =
+                fitted_start_placement(anchor, Size::new(550, 420), PanelEdge::Bottom, area, 8)
+                    .expect("placed");
+            let bounded =
+                bounded_start_placement(anchor, Size::new(550, 420), PanelEdge::Bottom, area, 8);
+            assert_eq!(fitted, bounded, "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn bounded_fallback_stays_on_negative_origin_outputs() {
+        let area = Rect::new(-1920, 0, 320, 240);
+        let anchor = Rect::new(-1920, 0, 43, 44);
+        let bounded =
+            bounded_start_placement(anchor, Size::new(550, 420), PanelEdge::Bottom, area, 8);
+        assert_inside_work_area(bounded.rect, area);
+        assert!(bounded.rect.height >= START_ACTION_ROW_HEIGHT.min(area.height));
     }
 }
 

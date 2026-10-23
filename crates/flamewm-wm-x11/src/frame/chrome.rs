@@ -238,10 +238,11 @@ pub fn effects_for(frame_xid: u64, scene: &ChromeScene) -> Vec<ChromeEffect> {
 /// Opaque RGBA titlebar fill for `scene`; flat over the frame background when the frame's
 /// root geometry is unavailable.
 fn titlebar_fill_pixels(
-    renderer: &flamewm_render_x11::ExternalDecorationRenderer,
     frame_xid: u64,
     scene: &ChromeScene,
     height: u32,
+    origin: (i32, i32),
+    root: (u32, u32),
 ) -> Vec<u8> {
     use super::titlebar_backdrop::{
         drag_titlebar_pixels, flat_pixels, needs_drag_backdrop, titlebar_pixels,
@@ -249,33 +250,27 @@ fn titlebar_fill_pixels(
     if !needs_drag_backdrop(scene.bg_alpha) {
         return flat_pixels(scene.frame_w, height, scene.bg, scene.bg_alpha);
     }
-    let geometry_guard = flamewm_profiler::start("wm.chrome.fill.root_geometry");
-    let root_geometry = renderer.frame_root_geometry(frame_xid);
-    drop(geometry_guard);
     let _drag_guard = flamewm_profiler::start("wm.chrome.fill.drag_pixels");
-    match root_geometry {
-        Some((origin, root)) => drag_titlebar_pixels(
-            frame_xid,
+    drag_titlebar_pixels(
+        frame_xid,
+        origin,
+        scene.frame_w,
+        height,
+        scene.bg,
+        scene.bg_alpha,
+        scene.tokens.titlebar_blur_percent,
+    )
+    .unwrap_or_else(|| {
+        titlebar_pixels(
             origin,
+            root,
             scene.frame_w,
             height,
             scene.bg,
             scene.bg_alpha,
             scene.tokens.titlebar_blur_percent,
         )
-        .unwrap_or_else(|| {
-            titlebar_pixels(
-                origin,
-                root,
-                scene.frame_w,
-                height,
-                scene.bg,
-                scene.bg_alpha,
-                scene.tokens.titlebar_blur_percent,
-            )
-        }),
-        None => flat_pixels(scene.frame_w, height, scene.bg, scene.bg_alpha),
-    }
+    })
 }
 
 /// Execute a scene against the renderer. Passes 12.0/600 to `draw_title`;
@@ -287,6 +282,8 @@ pub fn render(
     renderer: &mut flamewm_render_x11::ExternalDecorationRenderer,
     frame_xid: u64,
     scene: &ChromeScene,
+    origin: (i32, i32),
+    root: (u32, u32),
 ) -> Result<(), String> {
     use flamewm_render_core::{Color, Rect};
     // Order is the live paint contract: retarget, fill, icon blit, title
@@ -307,7 +304,7 @@ pub fn render(
     let fill_result = {
         let _guard = flamewm_profiler::start("wm.chrome.render.fill");
         let pixels_guard = flamewm_profiler::start("wm.chrome.render.fill.pixels");
-        let mut pixels = titlebar_fill_pixels(renderer, frame_xid, scene, titlebar_h as u32);
+        let mut pixels = titlebar_fill_pixels(frame_xid, scene, titlebar_h as u32, origin, root);
         let plates = crate::chrome::control_backplates_for(
             scene.frame_w,
             scene.titlebar_height,
@@ -436,8 +433,7 @@ mod tests {
         assert_eq!(scene.bg_alpha, 127);
         assert_eq!(scene.tokens.titlebar_blur_percent, 80);
         // Unavailable renderer (no XRender, no display): flat opaque fill, no error.
-        let renderer = flamewm_render_x11::ExternalDecorationRenderer::unavailable("test");
-        let px = titlebar_fill_pixels(&renderer, 1, &scene, 2);
+        let px = titlebar_fill_pixels(1, &scene, 2, (0, 0), (800, 600));
         assert_eq!(px.len(), scene.frame_w as usize * 2 * 4);
         assert!(px.chunks_exact(4).all(|p| p[3] == 255));
         assert_eq!(PANEL.0, 0x1b1e20);
@@ -629,7 +625,7 @@ mod tests {
             true,
             &flamewm_skin::recipes::decoration::ChromeTokens::default(),
         );
-        let result = render(&mut renderer, 42, &scene);
+        let result = render(&mut renderer, 42, &scene, (0, 0), (800, 600));
         assert!(result.is_err());
         // Style params reached the draw-target contract before display touch.
         assert_eq!(renderer.last_title_style(), Some((12.0, 600)));

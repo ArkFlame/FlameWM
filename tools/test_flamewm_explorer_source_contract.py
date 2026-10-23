@@ -31,7 +31,7 @@ class ExplorerContract(unittest.TestCase):
         for i in range(15):
             self.assertIn(f"place-{i}", doc.ids)
             self.assertIn(f"explorer.place.{i}", doc.actions)
-        for id in ("progress-popup", "context-popup", "address", "status-message", "job-progress", "page-label"):
+        for id in ("progress-popup", "context-popup", "address", "status-message", "job-progress"):
             self.assertIn(id, doc.ids)
         for action in ("explorer.back", "explorer.forward", "explorer.up", "explorer.reload", "explorer.search", "explorer.address", "explorer.tab.new", "explorer.tab.close"):
             self.assertIn(action, doc.actions)
@@ -80,13 +80,25 @@ class ExplorerContract(unittest.TestCase):
 
     def test_safe_operations_and_local_xdg_directory_handler(self):
         source = (ROOT / "crates/flamewm-explorer/src/lib.rs").read_text()
+        jobs = (ROOT / "crates/flamewm-explorer/src/jobs.rs").read_text()
         manifest = (ROOT / "crates/flamewm-explorer/Cargo.toml").read_text()
         entry = (ROOT / "packaging/flamewm-explorer.desktop").read_text()
-        self.assertIn("rustix::fs::RenameFlags::NOREPLACE", source)
+        # The canonical no-clobber rename owner is the jobs module; lib.rs only delegates to it.
+        self.assertIn("use rustix::fs::{renameat_with, RenameFlags, CWD};", jobs)
+        self.assertIn("RenameFlags::NOREPLACE", jobs)
+        self.assertIn("renameat_with(CWD, from, CWD, to, flags)", jobs)
+        self.assertIn("jobs::move_publish(from, to, false", source)
+        # Destination preservation keeps its Rust behaviour test coverage.
+        self.assertIn("fn move_refuses_existing_destination_and_preserves_both_files", source)
+        # Deletions go through one helper; it only removes staging output or the
+        # already-verified source, never the existing destination.
+        self.assertIn("fn remove_entry(path: &Path)", jobs)
+        self.assertIn("fs::remove_dir_all(path)", jobs)
+        self.assertIn("fs::remove_file(path)", jobs)
+        self.assertIn("remove_entry(to)", jobs)
+        self.assertIn("remove_entry(from)", jobs)
         self.assertIn('rustix = { workspace = true }', manifest)
         self.assertIn('Exec=flamewm-explorer %f', entry)
-        self.assertIn('remove_file(to)', source)
-        self.assertIn('remove_dir_all(to)', source)
 
     def test_theme_uses_existing_snapshot_instead_of_private_config(self):
         source=(ROOT / "crates/flamewm-explorer/src/main.rs").read_text()

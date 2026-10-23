@@ -101,9 +101,11 @@ impl ChromeRuntime {
         &self,
         renderer: &mut flamewm_render_x11::ExternalDecorationRenderer,
         frame_xid: u64,
+        origin: (i32, i32),
+        root: (u32, u32),
     ) -> Result<(), String> {
         match self.scene.as_ref() {
-            Some(scene) => render(renderer, frame_xid, scene),
+            Some(scene) => render(renderer, frame_xid, scene, origin, root),
             None => Ok(()),
         }
     }

@@ -124,12 +124,19 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     pub(super) fn clear_frame_shape(
-        &self,
+        &mut self,
         frame: Window,
         outer: crate::geometry::Rect,
         floating: bool,
     ) -> Result<(), ReplyError> {
         use x11rb::protocol::shape::{SK as ShapeSk, SO as ShapeOp};
+        let radius = u32::from(
+            crate::frame::geometry_shape::scaled_corner_radius(
+                floating,
+                self.decoration_tokens.style,
+                self.config.titlebar_height,
+            ),
+        );
         let rects = crate::frame::geometry_shape::bounding_rectangles_with_titlebar(
             outer,
             floating,
@@ -145,6 +152,68 @@ impl<'a, C: Connection> Wm<'a, C> {
             0,
             &rects,
         )?;
+        // The child client is not clipped by the frame's bounding shape alone;
+        // set the clip region to the same rounded spans so client pixels cannot
+        // fill the transparent corner notches (and hide the shadow there).
+        self.conn.shape_rectangles(
+            ShapeOp::SET,
+            ShapeSk::CLIP,
+            ClipOrdering::UNSORTED,
+            frame,
+            0,
+            0,
+            &rects,
+        )?;
+        // The client is a child window with its own square pixels. Intersect
+        // its shape with the frame's bottom-corner arcs so the rounded corner
+        // and the shadow in the notch are actually visible. Intersection keeps
+        // any shape the application already set.
+        let Some(client) = self
+            .clients
+            .values()
+            .find(|c| c.frame == frame)
+            .map(|c| c.client)
+        else {
+            return Ok(());
+        };
+        let cw = outer.width.saturating_sub(2);
+        let ch = outer
+            .height
+            .saturating_sub(u32::from(self.config.titlebar_height) + 1);
+        if radius > 0 && cw > 0 && ch > 0 {
+            let mask = crate::frame::geometry_shape::client_bottom_rounded_rectangles(
+                cw,
+                ch,
+                radius,
+            );
+            self.conn.shape_rectangles(
+                ShapeOp::INTERSECT,
+                ShapeSk::BOUNDING,
+                ClipOrdering::UNSORTED,
+                client,
+                0,
+                0,
+                &mask,
+            )?;
+            self.rounded_clients.insert(client);
+        } else if self.rounded_clients.remove(&client) {
+            // Restore the unshaped client when the decoration turns square.
+            let full = [x11rb::protocol::xproto::Rectangle {
+                x: 0,
+                y: 0,
+                width: cw.min(u32::from(u16::MAX)) as u16,
+                height: ch.min(u32::from(u16::MAX)) as u16,
+            }];
+            self.conn.shape_rectangles(
+                ShapeOp::SET,
+                ShapeSk::BOUNDING,
+                ClipOrdering::UNSORTED,
+                client,
+                0,
+                0,
+                &full,
+            )?;
+        }
         Ok(())
     }
 

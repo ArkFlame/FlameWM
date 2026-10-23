@@ -260,6 +260,10 @@ pub fn emit_scroll_chrome(
     let offset = scroll(index);
     let metrics = LR::scroll_metrics(viewport, content, offset);
     commands.push(PaintCommand::PushClip { rect: viewport });
+    if style.hide_scrollbars {
+        commands.push(PaintCommand::PopClip);
+        return;
+    }
     if scrollbar_visible(style.overflow_x, viewport.width, content.width) {
         let track = Rect {
             x: viewport.x,
@@ -445,5 +449,92 @@ mod node_backdrop_tests {
             })
             .collect();
         assert_eq!(radii, vec![12.0]);
+    }
+
+    /// Real-Start-shaped scroll fixture: the 100x50 `pane` is the sized box,
+    /// the `list` inside it is stretched to that box by the flex parent (no
+    /// explicit height of its own) and holds one 100x200 row, so the retained
+    /// content extent (200) genuinely overflows the 100x50 viewport.
+    ///
+    /// Two fixture traps this avoids:
+    /// - `LayoutEngine::compute` forces the *root* to the viewport size, so a
+    ///   root scroller can never overflow a smaller requested size.
+    /// - A scroller with its own explicit `height`/`max-height` measures its
+    ///   content extent through that same clamp, so the overflow would be
+    ///   invisible (`app/scroll.rs::fit_scroll_extents` documents the same
+    ///   engine limitation). Real panes (`.start-content-pane`) take their box
+    ///   from the parent and keep the scroller's extent content-driven.
+    fn scroll_list(hide_scrollbars: bool) -> Vec<PaintCommand> {
+        let mut root = node("root", 0.0, None, Some(1), None);
+        root.style.background = ColorValue::Literal(Color::TRANSPARENT);
+        let mut pane = node("pane", 0.0, Some(0), Some(2), None);
+        pane.style.display = Display::Flex;
+        pane.style.flex_direction = FlexDirection::Row;
+        let mut list = node("list", 0.0, Some(1), Some(3), None);
+        list.style.overflow_y = Overflow::Auto;
+        list.style.hide_scrollbars = hide_scrollbars;
+        let mut document = RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![root, pane, list, node("row", 0.0, Some(2), None, None)],
+        })
+        .expect("fixture validates");
+        document.set_size_px("pane", 100.0, 50.0).expect("size");
+        document.set_size_px("row", 100.0, 200.0).expect("size");
+        let layout = LayoutEngine::compute(&document, 800.0, 600.0, InteractionState::default());
+        // Guard the fixture itself: the scroller is the 100x50 list and its
+        // content extent really is 200px tall.
+        let viewport = layout.boxes[2].rect;
+        assert_eq!((viewport.width, viewport.height), (100.0, 50.0));
+        assert_eq!(layout.content_extent(2).height, 200.0);
+        build_paint_commands_with_scroll(&document, &layout, InteractionState::default(), &|_| {
+            ScrollState {
+                offset_x: 0.0,
+                offset_y: 10.0,
+            }
+        })
+    }
+
+    #[test]
+    fn hidden_scrollbars_paint_no_track_or_thumb_but_keep_the_clip() {
+        let visible = scroll_list(false);
+        let tracks: Vec<&PaintCommand> = visible
+            .iter()
+            .filter(|c| matches!(c, PaintCommand::ScrollbarTrack { .. }))
+            .collect();
+        assert!(!tracks.is_empty(), "overflowing content must emit a track");
+        assert!(visible
+            .iter()
+            .any(|c| matches!(c, PaintCommand::ScrollbarThumb { .. })));
+        // Only the vertical axis overflows, so the only track is the 8px
+        // right-edge strip of the 100x50 viewport.
+        assert_eq!(tracks.len(), 1, "{tracks:?}");
+        let (track_rect, horizontal) = match tracks[0] {
+            PaintCommand::ScrollbarTrack { rect, horizontal } => (*rect, *horizontal),
+            _ => unreachable!("filtered to ScrollbarTrack"),
+        };
+        assert_eq!(
+            track_rect,
+            Rect {
+                x: 92.0,
+                y: 0.0,
+                width: 8.0,
+                height: 50.0,
+            }
+        );
+        assert!(!horizontal);
+
+        let hidden = scroll_list(true);
+        assert!(!hidden.iter().any(|c| matches!(
+            c,
+            PaintCommand::ScrollbarTrack { .. } | PaintCommand::ScrollbarThumb { .. }
+        )));
+        // Clip still wraps the scrolled content, so rows keep scrolling under it.
+        assert!(hidden
+            .iter()
+            .any(|c| matches!(c, PaintCommand::PushClip { .. })));
+        assert!(hidden.iter().any(|c| matches!(c, PaintCommand::PopClip)));
     }
 }

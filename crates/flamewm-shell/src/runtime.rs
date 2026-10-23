@@ -1036,6 +1036,25 @@ fn popup_context_unchanged(current: &PanelPlacementContext, next: &PanelPlacemen
         && current.panel == next.panel
 }
 
+/// A12-1: native context-menu rect clamped inside the PANEL-AWARE work area,
+/// not the raw output geometry. A menu opened near a bottom panel must stop at
+/// the panel's outer top instead of sliding under the panel strip (the output
+/// rect clamp let it overlap the taskbar). `PanelPlacementContext.work_area`
+/// already has the panel strip subtracted, so it is the only correct bound.
+#[must_use]
+pub fn context_menu_rect_for_placement(
+    placement: &PanelPlacementContext,
+    pointer: Option<flamewm_api::Point>,
+    size: flamewm_api::Size,
+) -> flamewm_api::Rect {
+    context_menu_rect(
+        placement.panel.output.clone(),
+        placement.work_area,
+        pointer,
+        size,
+    )
+}
+
 /// One placement context per connected panel whose edge matches
 /// `expected_edge`, each tied to its own output. Single-output snapshots
 /// yield the same single context as [`panel_context_for_snapshot`].
@@ -1236,8 +1255,8 @@ impl ShellSurfaces {
             };
             // A binary XShape mask alone makes jagged corners: the painted taskbar
             // must also use the same physical radius through its scaled UI scene.
-            let logical_radius =
-                radius as f32 / panel_ui_scale(placement.output.shell_scale_percent);
+            let scale_percent = placement.output.shell_scale_percent;
+            let logical_radius = radius as f32 / panel_ui_scale(scale_percent);
             runtime
                 .with_document(record.panel, |document| {
                     document.corner_radius("taskbar", logical_radius)
@@ -1946,12 +1965,9 @@ impl ShellSurfaces {
         runtime
             .apply_output_scale(self.task_menu, panel_ui_scale(percent))
             .map_err(ui_error)?;
-        let rect = context_menu_rect(
-            panel.placement.panel.output.clone(),
-            panel.placement.output.geometry,
-            state.anchor,
-            size,
-        );
+        // A12-1: clamp inside the panel-aware work area so a menu opened near
+        // the panel stops above the panel strip instead of under it.
+        let rect = context_menu_rect_for_placement(&panel.placement, state.anchor, size);
         let wallpaper_rect = (
             rect.x,
             rect.y,
@@ -2641,7 +2657,8 @@ mod tests {
             work,
             8,
         )
-        .expect("floating start placement");
+        .expect("floating start placement")
+        .rect;
         assert!(placed.bottom() <= anchor.y - 8);
         assert!(placed.x >= work.x && placed.right() <= work.right());
         assert!(placed.y >= work.y);
@@ -3658,6 +3675,54 @@ mod tests {
             flamewm_api::Rect::new(1920, 0, 1280, 980)
         );
         assert!(panel_contexts_for_snapshot(&snapshot, PanelEdge::Top).is_empty());
+    }
+
+    // REGRESSION (A12-1): a context menu opened near the bottom panel must be
+    // clamped inside the panel-aware work area, not the raw output geometry.
+    // MUTATION: pass `placement.output.geometry` to `context_menu_rect` again;
+    // the menu slides under the taskbar and both assertions below flip.
+    #[test]
+    fn context_menu_near_bottom_panel_clamps_above_the_panel_strip() {
+        let snapshot = two_output_snapshot();
+        let contexts = panel_contexts_for_snapshot(&snapshot, PanelEdge::Bottom);
+        // Secondary output: 1280x1024 with a 44px bottom panel at y = 980.
+        let placement = &contexts[1];
+        assert_eq!(
+            placement.work_area,
+            flamewm_api::Rect::new(1920, 0, 1280, 980)
+        );
+        let panel_top = placement.panel.geometry.y;
+        assert_eq!(panel_top, 980);
+        // Pointer inside the panel strip (a right-click on a task row).
+        let pointer = Some(flamewm_api::Point::new(3180, 1010));
+        let size = context_menu_size(3);
+
+        let rect = context_menu_rect_for_placement(placement, pointer, size);
+        assert_eq!((rect.width, rect.height), (size.width, size.height));
+        assert!(
+            rect.bottom() <= panel_top,
+            "menu must stop above the panel: {rect:?}"
+        );
+        assert!(
+            rect.bottom() <= placement.work_area.bottom(),
+            "menu must stay inside the work area: {rect:?}"
+        );
+        assert!(rect.y >= placement.work_area.y, "{rect:?}");
+        assert!(
+            rect.x >= placement.work_area.x && rect.right() <= placement.work_area.right(),
+            "{rect:?}"
+        );
+
+        // The pre-A12-1 argument (raw output geometry) clamps to the output
+        // bottom instead, so the menu overlaps the taskbar strip.
+        let stale = context_menu_rect(
+            placement.panel.output.clone(),
+            placement.output.geometry,
+            pointer,
+            size,
+        );
+        assert_eq!(stale.bottom(), placement.output.geometry.bottom());
+        assert!(stale.bottom() > panel_top, "{stale:?}");
     }
 
     #[test]

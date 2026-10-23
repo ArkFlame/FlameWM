@@ -10,6 +10,7 @@
 .target/release/flamewm-render-compile   usr/bin/flamewm-render-compile
 .target/release/flamewm-render-inspect   usr/bin/flamewm-render-inspect
 .target/release/flamewm-lock             usr/bin/flamewm-lock
+.target/release/flamewm-terminal         usr/bin/flamewm-terminal
 packaging/pam.d/flamewm-lock             etc/pam.d/flamewm-lock
 assets/                                  usr/share/flamewm/assets/
 assets/cursors/index.theme               usr/share/icons/FlameWM-Breeze-Dark/index.theme
@@ -22,6 +23,7 @@ assets/themes/icons/Fluent               usr/share/icons/Fluent/
 packaging/flamewm.desktop                usr/share/applications/flamewm.desktop
 packaging/flamewm-screenshot.desktop      usr/share/applications/flamewm-screenshot.desktop
 packaging/flamewm-explorer.desktop        usr/share/applications/flamewm-explorer.desktop
+packaging/flamewm-terminal.desktop        usr/share/applications/flamewm-terminal.desktop
 packaging/flamewm-session.desktop        usr/share/xsessions/flamewm.desktop
 packaging/menus/flamewm-applications.menu  etc/xdg/menus/flamewm-applications.menu
 packaging/notifications/dunstrc          usr/share/flamewm/dunstrc

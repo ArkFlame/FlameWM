@@ -460,6 +460,12 @@ mod tests {
             desktop_label_lines("Docs", 76.0, 13.0),
             ["Docs".to_owned(), String::new()]
         );
+        // A ten-character name fits the measured line, so it must not be
+        // split just because it is exactly at capacity.
+        assert_eq!(
+            desktop_label_lines("New Folder", 76.0, 13.0),
+            ["New Folder".to_owned(), String::new()]
+        );
     }
     #[test]
     fn label_truncates_long_unbroken_token_with_ellipsis() {

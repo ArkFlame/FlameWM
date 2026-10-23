@@ -115,11 +115,21 @@ struct DragBackdrop {
     /// Interactive resize: the blurred region is served as-is (edge-clamped) for every size until
     /// the drag ends, so a resize step never re-blurs. The final size is blurred after release.
     frozen: bool,
+    /// The drag ended but the snapshot is still held so the release paint can blur the frame's
+    /// final origin from the real content behind it instead of falling back to the wallpaper (A01:
+    /// no unfilled frame and no visible material change at the release). Dropped as soon as it
+    /// serves that paint, and at the latest after [`RELEASE_GRACE`].
+    released: bool,
+    released_at: Option<std::time::Instant>,
     /// Blur work buffers reused by every move step of this drag.
     scratch: BlurScratch,
     /// Padded crop reused by every blur of this drag.
     crop: Vec<u8>,
 }
+
+/// Longest a released drag snapshot is kept waiting for the release paint. Bounds the root-sized
+/// buffer when no paint follows the release (closed window, opaque titlebar, failed paint).
+const RELEASE_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Blurred titlebar crop: `(origin x, origin y, w, h, radius tenths, wallpaper generation)`.
 type BlurKey = (i32, i32, u32, u32, u32, u32);
@@ -202,11 +212,19 @@ pub fn set_wallpaper_outputs(outputs: &[(i32, i32, u32, u32)]) {
 }
 
 /// Publish the wallpaper source; returns the backdrop generation (bumped on change).
-pub fn set_wallpaper_source(mut source: WallpaperSource) -> u32 {
+pub fn set_wallpaper_source(source: WallpaperSource) -> u32 {
     let Ok(mut guard) = STATE.lock() else {
         return 0;
     };
     let state = guard.get_or_insert_with(State::default);
+    set_source_in(state, source)
+}
+
+/// Publishes `source` into `state` and returns the generation. Every cache keyed by the generation
+/// is dropped when the source changes, and the wallpaper is decoded now, not on the first drag
+/// press: a full wallpaper decode there cost ~280ms CPU. Takes the state by reference so tests can
+/// use a local `State` instead of the process-wide one (A16: no shared lock across a transaction).
+fn set_source_in(state: &mut State, mut source: WallpaperSource) -> u32 {
     if let WallpaperSource::Image { outputs, .. } = &mut source {
         *outputs = effective_layout(state);
     }
@@ -217,12 +235,25 @@ pub fn set_wallpaper_source(mut source: WallpaperSource) -> u32 {
         state.natural = None;
         state.cache.clear();
         state.retained = None;
-        // Decode now, not on the first drag press: a full wallpaper decode there cost ~280ms CPU.
-        if let Some(WallpaperSource::Image { path, .. }) = state.source.as_ref() {
-            let file = wallpaper_file(path);
-            state.natural = wallpaper::decode_file(&file)
-                .ok()
-                .map(|image| (file, image));
+        // Keep only a root-sized composed canvas. The decoded source image can be several times
+        // larger (a 4K wallpaper is ~33 MB); it is consumed here and dropped immediately.
+        if let Some(WallpaperSource::Image { path, fit, outputs }) = state.source.as_ref() {
+            if !outputs.is_empty() {
+                let root_w = outputs
+                    .iter()
+                    .map(|(x, _, w, _)| x.saturating_add(*w as i32))
+                    .max()
+                    .unwrap_or(0)
+                    .max(0) as u32;
+                let root_h = outputs
+                    .iter()
+                    .map(|(_, y, _, h)| y.saturating_add(*h as i32))
+                    .max()
+                    .unwrap_or(0)
+                    .max(0) as u32;
+                let root = (root_w, root_h);
+                state.canvas = Some((root, compose_canvas(path, *fit, outputs, root)));
+            }
         }
     }
     state.generation
@@ -308,9 +339,31 @@ pub fn forget(owner: u64) {
 }
 
 fn end_drag_in(state: &mut State, owner: u64) {
-    if let Some(mut drag) = state.drag.take_if(|drag| drag.owner == owner) {
-        drag.snapshot.release();
-        state.retained = drag.blurred.map(|blurred| (owner, blurred));
+    // Keep the frozen snapshot for the release paint: the last drag cell may not cover the frame's
+    // final origin, and blurring it from the snapshot is what keeps the release titlebar showing
+    // the real content instead of the wallpaper fallback (A01). `drop_released_drag` frees it.
+    let Some(drag) = state.drag.as_mut().filter(|drag| drag.owner == owner) else {
+        return;
+    };
+    drag.released = true;
+    drag.released_at = Some(std::time::Instant::now());
+    // The kept crop still serves repeated paints at the same place after the snapshot is gone.
+    state.retained = drag.blurred.clone().map(|blurred| (owner, blurred));
+}
+
+/// Drops a released drag snapshot once it served its release paint or outlived [`RELEASE_GRACE`].
+fn drop_released_drag(state: &mut State, served: bool) {
+    let expired = state.drag.as_ref().is_some_and(|drag| {
+        drag.released
+            && (served
+                || drag
+                    .released_at
+                    .is_some_and(|at| at.elapsed() >= RELEASE_GRACE))
+    });
+    if expired {
+        if let Some(mut drag) = state.drag.take() {
+            drag.snapshot.release();
+        }
     }
 }
 
@@ -365,6 +418,68 @@ fn titlebar_in(
     let radius_tenths = (radius * 10.0).round() as u32;
     let generation = state.generation;
     let key = (origin.0, origin.1, width, height, radius_tenths, generation);
+    // A released drag keeps its frozen snapshot until this paint: the blur for the frame's final
+    // origin is computed from the real content behind it, so the release titlebar is correct at
+    // once and never falls back to the wallpaper mid-frame (A01).
+    drop_released_drag(state, false);
+    if state
+        .drag
+        .as_ref()
+        .is_some_and(|drag| drag.owner == owner && drag.released)
+    {
+        let out = {
+            let drag = state.drag.as_mut().expect("checked above");
+            let cell = drag_cell(origin);
+            let reusable = drag.blurred.as_ref().is_some_and(|blurred| {
+                blurred.cell == cell
+                    && (blurred.key.2, blurred.key.3, blurred.key.4, blurred.key.5)
+                        == (width, height, radius_tenths, generation)
+            });
+            if reusable {
+                if let Some(blurred) = drag.blurred.as_mut() {
+                    blurred.key = key;
+                }
+            } else {
+                let region_w = width + DRAG_SLACK_X;
+                let region_h = height + DRAG_SLACK_Y;
+                let region = blur_region(
+                    &mut drag.scratch,
+                    &drag.snapshot,
+                    cell,
+                    region_w,
+                    region_h,
+                    radius,
+                    &mut drag.crop,
+                );
+                drag.blurred = Some(Blurred {
+                    key,
+                    cell,
+                    region,
+                    region_w,
+                    region_h,
+                });
+            }
+            let blurred = drag.blurred.as_ref()?;
+            let crop = slice_region(
+                &blurred.region,
+                width + DRAG_SLACK_X,
+                origin,
+                cell,
+                width,
+                height,
+            );
+            compose_rgba(&crop, rgb, alpha)
+        };
+        // The final crop becomes the kept fallback for later paints at this place, and the
+        // root-sized snapshot is freed: the release paint is served.
+        if let Some(mut drag) = state.drag.take() {
+            if let Some(blurred) = drag.blurred.clone() {
+                state.retained = Some((owner, blurred));
+            }
+            drag.snapshot.release();
+        }
+        return Some(out);
+    }
     if let Some(drag) = state.drag.as_mut().filter(|drag| drag.owner == owner) {
         if drag.frozen {
             if let Some(blurred) = drag.blurred.as_ref() {
@@ -617,6 +732,8 @@ fn build_drag(
             snapshot,
             blurred: None,
             frozen: false,
+            released: false,
+            released_at: None,
             scratch: BlurScratch::new(),
             crop: Vec::new(),
         })
@@ -1401,7 +1518,8 @@ mod tests {
         );
         titlebar_in(&mut state, 3, (2, 2), (3, 2), (0, 0, 0), 0, 0).unwrap();
         end_drag_in(&mut state, 3);
-        // Size changed at the same origin: kept blur served, kept crop survives.
+        // Size changed at the same origin: the released snapshot blurs the final size, and the
+        // resulting crop is kept for later paints.
         let resized = titlebar_in(&mut state, 3, (2, 2), (5, 2), (0, 0, 0), 0, 0).unwrap();
         assert_eq!(resized.len(), 5 * 2 * 4);
         assert!(
@@ -1410,6 +1528,54 @@ mod tests {
         );
         // Moved origin still falls back (wallpaper path).
         assert!(titlebar_in(&mut state, 3, (5, 2), (3, 2), (0, 0, 0), 0, 0).is_none());
+    }
+
+    /// A01: the paint at the frame's final origin is the real backdrop for that origin, taken from
+    /// the snapshot the drag froze. It must not fall back to the wallpaper, and the root-sized
+    /// snapshot must be freed as soon as that paint is served.
+    #[test]
+    fn released_move_paints_the_final_origin_from_the_snapshot_then_frees_it() {
+        // 600x200 root with a vertical red ramp so the blur depends on the origin: a wallpaper
+        // fallback (solid 9,9,9) is trivially distinguishable from the snapshot content.
+        let (w, h) = (600u32, 200u32);
+        let captured: Vec<u8> = (0..w * h)
+            .flat_map(|i| {
+                let y = i / w;
+                [10u8, 10, (y % 200) as u8, 255]
+            })
+            .collect();
+        let mut state = State {
+            source: Some(WallpaperSource::Solid([9, 9, 9])),
+            ..State::default()
+        };
+        state.drag = build_drag(&mut state, 3, (w, h), Some(captured), (0, 0, 0, 0));
+        // A mid-drag paint at the start cell.
+        titlebar_in(&mut state, 3, (0, 3), (20, 12), (0, 0, 0), 0, 0).unwrap();
+        end_drag_in(&mut state, 3);
+        assert!(
+            state.drag.as_ref().is_some_and(|drag| drag.released),
+            "the snapshot is held for the release paint"
+        );
+        // The release paint lands two horizontal cells away from the last drag cell.
+        let final_origin = (DRAG_SLACK_X as i32 + 10, 3);
+        let released =
+            titlebar_in(&mut state, 3, final_origin, (20, 12), (0, 0, 0), 0, 0).unwrap();
+        // Blur 0 at this origin is a plain crop of the snapshot (no wallpaper fallback).
+        assert_eq!(&released[..4], &[10, 10, 3, 255]);
+        assert_eq!(
+            &released[20 * 4 - 4..20 * 4],
+            &[10, 10, 3, 255],
+            "the final origin's own rows, not the drag-start rows"
+        );
+        assert!(
+            state.drag.is_none(),
+            "the root-sized snapshot is freed by the release paint"
+        );
+        // Later paints at that place reuse the kept crop: no wallpaper flips in.
+        assert_eq!(
+            titlebar_in(&mut state, 3, final_origin, (20, 12), (0, 0, 0), 0, 0),
+            Some(released)
+        );
     }
 
     #[test]
@@ -1479,13 +1645,15 @@ mod tests {
         assert_eq!(&live[..4], &[200, 0, 0, 255]);
         end_drag_in(&mut state, 3);
         assert!(
-            state.drag.is_none() && state.retained.is_some(),
-            "snapshot dropped, crop kept"
+            state.drag.is_some() && state.retained.is_some(),
+            "snapshot held for the release paint, crop kept"
         );
+        // The release paint at the same place serves the same pixels and frees the snapshot.
         assert_eq!(
             titlebar_in(&mut state, 3, (2, 2), (3, 2), (0, 0, 0), 0, 0),
             Some(live.clone())
         );
+        assert!(state.drag.is_none(), "release paint frees the snapshot");
         assert_eq!(
             titlebar_in(&mut state, 4, (2, 2), (3, 2), (0, 0, 0), 0, 0),
             None,
@@ -1496,6 +1664,8 @@ mod tests {
             "moved"
         );
         assert!(state.retained.is_none(), "moved frame drops the kept crop");
+        // A released snapshot is real root content, not a wallpaper cache, so a wallpaper
+        // generation bump alone does not turn it into the wallpaper.
         state.drag = build_drag(
             &mut state,
             3,
@@ -1506,8 +1676,24 @@ mod tests {
         end_drag_in(&mut state, 3);
         state.generation += 1;
         assert!(
+            titlebar_in(&mut state, 3, (2, 2), (3, 2), (0, 0, 0), 0, 0).is_some(),
+            "frozen root content still serves after a wallpaper bump"
+        );
+        // The kept crop dropped by a wallpaper change: no released snapshot left to serve it.
+        state.drag = build_drag(
+            &mut state,
+            3,
+            (8, 8),
+            Some([200, 0, 0, 255].repeat(64)),
+            (0, 0, 0, 0),
+        );
+        titlebar_in(&mut state, 3, (2, 2), (3, 2), (0, 0, 0), 0, 0).unwrap();
+        end_drag_in(&mut state, 3);
+        drop_released_drag(&mut state, true);
+        state.generation += 1;
+        assert!(
             titlebar_in(&mut state, 3, (2, 2), (3, 2), (0, 0, 0), 0, 0).is_none(),
-            "wallpaper change"
+            "wallpaper change drops the kept crop"
         );
         state.drag = build_drag(
             &mut state,
@@ -1519,8 +1705,8 @@ mod tests {
         end_drag_in(&mut state, 3);
         forget_in(&mut state, 3);
         assert!(
-            state.retained.is_none(),
-            "closed window drops the kept crop"
+            state.retained.is_none() && state.drag.is_none(),
+            "closed window drops the kept crop and the held snapshot"
         );
     }
 
@@ -1629,16 +1815,32 @@ mod tests {
 
     #[test]
     fn solid_source_blends_over_wallpaper_colour_and_tracks_generation() {
-        let g1 = set_wallpaper_source(WallpaperSource::Solid([100, 100, 100]));
+        // Local `State` + `titlebar_fill_in`, the module's own idiom: the process-wide `STATE` is
+        // never locked here, so this test is isolated from every other test running in parallel
+        // (A16). It keeps the same five assertions as the old shared-state version.
+        let mut state = State::default();
+        let g1 = set_source_in(&mut state, WallpaperSource::Solid([100, 100, 100]));
         assert_eq!(
-            set_wallpaper_source(WallpaperSource::Solid([100, 100, 100])),
-            g1
+            set_source_in(&mut state, WallpaperSource::Solid([100, 100, 100])),
+            g1,
+            "same source keeps the generation"
         );
-        let px = titlebar_pixels((-10, -5), (64, 64), 4, 2, (0, 0, 0), 255, 80);
-        assert_eq!(&px[..4], &[0, 0, 0, 255]);
-        let half = titlebar_pixels((0, 0), (64, 64), 4, 2, (0, 0, 0), 0, 80);
+        let root = (64, 64);
+        // The same 80% blur the old shared-state version used; the transparent fill is unaveraged
+        // because the wallpaper is one flat colour.
+        let radius = blur_radius_px(80, 80);
+        let opaque = titlebar_fill_in(&mut state, (-10, -5), root, (4, 2), (0, 0, 0), 255, radius);
+        assert_eq!(&opaque[..4], &[0, 0, 0, 255]);
+        let half = titlebar_fill_in(&mut state, (0, 0), root, (4, 2), (0, 0, 0), 0, radius);
         assert_eq!(&half[..4], &[100, 100, 100, 255]);
-        assert_ne!(set_wallpaper_source(WallpaperSource::Solid([1, 2, 3])), g1);
+        let g2 = set_source_in(&mut state, WallpaperSource::Solid([1, 2, 3]));
+        assert_ne!(g2, g1, "a new source bumps the generation");
+        let recoloured = titlebar_fill_in(&mut state, (0, 0), root, (4, 2), (0, 0, 0), 0, radius);
+        assert_eq!(
+            &recoloured[..4],
+            &[1, 2, 3, 255],
+            "the new source repaints every cached backdrop"
+        );
     }
 
     const ALL_FITS: [WallpaperFit; 5] = [

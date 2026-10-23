@@ -207,6 +207,8 @@ pub struct Style {
     pub cursor: CursorKind,
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
+    /// CSS `scrollbar-width: none`: scrolling still works, no track or thumb is painted.
+    pub hide_scrollbars: bool,
     pub image_treatment: ImageTreatment,
 }
 
@@ -246,6 +248,7 @@ impl Default for Style {
             cursor: CursorKind::Default,
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
+            hide_scrollbars: false,
             image_treatment: ImageTreatment::Original,
         }
     }

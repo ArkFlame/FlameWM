@@ -224,12 +224,23 @@ fn xdg_query(args: &[&std::ffi::OsStr]) -> Result<String, String> {
         .map_err(|error| format!("invalid xdg-mime output: {error}"))
 }
 
-/// Application icon raster for a chooser row. Brand marks and misses yield `None`, so the row stays text-only.
+/// True when at least one pixel of a straight RGBA8 raster would be painted. The theme resolver
+/// answers a miss with a transparent slot; binding that raster would leave an empty square in the
+/// chooser row, so a blank raster is treated exactly like a missing icon.
+pub fn visible_raster(pixels: &[u8]) -> bool {
+    pixels.chunks_exact(4).any(|pixel| pixel[3] >= 8)
+}
+
+/// Application icon raster for a chooser row. Brand marks, blank theme slots and misses yield `None`,
+/// so the row stays text-only instead of showing an empty icon box.
 fn choice_icon(resolver: &mut IconResolver, name: &str) -> Option<ChoiceIcon> {
     if name.is_empty() { return None; }
     let size = IconSize::new(CHOICE_ICON_SIZE, CHOICE_ICON_SIZE);
     let raster = resolver.prepare_name(name, size).ok()?;
     if raster.source.ends_with("flamewm-icon.svg") || raster.source.ends_with("flamewm-start.svg") {
+        return None;
+    }
+    if !visible_raster(&raster.pixels) {
         return None;
     }
     Some(ChoiceIcon { width: raster.width, height: raster.height, pixels: Arc::new(raster.pixels) })
@@ -340,6 +351,16 @@ pub fn set_default(mime: &str, desktop_id: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn transparent_icon_rasters_are_not_bound() {
+        // Straight RGBA8: any pixel at/above the visibility floor counts, an all-transparent raster does not.
+        assert!(!visible_raster(&[]));
+        assert!(!visible_raster(&[0xff, 0xff, 0xff, 0, 0, 0, 0, 7]));
+        assert!(visible_raster(&[0, 0, 0, 0, 0x20, 0x20, 0x20, 255]));
+        // Trailing bytes that do not form a pixel are ignored rather than treated as alpha.
+        assert!(!visible_raster(&[0, 0, 0]));
+    }
 
     #[test]
     fn desktop_mime_field_must_be_in_main_group_and_exact() {

@@ -81,7 +81,7 @@ input { cursor:text; }
 .terminal-body { height:359px; display:flex; flex-direction:column; gap:8px; padding:18px; background:#0c0d0e; color:#d5d8da; font-size:13px; border-radius:6px; }
 .start-menu { position:absolute; left:0px; top:0px; width:550px; min-height:349px; display:flex; flex-direction:row; background:#1e2123; color:var(--text); border:1px solid #474b4f; border-radius:18px; }
 .start-left-pane { width:292px; min-height:349px; display:flex; flex-direction:column; justify-content:flex-end; }
-.start-content-pane { border-radius:18px; width:258px; min-height:420px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:transparent; color:var(--text); overflow-x:hidden; overflow-y:auto; }
+.start-content-pane { border-radius:18px; width:258px; min-height:420px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:transparent; color:var(--text); overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
 .start-categories { padding:6px 5px 5px 5px; flex-grow:1; display:flex; flex-direction:column; }
 .start-category { width:280px; height:37px; padding:0px 9px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:3px; cursor:default; }
 .start-category:hover { background:var(--accent-soft); }.start-category div { flex-grow:1; }
@@ -91,7 +91,7 @@ input { cursor:text; }
 .start-search-field { flex-grow:1; height:32px; padding-left:10px; display:flex; align-items:center; gap:8px; color:#9ca3a9; background:transparent; border:1px solid #454a4f; border-radius:8px; }
 .start-search-field img { width:15px; height:15px; }
 .start-search-field div { flex-grow:1; display:flex; align-items:center; }
-.start-submenu { position:absolute; left:0px; top:0px; width:258px; min-height:0px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:#1e2123; color:var(--text); border:1px solid #474b4f; border-radius:12px; overflow-x:hidden; overflow-y:auto; }
+.start-submenu { position:absolute; left:0px; top:0px; width:258px; min-height:0px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:#1e2123; color:var(--text); border:1px solid #474b4f; border-radius:12px; overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
 .start-group, .calendar-days { width:100%; display:flex; flex-direction:column; }
 .start-app { width:248px; height:36px; padding:0px 9px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:3px; cursor:default; }
 .start-app:hover { background:var(--accent-soft); }.start-status { min-height:18px; padding:4px 8px; display:flex; align-items:center; color:#ff8a8f; font-size:11px; }
@@ -147,7 +147,7 @@ input { cursor:text; }
 .audio-list { width:100%; max-height:220px; display:flex; flex-direction:column; gap:2px; overflow-x:hidden; overflow-y:auto; }
 .network-slots { width:100%; max-height:180px; display:flex; flex-direction:column; gap:2px; overflow-x:hidden; overflow-y:auto; }
 .network-connected { width:100%; display:flex; flex-direction:column; gap:2px; }
-.start-list { width:100%; max-height:320px; display:flex; flex-direction:column; overflow-x:hidden; overflow-y:auto; }
+.start-list { width:100%; max-height:320px; display:flex; flex-direction:column; overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
 .audio-slot-label { flex-grow:1; }
 .network-secret { display:flex; align-items:center; gap:6px; }
 .network-secret-value { flex-grow:1; min-height:20px; padding:0px 6px; background:transparent; border:1px solid #454a4f; border-radius:3px; }

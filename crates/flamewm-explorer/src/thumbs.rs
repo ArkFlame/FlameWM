@@ -1,5 +1,10 @@
-//! Row thumbnails for image files. Decoding and downscaling run on a worker; the UI only reads the
-//! bounded LRU cache, keyed by path plus the entry's mtime and size, so an edited file gets a fresh thumbnail.
+//! Row thumbnails for image, SVG, ICO and `.desktop` rows. Decoding and downscaling run on a
+//! worker; the UI only reads the bounded LRU cache, keyed by path plus the entry's mtime and size,
+//! so an edited file gets a fresh thumbnail.
+//!
+//! A row slot shows either a thumbnail or the embedded type icon (`row-*.svg`), never nothing:
+//! every miss, failure, oversized source, corrupt file or fully transparent result is cached as a
+//! failure so the UI keeps the type icon in the slot.
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,18 +12,44 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use flamewm_image_core::scale::{scale_rgba, ScaleFilter};
-use flamewm_image_core::{decode_bytes, ImageSourceFormat, RgbaImage};
+use flamewm_image_core::{
+    ImageSourceFormat, RgbaImage, WrappedImageFormat, decode_bytes, decode_bytes_at,
+    decode_icon_container_at, svg,
+};
 
-use crate::Entry;
+use crate::{Entry, appicon};
 
-/// Edge length of a row thumbnail in pixels; the image is fitted and centred on a transparent square.
-pub const THUMB_SIZE: u32 = 24;
+/// Edge length of a row thumbnail in pixels. Matches the `.row-ico` box in `ui/explorer/explorer.css`
+/// (18 px) so the thumbnail and the type icon occupy the same slot and never shift the name cell.
+pub const THUMB_SIZE: u32 = 18;
 /// Larger files are never read for a thumbnail.
 pub const MAX_SOURCE_BYTES: u64 = 25 * 1024 * 1024;
 /// Images above this many pixels are skipped before decoding, bounding the RGBA decode buffer to about 100 MB.
 pub const MAX_SOURCE_PIXELS: u64 = 25_000_000;
-/// Decoded thumbnails kept in memory (about 600 KB at 24 px).
+/// Decoded thumbnails kept in memory (about 330 KB at 18 px).
 pub const CACHE_CAPACITY: usize = 256;
+/// Alpha at or above this value counts as a visible pixel; anything less is an invisible thumbnail.
+pub const MIN_VISIBLE_ALPHA: u8 = 8;
+
+/// Source kind behind one row thumbnail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThumbFormat {
+    /// A single-bitmap raster the shared decoder already owns.
+    Raster(ImageSourceFormat),
+    /// Scalable vector, rendered straight at the thumbnail size.
+    Svg,
+    /// Windows icon container, decoded to its largest entry.
+    Ico,
+    /// `.desktop` launcher: the app icon named by its own `Icon=` metadata.
+    Desktop,
+}
+
+impl ThumbFormat {
+    /// Formats whose bytes are an image the pipeline can decode directly.
+    pub fn is_image(self) -> bool {
+        !matches!(self, Self::Desktop)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ThumbKey {
@@ -28,9 +59,9 @@ pub struct ThumbKey {
 }
 
 impl ThumbKey {
-    /// Key for a row entry, or `None` when the entry is not a thumbnailable image file.
+    /// Key for a row entry, or `None` when the entry is not a thumbnailable file.
     pub fn of(entry: &Entry) -> Option<Self> {
-        (!entry.directory && source_format(&entry.path).is_some()).then(|| Self {
+        (!entry.directory && thumb_format(&entry.path).is_some()).then(|| Self {
             path: entry.path.clone(),
             modified: entry.modified,
             size: entry.size,
@@ -38,12 +69,27 @@ impl ThumbKey {
     }
 }
 
-/// Raster formats that get thumbnails. SVG and PPM are excluded: they are not image-file rows in the Finder sense.
-pub fn source_format(path: &Path) -> Option<ImageSourceFormat> {
+/// Source kind for a path: raster (png/jpg/jpeg/gif/webp), SVG, ICO or `.desktop`.
+/// PPM stays excluded: it is a development format, not a document a file manager previews.
+pub fn thumb_format(path: &Path) -> Option<ThumbFormat> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp")
-        .then(|| ImageSourceFormat::from_extension(path))
-        .flatten()
+    match ext.as_str() {
+        "svg" => Some(ThumbFormat::Svg),
+        "ico" | "cur" => Some(ThumbFormat::Ico),
+        "desktop" => Some(ThumbFormat::Desktop),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" => {
+            ImageSourceFormat::from_extension(path).map(ThumbFormat::Raster)
+        }
+        _ => None,
+    }
+}
+
+/// Raster-only view of [`thumb_format`], for callers that can only handle single-bitmap formats.
+pub fn source_format(path: &Path) -> Option<ImageSourceFormat> {
+    match thumb_format(path)? {
+        ThumbFormat::Raster(format) => Some(format),
+        _ => None,
+    }
 }
 
 fn read_uint(bytes: &[u8], at: usize, len: usize, big_endian: bool) -> Option<u32> {
@@ -110,6 +156,17 @@ pub fn header_dimensions(bytes: &[u8], format: ImageSourceFormat) -> Option<(u32
     }
 }
 
+/// Header probe for every thumbnail format. Runs before any decoding so an oversized or malformed
+/// source is rejected without allocating pixels.
+pub fn probe_dimensions(bytes: &[u8], format: ThumbFormat) -> Option<(u32, u32)> {
+    match format {
+        ThumbFormat::Raster(format) => header_dimensions(bytes, format),
+        ThumbFormat::Svg => svg::natural_size(bytes).ok(),
+        ThumbFormat::Ico => WrappedImageFormat::Ico.dimensions(bytes),
+        ThumbFormat::Desktop => None,
+    }
+}
+
 /// Size of the image after fitting it inside an `edge` square. Images that already fit are never upscaled.
 pub fn fit_dimensions(width: u32, height: u32, edge: u32) -> (u32, u32) {
     if width <= edge && height <= edge {
@@ -140,27 +197,61 @@ pub fn fit_canvas(source: &RgbaImage) -> Vec<u8> {
     canvas
 }
 
-/// Reads and decodes one image into a thumbnail canvas. Runs on the worker thread; `None` means no thumbnail.
-pub fn render_thumbnail(key: &ThumbKey) -> Option<Vec<u8>> {
-    let format = source_format(&key.path)?;
-    let meta = fs::metadata(&key.path).ok()?;
-    if !meta.is_file() || meta.len() > MAX_SOURCE_BYTES {
-        return None;
-    }
-    let bytes = fs::read(&key.path).ok()?;
-    let (width, height) = header_dimensions(&bytes, format)?;
+/// True when at least one pixel would actually be painted. A fully transparent canvas (an image
+/// that is nothing but alpha, or a broken encoder) is treated as "no thumbnail" so the row keeps
+/// its type icon instead of showing an empty slot.
+pub fn visible_canvas(canvas: &[u8]) -> bool {
+    canvas.chunks_exact(4).any(|pixel| pixel[3] >= MIN_VISIBLE_ALPHA)
+}
+
+/// Decodes image bytes of a known thumbnail format into a fitted canvas. `None` means "no thumbnail".
+pub fn thumbnail_from_bytes(bytes: &[u8], format: ThumbFormat) -> Option<Vec<u8>> {
+    let (width, height) = probe_dimensions(bytes, format)?;
     if u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
         return None;
     }
-    let natural = decode_bytes(&bytes, format).ok()?;
-    Some(fit_canvas(&natural))
+    let canvas = match format {
+        ThumbFormat::Raster(format) => fit_canvas(&decode_bytes(bytes, format).ok()?),
+        // Vectors render straight at the fitted size: no full-size raster is ever allocated.
+        ThumbFormat::Svg | ThumbFormat::Ico => {
+            let (fit_w, fit_h) = fit_dimensions(width, height, THUMB_SIZE);
+            let decoded = match format {
+                ThumbFormat::Svg => decode_bytes_at(bytes, ImageSourceFormat::Svg, fit_w, fit_h, ScaleFilter::Area),
+                _ => decode_icon_container_at(bytes, WrappedImageFormat::Ico, fit_w, fit_h, ScaleFilter::Area),
+            };
+            fit_canvas(&decoded.ok()?)
+        }
+        ThumbFormat::Desktop => return None,
+    };
+    visible_canvas(&canvas).then_some(canvas)
+}
+
+/// Reads a source file, refusing anything that is not a regular file within the byte cap.
+fn read_source(path: &Path) -> Option<Vec<u8>> {
+    let meta = fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_SOURCE_BYTES {
+        return None;
+    }
+    fs::read(path).ok()
+}
+
+/// Reads and decodes one image into a thumbnail canvas. Runs on the worker thread; `None` means no thumbnail.
+pub fn render_thumbnail(key: &ThumbKey) -> Option<Vec<u8>> {
+    let format = thumb_format(&key.path)?;
+    if format == ThumbFormat::Desktop {
+        // The .desktop file itself is data, not a picture: its Icon= names the artwork to decode.
+        let icon = appicon::icon_file(&key.path)?;
+        let icon_format = thumb_format(&icon).filter(|format| format.is_image())?;
+        return thumbnail_from_bytes(&read_source(&icon)?, icon_format);
+    }
+    thumbnail_from_bytes(&read_source(&key.path)?, format)
 }
 
 /// Result of a cache lookup on the UI thread.
 pub enum Lookup {
     Missing,
     Failed,
-    /// Monotonic id (new per decode, so a re-decoded file rebinds its row image) and the 24x24 RGBA canvas.
+    /// Monotonic id (new per decode, so a re-decoded file rebinds its row image) and the RGBA canvas.
     Ready(u64, Arc<Vec<u8>>),
 }
 
@@ -228,14 +319,63 @@ mod tests {
         0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ];
 
+    /// An SVG that decodes to a fully transparent canvas: a picture with nothing to paint.
+    const SVG_INVISIBLE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#e5484d" fill-opacity="0"/></svg>"##;
+
+    const SVG_SQUARE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8"><rect width="8" height="8" fill="#e5484d"/></svg>"##;
+
+    /// One-entry 32 bpp ICO: a 2x2 opaque white square, BGRA rows bottom-up.
+    fn ico_2x2() -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&40u32.to_le_bytes());
+        payload.extend_from_slice(&2i32.to_le_bytes());
+        payload.extend_from_slice(&4i32.to_le_bytes());
+        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend_from_slice(&32u16.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&16u32.to_le_bytes());
+        payload.extend_from_slice(&[0; 16]);
+        payload.extend_from_slice(&[255; 16]);
+        payload.extend_from_slice(&[0; 8]);
+        let mut file = vec![0, 0, 1, 0, 1, 0, 2, 2, 0, 0];
+        file.extend_from_slice(&1u16.to_le_bytes());
+        file.extend_from_slice(&32u16.to_le_bytes());
+        file.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        file.extend_from_slice(&22u32.to_le_bytes());
+        file.extend_from_slice(&payload);
+        file
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "flamewm-thumb-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn entry_of(path: &Path) -> Entry {
+        Entry { path: path.to_path_buf(), name: path.file_name().unwrap_or_default().to_string_lossy().into_owned(), directory: false, symlink: false, size: fs::metadata(path).map(|m| m.len()).unwrap_or(0), modified: None }
+    }
+
     #[test]
-    fn only_raster_extensions_are_thumbnailed() {
+    fn image_vector_icon_and_launcher_rows_are_thumbnailable() {
         for name in ["a.PNG", "b.jpg", "c.jpeg", "d.gif", "e.webp"] {
-            assert!(source_format(Path::new(name)).is_some(), "{name}");
+            assert!(matches!(thumb_format(Path::new(name)), Some(ThumbFormat::Raster(_))), "{name}");
         }
-        for name in ["f.bmp", "g.svg", "h.txt", "noext"] {
-            assert!(source_format(Path::new(name)).is_none(), "{name}");
+        assert_eq!(thumb_format(Path::new("v.svg")), Some(ThumbFormat::Svg));
+        assert_eq!(thumb_format(Path::new("app.ICO")), Some(ThumbFormat::Ico));
+        assert_eq!(thumb_format(Path::new("app.cur")), Some(ThumbFormat::Ico));
+        assert_eq!(thumb_format(Path::new("app.desktop")), Some(ThumbFormat::Desktop));
+        // PPM stays a build format, and unknown extensions are not thumbnails.
+        for name in ["f.bmp", "g.ppm", "h.txt", "noext"] {
+            assert_eq!(thumb_format(Path::new(name)), None, "{name}");
         }
+        assert_eq!(source_format(Path::new("v.svg")), None);
+        assert_eq!(ThumbKey::of(&entry_of(Path::new("v.svg"))).map(|k| k.path), Some(PathBuf::from("v.svg")));
     }
 
     #[test]
@@ -265,27 +405,142 @@ mod tests {
     }
 
     #[test]
+    fn svg_and_ico_headers_probe_without_rendering() {
+        assert_eq!(probe_dimensions(SVG_SQUARE, ThumbFormat::Svg), Some((8, 8)));
+        assert_eq!(probe_dimensions(&ico_2x2(), ThumbFormat::Ico), Some((2, 2)));
+        // A vector without intrinsic dimensions probes as the SVG default canvas, and a broken one
+        // probes as nothing at all.
+        assert_eq!(probe_dimensions(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>", ThumbFormat::Svg), Some((100, 100)));
+        assert_eq!(probe_dimensions(b"<svg", ThumbFormat::Svg), None);
+        assert_eq!(probe_dimensions(&PNG_1X1, ThumbFormat::Desktop), None);
+    }
+
+    #[test]
     fn fit_never_upscales_and_keeps_aspect() {
-        assert_eq!(fit_dimensions(10, 5, 24), (10, 5));
-        assert_eq!(fit_dimensions(480, 240, 24), (24, 12));
-        assert_eq!(fit_dimensions(240, 480, 24), (12, 24));
+        assert_eq!(fit_dimensions(10, 5, THUMB_SIZE), (10, 5));
+        assert_eq!(fit_dimensions(480, 240, THUMB_SIZE), (THUMB_SIZE, THUMB_SIZE / 2));
+        assert_eq!(fit_dimensions(240, 480, THUMB_SIZE), (THUMB_SIZE / 2, THUMB_SIZE));
     }
 
     #[test]
     fn decoded_png_is_centred_on_transparent_square() {
-        let dir = std::env::temp_dir().join(format!("flamewm-thumb-test-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("png");
         let path = dir.join("red.png");
         fs::write(&path, PNG_1X1).unwrap();
-        let entry = Entry { path: path.clone(), name: "red.png".into(), directory: false, symlink: false, size: PNG_1X1.len() as u64, modified: None };
-        let thumb = render_thumbnail(&ThumbKey::of(&entry).unwrap()).expect("decodes");
+        let thumb = render_thumbnail(&ThumbKey::of(&entry_of(&path)).unwrap()).expect("decodes");
         fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(thumb.len(), 24 * 24 * 4);
+        assert_eq!(thumb.len() as u32, THUMB_SIZE * THUMB_SIZE * 4);
         // A 1x1 image is not upscaled: exactly one opaque pixel at the centre, everything else transparent.
+        let edge = THUMB_SIZE as usize;
         let opaque: Vec<usize> = thumb.chunks_exact(4).enumerate().filter(|(_, p)| p[3] == 255).map(|(i, _)| i).collect();
-        // (24 - 1) / 2 = 11 on both axes.
-        assert_eq!(opaque, vec![11 * 24 + 11]);
-        assert_eq!(&thumb[(11 * 24 + 11) * 4..(11 * 24 + 11) * 4 + 4], &[255, 0, 0, 255]);
+        let offset = (edge - 1) / 2;
+        let centre = offset * edge + offset;
+        assert_eq!(opaque, vec![centre]);
+        assert_eq!(&thumb[centre * 4..centre * 4 + 4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn svg_row_renders_at_thumbnail_size() {
+        let dir = temp_dir("svg");
+        let path = dir.join("square.svg");
+        fs::write(&path, SVG_SQUARE).unwrap();
+        let thumb = render_thumbnail(&ThumbKey::of(&entry_of(&path)).unwrap()).expect("renders");
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(thumb.len() as u32, THUMB_SIZE * THUMB_SIZE * 4);
+        // An 8x8 source fits inside the box without upscaling: 8*8 opaque pixels, the rest transparent.
+        let opaque = thumb.chunks_exact(4).filter(|p| p[3] == 255).count();
+        assert_eq!(opaque, 8 * 8);
+    }
+
+    #[test]
+    fn ico_row_decodes_its_largest_entry() {
+        let dir = temp_dir("ico");
+        let path = dir.join("app.ico");
+        fs::write(&path, ico_2x2()).unwrap();
+        let thumb = render_thumbnail(&ThumbKey::of(&entry_of(&path)).unwrap()).expect("decodes");
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(thumb.len() as u32, THUMB_SIZE * THUMB_SIZE * 4);
+        let opaque = thumb.chunks_exact(4).filter(|p| p[3] == 255).count();
+        assert_eq!(opaque, 4, "a 2x2 icon is never upscaled");
+        assert!(thumb.chunks_exact(4).any(|p| p[3] == 255 && p[0] == 255 && p[1] == 255));
+    }
+
+    #[test]
+    fn desktop_row_shows_the_application_icon_from_its_metadata() {
+        let dir = temp_dir("desktop");
+        let icons = dir.join("icons");
+        let apps = icons.join("hicolor/48x48/apps");
+        fs::create_dir_all(&apps).unwrap();
+        fs::write(apps.join("myapp.png"), PNG_1X1).unwrap();
+        let desktop = dir.join("myapp.desktop");
+        fs::write(&desktop, "[Desktop Entry]\nType=Application\nName=My App\nIcon=myapp\nExec=/bin/false\n").unwrap();
+        // The `.desktop` row is a thumbnail row even though the file is not a picture.
+        assert_eq!(ThumbKey::of(&entry_of(&desktop)).map(|key| key.path), Some(desktop.clone()));
+        // The resolver is injected here: the real icon roots cannot see this fixture.
+        let icon = appicon::icon_file_in(&desktop, std::slice::from_ref(&icons)).expect("icon resolves");
+        assert_eq!(icon, apps.join("myapp.png"));
+        let thumb = thumbnail_from_bytes(&read_source(&icon).unwrap(), ThumbFormat::Raster(ImageSourceFormat::Png)).expect("decodes");
+        assert!(visible_canvas(&thumb));
+        // A hidden entry names no icon, so the row falls back to the embedded file icon.
+        fs::write(&desktop, "[Desktop Entry]\nType=Application\nHidden=true\nIcon=myapp\n").unwrap();
+        assert!(appicon::icon_file_in(&desktop, std::slice::from_ref(&icons)).is_none());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn invisible_or_broken_sources_fall_back_instead_of_showing_an_empty_slot() {
+        let dir = temp_dir("fallback");
+        // Decodable but fully transparent: nothing would be painted, so the row keeps its type icon.
+        let clear = dir.join("clear.svg");
+        fs::write(&clear, SVG_INVISIBLE).unwrap();
+        assert!(thumbnail_from_bytes(&read_source(&clear).unwrap(), ThumbFormat::Svg).is_none());
+        assert!(render_thumbnail(&ThumbKey::of(&entry_of(&clear)).unwrap()).is_none());
+        // Truncated and garbage files are misses, not panics.
+        let broken = dir.join("broken.png");
+        fs::write(&broken, &PNG_1X1[..40]).unwrap();
+        assert!(render_thumbnail(&ThumbKey::of(&entry_of(&broken)).unwrap()).is_none());
+        let garbage = dir.join("garbage.ico");
+        fs::write(&garbage, b"not an icon at all").unwrap();
+        assert!(render_thumbnail(&ThumbKey::of(&entry_of(&garbage)).unwrap()).is_none());
+        let svg_broken = dir.join("broken.svg");
+        fs::write(&svg_broken, b"<svg width=\"4\" height=\"4\"><rect width=\"4\"").unwrap();
+        assert!(render_thumbnail(&ThumbKey::of(&entry_of(&svg_broken)).unwrap()).is_none());
+        // An image whose header claims more pixels than the pipeline decodes is skipped before decoding.
+        let huge = dir.join("huge.png");
+        let mut header = PNG_1X1.to_vec();
+        header[16..20].copy_from_slice(&10_000u32.to_be_bytes());
+        header[20..24].copy_from_slice(&10_000u32.to_be_bytes());
+        fs::write(&huge, header).unwrap();
+        assert!(render_thumbnail(&ThumbKey::of(&entry_of(&huge)).unwrap()).is_none());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn missing_and_over_cap_sources_are_misses_without_reading_them() {
+        let dir = temp_dir("bounds");
+        // A file listed but removed before the worker reaches it: a miss, not a panic.
+        let missing = dir.join("gone.png");
+        fs::write(&missing, PNG_1X1).unwrap();
+        let key = ThumbKey::of(&entry_of(&missing)).unwrap();
+        fs::remove_file(&missing).unwrap();
+        assert_eq!(render_thumbnail(&key), None);
+        assert_eq!(read_source(&missing), None);
+        // A sparse file one byte over the cap is refused by its metadata, so its bytes are never read.
+        let oversized = dir.join("over.png");
+        let file = fs::File::create(&oversized).unwrap();
+        file.set_len(MAX_SOURCE_BYTES + 1).unwrap();
+        assert!(fs::metadata(&oversized).unwrap().len() > MAX_SOURCE_BYTES);
+        assert_eq!(read_source(&oversized), None);
+        assert_eq!(render_thumbnail(&ThumbKey::of(&entry_of(&oversized)).unwrap()), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn directories_and_non_images_are_never_queued() {
+        let mut folder = entry_of(Path::new("/tmp/folder"));
+        folder.directory = true;
+        assert!(ThumbKey::of(&folder).is_none());
+        assert!(ThumbKey::of(&entry_of(Path::new("/tmp/notes.txt"))).is_none());
     }
 
     #[test]

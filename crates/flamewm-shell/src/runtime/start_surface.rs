@@ -43,7 +43,8 @@ pub fn open(
 /// Grab-preserving refit for the already-open Start surface:
 /// anchor -> measure -> fit only. The caller prepares/presents without
 /// grabbing. Exposes typed `PopupError` so the caller leaves the mapped
-/// rect untouched on refusal.
+/// rect untouched on refusal, and reports (A12-2) when the work area
+/// capped the real intrinsic.
 pub fn refit(
     runtime: &mut SurfaceRuntime,
     panel: SurfaceHandle,
@@ -54,5 +55,7 @@ pub fn refit(
 ) -> Result<Rect, PopupError> {
     let anchor = popup_controller::resolve_source_rect(runtime, panel, spec().source_node_id)?;
     let intrinsic = popup_controller::measure_node(runtime, popup, spec().node_id, work_area)?;
-    popup_controller::fit_start(anchor, intrinsic, panel_edge, work_area, gap)
+    let placement = popup_controller::fit_start(anchor, intrinsic, panel_edge, work_area, gap)?;
+    popup_controller::report_start_placement(placement);
+    Ok(placement.rect)
 }

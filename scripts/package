@@ -43,7 +43,7 @@ fi
 mkdir -p "$DIST"
 rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$VERSION.tar.gz" "$DIST/SHA256SUMS"
 
-for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock; do
+for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal; do
     [[ -x "$BUILD_DIR/$binary" ]] || fail "missing release binary: $BUILD_DIR/$binary"
 done
 
@@ -55,6 +55,7 @@ for source in \
     "$ROOT/packaging/flamewm.desktop" \
     "$ROOT/packaging/flamewm-screenshot.desktop" \
     "$ROOT/packaging/flamewm-explorer.desktop" \
+    "$ROOT/packaging/flamewm-terminal.desktop" \
     "$ROOT/packaging/flamewm-session.desktop" \
     "$ROOT/packaging/menus/flamewm-applications.menu" \
     "$ROOT/packaging/notifications/dunstrc" \
@@ -79,13 +80,14 @@ mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/flamewm" "$STAGE/etc/pam.d" \
     "$STAGE/usr/share/applications" "$STAGE/usr/share/xsessions" "$STAGE/usr/share/doc/flamewm" \
     "$STAGE/DEBIAN"
 
-for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock; do
+for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal; do
     install -m 0755 "$BUILD_DIR/$binary" "$STAGE/usr/bin/$binary"
 done
 install -m 0644 "$ROOT/packaging/pam.d/flamewm-lock" "$STAGE/etc/pam.d/flamewm-lock"
 install -m 0644 "$ROOT/packaging/flamewm.desktop" "$STAGE/usr/share/applications/flamewm.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-screenshot.desktop" "$STAGE/usr/share/applications/flamewm-screenshot.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-explorer.desktop" "$STAGE/usr/share/applications/flamewm-explorer.desktop"
+install -m 0644 "$ROOT/packaging/flamewm-terminal.desktop" "$STAGE/usr/share/applications/flamewm-terminal.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"
 # Publish the KService menu selected by XDG_MENU_PREFIX=flamewm-.
 install -d -m 0755 "$STAGE/etc/xdg/menus"

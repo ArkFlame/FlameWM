@@ -30,6 +30,58 @@ OVERLAY = "overlay"
 BACKGROUND = "background"
 LABELS = (CLIENT, OVERLAY, BACKGROUND)
 
+# Labels for a moved window (settle after a move): see `classify_move`.
+HIDDEN = "hidden"
+STALE = "stale"
+MOVING = "moving"
+
+
+def count_hidden_frames(labels: list[str]) -> int:
+    """Samples where the window was expected on screen but nothing of it was found (A01 hide)."""
+    return sum(1 for label in labels if label == HIDDEN)
+
+
+def count_afterimage_frames(labels: list[str]) -> int:
+    """Samples that show the window only where it used to be (a leftover finish overlay)."""
+    return sum(1 for label in labels if label == STALE)
+
+
+def _box_at(box, rect, size, tolerance: int) -> bool:
+    x0, y0, x1, y1 = box
+    rx, ry, rw, rh = rect
+    cw, ch = size
+    return (
+        abs(x0 - rx) <= tolerance
+        and abs(y0 - ry) <= tolerance
+        and abs((x1 - x0 + 1) - (rw or cw)) <= tolerance
+        and abs((y1 - y0 + 1) - (rh or ch)) <= tolerance
+    )
+
+
+def classify_move(ink_box, client_size, old_rect, target_rect, tolerance: int = 2) -> str:
+    """Label one root frame sampled around a moved window.
+
+    `ink_box` is the ink bounding box `(x0, y0, x1, y1)` inside the sampled region, or ``None``
+    when the region holds no ink at all. `old_rect`/`target_rect` are the client rects at the move
+    start and at the release, both relative to the same region, as `(x, y, w, h)`.
+
+    hidden: the window is nowhere in the region, i.e. it was taken off the root (the A01 defect
+            after a move used to hide the frame to read the root behind it).
+    stale:  the window is only at the old rect, i.e. a finished transition overlay still covers the
+            frame at its previous position.
+    client: the ink box is the client at its target rect.
+    moving: anything else (the window is still travelling between the two rects).
+    """
+    if ink_box is None:
+        return HIDDEN
+    if _box_at(ink_box, old_rect, client_size, tolerance) and not _box_at(
+        ink_box, target_rect, client_size, tolerance
+    ):
+        return STALE
+    if _box_at(ink_box, target_rect, client_size, tolerance):
+        return CLIENT
+    return MOVING
+
 
 def count_flicker(labels: list[str]) -> int:
     """Count samples that contradict their neighbours (see module docstring)."""

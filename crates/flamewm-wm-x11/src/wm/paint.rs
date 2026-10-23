@@ -80,6 +80,11 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     /// Captures the root once (24-bit LSB only; otherwise the wallpaper is used) and freezes
     /// the backdrop for the dragged frame.
+    ///
+    /// This is the only root read of a move: every step and the release crop the frozen snapshot
+    /// (`drag_titlebar_pixels`), and `end_drag` keeps it alive until the paint at the frame's final
+    /// origin has blurred that origin from it. Nothing here or in the settle path hides the window
+    /// or reads the root again (A01), so a moved frame never disappears and reappears.
     pub(super) fn begin_drag_backdrop(&self, client: Window) {
         let _drag_guard = flamewm_profiler::start("wm.drag.begin_backdrop");
         let Some((frame, outer)) = self
@@ -170,7 +175,8 @@ impl<'a, C: Connection> Wm<'a, C> {
         // (J08 paint_plan seam); this owner only bridges cached rasters.
         let titlebar_height = u16::try_from(self.extents_for(client).titlebar_h)
             .unwrap_or(self.config.titlebar_height);
-        let Some((chrome_state, identity, icon, frame)) = self.clients.get(&client).map(|state| {
+        let Some((chrome_state, identity, icon, frame, outer)) =
+            self.clients.get(&client).map(|state| {
             (
                 chrome_runtime::ChromeState {
                     frame_w: state.outer.width.max(1),
@@ -191,22 +197,29 @@ impl<'a, C: Connection> Wm<'a, C> {
                 },
                 state.icon.clone(),
                 state.frame,
+                state.outer,
             )
         }) else {
             return Ok(());
         };
         let _paint_guard = flamewm_profiler::start("wm.chrome.paint");
+        // The WM already knows the frame's root origin; pass it instead of syncing this
+        // connection and querying the frame geometry on the renderer's connection.
+        let screen = self.screen();
+        let root = (
+            u32::from(screen.width_in_pixels),
+            u32::from(screen.height_in_pixels),
+        );
         let runtime = self.chrome_runtimes.entry(client).or_default();
         runtime.scene_for(&identity, chrome_state, icon);
-        // The renderer reads the frame origin on its own Xlib connection; sync so the
-        // queued MoveFrameRoot on self.conn is applied before the backdrop samples it.
-        {
-            let _sync_guard = flamewm_profiler::start("wm.chrome.sync");
-            self.conn.sync()?;
-        }
         if let Some(renderer) = self.renderer.as_ref() {
             let mut renderer = renderer.borrow_mut();
-            if let Err(error) = runtime.paint_cached(&mut renderer, u64::from(frame)) {
+            if let Err(error) = runtime.paint_cached(
+                &mut renderer,
+                u64::from(frame),
+                (outer.x, outer.y),
+                root,
+            ) {
                 // A failed chrome paint leaves the frame's dark background visible
                 // during resize/maximize. Surface the error instead of silently
                 // continuing as though the titlebar was painted successfully.

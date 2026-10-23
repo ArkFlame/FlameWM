@@ -43,6 +43,10 @@ pub enum Shortcut {
 }
 
 pub fn shortcut(key: &str, mods: Mods) -> Option<Shortcut> {
+    // Alt is a meta prefix for the child (AltGr arrives with it too), so an Alt combination is never a shortcut.
+    if mods.alt {
+        return None;
+    }
     let name = key.to_ascii_lowercase();
     match (mods.ctrl, mods.shift, name.as_str()) {
         (true, true, "c") => Some(Shortcut::Copy),
@@ -54,6 +58,10 @@ pub fn shortcut(key: &str, mods: Mods) -> Option<Shortcut> {
         (true, false, ",") => Some(Shortcut::Settings),
         (true, false, "=") | (true, false, "+") => Some(Shortcut::FontLarger),
         (true, false, "-") => Some(Shortcut::FontSmaller),
+        // Plain F2/F3/F4 are tabs; every other F-key (and any modified one) reaches the child.
+        (false, false, "f2") => Some(Shortcut::NewTab),
+        (false, false, "f3") => Some(Shortcut::PreviousTab),
+        (false, false, "f4") => Some(Shortcut::NextTab),
         _ => None,
     }
 }
@@ -246,5 +254,34 @@ mod tests {
         assert_eq!(shortcut("t", ctrl_shift), Some(Shortcut::NewTab));
         assert_eq!(shortcut(",", Mods { ctrl: true, ..Mods::default() }), Some(Shortcut::Settings));
         assert_eq!(shortcut("c", Mods { ctrl: true, ..Mods::default() }), None, "plain Ctrl+C reaches the child");
+    }
+
+    #[test]
+    fn plain_function_keys_are_tab_shortcuts_and_modified_ones_are_the_childs() {
+        assert_eq!(shortcut("f2", Mods::default()), Some(Shortcut::NewTab));
+        assert_eq!(shortcut("f3", Mods::default()), Some(Shortcut::PreviousTab));
+        assert_eq!(shortcut("f4", Mods::default()), Some(Shortcut::NextTab));
+        assert_eq!(shortcut("F2", Mods::default()), Some(Shortcut::NewTab), "key names arrive in any case");
+        // Every other F-key stays a function key for the child.
+        assert_eq!(shortcut("f1", Mods::default()), None);
+        assert_eq!(shortcut("f5", Mods::default()), None);
+        assert_eq!(shortcut("f12", Mods::default()), None);
+        // Alt or Shift makes it the child's key again, encoded with the modifier.
+        assert_eq!(shortcut("f3", Mods { alt: true, ..Mods::default() }), None);
+        assert_eq!(shortcut("f4", Mods { shift: true, ..Mods::default() }), None);
+        assert_eq!(encode(&key("f3", &["alt"], None), false), Some(b"\x1b[1;3R".to_vec()));
+        assert_eq!(encode(&key("f1", &[], None), false), Some(b"\x1bOP".to_vec()));
+        assert_eq!(encode(&key("f5", &[], None), false), Some(b"\x1b[15~".to_vec()));
+    }
+
+    #[test]
+    fn alt_and_altgr_combinations_never_become_shortcuts() {
+        // AltGr arrives as Alt (or Ctrl+Alt) with the composed text, and that text belongs to the child.
+        assert_eq!(shortcut("tab", Mods::default()), None, "Tab alone is the shell's");
+        assert_eq!(shortcut("tab", Mods { alt: true, ctrl: true, ..Mods::default() }), None);
+        assert_eq!(shortcut("c", Mods { ctrl: true, alt: true, ..Mods::default() }), None);
+        assert_eq!(encode(&key("c", &["ctrl", "alt"], None), false), Some(vec![0x1b, 0x03]));
+        assert_eq!(encode(&key("c", &["ctrl", "alt"], Some("ć")), false), Some("\x1bć".as_bytes().to_vec()));
+        assert_eq!(encode(&key("e", &["alt"], Some("€")), false), Some("\x1b€".as_bytes().to_vec()));
     }
 }

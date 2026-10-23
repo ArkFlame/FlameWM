@@ -1,6 +1,7 @@
 import hashlib
 import os
 from pathlib import Path
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -102,6 +103,89 @@ class SourceArchiveTests(unittest.TestCase):
         (self.root / "assets/escape").symlink_to("../../outside")
         result = subprocess.run([str(BUILDER), str(self.root), str(self.manifest), str(self.root / "bad.tar.gz")], capture_output=True)
         self.assertNotEqual(result.returncode, 0)
+
+
+class TerminalPayloadPackageContractTests(unittest.TestCase):
+    """Static contract: the .deb must ship the native Terminal binary and launcher.
+
+    scripts/xephyr stages a nested flamewm-terminal entry from packaging/, which
+    hides a packaging omission here. These checks read the release scripts and
+    the install manifest only (no cargo, no dpkg-deb, no .deb build).
+    """
+
+    PACKAGE = ROOT / "scripts/package"
+    BUILD_DEB = ROOT / "scripts/build-deb"
+    ENTRY = ROOT / "packaging/flamewm-terminal.desktop"
+
+    def package_binary_loops(self):
+        text = self.PACKAGE.read_text(encoding="utf-8")
+        loops = re.findall(r"^for binary in ([^;\n]+); do$", text, re.MULTILINE)
+        self.assertEqual(len(loops), 2, "expected the existence loop and the install loop")
+        return [loop.split() for loop in loops]
+
+    def test_terminal_binary_is_in_both_package_binary_lists(self):
+        for index, binaries in enumerate(self.package_binary_loops()):
+            self.assertIn("flamewm-terminal", binaries, f"binary list {index} omits flamewm-terminal")
+
+    def test_terminal_binary_is_installed_by_package(self):
+        text = self.PACKAGE.read_text(encoding="utf-8")
+        self.assertIn('install -m 0755 "$BUILD_DIR/$binary" "$STAGE/usr/bin/$binary"', text)
+
+    def test_terminal_desktop_source_is_validated_and_installed(self):
+        text = self.PACKAGE.read_text(encoding="utf-8")
+        self.assertIn('"$ROOT/packaging/flamewm-terminal.desktop"', text)
+        self.assertIn(
+            'install -m 0644 "$ROOT/packaging/flamewm-terminal.desktop" '
+            '"$STAGE/usr/share/applications/flamewm-terminal.desktop"',
+            text,
+        )
+
+    def test_terminal_desktop_entry_launches_the_packaged_binary(self):
+        fields = dict(
+            line.split("=", 1) for line in self.ENTRY.read_text(encoding="utf-8").splitlines() if "=" in line
+        )
+        self.assertEqual(fields["Type"], "Application")
+        self.assertEqual(fields["Exec"], "flamewm-terminal")
+        self.assertEqual(fields["TryExec"], "flamewm-terminal")
+        self.assertEqual(fields["StartupWMClass"], "flamewm-terminal")
+
+    def test_install_manifest_ships_terminal_binary_and_entry(self):
+        manifest = (ROOT / "packaging/install-manifest.txt").read_text(encoding="utf-8")
+        self.assertIn(".target/release/flamewm-terminal         usr/bin/flamewm-terminal\n", manifest)
+        self.assertIn(
+            "packaging/flamewm-terminal.desktop        usr/share/applications/flamewm-terminal.desktop\n",
+            manifest,
+        )
+
+    def test_manifest_binaries_and_launchers_match_package_lists(self):
+        manifest = (ROOT / "packaging/install-manifest.txt").read_text(encoding="utf-8")
+        entries = {}
+        for line in manifest.splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            source, _, installed = line.partition(" ")
+            entries[source] = installed.strip()
+        prefix = ".target/release/"
+        shipped = {source[len(prefix):] for source in entries if source.startswith(prefix)}
+        self.assertIn("flamewm-terminal", shipped)
+        for binaries in self.package_binary_loops():
+            self.assertEqual(set(binaries), shipped)
+        for binary in sorted(shipped):
+            self.assertEqual(entries[f"{prefix}{binary}"], f"usr/bin/{binary}")
+        package = self.PACKAGE.read_text(encoding="utf-8")
+        launchers = sorted(
+            source for source in entries if source.startswith("packaging/") and source.endswith(".desktop")
+        )
+        self.assertIn("packaging/flamewm-terminal.desktop", launchers)
+        for source in launchers:
+            self.assertIn(f'"$ROOT/{source}"', package, f"{source} is not installed by scripts/package")
+
+    def test_build_deb_asserts_terminal_payload_in_the_built_deb(self):
+        text = self.BUILD_DEB.read_text(encoding="utf-8")
+        self.assertIn("dpkg-deb --contents \"$DEB\"", text)
+        for required in ("./usr/bin/flamewm-terminal", "./usr/share/applications/flamewm-terminal.desktop"):
+            self.assertIn(f"'{required}'", text, f"build-deb does not assert {required}")
+        self.assertIn('fail "native Terminal payload missing from package: $required"', text)
 
 
 if __name__ == "__main__":

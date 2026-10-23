@@ -659,8 +659,12 @@ fn project_item_label_scaled(
     scale: u16,
 ) -> Result<(), String> {
     let factor = f32::from(scale) / 100.0;
-    let [first, second] =
-        desktop_label_lines(label, LABEL_WIDTH_PX * factor, LABEL_FONT_SIZE_PX * factor);
+    let font_size = LABEL_FONT_SIZE_PX * factor;
+    let [first, second] = desktop_label_lines(label, LABEL_WIDTH_PX * factor, font_size);
+    // The 76px line stays full width; its flex `justify-content:center` centers
+    // the text node, which is measured with the renderer's own 0.49em metric.
+    // Do not shrink the line to that estimate: real glyphs (notably W) are
+    // wider, and a tight box clips the last character.
     document.text(&format!("desktop-label-{index}-line-1"), first)?;
     document.text(&format!("desktop-label-{index}-line-2"), second)
 }

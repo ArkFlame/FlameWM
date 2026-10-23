@@ -15,7 +15,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
 BINARIES = ("flamewm", "flamewm-session", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
-            "flamewm-screenshot", "flamewm-render-x11", "flamewm-render-compile", "flamewm-render-inspect", "flamewm-lock")
+            "flamewm-screenshot", "flamewm-explorer", "flamewm-render-x11", "flamewm-render-compile",
+            "flamewm-render-inspect", "flamewm-lock", "flamewm-terminal")
 
 
 @unittest.skipUnless(shutil.which("dpkg-deb") and shutil.which("dpkg") and shutil.which("tar") and
@@ -28,7 +29,9 @@ class DebianReleasePipelineTests(unittest.TestCase):
         self.root = Path(self.temp.name) / "flamewm-sample"
         self.root.mkdir()
         for file in ("Cargo.toml", "LICENSE", "README.md", "packaging/flamewm.desktop",
-                     "packaging/flamewm-session.desktop", "packaging/flamewm-screenshot.desktop", "packaging/pam.d/flamewm-lock",
+                     "packaging/flamewm-session.desktop", "packaging/flamewm-screenshot.desktop",
+                     "packaging/flamewm-explorer.desktop", "packaging/flamewm-terminal.desktop",
+                     "packaging/pam.d/flamewm-lock",
                      "packaging/menus/flamewm-applications.menu", "packaging/notifications/dunstrc",
                      "packaging/install-manifest.txt", "packaging/debian/control.in",
                      "packaging/debian/copyright", "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/build-deb", "scripts/check-cargo", "scripts/package",
@@ -96,6 +99,9 @@ class DebianReleasePipelineTests(unittest.TestCase):
         contents = subprocess.check_output(["dpkg-deb", "--contents", str(deb)], text=True)
         self.assertIn("usr/share/applications/flamewm-screenshot.desktop", contents)
         self.assertIn("usr/bin/flamewm-screenshot", contents)
+        # A17: the native Terminal binary and launcher must be in the built .deb.
+        self.assertIn("./usr/bin/flamewm-terminal", contents)
+        self.assertIn("./usr/share/applications/flamewm-terminal.desktop", contents)
         self.assertIn("usr/share/xdg-desktop-portal/flamewm-portals.conf", contents)
         self.assertIn("usr/libexec/flamewm/flamewm-session-wrapper", contents)
         self.assertIn("usr/libexec/flamewm/flamewm-desktop-services", contents)
@@ -171,6 +177,8 @@ class DebianReleasePipelineTests(unittest.TestCase):
         self.assertTrue((dist / f"flamewm-{VERSION}-source.tar.gz").exists())
         entry = subprocess.check_output(["dpkg-deb", "--contents", str(deb)], text=True)
         self.assertIn("./usr/share/xsessions/flamewm.desktop", entry)
+        self.assertIn("./usr/bin/flamewm-terminal", entry)
+        self.assertIn("./usr/share/applications/flamewm-terminal.desktop", entry)
 
     def test_unregistered_version_refuses_to_publish_deb(self):
         self.manifest.write_text(self.manifest.read_text().replace("@exec scripts/version\n", ""))

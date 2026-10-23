@@ -12,6 +12,7 @@ pub use blur::{
     BlurError, BlurScratch, Rect, frosted_backdrop, gaussian_blur_rgba, gaussian_blur_rgba_with,
 };
 pub mod gif_frame;
+pub mod ico;
 pub mod jpeg;
 pub mod png;
 pub mod ppm;
@@ -85,6 +86,66 @@ impl ImageSourceFormat {
             "jpg" | "jpeg" => Some(Self::Jpeg),
             "gif" => Some(Self::Gif),
             _ => None,
+        }
+    }
+}
+
+/// Image formats that are *containers* of other images rather than one bitmap stream.
+///
+/// `ImageSourceFormat` stays a closed set of single-bitmap decoders (its variants are matched
+/// exhaustively by other crates), so the multi-image icon container is probed and decoded through
+/// this sibling type and [`decode_icon_container_at`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WrappedImageFormat {
+    /// Windows ICO/CUR icon container: an index of PNG or DIB images.
+    Ico,
+}
+
+impl WrappedImageFormat {
+    /// Identifies a container format from its leading magic bytes.
+    #[must_use]
+    pub fn from_magic(bytes: &[u8]) -> Option<Self> {
+        ico::is_icon(bytes).then_some(Self::Ico)
+    }
+
+    /// Identifies a container format from the file extension only.
+    #[must_use]
+    pub fn from_extension(path: &Path) -> Option<Self> {
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        matches!(extension.as_str(), "ico" | "cur").then_some(Self::Ico)
+    }
+
+    /// Canvas size of the container's largest image, read without decoding pixels.
+    #[must_use]
+    pub fn dimensions(self, bytes: &[u8]) -> Option<(u32, u32)> {
+        match self {
+            Self::Ico => ico::dimensions(bytes),
+        }
+    }
+}
+
+/// Decodes a wrapped container image and scales it to an exact target size (SVG-style aspect
+/// handling is not applied: the caller already fitted the box).
+pub fn decode_icon_container_at(
+    bytes: &[u8],
+    format: WrappedImageFormat,
+    width: u32,
+    height: u32,
+    filter: scale::ScaleFilter,
+) -> Result<RgbaImage, String> {
+    check_size_limits(width, height)?;
+    match format {
+        WrappedImageFormat::Ico => {
+            let natural = ico::decode(bytes)?;
+            if natural.width == width && natural.height == height {
+                return Ok(natural);
+            }
+            scale::scale_rgba(&natural, width, height, filter)
+                .ok_or_else(|| "requested dimensions overflow".to_string())
         }
     }
 }
@@ -285,6 +346,33 @@ mod tests {
         );
         assert_eq!(ImageSourceFormat::from_magic(b"BM\0\0"), None);
         assert_eq!(ImageSourceFormat::from_magic(b"\xff\xd8"), None);
+    }
+
+    #[test]
+    fn icon_container_probe_covers_magic_and_extension() {
+        // ICONDIR with one 16x16 entry, no pixels: enough for the header probe.
+        let header = [
+            0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 1, 0, 0, 0, 22, 0, 0, 0, 0,
+        ];
+        assert_eq!(
+            WrappedImageFormat::from_magic(&header),
+            Some(WrappedImageFormat::Ico)
+        );
+        assert_eq!(
+            WrappedImageFormat::from_extension(Path::new("app.ICO")),
+            Some(WrappedImageFormat::Ico)
+        );
+        assert_eq!(
+            WrappedImageFormat::from_extension(Path::new("app.png")),
+            None
+        );
+        assert_eq!(WrappedImageFormat::from_magic(b"PNG\r\n"), None);
+        assert_eq!(WrappedImageFormat::Ico.dimensions(&header), Some((16, 16)));
+        // A container with no readable entry still has a header but no dimensions.
+        assert_eq!(
+            WrappedImageFormat::Ico.dimensions(&[0, 0, 1, 0, 0, 0]),
+            None
+        );
     }
 
     #[test]

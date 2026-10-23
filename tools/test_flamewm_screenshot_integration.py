@@ -2,6 +2,7 @@
 
 These are static contract checks, not substitutes for Cargo or native X11 tests.
 """
+import re
 import tomllib
 import unittest
 from pathlib import Path
@@ -31,7 +32,8 @@ class ScreenshotMergeChecks(unittest.TestCase):
         # RustConnection's maximum_request_bytes() is supplied by this trait.
         # The generic Connection bound in ui.rs does not establish scope here.
         clipboard = read("crates/flamewm-screenshot/src/clipboard.rs")
-        self.assertIn("conn.maximum_request_bytes()", clipboard)
+        # The call may be split across lines (`let chunk = conn\n    .maximum_request_bytes()`).
+        self.assertRegex(clipboard, r"\bconn\s*\.\s*maximum_request_bytes\s*\(\s*\)")
         self.assertRegex(
             clipboard,
             r"use\s+x11rb::connection::\{[^}]*\bRequestConnection\b[^}]*\};",
@@ -67,8 +69,16 @@ class ScreenshotMergeChecks(unittest.TestCase):
     def test_release_binary_and_launcher_registered_in_all_package_paths(self):
         package = read("scripts/package")
         installed = read("packaging/install-manifest.txt")
+        # Both release paths in scripts/package walk an explicit binary list: the
+        # existence check and the install loop. Every loop must carry the binaries.
+        loops = re.findall(r"^\s*for binary in ([^;]*);\s*do\b", package, re.MULTILINE)
+        self.assertGreaterEqual(len(loops), 2, "expected the release existence and install binary loops")
+        for index, binaries in enumerate(loops):
+            available = binaries.split()
+            for binary in ("flamewm-settings", "flamewm-screenshot", "flamewm-render-x11"):
+                with self.subTest(loop=index, binary=binary):
+                    self.assertIn(binary, available)
         for expected in (
-            'flamewm-settings flamewm-screenshot flamewm-render-x11',
             '"$ROOT/packaging/flamewm-screenshot.desktop"',
             '"$STAGE/usr/share/applications/flamewm-screenshot.desktop"',
         ):

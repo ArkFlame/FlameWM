@@ -202,6 +202,8 @@ pub struct ProductSettings {
     pub snap_preview_enabled: bool,
     /// `false` (XP style): move/resize shows an outline and applies the geometry on release.
     pub show_content_while_dragging: bool,
+    /// `windowShadows`: Win7-style frame shadows behind floating windows.
+    pub window_shadows: bool,
     pub focus_follows_mouse: bool,
     pub font_family: String,
     pub font_bold: bool,
@@ -316,6 +318,7 @@ impl Default for ProductSettings {
             window_snap_preview_fill_opacity: 20,
             snap_preview_enabled: true,
             show_content_while_dragging: false,
+            window_shadows: true,
             focus_follows_mouse: false,
             font_family: "IBM Plex Sans".to_owned(),
             font_bold: false,
@@ -1083,6 +1086,7 @@ stable_settings! {
     (false, desktop, "wallpaperFit", wallpaper_fit),
     (false, windows, "snapPreviewEnabled", snap_preview_enabled),
     (false, windows, "showContentWhileDragging", show_content_while_dragging),
+    (true, windows, "windowShadows", window_shadows),
     (false, windows, "focusFollowsMouse", focus_follows_mouse),
     (false, appearance, "cursorSize", cursor_size),
     (false, appearance, "cursorShadow", cursor_shadow),

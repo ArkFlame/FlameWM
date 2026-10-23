@@ -9,7 +9,10 @@
 use crate::popup_role::PopupRole;
 use crate::quick_controls::QuickControlKind;
 use flamewm_api::{PanelEdge, Rect, Size};
-use flamewm_shell_core::popup::{fitted_start_placement, measured_popup_rect, PopupRefusal};
+use flamewm_shell_core::popup::{
+    bounded_start_placement, fitted_start_placement, measured_popup_rect, PopupRefusal,
+    StartPlacement,
+};
 use flamewm_ui_core::popover::{PopoverAlign, PopoverEdge};
 use flamewm_ui_x11::{SurfaceHandle, SurfaceRuntime};
 
@@ -124,16 +127,39 @@ pub fn fit_popup(
 }
 
 /// Pure Start fit via the existing `fitted_start_placement` engine.
+///
+/// A12-2: the placement result is returned whole, so `content_was_capped` is no
+/// longer discarded. When the fitted engine refuses because the work area
+/// leaves no room for the gap (a 320x240 or 520x420 work area does), the
+/// bounded fallback keeps Start on output instead of leaving it unmapped.
 pub fn fit_start(
     anchor: Rect,
     intrinsic: Size,
     panel_edge: PanelEdge,
     work_area: Rect,
     gap: i32,
-) -> Result<Rect, PopupError> {
+) -> Result<StartPlacement, PopupError> {
     let anchor = resolve_anchor(Some(anchor))?;
     let size = measure_intrinsic(Some(intrinsic))?;
-    Ok(fitted_start_placement(anchor, size, panel_edge, work_area, gap)?.rect)
+    match fitted_start_placement(anchor, size, panel_edge, work_area, gap) {
+        Ok(placement) => Ok(placement),
+        Err(PopupRefusal::PendingLayout) => Ok(bounded_start_placement(
+            anchor, size, panel_edge, work_area, gap,
+        )),
+        Err(refusal) => Err(refusal.into()),
+    }
+}
+
+/// A12-2: one-line report when the Start placement had to shrink below the
+/// measured intrinsic. Logged only (no new state owner), so the open path can
+/// stay a pure rect transaction.
+pub fn report_start_placement(placement: StartPlacement) {
+    if placement.content_was_capped {
+        eprintln!(
+            "flamewm-shell: start popup capped to {}x{} at ({}, {}); work area limited the real intrinsic",
+            placement.rect.width, placement.rect.height, placement.rect.x, placement.rect.y
+        );
+    }
 }
 
 /// Retained-device anchor for a raw panel source node id. Hard
@@ -202,7 +228,10 @@ pub fn open_popup(
     let anchor = resolve_source_rect(runtime, panel, spec.source_node_id)?;
     let intrinsic = measure_node(runtime, popup, spec.node_id, work_area)?;
     let rect = if spec.role == PopupRole::Start {
-        fit_start(anchor, intrinsic, panel_edge, work_area, gap)?
+        let placement = fit_start(anchor, intrinsic, panel_edge, work_area, gap)?;
+        // A12-2: consume the capped flag instead of discarding it.
+        report_start_placement(placement);
+        placement.rect
     } else {
         fit_popup(anchor, intrinsic, edge, spec.alignment, work_area, gap)?
     };
@@ -245,6 +274,7 @@ pub fn close_popup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_shell_core::popup::START_ACTION_ROW_HEIGHT;
 
     #[test]
     fn dismiss_routes_through_hide_only_when_a_slide_is_configured() {
@@ -256,5 +286,76 @@ mod tests {
             !dismiss_animates(false),
             "animation off must keep the immediate unmap"
         );
+    }
+
+    // REGRESSION (A12-2): a 320x240 or 520x420 work area is smaller than the
+    // real Start intrinsic (550x420), so `content_was_capped` must reach the
+    // caller instead of being discarded, and the surface must stay on output
+    // with the bottom-pinned action row reachable.
+    #[test]
+    fn fit_start_reports_the_capped_flag_at_small_work_areas() {
+        for (w, h) in [(320, 240), (520, 420)] {
+            let area = Rect::new(0, 0, w, h);
+            let anchor = Rect::new(0, h, 43, 44);
+            let placement = fit_start(
+                anchor,
+                Size::new(550, 420),
+                PanelEdge::Bottom,
+                area,
+                POPUP_GAP,
+            )
+            .expect("small work area must still place Start");
+            assert!(placement.content_was_capped, "{w}x{h}");
+            assert_eq!(placement.rect.bottom(), h - POPUP_GAP, "{w}x{h}");
+            assert!(
+                placement.rect.x >= area.x && placement.rect.right() <= area.right(),
+                "{w}x{h}: {:?} must stay on output",
+                placement.rect
+            );
+            assert!(
+                placement.rect.y >= area.y && placement.rect.bottom() <= area.bottom(),
+                "{w}x{h}: {:?} must stay inside the work area",
+                placement.rect
+            );
+            assert!(
+                placement.rect.height >= START_ACTION_ROW_HEIGHT.min(h),
+                "{w}x{h}: action row unreachable in {:?}",
+                placement.rect
+            );
+        }
+    }
+
+    // REGRESSION (A12-2): no room for the gap used to refuse (PendingLayout)
+    // and leave Start unmapped. The bounded fallback keeps it on output.
+    #[test]
+    fn fit_start_falls_back_at_small_work_areas_with_no_gap_room() {
+        for (w, h) in [(320, 240), (520, 420)] {
+            let area = Rect::new(0, 0, w, h);
+            let anchor = Rect::new(0, area.y, 43, 44);
+            let placement = fit_start(
+                anchor,
+                Size::new(550, 420),
+                PanelEdge::Bottom,
+                area,
+                POPUP_GAP,
+            )
+            .expect("bounded fallback must not refuse");
+            assert!(placement.content_was_capped, "{w}x{h}");
+            assert!(
+                placement.rect.x >= area.x && placement.rect.right() <= area.right(),
+                "{w}x{h}: {:?} must stay on output",
+                placement.rect
+            );
+            assert!(
+                placement.rect.y >= area.y && placement.rect.bottom() <= area.bottom(),
+                "{w}x{h}: {:?} must stay inside the work area",
+                placement.rect
+            );
+            assert!(
+                placement.rect.height >= START_ACTION_ROW_HEIGHT.min(h),
+                "{w}x{h}: action row unreachable in {:?}",
+                placement.rect
+            );
+        }
     }
 }

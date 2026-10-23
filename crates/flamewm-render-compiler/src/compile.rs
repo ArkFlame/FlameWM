@@ -528,6 +528,9 @@ impl<'a> Compiler<'a> {
                     _ => style.overflow_y = overflow,
                 }
             }
+            "scrollbar-width" if matches!(value, "none" | "auto") => {
+                style.hide_scrollbars = value == "none";
+            }
             "user-select" if matches!(value, "none" | "text" | "auto") => {}
             "-flamewm-image-treatment" => {
                 style.image_treatment = match value {
@@ -845,6 +848,19 @@ mod tests {
             .unwrap()
             .style
             .clone()
+    }
+
+    #[test]
+    fn scrollbar_width_none_hides_scrollbars_per_node() {
+        let output = compile_str(
+            r#"<body><div class="list" id="list">x</div><div id="plain">x</div></body>"#,
+            ".list { overflow-y: auto; scrollbar-width: none; }",
+            CompileOptions::default(),
+        )
+        .unwrap();
+        assert!(style_of(&output, "list").hide_scrollbars);
+        assert_eq!(style_of(&output, "list").overflow_y, flamewm_render_core::Overflow::Auto);
+        assert!(!style_of(&output, "plain").hide_scrollbars);
     }
 
     fn temp_fixture_dir(tag: &str) -> PathBuf {

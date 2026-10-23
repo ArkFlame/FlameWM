@@ -54,6 +54,7 @@ const ACCENT_NODE_IDS: &[&str] = &[
     "sticky-toggle-on",
     "downloads-organize-on",
     "focus-mouse-on",
+    "shadows-on",
     "snap-preview-on",
     "show-content-on",
     "taskbar-seconds-on",
@@ -1957,6 +1958,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 "show-content-on",
                 "show-content-off",
             ),
+            ("windowShadows", "shadows-on", "shadows-off"),
             ("focusFollowsMouse", "focus-mouse-on", "focus-mouse-off"),
         ] {
             let enabled = self.setting_value(key).and_then(|value| match value {
@@ -3208,8 +3210,9 @@ fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-const TOGGLE_KEYS: [&str; 28] = [
+const TOGGLE_KEYS: [&str; 29] = [
     "showContentWhileDragging",
+    "windowShadows",
     "stickyNotesEnabled",
     "organizeDownloads",
     "fontBold",

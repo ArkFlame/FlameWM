@@ -285,6 +285,12 @@ impl X11Desktop {
 fn io_error<E: std::fmt::Display>(error: E) -> FlameError {
     FlameError::new(ErrorCode::IoFailure, error.to_string())
 }
+
+/// EWMH states removed by the control plane's `RestoreWindow`.
+///
+/// Restore is unminimize only; a maximized window stays maximized. Unmaximize has its own
+/// placement transition and must not be folded into restore.
+pub(crate) const RESTORE_REMOVED_STATES: [&str; 1] = ["_NET_WM_STATE_HIDDEN"];
 fn unsupported(message: &'static str) -> FlameError {
     FlameError::new(ErrorCode::Unsupported, message)
 }
@@ -491,11 +497,10 @@ impl WindowPort for X11Desktop {
     fn restore(&mut self, w: WindowRef) -> FlameResult<()> {
         let window = self.check_window(w)?;
         self.bump_generation(window);
-        for name in [
-            "_NET_WM_STATE_HIDDEN",
-            "_NET_WM_STATE_MAXIMIZED_VERT",
-            "_NET_WM_STATE_MAXIMIZED_HORZ",
-        ] {
+        // Restore means unminimize. Maximize is an independent placement and must survive a
+        // minimize/restore cycle: removing the MAXIMIZED atoms here would return the window
+        // demaximized (taskbar click on a minimized maximized window).
+        for name in RESTORE_REMOVED_STATES {
             self.send_state(window, self.atom(name), FeatureAction::Remove)?;
         }
         Ok(())
@@ -1022,6 +1027,18 @@ impl DisplayPort for X11Desktop {
         }
         self.pending_mode = None;
         self.flush()
+    }
+}
+
+#[cfg(test)]
+mod restore_state_tests {
+    use super::RESTORE_REMOVED_STATES;
+
+    #[test]
+    fn restore_unminimizes_without_clearing_maximize() {
+        assert_eq!(RESTORE_REMOVED_STATES, ["_NET_WM_STATE_HIDDEN"]);
+        assert!(!RESTORE_REMOVED_STATES.contains(&"_NET_WM_STATE_MAXIMIZED_VERT"));
+        assert!(!RESTORE_REMOVED_STATES.contains(&"_NET_WM_STATE_MAXIMIZED_HORZ"));
     }
 }
 

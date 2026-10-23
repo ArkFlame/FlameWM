@@ -1,47 +1,144 @@
-//! X side of the frame shadow (pure shading lives in `frame::shadow`).
+//! X side of the frame shadow (pure shading and planning live in `frame::shadow`).
 //!
-//! Per floating frame: three override-redirect, input-transparent windows
-//! stacked directly below the frame. The server holds each strip's shaded
-//! pixels as the window background, so exposes repaint without WM work.
-//! Pixels are refreshed only on map, resize, focus change and hide. A move
-//! just reconfigures the three strips.
+//! Per floating frame: one override-redirect, input-transparent window stacked
+//! directly below the frame. It holds a single root snapshot darkened in place,
+//! so exposes repaint without WM work. Pixels are refreshed only on map,
+//! resize, focus change and hide.
+//!
+//! Every reactor turn asks `frame::shadow::plan_shadow` what each frame needs:
+//!
+//! * `Noop` — nothing changed (the common case, including every motion step of a
+//!   frame nobody is dragging).
+//! * `Move` — the window slides with its frame, `configure_window` only.
+//! * `Reshade` — one `get_image` readback, under a short server grab.
+//!
+//! A live move/resize never re-shades *anything*: every frame is planned with
+//! `gesture_active`, so the dragged frame's shadow just slides and its neighbours stay
+//! untouched. The release advances the generation once, so the next idle turn is a single
+//! re-shade pass over the frames (one per frame, never per motion step). The same holds while
+//! a window open/close flight runs, so an animation costs shadow configures, not readbacks.
+//! Staleness behind a *resting* frame is caught by a root generation that advances only
+//! on wallpaper/output-layout changes, map/unmap/workspace changes, settled gestures and
+//! (when idle) managed geometry changes — never on a motion step.
 
 use super::*;
-use crate::frame::shadow::{self, STRIPS};
+use crate::frame::shadow::{self, ShadowAction, ShadowState};
 use crate::geometry::Rect;
+use std::hash::{Hash, Hasher};
 use x11rb::protocol::shape::{SK as ShapeSk, SO as ShapeOp};
 
-/// Strip windows of one frame and what they currently show.
+/// One shadow window of a frame and what it currently shows.
 pub(super) struct FrameShadow {
-    wins: [Window; 3],
-    rects: [Rect; 3],
-    focused: bool,
-    size: (u32, u32),
+    win: Window,
+    state: ShadowState,
 }
 
-fn strip_aux(rect: Rect, frame: Window) -> ConfigureWindowAux {
+/// One frame the current turn wants shadowed.
+struct WantedShadow {
+    frame: Window,
+    outer: Rect,
+    focused: bool,
+}
+
+/// Cross-frame shadow bookkeeping. Only `generation` reaches the pure planner; the rest
+/// decides when it advances.
+#[derive(Default)]
+pub(super) struct ShadowScene {
+    generation: u64,
+    /// Visible managed set (map/unmap/workspace) at the last reconcile.
+    membership: u64,
+    /// Wallpaper source + output layout at the last reconcile.
+    backdrop: u64,
+    /// Managed geometry at the last idle reconcile. Untouched while a gesture runs, so the
+    /// first idle turn after it always differs and re-shades once.
+    geometry: Option<u64>,
+    /// Clients owning an activated move/resize at the last reconcile (sorted).
+    dragging: Vec<Window>,
+    seeded: bool,
+}
+
+impl ShadowScene {
+    /// Advance the root generation for this turn and return its new value.
+    fn advance(
+        &mut self,
+        membership: u64,
+        backdrop: u64,
+        geometry: Option<u64>,
+        mut dragging: Vec<Window>,
+    ) -> u64 {
+        dragging.sort_unstable();
+        dragging.dedup();
+        let mut bump = !self.seeded;
+        self.seeded = true;
+        if self.backdrop != backdrop {
+            self.backdrop = backdrop;
+            bump = true;
+        }
+        if self.membership != membership {
+            self.membership = membership;
+            bump = true;
+        }
+        // A window that travelled over the root leaves different pixels behind once it settles.
+        if self.dragging.iter().any(|client| !dragging.contains(client)) {
+            bump = true;
+        }
+        self.dragging = dragging;
+        if let Some(geometry) = geometry {
+            if self.geometry != Some(geometry) {
+                // The very first idle turn only seeds the baseline.
+                if self.geometry.is_some() {
+                    bump = true;
+                }
+                self.geometry = Some(geometry);
+            }
+        }
+        if bump {
+            self.generation = self.generation.wrapping_add(1);
+        }
+        self.generation
+    }
+}
+
+fn hash_of<T: Hash>(value: T) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn shadow_aux(rect: Rect, sibling: Window) -> ConfigureWindowAux {
     ConfigureWindowAux::new()
         .x(rect.x)
         .y(rect.y)
         .width(rect.width.max(1))
         .height(rect.height.max(1))
-        .sibling(frame)
+        .sibling(sibling)
         .stack_mode(StackMode::BELOW)
+}
+
+fn shadow_geometry(rect: Rect) -> ConfigureWindowAux {
+    ConfigureWindowAux::new()
+        .x(rect.x)
+        .y(rect.y)
+        .width(rect.width.max(1))
+        .height(rect.height.max(1))
 }
 
 impl<'a, C: Connection> Wm<'a, C> {
     /// Bring shadow windows in line with the current frames. Called once per
     /// reactor turn; cheap when nothing changed.
     pub(super) fn reconcile_frame_shadows(&mut self) -> Result<(), ReplyOrIdError> {
-        let screen = self.screen();
         let usable = self.decoration_tokens.window_shadows
-            && screen.root_depth == 24
+            && self.screen().root_depth == 24
             && self.conn.setup().image_byte_order == ImageOrder::LSB_FIRST;
-        let wanted: Vec<(Window, Rect, bool)> = if usable {
+        let wanted: Vec<WantedShadow> = if usable {
             self.clients
                 .values()
                 .filter(|c| c.is_floating() && c.visible_on(self.current_workspace))
-                .map(|c| (c.frame, c.outer, self.active == Some(c.client)))
+                .map(|c| WantedShadow {
+                    frame: c.frame,
+                    outer: c.outer,
+                    focused: self.active == Some(c.client),
+                })
                 .collect()
         } else {
             Vec::new()
@@ -50,178 +147,292 @@ impl<'a, C: Connection> Wm<'a, C> {
             .frame_shadows
             .keys()
             .copied()
-            .filter(|frame| !wanted.iter().any(|w| w.0 == *frame))
+            .filter(|frame| !wanted.iter().any(|w| w.frame == *frame))
             .collect();
         for frame in gone {
             if let Some(shadow) = self.frame_shadows.remove(&frame) {
-                for win in shadow.wins {
-                    self.conn.destroy_window(win)?;
+                self.conn.destroy_window(shadow.win)?;
+            }
+        }
+        let (generation, motion) = self.advance_shadow_generation();
+        for want in wanted {
+            let prev = self.frame_shadows.get(&want.frame).map(|held| held.state);
+            // A frame first seen while frames are still moving waits for the settle: shading it
+            // now would need the root readback a live move must never do.
+            if prev.is_none() && motion {
+                continue;
+            }
+            match shadow::plan_shadow(
+                prev,
+                want.outer,
+                want.focused,
+                motion,
+                generation,
+            ) {
+                ShadowAction::Noop => {}
+                ShadowAction::Move => self.move_frame_shadow(want.frame, want.outer)?,
+                ShadowAction::Reshade => {
+                    let win = match self.frame_shadows.get(&want.frame) {
+                        Some(held) => held.win,
+                        None => self.create_shadow_window()?,
+                    };
+                    self.refresh_frame_shadow(
+                        want.frame,
+                        want.outer,
+                        want.focused,
+                        win,
+                        generation,
+                    )?;
                 }
             }
         }
-        for (frame, outer, focused) in wanted {
-            self.sync_frame_shadow(frame, outer, focused)?;
-        }
         Ok(())
     }
 
-    fn sync_frame_shadow(
-        &mut self,
-        frame: Window,
-        outer: Rect,
-        focused: bool,
-    ) -> Result<(), ReplyOrIdError> {
-        let rects = STRIPS.map(|strip| shadow::strip_rect(strip, outer));
-        let size = (outer.width, outer.height);
-        let Some(prev) = self.frame_shadows.get(&frame) else {
-            let wins = self.create_shadow_windows()?;
-            return self.refresh_frame_shadow(frame, outer, focused, wins);
+    /// Advance the root generation: bump it when the root behind some strip may have changed.
+    /// Also reports whether frames are still moving this turn (a gesture or a flight), in which
+    /// case nothing may re-shade.
+    fn advance_shadow_generation(&mut self) -> (u64, bool) {
+        let dragging: Vec<Window> = self
+            .sessions
+            .iter()
+            .filter(|(_, state)| drag_activated(&state.session))
+            .map(|(client, _)| *client)
+            .collect();
+        // The same "something is flying" predicate `transition_wait` uses to cap the reactor
+        // wait: geometry is only meaningful once both are quiet.
+        let motion = !dragging.is_empty() || self.animator.is_active();
+        let membership = self.shadow_membership_hash();
+        let backdrop = self.shadow_backdrop_hash();
+        // Geometry is only comparable between two quiet turns: a dragged or animating frame
+        // changes every step and must not invalidate the others.
+        let geometry = if motion {
+            None
+        } else {
+            Some(self.shadow_geometry_hash())
         };
-        if prev.size != size || prev.focused != focused {
-            let wins = prev.wins;
-            return self.refresh_frame_shadow(frame, outer, focused, wins);
-        }
-        if prev.rects == rects {
+        let generation = self
+            .shadow_scene
+            .advance(membership, backdrop, geometry, dragging);
+        (generation, motion)
+    }
+
+    /// Which windows the root currently shows: a map/unmap/workspace change re-shades.
+    fn shadow_membership_hash(&self) -> u64 {
+        let mut items: Vec<(Window, usize, bool)> = self
+            .clients
+            .values()
+            .filter(|c| c.visible_on(self.current_workspace))
+            .map(|c| (c.frame, c.workspace, c.sticky))
+            .collect();
+        items.sort_unstable();
+        hash_of((self.current_workspace, items))
+    }
+
+    /// Wallpaper source plus output layout: a change invalidates every strip's pixels.
+    fn shadow_backdrop_hash(&self) -> u64 {
+        let outputs: Vec<(i32, i32, u32, u32)> = self
+            .output_work_areas
+            .iter()
+            .map(|output| {
+                let rect = output.geometry;
+                (rect.x, rect.y, rect.width, rect.height)
+            })
+            .collect();
+        let screen = self.screen();
+        hash_of((
+            self.decoration_tokens.backdrop_revision,
+            screen.width_in_pixels,
+            screen.height_in_pixels,
+            outputs,
+        ))
+    }
+
+    /// Managed geometry while idle: a window that moved (or settled) re-shades the rest once.
+    fn shadow_geometry_hash(&self) -> u64 {
+        let mut items: Vec<(Window, i32, i32, u32, u32)> = self
+            .clients
+            .values()
+            .filter(|c| c.visible_on(self.current_workspace))
+            .map(|c| (c.frame, c.outer.x, c.outer.y, c.outer.width, c.outer.height))
+            .collect();
+        items.sort_unstable();
+        hash_of((self.current_workspace, items))
+    }
+
+    /// The lowest managed frame, used as the sibling for every shadow so the shadow sits below
+    /// all managed windows (and above the desktop). Falls back to the frame's own window.
+    fn shadow_sibling(&self, own: Window) -> Window {
+        let root = self.screen().root;
+        let Ok(cookie) = self.conn.query_tree(root) else {
+            return own;
+        };
+        let Ok(reply) = cookie.reply() else {
+            return own;
+        };
+        let frames: std::collections::HashSet<Window> =
+            self.clients.values().map(|client| client.frame).collect();
+        reply
+            .children
+            .iter()
+            .copied()
+            .find(|window| frames.contains(window))
+            .unwrap_or(own)
+    }
+
+    /// Slide the shadow with its frame. One `configure_window`, no readback.
+    fn move_frame_shadow(&mut self, frame: Window, outer: Rect) -> Result<(), ReplyOrIdError> {
+        let Some(held) = self.frame_shadows.get(&frame) else {
             return Ok(());
-        }
-        // Move only: reconfigure each strip, keeping it directly under the frame.
-        let wins = prev.wins;
-        for (win, rect) in wins.iter().zip(rects) {
-            self.conn.configure_window(*win, &strip_aux(rect, frame))?;
-        }
-        if let Some(shadow) = self.frame_shadows.get_mut(&frame) {
-            shadow.rects = rects;
+        };
+        self.conn
+            .configure_window(held.win, &shadow_geometry(shadow::shadow_rect(outer)))?;
+        if let Some(held) = self.frame_shadows.get_mut(&frame) {
+            held.state.placed = outer;
         }
         Ok(())
     }
 
-    fn create_shadow_windows(&self) -> Result<[Window; 3], ReplyOrIdError> {
+    fn create_shadow_window(&self) -> Result<Window, ReplyOrIdError> {
         let root = self.screen().root;
-        let mut wins = [0; 3];
-        for win in &mut wins {
-            *win = self.conn.generate_id()?;
-            self.conn.create_window(
-                COPY_DEPTH_FROM_PARENT,
-                *win,
-                root,
-                0,
-                0,
-                1,
-                1,
-                0,
-                WindowClass::INPUT_OUTPUT,
-                0,
-                &CreateWindowAux::new()
-                    .override_redirect(1)
-                    .event_mask(EventMask::NO_EVENT),
-            )?;
-            // Empty input shape: the strip never takes pointer input.
-            self.conn.shape_rectangles(
-                ShapeOp::SET,
-                ShapeSk::INPUT,
-                ClipOrdering::UNSORTED,
-                *win,
-                0,
-                0,
-                &[],
-            )?;
-        }
-        Ok(wins)
+        let win = self.conn.generate_id()?;
+        self.conn.create_window(
+            COPY_DEPTH_FROM_PARENT,
+            win,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            0,
+            &CreateWindowAux::new()
+                .override_redirect(1)
+                .event_mask(EventMask::NO_EVENT),
+        )?;
+        // Empty input shape: the shadow never takes pointer input.
+        self.conn.shape_rectangles(
+            ShapeOp::SET,
+            ShapeSk::INPUT,
+            ClipOrdering::UNSORTED,
+            win,
+            0,
+            0,
+            &[],
+        )?;
+        Ok(win)
     }
 
-    /// Shade all three strips from a root snapshot, under one server grab.
-    /// The strips are unmapped during the read so they never shade themselves.
+    /// Shade the shadow from a root snapshot, under one server grab. The window
+    /// is unmapped during the read so it never shades itself.
+    ///
+    /// The grab is kept, but only here: it makes unmap-then-read atomic, so a
+    /// repaint that lands between the two cannot be baked into the shadow. It
+    /// never spans a motion turn, because a live move only takes the `Move` path.
     fn refresh_frame_shadow(
         &mut self,
         frame: Window,
         outer: Rect,
         focused: bool,
-        wins: [Window; 3],
+        win: Window,
+        generation: u64,
     ) -> Result<(), ReplyOrIdError> {
         let _guard = flamewm_profiler::start("wm.shadow.refresh");
-        let rects = STRIPS.map(|strip| shadow::strip_rect(strip, outer));
+        // Stack below every managed frame, not just below this one: an opaque snapshot above a
+        // neighbour's titlebar paints stale/black pixels over that titlebar. Bottom-of-stack keeps
+        // the shadow on the desktop and never over another window.
+        let sibling = self.shadow_sibling(frame);
         self.conn.grab_server()?;
-        let result = self.refresh_strips(frame, outer, focused, wins, rects);
+        let result = self.refresh_shadow(outer, focused, win, sibling);
         self.conn.ungrab_server()?;
         let shown = result?;
         if shown {
             self.frame_shadows.insert(
                 frame,
                 FrameShadow {
-                    wins,
-                    rects,
-                    focused,
-                    size: (outer.width, outer.height),
+                    win,
+                    state: ShadowState {
+                        shaded: outer,
+                        focused,
+                        generation,
+                        placed: outer,
+                    },
                 },
             );
         } else {
-            for win in wins {
-                self.conn.destroy_window(win)?;
-            }
+            self.conn.destroy_window(win)?;
             self.frame_shadows.remove(&frame);
         }
         Ok(())
     }
 
-    /// Returns `false` when a strip could not be shaded (no snapshot, request
-    /// too large); the caller then hides the shadow for this frame.
-    fn refresh_strips(
+    /// Returns `false` when the shadow could not be shaded (no snapshot,
+    /// request too large); the caller then hides it for this frame.
+    fn refresh_shadow(
         &self,
-        frame: Window,
         outer: Rect,
         focused: bool,
-        wins: [Window; 3],
-        rects: [Rect; 3],
+        win: Window,
+        sibling: Window,
     ) -> Result<bool, ReplyOrIdError> {
         let root = self.screen().root;
-        for win in wins {
-            self.conn.unmap_window(win)?;
+        let rect = shadow::shadow_rect(outer);
+        self.conn.unmap_window(win)?;
+        let Some(mut pixels) = self.root_snapshot(rect)? else {
+            return Ok(false);
+        };
+        shadow::shade_shadow(outer, focused, &mut pixels);
+        if pixels.len() + 32 > self.conn.maximum_request_bytes() {
+            return Ok(false);
         }
         let gc = self.conn.generate_id()?;
-        self.conn
-            .create_gc(gc, root, &CreateGCAux::new())?;
-        let mut shown = true;
-        for (i, strip) in STRIPS.iter().enumerate() {
-            let rect = rects[i];
-            let Some(mut pixels) = self.root_snapshot(rect)? else {
-                shown = false;
-                break;
-            };
-            shadow::shade_strip(*strip, outer, focused, &mut pixels);
-            if pixels.len() + 32 > self.conn.maximum_request_bytes() {
-                shown = false;
-                break;
-            }
-            let pixmap = self.conn.generate_id()?;
-            let (w, h) = (rect.width.max(1) as u16, rect.height.max(1) as u16);
-            self.conn.create_pixmap(24, pixmap, root, w, h)?;
-            self.conn.put_image(
-                ImageFormat::Z_PIXMAP,
-                pixmap,
-                gc,
-                w,
-                h,
-                0,
-                0,
-                0,
-                24,
-                &pixels,
-            )?;
-            // The server keeps a pixmap alive while a window uses it as background.
-            self.conn.change_window_attributes(
-                wins[i],
-                &ChangeWindowAttributesAux::new().background_pixmap(pixmap),
-            )?;
-            self.conn.free_pixmap(pixmap)?;
-            self.conn.configure_window(wins[i], &strip_aux(rect, frame))?;
-        }
+        self.conn.create_gc(gc, root, &CreateGCAux::new())?;
+        let pixmap = self.conn.generate_id()?;
+        let (w, h) = (rect.width.max(1) as u16, rect.height.max(1) as u16);
+        self.conn.create_pixmap(24, pixmap, root, w, h)?;
+        self.conn.put_image(
+            ImageFormat::Z_PIXMAP,
+            pixmap,
+            gc,
+            w,
+            h,
+            0,
+            0,
+            0,
+            24,
+            &pixels,
+        )?;
+        // The server keeps a pixmap alive while a window uses it as background.
+        self.conn.change_window_attributes(
+            win,
+            &ChangeWindowAttributesAux::new().background_pixmap(pixmap),
+        )?;
+        self.conn.free_pixmap(pixmap)?;
         self.conn.free_gc(gc)?;
-        if shown {
-            for win in wins {
-                self.conn.map_window(win)?;
-            }
-        }
-        Ok(shown)
+        self.conn.configure_window(win, &shadow_aux(rect, sibling))?;
+        // One rounded square: the fixed small radius cuts all four corners; the
+        // frame hides the top-left one.
+        let mask: Vec<x11rb::protocol::xproto::Rectangle> = shadow::shadow_spans(rect)
+            .into_iter()
+            .map(|(row, start, end)| x11rb::protocol::xproto::Rectangle {
+                x: start as i16,
+                y: row as i16,
+                width: end.saturating_sub(start) as u16,
+                height: 1,
+            })
+            .collect();
+        self.conn.shape_rectangles(
+            ShapeOp::SET,
+            ShapeSk::BOUNDING,
+            ClipOrdering::UNSORTED,
+            win,
+            0,
+            0,
+            &mask,
+        )?;
+        self.conn.map_window(win)?;
+        Ok(true)
     }
 
     /// BGRX pixels of `rect`, clipped to the screen. Off-screen parts are zero

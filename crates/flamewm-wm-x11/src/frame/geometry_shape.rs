@@ -91,6 +91,46 @@ pub fn bounding_rectangles_with_titlebar(
         .collect()
 }
 
+/// Bounding rectangles for a client whose bottom corners follow the rounded
+/// frame. The titlebar sits above the client, so its top corners stay square;
+/// only the last `radius` rows are inset. A zero radius is one full rectangle.
+#[must_use]
+pub fn client_bottom_rounded_rectangles(
+    width: u32,
+    height: u32,
+    radius: u32,
+) -> Vec<Rectangle> {
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+    let radius = radius.min(width / 2).min(height);
+    if radius == 0 {
+        return vec![Rectangle {
+            x: 0,
+            y: 0,
+            width: width.min(u32::from(u16::MAX)) as u16,
+            height: height.min(u32::from(u16::MAX)) as u16,
+        }];
+    }
+    (0..height)
+        .map(|row| {
+            let inset = if row >= height - radius {
+                external_rounded_row_inset(width, height, radius, row)
+            } else {
+                0
+            };
+            let start = inset.min(width);
+            let end = width.saturating_sub(inset).max(start);
+            Rectangle {
+                x: i16::try_from(start.min(u32::from(u16::MAX))).unwrap_or(i16::MAX),
+                y: i16::try_from(row.min(u32::from(u16::MAX))).unwrap_or(i16::MAX),
+                width: end.saturating_sub(start).min(u32::from(u16::MAX)) as u16,
+                height: 1,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,6 +142,20 @@ mod tests {
                 && y >= i32::from(r.y)
                 && y < i32::from(r.y) + i32::from(r.height)
         })
+    }
+
+    #[test]
+    fn client_bottom_corners_round_while_the_top_stays_square() {
+        let rects = client_bottom_rounded_rectangles(200, 120, 12);
+        assert_eq!(rects.len(), 120);
+        assert_eq!(rects[0].x, 0);
+        assert_eq!(rects[0].width, 200);
+        let last = rects.last().expect("rows");
+        assert!(last.x > 0, "bottom-left corner is not cut: {last:?}");
+        assert!(last.width < 200, "bottom-right corner is not cut");
+        let squared = client_bottom_rounded_rectangles(200, 120, 0);
+        assert_eq!(squared.len(), 1);
+        assert_eq!((squared[0].x, squared[0].width), (0, 200));
     }
 
     #[test]

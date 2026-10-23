@@ -316,10 +316,13 @@ mod taskbar_menu_tests {
     fn task_and_desktop_menu_rows_share_one_structure() {
         const DESKTOP_HTML: &str = include_str!("../../../../ui/desktop/index.html");
         for (name, html) in [("task", TASK_MENU_HTML), ("desktop", DESKTOP_HTML)] {
-            // `confirm.*` rows belong to the desktop confirm dialog, a different component: text-only by design.
+            // `confirm.*`/`downloads.notice.*` rows live in the text-only `.desktop-confirm` notice dialogs, not icon menus.
             let rows: Vec<&str> = menu_rows(html)
                 .into_iter()
-                .filter(|line| !line.contains("data-action=\"confirm."))
+                .filter(|line| {
+                    !line.contains("data-action=\"confirm.")
+                        && !line.contains("data-action=\"downloads.notice.")
+                })
                 .collect();
             assert!(!rows.is_empty(), "{name} menu has rows");
             for line in rows {

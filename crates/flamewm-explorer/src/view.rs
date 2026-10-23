@@ -99,6 +99,10 @@ fn extension_lower(path: &Path) -> Option<String> {
 }
 
 /// Row icon family: folder, pdf, source or generic file. Names match `ui/explorer/icons/row-*.svg`.
+///
+/// Image, SVG, ICO and `.desktop` rows keep the `file` glyph and get a real thumbnail instead (see
+/// `thumbs.rs`); the glyph is what the slot shows whenever that thumbnail is missing or fails, so it
+/// must always name one of the compiled families.
 pub fn file_icon(entry: &Entry) -> &'static str {
     if entry.directory { return "folder"; }
     match extension_lower(&entry.path) {
@@ -108,17 +112,17 @@ pub fn file_icon(entry: &Entry) -> &'static str {
     }
 }
 
-/// Kind column text, matching the icon family.
+/// Kind column text, matching the icon family. A `.desktop` launcher reads as an application because
+/// its row shows the application's own icon.
 pub fn kind_name(entry: &Entry) -> String {
     if entry.directory { return "Folder".into(); }
     if entry.symlink { return "Link".into(); }
-    match file_icon(entry) {
-        "pdf" => "PDF Document".into(),
-        "source" => "Source file".into(),
-        _ => match extension_lower(&entry.path) {
-            Some(ext) => format!("{} File", ext.to_ascii_uppercase()),
-            None => "File".into(),
-        },
+    match extension_lower(&entry.path) {
+        Some(ext) if ext == "pdf" => "PDF Document".into(),
+        Some(ext) if ext == "desktop" => "Application".into(),
+        Some(ext) if SOURCE_EXTENSIONS.contains(&ext.as_str()) => "Source file".into(),
+        Some(ext) => format!("{} File", ext.to_ascii_uppercase()),
+        None => "File".into(),
     }
 }
 
@@ -206,9 +210,14 @@ mod tests {
         assert_eq!(file_icon(&entry("Roadmap.PDF", false, 0, 0)), "pdf");
         assert_eq!(file_icon(&entry("README.md", false, 0, 0)), "source");
         assert_eq!(file_icon(&entry("photo.jpg", false, 0, 0)), "file");
+        // Rows that get a decoded thumbnail keep the file glyph as their fallback.
+        assert_eq!(file_icon(&entry("clip.svg", false, 0, 0)), "file");
+        assert_eq!(file_icon(&entry("app.ico", false, 0, 0)), "file");
+        assert_eq!(file_icon(&entry("app.desktop", false, 0, 0)), "file");
         assert_eq!(kind_name(&entry("Roadmap.pdf", false, 0, 0)), "PDF Document");
         assert_eq!(kind_name(&entry("README.md", false, 0, 0)), "Source file");
         assert_eq!(kind_name(&entry("photo.jpg", false, 0, 0)), "JPG File");
+        assert_eq!(kind_name(&entry("firefox.desktop", false, 0, 0)), "Application");
         assert_eq!(kind_name(&entry("LICENSE", false, 0, 0)), "File");
     }
 

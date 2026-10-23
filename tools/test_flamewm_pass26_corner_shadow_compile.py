@@ -39,7 +39,7 @@ class Pass26Tests(unittest.TestCase):
         self.assertIn('text_shadow: if version >= FORMAT_VERSION_SHADOW_LEGACY', codec)
         self.assertIn('v5_style_decodes_without_text_shadow', codec)
         self.assertIn('v6_shadow_roundtrip_preserves_offset_and_color', codec)
-        self.assertIn('FORMAT_VERSION: u16 = 7', read('crates/flamewm-render-core/src/model/mod.rs'))
+        self.assertIn('FORMAT_VERSION: u16 = 8', read('crates/flamewm-render-core/src/model/mod.rs'))
 
     def test_shadows_only_on_desktop_labels(self):
         css = read('ui/desktop/desktop.css')

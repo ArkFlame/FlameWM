@@ -64,6 +64,10 @@ const WINDOW_HEIGHT:u32=740;
 /// Icon families compiled into the template; each slot toggles the one it needs (`pico-<slot>-<kind>`, `ico-<slot>-<kind>`).
 const PLACE_ICONS:[&str;11]=["home","desktop","documents","downloads","music","pictures","videos","trash","folder","drive","usb"];
 const ROW_ICONS:[&str;4]=["folder","pdf","source","file"];
+/// Side of the square that holds a row's icon (`.row-ico` in explorer.css, and `.row-thumb`, which
+/// inherits the same box). The type glyph and the thumbnail are laid out in this exact square, so a
+/// row never reflows when a thumbnail arrives and the glyph is never squeezed out of the cell.
+const ROW_ICON_BOX:f32=18.0;
 /// Width of the status-strip usage track (`.usage-track` in explorer.css).
 const USAGE_TRACK_WIDTH:f32=114.0;
 
@@ -1229,9 +1233,11 @@ impl ExplorerApp {
         }
     }
     /// Mount, unmount or eject a removable device through udisks2 on a worker thread; the outcome is shown in the status strip.
+    /// An eject here is a direct user action, so it carries the explicit confirmation the eject gate requires
+    /// (`places::eject_device_in`); the drive is still refused while another of its partitions is mounted.
     fn device_action(&mut self,verb:&'static str,device:String,label:String) {
         self.model.status=format!("{} {label}…",match verb {"mount"=>"Mounting","unmount"=>"Unmounting",_=>"Ejecting"});
-        self.spawn_background(move||WorkerResult::DeviceDone(match if verb=="eject" {bookmarks::eject_device(&device)} else {bookmarks::udisks_action(verb,&device)} {
+        self.spawn_background(move||WorkerResult::DeviceDone(match if verb=="eject" {bookmarks::eject_device_confirmed(&device)} else {bookmarks::udisks_action(verb,&device)} {
             Ok(_)=>Ok(format!("{} {label}",match verb {"mount"=>"Mounted","unmount"=>"Unmounted",_=>"Ejected"})),
             Err(error)=>Err(format!("{verb} {label} failed: {error}")),
         }));
@@ -2159,22 +2165,43 @@ impl ExplorerApp {
         Ok(())
     }
     fn project_row_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, entry:&Entry)->Result<(),String> {
-        let mut bound=self.thumb_bound.borrow_mut();
-        match self.row_thumbnail(entry) {
-            Some((id,pixels))=>{
+        let icon=view::file_icon(entry);
+        let thumbnail=self.row_thumbnail(entry);
+        match row_icon_choice(entry,thumbnail.as_ref()) {
+            RowIcon::Thumbnail(id)=>{
+                let Some((_,pixels))=thumbnail else {return self.show_type_icon(doc,slot,icon)};
+                // The thumbnail draws in the same square as the type glyph. The element is sized to
+                // ROW_ICON_BOX explicitly, which overrides the stylesheet's larger `.row-thumb` rule:
+                // the name cell never jumps when a thumbnail arrives, and the 24px rule can never
+                // squeeze the 18px glyph out of its cell.
+                let thumb_id=format!("ico-{slot}-thumb");
+                doc.size(&thumb_id,ROW_ICON_BOX,ROW_ICON_BOX)?;
+                let mut bound=self.thumb_bound.borrow_mut();
                 if bound[slot]!=Some(id) {
-                    doc.image_rgba8_shared(&format!("ico-{slot}-thumb"),format!("explorer-thumb-{id}"),THUMB_SIZE,THUMB_SIZE,pixels)?;
-                    bound[slot]=Some(id);
+                    // A document that rejects the raster must not blank the row (or abort the whole
+                    // projection, which would leave every later slot with a stale icon): fall back to
+                    // the embedded type icon for this slot instead.
+                    let bound_ok=doc.image_rgba8_shared(&thumb_id,format!("explorer-thumb-{id}"),THUMB_SIZE,THUMB_SIZE,pixels).is_ok();
+                    bound[slot]=bound_ok.then_some(id);
+                    if !bound_ok {drop(bound);return self.show_type_icon(doc,slot,icon);}
                 }
                 for kind in ROW_ICONS {doc.visible(&format!("ico-{slot}-{kind}"),false)?;}
-                doc.visible(&format!("ico-{slot}-thumb"),true)?;
+                doc.visible(&thumb_id,true)?;
             }
-            None=>{
-                bound[slot]=None;
-                doc.visible(&format!("ico-{slot}-thumb"),false)?;
-                let icon=view::file_icon(entry);
-                for kind in ROW_ICONS {doc.visible(&format!("ico-{slot}-{kind}"),kind==icon)?;}
-            }
+            RowIcon::Type(icon)=>self.show_type_icon(doc,slot,icon)?,
+        }
+        Ok(())
+    }
+    /// Shows one embedded `row-*.svg` family icon and hides the thumbnail. The family name always
+    /// comes from `view::file_icon`, whose values are the compiled `ROW_ICONS`. The glyph is sized
+    /// explicitly so it stays visible even if the stylesheet's `.row-ico` box changes.
+    fn show_type_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, icon:&'static str)->Result<(),String> {
+        self.thumb_bound.borrow_mut()[slot]=None;
+        doc.visible(&format!("ico-{slot}-thumb"),false)?;
+        for kind in ROW_ICONS {
+            let shown=kind==icon;
+            doc.visible(&format!("ico-{slot}-{kind}"),shown)?;
+            if shown {doc.size(&format!("ico-{slot}-{kind}"),ROW_ICON_BOX,ROW_ICON_BOX)?;}
         }
         Ok(())
     }
@@ -2295,9 +2322,11 @@ impl ExplorerApp {
                     match choice.icon.as_ref() {
                         Some(icon)=>{
                             // Rows bind their icon by application id, so a slot reused for another app rebinds on change.
+                            // A rejected raster hides the slot instead of aborting the projection: a failed bind must
+                            // never leave the dialog (or the rows below it) unprojected.
                             let source=format!("explorer-app-icon-{}",choice.entry.id().as_str());
-                            doc.image_rgba8_shared(&icon_id,source,icon.width,icon.height,Arc::clone(&icon.pixels))?;
-                            doc.visible(&icon_id,true)?;
+                            let bound=doc.image_rgba8_shared(&icon_id,source,icon.width,icon.height,Arc::clone(&icon.pixels)).is_ok();
+                            doc.visible(&icon_id,bound)?;
                         }
                         None=>doc.visible(&icon_id,false)?,
                     }
@@ -2517,7 +2546,6 @@ mod internal_drag_tests {
 #[cfg(test)]
 mod window_frame_tests {
     use super::*;
-
     #[test]
     fn window_stays_above_taskbar_reserve() {
         for root in [(1350,641),(1600,900),(1920,1080),(800,600)] {
@@ -2528,6 +2556,103 @@ mod window_frame_tests {
         }
         assert_eq!(window_frame((1920,1080)),(1250,740,65));
         assert_eq!(window_frame((1350,641)),(1215,493,59));
+    }
+}
+
+/// Which image fills a row's icon slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowIcon {
+    /// A decoded thumbnail, by cache id.
+    Thumbnail(u64),
+    /// The embedded type glyph for `view::file_icon`.
+    Type(&'static str),
+}
+
+/// A row shows the thumbnail only when one is ready in the cache; every other state (queued, failed,
+/// empty canvas, non-image row) resolves to a compiled family glyph. Keeping this pure makes the
+/// "never blank" contract testable without a live document.
+fn row_icon_choice(entry:&Entry, thumbnail:Option<&(u64,Arc<Vec<u8>>)>)->RowIcon {
+    match thumbnail {
+        Some((id,_))=>RowIcon::Thumbnail(*id),
+        None=>RowIcon::Type(view::file_icon(entry)),
+    }
+}
+
+#[cfg(test)]
+mod icon_slot_tests {
+    use super::*;
+
+    fn entry(name:&str,directory:bool)->Entry {
+        Entry{path:PathBuf::from(name),name:name.into(),directory,symlink:false,size:0,modified:None}
+    }
+
+    #[test]
+    fn every_row_family_is_a_compiled_row_icon() {
+        // `view::file_icon` names are the template's `ico-<slot>-<kind>` ids: a name the template does
+        // not compile would hide every image in the slot and leave it blank.
+        for (name,directory) in [
+            ("Photos",true),("roadmap.pdf",false),("main.rs",false),("photo.jpg",false),
+            ("clip.svg",false),("app.ico",false),("app.desktop",false),("notes.txt",false),("LICENSE",false),
+        ] {
+            let family=view::file_icon(&entry(name,directory));
+            assert!(ROW_ICONS.contains(&family),"{name} maps to unknown row icon {family}");
+        }
+    }
+
+    #[test]
+    fn a_missing_or_failed_thumbnail_falls_back_to_the_type_glyph() {
+        let photo=entry("photo.jpg",false);
+        assert_eq!(row_icon_choice(&photo,None),RowIcon::Type("file"));
+        let ready=(7,Arc::new(vec![0u8;THUMB_SIZE as usize*THUMB_SIZE as usize*4]));
+        assert_eq!(row_icon_choice(&photo,Some(&ready)),RowIcon::Thumbnail(7));
+        assert_eq!(row_icon_choice(&entry("app.desktop",false),None),RowIcon::Type("file"));
+    }
+
+    #[test]
+    fn every_sidebar_place_icon_is_a_compiled_place_icon() {
+        let home=PathBuf::from("/tmp/flamewm-icon-slot-test-home");
+        let devices=[bookmarks::BlockDevice{device:"/dev/sdb1".into(),label:"Stick".into(),removable:true}];
+        for place in places(&home,&devices) {
+            assert!(PLACE_ICONS.contains(&place.icon),"place {} maps to unknown icon {}",place.name,place.icon);
+        }
+        // The raster and the layout box are the same square, so no icon is scaled out of the cell.
+        assert_eq!(ROW_ICON_BOX,THUMB_SIZE as f32);
+    }
+
+    #[test]
+    fn the_template_compiles_every_icon_slot_the_code_can_show() {
+        // The document API can only toggle elements the template declares: a family or slot that is
+        // missing here would be a silently blank icon on a packaged install.
+        let html=include_str!("../../../ui/explorer/explorer.html");
+        for slot in 0..ROW_SLOTS {
+            for kind in ROW_ICONS {
+                let id=format!("id=\"ico-{slot}-{kind}\"");
+                assert!(html.contains(&id),"row slot {slot} has no {kind} glyph ({id})");
+            }
+            let thumb=format!("id=\"ico-{slot}-thumb\"");
+            assert!(html.contains(&thumb),"row slot {slot} has no thumbnail element ({thumb})");
+        }
+        for slot in 0..SIDEBAR_SLOTS {
+            for kind in PLACE_ICONS {
+                let id=format!("id=\"pico-{slot}-{kind}\"");
+                assert!(html.contains(&id),"sidebar slot {slot} has no {kind} icon ({id})");
+            }
+        }
+    }
+
+    #[test]
+    fn every_referenced_icon_ships_with_the_explorer() {
+        // The template loads `<icon>.svg` and `row-<kind>.svg` from the packaged icon set: a missing
+        // file is an empty slot, even on a fully offline install with no icon theme present.
+        let icons=Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/explorer/icons");
+        for kind in PLACE_ICONS {
+            let path=icons.join(format!("{kind}.svg"));
+            assert!(path.is_file(),"sidebar icon {} is not shipped",path.display());
+        }
+        for kind in ROW_ICONS {
+            let path=icons.join(format!("row-{kind}.svg"));
+            assert!(path.is_file(),"row icon {} is not shipped",path.display());
+        }
     }
 }
 

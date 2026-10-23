@@ -45,7 +45,7 @@ button:active { background:var(--hover); }
 .entry { justify-content:flex-start; position:absolute; height:35px; display:flex; flex-direction:row; align-items:center; overflow:hidden; border-radius:0px; }
 .entry:hover { background:var(--accent-soft); }
 .head { color:var(--text); font-size:12px; }
-.cell-name { flex-grow:1; min-width:0; padding-left:14px; display:flex; flex-direction:row; align-items:center; gap:12px; white-space:nowrap; overflow:hidden; }
+.cell-name { height:35px; flex-grow:1; min-width:0; padding-left:14px; display:flex; flex-direction:row; align-items:center; gap:12px; white-space:nowrap; overflow:hidden; }
 .row-ico { width:18px; height:18px; flex-grow:0; }
 /* Image-file thumbnail, shown in place of the type icon (see thumbs.rs). */
 .row-thumb { width:24px; height:24px; }
