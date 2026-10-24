@@ -78,7 +78,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                             flamewm_debug::WM_FRAME_GEOMETRY_RESIZE_NATIVE,
                             client,
                             frame,
-                            format!("effect=ConfigureFrameRoot rect=({x},{y},{w},{h})"),
+                            || format!("effect=ConfigureFrameRoot rect=({x},{y},{w},{h})"),
                             &result,
                         );
                         result?;
@@ -99,7 +99,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                             flamewm_debug::WM_FRAME_GEOMETRY_MOVE_NATIVE,
                             client,
                             frame,
-                            format!("effect=MoveFrameRoot position=({x},{y})"),
+                            || format!("effect=MoveFrameRoot position=({x},{y})"),
                             &result,
                         );
                         result?;
@@ -119,7 +119,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                             flamewm_debug::WM_FRAME_GEOMETRY_RESIZE_NATIVE,
                             client,
                             client,
-                            format!("effect=ConfigureClientLocal rect=({x},{y},{w},{h})"),
+                            || format!("effect=ConfigureClientLocal rect=({x},{y},{w},{h})"),
                             &result,
                         );
                         result?;
@@ -293,7 +293,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             flamewm_debug::WM_FRAME_GEOMETRY_MOVE_NATIVE,
             0,
             capture,
-            "effect=GrabCapture stack=above".to_owned(),
+            || "effect=GrabCapture stack=above".to_owned(),
             &result,
         );
         let grab = self.conn.grab_pointer(

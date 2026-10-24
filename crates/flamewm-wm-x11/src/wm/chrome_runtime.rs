@@ -37,7 +37,7 @@ pub struct ChromeState {
 /// Decide whether state inputs differ enough to invalidate the scene.
 #[must_use]
 pub fn state_changed(old: Option<ChromeState>, next: ChromeState) -> bool {
-    old.map_or(true, |old| old != next)
+    old != Some(next)
 }
 
 /// Per-client chrome cache: last identity/state plus the planned scene.
@@ -72,7 +72,7 @@ impl ChromeRuntime {
         if identity_changed || state_dirty || icon_dirty || self.scene.is_none() {
             self.dirty = true;
         }
-        if self.dirty || self.scene.is_none() {
+        if self.dirty {
             let planned = plan_scene_with_titlebar(
                 state.frame_w.max(1),
                 state.frame_h.max(1),

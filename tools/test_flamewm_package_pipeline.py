@@ -72,7 +72,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
         return subprocess.run([str(self.root / "scripts/package")], cwd=self.root,
                               capture_output=True, text=True, timeout=60)
 
-    def build_deb(self, cargo_exit=0, gate_failure=False):
+    def build_deb(self, cargo_exit=0, gate_failure=False, cargo_target_dir=None):
         fakebin = self.root / "fakebin"
         fakebin.mkdir(exist_ok=True)
         cargo = fakebin / "cargo"
@@ -83,6 +83,8 @@ class DebianReleasePipelineTests(unittest.TestCase):
         env['FLAMEWM_FAKE_EVENTS'] = str(self.events)
         if gate_failure:
             env['FLAMEWM_FAKE_GATE_FAIL'] = '1'
+        if cargo_target_dir is not None:
+            env['CARGO_TARGET_DIR'] = str(cargo_target_dir)
         return subprocess.run([str(self.root / "scripts/build-deb")], cwd=self.root,
                               capture_output=True, text=True, timeout=90, env=env)
 
@@ -91,7 +93,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("FLAMEWM-DEB-READY", result.stdout)
         events = self.events.read_text().splitlines()
-        self.assertEqual(events[0], 'GATE --profile release --include-ui --force')
+        self.assertEqual(events[0], 'GATE --profile release --include-ui')
         self.assertTrue(events[1].startswith('CARGO build --release --workspace'), events)
         deb = self.root / f".target/dist/flamewm_{VERSION}_amd64.deb"
         self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(deb), "Architecture"], text=True).strip(), "amd64")
@@ -120,6 +122,28 @@ class DebianReleasePipelineTests(unittest.TestCase):
         self.assertFalse(old.exists())
         self.assertFalse((dist / "SHA256SUMS").exists())
 
+    def test_explicit_cargo_target_dir_is_created_and_used(self):
+        # The stub cargo writes no binaries, so packaging fails later by design;
+        # this asserts only the target-dir handling that runs before Cargo.
+        target = self.root / "cache/deep/targets"
+        result = self.build_deb(cargo_target_dir=target)
+        self.assertNotIn("CARGO_TARGET_DIR", result.stderr)
+        self.assertTrue(target.is_dir())
+        self.assertTrue(self.events.read_text().splitlines()[1].startswith("CARGO build --release --workspace"))
+
+    def test_unusable_explicit_cargo_target_dir_fails_without_fallback(self):
+        blocker = self.root / "not-a-dir"
+        blocker.write_text("file, not a directory", encoding="utf-8")
+        dist = self.root / ".target/dist"
+        dist.mkdir(parents=True)
+        old = dist / f"flamewm_{VERSION}_amd64.deb"
+        old.write_bytes(b"old payload")
+        result = self.build_deb(cargo_target_dir=blocker)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CARGO_TARGET_DIR", result.stderr)
+        self.assertFalse(old.exists())
+        self.assertFalse(self.events.exists(), "cargo or the gate must not run")
+
     def test_missing_assets_preflight_removes_old_deb(self):
         dist = self.root / ".target/dist"
         dist.mkdir(parents=True)
@@ -146,7 +170,23 @@ class DebianReleasePipelineTests(unittest.TestCase):
         self.assertFalse(old.exists())
         self.assertFalse((dist / 'SHA256SUMS').exists())
         self.assertEqual(self.events.read_text().splitlines(),
-                         ['GATE --profile release --include-ui --force'])
+                         ['GATE --profile release --include-ui'])
+
+    def test_unregistered_executable_is_refused_before_cargo_or_gate(self):
+        dist = self.root / '.target/dist'
+        dist.mkdir(parents=True, exist_ok=True)
+        old = dist / f'flamewm_{VERSION}_amd64.deb'
+        old.write_bytes(b'stale')
+        stray = self.root / 'scripts/unregistered-tool'
+        stray.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+        stray.chmod(0o755)
+        result = self.build_deb()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('executable is not registered: scripts/unregistered-tool', result.stderr)
+        self.assertNotIn('FLAMEWM-DEB-READY', result.stdout)
+        self.assertFalse(self.events.exists(), 'Cargo and the desktop gate must never run')
+        self.assertFalse(old.exists())
+        self.assertFalse((dist / 'SHA256SUMS').exists())
 
     def test_dev_check_invalidate_before_cargo_check(self):
         self.build_deb()  # creates fake Cargo executable
@@ -158,7 +198,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
                                  env=env, capture_output=True, text=True, timeout=20)
         self.assertEqual(checked.returncode, 0, checked.stderr)
         self.assertEqual(self.events.read_text().splitlines(), [
-            'GATE --profile dev --include-ui --force',
+            'GATE --profile dev --include-ui',
             'CARGO check --workspace --all-targets',
         ])
 

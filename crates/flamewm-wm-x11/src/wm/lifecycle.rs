@@ -109,32 +109,15 @@ pub fn input_child_placements(
     let mut rects = layout.resize_rects().to_vec();
     rects.push(layout.title_drag);
     rects.extend(layout.controls);
-    let xids = ids.children_ordered();
-    let mut out = [ChildPlacement {
-        xid: 0,
-        x: 0,
-        y: 0,
-        w: 1,
-        h: 1,
-    }; 12];
-    let mut i = 0;
-    while i < 12 {
+    let xids = ids.resources().children();
+    std::array::from_fn(|i| {
         let rect = rects[i];
-        out[i] = ChildPlacement {
+        ChildPlacement {
             xid: xids[i],
             x: rect.x,
             y: rect.y,
             w: rect.w.max(1) as u32,
             h: rect.h.max(1) as u32,
-        };
-        i += 1;
-    }
-    out
-}
-
-impl LifecycleIds {
-    fn children_ordered(self) -> [u32; 12] {
-        let res = self.resources();
-        res.children()
-    }
+        }
+    })
 }

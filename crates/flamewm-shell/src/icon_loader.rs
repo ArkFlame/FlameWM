@@ -96,6 +96,7 @@ const RETRY_CAP: usize = 64;
 pub enum IconTarget {
     StartSlot(u8),
     TaskSlot(u8),
+    LauncherSlot(u8),
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +112,7 @@ pub struct IconRequest {
 pub enum DependentSurface {
     Panel,
     Start,
+    Launcher,
 }
 
 #[derive(Debug)]
@@ -380,6 +382,7 @@ impl IconLoader {
     pub fn dependent_surface(target: IconTarget) -> DependentSurface {
         match target {
             IconTarget::StartSlot(_) => DependentSurface::Start,
+            IconTarget::LauncherSlot(_) => DependentSurface::Launcher,
             IconTarget::TaskSlot(_) => DependentSurface::Panel,
         }
     }

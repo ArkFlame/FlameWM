@@ -11,14 +11,21 @@ fi
 if [[ ! -w "$TARGET_DIR" ]]; then
     TARGET_DIR="$ROOT/.target"
 fi
-BUILD_DIR="$TARGET_DIR/release"
-DIST="$ROOT/.target/dist"
-STAGE="$DIST/flamewm-$VERSION"
-SOURCE_ARCHIVE="$DIST/flamewm-$VERSION-source.tar.gz"
-LINUX_ARCHIVE="$DIST/flamewm-$VERSION-linux-x86_64.tar.gz"
-DEB="$DIST/flamewm_${VERSION}_amd64.deb"
-
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
+# Profile whitelist: release (production, default) or fast (development .deb).
+# The fast package goes to its own dist directory with a ~dev version so it can
+# never overwrite or be mistaken for the production .deb.
+PROFILE="${FLAMEWM_PACKAGE_PROFILE:-release}"
+case "$PROFILE" in
+    release) PKG_VERSION="$VERSION"; DIST="$ROOT/.target/dist" ;;
+    fast) PKG_VERSION="$VERSION~dev"; DIST="$ROOT/.target/dev-dist" ;;
+    *) fail "unknown FLAMEWM_PACKAGE_PROFILE: $PROFILE (expected release or fast)" ;;
+esac
+BUILD_DIR="$TARGET_DIR/$PROFILE"
+STAGE="$DIST/flamewm-$PKG_VERSION"
+SOURCE_ARCHIVE="$DIST/flamewm-$PKG_VERSION-source.tar.gz"
+LINUX_ARCHIVE="$DIST/flamewm-$PKG_VERSION-linux-x86_64.tar.gz"
+DEB="$DIST/flamewm_${PKG_VERSION}_amd64.deb"
 # If *any* later stage fails, do not leave an apparently installable partial
 # release or a deb from an earlier run. Only publish artifacts on full success.
 package_finished() {
@@ -39,12 +46,12 @@ if command -v dpkg-deb >/dev/null 2>&1; then
     [[ "$BUILD_ARCH" == amd64 && "$(uname -m)" == x86_64 ]] \
         || fail "this x86_64 release package requires amd64 host/target; detected $BUILD_ARCH / $(uname -m)"
 fi
-[[ -d "$BUILD_DIR" ]] || fail "missing release directory: $BUILD_DIR"
+[[ -d "$BUILD_DIR" ]] || fail "missing $PROFILE build directory: $BUILD_DIR"
 mkdir -p "$DIST"
-rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$VERSION.tar.gz" "$DIST/SHA256SUMS"
+rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$PKG_VERSION.tar.gz" "$DIST/SHA256SUMS"
 
 for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal; do
-    [[ -x "$BUILD_DIR/$binary" ]] || fail "missing release binary: $BUILD_DIR/$binary"
+    [[ -x "$BUILD_DIR/$binary" ]] || fail "missing $PROFILE binary: $BUILD_DIR/$binary"
 done
 
 for source in \
@@ -146,14 +153,22 @@ if [[ ! -d "$STAGE/usr/share/icons/Fluent" && -d "$ROOT/assets/themes/icons/Flue
 fi
 
 if command -v dpkg-deb >/dev/null 2>&1; then
-    sed -e "s/@VERSION@/$VERSION/g" -e "s/@ARCH@/$BUILD_ARCH/g" \
+    sed -e "s/@VERSION@/$PKG_VERSION/g" -e "s/@ARCH@/$BUILD_ARCH/g" \
         "$ROOT/packaging/debian/control.in" > "$STAGE/DEBIAN/control"
     grep -Fqx "Architecture: $BUILD_ARCH" "$STAGE/DEBIAN/control" \
         || fail 'invalid Debian binary control architecture'
+    if [[ "$PROFILE" == fast ]]; then
+        sed -i '0,/^Description: /s//Description: [DEVELOPMENT FAST BUILD - NOT FOR PRODUCTION] /' "$STAGE/DEBIAN/control"
+        grep -Fq '[DEVELOPMENT FAST BUILD - NOT FOR PRODUCTION]' "$STAGE/DEBIAN/control" \
+            || fail 'development package label missing from control file'
+    fi
     printf '%s\n' /etc/pam.d/flamewm-lock /etc/xdg/menus/flamewm-applications.menu > "$STAGE/DEBIAN/conffiles"
     chmod 0644 "$STAGE/DEBIAN/conffiles"
     install -m 0644 "$ROOT/packaging/debian/copyright" "$STAGE/usr/share/doc/flamewm/copyright"
-    dpkg-deb --build --root-owner-group "$STAGE" "$DEB" >/dev/null
+    deb_compress=()
+    # Dev lane: zstd is ~25x faster than the default xz (2.8 s vs 71 s measured); release keeps xz.
+    [[ "$PROFILE" == fast ]] && deb_compress=(-Zzstd -z3)
+    dpkg-deb "${deb_compress[@]}" --build --root-owner-group "$STAGE" "$DEB" >/dev/null
     [[ "$(dpkg-deb --field "$DEB" Architecture)" == "$BUILD_ARCH" ]] \
         || fail "generated .deb architecture mismatch: expected $BUILD_ARCH"
 fi
@@ -161,7 +176,7 @@ rm -rf "$STAGE/DEBIAN"
 
 # Keep source and installable binary artifacts distinct and reproducible.
 tar --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" --owner=0 --group=0 --numeric-owner \
-    -czf "$LINUX_ARCHIVE" -C "$DIST" "flamewm-$VERSION"
+    -czf "$LINUX_ARCHIVE" -C "$DIST" "flamewm-$PKG_VERSION"
 ARTIFACTS=("$SOURCE_ARCHIVE" "$LINUX_ARCHIVE")
 [[ -f "$DEB" ]] && ARTIFACTS+=("$DEB")
 sha256sum "${ARTIFACTS[@]}" | sed "s#  $DIST/#  #" > "$DIST/SHA256SUMS"

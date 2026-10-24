@@ -1,10 +1,14 @@
+mod damage;
 mod document;
 mod geometry;
 mod interaction;
 mod style;
 #[cfg(test)]
+mod damage_tests;
+#[cfg(test)]
 mod tests;
 
+pub use damage::*;
 pub use document::*;
 pub use geometry::*;
 pub use interaction::*;

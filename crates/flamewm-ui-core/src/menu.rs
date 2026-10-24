@@ -46,14 +46,6 @@ impl MenuModel {
         true
     }
 
-    pub fn add_separator(&mut self, id: MenuItemId) -> bool {
-        if id == 0 || !self.ids.insert(id) {
-            return false;
-        }
-        self.entries.push(MenuModelEntry::Separator { id });
-        true
-    }
-
     #[must_use]
     pub fn contains(&self, id: MenuItemId) -> bool {
         self.ids.contains(&id)

@@ -1,4 +1,5 @@
 use super::clip::{Visible, visible_under};
+use super::damage_plan::{PixelRegion, RegionInput, RedrawPlan, command_bounds, plan_region_paint};
 use super::primitives::{scale_rect, snap_device_rect};
 use super::*;
 use crate::external_drawable::match_argb32_visual;
@@ -83,8 +84,8 @@ impl X11App {
         let dx = x.round() as i32 - pad as i32 - 4;
         let dy = baseline.round() as i32 - pad as i32 - size.ceil() as i32;
         // The XRender target does not inherit the GC clip stack. Keep only the
-        // pixels inside every retained clip (intersection of the clip bounds),
-        // zeroing the rest of the alpha mask before uploading it.
+        // pixels inside every retained clip (intersection of the clip bounds);
+        // the rest is transparent in the premultiplied upload.
         let (mut min_x, mut min_y) = (i32::MIN, i32::MIN);
         let (mut max_x, mut max_y) = (i32::MAX, i32::MAX);
         for clip in &self.clip_stack {
@@ -93,19 +94,14 @@ impl X11App {
             max_x = max_x.min((clip.x + clip.width).ceil() as i32);
             max_y = max_y.min((clip.y + clip.height).ceil() as i32);
         }
-        for yy in 0..h as usize {
-            for xx in 0..w as usize {
-                let gx = dx + xx as i32;
-                let gy = dy + yy as i32;
-                if gx < min_x || gy < min_y || gx >= max_x || gy >= max_y {
-                    rgba[(yy * w as usize + xx) * 4 + 3] = 0;
-                }
-            }
-        }
         let Some(visual) = match_argb32_visual(self.display, self.screen) else {
             return Ok(false);
         };
-        crate::native::image::scale_and_premultiply_into(argb, rgba, w, h, w, h);
+        crate::native::image::premultiply_masked_into(argb, rgba, w, h, |xx, yy| {
+            let gx = dx + xx as i32;
+            let gy = dy + yy as i32;
+            gx >= min_x && gy >= min_y && gx < max_x && gy < max_y
+        });
         let root = unsafe { XRootWindow(self.display, self.screen) };
         let (pixmap, bytes) = self.alloc_pixmap(root, w, h, 32)?;
         let result = (|| {
@@ -126,8 +122,11 @@ impl X11App {
     /// Empty stack clears the clip.
     unsafe fn apply_clip_stack(&mut self) {
         if self.clip_stack.is_empty() {
-            unsafe { XSetClipMask(self.display, self.gc, 0) };
-            unsafe { XSetClipOrigin(self.display, self.gc, 0, 0) };
+            if self.gc_clip != Some(None) {
+                unsafe { XSetClipMask(self.display, self.gc, 0) };
+                unsafe { XSetClipOrigin(self.display, self.gc, 0, 0) };
+                self.gc_clip = Some(None);
+            }
             return;
         }
         let mut region = self.clip_stack[0];
@@ -157,8 +156,13 @@ impl X11App {
             width: region.width.round().max(0.0).min(u16::MAX as f32) as u16,
             height: region.height.round().max(0.0).min(u16::MAX as f32) as u16,
         };
+        let key = Some((rect.x, rect.y, rect.width, rect.height));
+        if self.gc_clip == Some(key) {
+            return;
+        }
         // Unsorted single rectangle; ordering constant 0 (Unsorted).
         unsafe { XSetClipRectangles(self.display, self.gc, 0, 0, &rect, 1, 0) };
+        self.gc_clip = Some(key);
     }
 
     pub(crate) unsafe fn font_for_size_pub(&self, size: f32) -> Option<Font> {
@@ -196,23 +200,41 @@ impl X11App {
     pub(crate) unsafe fn redraw(&mut self, document: &RuntimeDocument) -> Result<(), String> {
         let layout_guard = flamewm_profiler::start("render.layout");
         let scale = document.ui_scale();
-        let viewport = (self.width, self.height);
-        let reuse_layout = self.layout.as_ref().is_some_and(|cached| {
-            cached.revision == document.revision() && self.cached_viewport == viewport
-        });
+        let layout_key = LayoutKey {
+            layout_revision: document.layout_revision(),
+            geometry_revision: document.geometry_revision(),
+            viewport: (self.width, self.height),
+            scale_bits: scale.to_bits(),
+        };
+        let previous_key = self.cached_layout_key;
+        let reuse_layout = self.layout.is_some() && self.cached_layout_key == Some(layout_key);
         if !reuse_layout {
-            let layout = LayoutEngine::compute(
-                document,
-                self.width as f32 / scale,
-                self.height as f32 / scale,
-                self.interaction,
-            );
-            self.layout = Some(layout);
-            if let Some(layout) = self.layout.as_mut() {
-                super::scroll::fit_scroll_extents(layout, document, self.interaction);
-                super::scroll::translate_scrolled_content(layout, document, self.interaction);
+            // Same viewport, scale and layout revision: only isolated geometry moved since the
+            // retained layout, so patch its boxes in place. Otherwise recompute and fit scrolls.
+            let same_base = previous_key.is_some_and(|key| {
+                key.layout_revision == layout_key.layout_revision
+                    && key.viewport == layout_key.viewport
+                    && key.scale_bits == layout_key.scale_bits
+            });
+            let patched = same_base
+                && self
+                    .layout
+                    .as_mut()
+                    .is_some_and(|layout| document.patch_layout(layout, self.interaction));
+            if !patched {
+                let layout = LayoutEngine::compute(
+                    document,
+                    self.width as f32 / scale,
+                    self.height as f32 / scale,
+                    self.interaction,
+                );
+                self.layout = Some(layout);
+                if let Some(layout) = self.layout.as_mut() {
+                    super::scroll::fit_scroll_extents(layout, document, self.interaction);
+                    super::scroll::translate_scrolled_content(layout, document, self.interaction);
+                }
             }
-            self.cached_viewport = viewport;
+            self.cached_layout_key = Some(layout_key);
         }
         drop(layout_guard);
         let paint_guard = flamewm_profiler::start("render.paint");
@@ -223,9 +245,38 @@ impl X11App {
                 && cached.scroll_fingerprint == scroll_fp
                 && reuse_layout
         });
+        // Before planning: an invalidated window backdrop must already count as changed.
+        // SAFETY: redraw runs on the display thread; the snapshot is laid after the clear below.
+        unsafe { self.refresh_window_backdrop() };
+        let force_full = std::mem::take(&mut self.region_force_full);
+        let base_valid = std::mem::take(&mut self.region_base_valid);
+        let backdrop_unchanged = self.window_backdrop_unchanged();
+        let mut plan = RedrawPlan::Full;
         if !cache_valid {
             let layout = self.layout.as_mut().expect("layout retained above");
-            let fresh = super::scroll::build_scrolled_paint(document, layout, self.interaction);
+            let fresh = super::scroll::build_scrolled_paint_cached(
+                document,
+                layout,
+                self.interaction,
+                &mut self.paint_nodes,
+            );
+            let previous = self.cached_paint.take();
+            plan = plan_region_paint(RegionInput {
+                old: previous.as_ref().map(|cached| cached.commands.as_slice()),
+                new: &fresh,
+                scale,
+                viewport: (self.width, self.height),
+                enabled: self.region_paint,
+                viewport_unchanged: previous_key.is_some_and(|key| {
+                    key.viewport == (self.width, self.height) && key.scale_bits == scale.to_bits()
+                }),
+                backdrops: self.surface_backdrop.is_some()
+                    || (self.window_backdrop_pixmap.is_some() && !backdrop_unchanged)
+                    || !self.clip_stack.is_empty(),
+                translucent: backdrop_unchanged && self.surface_backdrop.is_none(),
+                full_latched: force_full,
+                base_valid,
+            });
             self.cached_paint = Some(CachedPaint {
                 commands: fresh,
                 revision: document.revision(),
@@ -235,41 +286,20 @@ impl X11App {
         }
         drop(paint_guard);
         let _present_guard = flamewm_profiler::start("render.present");
-        // SAFETY: redraw runs on the display thread; the snapshot is laid after the clear below.
-        unsafe { self.refresh_window_backdrop() };
-        {
-            let _clear_guard = flamewm_profiler::start("render.clear");
-            self.clear_scene()?;
-            unsafe { self.paint_surface_backdrop()? };
-        }
-        // Borrow retained commands by index: build fresh only when cache
-        // invalid; single coverage/shape per frame; no clone path.
-        {
-            let _draw_guard = flamewm_profiler::start("render.draw");
-            let count = self
-                .cached_paint
-                .as_ref()
-                .expect("paint cached above")
-                .commands
-                .len();
-            for index in 0..count {
-                // Borrow retained command without cloning the vector or the
-                // item: raw pointer scoped to one iteration; paint takes &.
-                let command: &PaintCommand = unsafe {
-                    let base = self
-                        .cached_paint
-                        .as_ref()
-                        .expect("paint cached above")
-                        .commands
-                        .as_ptr();
-                    &*base.add(index)
-                };
-                // SAFETY: redraw is entered only with the app's initialized X11 resources.
-                unsafe { self.paint(command, document, scale)? };
+        // A failed region paint leaves the backbuffer partly written; the Full path below
+        // clears and repaints every pixel, so it is the safe fallback.
+        let mut region_done = None;
+        if let RedrawPlan::Region(region) = plan {
+            self.region_base_valid = false;
+            match unsafe { self.paint_region(region, document, scale) } {
+                Ok(visits) => region_done = Some((plan, visits)),
+                Err(error) => eprintln!("FLAMEWM_RENDER_REGION fallback reason={error}"),
             }
         }
-        self.finish_node_backdrops();
-        unsafe { self.present_scene()? };
+        let (used, visits) = match region_done {
+            Some(done) => done,
+            None => (RedrawPlan::Full, unsafe { self.paint_full(document, scale)? }),
+        };
         unsafe { self.bind_presented_backbuffer_as_window_background()? };
         // Single shape per changed frame, from retained commands.
         {
@@ -284,7 +314,178 @@ impl X11App {
                 )
             };
         }
+        self.render_counters
+            .record(used, (self.width, self.height), visits, true);
+        self.record_window_backdrop_painted();
+        self.region_base_valid = true;
         Ok(())
+    }
+
+    /// Full clear, surface backdrop, every command, node backdrops, then present.
+    unsafe fn paint_full(&mut self, document: &RuntimeDocument, scale: f32) -> Result<u64, String> {
+        {
+            let _clear_guard = flamewm_profiler::start("render.clear");
+            self.clear_scene()?;
+            unsafe { self.paint_surface_backdrop()? };
+        }
+        // Borrow retained commands by index: build fresh only when cache
+        // invalid; single coverage/shape per frame; no clone path.
+        let count = self
+            .cached_paint
+            .as_ref()
+            .expect("paint cached above")
+            .commands
+            .len();
+        {
+            let _draw_guard = flamewm_profiler::start("render.draw");
+            for index in 0..count {
+                // SAFETY: index is below the cached count; `paint` does not replace the cache.
+                let command = unsafe { &*self.retained_command(index) };
+                // SAFETY: redraw is entered only with the app's initialized X11 resources.
+                unsafe { self.paint(command, document, scale)? };
+            }
+        }
+        self.finish_node_backdrops();
+        unsafe { self.present_scene()? };
+        Ok(count as u64)
+    }
+
+    /// Pointer to retained command `index`, so painting can borrow `self` mutably. Valid
+    /// while the paint cache is not replaced, which `paint` never does.
+    fn retained_command(&self, index: usize) -> *const PaintCommand {
+        let base = self
+            .cached_paint
+            .as_ref()
+            .expect("paint cached above")
+            .commands
+            .as_ptr();
+        // SAFETY: callers pass `index` below the cached command count.
+        unsafe { base.add(index) }
+    }
+
+    /// Repaints only `region` of the retained backbuffer: clear it, paint the commands that
+    /// touch it under a picture clip, reset the clip, then copy that rect to the window.
+    /// Returns the number of commands painted.
+    unsafe fn paint_region(
+        &mut self,
+        region: PixelRegion,
+        document: &RuntimeDocument,
+        scale: f32,
+    ) -> Result<u64, String> {
+        let _region_guard = flamewm_profiler::start("render.region");
+        unsafe { XSetForeground(self.display, self.gc, TRANSPARENT_CLEAR_PIXEL) };
+        unsafe { XSetClipMask(self.display, self.gc, 0) };
+        self.gc_clip = None;
+        unsafe {
+            XFillRectangle(
+                self.display,
+                self.backbuffer,
+                self.gc,
+                region.x,
+                region.y,
+                region.width,
+                region.height,
+            )
+        };
+        let xrender = self
+            .xrender
+            .as_mut()
+            .ok_or("region paint needs the XRender backend")?;
+        let clip = XRectangle {
+            x: region.x as i16,
+            y: region.y as i16,
+            width: region.width as u16,
+            height: region.height as u16,
+        };
+        unsafe { xrender.set_destination_clip(clip)? };
+        // The clear above erased the window backdrop here; lay it back (clipped to the region).
+        unsafe { self.paint_surface_backdrop()? };
+        self.region_text_clip = Some(region);
+        let painted = unsafe { self.paint_region_commands(region, document, scale) };
+        // Reset on every path, error or not: the clips must never leak into a later frame.
+        self.region_text_clip = None;
+        let (width, height) = (self.width, self.height);
+        let reset = match self.xrender.as_mut() {
+            Some(xrender) => unsafe {
+                xrender.set_destination_clip(XRectangle {
+                    x: 0,
+                    y: 0,
+                    width: width as u16,
+                    height: height as u16,
+                })
+            },
+            None => Ok(()),
+        };
+        let visits = painted?;
+        reset?;
+        unsafe { XSetClipMask(self.display, self.gc, 0) };
+        self.gc_clip = None;
+        unsafe { XSetClipOrigin(self.display, self.gc, 0, 0) };
+        unsafe {
+            XCopyArea(
+                self.display,
+                self.backbuffer,
+                self.window,
+                self.gc,
+                region.x,
+                region.y,
+                region.width,
+                region.height,
+                region.x,
+                region.y,
+            )
+        };
+        unsafe { XFlush(self.display) };
+        Ok(visits)
+    }
+
+    unsafe fn paint_region_commands(
+        &mut self,
+        region: PixelRegion,
+        document: &RuntimeDocument,
+        scale: f32,
+    ) -> Result<u64, String> {
+        let count = self
+            .cached_paint
+            .as_ref()
+            .expect("paint cached above")
+            .commands
+            .len();
+        let viewport = (self.width, self.height);
+        let mut visits = 0u64;
+        for index in 0..count {
+            // SAFETY: index is below the cached count; `paint` does not replace the cache.
+            let command = unsafe { &*self.retained_command(index) };
+            // Clip pushes and pops always replay so the stack matches the Full path.
+            let always = matches!(command, PaintCommand::PushClip { .. } | PaintCommand::PopClip);
+            if !always {
+                let Some(bounds) = command_bounds(command, viewport) else {
+                    return Err("unsupported command in region paint".to_string());
+                };
+                if !bounds.intersects(region) {
+                    continue;
+                }
+            }
+            visits += 1;
+            // The GC fallbacks have no picture clip, so they could write outside the region.
+            let needs_xft = matches!(
+                command,
+                PaintCommand::Text { .. } | PaintCommand::TextShadow { .. }
+            );
+            if needs_xft && self.xft.is_none() {
+                return Err("region text needs the Xft backend".to_string());
+            }
+            if matches!(
+                command,
+                PaintCommand::Image { .. } | PaintCommand::TextShadow { .. }
+            ) && self.xrender.is_none()
+            {
+                return Err("region image needs the XRender backend".to_string());
+            }
+            // SAFETY: same initialized resources as the Full path.
+            unsafe { self.paint(command, document, scale)? };
+        }
+        Ok(visits)
     }
 
     /// Full relayout and repaint for a window size change or Expose. A retained scene can
@@ -305,6 +506,12 @@ impl X11App {
         self.pending_damage = SurfaceDamage::Full;
     }
 
+    /// Input handled: repaint through the planner. Unlike `mark_full`, this does not latch a
+    /// Full repaint, because the command diff bounds what the input changed.
+    pub(crate) fn mark_input_repaint(&mut self) {
+        self.input_repaint = true;
+    }
+
     /// Paint only when damage is latched or the document revision moved
     /// past the retained cache; otherwise skip the frame.
     pub(crate) unsafe fn redraw_if_dirty(
@@ -312,13 +519,23 @@ impl X11App {
         document: &mut RuntimeDocument,
     ) -> Result<bool, String> {
         let doc_damage = document.take_damage();
+        // Only an explicit full request (mark_full: Expose, resize, backdrop deadline) latches a
+        // Full repaint. Document edits report Full damage too, but the command diff in the
+        // planner bounds them, so they must not disable the region path.
+        let explicit_full = matches!(self.pending_damage, SurfaceDamage::Full);
         self.pending_damage = self.pending_damage.merge(doc_damage);
+        let input = std::mem::take(&mut self.input_repaint);
+        // Paint staleness follows the paint revision: color edits must repaint even when
+        // retained layout is reused.
         let stale = self
-            .layout
+            .cached_paint
             .as_ref()
             .is_none_or(|cached| cached.revision != document.revision());
-        if self.pending_damage.is_empty() && !stale {
+        if self.pending_damage.is_empty() && !stale && !input {
             return Ok(false);
+        }
+        if explicit_full {
+            self.region_force_full = true;
         }
         self.pending_damage = SurfaceDamage::None;
         unsafe { self.redraw(document)? };
@@ -331,6 +548,7 @@ impl X11App {
         // XRender fills composite over this; the GC path fills pixel 0 too.
         unsafe { XSetForeground(self.display, self.gc, TRANSPARENT_CLEAR_PIXEL) };
         unsafe { XSetClipMask(self.display, self.gc, 0) };
+        self.gc_clip = None;
         unsafe {
             XFillRectangle(
                 self.display,
@@ -417,6 +635,7 @@ pub(crate) fn background_bind_plan(
 impl X11App {
     pub(crate) unsafe fn present_scene(&mut self) -> Result<(), String> {
         unsafe { XSetClipMask(self.display, self.gc, 0) };
+        self.gc_clip = None;
         unsafe { XSetClipOrigin(self.display, self.gc, 0, 0) };
         {
             let _copy_guard = flamewm_profiler::start("render.copy");
@@ -495,7 +714,12 @@ impl X11App {
         if spans.is_empty() {
             return;
         }
+        // Identical spans leave the server-side bounding region unchanged; skip the XShape request.
+        if !shape_needs_apply(&self.shape_applied, self.window, &spans) {
+            return;
+        }
         if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &spans) } {
+            self.shape_applied.set(None);
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
         }
     }
@@ -514,6 +738,8 @@ impl X11App {
         };
         let backdrop_radius = backdrop_corner_radius_px(document, self.width, self.height);
         let spans = self.base_shape_spans(&cached.commands, 1.0, backdrop_radius);
+        // The clipped mask replaces the base mask, so the next base refresh must re-apply it.
+        self.shape_applied.set(None);
         if let Err(error) = unsafe { bridge.apply_clipped_mask(self.window, &spans, clip) } {
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
         }
@@ -547,7 +773,6 @@ impl X11App {
                         device,
                         radius,
                         *blur_percent,
-                        document.revision(),
                     )?
                 };
             }
@@ -691,10 +916,37 @@ impl X11App {
                     },
                     &self.clip_stack,
                 );
+                // A region repaint copies only the image rows and columns inside the region.
+                let crop = self.region_text_clip.map(|region| {
+                    let x0 = dx.max(region.x);
+                    let y0 = dy.max(region.y);
+                    let x1 = (dx + width as i32).min(region.x + region.width as i32);
+                    let y1 = (dy + height as i32).min(region.y + region.height as i32);
+                    (x0, y0, x1, y1)
+                });
                 if let Some(xrender) = self.xrender.as_mut() {
                     if visible == Visible::Whole {
-                        // SAFETY: same initialized backbuffer/display contract as `paint`.
-                        unsafe { xrender.blit_argb32_over(cached.pixmap, dx, dy, width, height)? };
+                        match crop {
+                            None => {
+                                // SAFETY: same initialized backbuffer/display contract as `paint`.
+                                unsafe {
+                                    xrender.blit_argb32_over(cached.pixmap, dx, dy, width, height)?
+                                };
+                            }
+                            Some((x0, y0, x1, y1)) if x1 > x0 && y1 > y0 => {
+                                // SAFETY: same initialized backbuffer/display contract as `paint`.
+                                unsafe {
+                                    xrender.blit_argb32_over_from(
+                                        cached.pixmap,
+                                        (x0 - dx, y0 - dy),
+                                        (x0, y0),
+                                        (x1 - x0) as u32,
+                                        (y1 - y0) as u32,
+                                    )?
+                                };
+                            }
+                            Some(_) => {}
+                        }
                     }
                     return Ok(());
                 }
@@ -703,6 +955,7 @@ impl X11App {
                     unsafe { XSetClipOrigin(self.display, self.gc, dx, dy) };
                     // SAFETY: display and GC are valid X11 resources owned by this app.
                     unsafe { XSetClipMask(self.display, self.gc, cached.mask) };
+                    self.gc_clip = None;
                 }
                 // SAFETY: cached pixmap, backbuffer, display, and GC are valid X11 resources.
                 unsafe {
@@ -722,6 +975,7 @@ impl X11App {
                 if cached.mask != 0 {
                     // SAFETY: display and GC are valid X11 resources owned by this app.
                     unsafe { XSetClipMask(self.display, self.gc, 0) };
+                    self.gc_clip = None;
                     // SAFETY: display and GC are valid X11 resources owned by this app.
                     unsafe { XSetClipOrigin(self.display, self.gc, 0, 0) };
                 }
@@ -815,7 +1069,7 @@ impl X11App {
                 let size = *size * scale;
                 // Xft keeps its own draw clip, so the GC clip stack never reaches glyphs.
                 // Cut to the stack bounds; a stack with no common area draws nothing.
-                let text_clip = match super::clip::stack_bounds(&self.clip_stack) {
+                let stack_clip = match super::clip::stack_bounds(&self.clip_stack) {
                     _ if self.clip_stack.is_empty() => None,
                     None => return Ok(()),
                     Some(b) => Some((
@@ -824,6 +1078,21 @@ impl X11App {
                         b.width.round().max(0.0) as u32,
                         b.height.round().max(0.0) as u32,
                     )),
+                };
+                // Region repaint: glyphs outside the region are left to the rest of the frame.
+                let text_clip = match (stack_clip, self.region_text_clip) {
+                    (clip, None) => clip,
+                    (None, Some(region)) => Some((region.x, region.y, region.width, region.height)),
+                    (Some((x, y, w, h)), Some(region)) => {
+                        let x0 = x.max(region.x);
+                        let y0 = y.max(region.y);
+                        let x1 = (x + w as i32).min(region.x + region.width as i32);
+                        let y1 = (y + h as i32).min(region.y + region.height as i32);
+                        if x1 <= x0 || y1 <= y0 {
+                            return Ok(());
+                        }
+                        Some((x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
+                    }
                 };
                 if let Some(xft) = self.xft.as_mut() {
                     // SAFETY: same initialized backbuffer/display contract as `paint`.
@@ -1007,5 +1276,117 @@ mod tests {
         // Replacement painted and differs: bind, then release retired.
         let (bind, release) = background_bind_plan(20, 10, Some((10, 64)), true);
         assert!(bind && release);
+    }
+}
+
+/// Latch for the base bounding shape: true when `spans` for `window` differ from what was last
+/// applied (and records them). Any other writer of the bounding shape must reset the latch.
+pub(crate) fn shape_needs_apply(
+    applied: &std::cell::Cell<Option<u64>>,
+    window: Window,
+    spans: &[(u32, u32, u32)],
+) -> bool {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    window.hash(&mut hasher);
+    spans.hash(&mut hasher);
+    let key = hasher.finish();
+    if applied.get() == Some(key) {
+        return false;
+    }
+    applied.set(Some(key));
+    true
+}
+
+#[cfg(test)]
+mod shape_latch_tests {
+    use super::shape_needs_apply;
+    use std::cell::Cell;
+
+    #[test]
+    fn identical_spans_apply_once_and_changes_or_resets_reapply() {
+        let latch = Cell::new(None);
+        let a = [(0u32, 10u32, 20u32), (1, 9, 18)];
+        let b = [(0u32, 10u32, 21u32)];
+        let applies = |spans: &[(u32, u32, u32)], win| usize::from(shape_needs_apply(&latch, win, spans));
+        let total = applies(&a, 7) + applies(&a, 7) + applies(&a, 7);
+        assert_eq!(total, 1, "100 identical frames must apply the shape once");
+        assert_eq!(applies(&b, 7), 1, "changed spans re-apply");
+        assert_eq!(applies(&b, 8), 1, "another window re-applies");
+        latch.set(None); // clipped writer reset
+        assert_eq!(applies(&b, 8), 1, "after a clipped mask the base mask re-applies");
+    }
+}
+
+#[cfg(test)]
+mod layout_reuse_tests {
+    use super::*;
+    use crate::xlib::{XCloseDisplay, XOpenDisplay};
+    use flamewm_render_core::{
+        Color, CompiledDocument, CompiledNode, NodeKind, RuntimeDocument, Style,
+        layout_passes_on_this_thread,
+    };
+
+    fn document() -> RuntimeDocument {
+        RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![CompiledNode {
+                kind: NodeKind::Element,
+                parent: None,
+                first_child: None,
+                next_sibling: None,
+                id: "box".to_string().into(),
+                action: std::borrow::Cow::Borrowed(""),
+                text: "".to_string().into(),
+                image: None,
+                style: Style::default(),
+                hover_style: None,
+                active_style: None,
+            }],
+        })
+        .expect("fixture document validates")
+    }
+
+    /// Color edits repaint without a layout pass; geometry/text edits relayout.
+    /// Needs `FLAMEWM_TEST_DISPLAY` (skipped otherwise).
+    #[test]
+    fn color_edits_reuse_layout_and_geometry_edits_relayout() {
+        let Some(name) = std::env::var_os("FLAMEWM_TEST_DISPLAY") else {
+            return;
+        };
+        let name = std::ffi::CString::new(name.to_string_lossy().as_bytes()).unwrap();
+        unsafe {
+            let display = XOpenDisplay(name.as_ptr());
+            assert!(!display.is_null(), "XOpenDisplay failed");
+            let config = X11Config {
+                width: 200,
+                height: 120,
+                ..X11Config::default()
+            };
+            let mut app = X11App::new(display, &config).expect("app");
+            {
+                let mut doc = document();
+                app.redraw(&doc).expect("first redraw");
+                let first = layout_passes_on_this_thread();
+                for step in 0..25u32 {
+                    let color = if step % 2 == 0 { Color::BLACK } else { Color::TRANSPARENT };
+                    doc.set_background_color("box", color).expect("color");
+                    app.redraw(&doc).expect("repaint");
+                }
+                assert_eq!(layout_passes_on_this_thread(), first, "color edits must not relayout");
+                doc.set_font_size_px("box", 21.0).expect("size");
+                app.redraw(&doc).expect("geometry repaint");
+                assert_eq!(layout_passes_on_this_thread(), first + 1, "geometry edit relayouts once");
+            }
+            // Owner order (see runtime.rs): take deferred native handles, drop the app, close
+            // the display, and only then release the handles.
+            let deferred = app.take_deferred_native_libraries();
+            drop(app);
+            XCloseDisplay(display);
+            drop(deferred);
+        }
     }
 }

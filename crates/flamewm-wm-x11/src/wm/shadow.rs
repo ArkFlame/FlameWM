@@ -23,7 +23,9 @@
 
 use super::*;
 use crate::frame::shadow::{self, ShadowAction, ShadowState};
+use crate::frame::shadow_rubber;
 use crate::geometry::Rect;
+use flamewm_api::root_rubber::RootRubber;
 use std::hash::{Hash, Hasher};
 use x11rb::protocol::shape::{SK as ShapeSk, SO as ShapeOp};
 
@@ -31,6 +33,11 @@ use x11rb::protocol::shape::{SK as ShapeSk, SO as ShapeOp};
 pub(super) struct FrameShadow {
     win: Window,
     state: ShadowState,
+    /// Pixmap behind `win`'s background. Kept (not freed after use) so a live desktop rubber band
+    /// can be recomposed into it without a readback.
+    pixmap: Pixmap,
+    /// Unshaded root snapshot of `shadow_rect(state.shaded)`, BGRX.
+    raw: Vec<u8>,
 }
 
 /// One frame the current turn wants shadowed.
@@ -55,6 +62,8 @@ pub(super) struct ShadowScene {
     /// Clients owning an activated move/resize at the last reconcile (sorted).
     dragging: Vec<Window>,
     seeded: bool,
+    /// Live desktop rubber band currently composed into the shadows (root property mirror).
+    rubber: Option<RootRubber>,
 }
 
 impl ShadowScene {
@@ -105,22 +114,18 @@ fn hash_of<T: Hash>(value: T) -> u64 {
     hasher.finish()
 }
 
-fn shadow_aux(rect: Rect, sibling: Window) -> ConfigureWindowAux {
-    ConfigureWindowAux::new()
-        .x(rect.x)
-        .y(rect.y)
-        .width(rect.width.max(1))
-        .height(rect.height.max(1))
-        .sibling(sibling)
-        .stack_mode(StackMode::BELOW)
-}
-
 fn shadow_geometry(rect: Rect) -> ConfigureWindowAux {
     ConfigureWindowAux::new()
         .x(rect.x)
         .y(rect.y)
         .width(rect.width.max(1))
         .height(rect.height.max(1))
+}
+
+fn shadow_aux(rect: Rect, sibling: Window) -> ConfigureWindowAux {
+    shadow_geometry(rect)
+        .sibling(sibling)
+        .stack_mode(StackMode::BELOW)
 }
 
 impl<'a, C: Connection> Wm<'a, C> {
@@ -152,6 +157,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         for frame in gone {
             if let Some(shadow) = self.frame_shadows.remove(&frame) {
                 self.conn.destroy_window(shadow.win)?;
+                self.conn.free_pixmap(shadow.pixmap)?;
             }
         }
         let (generation, motion) = self.advance_shadow_generation();
@@ -172,6 +178,11 @@ impl<'a, C: Connection> Wm<'a, C> {
                 ShadowAction::Noop => {}
                 ShadowAction::Move => self.move_frame_shadow(want.frame, want.outer)?,
                 ShadowAction::Reshade => {
+                    // A readback now would bake the live rubber into the snapshot. The frame keeps
+                    // its state and is re-shaded by the first turn after the rubber ends.
+                    if self.shadow_scene.rubber.is_some() {
+                        continue;
+                    }
                     let win = match self.frame_shadows.get(&want.frame) {
                         Some(held) => held.win,
                         None => self.create_shadow_window()?,
@@ -343,48 +354,58 @@ impl<'a, C: Connection> Wm<'a, C> {
         // neighbour's titlebar paints stale/black pixels over that titlebar. Bottom-of-stack keeps
         // the shadow on the desktop and never over another window.
         let sibling = self.shadow_sibling(frame);
+        let previous = self.frame_shadows.get(&frame).map(|held| held.pixmap);
         self.conn.grab_server()?;
         let result = self.refresh_shadow(outer, focused, win, sibling);
         self.conn.ungrab_server()?;
         let shown = result?;
-        if shown {
-            self.frame_shadows.insert(
-                frame,
-                FrameShadow {
-                    win,
-                    state: ShadowState {
-                        shaded: outer,
-                        focused,
-                        generation,
-                        placed: outer,
+        match shown {
+            Some((raw, pixmap)) => {
+                self.frame_shadows.insert(
+                    frame,
+                    FrameShadow {
+                        win,
+                        state: ShadowState {
+                            shaded: outer,
+                            focused,
+                            generation,
+                            placed: outer,
+                        },
+                        pixmap,
+                        raw,
                     },
-                },
-            );
-        } else {
-            self.conn.destroy_window(win)?;
-            self.frame_shadows.remove(&frame);
+                );
+            }
+            None => {
+                self.conn.destroy_window(win)?;
+                self.frame_shadows.remove(&frame);
+            }
+        }
+        if let Some(old) = previous {
+            self.conn.free_pixmap(old)?;
         }
         Ok(())
     }
 
-    /// Returns `false` when the shadow could not be shaded (no snapshot,
-    /// request too large); the caller then hides it for this frame.
+    /// Returns the unshaded snapshot and the pixmap now behind the window, or `None` when the
+    /// shadow could not be shaded (no snapshot, request too large); the caller then hides it.
     fn refresh_shadow(
         &self,
         outer: Rect,
         focused: bool,
         win: Window,
         sibling: Window,
-    ) -> Result<bool, ReplyOrIdError> {
+    ) -> Result<Option<(Vec<u8>, Pixmap)>, ReplyOrIdError> {
         let root = self.screen().root;
         let rect = shadow::shadow_rect(outer);
         self.conn.unmap_window(win)?;
-        let Some(mut pixels) = self.root_snapshot(rect)? else {
-            return Ok(false);
+        let Some(raw) = self.root_snapshot(rect)? else {
+            return Ok(None);
         };
+        let mut pixels = raw.clone();
         shadow::shade_shadow(outer, focused, &mut pixels);
         if pixels.len() + 32 > self.conn.maximum_request_bytes() {
-            return Ok(false);
+            return Ok(None);
         }
         let gc = self.conn.generate_id()?;
         self.conn.create_gc(gc, root, &CreateGCAux::new())?;
@@ -403,17 +424,18 @@ impl<'a, C: Connection> Wm<'a, C> {
             24,
             &pixels,
         )?;
-        // The server keeps a pixmap alive while a window uses it as background.
+        // The window holds the pixmap by reference once it is its background; the caller frees it
+        // when the shadow is replaced or destroyed.
         self.conn.change_window_attributes(
             win,
             &ChangeWindowAttributesAux::new().background_pixmap(pixmap),
         )?;
-        self.conn.free_pixmap(pixmap)?;
         self.conn.free_gc(gc)?;
         self.conn.configure_window(win, &shadow_aux(rect, sibling))?;
-        // One rounded square: the fixed small radius cuts all four corners; the
-        // frame hides the top-left one.
-        let mask: Vec<x11rb::protocol::xproto::Rectangle> = shadow::shadow_spans(rect)
+        // One rounded square: the fixed small radius cuts all four corners. The
+        // window area inside the frame is cut away too, so only the cast shows.
+        let mask: Vec<x11rb::protocol::xproto::Rectangle> =
+            shadow::clip_spans_outside_frame(shadow::shadow_spans(rect), rect, outer)
             .into_iter()
             .map(|(row, start, end)| x11rb::protocol::xproto::Rectangle {
                 x: start as i16,
@@ -432,7 +454,86 @@ impl<'a, C: Connection> Wm<'a, C> {
             &mask,
         )?;
         self.conn.map_window(win)?;
-        Ok(true)
+        Ok(Some((raw, pixmap)))
+    }
+
+    /// The desktop published or withdrew the live rubber band. Recompose only the shadow regions
+    /// the old or new band crosses, from each shadow's raw snapshot: no root readback, no grab.
+    pub(super) fn on_root_rubber_changed(&mut self) -> Result<(), ReplyOrIdError> {
+        let root = self.screen().root;
+        let values: Vec<u32> = self
+            .conn
+            .get_property(false, root, self.atoms.root_rubber, AtomEnum::CARDINAL, 0, 6)?
+            .reply()?
+            .value32()
+            .map(|values| values.collect())
+            .unwrap_or_default();
+        let next = RootRubber::from_cardinals(&values);
+        let previous = std::mem::replace(&mut self.shadow_scene.rubber, next);
+        if previous == next {
+            return Ok(());
+        }
+        for held in self.frame_shadows.values() {
+            let area = shadow::shadow_rect(held.state.shaded);
+            let Some(region) =
+                shadow_rubber::damage_region(area, previous.as_ref(), next.as_ref())
+            else {
+                continue;
+            };
+            let pixels = shadow_rubber::compose_region(
+                &held.raw,
+                area,
+                region,
+                held.state.shaded,
+                held.state.focused,
+                next.as_ref(),
+            );
+            self.put_shadow_region(held, area, region, &pixels)?;
+        }
+        Ok(())
+    }
+
+    /// Writes composed pixels for `region` (root space, inside `area`) into the shadow's pixmap
+    /// and repaints that window area from it. Rows go in bands that fit one request.
+    fn put_shadow_region(
+        &self,
+        held: &FrameShadow,
+        area: Rect,
+        region: Rect,
+        pixels: &[u8],
+    ) -> Result<(), ReplyOrIdError> {
+        let root = self.screen().root;
+        let stride = region.width as usize * 4;
+        let rows_per_request =
+            (self.conn.maximum_request_bytes().saturating_sub(64) / stride.max(1)).max(1);
+        let (dst_x, dst_y) = (region.x - area.x, region.y - area.y);
+        let gc = self.conn.generate_id()?;
+        self.conn.create_gc(gc, root, &CreateGCAux::new())?;
+        for (index, band) in pixels.chunks(rows_per_request * stride).enumerate() {
+            let rows = band.len() / stride;
+            self.conn.put_image(
+                ImageFormat::Z_PIXMAP,
+                held.pixmap,
+                gc,
+                region.width as u16,
+                rows as u16,
+                dst_x as i16,
+                (dst_y as usize + index * rows_per_request) as i16,
+                0,
+                24,
+                band,
+            )?;
+        }
+        self.conn.free_gc(gc)?;
+        self.conn.clear_area(
+            false,
+            held.win,
+            dst_x as i16,
+            dst_y as i16,
+            region.width as u16,
+            region.height as u16,
+        )?;
+        Ok(())
     }
 
     /// BGRX pixels of `rect`, clipped to the screen. Off-screen parts are zero

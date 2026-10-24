@@ -1,6 +1,8 @@
 use super::*;
+use crate::layout::LayoutResult;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,7 +164,19 @@ pub struct RuntimeDocument {
     pub(super) z_index_overrides: HashMap<u32, i32>,
     pub(super) scroll_offsets: HashMap<u32, ScrollState>,
     pub(super) pending_damage: SurfaceDamage,
+    /// Node-tracked changes for `take_incremental_damage`; `full` latches untracked mutations.
+    pub(super) dirty: DirtyTracker,
     pub(super) revision: u64,
+    /// Bumped only by mutations that can change layout (text, size, visibility, position,
+    /// scroll, fonts, ...). Paint-only mutations (colors) bump `revision` but not this.
+    pub(super) layout_revision: u64,
+    /// Bumped by isolated geometry overrides only. Retained layout is patched in place for these
+    /// (see `patch_layout`), so `layout_revision` stays put.
+    pub(super) geometry_revision: u64,
+    /// Isolated geometry nodes moved since the last layout sync (`LayoutEngine::compute` or a
+    /// successful `patch_layout`). `None` means a layout-affecting change happened and a full
+    /// compute is required.
+    pub(crate) layout_patch: RefCell<Option<BTreeSet<u32>>>,
     /// Node indices with non-empty ids, sorted by id. Keys live in `nodes`, not duplicated here.
     pub(super) id_index: Vec<u32>,
     /// Variable indices sorted by (name, index). Keys live in `document.variables`.
@@ -220,7 +234,14 @@ impl RuntimeDocument {
             z_index_overrides: HashMap::new(),
             scroll_offsets: HashMap::new(),
             pending_damage: SurfaceDamage::Full,
+            dirty: DirtyTracker {
+                full: true,
+                ..DirtyTracker::default()
+            },
             revision: 0,
+            layout_revision: 0,
+            geometry_revision: 0,
+            layout_patch: RefCell::new(None),
             id_index,
             variable_index,
             ui_font_family: "IBM Plex Sans".to_string(),
@@ -234,13 +255,52 @@ impl RuntimeDocument {
         self.revision
     }
 
+    /// Revision of the layout-relevant document state. Retained layout is valid while this is
+    /// unchanged; paint-only mutations leave it alone.
+    pub fn layout_revision(&self) -> u64 {
+        self.layout_revision
+    }
+
+    pub fn geometry_revision(&self) -> u64 {
+        self.geometry_revision
+    }
+
     pub(super) fn touch(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+        self.layout_revision = self.layout_revision.wrapping_add(1);
+        *self.layout_patch.get_mut() = None;
         self.pending_damage = self.pending_damage.merge(SurfaceDamage::Full);
+        self.dirty.full = true;
+    }
+
+    /// Patches `layout` in place for the isolated geometry moves recorded since the last sync.
+    /// Returns false, leaving the layout untouched, when a full compute is required.
+    pub fn patch_layout(&self, layout: &mut LayoutResult, interaction: InteractionState) -> bool {
+        let mut pending = self.layout_patch.borrow_mut();
+        let Some(nodes) = pending.as_ref() else {
+            return false;
+        };
+        if !layout.patch_isolated(self, interaction, nodes) {
+            return false;
+        }
+        *pending = Some(BTreeSet::new());
+        layout.revision = self.revision;
+        true
+    }
+
+    /// Paint-only mutation (colors): invalidates paint and damage but keeps retained layout.
+    /// Damage stays `Full` because no node bounds are known here.
+    pub(super) fn touch_paint(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+        self.pending_damage = self.pending_damage.merge(SurfaceDamage::Full);
+        self.dirty.full = true;
     }
 
     pub(super) fn touch_light(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+        self.layout_revision = self.layout_revision.wrapping_add(1);
+        *self.layout_patch.get_mut() = None;
+        self.dirty.full = true;
     }
 }
 
@@ -290,7 +350,7 @@ impl RuntimeDocument {
             return Ok(());
         }
         self.text_overrides.insert(target, text);
-        self.touch();
+        self.touch_node(target, DirtyReason::Text, true);
         Ok(())
     }
 
@@ -350,7 +410,7 @@ impl RuntimeDocument {
             entry.width == width
                 && entry.height == height
                 && entry.source == source
-                && entry.rgba8 == rgba8
+                && (Arc::ptr_eq(&entry.rgba8, &rgba8) || entry.rgba8 == rgba8)
         }) {
             return Ok(());
         }

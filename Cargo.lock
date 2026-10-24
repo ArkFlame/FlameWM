@@ -194,7 +194,9 @@ version = "0.1.1"
 name = "flamewm-applications"
 version = "0.1.1"
 dependencies = [
+ "dbus",
  "flamewm-api",
+ "flamewm-session-core",
  "x11rb",
 ]
 
@@ -343,6 +345,7 @@ dependencies = [
  "flamewm-profiler",
  "flate2",
  "libpulse-binding",
+ "rustix",
 ]
 
 [[package]]

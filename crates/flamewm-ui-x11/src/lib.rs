@@ -6,6 +6,8 @@ mod input;
 mod startup_protocol;
 pub use startup_protocol::{StartupX11Event, StartupX11Observer};
 mod popup;
+mod root_property;
+pub use root_property::RootCardinalPublisher;
 mod reconcile;
 mod surface_runtime;
 mod template;
@@ -13,8 +15,7 @@ mod template;
 pub mod test_support;
 
 pub use event_source::{
-    pump_events, run_surface_runtime_until, run_surface_runtime_with_reactor,
-    run_surface_runtime_with_reactor_access,
+    pump_events, run_surface_runtime_until, run_surface_runtime_with_reactor_access,
 };
 pub use flamewm_render_x11::{
     DockEdge, GeometryTrace, RawPress, RawPressWatch, WindowGeometry, WindowGeometrySlot,
@@ -22,8 +23,7 @@ pub use flamewm_render_x11::{
     valid_object_path,
 };
 pub use input::{
-    SurfaceEvent, UiInputEvent, WHEEL_SCROLL_STEP, pointer_button_from_raw,
-    surface_event_to_ui_event, wheel_scroll_delta,
+    SurfaceEvent, UiInputEvent, WHEEL_SCROLL_STEP, pointer_button_from_raw, wheel_scroll_delta,
 };
 pub use popup::PopupState;
 pub use reconcile::{reconcile, update};
@@ -346,6 +346,13 @@ pub enum UiWakeDrain {
     Retire,
 }
 
+fn wake_action(drain: UiWakeDrain) -> FdAction {
+    match drain {
+        UiWakeDrain::Keep => FdAction::Continue,
+        UiWakeDrain::Retire => FdAction::Remove,
+    }
+}
+
 /// Same reactor-backed window loop with a second independent readable wake source.
 /// Both drains only queue data; document access stays in `on_wake`.
 pub fn run_with_controller_events_role_and_two_readable_fds<F, W, D>(
@@ -367,17 +374,15 @@ where
     // Level-triggered registration: a retired source is removed by the reactor, and the reactor
     // itself is dropped when this function returns, so no explicit removal is needed.
     let _registration = reactor
-        .register_raw_fd_with_action(readable_fd, Interest::READ, move |_, _| match drain() {
-            UiWakeDrain::Keep => FdAction::Continue,
-            UiWakeDrain::Retire => FdAction::Remove,
+        .register_raw_fd_with_action(readable_fd, Interest::READ, move |_, _| {
+            wake_action(drain())
         })
         .map_err(|error| error.to_string())?;
     let _second_registration = second_readable
         .map(|(fd, mut second_drain)| {
             reactor
-                .register_raw_fd_with_action(fd, Interest::READ, move |_, _| match second_drain() {
-                    UiWakeDrain::Keep => FdAction::Continue,
-                    UiWakeDrain::Retire => FdAction::Remove,
+                .register_raw_fd_with_action(fd, Interest::READ, move |_, _| {
+                    wake_action(second_drain())
                 })
                 .map_err(|error| error.to_string())
         })

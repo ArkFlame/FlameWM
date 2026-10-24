@@ -24,6 +24,7 @@ use flamewm_explorer::scroll::{self,Resize,ResizeGate,RowGlide};
 use flamewm_explorer::{archive,properties,refresh::DirWatch,search::{SearchEvent,SearchWorker},trash,places as bookmarks};
 use std::sync::atomic::{AtomicBool,Ordering};
 use std::sync::Arc;
+use flamewm_integrations_linux::device_watch::DeviceWatch;
 use flamewm_explorer::jobs::{self,CancellationToken,Conflict,Undo};
 use flamewm_explorer::remote::{self,CopyEvent};
 use flamewm_remote_fs::{Cancel as RemoteCancel,Config as RemoteConfig,Error as RemoteError,HostKeyPrompt,ListEvent,RemoteFs,TransferEvent,Url as RemoteUrl};
@@ -171,6 +172,8 @@ enum WorkerResult {
     Completed(Result<String,String>),
     /// Unmounted filesystems from lsblk.
     Devices(Vec<bookmarks::BlockDevice>),
+    /// A block device or mount-table change arrived from the kernel; the sidebar reloads.
+    DevicesChanged,
     /// Outcome of a udisks2 mount/unmount/eject, already worded for the status strip.
     DeviceDone(Result<String,String>),
     /// Paste decision from the system clipboard read; `None` means nothing to paste.
@@ -412,7 +415,7 @@ struct ExplorerApp {
     scroll_drag:Option<(f32,usize)>,
     column_sort:ColumnSort, typed:String, typed_at:Option<Instant>,
     dialog:Option<Dialog>, ark:bool, search:Option<SearchWorker>, search_id:u64, search_text:String,
-    search_rows:Option<Vec<Entry>>, watch:Option<DirWatch>, watched:Option<PathBuf>,
+    search_rows:Option<Vec<Entry>>, watch:Option<DirWatch>, watched:Option<PathBuf>, device_watch:Option<DeviceWatch>,
     context_place:Option<usize>, progress_total:u64, trash_base:PathBuf,
     /// Removable filesystems that are present but unmounted; merged into the sidebar's Devices group.
     unmounted:Vec<bookmarks::BlockDevice>,
@@ -433,7 +436,7 @@ impl ExplorerApp {
         let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
         let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,field:flamewm_explorer::TextField::default(),rename_target:None,theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
             ark_extracts:Vec::new(),cancel:CancellationToken::new(),menu_overflow:false,context_scroll:0,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
-            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
+            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,device_watch:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
         app.reload_places();
         app
     }
@@ -475,7 +478,7 @@ impl ExplorerApp {
         match flamewm_desktop_core::file_actions::validate_rename_name(content) {
             Ok(name)=>{
                 if path.file_name().map(|n|n.to_string_lossy().into_owned())==Some(name.to_string()) {return;}
-                if self.busy {self.model.status="File operation already in progress".into();return;}
+                if self.refuse_if_busy() {return;}
                 if let Some(from)=remote::url_of(&path) {
                     match from.parent() {
                         Some(parent)=>{let to=parent.join(&name);self.send_remote(RemoteOp::Rename{from,to},"Renaming…");},
@@ -490,6 +493,11 @@ impl ExplorerApp {
             },
             Err(e)=>self.model.status=e.to_string(),
         }
+    }
+    /// Reports and returns true when a file operation is already running; callers return early.
+    fn refuse_if_busy(&mut self)->bool {
+        if self.busy {self.model.status="File operation already in progress".into();}
+        self.busy
     }
     /// The single selected folder entry, when the context menu is on an entry.
     fn selected_folder(&self)->Option<PathBuf> {
@@ -510,7 +518,7 @@ impl ExplorerApp {
     }
     /// Folder drops (row drags and external drops) confirm first, with the same validator and dialog as paste.
     fn confirm_drop(&mut self,sources:Vec<PathBuf>,directory:PathBuf,force_copy:bool) {
-        if self.busy {self.model.status="File operation already in progress".into();return;}
+        if self.refuse_if_busy() {return;}
         let writable=fs::metadata(&directory).is_ok_and(|m|m.is_dir() && !m.permissions().readonly());
         let kind=if force_copy {ops::Kind::Copy} else {ops::Kind::Move};
         let sources=match ops::validate(kind,&source_facts(&sources),Some(&directory),writable) {
@@ -549,8 +557,16 @@ impl ExplorerApp {
         let (tx,Ok(mut wake))=(tx.clone(),wake.try_clone()) else {return};
         std::thread::spawn(move||{if tx.send(job()).is_ok() {let _=wake.write_all(&[1]);}});
     }
+    /// Lists unmounted devices on a worker. Remounting remembered drives is the session's job, not the explorer's.
     fn refresh_devices(&self) {
-        self.spawn_background(||WorkerResult::Devices(bookmarks::unmounted_devices()));
+        self.spawn_background(move||WorkerResult::Devices(bookmarks::unmounted_devices()));
+    }
+    /// Starts the live device signal: udev block events and mount-table changes reload the sidebar.
+    fn watch_devices(&mut self) {
+        self.device_watch=self.events.as_ref().and_then(|(tx,wake)|{
+            let (tx,wake)=(tx.clone(),wake.try_clone().ok()?);
+            DeviceWatch::spawn(move||{if tx.send(WorkerResult::DevicesChanged).is_ok() {let _=(&wake).write_all(&[1]);}}).ok()
+        });
     }
     fn clear_search(&mut self) {
         self.search_rows=None;
@@ -579,7 +595,7 @@ impl ExplorerApp {
             match event {
                 SearchEvent::Batch{hits,..}=>{
                     let rows=self.search_rows.get_or_insert_with(Vec::new);
-                    rows.extend(hits.into_iter().map(|hit|Entry{path:hit.path,name:hit.name,directory:hit.directory,symlink:false,size:hit.size,modified:hit.modified}));
+                    rows.extend(hits.into_iter().map(|hit|Entry::new(hit.path,hit.name,hit.directory,false,hit.size,hit.modified)));
                     self.model.status=format!("Searching… {} found",rows.len());
                 },
                 SearchEvent::Done{truncated,cancelled,..}=>{
@@ -696,10 +712,10 @@ impl ExplorerApp {
         self.typed.push_str(text);
         self.typed_at=Some(now);
         let tab=self.model.tab();
-        let names=(0..tab.filtered_count()).filter_map(|i|tab.visible_nth(i).map(|e|e.name.clone())).collect::<Vec<_>>();
-        let refs=names.iter().map(String::as_str).collect::<Vec<_>>();
+        // One pass over the visible rows: per-index `visible_nth` rescans the list for every name.
+        let names=tab.visible().map(|e|e.name.as_str()).collect::<Vec<_>>();
         let from=self.selected().as_ref().and_then(|p|tab.visible_index_of(p)).unwrap_or(0);
-        if let Some(index)=view::typeahead_match(&refs,&self.typed,from) {
+        if let Some(index)=view::typeahead_match(&names,&self.typed,from) {
             let path=tab.visible_nth(index).expect("index from typeahead").path.clone();
             let rows=self.visible_rows();
             let tab=self.model.tab_mut();
@@ -740,7 +756,7 @@ impl ExplorerApp {
     fn start_remote_listing(&mut self,generation:u64,url:RemoteUrl) {
         let cancel=RemoteCancel::new();
         self.remote_cancel=Some(cancel.clone());
-        self.model.tab_mut().entries.clear();
+        self.model.tab_mut().clear_entries();
         self.model.status="Loading…".into();
         let path=remote::to_path(&url);
         let events=self.remote.list_dir(&url,&cancel);
@@ -931,7 +947,7 @@ impl ExplorerApp {
     }
     /// Duplicate: copy each source beside itself as `name (copy)`; no conflict prompt, since the name is always fresh.
     fn start_duplicate(&mut self,sources:Vec<PathBuf>) {
-        if self.busy {self.model.status="File operation already in progress".into();return;}
+        if self.refuse_if_busy() {return;}
         if sources.is_empty() {self.model.status="Select files first".into();return;}
         if sources.iter().any(|s|remote::is_remote(s)) {self.model.status="Duplicate is not available in remote folders yet".into();return;}
         let directory=self.model.tab().path().to_path_buf();
@@ -943,7 +959,7 @@ impl ExplorerApp {
         }
     }
     fn start_transfer_to(&mut self,sources:Vec<PathBuf>,directory:PathBuf,move_it:bool) {
-        if self.busy {self.model.status="File operation already in progress".into();return;}
+        if self.refuse_if_busy() {return;}
         if sources.is_empty() {self.model.status="Select files first".into();return;}
         // Local-to-remote and remote-to-local transfers copy through the remote worker; they never reach std::fs.
         if remote::is_remote(&directory) || sources.iter().any(|s|remote::is_remote(s)) {
@@ -1079,7 +1095,7 @@ impl ExplorerApp {
     }
     /// Ctrl+Z (`undoing`) and Ctrl+Shift+Z / Ctrl+Y redo, run on the file worker so the UI never blocks.
     fn history_last(&mut self,undoing:bool) {
-        if self.busy {self.model.status="File operation already in progress".into();return;}
+        if self.refuse_if_busy() {return;}
         let job=if undoing {WorkerJob::Undo} else {WorkerJob::Redo};
         if self.tx.send(job).is_ok() {self.busy=true;self.model.status=if undoing {"Undoing…"} else {"Redoing…"}.into();}
         else {self.model.status="File worker unavailable".into();}
@@ -1237,10 +1253,16 @@ impl ExplorerApp {
     /// (`places::eject_device_in`); the drive is still refused while another of its partitions is mounted.
     fn device_action(&mut self,verb:&'static str,device:String,label:String) {
         self.model.status=format!("{} {label}…",match verb {"mount"=>"Mounting","unmount"=>"Unmounting",_=>"Ejecting"});
-        self.spawn_background(move||WorkerResult::DeviceDone(match if verb=="eject" {bookmarks::eject_device_confirmed(&device)} else {bookmarks::udisks_action(verb,&device)} {
-            Ok(_)=>Ok(format!("{} {label}",match verb {"mount"=>"Mounted","unmount"=>"Unmounted",_=>"Ejected"})),
-            Err(error)=>Err(format!("{verb} {label} failed: {error}")),
-        }));
+        self.spawn_background(move||{
+            // A user unmount or eject is an explicit choice: no automatic remount until the user mounts it again.
+            if verb!="mount" {bookmarks::set_remembered(&device,false);}
+            let done=if verb=="eject" {bookmarks::eject_device_confirmed(&device)} else {bookmarks::udisks_action(verb,&device)};
+            if done.is_ok() && verb=="mount" {bookmarks::set_remembered(&device,true);}
+            WorkerResult::DeviceDone(match done {
+                Ok(_)=>Ok(format!("{} {label}",match verb {"mount"=>"Mounted","unmount"=>"Unmounted",_=>"Ejected"})),
+                Err(error)=>Err(format!("{verb} {label} failed: {error}")),
+            })
+        });
     }
     /// Opens a place, or mounts a removable device that is present but not mounted.
     fn activate_place(&mut self,index:usize) {
@@ -1363,7 +1385,7 @@ impl ExplorerApp {
             },
             Pending::Transfer{sources,directory,move_it,conflict}=>self.send_transfer(sources,directory,move_it,conflict),
             Pending::Drop{sources,directory,force_copy}=>{
-                if self.busy {self.model.status="File operation already in progress".into();return;}
+                if self.refuse_if_busy() {return;}
                 let text=if force_copy {"Copying dropped items…"} else {"Transferring dropped items…"};
                 if self.tx.send(WorkerJob::Drop{sources,directory,force_copy,cancel:self.cancel.clone()}).is_ok() {
                     self.busy=true;self.progress=Some(0);self.activity=None;self.model.status=text.into();
@@ -1836,6 +1858,7 @@ impl ExplorerApp {
                     if props.path==path {*size=Some(bytes.unwrap_or(0));}
                 }
             },
+            WorkerResult::DevicesChanged=>{self.reload_places();self.refresh_devices();},
             WorkerResult::Devices(devices)=>{
                 if self.unmounted!=devices {self.unmounted=devices;self.reload_places();}
             },
@@ -1889,6 +1912,21 @@ impl ExplorerApp {
             }
         }
     }
+    /// The rubber-band overlay is the only node a rubber drag changes before release.
+    fn project_rubber(&self, doc:&mut impl UiDocumentAccess)->Result<(),String>{
+        if let Some(((x0,y0),(x1,y1)))=self.rubber {
+            let width=(x1-x0).abs();let height=(y1-y0).abs();
+            let visible=width>5.0 || height>5.0;
+            doc.visible("selection-rectangle",visible)?;
+            if visible {
+                doc.position("selection-rectangle",x0.min(x1),y0.min(y1))?;
+                doc.size("selection-rectangle",width.max(1.0),height.max(1.0))?;
+                doc.background("selection-rectangle",self.theme.selection_fill())?;
+            }
+        } else {doc.visible("selection-rectangle",false)?;}
+        Ok(())
+    }
+
     fn project(&self, doc:&mut impl UiDocumentAccess)->Result<(),String>{
         self.theme.project(doc)?;
         let tab=self.model.tab();
@@ -2016,16 +2054,7 @@ impl ExplorerApp {
                 doc.visible("scroll-thumb",false)?;
             },
         }
-        if let Some(((x0,y0),(x1,y1)))=self.rubber {
-            let width=(x1-x0).abs();let height=(y1-y0).abs();
-            let visible=width>5.0 || height>5.0;
-            doc.visible("selection-rectangle",visible)?;
-            if visible {
-                doc.position("selection-rectangle",x0.min(x1),y0.min(y1))?;
-                doc.size("selection-rectangle",width.max(1.0),height.max(1.0))?;
-                doc.background("selection-rectangle",self.theme.selection_fill())?;
-            }
-        } else {doc.visible("selection-rectangle",false)?;}
+        self.project_rubber(doc)?;
         // Empty list space under the rows is the background context surface (rubber band and background menu).
         doc.visible("list-surface",true)?;
         let surface_top=list_top(self.model.tabs.len()>1);
@@ -2122,11 +2151,17 @@ impl ExplorerApp {
         let top=list_top(self.model.tabs.len()>1);
         let bottom=self.window.1-STATUS_STRIP_HEIGHT;
         let glide=self.glide.offset(Instant::now());
+        // One snapshot of the source for all slots, same sequence as `entry_at`; slot k maps to position k-1+origin.
+        let first=origin.saturating_sub(1);
+        let window:Vec<&Entry>=match self.search_rows.as_ref() {
+            Some(results)=>results.iter().skip(first).take(ROW_SLOTS).collect(),
+            None=>tab.visible().skip(first).take(ROW_SLOTS).collect(),
+        };
         for slot in 0..ROW_SLOTS {
             let row=format!("row-{slot}");
             let index=flamewm_explorer::row_slot_index(origin,slot);
             let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
-            let entry=if slot<=rows+1 {self.entry_at(index)} else {None};
+            let entry=if slot<=rows+1 {usize::try_from(index).ok().and_then(|i|i.checked_sub(first)).and_then(|p|window.get(p).copied())} else {None};
             let in_view=y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5;
             if let Some(entry)=entry {
                 // Contents are set even off-view, so a row that glides into view later already shows its entry.
@@ -2425,6 +2460,7 @@ fn run()->Result<(),String>{
     app.borrow_mut().scan();
     // Present-but-unmounted devices arrive from lsblk on a worker; without this they only show after a reload.
     app.borrow().refresh_devices();
+    app.borrow_mut().watch_devices();
     let mut doc=decode_document(UI)?.with_file_drop_target();
     // Translucent surfaces show the blurred wallpaper through the window; opaque (100%) installs nothing.
     if let Some(spec)=backdrop {doc=doc.with_window_backdrop(spec);}
@@ -2464,11 +2500,22 @@ fn run()->Result<(),String>{
             });
             match event {
                 UiControllerEvent::Action(action)=>{
+                    let rubber_before=app.rubber;
                     app.event(action);
                     app.sync_scroll();
                     // A wheel notch during a glide only moves the target: the next frame tick projects the burst, so
                     // N notches cost one relayout per frame instead of N.
                     if action.action=="scroll" && app.glide.is_animating(Instant::now()) {return Ok(());}
+                    // A hover is a pointer position, not a state change: the Explorer paints no hover
+                    // state, so every pointer move over a row would otherwise re-project the whole window.
+                    let pointer_drag=app.row_drag.is_some()||app.rubber.is_some()||app.col_drag.is_some()||app.scroll_drag.is_some();
+                    if hover_skips_projection(action.phase,app.list_dirty,pointer_drag) {return Ok(());}
+                    // A rubber drag changes only the overlay until release (rows commit on Release).
+                    if rubber_motion_only(action.phase,app.list_dirty,app.rubber.is_some(),app.row_drag.is_some()||app.col_drag.is_some()||app.scroll_drag.is_some()) {
+                        // Sub-pixel pointer moves clamp to the same rubber corners: the overlay is already right.
+                        if app.rubber==rubber_before {return Ok(());}
+                        return app.project_rubber(document);
+                    }
                 },
                 UiControllerEvent::Key(key)=>{app.key(key);app.sync_scroll();},
                 // Settled client size: sizes, scroll window and rows all follow from `window` in project.
@@ -2514,50 +2561,24 @@ fn run()->Result<(),String>{
 }
 
 
-#[cfg(test)]
-mod internal_drag_tests {
-    use super::*;
-    #[test]
-    fn drag_requires_threshold_and_release_can_cancel() {
-        let mut drag=RowDrag::new(PathBuf::from("/tmp/item"),10.0,10.0);
-        assert!(!drag.motion(13.0,14.0));
-        assert!(!drag.dragging);
-        assert!(drag.motion(18.0,10.0));
-        assert!(drag.dragging);
-        assert!(drag.motion(18.0,10.0));
-    }
-    #[test]
-    fn tab_header_and_other_panes_cannot_be_silent_drop_targets() {
-        let (tx,_rx)=mpsc::channel();
-        let (scan_tx,_scan_rx)=mpsc::channel();
-        let (chooser_tx,_chooser_rx)=mpsc::channel();
-        let mut app=ExplorerApp::new(PathBuf::from("/tmp"),tx,scan_tx,chooser_tx);
-        let dir=PathBuf::from("/tmp/folder");
-        app.model.tab_mut().entries.push(Entry{
-            path:dir.clone(),name:"folder".into(),directory:true,symlink:false,
-            size:0,modified:None,
-        });
-        assert!(app.folder_at(150.0,80.0).is_none());
-        assert!(app.folder_at(230.0,45.0).is_none());
-        assert_eq!(app.folder_at(230.0,list_top(false)+1.0),Some(dir));
-    }
+/// A hover moves no Explorer state, so it needs no projection unless a list change is already pending.
+/// A hover, or a motion with no drag in progress, changes no state, so it does not re-project the window.
+fn hover_skips_projection(phase:UiActionPhase,list_dirty:bool,pointer_drag:bool)->bool {
+    !list_dirty && (phase==UiActionPhase::Hover || (phase==UiActionPhase::Motion && !pointer_drag))
+}
+
+/// Motion during a pure rubber-band drag (no row, column or scroll drag) with a clean list.
+fn rubber_motion_only(phase:UiActionPhase,list_dirty:bool,rubber:bool,other_drag:bool)->bool {
+    !list_dirty && phase==UiActionPhase::Motion && rubber && !other_drag
 }
 
 #[cfg(test)]
-mod window_frame_tests {
-    use super::*;
-    #[test]
-    fn window_stays_above_taskbar_reserve() {
-        for root in [(1350,641),(1600,900),(1920,1080),(800,600)] {
-            let (w,h,y)=window_frame(root);
-            // The framed window (client plus WM chrome) must end above the taskbar reserve.
-            assert!(y>=0 && (y as u32)+h+FRAME_CHROME_HEIGHT<=root.1-TASKBAR_RESERVE, "root {root:?} window {w}x{h} at {y}");
-            assert!(w<=root.0);
-        }
-        assert_eq!(window_frame((1920,1080)),(1250,740,65));
-        assert_eq!(window_frame((1350,641)),(1215,493,59));
-    }
-}
+#[path = "tests/internal_drag_tests.rs"]
+mod internal_drag_tests;
+
+#[cfg(test)]
+#[path = "tests/window_frame_tests.rs"]
+mod window_frame_tests;
 
 /// Which image fills a row's icon slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2579,82 +2600,8 @@ fn row_icon_choice(entry:&Entry, thumbnail:Option<&(u64,Arc<Vec<u8>>)>)->RowIcon
 }
 
 #[cfg(test)]
-mod icon_slot_tests {
-    use super::*;
-
-    fn entry(name:&str,directory:bool)->Entry {
-        Entry{path:PathBuf::from(name),name:name.into(),directory,symlink:false,size:0,modified:None}
-    }
-
-    #[test]
-    fn every_row_family_is_a_compiled_row_icon() {
-        // `view::file_icon` names are the template's `ico-<slot>-<kind>` ids: a name the template does
-        // not compile would hide every image in the slot and leave it blank.
-        for (name,directory) in [
-            ("Photos",true),("roadmap.pdf",false),("main.rs",false),("photo.jpg",false),
-            ("clip.svg",false),("app.ico",false),("app.desktop",false),("notes.txt",false),("LICENSE",false),
-        ] {
-            let family=view::file_icon(&entry(name,directory));
-            assert!(ROW_ICONS.contains(&family),"{name} maps to unknown row icon {family}");
-        }
-    }
-
-    #[test]
-    fn a_missing_or_failed_thumbnail_falls_back_to_the_type_glyph() {
-        let photo=entry("photo.jpg",false);
-        assert_eq!(row_icon_choice(&photo,None),RowIcon::Type("file"));
-        let ready=(7,Arc::new(vec![0u8;THUMB_SIZE as usize*THUMB_SIZE as usize*4]));
-        assert_eq!(row_icon_choice(&photo,Some(&ready)),RowIcon::Thumbnail(7));
-        assert_eq!(row_icon_choice(&entry("app.desktop",false),None),RowIcon::Type("file"));
-    }
-
-    #[test]
-    fn every_sidebar_place_icon_is_a_compiled_place_icon() {
-        let home=PathBuf::from("/tmp/flamewm-icon-slot-test-home");
-        let devices=[bookmarks::BlockDevice{device:"/dev/sdb1".into(),label:"Stick".into(),removable:true}];
-        for place in places(&home,&devices) {
-            assert!(PLACE_ICONS.contains(&place.icon),"place {} maps to unknown icon {}",place.name,place.icon);
-        }
-        // The raster and the layout box are the same square, so no icon is scaled out of the cell.
-        assert_eq!(ROW_ICON_BOX,THUMB_SIZE as f32);
-    }
-
-    #[test]
-    fn the_template_compiles_every_icon_slot_the_code_can_show() {
-        // The document API can only toggle elements the template declares: a family or slot that is
-        // missing here would be a silently blank icon on a packaged install.
-        let html=include_str!("../../../ui/explorer/explorer.html");
-        for slot in 0..ROW_SLOTS {
-            for kind in ROW_ICONS {
-                let id=format!("id=\"ico-{slot}-{kind}\"");
-                assert!(html.contains(&id),"row slot {slot} has no {kind} glyph ({id})");
-            }
-            let thumb=format!("id=\"ico-{slot}-thumb\"");
-            assert!(html.contains(&thumb),"row slot {slot} has no thumbnail element ({thumb})");
-        }
-        for slot in 0..SIDEBAR_SLOTS {
-            for kind in PLACE_ICONS {
-                let id=format!("id=\"pico-{slot}-{kind}\"");
-                assert!(html.contains(&id),"sidebar slot {slot} has no {kind} icon ({id})");
-            }
-        }
-    }
-
-    #[test]
-    fn every_referenced_icon_ships_with_the_explorer() {
-        // The template loads `<icon>.svg` and `row-<kind>.svg` from the packaged icon set: a missing
-        // file is an empty slot, even on a fully offline install with no icon theme present.
-        let icons=Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/explorer/icons");
-        for kind in PLACE_ICONS {
-            let path=icons.join(format!("{kind}.svg"));
-            assert!(path.is_file(),"sidebar icon {} is not shipped",path.display());
-        }
-        for kind in ROW_ICONS {
-            let path=icons.join(format!("row-{kind}.svg"));
-            assert!(path.is_file(),"row icon {} is not shipped",path.display());
-        }
-    }
-}
+#[path = "tests/icon_slot_tests.rs"]
+mod icon_slot_tests;
 
 /// Filesystem facts for the guard; a source that cannot be stat'ed is reported missing.
 fn source_facts(paths:&[PathBuf])->Vec<ops::Source> {

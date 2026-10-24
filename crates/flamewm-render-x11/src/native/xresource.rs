@@ -304,14 +304,84 @@ impl X11ResourceAllocator {
             return;
         };
         // SAFETY: display/pixmap are live per the caller contract.
-        unsafe { XFreePixmap(display, pixmap) };
+        unsafe { free_pixmap_raw(display, pixmap) };
         self.note_free(bytes);
     }
+}
+
+/// Pixmap ids freed since the last drain are queued here so any cache keyed by
+/// pixmap XID (XRender source pictures) can drop its entry before the XID can be
+/// reused by a later `XCreatePixmap`. Bounded: on overflow the queue collapses
+/// into a single "invalidate everything" flag.
+pub const PIXMAP_INVALIDATION_CAP: usize = 1024;
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PixmapInvalidations {
+    ids: Vec<Pixmap>,
+    overflowed: bool,
+}
+
+impl PixmapInvalidations {
+    pub fn push(&mut self, pixmap: Pixmap) {
+        if self.overflowed {
+            return;
+        }
+        if self.ids.len() >= PIXMAP_INVALIDATION_CAP {
+            self.ids.clear();
+            self.overflowed = true;
+        } else {
+            self.ids.push(pixmap);
+        }
+    }
+
+    /// Returns `(freed ids, overflowed)` and resets the queue.
+    pub fn take(&mut self) -> (Vec<Pixmap>, bool) {
+        let overflowed = std::mem::take(&mut self.overflowed);
+        (std::mem::take(&mut self.ids), overflowed)
+    }
+}
+
+thread_local! {
+    static PIXMAP_INVALIDATIONS: std::cell::RefCell<PixmapInvalidations> =
+        std::cell::RefCell::default();
+}
+
+/// Drain the pixmap ids freed since the previous call (see [`PixmapInvalidations`]).
+pub fn take_pixmap_invalidations() -> (Vec<Pixmap>, bool) {
+    PIXMAP_INVALIDATIONS.with(|queue| queue.borrow_mut().take())
+}
+
+/// The single raw pixmap free point for this crate. Every `XFreePixmap` goes
+/// through here so the invalidation queue cannot miss a free.
+///
+/// # Safety
+/// `display`/`pixmap` must be live on the calling thread.
+pub unsafe fn free_pixmap_raw(display: *mut Display, pixmap: Pixmap) {
+    if pixmap == 0 {
+        return;
+    }
+    PIXMAP_INVALIDATIONS.with(|queue| queue.borrow_mut().push(pixmap));
+    // SAFETY: display/pixmap are live per the caller contract.
+    unsafe { XFreePixmap(display, pixmap) };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pixmap_invalidations_collapse_on_overflow() {
+        let mut queue = PixmapInvalidations::default();
+        queue.push(5);
+        queue.push(6);
+        assert_eq!(queue.take(), (vec![5, 6], false));
+        for id in 1..=(PIXMAP_INVALIDATION_CAP as Pixmap + 1) {
+            queue.push(id);
+        }
+        assert_eq!(queue.take(), (Vec::new(), true));
+        queue.push(9);
+        assert_eq!(queue.take(), (vec![9], false));
+    }
 
     #[test]
     fn rejects_zero_and_oversize_dims() {

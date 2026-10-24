@@ -21,11 +21,6 @@ impl ImageDescriptor {
             && self.intrinsic_height != 0
             && self.byte_count != 0
     }
-
-    #[must_use]
-    pub const fn has_tint(self) -> bool {
-        self.tint.is_some()
-    }
 }
 
 #[cfg(test)]

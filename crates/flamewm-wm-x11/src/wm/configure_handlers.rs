@@ -7,16 +7,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     ) -> Result<(), ReplyError> {
         // Observation-only: classify and compare through configure policy;
         // never commit geometry from a ConfigureNotify.
-        let synthetic = event.response_type & 0x80 != 0;
-        if synthetic {
-            let _ = configure::classify_notify(
-                event.window,
-                event.window,
-                event.window,
-                false,
-                true,
-                true,
-            );
+        if event.response_type & 0x80 != 0 {
             return Ok(());
         }
         if event.window == self.screen().root {
@@ -33,7 +24,6 @@ impl<'a, C: Connection> Wm<'a, C> {
         // via `client_for`, so disambiguate with the authoritative frame id
         // and the input-child registry first.
         let Some(client_id) = self.client_for(event.window) else {
-            let _ = configure::classify_notify(event.window, 0, 0, false, false, false);
             return Ok(());
         };
         let (frame_id, expected_frame, mode) = match self.clients.get(&client_id) {
@@ -176,24 +166,17 @@ impl<'a, C: Connection> Wm<'a, C> {
             configure::decide_request(&controller.session, controller.placement.mode),
             has_stack,
         );
-        // Active gesture owns geometry: acknowledge current root geometry,
-        // never mutate the frame from the client request.
-        if decision == configure::RequestDecision::RefuseInteractive {
-            configure_bump!(
-                request_refused_interactive,
-                request_refused_interactive_total
-            );
-            self.send_configure_notify(client_id)?;
-            emit_configure_summary();
-            if let Some((frame, mode, sibling)) = stack {
-                self.restack(frame, mode, sibling)?;
-                self.publish_client_list()?;
+        // Active gesture owns geometry, and WM-owned modes stay authoritative against client
+        // geometry: acknowledge current root geometry, never mutate the frame from the request.
+        if decision != configure::RequestDecision::AcceptOnce {
+            if decision == configure::RequestDecision::RefuseInteractive {
+                configure_bump!(
+                    request_refused_interactive,
+                    request_refused_interactive_total
+                );
+            } else {
+                configure_bump!(request_refused_mode, request_refused_mode_total);
             }
-            return Ok(());
-        }
-        // WM-owned modes stay authoritative against client geometry.
-        if decision == configure::RequestDecision::RefuseMode {
-            configure_bump!(request_refused_mode, request_refused_mode_total);
             self.send_configure_notify(client_id)?;
             emit_configure_summary();
             if let Some((frame, mode, sibling)) = stack {
@@ -242,7 +225,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             pointer_delta: (0, 0),
             edges: crate::frame::model::ResizeEdges::none(),
             work_area: controller.work_area,
-            outputs: &controller.outputs,
+            outputs: controller.outputs.as_slice(),
             hints: controller.hints,
             frame_extents: extents,
         };
@@ -262,10 +245,8 @@ impl<'a, C: Connection> Wm<'a, C> {
                 session.placement.current = plan.frame;
             }
             self.apply_frame_geometry(client_id)?;
-            self.send_configure_notify(client_id)?;
-        } else {
-            self.send_configure_notify(client_id)?;
         }
+        self.send_configure_notify(client_id)?;
         emit_configure_summary();
         if let Some((frame, mode, sibling)) = stack {
             self.restack(frame, mode, sibling)?;

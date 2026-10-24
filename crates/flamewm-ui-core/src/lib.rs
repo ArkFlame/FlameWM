@@ -14,15 +14,6 @@ pub mod virtual_list;
 
 use flamewm_api::{OutputId, Point, Rect};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum WindowRole {
-    #[default]
-    GenericChild,
-    PanelDock,
-    ApplicationWindow,
-    Popup,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color(pub u32);
 

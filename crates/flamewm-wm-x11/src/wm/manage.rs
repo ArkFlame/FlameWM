@@ -212,38 +212,35 @@ impl<'a, C: Connection> Wm<'a, C> {
         );
         let frame_rect = if adopt {
             crate::frame::geometry::plan_adopt(origin, size, extents)
-        } else if crate::frame::geometry::can_place_near_pointer(
-            adopt,
-            kind == WindowKind::Normal,
-            transient_for.is_some(),
-            hints,
-            origin,
-        ) {
+        } else {
             // One best-effort pointer snapshot per eligible first map; never poll or
             // let a transient X11 failure prevent mapping the application.
-            let pointer = self
-                .conn
-                .query_pointer(screen.root)
-                .ok()
-                .and_then(|cookie| cookie.reply().ok())
-                .filter(|reply| reply.same_screen);
-            if let Some(pointer) = pointer {
-                let point = RootPoint::new(i32::from(pointer.root_x), i32::from(pointer.root_y));
-                let work_area = self
-                    .output_for_point(point.x, point.y, Rect::new(point.x, point.y, 1, 1))
-                    .map_or(work_root, |output| RootRect::from_legacy(output.work_area));
-                crate::frame::geometry::plan_initial_map_near_pointer(
-                    &initial_req,
-                    point,
-                    work_area,
-                    size,
-                )
-                .frame
-            } else {
-                crate::frame::geometry::plan_initial_map(&initial_req, origin, size).frame
+            let pointer = crate::frame::geometry::can_place_near_pointer(
+                adopt,
+                kind == WindowKind::Normal,
+                transient_for.is_some(),
+                hints,
+                origin,
+            )
+            .then(|| self.conn.query_pointer(screen.root).ok()?.reply().ok())
+            .flatten()
+            .filter(|reply| reply.same_screen);
+            match pointer {
+                Some(pointer) => {
+                    let point = RootPoint::new(i32::from(pointer.root_x), i32::from(pointer.root_y));
+                    let work_area = self
+                        .output_for_point(point.x, point.y, Rect::new(point.x, point.y, 1, 1))
+                        .map_or(work_root, |output| RootRect::from_legacy(output.work_area));
+                    crate::frame::geometry::plan_initial_map_near_pointer(
+                        &initial_req,
+                        point,
+                        work_area,
+                        size,
+                    )
+                    .frame
+                }
+                None => crate::frame::geometry::plan_initial_map(&initial_req, origin, size).frame,
             }
-        } else {
-            crate::frame::geometry::plan_initial_map(&initial_req, origin, size).frame
         };
         let outer = crate::client::root_to_rect(frame_rect);
 
@@ -272,42 +269,8 @@ impl<'a, C: Connection> Wm<'a, C> {
         // Grab-server only for save-set/reparent/structural-configure.
         // Reparent offset + client configure from the lifecycle contract
         // (single geometry source); this owner performs the X calls.
-        self.conn.grab_server()?;
-        self.conn.change_save_set(SetMode::INSERT, window)?;
-        let (reparent_x, reparent_y) = lifecycle::reparent_offset(extents);
-        self.conn
-            .reparent_window(window, frame, reparent_x as i16, reparent_y as i16)?;
-        self.conn.change_window_attributes(
-            window,
-            &ChangeWindowAttributesAux::new()
-                .event_mask(EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY),
-        )?;
-        // Click-to-focus: a sync passive grab sees presses inside the client area;
-        // handle_client_press focuses and then replays the press to the client.
-        self.conn.grab_button(
-            false,
-            window,
-            EventMask::BUTTON_PRESS,
-            GrabMode::SYNC,
-            GrabMode::ASYNC,
-            x11rb::NONE,
-            x11rb::NONE,
-            ButtonIndex::ANY,
-            ModMask::ANY,
-        )?;
-        let (client_x, client_y, client_w, client_h) =
-            lifecycle::client_configure(crate::client::rect_to_root(outer), extents);
-        self.conn.configure_window(
-            window,
-            &ConfigureWindowAux::new()
-                .x(client_x)
-                .y(client_y)
-                .width(client_w)
-                .height(client_h)
-                .border_width(0),
-        )?;
-
         // Create real 12 InputOnly children (8 resize + title-drag + 3 controls).
+        // Ids and placements are pure lifecycle computation, so they are built before the grab.
         let mut child_ids = [0; 12];
         for id in &mut child_ids {
             *id = self.conn.generate_id()?;
@@ -319,26 +282,68 @@ impl<'a, C: Connection> Wm<'a, C> {
         let placements = lifecycle::input_child_placements(
             outer.width.max(1) as i32,
             outer.height.max(1) as i32,
-            extents.titlebar_h,
+            self.extents().titlebar_h,
             lifecycle_ids,
         );
-        for placement in &placements {
-            self.conn.create_window(
-                COPY_DEPTH_FROM_PARENT,
-                placement.xid,
-                frame,
-                placement.x as i16,
-                placement.y as i16,
-                placement.w.max(1) as u16,
-                placement.h.max(1) as u16,
-                0,
-                WindowClass::INPUT_ONLY,
-                0,
-                &CreateWindowAux::new().event_mask(EventMask::from(INPUT_CHILD_EVENT_MASK)),
+        let (client_x, client_y, client_w, client_h) =
+            lifecycle::client_configure(crate::client::rect_to_root(outer), extents);
+        let (reparent_x, reparent_y) = lifecycle::reparent_offset(extents);
+
+        // Ungrab on every path: a failed request inside the grabbed section must never leave the
+        // X server grabbed, which freezes the whole screen until the WM exits.
+        self.conn.grab_server()?;
+        let structural = (|| -> Result<(), ReplyOrIdError> {
+            self.conn.change_save_set(SetMode::INSERT, window)?;
+            self.conn
+                .reparent_window(window, frame, reparent_x as i16, reparent_y as i16)?;
+            self.conn.change_window_attributes(
+                window,
+                &ChangeWindowAttributesAux::new()
+                    .event_mask(EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY),
             )?;
-        }
-        self.conn.ungrab_server()?;
+            // Click-to-focus: a sync passive grab sees presses inside the client area;
+            // handle_client_press focuses and then replays the press to the client.
+            self.conn.grab_button(
+                false,
+                window,
+                EventMask::BUTTON_PRESS,
+                GrabMode::SYNC,
+                GrabMode::ASYNC,
+                x11rb::NONE,
+                x11rb::NONE,
+                ButtonIndex::ANY,
+                ModMask::ANY,
+            )?;
+            self.conn.configure_window(
+                window,
+                &ConfigureWindowAux::new()
+                    .x(client_x)
+                    .y(client_y)
+                    .width(client_w)
+                    .height(client_h)
+                    .border_width(0),
+            )?;
+            for placement in &placements {
+                self.conn.create_window(
+                    COPY_DEPTH_FROM_PARENT,
+                    placement.xid,
+                    frame,
+                    placement.x as i16,
+                    placement.y as i16,
+                    placement.w.max(1) as u16,
+                    placement.h.max(1) as u16,
+                    0,
+                    WindowClass::INPUT_ONLY,
+                    0,
+                    &CreateWindowAux::new().event_mask(EventMask::from(INPUT_CHILD_EVENT_MASK)),
+                )?;
+            }
+            Ok(())
+        })();
+        let ungrab = self.conn.ungrab_server();
         self.conn.flush()?;
+        ungrab?;
+        structural?;
 
         // Insert FrameResources + ManagedClient.
         let _ = self.registry.register(resources);
@@ -367,6 +372,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             kind,
             hover_control: None,
             decoration,
+            shaped: None,
+            input_layout: None,
         };
         self.frame_to_client.insert(frame, window);
         for xid in resources.children() {
@@ -405,6 +412,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.set_frame_extents(window)?;
         self.set_client_workspace(window, self.current_workspace)?;
         self.set_wm_state(window, WM_STATE_NORMAL)?;
+        self.publish_allowed_actions(window)?;
 
         // Retarget + paint chrome + shape + cursors.
         self.paint_chrome(window)?;
@@ -421,8 +429,8 @@ impl<'a, C: Connection> Wm<'a, C> {
 
         // Map client + input children + frame (renderer flush above).
         self.conn.map_window(window)?;
-        if decoration == Decoration::Server {
-            for xid in resources.children() {
+        for xid in resources.children() {
+            if input_child_mapped(decoration, resources.region_of(xid)) {
                 self.conn.map_window(xid)?;
             }
         }

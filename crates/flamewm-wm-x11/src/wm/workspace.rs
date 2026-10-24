@@ -247,22 +247,13 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     pub(super) fn reconcile_workspace_visibility(&mut self) -> Result<(), ReplyError> {
-        let mut ids = Vec::with_capacity(self.clients.len());
-        ids.extend(self.clients.keys().copied());
-        for id in ids {
-            let (frame, visible) = {
-                let Some(state) = self.clients.get(&id) else {
-                    continue;
-                };
-                (state.frame, state.visible_on(self.current_workspace))
-            };
-            if visible {
-                self.conn.map_window(frame)?;
+        let current = self.current_workspace;
+        for state in self.clients.values_mut() {
+            if state.visible_on(current) {
+                self.conn.map_window(state.frame)?;
             } else {
-                if let Some(state) = self.clients.get_mut(&id) {
-                    state.ignore_unmap = state.ignore_unmap.saturating_add(1);
-                }
-                self.conn.unmap_window(frame)?;
+                state.ignore_unmap = state.ignore_unmap.saturating_add(1);
+                self.conn.unmap_window(state.frame)?;
             }
         }
         Ok(())
@@ -326,13 +317,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         client: Window,
         workspace: usize,
     ) -> Result<(), ReplyError> {
-        self.conn.change_property32(
-            PropMode::REPLACE,
+        self.set_property32(
             client,
             self.atoms.net_wm_desktop,
             AtomEnum::CARDINAL,
             &[workspace as u32],
-        )?;
-        Ok(())
+        )
     }
 }

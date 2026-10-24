@@ -119,10 +119,10 @@ impl<'a, C: Connection> Wm<'a, C> {
 }
 
 use flamewm_api::shortcuts::{
-    ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW,
+    ACTION_LAUNCHER, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW,
     ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
-    ACTION_WINDOW_MINIMIZE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT,
-    ACTION_WORKSPACE_UP,
+    ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_SWITCH, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT,
+    ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{
@@ -482,6 +482,8 @@ pub struct WmChangeSet {
     pub work_area: bool,
     /// One-shot request from the ToggleStartMenu shortcut; the flush emits it once.
     pub start_menu_toggle: bool,
+    /// One-shot request from the Launcher shortcut; the flush emits it once.
+    pub launcher_toggle: bool,
     /// One-shot media-key request; the flush dispatches it through the platform host.
     pub media_audio_key: Option<MediaAudioKey>,
 }
@@ -500,6 +502,7 @@ impl WmChangeSet {
             || self.panels
             || self.work_area
             || self.start_menu_toggle
+            || self.launcher_toggle
             || self.media_audio_key.is_some()
     }
 }
@@ -565,34 +568,7 @@ impl WmConfig {
 }
 
 #[cfg(test)]
-mod workspace_count_tests {
-    use super::WmConfig;
-
-    #[test]
-    fn persisted_count_applies_only_without_env_override() {
-        let base = WmConfig::default();
-        assert_eq!(base.resolve_workspaces(false, Some(7)).workspaces, 7);
-        assert_eq!(base.resolve_workspaces(true, Some(7)).workspaces, 4);
-        assert_eq!(base.resolve_workspaces(false, None).workspaces, 4);
-    }
-
-    #[test]
-    fn start_path_reads_persisted_count_from_settings_dir() {
-        let dir = std::env::temp_dir().join(format!("flamewm-wm-start-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
-        let settings = dir.join("settings.toml");
-        std::fs::write(dir.join("workspaces.conf"), "workspaces.count=6\n").expect("write");
-        let config = WmConfig::default().with_persisted_workspaces(&settings);
-        assert_eq!(config.workspaces, 6);
-        assert_eq!(
-            WmConfig::default()
-                .resolve_workspaces(true, Some(6))
-                .workspaces,
-            4
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
+mod workspace_count_tests;
 
 fn env_u16(name: &str, default: u16, min: u16, max: u16) -> u16 {
     env::var(name)
@@ -606,100 +582,6 @@ fn any_conn_err(error: x11rb::errors::ConnectionError) -> AnyError {
         std::io::ErrorKind::Other,
         error.to_string(),
     ))
-}
-
-fn bump(counter: &std::sync::atomic::AtomicU64) {
-    counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
-fn read(counter: &std::sync::atomic::AtomicU64) -> u64 {
-    counter.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Profiler point plus the running total read by the summary lines.
-struct TotalledCounter {
-    point: flamewm_profiler::CounterPoint,
-    total: std::sync::atomic::AtomicU64,
-}
-
-impl TotalledCounter {
-    fn new(label: &'static str) -> Self {
-        Self {
-            point: flamewm_profiler::CounterPoint::new(label),
-            total: std::sync::atomic::AtomicU64::new(0),
-        }
-    }
-
-    fn add(&self, value: u64) {
-        self.point.increment_by(value);
-        self.total
-            .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    fn load(&self) -> u64 {
-        self.total.load(std::sync::atomic::Ordering::Relaxed)
-    }
-}
-
-struct ResizeCounterSet {
-    received: TotalledCounter,
-    coalesced: TotalledCounter,
-    committed: TotalledCounter,
-    max_batch: std::sync::atomic::AtomicU64,
-}
-
-fn resize_counters() -> &'static ResizeCounterSet {
-    use std::sync::OnceLock;
-    static SET: OnceLock<ResizeCounterSet> = OnceLock::new();
-    SET.get_or_init(|| ResizeCounterSet {
-        received: TotalledCounter::new("wm.resize.received"),
-        coalesced: TotalledCounter::new("wm.resize.coalesced"),
-        committed: TotalledCounter::new("wm.resize.commit"),
-        max_batch: std::sync::atomic::AtomicU64::new(0),
-    })
-}
-
-impl ResizeCounterSet {
-    fn record_received(&self, value: u64) {
-        self.received.add(value);
-    }
-
-    fn record_coalesced(&self, value: u64) {
-        self.coalesced.add(value);
-    }
-
-    fn record_committed(&self, value: u64) {
-        self.committed.add(value);
-    }
-
-    fn snapshot(&self) -> (u64, u64, u64) {
-        (
-            self.received.load(),
-            self.coalesced.load(),
-            self.committed.load(),
-        )
-    }
-
-    fn max_batch(&self) -> usize {
-        self.max_batch.load(std::sync::atomic::Ordering::Relaxed) as usize
-    }
-    fn set_max_batch(&self, value: usize) {
-        self.max_batch
-            .store(value as u64, std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
-fn emit_resize_summary() {
-    flamewm_debug::emit(
-        flamewm_debug::WM_RESIZE_SUMMARY,
-        flamewm_debug::WM_RESIZE_SUMMARY_COOLDOWN,
-        || {
-            let counters = resize_counters();
-            let (received, coalesced, committed) = counters.snapshot();
-            let max = counters.max_batch();
-            format!("received={received} coalesced={coalesced} commit={committed} max_batch={max}")
-        },
-    );
 }
 
 struct ConfigureCounterSet {
@@ -724,7 +606,6 @@ struct ConfigureCounterSet {
     notify_input_child_total: std::sync::atomic::AtomicU64,
     notify_expected_total: std::sync::atomic::AtomicU64,
     notify_mismatch_total: std::sync::atomic::AtomicU64,
-    feedback_total: std::sync::atomic::AtomicU64,
     synthetic_total: std::sync::atomic::AtomicU64,
 }
 
@@ -757,7 +638,6 @@ fn configure_counters() -> &'static ConfigureCounterSet {
         notify_input_child_total: std::sync::atomic::AtomicU64::new(0),
         notify_expected_total: std::sync::atomic::AtomicU64::new(0),
         notify_mismatch_total: std::sync::atomic::AtomicU64::new(0),
-        feedback_total: std::sync::atomic::AtomicU64::new(0),
         synthetic_total: std::sync::atomic::AtomicU64::new(0),
     })
 }
@@ -770,7 +650,6 @@ macro_rules! configure_bump {
     }};
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_configure_summary() {
     flamewm_debug::emit(
         flamewm_debug::WM_CONFIGURE_SUMMARY,
@@ -778,7 +657,7 @@ fn emit_configure_summary() {
         || {
             let counters = configure_counters();
             format!(
-                "requests={} accepted={} refused_interactive={} refused_mode={} notify_frame={} notify_client={} expected={} mismatch={} feedback={} synthetic={}",
+                "requests={} accepted={} refused_interactive={} refused_mode={} notify_frame={} notify_client={} expected={} mismatch={} synthetic={}",
                 read(&counters.request_received_total),
                 read(&counters.request_accepted_total),
                 read(&counters.request_refused_interactive_total),
@@ -787,102 +666,10 @@ fn emit_configure_summary() {
                 read(&counters.notify_client_total),
                 read(&counters.notify_expected_total),
                 read(&counters.notify_mismatch_total),
-                read(&counters.feedback_total),
                 read(&counters.synthetic_total),
             )
         },
     );
-}
-
-struct MoveCounterSet {
-    received: TotalledCounter,
-    coalesced: TotalledCounter,
-    committed: TotalledCounter,
-    snap_target: flamewm_profiler::CounterPoint,
-    preview: flamewm_profiler::CounterPoint,
-    snap_target_changes: std::sync::atomic::AtomicU64,
-    preview_updates: std::sync::atomic::AtomicU64,
-    last_target: std::sync::atomic::AtomicU64,
-    toggle_max_total: std::sync::atomic::AtomicU64,
-    client_message_maximize_total: std::sync::atomic::AtomicU64,
-    state_mutations_total: std::sync::atomic::AtomicU64,
-    maximized_transitions: std::sync::atomic::AtomicU64,
-    resize_snap_blocked_total: std::sync::atomic::AtomicU64,
-}
-
-fn move_counters() -> &'static MoveCounterSet {
-    use std::sync::OnceLock;
-    static SET: OnceLock<MoveCounterSet> = OnceLock::new();
-    SET.get_or_init(|| MoveCounterSet {
-        received: TotalledCounter::new("wm.move.received"),
-        coalesced: TotalledCounter::new("wm.move.coalesced"),
-        committed: TotalledCounter::new("wm.move.commit"),
-        snap_target: flamewm_profiler::CounterPoint::new("wm.move.snap_target.count"),
-        preview: flamewm_profiler::CounterPoint::new("wm.move.preview.count"),
-        snap_target_changes: std::sync::atomic::AtomicU64::new(0),
-        preview_updates: std::sync::atomic::AtomicU64::new(0),
-        last_target: std::sync::atomic::AtomicU64::new(u64::MAX),
-        toggle_max_total: std::sync::atomic::AtomicU64::new(0),
-        client_message_maximize_total: std::sync::atomic::AtomicU64::new(0),
-        state_mutations_total: std::sync::atomic::AtomicU64::new(0),
-        maximized_transitions: std::sync::atomic::AtomicU64::new(0),
-        resize_snap_blocked_total: std::sync::atomic::AtomicU64::new(0),
-    })
-}
-
-impl MoveCounterSet {
-    fn record_received(&self, value: u64) {
-        self.received.add(value);
-    }
-
-    fn record_coalesced(&self, value: u64) {
-        self.coalesced.add(value);
-    }
-
-    fn record_committed(&self, value: u64) {
-        self.committed.add(value);
-    }
-
-    fn record_snap_target(&self, target_bits: u64) {
-        self.snap_target.increment();
-        if self
-            .last_target
-            .swap(target_bits, std::sync::atomic::Ordering::Relaxed)
-            != target_bits
-        {
-            bump(&self.snap_target_changes);
-        }
-    }
-
-    fn record_preview(&self) {
-        self.preview.increment();
-        bump(&self.preview_updates);
-    }
-
-    fn record_toggle_max(&self) {
-        bump(&self.toggle_max_total);
-    }
-
-    fn record_client_message_maximize(&self) {
-        bump(&self.client_message_maximize_total);
-    }
-
-    fn record_placement_transition(&self, before: PlacementMode, after: PlacementMode) {
-        if before == after {
-            return;
-        }
-        bump(&self.state_mutations_total);
-        if matches!(
-            (before, after),
-            (PlacementMode::Maximized, _) | (_, PlacementMode::Maximized)
-        ) {
-            bump(&self.maximized_transitions);
-        }
-    }
-
-    fn record_resize_snap_blocked(&self) {
-        bump(&self.resize_snap_blocked_total);
-    }
 }
 
 /// `_NET_FRAME_EXTENTS` for a server-decorated frame in `mode`: the effective
@@ -900,6 +687,15 @@ fn frame_extents_needs_publish(
     extents: [u32; 4],
 ) -> bool {
     published.get(&client) != Some(&extents)
+}
+
+/// True unless the last published client list and stacking are exactly `next` (first publish always true).
+fn client_list_needs_publish(
+    published: Option<&(Vec<Window>, Vec<Window>)>,
+    client_list: &[Window],
+    stacking: &[Window],
+) -> bool {
+    published.is_none_or(|(list, stack)| list != client_list || stack != stacking)
 }
 
 fn snap_target_bits(target: SnapTarget) -> u64 {
@@ -1027,13 +823,6 @@ fn emit_pointer_trace(
             point.y.saturating_sub(start.y),
         ))
     });
-    let commit = commit.map(|commit| {
-        let effects = join_effects(&commit.effects);
-        format!(
-            "grab={:?} ungrab={} abort_on_grab_fail={} effects=[{effects}]",
-            commit.grab, commit.ungrab, commit.abort_on_grab_fail
-        )
-    });
     let cooldown = if matches!(event, FrameEvent::Motion { .. }) {
         std::time::Duration::ZERO
     } else {
@@ -1041,6 +830,13 @@ fn emit_pointer_trace(
     };
     flamewm_debug::emit(id, cooldown, || {
         // Formatted only when tracing is enabled; keeps the `Some("Target")` text shape.
+        let commit = commit.map(|commit| {
+            let effects = join_effects(&commit.effects);
+            format!(
+                "grab={:?} ungrab={} abort_on_grab_fail={} effects=[{effects}]",
+                commit.grab, commit.ungrab, commit.abort_on_grab_fail
+            )
+        });
         let snap_target = snap_target.map(|target| format!("{target:?}"));
         format!(
             "phase={phase} client={client} source={source} region={region:?} event={event:?} pointer={pointer:?} delta={delta:?} pre={pre:?} post={post:?} placement={placement:?} post_placement={post_placement:?} snap_target={snap_target:?} preview={preview:?} commit={commit:?}"
@@ -1052,15 +848,17 @@ fn emit_native_configure<T, E: std::fmt::Debug>(
     id: flamewm_debug::DebugEventId,
     client: Window,
     xid: Window,
-    detail: String,
+    detail: impl FnOnce() -> String,
     result: &Result<T, E>,
 ) {
-    let outcome = match result {
-        Ok(_) => "ok".to_owned(),
-        Err(error) => format!("error={error:?}"),
-    };
+    // Built lazily: this runs on every drag motion, and the strings are only
+    // needed when debug emission is enabled.
     flamewm_debug::emit(id, std::time::Duration::from_millis(100), || {
-        format!("client={client} xid={xid} {detail} result={outcome}")
+        let outcome = match result {
+            Ok(_) => "ok".to_owned(),
+            Err(error) => format!("error={error:?}"),
+        };
+        format!("client={client} xid={xid} {} result={outcome}", detail())
     });
 }
 
@@ -1461,6 +1259,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     frame_to_client: HashMap<Window, Window>,
     /// Last `_NET_FRAME_EXTENTS` value published per client; skips identical re-publishes.
     frame_extents_published: HashMap<Window, [u32; 4]>,
+    /// Last `_NET_CLIENT_LIST` and `_NET_CLIENT_LIST_STACKING` pair published; skips identical re-publishes.
+    client_list_published: Option<(Vec<Window>, Vec<Window>)>,
     registry: FrameRegistry,
     sessions: HashMap<Window, ControllerState>,
     // Declared before `renderer`: overlays must drop while the renderer's display is open.
@@ -1487,6 +1287,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     controller_geometry: ControllerGeometryCache,
     /// Set by RandR notifications; the runtime refreshes the display snapshot on the next turn.
     display_topology_dirty: TopologyDirty,
+    /// Desktop CRTC modes and the hold/restore state for fullscreen mode changes.
+    desktop_mode: desktop_mode::DesktopModeTracker,
     dock_struts: HashMap<Window, [u32; 12]>,
     snap_preview: SnapPreviewSurface,
     chrome_runtimes: HashMap<Window, chrome_runtime::ChromeRuntime>,
@@ -1556,6 +1358,9 @@ impl OutputWorkArea {
     }
 }
 
+mod counters;
+mod desktop_mode;
+use counters::{bump, emit_resize_summary, move_counters, read, resize_counters};
 mod client_state;
 mod configure_handlers;
 mod effects;
@@ -1646,6 +1451,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             managed_order: Vec::new(),
             frame_to_client: HashMap::new(),
             frame_extents_published: HashMap::new(),
+            client_list_published: None,
             registry: FrameRegistry::new(),
             sessions: HashMap::new(),
             renderer,
@@ -1668,6 +1474,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             output_work_areas: Vec::new(),
             controller_geometry: ControllerGeometryCache::default(),
             display_topology_dirty: TopologyDirty::default(),
+            desktop_mode: desktop_mode::DesktopModeTracker::default(),
             dock_struts: HashMap::new(),
             snap_preview: SnapPreviewSurface::new(),
             chrome_runtimes: HashMap::new(),
@@ -1686,11 +1493,28 @@ impl<'a, C: Connection> Wm<'a, C> {
         })
     }
 
+    /// Submits a HIGH catalog-icon job; parks it on queue pressure. True when the service has stopped.
+    fn submit_catalog_icon(
+        &mut self,
+        client_id: Window,
+        token: u64,
+        job: flamewm_integrations_linux::icon_service::IconJob,
+    ) -> bool {
+        use flamewm_integrations_linux::icon_service::{IconSubmit, IconSubmitError};
+        match self.icon_service.borrow().submit(job) {
+            Ok(IconSubmit::Enqueued | IconSubmit::Coalesced) => false,
+            Ok(IconSubmit::DroppedLow) => unreachable!("catalog icons are HIGH priority"),
+            Err(IconSubmitError::HighQueueFull(job)) => {
+                retain_deferred_icon_job(&mut self.deferred_icon_jobs, client_id, token, job);
+                false
+            }
+            Err(IconSubmitError::Stopped(_)) => true,
+        }
+    }
+
     /// Consume worker completions on the WM owner thread and retry retained
     /// HIGH jobs only after a wake, so queue pressure never causes polling.
     fn drain_catalog_icon_results(&mut self) {
-        use flamewm_integrations_linux::icon_service::IconSubmit;
-
         let ready = self.icon_service.borrow_mut().drain_ready();
         for result in ready {
             let requesters = self.icon_requests.remove(&result.key).unwrap_or_default();
@@ -1726,23 +1550,12 @@ impl<'a, C: Connection> Wm<'a, C> {
             if !current {
                 continue;
             }
-            match self.icon_service.borrow().submit(job) {
-                Ok(IconSubmit::Enqueued | IconSubmit::Coalesced) => {}
-                Ok(IconSubmit::DroppedLow) => unreachable!("catalog icons are HIGH priority"),
-                Err(flamewm_integrations_linux::icon_service::IconSubmitError::HighQueueFull(
-                    job,
-                )) => {
-                    retain_deferred_icon_job(&mut self.deferred_icon_jobs, client_id, token, job);
-                }
-                Err(flamewm_integrations_linux::icon_service::IconSubmitError::Stopped(_)) => {}
-            }
+            self.submit_catalog_icon(client_id, token, job);
         }
     }
 
     fn request_catalog_icon(&mut self, client_id: Window) {
-        use flamewm_integrations_linux::icon_service::{
-            IconJob, IconPriority, IconSubmit, IconSubmitError,
-        };
+        use flamewm_integrations_linux::icon_service::{IconJob, IconPriority};
         use flamewm_integrations_linux::icons::{
             IconKey, IconLookupPurpose, IconRequest, IconSize,
         };
@@ -1802,16 +1615,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             .entry(key)
             .or_default()
             .push((client_id, token));
-        match self.icon_service.borrow().submit(job) {
-            Ok(IconSubmit::Enqueued | IconSubmit::Coalesced) => {}
-            Ok(IconSubmit::DroppedLow) => unreachable!("catalog icons are HIGH priority"),
-            Err(IconSubmitError::HighQueueFull(job)) => {
-                retain_deferred_icon_job(&mut self.deferred_icon_jobs, client_id, token, job);
-            }
-            Err(IconSubmitError::Stopped(_)) => {
-                if let Some(client) = self.clients.get_mut(&client_id) {
-                    client.icon_fallback = Some("catalog-icon-service-stopped".to_owned());
-                }
+        if self.submit_catalog_icon(client_id, token, job) {
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.icon_fallback = Some("catalog-icon-service-stopped".to_owned());
             }
         }
     }
@@ -1987,9 +1793,10 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// Output geometry and its work area at a root point; falls back to the primary work area.
     fn snap_zones_at(&self, root_x: i16, root_y: i16, fallback: Rect) -> (Rect, Rect) {
         self.output_for_point(i32::from(root_x), i32::from(root_y), fallback)
-            .map_or((self.work_area(), self.work_area()), |o| {
-                (o.geometry, o.work_area)
-            })
+            .map_or_else(
+                || (self.work_area(), self.work_area()),
+                |o| (o.geometry, o.work_area),
+            )
     }
 
     /// Snap target for a root point. Far edges use the physical output so bottom/right
@@ -2089,7 +1896,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         state.set_outer(Rect::new(outer.x, y, outer.width, height as u32));
         if let Some(resources) = self.registry.lookup_by_client(client) {
             for xid in resources.children() {
-                if new == Decoration::Server {
+                if input_child_mapped(new, resources.region_of(xid)) {
                     self.conn.map_window(xid)?;
                 } else {
                     self.conn.unmap_window(xid)?;
@@ -2142,13 +1949,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn work_root(&self) -> RootRect {
-        let work = self.work_area();
-        RootRect::new(
-            work.x,
-            work.y,
-            work.width.max(1) as i32,
-            work.height.max(1) as i32,
-        )
+        to_root_rect(self.work_area())
     }
 
     fn controller_for(&mut self, client: Window) -> Option<ControllerState> {
@@ -2166,7 +1967,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             let geometry = self
                 .controller_geometry
                 .fetch(client, children, regions, outputs);
-            (geometry.region_map.clone(), geometry.outputs.clone())
+            (Rc::clone(&geometry.region_map), Rc::clone(&geometry.outputs))
         };
         let screen_rect = RootRect::new(
             0,
@@ -2183,15 +1984,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 client,
                 state.frame,
                 state.placement,
-                {
-                    let work = self.work_area_for_rect(state.outer);
-                    RootRect::new(
-                        work.x,
-                        work.y,
-                        work.width.max(1) as i32,
-                        work.height.max(1) as i32,
-                    )
-                },
+                to_root_rect(self.work_area_for_rect(state.outer)),
                 screen_rect,
                 state.hints,
                 self.extents_for(client),
@@ -2236,6 +2029,10 @@ impl TopologyDirty {
     fn take(&mut self) -> bool {
         std::mem::take(&mut self.0)
     }
+
+    fn is_pending(&self) -> bool {
+        self.0
+    }
 }
 
 /// Work area of the output holding `rect`, else the global work area.
@@ -2274,6 +2071,16 @@ fn rehome_outer(
 
 fn from_root_rect(rect: RootRect) -> Rect {
     Rect::new(rect.x, rect.y, rect.w.max(0) as u32, rect.h.max(0) as u32)
+}
+
+/// Work-area rect as a root rect; a zero-size area becomes 1px so the controller never sees empty bounds.
+fn to_root_rect(rect: Rect) -> RootRect {
+    RootRect::new(
+        rect.x,
+        rect.y,
+        rect.width.max(1) as i32,
+        rect.height.max(1) as i32,
+    )
 }
 
 /// Stacking for a dock: directly above `frame`, the normal window just raised to the top.
@@ -2383,13 +2190,30 @@ fn desktop_names_payload(count: usize) -> Vec<u8> {
 
 /// True when `_NET_NUMBER_OF_DESKTOPS` or `_NET_DESKTOP_NAMES` differ from what
 /// we last published; an identical echo of our own write must not advance the fence.
-fn workspace_metadata_is_external(
-    count: Option<u32>,
-    names: &[u8],
-    own_count: usize,
-    own_names: &[u8],
-) -> bool {
-    count.map_or(true, |value| value as usize != own_count) || names != own_names
+fn workspace_metadata_is_external(count: Option<u32>, names: &[u8], own_count: usize) -> bool {
+    count.map_or(true, |value| value as usize != own_count)
+        || !desktop_names_match(names, own_count)
+}
+
+/// True when `names` equals `desktop_names_payload(count)`, checked without building the
+/// payload: this runs on every root desktop-metadata PropertyNotify.
+fn desktop_names_match(names: &[u8], count: usize) -> bool {
+    use std::io::Write;
+    let mut rest = names;
+    for index in 1..=count {
+        let mut buf = [0u8; 32];
+        let mut cursor: &mut [u8] = &mut buf;
+        // "Workspace " (10) + at most 20 digits + NUL fits in 32 bytes.
+        if write!(cursor, "Workspace {index}\0").is_err() {
+            return false;
+        }
+        let written = 32 - cursor.len();
+        match rest.strip_prefix(&buf[..written]) {
+            Some(next) => rest = next,
+            None => return false,
+        }
+    }
+    rest.is_empty()
 }
 
 /// Mapping a frame is necessary only when workspace membership changes its
@@ -2414,8 +2238,8 @@ struct ControllerGeometry {
     client: Window,
     children: [Window; 12],
     regions: [Option<FrameRegion>; 12],
-    region_map: HashMap<u32, FrameRegion>,
-    outputs: Vec<RootRect>,
+    region_map: Rc<HashMap<u32, FrameRegion>>,
+    outputs: Rc<Vec<RootRect>>,
 }
 
 /// Reuses the last `ControllerGeometry` while its inputs are unchanged. The key is the
@@ -2455,8 +2279,8 @@ impl ControllerGeometryCache {
                 client,
                 children,
                 regions,
-                region_map,
-                outputs: outputs.collect(),
+                region_map: Rc::new(region_map),
+                outputs: Rc::new(outputs.collect()),
             });
         }
         self.entry.as_ref().expect("entry populated above")
@@ -2464,130 +2288,23 @@ impl ControllerGeometryCache {
 }
 
 #[cfg(test)]
-mod controller_geometry_tests {
-    use super::*;
-
-    fn children(base: u32) -> [u32; 12] {
-        std::array::from_fn(|i| base + i as u32)
-    }
-
-    fn regions() -> [Option<FrameRegion>; 12] {
-        std::array::from_fn(|i| (i == 8).then_some(FrameRegion::TitleDrag))
-    }
-
-    fn outputs(width: i32) -> [RootRect; 1] {
-        [RootRect::new(0, 0, width, 1080)]
-    }
-
-    #[test]
-    fn unchanged_motions_rebuild_once() {
-        let mut cache = ControllerGeometryCache::default();
-        for _ in 0..1000 {
-            let geometry = cache.fetch(7, children(100), regions(), outputs(1920).into_iter());
-            assert_eq!(geometry.region_map.get(&108), Some(&FrameRegion::TitleDrag));
-            assert_eq!(geometry.region_map.len(), 1);
-            assert_eq!(geometry.outputs, outputs(1920));
-        }
-        assert_eq!(cache.rebuilds, 1);
-    }
-
-    #[test]
-    fn client_region_or_output_change_rebuilds() {
-        let mut cache = ControllerGeometryCache::default();
-        cache.fetch(7, children(100), regions(), outputs(1920).into_iter());
-        cache.fetch(8, children(100), regions(), outputs(1920).into_iter());
-        assert_eq!(cache.rebuilds, 2);
-        cache.fetch(8, children(200), regions(), outputs(1920).into_iter());
-        assert_eq!(cache.rebuilds, 3);
-        let mut moved = regions();
-        moved[8] = None;
-        let geometry = cache.fetch(8, children(200), moved, outputs(1920).into_iter());
-        assert!(geometry.region_map.is_empty());
-        assert_eq!(cache.rebuilds, 4);
-        cache.fetch(8, children(200), moved, outputs(1280).into_iter());
-        assert_eq!(cache.rebuilds, 5);
-    }
-}
+mod controller_geometry_tests;
 
 #[cfg(test)]
-mod transition_fix_tests {
-    use super::*;
-    use crate::frame::coords::RootRect;
+mod transition_fix_tests;
 
-    fn maximized(resume: Option<PlacementSnapshot>, restore: RootRect) -> PlacementState {
-        PlacementState {
-            mode: PlacementMode::Maximized,
-            current: RootRect::new(0, 0, 1920, 1080),
-            floating_restore: restore,
-            resume,
-        }
-    }
-
-    #[test]
-    fn unmaximize_target_returns_floating_rect_for_maximized_client() {
-        let floating = RootRect::new(500, 200, 400, 300);
-        let snap = PlacementSnapshot {
-            mode: PlacementMode::Floating,
-            rect: floating,
-        };
-        assert_eq!(
-            unmaximize_target(&maximized(Some(snap), floating)),
-            Some(floating)
-        );
-        assert_eq!(
-            unmaximize_target(&maximized(None, floating)),
-            Some(floating)
-        );
-    }
-
-    #[test]
-    fn unmaximize_target_is_none_when_not_maximized_or_not_floating_restore() {
-        let floating = RootRect::new(500, 200, 400, 300);
-        let mut floating_state = maximized(None, floating);
-        floating_state.mode = PlacementMode::Floating;
-        assert_eq!(unmaximize_target(&floating_state), None);
-        let fullscreen_snap = PlacementSnapshot {
-            mode: PlacementMode::Fullscreen,
-            rect: floating,
-        };
-        assert_eq!(
-            unmaximize_target(&maximized(Some(fullscreen_snap), floating)),
-            None
-        );
-    }
-
-    #[test]
-    fn expected_unmap_is_consumed_exactly_once() {
-        let mut ignore = 1u8;
-        assert!(consume_expected_unmap(&mut ignore));
-        assert!(
-            !consume_expected_unmap(&mut ignore),
-            "no count left for a real unmap"
-        );
-    }
-
-    /// Models the frame's UnmapNotify stream. Minimize hides the frame and counts one expected
-    /// unmap; restore maps the frame (no UnmapNotify). A later client-initiated unmap must
-    /// reach the WM. Before the fix, restore's extra count swallowed that unmap.
-    #[test]
-    fn restore_does_not_leave_an_ignore_count_that_swallows_a_later_unmap() {
-        // minimize: WM unmaps the frame and expects exactly one UnmapNotify.
-        let mut ignore_unmap = 1u8;
-        assert!(
-            consume_expected_unmap(&mut ignore_unmap),
-            "minimize unmap is ours"
-        );
-        // restore: WM maps the frame; mapping produces no UnmapNotify, so no count is added.
-        assert_eq!(ignore_unmap, 0);
-        // later: the client withdraws its own window; this unmap must not be swallowed.
-        assert!(
-            !consume_expected_unmap(&mut ignore_unmap),
-            "client unmap is handled"
-        );
+/// `_NET_WM_MOVERESIZE` direction (EWMH 0 = top-left, clockwise) to frame edges.
+/// Whether an input child is mapped for `decoration`. A Flame frame maps all of them. A
+/// client-drawn (GTK CSD) frame maps only its eight resize handles, so edges and corners
+/// still resize; title drag and controls stay with the client.
+fn input_child_mapped(decoration: Decoration, region: Option<FrameRegion>) -> bool {
+    match decoration {
+        Decoration::Server => true,
+        Decoration::ClientSide => matches!(region, Some(FrameRegion::Resize(_))),
+        Decoration::None => false,
     }
 }
 
-/// `_NET_WM_MOVERESIZE` direction (EWMH 0 = top-left, clockwise) to frame edges.
 fn resize_edges_for_direction(direction: u32) -> ResizeEdges {
     match direction {
         0 => ResizeEdges::top_left(),
@@ -2602,179 +2319,7 @@ fn resize_edges_for_direction(direction: u32) -> ResizeEdges {
 }
 
 #[cfg(test)]
-mod csd_direction_tests {
-    use super::*;
-
-    #[test]
-    fn moveresize_directions_map_clockwise_from_top_left() {
-        // EWMH _NET_WM_MOVERESIZE: 0 TL, 1 T, 2 TR, 3 R, 4 BR, 5 B, 6 BL, 7 L.
-        assert_eq!(resize_edges_for_direction(0), ResizeEdges::top_left());
-        assert_eq!(resize_edges_for_direction(1), ResizeEdges::top());
-        assert_eq!(resize_edges_for_direction(2), ResizeEdges::top_right());
-        assert_eq!(resize_edges_for_direction(3), ResizeEdges::right());
-        assert_eq!(resize_edges_for_direction(4), ResizeEdges::bottom_right());
-        assert_eq!(resize_edges_for_direction(5), ResizeEdges::bottom());
-        assert_eq!(resize_edges_for_direction(6), ResizeEdges::bottom_left());
-        assert_eq!(resize_edges_for_direction(7), ResizeEdges::left());
-    }
-
-    #[test]
-    fn moveresize_edge_mapping_rejects_plain_move() {
-        // Negative control: direction 8 (move) must not be a resize edge.
-        assert_eq!(resize_edges_for_direction(8), ResizeEdges::left());
-    }
-
-    #[test]
-    fn click_on_inactive_client_requests_focus_and_active_client_does_not() {
-        let client: Window = 0x400002;
-        assert!(super::should_focus_on_press(None, client));
-        assert!(super::should_focus_on_press(Some(0x400001), client));
-        // Negative control: a plain click on the already-active window must not refocus/restack.
-        assert!(!super::should_focus_on_press(Some(client), client));
-    }
-}
+mod csd_direction_tests;
 
 #[cfg(test)]
-mod frame_extents_publish_tests {
-    use super::*;
-
-    /// Mirrors `set_frame_extents`: a publish is sent only when the value differs.
-    fn publish_all(values: &[[u32; 4]]) -> usize {
-        let mut published = HashMap::new();
-        values
-            .iter()
-            .filter(|&&extents| {
-                let needs = frame_extents_needs_publish(&published, 7, extents);
-                if needs {
-                    published.insert(7, extents);
-                }
-                needs
-            })
-            .count()
-    }
-
-    #[test]
-    fn first_publish_always_sends_and_identical_repeats_are_suppressed() {
-        let floating = [1, 1, 25, 1];
-        let published: HashMap<Window, [u32; 4]> = HashMap::new();
-        assert!(frame_extents_needs_publish(&published, 7, floating));
-        assert_eq!(publish_all(&[floating, floating, floating, floating]), 1);
-    }
-
-    #[test]
-    fn any_change_republishes_including_border_mode_switch() {
-        let floating = [1, 1, 25, 1];
-        let snapped = [0, 0, 25, 0];
-        let client_side = [0, 0, 0, 0];
-        // Floating -> snapped (border 1 -> 0) -> floating -> client-side decoration.
-        assert_eq!(publish_all(&[floating, snapped, floating, client_side]), 4);
-        // Titlebar-only change must also be detected (no border-only shortcut).
-        assert_eq!(publish_all(&[floating, [1, 1, 0, 1], [1, 1, 0, 1]]), 2);
-    }
-
-    #[test]
-    fn frame_extents_follow_effective_border_per_mode() {
-        let (border, titlebar) = (1, 31);
-        let floating = [1, 1, 32, 1];
-        let snapped = [0, 0, 31, 0];
-        assert_eq!(
-            frame_extents_for_mode(PlacementMode::Floating, border, titlebar),
-            floating
-        );
-        assert_eq!(
-            frame_extents_for_mode(
-                PlacementMode::Snapped(crate::frame::model::SnapTarget::Left),
-                border,
-                titlebar
-            ),
-            snapped
-        );
-        assert_eq!(
-            frame_extents_for_mode(PlacementMode::Maximized, border, titlebar),
-            snapped
-        );
-        assert_eq!(
-            frame_extents_for_mode(PlacementMode::Fullscreen, border, titlebar),
-            snapped
-        );
-        // Unsnap returns to the floating border and titlebar extents.
-        assert_eq!(
-            frame_extents_for_mode(PlacementMode::Floating, border, titlebar),
-            floating
-        );
-    }
-
-    /// Client interior per mode: the published EWMH side/bottom extents equal
-    /// the effective X border (the only side inset), and the client rect sits
-    /// at (0, titlebar) spanning the full frame width. No side inset leaks
-    /// into the client for snapped/maximized/fullscreen frames.
-    #[test]
-    fn client_interior_matches_effective_border_per_mode() {
-        let outer = crate::frame::coords::RootRect {
-            x: 10,
-            y: 20,
-            w: 800,
-            h: 600,
-        };
-        let titlebar: u16 = 31;
-        let configured: u16 = 1;
-        let modes = [
-            PlacementMode::Floating,
-            PlacementMode::Snapped(crate::frame::model::SnapTarget::TopLeft),
-            PlacementMode::Maximized,
-            PlacementMode::Fullscreen,
-        ];
-        for mode in modes {
-            let border = frame_border_for_mode(mode, configured);
-            let [left, right, top, bottom] = frame_extents_for_mode(mode, configured, titlebar);
-            assert_eq!(left, u32::from(border), "{mode:?} left extent");
-            assert_eq!(right, u32::from(border), "{mode:?} right extent");
-            assert_eq!(bottom, u32::from(border), "{mode:?} bottom extent");
-            assert_eq!(
-                top,
-                u32::from(titlebar) + u32::from(border),
-                "{mode:?} top extent"
-            );
-            let ext = FrameExtents::new(i32::from(titlebar), i32::from(border));
-            let (x, y, w, h) = lifecycle::client_configure(outer, ext);
-            assert_eq!((x, y), (0, i32::from(titlebar)), "{mode:?} client origin");
-            assert_eq!(
-                w, outer.w as u32,
-                "{mode:?} client width equals frame width"
-            );
-            assert_eq!(
-                h,
-                (outer.h - i32::from(titlebar)) as u32,
-                "{mode:?} client height"
-            );
-        }
-        // Client-drawn side insets must never appear for borderless modes.
-        let snapped = FrameExtents::new(i32::from(titlebar), 0);
-        assert_eq!(lifecycle::client_configure(outer, snapped).2, 800);
-    }
-
-    /// The ConfigureFrameRoot arm commits the border/geometry, then publishes
-    /// the effective extents through the single owner, `set_frame_extents`.
-    #[test]
-    fn configure_frame_root_arm_publishes_extents_after_commit() {
-        let src = WM_SOURCE;
-        let start = src
-            .find("FrameEffect::ConfigureFrameRoot { x, y, w, h } => {")
-            .expect("ConfigureFrameRoot arm");
-        let end = start
-            + src[start..]
-                .find("FrameEffect::MoveFrameRoot")
-                .expect("arm following ConfigureFrameRoot");
-        let arm = &src[start..end];
-        let commit = arm
-            .find("self.commit_frame_rect(client, x, y, w, h);")
-            .expect("arm commits frame rect");
-        let publish = arm
-            .find("self.set_frame_extents(client)?;")
-            .expect("arm publishes frame extents");
-        assert!(
-            publish > commit,
-            "extents must publish after the rect is committed"
-        );
-    }
-}
+mod frame_extents_publish_tests;

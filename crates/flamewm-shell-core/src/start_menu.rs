@@ -258,18 +258,6 @@ impl StartModel {
             .collect()
     }
 
-    /// Borrowed generation view: presentation bucket plus ad-hoc query.
-    #[must_use]
-    pub fn bucket_view(&self, bucket: StartBucket, query: &str) -> Vec<&DesktopApplication> {
-        let needle = query.trim().to_lowercase();
-        self.sorted
-            .iter()
-            .filter(|&&index| bucket_for_application(&self.applications[index]) == bucket)
-            .filter(|&&index| self.entries[index].matches(&needle))
-            .map(|&index| &self.applications[index])
-            .collect()
-    }
-
     #[must_use]
     pub fn results(&self) -> Vec<&DesktopApplication> {
         self.query_view(&self.query)

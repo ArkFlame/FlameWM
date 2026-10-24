@@ -4,10 +4,28 @@
 
 use std::collections::HashMap;
 
-use flamewm_render_core::Overflow;
+use flamewm_render_core::{CompiledNode, NodeKind, Overflow, Style};
 use flamewm_ui_core::style::UiLayer;
 
 use crate::{RuntimeImage, UiColor, UiDocumentAccess};
+
+/// Fixture node with empty action/text and no style; callers override fields with `..`.
+#[cfg(test)]
+pub(crate) fn compiled_node(id: &str, kind: NodeKind) -> CompiledNode {
+    CompiledNode {
+        kind,
+        parent: None,
+        first_child: None,
+        next_sibling: None,
+        id: id.to_string().into(),
+        action: std::borrow::Cow::Borrowed(""),
+        text: std::borrow::Cow::Borrowed(""),
+        image: None,
+        style: Style::default(),
+        hover_style: None,
+        active_style: None,
+    }
+}
 
 #[derive(Default)]
 pub struct RecordingUiDoc {

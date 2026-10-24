@@ -69,6 +69,37 @@ impl X11App {
         width: u32,
         height: u32,
     ) -> Result<Pixmap, String> {
+        let visual = unsafe { self.backdrop_argb_visual() }?;
+        let root = unsafe { XRootWindow(self.display, self.screen) };
+        let pixmap = unsafe { XCreatePixmap(self.display, root, width, height, 32) };
+        if pixmap == 0 {
+            return Err("backdrop: XCreatePixmap failed".to_string());
+        }
+        if let Err(error) = unsafe { self.upload_argb32_words(pixmap, visual, argb, width, height) }
+        {
+            unsafe { crate::native::xresource::free_pixmap_raw(self.display, pixmap) };
+            return Err(error);
+        }
+        Ok(pixmap)
+    }
+
+    /// Re-uploads `argb` into an existing 32-bit pixmap of `width` x `height`.
+    ///
+    /// # Safety
+    ///
+    /// `pixmap` must be a live 32-bit pixmap on this app's display.
+    pub(crate) unsafe fn upload_argb_into_pixmap(
+        &mut self,
+        pixmap: Pixmap,
+        argb: &[u32],
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        let visual = unsafe { self.backdrop_argb_visual() }?;
+        unsafe { self.upload_argb32_words(pixmap, visual, argb, width, height) }
+    }
+
+    unsafe fn backdrop_argb_visual(&self) -> Result<*mut Visual, String> {
         let mut vinfo: XVisualInfo = unsafe { std::mem::zeroed() };
         let matched = unsafe {
             XMatchVisualInfo(self.display, self.screen, 32, TRUE_COLOR_CLASS, &mut vinfo)
@@ -76,24 +107,13 @@ impl X11App {
         if matched == 0 || vinfo.visual.is_null() {
             return Err("backdrop: no 32-bit TrueColor visual".to_string());
         }
-        let root = unsafe { XRootWindow(self.display, self.screen) };
-        let pixmap = unsafe { XCreatePixmap(self.display, root, width, height, 32) };
-        if pixmap == 0 {
-            return Err("backdrop: XCreatePixmap failed".to_string());
-        }
-        if let Err(error) =
-            unsafe { self.upload_argb32_words(pixmap, vinfo.visual, argb, width, height) }
-        {
-            unsafe { XFreePixmap(self.display, pixmap) };
-            return Err(error);
-        }
-        Ok(pixmap)
+        Ok(vinfo.visual)
     }
 
     /// Frees the retained backdrop, if any. Surfaces without backdrop keep the transparent clear.
     pub(crate) fn clear_surface_backdrop(&mut self) {
         if let Some(backdrop) = self.surface_backdrop.take() {
-            unsafe { XFreePixmap(self.display, backdrop.pixmap) };
+            unsafe { crate::native::xresource::free_pixmap_raw(self.display, backdrop.pixmap) };
         }
     }
 
@@ -199,7 +219,8 @@ impl X11App {
     }
 }
 
-/// What produced a node backdrop. Any change misses the cache and recaptures.
+/// Geometry and blur that shape a node backdrop. The pixels beneath are compared separately, so
+/// the cache never depends on the document revision: text edits keep the same backdrop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NodeBackdropKey {
     pub(crate) rect: (i32, i32, u32, u32),
@@ -207,26 +228,34 @@ pub(crate) struct NodeBackdropKey {
     pub(crate) clip: (u32, u32),
     pub(crate) radius: u32,
     pub(crate) blur_percent: u8,
-    pub(crate) revision: u64,
+}
+
+/// One retained backdrop: the geometry it was blurred with, the captured pixels beneath it (the
+/// exact input), and the blurred pixmap.
+#[derive(Debug)]
+struct NodeBackdropEntry {
+    key: NodeBackdropKey,
+    source: Vec<u8>,
+    pixmap: Pixmap,
 }
 
 /// Retained blurred backdrops per node index, freed when a frame stops painting them.
 #[derive(Debug, Default)]
 pub(crate) struct NodeBackdropCache {
-    entries: HashMap<u32, (NodeBackdropKey, Pixmap)>,
+    entries: HashMap<u32, NodeBackdropEntry>,
     used: HashSet<u32>,
     /// Scratch for pixmaps freed by the last `finish_frame` / `drain`; reused across frames.
     freed: Vec<Pixmap>,
 }
 
 impl NodeBackdropCache {
-    /// Pixmap for `node` when its entry was produced by exactly `key`.
-    pub(crate) fn hit(&mut self, node: u32, key: NodeBackdropKey) -> Option<Pixmap> {
+    /// Pixmap for `node` when its entry was blurred from exactly `key` and `source`.
+    pub(crate) fn hit(&mut self, node: u32, key: NodeBackdropKey, source: &[u8]) -> Option<Pixmap> {
         self.used.insert(node);
         self.entries
             .get(&node)
-            .filter(|(cached, _)| *cached == key)
-            .map(|(_, pixmap)| *pixmap)
+            .filter(|entry| entry.key == key && entry.source == source)
+            .map(|entry| entry.pixmap)
     }
 
     /// Stores `pixmap` for `node`; returns the replaced pixmap for the caller to free.
@@ -234,10 +263,13 @@ impl NodeBackdropCache {
         &mut self,
         node: u32,
         key: NodeBackdropKey,
+        source: Vec<u8>,
         pixmap: Pixmap,
     ) -> Option<Pixmap> {
         self.used.insert(node);
-        self.entries.insert(node, (key, pixmap)).map(|(_, old)| old)
+        self.entries
+            .insert(node, NodeBackdropEntry { key, source, pixmap })
+            .map(|old| old.pixmap)
     }
 
     /// Ends a frame: removes entries not touched this frame and returns their pixmaps to free.
@@ -246,10 +278,10 @@ impl NodeBackdropCache {
         self.freed.clear();
         let used = &self.used;
         let freed = &mut self.freed;
-        self.entries.retain(|node, (_, pixmap)| {
+        self.entries.retain(|node, entry| {
             let keep = used.contains(node);
             if !keep {
-                freed.push(*pixmap);
+                freed.push(entry.pixmap);
             }
             keep
         });
@@ -262,7 +294,7 @@ impl NodeBackdropCache {
         self.used.clear();
         self.freed.clear();
         let freed = &mut self.freed;
-        freed.extend(self.entries.drain().map(|(_, (_, pixmap))| pixmap));
+        freed.extend(self.entries.drain().map(|(_, entry)| entry.pixmap));
         &self.freed
     }
 }
@@ -332,8 +364,9 @@ pub(crate) fn node_backdrop_words(
 
 impl X11App {
     /// Paints the blurred root pixels under a translucent node's rect, clipped to its rounded
-    /// shape. The source is the scene painted so far (wallpaper layers below the node). Cached
-    /// per (rect, radius, blur, revision); capture failure keeps the plain fill.
+    /// shape. The source is the scene painted so far (wallpaper layers below the node). Each frame
+    /// captures the pixels beneath; the blur is reused when they and the geometry are unchanged, so
+    /// a text edit above a translucent surface does not re-blur it. Capture failure keeps the plain fill.
     ///
     /// # Safety
     ///
@@ -344,7 +377,6 @@ impl X11App {
         rect: (i32, i32, u32, u32),
         radius: u32,
         blur_percent: u8,
-        revision: u64,
     ) -> Result<(), String> {
         if self.xrender.is_none() {
             return Ok(());
@@ -357,24 +389,22 @@ impl X11App {
             clip: (clip.2, clip.3),
             radius,
             blur_percent,
-            revision,
         };
-        let pixmap = match self.node_backdrops.hit(node, key) {
+        let Ok(capture) = crate::backdrop::capture_drawable_rect(self.display, self.backbuffer, clip)
+        else {
+            return Ok(());
+        };
+        let pixmap = match self.node_backdrops.hit(node, key, &capture.pixels) {
             Some(pixmap) => pixmap,
             None => {
-                let Ok(capture) =
-                    crate::backdrop::capture_drawable_rect(self.display, self.backbuffer, clip)
-                else {
-                    return Ok(());
-                };
                 let Some(words) =
-                    node_backdrop_words(capture.pixels, clip, rect, radius, blur_percent)
+                    node_backdrop_words(capture.pixels.clone(), clip, rect, radius, blur_percent)
                 else {
                     return Ok(());
                 };
                 let pixmap = unsafe { self.upload_argb_pixmap(&words, clip.2, clip.3)? };
-                if let Some(old) = self.node_backdrops.store(node, key, pixmap) {
-                    unsafe { XFreePixmap(self.display, old) };
+                if let Some(old) = self.node_backdrops.store(node, key, capture.pixels, pixmap) {
+                    unsafe { crate::native::xresource::free_pixmap_raw(self.display, old) };
                 }
                 pixmap
             }
@@ -388,14 +418,14 @@ impl X11App {
     /// Frees node backdrops that the finished frame did not paint.
     pub(crate) fn finish_node_backdrops(&mut self) {
         for &pixmap in self.node_backdrops.finish_frame() {
-            unsafe { XFreePixmap(self.display, pixmap) };
+            unsafe { crate::native::xresource::free_pixmap_raw(self.display, pixmap) };
         }
     }
 
     /// Frees every node backdrop pixmap (teardown).
     pub(crate) fn clear_node_backdrops(&mut self) {
         for &pixmap in self.node_backdrops.drain() {
-            unsafe { XFreePixmap(self.display, pixmap) };
+            unsafe { crate::native::xresource::free_pixmap_raw(self.display, pixmap) };
         }
     }
 }
@@ -404,13 +434,12 @@ impl X11App {
 mod tests {
     use super::*;
 
-    fn key(blur: u8, revision: u64) -> NodeBackdropKey {
+    fn key(blur: u8) -> NodeBackdropKey {
         NodeBackdropKey {
             rect: (10, 20, 40, 30),
             clip: (40, 30),
             radius: 6,
             blur_percent: blur,
-            revision,
         }
     }
 
@@ -466,14 +495,15 @@ mod tests {
     }
 
     #[test]
-    fn cache_hits_only_on_identical_key() {
+    fn cache_hits_only_on_identical_key_and_source() {
         let mut cache = NodeBackdropCache::default();
-        assert_eq!(cache.store(3, key(80, 1), 7), None);
-        assert_eq!(cache.hit(3, key(80, 1)), Some(7));
-        assert_eq!(cache.hit(3, key(80, 2)), None, "revision change misses");
-        assert_eq!(cache.hit(3, key(40, 1)), None, "blur change misses");
+        let source = vec![1_u8; 16];
+        assert_eq!(cache.store(3, key(80), source.clone(), 7), None);
+        assert_eq!(cache.hit(3, key(80), &source), Some(7), "same geometry and pixels reuse the blur");
+        assert_eq!(cache.hit(3, key(80), &[2_u8; 16]), None, "changed pixels beneath miss");
+        assert_eq!(cache.hit(3, key(40), &source), None, "blur change misses");
         assert_eq!(
-            cache.store(3, key(40, 1), 8),
+            cache.store(3, key(40), source.clone(), 8),
             Some(7),
             "replaced pixmap returned"
         );
@@ -482,11 +512,12 @@ mod tests {
     #[test]
     fn cache_misses_when_clip_size_changes() {
         let mut cache = NodeBackdropCache::default();
-        let mut resized = key(80, 1);
+        let source = vec![1_u8; 16];
+        let mut resized = key(80);
         resized.clip = (30, 30);
-        assert_eq!(cache.store(3, key(80, 1), 7), None);
+        assert_eq!(cache.store(3, key(80), source.clone(), 7), None);
         assert_eq!(
-            cache.hit(3, resized),
+            cache.hit(3, resized, &source),
             None,
             "scene resize with same rect misses"
         );
@@ -495,11 +526,11 @@ mod tests {
     #[test]
     fn unpainted_nodes_are_pruned_per_frame() {
         let mut cache = NodeBackdropCache::default();
-        cache.store(1, key(80, 1), 11);
-        cache.store(2, key(80, 1), 12);
+        cache.store(1, key(80), vec![0], 11);
+        cache.store(2, key(80), vec![0], 12);
         cache.finish_frame();
-        assert_eq!(cache.hit(1, key(80, 1)), Some(11));
+        assert_eq!(cache.hit(1, key(80), &[0]), Some(11));
         assert_eq!(cache.finish_frame(), &[12]);
-        assert_eq!(cache.hit(2, key(80, 1)), None);
+        assert_eq!(cache.hit(2, key(80), &[0]), None);
     }
 }

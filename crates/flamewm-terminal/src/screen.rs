@@ -4,64 +4,17 @@ use std::collections::VecDeque;
 
 use crate::parser::Perform;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Color {
-    #[default]
-    Default,
-    Indexed(u8),
-    Rgb(u8, u8, u8),
-}
+mod cell;
+mod charset;
+mod modes;
+mod sgr;
 
-pub mod attr {
-    pub const BOLD: u16 = 1;
-    pub const ITALIC: u16 = 2;
-    pub const UNDERLINE: u16 = 4;
-    pub const INVERSE: u16 = 8;
-    pub const DIM: u16 = 16;
-    pub const STRIKE: u16 = 32;
-    /// First cell of a double-width character.
-    pub const WIDE: u16 = 64;
-    /// Second cell of a double-width character; holds no glyph of its own.
-    pub const SPACER: u16 = 128;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Cell {
-    pub ch: char,
-    pub fg: Color,
-    pub bg: Color,
-    pub attrs: u16,
-}
-
-impl Cell {
-    pub const fn blank(bg: Color) -> Self {
-        Self { ch: ' ', fg: Color::Default, bg, attrs: 0 }
-    }
-}
-
-pub type Line = Vec<Cell>;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct Pen {
-    pub fg: Color,
-    pub bg: Color,
-    pub attrs: u16,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CursorShape {
-    Block,
-    Underline,
-    Bar,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MouseMode {
-    Off,
-    Press,
-    Drag,
-    Any,
-}
+pub use self::cell::{Cell, Color, Line, Pen, attr};
+pub use self::charset::char_width;
+pub use self::modes::{CursorShape, MouseMode};
+use self::cell::{blank_line, compact_history};
+use self::charset::dec_graphics;
+use self::sgr::extended_color;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Saved {
@@ -70,6 +23,15 @@ struct Saved {
     pen: Pen,
     g1_graphics: bool,
     use_g1: bool,
+}
+
+/// Live-grid rows changed since the last `Screen::take_dirty`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Dirty {
+    /// Every row may have changed (scroll, resize, mode switch, reset): rebuild the whole grid.
+    All,
+    /// Only these live-grid rows (ascending) were written.
+    Rows(Vec<usize>),
 }
 
 #[derive(Debug)]
@@ -108,55 +70,16 @@ pub struct Screen {
     pub title: Option<String>,
     pub bell: bool,
     replies: Vec<u8>,
+    /// Live-grid rows written since the last `take_dirty`; `dirty_all` covers wholesale changes.
+    dirty_rows: Vec<bool>,
+    dirty_all: bool,
+    /// Last graphic character printed, the source for REP (`CSI b`).
+    last_char: Option<char>,
 }
 
-fn blank_line(cols: usize, bg: Color) -> Line {
-    vec![Cell::blank(bg); cols]
-}
-
-/// Display width of one scalar: 0 for combining marks, 2 for East Asian wide and emoji ranges, else 1.
-pub fn char_width(c: char) -> usize {
-    let u = c as u32;
-    if matches!(u, 0x0300..=0x036f | 0x200b..=0x200f | 0xfe00..=0xfe0f | 0x20d0..=0x20ff) {
-        return 0;
-    }
-    let wide = matches!(u,
-        0x1100..=0x115f | 0x2e80..=0x303e | 0x3041..=0x33ff | 0x3400..=0x4dbf | 0x4e00..=0x9fff
-        | 0xa000..=0xa4cf | 0xac00..=0xd7a3 | 0xf900..=0xfaff | 0xfe30..=0xfe4f | 0xff00..=0xff60
-        | 0xffe0..=0xffe6 | 0x1f300..=0x1f64f | 0x1f900..=0x1f9ff | 0x20000..=0x3fffd);
-    if wide { 2 } else { 1 }
-}
-
-/// DEC Special Graphics (ESC ( 0): the line-drawing characters used by curses programs.
-fn dec_graphics(c: char) -> char {
-    match c {
-        '`' => '◆',
-        'a' => '▒',
-        'f' => '°',
-        'g' => '±',
-        'j' => '┘',
-        'k' => '┐',
-        'l' => '┌',
-        'm' => '└',
-        'n' => '┼',
-        'o' => '⎺',
-        'p' => '⎻',
-        'q' => '─',
-        'r' => '⎼',
-        's' => '⎽',
-        't' => '├',
-        'u' => '┤',
-        'v' => '┴',
-        'w' => '┬',
-        'x' => '│',
-        'y' => '≤',
-        'z' => '≥',
-        '{' => 'π',
-        '|' => '≠',
-        '}' => '£',
-        '~' => '·',
-        other => other,
-    }
+/// Default tab stops: every eighth column, excluding column 0.
+fn default_tabs(cols: usize) -> Vec<bool> {
+    (0..cols).map(|c| c % 8 == 0 && c != 0).collect()
 }
 
 impl Screen {
@@ -189,7 +112,7 @@ impl Screen {
             focus_events: false,
             mouse: MouseMode::Off,
             mouse_sgr: false,
-            tabs: (0..cols).map(|c| c % 8 == 0 && c != 0).collect(),
+            tabs: default_tabs(cols),
             cursor_shape: CursorShape::Block,
             cursor_blink: true,
             g0_graphics: false,
@@ -198,6 +121,9 @@ impl Screen {
             title: None,
             bell: false,
             replies: Vec::new(),
+            dirty_rows: vec![false; rows],
+            dirty_all: true,
+            last_char: None,
         }
     }
 
@@ -221,8 +147,35 @@ impl Screen {
         if self.alt_active { &self.alt } else { &self.primary }
     }
 
+    /// Whole live grid, for changes that can move any row (scrolling, mode switches). Marks every row dirty.
     fn grid_mut(&mut self) -> &mut Vec<Line> {
+        self.dirty_all = true;
         if self.alt_active { &mut self.alt } else { &mut self.primary }
+    }
+
+    /// One live-grid row, for cell writes that touch only that row.
+    fn row_mut(&mut self, row: usize) -> &mut Line {
+        self.dirty_rows[row] = true;
+        let grid = if self.alt_active { &mut self.alt } else { &mut self.primary };
+        &mut grid[row]
+    }
+
+    /// Dirty-marked live rows not yet taken (benchmark probe).
+    #[cfg(test)]
+    pub fn pending_dirty_rows(&self) -> usize {
+        self.dirty_rows.iter().filter(|dirty| **dirty).count()
+    }
+
+    /// Takes the rows changed since the last call, so a renderer rebuilds only those.
+    pub fn take_dirty(&mut self) -> Dirty {
+        let all = std::mem::take(&mut self.dirty_all);
+        let rows: Vec<usize> = self.dirty_rows.iter().enumerate().filter_map(|(row, dirty)| dirty.then_some(row)).collect();
+        self.dirty_rows.fill(false);
+        if all { Dirty::All } else { Dirty::Rows(rows) }
+    }
+
+    fn mark_all(&mut self) {
+        self.dirty_all = true;
     }
 
     /// Visible row `row` of the live grid (not scrollback).
@@ -253,10 +206,6 @@ impl Screen {
         std::mem::take(&mut self.replies)
     }
 
-    pub fn clear_scrollback(&mut self) {
-        self.scrollback.clear();
-    }
-
     fn reply(&mut self, text: &str) {
         self.replies.extend_from_slice(text.as_bytes());
     }
@@ -276,18 +225,15 @@ impl Screen {
             let shift = excess.min(self.row);
             for _ in 0..shift {
                 let line = self.primary.remove(0);
-                self.scrollback.push_back(line);
+                self.scrollback.push_back(compact_history(line));
                 self.primary.push(blank_line(cols, Color::Default));
                 self.row = self.row.saturating_sub(1);
             }
-            self.primary.truncate(rows);
-            self.alt.truncate(rows);
         } else if rows > self.rows {
             let grow = rows - self.rows;
             for _ in 0..grow {
                 if !self.alt_active && self.scrollback.back().is_some() && self.primary.len() < rows {
-                    if let Some(line) = self.scrollback.pop_back() {
-                        let mut line = line;
+                    if let Some(mut line) = self.scrollback.pop_back() {
                         line.resize(cols, Cell::blank(Color::Default));
                         self.primary.insert(0, line);
                         self.row += 1;
@@ -305,10 +251,9 @@ impl Screen {
         self.alt.truncate(rows);
         self.cols = cols;
         self.rows = rows;
-        self.tabs.resize(cols, false);
-        for (c, tab) in self.tabs.iter_mut().enumerate() {
-            *tab = c % 8 == 0 && c != 0;
-        }
+        self.dirty_rows = vec![false; rows];
+        self.mark_all();
+        self.tabs = default_tabs(cols);
         self.scroll_top = 0;
         self.scroll_bottom = rows - 1;
         self.row = self.row.min(rows - 1);
@@ -333,7 +278,7 @@ impl Screen {
         for _ in 0..count.min(bottom - top + 1) {
             let line = self.grid_mut().remove(top);
             if capture {
-                self.scrollback.push_back(line);
+                self.scrollback.push_back(compact_history(line));
                 if self.scrollback.len() > self.scrollback_limit {
                     self.scrollback.pop_front();
                 }
@@ -369,6 +314,19 @@ impl Screen {
         }
     }
 
+    /// IL/DL: scrolls the region from `row` down (insert) or up (delete). Rows outside the scroll region are left alone.
+    fn scroll_from(&mut self, row: usize, count: usize, down: bool) {
+        if row < self.scroll_top || row > self.scroll_bottom {
+            return;
+        }
+        let saved_top = self.scroll_top;
+        self.scroll_top = row;
+        if down { self.scroll_down(count) } else { self.scroll_up(count) }
+        self.scroll_top = saved_top;
+        self.col = 0;
+        self.wrap_next = false;
+    }
+
     fn set_cursor(&mut self, row: usize, col: usize) {
         let (top, bottom) = if self.origin { (self.scroll_top, self.scroll_bottom) } else { (0, self.rows - 1) };
         let row = if self.origin { (top + row).min(bottom) } else { row.min(bottom) };
@@ -380,8 +338,12 @@ impl Screen {
     fn erase_cells(&mut self, row: usize, from: usize, to: usize) {
         let blank = self.blank();
         let to = to.min(self.cols);
-        let line = &mut self.grid_mut()[row];
-        for cell in &mut line[from.min(to)..to] {
+        let from = from.min(to);
+        if self.grid()[row][from..to].iter().all(|cell| *cell == blank) {
+            return;
+        }
+        let line = self.row_mut(row);
+        for cell in &mut line[from..to] {
             *cell = blank;
         }
     }
@@ -390,7 +352,9 @@ impl Screen {
         let blank = self.blank();
         let cols = self.cols;
         for row in from..to.min(self.rows) {
-            self.grid_mut()[row] = vec![blank; cols];
+            if self.grid()[row].iter().any(|cell| *cell != blank) {
+                *self.row_mut(row) = vec![blank; cols];
+            }
         }
     }
 
@@ -416,23 +380,31 @@ impl Screen {
         let pen = self.pen;
         let cols = self.cols;
         if self.insert {
-            let line = &mut self.grid_mut()[row];
+            let line = self.row_mut(row);
             line.truncate(cols - width);
             for _ in 0..width {
                 line.insert(col, Cell::blank(pen.bg));
             }
             line.truncate(cols);
         }
-        let line = &mut self.grid_mut()[row];
-        if line[col].attrs & attr::SPACER != 0 && col > 0 {
-            line[col - 1] = Cell::blank(line[col - 1].bg);
-        }
-        if line[col].attrs & attr::WIDE != 0 && col + 1 < cols {
-            line[col + 1] = Cell::blank(line[col + 1].bg);
-        }
-        line[col] = Cell { ch: c, fg: pen.fg, bg: pen.bg, attrs: pen.attrs | if width == 2 { attr::WIDE } else { 0 } };
-        if width == 2 {
-            line[col + 1] = Cell { ch: ' ', fg: pen.fg, bg: pen.bg, attrs: attr::SPACER | pen.attrs };
+        // Rewriting a cell with the same content changes nothing, so the row stays clean (an htop-style repaint writes
+        // the same text every tick).
+        let cell = Cell { ch: c, fg: pen.fg, bg: pen.bg, attrs: pen.attrs | if width == 2 { attr::WIDE } else { 0 } };
+        let spacer = Cell { ch: ' ', fg: pen.fg, bg: pen.bg, attrs: attr::SPACER | pen.attrs };
+        let grid = self.grid();
+        let unchanged = !self.insert && grid[row][col] == cell && (width == 1 || grid[row][col + 1] == spacer);
+        if !unchanged {
+            let line = self.row_mut(row);
+            if line[col].attrs & attr::SPACER != 0 && col > 0 {
+                line[col - 1] = Cell::blank(line[col - 1].bg);
+            }
+            if line[col].attrs & attr::WIDE != 0 && col + 1 < cols {
+                line[col + 1] = Cell::blank(line[col + 1].bg);
+            }
+            line[col] = cell;
+            if width == 2 {
+                line[col + 1] = spacer;
+            }
         }
         self.col += width;
         if self.col >= cols {
@@ -475,22 +447,27 @@ impl Screen {
         }
     }
 
+    fn set_modes(&mut self, private: bool, params: &[Vec<u16>], on: bool) {
+        for group in params {
+            self.set_mode(private, group.first().copied().unwrap_or(0), on);
+        }
+    }
+
     fn switch_alt(&mut self, on: bool, save_cursor: bool) {
         if on == self.alt_active {
             return;
         }
+        self.mark_all();
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows - 1;
         if on {
             if save_cursor {
                 self.alt_saved = Some(self.save_state());
             }
             self.alt_active = true;
             self.alt = vec![blank_line(self.cols, Color::Default); self.rows];
-            self.scroll_top = 0;
-            self.scroll_bottom = self.rows - 1;
         } else {
             self.alt_active = false;
-            self.scroll_top = 0;
-            self.scroll_bottom = self.rows - 1;
             if save_cursor {
                 if let Some(saved) = self.alt_saved.take() {
                     self.restore_state(saved);
@@ -564,25 +541,6 @@ impl Screen {
     }
 }
 
-/// Parses `38/48` extended colours in both forms: `38;5;n` / `38;2;r;g;b` (separate groups) and `38:5:n` /
-/// `38:2:cs:r:g:b` (one group). Returns the colour and how many extra groups it consumed.
-fn extended_color(group: &[u16], params: &[Vec<u16>], index: usize) -> (Option<Color>, usize) {
-    if group.len() > 1 {
-        return match group[1] {
-            5 => (group.get(2).map(|n| Color::Indexed(*n as u8)), 0),
-            2 if group.len() >= 6 => (Some(Color::Rgb(group[3] as u8, group[4] as u8, group[5] as u8)), 0),
-            2 if group.len() >= 5 => (Some(Color::Rgb(group[2] as u8, group[3] as u8, group[4] as u8)), 0),
-            _ => (None, 0),
-        };
-    }
-    let first = |i: usize| params.get(index + i).and_then(|g| g.first()).copied().unwrap_or(0);
-    match params.get(index + 1).and_then(|g| g.first()).copied() {
-        Some(5) => (Some(Color::Indexed(first(2) as u8)), 2),
-        Some(2) => (Some(Color::Rgb(first(2) as u8, first(3) as u8, first(4) as u8)), 4),
-        _ => (None, 0),
-    }
-}
-
 impl Perform for Screen {
     fn print(&mut self, c: char) {
         let c = if (self.use_g1 && self.g1_graphics) || (!self.use_g1 && self.g0_graphics) {
@@ -591,6 +549,7 @@ impl Perform for Screen {
             c
         };
         self.put_char(c);
+        self.last_char = Some(c);
     }
 
     fn execute(&mut self, byte: u8) {
@@ -628,12 +587,12 @@ impl Perform for Screen {
                 self.row = row.saturating_sub(n1(0)).max(floor);
                 self.wrap_next = false;
             }
-            (None, [], b'B') | (None, [], b'e') => {
+            (None, [], b'B' | b'e') => {
                 let ceiling = if row <= self.scroll_bottom { self.scroll_bottom } else { self.rows - 1 };
                 self.row = (row + n1(0)).min(ceiling);
                 self.wrap_next = false;
             }
-            (None, [], b'C') | (None, [], b'a') => {
+            (None, [], b'C' | b'a') => {
                 self.col = (col + n1(0)).min(self.cols - 1);
                 self.wrap_next = false;
             }
@@ -651,9 +610,9 @@ impl Perform for Screen {
                 self.col = 0;
                 self.wrap_next = false;
             }
-            (None, [], b'G') | (None, [], b'`') => self.col = (n1(0) - 1).min(self.cols - 1),
+            (None, [], b'G' | b'`') => self.col = (n1(0) - 1).min(self.cols - 1),
             (None, [], b'd') => self.set_cursor(n1(0) - 1, col),
-            (None, [], b'H') | (None, [], b'f') => self.set_cursor(n1(0) - 1, n1(1) - 1),
+            (None, [], b'H' | b'f') => self.set_cursor(n1(0) - 1, n1(1) - 1),
             (None, [], b'I') => {
                 for _ in 0..n1(0) {
                     self.col = self.next_tab(self.col);
@@ -676,6 +635,7 @@ impl Perform for Screen {
                 2 => self.erase_lines(0, self.rows),
                 3 => {
                     self.scrollback.clear();
+                    self.mark_all();
                     self.erase_lines(0, self.rows);
                 }
                 _ => {}
@@ -687,30 +647,19 @@ impl Perform for Screen {
                 _ => {}
             },
             (None, [], b'X') => self.erase_cells(row, col, col + n1(0)),
-            (None, [], b'L') => {
-                if row >= self.scroll_top && row <= self.scroll_bottom {
-                    let saved_top = self.scroll_top;
-                    self.scroll_top = row;
-                    self.scroll_down(n1(0));
-                    self.scroll_top = saved_top;
-                    self.col = 0;
-                    self.wrap_next = false;
+            (None, [], b'b') => {
+                if let Some(c) = self.last_char {
+                    for _ in 0..n1(0) {
+                        self.put_char(c);
+                    }
                 }
             }
-            (None, [], b'M') => {
-                if row >= self.scroll_top && row <= self.scroll_bottom {
-                    let saved_top = self.scroll_top;
-                    self.scroll_top = row;
-                    self.scroll_up(n1(0));
-                    self.scroll_top = saved_top;
-                    self.col = 0;
-                    self.wrap_next = false;
-                }
-            }
+            (None, [], b'L') => self.scroll_from(row, n1(0), true),
+            (None, [], b'M') => self.scroll_from(row, n1(0), false),
             (None, [], b'P') => {
                 let blank = self.blank();
                 let cols = self.cols;
-                let line = &mut self.grid_mut()[row];
+                let line = self.row_mut(row);
                 for _ in 0..n1(0).min(cols - col) {
                     line.remove(col);
                     line.push(blank);
@@ -719,7 +668,7 @@ impl Perform for Screen {
             (None, [], b'@') => {
                 let blank = self.blank();
                 let cols = self.cols;
-                let line = &mut self.grid_mut()[row];
+                let line = self.row_mut(row);
                 for _ in 0..n1(0).min(cols - col) {
                     line.insert(col, blank);
                     line.truncate(cols);
@@ -753,16 +702,8 @@ impl Perform for Screen {
                     self.restore_state(saved);
                 }
             }
-            (None, [], b'h') | (None, [], b'l') => {
-                for group in params {
-                    self.set_mode(false, group.first().copied().unwrap_or(0), action == b'h');
-                }
-            }
-            (Some(b'?'), [], b'h') | (Some(b'?'), [], b'l') => {
-                for group in params {
-                    self.set_mode(true, group.first().copied().unwrap_or(0), action == b'h');
-                }
-            }
+            (None, [], b'h' | b'l') => self.set_modes(false, params, action == b'h'),
+            (Some(b'?'), [], b'h' | b'l') => self.set_modes(true, params, action == b'h'),
             (None, [b' '], b'q') => {
                 let (shape, blink) = match p(0) {
                     0 | 1 => (CursorShape::Block, true),
@@ -825,174 +766,4 @@ impl Perform for Screen {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::parser::Parser;
-
-    fn feed(screen: &mut Screen, bytes: &[u8]) {
-        let mut parser = Parser::new();
-        parser.advance(bytes, screen);
-    }
-
-    fn text(screen: &Screen, row: usize) -> String {
-        screen.line(row).iter().filter(|c| c.attrs & attr::SPACER == 0).map(|c| c.ch).collect::<String>().trim_end().to_owned()
-    }
-
-    #[test]
-    fn cursor_movement_is_clamped_and_absolute() {
-        let mut screen = Screen::new(10, 5, 100);
-        feed(&mut screen, b"\x1b[3;4H");
-        assert_eq!(screen.cursor(), (2, 3));
-        feed(&mut screen, b"\x1b[10A");
-        assert_eq!(screen.cursor(), (0, 3));
-        feed(&mut screen, b"\x1b[99C");
-        assert_eq!(screen.cursor(), (0, 9));
-        feed(&mut screen, b"\x1b[2;2H\x1b[1B\x1b[2D");
-        assert_eq!(screen.cursor(), (2, 0));
-        feed(&mut screen, b"\x1b[0;0H");
-        assert_eq!(screen.cursor(), (0, 0));
-    }
-
-    #[test]
-    fn text_wraps_at_the_right_margin_and_scrolls_into_scrollback() {
-        let mut screen = Screen::new(4, 2, 100);
-        feed(&mut screen, b"abcdefghijk");
-        assert_eq!(text(&screen, 0), "efgh");
-        assert_eq!(text(&screen, 1), "ijk");
-        assert_eq!(screen.scrollback_len(), 1);
-        assert_eq!(screen.line_abs(0).map(|l| l[0].ch), Some('a'));
-    }
-
-    #[test]
-    fn decawm_off_overwrites_the_last_column() {
-        let mut screen = Screen::new(3, 2, 10);
-        feed(&mut screen, b"\x1b[?7labcdef");
-        assert_eq!(text(&screen, 0), "abf");
-        assert_eq!(screen.cursor().0, 0);
-    }
-
-    #[test]
-    fn sgr_sets_attributes_and_colours_in_all_forms() {
-        let mut screen = Screen::new(40, 2, 10);
-        feed(&mut screen, b"\x1b[1;3;4;7mA\x1b[0m\x1b[31;42mB\x1b[38;5;200mC\x1b[38;2;1;2;3;48:2::9:8:7mD\x1b[91mE");
-        let row = screen.line(0);
-        assert_eq!(row[0].attrs, attr::BOLD | attr::ITALIC | attr::UNDERLINE | attr::INVERSE);
-        assert_eq!((row[1].fg, row[1].bg, row[1].attrs), (Color::Indexed(1), Color::Indexed(2), 0));
-        assert_eq!(row[2].fg, Color::Indexed(200));
-        assert_eq!((row[3].fg, row[3].bg), (Color::Rgb(1, 2, 3), Color::Rgb(9, 8, 7)));
-        assert_eq!(row[4].fg, Color::Indexed(9));
-    }
-
-    #[test]
-    fn scroll_region_limits_linefeed_scrolling_and_keeps_outside_rows() {
-        let mut screen = Screen::new(5, 5, 100);
-        feed(&mut screen, b"1\r\n2\r\n3\r\n4\r\n5");
-        feed(&mut screen, b"\x1b[2;4r\x1b[4;1H\n");
-        assert_eq!(text(&screen, 0), "1");
-        assert_eq!(text(&screen, 1), "3");
-        assert_eq!(text(&screen, 2), "4");
-        assert_eq!(text(&screen, 3), "");
-        assert_eq!(text(&screen, 4), "5");
-        assert_eq!(screen.scrollback_len(), 0, "a partial region must not feed scrollback");
-    }
-
-    #[test]
-    fn reverse_index_at_top_of_region_scrolls_down() {
-        let mut screen = Screen::new(3, 3, 10);
-        feed(&mut screen, b"a\r\nb\r\nc\x1b[1;1H\x1bM");
-        assert_eq!(text(&screen, 0), "");
-        assert_eq!(text(&screen, 1), "a");
-        assert_eq!(text(&screen, 2), "b");
-    }
-
-    #[test]
-    fn alt_screen_1049_saves_cursor_and_restores_primary_contents() {
-        let mut screen = Screen::new(6, 3, 10);
-        feed(&mut screen, b"main\x1b[2;3H");
-        feed(&mut screen, b"\x1b[?1049h");
-        assert!(screen.alt_active());
-        assert_eq!(text(&screen, 0), "", "alt screen starts blank");
-        feed(&mut screen, b"alt");
-        feed(&mut screen, b"\x1b[?1049l");
-        assert!(!screen.alt_active());
-        assert_eq!(text(&screen, 0), "main");
-        assert_eq!(screen.cursor(), (1, 2));
-    }
-
-    #[test]
-    fn erase_in_line_and_display_use_the_current_background() {
-        let mut screen = Screen::new(4, 2, 10);
-        feed(&mut screen, b"abcd\x1b[42m\x1b[1;2H\x1b[K");
-        assert_eq!(text(&screen, 0), "a");
-        assert_eq!(screen.line(0)[3].bg, Color::Indexed(2));
-        feed(&mut screen, b"\x1b[2J");
-        assert_eq!(text(&screen, 0), "");
-    }
-
-    #[test]
-    fn insert_and_delete_characters_shift_the_line() {
-        let mut screen = Screen::new(5, 1, 0);
-        feed(&mut screen, b"abcde\x1b[1;2H\x1b[P");
-        assert_eq!(text(&screen, 0), "acde");
-        feed(&mut screen, b"\x1b[@");
-        assert_eq!(text(&screen, 0), "a cde");
-    }
-
-    #[test]
-    fn device_status_and_attributes_produce_replies() {
-        let mut screen = Screen::new(10, 5, 0);
-        feed(&mut screen, b"\x1b[3;7H\x1b[6n\x1b[c\x1b[5n");
-        assert_eq!(String::from_utf8(screen.take_replies()).unwrap(), "\x1b[3;7R\x1b[?62;22c\x1b[0n");
-    }
-
-    #[test]
-    fn modes_and_title_are_tracked() {
-        let mut screen = Screen::new(10, 5, 0);
-        feed(&mut screen, b"\x1b[?1h\x1b[?2004h\x1b[?25l\x1b]2;vim\x07\x1b[6 q");
-        assert!(screen.app_cursor);
-        assert!(screen.bracketed_paste);
-        assert!(!screen.cursor_visible);
-        assert_eq!(screen.title.as_deref(), Some("vim"));
-        assert_eq!(screen.cursor_shape, CursorShape::Bar);
-        assert!(!screen.cursor_blink);
-    }
-
-    #[test]
-    fn line_drawing_charset_maps_box_characters() {
-        let mut screen = Screen::new(4, 1, 0);
-        feed(&mut screen, b"\x1b(0lqk\x1b(Bx");
-        assert_eq!(text(&screen, 0), "┌─┐x");
-    }
-
-    #[test]
-    fn wide_characters_occupy_two_cells() {
-        let mut screen = Screen::new(4, 1, 0);
-        feed(&mut screen, "a界b".as_bytes());
-        assert_eq!(screen.line(0)[1].attrs & attr::WIDE, attr::WIDE);
-        assert_eq!(screen.line(0)[2].attrs & attr::SPACER, attr::SPACER);
-        assert_eq!(screen.cursor(), (0, 4 - 1));
-        assert_eq!(text(&screen, 0), "a界b");
-    }
-
-    #[test]
-    fn resize_moves_rows_into_scrollback_and_keeps_cursor_visible() {
-        let mut screen = Screen::new(4, 4, 100);
-        feed(&mut screen, b"1\r\n2\r\n3\r\n4");
-        screen.resize(4, 2);
-        assert_eq!(screen.rows(), 2);
-        assert_eq!(text(&screen, 0), "3");
-        assert_eq!(text(&screen, 1), "4");
-        assert_eq!(screen.scrollback_len(), 2);
-        screen.resize(6, 4);
-        assert_eq!(screen.cols(), 6);
-        assert_eq!(screen.rows(), 4);
-        assert_eq!(text(&screen, 0), "1");
-    }
-
-    #[test]
-    fn scrollback_is_capped() {
-        let mut screen = Screen::new(2, 1, 3);
-        feed(&mut screen, b"a\r\nb\r\nc\r\nd\r\ne");
-        assert_eq!(screen.scrollback_len(), 3);
-    }
-}
+mod tests;

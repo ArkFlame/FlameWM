@@ -568,28 +568,6 @@ pub fn solve_panel_slot_sizes(
     sizes
 }
 
-#[must_use]
-pub fn panel_slot_rects(
-    horizontal: bool,
-    axis: i32,
-    cross: i32,
-    preferred: [i32; PANEL_SLOT_COUNT],
-    minimum: [i32; PANEL_SLOT_COUNT],
-) -> [Rect; PANEL_SLOT_COUNT] {
-    let sizes = solve_panel_slot_sizes(axis, preferred, minimum);
-    let mut result = [Rect::default(); PANEL_SLOT_COUNT];
-    let mut cursor = 0;
-    for (index, size) in sizes.into_iter().enumerate() {
-        result[index] = if horizontal {
-            Rect::new(cursor, 0, size, cross.max(0))
-        } else {
-            Rect::new(0, cursor, cross.max(0), size)
-        };
-        cursor += size;
-    }
-    result
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrimaryPresentationRouter {
     primary: Option<OutputId>,
@@ -609,14 +587,6 @@ impl PrimaryPresentationRouter {
     pub fn primary(&self) -> Option<&OutputId> {
         self.primary.as_ref()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[deprecated(note = "canonical StartSurfaceLayout lives in start_menu; use that import")]
-pub struct StartSurfaceLayoutCompat {
-    pub button: Rect,
-    pub anchor: Rect,
-    pub popover: Rect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

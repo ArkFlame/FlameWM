@@ -62,6 +62,8 @@ pub struct Atoms {
     pub net_wm_action_change_desktop: Atom,
     pub net_wm_moveresize: Atom,
     pub wm_change_state: Atom,
+    /// Live desktop rubber band on the root (`flamewm_api::root_rubber`).
+    pub root_rubber: Atom,
 }
 
 impl Atoms {
@@ -123,6 +125,7 @@ impl Atoms {
             net_wm_action_change_desktop: atom(conn, "_NET_WM_ACTION_CHANGE_DESKTOP")?,
             net_wm_moveresize: atom(conn, "_NET_WM_MOVERESIZE")?,
             wm_change_state: atom(conn, "WM_CHANGE_STATE")?,
+            root_rubber: atom(conn, flamewm_api::root_rubber::ROOT_RUBBER_PROPERTY)?,
         })
     }
 

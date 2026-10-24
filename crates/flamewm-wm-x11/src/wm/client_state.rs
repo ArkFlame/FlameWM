@@ -37,6 +37,29 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
+    /// `_NET_WM_ALLOWED_ACTIONS`: the EWMH actions this WM honours. GTK (Firefox) reads it
+    /// before offering maximize/resize affordances; it was never published, so those were hidden.
+    pub(super) fn publish_allowed_actions(&self, client: Window) -> Result<(), ReplyError> {
+        let values = [
+            self.atoms.net_wm_action_move,
+            self.atoms.net_wm_action_resize,
+            self.atoms.net_wm_action_minimize,
+            self.atoms.net_wm_action_maximize_horz,
+            self.atoms.net_wm_action_maximize_vert,
+            self.atoms.net_wm_action_fullscreen,
+            self.atoms.net_wm_action_close,
+            self.atoms.net_wm_action_change_desktop,
+        ];
+        self.conn.change_property32(
+            PropMode::REPLACE,
+            client,
+            self.atoms.net_wm_allowed_actions,
+            AtomEnum::ATOM,
+            &values,
+        )?;
+        Ok(())
+    }
+
     /// `_NET_FRAME_EXTENTS` (EWMH: left, right, top, bottom). Client-drawn
     /// frames publish zeros: Flame adds no frame, so the window is its own
     /// visible area and GTK's `_GTK_FRAME_EXTENTS` stays client-owned.
@@ -130,6 +153,21 @@ impl<'a, C: Connection> Wm<'a, C> {
         floating: bool,
     ) -> Result<(), ReplyError> {
         use x11rb::protocol::shape::{SK as ShapeSk, SO as ShapeOp};
+        // Every shape writer (ApplyShape, manage, decoration change) comes through
+        // here, so this one check covers all emitters. Only the state of the
+        // ManagedClient owning `frame` is consulted and updated.
+        let key = crate::client::ShapeKey {
+            frame,
+            width: outer.width,
+            height: outer.height,
+            floating,
+            tokens: self.decoration_tokens,
+        };
+        let owner = self.clients.values().find(|c| c.frame == frame);
+        if owner.is_some_and(|c| c.shaped == Some(key)) {
+            return Ok(());
+        }
+        let owner_client = owner.map(|c| c.client);
         let radius = u32::from(
             crate::frame::geometry_shape::scaled_corner_radius(
                 floating,
@@ -166,26 +204,41 @@ impl<'a, C: Connection> Wm<'a, C> {
         )?;
         // The client is a child window with its own square pixels. Intersect
         // its shape with the frame's bottom-corner arcs so the rounded corner
-        // and the shadow in the notch are actually visible. Intersection keeps
-        // any shape the application already set.
-        let Some(client) = self
-            .clients
-            .values()
-            .find(|c| c.frame == frame)
-            .map(|c| c.client)
-        else {
+        // and the shadow in the notch are actually visible. The client shape is
+        // reset to the full client rect first, so a grown frame is not left with
+        // the smaller shape from the previous mask; any app-set client shape is
+        // replaced by this reset.
+        let Some(client) = owner_client else {
             return Ok(());
         };
         let cw = outer.width.saturating_sub(2);
         let ch = outer
             .height
             .saturating_sub(u32::from(self.config.titlebar_height) + 1);
+        // Reset to the full client rect first: intersecting with the previous mask can only
+        // shrink, so a grown frame would keep the old, smaller client shape. Also used to
+        // restore an unshaped client below.
+        let full = [x11rb::protocol::xproto::Rectangle {
+            x: 0,
+            y: 0,
+            width: cw.min(u32::from(u16::MAX)) as u16,
+            height: ch.min(u32::from(u16::MAX)) as u16,
+        }];
         if radius > 0 && cw > 0 && ch > 0 {
             let mask = crate::frame::geometry_shape::client_bottom_rounded_rectangles(
                 cw,
                 ch,
                 radius,
             );
+            self.conn.shape_rectangles(
+                ShapeOp::SET,
+                ShapeSk::BOUNDING,
+                ClipOrdering::UNSORTED,
+                client,
+                0,
+                0,
+                &full,
+            )?;
             self.conn.shape_rectangles(
                 ShapeOp::INTERSECT,
                 ShapeSk::BOUNDING,
@@ -198,12 +251,6 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.rounded_clients.insert(client);
         } else if self.rounded_clients.remove(&client) {
             // Restore the unshaped client when the decoration turns square.
-            let full = [x11rb::protocol::xproto::Rectangle {
-                x: 0,
-                y: 0,
-                width: cw.min(u32::from(u16::MAX)) as u16,
-                height: ch.min(u32::from(u16::MAX)) as u16,
-            }];
             self.conn.shape_rectangles(
                 ShapeOp::SET,
                 ShapeSk::BOUNDING,
@@ -213,6 +260,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                 0,
                 &full,
             )?;
+        }
+        if let Some(state) = self.clients.values_mut().find(|c| c.frame == frame) {
+            state.shaped = Some(key);
         }
         Ok(())
     }

@@ -100,8 +100,8 @@ pub fn parse_html(input: &str) -> Result<ParsedHtml, String> {
             if stack.len() <= 1 {
                 return Err(format!("unexpected closing tag </{name}>"));
             }
-            let open = nodes[*stack.last().unwrap()].tag.clone();
-            if open != name {
+            let open = &nodes[*stack.last().unwrap()].tag;
+            if *open != name {
                 return Err(format!(
                     "mismatched closing tag: expected </{open}> but found </{name}>"
                 ));
@@ -112,13 +112,15 @@ pub fn parse_html(input: &str) -> Result<ParsedHtml, String> {
         }
 
         let end = find_tag_end(input, cursor + 1)?;
-        let mut inside = input[cursor + 1..end].trim().to_string();
-        let self_closing = inside.ends_with('/');
-        if self_closing {
-            inside.pop();
-            inside = inside.trim_end().to_string();
-        }
-        let (tag, attrs) = parse_tag(&inside)?;
+        let raw = input[cursor + 1..end].trim();
+        let self_closing = raw.ends_with('/');
+        let inside = if self_closing {
+            raw[..raw.len() - 1].trim_end()
+        } else {
+            raw
+        };
+        let (tag, attrs) = parse_tag(inside)?;
+        let void = is_void_element(&tag);
         let parent = *stack
             .last()
             .ok_or_else(|| "HTML parser stack underflow".to_string())?;
@@ -127,21 +129,21 @@ pub fn parse_html(input: &str) -> Result<ParsedHtml, String> {
             parent,
             HtmlNode {
                 kind: HtmlNodeKind::Element,
-                tag: tag.clone(),
+                tag,
                 attrs,
                 parent: Some(parent),
                 children: Vec::new(),
                 text: String::new(),
             },
         );
-        if !self_closing && !is_void_element(&tag) {
+        if !self_closing && !void {
             stack.push(index);
         }
         cursor = end + 1;
     }
 
     if stack.len() != 1 {
-        let open = nodes[*stack.last().unwrap()].tag.clone();
+        let open = &nodes[*stack.last().unwrap()].tag;
         return Err(format!("unclosed HTML tag <{open}>"));
     }
 

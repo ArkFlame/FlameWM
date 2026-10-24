@@ -6,6 +6,7 @@
 //! list applied by the live owner.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use flamewm_render_core::CursorKind;
 
@@ -59,12 +60,13 @@ pub enum FrameEffect {
 pub struct ControllerState {
     pub session: InteractionSession,
     pub placement: PlacementState,
-    pub registry: HashMap<u32, FrameRegion>,
+    /// Shared with the geometry cache; cloning a controller only bumps the refcount.
+    pub registry: Rc<HashMap<u32, FrameRegion>>,
     pub client: u32,
     pub grab: u32,
     pub work_area: RootRect,
     /// Output geometries bounding drags; empty falls back to `work_area`.
-    pub outputs: Vec<RootRect>,
+    pub outputs: Rc<Vec<RootRect>>,
     pub screen_rect: RootRect,
     pub hints: ClientSizeHints,
     pub extents: FrameExtents,
@@ -73,6 +75,8 @@ pub struct ControllerState {
     pub last_title_click: Option<TitleClick>,
     /// `false`: motion only moves an outline; the real frame/client change on release.
     pub contents_while_dragging: bool,
+    /// Pointer and snap target of the last move motion applied; a repeat is skipped.
+    pub last_motion: Option<(RootPoint, flamewm_window_core::SnapTarget)>,
 }
 
 /// Non-drag title release awaiting a possible second click.
@@ -99,16 +103,17 @@ impl ControllerState {
         Self {
             session: InteractionSession::Idle,
             placement,
-            registry: HashMap::new(),
+            registry: Rc::new(HashMap::new()),
             client,
             grab,
             work_area,
-            outputs: Vec::new(),
+            outputs: Rc::new(Vec::new()),
             screen_rect: work_area,
             hints,
             extents,
             last_title_click: None,
             contents_while_dragging: true,
+            last_motion: None,
         }
     }
 
@@ -136,13 +141,13 @@ impl ControllerState {
     }
 
     #[must_use]
-    pub fn with_outputs(mut self, outputs: Vec<RootRect>) -> Self {
+    pub fn with_outputs(mut self, outputs: Rc<Vec<RootRect>>) -> Self {
         self.outputs = outputs;
         self
     }
 
     #[must_use]
-    pub fn with_registry(mut self, registry: HashMap<u32, FrameRegion>) -> Self {
+    pub fn with_registry(mut self, registry: Rc<HashMap<u32, FrameRegion>>) -> Self {
         self.registry = registry;
         self
     }
@@ -195,7 +200,7 @@ fn request(
         pointer_delta: delta,
         edges,
         work_area: state.work_area,
-        outputs: &state.outputs,
+        outputs: state.outputs.as_slice(),
         hints: state.hints,
         frame_extents: state.extents,
     }
@@ -369,6 +374,11 @@ fn move_step(
     if preview {
         return (state, vec![FrameEffect::DragOutline { rect: Some(plan.frame) }]);
     }
+    if !final_commit && !moved {
+        // Pointer moved but the output clamp kept the frame where it was: the native
+        // frame, its ConfigureNotify and the repaint are all already current.
+        return (state, vec![FrameEffect::Noop]);
+    }
     if final_commit && !state.contents_while_dragging && start_mode != PlacementMode::Floating {
         // Preview left a snapped/maximized window untouched; apply its real size now.
         let effects = full_configure(plan.frame, state.extents);
@@ -408,6 +418,10 @@ fn resize_step(
         return (state, vec![FrameEffect::Noop]);
     }
 
+    // A live motion that leaves the frame where it is (minimum/output clamp) owes no
+    // native configure, repaint or shape pass. A snapped frame still exits its layout.
+    let unchanged = !matches!(state.placement.mode, PlacementMode::Snapped(_))
+        && state.placement.current == plan.frame;
     if matches!(state.placement.mode, PlacementMode::Snapped(_)) {
         state.placement.mode = PlacementMode::Floating;
         state.placement.resume = None;
@@ -418,6 +432,9 @@ fn resize_step(
     }
     if !state.contents_while_dragging && !final_effects {
         return (state, vec![FrameEffect::DragOutline { rect: Some(plan.frame) }]);
+    }
+    if unchanged && !final_effects {
+        return (state, vec![FrameEffect::Noop]);
     }
     let effects = if final_effects {
         full_configure(plan.frame, state.extents)
@@ -800,7 +817,7 @@ mod tests {
         registry.insert(3, FrameRegion::Control(FrameControl::MaximizeRestore));
         ControllerState::new(7, 71, placement, WA, ClientSizeHints::default(), EXT)
             .with_screen_rect(SCREEN)
-            .with_registry(registry)
+            .with_registry(Rc::new(registry))
     }
 
     /// Floating fixture moved into `mode` at `current`, resumable back to `START`.
@@ -1156,6 +1173,56 @@ mod tests {
         // Bare configure with no movement on idle session -> Noop path.
         let (_, e3) = reduce(&s0, motion(0, 0));
         assert_eq!(e3, vec![FrameEffect::Noop]);
+    }
+
+    #[test]
+    fn move_motion_clamped_at_output_edge_emits_no_native_move() {
+        let s1 = pressed(&floating_state(), 1, 150, 120);
+        // First pointer step past the right edge moves the frame to the clamp.
+        let (s2, e2) = reduce(&s1, motion(5150, 120));
+        assert!(e2.iter().any(|e| matches!(e, FrameEffect::MoveFrameRoot { .. })));
+        let clamped = s2.placement.current;
+        // Further pointer travel keeps the same clamped frame: no move, no notify, no paint.
+        let (s3, e3) = reduce(&s2, motion(6150, 120));
+        assert_eq!(e3, vec![FrameEffect::Noop]);
+        assert_eq!(s3.placement.current, clamped);
+    }
+
+    #[test]
+    fn resize_motion_leaving_frame_unchanged_emits_no_configure() {
+        let s1 = pressed(&floating_state(), 2, 500, 400);
+        let (s2, e2) = reduce(&s1, motion(550, 460));
+        assert!(e2.iter().any(|e| matches!(e, FrameEffect::ConfigureFrameRoot { .. })));
+        let (s3, e3) = reduce(&s2, motion(550, 460));
+        assert_eq!(e3, vec![FrameEffect::Noop]);
+        assert_eq!(s3.placement.current, RootRect::new(100, 100, 450, 360));
+    }
+
+    #[test]
+    fn release_after_clamped_motion_configures_client_at_final_size() {
+        let s1 = pressed(&floating_state(), 2, 500, 400);
+        // Grow, clamp at the output edge, then repeat the clamped point as an unchanged motion.
+        let (s2, _) = reduce(&s1, motion(550, 460));
+        let (s3, _) = reduce(&s2, motion(900, 900));
+        let (s4, e4) = reduce(&s3, motion(900, 900));
+        assert_eq!(e4, vec![FrameEffect::Noop]);
+        let final_frame = s4.placement.current;
+        let (_, release_effects) = reduce(&s4, release(900, 900));
+        assert!(
+            release_effects.iter().any(|e| matches!(
+                e,
+                FrameEffect::ConfigureFrameRoot { w, h, .. }
+                    if *w == final_frame.w && *h == final_frame.h
+            )),
+            "release must size the frame to the final geometry: {release_effects:?}"
+        );
+        assert!(
+            release_effects
+                .iter()
+                .any(|e| matches!(e, FrameEffect::ConfigureClientLocal { .. })),
+            "release must configure the client window: {release_effects:?}"
+        );
+        assert!(release_effects.contains(&FrameEffect::ApplyShape));
     }
 
     #[test]

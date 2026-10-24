@@ -249,12 +249,18 @@ impl<'a, C: Connection> Wm<'a, C> {
         };
         // Single input-child layout owner: lifecycle placements (J19 wiring).
         let ids = lifecycle::LifecycleIds::new(client, state.frame, res.children());
-        for placement in &lifecycle::input_child_placements(
+        let placements = lifecycle::input_child_placements(
             state.outer.width.max(1) as i32,
             state.outer.height.max(1) as i32,
-            self.extents_for(client).titlebar_h,
+            // Handle thickness comes from the configured titlebar even for client-drawn frames
+            // (zero extents): a zero titlebar would collapse the resize handles to 1px.
+            self.extents().titlebar_h,
             ids,
-        ) {
+        );
+        if state.input_layout == Some(placements) {
+            return Ok(());
+        }
+        for placement in &placements {
             let result = self.conn.configure_window(
                 placement.xid,
                 &ConfigureWindowAux::new()
@@ -267,13 +273,18 @@ impl<'a, C: Connection> Wm<'a, C> {
                 flamewm_debug::WM_FRAME_GEOMETRY_RESIZE_NATIVE,
                 client,
                 placement.xid,
-                format!(
-                    "effect=LayoutInput rect=({},{},{},{})",
-                    placement.x, placement.y, placement.w, placement.h
-                ),
+                || {
+                    format!(
+                        "effect=LayoutInput rect=({},{},{},{})",
+                        placement.x, placement.y, placement.w, placement.h
+                    )
+                },
                 &result,
             );
             result?;
+        }
+        if let Some(state) = self.clients.get_mut(&client) {
+            state.input_layout = Some(placements);
         }
         Ok(())
     }

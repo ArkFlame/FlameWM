@@ -53,6 +53,7 @@ class BuildGateTests(unittest.TestCase):
         root = self.root
         return {
             'workspace_root': str(root),
+            'target_directory': str(root / '.target'),
             'workspace_members': ['p-core', 'p-desktop'],
             'packages': [
                 {'name': 'flamewm-desktop-core', 'id': 'p-core',
@@ -170,6 +171,37 @@ class BuildGateTests(unittest.TestCase):
                                    capture_output=True, text=True, timeout=10)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn('--profile', completed.stdout)
+
+    def test_routine_rerun_without_force_is_a_noop_with_no_forced_clean(self):
+        self.assertTrue(run(self.root, include_ui=True, executor=self.execute))
+        cleans = len(self.commands)
+        self.assertFalse(run(self.root, include_ui=True, executor=self.execute))
+        self.assertEqual(sum('clean' in command for command in self.commands[cleans:]), 0)
+
+    def test_unlisted_core_module_with_old_mtime_and_new_bytes_invalidates(self):
+        module = self.root / 'crates/flamewm-desktop-core/src/late_module.rs'
+        module.write_text('pub fn before() {}\n')
+        self.assertTrue(run(self.root, executor=self.execute))
+        import os
+        module.write_text('pub fn after() {}\n')
+        os.utime(module, (0, 0))
+        self.assertTrue(run(self.root, executor=self.execute))
+        self.assertEqual(sum('clean' in command for command in self.commands), 2)
+
+    def test_stamp_is_scoped_to_resolved_target_dir(self):
+        self.assertTrue(run(self.root, executor=self.execute))
+        stamp = self.root / '.target/flamewm/desktop-core-release-cache-invalidated.sha256'
+        self.assertTrue(stamp.is_file())
+        self.meta['target_directory'] = str(self.root / 'alternate-target')
+        self.assertTrue(run(self.root, executor=self.execute))
+        self.assertTrue((self.root / 'alternate-target/flamewm/desktop-core-release-cache-invalidated.sha256').is_file())
+        self.assertEqual(sum('clean' in command for command in self.commands), 2)
+
+    def test_metadata_without_target_directory_is_rejected_without_clean(self):
+        del self.meta['target_directory']
+        with self.assertRaisesRegex(BuildGateError, 'missing workspace/core/desktop/target'):
+            run(self.root, executor=self.execute)
+        self.assertFalse(any('clean' in command for command in self.commands))
 
     def test_metadata_failure_does_not_clean(self):
         def fail(command, **kwargs):

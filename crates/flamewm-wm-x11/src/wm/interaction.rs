@@ -6,6 +6,7 @@
 //! server; J19 wires this module without signature churn.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::client::ManagedClient;
 use crate::frame::controller::{ControllerState, FrameEffect, FrameEvent, reduce, reduce_owned};
@@ -64,7 +65,7 @@ pub fn build_controller(
     hints: ClientSizeHints,
     extents: FrameExtents,
     session: crate::frame::session::InteractionSession,
-    region_map: HashMap<u32, FrameRegion>,
+    region_map: Rc<HashMap<u32, FrameRegion>>,
 ) -> ControllerState {
     let mut controller = ControllerState::new(client, grab, placement, work_area, hints, extents)
         .with_screen_rect(screen_rect)
@@ -141,7 +142,7 @@ mod tests {
             ClientSizeHints::default(),
             FrameExtents::new(31, 1),
             crate::frame::session::InteractionSession::Idle,
-            region_map,
+            Rc::new(region_map),
         )
     }
 

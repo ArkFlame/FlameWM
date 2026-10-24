@@ -132,12 +132,6 @@ impl Default for Material {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BoxStyle {
-    pub visual: Visual,
-    pub material: Material,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShellMetrics {
     pub panel_height: u16,
     pub panel_pad_x: u16,

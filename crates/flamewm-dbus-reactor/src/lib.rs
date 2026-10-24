@@ -97,6 +97,14 @@ impl BusPump {
         Ok(visited)
     }
 
+    /// Blocks the calling thread until the bus fd is ready for read/write or `timeout` elapses. It
+    /// does not dispatch: callers must follow with `on_ready` to drain queued messages.
+    pub fn wait_ready(&self, timeout: Duration) -> FlameResult<()> {
+        self.channel
+            .read_write(Some(timeout))
+            .map_err(|()| FlameError::unavailable("D-Bus connection read/write failed"))
+    }
+
     /// Dispatch incoming method calls for one exported object path on this connection. Other
     /// messages remain available to the general handler, so one pump owns both client and server I/O.
     pub fn on_ready_with_object_path(

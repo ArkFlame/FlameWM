@@ -54,8 +54,8 @@ use x11rb::protocol::xproto::{self, Atom, AtomEnum, ConnectionExt, Window};
 use x11rb::rust_connection::RustConnection;
 
 /// Process-wide workspace revision fence. `Wm` advances it on desktop root
-/// property changes; `X11Desktop` is rebuilt per event, so the counter must
-/// not live on the instance.
+/// property changes; `X11Desktop` is recreated whenever the platform host is
+/// rebuilt, so the counter must not live on the instance.
 static WORKSPACE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Advances the workspace revision fence. Called from the WM when

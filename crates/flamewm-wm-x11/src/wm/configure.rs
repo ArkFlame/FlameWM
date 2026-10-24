@@ -225,7 +225,6 @@ mod tests {
     #[test]
     fn t04_frame_expected_notify_is_observation_only() {
         let expected = RootRect::new(100, 100, 400, 300);
-        let geometry_effects = 0usize;
         for i in 0..1000 {
             let class = classify_notify(11, 11, 12, false, false, true);
             assert_eq!(class, NotifyClass::FrameObserved, "iter {i}");
@@ -235,7 +234,6 @@ mod tests {
                 "iter {i}"
             );
         }
-        assert_eq!(geometry_effects, 0);
         assert_eq!(expected, RootRect::new(100, 100, 400, 300));
     }
 
@@ -244,7 +242,6 @@ mod tests {
     fn t04_client_expected_notify_is_observation_only() {
         let frame = RootRect::new(100, 100, 400, 300);
         let expected = expected_client_geometry(frame, extents());
-        let geometry_effects = 0usize;
         for i in 0..1000 {
             let class = classify_notify(12, 11, 12, false, false, true);
             assert_eq!(class, NotifyClass::ClientObserved, "iter {i}");
@@ -254,30 +251,25 @@ mod tests {
                 "iter {i}"
             );
         }
-        assert_eq!(geometry_effects, 0);
     }
 
     // T04: 1000 stale notifies drop without lookup or mutation.
     #[test]
     fn t04_stale_notify_is_dropped() {
-        let geometry_effects = 0usize;
         for i in 0..1000 {
             let class = classify_notify(9000 + (i % 64) as u32, 11, 12, false, false, false);
             assert_eq!(class, NotifyClass::StaleUnknown, "iter {i}");
         }
-        assert_eq!(geometry_effects, 0);
     }
 
     // T04: 1000 input-child notifies never touch placement.
     #[test]
     fn t04_input_child_notify_is_observation_only() {
-        let geometry_effects = 0usize;
         for i in 0..1000 {
             let child = 100 + (i % 12) as u32;
             let class = classify_notify(child, 11, 12, true, false, true);
             assert_eq!(class, NotifyClass::InputChildObserved, "iter {i}");
         }
-        assert_eq!(geometry_effects, 0);
     }
 
     // T05: Idle+Floating accepts exactly once.

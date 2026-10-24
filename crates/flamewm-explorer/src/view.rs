@@ -1,7 +1,8 @@
 //! Pure view logic for the explorer: view modes, column sorting, type-ahead, status text.
 //! No UI or filesystem writes here; callers pass in already-listed entries.
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, TimeZone};
 
@@ -43,7 +44,7 @@ pub fn sort_entries(entries: &mut [Entry], sort: ColumnSort) {
     entries.sort_by(|a, b| {
         b.directory.cmp(&a.directory).then_with(|| {
             let order = match sort.column {
-                Column::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                Column::Name => a.lower_name.cmp(&b.lower_name),
                 Column::Size => a.size.cmp(&b.size),
                 Column::Modified => a.modified.cmp(&b.modified),
                 Column::Type => type_label(a).cmp(&type_label(b)),
@@ -82,10 +83,64 @@ pub fn items_text(total: usize, selected: usize) -> String {
     if selected == 0 { format!("{total} {noun}") } else { format!("{total} {noun} · {selected} selected") }
 }
 
-/// Free and total bytes of the filesystem holding `path`. Free counts only space open to unprivileged users.
+/// Last statvfs sample: the path it describes, when it was taken, and its result.
+type SpaceSample = (PathBuf, Instant, Option<(u64, u64)>);
+/// Projections run on every wake, so statvfs is re-read at most once per TTL for the same path.
+const SPACE_TTL: Duration = Duration::from_secs(2);
+thread_local! {
+    static SPACE: RefCell<Option<SpaceSample>> = const { RefCell::new(None) };
+}
+
+/// Free and total bytes of the filesystem holding `path`, cached for `SPACE_TTL`.
+/// Free counts only space open to unprivileged users.
 pub fn fs_space(path: &Path) -> Option<(u64, u64)> {
+    SPACE.with(|slot| cached_space(&mut slot.borrow_mut(), path, Instant::now(), statvfs_space))
+}
+
+fn cached_space(
+    slot: &mut Option<SpaceSample>,
+    path: &Path,
+    now: Instant,
+    read: impl FnOnce(&Path) -> Option<(u64, u64)>,
+) -> Option<(u64, u64)> {
+    if let Some((cached, taken, value)) = slot.as_ref() {
+        if cached.as_path() == path && now.duration_since(*taken) < SPACE_TTL {
+            return *value;
+        }
+    }
+    let value = read(path);
+    *slot = Some((path.to_path_buf(), now, value));
+    value
+}
+
+fn statvfs_space(path: &Path) -> Option<(u64, u64)> {
     let stat = rustix::fs::statvfs(path).ok()?;
     Some((stat.f_bavail.saturating_mul(stat.f_frsize), stat.f_blocks.saturating_mul(stat.f_frsize)))
+}
+
+#[cfg(test)]
+mod space_cache_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn statvfs_runs_once_per_ttl_and_per_path() {
+        let calls = Cell::new(0);
+        let read = |_: &Path| {
+            calls.set(calls.get() + 1);
+            Some((1, 2))
+        };
+        let start = Instant::now();
+        let mut slot = None;
+        let a = Path::new("/a");
+        assert_eq!(cached_space(&mut slot, a, start, read), Some((1, 2)));
+        assert_eq!(cached_space(&mut slot, a, start + Duration::from_millis(500), read), Some((1, 2)));
+        assert_eq!(calls.get(), 1);
+        cached_space(&mut slot, a, start + SPACE_TTL, read);
+        assert_eq!(calls.get(), 2);
+        cached_space(&mut slot, Path::new("/b"), start + SPACE_TTL, read);
+        assert_eq!(calls.get(), 3);
+    }
 }
 
 /// Extensions shown as "Source file" with the code icon.
@@ -150,10 +205,7 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     fn entry(name: &str, directory: bool, size: u64, secs: u64) -> Entry {
-        Entry {
-            path: PathBuf::from(name), name: name.into(), directory, symlink: false,
-            size, modified: Some(UNIX_EPOCH + Duration::from_secs(secs)),
-        }
+        Entry::new(PathBuf::from(name), name.into(), directory, false, size, Some(UNIX_EPOCH + Duration::from_secs(secs)))
     }
 
     #[test]

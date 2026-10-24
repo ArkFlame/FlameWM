@@ -119,15 +119,27 @@ pub fn background_image(settings: &LockSettings, width: u32, height: u32) -> Run
     image
 }
 
-/// Uses an independent cover crop by default, or the matching crop from one root-sized lock
-/// background when `shareWallpaper` is enabled.
-pub fn background_for_output(settings: &LockSettings, root: Rect, output: Rect) -> RuntimeImage {
+/// The root-sized lock background that every output crops from when `shareWallpaper` is on.
+/// Compute it once per pass and pass it to `background_for_output`; `None` when sharing is off
+/// or the root is empty.
+pub fn shared_root_background(settings: &LockSettings, root: Rect) -> Option<RuntimeImage> {
+    (settings.share_wallpaper && root.is_valid())
+        .then(|| background_image(settings, root.width as u32, root.height as u32))
+}
+
+/// Background for `output`: the matching crop of the shared `canvas` when one is given,
+/// else an independent cover-scaled background for the output.
+pub fn background_for_output(
+    settings: &LockSettings,
+    root: Rect,
+    output: Rect,
+    canvas: Option<&RuntimeImage>,
+) -> RuntimeImage {
     let width = output.width.max(1) as u32;
     let height = output.height.max(1) as u32;
-    if settings.share_wallpaper && root.is_valid() && output.is_valid() {
-        let canvas = background_image(settings, root.width as u32, root.height as u32);
+    if let Some(canvas) = canvas.filter(|_| output.is_valid()) {
         if let Some(crop) = crop_runtime_image(
-            &canvas,
+            canvas,
             (output.x - root.x).max(0) as u32,
             (output.y - root.y).max(0) as u32,
             width,
@@ -1119,18 +1131,9 @@ mod tests {
         assert_eq!(document.text["lock-other-logout"], "Log out");
     }
 
-    fn picture(width: u32, height: u32) -> RgbaImage {
-        RgbaImage::from_rgba8(
-            width,
-            height,
-            [200, 30, 30, 255].repeat((width * height) as usize),
-        )
-        .expect("valid image")
-    }
-
     #[test]
     fn circle_crop_is_opaque_in_the_centre_and_transparent_in_the_corners() {
-        let circle = circle_crop(&picture(40, 20), 20).expect("crop");
+        let circle = circle_crop(&solid(40, 20), 20).expect("crop");
         assert_eq!((circle.width, circle.height), (20, 20));
         let alpha = |x: usize, y: usize| circle.pixels[(y * 20 + x) * 4 + 3];
         assert_eq!(alpha(10, 10), 255);
@@ -1145,10 +1148,10 @@ mod tests {
     #[test]
     fn composite_puts_an_opaque_picture_over_the_ring() {
         let mut base = RgbaImage::from_rgba8(4, 4, [0, 0, 0, 0].repeat(16)).expect("base");
-        composite_over(&mut base, &picture(2, 2), 1, 1);
+        composite_over(&mut base, &solid(2, 2), 1, 1);
         assert_eq!(
             &base.pixels[(1 * 4 + 1) * 4..(1 * 4 + 1) * 4 + 4],
-            &[200, 30, 30, 255]
+            &[255, 0, 0, 255]
         );
         assert_eq!(base.pixels[3], 0, "outside the picture stays transparent");
     }
@@ -1162,7 +1165,7 @@ mod tests {
         };
         let fallback = avatar_runtime(&broken, 68).expect("fallback");
         assert_eq!(default.pixels, fallback.pixels);
-        assert_eq!(default.source, format!("lock-svg-68"));
+        assert_eq!(default.source, "lock-svg-68");
     }
 
     #[test]

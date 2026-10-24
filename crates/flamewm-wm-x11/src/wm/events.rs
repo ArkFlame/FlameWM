@@ -27,8 +27,8 @@ impl<'a, C: Connection> Wm<'a, C> {
                     self.mark_work_area();
                     self.reconcile_work_area()?;
                 }
-                let client = self.client_for(event.window);
-                if let Some(client) = client {
+                if let Some(client) = self.client_for(event.window) {
+                    self.note_client_gone_for_desktop_mode();
                     self.unmanage(client, false)?;
                 }
                 self.publish_workspace_metadata()?;
@@ -53,6 +53,12 @@ impl<'a, C: Connection> Wm<'a, C> {
             Event::KeyRelease(event) => self.handle_key_release(event)?,
             Event::FocusOut(_) => self.super_tap.focus_lost(),
             Event::MotionNotify(event) => self.handle_motion(event)?,
+            Event::PropertyNotify(event)
+                if event.atom == self.atoms.root_rubber
+                    && event.window == self.screen().root =>
+            {
+                self.on_root_rubber_changed()?
+            }
             Event::PropertyNotify(event) => self.handle_property(event.window, event.atom)?,
             Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => {
                 self.display_topology_dirty.mark()
@@ -95,6 +101,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             ACTION_WINDOW_CLOSE => self.on_active(Self::request_close)?,
             ACTION_WINDOW_MINIMIZE => self.on_active(Self::minimize)?,
             ACTION_WINDOW_MAXIMIZE => self.on_active(Self::toggle_maximize)?,
+            ACTION_WINDOW_SWITCH => self.switch_window()?,
             // Arrow shortcuts follow the product two-row grid: left/right stay inside the
             // current row, up/down switch rows, and a missing neighbour is a no-op.
             ACTION_WORKSPACE_LEFT
@@ -148,12 +155,35 @@ impl<'a, C: Connection> Wm<'a, C> {
             // Chorded start-menu binding: toggle on press. Bare Super is handled above
             // and toggles through the SuperTap commit at the end of the batch.
             ACTION_TOGGLE_START_MENU => self.changes.start_menu_toggle = true,
+            ACTION_LAUNCHER => self.changes.launcher_toggle = true,
             ACTION_VOLUME_UP => self.changes.media_audio_key = Some(MediaAudioKey::VolumeUp),
             ACTION_VOLUME_DOWN => self.changes.media_audio_key = Some(MediaAudioKey::VolumeDown),
             ACTION_VOLUME_MUTE => self.changes.media_audio_key = Some(MediaAudioKey::VolumeMute),
             other => log_unhandled_shortcut_once(other),
         }
         Ok(())
+    }
+
+    /// Alt+Tab: focuses the topmost visible normal client other than the active one. Focus
+    /// raises the target, so the next press returns to the previous window.
+    fn switch_window(&mut self) -> Result<(), ReplyError> {
+        let tree = self.conn.query_tree(self.screen().root)?.reply()?;
+        // `children` is bottom-to-top; walk it topmost-first.
+        let stack: Vec<Window> = tree
+            .children
+            .iter()
+            .rev()
+            .filter_map(|frame| self.frame_to_client.get(frame).copied())
+            .collect();
+        let target = switch_target(&stack, self.active, |client| {
+            self.clients.get(&client).is_some_and(|state| {
+                state.kind == WindowKind::Normal && state.visible_on(self.current_workspace)
+            })
+        });
+        match target {
+            Some(client) => self.focus(client),
+            None => Ok(()),
+        }
     }
 
     fn on_active(
@@ -264,6 +294,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         self.cancel_open_for(client_id)?;
         if window == client_id {
+            self.note_client_gone_for_desktop_mode();
             self.unmanage(client_id, true)?;
         }
         Ok(())
@@ -316,8 +347,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .and_then(|cookie| cookie.reply().ok())
                     .map(|reply| reply.value)
                     .unwrap_or_default();
-                let own_names = desktop_names_payload(self.workspace_count);
-                if workspace_metadata_is_external(count, &names, self.workspace_count, &own_names) {
+                if workspace_metadata_is_external(count, &names, self.workspace_count) {
                     match count.map(|value| value as usize) {
                         Some(external) if external != self.workspace_count => {
                             // Adopt the root's current desktop before republishing so the
@@ -571,6 +601,38 @@ fn net_wm_state_enable(action: u32, currently: bool) -> bool {
     }
 }
 
+/// First client in `topmost_first` that is not `active` and passes `eligible`.
+fn switch_target(
+    topmost_first: &[Window],
+    active: Option<Window>,
+    eligible: impl Fn(Window) -> bool,
+) -> Option<Window> {
+    topmost_first
+        .iter()
+        .copied()
+        .find(|&client| Some(client) != active && eligible(client))
+}
+
+#[cfg(test)]
+mod window_switch_tests {
+    use super::*;
+
+    #[test]
+    fn switch_target_skips_active_and_ineligible_windows() {
+        let stack = [30, 20, 10];
+        assert_eq!(switch_target(&stack, Some(30), |_| true), Some(20));
+        assert_eq!(switch_target(&stack, Some(30), |w| w != 20), Some(10));
+        assert_eq!(switch_target(&stack, None, |_| true), Some(30));
+    }
+
+    #[test]
+    fn switch_target_is_none_without_another_eligible_window() {
+        assert_eq!(switch_target(&[30], Some(30), |_| true), None);
+        assert_eq!(switch_target(&[], None, |_| true), None);
+        assert_eq!(switch_target(&[30, 20], Some(30), |_| false), None);
+    }
+}
+
 /// Desktop named by an external `_NET_WM_DESKTOP` / `_NET_CURRENT_DESKTOP` value, filtered
 /// only by the product maximum. Absent and sticky (`0xFFFF_FFFF`) values yield `None`.
 fn external_desktop_target(value: Option<u32>) -> Option<usize> {
@@ -587,9 +649,7 @@ mod desktop_adoption_tests {
     // `_NET_WM_DESKTOP`, so the old WM count must not filter an external value.
     #[test]
     fn external_target_at_old_count_is_kept_for_either_event_order() {
-        // Client-first: client on old count 3 must still be accepted.
-        assert_eq!(external_desktop_target(Some(3)), Some(3));
-        // Count-first: the same value stays valid after adoption to 4.
+        // The target is not filtered by the WM's old count, so either order keeps it.
         assert_eq!(external_desktop_target(Some(3)), Some(3));
     }
 

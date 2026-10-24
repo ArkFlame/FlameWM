@@ -130,11 +130,6 @@ impl QuickSwitchModel {
     }
 
     #[must_use]
-    pub fn selected_candidate(&self) -> Option<&QuickSwitchCandidate> {
-        self.selected.and_then(|index| self.candidates.get(index))
-    }
-
-    #[must_use]
     pub fn candidates(&self) -> &[QuickSwitchCandidate] {
         &self.candidates
     }

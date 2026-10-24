@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Opt-in DEVELOPMENT .deb lane. The output is NOT a production package:
+#   - binaries come from [profile.fast] in $CARGO_TARGET_DIR/fast (never release/)
+#   - the package version is <version>~dev and its description is labelled
+#   - output goes to .target/dev-dist; production .target/dist is never touched
+# Production packaging remains ./scripts/build-deb (cargo --release, unchanged).
+# Note: the desktop cache guard tools/ensure_desktop_conversion_cargo.py is not
+# run here because it only accepts dev|release profiles.
+set -Eeuo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+cd "$ROOT"
+fail() { printf 'FLAMEWM-DEV-DEB-ERROR: %s\n' "$1" >&2; exit 1; }
+
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${FLAMEWM_TARGET_BASE:-/run/media/linsaftw/SDD/flamewm-targets}/fastdeb}"
+[[ "$CARGO_TARGET_DIR" == /* ]] || fail "CARGO_TARGET_DIR must be absolute: $CARGO_TARGET_DIR"
+mkdir -p "$CARGO_TARGET_DIR" || fail "cannot create CARGO_TARGET_DIR: $CARGO_TARGET_DIR"
+[[ -w "$CARGO_TARGET_DIR" ]] || fail "CARGO_TARGET_DIR is not writable: $CARGO_TARGET_DIR"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
+export FLAMEWM_PACKAGE_PROFILE=fast
+command -v cargo >/dev/null 2>&1 || fail 'cargo not found'
+
+# Same 12 binaries scripts/package requires; built from the fast profile only.
+BINARIES=(flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot
+    flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal)
+bin_args=()
+for binary in "${BINARIES[@]}"; do bin_args+=(--bin "$binary"); done
+
+# Clear only the dev distribution; the production dist is never removed here.
+rm -rf "$ROOT/.target/dev-dist"
+
+start=$(date +%s)
+printf 'dev-deb: CARGO_TARGET_DIR=%s jobs=%s profile=fast\n' "$CARGO_TARGET_DIR" "$CARGO_BUILD_JOBS"
+cargo build --profile fast --locked "${bin_args[@]}"
+for binary in "${BINARIES[@]}"; do
+    [[ -x "$CARGO_TARGET_DIR/fast/$binary" ]] || fail "missing fast binary after build: $binary"
+done
+"$ROOT/scripts/package"
+
+version="$("$ROOT/scripts/version")"
+deb="$ROOT/.target/dev-dist/flamewm_${version}~dev_amd64.deb"
+[[ -f "$deb" ]] || fail "missing development package: $deb"
+contents="$(dpkg-deb --contents "$deb")"
+for binary in "${BINARIES[@]}"; do
+    grep -Fq " ./usr/bin/$binary" <<<"$contents" || fail "package lacks usr/bin/$binary"
+done
+printf 'OK dev-deb: %s (%s binaries, %ss)\n' "$deb" "${#BINARIES[@]}" "$(( $(date +%s) - start ))"

@@ -74,9 +74,37 @@ pub struct NetworkQuery {
 }
 
 impl NetworkQuery {
+    /// Trimmed, lowercased filter. Compute once per list pass and feed
+    /// [`NetworkQuery::matches_needle`] per row.
+    #[must_use]
+    pub fn needle(&self) -> String {
+        self.filter.trim().to_lowercase()
+    }
+
     #[must_use]
     pub fn matches(&self, label: &str) -> bool {
-        let needle = self.filter.trim().to_lowercase();
-        needle.is_empty() || label.to_lowercase().contains(&needle)
+        Self::matches_needle(&self.needle(), label)
+    }
+
+    #[must_use]
+    pub fn matches_needle(needle: &str, label: &str) -> bool {
+        needle.is_empty() || label.to_lowercase().contains(needle)
+    }
+}
+
+#[cfg(test)]
+mod network_query_tests {
+    use super::NetworkQuery;
+
+    #[test]
+    fn filter_is_trimmed_lowercased_and_matches_case_insensitively() {
+        let query = NetworkQuery {
+            filter: "  HomE ".to_string(),
+        };
+        assert_eq!(query.needle(), "home");
+        assert!(query.matches("Home-5G"));
+        assert!(NetworkQuery::matches_needle(&query.needle(), "home"));
+        assert!(!NetworkQuery::matches_needle(&query.needle(), "Office"));
+        assert!(NetworkQuery::matches_needle("", "anything"));
     }
 }

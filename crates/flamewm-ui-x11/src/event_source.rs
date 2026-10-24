@@ -26,36 +26,6 @@ fn to_surface_event(event: &SurfaceControllerEvent) -> SurfaceEvent {
     }
 }
 
-/// Block on the shared reactor, pump X events when the connection is
-/// ready, run one tick callback, then redraw dirty surfaces. The X
-/// connection fd is registered without ownership transfer; the caller
-/// keeps the runtime (and its display) alive until this returns.
-///
-/// X behavior (grab/outside/pump) stays owned by `SurfaceController`;
-/// this runner only wires reactor readiness to that existing pump.
-pub fn run_surface_runtime_with_reactor<F, T>(
-    runtime: &mut SurfaceRuntime,
-    reactor: &mut Reactor,
-    mut on_event: F,
-    mut on_tick: T,
-) -> Result<(), UiBackendError>
-where
-    F: FnMut(SurfaceEvent),
-    T: FnMut() -> Result<(), String>,
-{
-    runtime
-        .controller
-        .run_with_reactor(
-            reactor,
-            |event: &SurfaceControllerEvent, _document| {
-                on_event(to_surface_event(event));
-                Ok(())
-            },
-            |_controller| on_tick(),
-        )
-        .map_err(UiBackendError::Renderer)
-}
-
 /// Run reactor cycles while keeping native document borrows inside the renderer.
 ///
 /// Each queued event is delivered with a mutable [`SurfaceRuntime`] after native dispatch ends;
@@ -120,15 +90,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn surface_runtime_runner_signature_pins_reactor_contract() {
-        // Runtime behavior needs X; this pins the generic runner signature.
-        let _ = super::run_surface_runtime_with_reactor::<
-            fn(super::SurfaceEvent),
-            fn() -> Result<(), String>,
-        >;
-    }
-
     #[test]
     fn surface_runtime_until_runner_keeps_lazy_hosts_alive_without_surfaces() {
         // Zero surfaces is a valid idle state for lazily created hosts; the

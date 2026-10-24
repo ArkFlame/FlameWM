@@ -10,9 +10,10 @@ use std::ptr;
 use flamewm_render_core::Color;
 
 use crate::ffi::dynamic_library::DynamicLibrary;
+use crate::text_mask_cache::{TextMaskCache, TextMaskKey, TextMaskRef};
 use crate::xlib::{
     Colormap, Display, Drawable, Visual, XCreateGC, XCreatePixmap, XDestroyImage, XFillRectangle,
-    XFreeGC, XFreePixmap, XGetImage, XImageHead, XRectangle, XRootWindow, XSetForeground, ZPIXMAP,
+    XFreeGC, XGetImage, XImageHead, XRectangle, XRootWindow, XSetForeground, ZPIXMAP,
 };
 
 #[repr(C)]
@@ -153,6 +154,7 @@ pub struct XftBackend {
     fonts: HashMap<FontKey, *mut XftFont>,
     colors: HashMap<Color, XftColor>,
     preferred_family: String,
+    text_masks: TextMaskCache,
 }
 
 impl XftBackend {
@@ -234,6 +236,7 @@ impl XftBackend {
             fonts: HashMap::new(),
             colors: HashMap::new(),
             preferred_family,
+            text_masks: TextMaskCache::default(),
         };
 
         // Fail early only if *no* usable Xft font exists. IBM Plex Sans remains
@@ -288,6 +291,7 @@ impl XftBackend {
             unsafe { (self.api.font_close)(self.display, font) };
         }
         self.preferred_family = family.to_string();
+        self.text_masks.clear();
     }
 
     pub unsafe fn draw_text(
@@ -336,6 +340,12 @@ impl XftBackend {
         pad: u32,
         mask: &mut Vec<u8>,
     ) -> Result<(u32, u32), String> {
+        // Coverage depends only on family, glyphs, size (scale is folded in),
+        // weight and pad; a hit skips the A8 pixmap, GC, draw and XGetImage.
+        let key = TextMaskRef::new(&self.preferred_family, text, size, weight, pad);
+        if let Some(dims) = self.text_masks.get_into(&key, mask) {
+            return Ok(dims);
+        }
         let create_alpha = self
             .api
             .draw_create_alpha
@@ -428,7 +438,11 @@ impl XftBackend {
             unsafe { (self.api.draw_destroy)(draw) };
             draw_result
         })();
-        unsafe { XFreePixmap(self.display, pixmap) };
+        unsafe { crate::native::xresource::free_pixmap_raw(self.display, pixmap) };
+        if let Ok(dims) = result {
+            let owned = TextMaskKey::new(&self.preferred_family, text, size, weight, pad);
+            self.text_masks.insert(owned, dims.0, dims.1, mask);
+        }
         result
     }
 
@@ -649,14 +663,6 @@ pub(crate) fn xft_measure_estimate(text: &str, size: f32) -> (f32, f32) {
     ((text.chars().count() as f32 * size * 0.58).round(), height)
 }
 
-/// Whether Xft text draws onto the composited ARGB32 target directly.
-/// Only the composited path keeps glyph alpha true; shape/opaque fallbacks
-/// draw onto the same drawable but the shape mask clips the tails.
-#[allow(dead_code)]
-pub(crate) fn xft_draws_on_composited_target(composited: bool) -> bool {
-    composited
-}
-
 /// Straight-alpha `Color` -> 16-bit XRender color triple used by
 /// `XftColorAllocValue`. Pure so the alpha expansion is unit-testable.
 pub(crate) fn xrender_color_for(color: Color) -> (u16, u16, u16, u16) {
@@ -709,7 +715,46 @@ mod tests {
             }),
             (65535, 0, 0, 32896)
         );
-        assert!(!xft_draws_on_composited_target(false));
-        assert!(xft_draws_on_composited_target(true));
+    }
+
+    /// The text-mask cache must return the same coverage as a fresh A8 render, and
+    /// a second identical request must be a hit (no new entry). Needs
+    /// `FLAMEWM_TEST_DISPLAY` with Xft fonts; skipped otherwise.
+    #[test]
+    fn text_mask_cache_hit_matches_fresh_render() {
+        use crate::xlib::{
+            XCloseDisplay, XDefaultColormap, XDefaultScreen, XDefaultVisual, XOpenDisplay,
+            XRootWindow,
+        };
+        let Some(name) = std::env::var_os("FLAMEWM_TEST_DISPLAY") else {
+            return;
+        };
+        let name = std::ffi::CString::new(name.to_string_lossy().as_bytes()).unwrap();
+        unsafe {
+            let display = XOpenDisplay(name.as_ptr());
+            assert!(!display.is_null(), "XOpenDisplay failed");
+            let screen = XDefaultScreen(display);
+            let root = XRootWindow(display, screen);
+            let visual = XDefaultVisual(display, screen);
+            let colormap = XDefaultColormap(display, screen);
+            let mut xft = XftBackend::new(display, screen, root, visual, colormap).expect("xft");
+            let (mut fresh, mut hit) = (Vec::new(), Vec::new());
+            let dims = xft
+                .text_alpha_mask(14.0, 400, "Shadow", 4, &mut fresh)
+                .expect("fresh mask");
+            assert_eq!(xft.text_masks.len(), 1);
+            let hit_dims = xft
+                .text_alpha_mask(14.0, 400, "Shadow", 4, &mut hit)
+                .expect("cached mask");
+            assert_eq!((dims, fresh.as_slice()), (hit_dims, hit.as_slice()));
+            assert_eq!(xft.text_masks.len(), 1, "identical request must hit");
+            xft.text_alpha_mask(15.0, 400, "Shadow", 4, &mut hit)
+                .expect("other size");
+            assert_eq!(xft.text_masks.len(), 2, "size is part of the key");
+            // Libraries stay loaded through XCloseDisplay, as in production.
+            let libraries = xft.into_deferred_libraries();
+            XCloseDisplay(display);
+            drop(libraries);
+        }
     }
 }

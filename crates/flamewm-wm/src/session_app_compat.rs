@@ -512,7 +512,9 @@ fn pam_socket_ready(path: &Path) -> bool {
 
 pub fn finalize_pam_kwallet_login(environment: &BTreeMap<String, String>) {
     static PAM_INIT: std::sync::Once = std::sync::Once::new();
-    let Some(socket) = std::env::var_os("PAM_KWALLET5_LOGIN").filter(|value| !value.is_empty())
+    let Some(socket) = std::env::var_os("PAM_KWALLET5_LOGIN")
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("PAM_KWALLET_LOGIN").filter(|value| !value.is_empty()))
     else {
         // Passwordless login, missing PAM hook, or a session where PAM already
         // completed its handshake: no credential is available to synthesize.

@@ -4,6 +4,8 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use flamewm_integrations_linux::removable_mounts::{self, by_uuid_dir, is_removable_in, mounted_block_devices, unescape_mount, uuid_blocks, valid_device_path};
+pub use flamewm_integrations_linux::removable_mounts::udisks_action;
 
 pub const MAX_BOOKMARKS: usize = 128;
 const MAX_LABEL_CHARS: usize = 120;
@@ -137,10 +139,6 @@ pub struct MountedDevice {
     pub block_name: String,
 }
 
-fn unescape_mount(text: &str) -> String {
-    text.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n").replace("\\134", "\\")
-}
-
 /// Parses `/proc/self/mountinfo` for removable-media mount points (`/media`, `/run/media`, `/mnt`).
 /// Field layout: id parent maj:min root mount_point opts [optional...] - fstype source superopts.
 pub fn parse_mountinfo(text: &str) -> Vec<MountedDevice> {
@@ -230,24 +228,6 @@ pub fn gvfs_label(folder: &str) -> String {
         (None, None) => folder.to_owned(),
     };
     sanitize_label(&label)
-}
-
-/// True when sysfs marks the block device, or its parent disk, as removable.
-pub fn is_removable_in(sys_block_root: &Path, block_name: &str) -> bool {
-    let flag = |dir: PathBuf| fs::read_to_string(dir.join("removable")).map(|v| v.trim() == "1").unwrap_or(false);
-    let dev = sys_block_root.join(block_name);
-    flag(dev.clone()) || flag(dev.join(".."))
-}
-
-pub fn is_removable(block_name: &str) -> bool {
-    is_removable_in(Path::new("/sys/class/block"), block_name)
-}
-
-/// Accepts only `/dev/<name>` block paths without shell metacharacters or traversal.
-pub fn valid_device_path(device: &str) -> bool {
-    device.strip_prefix("/dev/").is_some_and(|name| {
-        !name.is_empty() && name.len() <= 255 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    })
 }
 
 /// A removable filesystem that is present but not mounted, as reported by `lsblk`.
@@ -632,34 +612,6 @@ fn lsblk_output(columns: &str) -> Option<String> {
     output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Argument vector for one `udisksctl` call. Eject is a power-off of the device; no shell is involved.
-pub fn udisks_args(action: &str, device: &str) -> Result<Vec<String>, String> {
-    if !matches!(action, "mount" | "unmount" | "eject" | "power-off") {
-        return Err(format!("Unsupported device action {action}"));
-    }
-    if !valid_device_path(device) {
-        return Err("Refusing invalid device path".into());
-    }
-    let subcommand = if action == "eject" { "power-off" } else { action };
-    Ok(vec![subcommand.to_owned(), "-b".to_owned(), device.to_owned()])
-}
-
-/// Runs `udisksctl` for one device operation. Returns trimmed stdout on success, a bounded stderr message on failure.
-/// Callers run this on a worker thread: udisks can block while a filesystem is flushed.
-pub fn udisks_action(action: &str, device: &str) -> Result<String, String> {
-    let args = udisks_args(action, device)?;
-    let output = Command::new("udisksctl")
-        .args(&args)
-        .output()
-        .map_err(|error| format!("udisksctl unavailable: {error}"))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().chars().take(512).collect())
-    } else {
-        let message = String::from_utf8_lossy(&output.stderr);
-        Err(sanitize_label(message.trim()).chars().take(300).collect::<String>())
-    }
-}
-
 /// Name of the drive holding `block_name`: the parent disk of a partition, or the device itself.
 pub fn drive_in(sys_block_root: &Path, block_name: &str) -> String {
     let dev = sys_block_root.join(block_name);
@@ -701,26 +653,6 @@ fn eject_filesystem_then_drive(
         }
     }
     run("eject", drive).map_err(explain)
-}
-
-/// Mounted block devices from `/proc/self/mountinfo` text: `(block_name, mount_point)` for every
-/// `/dev/<name>` source, whatever the mount point. Field layout: id parent maj:min root mount_point
-/// opts [optional...] - fstype source superopts.
-pub fn mounted_block_devices(mountinfo: &str) -> Vec<(String, PathBuf)> {
-    let mut out: Vec<(String, PathBuf)> = Vec::new();
-    for line in mountinfo.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        let Some(separator) = fields.iter().position(|field| *field == "-") else { continue };
-        let (Some(mount), Some(source)) = (fields.get(4), fields.get(separator + 2)) else { continue };
-        let Some(block_name) = source.strip_prefix("/dev/").filter(|name| !name.is_empty() && !name.contains('/')) else {
-            continue;
-        };
-        let mount_point = PathBuf::from(unescape_mount(mount));
-        if !out.iter().any(|(name, existing)| name == block_name && *existing == mount_point) {
-            out.push((block_name.to_owned(), mount_point));
-        }
-    }
-    out
 }
 
 /// Another partition of `drive` that is still mounted, as `(device, mount_point)`.
@@ -783,8 +715,22 @@ pub fn eject_device_in(
     eject_filesystem_then_drive(device, &format!("/dev/{drive}"), &mut run)
 }
 
+/// Records a user mount (`remember`) or unmount/eject (`!remember`) of `device` in the remembered list.
+/// Reads the state file fresh: the session's remount worker saves the same file.
+pub fn set_remembered(device: &str, remember: bool) {
+    let block = device.trim_start_matches("/dev/");
+    let Some((uuid, _)) = uuid_blocks(&by_uuid_dir()).into_iter().find(|(_, name)| name == block) else { return };
+    let path = removable_mounts::state_path();
+    let mut known = removable_mounts::Memory::load(&path);
+    let changed = if remember { known.remember(&uuid) } else { known.forget(&uuid) };
+    if changed {
+        let _ = removable_mounts::save(&path, &known.known);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use flamewm_integrations_linux::removable_mounts::{removable_devices, udisks_args};
     use super::*;
 
     #[test]
@@ -861,6 +807,20 @@ garbage line with no separator
         assert_eq!(gvfs_label("smb-share:server=nas,share=media"), "media on nas");
         assert_eq!(gvfs_label("sftp:host=example.com,user=me"), "example.com");
         assert_eq!(gvfs_label("plain"), "plain");
+    }
+
+    #[test]
+    fn removable_devices_reports_mount_state_and_removable_flag() {
+        let pairs = vec![("AAAA-1111".to_owned(), "sdb1".to_owned()), ("BBBB".to_owned(), "nvme0n1p6".to_owned())];
+        let mounted = vec![("sdb1".to_owned(), PathBuf::from("/run/media/u/Stick"))];
+        let devices = removable_devices(&pairs, &mounted, |block| block == "sdb1");
+        assert_eq!(devices[0], removable_mounts::Device { uuid: "AAAA-1111".into(), block: "sdb1".into(), removable: true, mounted: true });
+        assert_eq!(devices[1], removable_mounts::Device { uuid: "BBBB".into(), block: "nvme0n1p6".into(), removable: false, mounted: false });
+    }
+
+    #[test]
+    fn uuid_blocks_is_empty_for_a_missing_directory() {
+        assert!(uuid_blocks(Path::new("/nonexistent/flamewm/by-uuid")).is_empty());
     }
 
     #[test]

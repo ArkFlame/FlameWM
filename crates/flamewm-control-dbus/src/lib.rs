@@ -632,6 +632,11 @@ mod tests {
         assert_bus_round_trip(ControlSignal::StartMenuToggleRequested);
     }
 
+    #[test]
+    fn launcher_toggle_requested_round_trips_through_dbus() {
+        assert_bus_round_trip(ControlSignal::LauncherToggleRequested);
+    }
+
     // CONTRACT-REGRESSION: T12 ApplySettings success order is reply, snapshot signal, legacy signal.
     // TRIGGER: decode a revision N+1 reply followed by both ordered D-Bus signals.
     // OBSERVABLE: the snapshot-bearing signal is first; legacy compatibility follows it.

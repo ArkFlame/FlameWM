@@ -51,26 +51,19 @@ pub fn compile_file(
     let html = parse_html(&html_source)?;
     let base = html_path.parent().unwrap_or_else(|| Path::new("."));
     let mut css = html.embedded_css.clone();
-
+    let mut sheets = Vec::with_capacity(html.linked_css.len() + extra_css_paths.len());
     for href in &html.linked_css {
         if href.contains("://") || href.starts_with("data:") {
             return Err(format!("runtime/network stylesheet URL '{href}' is forbidden; FlameWM Render stylesheets must be local build inputs"));
         }
-        let path = base.join(href);
-        css.push('\n');
-        css.push_str(&fs::read_to_string(&path).map_err(|error| {
-            format!(
-                "failed to read linked stylesheet {}: {error}",
-                path.display()
-            )
-        })?);
+        sheets.push(base.join(href));
     }
-    for path in extra_css_paths {
+    sheets.extend_from_slice(extra_css_paths);
+    for path in &sheets {
         css.push('\n');
         css.push_str(
-            &fs::read_to_string(path).map_err(|error| {
-                format!("failed to read stylesheet {}: {error}", path.display())
-            })?,
+            &fs::read_to_string(path)
+                .map_err(|error| format!("failed to read stylesheet {}: {error}", path.display()))?,
         );
     }
     compile_parsed(&html_source, &css, html, options, Some(base))
@@ -181,7 +174,7 @@ impl<'a> Compiler<'a> {
         parent: Option<u32>,
         inherited: &Style,
     ) -> Result<u32, String> {
-        let source = self.html.nodes[source_index].clone();
+        let source = &self.html.nodes[source_index];
         let node_index = self.nodes.len() as u32;
 
         if source.kind == HtmlNodeKind::Text {
@@ -194,7 +187,7 @@ impl<'a> Compiler<'a> {
                 next_sibling: None,
                 id: std::borrow::Cow::Borrowed(""),
                 action: std::borrow::Cow::Borrowed(""),
-                text: source.text.into(),
+                text: source.text.clone().into(),
                 image: None,
                 style,
                 hover_style: None,
@@ -307,7 +300,6 @@ impl<'a> Compiler<'a> {
         .map_err(|error| format!("failed to decode image {}: {error}", path.display()))?;
         // Opaque PPM build assets arrive with alpha=255 from image-core;
         // SVG/PNG preserve alpha. The RWRB v3 asset contract is 4 bytes/px.
-        let pixels = image.pixels;
         if self.assets.len() >= u16::MAX as usize {
             return Err("too many image assets".to_string());
         }
@@ -316,7 +308,7 @@ impl<'a> Compiler<'a> {
             source: src.to_string().into(),
             width: image.width,
             height: image.height,
-            pixels: pixels.into(),
+            pixels: image.pixels.into(),
         });
         self.asset_index.insert(src.to_string(), index);
         Ok(index)
@@ -668,13 +660,12 @@ fn parse_edges(input: &str) -> Result<Edges, String> {
 }
 
 fn parse_flex_grow(input: &str) -> Result<f32, String> {
-    let parts: Vec<&str> = input.split_ascii_whitespace().collect();
-    if parts.len() == 1 {
-        return Ok(parse_number(parts[0])?.max(0.0));
+    if input.split_ascii_whitespace().count() != 1 {
+        return Err(format!(
+            "flex shorthand '{input}' is not supported; use flex-grow"
+        ));
     }
-    Err(format!(
-        "flex shorthand '{input}' is not supported; use flex-grow"
-    ))
+    Ok(parse_number(input)?.max(0.0))
 }
 
 fn parse_signed_px(input: &str) -> Result<f32, String> {
@@ -737,31 +728,22 @@ pub fn parse_color_literal(input: &str) -> Option<Color> {
         _ => {}
     }
     if let Some(hex) = value.strip_prefix('#') {
-        return match hex.len() {
-            3 => Some(Color::rgb(
-                expand_hex(hex, 0)?,
-                expand_hex(hex, 1)?,
-                expand_hex(hex, 2)?,
-            )),
-            4 => Some(Color {
-                r: expand_hex(hex, 0)?,
-                g: expand_hex(hex, 1)?,
-                b: expand_hex(hex, 2)?,
-                a: expand_hex(hex, 3)?,
-            }),
-            6 => Some(Color::rgb(
-                parse_hex_byte(hex, 0)?,
-                parse_hex_byte(hex, 2)?,
-                parse_hex_byte(hex, 4)?,
-            )),
-            8 => Some(Color {
-                r: parse_hex_byte(hex, 0)?,
-                g: parse_hex_byte(hex, 2)?,
-                b: parse_hex_byte(hex, 4)?,
-                a: parse_hex_byte(hex, 6)?,
-            }),
-            _ => None,
+        // #rgb[a] digits each expand to one byte; #rrggbb[aa] reads two per channel.
+        let (width, channels) = match hex.len() {
+            3 => (1, 3),
+            4 => (1, 4),
+            6 => (2, 3),
+            8 => (2, 4),
+            _ => return None,
         };
+        let channel = |index: usize| hex_channel(hex, index, width);
+        let a = if channels == 4 { channel(3)? } else { 255 };
+        return Some(Color {
+            r: channel(0)?,
+            g: channel(1)?,
+            b: channel(2)?,
+            a,
+        });
     }
     if let Some(inner) = value
         .strip_prefix("rgb(")
@@ -798,13 +780,12 @@ pub fn parse_color_literal(input: &str) -> Option<Color> {
     None
 }
 
-fn expand_hex(input: &str, index: usize) -> Option<u8> {
-    let value = u8::from_str_radix(&input[index..index + 1], 16).ok()?;
-    Some((value << 4) | value)
-}
-
-fn parse_hex_byte(input: &str, index: usize) -> Option<u8> {
-    u8::from_str_radix(&input[index..index + 2], 16).ok()
+/// One hex channel at `index`: `width` 1 expands a digit (`a` -> `aa`), 2 reads a byte.
+/// `get` rejects non-char-boundary slices instead of panicking on multi-byte input.
+fn hex_channel(hex: &str, index: usize, width: usize) -> Option<u8> {
+    let digits = hex.get(index * width..(index + 1) * width)?;
+    let value = u8::from_str_radix(digits, 16).ok()?;
+    Some(if width == 1 { (value << 4) | value } else { value })
 }
 
 fn apply_border(
@@ -1130,7 +1111,7 @@ mod tests {
         assert!(output.document.assets[0].is_fully_opaque());
     }
 
-    fn compile_svg_fixture(name: &str) -> CompileOutput {
+    fn compile_svg_html(name: &str, body: &str) -> CompileOutput {
         use std::io::Write;
         let breeze =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/web/breeze");
@@ -1140,12 +1121,12 @@ mod tests {
         std::fs::write(dir.join(name), &bytes).expect("copy svg");
         let html = dir.join("doc.html");
         let mut file = std::fs::File::create(&html).expect("temp html");
-        write!(
-            file,
-            "<html><body><img id=\"i\" src=\"{name}\"></body></html>"
-        )
-        .expect("write html");
+        write!(file, "<html><body>{body}</body></html>").expect("write html");
         compile_file(&html, &[], CompileOptions::default()).expect("compile")
+    }
+
+    fn compile_svg_fixture(name: &str) -> CompileOutput {
+        compile_svg_html(name, &format!("<img id=\"i\" src=\"{name}\">"))
     }
 
     fn mean_rgb(pixels: &[u8]) -> (f32, f32, f32) {
@@ -1200,41 +1181,15 @@ mod tests {
         assert!(asset.pixels.chunks_exact(4).any(|p| p[3] > 8 && p[3] < 255));
         assert!(count_near(&asset.pixels, [0xef, 0x40, 0x48], 32) > 200);
         // Dedup: same src twice in one document yields one asset, both nodes share it.
-        {
-            use std::io::Write;
-            let breeze =
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/web/breeze");
-            let bytes = std::fs::read(breeze.join("folder.svg")).expect("read breeze svg");
-            let dir = temp_fixture_dir("j03-dedup");
-            std::fs::create_dir_all(&dir).expect("temp dir");
-            std::fs::write(dir.join("folder.svg"), &bytes).expect("copy svg");
-            let html = dir.join("doc.html");
-            let mut file = std::fs::File::create(&html).expect("temp html");
-            write!(
-                file,
-                "<html><body><img id=\"a\" src=\"folder.svg\"><img id=\"b\" src=\"folder.svg\"></body></html>"
-            )
-            .expect("write html");
-            let dup = compile_file(&html, &[], CompileOptions::default()).expect("compile");
-            assert_eq!(dup.document.assets.len(), 1);
-            let ia = dup
-                .document
-                .nodes
-                .iter()
-                .find(|n| n.id == "a")
-                .unwrap()
-                .image
-                .unwrap();
-            let ib = dup
-                .document
-                .nodes
-                .iter()
-                .find(|n| n.id == "b")
-                .unwrap()
-                .image
-                .unwrap();
-            assert_eq!(ia, ib);
-        }
+        let dup = compile_svg_html(
+            "folder.svg",
+            r#"<img id="a" src="folder.svg"><img id="b" src="folder.svg">"#,
+        );
+        assert_eq!(dup.document.assets.len(), 1);
+        let image_of = |id: &str| {
+            dup.document.nodes.iter().find(|n| n.id == id).unwrap().image.unwrap()
+        };
+        assert_eq!(image_of("a"), image_of("b"));
     }
 
     #[test]

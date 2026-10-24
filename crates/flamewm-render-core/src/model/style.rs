@@ -261,10 +261,19 @@ impl RuntimeDocument {
             .ok_or_else(|| format!("no color variable named '{name}'"))?;
         if self.variable_values[index as usize] != color {
             self.variable_values[index as usize] = color;
-            self.touch();
+            self.touch_paint();
         }
         Ok(())
     }
+}
+
+/// Stores `value` in `slot` and reports whether the stored value actually changed.
+fn set_slot<T: PartialEq>(slot: &mut T, value: T) -> bool {
+    if *slot == value {
+        return false;
+    }
+    *slot = value;
+    true
 }
 
 impl RuntimeDocument {
@@ -273,10 +282,38 @@ impl RuntimeDocument {
         Ok(self.style_overrides.entry(index).or_default())
     }
 
-    pub fn set_background_color(&mut self, id: &str, color: Color) -> Result<(), String> {
-        self.override_entry(id)?.background = Some(ColorValue::Literal(color));
-        self.touch();
+    fn set_literal_color(
+        &mut self,
+        id: &str,
+        field: impl Fn(&mut RuntimeStyleOverride) -> &mut Option<ColorValue>,
+        color: Color,
+    ) -> Result<(), String> {
+        let index = self.require_node(id)?;
+        let value = Some(ColorValue::Literal(color));
+        if set_slot(field(self.style_overrides.entry(index).or_default()), value) {
+            self.touch_node(index, DirtyReason::Paint, false);
+        }
         Ok(())
+    }
+
+    fn clear_color_field(
+        &mut self,
+        id: &str,
+        field: impl Fn(&mut RuntimeStyleOverride) -> &mut Option<ColorValue>,
+    ) -> Result<(), String> {
+        let index = self.require_node(id)?;
+        let changed = self
+            .style_overrides
+            .get_mut(&index)
+            .is_some_and(|style| field(style).take().is_some());
+        if changed {
+            self.touch_node(index, DirtyReason::Paint, false);
+        }
+        Ok(())
+    }
+
+    pub fn set_background_color(&mut self, id: &str, color: Color) -> Result<(), String> {
+        self.set_literal_color(id, |style| &mut style.background, color)
     }
 
     /// Per-node backdrop request: the root pixels beneath a translucent node are captured,
@@ -286,15 +323,13 @@ impl RuntimeDocument {
             return Err("node backdrop blur must be 0..=100".to_string());
         }
         let index = self.require_node(id)?;
-        match blur_percent.filter(|blur| *blur > 0) {
-            Some(blur) => {
-                self.node_backdrops.insert(index, blur);
-            }
-            None => {
-                self.node_backdrops.remove(&index);
-            }
+        let changed = match blur_percent.filter(|blur| *blur > 0) {
+            Some(blur) => self.node_backdrops.insert(index, blur) != Some(blur),
+            None => self.node_backdrops.remove(&index).is_some(),
+        };
+        if changed {
+            self.touch();
         }
-        self.touch();
         Ok(())
     }
 
@@ -319,50 +354,44 @@ impl RuntimeDocument {
     }
 
     pub fn set_border_color(&mut self, id: &str, color: Color) -> Result<(), String> {
-        self.override_entry(id)?.border_color = Some(ColorValue::Literal(color));
-        self.touch();
-        Ok(())
+        self.set_literal_color(id, |style| &mut style.border_color, color)
     }
 
     pub fn clear_background_color(&mut self, id: &str) -> Result<(), String> {
-        let index = self.require_node(id)?;
-        if let Some(override_style) = self.style_overrides.get_mut(&index) {
-            override_style.background = None;
-        }
-        self.touch();
-        Ok(())
+        self.clear_color_field(id, |style| &mut style.background)
     }
 
     pub fn clear_border_color(&mut self, id: &str) -> Result<(), String> {
-        let index = self.require_node(id)?;
-        if let Some(override_style) = self.style_overrides.get_mut(&index) {
-            override_style.border_color = None;
-        }
-        self.touch();
-        Ok(())
+        self.clear_color_field(id, |style| &mut style.border_color)
     }
 
     pub fn set_foreground_color(&mut self, id: &str, color: ColorValue) -> Result<(), String> {
         let index = self.require_node(id)?;
-        self.style_overrides.entry(index).or_default().color = Some(color.clone());
-        self.mirror_to_text_children(index, |style| style.color = Some(color.clone()));
-        self.touch();
+        if self.set_override_and_mirror(index, |style| &mut style.color, color) {
+            self.touch_paint();
+        }
         Ok(())
     }
 
     pub fn clear_foreground_color(&mut self, id: &str) -> Result<(), String> {
         let index = self.require_node(id)?;
-        if let Some(override_style) = self.style_overrides.get_mut(&index) {
-            override_style.color = None;
+        let changed = self
+            .style_overrides
+            .get_mut(&index)
+            .is_some_and(|style| style.color.take().is_some());
+        if changed {
+            self.touch_paint();
         }
-        self.touch();
         Ok(())
     }
 
     pub fn set_overflow(&mut self, id: &str, x: Overflow, y: Overflow) -> Result<(), String> {
         let entry = self.override_entry(id)?;
-        entry.overflow_x = Some(x);
-        entry.overflow_y = Some(y);
+        let changed =
+            set_slot(&mut entry.overflow_x, Some(x)) | set_slot(&mut entry.overflow_y, Some(y));
+        if changed {
+            self.touch();
+        }
         Ok(())
     }
 
@@ -371,8 +400,9 @@ impl RuntimeDocument {
             return Err("runtime font size must be finite and positive".to_string());
         }
         let index = self.require_node(id)?;
-        self.style_overrides.entry(index).or_default().font_size = Some(size);
-        self.mirror_to_text_children(index, |style| style.font_size = Some(size));
+        if self.set_override_and_mirror(index, |style| &mut style.font_size, size) {
+            self.touch();
+        }
         Ok(())
     }
 
@@ -381,24 +411,43 @@ impl RuntimeDocument {
     fn mirror_to_text_children(
         &mut self,
         index: u32,
-        apply: impl Fn(&mut RuntimeStyleOverride),
-    ) {
+        apply: impl Fn(&mut RuntimeStyleOverride) -> bool,
+    ) -> bool {
+        let mut changed = false;
         let mut child = self.document.nodes[index as usize].first_child;
         while let Some(current) = child {
             let node = &self.document.nodes[current as usize];
             let next = node.next_sibling;
             if node.kind == NodeKind::Text {
-                apply(self.style_overrides.entry(current).or_default());
+                changed |= apply(self.style_overrides.entry(current).or_default());
             }
             child = next;
         }
+        changed
+    }
+
+    /// Sets one override field on `index` and the same value on its direct text children.
+    /// Returns whether any stored value changed.
+    fn set_override_and_mirror<T: PartialEq + Copy>(
+        &mut self,
+        index: u32,
+        field: impl Fn(&mut RuntimeStyleOverride) -> &mut Option<T>,
+        value: T,
+    ) -> bool {
+        let mut changed = set_slot(
+            field(self.style_overrides.entry(index).or_default()),
+            Some(value),
+        );
+        changed |= self.mirror_to_text_children(index, |style| set_slot(field(style), Some(value)));
+        changed
     }
 
     pub fn set_font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
-        let weight = Some(weight.clamp(100, 900));
+        let weight = weight.clamp(100, 900);
         let index = self.require_node(id)?;
-        self.style_overrides.entry(index).or_default().font_weight = weight;
-        self.mirror_to_text_children(index, |style| style.font_weight = weight);
+        if self.set_override_and_mirror(index, |style| &mut style.font_weight, weight) {
+            self.touch();
+        }
         Ok(())
     }
 

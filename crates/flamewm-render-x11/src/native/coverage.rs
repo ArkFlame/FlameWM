@@ -217,7 +217,7 @@ mod tests {
             },
             size: 13.0,
             weight: 400,
-            text: "hi".to_string(),
+            text: "hi".into(),
         }
     }
 

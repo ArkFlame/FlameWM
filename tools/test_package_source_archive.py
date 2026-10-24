@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -103,6 +104,26 @@ class SourceArchiveTests(unittest.TestCase):
         (self.root / "assets/escape").symlink_to("../../outside")
         result = subprocess.run([str(BUILDER), str(self.root), str(self.manifest), str(self.root / "bad.tar.gz")], capture_output=True)
         self.assertNotEqual(result.returncode, 0)
+
+    def check(self):
+        return subprocess.run([sys.executable, "-I", str(BUILDER), "--check", str(self.root), str(self.manifest)],
+                              capture_output=True, text=True, timeout=30)
+
+    def test_check_mode_accepts_valid_manifest_and_writes_nothing(self):
+        before = sorted(p.relative_to(self.root).as_posix() for p in self.root.rglob("*"))
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("FLAMEWM-SOURCE-CHECK:", result.stdout)
+        self.assertEqual(before, sorted(p.relative_to(self.root).as_posix() for p in self.root.rglob("*")))
+
+    def test_check_mode_rejects_unregistered_executable_with_canonical_message(self):
+        path = self.root / "crates/unregistered.sh"
+        path.write_text("#!/bin/sh\n", encoding="utf-8")
+        path.chmod(0o755)
+        result = self.check()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("executable is not registered: crates/unregistered.sh", result.stderr)
+        self.assertFalse((self.root / "bad.tar.gz").exists())
 
 
 class TerminalPayloadPackageContractTests(unittest.TestCase):

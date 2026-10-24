@@ -55,6 +55,21 @@ pub struct ManagedClient {
     /// Who draws the frame; `Server` unless the client draws its own (CSD)
     /// or requested no decorations. Non-`Server` clients have no Flame frame.
     pub decoration: Decoration,
+    /// Inputs of the last frame shape applied; `None` until first shaped.
+    /// Skips the shape requests while the inputs are unchanged.
+    pub shaped: Option<ShapeKey>,
+    /// Input-child placements last configured; `None` until first laid out.
+    pub input_layout: Option<[crate::wm::lifecycle::ChildPlacement; 12]>,
+}
+
+/// Everything the frame shape depends on besides the window itself.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShapeKey {
+    pub frame: Window,
+    pub width: u32,
+    pub height: u32,
+    pub floating: bool,
+    pub tokens: flamewm_skin::recipes::decoration::ChromeTokens,
 }
 
 /// Convert a legacy frame `Rect` (u32 size) to a placement `RootRect`.
@@ -167,6 +182,8 @@ mod tests {
             kind: WindowKind::Normal,
             hover_control: None,
             decoration: Decoration::Server,
+            shaped: None,
+            input_layout: None,
         };
         assert!(!client.is_maximized());
         assert!(!client.is_fullscreen());

@@ -10,8 +10,7 @@ def read(path):
 
 class Pass26Tests(unittest.TestCase):
     def test_desktop_focus_test_imports_are_explicit(self):
-        code = read('crates/flamewm-render-x11/src/app/events.rs')
-        module = code.split('mod reactor_presentation_regressions {', 1)[1]
+        module = read('crates/flamewm-render-x11/src/app/events/tests/reactor_presentation_regressions.rs')
         imported = module.split('};', 1)[0]
         self.assertIn('desktop_takes_focus_on_press', imported)
         self.assertIn('X11WindowRole', imported)
@@ -34,7 +33,7 @@ class Pass26Tests(unittest.TestCase):
         self.assertIn('"text-shadow" =>', read('crates/flamewm-render-compiler/src/compile.rs'))
         core = read('crates/flamewm-render-core/src/paint.rs')
         self.assertIn('if let Some(shadow) = style.text_shadow', core)
-        self.assertLess(core.index('x: rect.x + shadow.offset_x'), core.index('text: line.text.clone()'))
+        self.assertLess(core.index('x: rect.x + shadow.offset_x'), core.index('text: Arc::clone(&text)'))
         codec = read('crates/flamewm-render-core/src/codec.rs')
         self.assertIn('text_shadow: if version >= FORMAT_VERSION_SHADOW_LEGACY', codec)
         self.assertIn('v5_style_decodes_without_text_shadow', codec)

@@ -133,16 +133,6 @@ impl KioJobViewProvider {
         task_progress_for_jobs(&self.jobs, panels)
     }
 
-    #[must_use]
-    pub fn active_job_count(&self) -> usize {
-        self.jobs.len()
-    }
-
-    #[must_use]
-    pub fn job_is_suspended(&self, path: &str) -> Option<bool> {
-        self.jobs.get(path).map(|job| job.suspended)
-    }
-
     /// Whether the most recent reactor turn changed visible task progress.
     pub fn take_changed(&mut self) -> bool {
         std::mem::take(&mut self.changed)

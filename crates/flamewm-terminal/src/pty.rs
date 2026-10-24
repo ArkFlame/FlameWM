@@ -77,6 +77,12 @@ impl PtyProcess {
         rustix::termios::tcgetattr(&self.master).map_or(true, |attrs| attrs.local_modes.contains(rustix::termios::LocalModes::ICANON))
     }
 
+    /// Whether the terminal echoes typed input. A shell line editor turns echo off and draws the line itself, while
+    /// a password prompt also turns it off; the prompt check therefore needs both flags.
+    pub fn echoing(&self) -> bool {
+        rustix::termios::tcgetattr(&self.master).map_or(true, |attrs| attrs.local_modes.contains(rustix::termios::LocalModes::ECHO))
+    }
+
     /// The master read side, owned by the reader thread. Returns `None` after the first call.
     pub fn take_reader(&mut self) -> Option<File> {
         self.reader.take()
@@ -95,11 +101,6 @@ impl PtyProcess {
     pub fn winsize(&self) -> io::Result<PtySize> {
         let size = rustix::termios::tcgetwinsize(&self.master)?;
         Ok(PtySize { cols: size.ws_col, rows: size.ws_row, pixel_width: size.ws_xpixel, pixel_height: size.ws_ypixel })
-    }
-
-    /// Exit status once the child has finished; `None` while it runs.
-    pub fn try_exit(&mut self) -> io::Result<Option<i32>> {
-        Ok(self.child.try_wait()?.map(|status| status.code().unwrap_or(-1)))
     }
 
     pub fn kill(&mut self) {

@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, ErrorKind};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Instant, SystemTime};
 
@@ -262,11 +262,6 @@ impl Organizer {
         }
         self.armed = None;
     }
-
-    #[cfg(test)]
-    pub fn dir(&self) -> &Path {
-        &self.dir
-    }
 }
 
 /// Reactor read callback body: drains kernel notes into the shared queue.
@@ -304,6 +299,7 @@ pub fn read_events(source: &mut Inotify, queue: &Queue) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::time::Duration;
 
     struct Harness {

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Opt-in short edit loops over selected crates. Cargo still compiles each
+# crate's real transitive dependencies. This is NOT a release gate: run
+# ./scripts/check and ./scripts/build-deb for final verification.
+#   scripts/dev-lane check <crate>...   cargo check --all-targets (dev target)
+#   scripts/dev-lane test  <crate>...   cargo test (dev target)
+#   scripts/dev-lane fast  <crate>...   cargo build --profile fast (fast target, not release)
+# Each mode has one stable target dir: $FLAMEWM_TARGET_BASE/{dev,fast}.
+set -Eeuo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+usage() {
+    echo "usage: scripts/dev-lane {check|test|fast} <crate> [<crate> ...]" >&2
+    exit 2
+}
+
+mode="${1:-}"
+[[ $# -ge 2 ]] || usage
+shift
+case "$mode" in
+    check) target=dev; cargo_args=(check --all-targets) ;;
+    test) target=dev; cargo_args=(test) ;;
+    fast) target=fast; cargo_args=(build --profile fast) ;;
+    *) usage ;;
+esac
+
+packages=()
+for crate in "$@"; do
+    packages+=(-p "$crate")
+done
+export CARGO_TARGET_DIR="${FLAMEWM_TARGET_BASE:-/run/media/linsaftw/SDD/flamewm-targets}/$target"
+cd "$ROOT"
+exec cargo "${cargo_args[@]}" "${packages[@]}" --locked

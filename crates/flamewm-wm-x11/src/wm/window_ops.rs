@@ -241,15 +241,12 @@ impl<'a, C: Connection> Wm<'a, C> {
         let fullscreen = self
             .clients
             .get(&client)
-            .map_or(false, |state| state.is_fullscreen());
+            .is_some_and(|state| state.is_fullscreen());
         if enable == fullscreen {
             return Ok(());
         }
-        // ToggleFullscreen is a pure toggle; drive it only when the target
-        // differs from current, and loop-safe (single reduce).
-        if (enable && !fullscreen) || (!enable && fullscreen) {
-            self.reduce_and_execute(client, FrameEvent::ToggleFullscreen)?;
-        }
+        // ToggleFullscreen is a pure toggle; the early return above guarantees a single reduce.
+        self.reduce_and_execute(client, FrameEvent::ToggleFullscreen)?;
         self.mark_windows();
         self.publish_window_state(client)?;
         Ok(())
@@ -310,13 +307,14 @@ impl<'a, C: Connection> Wm<'a, C> {
             Some(state) => (state.frame, state.outer, state.is_floating()),
             None => return Ok(()),
         };
+        let extents = self.extents_for(client);
         {
             let _guard = flamewm_profiler::start("wm.resize.shape");
             self.clear_frame_shape(frame, outer, floating)?;
         }
         {
             let _guard = flamewm_profiler::start("wm.resize.frame_configure");
-            let titlebar = u32::try_from(self.extents_for(client).titlebar_h).unwrap_or(0);
+            let titlebar = u32::try_from(extents.titlebar_h).unwrap_or(0);
             self.conn.configure_window(
                 frame,
                 &ConfigureWindowAux::new()
@@ -330,10 +328,8 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         {
             let _guard = flamewm_profiler::start("wm.resize.client_configure");
-            let (x, y, width, height) = lifecycle::client_configure(
-                crate::client::rect_to_root(outer),
-                self.extents_for(client),
-            );
+            let (x, y, width, height) =
+                lifecycle::client_configure(crate::client::rect_to_root(outer), extents);
             self.conn.configure_window(
                 client,
                 &ConfigureWindowAux::new()
@@ -343,14 +339,10 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .height(height),
             )?;
         }
-        {
-            let _guard = flamewm_profiler::start("wm.resize.commit");
-            // Geometry commit only: child layout is idempotent for an
-            // unchanged outer rect, and reconfiguring 12 children per commit
-            // sustains ConfigureNotify churn under SUBSTRUCTURE_NOTIFY.
-            // Full relayout stays on manage / WM_NORMAL_HINTS / final resize
-            // release (execute_effects LayoutInput arm).
-        }
+        // Geometry commit only: child layout is idempotent for an unchanged
+        // outer rect, and reconfiguring 12 children per commit sustains
+        // ConfigureNotify churn under SUBSTRUCTURE_NOTIFY. Full relayout stays
+        // on manage / WM_NORMAL_HINTS / final resize release.
         Ok(())
     }
 }

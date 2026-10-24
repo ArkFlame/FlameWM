@@ -41,6 +41,6 @@ class PointerSelectionContracts(unittest.TestCase):
         self.assertIn('if !additive {self.selected_paths.clear();}',block)
         self.assertIn('self.selected_paths.extend(range);',block)
         self.assertNotIn('self.anchor=Some(target)',block)
-        self.assertIn('mouse_selection_ctrl_toggle_shift_anchor_and_ctrl_shift_union',model)
+        self.assertIn('mouse_selection_ctrl_toggle_shift_anchor_and_ctrl_shift_union',src('crates/flamewm-explorer/src/tests/mod.rs'))
 
 if __name__=='__main__':unittest.main()

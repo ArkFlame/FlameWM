@@ -5,6 +5,7 @@ pub mod calendar;
 pub mod control_actions;
 pub mod cursor_theme;
 pub mod icon_loader;
+pub mod launcher;
 pub mod osd;
 pub mod panel;
 pub mod popovers;

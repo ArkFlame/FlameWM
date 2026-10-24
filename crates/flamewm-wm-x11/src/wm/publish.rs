@@ -24,7 +24,7 @@ pub(super) fn desktop_viewport_payload(count: usize, screen: Rect) -> Vec<u32> {
 }
 
 impl<'a, C: Connection> Wm<'a, C> {
-    fn set_property32(
+    pub(super) fn set_property32(
         &self,
         window: Window,
         property: Atom,
@@ -61,7 +61,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
-    pub(super) fn publish_desktop_state(&self) -> Result<(), ReplyError> {
+    pub(super) fn publish_desktop_state(&mut self) -> Result<(), ReplyError> {
         let root = self.screen().root;
         self.set_property32(
             root,
@@ -103,8 +103,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.atoms.net_current_desktop,
             AtomEnum::CARDINAL,
             &[self.current_workspace as u32],
-        )?;
-        Ok(())
+        )
     }
 
     pub(super) fn publish_workspace_metadata(&self) -> Result<(), ReplyError> {
@@ -159,7 +158,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
-    pub(super) fn publish_client_list(&self) -> Result<(), ReplyError> {
+    pub(super) fn publish_client_list(&mut self) -> Result<(), ReplyError> {
         workspace_counters().query_tree.increment();
         // The root tree is the server's authoritative bottom-to-top order.  HashMap iteration
         // cannot represent stacking and made _NET_CLIENT_LIST_STACKING observably false.
@@ -175,6 +174,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             .copied()
             .filter(|window| self.clients.contains_key(window))
             .collect::<Vec<_>>();
+        if !client_list_needs_publish(self.client_list_published.as_ref(), &client_list, &windows) {
+            return Ok(());
+        }
         let root = self.screen().root;
         self.set_property32(
             root,
@@ -188,6 +190,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             AtomEnum::WINDOW,
             &windows,
         )?;
+        self.client_list_published = Some((client_list, windows));
         Ok(())
     }
 
@@ -198,7 +201,6 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.atoms.net_active_window,
             AtomEnum::WINDOW,
             &[self.active.unwrap_or(0)],
-        )?;
-        Ok(())
+        )
     }
 }

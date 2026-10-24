@@ -59,10 +59,9 @@ impl RuntimeDocument {
         }
         entry.left = Some(left);
         entry.top = Some(top);
-        // The retained layout/paint cache is revision-keyed. Changing only the
-        // override left the old position on screen after the first ghost frame.
-        // Full damage also clears the ghost's previous rectangle on movement.
-        self.touch();
+        // Isolated nodes patch the retained layout in place (no layout revision bump); any other
+        // node advances the layout revision and forces a full compute.
+        self.touch_geometry(index);
         Ok(())
     }
 
@@ -79,8 +78,17 @@ impl RuntimeDocument {
         entry.height = Some(height);
         // Geometry dimensions are part of the cached layout as well. Do not
         // invalidate on repeated size writes from a pointer-motion projector.
-        self.touch();
+        self.touch_geometry(index);
         Ok(())
+    }
+
+    fn touch_geometry(&mut self, index: u32) {
+        if self.geometry_is_isolated(index) {
+            self.geometry_revision = self.geometry_revision.wrapping_add(1);
+            self.touch_node(index, DirtyReason::Geometry, false);
+        } else {
+            self.touch();
+        }
     }
 
     pub fn geometry_override(&self, index: u32) -> Option<GeometryOverride> {

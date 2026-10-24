@@ -6,7 +6,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::network_manager::{item_string, item_strings, item_u32, unwrap_variant};
@@ -16,6 +15,7 @@ use dbus::strings::Signature;
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use flamewm_dbus_reactor::{BusKind, BusPump, MessageDisposition};
 use flamewm_image_core::ImageSourceFormat;
+use flamewm_integrations_core::dispatcher::MAX_DISPATCH_PER_TURN;
 
 pub const PORTAL_SERVICE: &str = "org.freedesktop.portal.Desktop";
 pub const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -149,7 +149,7 @@ impl PortalFileChooser {
         let deadline = Instant::now() + self.timeout;
         loop {
             let mut result = None;
-            self.pump.on_ready(|message| {
+            let visited = self.pump.on_ready(|message| {
                 if is_response_signal(message, request_path) {
                     result = Some(parse_response(message.get_items(), accept));
                     MessageDisposition::Handled
@@ -160,13 +160,18 @@ impl PortalFileChooser {
             if let Some(result) = result {
                 return result;
             }
-            if Instant::now() >= deadline {
+            let now = Instant::now();
+            if now >= deadline {
                 return Err(FlameError::new(
                     ErrorCode::Timeout,
                     "portal FileChooser response timed out",
                 ));
             }
-            thread::park_timeout(Duration::from_millis(10));
+            // A full dispatch budget may leave messages queued with no fd event pending, so
+            // only block when the last turn drained the queue; otherwise loop again immediately.
+            if visited < MAX_DISPATCH_PER_TURN {
+                self.pump.wait_ready(deadline - now)?;
+            }
         }
     }
 }

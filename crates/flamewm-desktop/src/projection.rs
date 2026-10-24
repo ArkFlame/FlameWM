@@ -4,21 +4,32 @@ use flamewm_desktop_core::model::DesktopItemKind;
 use flamewm_desktop_core::presentation::desktop_label_lines;
 use flamewm_integrations_linux::icon_service::{IconJob, IconPriority, IconService};
 use flamewm_integrations_linux::icons::{
-    IconKey, IconLookupPurpose, IconOrigin, IconRequest, IconResolver, IconSize, Rgba8Raster,
+    IconKey, IconRequest, IconResolver, IconSize, Rgba8Raster,
 };
 use flamewm_ui_core::context_menu::{menu_surface, surface_fill};
 use flamewm_ui_core::style::UiLayer;
-use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
+use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
+pub use crate::icon_names::{file_icon_name, icon_purpose, launcher_icon_name};
+use crate::icon_names::icon_semantic;
+#[cfg(test)]
+use crate::icon_names::icon_name;
+use crate::icon_raster::{ICON_TILE_PX, fade_ghost_pixels, flame_fallback_raster, runtime_image};
 use crate::wallpaper_loader::{WallpaperPresentation, WallpaperRaster};
+use crate::wallpaper_stamp::{WALLPAPER_STAMP, WallpaperStamp, wallpaper_matches, wallpaper_stamp};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 /// Mirror of the shared icon theme generation for [`ParallelIconService::icon_key`],
 /// which stays a static constructor for its existing callers. Written only by
 /// [`ParallelIconService::refresh_theme`] on the UI thread.
 static THEME_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Current icon theme generation; a change invalidates every projected tile.
+pub fn theme_generation() -> u64 {
+    THEME_GENERATION.load(Ordering::Acquire)
+}
 
 const ICON_KINDS: [&str; 5] = ["directory", "desktop-launcher", "file", "symlink", "trash"];
 const LABEL_WIDTH_PX: f32 = 76.0;
@@ -26,37 +37,18 @@ const LABEL_FONT_SIZE_PX: f32 = 13.0;
 pub const DESKTOP_TILE_WIDTH: f32 = 82.0;
 pub const DESKTOP_TILE_HEIGHT: f32 = 82.0;
 pub const STICKY_SLOT_COUNT: usize = 16;
-const ICON_TILE_PX: u32 = 44;
-
 fn scaled_icon_px(scale: u16) -> u32 {
     (ICON_TILE_PX * u32::from(scale) + 50) / 100
 }
 
 pub fn project_background(
     document: &mut impl UiDocumentAccess,
-    _wallpaper: Option<&SettingValue>,
     presentation: &WallpaperPresentation,
 ) -> Result<(), String> {
     let has_image = matches!(presentation, WallpaperPresentation::Image(_));
     let (background, watermark) = match presentation {
-        WallpaperPresentation::Solid([r, g, b]) => (
-            UiColor {
-                r: *r,
-                g: *g,
-                b: *b,
-                a: 255,
-            },
-            false,
-        ),
-        _ => (
-            UiColor {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-            true,
-        ),
+        WallpaperPresentation::Solid([r, g, b]) => (UiColor { r: *r, g: *g, b: *b, a: 255 }, false),
+        _ => (UiColor { r: 0, g: 0, b: 0, a: 255 }, true),
     };
     document.background("desktop", background)?;
     document.visible("desktop-watermark", watermark)?;
@@ -93,41 +85,6 @@ fn global_font_defaults(snapshot: &SettingsSnapshot) -> (f32, bool) {
     (size_offset, bold)
 }
 
-/// Identity of the wallpaper last written to the document. The pixel buffer
-/// pointer and length change whenever the loader replaces the raster, so an
-/// unchanged raster skips the full-buffer clone without a content compare.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct WallpaperStamp {
-    source: String,
-    width: u32,
-    height: u32,
-    pixels_ptr: usize,
-    pixels_len: usize,
-}
-
-/// Last image projected by [`project_background`]. Cleared when the wallpaper is
-/// not an image so a later image re-sends.
-static WALLPAPER_STAMP: Mutex<Option<WallpaperStamp>> = Mutex::new(None);
-
-fn wallpaper_stamp(raster: &WallpaperRaster) -> WallpaperStamp {
-    WallpaperStamp {
-        source: raster.source.clone(),
-        width: raster.width,
-        height: raster.height,
-        pixels_ptr: raster.pixels.as_ptr() as usize,
-        pixels_len: raster.pixels.len(),
-    }
-}
-
-/// Compares a cached stamp against `raster` without allocating.
-fn wallpaper_matches(stamp: &WallpaperStamp, raster: &WallpaperRaster) -> bool {
-    stamp.source == raster.source
-        && stamp.width == raster.width
-        && stamp.height == raster.height
-        && stamp.pixels_ptr == raster.pixels.as_ptr() as usize
-        && stamp.pixels_len == raster.pixels.len()
-}
-
 /// Sends the image only when it differs from `cache`; the cache advances only
 /// after the document accepts the image, so a failed write is retried.
 fn project_wallpaper_image(
@@ -152,8 +109,6 @@ fn project_wallpaper_image(
     Ok(())
 }
 
-/// Semantic layer assignment, run once at document init. Static ids plus the
-/// generated item slots; never called per-frame so visibility math stays raw.
 /// Desktop context-menu roots whose surface follows the Surfaces settings.
 pub const MENU_SURFACE_IDS: [&str; 6] = [
     "desktop-menu",
@@ -206,6 +161,8 @@ pub fn clear_menu_backdrop(document: &mut impl UiDocumentAccess, id: &str) -> Re
     document.node_backdrop(id, None)
 }
 
+/// Semantic layer assignment, run once at document init. Static ids plus the
+/// generated item slots; never called per-frame so visibility math stays raw.
 pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<(), String> {
     document.layer("desktop", UiLayer::SurfaceBackground)?;
     document.layer("desktop-wallpaper-selection", UiLayer::Background)?;
@@ -253,17 +210,6 @@ pub fn initialize_transient_visibility(document: &mut impl UiDocumentAccess) -> 
         document.visible(id, false)?;
     }
     Ok(())
-}
-
-/// Which icon lookup purpose a candidate name uses. Explicit DesktopLauncher
-/// Icon= values are application icons; per-kind defaults are semantic.
-#[must_use]
-pub fn icon_purpose(kind: DesktopItemKind, has_override: bool) -> IconLookupPurpose {
-    if kind == DesktopItemKind::DesktopLauncher && has_override {
-        IconLookupPurpose::Application
-    } else {
-        IconLookupPurpose::Semantic
-    }
 }
 
 /// Reusable parallel icon service: rows project immediately from the warm
@@ -394,12 +340,9 @@ impl ParallelIconService {
             // Miss: Flame fallback paints synchronously so the tile never
             // shows blank/stale; the worker result replaces it on drain.
             apply_raster(document, index, kind, flame_fallback_raster())?;
-            let _ = self.service.submit(IconJob {
-                key: key.clone(),
-                priority: IconPriority::High,
-            });
+            self.request_high(key.clone());
         }
-        project_item_label_scaled(document, index, label, scale)?;
+        project_item_label(document, index, label, scale)?;
         Ok(key)
     }
 
@@ -446,8 +389,8 @@ impl ParallelIconService {
 
     #[must_use]
     pub fn memory_estimate_bytes(&self) -> usize {
-        // IconService owns cache memory; this facade retains no rasters.
-        0
+        // IconService owns the bounded shared result cache; this facade retains no rasters.
+        self.service.result_cache_bytes()
     }
 }
 
@@ -497,16 +440,7 @@ pub fn clear_item(document: &mut impl UiDocumentAccess, index: usize) -> Result<
     let item_id = format!("desktop-item-{index}");
     document.visible(&item_id, false)?;
     set_glyph_visibility(document, index, None)?;
-    project_item_label(document, index, "")
-}
-
-/// Half-opacity ghost pixels while preserving straight-alpha RGB and the
-/// original icon cache. This keeps the drag preview visually consistent with
-/// the 50% label and independent of renderer node-group alpha support.
-fn fade_ghost_pixels(pixels: &mut [u8]) {
-    for pixel in pixels.chunks_exact_mut(4) {
-        pixel[3] = ((u16::from(pixel[3]) + 1) / 2) as u8;
-    }
+    project_item_label(document, index, "", 100)
 }
 
 pub fn project_drag_ghost_icon_scaled(
@@ -556,80 +490,6 @@ pub fn project_conversion_preview_icon_scaled(
     Ok(())
 }
 
-/// Flame-red fallback raster (brand 239,64,72) painted synchronously on a
-/// cache miss; the worker result overwrites it. Not a placeholder shape: a
-/// real RGBA8 raster in the tile's selected semantic slot.
-fn flame_fallback_raster() -> Rgba8Raster {
-    let pixels = [239_u8, 64, 72, 255].repeat(ICON_TILE_PX as usize * ICON_TILE_PX as usize);
-    Rgba8Raster {
-        source: "flamewm-fallback".to_owned(),
-        width: ICON_TILE_PX,
-        height: ICON_TILE_PX,
-        pixels,
-        origin: IconOrigin::PackagedFallback,
-        fallback_reason: None,
-    }
-}
-
-/// Launcher metadata selection: an explicit Icon= value wins, otherwise the
-/// per-kind default name. Pure so unit tests can pin the ordering.
-#[cfg(test)]
-#[must_use]
-pub fn icon_candidates(kind: DesktopItemKind, icon_override: Option<&str>) -> Vec<String> {
-    let selected = launcher_icon_name(kind, icon_override);
-    let default = icon_name(kind).to_owned();
-    let mut candidates = Vec::with_capacity(3);
-    candidates.push(selected.clone());
-    if selected != default {
-        // Keep the per-kind default as a resolver fallback behind an explicit Icon= value.
-        candidates.push(default);
-    }
-    candidates.push(String::new());
-    candidates
-}
-
-/// Which icon name identifies the selected launcher for a given item kind.
-#[must_use]
-pub fn launcher_icon_name(kind: DesktopItemKind, icon_override: Option<&str>) -> String {
-    icon_override
-        .map(str::trim)
-        .filter(|icon| !icon.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| icon_name(kind).to_owned())
-}
-
-/// Freedesktop MIME-like icon names for desktop files. The theme resolver owns
-/// actual icon lookup; the filename extension only selects its semantic key.
-#[must_use]
-pub fn file_icon_name(path: &std::path::Path) -> &'static str {
-    let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("");
-    match extension.to_ascii_lowercase().as_str() {
-        "png" => "image-png",
-        "jpg" | "jpeg" => "image-jpeg",
-        "webp" => "image-webp",
-        "gif" => "image-gif",
-        "bmp" => "image-bmp",
-        "svg" | "svgz" => "image-svg+xml",
-        "tif" | "tiff" => "image-tiff",
-        "avif" => "image-avif",
-        "heic" | "heif" => "image-heic",
-        "pdf" => "application-pdf",
-        "md" | "markdown" => "text-markdown",
-        "txt" | "log" | "ini" | "conf" => "text-plain",
-        "rs" | "py" | "js" | "ts" | "c" | "h" | "cpp" | "java" | "sh" => "text-x-script",
-        "json" | "xml" | "yaml" | "yml" | "toml" => "text-x-generic",
-        "doc" | "docx" | "odt" => "x-office-document",
-        "xls" | "xlsx" | "ods" | "csv" => "x-office-spreadsheet",
-        "ppt" | "pptx" | "odp" => "x-office-presentation",
-        "zip" => "application-zip",
-        "tar" | "gz" | "xz" | "7z" | "rar" => "package-x-generic",
-        "mp3" | "wav" | "ogg" | "flac" | "m4a" => "audio-x-generic",
-        "mp4" | "mkv" | "avi" | "mov" | "webm" => "video-x-generic",
-        "exe" | "appimage" => "application-x-executable",
-        _ => "text-x-generic",
-    }
-}
-
 /// Projection-only caret: appends a thin `|` glyph to the edit buffer for
 /// display/sync output while a sticky edit is active. A glyph is used because
 /// `UiDocumentAccess` has no text-position query, so a separate element cannot
@@ -644,15 +504,7 @@ pub fn caret_text(buffer: &str, editing: bool) -> String {
     }
 }
 
-pub fn project_item_label(
-    document: &mut impl UiDocumentAccess,
-    index: usize,
-    label: &str,
-) -> Result<(), String> {
-    project_item_label_scaled(document, index, label, 100)
-}
-
-fn project_item_label_scaled(
+fn project_item_label(
     document: &mut impl UiDocumentAccess,
     index: usize,
     label: &str,
@@ -669,38 +521,11 @@ fn project_item_label_scaled(
     document.text(&format!("desktop-label-{index}-line-2"), second)
 }
 
-fn icon_semantic(kind: DesktopItemKind) -> &'static str {
-    match kind {
-        DesktopItemKind::Directory => "directory",
-        DesktopItemKind::DesktopLauncher => "desktop-launcher",
-        DesktopItemKind::File => "file",
-        DesktopItemKind::Symlink => "symlink",
-        DesktopItemKind::TrashPseudo => "trash",
-    }
-}
-
-fn icon_name(kind: DesktopItemKind) -> &'static str {
-    match kind {
-        DesktopItemKind::Directory => "folder",
-        DesktopItemKind::DesktopLauncher => "desktop",
-        DesktopItemKind::File => "document-edit",
-        DesktopItemKind::Symlink => "link",
-        DesktopItemKind::TrashPseudo => "trash",
-    }
-}
-
-fn runtime_image(raster: Rgba8Raster) -> RuntimeImage {
-    RuntimeImage {
-        source: raster.source,
-        width: raster.width,
-        height: raster.height,
-        pixels: raster.pixels,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_integrations_linux::icons::{IconLookupPurpose, IconOrigin};
+    use flamewm_ui_x11::RuntimeImage;
     use std::path::Path;
 
     // No-op `UiDocumentAccess` methods shared by every probe below; each probe
@@ -928,14 +753,6 @@ mod tests {
     #[test]
     fn launcher_metadata_prefers_icon_value_then_kind_default() {
         assert_eq!(
-            icon_candidates(DesktopItemKind::Directory, Some("my-folder")),
-            vec!["my-folder".to_owned(), "folder".to_owned(), String::new()]
-        );
-        assert_eq!(
-            icon_candidates(DesktopItemKind::DesktopLauncher, None),
-            vec!["desktop".to_owned(), String::new()]
-        );
-        assert_eq!(
             launcher_icon_name(DesktopItemKind::File, Some("  ")),
             "document-edit"
         );
@@ -1141,29 +958,19 @@ mod tests {
             height: 1,
             pixels: Arc::new(vec![0, 0, 0, 255]),
         });
-        for wallpaper in [
-            None,
-            Some(SettingValue::Text(String::new())),
-            Some(SettingValue::Text("custom.webp".to_owned())),
-        ] {
-            let mut probe = VisibilityProbe::default();
-            project_background(&mut probe, wallpaper.as_ref(), &image).expect("project image");
-            assert!(
-                probe
-                    .shown
-                    .contains(&"desktop-wallpaper-selection".to_owned())
-            );
-            assert!(probe.shown.contains(&"desktop-watermark".to_owned()));
-            assert!(!probe.hidden.contains(&"desktop-watermark".to_owned()));
-        }
+        let mut probe = VisibilityProbe::default();
+        project_background(&mut probe, &image).expect("project image");
+        assert!(
+            probe
+                .shown
+                .contains(&"desktop-wallpaper-selection".to_owned())
+        );
+        assert!(probe.shown.contains(&"desktop-watermark".to_owned()));
+        assert!(!probe.hidden.contains(&"desktop-watermark".to_owned()));
 
         let mut reset = VisibilityProbe::default();
-        project_background(
-            &mut reset,
-            Some(&SettingValue::Text(String::new())),
-            &WallpaperPresentation::DefaultBlackWatermark,
-        )
-        .expect("project reset fallback");
+        project_background(&mut reset, &WallpaperPresentation::DefaultBlackWatermark)
+            .expect("project reset fallback");
         assert!(
             reset
                 .hidden
@@ -1440,12 +1247,7 @@ mod tests {
         assert!(!icons.refresh_theme());
         assert_eq!(THEME_GENERATION.load(Ordering::Acquire), before);
     }
-}
 
-#[cfg(test)]
-mod desktop_file_mime_icon_tests {
-    use super::file_icon_name;
-    use std::path::Path;
     #[test]
     fn images_documents_archives_use_distinct_icons() {
         assert_eq!(file_icon_name(Path::new("tree.PNG")), "image-png");
@@ -1455,11 +1257,6 @@ mod desktop_file_mime_icon_tests {
         assert_eq!(file_icon_name(Path::new("data.zip")), "application-zip");
         assert_eq!(file_icon_name(Path::new("untitled")), "text-x-generic");
     }
-}
-
-#[cfg(test)]
-mod desktop_drag_alpha_regressions {
-    use super::fade_ghost_pixels;
 
     #[test]
     fn ghost_alpha_fades_actual_pixels_without_colorkey() {
@@ -1467,12 +1264,6 @@ mod desktop_drag_alpha_regressions {
         fade_ghost_pixels(&mut pixels);
         assert_eq!(pixels, vec![17, 29, 47, 128, 101, 67, 23, 64, 1, 2, 3, 0]);
     }
-}
-
-#[cfg(test)]
-mod global_font_setting_tests {
-    use super::global_font_defaults;
-    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
     #[test]
     fn global_font_defaults_read_typed_live_values_and_bound_size_offset() {

@@ -93,8 +93,7 @@ pub trait UiDocumentAccess {
         )
     }
     /// Restores the node's compiled (packaged) image. Documents without image overrides ignore it.
-    fn image_reset(&mut self, id: &str) -> Result<(), String> {
-        let _ = id;
+    fn image_reset(&mut self, _id: &str) -> Result<(), String> {
         Ok(())
     }
     fn visible(&mut self, id: &str, visible: bool) -> Result<(), String>;
@@ -104,14 +103,12 @@ pub trait UiDocumentAccess {
     fn background(&mut self, id: &str, color: UiColor) -> Result<(), String>;
     fn border(&mut self, id: &str, color: UiColor) -> Result<(), String>;
     /// Corner radius in px for a surface root. Documents without shape support ignore it.
-    fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
-        let _ = (id, radius_px);
+    fn corner_radius(&mut self, _id: &str, _radius_px: f32) -> Result<(), String> {
         Ok(())
     }
     /// Blurred root backdrop under a translucent node (`Some(0)` or `None` clears). Documents
     /// without node backdrop support ignore it.
-    fn node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
-        let _ = (id, blur_percent);
+    fn node_backdrop(&mut self, _id: &str, _blur_percent: Option<u8>) -> Result<(), String> {
         Ok(())
     }
     fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String>;
@@ -124,12 +121,10 @@ pub trait UiDocumentAccess {
     fn ui_font_defaults(&mut self, _size_offset: f32, _bold: bool) -> Result<(), String> {
         Ok(())
     }
-    fn font_family(&mut self, family: String) -> Result<(), String> {
-        let _ = family;
+    fn font_family(&mut self, _family: String) -> Result<(), String> {
         Err("font family projection is unsupported by this document access".to_string())
     }
-    fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {
-        let _ = (name, color);
+    fn color_variable(&mut self, _name: &str, _color: UiColor) -> Result<(), String> {
         Err("color variable projection is unsupported by this document access".to_string())
     }
     fn overflow(
@@ -142,6 +137,15 @@ pub trait UiDocumentAccess {
 }
 
 impl UiDocument {
+    fn new(document: RuntimeDocument) -> Self {
+        Self {
+            document,
+            layout_memo: RefCell::new(None),
+            window_backdrop: None,
+            file_drop_target: false,
+        }
+    }
+
     /// Opts the window into XDND: it advertises `XdndAware`, reports files dropped from other
     /// applications as `UiControllerEvent::Drag`, and can start outgoing file drags with
     /// `UiDocumentView::begin_file_drag`. Windows without this are unaffected.
@@ -175,7 +179,8 @@ impl UiDocument {
     /// id is absent from the template.
     pub fn layout_box_by_id(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
         let index = self.document.node_by_id(id)?;
-        let revision = self.document.revision();
+        // Layout-keyed: paint-only edits (colors) keep the retained boxes valid.
+        let revision = self.document.layout_revision();
         let mut memo = self.layout_memo.borrow_mut();
         let fresh = memo
             .as_ref()
@@ -513,12 +518,9 @@ pub fn rounded_rect_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u32
 
 /// Decodes an embedded `.rwr` document; image pixels stay borrowed from `bytes`.
 pub fn decode_document(bytes: &'static [u8]) -> Result<UiDocument, String> {
-    Ok(UiDocument {
-        document: RuntimeDocument::new(flamewm_render_core::decode_static(bytes)?)?,
-        layout_memo: RefCell::new(None),
-        window_backdrop: None,
-        file_drop_target: false,
-    })
+    Ok(UiDocument::new(RuntimeDocument::new(
+        flamewm_render_core::decode_static(bytes)?,
+    )?))
 }
 
 /// A renderer document kept behind the UI/X11 boundary.
@@ -542,29 +544,15 @@ mod tests {
         Length, NodeKind, Style,
     };
 
-    fn node(id: &str, kind: NodeKind) -> CompiledNode {
-        CompiledNode {
-            kind,
-            parent: None,
-            first_child: None,
-            next_sibling: None,
-            id: id.to_string().into(),
-            action: std::borrow::Cow::Borrowed(""),
-            text: std::borrow::Cow::Borrowed(""),
-            image: None,
-            style: Style::default(),
-            hover_style: None,
-            active_style: None,
-        }
-    }
+    use crate::test_support::compiled_node as node;
 
     fn make_doc(
         assets: Vec<ImageAsset>,
         variables: Vec<ColorVariable>,
         nodes: Vec<CompiledNode>,
     ) -> UiDocument {
-        UiDocument {
-            document: RuntimeDocument::new(CompiledDocument {
+        UiDocument::new(
+            RuntimeDocument::new(CompiledDocument {
                 source_fingerprint: 0,
                 root: 0,
                 variables,
@@ -572,10 +560,7 @@ mod tests {
                 nodes,
             })
             .expect("fixture validates"),
-            layout_memo: RefCell::new(None),
-            window_backdrop: None,
-            file_drop_target: false,
-        }
+        )
     }
 
     fn px(source: &str, pixels: [u8; 4]) -> RuntimeImage {
@@ -905,6 +890,49 @@ mod tests {
         let after = doc.layout_box_by_id("box", (200.0, 200.0)).expect("box");
         assert_ne!(Some(after), Some(before));
         assert_eq!((after.2, after.3), (33.0, 17.0));
+    }
+
+    #[test]
+    fn paint_only_color_edits_reuse_retained_layout() {
+        let sized = CompiledNode {
+            parent: Some(0),
+            style: Style {
+                width: flamewm_render_core::Length::Px(50.0),
+                height: flamewm_render_core::Length::Px(20.0),
+                ..Style::default()
+            },
+            ..node("box", NodeKind::Element)
+        };
+        let root = CompiledNode {
+            first_child: Some(1),
+            ..node("root", NodeKind::Element)
+        };
+        let mut doc = make_doc(Vec::new(), Vec::new(), vec![root, sized]);
+        let viewport = (200.0, 200.0);
+        let before = doc.layout_box_by_id("box", viewport).expect("box");
+        let passes = flamewm_render_core::layout_passes_on_this_thread();
+        for step in 0..50u8 {
+            let shade = UiColor {
+                r: step,
+                g: 0,
+                b: 0,
+                a: 255,
+            };
+            doc.background("box", shade).expect("background");
+            assert_eq!(doc.layout_box_by_id("box", viewport), Some(before));
+        }
+        assert_eq!(
+            flamewm_render_core::layout_passes_on_this_thread(),
+            passes,
+            "50 paint-only edits must reuse one layout pass"
+        );
+        doc.size("box", 33.0, 17.0).expect("size projection");
+        doc.layout_box_by_id("box", viewport).expect("box");
+        assert_eq!(
+            flamewm_render_core::layout_passes_on_this_thread(),
+            passes + 1,
+            "a size edit must relayout exactly once"
+        );
     }
 
     #[test]

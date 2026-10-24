@@ -102,9 +102,7 @@ impl StartupX11Observer {
                     });
                 }
                 Event::MapNotify(event) if observe && event.event == self.root => {
-                    if let Some(identity) = self.identity(event.window) {
-                        events.push(identity);
-                    }
+                    events.extend(self.identity(event.window));
                 }
                 Event::PropertyNotify(event)
                     if event.window == self.root && event.atom == self.client_list =>
@@ -114,26 +112,20 @@ impl StartupX11Observer {
                         .collect();
                     if observe {
                         let added: Vec<_> = next.difference(&self.known_clients).copied().collect();
-                        for window in added {
-                            if let Some(identity) = self.identity(window) {
-                                events.push(identity);
-                            }
-                        }
+                        events.extend(added.into_iter().filter_map(|window| self.identity(window)));
                     }
                     self.known_clients = next;
                 }
+                // Covers activation of an existing single-instance application.
                 Event::PropertyNotify(event)
                     if observe && event.window == self.root && event.atom == self.active_window =>
                 {
-                    // Covers activation of an existing single-instance application.
-                    if let Some(window) = read_windows(&self.conn, self.root, self.active_window)
-                        .into_iter()
-                        .next()
-                    {
-                        if let Some(identity) = self.identity(window) {
-                            events.push(identity);
-                        }
-                    }
+                    events.extend(
+                        read_windows(&self.conn, self.root, self.active_window)
+                            .into_iter()
+                            .next()
+                            .and_then(|window| self.identity(window)),
+                    );
                 }
                 _ => {}
             }
@@ -156,14 +148,14 @@ impl StartupX11Observer {
     }
 
     fn identity(&self, window: Window) -> Option<StartupX11Event> {
-        if !self
+        let ready = self
             .conn
             .get_window_attributes(window)
             .ok()?
             .reply()
             .ok()
-            .is_some_and(|attributes| window_is_ready(attributes.map_state))
-        {
+            .is_some_and(|attributes| window_is_ready(attributes.map_state));
+        if !ready {
             return None;
         }
         let startup_id = self.startup_id_for(window).or_else(|| {

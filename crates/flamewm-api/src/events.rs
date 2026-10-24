@@ -1,7 +1,5 @@
 //! Engine-neutral domain events and RAII subscription ownership.
 
-use crate::TaskEntryId;
-
 pub struct Subscription {
     disconnect: Option<Box<dyn FnOnce()>>,
 }
@@ -35,29 +33,6 @@ impl Drop for Subscription {
     fn drop(&mut self) {
         self.reset();
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SettingsChangedEvent {
-    pub revision: u64,
-    pub keys: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TopologyChangedEvent {
-    pub generation: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WorkspaceChangedEvent {
-    pub revision: u64,
-    pub active_index: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TaskOrderChangedEvent {
-    pub revision: u64,
-    pub order: Vec<TaskEntryId>,
 }
 
 #[cfg(test)]

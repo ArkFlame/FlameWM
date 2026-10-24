@@ -18,10 +18,13 @@ class DesktopPass18(unittest.TestCase):
         s=source('crates/flamewm-desktop/src/main.rs')
         self.assertIn('source_ids: Vec<String>', s)
         self.assertIn('drag.originals.iter().map(|item| item.id.clone()).collect()',s)
-        self.assertIn('document.position("desktop-drag-ghost", gx, gy)',s)
-        self.assertIn('if ghost.source_ids.contains(&item.id)',s)
-        self.assertIn('document.visible(&format!("desktop-item-{index}"), false)',s)
-        self.assertIn('document.visible(&format!("desktop-item-{index}"), true)',s)
+        # Drag ghost painting lives in drag.rs (split out of main.rs).
+        self.assertIn('document.position("desktop-drag-ghost", gx, gy)', source('crates/flamewm-desktop/src/drag.rs'))
+        drag = source('crates/flamewm-desktop/src/drag.rs')
+        self.assertIn('if source_ids.contains(&item.id)', drag)
+        self.assertIn('set_source_tiles_visible(document, state.model.items(), &ghost.source_ids, false)', drag)
+        self.assertIn('set_source_tiles_visible(document, state.model.items(), &ghost.source_ids, true)', drag)
+        self.assertIn('document.visible(&format!("desktop-item-{index}"), visible)', drag)
         self.assertIn('UiActionPhase::Motion | UiActionPhase::Release',s)
     def test_native_radial_is_painted_only_on_hover(self):
         h=source('ui/desktop/index.html'); c=source('ui/desktop/desktop.css')

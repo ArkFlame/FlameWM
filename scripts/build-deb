@@ -5,19 +5,21 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 cd "$ROOT"
+
+fail() { printf 'FLAMEWM-DEB-ERROR: %s\n' "$1" >&2; exit 1; }
+
+# An explicit CARGO_TARGET_DIR is the user's cache root: create it, and fail
+# clearly if it cannot be used. Never silently fall back to $ROOT/.target, which
+# would split the cache and force a full rebuild on the next run.
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/.target}"
 if [[ "$TARGET_DIR" != /* ]]; then
     TARGET_DIR="$ROOT/$TARGET_DIR"
-fi
-if [[ ! -w "$TARGET_DIR" ]]; then
-    TARGET_DIR="$ROOT/.target"
 fi
 export CARGO_TARGET_DIR="$TARGET_DIR"
 VERSION="$(./scripts/version)"
 DIST="$ROOT/.target/dist"
 DEB="$DIST/flamewm_${VERSION}_amd64.deb"
 
-fail() { printf 'FLAMEWM-DEB-ERROR: %s\n' "$1" >&2; exit 1; }
 on_error() {
     local status=$?
     printf 'FLAMEWM-DEB-ERROR: build/package/verification failed (exit %s, line %s).\n' "$status" "$1" >&2
@@ -29,6 +31,13 @@ trap 'on_error "$LINENO"' ERR
 # Clear the complete distribution directory before any build or preflight.
 rm -rf "$DIST"
 mkdir -p "$DIST"
+
+# Create the explicit cache root (mkdir -p), then require it to be writable.
+# Failing here, after the old distribution was cleared, keeps the no-stale-deb rule.
+mkdir -p "$TARGET_DIR" 2>/dev/null \
+    || fail "cannot create CARGO_TARGET_DIR=$TARGET_DIR (fix the path or its permissions; no fallback is used)"
+[[ -d "$TARGET_DIR" && -w "$TARGET_DIR" ]] \
+    || fail "CARGO_TARGET_DIR=$TARGET_DIR is not a writable directory (no fallback is used)"
 
 command -v cargo >/dev/null 2>&1 || fail 'cargo not found (install the Rust toolchain)'
 command -v python3 >/dev/null 2>&1 || fail 'python3 not found (required for Cargo cache consistency gate)'
@@ -42,15 +51,19 @@ command -v sha256sum >/dev/null 2>&1 || fail 'sha256sum not found'
 [[ -d assets/cursors/cursors && -d assets/web/breeze ]] \
     || fail 'FlameWM assets missing; overlay this source update onto the complete checkout'
 
+# Read-only source-manifest preflight: the same members() validation that
+# scripts/package runs later, so an unregistered executable fails before Cargo.
+python3 -I scripts/package-source-archive --check "$ROOT" packaging/source-manifest.txt \
+    || fail 'source manifest preflight failed; register or remove the file above and rerun'
+
 # Nothing is published until all checks pass.
-printf 'FLAMEWM-DEB: validating desktop/core API and rebuilding stale Cargo caches (version %s)\n' "$VERSION"
-# An archive can carry new source with 1970 mtimes. Cargo may then reuse an
-# older core rlib even when lib.rs currently exports conversion correctly.
-# A repeat failure must invalidate the *actual* compiled owners before build,
-# regardless of old digest stamps. Scoped clean, never repo-wide cargo clean.
-python3 -I tools/ensure_desktop_conversion_cargo.py --profile release --include-ui --force
+printf 'FLAMEWM-DEB: validating desktop/core API and Cargo cache identity (version %s)\n' "$VERSION"
+# The gate compares source content digests (not mtimes) and cleans only when
+# inputs changed or the marker for this resolved target dir is absent. Archive
+# imports with 1970 mtimes but new bytes still invalidate. Scoped clean only.
+python3 -I tools/ensure_desktop_conversion_cargo.py --profile release --include-ui
 printf 'FLAMEWM-DEB: building the current FlameWM source (version %s)\n' "$VERSION"
-CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build --release --workspace
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-10}" cargo build --release --workspace
 printf 'FLAMEWM-DEB: producing source, Linux, and Debian artifacts\n'
 ./scripts/package
 

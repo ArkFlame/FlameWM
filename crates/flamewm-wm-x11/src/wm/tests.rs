@@ -379,17 +379,26 @@ fn own_desktop_publish_echo_does_not_bump_workspace_revision() {
 fn own_workspace_metadata_publish_echo_does_not_bump_workspace_revision() {
     let names = desktop_names_payload(2);
     // Echo of our own publish (count + names) must not advance the fence.
-    assert!(!workspace_metadata_is_external(Some(2), &names, 2, &names));
+    assert!(!workspace_metadata_is_external(Some(2), &names, 2));
     // A foreign count or name change must still advance the fence.
-    assert!(workspace_metadata_is_external(Some(3), &names, 2, &names));
-    assert!(workspace_metadata_is_external(
-        Some(2),
-        b"Web\0Mail\0",
-        2,
-        &names
-    ));
+    assert!(workspace_metadata_is_external(Some(3), &names, 2));
+    assert!(workspace_metadata_is_external(Some(2), b"Web\0Mail\0", 2));
     // Unreadable count is treated as external (conservative fence advance).
-    assert!(workspace_metadata_is_external(None, &names, 2, &names));
+    assert!(workspace_metadata_is_external(None, &names, 2));
+}
+
+#[test]
+fn desktop_names_match_agrees_with_payload_builder() {
+    for count in 0..=12 {
+        let names = desktop_names_payload(count);
+        assert!(desktop_names_match(&names, count), "count={count}");
+        assert!(!desktop_names_match(&names, count + 1), "count={count}");
+    }
+    assert!(!desktop_names_match(b"Workspace 1\0Workspace 3\0", 2));
+    assert!(!desktop_names_match(b"Workspace 1\0Workspace 2", 2));
+    assert!(!desktop_names_match(b"Workspace 1\0", 2));
+    assert!(!desktop_names_match(b"Workspace 1\0Workspace 2\0x", 2));
+    assert!(desktop_names_match(b"", 0));
 }
 
 #[test]
@@ -1280,7 +1289,7 @@ fn edge_arrival_reducer_preserves_window_geometry_and_defers_renderer_work() {
             anchor,
             grab_window: 142,
         }),
-        HashMap::new(),
+        std::rc::Rc::new(HashMap::new()),
     );
     let pointer = drag_edge_destination(
         RootPoint::new(1919, 130),
@@ -1365,7 +1374,7 @@ fn vertical_edge_arrival_keeps_pointer_in_titlebar_and_half_frame_visible() {
             anchor,
             grab_window: 142,
         }),
-        HashMap::new(),
+        std::rc::Rc::new(HashMap::new()),
     );
     let pointer = drag_edge_destination(
         RootPoint::new(760, 0),

@@ -8,7 +8,7 @@ use std::os::raw::c_ulong;
 
 use crate::lamp::LampBand;
 use crate::xcomposite::{CapturedImage, check_capture_size, upload_pixmap_depth};
-use crate::xlib::{Display, Pixmap, XFreePixmap};
+use crate::xlib::{Display, Pixmap};
 use crate::xrender_transform::{PICT_STANDARD_RGB_24, XRenderTransformApi};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -96,7 +96,7 @@ pub unsafe fn upload_warp_source(
         }),
         Err(error) => {
             // SAFETY: `pixmap` was created above and is not used again.
-            unsafe { XFreePixmap(display, pixmap) };
+            unsafe { crate::native::xresource::free_pixmap_raw(display, pixmap) };
             Err(error)
         }
     }
@@ -115,7 +115,7 @@ pub unsafe fn free_warp_source(
     // SAFETY: both ids were created by `upload_warp_source` on `display` and are released once.
     unsafe {
         api.free_picture(display, source.picture);
-        XFreePixmap(display, source.pixmap);
+        crate::native::xresource::free_pixmap_raw(display, source.pixmap);
     }
 }
 

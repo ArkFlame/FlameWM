@@ -24,7 +24,7 @@ flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-remote-fs = { path = "../flamewm-remote-fs" }
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
 inotify = { workspace = true }
-rustix = { workspace = true }
+rustix = { workspace = true, features = ["event", "net", "pipe"] }
 
 [build-dependencies]
 flamewm-render-compiler = { path = "../flamewm-render-compiler" }

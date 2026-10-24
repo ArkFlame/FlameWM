@@ -7,7 +7,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flamewm_api::settings::SettingsSnapshot;
 use flamewm_control_core::{ControlRequest, ControlResponse};
@@ -20,11 +20,10 @@ use flamewm_terminal::pty::Launch;
 use flamewm_terminal::session::SessionEvent;
 use flamewm_terminal::store::{self, TerminalConfig, ThemeStore};
 use flamewm_terminal::theme;
+use flamewm_terminal::wake::{self, ALL_TABS_CLOSED};
 
 const UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-terminal.rwr"));
 const DEFAULT_WINDOW: (u32, u32) = (880, 540);
-/// Returned from the UI loop when the last tab closes. The run is a clean exit, not a failure.
-const ALL_TABS_CLOSED: &str = "all tabs closed";
 
 fn main() {
     if let Err(error) = run() {
@@ -70,10 +69,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Options>,
 
 fn run() -> Result<(), String> {
     let Some(options) = parse_args(std::env::args().skip(1))? else { return Ok(()) };
-    let cwd = match options.working_directory {
-        Some(dir) => Some(fs::canonicalize(&dir).map_err(|error| format!("{}: {error}", dir.display()))?),
-        None => None,
-    };
+    let cwd = options.working_directory.map(|dir| fs::canonicalize(&dir).map_err(|error| format!("{}: {error}", dir.display()))).transpose()?;
     let config_dir = store::config_dir();
     let config_path = config_dir.join("terminal.toml");
     let config = fs::read_to_string(&config_path).ok().and_then(|text| TerminalConfig::from_toml(&text).ok()).unwrap_or_default();
@@ -98,9 +94,7 @@ fn run() -> Result<(), String> {
     app.open_tab(launch)?;
     let backdrop = snapshot.as_ref().and_then(|s| theme::window_backdrop(s, &packaged_root(), app.config.background_opacity));
     let mut doc = decode_document(UI)?;
-    if let Some(spec) = backdrop {
-        doc = doc.with_window_backdrop(spec);
-    }
+    if let Some(spec) = backdrop { doc = doc.with_window_backdrop(spec); }
     app.project(&mut doc)?;
     let app = Rc::new(RefCell::new(app));
     let event_app = Rc::clone(&app);
@@ -145,38 +139,49 @@ fn run() -> Result<(), String> {
         notifications,
         move |event, document| {
             let mut app = event_app.borrow_mut();
-            match event {
+            let changed = match event {
                 UiControllerEvent::Action(action) => app.pointer(action),
-                UiControllerEvent::Key(key) => app.key(key),
-                UiControllerEvent::Resized { width, height } => app.set_window(*width, *height),
-                _ => {}
-            }
-            app.project(document)
+                UiControllerEvent::Key(key) => {
+                    app.key(key);
+                    true
+                }
+                UiControllerEvent::Resized { width, height } => {
+                    app.set_window(*width, *height);
+                    true
+                }
+                _ => true,
+            };
+            if changed { app.project(document) } else { Ok(()) }
         },
         move |document| {
             let mut app = wake_app.borrow_mut();
-            let mut changed = false;
+            let mut settings_changed = false;
             if let Some(snapshot) = wake_snapshot.borrow_mut().take() {
                 app.snapshot = Some(snapshot);
                 app.reload_themes();
-                changed = true;
+                settings_changed = true;
             }
-            while let Ok(event) = events.try_recv() {
-                changed = true;
-                if app.session_event(event) {
-                    return Err(ALL_TABS_CLOSED.to_owned());
-                }
-            }
-            if changed { app.project(document) } else { Ok(()) }
+            wake::drain_and_commit(&mut app, &events, settings_changed, |app| app.project(document))
         },
     )
 }
 
+/// The window backdrop is built once from the startup snapshot and cannot be installed later, so a miss leaves the
+/// terminal opaque for its whole life. Startup retries GetSettings in short attempts within a bounded budget.
+const SETTINGS_ATTEMPT: Duration = Duration::from_millis(300);
+const SETTINGS_BUDGET: Duration = Duration::from_millis(2_000);
+const SETTINGS_RETRY_PAUSE: Duration = Duration::from_millis(100);
+
 fn initial_settings() -> Option<SettingsSnapshot> {
-    let client = ControlClient::connect(BusKind::Session).ok()?;
-    match client.call_with_timeout(&ControlRequest::GetSettings, Duration::from_millis(300)) {
-        Ok(ControlResponse::Settings(snapshot)) => Some(snapshot),
-        _ => None,
+    let deadline = Instant::now() + SETTINGS_BUDGET;
+    loop {
+        // A fresh connection per attempt, so a late reply to an abandoned call cannot be read as the next answer.
+        let client = ControlClient::connect(BusKind::Session).ok()?;
+        match client.call_with_timeout(&ControlRequest::GetSettings, SETTINGS_ATTEMPT) {
+            Ok(ControlResponse::Settings(snapshot)) => return Some(snapshot),
+            _ if Instant::now() >= deadline => return None,
+            _ => std::thread::sleep(SETTINGS_RETRY_PAUSE),
+        }
     }
 }
 

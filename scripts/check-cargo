@@ -4,5 +4,5 @@
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 cd "$ROOT"
-python3 -I tools/ensure_desktop_conversion_cargo.py --profile dev --include-ui --force
+python3 -I tools/ensure_desktop_conversion_cargo.py --profile dev --include-ui
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo check --workspace --all-targets

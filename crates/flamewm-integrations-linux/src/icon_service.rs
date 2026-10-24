@@ -375,6 +375,12 @@ impl<R: IconResolve> IconService<R> {
             .map_or(0, |cache| cache.entries.len())
     }
 
+    /// Live shared result cache byte total (bounded by `RESULT_CACHE_BYTES`).
+    #[must_use]
+    pub fn result_cache_bytes(&self) -> usize {
+        self.result_cache.lock().map_or(0, |cache| cache.bytes)
+    }
+
     /// Raw FD readable whenever a result completes (edge: drain `wake_drain`).
     #[must_use]
     pub fn wake_fd(&self) -> Option<RawFd> {

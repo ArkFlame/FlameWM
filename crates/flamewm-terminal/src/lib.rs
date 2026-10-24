@@ -15,3 +15,4 @@ pub mod theme;
 pub mod themes;
 pub mod ui;
 pub mod view;
+pub mod wake;

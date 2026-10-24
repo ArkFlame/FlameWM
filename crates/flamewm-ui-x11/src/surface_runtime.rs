@@ -1,6 +1,5 @@
-use std::os::fd::RawFd;
-
 use std::collections::HashMap;
+use std::os::fd::RawFd;
 
 use flamewm_render_core::RuntimeDocument;
 use flamewm_render_x11::{
@@ -421,16 +420,8 @@ impl SurfaceRuntime {
         self.controller.take_raw_press_observations()
     }
 
+    /// Pass-through refusal is owned by the render controller (`allows_grab`).
     pub fn grab_pointer(&mut self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
-        // Pass-through surfaces never grab: refuse up front, same as render.
-        if self.controller.surface_input_mode(surface.0)
-            == Ok(flamewm_render_x11::SurfaceInputMode::PassThrough)
-        {
-            return Err(UiBackendError::PointerGrabRefused(format!(
-                "surface {} is pass-through",
-                surface.0.get()
-            )));
-        }
         self.controller
             .grab_pointer(surface.0)
             .map_err(UiBackendError::PointerGrabRefused)
@@ -677,11 +668,7 @@ impl SurfaceRuntime {
         max_device_h: f32,
         measure: impl FnOnce(&RuntimeDocument, f32, f32) -> Result<(f32, f32), String>,
     ) -> Result<(f32, f32), UiBackendError> {
-        let scale = self
-            .controller
-            .document_mut(surface.0)
-            .map(|document| document.ui_scale())
-            .unwrap_or(1.0);
+        let scale = self.surface_ui_scale(surface).unwrap_or(1.0);
         let (max_logical_w, max_logical_h) =
             device_constraint_to_logical(max_device_w, max_device_h, scale)
                 .map_err(UiBackendError::Document)?;
@@ -820,17 +807,10 @@ mod intrinsic_tests {
         style: flamewm_render_core::Style,
     ) -> flamewm_render_core::CompiledNode {
         flamewm_render_core::CompiledNode {
-            kind: flamewm_render_core::NodeKind::Element,
             parent,
             first_child,
-            next_sibling: None,
-            id: id.to_string().into(),
-            action: std::borrow::Cow::Borrowed(""),
-            text: std::borrow::Cow::Borrowed(""),
-            image: None,
             style,
-            hover_style: None,
-            active_style: None,
+            ..crate::test_support::compiled_node(id, flamewm_render_core::NodeKind::Element)
         }
     }
 

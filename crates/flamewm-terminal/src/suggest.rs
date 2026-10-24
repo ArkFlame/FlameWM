@@ -22,7 +22,24 @@ const COMPACT_BYTES: u64 = 1 << 20;
 const HEAD_BYTES: usize = 64;
 const REFRESH_EVERY: Duration = Duration::from_secs(1);
 /// Commands containing these (lowercase) are never stored.
-const SECRET_MARKERS: [&str; 6] = ["password=", "passwd=", "token=", "secret=", "api_key=", "authorization"];
+const SECRET_MARKERS: [&str; 14] = [
+    "password",
+    "passwd",
+    "passphrase",
+    "secret=",
+    "token=",
+    "api_key",
+    "apikey",
+    "api-key",
+    "access_key",
+    "private_key",
+    "authorization",
+    "bearer ",
+    "credential",
+    "--pass",
+];
+/// Words that mark a variable name, long option or `-u user:pass` value as a credential.
+const SECRET_WORDS: [&str; 7] = ["pass", "pwd", "secret", "token", "key", "auth", "credential"];
 
 /// Ordering of a command: uses first, then recency (the sequence number of its last line).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,9 +48,13 @@ struct Rank {
     seq: u64,
 }
 
+/// Most commands the trie keeps. Past twice this, `Trie::add` rebuilds it from the highest-ranked half.
+const MAX_COMMANDS: usize = 4000;
+
 #[derive(Default)]
 struct Node {
-    children: HashMap<char, usize>,
+    /// A short list: most prefixes have one or two children, so a map per node costs far more than its entries.
+    children: Vec<(char, usize)>,
     /// Best command strictly below this prefix (a command equal to the prefix is not a suggestion for it).
     best: Option<(Rank, usize)>,
 }
@@ -80,15 +101,33 @@ impl Trie {
             if slot.is_none_or(|(best, best_id)| best_id == id || rank > best) {
                 *slot = Some((rank, id));
             }
-            node = match self.nodes[node].children.get(&c) {
-                Some(&next) => next,
+            node = match self.child(node, c) {
+                Some(next) => next,
                 None => {
                     self.nodes.push(Node::default());
                     let next = self.nodes.len() - 1;
-                    self.nodes[node].children.insert(c, next);
+                    self.nodes[node].children.push((c, next));
                     next
                 }
             };
+        }
+        if self.commands.len() > 2 * MAX_COMMANDS {
+            self.prune();
+        }
+    }
+
+    fn child(&self, node: usize, c: char) -> Option<usize> {
+        self.nodes[node].children.iter().find(|(ch, _)| *ch == c).map(|&(_, next)| next)
+    }
+
+    /// Rebuilds the trie from the `MAX_COMMANDS` highest-ranked commands, so the store stays bounded.
+    fn prune(&mut self) {
+        let mut kept: Vec<(Rank, String)> = self.commands.drain(..).map(|command| (command.rank, command.text)).collect();
+        kept.sort_by(|a, b| b.0.cmp(&a.0));
+        kept.truncate(MAX_COMMANDS);
+        *self = Self::default();
+        for (rank, text) in kept {
+            self.add(&text, rank.count, rank.seq);
         }
     }
 
@@ -96,7 +135,7 @@ impl Trie {
     pub fn best_extension(&self, prefix: &str) -> Option<&str> {
         let mut node = 0;
         for c in prefix.chars() {
-            node = *self.nodes[node].children.get(&c)?;
+            node = self.child(node, c)?;
         }
         let (_, id) = self.nodes[node].best?;
         Some(&self.commands[id].text)
@@ -116,8 +155,52 @@ pub fn admissible(command: &str) -> bool {
     if command.contains(['\n', '\r']) {
         return false;
     }
+    !secret_bearing(command)
+}
+
+/// Whether a command line carries a credential: secret words in the text, `scheme://user:pass@host`, a secret
+/// assignment (`export TOKEN=x`, `KEY=x cmd`), a secret-named long option, `-p<pass>`, `-u user:pass`, or `sudo -S`.
+pub fn secret_bearing(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
-    !SECRET_MARKERS.iter().any(|marker| lower.contains(marker))
+    if SECRET_MARKERS.iter().any(|marker| lower.contains(marker)) || url_with_credentials(&lower) {
+        return true;
+    }
+    let has_sudo = lower.split_whitespace().any(|word| word == "sudo");
+    let mut previous = "";
+    for word in lower.split_whitespace() {
+        let word = word.trim_matches(|c| c == '"' || c == '\'');
+        let secret_name = |name: &str| SECRET_WORDS.iter().any(|secret| name.contains(secret));
+        if let Some((name, _)) = word.split_once('=') {
+            if !name.is_empty() && secret_name(name.trim_start_matches("--")) {
+                return true;
+            }
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            if secret_name(long.split('=').next().unwrap_or_default()) {
+                return true;
+            }
+        }
+        if word.len() > 2 && word.starts_with("-p") && !word.starts_with("--") {
+            return true;
+        }
+        if has_sudo && word.starts_with('-') && !word.starts_with("--") && word.contains('s') {
+            return true;
+        }
+        if matches!(previous, "-u" | "--user") && word.contains(':') {
+            return true;
+        }
+        previous = word;
+    }
+    false
+}
+
+/// `scheme://user:password@host` in any word of an already lowercased line.
+fn url_with_credentials(lower: &str) -> bool {
+    lower.match_indices("://").any(|(at, _)| {
+        let rest = &lower[at + 3..];
+        let authority = rest.split(['/', ' ', '\t', '"', '\'']).next().unwrap_or_default();
+        authority.split_once('@').is_some_and(|(userinfo, _)| userinfo.contains(':'))
+    })
 }
 
 fn escape(text: &str) -> String {
@@ -241,6 +324,18 @@ fn compact(path: &Path) -> io::Result<()> {
     atomic_write(path, &compact_lines(&String::from_utf8_lossy(&bytes)))
 }
 
+/// Rewrites the store without lines that the filter now rejects (entries stored before a rule existed, or by
+/// another program). Nothing is rewritten when every line passes.
+fn purge_filtered(path: &Path) -> io::Result<()> {
+    let text = String::from_utf8_lossy(&fs::read(path)?).into_owned();
+    let stored_secret = text.lines().any(|line| {
+        line.split_once('\t').is_some_and(|(count, escaped)| {
+            count.parse::<u64>().is_ok_and(|uses| uses > 0) && !admissible(&unescape(escaped))
+        })
+    });
+    if stored_secret { compact(path) } else { Ok(()) }
+}
+
 /// The store locations: `$XDG_DATA_HOME/flamewm/terminal-history` and the user's shell history files.
 pub fn default_locations() -> (Option<PathBuf>, Vec<PathBuf>) {
     let home = std::env::var_os("HOME").filter(|v| !v.is_empty()).map(PathBuf::from);
@@ -265,6 +360,9 @@ pub struct History {
     head: Vec<u8>,
     seq: u64,
     checked: Option<Instant>,
+    /// Store size above which `record` compacts. Compaction folds duplicates only, so a store of mostly distinct
+    /// commands stays large; the trigger then moves to twice its size instead of rewriting it on every record.
+    compact_at: u64,
 }
 
 impl History {
@@ -274,9 +372,20 @@ impl History {
             if !path.exists() {
                 let body = compact_lines(&seeds.iter().map(|seed| shell_history_lines(seed)).collect::<String>());
                 let _ = atomic_write(path, &body);
+            } else {
+                let _ = purge_filtered(path);
             }
         }
-        let mut history = Self { path, trie: Trie::default(), offset: 0, file: None, head: Vec::new(), seq: 0, checked: None };
+        let mut history = Self {
+            path,
+            trie: Trie::default(),
+            offset: 0,
+            file: None,
+            head: Vec::new(),
+            seq: 0,
+            checked: None,
+            compact_at: COMPACT_BYTES,
+        };
         let _ = history.sync();
         history
     }
@@ -362,8 +471,10 @@ impl History {
         }
         append(&path, &format!("1\t{}\n", escape(command)))?;
         self.sync()?;
-        if fs::metadata(&path).is_ok_and(|meta| meta.len() > COMPACT_BYTES) {
+        if fs::metadata(&path).is_ok_and(|meta| meta.len() > self.compact_at) {
             compact(&path)?;
+            let after = fs::metadata(&path).map_or(COMPACT_BYTES, |meta| meta.len());
+            self.compact_at = (after * 2).max(COMPACT_BYTES);
             self.sync()?;
         }
         Ok(())
@@ -538,6 +649,19 @@ mod tests {
         assert_eq!(trie.best_extension("ls"), Some("ls -la"));
     }
 
+    /// Past the cap the trie keeps the highest-ranked commands and still answers for them.
+    #[test]
+    fn trie_is_bounded_and_keeps_the_most_used_commands() {
+        let mut trie = Trie::default();
+        trie.add("git status", 500, 1);
+        for i in 0..(2 * MAX_COMMANDS + 10) {
+            trie.add(&format!("cmd{i:05}"), 1, 2 + i as u64);
+        }
+        assert!(trie.commands.len() <= 2 * MAX_COMMANDS, "{} commands kept", trie.commands.len());
+        assert_eq!(trie.best_extension("git"), Some("git status"));
+        assert_eq!(trie.uses("git status"), Some(500));
+    }
+
     #[test]
     fn trie_ranking_follows_later_growth_of_a_lower_command() {
         let mut trie = Trie::default();
@@ -609,6 +733,41 @@ mod tests {
     }
 
     #[test]
+    fn credential_bearing_commands_are_never_admissible() {
+        for secret in [
+            "export GITHUB_TOKEN=abc123",
+            "API_KEY=xyz npm run deploy",
+            "mysql -psecret123 -u root",
+            "mysql --password=hunter2",
+            "mysql --password hunter2",
+            "curl -u alice:hunter2 https://x.example",
+            "git clone https://alice:hunter2@git.example/repo.git",
+            "sudo -S apt update",
+            "sudo -kS whoami",
+            "echo hi | passwd alice",
+            "aws configure set aws_secret_access_key abc",
+            "Authorization: Bearer abc",
+        ] {
+            assert!(!admissible(secret), "must be filtered: {secret}");
+        }
+        for plain in ["ls -la", "git status", "sudo apt update", "cargo test -p flamewm-terminal", "ssh host", "cd /tmp"] {
+            assert!(admissible(plain), "must be kept: {plain}");
+        }
+    }
+
+    #[test]
+    fn stored_secrets_are_removed_when_the_store_loads() {
+        let dir = tmp_dir("purge");
+        let path = dir.join("terminal-history");
+        fs::write(&path, "2\tls\n1\texport TOKEN=abc\n1\tcurl https://a:b@host/x\n3\tgit status\n").unwrap();
+        let history = History::open(Some(path.clone()), &[]);
+        assert_eq!(history.uses("ls"), Some(2));
+        assert_eq!(history.uses("export TOKEN=abc"), None);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "2\tls\n3\tgit status\n");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn filtered_commands_are_not_persisted() {
         let dir = tmp_dir("filter");
         let path = dir.join("terminal-history");
@@ -641,6 +800,21 @@ mod tests {
         assert_eq!(history.uses("make"), Some(200_002));
         assert_eq!(other.uses("make"), Some(200_002));
         assert!(fs::metadata(&path).unwrap().len() < 100, "compacted to one line");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_store_of_distinct_commands_is_not_recompacted_on_every_record() {
+        let dir = tmp_dir("distinct");
+        let path = dir.join("terminal-history");
+        let mut history = History::open(Some(path.clone()), &[]);
+        // Distinct commands cannot fold, so compaction leaves the store above COMPACT_BYTES.
+        let body: String = (0..40_000).map(|i| format!("1\tcommand-{i:08}-padding-padding-padding\n")).collect();
+        fs::write(&path, body).unwrap();
+        history.record("ls").unwrap();
+        let after = fs::metadata(&path).unwrap().len();
+        assert!(after > COMPACT_BYTES, "still above the limit after folding: {after}");
+        assert!(history.compact_at >= after * 2, "next compaction waits for the store to double: {}", history.compact_at);
         fs::remove_dir_all(dir).unwrap();
     }
 

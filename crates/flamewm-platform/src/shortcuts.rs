@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use flamewm_api::shortcuts::{
     ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW,
-    ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
-    ACTION_WINDOW_MINIMIZE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT,
-    ACTION_WORKSPACE_UP, KeyBinding,
+    ACTION_LAUNCHER, ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE,
+    ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_SWITCH, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT,
+    ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP, KeyBinding,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
@@ -18,8 +18,9 @@ pub const ACTION_VOLUME_UP: &str = "VolumeUp";
 pub const ACTION_VOLUME_DOWN: &str = "VolumeDown";
 pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
 
-pub const ACTIONS: [&str; 19] = [
+pub const ACTIONS: [&str; 21] = [
     ACTION_TOGGLE_START_MENU,
+    ACTION_LAUNCHER,
     ACTION_WORKSPACE_LEFT,
     ACTION_WORKSPACE_RIGHT,
     ACTION_WORKSPACE_UP,
@@ -27,6 +28,7 @@ pub const ACTIONS: [&str; 19] = [
     ACTION_WINDOW_CLOSE,
     ACTION_WINDOW_MINIMIZE,
     ACTION_WINDOW_MAXIMIZE,
+    ACTION_WINDOW_SWITCH,
     ACTION_SESSION_LOCK,
     ACTION_SCREENSHOT_FULL,
     ACTION_SCREENSHOT_REGION,
@@ -87,6 +89,11 @@ impl Default for ShortcutRegistry {
             ),
             (ACTION_WINDOW_MINIMIZE.to_owned(), KeyBinding::unassigned()),
             (ACTION_WINDOW_MAXIMIZE.to_owned(), KeyBinding::unassigned()),
+            (
+                ACTION_WINDOW_SWITCH.to_owned(),
+                KeyBinding::assigned("Alt+Tab"),
+            ),
+            (ACTION_LAUNCHER.to_owned(), KeyBinding::assigned("Super+space")),
             (
                 ACTION_OPEN_FILES_SUPER.to_owned(),
                 KeyBinding::assigned("Super+E"),
@@ -274,6 +281,17 @@ pub fn is_modifier_only(normalized: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+#[test]
+fn launcher_is_a_registered_action_with_super_space_default() {
+    assert_eq!(ACTIONS.len(), 21);
+    assert!(ACTIONS.contains(&ACTION_LAUNCHER));
+    let defaults = ShortcutRegistry::default();
+    assert_eq!(
+        defaults.binding(ACTION_LAUNCHER),
+        Some(&KeyBinding::assigned("Super+space"))
+    );
+}
     use super::*;
 
     #[test]

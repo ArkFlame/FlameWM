@@ -44,14 +44,20 @@ DESKTOP_UI_INPUTS = (
 INPUTS = (
     "crates/flamewm-desktop-core/Cargo.toml",
     "crates/flamewm-desktop-core/src/lib.rs",
-    "crates/flamewm-desktop-core/src/file_actions.rs",
-    "crates/flamewm-desktop-core/src/conversion.rs",
     "crates/flamewm-desktop/Cargo.toml",
 )
+# Every core source file is an input, so a new or unlisted module with an
+# old mtime and new bytes still invalidates the core without a forced clean.
+CORE_SOURCE_DIR = "crates/flamewm-desktop-core/src"
 
 
 class BuildGateError(RuntimeError):
     """A source, Cargo resolution or targeted invalidation boundary failed."""
+
+
+def core_inputs(root: Path) -> tuple[str, ...]:
+    sources = (p.relative_to(root).as_posix() for p in (root / CORE_SOURCE_DIR).rglob("*.rs") if p.is_file())
+    return tuple(sorted(set(INPUTS) | set(sources)))
 
 
 def digest_files(root: Path, files: tuple[str, ...]) -> str:
@@ -69,22 +75,24 @@ def digest_files(root: Path, files: tuple[str, ...]) -> str:
 
 
 def content_digest(root: Path) -> str:
-    return digest_files(root, INPUTS)
+    return digest_files(root, core_inputs(root))
 
 
 def desktop_ui_digest(root: Path) -> str:
     return digest_files(root, DESKTOP_UI_INPUTS)
 
 
-def validate_metadata(root: Path, data: dict) -> None:
+def validate_metadata(root: Path, data: dict) -> Path:
+    """Validate Cargo's own resolution and return the resolved target directory."""
     try:
         actual_root = Path(data["workspace_root"]).resolve()
         packages = {p["name"]: p for p in data["packages"] if p["name"] in (DESKTOP, CORE)}
         core = packages[CORE]
         desktop = packages[DESKTOP]
         members = set(data["workspace_members"])
+        target_dir = Path(data["target_directory"]).resolve()
     except (KeyError, TypeError, ValueError) as error:
-        raise BuildGateError(f"Cargo metadata missing workspace/core/desktop: {error}") from error
+        raise BuildGateError(f"Cargo metadata missing workspace/core/desktop/target: {error}") from error
     if actual_root != root:
         raise BuildGateError(f"Cargo workspace root mismatch: expected {root}, got {actual_root}")
     for name, info in ((CORE, core), (DESKTOP, desktop)):
@@ -101,13 +109,16 @@ def validate_metadata(root: Path, data: dict) -> None:
     deps = [d for d in desktop.get("dependencies", ()) if d.get("name") == CORE]
     if len(deps) != 1 or not deps[0].get("path") or Path(deps[0]["path"]).resolve() != source.parent.parent:
         raise BuildGateError(f"Cargo desktop's {CORE} dependency is not the local path crate")
+    return target_dir
 
 
 def invalidate_if_changed(
-    root: Path, *, package: str, profile: str, digest: str, marker: str,
+    state_dir: Path, *, root: Path, package: str, profile: str, digest: str, marker: str,
     force: bool, cargo: str, executor,
 ) -> bool:
-    state = root / ".target" / "flamewm" / marker
+    # Markers live beside the resolved Cargo target dir, so a digest stamped for one
+    # target (or a full `cargo clean`, which removes it) never vouches for another.
+    state = state_dir / marker
     prior = state.read_text(encoding="ascii").strip() if state.is_file() else None
     if prior == digest and not force:
         print(f"OK FlameWM {package} Cargo path and {profile} content fingerprint unchanged")
@@ -156,21 +167,22 @@ def run(root: Path, *, profile: str = "release", force: bool = False,
     if result.returncode:
         raise BuildGateError(f"Cargo metadata failed (exit {result.returncode}): {result.stderr.strip()[-2500:]}")
     try:
-        validate_metadata(root, json.loads(result.stdout))
+        target_dir = validate_metadata(root, json.loads(result.stdout))
     except (ValueError, TypeError) as error:
         raise BuildGateError(f"malformed Cargo metadata JSON: {error}") from error
+    state_dir = target_dir / "flamewm"
 
     # Validate ALL digests before cleaning anything: absent build inputs fail closed.
     core_digest = content_digest(root)
     ui_digest = desktop_ui_digest(root) if include_ui else None
     changed = invalidate_if_changed(
-        root, package=CORE, profile=profile, digest=core_digest,
+        state_dir, root=root, package=CORE, profile=profile, digest=core_digest,
         marker=f"desktop-core-{profile}-cache-invalidated.sha256",
         force=force, cargo=cargo, executor=executor,
     )
     if ui_digest is not None:
         changed |= invalidate_if_changed(
-            root, package=DESKTOP, profile=profile, digest=ui_digest,
+            state_dir, root=root, package=DESKTOP, profile=profile, digest=ui_digest,
             marker=f"desktop-rwr-{profile}-cache-invalidated.sha256",
             force=force, cargo=cargo, executor=executor,
         )

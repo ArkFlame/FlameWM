@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::layout::LayoutResult;
 use crate::model::*;
 
@@ -35,7 +37,7 @@ pub enum PaintCommand {
         color: Color,
         size: f32,
         weight: u16,
-        text: String,
+        text: Arc<str>,
     },
     TextShadow {
         x: f32,
@@ -44,7 +46,7 @@ pub enum PaintCommand {
         size: f32,
         weight: u16,
         blur_radius: f32,
-        text: String,
+        text: Arc<str>,
     },
     PushClip {
         rect: Rect,
@@ -99,7 +101,9 @@ pub fn build_paint_commands_with_scroll(
     interaction: InteractionState,
     scroll: &dyn Fn(u32) -> ScrollState,
 ) -> Vec<PaintCommand> {
-    let mut commands = Vec::with_capacity(document.document.nodes.len() * 2);
+    // Sized by the nodes this call walks, not the whole document: the per-node paint memo calls this once per node,
+    // and a document-sized reservation there touched pages per node (about 50 MB for a 6k-node terminal grid).
+    let mut commands = Vec::with_capacity(layout.z_order.len() * 2);
     for index in layout.z_order.iter().copied() {
         let index = index as usize;
         let node = &document.document.nodes[index];
@@ -190,6 +194,8 @@ pub fn build_paint_commands_with_scroll(
                                 continue;
                             }
                             let y = rect.y + laid.line_height * line_index as f32 + style.font_size;
+                            // One allocation per laid-out line; every emitted command shares it by refcount.
+                            let text: Arc<str> = Arc::from(line.text);
                             if let Some(shadow) = style.text_shadow {
                                 let shade = apply_opacity(
                                     document.resolve_color(shadow.color),
@@ -204,7 +210,7 @@ pub fn build_paint_commands_with_scroll(
                                             size: style.font_size,
                                             weight: style.font_weight,
                                             blur_radius: shadow.blur_radius,
-                                            text: line.text.clone(),
+                                            text: Arc::clone(&text),
                                         });
                                     } else {
                                         commands.push(PaintCommand::Text {
@@ -213,7 +219,7 @@ pub fn build_paint_commands_with_scroll(
                                             color: shade,
                                             size: style.font_size,
                                             weight: style.font_weight,
-                                            text: line.text.clone(),
+                                            text: Arc::clone(&text),
                                         });
                                     }
                                 }
@@ -224,7 +230,7 @@ pub fn build_paint_commands_with_scroll(
                                 color,
                                 size: style.font_size,
                                 weight: style.font_weight,
-                                text: line.text,
+                                text,
                             });
                         }
                     }
@@ -253,10 +259,10 @@ pub fn emit_scroll_chrome(
         .get(index as usize)
         .map(|b| b.rect)
         .unwrap_or_default();
-    let content = layout.content_extent(index);
     if scroll_clip(style, viewport).is_none() {
         return;
     }
+    let content = layout.content_extent(index);
     let offset = scroll(index);
     let metrics = LR::scroll_metrics(viewport, content, offset);
     commands.push(PaintCommand::PushClip { rect: viewport });

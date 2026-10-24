@@ -30,6 +30,7 @@ const DEFAULT_FONT_FAMILY: &str = "IBM Plex Sans";
 pub enum SurfaceKind {
     Panel,
     Start,
+    Launcher,
     TaskMenu,
     Media,
     Osd,
@@ -45,6 +46,7 @@ pub fn project(
     let root = match surface {
         SurfaceKind::Panel => "taskbar",
         SurfaceKind::Start => "start-menu",
+        SurfaceKind::Launcher => "launcher-popup",
         SurfaceKind::TaskMenu => "task-menu",
         SurfaceKind::Media => "media-popup",
         SurfaceKind::Osd => "osd",
@@ -85,6 +87,11 @@ pub fn project(
         }
         SurfaceKind::TaskMenu => {
             // Task menu shares the desktop menu frame (ui/shared/menu.css 1px border); no accent outline.
+        }
+        SurfaceKind::Launcher => {
+            // Launcher shares the Start surface pair so both popups match in every theme.
+            document.background(root, surface_background(snapshot))?;
+            document.corner_radius(root, popup_corner_radius(snapshot))?;
         }
         SurfaceKind::Media => {
             document.border(root, accent)?;
@@ -451,6 +458,18 @@ mod tests {
         project(&mut doc, &snapshot, SurfaceKind::Start).expect("start projection");
         assert_eq!(doc.backgrounds["start-menu"].a, 0);
         assert_eq!(doc.backgrounds["start-search-box"].a, 255);
+    }
+
+    #[test]
+    fn launcher_projection_shares_start_surface_pair() {
+        let mut doc = RecordingUiDoc::default();
+        project(&mut doc, &SettingsSnapshot::new(1), SurfaceKind::Launcher).expect("launcher");
+        project(&mut doc, &SettingsSnapshot::new(1), SurfaceKind::Start).expect("start");
+        assert_eq!(
+            doc.backgrounds["launcher-popup"],
+            doc.backgrounds["start-menu"]
+        );
+        assert_eq!(doc.radii["launcher-popup"], doc.radii["start-menu"]);
     }
 
     #[test]
@@ -831,7 +850,11 @@ mod tests {
 
     #[test]
     fn every_compiled_shell_surface_declares_accent_tokens() {
-        let artifacts: [(&str, &[u8]); 9] = [
+        let artifacts: [(&str, &[u8]); 10] = [
+            (
+                "launcher",
+                include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-launcher.rwr")),
+            ),
             (
                 "panel",
                 include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel.rwr")),

@@ -150,8 +150,7 @@ fn copy_one(fs: &impl RemoteOps, source: &Path, directory: &Path, cancel: &Cance
     let cancel_remote = RemoteCancel::new();
     match (url_of(source), url_of(directory)) {
         (None, Some(folder)) => {
-            let is_file = fs::metadata(source).map_or(false, |meta| meta.is_file());
-            if !is_file {
+            if !fs::metadata(source).map_or(false, |meta| meta.is_file()) {
                 return Err(CopyError::Refused("folders cannot be copied to remote folders yet"));
             }
             let target = free_remote_name(fs, &folder, name)?;
@@ -398,14 +397,14 @@ pub fn to_path(url: &Url) -> PathBuf {
 /// Explorer entry for a remote child of `dir`. Symlinks to directories arrive as `Kind::Dir` (resolved by
 /// `flamewm-remote-fs`); other symlinks stay symlinks.
 pub fn entry_of(dir: &Url, item: &RemoteEntry) -> Entry {
-    Entry {
-        path: to_path(&dir.join(&item.name)),
-        name: item.name.clone(),
-        directory: matches!(item.kind, Kind::Dir),
-        symlink: matches!(item.kind, Kind::Symlink),
-        size: item.size,
-        modified: (item.mtime > 0).then(|| UNIX_EPOCH + Duration::from_secs(item.mtime as u64)),
-    }
+    Entry::new(
+        to_path(&dir.join(&item.name)),
+        item.name.clone(),
+        matches!(item.kind, Kind::Dir),
+        matches!(item.kind, Kind::Symlink),
+        item.size,
+        (item.mtime > 0).then(|| UNIX_EPOCH + Duration::from_secs(item.mtime as u64)),
+    )
 }
 
 /// Status-strip wording for a typed remote error. Never includes secrets; never trusts a host key.

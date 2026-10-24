@@ -59,6 +59,8 @@ pub struct SnapPreviewSurface {
     visible: bool,
     candidate: Option<SnapTarget>,
     geometry: Option<Rect>,
+    /// Size whose ring mask is currently applied to the visible surface.
+    mask_size: Option<(u32, u32)>,
 }
 
 impl SnapPreviewSurface {
@@ -70,6 +72,7 @@ impl SnapPreviewSurface {
             visible: false,
             candidate: None,
             geometry: None,
+            mask_size: None,
         }
     }
 
@@ -113,11 +116,10 @@ impl SnapPreviewSurface {
             return;
         };
 
-        if self.candidate != Some(candidate) || self.geometry != Some(geometry) {
-            self.hide();
-            self.candidate = Some(candidate);
-            self.geometry = Some(geometry);
-        }
+        // A visible surface is moved/resized in place; hiding first caused an unmap/map/raise
+        // flicker on every snap-target change.
+        self.candidate = Some(candidate);
+        self.geometry = Some(geometry);
         self.present(geometry, width, height);
     }
 
@@ -147,18 +149,27 @@ impl SnapPreviewSurface {
             self.visible = false;
             return;
         };
+        // A pure move keeps the window shape, so the ring mask (a per-motion
+        // XShape rebuild) is only reapplied when the size changes.
+        let same_size = self.visible && self.mask_size == Some((width, height));
         if runtime
             .move_resize(surface, geometry.x, geometry.y, width, height)
             .is_err()
-            || runtime
-                .set_surface_ring_mask(surface, RING_BORDER_PX, RING_RADIUS_PX)
-                .is_err()
+            || (!same_size
+                && runtime
+                    .set_surface_ring_mask(surface, RING_BORDER_PX, RING_RADIUS_PX)
+                    .is_err())
         {
             self.hide();
             return;
         }
+        self.mask_size = Some((width, height));
         if self.visible {
-            if runtime.redraw(surface).is_err() {
+            // Pure move: size, content and shape are unchanged and the window background is
+            // the presented backbuffer, so a repaint would only rewrite identical pixels.
+            // A size change already repainted inside `move_resize` (commit_geometry); keep
+            // that redraw so the ring mask ordering is unchanged.
+            if !same_size && runtime.redraw(surface).is_err() {
                 self.hide();
             }
             return;
@@ -175,6 +186,11 @@ impl SnapPreviewSurface {
 
     /// Hide every preview node on release, cancel, unmanage, or shutdown.
     pub fn hide(&mut self) {
+        // Idle drag motion without a snap target calls hide() on every event. When nothing is
+        // tracked as shown, skip the document rewrite, grab release and unmap round-trip.
+        if !self.visible && self.candidate.is_none() && self.geometry.is_none() {
+            return;
+        }
         if let (Some(runtime), Some(surface)) = (self.runtime.as_mut(), self.surface) {
             let _ = runtime.with_document(surface, |document| {
                 document.visible(FILL_NODE, false)?;
@@ -186,6 +202,7 @@ impl SnapPreviewSurface {
         self.visible = false;
         self.candidate = None;
         self.geometry = None;
+        self.mask_size = None;
     }
 
     /// Lazily create the overlay surface. `false` without a display.
@@ -296,6 +313,7 @@ mod tests {
             visible: true,
             candidate: Some(SnapTarget::LeftHalf),
             geometry: Some(geometry()),
+            mask_size: None,
         };
         assert!(preview.is_current(SnapTarget::LeftHalf, geometry(), 20));
         assert!(preview.is_current(SnapTarget::LeftHalf, geometry(), 60));
@@ -311,8 +329,10 @@ mod tests {
             visible: true,
             candidate: Some(SnapTarget::LeftHalf),
             geometry: Some(geometry()),
+            mask_size: Some((960, 1080)),
         };
         preview.hide();
+        assert_eq!(preview.mask_size, None);
         assert!(!preview.visible());
         assert_eq!(preview.candidate(), None);
         assert_eq!(preview.geometry(), None);

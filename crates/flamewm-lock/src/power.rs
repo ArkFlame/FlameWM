@@ -389,12 +389,7 @@ mod tests {
         assert_eq!(PowerButton::Shutdown.label(), "Shut Down");
         assert_eq!(PowerButton::Other.label(), "Other…");
         let none = SessionCapabilities::default();
-        for b in [
-            PowerButton::Sleep,
-            PowerButton::Restart,
-            PowerButton::Shutdown,
-            PowerButton::Other,
-        ] {
+        for b in POWER_ORDER {
             assert!(!b.enabled(none));
             assert!(b.enabled(all_caps()));
         }
@@ -485,12 +480,7 @@ mod tests {
     #[test]
     fn disabled_actions_are_inert() {
         let mut p = ui(SessionCapabilities::default());
-        for b in [
-            PowerButton::Sleep,
-            PowerButton::Restart,
-            PowerButton::Shutdown,
-            PowerButton::Other,
-        ] {
+        for b in POWER_ORDER {
             assert_eq!(p.handle(PowerEvent::Click(b)), Effect::None);
             assert_eq!(p.state(), &PowerState::Idle);
         }

@@ -11,7 +11,7 @@ def src(path):
 
 class DesktopPass17Contract(unittest.TestCase):
     def test_regular_file_icon_does_not_inherit_pen_fallback(self):
-        projection = src("crates/flamewm-desktop/src/projection.rs")
+        projection = src("crates/flamewm-desktop/src/icon_names.rs")
         desktop = src("crates/flamewm-desktop/src/main.rs")
         self.assertIn('"pdf" => "application-pdf"', projection)
         self.assertIn('"png" => "image-png"', projection)

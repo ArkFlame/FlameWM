@@ -1,0 +1,7 @@
+# Taste
+- Wants work parallelized across subagents: keep at least 5 running simultaneously, launch a new one whenever one finishes, and autonomously investigate new areas instead of idling. Proceed without asking questions — pick the best option and implement it. Confidence: 0.85
+- Demands proof-based status reports: treat a fix as done only after independent verification against fresh source, tests, and real runtime evidence; never infer success from a clean compile or a single screenshot, and label anything observable-only-on-hardware as UNVERIFIED instead of claiming completion. Confidence: 0.8
+- Performance work must be benchmark-driven: build scoped tests/benchmarks for the hottest measured areas (CPU and memory), measure before/after, then iterate on real numbers — never guess or trust profiler spikes — while keeping behavior identical ("same result, more optimized code"). Confidence: 0.6
+- Never discards existing work: no `git reset`/`git clean`/`git stash`/force-checkout on his tree, and never overwrite a live checkout with an older archive — pre-existing uncommitted changes must be preserved. Confidence: 0.75
+- Finishing an implementation includes rebuilding the Debian package (`.deb`); packaging is part of "done", not an extra step to wait to be asked for. Confidence: 0.65
+- Never launch Dolphin (or other third-party file managers) when testing; always open FlameWM's own explorer/terminal instead. Confidence: 0.85

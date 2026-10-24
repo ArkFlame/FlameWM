@@ -857,8 +857,16 @@ impl SurfaceController {
                 }
                 // Drain the document-owned damage latch into the app latch so
                 // `redraw_dirty` can coalesce; event_loop already merged its
-                // own marks via redraw_if_dirty.
-                let pending = instance.document.take_damage();
+                // own marks via redraw_if_dirty. A document-side Full only means an untracked
+                // edit: the revision check repaints it and the command diff bounds it. Forwarding
+                // it would latch an explicit Full and disable the region path for every edit.
+                // Explicit Full requests reach the app through `mark_surface_dirty` itself.
+                let pending = match instance.document.take_damage() {
+                    flamewm_render_core::SurfaceDamage::Full => {
+                        flamewm_render_core::SurfaceDamage::None
+                    }
+                    other => other,
+                };
                 instance.app.mark_dirty(pending);
                 instance.app.close_requested
             };
@@ -941,10 +949,6 @@ impl SurfaceController {
 
     pub fn surface_role(&self, id: SurfaceId) -> Result<SurfaceRole, String> {
         Ok(self.instance_ref(id)?.role)
-    }
-
-    pub fn surface_input_mode(&self, id: SurfaceId) -> Result<SurfaceInputMode, String> {
-        Ok(self.instance_ref(id)?.input)
     }
 
     /// Overlay management policy: overlays stay raisable but are never

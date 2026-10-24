@@ -21,47 +21,26 @@ use flamewm_ui_x11::{SurfaceRuntime, UiBackendError};
 
 use crate::event_router::quick_popup_group;
 
-/// C07: one shell operation owns exactly one total span; nested totals must
-/// not double-own. `operation_total_active` on the `ShellLoop` event turn
-/// marks the outer owner; inner paths check it and skip their own total.
-pub(crate) const SHELL_SLOW_TOTAL_NS: u128 = 16_670_000;
-pub(crate) const SHELL_SLOW_COOLDOWN_MS: u64 = 500;
+mod helpers;
+mod launcher_session;
+mod quick_popups;
+mod slow_op;
+mod start_session;
 
-/// C07 slow-operation note: when `started`->now exceeds one 60Hz frame,
-/// emit `shell.operation.slow` debug with a 500ms per-op cooldown.
-pub(crate) fn shell_slow_note(op: &'static str, started: Instant) {
-    if started.elapsed().as_nanos() <= SHELL_SLOW_TOTAL_NS {
-        return;
-    }
-    fn last_for(op: &str) -> Option<&'static std::sync::atomic::AtomicU64> {
-        use std::sync::atomic::AtomicU64;
-        static START: AtomicU64 = AtomicU64::new(0);
-        static CONTEXT: AtomicU64 = AtomicU64::new(0);
-        static WORKSPACE: AtomicU64 = AtomicU64::new(0);
-        match op {
-            "start" => Some(&START),
-            "context" => Some(&CONTEXT),
-            "workspace" => Some(&WORKSPACE),
-            _ => None,
-        }
-    }
-    let wall_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    if let Some(last) = last_for(op) {
-        let prev = last.load(std::sync::atomic::Ordering::Relaxed);
-        if wall_ms.saturating_sub(prev) < SHELL_SLOW_COOLDOWN_MS {
-            return;
-        }
-        last.store(wall_ms, std::sync::atomic::Ordering::Relaxed);
-    }
-    flamewm_debug::emit(
-        flamewm_debug::DebugEventId("shell.operation.slow"),
-        Duration::from_millis(SHELL_SLOW_COOLDOWN_MS),
-        || format!("op={op} slow"),
-    );
-}
+use helpers::{
+    clear_transient_state_fields, earliest_wake, end_start_session_fields,
+    interaction_target_is_current, media_popup_must_close, media_system_request,
+    pager_cell_window_rect, panel_projection_needed, resolve_control_output,
+    start_icon_refresh_due, take_context_menu_for_popup, taskbar_frame, text_setting,
+    RuntimeIconGeometrySink, ZONE_SETTLE,
+};
+use quick_popups::{
+    apply_quick_open_result, is_quick_popup_kind, quick_popup_kind, QuickOpenResolution,
+};
+pub(crate) use slow_op::{is_popup_refusal, shell_slow_note};
+use start_session::{
+    start_launch_session_matches, start_toggle_action, StartLaunchContext, StartToggleAction,
+};
 
 /// C07 stage helper: open a static profiler span. Static labels only.
 macro_rules! shell_stage {
@@ -71,87 +50,6 @@ macro_rules! shell_stage {
     }};
 }
 
-/// Popup measurement refusal: layout pending, anchor pending, or transient
-/// pointer-grab contention. Callers swallow these (state untouched).
-pub(crate) fn is_popup_refusal(error: &str) -> bool {
-    error == PopupRefusal::PendingLayout.to_string()
-        || error == PopupRefusal::PendingAnchor.to_string()
-        || error == PopupRefusal::PointerGrabRefused.to_string()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartToggleAction {
-    Open,
-    Close,
-    Transfer,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QuickOpenResolution {
-    Presented,
-    Failed,
-    Stale,
-}
-
-fn apply_quick_open_result(
-    session: &mut flamewm_shell_core::popup_session::PopupSession,
-    result: OpenResult,
-) -> QuickOpenResolution {
-    let (sequence, presented) = match result {
-        OpenResult::Presented(sequence) => (sequence, true),
-        OpenResult::Refused(sequence)
-        | OpenResult::RolledBack(sequence)
-        | OpenResult::HostExited(sequence) => (sequence, false),
-    };
-    let Some(lease) = session.active().filter(|lease| lease.sequence == sequence) else {
-        return QuickOpenResolution::Stale;
-    };
-    if !is_quick_popup_kind(&lease.kind) {
-        return QuickOpenResolution::Stale;
-    }
-    if presented {
-        QuickOpenResolution::Presented
-    } else {
-        let close = session.close(sequence);
-        session.commit(&close);
-        QuickOpenResolution::Failed
-    }
-}
-
-fn start_toggle_action(
-    is_open: bool,
-    open_output: Option<&flamewm_api::OutputId>,
-    target_output: &flamewm_api::OutputId,
-) -> StartToggleAction {
-    if !is_open {
-        StartToggleAction::Open
-    } else if open_output == Some(target_output) {
-        StartToggleAction::Close
-    } else {
-        StartToggleAction::Transfer
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct StartLaunchContext {
-    invocation: u64,
-    output: flamewm_api::OutputId,
-    popup_sequence: u64,
-}
-
-fn start_launch_session_matches(
-    context: &StartLaunchContext,
-    start_open: bool,
-    active: Option<&flamewm_shell_core::popup_session::PopupLease>,
-) -> bool {
-    start_open
-        && active.is_some_and(|lease| {
-            lease.kind == flamewm_shell_core::popup_session::PopupKind::Start
-                && lease.output == context.output
-                && lease.sequence == context.popup_sequence
-        })
-}
-
 pub(crate) struct ShellLoop {
     pub(crate) shell: ShellRuntime,
     pub(crate) surfaces: ShellSurfaces,
@@ -159,6 +57,7 @@ pub(crate) struct ShellLoop {
     pub(crate) dispatcher: Option<std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>,
     pub(crate) start_category: StartCategory,
     pub(crate) start_query: String,
+    pub(crate) launcher: flamewm_shell::launcher::LauncherState,
     pub(crate) task_drag: Option<flamewm_shell::taskbar::tasks::drag::TaskDrag>,
     pub(crate) task_press_target: Option<(usize, flamewm_shell::runtime::TaskSlotTarget)>,
     pub(crate) start_drag: Option<crate::event_router::StartAppDrag>,
@@ -241,6 +140,7 @@ impl ShellLoop {
             dispatcher,
             start_category: StartCategory::All,
             start_query: String::new(),
+            launcher: Default::default(),
             task_drag: None,
             task_press_target: None,
             start_drag: None,
@@ -505,6 +405,9 @@ impl ShellLoop {
         self.surfaces
             .close_transients(runtime)
             .map_err(UiBackendError::Renderer)?;
+        self.surfaces
+            .close_launcher(runtime)
+            .map_err(UiBackendError::Renderer)?;
         if let Some(lease) = self.popup_session.active().cloned() {
             if !is_quick_popup_kind(&lease.kind) {
                 let transition = self.popup_session.close(lease.sequence);
@@ -649,6 +552,7 @@ impl ShellLoop {
                     };
                     let Ok(transition) = transition else { continue };
                     if action != StartToggleAction::Close {
+                        self.close_launcher(runtime)?;
                         let started = Instant::now();
                         let _total = shell_stage!("shell.start.open.total");
                         if action == StartToggleAction::Open
@@ -662,24 +566,9 @@ impl ShellLoop {
                                 .close_transients(runtime)
                                 .map_err(UiBackendError::Renderer)?;
                         }
-                        self.project_start(runtime)?;
-                        let _measure = shell_stage!("shell.start.open.measure");
-                        let _place = shell_stage!("shell.start.open.place");
-                        let _prepare = shell_stage!("shell.start.open.prepare");
-                        self.apply_start_backdrop(runtime);
-                        self.apply_start_slide(runtime);
-                        let opened = self
-                            .surfaces
-                            .open_start_group_for_output(runtime, &target_output);
-                        let _present = shell_stage!("shell.start.open.present");
-                        shell_slow_note("start", started);
-                        match opened {
-                            Ok(()) => {
-                                self.start_open = true;
-                                self.popup_session.commit(&transition);
-                            }
-                            Err(error) if is_popup_refusal(&error) => {}
-                            Err(error) => return Err(UiBackendError::Renderer(error)),
+                        if self.open_start_surface(runtime, &target_output, started)? {
+                            self.start_open = true;
+                            self.popup_session.commit(&transition);
                         }
                     } else {
                         let _close = shell_stage!("shell.start.open.close");
@@ -692,6 +581,12 @@ impl ShellLoop {
                             Err(error) => return Err(UiBackendError::Renderer(error)),
                         }
                     }
+                }
+                ShellControl::ToggleLauncher {
+                    output,
+                    interaction,
+                } => {
+                    self.toggle_launcher(runtime, output, interaction.as_ref())?;
                 }
                 ShellControl::CloseStart | ShellControl::ClosePopovers => {
                     self.close_transients(runtime)?;
@@ -733,23 +628,8 @@ impl ShellLoop {
                     // C07: SelectStartCategory owns the start total.
                     let started = Instant::now();
                     let _total = shell_stage!("shell.start.open.total");
-                    self.project_start(runtime)?;
-                    let _measure = shell_stage!("shell.start.open.measure");
-                    let _place = shell_stage!("shell.start.open.place");
-                    let _prepare = shell_stage!("shell.start.open.prepare");
-                    self.apply_start_backdrop(runtime);
-                    self.apply_start_slide(runtime);
-                    let opened = self
-                        .surfaces
-                        .open_start_group_for_output(runtime, &target.output);
-                    let _present = shell_stage!("shell.start.open.present");
-                    shell_slow_note("start", started);
-                    match opened {
-                        Ok(()) => {
-                            self.popup_session.commit(&transition);
-                        }
-                        Err(error) if is_popup_refusal(&error) => {}
-                        Err(error) => return Err(UiBackendError::Renderer(error)),
+                    if self.open_start_surface(runtime, &target.output, started)? {
+                        self.popup_session.commit(&transition);
                     }
                 }
                 ShellControl::OpenPopover {
@@ -882,6 +762,30 @@ impl ShellLoop {
             }
         }
         Ok(())
+    }
+
+    /// Projects and presents the Start group on `output`. Returns `false` when
+    /// the popup refused the open, leaving the caller's state untouched.
+    fn open_start_surface(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        output: &flamewm_api::OutputId,
+        started: Instant,
+    ) -> Result<bool, UiBackendError> {
+        self.project_start(runtime)?;
+        let _measure = shell_stage!("shell.start.open.measure");
+        let _place = shell_stage!("shell.start.open.place");
+        let _prepare = shell_stage!("shell.start.open.prepare");
+        self.apply_start_backdrop(runtime);
+        self.apply_start_slide(runtime);
+        let opened = self.surfaces.open_start_group_for_output(runtime, output);
+        let _present = shell_stage!("shell.start.open.present");
+        shell_slow_note("start", started);
+        match opened {
+            Ok(()) => Ok(true),
+            Err(error) if is_popup_refusal(&error) => Ok(false),
+            Err(error) => Err(UiBackendError::Renderer(error)),
+        }
     }
 
     pub(crate) fn context_system_request(&mut self, action: &str) -> Option<ControlRequest> {
@@ -1411,6 +1315,11 @@ impl ShellLoop {
                         need_submenu = true;
                     }
                 }
+                DependentSurface::Launcher => {
+                    if matches!(runtime.with_document(self.surfaces.launcher, apply), Ok(true)) {
+                        let _ = runtime.redraw(self.surfaces.launcher);
+                    }
+                }
             }
         }
         if need_panel {
@@ -1574,9 +1483,9 @@ impl ShellLoop {
         // F10: display geometry change may arrive without a panels dirty
         // flag, so check generation/revision/geometry drift even when no
         // changed domain fired. Sync happens BEFORE next open/projection.
-        // The drift check borrows the snapshot; clone only on the resync path.
+        // The drift check borrows the snapshot; share the Rc only on the resync path.
         let resynced = if self.panel_geometry_drifted(runtime, self.shell.snapshot()) {
-            let snapshot = self.shell.snapshot().clone();
+            let snapshot = self.shell.snapshot_rc();
             self.resync_panel_geometry(runtime, &snapshot)
         } else {
             false
@@ -1610,10 +1519,7 @@ impl ShellLoop {
             self.network_secret.clear();
             self.network_secret_request_id = request_id;
         }
-        let snapshot = self.shell.snapshot().clone();
-        let start_model = self.start_model.clone();
-        let category = self.start_category;
-        let query = self.start_query.clone();
+        let snapshot = self.shell.snapshot_rc();
         self.ensure_loader();
         // Windows or panels or workspaces own the visible panel document.
         if panel_projection_needed(projection_changed, resynced) {
@@ -1622,40 +1528,10 @@ impl ShellLoop {
             // not fire but panels changed, resync now.
             let resynced_now = changed.panels && self.resync_panel_geometry(runtime, &snapshot);
             if !resynced_now {
-                let loader = &mut self.icon_loader;
-                let icon_cache = &mut self.task_icon_cache;
-                let items = crate::settings_projection::taskbar_items(self.settings_cache.as_ref());
-                let panel_outputs = self.surfaces.panel_outputs();
-                let projected = projection::for_each_panel_record(
-                    &snapshot,
-                    panel_outputs.clone(),
-                    |handle, view| {
-                        runtime.with_document(handle, |document| {
-                            async_projection::project_panel_for_changed(
-                                document,
-                                view.with_items(items)
-                                    .with_task_progress(&self.task_progress),
-                                loader.as_mut(),
-                                icon_cache,
-                                projection_changed,
-                            )
-                        })
-                    },
-                );
-                if let Err(error) = &projected {
-                    eprintln!(
-                        "flamewm-shell: panel projection failed (stage=tick-partial): {error:?}"
-                    );
-                    if progress_changed {
-                        self.task_progress_pending = true;
-                    }
-                }
-                if projected.is_ok() {
-                    flamewm_shell::runtime::projection_counter(ProjectionKind::Partial).increment();
-                    for (handle, _) in &panel_outputs {
-                        let _ = runtime.redraw(*handle);
-                    }
-                    self.publish_pager_cells(runtime);
+                if !self.project_panels_partial(runtime, &snapshot, projection_changed, "tick-partial")
+                    && progress_changed
+                {
+                    self.task_progress_pending = true;
                 }
             }
         }
@@ -1685,14 +1561,20 @@ impl ShellLoop {
         }
         // Applications own the unified Start document, only when the app
         // set changed and Start is open; hidden Start stays untouched.
-        if (changed.applications || self.start_icons_stale) && self.start_open {
+        if start_icon_refresh_due(
+            &mut self.start_icons_stale,
+            changed.applications,
+            self.start_open,
+        ) {
+            // Borrow the start fields directly: no `&mut self` call sits between
+            // here and the projection, and `icon_loader` is a disjoint field.
             let loader = self.icon_loader.as_mut();
             let projected = runtime.with_document(self.surfaces.start, |document| {
                 async_projection::project_start_unified(
                     document,
-                    &start_model,
-                    category,
-                    &query,
+                    &self.start_model,
+                    self.start_category,
+                    &self.start_query,
                     &snapshot.session,
                     loader,
                 )
@@ -1705,6 +1587,50 @@ impl ShellLoop {
         if changed.windows || changed.workspaces || changed.panels || resynced {
             self.sync_icon_geometry(runtime, &snapshot);
         }
+    }
+
+    /// Projects the changed domains into every panel, redraws them and republishes pager cells.
+    /// Returns `false` when projection failed; `stage` names the caller in the diagnostic.
+    fn project_panels_partial(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        snapshot: &ShellSnapshot,
+        changed: flamewm_shell::runtime::ChangedDomains,
+        stage: &str,
+    ) -> bool {
+        let loader = &mut self.icon_loader;
+        let icon_cache = &mut self.task_icon_cache;
+        let items = crate::settings_projection::taskbar_items(self.settings_cache.as_ref());
+        let panel_outputs = self.surfaces.panel_outputs();
+        let projected = projection::for_each_panel_record(
+            snapshot,
+            panel_outputs.clone(),
+            |handle, view| {
+                runtime.with_document(handle, |document| {
+                    async_projection::project_panel_for_changed(
+                        document,
+                        view.with_items(items).with_task_progress(&self.task_progress),
+                        loader.as_mut(),
+                        icon_cache,
+                        changed,
+                    )
+                })
+            },
+        );
+        if let Err(error) = &projected {
+            eprintln!("flamewm-shell: panel projection failed (stage={stage}): {error:?}");
+        }
+        if projected.is_ok() {
+            flamewm_shell::runtime::projection_counter(
+                flamewm_shell::runtime::ProjectionKind::Partial,
+            )
+            .increment();
+            for (handle, _) in &panel_outputs {
+                let _ = runtime.redraw(*handle);
+            }
+            self.publish_pager_cells(runtime);
+        }
+        projected.is_ok()
     }
 
     /// Publishes `_NET_WM_ICON_GEOMETRY` on each task slot's client window
@@ -1759,7 +1685,10 @@ impl ShellLoop {
         snapshot.displays.generation != display_generation
             || snapshot.panels.revision != panels_revision
             || self.surfaces.panel_topology_drifted(snapshot)
-            || self.surfaces.panel_native_geometry_drifted(runtime)
+            || self.surfaces.panel_native_geometry_drifted(
+                runtime,
+                (snapshot.displays.generation, snapshot.panels.revision),
+            )
     }
 
     pub(crate) fn resync_panel_geometry(
@@ -1829,41 +1758,12 @@ impl ShellLoop {
         self.apply_taskbar_frame(runtime);
         self.apply_taskbar_backdrop(runtime);
         self.settings_projection_pending = true;
-        let loader = &mut self.icon_loader;
-        let icon_cache = &mut self.task_icon_cache;
         let changed = flamewm_shell::runtime::ChangedDomains {
             panels: true,
             windows: true,
             ..Default::default()
         };
-        let items = crate::settings_projection::taskbar_items(self.settings_cache.as_ref());
-        let panel_outputs = self.surfaces.panel_outputs();
-        let projected =
-            projection::for_each_panel_record(snapshot, panel_outputs.clone(), |handle, view| {
-                runtime.with_document(handle, |document| {
-                    async_projection::project_panel_for_changed(
-                        document,
-                        view.with_items(items)
-                            .with_task_progress(&self.task_progress),
-                        loader.as_mut(),
-                        icon_cache,
-                        changed,
-                    )
-                })
-            });
-        if let Err(error) = &projected {
-            eprintln!("flamewm-shell: panel projection failed (stage=resync-partial): {error:?}");
-        }
-        if projected.is_ok() {
-            flamewm_shell::runtime::projection_counter(
-                flamewm_shell::runtime::ProjectionKind::Partial,
-            )
-            .increment();
-            for (handle, _) in &panel_outputs {
-                let _ = runtime.redraw(*handle);
-            }
-            self.publish_pager_cells(runtime);
-        }
+        self.project_panels_partial(runtime, snapshot, changed, "resync-partial");
         flamewm_debug::emit(
             flamewm_debug::DebugEventId("shell.panel.resync"),
             Duration::from_millis(500),
@@ -2081,34 +1981,37 @@ impl ShellLoop {
         let level =
             flamewm_shell::taskbar::status::audio::default_endpoint_row(&snapshot.system.audio)
                 .map(|row| flamewm_shell::osd::Level::new(row.volume_percent, row.muted));
-        // Same output source as the panel scale: the shown panel's placement output.
-        let panel = self.surfaces.placement().output.clone();
-        let panel = flamewm_shell::osd::OsdOutput {
-            geometry: panel.geometry,
-            scale_percent: panel.shell_scale_percent,
-            primary: panel.primary,
-            connected: panel.connected,
-        };
-        let outputs = snapshot
-            .displays
-            .outputs
-            .iter()
-            .map(|output| flamewm_shell::osd::OsdOutput {
-                geometry: output.geometry,
-                scale_percent: output.shell_scale_percent,
-                primary: output.primary,
-                connected: output.connected,
-            })
-            .collect::<Vec<_>>();
-        let (output, scale) = match flamewm_shell::osd::target_output(Some(panel), &outputs) {
-            Some(target) => (target.geometry, f32::from(target.scale_percent) / 100.0),
-            None => (self.surfaces.work_area(), 1.0),
+        // Same output source as the panel scale: the shown panel's placement output. The lookup is
+        // lazy: the controller calls it only when the card shows, so idle ticks allocate nothing.
+        let target = || {
+            let panel = self.surfaces.placement().output.clone();
+            let panel = flamewm_shell::osd::OsdOutput {
+                geometry: panel.geometry,
+                scale_percent: panel.shell_scale_percent,
+                primary: panel.primary,
+                connected: panel.connected,
+            };
+            let outputs = snapshot
+                .displays
+                .outputs
+                .iter()
+                .map(|output| flamewm_shell::osd::OsdOutput {
+                    geometry: output.geometry,
+                    scale_percent: output.shell_scale_percent,
+                    primary: output.primary,
+                    connected: output.connected,
+                })
+                .collect::<Vec<_>>();
+            match flamewm_shell::osd::target_output(Some(panel), &outputs) {
+                Some(target) => (target.geometry, f32::from(target.scale_percent) / 100.0),
+                None => (self.surfaces.work_area(), 1.0),
+            }
         };
         let now = Instant::now();
         let settings = self.settings_cache.as_ref();
         if let Err(error) = self
             .osd
-            .update(runtime, level, output, scale, settings, now)
+            .update(runtime, level, target, settings, now)
         {
             eprintln!("flamewm-shell: volume OSD failed (nonfatal): {error:?}");
         }
@@ -2286,7 +2189,7 @@ impl ShellLoop {
             self.settings_projection_pending = false;
             return Ok(());
         };
-        let snapshot = snapshot.clone();
+        // Borrowed, not cloned: the snapshot is last used before any `&mut self` call below.
         // Every monitor has an independent native panel document. Project the same
         // surfaceOpacity/surfaceColor settings into all of them.
         for panel in self.surfaces.panel_handles() {
@@ -2299,6 +2202,10 @@ impl ShellLoop {
             })?;
         }
         for (surface, kind) in [
+            (
+                self.surfaces.launcher,
+                crate::settings_projection::SurfaceKind::Launcher,
+            ),
             (
                 self.surfaces.start,
                 crate::settings_projection::SurfaceKind::Start,
@@ -2366,46 +2273,6 @@ impl ShellLoop {
     }
 }
 
-fn resolve_control_output(
-    requested: Option<&flamewm_api::OutputId>,
-    panel_outputs: &[flamewm_api::OutputId],
-    connected_outputs: &[flamewm_api::OutputId],
-    focused_output: Option<&flamewm_api::OutputId>,
-    pointer_output: Option<&flamewm_api::OutputId>,
-    primary_outputs: &[flamewm_api::OutputId],
-) -> Option<flamewm_api::OutputId> {
-    let valid = |output: &flamewm_api::OutputId| {
-        panel_outputs.contains(output) && connected_outputs.contains(output)
-    };
-    if let Some(requested) = requested {
-        return valid(requested).then(|| requested.clone());
-    }
-    focused_output
-        .filter(|output| valid(output))
-        .or_else(|| pointer_output.filter(|output| valid(output)))
-        .or_else(|| primary_outputs.iter().find(|output| valid(output)))
-        .or_else(|| {
-            panel_outputs
-                .iter()
-                .filter(|output| connected_outputs.contains(output))
-                .min()
-        })
-        .cloned()
-}
-
-fn interaction_target_is_current(
-    requested: Option<&flamewm_api::OutputId>,
-    origin: &flamewm_api::OutputId,
-    display_generation: u64,
-    panels_revision: u64,
-    current_display_generation: u64,
-    current_panels_revision: u64,
-) -> bool {
-    requested == Some(origin)
-        && display_generation == current_display_generation
-        && panels_revision == current_panels_revision
-}
-
 /// Whether a quick-control popup's taskbar item is still shown under `items`.
 fn quick_kind_shown(
     kind: flamewm_shell::quick_controls::QuickControlKind,
@@ -2421,611 +2288,5 @@ fn quick_kind_shown(
     }
 }
 
-fn quick_popup_kind(
-    kind: flamewm_shell::quick_controls::QuickControlKind,
-) -> flamewm_shell_core::popup_session::PopupKind {
-    use flamewm_shell::quick_controls::QuickControlKind as Quick;
-    use flamewm_shell_core::popup_session::PopupKind as Popup;
-    match kind {
-        Quick::Audio => Popup::Audio,
-        Quick::Network => Popup::Network,
-        Quick::Calendar => Popup::Calendar,
-        Quick::Battery => Popup::Battery,
-        Quick::Weather => Popup::Weather,
-    }
-}
-
-fn is_quick_popup_kind(kind: &flamewm_shell_core::popup_session::PopupKind) -> bool {
-    use flamewm_shell_core::popup_session::PopupKind;
-    matches!(
-        kind,
-        PopupKind::Audio
-            | PopupKind::Network
-            | PopupKind::Calendar
-            | PopupKind::Battery
-            | PopupKind::Weather
-    )
-}
-
-/// Text value of one setting, or empty when it is absent or not text.
-fn text_setting(settings: &SettingsSnapshot, key: &str) -> String {
-    match settings.values.get(key) {
-        Some(SettingValue::Text(value)) => value.clone(),
-        _ => String::new(),
-    }
-}
-
-/// Flat `taskbarStyle` / `taskbarFloating*` keys as the platform reads them (defaults match
-/// `ProductSettings::default()`).
-fn taskbar_frame(settings: &SettingsSnapshot) -> TaskbarFrame {
-    let floating = matches!(
-        settings.values.get("taskbarStyle"),
-        Some(SettingValue::Text(style)) if style == "floating"
-    );
-    let logical = |key: &str, default: u16| match settings.values.get(key) {
-        Some(SettingValue::Integer(value)) => u16::try_from(*value).unwrap_or(default),
-        _ => default,
-    };
-    TaskbarFrame {
-        floating,
-        margin: logical("taskbarFloatingMargin", 8),
-        radius: logical("taskbarFloatingRadius", 12),
-    }
-}
-
-fn end_start_session_fields(start_open: &mut bool, start_query: &mut String) {
-    *start_open = false;
-    start_query.clear();
-}
-
-fn clear_transient_state_fields(
-    start_open: &mut bool,
-    start_query: &mut String,
-    context_menu: &mut Option<flamewm_shell::ContextMenuState>,
-) {
-    end_start_session_fields(start_open, start_query);
-    *context_menu = None;
-}
-
-/// Opening a quick popup releases the shell context-menu slot. Returns true
-/// when a context menu was open and its surface must be closed.
-fn take_context_menu_for_popup(context_menu: &mut Option<flamewm_shell::ContextMenuState>) -> bool {
-    context_menu.take().is_some()
-}
-
-/// `IconGeometrySink` over the `SurfaceRuntime` facade. Write failures are
-/// nonfatal diagnostics; a vanished client window is not an error.
-struct RuntimeIconGeometrySink<'a> {
-    runtime: &'a mut SurfaceRuntime,
-}
-
-impl IconGeometrySink for RuntimeIconGeometrySink<'_> {
-    fn set(&mut self, window: u64, rect: IconRect) {
-        if let Err(error) = self.runtime.set_window_icon_geometry(window, rect) {
-            eprintln!("flamewm-shell: icon geometry write failed (stage=x11-property): {error:?}");
-        }
-    }
-
-    fn clear(&mut self, window: u64) {
-        if let Err(error) = self.runtime.clear_window_icon_geometry(window) {
-            eprintln!("flamewm-shell: icon geometry clear failed (stage=x11-property): {error:?}");
-        }
-    }
-}
-
-/// Pure mapping for one pager cell: root-space node rect `(x, y, w, h)`
-/// minus the panel window origin, rounded to whole device pixels.
-/// Negative offsets clamp to zero.
-fn pager_cell_window_rect(node: (f32, f32, f32, f32), origin: (f32, f32)) -> [u64; 4] {
-    let (x, y, width, height) = node;
-    [
-        (x - origin.0).round().max(0.0) as u64,
-        (y - origin.1).round().max(0.0) as u64,
-        width.round().max(0.0) as u64,
-        height.round().max(0.0) as u64,
-    ]
-}
-
-/// Maps a `media.*` node action to an MPRIS system request for the active
-/// player. The host checks the live generation, so only the bus name and the
-/// snapshot revision are carried.
-fn media_system_request(
-    media: &flamewm_api::system::MediaSnapshot,
-    expected_revision: u64,
-    command: &str,
-) -> Option<ControlRequest> {
-    if media.active_bus_name.is_empty() {
-        return None;
-    }
-    let bus_name = media.active_bus_name.clone();
-    let action = match command {
-        "previous" => flamewm_api::system::SystemAction::Previous { bus_name },
-        "playpause" => flamewm_api::system::SystemAction::PlayPause { bus_name },
-        "next" => flamewm_api::system::SystemAction::Next { bus_name },
-        _ => return None,
-    };
-    Some(ControlRequest::SystemAction {
-        action,
-        expected_revision,
-    })
-}
-
-/// Whether the visible panel document must be re-projected for this change.
-/// System-only changes (media, etc.) project the panel too.
-fn panel_projection_needed(
-    changed: flamewm_shell::runtime::ChangedDomains,
-    resynced: bool,
-) -> bool {
-    changed.windows || changed.workspaces || changed.system || (changed.panels && !resynced)
-}
-
-/// Whether an open media popup must close because media is no longer
-/// shown in the tray (`tray-media` hidden). Uses the same visibility owner
-/// as the panel slot (`status::media::project`).
-fn media_popup_must_close(system: &flamewm_api::system::SystemSnapshot, media_open: bool) -> bool {
-    media_open && !flamewm_shell::taskbar::status::media::project(system).visible
-}
-
-/// Chrono's local-zone cache refresh window (chrono 0.4.45 `local/unix.rs`).
-const ZONE_SETTLE: std::time::Duration = std::time::Duration::from_millis(1100);
-
-/// The single shared reactor wake slot takes the earliest pending owner deadline, or none.
-#[must_use]
-fn earliest_wake(deadlines: [Option<std::time::Instant>; 4]) -> Option<std::time::Instant> {
-    deadlines.into_iter().flatten().min()
-}
-
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn shared_wake_slot_takes_the_earliest_owner_deadline() {
-        use std::time::{Duration, Instant};
-        let t0 = Instant::now();
-        let soon = t0 + Duration::from_millis(100);
-        assert_eq!(
-            super::earliest_wake([None, None, None, None]),
-            None,
-            "idle loop"
-        );
-        assert_eq!(
-            super::earliest_wake([Some(t0), None, Some(soon), None]),
-            Some(t0)
-        );
-        assert_eq!(
-            super::earliest_wake([None, Some(soon), None, None]),
-            Some(soon)
-        );
-        assert_eq!(
-            super::earliest_wake([None, None, None, Some(soon)]),
-            Some(soon)
-        );
-    }
-
-    #[test]
-    fn monitor_scoped_start_toggle_transfers_only_when_the_target_output_changes() {
-        let output_a = flamewm_api::OutputId::new("A");
-        let output_b = flamewm_api::OutputId::new("B");
-        assert_eq!(
-            super::start_toggle_action(false, None, &output_a),
-            super::StartToggleAction::Open,
-        );
-        assert_eq!(
-            super::start_toggle_action(true, Some(&output_a), &output_a),
-            super::StartToggleAction::Close,
-        );
-        assert_eq!(
-            super::start_toggle_action(true, Some(&output_a), &output_b),
-            super::StartToggleAction::Transfer,
-        );
-        assert_eq!(
-            super::start_toggle_action(true, None, &output_b),
-            super::StartToggleAction::Transfer,
-        );
-    }
-
-    #[test]
-    fn start_launch_result_cannot_cross_the_popup_session_origin() {
-        use flamewm_shell_core::popup_session::{PopupKind, PopupLease};
-        let context = super::StartLaunchContext {
-            invocation: 8,
-            output: flamewm_api::OutputId::new("A"),
-            popup_sequence: 12,
-        };
-        let lease_a = PopupLease {
-            output: flamewm_api::OutputId::new("A"),
-            kind: PopupKind::Start,
-            topology_generation: 3,
-            panels_revision: 6,
-            sequence: 12,
-        };
-        let lease_b = PopupLease {
-            output: flamewm_api::OutputId::new("B"),
-            sequence: 13,
-            ..lease_a.clone()
-        };
-        assert!(super::start_launch_session_matches(
-            &context,
-            true,
-            Some(&lease_a)
-        ));
-        assert!(!super::start_launch_session_matches(
-            &context,
-            true,
-            Some(&lease_b)
-        ));
-        assert!(!super::start_launch_session_matches(
-            &context,
-            false,
-            Some(&lease_a)
-        ));
-    }
-
-    #[test]
-    fn quick_open_ack_commits_only_the_matching_lease_and_failures_release_it() {
-        use flamewm_shell::quick_controls::protocol::OpenResult;
-        use flamewm_shell_core::popup_session::{PopupKind, PopupSession, PopupTarget};
-        let target = || PopupTarget {
-            output: flamewm_api::OutputId::new("A"),
-            topology_generation: 3,
-            panels_revision: 6,
-        };
-        let mut presented = PopupSession::default();
-        let open = presented.open(PopupKind::Audio, target()).unwrap();
-        assert!(presented.commit(&open));
-        let sequence = presented.active().unwrap().sequence;
-        assert_eq!(
-            super::apply_quick_open_result(&mut presented, OpenResult::Presented(sequence)),
-            super::QuickOpenResolution::Presented,
-        );
-        assert_eq!(presented.active().unwrap().sequence, sequence);
-
-        for failure in [
-            OpenResult::Refused(sequence),
-            OpenResult::RolledBack(sequence),
-            OpenResult::HostExited(sequence),
-        ] {
-            let mut session = PopupSession::default();
-            let open = session.open(PopupKind::Audio, target()).unwrap();
-            assert!(session.commit(&open));
-            assert_eq!(
-                super::apply_quick_open_result(&mut session, failure),
-                super::QuickOpenResolution::Failed,
-            );
-            assert!(session.active().is_none());
-        }
-    }
-
-    #[test]
-    fn stale_quick_open_result_cannot_clear_a_newer_popup_lease() {
-        use flamewm_shell::quick_controls::protocol::OpenResult;
-        use flamewm_shell_core::popup_session::{PopupKind, PopupSession, PopupTarget};
-        let target = PopupTarget {
-            output: flamewm_api::OutputId::new("A"),
-            topology_generation: 3,
-            panels_revision: 6,
-        };
-        let mut session = PopupSession::default();
-        let old = session.open(PopupKind::Audio, target.clone()).unwrap();
-        assert!(session.commit(&old));
-        let old_sequence = session.active().unwrap().sequence;
-        let next = session.open(PopupKind::Network, target).unwrap();
-        assert!(session.commit(&next));
-        let current = session.active().cloned().unwrap();
-        assert_eq!(
-            super::apply_quick_open_result(&mut session, OpenResult::Refused(old_sequence)),
-            super::QuickOpenResolution::Stale,
-        );
-        assert_eq!(session.active(), Some(&current));
-    }
-
-    #[test]
-    fn control_output_prefers_keyboard_focus_and_rejects_invalid_explicit_targets() {
-        use flamewm_api::OutputId;
-        let a = OutputId::new("A");
-        let b = OutputId::new("B");
-        let panel_outputs = [a.clone(), b.clone()];
-        let connected = panel_outputs.clone();
-        let primary = [a.clone()];
-        assert_eq!(
-            super::resolve_control_output(
-                None,
-                &panel_outputs,
-                &connected,
-                Some(&b),
-                Some(&a),
-                &primary
-            ),
-            Some(b.clone()),
-            "global keyboard action follows focused window before pointer history"
-        );
-        assert_eq!(
-            super::resolve_control_output(
-                Some(&OutputId::new("gone")),
-                &panel_outputs,
-                &connected,
-                Some(&b),
-                Some(&a),
-                &primary
-            ),
-            None,
-            "an explicit stale target must not fall back to another panel"
-        );
-        assert_eq!(
-            super::resolve_control_output(
-                None,
-                &panel_outputs,
-                &connected,
-                None,
-                Some(&b),
-                &primary
-            ),
-            Some(b),
-            "pointer is the fallback when no window is focused"
-        );
-    }
-
-    #[test]
-    fn interaction_context_rejects_output_and_snapshot_drift() {
-        let a = flamewm_api::OutputId::new("A");
-        let b = flamewm_api::OutputId::new("B");
-        assert!(super::interaction_target_is_current(
-            Some(&b),
-            &b,
-            7,
-            11,
-            7,
-            11
-        ));
-        assert!(!super::interaction_target_is_current(
-            Some(&a),
-            &b,
-            7,
-            11,
-            7,
-            11
-        ));
-        assert!(!super::interaction_target_is_current(
-            Some(&b),
-            &b,
-            6,
-            11,
-            7,
-            11
-        ));
-        assert!(!super::interaction_target_is_current(
-            Some(&b),
-            &b,
-            7,
-            10,
-            7,
-            11
-        ));
-    }
-
-    fn production_source() -> &'static str {
-        include_str!("app.rs")
-            .split_once("\n#[cfg(test)]\nmod tests")
-            .map(|(source, _)| source)
-            .expect("app tests must have a production section")
-    }
-
-    #[test]
-    fn open_media_popup_closes_when_media_unavailable_or_idle() {
-        use flamewm_api::system::{PlaybackState, ServiceAvailability, SystemSnapshot};
-        let mut system = SystemSnapshot::default();
-        system.media.availability = ServiceAvailability::Unavailable;
-        system.media.playback = PlaybackState::Playing;
-        assert!(
-            super::media_popup_must_close(&system, true),
-            "player gone must close the open media popup"
-        );
-        system.media.availability = ServiceAvailability::Available;
-        system.media.playback = PlaybackState::Unavailable;
-        assert!(
-            super::media_popup_must_close(&system, true),
-            "no playing/paused media must close the open media popup"
-        );
-        system.media.playback = PlaybackState::Playing;
-        assert!(
-            !super::media_popup_must_close(&system, true),
-            "playing media keeps the popup open"
-        );
-        assert!(
-            !super::media_popup_must_close(&system, false),
-            "closed popup is never closed again"
-        );
-    }
-
-    #[test]
-    fn panel_projection_needed_true_for_system_only_change() {
-        let changed = flamewm_shell::runtime::ChangedDomains {
-            system: true,
-            ..Default::default()
-        };
-        assert!(super::panel_projection_needed(changed, false));
-        assert!(super::panel_projection_needed(changed, true));
-    }
-
-    #[test]
-    fn panel_projection_needed_panels_only_when_not_resynced() {
-        let changed = flamewm_shell::runtime::ChangedDomains {
-            panels: true,
-            ..Default::default()
-        };
-        assert!(super::panel_projection_needed(changed, false));
-        assert!(!super::panel_projection_needed(changed, true));
-    }
-
-    #[test]
-    fn panel_projection_needed_false_without_projection_domains() {
-        let changed = flamewm_shell::runtime::ChangedDomains {
-            applications: true,
-            ..Default::default()
-        };
-        assert!(!super::panel_projection_needed(changed, false));
-    }
-
-    #[test]
-    fn start_slide_pass_also_arms_popup_slide_without_start_button_target() {
-        let source = production_source();
-        let body = source
-            .split_once("fn apply_start_slide(")
-            .and_then(|(_, rest)| rest.split_once("\n    }\n"))
-            .map(|(body, _)| body)
-            .expect("apply_start_slide must exist");
-        assert!(
-            body.contains("self.surfaces.set_popup_slide(popup_slide);"),
-            "apply_start_slide must arm the popup slide on every Start-slide refresh"
-        );
-        assert!(
-            body.contains("crate::settings_projection::start_slide(snapshot, self.surfaces.panel_edge(), None)"),
-            "popup slide must use the shared start_slide owner with no Magic Lamp target"
-        );
-    }
-
-    #[test]
-    fn media_node_actions_route_to_active_player_with_revision() {
-        let media = flamewm_api::system::MediaSnapshot {
-            active_bus_name: "org.mpris.MediaPlayer2.test".to_owned(),
-            ..Default::default()
-        };
-        let bus = "org.mpris.MediaPlayer2.test";
-        let cases = [
-            (
-                "previous",
-                flamewm_api::system::SystemAction::Previous {
-                    bus_name: bus.to_owned(),
-                },
-            ),
-            (
-                "playpause",
-                flamewm_api::system::SystemAction::PlayPause {
-                    bus_name: bus.to_owned(),
-                },
-            ),
-            (
-                "next",
-                flamewm_api::system::SystemAction::Next {
-                    bus_name: bus.to_owned(),
-                },
-            ),
-        ];
-        for (command, expected) in cases {
-            match super::media_system_request(&media, 42, command) {
-                Some(super::ControlRequest::SystemAction {
-                    action,
-                    expected_revision,
-                }) => {
-                    assert_eq!(format!("{action:?}"), format!("{expected:?}"), "{command}");
-                    assert_eq!(expected_revision, 42, "{command}");
-                }
-                _ => panic!("media.{command} must produce a SystemAction request"),
-            }
-        }
-    }
-
-    #[test]
-    fn media_node_actions_without_player_or_unknown_command_are_dropped() {
-        let no_player = flamewm_api::system::MediaSnapshot::default();
-        for command in ["previous", "playpause", "next"] {
-            assert!(
-                super::media_system_request(&no_player, 1, command).is_none(),
-                "media.{command} without an active player must be dropped"
-            );
-        }
-        let media = flamewm_api::system::MediaSnapshot {
-            active_bus_name: "org.mpris.MediaPlayer2.test".to_owned(),
-            ..Default::default()
-        };
-        assert!(super::media_system_request(&media, 1, "stop").is_none());
-    }
-
-    #[test]
-    fn pager_cell_rect_follows_panel_resize_scale() {
-        // Panel origin at (0, 1000) on a 1080 px output: 44 px bar at 100%,
-        // 55 px bar at 125%. Cell 1 sits at window y=6 in both cases.
-        let origin = (0.0, 1000.0);
-        assert_eq!(
-            super::pager_cell_window_rect((1166.0, 1006.0, 22.0, 16.0), origin),
-            [1166, 6, 22, 16]
-        );
-        // 125% layout: cell y and height scale by 1.25, rounded.
-        assert_eq!(
-            super::pager_cell_window_rect((1457.5, 1007.5, 27.5, 20.0), origin),
-            [1458, 8, 28, 20]
-        );
-        // Negative offset clamps to zero.
-        assert_eq!(
-            super::pager_cell_window_rect((5.0, 990.0, 10.0, 10.0), origin),
-            [5, 0, 10, 10]
-        );
-    }
-
-    #[test]
-    fn escape_close_clears_start_and_transient_state() {
-        let mut start_open = true;
-        let mut start_query = "fire".to_owned();
-        let mut context_menu = Some(flamewm_shell::ContextMenuState {
-            kind: flamewm_shell::ContextMenuKind::Workspace { index: 0 },
-            revision: 1,
-            output: None,
-            interaction: None,
-            anchor: None,
-        });
-
-        super::clear_transient_state_fields(&mut start_open, &mut start_query, &mut context_menu);
-
-        assert!(!start_open);
-        assert!(start_query.is_empty(), "close clears the search query");
-        assert!(context_menu.is_none());
-    }
-
-    #[test]
-    fn quick_popup_open_takes_and_closes_open_context_menu_only() {
-        let mut context_menu = Some(flamewm_shell::ContextMenuState {
-            kind: flamewm_shell::ContextMenuKind::Workspace { index: 0 },
-            revision: 1,
-            output: None,
-            interaction: None,
-            anchor: None,
-        });
-        assert!(super::take_context_menu_for_popup(&mut context_menu));
-        assert!(context_menu.is_none(), "popup open releases the menu slot");
-        assert!(
-            !super::take_context_menu_for_popup(&mut context_menu),
-            "no surface close is issued when no context menu is open"
-        );
-    }
-
-    #[test]
-    fn red_t06_settings_toggle_has_no_follow_up_get_settings_fetch() {
-        // RED(T06): the current toggle submits ApplySettings, then performs a
-        // blocking UI-thread GetSettings roundtrip instead of using its result.
-        let source = production_source();
-        assert!(
-            !source.contains("self.control.call(&ControlRequest::GetSettings"),
-            "T06 RED: settings mutation must not be followed by UI GetSettings"
-        );
-        assert!(
-            !source.contains("refresh_settings_revision"),
-            "T06 RED: remove the blocking settings refresh seam"
-        );
-    }
-
-    #[test]
-    fn red_t08_shell_loop_has_no_steady_state_control_client_field() {
-        // RED(T08): the current ShellLoop retains a blocking ControlClient
-        // solely for steady-state reconciliation.
-        let source = production_source();
-        let shell_loop = source
-            .split_once("pub(crate) struct ShellLoop {")
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split_once("\n}\n\nimpl ShellLoop"))
-            .map(|(body, _)| body)
-            .expect("ShellLoop definition must remain discoverable");
-        assert!(
-            !shell_loop.contains("ControlClient"),
-            "T08 RED: ShellLoop steady state must not own a blocking ControlClient"
-        );
-    }
-}
+mod tests;

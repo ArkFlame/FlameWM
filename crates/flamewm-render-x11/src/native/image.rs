@@ -45,9 +45,62 @@ pub fn scale_and_premultiply_into(
     let _ = (sw, sh);
 }
 
+/// Premultiplies straight RGBA8 `src` (`width` x `height`, same size) into ARGB32 words in one
+/// pass. Pixels where `keep(x, y)` is false become fully transparent (0), as if their alpha were
+/// zeroed before a premultiply, which yields the same zero word.
+pub fn premultiply_masked_into(
+    out: &mut Vec<u32>,
+    src: &[u8],
+    width: u32,
+    height: u32,
+    keep: impl Fn(u32, u32) -> bool,
+) {
+    out.clear();
+    out.reserve(width as usize * height as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let off = (y as usize * width as usize + x as usize) * 4;
+            let a = if keep(x, y) { u32::from(src[off + 3]) } else { 0 };
+            if a == 0 {
+                out.push(0);
+                continue;
+            }
+            let prem = |c: u32| (c * a + 127) / 255;
+            let (r, g, b) = (
+                u32::from(src[off]),
+                u32::from(src[off + 1]),
+                u32::from(src[off + 2]),
+            );
+            out.push((a << 24) | (prem(r) << 16) | (prem(g) << 8) | prem(b));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn masked_single_pass_matches_zero_alpha_then_premultiply() {
+        let (w, h) = (5u32, 4u32);
+        let src: Vec<u8> = (0..(w * h * 4))
+            .map(|i| (i.wrapping_mul(37).wrapping_add(i / 3)) as u8)
+            .collect();
+        let keep = |x: u32, y: u32| (x + 2 * y) % 3 != 0;
+        // Reference: zero the masked alpha, then the two-step scale+premultiply.
+        let mut zeroed = src.clone();
+        for y in 0..h {
+            for x in 0..w {
+                if !keep(x, y) {
+                    zeroed[((y * w + x) * 4 + 3) as usize] = 0;
+                }
+            }
+        }
+        let reference = scale_and_premultiply(&zeroed, w, h, w, h);
+        let mut single = vec![0xDEAD_BEEF; 3];
+        premultiply_masked_into(&mut single, &src, w, h, keep);
+        assert_eq!(single, reference);
+    }
 
     #[test]
     fn scale_nearest_neighbor_picks_source_texel() {

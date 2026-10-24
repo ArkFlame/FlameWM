@@ -14,7 +14,7 @@ use crate::backdrop::{BackdropCapture, capture_drawable_rect};
 use crate::ffi::dynamic_library::DynamicLibrary;
 use crate::xlib::{
     Display, Pixmap, Window, XCreateGC, XCreateImage, XCreatePixmap, XDefaultScreen,
-    XDefaultVisual, XDestroyImage, XFreeGC, XFreePixmap, XPutImage, XRootWindow, ZPIXMAP, malloc,
+    XDefaultVisual, XDestroyImage, XFreeGC, XPutImage, XRootWindow, ZPIXMAP, malloc,
 };
 use crate::xlib_ext::{XGetGeometry, free};
 
@@ -313,7 +313,7 @@ pub(crate) unsafe fn upload_pixmap_depth(
     }
     let gc = unsafe { XCreateGC(display, pixmap, 0, std::ptr::null_mut()) };
     if gc.is_null() {
-        unsafe { XFreePixmap(display, pixmap) };
+        unsafe { crate::native::xresource::free_pixmap_raw(display, pixmap) };
         return Err("XCreateGC returned NULL".to_string());
     }
     // XDestroyImage frees XImage.data, so the reusable staging buffer must
@@ -325,7 +325,7 @@ pub(crate) unsafe fn upload_pixmap_depth(
     let data = unsafe { malloc(strip_bytes) } as *mut c_char;
     if data.is_null() {
         unsafe { XFreeGC(display, gc) };
-        unsafe { XFreePixmap(display, pixmap) };
+        unsafe { crate::native::xresource::free_pixmap_raw(display, pixmap) };
         return Err("upload: malloc failed".to_string());
     }
     let image = unsafe {
@@ -345,7 +345,7 @@ pub(crate) unsafe fn upload_pixmap_depth(
     if image.is_null() {
         unsafe { free(data as *mut c_void) };
         unsafe { XFreeGC(display, gc) };
-        unsafe { XFreePixmap(display, pixmap) };
+        unsafe { crate::native::xresource::free_pixmap_raw(display, pixmap) };
         return Err("XCreateImage returned NULL".to_string());
     }
     let mut y = 0;

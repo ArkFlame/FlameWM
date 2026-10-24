@@ -292,8 +292,42 @@ pub fn resolve_kwallet_version(
     match (installed5, installed6) {
         (true, false) => Some("5"),
         (false, true) => Some("6"),
-        _ => None,
+        // Both generations can be present on a Plasma 6 system (the KWallet5 D-Bus
+        // service is often an alias whose Exec is kwalletd6). Plasma 6's browser
+        // backend is KWallet6; the explicit FLAMEWM_BRAVE_PASSWORD_STORE=kwallet5
+        // override above still wins for an older profile.
+        (true, true) => Some("6"),
+        (false, false) => None,
     }
+}
+
+/// Whether the wallet generation is actually installed. A D-Bus service file is
+/// not proof: KDE ships `org.kde.kwalletd5.service` with `Exec=/usr/bin/kwalletd6`
+/// on Plasma 6. Only a service that launches that generation's daemon counts.
+#[must_use]
+pub fn installed_kwallet_generations() -> (bool, bool) {
+    let installed6 = Path::new("/usr/bin/kwalletd6").is_file()
+        || service_runs("/usr/share/dbus-1/services/org.kde.kwalletd6.service", "kwalletd6");
+    let installed5 = Path::new("/usr/bin/kwalletd5").is_file()
+        || service_runs("/usr/share/dbus-1/services/org.kde.kwalletd5.service", "kwalletd5");
+    (installed5, installed6)
+}
+
+fn service_runs(service: &str, daemon: &str) -> bool {
+    std::fs::read_to_string(service).is_ok_and(|text| service_text_runs(&text, daemon))
+}
+
+/// True only when a D-Bus service file actually launches `daemon`. KDE ships
+/// `org.kde.kwalletd5.service` with `Exec=/usr/bin/kwalletd6` on Plasma 6.
+#[must_use]
+pub fn service_text_runs(text: &str, daemon: &str) -> bool {
+    text.lines().any(|line| {
+        line.strip_prefix("Exec=").is_some_and(|exec| {
+            exec.split_whitespace().any(|arg| {
+                Path::new(arg).file_name().and_then(|name| name.to_str()) == Some(daemon)
+            })
+        })
+    })
 }
 
 fn flame_environment(
@@ -341,19 +375,11 @@ fn flame_environment(
     environment.insert("XDG_SESSION_DESKTOP".to_owned(), "flamewm".to_owned());
     // KService reads ${XDG_MENU_PREFIX}applications.menu when building KSycoca.
     environment.insert("XDG_MENU_PREFIX".to_owned(), "flamewm-".to_owned());
-    // Keep KDE's version only as a browser compatibility hint; desktop identity
-    // stays FlameWM. A daemon's existence never proves which wallet encrypted a
-    // pre-existing browser profile. Ambiguous generations require provenance.
-    let kde6 = [
-        "/usr/bin/kwalletd6",
-        "/usr/share/dbus-1/services/org.kde.kwalletd6.service",
-    ];
-    let kde5 = [
-        "/usr/bin/kwalletd5",
-        "/usr/share/dbus-1/services/org.kde.kwalletd5.service",
-    ];
-    let installed6 = kde6.iter().any(|path| Path::new(path).exists());
-    let installed5 = kde5.iter().any(|path| Path::new(path).exists());
+    // A daemon's existence never proves which wallet encrypted a pre-existing
+    // browser profile. Service files are resolved to their Exec target: on
+    // Plasma 6 the kwalletd5 service is an alias to kwalletd6 and must not make
+    // generation selection ambiguous.
+    let (installed5, installed6) = installed_kwallet_generations();
     if let Some(version) = resolve_kwallet_version(existing_env, installed5, installed6) {
         environment.insert("KDE_SESSION_VERSION".to_owned(), version.to_owned());
     }
@@ -548,12 +574,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kwallet_version_requires_unambiguous_provenance() {
+    fn kwallet_version_prefers_kde6_unless_explicitly_overridden() {
         let empty = BTreeMap::new();
         assert_eq!(resolve_kwallet_version(&empty, false, false), None);
         assert_eq!(resolve_kwallet_version(&empty, true, false), Some("5"));
         assert_eq!(resolve_kwallet_version(&empty, false, true), Some("6"));
-        assert_eq!(resolve_kwallet_version(&empty, true, true), None);
+        assert_eq!(resolve_kwallet_version(&empty, true, true), Some("6"));
         let explicit = BTreeMap::from([
             ("KDE_SESSION_VERSION".into(), "5".into()),
             ("XDG_CURRENT_DESKTOP".into(), "KDE".into()),
@@ -563,7 +589,7 @@ mod tests {
             ("KDE_SESSION_VERSION".into(), "5".into()),
             ("XDG_CURRENT_DESKTOP".into(), "FlameWM".into()),
         ]);
-        assert_eq!(resolve_kwallet_version(&stale, true, true), None);
+        assert_eq!(resolve_kwallet_version(&stale, true, true), Some("6"));
         let selected = BTreeMap::from([
             ("KDE_SESSION_VERSION".into(), "5".into()),
             ("FLAMEWM_BRAVE_PASSWORD_STORE".into(), "kwallet6".into()),
@@ -574,6 +600,17 @@ mod tests {
             "gnome-libsecret".into(),
         )]);
         assert_eq!(resolve_kwallet_version(&libsecret, true, false), None);
+    }
+
+    #[test]
+    fn kwallet_service_alias_does_not_count_as_a_five_install() {
+        // Real Plasma 6 service file.
+        let alias = "[D-BUS Service]\nName=org.kde.kwalletd5\nExec=/usr/bin/kwalletd6\n";
+        assert!(service_text_runs(alias, "kwalletd6"));
+        assert!(!service_text_runs(alias, "kwalletd5"));
+        let real5 = "[D-BUS Service]\nName=org.kde.kwalletd5\nExec=/usr/bin/kwalletd5\n";
+        assert!(service_text_runs(real5, "kwalletd5"));
+        assert!(!service_text_runs(real5, "kwalletd6"));
     }
 
     #[test]

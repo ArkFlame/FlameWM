@@ -1,4 +1,6 @@
-use flamewm_api::system::{NetworkSnapshot, ServiceAvailability, SystemAction, SystemSnapshot};
+use flamewm_api::system::{
+    NetworkAccessPointSnapshot, NetworkSnapshot, ServiceAvailability, SystemAction, SystemSnapshot,
+};
 use flamewm_control_core::ControlRequest;
 use flamewm_shell_core::{NetworkPopoverModel, NetworkView};
 
@@ -41,6 +43,14 @@ pub struct NetworkPopoverView {
     pub secret_masked: bool,
 }
 
+fn row_label(access_point: &NetworkAccessPointSnapshot) -> &str {
+    if access_point.ssid.is_empty() {
+        "Hidden network"
+    } else {
+        access_point.ssid.as_str()
+    }
+}
+
 /// Project the filtered Available AP list (connected AP excluded) into the
 /// exact row slots shown by the network surface. `slot` is the visible slot (not a provider
 /// list index); `path` remains the stable NetworkManager object identity.
@@ -51,25 +61,15 @@ pub fn project_visible_rows(
     scroll_offset: u32,
 ) -> Vec<NetworkRowView> {
     let network = &snapshot.network;
-    let rows: Vec<_> = network
+    // Filter by reference and clone only the visible window: the list can hold far more
+    // access points than the slots shown.
+    let needle = query.needle();
+    let rows: Vec<&NetworkAccessPointSnapshot> = network
         .access_points
         .iter()
         .filter(|access_point| !is_connected_path(network, &access_point.path))
-        .filter_map(|access_point| {
-            let label = if access_point.ssid.is_empty() {
-                "Hidden network".to_owned()
-            } else {
-                access_point.ssid.clone()
-            };
-            query.matches(&label).then(|| NetworkRowView {
-                slot: 0,
-                path: access_point.path.clone(),
-                label,
-                strength_percent: access_point.strength_percent.min(100),
-                secured: access_point.secured,
-                known: access_point.known,
-                connected: false,
-            })
+        .filter(|access_point| {
+            flamewm_shell_core::status::NetworkQuery::matches_needle(&needle, row_label(access_point))
         })
         .collect();
 
@@ -79,9 +79,14 @@ pub fn project_visible_rows(
         .skip(first)
         .take(last.saturating_sub(first).min(NETWORK_SLOT_COUNT))
         .enumerate()
-        .map(|(slot, mut row)| {
-            row.slot = slot;
-            row
+        .map(|(slot, access_point)| NetworkRowView {
+            slot,
+            path: access_point.path.clone(),
+            label: row_label(access_point).to_owned(),
+            strength_percent: access_point.strength_percent.min(100),
+            secured: access_point.secured,
+            known: access_point.known,
+            connected: false,
         })
         .collect()
 }

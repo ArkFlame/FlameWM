@@ -213,6 +213,7 @@ counter! {
 fn target_in_range(target: IconTarget) -> bool {
     match target {
         IconTarget::StartSlot(n) => u32::from(n) < START_APP_SLOT_COUNT as u32,
+        IconTarget::LauncherSlot(n) => usize::from(n) < crate::launcher::LAUNCHER_ROWS,
         IconTarget::TaskSlot(n) => u32::from(n) < TASK_SLOT_COUNT as u32,
     }
 }
@@ -276,7 +277,7 @@ pub fn bump_task_view_epoch() -> u64 {
 
 fn epoch_for_target(target: IconTarget) -> u64 {
     match target {
-        IconTarget::StartSlot(_) => START_EPOCH.load(Ordering::SeqCst),
+        IconTarget::StartSlot(_) | IconTarget::LauncherSlot(_) => START_EPOCH.load(Ordering::SeqCst),
         IconTarget::TaskSlot(_) => TASK_EPOCH.load(Ordering::SeqCst),
     }
 }
@@ -286,6 +287,7 @@ fn epoch_for_target(target: IconTarget) -> u64 {
 pub fn icon_node_id_for_target(target: IconTarget) -> String {
     match target {
         IconTarget::StartSlot(n) => format!("start-app-slot-{}-icon", u32::from(n) + 1),
+        IconTarget::LauncherSlot(n) => format!("launcher-row-{}-icon", u32::from(n) + 1),
         IconTarget::TaskSlot(n) => format!("task-slot-{}-icon", u32::from(n) + 1),
     }
 }
@@ -469,7 +471,7 @@ pub fn note_loader_stats(loader: &IconLoader) {
 /// worker drops brand fallback rasters to None, and the caller keeps the
 /// last valid image or the transparent placeholder. Never flame-red, never
 /// retains a stale icon.
-fn schedule_visible(
+pub(crate) fn schedule_visible(
     document: &mut impl UiDocumentAccess,
     icon_id: &str,
     loader: &mut Option<&mut IconLoader>,

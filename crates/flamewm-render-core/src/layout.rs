@@ -1,4 +1,15 @@
 use crate::model::*;
+use std::collections::BTreeSet;
+
+thread_local! {
+    static LAYOUT_PASSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Whole-document layout passes run on the calling thread (diagnostic counter for cache tests).
+pub fn layout_passes_on_this_thread() -> u64 {
+    LAYOUT_PASSES.with(std::cell::Cell::get)
+}
+
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LayoutBox {
@@ -162,6 +173,9 @@ impl LayoutEngine {
         viewport_height: f32,
         interaction: InteractionState,
     ) -> LayoutResult {
+        LAYOUT_PASSES.with(|passes| passes.set(passes.get() + 1));
+        // Full layout is the sync point: no isolated geometry move is pending against it.
+        *document.layout_patch.borrow_mut() = Some(BTreeSet::new());
         let mut boxes = vec![LayoutBox::default(); document.document.nodes.len()];
         if document.document.nodes.is_empty() {
             return LayoutResult {
@@ -248,6 +262,92 @@ impl LayoutEngine {
     }
 }
 
+impl LayoutResult {
+    /// Re-places the isolated absolute leaves in `nodes` inside the retained boxes. A leaf's box
+    /// depends only on its parent's box, so the result equals a full compute. Changes nothing and
+    /// returns false unless every node qualifies (see `isolated_leaf_parent`).
+    pub(crate) fn patch_isolated(
+        &mut self,
+        document: &RuntimeDocument,
+        interaction: InteractionState,
+        nodes: &BTreeSet<u32>,
+    ) -> bool {
+        let count = document.document.nodes.len();
+        if self.boxes.len() != count || self.contents.len() != count {
+            return false;
+        }
+        let mut plan = Vec::with_capacity(nodes.len());
+        for &index in nodes {
+            let Some(parent) = isolated_leaf_parent(document, interaction, index, nodes) else {
+                return false;
+            };
+            plan.push((index, parent));
+        }
+        let mut engine = Engine {
+            document,
+            interaction,
+            boxes: &mut self.boxes,
+        };
+        for &(index, parent) in &plan {
+            let rect = engine.boxes[parent as usize].rect;
+            let padding = engine.style(parent).padding;
+            engine.place_absolute_child(
+                index,
+                rect.x + padding.left,
+                rect.y + padding.top,
+                (rect.width - padding.horizontal()).max(0.0),
+                (rect.height - padding.vertical()).max(0.0),
+            );
+        }
+        for &(index, _) in &plan {
+            // Non-scrolling leaf: its content extent is its box (see `compute`).
+            self.contents[index as usize] = self.boxes[index as usize].rect;
+        }
+        true
+    }
+}
+
+/// Parent index when `index` is a childless, absolutely positioned element whose box is fixed by
+/// its parent's box alone. Rejects any node in `moved` on the path to the root (its box moves
+/// too), any scrolling (Auto/Scroll) or hidden-display ancestor, and non-element parents.
+fn isolated_leaf_parent(
+    document: &RuntimeDocument,
+    interaction: InteractionState,
+    index: u32,
+    moved: &BTreeSet<u32>,
+) -> Option<u32> {
+    let node = &document.document.nodes[index as usize];
+    let parent = node.parent?;
+    if node.kind != NodeKind::Element || node.first_child.is_some() {
+        return None;
+    }
+    let style = document.runtime_style(index, interaction);
+    if style.position != Position::Absolute
+        || style.display == Display::None
+        || style.overflow_x != Overflow::Visible
+        || style.overflow_y != Overflow::Visible
+    {
+        return None;
+    }
+    let mut ancestor = Some(parent);
+    while let Some(current) = ancestor {
+        let node = &document.document.nodes[current as usize];
+        let style = document.runtime_style(current, interaction);
+        // Scrolling ancestors (Auto/Scroll) get their extents and offsets re-fitted after
+        // compute; hidden ones do not move children and absolute children never size them.
+        if moved.contains(&current)
+            || node.kind != NodeKind::Element
+            || style.display == Display::None
+            || matches!(style.overflow_x, Overflow::Auto | Overflow::Scroll)
+            || matches!(style.overflow_y, Overflow::Auto | Overflow::Scroll)
+        {
+            return None;
+        }
+        ancestor = node.parent;
+    }
+    Some(parent)
+}
+
 struct Engine<'a> {
     document: &'a RuntimeDocument,
     interaction: InteractionState,
@@ -321,7 +421,25 @@ impl<'a> Engine<'a> {
 
         match style.display {
             Display::None => return (0.0, 0.0),
-            Display::Block => {
+            Display::Flex if style.flex_direction == FlexDirection::Row => {
+                for child in children {
+                    let child_style = self.style(child);
+                    if child_style.position == Position::Absolute
+                        || child_style.display == Display::None
+                    {
+                        continue;
+                    }
+                    let (cw, ch) = self.measure_node(child, inner_w, inner_h);
+                    content_w += cw + child_style.margin.horizontal();
+                    content_h = content_h.max(ch + child_style.margin.vertical());
+                    if flow_count > 0 {
+                        content_w += style.gap;
+                    }
+                    flow_count += 1;
+                }
+            }
+            // Block and column flex both stack children along the vertical axis.
+            Display::Block | Display::Flex => {
                 for child in children {
                     let child_style = self.style(child);
                     if child_style.position == Position::Absolute
@@ -338,42 +456,6 @@ impl<'a> Engine<'a> {
                     flow_count += 1;
                 }
             }
-            Display::Flex => match style.flex_direction {
-                FlexDirection::Row => {
-                    for child in children {
-                        let child_style = self.style(child);
-                        if child_style.position == Position::Absolute
-                            || child_style.display == Display::None
-                        {
-                            continue;
-                        }
-                        let (cw, ch) = self.measure_node(child, inner_w, inner_h);
-                        content_w += cw + child_style.margin.horizontal();
-                        content_h = content_h.max(ch + child_style.margin.vertical());
-                        if flow_count > 0 {
-                            content_w += style.gap;
-                        }
-                        flow_count += 1;
-                    }
-                }
-                FlexDirection::Column => {
-                    for child in children {
-                        let child_style = self.style(child);
-                        if child_style.position == Position::Absolute
-                            || child_style.display == Display::None
-                        {
-                            continue;
-                        }
-                        let (cw, ch) = self.measure_node(child, inner_w, inner_h);
-                        content_w = content_w.max(cw + child_style.margin.horizontal());
-                        content_h += ch + child_style.margin.vertical();
-                        if flow_count > 0 {
-                            content_h += style.gap;
-                        }
-                        flow_count += 1;
-                    }
-                }
-            },
         }
 
         let width = explicit_w.unwrap_or(content_w + style.padding.horizontal());
@@ -639,10 +721,18 @@ impl<'a> Engine<'a> {
 
     fn layout_absolute_children(&mut self, parent: u32, x: f32, y: f32, width: f32, height: f32) {
         for child in self.children(parent) {
-            let style = self.style(child);
-            if style.position != Position::Absolute || style.display == Display::None {
-                continue;
-            }
+            self.place_absolute_child(child, x, y, width, height);
+        }
+    }
+
+    /// Places one absolutely positioned child inside its containing block. Shared by the full
+    /// layout pass and the isolated geometry patch so both produce identical boxes.
+    fn place_absolute_child(&mut self, child: u32, x: f32, y: f32, width: f32, height: f32) {
+        let style = self.style(child);
+        if style.position != Position::Absolute || style.display == Display::None {
+            return;
+        }
+        {
             let left = style.left.resolve(width);
             let right = style.right.resolve(width);
             let top = style.top.resolve(height);
@@ -1194,3 +1284,7 @@ mod tests {
         assert_eq!(err, IntrinsicMeasureError::ExceedsConstraint);
     }
 }
+
+#[cfg(test)]
+#[path = "layout_tests.rs"]
+mod layout_tests;

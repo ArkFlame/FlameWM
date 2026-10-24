@@ -89,7 +89,8 @@ class ExplorerContract(unittest.TestCase):
         self.assertIn("renameat_with(CWD, from, CWD, to, flags)", jobs)
         self.assertIn("jobs::move_publish(from, to, false", source)
         # Destination preservation keeps its Rust behaviour test coverage.
-        self.assertIn("fn move_refuses_existing_destination_and_preserves_both_files", source)
+        tests = (ROOT / "crates/flamewm-explorer/src/tests/mod.rs").read_text()
+        self.assertIn("fn move_refuses_existing_destination_and_preserves_both_files", tests)
         # Deletions go through one helper; it only removes staging output or the
         # already-verified source, never the existing destination.
         self.assertIn("fn remove_entry(path: &Path)", jobs)
@@ -97,7 +98,7 @@ class ExplorerContract(unittest.TestCase):
         self.assertIn("fs::remove_file(path)", jobs)
         self.assertIn("remove_entry(to)", jobs)
         self.assertIn("remove_entry(from)", jobs)
-        self.assertIn('rustix = { workspace = true }', manifest)
+        self.assertIn('rustix = { workspace = true, features = ["event", "net", "pipe"] }', manifest)
         self.assertIn('Exec=flamewm-explorer %f', entry)
 
     def test_theme_uses_existing_snapshot_instead_of_private_config(self):

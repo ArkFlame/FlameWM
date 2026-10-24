@@ -1,8 +1,10 @@
 //! Cell grid and settings text to per-row runs. A run is a span of cells that share colours and flags; the UI draws
 //! each run as one absolutely positioned text node on a fixed cell pitch. Pure functions only, so the same code
 //! is unit tested and drives the screen.
+use std::sync::Arc;
+
 use crate::glyphs::{Arm, blend, glyph_rects};
-use crate::screen::{Cell, Color, CursorShape, Screen, attr};
+use crate::screen::{Cell, Color, CursorShape, Dirty, Screen, attr};
 use crate::themes::Palette;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -19,6 +21,9 @@ pub struct Run {
     /// Set for a box or block glyph: the run is one rectangle (in `fg`) instead of text. `col` and `cells` place it.
     pub shape: Option<Arm>,
 }
+
+/// One row of runs, shared: a cache hit clones the handle, not the runs.
+pub type Row = Arc<[Run]>;
 
 /// Inclusive selection in absolute line coordinates (scrollback first), normalised so `start <= end`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +42,7 @@ impl Span {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct GridOptions {
     /// Lines scrolled back from the live bottom; 0 shows the live grid.
     pub view_offset: usize,
@@ -97,57 +103,138 @@ fn cell_colours(cell: &Cell, palette: &Palette, selected: bool, cursor: bool) ->
     (fg, bg)
 }
 
+/// Absolute index of the first visible line.
+fn top_line(screen: &Screen, options: &GridOptions) -> usize {
+    screen.total_lines().saturating_sub(screen.rows() + options.view_offset.min(screen.scrollback_len()))
+}
+
+/// Whether the cursor is drawn: the live view only, and only while the child has not hidden it.
+fn cursor_drawn(screen: &Screen, options: &GridOptions) -> bool {
+    options.cursor && options.view_offset == 0 && screen.cursor_visible
+}
+
 /// Rows of runs for the live grid or scrollback view. Adjacent cells with equal colours and weight merge.
 pub fn grid_runs(screen: &Screen, palette: &Palette, options: &GridOptions) -> Vec<Vec<Run>> {
-    let total = screen.total_lines();
-    let top = total.saturating_sub(screen.rows() + options.view_offset.min(screen.scrollback_len()));
+    let top = top_line(screen, options);
+    (0..screen.rows()).map(|row| row_runs(screen, palette, options, top, row)).collect()
+}
+
+/// Runs of visible row `row`, which shows line `top + row`.
+fn row_runs(screen: &Screen, palette: &Palette, options: &GridOptions, top: usize, row: usize) -> Vec<Run> {
+    let index = top + row;
+    let Some(line) = screen.line_abs(index) else { return Vec::new() };
     let (cursor_row, cursor_col) = screen.cursor();
-    let show_cursor = options.cursor && options.view_offset == 0 && screen.cursor_visible;
-    let mut rows = Vec::with_capacity(screen.rows());
-    for row in 0..screen.rows() {
-        let index = top + row;
-        let Some(line) = screen.line_abs(index) else {
-            rows.push(Vec::new());
+    let show_cursor = cursor_drawn(screen, options);
+    let mut runs: Vec<Run> = Vec::new();
+    let mut col = 0;
+    while col < line.len() {
+        let cell = &line[col];
+        if cell.attrs & attr::SPACER != 0 {
+            col += 1;
             continue;
-        };
-        let mut runs: Vec<Run> = Vec::new();
-        let mut col = 0;
-        while col < line.len() {
-            let cell = &line[col];
-            if cell.attrs & attr::SPACER != 0 {
-                col += 1;
-                continue;
-            }
-            let width = if cell.attrs & attr::WIDE != 0 { 2 } else { 1 };
-            let selected = options.selection.is_some_and(|span| span.contains(index, col));
-            let cursor = show_cursor && row == cursor_row && col == cursor_col;
-            let block = options.cursor_shape == CursorShape::Block;
-            let (mut fg, bg) = cell_colours(cell, palette, selected, cursor && block);
-            let mut ch = cell.ch;
-            if cursor && !block {
-                fg = palette.cursor;
-                ch = if options.cursor_shape == CursorShape::Underline { '\u{2581}' } else { '\u{258f}' };
-            }
-            let bold = cell.attrs & attr::BOLD != 0;
-            let bg_drawn = bg_visible(bg, palette);
-            match glyph_rects(ch, fg, bg) {
-                Some(rects) => {
-                    if bg_drawn.is_some() {
-                        push_text(&mut runs, Text { col, cells: width, ch: ' ', fg, bg: bg_drawn, bold });
+        }
+        let width = if cell.attrs & attr::WIDE != 0 { 2 } else { 1 };
+        let selected = options.selection.is_some_and(|span| span.contains(index, col));
+        let cursor = show_cursor && row == cursor_row && col == cursor_col;
+        let block = options.cursor_shape == CursorShape::Block;
+        let (mut fg, bg) = cell_colours(cell, palette, selected, cursor && block);
+        let mut ch = cell.ch;
+        if cursor && !block {
+            fg = palette.cursor;
+            ch = if options.cursor_shape == CursorShape::Underline { '\u{2581}' } else { '\u{258f}' };
+        }
+        let bold = cell.attrs & attr::BOLD != 0;
+        let bg_drawn = bg_visible(bg, palette);
+        match glyph_rects(ch, fg, bg) {
+            Some(rects) => {
+                if bg_drawn.is_some() {
+                    push_text(&mut runs, Text { col, cells: width, ch: ' ', fg, bg: bg_drawn, bold });
+                }
+                if !extend_bands(&mut runs, col, &rects) {
+                    for (arm, colour) in rects {
+                        runs.push(Run { col, cells: width, text: "\u{a0}".into(), fg: colour, bg: Some(colour), bold, shape: Some(arm) });
                     }
-                    if !extend_bands(&mut runs, col, &rects) {
-                        for (arm, colour) in rects {
-                            runs.push(Run { col, cells: width, text: "\u{a0}".into(), fg: colour, bg: Some(colour), bold, shape: Some(arm) });
+                }
+            }
+            None => push_text(&mut runs, Text { col, cells: width, ch, fg, bg: bg_drawn, bold }),
+        }
+        col += width;
+    }
+    runs
+}
+
+/// Grid runs of one pane, kept between frames. Only rows the screen marked dirty are rebuilt, plus the rows the
+/// cursor or selection moved through. A changed palette, view offset, cursor shape or grid size rebuilds every row.
+#[derive(Default)]
+pub struct RunCache {
+    key: Option<(Palette, usize, CursorShape)>,
+    cursor: Option<(usize, usize)>,
+    selection: Option<Span>,
+    rows: Vec<Row>,
+    /// Rows rebuilt by the last `update`.
+    pub rebuilt: usize,
+}
+
+impl RunCache {
+    /// Current runs for `options`, equal to `grid_runs` on the same screen. Takes the screen's dirty rows. Rows that
+    /// are not rebuilt keep their allocation, so callers can tell them apart with `Arc::ptr_eq`.
+    pub fn update(&mut self, screen: &mut Screen, palette: &Palette, options: &GridOptions) -> &[Row] {
+        let dirty = screen.take_dirty();
+        let rows = screen.rows();
+        let top = top_line(screen, options);
+        let cursor = cursor_drawn(screen, options).then(|| screen.cursor());
+        let key_matches = self
+            .key
+            .as_ref()
+            .is_some_and(|(kept, offset, shape)| kept == palette && *offset == options.view_offset && *shape == options.cursor_shape);
+        let mut stale = vec![false; rows];
+        if !key_matches || self.rows.len() != rows || dirty == Dirty::All {
+            stale.fill(true);
+        } else {
+            if let Dirty::Rows(changed) = dirty {
+                for live in changed {
+                    mark_live(screen, top, live, &mut stale);
+                }
+            }
+            if cursor != self.cursor {
+                for live in [self.cursor, cursor].into_iter().flatten() {
+                    mark_live(screen, top, live.0, &mut stale);
+                }
+            }
+            if options.selection != self.selection {
+                let spans = [self.selection, options.selection];
+                let lo = spans.iter().flatten().map(|span| span.start.0).min();
+                let hi = spans.iter().flatten().map(|span| span.end.0).max();
+                if let (Some(lo), Some(hi)) = (lo, hi) {
+                    for (row, slot) in stale.iter_mut().enumerate() {
+                        if (lo..=hi).contains(&(top + row)) {
+                            *slot = true;
                         }
                     }
                 }
-                None => push_text(&mut runs, Text { col, cells: width, ch, fg, bg: bg_drawn, bold }),
             }
-            col += width;
         }
-        rows.push(runs);
+        if self.rows.len() != rows {
+            self.rows = vec![Row::from(Vec::new()); rows];
+        }
+        if !key_matches {
+            self.key = Some((palette.clone(), options.view_offset, options.cursor_shape));
+        }
+        self.rebuilt = stale.iter().filter(|slot| **slot).count();
+        for row in (0..rows).filter(|&row| stale[row]) {
+            self.rows[row] = Row::from(row_runs(screen, palette, options, top, row));
+        }
+        self.cursor = cursor;
+        self.selection = options.selection;
+        &self.rows
     }
-    rows
+}
+
+/// Marks the visible row that shows live-grid row `live`, when that row is on screen.
+fn mark_live(screen: &Screen, top: usize, live: usize, stale: &mut [bool]) {
+    if let Some(slot) = (screen.scrollback_len() + live).checked_sub(top).and_then(|row| stale.get_mut(row)) {
+        *slot = true;
+    }
 }
 
 /// One text cell as a run, merged into the previous run when colours and weight match.
@@ -311,5 +398,127 @@ mod tests {
     #[test]
     fn dimmed_blends_toward_background() {
         assert_eq!(dimmed(0xffffff, 0x000000), 0x7f7f7f);
+    }
+
+    #[test]
+    fn one_typed_char_rebuilds_exactly_one_row() {
+        let p = palette();
+        let mut screen = Screen::new(10, 4, 100);
+        let mut cache = RunCache::default();
+        let options = opts(true);
+        feed(&mut screen, b"abc");
+        cache.update(&mut screen, &p, &options);
+        assert_eq!(cache.rebuilt, 4, "the first frame builds every row");
+        feed(&mut screen, b"d");
+        cache.update(&mut screen, &p, &options);
+        assert_eq!(cache.rebuilt, 1, "the typed row only; the cursor moved within it");
+        cache.update(&mut screen, &p, &options);
+        assert_eq!(cache.rebuilt, 0, "an unchanged screen rebuilds nothing");
+    }
+
+    #[test]
+    fn unchanged_rows_are_shared_allocations() {
+        let p = palette();
+        let mut screen = Screen::new(10, 4, 100);
+        let mut cache = RunCache::default();
+        let options = opts(true);
+        feed(&mut screen, b"abc");
+        let before: Vec<Row> = cache.update(&mut screen, &p, &options).to_vec();
+        feed(&mut screen, b"d");
+        let after = cache.update(&mut screen, &p, &options).to_vec();
+        assert_eq!(cache.rebuilt, 1);
+        let shared = (0..before.len()).filter(|&row| Arc::ptr_eq(&before[row], &after[row])).count();
+        assert_eq!(shared, before.len() - 1, "only the typed row is a new allocation");
+        assert!(!Arc::ptr_eq(&before[0], &after[0]), "row 0 holds the typed char and was rebuilt");
+    }
+
+    #[test]
+    fn scroll_and_resize_rebuild_every_row() {
+        let p = palette();
+        let mut screen = Screen::new(5, 3, 100);
+        let mut cache = RunCache::default();
+        let options = opts(true);
+        feed(&mut screen, b"1\r\n2\r\n3");
+        cache.update(&mut screen, &p, &options);
+        feed(&mut screen, b"\r\n");
+        cache.update(&mut screen, &p, &options);
+        assert_eq!(cache.rebuilt, 3, "a scroll moves every row");
+        screen.resize(6, 3);
+        cache.update(&mut screen, &p, &options);
+        assert_eq!(cache.rebuilt, 3, "a resize rebuilds every row");
+    }
+
+    #[test]
+    fn bench_row_rebuilds_per_typed_char_and_scroll() {
+        let p = palette();
+        let mut screen = Screen::new(40, 8, 100);
+        let mut cache = RunCache::default();
+        let options = opts(true);
+        feed(&mut screen, b"x");
+        cache.update(&mut screen, &p, &options);
+        let mut typed_rebuilds = 0;
+        for _ in 0..20 {
+            feed(&mut screen, b"a");
+            cache.update(&mut screen, &p, &options);
+            typed_rebuilds += cache.rebuilt;
+        }
+        for _ in 0..screen.rows() {
+            feed(&mut screen, b"\r\n");
+            cache.update(&mut screen, &p, &options);
+        }
+        feed(&mut screen, b"\r\n");
+        cache.update(&mut screen, &p, &options);
+        let scroll_rebuilds = cache.rebuilt;
+        eprintln!("BENCH terminal_typed_chars=20 terminal_typed_row_rebuilds={typed_rebuilds} terminal_scroll_row_rebuilds={scroll_rebuilds}");
+        assert_eq!(typed_rebuilds, 20, "one row per typed char");
+        assert_eq!(scroll_rebuilds, screen.rows(), "a scroll rebuilds every row");
+    }
+
+    #[test]
+    fn cached_runs_match_a_full_rebuild_over_random_updates() {
+        let themes = builtin_themes();
+        let fragments: &[&[u8]] = &[
+            b"abc", "界x".as_bytes(), "e\u{301}".as_bytes(), b"\x1b[31mred\x1b[0m", b"\x1b[7mi\x1b[0m", b"\x1b[41mbg",
+            b"\r\n", b"\n", b"\r", b"\x08", b"\t", b"\x1b[2K", b"\x1b[K", b"\x1b[1J", b"\x1b[2J", b"\x1b[3J",
+            b"\x1b[3;2H", b"\x1b[L", b"\x1b[M", b"\x1b[P", b"\x1b[@", b"\x1b[S", b"\x1b[T", b"\x1b[2;4r", b"\x1b[r",
+            b"\x1b[?1049h", b"\x1b[?1049l", b"\x1bM", b"\x1b[?25l\x1b[?25h", b"\x1b7x\x1b8", b"\x1b(0lqk\x1b(B",
+        ];
+        let mut rng: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = |bound: usize| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng % bound as u64) as usize
+        };
+        let mut screen = Screen::new(8, 4, 16);
+        let mut parser = Parser::new();
+        let mut cache = RunCache::default();
+        let shapes = [CursorShape::Block, CursorShape::Underline, CursorShape::Bar];
+        let (mut offset, mut selection, mut cursor, mut shape, mut theme) = (0, None, true, CursorShape::Block, 0);
+        for _ in 0..3000 {
+            match next(12) {
+                0 => screen.resize(3 + next(7), 2 + next(5)),
+                1 => offset = next(screen.scrollback_len() + 1),
+                2 => {
+                    selection = (next(2) == 0).then(|| {
+                        let total = screen.total_lines();
+                        Span::normalised((next(total), next(8)), (next(total), next(8)))
+                    })
+                }
+                3 => cursor = !cursor,
+                4 => shape = shapes[next(3)],
+                5 => theme = next(themes.len()),
+                _ => {
+                    for _ in 0..1 + next(3) {
+                        parser.advance(fragments[next(fragments.len())], &mut screen);
+                    }
+                }
+            }
+            let options = GridOptions { view_offset: offset, selection, cursor, cursor_shape: shape };
+            let palette = &themes[theme].palette;
+            let cached: Vec<Vec<Run>> = cache.update(&mut screen, palette, &options).iter().map(|row| row.to_vec()).collect();
+            assert_eq!(cached, grid_runs(&screen, palette, &options), "cache diverged from a full rebuild");
+            assert!(cache.rebuilt <= screen.rows());
+        }
     }
 }

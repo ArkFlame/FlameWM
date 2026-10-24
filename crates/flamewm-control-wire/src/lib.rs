@@ -1191,6 +1191,7 @@ pub enum ControlSignal {
         deadline_ms: u64,
     },
     StartMenuToggleRequested,
+    LauncherToggleRequested,
     ShortcutsChanged {
         revision: u64,
     },
@@ -1271,6 +1272,11 @@ pub fn encode_signal(signal: &ControlSignal) -> WireSignal {
         ControlSignal::StartMenuToggleRequested => WireSignal {
             interface: IFACE_ROOT.to_owned(),
             member: "StartMenuToggleRequested".to_owned(),
+            args: Vec::new(),
+        },
+        ControlSignal::LauncherToggleRequested => WireSignal {
+            interface: IFACE_ROOT.to_owned(),
+            member: "LauncherToggleRequested".to_owned(),
             args: Vec::new(),
         },
         ControlSignal::ShortcutsChanged { revision } => {
@@ -1359,6 +1365,10 @@ pub fn decode_signal(signal: &WireSignal) -> Result<ControlSignal, ControlError>
         (IFACE_ROOT, "StartMenuToggleRequested") => {
             expect_arity(&call, 0)?;
             Ok(ControlSignal::StartMenuToggleRequested)
+        }
+        (IFACE_ROOT, "LauncherToggleRequested") => {
+            expect_arity(&call, 0)?;
+            Ok(ControlSignal::LauncherToggleRequested)
         }
         (IFACE_SHORTCUTS, "ShortcutsChanged") => Ok(ControlSignal::ShortcutsChanged {
             revision: signal_revision(&call)?,
@@ -3327,6 +3337,24 @@ mod tests {
         let with_payload = WireSignal {
             interface: IFACE_ROOT.to_owned(),
             member: "StartMenuToggleRequested".to_owned(),
+            args: vec![WireValue::U64(1)],
+        };
+        assert!(decode_signal(&with_payload).is_err());
+    }
+
+    // Launcher toggle mirrors the Start toggle: zero-argument root signal, unit variant.
+    #[test]
+    fn launcher_toggle_requested_round_trips_through_wire() {
+        let signal = ControlSignal::LauncherToggleRequested;
+        let wire = encode_signal(&signal);
+        assert_eq!(wire.interface, IFACE_ROOT);
+        assert_eq!(wire.member, "LauncherToggleRequested");
+        assert!(wire.args.is_empty());
+        assert_eq!(decode_signal(&wire), Ok(signal));
+
+        let with_payload = WireSignal {
+            interface: IFACE_ROOT.to_owned(),
+            member: "LauncherToggleRequested".to_owned(),
             args: vec![WireValue::U64(1)],
         };
         assert!(decode_signal(&with_payload).is_err());

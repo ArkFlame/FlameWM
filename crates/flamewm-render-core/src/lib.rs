@@ -5,7 +5,10 @@ pub mod paint;
 pub mod text_layout;
 
 pub use codec::{decode, decode_static, encode};
-pub use layout::{IntrinsicMeasureError, IntrinsicSize, LayoutBox, LayoutEngine, LayoutResult};
+pub use layout::{
+    IntrinsicMeasureError, IntrinsicSize, LayoutBox, LayoutEngine, LayoutResult,
+    layout_passes_on_this_thread,
+};
 pub use model::*;
 pub use paint::{
     PaintCommand, build_paint_commands, build_paint_commands_with_scroll, emit_scroll_chrome,

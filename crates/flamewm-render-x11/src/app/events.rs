@@ -19,142 +19,19 @@ pub(crate) fn newest_configure<T>(first: T, mut next_matching: impl FnMut() -> O
 }
 
 #[cfg(test)]
-mod key_text_regressions {
-    use super::*;
-
-    fn payload(state: u32, symbol: u64) -> String {
-        let mut out = String::new();
-        typed_key_payload(state, symbol, &mut out);
-        out
-    }
-
-    #[test]
-    fn plain_altgr_and_alt_keys_carry_text_while_ctrl_and_super_do_not() {
-        assert!(inserts_text(0));
-        assert!(inserts_text(SHIFT_MASK));
-        assert!(inserts_text(LOCK_MASK));
-        assert!(inserts_text(MOD5_MASK));
-        assert!(inserts_text(MOD5_MASK | MOD1_MASK));
-        assert!(inserts_text(MOD1_MASK));
-        assert!(inserts_text(MOD1_MASK | SHIFT_MASK));
-        assert!(!inserts_text(CONTROL_MASK));
-        assert!(!inserts_text(CONTROL_MASK | MOD5_MASK));
-        assert!(!inserts_text(MOD4_MASK));
-    }
-
-    #[test]
-    fn ctrl_a_is_key_a_with_ctrl_and_no_text() {
-        assert_eq!(payload(CONTROL_MASK, 'a' as u64), "Ctrl\u{1f}a\u{1f}");
-        assert_eq!(payload(CONTROL_MASK | SHIFT_MASK, 'A' as u64), "Ctrl+Shift\u{1f}A\u{1f}");
-    }
-
-    #[test]
-    fn plain_and_altgr_keys_carry_their_text() {
-        assert_eq!(payload(0, 'q' as u64), "\u{1f}q\u{1f}q");
-        assert_eq!(payload(MOD5_MASK, '@' as u64), "\u{1f}@\u{1f}@");
-        assert_eq!(payload(MOD1_MASK, 'q' as u64), "Alt\u{1f}q\u{1f}q");
-        assert_eq!(payload(MOD1_MASK, '.' as u64), "Alt\u{1f}.\u{1f}.");
-        assert_eq!(payload(MOD1_MASK, XK_BACK_SPACE), "Alt\u{1f}BackSpace\u{1f}");
-    }
-}
+#[path = "events/tests/key_text_regressions.rs"]
+mod key_text_regressions;
 
 /// Runtime proof against a private X display (never the host display). Run with
 /// `FLAMEWM_KEY_TEST_DISPLAY=:200 cargo test -p flamewm-render-x11 xkb_lookup -- --ignored`.
 /// Uses the server's keymap as-is: Shift+2 is `@` on the default us layout.
 #[cfg(test)]
-mod xkb_lookup_runtime {
-    use super::*;
-    use crate::xlib::{
-        XCloseDisplay, XKeysymToKeycode, XMappingEvent, XOpenDisplay, XRefreshKeyboardMapping,
-    };
-    use std::ffi::CString;
-
-    #[test]
-    #[ignore = "needs FLAMEWM_KEY_TEST_DISPLAY set to a private display"]
-    fn xkb_lookup_resolves_levels_across_repeated_mapping_refreshes() {
-        let name = std::env::var("FLAMEWM_KEY_TEST_DISPLAY")
-            .expect("set FLAMEWM_KEY_TEST_DISPLAY to a private display");
-        let name = CString::new(name).unwrap();
-        // SAFETY: the display name is a valid C string; the display is closed below.
-        let display = unsafe { XOpenDisplay(name.as_ptr()) };
-        assert!(!display.is_null(), "XOpenDisplay failed");
-        let keycode_of = |keysym: c_ulong| {
-            // SAFETY: display is live.
-            let code = unsafe { XKeysymToKeycode(display, keysym) };
-            code as c_uint
-        };
-        let (q, two) = (keycode_of('q' as c_ulong), keycode_of('2' as c_ulong));
-        assert!(q != 0 && two != 0);
-        let event = |keycode: c_uint, state: u32| {
-            // SAFETY: an all-zero XKeyEvent is a valid value; the fields used are set below.
-            let mut key: XKeyEvent = unsafe { std::mem::zeroed() };
-            key.type_ = KEY_PRESS;
-            key.display = display;
-            key.keycode = keycode;
-            key.state = state;
-            key
-        };
-        // FLAMEWM_KEY_TEST_ALTGR=1: the caller patched keycode of Q to `q Q at AT` (de AltGr+Q).
-        let altgr_q = std::env::var("FLAMEWM_KEY_TEST_ALTGR").is_ok();
-        for round in 0..2000 {
-            if round % 100 == 0 {
-                // SAFETY: display is live; this mirrors a MappingKeyboard notify.
-                let mut mapping: XMappingEvent = unsafe { std::mem::zeroed() };
-                mapping.request = 1;
-                mapping.display = display;
-                unsafe { XRefreshKeyboardMapping(&mut mapping) };
-            }
-            let (plain, typed) = unsafe { key_symbols(&event(q, 0)) };
-            assert_eq!((plain, typed), ('q' as u64, 'q' as u64), "round {round}");
-            let (_, shifted) = unsafe { key_symbols(&event(two, SHIFT_MASK)) };
-            assert_eq!(shifted, '@' as u64, "Shift+2 must decode to @ (round {round})");
-            assert!(inserts_text(SHIFT_MASK));
-            if altgr_q {
-                let (_, altgr) = unsafe { key_symbols(&event(q, MOD5_MASK)) };
-                assert_eq!(altgr, '@' as u64, "AltGr+Q must decode to @ (round {round})");
-                assert!(inserts_text(MOD5_MASK));
-            }
-            let (ctrl_plain, _) = unsafe { key_symbols(&event(q, CONTROL_MASK)) };
-            assert_eq!(ctrl_plain, 'q' as u64, "Ctrl+Q keeps key name q");
-            assert!(!inserts_text(CONTROL_MASK));
-            let (_, alt_shifted) = unsafe { key_symbols(&event(two, MOD1_MASK | SHIFT_MASK)) };
-            assert_eq!(alt_shifted, '@' as u64);
-            assert!(inserts_text(MOD1_MASK | SHIFT_MASK), "Alt+Shift+2 carries @");
-        }
-        // SAFETY: display came from XOpenDisplay and is closed exactly once.
-        unsafe { XCloseDisplay(display) };
-    }
-}
+#[path = "events/tests/xkb_lookup_runtime.rs"]
+mod xkb_lookup_runtime;
 
 #[cfg(test)]
-mod configure_coalescing_regressions {
-    use super::newest_configure;
-    use std::collections::VecDeque;
-
-    #[test]
-    fn drag_run_adopts_only_the_newest_size() {
-        let mut queue: VecDeque<(u32, u32)> = VecDeque::from([(501, 400), (502, 400), (560, 430)]);
-        let newest = newest_configure((500, 400), || queue.pop_front());
-        assert_eq!(newest, (560, 430));
-        assert!(queue.is_empty(), "every queued configure is consumed");
-    }
-
-    #[test]
-    fn empty_queue_keeps_the_first_event() {
-        let mut queue: VecDeque<(u32, u32)> = VecDeque::new();
-        assert_eq!(newest_configure((500, 400), || queue.pop_front()), (500, 400));
-    }
-
-    #[test]
-    fn run_stops_at_first_foreign_event_and_leaves_the_rest_queued() {
-        // `None` models a queue head that is not a ConfigureNotify for this window.
-        let mut queue: VecDeque<Option<(u32, u32)>> =
-            VecDeque::from([Some((510, 400)), None, Some((999, 999))]);
-        let newest = newest_configure((500, 400), || queue.pop_front().flatten());
-        assert_eq!(newest, (510, 400));
-        assert_eq!(queue.len(), 1, "events after the foreign one are not consumed");
-    }
-}
+#[path = "events/tests/configure_coalescing_regressions.rs"]
+mod configure_coalescing_regressions;
 
 fn keyboard_text(symbol: u64) -> Option<String> {
     match symbol {
@@ -177,7 +54,7 @@ fn desktop_takes_focus_on_press(role: X11WindowRole, button: u32) -> bool {
 const TYPED_KEY_ACTION: &str = "__flamewm.ui.key";
 const KEY_PAYLOAD_SEPARATOR: char = '\u{1f}';
 
-fn normalized_modifiers(state: u32) -> Vec<&'static str> {
+fn normalized_modifiers(state: u32) -> impl Iterator<Item = &'static str> {
     [
         (CONTROL_MASK, "Ctrl"),
         (SHIFT_MASK, "Shift"),
@@ -185,9 +62,8 @@ fn normalized_modifiers(state: u32) -> Vec<&'static str> {
         (MOD4_MASK, "Super"),
     ]
     .into_iter()
-    .filter(|(mask, _)| state & mask != 0)
+    .filter(move |(mask, _)| state & mask != 0)
     .map(|(_, name)| name)
-    .collect()
 }
 
 fn canonical_key_name(symbol: u64) -> Cow<'static, str> {
@@ -394,7 +270,7 @@ fn inserts_text(state: u32) -> bool {
 /// Text is present only when `inserts_text` allows it; the key name is always set.
 fn typed_key_payload(state: u32, symbol: u64, payload: &mut String) {
     payload.clear();
-    for (index, modifier) in normalized_modifiers(state).iter().enumerate() {
+    for (index, modifier) in normalized_modifiers(state).enumerate() {
         if index > 0 {
             payload.push('+');
         }
@@ -635,7 +511,7 @@ impl X11App {
                             motion.state,
                         );
                         if fire_node(on_action, document, &mut buffers, drag_index, &mut event)? {
-                            self.mark_full();
+                            self.mark_input_repaint();
                             if self.single_event {
                                 unsafe { self.redraw_if_dirty(document)? };
                                 return Ok(());
@@ -659,7 +535,7 @@ impl X11App {
                         if fire_node(on_action, document, &mut buffers, index, &mut event)?
                             || changed
                         {
-                            self.mark_full();
+                            self.mark_input_repaint();
                         }
                     } else {
                         // Hover is a *pointer-position* event, not only an enter event.
@@ -681,7 +557,7 @@ impl X11App {
                             fire_node(on_action, document, &mut buffers, index, &mut event)?;
                         }
                         if changed {
-                            self.mark_full();
+                            self.mark_input_repaint();
                         }
                     }
                 }
@@ -689,7 +565,7 @@ impl X11App {
                     let had_hover = self.interaction.hover.take().is_some();
                     self.set_cursor(CursorKind::Default);
                     if had_hover {
-                        self.mark_full();
+                        self.mark_input_repaint();
                     }
                 }
                 KEY_PRESS => {
@@ -748,7 +624,7 @@ impl X11App {
                             key.state,
                         );
                         fire_static(on_action, document, &mut buffers, action, &mut event)?;
-                        self.mark_full();
+                        self.mark_input_repaint();
                     } else if inserts_text(key.state) {
                         if let Some(text) = keyboard_text(typed_symbol) {
                             let mut event = action_event(
@@ -768,7 +644,7 @@ impl X11App {
                                 "keyboard.input",
                                 &mut event,
                             )?;
-                            self.mark_full();
+                            self.mark_input_repaint();
                         }
                     }
                 }
@@ -804,7 +680,7 @@ impl X11App {
                                 "keyboard.start.0",
                                 &mut event,
                             )?;
-                            self.mark_full();
+                            self.mark_input_repaint();
                         }
                         self.super_chord_used = false;
                     }
@@ -851,7 +727,7 @@ impl X11App {
                             button.state,
                         );
                         fire_static(on_action, document, &mut buffers, "scroll", &mut event)?;
-                        self.mark_full();
+                        self.mark_input_repaint();
                         if self.single_event {
                             unsafe { self.redraw_if_dirty(document)? };
                             return Ok(());
@@ -898,7 +774,7 @@ impl X11App {
                                         &mut event,
                                     )?;
                                 }
-                                self.mark_full();
+                                self.mark_input_repaint();
                                 unsafe { self.redraw_if_dirty(document)? };
                                 return Ok(());
                             }
@@ -945,7 +821,7 @@ impl X11App {
                                 }
                             }
                         }
-                        self.mark_full();
+                        self.mark_input_repaint();
                     }
                 }
                 BUTTON_RELEASE => {
@@ -998,7 +874,7 @@ impl X11App {
                         );
                         fire_node(on_action, document, &mut buffers, index, &mut event)?;
                     }
-                    self.mark_full();
+                    self.mark_input_repaint();
                     let hover = self.hit_test(document, button.x as f32, button.y as f32);
                     self.interaction.hover = hover;
                     self.update_cursor(document, hover);
@@ -1023,10 +899,12 @@ impl X11App {
                 }
                 _ => {}
             }
-            // Coalesce: at most one redraw_if_dirty per drained event.
-            // Damage marks above merge (max coverage); Expose presented
-            // directly. single_event returns after that single paint.
-            unsafe { self.redraw_if_dirty(document)? };
+            // Coalesce: paint only once the X queue is drained, so a burst of input shares one frame.
+            // Damage marks above merge (max coverage); Expose presented directly. The reactor turn
+            // paints any damage left by an early return once the queue is empty.
+            if unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } <= 0 {
+                unsafe { self.redraw_if_dirty(document)? };
+            }
             // Size reports coalesce: the latest settled size is delivered once the queue is empty.
             if self.pending_window_resize.is_some()
                 && unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } <= 0
@@ -1099,10 +977,10 @@ impl X11App {
             unsafe { self.apply_window_geometry(document, requested)? };
             // Reactor callbacks may mutate the document without producing
             // an X event. The retained damage/revision gate presents that
-            // mutation once and skips no-op wakes.
-            unsafe { self.redraw_if_dirty(document)? };
+            // mutation once and skips no-op wakes. Queued X events paint first.
             // SAFETY: self.display is the live display owned by this app.
             if unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } <= 0 {
+                unsafe { self.redraw_if_dirty(document)? };
                 if self.close_requested {
                     return Ok(());
                 }
@@ -1258,131 +1136,9 @@ pub(crate) fn pointer_sample_point(x: f32, y: f32, scale: f32) -> (f32, f32) {
 }
 
 #[cfg(test)]
-mod pointer_sample_regressions {
-    use super::{Rect, pointer_sample_point};
-
-    #[test]
-    fn fractional_track_top_row_is_hit_at_pixel_center() {
-        // AP06 measured: the animation slider track laid out at y=451.30 and the
-        // pointer pixel row 451 was painted as the track but missed the hit test.
-        let track = Rect {
-            x: 528.0,
-            y: 451.30005,
-            width: 180.0,
-            height: 12.0,
-        };
-        assert!(
-            !track.contains(531.0, 451.0),
-            "corner sample misses the track"
-        );
-        let (x, y) = pointer_sample_point(531.0, 451.0, 1.0);
-        assert!(
-            track.contains(x, y),
-            "pixel-center sample must hit the track"
-        );
-    }
-
-    #[test]
-    fn pixel_center_sampling_scales_device_pixels_to_logical_points() {
-        assert_eq!(pointer_sample_point(10.0, 20.0, 2.0), (5.25, 10.25));
-    }
-}
+#[path = "events/tests/pointer_sample_regressions.rs"]
+mod pointer_sample_regressions;
 
 #[cfg(test)]
-mod reactor_presentation_regressions {
-    use super::{
-        CONTROL_MASK, MOD4_MASK, X11WindowRole, XK_ESCAPE, XK_LEFT, XK_SUPER_L, canonical_key_name,
-        desktop_takes_focus_on_press, normalized_modifiers, printable_key_text,
-    };
-
-    fn reactor_loop_source() -> &'static str {
-        const SOURCE: &str = include_str!("events.rs");
-        let start = SOURCE
-            .find("pub(crate) unsafe fn event_loop_with_reactor")
-            .expect("reactor event-loop owner remains present");
-        let end = SOURCE[start..]
-            .find("pub(crate) fn hit_test")
-            .map(|offset| start + offset)
-            .expect("reactor event-loop owner has a bounded body");
-        &SOURCE[start..end]
-    }
-
-    #[test]
-    fn t18_reactor_only_document_mutation_presents_before_x_queue_gate() {
-        let source = reactor_loop_source();
-        let callback = source
-            .find("on_reactor(document)?")
-            .expect("reactor callback is the document mutation boundary");
-        let after_callback = &source[callback..];
-        let present = after_callback
-            .find("redraw_if_dirty(document)?")
-            .expect("reactor-only mutation must reach the retained redraw gate");
-        let queue_gate = after_callback
-            .find("XEventsQueued")
-            .expect("X11 queue gate remains after reactor dispatch");
-        assert!(
-            present < queue_gate,
-            "reactor document mutation must be presented before an empty X queue can continue"
-        );
-    }
-
-    #[test]
-    fn t19_noop_reactor_wakes_use_the_dirty_skip_not_an_unconditional_paint() {
-        let source = reactor_loop_source();
-        assert_eq!(
-            source.matches("redraw_if_dirty(document)?").count(),
-            1,
-            "one retained redraw gate must admit each reactor turn"
-        );
-        assert!(
-            !source.contains("self.redraw("),
-            "reactor wake must not become an unconditional full repaint loop"
-        );
-        let render = include_str!("render.rs");
-        assert!(render.contains("if self.pending_damage.is_empty() && !stale"));
-        assert!(render.contains("return Ok(false);"));
-    }
-
-    #[test]
-    fn t20_same_turn_reactor_mutations_coalesce_at_one_final_state_gate() {
-        let source = reactor_loop_source();
-        assert_eq!(
-            source.matches("on_reactor(document)?").count(),
-            1,
-            "one reactor callback owns the same-turn mutation batch"
-        );
-        assert_eq!(
-            source.matches("redraw_if_dirty(document)?").count(),
-            1,
-            "the mutation batch must have one retained presentation gate"
-        );
-        let callback = source
-            .find("on_reactor(document)?")
-            .expect("reactor callback is present");
-        let present = source[callback..]
-            .find("redraw_if_dirty(document)?")
-            .expect("same-turn mutations must present through the retained gate");
-        assert!(present > 0);
-    }
-
-    #[test]
-    fn desktop_primary_press_claims_focus_for_selected_file_shortcuts() {
-        assert!(desktop_takes_focus_on_press(X11WindowRole::Desktop, 1));
-        assert!(desktop_takes_focus_on_press(X11WindowRole::Desktop, 3));
-        assert!(!desktop_takes_focus_on_press(X11WindowRole::Desktop, 4));
-        assert!(!desktop_takes_focus_on_press(X11WindowRole::Normal, 1));
-        assert!(!desktop_takes_focus_on_press(X11WindowRole::Dock, 1));
-    }
-
-    #[test]
-    fn typed_key_projection_uses_shortcut_modifier_order_and_canonical_names() {
-        assert_eq!(
-            normalized_modifiers(CONTROL_MASK | MOD4_MASK),
-            vec!["Ctrl", "Super"]
-        );
-        assert_eq!(canonical_key_name(XK_LEFT), "Left");
-        assert_eq!(canonical_key_name(XK_SUPER_L), "Super_L");
-        assert_eq!(printable_key_text(u64::from(b'A')), Some("A".to_string()));
-        assert_eq!(printable_key_text(XK_ESCAPE), None);
-    }
-}
+#[path = "events/tests/reactor_presentation_regressions.rs"]
+mod reactor_presentation_regressions;

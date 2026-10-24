@@ -71,11 +71,6 @@ pub fn menu_parts_for_rows(visible_rows: usize) -> Vec<MenuPart> {
 }
 
 #[must_use]
-pub fn context_menu_min_width() -> i32 {
-    MIN_ROW_WIDTH
-}
-
-#[must_use]
 pub fn context_menu_size(parts: &[MenuPart]) -> Size {
     context_menu::menu_size(parts, MIN_ROW_WIDTH, MenuMetrics::canonical())
 }

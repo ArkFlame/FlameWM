@@ -33,6 +33,11 @@ use cursor::cursor_shape;
 use cursor_theme::{SurfaceCursor, share_surface_cursor};
 
 mod clip;
+// Region planner and counters; the live redraw path adopts them once region clipping is enabled.
+#[cfg_attr(not(test), allow(dead_code))]
+mod damage_plan;
+#[cfg(test)]
+mod region_equivalence_tests;
 mod color;
 mod cursor;
 mod xdnd;
@@ -78,6 +83,17 @@ struct CachedImage {
 
 /// Retained paint cache entry: commands rendered once per layout
 /// revision; frames borrow without cloning.
+/// Inputs that determine retained layout geometry. Paint-only edits (colors) keep
+/// `layout_revision` unchanged, so they reuse layout; size, scale or any layout edit do not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LayoutKey {
+    pub(crate) layout_revision: u64,
+    /// Isolated geometry moves: the retained layout is patched in place, not recomputed.
+    pub(crate) geometry_revision: u64,
+    pub(crate) viewport: (u32, u32),
+    pub(crate) scale_bits: u32,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct CachedPaint {
     pub(crate) commands: Vec<PaintCommand>,
@@ -173,14 +189,31 @@ pub(crate) struct X11App {
     pub(crate) height: u32,
     pub(crate) presentation: PresentationState,
     pub(crate) clip_stack: Vec<Rect>,
+    /// Last clip applied by `apply_clip_stack` (`Some(None)` = cleared); `None` = unknown.
+    pub(crate) gc_clip: Option<Option<(i16, i16, u16, u16)>>,
     pub(crate) range_drag: Option<(u32, f32, f32, f32, f32)>,
     pub(crate) interaction: InteractionState,
     /// Retained layout+paint cache: reuse while (revision, viewport,
     /// interaction, scroll fingerprint) is unchanged. No frame clones.
     pub(crate) layout: Option<LayoutResult>,
     pub(crate) cached_paint: Option<CachedPaint>,
-    pub(crate) cached_viewport: (u32, u32),
+    /// Per-node paint memo behind `cached_paint`; re-emits only nodes whose inputs changed.
+    pub(crate) paint_nodes: scroll::PaintNodeCache,
+    pub(crate) cached_layout_key: Option<LayoutKey>,
+    /// Hash of the bounding-shape spans last applied to `window` (None = unknown/clipped).
+    pub(crate) shape_applied: std::cell::Cell<Option<u64>>,
     pub(crate) pending_damage: SurfaceDamage,
+    /// Region painting for the opaque subset; `FLAMEWM_RENDER_REGION=0` forces Full.
+    pub(crate) region_paint: bool,
+    /// A Full damage latch was consumed into the next redraw.
+    pub(crate) region_force_full: bool,
+    /// The backbuffer holds the last fully presented frame (region base).
+    pub(crate) region_base_valid: bool,
+    /// Region being repainted: Xft text is clipped to it. None on the Full path.
+    pub(crate) region_text_clip: Option<damage_plan::PixelRegion>,
+    /// An input event was handled and the next redraw must run through the planner.
+    pub(crate) input_repaint: bool,
+    pub(crate) render_counters: damage_plan::RedrawCounters,
     /// Pixmap currently bound via XSetWindowBackgroundPixmap (0 = none).
     /// Only ever a fully painted backbuffer; never an unpainted replacement.
     pub(crate) background_bound: Pixmap,
@@ -196,6 +229,8 @@ pub(crate) struct X11App {
     pub(crate) pending_window_resize: Option<(u32, u32)>,
     /// Trailing wake ending the quiet period of a frozen window snapshot (`window_backdrop`).
     pub(crate) backdrop_deadline: Option<std::time::Instant>,
+    /// Window backdrop generation the backbuffer was last painted over (`window_backdrop`).
+    pub(crate) window_backdrop_painted: Option<u64>,
     pub(crate) node_backdrops: surface_backdrop::NodeBackdropCache,
     pub(crate) pointer_button: Option<u32>,
     pub(crate) pointer_grabbed: bool,
@@ -518,12 +553,10 @@ impl X11App {
             PresentationState::CreatedHidden
         };
 
-        if initially_visible {
-            unsafe {
+        unsafe {
+            if initially_visible {
                 XMapWindow(display, window);
             }
-        }
-        unsafe {
             XFlush(display);
         }
         let picture =
@@ -572,18 +605,29 @@ impl X11App {
             height: config.height.max(1),
             presentation,
             clip_stack: Vec::new(),
+            gc_clip: None,
             range_drag: None,
             interaction: InteractionState::default(),
             layout: None,
             cached_paint: None,
-            cached_viewport: (config.width.max(1), config.height.max(1)),
+            paint_nodes: Default::default(),
+            cached_layout_key: None,
+            shape_applied: std::cell::Cell::new(None),
             pending_damage: SurfaceDamage::Full,
+            // Default on for the harness-proven opaque subset; FLAMEWM_RENDER_REGION=0 forces Full.
+            region_paint: std::env::var_os("FLAMEWM_RENDER_REGION").is_none_or(|v| v != "0"),
+            region_force_full: false,
+            region_base_valid: false,
+            region_text_clip: None,
+            input_repaint: false,
+            render_counters: damage_plan::RedrawCounters::default(),
             background_bound: 0,
             retired_backbuffer: None,
             surface_backdrop: None,
             window_backdrop_pixmap: None,
             pending_window_resize: None,
             backdrop_deadline: None,
+            window_backdrop_painted: None,
             window_backdrop: config
                 .backdrop
                 .clone()

@@ -205,12 +205,11 @@ impl OsdController {
         &mut self,
         runtime: &mut SurfaceRuntime,
         level: Option<Level>,
-        work: Rect,
-        scale: f32,
+        target: impl FnOnce() -> (Rect, f32),
         settings: Option<&SettingsSnapshot>,
         now: Instant,
     ) -> Result<(), UiBackendError> {
-        let result = self.observe(runtime, level, work, scale, settings, now);
+        let result = self.observe(runtime, level, target, settings, now);
         result.and_then(|()| self.expire(runtime, now))
     }
 
@@ -218,8 +217,7 @@ impl OsdController {
         &mut self,
         runtime: &mut SurfaceRuntime,
         level: Option<Level>,
-        work: Rect,
-        scale: f32,
+        target: impl FnOnce() -> (Rect, f32),
         settings: Option<&SettingsSnapshot>,
         now: Instant,
     ) -> Result<(), UiBackendError> {
@@ -229,6 +227,8 @@ impl OsdController {
         if !self.state.observe(level, now) {
             return Ok(());
         }
+        // The output lookup runs only when the card shows, so idle ticks allocate nothing.
+        let (work, scale) = target();
         let surface = match self.surface {
             Some(surface) => surface,
             None => {

@@ -1,6 +1,4 @@
-use flamewm_render_core::{ActionEvent, ActionPhase, PointerButton, ScrollDelta};
-
-use flamewm_ui::{ActionId, UiEvent, WidgetId};
+use flamewm_render_core::{ActionEvent, PointerButton, ScrollDelta};
 
 /// Translate a raw X button once at the native boundary.
 pub fn pointer_button_from_raw(button: u32) -> PointerButton {
@@ -36,24 +34,4 @@ pub struct SurfaceEvent {
 pub struct UiInputEvent {
     pub surface: crate::SurfaceHandle,
     pub action: ActionEvent,
-}
-
-pub fn surface_event_to_ui_event(event: &SurfaceEvent) -> Option<UiEvent> {
-    action_to_ui_event(&event.action)
-}
-
-pub(crate) fn action_to_ui_event(event: &ActionEvent) -> Option<UiEvent> {
-    if event.phase != ActionPhase::Release || !event.inside {
-        return None;
-    }
-    if let Some(text) = event.text.clone() {
-        return Some(UiEvent::TextChanged {
-            widget: WidgetId::new(&event.action),
-            text,
-        });
-    }
-    Some(UiEvent::Activate {
-        widget: WidgetId::new(&event.action),
-        action: ActionId::new(&event.action),
-    })
 }

@@ -57,11 +57,7 @@ fn holds_off_anchor(
         }
         match current(*client) {
             Some(now_anchor) if hold_still_anchored(*anchor, now_anchor) => true,
-            Some(_) => {
-                released.push(*client);
-                false
-            }
-            None => {
+            _ => {
                 released.push(*client);
                 false
             }

@@ -199,13 +199,14 @@ fn create_lock_surface(
     runtime: &mut SurfaceRuntime,
     settings: &LockSettings,
     root: Rect,
+    canvas: Option<&RuntimeImage>,
     rect: Rect,
     title: &str,
 ) -> Result<LockSurface, String> {
     let template = document::template()?;
     let width = rect.width.max(1) as u32;
     let height = rect.height.max(1) as u32;
-    let background = document::background_for_output(settings, root, rect);
+    let background = document::background_for_output(settings, root, rect, canvas);
     let handle = runtime
         .create_surface(
             template,
@@ -341,10 +342,12 @@ fn lock_on(
     };
     // Keep full-root coverage under the output surfaces so stale monitor geometry
     // after a layout change cannot reveal the desktop.
+    let canvas = document::shared_root_background(settings, root);
     let fallback = Some(create_lock_surface(
         runtime,
         settings,
         root,
+        canvas.as_ref(),
         root,
         "FlameWM lock coverage",
     )?);
@@ -356,6 +359,7 @@ fn lock_on(
                 runtime,
                 settings,
                 root,
+                canvas.as_ref(),
                 *rect,
                 &format!("FlameWM lock {}", index + 1),
             )
@@ -366,6 +370,7 @@ fn lock_on(
             runtime,
             settings,
             root,
+            canvas.as_ref(),
             root,
             "FlameWM lock",
         )?);
@@ -399,6 +404,9 @@ fn lock_on(
         power_tx,
         power_rx,
         shown_power: None,
+        painted_key: None,
+        settings_revision: 0,
+        power_revision: 0,
         saver: Screensaver::new(settings.saver.clone()),
         frames: None,
         background_stale: false,
@@ -475,6 +483,18 @@ fn lock_on(
     }
 }
 
+/// Every input the lock projection reads. Equal keys mean the last paint is still current.
+/// `settings_revision` and `power_revision` are bumped wherever those inputs change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PaintKey {
+    time: Option<crate::native_time::LocalTime>,
+    password_len: usize,
+    status: crate::state::Status,
+    caps_lock: bool,
+    settings_revision: u32,
+    power_revision: u32,
+}
+
 struct LockLoop {
     surfaces: Vec<LockSurface>,
     fallback: Option<LockSurface>,
@@ -490,6 +510,10 @@ struct LockLoop {
     power_tx: Sender<PowerEvent>,
     power_rx: Receiver<PowerEvent>,
     shown_power: Option<PowerView>,
+    /// Inputs of the last successful paint; `shown` is reset to `None` to force a repaint.
+    painted_key: Option<PaintKey>,
+    settings_revision: u32,
+    power_revision: u32,
     saver: Screensaver,
     frames: Option<Vec<RibbonFrames>>,
     /// Set when the wallpaper restore was refused; the next turn outside Ribbons retries.
@@ -718,17 +742,24 @@ impl LockLoop {
         self.live_typography_dirty |= typography_changed(&self.settings, &settings);
         self.live_background_dirty |= background_changed(&self.settings, &settings);
         self.settings = settings;
+        self.settings_revision += 1;
     }
 
     fn sync_live_settings(&mut self, runtime: &mut SurfaceRuntime) {
         if !self.live_typography_dirty && !self.live_background_dirty {
             return;
         }
-        let settings = self.settings.clone();
+        // Borrow the settings field directly: `surfaces` and `fallback` are disjoint fields.
+        let settings = &self.settings;
         let root = self.root;
         let typography_dirty = self.live_typography_dirty;
         let background_dirty = self.live_background_dirty;
         let update_visible_background = self.saver.phase() != Phase::RibbonsActive;
+        let canvas = if background_dirty {
+            document::shared_root_background(&settings, root)
+        } else {
+            None
+        };
         let mut typography_ok = true;
         let mut background_ok = true;
         for surface in self.surfaces.iter_mut().chain(self.fallback.iter_mut()) {
@@ -741,7 +772,8 @@ impl LockLoop {
                 typography_ok &= result.is_ok();
             }
             if background_dirty {
-                let background = document::background_for_output(&settings, root, surface.rect);
+                let background =
+                    document::background_for_output(&settings, root, surface.rect, canvas.as_ref());
                 surface.base_background = background.clone();
                 if update_visible_background {
                     let result = runtime
@@ -777,11 +809,13 @@ impl LockLoop {
 
     fn rebuild_output_surfaces(&mut self, runtime: &mut SurfaceRuntime, rects: Vec<Rect>) -> bool {
         let mut rebuilt = Vec::with_capacity(rects.len());
+        let canvas = document::shared_root_background(&self.settings, self.root);
         for (index, rect) in rects.iter().enumerate() {
             match create_lock_surface(
                 runtime,
                 &self.settings,
                 self.root,
+                canvas.as_ref(),
                 *rect,
                 &format!("FlameWM lock {}", index + 1),
             ) {
@@ -840,7 +874,9 @@ impl LockLoop {
         let Some(fallback) = self.fallback.as_mut() else {
             return false;
         };
-        let background = document::background_for_output(&self.settings, root, root);
+        let canvas = document::shared_root_background(&self.settings, root);
+        let background =
+            document::background_for_output(&self.settings, root, root, canvas.as_ref());
         if let Err(error) = runtime.move_resize(fallback.handle, root.x, root.y, width, height) {
             eprintln!("flamewm-lock: resize root coverage failed; retaining prior lock: {error:?}");
             return false;
@@ -1059,6 +1095,12 @@ impl LockLoop {
 
     /// Feeds one event to the power reducer; a requested action runs on a worker thread.
     fn power_event(&mut self, event: PowerEvent) {
+        // A tick only changes the power view while an error message is on screen (TTL expiry).
+        let visible_change = !matches!(event, PowerEvent::Tick(_))
+            || self.shown_power.as_ref().is_some_and(|shown| !shown.message.is_empty());
+        if visible_change {
+            self.power_revision += 1;
+        }
         if let PowerEffect::Perform(action) = self.power.handle(event) {
             power::perform_on_worker(action, self.power_tx.clone());
         }
@@ -1088,9 +1130,20 @@ impl LockLoop {
         if self.saver.phase() != Phase::Visible {
             return;
         }
+        let key = PaintKey {
+            time: local_now(),
+            password_len: self.state.password().len(),
+            status: self.state.status(),
+            caps_lock: self.caps_lock,
+            settings_revision: self.settings_revision,
+            power_revision: self.power_revision,
+        };
+        if self.shown.is_some() && self.painted_key == Some(key) {
+            return;
+        }
         let mut view = LockView::project(
             &self.settings,
-            local_now(),
+            key.time,
             &self.username,
             self.state.password(),
             self.state.status(),
@@ -1102,6 +1155,7 @@ impl LockLoop {
         let view_changed = self.shown.as_ref() != Some(&view);
         let power_changed = self.shown_power.as_ref() != Some(&power);
         if !view_changed && !power_changed {
+            self.painted_key = Some(key);
             return;
         }
         let painted = keep_lock_step("repaint lock surface", || {
@@ -1152,6 +1206,7 @@ impl LockLoop {
         if painted {
             self.shown = Some(view);
             self.shown_power = Some(power);
+            self.painted_key = Some(key);
         }
     }
 }
@@ -1383,6 +1438,15 @@ mod tests {
         assert!(body("fn enter(").contains("ui_shown_wanted = false"));
         assert!(body("fn wake(").contains("ui_shown_wanted = true"));
         assert!(body("fn sync_ui_visibility(").contains("set_lock_ui_shown(view, shown)"));
+    }
+
+    /// The projection is skipped only while the paint key matches; every input bumps a revision.
+    #[test]
+    fn repaint_skips_projection_on_unchanged_paint_key() {
+        let body = method_body;
+        assert!(body("fn repaint(").contains("self.painted_key == Some(key)"));
+        assert!(body("fn power_event(").contains("self.power_revision += 1"));
+        assert!(body("fn update_live_settings(").contains("self.settings_revision += 1"));
     }
 
     /// A refused wallpaper restore must stay pending and be retried; a success clears it.

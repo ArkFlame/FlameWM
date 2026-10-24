@@ -47,16 +47,6 @@ impl SliderState {
     pub const fn value(self) -> i32 {
         self.value
     }
-    pub fn set_range(&mut self, a: i32, b: i32) -> bool {
-        let next_min = a.min(b);
-        let next_max = a.max(b);
-        let next_value = self.value.clamp(next_min, next_max);
-        let changed = (self.minimum, self.maximum, self.value) != (next_min, next_max, next_value);
-        self.minimum = next_min;
-        self.maximum = next_max;
-        self.value = next_value;
-        changed
-    }
     pub fn set_value(&mut self, value: i32) -> bool {
         let next = value.clamp(self.minimum, self.maximum);
         if next == self.value {

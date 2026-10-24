@@ -8,6 +8,7 @@ extern crate pulse as libpulse_binding;
 pub mod icon_service;
 pub mod icon_theme;
 pub mod icons;
+pub mod device_watch;
 pub mod job_view;
 pub mod media_store;
 pub mod mpris;
@@ -17,6 +18,7 @@ pub mod notifications;
 pub mod portal_file_chooser;
 pub mod power;
 pub mod pulse;
+pub mod removable_mounts;
 pub mod themes;
 
 pub use icon_service::{
@@ -36,6 +38,7 @@ pub use power::PowerProvider;
 use flamewm_api::FlameResult;
 use flamewm_api::system::{MediaSnapshot, NetworkSnapshot, PowerSnapshot, SystemAction};
 use flamewm_dbus_reactor::BusWatch;
+use removable_mounts::RemovableMountWorker;
 
 /// Which D-Bus source reported readiness to the desktop reactor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +53,7 @@ pub struct LinuxIntegrationRuntime {
     network_manager: NetworkManagerSlot,
     mpris: MprisProvider,
     power: PowerProvider,
+    removable_mounts: Option<RemovableMountWorker>,
     started: bool,
 }
 
@@ -60,6 +64,7 @@ impl LinuxIntegrationRuntime {
             network_manager: NetworkManagerSlot::connect()?,
             mpris: MprisProvider::connect()?,
             power: PowerProvider::connect()?,
+            removable_mounts: None,
             started: false,
         })
     }
@@ -72,12 +77,14 @@ impl LinuxIntegrationRuntime {
         self.network_manager.start()?;
         self.mpris.start()?;
         self.power.start();
+        self.removable_mounts = Some(RemovableMountWorker::start());
         self.started = true;
         Ok(())
     }
 
     /// Stop publication and invalidate provider-local generations.
     pub fn stop(&mut self) {
+        self.removable_mounts = None;
         self.power.stop();
         self.mpris.stop();
         self.network_manager.stop();

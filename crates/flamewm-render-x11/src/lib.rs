@@ -9,6 +9,7 @@ mod xlib_ext;
 mod xrender;
 mod xrender_aa;
 mod xrender_transform;
+mod text_mask_cache;
 mod xshape;
 
 pub use lamp::PanelEdge;

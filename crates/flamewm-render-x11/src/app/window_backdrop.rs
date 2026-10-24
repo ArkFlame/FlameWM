@@ -119,6 +119,10 @@ pub(crate) struct WindowBackdropState {
     pub(crate) captured: Option<CapturedSnapshot>,
     /// Mirror-extended fill of `captured` for the last (size, origin); reused while it matches.
     pub(crate) mirror: Option<MirrorFill>,
+    /// Bumped exactly when the window backdrop pixels change: a new or different snapshot, its
+    /// removal, a root stack change, or a move or resize. A backbuffer painted at generation `g`
+    /// holds this backdrop only while the generation is still `g`.
+    pub(crate) generation: u64,
 }
 
 /// Blurred ARGB snapshot as uploaded, with the root position of its top-left pixel.
@@ -163,6 +167,7 @@ impl WindowBackdropState {
             deferred_logged: false,
             captured: None,
             mirror: None,
+            generation: 0,
         }
     }
 }
@@ -175,6 +180,7 @@ impl X11App {
         if let Some(state) = self.window_backdrop.as_mut() {
             state.stale = true;
             state.desktop_stale = true;
+            state.generation += 1;
             self.backdrop_deadline = Some(Instant::now() + CAPTURE_QUIET);
         }
     }
@@ -198,6 +204,7 @@ impl X11App {
             if let Some(state) = self.window_backdrop.as_mut() {
                 state.desktop_stale = true;
                 state.stale = true;
+                state.generation += 1;
             }
         }
         let root = unsafe { self.root_size() };
@@ -250,11 +257,11 @@ impl X11App {
                             .as_ref()
                             .map(|state| state.spec.blur_percent)
                             .unwrap_or(0);
-                        let pixels = desktop.pixels.clone();
+                        // The raw copy is dropped below, so its pixels move into the blur.
                         let words = blurred_argb_words(
                             desktop.width,
                             desktop.height,
-                            pixels,
+                            desktop.pixels,
                             0,
                             blur_percent,
                         );
@@ -408,7 +415,9 @@ impl X11App {
         let Some(state) = self.window_backdrop.as_ref() else {
             return false;
         };
-        if state.desktop.is_none()
+        // Probing needs a clean root to compare against: the readback leaves `blurred_root`, not
+        // `desktop` (which is dropped after the read), so the test must use `blurred_root`.
+        if state.blurred_root.is_none()
             || state
                 .scene_probe_at
                 .is_some_and(|at| at.elapsed() < SCENE_PROBE_INTERVAL)
@@ -445,13 +454,11 @@ impl X11App {
                 &mut count,
             )
         };
-        let mut out = Vec::new();
-        if !children.is_null() {
-            for index in 0..count.max(0) as usize {
-                out.push(unsafe { *children.add(index) });
-            }
-            unsafe { XFree(children.cast()) };
+        if children.is_null() {
+            return Vec::new();
         }
+        let out = unsafe { std::slice::from_raw_parts(children, count.max(0) as usize) }.to_vec();
+        unsafe { XFree(children.cast()) };
         out
     }
 
@@ -544,28 +551,48 @@ impl X11App {
         if words.len() != width as usize * height as usize {
             return Err("window backdrop: snapshot size mismatch".to_string());
         }
+        // The cached mirror was made from the previous snapshot.
+        self.drop_mirror_fill();
+        // Same-size snapshots re-upload into the retained pixmap instead of a create/free pair.
+        let upload_span = flamewm_profiler::start("render.backdrop.upload");
+        let reuse = self
+            .window_backdrop_pixmap
+            .as_ref()
+            .filter(|old| (old.width, old.height) == (width, height))
+            .map(|old| old.pixmap);
+        // `None` means the retained pixmap was refreshed in place.
+        let upload = match reuse {
+            Some(pixmap) => unsafe { self.upload_argb_into_pixmap(pixmap, &words, width, height) }
+                .map(|()| None),
+            None => unsafe { self.upload_argb_pixmap(&words, width, height) }.map(Some),
+        };
+        drop(upload_span);
         if let Some(state) = self.window_backdrop.as_mut() {
+            // The pixels change only when the snapshot, its origin or its size does.
+            let changed = state.captured.as_ref().is_none_or(|old| {
+                old.words != words || (old.width, old.height) != (width, height) || old.root != (rx, ry)
+            });
+            if changed {
+                state.generation += 1;
+            }
             state.captured = Some(CapturedSnapshot {
-                words: words.clone(),
+                words,
                 width,
                 height,
                 root: (rx, ry),
             });
         }
-        // The cached mirror was made from the previous snapshot.
-        self.drop_mirror_fill();
-        let upload_span = flamewm_profiler::start("render.backdrop.upload");
-        let pixmap = unsafe { self.upload_argb_pixmap(&words, width, height)? };
-        drop(upload_span);
-        if let Some(old) =
-            self.window_backdrop_pixmap
-                .replace(super::surface_backdrop::SurfaceBackdrop {
-                    pixmap,
-                    width,
-                    height,
-                })
-        {
-            unsafe { XFreePixmap(self.display, old.pixmap) };
+        if let Some(pixmap) = upload? {
+            if let Some(old) =
+                self.window_backdrop_pixmap
+                    .replace(super::surface_backdrop::SurfaceBackdrop {
+                        pixmap,
+                        width,
+                        height,
+                    })
+            {
+                unsafe { crate::native::xresource::free_pixmap_raw(self.display, old.pixmap) };
+            }
         }
         Ok(())
     }
@@ -655,10 +682,27 @@ impl X11App {
         })
     }
 
+    /// Whether the window snapshot the backbuffer was last painted over is still the current one
+    /// (same generation, same size). Only then may a region paint reuse the backbuffer's backdrop.
+    pub(crate) fn window_backdrop_unchanged(&self) -> bool {
+        self.window_backdrop_pixmap
+            .is_some_and(|b| (b.width, b.height) == (self.width, self.height))
+            && self.window_backdrop_painted.is_some()
+            && self.window_backdrop_painted == self.window_backdrop.as_ref().map(|s| s.generation)
+    }
+
+    /// Records the generation of the snapshot the backbuffer now holds (called after a paint).
+    pub(crate) fn record_window_backdrop_painted(&mut self) {
+        self.window_backdrop_painted = self
+            .window_backdrop_pixmap
+            .and(self.window_backdrop.as_ref())
+            .map(|state| state.generation);
+    }
+
     /// Frees the window snapshot, if any. Translucent fills then show as straight colour.
     pub(crate) fn clear_window_backdrop(&mut self) {
         if let Some(old) = self.window_backdrop_pixmap.take() {
-            unsafe { XFreePixmap(self.display, old.pixmap) };
+            unsafe { crate::native::xresource::free_pixmap_raw(self.display, old.pixmap) };
         }
         if let Some(state) = self.window_backdrop.as_mut() {
             state.desktop = None;
@@ -666,6 +710,9 @@ impl X11App {
             // A new read needs a new invalidation baseline.
             state.scene_children = None;
             state.deferred_at = None;
+            // The snapshot is gone: the next one is a change even if its pixels match.
+            state.captured = None;
+            state.generation += 1;
         }
         self.drop_mirror_fill();
     }
@@ -676,11 +723,11 @@ impl X11App {
         match self.window_backdrop.as_mut() {
             Some(state) => {
                 if let Some(old) = state.mirror.replace(fill) {
-                    unsafe { XFreePixmap(display, old.pixmap) };
+                    unsafe { crate::native::xresource::free_pixmap_raw(display, old.pixmap) };
                 }
             }
             None => {
-                unsafe { XFreePixmap(display, fill.pixmap) };
+                unsafe { crate::native::xresource::free_pixmap_raw(display, fill.pixmap) };
             }
         }
     }
@@ -689,7 +736,7 @@ impl X11App {
     pub(crate) fn drop_mirror_fill(&mut self) {
         let display = self.display;
         if let Some(old) = self.window_backdrop.as_mut().and_then(|s| s.mirror.take()) {
-            unsafe { XFreePixmap(display, old.pixmap) };
+            unsafe { crate::native::xresource::free_pixmap_raw(display, old.pixmap) };
         }
     }
 }

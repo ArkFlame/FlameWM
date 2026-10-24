@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 pub const ACTION_TOGGLE_START_MENU: &str = "ToggleStartMenu";
+pub const ACTION_LAUNCHER: &str = "Launcher";
 pub const ACTION_WORKSPACE_LEFT: &str = "WorkspaceLeft";
 pub const ACTION_WORKSPACE_RIGHT: &str = "WorkspaceRight";
 pub const ACTION_WORKSPACE_UP: &str = "WorkspaceUp";
@@ -8,6 +9,7 @@ pub const ACTION_WORKSPACE_DOWN: &str = "WorkspaceDown";
 pub const ACTION_WINDOW_CLOSE: &str = "WindowClose";
 pub const ACTION_WINDOW_MINIMIZE: &str = "WindowMinimize";
 pub const ACTION_WINDOW_MAXIMIZE: &str = "WindowMaximize";
+pub const ACTION_WINDOW_SWITCH: &str = "WindowSwitch";
 pub const ACTION_SESSION_LOCK: &str = "SessionLock";
 pub const ACTION_SCREENSHOT_FULL: &str = "ScreenshotFull";
 pub const ACTION_SCREENSHOT_REGION: &str = "ScreenshotRegion";

@@ -444,6 +444,13 @@ impl<'a> Reader<'a> {
         let value = self.u8()?;
         T::from_wire(value).ok_or_else(|| format!("invalid {} {value}", T::NAME))
     }
+    fn flag(&mut self, name: &str) -> Result<bool, String> {
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            v => Err(format!("invalid {name} {v}")),
+        }
+    }
     fn opt_style(&mut self, version: u16) -> Result<Option<Style>, String> {
         if self.u8()? != 0 {
             Ok(Some(self.style_versioned(version)?))
@@ -548,20 +555,12 @@ impl<'a> Reader<'a> {
                 TextWrap::NoWrap
             },
             break_anywhere: if version >= FORMAT_VERSION_TEXT_WRAP_LEGACY {
-                match self.u8()? {
-                    0 => false,
-                    1 => true,
-                    v => return Err(format!("invalid break anywhere {v}")),
-                }
+                self.flag("break anywhere")?
             } else {
                 false
             },
             hide_scrollbars: if version > FORMAT_VERSION_BLUR_LEGACY {
-                match self.u8()? {
-                    0 => false,
-                    1 => true,
-                    v => return Err(format!("invalid hide scrollbars {v}")),
-                }
+                self.flag("hide scrollbars")?
             } else {
                 false
             },
@@ -757,25 +756,13 @@ mod tests {
     }
 
     #[test]
-    fn v4_roundtrip_preserves_original_treatment() {
-        let document = roundtrip_node(ImageTreatment::Original);
-        let decoded = decode(&encode(&document).unwrap()).unwrap();
-        assert_eq!(decoded, document);
-        assert_eq!(
-            decoded.nodes[0].style.image_treatment,
-            ImageTreatment::Original
-        );
-    }
-
-    #[test]
-    fn v4_roundtrip_preserves_symbolic_treatment() {
-        let document = roundtrip_node(ImageTreatment::SymbolicForeground);
-        let decoded = decode(&encode(&document).unwrap()).unwrap();
-        assert_eq!(decoded, document);
-        assert_eq!(
-            decoded.nodes[0].style.image_treatment,
-            ImageTreatment::SymbolicForeground
-        );
+    fn v4_roundtrip_preserves_image_treatment() {
+        for treatment in [ImageTreatment::Original, ImageTreatment::SymbolicForeground] {
+            let document = roundtrip_node(treatment);
+            let decoded = decode(&encode(&document).unwrap()).unwrap();
+            assert_eq!(decoded, document);
+            assert_eq!(decoded.nodes[0].style.image_treatment, treatment);
+        }
     }
 
     #[test]

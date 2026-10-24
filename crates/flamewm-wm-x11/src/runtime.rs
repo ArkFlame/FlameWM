@@ -462,7 +462,10 @@ fn run_session(
             let display_before = host.cached_display_snapshot();
             let panels_before = host.panels_snapshot();
             // RandR hotplug/mode notifications mark the topology dirty.
-            if wm.take_display_topology_dirty() {
+            // While a fullscreen client holds a temporary mode, the desktop stays at its recorded
+            // geometry: skip the snapshot refresh but still consume the topology flag.
+            let desktop_held = wm.observe_desktop_mode();
+            if wm.take_display_topology_dirty() && !desktop_held {
                 match host.display_snapshot() {
                     Ok(displays) => {
                         if let Err(error) = host.resync_panels_for_displays(&displays) {
@@ -597,6 +600,7 @@ where
     // Take the one-shot start-menu request out of the drained set so it is emitted
     // exactly once for this turn and never carried into a later flush.
     let start_menu_toggle = std::mem::take(&mut changes.start_menu_toggle);
+    let launcher_toggle = std::mem::take(&mut changes.launcher_toggle);
     let media_audio_key = changes.media_audio_key.take();
     for signal in collect_wm_signals(host, changes).map_err(any_from_flame)? {
         control.emit_signal(&signal).map_err(any_from_flame)?;
@@ -604,6 +608,11 @@ where
     if start_menu_toggle {
         control
             .emit_signal(&ControlSignal::StartMenuToggleRequested)
+            .map_err(any_from_flame)?;
+    }
+    if launcher_toggle {
+        control
+            .emit_signal(&ControlSignal::LauncherToggleRequested)
             .map_err(any_from_flame)?;
     }
     if let Some(key) = media_audio_key {
@@ -1205,6 +1214,7 @@ mod tests {
             panels,
             work_area: false,
             start_menu_toggle: false,
+            launcher_toggle: false,
             media_audio_key: None,
         }
     }

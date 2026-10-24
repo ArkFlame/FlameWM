@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(for f in crates/flamewm-explorer/src/appicon.rs crates/flamewm-image-core/src/ico.rs crates/flamewm-image-core/src/lib.rs crates/flamewm-render-x11/src/app/window_backdrop.rs crates/flamewm-wm-x11/src/wm/transition.rs; do rustfmt --edition 2024 --config skip_children=true --check \"$f\" >/dev/null 2>&1; echo \"$? $f\"; done)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

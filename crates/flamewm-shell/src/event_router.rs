@@ -503,6 +503,35 @@ impl ShellLoop {
             return Ok(());
         }
 
+        // Launcher owns text, navigation and row activation while open. Escape is
+        // handled above by the generic keyboard path (close_transients).
+        if action == "keyboard.input"
+            && event.action.phase == ActionPhase::Release
+            && event.action.inside
+            && self.route_launcher_text(
+                runtime,
+                event.action.text.as_deref().unwrap_or_default(),
+            )?
+        {
+            return Ok(());
+        }
+        if action == "__flamewm.ui.key" && event.action.phase == ActionPhase::Press {
+            let payload = event.action.text.as_deref().unwrap_or_default();
+            if self.route_launcher_key(runtime, payload)? {
+                return Ok(());
+            }
+        }
+        if let Some(slot) = slot_of(action, "launcher.app.") {
+            if event.action.inside {
+                match event.action.phase {
+                    ActionPhase::Release => self.click_launcher_row(runtime, slot)?,
+                    ActionPhase::Hover => self.route_launcher_hover(runtime, slot)?,
+                    _ => {}
+                }
+            }
+            return Ok(());
+        }
+
         if action == "keyboard.input"
             && event.action.phase == ActionPhase::Release
             && event.action.inside
@@ -1026,7 +1055,7 @@ mod tests {
             .expect("route_event origin handling exists");
 
         let mut missing_contracts = Vec::new();
-        if !controls.contains("open_start_group_for_output(runtime, &target_output)") {
+        if !controls.contains("open_start_surface(runtime, &target_output, started)") {
             missing_contracts
                 .push("an already-open Start must transfer to the newly requested output");
         }

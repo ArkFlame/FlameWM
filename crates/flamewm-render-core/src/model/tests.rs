@@ -37,6 +37,66 @@ fn fixture_document(nodes: Vec<CompiledNode>, assets: Vec<ImageAsset>) -> Runtim
 }
 
 #[cfg(test)]
+mod paint_revision_tests {
+    use super::*;
+
+    #[test]
+    fn paint_only_color_edits_keep_layout_revision_and_full_damage() {
+        let mut doc = fixture_document(
+            vec![fixture_node(NodeKind::Element, "box", "", None)],
+            vec![],
+        );
+        let _ = doc.take_damage();
+        let (layout_rev, rev) = (doc.layout_revision(), doc.revision());
+        for step in 0..50u32 {
+            let color = if step % 2 == 0 {
+                Color::BLACK
+            } else {
+                Color::TRANSPARENT
+            };
+            doc.set_background_color("box", color).expect("background");
+        }
+        assert_eq!(
+            doc.layout_revision(),
+            layout_rev,
+            "color edits must not relayout"
+        );
+        assert_eq!(
+            doc.revision(),
+            rev + 50,
+            "every color change still repaints"
+        );
+        assert_eq!(
+            doc.peek_damage(),
+            SurfaceDamage::Full,
+            "damage must not be lost"
+        );
+        let _ = doc.take_damage();
+        doc.set_background_color("box", Color::TRANSPARENT)
+            .expect("background");
+        assert_eq!(doc.revision(), rev + 50, "same-value color is a no-op");
+        assert_eq!(doc.peek_damage(), SurfaceDamage::None);
+    }
+
+    #[test]
+    fn geometry_and_text_edits_still_bump_layout_revision() {
+        let mut doc = fixture_document(
+            vec![fixture_node(NodeKind::Element, "box", "", None)],
+            vec![],
+        );
+        let layout_rev = doc.layout_revision();
+        doc.set_size_px("box", 33.0, 17.0).expect("size");
+        assert_eq!(doc.layout_revision(), layout_rev + 1);
+        doc.set_border_color("box", Color::BLACK).expect("border");
+        assert_eq!(
+            doc.layout_revision(),
+            layout_rev + 1,
+            "border color is paint-only"
+        );
+    }
+}
+
+#[cfg(test)]
 mod ui_scale_tests {
     use super::*;
 
@@ -146,6 +206,54 @@ mod ui_scale_tests {
             assert!(style.font_weight >= 600);
         }
         assert!(document.set_ui_font_defaults(f32::NAN, false).is_err());
+    }
+
+    #[test]
+    fn bench_setter_revisions_and_damage() {
+        let mut document = labelled_document();
+        let _ = document.take_damage();
+        let start = document.revision();
+        document.set_text("label", "bench-0").expect("first text");
+        let first_text_revs = document.revision() - start;
+        let _ = document.take_damage();
+        let before = document.revision();
+        for _ in 0..10 {
+            document.set_text("label", "bench-0").expect("identical text");
+        }
+        let identical_text_revs = document.revision() - before;
+        let identical_text_damage = document.take_damage();
+
+        let mut clickable = clickable_document();
+        clickable
+            .set_background_color("button", Color::rgb(1, 2, 3))
+            .expect("first paint");
+        let _ = clickable.take_damage();
+        let before = clickable.revision();
+        for _ in 0..10 {
+            clickable
+                .set_background_color("button", Color::rgb(1, 2, 3))
+                .expect("identical paint");
+        }
+        let identical_paint_revs = clickable.revision() - before;
+        let identical_paint_damage = clickable.take_damage();
+        clickable
+            .set_background_color("button", Color::rgb(9, 9, 9))
+            .expect("paint-only change");
+        let paint_revs = clickable.revision() - before;
+        let paint_damage = clickable.peek_damage();
+        eprintln!(
+            "BENCH render_first_text_revisions={first_text_revs} render_identical_text_x10_revisions={identical_text_revs} \
+             render_identical_text_x10_damage={identical_text_damage:?} render_identical_paint_x10_revisions={identical_paint_revs} \
+             render_identical_paint_x10_damage={identical_paint_damage:?} render_paint_only_change_revisions={paint_revs} \
+             render_paint_only_change_damage={paint_damage:?}"
+        );
+        assert_eq!(first_text_revs, 1);
+        assert_eq!(identical_text_revs, 0);
+        assert_eq!(identical_text_damage, SurfaceDamage::None);
+        assert_eq!(identical_paint_revs, 0);
+        assert_eq!(identical_paint_damage, SurfaceDamage::None);
+        assert_eq!(paint_revs, 1);
+        assert_eq!(paint_damage, SurfaceDamage::Full);
     }
 
     #[test]
@@ -458,6 +566,69 @@ mod idempotent_mutation_tests {
         let revision = doc.revision();
         let _ = doc.take_damage();
         doc.set_text("label", "13:00").expect("same override");
+        assert_eq!(doc.revision(), revision);
+        assert_eq!(doc.peek_damage(), SurfaceDamage::None);
+    }
+
+    #[test]
+    fn style_setters_same_value_keep_revision_and_damage() {
+        let mut doc = fixture();
+        let red = Color::rgb(255, 0, 0);
+        doc.set_background_color("label", red).expect("first");
+        doc.set_border_color("label", red).expect("first");
+        doc.set_node_backdrop("label", Some(20)).expect("first");
+        doc.set_border_radius("label", 4.0).expect("first");
+        let _ = doc.take_damage();
+        let revision = doc.revision();
+
+        doc.set_background_color("label", red).expect("same");
+        doc.set_border_color("label", red).expect("same");
+        doc.set_node_backdrop("label", Some(20)).expect("same");
+        doc.set_border_radius("label", 4.0).expect("same");
+        doc.clear_foreground_color("label").expect("already unset");
+        assert_eq!(doc.revision(), revision);
+        assert_eq!(doc.peek_damage(), SurfaceDamage::None);
+
+        doc.clear_background_color("label").expect("clear");
+        assert_eq!(doc.revision(), revision.wrapping_add(1));
+        doc.clear_background_color("label").expect("already clear");
+        assert_eq!(doc.revision(), revision.wrapping_add(1));
+    }
+
+    #[test]
+    fn text_style_setters_bump_revision_only_on_change() {
+        let mut doc = fixture();
+        let _ = doc.take_damage();
+        let revision = doc.revision();
+
+        doc.set_font_size_px("label", 14.0).expect("size");
+        assert_eq!(doc.revision(), revision.wrapping_add(1));
+        assert_eq!(doc.peek_damage(), SurfaceDamage::Full);
+        let _ = doc.take_damage();
+        let revision = doc.revision();
+
+        doc.set_font_size_px("label", 14.0).expect("same size");
+        doc.set_font_weight("label", 700).expect("weight");
+        assert_eq!(doc.revision(), revision.wrapping_add(1));
+        let _ = doc.take_damage();
+        let revision = doc.revision();
+
+        doc.set_font_weight("label", 700).expect("same weight");
+        doc.set_overflow("label", Overflow::Hidden, Overflow::Visible)
+            .expect("overflow");
+        assert_eq!(doc.revision(), revision.wrapping_add(1));
+        let _ = doc.take_damage();
+        let revision = doc.revision();
+
+        doc.set_overflow("label", Overflow::Hidden, Overflow::Visible)
+            .expect("same overflow");
+        let red = ColorValue::Literal(Color::rgb(255, 0, 0));
+        doc.set_foreground_color("label", red).expect("color");
+        assert_eq!(doc.revision(), revision.wrapping_add(1));
+        let _ = doc.take_damage();
+        let revision = doc.revision();
+
+        doc.set_foreground_color("label", red).expect("same color");
         assert_eq!(doc.revision(), revision);
         assert_eq!(doc.peek_damage(), SurfaceDamage::None);
     }

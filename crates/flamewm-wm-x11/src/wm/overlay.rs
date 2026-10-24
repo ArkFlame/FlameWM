@@ -109,17 +109,6 @@ impl<'a, C: Connection> Wm<'a, C> {
                     direction,
                 )
             }
-            // Window-open Scale is a single affine scale of the complete frame.
-            // The old default branch accidentally invoked the Magic Lamp band
-            // warp, dropping the upper content while the window emerged.
-            (Effect::Open, animation::Style::Scale) => renderer.borrow().open_warp_overlay_styled(
-                capture,
-                source,
-                warp_rect(target),
-                PanelEdge::Bottom,
-                TransitionStyle::Stretch,
-                TransitionDirection::In,
-            ),
             (Effect::Maximize | Effect::Unmaximize, animation::Style::Fade) => {
                 renderer.borrow().open_warp_overlay_styled(
                     capture,
@@ -130,7 +119,10 @@ impl<'a, C: Connection> Wm<'a, C> {
                     TransitionDirection::In,
                 )
             }
-            (
+            // Window-open Scale is a single affine scale of the complete frame. The old default
+            // branch accidentally invoked the Magic Lamp band warp, dropping the upper content.
+            (Effect::Open, animation::Style::Scale)
+            | (
                 Effect::Maximize | Effect::Unmaximize,
                 animation::Style::Scale | animation::Style::MagicLamp,
             ) => renderer.borrow().open_warp_overlay_styled(
@@ -222,15 +214,11 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         // Fade is a crossfade of the window rect, which works with or without a compositing manager.
-        if self.animator.style(Effect::Open) == animation::Style::Fade {
-            if self.open_overlay(client, Effect::Open).is_err() {
-                self.animator.cancel(client);
-            }
-            return Ok(());
-        }
-        // Without a compositing manager the transparent fade would show black, so the open uses
-        // the opaque warp from a smaller rect, the same backdrop path as minimize.
-        if !renderer.borrow().warp_argb_usable() {
+        // Without one, a transparent fade would show black, so the open uses the opaque warp from a
+        // smaller rect, the same backdrop path as minimize.
+        if self.animator.style(Effect::Open) == animation::Style::Fade
+            || !renderer.borrow().warp_argb_usable()
+        {
             if self.open_overlay(client, Effect::Open).is_err() {
                 self.animator.cancel(client);
             }

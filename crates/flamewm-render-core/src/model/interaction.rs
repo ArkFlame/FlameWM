@@ -80,10 +80,12 @@ impl RuntimeDocument {
     /// Damage bookkeeping: merge coverage (max), take clears the latch.
     pub fn mark_dirty(&mut self, damage: SurfaceDamage) {
         self.pending_damage = self.pending_damage.merge(damage);
+        self.dirty.full = true;
     }
 
     pub fn mark_full(&mut self) {
         self.pending_damage = SurfaceDamage::Full;
+        self.dirty.full = true;
     }
 
     pub fn take_damage(&mut self) -> SurfaceDamage {
@@ -141,16 +143,14 @@ pub struct InteractionState {
 
 impl InteractionState {
     pub fn style_for<'a>(&self, index: u32, node: &'a CompiledNode) -> &'a Style {
-        if self.active == Some(index) {
-            if let Some(style) = node.active_style.as_ref() {
-                return style;
-            }
-        }
-        if self.hover == Some(index) {
-            if let Some(style) = node.hover_style.as_ref() {
-                return style;
-            }
-        }
-        &node.style
+        node.active_style
+            .as_deref()
+            .filter(|_| self.active == Some(index))
+            .or_else(|| {
+                node.hover_style
+                    .as_deref()
+                    .filter(|_| self.hover == Some(index))
+            })
+            .unwrap_or(&node.style)
     }
 }

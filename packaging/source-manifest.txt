@@ -37,6 +37,8 @@ xephyr
 @exec scripts/version
 @exec scripts/build-deb
 @exec scripts/check-cargo
+@exec scripts/dev-lane
+@exec scripts/dev-deb
 @exec scripts/settings-installed-acceptance
 @exec scripts/appearance-acceptance
 @exec scripts/lamp-acceptance
@@ -59,6 +61,8 @@ xephyr
 @exec tools/verify_rwr_promotion.py
 @exec tools/performance_retention.py
 @exec tools/bench-flamewm-memory.py
+@exec tools/fast-bench.sh
+@exec tools/bench-cargo-build.sh
 @exec .vendor/RustWebRender-0.0.9/verify-visual
 @exec .vendor/RustWebRender-0.0.9/doctor
 @exec .vendor/RustWebRender-0.0.9/xephyr

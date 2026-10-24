@@ -150,6 +150,52 @@ pub fn shadow_spans(rect: Rect) -> Vec<(u32, u32, u32)> {
         .collect()
 }
 
+/// Removes the part of `spans` (rows of `rect`) that lies inside `frame`, so the
+/// shadow window only shows outside the window. Rows beside the frame keep the
+/// full band; rows below it keep their full width, since that is the cast.
+#[must_use]
+pub fn clip_spans_outside_frame(
+    spans: Vec<(u32, u32, u32)>,
+    rect: Rect,
+    frame: Rect,
+) -> Vec<(u32, u32, u32)> {
+    let frame_bottom = frame.y + frame.height as i32;
+    let frame_right = frame.x + frame.width as i32;
+    let cut = (frame_right - rect.x).max(0) as u32;
+    spans
+        .into_iter()
+        .map(|(row, start, end)| {
+            let y = rect.y + row as i32;
+            if y >= frame.y && y < frame_bottom {
+                let start = start.max(cut).min(end);
+                (row, start, end)
+            } else {
+                (row, start, end)
+            }
+        })
+        .collect()
+}
+
+/// Keep factor (0..=256) for the shadow at root pixel `(x, y)` of `frame`'s shadow area: a
+/// channel is scaled by `keep / 256`. Pointwise, so a sub-region can be shaded on its own.
+#[must_use]
+pub fn keep_at(frame: Rect, focused: bool, x: i32, y: i32) -> u32 {
+    let peak = if focused {
+        PEAK_FOCUSED
+    } else {
+        PEAK_UNFOCUSED
+    };
+    let right_edge = frame.x + frame.width as i32;
+    let bottom_edge = frame.y + frame.height as i32;
+    let reach = (SPREAD + OFFSET).max(1) as f32;
+    let dx = (x - right_edge + 1).max(0);
+    let dy = (y - bottom_edge + 1).max(0);
+    let distance = dx.max(dy) as f32;
+    let t = (1.0 - distance / reach).max(0.0);
+    let alpha = peak * t * t;
+    (256.0 * (1.0 - alpha)) as u32
+}
+
 /// Darken the snapshot pixels (BGRX rows of `shadow_rect(frame)`) in place.
 /// Alpha is highest at the frame's right/bottom edge and falls off with the
 /// 45-degree cast distance, so the band reads as a simple drop shadow rather
@@ -160,24 +206,9 @@ pub fn shade_shadow(frame: Rect, focused: bool, pixels: &mut [u8]) {
     if w == 0 || h == 0 || pixels.len() != (w * h * 4) as usize {
         return;
     }
-    let peak = if focused {
-        PEAK_FOCUSED
-    } else {
-        PEAK_UNFOCUSED
-    };
-    let right_edge = frame.x + frame.width as i32;
-    let bottom_edge = frame.y + frame.height as i32;
-    let reach = (SPREAD + OFFSET).max(1) as f32;
     for row in 0..h {
         for col in 0..w {
-            let x = area.x + col;
-            let y = area.y + row;
-            let dx = (x - right_edge + 1).max(0);
-            let dy = (y - bottom_edge + 1).max(0);
-            let distance = dx.max(dy) as f32;
-            let t = (1.0 - distance / reach).max(0.0);
-            let alpha = peak * t * t;
-            let keep = (256.0 * (1.0 - alpha)) as u32;
+            let keep = keep_at(frame, focused, area.x + col, area.y + row);
             let at = ((row * w + col) * 4) as usize;
             for channel in &mut pixels[at..at + 3] {
                 *channel = ((u32::from(*channel) * keep) >> 8) as u8;
@@ -307,6 +338,21 @@ mod tests {
         let mut wrong = vec![200u8; 8];
         shade_shadow(FRAME, true, &mut wrong);
         assert!(wrong.iter().all(|&b| b == 200));
+    }
+
+    #[test]
+    fn clip_removes_only_the_part_under_the_frame() {
+        let area = shadow_rect(FRAME);
+        let spans = clip_spans_outside_frame(shadow_spans(area), area, FRAME);
+        let frame_right_in_area = (FRAME.x + FRAME.width as i32 - area.x) as u32;
+        let frame_bottom = FRAME.y + FRAME.height as i32;
+        for (row, start, end) in spans {
+            let y = area.y + row as i32;
+            if y >= FRAME.y && y < frame_bottom {
+                assert!(start >= frame_right_in_area, "row {row} starts inside frame");
+            }
+            assert!(start <= end);
+        }
     }
 
     #[test]

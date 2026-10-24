@@ -473,7 +473,7 @@ fn titlebar_in(
         // The final crop becomes the kept fallback for later paints at this place, and the
         // root-sized snapshot is freed: the release paint is served.
         if let Some(mut drag) = state.drag.take() {
-            if let Some(blurred) = drag.blurred.clone() {
+            if let Some(blurred) = drag.blurred.take() {
                 state.retained = Some((owner, blurred));
             }
             drag.snapshot.release();

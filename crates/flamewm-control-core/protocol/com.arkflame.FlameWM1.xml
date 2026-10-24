@@ -16,6 +16,7 @@
       <arg name="reply" type="s" direction="out"/>
     </method>
     <signal name="StartMenuToggleRequested"/>
+    <signal name="LauncherToggleRequested"/>
   </interface>
 
   <!-- Windows -->
