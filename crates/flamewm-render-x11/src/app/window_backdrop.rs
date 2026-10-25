@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use flamewm_image_core::RgbaImage;
 
 use super::X11App;
-use crate::backdrop::{WindowBackdrop, blurred_argb_words, recapture_due, wallpaper_file};
+use crate::backdrop::{BlurredCanvas, WindowBackdrop, recapture_due};
 use crate::xlib::*;
 use crate::xlib_ext::{XQueryTree, XTranslateCoordinates};
 
@@ -91,18 +91,19 @@ pub(crate) fn scene_changed(known: &[Window], probed: &[Window]) -> bool {
     known != probed
 }
 
-/// Per-window state: the spec, the decoded wallpaper cache, and whether a capture is due.
+/// Per-window state: the spec, the blurred root and wallpaper canvases, and whether a capture is
+/// due.
 #[derive(Debug)]
 pub(crate) struct WindowBackdropState {
     pub(crate) spec: WindowBackdrop,
-    natural: Option<RgbaImage>,
-    /// Root pixels as last read while the window could not be on the root (root-sized).
-    desktop: Option<RgbaImage>,
+    /// Blurred wallpaper under the whole root, the source while no root read is cached. Built once
+    /// per root size (see `backdrop::wallpaper_canvas`); the decoded wallpaper is never kept.
+    wallpaper: Option<BlurredCanvas>,
     /// The root changed since `desktop` was read (a move or resize of this window, or a change in
     /// the root's top-level stack). Only a safe read clears it.
     pub(crate) desktop_stale: bool,
-    /// Root read blurred once (root width, root height, ARGB words), cropped per move.
-    blurred_root: Option<(u32, u32, Vec<u32>)>,
+    /// Root read blurred once, cropped per move.
+    blurred_root: Option<BlurredCanvas>,
     /// When the root was last read (either variant); spaces reads by `CAPTURE_QUIET`.
     pub(crate) last_readback: Option<Instant>,
     pub(crate) stale: bool,
@@ -159,8 +160,7 @@ impl WindowBackdropState {
     pub(crate) fn new(spec: WindowBackdrop) -> Self {
         Self {
             spec,
-            natural: None,
-            desktop: None,
+            wallpaper: None,
             desktop_stale: true,
             blurred_root: None,
             last_readback: None,
@@ -263,7 +263,7 @@ impl X11App {
                 state
                     .blurred_root
                     .as_ref()
-                    .is_some_and(|(width, height, _)| (*width, *height) == root),
+                    .is_some_and(|canvas| canvas.size() == root),
                 state
                     .deferred_at
                     .is_some_and(|at| at.elapsed() < SCENE_PROBE_INTERVAL),
@@ -304,8 +304,8 @@ impl X11App {
                             .as_ref()
                             .map(|state| state.spec.blur_percent)
                             .unwrap_or(0);
-                        // The raw copy is dropped below, so its pixels move into the blur.
-                        let words = blurred_argb_words(
+                        // The raw copy moves into the blur; only the blurred canvas is kept.
+                        let canvas = BlurredCanvas::new(
                             desktop.width,
                             desktop.height,
                             desktop.pixels,
@@ -313,9 +313,7 @@ impl X11App {
                             blur_percent,
                         );
                         if let Some(state) = self.window_backdrop.as_mut() {
-                            // The blurred copy is the crop source; the raw root copy is redundant.
-                            state.desktop = None;
-                            state.blurred_root = Some((root.0, root.1, words));
+                            state.blurred_root = Some(canvas);
                             state.desktop_stale = false;
                             state.last_readback = Some(Instant::now());
                             state.scene_children = Some(scene);
@@ -364,11 +362,6 @@ impl X11App {
         if let Err(error) = unsafe { self.capture_window_backdrop(readback) } {
             eprintln!("FLAMEWM_WINDOW_BACKDROP degraded reason={error}");
             self.clear_window_backdrop();
-        } else if readback {
-            // Keep the blurred root only: the raw copy is no longer needed for crops.
-            if let Some(state) = self.window_backdrop.as_mut() {
-                state.desktop = None;
-            }
         }
     }
 
@@ -548,14 +541,16 @@ impl X11App {
             let Some(state) = self.window_backdrop.as_mut() else {
                 return;
             };
-            let Some((width, height, words)) = state.blurred_root.as_mut() else {
+            let Some(canvas) = state.blurred_root.as_mut() else {
                 return;
             };
-            if (*width, *height) != root || (capture.width, capture.height) != (rw, rh) {
+            let (Ok(x), Ok(y)) = (u32::try_from(rx), u32::try_from(ry)) else {
+                continue;
+            };
+            if canvas.size() != root || (capture.width, capture.height) != (rw, rh) {
                 continue;
             }
-            let patch = blurred_argb_words(rw, rh, capture.pixels, 0, blur_percent);
-            paste_words(words, *width, (rx, ry), &patch, (rw, rh));
+            canvas.paste((x, y), (rw, rh), capture.pixels, 0, blur_percent);
             patched = true;
         }
         if patched {
@@ -659,10 +654,6 @@ impl X11App {
                 &mut child,
             )
         };
-        let rect = (rx, ry, self.width, self.height);
-        // Compose only the root-visible part; the window may be dragged partly off the root.
-        // Off-root pixels replicate the nearest root edge (never an opaque black slot).
-        let anchor = crate::backdrop::root_anchor_rect(rect, (root_w, root_h));
         if readback {
             // A failed readback leaves no cache: this capture falls back to the wallpaper and the
             // next refresh retries. The read only runs while the surface cannot be on the root, so
@@ -671,15 +662,11 @@ impl X11App {
             let desktop = unsafe { self.read_root_clean((root_w, root_h)) }.ok();
             let scene = desktop.as_ref().map(|_| unsafe { self.root_children() });
             if let Some(state) = self.window_backdrop.as_mut() {
-                // The root is blurred once per read, so a move only crops the blurred root.
+                // The root is blurred once per read, so a move only crops the blurred root. The
+                // raw read moves into the blur and is not kept.
                 let blur_percent = state.spec.blur_percent;
-                state.blurred_root = desktop.as_ref().map(|root| {
-                    let pixels = root.pixels.clone();
-                    let words =
-                        blurred_argb_words(root.width, root.height, pixels, 0, blur_percent);
-                    (root.width, root.height, words)
-                });
-                state.desktop = desktop;
+                state.blurred_root = desktop
+                    .map(|root| BlurredCanvas::new(root.width, root.height, root.pixels, 0, blur_percent));
                 state.desktop_stale = false;
                 state.last_readback = Some(Instant::now());
                 // A04 invalidation baseline: the root stack this clean copy was read against.
@@ -692,39 +679,27 @@ impl X11App {
             .window_backdrop
             .as_mut()
             .ok_or("window backdrop: no spec")?;
+        let root = (root_w, root_h);
         let blurred_fits = state
             .blurred_root
             .as_ref()
-            .is_some_and(|(w, h, _)| (*w, *h) == (root_w, root_h));
-        let words = if blurred_fits {
-            let (_, _, blurred) = state.blurred_root.as_ref().expect("checked above");
-            let blur_span = flamewm_profiler::start("render.backdrop.crop");
-            let words = crop_words_clamped(blurred, (root_w, root_h), (rx, ry), (width, height));
-            drop(blur_span);
-            words
+            .is_some_and(|canvas| canvas.size() == root);
+        if !blurred_fits && state.wallpaper.as_ref().is_none_or(|canvas| canvas.size() != root) {
+            // No clean root yet: the blurred wallpaper under the whole root is built (or loaded)
+            // once, and every later capture only crops it.
+            let _compose_span = flamewm_profiler::start("render.backdrop.compose");
+            state.wallpaper = Some(crate::backdrop::wallpaper_canvas(&state.spec, root)?);
+        }
+        let canvas = if blurred_fits {
+            state.blurred_root.as_ref()
         } else {
-            let snapshot = match state.desktop.as_ref() {
-                Some(desktop) => {
-                    crop_rgba(desktop, anchor).ok_or("window backdrop: root region unavailable")?
-                }
-                None => wallpaper_region(state, (root_w, root_h), anchor)?,
-            };
-            let shift = (
-                i64::from(rx) - i64::from(anchor.0),
-                i64::from(ry) - i64::from(anchor.1),
-            );
-            let pixels = crate::backdrop::edge_extend_rgba(
-                &snapshot.pixels,
-                snapshot.width,
-                snapshot.height,
-                shift,
-                (width, height),
-            );
-            let blur_span = flamewm_profiler::start("render.backdrop.blur");
-            let words = blurred_argb_words(width, height, pixels, 0, state.spec.blur_percent);
-            drop(blur_span);
-            words
-        };
+            state.wallpaper.as_ref()
+        }
+        .ok_or("window backdrop: no canvas")?;
+        // Off-root pixels replicate the nearest root edge (never an opaque black slot).
+        let crop_span = flamewm_profiler::start("render.backdrop.crop");
+        let words = canvas.crop((rx, ry), (width, height));
+        drop(crop_span);
         if words.len() != width as usize * height as usize {
             return Err("window backdrop: snapshot size mismatch".to_string());
         }
@@ -884,7 +859,6 @@ impl X11App {
             unsafe { crate::native::xresource::free_pixmap_raw(self.display, old.pixmap) };
         }
         if let Some(state) = self.window_backdrop.as_mut() {
-            state.desktop = None;
             state.blurred_root = None;
             // A new read needs a new invalidation baseline.
             state.scene_children = None;
@@ -920,30 +894,6 @@ impl X11App {
     }
 }
 
-/// Wallpaper region under `rect` for when no root readback is cached. The decoded image is kept
-/// in `state`; only `rect` is composed (pixel-identical to cropping the full root canvas), so a
-/// capture never builds the whole root.
-fn wallpaper_region(
-    state: &mut WindowBackdropState,
-    root: (u32, u32),
-    rect: (i32, i32, u32, u32),
-) -> Result<RgbaImage, String> {
-    let _compose_span = flamewm_profiler::start("render.backdrop.compose");
-    if state.natural.is_none() {
-        let path = wallpaper_file(&state.spec.wallpaper, &state.spec.packaged_root);
-        state.natural = Some(flamewm_image_core::wallpaper::decode_file(&path)?);
-    }
-    let fit = flamewm_image_core::wallpaper::parse(&state.spec.fit);
-    let natural = state
-        .natural
-        .as_ref()
-        .ok_or("window backdrop: wallpaper missing")?;
-    flamewm_image_core::wallpaper::compose_region(natural, root.0, root.1, fit, rect)
-        .ok_or_else(|| "window backdrop: wallpaper region unavailable".to_string())
-}
-
-/// Crops a root-sized ARGB word image at `origin` to `size`. Pixels off the root replicate the
-/// nearest root edge, as `edge_extend_rgba` does for the uncached path.
 /// Bound on the root rectangles read per covered capture; a heavily shaped stack keeps its first ones.
 const MAX_COVERING_RECTS: usize = 64;
 
@@ -964,79 +914,19 @@ fn intersect(a: (i32, i32, u32, u32), b: (i32, i32, u32, u32)) -> (i32, i32, u32
     )
 }
 
-/// Copies a `size` patch into a row-major buffer `stride` words wide at `origin`. The caller keeps
-/// the patch inside the buffer; rows or columns outside it are skipped, never written.
-fn paste_words(
-    target: &mut [u32],
-    stride: u32,
-    origin: (i32, i32),
-    patch: &[u32],
-    size: (u32, u32),
-) {
-    let (stride, width) = (stride as usize, size.0 as usize);
-    if stride == 0 || width == 0 || origin.0 < 0 || origin.1 < 0 {
-        return;
-    }
-    let (x, y) = (origin.0 as usize, origin.1 as usize);
-    if x + width > stride {
-        return;
-    }
-    for (row, source) in patch.chunks_exact(width).take(size.1 as usize).enumerate() {
-        let start = (y + row) * stride + x;
-        let Some(destination) = target.get_mut(start..start + width) else {
-            return;
-        };
-        destination.copy_from_slice(source);
-    }
-}
-
-fn crop_words_clamped(
-    words: &[u32],
-    root: (u32, u32),
-    origin: (i32, i32),
-    size: (u32, u32),
-) -> Vec<u32> {
-    if root.0 == 0 || root.1 == 0 {
-        return Vec::new();
-    }
-    let (rw, rh) = (i64::from(root.0), i64::from(root.1));
-    let (w, h) = (size.0 as usize, size.1 as usize);
-    let mut out = Vec::with_capacity(w * h);
-    for y in 0..h {
-        let sy = (i64::from(origin.1) + y as i64).clamp(0, rh - 1) as usize;
-        let row = &words[sy * root.0 as usize..][..root.0 as usize];
-        for x in 0..w {
-            let sx = (i64::from(origin.0) + x as i64).clamp(0, rw - 1) as usize;
-            out.push(row[sx]);
-        }
-    }
-    out
-}
-
-/// Crop `rect` out of a root-sized RGBA image; `None` when the rect leaves the image.
-fn crop_rgba(image: &RgbaImage, rect: (i32, i32, u32, u32)) -> Option<RgbaImage> {
-    let (x, y, w, h) = rect;
-    let (x, y) = (u32::try_from(x).ok()?, u32::try_from(y).ok()?);
-    if x.checked_add(w)? > image.width || y.checked_add(h)? > image.height {
-        return None;
-    }
-    let stride = image.width as usize * 4;
-    let row = w as usize * 4;
-    let mut pixels = Vec::with_capacity(row * h as usize);
-    for line in y as usize..(y + h) as usize {
-        let start = line * stride + x as usize * 4;
-        pixels.extend_from_slice(&image.pixels[start..start + row]);
-    }
-    Some(RgbaImage {
-        width: w,
-        height: h,
-        pixels,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn grey(value: u32) -> u32 {
+        0xff00_0000 | value << 16 | value << 8 | value
+    }
+
+    /// Unblurred 4x3 canvas whose grey value is `y * 4 + x`.
+    fn grey_canvas() -> BlurredCanvas {
+        let pixels = (0..12u8).flat_map(|value| [value, value, value, 0xff]).collect();
+        BlurredCanvas::new(4, 3, pixels, 0, 0)
+    }
 
     #[test]
     fn covering_rects_are_clipped_to_the_surface() {
@@ -1054,21 +944,16 @@ mod tests {
 
     #[test]
     fn a_covered_patch_lands_at_its_root_origin_only() {
-        let mut root = vec![0u32; 4 * 3];
-        paste_words(&mut root, 4, (1, 1), &[7, 8, 9, 10], (2, 2));
-        assert_eq!(root, vec![0, 0, 0, 0, 0, 7, 8, 0, 0, 9, 10, 0]);
-        let before = root.clone();
-        paste_words(&mut root, 4, (3, 0), &[1, 1], (2, 1));
+        let pixel = |value: u8| [value, value, value, 0xff];
+        let mut canvas = BlurredCanvas::new(4, 3, (0..12).flat_map(|_| pixel(0)).collect(), 0, 0);
+        canvas.paste((1, 1), (2, 2), [7, 8, 9, 10].iter().flat_map(|v| pixel(*v)).collect(), 0, 0);
         assert_eq!(
-            root, before,
-            "a patch wider than the root row is not written"
+            canvas.crop((0, 0), (4, 3)),
+            [0, 0, 0, 0, 0, 7, 8, 0, 0, 9, 10, 0].map(grey).to_vec()
         );
-        paste_words(&mut root, 4, (0, 2), &[5, 5, 6, 6], (2, 2));
-        assert_eq!(
-            &root[8..10],
-            &[5, 5],
-            "rows past the buffer end are skipped"
-        );
+        let before = canvas.crop((0, 0), (4, 3));
+        canvas.paste((3, 0), (2, 1), (0..2).flat_map(|_| pixel(1)).collect(), 0, 0);
+        assert_eq!(canvas.crop((0, 0), (4, 3)), before, "a patch leaving the canvas is not written");
     }
 
     #[test]
@@ -1124,12 +1009,12 @@ mod tests {
     /// second read (`blurred_root` is only ever written by the capture).
     #[test]
     fn a_move_crops_the_cached_snapshot_and_never_re_reads_the_root() {
-        // 4x3 root, pixel value = y*4 + x.
-        let root: Vec<u32> = (0..12).collect();
-        let first = crop_words_clamped(&root, (4, 3), (0, 0), (2, 2));
-        let moved = crop_words_clamped(&root, (4, 3), (1, 1), (2, 2));
-        assert_eq!(first, vec![0, 1, 4, 5]);
-        assert_eq!(moved, vec![5, 6, 9, 10], "same cache, new origin");
+        // 4x3 root, grey value = y*4 + x.
+        let root = grey_canvas();
+        let first = root.crop((0, 0), (2, 2));
+        let moved = root.crop((1, 1), (2, 2));
+        assert_eq!(first, [0, 1, 4, 5].map(grey).to_vec());
+        assert_eq!(moved, [5, 6, 9, 10].map(grey).to_vec(), "same cache, new origin");
         assert_eq!(
             root_capture_decision(true, true, false),
             RootCapture::ReuseCache,
@@ -1151,12 +1036,9 @@ mod tests {
 
     #[test]
     fn blurred_root_crop_replicates_the_root_edge_off_root() {
-        // 4x3 root, pixel value = y*4 + x.
-        let root: Vec<u32> = (0..12).collect();
-        let crop = crop_words_clamped(&root, (4, 3), (-1, 1), (3, 2));
+        let crop = grey_canvas().crop((-1, 1), (3, 2));
         // Row y=1 and y=2 starting at x=-1: x=-1 clamps to column 0.
-        assert_eq!(crop, vec![4, 4, 5, 8, 8, 9]);
-        assert!(crop_words_clamped(&root, (0, 0), (0, 0), (2, 2)).is_empty());
+        assert_eq!(crop, [4, 4, 5, 8, 8, 9].map(grey).to_vec());
     }
 
     #[test]
