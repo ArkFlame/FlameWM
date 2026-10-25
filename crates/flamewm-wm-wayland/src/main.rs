@@ -233,6 +233,13 @@ static REPORTED_STAGES: AtomicU8 = AtomicU8::new(0);
 /// Longest `detail` field; longer messages are cut instead of dumping state.
 const MAX_DETAIL: usize = 64;
 
+/// How long a presented session may go without XWayland becoming ready before it gives the VT back.
+///
+/// Ordered after the tty backend's 8 s first-frame deadline (a failed flip reports first) and before
+/// the session wrapper's 25 s readiness timeout, so this compositor-side gate is the one that names
+/// the failure instead of a wrapper kill.
+const CONTENT_DEADLINE_MS: u64 = 15_000;
+
 /// Start instant of this process, for the `t=` field of every stage line. A stage that takes seconds
 /// (DRM master, libinput, EGL, XWayland) is then visible in the log and in the session wrapper's
 /// report without a trace tool.
@@ -369,10 +376,46 @@ fn detail_tokens(detail: &str) -> String {
     }
 }
 
+/// Routes smithay's own diagnostics to stderr.
+///
+/// Smithay reports DRM, EGL/GBM, libinput and XWayland failures through `log`. Without a subscriber
+/// every one of them is discarded, which is how a failed hardware start can leave no trace beyond
+/// this crate's own stage lines. Warnings and errors only: smithay logs per-frame detail at
+/// info/debug, and the `eprintln!` stage lines above stay the canonical startup record.
+fn install_smithay_logger() {
+    struct StderrLogger;
+
+    static LOGGER: StderrLogger = StderrLogger;
+
+    impl log::Log for StderrLogger {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            metadata.level() <= log::Level::Warn
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if self.enabled(record.metadata()) {
+                eprintln!(
+                    "flamewm-wayland: {}: {}: {}",
+                    record.level(),
+                    record.target(),
+                    record.args()
+                );
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
+}
+
 fn main() {
     // The `t=` field of every stage line is measured from here, so the timer covers argument
     // parsing, the seat, DRM init and the socket, not just the event loop.
     let _ = START.set(Instant::now());
+    install_smithay_logger();
     // Parsed before anything else and exits 0: no event loop, no socket, no seat, no bus, no PATH.
     if std::env::args().any(|arg| arg == "--capabilities") {
         print!("{}", capabilities_text());
@@ -550,6 +593,32 @@ fn run() -> Result<i32, Box<dyn Error>> {
             TimeoutAction::ToDuration(Duration::from_millis(500))
         },
     )?;
+
+    // A completed flip is not a desktop. The first frame is painted inside backend init, before
+    // XWayland exists, and contains only the clear colour and the cursor; XWayland readiness is what
+    // actually puts windows on screen. If autostart clients are configured but XWayland never
+    // becomes ready, the VT holds a near-black frame forever with no way forward, so end the run:
+    // `NativeSession::drop` releases DRM master and logind control, `main` exits non-zero and the
+    // session wrapper reports the failure, which returns the greeter instead of a dead black VT.
+    // A session with no autostart clients (a nested dev run, or one that deliberately skipped
+    // XWayland) is not waiting for a desktop and arms no deadline.
+    if !state.autostart.is_empty() {
+        handle.insert_source(
+            Timer::from_duration(Duration::from_millis(CONTENT_DEADLINE_MS)),
+            |_, _, state| {
+                if state.desktop_pending() {
+                    stage_line(Stage::Xwayland, StageStatus::Fail, "no_client_before_deadline");
+                    eprintln!(
+                        "flamewm-wayland: no desktop after {CONTENT_DEADLINE_MS}ms \
+                         (XWayland never became ready); giving the VT back"
+                    );
+                    state.report_startup_failure("no_desktop_before_deadline");
+                    state.loop_signal.stop();
+                }
+                TimeoutAction::Drop
+            },
+        )?;
+    }
 
     // The event loop is about to run, nothing more: `detail=backend_init` keeps this line from being
     // read as "something is on screen" — that is `stage=presented`, reported by the tty backend when

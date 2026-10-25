@@ -77,8 +77,44 @@ class MemoryBenchTests(unittest.TestCase):
             self.assertEqual(totals["Pss"], 180)
             self.assertEqual(totals["process_count"], 3)
             self.assertEqual(totals["child_count"], 1)
+            # Only FlameWM-named processes are the group; the spawned `sleep` is
+            # resident but is not FlameWM's memory to report as its own.
+            self.assertEqual(totals["flamewm_pss"], 120)
+            self.assertEqual(totals["flamewm_process_count"], 2)
+            self.assertEqual(totals["foreign_process_count"], 1)
             self.assertEqual(owned[102]["role"], "shell")
             self.assertEqual(owned[103]["role"], "child:sleep")
+
+    def test_explorer_and_wayland_are_group_roles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proc"
+            root.mkdir()
+            bin_dir = Path(tmp) / "bin"
+            bin_dir.mkdir()
+            explorer = bin_dir / "flamewm-explorer"
+            wayland = bin_dir / "flamewm-wayland"
+            for path in (explorer, wayland):
+                path.touch()
+            # comm is truncated to 15 bytes by the kernel.
+            write_process(root, 201, exe=explorer, comm="flamewm-explore", start=11)
+            write_process(root, 202, exe=wayland, comm="flamewm-wayland", start=12)
+            owned = bench.scan_processes(root)
+        self.assertEqual(owned[201]["role"], "explorer")
+        self.assertEqual(owned[202]["role"], "wayland")
+        self.assertTrue({"explorer", "wayland"} <= bench.GROUP_ROLES)
+
+    def test_installed_helper_is_recognised_from_argv_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proc"
+            root.mkdir()
+            python = Path(tmp) / "python3.13"
+            python.touch()
+            # The packaged bridge is executed directly: argv[0] is the script,
+            # argv[1] is "--run", so the old argv[1] rule missed it entirely.
+            write_process(root, 301, exe=python, comm="python3.13", start=13,
+                          cmdline=("/usr/libexec/flamewm/flamewm-desktop-services", "--run"))
+            owned = bench.scan_processes(root)
+        self.assertEqual(owned[301]["role"], "helper")
 
     def test_profile_gauges_keep_real_process_and_source_identity(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -203,12 +203,19 @@ pub(crate) struct X11App {
     /// Hash of the bounding-shape spans last applied to `window` (None = unknown/clipped).
     pub(crate) shape_applied: std::cell::Cell<Option<u64>>,
     pub(crate) pending_damage: SurfaceDamage,
-    /// Region painting for the opaque subset; `FLAMEWM_RENDER_REGION=0` forces Full.
+    /// Region painting for the opaque subset. **Opt-in** (`FLAMEWM_RENDER_REGION=1`): the live path
+    /// paints Full, plus `RedrawPlan::Skip` when nothing changed. The incremental path is not safe
+    /// for real content yet — Xft has no XRender clip, so text is cropped by hand, and a stale region
+    /// leaves partial windows. Enabling it by default silently activated that path for every app and
+    /// dropped terminal updates, clipped windows and left selection rectangles behind.
     pub(crate) region_paint: bool,
     /// A Full damage latch was consumed into the next redraw.
     pub(crate) region_force_full: bool,
     /// The backbuffer holds the last fully presented frame (region base).
     pub(crate) region_base_valid: bool,
+    /// This redraw was requested by input alone: no document damage and no revision change, so
+    /// interaction is the only thing that can differ. Only then may an unchanged command list skip.
+    pub(crate) skip_eligible: bool,
     /// Region being repainted: Xft text is clipped to it. None on the Full path.
     pub(crate) region_text_clip: Option<damage_plan::PixelRegion>,
     /// An input event was handled and the next redraw must run through the planner.
@@ -614,10 +621,12 @@ impl X11App {
             cached_layout_key: None,
             shape_applied: std::cell::Cell::new(None),
             pending_damage: SurfaceDamage::Full,
-            // Default on for the harness-proven opaque subset; FLAMEWM_RENDER_REGION=0 forces Full.
-            region_paint: std::env::var_os("FLAMEWM_RENDER_REGION").is_none_or(|v| v != "0"),
+            // Opt-in: the incremental path needs the Xft/clip work before it is safe for real
+            // content (see the field docs). FLAMEWM_RENDER_REGION=1 enables it for evaluation.
+            region_paint: std::env::var_os("FLAMEWM_RENDER_REGION").is_some_and(|v| v == "1"),
             region_force_full: false,
             region_base_valid: false,
+            skip_eligible: false,
             region_text_clip: None,
             input_repaint: false,
             render_counters: damage_plan::RedrawCounters::default(),

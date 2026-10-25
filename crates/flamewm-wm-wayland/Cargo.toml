@@ -20,6 +20,9 @@ flamewm-applications = { path = "../flamewm-applications" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
 flamewm-control-wire = { path = "../flamewm-control-wire" }
 flamewm-platform = { path = "../flamewm-platform" }
+# A direct `log` dependency only so this crate can install a subscriber for smithay's own
+# diagnostics; the crate is already in the dependency graph through smithay.
+log = "0.4"
 dbus = { version = "=0.9.12", default-features = false, optional = true }
 smithay = { version = "0.7", default-features = false, features = [
     "backend_winit",

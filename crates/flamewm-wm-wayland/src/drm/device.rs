@@ -14,12 +14,12 @@ pub(super) struct OpenedGpu {
 
 /// Opens the seat's GPUs and picks the one to drive, plus a short detail token for the stage line.
 ///
-/// The boot GPU is tried first and wins as soon as it reports a connected connector: that is the
-/// common single-GPU and hybrid-desktop case and costs exactly one `TakeDevice` roundtrip. Only when
-/// it has nothing connected are the seat's other GPUs probed — a hybrid laptop whose only panel
-/// hangs off the non-boot card reports zero connectors on the boot GPU, which used to mean zero
-/// connectors for the whole session. The choice itself is `state::pick_gpu`, unit-tested without a
-/// GPU.
+/// The boot GPU is tried first, but it only settles the choice when it drives a connected *internal
+/// panel*: that is the common single-GPU laptop case and costs exactly one `TakeDevice` roundtrip.
+/// A connected *external* monitor on the boot GPU is not enough — on a hybrid laptop the internal
+/// panel usually hangs off the other card, and stopping there would modeset the external output
+/// while the laptop panel stays black. In that case the seat's other GPUs are probed too, and
+/// `state::pick_gpu` (unit-tested without a GPU) prefers whichever card has the panel.
 pub(super) fn open_scanout_gpu(
     session: &LogindSession,
     seat: &str,
@@ -44,11 +44,12 @@ pub(super) fn open_scanout_gpu(
         match open_gpu(session, path) {
             Ok(gpu) => {
                 let probe = probe_gpu(&gpu.device);
-                // Only the boot GPU short-circuits: on any other card the rest of the seat is still
-                // worth looking at, because a panel is what is being looked for.
+                // Only the boot GPU short-circuits, and only once a panel is in hand: on any other
+                // card the rest of the seat is still worth looking at, because a panel is what is
+                // being looked for.
                 let boot_gpu = index == 0 && boot.is_some();
                 opened.push((gpu, probe));
-                if boot_gpu && probe.connected {
+                if boot_gpu && probe.internal {
                     break;
                 }
             }

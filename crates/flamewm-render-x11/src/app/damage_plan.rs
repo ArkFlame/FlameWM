@@ -1,9 +1,11 @@
-//! Redraw planning for the X11 scene: a pure decision between a full repaint and a
-//! region-clipped repaint, plus the counters that measure either path.
+//! Redraw planning for the X11 scene: a pure decision between a full repaint, a
+//! region-clipped repaint, and skipping an unchanged scene, plus the counters that measure
+//! either path.
 //!
-//! The live redraw path does not consume this yet. Region painting is only enabled
-//! after the clip plumbing (GC, XRender picture, Xft draw) and the Full/Region
-//! equivalence harness exist; until then every call resolves to `RedrawPlan::Full`.
+//! The live path is `Full`, plus `Skip` when an input-only redraw rebuilds an identical command
+//! list. The incremental region path is **opt-in** (`FLAMEWM_RENDER_REGION=1`) and off by default:
+//! Xft has no XRender clip, so region text is cropped by hand, and a stale region leaves partial
+//! windows and leftover overlays. Turning it on by default regressed terminal updates.
 
 use flamewm_render_core::{PaintCommand, Rect, SurfaceDamage};
 
@@ -33,6 +35,9 @@ impl PixelRegion {
 pub(crate) enum RedrawPlan {
     Full,
     Region(PixelRegion),
+    /// The rebuilt command list is identical to the one already in the backbuffer: there is nothing
+    /// to draw and nothing to present.
+    Skip,
 }
 
 /// Everything besides the damage that must be unchanged for a region repaint to be
@@ -112,6 +117,7 @@ impl RedrawCounters {
         let area = match plan {
             RedrawPlan::Full => full,
             RedrawPlan::Region(region) => region.area(),
+            RedrawPlan::Skip => 0,
         };
         self.frames += 1;
         self.clip_area_px += area;
@@ -132,6 +138,10 @@ fn supported_bounds(command: &PaintCommand) -> Option<(Rect, f32)> {
             radius,
             ..
         } => Some((*rect, width.max(*radius))),
+        // The thumb is a 3 px-radius rounded strip drawn *inside* `rect` (the track box), so the
+        // track box is a conservative bound. It is translucent, which `region_supported` already
+        // requires, and `paint_region` guarantees the XRender path that clips it to the region.
+        PaintCommand::ScrollbarThumb { rect, .. } => Some((*rect, 3.0)),
         _ => None,
     }
 }
@@ -220,12 +230,13 @@ fn backdrop_blended(command: &PaintCommand) -> bool {
     )
 }
 
-/// Clip pushes and pops: no pixels of their own. They are always replayed so the stack
-/// matches the Full path, and a push bounds the pixels its clip can change.
-fn clip_command(command: &PaintCommand) -> bool {
+/// Commands with no pixels of their own: clip pushes and pops, and `ScrollbarTrack`, for which this
+/// renderer draws nothing (the trough and thumb are ordinary fills). They are always replayed so the
+/// clip stack and ordering match the Full path, and they bound no pixels.
+pub(crate) fn no_pixel_command(command: &PaintCommand) -> bool {
     matches!(
         command,
-        PaintCommand::PushClip { .. } | PaintCommand::PopClip
+        PaintCommand::PushClip { .. } | PaintCommand::PopClip | PaintCommand::ScrollbarTrack { .. }
     )
 }
 
@@ -235,7 +246,7 @@ fn region_supported(command: &PaintCommand, translucent: bool) -> bool {
     (supported_bounds(command).is_some() && (translucent || opaque_fill(command)))
         || (matches!(command, PaintCommand::Text { .. }) && (translucent || opaque_text(command)))
         || (backdrop_blended(command) && translucent)
-        || clip_command(command)
+        || no_pixel_command(command)
 }
 
 /// Whether every command in `commands` is region-safe (see [`region_eligible`]).
@@ -253,6 +264,7 @@ pub(crate) fn region_eligible(commands: &[PaintCommand], scale: f32, translucent
 }
 
 /// Inputs to the region-paint decision for one redraw.
+#[derive(Clone, Copy)]
 pub(crate) struct RegionInput<'a> {
     /// Commands last painted into the backbuffer; `None` before the first paint.
     pub(crate) old: Option<&'a [PaintCommand]>,
@@ -269,6 +281,9 @@ pub(crate) struct RegionInput<'a> {
     /// The window backdrop is unchanged since the backbuffer was painted, so translucent fills
     /// may take the region path over it.
     pub(crate) translucent: bool,
+    /// Input alone asked for this redraw: no document damage, no revision change. Only then may an
+    /// unchanged command list be skipped instead of repainted.
+    pub(crate) interaction_only: bool,
     /// A Full repaint was latched for this redraw.
     pub(crate) full_latched: bool,
     /// The backbuffer holds the last fully presented frame.
@@ -277,30 +292,97 @@ pub(crate) struct RegionInput<'a> {
 
 /// Region when every gate holds and the command diff is local; `Full` otherwise.
 pub(crate) fn plan_region_paint(input: RegionInput<'_>) -> RedrawPlan {
-    if !input.enabled
-        || !input.viewport_unchanged
-        || input.backdrops
-        || input.full_latched
-        || !input.base_valid
-    {
-        return RedrawPlan::Full;
+    // Attribution for the one question the counters cannot answer: why a frame that only touched two
+    // rows still repainted the whole window. Off unless `FLAMEWM_DEBUG_PLAN` is set, and free when
+    // it is off (the flag is read once).
+    let full = |why: &str| {
+        if plan_debug_enabled() {
+            eprintln!("FLAMEWM_PLAN full reason={why}");
+        }
+        RedrawPlan::Full
+    };
+    if !input.viewport_unchanged {
+        return full("viewport_changed");
+    }
+    if input.backdrops {
+        return full("backdrop_or_clip");
+    }
+    if input.full_latched {
+        return full("full_latched");
+    }
+    if !input.base_valid {
+        return full("base_invalid");
     }
     let Some(old) = input.old else {
-        return RedrawPlan::Full;
+        return full("no_previous_commands");
     };
-    if !region_eligible(input.new, input.scale, input.translucent)
-        || !region_supported_all(old, input.translucent)
-    {
+    // The rebuilt scene is identical to the one already in the backbuffer, so painting it would
+    // reproduce the same pixels. This is only safe when interaction was the sole reason for the
+    // redraw: if the document changed or damage was latched, an identical command list is not proof
+    // that the pixels are current (a retained asset can change without its command fields changing).
+    let Some(region) = diff_region(old, input.new, input.viewport) else {
+        if input.interaction_only {
+            if plan_debug_enabled() {
+                eprintln!("FLAMEWM_PLAN skip reason=identical_commands");
+            }
+            return RedrawPlan::Skip;
+        }
+        return full("no_local_diff");
+    };
+    // Region painting is opt-in; the live default is a Full repaint of a real diff.
+    if !input.enabled {
+        return full("region_disabled");
+    }
+    if !region_eligible(input.new, input.scale, input.translucent) {
+        if plan_debug_enabled() {
+            let bad = input
+                .new
+                .iter()
+                .find(|command| !region_supported(command, input.translucent));
+            eprintln!(
+                "FLAMEWM_PLAN full reason=new_commands_ineligible scale={} translucent={} \
+                 commands={} first_unsupported={bad:?}",
+                input.scale,
+                input.translucent,
+                input.new.len()
+            );
+        }
         return RedrawPlan::Full;
     }
-    let Some(region) = diff_region(old, input.new, input.viewport) else {
-        return RedrawPlan::Full;
-    };
+    if !region_supported_all(old, input.translucent) {
+        return full("old_commands_ineligible");
+    }
     let viewport_area = u64::from(input.viewport.0) * u64::from(input.viewport.1);
     if region.area() * 2 > viewport_area {
+        if plan_debug_enabled() {
+            eprintln!(
+                "FLAMEWM_PLAN full reason=region_too_large area={} viewport={} rect={}x{}+{}+{}",
+                region.area(),
+                viewport_area,
+                region.width,
+                region.height,
+                region.x,
+                region.y
+            );
+        }
         return RedrawPlan::Full;
     }
+    if plan_debug_enabled() {
+        eprintln!(
+            "FLAMEWM_PLAN region area={} viewport={viewport_area} rect={}x{}+{}+{}",
+            region.area(),
+            region.width,
+            region.height,
+            region.x,
+            region.y
+        );
+    }
     RedrawPlan::Region(region)
+}
+
+fn plan_debug_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("FLAMEWM_DEBUG_PLAN").is_some())
 }
 
 /// Smallest region that covers every command whose old or new form differs. Equal command
@@ -382,6 +464,80 @@ mod region_tests {
         assert_eq!(region.y, 8);
         assert_eq!(region.x + region.width as i32, 33);
         assert!(region.area() < (VIEW.0 * VIEW.1) as u64 / 10);
+    }
+
+    /// A rebuilt scene that is identical to the one already in the backbuffer must not paint, but
+    /// only when input alone asked for the redraw. This is what a pointer move over a node with no
+    /// hover style produces; repainting it would redraw the whole window to the same pixels.
+    /// A document change or latched damage must still repaint, because equal command fields are not
+    /// proof that the pixels behind a retained asset are current.
+    #[test]
+    fn identical_rebuild_plans_skip() {
+        let list = vec![
+            fill(0.0, 0.0, 10.0, 10.0, 255),
+            fill(20.0, 20.0, 5.0, 5.0, 255),
+        ];
+        let input = RegionInput {
+            old: Some(&list),
+            new: &list,
+            scale: 1.0,
+            viewport: VIEW,
+            enabled: true,
+            viewport_unchanged: true,
+            backdrops: false,
+            translucent: true,
+            interaction_only: true,
+            full_latched: false,
+            base_valid: true,
+        };
+        assert_eq!(plan_region_paint(input), RedrawPlan::Skip);
+        // The same commands, but a document change or latched damage asked for the repaint: the
+        // pixels behind a retained asset may have changed even though the fields compare equal.
+        assert_eq!(
+            plan_region_paint(RegionInput {
+                interaction_only: false,
+                ..input
+            }),
+            RedrawPlan::Full
+        );
+        // A latched full repaint still wins: Expose and resize must repaint.
+        assert_eq!(
+            plan_region_paint(RegionInput {
+                full_latched: true,
+                ..input
+            }),
+            RedrawPlan::Full
+        );
+    }
+
+    /// The scrollbar track carries a hit target but paints nothing here (the trough and thumb are
+    /// ordinary fills). It must not disqualify a frame from region painting: a single unsupported
+    /// command forces `Full`, so a window with a scrollbar would repaint in full forever.
+    #[test]
+    fn scrollbar_track_is_a_no_pixel_command() {
+        assert!(no_pixel_command(&PaintCommand::ScrollbarTrack {
+            rect: Rect {
+                x: 193.0,
+                y: 47.0,
+                width: 8.0,
+                height: 415.0,
+            },
+            horizontal: false,
+        }));
+        assert!(no_pixel_command(&PaintCommand::PopClip));
+        assert!(!no_pixel_command(&fill(0.0, 0.0, 5.0, 5.0, 255)));
+        assert!(region_supported(
+            &PaintCommand::ScrollbarTrack {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 8.0,
+                    height: 10.0,
+                },
+                horizontal: false,
+            },
+            false,
+        ));
     }
 
     #[test]
@@ -481,6 +637,7 @@ mod region_tests {
             viewport_unchanged: true,
             backdrops: false,
             translucent,
+            interaction_only: false,
             full_latched: false,
             base_valid: true,
         };

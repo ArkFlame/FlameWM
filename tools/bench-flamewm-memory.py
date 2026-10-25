@@ -26,8 +26,15 @@ PROCESS_NAMES = {
     "flamewm-desktop": "desktop",
     "flamewm-settings": "settings",
     "flamewm-lock": "lock",
+    "flamewm-explorer": "explorer",
+    "flamewm-wayland": "wayland",
+    "flamewm-terminal": "terminal",
+    "flamewm-screenshot": "screenshot",
 }
 HELPER_ARGS = {"flamewm-desktop-services", "flamewm_desktop_services.py"}
+# Roles that are FlameWM itself. `child:*` rows are descendants and may be any
+# program the desktop launched, so they are reported but never counted as group.
+GROUP_ROLES = frozenset({*PROCESS_NAMES.values(), "helper"})
 PHASES = {"startup", "idle", "transient", "steady", "shutdown"}
 WORKLOADS = {
     "idle": "60 s settled idle",
@@ -135,9 +142,11 @@ def scan_processes(proc_root: Path, uid: int | None = None) -> dict[int, dict]:
         expected_comm = executable[:15]
         if role and comm != expected_comm:
             role = None
-        if (executable.startswith("python3") and comm.startswith("python3") and len(argv) > 1
-                and Path(argv[1]).name in HELPER_ARGS):
-            role = "helper"
+        if executable.startswith("python3") and comm.startswith("python3") and len(argv) > 1:
+            # The installed bridge is exec'd directly, so the script name is
+            # argv[0] and argv[1] is a flag; the repo form has it in argv[1].
+            if any(Path(arg).name in HELPER_ARGS for arg in argv[:2]):
+                role = "helper"
         elif executable in HELPER_ARGS and comm == executable[:15]:
             role = "helper"
         processes[pid] = {
@@ -211,6 +220,12 @@ def sample_snapshot(proc_root: Path, uid: int | None = None) -> tuple[list[dict]
             if row.get(metric) is not None:
                 totals[metric] += row[metric]
     totals.update({"process_count": len(valid), "child_count": sum(not row["role"] in PROCESS_NAMES.values() and row["role"] != "helper" for row in valid)})
+    group_rows = [row for row in valid if row["role"] in GROUP_ROLES]
+    totals.update({
+        "flamewm_pss": sum(row["Pss"] for row in group_rows),
+        "flamewm_process_count": len(group_rows),
+        "foreign_process_count": len(valid) - len(group_rows),
+    })
     return rows, totals
 
 
@@ -289,7 +304,8 @@ def plan(args: argparse.Namespace) -> dict:
 CSV_FIELDS = ["timestamp_utc", "elapsed_seconds", "phase", "workload", "sample_kind",
               "pid", "start_ticks", "ppid", "role", "comm", "exe", *METRICS,
               "threads", "voluntary_ctxt_switches", "nonvoluntary_ctxt_switches",
-              "nr_wakeups", "nr_switches", "process_count", "child_count", "error"]
+              "nr_wakeups", "nr_switches", "process_count", "child_count",
+              "flamewm_pss", "flamewm_process_count", "foreign_process_count", "error"]
 
 
 def run(args: argparse.Namespace) -> int:
@@ -367,6 +383,9 @@ def run(args: argparse.Namespace) -> int:
     total_current.update({
         "process_count": len(latest),
         "child_count": sum(row["role"].startswith("child:") for row in latest.values()),
+        "flamewm_pss": sum(row["Pss"] for row in latest.values() if row["role"] in GROUP_ROLES),
+        "flamewm_process_count": sum(row["role"] in GROUP_ROLES for row in latest.values()),
+        "foreign_process_count": sum(row["role"] not in GROUP_ROLES for row in latest.values()),
         "threads": sum(row["threads"] or 0 for row in latest.values()),
         "nr_wakeups": sum(row["nr_wakeups"] or 0 for row in latest.values()),
         "nr_switches": sum(row["nr_switches"] or 0 for row in latest.values()),

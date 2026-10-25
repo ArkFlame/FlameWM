@@ -198,6 +198,9 @@ impl X11App {
     }
 
     pub(crate) unsafe fn redraw(&mut self, document: &RuntimeDocument) -> Result<(), String> {
+        // Only `redraw_if_dirty` may mark a redraw as interaction-only; a direct call (resize,
+        // RepaintFull) leaves this false so an unchanged command list still repaints.
+        let interaction_only = std::mem::take(&mut self.skip_eligible);
         let layout_guard = flamewm_profiler::start("render.layout");
         let scale = document.ui_scale();
         let layout_key = LayoutKey {
@@ -274,6 +277,7 @@ impl X11App {
                     || (self.window_backdrop_pixmap.is_some() && !backdrop_unchanged)
                     || !self.clip_stack.is_empty(),
                 translucent: backdrop_unchanged && self.surface_backdrop.is_none(),
+                interaction_only,
                 full_latched: force_full,
                 base_valid,
             });
@@ -285,6 +289,17 @@ impl X11App {
             });
         }
         drop(paint_guard);
+        // The rebuilt scene is identical to the one already in the backbuffer, so there is nothing to
+        // paint and nothing to present. Without this, a pointer move over a node with no hover style
+        // redraws the whole window to identical pixels.
+        if plan == RedrawPlan::Skip {
+            // The backbuffer still holds exactly these commands, so it is still a valid base for a
+            // later region paint (`base_valid` above was taken, not read).
+            self.region_base_valid = true;
+            self.render_counters
+                .record(RedrawPlan::Skip, (self.width, self.height), 0, false);
+            return Ok(());
+        }
         let _present_guard = flamewm_profiler::start("render.present");
         // A failed region paint leaves the backbuffer partly written; the Full path below
         // clears and repaints every pixel, so it is the safe fallback.
@@ -456,8 +471,9 @@ impl X11App {
         for index in 0..count {
             // SAFETY: index is below the cached count; `paint` does not replace the cache.
             let command = unsafe { &*self.retained_command(index) };
-            // Clip pushes and pops always replay so the stack matches the Full path.
-            let always = matches!(command, PaintCommand::PushClip { .. } | PaintCommand::PopClip);
+            // Commands that write no pixels (clips, the scrollbar track) always replay so the clip
+            // stack and ordering match the Full path.
+            let always = super::damage_plan::no_pixel_command(command);
             if !always {
                 let Some(bounds) = command_bounds(command, viewport) else {
                     return Err("unsupported command in region paint".to_string());
@@ -537,6 +553,10 @@ impl X11App {
         if explicit_full {
             self.region_force_full = true;
         }
+        // Skipping an unchanged scene is only allowed when input was the sole cause. A document
+        // revision bump or latched damage always repaints: the command list can compare equal while
+        // the pixels behind a retained asset changed.
+        self.skip_eligible = input && !stale && !explicit_full && self.pending_damage.is_empty();
         self.pending_damage = SurfaceDamage::None;
         unsafe { self.redraw(document)? };
         Ok(true)

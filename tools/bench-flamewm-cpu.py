@@ -7,8 +7,8 @@ total. Repeats each case N times and reports median/min/max. Output is JSON on
 stdout (or --json-out PATH).
 
 Process selection (allowlist only; nothing is signalled or modified):
-  * FlameWM roles (wm, desktop, shell, terminal): executable basename matches
-    and /proc/<pid>/environ has DISPLAY=<display>.
+  * FlameWM roles (wm, desktop, shell, terminal, explorer): executable basename
+    matches and /proc/<pid>/environ has DISPLAY=<display>.
   * Xephyr / Xorg: executable basename matches and the command line contains
     the display token (for example ":316").
 
@@ -17,9 +17,15 @@ Cases:
   rubber-band     XTEST drag on empty desktop (needs python-xlib + XTEST).
   start-toggle    XTEST click at --start-xy (needs python-xlib + XTEST).
   window-move     XTEST drag from --move-from to --move-to (needs python-xlib + XTEST).
+  hover-sweep     XTEST motion only, no button press, repeated across
+                  --hover-from/--hover-to for the whole sample window. This is
+                  the pointer-motion workload: subtract the stationary
+                  (idle) numbers to get the motion increment.
 XTEST cases run only with --allow-input, because they move the real pointer
 and send clicks to whatever X display is named. A case is skipped, with the
-reason recorded, when its requirements are missing.
+reason recorded, when its requirements are missing. --expect-class verifies
+that the windows under the hover endpoints carry that WM_CLASS before any
+motion is injected, so a hover run cannot silently measure another client.
 
 Usage:
   python3 -I tools/bench-flamewm-cpu.py --display :316 --window 5 --repeat 3
@@ -39,10 +45,11 @@ ROLE_BASENAMES = {
     "flamewm-desktop": "desktop",
     "flamewm-shell": "shell",
     "flamewm-terminal": "terminal",
+    "flamewm-explorer": "explorer",
 }
 SERVER_BASENAMES = {"Xephyr": "xephyr", "Xorg": "xorg"}
 HZ = os.sysconf("SC_CLK_TCK")
-ROLE_ORDER = ("wm", "desktop", "shell", "terminal", "xephyr", "xorg")
+ROLE_ORDER = ("wm", "desktop", "shell", "terminal", "explorer", "xephyr", "xorg")
 
 
 def _basename_of_exe(pid):
@@ -110,7 +117,7 @@ def measure(display, duration, workload=None):
     if workload is None:
         time.sleep(duration)
     else:
-        workload()
+        workload(duration)
     elapsed = time.monotonic() - t0
     rows = []
     for pid, role in sorted(procs.items()):
@@ -170,7 +177,7 @@ def _xtest_ops(d):
 def _drag_workload(d, start, end, steps=60, step_s=0.012):
     move, press, release = _xtest_ops(d)
 
-    def run():
+    def run(_duration):
         move(*start)
         press()
         time.sleep(0.05)
@@ -186,12 +193,73 @@ def _drag_workload(d, start, end, steps=60, step_s=0.012):
 def _click_workload(d, point):
     move, press, release = _xtest_ops(d)
 
-    def run():
+    def run(_duration):
         move(*point)
         press()
         release()
         time.sleep(0.5)
     return run
+
+
+def _hover_workload(d, start, end, steps=40, rate_hz=125.0):
+    """Motion-only sweep repeated until the sample window is filled.
+
+    No button is ever pressed, so every injected event is an ordinary
+    `MotionNotify`: this is the hover workload, not a drag. The sweep reverses
+    direction instead of jumping back, so the pointer crosses rows the same way
+    a real hand would and `hover` transitions (the repaint trigger) keep firing.
+    """
+    move, _press, _release = _xtest_ops(d)
+
+    def run(duration):
+        deadline = time.monotonic() + duration
+        period = 1.0 / rate_hz if rate_hz > 0 else 0.0
+        forward = True
+        while time.monotonic() < deadline:
+            order = range(steps + 1) if forward else range(steps, -1, -1)
+            for i in order:
+                if time.monotonic() >= deadline:
+                    return
+                move(start[0] + (end[0] - start[0]) * i // steps,
+                     start[1] + (end[1] - start[1]) * i // steps)
+                if period:
+                    time.sleep(period)
+            forward = not forward
+    return run
+
+
+def _window_class_at(d, x, y, max_depth=4):
+    """WM_CLASS of the client window under (x, y), or None.
+
+    Walks the window tree rather than only the root's children: a reparenting
+    window manager puts the client inside a frame, so WM_CLASS sits on a
+    grandchild (FlameWM itself does this). Bounded depth keeps the walk cheap
+    and stops it from descending into every client's own widget tree.
+    """
+    root = d.screen().root
+    queue = [(root, 0)]
+    while queue:
+        window, depth = queue.pop(0)
+        try:
+            children = window.query_tree().children
+        except Exception:  # noqa: BLE001 - a window can vanish mid-walk
+            continue
+        for child in children:
+            try:
+                wm_class = child.get_wm_class()
+                if wm_class:
+                    # `translate_coords` is called on the *destination* window, so
+                    # root.translate_coords(child, 0, 0) is the child's root origin.
+                    origin = root.translate_coords(child, 0, 0)
+                    geometry = child.get_geometry()
+                    if (origin.x <= x < origin.x + geometry.width
+                            and origin.y <= y < origin.y + geometry.height):
+                        return wm_class
+            except Exception:  # noqa: BLE001 - the window may vanish mid-walk
+                continue
+            if depth + 1 < max_depth:
+                queue.append((child, depth + 1))
+    return None
 
 
 def run_case(name, args):
@@ -210,14 +278,25 @@ def run_case(name, args):
     elif name == "window-move":
         if args.move_from is None or args.move_to is None:
             return {"case": name, "status": "skipped", "reason": "needs --move-from and --move-to"}
+    elif name == "hover-sweep":
+        if args.hover_from is None or args.hover_to is None:
+            return {"case": name, "status": "skipped", "reason": "needs --hover-from and --hover-to"}
     d, reason = _xtest_display(args.display)
     if d is None:
         return {"case": name, "status": "skipped", "reason": reason}
     try:
+        if name == "hover-sweep" and args.expect_class:
+            seen = [_window_class_at(d, *point) for point in (args.hover_from, args.hover_to)]
+            if any(wm_class is None or args.expect_class not in wm_class for wm_class in seen):
+                return {"case": name, "status": "skipped",
+                        "reason": f"hover endpoints are not over WM_CLASS {args.expect_class!r}: {seen!r}"}
         if name == "rubber-band":
             workload = _drag_workload(d, start, end)
         elif name == "start-toggle":
             workload = _click_workload(d, args.start_xy)
+        elif name == "hover-sweep":
+            workload = _hover_workload(d, args.hover_from, args.hover_to,
+                                       steps=args.hover_steps, rate_hz=args.hover_rate)
         else:
             workload = _drag_workload(d, args.move_from, args.move_to)
         return {"case": name, "status": "ran", **measure(args.display, args.window, workload)}
@@ -256,7 +335,7 @@ def build_parser():
     p.add_argument("--window", type=float, default=5.0, help="seconds per sample window (default 5)")
     p.add_argument("--repeat", type=int, default=3, help="repeats per case (default 3)")
     p.add_argument("--cases", default="idle,rubber-band,start-toggle,window-move",
-                   help="comma-separated subset of: idle, rubber-band, start-toggle, window-move")
+                   help="comma-separated subset of: idle, rubber-band, start-toggle, window-move, hover-sweep")
     p.add_argument("--allow-input", action="store_true",
                    help="permit XTEST pointer input on --display (required for non-idle cases)")
     p.add_argument("--rubber-from", type=_parse_xy, metavar="X,Y")
@@ -264,6 +343,16 @@ def build_parser():
     p.add_argument("--start-xy", type=_parse_xy, metavar="X,Y", help="click point for the start toggle")
     p.add_argument("--move-from", type=_parse_xy, metavar="X,Y")
     p.add_argument("--move-to", type=_parse_xy, metavar="X,Y")
+    p.add_argument("--hover-from", type=_parse_xy, metavar="X,Y",
+                   help="first hover-sweep endpoint (needs --hover-to)")
+    p.add_argument("--hover-to", type=_parse_xy, metavar="X,Y",
+                   help="second hover-sweep endpoint")
+    p.add_argument("--hover-steps", type=int, default=40,
+                   help="motion events per sweep leg (default 40)")
+    p.add_argument("--hover-rate", type=float, default=125.0,
+                   help="motion events per second (default 125)")
+    p.add_argument("--expect-class", metavar="WM_CLASS",
+                   help="refuse hover-sweep unless both endpoints are over this WM_CLASS")
     p.add_argument("--json-out", help="write JSON here instead of stdout")
     return p
 
@@ -276,7 +365,7 @@ def main(argv=None):
     if args.repeat < 1 or args.window <= 0:
         print("error: --repeat must be >= 1 and --window > 0", file=sys.stderr)
         return 2
-    known = {"idle", "rubber-band", "start-toggle", "window-move"}
+    known = {"idle", "rubber-band", "start-toggle", "window-move", "hover-sweep"}
     cases = [c.strip() for c in args.cases.split(",") if c.strip()]
     unknown = sorted(set(cases) - known)
     if unknown:

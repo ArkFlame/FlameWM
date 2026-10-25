@@ -633,6 +633,16 @@ impl State {
         self.startup_failure.get()
     }
 
+    /// True while the session still owes a desktop: autostart clients are configured but XWayland
+    /// never became ready, so nothing can ever map a window.
+    ///
+    /// The first frame is presented before XWayland is even spawned, and it only ever contains the
+    /// clear colour plus the cursor, so a completed flip is no evidence that a desktop will appear.
+    /// This is the condition the post-present content deadline watches.
+    pub fn desktop_pending(&self) -> bool {
+        self.xwm.is_none() && !self.autostart.is_empty()
+    }
+
     pub fn request_redraw(&self) {
         self.request_full_redraw();
         if let Some(backend) = self.backend.as_ref() {
