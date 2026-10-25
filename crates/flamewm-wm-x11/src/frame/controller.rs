@@ -356,10 +356,15 @@ fn move_step(
         state.placement.resume = None;
         state.placement.current = plan.frame;
         state.placement.floating_restore = plan.frame;
+        // Leaving snapped/maximized restores the floating size now, also under the outline: the
+        // press already recorded the start mode as floating, so release would only move the frame
+        // and keep the tiled size (and paint chrome for the restored width).
+        let mut effects = full_configure(plan.frame, state.extents);
         if preview {
-            return (state, vec![FrameEffect::DragOutline { rect: Some(plan.frame) }]);
+            effects.push(FrameEffect::DragOutline {
+                rect: Some(plan.frame),
+            });
         }
-        let effects = full_configure(plan.frame, state.extents);
         return (state, effects);
     }
 
@@ -929,6 +934,28 @@ mod tests {
 
     fn outline_state() -> ControllerState {
         floating_state().with_contents_while_dragging(false)
+    }
+
+    /// A snapped window dragged out under the outline gets its floating size back: the frame and
+    /// the client are configured to the restore size, never left at the snapped size.
+    #[test]
+    fn outline_drag_out_of_snap_restores_the_floating_size() {
+        let start = snapped_state().with_contents_while_dragging(false);
+        let restore = start.placement.floating_restore;
+        let (s1, _) = reduce(&start, press(1, 400, 10));
+        let (s2, e2) = reduce(&s1, motion(700, 300));
+        let (s3, e3) = reduce(&s2, release(700, 300));
+        assert!(s3.session.is_idle());
+        let restored = e2.iter().chain(&e3).any(|effect| {
+            matches!(effect, FrameEffect::ConfigureFrameRoot { w, h, .. }
+                if *w == restore.w && *h == restore.h)
+        });
+        assert!(restored, "no configure to {restore:?} in {e2:?} / {e3:?}");
+        assert!(
+            e2.iter()
+                .any(|effect| matches!(effect, FrameEffect::DragOutline { rect: Some(_) }))
+        );
+        assert_eq!(s3.placement.mode, PlacementMode::Floating);
     }
 
     #[test]
