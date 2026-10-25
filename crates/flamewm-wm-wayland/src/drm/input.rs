@@ -1,6 +1,7 @@
 //! libinput events: pointer motion, keyboard routing and the VT switch chord.
 
 use super::*;
+use smithay::reexports::input::DeviceCapability;
 
 pub(super) fn handle_input(
     state: &mut State,
@@ -24,10 +25,42 @@ pub(super) fn handle_input(
                         eprintln!("flamewm-wayland: VT switch to {vt} failed: {error}");
                     }
                 }
-                None => state.process_input::<LibinputInputBackend>(InputEvent::Keyboard { event }),
+                None => {
+                    state.process_input::<LibinputInputBackend>(InputEvent::Keyboard { event });
+                    sync_leds(state, drm);
+                }
             }
         }
+        InputEvent::DeviceAdded { mut device } => {
+            if device.has_capability(DeviceCapability::Keyboard) {
+                let mut d = drm.borrow_mut();
+                device.led_update(d.leds.into());
+                d.keyboards.push(device.clone());
+            }
+            state.process_input::<LibinputInputBackend>(InputEvent::DeviceAdded { device });
+        }
+        InputEvent::DeviceRemoved { device } => {
+            drm.borrow_mut().keyboards.retain(|known| *known != device);
+            state.process_input::<LibinputInputBackend>(InputEvent::DeviceRemoved { device });
+        }
         other => state.process_input(other),
+    }
+}
+
+/// Writes the keyboard's Caps/Num/Scroll Lock state to every libinput keyboard when it changed. The
+/// kernel no longer drives these LEDs once logind switched the VT keyboard off.
+fn sync_leds(state: &State, drm: &Rc<RefCell<Drm>>) {
+    let Some(keyboard) = state.seat.get_keyboard() else {
+        return;
+    };
+    let leds = keyboard.led_state();
+    let mut d = drm.borrow_mut();
+    if d.leds == leds {
+        return;
+    }
+    d.leds = leds;
+    for device in &mut d.keyboards {
+        device.led_update(leds.into());
     }
 }
 

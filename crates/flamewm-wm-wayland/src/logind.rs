@@ -895,7 +895,9 @@ mod system {
             let path = object_path(session_path)?;
 
             // Signal callbacks only enqueue: the pause reply is the compositor's decision.
-            let rule = MatchRule::new_signal(SESSION_IF, "PauseDevice").with_path(path.clone());
+            let rule = MatchRule::new_signal(SESSION_IF, "PauseDevice")
+                .with_sender(LOGIN)
+                .with_path(path.clone());
             let pause_queue = queue.clone();
             self.conn.add_match(
                 rule,
@@ -908,7 +910,9 @@ mod system {
                 },
             )?;
 
-            let rule = MatchRule::new_signal(SESSION_IF, "ResumeDevice").with_path(path.clone());
+            let rule = MatchRule::new_signal(SESSION_IF, "ResumeDevice")
+                .with_sender(LOGIN)
+                .with_path(path.clone());
             let resume_queue = queue.clone();
             self.conn
                 .add_match(rule, move |(major, minor, fd): (u32, u32, DbusFd), _, _| {
@@ -920,7 +924,9 @@ mod system {
                     true
                 })?;
 
-            let rule = MatchRule::new_signal(SESSION_IF, "Activate").with_path(path);
+            let rule = MatchRule::new_signal(SESSION_IF, "Activate")
+                .with_sender(LOGIN)
+                .with_path(path);
             let activate_queue = queue;
             self.conn.add_match(rule, move |(), _, _| {
                 activate_queue.push(Event::ActivateSession);
@@ -1529,8 +1535,8 @@ mod tests {
             session.is_active(),
             "a paused device is not an inactive session"
         );
-        // /dev/null is 1:5, so that is the key logind paused.
-        assert_eq!(session.paused_devices(), vec![(1, 5)]);
+        // /dev/null is 1:3, so that is the key logind paused.
+        assert_eq!(session.paused_devices(), vec![(1, 3)]);
     }
 
     #[test]
