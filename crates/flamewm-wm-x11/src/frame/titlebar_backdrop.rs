@@ -159,9 +159,6 @@ struct State {
     /// Final blurred crop of the last drag, kept per owner after release. No full-root snapshot
     /// is retained.
     retained: Option<(u64, Blurred)>,
-    /// Decoded natural wallpaper image for the masked drag path, kept per file so a drag start
-    /// does not decode the wallpaper again. Dropped when the wallpaper source changes.
-    natural: Option<(PathBuf, RgbaImage)>,
     /// Output rects (root `x, y, w, h`) published by the WM.
     outputs: Vec<(i32, i32, u32, u32)>,
 }
@@ -232,7 +229,6 @@ fn set_source_in(state: &mut State, mut source: WallpaperSource) -> u32 {
         state.source = Some(source);
         state.generation = state.generation.wrapping_add(1);
         state.canvas = None;
-        state.natural = None;
         state.cache.clear();
         state.retained = None;
         // Keep only a root-sized composed canvas. The decoded source image can be several times
@@ -711,7 +707,6 @@ fn build_drag(
     let masked = mask_pixels(
         state.source.as_ref(),
         &mut state.canvas,
-        &mut state.natural,
         mask,
         root,
         captured.is_some(),
@@ -772,28 +767,24 @@ fn wallpaper_base(
     wallpaper_rect(source, canvas, (0, 0, root.0, root.1), root)
 }
 
-/// Wallpaper pixels for the frame `mask`. With a root capture present, an image mask is composed
-/// from the decoded natural image, so no root canvas is built or kept. Otherwise, or when that is
-/// refused, it comes from the cached root canvas.
+/// Wallpaper pixels for the frame `mask`, from the root canvas the titlebars already keep (it is
+/// composed when the source is set). Only when that canvas is missing for this root and a root
+/// capture makes the canvas unnecessary for the base, the mask is composed from a decoded natural
+/// image that is dropped right after: the natural image is larger than the canvas (17 MB for the
+/// default wallpaper against 8 MB at 1080p) and keeping both doubled the WM's wallpaper memory.
 fn mask_pixels(
     source: Option<&WallpaperSource>,
     canvas: &mut Option<((u32, u32), Option<RgbaImage>)>,
-    natural: &mut Option<(PathBuf, RgbaImage)>,
     mask: (i32, i32, u32, u32),
     root: (u32, u32),
     has_capture: bool,
 ) -> Vec<u8> {
-    if has_capture {
+    let canvas_ready = canvas.as_ref().is_some_and(|(size, _)| *size == root);
+    if has_capture && !canvas_ready {
         if let Some(WallpaperSource::Image { path, fit, outputs }) = source {
-            let file = wallpaper_file(path);
-            if natural.as_ref().is_none_or(|(kept, _)| *kept != file) {
-                *natural = wallpaper::decode_file(&file)
-                    .ok()
-                    .map(|image| (file.clone(), image));
-            }
-            if let Some(pixels) = natural
-                .as_ref()
-                .and_then(|(_, image)| masked_from_natural(image, *fit, outputs, mask, root))
+            if let Some(pixels) = wallpaper::decode_file(&wallpaper_file(path))
+                .ok()
+                .and_then(|image| masked_from_natural(&image, *fit, outputs, mask, root))
             {
                 return pixels;
             }
@@ -1929,15 +1920,7 @@ mod tests {
                     let mut old_canvas = None;
                     let old = wallpaper_rect(Some(&source), &mut old_canvas, mask, root);
                     let mut new_canvas = None;
-                    let mut natural = None;
-                    let new = mask_pixels(
-                        Some(&source),
-                        &mut new_canvas,
-                        &mut natural,
-                        mask,
-                        root,
-                        true,
-                    );
+                    let new = mask_pixels(Some(&source), &mut new_canvas, mask, root, true);
                     assert_eq!(new, old, "root {root:?} {fit:?} mask {mask:?}");
                     assert!(
                         new_canvas.is_none(),
@@ -1946,7 +1929,21 @@ mod tests {
                 }
             }
         }
+        // With the canvas already kept, the mask comes from it: no decode, so a missing file does
+        // not matter.
+        let source = WallpaperSource::Image {
+            path: file.clone(),
+            fit: ALL_FITS[0],
+            outputs: Vec::new(),
+        };
+        let mut canvas = None;
+        let expected = wallpaper_rect(Some(&source), &mut canvas, MASKS[0], (16, 9));
         std::fs::remove_file(&path).ok();
+        assert_eq!(
+            mask_pixels(Some(&source), &mut canvas, MASKS[0], (16, 9), true),
+            expected,
+            "the kept canvas serves the mask"
+        );
     }
 
     #[test]
