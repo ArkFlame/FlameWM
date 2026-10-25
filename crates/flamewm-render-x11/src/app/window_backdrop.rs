@@ -104,6 +104,9 @@ pub(crate) struct WindowBackdropState {
     pub(crate) desktop_stale: bool,
     /// Root read blurred once, cropped per move.
     blurred_root: Option<BlurredCanvas>,
+    /// Bumped whenever `blurred_root` or `wallpaper` changes, so a capture can tell that the canvas
+    /// it would crop is the one the uploaded snapshot already came from.
+    canvas_epoch: u64,
     /// When the root was last read (either variant); spaces reads by `CAPTURE_QUIET`.
     pub(crate) last_readback: Option<Instant>,
     pub(crate) stale: bool,
@@ -134,6 +137,8 @@ pub(crate) struct WindowBackdropState {
 /// Blurred ARGB snapshot as uploaded, with the root position of its top-left pixel.
 #[derive(Debug)]
 pub(crate) struct CapturedSnapshot {
+    /// `canvas_epoch` of the canvas these words were cropped from.
+    pub(crate) epoch: u64,
     pub(crate) words: Vec<u32>,
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -161,6 +166,7 @@ impl WindowBackdropState {
         Self {
             spec,
             wallpaper: None,
+            canvas_epoch: 0,
             desktop_stale: true,
             blurred_root: None,
             last_readback: None,
@@ -201,10 +207,10 @@ impl X11App {
         };
         state.covered = !unobscured;
         if unobscured {
+            // The raise exposes the window, which repaints it; the recapture is a crop of the canvas
+            // the covering windows were read into, and a no-op when they were not.
             state.covered_due = None;
             state.stale = true;
-            state.generation += 1;
-            self.mark_full();
             return;
         }
         self.note_window_covered_change();
@@ -248,10 +254,11 @@ impl X11App {
         // cached clean root no longer describes the desktop. The flag only takes effect at the
         // next safe read; it never triggers a hide.
         if unsafe { self.probe_root_scene() } {
+            // The pixels change only if a later capture crops something different, which bumps the
+            // generation itself; a restack alone repaints nothing.
             if let Some(state) = self.window_backdrop.as_mut() {
                 state.desktop_stale = true;
                 state.stale = true;
-                state.generation += 1;
             }
         }
         let root = unsafe { self.root_size() };
@@ -314,6 +321,7 @@ impl X11App {
                         );
                         if let Some(state) = self.window_backdrop.as_mut() {
                             state.blurred_root = Some(canvas);
+                            state.canvas_epoch += 1;
                             state.desktop_stale = false;
                             state.last_readback = Some(Instant::now());
                             state.scene_children = Some(scene);
@@ -551,6 +559,7 @@ impl X11App {
                 continue;
             }
             canvas.paste((x, y), (rw, rh), capture.pixels, 0, blur_percent);
+            state.canvas_epoch += 1;
             patched = true;
         }
         if patched {
@@ -667,6 +676,7 @@ impl X11App {
                 let blur_percent = state.spec.blur_percent;
                 state.blurred_root = desktop
                     .map(|root| BlurredCanvas::new(root.width, root.height, root.pixels, 0, blur_percent));
+                state.canvas_epoch += 1;
                 state.desktop_stale = false;
                 state.last_readback = Some(Instant::now());
                 // A04 invalidation baseline: the root stack this clean copy was read against.
@@ -675,6 +685,9 @@ impl X11App {
             }
         }
         let (width, height) = (self.width, self.height);
+        let pixmap_fits = self
+            .window_backdrop_pixmap
+            .is_some_and(|pixmap| (pixmap.width, pixmap.height) == (width, height));
         let state = self
             .window_backdrop
             .as_mut()
@@ -689,6 +702,16 @@ impl X11App {
             // once, and every later capture only crops it.
             let _compose_span = flamewm_profiler::start("render.backdrop.compose");
             state.wallpaper = Some(crate::backdrop::wallpaper_canvas(&state.spec, root)?);
+            state.canvas_epoch += 1;
+        }
+        let epoch = state.canvas_epoch;
+        if pixmap_fits
+            && state.captured.as_ref().is_some_and(|old| {
+                old.epoch == epoch && old.root == (rx, ry) && (old.width, old.height) == (width, height)
+            })
+        {
+            // Same canvas, same place, same size: the uploaded snapshot already holds these pixels.
+            return Ok(());
         }
         let canvas = if blurred_fits {
             state.blurred_root.as_ref()
@@ -730,6 +753,7 @@ impl X11App {
                 state.generation += 1;
             }
             state.captured = Some(CapturedSnapshot {
+                epoch,
                 words,
                 width,
                 height,
@@ -860,6 +884,7 @@ impl X11App {
         }
         if let Some(state) = self.window_backdrop.as_mut() {
             state.blurred_root = None;
+            state.canvas_epoch += 1;
             // A new read needs a new invalidation baseline.
             state.scene_children = None;
             state.deferred_at = None;
