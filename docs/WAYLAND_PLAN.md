@@ -142,10 +142,21 @@ reduced to short tokens (no fds, addresses, cookies or environment dumps). A ses
 start the compositor before its VT/seat is active. After `TakeControl` the compositor calls
 `org.freedesktop.login1.Session.Activate` (and `Seat.SwitchTo(XDG_VTNR)` when the variable is set),
 polls the `Active` property, and fails closed (`reason=inactive_after_activate`) rather than taking
-DRM master on a session that is not ours. Once the event loop starts, a 5 s first-frame watchdog
-stops the loop, releases the session and exits non-zero if no frame was queued, so a taken-but-black
-VT cannot persist. `drm::init` also refuses to open the GPU and modeset while the session is
-inactive.
+DRM master on a session that is not ours. Once the event loop starts, an 8 s first-presented-frame
+watchdog stops the loop, releases the session and exits non-zero if the frame was never queued or
+was queued but never completed, so a taken-but-black VT cannot persist. `drm::init` also refuses to
+open the GPU and modeset while the session is inactive.
+
+`stage=ready status=ok code=6` only means the event loop started. A separate
+`stage=presented status=ok code=8` is emitted once after the first `VBlank` completes the frame that
+was queued (`frame_submitted` for that CRTC); that is the only startup signal that proves a pixel
+reached the panel. `stage=firstframe status=ok code=7` is diagnostic (a flip was queued). If the flip
+never completes the compositor reports `stage=firstframe status=fail detail=pageflip_timeout` (or
+`detail=no_first_queue`), stops the loop and releases the session, and the wrapper's readiness gate
+(which only accepts `stage=presented`) reports `detail=queued_but_not_presented`. libinput is
+initialised only after the first presented frame, so a wedged page flip can never leave the keyboard
+grabbed. The advisory `--probe` runs after the compositor is launched, so its busctl/ldconfig work
+never delays the first frame.
 
 The wrapper appends its own phases to the same shape (`session`, `runtime`, `log`, `capabilities`,
 `probe`, `socket`, `xwayland`, `ready`, `exit`, each with `ms=`) and writes everything to

@@ -69,13 +69,25 @@ REQUIRED = {
                               "desktop-exec-wrapper", "desktop-exec-exit",
                               "desktop-exec-backend-drm", "desktop-exec-gate-ran",
                               "desktop-exec-flag-not-forwarded"},
+    # readiness is a *presented* frame (code=8), not a queued one
+    "presented-gate": {"exit", "compositor-presented", "gate-accepted", "presented-timing",
+                       "no-timeout"},
+    # queued but never presented (the reported black panel): timeout, TERM, and the exact reason
+    "queued-not-presented": {"exit", "compositor-queued", "gate-failed", "black-panel-detail",
+                             "report-reason", "got-term", "never-ready", "no-zombie-compositor"},
+    # nothing was ever queued: the same timeout names a different failure
+    "no-frame-queued": {"exit", "gate-failed", "no-frame-queued-detail", "report-reason",
+                        "got-term", "no-zombie-compositor"},
 }
 
 # Matrix row -> the wrapper exit code it stands for. Asserted both by the harness and, below,
 # directly against the wrapper so the number is never taken on trust from another script.
+# `queued-not-presented`/`no-frame-queued` exit 143: the wrapper TERMs a compositor that never
+# presented, and the stub answers TERM with 143 (a real compositor's exit code is its own).
 EXIT_CODES = {"missing-binary-127": 127, "not-executable-126": 126, "capability-gate-missing": 2,
               "capability-unsupported": 2, "invalid-backend": 2, "probe-advisory": 0,
-              "runtime-missing": 0, "nested-flag-wins": 0}
+              "runtime-missing": 0, "nested-flag-wins": 0, "presented-gate": 0,
+              "queued-not-presented": 143, "no-frame-queued": 143}
 
 
 def parse_matrix(output):
@@ -157,6 +169,19 @@ case "${1:-}" in
   --probe) printf '[FAIL] fixture: no fixture seat\\n'; exit 3 ;;
 esac
 exit 0
+"""
+
+# The reported hardware case, without a GPU: the compositor queues its first flip
+# (`stage=firstframe code=7`) and the flip never completes, so `stage=presented code=8` never comes.
+STUB_QUEUED_NEVER_PRESENTED = """#!/bin/sh
+case "${1:-}" in
+  --capabilities) printf 'backend=native\\ndrm_compiled=true\\n'; exit 0 ;;
+  --probe) exit 0 ;;
+esac
+printf 'FLAMEWM-WAYLAND-STARTUP stage=ready status=ok code=6 detail=backend_init t=1ms\\n'
+printf 'FLAMEWM-WAYLAND-STARTUP stage=firstframe status=ok code=7 detail=card0 t=2ms\\n'
+trap 'exit 143' TERM
+while :; do sleep 0.05; done
 """
 
 
@@ -243,6 +268,22 @@ class WaylandSessionWrapperExitCodeTests(unittest.TestCase):
         log = (self.base / "home/.cache/flamewm/wayland-session.log").read_text(encoding="utf-8")
         self.assertIn("probe exit=3 (advisory; does not change the session exit code)", log)
         self.assertIn("stage=probe status=fail code=3 detail=advisory,continuing", log)
+
+    def test_a_queued_flip_that_is_never_presented_times_out(self):
+        """`firstframe` must never be readiness: the black-panel case has to fail, not hang."""
+        binary = self.base / "queued-never-presented"
+        binary.write_text(STUB_QUEUED_NEVER_PRESENTED, encoding="utf-8")
+        binary.chmod(0o755)
+        result = run_wrapper(self.base, FLAMEWM_WAYLAND_BINARY=str(binary),
+                             FLAMEWM_WAYLAND_READY_TIMEOUT_MS="600")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        log = (self.base / "home/.cache/flamewm/wayland-session.log").read_text(encoding="utf-8")
+        # The compositor did queue a flip, and that is exactly why the report names the black panel.
+        self.assertIn("stage=firstframe status=ok code=7", log)
+        # No success line from either side: the gate was never satisfied.
+        self.assertNotIn("stage=presented status=ok code=0", log)
+        self.assertIn("stage=presented status=fail code=0 detail=no_first_frame_timeout", log)
+        self.assertIn("reason=no_first_frame_timeout detail=queued_but_not_presented", log)
 
     def test_backend_flag_never_reaches_the_compositor(self):
         record = self.base / "record"

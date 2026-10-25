@@ -16,7 +16,7 @@
 #   capability-gate-missing, capability-unsupported, probe-advisory, runtime-missing,
 #   runtime-insecure, missing-binary-127, not-executable-126, sigterm-forward,
 #   sigterm-escalate, log-mode-rotation, socket-xwayland-activation, invalid-backend,
-#   desktop-exec-contract.
+#   desktop-exec-contract, presented-gate, queued-not-presented, no-frame-queued.
 set -uo pipefail
 
 SELF_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -89,6 +89,24 @@ case "${STUB_RUN:-exit0}" in
         printf "flamewm-wayland: XWayland ready on DISPLAY=:97\n"
         sleep "${STUB_RUN_SLEEP:-0.4}"
         exit "${STUB_RUN_RC:-0}"
+        ;;
+    presented)
+        # The successful native start: the event loop runs, a flip is queued and then presented.
+        printf "FLAMEWM-WAYLAND-STARTUP stage=ready status=ok code=6 detail=backend_init t=30ms\n"
+        printf "FLAMEWM-WAYLAND-STARTUP stage=firstframe status=ok code=7 detail=card0 t=32ms\n"
+        printf "FLAMEWM-WAYLAND-STARTUP stage=presented status=ok code=8 detail=card0_crtc_63 t=48ms\n"
+        printf "flamewm-wayland: startup timing session=4ms gpu=6ms gbm=1ms egl=2ms renderer=9ms scan=8ms queue=32ms present=48ms\n"
+        sleep "${STUB_RUN_SLEEP:-0.4}"
+        exit "${STUB_RUN_RC:-0}"
+        ;;
+    queued)
+        # The reported hardware case: a flip was queued to KMS and never presented, so the panel is
+        # black while the compositor holds DRM master. Readiness must never be reached.
+        printf "FLAMEWM-WAYLAND-STARTUP stage=ready status=ok code=6 detail=backend_init t=30ms\n"
+        printf "FLAMEWM-WAYLAND-STARTUP stage=firstframe status=ok code=7 detail=card0 t=32ms\n"
+        printf "flamewm-wayland: first frame queued on card0 crtc=63 detail=not_presented\n"
+        trap "printf \"got TERM\\n\" >> \"\$record\"; exit 143" TERM
+        while :; do sleep 0.05; done
         ;;
     term)
         trap "printf \"got TERM\\n\" >> \"\$record\"; printf \"flamewm-wayland: terminated by TERM\\n\"; exit 143" TERM
@@ -186,7 +204,15 @@ run_wrapper_signalled() { # signal, [wrapper args...] -> $RUN_RC (runs in backgr
     local sig="$1"; shift
     env -i "${CASE_ENV[@]}" "$WRAPPER" "$@" >"$OUT" 2>&1 &
     local wrapper_pid=$!
-    sleep 0.6
+    # Wait (bounded) until the wrapper has actually started the compositor: the signal must exercise
+    # the forwarding path, not land in preflight where there is nothing to forward to.
+    local waited=0
+    while (( waited < 5000 )); do
+        grep -Fq "flamewm-wayland started pid=" "$LOG" 2>/dev/null && break
+        kill -0 "$wrapper_pid" 2>/dev/null || break
+        sleep 0.05
+        waited=$(( waited + 50 ))
+    done
     kill -s "$sig" "$wrapper_pid" 2>/dev/null || :
     wait "$wrapper_pid" 2>/dev/null
     RUN_RC=$?
@@ -400,6 +426,47 @@ check_eq "desktop-exec-exit" 0 "$RUN_RC"
 check_file_has "desktop-exec-backend-drm" "$RECORD" "backend=drm"
 check_file_has "desktop-exec-gate-ran" "$LOG" "stage=capabilities status=ok"
 check_file_lacks "desktop-exec-flag-not-forwarded" "$RECORD" "--backend"
+
+# --- 18. Readiness is a *presented* frame: `stage=presented status=ok code=8` is the gate, and a
+#        session that reaches it is accepted (`firstframe`/`ready` are only timing diagnostics).
+start_case presented-gate
+add_env STUB_RUN "presented"
+add_env FLAMEWM_WAYLAND_READY_TIMEOUT_MS "1500"
+run_wrapper
+check_eq "exit" 0 "$RUN_RC"
+check_file_has "compositor-presented" "$LOG" "FLAMEWM-WAYLAND-STARTUP stage=presented status=ok code=8"
+check_file_has "gate-accepted" "$LOG" "stage=presented status=ok code=0 detail=presented,ready_ms="
+check_file_has "presented-timing" "$LOG" "timing: compositor presented its first frame at"
+check_file_lacks "no-timeout" "$LOG" "no_first_frame_timeout"
+
+# --- 19. The reported black-panel case: the flip is queued (`stage=firstframe code=7`) and never
+#        presented. That must never satisfy readiness: the wrapper stops the compositor (TERM, then
+#        KILL) and its report says reason=no_first_frame_timeout detail=queued_but_not_presented.
+start_case queued-not-presented
+add_env STUB_RUN "queued"
+add_env FLAMEWM_WAYLAND_READY_TIMEOUT_MS "1500"
+run_wrapper
+check_eq "exit" 143 "$RUN_RC"
+check_file_has "compositor-queued" "$LOG" "FLAMEWM-WAYLAND-STARTUP stage=firstframe status=ok code=7"
+check_file_has "gate-failed" "$LOG" "stage=presented status=fail code=0 detail=no_first_frame_timeout"
+check_file_has "black-panel-detail" "$LOG" "detail=queued_but_not_presented"
+check_file_has "report-reason" "$LOG" "reason=no_first_frame_timeout detail=queued_but_not_presented"
+check_file_has "got-term" "$RECORD" "got TERM"
+check_file_lacks "never-ready" "$LOG" "stage=presented status=ok code=0"
+no_leftover_process "no-zombie-compositor" "$BIN/flamewm-wayland"
+
+# --- 20. Nothing was ever queued either: the same timeout, but the report must not claim a flip was
+#        in flight (detail=no_frame_queued), which is a different failure from the black panel.
+start_case no-frame-queued
+add_env STUB_RUN "term"
+add_env FLAMEWM_WAYLAND_READY_TIMEOUT_MS "1500"
+run_wrapper
+check_eq "exit" 143 "$RUN_RC"
+check_file_has "gate-failed" "$LOG" "stage=presented status=fail code=0 detail=no_first_frame_timeout"
+check_file_has "no-frame-queued-detail" "$LOG" "detail=no_frame_queued"
+check_file_has "report-reason" "$LOG" "reason=no_first_frame_timeout detail=no_frame_queued"
+check_file_has "got-term" "$RECORD" "got TERM"
+no_leftover_process "no-zombie-compositor" "$BIN/flamewm-wayland"
 
 printf '\nSUMMARY cases=%d passed=%d failed=%d\n' "$CASES" "$PASSES" "$FAILS"
 if (( FAILS > 0 )); then

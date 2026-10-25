@@ -11,9 +11,62 @@
 //! Nothing paints unless somebody asked for it: `State::request_full_redraw` sets a coalescing
 //! dirty flag and pings the calloop waker installed here, and the per-output rules live in
 //! `state::plan_frame`/`state::OutputFrames` so they are testable without a GPU. There is no
-//! periodic repaint: idle means zero paints, and the only timer is a bounded retry for a real sync
-//! or buffer error. A vblank clears `queued` before the next plan, so a request that arrives while
-//! a frame is in flight is deferred to that vblank instead of being dropped.
+//! periodic repaint: idle means zero paints, and the only paint-related timer is a bounded retry for a
+//! real sync or buffer error (the session poll and the one startup deadline never paint). A vblank
+//! clears `queued` before the next plan, so a request that arrives while a frame is in flight is
+//! deferred to that vblank instead of being dropped.
+//!
+//! # The GPU sync contract
+//!
+//! `DrmCompositor::render_frame` returns a `RenderFrameResult` whose `needs_sync()` is true when KMS
+//! cannot be made to wait for our rendering itself (no explicit fencing, or a sync point that cannot
+//! be exported as a native fence). Smithay's contract for that case is explicit — see the docs of
+//! `DrmCompositor::queue_frame`/`commit_frame` (`smithay-0.7.0/src/backend/drm/compositor/mod.rs:2424`
+//! and `:2474`) and of `RenderFrameResult::needs_sync`
+//! (`smithay-0.7.0/src/backend/drm/compositor/frame_result.rs:59`): the caller must synchronize
+//! before it renders or submits again. `anvil` does exactly that in `anvil/src/udev.rs:1641-1643`
+//! (`PrimaryPlaneElement::Swapchain(element) => element.sync.wait()`).
+//!
+//! This backend waits on the frame's `SyncPoint` (`PrimarySwapchainElement::sync`,
+//! `frame_result.rs:435`) instead of queueing straight away, and it does so *bounded*: an `EGLFence`
+//! is waited on with `EGLFence::client_wait(Some(budget), false)`
+//! (`smithay-0.7.0/src/backend/egl/fence.rs:157`), so the compositor thread can never block on a dead
+//! GPU forever. If the fence does not signal, the frame is **not** queued: the output is deferred
+//! (`state::sync_wait_decision` -> `SyncWait::Defer`, then `SyncWait::Fail`) and the bounded retry
+//! re-plans it. Skipping this wait is what produces the repeated buffer/IO errors that end in a
+//! wedged pipeline and a black screen.
+//!
+//! # Input is grabbed at the first *presented* frame
+//!
+//! `udev_assign_seat` opens every device on the seat and `EVIOCGRAB`s it, and our modeset unbinds
+//! fbcon: from that moment the compositor owns the keyboard. Bringing input up before a frame is on
+//! screen therefore means that *any* later hang leaves a black VT with a dead keyboard and no way to
+//! Ctrl+Alt+Fn out. So libinput is started last — after every output exists *and* after the first
+//! flip has completed — and `stage=libinput` is only reported when it is actually up. A startup that
+//! wedges before that point grabs nothing, and the console keeps working.
+//!
+//! # Queue, present, and the escape hatch
+//!
+//! Two boundaries, and only the second one is readiness (see `crate::startup`):
+//!
+//! * A successful `DrmCompositor::queue_frame` means the atomic commit was handed to KMS. It emits
+//!   `stage=firstframe status=ok code=7` — diagnostic only. It starts nothing, it grabs nothing and
+//!   it does **not** cancel the startup deadline: a queued flip can still never complete, and a
+//!   compositor that treats "queued" as "on screen" holds DRM master and the keyboard in front of a
+//!   black panel.
+//! * The vblank whose `DrmCompositor::frame_submitted()` answers `Some(..)` means that flip completed.
+//!   It emits `stage=presented status=ok code=8` exactly once, starts libinput and cancels the
+//!   deadline. A vblank for a CRTC without a queued flip, or while the session is paused, satisfies
+//!   nothing.
+//!
+//! One bounded deadline (8 s, `startup::FIRST_FRAME_DEADLINE`) is armed when the backend initialises
+//! and is cancelled by nothing but a presented frame. When it fires, the session is unrecoverable in
+//! place — the CRTC is ours, nothing is on it, and (because input still is not grabbed) it is only a
+//! black screen — so it reports itself, stops the loop and lets `main` exit non-zero, which tears the
+//! backend down (`device.pause`, `ReleaseControl`) and gives the VT back. The reason distinguishes
+//! `detail=no_first_queue` (nothing ever reached KMS) from `detail=pageflip_timeout` (a flip was
+//! queued and never completed, the black-panel case), with the counters, the CRTC, the elapsed time
+//! and the last render error.
 //!
 //! # Session
 //!
@@ -26,15 +79,6 @@
 //! master on an inactive session (see the `is_active` check there). Only a real `PauseDevice` suspends
 //! libinput: a session that merely started out inactive never does, because input has to stay live
 //! for Ctrl+Alt+Fn to reach the kernel.
-//!
-//! # First-frame escape hatch
-//!
-//! A one-shot five-second timer is armed once the render waker is installed. If no frame has been
-//! queued to KMS by then (`Drm::frames_queued`), the session is unrecoverable in place: the CRTC is
-//! ours, nothing is on it and the console cannot be reached. `stage=ready status=fail
-//! detail=no_first_frame` is emitted, the loop is stopped and `main` exits non-zero, which tears the
-//! backend down (`device.pause`, `ReleaseControl`) and gives the VT back. The timer is cancelled by
-//! the first successfully queued frame.
 //!
 //! # GPU selection and partial bring-up
 //!
@@ -56,13 +100,18 @@ use std::os::fd::OwnedFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
-use smithay::backend::allocator::{Format, Fourcc};
-use smithay::backend::drm::compositor::{DrmCompositor, FrameError, FrameFlags, RenderFrameError};
+use smithay::backend::allocator::{Buffer, Format, Fourcc};
+use smithay::backend::drm::compositor::{
+    DrmCompositor, FrameError, FrameFlags, PrimaryPlaneElement, RenderFrameError, RenderFrameResult,
+};
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
-use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmDeviceNotifier, DrmError, DrmEvent};
+use smithay::backend::drm::{
+    DrmDevice, DrmDeviceFd, DrmDeviceNotifier, DrmError, DrmEvent, Framebuffer,
+};
+use smithay::backend::egl::fence::EGLFence;
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
     Event as _, InputEvent, KeyState, KeyboardKeyEvent, PointerMotionEvent,
@@ -72,6 +121,7 @@ use smithay::backend::renderer::ImportDma;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::{Id, Kind};
 use smithay::backend::renderer::glow::GlowRenderer;
+use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::session::Session;
 use smithay::backend::udev::{self, UdevBackend, UdevEvent};
@@ -92,12 +142,18 @@ use smithay::utils::{DeviceFd, Physical, Point, Rectangle, Size, Transform};
 
 use crate::Stage;
 use crate::StageStatus;
+use crate::StartupTiming;
+use crate::elapsed_ms;
 use crate::logind::{Event as LogindEvent, LogindSession, PauseKind};
+mod device;
+mod input;
+
 use crate::render::{self, CURSOR_COLOR, CURSOR_SIZE, Elem};
 use crate::stage_line;
+use crate::startup::{FIRST_FRAME_DEADLINE, FirstFrameGate, NO_FAILURE};
 use crate::state::{
-    FrameDecision, GpuProbe, OutputFrames, State, arm_retry, first_frame_missing, pick_gpu,
-    scan_failed,
+    FrameDecision, GpuProbe, OutputFrames, SYNC_WAIT_BUDGET, State, SyncWait, pick_gpu, retry_owed,
+    scan_failed, sync_wait_decision,
 };
 
 type Compositor =
@@ -110,8 +166,6 @@ const FRAME_RETRY: Duration = Duration::from_millis(16);
 const MAX_RETRIES: u32 = 3;
 /// logind signals are read by polling the system bus: there is no blocking bus source.
 const SESSION_POLL: Duration = Duration::from_millis(20);
-/// Budget of the first-frame escape hatch: nothing queued after this means a black VT.
-const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One scanned-out connector. `global` is `None` for the output that is `State::output`.
 struct OutputSurface {
@@ -130,7 +184,14 @@ pub struct Drm {
     gbm: GbmDevice<DrmDeviceFd>,
     renderer: GlowRenderer,
     formats: Vec<Format>,
-    libinput: Libinput,
+    /// libinput, once it is up. `None` for the whole startup until the first frame has been
+    /// *presented*: `udev_assign_seat` grabs every device with `EVIOCGRAB`, and holding the keyboard
+    /// while no pixel is on the panel is what turns any hang into an unreachable console.
+    libinput: Option<Libinput>,
+    /// Seat name, kept for bringing libinput up late.
+    seat: String,
+    /// Card name of the scanout GPU, for the first-frame marker's `detail` and the log.
+    gpu_name: String,
     /// `dev_t` of the GPU this backend drives; udev change events and resume events for it are ours.
     primary_dev: u64,
     surfaces: Vec<OutputSurface>,
@@ -141,12 +202,17 @@ pub struct Drm {
     gate: Option<&'static str>,
     retry_scheduled: bool,
     retry_attempts: u32,
-    /// Frames successfully queued to KMS since startup; read by the first-frame escape hatch.
-    frames_queued: u32,
-    /// Last render or queue error, named by the escape hatch when no frame ever made it.
-    last_render_error: Option<String>,
-    /// The one-shot first-frame watchdog; removed when the first frame is queued.
-    first_frame_watchdog: Option<RegistrationToken>,
+    /// The queue/present boundary of this session: what reached KMS and what came back from it. It is
+    /// also what the bounded startup deadline asks, and the only source of its counters.
+    first_frame: FirstFrameGate,
+    /// The one-shot deadline for the first presented frame. Armed at init and after a resume, and
+    /// removed by nothing but a presented frame: a queued flip must never disarm it.
+    first_frame_deadline: Option<RegistrationToken>,
+    /// Per-step startup timings, reported once (first presented frame or failed startup).
+    timing: StartupTiming,
+    /// A deferred GPU fence and a wedged one are each reported once, not per paint.
+    sync_defer_logged: bool,
+    sync_fail_logged: bool,
     handle: LoopHandle<'static, State>,
 }
 
@@ -154,8 +220,12 @@ pub struct Drm {
 /// [`finish`] on every exit path, including a panic.
 pub struct DrmHandle(pub Rc<RefCell<Drm>>);
 
-/// Starts the tty backend. Registers the session, udev, libinput, DRM and redraw-wake sources on
-/// `handle` and renders the first frame; vblank events drive the rest.
+/// Starts the tty backend. Registers the session, DRM, udev and redraw-wake sources on `handle` and
+/// renders the first frame; vblank events drive the rest. libinput is brought up last, from
+/// [`Drm::note_presented`], and only once that first frame is actually on the CRTC.
+///
+/// On a failed startup the one-shot `startup timing` line is emitted with the steps that completed,
+/// so a black session can be localized from the log alone.
 ///
 /// The error type is `Box<dyn Error>` because this crate has no `anyhow` dependency; `main` only
 /// needs `Display` for its stage line.
@@ -163,6 +233,24 @@ pub fn init(
     state: &mut State,
     handle: &LoopHandle<'static, State>,
 ) -> Result<DrmHandle, Box<dyn Error>> {
+    let mut timing = StartupTiming::default();
+    match init_backend(state, handle, &mut timing) {
+        Ok(drm) => Ok(drm),
+        Err(error) => {
+            timing.emit();
+            Err(error)
+        }
+    }
+}
+
+/// The body of [`init`]; `timing` is filled in step by step so a failure can still report it.
+fn init_backend(
+    state: &mut State,
+    handle: &LoopHandle<'static, State>,
+    timing: &mut StartupTiming,
+) -> Result<DrmHandle, Box<dyn Error>> {
+    // 1. logind session: open, activate, wait for `Active`.
+    let step = Instant::now();
     let session = match LogindSession::new() {
         Ok(session) => session,
         Err(error) => {
@@ -170,7 +258,12 @@ pub fn init(
             return Err(error.into());
         }
     };
-    stage_line(Stage::Seat, StageStatus::Ok, "logind control");
+    timing.session_ms = step.elapsed().as_millis();
+    stage_line(
+        Stage::Seat,
+        StageStatus::Ok,
+        &format!("logind_control elapsed_{}ms", timing.session_ms),
+    );
     // Belt and braces after the fail-closed activation in `LogindSession::new`: taking DRM master on
     // an inactive session blanks a VT that belongs to the greeter, no frame is ever presented and the
     // console cannot be reached. Refuse before any GPU is opened.
@@ -183,37 +276,59 @@ pub fn init(
         return Err("logind session is not active; refusing to take DRM master".into());
     }
     let seat = session.seat();
-    let (gpu, gpu_detail) = open_scanout_gpu(&session, &seat)?;
-    let OpenedGpu {
+
+    // 2. GPU: logind `TakeDevice` plus DRM master on the card that can drive the panel.
+    let step = Instant::now();
+    let (gpu, gpu_detail) = device::open_scanout_gpu(&session, &seat)?;
+    timing.gpu_ms = step.elapsed().as_millis();
+    let device::OpenedGpu {
         name: gpu_name,
         dev: primary_dev,
         device,
         fd: gpu_fd,
         notifier: drm_notifier,
     } = gpu;
+    stage_line(
+        Stage::Drm,
+        StageStatus::Ok,
+        &format!("{gpu_name} master {gpu_detail} elapsed_{}ms", timing.gpu_ms),
+    );
+
+    // 3. GBM device for buffer allocation.
+    let step = Instant::now();
     let gbm = GbmDevice::new(gpu_fd)?;
+    timing.gbm_ms = step.elapsed().as_millis();
+    stage_line(
+        Stage::Drm,
+        StageStatus::Ok,
+        &format!("gbm elapsed_{}ms", timing.gbm_ms),
+    );
+
+    // 4. EGL display and context on that GBM device.
+    let step = Instant::now();
     // SAFETY: the EGL display is created on the GBM device owned by this compositor and lives as
     // long as the renderer in `Drm`, which is the only user of the context.
     let egl = unsafe { EGLDisplay::new(gbm.clone())? };
     let context = EGLContext::new(&egl)?;
-    // SAFETY: the context is current only on this thread, the single compositor thread.
-    let renderer = unsafe { GlowRenderer::new(context)? };
-    let formats: Vec<Format> = renderer.dmabuf_formats().into_iter().collect();
+    timing.egl_ms = step.elapsed().as_millis();
     stage_line(
         Stage::Drm,
         StageStatus::Ok,
-        &format!("{gpu_name} master {gpu_detail}"),
+        &format!("egl_display_context elapsed_{}ms", timing.egl_ms),
     );
 
-    let mut libinput =
-        Libinput::new_with_udev::<LibinputSessionInterface<LogindSession>>(session.clone().into());
-    if libinput.udev_assign_seat(&seat).is_err() {
-        stage_line(Stage::Libinput, StageStatus::Fail, "seat assign");
-        return Err("libinput could not take the seat".into());
-    }
-    // Reported after the connector scan so the stage lines come out in `Stage` order.
-    let libinput_detail = format!("{seat} devices");
-    let input_backend = LibinputInputBackend::new(libinput.clone());
+    // 5. GLES renderer: the step that loads the GL entry points and is slow on real hardware.
+    let step = Instant::now();
+    // SAFETY: the context is current only on this thread, the single compositor thread.
+    let renderer = unsafe { GlowRenderer::new(context)? };
+    let formats: Vec<Format> = renderer.dmabuf_formats().into_iter().collect();
+    timing.renderer_ms = step.elapsed().as_millis();
+    stage_line(
+        Stage::Drm,
+        StageStatus::Ok,
+        &format!("renderer elapsed_{}ms", timing.renderer_ms),
+    );
+
     let udev_backend = UdevBackend::new(&seat)?;
 
     let drm = Rc::new(RefCell::new(Drm {
@@ -222,7 +337,10 @@ pub fn init(
         gbm,
         renderer,
         formats,
-        libinput,
+        // Deliberately not opened yet: see the module docs on input.
+        libinput: None,
+        seat,
+        gpu_name,
         primary_dev,
         surfaces: Vec::new(),
         cursor_id: Id::new(),
@@ -230,12 +348,16 @@ pub fn init(
         gate: None,
         retry_scheduled: false,
         retry_attempts: 0,
-        frames_queued: 0,
-        last_render_error: None,
-        first_frame_watchdog: None,
+        first_frame: FirstFrameGate::new(),
+        first_frame_deadline: None,
+        timing: *timing,
+        sync_defer_logged: false,
+        sync_fail_logged: false,
         handle: handle.clone(),
     }));
     {
+        // 6. Connectors: the first frame can only be rendered once these exist.
+        let step = Instant::now();
         let mut d = drm.borrow_mut();
         // Only a device-level failure is fatal here: a single connector that cannot be set up is
         // logged and skipped, like anvil does.
@@ -243,6 +365,8 @@ pub fn init(
             stage_line(Stage::Outputs, StageStatus::Fail, &format!("{error}"));
             return Err(error);
         }
+        d.timing.scan_ms = step.elapsed().as_millis();
+        timing.scan_ms = d.timing.scan_ms;
         if scan_failed(d.surfaces.len()) {
             stage_line(Stage::Outputs, StageStatus::Fail, "no_connector");
             return Err("no connected connector with a usable mode".into());
@@ -253,20 +377,14 @@ pub fn init(
         Stage::Outputs,
         StageStatus::Ok,
         &format!(
-            "{outputs} out {}x{}",
-            state.output_size.w, state.output_size.h
+            "{outputs} out {}x{} elapsed_{}ms",
+            state.output_size.w, state.output_size.h, timing.scan_ms
         ),
     );
-    stage_line(Stage::Libinput, StageStatus::Ok, &libinput_detail);
 
     let drm_events = Rc::clone(&drm);
     handle.insert_source(drm_notifier, move |event, _, state| {
         on_drm_event(state, &drm_events, event)
-    })?;
-
-    let input_drm = Rc::clone(&drm);
-    handle.insert_source(input_backend, move |event, _, state| {
-        handle_input(state, &input_drm, event)
     })?;
 
     // logind signals (VT pause and resume) are read by polling the bus; the events are queued by
@@ -309,32 +427,18 @@ pub fn init(
     })?;
     state.set_drm_waker(ping);
 
-    // First-frame escape hatch: if nothing has been queued to KMS five seconds after the waker is
-    // installed, this VT is dead (CRTC taken, nothing on it, console unreachable). Report it in the
-    // same structured form as every other startup stage, stop the loop and let `main` exit non-zero
-    // so the backend is torn down and the console returns. The first queued frame removes the timer.
-    let watchdog_drm = Rc::clone(&drm);
-    let watchdog = handle.insert_source(Timer::from_duration(FIRST_FRAME_TIMEOUT), move |_, _, state| {
-        let (queued, last_error) = {
-            let d = watchdog_drm.borrow();
-            (d.frames_queued, d.last_render_error.clone())
-        };
-        if !first_frame_missing(queued) {
-            return TimeoutAction::Drop;
-        }
-        match last_error {
-            Some(error) => eprintln!("flamewm-wayland: no first frame, last render error: {error}"),
-            None => eprintln!(
-                "flamewm-wayland: no first frame, no render was attempted (session or output not usable)"
-            ),
-        }
-        stage_line(Stage::Ready, StageStatus::Fail, "no_first_frame");
-        state.report_startup_failure("no_first_frame");
-        state.loop_signal.stop();
-        TimeoutAction::Drop
-    })?;
-    drm.borrow_mut().first_frame_watchdog = Some(watchdog);
+    // The bounded deadline for the first *presented* frame. It is armed here, before anything is
+    // painted, and only a completed flip removes it: a queue must never disarm it, because the
+    // symptom this guards against is a flip that was queued and never came back.
+    {
+        let drm_handle = Rc::clone(&drm);
+        let mut d = drm.borrow_mut();
+        d.arm_first_frame_deadline(&drm_handle);
+    }
 
+    // 7. The first frame, rendered *without* input: nothing on this seat is grabbed yet, so a hang
+    // here still leaves a keyboard that reaches the kernel and Ctrl+Alt+Fn keeps working. The first
+    // *presented* frame is what brings libinput up (see `Drm::note_presented`).
     state.request_full_redraw();
     render_all(state, &drm);
     Ok(DrmHandle(drm))
@@ -366,11 +470,18 @@ impl Drm {
         for out in &mut self.surfaces {
             out.frames.park();
         }
+        // A flip that was in flight is gone with the session, so the first-frame gate forgets it: a
+        // vblank of the new owner of this CRTC must not be read as our presented frame.
+        self.first_frame.pause();
         if self.paused {
             return;
         }
         self.paused = true;
-        self.libinput.suspend();
+        // Nothing is grabbed before the first frame, so this is a no-op on a startup that pauses
+        // before it ever got that far.
+        if let Some(libinput) = self.libinput.as_mut() {
+            libinput.suspend();
+        }
         self.device.pause();
     }
 
@@ -472,10 +583,18 @@ impl Drm {
             }
         }
 
-        let retry = self
-            .surfaces
-            .iter()
-            .any(|out| arm_retry(out.frames.needs_retry, out.frames.dirty, self.paused));
+        // A deferred GPU fence owes the bounded retry too: the output is still dirty, so the retry
+        // pass is what paints it again once the fence has had time to signal. That timer is a
+        // *retry*, never a substitute for synchronizing: no frame is ever queued over an unfinished
+        // buffer (see [`frame_sync_wait`]).
+        let retry = self.surfaces.iter().any(|out| {
+            retry_owed(
+                out.frames.needs_retry,
+                out.frames.dirty,
+                out.frames.sync_waited_ms,
+                self.paused,
+            )
+        });
         if retry && !self.retry_scheduled && self.retry_attempts < MAX_RETRIES {
             self.retry_scheduled = true;
             self.retry_attempts += 1;
@@ -514,14 +633,19 @@ impl Drm {
     /// because `paint` resets the device state and repeats the pass once.
     fn draw_pass(&mut self, elements: &[Elem], has_callback: bool) -> bool {
         let mut test_failed = false;
-        let mut queued = false;
+        // One entry per flip handed to KMS in this pass: the queue boundary, recorded after the loop
+        // so the gate is never mutated while an output is borrowed.
+        let mut queued: Vec<u32> = Vec::new();
         let mut last_error: Option<String> = None;
+        let mut deferred = 0u32;
+        let mut wedged = 0u32;
         for out in self.surfaces.iter_mut() {
             // `Deferred` is not a reason to paint: a frame is still in flight, so this output is
             // re-planned by the vblank that clears `queued`, and painting now would queue over it.
             if out.frames.plan(has_callback, self.paused) != FrameDecision::Draw {
                 continue;
             }
+            let already_waited = out.frames.sync_waited_ms;
             match out.compositor.render_frame(
                 &mut self.renderer,
                 elements,
@@ -529,24 +653,45 @@ impl Drm {
                 FrameFlags::DEFAULT,
             ) {
                 Ok(result) if result.is_empty => {
-                    // Nothing was drawn, so no vblank follows. Only a pending state sync is worth
-                    // another pass; otherwise the output is idle and must not arm a timer.
-                    out.frames.empty(result.needs_sync());
+                    // Nothing was drawn, no new GPU work exists and no vblank follows. A pending
+                    // state sync is *not* a reason to arm a timer here: this pass owns no unfinished
+                    // frame, so re-rendering after 16 ms would be the very retry that corrupts the
+                    // pipeline.
+                    out.frames.empty(false);
                 }
-                Ok(_) => match out.compositor.queue_frame(()) {
-                    Ok(()) => {
-                        out.frames.queue();
-                        queued = true;
+                Ok(result) => {
+                    // Smithay's sync contract: with `needs_sync` the caller must synchronize with the
+                    // render before this buffer goes to KMS, or the swapchain and the scanout get out
+                    // of step and the kernel starts reporting buffer/IO errors.
+                    let (decision, waited) = frame_sync_wait(&result, already_waited);
+                    match decision {
+                        SyncWait::Wait => match out.compositor.queue_frame(()) {
+                            Ok(()) => {
+                                out.frames.queue();
+                                queued.push(u32::from(out.crtc));
+                            }
+                            Err(error) => {
+                                out.frames.fail();
+                                last_error =
+                                    Some(format!("queue_frame {}: {error}", out.output.name()));
+                                eprintln!(
+                                    "flamewm-wayland: queue_frame failed on {}: {error}",
+                                    out.output.name()
+                                );
+                            }
+                        },
+                        SyncWait::Defer | SyncWait::Fail => {
+                            if decision == SyncWait::Fail {
+                                wedged += 1;
+                            } else {
+                                deferred += 1;
+                            }
+                            // Not queued: the GPU is still writing that buffer. The output keeps its
+                            // frame request and the bounded retry re-plans it.
+                            out.frames.defer_sync(waited);
+                        }
                     }
-                    Err(error) => {
-                        out.frames.fail();
-                        last_error = Some(format!("queue_frame {}: {error}", out.output.name()));
-                        eprintln!(
-                            "flamewm-wayland: queue_frame failed on {}: {error}",
-                            out.output.name()
-                        );
-                    }
-                },
+                }
                 Err(error) => {
                     if is_test_failed(&error) {
                         test_failed = true;
@@ -568,42 +713,261 @@ impl Drm {
             }
         }
         if let Some(error) = last_error {
-            self.last_render_error = Some(error);
+            self.first_frame.note_error(error);
         }
-        if queued {
-            self.note_first_frame();
+        // Logged once each, not once per paint: a wedged GPU would otherwise flood the log that a
+        // hardware diagnosis depends on.
+        if deferred > 0 && !self.sync_defer_logged {
+            self.sync_defer_logged = true;
+            eprintln!(
+                "flamewm-wayland: frame sync detail=deferred outputs={deferred} detail=not_queued"
+            );
+        }
+        if wedged > 0 && !self.sync_fail_logged {
+            self.sync_fail_logged = true;
+            eprintln!(
+                "flamewm-wayland: frame sync detail=wedged outputs={wedged} detail=needs_retry"
+            );
+        }
+        // The queue boundary, recorded after the loop so the gate is never mutated while an output is
+        // borrowed. A queue is a diagnostic only: it starts nothing and disarms nothing.
+        for crtc in queued {
+            self.note_queued(crtc);
         }
         test_failed
     }
 
-    /// A frame reached KMS: the startup escape hatch has nothing left to guard, so its timer goes.
+    /// The **queue** boundary: a flip was handed to KMS.
     ///
-    /// Removing the source is best effort; the timer also re-checks `frames_queued` when it fires, so
-    /// a failed removal cannot turn a working session into a reported failure.
-    fn note_first_frame(&mut self) {
-        self.frames_queued = self.frames_queued.saturating_add(1);
-        if let Some(token) = self.first_frame_watchdog.take() {
+    /// This is a diagnostic and nothing else. `stage=firstframe status=ok code=7` says the pipeline
+    /// got as far as submitting a frame, which is worth having in a hardware log — but a queued flip
+    /// can still fail to complete, so this must not start libinput (that would grab the keyboard in
+    /// front of a possibly black panel) and must not cancel the startup deadline (that would disarm
+    /// the only way out of a flip that never comes back).
+    fn note_queued(&mut self, crtc: u32) {
+        if !self.first_frame.queued(crtc) {
+            return;
+        }
+        self.timing.queue_ms = self.first_frame.queued_ms();
+        eprintln!(
+            "flamewm-wayland: first frame queued on {} crtc={crtc} detail=not_presented",
+            self.gpu_name
+        );
+        stage_line(Stage::Firstframe, StageStatus::Ok, &self.gpu_name);
+    }
+
+    /// The **present** boundary: the flip we queued is on the panel. This is readiness.
+    ///
+    /// `stage=presented status=ok code=8` is emitted once, followed immediately by the one-shot
+    /// `startup timing` summary. Only here — after a pixel is actually on screen — is the seat grabbed
+    /// ([`Drm::start_input`]) and only here is the bounded deadline disarmed. A vblank that does not
+    /// belong to a queued flip of this output (`FirstFrameGate::presented` refuses it) changes nothing.
+    fn note_presented(&mut self, crtc: u32, drm: &Rc<RefCell<Drm>>) {
+        // The guard first: only the CRTC of an output that has a flip in flight can present one.
+        if !self.first_frame.presented_for(crtc) {
+            return;
+        }
+        if !self.first_frame.presented(crtc) {
+            return;
+        }
+        self.timing.present_ms = self.first_frame.presented_ms();
+        if let Some(token) = self.first_frame_deadline.take() {
             self.handle.remove(token);
-            eprintln!("flamewm-wayland: first frame queued, startup watchdog cancelled");
+            eprintln!("flamewm-wayland: first frame presented, startup deadline cancelled");
+        }
+        eprintln!(
+            "flamewm-wayland: first frame presented gpu={} crtc={crtc} t={}ms",
+            self.gpu_name,
+            elapsed_ms()
+        );
+        stage_line(
+            Stage::Presented,
+            StageStatus::Ok,
+            &format!("{} crtc={crtc}", self.gpu_name),
+        );
+        self.timing.emit();
+        // Only now: a frame is on the CRTC, so grabbing the seat can no longer leave the console
+        // unreachable *without* a painted session.
+        self.start_input(drm);
+    }
+
+    /// Arms the one bounded deadline for the first presented frame.
+    ///
+    /// Called once from [`init`] (before the first paint) and again after a resume, because a pause
+    /// takes the session — and with it the deadline it consumed — away. It is never called from a
+    /// queue, and it refuses to arm when the gate is already satisfied.
+    fn arm_first_frame_deadline(&mut self, drm: &Rc<RefCell<Drm>>) {
+        if self.first_frame.ready() || self.first_frame_deadline.is_some() {
+            return;
+        }
+        let armed = Rc::clone(drm);
+        match self.handle.insert_source(
+            Timer::from_duration(FIRST_FRAME_DEADLINE),
+            move |_, _, state| on_first_frame_deadline(state, &armed),
+        ) {
+            Ok(token) => self.first_frame_deadline = Some(token),
+            Err(error) => {
+                eprintln!("flamewm-wayland: first-frame deadline could not be armed: {error}");
+            }
         }
     }
 
-    /// A frame reached the screen: nothing is in flight for that output any more, so the next plan
-    /// sees requests that arrived while it was queued.
-    fn on_vblank(&mut self, state: &mut State, crtc: crtc::Handle, drm: &Rc<RefCell<Drm>>) {
-        let Some(out) = self.surfaces.iter_mut().find(|out| out.crtc == crtc) else {
+    /// Brings up libinput, then registers its event source — the last step of the startup.
+    ///
+    /// `udev_assign_seat` opens every device on the seat and `EVIOCGRAB`s it. Doing that before a
+    /// frame is *presented* is what made a wedged startup unrecoverable: the compositor held the
+    /// keyboard while fbcon was already unbound, so Ctrl+Alt+Fn never reached the kernel. Until this
+    /// point the seat is untouched, and every early return in [`init`] — and every deadline that
+    /// fires — therefore grabs nothing.
+    ///
+    /// Only [`Drm::note_presented`] calls this: a queued flip is not enough.
+    fn start_input(&mut self, drm: &Rc<RefCell<Drm>>) {
+        if self.libinput.is_some() {
+            return;
+        }
+        let step = Instant::now();
+        let mut libinput = Libinput::new_with_udev::<LibinputSessionInterface<LogindSession>>(
+            self.session.clone().into(),
+        );
+        if libinput.udev_assign_seat(&self.seat).is_err() {
+            // No device is grabbed: libinput only takes the ones it could open.
+            stage_line(Stage::Libinput, StageStatus::Fail, "seat_assign");
+            return;
+        }
+        let elapsed = step.elapsed().as_millis();
+        let input_backend = LibinputInputBackend::new(libinput.clone());
+        self.libinput = Some(libinput);
+        let input_drm = Rc::clone(drm);
+        let seat = self.seat.clone();
+        if let Err(error) = self
+            .handle
+            .insert_source(input_backend, move |event, _, state| {
+                input::handle_input(state, &input_drm, event)
+            })
+        {
+            eprintln!(
+                "flamewm-wayland: input source registration failed: {error}; releasing the seat"
+            );
+            if let Some(libinput) = self.libinput.as_mut() {
+                libinput.suspend();
+            }
+            stage_line(Stage::Libinput, StageStatus::Fail, "source_register");
+            return;
+        }
+        stage_line(
+            Stage::Libinput,
+            StageStatus::Ok,
+            &format!("{seat} devices elapsed_{elapsed}ms"),
+        );
+    }
+
+    /// Reopens the input devices logind handed back after a pause.
+    ///
+    /// A no-op while libinput was never started (a session that has not presented its first frame
+    /// yet, so it grabbed nothing in the first place).
+    fn resume_input(&mut self) {
+        let Some(libinput) = self.libinput.as_mut() else {
             return;
         };
-        out.frames.presented();
-        if let Err(error) = out.compositor.frame_submitted() {
-            out.frames.fail();
-            eprintln!(
-                "flamewm-wayland: frame_submitted failed on {}: {error}",
-                out.output.name()
-            );
+        if libinput.resume().is_err() {
+            eprintln!("flamewm-wayland: libinput resume failed");
+        }
+    }
+
+    /// A vblank arrived for `crtc`.
+    ///
+    /// `DrmCompositor::frame_submitted` answers `Some(..)` when the atomic commit this output queued
+    /// completed — that is the *present* boundary (`smithay-0.7.0/src/backend/drm/compositor/mod.rs:2604`:
+    /// "Needs to be called, after the vblank event of the matching `DrmDevice` was received after
+    /// calling `queue_frame`"). `None` means no flip of ours was pending, so this event is not
+    /// evidence that anything was presented and must not satisfy the gate. The vblank also releases
+    /// the output, so the next plan sees requests that arrived while the frame was in flight.
+    fn on_vblank(&mut self, state: &mut State, crtc: crtc::Handle, drm: &Rc<RefCell<Drm>>) {
+        let Some(index) = self.surfaces.iter().position(|out| out.crtc == crtc) else {
+            return;
+        };
+        let presented = {
+            let out = &mut self.surfaces[index];
+            out.frames.presented();
+            match out.compositor.frame_submitted() {
+                Ok(submitted) => submitted.is_some(),
+                Err(error) => {
+                    out.frames.fail();
+                    eprintln!(
+                        "flamewm-wayland: frame_submitted failed on {}: {error}",
+                        out.output.name()
+                    );
+                    false
+                }
+            }
+        };
+        if presented {
+            self.note_presented(u32::from(crtc), drm);
         }
         self.paint(state, drm);
     }
+}
+
+/// Synchronizes with the GPU fence of a frame that `render_frame` reported as `needs_sync`, bounded.
+///
+/// This is Smithay's documented contract, not an optimisation: `DrmCompositor::queue_frame` says
+/// "it is your responsibility to synchronize rendering if the `RenderFrameResult` returned by the
+/// previous `render_frame` call returns `true` on `RenderFrameResult::needs_sync`"
+/// (`smithay-0.7.0/src/backend/drm/compositor/mod.rs:2424`), and `RenderFrameResult::needs_sync` says
+/// the same for the swapchain element (`.../compositor/frame_result.rs:59`). `anvil` implements it by
+/// waiting on the element's sync point (`anvil/src/udev.rs:1641-1643`).
+///
+/// The APIs used here, all from the pinned `smithay` 0.7.0:
+/// * `RenderFrameResult::needs_sync` — `.../drm/compositor/frame_result.rs:60`;
+/// * `PrimaryPlaneElement::Swapchain(PrimarySwapchainElement { sync, .. })` — same file, `:182`, `:435`;
+/// * `SyncPoint::is_reached`/`get::<EGLFence>` — `.../renderer/sync/mod.rs:77` and `:70`;
+/// * `EGLFence::client_wait(Some(timeout), flush)` (`eglClientWaitSyncKHR`) —
+///   `.../egl/fence.rs:157`, the only fence wait in this version that accepts a timeout.
+///
+/// `already_waited` is the cumulative time this output has spent on fences since it last queued a
+/// frame; it is what makes repeated passes end in `SyncWait::Fail` instead of waiting forever.
+/// Returns the decision and the new cumulative wait.
+fn frame_sync_wait<B, F, E>(
+    result: &RenderFrameResult<'_, B, F, E>,
+    already_waited: u128,
+) -> (SyncWait, u128)
+where
+    B: Buffer,
+    F: Framebuffer,
+{
+    if !result.needs_sync() {
+        // KMS waits for our rendering itself: nothing to synchronize, the frame may be queued.
+        return (SyncWait::Wait, 0);
+    }
+    let Some(element) = (match &result.primary_element {
+        PrimaryPlaneElement::Swapchain(element) => Some(element),
+        // Direct scan-out of a client buffer: no composited buffer of ours is in flight.
+        PrimaryPlaneElement::Element(_) => None,
+    }) else {
+        return (SyncWait::Wait, 0);
+    };
+    let sync: &SyncPoint = &element.sync;
+    if sync.is_reached() {
+        // The fence already signaled: the wait below would not block at all.
+        return (SyncWait::Wait, 0);
+    }
+    let Some(fence) = sync.get::<EGLFence>() else {
+        // A fence type without a timeout API. Never block the compositor thread on it: report and let
+        // the output be retried. Smithay's GLES renderer only produces an `EGLFence` or an already
+        // signaled point (`.../renderer/gles/mod.rs:2328-2345`), so this is a safety net.
+        return (SyncWait::Fail, already_waited);
+    };
+    let start = Instant::now();
+    // One bounded kernel wait, not a spin: `eglClientWaitSyncKHR` returns as soon as the fence
+    // signals, and at the latest after the budget.
+    let signaled = fence
+        .client_wait(Some(SYNC_WAIT_BUDGET), false)
+        .unwrap_or(false);
+    let waited = already_waited.saturating_add(start.elapsed().as_millis());
+    if signaled {
+        return (SyncWait::Wait, 0);
+    }
+    (sync_wait_decision(true, waited), waited)
 }
 
 /// Whether a render error is the kernel rejecting the atomic state (`DrmError::TestFailed`).
@@ -623,125 +987,6 @@ where
         _ => matches!(error.source(), Some(source)
             if matches!(source.downcast_ref::<DrmError>(), Some(DrmError::TestFailed(_)))),
     }
-}
-
-/// One seat GPU that opened, with the descriptor kept for GBM.
-struct OpenedGpu {
-    name: String,
-    /// `dev_t` of the card: udev change and resume events are matched against it.
-    dev: u64,
-    device: DrmDevice,
-    fd: DrmDeviceFd,
-    notifier: DrmDeviceNotifier,
-}
-
-/// Opens the seat's GPUs and picks the one to drive, plus a short detail token for the stage line.
-///
-/// The boot GPU is tried first and wins as soon as it reports a connected connector: that is the
-/// common single-GPU and hybrid-desktop case and costs exactly one `TakeDevice` roundtrip. Only when
-/// it has nothing connected are the seat's other GPUs probed — a hybrid laptop whose only panel
-/// hangs off the non-boot card reports zero connectors on the boot GPU, which used to mean zero
-/// connectors for the whole session. The choice itself is `state::pick_gpu`, unit-tested without a
-/// GPU.
-fn open_scanout_gpu(
-    session: &LogindSession,
-    seat: &str,
-) -> Result<(OpenedGpu, String), Box<dyn Error>> {
-    let boot = udev::primary_gpu(seat)?;
-    let mut paths: Vec<PathBuf> = boot.iter().cloned().collect();
-    for path in udev::all_gpus(seat)? {
-        if !paths.contains(&path) {
-            paths.push(path);
-        }
-    }
-    if paths.is_empty() {
-        return Err("no DRM device on seat".into());
-    }
-
-    let mut opened: Vec<(OpenedGpu, GpuProbe)> = Vec::new();
-    for (index, path) in paths.iter().enumerate() {
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        match open_gpu(session, path) {
-            Ok(gpu) => {
-                let probe = probe_gpu(&gpu.device);
-                // Only the boot GPU short-circuits: on any other card the rest of the seat is still
-                // worth looking at, because a panel is what is being looked for.
-                let boot_gpu = index == 0 && boot.is_some();
-                opened.push((gpu, probe));
-                if boot_gpu && probe.connected {
-                    break;
-                }
-            }
-            Err(error) => eprintln!("flamewm-wayland: gpu {name} skip: {error}"),
-        }
-    }
-
-    let probes: Vec<GpuProbe> = opened.iter().map(|(_, probe)| *probe).collect();
-    let chosen = pick_gpu(&probes).ok_or("no DRM device on seat")?;
-    let detail = if probes[chosen].internal {
-        "detail=panel"
-    } else if probes[chosen].connected {
-        "detail=connected"
-    } else {
-        "detail=none-connected"
-    };
-    let (gpu, _) = opened.swap_remove(chosen);
-    // The cards that did not win are dropped here: their descriptors close and their master is
-    // released before the compositor starts.
-    Ok((gpu, detail.to_owned()))
-}
-
-/// Takes one DRM device from the session and opens it.
-fn open_gpu(session: &LogindSession, path: &Path) -> Result<OpenedGpu, Box<dyn Error>> {
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let dev = std::fs::metadata(path)?.rdev();
-    let fd = session.clone().open(
-        path,
-        OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
-    )?;
-    let fd = DrmDeviceFd::new(DeviceFd::from(fd));
-    let (device, notifier) = DrmDevice::new(fd.clone(), true)?;
-    Ok(OpenedGpu {
-        name,
-        dev,
-        device,
-        fd,
-        notifier,
-    })
-}
-
-/// What one card can drive, without setting anything up: internal (panel) connectors and all
-/// connected connectors.
-fn probe_gpu(device: &DrmDevice) -> GpuProbe {
-    let Ok(resources) = device.resource_handles() else {
-        return GpuProbe::default();
-    };
-    let mut probe = GpuProbe::default();
-    for conn in resources.connectors() {
-        let Ok(info) = device.get_connector(*conn, false) else {
-            continue;
-        };
-        if info.state() != connector::State::Connected {
-            continue;
-        }
-        probe.connected = true;
-        if matches!(
-            info.interface(),
-            connector::Interface::LVDS
-                | connector::Interface::EmbeddedDisplayPort
-                | connector::Interface::DSI
-                | connector::Interface::DPI
-        ) {
-            probe.internal = true;
-        }
-    }
-    probe
 }
 
 /// Reports one connector that was left out, as `stage=outputs status=skip detail=<connector> <why>`.
@@ -998,6 +1243,65 @@ fn render_all(state: &mut State, drm: &Rc<RefCell<Drm>>) {
     d.paint(state, drm);
 }
 
+/// The one bounded deadline for the first presented frame fired.
+///
+/// Nothing else in the backend ends a startup on its own, so this is the only way out of a session
+/// that owns DRM master and has nothing on the panel. It names why — `no_first_queue` when not even a
+/// flip was queued, `pageflip_timeout` when one was queued and never came back (the black-panel case)
+/// — with the counters, the CRTC, the elapsed milliseconds and the last render error, then stops the
+/// loop so `main` exits non-zero and the backend is torn down. Input was never started at this point,
+/// so the keyboard still reaches the kernel either way.
+fn on_first_frame_deadline(state: &mut State, drm: &Rc<RefCell<Drm>>) -> TimeoutAction {
+    let Ok(mut d) = drm.try_borrow_mut() else {
+        // A paint is in flight on this thread; it cannot be, but never block the loop on it.
+        return TimeoutAction::Drop;
+    };
+    d.first_frame_deadline = None;
+    if d.first_frame.ready() {
+        // The presented frame already cancelled this timer; a late fire changes nothing.
+        return TimeoutAction::Drop;
+    }
+    let elapsed = Duration::from_millis(u64::try_from(elapsed_ms()).unwrap_or(u64::MAX));
+    let reason = d.first_frame.failure(elapsed);
+    if reason == NO_FAILURE {
+        // The session was paused away: that is not a wedged GPU, and a resume arms a fresh deadline.
+        return TimeoutAction::Drop;
+    }
+    let queued = d.first_frame.queued_count();
+    let presented = d.first_frame.presented_count();
+    let crtc = match d.first_frame.queued_crtc() {
+        Some(crtc) => crtc.to_string(),
+        None => "none".to_owned(),
+    };
+    let error = d.first_frame.last_error().unwrap_or("none").to_owned();
+    eprintln!(
+        "flamewm-wayland: first frame not presented detail={reason} queued={queued} \
+         presented={presented} crtc={crtc} elapsed={}ms last_render_error={error}",
+        elapsed.as_millis()
+    );
+    if queued == 0 {
+        eprintln!(
+            "flamewm-wayland: nothing reached KMS (session or output unusable); giving the VT back"
+        );
+    } else {
+        eprintln!(
+            "flamewm-wayland: the flip was queued and never completed (black panel); giving the VT back"
+        );
+    }
+    // The stage that failed is the frame marker, not `ready`: the event loop did start. A reader (and
+    // the session wrapper's failure report) greps the last `status=fail` line for the reason.
+    stage_line(
+        Stage::Firstframe,
+        StageStatus::Fail,
+        &d.first_frame.failure_detail(reason, elapsed),
+    );
+    // The steps that did complete, with `present=none`: this is what a hardware log needs.
+    d.timing.emit();
+    state.report_startup_failure(reason);
+    state.loop_signal.stop();
+    TimeoutAction::Drop
+}
+
 fn on_drm_event(state: &mut State, drm: &Rc<RefCell<Drm>>, event: DrmEvent) {
     match event {
         DrmEvent::VBlank(crtc) => {
@@ -1008,35 +1312,6 @@ fn on_drm_event(state: &mut State, drm: &Rc<RefCell<Drm>>, event: DrmEvent) {
             d.on_vblank(state, crtc, drm);
         }
         DrmEvent::Error(error) => eprintln!("flamewm-wayland: drm error: {error}"),
-    }
-}
-
-fn handle_input(
-    state: &mut State,
-    drm: &Rc<RefCell<Drm>>,
-    event: InputEvent<LibinputInputBackend>,
-) {
-    match event {
-        InputEvent::PointerMotion { event } => {
-            // Relative motion: the same absolute path the nested backend uses, clamped to the output.
-            let size = state.output_size;
-            let x = (state.pointer.x + event.delta_x()).clamp(0.0, f64::from((size.w - 1).max(0)));
-            let y = (state.pointer.y + event.delta_y()).clamp(0.0, f64::from((size.h - 1).max(0)));
-            state.on_motion((x, y).into(), event.time_msec());
-            state.request_redraw();
-        }
-        InputEvent::Keyboard { event } => {
-            match vt_for_key(state, &event) {
-                // Ctrl+Alt+Fn is consumed here: the session switches and the key never reaches clients.
-                Some(vt) => {
-                    if let Err(error) = drm.borrow_mut().session.change_vt(vt) {
-                        eprintln!("flamewm-wayland: VT switch to {vt} failed: {error}");
-                    }
-                }
-                None => state.process_input::<LibinputInputBackend>(InputEvent::Keyboard { event }),
-            }
-        }
-        other => state.process_input(other),
     }
 }
 
@@ -1064,7 +1339,7 @@ fn on_logind_event(state: &mut State, drm: &Rc<RefCell<Drm>>, event: LogindEvent
         LogindEvent::ActivateSession => {
             let resumed = {
                 let mut d = drm.borrow_mut();
-                match kept_fd_resume(&mut d, state) {
+                match kept_fd_resume(&mut d, state, drm) {
                     Ok(()) => true,
                     Err(error) => {
                         eprintln!(
@@ -1090,11 +1365,13 @@ fn on_logind_event(state: &mut State, drm: &Rc<RefCell<Drm>>, event: LogindEvent
 /// `ControlDevice::set_master` on `DrmDevice` (E0599), so `activate` on the existing fd is the
 /// operation that fails on a revoked descriptor — and that failure is what routes the resume to
 /// the rebuild path instead of pretending the device works.
-fn kept_fd_resume(d: &mut Drm, state: &mut State) -> Result<(), Box<dyn Error>> {
+fn kept_fd_resume(
+    d: &mut Drm,
+    state: &mut State,
+    drm: &Rc<RefCell<Drm>>,
+) -> Result<(), Box<dyn Error>> {
     d.device.activate(false)?;
-    if d.libinput.resume().is_err() {
-        eprintln!("flamewm-wayland: libinput resume failed");
-    }
+    d.resume_input();
     for out in &mut d.surfaces {
         out.frames.wake();
         if let Err(error) = out.compositor.reset_state() {
@@ -1107,6 +1384,11 @@ fn kept_fd_resume(d: &mut Drm, state: &mut State) -> Result<(), Box<dyn Error>> 
     d.paused = false;
     d.retry_scheduled = false;
     d.retry_attempts = 0;
+    // The session was taken away, so any flip that was in flight is gone and the deadline it
+    // consumed says nothing about this one: a resumed startup that never presents gets a fresh,
+    // equally bounded one.
+    d.first_frame.resume();
+    d.arm_first_frame_deadline(drm);
     state.request_full_redraw();
     Ok(())
 }
@@ -1114,7 +1396,7 @@ fn kept_fd_resume(d: &mut Drm, state: &mut State) -> Result<(), Box<dyn Error>> 
 /// A resume logind delivered with a descriptor. Only the primary scanout device is ours; input
 /// devices are reopened by libinput through the session's `TakeDevice`.
 fn resume_device(state: &mut State, drm: &Rc<RefCell<Drm>>, major: u32, minor: u32, fd: OwnedFd) {
-    let rdev = match device_rdev(&fd) {
+    let rdev = match device::device_rdev(&fd) {
         Ok(rdev) => rdev,
         Err(error) => {
             eprintln!("flamewm-wayland: resume {major}:{minor} detail=fstat-failed: {error}");
@@ -1129,7 +1411,7 @@ fn resume_device(state: &mut State, drm: &Rc<RefCell<Drm>>, major: u32, minor: u
     }
     let kept = {
         let mut d = drm.borrow_mut();
-        match kept_fd_resume(&mut d, state) {
+        match kept_fd_resume(&mut d, state, drm) {
             Ok(()) => true,
             Err(error) => {
                 eprintln!("flamewm-wayland: resume detail=kept-fd-failed: {error}");
@@ -1181,9 +1463,7 @@ fn rebuild(state: &mut State, drm: &Rc<RefCell<Drm>>, fd: OwnedFd) -> Result<(),
     d.paused = false;
     d.retry_scheduled = false;
     d.retry_attempts = 0;
-    if d.libinput.resume().is_err() {
-        eprintln!("flamewm-wayland: libinput resume failed");
-    }
+    d.resume_input();
     let handle = d.handle.clone();
     let again = Rc::clone(drm);
     // The replacement device needs its own event source; the old one watches a dead descriptor and
@@ -1194,14 +1474,11 @@ fn rebuild(state: &mut State, drm: &Rc<RefCell<Drm>>, fd: OwnedFd) -> Result<(),
     if let Err(error) = scan_connectors(&mut d, state) {
         return Err(error);
     }
+    // Same rule as the kept-fd resume: the session is ours again, so the startup deadline starts over.
+    d.first_frame.resume();
+    d.arm_first_frame_deadline(drm);
     state.request_full_redraw();
     Ok(())
-}
-
-/// `fstat` of a descriptor logind handed over, as the `dev_t` to compare with the primary GPU.
-fn device_rdev(fd: &OwnedFd) -> std::io::Result<u64> {
-    let probe = fd.try_clone()?;
-    Ok(std::fs::File::from(probe).metadata()?.rdev())
 }
 
 /// Frame callbacks for every surface that can be on screen; same set as the nested backend.
@@ -1242,25 +1519,5 @@ fn send_frame_callbacks(state: &State) {
             throttle,
             |_, _| Some(output.clone()),
         );
-    }
-}
-
-/// Ctrl+Alt+F1..F12 (evdev KEY_F1..KEY_F12) select virtual terminals 1..12.
-fn vt_for_key(state: &State, event: &impl KeyboardKeyEvent<LibinputInputBackend>) -> Option<i32> {
-    if event.state() != KeyState::Pressed {
-        return None;
-    }
-    let keyboard = state.seat.get_keyboard()?;
-    let mods = keyboard.modifier_state();
-    if !(mods.ctrl && mods.alt) {
-        return None;
-    }
-    // xkb keycodes are evdev codes plus 8.
-    let code = event.key_code().raw().checked_sub(8)?;
-    match code {
-        59..=68 => Some((code - 58) as i32),
-        87 => Some(11),
-        88 => Some(12),
-        _ => None,
     }
 }

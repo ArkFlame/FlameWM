@@ -18,11 +18,32 @@
 //! - `--probe`: read-only prerequisite report, exit 0 when every required prerequisite exists.
 //!
 //! Startup diagnostics: every stage writes
-//! `FLAMEWM-WAYLAND-STARTUP stage=<name> status=<ok|fail|skip> code=<0..6> detail=<tokens> t=<ms>ms`
+//! `FLAMEWM-WAYLAND-STARTUP stage=<name> status=<ok|fail|skip> code=<0..8> detail=<tokens> t=<ms>ms`
 //! to stderr (the session wrapper redirects that into its log and its failure report). `t` is
 //! milliseconds since this process started, so a slow stage is visible without a trace tool. A
 //! startup that dies before `stage=ready` also emits `stage=ready status=fail`, which is what the
 //! wrapper's exit watchdog keys on; a normal exit emits nothing extra.
+//!
+//! Three markers say three different things about the native backend, and only the last one is
+//! readiness:
+//! * `stage=ready status=ok code=6 detail=backend_init` — the event loop is running (socket,
+//!   XWayland, sources installed). It says nothing about the panel.
+//! * `stage=firstframe status=ok code=7` — a flip was queued to KMS. Diagnostic only: a queued flip
+//!   can still fail, leaving a black panel under a compositor that holds DRM master.
+//! * `stage=presented status=ok code=8` — the first flip actually completed. That is the only
+//!   evidence a pixel reached the screen, and on the native backend it is also the moment the seat
+//!   is grabbed (see `startup` and `drm::Drm::note_presented`).
+//!
+//! The tty backend paints its first frame inside its own `init`, so on the native backend these two
+//! lines come *before* `stage=ready`. A session that reports `ready` but neither of them is the
+//! black-VT case; a session that reports `firstframe` but not `presented` is the black-panel case, and
+//! the backend's own bounded deadline turns it into a reported failure instead of a dead VT.
+//!
+//! The native backend also prints one `flamewm-wayland: startup timing session=Nms gpu=Nms gbm=Nms
+//! egl=Nms renderer=Nms scan=Nms queue=Nms present=Nms` line right after the presented frame (or, on a
+//! failed startup, with the steps that completed and `none` for a boundary that was never reached).
+//! Every init step carries its own elapsed milliseconds in the `detail` of its stage line, so the next
+//! hardware log localizes a slowdown without a trace tool.
 //!
 //! # Session activation
 //!
@@ -52,6 +73,9 @@ mod logind;
 mod model;
 mod probe;
 mod render;
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
+// The native backend's first-frame gate; pure, so it is compiled (and tested) without a GPU.
+mod startup;
 mod state;
 mod xwayland;
 
@@ -132,6 +156,17 @@ pub(crate) fn capabilities_text() -> String {
 
 /// Startup stages, in the order they must succeed. The stage index is the `code=` of the structured
 /// line, so a log reader can order stages without parsing names.
+///
+/// `Firstframe` and `Presented` are the two exceptions to "in order": both are reported by the tty
+/// backend while it builds its first frame, which happens inside the backend's own init and therefore
+/// before `Ready` (emitted by `run` once the socket and XWayland exist). They keep the next free codes
+/// so no existing code number moves.
+///
+/// They are *not* the same event and must never be read as one:
+/// * `Firstframe` (7) means a flip was queued to KMS. Diagnostic only — a queued flip can still fail,
+///   which leaves a black panel with a compositor that owns DRM master.
+/// * `Presented` (8) means the first flip *completed*. This is the readiness signal, the point where
+///   the tty backend grabs the seat and cancels its own startup deadline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Stage {
     Seat = 0,
@@ -141,6 +176,8 @@ pub(crate) enum Stage {
     Socket = 4,
     Xwayland = 5,
     Ready = 6,
+    Firstframe = 7,
+    Presented = 8,
 }
 
 impl Stage {
@@ -153,6 +190,8 @@ impl Stage {
             Self::Socket => "socket",
             Self::Xwayland => "xwayland",
             Self::Ready => "ready",
+            Self::Firstframe => "firstframe",
+            Self::Presented => "presented",
         }
     }
 
@@ -165,6 +204,8 @@ impl Stage {
             Self::Socket => 4,
             Self::Xwayland => 5,
             Self::Ready => 6,
+            Self::Firstframe => 7,
+            Self::Presented => 8,
         }
     }
 }
@@ -198,15 +239,76 @@ const MAX_DETAIL: usize = 64;
 static START: OnceLock<Instant> = OnceLock::new();
 
 /// Milliseconds since this process started; 0 until [`START`] is initialised.
-fn elapsed_ms() -> u128 {
+pub(crate) fn elapsed_ms() -> u128 {
     START
         .get()
         .map(|start| start.elapsed().as_millis())
         .unwrap_or(0)
 }
 
+/// Per-step monotonic timings of the tty backend startup, in milliseconds.
+///
+/// Reported exactly once by [`StartupTiming::emit`]: right after the `stage=presented` line of a
+/// successful start, or on a failed startup with the steps that completed (`queue=none present=none`).
+/// `egl_ms` covers the EGL display and its context. This is the line that localizes a slow or wedged
+/// hardware start without a trace tool, and it is the reason each init step also carries its own
+/// `elapsed_<n>ms` token in the `detail` of its stage line.
+///
+/// `queue_ms` and `present_ms` are two different facts: the first is when a flip reached KMS, the
+/// second when one came back. A `queue` with no `present` is the black-panel case.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StartupTiming {
+    /// logind session open and activation.
+    pub session_ms: u128,
+    /// logind `TakeDevice` plus DRM master on the chosen card.
+    pub gpu_ms: u128,
+    pub gbm_ms: u128,
+    /// EGL display and EGL context.
+    pub egl_ms: u128,
+    pub renderer_ms: u128,
+    /// Connector scan: every `DrmCompositor` of every output.
+    pub scan_ms: u128,
+    /// Time from native backend init to the first flip queued to KMS; `None` when none was queued.
+    pub queue_ms: Option<u128>,
+    /// Time from native backend init to the first flip that actually completed; `None` when none did.
+    pub present_ms: Option<u128>,
+}
+
+impl StartupTiming {
+    /// The exact text of the one-shot summary line:
+    /// `flamewm-wayland: startup timing session=Nms gpu=Nms gbm=Nms egl=Nms renderer=Nms scan=Nms
+    /// queue=Nms present=Nms` (`none` for a boundary that was never reached).
+    pub(crate) fn line(&self) -> String {
+        format!(
+            "flamewm-wayland: startup timing session={}ms gpu={}ms gbm={}ms egl={}ms renderer={}ms \
+             scan={}ms queue={} present={}",
+            self.session_ms,
+            self.gpu_ms,
+            self.gbm_ms,
+            self.egl_ms,
+            self.renderer_ms,
+            self.scan_ms,
+            step(self.queue_ms),
+            step(self.present_ms)
+        )
+    }
+
+    /// Emits the summary line once (see [`StartupTiming::line`]).
+    pub(crate) fn emit(&self) {
+        eprintln!("{}", self.line());
+    }
+}
+
+/// One optional timing field: `Nms` when the step happened, `none` when it never did.
+fn step(millis: Option<u128>) -> String {
+    match millis {
+        Some(millis) => format!("{millis}ms"),
+        None => "none".to_owned(),
+    }
+}
+
 /// The exact text of one structured startup line:
-/// `FLAMEWM-WAYLAND-STARTUP stage=<stage> status=<ok|fail|skip> code=<0..6> detail=<tokens> t=<ms>ms`.
+/// `FLAMEWM-WAYLAND-STARTUP stage=<stage> status=<ok|fail|skip> code=<0..7> detail=<tokens> t=<ms>ms`.
 ///
 /// `detail` is reduced to short tokens: no fds, addresses, cookies, environment dumps or file
 /// contents reach the line. Split out from [`stage_line`] so the format itself is testable.
@@ -231,10 +333,16 @@ fn stage_reported(stage: Stage) -> bool {
     REPORTED_STAGES.load(Ordering::Relaxed) & (1u8 << stage.code()) != 0
 }
 
+/// The stages a successful backend init stands for. `Stage::Libinput` is deliberately absent: the tty
+/// backend grabs the seat only after the first frame has been queued, so "backend init ok" is no
+/// evidence that input is up, and claiming it would hide a session that never grabbed a keyboard.
+/// `Stage::Firstframe` is absent for the same reason: it is only ever reported by a real queued frame.
+const BACKEND_STAGES: [Stage; 3] = [Stage::Seat, Stage::Drm, Stage::Outputs];
+
 /// Fills the stages the backend owns but did not report itself: a successful backend init covers
 /// them, and a stage never appears twice.
 fn fill_backend_stages() {
-    for stage in [Stage::Seat, Stage::Drm, Stage::Outputs, Stage::Libinput] {
+    for stage in BACKEND_STAGES {
         if !stage_reported(stage) {
             stage_line(stage, StageStatus::Ok, "backend init");
         }
@@ -443,7 +551,10 @@ fn run() -> Result<i32, Box<dyn Error>> {
         },
     )?;
 
-    stage_line(Stage::Ready, StageStatus::Ok, backend.name());
+    // The event loop is about to run, nothing more: `detail=backend_init` keeps this line from being
+    // read as "something is on screen" — that is `stage=presented`, reported by the tty backend when
+    // the first flip completes.
+    stage_line(Stage::Ready, StageStatus::Ok, "backend_init");
     let result = event_loop.run(None, &mut state, |state| {
         let _ = state.display.flush_clients();
         if let Some(service) = state.control.clone() {
@@ -586,8 +697,8 @@ fn host_root_size() -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Backend, MAX_DETAIL, Stage, StageStatus, capabilities_text, detail_tokens, select_backend,
-        stage_text, xwayland_unavailable_detail,
+        BACKEND_STAGES, Backend, MAX_DETAIL, Stage, StageStatus, StartupTiming, capabilities_text,
+        detail_tokens, select_backend, stage_text, xwayland_unavailable_detail,
     };
 
     #[test]
@@ -655,8 +766,113 @@ mod tests {
         assert_eq!(Stage::Socket.code(), 4);
         assert_eq!(Stage::Xwayland.code(), 5);
         assert_eq!(Stage::Ready.code(), 6);
+        // The two frame markers take the next free codes so no existing number moves, and they keep
+        // their order: a queued flip (7) before a completed one (8).
+        assert_eq!(Stage::Firstframe.code(), 7);
+        assert_eq!(Stage::Presented.code(), 8);
+        assert!(Stage::Firstframe.code() < Stage::Presented.code());
         assert_eq!(Stage::Seat.name(), "seat");
         assert_eq!(Stage::Xwayland.name(), "xwayland");
+        assert_eq!(Stage::Firstframe.name(), "firstframe");
+        assert_eq!(Stage::Presented.name(), "presented");
+    }
+
+    /// The queue marker is what a reader of a black-screen log looks for, but it is *not* readiness:
+    /// stage, status, code and the GPU token must be exactly this, and it is emitted once per session
+    /// (`stage_line` never dedupes, the backend does). The wrapper logs it as a timing diagnostic only.
+    #[test]
+    fn first_frame_marker_has_the_documented_shape() {
+        let line = stage_text(Stage::Firstframe, StageStatus::Ok, "card0");
+        let (head, stamp) = line.split_once(" t=").unwrap_or((line.as_str(), ""));
+        assert_eq!(
+            head,
+            "FLAMEWM-WAYLAND-STARTUP stage=firstframe status=ok code=7 detail=card0"
+        );
+        assert!(stamp.ends_with("ms"), "{line}");
+        // A failure of the same stage must never look like that marker.
+        let failed = stage_text(
+            Stage::Firstframe,
+            StageStatus::Fail,
+            "pageflip_timeout queued=1 presented=0 crtc=63 elapsed=8003ms",
+        );
+        assert!(
+            failed.starts_with(
+                "FLAMEWM-WAYLAND-STARTUP stage=firstframe status=fail code=7 \
+                 detail=pageflip_timeout_queued_1_presented_0_crtc_63_elapsed_8003ms t="
+            ),
+            "{failed}"
+        );
+    }
+
+    /// The presented marker is the readiness signal: `code=8`, the GPU and the CRTC in `detail`, and a
+    /// trailing timestamp. The wrapper's readiness gate greps exactly this prefix, so the field order
+    /// must not drift.
+    #[test]
+    fn presented_marker_has_the_documented_shape() {
+        let line = stage_text(Stage::Presented, StageStatus::Ok, "card0 crtc=63");
+        let (head, stamp) = line.split_once(" t=").unwrap_or((line.as_str(), ""));
+        assert_eq!(
+            head,
+            "FLAMEWM-WAYLAND-STARTUP stage=presented status=ok code=8 detail=card0_crtc_63"
+        );
+        assert!(stamp.ends_with("ms"), "{line}");
+        // A queued flip is a different line: dropping the code would make the two indistinguishable.
+        assert_ne!(Stage::Presented.code(), Stage::Firstframe.code());
+    }
+
+    /// A backend init success only vouches for seat, DRM and outputs. Input is grabbed after the first
+    /// *presented* frame, and neither frame marker comes from a queued flip alone, so neither may be
+    /// filled in by `fill_backend_stages`.
+    #[test]
+    fn backend_stage_fill_never_claims_input_or_a_frame() {
+        assert_eq!(
+            BACKEND_STAGES,
+            [Stage::Seat, Stage::Drm, Stage::Outputs],
+            "a backend that never grabbed the seat must not report libinput"
+        );
+        assert!(!BACKEND_STAGES.contains(&Stage::Libinput));
+        assert!(!BACKEND_STAGES.contains(&Stage::Firstframe));
+        assert!(
+            !BACKEND_STAGES.contains(&Stage::Presented),
+            "only a completed flip may report presented"
+        );
+    }
+
+    /// The one-shot timing line keeps its documented field order: the next hardware log is read with a
+    /// grep for `startup timing` plus these keys. `queue` and `present` are separate boundaries.
+    #[test]
+    fn startup_timing_line_lists_every_step_in_order() {
+        let timing = StartupTiming {
+            session_ms: 412,
+            gpu_ms: 180,
+            gbm_ms: 3,
+            egl_ms: 95,
+            renderer_ms: 240,
+            scan_ms: 310,
+            queue_ms: Some(5912),
+            present_ms: Some(5931),
+        };
+        assert_eq!(
+            timing.line(),
+            "flamewm-wayland: startup timing session=412ms gpu=180ms gbm=3ms egl=95ms \
+             renderer=240ms scan=310ms queue=5912ms present=5931ms"
+        );
+        // A failed startup reports the steps that completed and says neither boundary was reached.
+        let failed = StartupTiming {
+            session_ms: 1,
+            ..StartupTiming::default()
+        };
+        assert_eq!(
+            failed.line(),
+            "flamewm-wayland: startup timing session=1ms gpu=0ms gbm=0ms egl=0ms renderer=0ms \
+             scan=0ms queue=none present=none"
+        );
+        // A flip that was queued and never completed is the black-panel case and must look like it.
+        let queued_only = StartupTiming {
+            queue_ms: Some(250),
+            ..StartupTiming::default()
+        };
+        assert!(queued_only.line().ends_with("queue=250ms present=none"));
     }
 
     #[test]

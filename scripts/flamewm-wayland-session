@@ -35,29 +35,41 @@
 # ~/.cache/flamewm/wayland-session.log (mode 0600, previous run kept as `wayland-session.log.1`,
 # exactly one rotation). Output goes to the inherited streams if the log cannot be created; a log
 # failure never prevents startup. Structured lines:
-#   FLAMEWM-WAYLAND-STARTUP stage=<session|runtime|log|capabilities|probe|socket|xwayland|ready|firstframe|exit>
+#   FLAMEWM-WAYLAND-STARTUP stage=<session|runtime|log|capabilities|probe|socket|xwayland|ready|presented|exit>
 #       status=<ok|fail|skip> code=<n> detail=<token,token> ms=<n>
 # `code` is the exit code that phase produces; a non-fatal failure carries `code=0` and
 # `detail` contains `continuing`. `ms` is milliseconds since the wrapper started, so a slow stage is
 # visible without a trace tool; separate `timing:` lines record when the compositor's first stage
-# line and its own `stage=ready status=ok code=6` arrived (that `code=6` is what tells the
-# compositor's ready apart from this wrapper's activation-sync stage of the same name). The D-Bus
-# address, the full environment, browser arguments and tokens are never logged.
+# line, its own `stage=ready status=ok code=6`, its `stage=firstframe status=ok code=7` (a flip was
+# queued to KMS) and its `stage=presented status=ok code=8` (that flip completed) arrived. Those
+# `code=` values tell the compositor's lines apart from this wrapper's stages of the same name.
+# The D-Bus address, the full environment, browser arguments and tokens are never logged.
 #
-# First-frame watchdog: `stage=ready status=ok code=6` is the compositor's "DRM, outputs and libinput
-# are up" line. A compositor that has not printed it within READY_TIMEOUT_MS (default 15000, measured
-# from the compositor start) is stopped here — TERM, ~3 s grace, then KILL to that one pid — and
-# reported as `reason=no_ready_timeout`, so a native session that never paints fails back to the
-# greeter instead of leaving the VT black. It cannot see inside the compositor, so it is a backstop;
-# the compositor's own first-frame escape hatch is what reports `detail=no_first_frame`.
+# Readiness gate: `stage=presented status=ok code=8` must appear within READY_TIMEOUT_MS (default
+# 25000, counted from the compositor start). A queued flip is not a presented frame, so
+# `stage=firstframe status=ok code=7` is logged as a timing diagnostic only and never satisfies this
+# gate, and neither does `stage=ready status=ok code=6` (the event loop started, `detail=backend_init`).
+# The gate is what makes the black-panel case fail instead of hanging: a compositor that queues a flip
+# nobody ever sees holds DRM master and (before presentation) does not grab the seat. A compositor
+# that does not print the presented line in the budget is stopped here — TERM, a 2 s grace, then KILL
+# to that one pid only — and reported as `reason=no_first_frame_timeout`, so the session fails back to
+# the greeter instead of leaving the VT black. When a queued flip was seen but never presented, the
+# report also carries `detail=queued_but_not_presented`, which is exactly the black-panel symptom.
+#
+# The wrapper cannot see inside the compositor, so it is a backstop: the compositor's own bounded
+# deadline (8 s after backend init) reports `stage=firstframe status=fail` with `detail=no_first_queue`
+# or `detail=pageflip_timeout` and exits non-zero first, and that line reaches the failure report.
+#
+# The compositor's lines carry the codes above; this wrapper's own `stage=presented` line carries
+# `code=0` on success and failure details instead, so the two can never be confused.
 #
 # Failure report: every failure path (backend argument, capability gate, missing or non-executable
-# binary, a compositor that dies before `stage=ready` — the exit watchdog — and any non-zero
-# compositor exit; a signal this wrapper forwarded itself is a requested logout and is NOT reported as
-# a failure) prints ONE short block of text to the controlling terminal as well as into the log. The
-# VT belongs to this session, so `printf` to /dev/tty is what a user with a black screen actually
-# sees; when there is no controlling terminal the write is skipped silently and never changes the
-# exit code. The same block (timestamp, exact command line, the last startup lines, the compositor
+# binary, a compositor that dies before `stage=presented` — the exit watchdog — and
+# any non-zero compositor exit; a signal this wrapper forwarded itself is a requested logout and is NOT
+# reported as a failure) prints ONE short block of text to the controlling terminal as well as into the
+# log. The VT belongs to this session, so `printf` to /dev/tty is what a user with a black screen
+# actually sees; when there is no controlling terminal the write is skipped silently and never changes
+# the exit code. The same block (timestamp, exact command line, the last startup lines, the compositor
 # exit code/signal, its last messages, both log paths) is written to
 # ~/.cache/flamewm/wayland-session-last-failure.log in mode 0600, overwriting the previous failure
 # so the evidence survives a reboot/relogin. It is not deleted on a successful start: the timestamp
@@ -72,19 +84,30 @@
 #   FLAMEWM_WAYLAND_BINARY               compositor path (default /usr/bin/flamewm-wayland)
 #   FLAMEWM_WAYLAND_STARTUP_TIMEOUT_MS   socket/XWayland wait budget (default 5000)
 #   FLAMEWM_WAYLAND_SHUTDOWN_TIMEOUT_MS  TERM->KILL grace for compositor and bridge (default 10000)
-#   FLAMEWM_WAYLAND_READY_TIMEOUT_MS     budget for the compositor's `stage=ready status=ok`
-#                                        (default 15000, counted from the compositor start)
+#   FLAMEWM_WAYLAND_READY_TIMEOUT_MS     budget for the compositor's `stage=presented status=ok
+#                                        code=8` (default 25000, counted from the compositor start)
 #
 # Not done here: falling back to the X11 session when the Wayland backend fails. A lightdm
 # wayland-type session has no X server to exec into, so this wrapper does not start Xorg.
 set -uo pipefail
 
+# A signal during preflight (before the compositor exists) must not kill the wrapper with the shell's
+# default action: record it and exit with the conventional code. The full handler below replaces these
+# traps once the compositor pid exists.
+preflight_signal() {
+    printf 'flamewm-wayland-session: signal SIG%s during preflight; exiting\n' "$1" >&2
+    exit "$2"
+}
+trap 'preflight_signal TERM 143' TERM
+trap 'preflight_signal INT 130' INT
+trap 'preflight_signal HUP 129' HUP
+
 STARTUP_TIMEOUT_MS="${FLAMEWM_WAYLAND_STARTUP_TIMEOUT_MS:-5000}"
 SHUTDOWN_TIMEOUT_MS="${FLAMEWM_WAYLAND_SHUTDOWN_TIMEOUT_MS:-10000}"
-READY_TIMEOUT_MS="${FLAMEWM_WAYLAND_READY_TIMEOUT_MS:-15000}"
+READY_TIMEOUT_MS="${FLAMEWM_WAYLAND_READY_TIMEOUT_MS:-25000}"
 [[ "$STARTUP_TIMEOUT_MS" =~ ^[0-9]+$ ]] || STARTUP_TIMEOUT_MS=5000
 [[ "$SHUTDOWN_TIMEOUT_MS" =~ ^[0-9]+$ ]] || SHUTDOWN_TIMEOUT_MS=10000
-[[ "$READY_TIMEOUT_MS" =~ ^[0-9]+$ ]] || READY_TIMEOUT_MS=15000
+[[ "$READY_TIMEOUT_MS" =~ ^[0-9]+$ ]] || READY_TIMEOUT_MS=25000
 SOCKET_NAME="${FLAMEWM_WAYLAND_SOCKET:-wayland-flame}"
 PROBE_TIMEOUT_S=20
 CAPABILITIES_TIMEOUT_S=10
@@ -159,12 +182,16 @@ write_failure_file() {
     chmod 600 "$FAIL_FILE" 2>/dev/null || :
 }
 
-report_failure() { # reason exit-code [signal]
-    local reason="${1:-unspecified}" code="${2:-unknown}" sig="${3:-none}"
-    local block=() line message
+report_failure() { # reason exit-code [signal] [detail]
+    local reason="${1:-unspecified}" code="${2:-unknown}" sig="${3:-none}" detail="${4:-}"
+    local block=() line message reason_line
+    reason_line="reason=$reason"
+    # An optional second token names the sub-case (e.g. `queued_but_not_presented`), so a reader can
+    # tell a black panel from a compositor that never got as far as queueing a flip.
+    [[ -n "$detail" ]] && reason_line+=" detail=$detail"
     block+=("== flamewm-wayland session failure: $(date '+%F %T' 2>/dev/null)")
     block+=("command: $(session_command)")
-    block+=("reason=$reason backend=${backend:-unset} binary=${SESSION:-unset} exit=$code signal=$sig elapsed=${elapsed_ms:-0}ms")
+    block+=("$reason_line backend=${backend:-unset} binary=${SESSION:-unset} exit=$code signal=$sig elapsed=${elapsed_ms:-0}ms")
     # The compositor's own words come first: that is usually the actual cause.
     while IFS= read -r message; do block+=("  $message"); done < <(compositor_messages 2)
     message="$(compositor_failed_stage)"
@@ -453,20 +480,10 @@ else
     stage capabilities skip 0 "nested_no_gate,reported_backend=${reported_backend:-none},drm_compiled=${drm_compiled:-unreported}"
 fi
 
-# Probe: advisory diagnostics only. It never gates startup and never changes the exit code.
+# Probe: advisory diagnostics only. It runs after the presentation gate below, so the busctl/ldconfig
+# work never delays the compositor's first frame, and it never gates startup or the exit code.
 probe_out=""
 probe_rc=-1
-probe_out="$(run_bounded "$PROBE_TIMEOUT_S" "$SESSION" --probe 2>&1)"; probe_rc=$?
-log "probe exit=$probe_rc (advisory; does not change the session exit code)"
-if [[ -n "$probe_out" ]]; then
-    # The probe prints DBUS_SESSION_BUS_ADDRESS as an informational line: keep it out of the log.
-    printf '%s\n' "$probe_out" | grep -v 'DBUS_SESSION_BUS_ADDRESS' | grep -vE 'unix:(path|abstract)=' | sed 's/^/  /'
-fi
-if (( probe_rc == 0 )); then
-    stage probe ok 0 "advisory,exit=0"
-else
-    stage probe fail "$probe_rc" "advisory,continuing,exit=$probe_rc"
-fi
 
 bridge_pid=""
 session_pid=""
@@ -475,12 +492,19 @@ pending_signal=""
 elapsed_ms=0
 died_before_ready=0
 
-# Timing: the compositor's first stage line and its own `stage=ready` are grepped out of the log while
-# the wrapper is waiting anyway, so "DRM init took 4 s" is visible without a trace tool. `code=6`
-# distinguishes the compositor's ready from this wrapper's activation-sync stage of the same name.
+# Timing: the compositor's first stage line, its own `stage=ready`, its `stage=firstframe` and its
+# `stage=presented` are grepped out of the log while the wrapper is waiting anyway, so "DRM init took
+# 4 s", "the flip was queued" and "the flip never came back" are visible without a trace tool. The
+# `code=` values (6/7/8) distinguish the compositor's lines from this wrapper's stages of the same
+# name. Only `presented` is a gate; `firstframe` is a diagnostic that tells the black-panel case (a
+# flip was queued) from a compositor that never got that far.
 COMPOSITOR_READY_RE='FLAMEWM-WAYLAND-STARTUP stage=ready status=ok code=6'
+COMPOSITOR_FIRSTFRAME_RE='FLAMEWM-WAYLAND-STARTUP stage=firstframe status=ok code=7'
+COMPOSITOR_PRESENTED_RE='FLAMEWM-WAYLAND-STARTUP stage=presented status=ok code=8'
 compositor_first_ms=""
 compositor_ready_ms=""
+compositor_firstframe_ms=""
+compositor_presented_ms=""
 scan_compositor() {
     [[ -n "$LOG_FILE" ]] || return 0
     if [[ -z "$compositor_first_ms" ]] \
@@ -492,6 +516,23 @@ scan_compositor() {
         compositor_ready_ms="$(now_ms)"
         log "timing: compositor reached stage=ready at ${compositor_ready_ms}ms"
     fi
+    if [[ -z "$compositor_firstframe_ms" ]] \
+        && grep -qF "$COMPOSITOR_FIRSTFRAME_RE" "$LOG_FILE" 2>/dev/null; then
+        compositor_firstframe_ms="$(now_ms)"
+        log "timing: compositor queued its first flip at ${compositor_firstframe_ms}ms"
+    fi
+    if [[ -z "$compositor_presented_ms" ]] \
+        && grep -qF "$COMPOSITOR_PRESENTED_RE" "$LOG_FILE" 2>/dev/null; then
+        compositor_presented_ms="$(now_ms)"
+        log "timing: compositor presented its first frame at ${compositor_presented_ms}ms"
+    fi
+}
+
+# The one line this session needs before it counts as started: `presented` says a flip completed, so a
+# pixel is on the panel. `ready` only says the event loop runs and `firstframe` only says a flip was
+# queued — a queued flip can still never complete, which is the black-panel case this gate exists for.
+compositor_presented() {
+    [[ -n "${compositor_presented_ms:-}" ]]
 }
 
 # Signal handling: forward the signal we received (not always TERM), then KILL only that pid after the
@@ -603,45 +644,82 @@ else
     stage ready fail 0 "activation_environment=failed,continuing"
 fi
 
-# First-frame watchdog. `stage=ready status=ok code=6` is the compositor's own "everything came up"
-# line; without it there is no evidence that a frame can ever be presented, and a native session that
-# took the VT and stopped there leaves the user on a black screen with no console. Bounded, measured
-# from the compositor start: TERM, a short grace, then KILL to that one pid only (the same shape as
-# the signal path above). The failure report names reason=no_ready_timeout.
-ready_timed_out=0
+# Presentation gate. The compositor must report `stage=presented status=ok code=8`: a flip it queued
+# to KMS actually completed, so a pixel is on the panel. Neither `stage=ready status=ok code=6` (the
+# event loop started) nor `stage=firstframe status=ok code=7` (a flip was queued) is evidence of that,
+# and the difference is the reported hardware bug: a queued flip that never completes leaves a black
+# panel under a compositor that owns DRM master. `firstframe` is still read, but only to name that case
+# in the report (`detail=queued_but_not_presented`). Bounded, measured from the compositor start: TERM,
+# a 2 s grace, then KILL to that one pid only (the same shape as the signal path above). The failure
+# report names reason=no_first_frame_timeout, and the session exit is non-zero.
+first_frame_timed_out=0
 failure_reported=0
 if [[ -z "$LOG_FILE" ]]; then
-    # Without a log the ready line cannot be observed: never kill a compositor we cannot see.
-    stage firstframe skip 0 "no_log,continuing"
+    # Without a log the compositor's lines cannot be observed: never kill a compositor we cannot see.
+    stage presented skip 0 "no_log,continuing"
 else
     while :; do
         scan_compositor
-        [[ -n "${compositor_ready_ms:-}" ]] && break
+        compositor_presented && break
         pid_alive "$session_pid" || break
         (( $(now_ms) - start_ms < READY_TIMEOUT_MS )) || break
         sleep 0.1
     done
-    if [[ -z "${compositor_ready_ms:-}" ]] && pid_alive "$session_pid"; then
-        ready_timed_out=1
-        log "FAILED: flamewm-wayland did not report stage=ready within ${READY_TIMEOUT_MS}ms; stopping it (no frame was ever presented)"
-        stage firstframe fail 0 "no_ready_timeout,timeout_ms=$READY_TIMEOUT_MS,continuing"
+    if ! compositor_presented && pid_alive "$session_pid"; then
+        first_frame_timed_out=1
+        missing=""
+        [[ -z "${compositor_ready_ms:-}" ]] && missing+="no_ready,"
+        [[ -z "${compositor_firstframe_ms:-}" ]] && missing+="no_firstframe,"
+        missing+="no_presented,"
+        # The black-panel case is the one where the flip was queued and never came back; a compositor
+        # that never queued anything is a different failure and must not be described as one.
+        if [[ -n "${compositor_firstframe_ms:-}" ]]; then
+            gate_detail="queued_but_not_presented"
+        else
+            gate_detail="no_frame_queued"
+        fi
+        log "FAILED: flamewm-wayland did not report stage=presented status=ok code=8 within ${READY_TIMEOUT_MS}ms (missing ${missing%,}, detail=${gate_detail}); stopping it"
+        stage presented fail 0 "no_first_frame_timeout,timeout_ms=$READY_TIMEOUT_MS,missing=${missing%,},detail=${gate_detail},continuing"
         kill -TERM "$session_pid" 2>/dev/null || :
-        grace_ms=3000
+        # 2 s grace, then SIGKILL: a compositor wedged in a modeset or a fence ignores TERM, and the
+        # user is staring at a black VT while we wait. Bounded on both sides, that one pid only.
+        grace_ms=2000
         (( SHUTDOWN_TIMEOUT_MS < grace_ms )) && grace_ms="$SHUTDOWN_TIMEOUT_MS"
         remaining=$(( grace_ms / 100 ))
         (( remaining > 0 )) || remaining=1
         while (( remaining-- > 0 )) && pid_alive "$session_pid"; do sleep 0.1; done
         if pid_alive "$session_pid"; then
-            log "flamewm-wayland pid=$session_pid ignored SIGTERM after the ready timeout; sending SIGKILL"
+            log "flamewm-wayland pid=$session_pid ignored SIGTERM after the presentation timeout; sending SIGKILL"
             kill -KILL "$session_pid" 2>/dev/null || :
+            # Never wait forever for the corpse either.
+            remaining=$(( grace_ms / 100 ))
+            (( remaining > 0 )) || remaining=1
+            while (( remaining-- > 0 )) && pid_alive "$session_pid"; do sleep 0.1; done
         fi
-        # The report runs before the exit bookkeeping above, so it is given the elapsed time itself.
+        # The report runs before the exit bookkeeping below, so it is given the elapsed time itself.
         elapsed_ms=$(( $(now_ms) - start_ms ))
-        report_failure no_ready_timeout "timeout" "TERM"
+        report_failure no_first_frame_timeout "timeout" "TERM" "$gate_detail"
         failure_reported=1
+    elif compositor_presented; then
+        stage presented ok 0 "presented,ready_ms=${compositor_ready_ms:-0},firstframe_ms=${compositor_firstframe_ms:-0},presented_ms=${compositor_presented_ms:-0},elapsed_ms=$(now_ms)"
     else
-        stage firstframe ok 0 "ready,elapsed_ms=$(now_ms)"
+        # The compositor is already gone without ever presenting: the exit watchdog below names it.
+        stage presented skip 0 "compositor_exited_before_presented_frame,continuing"
     fi
+fi
+
+# Advisory probe, off the critical path: the compositor is already running or gone, so this can no
+# longer delay startup. Its result is recorded before the failure report reads it.
+probe_out="$(run_bounded "$PROBE_TIMEOUT_S" "$SESSION" --probe 2>&1)"; probe_rc=$?
+log "probe exit=$probe_rc (advisory; does not change the session exit code)"
+if [[ -n "$probe_out" ]]; then
+    # The probe prints DBUS_SESSION_BUS_ADDRESS as an informational line: keep it out of the log.
+    printf '%s\n' "$probe_out" | grep -v 'DBUS_SESSION_BUS_ADDRESS' | grep -vE 'unix:(path|abstract)=' | sed 's/^/  /'
+fi
+if (( probe_rc == 0 )); then
+    stage probe ok 0 "advisory,exit=0"
+else
+    stage probe fail "$probe_rc" "advisory,continuing,exit=$probe_rc"
 fi
 
 # Wait for the compositor. A forwarded signal interrupts `wait`; loop until the child is really gone.
@@ -674,16 +752,22 @@ if [[ -n "$bridge_pid" ]]; then
     log "service bridge stopped"
 fi
 
-# Exit watchdog. A compositor that goes away before its own `stage=ready` never painted a frame: that
-# is exactly the black-screen-with-a-cursor case, so it is named instead of only surfacing as an exit
-# code. A shutdown this wrapper asked for (pending_signal) is not a failure and is not reported.
+# Exit watchdog. A compositor that goes away before reporting `stage=presented` never proved it put a
+# pixel on the panel: that is exactly the black-screen case, so it is named instead of only surfacing
+# as an exit code (and the report carries `detail=queued_but_not_presented` when a flip was queued but
+# never came back). A shutdown this wrapper asked for (pending_signal) is not a failure.
 exit_signal="none"
 if (( result > 128 && result < 160 )); then
     exit_signal="$(kill -l $(( result - 128 )) 2>/dev/null || printf 'unknown')"
 fi
-if (( result != 0 )) && [[ -z "${compositor_ready_ms:-}" && -z "$pending_signal" ]]; then
+if (( result != 0 )) && [[ -z "$pending_signal" ]] && ! compositor_presented; then
     died_before_ready=1
-    log "watchdog: flamewm-wayland exited exit=$result signal=$exit_signal after ${elapsed_ms}ms without reaching stage=ready (no frame was ever painted)"
+    if [[ -n "${compositor_firstframe_ms:-}" ]]; then
+        gate_detail="queued_but_not_presented"
+    else
+        gate_detail="no_frame_queued"
+    fi
+    log "watchdog: flamewm-wayland exited exit=$result signal=$exit_signal after ${elapsed_ms}ms without stage=presented status=ok code=8 (detail=$gate_detail)"
 fi
 
 if (( result != 0 && elapsed_ms < 5000 )) && [[ -z "$pending_signal" ]]; then
@@ -700,22 +784,22 @@ if (( result != 0 && elapsed_ms < 5000 )) && [[ -z "$pending_signal" ]]; then
 fi
 
 # The block the user sees on the VT (and finds later in the cache file). A signal we forwarded
-# ourselves is a requested logout, not a diagnosed failure. The first-frame watchdog above already
+# ourselves is a requested logout, not a diagnosed failure. The presentation gate above already
 # reported its own reason, so this cannot report the same death twice.
 if (( result != 0 )) && [[ -z "$pending_signal" ]] && (( ! failure_reported )); then
     if (( died_before_ready )); then
-        report_failure died_before_ready "$result" "$exit_signal"
+        report_failure died_before_ready "$result" "$exit_signal" "${gate_detail:-}"
     else
         report_failure compositor_exit "$result" "$exit_signal"
     fi
 fi
 
 # A timed-out compositor that then managed to exit 0 is still a failed session start.
-if (( ready_timed_out )) && (( result == 0 )); then result=124; fi
+if (( first_frame_timed_out )) && (( result == 0 )); then result=124; fi
 
 exit_detail="elapsed=${elapsed_ms}ms,elapsed_s=${elapsed_s},backend=$backend,signal=${pending_signal:-none},compositor_signal=${exit_signal}"
 (( died_before_ready )) && exit_detail+=",died_before_ready"
-(( ready_timed_out )) && exit_detail+=",no_ready_timeout"
+(( first_frame_timed_out )) && exit_detail+=",no_first_frame_timeout"
 if (( result == 0 )); then
     stage exit ok 0 "$exit_detail"
 else
