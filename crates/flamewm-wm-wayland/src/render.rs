@@ -126,10 +126,7 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
             let frame = managed.frame();
             let focused = state.focused == Some(id);
             let titlebar = Rect::new(frame.x, frame.y, frame.w, TITLEBAR_HEIGHT);
-            out.push(solid(
-                titlebar,
-                if focused { TITLE_FOCUSED } else { TITLE_IDLE },
-            ));
+            // Front to back: the buttons sit on the titlebar, so they come first.
             for (button, color) in [
                 (Button::Close, BUTTON_CLOSE),
                 (Button::Maximize, BUTTON_MAXIMIZE),
@@ -137,6 +134,10 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
             ] {
                 out.push(solid(button_rect(frame, button), color));
             }
+            out.push(solid(
+                titlebar,
+                if focused { TITLE_FOCUSED } else { TITLE_IDLE },
+            ));
         }
     }
 
