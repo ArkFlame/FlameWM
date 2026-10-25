@@ -2,7 +2,7 @@
 
 Read `README.md` and `docs/DEVELOPMENT.md` before changing code. Keep changes scoped to the owning crate or documented integration boundary.
 
-Use Rust toolchain `1.85.1`. Before opening a pull request, run:
+Use Rust toolchain `1.88.0`. Before opening a pull request, run:
 
 ```bash
 cargo fmt --all -- --check
