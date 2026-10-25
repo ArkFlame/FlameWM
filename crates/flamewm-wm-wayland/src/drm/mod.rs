@@ -36,14 +36,12 @@
 //! re-plans it. Skipping this wait is what produces the repeated buffer/IO errors that end in a
 //! wedged pipeline and a black screen.
 //!
-//! # Input is grabbed at the first *presented* frame
+//! # Input
 //!
-//! `udev_assign_seat` opens every device on the seat and `EVIOCGRAB`s it, and our modeset unbinds
-//! fbcon: from that moment the compositor owns the keyboard. Bringing input up before a frame is on
-//! screen therefore means that *any* later hang leaves a black VT with a dead keyboard and no way to
-//! Ctrl+Alt+Fn out. So libinput is started last — after every output exists *and* after the first
-//! flip has completed — and `stage=libinput` is only reported when it is actually up. A startup that
-//! wedges before that point grabs nothing, and the console keeps working.
+//! libinput comes up at init, before the first frame, exactly like anvil. `TakeControl` makes
+//! logind switch the VT to `KD_GRAPHICS` with the kernel keyboard set to `K_OFF`, so from that moment
+//! only this compositor can turn Ctrl+Alt+Fn into a VT switch; keeping input down until a frame is
+//! presented only meant that any startup stall left the machine without a keyboard.
 //!
 //! # Queue, present, and the escape hatch
 //!
@@ -55,15 +53,13 @@
 //!   compositor that treats "queued" as "on screen" holds DRM master and the keyboard in front of a
 //!   black panel.
 //! * The vblank whose `DrmCompositor::frame_submitted()` answers `Some(..)` means that flip completed.
-//!   It emits `stage=presented status=ok code=8` exactly once, starts libinput and cancels the
-//!   deadline. A vblank for a CRTC without a queued flip, or while the session is paused, satisfies
+//!   It emits `stage=presented status=ok code=8` exactly once and cancels the deadline. A vblank for a CRTC without a queued flip, or while the session is paused, satisfies
 //!   nothing.
 //!
 //! One bounded deadline (8 s, `startup::FIRST_FRAME_DEADLINE`) is armed when the backend initialises
 //! and is cancelled by nothing but a presented frame. When it fires, the session is unrecoverable in
-//! place — the CRTC is ours, nothing is on it, and (because input still is not grabbed) it is only a
-//! black screen — so it reports itself, stops the loop and lets `main` exit non-zero, which tears the
-//! backend down (`device.pause`, `ReleaseControl`) and gives the VT back. The reason distinguishes
+//! place — the CRTC is ours and nothing is on it — so it reports itself, stops the loop and lets
+//! `main` exit non-zero, which tears the backend down (`device.pause`, `ReleaseControl`) and gives the VT back. The reason distinguishes
 //! `detail=no_first_queue` (nothing ever reached KMS) from `detail=pageflip_timeout` (a flip was
 //! queued and never completed, the black-panel case), with the counters, the CRTC, the elapsed time
 //! and the last render error.
@@ -75,10 +71,12 @@
 //! master on the descriptor we already hold when logind hands back the same card, and rebuilds
 //! device, GBM, EGL, renderer and outputs from the new descriptor when it does not.
 //!
+//! Only pauses of the scanout card stop the session. logind pauses input nodes on a VT switch and
+//! sends `gone` for every `ReleaseDevice`, including the nodes libinput opens and closes while it
+//! probes the seat; treating those as a session pause blanked the panel and suspended input for good.
+//!
 //! `LogindSession::new` activates the session and fails when it cannot, so `init` refuses to take DRM
-//! master on an inactive session (see the `is_active` check there). Only a real `PauseDevice` suspends
-//! libinput: a session that merely started out inactive never does, because input has to stay live
-//! for Ctrl+Alt+Fn to reach the kernel.
+//! master on an inactive session (see the `is_active` check there).
 //!
 //! # GPU selection and partial bring-up
 //!
@@ -185,12 +183,14 @@ pub struct Drm {
     gbm: GbmDevice<DrmDeviceFd>,
     renderer: GlowRenderer,
     formats: Vec<Format>,
-    /// libinput, once it is up. `None` for the whole startup until the first frame has been
-    /// *presented*: `udev_assign_seat` grabs every device with `EVIOCGRAB`, and holding the keyboard
-    /// while no pixel is on the panel is what turns any hang into an unreachable console.
+    /// libinput, started at init. `None` only when the seat could not be assigned.
     libinput: Option<Libinput>,
-    /// Seat name, kept for bringing libinput up late.
+    /// Seat name libinput is assigned to.
     seat: String,
+    /// libinput keyboards, so Caps/Num/Scroll Lock LEDs follow the seat's xkb state.
+    keyboards: Vec<smithay::reexports::input::Device>,
+    /// LED state last written to `keyboards`.
+    leds: smithay::input::keyboard::LedState,
     /// Card name of the scanout GPU, for the first-frame marker's `detail` and the log.
     gpu_name: String,
     /// `dev_t` of the GPU this backend drives; udev change events and resume events for it are ours.
@@ -222,8 +222,7 @@ pub struct Drm {
 pub struct DrmHandle(pub Rc<RefCell<Drm>>);
 
 /// Starts the tty backend. Registers the session, DRM, udev and redraw-wake sources on `handle` and
-/// renders the first frame; vblank events drive the rest. libinput is brought up last, from
-/// [`Drm::note_presented`], and only once that first frame is actually on the CRTC.
+/// starts libinput and renders the first frame; vblank events drive the rest.
 ///
 /// On a failed startup the one-shot `startup timing` line is emitted with the steps that completed,
 /// so a black session can be localized from the log alone.
@@ -344,6 +343,8 @@ fn init_backend(
         // Deliberately not opened yet: see the module docs on input.
         libinput: None,
         seat,
+        keyboards: Vec::new(),
+        leds: smithay::input::keyboard::LedState::default(),
         gpu_name,
         primary_dev,
         surfaces: Vec::new(),
@@ -440,9 +441,14 @@ fn init_backend(
         d.arm_first_frame_deadline(&drm_handle);
     }
 
-    // 7. The first frame, rendered *without* input: nothing on this seat is grabbed yet, so a hang
-    // here still leaves a keyboard that reaches the kernel and Ctrl+Alt+Fn keeps working. The first
-    // *presented* frame is what brings libinput up (see `Drm::note_presented`).
+    // 7. Input before the first frame, like anvil: `TakeControl` already switched the VT keyboard
+    // to K_OFF, so without libinput nothing — not even Ctrl+Alt+Fn — reaches anyone.
+    {
+        let input_drm = Rc::clone(&drm);
+        drm.borrow_mut().start_input(&input_drm);
+    }
+
+    // 8. The first frame.
     state.request_full_redraw();
     render_all(state, &drm);
     Ok(DrmHandle(drm))
@@ -465,9 +471,7 @@ impl Drm {
     /// pause before a resume does not suspend twice, which makes it safe from both the pause
     /// handler and [`finish`].
     ///
-    /// Only a real logind `PauseDevice` (or [`finish`]) reaches this: a session that merely reported
-    /// itself inactive at startup never suspends libinput, so Ctrl+Alt+Fn keeps reaching the kernel
-    /// and can take the console back.
+    /// Only a logind `PauseDevice` for the scanout card (or [`finish`]) reaches this.
     fn quiesce(&mut self) {
         self.retry_scheduled = false;
         self.retry_attempts = 0;
@@ -481,8 +485,6 @@ impl Drm {
             return;
         }
         self.paused = true;
-        // Nothing is grabbed before the first frame, so this is a no-op on a startup that pauses
-        // before it ever got that far.
         if let Some(libinput) = self.libinput.as_mut() {
             libinput.suspend();
         }
@@ -768,10 +770,9 @@ impl Drm {
     /// The **present** boundary: the flip we queued is on the panel. This is readiness.
     ///
     /// `stage=presented status=ok code=8` is emitted once, followed immediately by the one-shot
-    /// `startup timing` summary. Only here — after a pixel is actually on screen — is the seat grabbed
-    /// ([`Drm::start_input`]) and only here is the bounded deadline disarmed. A vblank that does not
+    /// `startup timing` summary, and only here is the bounded deadline disarmed. A vblank that does not
     /// belong to a queued flip of this output (`FirstFrameGate::presented` refuses it) changes nothing.
-    fn note_presented(&mut self, crtc: u32, drm: &Rc<RefCell<Drm>>) {
+    fn note_presented(&mut self, crtc: u32) {
         // The guard first: only the CRTC of an output that has a flip in flight can present one.
         if !self.first_frame.presented_for(crtc) {
             return;
@@ -795,9 +796,6 @@ impl Drm {
             &format!("{} crtc={crtc}", self.gpu_name),
         );
         self.timing.emit();
-        // Only now: a frame is on the CRTC, so grabbing the seat can no longer leave the console
-        // unreachable *without* a painted session.
-        self.start_input(drm);
     }
 
     /// Arms the one bounded deadline for the first presented frame.
@@ -821,15 +819,7 @@ impl Drm {
         }
     }
 
-    /// Brings up libinput, then registers its event source — the last step of the startup.
-    ///
-    /// `udev_assign_seat` opens every device on the seat and `EVIOCGRAB`s it. Doing that before a
-    /// frame is *presented* is what made a wedged startup unrecoverable: the compositor held the
-    /// keyboard while fbcon was already unbound, so Ctrl+Alt+Fn never reached the kernel. Until this
-    /// point the seat is untouched, and every early return in [`init`] — and every deadline that
-    /// fires — therefore grabs nothing.
-    ///
-    /// Only [`Drm::note_presented`] calls this: a queued flip is not enough.
+    /// Brings up libinput on the seat and registers its event source. Called once from [`init`].
     fn start_input(&mut self, drm: &Rc<RefCell<Drm>>) {
         if self.libinput.is_some() {
             return;
@@ -872,8 +862,7 @@ impl Drm {
 
     /// Reopens the input devices logind handed back after a pause.
     ///
-    /// A no-op while libinput was never started (a session that has not presented its first frame
-    /// yet, so it grabbed nothing in the first place).
+    /// A no-op when libinput could not be started.
     fn resume_input(&mut self) {
         let Some(libinput) = self.libinput.as_mut() else {
             return;
@@ -911,7 +900,7 @@ impl Drm {
             }
         };
         if presented {
-            self.note_presented(u32::from(crtc), drm);
+            self.note_presented(u32::from(crtc));
         }
         self.paint(state, drm);
     }
@@ -1363,6 +1352,18 @@ fn on_logind_event(state: &mut State, drm: &Rc<RefCell<Drm>>, event: LogindEvent
         LogindEvent::Pause { major, minor, kind } => {
             {
                 let mut d = drm.borrow_mut();
+                if !pauses_scanout(d.primary_dev, major, minor) {
+                    // An input device: logind revokes its evdev descriptor and libinput drops it.
+                    // logind also sends `gone` for every `ReleaseDevice`, e.g. each node libinput
+                    // opens and closes again while probing the seat, so this must never touch
+                    // scanout (wlroots and libseat filter on the DRM device the same way).
+                    if kind.needs_ack() {
+                        if let Err(error) = d.session.ack_pause(major, minor) {
+                            eprintln!("flamewm-wayland: pause ack {major}:{minor} failed: {error}");
+                        }
+                    }
+                    return;
+                }
                 d.quiesce();
                 // The reply is owed only for `pause`: logind waits for it to finish a VT switch,
                 // so it has to leave this callback after scanout stopped. `force` and `gone` are
@@ -1433,6 +1434,12 @@ fn kept_fd_resume(
     d.arm_first_frame_deadline(drm);
     state.request_full_redraw();
     Ok(())
+}
+
+/// Whether a logind `PauseDevice` for `major:minor` is about the scanout GPU this backend drives.
+/// Pauses of any other device (input nodes, other cards) leave the outputs alone.
+fn pauses_scanout(primary_dev: u64, major: u32, minor: u32) -> bool {
+    smithay::reexports::rustix::fs::makedev(major, minor) == primary_dev
 }
 
 /// A resume logind delivered with a descriptor. Only the primary scanout device is ours; input
@@ -1560,6 +1567,23 @@ fn send_frame_callbacks(state: &State) {
             time,
             throttle,
             |_, _| Some(output.clone()),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pauses_scanout;
+    use smithay::reexports::rustix::fs::makedev;
+
+    #[test]
+    fn only_the_scanout_card_pauses_scanout() {
+        let card = makedev(226, 1);
+        assert!(pauses_scanout(card, 226, 1));
+        assert!(!pauses_scanout(card, 226, 0), "another card");
+        assert!(
+            !pauses_scanout(card, 13, 64),
+            "an evdev node released by libinput"
         );
     }
 }

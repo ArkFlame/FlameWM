@@ -350,7 +350,9 @@ impl RuntimeDocument {
             return Ok(());
         }
         self.text_overrides.insert(target, text);
-        self.touch_node(target, DirtyReason::Text, true);
+        if !self.touch_isolated_box(target, DirtyReason::Text) {
+            self.touch_node(target, DirtyReason::Text, true);
+        }
         Ok(())
     }
 
@@ -364,7 +366,13 @@ impl RuntimeDocument {
         } else {
             self.hidden_nodes.insert(index);
         }
-        self.touch();
+        // An isolated absolute box only shows or hides its own subtree: patch the retained layout.
+        // The repaint stays whole, exactly as before.
+        if self.touch_isolated_box(index, DirtyReason::Geometry) {
+            self.dirty.full = true;
+        } else {
+            self.touch();
+        }
         Ok(())
     }
 

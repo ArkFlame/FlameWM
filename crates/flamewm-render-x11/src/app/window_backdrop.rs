@@ -21,10 +21,14 @@
 //! [`SCENE_PROBE_INTERVAL`]. Invalidation only takes effect at the next safe read moment; while the
 //! surface stays on screen the cached copy keeps painting (no hide, no flicker).
 //!
-//! Limit: other windows moving behind a surface that stays on screen are not re-read (that would
-//! need a compositor or hiding the visible window). The crop then shows them where they were when
-//! the copy was read; no root event subscription is added here (event sources are owned by
-//! `flamewm-reactor`).
+//! Windows stacked above the surface are read while they cover it: a VisibilityNotify (or an Expose
+//! while covered) schedules, after [`CAPTURE_QUIET`], a read of only the root rectangles those
+//! windows cover over the surface. Those pixels are exactly what lies beneath the surface once it is
+//! raised, so they are blurred into the cached root, and the raise (VisibilityUnobscured) recrops it.
+//! The read never touches pixels of the surface itself, so nothing is hidden (A01).
+//!
+//! Limit: other windows changing behind a surface that is on top are not re-read (that would need a
+//! compositor or hiding the visible window). The crop then shows them as they were when last read.
 
 use std::time::{Duration, Instant};
 
@@ -120,6 +124,10 @@ pub(crate) struct WindowBackdropState {
     /// removal, a root stack change, or a move or resize. A backbuffer painted at generation `g`
     /// holds this backdrop only while the generation is still `g`.
     pub(crate) generation: u64,
+    /// Other windows cover part of this one; set from VisibilityNotify.
+    pub(crate) covered: bool,
+    /// When the covering windows are read into the cached root (end of their quiet period).
+    pub(crate) covered_due: Option<Instant>,
 }
 
 /// Blurred ARGB snapshot as uploaded, with the root position of its top-left pixel.
@@ -164,6 +172,8 @@ impl WindowBackdropState {
             captured: None,
             mirror: None,
             generation: 0,
+            covered: false,
+            covered_due: None,
         }
     }
 }
@@ -181,6 +191,39 @@ impl X11App {
         }
     }
 
+    /// A VisibilityNotify for this window. Covered: the windows above it now show over its area,
+    /// and they are what will lie beneath it once it is raised, so they are read after the quiet
+    /// period (they may still be painting). Uncovered: it was raised over them, so the snapshot is
+    /// recropped from the cached root that holds them.
+    pub(crate) fn note_window_visibility(&mut self, unobscured: bool) {
+        let Some(state) = self.window_backdrop.as_mut() else {
+            return;
+        };
+        state.covered = !unobscured;
+        if unobscured {
+            state.covered_due = None;
+            state.stale = true;
+            state.generation += 1;
+            self.mark_full();
+            return;
+        }
+        self.note_window_covered_change();
+    }
+
+    /// What covers this window may have changed (it became covered, or a covering window moved and
+    /// exposed it): restart the quiet period before the covering windows are read.
+    pub(crate) fn note_window_covered_change(&mut self) {
+        let Some(state) = self.window_backdrop.as_mut() else {
+            return;
+        };
+        if !state.covered || state.blurred_root.is_none() {
+            return;
+        }
+        let due = Instant::now() + CAPTURE_QUIET;
+        state.covered_due = Some(due);
+        self.backdrop_deadline = Some(self.backdrop_deadline.map_or(due, |at| at.min(due)));
+    }
+
     /// Recomputes the window snapshot for this paint. The settle path only crops the cached clean
     /// root at the new origin; the root is read only while the surface cannot be on the root yet.
     /// Capture failure is nonfatal: the slot is cleared and translucent fills show as straight
@@ -192,6 +235,14 @@ impl X11App {
     pub(crate) unsafe fn refresh_window_backdrop(&mut self) {
         if self.window_backdrop.is_none() {
             return;
+        }
+        if self
+            .window_backdrop
+            .as_ref()
+            .and_then(|state| state.covered_due)
+            .is_some_and(|due| Instant::now() >= due)
+        {
+            unsafe { self.read_covering_windows() };
         }
         // A04 invalidation: a top-level window that appeared, vanished or was restacked means the
         // cached clean root no longer describes the desktop. The flag only takes effect at the
@@ -458,6 +509,136 @@ impl X11App {
         out
     }
 
+    /// Reads the root where windows stacked above this one cover it and blurs those pixels into the
+    /// cached root. Covered pixels belong to the windows above, never to this surface, so the read
+    /// needs no hide. Only the part under this window is read; the rest of the cache is unchanged.
+    unsafe fn read_covering_windows(&mut self) {
+        let _span = flamewm_profiler::start("render.backdrop.covered");
+        let root = unsafe { self.root_size() };
+        let root_window = unsafe { XRootWindow(self.display, self.screen) };
+        let (mut x, mut y, mut child) = (0, 0, 0);
+        unsafe {
+            XTranslateCoordinates(
+                self.display,
+                self.window,
+                root_window,
+                0,
+                0,
+                &mut x,
+                &mut y,
+                &mut child,
+            )
+        };
+        let area = (x, y, self.width, self.height);
+        let rects = unsafe { self.covering_rects(root_window, area, root) };
+        let Some(state) = self.window_backdrop.as_mut() else {
+            return;
+        };
+        state.covered_due = None;
+        let blur_percent = state.spec.blur_percent;
+        let mut patched = false;
+        for (rx, ry, rw, rh) in rects {
+            let Ok(capture) = crate::backdrop::capture_drawable_rect(
+                self.display,
+                root_window as u64,
+                (rx, ry, rw, rh),
+            ) else {
+                continue;
+            };
+            let Some(state) = self.window_backdrop.as_mut() else {
+                return;
+            };
+            let Some((width, height, words)) = state.blurred_root.as_mut() else {
+                return;
+            };
+            if (*width, *height) != root || (capture.width, capture.height) != (rw, rh) {
+                continue;
+            }
+            let patch = blurred_argb_words(rw, rh, capture.pixels, 0, blur_percent);
+            paste_words(words, *width, (rx, ry), &patch, (rw, rh));
+            patched = true;
+        }
+        if patched {
+            if let Some(state) = self.window_backdrop.as_mut() {
+                state.stale = true;
+                state.generation += 1;
+            }
+        }
+    }
+
+    /// Root rectangles inside `area` covered by viewable windows stacked above this window's
+    /// top-level ancestor, clipped to their bounding shapes and to the root.
+    unsafe fn covering_rects(
+        &self,
+        root_window: Window,
+        area: (i32, i32, u32, u32),
+        root: (u32, u32),
+    ) -> Vec<(i32, i32, u32, u32)> {
+        let Some(&top) = unsafe { self.window_and_ancestors(root_window) }.last() else {
+            return Vec::new();
+        };
+        let stack = unsafe { self.root_children() };
+        let Some(position) = stack.iter().position(|window| *window == top) else {
+            return Vec::new();
+        };
+        let bounds = intersect(area, (0, 0, root.0, root.1));
+        let mut out = Vec::new();
+        for &window in &stack[position + 1..] {
+            let mut attributes =
+                std::mem::MaybeUninit::<crate::xlib_ext::XWindowAttributes>::zeroed();
+            // SAFETY: XGetWindowAttributes fills the struct on success; zeroed is a valid fallback.
+            let ok = unsafe {
+                crate::xlib_ext::XGetWindowAttributes(self.display, window, attributes.as_mut_ptr())
+            };
+            if ok == 0 {
+                continue;
+            }
+            // SAFETY: zero-initialised and possibly filled by the call above.
+            let attributes = unsafe { attributes.assume_init() };
+            if attributes.map_state != crate::xlib_ext::IS_VIEWABLE
+                || attributes.class == crate::xlib_ext::INPUT_ONLY
+            {
+                continue;
+            }
+            let border = attributes.border_width;
+            let origin = (attributes.x + border, attributes.y + border);
+            let shape = self
+                .xshape
+                .as_ref()
+                .map(|bridge| unsafe { bridge.bounding_rects(window) });
+            let pieces: Vec<(i32, i32, u32, u32)> = match shape {
+                Some(rects) => rects
+                    .iter()
+                    .map(|rect| {
+                        (
+                            origin.0 + i32::from(rect.x),
+                            origin.1 + i32::from(rect.y),
+                            u32::from(rect.width),
+                            u32::from(rect.height),
+                        )
+                    })
+                    .collect(),
+                None => vec![(
+                    attributes.x,
+                    attributes.y,
+                    (attributes.width + 2 * border).max(0) as u32,
+                    (attributes.height + 2 * border).max(0) as u32,
+                )],
+            };
+            out.extend(
+                pieces
+                    .into_iter()
+                    .map(|piece| intersect(piece, bounds))
+                    .filter(|piece| piece.2 > 0 && piece.3 > 0),
+            );
+            if out.len() >= MAX_COVERING_RECTS {
+                out.truncate(MAX_COVERING_RECTS);
+                break;
+            }
+        }
+        out
+    }
+
     /// Root pixels under the window's rect, blurred and uploaded as the window snapshot. `readback`
     /// reads the whole root first (only allowed while the surface cannot be on the root); otherwise
     /// the cached root is cropped.
@@ -566,7 +747,9 @@ impl X11App {
         if let Some(state) = self.window_backdrop.as_mut() {
             // The pixels change only when the snapshot, its origin or its size does.
             let changed = state.captured.as_ref().is_none_or(|old| {
-                old.words != words || (old.width, old.height) != (width, height) || old.root != (rx, ry)
+                old.words != words
+                    || (old.width, old.height) != (width, height)
+                    || old.root != (rx, ry)
             });
             if changed {
                 state.generation += 1;
@@ -761,6 +944,52 @@ fn wallpaper_region(
 
 /// Crops a root-sized ARGB word image at `origin` to `size`. Pixels off the root replicate the
 /// nearest root edge, as `edge_extend_rgba` does for the uncached path.
+/// Bound on the root rectangles read per covered capture; a heavily shaped stack keeps its first ones.
+const MAX_COVERING_RECTS: usize = 64;
+
+/// Intersection of two `(x, y, width, height)` rectangles; empty when they do not overlap.
+fn intersect(a: (i32, i32, u32, u32), b: (i32, i32, u32, u32)) -> (i32, i32, u32, u32) {
+    let left = a.0.max(b.0);
+    let top = a.1.max(b.1);
+    let right = (i64::from(a.0) + i64::from(a.2)).min(i64::from(b.0) + i64::from(b.2));
+    let bottom = (i64::from(a.1) + i64::from(a.3)).min(i64::from(b.1) + i64::from(b.3));
+    if right <= i64::from(left) || bottom <= i64::from(top) {
+        return (left, top, 0, 0);
+    }
+    (
+        left,
+        top,
+        (right - i64::from(left)) as u32,
+        (bottom - i64::from(top)) as u32,
+    )
+}
+
+/// Copies a `size` patch into a row-major buffer `stride` words wide at `origin`. The caller keeps
+/// the patch inside the buffer; rows or columns outside it are skipped, never written.
+fn paste_words(
+    target: &mut [u32],
+    stride: u32,
+    origin: (i32, i32),
+    patch: &[u32],
+    size: (u32, u32),
+) {
+    let (stride, width) = (stride as usize, size.0 as usize);
+    if stride == 0 || width == 0 || origin.0 < 0 || origin.1 < 0 {
+        return;
+    }
+    let (x, y) = (origin.0 as usize, origin.1 as usize);
+    if x + width > stride {
+        return;
+    }
+    for (row, source) in patch.chunks_exact(width).take(size.1 as usize).enumerate() {
+        let start = (y + row) * stride + x;
+        let Some(destination) = target.get_mut(start..start + width) else {
+            return;
+        };
+        destination.copy_from_slice(source);
+    }
+}
+
 fn crop_words_clamped(
     words: &[u32],
     root: (u32, u32),
@@ -808,6 +1037,39 @@ fn crop_rgba(image: &RgbaImage, rect: (i32, i32, u32, u32)) -> Option<RgbaImage>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn covering_rects_are_clipped_to_the_surface() {
+        assert_eq!(
+            intersect((0, 0, 100, 50), (40, 10, 100, 100)),
+            (40, 10, 60, 40)
+        );
+        assert_eq!(
+            intersect((-20, -5, 30, 30), (0, 0, 800, 600)),
+            (0, 0, 10, 25)
+        );
+        let disjoint = intersect((0, 0, 10, 10), (20, 20, 5, 5));
+        assert_eq!((disjoint.2, disjoint.3), (0, 0));
+    }
+
+    #[test]
+    fn a_covered_patch_lands_at_its_root_origin_only() {
+        let mut root = vec![0u32; 4 * 3];
+        paste_words(&mut root, 4, (1, 1), &[7, 8, 9, 10], (2, 2));
+        assert_eq!(root, vec![0, 0, 0, 0, 0, 7, 8, 0, 0, 9, 10, 0]);
+        let before = root.clone();
+        paste_words(&mut root, 4, (3, 0), &[1, 1], (2, 1));
+        assert_eq!(
+            root, before,
+            "a patch wider than the root row is not written"
+        );
+        paste_words(&mut root, 4, (0, 2), &[5, 5, 6, 6], (2, 2));
+        assert_eq!(
+            &root[8..10],
+            &[5, 5],
+            "rows past the buffer end are skipped"
+        );
+    }
 
     #[test]
     fn no_cache_is_read_only_while_the_surface_cannot_be_on_the_root() {

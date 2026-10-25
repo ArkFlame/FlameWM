@@ -279,8 +279,11 @@ impl X11App {
         install_x_protocol_error_handler();
         let screen = unsafe { XDefaultScreen(display) };
         let root = unsafe { XRootWindow(display, screen) };
-        let width = config.width.max(1);
-        let height = config.height.max(1);
+        // A requested size larger than the screen (a small or scaled display) would only fail the
+        // root-bounded backbuffer below, so the window starts at most screen-sized.
+        let (root_w, root_h) = display_extent(display, screen);
+        let width = config.width.clamp(1, root_w.max(1));
+        let height = config.height.clamp(1, root_h.max(1));
         // Canonical scene creation: prefer a depth-32 TrueColor ARGB visual
         // validated by native/surface_format; fall back to the default visual
         // (opaque or shape-backed) only when no real alpha channel exists.
@@ -373,7 +376,8 @@ impl X11App {
             | BUTTON_PRESS_MASK
             | BUTTON_RELEASE_MASK
             | KEY_PRESS_MASK
-            | KEY_RELEASE_MASK;
+            | KEY_RELEASE_MASK
+            | crate::xlib_ext::VISIBILITY_CHANGE_MASK;
         unsafe {
             XSelectInput(display, window, event_mask);
         }
@@ -416,8 +420,8 @@ impl X11App {
                 owned.create_pixmap(
                     display,
                     window,
-                    config.width.max(1),
-                    config.height.max(1),
+                    width,
+                    height,
                     depth as u32,
                     root_w,
                     root_h,
@@ -594,7 +598,7 @@ impl X11App {
             images: HashMap::new(),
             allocator,
             backbuffer_bytes,
-            backbuffer_cap: (config.width.max(1), config.height.max(1)),
+            backbuffer_cap: (width, height),
             cursors,
             current_cursor: None,
             xcursor: Some(xcursor),
@@ -608,8 +612,8 @@ impl X11App {
             alpha_mode,
             surface: Some(surface),
             wm_delete,
-            width: config.width.max(1),
-            height: config.height.max(1),
+            width,
+            height,
             presentation,
             clip_stack: Vec::new(),
             gc_clip: None,

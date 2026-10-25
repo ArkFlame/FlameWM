@@ -46,7 +46,9 @@ impl Launch {
 impl PtyProcess {
     /// Opens a PTY pair, sizes it, and starts `launch` on the slave with a controlling terminal when `setsid` exists.
     pub fn spawn(launch: &Launch, size: PtySize) -> io::Result<Self> {
-        let master: OwnedFd = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
+        // Close-on-exec: a child holding the master never sees the terminal hang up, so closing the window would
+        // leave the shell and everything it started running.
+        let master: OwnedFd = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)?;
         grantpt(&master)?;
         unlockpt(&master)?;
         let slave_name = ptsname(&master, Vec::new())?;
@@ -184,6 +186,27 @@ mod tests {
             }
         }
         assert!(String::from_utf8_lossy(&output).contains("hi"), "pty output: {output:?}");
+    }
+
+    #[test]
+    fn the_child_does_not_inherit_the_master() {
+        let script = "for fd in /proc/$$/fd/*; do readlink \"$fd\"; done; echo done";
+        let launch = Launch { program: "/bin/sh".into(), args: vec!["-c".into(), script.into()], cwd: None };
+        let mut process = PtyProcess::spawn(&launch, size()).expect("spawn fd listing on pty");
+        let mut reader = process.take_reader().expect("reader");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut output = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while Instant::now() < deadline && !String::from_utf8_lossy(&output).contains("done") {
+            match read_chunk(&mut reader, &mut buffer) {
+                Ok(0) => break,
+                Ok(count) => output.extend_from_slice(&buffer[..count]),
+                Err(_) => break,
+            }
+        }
+        let listing = String::from_utf8_lossy(&output);
+        assert!(listing.contains("done"), "fd listing: {listing}");
+        assert!(!listing.contains("ptmx"), "child holds the pty master: {listing}");
     }
 
     #[test]

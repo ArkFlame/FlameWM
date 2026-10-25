@@ -255,6 +255,81 @@ fn patch_falls_back_to_full_compute_when_not_provably_safe() {
     );
 }
 
+/// Terminal-like runs: absolutely positioned boxes holding one text node each, some sized by their
+/// text. Text, visibility, weight and position writes patch the retained layout, and the result
+/// equals a full compute at every step.
+#[test]
+fn isolated_text_box_patch_matches_full_compute() {
+    let interaction = InteractionState::default();
+    let rows: Vec<(String, Style)> = (0..12)
+        .map(|i| {
+            let style = if i % 2 == 0 {
+                absolute_box(80.0, 16.0)
+            } else {
+                Style {
+                    position: Position::Absolute,
+                    ..Style::default()
+                }
+            };
+            (format!("cell {i}"), style)
+        })
+        .collect();
+    let mut doc = rows_document(&rows);
+    let mut layout = LayoutEngine::compute(&doc, 800.0, 600.0, interaction);
+    let layout_revision = doc.layout_revision();
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = |bound: u64| {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 33) % bound
+    };
+    for step in 0..400 {
+        let row = format!("row{}", next(12));
+        match step % 4 {
+            0 => doc
+                .set_text(&row, "x".repeat(next(40) as usize))
+                .expect("text"),
+            1 => doc.set_visible(&row, next(3) != 0).expect("visibility"),
+            2 => doc
+                .set_position_px(&row, next(700) as f32, next(500) as f32)
+                .expect("move"),
+            _ => doc
+                .set_font_weight(&row, if next(2) == 0 { 400 } else { 700 })
+                .expect("weight"),
+        }
+        let passes = layout_passes_on_this_thread();
+        assert!(
+            doc.patch_layout(&mut layout, interaction),
+            "step {step}: isolated text box must patch"
+        );
+        assert_eq!(layout_passes_on_this_thread(), passes);
+        assert_eq!(doc.layout_revision(), layout_revision);
+        assert_eq!(layout.revision, doc.revision());
+        assert_same_layout(
+            &layout,
+            &LayoutEngine::compute(&doc, 800.0, 600.0, interaction),
+        );
+    }
+}
+
+/// Text in normal flow resizes its parent and pushes its siblings: never patched.
+#[test]
+fn flow_text_change_invalidates_layout() {
+    let interaction = InteractionState::default();
+    let mut doc = rows_document(&bench_rows(3));
+    let mut layout = LayoutEngine::compute(&doc, 800.0, 600.0, interaction);
+    let layout_revision = doc.layout_revision();
+    doc.set_text(
+        "row1",
+        "a much longer line that wraps differently than before",
+    )
+    .expect("text");
+    doc.set_visible("row2", false).expect("visibility");
+    assert_ne!(doc.layout_revision(), layout_revision);
+    assert!(!doc.patch_layout(&mut layout, interaction));
+}
+
 fn bench_rows(count: usize) -> Vec<(String, Style)> {
     (0..count)
         .map(|i| {
