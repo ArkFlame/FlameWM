@@ -11,6 +11,7 @@ use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::winit::WinitGraphicsBackend;
 use smithay::desktop::{PopupManager, layer_map_for_output};
+use smithay::input::pointer::CursorImageStatus;
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Output, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::ping::Ping;
@@ -308,6 +309,10 @@ pub struct State {
     pub focused: Option<WindowId>,
     pub shortcuts: Shortcuts,
     pub pointer: Point<f64, Logical>,
+    /// What clients asked the pointer to show (`wl_pointer.set_cursor`, XWayland included).
+    pub cursor_status: CursorImageStatus,
+    /// Session xcursor theme and the cursors decoded from it.
+    pub cursors: crate::cursor::Cursors,
     pub grab: Option<Grab>,
     /// Bare Super press that has not been combined with another key yet.
     pub super_tap: bool,
@@ -404,6 +409,8 @@ impl State {
             focused: None,
             shortcuts,
             pointer: Point::from((0.0, 0.0)),
+            cursor_status: CursorImageStatus::default_named(),
+            cursors: crate::cursor::Cursors::from_env(),
             grab: None,
             super_tap: false,
             swallowed_keys: Vec::new(),

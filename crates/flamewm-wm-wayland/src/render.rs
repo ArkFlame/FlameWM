@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
@@ -29,6 +30,7 @@ render_elements! {
     pub Elem<=GlowRenderer>;
     Solid=SolidColorRenderElement,
     Surface=WaylandSurfaceRenderElement<GlowRenderer>,
+    Memory=MemoryRenderBufferRenderElement<GlowRenderer>,
 }
 
 const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
@@ -37,10 +39,6 @@ const TITLE_IDLE: [f32; 4] = [0.16, 0.18, 0.22, 1.0];
 const BUTTON_CLOSE: [f32; 4] = [0.75, 0.31, 0.30, 1.0];
 const BUTTON_MAXIMIZE: [f32; 4] = [0.31, 0.55, 0.31, 1.0];
 const BUTTON_MINIMIZE: [f32; 4] = [0.72, 0.63, 0.25, 1.0];
-#[cfg(feature = "drm")]
-pub const CURSOR_SIZE: i32 = 12;
-#[cfg(feature = "drm")]
-pub const CURSOR_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
 fn solid(rect: Rect, color: [f32; 4]) -> Elem {
     let geometry = Rectangle::new(Point::from((rect.x, rect.y)), Size::from((rect.w, rect.h)));
@@ -197,7 +195,11 @@ fn render_into(
     backend: &mut WinitGraphicsBackend<GlowRenderer>,
 ) -> Result<(), Box<dyn Error>> {
     let size = backend.window_size();
-    let elements = build_elements(state, backend.renderer());
+    let mut elements =
+        state
+            .cursors
+            .elements(backend.renderer(), &state.cursor_status, state.pointer);
+    elements.extend(build_elements(state, backend.renderer()));
     if let Some(path) = state.dump.take() {
         // Readback goes through an offscreen texture: copying from the window surface target
         // left the GL context lost for the next swap (EGL_BAD_ALLOC), so the window path stays
@@ -290,6 +292,15 @@ fn send_frame_callbacks(state: &State) {
             throttle,
             |_, _| Some(output.clone()),
         );
+    }
+    send_cursor_frame(state, time);
+}
+
+/// Frame callback for the client's cursor surface, so an animated cursor keeps committing.
+pub fn send_cursor_frame(state: &State, time: Duration) {
+    if let smithay::input::pointer::CursorImageStatus::Surface(surface) = &state.cursor_status {
+        let output = &state.output;
+        send_frames_surface_tree(surface, output, time, None, |_, _| Some(output.clone()));
     }
 }
 

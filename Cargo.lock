@@ -913,10 +913,12 @@ dependencies = [
  "flamewm-control-dbus",
  "flamewm-control-wire",
  "flamewm-platform",
+ "flamewm-session-core",
  "log",
  "smithay",
  "wayland-client",
  "wayland-protocols",
+ "xcursor",
 ]
 
 [[package]]

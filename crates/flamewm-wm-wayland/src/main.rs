@@ -60,6 +60,7 @@
 //! autostart is skipped instead of aborting the session.
 
 mod control;
+mod cursor;
 #[cfg(feature = "drm")]
 #[allow(unsafe_code)]
 // EGL display and renderer creation are unsafe in smithay; no other module may.
@@ -450,6 +451,9 @@ fn abort_startup(reason: &str) {
 
 /// Runs the compositor and returns its exit code.
 fn run() -> Result<i32, Box<dyn Error>> {
+    // Before any thread or child exists: XWayland, the session clients and the compositor's own
+    // pointer read the theme from this process's environment.
+    cursor::export_session_theme(cursor::saved_theme().as_deref());
     let explicit = std::env::var("FLAMEWM_WAYLAND_BACKEND").ok();
     let backend = select_backend(explicit.as_deref());
     if let Some(requested) = explicit
@@ -717,6 +721,8 @@ fn init_winit(
     );
     state.output.set_preferred(mode);
     state.output_size = (size.w, size.h).into();
+    // The compositor draws the pointer the clients ask for, as the tty backend does.
+    backend.window().set_cursor_visible(false);
     state.backend = Some(backend);
     handle.insert_source(winit_source, |event, _, state| match event {
         WinitEvent::Resized { size, .. } => state.on_resized(size.w, size.h),
