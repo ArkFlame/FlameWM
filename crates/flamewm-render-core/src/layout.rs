@@ -10,7 +10,6 @@ pub fn layout_passes_on_this_thread() -> u64 {
     LAYOUT_PASSES.with(std::cell::Cell::get)
 }
 
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LayoutBox {
     pub rect: Rect,
@@ -283,12 +282,18 @@ impl LayoutResult {
             };
             plan.push((index, parent));
         }
+        let nodes = &document.document.nodes;
         let mut engine = Engine {
             document,
             interaction,
             boxes: &mut self.boxes,
         };
         for &(index, parent) in &plan {
+            // A full compute never visits a hidden box or its text, so they keep the default box.
+            engine.boxes[index as usize] = LayoutBox::default();
+            for child in engine.children(index) {
+                engine.boxes[child as usize] = LayoutBox::default();
+            }
             let rect = engine.boxes[parent as usize].rect;
             let padding = engine.style(parent).padding;
             engine.place_absolute_child(
@@ -300,16 +305,22 @@ impl LayoutResult {
             );
         }
         for &(index, _) in &plan {
-            // Non-scrolling leaf: its content extent is its box (see `compute`).
+            // Non-scrolling box and text: their content extent is their box (see `compute`).
             self.contents[index as usize] = self.boxes[index as usize].rect;
+            let mut child = nodes[index as usize].first_child;
+            while let Some(current) = child {
+                self.contents[current as usize] = self.boxes[current as usize].rect;
+                child = nodes[current as usize].next_sibling;
+            }
         }
         true
     }
 }
 
-/// Parent index when `index` is a childless, absolutely positioned element whose box is fixed by
-/// its parent's box alone. Rejects any node in `moved` on the path to the root (its box moves
-/// too), any scrolling (Auto/Scroll) or hidden-display ancestor, and non-element parents.
+/// Parent index when `index` is an absolutely positioned element holding nothing but text, whose
+/// box is fixed by its parent's box alone. The element itself may be hidden. Rejects any node in
+/// `moved` on the path to the root (its box moves too), any scrolling (Auto/Scroll) or
+/// hidden-display ancestor, a scrolling box or text, and non-element parents.
 fn isolated_leaf_parent(
     document: &RuntimeDocument,
     interaction: InteractionState,
@@ -318,16 +329,23 @@ fn isolated_leaf_parent(
 ) -> Option<u32> {
     let node = &document.document.nodes[index as usize];
     let parent = node.parent?;
-    if node.kind != NodeKind::Element || node.first_child.is_some() {
+    if node.kind != NodeKind::Element {
         return None;
     }
+    let scrolls = |style: &Style| {
+        style.overflow_x != Overflow::Visible || style.overflow_y != Overflow::Visible
+    };
     let style = document.runtime_style(index, interaction);
-    if style.position != Position::Absolute
-        || style.display == Display::None
-        || style.overflow_x != Overflow::Visible
-        || style.overflow_y != Overflow::Visible
-    {
+    if style.position != Position::Absolute || scrolls(&style) {
         return None;
+    }
+    let mut child = node.first_child;
+    while let Some(current) = child {
+        let text = &document.document.nodes[current as usize];
+        if text.kind != NodeKind::Text || scrolls(&document.runtime_style(current, interaction)) {
+            return None;
+        }
+        child = text.next_sibling;
     }
     let mut ancestor = Some(parent);
     while let Some(current) = ancestor {

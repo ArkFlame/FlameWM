@@ -446,7 +446,12 @@ impl RuntimeDocument {
         let weight = weight.clamp(100, 900);
         let index = self.require_node(id)?;
         if self.set_override_and_mirror(index, |style| &mut style.font_weight, weight) {
-            self.touch();
+            // The weight only re-measures this element's own text when it is an isolated box.
+            if self.touch_isolated_box(index, DirtyReason::Text) {
+                self.dirty.full = true;
+            } else {
+                self.touch();
+            }
         }
         Ok(())
     }

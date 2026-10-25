@@ -16,7 +16,7 @@ pub struct UiDocument {
 }
 
 struct LayoutMemo {
-    revision: u64,
+    revision: (u64, u64),
     viewport: (f32, f32),
     layout: flamewm_render_core::LayoutResult,
 }
@@ -179,8 +179,12 @@ impl UiDocument {
     /// id is absent from the template.
     pub fn layout_box_by_id(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
         let index = self.document.node_by_id(id)?;
-        // Layout-keyed: paint-only edits (colors) keep the retained boxes valid.
-        let revision = self.document.layout_revision();
+        // Layout-keyed: paint-only edits (colors) keep the retained boxes valid. Isolated absolute
+        // boxes move and re-measure without a layout revision, so their geometry revision counts too.
+        let revision = (
+            self.document.layout_revision(),
+            self.document.geometry_revision(),
+        );
         let mut memo = self.layout_memo.borrow_mut();
         let fresh = memo
             .as_ref()

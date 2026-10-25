@@ -181,6 +181,50 @@ impl RuntimeDocument {
                 .map_or(true, |style| style.position == Position::Absolute)
     }
 
+    /// The isolated absolute element whose boxes a text, visibility or font change of `index`
+    /// can move: `index` itself, or the parent of a text node, when that element is isolated
+    /// (see [`Self::geometry_is_isolated`]) and holds nothing but text. Such a change resizes
+    /// that element's own subtree only; absolute children never size or move their parent.
+    fn isolated_box_owner(&self, index: u32) -> Option<u32> {
+        let node = &self.document.nodes[index as usize];
+        let owner = if node.kind == NodeKind::Text {
+            node.parent?
+        } else {
+            index
+        };
+        let element = &self.document.nodes[owner as usize];
+        if element.kind != NodeKind::Element || !self.geometry_is_isolated(owner) {
+            return None;
+        }
+        let mut child = element.first_child;
+        while let Some(current) = child {
+            let node = &self.document.nodes[current as usize];
+            if node.kind != NodeKind::Text {
+                return None;
+            }
+            child = node.next_sibling;
+        }
+        Some(owner)
+    }
+
+    /// Records a layout-affecting change of `index` as a patch of its isolated box owner instead
+    /// of a full layout invalidation. Returns false, recording nothing, when the change is not
+    /// provably local or a full compute is already pending; the caller then invalidates layout.
+    pub(super) fn touch_isolated_box(&mut self, index: u32, reason: DirtyReason) -> bool {
+        let Some(owner) = self.isolated_box_owner(index) else {
+            return false;
+        };
+        let Some(nodes) = self.layout_patch.get_mut().as_mut() else {
+            return false;
+        };
+        nodes.insert(owner);
+        self.revision = self.revision.wrapping_add(1);
+        self.geometry_revision = self.geometry_revision.wrapping_add(1);
+        self.pending_damage = self.pending_damage.merge(SurfaceDamage::Full);
+        self.dirty.nodes.insert(index, reason);
+        true
+    }
+
     /// Resolves the mutations since the previous call into surface damage and clears them.
     ///
     /// `old` must be the layout that was last painted; `new` the layout for the current
