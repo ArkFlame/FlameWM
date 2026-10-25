@@ -50,7 +50,7 @@ fi
 mkdir -p "$DIST"
 rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$PKG_VERSION.tar.gz" "$DIST/SHA256SUMS"
 
-for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal; do
+for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal flamewm-wayland; do
     [[ -x "$BUILD_DIR/$binary" ]] || fail "missing $PROFILE binary: $BUILD_DIR/$binary"
 done
 
@@ -84,10 +84,10 @@ python3 "$ROOT/scripts/package-source-archive" "$ROOT" \
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/flamewm" "$STAGE/etc/pam.d" \
-    "$STAGE/usr/share/applications" "$STAGE/usr/share/xsessions" "$STAGE/usr/share/doc/flamewm" \
+    "$STAGE/usr/share/applications" "$STAGE/usr/share/xsessions" "$STAGE/usr/share/wayland-sessions" "$STAGE/usr/share/doc/flamewm" \
     "$STAGE/DEBIAN"
 
-for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal; do
+for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal flamewm-wayland; do
     install -m 0755 "$BUILD_DIR/$binary" "$STAGE/usr/bin/$binary"
 done
 install -m 0644 "$ROOT/packaging/pam.d/flamewm-lock" "$STAGE/etc/pam.d/flamewm-lock"
@@ -96,6 +96,7 @@ install -m 0644 "$ROOT/packaging/flamewm-screenshot.desktop" "$STAGE/usr/share/a
 install -m 0644 "$ROOT/packaging/flamewm-explorer.desktop" "$STAGE/usr/share/applications/flamewm-explorer.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-terminal.desktop" "$STAGE/usr/share/applications/flamewm-terminal.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"
+install -m 0644 "$ROOT/packaging/flamewm-wayland.desktop" "$STAGE/usr/share/wayland-sessions/flamewm-wayland.desktop"
 # Publish the KService menu selected by XDG_MENU_PREFIX=flamewm-.
 install -d -m 0755 "$STAGE/etc/xdg/menus"
 install -m 0644 "$ROOT/packaging/menus/flamewm-applications.menu" \
@@ -103,6 +104,7 @@ install -m 0644 "$ROOT/packaging/menus/flamewm-applications.menu" \
 install -m 0644 "$ROOT/packaging/notifications/dunstrc" "$STAGE/usr/share/flamewm/dunstrc"
 install -d -m 0755 "$STAGE/usr/libexec/flamewm"
 install -m 0755 "$ROOT/scripts/flamewm-session-wrapper" "$STAGE/usr/libexec/flamewm/flamewm-session-wrapper"
+install -m 0755 "$ROOT/scripts/flamewm-wayland-session" "$STAGE/usr/libexec/flamewm/flamewm-wayland-session"
 install -m 0755 "$ROOT/tools/flamewm_desktop_services.py" "$STAGE/usr/libexec/flamewm/flamewm-desktop-services"
 # Desktop-specific portal backend configuration: never override the user's
 # ~/.config/xdg-desktop-portal preferences or the system's KDE configuration.

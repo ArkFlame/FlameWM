@@ -41,7 +41,7 @@ Conversion jobs now have a **90-second child-process deadline**, a **maximum of 
 
 ## 3. Wayland/X11 packaging truth
 
-The X11 `.desktop` session remains registered in `packaging/install-manifest.txt` → `/usr/share/xsessions/flamewm.desktop` and points at `/usr/bin/flamewm-session`. **No native Wayland compositor/backend is present** and no misleading Wayland session file was installed. A proper Wayland session requires a compositor/platform provider with window lifecycle, input, output, popup/subsurface and rendering integration, and native tests, not just a new session selector entry.
+The X11 `.desktop` session remains registered in `packaging/install-manifest.txt` → `/usr/share/xsessions/flamewm.desktop` and points at `/usr/bin/flamewm-session`. **No native Wayland compositor/backend is present** and no misleading Wayland session file was installed. A proper Wayland session requires a compositor/platform provider with window lifecycle, input, output, popup/subsurface and rendering integration, and native tests, not just a new session selector entry. Superseded: a preliminary Wayland session now ships; see `docs/WAYLAND_PLAN.md`.
 
 ## 4. Next verification on full Linux checkout
 

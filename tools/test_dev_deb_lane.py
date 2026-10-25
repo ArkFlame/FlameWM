@@ -16,15 +16,15 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
 BINARIES = ("flamewm", "flamewm-session", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
             "flamewm-screenshot", "flamewm-explorer", "flamewm-render-x11", "flamewm-render-compile",
-            "flamewm-render-inspect", "flamewm-lock", "flamewm-terminal")
+            "flamewm-render-inspect", "flamewm-lock", "flamewm-terminal", "flamewm-wayland")
 COPIED = ("Cargo.toml", "LICENSE", "README.md", "packaging/flamewm.desktop",
-          "packaging/flamewm-session.desktop", "packaging/flamewm-screenshot.desktop",
+          "packaging/flamewm-session.desktop", "packaging/flamewm-wayland.desktop", "packaging/flamewm-screenshot.desktop",
           "packaging/flamewm-explorer.desktop", "packaging/flamewm-terminal.desktop",
           "packaging/pam.d/flamewm-lock", "packaging/menus/flamewm-applications.menu",
           "packaging/notifications/dunstrc", "packaging/install-manifest.txt",
           "packaging/debian/control.in", "packaging/debian/copyright",
           "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/package",
-          "scripts/package-source-archive", "scripts/flamewm-session-wrapper", "scripts/dev-deb",
+          "scripts/package-source-archive", "scripts/flamewm-session-wrapper", "scripts/flamewm-wayland-session", "scripts/dev-deb",
           "tools/flamewm_desktop_services.py")
 FAKE_CARGO = """#!/bin/sh
 printf 'CARGO_TARGET_DIR=%s ARGS=%s\\n' "$CARGO_TARGET_DIR" "$*" >> "$FLAMEWM_FAKE_EVENTS"
@@ -63,7 +63,7 @@ class DevDebLaneTests(unittest.TestCase):
         (self.root / "assets/web/breeze/application-menu.svg").write_text("<svg/>")
         (self.root / "packaging/source-manifest.txt").write_text(
             "scripts/\ntools/\nassets/\n@exec scripts/version\n@exec scripts/package\n"
-            "@exec scripts/package-source-archive\n@exec scripts/flamewm-session-wrapper\n"
+            "@exec scripts/package-source-archive\n@exec scripts/flamewm-session-wrapper\n@exec scripts/flamewm-wayland-session\n"
             "@exec scripts/dev-deb\n@exec tools/flamewm_desktop_services.py\n", encoding="utf-8")
         # Stale production binaries: the fast lane must never consume these.
         release = self.root / ".target/release"
@@ -137,7 +137,7 @@ class DevDebLaneTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("expected release or fast", result.stderr)
 
-    def test_dev_deb_builds_fast_profile_twelve_bins_and_packages_them(self):
+    def test_dev_deb_builds_fast_profile_all_bins_and_packages_them(self):
         result = self.run_script("dev-deb")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         line = self.events.read_text(encoding="utf-8").strip()
@@ -156,6 +156,16 @@ class DevDebLaneTests(unittest.TestCase):
         result = self.run_script("dev-deb", CARGO_TARGET_DIR="relative/dir")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must be absolute", result.stderr)
+
+
+class DevDebDrmFeatureTests(unittest.TestCase):
+    def test_fast_build_enables_the_wayland_drm_feature(self):
+        lines = [line for line in (ROOT / "scripts/dev-deb").read_text().splitlines()
+                 if "cargo build --profile fast" in line]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("--locked", lines[0])
+        self.assertIn("--features flamewm-wm-wayland/drm", lines[0])
+        self.assertIn('"${bin_args[@]}"', lines[0])
 
 
 if __name__ == "__main__":

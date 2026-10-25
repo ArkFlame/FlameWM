@@ -1157,6 +1157,13 @@ fn dict_string_array<'a>(dict: &'a WireDict, key: &str) -> Result<&'a [String], 
     required_string_array(dict_value(dict, key)?, key)
 }
 
+/// One row of the Alt+Tab switcher as the shell renders it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitcherEntry {
+    pub title: String,
+    pub app_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlSignal {
     WindowsChanged {
@@ -1192,6 +1199,15 @@ pub enum ControlSignal {
     },
     StartMenuToggleRequested,
     LauncherToggleRequested,
+    /// Alt+Tab switcher state, pushed by the WM on open, selection change and close. `entries`
+    /// are in MRU order; `selected` indexes them. `immediate` asks for the overlay to show
+    /// without the hold delay (a second Tab press arrived). The shell only renders this.
+    WindowSwitcherChanged {
+        open: bool,
+        immediate: bool,
+        selected: u32,
+        entries: Vec<SwitcherEntry>,
+    },
     ShortcutsChanged {
         revision: u64,
     },
@@ -1278,6 +1294,21 @@ pub fn encode_signal(signal: &ControlSignal) -> WireSignal {
             interface: IFACE_ROOT.to_owned(),
             member: "LauncherToggleRequested".to_owned(),
             args: Vec::new(),
+        },
+        ControlSignal::WindowSwitcherChanged {
+            open,
+            immediate,
+            selected,
+            entries,
+        } => WireSignal {
+            interface: IFACE_ROOT.to_owned(),
+            member: "WindowSwitcherChanged".to_owned(),
+            args: vec![
+                WireValue::Bool(*open),
+                WireValue::Bool(*immediate),
+                WireValue::U32(*selected),
+                WireValue::Array(entries.iter().map(switcher_entry_wire_value).collect()),
+            ],
         },
         ControlSignal::ShortcutsChanged { revision } => {
             revision_signal(IFACE_SHORTCUTS, "ShortcutsChanged", *revision)
@@ -1370,6 +1401,18 @@ pub fn decode_signal(signal: &WireSignal) -> Result<ControlSignal, ControlError>
             expect_arity(&call, 0)?;
             Ok(ControlSignal::LauncherToggleRequested)
         }
+        (IFACE_ROOT, "WindowSwitcherChanged") => {
+            expect_arity(&call, 4)?;
+            Ok(ControlSignal::WindowSwitcherChanged {
+                open: required_bool(&call.args[0], "open")?,
+                immediate: required_bool(&call.args[1], "immediate")?,
+                selected: required_u32(&call.args[2], "selected")?,
+                entries: required_array(&call.args[3], "entries")?
+                    .iter()
+                    .map(switcher_entry)
+                    .collect::<Result<Vec<_>, _>>()?,
+            })
+        }
         (IFACE_SHORTCUTS, "ShortcutsChanged") => Ok(ControlSignal::ShortcutsChanged {
             revision: signal_revision(&call)?,
         }),
@@ -1384,6 +1427,21 @@ pub fn decode_signal(signal: &WireSignal) -> Result<ControlSignal, ControlError>
         }
         _ => Err(invalid("unknown Flame Control signal")),
     }
+}
+
+fn switcher_entry_wire_value(entry: &SwitcherEntry) -> WireValue {
+    WireValue::Dict(dict_of([
+        ("title", WireValue::String(entry.title.clone())),
+        ("appId", WireValue::String(entry.app_id.clone())),
+    ]))
+}
+
+fn switcher_entry(value: &WireValue) -> Result<SwitcherEntry, ControlError> {
+    let dict = required_dict(value, "switcher entry")?;
+    Ok(SwitcherEntry {
+        title: dict_string(dict, "title")?.to_owned(),
+        app_id: dict_string(dict, "appId")?.to_owned(),
+    })
 }
 
 fn revision_signal(interface: &str, member: &str, revision: u64) -> WireSignal {
@@ -2550,6 +2608,12 @@ fn required_u32(value: &WireValue, name: &str) -> Result<u32, ControlError> {
         .ok_or_else(|| invalid(&format!("{name} must be uint32")))
 }
 
+fn required_bool(value: &WireValue, name: &str) -> Result<bool, ControlError> {
+    value
+        .as_bool()
+        .ok_or_else(|| invalid(&format!("{name} must be bool")))
+}
+
 fn required_string<'a>(value: &'a WireValue, name: &str) -> Result<&'a str, ControlError> {
     value
         .as_str()
@@ -3358,6 +3422,46 @@ mod tests {
             args: vec![WireValue::U64(1)],
         };
         assert!(decode_signal(&with_payload).is_err());
+    }
+
+    // The switcher signal carries its full entry list in MRU order; the decoder keeps order.
+    #[test]
+    fn window_switcher_changed_round_trips_through_wire() {
+        let signal = ControlSignal::WindowSwitcherChanged {
+            open: true,
+            immediate: false,
+            selected: 1,
+            entries: vec![
+                SwitcherEntry {
+                    title: "Terminal".to_owned(),
+                    app_id: "org.flame.terminal".to_owned(),
+                },
+                SwitcherEntry {
+                    title: "Files".to_owned(),
+                    app_id: String::new(),
+                },
+            ],
+        };
+        let wire = encode_signal(&signal);
+        assert_eq!(wire.interface, IFACE_ROOT);
+        assert_eq!(wire.member, "WindowSwitcherChanged");
+        assert_eq!(wire.args.len(), 4);
+        assert_eq!(decode_signal(&wire), Ok(signal));
+
+        let closed = ControlSignal::WindowSwitcherChanged {
+            open: false,
+            immediate: false,
+            selected: 0,
+            entries: Vec::new(),
+        };
+        assert_eq!(decode_signal(&encode_signal(&closed)), Ok(closed));
+
+        let short = WireSignal {
+            interface: IFACE_ROOT.to_owned(),
+            member: "WindowSwitcherChanged".to_owned(),
+            args: vec![WireValue::Bool(true)],
+        };
+        assert!(decode_signal(&short).is_err());
     }
 
     // CONTRACT-REGRESSION: T05 SystemSnapshotChanged carries the complete authoritative snapshot.

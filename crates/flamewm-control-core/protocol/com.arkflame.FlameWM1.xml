@@ -17,6 +17,12 @@
     </method>
     <signal name="StartMenuToggleRequested"/>
     <signal name="LauncherToggleRequested"/>
+    <signal name="WindowSwitcherChanged">
+      <arg name="open" type="b"/>
+      <arg name="immediate" type="b"/>
+      <arg name="selected" type="u"/>
+      <arg name="entries" type="aa{sv}"/>
+    </signal>
   </interface>
 
   <!-- Windows -->

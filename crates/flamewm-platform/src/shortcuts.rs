@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 
 use flamewm_api::shortcuts::{
-    ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW,
-    ACTION_LAUNCHER, ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE,
-    ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_SWITCH, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT,
-    ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP, KeyBinding,
+    ACTION_FULLSCREEN_ESCAPE, ACTION_LAUNCHER, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION,
+    ACTION_SCREENSHOT_WINDOW, ACTION_SESSION_LOCK, ACTION_SHOW_DESKTOP,
+    ACTION_SHOW_DESKTOP_CTRL_ALT, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE,
+    ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_SWITCH, ACTION_WORKSPACE_DOWN,
+    ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP, KeyBinding,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
@@ -18,7 +19,7 @@ pub const ACTION_VOLUME_UP: &str = "VolumeUp";
 pub const ACTION_VOLUME_DOWN: &str = "VolumeDown";
 pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
 
-pub const ACTIONS: [&str; 21] = [
+pub const ACTIONS: [&str; 24] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_LAUNCHER,
     ACTION_WORKSPACE_LEFT,
@@ -29,6 +30,9 @@ pub const ACTIONS: [&str; 21] = [
     ACTION_WINDOW_MINIMIZE,
     ACTION_WINDOW_MAXIMIZE,
     ACTION_WINDOW_SWITCH,
+    ACTION_SHOW_DESKTOP,
+    ACTION_SHOW_DESKTOP_CTRL_ALT,
+    ACTION_FULLSCREEN_ESCAPE,
     ACTION_SESSION_LOCK,
     ACTION_SCREENSHOT_FULL,
     ACTION_SCREENSHOT_REGION,
@@ -93,7 +97,22 @@ impl Default for ShortcutRegistry {
                 ACTION_WINDOW_SWITCH.to_owned(),
                 KeyBinding::assigned("Alt+Tab"),
             ),
-            (ACTION_LAUNCHER.to_owned(), KeyBinding::assigned("Super+space")),
+            (
+                ACTION_SHOW_DESKTOP.to_owned(),
+                KeyBinding::assigned("Super+d"),
+            ),
+            (
+                ACTION_SHOW_DESKTOP_CTRL_ALT.to_owned(),
+                KeyBinding::assigned("Ctrl+Alt+d"),
+            ),
+            (
+                ACTION_FULLSCREEN_ESCAPE.to_owned(),
+                KeyBinding::assigned("Ctrl+Alt+Escape"),
+            ),
+            (
+                ACTION_LAUNCHER.to_owned(),
+                KeyBinding::assigned("Super+space"),
+            ),
             (
                 ACTION_OPEN_FILES_SUPER.to_owned(),
                 KeyBinding::assigned("Super+E"),
@@ -194,7 +213,11 @@ impl ShortcutRegistry {
         // Duplicates never fail the set: the first action (registry order) keeps the key.
         let mut seen = std::collections::BTreeSet::new();
         for binding in candidate.values_mut() {
-            if binding.0.as_ref().is_some_and(|v| !seen.insert(v.to_ascii_lowercase())) {
+            if binding
+                .0
+                .as_ref()
+                .is_some_and(|v| !seen.insert(v.to_ascii_lowercase()))
+            {
                 *binding = KeyBinding::unassigned();
             }
         }
@@ -250,7 +273,35 @@ fn checked_binding(action: &str, raw: &str) -> FlameResult<Option<String>> {
             "modifier-only binding is permitted only for ToggleStartMenu",
         ));
     }
+    if is_bare_typing_key(&normalized) {
+        return Err(FlameError::new(
+            ErrorCode::InvalidArgument,
+            "a single letter or digit needs Ctrl, Alt or Super: bound bare it would fire while typing",
+        ));
+    }
     Ok(Some(normalized))
+}
+
+/// True for a binding whose key is one printable character bound without Ctrl, Alt or Super.
+/// Such a binding grabs an ordinary typing key: `d` would toggle its action on every keystroke.
+/// Shift does not count (Shift+d is how you type `D`), and bare modifier keys ("Super") are
+/// not typing keys and are handled by [`is_modifier_only`].
+#[must_use]
+pub fn is_bare_typing_key(normalized: &str) -> bool {
+    let tokens: Vec<&str> = normalized.split('+').map(str::trim).collect();
+    let Some((key, prefix)) = tokens.split_last() else {
+        return false;
+    };
+    let mut chars = key.chars();
+    let single =
+        matches!(chars.next(), Some(only) if only.is_ascii_graphic()) && chars.next().is_none();
+    single
+        && !prefix.iter().any(|token| {
+            matches!(
+                token.to_ascii_lowercase().as_str(),
+                "ctrl" | "control" | "alt" | "super" | "meta" | "win" | "logo" | "hyper"
+            )
+        })
 }
 
 pub fn validate_binding(normalized: &str) -> FlameResult<()> {
@@ -282,16 +333,16 @@ pub fn is_modifier_only(normalized: &str) -> bool {
 #[cfg(test)]
 mod tests {
 
-#[test]
-fn launcher_is_a_registered_action_with_super_space_default() {
-    assert_eq!(ACTIONS.len(), 21);
-    assert!(ACTIONS.contains(&ACTION_LAUNCHER));
-    let defaults = ShortcutRegistry::default();
-    assert_eq!(
-        defaults.binding(ACTION_LAUNCHER),
-        Some(&KeyBinding::assigned("Super+space"))
-    );
-}
+    #[test]
+    fn launcher_is_a_registered_action_with_super_space_default() {
+        assert_eq!(ACTIONS.len(), 24);
+        assert!(ACTIONS.contains(&ACTION_LAUNCHER));
+        let defaults = ShortcutRegistry::default();
+        assert_eq!(
+            defaults.binding(ACTION_LAUNCHER),
+            Some(&KeyBinding::assigned("Super+space"))
+        );
+    }
     use super::*;
 
     #[test]
@@ -419,17 +470,53 @@ fn launcher_is_a_registered_action_with_super_space_default() {
     }
 
     #[test]
-    fn modifier_only_is_allowed_for_start_but_not_window_action() {
+    fn bare_letter_or_digit_binding_is_rejected() {
         let mut registry = ShortcutRegistry::default();
+        for binding in ["d", "D", "5", "Shift+q", "Shift+D"] {
+            assert!(
+                is_bare_typing_key(&normalize(binding)),
+                "{binding} must be recognised as a typing key"
+            );
+            assert_eq!(
+                registry
+                    .set(ACTION_SHOW_DESKTOP, binding)
+                    .expect_err("a bare typing key must be rejected")
+                    .code,
+                ErrorCode::InvalidArgument,
+                "{binding}"
+            );
+        }
+        // The chords and the modifier-only start binding stay valid.
+        for binding in ["Super+d", "Ctrl+Alt+d", "Ctrl+Super+Left", "XF86AudioMute"] {
+            assert!(!is_bare_typing_key(&normalize(binding)), "{binding}");
+        }
         registry
-            .set(ACTION_TOGGLE_START_MENU, "Super")
-            .expect("Start can use modifier-only");
+            .set(ACTION_SHOW_DESKTOP, "Super+d")
+            .expect("Super+d is valid");
+        // A persisted set that lost its modifier is refused as a whole, so the WM grabs the
+        // defaults instead of installing a bare-`d` grab.
+        let persisted = BTreeMap::from([(ACTION_SHOW_DESKTOP.to_owned(), "d".to_owned())]);
+        let error = crate::services::shortcuts::effective_registry(&persisted)
+            .expect_err("a persisted bare letter must not load");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn show_desktop_defaults_keep_both_explicit_chords() {
+        let registry = ShortcutRegistry::default();
         assert_eq!(
-            registry
-                .set(ACTION_WINDOW_CLOSE, "Super")
-                .expect_err("must reject")
-                .code,
-            ErrorCode::InvalidArgument
+            registry.binding(ACTION_SHOW_DESKTOP),
+            Some(&KeyBinding::assigned("Super+d"))
         );
+        assert_eq!(
+            registry.binding(ACTION_SHOW_DESKTOP_CTRL_ALT),
+            Some(&KeyBinding::assigned("Ctrl+Alt+d"))
+        );
+        assert!(ACTIONS.contains(&ACTION_SHOW_DESKTOP));
+        assert!(ACTIONS.contains(&ACTION_SHOW_DESKTOP_CTRL_ALT));
+        // Both bindings resolve to their own action, so neither is unassigned by a conflict.
+        let effective = crate::services::shortcuts::effective_registry(&BTreeMap::new())
+            .expect("defaults are valid");
+        assert_eq!(effective, registry);
     }
 }

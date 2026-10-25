@@ -35,6 +35,7 @@ BINARIES = [
     "flamewm-render-compile",
     "flamewm-render-inspect",
     "flamewm-lock",
+    "flamewm-wayland",
 ]
 REQUIRED_DEPENDS = ["libx11-6", "libxi6", "libxft2", "libfontconfig1", "libdbus-1-3", "libpulse0",
                     "libpam0g", "libpam-runtime", "python3"]

@@ -2,7 +2,8 @@
 
 ## 1. Product boundary
 
-FlameWM is now an independent Rust X11 desktop/window manager.
+FlameWM is now an independent Rust desktop with two sessions: the supported X11 window manager and
+a preliminary Wayland compositor.
 
 Historical IceWM-derived code is **reference material only**. Production behavior may be learned from it, but production ownership lives in FlameWM crates.
 
@@ -12,6 +13,7 @@ Historical IceWM-derived code is **reference material only**. Production behavio
        | engineering evidence only
        v
 crates/flamewm-wm             X11 WM authority
+crates/flamewm-wm-wayland     Wayland compositor authority (preliminary)
 crates/flamewm-platform       product services/policy
 crates/flamewm-*-core         pure product models
 crates/flamewm-shell          V8 shell controller
@@ -96,3 +98,30 @@ flamewm-shell process         desktop/panel/popovers/settings presentation
 ```
 
 Long-term convergence keeps one state authority and minimizes process duplication. The UI controller consumes typed state/events and issues commands; it never constructs a second hidden WM.
+
+## 8. Wayland session boundary (preliminary)
+
+`crates/flamewm-wm-wayland` (binary `flamewm-wayland`, Smithay 0.7) owns the Wayland session. It is
+a separate compositor, not a second mode of `flamewm-wm-x11`:
+
+- `model.rs` owns the window model (stacking, workspaces, cascade, min/max/fullscreen, grabs) and
+  does not depend on Smithay; `handlers.rs` maps xdg-shell, server-side decorations, layer-shell and
+  seat events onto it.
+- Seat access is a systemd-logind client implemented in `logind.rs` over the system bus
+  (`TakeControl`/`TakeDevice`, `PauseDevice`/`ResumeDevice`); there is no libseat or seatd. DRM/KMS
+  and libinput live in `drm.rs` behind the crate feature `drm`, which relaxes the crate-level
+  `unsafe_code = deny` only for the local smithay/EGL and D-Bus fd transfers.
+- The shell, desktop, settings, launcher and screenshot processes remain the X11 clients running on
+  the compositor's XWayland display (`xwayland.rs`). They are not Wayland-native, the compositor's
+  window model stays the only stacking/workspace authority for them, and
+  `flamewm-desktop-services` provides the control/settings services that `flamewm-wm` provides in
+  the X11 session.
+- Shared product policy stays shared: `flamewm-api` (shortcut action names, workspace grid) and
+  `flamewm-platform` (shortcut registry, terminal/open-files actions) are consumed by both sessions,
+  so workspace topology and shortcut names cannot drift between them.
+- Frame scheduling is backend-neutral in `state.rs` (`plan_frame`, `arm_retry`, `OutputFrames`): a
+  redraw request is drawn or deferred to the queued frame, and there is no idle paint timer.
+
+Ownership rules for the Wayland path are recorded in
+[`WAYLAND_PLAN.md`](WAYLAND_PLAN.md), together with the diagnostics and the unverified items.
+

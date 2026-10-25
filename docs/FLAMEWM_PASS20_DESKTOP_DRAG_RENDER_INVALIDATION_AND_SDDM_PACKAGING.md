@@ -39,7 +39,7 @@ Install on the *other* x86_64 computer by copying the generated file and running
 sudo apt install ./flamewm_0.1.0_amd64.deb
 ```
 
-`./scripts/package` already stages `packaging/flamewm-session.desktop` to `/usr/share/xsessions/flamewm.desktop`, with `Exec=/usr/bin/flamewm-session` and `TryExec=/usr/bin/flamewm-session`. SDDM automatically discovers it. No manual symlink or post-install hook is necessary. Select **FlameWM** in SDDM's login session picker; ensure Xorg/X11-capable SDDM exists. The `.deb` does not install SDDM, and no Wayland session is claimed.
+`./scripts/package` already stages `packaging/flamewm-session.desktop` to `/usr/share/xsessions/flamewm.desktop`, with `Exec=/usr/bin/flamewm-session` and `TryExec=/usr/bin/flamewm-session`. SDDM automatically discovers it. No manual symlink or post-install hook is necessary. Select **FlameWM** in SDDM's login session picker; ensure Xorg/X11-capable SDDM exists. The `.deb` does not install SDDM, and no Wayland session is claimed at this pass. Superseded: the package now also installs a preliminary `FlameWM (Wayland)` entry; see `docs/WAYLAND_PLAN.md`.
 
 ## Verification limits
 

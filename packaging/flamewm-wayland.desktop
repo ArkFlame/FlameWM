@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=FlameWM (Wayland)
+Comment=FlameWM native Wayland desktop session
+DesktopNames=FlameWM
+Exec=/usr/libexec/flamewm/flamewm-wayland-session --backend=drm
+TryExec=/usr/bin/flamewm-wayland

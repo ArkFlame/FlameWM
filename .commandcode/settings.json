@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Shell(for f in crates/flamewm-explorer/src/appicon.rs crates/flamewm-image-core/src/ico.rs crates/flamewm-image-core/src/lib.rs crates/flamewm-render-x11/src/app/window_backdrop.rs crates/flamewm-wm-x11/src/wm/transition.rs; do rustfmt --edition 2024 --config skip_children=true --check \"$f\" >/dev/null 2>&1; echo \"$? $f\"; done)"
+      "Shell(for f in crates/flamewm-explorer/src/appicon.rs crates/flamewm-image-core/src/ico.rs crates/flamewm-image-core/src/lib.rs crates/flamewm-render-x11/src/app/window_backdrop.rs crates/flamewm-wm-x11/src/wm/transition.rs; do rustfmt --edition 2024 --config skip_children=true --check \"$f\" >/dev/null 2>&1; echo \"$? $f\"; done)",
+      "Shell(cat /etc/os-release | head -3; echo \"--- pm:\"; command -v apt-get pacman dnf zypper 2>/dev/null; echo \"--- pkgconfig:\"; pkg-config --modversion libinput gbm libdrm libudev egl glesv2 2>&1; echo \"rc=$?\"; echo \"--- libs:\"; ls /usr/lib/x86_64-linux-gnu/libgbm.so* /usr/lib/x86_64-linux-gnu/libdrm.so* /usr/lib/x86_64-linux-gnu/libinput.so* 2>/dev/null; echo \"--- settings files:\"; ls -la ~/.commandcode/settings.json .commandcode/settings.json .commandcode/ 2>/dev/null | head -30)"
     ],
     "deny": [],
     "defaultMode": "default"

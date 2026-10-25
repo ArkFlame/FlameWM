@@ -331,7 +331,10 @@ impl X11Desktop {
             .map_err(io_error)
             .and_then(|cookie| cookie.reply().map_err(io_error));
         let (title, name_named) = match name_reply {
-            Ok(reply) => (shared::text_from_bytes(&reply.value), !reply.value.is_empty()),
+            Ok(reply) => (
+                shared::text_from_bytes(&reply.value),
+                !reply.value.is_empty(),
+            ),
             Err(_) => (self.text(window, "WM_NAME")?, false),
         };
         let named = !class_bytes.is_empty() || name_named;
@@ -340,11 +343,7 @@ impl X11Desktop {
             .nth(1)
             .unwrap_or_default()
             .to_owned();
-        let states = reads
-            .states
-            .map_err(io_error)?
-            .reply()
-            .map_err(io_error)?;
+        let states = reads.states.map_err(io_error)?.reply().map_err(io_error)?;
         let (mut fullscreen, mut hidden, mut max_vert, mut max_horz, mut sticky) =
             (false, false, false, false, false);
         for state in states.value32().into_iter().flatten() {

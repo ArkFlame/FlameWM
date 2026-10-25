@@ -254,3 +254,7 @@ input { cursor:text; }
 .launcher-row img { width:20px; height:20px; }
 .launcher-label { flex-grow:1; font-size:14px; white-space:nowrap; overflow:hidden; }
 .launcher-empty { height:40px; padding:0px 10px; display:flex; align-items:center; color:var(--muted); font-size:13px; }
+/* Alt+Tab switcher: the launcher's list rows and surface; only the card width and the accent selection differ. */
+.switcher-popup { width:420px; }
+.switcher-highlight { background:var(--accent); }
+.switcher-row { color:var(--text); }

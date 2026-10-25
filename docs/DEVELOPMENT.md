@@ -15,6 +15,25 @@ For an existing-image comparison, use `scripts/verify-visual --reference` with `
 
 The current repository version is `[workspace.package].version` in `Cargo.toml`, printed by `scripts/version`. Historical references to 0.0.2 describe the earlier project layout.
 
+## Wayland session work (preliminary)
+
+The Wayland session is developed in `crates/flamewm-wm-wayland` against
+[`WAYLAND_PLAN.md`](WAYLAND_PLAN.md). Useful commands:
+
+```bash
+cargo check -p flamewm-wm-wayland --features drm   # native backend compiles
+cargo test -p flamewm-wm-wayland --features drm    # logind, frame planner, probe tables (no GPU needed)
+./scripts/tests/wayland-session-matrix.sh          # wrapper backend/gate matrix (no display needed)
+flamewm-wayland --backend=nested                   # nested winit window inside the current session
+flamewm-wayland --capabilities                     # build facts only, no seat access
+```
+
+The native build needs the `libinput`, `gbm`, `libdrm` and `libudev` development files plus
+`Xwayland`. Do not present a nested run, a unit test or a successful package build as evidence that
+the native session works: no real hardware login is on record, the X11 session stays the supported
+default, and the Wayland session must be described as preliminary in code comments, docs and commit
+messages.
+
 ## Work on the correct owner
 
 - X11/ICCCM/EWMH/window/workspace defect -> `crates/flamewm-wm`.

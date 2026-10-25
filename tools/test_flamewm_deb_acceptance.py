@@ -110,10 +110,18 @@ class SessionRegistrationTests(unittest.TestCase):
         self.assertIn("usr/share/xsessions/flamewm.desktop", self.MANIFEST.read_text())
         self.assertIn('"$STAGE/usr/share/xsessions/flamewm.desktop"', self.SCRIPT.read_text())
 
-    def test_no_fake_wayland_login_session_is_advertised(self):
+    def test_wayland_login_session_is_backed_by_real_binary(self):
         root = self.SESSION.parents[1]
-        self.assertFalse((root / "packaging/flamewm-wayland-session.desktop").exists())
-        self.assertNotIn("wayland-sessions", self.MANIFEST.read_text())
+        entry = root / "packaging/flamewm-wayland.desktop"
+        fields = dict(line.split("=", 1) for line in entry.read_text().splitlines()
+                      if "=" in line and not line.startswith("#"))
+        self.assertEqual(fields.get("Exec"), "/usr/libexec/flamewm/flamewm-wayland-session --backend=drm")
+        self.assertEqual(fields.get("TryExec"), "/usr/bin/flamewm-wayland")
+        self.assertEqual(fields.get("DesktopNames"), "FlameWM")
+        self.assertTrue((root / "scripts/flamewm-wayland-session").exists())
+        self.assertIn(".target/release/flamewm-wayland", self.MANIFEST.read_text())
+        self.assertIn("usr/share/wayland-sessions/flamewm-wayland.desktop", self.MANIFEST.read_text())
+        self.assertIn('"$STAGE/usr/share/wayland-sessions/flamewm-wayland.desktop"', self.SCRIPT.read_text())
 
 
 class PamRuntimeTests(unittest.TestCase):
@@ -202,6 +210,67 @@ class HelperTests(unittest.TestCase):
 
     def test_info_parser_reads_version(self):
         self.assertEqual(deb.parse_info(f" Package: flamewm\n Version: {deb.workspace_version()}\n")["Version"], deb.workspace_version())
+
+
+DRM_NATIVE_DEPENDS = ("libgbm1", "libdrm2", "libinput10", "libudev1", "libegl1", "libgles2", "xwayland")
+
+
+class DrmNativeRuntimeDependsTests(unittest.TestCase):
+    CONTROL_IN = Path(__file__).resolve().parents[1] / "packaging/debian/control.in"
+
+    def _depends(self):
+        for line in self.CONTROL_IN.read_text().splitlines():
+            if line.startswith("Depends:"):
+                return deb.depend_names(line[len("Depends:"):])
+        self.fail("no Depends line in control.in")
+
+    def test_drm_native_link_closure_is_declared(self):
+        declared = self._depends()
+        self.assertEqual([name for name in DRM_NATIVE_DEPENDS if name not in declared], [])
+
+    def test_xwayland_executable_is_declared(self):
+        self.assertIn("xwayland", self._depends())
+
+    def test_no_libseat_dependency(self):
+        self.assertNotIn("libseat1", self._depends())
+        self.assertNotIn("libseat", self.CONTROL_IN.read_text())
+
+    def test_existing_x11_and_python_dependencies_are_kept(self):
+        declared = self._depends()
+        self.assertEqual([name for name in deb.REQUIRED_DEPENDS if name not in declared], [])
+
+
+class ReleaseBuildDrmGateTests(unittest.TestCase):
+    SCRIPT = Path(__file__).resolve().parents[1] / "scripts/build-deb"
+
+    def _text(self):
+        return self.SCRIPT.read_text()
+
+    def _release_cargo_lines(self):
+        return [line for line in self._text().splitlines() if "cargo build --release" in line]
+
+    def test_release_build_enables_the_wayland_drm_feature(self):
+        lines = self._release_cargo_lines()
+        self.assertEqual(len(lines), 1, lines)
+        line = lines[0]
+        self.assertIn("--release --workspace", line)
+        self.assertIn("--locked", line)
+        self.assertIn("--features flamewm-wm-wayland/drm", line)
+        self.assertIn('CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-10}"', line)
+
+    def test_native_preflight_runs_before_compiling(self):
+        text = self._text()
+        self.assertIn("pkg-config --exists libinput gbm libdrm libudev", text)
+        self.assertIn("command -v Xwayland", text)
+        self.assertLess(text.index("pkg-config --exists"), text.index("cargo build --release"))
+
+    def test_capability_gate_is_after_the_build_and_before_packaging(self):
+        text = self._text()
+        self.assertIn("--capabilities", text)
+        self.assertIn("drm_compiled=true", text)
+        self.assertGreater(text.index("--capabilities"), text.index("cargo build --release"))
+        self.assertLess(text.index("--capabilities"), text.index("./scripts/package"))
+        self.assertNotIn("--probe", text)
 
 
 if __name__ == "__main__":

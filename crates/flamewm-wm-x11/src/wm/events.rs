@@ -1,4 +1,5 @@
 use super::*;
+use super::raw_keys::is_escape_chord;
 
 impl<'a, C: Connection> Wm<'a, C> {
     /// Dispatches one event. A request that raced a client's destruction (BadWindow and friends)
@@ -64,6 +65,13 @@ impl<'a, C: Connection> Wm<'a, C> {
                 self.display_topology_dirty.mark()
             }
             Event::ClientMessage(event) => self.handle_client_message(event)?,
+            // XInput2 raw key records arrive as unknown generic events; see `raw_keys`.
+            Event::Unknown(bytes) => {
+                if key_diag_enabled() {
+                    eprintln!("flamewm: unknown event head={:?}", &bytes[..bytes.len().min(12)]);
+                }
+                self.handle_raw_event(&bytes)?
+            }
             _ => {}
         }
         Ok(())
@@ -72,10 +80,19 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// Dispatches a passive-grab KeyPress to the bound action. Only actions
     /// with an existing WM path are executed; the rest are logged once.
     pub(super) fn handle_key_press(&mut self, event: KeyPressEvent) -> Result<(), ReplyError> {
+        // The raw feed may already have dispatched this key while a client held the keyboard.
+        if self.raw_claimed(event.time, event.detail) {
+            return Ok(());
+        }
+        let state = u16::from(event.state);
+        // Passive path while the switcher is open (the raw twin is claimed, so it is skipped).
+        if self.switcher.is_open() {
+            self.claim_escape_chord(event.time, event.detail);
+            return self.switcher_key(event.detail, state);
+        }
         if let Some(active) = self.active {
             self.cancel_open_for(active)?;
         }
-        let state = u16::from(event.state);
         let matched = crate::shortcut_action_for_key(event.detail, state);
         if key_diag_enabled() {
             eprintln!(
@@ -84,6 +101,11 @@ impl<'a, C: Connection> Wm<'a, C> {
                 state,
                 matched.as_deref().unwrap_or("none")
             );
+        }
+        if let Some(action) = matched.as_deref().filter(|action| is_escape_chord(action)) {
+            let action = action.to_owned();
+            self.claim_escape_chord(event.time, event.detail);
+            return self.dispatch_escape_chord(&action);
         }
         // A bare Start-bound Super press only arms the tap; Start toggles on its
         // completed release. Any other press completes or cancels a pending tap.
@@ -101,7 +123,6 @@ impl<'a, C: Connection> Wm<'a, C> {
             ACTION_WINDOW_CLOSE => self.on_active(Self::request_close)?,
             ACTION_WINDOW_MINIMIZE => self.on_active(Self::minimize)?,
             ACTION_WINDOW_MAXIMIZE => self.on_active(Self::toggle_maximize)?,
-            ACTION_WINDOW_SWITCH => self.switch_window()?,
             // Arrow shortcuts follow the product two-row grid: left/right stay inside the
             // current row, up/down switch rows, and a missing neighbour is a no-op.
             ACTION_WORKSPACE_LEFT
@@ -162,6 +183,58 @@ impl<'a, C: Connection> Wm<'a, C> {
             other => log_unhandled_shortcut_once(other),
         }
         Ok(())
+    }
+
+    /// Runs an escape chord from either feed.
+    pub(super) fn dispatch_escape_chord(
+        &mut self,
+        action: &str,
+    ) -> Result<(), ReplyError> {
+        let outcome = self.super_tap.press_other();
+        self.apply_super_tap(outcome);
+        match action {
+            // Without the raw feed there is no release to commit on, so keep the direct switch.
+            ACTION_WINDOW_SWITCH if self.raw_keys.is_none() => self.switch_window(),
+            ACTION_WINDOW_SWITCH => self.switcher_step(switcher::Step::Next),
+            ACTION_SHOW_DESKTOP | ACTION_SHOW_DESKTOP_CTRL_ALT => self.toggle_show_desktop(),
+            ACTION_FULLSCREEN_ESCAPE => self.fullscreen_escape(),
+            _ => Ok(()),
+        }
+    }
+
+    /// Takes every fullscreen client out of fullscreen and iconifies it, so the desktop is
+    /// reachable. When another client still owns the keyboard, it is also asked to close.
+    pub(super) fn break_fullscreen_trap(&mut self) -> Result<(), ReplyError> {
+        let targets = self.fullscreen_clients();
+        for &client in &targets {
+            self.set_fullscreen(client, false)?;
+            self.minimize(client)?;
+        }
+        if !targets.is_empty() && self.keyboard_grabbed_by_other()? {
+            for &client in &targets {
+                self.close(client)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Ctrl+Alt+Escape. The first press breaks the fullscreen client out and asks it to close.
+    /// A second press within the window kills it when it still owns the keyboard.
+    fn fullscreen_escape(&mut self) -> Result<(), ReplyError> {
+        if let Some((client, since)) = self.escape_pending.take() {
+            if since.elapsed() < ESCAPE_KILL_WINDOW
+                && self.clients.contains_key(&client)
+                && self.keyboard_grabbed_by_other()?
+            {
+                self.conn.kill_client(client)?;
+                return Ok(());
+            }
+        }
+        let Some(&client) = self.fullscreen_clients().first() else {
+            return Ok(());
+        };
+        self.escape_pending = Some((client, std::time::Instant::now()));
+        self.break_fullscreen_trap()
     }
 
     /// Alt+Tab: focuses the topmost visible normal client other than the active one. Focus

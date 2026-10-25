@@ -50,7 +50,8 @@ class DragGeometryContract(unittest.TestCase):
         self.assertIn('"$STAGE/usr/share/xsessions/flamewm.desktop"', package)
         self.assertIn('Exec=/usr/bin/flamewm-session', session)
         self.assertIn('TryExec=/usr/bin/flamewm-session', session)
-        self.assertNotIn('wayland-sessions', package)
+        # The Wayland session is shipped alongside the X11 entry (phase 1 packaging).
+        self.assertIn('"$STAGE/usr/share/wayland-sessions/flamewm-wayland.desktop"', package)
 
 if __name__ == '__main__':
     unittest.main()

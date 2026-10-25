@@ -31,6 +31,7 @@ pub enum SurfaceKind {
     Panel,
     Start,
     Launcher,
+    Switcher,
     TaskMenu,
     Media,
     Osd,
@@ -47,6 +48,7 @@ pub fn project(
         SurfaceKind::Panel => "taskbar",
         SurfaceKind::Start => "start-menu",
         SurfaceKind::Launcher => "launcher-popup",
+        SurfaceKind::Switcher => "switcher-popup",
         SurfaceKind::TaskMenu => "task-menu",
         SurfaceKind::Media => "media-popup",
         SurfaceKind::Osd => "osd",
@@ -88,8 +90,8 @@ pub fn project(
         SurfaceKind::TaskMenu => {
             // Task menu shares the desktop menu frame (ui/shared/menu.css 1px border); no accent outline.
         }
-        SurfaceKind::Launcher => {
-            // Launcher shares the Start surface pair so both popups match in every theme.
+        SurfaceKind::Launcher | SurfaceKind::Switcher => {
+            // Launcher and switcher share the Start surface pair so the popups match in every theme.
             document.background(root, surface_background(snapshot))?;
             document.corner_radius(root, popup_corner_radius(snapshot))?;
         }

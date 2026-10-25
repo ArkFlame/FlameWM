@@ -39,4 +39,4 @@ dpkg-deb -f .target/dist/flamewm_0.1.0_amd64.deb Architecture
 python3 -I tools/flamewm_deb_acceptance.py --deb .target/dist/flamewm_0.1.0_amd64.deb
 ```
 
-The Debian field must equal `amd64`; do not install a stale package with `any`. On an x86_64 Debian/Ubuntu target, transfer the newly created `.deb` and run `sudo apt install ./flamewm_0.1.0_amd64.deb` from the directory containing it. The installed X11 SDDM session is `usr/share/xsessions/flamewm.desktop`; no native Wayland session is claimed.
+The Debian field must equal `amd64`; do not install a stale package with `any`. On an x86_64 Debian/Ubuntu target, transfer the newly created `.deb` and run `sudo apt install ./flamewm_0.1.0_amd64.deb` from the directory containing it. The installed X11 SDDM session is `usr/share/xsessions/flamewm.desktop`; no native Wayland session is claimed at this pass. Superseded: a preliminary `FlameWM (Wayland)` session entry now ships; see `docs/WAYLAND_PLAN.md`.

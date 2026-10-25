@@ -4,20 +4,20 @@ fn shared_wake_slot_takes_the_earliest_owner_deadline() {
     let t0 = Instant::now();
     let soon = t0 + Duration::from_millis(100);
     assert_eq!(
-        super::earliest_wake([None, None, None, None]),
+        super::earliest_wake([None, None, None, None, None]),
         None,
         "idle loop"
     );
     assert_eq!(
-        super::earliest_wake([Some(t0), None, Some(soon), None]),
+        super::earliest_wake([Some(t0), None, Some(soon), None, None]),
         Some(t0)
     );
     assert_eq!(
-        super::earliest_wake([None, Some(soon), None, None]),
+        super::earliest_wake([None, Some(soon), None, None, None]),
         Some(soon)
     );
     assert_eq!(
-        super::earliest_wake([None, None, None, Some(soon)]),
+        super::earliest_wake([None, None, None, Some(soon), None]),
         Some(soon)
     );
 }

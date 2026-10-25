@@ -242,6 +242,10 @@ def wait_for_wm(env: dict[str, str], stop: threading.Event, timeout: float = 25.
             )
             if reply.returncode == 0 and re.search(r"window id # 0x[1-9a-fA-F][0-9a-fA-F]*", reply.stdout):
                 return True
+            # flamewm-wayland does not publish _NET_SUPPORTING_WM_CHECK on the XWayland root; its
+            # readiness is the XWayland server answering the root query, which xprop reports with exit 0.
+            if env.get("FLAMEWM_WAYLAND_SESSION") == "1" and reply.returncode == 0:
+                return True
         except (OSError, subprocess.TimeoutExpired):
             pass
         stop.wait(0.2)

@@ -2,7 +2,7 @@
 
 ## Baseline / scope
 
-Pass 23 source archive, NOT the user's complete checked-out repository. The export intentionally lacks the full `assets/` tree. Do not delete installed or custom assets, alter icon themes, or overwrite the user's dirty local changes unintentionally. FlameWM is a standalone **Rust/X11** WM. The native SDDM X11 entry and `scripts/build-deb` are preserved. No Wayland support was created.
+Pass 23 source archive, NOT the user's complete checked-out repository. The export intentionally lacks the full `assets/` tree. Do not delete installed or custom assets, alter icon themes, or overwrite the user's dirty local changes unintentionally. FlameWM is a standalone **Rust/X11** WM. The native SDDM X11 entry and `scripts/build-deb` are preserved. No Wayland support was created in this pass. Superseded: a preliminary Wayland session now ships; see `docs/WAYLAND_PLAN.md`.
 
 ## Changes applied in source
 

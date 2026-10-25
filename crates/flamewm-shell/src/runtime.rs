@@ -188,6 +188,8 @@ pub struct ShellRuntime {
     selected_panel_output: Option<flamewm_api::OutputId>,
     controls: VecDeque<ShellControl>,
     dirty: ShellDirty,
+    /// Latest Alt+Tab switcher snapshot not yet taken by the shell loop.
+    switcher: Option<crate::switcher::SwitcherFrame>,
 }
 
 /// Domain dirty flags set by `ControlSignal` delivery and reconciled at most
@@ -247,6 +249,7 @@ impl ShellRuntime {
             selected_panel_output: None,
             controls: VecDeque::new(),
             dirty: ShellDirty::default(),
+            switcher: None,
         }
     }
 
@@ -311,6 +314,20 @@ impl ShellRuntime {
                 self.controls.push_back(ShellControl::ToggleLauncher {
                     output: None,
                     interaction: None,
+                });
+            }
+            // Latest snapshot wins; the overlay renders it and never decides the switch.
+            ControlSignal::WindowSwitcherChanged {
+                open,
+                immediate,
+                selected,
+                entries,
+            } => {
+                self.switcher = Some(crate::switcher::SwitcherFrame {
+                    open: *open,
+                    immediate: *immediate,
+                    selected: usize::try_from(*selected).unwrap_or(0),
+                    entries: entries.clone(),
                 });
             }
             _ => {}
@@ -913,6 +930,11 @@ impl ShellRuntime {
     #[must_use]
     pub fn has_pending_controls(&self) -> bool {
         !self.controls.is_empty()
+    }
+
+    /// Takes the pending Alt+Tab switcher snapshot, if one arrived since the last tick.
+    pub fn take_switcher_frame(&mut self) -> Option<crate::switcher::SwitcherFrame> {
+        self.switcher.take()
     }
 }
 

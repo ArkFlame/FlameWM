@@ -502,6 +502,10 @@ fn run_session(
                     snapshot: panels_after,
                 })?;
             }
+            // Alt+Tab overlay snapshot: queued by the switcher on each change, emitted once here.
+            if let Some(signal) = wm.take_switcher_signal() {
+                control_for_hook.emit_signal(&signal)?;
+            }
             flush_wm_changes(host, control_for_hook.as_ref(), changes)?;
             let areas = host.output_work_areas();
             let wait = crate::wm::next_wait_timeout(now_ms, host.display_transaction_deadline_ms());

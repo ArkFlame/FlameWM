@@ -187,7 +187,7 @@ pub(super) const ZONE_SETTLE: std::time::Duration = std::time::Duration::from_mi
 /// The single shared reactor wake slot takes the earliest pending owner deadline, or none.
 #[must_use]
 pub(super) fn earliest_wake(
-    deadlines: [Option<std::time::Instant>; 4],
+    deadlines: [Option<std::time::Instant>; 5],
 ) -> Option<std::time::Instant> {
     deadlines.into_iter().flatten().min()
 }

@@ -1,0 +1,667 @@
+#!/usr/bin/env bash
+# Wayland session wrapper for the `flamewm-wayland.desktop` session entry: starts flamewm-wayland
+# plus the wrapper-owned desktop services bridge and forwards the compositor's exit code.
+#
+# Backend selection, highest precedence first:
+#   1. `--backend=drm|native|winit|nested` on the command line (stripped before the compositor exec;
+#      `--backend VALUE` is accepted as well)
+#   2. `FLAMEWM_WAYLAND_BACKEND` in the environment
+#   3. `drm` (native tty session)
+# A non-empty DISPLAY or WAYLAND_DISPLAY NEVER selects a backend: a display manager greeter leaks
+# both into a login session and must not silently turn a tty login into a nested winit session.
+# Nested testing is `--backend=nested` explicitly. The compositor keeps the value it already checks:
+# `drm`/`native` export `FLAMEWM_WAYLAND_BACKEND=drm`, `winit`/`nested` export `...=winit`. An
+# inherited DISPLAY is dropped for the drm/native backend so X11 clients cannot land on a greeter's
+# X server, and it is pushed to D-Bus activation only once XWayland reports its own display.
+#
+# Session bus: a private `dbus-run-session` is started only when there is genuinely no bus. An
+# inherited `DBUS_SESSION_BUS_ADDRESS` counts, and so does the well-known socket
+# `$XDG_RUNTIME_DIR/bus` that `dbus-user-session` provides: on those systems the variable is
+# legitimately unset, and starting a second bus would push the activation environment (DISPLAY,
+# WAYLAND_DISPLAY) onto a bus no client reads. The log records `dbus_session_bus=present|absent`
+# and, for the socket case, `dbus_session_bus_source=socket`; the address itself is never logged.
+#
+# Hard gate: only the capability contract. `"$SESSION" --capabilities` prints stable `key=value`
+# stdout (including `drm_compiled=true|false` and `backend=native|nested`), exits 0 and touches no
+# seat. For the drm/native backend `drm_compiled=true` must be reported, otherwise the wrapper logs
+# `FLAMEWM-WAYLAND-STARTUP stage=capabilities status=fail code=2 detail=drm_feature_missing` and
+# exits 2. A build that does not answer `--capabilities` (empty output or non-zero exit) fails the
+# same way with `detail=capabilities_unsupported`. The nested backend never runs the gate.
+#
+# `--probe` is ADVISORY: its exit code and `[FAIL]` lines are recorded in the log and it never
+# changes the session exit code or gates startup.
+#
+# Diagnostics: the wrapper, the compositor and the bridge write to
+# ~/.cache/flamewm/wayland-session.log (mode 0600, previous run kept as `wayland-session.log.1`,
+# exactly one rotation). Output goes to the inherited streams if the log cannot be created; a log
+# failure never prevents startup. Structured lines:
+#   FLAMEWM-WAYLAND-STARTUP stage=<session|runtime|log|capabilities|probe|socket|xwayland|ready|exit>
+#       status=<ok|fail|skip> code=<n> detail=<token,token> ms=<n>
+# `code` is the exit code that phase produces; a non-fatal failure carries `code=0` and
+# `detail` contains `continuing`. `ms` is milliseconds since the wrapper started, so a slow stage is
+# visible without a trace tool; separate `timing:` lines record when the compositor's first stage
+# line and its own `stage=ready status=ok code=6` arrived (that `code=6` is what tells the
+# compositor's ready apart from this wrapper's activation-sync stage of the same name). The D-Bus
+# address, the full environment, browser arguments and tokens are never logged.
+#
+# Failure report: every failure path (backend argument, capability gate, missing or non-executable
+# binary, a compositor that dies before `stage=ready` — the exit watchdog — and any non-zero
+# compositor exit; a signal this wrapper forwarded itself is a requested logout and is NOT reported as
+# a failure) prints ONE short block of text to the controlling terminal as well as into the log. The
+# VT belongs to this session, so `printf` to /dev/tty is what a user with a black screen actually
+# sees; when there is no controlling terminal the write is skipped silently and never changes the
+# exit code. The same block (timestamp, exact command line, the last startup lines, the compositor
+# exit code/signal, its last messages, both log paths) is written to
+# ~/.cache/flamewm/wayland-session-last-failure.log in mode 0600, overwriting the previous failure
+# so the evidence survives a reboot/relogin. It is not deleted on a successful start: the timestamp
+# says how old it is.
+#
+# Shutdown: INT/TERM/HUP are forwarded with the same signal to the compositor, the wrapper waits with
+# a bounded grace period, then sends SIGKILL to that one pid only; the bridge is stopped afterwards.
+# There is no pkill/killall and no process-group kill. Exit code is the compositor's; 127 (missing
+# binary), 126 (not executable) and 2 (missing feature) are produced by the wrapper itself.
+#
+# Test-only knobs (scripts/tests/wayland-session-matrix.sh; they do not change a real session):
+#   FLAMEWM_WAYLAND_BINARY               compositor path (default /usr/bin/flamewm-wayland)
+#   FLAMEWM_WAYLAND_STARTUP_TIMEOUT_MS   socket/XWayland wait budget (default 5000)
+#   FLAMEWM_WAYLAND_SHUTDOWN_TIMEOUT_MS  TERM->KILL grace for compositor and bridge (default 10000)
+#
+# Not done here: falling back to the X11 session when the Wayland backend fails. A lightdm
+# wayland-type session has no X server to exec into, so this wrapper does not start Xorg.
+set -uo pipefail
+
+STARTUP_TIMEOUT_MS="${FLAMEWM_WAYLAND_STARTUP_TIMEOUT_MS:-5000}"
+SHUTDOWN_TIMEOUT_MS="${FLAMEWM_WAYLAND_SHUTDOWN_TIMEOUT_MS:-10000}"
+[[ "$STARTUP_TIMEOUT_MS" =~ ^[0-9]+$ ]] || STARTUP_TIMEOUT_MS=5000
+[[ "$SHUTDOWN_TIMEOUT_MS" =~ ^[0-9]+$ ]] || SHUTDOWN_TIMEOUT_MS=10000
+SOCKET_NAME="${FLAMEWM_WAYLAND_SOCKET:-wayland-flame}"
+PROBE_TIMEOUT_S=20
+CAPABILITIES_TIMEOUT_S=10
+
+# The invocation as the session entry made it, kept for the failure report (nothing here is secret:
+# it is the argv lightdm/lightdm-gtk-greeter handed us).
+ORIGINAL_ARGV=()
+(( $# > 0 )) && ORIGINAL_ARGV=("$@")
+
+# Where the durable one-shot report goes: the same cache directory as the rotating session log.
+CACHE_DIR="${XDG_CACHE_HOME:-${HOME:-}/.cache}/flamewm"
+FAIL_FILE=""
+[[ -n "${HOME:-}${XDG_CACHE_HOME:-}" ]] && FAIL_FILE="$CACHE_DIR/wayland-session-last-failure.log"
+# Empty until the log is opened: the failure report must work before that (a bad --backend value).
+LOG_FILE=""
+
+# Milliseconds since the wrapper started, for the `ms=` field of every stage line. The source is
+# monotonic (`/proc/uptime`, 10 ms resolution) because the wall clock can step during a session
+# start and a negative "elapsed" is worse than none; `date +%s` is only the fallback.
+uptime_ms() {
+    local value sec frac
+    if [[ -r /proc/uptime ]] && read -r value _ < /proc/uptime 2>/dev/null; then
+        sec="${value%%.*}"
+        frac="${value#*.}000"
+        printf '%s' "$(( 10#${sec:-0} * 1000 + 10#${frac:0:3} ))"
+        return 0
+    fi
+    printf '%s' "$(( $(date +%s) * 1000 ))"
+}
+START_MS="$(uptime_ms)"
+now_ms() { printf '%s' "$(( $(uptime_ms) - START_MS ))"; }
+
+log() { printf '%s flamewm-wayland-session: %s\n' "$(date '+%F %T' 2>/dev/null)" "$*"; }
+
+# The last stage lines are also kept in memory, so the failure report works when the log could not be
+# created (or was rotated away) and still shows how far startup got.
+STARTUP_RING=()
+STAGE_RING_MAX=5
+stage() {
+    local line
+    line="FLAMEWM-WAYLAND-STARTUP stage=$1 status=$2 code=$3 detail=${4:-none} ms=$(now_ms)"
+    STARTUP_RING+=("$line")
+    if (( ${#STARTUP_RING[@]} > STAGE_RING_MAX )); then STARTUP_RING=("${STARTUP_RING[@]:1}"); fi
+    log "$line"
+}
+
+# The exact command line, quoted so a copy/paste reproduces it.
+session_command() {
+    local out arg
+    out="$0"
+    for arg in "${ORIGINAL_ARGV[@]}"; do out+=" $(printf '%q' "$arg")"; done
+    printf '%s' "$out"
+}
+
+# The compositor's own stderr lines start at column 0 with `flamewm-wayland:`; every line this
+# wrapper writes carries a leading timestamp.
+compositor_messages() { # max-lines
+    [[ -n "$LOG_FILE" ]] || return 0
+    grep -a '^flamewm-wayland:' "$LOG_FILE" 2>/dev/null | tail -n "${1:-2}"
+}
+
+# The last stage line the *compositor* wrote (unprefixed by this wrapper's timestamp) that failed:
+# it names the stage a startup died in, which the wrapper's own stages cannot say.
+compositor_failed_stage() {
+    [[ -n "$LOG_FILE" ]] || return 0
+    grep -a '^FLAMEWM-WAYLAND-STARTUP ' "$LOG_FILE" 2>/dev/null | grep -a ' status=fail ' | tail -n 1
+}
+
+write_failure_file() {
+    [[ -n "$FAIL_FILE" ]] || return 0
+    ( umask 077; mkdir -p "$CACHE_DIR" && printf '%s\n' "$@" > "$FAIL_FILE" ) 2>/dev/null || return 0
+    chmod 600 "$FAIL_FILE" 2>/dev/null || :
+}
+
+report_failure() { # reason exit-code [signal]
+    local reason="${1:-unspecified}" code="${2:-unknown}" sig="${3:-none}"
+    local block=() line message
+    block+=("== flamewm-wayland session failure: $(date '+%F %T' 2>/dev/null)")
+    block+=("command: $(session_command)")
+    block+=("reason=$reason backend=${backend:-unset} binary=${SESSION:-unset} exit=$code signal=$sig elapsed=${elapsed_ms:-0}ms")
+    # The compositor's own words come first: that is usually the actual cause.
+    while IFS= read -r message; do block+=("  $message"); done < <(compositor_messages 2)
+    message="$(compositor_failed_stage)"
+    if [[ -n "$message" ]]; then block+=("  $message"); fi
+    if (( ${#STARTUP_RING[@]} > 0 )); then
+        for line in "${STARTUP_RING[@]}"; do block+=("  $line"); done
+    else
+        block+=("  (no FLAMEWM-WAYLAND-STARTUP line was reached)")
+    fi
+    if [[ -n "$LOG_FILE" ]]; then
+        block+=("log=$LOG_FILE (previous run: $LOG_FILE.1)")
+    else
+        block+=("log=<unavailable: ${CACHE_DIR} is not writable>")
+    fi
+    block+=("durable report=${FAIL_FILE:-<unavailable>}")
+    write_failure_file "${block[@]}"
+    for line in "${block[@]}"; do printf '%s\n' "$line"; done
+    # The VT belongs to this session: that is the screen a user stares at when nothing appears. Best
+    # effort only. stderr is redirected FIRST so a `no controlling terminal` failure of the
+    # /dev/tty open is swallowed by /dev/null instead of landing in the log.
+    ( printf '\n'; for line in "${block[@]}"; do printf '%s\n' "$line"; done; printf '\n' ) \
+        2>/dev/null >/dev/tty || :
+}
+
+normalize_backend() {
+    case "${1,,}" in
+        drm|native) printf 'drm' ;;
+        winit|nested) printf 'winit' ;;
+        *) return 1 ;;
+    esac
+}
+
+# Backend flag: parsed and stripped here, before anything is executed, so the compositor never sees it.
+backend_requested=""
+backend_seen=0
+compositor_args=()
+while (( $# > 0 )); do
+    case "$1" in
+        --backend=*) backend_seen=1; backend_requested="${1#--backend=}"; shift ;;
+        --backend)
+            backend_seen=1; backend_requested=""
+            if (( $# > 1 )) && [[ "$2" != -* ]]; then backend_requested="$2"; shift; fi
+            shift ;;
+        *) compositor_args+=("$1"); shift ;;
+    esac
+done
+
+if (( backend_seen )) && [[ -z "$backend_requested" ]]; then
+    printf 'flamewm-wayland-session: --backend needs a value (drm, native, winit, nested)\n' >&2
+    stage session fail 2 "missing_backend_value"
+    report_failure missing_backend_value 2
+    exit 2
+fi
+if (( backend_seen )); then
+    if ! backend="$(normalize_backend "$backend_requested")"; then
+        printf 'flamewm-wayland-session: --backend=%s is not supported (drm, native, winit, nested)\n' "$backend_requested" >&2
+        stage session fail 2 "invalid_backend,source=flag,value=$backend_requested"
+        report_failure invalid_backend 2
+        exit 2
+    fi
+    backend_source=flag
+elif [[ -n "${FLAMEWM_WAYLAND_BACKEND:-}" ]]; then
+    if ! backend="$(normalize_backend "$FLAMEWM_WAYLAND_BACKEND")"; then
+        printf 'flamewm-wayland-session: FLAMEWM_WAYLAND_BACKEND=%s is not supported (drm, native, winit, nested)\n' "$FLAMEWM_WAYLAND_BACKEND" >&2
+        stage session fail 2 "invalid_backend,source=env,value=$FLAMEWM_WAYLAND_BACKEND"
+        report_failure invalid_backend 2
+        exit 2
+    fi
+    backend_source=env
+else
+    backend=drm
+    backend_source=default
+fi
+export FLAMEWM_WAYLAND_BACKEND="$backend"
+
+# D-Bus first, before the log is opened: re-executing later would rotate the log and lose the header.
+# lightdm normally provides a session bus, so a private one is started only when there is really none:
+#   * `DBUS_SESSION_BUS_ADDRESS` set                 -> a bus was handed to us
+#   * `$XDG_RUNTIME_DIR/bus` is a socket             -> `dbus-user-session`, where the address is
+#                                                       legitimately unset; the bus at that well-known
+#                                                       path is THE user bus, and `dbus-update-
+#                                                       activation-environment` (and every activated
+#                                                       client) talks to it through that path
+# Starting a second bus in the second case would move the activation environment onto a bus nobody
+# else uses, so clients would still inherit the greeter's environment.
+session_bus=absent
+if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+    session_bus=env
+elif [[ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus" ]]; then
+    session_bus=socket
+fi
+if [[ "$session_bus" == absent && -z "${FLAMEWM_WAYLAND_DBUS_WRAPPED:-}" ]] \
+    && command -v dbus-run-session >/dev/null 2>&1; then
+    export FLAMEWM_WAYLAND_DBUS_WRAPPED=1
+    if (( ${#compositor_args[@]} > 0 )); then
+        exec dbus-run-session -- "$0" "${compositor_args[@]}"
+    fi
+    exec dbus-run-session -- "$0"
+fi
+
+# Session identity is stated here instead of inherited: a display manager hands the greeter's own
+# values to the login session, and a stale `XDG_SESSION_TYPE=x11` or another desktop's name would
+# make clients pick the wrong toolkit path or the wrong integration.
+export XDG_SESSION_TYPE=wayland
+desktop_note=""
+if [[ "${XDG_CURRENT_DESKTOP:-}" != "FlameWM" ]]; then
+    desktop_note="inherited XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-<unset>}"
+    export XDG_CURRENT_DESKTOP=FlameWM
+fi
+export XDG_MENU_PREFIX=flamewm-
+SESSION="${FLAMEWM_WAYLAND_BINARY:-/usr/bin/flamewm-wayland}"
+# Shell and desktop are the same X11 clients the X11 session starts; flamewm-wayland runs them on
+# the XWayland DISPLAY once XWayland is ready. The X11 WM (flamewm-wm) is not started here: its
+# control and settings services are provided by flamewm-desktop-services below.
+BINDIR="${FLAMEWM_BINDIR:-/usr/bin}"
+BRIDGE="${FLAMEWM_SERVICES_BINARY:-/usr/libexec/flamewm/flamewm-desktop-services}"
+export FLAMEWM_WAYLAND_SESSION=1
+export FLAMEWM_WAYLAND_AUTOSTART="${FLAMEWM_WAYLAND_AUTOSTART:-$BINDIR/flamewm-desktop:$BINDIR/flamewm-shell}"
+
+# Log setup. The log and its directory are private (umask 077 + chmod 600) and LOG_FILE stays empty
+# when the log cannot be written, in which case the inherited streams are used.
+umask 077
+LOG_FILE=""
+LOG_DIR="$CACHE_DIR"
+if [[ -n "${HOME:-}${XDG_CACHE_HOME:-}" ]] && mkdir -p "$LOG_DIR" 2>/dev/null && [[ -d "$LOG_DIR" && -w "$LOG_DIR" ]]; then
+    candidate="$LOG_DIR/wayland-session.log"
+    if [[ -f "$candidate" ]]; then
+        mv -f "$candidate" "$candidate.1" 2>/dev/null || :
+        chmod 600 "$candidate.1" 2>/dev/null || :
+    fi
+    if ( : >>"$candidate" ) 2>/dev/null; then
+        LOG_FILE="$candidate"
+        chmod 600 "$LOG_FILE" 2>/dev/null || :
+        exec >>"$LOG_FILE" 2>&1
+    fi
+fi
+
+pid_alive() { [[ -n "${1:-}" ]] && kill -s 0 "$1" 2>/dev/null; }
+run_bounded() {
+    local seconds="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$seconds" "$@"
+    else
+        "$@"
+    fi
+}
+
+if [[ -n "$LOG_FILE" ]]; then stage log ok 0 "file=$LOG_FILE"; else stage log fail 0 "unavailable,continuing"; fi
+
+log "env summary:"
+for var in XDG_SESSION_TYPE XDG_SESSION_ID XDG_SESSION_CLASS XDG_SEAT XDG_VTNR XDG_RUNTIME_DIR \
+    XDG_CURRENT_DESKTOP XDG_MENU_PREFIX DESKTOP_SESSION WAYLAND_DISPLAY DISPLAY \
+    FLAMEWM_WAYLAND_BACKEND FLAMEWM_WAYLAND_AUTOSTART FLAMEWM_WAYLAND_DBUS_WRAPPED; do
+    log "  $var=${!var:-<unset>}"
+done
+log "  binary=$SESSION"
+if [[ "$session_bus" == absent ]]; then
+    log "  dbus_session_bus=absent"
+else
+    log "  dbus_session_bus=present"
+    # `socket` is `dbus-user-session`: no address in the environment, the user bus is the socket at
+    # $XDG_RUNTIME_DIR/bus. Logged as a source so a wrong-bus diagnosis needs no strace.
+    [[ "$session_bus" == socket ]] && log "  dbus_session_bus_source=socket"
+fi
+if [[ -n "$desktop_note" ]]; then log "overriding $desktop_note with FlameWM"; fi
+
+# XDG_RUNTIME_DIR: the Wayland socket and the XWayland lock file go there. Never silently use /tmp;
+# log an actionable error and continue (the compositor fails visibly if it really cannot run).
+runtime_status=ok
+runtime_detail="path=${XDG_RUNTIME_DIR:-unset}"
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+    if [[ -d "/run/user/$(id -u)" ]]; then
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        runtime_detail="recovered=$XDG_RUNTIME_DIR"
+    else
+        runtime_status=fail
+        runtime_detail="unset,continuing,set_XDG_RUNTIME_DIR=/run/user/$(id -u)"
+    fi
+fi
+if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    if [[ ! -d "$XDG_RUNTIME_DIR" ]]; then
+        runtime_status=fail
+        runtime_detail="not_a_directory,continuing,path=$XDG_RUNTIME_DIR,set_XDG_RUNTIME_DIR=/run/user/$(id -u)"
+    else
+        runtime_uid="$(stat -c %u "$XDG_RUNTIME_DIR" 2>/dev/null || printf '')"
+        runtime_mode="$(stat -c %a "$XDG_RUNTIME_DIR" 2>/dev/null || printf '')"
+        if [[ -n "$runtime_uid" && "$runtime_uid" != "$(id -u)" ]]; then
+            runtime_status=fail
+            runtime_detail="owner_uid=$runtime_uid,expected_uid=$(id -u),continuing,path=$XDG_RUNTIME_DIR"
+        elif [[ -n "$runtime_mode" ]] && (( 8#$runtime_mode & 077 )); then
+            runtime_status=fail
+            runtime_detail="insecure_mode=$runtime_mode,expected_700,continuing,path=$XDG_RUNTIME_DIR"
+        else
+            runtime_detail="path=$XDG_RUNTIME_DIR,mode=${runtime_mode:-unknown}"
+        fi
+    fi
+fi
+stage runtime "$runtime_status" 0 "$runtime_detail"
+if [[ "$runtime_status" == fail ]]; then
+    log "ACTION: XDG_RUNTIME_DIR must be an existing directory owned by uid $(id -u) with mode 0700,"
+    log "        usually /run/user/$(id -u) (systemd creates it). The session continues, but the"
+    log "        Wayland socket and the XWayland lock file may be unusable."
+fi
+
+# An inherited DISPLAY/WAYLAND_DISPLAY belongs to whoever started us (a greeter, a nested host,
+# ssh -X). They never select the backend — that is decided above — but they must not survive into the
+# compositor's environment either:
+#   DISPLAY        XWayland sets its own display after spawn, clients get it from the compositor
+#                  (state::spawn) or from the activation environment below, so a greeter's X server is
+#                  never needed. Dropping it is what keeps X11 clients off the greeter's server.
+#   WAYLAND_DISPLAY  the native compositor creates its own socket from FLAMEWM_WAYLAND_SOCKET, hands
+#                  Xwayland a WAYLAND_SOCKET fd (smithay clears that child's environment down to
+#                  PATH/XDG_RUNTIME_DIR), and its own autostart children get WAYLAND_DISPLAY from the
+#                  compositor. Nothing in the native backend reads an inherited value, so it is
+#                  dropped too; this wrapper exports its own value once the socket exists.
+# The nested backend keeps both: there they describe the host session it draws into.
+display_note=""
+if [[ "$backend" == drm ]]; then
+    for inherited in DISPLAY WAYLAND_DISPLAY; do
+        if [[ -n "${!inherited:-}" ]]; then
+            log "inherited $inherited=${!inherited} is not part of the tty session; dropping it"
+            unset "$inherited"
+            display_note+=",inherited_${inherited,,}=dropped"
+        fi
+    done
+fi
+stage session ok 0 "pid=$$,uid=$(id -u 2>/dev/null),backend=$backend,source=$backend_source${display_note}"
+
+# Capability gate: the only gate. Exit 127/126 first so a broken install is reported as itself.
+if [[ ! -e "$SESSION" ]]; then
+    stage capabilities skip 0 "binary_missing,path=$SESSION"
+    log "ACTION: $SESSION is missing; install flamewm-wayland or set FLAMEWM_WAYLAND_BINARY"
+    stage exit fail 127 "binary_missing,path=$SESSION"
+    report_failure binary_missing 127
+    exit 127
+fi
+if [[ ! -x "$SESSION" ]]; then
+    stage capabilities skip 0 "binary_not_executable,path=$SESSION"
+    log "ACTION: $SESSION is not executable (expected mode 0755)"
+    stage exit fail 126 "binary_not_executable,path=$SESSION"
+    report_failure binary_not_executable 126
+    exit 126
+fi
+
+cap_output="$(run_bounded "$CAPABILITIES_TIMEOUT_S" "$SESSION" --capabilities 2>&1)"; cap_rc=$?
+cap_keys="$(printf '%s\n' "$cap_output" | grep -E '^[a-z][a-z0-9_]*=' || true)"
+drm_compiled="$(printf '%s\n' "$cap_keys" | sed -n 's/^drm_compiled=//p' | head -n 1)"
+reported_backend="$(printf '%s\n' "$cap_keys" | sed -n 's/^backend=//p' | head -n 1)"
+cap_line_count=0
+[[ -n "$cap_output" ]] && cap_line_count="$(printf '%s\n' "$cap_output" | wc -l | tr -d ' ')"
+log "capabilities binary=$SESSION exit=$cap_rc lines_seen=$cap_line_count"
+if [[ -n "$cap_output" ]]; then
+    printf '%s\n' "$cap_output" | head -n 20 | sed 's/^/  /'
+fi
+if [[ "$backend" == drm ]]; then
+    if (( cap_rc != 0 )) || [[ -z "$cap_keys" ]]; then
+        stage capabilities fail 2 "capabilities_unsupported,exit=$cap_rc"
+        log "FAILED: $SESSION does not answer --capabilities (exit=$cap_rc); the DRM backend cannot be confirmed"
+        # Which binary was asked and what it actually answered: the two facts needed to tell a stale
+        # install from a build that never implemented the flag.
+        log "  binary asked: $SESSION"
+        if [[ -n "$cap_output" ]]; then
+            log "  lines seen (up to 10):"
+            printf '%s\n' "$cap_output" | head -n 10 | sed 's/^/    /'
+        else
+            log "  lines seen: none (no stdout/stderr at all)"
+        fi
+        log "ACTION: use a flamewm-wayland build that implements --capabilities, or run a nested test"
+        log "        session with --backend=nested inside an existing desktop session"
+        stage exit fail 2 "capabilities_unsupported"
+        report_failure capabilities_unsupported 2
+        exit 2
+    fi
+    if [[ "$drm_compiled" != "true" ]]; then
+        stage capabilities fail 2 "drm_feature_missing"
+        log "FAILED: $SESSION reports drm_compiled=${drm_compiled:-absent}; this build has no DRM/tty backend"
+        log "  binary asked: $SESSION"
+        log "  lines seen: drm_compiled=${drm_compiled:-<absent>} backend=${reported_backend:-<absent>}"
+        log "ACTION: rebuild with --features flamewm-wm-wayland/drm, or start the nested backend explicitly"
+        stage exit fail 2 "drm_feature_missing"
+        report_failure drm_feature_missing 2
+        exit 2
+    fi
+    stage capabilities ok 0 "drm_compiled=true,reported_backend=${reported_backend:-none}"
+else
+    stage capabilities skip 0 "nested_no_gate,reported_backend=${reported_backend:-none},drm_compiled=${drm_compiled:-unreported}"
+fi
+
+# Probe: advisory diagnostics only. It never gates startup and never changes the exit code.
+probe_out=""
+probe_rc=-1
+probe_out="$(run_bounded "$PROBE_TIMEOUT_S" "$SESSION" --probe 2>&1)"; probe_rc=$?
+log "probe exit=$probe_rc (advisory; does not change the session exit code)"
+if [[ -n "$probe_out" ]]; then
+    # The probe prints DBUS_SESSION_BUS_ADDRESS as an informational line: keep it out of the log.
+    printf '%s\n' "$probe_out" | grep -v 'DBUS_SESSION_BUS_ADDRESS' | grep -vE 'unix:(path|abstract)=' | sed 's/^/  /'
+fi
+if (( probe_rc == 0 )); then
+    stage probe ok 0 "advisory,exit=0"
+else
+    stage probe fail "$probe_rc" "advisory,continuing,exit=$probe_rc"
+fi
+
+bridge_pid=""
+session_pid=""
+watchdog_pid=""
+pending_signal=""
+elapsed_ms=0
+died_before_ready=0
+
+# Timing: the compositor's first stage line and its own `stage=ready` are grepped out of the log while
+# the wrapper is waiting anyway, so "DRM init took 4 s" is visible without a trace tool. `code=6`
+# distinguishes the compositor's ready from this wrapper's activation-sync stage of the same name.
+COMPOSITOR_READY_RE='FLAMEWM-WAYLAND-STARTUP stage=ready status=ok code=6'
+compositor_first_ms=""
+compositor_ready_ms=""
+scan_compositor() {
+    [[ -n "$LOG_FILE" ]] || return 0
+    if [[ -z "$compositor_first_ms" ]] \
+        && grep -qE 'FLAMEWM-WAYLAND-STARTUP stage=(seat|drm|outputs|libinput) ' "$LOG_FILE" 2>/dev/null; then
+        compositor_first_ms="$(now_ms)"
+        log "timing: compositor first stage line at ${compositor_first_ms}ms"
+    fi
+    if [[ -z "$compositor_ready_ms" ]] && grep -qF "$COMPOSITOR_READY_RE" "$LOG_FILE" 2>/dev/null; then
+        compositor_ready_ms="$(now_ms)"
+        log "timing: compositor reached stage=ready at ${compositor_ready_ms}ms"
+    fi
+}
+
+# Signal handling: forward the signal we received (not always TERM), then KILL only that pid after the
+# grace period. The watchdog polls instead of sleeping once, so it exits as soon as the child is gone.
+on_signal() {
+    local sig="$1"
+    pending_signal="$sig"
+    log "received SIG$sig"
+    if [[ -z "${session_pid:-}" ]]; then
+        log "FAILED: SIG$sig arrived before the compositor started"
+        stage exit fail 1 "signal_before_compositor,signal=$sig"
+        report_failure signal_before_compositor 1 "$sig"
+        exit 1
+    fi
+    log "forwarding SIG$sig to flamewm-wayland pid=$session_pid"
+    kill -s "$sig" "$session_pid" 2>/dev/null || :
+    if [[ -z "$watchdog_pid" ]] && (( SHUTDOWN_TIMEOUT_MS > 0 )); then
+        (
+            remaining=$(( SHUTDOWN_TIMEOUT_MS / 100 ))
+            while (( remaining-- > 0 )); do
+                kill -s 0 "$session_pid" 2>/dev/null || exit 0
+                sleep 0.1
+            done
+            printf '%s flamewm-wayland-session: flamewm-wayland pid=%s ignored SIG%s; sending SIGKILL\n' \
+                "$(date '+%F %T' 2>/dev/null)" "$session_pid" "$sig"
+            kill -KILL "$session_pid" 2>/dev/null || :
+        ) &
+        watchdog_pid=$!
+    fi
+}
+trap 'on_signal TERM' TERM
+trap 'on_signal INT' INT
+trap 'on_signal HUP' HUP
+
+if [[ -x "$BRIDGE" ]]; then
+    "$BRIDGE" --run & bridge_pid=$!
+    log "service bridge started pid=$bridge_pid"
+else
+    log "service bridge not started: $BRIDGE is not executable"
+fi
+
+start_ms="$(now_ms)"
+if (( ${#compositor_args[@]} > 0 )); then
+    "$SESSION" "${compositor_args[@]}" & session_pid=$!
+else
+    "$SESSION" & session_pid=$!
+fi
+log "flamewm-wayland started pid=$session_pid backend=$backend ms=$(now_ms)"
+
+# Wayland socket: bounded wait, never fatal. WAYLAND_DISPLAY is exported for native Wayland clients
+# and published to D-Bus activation once it exists.
+socket_ok=0
+if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    socket_path="$XDG_RUNTIME_DIR/$SOCKET_NAME"
+    waited=0
+    while (( waited < STARTUP_TIMEOUT_MS )); do
+        if [[ -e "$socket_path" ]]; then socket_ok=1; break; fi
+        scan_compositor
+        pid_alive "$session_pid" || break
+        sleep 0.1
+        waited=$(( waited + 100 ))
+    done
+fi
+scan_compositor
+if (( socket_ok )); then
+    export WAYLAND_DISPLAY="$SOCKET_NAME"
+    stage socket ok 0 "wayland_display=$SOCKET_NAME"
+elif [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+    stage socket skip 0 "no_runtime_dir,continuing"
+else
+    stage socket fail 0 "not_detected,continuing,path=$XDG_RUNTIME_DIR/$SOCKET_NAME"
+fi
+
+# XWayland DISPLAY: the compositor announces it on stderr, which this wrapper's log receives. Only
+# worth waiting for once the Wayland socket exists; nothing here gates startup.
+xwayland_display=""
+if (( socket_ok )) && [[ -n "$LOG_FILE" ]]; then
+    waited=0
+    while (( waited < STARTUP_TIMEOUT_MS )); do
+        xwayland_display="$(grep -oE 'XWayland ready on DISPLAY=:[0-9]+' "$LOG_FILE" 2>/dev/null | tail -n 1 | sed 's/.*DISPLAY=//')"
+        [[ -n "$xwayland_display" ]] && break
+        scan_compositor
+        pid_alive "$session_pid" || break
+        sleep 0.1
+        waited=$(( waited + 100 ))
+    done
+fi
+scan_compositor
+if [[ -n "$xwayland_display" ]]; then
+    export DISPLAY="$xwayland_display"
+    stage xwayland ok 0 "display=$xwayland_display"
+elif [[ -z "$LOG_FILE" ]]; then
+    stage xwayland skip 0 "no_log,continuing"
+else
+    stage xwayland skip 0 "not_detected,continuing"
+fi
+
+# D-Bus activation environment, synced AFTER the Wayland socket and the XWayland DISPLAY exist so an
+# activated client never inherits a greeter's DISPLAY. WAYLAND_DISPLAY stays available for native
+# Wayland clients; X11-only FlameWM clients use the XWayland DISPLAY.
+activation_vars=(XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX)
+[[ -n "${WAYLAND_DISPLAY:-}" ]] && activation_vars+=(WAYLAND_DISPLAY)
+[[ -n "${DISPLAY:-}" ]] && activation_vars+=(DISPLAY)
+if ! command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    stage ready skip 0 "dbus_update_activation_environment_missing"
+elif dbus-update-activation-environment --systemd "${activation_vars[@]}" >/dev/null 2>&1; then
+    stage ready ok 0 "activation_environment=synced,vars=${activation_vars[*]// /+},wayland_display=${WAYLAND_DISPLAY:-none},display=${DISPLAY:-none}"
+else
+    stage ready fail 0 "activation_environment=failed,continuing"
+fi
+
+# Wait for the compositor. A forwarded signal interrupts `wait`; loop until the child is really gone.
+result=0
+while :; do
+    wait "$session_pid"; result=$?
+    pid_alive "$session_pid" || break
+done
+scan_compositor
+elapsed_ms=$(( $(now_ms) - start_ms ))
+elapsed_s=$(( elapsed_ms / 1000 ))
+if [[ -n "$watchdog_pid" ]]; then
+    kill -TERM "$watchdog_pid" 2>/dev/null || :
+    wait "$watchdog_pid" 2>/dev/null || :
+    watchdog_pid=""
+fi
+
+# Stop the wrapper-owned bridge: TERM, bounded wait, KILL only that pid.
+if [[ -n "$bridge_pid" ]]; then
+    if pid_alive "$bridge_pid"; then
+        kill -TERM "$bridge_pid" 2>/dev/null || :
+        remaining=$(( SHUTDOWN_TIMEOUT_MS / 100 ))
+        while (( remaining-- > 0 )) && pid_alive "$bridge_pid"; do sleep 0.1; done
+        if pid_alive "$bridge_pid"; then
+            log "service bridge pid=$bridge_pid ignored SIGTERM; sending SIGKILL"
+            kill -KILL "$bridge_pid" 2>/dev/null || :
+        fi
+    fi
+    wait "$bridge_pid" 2>/dev/null || :
+    log "service bridge stopped"
+fi
+
+# Exit watchdog. A compositor that goes away before its own `stage=ready` never painted a frame: that
+# is exactly the black-screen-with-a-cursor case, so it is named instead of only surfacing as an exit
+# code. A shutdown this wrapper asked for (pending_signal) is not a failure and is not reported.
+exit_signal="none"
+if (( result > 128 && result < 160 )); then
+    exit_signal="$(kill -l $(( result - 128 )) 2>/dev/null || printf 'unknown')"
+fi
+if (( result != 0 )) && [[ -z "${compositor_ready_ms:-}" && -z "$pending_signal" ]]; then
+    died_before_ready=1
+    log "watchdog: flamewm-wayland exited exit=$result signal=$exit_signal after ${elapsed_ms}ms without reaching stage=ready (no frame was ever painted)"
+fi
+
+if (( result != 0 && elapsed_ms < 5000 )) && [[ -z "$pending_signal" ]]; then
+    log "FAILED: flamewm-wayland exited $result after ${elapsed_ms}ms (fast failure; not restarted)"
+    if [[ -n "$probe_out" ]]; then
+        log "probe failures (advisory):"
+        printf '%s\n' "$probe_out" | grep '^\[FAIL\]' | head -n 10 | sed 's/^/  /'
+    fi
+    if [[ -n "$LOG_FILE" ]]; then
+        log "last compositor messages:"
+        grep '^flamewm-wayland' "$LOG_FILE" | tail -n 5 | sed 's/^/  /'
+    fi
+    log "ACTION: fix the prerequisite above and start the session again; see ${LOG_FILE:-the session output}."
+fi
+
+# The block the user sees on the VT (and finds later in the cache file). A signal we forwarded
+# ourselves is a requested logout, not a diagnosed failure.
+if (( result != 0 )) && [[ -z "$pending_signal" ]]; then
+    if (( died_before_ready )); then
+        report_failure died_before_ready "$result" "$exit_signal"
+    else
+        report_failure compositor_exit "$result" "$exit_signal"
+    fi
+fi
+
+exit_detail="elapsed=${elapsed_ms}ms,elapsed_s=${elapsed_s},backend=$backend,signal=${pending_signal:-none},compositor_signal=${exit_signal}"
+(( died_before_ready )) && exit_detail+=",died_before_ready"
+if (( result == 0 )); then
+    stage exit ok 0 "$exit_detail"
+else
+    stage exit fail "$result" "$exit_detail"
+fi
+exit "$result"

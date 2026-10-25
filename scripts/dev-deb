@@ -20,9 +20,9 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
 export FLAMEWM_PACKAGE_PROFILE=fast
 command -v cargo >/dev/null 2>&1 || fail 'cargo not found'
 
-# Same 12 binaries scripts/package requires; built from the fast profile only.
+# Same 13 binaries scripts/package requires; built from the fast profile only.
 BINARIES=(flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot
-    flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal)
+    flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal flamewm-wayland)
 bin_args=()
 for binary in "${BINARIES[@]}"; do bin_args+=(--bin "$binary"); done
 
@@ -31,7 +31,7 @@ rm -rf "$ROOT/.target/dev-dist"
 
 start=$(date +%s)
 printf 'dev-deb: CARGO_TARGET_DIR=%s jobs=%s profile=fast\n' "$CARGO_TARGET_DIR" "$CARGO_BUILD_JOBS"
-cargo build --profile fast --locked "${bin_args[@]}"
+cargo build --profile fast --locked --features flamewm-wm-wayland/drm "${bin_args[@]}"
 for binary in "${BINARIES[@]}"; do
     [[ -x "$CARGO_TARGET_DIR/fast/$binary" ]] || fail "missing fast binary after build: $binary"
 done

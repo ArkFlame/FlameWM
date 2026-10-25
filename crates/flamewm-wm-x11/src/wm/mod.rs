@@ -119,10 +119,11 @@ impl<'a, C: Connection> Wm<'a, C> {
 }
 
 use flamewm_api::shortcuts::{
-    ACTION_LAUNCHER, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW,
-    ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
-    ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_SWITCH, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT,
-    ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
+    ACTION_FULLSCREEN_ESCAPE, ACTION_LAUNCHER, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION,
+    ACTION_SCREENSHOT_WINDOW, ACTION_SESSION_LOCK, ACTION_SHOW_DESKTOP,
+    ACTION_SHOW_DESKTOP_CTRL_ALT, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE,
+    ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_SWITCH, ACTION_WORKSPACE_DOWN,
+    ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{
@@ -177,6 +178,9 @@ pub mod interaction;
 pub mod lifecycle;
 
 const BUTTON_PRIMARY: Button = 1;
+/// How long after a fullscreen escape press a second press may kill the client that kept the keyboard.
+const ESCAPE_KILL_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Shortcut action ids that were bound but have no WM handler, logged once each.
 static UNHANDLED_SHORTCUTS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
@@ -1075,6 +1079,9 @@ where
     )?;
     wm.publish_desktop_state()?;
     wm.scan_existing()?;
+    if let Err(error) = wm.select_raw_keys() {
+        eprintln!("flamewm: raw escape-key feed unavailable: {error}");
+    }
     conn.flush()?;
 
     // X fd source: borrowed fd wakes dispatch; buffered drain happens below.
@@ -1289,6 +1296,17 @@ pub(crate) struct Wm<'a, C: Connection> {
     display_topology_dirty: TopologyDirty,
     /// Desktop CRTC modes and the hold/restore state for fullscreen mode changes.
     desktop_mode: desktop_mode::DesktopModeTracker,
+    /// XInput2 raw key feed for escape chords while a client holds the keyboard.
+    raw_keys: Option<raw_keys::RawKeys>,
+    /// Show-desktop toggle state: the iconified set and the active window to focus on restore.
+    show_desktop: show_desktop::ShowDesktop,
+    /// Fullscreen client broken out by the last escape press, killed if a second press follows.
+    escape_pending: Option<(Window, std::time::Instant)>,
+    /// Alt+Tab session state and the focus history that orders it.
+    switcher: switcher::Switcher,
+    mru: switcher::Mru,
+    /// Overlay snapshot queued for the next reactor flush.
+    switcher_signal: Option<flamewm_control_wire::ControlSignal>,
     dock_struts: HashMap<Window, [u32; 12]>,
     snap_preview: SnapPreviewSurface,
     chrome_runtimes: HashMap<Window, chrome_runtime::ChromeRuntime>,
@@ -1360,6 +1378,9 @@ impl OutputWorkArea {
 
 mod counters;
 mod desktop_mode;
+mod raw_keys;
+mod show_desktop;
+mod switcher;
 use counters::{bump, emit_resize_summary, move_counters, read, resize_counters};
 mod client_state;
 mod configure_handlers;
@@ -1475,6 +1496,12 @@ impl<'a, C: Connection> Wm<'a, C> {
             controller_geometry: ControllerGeometryCache::default(),
             display_topology_dirty: TopologyDirty::default(),
             desktop_mode: desktop_mode::DesktopModeTracker::default(),
+            raw_keys: None,
+            show_desktop: show_desktop::ShowDesktop::default(),
+            escape_pending: None,
+            switcher: switcher::Switcher::default(),
+            mru: switcher::Mru::default(),
+            switcher_signal: None,
             dock_struts: HashMap::new(),
             snap_preview: SnapPreviewSurface::new(),
             chrome_runtimes: HashMap::new(),

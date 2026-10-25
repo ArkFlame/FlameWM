@@ -92,9 +92,6 @@ pub(crate) fn scene_changed(known: &[Window], probed: &[Window]) -> bool {
 pub(crate) struct WindowBackdropState {
     pub(crate) spec: WindowBackdrop,
     natural: Option<RgbaImage>,
-    /// Wallpaper composed over the whole root for (root w, root h, fit); used when no root
-    /// readback is cached.
-    canvas: Option<(u32, u32, String, RgbaImage)>,
     /// Root pixels as last read while the window could not be on the root (root-sized).
     desktop: Option<RgbaImage>,
     /// The root changed since `desktop` was read (a move or resize of this window, or a change in
@@ -155,7 +152,6 @@ impl WindowBackdropState {
         Self {
             spec,
             natural: None,
-            canvas: None,
             desktop: None,
             desktop_stale: true,
             blurred_root: None,
@@ -741,9 +737,9 @@ impl X11App {
     }
 }
 
-/// Wallpaper region under `rect` for when no root readback is cached. The composed root canvas
-/// depends only on the wallpaper, the root size and the fit, so it is built once and each
-/// capture crops it.
+/// Wallpaper region under `rect` for when no root readback is cached. The decoded image is kept
+/// in `state`; only `rect` is composed (pixel-identical to cropping the full root canvas), so a
+/// capture never builds the whole root.
 fn wallpaper_region(
     state: &mut WindowBackdropState,
     root: (u32, u32),
@@ -759,23 +755,7 @@ fn wallpaper_region(
         .natural
         .as_ref()
         .ok_or("window backdrop: wallpaper missing")?;
-    let canvas_fresh = state
-        .canvas
-        .as_ref()
-        .is_some_and(|(w, h, f, _)| (*w, *h, f) == (root.0, root.1, &state.spec.fit));
-    if !canvas_fresh {
-        let full = flamewm_image_core::wallpaper::compose_region(
-            natural,
-            root.0,
-            root.1,
-            fit,
-            (0, 0, root.0, root.1),
-        )
-        .ok_or("window backdrop: wallpaper canvas unavailable")?;
-        state.canvas = Some((root.0, root.1, state.spec.fit.clone(), full));
-    }
-    let canvas = &state.canvas.as_ref().expect("canvas built above").3;
-    crop_rgba(canvas, rect)
+    flamewm_image_core::wallpaper::compose_region(natural, root.0, root.1, fit, rect)
         .ok_or_else(|| "window backdrop: wallpaper region unavailable".to_string())
 }
 

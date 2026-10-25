@@ -245,13 +245,30 @@ pub fn is_optional_keysym(keysym: u32) -> bool {
     (0x1008_ff00..=0x1008_ffff).contains(&keysym)
 }
 
+/// True for a chord whose key is one printable ASCII character held without Ctrl, Alt or Super.
+/// A root grab on such a key fires on ordinary typing: a bare `d` grab would trigger its action
+/// on every `d` and would also shadow the real `Super+d` / `Ctrl+Alt+d` chords.
+#[must_use]
+pub fn is_bare_typing_chord(chord: KeyChord) -> bool {
+    (0x20..=0x7e).contains(&chord.keysym)
+        && chord.modifiers & (MOD_CONTROL | MOD_ALT | MOD_SUPER) == 0
+}
+
 /// Resolves a chord to every keycode that produces its keysym, expanded over
 /// the NumLock and CapsLock variants so locked keyboards still fire.
+///
+/// A bare typing key resolves to no grab at all: `XGrabKey` would swallow the key everywhere.
 pub fn resolve(
     action: &str,
     chord: KeyChord,
     lookup: &dyn KeycodeLookup,
 ) -> FlameResult<Vec<Entry>> {
+    if is_bare_typing_chord(chord) {
+        eprintln!(
+            "flamewm: shortcut {action} is a bare typing key; it is not grabbed so typing stays intact"
+        );
+        return Ok(Vec::new());
+    }
     let keycodes = lookup.keycodes_for(chord.keysym);
     if keycodes.is_empty() {
         return Err(FlameError::new(
@@ -817,6 +834,145 @@ mod tests {
         assert!(
             backend.held.is_empty(),
             "optional grab released on rollback"
+        );
+    }
+
+    /// Every key the shipped defaults bind, with a keycode per keysym.
+    struct DefaultLookup(BTreeMap<u32, Vec<u8>>);
+
+    impl DefaultLookup {
+        fn new() -> Self {
+            let keys = [
+                "Super_L",
+                "space",
+                "Left",
+                "Right",
+                "Up",
+                "Down",
+                "F4",
+                "Tab",
+                "Print",
+                "Escape",
+                "d",
+                "e",
+                "t",
+                "l",
+                "XF86AudioRaiseVolume",
+                "XF86AudioLowerVolume",
+                "XF86AudioMute",
+            ];
+            let mut map = BTreeMap::new();
+            for (index, name) in keys.iter().enumerate() {
+                let keycode = u8::try_from(index + 8).unwrap();
+                map.insert(keysym_for_name(name).unwrap(), vec![keycode]);
+            }
+            Self(map)
+        }
+
+        fn keycode(&self, name: &str) -> u8 {
+            self.0[&keysym_for_name(name).unwrap()][0]
+        }
+    }
+
+    impl KeycodeLookup for DefaultLookup {
+        fn keycodes_for(&self, keysym: u32) -> Vec<u8> {
+            self.0.get(&keysym).cloned().unwrap_or_default()
+        }
+    }
+
+    /// The shipped show-desktop bindings.
+    const SHOW_DESKTOP: &str = "ShowDesktop";
+    const SHOW_DESKTOP_CTRL_ALT: &str = "ShowDesktopCtrlAlt";
+
+    #[test]
+    fn show_desktop_grabs_require_mod4_or_ctrl_alt_and_never_modifiers_zero() {
+        let lookup = DefaultLookup::new();
+        let d = lookup.keycode("d");
+        let mut grabs = ShortcutGrabs::new();
+        grabs
+            .prepare(
+                &desired(&[
+                    (SHOW_DESKTOP, "Super+d"),
+                    (SHOW_DESKTOP_CTRL_ALT, "Ctrl+Alt+d"),
+                ]),
+                &lookup,
+            )
+            .expect("both show-desktop bindings resolve");
+        let mut backend = FakeBackend::default();
+        grabs.commit(&mut backend).expect("grabs commit");
+        for entry in grabs.active() {
+            eprintln!("{:?}", entry);
+        }
+
+        for entry in grabs.active() {
+            assert_eq!(entry.grab.keycode, d, "both bindings grab the d key");
+            let stripped = entry.grab.modifiers & !LOCK_BITS;
+            let expected = match entry.action.as_str() {
+                SHOW_DESKTOP => MOD_SUPER,
+                SHOW_DESKTOP_CTRL_ALT => MOD_CONTROL | MOD_ALT,
+                other => panic!("unexpected action {other}"),
+            };
+            assert_eq!(
+                stripped, expected,
+                "{} must grab with its own modifier chord, got {:#06x}",
+                entry.action, stripped
+            );
+            assert_ne!(stripped, 0, "a letter grab must never carry modifiers 0");
+        }
+
+        // Plain `d` must never dispatch; the two chords must.
+        assert_eq!(grabs.action_for_key(d, 0), None);
+        assert_eq!(grabs.action_for_key(d, MOD_SUPER), Some(SHOW_DESKTOP));
+        assert_eq!(
+            grabs.action_for_key(d, MOD_CONTROL | MOD_ALT),
+            Some(SHOW_DESKTOP_CTRL_ALT)
+        );
+        assert_eq!(
+            grabs.action_for_key(d, MOD_SUPER | MOD_NUM_LOCK),
+            Some(SHOW_DESKTOP),
+            "NumLock must not break Super+d"
+        );
+    }
+
+    #[test]
+    fn bare_letter_binding_never_becomes_a_modifierless_grab() {
+        let lookup = DefaultLookup::new();
+        let d = lookup.keycode("d");
+        for binding in ["d", "D", "Shift+d"] {
+            let chord = parse_binding(binding).expect("parses");
+            assert!(is_bare_typing_chord(chord), "{binding}");
+            assert!(
+                resolve(SHOW_DESKTOP, chord, &lookup)
+                    .expect("resolves to nothing")
+                    .is_empty(),
+                "{binding} must not be grabbed"
+            );
+        }
+        // With a command modifier the same key is a real chord.
+        for binding in ["Super+d", "Ctrl+Alt+d"] {
+            let chord = parse_binding(binding).expect("parses");
+            assert!(!is_bare_typing_chord(chord), "{binding}");
+            let entries = resolve(SHOW_DESKTOP, chord, &lookup).expect("resolves");
+            assert_eq!(entries.len(), 4, "one grab per lock variant");
+            assert!(entries.iter().all(|entry| {
+                entry.grab.keycode == d && entry.grab.modifiers & !LOCK_BITS == chord.modifiers
+            }));
+        }
+
+        // A stale persisted binding cannot hijack typing or shadow the real chords.
+        let mut grabs = ShortcutGrabs::new();
+        let mut backend = FakeBackend::default();
+        grabs
+            .prepare(
+                &desired(&[(SHOW_DESKTOP, "d"), (SHOW_DESKTOP_CTRL_ALT, "Ctrl+Alt+d")]),
+                &lookup,
+            )
+            .expect("a bare typing key is dropped, the chord still resolves");
+        grabs.commit(&mut backend).expect("grabs commit");
+        assert_eq!(grabs.action_for_key(d, 0), None, "plain d types normally");
+        assert_eq!(
+            grabs.action_for_key(d, MOD_CONTROL | MOD_ALT),
+            Some(SHOW_DESKTOP_CTRL_ALT)
         );
     }
 

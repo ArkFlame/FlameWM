@@ -38,4 +38,4 @@ The normal `scripts/package` was also changed to validate/build the source archi
 sudo apt install "$(pwd)/.target/dist/flamewm_0.1.0_amd64.deb"
 ```
 
-Do not run the `sudo` step unless the first step prints `FLAMEWM-DEB-READY`. FlameWM installs `/usr/share/xsessions/flamewm.desktop`, allowing SDDM to discover the X11 session. It does not install SDDM or provide Wayland compositor support.
+Do not run the `sudo` step unless the first step prints `FLAMEWM-DEB-READY`. FlameWM installs `/usr/share/xsessions/flamewm.desktop`, allowing SDDM to discover the X11 session. It does not install SDDM or provide Wayland compositor support. Superseded: the package now ships a preliminary `FlameWM (Wayland)` session; see `docs/WAYLAND_PLAN.md`.

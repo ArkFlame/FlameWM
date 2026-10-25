@@ -75,6 +75,10 @@ background recorder control panel, microphone/system-audio recording, typed
 text/callout annotation, automatic upload, OCR, KWin composite capture of
 obscured windows, or Spectacle DBus compatibility is implemented.
 
+The tool is an X11 client only. In the preliminary Wayland session it runs on
+XWayland and is not a compositor capture path: it cannot see native Wayland
+surfaces, and screenshot behaviour under that session is unvalidated.
+
 No native Rust compilation or screenshot-on-X11 run was possible in the
 implementation environment without Cargo/rustc and a running X11 server.
 Static/package tests are not substitute evidence for real screenshot behavior.

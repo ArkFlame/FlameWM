@@ -16,7 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
 BINARIES = ("flamewm", "flamewm-session", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
             "flamewm-screenshot", "flamewm-explorer", "flamewm-render-x11", "flamewm-render-compile",
-            "flamewm-render-inspect", "flamewm-lock", "flamewm-terminal")
+            "flamewm-render-inspect", "flamewm-lock", "flamewm-terminal", "flamewm-wayland")
+# Stub for the --capabilities contract: key=value lines, exit 0, no device access.
+CAPABILITY_STUB = "#!/bin/sh\nprintf 'backend=native\\ndrm_compiled=true\\n'\nexit 0\n"
+PKG_CONFIG_STUB = "#!/bin/sh\nexit \"${FLAMEWM_FAKE_PKGCONFIG_EXIT:-0}\"\n"
 
 
 @unittest.skipUnless(shutil.which("dpkg-deb") and shutil.which("dpkg") and shutil.which("tar") and
@@ -36,6 +39,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
                      "packaging/install-manifest.txt", "packaging/debian/control.in",
                      "packaging/debian/copyright", "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/build-deb", "scripts/check-cargo", "scripts/package",
                      "scripts/package-source-archive", "scripts/flamewm-session-wrapper",
+                     "scripts/flamewm-wayland-session", "packaging/flamewm-wayland.desktop",
                      "tools/flamewm_desktop_services.py"):
             src = ROOT / file
             dest = self.root / file
@@ -58,10 +62,11 @@ class DebianReleasePipelineTests(unittest.TestCase):
         release.mkdir(parents=True)
         for binary in BINARIES:
             stub = release / binary
-            stub.write_text("#!/bin/sh\necho FlameWM fixture\n", encoding="utf-8")
+            stub.write_text(CAPABILITY_STUB if binary == "flamewm-wayland"
+                            else "#!/bin/sh\necho FlameWM fixture\n", encoding="utf-8")
             stub.chmod(0o755)
         self.manifest = self.root / "packaging/source-manifest.txt"
-        self.manifest.write_text("scripts/\ntools/\nassets/\n@exec scripts/version\n@exec scripts/build-deb\n@exec scripts/check-cargo\n@exec scripts/package\n@exec scripts/package-source-archive\n@exec scripts/flamewm-session-wrapper\n@exec tools/flamewm_desktop_services.py\n", encoding="utf-8")
+        self.manifest.write_text("scripts/\ntools/\nassets/\n@exec scripts/version\n@exec scripts/build-deb\n@exec scripts/check-cargo\n@exec scripts/package\n@exec scripts/package-source-archive\n@exec scripts/flamewm-session-wrapper\n@exec scripts/flamewm-wayland-session\n@exec tools/flamewm_desktop_services.py\n", encoding="utf-8")
 
         tools = self.root / 'tools'
         tools.mkdir(exist_ok=True)
@@ -69,18 +74,29 @@ class DebianReleasePipelineTests(unittest.TestCase):
         self.events = self.root / 'events.txt'
 
     def package(self):
-        return subprocess.run([str(self.root / "scripts/package")], cwd=self.root,
+        # Fixture binaries live in <root>/.target/release; never inherit a host CARGO_TARGET_DIR.
+        env = {k: v for k, v in os.environ.items() if k != "CARGO_TARGET_DIR"}
+        return subprocess.run([str(self.root / "scripts/package")], cwd=self.root, env=env,
                               capture_output=True, text=True, timeout=60)
 
-    def build_deb(self, cargo_exit=0, gate_failure=False, cargo_target_dir=None):
+    def build_deb(self, cargo_exit=0, gate_failure=False, cargo_target_dir=None, pkgconfig_missing=False):
         fakebin = self.root / "fakebin"
         fakebin.mkdir(exist_ok=True)
         cargo = fakebin / "cargo"
         cargo.write_text(f"#!/bin/sh\nprintf 'CARGO %s\\n' \"$*\" >> \"$FLAMEWM_FAKE_EVENTS\"\nexit {cargo_exit}\n", encoding="utf-8")
         cargo.chmod(0o755)
-        env = os.environ.copy()
+        # Preflight stubs: the native drm closure and Xwayland are host capabilities the
+        # fixture must not require, so they are resolved from this fake PATH entry.
+        pkgconfig = fakebin / "pkg-config"
+        pkgconfig.write_text(PKG_CONFIG_STUB, encoding="utf-8")
+        pkgconfig.chmod(0o755)
+        xwayland = fakebin / "Xwayland"
+        xwayland.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        xwayland.chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if k != "CARGO_TARGET_DIR"}
         env["PATH"] = str(fakebin) + os.pathsep + env.get("PATH", "")
         env['FLAMEWM_FAKE_EVENTS'] = str(self.events)
+        env['FLAMEWM_FAKE_PKGCONFIG_EXIT'] = '1' if pkgconfig_missing else '0'
         if gate_failure:
             env['FLAMEWM_FAKE_GATE_FAIL'] = '1'
         if cargo_target_dir is not None:
@@ -95,6 +111,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
         events = self.events.read_text().splitlines()
         self.assertEqual(events[0], 'GATE --profile release --include-ui')
         self.assertTrue(events[1].startswith('CARGO build --release --workspace'), events)
+        self.assertIn('--features flamewm-wm-wayland/drm', events[1])
         deb = self.root / f".target/dist/flamewm_{VERSION}_amd64.deb"
         self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(deb), "Architecture"], text=True).strip(), "amd64")
         self.assertTrue((deb.parent / "SHA256SUMS").exists())
@@ -219,6 +236,39 @@ class DebianReleasePipelineTests(unittest.TestCase):
         self.assertIn("./usr/share/xsessions/flamewm.desktop", entry)
         self.assertIn("./usr/bin/flamewm-terminal", entry)
         self.assertIn("./usr/share/applications/flamewm-terminal.desktop", entry)
+
+    def test_wayland_binary_without_drm_capability_never_yields_a_login_entry(self):
+        dist = self.root / ".target/dist"
+        dist.mkdir(parents=True)
+        (dist / f"flamewm_{VERSION}_amd64.deb").write_bytes(b"previous payload")
+        stub = self.root / ".target/release/flamewm-wayland"
+        stub.write_text("#!/bin/sh\nprintf 'backend=native\\ndrm_compiled=false\\n'\nexit 0\n", encoding="utf-8")
+        stub.chmod(0o755)
+        result = self.build_deb()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("drm_compiled=true", result.stderr)
+        self.assertNotIn("FLAMEWM-DEB-READY", result.stdout)
+        self.assertEqual(list(dist.glob("*.deb")), [], "a non-drm build must not produce an installable package")
+        self.assertFalse((dist / "SHA256SUMS").exists())
+
+    def test_wayland_binary_without_capabilities_flag_is_a_failure_not_a_probe(self):
+        stub = self.root / ".target/release/flamewm-wayland"
+        stub.write_text("#!/bin/sh\nprintf 'usage: flamewm-wayland\\n' >&2\nexit 2\n", encoding="utf-8")
+        stub.chmod(0o755)
+        result = self.build_deb()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--capabilities", result.stderr)
+        self.assertNotIn("FLAMEWM-DEB-READY", result.stdout)
+        self.assertEqual(list((self.root / ".target/dist").glob("*.deb")), [])
+
+    def test_missing_native_preflight_stops_before_cargo_with_one_line(self):
+        result = self.build_deb(pkgconfig_missing=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("libinput, gbm, libdrm, libudev", result.stderr)
+        errors = [line for line in result.stderr.splitlines() if line.startswith("FLAMEWM-DEB-ERROR:")]
+        self.assertEqual(len(errors), 1, result.stderr)
+        self.assertFalse(self.events.exists(), "no gate or cargo run may happen without the native prerequisites")
+
 
     def test_unregistered_version_refuses_to_publish_deb(self):
         self.manifest.write_text(self.manifest.read_text().replace("@exec scripts/version\n", ""))

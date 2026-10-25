@@ -52,6 +52,39 @@ Historical reference (not present in this checkout; not current oracle approval)
 project_sources/visual/rwr-0.0.6-target-xephyr.png
 ```
 
+## Wayland session gate (preliminary)
+
+The Wayland session has its own gates; none of them replaces a hardware login. Source, wrapper and
+packaging evidence:
+
+```bash
+./scripts/tests/wayland-session-matrix.sh          # wrapper backend selection and capability gate matrix
+cargo test -p flamewm-wm-wayland --features drm    # logind state machine, frame planner, probe tables
+./scripts/build-deb                                # preflight + drm_compiled=true gate + packaged session entries
+```
+
+Only behaviour that was actually executed may be reported. `--capabilities` is compile-time only
+(`flamewm-capabilities=1`, `drm_compiled=true|false`, `backend=native|nested`); `--probe` is advisory
+and never gates startup.
+
+### Required hardware procedure (not yet performed)
+
+1. Install the `.deb` from a working X11 session so recovery stays available.
+2. `flamewm-wayland --capabilities` must show `drm_compiled=true`.
+3. Log out and select `FlameWM (Wayland)` in the display manager (LightDM).
+4. On failure collect `~/.cache/flamewm/wayland-session.log` (with its `.1` rotation) and
+   `journalctl -b`; the `FLAMEWM-WAYLAND-STARTUP stage=... status=... code=...` lines name the
+   failing stage.
+5. On success verify: first frame on the connector, panel and shell visible, a terminal opens and
+   accepts input, pointer and keyboard work, Ctrl+Alt+Fn VT switch away and back, and a further
+   login after returning to the VT.
+6. Recover by choosing `FlameWM` (X11) at the login screen; the Wayland wrapper does not fall back
+   by itself.
+
+No successful native DRM/LightDM login has been recorded. A login that returns to the greeter after
+showing a text cursor has been reported and is under investigation, so the Wayland session must be
+described as preliminary in any report. See [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md).
+
 ## Release gate status
 
 Run these gates on the current checkout and report their actual results. A source audit or package build alone does not establish compiler or runtime verification. `scripts/release-gate` reports its Xephyr runtime and visual gates as `UNEXECUTED` until they are run separately.

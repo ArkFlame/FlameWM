@@ -381,7 +381,9 @@ mod capture_lease_tests {
             service.end_capture(&mut port, first).unwrap_err().code,
             ErrorCode::Conflict
         );
-        service.end_capture(&mut port, second).expect("new lease ends");
+        service
+            .end_capture(&mut port, second)
+            .expect("new lease ends");
     }
 
     #[test]

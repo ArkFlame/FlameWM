@@ -104,6 +104,24 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
+    /// True when the client's `_NET_WM_STATE` property already asks for fullscreen.
+    pub(super) fn initial_state_fullscreen(&self, window: Window) -> Result<bool, ReplyError> {
+        let reply = self
+            .conn
+            .get_property(
+                false,
+                window,
+                self.atoms.net_wm_state,
+                AtomEnum::ATOM,
+                0,
+                32,
+            )?
+            .reply()?;
+        Ok(reply
+            .value32()
+            .is_some_and(|mut atoms| atoms.any(|atom| atom == self.atoms.net_wm_state_fullscreen)))
+    }
+
     pub(super) fn read_strut(&self, window: Window) -> Result<[u32; 12], ReplyError> {
         let partial = self
             .conn
@@ -438,6 +456,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.mark_windows();
         self.publish_client_list()?;
         self.focus(window)?;
+        // EWMH: a client may request fullscreen before mapping; honor it at manage time.
+        if self.initial_state_fullscreen(window)? {
+            self.set_fullscreen(window, true)?;
+        }
         self.raise_docks_above_normal(window, frame)?;
         // Window-open effect: only a new, non-adopted normal top-level. It starts on a later
         // Expose, so arming never delays the map or the focus above.

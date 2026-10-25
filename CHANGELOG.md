@@ -1,3 +1,31 @@
+## 0.1.1 — Preliminary Wayland session
+
+### Wayland (preliminary)
+- New `crates/flamewm-wm-wayland` (`flamewm-wayland`, smithay 0.7): native DRM/KMS backend behind the crate feature `drm`, plus a nested winit developer backend (`--backend=nested`) for running inside an existing session.
+- Seat access is implemented directly against systemd-logind over D-Bus: `TakeControl`/`TakeDevice`, one `PauseDeviceComplete` per paused device only after the compositor quiesces, and `ResumeDevice` descriptor handling with a rebuild path. No libseat and no seatd.
+- DRM/KMS through smithay `DrmCompositor` (GBM + EGL/GLES), libinput, Ctrl+Alt+F1..F12 VT switch and resume, and XWayland for the existing shell, desktop and launcher clients.
+- Dirty-driven frame scheduling: a redraw request is drawn or deferred to the queued frame, never painted by an idle timer.
+- Session wrapper `scripts/flamewm-wayland-session` resolves the backend explicitly (`--backend`, then `FLAMEWM_WAYLAND_BACKEND`, then `drm`), gates the native path on `--capabilities` reporting `drm_compiled=true`, logs to `~/.cache/flamewm/wayland-session.log` (0600, one `.1` rotation) and forwards signals without process-group kills.
+
+### Packaging
+- The `.deb` installs two session entries: `/usr/share/xsessions/flamewm.desktop`, whose name is now `FlameWM (X11)`, and `/usr/share/wayland-sessions/flamewm-wayland.desktop` (`FlameWM (Wayland)`, `Exec=/usr/libexec/flamewm/flamewm-wayland-session --backend=drm`).
+- `Depends` adds the Wayland runtime set on top of the X11 stack: `libgbm1, libdrm2, libinput10, libudev1, libegl1, libgles2, xwayland`. No seat-library runtime package.
+- `scripts/build-deb` builds with `--features flamewm-wm-wayland/drm`, preflights the libinput/gbm/libdrm/libudev development files plus `Xwayland`, and fails instead of packaging unless `flamewm-wayland --capabilities` prints `drm_compiled=true`.
+
+### Diagnostics
+- `flamewm-wayland --capabilities`: compile-time build facts only, no bus, no seat access.
+- `flamewm-wayland --probe`: read-only advisory report; never gates startup or changes the exit code.
+- Structured `FLAMEWM-WAYLAND-STARTUP stage=... status=... code=...` lines from the wrapper and the compositor.
+
+### Documentation
+- `README.md` gained a Wayland section with the two-session table, install/selection steps, diagnostics commands, limitations and the X11 recovery step; the X11 session is documented as the supported default.
+- `docs/WAYLAND_PLAN.md` is linked from the README and is the implementation and status record. `docs/INSTALL.md`, `docs/PACKAGING.md`, `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md`, `docs/VERIFICATION.md`, `docs/SCREENSHOT.md` and `docs/TODO.md` were updated; the statements that the package ships no Wayland session, that no Wayland backend exists, and that the `.deb` is X11-only were removed. `docs/WAYLAND_BACKEND_FEASIBILITY.md` is marked as the superseded pre-implementation analysis.
+
+### Known unverified
+- No successful native DRM/LightDM login has been validated on real hardware. A LightDM login reportedly reached a text cursor and returned to the greeter; that is under investigation and is not fixed. The Wayland session ships as preliminary and experimental.
+- Unvalidated: VT switch and pause/resume on real hardware, session lock, screenshot/portal integration, native Wayland shell clients, output layout and per-output scale.
+- Recovery path documented and expected: choose `FlameWM` (X11) at the login screen. The Wayland wrapper does not fall back by itself.
+
 ## Pass 26 — Test compilation, rounded taskbar paint, desktop text shadows
 - Fix the exact E0425/E0433 errors: import `desktop_takes_focus_on_press` and `X11WindowRole` into the X11 event-loop test module.
 - Synchronize floating taskbar rounded paint with the native XShape radius (correct physical/logical scaling); classic taskbar remains square. Avoid invalidating unchanged border radii.

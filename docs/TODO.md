@@ -268,7 +268,7 @@ This is the canonical implementation backlog after 0.0.2. A checked item means a
 
 ## Phase 8 — session/product integration
 
-- [ ] FlameWM session desktop file.
+- [x] FlameWM session desktop file: `/usr/share/xsessions/flamewm.desktop` (`FlameWM (X11)`) and the preliminary `/usr/share/wayland-sessions/flamewm-wayland.desktop` (`FlameWM (Wayland)`).
 - [ ] startup/shutdown lifecycle.
 - [ ] external notification-daemon policy.
 - [ ] Polkit agent policy.
@@ -294,3 +294,31 @@ This is the canonical implementation backlog after 0.0.2. A checked item means a
 - [ ] target-machine `./scripts/check` green.
 - [ ] `./scripts/xephyr` real interactive smoke green.
 - [ ] `./scripts/verify-visual` reviewed against approved reference.
+
+## Phase 10 — Wayland session (preliminary)
+
+The session ships; the X11 session remains the supported default. Implementation record:
+`docs/WAYLAND_PLAN.md`.
+
+### Implemented foundation
+
+- [x] `crates/flamewm-wm-wayland` compositor crate (Smithay 0.7), binary `flamewm-wayland`.
+- [x] Nested winit developer backend (`--backend=nested`).
+- [x] Native DRM/KMS backend behind the crate feature `drm` (GBM + EGL/GLES, `DrmCompositor`).
+- [x] systemd-logind seat session over D-Bus (`TakeControl`/`TakeDevice`, `PauseDeviceComplete` after quiescing, `ResumeDevice` fd handling); no libseat, no seatd.
+- [x] libinput input, Ctrl+Alt+Fn VT switch/resume, XWayland spawn and X11 WM integration.
+- [x] Dirty-driven frame scheduling with no idle paint timer.
+- [x] Session wrapper, `FlameWM (Wayland)` session entry, packaging runtime set and build gates.
+- [x] `--capabilities` (compile-time) and `--probe` (read-only advisory) diagnostics.
+
+### Required before the session can be called supported
+
+- [ ] Diagnose and fix the reported LightDM login that shows a text cursor and returns to the greeter.
+- [ ] Successful native DRM login on real hardware, including first frame, panel, terminal and input.
+- [ ] VT switch, pause/resume and a second login after returning to the VT.
+- [ ] Native Wayland shell/desktop clients instead of X11 clients on XWayland.
+- [ ] Session lock.
+- [ ] Screenshot and portal integration; there is no compositor capture path.
+- [ ] Output layout, per-output scale, gamma/DPMS and a hardware cursor plane.
+- [ ] Terminal transparency over a composited backdrop (black at the default 80% opacity).
+- [ ] Launcher settings parity and resize/taskbar middle-click coverage.

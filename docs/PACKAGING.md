@@ -30,15 +30,18 @@ manifest failure does not emit a new, apparently installable package.
 After `./scripts/package`, run:
 
 ```bash
-dpkg-deb -f .target/dist/flamewm_0.1.0_amd64.deb Architecture
+dpkg-deb -f .target/dist/flamewm_0.1.1_amd64.deb Architecture
 # Expected: amd64
 (cd .target/dist && sha256sum -c SHA256SUMS)
-python3 -I tools/flamewm_deb_acceptance.py --deb .target/dist/flamewm_0.1.0_amd64.deb
+python3 -I tools/flamewm_deb_acceptance.py --deb .target/dist/flamewm_0.1.1_amd64.deb
 ```
 
 Do **not** use `--force-architecture`. Install from the actual `dist` path
 (or copy the `.deb` to an accessible location first). The package carries
-`/usr/share/xsessions/flamewm.desktop` for SDDM's X11 session selector.
+`/usr/share/xsessions/flamewm.desktop` for the X11 session selector and
+`/usr/share/wayland-sessions/flamewm-wayland.desktop` for the preliminary
+Wayland session (see [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md)); the X11 session is
+the supported default.
 
 ## One-command fresh Debian build (recommended)
 
@@ -50,9 +53,11 @@ From the full source checkout (with `assets/`), run:
 
 It rebuilds the current Rust workspace, invokes `./scripts/package`, and
 requires all of the following before reporting `FLAMEWM-DEB-READY`:
-`Architecture: amd64`, a complete `SHA256SUMS`, and an SDDM X11 session file.
-It deletes the old named `.deb` **before compiling** and treats any failure
-as fatal. Do not install a package if `FLAMEWM-DEB-READY` did not appear.
+`Architecture: amd64`, a complete `SHA256SUMS`, the X11 session file
+`/usr/share/xsessions/flamewm.desktop`, and the Wayland session file
+`/usr/share/wayland-sessions/flamewm-wayland.desktop`. It deletes the old named
+`.deb` **before compiling** and treats any failure as fatal. Do not install a
+package if `FLAMEWM-DEB-READY` did not appear.
 The source package/`.deb` publisher also cleans incomplete release outputs on
 failure. For users overlaying a source `.tar.gz` on their checkout, this avoids
 relying on the existence of a separately downloaded patch file.
@@ -60,6 +65,24 @@ relying on the existence of a separately downloaded patch file.
 A full Rust toolchain and all FlameWM runtime assets are needed. The smaller
 source handoff archives intentionally omit bulky assets; overlay them onto the
 original checkout without deleting its `assets/` tree.
+
+## Wayland session packaging (preliminary)
+
+`scripts/build-deb` builds with `--features flamewm-wm-wayland/drm` and
+`scripts/dev-deb` uses the same feature list with the `fast` profile, so a
+packaged compositor always carries the native DRM backend. Two fail-closed
+gates protect the login entry: the preflight (`pkg-config --exists libinput gbm
+libdrm libudev` plus an `Xwayland` binary on `PATH`, nothing installed) and the
+post-build `flamewm-wayland --capabilities` check for `drm_compiled=true`.
+
+`packaging/debian/control.in` adds the Wayland runtime set on top of the
+existing X11 dependencies: `libgbm1, libdrm2, libinput10, libudev1, libegl1,
+libgles2, xwayland`. Seat access is implemented against systemd-logind over
+D-Bus, so no seat library (`libseat`) and no `seatd` is packaged or required.
+
+The Wayland session itself is preliminary and unvalidated on hardware. See
+[`WAYLAND_PLAN.md`](WAYLAND_PLAN.md) for the implementation, the diagnostics and
+the list of unverified items.
 
 ## Imported source archives and stale Cargo compiled APIs
 

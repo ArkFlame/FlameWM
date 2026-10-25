@@ -11,6 +11,7 @@
 .target/release/flamewm-render-inspect   usr/bin/flamewm-render-inspect
 .target/release/flamewm-lock             usr/bin/flamewm-lock
 .target/release/flamewm-terminal         usr/bin/flamewm-terminal
+.target/release/flamewm-wayland          usr/bin/flamewm-wayland
 packaging/pam.d/flamewm-lock             etc/pam.d/flamewm-lock
 assets/                                  usr/share/flamewm/assets/
 assets/cursors/index.theme               usr/share/icons/FlameWM-Breeze-Dark/index.theme
@@ -25,6 +26,7 @@ packaging/flamewm-screenshot.desktop      usr/share/applications/flamewm-screens
 packaging/flamewm-explorer.desktop        usr/share/applications/flamewm-explorer.desktop
 packaging/flamewm-terminal.desktop        usr/share/applications/flamewm-terminal.desktop
 packaging/flamewm-session.desktop        usr/share/xsessions/flamewm.desktop
+packaging/flamewm-wayland.desktop        usr/share/wayland-sessions/flamewm-wayland.desktop
 packaging/menus/flamewm-applications.menu  etc/xdg/menus/flamewm-applications.menu
 packaging/notifications/dunstrc          usr/share/flamewm/dunstrc
 LICENSE                                  usr/share/doc/flamewm/LICENSE
@@ -34,4 +36,5 @@ docs/INSTALL.md                          usr/share/doc/flamewm/INSTALL.md
 docs/PACKAGING.md                        usr/share/doc/flamewm/PACKAGING.md
 packaging/debian/copyright               usr/share/doc/flamewm/copyright
 scripts/flamewm-session-wrapper    usr/libexec/flamewm/flamewm-session-wrapper
+scripts/flamewm-wayland-session    usr/libexec/flamewm/flamewm-wayland-session
 tools/flamewm_desktop_services.py    usr/libexec/flamewm/flamewm-desktop-services

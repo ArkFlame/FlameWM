@@ -540,7 +540,7 @@ fn error_code_for_name(name: &str) -> Option<ErrorCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flamewm_control_wire::system_dict;
+    use flamewm_control_wire::{SwitcherEntry, system_dict};
 
     fn signal_message(signal: &ControlSignal) -> Message {
         wire_signal_message(&encode_signal(signal))
@@ -635,6 +635,19 @@ mod tests {
     #[test]
     fn launcher_toggle_requested_round_trips_through_dbus() {
         assert_bus_round_trip(ControlSignal::LauncherToggleRequested);
+    }
+
+    #[test]
+    fn window_switcher_changed_round_trips_through_dbus() {
+        assert_bus_round_trip(ControlSignal::WindowSwitcherChanged {
+            open: true,
+            immediate: true,
+            selected: 2,
+            entries: vec![SwitcherEntry {
+                title: "Terminal".to_owned(),
+                app_id: "terminal".to_owned(),
+            }],
+        });
     }
 
     // CONTRACT-REGRESSION: T12 ApplySettings success order is reply, snapshot signal, legacy signal.

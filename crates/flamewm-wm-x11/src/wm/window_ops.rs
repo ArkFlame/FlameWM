@@ -35,6 +35,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.send_protocol(client, self.atoms.wm_take_focus)?;
         }
         self.active = Some(client);
+        self.mru.touch(client);
         self.mark_windows();
         self.publish_active()?;
         self.publish_client_list()?;

@@ -35,7 +35,7 @@ The existing `.deb` already installs `/usr/share/xsessions/flamewm.desktop`, wit
 - No `rustc`, `cargo`, or usable release binaries in this sandbox; new Rust code is NOT compiled or tested.
 - User-provided DeepSeek source archive is a trimmed export missing the entire `assets/` tree (including `assets/wallpapers/fitz-roy-dawn.webp` required in `crates/flamewm-desktop/build.rs`) plus other `.vendor/.agents` resources. This archive preserves that deficiency; running `cargo` on these exports alone will fail before compilation. Reapply onto the full live repository, then compile and run native X11 tests.
 - No `.deb` was built or installed. Only the `.deb` packaging source and X11 session checks were updated.
-- No Wayland backend exists; not complete.
+- No Wayland backend exists at this pass; not complete. Superseded: a preliminary Wayland session now ships; see `docs/WAYLAND_PLAN.md`.
 - The pre-existing `MANIFEST.sha256` lists hundreds of omitted source paths and is retained strictly as historical metadata. This delivery's actual archive SHA-256 is supplied separately.
 
 ## Required live checks

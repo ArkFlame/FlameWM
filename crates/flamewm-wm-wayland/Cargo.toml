@@ -1,0 +1,57 @@
+[package]
+name = "flamewm-wm-wayland"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "FlameWM Wayland compositor (smithay): nested winit backend with XWayland; drm tty backend behind the drm feature"
+publish = false
+
+[[bin]]
+name = "flamewm-wayland"
+path = "src/main.rs"
+
+[dependencies]
+calloop = { workspace = true }
+flamewm-api = { path = "../flamewm-api" }
+flamewm-applications = { path = "../flamewm-applications" }
+flamewm-control-dbus = { path = "../flamewm-control-dbus" }
+flamewm-control-wire = { path = "../flamewm-control-wire" }
+flamewm-platform = { path = "../flamewm-platform" }
+dbus = { version = "=0.9.12", default-features = false, optional = true }
+smithay = { version = "0.7", default-features = false, features = [
+    "backend_winit",
+    "backend_egl",
+    "renderer_glow",
+    "wayland_frontend",
+    "desktop",
+    "backend_drm",
+    "xwayland",
+] }
+
+[features]
+# Real-hardware tty backend (logind session over D-Bus, udev, DRM/KMS, GBM, libinput). Needs the libinput,
+# libgbm and libdrm development files at build time only; selected at runtime with FLAMEWM_WAYLAND_BACKEND=drm.
+# No libseat: the session comes from systemd-logind, so the binary links only desktop-stock libraries.
+drm = [
+    "dep:dbus",
+    "smithay/backend_gbm",
+    "smithay/backend_libinput",
+    "smithay/backend_session",
+    "smithay/backend_udev",
+]
+
+[dev-dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+
+# The workspace forbids unsafe code; this crate denies it so the drm module (feature `drm`) can allow it
+# for smithay's EGL initialisation. A module-level allow cannot override `forbid`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

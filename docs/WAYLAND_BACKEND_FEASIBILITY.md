@@ -1,10 +1,13 @@
 # Wayland Backend Feasibility
 
-Status: feasibility analysis only. This document does not claim Wayland support, does not
-schedule Wayland work, and does not delay the X11 release. Source truth: the file references
-below, checked against the tree at 2026-10-14. Governing rules: `docs/ARCHITECTURE.md` (one owner
-per mechanism; `flamewm-reactor` owns native event sources; UI never becomes WM authority) and
-`AGENTS.md`.
+Status: historical feasibility analysis, superseded. A preliminary Wayland session now ships
+(`crates/flamewm-wm-wayland`, binary `flamewm-wayland`, session entry `FlameWM (Wayland)`); its
+implementation, diagnostics and unverified list are in [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md). Keep
+this document as the pre-implementation record of what was counted and proposed, not as a
+description of the current tree. It does not delay the X11 release. Source truth: the file
+references below, checked against the tree at 2026-10-14. Governing rules: `docs/ARCHITECTURE.md`
+(one owner per mechanism; `flamewm-reactor` owns native event sources; UI never becomes WM
+authority) and `AGENTS.md`.
 
 ## 1. Current state (verified)
 
@@ -30,6 +33,9 @@ match was the hex literal `0xcbf29ce…` (`src/lib.rs:42`), which the word-bound
 Wayland: zero references (`wayland|smithay|layer-shell|xdg-shell`) under `crates/` and `docs/`,
 excluding this document.
 No Wayland dependency exists in the workspace.
+
+Both statements describe the tree at 2026-10-14 and are **superseded**: `crates/flamewm-wm-wayland`
+and its smithay dependency exist in the current tree. See [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md).
 
 **Correction to the brief: a window-management port already exists.** `crates/flamewm-api/src/ports.rs`
 defines `WindowPort` (L59), `WorkspacePort` (L166), `DisplayPort` (L183), `ShortcutPort` (L190),
@@ -109,7 +115,9 @@ Each milestone is independently revertible. The X11 path is untouched by P0–P2
 
 ## 5. Non-goals
 
-- No Wayland support claim. Nothing here is shipped, tested at runtime, or promised.
+- No Wayland support claim here. Nothing in this document is shipped. (Superseded in scope: a
+  preliminary Wayland session does ship now, documented in [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md),
+  and it is not claimed to be validated on hardware.)
 - No X11 release delay. X11 milestones and releases proceed independently.
 - No XWayland in the first phases.
 - No new event loop; `flamewm-reactor` remains the only native event source owner.

@@ -88,6 +88,14 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.atoms.utf8_string,
             b"FlameWM",
         )?;
+        // Startup default only: show-desktop owns this property after startup, and
+        // workspace-metadata republishes must not reset it.
+        self.set_property32(
+            self.screen().root,
+            self.atoms.net_showing_desktop,
+            AtomEnum::CARDINAL,
+            &[0],
+        )?;
         self.publish_workspace_metadata()?;
         self.publish_current_workspace()?;
         self.publish_client_list()?;
@@ -148,12 +156,6 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.atoms.net_desktop_names,
             self.atoms.utf8_string,
             &names,
-        )?;
-        self.set_property32(
-            root,
-            self.atoms.net_showing_desktop,
-            AtomEnum::CARDINAL,
-            &[0],
         )?;
         Ok(())
     }

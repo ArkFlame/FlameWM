@@ -30,7 +30,7 @@ Baseline: Pass 8 archive, already integrating the DeepSeek two-row workspace gri
 
 The native test depends on python-xlib + XTEST and on a complete full-repository build. Vertical top-edge arrival deliberately warps the pointer farther from the bottom for tall windows to maintain titlebar contact and keep at least half the frame visible; this is a policy to evaluate with real pointer feel in Xephyr. For windows exceeding output dimensions, physical visibility constraints may make full-frame visibility impossible. The two-row grid has no vertical neighbour under the empty last cell in odd workspace counts.
 
-A true Wayland compositor/session remains unimplemented. The existing supported X11 login-session packaging is preserved; do NOT install an unusable Wayland session entry.
+A true Wayland compositor/session remains unimplemented. The existing supported X11 login-session packaging is preserved; do NOT install an unusable Wayland session entry. Superseded: a preliminary Wayland session now ships and its entry is gated on `flamewm-wayland --capabilities`; see `docs/WAYLAND_PLAN.md`.
 
 ## Verify on full checkout
 

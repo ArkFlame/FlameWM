@@ -555,8 +555,10 @@ fn canonical_dbus_start_menu_toggle_signal_matches_wire_contract() {
         .expect("root interface is declared");
     assert!(root.contains("<signal name=\"StartMenuToggleRequested\"/>"));
     assert!(root.contains("<signal name=\"LauncherToggleRequested\"/>"));
-    // Self-closing tags: the start and launcher requests are zero-argument signals on the root object.
-    assert_eq!(root.matches("<signal ").count(), 2);
+    assert!(root.contains("<signal name=\"WindowSwitcherChanged\">"));
+    assert!(root.contains("<arg name=\"entries\" type=\"aa{sv}\"/>"));
+    // The start and launcher requests are zero-argument signals; the switcher carries its list.
+    assert_eq!(root.matches("<signal ").count(), 3);
 }
 
 #[test]

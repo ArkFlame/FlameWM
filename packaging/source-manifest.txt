@@ -87,6 +87,7 @@ xephyr
 @exec verify-visual
 @exec xephyr
 @exec scripts/flamewm-session-wrapper
+@exec scripts/flamewm-wayland-session
 @exec tools/flamewm_desktop_services.py
 @exec tools/flamewm-test
 @exec tools/test-bin/dbus-run-session

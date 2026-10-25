@@ -56,6 +56,17 @@ command -v sha256sum >/dev/null 2>&1 || fail 'sha256sum not found'
 python3 -I scripts/package-source-archive --check "$ROOT" packaging/source-manifest.txt \
     || fail 'source manifest preflight failed; register or remove the file above and rerun'
 
+# Fail-closed native-backend preflight: the Wayland drm feature compiles against
+# libinput/gbm/libdrm/libudev and execs Xwayland. Nothing is installed here.
+preflight_missing=()
+command -v pkg-config >/dev/null 2>&1 || preflight_missing+=('pkg-config')
+if command -v pkg-config >/dev/null 2>&1 && ! pkg-config --exists libinput gbm libdrm libudev; then
+    preflight_missing+=('libinput, gbm, libdrm, libudev development files')
+fi
+command -v Xwayland >/dev/null 2>&1 || preflight_missing+=('Xwayland')
+(( ${#preflight_missing[@]} == 0 )) \
+    || fail "missing DRM-native prerequisites: ${preflight_missing[*]} (install the matching -dev packages and xwayland; this script installs nothing)"
+
 # Nothing is published until all checks pass.
 printf 'FLAMEWM-DEB: validating desktop/core API and Cargo cache identity (version %s)\n' "$VERSION"
 # The gate compares source content digests (not mtimes) and cleans only when
@@ -63,7 +74,16 @@ printf 'FLAMEWM-DEB: validating desktop/core API and Cargo cache identity (versi
 # imports with 1970 mtimes but new bytes still invalidate. Scoped clean only.
 python3 -I tools/ensure_desktop_conversion_cargo.py --profile release --include-ui
 printf 'FLAMEWM-DEB: building the current FlameWM source (version %s)\n' "$VERSION"
-CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-10}" cargo build --release --workspace
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-10}" cargo build --release --workspace --locked --features flamewm-wm-wayland/drm
+# Fail-closed capability gate: a Wayland login entry is only packaged when the
+# binary it points at was compiled with the drm feature. --capabilities is a
+# metadata query that exits 0 and never opens DRM/logind; an unknown flag is a
+# failure, never a reason to fall back to a weaker liveness probe.
+wayland_bin="$TARGET_DIR/release/flamewm-wayland"
+[[ -x "$wayland_bin" ]] || fail "release build produced no executable Wayland compositor: $wayland_bin"
+wayland_capabilities="$("$wayland_bin" --capabilities 2>/dev/null || true)"
+grep -Fxq 'drm_compiled=true' <<<"$wayland_capabilities" \
+    || fail "release flamewm-wayland does not report drm_compiled=true from --capabilities; refusing to package a Wayland login entry (rebuild with --features flamewm-wm-wayland/drm)"
 printf 'FLAMEWM-DEB: producing source, Linux, and Debian artifacts\n'
 ./scripts/package
 
@@ -79,6 +99,8 @@ actual_arch="$(dpkg-deb --field "$DEB" Architecture)"
 deb_contents="$(dpkg-deb --contents "$DEB")"
 grep -F './usr/share/xsessions/flamewm.desktop' <<<"$deb_contents" >/dev/null \
     || fail 'X11 SDDM session entry missing from package'
+grep -F './usr/share/wayland-sessions/flamewm-wayland.desktop' <<<"$deb_contents" >/dev/null \
+    || fail 'Wayland session entry missing from package'
 # The native Terminal payload must ship in the .deb: a nested Xephyr entry in
 # scripts/xephyr hides this, so assert both the binary and its launcher here.
 for required in './usr/bin/flamewm-terminal' './usr/share/applications/flamewm-terminal.desktop'; do

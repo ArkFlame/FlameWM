@@ -101,6 +101,7 @@ pub(crate) struct ShellLoop {
     pub(crate) icon_geometry: IconGeometryTracker,
     /// Volume OSD: one retained overlay, driven by the audio snapshot.
     pub(crate) osd: flamewm_shell::osd::OsdController,
+    pub(crate) switcher: flamewm_shell::switcher::SwitcherController,
     /// Weather scheduler: the only owner of weather fetches. Pushes its feed to the popup host.
     pub(crate) weather: flamewm_shell::weather_host::WeatherHost,
     /// Set when the tray or the popup host must receive the current weather feed.
@@ -174,6 +175,7 @@ impl ShellLoop {
             task_icon_prime_armed: true,
             icon_geometry: IconGeometryTracker::default(),
             osd: flamewm_shell::osd::OsdController::default(),
+            switcher: flamewm_shell::switcher::SwitcherController::default(),
             weather: flamewm_shell::weather_host::WeatherHost::new(),
             weather_feed_pending: true,
             auto_lookup: flamewm_shell::weather_auto::AutoLookup::default(),
@@ -553,7 +555,7 @@ impl ShellLoop {
                     let Ok(transition) = transition else { continue };
                     if action != StartToggleAction::Close {
                         self.close_launcher(runtime)?;
-                        let started = Instant::now();
+                    let started = Instant::now();
                         let _total = shell_stage!("shell.start.open.total");
                         if action == StartToggleAction::Open
                             || action == StartToggleAction::Transfer
@@ -1954,6 +1956,7 @@ impl ShellLoop {
             runtime.redraw_dirty()?;
         }
         self.tick_osd(runtime);
+        self.tick_switcher(runtime);
         self.publish_wake(std::time::Instant::now());
         Ok(())
     }
@@ -1968,6 +1971,7 @@ impl ShellLoop {
         let Some(wake) = &self.wake else { return };
         wake.set(earliest_wake([
             self.osd.deadline(),
+            self.switcher.deadline(),
             self.weather.poll_deadline(now),
             self.auto_lookup.poll_deadline(now),
             self.zone_settle_at,
@@ -1983,30 +1987,7 @@ impl ShellLoop {
                 .map(|row| flamewm_shell::osd::Level::new(row.volume_percent, row.muted));
         // Same output source as the panel scale: the shown panel's placement output. The lookup is
         // lazy: the controller calls it only when the card shows, so idle ticks allocate nothing.
-        let target = || {
-            let panel = self.surfaces.placement().output.clone();
-            let panel = flamewm_shell::osd::OsdOutput {
-                geometry: panel.geometry,
-                scale_percent: panel.shell_scale_percent,
-                primary: panel.primary,
-                connected: panel.connected,
-            };
-            let outputs = snapshot
-                .displays
-                .outputs
-                .iter()
-                .map(|output| flamewm_shell::osd::OsdOutput {
-                    geometry: output.geometry,
-                    scale_percent: output.shell_scale_percent,
-                    primary: output.primary,
-                    connected: output.connected,
-                })
-                .collect::<Vec<_>>();
-            match flamewm_shell::osd::target_output(Some(panel), &outputs) {
-                Some(target) => (target.geometry, f32::from(target.scale_percent) / 100.0),
-                None => (self.surfaces.work_area(), 1.0),
-            }
-        };
+        let target = || active_output_target(&self.surfaces, &snapshot);
         let now = Instant::now();
         let settings = self.settings_cache.as_ref();
         if let Err(error) = self
@@ -2014,6 +1995,31 @@ impl ShellLoop {
             .update(runtime, level, target, settings, now)
         {
             eprintln!("flamewm-shell: volume OSD failed (nonfatal): {error:?}");
+        }
+    }
+
+    /// Alt+Tab overlay: renders the WM's latest switcher snapshot after its hold delay. Nonfatal:
+    /// a failed card leaves the WM switch untouched. Idle ticks (no snapshot, no deadline) return
+    /// before any output lookup.
+    fn tick_switcher(&mut self, runtime: &mut SurfaceRuntime) {
+        let frame = self.shell.take_switcher_frame();
+        let due = self
+            .switcher
+            .deadline()
+            .is_some_and(|at| Instant::now() >= at);
+        if frame.is_none() && !due {
+            return;
+        }
+        let (output, scale) = active_output_target(&self.surfaces, self.shell.snapshot());
+        let settings = self.settings_cache.as_ref();
+        if let Err(error) = self.switcher.update(
+            runtime,
+            frame,
+            || (output, scale),
+            settings,
+            Instant::now(),
+        ) {
+            eprintln!("flamewm-shell: window switcher failed (nonfatal): {error:?}");
         }
     }
 
@@ -2274,6 +2280,33 @@ impl ShellLoop {
 }
 
 /// Whether a quick-control popup's taskbar item is still shown under `items`.
+/// Output rect and UI scale for the shell's active output: the shown panel's output, else the
+/// snapshot's primary, connected or first output. Falls back to the work area at 100%.
+fn active_output_target(surfaces: &ShellSurfaces, snapshot: &ShellSnapshot) -> (flamewm_api::Rect, f32) {
+    let panel = surfaces.placement().output.clone();
+    let panel = flamewm_shell::osd::OsdOutput {
+        geometry: panel.geometry,
+        scale_percent: panel.shell_scale_percent,
+        primary: panel.primary,
+        connected: panel.connected,
+    };
+    let outputs = snapshot
+        .displays
+        .outputs
+        .iter()
+        .map(|output| flamewm_shell::osd::OsdOutput {
+            geometry: output.geometry,
+            scale_percent: output.shell_scale_percent,
+            primary: output.primary,
+            connected: output.connected,
+        })
+        .collect::<Vec<_>>();
+    match flamewm_shell::osd::target_output(Some(panel), &outputs) {
+        Some(target) => (target.geometry, f32::from(target.scale_percent) / 100.0),
+        None => (surfaces.work_area(), 1.0),
+    }
+}
+
 fn quick_kind_shown(
     kind: flamewm_shell::quick_controls::QuickControlKind,
     items: flamewm_shell::projection::TaskbarItems,
