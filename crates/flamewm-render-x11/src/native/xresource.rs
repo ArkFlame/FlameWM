@@ -35,7 +35,14 @@ pub fn pixmap_byte_estimate(width: u32, height: u32, depth: u32) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-/// Pure dimension gate: `w,h > 0`, within the root screen, bytes checked.
+/// Largest pixmap edge the X protocol can address.
+pub const MAX_PIXMAP_EDGE: u32 = 32767;
+/// A pixmap may cover this many root screens' worth of pixels. A single edge may exceed the root:
+/// a frame wider than a small or freshly shrunk screen, or a window partly off screen, is legal.
+pub const MAX_PIXMAP_ROOT_AREAS: u64 = 4;
+
+/// Pure dimension gate: `w,h > 0`, each edge within the protocol limit, the area within
+/// [`MAX_PIXMAP_ROOT_AREAS`] root screens, bytes checked.
 /// Returns the native byte cost on success; never touches X.
 pub fn validate_pixmap_dims(
     width: u32,
@@ -47,7 +54,11 @@ pub fn validate_pixmap_dims(
     if width == 0 || height == 0 {
         return Err("pixmap dimensions must be nonzero".to_string());
     }
-    if width > root_w.max(1) || height > root_h.max(1) {
+    let root_area = u64::from(root_w.max(1)) * u64::from(root_h.max(1));
+    if width > MAX_PIXMAP_EDGE
+        || height > MAX_PIXMAP_EDGE
+        || u64::from(width) * u64::from(height) > root_area.saturating_mul(MAX_PIXMAP_ROOT_AREAS)
+    {
         return Err(format!(
             "pixmap {width}x{height} exceeds root {root_w}x{root_h}"
         ));
@@ -387,10 +398,20 @@ mod tests {
     fn rejects_zero_and_oversize_dims() {
         assert!(validate_pixmap_dims(0, 8, 32, 800, 600).is_err());
         assert!(validate_pixmap_dims(8, 0, 32, 800, 600).is_err());
-        assert!(validate_pixmap_dims(801, 8, 32, 800, 600).is_err());
-        assert!(validate_pixmap_dims(8, 601, 32, 800, 600).is_err());
+        assert!(validate_pixmap_dims(1601, 1200, 32, 800, 600).is_err());
+        assert!(validate_pixmap_dims(32768, 1, 32, 800, 600).is_err());
         assert_eq!(validate_pixmap_dims(2, 3, 32, 800, 600).unwrap(), 24);
         assert_eq!(validate_pixmap_dims(2, 3, 1, 800, 600).unwrap(), 6);
+    }
+
+    /// A titlebar wider than a small screen is a legal pixmap; only the area is bounded.
+    #[test]
+    fn an_edge_wider_than_the_root_is_accepted() {
+        assert_eq!(
+            validate_pixmap_dims(1920, 31, 32, 931, 486).unwrap(),
+            1920 * 31 * 4
+        );
+        assert!(validate_pixmap_dims(880, 540, 32, 931, 486).is_ok());
     }
 
     #[test]
