@@ -131,11 +131,14 @@ fn clip_chains(
         rect: Rect::default(),
         depth: 0,
     }];
-    let mut stack = vec![document.document.root];
+    // A hidden subtree paints nothing, so its overflow never clips anything: it keeps its parent's
+    // chain and its styles are not resolved (most nodes of a pooled document are hidden).
+    let mut stack = vec![(document.document.root, false)];
     let mut any_clip = false;
-    while let Some(index) = stack.pop() {
+    while let Some((index, hidden_ancestor)) = stack.pop() {
         let mut id = ids[index as usize];
-        if clips_descendants(document, index, interaction) {
+        let hidden = hidden_ancestor || !document.is_visible(index);
+        if !hidden && clips_descendants(document, index, interaction) {
             let depth = chains[id as usize].depth + 1;
             chains.push(ClipChain {
                 parent: id,
@@ -147,7 +150,7 @@ fn clip_chains(
         }
         for child in children(document, index) {
             ids[child as usize] = id;
-            stack.push(child);
+            stack.push((child, hidden));
         }
     }
     (ids, chains, any_clip)
@@ -251,7 +254,8 @@ pub(crate) fn build_scrolled_paint(
 #[derive(Default)]
 pub(crate) struct PaintNodeCache {
     variables: Vec<Color>,
-    nodes: Vec<Option<NodeEntry>>,
+    /// Boxed: most nodes of a large pooled document are hidden and keep only an empty slot.
+    nodes: Vec<Option<Box<NodeEntry>>>,
     #[cfg(test)]
     hits: usize,
     #[cfg(test)]
@@ -263,11 +267,11 @@ struct NodeEntry {
     commands: Vec<PaintCommand>,
 }
 
-/// Every input the emission of one node reads: its visibility (including ancestors), resolved
-/// style, layout box and content extent, text, node backdrop, and its own scroll state.
-/// Image nodes are never memoised because their emission reads asset pixels and revisions.
+/// Every input the emission of one visible node reads: its resolved style, layout box and content
+/// extent, text, node backdrop, and its own scroll state. Hidden nodes (including ancestors) emit
+/// nothing and are not memoised. Image nodes are never memoised because their emission reads asset
+/// pixels and revisions.
 struct NodeKey {
-    visible: bool,
     style: Style,
     rect: Rect,
     content: Rect,
@@ -291,21 +295,7 @@ impl NodeKey {
         interaction: Interaction,
         index: u32,
     ) -> Self {
-        let visible = document.is_effectively_visible(index);
-        if !visible {
-            // Paint skips hidden nodes before resolving anything else, so only visibility matters.
-            return Self {
-                visible,
-                style: Style::default(),
-                rect: Rect::default(),
-                content: Rect::default(),
-                text: String::new(),
-                blur: None,
-                scroll: ScrollState::default(),
-            };
-        }
         Self {
-            visible,
             style: document.runtime_style(index, interaction),
             rect: node_rect(layout, index),
             content: layout.content_extent(index),
@@ -322,13 +312,6 @@ impl NodeKey {
         interaction: Interaction,
         index: u32,
     ) -> bool {
-        let visible = document.is_effectively_visible(index);
-        if visible != self.visible {
-            return false;
-        }
-        if !visible {
-            return true;
-        }
         self.blur == document.node_backdrop_blur(index)
             && self.scroll == document.scroll_offset(index)
             && self.rect == node_rect(layout, index)
@@ -350,6 +333,11 @@ fn paint_memo(
 ) {
     for &index in nodes {
         let slot = &mut cache.nodes[index as usize];
+        if !document.is_effectively_visible(index) {
+            // Paint skips hidden nodes before resolving anything else: nothing to emit or keep.
+            *slot = None;
+            continue;
+        }
         if let Some(entry) = slot
             .as_ref()
             .filter(|entry| entry.key.matches(document, layout, interaction, index))
@@ -375,7 +363,7 @@ fn paint_memo(
         match key {
             Some(key) => {
                 out.extend_from_slice(&commands);
-                *slot = Some(NodeEntry { key, commands });
+                *slot = Some(Box::new(NodeEntry { key, commands }));
             }
             None => {
                 out.extend(commands);
