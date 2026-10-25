@@ -132,6 +132,7 @@ use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::calloop::ping::make_ping;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::drm::Device as _;
 use smithay::reexports::drm::control::{
     Device as ControlDevice, Mode as DrmMode, ModeTypeFlags, ResourceHandles, connector, crtc,
 };
@@ -306,9 +307,11 @@ fn init_backend(
 
     // 4. EGL display and context on that GBM device.
     let step = Instant::now();
+    eprintln!("flamewm-wayland: init phase=egl_display");
     // SAFETY: the EGL display is created on the GBM device owned by this compositor and lives as
     // long as the renderer in `Drm`, which is the only user of the context.
     let egl = unsafe { EGLDisplay::new(gbm.clone())? };
+    eprintln!("flamewm-wayland: init phase=egl_context");
     let context = EGLContext::new(&egl)?;
     timing.egl_ms = step.elapsed().as_millis();
     stage_line(
@@ -319,6 +322,7 @@ fn init_backend(
 
     // 5. GLES renderer: the step that loads the GL entry points and is slow on real hardware.
     let step = Instant::now();
+    eprintln!("flamewm-wayland: init phase=renderer");
     // SAFETY: the context is current only on this thread, the single compositor thread.
     let renderer = unsafe { GlowRenderer::new(context)? };
     let formats: Vec<Format> = renderer.dmabuf_formats().into_iter().collect();
@@ -593,7 +597,7 @@ impl Drm {
                 out.frames.dirty,
                 out.frames.sync_waited_ms,
                 self.paused,
-            )
+            ) || (self.first_frame.queued_count() == 0 && out.frames.dirty)
         });
         if retry && !self.retry_scheduled && self.retry_attempts < MAX_RETRIES {
             self.retry_scheduled = true;
@@ -653,11 +657,16 @@ impl Drm {
                 FrameFlags::DEFAULT,
             ) {
                 Ok(result) if result.is_empty => {
-                    // Nothing was drawn, no new GPU work exists and no vblank follows. A pending
-                    // state sync is *not* a reason to arm a timer here: this pass owns no unfinished
-                    // frame, so re-rendering after 16 ms would be the very retry that corrupts the
-                    // pipeline.
+                    // Nothing was drawn, so no vblank follows. A pending state sync is *not* a reason
+                    // to arm a timer here: this pass owns no unfinished frame, so re-rendering after
+                    // 16 ms would be the very retry that corrupts the pipeline.
                     out.frames.empty(false);
+                    if self.first_frame.queued_count() == 0 {
+                        // An empty *first* pass would otherwise leave the output black until an
+                        // unrelated event pokes the scene. Anvil reschedules in this case too; the
+                        // retry stays bounded by MAX_RETRIES and the first-frame deadline.
+                        out.frames.wake();
+                    }
                 }
                 Ok(result) => {
                     // Smithay's sync contract: with `needs_sync` the caller must synchronize with the
@@ -1039,13 +1048,25 @@ fn scan_connectors(d: &mut Drm, state: &mut State) -> Result<(), Box<dyn Error>>
         if d.surfaces.iter().any(|out| out.connector == conn) {
             continue;
         }
-        let info = match d.device.get_connector(conn, true) {
+        // A forced probe reads EDID and can stall for seconds on a flaky external connector, which
+        // delays the panel behind it. The cached state is enough unless it reports a connected
+        // connector with no modes.
+        let mut info = match d.device.get_connector(conn, false) {
             Ok(info) => info,
             Err(error) => {
                 skip_connector(&d.device, conn, &format!("read {error}"));
                 continue;
             }
         };
+        if info.state() == connector::State::Connected && info.modes().is_empty() {
+            match d.device.get_connector(conn, true) {
+                Ok(forced) => info = forced,
+                Err(error) => {
+                    skip_connector(&d.device, conn, &format!("read {error}"));
+                    continue;
+                }
+            }
+        }
         if info.state() != connector::State::Connected {
             continue;
         }
@@ -1109,6 +1130,19 @@ fn scan_connectors(d: &mut Drm, state: &mut State) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
+/// True when the DRM driver identifies as NVIDIA; anvil disables overlay planes for that driver
+/// because using them breaks the atomic commit and the first frame never reaches the panel.
+fn is_nvidia(device: &DrmDevice) -> bool {
+    device
+        .get_driver()
+        .map(|driver| {
+            let name = driver.name().to_string_lossy().to_lowercase();
+            let description = driver.description().to_string_lossy().to_lowercase();
+            name.contains("nvidia") || description.contains("nvidia")
+        })
+        .unwrap_or(false)
+}
+
 /// The first CRTC one of this connector's encoders can drive that no output uses yet.
 fn pick_crtc(
     device: &DrmDevice,
@@ -1139,6 +1173,7 @@ fn build_output(
     mode: DrmMode,
     info: &connector::Info,
 ) -> Result<OutputSurface, Box<dyn Error>> {
+    eprintln!("flamewm-wayland: init phase=create_surface");
     let surface = d.device.create_surface(crtc, mode, &[conn])?;
     let (width, height) = mode.size();
     let mode = Mode {
@@ -1186,10 +1221,17 @@ fn build_output(
         GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
     );
     let exporter = GbmFramebufferExporter::new(d.gbm.clone(), None);
+    // Anvil disables overlay planes on NVIDIA: using them there breaks the atomic commit and the
+    // first frame never reaches the panel. Dropping them costs one extra composition, not correctness.
+    let mut planes = surface.planes().clone();
+    if is_nvidia(&d.device) {
+        planes.overlay.clear();
+    }
+    eprintln!("flamewm-wayland: init phase=compositor");
     let compositor = match DrmCompositor::new(
         &output,
         surface,
-        None,
+        Some(planes),
         allocator,
         exporter,
         [Fourcc::Argb8888, Fourcc::Xrgb8888],
