@@ -313,6 +313,8 @@ pub struct State {
     pub cursor_status: CursorImageStatus,
     /// Session xcursor theme and the cursors decoded from it.
     pub cursors: crate::cursor::Cursors,
+    /// Server-side titlebar fills, stable across frames (see `render::Decorations`).
+    pub decorations: RefCell<crate::render::Decorations>,
     pub grab: Option<Grab>,
     /// Bare Super press that has not been combined with another key yet.
     pub super_tap: bool,
@@ -411,6 +413,7 @@ impl State {
             pointer: Point::from((0.0, 0.0)),
             cursor_status: CursorImageStatus::default_named(),
             cursors: crate::cursor::Cursors::from_env(),
+            decorations: RefCell::default(),
             grab: None,
             super_tap: false,
             swallowed_keys: Vec::new(),
