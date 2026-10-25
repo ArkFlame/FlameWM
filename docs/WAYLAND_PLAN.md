@@ -139,18 +139,24 @@ Structured stderr lines from the compositor:
 code=<0..6> detail=<short tokens> t=<ms>ms`. The stage code is the stage order, so a log reader can
 order stages without parsing names; `t` is monotonic milliseconds since process start; detail is
 reduced to short tokens (no fds, addresses, cookies or environment dumps). A session manager may
-start the compositor before its VT/seat is active: the session is then polled for up to ~3 s and,
-if it is this process's own session, takeover proceeds and waits for `ActivateSession` instead of
-failing (`detail=waited_for_active` / `detail=inactive_continuing`).
+start the compositor before its VT/seat is active. After `TakeControl` the compositor calls
+`org.freedesktop.login1.Session.Activate` (and `Seat.SwitchTo(XDG_VTNR)` when the variable is set),
+polls the `Active` property, and fails closed (`reason=inactive_after_activate`) rather than taking
+DRM master on a session that is not ours. Once the event loop starts, a 5 s first-frame watchdog
+stops the loop, releases the session and exits non-zero if no frame was queued, so a taken-but-black
+VT cannot persist. `drm::init` also refuses to open the GPU and modeset while the session is
+inactive.
 
 The wrapper appends its own phases to the same shape (`session`, `runtime`, `log`, `capabilities`,
 `probe`, `socket`, `xwayland`, `ready`, `exit`, each with `ms=`) and writes everything to
 `$XDG_CACHE_HOME|$HOME/.cache/flamewm/wayland-session.log` (mode 0600, exactly one `.1` rotation).
 On failure it also prints a bounded summary to `/dev/tty` (so a VT failure is readable without a
 second machine) and rewrites `$XDG_CACHE_HOME|$HOME/.cache/flamewm/wayland-session-last-failure.log`
-(0600) with the reason, exit code, signal and the last stage lines. A log that cannot be created
-never prevents startup; the inherited streams are used instead. The D-Bus bus address is never
-logged.
+(0600) with the reason, exit code, signal and the last stage lines. If `stage=ready status=ok` does
+not appear within 15 s (`FLAMEWM_WAYLAND_READY_TIMEOUT_MS`), the wrapper terminates the compositor
+(TERM, then KILL after a grace period) and reports `reason=no_ready_timeout`. A log that cannot be
+created never prevents startup; the inherited streams are used instead. The D-Bus bus address is
+never logged.
 
 ## Packaging
 

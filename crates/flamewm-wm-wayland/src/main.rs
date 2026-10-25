@@ -28,10 +28,11 @@
 //!
 //! A session manager may start this process before the VT and the seat are active: at that moment the
 //! greeter still owns the tty, and logind reports the session as not yet `Active`. The tty backend
-//! therefore waits for activation (polling `Active` for ~3 s before taking control, then carrying on)
-//! and arms DRM only when logind's `ActivateSession` arrives — the same shape as any other logind
-//! compositor. `stage=seat` is what reports this; a session that is still inactive when the wait
-//! expires logs `detail=inactive_continuing` inside the `logind` module and keeps running.
+//! therefore activates the session itself (`Session.Activate`, plus `Seat.SwitchTo(XDG_VTNR)`), waits
+//! for `Active` with a budget of ~5 s and FAILS the open when it stays inactive: taking DRM master on
+//! an inactive session blanks the VT, presents no frame and cannot be escaped, so a reported startup
+//! failure is strictly better than a dead black screen. `stage=seat` is what reports this; a session
+//! that never becomes active fails with `reason=inactive_after_activate`.
 //!
 //! XWayland is optional. If it cannot be spawned the compositor keeps running as a pure Wayland
 //! compositor (`stage=xwayland status=fail`), no X11 client is served and the X11 shell/desktop
@@ -449,12 +450,19 @@ fn run() -> Result<i32, Box<dyn Error>> {
             service.after_dispatch(state);
         }
     });
+    // A backend that decided the run cannot continue (the tty first-frame escape hatch) has to exit
+    // non-zero after the backend is torn down, so the session wrapper reports a failure and the
+    // console comes back instead of a dead black VT.
+    let startup_failure = state.startup_failure();
     // Backend teardown after the loop: releases DRM master and the logind session, then the
     // XWayland client (dropping it ends the X server connection).
     drop(native);
     drop(display);
     drop(xwayland_client);
     result?;
+    if let Some(reason) = startup_failure {
+        return Err(format!("startup failed: {reason}").into());
+    }
     Ok(0)
 }
 

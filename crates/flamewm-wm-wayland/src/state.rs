@@ -108,6 +108,17 @@ pub fn scan_failed(outputs: usize) -> bool {
     outputs == 0
 }
 
+/// Whether the tty backend's first-frame escape hatch must end the session.
+///
+/// A compositor that took DRM master and never got a frame queued leaves the user on a black VT with
+/// no way back to a console; exiting non-zero is what releases the session so the greeter returns.
+/// Pure so the decision is testable without a GPU: `frames_queued` is the count of successful
+/// `queue_frame` calls since startup.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
+pub fn first_frame_missing(frames_queued: u32) -> bool {
+    frames_queued == 0
+}
+
 /// What one seat GPU can drive, as seen by the tty backend's startup probe.
 ///
 /// Plain data on purpose: the choice between several cards is then testable without a GPU.
@@ -231,6 +242,9 @@ pub struct State {
     /// Coalescing repaint request for the tty backend: set by anything that changes what is on
     /// screen, consumed by exactly one paint. Single-threaded, so a `Cell` is enough.
     redraw_dirty: Cell<bool>,
+    /// Why a running session has to end as a startup failure, set by the tty backend's first-frame
+    /// escape hatch and read by `main` after the loop, so the process exits non-zero.
+    startup_failure: Cell<Option<&'static str>>,
     /// Wakes the tty backend for `redraw_dirty`; installed by `drm::init`, `None` when nested.
     /// The `RefCell` keeps `ping` callable from the `&self` request path.
     drm_waker: Option<RefCell<Ping>>,
@@ -320,6 +334,7 @@ impl State {
             exit_after_dump: false,
             // The first frame is always painted.
             redraw_dirty: Cell::new(true),
+            startup_failure: Cell::new(None),
             drm_waker: None,
             loop_handle,
             xwayland_shell,
@@ -526,6 +541,19 @@ impl State {
         self.redraw_dirty.replace(false)
     }
 
+    /// Records that the loop has to end as a startup failure (the tty backend's first-frame escape
+    /// hatch calls this before stopping the loop). `main` reads it afterwards and exits non-zero, so
+    /// the backend is torn down and the console comes back instead of a dead black VT.
+    #[cfg_attr(not(feature = "drm"), allow(dead_code))]
+    pub fn report_startup_failure(&self, reason: &'static str) {
+        self.startup_failure.set(Some(reason));
+    }
+
+    /// The startup failure recorded during the run, if any.
+    pub fn startup_failure(&self) -> Option<&'static str> {
+        self.startup_failure.get()
+    }
+
     pub fn request_redraw(&self) {
         self.request_full_redraw();
         if let Some(backend) = self.backend.as_ref() {
@@ -642,9 +670,17 @@ pub fn next_serial() -> Serial {
 #[cfg(test)]
 mod tests {
     use super::{
-        FrameDecision, GpuProbe, OutputFrames, Rect, arm_retry, pick_gpu, plan_frame,
-        reserve_struts, scan_failed,
+        FrameDecision, GpuProbe, OutputFrames, Rect, arm_retry, first_frame_missing, pick_gpu,
+        plan_frame, reserve_struts, scan_failed,
     };
+
+    /// The first-frame watchdog only fires when nothing was ever queued to KMS.
+    #[test]
+    fn first_frame_watchdog_only_fires_without_a_queued_frame() {
+        assert!(first_frame_missing(0));
+        assert!(!first_frame_missing(1));
+        assert!(!first_frame_missing(42));
+    }
 
     /// One connector that cannot be set up is skipped; only zero outputs is fatal.
     #[test]

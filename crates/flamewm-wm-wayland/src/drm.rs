@@ -22,6 +22,20 @@
 //! master on the descriptor we already hold when logind hands back the same card, and rebuilds
 //! device, GBM, EGL, renderer and outputs from the new descriptor when it does not.
 //!
+//! `LogindSession::new` activates the session and fails when it cannot, so `init` refuses to take DRM
+//! master on an inactive session (see the `is_active` check there). Only a real `PauseDevice` suspends
+//! libinput: a session that merely started out inactive never does, because input has to stay live
+//! for Ctrl+Alt+Fn to reach the kernel.
+//!
+//! # First-frame escape hatch
+//!
+//! A one-shot five-second timer is armed once the render waker is installed. If no frame has been
+//! queued to KMS by then (`Drm::frames_queued`), the session is unrecoverable in place: the CRTC is
+//! ours, nothing is on it and the console cannot be reached. `stage=ready status=fail
+//! detail=no_first_frame` is emitted, the loop is stopped and `main` exits non-zero, which tears the
+//! backend down (`device.pause`, `ReleaseControl`) and gives the VT back. The timer is cancelled by
+//! the first successfully queued frame.
+//!
 //! # GPU selection and partial bring-up
 //!
 //! The boot GPU is opened first and used as soon as it reports a connected connector. Only when it
@@ -65,6 +79,7 @@ use smithay::desktop::utils::send_frames_surface_tree;
 use smithay::desktop::{PopupManager, layer_map_for_output};
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::calloop::LoopHandle;
+use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::calloop::ping::make_ping;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::drm::control::{
@@ -81,7 +96,8 @@ use crate::logind::{Event as LogindEvent, LogindSession, PauseKind};
 use crate::render::{self, CURSOR_COLOR, CURSOR_SIZE, Elem};
 use crate::stage_line;
 use crate::state::{
-    FrameDecision, GpuProbe, OutputFrames, State, arm_retry, pick_gpu, scan_failed,
+    FrameDecision, GpuProbe, OutputFrames, State, arm_retry, first_frame_missing, pick_gpu,
+    scan_failed,
 };
 
 type Compositor =
@@ -94,6 +110,8 @@ const FRAME_RETRY: Duration = Duration::from_millis(16);
 const MAX_RETRIES: u32 = 3;
 /// logind signals are read by polling the system bus: there is no blocking bus source.
 const SESSION_POLL: Duration = Duration::from_millis(20);
+/// Budget of the first-frame escape hatch: nothing queued after this means a black VT.
+const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One scanned-out connector. `global` is `None` for the output that is `State::output`.
 struct OutputSurface {
@@ -123,6 +141,12 @@ pub struct Drm {
     gate: Option<&'static str>,
     retry_scheduled: bool,
     retry_attempts: u32,
+    /// Frames successfully queued to KMS since startup; read by the first-frame escape hatch.
+    frames_queued: u32,
+    /// Last render or queue error, named by the escape hatch when no frame ever made it.
+    last_render_error: Option<String>,
+    /// The one-shot first-frame watchdog; removed when the first frame is queued.
+    first_frame_watchdog: Option<RegistrationToken>,
     handle: LoopHandle<'static, State>,
 }
 
@@ -147,6 +171,17 @@ pub fn init(
         }
     };
     stage_line(Stage::Seat, StageStatus::Ok, "logind control");
+    // Belt and braces after the fail-closed activation in `LogindSession::new`: taking DRM master on
+    // an inactive session blanks a VT that belongs to the greeter, no frame is ever presented and the
+    // console cannot be reached. Refuse before any GPU is opened.
+    if !session.is_active() {
+        stage_line(
+            Stage::Seat,
+            StageStatus::Fail,
+            "inactive_refusing_drm_master",
+        );
+        return Err("logind session is not active; refusing to take DRM master".into());
+    }
     let seat = session.seat();
     let (gpu, gpu_detail) = open_scanout_gpu(&session, &seat)?;
     let OpenedGpu {
@@ -195,6 +230,9 @@ pub fn init(
         gate: None,
         retry_scheduled: false,
         retry_attempts: 0,
+        frames_queued: 0,
+        last_render_error: None,
+        first_frame_watchdog: None,
         handle: handle.clone(),
     }));
     {
@@ -271,6 +309,32 @@ pub fn init(
     })?;
     state.set_drm_waker(ping);
 
+    // First-frame escape hatch: if nothing has been queued to KMS five seconds after the waker is
+    // installed, this VT is dead (CRTC taken, nothing on it, console unreachable). Report it in the
+    // same structured form as every other startup stage, stop the loop and let `main` exit non-zero
+    // so the backend is torn down and the console returns. The first queued frame removes the timer.
+    let watchdog_drm = Rc::clone(&drm);
+    let watchdog = handle.insert_source(Timer::from_duration(FIRST_FRAME_TIMEOUT), move |_, _, state| {
+        let (queued, last_error) = {
+            let d = watchdog_drm.borrow();
+            (d.frames_queued, d.last_render_error.clone())
+        };
+        if !first_frame_missing(queued) {
+            return TimeoutAction::Drop;
+        }
+        match last_error {
+            Some(error) => eprintln!("flamewm-wayland: no first frame, last render error: {error}"),
+            None => eprintln!(
+                "flamewm-wayland: no first frame, no render was attempted (session or output not usable)"
+            ),
+        }
+        stage_line(Stage::Ready, StageStatus::Fail, "no_first_frame");
+        state.report_startup_failure("no_first_frame");
+        state.loop_signal.stop();
+        TimeoutAction::Drop
+    })?;
+    drm.borrow_mut().first_frame_watchdog = Some(watchdog);
+
     state.request_full_redraw();
     render_all(state, &drm);
     Ok(DrmHandle(drm))
@@ -292,6 +356,10 @@ impl Drm {
     /// Stops every device exactly once and forgets all in-flight frames. Idempotent: a second
     /// pause before a resume does not suspend twice, which makes it safe from both the pause
     /// handler and [`finish`].
+    ///
+    /// Only a real logind `PauseDevice` (or [`finish`]) reaches this: a session that merely reported
+    /// itself inactive at startup never suspends libinput, so Ctrl+Alt+Fn keeps reaching the kernel
+    /// and can take the console back.
     fn quiesce(&mut self) {
         self.retry_scheduled = false;
         self.retry_attempts = 0;
@@ -446,6 +514,8 @@ impl Drm {
     /// because `paint` resets the device state and repeats the pass once.
     fn draw_pass(&mut self, elements: &[Elem], has_callback: bool) -> bool {
         let mut test_failed = false;
+        let mut queued = false;
+        let mut last_error: Option<String> = None;
         for out in self.surfaces.iter_mut() {
             // `Deferred` is not a reason to paint: a frame is still in flight, so this output is
             // re-planned by the vblank that clears `queued`, and painting now would queue over it.
@@ -464,9 +534,13 @@ impl Drm {
                     out.frames.empty(result.needs_sync());
                 }
                 Ok(_) => match out.compositor.queue_frame(()) {
-                    Ok(()) => out.frames.queue(),
+                    Ok(()) => {
+                        out.frames.queue();
+                        queued = true;
+                    }
                     Err(error) => {
                         out.frames.fail();
+                        last_error = Some(format!("queue_frame {}: {error}", out.output.name()));
                         eprintln!(
                             "flamewm-wayland: queue_frame failed on {}: {error}",
                             out.output.name()
@@ -485,6 +559,7 @@ impl Drm {
                         continue;
                     }
                     out.frames.fail();
+                    last_error = Some(format!("render {}: {error}", out.output.name()));
                     eprintln!(
                         "flamewm-wayland: render failed on {}: {error}",
                         out.output.name()
@@ -492,7 +567,25 @@ impl Drm {
                 }
             }
         }
+        if let Some(error) = last_error {
+            self.last_render_error = Some(error);
+        }
+        if queued {
+            self.note_first_frame();
+        }
         test_failed
+    }
+
+    /// A frame reached KMS: the startup escape hatch has nothing left to guard, so its timer goes.
+    ///
+    /// Removing the source is best effort; the timer also re-checks `frames_queued` when it fires, so
+    /// a failed removal cannot turn a working session into a reported failure.
+    fn note_first_frame(&mut self) {
+        self.frames_queued = self.frames_queued.saturating_add(1);
+        if let Some(token) = self.first_frame_watchdog.take() {
+            self.handle.remove(token);
+            eprintln!("flamewm-wayland: first frame queued, startup watchdog cancelled");
+        }
     }
 
     /// A frame reached the screen: nothing is in flight for that output any more, so the next plan

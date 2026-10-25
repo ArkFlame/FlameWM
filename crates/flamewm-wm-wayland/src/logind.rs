@@ -22,12 +22,20 @@
 //!
 //! A session manager (lightdm, a login shell, a `--backend=drm` exec) can start this process before
 //! logind has made the session the active one on its seat: the VT is still owned by the greeter while
-//! the session is being set up. An inactive session that is *our own* is therefore not a failure —
-//! validation polls the `Active` property for a short bounded time (see [`ActiveWait`]) and then
-//! proceeds anyway, leaving `is_active()` false until the `ActivateSession` event arrives. The tty
-//! backend arms DRM on that event, exactly like any other logind client. Sessions that are not ours
-//! (another user, another seat, a greeter) are still rejected while inactive: taking control of them
-//! would steal somebody else's devices.
+//! the session is being set up. `TakeControl` does not change that — it only hands us the devices —
+//! so this module activates the session itself, the way libseat (cosmic-comp) and wlroots' logind
+//! backend do: validation polls `Active` for a short bounded time (see [`ActiveWait`]), then
+//! `org.freedesktop.login1.Session.Activate()` is called on our own session path, plus
+//! `org.freedesktop.login1.Seat.SwitchTo(XDG_VTNR)` when the session has a VT, and `Active` is
+//! polled again. The whole wait is bounded at ~5 s. Skipping the activation is what leaves a
+//! compositor holding DRM master on a VT that still belongs to the greeter: the CRTC is taken and
+//! blanked, nothing is ever presented and our input/VT handling is never live.
+//!
+//! A session that is still not active after that makes opening the session FAIL
+//! (`reason=inactive_after_activate`) instead of continuing: the tty backend returns before taking
+//! DRM master, so the user gets a greeter-visible error instead of a dead black VT. Sessions that
+//! are not ours (another user, another seat, a greeter) are rejected while inactive even earlier:
+//! taking control of them would steal somebody else's devices.
 //!
 //! `is_active()` is session activation and nothing else (`ActivateSession` sets it, validation seeds
 //! it). A per-device pause — the touchpad or keyboard going away, which logind also does for reasons
@@ -165,6 +173,8 @@ pub(crate) trait Bus {
     fn session_active(&self, session_path: &str) -> Result<bool, LogindError>;
     fn take_control(&self, session_path: &str) -> Result<(), LogindError>;
     fn release_control(&self, session_path: &str) -> Result<(), LogindError>;
+    /// `org.freedesktop.login1.Session.Activate()`: makes this session the active one on its seat.
+    fn activate_session(&self, session_path: &str) -> Result<(), LogindError>;
     fn pause_device_complete(
         &self,
         session_path: &str,
@@ -277,7 +287,7 @@ struct Validated {
     seat_name: String,
     seat_path: String,
     /// Session activation at the end of validation. False when the wait below expired; the session
-    /// is then taken over anyway and activation is awaited as an event.
+    /// is then activated explicitly (see [`activate`]) or the open fails.
     active: bool,
     /// Short log token describing what the activation wait decided, for the startup log.
     note: Option<&'static str>,
@@ -287,7 +297,7 @@ struct Validated {
 ///
 /// libseat blocks until the seat is active, and a compositor is routinely started while the VT still
 /// belongs to the greeter. Ten reads over three seconds cover a normal session setup; after that the
-/// session is used anyway and activation arrives as the `ActivateSession` signal.
+/// session is activated explicitly and one more short wait decides whether to proceed or fail.
 #[derive(Clone, Copy, Debug)]
 struct ActiveWait {
     attempts: usize,
@@ -295,22 +305,29 @@ struct ActiveWait {
 }
 
 impl ActiveWait {
-    /// The production budget: 10 × 300 ms.
+    /// The validation budget: 10 × 300 ms.
     const DEFAULT: Self = Self {
         attempts: 10,
         interval: Duration::from_millis(300),
     };
 
+    /// The budget after `Session.Activate` + `Seat.SwitchTo`: 20 × 100 ms, so validation and
+    /// activation together stay bounded at ~5 s.
+    const AFTER_ACTIVATE: Self = Self {
+        attempts: 20,
+        interval: Duration::from_millis(100),
+    };
+
     /// The same number of reads without the pauses, so the tests exercise the polling loop itself.
     #[cfg(test)]
     const IMMEDIATE: Self = Self {
-        attempts: 10,
+        attempts: 20,
         interval: Duration::ZERO,
     };
 }
 
 /// Polls the `Active` property up to `wait.attempts` times. A read that fails counts as "not active
-/// yet": the caller's fallback (proceed and wait for `ActivateSession`) is the same either way.
+/// yet": the caller decides whether that is a failure (see [`activate`]).
 ///
 /// Runs before the event loop takes over, so the short sleeps here never block a calloop callback.
 fn wait_for_active(bus: &dyn Bus, session_path: &str, wait: ActiveWait) -> bool {
@@ -325,6 +342,62 @@ fn wait_for_active(bus: &dyn Bus, session_path: &str, wait: ActiveWait) -> bool 
         }
     }
     false
+}
+
+/// The VT this session owns, from `XDG_VTNR`, when it is set and parses.
+///
+/// A number below 1 is not a VT and is ignored rather than handed to `Seat.SwitchTo`.
+fn vt_number() -> Option<u32> {
+    parse_vt(std::env::var("XDG_VTNR").ok().as_deref())
+}
+
+/// [`vt_number`] without the environment, so the parsing is testable.
+fn parse_vt(value: Option<&str>) -> Option<u32> {
+    value
+        .map(str::trim)
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|vt| *vt > 0)
+}
+
+/// Asks logind to make this session the active one on its seat, then waits for `Active`.
+///
+/// `TakeControl` does not activate the session. libseat (cosmic-comp) and wlroots' logind backend
+/// call `Session.Activate` — and `Seat.SwitchTo` when the session has a VT — as part of opening it.
+/// A compositor that skips this takes DRM master on a VT that still belongs to the greeter: the CRTC
+/// is taken and blanked, no frame is ever presented and input/VT handling is not live.
+///
+/// Returns whether the session reported `Active` within `wait`. Both calls are best effort at this
+/// level (a failure is logged); the caller fails the open when the answer is still `false`.
+fn activate(
+    bus: &dyn Bus,
+    session_path: &str,
+    seat_path: &str,
+    vt: Option<u32>,
+    wait: ActiveWait,
+) -> bool {
+    match bus.activate_session(session_path) {
+        Ok(()) => {
+            eprintln!("flamewm-wayland: logind session {session_path} detail=activate_requested")
+        }
+        Err(error) => eprintln!("flamewm-wayland: logind Session.Activate failed: {error}"),
+    }
+    if let Some(vt) = vt {
+        match bus.switch_to(seat_path, vt) {
+            Ok(()) => eprintln!(
+                "flamewm-wayland: logind session {session_path} detail=switched_to_vt{vt}"
+            ),
+            Err(error) => {
+                eprintln!("flamewm-wayland: logind Seat.SwitchTo({vt}) failed: {error}")
+            }
+        }
+    }
+    if wait_for_active(bus, session_path, wait) {
+        eprintln!("flamewm-wayland: logind session {session_path} detail=activated");
+        true
+    } else {
+        eprintln!("flamewm-wayland: logind session {session_path} detail=still_inactive");
+        false
+    }
 }
 
 /// Whether `session_path` is this process's own session.
@@ -380,10 +453,9 @@ fn validate_session(
         if wait_for_active(bus, session_path, wait) {
             active = true;
             note = Some("waited_for_active");
-        } else {
-            // Deliberate: proceed and let `ActivateSession` activate the session.
-            note = Some("inactive_continuing");
         }
+        // Still inactive: the caller activates the session explicitly and fails the open when that
+        // does not help (see [`activate`]). There is no "continue inactive" path.
     }
     Ok(Validated {
         seat_name,
@@ -404,21 +476,30 @@ impl LogindSession {
         Self::open_with_bus(bus, session_id.as_deref(), seat.as_deref())
     }
 
-    /// Session discovery, validation, `TakeControl` and signal subscription over any [`Bus`].
+    /// Session discovery, validation, `TakeControl`, activation and signal subscription over any
+    /// [`Bus`].
     fn open_with_bus(
         bus: Rc<dyn Bus>,
         session_id: Option<&str>,
         expected_seat: Option<&str>,
     ) -> Result<Self, LogindError> {
-        Self::open_with_bus_waiting(bus, session_id, expected_seat, ActiveWait::DEFAULT)
+        Self::open_with_bus_waiting(
+            bus,
+            session_id,
+            expected_seat,
+            ActiveWait::DEFAULT,
+            vt_number(),
+        )
     }
 
-    /// [`Self::open_with_bus`] with an explicit activation budget, so tests do not sleep.
+    /// [`Self::open_with_bus`] with an explicit activation budget and VT, so tests do not sleep and
+    /// do not depend on the ambient environment.
     fn open_with_bus_waiting(
         bus: Rc<dyn Bus>,
         session_id: Option<&str>,
         expected_seat: Option<&str>,
         wait: ActiveWait,
+        vt: Option<u32>,
     ) -> Result<Self, LogindError> {
         let session_path = resolve_session(bus.as_ref(), session_id)?;
         let validated = validate_session(bus.as_ref(), &session_path, expected_seat, wait)?;
@@ -427,31 +508,47 @@ impl LogindSession {
                 "logind TakeControl on {session_path} failed; run from the user's own graphical session: {error}"
             ))
         })?;
+        // Control is ours from here on, so every failure below has to give it back: the guard owns
+        // the release (`Inner::drop`), exactly like a running session does.
+        let inner = Rc::new(RefCell::new(Inner {
+            bus: Rc::clone(&bus),
+            session_path: session_path.clone(),
+            seat_name: validated.seat_name.clone(),
+            seat_path: validated.seat_path.clone(),
+            active: validated.active,
+            controlled: true,
+            pending: Vec::new(),
+            paused_devices: BTreeSet::new(),
+        }));
         let events = EventQueue::new();
+        // Subscribed before the activation below, so an `Activate` signal that arrives while we wait
+        // is queued and still flips `is_active()` later.
         bus.subscribe(&session_path, events.clone())?;
         if let Some(note) = validated.note {
             eprintln!("flamewm-wayland: logind session {session_path} detail={note}");
         }
-        // The seat can become active between the last poll and the subscription, and that one-shot
-        // `Activate` signal would be lost. Queue the event the tty backend arms DRM on instead of
-        // silently claiming an activation no event ever announced.
-        if !validated.active && bus.session_active(&session_path).unwrap_or(false) {
-            eprintln!("flamewm-wayland: logind session {session_path} detail=activate_queued");
-            events.push(Event::ActivateSession);
+        // `TakeControl` only hands over the devices: the session has to be activated explicitly,
+        // like libseat and wlroots' logind backend do. Fail closed when it still will not activate:
+        // continuing would take DRM master on a VT that belongs to the greeter (black screen, no
+        // frames, no VT switches) instead of leaving a diagnosable failure behind.
+        if !validated.active {
+            if !activate(
+                bus.as_ref(),
+                &session_path,
+                &validated.seat_path,
+                vt,
+                ActiveWait::AFTER_ACTIVATE,
+            ) {
+                return Err(LogindError::rejected(
+                    "inactive_after_activate",
+                    format!(
+                        "session {session_path} is still not active after Session.Activate and Seat.SwitchTo"
+                    ),
+                ));
+            }
+            inner.borrow_mut().active = true;
         }
-        Ok(Self {
-            inner: Rc::new(RefCell::new(Inner {
-                bus,
-                session_path,
-                seat_name: validated.seat_name,
-                seat_path: validated.seat_path,
-                active: validated.active,
-                controlled: true,
-                pending: Vec::new(),
-                paused_devices: BTreeSet::new(),
-            })),
-            events,
-        })
+        Ok(Self { inner, events })
     }
 
     /// Dispatches pending bus messages without blocking. Callbacks only enqueue.
@@ -571,6 +668,13 @@ impl LogindSession {
     #[cfg(test)]
     fn is_active_flag(&self) -> bool {
         self.inner.borrow().active
+    }
+
+    /// Test-only: pretend logind took the session away without pausing a device, so the resume path
+    /// can be checked against an inactive session without a seat.
+    #[cfg(test)]
+    fn clear_active_flag(&self) {
+        self.inner.borrow_mut().active = false;
     }
 }
 
@@ -737,6 +841,12 @@ mod system {
             self.session_call(session_path, "ReleaseControl", ())
         }
 
+        /// `org.freedesktop.login1.Session.Activate()`, no arguments: makes this session the active
+        /// one on its seat, which is what `TakeControl` deliberately does not do.
+        fn activate_session(&self, session_path: &str) -> Result<(), LogindError> {
+            self.session_call(session_path, "Activate", ())
+        }
+
         fn pause_device_complete(
             &self,
             session_path: &str,
@@ -844,6 +954,8 @@ mod tests {
         Active,
         TakeControl,
         ReleaseControl,
+        Activate,
+        SwitchTo(u32),
         PauseDeviceComplete(u32, u32),
         Subscribe,
     }
@@ -854,6 +966,9 @@ mod tests {
         by_pid: RefCell<Option<String>>,
         class: RefCell<String>,
         active: Cell<bool>,
+        /// Whether `org.freedesktop.login1.Session.Activate` makes the fake report the session
+        /// active. `false` models a session logind refuses to activate (the fail-closed case).
+        activates: Cell<bool>,
         /// Read counter at which `Active` starts reporting true, for the activation wait.
         active_after: Cell<Option<usize>>,
         active_reads: Cell<usize>,
@@ -870,6 +985,7 @@ mod tests {
                 by_pid: RefCell::new(Some(SESSION.to_owned())),
                 class: RefCell::new("user".to_owned()),
                 active: Cell::new(true),
+                activates: Cell::new(true),
                 active_after: Cell::new(None),
                 active_reads: Cell::new(0),
                 take_device_paused: Cell::new(false),
@@ -965,6 +1081,14 @@ mod tests {
             Ok(())
         }
 
+        fn activate_session(&self, _session_path: &str) -> Result<(), LogindError> {
+            self.record(Call::Activate);
+            if self.activates.get() {
+                self.active.set(true);
+            }
+            Ok(())
+        }
+
         fn pause_device_complete(
             &self,
             _session_path: &str,
@@ -994,7 +1118,8 @@ mod tests {
             Ok(())
         }
 
-        fn switch_to(&self, _seat_path: &str, _vt: u32) -> Result<(), LogindError> {
+        fn switch_to(&self, _seat_path: &str, vt: u32) -> Result<(), LogindError> {
+            self.record(Call::SwitchTo(vt));
             Ok(())
         }
 
@@ -1088,10 +1213,10 @@ mod tests {
         assert_eq!(fake.count(&Call::Subscribe), 0);
     }
 
-    /// A display manager starts us before the VT is ours: waiting for `Active` and then proceeding is
-    /// the fix for "cursor, then back to the greeter", and activation arrives as an event.
+    /// A display manager starts us before the VT is ours: the session has to be activated explicitly
+    /// (`Session.Activate`, after `TakeControl`) and it then opens once logind reports `Active`.
     #[test]
-    fn inactive_own_session_is_taken_over_and_waits_for_activation() {
+    fn inactive_own_session_is_activated_then_taken_over() {
         let fake = Rc::new(FakeBus::new());
         fake.active.set(false);
         let bus: Rc<dyn Bus> = fake.clone();
@@ -1100,26 +1225,109 @@ mod tests {
             Some("5"),
             Some("seat0"),
             ActiveWait::IMMEDIATE,
+            None,
         )
-        .expect("own inactive session is taken over");
-        // One validating read, the ten polls and one read after subscribing.
+        .expect("own inactive session is activated and taken over");
+        assert_eq!(fake.count(&Call::Activate), 1, "{:?}", fake.calls());
+        assert_eq!(fake.count(&Call::TakeControl), 1);
+        assert_eq!(fake.count(&Call::Subscribe), 1);
+        // No VT in the environment: no `Seat.SwitchTo`.
         assert!(
-            fake.count(&Call::Active) > ActiveWait::IMMEDIATE.attempts,
+            !fake
+                .calls()
+                .iter()
+                .any(|call| matches!(call, Call::SwitchTo(_))),
             "{:?}",
             fake.calls()
         );
-        assert_eq!(fake.count(&Call::TakeControl), 1);
-        assert_eq!(fake.count(&Call::Subscribe), 1);
+        assert!(session.is_active_flag());
+        // Activation is requested only once, and only after control was taken.
+        let calls = fake.calls();
+        let control = calls.iter().position(|c| *c == Call::TakeControl);
+        let activate = calls.iter().position(|c| *c == Call::Activate);
         assert!(
-            !session.is_active_flag(),
-            "inactive until an Activate event"
+            matches!((control, activate), (Some(control), Some(activate)) if control < activate),
+            "{calls:?}"
         );
+        // A later `Activate` signal still only confirms what the property already said.
         fake.signal(Event::ActivateSession);
         assert!(matches!(
             session.take_events().as_slice(),
             [Event::ActivateSession]
         ));
         assert!(session.is_active_flag());
+        assert_eq!(fake.count(&Call::Activate), 1, "{calls:?}");
+    }
+
+    /// With a VT the activation also asks the seat to switch to it.
+    #[test]
+    fn activation_switches_to_the_session_vt() {
+        let fake = Rc::new(FakeBus::new());
+        fake.active.set(false);
+        let bus: Rc<dyn Bus> = fake.clone();
+        let session = LogindSession::open_with_bus_waiting(
+            bus,
+            Some("5"),
+            None,
+            ActiveWait::IMMEDIATE,
+            Some(2),
+        )
+        .expect("activated on VT 2");
+        assert!(session.is_active_flag());
+        let calls = fake.calls();
+        assert_eq!(fake.count(&Call::Activate), 1, "{calls:?}");
+        assert!(
+            calls.contains(&Call::SwitchTo(2)),
+            "expected Seat.SwitchTo(2): {calls:?}"
+        );
+    }
+
+    /// Fail closed: a session logind will not activate must not be taken over, and control goes back.
+    #[test]
+    fn still_inactive_after_activation_fails_closed() {
+        let fake = Rc::new(FakeBus::new());
+        fake.active.set(false);
+        fake.activates.set(false); // logind refuses to activate this session
+        let bus: Rc<dyn Bus> = fake.clone();
+        let error = LogindSession::open_with_bus_waiting(
+            bus,
+            Some("5"),
+            Some("seat0"),
+            ActiveWait::IMMEDIATE,
+            Some(3),
+        )
+        .err()
+        .expect("refused to continue inactive");
+        assert_eq!(error.reason(), Some("inactive_after_activate"));
+        assert_eq!(fake.count(&Call::Activate), 1, "{:?}", fake.calls());
+        assert_eq!(fake.count(&Call::SwitchTo(3)), 1, "{:?}", fake.calls());
+        assert_eq!(fake.count(&Call::TakeControl), 1);
+        // The guard released control instead of leaving logind holding a session nobody uses.
+        assert_eq!(fake.count(&Call::ReleaseControl), 1, "{:?}", fake.calls());
+    }
+
+    /// An already active session is not activated again: no `Activate`, no `SwitchTo`.
+    #[test]
+    fn active_session_is_not_activated() {
+        let (session, fake) = session();
+        assert!(session.is_active_flag());
+        let calls = fake.calls();
+        assert_eq!(fake.count(&Call::Activate), 0, "{calls:?}");
+        assert!(
+            !calls.iter().any(|call| matches!(call, Call::SwitchTo(_))),
+            "{calls:?}"
+        );
+    }
+
+    #[test]
+    fn vt_number_parsing() {
+        assert_eq!(parse_vt(Some("2")), Some(2));
+        assert_eq!(parse_vt(Some(" 7 ")), Some(7));
+        assert_eq!(parse_vt(Some("0")), None);
+        assert_eq!(parse_vt(Some("-1")), None);
+        assert_eq!(parse_vt(Some("tty1")), None);
+        assert_eq!(parse_vt(Some("")), None);
+        assert_eq!(parse_vt(None), None);
     }
 
     #[test]
@@ -1135,34 +1343,15 @@ mod tests {
         assert_eq!(validated.note, Some("waited_for_active"));
     }
 
+    /// Validation no longer has a "continue inactive" note: the open activates or fails.
     #[test]
-    fn activation_after_the_wait_reports_inactive_continuing() {
+    fn activation_after_the_wait_leaves_the_session_inactive() {
         let fake = Rc::new(FakeBus::new());
         fake.active.set(false);
         let validated = validate_session(fake.as_ref(), SESSION, None, ActiveWait::IMMEDIATE)
             .expect("validated");
         assert!(!validated.active);
-        assert_eq!(validated.note, Some("inactive_continuing"));
-    }
-
-    /// The one-shot `Activate` can fire between the last poll and `subscribe`; the event is queued
-    /// so the tty backend still arms DRM exactly once.
-    #[test]
-    fn activation_between_the_wait_and_the_subscription_is_queued() {
-        let fake = Rc::new(FakeBus::new());
-        fake.active.set(false);
-        // 11 reads are the validating read plus the polls; the read after subscribing is the 12th.
-        fake.active_after.set(Some(11));
-        let bus: Rc<dyn Bus> = fake.clone();
-        let session =
-            LogindSession::open_with_bus_waiting(bus, Some("5"), None, ActiveWait::IMMEDIATE)
-                .expect("session");
-        assert!(!session.is_active_flag());
-        assert!(matches!(
-            session.take_events().as_slice(),
-            [Event::ActivateSession]
-        ));
-        assert!(session.is_active_flag());
+        assert_eq!(validated.note, None);
     }
 
     #[test]
@@ -1287,11 +1476,10 @@ mod tests {
 
     #[test]
     fn resume_drops_paused_device_state_without_reactivating_a_session() {
-        let fake = Rc::new(FakeBus::new());
-        fake.active.set(false);
-        let bus: Rc<dyn Bus> = fake.clone();
-        let session = LogindSession::open_with_bus_waiting(bus, None, None, ActiveWait::IMMEDIATE)
-            .expect("session");
+        let (session, fake) = session();
+        // Startup requires an active session now, so the inactive state a VT switch away produces is
+        // simulated directly: what this test pins down is that a device resume never sets it.
+        session.clear_active_flag();
         assert!(!session.is_active_flag());
         fake.signal_pause(13, 5, PauseKind::Force);
         session.take_events();
