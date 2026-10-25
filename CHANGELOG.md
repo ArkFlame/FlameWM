@@ -1,3 +1,25 @@
+## Unreleased — Wayland tty session, terminal CPU/RAM, snap drag-out, translucency order
+
+### Wayland (preliminary)
+- Only `PauseDevice` for the scanout card quiesces the tty backend. logind answers every `ReleaseDevice` (including the input nodes libinput opens and closes while probing the seat) with `PauseDevice gone`; treating those as a session pause blanked the panel after the first frame and suspended input for good, which is the black screen with dead Caps Lock and no Ctrl+Alt+Fn seen under LightDM. libinput starts at init and keyboard LEDs follow the xkb state. Still unverified on hardware.
+
+### Performance
+- Text, visibility and font-weight writes on an absolutely positioned box that holds only text patch the retained layout in place instead of recomputing all of it. The terminal (a pool of ~6k such run boxes) drops from ~19% to ~3.4% of one core with a full-screen `top -d 0.1` (median of 3 runs, release builds, same workload).
+- The per-node paint memo keeps no entry for hidden nodes and boxes the rest, and hidden subtrees skip style resolution when clip chains are built: terminal PSS 19.2 MB -> 15.3 MB.
+
+### Terminal
+- The PTY master is opened close-on-exec. Every child inherited it, so a closed or killed terminal never hung up its shell and programs such as `htop` kept running (and using CPU) as orphans.
+
+### Window management
+- Dragging a snapped or maximized window out under the outline (the default) restores its floating size at once, so the frame no longer keeps the snapped width while its chrome and state use the restored one (the "half cut" window).
+- Pixmaps may exceed one root edge as long as their area stays within four root screens, and a requested app window starts at most screen-sized.
+
+### Translucency
+- A translucent window reads the windows stacked above it while they cover it (after a 250 ms quiet period, VisibilityNotify/Expose driven) into its cached root, so raising it shows those windows beneath it instead of the stale desktop. Only covered root pixels are read; the window is never hidden.
+
+### Build
+- Rust toolchain pin 1.85.1 -> 1.88.0 (`rust-toolchain.toml`, workspace `rust-version`, CI). The tree already uses let chains and its lockfile already needed 1.88, so the old pin could not build it.
+
 ## 0.1.1 — Preliminary Wayland session
 
 ### Wayland (preliminary)
