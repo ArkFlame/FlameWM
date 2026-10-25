@@ -376,7 +376,8 @@ impl X11App {
             | BUTTON_PRESS_MASK
             | BUTTON_RELEASE_MASK
             | KEY_PRESS_MASK
-            | KEY_RELEASE_MASK;
+            | KEY_RELEASE_MASK
+            | crate::xlib_ext::VISIBILITY_CHANGE_MASK;
         unsafe {
             XSelectInput(display, window, event_mask);
         }

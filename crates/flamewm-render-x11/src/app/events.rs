@@ -389,9 +389,21 @@ impl X11App {
                     // document change (a shrink), so the last Expose of a run relayouts
                     // and repaints. Coalesce counts.
                     if unsafe { event.xexpose.count } == 0 {
+                        // A window moving above a covered surface exposes it: what covers it changed.
+                        self.note_window_covered_change();
                         // SAFETY: The caller owns a live X11 display and app resources.
                         unsafe { self.repaint_full(document)? };
                     }
+                }
+                crate::xlib_ext::VISIBILITY_NOTIFY => {
+                    // SAFETY: the discriminator identifies XVisibilityEvent, which shares the
+                    // XEvent prefix; the union is at least as large as the event.
+                    let visibility = unsafe {
+                        *(std::ptr::addr_of!(event).cast::<crate::xlib_ext::XVisibilityEvent>())
+                    };
+                    self.note_window_visibility(
+                        visibility.state == crate::xlib_ext::VISIBILITY_UNOBSCURED,
+                    );
                 }
                 MAP_NOTIFY => {
                     // Native presenter: MapNotify advances Painted -> Mapped.
