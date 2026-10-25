@@ -337,26 +337,7 @@ fn flame_environment(
 ) -> BTreeMap<String, String> {
     // Empty values count as unset throughout, so `FOO=` never overrides a default.
     let non_empty = |key: &str| existing_env.get(key).filter(|value| !value.is_empty());
-    let mut environment = BTreeMap::new();
-    // Bundled authority first: explicit FLAMEWM_CURSOR_* wins, then existing
-    // XCURSOR_*, then the bundled theme/size defaults.
-    let requested_theme = non_empty("FLAMEWM_CURSOR_THEME")
-        .or_else(|| non_empty("XCURSOR_THEME"))
-        .map_or("", String::as_str);
-    environment.insert(
-        "XCURSOR_SIZE".to_owned(),
-        non_empty("FLAMEWM_CURSOR_SIZE")
-            .or_else(|| non_empty("XCURSOR_SIZE"))
-            .cloned()
-            .unwrap_or_else(|| CURSOR_SIZE.to_owned()),
-    );
-    environment.insert(
-        "XCURSOR_THEME_CORE".to_owned(),
-        existing_env
-            .get("XCURSOR_THEME_CORE")
-            .cloned()
-            .unwrap_or_else(|| "1".to_owned()),
-    );
+    let mut environment = cursor_environment(paths, existing_env, cursor_library_path);
     // An inherited FLAMEWM_CONFIG_DIR (isolated runs, tests) wins over the
     // session default; overwriting it sent the WM to ~/.config/flamewm.
     environment.insert(
@@ -383,6 +364,39 @@ fn flame_environment(
     if let Some(version) = resolve_kwallet_version(existing_env, installed5, installed6) {
         environment.insert("KDE_SESSION_VERSION".to_owned(), version.to_owned());
     }
+    environment
+}
+
+/// `XCURSOR_SIZE`, `XCURSOR_THEME_CORE`, `XCURSOR_PATH` and the resolved `XCURSOR_THEME` of a
+/// FlameWM session. Shared by the X11 session plan and the Wayland compositor, so both sessions
+/// search the same roots and pick the same theme.
+#[must_use]
+pub fn cursor_environment(
+    paths: &SessionPaths,
+    existing_env: &BTreeMap<String, String>,
+    cursor_library_path: Option<&str>,
+) -> BTreeMap<String, String> {
+    let non_empty = |key: &str| existing_env.get(key).filter(|value| !value.is_empty());
+    let mut environment = BTreeMap::new();
+    // Bundled authority first: explicit FLAMEWM_CURSOR_* wins, then existing
+    // XCURSOR_*, then the bundled theme/size defaults.
+    let requested_theme = non_empty("FLAMEWM_CURSOR_THEME")
+        .or_else(|| non_empty("XCURSOR_THEME"))
+        .map_or("", String::as_str);
+    environment.insert(
+        "XCURSOR_SIZE".to_owned(),
+        non_empty("FLAMEWM_CURSOR_SIZE")
+            .or_else(|| non_empty("XCURSOR_SIZE"))
+            .cloned()
+            .unwrap_or_else(|| CURSOR_SIZE.to_owned()),
+    );
+    environment.insert(
+        "XCURSOR_THEME_CORE".to_owned(),
+        existing_env
+            .get("XCURSOR_THEME_CORE")
+            .cloned()
+            .unwrap_or_else(|| "1".to_owned()),
+    );
 
     // Keep bundled themes first, then search standard XDG icon roots so the
     // themes shown by Settings remain usable when the login manager omits
