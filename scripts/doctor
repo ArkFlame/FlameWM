@@ -13,14 +13,14 @@ need(){
 }
 need rustc rustup
 need cargo rustup
-need pkg-config pkg-config
+need pkg-config 'pkg-config; Arch: pkgconf'
 need python3 python3
-need xdpyinfo x11-utils
-need Xvfb xvfb
+need xdpyinfo 'x11-utils; Arch: xorg-xdpyinfo'
+need Xvfb 'xvfb; Arch: xorg-server-xvfb'
 if command -v Xephyr >/dev/null 2>&1; then
   echo "OK command: Xephyr -> $(command -v Xephyr)"
 else
-  echo "MISSING command: Xephyr (xserver-xephyr; required for ./scripts/xephyr)"
+  echo "MISSING command: Xephyr (xserver-xephyr; Arch: xorg-server-xephyr; required for ./scripts/xephyr)"
 fi
 for pc in x11 dbus-1; do
   if pkg-config --exists "$pc" 2>/dev/null; then

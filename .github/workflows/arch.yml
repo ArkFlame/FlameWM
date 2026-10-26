@@ -1,0 +1,74 @@
+name: Arch Linux package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  makepkg:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install packaging tools
+        run: pacman -Syu --noconfirm --needed git namcap xorg-server-xvfb xorg-xprop xorg-xwininfo
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare unprivileged builder
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          chown -R builder: "$GITHUB_WORKSPACE"
+      - name: Build, verify and lint the package
+        run: sudo -u builder -H ./scripts/build-arch --syncdeps --noconfirm
+      - name: Install the package
+        run: |
+          package="$(find .target/arch/packages -name 'flamewm-git-[0-9]*.pkg.tar.zst' ! -name '*-debug-*')"
+          pacman -U --noconfirm "$package"
+          pacman -Qkk flamewm-git
+      - name: Check installed binaries and sessions
+        run: |
+          for binary in $(pacman -Qlq flamewm-git | grep -E '^/usr/(bin|lib/flamewm)/.+[^/]$'); do
+            if [[ "$(file -b "$binary")" == ELF* ]] && ldd "$binary" | grep 'not found'; then
+              exit 1
+            fi
+          done
+          flamewm-wayland --capabilities | grep -Fx 'drm_compiled=true'
+          grep -Fx 'Exec=/usr/lib/flamewm/flamewm-session-wrapper' /usr/share/xsessions/flamewm.desktop
+          grep -Fx 'Exec=/usr/lib/flamewm/flamewm-wayland-session --backend=drm' /usr/share/wayland-sessions/flamewm-wayland.desktop
+      - name: Start the X11 session on Xvfb
+        run: |
+          useradd -m tester
+          Xvfb :91 -screen 0 1280x800x24 -nolisten tcp >xvfb.log 2>&1 &
+          for _ in $(seq 50); do [ -S /tmp/.X11-unix/X91 ] && break; sleep 0.2; done
+          sudo -u tester -H env DISPLAY=:91 XDG_RUNTIME_DIR=/tmp/tester-runtime \
+            sh -c 'mkdir -m 0700 -p "$XDG_RUNTIME_DIR" && exec dbus-run-session -- /usr/lib/flamewm/flamewm-session-wrapper' \
+            >session.log 2>&1 &
+          for _ in $(seq 150); do
+            DISPLAY=:91 xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q 'window id' && break
+            sleep 0.2
+          done
+          DISPLAY=:91 xprop -root _NET_SUPPORTING_WM_CHECK | grep 'window id'
+          sleep 5
+          pgrep -u tester -x flamewm
+          pgrep -u tester -x flamewm-shell
+          pgrep -u tester -x flamewm-desktop
+          DISPLAY=:91 xwininfo -root -children | tail -n +6
+      - name: Session log
+        if: always()
+        run: cat session.log || true
+      - name: Remove the package
+        run: |
+          pkill -u tester || true
+          pacman -R --noconfirm flamewm-git
+          test ! -e /usr/bin/flamewm-session
+          test ! -e /usr/share/xsessions/flamewm.desktop
+          test ! -e /usr/lib/flamewm

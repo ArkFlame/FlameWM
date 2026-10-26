@@ -177,6 +177,12 @@ Ubuntu/Debian development dependencies:
 ./scripts/install-deps-ubuntu.sh
 ```
 
+Arch Linux development dependencies:
+
+```bash
+./scripts/install-deps-arch.sh
+```
+
 Then, from the repository root:
 
 ```bash
@@ -224,6 +230,15 @@ Uninstall:
 
 ```bash
 sudo dpkg -r flamewm
+```
+
+On Arch Linux, build and install the native pacman package instead (details in
+[`docs/INSTALL.md`](docs/INSTALL.md#arch-linux)); upgrade by rebuilding and installing again with
+`pacman -U`, uninstall with `sudo pacman -R flamewm-git`:
+
+```bash
+./scripts/build-arch --syncdeps
+sudo pacman -U .target/arch/packages/flamewm-git-<pkgver>-1-x86_64.pkg.tar.zst
 ```
 
 Without `dpkg` (not tested), the Linux archive can be unpacked as root. Its entries are prefixed `flamewm-<version>/`, so strip that component:

@@ -72,8 +72,8 @@ if [[ "${FLAMEWM_XEPHYR_BUILD:-1}" != 0 ]]; then
   export PATH="$TARGET_DIR/release:$PATH"
 fi
 command -v cargo >/dev/null || { echo 'cargo is required' >&2; exit 1; }
-command -v Xephyr >/dev/null || { echo 'Xephyr is required (Ubuntu/Debian: xserver-xephyr)' >&2; exit 1; }
-command -v xdpyinfo >/dev/null || { echo 'xdpyinfo is required (x11-utils)' >&2; exit 1; }
+command -v Xephyr >/dev/null || { echo 'Xephyr is required (Ubuntu/Debian: xserver-xephyr; Arch: xorg-server-xephyr)' >&2; exit 1; }
+command -v xdpyinfo >/dev/null || { echo 'xdpyinfo is required (Ubuntu/Debian: x11-utils; Arch: xorg-xdpyinfo)' >&2; exit 1; }
 [[ -n "${DISPLAY:-}" ]] || { echo 'Host DISPLAY is unset; Xephyr needs the current X desktop.' >&2; exit 1; }
 
 SCREEN="${FLAMEWM_XEPHYR_SCREEN:-1350x641}"

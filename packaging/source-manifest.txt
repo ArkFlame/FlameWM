@@ -52,6 +52,8 @@ xephyr
 @exec scripts/xephyr
 @exec scripts/package
 @exec scripts/install-deps-ubuntu.sh
+@exec scripts/install-deps-arch.sh
+@exec scripts/build-arch
 @exec scripts/bench-memory
 @exec scripts/check
 @exec scripts/package-source-archive

@@ -17,6 +17,35 @@ package sources are errors. `SHA256SUMS` covers every artifact that was
 emitted.
 
 
+`./scripts/package --stage DESTDIR` runs only the install step: it validates the release
+binaries and packaging sources and installs the runtime tree into an empty or absent `DESTDIR`,
+without archives, `.deb` or checksums. `--libexecdir DIR` (default `/usr/libexec/flamewm`) moves
+the session helpers and rewrites the `Exec` of both session entries, and `--pam FILE` selects the
+PAM service file. Both options are rejected outside `--stage`, so the Debian layout cannot change.
+Distribution packages call this mode instead of repeating the layout.
+
+## Arch Linux package
+
+`packaging/arch/PKGBUILD` builds `flamewm-git` with the Rust package guidelines
+(`cargo fetch --locked` in `prepare()`, `cargo build --frozen --release --workspace --features
+flamewm-wm-wayland/drm` in `build()`) and installs with `scripts/package --stage "$pkgdir"
+--libexecdir /usr/lib/flamewm --pam packaging/arch/flamewm-lock.pam`. `build()` keeps the
+`drm_compiled=true` capability gate of `build-deb`. `CARGO_PROFILE_RELEASE_STRIP=false` leaves
+stripping and the `-debug` split package to makepkg's `strip`/`debug` options. `pkgver()` is the
+workspace version plus `r<commit count>.g<hash>`, so it always starts with `scripts/version`.
+`backup` covers `/etc/pam.d/flamewm-lock` and `/etc/xdg/menus/flamewm-applications.menu` (the
+Debian `conffiles`). Icon and desktop database refreshes come from the pacman hooks of
+`gtk-update-icon-cache` and `desktop-file-utils`; the package ships no `.install` script and no
+service.
+
+`./scripts/build-arch` points a copy of the PKGBUILD at the checkout's committed `HEAD`
+(`git+file://...#commit=`), runs `makepkg --cleanbuild --force` under `.target/arch` (sources,
+build tree and packages stay there) and verifies the produced package: version prefix, session
+entries, helpers in `/usr/lib/flamewm`, no `/usr/libexec`, and the Arch PAM service, followed by
+`namcap` when installed. `.github/workflows/arch.yml` runs it in `archlinux:base-devel` on every
+push and pull request, then installs the package, checks every installed ELF with `ldd`, starts
+the X11 session on Xvfb and removes the package again.
+
 ## Multi-call applications
 
 `flamewm`, `flamewm-desktop`, `flamewm-shell`, `flamewm-settings`, `flamewm-explorer` and
