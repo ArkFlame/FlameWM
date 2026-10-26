@@ -17,6 +17,16 @@ package sources are errors. `SHA256SUMS` covers every artifact that was
 emitted.
 
 
+## Multi-call applications
+
+`flamewm`, `flamewm-desktop`, `flamewm-shell`, `flamewm-settings`, `flamewm-explorer` and
+`flamewm-terminal` are installed as hard links to one executable, `/usr/bin/flamewm-apps`
+(`crates/flamewm-apps`), which runs the application named by `argv[0]`. The applications link the
+same renderer, image decoders, X11 and D-Bus code; as one file the kernel shares those pages
+between their processes. Hard links (not symlinks) keep `current_exe()` and every packaged-asset
+lookup at the application's own name. Each application crate still builds its standalone binary
+for development; `scripts/package` installs only `flamewm-apps` plus the links.
+
 ## Debian architecture and failure handling
 
 The binary Debian control `Architecture` is the host's actual `dpkg
