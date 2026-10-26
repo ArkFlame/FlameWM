@@ -40,10 +40,10 @@ manifest failure does not emit a new, apparently installable package.
 After `./scripts/package`, run:
 
 ```bash
-dpkg-deb -f .target/dist/flamewm_0.1.1_amd64.deb Architecture
+dpkg-deb -f .target/dist/flamewm_0.1.2_amd64.deb Architecture
 # Expected: amd64
 (cd .target/dist && sha256sum -c SHA256SUMS)
-python3 -I tools/flamewm_deb_acceptance.py --deb .target/dist/flamewm_0.1.1_amd64.deb
+python3 -I tools/flamewm_deb_acceptance.py --deb .target/dist/flamewm_0.1.2_amd64.deb
 ```
 
 Do **not** use `--force-architecture`. Install from the actual `dist` path

@@ -1,11 +1,16 @@
 use std::collections::BTreeMap;
 
 use flamewm_api::shortcuts::{
-    ACTION_FULLSCREEN_ESCAPE, ACTION_LAUNCHER, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION,
-    ACTION_SCREENSHOT_WINDOW, ACTION_SESSION_LOCK, ACTION_SHOW_DESKTOP,
+    ACTION_FOCUS_DOWN, ACTION_FOCUS_LEFT, ACTION_FOCUS_RIGHT, ACTION_FOCUS_UP,
+    ACTION_FULLSCREEN_ESCAPE, ACTION_LAUNCHER, ACTION_MOVE_WINDOW_DOWN, ACTION_MOVE_WINDOW_LEFT,
+    ACTION_MOVE_WINDOW_RIGHT, ACTION_MOVE_WINDOW_UP, ACTION_SCREENSHOT_FULL,
+    ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW, ACTION_SESSION_LOCK, ACTION_SHOW_DESKTOP,
     ACTION_SHOW_DESKTOP_CTRL_ALT, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE,
-    ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_SWITCH, ACTION_WORKSPACE_DOWN,
-    ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP, KeyBinding,
+    ACTION_WINDOW_CYCLE_NEXT, ACTION_WINDOW_CYCLE_PREV, ACTION_WINDOW_FLOAT,
+    ACTION_WINDOW_FULLSCREEN, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
+    ACTION_WINDOW_RESIZE_GROW, ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH,
+    ACTION_WORKSPACE_ACTIVATE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT,
+    ACTION_WORKSPACE_MOVE, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP, KeyBinding,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
@@ -19,16 +24,48 @@ pub const ACTION_VOLUME_UP: &str = "VolumeUp";
 pub const ACTION_VOLUME_DOWN: &str = "VolumeDown";
 pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
 
-pub const ACTIONS: [&str; 24] = [
+pub const ACTIONS: [&str; 56] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_LAUNCHER,
     ACTION_WORKSPACE_LEFT,
     ACTION_WORKSPACE_RIGHT,
     ACTION_WORKSPACE_UP,
     ACTION_WORKSPACE_DOWN,
+    "Workspace1",
+    "Workspace2",
+    "Workspace3",
+    "Workspace4",
+    "Workspace5",
+    "Workspace6",
+    "Workspace7",
+    "Workspace8",
+    "Workspace9",
+    "MoveToWorkspace1",
+    "MoveToWorkspace2",
+    "MoveToWorkspace3",
+    "MoveToWorkspace4",
+    "MoveToWorkspace5",
+    "MoveToWorkspace6",
+    "MoveToWorkspace7",
+    "MoveToWorkspace8",
+    "MoveToWorkspace9",
+    ACTION_FOCUS_LEFT,
+    ACTION_FOCUS_RIGHT,
+    ACTION_FOCUS_UP,
+    ACTION_FOCUS_DOWN,
+    ACTION_MOVE_WINDOW_LEFT,
+    ACTION_MOVE_WINDOW_RIGHT,
+    ACTION_MOVE_WINDOW_UP,
+    ACTION_MOVE_WINDOW_DOWN,
     ACTION_WINDOW_CLOSE,
     ACTION_WINDOW_MINIMIZE,
     ACTION_WINDOW_MAXIMIZE,
+    ACTION_WINDOW_FULLSCREEN,
+    ACTION_WINDOW_FLOAT,
+    ACTION_WINDOW_RESIZE_GROW,
+    ACTION_WINDOW_RESIZE_SHRINK,
+    ACTION_WINDOW_CYCLE_NEXT,
+    ACTION_WINDOW_CYCLE_PREV,
     ACTION_WINDOW_SWITCH,
     ACTION_SHOW_DESKTOP,
     ACTION_SHOW_DESKTOP_CTRL_ALT,
@@ -75,9 +112,135 @@ impl Default for ShortcutRegistry {
                 ACTION_WORKSPACE_DOWN.to_owned(),
                 KeyBinding::assigned("Ctrl+Super+Down"),
             ),
+            // Hyprland workspace binds: Super+N activates, Super+Shift+N moves the window.
+            (
+                ACTION_WORKSPACE_ACTIVATE[0].to_owned(),
+                KeyBinding::assigned("Super+1"),
+            ),
+            (
+                ACTION_WORKSPACE_ACTIVATE[1].to_owned(),
+                KeyBinding::assigned("Super+2"),
+            ),
+            (
+                ACTION_WORKSPACE_ACTIVATE[2].to_owned(),
+                KeyBinding::assigned("Super+3"),
+            ),
+            (
+                ACTION_WORKSPACE_ACTIVATE[3].to_owned(),
+                KeyBinding::assigned("Super+4"),
+            ),
+            (
+                ACTION_WORKSPACE_ACTIVATE[4].to_owned(),
+                KeyBinding::assigned("Super+5"),
+            ),
+            (
+                ACTION_WORKSPACE_ACTIVATE[5].to_owned(),
+                KeyBinding::assigned("Super+6"),
+            ),
+            (
+                ACTION_WORKSPACE_ACTIVATE[6].to_owned(),
+                KeyBinding::assigned("Super+7"),
+            ),
+            (
+                ACTION_WORKSPACE_ACTIVATE[7].to_owned(),
+                KeyBinding::assigned("Super+8"),
+            ),
+            (
+                ACTION_WORKSPACE_ACTIVATE[8].to_owned(),
+                KeyBinding::assigned("Super+9"),
+            ),
+            (
+                ACTION_WORKSPACE_MOVE[0].to_owned(),
+                KeyBinding::assigned("Super+Shift+1"),
+            ),
+            (
+                ACTION_WORKSPACE_MOVE[1].to_owned(),
+                KeyBinding::assigned("Super+Shift+2"),
+            ),
+            (
+                ACTION_WORKSPACE_MOVE[2].to_owned(),
+                KeyBinding::assigned("Super+Shift+3"),
+            ),
+            (
+                ACTION_WORKSPACE_MOVE[3].to_owned(),
+                KeyBinding::assigned("Super+Shift+4"),
+            ),
+            (
+                ACTION_WORKSPACE_MOVE[4].to_owned(),
+                KeyBinding::assigned("Super+Shift+5"),
+            ),
+            (
+                ACTION_WORKSPACE_MOVE[5].to_owned(),
+                KeyBinding::assigned("Super+Shift+6"),
+            ),
+            (
+                ACTION_WORKSPACE_MOVE[6].to_owned(),
+                KeyBinding::assigned("Super+Shift+7"),
+            ),
+            (
+                ACTION_WORKSPACE_MOVE[7].to_owned(),
+                KeyBinding::assigned("Super+Shift+8"),
+            ),
+            (
+                ACTION_WORKSPACE_MOVE[8].to_owned(),
+                KeyBinding::assigned("Super+Shift+9"),
+            ),
+            (
+                ACTION_FOCUS_LEFT.to_owned(),
+                KeyBinding::assigned("Super+Left"),
+            ),
+            (
+                ACTION_FOCUS_RIGHT.to_owned(),
+                KeyBinding::assigned("Super+Right"),
+            ),
+            (ACTION_FOCUS_UP.to_owned(), KeyBinding::assigned("Super+Up")),
+            (
+                ACTION_FOCUS_DOWN.to_owned(),
+                KeyBinding::assigned("Super+Down"),
+            ),
+            (
+                ACTION_MOVE_WINDOW_LEFT.to_owned(),
+                KeyBinding::assigned("Super+Shift+Left"),
+            ),
+            (
+                ACTION_MOVE_WINDOW_RIGHT.to_owned(),
+                KeyBinding::assigned("Super+Shift+Right"),
+            ),
+            (
+                ACTION_MOVE_WINDOW_UP.to_owned(),
+                KeyBinding::assigned("Super+Shift+Up"),
+            ),
+            (
+                ACTION_MOVE_WINDOW_DOWN.to_owned(),
+                KeyBinding::assigned("Super+Shift+Down"),
+            ),
             (
                 ACTION_WINDOW_CLOSE.to_owned(),
-                KeyBinding::assigned("Alt+F4"),
+                KeyBinding::assigned("Super+Q"),
+            ),
+            (
+                ACTION_WINDOW_FULLSCREEN.to_owned(),
+                KeyBinding::assigned("Super+F"),
+            ),
+            (
+                ACTION_WINDOW_FLOAT.to_owned(),
+                KeyBinding::assigned("Super+V"),
+            ),
+            (
+                ACTION_WINDOW_RESIZE_GROW.to_owned(),
+                KeyBinding::assigned("Super+equal"),
+            ),
+            (
+                ACTION_WINDOW_RESIZE_SHRINK.to_owned(),
+                KeyBinding::assigned("Super+minus"),
+            ),
+            (
+                ACTION_WINDOW_CYCLE_NEXT.to_owned(),
+                KeyBinding::assigned("Super+J"),
+            ),
+            (
+                ACTION_WINDOW_CYCLE_PREV.to_owned(),
+                KeyBinding::assigned("Super+K"),
             ),
             (
                 ACTION_SCREENSHOT_FULL.to_owned(),
@@ -91,7 +254,10 @@ impl Default for ShortcutRegistry {
                 ACTION_SCREENSHOT_WINDOW.to_owned(),
                 KeyBinding::assigned("Ctrl+Print"),
             ),
-            (ACTION_WINDOW_MINIMIZE.to_owned(), KeyBinding::unassigned()),
+            (
+                ACTION_WINDOW_MINIMIZE.to_owned(),
+                KeyBinding::assigned("Super+M"),
+            ),
             (ACTION_WINDOW_MAXIMIZE.to_owned(), KeyBinding::unassigned()),
             (
                 ACTION_WINDOW_SWITCH.to_owned(),
@@ -123,7 +289,7 @@ impl Default for ShortcutRegistry {
             ),
             (
                 ACTION_OPEN_TERMINAL_SUPER.to_owned(),
-                KeyBinding::assigned("Super+T"),
+                KeyBinding::assigned("Super+Return"),
             ),
             (
                 ACTION_OPEN_TERMINAL_CTRL_ALT.to_owned(),
@@ -335,7 +501,7 @@ mod tests {
 
     #[test]
     fn launcher_is_a_registered_action_with_super_space_default() {
-        assert_eq!(ACTIONS.len(), 24);
+        assert_eq!(ACTIONS.len(), 56);
         assert!(ACTIONS.contains(&ACTION_LAUNCHER));
         let defaults = ShortcutRegistry::default();
         assert_eq!(
@@ -465,7 +631,7 @@ mod tests {
         );
         assert_eq!(
             registry.binding(ACTION_WINDOW_CLOSE),
-            Some(&KeyBinding::assigned("Alt+F4"))
+            Some(&KeyBinding::assigned("Super+Q"))
         );
     }
 

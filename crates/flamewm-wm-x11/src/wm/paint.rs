@@ -141,10 +141,16 @@ impl<'a, C: Connection> Wm<'a, C> {
         &mut self,
         tokens: flamewm_skin::recipes::decoration::ChromeTokens,
     ) -> Result<(), ReplyError> {
-        if tokens == self.decoration_tokens {
+        let titlebars = crate::live_settings::titlebars();
+        let titlebars_changed = titlebars != self.titlebars_applied;
+        if tokens == self.decoration_tokens && !titlebars_changed {
             return Ok(());
         }
         self.decoration_tokens = tokens;
+        if titlebars_changed {
+            self.titlebars_applied = titlebars;
+            self.reflow_titlebars(titlebars)?;
+        }
         let clients: Vec<Window> = self.clients.keys().copied().collect();
         for client in clients {
             let Some((frame, outer, floating)) = self
@@ -163,6 +169,51 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
+    /// Resize every Server frame by the titlebar delta when the setting flips. The frame's
+    /// top edge moves so the client area keeps its on-screen position.
+    fn reflow_titlebars(&mut self, show: bool) -> Result<(), ReplyError> {
+        let h = i32::from(self.config.titlebar_height);
+        if h == 0 {
+            return Ok(());
+        }
+        let (old, new) = if show { (0, h) } else { (h, 0) };
+        let clients: Vec<Window> = self
+            .clients
+            .iter()
+            .filter(|(_, state)| state.decoration == Decoration::Server)
+            .map(|(client, _)| *client)
+            .collect();
+        for client in clients {
+            let Some(state) = self.clients.get_mut(&client) else {
+                continue;
+            };
+            let outer = state.outer;
+            let y = outer.y + old - new;
+            let height = (i32::try_from(outer.height).unwrap_or(i32::MAX) - old + new).max(1);
+            state.set_outer(crate::geometry::Rect::new(
+                outer.x,
+                y,
+                outer.width,
+                u32::try_from(height).unwrap_or(1),
+            ));
+            if let Some(resources) = self.registry.lookup_by_client(client) {
+                for xid in resources.children() {
+                    if input_child_mapped(state.decoration, resources.region_of(xid), show) {
+                        self.conn.map_window(xid)?;
+                    } else {
+                        self.conn.unmap_window(xid)?;
+                    }
+                }
+            }
+            self.apply_frame_geometry(client)?;
+            self.layout_input_children(client)?;
+            self.set_frame_extents(client)?;
+            self.paint_chrome(client)?;
+        }
+        self.mark_windows();
+        Ok(())
+    }
+
     pub(super) fn paint_chrome(&mut self, client: Window) -> Result<(), ReplyError> {
         if self
             .clients
@@ -174,7 +225,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         // Single chrome paint path: delegate scene build to chrome_runtime
         // (J08 paint_plan seam); this owner only bridges cached rasters.
         let titlebar_height = u16::try_from(self.extents_for(client).titlebar_h)
-            .unwrap_or(self.config.titlebar_height);
+            .unwrap_or(self.titlebar_height());
+        if titlebar_height == 0 {
+            // No band to paint; the frame keeps its flat background and the client covers it.
+            return Ok(());
+        }
         let Some((chrome_state, identity, icon, frame, outer)) =
             self.clients.get(&client).map(|state| {
             (
@@ -252,8 +307,8 @@ impl<'a, C: Connection> Wm<'a, C> {
         let placements = lifecycle::input_child_placements(
             state.outer.width.max(1) as i32,
             state.outer.height.max(1) as i32,
-            // Handle thickness comes from the configured titlebar even for client-drawn frames
-            // (zero extents): a zero titlebar would collapse the resize handles to 1px.
+            // Handle thickness follows the effective band; a hidden titlebar keeps the
+            // base resize thickness so edges stay grabbable.
             self.extents().titlebar_h,
             ids,
         );

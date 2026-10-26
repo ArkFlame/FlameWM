@@ -525,11 +525,11 @@ checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
 
 [[package]]
 name = "flamewm-api"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "flamewm-applications"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dbus",
  "flamewm-api",
@@ -551,14 +551,14 @@ dependencies = [
 
 [[package]]
 name = "flamewm-clipboard"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "x11rb 0.14.0",
 ]
 
 [[package]]
 name = "flamewm-control-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
  "flamewm-platform",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-control-dbus"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dbus",
  "flamewm-api",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-control-wire"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
  "flamewm-control-core",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-dbus-reactor"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dbus",
  "flamewm-api",
@@ -595,11 +595,11 @@ dependencies = [
 
 [[package]]
 name = "flamewm-debug"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "flamewm-desktop"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "calloop 0.14.4",
  "flamewm-api",
@@ -624,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-desktop-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
  "flamewm-applications",
@@ -634,14 +634,14 @@ dependencies = [
 
 [[package]]
 name = "flamewm-downloads-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rustix 1.1.4",
 ]
 
 [[package]]
 name = "flamewm-explorer"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "flamewm-api",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-image-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
  "gif",
@@ -676,14 +676,14 @@ dependencies = [
 
 [[package]]
 name = "flamewm-integrations-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
 ]
 
 [[package]]
 name = "flamewm-integrations-linux"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dbus",
  "flamewm-api",
@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-lock"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "calloop 0.14.4",
  "flamewm-api",
@@ -717,32 +717,32 @@ dependencies = [
 
 [[package]]
 name = "flamewm-platform"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
 ]
 
 [[package]]
 name = "flamewm-profiler"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rustix 1.1.4",
 ]
 
 [[package]]
 name = "flamewm-reactor"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "calloop 0.14.4",
 ]
 
 [[package]]
 name = "flamewm-remote-fs"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "flamewm-render-compiler"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-image-core",
  "flamewm-render-core",
@@ -750,11 +750,11 @@ dependencies = [
 
 [[package]]
 name = "flamewm-render-core"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "flamewm-render-x11"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "calloop 0.14.4",
  "flamewm-image-core",
@@ -766,11 +766,11 @@ dependencies = [
 
 [[package]]
 name = "flamewm-ribbons"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "flamewm-screenshot"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "png",
  "x11rb 0.14.0",
@@ -778,14 +778,14 @@ dependencies = [
 
 [[package]]
 name = "flamewm-session-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
 ]
 
 [[package]]
 name = "flamewm-settings"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
  "flamewm-control-core",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-settings-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
  "flamewm-control-core",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-shell"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "calloop 0.14.4",
  "chrono",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-shell-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
  "flamewm-ui-core",
@@ -846,11 +846,11 @@ dependencies = [
 
 [[package]]
 name = "flamewm-skin"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "flamewm-terminal"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
  "flamewm-clipboard",
@@ -866,21 +866,21 @@ dependencies = [
 
 [[package]]
 name = "flamewm-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-ui-core",
 ]
 
 [[package]]
 name = "flamewm-ui-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
 ]
 
 [[package]]
 name = "flamewm-ui-x11"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "calloop 0.14.4",
  "flamewm-reactor",
@@ -894,14 +894,14 @@ dependencies = [
 
 [[package]]
 name = "flamewm-window-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
 ]
 
 [[package]]
 name = "flamewm-wm"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
  "flamewm-control-core",
@@ -917,7 +917,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-wm-wayland"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "calloop 0.14.4",
  "dbus",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-wm-x11"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "calloop 0.14.4",
  "flamewm-api",
@@ -961,14 +961,14 @@ dependencies = [
 
 [[package]]
 name = "flamewm-x11-canary"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "x11rb 0.14.0",
 ]
 
 [[package]]
 name = "flamewm-x11-desktop"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
  "flamewm-applications",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-xsettings"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-api",
  "x11rb 0.14.0",

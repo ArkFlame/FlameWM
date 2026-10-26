@@ -180,9 +180,47 @@ impl<'a, C: Connection> Wm<'a, C> {
             ACTION_VOLUME_UP => self.changes.media_audio_key = Some(MediaAudioKey::VolumeUp),
             ACTION_VOLUME_DOWN => self.changes.media_audio_key = Some(MediaAudioKey::VolumeDown),
             ACTION_VOLUME_MUTE => self.changes.media_audio_key = Some(MediaAudioKey::VolumeMute),
-            other => log_unhandled_shortcut_once(other),
+            ACTION_WINDOW_FULLSCREEN => self.on_active(Self::toggle_fullscreen)?,
+            ACTION_WINDOW_FLOAT => self.on_active(Self::toggle_float)?,
+            ACTION_WINDOW_CYCLE_NEXT => self.cycle_window(1)?,
+            ACTION_WINDOW_CYCLE_PREV => self.cycle_window(-1)?,
+            ACTION_WINDOW_RESIZE_GROW => self.resize_active(true)?,
+            ACTION_WINDOW_RESIZE_SHRINK => self.resize_active(false)?,
+            other => {
+                if !self.dispatch_hyprland_binding(other)? {
+                    log_unhandled_shortcut_once(other);
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Hyprland-style binds whose target is encoded in the action id: absolute workspace
+    /// activation/move and directional focus/move. Returns false for any other action.
+    fn dispatch_hyprland_binding(&mut self, action: &str) -> Result<bool, ReplyError> {
+        if let Some(index) = workspace_activate_index(action) {
+            if index < self.workspace_count {
+                self.switch_workspace(index)?;
+            }
+            return Ok(true);
+        }
+        if let Some(index) = workspace_move_index(action) {
+            if index < self.workspace_count {
+                if let Some(client) = self.active {
+                    self.move_to_workspace(client, index)?;
+                }
+            }
+            return Ok(true);
+        }
+        if let Some(direction) = focus_direction(action) {
+            self.focus_direction(direction)?;
+            return Ok(true);
+        }
+        if let Some(direction) = move_direction(action) {
+            self.move_active(direction)?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// Runs an escape chord from either feed.

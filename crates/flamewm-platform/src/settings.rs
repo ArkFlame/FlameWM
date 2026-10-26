@@ -5,25 +5,14 @@ use std::time::Duration;
 
 use flamewm_api::panels::PanelEdge;
 use flamewm_api::settings::{AppearanceMode, SettingValue};
-use flamewm_api::shortcuts::{
-    ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
-    ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
-};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
 use crate::chrome::parse_hex_rgb;
 use crate::storage::write_atomic_text;
 
-const KNOWN_HOTKEYS: [&str; 8] = [
-    ACTION_TOGGLE_START_MENU,
-    ACTION_WORKSPACE_LEFT,
-    ACTION_WORKSPACE_RIGHT,
-    ACTION_WORKSPACE_UP,
-    ACTION_WORKSPACE_DOWN,
-    ACTION_WINDOW_CLOSE,
-    ACTION_WINDOW_MINIMIZE,
-    ACTION_WINDOW_MAXIMIZE,
-];
+/// Every action the shortcut registry can bind is persistable; this allowlist used to lag it,
+/// so a file overriding e.g. `OpenTerminalSuper` was rejected as a whole.
+const KNOWN_HOTKEYS: [&str; 56] = crate::shortcuts::ACTIONS;
 
 /// Generates `as_str` (wire text) and `parse` (wire text to variant) from one variant table.
 macro_rules! wire_enum {
@@ -204,6 +193,8 @@ pub struct ProductSettings {
     pub show_content_while_dragging: bool,
     /// `windowShadows`: Win7-style frame shadows behind floating windows.
     pub window_shadows: bool,
+    /// `titlebars`: draw the Flame titlebar; when off, windows keep only resize edges.
+    pub titlebars: bool,
     pub focus_follows_mouse: bool,
     pub font_family: String,
     pub font_bold: bool,
@@ -226,12 +217,16 @@ pub struct ProductSettings {
     pub taskbar_show_clock: bool,
     pub taskbar_show_workspaces: bool,
     pub taskbar_battery_only_when_relevant: bool,
+    /// `taskbarActivities`: show the running-window area; off also forbids minimizing.
+    pub taskbar_activities: bool,
+    /// `taskbarSeparate`: one rounded background per element instead of a unified bar.
+    pub taskbar_separate: bool,
     pub weather_enabled: bool,
     /// Encoded weather location (`lat\tlon\tcountry\tname`); empty means unset.
     pub weather_location: String,
     /// `celsius` or `fahrenheit`.
     pub weather_units: String,
-    /// Sets `weatherLocation` from the IP-geolocated position (privacy-first: off by default).
+    /// Sets `weatherLocation` from the IP-geolocated position.
     pub auto_location_enabled: bool,
     /// Applies the IP-geolocated IANA time zone to the shell and lock clocks.
     pub auto_time_zone_enabled: bool,
@@ -319,6 +314,7 @@ impl Default for ProductSettings {
             snap_preview_enabled: true,
             show_content_while_dragging: false,
             window_shadows: true,
+            titlebars: true,
             focus_follows_mouse: false,
             font_family: "IBM Plex Sans".to_owned(),
             font_bold: false,
@@ -340,11 +336,13 @@ impl Default for ProductSettings {
             taskbar_show_clock: true,
             taskbar_show_workspaces: true,
             taskbar_battery_only_when_relevant: false,
+            taskbar_activities: true,
+            taskbar_separate: true,
             weather_enabled: true,
             weather_location: String::new(),
             weather_units: "celsius".to_owned(),
-            auto_location_enabled: false,
-            auto_time_zone_enabled: false,
+            auto_location_enabled: true,
+            auto_time_zone_enabled: true,
             auto_time_zone: String::new(),
             surface_color: "#191b1d".to_owned(),
             surface_opacity: 50,
@@ -1077,6 +1075,8 @@ stable_settings! {
     (false, taskbar, "taskbarShowClock", taskbar_show_clock),
     (false, taskbar, "taskbarShowWorkspaces", taskbar_show_workspaces),
     (false, taskbar, "taskbarBatteryOnlyWhenRelevant", taskbar_battery_only_when_relevant),
+    (false, taskbar, "taskbarActivities", taskbar_activities),
+    (false, taskbar, "taskbarSeparate", taskbar_separate),
     (false, weather, "weatherEnabled", weather_enabled),
     (false, weather, "weatherLocation", weather_location),
     (false, weather, "weatherUnits", weather_units),
@@ -1087,6 +1087,7 @@ stable_settings! {
     (false, windows, "snapPreviewEnabled", snap_preview_enabled),
     (false, windows, "showContentWhileDragging", show_content_while_dragging),
     (true, windows, "windowShadows", window_shadows),
+    (false, windows, "titlebars", titlebars),
     (false, windows, "focusFollowsMouse", focus_follows_mouse),
     (false, appearance, "cursorSize", cursor_size),
     (false, appearance, "cursorShadow", cursor_shadow),
@@ -2318,8 +2319,8 @@ mod tests {
         assert!(defaults.weather_enabled);
         assert!(defaults.weather_location.is_empty());
         assert_eq!(defaults.weather_units, "celsius");
-        assert!(!defaults.auto_location_enabled);
-        assert!(!defaults.auto_time_zone_enabled);
+        assert!(defaults.auto_location_enabled);
+        assert!(defaults.auto_time_zone_enabled);
         let text = ConfigStore::serialize(&defaults);
         for key in [
             "weatherEnabled",

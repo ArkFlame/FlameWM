@@ -58,10 +58,18 @@ if [[ "${FLAMEWM_XEPHYR_PRIVATE_DBUS_INNER:-}" != "1" ]]; then
 fi
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 cd "$ROOT"
+# Cargo and the nested session must use the SAME release directory. Previously
+# Cargo honored CARGO_TARGET_DIR but the launcher always used .target/release,
+# silently running an older Settings/WM/Shell after a successful build.
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/.target}"
+if [[ "$TARGET_DIR" != /* ]]; then
+  TARGET_DIR="$ROOT/$TARGET_DIR"
+fi
+export CARGO_TARGET_DIR="$TARGET_DIR"
 # Checkout binaries shadow PATH only for checkout builds; FLAMEWM_XEPHYR_BUILD=0
 # leaves bare-name lookups to the installed prefix.
 if [[ "${FLAMEWM_XEPHYR_BUILD:-1}" != 0 ]]; then
-  export PATH="$ROOT/.target/release:$PATH"
+  export PATH="$TARGET_DIR/release:$PATH"
 fi
 command -v cargo >/dev/null || { echo 'cargo is required' >&2; exit 1; }
 command -v Xephyr >/dev/null || { echo 'Xephyr is required (Ubuntu/Debian: xserver-xephyr)' >&2; exit 1; }
@@ -100,11 +108,12 @@ VERSION="$("$ROOT/scripts/version")"
 
 OUTPUT_DIR="${FLAMEWM_XEPHYR_OUTPUT_DIR:-$ROOT/.target/flamewm}"
 mkdir -p "$OUTPUT_DIR"
-WM_BIN="${FLAMEWM_XEPHYR_WM_BIN:-./.target/release/flamewm}"
-DESKTOP_BIN="${FLAMEWM_XEPHYR_DESKTOP_BIN:-./.target/release/flamewm-desktop}"
-SHELL_BIN="${FLAMEWM_XEPHYR_SHELL_BIN:-./.target/release/flamewm-shell}"
-SESSION_BIN="${FLAMEWM_XEPHYR_SESSION_BIN:-./.target/release/flamewm-session}"
-CANARY_BIN="${FLAMEWM_XEPHYR_CANARY_BIN:-./.target/release/flamewm-x11-canary}"
+WM_BIN="${FLAMEWM_XEPHYR_WM_BIN:-$TARGET_DIR/release/flamewm}"
+DESKTOP_BIN="${FLAMEWM_XEPHYR_DESKTOP_BIN:-$TARGET_DIR/release/flamewm-desktop}"
+SHELL_BIN="${FLAMEWM_XEPHYR_SHELL_BIN:-$TARGET_DIR/release/flamewm-shell}"
+SESSION_BIN="${FLAMEWM_XEPHYR_SESSION_BIN:-$TARGET_DIR/release/flamewm-session}"
+CANARY_BIN="${FLAMEWM_XEPHYR_CANARY_BIN:-$TARGET_DIR/release/flamewm-x11-canary}"
+SETTINGS_BIN="$TARGET_DIR/release/flamewm-settings"
 if [[ "$BUILD" == 1 ]]; then
   # Fail early when desktop UI and core were merged from different FlameWM passes.
   # Otherwise Cargo reports E0432/E0599/E0061 deep into a full release build.
@@ -117,6 +126,21 @@ if [[ "$BUILD" == 1 ]]; then
   python3 -I tools/ensure_desktop_conversion_cargo.py --profile release --include-ui
   echo "[1/5] Building FlameWM WM + desktop + shell + settings + Explorer + X11 canary"
   cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-explorer -p flamewm-terminal -p flamewm-x11-canary
+  # The Settings UI is embedded into the executable at compile time. Assert
+  # that the exact binary Xephyr will launch contains the newly added control;
+  # a successful Cargo exit must not masquerade as a successful UI update.
+  if [[ ! -x "$SETTINGS_BIN" ]]; then
+    echo "FLAMEWM_XEPHYR_FAIL: Settings build missing: $SETTINGS_BIN" >&2
+    exit 1
+  fi
+  if ! LC_ALL=C grep -aFq 'taskbar-separate-on' "$SETTINGS_BIN" || \
+     ! LC_ALL=C grep -aFq 'Separate taskbar' "$SETTINGS_BIN"; then
+    echo "FLAMEWM_XEPHYR_FAIL: Settings binary lacks compiled Separate taskbar markup: $SETTINGS_BIN" >&2
+    echo "Check the Cargo target directory and ui/settings.html compilation; refusing to launch stale UI." >&2
+    exit 1
+  fi
+  echo "[settings] checkout executable verified: $SETTINGS_BIN"
+  echo "[settings] PATH resolution: $(command -v flamewm-settings)"
 elif [[ "$BUILD" != 0 ]]; then
   echo "FLAMEWM_XEPHYR_BUILD must be 0 or 1" >&2; exit 2
 fi
@@ -561,7 +585,7 @@ if [[ -d "$host_data_home/icons" && ! -e "$XDG_DATA_HOME/icons" ]]; then
 fi
 # Folder opens and the start menu use the nested Explorer entry, derived from
 # the packaged desktop file with the resolved binary path.
-explorer_bin="$ROOT/.target/release/flamewm-explorer"
+explorer_bin="$TARGET_DIR/release/flamewm-explorer"
 [[ -x "$explorer_bin" ]] || explorer_bin="$(command -v flamewm-explorer || true)"
 if [[ -n "$explorer_bin" && -x "$explorer_bin" ]]; then
   sed -e "s|^Exec=flamewm-explorer|Exec=$explorer_bin|" -e "s|^TryExec=flamewm-explorer|TryExec=$explorer_bin|" \
@@ -572,13 +596,28 @@ else
   echo "[xephyr] flamewm-explorer not found; nested folder opens use the system handler" >&2
 fi
 # The nested Terminal entry makes 'Open Terminal Here' and the start menu find flamewm-terminal.
-terminal_bin="$ROOT/.target/release/flamewm-terminal"
+terminal_bin="$TARGET_DIR/release/flamewm-terminal"
 [[ -x "$terminal_bin" ]] || terminal_bin="$(command -v flamewm-terminal || true)"
 if [[ -n "$terminal_bin" && -x "$terminal_bin" ]]; then
   sed -e "s|^Exec=flamewm-terminal|Exec=$terminal_bin|" -e "s|^TryExec=flamewm-terminal|TryExec=$terminal_bin|" \
     "$ROOT/packaging/flamewm-terminal.desktop" >"$XDG_DATA_HOME/applications/flamewm-terminal.desktop"
 else
   echo "[xephyr] flamewm-terminal not found; nested terminal entry is absent" >&2
+fi
+
+# Application discovery may prefer an installed .desktop entry with a stale
+# absolute Exec=/usr/bin/flamewm-settings. Shadow it in the nested XDG home.
+if [[ -x "$SETTINGS_BIN" ]]; then
+  cat >"$XDG_DATA_HOME/applications/flamewm-settings.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=System Settings
+Comment=FlameWM checkout Settings for the nested Xephyr session
+Exec=$SETTINGS_BIN
+TryExec=$SETTINGS_BIN
+Icon=preferences-system
+Categories=Settings;System;
+EOF
 fi
 
 echo "[2/5] Starting Xephyr $nested ($SCREEN)"

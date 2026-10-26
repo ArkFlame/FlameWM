@@ -63,6 +63,22 @@ pub fn blurred_argb(snapshot: &RgbaImage, opacity_percent: u8, blur_percent: u8)
     )
 }
 
+/// Solid backdrop for `rect` in `color`. Used when the wallpaper cannot be decoded: a
+/// translucent bar must never composite over a cleared (black) scene.
+#[must_use]
+pub fn solid_backdrop(color: (u8, u8, u8), rect: (i32, i32, u32, u32)) -> RgbaImage {
+    let (_, _, width, height) = rect;
+    let pixels = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    RgbaImage {
+        width,
+        height,
+        pixels: [color.0, color.1, color.2, 255]
+            .repeat(pixels / 4),
+    }
+}
+
 /// Debug trace for taskbar pseudo-transparency, enabled by `FLAMEWM_DEBUG_BACKDROP=1` (stderr).
 pub fn backdrop_trace(message: std::fmt::Arguments<'_>) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

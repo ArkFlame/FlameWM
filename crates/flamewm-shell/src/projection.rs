@@ -42,6 +42,12 @@ const TASK_SLOT_COUNT: usize = 8;
 const TASKBAR_DEFAULT_HEIGHT: f32 = 44.0;
 /// Logical edge of a taskbar task icon, before the output's shell scale.
 const TASK_ICON_LOGICAL_PX: f32 = 25.0;
+/// `.task-slot` width in CSS px (`ui/shell/flamewm.css`).
+const TASK_SLOT_WIDTH: f32 = 42.0;
+/// `.tray-button` width in CSS px.
+const TRAY_BUTTON_WIDTH: f32 = 30.0;
+/// Height of one taskbar element row in CSS px (`.task-slots`, `.tray-button`).
+const TASKBAR_ELEMENT_HEIGHT: f32 = 44.0;
 
 /// Taskbar task icon raster edge in device pixels. The icon node is laid out
 /// in logical px and scaled by the panel's UI scale, so requesting only 25 px
@@ -78,6 +84,132 @@ pub(crate) fn task_accent() -> UiColor {
         g: (packed >> 8) as u8,
         b: packed as u8,
     }
+}
+
+/// Surface fill each separate-mode element capsule paints, fed by the settings projection.
+/// Default matches `ProductSettings::default()`: surfaceColor `#191b1d` at 50% opacity.
+static TASKBAR_SURFACE_ARGB: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x8019_1b1d);
+
+/// Records the surface fill used by the separate-taskbar capsules.
+pub fn set_taskbar_surface(color: UiColor) {
+    let packed = (u32::from(color.a) << 24)
+        | (u32::from(color.r) << 16)
+        | (u32::from(color.g) << 8)
+        | u32::from(color.b);
+    TASKBAR_SURFACE_ARGB.store(packed, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn taskbar_surface() -> UiColor {
+    let packed = TASKBAR_SURFACE_ARGB.load(std::sync::atomic::Ordering::Relaxed);
+    UiColor {
+        a: (packed >> 24) as u8,
+        r: (packed >> 16) as u8,
+        g: (packed >> 8) as u8,
+        b: packed as u8,
+    }
+}
+
+/// Same 8px rounding the taskbar elements use on hover (`ui/shell/flamewm.css`), so a
+/// separate-mode capsule and its hover highlight share one shape.
+const ELEMENT_RADIUS: f32 = 8.0;
+const TRANSPARENT_FILL: UiColor = UiColor {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 0,
+};
+
+/// Separate mode: every element paints its own rounded capsule and the bar root paints none,
+/// so the raw wallpaper shows between them. The blur is per node, never over the whole bar.
+/// Unified mode clears the capsules and the root keeps the single surface fill.
+pub(crate) fn project_element_backgrounds(
+    document: &mut impl UiDocumentAccess,
+    items: TaskbarItems,
+    rendered_slots: usize,
+    tray_visible: bool,
+    clock_visible: bool,
+) -> Result<(), String> {
+    RENDERED_SLOTS.store(rendered_slots, std::sync::atomic::Ordering::Relaxed);
+    TRAY_VISIBLE.store(tray_visible, std::sync::atomic::Ordering::Relaxed);
+    let fill = if items.separate {
+        taskbar_surface()
+    } else {
+        TRANSPARENT_FILL
+    };
+    let blur = items.separate.then_some(items.blur_percent);
+    // The capsules own the background; start/clock buttons keep their CSS hover on top.
+    document.background("start-capsule", fill)?;
+    document.corner_radius("start-capsule", ELEMENT_RADIUS)?;
+    document.node_backdrop("start-capsule", blur)?;
+    // A capsule with no icons inside is not painted at all.
+    let capsule = |shown: bool| if shown { fill } else { TRANSPARENT_FILL };
+    let capsule_blur = |shown: bool| (items.separate && shown).then_some(items.blur_percent);
+    document.background("tray-group", capsule(tray_visible))?;
+    document.corner_radius("tray-group", ELEMENT_RADIUS)?;
+    document.node_backdrop("tray-group", capsule_blur(tray_visible))?;
+    document.background("clock-capsule", capsule(clock_visible))?;
+    document.corner_radius("clock-capsule", ELEMENT_RADIUS)?;
+    document.node_backdrop("clock-capsule", capsule_blur(clock_visible))?;
+    // No capsule behind the workspace selector: its cells carry the selector's own fills.
+    document.background("workspace-pager", TRANSPARENT_FILL)?;
+    document.corner_radius("workspace-pager", 0.0)?;
+    document.node_backdrop("workspace-pager", None)?;
+    let slots = if items.separate && rendered_slots > 0 {
+        taskbar_surface()
+    } else {
+        TRANSPARENT_FILL
+    };
+    document.background("task-slots", slots)?;
+    document.corner_radius("task-slots", ELEMENT_RADIUS)?;
+    document.node_backdrop(
+        "task-slots",
+        (items.separate && rendered_slots > 0).then_some(items.blur_percent),
+    )?;
+    Ok(())
+}
+
+/// Whether the grouped tray renders any icon; the settings path reuses the last state value.
+pub(crate) fn tray_any_visible(
+    system: &flamewm_api::system::SystemSnapshot,
+    items: TaskbarItems,
+) -> bool {
+    let status = crate::taskbar::status::project(system).views;
+    let media = status.media.visible
+        && matches!(
+            system.media.playback,
+            flamewm_api::system::PlaybackState::Playing
+                | flamewm_api::system::PlaybackState::Paused
+        );
+    media
+        || (status.audio.visible && items.volume)
+        || (status.network.visible && items.network)
+        || crate::taskbar::status::battery::tray_visible(
+            &system.power,
+            items.battery,
+            items.battery_only_when_relevant,
+        )
+        // Weather is projected by its own provider; the setting is the only signal here.
+        || items.weather
+}
+
+/// Window buttons the last element projection rendered; a settings change reuses it so the
+/// task-slots capsule is not cleared when only the surface colour/opacity changed.
+static RENDERED_SLOTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static TRAY_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Re-applies the element capsules from a settings snapshot without a panel state pass.
+pub fn reapply_element_backgrounds(
+    document: &mut impl UiDocumentAccess,
+    items: TaskbarItems,
+) -> Result<(), String> {
+    project_element_backgrounds(
+        document,
+        items,
+        RENDERED_SLOTS.load(std::sync::atomic::Ordering::Relaxed),
+        TRAY_VISIBLE.load(std::sync::atomic::Ordering::Relaxed),
+        items.clock,
+    )
 }
 
 /// Active pager cell fill: the live accent at the stylesheet's `--accent-soft` alpha.
@@ -229,7 +361,7 @@ pub struct PanelView<'a> {
     pub task_progress: &'a [flamewm_api::panels::TaskProgressEntry],
 }
 
-/// Taskbar item visibility settings. Each flag is the setting alone; the
+/// Taskbar item settings. Each flag is the setting alone; the
 /// projection ANDs it with the item's availability. Defaults match
 /// `ProductSettings::default()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,6 +373,12 @@ pub struct TaskbarItems {
     pub battery_only_when_relevant: bool,
     pub clock: bool,
     pub workspaces: bool,
+    /// `taskbarActivities`: the running-window area renders at all.
+    pub activities: bool,
+    /// `taskbarSeparate`: one rounded background per element instead of a unified bar.
+    pub separate: bool,
+    /// `surfaceBlurPercent`: blur applied behind each separate-mode capsule.
+    pub blur_percent: u8,
 }
 
 impl Default for TaskbarItems {
@@ -253,6 +391,9 @@ impl Default for TaskbarItems {
             battery_only_when_relevant: false,
             clock: true,
             workspaces: true,
+            activities: true,
+            separate: true,
+            blur_percent: 80,
         }
     }
 }
@@ -412,13 +553,61 @@ pub fn project_panel(
             document.visible(&line_id, false)?;
             document.background_clear(&slot_id)?;
         }
-        document.visible(&slot_id, states.get(index).is_some())?;
+        document.visible(
+            &slot_id,
+            view.items.activities && states.get(index).is_some(),
+        )?;
     }
+    project_task_slots_extent(document, task_slots_rendered(states.len(), view.items))?;
+    document.visible("task-slot-insert", view.items.activities)?;
 
     project_pager(document, snapshot.workspaces.as_ref())?;
+    document.visible("workspace-pager", view.items.workspaces)?;
 
     project_clock(document)?;
-    project_status_tray(document, &snapshot.system, view.items)
+    project_status_tray(document, &snapshot.system, view.items)?;
+    project_element_backgrounds(
+        document,
+        view.items,
+        task_slots_rendered(states.len(), view.items),
+        tray_any_visible(&snapshot.system, view.items),
+        view.items.clock,
+    )
+}
+
+/// Window buttons `#task-slots` renders: `taskbarActivities` off hides the whole area.
+pub(crate) fn task_slots_rendered(states: usize, items: TaskbarItems) -> usize {
+    if items.activities {
+        states.min(TASK_SLOT_COUNT)
+    } else {
+        0
+    }
+}
+
+/// `#task-slots` covers exactly the window buttons that render, so a separate-mode capsule hugs
+/// them and the bar reflows; zero buttons leave no area behind for an empty capsule.
+pub(crate) fn project_task_slots_extent(
+    document: &mut impl UiDocumentAccess,
+    rendered: usize,
+) -> Result<(), String> {
+    document.size(
+        "task-slots",
+        rendered as f32 * TASK_SLOT_WIDTH,
+        TASKBAR_ELEMENT_HEIGHT,
+    )
+}
+
+/// Collapses a hidden tray button so the grouped tray capsule encloses only the icons that render.
+pub(crate) fn project_tray_button(
+    document: &mut impl UiDocumentAccess,
+    id: &str,
+    shown: bool,
+) -> Result<(), String> {
+    document.size(
+        id,
+        if shown { TRAY_BUTTON_WIDTH } else { 0.0 },
+        TASKBAR_ELEMENT_HEIGHT,
+    )
 }
 
 /// Projects a determinate progress fill for one task slot, clearing stale fills when
@@ -450,15 +639,14 @@ pub(crate) fn project_status_tray(
     items: TaskbarItems,
 ) -> Result<(), String> {
     let status = crate::taskbar::status::project(system).views;
-    document.visible(
-        "tray-media",
-        status.media.visible
-            && matches!(
-                system.media.playback,
-                flamewm_api::system::PlaybackState::Playing
-                    | flamewm_api::system::PlaybackState::Paused
-            ),
-    )?;
+    let media = status.media.visible
+        && matches!(
+            system.media.playback,
+            flamewm_api::system::PlaybackState::Playing
+                | flamewm_api::system::PlaybackState::Paused
+        );
+    document.visible("tray-media", media)?;
+    project_tray_button(document, "tray-media", media)?;
     document.visible(
         "tray-play-icon",
         matches!(
@@ -473,10 +661,14 @@ pub(crate) fn project_status_tray(
             Some(flamewm_ui_core::IconRole::MediaPause)
         ),
     )?;
-    document.visible("tray-volume", status.audio.visible && items.volume)?;
+    let volume = status.audio.visible && items.volume;
+    document.visible("tray-volume", volume)?;
+    project_tray_button(document, "tray-volume", volume)?;
     document.visible("tray-volume-icon", !status.audio.muted)?;
     document.visible("tray-volume-muted-icon", status.audio.muted)?;
-    document.visible("tray-network", status.network.visible && items.network)?;
+    let network = status.network.visible && items.network;
+    document.visible("tray-network", network)?;
+    project_tray_button(document, "tray-network", network)?;
     project_battery_tray(document, &system.power, items)?;
     document.visible("clock-button", items.clock)?;
     Ok(())
@@ -493,10 +685,9 @@ pub fn project_battery_tray(
     use flamewm_api::system::PowerState;
     let charging = power.state == PowerState::Charging;
     let glyph = glyph_for_percent(power.percent);
-    document.visible(
-        "tray-battery",
-        tray_visible(power, items.battery, items.battery_only_when_relevant),
-    )?;
+    let tray = tray_visible(power, items.battery, items.battery_only_when_relevant);
+    document.visible("tray-battery", tray)?;
+    project_tray_button(document, "tray-battery", tray)?;
     project_glyph_nodes(document, "tray-battery-", glyph, charging)
 }
 

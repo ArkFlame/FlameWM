@@ -2073,8 +2073,19 @@ impl ShellLoop {
         let fit_name = text_setting(settings, "wallpaperFit");
         let root = flamewm_ui_x11::backdrop::root_geometry().ok();
         let packaged_root = crate::entry::packaged_root();
+        let color = text_setting(settings, "wallpaperColor");
+        let solid = flamewm_platform::chrome::parse_hex_rgb(&format!(
+            "#{}",
+            color.trim_start_matches('#')
+        ))
+        .unwrap_or((0x23, 0x26, 0x29));
         let wallpaper = |rect| {
-            let (width, height) = root?;
+            // A snapshot must always exist: at opacity < 100 the bar composites over it, and a
+            // missing snapshot leaves the cleared (black) scene showing through.
+            let fallback = || flamewm_shell::surface_backdrop::solid_backdrop(solid, rect);
+            let Some((width, height)) = root else {
+                return Some(fallback());
+            };
             flamewm_shell::surface_backdrop::wallpaper_source(
                 &wallpaper_path,
                 flamewm_image_core::wallpaper::parse(&fit_name),
@@ -2082,6 +2093,7 @@ impl ShellLoop {
                 rect,
                 &packaged_root,
             )
+            .or_else(|| Some(fallback()))
         };
         if let Err(error) =
             self.surfaces
@@ -2089,7 +2101,11 @@ impl ShellLoop {
         {
             eprintln!("flamewm-shell: taskbar backdrop capture failed (nonfatal): {error}");
         }
-        if let Err(error) = self.surfaces.apply_panel_backdrop(runtime, opacity, blur) {
+        let separate = crate::settings_projection::taskbar_items(Some(settings)).separate;
+        if let Err(error) = self
+            .surfaces
+            .apply_panel_backdrop(runtime, opacity, blur, separate)
+        {
             eprintln!("flamewm-shell: taskbar backdrop failed (nonfatal): {error}");
         }
     }

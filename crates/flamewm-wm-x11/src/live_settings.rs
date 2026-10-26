@@ -11,6 +11,10 @@ const DEFAULT_SNAP_PREVIEW_ENABLED: bool = true;
 const DEFAULT_FOCUS_FOLLOWS_MOUSE: bool = false;
 /// XP style: moves and resizes show an outline and apply the real geometry on release.
 const DEFAULT_SHOW_CONTENT_WHILE_DRAGGING: bool = false;
+/// `titlebars`: Server decoration draws the Flame titlebar band.
+const DEFAULT_TITLEBARS: bool = true;
+/// `taskbarActivities`: the shell shows running windows, so they may be minimized.
+const DEFAULT_TASKBAR_ACTIVITIES: bool = true;
 /// Neutral grey until a settings snapshot supplies `accent`.
 const DEFAULT_ACCENT_RGB: (u8, u8, u8) = (0x7f, 0x87, 0x8e);
 
@@ -18,6 +22,8 @@ static SNAP_PREVIEW_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_SNAP_PREVIEW_E
 static FOCUS_FOLLOWS_MOUSE: AtomicBool = AtomicBool::new(DEFAULT_FOCUS_FOLLOWS_MOUSE);
 static SHOW_CONTENT_WHILE_DRAGGING: AtomicBool =
     AtomicBool::new(DEFAULT_SHOW_CONTENT_WHILE_DRAGGING);
+static TITLEBARS: AtomicBool = AtomicBool::new(DEFAULT_TITLEBARS);
+static TASKBAR_ACTIVITIES: AtomicBool = AtomicBool::new(DEFAULT_TASKBAR_ACTIVITIES);
 /// `shareWallpaper`: one wallpaper spans the outputs instead of one copy per output.
 static SHARE_WALLPAPER: AtomicBool = AtomicBool::new(false);
 /// Live `accent` packed as `0x00RRGGBB`.
@@ -77,6 +83,14 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     SNAP_PREVIEW_ENABLED.store(snap_preview, Ordering::Relaxed);
     FOCUS_FOLLOWS_MOUSE.store(focus_follows_mouse, Ordering::Relaxed);
     SHOW_CONTENT_WHILE_DRAGGING.store(show_content_from_snapshot(snapshot), Ordering::Relaxed);
+    TITLEBARS.store(
+        boolean_setting(snapshot, "titlebars", DEFAULT_TITLEBARS),
+        Ordering::Relaxed,
+    );
+    TASKBAR_ACTIVITIES.store(
+        boolean_setting(snapshot, "taskbarActivities", DEFAULT_TASKBAR_ACTIVITIES),
+        Ordering::Relaxed,
+    );
     SHARE_WALLPAPER.store(
         boolean_setting(snapshot, "shareWallpaper", false),
         Ordering::Relaxed,
@@ -107,6 +121,16 @@ pub(crate) fn share_wallpaper() -> bool {
 /// `false` (default) draws an outline during interactive move/resize.
 pub(crate) fn show_content_while_dragging() -> bool {
     SHOW_CONTENT_WHILE_DRAGGING.load(Ordering::Relaxed)
+}
+
+/// `titlebars` (default `true`): Server frames include the titlebar band.
+pub(crate) fn titlebars() -> bool {
+    TITLEBARS.load(Ordering::Relaxed)
+}
+
+/// `taskbarActivities` (default `true`): the shell lists running windows, so minimize is allowed.
+pub(crate) fn taskbar_activities() -> bool {
+    TASKBAR_ACTIVITIES.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -213,5 +237,29 @@ mod tests {
             ("focusFollowsMouse", SettingValue::Integer(1)),
         ]));
         assert_eq!(mapped, (true, false));
+    }
+
+    #[test]
+    fn titlebars_and_activities_default_on_and_map_booleans() {
+        // Pure mapping only: `sync` writes process globals that parallel WM tests read.
+        let empty = SettingsSnapshot::new(1);
+        assert!(boolean_setting(&empty, "titlebars", DEFAULT_TITLEBARS));
+        assert!(boolean_setting(
+            &empty,
+            "taskbarActivities",
+            DEFAULT_TASKBAR_ACTIVITIES
+        ));
+        let off = snapshot(&[
+            ("titlebars", SettingValue::Boolean(false)),
+            ("taskbarActivities", SettingValue::Boolean(false)),
+        ]);
+        assert!(!boolean_setting(&off, "titlebars", DEFAULT_TITLEBARS));
+        assert!(!boolean_setting(
+            &off,
+            "taskbarActivities",
+            DEFAULT_TASKBAR_ACTIVITIES
+        ));
+        let junk = snapshot(&[("titlebars", SettingValue::Integer(0))]);
+        assert!(boolean_setting(&junk, "titlebars", DEFAULT_TITLEBARS));
     }
 }

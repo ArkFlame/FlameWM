@@ -55,6 +55,7 @@ const ACCENT_NODE_IDS: &[&str] = &[
     "downloads-organize-on",
     "focus-mouse-on",
     "shadows-on",
+    "titlebars-on",
     "snap-preview-on",
     "show-content-on",
     "taskbar-seconds-on",
@@ -66,6 +67,8 @@ const ACCENT_NODE_IDS: &[&str] = &[
     "taskbar-battery-relevant-on",
     "taskbar-clock-on",
     "taskbar-workspaces-on",
+    "taskbar-activities-on",
+    "taskbar-separate-on",
     "weather-enabled-on",
     "weather-auto-location-on",
     "time-auto-zone-on",
@@ -152,6 +155,19 @@ const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "time-auto-zone-on",
         "time-auto-zone-off",
         false,
+    ),
+    ("titlebars", "titlebars-on", "titlebars-off", true),
+    (
+        "taskbarActivities",
+        "taskbar-activities-on",
+        "taskbar-activities-off",
+        true,
+    ),
+    (
+        "taskbarSeparate",
+        "taskbar-separate-on",
+        "taskbar-separate-off",
+        true,
     ),
 ];
 /// Inline status line for failed requests. Optional in the compiled markup.
@@ -3210,7 +3226,7 @@ fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-const TOGGLE_KEYS: [&str; 29] = [
+const TOGGLE_KEYS: [&str; 32] = [
     "showContentWhileDragging",
     "windowShadows",
     "stickyNotesEnabled",
@@ -3240,6 +3256,9 @@ const TOGGLE_KEYS: [&str; 29] = [
     "focusFollowsMouse",
     "shareWallpaper",
     "cursorShadow",
+    "titlebars",
+    "taskbarActivities",
+    "taskbarSeparate",
 ];
 
 /// Parses one `data-action` value. Unknown IDs are errors, never silent no-ops.

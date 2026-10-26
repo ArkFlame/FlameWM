@@ -122,8 +122,11 @@ use flamewm_api::shortcuts::{
     ACTION_FULLSCREEN_ESCAPE, ACTION_LAUNCHER, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION,
     ACTION_SCREENSHOT_WINDOW, ACTION_SESSION_LOCK, ACTION_SHOW_DESKTOP,
     ACTION_SHOW_DESKTOP_CTRL_ALT, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE,
-    ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_SWITCH, ACTION_WORKSPACE_DOWN,
-    ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
+    ACTION_WINDOW_CYCLE_NEXT, ACTION_WINDOW_CYCLE_PREV, ACTION_WINDOW_FLOAT,
+    ACTION_WINDOW_FULLSCREEN, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
+    ACTION_WINDOW_RESIZE_GROW, ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH,
+    ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
+    workspace_activate_index, workspace_move_index, focus_direction, move_direction,
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{
@@ -1312,6 +1315,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     chrome_runtimes: HashMap<Window, chrome_runtime::ChromeRuntime>,
     /// Live skin chrome tokens (settings-derived); changes repaint all frames.
     decoration_tokens: flamewm_skin::recipes::decoration::ChromeTokens,
+    /// `titlebars` value the frames were last reflowed for; a change resizes every Server frame.
+    titlebars_applied: bool,
     /// Shadow strips per floating frame (`wm/shadow.rs`).
     frame_shadows: HashMap<Window, shadow::FrameShadow>,
     /// Clients whose bottom corners were clipped to a rounded frame; used to
@@ -1506,6 +1511,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             snap_preview: SnapPreviewSurface::new(),
             chrome_runtimes: HashMap::new(),
             decoration_tokens: flamewm_skin::recipes::decoration::ChromeTokens::default(),
+            titlebars_applied: crate::live_settings::titlebars(),
             frame_shadows: HashMap::new(),
             rounded_clients: HashSet::new(),
             shadow_scene: shadow::ShadowScene::default(),
@@ -1854,7 +1860,17 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn extents(&self) -> FrameExtents {
-        FrameExtents::new(i32::from(self.config.titlebar_height), 1)
+        FrameExtents::new(i32::from(self.titlebar_height()), 1)
+    }
+
+    /// Effective Server titlebar band. The `titlebars` setting is the only authority;
+    /// every geometry, shape and chrome read goes through it.
+    fn titlebar_height(&self) -> u16 {
+        if crate::live_settings::titlebars() {
+            self.config.titlebar_height
+        } else {
+            0
+        }
     }
 
     /// Frame extents for a decoration owner. Only `Server` gets a Flame
@@ -1923,7 +1939,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         state.set_outer(Rect::new(outer.x, y, outer.width, height as u32));
         if let Some(resources) = self.registry.lookup_by_client(client) {
             for xid in resources.children() {
-                if input_child_mapped(new, resources.region_of(xid)) {
+                if input_child_mapped(new, resources.region_of(xid), crate::live_settings::titlebars()) {
                     self.conn.map_window(xid)?;
                 } else {
                     self.conn.unmap_window(xid)?;
@@ -2324,8 +2340,15 @@ mod transition_fix_tests;
 /// Whether an input child is mapped for `decoration`. A Flame frame maps all of them. A
 /// client-drawn (GTK CSD) frame maps only its eight resize handles, so edges and corners
 /// still resize; title drag and controls stay with the client.
-fn input_child_mapped(decoration: Decoration, region: Option<FrameRegion>) -> bool {
+fn input_child_mapped(
+    decoration: Decoration,
+    region: Option<FrameRegion>,
+    titlebars: bool,
+) -> bool {
     match decoration {
+        // With the titlebar hidden only the resize strips keep their input children;
+        // the title-drag body and the three control cells must not be mapped.
+        Decoration::Server if !titlebars => matches!(region, Some(FrameRegion::Resize(_))),
         Decoration::Server => true,
         Decoration::ClientSide => matches!(region, Some(FrameRegion::Resize(_))),
         Decoration::None => false,

@@ -18,6 +18,85 @@ pub const ACTION_SCREENSHOT_FULL: &str = "ScreenshotFull";
 pub const ACTION_SCREENSHOT_REGION: &str = "ScreenshotRegion";
 pub const ACTION_SCREENSHOT_WINDOW: &str = "ScreenshotWindow";
 
+/// Absolute workspace activation, Hyprland-style `Super+1..9`. Index is 0-based.
+pub const ACTION_WORKSPACE_ACTIVATE: [&str; 9] = [
+    "Workspace1",
+    "Workspace2",
+    "Workspace3",
+    "Workspace4",
+    "Workspace5",
+    "Workspace6",
+    "Workspace7",
+    "Workspace8",
+    "Workspace9",
+];
+/// Move the active window to an absolute workspace, `Super+Shift+1..9`.
+pub const ACTION_WORKSPACE_MOVE: [&str; 9] = [
+    "MoveToWorkspace1",
+    "MoveToWorkspace2",
+    "MoveToWorkspace3",
+    "MoveToWorkspace4",
+    "MoveToWorkspace5",
+    "MoveToWorkspace6",
+    "MoveToWorkspace7",
+    "MoveToWorkspace8",
+    "MoveToWorkspace9",
+];
+pub const ACTION_FOCUS_LEFT: &str = "FocusLeft";
+pub const ACTION_FOCUS_RIGHT: &str = "FocusRight";
+pub const ACTION_FOCUS_UP: &str = "FocusUp";
+pub const ACTION_FOCUS_DOWN: &str = "FocusDown";
+pub const ACTION_MOVE_WINDOW_LEFT: &str = "MoveWindowLeft";
+pub const ACTION_MOVE_WINDOW_RIGHT: &str = "MoveWindowRight";
+pub const ACTION_MOVE_WINDOW_UP: &str = "MoveWindowUp";
+pub const ACTION_MOVE_WINDOW_DOWN: &str = "MoveWindowDown";
+pub const ACTION_WINDOW_FULLSCREEN: &str = "WindowFullscreen";
+pub const ACTION_WINDOW_FLOAT: &str = "WindowFloat";
+pub const ACTION_WINDOW_CYCLE_NEXT: &str = "WindowCycleNext";
+pub const ACTION_WINDOW_CYCLE_PREV: &str = "WindowCyclePrev";
+pub const ACTION_WINDOW_RESIZE_GROW: &str = "WindowResizeGrow";
+pub const ACTION_WINDOW_RESIZE_SHRINK: &str = "WindowResizeShrink";
+
+/// Absolute workspace index addressed by a `WorkspaceN` action.
+#[must_use]
+pub fn workspace_activate_index(action: &str) -> Option<usize> {
+    ACTION_WORKSPACE_ACTIVATE
+        .iter()
+        .position(|candidate| *candidate == action)
+}
+
+/// Absolute workspace index addressed by a `MoveToWorkspaceN` action.
+#[must_use]
+pub fn workspace_move_index(action: &str) -> Option<usize> {
+    ACTION_WORKSPACE_MOVE
+        .iter()
+        .position(|candidate| *candidate == action)
+}
+
+/// Spatial focus direction requested by a `Focus*` action.
+#[must_use]
+pub fn focus_direction(action: &str) -> Option<crate::workspace::GridDirection> {
+    match action {
+        ACTION_FOCUS_LEFT => Some(crate::workspace::GridDirection::Left),
+        ACTION_FOCUS_RIGHT => Some(crate::workspace::GridDirection::Right),
+        ACTION_FOCUS_UP => Some(crate::workspace::GridDirection::Up),
+        ACTION_FOCUS_DOWN => Some(crate::workspace::GridDirection::Down),
+        _ => None,
+    }
+}
+
+/// Spatial move direction requested by a `MoveWindow*` action.
+#[must_use]
+pub fn move_direction(action: &str) -> Option<crate::workspace::GridDirection> {
+    match action {
+        ACTION_MOVE_WINDOW_LEFT => Some(crate::workspace::GridDirection::Left),
+        ACTION_MOVE_WINDOW_RIGHT => Some(crate::workspace::GridDirection::Right),
+        ACTION_MOVE_WINDOW_UP => Some(crate::workspace::GridDirection::Up),
+        ACTION_MOVE_WINDOW_DOWN => Some(crate::workspace::GridDirection::Down),
+        _ => None,
+    }
+}
+
 /// Direction a workspace navigation shortcut moves in the two-row topology, or `None` for any
 /// other action. The grid itself lives in [`crate::workspace`].
 #[must_use]

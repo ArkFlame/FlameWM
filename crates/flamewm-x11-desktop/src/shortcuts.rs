@@ -28,6 +28,10 @@ const LOCK_BITS: u16 = MOD_LOCK | MOD_NUM_LOCK;
 /// Keysym values from the X11 keysym definitions (keysymdef.h).
 const KEYSYM_NAMES: &[(&str, u32)] = &[
     ("space", 0x0020),
+    ("minus", 0x002d),
+    ("-", 0x002d),
+    ("equal", 0x003d),
+    ("=", 0x003d),
     ("BackSpace", 0xff08),
     ("Tab", 0xff09),
     ("Return", 0xff0d),
