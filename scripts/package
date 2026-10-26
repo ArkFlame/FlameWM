@@ -12,6 +12,28 @@ if [[ ! -w "$TARGET_DIR" ]]; then
     TARGET_DIR="$ROOT/.target"
 fi
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
+STAGE_ONLY=""
+LIBEXECDIR=/usr/libexec/flamewm
+PAM_SOURCE="$ROOT/packaging/pam.d/flamewm-lock"
+while (( $# )); do
+    case "$1" in
+        --stage|--libexecdir|--pam)
+            (( $# >= 2 )) && [[ -n "$2" ]] || fail "$1 requires a value"
+            case "$1" in
+                --stage) STAGE_ONLY="$2" ;;
+                --libexecdir) LIBEXECDIR="${2%/}" ;;
+                --pam) PAM_SOURCE="$2" ;;
+            esac
+            shift 2 ;;
+        *) fail "unknown argument: $1 (usage: scripts/package [--stage DESTDIR [--libexecdir DIR] [--pam FILE]])" ;;
+    esac
+done
+if [[ -z "$STAGE_ONLY" ]]; then
+    [[ "$LIBEXECDIR" == /usr/libexec/flamewm && "$PAM_SOURCE" == "$ROOT/packaging/pam.d/flamewm-lock" ]] \
+        || fail '--libexecdir and --pam are only valid with --stage; the Debian layout is fixed'
+fi
+[[ "$LIBEXECDIR" =~ ^/usr/[A-Za-z0-9._+/-]+$ && "$LIBEXECDIR" != *..* ]] \
+    || fail "--libexecdir must be an absolute path under /usr: $LIBEXECDIR"
 # Profile whitelist: release (production, default) or fast (development .deb).
 # The fast package goes to its own dist directory with a ~dev version so it can
 # never overwrite or be mistaken for the production .deb.
@@ -22,7 +44,7 @@ case "$PROFILE" in
     *) fail "unknown FLAMEWM_PACKAGE_PROFILE: $PROFILE (expected release or fast)" ;;
 esac
 BUILD_DIR="$TARGET_DIR/$PROFILE"
-STAGE="$DIST/flamewm-$PKG_VERSION"
+STAGE="${STAGE_ONLY:-$DIST/flamewm-$PKG_VERSION}"
 SOURCE_ARCHIVE="$DIST/flamewm-$PKG_VERSION-source.tar.gz"
 LINUX_ARCHIVE="$DIST/flamewm-$PKG_VERSION-linux-x86_64.tar.gz"
 DEB="$DIST/flamewm_${PKG_VERSION}_amd64.deb"
@@ -35,20 +57,22 @@ package_finished() {
         printf 'FLAMEWM-PACKAGE-ERROR: incomplete release; published artifacts removed (exit %s)\n' "$status" >&2
     fi
 }
-trap package_finished EXIT
+[[ -n "$STAGE_ONLY" ]] || trap package_finished EXIT
 
 [[ -n "$VERSION" ]] || fail 'workspace version is empty'
 # This release script assembles native x86_64 binaries. Fail explicitly rather
 # than emitting a misleading *_amd64.deb on another build architecture.
-if command -v dpkg-deb >/dev/null 2>&1; then
+if [[ -z "$STAGE_ONLY" ]] && command -v dpkg-deb >/dev/null 2>&1; then
     command -v dpkg >/dev/null 2>&1 || fail 'dpkg is required alongside dpkg-deb'
     BUILD_ARCH="$(dpkg --print-architecture)"
     [[ "$BUILD_ARCH" == amd64 && "$(uname -m)" == x86_64 ]] \
         || fail "this x86_64 release package requires amd64 host/target; detected $BUILD_ARCH / $(uname -m)"
 fi
 [[ -d "$BUILD_DIR" ]] || fail "missing $PROFILE build directory: $BUILD_DIR"
-mkdir -p "$DIST"
-rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$PKG_VERSION.tar.gz" "$DIST/SHA256SUMS"
+if [[ -z "$STAGE_ONLY" ]]; then
+    mkdir -p "$DIST"
+    rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$PKG_VERSION.tar.gz" "$DIST/SHA256SUMS"
+fi
 
 for binary in flamewm-apps flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
     [[ -x "$BUILD_DIR/$binary" ]] || fail "missing $PROFILE binary: $BUILD_DIR/$binary"
@@ -67,6 +91,7 @@ for source in \
     "$ROOT/packaging/menus/flamewm-applications.menu" \
     "$ROOT/packaging/notifications/dunstrc" \
     "$ROOT/packaging/pam.d/flamewm-lock" \
+    "$PAM_SOURCE" \
     "$ROOT/packaging/install-manifest.txt" \
     "$ROOT/packaging/debian/control.in" \
     "$ROOT/packaging/debian/copyright" \
@@ -79,13 +104,16 @@ done
 
 # Validate source manifest and publish deterministic source archive BEFORE
 # copying large icon/theme trees into the install staging directory.
-python3 "$ROOT/scripts/package-source-archive" "$ROOT" \
-    "$ROOT/packaging/source-manifest.txt" "$SOURCE_ARCHIVE"
-
-rm -rf "$STAGE"
+if [[ -n "$STAGE_ONLY" ]]; then
+    [[ ! -e "$STAGE" || ( -d "$STAGE" && -z "$(ls -A "$STAGE")" ) ]] \
+        || fail "--stage directory must be empty or absent: $STAGE"
+else
+    python3 "$ROOT/scripts/package-source-archive" "$ROOT" \
+        "$ROOT/packaging/source-manifest.txt" "$SOURCE_ARCHIVE"
+    rm -rf "$STAGE"
+fi
 mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/flamewm" "$STAGE/etc/pam.d" \
-    "$STAGE/usr/share/applications" "$STAGE/usr/share/xsessions" "$STAGE/usr/share/wayland-sessions" "$STAGE/usr/share/doc/flamewm" \
-    "$STAGE/DEBIAN"
+    "$STAGE/usr/share/applications" "$STAGE/usr/share/xsessions" "$STAGE/usr/share/wayland-sessions" "$STAGE/usr/share/doc/flamewm"
 
 for binary in flamewm-apps flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
     install -m 0755 "$BUILD_DIR/$binary" "$STAGE/usr/bin/$binary"
@@ -95,22 +123,26 @@ done
 for application in flamewm flamewm-desktop flamewm-shell flamewm-settings flamewm-explorer flamewm-terminal; do
     ln "$STAGE/usr/bin/flamewm-apps" "$STAGE/usr/bin/$application"
 done
-install -m 0644 "$ROOT/packaging/pam.d/flamewm-lock" "$STAGE/etc/pam.d/flamewm-lock"
+install -m 0644 "$PAM_SOURCE" "$STAGE/etc/pam.d/flamewm-lock"
 install -m 0644 "$ROOT/packaging/flamewm.desktop" "$STAGE/usr/share/applications/flamewm.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-screenshot.desktop" "$STAGE/usr/share/applications/flamewm-screenshot.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-explorer.desktop" "$STAGE/usr/share/applications/flamewm-explorer.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-terminal.desktop" "$STAGE/usr/share/applications/flamewm-terminal.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-wayland.desktop" "$STAGE/usr/share/wayland-sessions/flamewm-wayland.desktop"
+if [[ "$LIBEXECDIR" != /usr/libexec/flamewm ]]; then
+    sed -i "s#=/usr/libexec/flamewm/#=$LIBEXECDIR/#" \
+        "$STAGE/usr/share/xsessions/flamewm.desktop" "$STAGE/usr/share/wayland-sessions/flamewm-wayland.desktop"
+fi
 # Publish the KService menu selected by XDG_MENU_PREFIX=flamewm-.
 install -d -m 0755 "$STAGE/etc/xdg/menus"
 install -m 0644 "$ROOT/packaging/menus/flamewm-applications.menu" \
     "$STAGE/etc/xdg/menus/flamewm-applications.menu"
 install -m 0644 "$ROOT/packaging/notifications/dunstrc" "$STAGE/usr/share/flamewm/dunstrc"
-install -d -m 0755 "$STAGE/usr/libexec/flamewm"
-install -m 0755 "$ROOT/scripts/flamewm-session-wrapper" "$STAGE/usr/libexec/flamewm/flamewm-session-wrapper"
-install -m 0755 "$ROOT/scripts/flamewm-wayland-session" "$STAGE/usr/libexec/flamewm/flamewm-wayland-session"
-install -m 0755 "$ROOT/tools/flamewm_desktop_services.py" "$STAGE/usr/libexec/flamewm/flamewm-desktop-services"
+install -d -m 0755 "$STAGE$LIBEXECDIR"
+install -m 0755 "$ROOT/scripts/flamewm-session-wrapper" "$STAGE$LIBEXECDIR/flamewm-session-wrapper"
+install -m 0755 "$ROOT/scripts/flamewm-wayland-session" "$STAGE$LIBEXECDIR/flamewm-wayland-session"
+install -m 0755 "$ROOT/tools/flamewm_desktop_services.py" "$STAGE$LIBEXECDIR/flamewm-desktop-services"
 # Desktop-specific portal backend configuration: never override the user's
 # ~/.config/xdg-desktop-portal preferences or the system's KDE configuration.
 install -d -m 0755 "$STAGE/usr/share/xdg-desktop-portal"
@@ -158,8 +190,13 @@ if [[ ! -d "$STAGE/usr/share/icons/Fluent" && -d "$ROOT/assets/themes/icons/Flue
         sed -i -E 's/^Name=.*/Name=Fluent/' "$STAGE/usr/share/icons/Fluent/index.theme"
     fi
 fi
+if [[ -n "$STAGE_ONLY" ]]; then
+    printf 'OK stage: %s\n' "$STAGE"
+    exit 0
+fi
 
 if command -v dpkg-deb >/dev/null 2>&1; then
+    mkdir -p "$STAGE/DEBIAN"
     sed -e "s/@VERSION@/$PKG_VERSION/g" -e "s/@ARCH@/$BUILD_ARCH/g" \
         "$ROOT/packaging/debian/control.in" > "$STAGE/DEBIAN/control"
     grep -Fqx "Architecture: $BUILD_ARCH" "$STAGE/DEBIAN/control" \

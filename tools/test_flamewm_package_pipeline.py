@@ -280,5 +280,53 @@ class DebianReleasePipelineTests(unittest.TestCase):
         self.assertFalse((self.root / ".target/dist/flamewm-0.1.0-source.tar.gz").exists())
 
 
+@unittest.skipUnless(shutil.which("tar"), "tar required")
+class StageLayoutTests(unittest.TestCase):
+    setUp = DebianReleasePipelineTests.setUp
+
+    def stage(self, *arguments):
+        env = {k: v for k, v in os.environ.items() if k != "CARGO_TARGET_DIR"}
+        return subprocess.run([str(self.root / "scripts/package"), *arguments], cwd=self.root, env=env,
+                              capture_output=True, text=True, timeout=60)
+
+    def test_arch_layout_relocates_helpers_and_pam_without_publishing_artifacts(self):
+        pam = self.root / "arch.pam"
+        pam.write_text("#%PAM-1.0\nauth include system-auth\naccount include system-auth\n", encoding="utf-8")
+        destdir = self.root / "pkgdir"
+        result = self.stage("--stage", str(destdir), "--libexecdir", "/usr/lib/flamewm", "--pam", str(pam))
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        for helper in ("flamewm-session-wrapper", "flamewm-wayland-session", "flamewm-desktop-services"):
+            self.assertTrue(os.access(destdir / "usr/lib/flamewm" / helper, os.X_OK), helper)
+        self.assertFalse((destdir / "usr/libexec").exists())
+        self.assertFalse((destdir / "DEBIAN").exists())
+        self.assertIn("Exec=/usr/lib/flamewm/flamewm-session-wrapper\n",
+                      (destdir / "usr/share/xsessions/flamewm.desktop").read_text())
+        self.assertIn("Exec=/usr/lib/flamewm/flamewm-wayland-session --backend=drm\n",
+                      (destdir / "usr/share/wayland-sessions/flamewm-wayland.desktop").read_text())
+        self.assertEqual((destdir / "etc/pam.d/flamewm-lock").read_text(), pam.read_text())
+        self.assertTrue((destdir / "usr/bin/flamewm-terminal").samefile(destdir / "usr/bin/flamewm-apps"))
+        self.assertFalse((self.root / ".target/dist").exists())
+
+    def test_default_stage_keeps_the_debian_layout(self):
+        destdir = self.root / "pkgdir"
+        result = self.stage("--stage", str(destdir))
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertTrue((destdir / "usr/libexec/flamewm/flamewm-session-wrapper").is_file())
+        self.assertEqual((destdir / "usr/share/xsessions/flamewm.desktop").read_bytes(),
+                         (ROOT / "packaging/flamewm-session.desktop").read_bytes())
+        self.assertEqual((destdir / "etc/pam.d/flamewm-lock").read_bytes(),
+                         (ROOT / "packaging/pam.d/flamewm-lock").read_bytes())
+
+    def test_stage_refuses_a_populated_destdir_and_layout_options_without_stage(self):
+        destdir = self.root / "pkgdir"
+        destdir.mkdir()
+        (destdir / "keep").write_text("user file", encoding="utf-8")
+        refused = self.stage("--stage", str(destdir))
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual((destdir / "keep").read_text(), "user file")
+        self.assertNotEqual(self.stage("--libexecdir", "/usr/lib/flamewm").returncode, 0)
+        self.assertNotEqual(self.stage("--stage", str(self.root / "other"), "--libexecdir", "lib").returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

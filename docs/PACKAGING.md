@@ -17,6 +17,13 @@ package sources are errors. `SHA256SUMS` covers every artifact that was
 emitted.
 
 
+`./scripts/package --stage DESTDIR` runs only the install step: it validates the release
+binaries and packaging sources and installs the runtime tree into an empty or absent `DESTDIR`,
+without archives, `.deb` or checksums. `--libexecdir DIR` (default `/usr/libexec/flamewm`) moves
+the session helpers and rewrites the `Exec` of both session entries, and `--pam FILE` selects the
+PAM service file. Both options are rejected outside `--stage`, so the Debian layout cannot change.
+Distribution packages call this mode instead of repeating the layout.
+
 ## Multi-call applications
 
 `flamewm`, `flamewm-desktop`, `flamewm-shell`, `flamewm-settings`, `flamewm-explorer` and
