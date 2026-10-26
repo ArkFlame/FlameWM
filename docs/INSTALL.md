@@ -37,6 +37,58 @@ session chooser to log in to the X11 session. `FlameWM (Wayland)` is also
 registered; it is preliminary, so read [Wayland session](#wayland-session-preliminary)
 below before selecting it.
 
+## Arch Linux
+
+Arch Linux builds a native pacman package from `packaging/arch/PKGBUILD`. From the full git
+checkout on an x86_64 Arch system with `base-devel` installed:
+
+```bash
+./scripts/build-arch --syncdeps
+sudo pacman -U .target/arch/packages/flamewm-git-<pkgver>-1-x86_64.pkg.tar.zst
+```
+
+`./scripts/build-arch` runs `makepkg --cleanbuild` in `.target/arch` against the **committed**
+`HEAD` of the checkout (uncommitted changes are reported and not packaged). Its arguments go to
+`makepkg`: `--syncdeps` installs the build and runtime dependencies with pacman, `--nocheck` and
+`--install` work as usual. It prints `FLAMEWM-ARCH-READY` only after it has checked the package
+version against `scripts/version`, the session entries, the `/usr/lib/flamewm` helpers and the
+Arch PAM service, and has run `namcap` when it is installed. Without a checkout, the same
+PKGBUILD builds upstream `main` like any VCS package: `cd packaging/arch && makepkg -si`.
+
+The package is `flamewm-git` (`provides=flamewm`). It follows the Arch package guidelines, so its
+layout differs from the `.deb` in three places:
+
+| Item | Debian | Arch |
+| --- | --- | --- |
+| Session helpers | `/usr/libexec/flamewm/` | `/usr/lib/flamewm/` |
+| PAM service `/etc/pam.d/flamewm-lock` | `@include common-auth` / `common-account` | `include system-auth` |
+| Third-party license texts | `/usr/share/doc/flamewm/LICENSES` | also `/usr/share/licenses/flamewm-git/` |
+
+The session entries are the same files with the helper path rewritten:
+`/usr/share/xsessions/flamewm.desktop` runs `/usr/lib/flamewm/flamewm-session-wrapper` and
+`/usr/share/wayland-sessions/flamewm-wayland.desktop` runs
+`/usr/lib/flamewm/flamewm-wayland-session --backend=drm`. LightDM, SDDM and GDM read both
+directories; no extra registration is needed. For LightDM install `lightdm` plus a greeter (for
+example `lightdm-gtk-greeter`) and enable it with `sudo systemctl enable lightdm`.
+
+Upgrade by building again and installing the newer package with `sudo pacman -U`. pacman keeps
+local edits of the two configuration files (`/etc/pam.d/flamewm-lock`,
+`/etc/xdg/menus/flamewm-applications.menu`); a changed upstream copy is written next to them as
+`.pacnew`. Uninstall with `sudo pacman -R flamewm-git`; edited configuration files are kept as
+`.pacsave`. pacman never touches per-user data: `~/.config/flamewm`, `~/.local/share/flamewm` and
+`~/.cache/flamewm` stay in place after an upgrade or removal.
+
+Optional integrations (xdg-utils, xrandr, dunst, dex, udisks2, ImageMagick, ffmpeg, IBM Plex Sans,
+polkit agent, portal backends, kwallet-pam, and `libxkbcommon-x11` for `flamewm-wayland
+--backend=nested` inside an X11 desktop) are listed as `optdepends` and printed by pacman. The
+package bundles the McMojave cursor theme, so it conflicts with the AUR `mcmojave-cursors`
+packages that install the same `/usr/share/icons/McMojave-cursors` directory.
+
+The package has been built with `makepkg` in a clean Arch container, installed, upgraded and
+removed with pacman, and both sessions were started from it on Xvfb/Xephyr (the Wayland
+compositor through its nested backend). A real display-manager login and the DRM/KMS Wayland
+backend on hardware are not verified yet, the same open items as on Debian.
+
 ## Display-manager session registration
 
 The `.deb` installs two session entries:
