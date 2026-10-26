@@ -189,21 +189,55 @@ fn spawn_child(launch: &Launch, slave: &File) -> io::Result<Child> {
             .stderr(Stdio::from(slave.try_clone()?));
         Ok(())
     };
+    let reset = default_signals_prefix();
     // `setsid -c` makes the slave the controlling terminal; without util-linux the shell still runs, without job control.
     let mut wrapped = Command::new("setsid");
-    wrapped.arg("-c").arg(&launch.program).args(&launch.args);
+    wrapped
+        .arg("-c")
+        .args(reset)
+        .arg(&launch.program)
+        .args(&launch.args);
     env(&mut wrapped);
     stdio(&mut wrapped)?;
     match wrapped.spawn() {
         Ok(child) => Ok(child),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let mut direct = Command::new(&launch.program);
+            let mut direct = match reset.split_first() {
+                Some((program, args)) => {
+                    let mut command = Command::new(program);
+                    command.args(args).arg(&launch.program);
+                    command
+                }
+                None => Command::new(&launch.program),
+            };
             direct.args(&launch.args);
             env(&mut direct);
             stdio(&mut direct)?;
             direct.spawn()
         }
         Err(error) => Err(error),
+    }
+}
+
+/// `env --default-signal` (coreutils 8.31+) when available. Ignored signal dispositions survive exec, so a terminal
+/// started by a launcher that ignores SIGINT and SIGQUIT (any background job of a non-interactive shell does) would
+/// hand that to the shell, where no trap can undo it: Ctrl+C and Ctrl+\ would reach the line discipline and do
+/// nothing. Every signal starts at its default in the child instead, as in other terminal emulators.
+fn default_signals_prefix() -> &'static [&'static str] {
+    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let supported = *SUPPORTED.get_or_init(|| {
+        Command::new("env")
+            .args(["--default-signal", "true"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    });
+    if supported {
+        &["env", "--default-signal"]
+    } else {
+        &[]
     }
 }
 
@@ -276,6 +310,63 @@ mod tests {
         assert!(
             !listing.contains("ptmx"),
             "child holds the pty master: {listing}"
+        );
+    }
+
+    /// Re-runs the inner test in a process that ignores SIGINT and SIGQUIT, as a terminal started in the background
+    /// by a shell script is.
+    #[test]
+    fn ctrl_c_interrupts_the_child_of_a_terminal_launched_ignoring_sigint() {
+        let exe = std::env::current_exe().expect("test binary path");
+        let status = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "trap '' INT QUIT; exec \"$0\" --exact --ignored --test-threads=1 \
+                 pty::tests::ctrl_c_interrupts_the_foreground_child",
+            ])
+            .arg(exe)
+            .stdout(Stdio::null())
+            .status()
+            .expect("run the inner test");
+        assert!(status.success(), "Ctrl+C did not interrupt the child");
+    }
+
+    #[test]
+    #[ignore = "run by ctrl_c_interrupts_the_child_of_a_terminal_launched_ignoring_sigint"]
+    fn ctrl_c_interrupts_the_foreground_child() {
+        use std::os::unix::process::ExitStatusExt;
+        let launch = Launch {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "echo ready; exec sleep 30".into()],
+            cwd: None,
+        };
+        let mut process = PtyProcess::spawn(&launch, size()).expect("spawn sleep on pty");
+        let mut reader = process.take_reader().expect("reader");
+        let mut output = Vec::new();
+        let mut buffer = [0_u8; 256];
+        while !String::from_utf8_lossy(&output).contains("ready") {
+            match read_chunk(&mut reader, &mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => output.extend_from_slice(&buffer[..count]),
+            }
+        }
+        assert!(String::from_utf8_lossy(&output).contains("ready"));
+        std::thread::sleep(Duration::from_millis(200));
+        process.write(vec![0x03]).expect("queue Ctrl+C");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = process.child.try_wait().expect("child status") {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(
+            status.and_then(|status| status.signal()),
+            Some(2),
+            "the foreground child ends on SIGINT"
         );
     }
 
