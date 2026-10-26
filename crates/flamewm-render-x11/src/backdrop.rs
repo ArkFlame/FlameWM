@@ -555,6 +555,13 @@ pub fn desktop_canvas(
     Ok(canvas)
 }
 
+/// Root property on which the desktop surface publishes its presented frame for the WM:
+/// `CARDINAL[6]` = backbuffer pixmap, window root `x`, `y` (two's complement), `width`, `height`,
+/// present serial. The pixmap holds what the desktop shows, so the WM shades frame shadows from it
+/// without reading the root. It is rewritten after every present: the serial change tells the WM
+/// that a read racing that repaint must be redone. Deleted when the desktop surface goes away.
+pub const DESKTOP_FRAME_PROPERTY: &str = "_FLAMEWM_DESKTOP_FRAME";
+
 /// What the desktop layer is made of, as the desktop draws it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesktopSource {

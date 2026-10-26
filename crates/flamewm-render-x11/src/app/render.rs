@@ -325,6 +325,9 @@ impl X11App {
         };
         unsafe { self.bind_presented_backbuffer_as_window_background()? };
         self.presented_size = Some((self.width, self.height));
+        if self.role == X11WindowRole::Desktop {
+            unsafe { self.publish_desktop_frame() };
+        }
         // Single shape per changed frame, from retained commands.
         {
             let _shape_guard = flamewm_profiler::start("render.shape");
@@ -624,6 +627,82 @@ impl X11App {
         }
         self.release_retired_after_bind();
         Ok(())
+    }
+
+    /// Publishes the presented desktop frame on the root ([`crate::backdrop::DESKTOP_FRAME_PROPERTY`])
+    /// with the next present serial. The window origin is only queried when the pixmap or size
+    /// changed.
+    unsafe fn publish_desktop_frame(&mut self) {
+        let frame = (self.backbuffer, self.width, self.height);
+        let root = unsafe { XRootWindow(self.display, self.screen) };
+        let (origin, serial) = match self.published_desktop_frame {
+            Some(published) if published.frame == frame => {
+                (published.origin, published.serial.wrapping_add(1))
+            }
+            previous => {
+                let (mut x, mut y, mut child) = (0, 0, 0);
+                unsafe {
+                    crate::xlib_ext::XTranslateCoordinates(
+                        self.display,
+                        self.window,
+                        root,
+                        0,
+                        0,
+                        &mut x,
+                        &mut y,
+                        &mut child,
+                    )
+                };
+                (
+                    (x, y),
+                    previous.map_or(0, |published| published.serial.wrapping_add(1)),
+                )
+            }
+        };
+        let atom = unsafe { self.desktop_frame_atom() };
+        let data: [std::os::raw::c_long; 6] = [
+            frame.0 as std::os::raw::c_long,
+            std::os::raw::c_long::from(origin.0 as u32),
+            std::os::raw::c_long::from(origin.1 as u32),
+            std::os::raw::c_long::from(frame.1),
+            std::os::raw::c_long::from(frame.2),
+            std::os::raw::c_long::from(serial),
+        ];
+        // SAFETY: six 32-bit property units, matching format 32 (c_long items).
+        unsafe {
+            XChangeProperty(
+                self.display,
+                root,
+                atom,
+                XA_CARDINAL,
+                32,
+                PROP_MODE_REPLACE,
+                data.as_ptr().cast(),
+                6,
+            );
+        }
+        self.published_desktop_frame = Some(super::PublishedDesktopFrame {
+            frame,
+            origin,
+            serial,
+        });
+    }
+
+    /// Deletes the published desktop frame: its pixmap is about to be freed.
+    pub(crate) unsafe fn withdraw_desktop_frame(&mut self) {
+        let root = unsafe { XRootWindow(self.display, self.screen) };
+        let atom = unsafe { self.desktop_frame_atom() };
+        unsafe { XDeleteProperty(self.display, root, atom) };
+        self.published_desktop_frame = None;
+    }
+
+    unsafe fn desktop_frame_atom(&mut self) -> Atom {
+        if self.desktop_frame_atom == 0 {
+            let name = std::ffi::CString::new(crate::backdrop::DESKTOP_FRAME_PROPERTY)
+                .expect("property name has no NUL");
+            self.desktop_frame_atom = unsafe { XInternAtom(self.display, name.as_ptr(), 0) };
+        }
+        self.desktop_frame_atom
     }
 
     /// Whether the server already restored an exposed area of the desktop surface: its window

@@ -228,6 +228,10 @@ pub(crate) struct X11App {
     pub(crate) background_bound: Pixmap,
     /// Window size of the last frame presented from the bound backbuffer.
     pub(crate) presented_size: Option<(u32, u32)>,
+    /// Desktop surfaces only: the frame last published on the root.
+    pub(crate) published_desktop_frame: Option<PublishedDesktopFrame>,
+    /// Interned [`crate::backdrop::DESKTOP_FRAME_PROPERTY`]; 0 until first use.
+    pub(crate) desktop_frame_atom: Atom,
     /// Stale backbuffer kept alive across resize until the replacement is
     /// painted and bound. (pixmap, bytes).
     pub(crate) retired_backbuffer: Option<(Pixmap, usize)>,
@@ -631,6 +635,8 @@ impl X11App {
             render_counters: damage_plan::RedrawCounters::default(),
             background_bound: 0,
             presented_size: None,
+            published_desktop_frame: None,
+            desktop_frame_atom: 0,
             retired_backbuffer: None,
             surface_backdrop: None,
             window_backdrop_pixmap: None,
@@ -977,6 +983,15 @@ fn set_window_role(display: *mut Display, window: Window, role: X11WindowRole) {
     }
 }
 
+/// A desktop frame published on the root: `(backbuffer, width, height)`, the window's root origin
+/// and the present serial.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PublishedDesktopFrame {
+    pub(crate) frame: (Pixmap, u32, u32),
+    pub(crate) origin: (i32, i32),
+    pub(crate) serial: u32,
+}
+
 impl Drop for X11App {
     fn drop(&mut self) {
         if x_io_broken() {
@@ -993,6 +1008,9 @@ impl Drop for X11App {
         // display owners call `take_deferred_native_libraries` first and keep
         // its dynamic handles alive through XCloseDisplay.
         let _deferred = unsafe { self.take_deferred_native_libraries() };
+        if self.published_desktop_frame.is_some() {
+            unsafe { self.withdraw_desktop_frame() };
+        }
         self.clear_surface_backdrop();
         self.clear_window_backdrop();
         self.clear_node_backdrops();

@@ -64,6 +64,8 @@ pub struct Atoms {
     pub wm_change_state: Atom,
     /// Live desktop rubber band on the root (`flamewm_api::root_rubber`).
     pub root_rubber: Atom,
+    /// Presented desktop frame on the root (`flamewm_render_x11::backdrop::DESKTOP_FRAME_PROPERTY`).
+    pub desktop_frame: Atom,
 }
 
 impl Atoms {
@@ -126,6 +128,7 @@ impl Atoms {
             net_wm_moveresize: atom(conn, "_NET_WM_MOVERESIZE")?,
             wm_change_state: atom(conn, "WM_CHANGE_STATE")?,
             root_rubber: atom(conn, flamewm_api::root_rubber::ROOT_RUBBER_PROPERTY)?,
+            desktop_frame: atom(conn, flamewm_render_x11::backdrop::DESKTOP_FRAME_PROPERTY)?,
         })
     }
 

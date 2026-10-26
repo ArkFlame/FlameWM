@@ -59,6 +59,11 @@ impl<C: Connection> Wm<'_, C> {
             {
                 self.on_root_rubber_changed()?;
             }
+            Event::PropertyNotify(event)
+                if event.atom == self.atoms.desktop_frame && event.window == self.screen().root =>
+            {
+                self.shadow_scene.desktop_read = false;
+            }
             Event::PropertyNotify(event) => self.handle_property(event.window, event.atom)?,
             Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => {
                 self.display_topology_dirty.mark();
