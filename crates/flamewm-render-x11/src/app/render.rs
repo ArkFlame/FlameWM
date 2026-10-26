@@ -776,6 +776,7 @@ impl X11App {
                 rect,
                 radius,
                 blur_percent,
+                opacity,
                 node,
             } => {
                 let rect = scale_rect(*rect, scale);
@@ -793,6 +794,7 @@ impl X11App {
                         device,
                         radius,
                         *blur_percent,
+                        *opacity,
                     )?
                 };
             }

@@ -219,7 +219,7 @@ impl X11App {
     }
 }
 
-/// Geometry and blur that shape a node backdrop. The pixels beneath are compared separately, so
+/// Geometry, blur and effective alpha that shape a node backdrop. The pixels beneath are compared separately, so
 /// the cache never depends on the document revision: text edits keep the same backdrop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NodeBackdropKey {
@@ -228,6 +228,8 @@ pub(crate) struct NodeBackdropKey {
     pub(crate) clip: (u32, u32),
     pub(crate) radius: u32,
     pub(crate) blur_percent: u8,
+    /// Blurred layer opacity. A change must invalidate the cached premultiplied pixmap.
+    pub(crate) opacity: u8,
 }
 
 /// One retained backdrop: the geometry it was blurred with, the captured pixels beneath it (the
@@ -336,16 +338,17 @@ fn inside_rounded(px: i32, py: i32, node: (i32, i32, u32, u32), radius: u32) -> 
 }
 
 /// Blurred premultiplied ARGB words for the clipped capture `rgba` (`clip` size), masked by the
-/// node's rounded rect. Source is opaque, so premultiplied colour equals colour inside the shape
-/// and zero outside it (alpha and RGB masked together, once). `None` for blur 0 (no backdrop).
+/// node's rounded rect. The opaque input is premultiplied by `opacity` inside the shape;
+/// both alpha and RGB are zero outside it. `None` for blur 0 or zero opacity.
 pub(crate) fn node_backdrop_words(
     rgba: Vec<u8>,
     clip: (i32, i32, u32, u32),
     node: (i32, i32, u32, u32),
     radius: u32,
     blur_percent: u8,
+    opacity: u8,
 ) -> Option<Vec<u32>> {
-    if blur_percent == 0 {
+    if blur_percent == 0 || opacity == 0 {
         return None;
     }
     let (cx, cy, width, height) = clip;
@@ -354,7 +357,12 @@ pub(crate) fn node_backdrop_words(
         let px = cx + (index as u32 % width) as i32;
         let py = cy + (index as u32 / width) as i32;
         *word = if inside_rounded(px, py, node, radius) {
-            *word | 0xff00_0000
+            // Source pixels are opaque; XRender expects PREMULTIPLIED ARGB.
+            // Without scaling this alpha, any nonzero surfaceOpacity produces
+            // an entirely opaque blur layer underneath its translucent tint.
+            let scale = u32::from(opacity);
+            let component = |shift: u32| (((*word >> shift) & 0xff_u32) * scale + 127) / 255;
+            (scale << 24) | (component(16) << 16) | (component(8) << 8) | component(0)
         } else {
             0
         };
@@ -363,8 +371,8 @@ pub(crate) fn node_backdrop_words(
 }
 
 impl X11App {
-    /// Paints the blurred root pixels under a translucent node's rect, clipped to its rounded
-    /// shape. The source is the scene painted so far (wallpaper layers below the node). Each frame
+    /// Paints the blurred root pixels under a translucent node's rect at the node's effective
+    /// alpha, clipped to its rounded shape. The source is the scene painted so far; each frame
     /// captures the pixels beneath; the blur is reused when they and the geometry are unchanged, so
     /// a text edit above a translucent surface does not re-blur it. Capture failure keeps the plain fill.
     ///
@@ -377,8 +385,9 @@ impl X11App {
         rect: (i32, i32, u32, u32),
         radius: u32,
         blur_percent: u8,
+        opacity: u8,
     ) -> Result<(), String> {
-        if self.xrender.is_none() {
+        if opacity == 0 || self.xrender.is_none() {
             return Ok(());
         }
         let Some(clip) = node_backdrop_clip(rect, (self.width, self.height)) else {
@@ -389,6 +398,7 @@ impl X11App {
             clip: (clip.2, clip.3),
             radius,
             blur_percent,
+            opacity,
         };
         let Ok(capture) = crate::backdrop::capture_drawable_rect(self.display, self.backbuffer, clip)
         else {
@@ -398,7 +408,7 @@ impl X11App {
             Some(pixmap) => pixmap,
             None => {
                 let Some(words) =
-                    node_backdrop_words(capture.pixels.clone(), clip, rect, radius, blur_percent)
+                    node_backdrop_words(capture.pixels.clone(), clip, rect, radius, blur_percent, opacity)
                 else {
                     return Ok(());
                 };
@@ -440,13 +450,14 @@ mod tests {
             clip: (40, 30),
             radius: 6,
             blur_percent: blur,
+            opacity: 255,
         }
     }
 
     #[test]
     fn blur_zero_is_no_backdrop() {
         let rgba = [0x40, 0x80, 0xc0, 255].repeat(16 * 16);
-        assert!(node_backdrop_words(rgba, (0, 0, 16, 16), (0, 0, 16, 16), 0, 0).is_none());
+        assert!(node_backdrop_words(rgba, (0, 0, 16, 16), (0, 0, 16, 16), 0, 0, 255).is_none());
     }
 
     #[test]
@@ -467,7 +478,7 @@ mod tests {
     fn rounded_corners_stay_transparent_and_interior_opaque() {
         let rgba = [0x40, 0x80, 0xc0, 255].repeat(12 * 12);
         let words =
-            node_backdrop_words(rgba, (0, 0, 12, 12), (0, 0, 12, 12), 6, 50).expect("blur on");
+            node_backdrop_words(rgba, (0, 0, 12, 12), (0, 0, 12, 12), 6, 50, 255).expect("blur on");
         // Premultiplied ARGB: a masked corner must be zero in every channel, not only alpha.
         for corner in [0, 11, 11 * 12, 11 * 12 + 11] {
             assert_eq!(
@@ -487,11 +498,39 @@ mod tests {
         }
         let square = [0x40, 0x80, 0xc0, 255].repeat(12 * 12);
         let words =
-            node_backdrop_words(square, (0, 0, 12, 12), (0, 0, 12, 12), 0, 50).expect("blur on");
+            node_backdrop_words(square, (0, 0, 12, 12), (0, 0, 12, 12), 0, 50, 255).expect("blur on");
         assert!(
             words.iter().all(|word| word >> 24 == 0xff),
             "radius 0 is full rect"
         );
+    }
+
+    #[test]
+    fn translucent_capsule_blur_preserves_wallpaper_visibility() {
+        // At 5% opacity the blurred layer must contribute 13/255, not 255/255.
+        // The fill is composited separately; this test catches the opaque second layer.
+        let rgba = [0x40, 0x80, 0xc0, 255].repeat(12 * 12);
+        let rect = (0, 0, 12, 12);
+        assert!(node_backdrop_words(rgba.clone(), rect, rect, 0, 50, 0).is_none());
+        let faint = node_backdrop_words(rgba.clone(), rect, rect, 0, 50, 13).unwrap();
+        assert!(faint.iter().all(|word| word >> 24 == 13));
+        assert_eq!(faint[0], 0x0d_03_07_0a, "RGB must be premultiplied");
+        let opaque = node_backdrop_words(rgba, rect, rect, 0, 50, 255).unwrap();
+        assert!(opaque.iter().all(|word| word >> 24 == 255));
+        assert_eq!(opaque[0], 0xff_40_80_c0);
+    }
+
+    #[test]
+    fn opacity_change_invalidates_node_backdrop_pixmap() {
+        let mut cache = NodeBackdropCache::default();
+        let source = vec![1_u8; 16];
+        let mut low = key(50);
+        low.opacity = 13;
+        let mut high = low;
+        high.opacity = 128;
+        cache.store(3, low, source.clone(), 7);
+        assert_eq!(cache.hit(3, high, &source), None);
+        assert_eq!(cache.hit(3, low, &source), Some(7));
     }
 
     #[test]

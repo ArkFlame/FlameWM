@@ -97,11 +97,11 @@ support depends on the installed ImageMagick delegates and security policy.
 
 ## Install the `.deb` on another computer (SDDM)
 
-The build creates `.target/dist/flamewm_0.1.1_amd64.deb`. Copy it to the
+The build creates `.target/dist/flamewm_0.1.2_amd64.deb`. Copy it to the
 other x86_64 Ubuntu/Debian computer, then run:
 
 ```bash
-sudo apt install ./flamewm_0.1.1_amd64.deb
+sudo apt install ./flamewm_0.1.2_amd64.deb
 ```
 
 The package **automatically installs** `/usr/share/xsessions/flamewm.desktop`
@@ -116,8 +116,8 @@ install SDDM itself.
 Validate the package before copying:
 
 ```bash
-dpkg-deb --contents .target/dist/flamewm_0.1.1_amd64.deb | grep -E '/xsessions/flamewm.desktop|/wayland-sessions/flamewm-wayland.desktop|/usr/bin/flamewm-session|/usr/bin/flamewm-wayland'
-python3 -I tools/flamewm_deb_acceptance.py --deb .target/dist/flamewm_0.1.1_amd64.deb
+dpkg-deb --contents .target/dist/flamewm_0.1.2_amd64.deb | grep -E '/xsessions/flamewm.desktop|/wayland-sessions/flamewm-wayland.desktop|/usr/bin/flamewm-session|/usr/bin/flamewm-wayland'
+python3 -I tools/flamewm_deb_acceptance.py --deb .target/dist/flamewm_0.1.2_amd64.deb
 ```
 
 FlameWM ships an X11 session and a preliminary Wayland session. Only the X11
@@ -130,14 +130,14 @@ Verify the actual `Architecture` field before attempting installation:
 
 ```bash
 dpkg --print-architecture
-dpkg-deb -f .target/dist/flamewm_0.1.1_amd64.deb Architecture
+dpkg-deb -f .target/dist/flamewm_0.1.2_amd64.deb Architecture
 ```
 
 Both should print `amd64` on an x86_64 Debian/Ubuntu computer. If the
 package says `any`, it is an old invalid artifact. Rebuild using the current
 `scripts/package`, then transfer the newly generated file. On the target
 computer, install from the location where it was copied, e.g.
-`sudo apt install ./flamewm_0.1.1_amd64.deb` in that directory.
+`sudo apt install ./flamewm_0.1.2_amd64.deb` in that directory.
 
 
 If installing the package directly from a restricted external mount produces
@@ -145,9 +145,9 @@ an `_apt` sandbox access notice, copy it to a publicly traversable directory
 first (this does not require weakening your home-directory permissions):
 
 ```bash
-cp .target/dist/flamewm_0.1.1_amd64.deb /tmp/flamewm_0.1.1_amd64.deb
-chmod 0644 /tmp/flamewm_0.1.1_amd64.deb
-sudo apt install /tmp/flamewm_0.1.1_amd64.deb
+cp .target/dist/flamewm_0.1.2_amd64.deb /tmp/flamewm_0.1.2_amd64.deb
+chmod 0644 /tmp/flamewm_0.1.2_amd64.deb
+sudo apt install /tmp/flamewm_0.1.2_amd64.deb
 ```
 
 If a previous failed installation left unrelated dependencies unpacked, use

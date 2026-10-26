@@ -10,6 +10,9 @@ pub enum PaintCommand {
         rect: Rect,
         radius: f32,
         blur_percent: u8,
+        /// Compositing strength of the node's blurred backdrop; derived from the
+        /// effective fill alpha, so a 5% capsule cannot cover the wallpaper opaquely.
+        opacity: u8,
         node: u32,
     },
     FillRect {
@@ -131,6 +134,7 @@ pub fn build_paint_commands_with_scroll(
                             rect,
                             radius: style.border_radius.max(0.0),
                             blur_percent,
+                            opacity: background.a,
                             node: index as u32,
                         });
                     }
@@ -455,6 +459,35 @@ mod node_backdrop_tests {
             })
             .collect();
         assert_eq!(radii, vec![12.0]);
+    }
+
+    #[test]
+    fn translucent_node_backdrop_uses_effective_fill_alpha() {
+        // A separate taskbar capsule has an opaque wallpaper underneath it. Its
+        // blur must NOT replace the wallpaper with a fully opaque layer at 5%.
+        let mut root = node("taskbar", 0.0, None, Some(1), None);
+        root.style.background = ColorValue::Literal(Color::TRANSPARENT);
+        let mut capsule = node("start-capsule", 8.0, Some(0), None, None);
+        capsule.style.background = ColorValue::Literal(Color {
+            r: 25, g: 27, b: 29, a: 13,
+        });
+        let mut document = RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![root, capsule],
+        }).expect("capsule fixture");
+        document.set_size_px("start-capsule", 42.0, 44.0).unwrap();
+        document.set_node_backdrop("start-capsule", Some(80)).unwrap();
+        let layout = LayoutEngine::compute(&document, 100.0, 44.0, InteractionState::default());
+        let commands = build_paint_commands(&document, &layout, InteractionState::default());
+        assert!(commands.iter().any(|command| matches!(command,
+            PaintCommand::NodeBackdrop { opacity: 13, .. }
+        )), "5% tint must not get an opaque blur");
+        assert!(commands.iter().any(|command| matches!(command,
+            PaintCommand::FillRect { color: Color { a: 13, .. }, .. }
+        )), "tint alpha must remain unchanged");
     }
 
     /// Real-Start-shaped scroll fixture: the 100x50 `pane` is the sized box,

@@ -1,3 +1,10 @@
+## 0.1.2 — Separate-taskbar capsule alpha fix
+
+- Separate-mode taskbar capsules now alpha-blend the blurred backdrop with the already-painted wallpaper instead of replacing it with opaque blurred pixels whenever opacity is nonzero. This fixes the apparent solid background at 1–5% and preserves the expected transparent 0% and opaque 100% endpoints.
+- Premultiplied ARGB is used for the blurred pixmap and its cache key now includes opacity, so live settings changes invalidate the correct resource without stale backgrounds.
+- Unified taskbar compositing, blur settings, capsule shapes and hover behaviors are unchanged.
+- Source-level regression tests cover zero, low and full alpha and cache invalidation. Native Xephyr visual tests must still run on a graphical Linux host.
+
 ## Unreleased — Wayland tty session, terminal CPU/RAM, snap drag-out, translucency order
 
 ### Wayland (preliminary)
