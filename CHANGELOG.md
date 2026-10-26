@@ -1,3 +1,34 @@
+## Unreleased — Wayland cursor, CPU and memory pass
+
+Measured with `tools/bench-flamewm-session.py` (nested Wayland session, shell and desktop on
+XWayland, terminal/explorer/settings opened, fixed 10 s XTEST workload; four runs each):
+whole-session CPU median 8.2% -> 4.1%, allocated memory (heap + anonymous) 174 MB -> 134 MB.
+
+### Wayland (preliminary)
+- The pointer shows the cursor clients ask for: the surface set with `wl_pointer.set_cursor`
+  (XWayland forwards every X11 cursor that way) or a named xcursor cursor, instead of a white
+  square. Elements are `Kind::Cursor`, so the DRM compositor uses the hardware cursor plane. The
+  theme is resolved like the X11 session (`flamewm-session-core::cursor_environment` and the saved
+  `cursorTheme`) and exported before XWayland starts.
+- Titlebar buttons are drawn above the titlebar (they were hidden under it).
+- Titlebar fills keep stable element ids, so a pointer move no longer repaints every titlebar.
+- `FLAMEWM_WAYLAND_DUMP_POINTER=<x>,<y>` places the pointer before a frame dump.
+
+### Performance
+- Translucent window backdrops are a 1/4-scale blurred canvas (about 0.5 MB at 1080p) instead of
+  the decoded wallpaper (17 MB) or a full-size blurred root (8 MB); the wallpaper canvas is cached
+  under `$XDG_CACHE_HOME/flamewm/backdrops` so later windows skip the decode. Terminal 38 -> 17 MB
+  PSS and 5.1% -> 0.75% CPU under the workload; explorer 25 -> 10 MB PSS.
+- A restack no longer re-crops, re-uploads and repaints identical backdrops.
+- The X11 WM masks drag snapshots from its kept wallpaper canvas and no longer keeps a second,
+  decoded copy of the wallpaper (17 MB for the default) after the first drag.
+- The WM, desktop, shell, settings, explorer and terminal ship as one multi-call executable
+  (`flamewm-apps`) with hard links, so their processes share the common code pages: those five
+  session apps 98.9 -> 92.5 MB PSS, package executables about 47 -> 26 MB.
+
+### Tools
+- `tools/bench-flamewm-session.py`: ten-second CPU and memory benchmark of a whole desktop.
+- The terminal writes FlameWM profiler reports like the other apps.
 ## 0.1.2 — Separate-taskbar capsule alpha fix
 
 - Separate-mode taskbar capsules now alpha-blend the blurred backdrop with the already-painted wallpaper instead of replacing it with opaque blurred pixels whenever opacity is nonzero. This fixes the apparent solid background at 1–5% and preserves the expected transparent 0% and opaque 100% endpoints.

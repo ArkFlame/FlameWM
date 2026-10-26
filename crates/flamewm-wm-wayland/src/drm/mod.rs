@@ -4,7 +4,8 @@
 //!
 //! Scope: the first connected connector drives `State::output`; further connectors show the same
 //! scene. Frames are paced by vblank events. Hotplug rescans the primary GPU on udev change events.
-//! The cursor is a software square drawn at the pointer.
+//! The pointer is the client's cursor surface or a themed xcursor image (`crate::cursor`), drawn as
+//! `Kind::Cursor` so the `DrmCompositor` can put it on the hardware cursor plane.
 //!
 //! # Frame scheduling
 //!
@@ -116,11 +117,8 @@ use smithay::backend::input::{
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::ImportDma;
-use smithay::backend::renderer::element::solid::SolidColorRenderElement;
-use smithay::backend::renderer::element::{Id, Kind};
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::renderer::sync::SyncPoint;
-use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::session::Session;
 use smithay::backend::udev::{self, UdevBackend, UdevEvent};
 use smithay::desktop::utils::send_frames_surface_tree;
@@ -137,7 +135,7 @@ use smithay::reexports::drm::control::{
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_server::backend::GlobalId;
-use smithay::utils::{DeviceFd, Physical, Point, Rectangle, Size, Transform};
+use smithay::utils::{DeviceFd, Physical, Size, Transform};
 
 use crate::Stage;
 use crate::StageStatus;
@@ -147,7 +145,7 @@ use crate::logind::{Event as LogindEvent, LogindSession, PauseKind};
 mod device;
 mod input;
 
-use crate::render::{self, CURSOR_COLOR, CURSOR_SIZE, Elem};
+use crate::render::{self, Elem};
 use crate::stage_line;
 use crate::startup::{FIRST_FRAME_DEADLINE, FirstFrameGate, NO_FAILURE};
 use crate::state::{
@@ -196,7 +194,6 @@ pub struct Drm {
     /// `dev_t` of the GPU this backend drives; udev change events and resume events for it are ours.
     primary_dev: u64,
     surfaces: Vec<OutputSurface>,
-    cursor_id: Id,
     /// Render, vblank and device work are no-ops while the session is not ours.
     paused: bool,
     /// Why the render gate was last logged as closed, so each transition is reported once.
@@ -348,7 +345,6 @@ fn init_backend(
         gpu_name,
         primary_dev,
         surfaces: Vec::new(),
-        cursor_id: Id::new(),
         paused: false,
         gate: None,
         retry_scheduled: false,
@@ -529,21 +525,12 @@ impl Drm {
             return;
         }
 
-        let app = render::build_elements(state, &mut self.renderer);
-        let pointer = Point::<i32, Physical>::from((
-            state.pointer.x.round() as i32,
-            state.pointer.y.round() as i32,
-        ));
-        let cursor = SolidColorRenderElement::new(
-            self.cursor_id.clone(),
-            Rectangle::new(pointer, Size::from((CURSOR_SIZE, CURSOR_SIZE))),
-            CommitCounter::default(),
-            CURSOR_COLOR,
-            Kind::Unspecified,
-        );
-        let mut elements: Vec<Elem> = Vec::with_capacity(app.len() + 1);
-        elements.push(Elem::Solid(cursor));
-        elements.extend(app);
+        // Cursor first: it is the topmost element and the one the cursor plane can take.
+        let mut elements: Vec<Elem> =
+            state
+                .cursors
+                .elements(&mut self.renderer, &state.cursor_status, state.pointer);
+        elements.extend(render::build_elements(state, &mut self.renderer));
 
         // `FLAMEWM_WAYLAND_DUMP`: one readback of the primary output. Taking the path makes a set
         // request be consumed exactly once, and `state.dumped` stops main.rs's re-arming timer.
@@ -1569,6 +1556,7 @@ fn send_frame_callbacks(state: &State) {
             |_, _| Some(output.clone()),
         );
     }
+    render::send_cursor_frame(state, time);
 }
 
 #[cfg(test)]

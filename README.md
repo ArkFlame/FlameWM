@@ -41,7 +41,7 @@ reporting `drm_compiled=true`. The compositor is `crates/flamewm-wm-wayland` (Sm
 - XWayland, so the existing shell, desktop, launcher and settings X11 clients run unchanged. Native
   Wayland shell clients do not exist yet.
 - Nested developer backend: `--backend=nested` opens a winit window inside an existing Wayland or
-  X11 session (output transform `Flipped180`, window sized to the host, host cursor). This is a
+  X11 session (output transform `Flipped180`, window sized to the host, compositor-drawn cursor). This is a
   developer mode only, not a product session.
 
 Runtime dependencies added by the package on top of the X11 stack: `libgbm1`, `libdrm2`,
@@ -85,7 +85,7 @@ Wayland wrapper does not fall back to X11 by itself.
   XWayland; layer-shell support exists in the compositor but nothing shipped uses it yet.
 - No session lock, no screenshot/portal integration, no portal-driven capture.
 - One connected connector drives the scene; further connectors show the same scene. No output
-  layout, per-output scale, gamma or DPMS. The cursor is a software square, not a hardware plane.
+  layout, per-output scale, gamma or DPMS. Animated cursors show their first frame.
 - The terminal body stays black at the default 80% opacity because the translucent fill blends over
   a backdrop taken from the X root; at `background_opacity = 100` it renders correctly.
 - Launcher settings parity with X11 is partial, and resize parity (edge-specific resize, Ctrl+Super

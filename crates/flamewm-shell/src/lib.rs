@@ -43,3 +43,11 @@ pub use runtime::{
     ChangedDomains, ContextMenuKind, ContextMenuState, ProjectionKind, ShellControl, ShellDirty,
     ShellRuntime, ShellSnapshot, ShellSurfaces, TaskSlotTarget,
 };
+
+extern crate self as flamewm_shell;
+
+/// The application entry point, compiled into this library so the multi-call `flamewm-apps`
+/// executable can run it; `src/main.rs` is a one-line wrapper around it.
+#[doc(hidden)]
+#[path = "main.rs"]
+pub mod entry;

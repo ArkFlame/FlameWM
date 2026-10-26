@@ -324,39 +324,269 @@ fn box_downscale(rgba: &[u8], width: u32, height: u32, factor: u32) -> (Vec<u8>,
     (out, small_w, small_h)
 }
 
+/// Bilinear taps `(lower index, upper index, weight of the upper tap out of 256)` mapping each of
+/// `out` target coordinates onto a source of `len` samples.
+fn bilinear_taps(len: u32, out: u32) -> Vec<(usize, usize, u32)> {
+    let scale = len as f32 / out as f32;
+    (0..out)
+        .map(|i| {
+            let f = ((i as f32 + 0.5) * scale - 0.5).clamp(0.0, (len - 1) as f32);
+            let lo = f.floor();
+            let hi = (lo as u32 + 1).min(len - 1);
+            (lo as usize, hi as usize, ((f - lo) * 256.0).round() as u32)
+        })
+        .collect()
+}
+
+/// One opaque ARGB32 word blended from two source rows at a column tap and a row weight.
+#[inline]
+fn bilinear_word(top_row: &[u8], bottom_row: &[u8], col: (usize, usize, u32), wy: u32) -> u32 {
+    let (a, b, wx) = (col.0 * 4, col.1 * 4, col.2);
+    let mut word = 0xff00_0000u32;
+    for channel in 0..3usize {
+        let top = u32::from(top_row[a + channel]) * (256 - wx) + u32::from(top_row[b + channel]) * wx;
+        let bottom = u32::from(bottom_row[a + channel]) * (256 - wx) + u32::from(bottom_row[b + channel]) * wx;
+        let value = (top * (256 - wy) + bottom * wy + (1 << 15)) >> 16;
+        word |= value << (16 - 8 * channel);
+    }
+    word
+}
+
 /// Bilinear upscale of a small RGBA image to opaque ARGB32 words for a `width` x `height` target.
 /// Weights are 8-bit fixed point and the taps are computed once per column and per row.
 fn bilinear_argb_words(small: &[u8], small_w: u32, small_h: u32, width: u32, height: u32) -> Vec<u32> {
-    // (lower index, upper index, weight of the upper tap out of 256) for each output coordinate.
-    let taps = |len: u32, out: u32| -> Vec<(usize, usize, u32)> {
-        let scale = len as f32 / out as f32;
-        (0..out)
-            .map(|i| {
-                let f = ((i as f32 + 0.5) * scale - 0.5).clamp(0.0, (len - 1) as f32);
-                let lo = f.floor();
-                let hi = (lo as u32 + 1).min(len - 1);
-                (lo as usize, hi as usize, ((f - lo) * 256.0).round() as u32)
-            })
-            .collect()
-    };
-    let (cols, rows) = (taps(small_w, width), taps(small_h, height));
+    let (cols, rows) = (bilinear_taps(small_w, width), bilinear_taps(small_h, height));
     let stride = small_w as usize * 4;
     let mut words = Vec::with_capacity((width * height) as usize);
     for &(r0, r1, wy) in &rows {
         let (top_row, bottom_row) = (&small[r0 * stride..], &small[r1 * stride..]);
-        for &(c0, c1, wx) in &cols {
-            let (a, b) = (c0 * 4, c1 * 4);
-            let mut word = 0xff00_0000u32;
-            for channel in 0..3usize {
-                let top = u32::from(top_row[a + channel]) * (256 - wx) + u32::from(top_row[b + channel]) * wx;
-                let bottom = u32::from(bottom_row[a + channel]) * (256 - wx) + u32::from(bottom_row[b + channel]) * wx;
-                let value = (top * (256 - wy) + bottom * wy + (1 << 15)) >> 16;
-                word |= value << (16 - 8 * channel);
-            }
-            words.push(word);
-        }
+        words.extend(cols.iter().map(|&col| bilinear_word(top_row, bottom_row, col, wy)));
     }
     words
+}
+
+/// A blurred root-sized image stored at the resolution its blur leaves meaningful.
+///
+/// A radius of at least twice [`BLUR_DOWNSCALE`] blurs a 1/`BLUR_DOWNSCALE` copy and upsamples it
+/// (see [`blurred_argb_words`]); that small copy is all this keeps, 1/16 of the full image, and a
+/// crop upsamples only the pixels it returns. A crop is pixel-identical to cropping the full
+/// upsampled image. Smaller radii keep full-resolution words.
+#[derive(Debug)]
+pub(crate) struct BlurredCanvas {
+    width: u32,
+    height: u32,
+    pixels: CanvasPixels,
+}
+
+#[derive(Debug)]
+enum CanvasPixels {
+    Full(Vec<u32>),
+    Scaled {
+        small: Vec<u8>,
+        small_w: u32,
+        small_h: u32,
+    },
+}
+
+impl BlurredCanvas {
+    /// Blurs a `width` x `height` RGBA image per [`blur_radius_px`].
+    pub(crate) fn new(width: u32, height: u32, mut rgba: Vec<u8>, opacity_percent: u8, blur_percent: u8) -> Self {
+        let radius = blur_radius_px(opacity_percent, blur_percent);
+        let pixels = if radius >= 2.0 * BLUR_DOWNSCALE as f32 {
+            let (mut small, small_w, small_h) = box_downscale(&rgba, width, height, BLUR_DOWNSCALE);
+            blur_in_place_slice(&mut small, small_w, small_h, radius / BLUR_DOWNSCALE as f32);
+            CanvasPixels::Scaled { small, small_w, small_h }
+        } else {
+            CanvasPixels::Full(blurred_argb_words(width, height, std::mem::take(&mut rgba), opacity_percent, blur_percent))
+        };
+        Self { width, height, pixels }
+    }
+
+    /// A canvas from a small image stored earlier (see [`Self::scaled_bytes`]); `None` when the
+    /// bytes do not describe a `width` x `height` canvas.
+    pub(crate) fn from_scaled(width: u32, height: u32, small: Vec<u8>) -> Option<Self> {
+        let (small_w, small_h) = (width.div_ceil(BLUR_DOWNSCALE), height.div_ceil(BLUR_DOWNSCALE));
+        (width > 0 && height > 0 && small.len() == (small_w * small_h * 4) as usize).then_some(Self {
+            width,
+            height,
+            pixels: CanvasPixels::Scaled { small, small_w, small_h },
+        })
+    }
+
+    /// The stored small image, when this canvas keeps one.
+    pub(crate) fn scaled_bytes(&self) -> Option<&[u8]> {
+        match &self.pixels {
+            CanvasPixels::Scaled { small, .. } => Some(small),
+            CanvasPixels::Full(_) => None,
+        }
+    }
+
+    pub(crate) fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// The `size` region at `origin` as opaque ARGB32 words. Pixels off the canvas replicate its
+    /// nearest edge.
+    pub(crate) fn crop(&self, origin: (i32, i32), size: (u32, u32)) -> Vec<u32> {
+        if self.width == 0 || self.height == 0 {
+            return Vec::new();
+        }
+        let clamp = |start: i32, offset: u32, len: u32| (i64::from(start) + i64::from(offset)).clamp(0, i64::from(len) - 1) as usize;
+        let mut out = Vec::with_capacity(size.0 as usize * size.1 as usize);
+        match &self.pixels {
+            CanvasPixels::Full(words) => {
+                for y in 0..size.1 {
+                    let row = &words[clamp(origin.1, y, self.height) * self.width as usize..][..self.width as usize];
+                    out.extend((0..size.0).map(|x| row[clamp(origin.0, x, self.width)]));
+                }
+            }
+            CanvasPixels::Scaled { small, small_w, small_h } => {
+                let (cols, rows) = (bilinear_taps(*small_w, self.width), bilinear_taps(*small_h, self.height));
+                let stride = *small_w as usize * 4;
+                for y in 0..size.1 {
+                    let (r0, r1, wy) = rows[clamp(origin.1, y, self.height)];
+                    let (top_row, bottom_row) = (&small[r0 * stride..], &small[r1 * stride..]);
+                    out.extend((0..size.0).map(|x| bilinear_word(top_row, bottom_row, cols[clamp(origin.0, x, self.width)], wy)));
+                }
+            }
+        }
+        out
+    }
+
+    /// Replaces the `size` region at `origin` (inside the canvas) with `rgba`, blurred alone with
+    /// the same radius. A downscaled canvas takes the whole small cells the region covers.
+    pub(crate) fn paste(&mut self, origin: (u32, u32), size: (u32, u32), rgba: Vec<u8>, opacity_percent: u8, blur_percent: u8) {
+        let (width, height) = (self.width, self.height);
+        if size.0 == 0 || size.1 == 0 || origin.0 + size.0 > width || origin.1 + size.1 > height || rgba.len() != (size.0 * size.1 * 4) as usize {
+            return;
+        }
+        match &mut self.pixels {
+            CanvasPixels::Full(words) => {
+                let patch = blurred_argb_words(size.0, size.1, rgba, opacity_percent, blur_percent);
+                for (row, source) in patch.chunks_exact(size.0 as usize).enumerate() {
+                    let start = (origin.1 as usize + row) * width as usize + origin.0 as usize;
+                    words[start..start + size.0 as usize].copy_from_slice(source);
+                }
+            }
+            CanvasPixels::Scaled { small, small_w, .. } => {
+                // Only whole cells: a cell straddling the region edge keeps its old average.
+                let first = (origin.0.div_ceil(BLUR_DOWNSCALE), origin.1.div_ceil(BLUR_DOWNSCALE));
+                let end = ((origin.0 + size.0) / BLUR_DOWNSCALE, (origin.1 + size.1) / BLUR_DOWNSCALE);
+                if end.0 <= first.0 || end.1 <= first.1 {
+                    return;
+                }
+                let (cells_w, cells_h) = (end.0 - first.0, end.1 - first.1);
+                let (inner_x, inner_y) = (first.0 * BLUR_DOWNSCALE - origin.0, first.1 * BLUR_DOWNSCALE - origin.1);
+                let (inner_w, inner_h) = (cells_w * BLUR_DOWNSCALE, cells_h * BLUR_DOWNSCALE);
+                let mut inner = Vec::with_capacity((inner_w * inner_h * 4) as usize);
+                for y in inner_y..inner_y + inner_h {
+                    let start = ((y * size.0 + inner_x) * 4) as usize;
+                    inner.extend_from_slice(&rgba[start..start + (inner_w * 4) as usize]);
+                }
+                let (mut cells, _, _) = box_downscale(&inner, inner_w, inner_h, BLUR_DOWNSCALE);
+                let radius = blur_radius_px(opacity_percent, blur_percent);
+                blur_in_place_slice(&mut cells, cells_w, cells_h, radius / BLUR_DOWNSCALE as f32);
+                let stride = *small_w as usize * 4;
+                for (row, source) in cells.chunks_exact((cells_w * 4) as usize).enumerate() {
+                    let start = (first.1 as usize + row) * stride + first.0 as usize * 4;
+                    small[start..start + source.len()].copy_from_slice(source);
+                }
+            }
+        }
+    }
+}
+
+/// Magic and format version of a cached wallpaper canvas file.
+const CANVAS_CACHE_MAGIC: &[u8; 8] = b"FWBCNV01";
+/// Cached canvases kept; older ones are removed when a new one is written.
+const CANVAS_CACHE_FILES: usize = 6;
+
+/// The wallpaper under the whole `root`, blurred once per [`BlurredCanvas::new`].
+///
+/// The first FlameWM window to need it decodes, composes and blurs the wallpaper and stores the
+/// small canvas (about half a megabyte at 1080p) under `$XDG_CACHE_HOME/flamewm/backdrops`; every
+/// later window, and later sessions, load that file instead of decoding the wallpaper again. The
+/// key covers the wallpaper file (path, size, modification time), the fit, the root size and the
+/// blur, so a changed wallpaper or setting never reads a stale canvas. The decoded wallpaper is
+/// dropped as soon as the canvas exists.
+pub(crate) fn wallpaper_canvas(spec: &WindowBackdrop, root: (u32, u32)) -> Result<BlurredCanvas, String> {
+    let path = wallpaper_file(&spec.wallpaper, &spec.packaged_root);
+    let cache = canvas_cache_path(&path, spec, root);
+    if let Some(canvas) = cache.as_deref().and_then(|file| load_canvas(file, root)) {
+        return Ok(canvas);
+    }
+    let natural = flamewm_image_core::wallpaper::decode_file(&path)?;
+    let fit = flamewm_image_core::wallpaper::parse(&spec.fit);
+    let composed = flamewm_image_core::wallpaper::compose_region(&natural, root.0, root.1, fit, (0, 0, root.0, root.1))
+        .ok_or("window backdrop: wallpaper region unavailable")?;
+    drop(natural);
+    let canvas = BlurredCanvas::new(root.0, root.1, composed.pixels, 0, spec.blur_percent);
+    if let (Some(file), Some(small)) = (cache.as_deref(), canvas.scaled_bytes()) {
+        store_canvas(file, root, small);
+    }
+    Ok(canvas)
+}
+
+/// Cache file for the wallpaper canvas of `spec` at `root`; `None` without a cache directory or a
+/// readable wallpaper file.
+fn canvas_cache_path(wallpaper: &std::path::Path, spec: &WindowBackdrop, root: (u32, u32)) -> Option<std::path::PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let metadata = std::fs::metadata(wallpaper).ok()?;
+    let modified = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (wallpaper, metadata.len(), modified.as_nanos(), spec.fit.as_str(), root, spec.blur_percent, BLUR_DOWNSCALE).hash(&mut hasher);
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").filter(|value| !value.is_empty()).map(|home| std::path::PathBuf::from(home).join(".cache")))?;
+    Some(base.join("flamewm/backdrops").join(format!("{:016x}.canvas", hasher.finish())))
+}
+
+fn load_canvas(file: &std::path::Path, root: (u32, u32)) -> Option<BlurredCanvas> {
+    let bytes = std::fs::read(file).ok()?;
+    let header = CANVAS_CACHE_MAGIC.len() + 8;
+    if bytes.len() < header || &bytes[..CANVAS_CACHE_MAGIC.len()] != CANVAS_CACHE_MAGIC {
+        return None;
+    }
+    let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().expect("four bytes"));
+    let size = (word(CANVAS_CACHE_MAGIC.len()), word(CANVAS_CACHE_MAGIC.len() + 4));
+    if size != root {
+        return None;
+    }
+    BlurredCanvas::from_scaled(root.0, root.1, bytes[header..].to_vec())
+}
+
+/// Writes the canvas atomically (temporary file, then rename) and keeps only the newest
+/// [`CANVAS_CACHE_FILES`] canvases. Any failure only costs the next window a decode.
+fn store_canvas(file: &std::path::Path, root: (u32, u32), small: &[u8]) {
+    let Some(dir) = file.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let mut bytes = Vec::with_capacity(CANVAS_CACHE_MAGIC.len() + 8 + small.len());
+    bytes.extend_from_slice(CANVAS_CACHE_MAGIC);
+    bytes.extend_from_slice(&root.0.to_le_bytes());
+    bytes.extend_from_slice(&root.1.to_le_bytes());
+    bytes.extend_from_slice(small);
+    let temporary = file.with_extension(format!("tmp{}", std::process::id()));
+    if std::fs::write(&temporary, &bytes).is_err() || std::fs::rename(&temporary, file).is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut canvases: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "canvas"))
+        .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
+        .collect();
+    canvases.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, stale) in canvases.into_iter().skip(CANVAS_CACHE_FILES) {
+        let _ = std::fs::remove_file(stale);
+    }
 }
 
 /// Window-level pseudo-transparency for a Normal window (for example the explorer): the
@@ -472,6 +702,64 @@ mod tests {
         assert!(channel(0) < channel(16) && channel(16) < channel(33), "dark side ramps up");
         assert!(channel(33) < channel(50) && channel(50) < channel(65), "light side ramps up");
         assert!((64..192).contains(&channel(33)), "edge is soft: {}", channel(33));
+    }
+
+    /// A scaled canvas never stores the full image, yet every crop (inside, straddling or off the
+    /// canvas) equals cropping the full upsampled image that `blurred_argb_words` returns.
+    #[test]
+    fn scaled_canvas_crops_match_the_full_upsampled_image() {
+        let (width, height) = (61u32, 37u32);
+        let rgba: Vec<u8> = (0..width * height)
+            .flat_map(|i| {
+                let (x, y) = (i % width, i / width);
+                [(x * 255 / width) as u8, (y * 255 / height) as u8, ((x * y) % 251) as u8, 0xff]
+            })
+            .collect();
+        let full = blurred_argb_words(width, height, rgba.clone(), 0, 80);
+        let canvas = BlurredCanvas::new(width, height, rgba, 0, 80);
+        assert!(canvas.scaled_bytes().is_some(), "80% blur keeps only the small image");
+        let reference = |origin: (i32, i32), size: (u32, u32)| -> Vec<u32> {
+            let mut out = Vec::new();
+            for y in 0..size.1 as i32 {
+                let sy = (origin.1 + y).clamp(0, height as i32 - 1) as u32;
+                for x in 0..size.0 as i32 {
+                    let sx = (origin.0 + x).clamp(0, width as i32 - 1) as u32;
+                    out.push(full[(sy * width + sx) as usize]);
+                }
+            }
+            out
+        };
+        for &(origin, size) in &[((0, 0), (61, 37)), ((7, 3), (20, 11)), ((-5, -2), (12, 9)), ((55, 30), (14, 14))] {
+            assert_eq!(canvas.crop(origin, size), reference(origin, size), "origin {origin:?} size {size:?}");
+        }
+        let stored = canvas.scaled_bytes().expect("scaled").to_vec();
+        let reloaded = BlurredCanvas::from_scaled(width, height, stored).expect("same dimensions");
+        assert_eq!(reloaded.crop((3, 4), (10, 10)), canvas.crop((3, 4), (10, 10)));
+        assert!(BlurredCanvas::from_scaled(width + 9, height, vec![0; 16]).is_none());
+    }
+
+    #[test]
+    fn a_scaled_paste_replaces_whole_cells_only() {
+        let (width, height) = (32u32, 16u32);
+        let mut canvas = BlurredCanvas::new(width, height, vec![0; (width * height * 4) as usize], 0, 80);
+        let white = vec![0xff; 16 * 8 * 4];
+        canvas.paste((8, 4), (16, 8), white, 0, 80);
+        let small = canvas.scaled_bytes().expect("scaled");
+        let cell = |sx: usize, sy: usize| small[(sy * 8 + sx) * 4];
+        assert!(cell(3, 1) > 0, "a covered cell takes the patch");
+        assert_eq!(cell(0, 0), 0, "cells outside the patch are untouched");
+    }
+
+    #[test]
+    fn a_cached_canvas_round_trips_through_its_file() {
+        let dir = std::env::temp_dir().join(format!("flamewm-canvas-{}", std::process::id()));
+        let file = dir.join("one.canvas");
+        let canvas = BlurredCanvas::new(40, 24, vec![90; 40 * 24 * 4], 0, 80);
+        store_canvas(&file, (40, 24), canvas.scaled_bytes().expect("scaled"));
+        let loaded = load_canvas(&file, (40, 24)).expect("cached canvas");
+        assert_eq!(loaded.crop((0, 0), (40, 24)), canvas.crop((0, 0), (40, 24)));
+        assert!(load_canvas(&file, (41, 24)).is_none(), "another root size is a miss");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

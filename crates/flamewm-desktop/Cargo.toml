@@ -1,5 +1,6 @@
 [package]
 name = "flamewm-desktop"
+autobins = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -34,3 +35,7 @@ workspace = true
 
 [dev-dependencies]
 flamewm-ui-x11 = { path = "../flamewm-ui-x11", features = ["test-support"] }
+
+[[bin]]
+name = "flamewm-desktop"
+path = "src/bin/flamewm-desktop.rs"

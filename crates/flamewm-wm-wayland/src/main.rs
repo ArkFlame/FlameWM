@@ -11,6 +11,8 @@
 //! - `FLAMEWM_WAYLAND_DUMP=<file.ppm>`: write one framebuffer readback after
 //!   `FLAMEWM_WAYLAND_DUMP_AFTER_MS` (default 2000); with `FLAMEWM_WAYLAND_EXIT_AFTER_DUMP=1`
 //!   the compositor exits right after the dump (used by the headless evidence run).
+//!   `FLAMEWM_WAYLAND_DUMP_POINTER=<x>,<y>` places the pointer there half a second before the dump,
+//!   so the frame shows the cursor the client under it asked for.
 //!
 //! Two non-compositing entry points exist for packaging and diagnostics:
 //! - `--capabilities`: machine-readable build facts on stdout, exit 0. Touches no bus, no `/dev`
@@ -60,6 +62,7 @@
 //! autostart is skipped instead of aborting the session.
 
 mod control;
+mod cursor;
 #[cfg(feature = "drm")]
 #[allow(unsafe_code)]
 // EGL display and renderer creation are unsafe in smithay; no other module may.
@@ -450,6 +453,9 @@ fn abort_startup(reason: &str) {
 
 /// Runs the compositor and returns its exit code.
 fn run() -> Result<i32, Box<dyn Error>> {
+    // Before any thread or child exists: XWayland, the session clients and the compositor's own
+    // pointer read the theme from this process's environment.
+    cursor::export_session_theme(cursor::saved_theme().as_deref());
     let explicit = std::env::var("FLAMEWM_WAYLAND_BACKEND").ok();
     let backend = select_backend(explicit.as_deref());
     if let Some(requested) = explicit
@@ -570,6 +576,13 @@ fn run() -> Result<i32, Box<dyn Error>> {
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(2000);
         let path = PathBuf::from(path);
+        let mut place_pointer =
+            std::env::var("FLAMEWM_WAYLAND_DUMP_POINTER")
+                .ok()
+                .and_then(|value| {
+                    let (x, y) = value.split_once(',')?;
+                    Some((x.trim().parse::<f64>().ok()?, y.trim().parse::<f64>().ok()?))
+                });
         // Re-armed until the frame is written: a redraw request is only honoured once the host
         // delivers a frame callback, so a single shot can be lost.
         handle.insert_source(
@@ -577,6 +590,12 @@ fn run() -> Result<i32, Box<dyn Error>> {
             move |_, _, state| {
                 if state.dumped {
                     return TimeoutAction::Drop;
+                }
+                if let Some((x, y)) = place_pointer.take() {
+                    // The client under the pointer answers the enter with its cursor; give it time.
+                    state.on_motion((x, y).into(), 0);
+                    state.request_redraw();
+                    return TimeoutAction::ToDuration(Duration::from_millis(500));
                 }
                 state.dump = Some(path.clone());
                 state.request_redraw();
@@ -717,6 +736,8 @@ fn init_winit(
     );
     state.output.set_preferred(mode);
     state.output_size = (size.w, size.h).into();
+    // The compositor draws the pointer the clients ask for, as the tty backend does.
+    backend.window().set_cursor_visible(false);
     state.backend = Some(backend);
     handle.insert_source(winit_source, |event, _, state| match event {
         WinitEvent::Resized { size, .. } => state.on_resized(size.w, size.h),

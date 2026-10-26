@@ -418,7 +418,7 @@ struct OriginalItem {
     drag_cell: Cell,
 }
 
-fn main() -> Result<(), String> {
+pub fn main() -> Result<(), String> {
     flamewm_profiler::init_process("flamewm-desktop");
     flamewm_debug::init_process("desktop");
     let home = PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?);

@@ -13,8 +13,8 @@ use flamewm_profiler::CounterPoint;
 use flamewm_reactor::{Reactor, WakeDeadline};
 use flamewm_ui_x11::{PointerButton, UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess};
 
-use crate::projection;
-use crate::{
+use crate::entry::projection;
+use crate::entry::{
     DesktopState, MenuKind, MenuState, context_secondary_counter, hide_confirm, hide_menus,
     pointer_button, pointer_on_output, selected_menu_id, sync_menu,
 };

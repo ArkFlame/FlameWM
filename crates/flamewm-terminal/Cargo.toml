@@ -1,5 +1,6 @@
 [package]
 name = "flamewm-terminal"
+autobins = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +15,7 @@ flamewm-clipboard = { path = "../flamewm-clipboard" }
 flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
+flamewm-profiler = { path = "../flamewm-profiler" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 rustix = { workspace = true, features = ["pty", "termios"] }
@@ -29,4 +31,4 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "flamewm-terminal"
-path = "src/main.rs"
+path = "src/bin/flamewm-terminal.rs"

@@ -1,5 +1,6 @@
 [package]
 name = "flamewm-shell"
+autobins = false
 version.workspace = true
 edition = "2021"
 rust-version = "1.70"
@@ -36,3 +37,7 @@ workspace = true
 
 [dev-dependencies]
 flamewm-ui-x11 = { path = "../flamewm-ui-x11", features = ["test-support"] }
+
+[[bin]]
+name = "flamewm-shell"
+path = "src/bin/flamewm-shell.rs"

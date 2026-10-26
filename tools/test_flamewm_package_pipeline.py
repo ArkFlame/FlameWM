@@ -14,7 +14,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-BINARIES = ("flamewm", "flamewm-session", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
+BINARIES = ("flamewm-apps", "flamewm", "flamewm-session", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
             "flamewm-screenshot", "flamewm-explorer", "flamewm-render-x11", "flamewm-render-compile",
             "flamewm-render-inspect", "flamewm-lock", "flamewm-terminal", "flamewm-wayland")
 # Stub for the --capabilities contract: key=value lines, exit 0, no device access.

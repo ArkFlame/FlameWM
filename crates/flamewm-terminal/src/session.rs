@@ -47,6 +47,7 @@ impl Session {
 
     /// Feeds child output through the parser, then writes any replies (cursor reports, DA) back to the child.
     pub fn feed(&mut self, bytes: &[u8]) {
+        let _parse = flamewm_profiler::start("terminal.parse");
         self.parser.advance(bytes, &mut self.screen);
         let replies = self.screen.take_replies();
         if !replies.is_empty() {

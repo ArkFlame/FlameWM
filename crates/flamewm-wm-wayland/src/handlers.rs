@@ -311,8 +311,11 @@ impl SeatHandler for State {
         set_data_device_focus(&self.display, seat, client);
     }
 
-    fn cursor_image(&mut self, _seat: &Seat<Self>, _image: CursorImageStatus) {
-        // The nested backend shows the host cursor; client cursor images are not forwarded yet.
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        if self.cursor_status != image {
+            self.cursor_status = image;
+            self.request_redraw();
+        }
     }
 }
 

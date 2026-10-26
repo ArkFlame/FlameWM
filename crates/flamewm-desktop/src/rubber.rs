@@ -1,5 +1,5 @@
 use super::*;
-use crate::settings_values::{accent_color, percent_alpha, setting_percent};
+use crate::entry::settings_values::{accent_color, percent_alpha, setting_percent};
 use flamewm_api::root_rubber::RootRubber;
 
 /// One model item's rubber target, frozen at gesture start. `slot` is the visual node id

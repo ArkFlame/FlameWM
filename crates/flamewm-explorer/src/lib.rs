@@ -688,3 +688,11 @@ mod text_field_tests;
 #[cfg(test)]
 #[path = "tests/filter_cache_tests.rs"]
 mod filter_cache_tests;
+
+extern crate self as flamewm_explorer;
+
+/// The application entry point, compiled into this library so the multi-call `flamewm-apps`
+/// executable can run it; `src/main.rs` is a one-line wrapper around it.
+#[doc(hidden)]
+#[path = "main.rs"]
+pub mod entry;

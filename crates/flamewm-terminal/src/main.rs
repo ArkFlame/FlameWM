@@ -25,7 +25,7 @@ use flamewm_terminal::wake::{self, ALL_TABS_CLOSED};
 const UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-terminal.rwr"));
 const DEFAULT_WINDOW: (u32, u32) = (880, 540);
 
-fn main() {
+pub fn main() {
     if let Err(error) = run() {
         if error != ALL_TABS_CLOSED {
             eprintln!("flamewm-terminal: {error}");
@@ -69,6 +69,15 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Options>,
 
 fn run() -> Result<(), String> {
     let Some(options) = parse_args(std::env::args().skip(1))? else { return Ok(()) };
+    flamewm_profiler::init_process("flamewm-terminal");
+    if flamewm_profiler::enabled() {
+        // No reactor timer here: a plain thread drains the span window every interval, as the explorer does.
+        let interval = Duration::from_secs(flamewm_profiler::profile_interval_secs());
+        std::thread::spawn(move || loop {
+            std::thread::sleep(interval);
+            let _ = flamewm_profiler::report_window();
+        });
+    }
     let cwd = options.working_directory.map(|dir| fs::canonicalize(&dir).map_err(|error| format!("{}: {error}", dir.display()))).transpose()?;
     let config_dir = store::config_dir();
     let config_path = config_dir.join("terminal.toml");
@@ -161,7 +170,11 @@ fn run() -> Result<(), String> {
                 app.reload_themes();
                 settings_changed = true;
             }
-            wake::drain_and_commit(&mut app, &events, settings_changed, |app| app.project(document))
+            let _wake = flamewm_profiler::start("terminal.wake");
+            wake::drain_and_commit(&mut app, &events, settings_changed, |app| {
+                let _project = flamewm_profiler::start("terminal.project");
+                app.project(document)
+            })
         },
     )
 }

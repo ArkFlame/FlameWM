@@ -144,9 +144,18 @@ class TerminalPayloadPackageContractTests(unittest.TestCase):
         self.assertEqual(len(loops), 2, "expected the existence loop and the install loop")
         return [loop.split() for loop in loops]
 
+    def package_application_links(self):
+        """Applications installed as hard links to the multi-call `flamewm-apps` executable."""
+        text = self.PACKAGE.read_text(encoding="utf-8")
+        links = re.findall(r"^for application in ([^;\n]+); do$", text, re.MULTILINE)
+        self.assertEqual(len(links), 1, "expected one hard-link loop for the multi-call applications")
+        self.assertIn('ln "$STAGE/usr/bin/flamewm-apps" "$STAGE/usr/bin/$application"', text)
+        return links[0].split()
+
     def test_terminal_binary_is_in_both_package_binary_lists(self):
         for index, binaries in enumerate(self.package_binary_loops()):
-            self.assertIn("flamewm-terminal", binaries, f"binary list {index} omits flamewm-terminal")
+            self.assertIn("flamewm-apps", binaries, f"binary list {index} omits flamewm-apps")
+        self.assertIn("flamewm-terminal", self.package_application_links())
 
     def test_terminal_binary_is_installed_by_package(self):
         text = self.PACKAGE.read_text(encoding="utf-8")
@@ -189,8 +198,9 @@ class TerminalPayloadPackageContractTests(unittest.TestCase):
         prefix = ".target/release/"
         shipped = {source[len(prefix):] for source in entries if source.startswith(prefix)}
         self.assertIn("flamewm-terminal", shipped)
+        linked = set(self.package_application_links())
         for binaries in self.package_binary_loops():
-            self.assertEqual(set(binaries), shipped)
+            self.assertEqual(set(binaries) | linked, shipped)
         for binary in sorted(shipped):
             self.assertEqual(entries[f"{prefix}{binary}"], f"usr/bin/{binary}")
         package = self.PACKAGE.read_text(encoding="utf-8")

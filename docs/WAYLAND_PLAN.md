@@ -98,8 +98,16 @@ EGL/GLES `GlowRenderer`, one `DrmCompositor` per connector, vblank-paced frames,
 session, Ctrl+Alt+F1..F12 VT switch through `SwitchTo`, connector rescan on udev change.
 
 Scope limits: the first connected connector drives `State::output` and further connectors show the
-same scene. The cursor is a software square, not a hardware plane. No output layout, no per-output
-scale, no gamma or DPMS.
+same scene. No output layout, no per-output scale, no gamma or DPMS.
+
+Cursor (`cursor.rs`): the pointer shows the surface a client set with `wl_pointer.set_cursor`, which
+covers every X11 client because XWayland forwards X cursors that way, and otherwise a named cursor
+from the xcursor theme (the theme's default arrow, then the system `default` theme, then a built-in
+arrow). Elements are `Kind::Cursor`, so `DrmCompositor` uses the hardware cursor plane when the
+image fits it. The theme follows the X11 session: `flamewm-session-core::cursor_environment` plus the
+saved `cursorTheme` set `XCURSOR_THEME`/`XCURSOR_SIZE`/`XCURSOR_PATH` before XWayland starts.
+Animated cursors show their first frame. `FLAMEWM_WAYLAND_DUMP_POINTER=<x>,<y>` places the pointer
+before a `FLAMEWM_WAYLAND_DUMP`, so a frame dump shows the cursor a client chose.
 
 ## Rendering and frame scheduling
 

@@ -1,19 +1,20 @@
 //! Frame composition: layer surfaces, windows with server-side titlebars, popups, frame callbacks.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::path::Path;
 use std::time::Duration;
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+use smithay::backend::renderer::element::solid::{SolidColorBuffer, SolidColorRenderElement};
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
 };
-use smithay::backend::renderer::element::{Id, Kind};
+use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesTexture;
 use smithay::backend::renderer::glow::GlowRenderer;
-use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
 use smithay::backend::winit::WinitGraphicsBackend;
 use smithay::desktop::utils::send_frames_surface_tree;
@@ -22,13 +23,14 @@ use smithay::render_elements;
 use smithay::utils::{Buffer, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use crate::model::{Button, Rect, TITLEBAR_HEIGHT, button_rect};
+use crate::model::{Button, Rect, TITLEBAR_HEIGHT, WindowId, button_rect};
 use crate::state::State;
 
 render_elements! {
     pub Elem<=GlowRenderer>;
     Solid=SolidColorRenderElement,
     Surface=WaylandSurfaceRenderElement<GlowRenderer>,
+    Memory=MemoryRenderBufferRenderElement<GlowRenderer>,
 }
 
 const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
@@ -37,20 +39,39 @@ const TITLE_IDLE: [f32; 4] = [0.16, 0.18, 0.22, 1.0];
 const BUTTON_CLOSE: [f32; 4] = [0.75, 0.31, 0.30, 1.0];
 const BUTTON_MAXIMIZE: [f32; 4] = [0.31, 0.55, 0.31, 1.0];
 const BUTTON_MINIMIZE: [f32; 4] = [0.72, 0.63, 0.25, 1.0];
-#[cfg(feature = "drm")]
-pub const CURSOR_SIZE: i32 = 12;
-#[cfg(feature = "drm")]
-pub const CURSOR_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
-fn solid(rect: Rect, color: [f32; 4]) -> Elem {
-    let geometry = Rectangle::new(Point::from((rect.x, rect.y)), Size::from((rect.w, rect.h)));
-    Elem::Solid(SolidColorRenderElement::new(
-        Id::new(),
-        geometry,
-        CommitCounter::default(),
-        color,
-        Kind::Unspecified,
-    ))
+/// Titlebar and button fills, kept per window and part. A stable buffer keeps its element id across
+/// frames and bumps its commit only when its size or colour changes, so the damage trackers redraw
+/// a titlebar when it changes instead of on every frame (a fresh id each frame read as a new
+/// element, which repainted every titlebar on each pointer move).
+#[derive(Default)]
+pub struct Decorations {
+    parts: HashMap<(WindowId, Part), SolidColorBuffer>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Part {
+    Titlebar,
+    Button(Button),
+}
+
+impl Decorations {
+    fn element(&mut self, window: WindowId, part: Part, rect: Rect, color: [f32; 4]) -> Elem {
+        let buffer = self.parts.entry((window, part)).or_default();
+        buffer.update((rect.w, rect.h), color);
+        Elem::Solid(SolidColorRenderElement::from_buffer(
+            buffer,
+            (rect.x, rect.y),
+            1.0,
+            1.0,
+            Kind::Unspecified,
+        ))
+    }
+
+    /// Drops the fills of windows that no longer exist.
+    fn retain(&mut self, live: impl Fn(WindowId) -> bool) {
+        self.parts.retain(|(window, _), _| live(*window));
+    }
 }
 
 fn surface_elements(
@@ -82,6 +103,8 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
     drop(map);
     let mut out: Vec<Elem> = Vec::new();
     let mut back: Vec<Elem> = Vec::new();
+    let mut decorations = state.decorations.borrow_mut();
+    decorations.retain(|window| state.model.get(window).is_some());
     for group in [Layer::Overlay, Layer::Top] {
         for layer in layers.iter().rev().filter(|l| l.layer() == group) {
             out.extend(layer_elements(state, renderer, layer));
@@ -128,17 +151,25 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
             let frame = managed.frame();
             let focused = state.focused == Some(id);
             let titlebar = Rect::new(frame.x, frame.y, frame.w, TITLEBAR_HEIGHT);
-            out.push(solid(
-                titlebar,
-                if focused { TITLE_FOCUSED } else { TITLE_IDLE },
-            ));
+            // Front to back: the buttons sit on the titlebar, so they come first.
             for (button, color) in [
                 (Button::Close, BUTTON_CLOSE),
                 (Button::Maximize, BUTTON_MAXIMIZE),
                 (Button::Minimize, BUTTON_MINIMIZE),
             ] {
-                out.push(solid(button_rect(frame, button), color));
+                out.push(decorations.element(
+                    id,
+                    Part::Button(button),
+                    button_rect(frame, button),
+                    color,
+                ));
             }
+            out.push(decorations.element(
+                id,
+                Part::Titlebar,
+                titlebar,
+                if focused { TITLE_FOCUSED } else { TITLE_IDLE },
+            ));
         }
     }
 
@@ -197,7 +228,11 @@ fn render_into(
     backend: &mut WinitGraphicsBackend<GlowRenderer>,
 ) -> Result<(), Box<dyn Error>> {
     let size = backend.window_size();
-    let elements = build_elements(state, backend.renderer());
+    let mut elements =
+        state
+            .cursors
+            .elements(backend.renderer(), &state.cursor_status, state.pointer);
+    elements.extend(build_elements(state, backend.renderer()));
     if let Some(path) = state.dump.take() {
         // Readback goes through an offscreen texture: copying from the window surface target
         // left the GL context lost for the next swap (EGL_BAD_ALLOC), so the window path stays
@@ -291,6 +326,15 @@ fn send_frame_callbacks(state: &State) {
             |_, _| Some(output.clone()),
         );
     }
+    send_cursor_frame(state, time);
+}
+
+/// Frame callback for the client's cursor surface, so an animated cursor keeps committing.
+pub fn send_cursor_frame(state: &State, time: Duration) {
+    if let smithay::input::pointer::CursorImageStatus::Surface(surface) = &state.cursor_status {
+        let output = &state.output;
+        send_frames_surface_tree(surface, output, time, None, |_, _| Some(output.clone()));
+    }
 }
 
 /// Writes a framebuffer readback as binary PPM (P6), converting BGRA rows to RGB.
@@ -322,4 +366,34 @@ fn write_ppm(
         path.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod decoration_tests {
+    use super::*;
+    use smithay::backend::renderer::element::Element;
+
+    fn solid(element: Elem) -> SolidColorRenderElement {
+        match element {
+            Elem::Solid(solid) => solid,
+            _ => panic!("decorations are solid fills"),
+        }
+    }
+
+    #[test]
+    fn a_titlebar_keeps_its_id_and_commits_only_on_change() {
+        let mut decorations = Decorations::default();
+        let rect = Rect::new(10, 20, 300, TITLEBAR_HEIGHT);
+        let first = solid(decorations.element(7, Part::Titlebar, rect, TITLE_IDLE));
+        let again = solid(decorations.element(7, Part::Titlebar, rect, TITLE_IDLE));
+        assert_eq!(first.id(), again.id(), "same window part, same element");
+        assert_eq!(first.current_commit(), again.current_commit(), "unchanged: no damage");
+        let focused = solid(decorations.element(7, Part::Titlebar, rect, TITLE_FOCUSED));
+        assert_eq!(focused.id(), first.id());
+        assert_ne!(focused.current_commit(), first.current_commit(), "a colour change is damage");
+        let button = solid(decorations.element(7, Part::Button(Button::Close), rect, BUTTON_CLOSE));
+        assert_ne!(button.id(), first.id(), "each part has its own element");
+        decorations.retain(|window| window != 7);
+        assert!(decorations.parts.is_empty(), "a closed window's fills are dropped");
+    }
 }

@@ -408,7 +408,7 @@ pub struct Service {
     started: Instant,
 }
 
-fn settings_path() -> PathBuf {
+pub(crate) fn settings_path() -> PathBuf {
     if let Some(path) = std::env::var_os("FLAMEWM_SETTINGS_PATH").filter(|value| !value.is_empty())
     {
         return PathBuf::from(path);

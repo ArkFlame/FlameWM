@@ -1,4 +1,7 @@
 # Runtime package layout: source path -> installed path
+.target/release/flamewm-apps             usr/bin/flamewm-apps
+# flamewm, flamewm-desktop, flamewm-shell, flamewm-settings, flamewm-explorer and flamewm-terminal are
+# installed as hard links to flamewm-apps (one multi-call executable, shared code pages).
 .target/release/flamewm                  usr/bin/flamewm
 .target/release/flamewm-session          usr/bin/flamewm-session
 .target/release/flamewm-desktop          usr/bin/flamewm-desktop

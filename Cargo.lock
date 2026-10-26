@@ -538,6 +538,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-apps"
+version = "0.1.1"
+dependencies = [
+ "flamewm-desktop",
+ "flamewm-explorer",
+ "flamewm-settings",
+ "flamewm-shell",
+ "flamewm-terminal",
+ "flamewm-wm",
+]
+
+[[package]]
 name = "flamewm-clipboard"
 version = "0.1.2"
 dependencies = [
@@ -845,6 +857,7 @@ dependencies = [
  "flamewm-control-core",
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",
+ "flamewm-profiler",
  "flamewm-render-compiler",
  "flamewm-ui-core",
  "flamewm-ui-x11",
@@ -913,10 +926,12 @@ dependencies = [
  "flamewm-control-dbus",
  "flamewm-control-wire",
  "flamewm-platform",
+ "flamewm-session-core",
  "log",
  "smithay",
  "wayland-client",
  "wayland-protocols",
+ "xcursor",
 ]
 
 [[package]]
