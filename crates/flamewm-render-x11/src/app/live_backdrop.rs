@@ -28,7 +28,6 @@ pub(crate) const LIVE_INTERVAL: Duration = Duration::from_millis(50);
 /// `DamageReportNonEmpty`: one notify per damaged frame until the damage is subtracted.
 const DAMAGE_REPORT_NON_EMPTY: c_int = 3;
 const SUBSTRUCTURE_NOTIFY_MASK: std::os::raw::c_long = 1 << 19;
-const CREATE_NOTIFY: c_int = 16;
 const DESTROY_NOTIFY: c_int = 17;
 const UNMAP_NOTIFY: c_int = 18;
 const REPARENT_NOTIFY: c_int = 21;
@@ -163,6 +162,61 @@ fn target_rect(
     (x1 > x0 && y1 > y0).then_some((x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32))
 }
 
+/// Whether `event` belongs to the live backdrop (a frame below changed its contents, or a root
+/// child was mapped, unmapped, moved or restacked). Returns `(consumed, relevant)`: consumed
+/// events never reach the window's own handlers; relevant ones need a refresh.
+///
+/// Every event addressed to the root is consumed. Selecting SubstructureNotify on the root also
+/// delivers every client message other clients send there (EWMH `_NET_ACTIVE_WINDOW`,
+/// `_NET_WM_STATE`, `_NET_WM_MOVERESIZE`, ...); none of them is for this window, and an event left
+/// unconsumed here is one the window's own handlers would misread as theirs.
+fn classify_event(
+    event: &XEvent,
+    root: Window,
+    damage_event_base: c_int,
+    own_top: Window,
+    frames: &[Window],
+    behind: &[Behind],
+    rect: (i32, i32, u32, u32),
+) -> (bool, bool) {
+    // SAFETY: type_ is the common discriminator at the start of every XEvent variant.
+    let kind = unsafe { event.type_ };
+    if kind == damage_event_base {
+        return (true, true);
+    }
+    // SAFETY: xany is the common prefix of every event.
+    if unsafe { event.xany.window } != root {
+        return (false, false);
+    }
+    match kind {
+        CONFIGURE_NOTIFY => {
+            // SAFETY: the discriminator selects XConfigureEvent.
+            let configure = unsafe { event.xconfigure };
+            if configure.window == own_top || !frames.contains(&configure.window) {
+                return (true, false);
+            }
+            let moved = (
+                configure.x,
+                configure.y,
+                (configure.width + 2 * configure.border_width).max(0) as u32,
+                (configure.height + 2 * configure.border_width).max(0) as u32,
+            );
+            let was_behind = behind.iter().any(|b| b.window == configure.window);
+            (true, was_behind || overlaps(moved, rect))
+        }
+        // A frame mapped for the first time is not listed yet, so every map counts.
+        MAP_NOTIFY => (true, true),
+        UNMAP_NOTIFY | DESTROY_NOTIFY | REPARENT_NOTIFY | GRAVITY_NOTIFY | CIRCULATE_NOTIFY => {
+            // SAFETY: Unmap, Destroy, Reparent, Gravity and Circulate events share
+            // XConfigureEvent's prefix (`type`, `serial`, `send_event`, `display`, `event`, `window`).
+            let window = unsafe { event.xconfigure.window };
+            (true, frames.contains(&window))
+        }
+        // CreateNotify (an unmapped child shows nothing), client messages and anything else.
+        _ => (true, false),
+    }
+}
+
 /// Children of `window` in stacking order (bottom first) and its parent.
 ///
 /// # Safety
@@ -229,48 +283,17 @@ impl LiveScene {
         })
     }
 
-    /// Whether `event` belongs to the live backdrop (a frame below changed its contents, or a
-    /// root child was mapped, unmapped, moved or restacked). Returns `(consumed, relevant)`:
-    /// consumed events never reach the window's own handlers; relevant ones need a refresh.
+    /// Whether `event` belongs to the live backdrop. See [`classify_event`].
     pub(crate) fn classify(&self, event: &XEvent) -> (bool, bool) {
-        // SAFETY: type_ is the common discriminator at the start of every XEvent variant.
-        let kind = unsafe { event.type_ };
-        if kind == self.extensions.damage_event_base {
-            return (true, true);
-        }
-        // SAFETY: xany is the common prefix of every event.
-        if unsafe { event.xany.window } != self.root {
-            return (false, false);
-        }
-        match kind {
-            CONFIGURE_NOTIFY => {
-                // SAFETY: the discriminator selects XConfigureEvent.
-                let configure = unsafe { event.xconfigure };
-                if configure.window == self.own_top || !self.frames.contains(&configure.window) {
-                    return (true, false);
-                }
-                let rect = (
-                    configure.x,
-                    configure.y,
-                    (configure.width + 2 * configure.border_width).max(0) as u32,
-                    (configure.height + 2 * configure.border_width).max(0) as u32,
-                );
-                let was_behind = self.behind.iter().any(|b| b.window == configure.window);
-                (true, was_behind || overlaps(rect, self.rect))
-            }
-            // A frame mapped for the first time is not listed yet, so every map counts.
-            MAP_NOTIFY => (true, true),
-            // An unmapped new child shows nothing; consumed, since the window filter would
-            // otherwise put it back on the queue forever.
-            CREATE_NOTIFY => (true, false),
-            UNMAP_NOTIFY | DESTROY_NOTIFY | REPARENT_NOTIFY | GRAVITY_NOTIFY | CIRCULATE_NOTIFY => {
-                // SAFETY: Unmap, Destroy, Reparent, Gravity and Circulate events share
-                // XConfigureEvent's prefix (`type`, `serial`, `send_event`, `display`, `event`, `window`).
-                let window = unsafe { event.xconfigure.window };
-                (true, self.frames.contains(&window))
-            }
-            _ => (false, false),
-        }
+        classify_event(
+            event,
+            self.root,
+            self.extensions.damage_event_base,
+            self.own_top,
+            &self.frames,
+            &self.behind,
+            self.rect,
+        )
     }
 
     /// Composes what lies behind `window` at root `rect` and returns it as opaque ARGB32 words of
@@ -687,6 +710,8 @@ impl LiveScene {
             if let Some((_, picture)) = self.desktop.take() {
                 self.api.free_picture(display, picture);
             }
+            // SAFETY: live display; this scene made the only root selection of this client.
+            XSelectInput(display, self.root, 0);
         }
         self.behind.clear();
     }
@@ -719,6 +744,80 @@ mod tests {
         assert_eq!(
             target_rect(window, (90, 40, 20, 20), 1, (400, 200)),
             Some((0, 0, 10, 10))
+        );
+    }
+
+    const ROOT: Window = 0x2cf;
+    const DAMAGE_BASE: c_int = 91;
+    const PROPERTY_NOTIFY: c_int = 28;
+
+    fn root_event(kind: c_int, window: Window) -> XEvent {
+        // SAFETY: an all-zero XEvent is a valid value of every variant.
+        let mut event: XEvent = unsafe { std::mem::zeroed() };
+        let configure = XConfigureEvent {
+            type_: kind,
+            serial: 0,
+            send_event: 0,
+            display: std::ptr::null_mut(),
+            event: ROOT,
+            window,
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+            border_width: 0,
+            above: 0,
+            override_redirect: 0,
+        };
+        event.xconfigure = configure;
+        event
+    }
+
+    fn classify_root(kind: c_int, window: Window) -> (bool, bool) {
+        classify_event(
+            &root_event(kind, window),
+            ROOT,
+            DAMAGE_BASE,
+            0x500,
+            &[0x400],
+            &[],
+            (0, 0, 100, 100),
+        )
+    }
+
+    #[test]
+    fn every_event_addressed_to_the_root_is_consumed() {
+        for kind in 2..=35 {
+            assert!(
+                classify_root(kind, 0x777).0,
+                "root event type {kind} must never reach the window's handlers"
+            );
+        }
+        assert_eq!(classify_root(CLIENT_MESSAGE, 0x777), (true, false));
+        assert_eq!(classify_root(PROPERTY_NOTIFY, 0x777), (true, false));
+    }
+
+    #[test]
+    fn frame_changes_behind_refresh_and_others_do_not() {
+        assert_eq!(classify_root(MAP_NOTIFY, 0x777), (true, true));
+        assert_eq!(classify_root(UNMAP_NOTIFY, 0x400), (true, true));
+        assert_eq!(classify_root(UNMAP_NOTIFY, 0x777), (true, false));
+        assert_eq!(classify_root(CONFIGURE_NOTIFY, 0x400), (true, true));
+        assert_eq!(classify_root(CONFIGURE_NOTIFY, 0x500), (true, false));
+    }
+
+    #[test]
+    fn damage_counts_and_events_of_other_windows_pass_through() {
+        let damage = root_event(DAMAGE_BASE, 0x400);
+        assert_eq!(
+            classify_event(&damage, ROOT, DAMAGE_BASE, 0, &[], &[], (0, 0, 1, 1)),
+            (true, true)
+        );
+        let mut own = root_event(CLIENT_MESSAGE, 0);
+        own.xany.window = 0x500;
+        assert_eq!(
+            classify_event(&own, ROOT, DAMAGE_BASE, 0, &[], &[], (0, 0, 1, 1)),
+            (false, false)
         );
     }
 
