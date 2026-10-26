@@ -212,6 +212,7 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     /// Handles one raw record. Only press records that resolve to an escape chord dispatch.
     pub(super) fn handle_raw_event(&mut self, bytes: &[u8]) -> Result<(), ReplyError> {
+        let root = self.screen().root;
         let Some(raw) = self.raw_keys.as_mut() else {
             return Ok(());
         };
@@ -249,7 +250,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         if matches!(action.as_str(), ACTION_SHOW_DESKTOP | ACTION_SHOW_DESKTOP_CTRL_ALT) {
-            let Ok(cookie) = self.conn.query_pointer(self.screen().root) else {
+            let Ok(cookie) = self.conn.query_pointer(root) else {
                 return Ok(());
             };
             let Ok(pointer) = cookie.reply() else {
