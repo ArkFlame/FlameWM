@@ -3,7 +3,7 @@ name = "flamewm-shell"
 autobins = false
 version.workspace = true
 edition = "2021"
-rust-version = "1.70"
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
