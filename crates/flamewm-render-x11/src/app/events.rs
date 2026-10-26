@@ -389,10 +389,13 @@ impl X11App {
             // SAFETY: type_ is the common discriminator at the start of every XEvent variant.
             match unsafe { event.type_ } {
                 EXPOSE => {
-                    // Expose repaints in full: a retained scene can predate a size or
-                    // document change (a shrink), so the last Expose of a run relayouts
-                    // and repaints. Coalesce counts.
-                    if unsafe { event.xexpose.count } == 0 {
+                    // The bound backbuffer already restored the exposed pixels when it holds the
+                    // last frame at the current size. Otherwise a retained scene can predate a size
+                    // or document change (a shrink), so the last Expose of a run relayouts and
+                    // repaints. Coalesce counts.
+                    if unsafe { event.xexpose.count } == 0
+                        && !self.exposure_restored_by_background()
+                    {
                         // SAFETY: The caller owns a live X11 display and app resources.
                         unsafe { self.repaint_full(document)? };
                     }

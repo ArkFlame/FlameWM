@@ -324,6 +324,7 @@ impl X11App {
             }),
         };
         unsafe { self.bind_presented_backbuffer_as_window_background()? };
+        self.presented_size = Some((self.width, self.height));
         // Single shape per changed frame, from retained commands.
         {
             let _shape_guard = flamewm_profiler::start("render.shape");
@@ -623,6 +624,18 @@ impl X11App {
         }
         self.release_retired_after_bind();
         Ok(())
+    }
+
+    /// Whether the server already restored an exposed area of the desktop surface: its window
+    /// background is the backbuffer holding the last presented frame at the current size, so
+    /// repainting would only rewrite identical pixels. Limited to the desktop, the root-sized
+    /// surface every moving window and outline exposes; other surfaces keep repainting, since a
+    /// resize can leave their window edges different from the retained backbuffer.
+    pub(crate) fn exposure_restored_by_background(&self) -> bool {
+        self.role == X11WindowRole::Desktop
+            && self.backbuffer != 0
+            && self.background_bound == self.backbuffer
+            && self.presented_size == Some((self.width, self.height))
     }
 
     fn release_retired_after_bind(&mut self) {

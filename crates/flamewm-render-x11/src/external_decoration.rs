@@ -106,6 +106,7 @@ impl ExternalDecorationRenderer {
             );
         }
         install_x_protocol_error_handler();
+        crate::xlib::return_large_frees_to_system();
         let session = match unsafe { ExternalDrawableSession::new(display) } {
             Ok(session) => session,
             Err(error) => {

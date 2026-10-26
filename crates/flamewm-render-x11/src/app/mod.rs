@@ -226,6 +226,8 @@ pub(crate) struct X11App {
     /// Pixmap currently bound via XSetWindowBackgroundPixmap (0 = none).
     /// Only ever a fully painted backbuffer; never an unpainted replacement.
     pub(crate) background_bound: Pixmap,
+    /// Window size of the last frame presented from the bound backbuffer.
+    pub(crate) presented_size: Option<(u32, u32)>,
     /// Stale backbuffer kept alive across resize until the replacement is
     /// painted and bound. (pixmap, bytes).
     pub(crate) retired_backbuffer: Option<(Pixmap, usize)>,
@@ -277,6 +279,7 @@ impl X11App {
         // Every app display gets the non-fatal protocol handler: a BadWindow from a reply to a
         // vanished peer (XDND source) must not exit the process. Idempotent per process.
         install_x_protocol_error_handler();
+        crate::xlib::return_large_frees_to_system();
         let screen = unsafe { XDefaultScreen(display) };
         let root = unsafe { XRootWindow(display, screen) };
         // A requested size larger than the screen (a small or scaled display) would only fail the
@@ -627,6 +630,7 @@ impl X11App {
             input_repaint: false,
             render_counters: damage_plan::RedrawCounters::default(),
             background_bound: 0,
+            presented_size: None,
             retired_backbuffer: None,
             surface_backdrop: None,
             window_backdrop_pixmap: None,

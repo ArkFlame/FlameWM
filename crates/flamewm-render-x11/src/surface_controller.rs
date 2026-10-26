@@ -176,6 +176,7 @@ impl SurfaceController {
             }
             install_x_io_error_handler();
             install_x_protocol_error_handler();
+            crate::xlib::return_large_frees_to_system();
             let press_opcode = xi_raw_press_opcode(display);
             if press_opcode.is_none() {
                 eprintln!(
