@@ -538,6 +538,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-apps"
+version = "0.1.1"
+dependencies = [
+ "flamewm-desktop",
+ "flamewm-explorer",
+ "flamewm-settings",
+ "flamewm-shell",
+ "flamewm-terminal",
+ "flamewm-wm",
+]
+
+[[package]]
 name = "flamewm-clipboard"
 version = "0.1.1"
 dependencies = [

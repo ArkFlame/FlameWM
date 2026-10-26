@@ -50,7 +50,7 @@ fi
 mkdir -p "$DIST"
 rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$PKG_VERSION.tar.gz" "$DIST/SHA256SUMS"
 
-for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal flamewm-wayland; do
+for binary in flamewm-apps flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
     [[ -x "$BUILD_DIR/$binary" ]] || fail "missing $PROFILE binary: $BUILD_DIR/$binary"
 done
 
@@ -87,8 +87,13 @@ mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/flamewm" "$STAGE/etc/pam.d" \
     "$STAGE/usr/share/applications" "$STAGE/usr/share/xsessions" "$STAGE/usr/share/wayland-sessions" "$STAGE/usr/share/doc/flamewm" \
     "$STAGE/DEBIAN"
 
-for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal flamewm-wayland; do
+for binary in flamewm-apps flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
     install -m 0755 "$BUILD_DIR/$binary" "$STAGE/usr/bin/$binary"
+done
+# The WM, desktop, shell, settings, explorer and terminal are one multi-call executable
+# (crates/flamewm-apps); each name is a hard link to it, so the processes share its code pages.
+for application in flamewm flamewm-desktop flamewm-shell flamewm-settings flamewm-explorer flamewm-terminal; do
+    ln "$STAGE/usr/bin/flamewm-apps" "$STAGE/usr/bin/$application"
 done
 install -m 0644 "$ROOT/packaging/pam.d/flamewm-lock" "$STAGE/etc/pam.d/flamewm-lock"
 install -m 0644 "$ROOT/packaging/flamewm.desktop" "$STAGE/usr/share/applications/flamewm.desktop"

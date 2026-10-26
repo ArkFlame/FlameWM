@@ -20,9 +20,10 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
 export FLAMEWM_PACKAGE_PROFILE=fast
 command -v cargo >/dev/null 2>&1 || fail 'cargo not found'
 
-# Same 13 binaries scripts/package requires; built from the fast profile only.
-BINARIES=(flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot
-    flamewm-explorer flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-terminal flamewm-wayland)
+# The binaries scripts/package installs; built from the fast profile only. flamewm-apps carries
+# the WM, desktop, shell, settings, explorer and terminal (installed as hard links to it).
+BINARIES=(flamewm-apps flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile
+    flamewm-render-inspect flamewm-lock flamewm-wayland)
 bin_args=()
 for binary in "${BINARIES[@]}"; do bin_args+=(--bin "$binary"); done
 

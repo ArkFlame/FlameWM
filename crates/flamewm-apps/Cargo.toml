@@ -1,0 +1,24 @@
+[package]
+name = "flamewm-apps"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Multi-call executable for the FlameWM applications: one copy of the shared code, one hard link per application name"
+publish = false
+
+[[bin]]
+name = "flamewm-apps"
+path = "src/main.rs"
+
+[dependencies]
+flamewm-desktop = { path = "../flamewm-desktop" }
+flamewm-explorer = { path = "../flamewm-explorer" }
+flamewm-settings = { path = "../flamewm-settings" }
+flamewm-shell = { path = "../flamewm-shell" }
+flamewm-terminal = { path = "../flamewm-terminal" }
+flamewm-wm = { path = "../flamewm-wm" }
+
+[lints]
+workspace = true
