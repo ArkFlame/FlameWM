@@ -221,19 +221,27 @@ impl SurfaceRuntime {
             .map_err(Into::into)
     }
 
-    /// Popup-sized RGBA8 wallpaper crop for one first-show backdrop; `None` uses root capture.
-    pub fn set_popup_wallpaper_region(
+    /// What the desktop layer behind translucent popups and panels is made of; `None` keeps them
+    /// solid.
+    pub fn set_desktop_source(
         &mut self,
-        surface: SurfaceHandle,
-        rect: (i32, i32, u32, u32),
-        pixels: Option<Vec<u8>>,
-    ) -> Result<(), UiBackendError> {
-        self.controller
-            .set_popup_wallpaper_region(surface.0, pixels.map(|pixels| (rect, pixels)))
-            .map_err(Into::into)
+        source: Option<flamewm_render_x11::backdrop::DesktopSource>,
+    ) {
+        self.controller.set_desktop_source(source);
     }
 
-    /// Opt-in `(opacity, blur)` pseudo-transparency backdrop, captured before each first show.
+    /// Opaque ARGB32 desktop-layer words under the root-space `rect` for a surface at `opacity`
+    /// and `blur` percent; `None` without a desktop source.
+    pub fn desktop_backdrop(
+        &mut self,
+        rect: (i32, i32, u32, u32),
+        opacity: u8,
+        blur: u8,
+    ) -> Option<Vec<u32>> {
+        self.controller.desktop_backdrop(rect, opacity, blur)
+    }
+
+    /// Opt-in `(opacity, blur)` desktop-layer backdrop, installed before each first show.
     pub fn set_popup_backdrop(
         &mut self,
         surface: SurfaceHandle,
@@ -340,16 +348,6 @@ impl SurfaceRuntime {
         self.controller.redraw_dirty().map_err(Into::into)
     }
 
-    /// Straight RGBA8 root pixels under the surface's device rect (pseudo-transparency source).
-    pub fn capture_root_under(
-        &self,
-        surface: SurfaceHandle,
-    ) -> Result<flamewm_render_x11::backdrop::BackdropCapture, UiBackendError> {
-        self.controller
-            .capture_root_under(surface.0)
-            .map_err(Into::into)
-    }
-
     /// Subscribes to root child map/unmap/configure changes (see the controller method).
     pub fn watch_root_changes(&self) {
         self.controller.watch_root_changes();
@@ -367,16 +365,6 @@ impl SurfaceRuntime {
     /// Whether root children changed since the last call.
     pub fn take_root_changed(&mut self) -> bool {
         self.controller.take_root_changed()
-    }
-
-    /// Root pixels under a surface read with the surface unmapped (see the controller method).
-    pub fn capture_root_under_unmapped(
-        &mut self,
-        surface: SurfaceHandle,
-    ) -> Result<flamewm_render_x11::backdrop::BackdropCapture, UiBackendError> {
-        self.controller
-            .capture_root_under_unmapped(surface.0)
-            .map_err(Into::into)
     }
 
     /// Installs or removes the static ARGB backdrop under a surface's translucent fills.

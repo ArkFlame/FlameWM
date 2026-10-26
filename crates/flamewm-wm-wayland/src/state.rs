@@ -14,8 +14,11 @@ use smithay::desktop::{PopupManager, layer_map_for_output};
 use smithay::input::pointer::CursorImageStatus;
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Output, PhysicalProperties, Subpixel};
+use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::ping::Ping;
-use smithay::reexports::calloop::{LoopHandle, LoopSignal};
+use smithay::reexports::calloop::{
+    Interest, LoopHandle, LoopSignal, Mode as CalloopMode, PostAction,
+};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::{Client, DisplayHandle, protocol::wl_surface::WlSurface};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial, Size};
@@ -348,7 +351,8 @@ pub struct State {
     pub props: Option<Props>,
     /// Programs started once `XWayland` is ready (`FLAMEWM_WAYLAND_AUTOSTART`, colon separated).
     pub autostart: Vec<String>,
-    /// Children started by the compositor; reaped by `reap_children` so they never linger as zombies.
+    /// Children started by the compositor; reaped by `reap_children` when one exits (its pidfd wakes
+    /// the loop), so they never linger as zombies.
     pub children: RefCell<Vec<Child>>,
     /// `com.arkflame.FlameWM1` service; installed after the loop exists (see `control::install`).
     pub control: Option<std::rc::Rc<crate::control::Service>>,
@@ -680,8 +684,32 @@ impl State {
             }
         }
         match command.spawn() {
-            Ok(child) => self.children.borrow_mut().push(child),
+            Ok(child) => {
+                self.watch_exit(&child);
+                self.children.borrow_mut().push(child);
+            }
             Err(error) => eprintln!("flamewm-wayland: spawn {program} failed: {error}"),
+        }
+    }
+
+    /// Wakes the loop once when `child` exits so it is reaped then; nothing polls for exits.
+    fn watch_exit(&self, child: &Child) {
+        let pid = rustix::process::Pid::from_child(child);
+        let watched = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
+            .map_err(|error| error.to_string())
+            .and_then(|pidfd| {
+                self.loop_handle
+                    .insert_source(
+                        Generic::new(pidfd, Interest::READ, CalloopMode::Level),
+                        |_, _, state| {
+                            state.reap_children();
+                            Ok(PostAction::Remove)
+                        },
+                    )
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(error) = watched {
+            eprintln!("flamewm-wayland: child {pid:?} exit is not watched: {error}");
         }
     }
 

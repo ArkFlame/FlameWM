@@ -83,7 +83,9 @@ pub fn bounded_timeout(
     Some(timeout.map_or(until, |timeout| timeout.min(until)))
 }
 
-struct BorrowedRawFd(RawFd);
+/// A descriptor owned elsewhere, as an `AsFd` source for any calloop loop. The owner keeps it
+/// open for as long as the source is registered.
+pub struct BorrowedRawFd(pub RawFd);
 
 impl AsFd for BorrowedRawFd {
     fn as_fd(&self) -> BorrowedFd<'_> {

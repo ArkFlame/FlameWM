@@ -6,7 +6,7 @@ impl<C: Connection> Wm<'_, C> {
         if target >= self.workspace_count || target == self.current_workspace {
             return Ok(());
         }
-        self.snap_preview.hide();
+        self.snap_preview.hide(self.conn);
         let old = self.current_workspace;
         if let Some(slot) = self.workspace_focus.get_mut(old) {
             *slot = self.active;
@@ -124,7 +124,7 @@ impl<C: Connection> Wm<'_, C> {
                 rect: next.placement.current,
             };
         }
-        self.snap_preview.hide();
+        self.snap_preview.hide(self.conn);
 
         self.conn.grab_server()?;
         let result: Result<(), ReplyError> = (|| {
@@ -213,7 +213,7 @@ impl<C: Connection> Wm<'_, C> {
         if requested == self.workspace_count {
             return Ok(());
         }
-        self.snap_preview.hide();
+        self.snap_preview.hide(self.conn);
         crate::bump_workspace_generation();
         let mut moved = Vec::new();
         if requested < self.workspace_count {
@@ -271,7 +271,7 @@ impl<C: Connection> Wm<'_, C> {
         if target >= self.workspace_count {
             return Ok(());
         }
-        self.snap_preview.hide();
+        self.snap_preview.hide(self.conn);
         let (frame, was_visible, visible) = {
             let Some(state) = self.clients.get_mut(&client) else {
                 return Ok(());

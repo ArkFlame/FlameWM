@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
 
-use flamewm_api::background::WallpaperFit;
+pub use flamewm_api::background::WallpaperFit;
 
 use crate::scale::{ScaleFilter, area_tap, scale_rgba};
 use crate::{ImageSourceFormat, RgbaImage, check_size_limits};

@@ -6,7 +6,6 @@ pub mod start_surface;
 pub mod status_surface;
 use crate::popup_controller::POPUP_GAP;
 use crate::start::{self, StartCategory};
-use crate::surface_backdrop::{blurred_argb, capture_step, CaptureKey, CaptureStep};
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
 use flamewm_api::display::DisplaySnapshot;
 use flamewm_api::panels::PanelsSnapshot;
@@ -18,7 +17,6 @@ use flamewm_api::PanelEdge;
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
 use flamewm_control_wire::ControlSignal;
-use flamewm_image_core::RgbaImage;
 use flamewm_platform::panel::{OutputPanel, TaskbarFrame};
 use flamewm_shell_core::popup::{
     anchor_popover_rect, context_menu_rect, context_menu_size, panel_anchor, work_area_for_panel,
@@ -26,6 +24,7 @@ use flamewm_shell_core::popup::{
 };
 use flamewm_shell_core::start_surface_layout;
 use flamewm_ui_core::style::ShellMetrics;
+use flamewm_ui_x11::backdrop::DesktopSource;
 use flamewm_ui_x11::{
     decode_document, DockEdge, GeometryTrace, SlideConfig, SurfaceConfig, SurfaceHandle,
     SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
@@ -1201,9 +1200,8 @@ pub fn synced_placement_for_snapshot(
 pub struct PanelSurfaceRecord {
     pub panel: SurfaceHandle,
     pub placement: PanelPlacementContext,
-    /// Backdrop state belongs to this output, never to the primary panel globally.
-    snapshot: Option<RgbaImage>,
-    capture: Option<PanelCapture>,
+    /// Backdrop installed on this output's panel, never the primary panel's globally.
+    backdrop: Option<PanelBackdrop>,
 }
 
 /// J07 parent role: panel + Start + task menu + media only. The parent no
@@ -1252,12 +1250,13 @@ fn native_geometry_drifted<P: Copy>(
     drifted
 }
 
-/// One panel capture attempt: the key it was taken for, attempts so far, and whether it is final.
-#[derive(Debug, Clone)]
-struct PanelCapture {
-    key: CaptureKey,
-    attempts: u8,
-    settled: bool,
+/// What a panel's installed backdrop was made for; an equal request installs nothing.
+#[derive(Debug, Clone, PartialEq)]
+struct PanelBackdrop {
+    rect: (i32, i32, u32, u32),
+    opacity: u8,
+    blur: u8,
+    source: Option<DesktopSource>,
 }
 
 /// Whether a dismissed transient slides out through `hide` instead of unmapping at once.
@@ -1478,149 +1477,64 @@ impl ShellSurfaces {
         self.panels.iter().map(|record| record.panel).collect()
     }
 
-    /// Pre-map hook kept for the startup sequence. The snapshot is no longer read from the root
-    /// here: a root read before the desktop paints its wallpaper yields the wrong pixels, so the
-    /// snapshot is derived by `refresh_panel_backdrop` from the wallpaper itself.
-    pub fn capture_panel_backdrop(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
-        runtime.watch_root_changes();
-        Ok(())
-    }
-
-    /// Re-opens settled-but-blank captures on every output, not only the primary.
-    pub fn reopen_panel_capture(&mut self) {
-        for record in &mut self.panels {
-            if let Some(capture) = record
-                .capture
-                .as_mut()
-                .filter(|capture| capture.settled && record.snapshot.is_none())
-            {
-                capture.attempts = 0;
-                capture.settled = false;
-            }
-        }
-    }
-
     /// Resolve the output that originated input on a shell surface.
     pub fn select_input_output(&self, surface: SurfaceHandle) -> Option<flamewm_api::OutputId> {
         self.input_output(surface)
     }
 
-    #[must_use]
-    pub fn panel_capture_pending(&self) -> bool {
-        self.panels.iter().any(|record| {
-            record
-                .capture
-                .as_ref()
-                .is_none_or(|capture| !capture.settled)
-        })
-    }
-
-    /// One wallpaper/capture state per native panel. The key is derived from that panel's
-    /// device rect, so monitor changes cannot reuse another output's wallpaper pixels.
-    pub fn refresh_panel_backdrops(
+    /// Installs each panel's desktop-layer backdrop, or none when it is opaque. Separate mode
+    /// installs the unblurred layer: the tint and blur live on each element capsule, so the gaps
+    /// must not be blurred. An unchanged panel, source and material installs nothing.
+    pub fn apply_panel_backdrop(
         &mut self,
         runtime: &mut SurfaceRuntime,
-        wallpaper_name: &str,
-        fit_name: &str,
-        mut wallpaper: impl FnMut((i32, i32, u32, u32)) -> Option<RgbaImage>,
-    ) -> Result<(), String> {
-        runtime.watch_root_changes();
-        for record in &mut self.panels {
-            let panel = record.panel;
-            let rect = runtime.surface_device_rect(panel).map_err(ui_error)?;
-            let key = CaptureKey {
-                wallpaper: wallpaper_name.to_owned(),
-                fit: fit_name.to_owned(),
-                rect: (
-                    rect.x as i32,
-                    rect.y as i32,
-                    rect.width as u32,
-                    rect.height as u32,
-                ),
-            };
-            let attempts_so_far = match &record.capture {
-                Some(capture) if capture.key == key && capture.settled => continue,
-                Some(capture) if capture.key == key => capture.attempts,
-                _ => 0,
-            };
-            let attempts = attempts_so_far.saturating_add(1);
-            let (step, raw) = if let Some(image) = wallpaper(key.rect) {
-                (CaptureStep::Use, image)
-            } else {
-                let capture = runtime
-                    .capture_root_under_unmapped(panel)
-                    .map_err(ui_error)?;
-                let ready = flamewm_ui_x11::backdrop::capture_is_ready(&capture.pixels);
-                let image = RgbaImage {
-                    width: capture.width,
-                    height: capture.height,
-                    pixels: capture.pixels,
-                };
-                (capture_step(ready, attempts), image)
-            };
-            crate::surface_backdrop::backdrop_trace(format_args!(
-                "panel={panel:?} snapshot rect={:?} size={}x{} step={step:?} attempts={attempts}",
-                key.rect, raw.width, raw.height,
-            ));
-            record.snapshot = (step == CaptureStep::Use).then_some(raw);
-            record.capture = Some(PanelCapture {
-                key,
-                attempts,
-                settled: step != CaptureStep::Retry,
-            });
-        }
-        Ok(())
-    }
-
-    /// Each panel gets its own backdrop, or no backdrop if opaque/unavailable/resized.
-    /// Separate mode installs the raw wallpaper as the surface layer: the tint and blur live
-    /// on each element capsule, so the gaps must not be blurred.
-    pub fn apply_panel_backdrop(
-        &self,
-        runtime: &mut SurfaceRuntime,
+        source: Option<&DesktopSource>,
         opacity_percent: u8,
         blur_percent: u8,
         separate: bool,
     ) -> Result<(), String> {
-        // In separate mode the surface layer is the raw wallpaper and each capsule carries the
-        // tint and blur, so the snapshot is installed opaque and unblurred.
         let install = separate || opacity_percent < 100;
-        let (opacity_percent, blur_percent) = if separate {
+        let (opacity, blur) = if separate {
             (100, 0)
         } else {
             (opacity_percent, blur_percent)
         };
-        for record in &self.panels {
+        for record in &mut self.panels {
             let panel = record.panel;
-            let rect = runtime.surface_device_rect(panel).map_err(ui_error)?;
-            let fitting = record.snapshot.as_ref().filter(|snapshot| {
-                install
-                    && snapshot.width as f32 == rect.width
-                    && snapshot.height as f32 == rect.height
-            });
+            let device = runtime.surface_device_rect(panel).map_err(ui_error)?;
+            let rect = (
+                device.x as i32,
+                device.y as i32,
+                device.width as u32,
+                device.height as u32,
+            );
+            let wanted = PanelBackdrop {
+                rect,
+                opacity,
+                blur,
+                source: source.filter(|_| install).cloned(),
+            };
+            if record.backdrop.as_ref() == Some(&wanted) {
+                continue;
+            }
+            let words = wanted
+                .source
+                .as_ref()
+                .filter(|_| rect.2 > 0 && rect.3 > 0)
+                .and_then(|_| runtime.desktop_backdrop(rect, opacity, blur));
             crate::surface_backdrop::backdrop_trace(format_args!(
-                "panel={panel:?} apply rect={}x{}@{},{} opacity={opacity_percent} blur={blur_percent} snapshot={:?} install={}",
-                rect.width,
-                rect.height,
-                rect.x,
-                rect.y,
-                record.snapshot.as_ref().map(|s| (s.width, s.height)),
-                fitting.is_some(),
+                "panel={panel:?} apply rect={rect:?} opacity={opacity} blur={blur} install={}",
+                words.is_some(),
             ));
-            match fitting {
-                Some(snapshot) => {
-                    let words = blurred_argb(snapshot, opacity_percent, blur_percent);
-                    runtime
-                        .set_surface_backdrop(
-                            panel,
-                            Some((&words, snapshot.width, snapshot.height)),
-                        )
-                        .map_err(ui_error)?;
-                }
+            match words {
+                Some(words) => runtime
+                    .set_surface_backdrop(panel, Some((&words, rect.2, rect.3)))
+                    .map_err(ui_error)?,
                 None => runtime
                     .set_surface_backdrop(panel, None)
                     .map_err(ui_error)?,
             }
+            record.backdrop = Some(wanted);
         }
         Ok(())
     }
@@ -1702,8 +1616,7 @@ impl ShellSurfaces {
         let mut panels = vec![PanelSurfaceRecord {
             panel: primary_panel,
             placement: primary_placement.clone(),
-            snapshot: None,
-            capture: None,
+            backdrop: None,
         }];
         for context in contexts {
             if context.output.id == primary_placement.output.id {
@@ -1713,8 +1626,7 @@ impl ShellSurfaces {
             panels.push(PanelSurfaceRecord {
                 panel,
                 placement: context,
-                snapshot: None,
-                capture: None,
+                backdrop: None,
             });
         }
         Ok(Self {
@@ -1996,7 +1908,6 @@ impl ShellSurfaces {
         state: &ContextMenuState,
         snapshot: &ShellSnapshot,
         backdrop: (u8, u8),
-        wallpaper_region: impl FnOnce((i32, i32, u32, u32)) -> Option<Vec<u8>>,
     ) -> Result<(), String> {
         let output = state
             .output
@@ -2030,27 +1941,10 @@ impl ShellSurfaces {
         // A12-1: clamp inside the panel-aware work area so a menu opened near
         // the panel stops above the panel strip instead of under it.
         let rect = context_menu_rect_for_placement(&panel.placement, state.anchor, size);
-        let wallpaper_rect = (
-            rect.x,
-            rect.y,
-            checked_size(rect.width)?,
-            checked_size(rect.height)?,
-        );
-        runtime
-            .set_popup_wallpaper_region(
-                self.task_menu,
-                wallpaper_rect,
-                wallpaper_region(wallpaper_rect),
-            )
-            .map_err(ui_error)?;
         runtime
             .set_popup_backdrop(self.task_menu, Some(backdrop))
             .map_err(ui_error)?;
-        let opened = self.show_grabbed(runtime, self.task_menu, rect, Transient::ContextMenu);
-        if opened.is_err() {
-            let _ = runtime.set_popup_wallpaper_region(self.task_menu, wallpaper_rect, None);
-        }
-        opened
+        self.show_grabbed(runtime, self.task_menu, rect, Transient::ContextMenu)
     }
 
     /// Retained-device anchor for a quick-control source id, with the
@@ -2139,8 +2033,7 @@ impl ShellSurfaces {
             staged.push(PanelSurfaceRecord {
                 panel,
                 placement: context.clone(),
-                snapshot: None,
-                capture: None,
+                backdrop: None,
             });
             if context.panel.visible {
                 if let Err(error) = runtime.show(panel) {

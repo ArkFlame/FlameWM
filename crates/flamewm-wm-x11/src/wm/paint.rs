@@ -78,63 +78,6 @@ impl<C: Connection> Wm<'_, C> {
         chrome_wait_cap(self.chrome_paint_at, std::time::Instant::now(), wait)
     }
 
-    /// Captures the root once (24-bit LSB only; otherwise the wallpaper is used) and freezes
-    /// the backdrop for the dragged frame.
-    ///
-    /// This is the only root read of a move: every step and the release crop the frozen snapshot
-    /// (`drag_titlebar_pixels`), and `end_drag` keeps it alive until the paint at the frame's final
-    /// origin has blurred that origin from it. Nothing here or in the settle path hides the window
-    /// or reads the root again (A01), so a moved frame never disappears and reappears.
-    pub(super) fn begin_drag_backdrop(&self, client: Window) {
-        let _drag_guard = flamewm_profiler::start("wm.drag.begin_backdrop");
-        let Some((frame, outer)) = self
-            .clients
-            .get(&client)
-            .map(|state| (state.frame, state.outer))
-        else {
-            return;
-        };
-        // Opaque titlebars never sample the backdrop: skip the root capture entirely. Drop any
-        // snapshot or kept crop this frame still holds so none outlives a skipped drag.
-        if !crate::frame::titlebar_backdrop::needs_drag_backdrop(
-            self.decoration_tokens.titlebar_alpha,
-        ) {
-            crate::frame::titlebar_backdrop::forget(u64::from(frame));
-            return;
-        }
-        let screen = self.screen();
-        let root = (
-            u32::from(screen.width_in_pixels),
-            u32::from(screen.height_in_pixels),
-        );
-        let raw_root = (screen.root_depth == 24
-            && self.conn.setup().image_byte_order == ImageOrder::LSB_FIRST)
-            .then(|| {
-                self.conn
-                    .get_image(
-                        ImageFormat::Z_PIXMAP,
-                        screen.root,
-                        0,
-                        0,
-                        screen.width_in_pixels,
-                        screen.height_in_pixels,
-                        u32::MAX,
-                    )
-                    .ok()?
-                    .reply()
-                    .ok()
-            })
-            .flatten()
-            .filter(|reply| reply.depth == 24)
-            .map(|reply| reply.data);
-        crate::frame::titlebar_backdrop::begin_drag(
-            u64::from(frame),
-            root,
-            raw_root,
-            (outer.x, outer.y, outer.width, outer.height),
-        );
-    }
-
     /// Apply live chrome tokens from the settings sync point. A change
     /// repaints every frame and reapplies its shape (radius/glass).
     pub(crate) fn apply_decoration_tokens(

@@ -22,12 +22,8 @@ flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-render-core = { path = "../flamewm-render-core" }
 flamewm-render-x11 = { path = "../flamewm-render-x11" }
 flamewm-skin = { path = "../flamewm-skin" }
-flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 flamewm-x11-desktop = { path = "../flamewm-x11-desktop" }
-x11rb = { workspace = true, features = ["screensaver", "damage"] }
-
-[build-dependencies]
-flamewm-render-compiler = { path = "../flamewm-render-compiler" }
+x11rb = { workspace = true, features = ["screensaver", "damage", "composite"] }
 
 [lints]
 workspace = true

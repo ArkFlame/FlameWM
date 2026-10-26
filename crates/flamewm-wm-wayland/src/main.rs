@@ -605,15 +605,6 @@ fn run() -> Result<i32, Box<dyn Error>> {
         )?;
     }
 
-    // Reap exited children twice a second; the loop may otherwise sleep indefinitely.
-    handle.insert_source(
-        Timer::from_duration(Duration::from_millis(500)),
-        |_, (), state| {
-            state.reap_children();
-            TimeoutAction::ToDuration(Duration::from_millis(500))
-        },
-    )?;
-
     // A completed flip is not a desktop. The first frame is painted inside backend init, before
     // XWayland exists, and contains only the clear colour and the cursor; XWayland readiness is what
     // actually puts windows on screen. If autostart clients are configured but XWayland never

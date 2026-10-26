@@ -342,6 +342,29 @@ pub fn install_x_protocol_error_handler() {
     });
 }
 
+/// Allocations at least this large are served by `mmap` and returned to the system on free.
+const MMAP_THRESHOLD_BYTES: c_int = 1024 * 1024;
+
+/// Pins glibc's mmap threshold once per process. glibc raises the threshold to the size of every
+/// large block freed, so after one wallpaper decode or capture every later multi-megabyte buffer
+/// was carved from the heap and stayed resident after it was freed (the desktop kept about 33 MB
+/// of freed wallpaper buffers). A fixed threshold hands every large buffer back on free.
+pub fn return_large_frees_to_system() {
+    #[cfg(target_env = "gnu")]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        unsafe extern "C" {
+            fn mallopt(param: c_int, value: c_int) -> c_int;
+        }
+        const M_MMAP_THRESHOLD: c_int = -3;
+        // SAFETY: glibc's `mallopt` takes the arena lock and only changes allocator tunables;
+        // live allocations are unaffected.
+        ONCE.call_once(|| unsafe {
+            mallopt(M_MMAP_THRESHOLD, MMAP_THRESHOLD_BYTES);
+        });
+    }
+}
+
 /// Install the process-lifetime IO-error handler exactly once. Call after
 /// each successful XOpenDisplay; the latch is process-wide by design.
 pub fn install_x_io_error_handler() {
@@ -399,6 +422,7 @@ pub const QUEUED_AFTER_READING: c_int = 1;
 pub const PROP_MODE_REPLACE: c_int = 0;
 pub const XA_ATOM: Atom = 4;
 pub const XA_CARDINAL: Atom = 6;
+pub const XA_WINDOW: Atom = 33;
 pub const CW_OVERRIDE_REDIRECT: c_ulong = 1 << 9;
 pub const GRAB_MODE_ASYNC: c_int = 1;
 pub const CURRENT_TIME: Time = 0;

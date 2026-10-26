@@ -31,8 +31,8 @@ use helpers::{
     clear_transient_state_fields, earliest_wake, end_start_session_fields,
     interaction_target_is_current, media_popup_must_close, media_system_request,
     pager_cell_window_rect, panel_projection_needed, resolve_control_output,
-    start_icon_refresh_due, take_context_menu_for_popup, taskbar_frame, text_setting,
-    RuntimeIconGeometrySink, ZONE_SETTLE,
+    start_icon_refresh_due, take_context_menu_for_popup, taskbar_frame, RuntimeIconGeometrySink,
+    ZONE_SETTLE,
 };
 use quick_popups::{
     apply_quick_open_result, is_quick_popup_kind, quick_popup_kind, QuickOpenResolution,
@@ -721,8 +721,6 @@ impl ShellLoop {
                             )
                         })?;
                     }
-                    // The popup's final root-space rect is known inside open_context_menu. Compose
-                    // only that wallpaper region before its first show.
                     let backdrop =
                         crate::entry::settings_projection::start_backdrop_percents(&settings);
                     self.context_menu = Some(state.clone());
@@ -731,13 +729,7 @@ impl ShellLoop {
                     let _prepare = shell_stage!("shell.context.open.prepare");
                     let opened = self
                         .surfaces
-                        .open_context_menu(
-                            runtime,
-                            &state,
-                            self.shell.snapshot(),
-                            backdrop,
-                            |rect| Self::popup_wallpaper_region(&settings, rect),
-                        )
+                        .open_context_menu(runtime, &state, self.shell.snapshot(), backdrop)
                         .map_err(UiBackendError::Renderer);
                     let _present = shell_stage!("shell.context.open.present");
                     shell_slow_note("context", started);
@@ -1820,10 +1812,6 @@ impl ShellLoop {
         if self.quick_kind_open.is_none() {
             runtime.disarm_raw_press_observer();
         }
-        // Event-driven retry: a blank taskbar snapshot is recaptured when root children change.
-        if runtime.take_root_changed() && self.surfaces.panel_capture_pending() {
-            self.apply_taskbar_backdrop(runtime);
-        }
         // Startup panel projection runs with no loader (main.rs
         // project_panel_critical), so task-slot icons were recorded as empty
         // placeholders with no request. Re-project task slots once with the
@@ -2061,73 +2049,26 @@ impl ShellLoop {
         self.surfaces.set_popup_slide(popup_slide);
     }
 
-    /// Installs the taskbar pseudo-transparency backdrop from the current opacity and blur.
+    /// Publishes the desktop layer from the wallpaper settings and installs the taskbar backdrop
+    /// for the current opacity and blur.
     fn apply_taskbar_backdrop(&mut self, runtime: &mut SurfaceRuntime) {
         let Some(settings) = self.settings_cache.as_ref() else {
             return;
         };
         let (opacity, blur) =
             crate::entry::settings_projection::taskbar_backdrop_percents(settings);
-        let wallpaper_path = text_setting(settings, "wallpaper");
-        let fit_name = text_setting(settings, "wallpaperFit");
-        let root = flamewm_ui_x11::backdrop::root_geometry().ok();
-        let packaged_root = crate::entry::packaged_root();
-        let color = text_setting(settings, "wallpaperColor");
-        let solid =
-            flamewm_platform::chrome::parse_hex_rgb(&format!("#{}", color.trim_start_matches('#')))
-                .unwrap_or((0x23, 0x26, 0x29));
-        let wallpaper = |rect| {
-            // A snapshot must always exist: at opacity < 100 the bar composites over it, and a
-            // missing snapshot leaves the cleared (black) scene showing through.
-            let fallback = || flamewm_shell::surface_backdrop::solid_backdrop(solid, rect);
-            let Some((width, height)) = root else {
-                return Some(fallback());
-            };
-            flamewm_shell::surface_backdrop::wallpaper_source(
-                &wallpaper_path,
-                flamewm_image_core::wallpaper::parse(&fit_name),
-                (width, height),
-                rect,
-                &packaged_root,
-            )
-            .or_else(|| Some(fallback()))
-        };
+        let source = flamewm_shell::surface_backdrop::desktop_source(
+            settings,
+            &crate::entry::packaged_root(),
+        );
+        runtime.set_desktop_source(Some(source.clone()));
+        let separate = crate::settings_projection::taskbar_items(Some(settings)).separate;
         if let Err(error) =
             self.surfaces
-                .refresh_panel_backdrops(runtime, &wallpaper_path, &fit_name, wallpaper)
-        {
-            eprintln!("flamewm-shell: taskbar backdrop capture failed (nonfatal): {error}");
-        }
-        let separate = crate::settings_projection::taskbar_items(Some(settings)).separate;
-        if let Err(error) = self
-            .surfaces
-            .apply_panel_backdrop(runtime, opacity, blur, separate)
+                .apply_panel_backdrop(runtime, Some(&source), opacity, blur, separate)
         {
             eprintln!("flamewm-shell: taskbar backdrop failed (nonfatal): {error}");
         }
-    }
-
-    /// Wallpaper pixels under the final popup rect. `None` falls back to a root capture.
-    fn popup_wallpaper_region(
-        settings: &flamewm_api::settings::SettingsSnapshot,
-        rect: (i32, i32, u32, u32),
-    ) -> Option<Vec<u8>> {
-        let text = |key: &str| text_setting(settings, key);
-        let (width, height) = flamewm_ui_x11::backdrop::root_geometry().ok()?;
-        let region = flamewm_shell::surface_backdrop::wallpaper_source(
-            &text("wallpaper"),
-            flamewm_image_core::wallpaper::parse(&text("wallpaperFit")),
-            (width, height),
-            rect,
-            &crate::entry::packaged_root(),
-        );
-        let Some(region) = region else {
-            flamewm_shell::surface_backdrop::backdrop_trace(format_args!(
-                "context-menu wallpaper region unavailable for rect {rect:?}; falling back to root capture"
-            ));
-            return None;
-        };
-        Some(region.pixels)
     }
 
     /// Installs the Start popup backdrop percents; the snapshot itself is captured on each first show.

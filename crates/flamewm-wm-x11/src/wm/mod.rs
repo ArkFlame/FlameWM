@@ -1277,6 +1277,9 @@ pub(crate) struct Wm<'a, C: Connection> {
     frame_extents_published: HashMap<Window, [u32; 4]>,
     /// Last `_NET_CLIENT_LIST` and `_NET_CLIENT_LIST_STACKING` pair published; skips identical re-publishes.
     client_list_published: Option<(Vec<Window>, Vec<Window>)>,
+    /// Frames are redirected automatically through Composite (no compositing manager runs), so
+    /// their contents stay valid off screen for translucent windows above them.
+    redirect_frames: bool,
     registry: FrameRegistry,
     sessions: HashMap<Window, ControllerState>,
     // Declared before `renderer`: overlays must drop while the renderer's display is open.
@@ -1484,6 +1487,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             frame_to_client: HashMap::new(),
             frame_extents_published: HashMap::new(),
             client_list_published: None,
+            redirect_frames: automatic_frame_redirect_available(conn, screen_num),
             registry: FrameRegistry::new(),
             sessions: HashMap::new(),
             renderer,
@@ -2183,13 +2187,36 @@ fn should_focus_on_press(active: Option<Window>, client: Window) -> bool {
     active != Some(client)
 }
 
+/// Whether frames may be redirected automatically: the Composite extension exists and no
+/// compositing manager owns `_NET_WM_CM_S<screen>` (one would composite the frames itself).
+fn automatic_frame_redirect_available<C: Connection>(conn: &C, screen_num: usize) -> bool {
+    use x11rb::protocol::composite::ConnectionExt as _;
+    let composite = conn
+        .composite_query_version(0, 4)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .is_some_and(|version| (version.major_version, version.minor_version) >= (0, 2));
+    if !composite {
+        return false;
+    }
+    let owner = conn
+        .intern_atom(true, format!("_NET_WM_CM_S{screen_num}").as_bytes())
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .filter(|reply| reply.atom != x11rb::NONE)
+        .and_then(|reply| conn.get_selection_owner(reply.atom).ok())
+        .and_then(|cookie| cookie.reply().ok())
+        .map_or(x11rb::NONE, |reply| reply.owner);
+    owner == x11rb::NONE
+}
+
 fn pointer_grab_target(requested: Window, resources: FrameResources) -> bool {
     requested == resources.frame || resources.children().contains(&requested)
 }
 
 impl<C: Connection> Drop for Wm<'_, C> {
     fn drop(&mut self) {
-        self.snap_preview.hide();
+        self.snap_preview.hide(self.conn);
     }
 }
 

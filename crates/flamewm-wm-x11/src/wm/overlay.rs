@@ -59,8 +59,10 @@ impl<C: Connection> Wm<'_, C> {
                 (capture, false, self.minimize_target_for(client, outer))
             }
         };
-        // The window pixels are captured above. Without ARGB the overlay is opaque and snapshots
-        // the root under it, so the frame is unmapped first, then synced before the snapshot.
+        // The window pixels are captured above. Without ARGB the overlay is opaque: outside the
+        // animated silhouette it shows live content, so the frame is unmapped and must not show
+        // there. Its backdrop is the desktop frame, which never holds the frame, so nothing waits
+        // for the unmap; the overlay is mapped above the frame anyway.
         // Restore needs no hide: its frame is already unmapped while minimized.
         let hide = !renderer.borrow().warp_argb_usable()
             && matches!(
@@ -72,17 +74,7 @@ impl<C: Connection> Wm<'_, C> {
             if let Some(state) = self.clients.get_mut(&client) {
                 state.ignore_unmap = state.ignore_unmap.saturating_add(1);
             }
-            // Round trip on the WM connection: the unmap is processed before the root snapshot.
-            let sync = self
-                .conn
-                .get_input_focus()
-                .map_err(|e| e.to_string())
-                .and_then(|cookie| cookie.reply().map_err(|e| e.to_string()));
-            if let Err(error) = sync {
-                // The unmap was sent and its UnmapNotify stays ignored; restore the frame.
-                let _ = self.conn.map_window(frame);
-                return Err(error);
-            }
+            self.conn.flush().map_err(|e| e.to_string())?;
         }
         // Fade keeps the window rect (minimize, restore, open) or moves it between the two rects
         // (maximize, unmaximize) while crossfading. Magic Lamp keeps the lamp warp; its panel edge is

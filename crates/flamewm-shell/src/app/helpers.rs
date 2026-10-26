@@ -42,14 +42,6 @@ pub(super) fn interaction_target_is_current(
         && panels_revision == current_panels_revision
 }
 
-/// Text value of one setting, or empty when it is absent or not text.
-pub(super) fn text_setting(settings: &SettingsSnapshot, key: &str) -> String {
-    match settings.values.get(key) {
-        Some(SettingValue::Text(value)) => value.clone(),
-        _ => String::new(),
-    }
-}
-
 /// Flat `taskbarStyle` / `taskbarFloating*` keys as the platform reads them (defaults match
 /// `ProductSettings::default()`).
 pub(super) fn taskbar_frame(settings: &SettingsSnapshot) -> TaskbarFrame {

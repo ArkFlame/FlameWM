@@ -3,13 +3,14 @@
 //! Three surfaces share the type:
 //! - Magic Lamp warp on a 32-bit ARGB window ([`WarpOverlay::begin`] with an ARGB visual).
 //! - Magic Lamp warp on the default visual when no ARGB visual exists. The window is opaque
-//!   and first paints a root snapshot of the area beneath it, then the warped strips. The
-//!   caller must hide the animated frame before `begin` so the snapshot shows the backdrop.
-//!   Exposed areas outside the snapshot rect are not refreshed; they are accepted as stale.
+//!   and first paints the desktop beneath it, then the warped strips. The desktop comes from
+//!   the frame the desktop surface presents (its backbuffer pixmap, published on the root),
+//!   composited by the server straight from that pixmap: no root read, no sync and no pixel
+//!   transfer when a flight starts. Outside the animated silhouette the shape shows live content.
 //! - Window-open scale-and-fade on ARGB only ([`WarpOverlay::begin_fade`]). It never fakes a
 //!   fade on an opaque visual.
 //! - Crossfade ([`TransitionStyle::Fade`] via [`WarpOverlay::begin_styled`]). Draws the capture
-//!   with an alpha mask over the root backdrop (opaque) or over clear (ARGB with a compositor),
+//!   with an alpha mask over the desktop backdrop (opaque) or over clear (ARGB with a compositor),
 //!   so it works with or without a compositing manager.
 //!
 //! The capture is taken once by the caller and owned here. Raw Xlib stays inside render-x11;
@@ -19,19 +20,16 @@
 use std::mem::MaybeUninit;
 use std::os::raw::c_ulong;
 
-use crate::backdrop::capture_drawable_rect;
 use crate::external_drawable::match_argb32_visual;
 use crate::lamp::{self, LampBand, PanelEdge};
 use crate::warp::{self, WarpRect, WarpSource};
-use crate::xcomposite::{
-    CapturedImage, check_capture_size, rgba_to_argb_owned, upload_argb_pixmap,
-};
+use crate::xcomposite::{CapturedImage, check_capture_size, upload_argb_pixmap};
 use crate::xlib::{
     ALLOC_NONE, CW_BACK_PIXEL, CW_COLORMAP, CW_OVERRIDE_REDIRECT, Colormap, Display,
     INPUT_OUTPUT_CLASS, Pixmap, TRANSPARENT_CLEAR_PIXEL, Window, XCreateColormap, XCreatePixmap,
     XCreateWindow, XDefaultDepth, XDefaultScreen, XDefaultVisual, XDestroyWindow, XDisplayHeight,
     XDisplayWidth, XFlush, XFreeColormap, XInternAtom, XMapWindow, XRaiseWindow, XRootWindow,
-    XSetWindowAttributes, XSync,
+    XSetWindowAttributes,
 };
 use crate::xrender_transform::{PICT_STANDARD_RGB_24, XRenderTransformApi};
 use crate::xshape::{XShapeBridge, rounded_mask_spans};
@@ -47,7 +45,7 @@ const FADE_START_SCALE: f64 = 0.85;
 pub enum WarpSurface {
     /// Transparent 32-bit window; the real window beneath stays visible around the warp.
     Argb,
-    /// Opaque default-visual window painted over a root snapshot.
+    /// Opaque default-visual window painted over the desktop frame.
     OpaqueBackdrop,
 }
 
@@ -178,8 +176,11 @@ pub fn argb_visual_available(display: *mut Display) -> bool {
 
 /// Root snapshot pixmap and its picture, both released by the owning overlay.
 struct Backdrop {
+    /// Owned pixmap freed on drop; 0 when the picture reads a pixmap owned elsewhere.
     pixmap: Pixmap,
     picture: c_ulong,
+    /// Where window pixel (0, 0) reads from in the picture.
+    origin: (i32, i32),
 }
 
 /// A live transition window. Releases every X resource it created on drop.
@@ -288,10 +289,10 @@ impl WarpOverlay {
 
     /// Opens a Magic Lamp warp covering both rects. `capture` must match `source`'s size.
     ///
-    /// Uses an ARGB window when available. Otherwise it takes a root snapshot of the union
-    /// rect now, so the caller must hide the animated frame before calling.
+    /// Uses an ARGB window when available. Otherwise it paints over the desktop frame, so the
+    /// caller must hide the animated frame before the first paint.
     /// Fails without leaving X resources behind when the transform extension, the capture
-    /// size, or the snapshot is unavailable, so the caller skips the effect.
+    /// size, or the desktop frame is unavailable, so the caller skips the effect.
     pub fn begin(
         display: *mut Display,
         capture: CapturedImage,
@@ -312,7 +313,7 @@ impl WarpOverlay {
 
     /// Opens a transition of `style` between `source` and `target` (root rects). `direction`
     /// picks appear (`In`) or disappear (`Out`); Magic Lamp ignores it. `capture` must match
-    /// `source`'s size. Same failure and root-snapshot rules as [`WarpOverlay::begin`].
+    /// `source`'s size. Same failure and backdrop rules as [`WarpOverlay::begin`].
     pub fn begin_styled(
         display: *mut Display,
         capture: CapturedImage,
@@ -368,9 +369,9 @@ impl WarpOverlay {
                 self.clear = unsafe { self.api.create_solid_fill(display, 0, 0, 0, 0) }?;
             }
             WarpSurface::OpaqueBackdrop => {
-                // SAFETY: `display` is live; the snapshot picture is owned by `self`.
+                // SAFETY: `display` is live; the backdrop picture is owned by `self`.
                 self.backdrop =
-                    Some(unsafe { capture_backdrop(display, &self.api, bx, by, bw, bh)? });
+                    Some(unsafe { desktop_backdrop(display, &self.api, bx, by, bw, bh)? });
                 // SAFETY: `display` is live; the window is recorded for Drop.
                 let window = unsafe { create_default_window(display, bx, by, bw, bh)? };
                 self.window = window;
@@ -392,7 +393,11 @@ impl WarpOverlay {
                 if pixmap == 0 {
                     return Err("overlay: offscreen pixmap returned 0".to_string());
                 }
-                self.offscreen = Some(Backdrop { pixmap, picture: 0 });
+                self.offscreen = Some(Backdrop {
+                    pixmap,
+                    picture: 0,
+                    origin: (0, 0),
+                });
                 // SAFETY: `pixmap` is live and owned by `self`.
                 let picture = unsafe {
                     self.api
@@ -694,21 +699,27 @@ impl WarpOverlay {
         Ok(())
     }
 
-    /// Fills `dest` with the root snapshot when opaque, else the transparent clear.
+    /// Fills `dest` with the desktop backdrop when opaque, else the transparent clear.
     ///
     /// # Safety
     ///
     /// `dest` and the fill picture must be live on `self.display` until Drop.
     unsafe fn begin_frame(&self, dest: c_ulong) {
-        let fill = self
-            .backdrop
-            .as_ref()
-            .map_or(self.clear, |backdrop| backdrop.picture);
         let (w, h) = self.size;
-        // SAFETY: forwarded contract; `fill` and `dest` are live pictures on `self.display`.
+        // SAFETY: forwarded contract; the fill and `dest` are live pictures on `self.display`.
         unsafe {
-            self.api
-                .composite_src(self.display, fill, dest, (0, 0, w, h))
+            match self.backdrop.as_ref() {
+                Some(backdrop) => self.api.composite_src_from(
+                    self.display,
+                    backdrop.picture,
+                    dest,
+                    (0, 0, w, h),
+                    backdrop.origin,
+                ),
+                None => self
+                    .api
+                    .composite_src(self.display, self.clear, dest, (0, 0, w, h)),
+            }
         };
     }
 
@@ -875,7 +886,9 @@ impl Drop for WarpOverlay {
             free(self.picture);
             let release = |b: Backdrop| {
                 free(b.picture);
-                crate::native::xresource::free_pixmap_raw(self.display, b.pixmap);
+                if b.pixmap != 0 {
+                    crate::native::xresource::free_pixmap_raw(self.display, b.pixmap);
+                }
             };
             self.backdrop
                 .take()
@@ -933,14 +946,16 @@ fn load_checked_api(display: *mut Display) -> Result<XRenderTransformApi, String
     Ok(api)
 }
 
-/// Root snapshot of `(x, y, width, height)` as an ARGB pixmap and picture. Syncs first so the
-/// frame hidden by the caller is no longer on screen. Rects that leave the screen are rejected,
-/// because XGetImage on them would raise an X error.
+/// Backdrop for the root rect `(x, y, width, height)`: a picture on the frame the desktop surface
+/// presents ([`crate::backdrop::DESKTOP_FRAME_PROPERTY`]), read by the server in place. Nothing is
+/// read back or uploaded, so a flight starts without a sync or a pixel transfer. Errors when no
+/// desktop frame is published, its pixmap is gone, or the rect leaves the screen, so the caller
+/// skips the effect.
 ///
 /// # Safety
 ///
-/// `display` must be live. The returned resources are owned by the caller.
-unsafe fn capture_backdrop(
+/// `display` must be live. The returned picture is owned by the caller; the pixmap is not.
+unsafe fn desktop_backdrop(
     display: *mut Display,
     api: &XRenderTransformApi,
     x: i32,
@@ -949,10 +964,9 @@ unsafe fn capture_backdrop(
     height: u32,
 ) -> Result<Backdrop, String> {
     // SAFETY: live display; the screen index is the default screen.
-    let (root, screen_w, screen_h) = unsafe {
+    let (screen_w, screen_h) = unsafe {
         let screen = XDefaultScreen(display);
         (
-            XRootWindow(display, screen),
             XDisplayWidth(display, screen),
             XDisplayHeight(display, screen),
         )
@@ -964,21 +978,41 @@ unsafe fn capture_backdrop(
     if x < 0 || y < 0 || x_end > i64::from(screen_w) || y_end > i64::from(screen_h) {
         return Err("overlay: backdrop rect leaves the screen".to_string());
     }
-    // SAFETY: live display; a zero-status sync only flushes and waits for the server.
-    unsafe { XSync(display, 0) };
-    let shot = capture_drawable_rect(display, root, (x, y, width, height))?;
-    let captured = rgba_to_argb_owned(shot.width, shot.height, shot.pixels)?;
-    // SAFETY: live display; the pixmap is freed below if the picture cannot be made.
-    let pixmap = unsafe { upload_argb_pixmap(display, &captured) }?;
-    // SAFETY: `pixmap` is live.
-    match unsafe { api.create_argb_picture(display, pixmap) } {
-        Ok(picture) => Ok(Backdrop { pixmap, picture }),
-        Err(error) => {
-            // SAFETY: `pixmap` was created above and is not used again.
-            unsafe { crate::native::xresource::free_pixmap_raw(display, pixmap) };
-            Err(error)
-        }
+    // SAFETY: live display per the caller contract.
+    let frame = unsafe { crate::backdrop::published_desktop_frame(display) }
+        .ok_or("overlay: no desktop frame published")?;
+    let (mut root, mut gx, mut gy) = (0, 0, 0);
+    let (mut gw, mut gh, mut border, mut depth) = (0, 0, 0, 0);
+    // SAFETY: live display; out-pointers are valid locals. A pixmap freed since its publish fails
+    // here instead of producing a picture on a dead drawable.
+    let ok = unsafe {
+        crate::xlib_ext::XGetGeometry(
+            display,
+            frame.pixmap,
+            &mut root,
+            &mut gx,
+            &mut gy,
+            &mut gw,
+            &mut gh,
+            &mut border,
+            &mut depth,
+        )
+    };
+    if ok == 0 {
+        return Err("overlay: desktop frame pixmap is gone".to_string());
     }
+    let format = match depth {
+        24 => PICT_STANDARD_RGB_24,
+        32 => crate::xrender_transform::PICT_STANDARD_ARGB_32,
+        other => return Err(format!("overlay: desktop frame depth {other} unsupported")),
+    };
+    // SAFETY: the pixmap is live (checked above); the picture keeps it referenced until freed.
+    let picture = unsafe { api.create_standard_picture(display, frame.pixmap, format) }?;
+    Ok(Backdrop {
+        pixmap: 0,
+        picture,
+        origin: (x - frame.x, y - frame.y),
+    })
 }
 
 /// # Safety

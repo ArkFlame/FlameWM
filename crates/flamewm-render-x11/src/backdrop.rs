@@ -237,17 +237,6 @@ pub fn blur_radius_px(opacity_percent: u8, blur_percent: u8) -> f32 {
     f32::from(blur_percent.min(100)) / 100.0 * MAX_BLUR_RADIUS_PX
 }
 
-/// Whether a root capture holds real content. An empty or single-colour capture (all black
-/// included) means the root was not painted yet, so the caller must not install it.
-#[must_use]
-pub fn capture_is_ready(rgba: &[u8]) -> bool {
-    let mut pixels = rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2]]);
-    let Some(first) = pixels.next() else {
-        return false;
-    };
-    pixels.any(|pixel| pixel != first)
-}
-
 thread_local! {
     /// Blur work buffers shared by every snapshot blur on the display thread.
     static BLUR_SCRATCH: std::cell::RefCell<flamewm_image_core::blur::BlurScratch> =
@@ -257,7 +246,7 @@ thread_local! {
 /// Blur runs on a snapshot shrunk by this factor once the radius is large: the blur cost falls with
 /// the pixel count, and the soft result is upscaled bilinearly. Below twice the factor the blur is
 /// already cheap, so it stays at full resolution.
-const BLUR_DOWNSCALE: u32 = 4;
+pub(crate) const BLUR_DOWNSCALE: u32 = 4;
 
 /// Opaque ARGB32 words (0xFFRRGGBB) for a straight RGBA8 snapshot, blurred per
 /// [`blur_radius_px`]. Takes ownership so the blur runs in place without a copy.
@@ -285,7 +274,7 @@ pub fn blurred_argb_words(
 }
 
 /// Gaussian blur through the shared scratch buffers. A failure keeps the input pixels.
-fn blur_in_place_slice(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
+pub(crate) fn blur_in_place_slice(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
     let blurred = BLUR_SCRATCH.with(|scratch| {
         flamewm_image_core::blur::gaussian_blur_rgba_with(
             &mut scratch.borrow_mut(),
@@ -388,7 +377,7 @@ fn bilinear_argb_words(
 /// crop upsamples only the pixels it returns. A crop is pixel-identical to cropping the full
 /// upsampled image. Smaller radii keep full-resolution words.
 #[derive(Debug)]
-pub(crate) struct BlurredCanvas {
+pub struct BlurredCanvas {
     width: u32,
     height: u32,
     pixels: CanvasPixels,
@@ -406,7 +395,7 @@ enum CanvasPixels {
 
 impl BlurredCanvas {
     /// Blurs a `width` x `height` RGBA image per [`blur_radius_px`].
-    pub(crate) fn new(
+    pub fn new(
         width: u32,
         height: u32,
         mut rgba: Vec<u8>,
@@ -466,13 +455,15 @@ impl BlurredCanvas {
         }
     }
 
-    pub(crate) fn size(&self) -> (u32, u32) {
+    #[must_use]
+    pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
 
     /// The `size` region at `origin` as opaque ARGB32 words. Pixels off the canvas replicate its
     /// nearest edge.
-    pub(crate) fn crop(&self, origin: (i32, i32), size: (u32, u32)) -> Vec<u32> {
+    #[must_use]
+    pub fn crop(&self, origin: (i32, i32), size: (u32, u32)) -> Vec<u32> {
         if self.width == 0 || self.height == 0 {
             return Vec::new();
         }
@@ -514,69 +505,6 @@ impl BlurredCanvas {
         }
         out
     }
-
-    /// Replaces the `size` region at `origin` (inside the canvas) with `rgba`, blurred alone with
-    /// the same radius. A downscaled canvas takes the whole small cells the region covers.
-    pub(crate) fn paste(
-        &mut self,
-        origin: (u32, u32),
-        size: (u32, u32),
-        rgba: Vec<u8>,
-        opacity_percent: u8,
-        blur_percent: u8,
-    ) {
-        let (width, height) = (self.width, self.height);
-        if size.0 == 0
-            || size.1 == 0
-            || origin.0 + size.0 > width
-            || origin.1 + size.1 > height
-            || rgba.len() != (size.0 * size.1 * 4) as usize
-        {
-            return;
-        }
-        match &mut self.pixels {
-            CanvasPixels::Full(words) => {
-                let patch = blurred_argb_words(size.0, size.1, rgba, opacity_percent, blur_percent);
-                for (row, source) in patch.chunks_exact(size.0 as usize).enumerate() {
-                    let start = (origin.1 as usize + row) * width as usize + origin.0 as usize;
-                    words[start..start + size.0 as usize].copy_from_slice(source);
-                }
-            }
-            CanvasPixels::Scaled { small, small_w, .. } => {
-                // Only whole cells: a cell straddling the region edge keeps its old average.
-                let first = (
-                    origin.0.div_ceil(BLUR_DOWNSCALE),
-                    origin.1.div_ceil(BLUR_DOWNSCALE),
-                );
-                let end = (
-                    (origin.0 + size.0) / BLUR_DOWNSCALE,
-                    (origin.1 + size.1) / BLUR_DOWNSCALE,
-                );
-                if end.0 <= first.0 || end.1 <= first.1 {
-                    return;
-                }
-                let (cells_w, cells_h) = (end.0 - first.0, end.1 - first.1);
-                let (inner_x, inner_y) = (
-                    first.0 * BLUR_DOWNSCALE - origin.0,
-                    first.1 * BLUR_DOWNSCALE - origin.1,
-                );
-                let (inner_w, inner_h) = (cells_w * BLUR_DOWNSCALE, cells_h * BLUR_DOWNSCALE);
-                let mut inner = Vec::with_capacity((inner_w * inner_h * 4) as usize);
-                for y in inner_y..inner_y + inner_h {
-                    let start = ((y * size.0 + inner_x) * 4) as usize;
-                    inner.extend_from_slice(&rgba[start..start + (inner_w * 4) as usize]);
-                }
-                let (mut cells, _, _) = box_downscale(&inner, inner_w, inner_h, BLUR_DOWNSCALE);
-                let radius = blur_radius_px(opacity_percent, blur_percent);
-                blur_in_place_slice(&mut cells, cells_w, cells_h, radius / BLUR_DOWNSCALE as f32);
-                let stride = *small_w as usize * 4;
-                for (row, source) in cells.chunks_exact((cells_w * 4) as usize).enumerate() {
-                    let start = (first.1 as usize + row) * stride + first.0 as usize * 4;
-                    small[start..start + source.len()].copy_from_slice(source);
-                }
-            }
-        }
-    }
 }
 
 /// Magic and format version of a cached wallpaper canvas file.
@@ -584,47 +512,253 @@ const CANVAS_CACHE_MAGIC: &[u8; 8] = b"FWBCNV01";
 /// Cached canvases kept; older ones are removed when a new one is written.
 const CANVAS_CACHE_FILES: usize = 6;
 
-/// The wallpaper under the whole `root`, blurred once per [`BlurredCanvas::new`].
+/// The desktop layer every translucent surface blends over: the wallpaper under the whole
+/// `root`, laid out per output like the desktop draws it (`outputs` in root coordinates; empty is
+/// one wallpaper over the root), blurred once per [`BlurredCanvas::new`].
 ///
-/// The first FlameWM window to need it decodes, composes and blurs the wallpaper and stores the
+/// The first FlameWM process to need it decodes, composes and blurs the wallpaper and stores the
 /// small canvas (about half a megabyte at 1080p) under `$XDG_CACHE_HOME/flamewm/backdrops`; every
-/// later window, and later sessions, load that file instead of decoding the wallpaper again. The
-/// key covers the wallpaper file (path, size, modification time), the fit, the root size and the
-/// blur, so a changed wallpaper or setting never reads a stale canvas. The decoded wallpaper is
-/// dropped as soon as the canvas exists.
-pub(crate) fn wallpaper_canvas(
-    spec: &WindowBackdrop,
+/// later surface, process and session loads that file instead of decoding the wallpaper again.
+/// The key covers the wallpaper file (path, size, modification time), the fit, the output layout,
+/// the root size and the blur, so a changed wallpaper or setting never reads a stale canvas. The
+/// decoded wallpaper is dropped as soon as the canvas exists.
+pub fn desktop_canvas(
+    wallpaper: &std::path::Path,
+    fit: flamewm_image_core::wallpaper::WallpaperFit,
+    outputs: &[(i32, i32, u32, u32)],
     root: (u32, u32),
+    blur_percent: u8,
 ) -> Result<BlurredCanvas, String> {
-    let path = wallpaper_file(&spec.wallpaper, &spec.packaged_root);
-    let cache = canvas_cache_path(&path, spec, root);
+    let outputs = if outputs == [(0, 0, root.0, root.1)] {
+        &[][..]
+    } else {
+        outputs
+    };
+    let cache = canvas_cache_path(wallpaper, fit, outputs, root, blur_percent);
     if let Some(canvas) = cache.as_deref().and_then(|file| load_canvas(file, root)) {
         return Ok(canvas);
     }
-    let natural = flamewm_image_core::wallpaper::decode_file(&path)?;
-    let fit = flamewm_image_core::wallpaper::parse(&spec.fit);
-    let composed = flamewm_image_core::wallpaper::compose_region(
+    let natural = flamewm_image_core::wallpaper::decode_file(wallpaper)?;
+    let composed = flamewm_image_core::wallpaper::compose_outputs_region(
         &natural,
-        root.0,
-        root.1,
+        root,
+        outputs,
         fit,
         (0, 0, root.0, root.1),
     )
-    .ok_or("window backdrop: wallpaper region unavailable")?;
+    .ok_or("desktop canvas: wallpaper region unavailable")?;
     drop(natural);
-    let canvas = BlurredCanvas::new(root.0, root.1, composed.pixels, 0, spec.blur_percent);
+    let canvas = BlurredCanvas::new(root.0, root.1, composed.pixels, 0, blur_percent);
     if let (Some(file), Some(small)) = (cache.as_deref(), canvas.scaled_bytes()) {
         store_canvas(file, root, small);
     }
     Ok(canvas)
 }
 
-/// Cache file for the wallpaper canvas of `spec` at `root`; `None` without a cache directory or a
-/// readable wallpaper file.
-fn canvas_cache_path(
-    wallpaper: &std::path::Path,
+/// Root property on which the desktop surface publishes its presented frame for the WM:
+/// `CARDINAL[6]` = backbuffer pixmap, window root `x`, `y` (two's complement), `width`, `height`,
+/// present serial. The pixmap holds what the desktop shows, so the WM shades frame shadows from it
+/// without reading the root. It is rewritten after every present: the serial change tells the WM
+/// that a read racing that repaint must be redone. Deleted when the desktop surface goes away.
+pub const DESKTOP_FRAME_PROPERTY: &str = "_FLAMEWM_DESKTOP_FRAME";
+
+/// Root property on which the WM lists the frames it redirects automatically through Composite
+/// (`WINDOW[]`, bottom to top). Their contents stay valid off screen even where other windows
+/// cover them, so translucent app windows compose what lies behind them from these pixmaps.
+/// Absent when the WM does not redirect (no Composite, or a compositing manager runs).
+pub const REDIRECTED_FRAMES_PROPERTY: &str = "_FLAMEWM_REDIRECTED_FRAMES";
+
+/// A desktop frame read back from [`DESKTOP_FRAME_PROPERTY`]: the pixmap and its window's root
+/// origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DesktopFrame {
+    pub(crate) pixmap: Pixmap,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+}
+
+/// Parses the [`DESKTOP_FRAME_PROPERTY`] words; `None` when malformed.
+fn desktop_frame_from_words(words: &[u32]) -> Option<DesktopFrame> {
+    let [pixmap, x, y, width, height, _serial] = *words else {
+        return None;
+    };
+    (pixmap != 0 && width > 0 && height > 0).then_some(DesktopFrame {
+        pixmap: Pixmap::from(pixmap),
+        x: x as i32,
+        y: y as i32,
+    })
+}
+
+/// The desktop frame currently published on the root of `display`; `None` without a desktop.
+///
+/// # Safety
+///
+/// `display` must be live.
+pub(crate) unsafe fn published_desktop_frame(display: *mut Display) -> Option<DesktopFrame> {
+    let name = std::ffi::CString::new(DESKTOP_FRAME_PROPERTY).ok()?;
+    // SAFETY: live display per the contract; `only_if_exists` keeps the lookup from creating it.
+    let atom = unsafe { XInternAtom(display, name.as_ptr(), 1) };
+    if atom == 0 {
+        return None;
+    }
+    let root = unsafe { XRootWindow(display, XDefaultScreen(display)) };
+    let (mut actual_type, mut actual_format, mut items, mut after) = (0, 0, 0, 0);
+    let mut data: *mut u8 = std::ptr::null_mut();
+    // SAFETY: all out-pointers reference live locals; Xlib allocates `data`, freed below.
+    let status = unsafe {
+        crate::xlib_ext::XGetWindowProperty(
+            display,
+            root,
+            atom,
+            0,
+            6,
+            0,
+            XA_CARDINAL,
+            &mut actual_type,
+            &mut actual_format,
+            &mut items,
+            &mut after,
+            &mut data,
+        )
+    };
+    if status != 0 || data.is_null() {
+        return None;
+    }
+    let words: Vec<u32> = if actual_format == 32 {
+        // SAFETY: format-32 properties come back as `items` C longs at `data`.
+        unsafe {
+            std::slice::from_raw_parts(data.cast::<std::os::raw::c_long>(), items as usize)
+                .iter()
+                .map(|&word| word as u32)
+                .collect()
+        }
+    } else {
+        Vec::new()
+    };
+    unsafe { XFree(data.cast()) };
+    desktop_frame_from_words(&words)
+}
+
+/// What the desktop layer is made of, as the desktop draws it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DesktopSource {
+    Solid([u8; 3]),
+    Image {
+        path: std::path::PathBuf,
+        fit: flamewm_image_core::wallpaper::WallpaperFit,
+    },
+}
+
+/// Flat colour of the layer when the wallpaper cannot be decoded (the desktop's solid default).
+const DESKTOP_FALLBACK_RGB: [u8; 3] = [0x23, 0x26, 0x29];
+
+/// One process's handle on the desktop layer that popups and panels blend over. Blurs that the
+/// canvas stores downscaled share [`desktop_canvas`] (one small canvas, cached on disk); smaller
+/// blurs and unblurred crops are composed per request from the decoded wallpaper and never kept,
+/// so no root-sized full-resolution copy stays resident.
+#[derive(Debug)]
+pub struct DesktopLayer {
+    source: DesktopSource,
+    canvas: Option<((u32, u32), u8, Option<BlurredCanvas>)>,
+}
+
+impl DesktopLayer {
+    #[must_use]
+    pub fn new(source: DesktopSource) -> Self {
+        Self {
+            source,
+            canvas: None,
+        }
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &DesktopSource {
+        &self.source
+    }
+
+    /// Opaque ARGB32 words of the layer under the root-space `rect`, blurred as a surface at
+    /// `opacity_percent` and `blur_percent` would be. A solid or undecodable wallpaper is flat.
+    pub fn crop(
+        &mut self,
+        root: (u32, u32),
+        rect: (i32, i32, u32, u32),
+        opacity_percent: u8,
+        blur_percent: u8,
+    ) -> Vec<u32> {
+        let (x, y, width, height) = rect;
+        let flat = |rgb: [u8; 3]| {
+            let word =
+                0xff00_0000 | u32::from(rgb[0]) << 16 | u32::from(rgb[1]) << 8 | u32::from(rgb[2]);
+            vec![word; width as usize * height as usize]
+        };
+        let (path, fit) = match &self.source {
+            DesktopSource::Solid(rgb) => return flat(*rgb),
+            DesktopSource::Image { path, fit } => (path, *fit),
+        };
+        let radius = blur_radius_px(opacity_percent, blur_percent);
+        if radius < 2.0 * BLUR_DOWNSCALE as f32 {
+            return flamewm_image_core::wallpaper::decode_file(path)
+                .ok()
+                .and_then(|natural| {
+                    flamewm_image_core::wallpaper::compose_region(
+                        &natural, root.0, root.1, fit, rect,
+                    )
+                })
+                .map_or_else(
+                    || flat(DESKTOP_FALLBACK_RGB),
+                    |region| {
+                        blurred_argb_words(
+                            width,
+                            height,
+                            region.pixels,
+                            opacity_percent,
+                            blur_percent,
+                        )
+                    },
+                );
+        }
+        if self
+            .canvas
+            .as_ref()
+            .is_none_or(|(size, blur, _)| (*size, *blur) != (root, blur_percent))
+        {
+            let canvas = desktop_canvas(path, fit, &[], root, blur_percent)
+                .map_err(|error| eprintln!("flamewm-render-x11: desktop layer: {error}"))
+                .ok();
+            self.canvas = Some((root, blur_percent, canvas));
+        }
+        match self
+            .canvas
+            .as_ref()
+            .and_then(|(_, _, canvas)| canvas.as_ref())
+        {
+            Some(canvas) => canvas.crop((x, y), (width, height)),
+            None => flat(DESKTOP_FALLBACK_RGB),
+        }
+    }
+}
+
+/// [`desktop_canvas`] for a window backdrop spec: one wallpaper over the whole root.
+pub(crate) fn wallpaper_canvas(
     spec: &WindowBackdrop,
     root: (u32, u32),
+) -> Result<BlurredCanvas, String> {
+    desktop_canvas(
+        &wallpaper_file(&spec.wallpaper, &spec.packaged_root),
+        flamewm_image_core::wallpaper::parse(&spec.fit),
+        &[],
+        root,
+        spec.blur_percent,
+    )
+}
+
+/// Cache file for a desktop canvas; `None` without a cache directory or a readable wallpaper.
+fn canvas_cache_path(
+    wallpaper: &std::path::Path,
+    fit: flamewm_image_core::wallpaper::WallpaperFit,
+    outputs: &[(i32, i32, u32, u32)],
+    root: (u32, u32),
+    blur_percent: u8,
 ) -> Option<std::path::PathBuf> {
     use std::hash::{Hash, Hasher};
     let metadata = std::fs::metadata(wallpaper).ok()?;
@@ -638,9 +772,10 @@ fn canvas_cache_path(
         wallpaper,
         metadata.len(),
         modified.as_nanos(),
-        spec.fit.as_str(),
+        format!("{fit:?}"),
+        outputs,
         root,
-        spec.blur_percent,
+        blur_percent,
         BLUR_DOWNSCALE,
     )
         .hash(&mut hasher);
@@ -765,18 +900,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn uniform_and_black_captures_are_not_ready() {
-        assert!(!capture_is_ready(&[]));
-        assert!(!capture_is_ready(&[0, 0, 0, 255].repeat(16)));
-        assert!(!capture_is_ready(&[0x40, 0x80, 0xc0, 255].repeat(16)));
-    }
-
-    #[test]
-    fn one_differing_pixel_makes_capture_ready() {
-        let mut pixels = [0x40, 0x80, 0xc0, 255].repeat(16);
-        pixels[4 * 7] = 0x41;
-        assert!(capture_is_ready(&pixels));
-        assert!(capture_is_ready(&[0, 0, 0, 255, 0, 0, 1, 255]));
+    fn desktop_frame_words_parse_and_reject_malformed() {
+        assert_eq!(
+            desktop_frame_from_words(&[7, 0, (-3i32) as u32, 1280, 800, 9]),
+            Some(DesktopFrame {
+                pixmap: 7,
+                x: 0,
+                y: -3,
+            })
+        );
+        assert_eq!(desktop_frame_from_words(&[0, 0, 0, 1280, 800, 9]), None);
+        assert_eq!(desktop_frame_from_words(&[7, 0, 0, 1280, 800]), None);
     }
 
     #[test]
@@ -885,19 +1019,6 @@ mod tests {
             canvas.crop((3, 4), (10, 10))
         );
         assert!(BlurredCanvas::from_scaled(width + 9, height, vec![0; 16]).is_none());
-    }
-
-    #[test]
-    fn a_scaled_paste_replaces_whole_cells_only() {
-        let (width, height) = (32u32, 16u32);
-        let mut canvas =
-            BlurredCanvas::new(width, height, vec![0; (width * height * 4) as usize], 0, 80);
-        let white = vec![0xff; 16 * 8 * 4];
-        canvas.paste((8, 4), (16, 8), white, 0, 80);
-        let small = canvas.scaled_bytes().expect("scaled");
-        let cell = |sx: usize, sy: usize| small[(sy * 8 + sx) * 4];
-        assert!(cell(3, 1) > 0, "a covered cell takes the patch");
-        assert_eq!(cell(0, 0), 0, "cells outside the patch are untouched");
     }
 
     #[test]

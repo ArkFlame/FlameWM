@@ -284,6 +284,12 @@ impl<C: Connection> Wm<'_, C> {
                         | EventMask::SUBSTRUCTURE_REDIRECT,
                 ),
         )?;
+        if self.redirect_frames {
+            // Before the first map: the frame's off-screen contents are valid from the start.
+            use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
+            self.conn
+                .composite_redirect_window(frame, Redirect::AUTOMATIC)?;
+        }
 
         // Grab-server only for save-set/reparent/structural-configure.
         // Reparent offset + client configure from the lifecycle contract
@@ -479,10 +485,7 @@ impl<C: Connection> Wm<'_, C> {
         window: Window,
         restore_to_root: bool,
     ) -> Result<(), ReplyError> {
-        self.snap_preview.hide();
-        if let Some(frame) = self.clients.get(&window).map(|state| state.frame) {
-            crate::frame::titlebar_backdrop::forget(u64::from(frame));
-        }
+        self.snap_preview.hide(self.conn);
         // The client is leaving: drop its flight and overlay without applying an end state. A
         // running close keeps its afterimage, which finishes on its own timeline.
         if !animation::survives_unmanage(self.animator.running(window)) {

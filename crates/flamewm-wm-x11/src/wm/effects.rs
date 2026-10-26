@@ -149,17 +149,24 @@ impl<C: Connection> Wm<'_, C> {
                     }
                     FrameEffect::SnapPreview { target } => {
                         if target.is_none() {
-                            self.snap_preview.hide();
+                            self.snap_preview.hide(self.conn);
                         }
                     }
                     FrameEffect::DragOutline { rect } => match rect {
-                        Some(frame) => self.snap_preview.show_outline(flamewm_api::Rect {
-                            x: frame.x,
-                            y: frame.y,
-                            width: frame.w,
-                            height: frame.h,
-                        }),
-                        None => self.snap_preview.hide(),
+                        Some(frame) => {
+                            let root = self.screen().root;
+                            self.snap_preview.show_outline(
+                                self.conn,
+                                root,
+                                flamewm_api::Rect {
+                                    x: frame.x,
+                                    y: frame.y,
+                                    width: frame.w,
+                                    height: frame.h,
+                                },
+                            );
+                        }
+                        None => self.snap_preview.hide(self.conn),
                     },
                     FrameEffect::Noop => {}
                 }
@@ -332,7 +339,7 @@ impl<C: Connection> Wm<'_, C> {
         if let Some(session) = self.sessions.get_mut(&client) {
             session.session.cancel();
         }
-        self.snap_preview.hide();
+        self.snap_preview.hide(self.conn);
         self.release_pointer();
     }
 
@@ -436,23 +443,6 @@ impl<C: Connection> Wm<'_, C> {
                 .all(|e| matches!(e, FrameEffect::Noop))
         {
             move_counters().record_coalesced(1);
-        }
-        // Drag backdrop: freeze the content behind the frame when the move activates; drop it
-        // when the move ends. Crops are taken per step in the titlebar fill.
-        let was_dragging = drag_activated(&pre_session);
-        let now_dragging = drag_activated(&next.session);
-        if !was_dragging && now_dragging {
-            self.begin_drag_backdrop(client);
-            if matches!(next.session, InteractionSession::Resize(_)) {
-                // Resize reuses the blur taken here for every step; it is recomputed after release.
-                if let Some(frame) = self.clients.get(&client).map(|state| state.frame) {
-                    crate::frame::titlebar_backdrop::set_drag_frozen(u64::from(frame), true);
-                }
-            }
-        } else if was_dragging && !now_dragging {
-            if let Some(frame) = self.clients.get(&client).map(|state| state.frame) {
-                crate::frame::titlebar_backdrop::end_drag(u64::from(frame));
-            }
         }
         // Zero-X-configure fast path: controller already returned Noop.
         self.store_controller(client, &next);

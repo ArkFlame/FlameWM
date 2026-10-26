@@ -1,16 +1,22 @@
 //! X side of the frame shadow (pure shading and planning live in `frame::shadow`).
 //!
 //! Per floating frame: one override-redirect, input-transparent window stacked
-//! directly below the frame. It holds a single root snapshot darkened in place,
+//! below every managed frame. It holds the desktop under it darkened in place,
 //! so exposes repaint without WM work. Pixels are refreshed only on map,
 //! resize, focus change and hide.
+//!
+//! The pixels come from the frame the desktop surface presents (its backbuffer
+//! pixmap, published on the root), never from the root: a root read held other
+//! windows and unpainted areas as they were at that instant, and baked them into
+//! the shadow as stale ghosts and dark marks. The shadow sits below every frame,
+//! so the desktop is all it can ever show. No server grab and no unmap is needed.
 //!
 //! Every reactor turn asks `frame::shadow::plan_shadow` what each frame needs:
 //!
 //! * `Noop` — nothing changed (the common case, including every motion step of a
 //!   frame nobody is dragging).
 //! * `Move` — the window slides with its frame, `configure_window` only.
-//! * `Reshade` — one `get_image` readback, under a short server grab.
+//! * `Reshade` — one `get_image` of the desktop frame pixmap.
 //!
 //! A live move/resize never re-shades *anything*: every frame is planned with
 //! `gesture_active`, so the dragged frame's shadow just slides and its neighbours stay
@@ -64,6 +70,40 @@ pub(super) struct ShadowScene {
     seeded: bool,
     /// Live desktop rubber band currently composed into the shadows (root property mirror).
     rubber: Option<RootRubber>,
+    /// Presented desktop frame (root property mirror); `None` when the desktop publishes none
+    /// (no shadows then).
+    desktop: Option<DesktopFrame>,
+    /// `desktop` matches the property; cleared by its `PropertyNotify`.
+    pub(super) desktop_read: bool,
+}
+
+/// The desktop surface's presented frame: its backbuffer pixmap, the window's root rect and the
+/// present serial. Every present changes the serial, so a read that raced a repaint is redone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct DesktopFrame {
+    pixmap: Pixmap,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    serial: u32,
+}
+
+impl DesktopFrame {
+    /// Parses `flamewm_render_x11::backdrop::DESKTOP_FRAME_PROPERTY`; `None` when malformed.
+    fn from_cardinals(data: &[u32]) -> Option<Self> {
+        let [pixmap, x, y, width, height, serial] = *data else {
+            return None;
+        };
+        (pixmap != 0 && width > 0 && height > 0).then_some(Self {
+            pixmap,
+            x: x as i32,
+            y: y as i32,
+            width,
+            height,
+            serial,
+        })
+    }
 }
 
 impl ShadowScene {
@@ -138,7 +178,8 @@ impl<C: Connection> Wm<'_, C> {
     pub(super) fn reconcile_frame_shadows(&mut self) -> Result<(), ReplyOrIdError> {
         let usable = self.decoration_tokens.window_shadows
             && self.screen().root_depth == 24
-            && self.conn.setup().image_byte_order == ImageOrder::LSB_FIRST;
+            && self.conn.setup().image_byte_order == ImageOrder::LSB_FIRST
+            && self.desktop_frame()?.is_some();
         let wanted: Vec<WantedShadow> = if usable {
             self.clients
                 .values()
@@ -254,6 +295,7 @@ impl<C: Connection> Wm<'_, C> {
             screen.width_in_pixels,
             screen.height_in_pixels,
             outputs,
+            self.shadow_scene.desktop,
         ))
     }
 
@@ -333,12 +375,8 @@ impl<C: Connection> Wm<'_, C> {
         Ok(win)
     }
 
-    /// Shade the shadow from a root snapshot, under one server grab. The window
-    /// is unmapped during the read so it never shades itself.
-    ///
-    /// The grab is kept, but only here: it makes unmap-then-read atomic, so a
-    /// repaint that lands between the two cannot be baked into the shadow. It
-    /// never spans a motion turn, because a live move only takes the `Move` path.
+    /// Shade the shadow from the desktop frame under it. The window stays mapped: the source is
+    /// the desktop's own pixmap, so the shadow can never read itself or another window.
     fn refresh_frame_shadow(
         &mut self,
         frame: Window,
@@ -353,10 +391,7 @@ impl<C: Connection> Wm<'_, C> {
         // the shadow on the desktop and never over another window.
         let sibling = self.shadow_sibling(frame);
         let previous = self.frame_shadows.get(&frame).map(|held| held.pixmap);
-        self.conn.grab_server()?;
-        let result = self.refresh_shadow(outer, focused, win, sibling);
-        self.conn.ungrab_server()?;
-        let shown = result?;
+        let shown = self.refresh_shadow(outer, focused, win, sibling)?;
         if let Some((raw, pixmap)) = shown {
             self.frame_shadows.insert(
                 frame,
@@ -393,8 +428,7 @@ impl<C: Connection> Wm<'_, C> {
     ) -> Result<Option<(Vec<u8>, Pixmap)>, ReplyOrIdError> {
         let root = self.screen().root;
         let rect = shadow::shadow_rect(outer);
-        self.conn.unmap_window(win)?;
-        let Some(raw) = self.root_snapshot(rect)? else {
+        let Some(raw) = self.desktop_snapshot(rect, outer)? else {
             return Ok(None);
         };
         let mut pixels = raw.clone();
@@ -425,6 +459,8 @@ impl<C: Connection> Wm<'_, C> {
             win,
             &ChangeWindowAttributesAux::new().background_pixmap(pixmap),
         )?;
+        // A new background does not repaint a mapped window: repaint it from the new pixels.
+        self.conn.clear_area(false, win, 0, 0, 0, 0)?;
         self.conn.free_gc(gc)?;
         self.conn
             .configure_window(win, &shadow_aux(rect, sibling))?;
@@ -538,41 +574,107 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
-    /// BGRX pixels of `rect`, clipped to the screen. Off-screen parts are zero
-    /// (never visible). Returns `None` when nothing of the rect is on screen.
-    fn root_snapshot(&self, rect: Rect) -> Result<Option<Vec<u8>>, ReplyOrIdError> {
-        let screen = self.screen();
-        let x0 = rect.x.max(0);
-        let y0 = rect.y.max(0);
-        let x1 = (rect.x + rect.width as i32).min(i32::from(screen.width_in_pixels));
-        let y1 = (rect.y + rect.height as i32).min(i32::from(screen.height_in_pixels));
-        if x1 <= x0 || y1 <= y0 {
-            return Ok(None);
+    /// The presented desktop frame, read from the root property once per change.
+    fn desktop_frame(&mut self) -> Result<Option<DesktopFrame>, ReplyOrIdError> {
+        if self.shadow_scene.desktop_read {
+            return Ok(self.shadow_scene.desktop);
         }
-        let (cw, ch) = ((x1 - x0) as usize, (y1 - y0) as usize);
-        let reply = self
+        let values: Vec<u32> = self
             .conn
-            .get_image(
-                ImageFormat::Z_PIXMAP,
-                screen.root,
-                x0 as i16,
-                y0 as i16,
-                cw as u16,
-                ch as u16,
-                u32::MAX,
+            .get_property(
+                false,
+                self.screen().root,
+                self.atoms.desktop_frame,
+                AtomEnum::CARDINAL,
+                0,
+                6,
             )?
-            .reply()?;
-        if reply.depth != 24 || reply.data.len() != cw * ch * 4 {
+            .reply()?
+            .value32()
+            .map(std::iter::Iterator::collect)
+            .unwrap_or_default();
+        let frame = DesktopFrame::from_cardinals(&values);
+        self.shadow_scene.desktop = frame;
+        self.shadow_scene.desktop_read = true;
+        Ok(frame)
+    }
+
+    /// BGRX desktop pixels of the shadow `rect` of frame `outer`, read from the presented desktop
+    /// frame. Only the visible cast is read (the band right of and below the frame); the area the
+    /// frame covers and anything outside the desktop frame stay zero (never visible). `None`
+    /// without a desktop frame, or when the frame was replaced between its publish and this read
+    /// (its property change re-shades).
+    fn desktop_snapshot(&self, rect: Rect, outer: Rect) -> Result<Option<Vec<u8>>, ReplyOrIdError> {
+        let Some(desktop) = self.shadow_scene.desktop else {
             return Ok(None);
-        }
+        };
         let (w, h) = (rect.width.max(1) as usize, rect.height.max(1) as usize);
         let mut pixels = vec![0u8; w * h * 4];
-        let (ox, oy) = ((x0 - rect.x) as usize, (y0 - rect.y) as usize);
-        for row in 0..ch {
-            let src = &reply.data[row * cw * 4..(row + 1) * cw * 4];
-            let dst = ((oy + row) * w + ox) * 4;
-            pixels[dst..dst + cw * 4].copy_from_slice(src);
+        let right = (outer.x + outer.width as i32 - rect.x).clamp(0, w as i32);
+        let bottom = (outer.y + outer.height as i32 - rect.y).clamp(0, h as i32);
+        let bands = [
+            (right, 0, w as i32 - right, bottom),
+            (0, bottom, w as i32, h as i32 - bottom),
+        ];
+        for (bx, by, bw, bh) in bands {
+            let x0 = (rect.x + bx).max(desktop.x);
+            let y0 = (rect.y + by).max(desktop.y);
+            let x1 = (rect.x + bx + bw).min(desktop.x + desktop.width as i32);
+            let y1 = (rect.y + by + bh).min(desktop.y + desktop.height as i32);
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
+            let (cw, ch) = ((x1 - x0) as usize, (y1 - y0) as usize);
+            let Ok(reply) = self
+                .conn
+                .get_image(
+                    ImageFormat::Z_PIXMAP,
+                    desktop.pixmap,
+                    (x0 - desktop.x) as i16,
+                    (y0 - desktop.y) as i16,
+                    cw as u16,
+                    ch as u16,
+                    u32::MAX,
+                )?
+                .reply()
+            else {
+                return Ok(None);
+            };
+            if !matches!(reply.depth, 24 | 32) || reply.data.len() != cw * ch * 4 {
+                return Ok(None);
+            }
+            let (ox, oy) = ((x0 - rect.x) as usize, (y0 - rect.y) as usize);
+            for row in 0..ch {
+                let src = &reply.data[row * cw * 4..(row + 1) * cw * 4];
+                let dst = ((oy + row) * w + ox) * 4;
+                pixels[dst..dst + cw * 4].copy_from_slice(src);
+            }
         }
         Ok(Some(pixels))
+    }
+}
+
+#[cfg(test)]
+mod desktop_frame_tests {
+    use super::DesktopFrame;
+
+    #[test]
+    fn parses_the_published_frame_and_rejects_malformed_ones() {
+        let frame = DesktopFrame::from_cardinals(&[0x0c0_0003, 0, (-4i32) as u32, 1280, 800, 7])
+            .expect("valid frame");
+        assert_eq!(
+            (
+                frame.pixmap,
+                frame.x,
+                frame.y,
+                frame.width,
+                frame.height,
+                frame.serial
+            ),
+            (0x0c0_0003, 0, -4, 1280, 800, 7)
+        );
+        assert!(DesktopFrame::from_cardinals(&[0, 0, 0, 1280, 800, 1]).is_none());
+        assert!(DesktopFrame::from_cardinals(&[5, 0, 0, 0, 800, 1]).is_none());
+        assert!(DesktopFrame::from_cardinals(&[5, 0, 0, 1280, 800]).is_none());
     }
 }

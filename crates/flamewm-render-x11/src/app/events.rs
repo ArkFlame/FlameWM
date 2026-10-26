@@ -363,6 +363,14 @@ impl X11App {
                 }
                 continue;
             }
+            // Root stacking changes and damage on frames behind a live window backdrop carry no
+            // window of ours; handle them before the window filter, which would put them back.
+            if self.note_live_backdrop_event(&event) {
+                if self.single_event {
+                    return Ok(());
+                }
+                continue;
+            }
             // SAFETY: type_ is the common discriminator at the start of every XEvent variant.
             if unsafe { event.type_ } == MAPPING_NOTIFY {
                 // Keymap changed (layout switch, setxkbmap, xmodmap). Refresh Xlib's cache so
@@ -389,25 +397,16 @@ impl X11App {
             // SAFETY: type_ is the common discriminator at the start of every XEvent variant.
             match unsafe { event.type_ } {
                 EXPOSE => {
-                    // Expose repaints in full: a retained scene can predate a size or
-                    // document change (a shrink), so the last Expose of a run relayouts
-                    // and repaints. Coalesce counts.
-                    if unsafe { event.xexpose.count } == 0 {
-                        // A window moving above a covered surface exposes it: what covers it changed.
-                        self.note_window_covered_change();
+                    // The bound backbuffer already restored the exposed pixels when it holds the
+                    // last frame at the current size. Otherwise a retained scene can predate a size
+                    // or document change (a shrink), so the last Expose of a run relayouts and
+                    // repaints. Coalesce counts.
+                    if unsafe { event.xexpose.count } == 0
+                        && !self.exposure_restored_by_background()
+                    {
                         // SAFETY: The caller owns a live X11 display and app resources.
                         unsafe { self.repaint_full(document)? };
                     }
-                }
-                crate::xlib_ext::VISIBILITY_NOTIFY => {
-                    // SAFETY: the discriminator identifies XVisibilityEvent, which shares the
-                    // XEvent prefix; the union is at least as large as the event.
-                    let visibility = unsafe {
-                        *(std::ptr::addr_of!(event).cast::<crate::xlib_ext::XVisibilityEvent>())
-                    };
-                    self.note_window_visibility(
-                        visibility.state == crate::xlib_ext::VISIBILITY_UNOBSCURED,
-                    );
                 }
                 MAP_NOTIFY => {
                     // Native presenter: MapNotify advances Painted -> Mapped.
@@ -974,7 +973,7 @@ impl X11App {
             // single_event returns. Avoid blocking on the fd reactor in that case.
             let mut timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
                 .then_some(std::time::Duration::ZERO);
-            // A frozen window snapshot wakes at the end of its quiet period, even when nothing else arrives.
+            // A throttled live backdrop refresh wakes the loop when it is due.
             if let Some(deadline) = self.backdrop_deadline {
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                 timeout = Some(timeout.map_or(remaining, |t| t.min(remaining)));
@@ -984,9 +983,8 @@ impl X11App {
                 .map_err(|error| error.to_string())?;
             if self
                 .backdrop_deadline
-                .is_some_and(|d| std::time::Instant::now() >= d)
+                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
             {
-                // Quiet period over: the stale snapshot is recaptured by the paint below.
                 self.backdrop_deadline = None;
                 self.mark_full();
             }

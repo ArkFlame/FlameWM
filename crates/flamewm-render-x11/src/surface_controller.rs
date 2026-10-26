@@ -165,6 +165,8 @@ pub struct SurfaceController {
     press_observer_armed: bool,
     /// Root presses observed while armed, drained by the owner.
     raw_press_observations: Vec<RawPressObservation>,
+    /// Desktop layer translucent popups and panels blend over; `None` keeps them solid.
+    desktop: Option<crate::backdrop::DesktopLayer>,
 }
 
 impl SurfaceController {
@@ -176,6 +178,7 @@ impl SurfaceController {
             }
             install_x_io_error_handler();
             install_x_protocol_error_handler();
+            crate::xlib::return_large_frees_to_system();
             let press_opcode = xi_raw_press_opcode(display);
             if press_opcode.is_none() {
                 eprintln!(
@@ -197,6 +200,7 @@ impl SurfaceController {
                 press_selection: RawPressSelection::new(press_opcode),
                 press_observer_armed: false,
                 raw_press_observations: Vec::new(),
+                desktop: None,
             })
         }
     }
@@ -259,7 +263,6 @@ impl SurfaceController {
             dock_edge: None,
             dock_radius: 0,
             popup_backdrop: None,
-            popup_wallpaper: None,
         };
         // Overlay/passthrough surfaces are excluded from WM client
         // management: override-redirect + empty input region + no grab/focus.
@@ -351,7 +354,6 @@ impl SurfaceController {
 
     pub fn destroy_surface(&mut self, id: SurfaceId) -> Result<(), String> {
         if let Some(mut instance) = self.surfaces.remove(&id) {
-            Self::clear_popup_wallpaper(&mut instance.popup_wallpaper);
             self.slides.cancel(id.get());
             self.windows.remove(&instance.app.window);
             drop_popup_grab(
@@ -402,7 +404,6 @@ impl SurfaceController {
         // starts a fresh slide instead of taking the "already shown" path with no animation.
         instance.shown = false;
         instance.slide_drawn = None;
-        Self::clear_popup_wallpaper(&mut instance.popup_wallpaper);
         // SAFETY: display/window live; a closed popup must not keep a slide clip for its next show.
         unsafe { instance.app.refresh_shape_mask(&instance.document) };
         // Immediate close drops any Fade/Lamp overlay without playing it.
@@ -554,7 +555,6 @@ impl SurfaceController {
         let display = self.display;
         let now = Instant::now();
         let key = id.get();
-        Self::clear_popup_wallpaper(&mut self.instance_mut(id)?.popup_wallpaper);
         let (slide, shown) = {
             let instance = self.instance_mut(id)?;
             (instance.slide, instance.shown)
@@ -1254,7 +1254,6 @@ impl SurfaceController {
                 unsafe { XSync(display, 0) };
                 instance.shown = false;
                 instance.slide_drawn = None;
-                Self::clear_popup_wallpaper(&mut instance.popup_wallpaper);
                 unsafe { instance.app.refresh_shape_mask(&instance.document) };
                 instance.app.clear_surface_backdrop();
                 instance.app.clear_node_backdrops();

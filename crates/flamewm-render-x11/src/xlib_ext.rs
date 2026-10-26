@@ -79,28 +79,8 @@ unsafe extern "C" {
     ) -> c_int;
 }
 
-/// `VisibilityChangeMask`: a window learns when windows stacked above it start or stop covering it.
-pub const VISIBILITY_CHANGE_MASK: c_long = 1 << 16;
-/// `VisibilityNotify` event type.
-pub const VISIBILITY_NOTIFY: c_int = 15;
-/// `VisibilityUnobscured`: nothing covers the window.
-pub const VISIBILITY_UNOBSCURED: c_int = 0;
 /// `IsViewable` map state: the window and all its ancestors are mapped.
 pub const IS_VIEWABLE: c_int = 2;
-/// `InputOnly` window class: paints nothing.
-pub const INPUT_ONLY: c_int = 2;
-
-/// Xlib `XVisibilityEvent`, read from the `XEvent` union's common prefix.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct XVisibilityEvent {
-    pub type_: c_int,
-    pub serial: c_ulong,
-    pub send_event: Bool,
-    pub display: *mut Display,
-    pub window: Window,
-    pub state: c_int,
-}
 
 /// Xlib `XWindowAttributes`.
 #[repr(C)]
