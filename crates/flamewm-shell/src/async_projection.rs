@@ -393,6 +393,12 @@ pub fn test_record_binding(target: IconTarget, name: &str, w: u32, h: u32, gener
 }
 
 #[cfg(test)]
+pub(crate) fn icon_test_lock() -> &'static std::sync::Mutex<()> {
+    static M: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+    M.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+#[cfg(test)]
 pub fn test_reset_icon_bindings() {
     START_EPOCH.store(0, Ordering::SeqCst);
     TASK_EPOCH.store(0, Ordering::SeqCst);
@@ -1047,11 +1053,6 @@ pub(crate) mod tests {
         sized_test_image(source, 1)
     }
 
-    fn icon_test_lock() -> &'static std::sync::Mutex<()> {
-        static M: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
-        M.get_or_init(|| std::sync::Mutex::new(()))
-    }
-
     fn project_changed(view: PanelView<'_>, changed: crate::runtime::ChangedDomains) -> FakeDoc {
         let mut doc = FakeDoc::default();
         project_panel_for_changed(&mut doc, view, None, &mut TaskIconCache::default(), changed)
@@ -1273,6 +1274,7 @@ pub(crate) mod tests {
         };
         use flamewm_api::window::{WindowSnapshot, WindowState};
         use flamewm_api::{DesktopAppId, OutputId, Rect, TaskEntryId, WindowRef, WorkspaceRef};
+        let _guard = icon_test_lock().lock();
         let window_on = |id: u64, output: &str| WindowSnapshot {
             reference: WindowRef::new(id, 1),
             title: String::new(),
@@ -1682,6 +1684,7 @@ pub(crate) mod tests {
     fn system_scope_projects_battery_from_power_snapshot() {
         use crate::runtime::ChangedDomains;
         use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
+        let _guard = icon_test_lock().lock();
         let mut snapshot = ShellSnapshot::default();
         snapshot.system.power = PowerSnapshot {
             available: ServiceAvailability::Available,

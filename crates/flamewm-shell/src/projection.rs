@@ -1445,6 +1445,7 @@ mod panel_template_tests {
     #[test]
     fn tray_battery_button_follows_power_bucket_on_real_artifact() {
         type Projector = fn(&mut flamewm_ui_x11::UiDocument, &crate::ShellSnapshot);
+        let _guard = crate::async_projection::icon_test_lock().lock();
         let glyphs = glyph_node_ids("tray-battery-");
         let avail = ServiceAvailability::Available;
         let cases: [(PowerSnapshot, Option<&str>); 14] = [
@@ -1630,6 +1631,7 @@ mod panel_template_tests {
     // before the later nodes are written.
     #[test]
     fn full_panel_projection_succeeds_on_real_artifact() {
+        let _guard = crate::async_projection::icon_test_lock().lock();
         let mut document = decode_panel();
         let snapshot = crate::ShellSnapshot::default();
         crate::async_projection::project_panel_async(
