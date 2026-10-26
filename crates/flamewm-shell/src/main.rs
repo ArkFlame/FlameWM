@@ -193,7 +193,7 @@ pub fn main() {
     // audio/network/calendar surfaces); otherwise the normal shell role
     // (profiler `flamewm-shell`, owns panel/start/task menu/media).
     if std::env::args().any(|arg| arg == "--quick-control-host") {
-        if let Err(error) = flamewm_shell::quick_controls::run_quick_control_host() {
+        if let Err(error) = flamewm_shell::quick_controls::run_quick_control_host(packaged_root()) {
             eprintln!("flamewm-quick-control: {error}");
             std::process::exit(1);
         }
@@ -248,7 +248,7 @@ fn execute() -> Result<(), String> {
         let _s = scope.start();
         SurfaceRuntime::new().map_err(|error| format!("create UI runtime: {error:?}"))?
     };
-    let mut surfaces = {
+    let surfaces = {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.surface_create");
         let _s = scope.start();
         ShellSurfaces::create(&mut runtime, &snapshot)?
@@ -265,10 +265,6 @@ fn execute() -> Result<(), String> {
             settings_projection::taskbar_items(startup_settings.as_ref()),
         )?;
     }
-    // Snapshot before the first map: the bar's own translucent pixels must not be captured.
-    if let Err(error) = surfaces.capture_panel_backdrop(&mut runtime) {
-        eprintln!("flamewm-shell: taskbar backdrop capture skipped: {error}");
-    }
     {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.panel_show");
         let _s = scope.start();
@@ -277,8 +273,6 @@ fn execute() -> Result<(), String> {
                 .show(panel)
                 .map_err(|e| format!("show panel: {e:?}"))?;
         }
-        // Our own Map changes the root under the bar: a blank earlier capture gets a fresh attempt.
-        surfaces.reopen_panel_capture();
     }
     let loader_root = packaged_root();
     // Separate X connection observes freedesktop startup notifications from

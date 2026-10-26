@@ -351,6 +351,9 @@ fn drain_parent_fd(file: &mut std::fs::File, state: &Arc<Mutex<ParentInput>>) {
     }
 }
 
+/// Packaged data root the desktop layer resolves the default wallpaper against.
+static PACKAGED_ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
 /// Run the quick-control host loop.
 ///
 /// Connects its own control client, creates the three helper-owned popup
@@ -359,7 +362,8 @@ fn drain_parent_fd(file: &mut std::fs::File, state: &Arc<Mutex<ParentInput>>) {
 /// The tick drains commands: OPEN closes the current helper popup,
 /// projects, fits, shows/grabs; CLOSE closes; SHUTDOWN stops cleanly.
 /// The surface event callback calls `route_helper_event`.
-pub fn run_quick_control_host() -> Result<(), HostError> {
+pub fn run_quick_control_host(packaged_root: std::path::PathBuf) -> Result<(), HostError> {
+    let _ = PACKAGED_ROOT.set(packaged_root);
     flamewm_profiler::init_process("flamewm-quick-control");
     flamewm_debug::init_process("flamewm-quick-control");
     let client = ControlClient::connect(BusKind::Session).map_err(|error| {
@@ -989,7 +993,13 @@ fn open_request(
     prepare_commit(runtime, surface, rect).map_err(OpenFailure::refused)?;
     let prepare_elapsed = prepare_start.elapsed();
     drop(_prepare);
-    // Same frosted backdrop as the Start menu, captured at the first show.
+    // Same frosted backdrop as the Start menu: the desktop layer, installed at the first show.
+    if let Some(root) = PACKAGED_ROOT.get() {
+        runtime.set_desktop_source(Some(crate::surface_backdrop::desktop_source(
+            &snapshot.settings,
+            root,
+        )));
+    }
     let backdrop = crate::settings_projection::start_backdrop_percents(&snapshot.settings);
     if let Err(error) = runtime.set_popup_backdrop(surface, Some(backdrop)) {
         eprintln!("flamewm-quick-control: popup backdrop skipped (nonfatal): {error:?}");

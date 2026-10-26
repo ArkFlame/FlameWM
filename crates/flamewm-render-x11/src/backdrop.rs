@@ -237,17 +237,6 @@ pub fn blur_radius_px(opacity_percent: u8, blur_percent: u8) -> f32 {
     f32::from(blur_percent.min(100)) / 100.0 * MAX_BLUR_RADIUS_PX
 }
 
-/// Whether a root capture holds real content. An empty or single-colour capture (all black
-/// included) means the root was not painted yet, so the caller must not install it.
-#[must_use]
-pub fn capture_is_ready(rgba: &[u8]) -> bool {
-    let mut pixels = rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2]]);
-    let Some(first) = pixels.next() else {
-        return false;
-    };
-    pixels.any(|pixel| pixel != first)
-}
-
 thread_local! {
     /// Blur work buffers shared by every snapshot blur on the display thread.
     static BLUR_SCRATCH: std::cell::RefCell<flamewm_image_core::blur::BlurScratch> =
@@ -566,6 +555,105 @@ pub fn desktop_canvas(
     Ok(canvas)
 }
 
+/// What the desktop layer is made of, as the desktop draws it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DesktopSource {
+    Solid([u8; 3]),
+    Image {
+        path: std::path::PathBuf,
+        fit: flamewm_image_core::wallpaper::WallpaperFit,
+    },
+}
+
+/// Flat colour of the layer when the wallpaper cannot be decoded (the desktop's solid default).
+const DESKTOP_FALLBACK_RGB: [u8; 3] = [0x23, 0x26, 0x29];
+
+/// One process's handle on the desktop layer that popups and panels blend over. Blurs that the
+/// canvas stores downscaled share [`desktop_canvas`] (one small canvas, cached on disk); smaller
+/// blurs and unblurred crops are composed per request from the decoded wallpaper and never kept,
+/// so no root-sized full-resolution copy stays resident.
+#[derive(Debug)]
+pub struct DesktopLayer {
+    source: DesktopSource,
+    canvas: Option<((u32, u32), u8, Option<BlurredCanvas>)>,
+}
+
+impl DesktopLayer {
+    #[must_use]
+    pub fn new(source: DesktopSource) -> Self {
+        Self {
+            source,
+            canvas: None,
+        }
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &DesktopSource {
+        &self.source
+    }
+
+    /// Opaque ARGB32 words of the layer under the root-space `rect`, blurred as a surface at
+    /// `opacity_percent` and `blur_percent` would be. A solid or undecodable wallpaper is flat.
+    pub fn crop(
+        &mut self,
+        root: (u32, u32),
+        rect: (i32, i32, u32, u32),
+        opacity_percent: u8,
+        blur_percent: u8,
+    ) -> Vec<u32> {
+        let (x, y, width, height) = rect;
+        let flat = |rgb: [u8; 3]| {
+            let word =
+                0xff00_0000 | u32::from(rgb[0]) << 16 | u32::from(rgb[1]) << 8 | u32::from(rgb[2]);
+            vec![word; width as usize * height as usize]
+        };
+        let (path, fit) = match &self.source {
+            DesktopSource::Solid(rgb) => return flat(*rgb),
+            DesktopSource::Image { path, fit } => (path, *fit),
+        };
+        let radius = blur_radius_px(opacity_percent, blur_percent);
+        if radius < 2.0 * BLUR_DOWNSCALE as f32 {
+            return flamewm_image_core::wallpaper::decode_file(path)
+                .ok()
+                .and_then(|natural| {
+                    flamewm_image_core::wallpaper::compose_region(
+                        &natural, root.0, root.1, fit, rect,
+                    )
+                })
+                .map_or_else(
+                    || flat(DESKTOP_FALLBACK_RGB),
+                    |region| {
+                        blurred_argb_words(
+                            width,
+                            height,
+                            region.pixels,
+                            opacity_percent,
+                            blur_percent,
+                        )
+                    },
+                );
+        }
+        if self
+            .canvas
+            .as_ref()
+            .is_none_or(|(size, blur, _)| (*size, *blur) != (root, blur_percent))
+        {
+            let canvas = desktop_canvas(path, fit, &[], root, blur_percent)
+                .map_err(|error| eprintln!("flamewm-render-x11: desktop layer: {error}"))
+                .ok();
+            self.canvas = Some((root, blur_percent, canvas));
+        }
+        match self
+            .canvas
+            .as_ref()
+            .and_then(|(_, _, canvas)| canvas.as_ref())
+        {
+            Some(canvas) => canvas.crop((x, y), (width, height)),
+            None => flat(DESKTOP_FALLBACK_RGB),
+        }
+    }
+}
+
 /// [`desktop_canvas`] for a window backdrop spec: one wallpaper over the whole root.
 pub(crate) fn wallpaper_canvas(
     spec: &WindowBackdrop,
@@ -726,21 +814,6 @@ pub fn recapture_due(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn uniform_and_black_captures_are_not_ready() {
-        assert!(!capture_is_ready(&[]));
-        assert!(!capture_is_ready(&[0, 0, 0, 255].repeat(16)));
-        assert!(!capture_is_ready(&[0x40, 0x80, 0xc0, 255].repeat(16)));
-    }
-
-    #[test]
-    fn one_differing_pixel_makes_capture_ready() {
-        let mut pixels = [0x40, 0x80, 0xc0, 255].repeat(16);
-        pixels[4 * 7] = 0x41;
-        assert!(capture_is_ready(&pixels));
-        assert!(capture_is_ready(&[0, 0, 0, 255, 0, 0, 1, 255]));
-    }
 
     #[test]
     fn full_opacity_and_zero_blur_never_blur() {

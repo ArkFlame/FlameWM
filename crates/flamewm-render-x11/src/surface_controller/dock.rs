@@ -1,7 +1,5 @@
 use super::*;
 
-pub(super) type PopupWallpaper = ((i32, i32, u32, u32), Vec<u8>);
-
 pub(super) struct SurfaceInstance {
     pub(super) app: X11App,
     pub(super) document: RuntimeDocument,
@@ -26,10 +24,8 @@ pub(super) struct SurfaceInstance {
     pub(super) dock_edge: Option<DockEdge>,
     /// Corner radius (window px) last published by `set_dock_frame`; zero means rectangular.
     pub(super) dock_radius: u32,
-    /// `(opacity, blur)` percents for a pseudo-transparency backdrop captured before each first map.
+    /// `(opacity, blur)` percents for the desktop-layer backdrop installed before each first map.
     pub(super) popup_backdrop: Option<(u8, u8)>,
-    /// One-shot wallpaper crop for the popup's exact root-space rect.
-    pub(super) popup_wallpaper: Option<PopupWallpaper>,
 }
 
 /// Pure mask decision for a dock window: keep the current shape, round it to `radius`, or
