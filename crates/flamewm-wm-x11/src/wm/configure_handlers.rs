@@ -14,9 +14,30 @@ impl<'a, C: Connection> Wm<'a, C> {
             configure_bump!(notify_root, notify_root_total);
             self.screen_rect.width = u32::from(event.width).max(1);
             self.screen_rect.height = u32::from(event.height).max(1);
-            self.mark_work_area();
-            self.reconcile_work_area()?;
-            self.publish_workspace_metadata()?;
+            // An exclusive game may temporarily resize the root framebuffer. Keep normal
+            // windows and taskbar reservations at the saved desktop layout; only the game
+            // framebuffer follows the temporary screen extent. The normal reflow resumes after
+            // fullscreen exits and the desktop mode tracker restores the root resolution.
+            let fullscreen: Vec<Window> = self.clients.iter()
+                .filter(|(_, state)| state.is_fullscreen())
+                .map(|(&client, _)| client)
+                .collect();
+            if !fullscreen.is_empty() {
+                if self.output_work_areas.len() <= 1 {
+                    for client in fullscreen {
+                        if let Some(state) = self.clients.get_mut(&client) {
+                            state.set_outer(self.screen_rect);
+                        }
+                        self.apply_frame_geometry(client)?;
+                        self.publish_window_state(client)?;
+                    }
+                }
+                self.display_topology_dirty.mark();
+            } else {
+                self.mark_work_area();
+                self.reconcile_work_area()?;
+                self.publish_workspace_metadata()?;
+            }
             return Ok(());
         }
         // Classify the observed window before touching placement. Frame,

@@ -539,7 +539,7 @@ dependencies = [
 
 [[package]]
 name = "flamewm-apps"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flamewm-desktop",
  "flamewm-explorer",

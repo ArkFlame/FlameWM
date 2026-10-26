@@ -125,8 +125,8 @@ pub fn modifier_bit(token: &str) -> Option<u16> {
     match token.to_ascii_lowercase().as_str() {
         "ctrl" | "control" => Some(MOD_CONTROL),
         "shift" => Some(MOD_SHIFT),
-        "alt" | "meta" => Some(MOD_ALT),
-        "super" => Some(MOD_SUPER),
+        "alt" => Some(MOD_ALT),
+        "super" | "meta" | "logo" | "win" => Some(MOD_SUPER),
         "hyper" => Some(MOD_HYPER),
         _ => None,
     }
@@ -628,6 +628,9 @@ mod tests {
         let chord = parse_binding("Ctrl+Super+Left").expect("valid");
         assert_eq!(chord.keysym, keysym_for_name("Left").unwrap());
         assert_eq!(chord.modifiers, MOD_CONTROL | MOD_SUPER);
+        // Desktop environments call the Windows key both Meta and Super; Alt remains separate.
+        assert_eq!(parse_binding("Meta+d").unwrap().modifiers, MOD_SUPER);
+        assert_eq!(parse_binding("Alt+d").unwrap().modifiers, MOD_ALT);
         let bare = parse_binding("Super").expect("bare modifier");
         assert_eq!(bare.keysym, keysym_for_name("Super_L").unwrap());
         assert_eq!(bare.modifiers, 0);

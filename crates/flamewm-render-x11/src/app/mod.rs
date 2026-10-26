@@ -180,6 +180,8 @@ pub(crate) struct X11App {
     /// Border-only ring (`border_px`, `radius_px`) in window px. When set, the coverage refresh
     /// keeps only the ring so the interior stays see-through.
     pub(crate) ring_mask: Option<(u32, u32)>,
+    /// Per-pixel alpha silhouette for an XShape-backed overlay without an ARGB compositor.
+    pub(crate) shape_override: Option<Vec<(u32, u32, u32)>>,
     #[allow(dead_code)]
     pub(crate) visual: *mut Visual,
     pub(crate) alpha_mode: SurfaceAlphaMode,
@@ -608,6 +610,7 @@ impl X11App {
             xshape,
             dock_corner_radius: 0,
             ring_mask: None,
+            shape_override: None,
             visual,
             alpha_mode,
             surface: Some(surface),

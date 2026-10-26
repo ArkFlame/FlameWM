@@ -185,6 +185,7 @@ impl LaunchFeedback {
             self.painted = None;
             self.indicator_frame = None;
             if let Some(surface) = self.surface {
+                runtime.set_surface_shape_mask(surface, None)?;
                 runtime.with_document(surface, |doc| {
                     for index in 0..4 {
                         doc.visible(&format!("launch-dot-{index}"), true)?;
@@ -241,6 +242,14 @@ impl LaunchFeedback {
                 height: raster.height,
                 pixels: raster.pixels,
             };
+            // XShape clips the 24-bit overlay at real PNG/SVG alpha boundaries, so
+            // pixels outside the app glyph reveal the desktop instead of opaque black.
+            let Some(shape) = alpha_shape_spans(&image.pixels, image.width, image.height) else {
+                // A missing/fully transparent glyph must not create an opaque black overlay.
+                // Keep the already-visible four-dot animation until the launch completes.
+                continue;
+            };
+            runtime.set_surface_shape_mask(surface, Some(shape))?;
             runtime.with_document(surface, |doc| {
                 doc.image_rgba8("launch-icon", image)?;
                 doc.visible("launch-icon", true)?;
@@ -359,6 +368,30 @@ impl LaunchFeedback {
     pub fn counters(&self) -> flamewm_applications::launch_feedback::Counters {
         self.sequences.counters
     }
+}
+
+/// Convert RGBA8 icon alpha into per-row runs for XShape's 1-bit bounding region.
+/// A small alpha cutoff preserves antialiased edges without expanding transparent padding.
+fn alpha_shape_spans(pixels: &[u8], width: u32, height: u32) -> Option<Vec<(u32, u32, u32)>> {
+    let len = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    if width == 0 || height == 0 || width > 64 || height > 64 || pixels.len() != len {
+        return None;
+    }
+    let mut spans = Vec::new();
+    for y in 0..height {
+        let mut start = None;
+        for x in 0..=width {
+            let covered = x < width && pixels[((y * width + x) * 4 + 3) as usize] >= 8;
+            if covered {
+                if start.is_none() {
+                    start = Some(x);
+                }
+            } else if let Some(left) = start.take() {
+                spans.push((y, left, x));
+            }
+        }
+    }
+    (!spans.is_empty()).then_some(spans)
 }
 
 fn updated_launch_key(
@@ -507,6 +540,17 @@ mod tests {
                 24
             ))
         );
+    }
+
+    #[test]
+    fn alpha_shape_excludes_transparent_padding_and_holes() {
+        let mut rgba = vec![0_u8; 4 * 4 * 4];
+        for (x, y) in [(1, 1), (2, 1), (2, 2)] {
+            rgba[(y * 4 + x) * 4 + 3] = 255;
+        }
+        assert_eq!(alpha_shape_spans(&rgba, 4, 4), Some(vec![(1, 1, 3), (2, 2, 3)]));
+        assert_eq!(alpha_shape_spans(&[], 4, 4), None);
+        assert_eq!(alpha_shape_spans(&vec![0; 16 * 4], 4, 4), None);
     }
 
     #[test]

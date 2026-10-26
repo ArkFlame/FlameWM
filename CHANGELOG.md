@@ -210,3 +210,11 @@ whole-session CPU median 8.2% -> 4.1%, allocated memory (heap + anonymous) 174 M
 - Integrated the SourcePort post-mortem as a permanent parity-development rule.
 - For visual/prototype parity: exact source owner -> mechanical translation/copy -> wire -> compile -> differential -> refactor.
 - IceWM remains useful engineering reference material, but no longer defines FlameWM's runtime architecture or source ownership.
+
+### FlameWM fullscreen, shortcut and startup-overlay fixes (2026-10-26)
+
+- Require the live X server modifier mask to contain exactly Super+D or Ctrl+Alt+D for raw XInput show-desktop commands; ignore stale modifier cache and pointer button bits. X11 `Meta` bindings now alias Super, not Alt.
+- Shape the X11 launch-feedback overlay from actual per-pixel icon alpha, preserving the image while removing opaque black padding on non-ARGB X11 windows; keep the indicator animation if a valid icon silhouette is unavailable.
+- Track the original RandR root framebuffer dimensions as well as CRTC modes during fullscreen. Restore both safely after the game leaves fullscreen; grow before repositioning CRTCs and shrink afterward to support mixed-dimension changes.
+- Refit fullscreen and maximized window geometry after host output changes (including windows on inactive Wayland workspaces), without adopting temporary fullscreen display geometry as the taskbar layout.
+- Added focused unit tests for raw show-desktop modifiers, icon alpha shape, fullscreen geometry and resolution-tracker transitions.

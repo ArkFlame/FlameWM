@@ -253,6 +253,9 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         // ToggleFullscreen is a pure toggle; the early return above guarantees a single reduce.
         self.reduce_and_execute(client, FrameEvent::ToggleFullscreen)?;
+        if !enable {
+            self.note_client_gone_for_desktop_mode();
+        }
         self.mark_windows();
         self.publish_window_state(client)?;
         Ok(())

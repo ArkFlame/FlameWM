@@ -465,18 +465,15 @@ impl State {
         self.output.set_preferred(mode);
         self.output_size = Size::from((width, height));
         let output = self.output_rect();
-        let fullscreen: Vec<WindowId> = self
-            .model
-            .visible_top_first()
-            .into_iter()
-            .filter(|id| {
-                self.model
-                    .get(*id)
-                    .is_some_and(|w| w.mode == Mode::Fullscreen)
-            })
+        let work = self.work_area();
+        // Include fullscreen and maximized windows on inactive workspaces. Refit the fullscreen
+        // restore rect too, so exiting a game does not bring back an old-size maximized window.
+        let fitted: Vec<WindowId> = self.model.managed().iter()
+            .filter(|window| window.mode != Mode::Normal)
+            .map(|window| window.id)
             .collect();
-        for id in fullscreen {
-            self.model.set_fullscreen(id, output, true);
+        for id in fitted {
+            self.model.refit_output(id, output, work);
             self.apply_geometry(id);
         }
         self.request_redraw();

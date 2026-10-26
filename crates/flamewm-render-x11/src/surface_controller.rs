@@ -333,6 +333,22 @@ impl SurfaceController {
         Ok(id)
     }
 
+    /// Override the XShape bounding silhouette of one overlay with the alpha pixels of its icon.
+    /// Default paint coverage uses the image's whole rectangular bounds, exposing an opaque
+    /// black box on a 24-bit visual. `None` restores the normal coverage-derived shape.
+    pub fn set_surface_shape_mask(
+        &mut self,
+        id: SurfaceId,
+        spans: Option<Vec<(u32, u32, u32)>>,
+    ) -> Result<(), String> {
+        let instance = self.instance_mut(id)?;
+        instance.app.shape_override = spans;
+        instance.app.shape_applied.set(None);
+        instance.app.mark_full();
+        instance.document.mark_dirty(SurfaceDamage::Full);
+        Ok(())
+    }
+
     pub fn destroy_surface(&mut self, id: SurfaceId) -> Result<(), String> {
         if let Some(mut instance) = self.surfaces.remove(&id) {
             Self::clear_popup_wallpaper(&mut instance.popup_wallpaper);

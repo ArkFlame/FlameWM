@@ -706,6 +706,9 @@ impl X11App {
         scale: f32,
         backdrop_radius: u32,
     ) -> Vec<(u32, u32, u32)> {
+        if let Some(spans) = &self.shape_override {
+            return spans.clone();
+        }
         if let Some((border, radius)) = self.ring_mask {
             crate::xshape::ring_mask_spans(self.width, self.height, border, radius)
         } else if self.dock_corner_radius > 0 {

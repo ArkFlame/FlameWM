@@ -184,6 +184,16 @@ impl SurfaceRuntime {
         Ok(scale)
     }
 
+    /// Alpha-silhouette bounding mask for the cursor-adjacent launch overlay.
+    /// Falls back to normal retained paint coverage when `None`.
+    pub fn set_surface_shape_mask(
+        &mut self,
+        surface: SurfaceHandle,
+        spans: Option<Vec<(u32, u32, u32)>>,
+    ) -> Result<(), UiBackendError> {
+        self.controller.set_surface_shape_mask(surface.0, spans).map_err(Into::into)
+    }
+
     pub fn show(&mut self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
         self.controller.show(surface.0).map_err(Into::into)
     }

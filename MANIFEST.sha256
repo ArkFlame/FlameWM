@@ -228,7 +228,7 @@ f4d77022d552f149365acc3010af4df923307c4766ad72957b4220b2df2abf55  ./assets/web/p
 75e9dbad92fb71e9adc52f33c6e1c0b365445aabcea4399b8d715261fdce367e  ./.cargo/config.toml
 f3eaf105a656ee1b097c7e24205b5ac13a8f9a61d3b77791a83bdda868e0df87  ./Cargo.lock
 b18d8cf6a782d5667043a5558478a2b64b77f923ef1f4c5d4f25473a3a6c05b2  ./Cargo.toml
-765d6356a30b177c678f338ce8b38fce0e91a86dd70d08ce9ee8b5588618421c  ./CHANGELOG.md
+b64e1444a31988f532309f5ad9d320cb38c21119ffdae5b73b38595b9f1f7ccb  ./CHANGELOG.md
 e7ff98c04d7773ea9083be4ed0e1a21c01247cb2d0e5a571de1f3b89d2bcb3f5  ./CONTRIBUTING.md
 8359520adb4e76c7abae89e49faebdfa1f38e8ae1e7585cb969b2fa57661fb0b  ./crates/flamewm-api/Cargo.toml
 759452f7512fd701581258f93ab3e6a2fa48531bd7ebe22e0576840918cb9c5d  ./crates/flamewm-api/src/applications.rs
@@ -1261,7 +1261,7 @@ d5a8d359687a431064065f7f2e8bd232dd495b9304c5927e3b37ccd01b4daf5e  ./.vendor/Rust
 71897d2991f7f66c34de4284d1032b70a95bcaa3a570396fa6a6b2b5272755d5  ./.vendor/RustWebRender-0.0.9/scripts/verify-visual
 4c1bc6f0ef489ca831f45a4e74109175241f207fbd36a20157acd7581e82ecab  ./.vendor/RustWebRender-0.0.9/scripts/xephyr
 4de5dd87ab26de07b5e5453f8e411b1b74f4f4a0ed46be03240d458d3826534b  ./crates/flamewm-applications/src/launch_feedback.rs
-97d0614b07a589f52ca9765763da2bd0e13e59fc17d84385467bb074408fcc2c  ./crates/flamewm-shell/src/launch_feedback.rs
+8c4655848cf8e82cae026389a9ee8b186bd3e2bfdb8c3f4b5a6742a77819a2bf  ./crates/flamewm-shell/src/launch_feedback.rs
 7ce0b48e4edcd20bd86e371891d419c55eff05dc3f6b86e79e3e9a382a3421b0  ./crates/flamewm-ui-x11/Cargo.toml
 38c419171a64105da2cae26191f4814ce5a28b7281a60635c52a3b02c0d4fe48  ./crates/flamewm-ui-x11/src/lib.rs
 92873a6f4dfad3d9b442f263df59428e4ba6d6a8895e57ed9c0814513ae45b99  ./crates/flamewm-ui-x11/src/startup_protocol.rs

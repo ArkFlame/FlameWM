@@ -139,6 +139,18 @@ pub(crate) fn is_escape_chord(action: &str) -> bool {
     )
 }
 
+/// Raw XI events can arrive after a keyboard grab dropped modifier releases. Use the X
+/// server's current pointer state as authority, ignoring lock bits and held mouse buttons.
+fn show_desktop_chord_is_down(action: &str, server_state: u16) -> bool {
+    use flamewm_x11_desktop::shortcuts::{MOD_CONTROL, MOD_LOCK, MOD_NUM_LOCK, MOD_SUPER};
+    let held = (server_state & 0x00ff) & !(MOD_LOCK | MOD_NUM_LOCK);
+    match action {
+        ACTION_SHOW_DESKTOP => held == MOD_SUPER,
+        ACTION_SHOW_DESKTOP_CTRL_ALT => held == (MOD_CONTROL | MOD_ALT),
+        _ => false,
+    }
+}
+
 /// Per-WM raw-key state, present once the XInput2 selection succeeded.
 #[derive(Debug)]
 pub(crate) struct RawKeys {
@@ -236,6 +248,18 @@ impl<'a, C: Connection> Wm<'a, C> {
         if !is_escape_chord(&action) {
             return Ok(());
         }
+        if matches!(action.as_str(), ACTION_SHOW_DESKTOP | ACTION_SHOW_DESKTOP_CTRL_ALT) {
+            let Ok(cookie) = self.conn.query_pointer(self.screen().root) else {
+                return Ok(());
+            };
+            let Ok(pointer) = cookie.reply() else {
+                // Fail closed: an X11 grab can leave our raw modifier cache stale.
+                return Ok(());
+            };
+            if !show_desktop_chord_is_down(&action, u16::from(pointer.mask)) {
+                return Ok(());
+            }
+        }
         if raw.claim.take_if_claimed(key.time, key.keycode) {
             return Ok(());
         }
@@ -285,6 +309,20 @@ mod tests {
         bytes[12..16].copy_from_slice(&time.to_ne_bytes());
         bytes[16..20].copy_from_slice(&keycode.to_ne_bytes());
         bytes
+    }
+
+    #[test]
+    fn bare_d_and_stale_raw_modifiers_never_toggle_desktop() {
+        use flamewm_x11_desktop::shortcuts::{MOD_CONTROL, MOD_LOCK, MOD_NUM_LOCK, MOD_SUPER};
+        assert!(!show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, 0));
+        assert!(!show_desktop_chord_is_down(ACTION_SHOW_DESKTOP_CTRL_ALT, 0));
+        assert!(!show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, MOD_ALT));
+        assert!(!show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, MOD_SUPER | MOD_ALT));
+        assert!(show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, MOD_SUPER));
+        assert!(show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, MOD_SUPER | MOD_LOCK));
+        assert!(show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, MOD_SUPER | MOD_NUM_LOCK | 0x100));
+        assert!(show_desktop_chord_is_down(ACTION_SHOW_DESKTOP_CTRL_ALT, MOD_CONTROL | MOD_ALT));
+        assert!(!show_desktop_chord_is_down(ACTION_SHOW_DESKTOP_CTRL_ALT, MOD_CONTROL));
     }
 
     #[test]

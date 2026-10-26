@@ -85,6 +85,10 @@ pub struct Managed {
     pub mode: Mode,
     /// Client rectangle to return to when leaving maximized or fullscreen.
     pub restore: Rect,
+    /// Preserve maximize state across fullscreen, so exiting a game restores the prior layout.
+    pub fullscreen_restore_mode: Mode,
+    /// Geometry before fullscreen, independently of normal/maximized restore geometry.
+    pub fullscreen_restore_rect: Rect,
 }
 
 impl Managed {
@@ -178,6 +182,8 @@ impl WindowModel {
             minimized: false,
             mode: Mode::Normal,
             restore: rect,
+            fullscreen_restore_mode: Mode::Normal,
+            fullscreen_restore_rect: rect,
         });
     }
 
@@ -323,6 +329,31 @@ impl WindowModel {
         }
     }
 
+    /// Refit output-sized windows without overwriting a floating window's restore geometry.
+    /// The fullscreen saved maximized rect must track the new work area too, otherwise leaving
+    /// fullscreen after a host mode change returns to a clipped, old-size maximized window.
+    pub fn refit_output(&mut self, id: WindowId, output: Rect, work: Rect) {
+        let Some(window) = self.get_mut(id) else {
+            return;
+        };
+        let maximized = Rect::new(
+            work.x,
+            work.y + TITLEBAR_HEIGHT,
+            work.w.max(1),
+            (work.h - TITLEBAR_HEIGHT).max(1),
+        );
+        match window.mode {
+            Mode::Fullscreen => {
+                window.rect = output;
+                if window.fullscreen_restore_mode == Mode::Maximized {
+                    window.fullscreen_restore_rect = maximized;
+                }
+            }
+            Mode::Maximized => window.rect = maximized,
+            Mode::Normal => {}
+        }
+    }
+
     /// Explicit fullscreen on/off; idempotent.
     pub fn set_fullscreen(&mut self, id: WindowId, output: Rect, on: bool) {
         let Some(window) = self.get_mut(id) else {
@@ -330,16 +361,18 @@ impl WindowModel {
         };
         match (window.mode, on) {
             (Mode::Fullscreen, false) => {
-                window.mode = Mode::Normal;
-                window.rect = window.restore;
+                window.mode = window.fullscreen_restore_mode;
+                window.rect = window.fullscreen_restore_rect;
             }
             (Mode::Normal | Mode::Maximized, true) => {
-                if window.mode == Mode::Normal {
-                    window.restore = window.rect;
-                }
+                window.fullscreen_restore_mode = window.mode;
+                // `restore` is separately owned by maximize/unmaximize; do not overwrite it.
+                window.fullscreen_restore_rect = window.rect;
                 window.mode = Mode::Fullscreen;
                 window.rect = output;
             }
+            // A host/output resize does not change fullscreen state, but must update its rect.
+            (Mode::Fullscreen, true) => window.rect = output,
             _ => {}
         }
     }
@@ -674,6 +707,57 @@ mod tests {
         assert_eq!(maximized.frame(), Rect::new(0, 0, 1000, 700));
         model.toggle_maximize(1, WORK);
         assert_eq!(model.get(1).unwrap().rect, before);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Normal);
+    }
+
+    #[test]
+    fn fullscreen_resize_and_restore_maximized_window() {
+        let mut model = model_with(&[1, 2]);
+        let initial = model.get(1).unwrap().rect;
+        model.toggle_maximize(1, WORK);
+        let maximized = model.get(1).unwrap().rect;
+        model.set_fullscreen(1, WORK, true);
+        let resized = Rect::new(0, 0, 1280, 720);
+        model.set_fullscreen(1, resized, true);
+        assert_eq!(model.get(1).unwrap().rect, resized);
+        model.set_fullscreen(1, resized, false);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Maximized);
+        assert_eq!(model.get(1).unwrap().rect, maximized);
+        model.toggle_maximize(1, WORK);
+        assert_eq!(model.get(1).unwrap().rect, initial);
+    }
+
+    #[test]
+    fn output_resize_refits_fullscreen_maximized_and_inactive_windows() {
+        let mut model = model_with(&[1, 2, 3]);
+        let original = model.get(1).unwrap().rect;
+        model.toggle_maximize(1, WORK);
+        model.set_fullscreen(1, WORK, true);
+        model.move_to_workspace(1, 1);
+        model.toggle_maximize(2, WORK);
+        let resized = Rect::new(0, 0, 1280, 720);
+        let usable = Rect::new(0, 0, 1280, 688);
+        for id in [1, 2, 3] {
+            model.refit_output(id, resized, usable);
+        }
+        assert_eq!(model.get(1).unwrap().rect, resized);
+        assert_eq!(model.get(2).unwrap().frame(), usable);
+        assert_eq!(model.get(3).unwrap().mode, Mode::Normal);
+        model.set_fullscreen(1, resized, false);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Maximized);
+        assert_eq!(model.get(1).unwrap().frame(), usable);
+        model.toggle_maximize(1, WORK);
+        assert_eq!(model.get(1).unwrap().rect, original);
+    }
+
+    #[test]
+    fn fullscreen_resized_while_on_other_workspace_is_not_clipped() {
+        let mut model = model_with(&[1]);
+        model.move_to_workspace(1, 1);
+        model.set_fullscreen(1, WORK, true);
+        model.set_fullscreen(1, Rect::new(0, 0, 640, 360), true);
+        assert_eq!(model.get(1).unwrap().rect, Rect::new(0, 0, 640, 360));
+        model.set_fullscreen(1, WORK, false);
         assert_eq!(model.get(1).unwrap().mode, Mode::Normal);
     }
 
