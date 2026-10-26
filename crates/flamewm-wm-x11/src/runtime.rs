@@ -5,7 +5,7 @@ use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc::{self, TryRecvError};
+use std::sync::mpsc;
 use std::time::Instant;
 
 use calloop::{Interest, RegistrationToken};
@@ -59,7 +59,7 @@ pub type SettingsObserver = Box<dyn FnMut(&SettingsSnapshot)>;
 /// Shared, optional observer handle threaded through the reactor callbacks.
 type SharedSettingsObserver = Rc<RefCell<Option<SettingsObserver>>>;
 
-/// Wake source for a settings owner (for example the XSettings manager). `fd`
+/// Wake source for a settings owner (for example the `XSettings` manager). `fd`
 /// is watched for read readiness on the reactor; `on_readable` drains the
 /// owner's pending events and must not publish. An `Err` or error/hangup
 /// readiness removes the registration, so a broken descriptor cannot spin the
@@ -117,7 +117,7 @@ fn register_settings_wake(
     reactor
         .borrow_mut()
         .register_raw_fd_with_action(fd, Interest::READ, move |_, readiness| {
-            settings_wake_step(readiness, || on_readable())
+            settings_wake_step(readiness, &mut on_readable)
         })
         .map_err(Into::into)
 }
@@ -182,11 +182,8 @@ fn run_session(
                 }
             }
             let mut updates = audio_updates_for_callback.borrow_mut();
-            loop {
-                match audio_receiver.try_recv() {
-                    Ok(snapshot) => updates.push(snapshot),
-                    Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-                }
+            while let Ok(snapshot) = audio_receiver.try_recv() {
+                updates.push(snapshot);
             }
             FdAction::Continue
         },
@@ -232,7 +229,7 @@ fn run_session(
                 })
                 .map_err(|error| {
                     integrations.borrow_mut().stop();
-                    AnyError::from(io::Error::new(io::ErrorKind::Other, error.to_string()))
+                    AnyError::from(io::Error::other(error.to_string()))
                 })?,
         )
     } else {
@@ -258,8 +255,7 @@ fn run_session(
         ),
     ));
     let Some(icon_fd) = icon_service.borrow().wake_fd() else {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(Box::new(io::Error::other(
             "IconService wake FD unavailable",
         )));
     };
@@ -537,12 +533,14 @@ where
 
 /// Persisted `cursorTheme` from the settings file at startup, before the session
 /// environment is applied. `None` when the file is missing or unparsable.
+#[must_use]
 pub fn persisted_cursor_theme() -> Option<String> {
     persisted_settings().map(|settings| settings.cursor_theme)
 }
 
 /// Persisted `appearance` from the settings file at startup. `None` when the
 /// file is missing or unparsable.
+#[must_use]
 pub fn persisted_appearance() -> Option<AppearanceMode> {
     persisted_settings().map(|settings| settings.appearance)
 }
@@ -679,10 +677,7 @@ fn keep_first_error<T>(slot: &RefCell<Option<T>>, error: T) {
 }
 
 fn any_from_flame(error: flamewm_api::FlameError) -> AnyError {
-    Box::new(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        error.to_string(),
-    ))
+    Box::new(std::io::Error::other(error.to_string()))
 }
 
 struct ControlRegistration {
@@ -1041,7 +1036,7 @@ mod tests {
             }
         }
 
-        /// Simulates a desktop change that bypasses activate_workspace, as a
+        /// Simulates a desktop change that bypasses `activate_workspace`, as a
         /// root-property change observed by the WM would. Bumps the revision.
         fn external_desktop_change(&mut self, index: usize) {
             self.workspaces.active_index = index;

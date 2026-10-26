@@ -15,5 +15,5 @@ pub const TOGGLE: ToggleRecipe = ToggleRecipe {
     height: crate::DEFAULT.settings.toggle_height,
     knob: crate::DEFAULT.settings.knob,
     on: ACCENT,
-    off: Rgb(0x555a5f),
+    off: Rgb(0x0055_5a5f),
 };

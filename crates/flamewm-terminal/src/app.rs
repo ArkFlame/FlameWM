@@ -124,6 +124,8 @@ pub struct App {
 }
 
 impl App {
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: TerminalConfig,
         config_path: PathBuf,

@@ -364,6 +364,7 @@ impl ExternalDrawableTarget {
         refresh_image_gauge(self.image_cache_bytes() as u64);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_text(
         &mut self,
         family: &str,
@@ -588,6 +589,7 @@ impl<'a> NativeDrawableRenderer<'a> {
     }
 
     /// Draw text at device-pixel (x, baseline y) via Xft when available.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_text(
         &mut self,
         document: &RuntimeDocument,
@@ -733,7 +735,7 @@ pub fn external_symbolic_argb(
                 0
             };
             let eff_a = (sa * u32::from(fg.a) + 127) / 255;
-            let prem = |c: u32| ((c * eff_a + 127) / 255) as u32;
+            let prem = |c: u32| ((c * eff_a + 127) / 255);
             out.push(
                 (eff_a << 24)
                     | (prem(u32::from(fg.r)) << 16)
@@ -930,8 +932,8 @@ mod tests {
 
     #[test]
     fn rgba_length_validated_before_touching_display() {
-        assert!(expected_rgba_len(2, 2, &vec![0u8; 15]).is_err());
-        assert!(expected_rgba_len(2, 2, &vec![0u8; 16]).is_ok());
+        assert!(expected_rgba_len(2, 2, &[0u8; 15]).is_err());
+        assert!(expected_rgba_len(2, 2, &[0u8; 16]).is_ok());
     }
 
     #[test]
@@ -989,7 +991,7 @@ mod tests {
             content_hash: external_content_hash(&[9, 9, 9, 255]),
             ..key
         };
-        assert!(cache.get(&miss_key).is_none());
+        assert!(!cache.contains_key(&miss_key));
         cache.insert(miss_key, ExternalCachedImage { pixmap: 8, bytes });
         assert_eq!(cache.len(), 2);
     }

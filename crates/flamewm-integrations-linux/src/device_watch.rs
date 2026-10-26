@@ -18,6 +18,7 @@ pub const QUIET: Duration = Duration::from_millis(300);
 const KERNEL_UEVENT_GROUP: u32 = 1;
 
 /// True when a kernel uevent datagram belongs to the block subsystem: its NUL-separated fields include `SUBSYSTEM=block`.
+#[must_use]
 pub fn is_block_uevent(datagram: &[u8]) -> bool {
     datagram
         .split(|byte| *byte == 0)
@@ -66,7 +67,7 @@ impl DeviceWatch {
                         let left = QUIET.saturating_sub(since.elapsed());
                         Timespec {
                             tv_sec: left.as_secs() as _,
-                            tv_nsec: left.subsec_nanos() as _,
+                            tv_nsec: left.subsec_nanos().into(),
                         }
                     });
                     let mut fds = vec![

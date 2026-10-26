@@ -1,13 +1,13 @@
-//! FlameWM Wayland compositor: nested under a host session via the winit backend, or on a tty via
-//! the `drm` backend (cargo feature `drm`), with XWayland.
+//! `FlameWM` Wayland compositor: nested under a host session via the winit backend, or on a tty via
+//! the `drm` backend (cargo feature `drm`), with `XWayland`.
 //!
 //! Environment:
 //! - `FLAMEWM_WAYLAND_BACKEND` (`drm`/`native` or `winit`/`nested`): backend choice. When unset, a
 //!   build with the `drm` feature runs the native backend and every other build runs nested. The
 //!   choice never comes from `DISPLAY`/`WAYLAND_DISPLAY`: a session wrapper states its intent.
 //! - `FLAMEWM_WAYLAND_SOCKET` (default `wayland-flame`): socket name under `XDG_RUNTIME_DIR`.
-//! - `FLAMEWM_WAYLAND_AUTOSTART` (colon-separated programs): started once XWayland is ready, with
-//!   `DISPLAY` pointing at XWayland. The session wrapper passes the shell and desktop clients.
+//! - `FLAMEWM_WAYLAND_AUTOSTART` (colon-separated programs): started once `XWayland` is ready, with
+//!   `DISPLAY` pointing at `XWayland`. The session wrapper passes the shell and desktop clients.
 //! - `FLAMEWM_WAYLAND_DUMP=<file.ppm>`: write one framebuffer readback after
 //!   `FLAMEWM_WAYLAND_DUMP_AFTER_MS` (default 2000); with `FLAMEWM_WAYLAND_EXIT_AFTER_DUMP=1`
 //!   the compositor exits right after the dump (used by the headless evidence run).
@@ -29,7 +29,7 @@
 //! Three markers say three different things about the native backend, and only the last one is
 //! readiness:
 //! * `stage=ready status=ok code=6 detail=backend_init` — the event loop is running (socket,
-//!   XWayland, sources installed). It says nothing about the panel.
+//!   `XWayland`, sources installed). It says nothing about the panel.
 //! * `stage=firstframe status=ok code=7` — a flip was queued to KMS. Diagnostic only: a queued flip
 //!   can still fail, leaving a black panel under a compositor that holds DRM master.
 //! * `stage=presented status=ok code=8` — the first flip actually completed. That is the only
@@ -57,7 +57,7 @@
 //! failure is strictly better than a dead black screen. `stage=seat` is what reports this; a session
 //! that never becomes active fails with `reason=inactive_after_activate`.
 //!
-//! XWayland is optional. If it cannot be spawned the compositor keeps running as a pure Wayland
+//! `XWayland` is optional. If it cannot be spawned the compositor keeps running as a pure Wayland
 //! compositor (`stage=xwayland status=fail`), no X11 client is served and the X11 shell/desktop
 //! autostart is skipped instead of aborting the session.
 
@@ -162,7 +162,7 @@ pub(crate) fn capabilities_text() -> String {
 ///
 /// `Firstframe` and `Presented` are the two exceptions to "in order": both are reported by the tty
 /// backend while it builds its first frame, which happens inside the backend's own init and therefore
-/// before `Ready` (emitted by `run` once the socket and XWayland exist). They keep the next free codes
+/// before `Ready` (emitted by `run` once the socket and `XWayland` exist). They keep the next free codes
 /// so no existing code number moves.
 ///
 /// They are *not* the same event and must never be read as one:
@@ -170,6 +170,7 @@ pub(crate) fn capabilities_text() -> String {
 ///   which leaves a black panel with a compositor that owns DRM master.
 /// * `Presented` (8) means the first flip *completed*. This is the readiness signal, the point where
 ///   the tty backend grabs the seat and cancels its own startup deadline.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Stage {
     Seat = 0,
@@ -236,7 +237,7 @@ static REPORTED_STAGES: AtomicU8 = AtomicU8::new(0);
 /// Longest `detail` field; longer messages are cut instead of dumping state.
 const MAX_DETAIL: usize = 64;
 
-/// How long a presented session may go without XWayland becoming ready before it gives the VT back.
+/// How long a presented session may go without `XWayland` becoming ready before it gives the VT back.
 ///
 /// Ordered after the tty backend's 8 s first-frame deadline (a failed flip reports first) and before
 /// the session wrapper's 25 s readiness timeout, so this compositor-side gate is the one that names
@@ -244,16 +245,13 @@ const MAX_DETAIL: usize = 64;
 const CONTENT_DEADLINE_MS: u64 = 15_000;
 
 /// Start instant of this process, for the `t=` field of every stage line. A stage that takes seconds
-/// (DRM master, libinput, EGL, XWayland) is then visible in the log and in the session wrapper's
+/// (DRM master, libinput, EGL, `XWayland`) is then visible in the log and in the session wrapper's
 /// report without a trace tool.
 static START: OnceLock<Instant> = OnceLock::new();
 
 /// Milliseconds since this process started; 0 until [`START`] is initialised.
 pub(crate) fn elapsed_ms() -> u128 {
-    START
-        .get()
-        .map(|start| start.elapsed().as_millis())
-        .unwrap_or(0)
+    START.get().map_or(0, |start| start.elapsed().as_millis())
 }
 
 /// Per-step monotonic timings of the tty backend startup, in milliseconds.
@@ -266,6 +264,7 @@ pub(crate) fn elapsed_ms() -> u128 {
 ///
 /// `queue_ms` and `present_ms` are two different facts: the first is when a flip reached KMS, the
 /// second when one came back. A `queue` with no `present` is the black-panel case.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct StartupTiming {
     /// logind session open and activation.
@@ -284,6 +283,7 @@ pub(crate) struct StartupTiming {
     pub present_ms: Option<u128>,
 }
 
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
 impl StartupTiming {
     /// The exact text of the one-shot summary line:
     /// `flamewm-wayland: startup timing session=Nms gpu=Nms gbm=Nms egl=Nms renderer=Nms scan=Nms
@@ -310,6 +310,7 @@ impl StartupTiming {
 }
 
 /// One optional timing field: `Nms` when the step happened, `none` when it never did.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
 fn step(millis: Option<u128>) -> String {
     match millis {
         Some(millis) => format!("{millis}ms"),
@@ -381,7 +382,7 @@ fn detail_tokens(detail: &str) -> String {
 
 /// Routes smithay's own diagnostics to stderr.
 ///
-/// Smithay reports DRM, EGL/GBM, libinput and XWayland failures through `log`. Without a subscriber
+/// Smithay reports DRM, EGL/GBM, libinput and `XWayland` failures through `log`. Without a subscriber
 /// every one of them is discarded, which is how a failed hardware start can leave no trace beyond
 /// this crate's own stage lines. Warnings and errors only: smithay logs per-frame detail at
 /// info/debug, and the `eprintln!` stage lines above stay the canonical startup record.
@@ -525,7 +526,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
             return Err(error.into());
         }
     };
-    handle.insert_source(listening, |client, _, state| {
+    handle.insert_source(listening, |client, (), state| {
         if let Err(error) = state
             .display
             .insert_client(client, Arc::new(ClientState::default()))
@@ -587,7 +588,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
         // delivers a frame callback, so a single shot can be lost.
         handle.insert_source(
             Timer::from_duration(Duration::from_millis(after)),
-            move |_, _, state| {
+            move |_, (), state| {
                 if state.dumped {
                     return TimeoutAction::Drop;
                 }
@@ -607,7 +608,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
     // Reap exited children twice a second; the loop may otherwise sleep indefinitely.
     handle.insert_source(
         Timer::from_duration(Duration::from_millis(500)),
-        |_, _, state| {
+        |_, (), state| {
             state.reap_children();
             TimeoutAction::ToDuration(Duration::from_millis(500))
         },
@@ -624,7 +625,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
     if !state.autostart.is_empty() {
         handle.insert_source(
             Timer::from_duration(Duration::from_millis(CONTENT_DEADLINE_MS)),
-            |_, _, state| {
+            |_, (), state| {
                 if state.desktop_pending() {
                     stage_line(
                         Stage::Xwayland,
@@ -659,6 +660,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
     let startup_failure = state.startup_failure();
     // Backend teardown after the loop: releases DRM master and the logind session, then the
     // XWayland client (dropping it ends the X server connection).
+    #[cfg_attr(not(feature = "drm"), allow(clippy::drop_non_drop))]
     drop(native);
     drop(display);
     drop(xwayland_client);
@@ -669,7 +671,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
     Ok(0)
 }
 
-/// `detail` of the `stage=xwayland status=fail` line when XWayland cannot be spawned.
+/// `detail` of the `stage=xwayland status=fail` line when `XWayland` cannot be spawned.
 ///
 /// X11 is optional, so the line says so instead of looking like a fatal stage: the fixed tokens come
 /// first (a long error message can only truncate itself), then the error. Split out from the startup
@@ -743,7 +745,7 @@ fn init_winit(
     // The compositor draws the pointer the clients ask for, as the tty backend does.
     backend.window().set_cursor_visible(false);
     state.backend = Some(backend);
-    handle.insert_source(winit_source, |event, _, state| match event {
+    handle.insert_source(winit_source, |event, (), state| match event {
         WinitEvent::Resized { size, .. } => state.on_resized(size.w, size.h),
         WinitEvent::Input(event) => state.process_input(event),
         WinitEvent::Redraw => render::render_frame(state),

@@ -850,8 +850,10 @@ fn workspace_snapshot(
 // MUTATION: keep mapping `workspace-N` to page slot `N - 1`.
 #[test]
 fn pager_cell_actions_activate_the_workspace_in_that_cell() {
-    let mut snapshot = ShellSnapshot::default();
-    snapshot.workspaces = Some(workspace_snapshot(6, 0));
+    let snapshot = ShellSnapshot {
+        workspaces: Some(workspace_snapshot(6, 0)),
+        ..ShellSnapshot::default()
+    };
     let runtime = ShellRuntime::new(snapshot);
     assert_eq!(
         runtime.control_request_for_action("workspace.2"),
@@ -943,8 +945,10 @@ fn global_workspace_snapshot_refreshes_task_views_on_each_output() {
 // empty cell must not open the menu of a neighbouring workspace.
 #[test]
 fn workspace_context_menu_opens_for_the_cell_workspace_only() {
-    let mut snapshot = ShellSnapshot::default();
-    snapshot.workspaces = Some(workspace_snapshot(6, 0));
+    let snapshot = ShellSnapshot {
+        workspaces: Some(workspace_snapshot(6, 0)),
+        ..ShellSnapshot::default()
+    };
     let mut runtime = ShellRuntime::new(snapshot);
     runtime.open_workspace_context_at_cell(6, None);
     match runtime.controls.front() {

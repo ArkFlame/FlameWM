@@ -229,13 +229,12 @@ impl OsdController {
         }
         // The output lookup runs only when the card shows, so idle ticks allocate nothing.
         let (work, scale) = target();
-        let surface = match self.surface {
-            Some(surface) => surface,
-            None => {
-                let surface = create(runtime)?;
-                self.surface = Some(surface);
-                surface
-            }
+        let surface = if let Some(surface) = self.surface {
+            surface
+        } else {
+            let surface = create(runtime)?;
+            self.surface = Some(surface);
+            surface
         };
         let scale = runtime.apply_output_scale(surface, scale)?;
         let card = placement(work, scale);
@@ -456,7 +455,7 @@ mod tests {
         let t0 = Instant::now();
         state.observe(Level::new(40, false), t0);
         state.observe(Level::new(41, false), t0);
-        assert!(!state.expire(t0 + HOLD - Duration::from_millis(1)));
+        assert!(!state.expire(t0 + (HOLD - Duration::from_millis(1))));
         assert!(!state.expire(t0 + HOLD));
         assert_eq!(state.deadline(), Some(t0 + HOLD + FADE));
         assert!(state.expire(t0 + HOLD + FADE));
@@ -474,7 +473,7 @@ mod tests {
         let t1 = t0 + HOLD + Duration::from_millis(50);
         assert!(state.observe(Level::new(41, true), t1));
         assert_eq!(state.deadline(), Some(t1 + HOLD));
-        assert!(!state.expire(t1 + HOLD - Duration::from_millis(1)));
+        assert!(!state.expire(t1 + (HOLD - Duration::from_millis(1))));
     }
 
     /// The backdrop/XShape mask radius is read from the document ROOT (`body`) only,

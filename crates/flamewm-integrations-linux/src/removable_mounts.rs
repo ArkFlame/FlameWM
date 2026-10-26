@@ -6,6 +6,7 @@
 //! - mounted now: remember it;
 //! - unmounted, remembered, and not seen mounted at the previous pass: mount it;
 //! - unmounted, remembered, and seen mounted at the previous pass: the user unmounted it, so forget it.
+//!
 //! An explicit user eject or unmount forgets the UUID before the action runs.
 use std::collections::BTreeSet;
 use std::env;
@@ -73,6 +74,7 @@ pub fn parse(text: &str) -> Vec<String> {
     out
 }
 
+#[must_use]
 pub fn load(path: &Path) -> Vec<String> {
     parse(&fs::read_to_string(path).unwrap_or_default())
 }
@@ -95,6 +97,7 @@ pub fn save(path: &Path, known: &[String]) -> io::Result<()> {
 }
 
 impl Memory {
+    #[must_use]
     pub fn load(path: &Path) -> Self {
         Self {
             known: load(path),
@@ -137,13 +140,14 @@ impl Memory {
 }
 
 /// Decides the mounts, remembers and forgets for one pass. Pure: no udisks, no filesystem access.
+#[must_use]
 pub fn plan(memory: &Memory, devices: &[Device]) -> Plan {
     let mut plan = Plan::default();
     for device in devices
         .iter()
         .filter(|d| d.removable && valid_uuid(&d.uuid))
     {
-        let known = memory.known.iter().any(|known| *known == device.uuid);
+        let known = memory.known.contains(&device.uuid);
         if device.mounted {
             if !known && !plan.remember.contains(&device.uuid) {
                 plan.remember.push(device.uuid.clone());
@@ -172,6 +176,7 @@ fn bounded_message(raw: &str) -> String {
 }
 
 /// Mount-table escapes used by `/proc/self/mountinfo` mount points.
+#[must_use]
 pub fn unescape_mount(text: &str) -> String {
     text.replace("\\040", " ")
         .replace("\\011", "\t")
@@ -180,8 +185,9 @@ pub fn unescape_mount(text: &str) -> String {
 }
 
 /// Mounted block devices from `/proc/self/mountinfo` text: `(block_name, mount_point)` for every
-/// `/dev/<name>` source, whatever the mount point. Field layout: id parent maj:min root mount_point
+/// `/dev/<name>` source, whatever the mount point. Field layout: id parent maj:min root `mount_point`
 /// opts [optional...] - fstype source superopts.
+#[must_use]
 pub fn mounted_block_devices(mountinfo: &str) -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     for line in mountinfo.lines() {
@@ -210,6 +216,7 @@ pub fn mounted_block_devices(mountinfo: &str) -> Vec<(String, PathBuf)> {
 }
 
 /// True when sysfs marks the block device, or its parent disk, as removable.
+#[must_use]
 pub fn is_removable_in(sys_block_root: &Path, block_name: &str) -> bool {
     let flag = |dir: PathBuf| {
         fs::read_to_string(dir.join("removable"))
@@ -220,11 +227,13 @@ pub fn is_removable_in(sys_block_root: &Path, block_name: &str) -> bool {
     flag(dev.clone()) || flag(dev.join(".."))
 }
 
+#[must_use]
 pub fn is_removable(block_name: &str) -> bool {
     is_removable_in(Path::new("/sys/class/block"), block_name)
 }
 
 /// Accepts only `/dev/<name>` block paths without shell metacharacters or traversal.
+#[must_use]
 pub fn valid_device_path(device: &str) -> bool {
     device.strip_prefix("/dev/").is_some_and(|name| {
         !name.is_empty()
@@ -275,6 +284,7 @@ pub fn udisks_action(action: &str, device: &str) -> Result<String, String> {
 }
 
 /// Filesystem UUID and block name pairs from a `/dev/disk/by-uuid` directory (present filesystems only).
+#[must_use]
 pub fn uuid_blocks(by_uuid: &Path) -> Vec<(String, String)> {
     let Ok(entries) = fs::read_dir(by_uuid) else {
         return Vec::new();
@@ -290,6 +300,7 @@ pub fn uuid_blocks(by_uuid: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
+#[must_use]
 pub fn by_uuid_dir() -> PathBuf {
     PathBuf::from("/dev/disk/by-uuid")
 }
@@ -342,6 +353,7 @@ pub struct RemovableMountWorker {
 }
 
 impl RemovableMountWorker {
+    #[must_use]
     pub fn start() -> Self {
         let memory = Arc::new(Mutex::new(Memory::load(&state_path())));
         let initial = Arc::clone(&memory);

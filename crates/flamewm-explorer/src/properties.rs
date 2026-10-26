@@ -50,9 +50,8 @@ pub fn recursive_size(path: &Path, cancel: &AtomicBool) -> io::Result<u64> {
         if cancel.load(Ordering::Relaxed) {
             return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
         }
-        let meta = match fs::symlink_metadata(&dir) {
-            Ok(m) => m,
-            Err(_) => continue,
+        let Ok(meta) = fs::symlink_metadata(&dir) else {
+            continue;
         };
         total += meta.len();
         if !meta.is_dir() {
@@ -67,6 +66,7 @@ pub fn recursive_size(path: &Path, cancel: &AtomicBool) -> io::Result<u64> {
 }
 
 /// `rwxr-xr-x` style string for the nine permission bits.
+#[must_use]
 pub fn mode_string(mode: u32) -> String {
     (0..9)
         .rev()

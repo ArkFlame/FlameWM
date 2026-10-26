@@ -139,7 +139,7 @@ pub(crate) fn symbolic_foreground_argb32(
             let off = (sy * sw as usize + sx) * 4;
             let sa = u32::from(pixels[off + 3]);
             let eff_a = (sa * u32::from(fg.a) + 127) / 255;
-            let prem = |c: u32| ((c * eff_a + 127) / 255) as u32;
+            let prem = |c: u32| ((c * eff_a + 127) / 255);
             out.push(
                 (eff_a << 24)
                     | (prem(u32::from(fg.r)) << 16)
@@ -775,7 +775,7 @@ unsafe fn visual_alpha_mask(display: *mut Display, visual: *mut Visual) -> u32 {
         }
         type FindFn = unsafe extern "C" fn(*mut Display, *mut Visual) -> *mut XRenderFormatProbe;
         let func: FindFn = unsafe { std::mem::transmute(dlsym(handle, sym.as_ptr() as *const i8)) };
-        let addr: *mut std::ffi::c_void = unsafe { std::mem::transmute(func) };
+        let addr: *mut std::ffi::c_void = func as *mut std::ffi::c_void;
         if addr.is_null() {
             unsafe { dlclose(handle) };
             continue;
@@ -796,6 +796,7 @@ unsafe fn visual_alpha_mask(display: *mut Display, visual: *mut Visual) -> u32 {
 /// `_NET_WM_STRUT` for dock windows from a root-space panel rect, or
 /// deletes both when the rect touches no root edge. Must run before the
 /// first map; callers re-apply on move/resize.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_dock_strut(
     display: *mut Display,
     window: Window,

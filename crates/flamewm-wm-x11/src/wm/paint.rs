@@ -23,7 +23,7 @@ pub(crate) fn chrome_wait_cap(
     Some(wait.map_or(remaining, |wait| wait.min(remaining)))
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     /// True while `client` has an activated move; its titlebar repaints are paced.
     fn is_moving(&self, client: Window) -> bool {
         matches!(

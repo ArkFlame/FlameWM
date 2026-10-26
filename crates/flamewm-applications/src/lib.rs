@@ -70,7 +70,7 @@ pub mod launcher {
 }
 
 /// Display label for a desktop launcher. Unlike catalog eligibility, the visible
-/// `Name` is independent of Exec/TryExec and OnlyShowIn. A shortcut whose
+/// `Name` is independent of Exec/TryExec and `OnlyShowIn`. A shortcut whose
 /// target is not currently runnable still has a meaningful name on the desktop.
 /// Localized translations fall back to the unqualified Name key.
 #[must_use]
@@ -90,10 +90,10 @@ pub fn desktop_file_display_name(path: &Path) -> Option<String> {
             continue;
         }
         if let Some((key, value)) = line.split_once('=') {
-            if key == "Name" || key.starts_with("Name[") && key.ends_with(']') {
-                if !value.trim().is_empty() {
-                    labels.insert(key.to_owned(), value.trim().to_owned());
-                }
+            if (key == "Name" || key.starts_with("Name[") && key.ends_with(']'))
+                && !value.trim().is_empty()
+            {
+                labels.insert(key.to_owned(), value.trim().to_owned());
             }
         }
     }
@@ -181,7 +181,7 @@ impl ApplicationCatalog {
         Self::from_dirs(&xdg_application_dirs())
     }
 
-    /// MIME choosers must also see NoDisplay and other-desktop handlers.
+    /// MIME choosers must also see `NoDisplay` and other-desktop handlers.
     /// This does not expose those entries in Start or the application menu.
     pub fn discover_file_handlers() -> FlameResult<Self> {
         Self::from_dirs_with_visibility(&xdg_application_dirs(), true)
@@ -199,7 +199,7 @@ impl ApplicationCatalog {
                 continue;
             }
             let mut files = Vec::new();
-            collect_desktop_files(dir, dir, &mut files)?;
+            collect_desktop_files(dir, &mut files)?;
             files.sort();
             for path in files {
                 let id = desktop_id(dir, &path);
@@ -268,6 +268,7 @@ impl ApplicationCatalog {
             .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "application id not found"))
     }
 
+    #[must_use]
     pub fn find_by_window_identity(
         &self,
         identity: &WindowApplicationIdentity,
@@ -461,7 +462,7 @@ fn expand_exec_with_path(
     Ok(argv)
 }
 
-/// Select a desktop's native MIME opener once, without depending on FlameWM
+/// Select a desktop's native MIME opener once, without depending on `FlameWM`
 /// pretending to be another desktop or modifying the user's MIME database.
 /// KDE's own KIO opener gives Dolphin/Kate users their existing defaults and
 /// Open With chooser; XDG remains the universal fallback.
@@ -511,7 +512,7 @@ pub fn open_target(target: &std::ffi::OsStr) -> FlameResult<()> {
     {
         let mut last = LAST_OPEN
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if is_repeat_open(
             last.as_ref().map(|(t, at)| (t.as_os_str(), *at)),
             target,
@@ -562,7 +563,7 @@ fn short_command_output(program: &str, args: &[&std::ffi::OsStr]) -> Option<Stri
             Some(status) if status.success() => break,
             Some(_) => return None,
             None if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(2))
+                std::thread::sleep(std::time::Duration::from_millis(2));
             }
             None => {
                 let _ = child.kill();
@@ -605,20 +606,19 @@ fn startup_identity_for_target(target: &std::ffi::OsStr) -> Option<(String, Stri
     };
     let defaults = DEFAULTS.get_or_init(|| Mutex::new(std::collections::BTreeMap::new()));
     let cached = { defaults.lock().ok()?.get(&mime).cloned() };
-    let desktop_id = match cached {
-        Some(id) => id,
-        None => {
-            let id = short_command_output(
-                "xdg-mime",
-                &[
-                    std::ffi::OsStr::new("query"),
-                    std::ffi::OsStr::new("default"),
-                    std::ffi::OsStr::new(&mime),
-                ],
-            );
-            defaults.lock().ok()?.insert(mime, id.clone());
-            id
-        }
+    let desktop_id = if let Some(id) = cached {
+        id
+    } else {
+        let id = short_command_output(
+            "xdg-mime",
+            &[
+                std::ffi::OsStr::new("query"),
+                std::ffi::OsStr::new("default"),
+                std::ffi::OsStr::new(&mime),
+            ],
+        );
+        defaults.lock().ok()?.insert(mime, id.clone());
+        id
     }?;
     let catalog = CATALOG.get_or_init(|| ApplicationCatalog::discover().unwrap_or_default());
     let entry = catalog.find(&DesktopAppId::new(desktop_id)).ok()?;
@@ -652,7 +652,7 @@ fn is_helium_program(program: &str) -> bool {
     )
 }
 
-/// A user-supplied Chromium secret-storage flag always wins over FlameWM's policy.
+/// A user-supplied Chromium secret-storage flag always wins over `FlameWM`'s policy.
 fn explicit_password_store(args: &[String]) -> Option<String> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -700,7 +700,7 @@ const WALLET_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const WALLET_WAIT_ATTEMPTS: usize = 3;
 const WALLET_WAIT_STEP: Duration = Duration::from_millis(250);
 
-/// Chromium's KWallet backend opens `kdewallet`; KWallet's configured default is
+/// Chromium's `KWallet` backend opens `kdewallet`; `KWallet`'s configured default is
 /// checked too so a renamed default cannot hide a locked browser wallet.
 fn wallet_names() -> Vec<String> {
     let mut names = vec!["kdewallet".to_owned()];
@@ -711,9 +711,9 @@ fn wallet_names() -> Vec<String> {
     names
 }
 
-/// Ask the existing KWallet daemon (never a new daemon or wallet) whether the
+/// Ask the existing `KWallet` daemon (never a new daemon or wallet) whether the
 /// wallet is open. No secret material is read. `isOpen` is a standard,
-/// non-destructive KWallet D-Bus method.
+/// non-destructive `KWallet` D-Bus method.
 fn wallet_ready(version: &str) -> Result<(), String> {
     let connection = dbus::blocking::Connection::new_session()
         .map_err(|error| format!("session bus unavailable: {error}"))?;
@@ -771,7 +771,7 @@ fn auto_wallet_version() -> FlameResult<Option<&'static str>> {
 }
 
 /// The single secret-storage policy for FlameWM-owned browser launches.
-/// Brave gets the existing KWallet generation; Helium is left untouched unless
+/// Brave gets the existing `KWallet` generation; Helium is left untouched unless
 /// its original backend is explicitly opted in. Explicit user flags always win.
 fn browser_secret_version(program: &str, args: &[String]) -> FlameResult<Option<&'static str>> {
     let brave = is_brave_program(program);
@@ -974,7 +974,7 @@ fn spawn_reaped_with_id(command: &mut Command, startup_id: Option<String>) -> Fl
     Ok(pid)
 }
 
-fn collect_desktop_files(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> FlameResult<()> {
+fn collect_desktop_files(dir: &Path, files: &mut Vec<PathBuf>) -> FlameResult<()> {
     for item in fs::read_dir(dir).map_err(|error| {
         FlameError::new(
             ErrorCode::IoFailure,
@@ -985,7 +985,7 @@ fn collect_desktop_files(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> F
             .map_err(|error| FlameError::new(ErrorCode::IoFailure, error.to_string()))?
             .path();
         if path.is_dir() {
-            collect_desktop_files(root, &path, files)?;
+            collect_desktop_files(&path, files)?;
         } else if path.extension().and_then(|v| v.to_str()) == Some("desktop") {
             files.push(path);
         }

@@ -1,4 +1,4 @@
-//! FlameWM window-manager facade.
+//! `FlameWM` window-manager facade.
 //!
 //! Native X11 authority lives in `flamewm-wm-x11`.
 

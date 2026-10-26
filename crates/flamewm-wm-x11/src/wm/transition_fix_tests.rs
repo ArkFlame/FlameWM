@@ -53,8 +53,8 @@ fn expected_unmap_is_consumed_exactly_once() {
     );
 }
 
-/// Models the frame's UnmapNotify stream. Minimize hides the frame and counts one expected
-/// unmap; restore maps the frame (no UnmapNotify). A later client-initiated unmap must
+/// Models the frame's `UnmapNotify` stream. Minimize hides the frame and counts one expected
+/// unmap; restore maps the frame (no `UnmapNotify`). A later client-initiated unmap must
 /// reach the WM. Before the fix, restore's extra count swallowed that unmap.
 #[test]
 fn restore_does_not_leave_an_ignore_count_that_swallows_a_later_unmap() {

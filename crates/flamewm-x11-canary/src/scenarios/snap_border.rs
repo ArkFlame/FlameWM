@@ -1,7 +1,7 @@
 //! S1-S4 snap/border/extents probes on a synthetic client: physical output
 //! corner quarters, snapped border width, per-mode `_NET_FRAME_EXTENTS`
 //! relations, and fixed-hints (`min == max`) client stability. Pointer input
-//! is XTEST only; the client is a canary-owned top-level with WM_NORMAL_HINTS.
+//! is XTEST only; the client is a canary-owned top-level with `WM_NORMAL_HINTS`.
 
 use std::time::{Duration, Instant};
 
@@ -20,7 +20,7 @@ use super::{xtest_button_press, xtest_button_release, xtest_motion};
 
 const PATH: &str = "path=real-pointer";
 const CLIENT_NAME: &str = "snap-border-canary";
-/// Canonical frame layout (mirrors window_interaction): 6px resize strip,
+/// Canonical frame layout (mirrors `window_interaction)`: 6px resize strip,
 /// 31px titlebar, 114px controls.
 const RESIZE_T: i32 = 6;
 const TITLEBAR_H: i32 = 31;
@@ -103,7 +103,7 @@ fn settle<T>(
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         let value = read();
-        if value.as_ref().is_some_and(|v| ready(v)) || Instant::now() >= deadline {
+        if value.as_ref().is_some_and(&ready) || Instant::now() >= deadline {
             return value;
         }
         std::thread::sleep(Duration::from_millis(25));
@@ -184,7 +184,7 @@ fn checked(cookie: Result<VoidCookie<'_, RustConnection>, ConnectionError>) -> R
         .map_err(|e| e.to_string())
 }
 
-/// Create and map a top-level client, optionally with fixed WM_NORMAL_HINTS
+/// Create and map a top-level client, optionally with fixed `WM_NORMAL_HINTS`
 /// (`PMinSize|PMaxSize` with min == max). Returns the client window id.
 fn create_client(
     canary: &crate::Canary,
@@ -282,12 +282,11 @@ fn destroy_client(canary: &crate::Canary, client: u32) {
 
 fn new_client(canary: &crate::Canary) -> Result<(u32, Frame), String> {
     let client = create_client(canary, (100, 100), (320, 200), None)?;
-    match wait_managed(canary, client) {
-        Some(frame) => Ok((client, frame)),
-        None => {
-            destroy_client(canary, client);
-            Err(format!("client {client} not managed"))
-        }
+    if let Some(frame) = wait_managed(canary, client) {
+        Ok((client, frame))
+    } else {
+        destroy_client(canary, client);
+        Err(format!("client {client} not managed"))
     }
 }
 
@@ -454,7 +453,7 @@ pub fn run_s3(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
     )
 }
 
-/// S4: fixed min==max hints keep the client at 275x116 through ConfigureWindow,
+/// S4: fixed min==max hints keep the client at 275x116 through `ConfigureWindow`,
 /// a titlebar drag, and a `_NET_WM_MOVERESIZE` move sampled for 1s.
 pub fn run_s4(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
     let client = match create_client(

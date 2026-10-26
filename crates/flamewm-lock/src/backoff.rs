@@ -8,6 +8,7 @@ pub const MAX_DELAY: Duration = Duration::from_secs(30);
 /// Delay before the next attempt is accepted after `failures` consecutive
 /// failed authentications: 0s for the first three, then 1s, 2s, 4s, ... capped
 /// at [`MAX_DELAY`].
+#[must_use]
 pub fn delay_after_failures(failures: u32) -> Duration {
     if failures < FREE_ATTEMPTS {
         return Duration::ZERO;

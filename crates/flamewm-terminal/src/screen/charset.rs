@@ -1,6 +1,7 @@
 //! Character width (East Asian wide, combining marks) and the DEC Special Graphics line-drawing map.
 
 /// Display width of one scalar: 0 for combining marks, 2 for East Asian wide and emoji ranges, else 1.
+#[must_use]
 pub fn char_width(c: char) -> usize {
     let u = c as u32;
     if matches!(u, 0x0300..=0x036f | 0x200b..=0x200f | 0xfe00..=0xfe0f | 0x20d0..=0x20ff) {

@@ -34,7 +34,7 @@ pub fn parse_file_uri(uri: &str) -> Option<PathBuf> {
     if !host.is_empty() && host != "localhost" {
         return None;
     }
-    let bytes = percent_decode(rest[slash..].as_bytes())?;
+    let bytes = percent_decode(&rest.as_bytes()[slash..])?;
     Some(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
 }
 
@@ -147,7 +147,7 @@ pub fn payloads(paths: &[PathBuf], op: FileOp) -> Vec<(&'static str, Vec<u8>)> {
     ]
 }
 
-/// Text targets: UTF8_STRING always, STRING only for ASCII text (its Latin-1 meaning would
+/// Text targets: `UTF8_STRING` always, STRING only for ASCII text (its Latin-1 meaning would
 /// corrupt UTF-8 bytes).
 pub fn text_payloads(text: &str) -> Vec<(&'static str, Vec<u8>)> {
     let bytes = text.as_bytes().to_vec();

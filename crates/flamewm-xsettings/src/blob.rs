@@ -4,7 +4,7 @@
 //! pad bytes, the manager serial, the setting count, then each setting as a
 //! type byte, pad byte, name length, padded name, last-change serial and a
 //! padded integer or string value. Multi-byte fields use the byte order named
-//! by the first byte; FlameWM always publishes little-endian (`0`, LSBFirst).
+//! by the first byte; `FlameWM` always publishes little-endian (`0`, `LSBFirst`).
 
 use std::collections::BTreeMap;
 
@@ -12,7 +12,7 @@ use flamewm_api::{FlameError, FlameResult};
 
 use crate::XSettingsValue;
 
-/// XSETTINGS byte-order byte for LSBFirst (little-endian) data.
+/// XSETTINGS byte-order byte for `LSBFirst` (little-endian) data.
 pub const BYTE_ORDER_LSB_FIRST: u8 = 0;
 pub const SETTING_TYPE_INTEGER: u8 = 0;
 pub const SETTING_TYPE_STRING: u8 = 1;
@@ -350,8 +350,8 @@ mod tests {
         assert_eq!(second.serial, 2);
     }
 
-    /// Independent spec-conformant decoder: byte 0 selects LSBFirst (0) or
-    /// MSBFirst (1); all multi-byte fields use that order.
+    /// Independent spec-conformant decoder: byte 0 selects `LSBFirst` (0) or
+    /// `MSBFirst` (1); all multi-byte fields use that order.
     fn parse_blob(bytes: &[u8]) -> (u32, Vec<(String, u32, XSettingsValue)>) {
         let order = bytes[0];
         assert!(order == 0 || order == 1, "invalid byte-order byte {order}");

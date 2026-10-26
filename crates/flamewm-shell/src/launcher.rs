@@ -193,29 +193,26 @@ impl LauncherState {
             let row_id = format!("launcher-row-{row}");
             let label_id = format!("launcher-row-{row}-label");
             let icon_id = format!("launcher-row-{row}-icon");
-            match apps
+            if let Some(application) = apps
                 .get(window.start + slot)
                 .filter(|_| window.start + slot < window.end)
             {
-                Some(application) => {
-                    document.text(&label_id, application.name.clone())?;
-                    document.visible(&row_id, true)?;
-                    document.visible(&icon_id, true)?;
-                    crate::async_projection::schedule_visible(
-                        document,
-                        &icon_id,
-                        &mut loader.as_deref_mut(),
-                        IconTarget::LauncherSlot(slot as u8),
-                        &application.icon_name,
-                        ICON_SIZE,
-                        ICON_SIZE,
-                    )?;
-                }
-                None => {
-                    document.text(&label_id, String::new())?;
-                    document.visible(&row_id, false)?;
-                    document.visible(&icon_id, false)?;
-                }
+                document.text(&label_id, application.name.clone())?;
+                document.visible(&row_id, true)?;
+                document.visible(&icon_id, true)?;
+                crate::async_projection::schedule_visible(
+                    document,
+                    &icon_id,
+                    &mut loader.as_deref_mut(),
+                    IconTarget::LauncherSlot(slot as u8),
+                    &application.icon_name,
+                    ICON_SIZE,
+                    ICON_SIZE,
+                )?;
+            } else {
+                document.text(&label_id, String::new())?;
+                document.visible(&row_id, false)?;
+                document.visible(&icon_id, false)?;
             }
         }
         Ok(())

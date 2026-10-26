@@ -94,7 +94,7 @@ impl App {
             "return" | "enter" | "kp_enter" | "escape" => pane.input_line.clear(),
             _ => match event.text.as_deref() {
                 Some(text) if !mods.ctrl && !mods.alt && !text.chars().any(char::is_control) => {
-                    pane.input_line.push_str(text)
+                    pane.input_line.push_str(text);
                 }
                 _ => pane.input_line.clear(),
             },

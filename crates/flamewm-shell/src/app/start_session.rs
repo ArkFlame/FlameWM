@@ -1,7 +1,5 @@
 //! Start-menu toggle decisions and launch-session matching.
 
-use super::*;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StartToggleAction {
     Open,

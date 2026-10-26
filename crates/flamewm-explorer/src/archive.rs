@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// Finds an executable named `ark` in a PATH-style list. Relative PATH entries are ignored.
+#[must_use]
 pub fn find_ark_in(path_var: &OsStr) -> Option<PathBuf> {
     std::env::split_paths(path_var)
         .filter(|dir| dir.is_absolute())
@@ -15,11 +16,13 @@ pub fn find_ark_in(path_var: &OsStr) -> Option<PathBuf> {
         })
 }
 
+#[must_use]
 pub fn find_ark() -> Option<PathBuf> {
     find_ark_in(&std::env::var_os("PATH").unwrap_or_default())
 }
 
 /// Arguments for "Extract Here": extract into the archive's directory, in a subfolder when needed.
+#[must_use]
 pub fn extract_here_args(archive: &Path) -> Vec<OsString> {
     let parent = archive
         .parent()
@@ -54,18 +57,20 @@ pub fn compress_args(archive: &Path, items: &[PathBuf]) -> Result<Vec<OsString>,
 }
 
 /// Picks a non-existing archive name in `dir`: `<base>.zip`, then `<base> (2).zip`, and so on.
+#[must_use]
 pub fn unique_archive_name(dir: &Path, base: &str, extension: &str) -> PathBuf {
     let first = dir.join(format!("{base}.{extension}"));
     if first.symlink_metadata().is_err() {
         return first;
     }
-    (2_u32..)
+    (2_u32..=u32::MAX)
         .map(|n| dir.join(format!("{base} ({n}).{extension}")))
         .find(|candidate| candidate.symlink_metadata().is_err())
         .unwrap_or(first)
 }
 
 /// Default archive base name: a single item keeps its name; several items become "Archive".
+#[must_use]
 pub fn default_archive_base(items: &[PathBuf]) -> String {
     match items {
         [only] => only

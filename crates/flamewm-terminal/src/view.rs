@@ -33,6 +33,7 @@ pub struct Span {
 }
 
 impl Span {
+    #[must_use]
     pub fn normalised(a: (usize, usize), b: (usize, usize)) -> Self {
         if a <= b {
             Self { start: a, end: b }
@@ -58,7 +59,9 @@ pub struct GridOptions {
 }
 
 /// xterm 256-colour palette index to RGB (16 ANSI from the theme, then the 6x6x6 cube and the greyscale ramp).
+#[must_use]
 pub fn indexed_rgb(index: u8, palette: &Palette) -> u32 {
+    const LEVELS: [u32; 6] = [0, 95, 135, 175, 215, 255];
     if index < 16 {
         return palette.ansi[index as usize];
     }
@@ -66,7 +69,6 @@ pub fn indexed_rgb(index: u8, palette: &Palette) -> u32 {
         let level = 8 + 10 * u32::from(index - 232);
         return (level << 16) | (level << 8) | level;
     }
-    const LEVELS: [u32; 6] = [0, 95, 135, 175, 215, 255];
     let cube = u32::from(index - 16);
     let (r, g, b) = (cube / 36, (cube / 6) % 6, cube % 6);
     (LEVELS[r as usize] << 16) | (LEVELS[g as usize] << 8) | LEVELS[b as usize]
@@ -120,6 +122,7 @@ fn cursor_drawn(screen: &Screen, options: &GridOptions) -> bool {
 }
 
 /// Rows of runs for the live grid or scrollback view. Adjacent cells with equal colours and weight merge.
+#[must_use]
 pub fn grid_runs(screen: &Screen, palette: &Palette, options: &GridOptions) -> Vec<Vec<Run>> {
     let top = top_line(screen, options);
     (0..screen.rows())
@@ -364,6 +367,7 @@ fn bg_visible(bg: u32, palette: &Palette) -> Option<u32> {
 }
 
 /// Converts plain text into one run per line (settings, tab bar). Wide glyphs are not expected here.
+#[must_use]
 pub fn text_run(col: usize, text: &str, fg: u32, bg: Option<u32>, bold: bool) -> Run {
     Run {
         col,
@@ -403,10 +407,10 @@ mod tests {
     fn indexed_palette_covers_ansi_cube_and_grey() {
         let p = palette();
         assert_eq!(indexed_rgb(1, &p), p.ansi[1]);
-        assert_eq!(indexed_rgb(16, &p), 0x000000);
-        assert_eq!(indexed_rgb(231, &p), 0xffffff);
-        assert_eq!(indexed_rgb(232, &p), 0x080808);
-        assert_eq!(indexed_rgb(196, &p), 0xff0000);
+        assert_eq!(indexed_rgb(16, &p), 0x0000_0000);
+        assert_eq!(indexed_rgb(231, &p), 0x00ff_ffff);
+        assert_eq!(indexed_rgb(232, &p), 0x0008_0808);
+        assert_eq!(indexed_rgb(196, &p), 0x00ff_0000);
     }
 
     #[test]
@@ -520,7 +524,7 @@ mod tests {
 
     #[test]
     fn dimmed_blends_toward_background() {
-        assert_eq!(dimmed(0xffffff, 0x000000), 0x7f7f7f);
+        assert_eq!(dimmed(0x00ff_ffff, 0x0000_0000), 0x007f_7f7f);
     }
 
     #[test]
@@ -672,13 +676,13 @@ mod tests {
                     selection = (next(2) == 0).then(|| {
                         let total = screen.total_lines();
                         Span::normalised((next(total), next(8)), (next(total), next(8)))
-                    })
+                    });
                 }
                 3 => cursor = !cursor,
                 4 => shape = shapes[next(3)],
                 5 => theme = next(themes.len()),
                 _ => {
-                    for _ in 0..1 + next(3) {
+                    for _ in 0..=next(3) {
                         parser.advance(fragments[next(fragments.len())], &mut screen);
                     }
                 }

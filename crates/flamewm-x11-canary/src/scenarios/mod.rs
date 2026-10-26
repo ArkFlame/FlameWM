@@ -29,7 +29,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::protocol::xtest::ConnectionExt as _;
 
-/// Verdict path marker: synthetic SendEvent delivery never counts as pass.
+/// Verdict path marker: synthetic `SendEvent` delivery never counts as pass.
 pub const SYNTHETIC_NEVER_PASSES: &str = "SYNTHETIC-NEVER-COUNTS-AS-PASS-R02-R03";
 
 /// Which input path produced a scenario verdict.
@@ -181,7 +181,7 @@ pub fn xtest_self_check(canary: &crate::Canary) -> (bool, String) {
 }
 
 /// Real Escape keypress through XTEST. The keycode is resolved from the server
-/// keyboard mapping for keysym XK_Escape (0xff1b); false if unmapped or not
+/// keyboard mapping for keysym `XK_Escape` (0xff1b); false if unmapped or not
 /// delivered.
 pub fn real_escape(canary: &crate::Canary) -> bool {
     const XK_ESCAPE: u32 = 0xff1b;
@@ -219,6 +219,7 @@ pub fn center(w: &crate::WinInfo) -> (i16, i16) {
 
 /// J07 dispatcher: `j07 --scenario <name|all> [--json]`, CLI-compat additive.
 pub fn cmd_j07(canary: &crate::Canary, args: &[String]) {
+    type Scenario = fn(&crate::Canary, &[String]) -> (bool, String);
     let scenario = crate::arg(args, "--scenario").unwrap_or_else(|| "all".to_owned());
     let json = crate::has(args, "--json");
     if scenario == "xtest-self-check" {
@@ -234,7 +235,6 @@ pub fn cmd_j07(canary: &crate::Canary, args: &[String]) {
         return;
     }
     let mut results: Vec<(String, bool, String)> = Vec::new();
-    type Scenario = fn(&crate::Canary, &[String]) -> (bool, String);
     let s = scenario.as_str();
     // (selectors, verdict name, scenario). `all` selects only the default group.
     #[rustfmt::skip]
@@ -276,7 +276,7 @@ pub fn cmd_j07(canary: &crate::Canary, args: &[String]) {
     for (selectors, name, f) in table {
         if selectors.contains(&s) {
             let (pass, detail) = f(canary, args);
-            results.push((name.to_string(), pass, detail));
+            results.push(((*name).to_string(), pass, detail));
         }
     }
     if results.is_empty() {

@@ -253,7 +253,7 @@ pub struct IconBinding {
 }
 
 /// Bindings are keyed by target and raster edge: per-output panels share one
-/// target id but may request different edges (HiDPI mix), and each must keep
+/// target id but may request different edges (`HiDPI` mix), and each must keep
 /// its own exact-size binding instead of overwriting the other's.
 type BindingKey = (IconTarget, u32);
 
@@ -542,7 +542,7 @@ fn task_icon_name(
     icon_out
 }
 
-/// One resolved task icon, keyed by app_id and the state icon it came from.
+/// One resolved task icon, keyed by `app_id` and the state icon it came from.
 struct ResolvedTaskIcon {
     app_id: DesktopAppId,
     icon_in: String,
@@ -554,7 +554,7 @@ struct ResolvedTaskIcon {
 /// Owned by the caller (app state), passed to each task-slot projection.
 #[derive(Default)]
 pub struct TaskIconCache {
-    /// (id, icon_name, startup_wm_class) of the list the entries were built from.
+    /// (id, `icon_name`, `startup_wm_class`) of the list the entries were built from.
     applications: Vec<(DesktopAppId, String, String)>,
     resolved: Vec<ResolvedTaskIcon>,
 }
@@ -588,6 +588,7 @@ impl TaskIconCache {
 
 /// Desktop-entry `Icon=` whose `StartupWMClass` equals one lookup candidate
 /// of `name` (case-insensitive). Non-empty icons only.
+#[must_use]
 pub fn desktop_icon_for_wm_class(
     applications: &[flamewm_api::applications::DesktopApplication],
     name: &str,
@@ -635,7 +636,7 @@ pub fn project_panel_async(
     loader: Option<&mut IconLoader>,
     icon_cache: &mut TaskIconCache,
 ) -> Result<(), String> {
-    project_panel_scoped(document, view, loader, icon_cache, &PanelScope::full())
+    project_panel_scoped(document, view, loader, icon_cache, PanelScope::full())
 }
 
 /// Subset of panel nodes a changed domain may reproject. Windows owns
@@ -684,6 +685,7 @@ impl PanelScope {
 
 /// Startup task-icon prime: whether the one-shot task-slot projection may run.
 /// It needs live task states to request icons for and a loader to request on.
+#[must_use]
 pub fn task_icon_prime_should_run(
     armed: bool,
     task_state_count: usize,
@@ -695,6 +697,7 @@ pub fn task_icon_prime_should_run(
 /// Startup task-icon prime: whether the prime stays armed after a run.
 /// Disarms only once a run with task states, a loader, and a successful
 /// projection has submitted icon requests; an empty snapshot keeps it armed.
+#[must_use]
 pub fn task_icon_prime_still_armed(
     armed: bool,
     task_state_count: usize,
@@ -705,8 +708,8 @@ pub fn task_icon_prime_still_armed(
 }
 
 /// Domain-scoped panel dispatcher for the shell loop (`refresh_dynamic`):
-/// WindowsChanged -> task slots only, WorkspacesChanged -> pager and task slots,
-/// PanelsChanged -> geometry only, SystemChanged -> tray only. Combined
+/// `WindowsChanged` -> task slots only, `WorkspacesChanged` -> pager and task slots,
+/// `PanelsChanged` -> geometry only, `SystemChanged` -> tray only. Combined
 /// flags compose (e.g. panels+windows projects geometry+slots, never the
 /// tray). Empty scope is a no-op returning `Ok`. Clock projects only on
 /// the full scope (cold start / snapshot replace via
@@ -724,9 +727,9 @@ pub fn project_panel_for_changed(
     if scope == PanelScope::none() {
         return Ok(());
     }
-    project_panel_scoped(document, view, loader, icon_cache, &scope)
+    project_panel_scoped(document, view, loader, icon_cache, scope)
 }
-/// WindowsChanged -> task slots only. Resolves task visual states (cheap
+/// `WindowsChanged` -> task slots only. Resolves task visual states (cheap
 /// in-memory join, no fetch) and projects labels/icon/visibility/background
 /// for the 8 task slots. Pager, tray, and geometry nodes are untouched, so
 /// a focus-only window update never reprojects the full panel.
@@ -806,7 +809,7 @@ pub fn project_task_slots_async(
     Ok(())
 }
 
-/// WorkspacesChanged also refreshes tasks via PanelScope; this projection
+/// `WorkspacesChanged` also refreshes tasks via `PanelScope`; this projection
 /// itself owns only pager nodes. Projects the same pager cells, columns and
 /// fills as the sync panel pass (`crate::projection::project_pager`).
 pub fn project_pager_async(
@@ -817,7 +820,7 @@ pub fn project_pager_async(
     crate::projection::project_pager(document, snapshot.workspaces.as_ref())
 }
 
-/// SystemChanged -> status tray visibility only. The open popup content
+/// `SystemChanged` -> status tray visibility only. The open popup content
 /// projects on its own open path (`refresh_dynamic` reprojects media when
 /// open); the panel itself only flips tray visibility nodes.
 pub fn project_status_tray_async(
@@ -828,7 +831,7 @@ pub fn project_status_tray_async(
     crate::projection::project_status_tray(document, &snapshot.system, items)
 }
 
-/// PanelsChanged -> geometry/layout ownership counts only (slot/pager
+/// `PanelsChanged` -> geometry/layout ownership counts only (slot/pager
 /// visibility for added/removed entries). Content styling stays with the
 /// task/pager projectors. Currently geometry is node-identical to the
 /// visibility pass, so this reuses the slot/pager visibility tails without
@@ -867,7 +870,7 @@ fn project_panel_scoped(
     view: PanelView<'_>,
     loader: Option<&mut IconLoader>,
     icon_cache: &mut TaskIconCache,
-    scope: &PanelScope,
+    scope: PanelScope,
 ) -> Result<(), String> {
     if scope.task_slots {
         project_task_slots_async(document, view, loader, icon_cache)?;
@@ -940,7 +943,7 @@ pub fn project_start_unified(
     }
     let show_session = query.trim().is_empty()
         && category == StartCategory::Power
-        && crate::projection::session_available(session);
+        && crate::projection::session_available(*session);
     document.visible("start-group-power", show_session)?;
     document.visible("start-session-lock", show_session && session.lock)?;
     document.visible("start-session-logout", show_session && session.logout)?;
@@ -1295,20 +1298,22 @@ pub(crate) mod tests {
                 order_index: id as usize,
             }
         };
-        let mut snapshot = ShellSnapshot::default();
-        snapshot.panels = PanelsSnapshot {
-            revision: 1,
-            panels: vec![PanelSnapshot {
-                output: OutputId::new("A"),
-                edge: PanelEdge::Bottom,
-                logical_size: 40,
-                visible: true,
-                geometry: Rect::new(0, 760, 1000, 40),
-            }],
-            tasks: vec![task(1), task(2)],
-            pinned_apps: Vec::new(),
+        let mut snapshot = ShellSnapshot {
+            panels: PanelsSnapshot {
+                revision: 1,
+                panels: vec![PanelSnapshot {
+                    output: OutputId::new("A"),
+                    edge: PanelEdge::Bottom,
+                    logical_size: 40,
+                    visible: true,
+                    geometry: Rect::new(0, 760, 1000, 40),
+                }],
+                tasks: vec![task(1), task(2)],
+                pinned_apps: Vec::new(),
+            },
+            windows: vec![window_on(1, "A"), window_on(2, "B")],
+            ..ShellSnapshot::default()
         };
-        snapshot.windows = vec![window_on(1, "A"), window_on(2, "B")];
         let mut doc = FakeDoc::default();
         project_task_slots_async(
             &mut doc,
@@ -1388,8 +1393,8 @@ pub(crate) mod tests {
 
     #[test]
     fn windows_scope_projects_task_slots_only() {
-        let _guard = icon_test_lock().lock();
         use crate::runtime::ChangedDomains;
+        let _guard = icon_test_lock().lock();
         let snapshot = ShellSnapshot::default();
         let changed = ChangedDomains {
             windows: true,
@@ -1425,8 +1430,8 @@ pub(crate) mod tests {
 
     #[test]
     fn workspaces_scope_projects_pager_and_tasks() {
-        let _guard = icon_test_lock().lock();
         use crate::runtime::ChangedDomains;
+        let _guard = icon_test_lock().lock();
         let snapshot = ShellSnapshot::default();
         let changed = ChangedDomains {
             workspaces: true,
@@ -1452,14 +1457,16 @@ pub(crate) mod tests {
     #[test]
     fn async_pager_projects_the_two_row_topology() {
         let _guard = icon_test_lock().lock();
-        let mut snapshot = ShellSnapshot::default();
-        snapshot.workspaces = Some(flamewm_api::workspace::WorkspaceSnapshot {
-            revision: 1,
-            count: 6,
-            active_index: 3,
-            last_index: None,
-            names: Vec::new(),
-        });
+        let snapshot = ShellSnapshot {
+            workspaces: Some(flamewm_api::workspace::WorkspaceSnapshot {
+                revision: 1,
+                count: 6,
+                active_index: 3,
+                last_index: None,
+                names: Vec::new(),
+            }),
+            ..ShellSnapshot::default()
+        };
         let mut doc = FakeDoc::default();
         project_pager_async(&mut doc, &snapshot).expect("pager projects");
         // Labels follow the cell each workspace sits in.
@@ -1512,8 +1519,8 @@ pub(crate) mod tests {
 
     #[test]
     fn system_scope_projects_tray_only() {
-        let _guard = icon_test_lock().lock();
         use crate::runtime::ChangedDomains;
+        let _guard = icon_test_lock().lock();
         let snapshot = ShellSnapshot::default();
         let changed = ChangedDomains {
             system: true,
@@ -1646,8 +1653,8 @@ pub(crate) mod tests {
 
     #[test]
     fn panels_scope_projects_geometry_only() {
-        let _guard = icon_test_lock().lock();
         use crate::runtime::ChangedDomains;
+        let _guard = icon_test_lock().lock();
         let snapshot = ShellSnapshot::default();
         let changed = ChangedDomains {
             panels: true,
@@ -1796,8 +1803,8 @@ pub(crate) mod tests {
 
     #[test]
     fn empty_scope_is_noop() {
-        let _guard = icon_test_lock().lock();
         use crate::runtime::ChangedDomains;
+        let _guard = icon_test_lock().lock();
         let snapshot = ShellSnapshot::default();
         let doc = project_changed(PanelView::first(&snapshot), ChangedDomains::default());
         assert!(doc.visible.is_empty(), "empty scope touches nothing");

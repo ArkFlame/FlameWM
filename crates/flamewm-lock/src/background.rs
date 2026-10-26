@@ -60,6 +60,7 @@ fn gradient_at(t: f64) -> [f64; 3] {
 }
 
 /// Reference navy background at `w`x`h`: gradient plus three soft blobs.
+#[must_use]
 pub fn reference_navy(w: u32, h: u32) -> Vec<u8> {
     let (wu, hu) = (w as usize, h as usize);
     let s = layout::fit(w, h).s;
@@ -100,8 +101,8 @@ pub fn reference_navy(w: u32, h: u32) -> Vec<u8> {
                 if u < 1.0 {
                     let falloff = 1.0 - u;
                     let a = opacity * falloff * falloff;
-                    for i in 0..3 {
-                        c[i] += (blob.rgb[i] - c[i]) * a;
+                    for (channel, &target) in c.iter_mut().zip(&blob.rgb) {
+                        *channel += (target - *channel) * a;
                     }
                 }
             }
@@ -142,6 +143,7 @@ pub fn post_process(
 }
 
 /// Solid RGBA8 fill of `w`x`h`.
+#[must_use]
 pub fn flat(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
     let row = [rgb[0], rgb[1], rgb[2], 255].repeat(w as usize);
     let mut out = Vec::with_capacity(row.len() * h as usize);
@@ -262,8 +264,8 @@ mod tests {
                     if u < 1.0 {
                         let falloff = 1.0 - u;
                         let a = opacity * falloff * falloff;
-                        for i in 0..3 {
-                            c[i] += (blob.rgb[i] - c[i]) * a;
+                        for (channel, &target) in c.iter_mut().zip(&blob.rgb) {
+                            *channel += (target - *channel) * a;
                         }
                     }
                 }
@@ -322,8 +324,8 @@ mod tests {
         let mut sum = 0.0;
         for y in 0..(buf.len() / 4 / w as usize) {
             for x in 1..w as usize {
-                let a = buf[(y * w as usize + x - 1) * 4] as f64;
-                let b = buf[(y * w as usize + x) * 4] as f64;
+                let a = f64::from(buf[(y * w as usize + x - 1) * 4]);
+                let b = f64::from(buf[(y * w as usize + x) * 4]);
                 sum += (a - b).abs();
             }
         }

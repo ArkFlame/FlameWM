@@ -1,4 +1,4 @@
-//! XInput2 raw-key feed for the WM.
+//! `XInput2` raw-key feed for the WM.
 //!
 //! Passive root key grabs do not fire while another client holds an active keyboard grab
 //! (a fullscreen game). Raw key events are delivered regardless of grabs, so the WM selects
@@ -32,8 +32,8 @@ pub(crate) struct RawKey {
     pub time: u32,
 }
 
-/// Parses an XInput2 `XIRawKeyPress`/`XIRawKeyRelease` GenericEvent. `opcode` is the XInput
-/// major opcode from QueryExtension; anything else returns `None`.
+/// Parses an `XInput2` `XIRawKeyPress`/`XIRawKeyRelease` `GenericEvent`. `opcode` is the `XInput`
+/// major opcode from `QueryExtension`; anything else returns `None`.
 pub(crate) fn parse_raw_key(bytes: &[u8], opcode: u8) -> Option<RawKey> {
     if bytes.len() < 20 || bytes[0] & 0x7f != GE_GENERIC_EVENT || bytes[1] != opcode {
         return None;
@@ -64,7 +64,7 @@ pub(crate) struct ModifierState {
 }
 
 impl ModifierState {
-    /// `keycodes` is the GetModifierMapping table: `keycodes_per_modifier` entries per modifier,
+    /// `keycodes` is the `GetModifierMapping` table: `keycodes_per_modifier` entries per modifier,
     /// eight modifiers in order.
     pub(crate) fn from_mapping(keycodes_per_modifier: usize, keycodes: &[u8]) -> Self {
         let mut bits_for_keycode = vec![0u16; 256];
@@ -151,7 +151,7 @@ fn show_desktop_chord_is_down(action: &str, server_state: u16) -> bool {
     }
 }
 
-/// Per-WM raw-key state, present once the XInput2 selection succeeded.
+/// Per-WM raw-key state, present once the `XInput2` selection succeeded.
 #[derive(Debug)]
 pub(crate) struct RawKeys {
     pub opcode: u8,
@@ -166,9 +166,9 @@ fn request(opcode: u8, minor: u8, units: u16, body: &[u8]) -> Vec<u8> {
     bytes
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
-    /// Negotiates XInput 2.0 and selects raw key press/release on all master devices. A server
-    /// without XInput leaves the feed off and the passive grabs keep working.
+impl<C: Connection> Wm<'_, C> {
+    /// Negotiates `XInput` 2.0 and selects raw key press/release on all master devices. A server
+    /// without `XInput` leaves the feed off and the passive grabs keep working.
     pub(super) fn select_raw_keys(&mut self) -> Result<(), ReplyError> {
         let extension = self.conn.query_extension(b"XInputExtension")?.reply()?;
         if !extension.present {
@@ -271,7 +271,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.dispatch_escape_chord(&action)
     }
 
-    /// Passive-path hook: true when the raw feed already handled this KeyPress.
+    /// Passive-path hook: true when the raw feed already handled this `KeyPress`.
     pub(super) fn raw_claimed(&mut self, time: u32, keycode: u8) -> bool {
         self.raw_keys
             .as_mut()

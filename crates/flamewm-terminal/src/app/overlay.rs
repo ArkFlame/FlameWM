@@ -10,7 +10,7 @@ use crate::view::Row;
 use crate::view::Run;
 use crate::view::text_run;
 
-/// Startup banner: FlameWM art, then the `/theme` hint. Drawn above the shell until its output scrolls.
+/// Startup banner: `FlameWM` art, then the `/theme` hint. Drawn above the shell until its output scrolls.
 pub(super) const BANNER: [&str; 7] = [
     r"     _____   _         _       __  __   _____  __        __  __  __ ",
     r"   |  ___| | |       / \     |  \/  | | ____| \ \      / / |  \/  | ",
@@ -177,7 +177,7 @@ impl App {
                 self.rename = Some(Rename {
                     tab: self.active,
                     text: String::new(),
-                })
+                });
             }
             3 => self.copy_to_clipboard(),
             4 => self.paste(),

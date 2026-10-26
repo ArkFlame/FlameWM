@@ -56,7 +56,7 @@ mod tests {
         assert_eq!(fade(2.0), 0.0);
         let mut prev = 1.0;
         for i in 0..=1000 {
-            let f = fade(i as f64 / 1000.0);
+            let f = fade(f64::from(i) / 1000.0);
             assert!((0.0..=1.0).contains(&f));
             assert!(f <= prev + 1e-12, "fade must not increase");
             prev = f;
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn gaussian_profile_is_bounded_and_peaks_on_centreline() {
         for i in 0..=400 {
-            let d = i as f64 * 0.1;
+            let d = f64::from(i) * 0.1;
             let g = profile(d, 3.0);
             assert!((0.0..=1.0).contains(&g), "profile out of range at d={d}");
         }

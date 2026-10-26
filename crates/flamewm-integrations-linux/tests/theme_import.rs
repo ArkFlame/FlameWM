@@ -97,7 +97,7 @@ fn write_tgz(dir: &Path, name: &str, members: &[Member<'_>]) -> PathBuf {
     path
 }
 
-fn demo_members<'a>(xcursor: &'a [u8]) -> Vec<Member<'a>> {
+fn demo_members(xcursor: &[u8]) -> Vec<Member<'_>> {
     vec![
         m("Demo/", b'5', b""),
         m("Demo/index.theme", b'0', INDEX.as_bytes()),
@@ -212,17 +212,14 @@ fn xz_tar_installs_through_the_shared_tar_path() {
     let icons = base.join("icons");
     let tar_bytes = tar(&demo_members(b"cursor"));
     let src = base.join("demo.tar.xz");
-    let mut child = match std::process::Command::new("xz")
+    let Ok(mut child) = std::process::Command::new("xz")
         .args(["-c", "-q"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => {
-            eprintln!("SKIP: xz CLI unavailable");
-            return;
-        }
+    else {
+        eprintln!("SKIP: xz CLI unavailable");
+        return;
     };
     let mut stdin = child.stdin.take().unwrap();
     let writer = std::thread::spawn(move || stdin.write_all(&tar_bytes));
@@ -484,7 +481,7 @@ fn cancellation_leaves_zero_entries() {
     let cancel = AtomicBool::new(true);
     let err = install_theme(&src, &icons, &InstallOptions::default(), &cancel).unwrap_err();
     assert!(matches!(err, ImportError::Cancelled), "{err:?}");
-    let count = fs::read_dir(&icons).map_or(0, |d| d.count());
+    let count = fs::read_dir(&icons).map_or(0, std::iter::Iterator::count);
     assert_eq!(count, 0, "cancelled install must leave no entries");
     fs::remove_dir_all(&base).unwrap();
 }

@@ -59,6 +59,7 @@ impl Tab {
 }
 
 /// Background opacity choices, 100 down to 5 in steps of 5.
+#[must_use]
 pub fn opacity_options() -> Vec<u8> {
     (1..=20).rev().map(|step| step * 5).collect()
 }
@@ -138,6 +139,7 @@ impl Default for SettingsView {
 }
 
 impl SettingsView {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             tab: Tab::Theme,
@@ -153,6 +155,7 @@ impl SettingsView {
     }
 
     /// The view as it opens: the saved theme, font and opacity are highlighted.
+    #[must_use]
     pub fn open(themes: &[Theme], config: &TerminalConfig, fonts: Vec<String>) -> Self {
         let mut view = Self::new();
         view.focus(themes, &config.theme);
@@ -169,6 +172,7 @@ impl SettingsView {
     }
 
     /// Palette the view should preview while editing, if any.
+    #[must_use]
     pub fn preview(&self) -> Option<&Palette> {
         self.edit.as_ref().map(|theme| &theme.palette)
     }
@@ -274,17 +278,14 @@ impl SettingsView {
                 "return" | "enter" => {
                     let commit = parse_hex(&format!("#{buffer}"));
                     self.mode = Mode::Hex(String::new());
-                    match (commit, self.edit.as_mut()) {
-                        (Some(value), Some(theme)) => {
-                            let slot = theme.palette.slots()[self.slot].0;
-                            theme.palette.set_slot(slot, value);
-                            self.message = format!("{slot} set to {}", format_hex(value));
-                            Command::Save(theme.clone())
-                        }
-                        _ => {
-                            self.message = "enter six hex digits".into();
-                            Command::None
-                        }
+                    if let (Some(value), Some(theme)) = (commit, self.edit.as_mut()) {
+                        let slot = theme.palette.slots()[self.slot].0;
+                        theme.palette.set_slot(slot, value);
+                        self.message = format!("{slot} set to {}", format_hex(value));
+                        Command::Save(theme.clone())
+                    } else {
+                        self.message = "enter six hex digits".into();
+                        Command::None
                     }
                 }
                 "backspace" => {
@@ -396,7 +397,7 @@ impl SettingsView {
             "r" => match selected {
                 Some(theme) if !theme.builtin => self.mode = Mode::Rename(theme.name),
                 _ => {
-                    self.message = "Built-in themes cannot be renamed. Press C to copy one.".into()
+                    self.message = "Built-in themes cannot be renamed. Press C to copy one.".into();
                 }
             },
             "delete" | "d" => match selected {
@@ -414,7 +415,7 @@ impl SettingsView {
             "up" => self.font_selected = self.font_selected.saturating_sub(1),
             "down" => {
                 self.font_selected =
-                    (self.font_selected + 1).min(self.fonts.len().saturating_sub(1))
+                    (self.font_selected + 1).min(self.fonts.len().saturating_sub(1));
             }
             "return" | "enter" => return Command::Persist,
             _ => return Command::None,
@@ -436,6 +437,7 @@ impl SettingsView {
     }
 
     /// Settings rows: tab strip, hint, blank, the current tab's body and a status line. `rows` is the body height.
+    #[must_use]
     pub fn render(
         &self,
         cols: usize,
@@ -782,7 +784,7 @@ mod tests {
         let Command::Save(saved) = command else {
             panic!("expected save, got {command:?}")
         };
-        assert_eq!(saved.palette.background, 0xff8800);
+        assert_eq!(saved.palette.background, 0x00ff_8800);
     }
 
     #[test]

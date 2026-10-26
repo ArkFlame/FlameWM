@@ -33,6 +33,7 @@ impl Default for ColumnSort {
 
 impl ColumnSort {
     /// Clicking the active column flips direction; clicking another column sorts it ascending.
+    #[must_use]
     pub fn click(self, column: Column) -> Self {
         if self.column == column {
             Self {
@@ -49,6 +50,7 @@ impl ColumnSort {
 }
 
 /// Human type label used by the Type column and the Properties dialog.
+#[must_use]
 pub fn type_label(entry: &Entry) -> String {
     if entry.symlink {
         return "Link".into();
@@ -83,6 +85,7 @@ pub fn sort_entries(entries: &mut [Entry], sort: ColumnSort) {
 }
 
 /// Index of the first name, starting at `from` and wrapping, whose lowercase form starts with `prefix`.
+#[must_use]
 pub fn typeahead_match(names: &[&str], prefix: &str, from: usize) -> Option<usize> {
     let prefix = prefix.to_lowercase();
     let len = names.len();
@@ -95,6 +98,7 @@ pub fn typeahead_match(names: &[&str], prefix: &str, from: usize) -> Option<usiz
 }
 
 /// Byte count as a short label with binary units (B, KiB, MiB, ...).
+#[must_use]
 pub fn human_size(bytes: u64) -> String {
     let mut n = bytes as f64;
     let mut unit = "B";
@@ -113,6 +117,7 @@ pub fn human_size(bytes: u64) -> String {
 }
 
 /// Status strip count: "12 items", plus the selection count when something is selected.
+#[must_use]
 pub fn items_text(total: usize, selected: usize) -> String {
     let noun = if total == 1 { "item" } else { "items" };
     if selected == 0 {
@@ -132,6 +137,7 @@ thread_local! {
 
 /// Free and total bytes of the filesystem holding `path`, cached for `SPACE_TTL`.
 /// Free counts only space open to unprivileged users.
+#[must_use]
 pub fn fs_space(path: &Path) -> Option<(u64, u64)> {
     SPACE.with(|slot| cached_space(&mut slot.borrow_mut(), path, Instant::now(), statvfs_space))
 }
@@ -206,6 +212,7 @@ fn extension_lower(path: &Path) -> Option<String> {
 /// Image, SVG, ICO and `.desktop` rows keep the `file` glyph and get a real thumbnail instead (see
 /// `thumbs.rs`); the glyph is what the slot shows whenever that thumbnail is missing or fails, so it
 /// must always name one of the compiled families.
+#[must_use]
 pub fn file_icon(entry: &Entry) -> &'static str {
     if entry.directory {
         return "folder";
@@ -219,6 +226,7 @@ pub fn file_icon(entry: &Entry) -> &'static str {
 
 /// Kind column text, matching the icon family. A `.desktop` launcher reads as an application because
 /// its row shows the application's own icon.
+#[must_use]
 pub fn kind_name(entry: &Entry) -> String {
     if entry.directory {
         return "Folder".into();

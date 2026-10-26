@@ -255,6 +255,7 @@ impl X11App {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) unsafe fn image_pixmap(
         &mut self,
         node: u32,
@@ -529,7 +530,7 @@ mod tests {
     fn cache_budget_admits_one_4k_rgba_surface_and_stays_bounded() {
         let four_k_rgba = 3840usize * 2160 * 4;
         assert!(four_k_rgba <= MAX_IMAGE_CACHE_BYTES);
-        assert!(MAX_IMAGE_CACHE_BYTES <= 64 * 1024 * 1024);
+        const { assert!(MAX_IMAGE_CACHE_BYTES <= 64 * 1024 * 1024) };
         assert!(four_k_rgba * 2 > MAX_IMAGE_CACHE_BYTES);
     }
 

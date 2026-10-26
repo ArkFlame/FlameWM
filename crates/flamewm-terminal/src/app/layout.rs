@@ -52,6 +52,7 @@ pub enum PaneNode {
 
 impl PaneNode {
     /// True when the tab shows a single shell, which is the only case that draws the startup banner.
+    #[must_use]
     pub fn is_single(&self) -> bool {
         matches!(self, PaneNode::Leaf(_))
     }
@@ -77,6 +78,7 @@ impl PaneNode {
         }
     }
 
+    #[must_use]
     pub fn pane(&self, id: u64) -> Option<&Pane> {
         match self {
             PaneNode::Leaf(pane) => (pane.session.id == id).then_some(pane),
@@ -123,6 +125,7 @@ impl PaneNode {
     }
 
     /// Rectangles of every leaf, in tree order (left to right, top to bottom).
+    #[must_use]
     pub fn rects(&self, rect: Rect) -> Vec<(u64, Rect)> {
         match self {
             PaneNode::Leaf(pane) => vec![(pane.session.id, rect)],

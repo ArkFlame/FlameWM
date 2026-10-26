@@ -45,6 +45,7 @@ fn fetch_snapshot() -> Option<flamewm_api::settings::SettingsSnapshot> {
 
 /// Returns connected output rectangles clipped to the X root. A full-root fallback keeps
 /// lock coverage when the display service is unavailable or has no usable outputs.
+#[must_use]
 pub fn lock_output_rects(root: Rect) -> Vec<Rect> {
     output_rects_from_snapshot(fetch_displays().as_ref(), root)
 }
@@ -111,6 +112,7 @@ fn real_uid(status: &str) -> Option<u32> {
 
 /// The account being unlocked. The process's real uid is authoritative (the environment is caller
 /// controlled); `USER`/`LOGNAME` are used only when the uid cannot be resolved.
+#[must_use]
 pub fn username() -> Option<String> {
     let from_uid = std::fs::read_to_string("/proc/self/status")
         .ok()

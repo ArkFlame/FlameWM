@@ -199,7 +199,7 @@ pub trait WorkAreaPort {
     fn request_recompute(&mut self);
 }
 
-/// Adapter over FlameWM's desktop event loop. Product code does not create a second reactor.
+/// Adapter over `FlameWM`'s desktop event loop. Product code does not create a second reactor.
 ///
 /// Lifetime contract learned from the desktop event-loop contract:
 /// - `remove_poll` and `remove_timer` MUST be safe when called from inside their own callback;
@@ -208,7 +208,7 @@ pub trait WorkAreaPort {
 /// - shutdown invalidates callbacks before releasing their backing registrations;
 /// - callbacks captured under an older desktop generation MUST NOT mutate current state.
 ///
-/// A concrete FlameWM backend may satisfy this naturally with ownership, but it must preserve
+/// A concrete `FlameWM` backend may satisfy this naturally with ownership, but it must preserve
 /// these observable semantics rather than allowing callback-time use-after-free equivalents.
 pub trait MainLoopPort {
     fn add_poll(
@@ -254,7 +254,7 @@ pub trait TrayPort {
     fn tray_owner(&self) -> FlameResult<Option<OutputId>>;
 }
 
-/// Canonical engine adapter contract expected from a FlameWM desktop backend.
+/// Canonical engine adapter contract expected from a `FlameWM` desktop backend.
 ///
 /// High-frequency move/render callbacks stay in-process. Flame Control is above this boundary and
 /// is deliberately absent from pointer-motion and X event ordering paths.

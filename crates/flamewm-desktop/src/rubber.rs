@@ -175,7 +175,7 @@ fn publish_root_rubber(state: &mut DesktopState, overlay: Option<Rect>) -> Resul
         return Ok(());
     };
     let rubber = overlay.map(|rect| root_rubber_payload(rect, fill_alpha, accent).to_cardinals());
-    publisher.set(rubber.as_ref().map(|values| values.as_slice()))
+    publisher.set(rubber.as_ref().map(<[u32; 6]>::as_slice))
 }
 
 /// The root-space description of the overlay the desktop is painting at `rect`.
@@ -212,7 +212,7 @@ mod rubber_tests {
             .map(|i| RubberItem {
                 slot: format!("desktop-item-{i}"),
                 id: format!("item-{i:03}"),
-                rect: Rect::new((i % 10) as i32 * 20, (i / 10) as i32 * 20, 16, 16),
+                rect: Rect::new((i % 10) * 20, (i / 10) * 20, 16, 16),
             })
             .collect()
     }

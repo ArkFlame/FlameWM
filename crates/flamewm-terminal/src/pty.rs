@@ -37,6 +37,7 @@ pub struct Launch {
 
 impl Launch {
     /// The user's shell (`$SHELL`, else `/bin/sh`), started in `cwd`.
+    #[must_use]
     pub fn shell(cwd: Option<std::path::PathBuf>) -> Self {
         let program = std::env::var("SHELL")
             .ok()
@@ -96,6 +97,7 @@ impl PtyProcess {
 
     /// Whether the line discipline is canonical. Shell line editors clear ICANON while they read keys at the prompt, so
     /// a set flag means a program reads cooked lines (sudo, cat, a REPL) rather than the prompt. Errors count as canonical.
+    #[must_use]
     pub fn canonical(&self) -> bool {
         rustix::termios::tcgetattr(&self.master).map_or(true, |attrs| {
             attrs
@@ -106,6 +108,7 @@ impl PtyProcess {
 
     /// Whether the terminal echoes typed input. A shell line editor turns echo off and draws the line itself, while
     /// a password prompt also turns it off; the prompt check therefore needs both flags.
+    #[must_use]
     pub fn echoing(&self) -> bool {
         rustix::termios::tcgetattr(&self.master).map_or(true, |attrs| {
             attrs
@@ -146,6 +149,7 @@ impl PtyProcess {
         let _ = self.child.wait();
     }
 
+    #[must_use]
     pub fn id(&self) -> u32 {
         self.child.id()
     }

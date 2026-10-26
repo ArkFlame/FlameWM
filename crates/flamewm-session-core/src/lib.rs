@@ -589,6 +589,18 @@ pub fn default_paths_from_home(bindir: impl AsRef<Path>, home: impl AsRef<Path>)
     }
 }
 
+/// Apply computed session environment to the current process. Centralizes
+/// the single `std::env::set_var` owner (Rust 2024 marks it `unsafe`
+/// because it races with `getenv` on other threads; call before spawning
+/// threads/children, matching long-standing launcher practice).
+#[allow(unsafe_code)]
+pub fn apply_current_process_env(vars: &std::collections::BTreeMap<String, String>) {
+    for (key, value) in vars {
+        // SAFETY: launcher single-threaded setup before thread spawn.
+        unsafe { std::env::set_var(key, value) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1007,17 +1019,5 @@ mod tests {
             supervisor.child_exited(ChildExit::ExitCode(1)),
             SupervisorDecision::GiveUp
         );
-    }
-}
-
-/// Apply computed session environment to the current process. Centralizes
-/// the single `std::env::set_var` owner (Rust 2024 marks it `unsafe`
-/// because it races with `getenv` on other threads; call before spawning
-/// threads/children, matching long-standing launcher practice).
-#[allow(unsafe_code)]
-pub fn apply_current_process_env(vars: &std::collections::BTreeMap<String, String>) {
-    for (key, value) in vars {
-        // SAFETY: launcher single-threaded setup before thread spawn.
-        unsafe { std::env::set_var(key, value) };
     }
 }

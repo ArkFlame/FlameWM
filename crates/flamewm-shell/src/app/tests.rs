@@ -287,12 +287,15 @@ fn start_slide_pass_also_arms_popup_slide_without_start_button_target() {
         .and_then(|(_, rest)| rest.split_once("\n    }\n"))
         .map(|(body, _)| body)
         .expect("apply_start_slide must exist");
+    let body: String = body.split_whitespace().collect();
     assert!(
         body.contains("self.surfaces.set_popup_slide(popup_slide);"),
         "apply_start_slide must arm the popup slide on every Start-slide refresh"
     );
     assert!(
-        body.contains("crate::entry::settings_projection::start_slide(snapshot, self.surfaces.panel_edge(), None)"),
+        body.contains(
+            "crate::entry::settings_projection::start_slide(snapshot,self.surfaces.panel_edge(),None"
+        ),
         "popup slide must use the shared start_slide owner with no Magic Lamp target"
     );
 }

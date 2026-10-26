@@ -61,7 +61,7 @@ impl SurfaceController {
     pub fn set_popup_wallpaper_region(
         &mut self,
         id: SurfaceId,
-        region: Option<((i32, i32, u32, u32), Vec<u8>)>,
+        region: Option<dock::PopupWallpaper>,
     ) -> Result<(), String> {
         self.instance_mut(id)?.popup_wallpaper = None;
         if let Some((rect, pixels)) = region.as_ref() {
@@ -83,7 +83,7 @@ impl SurfaceController {
     /// Validates a one-shot wallpaper region against the current popup rect and byte count.
     pub(super) fn popup_wallpaper_capture(
         rect: flamewm_render_core::Rect,
-        region: Option<((i32, i32, u32, u32), Vec<u8>)>,
+        region: Option<dock::PopupWallpaper>,
     ) -> Result<Option<crate::backdrop::BackdropCapture>, String> {
         let Some((expected, pixels)) = region else {
             return Ok(None);
@@ -109,12 +109,12 @@ impl SurfaceController {
     }
 
     pub(super) fn take_popup_wallpaper(
-        region: &mut Option<((i32, i32, u32, u32), Vec<u8>)>,
-    ) -> Option<((i32, i32, u32, u32), Vec<u8>)> {
+        region: &mut Option<dock::PopupWallpaper>,
+    ) -> Option<dock::PopupWallpaper> {
         region.take()
     }
 
-    pub(super) fn clear_popup_wallpaper(region: &mut Option<((i32, i32, u32, u32), Vec<u8>)>) {
+    pub(super) fn clear_popup_wallpaper(region: &mut Option<dock::PopupWallpaper>) {
         *region = None;
     }
 
@@ -122,13 +122,13 @@ impl SurfaceController {
     fn popup_backdrop_source(
         &self,
         id: SurfaceId,
-        region: Option<((i32, i32, u32, u32), Vec<u8>)>,
+        region: Option<dock::PopupWallpaper>,
     ) -> Result<crate::backdrop::BackdropCapture, String> {
         let rect = self.surface_device_rect(id)?;
         if let Some(capture) = Self::popup_wallpaper_capture(rect, region)? {
-            return Ok(capture);
+            Ok(capture)
         } else {
-            return self.capture_root_under(id);
+            self.capture_root_under(id)
         }
     }
 

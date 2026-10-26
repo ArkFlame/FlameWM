@@ -89,7 +89,7 @@
 //!
 //! # Client GPU buffers
 //!
-//! Not wired yet: clients use wl_shm. dmabuf import needs smithay's `ImportEgl::bind_wl_display`,
+//! Not wired yet: clients use `wl_shm`. dmabuf import needs smithay's `ImportEgl::bind_wl_display`,
 //! which is compiled only with smithay's `use_system_lib` feature, plus a `zwp_linux_dmabuf_v1`
 //! global. Neither is available here, so no dmabuf global is offered.
 
@@ -385,13 +385,13 @@ fn init_backend(
 
     let drm_events = Rc::clone(&drm);
     handle.insert_source(drm_notifier, move |event, _, state| {
-        on_drm_event(state, &drm_events, event)
+        on_drm_event(state, &drm_events, event);
     })?;
 
     // logind signals (VT pause and resume) are read by polling the bus; the events are queued by
     // the session and dispatched here, outside the session borrow.
     let session_drm = Rc::clone(&drm);
-    handle.insert_source(Timer::from_duration(SESSION_POLL), move |_, _, state| {
+    handle.insert_source(Timer::from_duration(SESSION_POLL), move |_, (), state| {
         let events = {
             let d = session_drm.borrow();
             d.session.pump();
@@ -404,7 +404,7 @@ fn init_backend(
     })?;
 
     let udev_drm = Rc::clone(&drm);
-    handle.insert_source(udev_backend, move |event, _, state| {
+    handle.insert_source(udev_backend, move |event, (), state| {
         if let UdevEvent::Changed { device_id } = event {
             let primary = udev_drm.borrow().primary_dev;
             if device_id == primary {
@@ -423,8 +423,8 @@ fn init_backend(
     // handlers, timers) so a request never waits for an unrelated event to be painted.
     let (ping, ping_source) = make_ping()?;
     let waker_drm = Rc::clone(&drm);
-    handle.insert_source(ping_source, move |_, _, state| {
-        render_all(state, &waker_drm)
+    handle.insert_source(ping_source, move |(), (), state| {
+        render_all(state, &waker_drm);
     })?;
     state.set_drm_waker(ping);
 
@@ -592,15 +592,16 @@ impl Drm {
             self.retry_scheduled = true;
             self.retry_attempts += 1;
             let again = Rc::clone(drm);
-            let _ =
-                self.handle
-                    .insert_source(Timer::from_duration(FRAME_RETRY), move |_, _, state| {
-                        if let Ok(mut d) = again.try_borrow_mut() {
-                            d.retry_scheduled = false;
-                        }
-                        render_all(state, &again);
-                        TimeoutAction::Drop
-                    });
+            let _ = self.handle.insert_source(
+                Timer::from_duration(FRAME_RETRY),
+                move |_, (), state| {
+                    if let Ok(mut d) = again.try_borrow_mut() {
+                        d.retry_scheduled = false;
+                    }
+                    render_all(state, &again);
+                    TimeoutAction::Drop
+                },
+            );
         } else if !retry {
             self.retry_attempts = 0;
         }
@@ -632,7 +633,7 @@ impl Drm {
         let mut last_error: Option<String> = None;
         let mut deferred = 0u32;
         let mut wedged = 0u32;
-        for out in self.surfaces.iter_mut() {
+        for out in &mut self.surfaces {
             // `Deferred` is not a reason to paint: a frame is still in flight, so this output is
             // re-planned by the vblank that clears `queued`, and painting now would queue over it.
             if out.frames.plan(has_callback, self.paused) != FrameDecision::Draw {
@@ -797,7 +798,7 @@ impl Drm {
         let armed = Rc::clone(drm);
         match self.handle.insert_source(
             Timer::from_duration(FIRST_FRAME_DEADLINE),
-            move |_, _, state| on_first_frame_deadline(state, &armed),
+            move |_, (), state| on_first_frame_deadline(state, &armed),
         ) {
             Ok(token) => self.first_frame_deadline = Some(token),
             Err(error) => {
@@ -827,8 +828,8 @@ impl Drm {
         let seat = self.seat.clone();
         if let Err(error) = self
             .handle
-            .insert_source(input_backend, move |event, _, state| {
-                input::handle_input(state, &input_drm, event)
+            .insert_source(input_backend, move |event, (), state| {
+                input::handle_input(state, &input_drm, event);
             })
         {
             eprintln!(
@@ -1505,11 +1506,9 @@ fn rebuild(state: &mut State, drm: &Rc<RefCell<Drm>>, fd: OwnedFd) -> Result<(),
     // The replacement device needs its own event source; the old one watches a dead descriptor and
     // stays registered (calloop has no cheap removal) but never reports again.
     handle.insert_source(notifier, move |event, _, state| {
-        on_drm_event(state, &again, event)
+        on_drm_event(state, &again, event);
     })?;
-    if let Err(error) = scan_connectors(&mut d, state) {
-        return Err(error);
-    }
+    scan_connectors(&mut d, state)?;
     // Same rule as the kept-fd resume: the session is ours again, so the startup deadline starts over.
     d.first_frame.resume();
     d.arm_first_frame_deadline(drm);
@@ -1541,7 +1540,7 @@ fn send_frame_callbacks(state: &State) {
         .iter()
         .map(|(_, window)| window)
         .chain(state.unmanaged.iter().map(|entry| &entry.surface));
-    for surface in x11.filter_map(|window| window.wl_surface()) {
+    for surface in x11.filter_map(smithay::xwayland::X11Surface::wl_surface) {
         send_frames_surface_tree(&surface, output, time, throttle, |_, _| {
             Some(output.clone())
         });

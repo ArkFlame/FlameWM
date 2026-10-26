@@ -32,12 +32,13 @@ pub struct Launcher {
 
 fn clean(value: &str) -> Option<String> {
     let value = value.trim();
-    let usable = !value.is_empty() && !value.chars().any(|c| c.is_control());
+    let usable = !value.is_empty() && !value.chars().any(char::is_control);
     usable.then(|| value.chars().take(MAX_ICON_CHARS).collect())
 }
 
 /// Parses the `[Desktop Entry]` group. Returns `None` for a hidden entry, a non-application entry,
 /// or one that declares neither a name nor an icon: such a file has no icon to show.
+#[must_use]
 pub fn parse_desktop_entry(text: &str) -> Option<Launcher> {
     let mut launcher = Launcher::default();
     let mut in_entry = false;
@@ -147,6 +148,7 @@ pub fn resolve_icon(icon: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
 
 /// Icon file named by a `.desktop` entry, read without executing it. `dirs` is injected so the
 /// lookup is testable without touching the real XDG roots.
+#[must_use]
 pub fn icon_file_in(desktop: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
     let meta = fs::metadata(desktop).ok()?;
     if !meta.is_file() || meta.len() > MAX_DESKTOP_BYTES {
@@ -159,6 +161,7 @@ pub fn icon_file_in(desktop: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
 }
 
 /// Icon file named by a `.desktop` entry, using the real icon roots.
+#[must_use]
 pub fn icon_file(desktop: &Path) -> Option<PathBuf> {
     icon_file_in(desktop, &icon_dirs())
 }

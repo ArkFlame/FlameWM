@@ -6,6 +6,7 @@ pub enum ClockFormat {
 }
 
 impl ClockFormat {
+    #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "24h" => Some(Self::H24),
@@ -17,6 +18,7 @@ impl ClockFormat {
 
 /// Formats `hour` (0-23) and `minute` (0-59). Out-of-range inputs are clamped
 /// so a bad clock value can never panic the lock screen.
+#[must_use]
 pub fn format_clock(hour: u8, minute: u8, format: ClockFormat) -> String {
     let hour = hour.min(23);
     let minute = minute.min(59);
@@ -59,6 +61,7 @@ const MONTHS: [&str; 12] = [
 
 /// Formats a Gregorian date as e.g. "Monday, 12 October 2026".
 /// Returns `None` for an invalid month or day.
+#[must_use]
 pub fn format_date(year: i32, month: u8, day: u8) -> Option<String> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;

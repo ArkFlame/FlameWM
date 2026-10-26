@@ -1,7 +1,7 @@
 //! Session-scoped KDE application compatibility without impersonating a Plasma session.
 //!
 //! KDE as a global XDG desktop identity allows KDE-only display managers to
-//! activate and race FlameWM's own XRandR authority. Keep the session FlameWM,
+//! activate and race `FlameWM`'s own `XRandR` authority. Keep the session `FlameWM`,
 //! borrow only MIME defaults and Brave's wallet backend on application launch.
 use std::collections::BTreeMap;
 use std::fs;
@@ -374,8 +374,8 @@ fn install_applications_menu(config_dir: &Path) -> Result<(), String> {
     )
 }
 
-/// Configure the session's XDG_DATA_DIRS / XDG_CONFIG_DIRS overlays. The
-/// overlay is below the user's XDG_CONFIG_HOME/XDG_DATA_HOME but above system
+/// Configure the session's `XDG_DATA_DIRS` / `XDG_CONFIG_DIRS` overlays. The
+/// overlay is below the user's `XDG_CONFIG_HOME/XDG_DATA_HOME` but above system
 /// defaults: user-chosen associations and desktop overrides always win.
 /// Degraded compatibility is nonfatal; Plasma files and wallets are untouched.
 pub fn configure(

@@ -25,6 +25,7 @@ const MASK: WatchMask = WatchMask::CREATE
     .union(WatchMask::MOVE_SELF);
 
 /// Pure coalescing rule: fire once there is a pending change and the quiet period has elapsed.
+#[must_use]
 pub fn should_fire(pending_since: Option<Instant>, now: Instant) -> bool {
     pending_since.is_some_and(|since| now.duration_since(since) >= QUIET)
 }

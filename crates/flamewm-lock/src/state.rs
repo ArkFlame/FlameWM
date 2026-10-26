@@ -26,6 +26,7 @@ pub enum Status {
 }
 
 impl Status {
+    #[must_use]
     pub fn text(self) -> &'static str {
         match self {
             Self::Idle => "",
@@ -55,15 +56,18 @@ pub struct LockState {
 }
 
 impl LockState {
+    #[must_use]
     pub fn password(&self) -> &PasswordBuffer {
         &self.password
     }
 
+    #[must_use]
     pub fn status(&self) -> Status {
         self.status
     }
 
     /// Input is ignored while authenticating and during a backoff delay.
+    #[must_use]
     pub fn accepts_input(&self, now: Instant) -> bool {
         self.status != Status::Authenticating && self.locked_until.is_none_or(|until| now >= until)
     }

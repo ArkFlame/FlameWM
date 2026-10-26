@@ -319,7 +319,7 @@ pub fn move_into_category(dir: &Path, name: &str, category: Category) -> io::Res
         };
         match outcome {
             Ok(()) => return Ok(target),
-            Err(RenameFailure::Exists) => continue,
+            Err(RenameFailure::Exists) => {}
             Err(RenameFailure::CrossDevice) => {
                 return Err(io::Error::other("cross-device move did not complete"));
             }

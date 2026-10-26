@@ -276,8 +276,8 @@ fn area_pixel(natural: &RgbaImage, column: &(usize, Vec<f32>), row: &(usize, Vec
         for (col_offset, col_weight) in column.1.iter().enumerate() {
             let weight = row_weight * col_weight;
             let index = (base + column.0 + col_offset) * 4;
-            for channel in 0..4 {
-                acc[channel] += weight * f32::from(natural.pixels[index + channel]);
+            for (sum, &value) in acc.iter_mut().zip(&natural.pixels[index..index + 4]) {
+                *sum += weight * f32::from(value);
             }
         }
     }

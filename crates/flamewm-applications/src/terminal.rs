@@ -1,8 +1,8 @@
-//! Terminal resolution: one owner for which terminal emulator FlameWM runs.
+//! Terminal resolution: one owner for which terminal emulator `FlameWM` runs.
 //!
 //! Order: settings override (`defaultTerminal`) when it is available, then
 //! `flamewm-terminal` on PATH or next to the running binaries, then `$TERMINAL`,
-//! then the Debian/common fallbacks. Fallbacks are used only when FlameWM Terminal
+//! then the Debian/common fallbacks. Fallbacks are used only when `FlameWM` Terminal
 //! is missing.
 
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
@@ -12,7 +12,7 @@ use std::sync::Mutex;
 
 pub const FLAMEWM_TERMINAL: &str = "flamewm-terminal";
 
-/// Tried in order only after the settings override and FlameWM Terminal are unavailable.
+/// Tried in order only after the settings override and `FlameWM` Terminal are unavailable.
 pub const FALLBACK_TERMINALS: &[&str] = &[
     "x-terminal-emulator",
     "xdg-terminal-exec",
@@ -27,18 +27,18 @@ pub const FALLBACK_TERMINALS: &[&str] = &[
 /// [`set_configured_terminal`]. Empty means no override.
 static CONFIGURED: Mutex<String> = Mutex::new(String::new());
 
-/// Install the `defaultTerminal` settings value. Empty selects FlameWM Terminal.
+/// Install the `defaultTerminal` settings value. Empty selects `FlameWM` Terminal.
 pub fn set_configured_terminal(value: &str) {
     let mut configured = CONFIGURED
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    *configured = value.trim().to_owned();
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    value.trim().clone_into(&mut configured);
 }
 
 fn configured_terminal() -> String {
     CONFIGURED
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
 }
 
@@ -115,7 +115,7 @@ pub fn resolve_terminal() -> Option<String> {
 }
 
 /// Terminal program name for "Open Terminal" style callers. Falls back to the
-/// FlameWM Terminal name so a missing install produces a clear spawn error.
+/// `FlameWM` Terminal name so a missing install produces a clear spawn error.
 #[must_use]
 pub fn terminal_program() -> String {
     resolve_terminal().unwrap_or_else(|| FLAMEWM_TERMINAL.to_owned())
@@ -123,7 +123,7 @@ pub fn terminal_program() -> String {
 
 /// Argv that runs `command` inside `terminal`. The execute flag depends on the
 /// emulator: `kitty` and `xdg-terminal-exec` take the command directly, `gnome-terminal`
-/// takes `--`, and the others take `-e`. Only FlameWM Terminal receives `cwd`.
+/// takes `--`, and the others take `-e`. Only `FlameWM` Terminal receives `cwd`.
 #[must_use]
 pub fn terminal_command(terminal: &str, command: &[String], cwd: Option<&Path>) -> Vec<String> {
     let base = Path::new(terminal)

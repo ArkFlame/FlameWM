@@ -65,10 +65,10 @@ impl SurfaceController {
         let dock = self.dock_rect();
         let instance = self.instance_mut(id)?;
         let result = unsafe {
-            instance.app.redraw(&instance.document).map_err(|error| {
-                mark_x_error_seen();
-                error
-            })
+            instance
+                .app
+                .redraw(&instance.document)
+                .inspect_err(|_| mark_x_error_seen())
         };
         if result.is_ok() {
             if let Some(active) = flight.filter(|_| instance.overlay.is_none() && instance.shown) {
@@ -91,10 +91,7 @@ impl SurfaceController {
                 instance
                     .app
                     .redraw_if_dirty(&mut instance.document)
-                    .map_err(|error| {
-                        mark_x_error_seen();
-                        error
-                    })?
+                    .inspect_err(|_| mark_x_error_seen())?
             };
             if painted {
                 // SAFETY: display/window live; mask follows repaint. Active

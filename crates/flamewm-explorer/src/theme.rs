@@ -1,4 +1,4 @@
-//! Consume FlameWM's canonical settings snapshot. No local theme config/polling.
+//! Consume `FlameWM`'s canonical settings snapshot. No local theme config/polling.
 //! Every colour derives from the live `surfaceColor` and `surfaceOpacity`: the root fills once with the surface
 //! (translucent over the blurred wallpaper when opacity is below 100), darker panels draw nothing, and lighter
 //! elements are a white wash over that surface. No grey literal is painted anywhere.
@@ -9,8 +9,8 @@ use flamewm_ui_core::context_menu::surface_fill;
 use flamewm_ui_x11::backdrop::WindowBackdrop;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
-/// FlameWM default accent, the same value as flamewm-settings `DEFAULT_ACCENT`. Used only when no settings snapshot supplies `accent`.
-pub const DEFAULT_ACCENT: u32 = 0xEF4048;
+/// `FlameWM` default accent, the same value as flamewm-settings `DEFAULT_ACCENT`. Used only when no settings snapshot supplies `accent`.
+pub const DEFAULT_ACCENT: u32 = 0x00EF_4048;
 /// Shared defaults (flamewm-ui-core `DEFAULT_SURFACE_OPACITY`, shell/desktop `surfaceBlurPercent`).
 const DEFAULT_SURFACE_OPACITY: u8 = 50;
 const DEFAULT_BLUR_PERCENT: u8 = 80;
@@ -119,11 +119,11 @@ impl ExplorerTheme {
         if let Some(SettingValue::Text(name)) = snapshot.values.get("accent") {
             theme.accent = rgb(match name.as_str() {
                 "red" => DEFAULT_ACCENT,
-                "blue" => 0x3daee9,
-                "purple" => 0x9b59b6,
-                "teal" => 0x1abc9c,
-                "green" => 0x27ae60,
-                "amber" => 0xf39c12,
+                "blue" => 0x003d_aee9,
+                "purple" => 0x009b_59b6,
+                "teal" => 0x001a_bc9c,
+                "green" => 0x0027_ae60,
+                "amber" => 0x00f3_9c12,
                 _ => hex(name).unwrap_or(DEFAULT_ACCENT),
             });
         }

@@ -43,6 +43,7 @@ fn scroll_fingerprint(document: &RuntimeDocument) -> u64 {
 impl X11App {
     /// Soft alpha shadow uses the canonical Xft glyph coverage once, the shared
     /// bounded Gaussian blur, then a transient premultiplied ARGB32 XRender blit.
+    #[allow(clippy::too_many_arguments)]
     fn paint_text_shadow(
         &mut self,
         x: f32,

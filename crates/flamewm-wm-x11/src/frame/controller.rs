@@ -195,9 +195,9 @@ pub enum FrameEvent {
     },
     Enter,
     Leave,
-    /// Client intent only: a ConfigureRequest from the client window.
+    /// Client intent only: a `ConfigureRequest` from the client window.
     /// `root_origin`/`size` are client-window geometry (client-root rect),
-    /// never the frame outer rect and never a ConfigureNotify observation.
+    /// never the frame outer rect and never a `ConfigureNotify` observation.
     /// The live owner must never construct this from notify events (M01).
     #[cfg(test)]
     ClientConfigureRequest {
@@ -686,15 +686,15 @@ pub fn reduce_owned(
         FrameEvent::Snap { target } => {
             let rect = snap_rect(state.work_area, target);
             state.session = InteractionSession::Idle;
-            if state.placement.mode != PlacementMode::Floating {
-                state.placement.resume = Some(PlacementSnapshot {
-                    mode: state.placement.mode,
-                    rect: state.placement.current,
-                });
-            } else {
+            if state.placement.mode == PlacementMode::Floating {
                 state.placement.resume = Some(PlacementSnapshot {
                     mode: PlacementMode::Floating,
                     rect: state.placement.floating_restore,
+                });
+            } else {
+                state.placement.resume = Some(PlacementSnapshot {
+                    mode: state.placement.mode,
+                    rect: state.placement.current,
                 });
             }
             state.placement.mode = PlacementMode::Snapped(target);
@@ -2010,8 +2010,7 @@ mod tests {
                 let preview = preview_snap_rect(work_area, target);
                 if commit != preview {
                     out.push(format!(
-                        "work_area={:?} target={:?} commit={:?} preview={:?}",
-                        work_area, target, commit, preview
+                        "work_area={work_area:?} target={target:?} commit={commit:?} preview={preview:?}"
                     ));
                 }
             }

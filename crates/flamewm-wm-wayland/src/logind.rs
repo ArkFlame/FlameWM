@@ -43,7 +43,7 @@
 //! never clears it. Stopping scanout on a pause is the tty backend's own decision, so a single device
 //! pause can no longer strand the session in a permanently inactive state.
 
-#![cfg_attr(not(feature = "drm"), allow(dead_code, unused_imports))]
+#![cfg_attr(not(feature = "drm"), allow(unused_imports))]
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
@@ -377,7 +377,7 @@ fn activate(
 ) -> bool {
     match bus.activate_session(session_path) {
         Ok(()) => {
-            eprintln!("flamewm-wayland: logind session {session_path} detail=activate_requested")
+            eprintln!("flamewm-wayland: logind session {session_path} detail=activate_requested");
         }
         Err(error) => eprintln!("flamewm-wayland: logind Session.Activate failed: {error}"),
     }
@@ -387,7 +387,7 @@ fn activate(
                 "flamewm-wayland: logind session {session_path} detail=switched_to_vt{vt}"
             ),
             Err(error) => {
-                eprintln!("flamewm-wayland: logind Seat.SwitchTo({vt}) failed: {error}")
+                eprintln!("flamewm-wayland: logind Seat.SwitchTo({vt}) failed: {error}");
             }
         }
     }
@@ -768,7 +768,7 @@ mod system {
 
     fn object_path(path: &str) -> Result<dbus::Path<'static>, LogindError> {
         dbus::Path::new(path)
-            .map(|path| path.into_static())
+            .map(dbus::Path::into_static)
             .map_err(|error| LogindError(format!("invalid object path {path}: {error}")))
     }
 

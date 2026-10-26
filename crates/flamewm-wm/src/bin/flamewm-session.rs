@@ -33,8 +33,8 @@ const TICK: Duration = Duration::from_millis(100);
 const STARTUP_GRACE: Duration = Duration::from_millis(500);
 /// Upper bound on the supervisor's idle block. SIGCHLD normally wakes it; this bounds a missed
 /// wakeup (signal-hook drops a wakeup byte if the pipe is full) to one cheap 1 s re-scan.
-/// SIG_IGN note: signal-hook installs its own SIGCHLD handler, so children never inherit SIG_IGN
-/// (exec resets caught signals to SIG_DFL); auto-reaping cannot hide exits from try_wait here.
+/// `SIG_IGN` note: signal-hook installs its own SIGCHLD handler, so children never inherit `SIG_IGN`
+/// (exec resets caught signals to `SIG_DFL`); auto-reaping cannot hide exits from `try_wait` here.
 const SUPERVISOR_SAFETY_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct Running {
@@ -141,7 +141,7 @@ fn allocator_tuning_defaults(is_set: impl Fn(&str) -> bool) -> Vec<(&'static str
         .collect()
 }
 
-/// A two-connector preference belongs to FlameWM, not Plasma/KScreen.
+/// A two-connector preference belongs to `FlameWM`, not Plasma/KScreen.
 /// Restore only when BOTH connector names are currently active. A stale
 /// hotplug preference does not cause a mode-set or block login.
 fn restore_saved_display_order() {
@@ -179,7 +179,7 @@ fn restore_saved_display_order() {
 }
 
 /// Publish the SAME session identity and display coordinates to services
-/// activated later by Dolphin, Brave, xdg-desktop-portal or KWallet.
+/// activated later by Dolphin, Brave, xdg-desktop-portal or `KWallet`.
 /// No credential access and no global user-config mutation.
 fn activation_assignments(
     environment: &BTreeMap<String, String>,
@@ -204,7 +204,7 @@ fn activation_assignments(
             if *key == "KDE_SESSION_VERSION" {
                 return Some(format!(
                     "KDE_SESSION_VERSION={}",
-                    environment.get(*key).map(String::as_str).unwrap_or("")
+                    environment.get(*key).map_or("", String::as_str)
                 ));
             }
             environment
@@ -225,7 +225,7 @@ fn sync_activation_environment(environment: &BTreeMap<String, String>) {
     match command.status() {
         Ok(status) if status.success() => (),
         Ok(status) => {
-            eprintln!("flamewm-session: D-Bus activation environment not synchronized: {status}")
+            eprintln!("flamewm-session: D-Bus activation environment not synchronized: {status}");
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {
             eprintln!(
@@ -320,10 +320,10 @@ fn check_stop(stop_requested: &AtomicBool) -> Result<(), String> {
 
 fn check_parent(parent: rustix::process::Pid, stop_requested: &AtomicBool) -> Result<(), String> {
     check_stop(stop_requested)?;
-    if getppid() != Some(parent) {
-        Err("session parent exited or is unavailable; stopping session children".to_owned())
-    } else {
+    if getppid() == Some(parent) {
         Ok(())
+    } else {
+        Err("session parent exited or is unavailable; stopping session children".to_owned())
     }
 }
 
@@ -390,7 +390,8 @@ fn wait_ready(
                     Ok(true) if Instant::now() < deadline => return Ok(()),
                     Ok(true) => break,
                     Ok(false) => {
-                        last_error = "session control returned a non-bootstrap response".to_owned()
+                        "session control returned a non-bootstrap response"
+                            .clone_into(&mut last_error);
                     }
                     Err(error) => last_error = format!("session control bootstrap: {error}"),
                 }
@@ -398,7 +399,7 @@ fn wait_ready(
                     break;
                 }
             }
-            Ok(false) => last_error = "EWMH supporting-WM check is not valid".to_owned(),
+            Ok(false) => "EWMH supporting-WM check is not valid".clone_into(&mut last_error),
             Err(error) => last_error = format!("EWMH readiness: {error}"),
         }
         thread::sleep(TICK.min(deadline.saturating_duration_since(Instant::now())));
@@ -467,165 +468,6 @@ fn supporting_wm_check_is_valid(root_support: Option<u32>, self_support: Option<
 
 fn clean_wm_exit(index: usize, status: ExitStatus) -> bool {
     index == 0 && status.success()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        ProcessPlan, Running, WAKEUP, activation_assignments, allocator_tuning_defaults,
-        clean_wm_exit, scan_exits, stop_all, supporting_wm_check_is_valid,
-    };
-    use flamewm_session_core::{ProcessSupervisorPolicy, SessionRole, SupervisorPolicy};
-    use std::collections::BTreeMap;
-    use std::os::unix::net::UnixStream;
-    use std::os::unix::process::ExitStatusExt;
-    use std::process::{Command, ExitStatus};
-
-    #[test]
-    fn successful_wm_exit_stops_session_without_restarting_it() {
-        assert!(clean_wm_exit(0, ExitStatus::from_raw(0)));
-        assert!(!clean_wm_exit(0, ExitStatus::from_raw(1 << 8)));
-        assert!(!clean_wm_exit(1, ExitStatus::from_raw(0)));
-    }
-
-    #[test]
-    fn logout_cleanup_reaps_only_managed_children_without_restart() {
-        let (reader, _writer) = UnixStream::pair().unwrap();
-        let _ = WAKEUP.set(reader);
-        let make_plan = |role| ProcessPlan {
-            role,
-            program: if role == SessionRole::WindowManager {
-                "/bin/true"
-            } else {
-                "/bin/sleep"
-            }
-            .into(),
-            arguments: if role == SessionRole::WindowManager {
-                Vec::new()
-            } else {
-                vec!["30".into()]
-            },
-            environment: BTreeMap::new(),
-            required: true,
-        };
-        let wm_plan = make_plan(SessionRole::WindowManager);
-        let mut wm_child = Command::new(&wm_plan.program).spawn().unwrap();
-        let wm_pid = wm_child.id();
-        let wm_status = wm_child.wait().unwrap();
-        assert!(clean_wm_exit(0, wm_status));
-        let wm = Running {
-            plan: wm_plan,
-            child: wm_child,
-            supervisor: ProcessSupervisorPolicy::new(SupervisorPolicy {
-                graceful_stop_ms: 5,
-                ..SupervisorPolicy::default()
-            }),
-        };
-        let desktop_plan = make_plan(SessionRole::Desktop);
-        let desktop_child = Command::new(&desktop_plan.program)
-            .args(&desktop_plan.arguments)
-            .spawn()
-            .unwrap();
-        let desktop_pid = desktop_child.id();
-        let desktop = Running {
-            plan: desktop_plan,
-            child: desktop_child,
-            supervisor: ProcessSupervisorPolicy::new(SupervisorPolicy {
-                graceful_stop_ms: 5,
-                ..SupervisorPolicy::default()
-            }),
-        };
-        let mut children = vec![wm, desktop];
-        let managed_pids = [wm_pid, desktop_pid];
-        let mut unrelated = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-
-        let cleanup = stop_all(&mut children);
-        let unrelated_status = unrelated.try_wait().unwrap();
-        let _ = unrelated.kill();
-        let _ = unrelated.wait();
-
-        assert!(cleanup.is_ok(), "managed child cleanup failed: {cleanup:?}");
-        assert!(children.is_empty(), "supervisor retained managed children");
-        assert!(
-            managed_pids
-                .iter()
-                .all(|pid| !std::path::Path::new(&format!("/proc/{pid}")).exists()),
-            "managed child remained alive"
-        );
-        assert!(
-            unrelated_status.is_none(),
-            "cleanup affected an unrelated process"
-        );
-    }
-
-    #[test]
-    fn activation_clears_stale_kde_backend_without_exporting_pam_credentials() {
-        let live = BTreeMap::from([
-            ("DISPLAY".to_owned(), ":0".to_owned()),
-            ("XDG_CURRENT_DESKTOP".to_owned(), "FlameWM".to_owned()),
-        ]);
-        let inherited = BTreeMap::from([
-            ("XDG_CURRENT_DESKTOP".to_owned(), "KDE".to_owned()),
-            ("KDE_SESSION_VERSION".to_owned(), "5".to_owned()),
-            (
-                "PAM_KWALLET5_LOGIN".to_owned(),
-                "/private/socket".to_owned(),
-            ),
-        ]);
-        let args = activation_assignments(&live, &inherited);
-        assert!(args.contains(&"XDG_CURRENT_DESKTOP=FlameWM".to_owned()));
-        assert!(args.contains(&"KDE_SESSION_VERSION=".to_owned()));
-        assert!(!args.iter().any(|arg| arg.contains("PAM_KWALLET5_LOGIN")));
-        let kde6 = BTreeMap::from([("KDE_SESSION_VERSION".to_owned(), "6".to_owned())]);
-        let selected = activation_assignments(&kde6, &inherited);
-        assert!(selected.contains(&"KDE_SESSION_VERSION=6".to_owned()));
-    }
-
-    #[test]
-    fn scan_exits_reports_every_exited_child_before_blocking() {
-        let mixed = scan_exits(3, |index| {
-            Ok(if index == 1 { None } else { Some(index as i32) })
-        })
-        .unwrap();
-        assert_eq!(mixed, vec![(2, 2), (0, 0)]);
-        let both = scan_exits(2, |index| Ok(Some(index as i32))).unwrap();
-        assert_eq!(both, vec![(1, 1), (0, 0)]);
-        assert!(
-            scan_exits(2, |_| Ok::<Option<i32>, String>(None))
-                .unwrap()
-                .is_empty()
-        );
-        assert_eq!(
-            scan_exits(2, |_| Err::<Option<i32>, _>("poll".to_owned())),
-            Err("poll".to_owned())
-        );
-    }
-
-    #[test]
-    fn allocator_tuning_fills_only_unset_keys() {
-        let all = allocator_tuning_defaults(|_| false);
-        assert_eq!(
-            all,
-            vec![
-                ("MALLOC_ARENA_MAX", "2"),
-                ("MALLOC_TRIM_THRESHOLD_", "131072"),
-                ("MALLOC_MMAP_THRESHOLD_", "131072"),
-            ]
-        );
-        let user_arena = allocator_tuning_defaults(|key| key == "MALLOC_ARENA_MAX");
-        assert_eq!(user_arena.len(), 2);
-        assert!(user_arena.iter().all(|(key, _)| *key != "MALLOC_ARENA_MAX"));
-        assert!(allocator_tuning_defaults(|_| true).is_empty());
-    }
-
-    #[test]
-    fn supporting_wm_check_requires_matching_nonzero_self_reference() {
-        assert!(supporting_wm_check_is_valid(Some(42), Some(42)));
-        assert!(!supporting_wm_check_is_valid(None, Some(42)));
-        assert!(!supporting_wm_check_is_valid(Some(42), None));
-        assert!(!supporting_wm_check_is_valid(Some(42), Some(43)));
-        assert!(!supporting_wm_check_is_valid(Some(0), Some(0)));
-    }
 }
 
 /// Polls every child without early exit and returns exits in descending index order, so a
@@ -847,4 +689,163 @@ fn child_error(child: &Running, action: &str, error: std::io::Error) -> String {
         child.plan.role,
         child.plan.program.display()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ProcessPlan, Running, WAKEUP, activation_assignments, allocator_tuning_defaults,
+        clean_wm_exit, scan_exits, stop_all, supporting_wm_check_is_valid,
+    };
+    use flamewm_session_core::{ProcessSupervisorPolicy, SessionRole, SupervisorPolicy};
+    use std::collections::BTreeMap;
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Command, ExitStatus};
+
+    #[test]
+    fn successful_wm_exit_stops_session_without_restarting_it() {
+        assert!(clean_wm_exit(0, ExitStatus::from_raw(0)));
+        assert!(!clean_wm_exit(0, ExitStatus::from_raw(1 << 8)));
+        assert!(!clean_wm_exit(1, ExitStatus::from_raw(0)));
+    }
+
+    #[test]
+    fn logout_cleanup_reaps_only_managed_children_without_restart() {
+        let (reader, _writer) = UnixStream::pair().unwrap();
+        let _ = WAKEUP.set(reader);
+        let make_plan = |role| ProcessPlan {
+            role,
+            program: if role == SessionRole::WindowManager {
+                "/bin/true"
+            } else {
+                "/bin/sleep"
+            }
+            .into(),
+            arguments: if role == SessionRole::WindowManager {
+                Vec::new()
+            } else {
+                vec!["30".into()]
+            },
+            environment: BTreeMap::new(),
+            required: true,
+        };
+        let wm_plan = make_plan(SessionRole::WindowManager);
+        let mut wm_child = Command::new(&wm_plan.program).spawn().unwrap();
+        let wm_pid = wm_child.id();
+        let wm_status = wm_child.wait().unwrap();
+        assert!(clean_wm_exit(0, wm_status));
+        let wm = Running {
+            plan: wm_plan,
+            child: wm_child,
+            supervisor: ProcessSupervisorPolicy::new(SupervisorPolicy {
+                graceful_stop_ms: 5,
+                ..SupervisorPolicy::default()
+            }),
+        };
+        let desktop_plan = make_plan(SessionRole::Desktop);
+        let desktop_child = Command::new(&desktop_plan.program)
+            .args(&desktop_plan.arguments)
+            .spawn()
+            .unwrap();
+        let desktop_pid = desktop_child.id();
+        let desktop = Running {
+            plan: desktop_plan,
+            child: desktop_child,
+            supervisor: ProcessSupervisorPolicy::new(SupervisorPolicy {
+                graceful_stop_ms: 5,
+                ..SupervisorPolicy::default()
+            }),
+        };
+        let mut children = vec![wm, desktop];
+        let managed_pids = [wm_pid, desktop_pid];
+        let mut unrelated = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+
+        let cleanup = stop_all(&mut children);
+        let unrelated_status = unrelated.try_wait().unwrap();
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
+
+        assert!(cleanup.is_ok(), "managed child cleanup failed: {cleanup:?}");
+        assert!(children.is_empty(), "supervisor retained managed children");
+        assert!(
+            managed_pids
+                .iter()
+                .all(|pid| !std::path::Path::new(&format!("/proc/{pid}")).exists()),
+            "managed child remained alive"
+        );
+        assert!(
+            unrelated_status.is_none(),
+            "cleanup affected an unrelated process"
+        );
+    }
+
+    #[test]
+    fn activation_clears_stale_kde_backend_without_exporting_pam_credentials() {
+        let live = BTreeMap::from([
+            ("DISPLAY".to_owned(), ":0".to_owned()),
+            ("XDG_CURRENT_DESKTOP".to_owned(), "FlameWM".to_owned()),
+        ]);
+        let inherited = BTreeMap::from([
+            ("XDG_CURRENT_DESKTOP".to_owned(), "KDE".to_owned()),
+            ("KDE_SESSION_VERSION".to_owned(), "5".to_owned()),
+            (
+                "PAM_KWALLET5_LOGIN".to_owned(),
+                "/private/socket".to_owned(),
+            ),
+        ]);
+        let args = activation_assignments(&live, &inherited);
+        assert!(args.contains(&"XDG_CURRENT_DESKTOP=FlameWM".to_owned()));
+        assert!(args.contains(&"KDE_SESSION_VERSION=".to_owned()));
+        assert!(!args.iter().any(|arg| arg.contains("PAM_KWALLET5_LOGIN")));
+        let kde6 = BTreeMap::from([("KDE_SESSION_VERSION".to_owned(), "6".to_owned())]);
+        let selected = activation_assignments(&kde6, &inherited);
+        assert!(selected.contains(&"KDE_SESSION_VERSION=6".to_owned()));
+    }
+
+    #[test]
+    fn scan_exits_reports_every_exited_child_before_blocking() {
+        let mixed = scan_exits(3, |index| {
+            Ok(if index == 1 { None } else { Some(index as i32) })
+        })
+        .unwrap();
+        assert_eq!(mixed, vec![(2, 2), (0, 0)]);
+        let both = scan_exits(2, |index| Ok(Some(index as i32))).unwrap();
+        assert_eq!(both, vec![(1, 1), (0, 0)]);
+        assert!(
+            scan_exits(2, |_| Ok::<Option<i32>, String>(None))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            scan_exits(2, |_| Err::<Option<i32>, _>("poll".to_owned())),
+            Err("poll".to_owned())
+        );
+    }
+
+    #[test]
+    fn allocator_tuning_fills_only_unset_keys() {
+        let all = allocator_tuning_defaults(|_| false);
+        assert_eq!(
+            all,
+            vec![
+                ("MALLOC_ARENA_MAX", "2"),
+                ("MALLOC_TRIM_THRESHOLD_", "131072"),
+                ("MALLOC_MMAP_THRESHOLD_", "131072"),
+            ]
+        );
+        let user_arena = allocator_tuning_defaults(|key| key == "MALLOC_ARENA_MAX");
+        assert_eq!(user_arena.len(), 2);
+        assert!(user_arena.iter().all(|(key, _)| *key != "MALLOC_ARENA_MAX"));
+        assert!(allocator_tuning_defaults(|_| true).is_empty());
+    }
+
+    #[test]
+    fn supporting_wm_check_requires_matching_nonzero_self_reference() {
+        assert!(supporting_wm_check_is_valid(Some(42), Some(42)));
+        assert!(!supporting_wm_check_is_valid(None, Some(42)));
+        assert!(!supporting_wm_check_is_valid(Some(42), None));
+        assert!(!supporting_wm_check_is_valid(Some(42), Some(43)));
+        assert!(!supporting_wm_check_is_valid(Some(0), Some(0)));
+    }
 }

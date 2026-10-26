@@ -115,12 +115,16 @@ mod tests {
     /// Root is the only node whose layout viewport is forced to the surface
     /// size, so it is the overflow case the layout engine can express.
     fn wheel_fixture() -> RuntimeDocument {
-        let mut root = Style::default();
-        root.width = Length::Px(300.0);
-        root.overflow_y = Overflow::Auto;
-        let mut content = Style::default();
-        content.width = Length::Px(180.0);
-        content.height = Length::Px(500.0);
+        let root = Style {
+            width: Length::Px(300.0),
+            overflow_y: Overflow::Auto,
+            ..Style::default()
+        };
+        let content = Style {
+            width: Length::Px(180.0),
+            height: Length::Px(500.0),
+            ..Style::default()
+        };
         let node = |parent: Option<u32>, first_child: Option<u32>, style: Style| CompiledNode {
             kind: NodeKind::Element,
             parent,

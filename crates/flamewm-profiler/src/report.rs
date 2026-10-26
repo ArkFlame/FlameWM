@@ -66,7 +66,7 @@ pub fn report_window() -> String {
     if !crate::enabled() {
         return String::new();
     }
-    let top = crate::config().top.max(1).min(8);
+    let top = crate::config().top.clamp(1, 8);
     let interval = crate::config().interval_secs;
     let spans = crate::stats::span_aggs_reset();
     let counters = crate::stats::counter_aggs_reset();

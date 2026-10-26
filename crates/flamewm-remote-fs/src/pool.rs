@@ -1,4 +1,4 @@
-//! Connection pool. ssh's ControlMaster holds the real socket; the pool decides when a
+//! Connection pool. ssh's `ControlMaster` holds the real socket; the pool decides when a
 //! connection must be (re)established or re-verified, and evicts idle masters.
 
 use crate::Error;

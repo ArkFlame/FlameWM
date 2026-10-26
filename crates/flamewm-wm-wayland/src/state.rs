@@ -87,7 +87,7 @@ pub fn plan_frame(queued: bool, dirty: bool, has_callback: bool, paused: bool) -
     let wanted = dirty || has_callback;
     match (queued, wanted) {
         (true, true) => FrameDecision::Deferred,
-        (true, false) | (false, false) => FrameDecision::Idle,
+        (true | false, false) => FrameDecision::Idle,
         (false, true) => FrameDecision::Draw,
     }
 }
@@ -309,7 +309,7 @@ pub struct State {
     pub focused: Option<WindowId>,
     pub shortcuts: Shortcuts,
     pub pointer: Point<f64, Logical>,
-    /// What clients asked the pointer to show (`wl_pointer.set_cursor`, XWayland included).
+    /// What clients asked the pointer to show (`wl_pointer.set_cursor`, `XWayland` included).
     pub cursor_status: CursorImageStatus,
     /// Session xcursor theme and the cursors decoded from it.
     pub cursors: crate::cursor::Cursors,
@@ -337,16 +337,16 @@ pub struct State {
 
     pub loop_handle: LoopHandle<'static, State>,
     pub xwayland_shell: XWaylandShellState,
-    /// X11 window manager, present once XWayland reports ready.
+    /// X11 window manager, present once `XWayland` reports ready.
     pub xwm: Option<X11Wm>,
     /// Managed X11 windows, keyed by the model identifier.
     pub x11: Vec<(WindowId, X11Surface)>,
     /// Override-redirect windows, docks and the desktop; the last entry is the topmost.
     pub unmanaged: Vec<Unmanaged>,
-    /// DISPLAY number of the running XWayland server.
+    /// DISPLAY number of the running `XWayland` server.
     pub display_number: Option<u32>,
     pub props: Option<Props>,
-    /// Programs started once XWayland is ready (`FLAMEWM_WAYLAND_AUTOSTART`, colon separated).
+    /// Programs started once `XWayland` is ready (`FLAMEWM_WAYLAND_AUTOSTART`, colon separated).
     pub autostart: Vec<String>,
     /// Children started by the compositor; reaped by `reap_children` so they never linger as zombies.
     pub children: RefCell<Vec<Child>>,
@@ -607,7 +607,7 @@ impl State {
         if let Some(waker) = self.drm_waker.as_ref() {
             // The ping coalesces in the kernel and a closed source only reports an error, which is
             // nothing the compositor can act on.
-            let _ = waker.borrow_mut().ping();
+            let () = waker.borrow_mut().ping();
         }
     }
 
@@ -643,10 +643,10 @@ impl State {
         self.startup_failure.get()
     }
 
-    /// True while the session still owes a desktop: autostart clients are configured but XWayland
+    /// True while the session still owes a desktop: autostart clients are configured but `XWayland`
     /// never became ready, so nothing can ever map a window.
     ///
-    /// The first frame is presented before XWayland is even spawned, and it only ever contains the
+    /// The first frame is presented before `XWayland` is even spawned, and it only ever contains the
     /// clear colour plus the cursor, so a completed flip is no evidence that a desktop will appear.
     /// This is the condition the post-present content deadline watches.
     pub fn desktop_pending(&self) -> bool {
@@ -660,8 +660,8 @@ impl State {
         }
     }
 
-    /// Starts a program. Once XWayland runs, children get `DISPLAY` and no `WAYLAND_DISPLAY`,
-    /// so toolkits use X11 and reach the compositor through XWayland.
+    /// Starts a program. Once `XWayland` runs, children get `DISPLAY` and no `WAYLAND_DISPLAY`,
+    /// so toolkits use X11 and reach the compositor through `XWayland`.
     pub fn spawn(&self, program: &str, args: &[&str]) {
         let mut command = Command::new(program);
         command.args(args);
@@ -704,16 +704,15 @@ impl State {
             states
                 .data_map
                 .get::<LayerSurfaceData>()
-                .map(|data| {
+                .is_none_or(|data| {
                     data.lock()
                         .map(|d| d.initial_configure_sent)
                         .unwrap_or(true)
                 })
-                .unwrap_or(true)
         })
     }
 
-    /// Compositor state for a client: our own clients carry `ClientState`, XWayland carries its own.
+    /// Compositor state for a client: our own clients carry `ClientState`, `XWayland` carries its own.
     pub fn client_compositor_state(client: &Client) -> &CompositorClientState {
         if let Some(data) = client.get_data::<ClientState>() {
             return &data.compositor;
@@ -929,7 +928,7 @@ mod tests {
         assert_eq!(sync_wait_decision(true, SYNC_WAIT_LIMIT_MS), SyncWait::Fail);
         assert_eq!(sync_wait_decision(true, u128::MAX), SyncWait::Fail);
         // The thresholds are ordered, or the three outcomes would be unreachable in this order.
-        assert!(SYNC_WAIT_BUDGET_MS < SYNC_WAIT_LIMIT_MS);
+        const { assert!(SYNC_WAIT_BUDGET_MS < SYNC_WAIT_LIMIT_MS) };
     }
 
     /// A deferred fence keeps the output pending and asks for the bounded retry, and the waiting

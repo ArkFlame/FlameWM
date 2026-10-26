@@ -1,6 +1,6 @@
 use super::*;
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn set_wm_state(&self, client: Window, state: u32) -> Result<(), ReplyError> {
         self.conn.change_property32(
             PropMode::REPLACE,
@@ -364,10 +364,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             Some(window)
         } else if let Some(client) = self.frame_to_client.get(&window).copied() {
             Some(client)
-        } else if let Some(target) = self.registry.lookup_by_xid(window) {
-            Some(target.client)
         } else {
-            None
+            self.registry
+                .lookup_by_xid(window)
+                .map(|target| target.client)
         }
     }
 
@@ -391,7 +391,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             )
             .ok()
             .and_then(|cookie| cookie.reply().ok())
-            .and_then(|reply| reply.value32().map(|iter| iter.collect::<Vec<_>>()))
+            .and_then(|reply| reply.value32().map(std::iter::Iterator::collect::<Vec<_>>))
             .map_or_else(ClientSizeHints::default, |values| {
                 ClientSizeHints::parse(&values)
             })

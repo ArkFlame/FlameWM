@@ -1,9 +1,9 @@
 //! Transport over the system OpenSSH client.
 //!
-//! Every connection shares one ControlMaster socket per (user, host, port) via `ControlPath=<dir>/%C`.
+//! Every connection shares one `ControlMaster` socket per (user, host, port) via `ControlPath=<dir>/%C`.
 //! The first command opens the master; later commands multiplex over it, so each remote command
 //! costs one round trip. `ServerAliveInterval` detects dead links; `ControlPersist` keeps the master.
-//! Host keys are verified by ssh itself against ~/.ssh/known_hosts (`StrictHostKeyChecking=yes`).
+//! Host keys are verified by ssh itself against ~/.`ssh/known_hosts` (`StrictHostKeyChecking=yes`).
 //! `BatchMode=yes` forbids interactive prompts: auth is key or agent only.
 
 use crate::Error;
@@ -100,6 +100,7 @@ impl Proc {
         })
     }
 
+    #[must_use]
     pub fn read(&self, timeout: Duration) -> ReadEvent {
         match self.stdout.recv_timeout(timeout) {
             Ok(v) => ReadEvent::Data(v),
@@ -124,6 +125,7 @@ impl Proc {
     }
 
     /// Wait for exit and collect stderr. Call after stdout reached EOF or after `kill`.
+    #[must_use]
     pub fn finish(mut self) -> (i32, String) {
         self.close_stdin();
         let status = self.child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
@@ -211,7 +213,7 @@ impl Transport {
                 ReadEvent::Idle => {
                     if last.elapsed() > idle {
                         p.kill();
-                        return Err(Error::Timeout(format!("{}", key.host)));
+                        return Err(Error::Timeout(key.host.to_string()));
                     }
                 }
                 ReadEvent::Eof => break,

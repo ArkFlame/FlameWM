@@ -37,9 +37,9 @@ pub enum JobState { Queued, Counting, Running, Cancelling, Completed, PartiallyF
 #[derive(Clone, Debug, Default)]
 pub struct CancellationToken(Arc<AtomicBool>);
 impl CancellationToken {
-    pub fn new() -> Self { Self::default() }
+    #[must_use] pub fn new() -> Self { Self::default() }
     pub fn cancel(&self) { self.0.store(true, Ordering::SeqCst); }
-    pub fn is_cancelled(&self) -> bool { self.0.load(Ordering::SeqCst) }
+    #[must_use] pub fn is_cancelled(&self) -> bool { self.0.load(Ordering::SeqCst) }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -101,12 +101,12 @@ impl Journal {
         self.redo.drain(..excess);
     }
     pub fn take_redo(&mut self) -> Option<Undo> { self.redo.pop() }
-    pub fn len(&self) -> usize { self.entries.len() }
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+    #[must_use] pub fn len(&self) -> usize { self.entries.len() }
+    #[must_use] pub fn is_empty(&self) -> bool { self.entries.is_empty() }
 }
 
 /// Short noun phrase for status text, for example "move of report.pdf".
-pub fn describe(entry: &Undo) -> String {
+#[must_use] pub fn describe(entry: &Undo) -> String {
     let name = |path: &Path| path.file_name().unwrap_or_default().to_string_lossy().into_owned();
     match entry {
         Undo::Moved { to, .. } => format!("move of {}", name(to)),
@@ -165,7 +165,7 @@ fn rename_into(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
 
 fn staging_path(to: &Path) -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "item".into());
+    let name = to.file_name().map_or_else(|| "item".into(), |n| n.to_string_lossy().into_owned());
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     to.with_file_name(format!(".flamewm-part-{}-{stamp}-{seq}-{name}", std::process::id()))
@@ -275,10 +275,7 @@ pub fn count_tree(path: &Path, cancel: &CancellationToken) -> io::Result<Totals>
 }
 
 fn count_into(path: &Path, depth: usize, cancel: &CancellationToken, totals: &mut Totals) -> io::Result<()> {
-    let meta = match fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(_) => { totals.errors += 1; return Ok(()); }
-    };
+    let Ok(meta) = fs::symlink_metadata(path) else { totals.errors += 1; return Ok(()); };
     count_meta(path, &meta, depth, cancel, totals)
 }
 
@@ -309,7 +306,7 @@ fn count_meta(path: &Path, meta: &fs::Metadata, depth: usize, cancel: &Cancellat
 }
 
 /// Total of several top-level sources; a failed source counts as one error.
-pub fn count_sources(sources: &[PathBuf], cancel: &CancellationToken) -> Totals {
+#[must_use] pub fn count_sources(sources: &[PathBuf], cancel: &CancellationToken) -> Totals {
     let mut sum = Totals::default();
     for source in sources {
         match count_tree(source, cancel) {

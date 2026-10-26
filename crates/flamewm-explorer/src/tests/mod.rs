@@ -255,7 +255,7 @@
         let source=base.join("source");
         fs::create_dir_all(source.join("child")).unwrap();
         fs::write(source.join("item"), b"original").unwrap();
-        symlink(&source.join("child"),base.join("alias")).unwrap();
+        symlink(source.join("child"),base.join("alias")).unwrap();
         let outcome=transfer_batch(&[source.clone()],&base.join("alias"),true,&mut |_| {});
         assert_eq!((outcome.completed,outcome.failed),(0,1));
         assert!(source.join("item").exists());

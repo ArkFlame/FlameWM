@@ -102,9 +102,11 @@ fn geometry_document() -> RuntimeDocument {
     };
     frame.overflow_x = Overflow::Hidden;
     frame.overflow_y = Overflow::Hidden;
-    let mut scroller = Style::default();
-    scroller.overflow_x = Overflow::Hidden;
-    scroller.overflow_y = Overflow::Auto;
+    let scroller = Style {
+        overflow_x: Overflow::Hidden,
+        overflow_y: Overflow::Auto,
+        ..Style::default()
+    };
     let nodes = vec![
         geometry_node(
             NodeKind::Element,

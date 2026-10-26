@@ -30,6 +30,7 @@ pub struct Cell {
 }
 
 impl Cell {
+    #[must_use]
     pub const fn blank(bg: Color) -> Self {
         Self {
             ch: ' ',

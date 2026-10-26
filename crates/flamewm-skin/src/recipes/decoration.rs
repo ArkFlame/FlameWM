@@ -36,7 +36,7 @@ pub struct ButtonTokens {
 }
 
 /// Settings default for `surfaceColor` (shared Surfaces RGB).
-pub const DEFAULT_SURFACE_RGB: Rgb = Rgb(0x191b1d);
+pub const DEFAULT_SURFACE_RGB: Rgb = Rgb(0x0019_1b1d);
 /// Settings default for `surfaceOpacity` 50% as an 8-bit alpha (`50 * 255 / 100`).
 pub const DEFAULT_SURFACE_ALPHA: u8 = 127;
 /// Settings default for `surfaceBlurPercent`.

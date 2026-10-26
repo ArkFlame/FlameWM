@@ -44,7 +44,7 @@ impl SettingsService {
     }
 
     /// Apply one complete settings transaction with native shortcut state and persistence behaving
-    /// as one transaction. Native grabs are rolled back if persistence fails; no SettingsChanged
+    /// as one transaction. Native grabs are rolled back if persistence fails; no `SettingsChanged`
     /// state is published until both native state and durable state succeed.
     pub fn apply<P: ShortcutPort>(
         &mut self,

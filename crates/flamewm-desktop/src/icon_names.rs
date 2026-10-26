@@ -1,7 +1,7 @@
 use flamewm_desktop_core::model::DesktopItemKind;
 use flamewm_integrations_linux::icons::IconLookupPurpose;
 
-/// Which icon lookup purpose a candidate name uses. Explicit DesktopLauncher
+/// Which icon lookup purpose a candidate name uses. Explicit `DesktopLauncher`
 /// Icon= values are application icons; per-kind defaults are semantic.
 #[must_use]
 pub fn icon_purpose(kind: DesktopItemKind, has_override: bool) -> IconLookupPurpose {
@@ -18,8 +18,7 @@ pub fn launcher_icon_name(kind: DesktopItemKind, icon_override: Option<&str>) ->
     icon_override
         .map(str::trim)
         .filter(|icon| !icon.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| icon_name(kind).to_owned())
+        .map_or_else(|| icon_name(kind).to_owned(), str::to_owned)
 }
 
 /// Freedesktop MIME-like icon names for desktop files. The theme resolver owns

@@ -123,6 +123,7 @@ const BUILTIN: &[(&str, &str)] = &[
 ];
 
 /// Parses a `#rrggbb` or `rrggbb` string.
+#[must_use]
 pub fn parse_hex(value: &str) -> Option<u32> {
     let digits = value.trim().strip_prefix('#').unwrap_or(value.trim());
     (digits.len() == 6 && digits.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -130,12 +131,14 @@ pub fn parse_hex(value: &str) -> Option<u32> {
         .flatten()
 }
 
+#[must_use]
 pub fn format_hex(value: u32) -> String {
     format!("#{:06x}", value & 0xff_ffff)
 }
 
 impl Palette {
     /// Colour slots in display order: background, foreground, cursor, selection, then the 16 ANSI names.
+    #[must_use]
     pub fn slots(&self) -> Vec<(&'static str, u32)> {
         let mut slots = vec![
             ("background", self.background),
@@ -182,6 +185,7 @@ impl Palette {
 }
 
 /// The built-in themes, in picker order.
+#[must_use]
 pub fn builtin_themes() -> Vec<Theme> {
     BUILTIN
         .iter()
@@ -231,19 +235,19 @@ mod tests {
 
     #[test]
     fn hex_parsing_accepts_hash_and_rejects_garbage() {
-        assert_eq!(parse_hex("#1E1E1E"), Some(0x1e1e1e));
-        assert_eq!(parse_hex("ff00aa"), Some(0xff00aa));
+        assert_eq!(parse_hex("#1E1E1E"), Some(0x001e_1e1e));
+        assert_eq!(parse_hex("ff00aa"), Some(0x00ff_00aa));
         assert_eq!(parse_hex("#12345"), None);
         assert_eq!(parse_hex("#zzzzzz"), None);
-        assert_eq!(format_hex(0x0a0b0c), "#0a0b0c");
+        assert_eq!(format_hex(0x000a_0b0c), "#0a0b0c");
     }
 
     #[test]
     fn slots_round_trip_through_set_slot() {
         let mut palette = builtin_themes()[0].palette.clone();
         assert_eq!(palette.slots().len(), 20);
-        assert!(palette.set_slot("bright_red", 0x123456));
-        assert_eq!(palette.ansi[9], 0x123456);
+        assert!(palette.set_slot("bright_red", 0x0012_3456));
+        assert_eq!(palette.ansi[9], 0x0012_3456);
         assert!(!palette.set_slot("nope", 1));
     }
 }

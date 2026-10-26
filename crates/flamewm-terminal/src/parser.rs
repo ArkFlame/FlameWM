@@ -48,6 +48,7 @@ impl Default for Parser {
 }
 
 impl Parser {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: State::Ground,
@@ -206,7 +207,7 @@ impl Parser {
                     }
                 }
             }
-            0xc0..=0xdf | 0xe0..=0xef | 0xf0..=0xf7 => {
+            0xc0..=0xf7 => {
                 self.utf8.clear();
                 self.utf8.push(byte);
                 self.utf8_need = match byte {
@@ -338,11 +339,13 @@ impl Parser {
 pub(crate) mod recording {
     use super::Perform;
 
+    pub type CsiRecord = (Option<u8>, Vec<Vec<u16>>, Vec<u8>, u8);
+
     #[derive(Debug, Default, PartialEq)]
     pub struct Recorder {
         pub printed: String,
         pub executed: Vec<u8>,
-        pub csi: Vec<(Option<u8>, Vec<Vec<u16>>, Vec<u8>, u8)>,
+        pub csi: Vec<CsiRecord>,
         pub esc: Vec<(Vec<u8>, u8)>,
         pub osc: Vec<Vec<Vec<u8>>>,
     }

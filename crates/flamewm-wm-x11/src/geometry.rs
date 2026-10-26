@@ -6,20 +6,6 @@ pub struct Rect {
     pub height: u32,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn clamp_handles_negative_monitor_origin() {
-        let bounds = Rect::new(-1920, 0, 1920, 1080);
-        assert_eq!(
-            Rect::new(-2500, -100, 800, 600).clamp_inside(bounds),
-            Rect::new(-1920, 0, 800, 600)
-        );
-    }
-}
-
 impl Rect {
     pub const fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
         Self {
@@ -55,5 +41,19 @@ impl Rect {
             width,
             height,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_handles_negative_monitor_origin() {
+        let bounds = Rect::new(-1920, 0, 1920, 1080);
+        assert_eq!(
+            Rect::new(-2500, -100, 800, 600).clamp_inside(bounds),
+            Rect::new(-1920, 0, 800, 600)
+        );
     }
 }

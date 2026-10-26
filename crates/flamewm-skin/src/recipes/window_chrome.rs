@@ -107,8 +107,8 @@ pub const WINDOW_CHROME: WindowChromeRecipe = WindowChromeRecipe {
         WindowControlRole::Close,
     ],
     titlebar_background: PANEL,
-    border: Rgb(0x46484b),
-    close_hover: Rgb(0xe81123),
+    border: Rgb(0x0046_484b),
+    close_hover: Rgb(0x00e8_1123),
 };
 
 /// Vertical padding inside the titlebar reserved above/below the icon slot.
@@ -153,8 +153,8 @@ pub const fn icon_slot_edge() -> u16 {
 /// X offsets of the control buttons from the right frame edge (index 0 = leftmost).
 #[must_use]
 pub fn control_button_geometries(titlebar: SceneRect) -> [ControlGeometry; 3] {
-    let width = WINDOW_CHROME.metrics.button_width as i32;
-    let height = WINDOW_CHROME.metrics.titlebar as i32;
+    let width = i32::from(WINDOW_CHROME.metrics.button_width);
+    let height = i32::from(WINDOW_CHROME.metrics.titlebar);
     let roles = WINDOW_CHROME.controls;
     [0, 1, 2].map(|index: usize| {
         let from_right = 2 - index as i32;

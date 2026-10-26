@@ -1,10 +1,10 @@
 use super::raw_keys::is_escape_chord;
 use super::*;
 
-impl<'a, C: Connection> Wm<'a, C> {
-    /// Dispatches one event. A request that raced a client's destruction (BadWindow and friends)
+impl<C: Connection> Wm<'_, C> {
+    /// Dispatches one event. A request that raced a client's destruction (`BadWindow` and friends)
     /// is expected on a window manager and must never end the session: the window is gone, and its
-    /// DestroyNotify performs the cleanup.
+    /// `DestroyNotify` performs the cleanup.
     pub(super) fn handle_event(&mut self, event: Event) -> Result<(), ReplyOrIdError> {
         match self.handle_event_inner(event) {
             Err(error) if is_destroyed_window_race(&error) => {
@@ -57,11 +57,11 @@ impl<'a, C: Connection> Wm<'a, C> {
             Event::PropertyNotify(event)
                 if event.atom == self.atoms.root_rubber && event.window == self.screen().root =>
             {
-                self.on_root_rubber_changed()?
+                self.on_root_rubber_changed()?;
             }
             Event::PropertyNotify(event) => self.handle_property(event.window, event.atom)?,
             Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => {
-                self.display_topology_dirty.mark()
+                self.display_topology_dirty.mark();
             }
             Event::ClientMessage(event) => self.handle_client_message(event)?,
             // XInput2 raw key records arrive as unknown generic events; see `raw_keys`.
@@ -72,14 +72,14 @@ impl<'a, C: Connection> Wm<'a, C> {
                         &bytes[..bytes.len().min(12)]
                     );
                 }
-                self.handle_raw_event(&bytes)?
+                self.handle_raw_event(&bytes)?;
             }
             _ => {}
         }
         Ok(())
     }
 
-    /// Dispatches a passive-grab KeyPress to the bound action. Only actions
+    /// Dispatches a passive-grab `KeyPress` to the bound action. Only actions
     /// with an existing WM path are executed; the rest are logged once.
     pub(super) fn handle_key_press(&mut self, event: KeyPressEvent) -> Result<(), ReplyError> {
         // The raw feed may already have dispatched this key while a client held the keyboard.
@@ -142,8 +142,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             // Same spawn and supervision path as the Lock session action.
             ACTION_OPEN_FILES_SUPER | ACTION_OPEN_FILES_CTRL_ALT => {
                 let home = std::env::var_os("HOME")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| std::path::PathBuf::from("/"));
+                    .map_or_else(|| std::path::PathBuf::from("/"), std::path::PathBuf::from);
                 if let Err(error) = std::process::Command::new("xdg-open").arg(home).spawn() {
                     eprintln!("flamewm: file explorer shortcut failed: {error}");
                 }
@@ -359,12 +358,12 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.manage(event.window, &geometry, false, kind)
     }
 
-    /// MapNotify without a preceding MapRequest arrives for windows the WM
+    /// `MapNotify` without a preceding `MapRequest` arrives for windows the WM
     /// itself mapped (frame, client, children: `map_window` generates no
-    /// MapRequest). A client MapNotify means the client is visible now; if it
-    /// is still unframed (e.g. WM missed the MapRequest because it was not
-    /// yet selecting SubstructureRedirect), manage it now. Frame/child
-    /// MapNotify events are ignored.
+    /// `MapRequest`). A client `MapNotify` means the client is visible now; if it
+    /// is still unframed (e.g. WM missed the `MapRequest` because it was not
+    /// yet selecting `SubstructureRedirect`), manage it now. Frame/child
+    /// `MapNotify` events are ignored.
     pub(super) fn handle_map_notify(&mut self, window: Window) -> Result<(), ReplyOrIdError> {
         if self.registry.capture() == Some(window) {
             return Ok(());
@@ -699,14 +698,14 @@ impl<'a, C: Connection> Wm<'a, C> {
             let currently = self
                 .clients
                 .get(&client)
-                .is_some_and(|state| state.is_fullscreen());
+                .is_some_and(super::super::client::ManagedClient::is_fullscreen);
             return self.set_fullscreen(client, net_wm_state_enable(action, currently));
         }
         if wants_maximize {
             let currently = self
                 .clients
                 .get(&client)
-                .is_some_and(|state| state.is_maximized());
+                .is_some_and(super::super::client::ManagedClient::is_maximized);
             if net_wm_state_enable(action, currently) != currently {
                 self.toggle_maximize(client)?;
             }

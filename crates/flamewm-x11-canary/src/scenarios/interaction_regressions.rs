@@ -74,7 +74,7 @@ fn source_at(canary: &crate::Canary, x: i16, y: i16) -> Option<crate::WinInfo> {
                 && x < w.x.saturating_add(w.width as i16)
                 && y < w.y.saturating_add(w.height as i16)
         })
-        .max_by_key(|w| w.width as u32 * u32::from(w.height))
+        .max_by_key(|w| u32::from(w.width) * u32::from(w.height))
 }
 
 fn select_structure_notify(canary: &crate::Canary, target: &crate::WinInfo) -> bool {
@@ -286,7 +286,7 @@ fn x03_observe(
     if !event.starts_with("before-") {
         // The WM tears down its capture overlay asynchronously after a release; let it settle.
         wait_until(500, || {
-            x03_native_route(canary).map_or(true, |window| {
+            x03_native_route(canary).is_none_or(|window| {
                 window == pinned.client
                     || window == pinned.frame
                     || x03_interaction_capture_route(canary, window, (root_width, root_height))
@@ -306,12 +306,9 @@ fn x03_observe(
         (root_width, root_height),
         capture_route,
     );
-    let native_route_ok = native_route.map_or(true, |window| {
-        window == pinned.client || window == pinned.frame || capture_route
-    });
-    let active_ok = active.map_or(true, |window| {
-        window == pinned.client || window == pinned.frame
-    });
+    let native_route_ok = native_route
+        .is_none_or(|window| window == pinned.client || window == pinned.frame || capture_route);
+    let active_ok = active.is_none_or(|window| window == pinned.client || window == pinned.frame);
     let pre_event = event.starts_with("before-");
     logs.push(format!(
         "phase=X03 event={} root=({}, {}) root_geometry={}x{} client={} frame={} rect=client:{} frame:{} active={} native_route={} capture_route={} root_ready={} active_ok={} native_route_ok={} route_validation={}",
@@ -364,14 +361,14 @@ fn x03_event<F>(
 where
     F: FnOnce(&crate::Canary) -> bool,
 {
-    x03_observe(canary, pinned, &format!("before-{}", event), root, logs)?;
+    x03_observe(canary, pinned, &format!("before-{event}"), root, logs)?;
     if !send(canary) {
         return Err(X03ProbeError::XtestFailed(format!(
             "event={} root=({}, {})",
             event, root.0, root.1
         )));
     }
-    x03_observe(canary, pinned, &format!("after-{}", event), root, logs)
+    x03_observe(canary, pinned, &format!("after-{event}"), root, logs)
 }
 
 fn interpolate(from: (i16, i16), to: (i16, i16), step: u32, steps: u32) -> (i16, i16) {
@@ -557,7 +554,7 @@ fn process_health_detail(health: Option<bool>) -> &'static str {
 
 /// X01-X03 are deliberately independent real-XTEST phases.  Each phase
 /// resolves a ready client/frame pair, establishes its starting state, selects
-/// StructureNotify, and reports only observations available to this canary.
+/// `StructureNotify`, and reports only observations available to this canary.
 fn run_drag_max_probe(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let phases = [run_x01, run_x02, run_x03]
         .into_iter()
@@ -734,13 +731,13 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         return x03_gone(pinned, "frame_gone_after_establish", &logs);
     }
     let selected_before = prepare_native_measurement(canary, &floating);
-    let maximized_once = if !reset {
-        false
-    } else {
+    let maximized_once = if reset {
         match x03_maximize(canary, pinned, &mut logs) {
             Ok(()) => wait_until(500, || maximized(canary, pinned.client)),
             Err(error) => return x03_failure(pinned, error, &logs),
         }
+    } else {
+        false
     };
     settle_frame(canary, pinned.frame);
     let Some(max_surface) = child_of(canary, pinned.frame, canary.root) else {
@@ -1054,11 +1051,11 @@ fn run_x04(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             x03_rect(&setup.client),
             hold.final_client
                 .as_ref()
-                .map_or_else(|| "gone".to_owned(), |client| x03_rect(client)),
+                .map_or_else(|| "gone".to_owned(), x03_rect),
             x03_rect(&setup.frame),
             hold.final_frame
                 .as_ref()
-                .map_or_else(|| "gone".to_owned(), |frame| x03_rect(frame)),
+                .map_or_else(|| "gone".to_owned(), x03_rect),
             hold.dimensions_stable,
             hold.native_configures,
             setup.initial_preview,
@@ -1147,7 +1144,7 @@ fn run_x05(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             work_area_detail(setup.work_area),
             after_frame
                 .as_ref()
-                .map_or_else(|| "gone".to_owned(), |frame| x03_rect(frame)),
+                .map_or_else(|| "gone".to_owned(), x03_rect),
             work_area_geometry,
             left_snap,
             hold.preview_visible,
@@ -1383,19 +1380,19 @@ fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             continue;
         };
         let selected = prepare_native_measurement(canary, &before);
-        let restore_geometry = match floating_baseline {
-            Some((client_width, client_height, frame_width, frame_height)) => {
+        let restore_geometry =
+            if let Some((client_width, client_height, frame_width, frame_height)) =
+                floating_baseline
+            {
                 before.width == client_width
                     && before.height == client_height
                     && surface.width == frame_width
                     && surface.height == frame_height
-            }
-            None => {
+            } else {
                 floating_baseline =
                     Some((before.width, before.height, surface.width, surface.height));
                 true
-            }
-        };
+            };
         let initial_state = wm_state(canary, client_id);
         let start = title(&surface);
         let destination = probe_snap_point(target_kind, work_area);
@@ -1495,7 +1492,7 @@ fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
                 ProbeSnapTarget::BottomHalf => "None",
                 _ => "Snap",
             },
-            format!(
+            format_args!(
                 "{}x{}+{}+{}",
                 expected_geometry.2,
                 expected_geometry.3,
@@ -1544,14 +1541,12 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let reset_floating = establish_known_floating(canary, &target, work_area);
     let Some(initial_client) = child_of(canary, client_id, frame_id) else {
         return fail(format!(
-            "scenario=X07 client={} frame={} target_gone_after_reset",
-            client_id, frame_id
+            "scenario=X07 client={client_id} frame={frame_id} target_gone_after_reset"
         ));
     };
     let Some(initial_frame) = input_surface(canary, &initial_client) else {
         return fail(format!(
-            "scenario=X07 client={} frame={} frame_not_ready",
-            client_id, frame_id
+            "scenario=X07 client={client_id} frame={frame_id} frame_not_ready"
         ));
     };
     let selected = prepare_native_measurement(canary, &initial_client);
@@ -1567,14 +1562,12 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     });
     let Some(snapped_client) = child_of(canary, client_id, frame_id) else {
         return fail(format!(
-            "scenario=X07 client={} frame={} snap_dragged={} snap_committed={} snapped_client_missing",
-            client_id, frame_id, snap_dragged, snap_committed
+            "scenario=X07 client={client_id} frame={frame_id} snap_dragged={snap_dragged} snap_committed={snap_committed} snapped_client_missing"
         ));
     };
     let Some(snapped_frame) = input_surface(canary, &snapped_client) else {
         return fail(format!(
-            "scenario=X07 client={} frame={} snap_dragged={} snap_committed={} snapped_frame_missing",
-            client_id, frame_id, snap_dragged, snap_committed
+            "scenario=X07 client={client_id} frame={frame_id} snap_dragged={snap_dragged} snap_committed={snap_committed} snapped_frame_missing"
         ));
     };
     let snap_mode =
@@ -1587,8 +1580,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         && xtest_button_press(canary, press_point.0, press_point.1, 1);
     if !pressed {
         return fail(format!(
-            "scenario=X07 client={} frame={} snap_mode={} snap_dragged={} snap_committed={} pressed=false",
-            client_id, frame_id, snap_mode, snap_dragged, snap_committed
+            "scenario=X07 client={client_id} frame={frame_id} snap_mode={snap_mode} snap_dragged={snap_dragged} snap_committed={snap_committed} pressed=false"
         ));
     }
     let jitter_points = [
@@ -1619,8 +1611,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     if !jittered {
         let _ = xtest_button_release(canary, press_point.0, press_point.1, 1);
         return fail(format!(
-            "scenario=X07 client={} frame={} snap_mode={} snap_dragged={} snap_committed={} pressed=true jittered=false release_cleanup=true",
-            client_id, frame_id, snap_mode, snap_dragged, snap_committed
+            "scenario=X07 client={client_id} frame={frame_id} snap_mode={snap_mode} snap_dragged={snap_dragged} snap_committed={snap_committed} pressed=true jittered=false release_cleanup=true"
         ));
     }
     let away = root_point(i32::from(press_point.0) + 96, i32::from(press_point.1) + 64);
@@ -1647,8 +1638,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     else {
         let _ = xtest_button_release(canary, away.0, away.1, 1);
         return fail(format!(
-            "scenario=X07 client={} frame={} snap_mode={} jittered=true jitter_stable={} activated=false release_cleanup=true",
-            client_id, frame_id, snap_mode, jitter_stable
+            "scenario=X07 client={client_id} frame={frame_id} snap_mode={snap_mode} jittered=true jitter_stable={jitter_stable} activated=false release_cleanup=true"
         ));
     };
     let later = root_point(i32::from(away.0) + 20, i32::from(away.1) + 12);

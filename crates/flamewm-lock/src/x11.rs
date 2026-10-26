@@ -183,6 +183,7 @@ pub struct PointerState {
 
 impl PointerState {
     /// Button or pointer activity relative to `previous`: a move or a button change.
+    #[must_use]
     pub fn moved_or_buttons_changed(&self, previous: &Self) -> bool {
         self.x != previous.x
             || self.y != previous.y
@@ -190,6 +191,7 @@ impl PointerState {
     }
 
     /// Caps Lock is on when the server reports the Lock modifier.
+    #[must_use]
     pub fn caps_lock(&self) -> bool {
         self.mask & LOCK_MASK != 0
     }
@@ -230,6 +232,7 @@ impl Session {
     }
 
     /// Descriptor readable when key events are pending.
+    #[must_use]
     pub fn fd(&self) -> RawFd {
         // SAFETY: `display` is live for the lifetime of `self`.
         unsafe { XConnectionNumber(self.display) }
@@ -262,7 +265,7 @@ impl Session {
         unsafe {
             while XPending(self.display) > 0 {
                 let mut event = XEventBuffer([0; 24]);
-                XNextEvent(self.display, &mut event);
+                XNextEvent(self.display, &raw mut event);
                 if event.0[0] as c_int == KEY_PRESS {
                     batch.presses += 1;
                     let key = &*(event.0.as_ptr().cast::<XKeyEvent>());
@@ -275,6 +278,7 @@ impl Session {
 
     /// Current pointer position and modifier/button mask. Works without a pointer
     /// event mask, so it sees motion and buttons while the grab reports no events.
+    #[must_use]
     pub fn pointer(&self) -> Option<PointerState> {
         let (mut root_return, mut child_return) = (0, 0);
         let (mut root_x, mut root_y, mut win_x, mut win_y) = (0, 0, 0, 0);
@@ -284,13 +288,13 @@ impl Session {
             XQueryPointer(
                 self.display,
                 self.root,
-                &mut root_return,
-                &mut child_return,
-                &mut root_x,
-                &mut root_y,
-                &mut win_x,
-                &mut win_y,
-                &mut mask,
+                &raw mut root_return,
+                &raw mut child_return,
+                &raw mut root_x,
+                &raw mut root_y,
+                &raw mut win_x,
+                &raw mut win_y,
+                &raw mut mask,
             )
         };
         (same_screen != 0).then_some(PointerState {
@@ -301,6 +305,7 @@ impl Session {
     }
 
     /// Bitmap of the keys held down, one bit per keycode, read without any grab.
+    #[must_use]
     pub fn keymap(&self) -> [u8; 32] {
         let mut keys = [0 as c_char; 32];
         // SAFETY: display is live; XQueryKeymap writes exactly 32 bytes into the buffer.

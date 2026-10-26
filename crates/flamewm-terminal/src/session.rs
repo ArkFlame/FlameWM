@@ -77,6 +77,7 @@ impl Session {
     }
 
     /// Working directory of the child, read from `/proc`; used to start new tabs in the same place.
+    #[must_use]
     pub fn working_directory(&self) -> Option<std::path::PathBuf> {
         std::fs::read_link(format!("/proc/{}/cwd", self.pty.id())).ok()
     }
@@ -157,7 +158,7 @@ fn read_loop(
                     return;
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             // EIO is how Linux ends a PTY once the child's session is gone; any other error also ends the tab.
             Err(_) => return,
         }
@@ -190,17 +191,12 @@ mod tests {
         let started = Instant::now();
         let _session = Session::start(1, &launch, size, 0, events_tx, writer).expect("start flood");
         let (mut bytes, mut chunks) = (0_usize, 0_usize);
-        loop {
-            match events_rx
-                .recv_timeout(Duration::from_secs(30))
-                .expect("event before timeout")
-            {
-                SessionEvent::Output { bytes: chunk, .. } => {
-                    bytes += chunk.len();
-                    chunks += 1;
-                }
-                SessionEvent::Exited { .. } => break,
-            }
+        while let SessionEvent::Output { bytes: chunk, .. } = events_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("event before timeout")
+        {
+            bytes += chunk.len();
+            chunks += 1;
         }
         let elapsed = started.elapsed();
         // Every wake is one byte on the socket. Exited's own wake may still be in flight, which only lowers the count.

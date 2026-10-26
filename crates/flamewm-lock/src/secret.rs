@@ -21,19 +21,23 @@ impl PasswordBuffer {
         wipe(&mut self.text);
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.text.chars().count()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
 
     /// One mask dot per entered character; the secret itself is never rendered.
+    #[must_use]
     pub fn masked(&self) -> String {
         "\u{2022}".repeat(self.len())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.text
     }

@@ -1,6 +1,6 @@
 use flamewm_ribbons::{Config, Quality, Rasterizer, Rect, Ribbons};
 
-/// Same config and canvas as the lock screensaver test (`flamewm-lock` ribbons::tests): 320x180,
+/// Same config and canvas as the lock screensaver test (`flamewm-lock` `ribbons::tests)`: 320x180,
 /// 6 ribbons, 11 px width, Half quality.
 /// Mirrors `RibbonFrames::frame`: one `step_to` call straight to `t`, not frame-by-frame.
 fn lock_frame(state: &mut Ribbons, t: f64) -> Vec<u8> {
@@ -8,7 +8,7 @@ fn lock_frame(state: &mut Ribbons, t: f64) -> Vec<u8> {
     let r = state;
     r.step_to(t);
     let mut out = vec![0u8; (w * h * 4) as usize];
-    Rasterizer::new(Quality::Half).render(&r, &mut out);
+    Rasterizer::new(Quality::Half).render(r, &mut out);
     out
 }
 

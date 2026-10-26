@@ -165,13 +165,12 @@ impl SwitcherController {
         settings: Option<&SettingsSnapshot>,
     ) -> Result<(), UiBackendError> {
         let (output, scale) = target();
-        let surface = match self.surface {
-            Some(surface) => surface,
-            None => {
-                let surface = create(runtime)?;
-                self.surface = Some(surface);
-                surface
-            }
+        let surface = if let Some(surface) = self.surface {
+            surface
+        } else {
+            let surface = create(runtime)?;
+            self.surface = Some(surface);
+            surface
         };
         let scale = runtime.apply_output_scale(surface, scale)?;
         let (width, height) = card_size(frame.entries.len());

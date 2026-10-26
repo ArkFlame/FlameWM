@@ -1,7 +1,7 @@
 //! Taskbar weather data layer (A09 part 1). View-independent: no UI here.
 //!
 //! Providers implement [`WeatherProvider`]. The Open-Meteo provider lives in
-//! flamewm-shell (weather_provider.rs). LICENSING: Open-Meteo's free API is for noncommercial use
+//! flamewm-shell (`weather_provider.rs`). LICENSING: Open-Meteo's free API is for noncommercial use
 //! only and its data requires attribution ([`OPEN_METEO_ATTRIBUTION`]). Check
 //! the current terms before shipping commercially, and show the attribution
 //! wherever forecast data is displayed.

@@ -62,7 +62,7 @@ impl TaskEntry {
 
 /// V8 task-strip authority.
 ///
-/// The strip owns only FlameWM presentation ordering/pin identity. The engine remains authoritative
+/// The strip owns only `FlameWM` presentation ordering/pin identity. The engine remains authoritative
 /// for the existence, focus, state and lifetime generation of windows.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskStrip {

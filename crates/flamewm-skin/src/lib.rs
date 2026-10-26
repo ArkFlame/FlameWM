@@ -1,4 +1,4 @@
-//! Renderer-neutral FlameWM skin tokens promoted from the RWR 0.0.9 prototype.
+//! Renderer-neutral `FlameWM` skin tokens promoted from the RWR 0.0.9 prototype.
 
 pub mod icons;
 pub mod metrics;

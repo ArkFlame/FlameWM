@@ -46,6 +46,7 @@ pub enum ThumbFormat {
 
 impl ThumbFormat {
     /// Formats whose bytes are an image the pipeline can decode directly.
+    #[must_use]
     pub fn is_image(self) -> bool {
         !matches!(self, Self::Desktop)
     }
@@ -60,6 +61,7 @@ pub struct ThumbKey {
 
 impl ThumbKey {
     /// Key for a row entry, or `None` when the entry is not a thumbnailable file.
+    #[must_use]
     pub fn of(entry: &Entry) -> Option<Self> {
         (!entry.directory && thumb_format(&entry.path).is_some()).then(|| Self {
             path: entry.path.clone(),
@@ -85,6 +87,7 @@ pub fn thumb_format(path: &Path) -> Option<ThumbFormat> {
 }
 
 /// Raster-only view of [`thumb_format`], for callers that can only handle single-bitmap formats.
+#[must_use]
 pub fn source_format(path: &Path) -> Option<ImageSourceFormat> {
     match thumb_format(path)? {
         ThumbFormat::Raster(format) => Some(format),
@@ -104,7 +107,7 @@ fn read_uint(bytes: &[u8], at: usize, len: usize, big_endian: bool) -> Option<u3
     Some(value)
 }
 
-/// JPEG start-of-frame scan: returns the dimensions from the first SOFn marker (SOF4/8/12 are not frames).
+/// JPEG start-of-frame scan: returns the dimensions from the first `SOFn` marker (SOF4/8/12 are not frames).
 fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let mut i = 2;
     while i + 4 <= bytes.len() {
@@ -150,6 +153,7 @@ fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// Canvas size from the container header, read without decoding. `None` when the header is not recognised.
+#[must_use]
 pub fn header_dimensions(bytes: &[u8], format: ImageSourceFormat) -> Option<(u32, u32)> {
     match format {
         ImageSourceFormat::Png if bytes.get(12..16)? == b"IHDR" => Some((
@@ -168,6 +172,7 @@ pub fn header_dimensions(bytes: &[u8], format: ImageSourceFormat) -> Option<(u32
 
 /// Header probe for every thumbnail format. Runs before any decoding so an oversized or malformed
 /// source is rejected without allocating pixels.
+#[must_use]
 pub fn probe_dimensions(bytes: &[u8], format: ThumbFormat) -> Option<(u32, u32)> {
     match format {
         ThumbFormat::Raster(format) => header_dimensions(bytes, format),
@@ -178,6 +183,7 @@ pub fn probe_dimensions(bytes: &[u8], format: ThumbFormat) -> Option<(u32, u32)>
 }
 
 /// Size of the image after fitting it inside an `edge` square. Images that already fit are never upscaled.
+#[must_use]
 pub fn fit_dimensions(width: u32, height: u32, edge: u32) -> (u32, u32) {
     if width <= edge && height <= edge {
         return (width, height);
@@ -192,6 +198,7 @@ pub fn fit_dimensions(width: u32, height: u32, edge: u32) -> (u32, u32) {
 }
 
 /// Fits `source` into a `THUMB_SIZE` square of straight RGBA8, centred, with transparent margins.
+#[must_use]
 pub fn fit_canvas(source: &RgbaImage) -> Vec<u8> {
     let (width, height) = fit_dimensions(source.width, source.height, THUMB_SIZE);
     let scaled = if (width, height) == (source.width, source.height) {
@@ -218,6 +225,7 @@ pub fn fit_canvas(source: &RgbaImage) -> Vec<u8> {
 /// True when at least one pixel would actually be painted. A fully transparent canvas (an image
 /// that is nothing but alpha, or a broken encoder) is treated as "no thumbnail" so the row keeps
 /// its type icon instead of showing an empty slot.
+#[must_use]
 pub fn visible_canvas(canvas: &[u8]) -> bool {
     canvas
         .chunks_exact(4)
@@ -225,6 +233,7 @@ pub fn visible_canvas(canvas: &[u8]) -> bool {
 }
 
 /// Decodes image bytes of a known thumbnail format into a fitted canvas. `None` means "no thumbnail".
+#[must_use]
 pub fn thumbnail_from_bytes(bytes: &[u8], format: ThumbFormat) -> Option<Vec<u8>> {
     let (width, height) = probe_dimensions(bytes, format)?;
     if u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
@@ -268,6 +277,7 @@ fn read_source(path: &Path) -> Option<Vec<u8>> {
 }
 
 /// Reads and decodes one image into a thumbnail canvas. Runs on the worker thread; `None` means no thumbnail.
+#[must_use]
 pub fn render_thumbnail(key: &ThumbKey) -> Option<Vec<u8>> {
     let format = thumb_format(&key.path)?;
     if format == ThumbFormat::Desktop {

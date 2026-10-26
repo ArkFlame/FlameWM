@@ -141,8 +141,8 @@ fn scale_area(source: &RgbaImage, width: u32, height: u32, output: &mut [u8]) {
                 for (col_offset, col_weight) in col_weights.iter().enumerate() {
                     let weight = row_weight * col_weight;
                     let index = (row + first_col + col_offset) * 4;
-                    for channel in 0..4 {
-                        acc[channel] += weight * f32::from(source.pixels[index + channel]);
+                    for (sum, &value) in acc.iter_mut().zip(&source.pixels[index..index + 4]) {
+                        *sum += weight * f32::from(value);
                     }
                 }
             }

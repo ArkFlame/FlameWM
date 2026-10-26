@@ -1,9 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Popup {
     pub open: bool,
-}
-impl Default for Popup {
-    fn default() -> Self {
-        Self { open: false }
-    }
 }

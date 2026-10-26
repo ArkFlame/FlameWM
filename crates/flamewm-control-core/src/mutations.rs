@@ -123,7 +123,9 @@ struct QueueInner {
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn busy(message: &str) -> ControlError {
@@ -150,6 +152,7 @@ pub struct ControlMutationQueue {
 }
 
 impl ControlMutationQueue {
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         let (reader, writer) = UnixStream::pair().expect("mutation queue wake pipe must exist");
         reader
@@ -218,7 +221,7 @@ impl ControlMutationQueue {
             inner = self
                 .pending_cv
                 .wait(inner)
-                .unwrap_or_else(|poison| poison.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
@@ -263,7 +266,7 @@ impl ControlMutationQueue {
             let (guard, timed_out) = self
                 .result_cv
                 .wait_timeout(inner, deadline - now)
-                .unwrap_or_else(|poison| poison.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             inner = guard;
             if timed_out.timed_out() && inner.results.is_empty() {
                 return None;

@@ -10,6 +10,8 @@ pub mod status;
 pub mod weather;
 pub mod workspaces;
 
+use std::cmp::Ordering;
+
 use flamewm_api::applications::DesktopApplication;
 use flamewm_api::display::DisplaySnapshot;
 use flamewm_api::panels::{PanelsSnapshot, TaskEntry, TaskEntryKind};
@@ -277,11 +279,13 @@ pub struct CalendarGrid {
 }
 
 impl CalendarGrid {
+    #[must_use]
     pub fn build(year: i32, month: u8) -> Option<Self> {
         let (today_year, today_month, today_day) = today_date();
         Self::build_for_date(year, month, today_year, today_month, today_day)
     }
 
+    #[must_use]
     pub fn build_for_date(
         year: i32,
         month: u8,
@@ -299,7 +303,7 @@ impl CalendarGrid {
         let previous_days = days_in_month(previous_year, previous_month);
         let mut cells = Vec::with_capacity(42);
         for index in 0..42 {
-            let relative_day = index as i32 - i32::from(first) + 1;
+            let relative_day = index - i32::from(first) + 1;
             let (cell_year, cell_month, day, month_kind) = if relative_day < 1 {
                 (
                     previous_year,
@@ -328,7 +332,7 @@ impl CalendarGrid {
         Some(Self {
             year,
             month,
-            cells: cells.try_into().ok().expect("calendar has 42 cells"),
+            cells: cells.try_into().expect("calendar has 42 cells"),
         })
     }
 }
@@ -407,7 +411,7 @@ fn civil_date_from_days(days: i64) -> (i32, u8, u8) {
     let month_part = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * month_part + 2) / 5 + 1;
     let month = month_part + if month_part < 10 { 3 } else { -9 };
-    (year as i32 + (month <= 2) as i32, month as u8, day as u8)
+    (year as i32 + i32::from(month <= 2), month as u8, day as u8)
 }
 
 pub const STATUS_SLOT_WIDTH: i32 = 30;
@@ -522,46 +526,50 @@ pub fn solve_panel_slot_sizes(
     let axis = axis.max(0);
     let mut sizes = preferred.map(|value| value.max(0));
     let mut total: i32 = sizes.iter().sum();
-    if total > axis {
-        let mut excess = total - axis;
-        while excess > 0 {
-            let mut reduced = false;
-            for index in 0..PANEL_SLOT_COUNT {
-                let floor = minimum[index].max(0);
-                if excess > 0 && sizes[index] > floor {
-                    sizes[index] -= 1;
-                    excess -= 1;
-                    reduced = true;
+    match total.cmp(&axis) {
+        Ordering::Greater => {
+            let mut excess = total - axis;
+            while excess > 0 {
+                let mut reduced = false;
+                for index in 0..PANEL_SLOT_COUNT {
+                    let floor = minimum[index].max(0);
+                    if excess > 0 && sizes[index] > floor {
+                        sizes[index] -= 1;
+                        excess -= 1;
+                        reduced = true;
+                    }
                 }
-            }
-            if !reduced {
-                break;
-            }
-        }
-        while excess > 0 {
-            let mut reduced = false;
-            for size in &mut sizes {
-                if excess > 0 && *size > 0 {
-                    *size -= 1;
-                    excess -= 1;
-                    reduced = true;
-                }
-            }
-            if !reduced {
-                break;
-            }
-        }
-    } else if total < axis {
-        let mut extra = axis - total;
-        while extra > 0 {
-            for index in [PanelSlot::Tasks as usize, PanelSlot::Spacer as usize] {
-                if extra == 0 {
+                if !reduced {
                     break;
                 }
-                sizes[index] += 1;
-                extra -= 1;
+            }
+            while excess > 0 {
+                let mut reduced = false;
+                for size in &mut sizes {
+                    if excess > 0 && *size > 0 {
+                        *size -= 1;
+                        excess -= 1;
+                        reduced = true;
+                    }
+                }
+                if !reduced {
+                    break;
+                }
             }
         }
+        Ordering::Less => {
+            let mut extra = axis - total;
+            while extra > 0 {
+                for index in [PanelSlot::Tasks as usize, PanelSlot::Spacer as usize] {
+                    if extra == 0 {
+                        break;
+                    }
+                    sizes[index] += 1;
+                    extra -= 1;
+                }
+            }
+        }
+        Ordering::Equal => {}
     }
     total = sizes.iter().sum();
     debug_assert!(total <= axis || axis == 0);

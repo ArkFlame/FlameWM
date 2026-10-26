@@ -1,5 +1,5 @@
 //! J7 icon/alpha ratchet, G1/G2/G5 surface half: canonical Flame surfaces
-//! are ARGB-validated with no blend-over-black and no XCreateSimpleWindow.
+//! are ARGB-validated with no blend-over-black and no `XCreateSimpleWindow`.
 //!
 //! `flamewm-image-core` is the shared RGBA8 owner: straight alpha, never a
 //! magenta color-key. `flamewm-render-x11` stays the sole native surface

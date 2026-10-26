@@ -21,9 +21,9 @@ fn moveresize_edge_mapping_rejects_plain_move() {
 
 #[test]
 fn click_on_inactive_client_requests_focus_and_active_client_does_not() {
-    let client: Window = 0x400002;
+    let client: Window = 0x0040_0002;
     assert!(super::should_focus_on_press(None, client));
-    assert!(super::should_focus_on_press(Some(0x400001), client));
+    assert!(super::should_focus_on_press(Some(0x0040_0001), client));
     // Negative control: a plain click on the already-active window must not refocus/restack.
     assert!(!super::should_focus_on_press(Some(client), client));
 }

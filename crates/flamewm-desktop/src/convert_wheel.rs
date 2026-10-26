@@ -1,6 +1,6 @@
 //! Shared radial geometry and cursor-sector highlight for the Convert wheel.
 //! UI hit testing and the hover raster use *exactly the same* annulus predicate.
-//! The wheel is otherwise a standard surface-coloured FlameWM popup.
+//! The wheel is otherwise a standard surface-coloured `FlameWM` popup.
 use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
 

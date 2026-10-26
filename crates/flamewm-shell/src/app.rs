@@ -313,20 +313,15 @@ impl ShellLoop {
         if desired == self.auto_time_zone_applied {
             return;
         }
-        match desired {
-            Some(zone) => {
-                if !flamewm_shell::weather_auto::apply_time_zone(&zone) {
-                    eprintln!(
-                        "flamewm-shell: time zone not applied (zone file missing or invalid)"
-                    );
-                    return;
-                }
-                self.auto_time_zone_applied = Some(zone);
+        if let Some(zone) = desired {
+            if !flamewm_shell::weather_auto::apply_time_zone(&zone) {
+                eprintln!("flamewm-shell: time zone not applied (zone file missing or invalid)");
+                return;
             }
-            None => {
-                flamewm_shell::weather_auto::restore_system_time_zone();
-                self.auto_time_zone_applied = None;
-            }
+            self.auto_time_zone_applied = Some(zone);
+        } else {
+            flamewm_shell::weather_auto::restore_system_time_zone();
+            self.auto_time_zone_applied = None;
         }
         self.time_zone_changed = true;
         self.zone_settle_at = Some(std::time::Instant::now() + ZONE_SETTLE);
@@ -553,7 +548,17 @@ impl ShellLoop {
                             .open(flamewm_shell_core::popup_session::PopupKind::Start, target)
                     };
                     let Ok(transition) = transition else { continue };
-                    if action != StartToggleAction::Close {
+                    if action == StartToggleAction::Close {
+                        let _close = shell_stage!("shell.start.open.close");
+                        match self.surfaces.toggle_start(runtime) {
+                            Ok(()) => {
+                                self.popup_session.commit(&transition);
+                                self.end_start_session();
+                            }
+                            Err(error) if is_popup_refusal(&error) => {}
+                            Err(error) => return Err(UiBackendError::Renderer(error)),
+                        }
+                    } else {
                         self.close_launcher(runtime)?;
                         let started = Instant::now();
                         let _total = shell_stage!("shell.start.open.total");
@@ -571,16 +576,6 @@ impl ShellLoop {
                         if self.open_start_surface(runtime, &target_output, started)? {
                             self.start_open = true;
                             self.popup_session.commit(&transition);
-                        }
-                    } else {
-                        let _close = shell_stage!("shell.start.open.close");
-                        match self.surfaces.toggle_start(runtime) {
-                            Ok(()) => {
-                                self.popup_session.commit(&transition);
-                                self.end_start_session();
-                            }
-                            Err(error) if is_popup_refusal(&error) => {}
-                            Err(error) => return Err(UiBackendError::Renderer(error)),
                         }
                     }
                 }
@@ -948,11 +943,10 @@ impl ShellLoop {
         // J07: only media projects in-process; helper kinds are unreachable
         // here (routed to the supervisor before this call).
         let snapshot = self.shell.snapshot();
-        match name {
-            "media" => runtime.with_document(self.surfaces.media, |document| {
+        if name == "media" {
+            runtime.with_document(self.surfaces.media, |document| {
                 projection::project_media(document, snapshot)
-            })?,
-            _ => {}
+            })?;
         }
         Ok(())
     }
@@ -1129,7 +1123,7 @@ impl ShellLoop {
         let start_model = self.start_model.clone();
         let category = self.start_category;
         let query = self.start_query.clone();
-        let session = self.shell.snapshot().session.clone();
+        let session = self.shell.snapshot().session;
         self.ensure_loader();
         let loader = self.icon_loader.as_mut();
         // ONE unified document on the single Start surface: categories +
@@ -1203,14 +1197,14 @@ impl ShellLoop {
         }
     }
 
-    /// Canonical IconService wake FD for the reactor loop. Ensures the
+    /// Canonical `IconService` wake FD for the reactor loop. Ensures the
     /// loader exists (single owner) and returns the service descriptor;
     /// the reactor only wakes on it, `drain_icons` drains on the tick.
     pub(crate) fn icon_wake_fd(&mut self) -> std::os::unix::io::RawFd {
         self.ensure_loader();
         self.icon_loader
             .as_ref()
-            .map(|loader| loader.wake_fd())
+            .map(super::super::icon_loader::IconLoader::wake_fd)
             .expect("icon loader present after ensure")
     }
 
@@ -1228,7 +1222,7 @@ impl ShellLoop {
         let results = self
             .icon_loader
             .as_mut()
-            .map(|loader| loader.drain_ready())
+            .map(super::super::icon_loader::IconLoader::drain_ready)
             .unwrap_or_default();
         let loader = self.icon_loader.as_ref();
         if loader.map_or(0, |l| l.queue_full_drops) > 0 || loader.map_or(0, |l| l.stale_drops) > 0 {
@@ -1300,13 +1294,13 @@ impl ShellLoop {
                         if *edge != res.width {
                             continue;
                         }
-                        let applied =
-                            runtime.with_document(*handle, |document| match apply(document)? {
-                                true => Ok(true),
-                                false => async_projection::apply_cached_binding(
-                                    document, res.target, *edge,
-                                ),
-                            });
+                        let applied = runtime.with_document(*handle, |document| {
+                            if apply(document)? {
+                                Ok(true)
+                            } else {
+                                async_projection::apply_cached_binding(document, res.target, *edge)
+                            }
+                        });
                         if matches!(applied, Ok(true)) {
                             need_panel = true;
                         }
@@ -1532,16 +1526,16 @@ impl ShellLoop {
             // helper anchor. F10: when the pre-projection resync above did
             // not fire but panels changed, resync now.
             let resynced_now = changed.panels && self.resync_panel_geometry(runtime, &snapshot);
-            if !resynced_now {
-                if !self.project_panels_partial(
+            if !resynced_now
+                && !self.project_panels_partial(
                     runtime,
                     &snapshot,
                     projection_changed,
                     "tick-partial",
-                ) && progress_changed
-                {
-                    self.task_progress_pending = true;
-                }
+                )
+                && progress_changed
+            {
+                self.task_progress_pending = true;
             }
         }
         // Media popup closes when its tray slot is hidden (player gone or idle).
@@ -1684,7 +1678,7 @@ impl ShellLoop {
 
     /// F10: panel/display geometry resync. Close popup/quick helper,
     /// sync the placement context BEFORE the next open/projection,
-    /// move_resize the panel native surface when geometry changed,
+    /// `move_resize` the panel native surface when geometry changed,
     /// then reproject the panel. Returns true when a resync happened.
     /// Pure drift check against a borrowed snapshot; no clone, no mutation.
     fn panel_geometry_drifted(&self, runtime: &SurfaceRuntime, snapshot: &ShellSnapshot) -> bool {
@@ -1993,7 +1987,7 @@ impl ShellLoop {
                 .map(|row| flamewm_shell::osd::Level::new(row.volume_percent, row.muted));
         // Same output source as the panel scale: the shown panel's placement output. The lookup is
         // lazy: the controller calls it only when the card shows, so idle ticks allocate nothing.
-        let target = || active_output_target(&self.surfaces, &snapshot);
+        let target = || active_output_target(&self.surfaces, snapshot);
         let now = Instant::now();
         let settings = self.settings_cache.as_ref();
         if let Err(error) = self.osd.update(runtime, level, target, settings, now) {
@@ -2222,7 +2216,7 @@ impl ShellLoop {
             runtime.with_document(panel, |document| {
                 crate::entry::settings_projection::project(
                     document,
-                    &snapshot,
+                    snapshot,
                     crate::entry::settings_projection::SurfaceKind::Panel,
                 )
             })?;
@@ -2246,7 +2240,7 @@ impl ShellLoop {
             ),
         ] {
             runtime.with_document(surface, |document| {
-                crate::entry::settings_projection::project(document, &snapshot, kind)
+                crate::entry::settings_projection::project(document, snapshot, kind)
             })?;
         }
         // The focused task underline takes its colour from the settings accent; re-project the task slots
@@ -2263,7 +2257,7 @@ impl ShellLoop {
         let items = crate::entry::settings_projection::taskbar_items(self.settings_cache.as_ref());
         let icon_cache = &mut self.task_icon_cache;
         let _ = projection::for_each_panel_record(
-            &shell_snapshot,
+            shell_snapshot,
             self.surfaces.panel_outputs(),
             |handle, view| {
                 runtime.with_document(handle, |document| {

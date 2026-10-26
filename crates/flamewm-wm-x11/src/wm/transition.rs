@@ -71,7 +71,7 @@ fn anchored_clients() -> usize {
     HOLD_ANCHORS.lock().map(|guard| guard.len()).unwrap_or(0)
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     /// Starts `effect` with an overlay unless it is disabled or unavailable. Returns `true`
     /// when a flight owns the end state (the caller must not apply it now). A rapid repeat
     /// or an opposite minimize/restore is absorbed; any other running flight finishes first.
@@ -164,7 +164,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                             format!("window={client} effect={effect:?}")
                         });
                     }
-                    self.finish_transition(client, effect)?
+                    self.finish_transition(client, effect)?;
                 }
             }
         }

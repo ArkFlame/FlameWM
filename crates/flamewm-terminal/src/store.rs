@@ -33,7 +33,7 @@ pub fn parse_toml(text: &str) -> Result<Vec<Entry>, String> {
             .strip_prefix('[')
             .and_then(|rest| rest.strip_suffix(']'))
         {
-            section = name.trim().to_owned();
+            name.trim().clone_into(&mut section);
             continue;
         }
         let (key, value) = line
@@ -93,6 +93,7 @@ fn quote(text: &str) -> String {
     out
 }
 
+#[must_use]
 pub fn write_toml(entries: &[Entry]) -> String {
     let mut out = String::new();
     let mut section = String::new();
@@ -104,7 +105,7 @@ pub fn write_toml(entries: &[Entry]) -> String {
             if !entry.section.is_empty() {
                 out.push_str(&format!("[{}]\n", entry.section));
             }
-            section = entry.section.clone();
+            section.clone_from(&entry.section);
         }
         let value = match &entry.value {
             Value::Text(text) => quote(text),
@@ -116,7 +117,7 @@ pub fn write_toml(entries: &[Entry]) -> String {
     out
 }
 
-/// `terminal.toml`: which theme is active and how the terminal behaves. Opacity follows FlameWM's `surfaceOpacity`.
+/// `terminal.toml`: which theme is active and how the terminal behaves. Opacity follows `FlameWM`'s `surfaceOpacity`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalConfig {
     /// `FOLLOW_FLAMEWM` or a theme name.
@@ -157,18 +158,18 @@ impl TerminalConfig {
                 ("theme", Value::Text(name)) => config.theme = name,
                 ("font_size", Value::Int(size)) => config.font_size = size.clamp(6, 40) as u16,
                 ("scrollback", Value::Int(lines)) => {
-                    config.scrollback = lines.clamp(0, 1_000_000) as usize
+                    config.scrollback = lines.clamp(0, 1_000_000) as usize;
                 }
                 ("cursor_style", Value::Text(style))
                     if matches!(style.as_str(), "block" | "underline" | "bar") =>
                 {
-                    config.cursor_style = style
+                    config.cursor_style = style;
                 }
                 ("font_family", Value::Text(family)) if !family.trim().is_empty() => {
-                    config.font_family = family
+                    config.font_family = family;
                 }
                 ("background_opacity", Value::Int(percent)) => {
-                    config.background_opacity = (percent.clamp(5, 100) / 5 * 5) as u8
+                    config.background_opacity = (percent.clamp(5, 100) / 5 * 5) as u8;
                 }
                 _ => {}
             }
@@ -176,6 +177,7 @@ impl TerminalConfig {
         Ok(config)
     }
 
+    #[must_use]
     pub fn to_toml(&self) -> String {
         write_toml(&[
             Entry {
@@ -223,6 +225,7 @@ pub fn config_dir() -> PathBuf {
 }
 
 /// Filesystem-safe file stem for a theme name.
+#[must_use]
 pub fn slug(name: &str) -> String {
     let mut out = String::new();
     for c in name.chars() {
@@ -241,6 +244,7 @@ pub fn slug(name: &str) -> String {
 }
 
 /// Serialises a user theme. Every colour is written as `#rrggbb` under `[colors]`.
+#[must_use]
 pub fn theme_to_toml(theme: &Theme) -> String {
     let mut entries = vec![Entry {
         section: String::new(),
@@ -299,6 +303,7 @@ impl ThemeStore {
         Self { dir: dir.into() }
     }
 
+    #[must_use]
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -327,6 +332,7 @@ impl ThemeStore {
     }
 
     /// Built-in themes first, then user themes.
+    #[must_use]
     pub fn all_themes(&self) -> Vec<Theme> {
         let mut themes = builtin_themes();
         themes.extend(self.user_themes());
@@ -392,7 +398,7 @@ impl ThemeStore {
                 "no such user theme",
             ));
         };
-        theme.name = new.to_owned();
+        new.clone_into(&mut theme.name);
         self.save(&theme)?;
         if slug(old) != slug(new) {
             self.delete(old)?;

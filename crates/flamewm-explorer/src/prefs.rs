@@ -1,4 +1,4 @@
-//! Explorer preferences kept in `explorer.toml` under the FlameWM config directory.
+//! Explorer preferences kept in `explorer.toml` under the `FlameWM` config directory.
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -33,14 +33,15 @@ pub fn config_dir() -> PathBuf {
     }
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
-        });
+        .map_or_else(
+            || PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"),
+            PathBuf::from,
+        );
     base.join("flamewm")
 }
 
 /// Reads `key = value` lines; unknown keys and malformed lines keep the defaults.
+#[must_use]
 pub fn parse(text: &str) -> Prefs {
     let mut prefs = Prefs::default();
     for line in text.lines() {
@@ -59,6 +60,7 @@ pub fn parse(text: &str) -> Prefs {
     prefs
 }
 
+#[must_use]
 pub fn render(prefs: &Prefs) -> String {
     format!(
         "show_hidden = {}\nshow_type = {}\ncol_modified = {}\ncol_size = {}\ncol_kind = {}\n",
@@ -82,6 +84,7 @@ pub fn recent_remotes(text: &str) -> Vec<String> {
         .collect()
 }
 
+#[must_use]
 pub fn render_with_recent(prefs: &Prefs, recent: &[String]) -> String {
     let mut text = render(prefs);
     for url in recent {
@@ -90,6 +93,7 @@ pub fn render_with_recent(prefs: &Prefs, recent: &[String]) -> String {
     text
 }
 
+#[must_use]
 pub fn load_recent(dir: &Path) -> Vec<String> {
     fs::read_to_string(dir.join("explorer.toml"))
         .map(|text| recent_remotes(&text))
@@ -104,6 +108,7 @@ pub fn save_recent(dir: &Path, recent: &[String]) -> io::Result<()> {
     write_atomic(dir, &render_with_recent(&prefs, recent))
 }
 
+#[must_use]
 pub fn load(dir: &Path) -> Prefs {
     fs::read_to_string(dir.join("explorer.toml"))
         .map(|text| parse(&text))

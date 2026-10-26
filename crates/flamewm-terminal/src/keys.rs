@@ -42,6 +42,7 @@ pub enum Shortcut {
     FontSmaller,
 }
 
+#[must_use]
 pub fn shortcut(key: &str, mods: Mods) -> Option<Shortcut> {
     // Alt is a meta prefix for the child (AltGr arrives with it too), so an Alt combination is never a shortcut.
     if mods.alt {
@@ -54,9 +55,9 @@ pub fn shortcut(key: &str, mods: Mods) -> Option<Shortcut> {
         (true, true, "t") => Some(Shortcut::NewTab),
         (true, true, "w") => Some(Shortcut::CloseTab),
         (true, false, "tab") => Some(Shortcut::NextTab),
-        (true, true, "tab") | (true, true, "iso_left_tab") => Some(Shortcut::PreviousTab),
+        (true, true, "tab" | "iso_left_tab") => Some(Shortcut::PreviousTab),
         (true, false, ",") => Some(Shortcut::Settings),
-        (true, false, "=") | (true, false, "+") => Some(Shortcut::FontLarger),
+        (true, false, "=" | "+") => Some(Shortcut::FontLarger),
         (true, false, "-") => Some(Shortcut::FontSmaller),
         // Plain F2/F3/F4 are tabs; every other F-key (and any modified one) reaches the child.
         (false, false, "f2") => Some(Shortcut::NewTab),
@@ -125,6 +126,7 @@ fn csi_key(name: &str) -> Option<(&'static str, char)> {
 }
 
 /// Bytes for one key press. `app_cursor` is DECCKM, which switches arrows and Home/End to SS3 form.
+#[must_use]
 pub fn encode(event: &UiKeyEvent, app_cursor: bool) -> Option<Vec<u8>> {
     let mods = Mods::from_names(event.modifiers.iter());
     let name = event.key.to_ascii_lowercase();

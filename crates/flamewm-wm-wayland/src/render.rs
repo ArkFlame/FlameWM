@@ -311,7 +311,7 @@ fn send_frame_callbacks(state: &State) {
         .iter()
         .map(|(_, window)| window)
         .chain(state.unmanaged.iter().map(|entry| &entry.surface));
-    for surface in x11_surfaces.filter_map(|window| window.wl_surface()) {
+    for surface in x11_surfaces.filter_map(smithay::xwayland::X11Surface::wl_surface) {
         send_frames_surface_tree(&surface, output, time, throttle, |_, _| {
             Some(output.clone())
         });

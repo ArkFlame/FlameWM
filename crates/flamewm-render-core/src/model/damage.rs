@@ -174,11 +174,11 @@ impl RuntimeDocument {
             && node
                 .hover_style
                 .as_ref()
-                .map_or(true, |style| style.position == Position::Absolute)
+                .is_none_or(|style| style.position == Position::Absolute)
             && node
                 .active_style
                 .as_ref()
-                .map_or(true, |style| style.position == Position::Absolute)
+                .is_none_or(|style| style.position == Position::Absolute)
     }
 
     /// The isolated absolute element whose boxes a text, visibility or font change of `index`

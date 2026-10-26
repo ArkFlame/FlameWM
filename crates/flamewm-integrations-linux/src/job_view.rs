@@ -1,4 +1,4 @@
-//! KDE KIO JobViewServer adapter. Progress is keyed by the caller's unique bus owner and
+//! KDE KIO `JobViewServer` adapter. Progress is keyed by the caller's unique bus owner and
 //! server-issued object path; no progress is inferred from notification hints.
 
 use std::collections::BTreeMap;
@@ -48,7 +48,7 @@ struct JobView {
     suspended: bool,
 }
 
-/// Event-driven implementation of KDE's JobView server side. It declines ownership when another
+/// Event-driven implementation of KDE's `JobView` server side. It declines ownership when another
 /// desktop already provides either well-known name, and never replaces or queues behind it.
 pub struct KioJobViewProvider {
     pump: BusPump,
@@ -212,12 +212,10 @@ fn handle_message(
                 jobs.retain(|_, job| job.owner != *old_owner);
                 *changed |= jobs.len() != before;
             }
-            if name == JOB_VIEW_SERVICE || name == KUISERVER_SERVICE {
-                if new_owner.is_empty() {
-                    let before = jobs.len();
-                    jobs.clear();
-                    *changed |= before != 0;
-                }
+            if (name == JOB_VIEW_SERVICE || name == KUISERVER_SERVICE) && new_owner.is_empty() {
+                let before = jobs.len();
+                jobs.clear();
+                *changed |= before != 0;
             }
         }
         return MessageDisposition::Handled;
@@ -291,15 +289,12 @@ fn request_view(
         );
     }
     let items = message.get_items();
-    let app_id = match request_app_id(interface, &items) {
-        Ok(app_id) => app_id,
-        Err(()) => {
-            return error_reply(
-                message,
-                "org.freedesktop.DBus.Error.InvalidArgs",
-                "invalid KIO requestView arguments",
-            );
-        }
+    let Ok(app_id) = request_app_id(interface, &items) else {
+        return error_reply(
+            message,
+            "org.freedesktop.DBus.Error.InvalidArgs",
+            "invalid KIO requestView arguments",
+        );
     };
     let Some(id) = allocate_job_id(jobs, next_job_id) else {
         return error_reply(
@@ -542,6 +537,7 @@ fn apply_job_update(
     }
 }
 
+#[allow(clippy::option_option)]
 fn parse_v3_update(items: &[MessageItem]) -> Result<(Option<Option<u8>>, Option<bool>), ()> {
     let [MessageItem::Dict(properties)] = items else {
         return Err(());

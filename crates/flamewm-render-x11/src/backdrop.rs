@@ -80,11 +80,13 @@ pub fn fill_color(opacity_percent: u8) -> (u8, u8, u8, u8) {
     )
 }
 
+pub type SelectionMaterial = ((u8, u8, u8, u8), (u8, u8, u8, u8));
+
 /// Shared desktop-selection material for one material, two consumers
 /// (desktop selection renderer and snap-preview backdrop): translucent
 /// accent fill plus strong accent border ring. Pure and headless-testable.
 #[must_use]
-pub fn selection_material(opacity_percent: u8) -> ((u8, u8, u8, u8), (u8, u8, u8, u8)) {
+pub fn selection_material(opacity_percent: u8) -> SelectionMaterial {
     (
         fill_color(opacity_percent),
         (
@@ -109,7 +111,7 @@ pub fn channel_masks(red: u64, green: u64, blue: u64) -> (u64, u64, u64) {
 
 /// XGetImage of any window or pixmap drawable (`rect` is drawable-local),
 /// decoded to straight RGBA8 with the live server masks.
-pub fn capture_drawable_rect(
+pub(crate) fn capture_drawable_rect(
     display: *mut Display,
     drawable: u64,
     rect: (i32, i32, u32, u32),

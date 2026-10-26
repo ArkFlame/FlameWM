@@ -78,7 +78,7 @@ impl ChromePolicy {
             ));
         }
         if self.accent != value {
-            self.accent = value.to_owned();
+            value.clone_into(&mut self.accent);
             self.revision = self.revision.saturating_add(1);
         }
         Ok(())

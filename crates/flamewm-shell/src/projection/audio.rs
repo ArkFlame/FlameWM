@@ -15,7 +15,7 @@ pub fn project_audio(
     )
 }
 
-/// Full audio projection: Devices/Applications tabs, RangeSpec slider state,
+/// Full audio projection: Devices/Applications tabs, `RangeSpec` slider state,
 /// mute + percent, raise-maximum cap. Scroll/virtualized lists are declared
 /// in the template (`overflow-y:auto` on `#audio-list`); the retained
 /// `scroll_offset` selects the visible window without truncating the model.
@@ -252,11 +252,7 @@ mod audio_template_tests {
     }
 
     fn text<'a>(recorded: &'a Recorded, id: &str) -> &'a str {
-        recorded
-            .texts
-            .get(id)
-            .map(String::as_str)
-            .unwrap_or("<unset>")
+        recorded.texts.get(id).map_or("<unset>", String::as_str)
     }
 
     #[test]

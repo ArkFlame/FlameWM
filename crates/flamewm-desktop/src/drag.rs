@@ -149,12 +149,13 @@ pub(super) fn commit_item_drag(
             .filter(|(_, item)| live_output(state, &item.output) == output)
             .map(|(slot, _)| projected[slot].1)
             .collect::<BTreeSet<_>>();
-        match group_drag_transaction(&selected, &occupied, delta, grid_for_output(state, &output)) {
-            Ok(output_updates) => updates.extend(output_updates),
-            Err(_) => {
-                sync_document(document, state)?;
-                return Ok(());
-            }
+        if let Ok(output_updates) =
+            group_drag_transaction(&selected, &occupied, delta, grid_for_output(state, &output))
+        {
+            updates.extend(output_updates);
+        } else {
+            sync_document(document, state)?;
+            return Ok(());
         }
     }
 

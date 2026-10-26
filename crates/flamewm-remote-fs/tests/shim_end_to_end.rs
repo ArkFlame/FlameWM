@@ -1,6 +1,6 @@
 //! End-to-end tests through the real async client, process pump and ls/cat parsers. The `ssh`
 //! binary is replaced by a shim that runs the final argument with `sh -c` locally. Host, port and
-//! ControlMaster options are ignored; everything else (commands, quoting, streaming, error mapping)
+//! `ControlMaster` options are ignored; everything else (commands, quoting, streaming, error mapping)
 //! is the production path. Real OpenSSH behaviour is covered by `real_host.rs`.
 
 use flamewm_remote_fs::{Cancel, Config, Error, Kind, ListEvent, RemoteFs, TransferEvent, Url};

@@ -145,7 +145,7 @@ pub fn init_process_in(dir: &std::path::Path, process_name: &str, is_enabled: bo
     let _ = fs::create_dir_all(&dir);
     let file = file_for_process(process_name).map(|name| dir.join(name));
     if let Ok(mut guard) = state().lock() {
-        guard.file = file.clone();
+        guard.file.clone_from(&file);
         guard.capped = false;
     }
     let (true, Some(path)) = (is_enabled, file) else {

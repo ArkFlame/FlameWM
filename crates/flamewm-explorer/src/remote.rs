@@ -64,7 +64,7 @@ pub fn new_folder(fs: &impl RemoteOps, parent: &Url) -> Result<String, Error> {
         };
         match fs.mkdir(&parent.join(&name)) {
             Ok(()) => return Ok(name),
-            Err(Error::AlreadyExists(_)) => continue,
+            Err(Error::AlreadyExists(_)) => {}
             Err(error) => return Err(error),
         }
     }
@@ -119,7 +119,7 @@ pub fn copy_items(
             break;
         }
         match copy_one(fs, source, directory, cancel, base, &mut |bytes| {
-            events(CopyEvent::Progress(bytes))
+            events(CopyEvent::Progress(bytes));
         }) {
             Ok(bytes) => {
                 base += bytes;
@@ -179,7 +179,7 @@ fn copy_one(
     let cancel_remote = RemoteCancel::new();
     match (url_of(source), url_of(directory)) {
         (None, Some(folder)) => {
-            if !fs::metadata(source).map_or(false, |meta| meta.is_file()) {
+            if !fs::metadata(source).is_ok_and(|meta| meta.is_file()) {
                 return Err(CopyError::Refused(
                     "folders cannot be copied to remote folders yet",
                 ));
@@ -224,7 +224,7 @@ fn free_remote_name(fs: &impl RemoteOps, folder: &Url, name: &str) -> Result<Url
         };
         let url = folder.join(&candidate);
         match fs.stat(&url) {
-            Ok(_) => continue,
+            Ok(_) => {}
             Err(Error::NotFound(_)) => return Ok(url),
             Err(error) => return Err(error),
         }
@@ -419,7 +419,7 @@ mod ops_tests {
         let cancel = CancellationToken::new();
         let mut seen = Vec::new();
         let report = copy_items(&fake, &[source], &dir, &cancel, &mut |event| {
-            seen.push(event)
+            seen.push(event);
         });
         assert_eq!(report.completed, 1, "{report:?}");
         assert_eq!(fs::read(dir.join("file.txt")).unwrap(), b"local old");
@@ -504,6 +504,7 @@ mod ops_tests {
 pub const RECENT_LIMIT: usize = 8;
 
 /// True for schemes this explorer lists through `flamewm-remote-fs`.
+#[must_use]
 pub fn is_remote_scheme(scheme: &str) -> bool {
     matches!(
         scheme.to_ascii_lowercase().as_str(),
@@ -512,6 +513,7 @@ pub fn is_remote_scheme(scheme: &str) -> bool {
 }
 
 /// The URL behind a remote tab or entry path; `None` for local paths.
+#[must_use]
 pub fn url_of(path: &Path) -> Option<Url> {
     let text = path.to_str()?;
     let (scheme, _) = text.split_once("://")?;
@@ -521,17 +523,20 @@ pub fn url_of(path: &Path) -> Option<Url> {
     Url::parse(text).ok()
 }
 
+#[must_use]
 pub fn is_remote(path: &Path) -> bool {
     url_of(path).is_some()
 }
 
 /// Tab/entry path form of a URL. Never pass the result to local filesystem calls.
+#[must_use]
 pub fn to_path(url: &Url) -> PathBuf {
     PathBuf::from(url.to_string())
 }
 
 /// Explorer entry for a remote child of `dir`. Symlinks to directories arrive as `Kind::Dir` (resolved by
 /// `flamewm-remote-fs`); other symlinks stay symlinks.
+#[must_use]
 pub fn entry_of(dir: &Url, item: &RemoteEntry) -> Entry {
     Entry::new(
         to_path(&dir.join(&item.name)),
@@ -544,6 +549,7 @@ pub fn entry_of(dir: &Url, item: &RemoteEntry) -> Entry {
 }
 
 /// Status-strip wording for a typed remote error. Never includes secrets; never trusts a host key.
+#[must_use]
 pub fn describe(error: &Error) -> String {
     match error {
         Error::HostKeyUnknown { host, port } => format!(
@@ -571,6 +577,7 @@ pub fn describe(error: &Error) -> String {
 
 /// Human-facing URL text: the canonical form without a default port (`sftp://u@h/x`, not `:22`).
 /// Canonical text stays unchanged for recents and cache keys.
+#[must_use]
 pub fn display_text(url: &Url) -> String {
     // sftp, ssh and fish all default to port 22 (`Url::parse` fills it in).
     const DEFAULT_PORT: &str = ":22";
@@ -589,15 +596,16 @@ pub fn display_text(url: &Url) -> String {
 pub fn cache_root() -> PathBuf {
     std::env::var_os("XDG_CACHE_HOME")
         .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache")
-        })
+        .map_or_else(
+            || PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache"),
+            PathBuf::from,
+        )
         .join("flamewm-explorer")
         .join("remote")
 }
 
 /// Per-URL cache file. Every open downloads again, so the cache never serves stale content.
+#[must_use]
 pub fn cache_path(root: &Path, url: &Url, name: &str) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     url.to_string().hash(&mut hasher);
@@ -606,6 +614,7 @@ pub fn cache_path(root: &Path, url: &Url, name: &str) -> PathBuf {
 }
 
 /// Keeps a remote file name usable as one local path component.
+#[must_use]
 pub fn safe_file_name(name: &str) -> String {
     let cleaned: String = name
         .chars()

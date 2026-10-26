@@ -233,7 +233,7 @@ fn fallback_arrow() -> Named {
     }
 }
 
-/// The `cursorTheme` saved in the FlameWM settings file, as the X11 session reads it at login.
+/// The `cursorTheme` saved in the `FlameWM` settings file, as the X11 session reads it at login.
 pub fn saved_theme() -> Option<String> {
     let text = std::fs::read_to_string(crate::control::settings_path()).ok()?;
     flamewm_platform::settings::ConfigStore::default()

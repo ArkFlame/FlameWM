@@ -1,8 +1,8 @@
-//! Ark drag-out target: asks the source's DBus service (`org.kde.ark.DndExtract`) to extract
+//! Ark drag-out target: asks the source's `DBus` service (`org.kde.ark.DndExtract`) to extract
 //! the dragged selection into the explorer's current folder.
 //!
 //! The XDND payload is validated by `flamewm_ui_x11` re-exports of the protocol owner. This
-//! module owns only the DBus call: it runs `gdbus` with a hard timeout on a worker thread,
+//! module owns only the `DBus` call: it runs `gdbus` with a hard timeout on a worker thread,
 //! catches panics, and reports the extracted entries. Nothing here deletes or overwrites:
 //! entries that appear during the call are reported, and a failed call leaves its output in
 //! place for the user to see.
@@ -42,8 +42,8 @@ pub struct ExtractReport {
     pub created: Vec<String>,
 }
 
-/// Checks the DBus names and that `dest` is an existing absolute directory without control
-/// characters (it is passed as a GVariant string).
+/// Checks the `DBus` names and that `dest` is an existing absolute directory without control
+/// characters (it is passed as a `GVariant` string).
 pub fn validate_request(service: &str, path: &str, dest: &Path) -> Result<(), ExtractError> {
     if !valid_bus_name(service) {
         return Err(ExtractError::Rejected("invalid DBus service name".into()));
@@ -54,7 +54,7 @@ pub fn validate_request(service: &str, path: &str, dest: &Path) -> Result<(), Ex
     let Some(text) = dest.to_str() else {
         return Err(ExtractError::Rejected("destination is not UTF-8".into()));
     };
-    if !dest.is_absolute() || text.chars().any(|c| c.is_control()) {
+    if !dest.is_absolute() || text.chars().any(char::is_control) {
         return Err(ExtractError::Rejected(
             "destination must be an absolute path".into(),
         ));
@@ -67,7 +67,7 @@ pub fn validate_request(service: &str, path: &str, dest: &Path) -> Result<(), Ex
     Ok(())
 }
 
-/// GVariant string literal for `text` (single-quoted, backslash and quote escaped).
+/// `GVariant` string literal for `text` (single-quoted, backslash and quote escaped).
 fn gvariant_string(text: &str) -> String {
     let escaped = text.replace('\\', "\\\\").replace('\'', "\\'");
     format!("'{escaped}'")
@@ -133,6 +133,7 @@ pub fn run_with_timeout(
 }
 
 /// Name in `dir` that is not taken yet: `name`, then `name (2)`, `name (3)`, ...
+#[must_use]
 pub fn free_name(dir: &Path, name: &str) -> String {
     if !dir.join(name).exists() {
         return name.to_string();
@@ -141,7 +142,7 @@ pub fn free_name(dir: &Path, name: &str) -> String {
         Some(index) if index > 0 => (&name[..index], &name[index..]),
         _ => (name, ""),
     };
-    (2..)
+    (2_u32..=u32::MAX)
         .map(|n| format!("{stem} ({n}){ext}"))
         .find(|candidate| !dir.join(candidate).exists())
         .unwrap_or_else(|| name.to_string())
@@ -207,6 +208,7 @@ fn extract_blocking(service: &str, path: &str, dest: &Path) -> Result<ExtractRep
 /// Starts an extraction on a worker thread. Validation happens first and synchronously, so an
 /// invalid request never spawns anything. The result arrives on the returned channel; a dropped
 /// sender (worker died) is reported by the receiver as a disconnect, never a hang.
+#[must_use]
 pub fn spawn_ark_extract(
     service: String,
     path: String,

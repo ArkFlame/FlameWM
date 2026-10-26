@@ -29,7 +29,7 @@ mod dock_frame_plan_tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod controller_tests {
     use super::*;
 
     #[test]
@@ -157,10 +157,7 @@ mod tests {
             !selection.arm(popup),
             "popup rides the observer's selection"
         );
-        assert!(
-            selection.arm(PRESS_OBSERVER) == false,
-            "re-arm is idempotent"
-        );
+        assert!(!selection.arm(PRESS_OBSERVER), "re-arm is idempotent");
         assert!(
             !selection.disarm(PRESS_OBSERVER),
             "popup keeps the selection"

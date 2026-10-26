@@ -10,6 +10,7 @@ pub struct PanelView {
 }
 
 /// One view per panel whose output is present in `outputs` (the work area needs the output rect).
+#[must_use]
 pub fn views(
     snapshot: &[PanelSnapshot],
     outputs: &[OutputSnapshot],

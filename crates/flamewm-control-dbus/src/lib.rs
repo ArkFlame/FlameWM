@@ -346,7 +346,7 @@ impl ControlSignalClient {
 }
 
 fn signal_match_rule() -> String {
-    format!("type='signal',path='{}'", OBJECT_PATH)
+    format!("type='signal',path='{OBJECT_PATH}'")
 }
 
 fn add_match_rule(pump: &BusPump, rule: &str) -> FlameResult<()> {
@@ -366,6 +366,7 @@ fn add_match_rule(pump: &BusPump, rule: &str) -> FlameResult<()> {
 ///
 /// Returns `None` for non-signal traffic and for signals outside the Flame
 /// Control object path or wire vocabulary, so unrelated bus noise is ignored.
+#[must_use]
 pub fn decode_bus_signal(message: &Message) -> Option<ControlSignal> {
     if message.msg_type() != MessageType::Signal {
         return None;
@@ -798,8 +799,10 @@ mod tests {
     // CASE: non-default revision and status fields distinguish the snapshot from a revision-only signal.
     #[test]
     fn t05_system_snapshot_changed_round_trips_exact_snapshot_through_dbus() {
-        let mut snapshot = flamewm_api::system::SystemSnapshot::default();
-        snapshot.revision = 37;
+        let mut snapshot = flamewm_api::system::SystemSnapshot {
+            revision: 37,
+            ..flamewm_api::system::SystemSnapshot::default()
+        };
         snapshot.network.label = "ArkNet 5G".to_owned();
         snapshot.network.strength_percent = 82;
         snapshot.media.title = "Neon Skyline".to_owned();

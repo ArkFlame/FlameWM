@@ -142,14 +142,10 @@ impl WorkspacePlanner {
         let new_count = snapshot.count - 1;
         let migrate_target = index.min(new_count - 1);
         let old_to_new = (0..snapshot.count)
-            .map(|old| {
-                if old == index {
-                    migrate_target
-                } else if old > index {
-                    old - 1
-                } else {
-                    old
-                }
+            .map(|old| match old.cmp(&index) {
+                std::cmp::Ordering::Equal => migrate_target,
+                std::cmp::Ordering::Greater => old - 1,
+                std::cmp::Ordering::Less => old,
             })
             .collect::<Vec<_>>();
 

@@ -216,7 +216,8 @@ mod tests {
         assert!(themed_alpha > 0);
         // Alpha coverage (shape area) must be preserved by recoloring.
         assert!(
-            (themed_alpha as i64 - plain_alpha as i64).abs() <= (plain_alpha as i64 / 10 + 8),
+            (i64::from(themed_alpha) - i64::from(plain_alpha)).abs()
+                <= (i64::from(plain_alpha) / 10 + 8),
             "alpha coverage changed: plain={plain_alpha} themed={themed_alpha}"
         );
         let (r, g, b, _) = mean_rgb(&themed);

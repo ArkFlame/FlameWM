@@ -92,24 +92,21 @@ impl Default for Trie {
 impl Trie {
     /// Adds `uses` to `text` and marks it as used at sequence `seq` (later than every earlier use).
     pub fn add(&mut self, text: &str, uses: u64, seq: u64) {
-        let id = match self.ids.get(text) {
-            Some(&id) => {
-                let command = &mut self.commands[id];
-                command.rank = Rank {
-                    count: command.rank.count + uses,
-                    seq,
-                };
-                id
-            }
-            None => {
-                let id = self.commands.len();
-                self.commands.push(Command {
-                    text: text.to_owned(),
-                    rank: Rank { count: uses, seq },
-                });
-                self.ids.insert(text.to_owned(), id);
-                id
-            }
+        let id = if let Some(&id) = self.ids.get(text) {
+            let command = &mut self.commands[id];
+            command.rank = Rank {
+                count: command.rank.count + uses,
+                seq,
+            };
+            id
+        } else {
+            let id = self.commands.len();
+            self.commands.push(Command {
+                text: text.to_owned(),
+                rank: Rank { count: uses, seq },
+            });
+            self.ids.insert(text.to_owned(), id);
+            id
         };
         let rank = self.commands[id].rank;
         let mut node = 0;
@@ -119,14 +116,13 @@ impl Trie {
             if slot.is_none_or(|(best, best_id)| best_id == id || rank > best) {
                 *slot = Some((rank, id));
             }
-            node = match self.child(node, c) {
-                Some(next) => next,
-                None => {
-                    self.nodes.push(Node::default());
-                    let next = self.nodes.len() - 1;
-                    self.nodes[node].children.push((c, next));
-                    next
-                }
+            node = if let Some(next) = self.child(node, c) {
+                next
+            } else {
+                self.nodes.push(Node::default());
+                let next = self.nodes.len() - 1;
+                self.nodes[node].children.push((c, next));
+                next
             };
         }
         if self.commands.len() > 2 * MAX_COMMANDS {
@@ -158,6 +154,7 @@ impl Trie {
     }
 
     /// The best stored command that starts with `prefix` and is longer than it.
+    #[must_use]
     pub fn best_extension(&self, prefix: &str) -> Option<&str> {
         let mut node = 0;
         for c in prefix.chars() {
@@ -167,6 +164,7 @@ impl Trie {
         Some(&self.commands[id].text)
     }
 
+    #[must_use]
     pub fn uses(&self, text: &str) -> Option<u64> {
         self.ids.get(text).map(|&id| self.commands[id].rank.count)
     }
@@ -174,6 +172,7 @@ impl Trie {
 
 /// Whether a command may be stored: not blank, not space-prefixed (HISTCONTROL=ignorespace), short, single line,
 /// and free of obvious secret markers.
+#[must_use]
 pub fn admissible(command: &str) -> bool {
     if command.trim().is_empty()
         || command.len() > MAX_COMMAND_BYTES
@@ -189,6 +188,7 @@ pub fn admissible(command: &str) -> bool {
 
 /// Whether a command line carries a credential: secret words in the text, `scheme://user:pass@host`, a secret
 /// assignment (`export TOKEN=x`, `KEY=x cmd`), a secret-named long option, `-p<pass>`, `-u user:pass`, or `sudo -S`.
+#[must_use]
 pub fn secret_bearing(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
     if SECRET_MARKERS.iter().any(|marker| lower.contains(marker)) || url_with_credentials(&lower) {
@@ -426,9 +426,12 @@ pub struct History {
 
 impl History {
     /// Opens the store. When it does not exist yet, it is created from the shell history files.
+    #[must_use]
     pub fn open(path: Option<PathBuf>, seeds: &[PathBuf]) -> Self {
         if let Some(path) = &path {
-            if !path.exists() {
+            if path.exists() {
+                let _ = purge_filtered(path);
+            } else {
                 let body = compact_lines(
                     &seeds
                         .iter()
@@ -436,8 +439,6 @@ impl History {
                         .collect::<String>(),
                 );
                 let _ = atomic_write(path, &body);
-            } else {
-                let _ = purge_filtered(path);
             }
         }
         let mut history = Self {
@@ -454,12 +455,14 @@ impl History {
         history
     }
 
+    #[must_use]
     pub fn open_default() -> Self {
         let (path, seeds) = default_locations();
         Self::open(path, &seeds)
     }
 
     /// The best suffix that completes `prefix` from the store. Empty or absent when nothing extends it.
+    #[must_use]
     pub fn suggest(&self, prefix: &str) -> Option<&str> {
         self.trie
             .best_extension(prefix)
@@ -559,6 +562,7 @@ impl History {
         Ok(())
     }
 
+    #[must_use]
     pub fn uses(&self, command: &str) -> Option<u64> {
         self.trie.uses(command)
     }
@@ -589,11 +593,13 @@ fn printable(text: &str) -> bool {
 }
 
 impl LineInput {
+    #[must_use]
     pub fn text(&self) -> String {
         self.chars.iter().collect()
     }
 
     /// True when a suggestion may be drawn: the line is exact and the cursor sits at its end.
+    #[must_use]
     pub fn is_ready(&self) -> bool {
         self.known && !self.chars.is_empty() && self.cursor == self.chars.len()
     }

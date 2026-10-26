@@ -196,6 +196,7 @@ where
 }
 
 /// Pointer or key ActionEvent; device coordinates are scaled to logical points.
+#[allow(clippy::too_many_arguments)]
 fn action_event(
     scale: f32,
     phase: ActionPhase,
@@ -949,6 +950,7 @@ impl X11App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) unsafe fn event_loop_with_reactor<F, R, P>(
         &mut self,
         document: &mut RuntimeDocument,

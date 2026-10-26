@@ -1,4 +1,4 @@
-//! Renderer-neutral FlameWM visual design contracts.
+//! Renderer-neutral `FlameWM` visual design contracts.
 
 pub mod context_menu;
 pub mod controls;
@@ -18,14 +18,14 @@ use flamewm_api::{OutputId, Point, Rect};
 pub struct Color(pub u32);
 
 impl Color {
-    pub const FLAME_RED: Self = Self(0xEF40_48);
-    pub const BACKGROUND: Self = Self(0x0A0A_0A);
-    pub const SURFACE: Self = Self(0x191B_1D);
-    pub const SURFACE_RAISED: Self = Self(0x2427_2A);
-    pub const BORDER: Self = Self(0x5156_5B);
-    pub const TEXT: Self = Self(0xF1F2_F3);
-    pub const TEXT_MUTED: Self = Self(0xAEB4_BB);
-    pub const DANGER: Self = Self(0xE539_35);
+    pub const FLAME_RED: Self = Self(0x00EF_4048);
+    pub const BACKGROUND: Self = Self(0x000A_0A0A);
+    pub const SURFACE: Self = Self(0x0019_1B1D);
+    pub const SURFACE_RAISED: Self = Self(0x0024_272A);
+    pub const BORDER: Self = Self(0x0051_565B);
+    pub const TEXT: Self = Self(0x00F1_F2F3);
+    pub const TEXT_MUTED: Self = Self(0x00AE_B4BB);
+    pub const DANGER: Self = Self(0x00E5_3935);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

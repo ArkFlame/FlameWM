@@ -87,7 +87,7 @@ pub fn normal_hints_resizable(values: &[u32]) -> bool {
 ///
 /// Convention: Motif WM hints (`MWM_HINTS_DECORATIONS` = 1 << 1, and
 /// `MWM_DECOR_*` bits where `MWM_DECOR_ALL` = 1, `BORDER` = 2, `RESIZEH` = 4,
-/// `TITLE` = 8). Used by Qt frameless windows, OnlyOffice, and Electron.
+/// `TITLE` = 8). Used by Qt frameless windows, `OnlyOffice`, and Electron.
 #[cfg(test)]
 #[must_use]
 pub fn motif_no_decorations(values: &[u32]) -> bool {

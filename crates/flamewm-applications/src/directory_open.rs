@@ -1,7 +1,7 @@
-//! Directory opening is a typed FlameWM decision. Folders never reach the KDE/XDG
+//! Directory opening is a typed `FlameWM` decision. Folders never reach the KDE/XDG
 //! opener: the effective `inode/directory` default (user `mimeapps.list` first, then
-//! the XDG config/data search order) selects FlameWM Explorer or an installed,
-//! non-FlameWM desktop entry; any uncertainty selects FlameWM Explorer.
+//! the XDG config/data search order) selects `FlameWM` Explorer or an installed,
+//! non-FlameWM desktop entry; any uncertainty selects `FlameWM` Explorer.
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,7 +18,7 @@ const DIRECTORY_MIME: &str = "inode/directory";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DirectoryHandler {
     FlameExplorer,
-    /// An installed desktop entry that the user explicitly chose (not FlameWM Explorer).
+    /// An installed desktop entry that the user explicitly chose (not `FlameWM` Explorer).
     Desktop(String),
 }
 
@@ -85,7 +85,7 @@ pub fn default_in_mimeapps(content: &str, mime: &str) -> Option<String> {
 }
 
 /// Pure decision: the first mimeapps file that names a directory default wins.
-/// Missing, unknown or uninstalled defaults fall back to FlameWM Explorer.
+/// Missing, unknown or uninstalled defaults fall back to `FlameWM` Explorer.
 #[must_use]
 pub fn decide_directory_handler(
     mimeapps_texts: &[Option<String>],
@@ -157,7 +157,7 @@ impl DirectorySpawner for SystemSpawner {
     }
 }
 
-/// Open a folder through FlameWM's own handler resolution. Never calls kde-open/xdg-open.
+/// Open a folder through `FlameWM`'s own handler resolution. Never calls kde-open/xdg-open.
 pub fn open_directory(directory: &Path) -> FlameResult<()> {
     let handler = decide_directory_handler(&read_mimeapps(), installed_desktop_entry);
     route_directory(&handler, directory, &explorer_binary(), &mut SystemSpawner)

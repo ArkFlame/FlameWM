@@ -6,6 +6,7 @@ pub const POOL_ROWS: usize = 96;
 pub const POOL_RUNS: usize = 64;
 
 /// Node id of run `slot` on row `row`. Generated ids are `r{row}s{slot}` and must match `build.rs` output.
+#[must_use]
 pub fn run_id(row: usize, slot: usize) -> String {
     format!("r{row}s{slot}")
 }

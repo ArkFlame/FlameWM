@@ -1,6 +1,6 @@
-//! FlameWM product policy ported from the current native C++ implementation.
+//! `FlameWM` product policy ported from the current native C++ implementation.
 //!
-//! This crate owns product semantics, not window-manager protocol state. The native FlameWM desktop backend
+//! This crate owns product semantics, not window-manager protocol state. The native `FlameWM` desktop backend
 //! engine remains authoritative for windows, focus, stacking, work areas, EWMH/ICCCM and native
 //! X11 resources.
 

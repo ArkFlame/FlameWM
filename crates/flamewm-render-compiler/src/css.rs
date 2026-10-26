@@ -259,7 +259,9 @@ fn selector_tokens(input: &str) -> Result<Vec<String>, String> {
     Ok(tokens)
 }
 
-fn parse_compound(input: &str) -> Result<(CompoundSelector, PseudoState, (u16, u16, u16)), String> {
+type ParsedCompound = (CompoundSelector, PseudoState, (u16, u16, u16));
+
+fn parse_compound(input: &str) -> Result<ParsedCompound, String> {
     let mut tag = None;
     let mut id = None;
     let mut classes = Vec::new();

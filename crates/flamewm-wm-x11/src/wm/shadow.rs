@@ -132,7 +132,7 @@ fn shadow_aux(rect: Rect, sibling: Window) -> ConfigureWindowAux {
         .stack_mode(StackMode::BELOW)
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     /// Bring shadow windows in line with the current frames. Called once per
     /// reactor turn; cheap when nothing changed.
     pub(super) fn reconcile_frame_shadows(&mut self) -> Result<(), ReplyOrIdError> {
@@ -357,27 +357,24 @@ impl<'a, C: Connection> Wm<'a, C> {
         let result = self.refresh_shadow(outer, focused, win, sibling);
         self.conn.ungrab_server()?;
         let shown = result?;
-        match shown {
-            Some((raw, pixmap)) => {
-                self.frame_shadows.insert(
-                    frame,
-                    FrameShadow {
-                        win,
-                        state: ShadowState {
-                            shaded: outer,
-                            focused,
-                            generation,
-                            placed: outer,
-                        },
-                        pixmap,
-                        raw,
+        if let Some((raw, pixmap)) = shown {
+            self.frame_shadows.insert(
+                frame,
+                FrameShadow {
+                    win,
+                    state: ShadowState {
+                        shaded: outer,
+                        focused,
+                        generation,
+                        placed: outer,
                     },
-                );
-            }
-            None => {
-                self.conn.destroy_window(win)?;
-                self.frame_shadows.remove(&frame);
-            }
+                    pixmap,
+                    raw,
+                },
+            );
+        } else {
+            self.conn.destroy_window(win)?;
+            self.frame_shadows.remove(&frame);
         }
         if let Some(old) = previous {
             self.conn.free_pixmap(old)?;
@@ -472,7 +469,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             )?
             .reply()?
             .value32()
-            .map(|values| values.collect())
+            .map(std::iter::Iterator::collect)
             .unwrap_or_default();
         let next = RootRubber::from_cardinals(&values);
         let previous = std::mem::replace(&mut self.shadow_scene.rubber, next);

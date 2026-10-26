@@ -94,6 +94,7 @@ pub fn self_test() -> Result<(), String> {
 /// Background for a `width` x `height` output: the cover-scaled background image
 /// when one decodes, else the reference navy gradient (default colour) or a flat
 /// fill of the configured `lockBackgroundColor`.
+#[must_use]
 pub fn background_image(settings: &LockSettings, width: u32, height: u32) -> RuntimeImage {
     let mut image = decoded_background(settings, width, height).unwrap_or_else(|| {
         let pixels = if settings.background_color == DEFAULT_BACKGROUND {
@@ -122,6 +123,7 @@ pub fn background_image(settings: &LockSettings, width: u32, height: u32) -> Run
 /// The root-sized lock background that every output crops from when `shareWallpaper` is on.
 /// Compute it once per pass and pass it to `background_for_output`; `None` when sharing is off
 /// or the root is empty.
+#[must_use]
 pub fn shared_root_background(settings: &LockSettings, root: Rect) -> Option<RuntimeImage> {
     (settings.share_wallpaper && root.is_valid())
         .then(|| background_image(settings, root.width as u32, root.height as u32))
@@ -129,6 +131,7 @@ pub fn shared_root_background(settings: &LockSettings, root: Rect) -> Option<Run
 
 /// Background for `output`: the matching crop of the shared `canvas` when one is given,
 /// else an independent cover-scaled background for the output.
+#[must_use]
 pub fn background_for_output(
     settings: &LockSettings,
     root: Rect,
@@ -208,6 +211,7 @@ fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Optio
 }
 
 /// Scales `image` to fully cover `width` x `height` and crops the centre.
+#[must_use]
 pub fn cover_rgba(image: &RgbaImage, width: u32, height: u32) -> Option<RgbaImage> {
     if image.width == 0 || image.height == 0 || width == 0 || height == 0 {
         return None;
@@ -592,6 +596,7 @@ fn decode_file(path: &Path) -> Option<RgbaImage> {
 
 /// Square `diameter` crop of `image` (cover-scaled, centred) clipped to a circle. The edge
 /// is anti-aliased over one pixel; everything outside the circle is transparent.
+#[must_use]
 pub fn circle_crop(image: &RgbaImage, diameter: u32) -> Option<RgbaImage> {
     let square = cover_rgba(image, diameter, diameter)?;
     let (width, height) = (square.width, square.height);
@@ -1150,7 +1155,7 @@ mod tests {
         let mut base = RgbaImage::from_rgba8(4, 4, [0, 0, 0, 0].repeat(16)).expect("base");
         composite_over(&mut base, &solid(2, 2), 1, 1);
         assert_eq!(
-            &base.pixels[(1 * 4 + 1) * 4..(1 * 4 + 1) * 4 + 4],
+            &base.pixels[(4 + 1) * 4..(4 + 1) * 4 + 4],
             &[255, 0, 0, 255]
         );
         assert_eq!(base.pixels[3], 0, "outside the picture stays transparent");

@@ -45,8 +45,7 @@ pub fn run(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     (
         pass,
         format!(
-            "scenario=T18-T20 classification=RED admission={} T18_reactor_only_present={} T19_noop_wake_skip={} T20_same_turn_coalesce={} observable=source-control-flow failure_mutation=missing-redraw-if-dirty-before-empty-x-queue path=source-admission",
-            pass, t18, t19, t20
+            "scenario=T18-T20 classification=RED admission={pass} T18_reactor_only_present={t18} T19_noop_wake_skip={t19} T20_same_turn_coalesce={t20} observable=source-control-flow failure_mutation=missing-redraw-if-dirty-before-empty-x-queue path=source-admission"
         ),
     )
 }

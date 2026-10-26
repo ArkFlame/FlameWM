@@ -1,6 +1,6 @@
 use super::*;
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn handle_configure_notify(
         &mut self,
         event: ConfigureNotifyEvent,
@@ -24,7 +24,11 @@ impl<'a, C: Connection> Wm<'a, C> {
                 .filter(|(_, state)| state.is_fullscreen())
                 .map(|(&client, _)| client)
                 .collect();
-            if !fullscreen.is_empty() {
+            if fullscreen.is_empty() {
+                self.mark_work_area();
+                self.reconcile_work_area()?;
+                self.publish_workspace_metadata()?;
+            } else {
                 if self.output_work_areas.len() <= 1 {
                     for client in fullscreen {
                         if let Some(state) = self.clients.get_mut(&client) {
@@ -35,10 +39,6 @@ impl<'a, C: Connection> Wm<'a, C> {
                     }
                 }
                 self.display_topology_dirty.mark();
-            } else {
-                self.mark_work_area();
-                self.reconcile_work_area()?;
-                self.publish_workspace_metadata()?;
             }
             return Ok(());
         }
@@ -172,8 +172,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             let frame = self
                 .clients
                 .get(&client_id)
-                .map(|state| state.frame)
-                .unwrap_or(client_id);
+                .map_or(client_id, |state| state.frame);
             let sibling = if event.value_mask.contains(ConfigWindow::SIBLING) && event.sibling != 0
             {
                 self.client_for(event.sibling)

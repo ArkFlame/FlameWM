@@ -1,6 +1,6 @@
 use super::*;
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn handle_enter(&mut self, event: EnterNotifyEvent) -> Result<(), ReplyError> {
         let source = resolve_frame_event_source(&self.registry, event.event, event.child);
         let Some(client_id) = self.client_for(source) else {
@@ -536,10 +536,10 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     pub(super) fn session_client(&self) -> Option<Window> {
         self.sessions.iter().find_map(|(client, session)| {
-            if !session.session.is_idle() {
-                Some(*client)
-            } else {
+            if session.session.is_idle() {
                 None
+            } else {
+                Some(*client)
             }
         })
     }
@@ -585,7 +585,7 @@ fn motion_repeats(
     last: &mut Option<(RootPoint, SnapTarget)>,
     key: (RootPoint, SnapTarget),
 ) -> bool {
-    std::mem::replace(last, Some(key)) == Some(key)
+    last.replace(key) == Some(key)
 }
 
 #[cfg(test)]

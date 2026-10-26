@@ -5,7 +5,7 @@ fn tab_with(names: &[&str]) -> Tab {
     tab.set_entries(
         names
             .iter()
-            .map(|n| Entry::new(PathBuf::from(n), n.to_string(), false, false, 0, None))
+            .map(|n| Entry::new(PathBuf::from(n), (*n).to_string(), false, false, 0, None))
             .collect(),
     );
     tab

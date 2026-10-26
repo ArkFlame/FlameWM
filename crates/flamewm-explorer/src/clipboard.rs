@@ -9,6 +9,7 @@ pub type FileClip = (Vec<PathBuf>, bool);
 /// Chooses what Paste uses. A system file list wins, including copies made by other apps.
 /// A system cut that this explorer already moved (`spent`) is ignored so it cannot be moved twice.
 /// The in-app clipboard is used only when the system holds no usable file list.
+#[must_use]
 pub fn resolve_paste(
     system: Option<FileClip>,
     in_app: Option<&FileClip>,
@@ -26,6 +27,7 @@ pub fn resolve_paste(
 /// Updates the in-app clipboard after a cut batch finished. A cut that moved everything
 /// clears the clipboard; a partial move keeps only the failed sources for a safe retry.
 /// Clipboards that hold other content, or copies, are left untouched.
+#[must_use]
 pub fn settle_cut(
     clipboard: Option<FileClip>,
     sources: &[PathBuf],

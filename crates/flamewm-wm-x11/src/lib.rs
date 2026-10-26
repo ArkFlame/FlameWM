@@ -59,7 +59,7 @@ use x11rb::rust_connection::RustConnection;
 static WORKSPACE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Advances the workspace revision fence. Called from the WM when
-/// _NET_CURRENT_DESKTOP, _NET_NUMBER_OF_DESKTOPS, or _NET_DESKTOP_NAMES change.
+/// _`NET_CURRENT_DESKTOP`, _`NET_NUMBER_OF_DESKTOPS`, or _`NET_DESKTOP_NAMES` change.
 pub(crate) fn bump_workspace_generation() -> u64 {
     WORKSPACE_GENERATION
         .fetch_add(1, Ordering::Relaxed)
@@ -318,18 +318,17 @@ fn window_application_id(
     wm_class: &str,
 ) -> DesktopAppId {
     let identity = WindowApplicationIdentity::new(wm_instance, wm_class, "");
-    catalog
-        .find_by_window_identity(&identity)
-        .map(|entry| entry.id.clone())
-        .unwrap_or_else(|| {
+    catalog.find_by_window_identity(&identity).map_or_else(
+        || {
             let fallback = [wm_class, wm_instance]
                 .into_iter()
                 .map(str::trim)
                 .find(|value| !value.is_empty())
-                .map(str::to_ascii_lowercase)
-                .unwrap_or_else(|| "unknown".to_owned());
+                .map_or_else(|| "unknown".to_owned(), str::to_ascii_lowercase);
             DesktopAppId::new(fallback)
-        })
+        },
+        |entry| entry.id.clone(),
+    )
 }
 
 /// Split a raw `WM_CLASS` property (two NUL-separated tokens: instance first,
@@ -369,7 +368,7 @@ fn output_for_window_rect(outputs: &[OutputSnapshot], rect: Rect) -> Option<Outp
         let area = u64::try_from(width)
             .unwrap_or(0)
             .saturating_mul(u64::try_from(height).unwrap_or(0));
-        if area > 0 && best.map_or(true, |(_, score)| area > score) {
+        if area > 0 && best.is_none_or(|(_, score)| area > score) {
             best = Some((output, area));
         }
     }
@@ -438,7 +437,7 @@ impl X11Desktop {
             )
             .map_err(io_error)?;
         let parent = tree_cookie.reply().map_err(io_error)?.parent;
-        let geometry_window = if parent != self.root { parent } else { window };
+        let geometry_window = if parent == self.root { window } else { parent };
         let geometry_cookie = self.conn.get_geometry(geometry_window).map_err(io_error)?;
         let states: Vec<u32> = states_cookie
             .reply()
@@ -701,7 +700,7 @@ impl ApplicationPort for X11Desktop {
         app: &DesktopAppId,
         options: &ApplicationLaunchOptions,
     ) -> FlameResult<()> {
-        self.catalog.launch(app, options).map(|_| ())
+        self.catalog.launch(app, options)
     }
     fn launch_uri(&mut self, uri: &str) -> FlameResult<()> {
         Command::new("xdg-open")
@@ -765,7 +764,7 @@ fn shortcut_grabs() -> MutexGuard<'static, ShortcutGrabs> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Resolves a KeyPress (keycode and modifier state) to the active action id.
+/// Resolves a `KeyPress` (keycode and modifier state) to the active action id.
 pub(crate) fn shortcut_action_for_key(keycode: u8, state: u16) -> Option<String> {
     let matched = shortcut_grabs()
         .action_for_key(keycode, state)
@@ -800,7 +799,7 @@ impl ShortcutPort for X11Desktop {
     }
 }
 
-/// Diagnostic only (FLAMEWM_KEY_DIAG=1): one line per committed startup binding
+/// Diagnostic only (`FLAMEWM_KEY_DIAG=1)`: one line per committed startup binding
 /// (the effective set, persisted hotkeys over defaults) with the keysym and
 /// every keycode the server maps that keysym to. The grab itself is performed by
 /// `PlatformHost::commit_startup_shortcuts` through `ShortcutPort`.
@@ -936,8 +935,7 @@ impl DisplayPort for X11Desktop {
             .randr_get_output_primary(self.root)
             .ok()
             .and_then(|cookie| cookie.reply().ok())
-            .map(|reply| reply.output)
-            .unwrap_or(0);
+            .map_or(0, |reply| reply.output);
         // A multi-output server can have connected but disabled CRTCs. Only a
         // genuinely single RandR output may use Xephyr's CRTC=0 fallback.
         let single_randr_output = resources.outputs.len() == 1;

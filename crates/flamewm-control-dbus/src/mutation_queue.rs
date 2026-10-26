@@ -63,9 +63,8 @@ fn execute_with_calls(
         _ => return first,
     };
     STALE_REVISION_COUNT.fetch_add(1, Ordering::Relaxed);
-    let snapshot = match call(&ControlRequest::GetSystem) {
-        Ok(ControlResponse::System(snapshot)) => snapshot,
-        _ => return first,
+    let Ok(ControlResponse::System(snapshot)) = call(&ControlRequest::GetSystem) else {
+        return first;
     };
     let Some(fresh_action) = retryable_system_action(action, &snapshot) else {
         RETRY_REJECTED_GENERATION_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -170,7 +169,7 @@ impl MutationDispatcher {
         let handle = self
             .worker
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if let Some(handle) = handle {
             handle.join().map_err(|_| {
@@ -317,7 +316,7 @@ mod tests {
         let guard = LOCK
             .get_or_init(|| std::sync::Mutex::new(()))
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         reset_stale_retry_stats_for_test();
         guard
     }

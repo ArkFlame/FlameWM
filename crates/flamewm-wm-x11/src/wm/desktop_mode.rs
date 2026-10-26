@@ -1,13 +1,13 @@
 //! Authoritative desktop CRTC mode and the hold/restore state machine for exclusive
-//! fullscreen clients (games that switch the video mode through XRandR or XF86VidMode).
+//! fullscreen clients (games that switch the video mode through `XRandR` or `XF86VidMode`).
 //!
 //! The pure state machine has no X calls. The WM glue below reads the live CRTC state only
-//! when a RandR topology change is pending or a hold is active, feeds it to
+//! when a `RandR` topology change is pending or a hold is active, feeds it to
 //! [`DesktopModeTracker::observe`], and performs whatever [`ModeAction`] comes back.
 
 use super::*;
 
-/// One active CRTC: enough to re-issue RRSetCrtcConfig for the same output placement.
+/// One active CRTC: enough to re-issue `RRSetCrtcConfig` for the same output placement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CrtcMode {
     pub crtc: u32,
@@ -32,7 +32,7 @@ pub(crate) enum ModeAction {
 #[derive(Debug, Default)]
 pub(crate) struct DesktopModeTracker {
     desktop: Vec<CrtcMode>,
-    /// XRandR screen extent, separate from the active CRTC modes. Exclusive games may resize
+    /// `XRandR` screen extent, separate from the active CRTC modes. Exclusive games may resize
     /// the root framebuffer without changing its CRTC identifiers.
     desktop_size: Option<(u16, u16)>,
     borrowed: bool,
@@ -91,9 +91,11 @@ impl DesktopModeTracker {
     }
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+type LiveCrtcs = (Vec<CrtcMode>, u32, (u16, u16));
+
+impl<C: Connection> Wm<'_, C> {
     /// Runs once per loop turn. Returns true while the desktop must not follow a temporary mode.
-    /// Reads RandR only when a topology change is pending; a failed read holds the desktop and
+    /// Reads `RandR` only when a topology change is pending; a failed read holds the desktop and
     /// keeps the change pending so the next turn retries.
     pub(crate) fn observe_desktop_mode(&mut self) -> bool {
         if self.desktop_mode.needs_seed() {
@@ -106,7 +108,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         if !self.display_topology_dirty.is_pending() {
             return self.desktop_mode.is_borrowed();
         }
-        let fullscreen = self.clients.values().any(|client| client.is_fullscreen());
+        let fullscreen = self
+            .clients
+            .values()
+            .any(super::super::client::ManagedClient::is_fullscreen);
         let Ok(live) = self.read_live_crtcs() else {
             self.display_topology_dirty.mark();
             return true;
@@ -136,7 +141,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
     }
 
-    fn read_live_crtcs(&self) -> Result<(Vec<CrtcMode>, u32, (u16, u16)), ReplyError> {
+    fn read_live_crtcs(&self) -> Result<LiveCrtcs, ReplyError> {
         let root = self.screen().root;
         let resources = self
             .conn
@@ -169,7 +174,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     /// Restore both the root framebuffer and CRTC mode/placement. A game may change only the
-    /// framebuffer size; RRSetCrtcConfig alone will not undo that and panels stay shrunken.
+    /// framebuffer size; `RRSetCrtcConfig` alone will not undo that and panels stay shrunken.
     fn restore_crtcs(&self, desktop: &[CrtcMode], size: (u16, u16)) -> Result<bool, ReplyError> {
         let root = self.screen().root;
         let geometry = self.conn.get_geometry(root)?.reply()?;

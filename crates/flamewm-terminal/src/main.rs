@@ -201,7 +201,7 @@ fn run() -> Result<(), String> {
                     app.set_window(*width, *height);
                     true
                 }
-                _ => true,
+                UiControllerEvent::Drag(_) => true,
             };
             if changed {
                 app.project(document)
@@ -227,7 +227,7 @@ fn run() -> Result<(), String> {
 }
 
 /// The window backdrop is built once from the startup snapshot and cannot be installed later, so a miss leaves the
-/// terminal opaque for its whole life. Startup retries GetSettings in short attempts within a bounded budget.
+/// terminal opaque for its whole life. Startup retries `GetSettings` in short attempts within a bounded budget.
 const SETTINGS_ATTEMPT: Duration = Duration::from_millis(300);
 const SETTINGS_BUDGET: Duration = Duration::from_millis(2_000);
 const SETTINGS_RETRY_PAUSE: Duration = Duration::from_millis(100);

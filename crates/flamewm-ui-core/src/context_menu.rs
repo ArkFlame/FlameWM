@@ -111,7 +111,7 @@ pub struct SurfaceFill {
     pub alpha: u8,
 }
 
-const DEFAULT_SURFACE_COLOR: u32 = 0x191b1d;
+const DEFAULT_SURFACE_COLOR: u32 = 0x0019_1b1d;
 const DEFAULT_SURFACE_OPACITY: u8 = 50;
 
 /// Maps `surfaceColor` / `surfaceOpacity` to a fill. Same mapping as the shell
@@ -165,7 +165,7 @@ pub const SETTINGS_ROW_ID: &str = "flamewm-settings";
 pub const SETTINGS_ROW_LABEL: &str = "FlameWM Settings";
 pub const SETTINGS_ROW_ICON: &str = "preferences-desktop";
 
-/// The "FlameWM Settings" row, identical on the desktop and taskbar menus.
+/// The "`FlameWM` Settings" row, identical on the desktop and taskbar menus.
 #[must_use]
 pub const fn settings_row(id: &'static str) -> MenuRow {
     MenuRow {
@@ -263,7 +263,7 @@ mod tests {
         assert_eq!(
             fill,
             SurfaceFill {
-                rgb: 0x191b1d,
+                rgb: 0x0019_1b1d,
                 alpha: 127
             }
         );
@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(
             surface_fill(&snapshot),
             SurfaceFill {
-                rgb: 0x1e2123,
+                rgb: 0x001e_2123,
                 alpha: 255
             }
         );
@@ -291,9 +291,9 @@ mod tests {
     #[test]
     fn surface_fill_accepts_bare_hex_and_rejects_invalid_colour() {
         let bare = snapshot_with("surfaceColor", SettingValue::Text("ef4048".into()));
-        assert_eq!(surface_fill(&bare).rgb, 0xef4048);
+        assert_eq!(surface_fill(&bare).rgb, 0x00ef_4048);
         let invalid = snapshot_with("surfaceColor", SettingValue::Text("#zzzzzz".into()));
-        assert_eq!(surface_fill(&invalid).rgb, 0x191b1d);
+        assert_eq!(surface_fill(&invalid).rgb, 0x0019_1b1d);
     }
 
     #[test]
@@ -301,7 +301,7 @@ mod tests {
         let snapshot = snapshot_with("surfaceOpacity", SettingValue::Percent(50));
         let fill = surface_fill(&snapshot);
         assert_eq!(fill.alpha, 127);
-        assert_eq!(fill.rgb, 0x191b1d);
+        assert_eq!(fill.rgb, 0x0019_1b1d);
     }
 }
 
@@ -454,7 +454,7 @@ mod shared_row_tests {
         assert_eq!(
             rounded.fill,
             SurfaceFill {
-                rgb: 0x191b1d,
+                rgb: 0x0019_1b1d,
                 alpha: 127
             }
         );

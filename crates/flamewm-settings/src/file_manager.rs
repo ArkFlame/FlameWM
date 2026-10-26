@@ -1,4 +1,4 @@
-//! Freedesktop default file manager; no new FlameWM configuration key or parallel MIME database.
+//! Freedesktop default file manager; no new `FlameWM` configuration key or parallel MIME database.
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -9,9 +9,8 @@ fn available(id: &str) -> bool {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    let user = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/share"));
+    let user =
+        std::env::var_os("XDG_DATA_HOME").map_or_else(|| home.join(".local/share"), PathBuf::from);
     std::iter::once(user)
         .chain(std::env::split_paths(
             &std::env::var_os("XDG_DATA_DIRS")

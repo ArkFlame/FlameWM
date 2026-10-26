@@ -8,18 +8,18 @@ pub enum Error {
     InvalidUrl(String),
     /// The scheme is recognised but this build has no backend for it.
     UnsupportedProtocol(&'static str),
-    /// Host key is not in known_hosts. Caller must probe, show the fingerprint, and trust it.
+    /// Host key is not in `known_hosts`. Caller must probe, show the fingerprint, and trust it.
     HostKeyUnknown {
         host: String,
         port: u16,
     },
-    /// Host key differs from known_hosts. Never accepted automatically.
+    /// Host key differs from `known_hosts`. Never accepted automatically.
     HostKeyChanged {
         host: String,
         port: u16,
     },
     /// Public-key/agent auth failed. `password_possible` means the server offered a password
-    /// method, which this client does not answer (BatchMode, no secret handling).
+    /// method, which this client does not answer (`BatchMode`, no secret handling).
     AuthFailed {
         host: String,
         password_possible: bool,

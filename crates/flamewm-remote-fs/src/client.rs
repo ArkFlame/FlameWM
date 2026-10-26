@@ -44,14 +44,15 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
+            || {
                 std::env::temp_dir().join(format!(
                     "flamewm-rfs-{}",
                     std::env::var("USER").unwrap_or_default()
                 ))
-            });
+            },
+            PathBuf::from,
+        );
         Self {
             ssh: std::env::var_os("FLAMEWM_RFS_SSH").map_or_else(|| "ssh".into(), PathBuf::from),
             keyscan: "ssh-keyscan".into(),
@@ -88,7 +89,7 @@ pub struct HostKeyPrompt {
     pub port: u16,
     pub key_type: String,
     pub fingerprint_sha256: String,
-    /// Exact known_hosts line to append on acceptance.
+    /// Exact `known_hosts` line to append on acceptance.
     pub known_hosts_line: String,
 }
 
@@ -102,6 +103,7 @@ impl<T> Reply<T> {
             .unwrap_or(Err(Error::Io("worker stopped".into())))
     }
 
+    #[must_use]
     pub fn try_take(&self) -> Option<Result<T, Error>> {
         self.0.try_recv().ok()
     }
@@ -181,21 +183,24 @@ impl RemoteFs {
     }
 
     /// Stream a directory listing in chunks. Cancel with `cancel`; cached listings return at once.
+    #[must_use]
     pub fn list_dir(&self, url: &Url, cancel: &Cancel) -> Receiver<ListEvent> {
         let (tx, rx) = channel();
         let (url, cancel) = (url.clone(), cancel.clone());
         let _ = self.tx.send(Box::new(move |sh: &Shared| {
-            list_job(sh, &url, &cancel, &tx)
+            list_job(sh, &url, &cancel, &tx);
         }));
         rx
     }
 
+    #[must_use]
     pub fn stat(&self, url: &Url) -> Reply<Entry> {
         let url = url.clone();
         self.submit(move |sh| stat_entry(sh, &url))
     }
 
     /// Resolve the remote home directory to an absolute URL.
+    #[must_use]
     pub fn home(&self, url: &Url) -> Reply<Url> {
         let url = url.clone();
         self.submit(move |sh| {
@@ -214,6 +219,7 @@ impl RemoteFs {
         })
     }
 
+    #[must_use]
     pub fn mkdir(&self, url: &Url) -> Reply<()> {
         let url = url.clone();
         self.submit(move |sh| {
@@ -227,6 +233,7 @@ impl RemoteFs {
         })
     }
 
+    #[must_use]
     pub fn remove(&self, url: &Url, recursive: bool) -> Reply<()> {
         let url = url.clone();
         self.submit(move |sh| {
@@ -240,6 +247,7 @@ impl RemoteFs {
         })
     }
 
+    #[must_use]
     pub fn rename(&self, from: &Url, to: &Url) -> Reply<()> {
         let (from, to) = (from.clone(), to.clone());
         self.submit(move |sh| {
@@ -260,6 +268,7 @@ impl RemoteFs {
     }
 
     /// Copy a remote file to `local` via a `.flamewm-part` temp file, renamed on success.
+    #[must_use]
     pub fn download(&self, url: &Url, local: &Path, cancel: &Cancel) -> Receiver<TransferEvent> {
         let (tx, rx) = channel();
         let (url, local, cancel) = (url.clone(), local.to_path_buf(), cancel.clone());
@@ -275,6 +284,7 @@ impl RemoteFs {
 
     /// Copy `local` to the remote path via a temp file and atomic rename. The remote temp file is
     /// removed on failure or cancellation.
+    #[must_use]
     pub fn upload(&self, local: &Path, url: &Url, cancel: &Cancel) -> Receiver<TransferEvent> {
         let (tx, rx) = channel();
         let (local, url, cancel) = (local.to_path_buf(), url.clone(), cancel.clone());
@@ -289,13 +299,15 @@ impl RemoteFs {
         rx
     }
 
-    /// Fetch the host's key for a first-time trust decision. Does not modify known_hosts.
+    /// Fetch the host's key for a first-time trust decision. Does not modify `known_hosts`.
+    #[must_use]
     pub fn probe_host_key(&self, url: &Url) -> Reply<HostKeyPrompt> {
         let url = url.clone();
         self.submit(move |sh| probe_host_key(sh, &url))
     }
 
-    /// Append a user-confirmed key to ~/.ssh/known_hosts. Refuses to overwrite a different key.
+    /// Append a user-confirmed key to ~/.`ssh/known_hosts`. Refuses to overwrite a different key.
+    #[must_use]
     pub fn trust_host_key(&self, prompt: &HostKeyPrompt) -> Reply<()> {
         let prompt = prompt.clone();
         self.submit(move |_| trust_host_key(&prompt))

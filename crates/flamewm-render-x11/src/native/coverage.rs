@@ -262,8 +262,8 @@ mod tests {
         let cmds = vec![fill(0.0, 0.0, 8.0, 8.0, 255, 4.0)];
         let spans = build_coverage(&cmds, 8, 8, 0.0);
         let row0 = spans.iter().find(|(y, _, _)| *y == 0).unwrap();
-        assert_eq!((*row0).1, 2);
-        assert_eq!((*row0).2, 6);
+        assert_eq!(row0.1, 2);
+        assert_eq!(row0.2, 6);
         let row3 = spans.iter().find(|(y, _, _)| *y == 3).unwrap();
         assert_eq!((row3.1, row3.2), (0, 8));
     }

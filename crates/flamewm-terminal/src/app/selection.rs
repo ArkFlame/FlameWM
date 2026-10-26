@@ -66,6 +66,7 @@ impl App {
                 line.len().saturating_sub(1)
             };
             let mut text = String::new();
+            #[allow(clippy::needless_range_loop)]
             for col in from..=to.min(line.len().saturating_sub(1)) {
                 let cell = &line[col];
                 if cell.attrs & crate::screen::attr::SPACER == 0 {

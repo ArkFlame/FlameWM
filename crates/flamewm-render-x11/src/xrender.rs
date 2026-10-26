@@ -430,6 +430,14 @@ fn premultiplied_u16(channel: u8, alpha: u8) -> u16 {
     ((straight * a + 32767) / 65535) as u16
 }
 
+impl Drop for XRenderBackend {
+    fn drop(&mut self) {
+        // SAFETY: teardown only frees backend-owned pictures while `display` is
+        // live; draining first guarantees each picture is released once.
+        unsafe { self.release_resources() };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,13 +501,5 @@ mod tests {
             XCloseDisplay(display);
             drop(libraries);
         }
-    }
-}
-
-impl Drop for XRenderBackend {
-    fn drop(&mut self) {
-        // SAFETY: teardown only frees backend-owned pictures while `display` is
-        // live; draining first guarantees each picture is released once.
-        unsafe { self.release_resources() };
     }
 }

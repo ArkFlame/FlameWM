@@ -1,7 +1,7 @@
 use super::*;
 use flamewm_api::workspace::{WORKSPACE_ROWS, grid_position, workspace_columns};
 
-/// `_NET_DESKTOP_GEOMETRY`: the whole two-row grid in pixels (columns x WORKSPACE_ROWS cells).
+/// `_NET_DESKTOP_GEOMETRY`: the whole two-row grid in pixels (columns x `WORKSPACE_ROWS` cells).
 pub(super) fn desktop_geometry_payload(count: usize, screen: Rect) -> [u32; 2] {
     [
         (workspace_columns(count) as u32).saturating_mul(screen.width),
@@ -23,7 +23,7 @@ pub(super) fn desktop_viewport_payload(count: usize, screen: Rect) -> Vec<u32> {
         .collect()
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn set_property32(
         &self,
         window: Window,

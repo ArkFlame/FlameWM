@@ -1,5 +1,5 @@
 //! Lock-screen idle state machine: Visible, then Ribbons (animated) or straight to
-//! DisplayOff (mode `none`), then DisplayOff. Pure: no clock, X, or DPMS access.
+//! `DisplayOff` (mode `none`), then `DisplayOff`. Pure: no clock, X, or DPMS access.
 //!
 //! Timing: a `0` value means "never". `screensaverAfterLockMinutes` counts idle time
 //! since the last input; `screensaverDisplayOffMinutes` counts time spent in Ribbons.
@@ -24,6 +24,7 @@ pub struct Screensaver {
 }
 
 impl Screensaver {
+    #[must_use]
     pub fn new(config: SaverConfig) -> Self {
         Self {
             config,
@@ -33,6 +34,7 @@ impl Screensaver {
         }
     }
 
+    #[must_use]
     pub fn phase(&self) -> Phase {
         self.phase
     }

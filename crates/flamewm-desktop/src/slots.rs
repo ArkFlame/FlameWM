@@ -13,6 +13,7 @@ pub(super) fn project_slots(
     };
     let cells = &cache.cells;
     let generation = projection::theme_generation();
+    #[allow(clippy::needless_range_loop)]
     for index in 0..SLOT_COUNT {
         let item = items.get(index).copied();
         if let Some(item) = item {
@@ -96,6 +97,81 @@ impl SlotInputs {
             && self.scale == scale
             && self.generation == generation
     }
+}
+
+/// Wake-driven icon completion: the `IconService` wake FD sets the pending
+/// flag (no inotify/click dependency); this drains the service and applies
+/// each result only to slots whose tracked [`IconKey`] still matches, then
+/// redraws each affected tile surface exactly once via the document marks.
+pub(super) fn apply_pending_icon_results(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    if !state.icons_pending.swap(false, Ordering::Acquire) {
+        return Ok(());
+    }
+    apply_ready_icons(document, state)
+}
+
+/// An empty slot needs a clear until the first slot pass, and again whenever it held a tile.
+fn empty_slot_needs_clear(primed: bool, held_tile: bool) -> bool {
+    !primed || held_tile
+}
+
+/// A completed icon result applies only to the slot still expecting its exact key
+/// (including theme generation), so results for a replaced theme are dropped.
+fn slot_expects_key(slot: Option<&IconKey>, key: &IconKey) -> bool {
+    slot.is_some_and(|expected| expected == key)
+}
+
+pub(super) fn apply_ready_icons(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    let ready = state.icons.drain_ready();
+    if ready.is_empty() {
+        return Ok(());
+    }
+    for (key, raster) in ready {
+        let Some(raster) = raster else { continue };
+        for index in 0..SLOT_COUNT {
+            let Some(expected) = state.icon_slots.get(index).cloned().flatten() else {
+                continue;
+            };
+            let Some(kind) = state.model.items().nth(index).map(|item| item.kind) else {
+                continue;
+            };
+            if slot_expects_key(Some(&expected), &key) {
+                state.icons.apply_if_current(
+                    document,
+                    index,
+                    kind,
+                    &expected,
+                    &key,
+                    raster.clone(),
+                )?;
+            }
+        }
+    }
+    // A live prediction shares the same async icon cache as real desktop tiles.
+    if let Some(preview) = state.conversion_preview.as_ref() {
+        let key = projection::ParallelIconService::icon_key(
+            DesktopItemKind::File,
+            Some(projection::file_icon_name(&preview.destination)),
+        );
+        if let Some(raster) = state.icons.cached(&key) {
+            document.image_rgba8(
+                "desktop-convert-preview-icon",
+                flamewm_ui_x11::RuntimeImage {
+                    source: raster.source,
+                    width: raster.width,
+                    height: raster.height,
+                    pixels: raster.pixels,
+                },
+            )?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -189,79 +265,4 @@ mod slot_input_tests {
         assert!(!slot_expects_key(Some(&current), &stale));
         assert!(!slot_expects_key(None, &current));
     }
-}
-
-/// Wake-driven icon completion: the IconService wake FD sets the pending
-/// flag (no inotify/click dependency); this drains the service and applies
-/// each result only to slots whose tracked [`IconKey`] still matches, then
-/// redraws each affected tile surface exactly once via the document marks.
-pub(super) fn apply_pending_icon_results(
-    document: &mut impl UiDocumentAccess,
-    state: &mut DesktopState,
-) -> Result<(), String> {
-    if !state.icons_pending.swap(false, Ordering::Acquire) {
-        return Ok(());
-    }
-    apply_ready_icons(document, state)
-}
-
-/// An empty slot needs a clear until the first slot pass, and again whenever it held a tile.
-fn empty_slot_needs_clear(primed: bool, held_tile: bool) -> bool {
-    !primed || held_tile
-}
-
-/// A completed icon result applies only to the slot still expecting its exact key
-/// (including theme generation), so results for a replaced theme are dropped.
-fn slot_expects_key(slot: Option<&IconKey>, key: &IconKey) -> bool {
-    slot.is_some_and(|expected| expected == key)
-}
-
-pub(super) fn apply_ready_icons(
-    document: &mut impl UiDocumentAccess,
-    state: &mut DesktopState,
-) -> Result<(), String> {
-    let ready = state.icons.drain_ready();
-    if ready.is_empty() {
-        return Ok(());
-    }
-    for (key, raster) in ready {
-        let Some(raster) = raster else { continue };
-        for index in 0..SLOT_COUNT {
-            let Some(expected) = state.icon_slots.get(index).cloned().flatten() else {
-                continue;
-            };
-            let Some(kind) = state.model.items().nth(index).map(|item| item.kind) else {
-                continue;
-            };
-            if slot_expects_key(Some(&expected), &key) {
-                state.icons.apply_if_current(
-                    document,
-                    index,
-                    kind,
-                    &expected,
-                    &key,
-                    raster.clone(),
-                )?;
-            }
-        }
-    }
-    // A live prediction shares the same async icon cache as real desktop tiles.
-    if let Some(preview) = state.conversion_preview.as_ref() {
-        let key = projection::ParallelIconService::icon_key(
-            DesktopItemKind::File,
-            Some(projection::file_icon_name(&preview.destination)),
-        );
-        if let Some(raster) = state.icons.cached(&key) {
-            document.image_rgba8(
-                "desktop-convert-preview-icon",
-                flamewm_ui_x11::RuntimeImage {
-                    source: raster.source,
-                    width: raster.width,
-                    height: raster.height,
-                    pixels: raster.pixels,
-                },
-            )?;
-        }
-    }
-    Ok(())
 }

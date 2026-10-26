@@ -1,4 +1,4 @@
-//! Blocking XDG portal FileChooser provider for one local wallpaper file.
+//! Blocking XDG portal `FileChooser` provider for one local wallpaper file.
 //!
 //! The Settings worker owns the blocking boundary.  The provider uses the
 //! existing libdbus pump and does not create a second async runtime or shell
@@ -29,7 +29,7 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
 static NEXT_HANDLE_TOKEN: AtomicU64 = AtomicU64::new(1);
 
-/// One-session-bus FileChooser provider. Calls intentionally block the caller;
+/// One-session-bus `FileChooser` provider. Calls intentionally block the caller;
 /// Settings must invoke this provider from its worker boundary.
 pub struct PortalFileChooser {
     pump: BusPump,

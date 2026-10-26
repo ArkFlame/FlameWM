@@ -166,7 +166,7 @@ pub struct ContextMenuState {
     pub revision: u64,
     pub output: Option<flamewm_api::OutputId>,
     pub interaction: Option<InteractionContext>,
-    /// Root-coordinate pointer anchor (ActionEvent local x/y resolved
+    /// Root-coordinate pointer anchor (`ActionEvent` local x/y resolved
     /// against the source surface global rect). `None` only when pointer
     /// data was absent; that is the sole output-origin fallback case.
     pub anchor: Option<flamewm_api::Point>,
@@ -268,7 +268,7 @@ impl ShellRuntime {
             ControlSignal::WindowsSnapshotChanged { windows, .. } => {
                 let _s = crate::runtime::shell_span("shell.signal_to_visual.windows").start();
                 if *windows != self.snapshot.windows {
-                    Rc::make_mut(&mut self.snapshot).windows = windows.clone();
+                    Rc::make_mut(&mut self.snapshot).windows.clone_from(windows);
                     self.dirty.windows = true;
                 }
             }
@@ -494,12 +494,12 @@ impl ShellRuntime {
                     return None;
                 }
                 crate::taskbar::context_menu::workspace_action(snapshot, *index, row)
-                    .map(|intent| intent.into_control_request())
+                    .map(super::taskbar::context_menu::ContextAction::into_control_request)
             }
         }
     }
 
-    /// Typed SystemAction control for audio rows from a provider snapshot.
+    /// Typed `SystemAction` control for audio rows from a provider snapshot.
     /// The provider owns volumes/mutes; the shell only forwards the id-keyed
     /// action. Rejects out-of-range percents the same way the provider does.
     #[must_use]
@@ -517,8 +517,8 @@ impl ShellRuntime {
         )
     }
 
-    /// Typed SystemAction control for network rows from a provider snapshot.
-    /// Secrets travel via the SecretAgent snapshot only; this never carries
+    /// Typed `SystemAction` control for network rows from a provider snapshot.
+    /// Secrets travel via the `SecretAgent` snapshot only; this never carries
     /// a secret value.
     #[must_use]
     pub fn network_system_action_for_path(
@@ -1138,9 +1138,12 @@ fn panel_reconciliation_plan(
             None => plan.create.push(context.output.id.clone()),
         }
     }
-    plan.remove.extend(existing.iter().filter_map(|(id, _)| {
-        (!desired.iter().any(|context| context.output.id == *id)).then(|| id.clone())
-    }));
+    plan.remove.extend(
+        existing
+            .iter()
+            .filter(|&(id, _)| (!desired.iter().any(|context| context.output.id == *id)))
+            .map(|(id, _)| id.clone()),
+    );
     plan
 }
 
@@ -1293,7 +1296,7 @@ impl ShellSurfaces {
             );
             panel.set_logical_size(placement.panel.logical_size);
             panel.frame = frame;
-            let edge = frame.floating.then(|| match placement.panel.edge {
+            let edge = frame.floating.then_some(match placement.panel.edge {
                 PanelEdge::Bottom => DockEdge::Bottom,
                 PanelEdge::Top => DockEdge::Top,
                 PanelEdge::Left => DockEdge::Left,
@@ -1541,20 +1544,19 @@ impl ShellSurfaces {
                 _ => 0,
             };
             let attempts = attempts_so_far.saturating_add(1);
-            let (step, raw) = match wallpaper(key.rect) {
-                Some(image) => (CaptureStep::Use, image),
-                None => {
-                    let capture = runtime
-                        .capture_root_under_unmapped(panel)
-                        .map_err(ui_error)?;
-                    let ready = flamewm_ui_x11::backdrop::capture_is_ready(&capture.pixels);
-                    let image = RgbaImage {
-                        width: capture.width,
-                        height: capture.height,
-                        pixels: capture.pixels,
-                    };
-                    (capture_step(ready, attempts), image)
-                }
+            let (step, raw) = if let Some(image) = wallpaper(key.rect) {
+                (CaptureStep::Use, image)
+            } else {
+                let capture = runtime
+                    .capture_root_under_unmapped(panel)
+                    .map_err(ui_error)?;
+                let ready = flamewm_ui_x11::backdrop::capture_is_ready(&capture.pixels);
+                let image = RgbaImage {
+                    width: capture.width,
+                    height: capture.height,
+                    pixels: capture.pixels,
+                };
+                (capture_step(ready, attempts), image)
             };
             crate::surface_backdrop::backdrop_trace(format_args!(
                 "panel={panel:?} snapshot rect={:?} size={}x{} step={step:?} attempts={attempts}",
@@ -2001,7 +2003,7 @@ impl ShellSurfaces {
             .as_ref()
             .ok_or_else(|| "context menu has no source output".to_owned())?;
         if self.for_output(output).is_none() {
-            return Err(format!("context menu output {} is unavailable", output));
+            return Err(format!("context menu output {output} is unavailable"));
         }
         self.select_panel_output(output);
         self.close_transients(runtime)?;
@@ -2015,7 +2017,7 @@ impl ShellSurfaces {
         );
         let panel = self
             .for_output(output)
-            .ok_or_else(|| format!("context menu output {} is unavailable", output))?;
+            .ok_or_else(|| format!("context menu output {output} is unavailable"))?;
         let percent = panel.placement.output.shell_scale_percent;
         let logical = context_menu_size(rows);
         let size = flamewm_api::Size::new(
@@ -2261,7 +2263,7 @@ impl ShellSurfaces {
     }
 
     /// Detect changes in every output by stable ID, not the primary panel's
-    /// position alone. RandR can change CRTC coordinates without a reliable
+    /// position alone. `RandR` can change CRTC coordinates without a reliable
     /// panels revision/generation bump. This gate runs before every popup.
     #[must_use]
     pub fn panel_topology_drifted(&self, snapshot: &ShellSnapshot) -> bool {
@@ -2345,7 +2347,7 @@ impl ShellSurfaces {
     }
 
     /// The retained placement record can be current while the X11 surface is
-    /// stale (for example if a previous ConfigureWindow failed). Compare the
+    /// stale (for example if a previous `ConfigureWindow` failed). Compare the
     /// actual native rectangles for *every* output, not just snapshot revisions.
     /// `key` is the (display generation, panels revision) under which the
     /// result is cached: a clean result is not re-probed until it changes, and
@@ -2374,8 +2376,8 @@ impl ShellSurfaces {
         )
     }
 
-    /// F10: move_resize every panel native surface to its synced snapshot
-    /// geometry. Returns `true` when at least one move_resize was issued.
+    /// F10: `move_resize` every panel native surface to its synced snapshot
+    /// geometry. Returns `true` when at least one `move_resize` was issued.
     pub fn move_panel_to_synced(&self, runtime: &mut SurfaceRuntime) -> Result<bool, String> {
         let mut moved = false;
         for record in &self.panels {
@@ -2414,7 +2416,7 @@ impl ShellSurfaces {
         self.selected().placement.panel.edge
     }
 
-    /// Resolve a surface-local pointer position (ActionEvent x/y from the
+    /// Resolve a surface-local pointer position (`ActionEvent` x/y from the
     /// panel surface) to root coordinates via the retained panel device
     /// rect. Falls back to the snapshot geometry only when no retained
     /// layout exists (pre-map).
@@ -2486,8 +2488,8 @@ impl ShellSurfaces {
             .map_err(ui_error)
     }
 
-    /// Present step for the grabbed tail: canonical present_mapped path
-    /// (show = geometry/move_resize origin-tracked + map/raise/present).
+    /// Present step for the grabbed tail: canonical `present_mapped` path
+    /// (show = `geometry/move_resize` origin-tracked + map/raise/present).
     /// No separate raise or redraw chains: `show` owns the single ordered
     /// present cycle, then the single group grab.
     fn map_raise_grab(
@@ -2607,9 +2609,10 @@ fn ui_error(error: UiBackendError) -> String {
 
 /// Shell spans (static only): shell.windows.reconcile, shell.workspaces.reconcile,
 /// shell.tasks.project, shell.pager.project, shell.popup.request,
-/// shell.quick_control.open_request, shell.quick_control.restart,
-/// shell.signal_to_visual.windows, shell.signal_to_visual.workspaces,
-/// shell.signal_to_visual.system.
+/// `shell.quick_control.open_request`, `shell.quick_control.restart`,
+/// `shell.signal_to_visual.windows`, `shell.signal_to_visual.workspaces`,
+/// `shell.signal_to_visual.system`.
+#[must_use]
 pub fn shell_span(label: &'static str) -> flamewm_profiler::ProfilePoint {
     debug_assert!(
         matches!(

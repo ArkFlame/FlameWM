@@ -1,6 +1,6 @@
 use super::*;
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn execute_effects(
         &mut self,
         client: Window,
@@ -143,7 +143,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                             client,
                             clamp_i16(x),
                             clamp_i16(y),
-                            clamp_u16(w.max(1) as u32),
+                            clamp_u16(w.max(1)),
                             clamp_u16(h.max(1)),
                         )?;
                     }
@@ -257,27 +257,26 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.release_pointer();
             return Ok(false);
         };
-        let capture = match self.registry.capture() {
-            Some(existing) => existing,
-            None => {
-                let id = self.conn.generate_id()?;
-                let root = self.screen().root;
-                self.conn.create_window(
-                    COPY_DEPTH_FROM_PARENT,
-                    id,
-                    root,
-                    clamp_i16(self.screen_rect.x),
-                    clamp_i16(self.screen_rect.y),
-                    clamp_u16(self.screen_rect.width),
-                    clamp_u16(self.screen_rect.height),
-                    0,
-                    WindowClass::INPUT_ONLY,
-                    0,
-                    &CreateWindowAux::new(),
-                )?;
-                self.registry.set_capture(id);
-                id
-            }
+        let capture = if let Some(existing) = self.registry.capture() {
+            existing
+        } else {
+            let id = self.conn.generate_id()?;
+            let root = self.screen().root;
+            self.conn.create_window(
+                COPY_DEPTH_FROM_PARENT,
+                id,
+                root,
+                clamp_i16(self.screen_rect.x),
+                clamp_i16(self.screen_rect.y),
+                clamp_u16(self.screen_rect.width),
+                clamp_u16(self.screen_rect.height),
+                0,
+                WindowClass::INPUT_ONLY,
+                0,
+                &CreateWindowAux::new(),
+            )?;
+            self.registry.set_capture(id);
+            id
         };
         if let Some(renderer) = self.renderer.as_ref() {
             let _ = renderer
@@ -394,7 +393,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         if let (Some(probe), Some(pointer)) = (self.resize_probe.as_mut(), pointer) {
             probe.last_pointer = pointer;
         }
-        let resize_boundary = self.resize_probe.as_ref().and_then(|_| match event {
+        let resize_boundary = self.resize_probe.as_ref().and(match event {
             FrameEvent::Press { .. } if matches!(region, Some(FrameRegion::Resize(_))) => {
                 Some(("first", next.session))
             }

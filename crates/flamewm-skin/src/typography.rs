@@ -55,7 +55,7 @@ impl Typography {
         sticky_title: TextStyle {
             size_px: 15,
             weight: FontWeight::Bold,
-            color: Rgb(0x171717),
+            color: Rgb(0x0017_1717),
         },
         muted: TextStyle {
             size_px: 13,

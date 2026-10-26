@@ -68,10 +68,10 @@ pub fn plan_shadow(
         return ShadowAction::Reshade;
     };
     if gesture_active {
-        return if current != prev.placed {
-            ShadowAction::Move
-        } else {
+        return if current == prev.placed {
             ShadowAction::Noop
+        } else {
+            ShadowAction::Move
         };
     }
     if prev.shaded != current || prev.focused != focused || prev.generation != root_generation {

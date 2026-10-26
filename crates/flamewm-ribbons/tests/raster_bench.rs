@@ -14,7 +14,7 @@ fn bench(w: u32, h: u32, quality: Quality) {
     };
     let mut r = Ribbons::new(config, 0.0);
     for k in 1..=60 * 9 {
-        r.step_to(k as f64 / 60.0);
+        r.step_to(f64::from(k) / 60.0);
     }
     let mut out = vec![0u8; (w * h * 4) as usize];
     let mut rast = Rasterizer::new(quality);

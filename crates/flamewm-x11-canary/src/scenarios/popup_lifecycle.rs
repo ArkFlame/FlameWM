@@ -5,12 +5,12 @@ use x11rb::protocol::xproto::{ConnectionExt as _, MapState};
 
 use super::{InputPath, real_click, real_escape, xtest_motion};
 
-/// Root point over the FlameWM Desktop window (0..1350 x 0..551), outside the
+/// Root point over the `FlameWM` Desktop window (0..1350 x 0..551), outside the
 /// popup (x 0..550, y 244..593 at the Start button) and the panel
 /// (y 551..641). `--pointer-away`: Escape must still dismiss the popup from here.
 const POINTER_AWAY: (i16, i16) = (900, 100);
 
-/// Current input focus window (0 None, 1 PointerRoot, else a window id).
+/// Current input focus window (0 None, 1 `PointerRoot`, else a window id).
 fn input_focus(canary: &crate::Canary) -> u32 {
     canary
         .conn
@@ -101,7 +101,7 @@ fn wait_gone(canary: &crate::Canary, id: u32, timeout_ms: u64) -> bool {
     false
 }
 
-/// T03 with real-pointer path. Diagnostic SendEvent fallback is recorded but
+/// T03 with real-pointer path. Diagnostic `SendEvent` fallback is recorded but
 /// never counts as pass (returns fail with NEVER-COUNTS-AS-PASS marker).
 pub fn run_t03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let source_name = crate::arg(args, "--source").unwrap_or_else(|| "FlameWM panel".to_owned());

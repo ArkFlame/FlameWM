@@ -19,6 +19,7 @@ fn absolute_row(pane: &Pane, grid_row: usize) -> Option<usize> {
 }
 
 /// SGR (1006) or X10 mouse report for a button event in grid coordinates (0-based).
+#[must_use]
 pub fn mouse_report(
     sgr: bool,
     button: u8,
@@ -246,7 +247,7 @@ impl App {
                     }
                 }
             }
-            _ => {}
+            UiActionPhase::Press => {}
         }
         changed
     }

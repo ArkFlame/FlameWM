@@ -79,6 +79,7 @@ mod sticky;
 #[path = "../ui_contract.rs"]
 mod ui_contract;
 mod wallpaper_fit;
+#[allow(clippy::duplicate_mod)]
 mod wallpaper_loader;
 mod wallpaper_stamp;
 mod workspace_sync;
@@ -1135,9 +1136,10 @@ fn selected_deletable_paths(state: &DesktopState) -> Vec<PathBuf> {
 }
 
 fn state_path(name: &str) -> Result<PathBuf, String> {
-    let base = env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env::var_os("HOME").unwrap()).join(".local/state"));
+    let base = env::var_os("XDG_STATE_HOME").map_or_else(
+        || PathBuf::from(env::var_os("HOME").unwrap()).join(".local/state"),
+        PathBuf::from,
+    );
     Ok(base.join(name))
 }
 
@@ -1782,7 +1784,7 @@ fn double_click_pressed(state: &DesktopState, id: &str, x: f32, y: f32) -> bool 
     let Some(previous) = state.last_click.as_ref() else {
         return false;
     };
-    let delta_ms = previous.at.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    let delta_ms = previous.at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     double_click_opens(&previous.id, previous.x, previous.y, 0, id, x, y, delta_ms)
 }
 
@@ -1790,7 +1792,7 @@ fn open_item(state: &DesktopState, index: usize) -> Result<(), String> {
     let Some(item) = state.model.items().nth(index) else {
         return Ok(());
     };
-    let outcome = open_item_inner(state, item.kind.clone(), &item.path);
+    let outcome = open_item_inner(state, item.kind, &item.path);
     if let Err(error) = &outcome {
         // Double-click/open boundary: spawn intent failure is logged and
         // counted; the event loop stays alive. Child exit after a successful
@@ -1816,7 +1818,6 @@ fn open_item_inner(state: &DesktopState, kind: DesktopItemKind, path: &Path) -> 
                 .ok_or_else(|| format!("desktop entry is not launchable: {}", path.display()))?;
             entry
                 .launch(&ApplicationLaunchOptions::default())
-                .map(|_| ())
                 .map_err(|error| format!("{error:?}"))
         }
         LauncherOpen::RegularFile if kind == DesktopItemKind::Directory => {
@@ -1975,7 +1976,7 @@ fn handle_menu_action(
                                 )?;
                             }
                             Err(error) => {
-                                report_action_failure("start conversion", error.to_string())
+                                report_action_failure("start conversion", error.to_string());
                             }
                         }
                     }
@@ -2097,11 +2098,10 @@ fn sync_rename_editor(
         .items()
         .enumerate()
         .find(|(_, item)| item.id == rename.item_id)
-        .map(|(slot, _)| {
+        .map_or(state.grid.work_area.origin(), |(slot, _)| {
             let (output, cell) = &cells[slot];
             grid_for_output(state, output).cell_to_pixel(*cell)
-        })
-        .unwrap_or(state.grid.work_area.origin());
+        });
     // Value plus OK/Cancel on one row.
     let width = 300;
     let height = 44;
@@ -2257,7 +2257,7 @@ fn create_shortcut(state: &mut DesktopState) -> Result<(), String> {
 }
 
 /// Freedesktop Trash replaces irreversible deletion. The user's home is
-/// authoritative for XDG_DATA_HOME, and the UID comes from its metadata.
+/// authoritative for `XDG_DATA_HOME`, and the UID comes from its metadata.
 fn move_entry_to_trash(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let home = PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?);
@@ -2266,8 +2266,7 @@ fn move_entry_to_trash(path: &Path) -> Result<(), String> {
         .uid();
     let data_home = env::var_os("XDG_DATA_HOME")
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/share"));
+        .map_or_else(|| home.join(".local/share"), PathBuf::from);
     Trash::move_to_trash(path, &home, &data_home, uid)
         .map(|_| ())
         .map_err(|error| format!("{error:?}"))
@@ -2277,8 +2276,7 @@ fn empty_home_trash() -> Result<(), String> {
     let home = PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?);
     let data_home = env::var_os("XDG_DATA_HOME")
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/share"));
+        .map_or_else(|| home.join(".local/share"), PathBuf::from);
     let location = TrashLocation {
         scope: TrashScope::Home,
         top_directory: None,

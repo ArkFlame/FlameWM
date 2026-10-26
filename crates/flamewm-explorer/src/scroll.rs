@@ -10,6 +10,7 @@ pub const RESIZE_INTERVAL: Duration = Duration::from_millis(250);
 pub const MIN_THUMB: f32 = 24.0;
 
 /// Largest visual lead, in rows, between the drawn rows and their resting origin.
+#[must_use]
 pub fn max_lead(rows: usize) -> f32 {
     rows.max(1) as f32 * 2.0
 }
@@ -27,6 +28,7 @@ fn ease_out_cubic(t: f32) -> f32 {
 
 impl RowGlide {
     /// Offset in rows at `now`. Exactly zero once the glide has run its course, so it never drifts.
+    #[must_use]
     pub fn offset(&self, now: Instant) -> f32 {
         let Some(start) = self.start else { return 0.0 };
         let t = now.saturating_duration_since(start).as_secs_f32() / GLIDE_DURATION.as_secs_f32();
@@ -37,6 +39,7 @@ impl RowGlide {
         }
     }
 
+    #[must_use]
     pub fn is_animating(&self, now: Instant) -> bool {
         self.start
             .is_some_and(|start| now.saturating_duration_since(start) < GLIDE_DURATION)
@@ -98,12 +101,14 @@ impl ResizeGate {
 }
 
 /// Scrollbar thumb length for `total` items with `rows` visible. `None` when everything fits.
+#[must_use]
 pub fn thumb_length(track: f32, total: usize, rows: usize) -> Option<f32> {
     (rows > 0 && total > rows)
         .then(|| (track * rows as f32 / total as f32).clamp(MIN_THUMB.min(track), track))
 }
 
 /// Thumb `(top, length)` within a track of `track` pixels, for the window origin `origin`.
+#[must_use]
 pub fn thumb_geometry(track: f32, total: usize, rows: usize, origin: usize) -> Option<(f32, f32)> {
     let length = thumb_length(track, total, rows)?;
     let max_origin = (total - rows) as f32;
@@ -112,6 +117,7 @@ pub fn thumb_geometry(track: f32, total: usize, rows: usize, origin: usize) -> O
 }
 
 /// Origin after dragging the thumb by `dy` pixels from `start_origin`. Clamped to the list.
+#[must_use]
 pub fn drag_origin(track: f32, total: usize, rows: usize, start_origin: usize, dy: f32) -> usize {
     let Some(length) = thumb_length(track, total, rows) else {
         return 0;
@@ -147,7 +153,7 @@ mod tests {
             now += Duration::from_millis(2);
         }
         assert_eq!(origin, 300);
-        let last_event = now - Duration::from_millis(2);
+        let last_event = now.checked_sub(Duration::from_millis(2)).unwrap();
         assert!(glide.is_animating(last_event));
         let settled = last_event + Duration::from_millis(200);
         assert_eq!(glide.offset(settled), 0.0, "settled exactly, not drifting");

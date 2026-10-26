@@ -90,6 +90,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_with_controller_events_with_reactor_geometry<F, P, R>(
     mut document: RuntimeDocument,
     config: X11Config,

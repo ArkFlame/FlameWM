@@ -60,7 +60,7 @@ pub fn decode(bytes: &[u8]) -> Result<RgbaImage, String> {
         return Err("XPM is missing rows".to_string());
     }
     let mut palette: std::collections::HashMap<String, [u8; 4]> = std::collections::HashMap::new();
-    for entry in &quoted[1..1 + color_count as usize] {
+    for entry in &quoted[1..=(color_count as usize)] {
         if entry.len() < cpp_len {
             return Err("XPM color entry is too short".to_string());
         }

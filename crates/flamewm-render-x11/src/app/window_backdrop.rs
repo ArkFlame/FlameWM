@@ -80,7 +80,7 @@ pub(crate) fn root_capture_decision(cached: bool, settled: bool, clean: bool) ->
 /// read has happened yet.
 #[must_use]
 pub(crate) fn readback_spaced(since_last: Option<Duration>) -> bool {
-    since_last.map_or(true, |elapsed| elapsed >= CAPTURE_QUIET)
+    since_last.is_none_or(|elapsed| elapsed >= CAPTURE_QUIET)
 }
 
 /// Whether a probed top-level stack means the clean root no longer describes the desktop: a
@@ -505,7 +505,7 @@ impl X11App {
         if children.is_null() {
             return Vec::new();
         }
-        let out = unsafe { std::slice::from_raw_parts(children, count.max(0) as usize) }.to_vec();
+        let out = unsafe { std::slice::from_raw_parts(children, count as usize) }.to_vec();
         unsafe { XFree(children.cast()) };
         out
     }

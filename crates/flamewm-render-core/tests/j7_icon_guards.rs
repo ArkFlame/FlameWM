@@ -7,9 +7,11 @@ use flamewm_render_core::{
 };
 
 fn image_doc(treatment: ImageTreatment, color: ColorValue) -> RuntimeDocument {
-    let mut style = Style::default();
-    style.image_treatment = treatment;
-    style.color = color;
+    let style = Style {
+        image_treatment: treatment,
+        color,
+        ..Style::default()
+    };
     RuntimeDocument::new(CompiledDocument {
         source_fingerprint: 1,
         root: 0,

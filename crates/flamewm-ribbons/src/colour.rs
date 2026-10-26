@@ -12,6 +12,7 @@ const PALETTE: [[u8; 3]; 6] = [
 
 /// Ribbon colours for `num` ribbons. N=6 uses the exact palette; other counts cycle it with a
 /// seeded hue offset of at most 9 degrees, so N>=3 keeps the white (index 0) and cyan (index 2).
+#[must_use]
 pub fn palette(num: usize, seed: u64) -> Vec<[u8; 3]> {
     let mut rng = SplitMix64::new(seed ^ 0xD1B5_4A32_D192_ED03);
     (0..num)

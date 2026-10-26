@@ -1,7 +1,7 @@
 use super::*;
 use flamewm_api::workspace::MAX_WORKSPACES;
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn switch_workspace(&mut self, target: usize) -> Result<(), ReplyError> {
         if target >= self.workspace_count || target == self.current_workspace {
             return Ok(());
@@ -48,7 +48,7 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     /// Move the already-grabbed window into an adjacent workspace without
     /// releasing its move controller or unmapping its frame. Relocating the
-    /// controller's anchor together with XWarpPointer prevents the next motion
+    /// controller's anchor together with `XWarpPointer` prevents the next motion
     /// from snapping the frame back to the original workspace coordinates.
     pub(super) fn switch_workspace_dragging(
         &mut self,
@@ -146,8 +146,12 @@ impl<'a, C: Connection> Wm<'a, C> {
                 0,
                 0,
                 0,
-                new_pointer.x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-                new_pointer.y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                new_pointer
+                    .x
+                    .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+                new_pointer
+                    .y
+                    .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
             )?;
             Ok(())
         })();

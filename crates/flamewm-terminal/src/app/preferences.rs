@@ -53,7 +53,7 @@ impl App {
             Command::None => {}
             Command::Close => self.close_settings(),
             Command::PreviewTheme(name) => {
-                self.palette = theme::resolve_palette(&name, &self.themes, self.snapshot.as_ref())
+                self.palette = theme::resolve_palette(&name, &self.themes, self.snapshot.as_ref());
             }
             Command::Font(family) => self.config.font_family = family,
             Command::Opacity(percent) => {
@@ -105,7 +105,7 @@ impl App {
             Command::Rename { old, new } => match self.store.rename(&old, &new) {
                 Ok(()) => {
                     if self.config.theme == old {
-                        self.config.theme = new.clone();
+                        self.config.theme.clone_from(&new);
                         self.persist_config();
                     }
                     self.reload_themes();

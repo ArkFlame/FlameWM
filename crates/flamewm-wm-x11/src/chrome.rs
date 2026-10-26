@@ -13,7 +13,7 @@ pub const TITLEBAR_HEIGHT: u16 = WINDOW_CHROME.metrics.titlebar;
 pub const FRAME_BORDER: u16 = 1;
 const MAX_CONTROL_GLYPH_EDGE: u32 = 4096;
 
-/// WM-owned view of control roles (mirrors skin WindowControlRole).
+/// WM-owned view of control roles (mirrors skin `WindowControlRole`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ControlRole {
     Minimize,
@@ -283,17 +283,16 @@ pub fn control_glyph_raster_shared(
     // machine, not from the builder's CARGO_MANIFEST_DIR. This is the same
     // canonical runtime data root used by the titlebar wallpaper compositor.
     let path = crate::frame::titlebar_backdrop::packaged_root().join(role.asset_path());
-    let mut raster = match std::fs::read(&path).ok().and_then(|bytes| {
+    let mut raster = if let Some(raster) = std::fs::read(&path).ok().and_then(|bytes| {
         flamewm_image_core::svg::render_with_color_scheme(&bytes, edge, edge, &scheme).ok()
     }) {
-        Some(raster) => raster,
-        None => {
-            eprintln!(
-                "flamewm: titlebar control asset unavailable ({}); using native vector fallback",
-                path.display()
-            );
-            fallback_control_glyph(role, edge, scheme.text)?
-        }
+        raster
+    } else {
+        eprintln!(
+            "flamewm: titlebar control asset unavailable ({}); using native vector fallback",
+            path.display()
+        );
+        fallback_control_glyph(role, edge, scheme.text)?
     };
     if material != ControlMaterial::Rest {
         match look.button.shape {
@@ -326,7 +325,7 @@ fn fallback_control_glyph(
     edge: u32,
     rgba: [u8; 4],
 ) -> Option<flamewm_image_core::RgbaImage> {
-    if edge < 4 || edge > 128 {
+    if !(4..=128).contains(&edge) {
         return None;
     }
     let mut pixels = vec![0_u8; (edge as usize) * (edge as usize) * 4];
@@ -664,6 +663,7 @@ fn inside_control_mask(x: f32, y: f32, w: f32, h: f32, corners: ControlCorners) 
 }
 
 fn control_mask(key: ControlMaskKey) -> Arc<Vec<u8>> {
+    const SAMPLES: u32 = 4;
     if let Ok(cache) = control_mask_cache().lock() {
         if let Some(mask) = cache.get(&key) {
             return Arc::clone(mask);
@@ -671,7 +671,6 @@ fn control_mask(key: ControlMaskKey) -> Arc<Vec<u8>> {
     }
     // A 4x4 analytic coverage mask is generated ONLY on a cache miss, never
     // by supersampling a full RGBA button every time its hover state changes.
-    const SAMPLES: u32 = 4;
     let mut alpha = Vec::with_capacity(usize::from(key.w) * usize::from(key.h));
     for y in 0..u32::from(key.h) {
         for x in 0..u32::from(key.w) {
@@ -813,7 +812,7 @@ pub fn control_backplates_for(
 
 /// Composite AA cell backgrounds into the titlebar's already-opaque,
 /// wallpaper-resolved pixels. This correctly handles transparent titlebars
-/// and still paints the same AA edges on X11 hosts without XRender.
+/// and still paints the same AA edges on X11 hosts without `XRender`.
 pub fn composite_control_backplates(
     titlebar_pixels: &mut [u8],
     titlebar_width: u32,
@@ -894,12 +893,7 @@ pub fn icon_dest_rect(titlebar_height: u16) -> (f32, f32, f32) {
 #[must_use]
 pub fn title_text_width(title: &str) -> i32 {
     let mut width = 0_i32;
-    let mut count = 0_usize;
-    for ch in title.chars() {
-        if count >= TITLE_MAX_CHARS {
-            break;
-        }
-        count += 1;
+    for ch in title.chars().take(TITLE_MAX_CHARS) {
         let advance = if ch.is_ascii() {
             7
         } else if is_wide(ch) {
@@ -1140,7 +1134,7 @@ mod tests {
         put(&mut snapshot, "titlebarMinimizeColor", text("#zz"));
         let tokens = chrome_tokens_from_settings(&snapshot);
         assert_eq!(tokens.style, DecorationStyle::Squared);
-        assert_eq!(tokens.titlebar_bg, Rgb(0x202326));
+        assert_eq!(tokens.titlebar_bg, Rgb(0x0020_2326));
         assert_eq!(tokens.titlebar_alpha, 127);
         assert!(
             tokens
@@ -1148,7 +1142,7 @@ mod tests {
                 .iter()
                 .all(|button| button.shape == ButtonShape::Square)
         );
-        assert_eq!(tokens.buttons[2].hover, Some(Rgb(0x00ff00)));
+        assert_eq!(tokens.buttons[2].hover, Some(Rgb(0x0000_ff00)));
         assert_eq!(tokens.buttons[0].glyph, None);
         put(&mut snapshot, "titlebarButtonStyle", text("bogus"));
         let tokens = chrome_tokens_from_settings(&snapshot);
@@ -1327,7 +1321,7 @@ mod tests {
         let mut tokens = ChromeTokens::default();
         tokens.buttons[2].shape = ButtonShape::Square;
         let plates = control_backplates_for(400, 31, 12, Some(FrameControl::Close), None, &tokens);
-        let mut pixels = vec![30, 40, 50, 255].repeat(400 * 31);
+        let mut pixels = [30, 40, 50, 255].repeat(400 * 31);
         composite_control_backplates(&mut pixels, 400, 31, &plates);
         let pixel = |x: usize, y: usize| &pixels[(y * 400 + x) * 4..(y * 400 + x) * 4 + 4];
         assert_eq!(
@@ -1359,7 +1353,7 @@ mod tests {
             pixels.chunks_exact(4).all(|p| p[3] == 255),
             "opaque wallpaper composite keeps opaque alpha"
         );
-        let mut clean = vec![30, 40, 50, 255].repeat(400 * 31);
+        let mut clean = [30, 40, 50, 255].repeat(400 * 31);
         composite_control_backplates(
             &mut clean,
             400,
@@ -1375,11 +1369,11 @@ mod tests {
         let mut tokens = ChromeTokens::default();
         tokens.buttons[0].shape = ButtonShape::Square;
         let a = control_backplates_for(400, 31, 12, Some(FrameControl::Minimize), None, &tokens);
-        tokens.buttons[0].hover = Some(Rgb(0x224466));
+        tokens.buttons[0].hover = Some(Rgb(0x0022_4466));
         let b = control_backplates_for(400, 31, 12, Some(FrameControl::Minimize), None, &tokens);
         assert_eq!(b[0].rgb, [0x22, 0x44, 0x66]);
         assert!(Arc::ptr_eq(&a[0].coverage, &b[0].coverage));
-        tokens.buttons[0].pressed = Some(Rgb(0x102030));
+        tokens.buttons[0].pressed = Some(Rgb(0x0010_2030));
         let pressed =
             control_backplates_for(400, 31, 12, None, Some(FrameControl::Minimize), &tokens);
         assert_eq!(pressed[0].rgb, [0x10, 0x20, 0x30]);
@@ -1411,7 +1405,7 @@ mod tests {
                 assert_eq!(pair[0].x + i32::from(pair[0].width), pair[1].x);
             }
             assert_eq!(plates[2].x + i32::from(plates[2].width), width as i32);
-            let mut background = vec![42_u8, 42, 42, 255].repeat(width as usize * 31);
+            let mut background = [42_u8, 42, 42, 255].repeat(width as usize * 31);
             composite_control_backplates(&mut background, width, 31, &plates);
             assert_eq!(background.len(), width as usize * 31 * 4);
         }
@@ -1444,9 +1438,11 @@ mod tests {
 
     #[test]
     fn style_tokens_never_move_control_hit_geometry() {
-        let mut tokens = ChromeTokens::default();
-        tokens.style = DecorationStyle::Squared;
-        for button in tokens.buttons.iter_mut() {
+        let mut tokens = ChromeTokens {
+            style: DecorationStyle::Squared,
+            ..ChromeTokens::default()
+        };
+        for button in &mut tokens.buttons {
             button.shape = ButtonShape::Square;
         }
         let default = control_blits_for(400, false, false, None, None, &ChromeTokens::default());
@@ -1500,7 +1496,7 @@ mod tests {
         };
         let rgba = native_icon_rgba(&icon, 2).expect("rgba");
         assert_eq!((rgba.width, rgba.height), (2, 2));
-        assert_eq!(rgba.pixels, vec![255, 0, 0, 128].repeat(4));
+        assert_eq!(rgba.pixels, [255, 0, 0, 128].repeat(4));
     }
 
     #[test]

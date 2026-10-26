@@ -1,4 +1,4 @@
-//! `flamewm-remote-fs`: remote file access for the FlameWM explorer.
+//! `flamewm-remote-fs`: remote file access for the `FlameWM` explorer.
 //!
 //! Backends: `sftp://` and `ssh://` (shell-free exec of `ls`/`cat`/`mv` over a multiplexed OpenSSH
 //! connection), and `fish://` (same executor; KDE-fish-style paths with `~` as home). `smb://` and

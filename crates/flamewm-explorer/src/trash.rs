@@ -20,6 +20,7 @@ pub struct TrashEntry {
 }
 
 impl TrashEntry {
+    #[must_use]
     pub fn name(&self) -> String {
         self.stored
             .file_name()
@@ -30,6 +31,7 @@ impl TrashEntry {
 }
 
 /// Percent-decodes a `Path=` value. Returns `None` for malformed escapes or invalid UTF-8.
+#[must_use]
 pub fn percent_decode(raw: &str) -> Option<String> {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -55,6 +57,7 @@ pub fn percent_decode(raw: &str) -> Option<String> {
 }
 
 /// Parses the contents of a `.trashinfo` file into `(original path, deletion date)`.
+#[must_use]
 pub fn parse_trashinfo(text: &str) -> Option<(PathBuf, String)> {
     let mut in_section = false;
     let mut path = None;
@@ -134,6 +137,7 @@ pub fn list(base: &Path) -> io::Result<Vec<TrashEntry>> {
 }
 
 /// Returns a destination path that does not exist, appending ` (restored N)` before the extension.
+#[must_use]
 pub fn unique_destination(original: &Path) -> PathBuf {
     if !original.exists() && original.symlink_metadata().is_err() {
         return original.to_path_buf();

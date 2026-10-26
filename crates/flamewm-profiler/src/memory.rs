@@ -114,7 +114,7 @@ pub fn parse_smaps_text(text: &str) -> SmapsSummary {
         let Some((key, rest)) = line.split_once(':') else {
             continue;
         };
-        let mut parts = rest.trim().split_whitespace();
+        let mut parts = rest.split_whitespace();
         let value: u64 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
         match key {
             "Pss" => out.pss_kb = out.pss_kb.saturating_add(value),

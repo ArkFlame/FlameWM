@@ -21,8 +21,10 @@ pub const AUTO_TIME_ZONE_KEY: &str = "autoTimeZone";
 pub const AUTO_LOOKUP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const ZONEINFO_ROOT: &str = "/usr/share/zoneinfo";
 
+type ProviderParser = fn(&str) -> Result<IpFix, WeatherError>;
+
 /// Providers in fallback order. `ipwho.is` carries the country name; `ipinfo.io` the code only.
-const PROVIDERS: [(&str, fn(&str) -> Result<IpFix, WeatherError>); 2] = [
+const PROVIDERS: [(&str, ProviderParser); 2] = [
     ("https://ipwho.is/", parse_ipwho),
     ("https://ipinfo.io/json", parse_ipinfo),
 ];
@@ -111,6 +113,7 @@ pub fn lookup_with(http: &impl HttpGet) -> Result<IpFix, WeatherError> {
 }
 
 /// Worker-thread lookup on the production curl seam. A failed thread start reports transport.
+#[must_use]
 pub fn spawn_ip_lookup() -> mpsc::Receiver<Result<IpFix, WeatherError>> {
     let (tx, rx) = mpsc::channel();
     let _ = std::thread::Builder::new()
@@ -121,11 +124,13 @@ pub fn spawn_ip_lookup() -> mpsc::Receiver<Result<IpFix, WeatherError>> {
     rx
 }
 
+type FixReceiver = Arc<Mutex<mpsc::Receiver<Result<IpFix, WeatherError>>>>;
+
 /// Lookup cadence. Returns a finished lookup when one settles; starts a new one when due.
 #[derive(Debug, Default)]
 pub struct AutoLookup {
     last_started: Option<Instant>,
-    inflight: Option<Arc<Mutex<mpsc::Receiver<Result<IpFix, WeatherError>>>>>,
+    inflight: Option<FixReceiver>,
     was_enabled: bool,
     was_online: bool,
 }
@@ -174,9 +179,9 @@ impl AutoLookup {
         }
         let due = enable_edge
             || online_edge
-            || self.last_started.map_or(true, |started| {
-                now.duration_since(started) >= AUTO_LOOKUP_INTERVAL
-            });
+            || self
+                .last_started
+                .is_none_or(|started| now.duration_since(started) >= AUTO_LOOKUP_INTERVAL);
         if due && self.inflight.is_none() {
             self.last_started = Some(now);
             self.inflight = Some(Arc::new(Mutex::new(start())));
@@ -276,7 +281,7 @@ mod tests {
         let fix = parse_ipwho(IPWHO).expect("fixture");
         assert_eq!(fix.location.name, "Buenos Aires");
         assert_eq!(fix.location.country.as_deref(), Some("Argentina"));
-        assert!((fix.location.latitude + 34.6131499).abs() < 1e-9);
+        assert!((fix.location.latitude + 34.613_149_9).abs() < 1e-9);
         assert_eq!(
             fix.time_zone.as_deref(),
             Some("America/Argentina/Buenos_Aires")

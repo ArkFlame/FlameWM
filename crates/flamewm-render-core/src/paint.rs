@@ -352,9 +352,11 @@ mod shape_tests {
     use super::*;
 
     fn rounded_doc(radius: f32) -> RuntimeDocument {
-        let mut style = Style::default();
-        style.background = ColorValue::Literal(Color::rgb(30, 30, 30));
-        style.border_radius = radius;
+        let style = Style {
+            background: ColorValue::Literal(Color::rgb(30, 30, 30)),
+            border_radius: radius,
+            ..Style::default()
+        };
         let node = CompiledNode {
             kind: NodeKind::Element,
             parent: None,
@@ -406,14 +408,16 @@ mod node_backdrop_tests {
         first_child: Option<u32>,
         next: Option<u32>,
     ) -> CompiledNode {
-        let mut style = Style::default();
-        style.background = ColorValue::Literal(Color {
-            r: 30,
-            g: 30,
-            b: 30,
-            a: 127,
-        });
-        style.border_radius = radius;
+        let style = Style {
+            background: ColorValue::Literal(Color {
+                r: 30,
+                g: 30,
+                b: 30,
+                a: 127,
+            }),
+            border_radius: radius,
+            ..Style::default()
+        };
         CompiledNode {
             kind: NodeKind::Element,
             parent,

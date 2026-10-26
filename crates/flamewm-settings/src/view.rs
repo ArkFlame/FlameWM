@@ -136,8 +136,10 @@ mod tests {
     fn page_between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
         html.split_once(&format!("id=\"{from}\""))
             .and_then(|(_, rest)| rest.split_once(&format!("id=\"{to}\"")))
-            .map(|(body, _)| body)
-            .unwrap_or_else(|| panic!("settings page {from} must precede {to}"))
+            .map_or_else(
+                || panic!("settings page {from} must precede {to}"),
+                |(body, _)| body,
+            )
     }
 
     fn seed_text(document: &mut UiDocument, id: &str, text: &str) {
@@ -305,9 +307,7 @@ mod tests {
         assert!(
             css_value(authored_root, "width") == Some("100%")
                 && css_value(authored_root, "height") == Some("100%"),
-            "T01 native/authored geometry mismatch: native default is {}x{}, but authored root is {authored_root}",
-            SETTINGS_DEFAULT_WIDTH,
-            SETTINGS_DEFAULT_HEIGHT
+            "T01 native/authored geometry mismatch: native default is {SETTINGS_DEFAULT_WIDTH}x{SETTINGS_DEFAULT_HEIGHT}, but authored root is {authored_root}"
         );
     }
 

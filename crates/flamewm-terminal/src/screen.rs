@@ -1,5 +1,6 @@
 //! Terminal state: primary and alternate grids, cursor and pen, scroll region, modes, tab stops, scrollback and
 //! the replies the host owes the child (DSR, DA). Input arrives through the `Perform` trait from `parser`.
+use std::cmp::Ordering;
 use std::collections::VecDeque;
 
 use crate::parser::Perform;
@@ -83,6 +84,7 @@ fn default_tabs(cols: usize) -> Vec<bool> {
 }
 
 impl Screen {
+    #[must_use]
     pub fn new(cols: usize, rows: usize, scrollback_limit: usize) -> Self {
         let cols = cols.max(1);
         let rows = rows.max(1);
@@ -127,18 +129,22 @@ impl Screen {
         }
     }
 
+    #[must_use]
     pub fn cols(&self) -> usize {
         self.cols
     }
 
+    #[must_use]
     pub fn rows(&self) -> usize {
         self.rows
     }
 
+    #[must_use]
     pub fn cursor(&self) -> (usize, usize) {
         (self.row, self.col)
     }
 
+    #[must_use]
     pub fn alt_active(&self) -> bool {
         self.alt_active
     }
@@ -174,6 +180,7 @@ impl Screen {
 
     /// Dirty-marked live rows not yet taken (benchmark probe).
     #[cfg(test)]
+    #[must_use]
     pub fn pending_dirty_rows(&self) -> usize {
         self.dirty_rows.iter().filter(|dirty| **dirty).count()
     }
@@ -196,15 +203,18 @@ impl Screen {
     }
 
     /// Visible row `row` of the live grid (not scrollback).
+    #[must_use]
     pub fn line(&self, row: usize) -> &Line {
         &self.grid()[row]
     }
 
     /// Absolute line index: scrollback first, then the live grid. Alt screen has no scrollback.
+    #[must_use]
     pub fn total_lines(&self) -> usize {
         self.scrollback_len() + self.rows
     }
 
+    #[must_use]
     pub fn scrollback_len(&self) -> usize {
         if self.alt_active {
             0
@@ -213,6 +223,7 @@ impl Screen {
         }
     }
 
+    #[must_use]
     pub fn line_abs(&self, index: usize) -> Option<&Line> {
         let history = self.scrollback_len();
         if index < history {
@@ -241,33 +252,39 @@ impl Screen {
                 line.resize(cols, Cell::blank(Color::Default));
             }
         }
-        if rows < self.rows {
-            let excess = self.rows - rows;
-            let shift = excess.min(self.row);
-            for _ in 0..shift {
-                let line = self.primary.remove(0);
-                self.scrollback.push_back(compact_history(line));
-                self.primary.push(blank_line(cols, Color::Default));
-                self.row = self.row.saturating_sub(1);
-            }
-        } else if rows > self.rows {
-            let grow = rows - self.rows;
-            for _ in 0..grow {
-                if !self.alt_active && self.scrollback.back().is_some() && self.primary.len() < rows
-                {
-                    if let Some(mut line) = self.scrollback.pop_back() {
-                        line.resize(cols, Cell::blank(Color::Default));
-                        self.primary.insert(0, line);
-                        self.row += 1;
-                    }
+        match rows.cmp(&self.rows) {
+            Ordering::Less => {
+                let excess = self.rows - rows;
+                let shift = excess.min(self.row);
+                for _ in 0..shift {
+                    let line = self.primary.remove(0);
+                    self.scrollback.push_back(compact_history(line));
+                    self.primary.push(blank_line(cols, Color::Default));
+                    self.row = self.row.saturating_sub(1);
                 }
             }
-            while self.primary.len() < rows {
-                self.primary.push(blank_line(cols, Color::Default));
+            Ordering::Greater => {
+                let grow = rows - self.rows;
+                for _ in 0..grow {
+                    if !self.alt_active
+                        && self.scrollback.back().is_some()
+                        && self.primary.len() < rows
+                    {
+                        if let Some(mut line) = self.scrollback.pop_back() {
+                            line.resize(cols, Cell::blank(Color::Default));
+                            self.primary.insert(0, line);
+                            self.row += 1;
+                        }
+                    }
+                }
+                while self.primary.len() < rows {
+                    self.primary.push(blank_line(cols, Color::Default));
+                }
+                while self.alt.len() < rows {
+                    self.alt.push(blank_line(cols, Color::Default));
+                }
             }
-            while self.alt.len() < rows {
-                self.alt.push(blank_line(cols, Color::Default));
-            }
+            Ordering::Equal => {}
         }
         self.primary.truncate(rows);
         self.alt.truncate(rows);
@@ -344,9 +361,9 @@ impl Screen {
         let saved_top = self.scroll_top;
         self.scroll_top = row;
         if down {
-            self.scroll_down(count)
+            self.scroll_down(count);
         } else {
-            self.scroll_up(count)
+            self.scroll_up(count);
         }
         self.scroll_top = saved_top;
         self.col = 0;
@@ -560,9 +577,9 @@ impl Screen {
                 4 => {
                     let style = group.get(1).copied().unwrap_or(1);
                     if style == 0 {
-                        self.pen.attrs &= !attr::UNDERLINE
+                        self.pen.attrs &= !attr::UNDERLINE;
                     } else {
-                        self.pen.attrs |= attr::UNDERLINE
+                        self.pen.attrs |= attr::UNDERLINE;
                     }
                 }
                 7 => self.pen.attrs |= attr::INVERSE,
@@ -582,9 +599,9 @@ impl Screen {
                     let (color, consumed) = extended_color(group, params, index);
                     if let Some(color) = color {
                         if code == 38 {
-                            self.pen.fg = color
+                            self.pen.fg = color;
                         } else {
-                            self.pen.bg = color
+                            self.pen.bg = color;
                         }
                     }
                     index += consumed + 1;

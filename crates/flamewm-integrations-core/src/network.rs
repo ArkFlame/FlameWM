@@ -17,23 +17,12 @@ pub struct AccessPoint {
     pub known: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NetworkStatus {
     pub snapshot: NetworkSnapshot,
     pub active_path: String,
     pub visible_access_points: Vec<AccessPoint>,
     pub networking_enabled: bool,
-}
-
-impl Default for NetworkStatus {
-    fn default() -> Self {
-        Self {
-            snapshot: NetworkSnapshot::default(),
-            active_path: String::new(),
-            visible_access_points: Vec::new(),
-            networking_enabled: false,
-        }
-    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -114,7 +103,7 @@ impl Default for BackoffConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NetworkController {
     generation: u64,
     status: NetworkStatus,
@@ -126,23 +115,6 @@ pub struct NetworkController {
     known_profiles: BTreeSet<String>,
     pending_secret: Option<NetworkSecretRequestSnapshot>,
     next_secret_request_id: u64,
-}
-
-impl Default for NetworkController {
-    fn default() -> Self {
-        Self {
-            generation: 0,
-            status: NetworkStatus::default(),
-            available: false,
-            reconnect_attempts: 0,
-            reconnect_pending: false,
-            backoff: BackoffConfig::default(),
-            ap_refresh_pending: false,
-            known_profiles: BTreeSet::new(),
-            pending_secret: None,
-            next_secret_request_id: 0,
-        }
-    }
 }
 
 impl NetworkController {
@@ -161,13 +133,13 @@ impl NetworkController {
         &self.status
     }
 
-    /// Produce the complete shell-facing snapshot without exposing NetworkManager adapter state.
+    /// Produce the complete shell-facing snapshot without exposing `NetworkManager` adapter state.
     #[must_use]
     pub fn snapshot(&self) -> NetworkSnapshot {
         let mut snapshot = self.status.snapshot.clone();
         snapshot.generation = self.generation;
         snapshot.networking_enabled = self.status.networking_enabled;
-        snapshot.active_path = self.status.active_path.clone();
+        snapshot.active_path.clone_from(&self.status.active_path);
         snapshot.access_points = self
             .status
             .visible_access_points
@@ -180,7 +152,7 @@ impl NetworkController {
                 known: ap.known,
             })
             .collect();
-        snapshot.pending_secret = self.pending_secret.clone();
+        snapshot.pending_secret.clone_from(&self.pending_secret);
         snapshot
     }
 
@@ -281,7 +253,7 @@ impl NetworkController {
         })
     }
 
-    /// Publish only metadata after NetworkManager asks its SecretAgent for credentials.
+    /// Publish only metadata after `NetworkManager` asks its `SecretAgent` for credentials.
     pub fn request_secret_from_agent(
         &mut self,
         access_point_path: String,
@@ -400,13 +372,13 @@ impl NetworkController {
     }
 
     fn validate_generation(&self, caller_generation: u64) -> FlameResult<()> {
-        if caller_generation != self.generation {
+        if caller_generation == self.generation {
+            Ok(())
+        } else {
             Err(FlameError::new(
                 ErrorCode::StaleRevision,
                 "stale NetworkManager service generation",
             ))
-        } else {
-            Ok(())
         }
     }
 

@@ -317,6 +317,7 @@ impl ParallelIconService {
     /// cache when present, otherwise the Flame fallback paints synchronously
     /// (never a stale glyph, never blank) and a HIGH request is queued.
     /// Returns the key for slot identity tracking.
+    #[allow(clippy::too_many_arguments)]
     pub fn project_row(
         &mut self,
         document: &mut impl UiDocumentAccess,
@@ -448,6 +449,7 @@ fn set_glyph_visibility(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn project_item(
     document: &mut impl UiDocumentAccess,
     icons: &mut ParallelIconService,

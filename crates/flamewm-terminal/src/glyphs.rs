@@ -127,6 +127,7 @@ fn box_arms([left, right, up, down]: [u8; 4]) -> Vec<Arm> {
 }
 
 /// `from` blended toward `to` by `num / den` per channel.
+#[must_use]
 pub fn blend(from: u32, to: u32, num: u32, den: u32) -> u32 {
     let channel = |shift: u32| {
         let (a, b) = ((from >> shift) & 0xff, (to >> shift) & 0xff);
@@ -137,6 +138,7 @@ pub fn blend(from: u32, to: u32, num: u32, den: u32) -> u32 {
 
 /// Rectangles that draw `ch`, each with its colour, or `None` when the glyph is drawn as text. `fg` and `bg` are the
 /// cell's resolved colours, so shades blend the two.
+#[must_use]
 pub fn glyph_rects(ch: char, fg: u32, bg: u32) -> Option<Vec<(Arm, u32)>> {
     if let Some((_, weights)) = BOX.iter().find(|(glyph, _)| *glyph == ch) {
         return Some(
@@ -189,10 +191,10 @@ mod tests {
 
     #[test]
     fn horizontal_and_vertical_light_lines_are_single_full_bands() {
-        let line = glyph_rects('─', 0xffffff, 0).expect("box glyph");
+        let line = glyph_rects('─', 0x00ff_ffff, 0).expect("box glyph");
         assert_eq!(
             line,
-            vec![(Arm::new(0.0, 1.0, 7.0 / 16.0, 8.0 / 16.0), 0xffffff)]
+            vec![(Arm::new(0.0, 1.0, 7.0 / 16.0, 8.0 / 16.0), 0x00ff_ffff)]
         );
         let bar = glyph_rects('│', 1, 0).expect("box glyph");
         assert_eq!(bar.len(), 1);
@@ -224,10 +226,10 @@ mod tests {
 
     #[test]
     fn shades_blend_foreground_into_background() {
-        let half = glyph_rects('\u{2592}', 0xffffff, 0x000000).expect("shade");
-        assert_eq!(half[0].1, 0x7f7f7f);
-        let quarter = glyph_rects('\u{2591}', 0xffffff, 0x000000).expect("shade");
-        assert_eq!(quarter[0].1, 0x3f3f3f);
+        let half = glyph_rects('\u{2592}', 0x00ff_ffff, 0x0000_0000).expect("shade");
+        assert_eq!(half[0].1, 0x007f_7f7f);
+        let quarter = glyph_rects('\u{2591}', 0x00ff_ffff, 0x0000_0000).expect("shade");
+        assert_eq!(quarter[0].1, 0x003f_3f3f);
     }
 
     #[test]

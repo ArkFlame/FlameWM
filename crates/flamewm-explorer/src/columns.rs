@@ -33,6 +33,7 @@ impl Default for Widths {
 
 impl Widths {
     /// Widths read from preferences, raised to their minimums so a hand-edited file cannot break the layout.
+    #[must_use]
     pub fn clamped(self) -> Self {
         Self {
             modified: self.modified.max(MODIFIED_MIN),
@@ -42,6 +43,7 @@ impl Widths {
     }
 
     /// Width of the Name column for a list `total` px wide.
+    #[must_use]
     pub fn name_width(&self, total: f32, show_kind: bool) -> f32 {
         (total - self.modified - self.size - if show_kind { self.kind } else { 0.0 }).max(NAME_MIN)
     }

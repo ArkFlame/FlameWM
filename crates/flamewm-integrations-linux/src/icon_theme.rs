@@ -53,10 +53,8 @@ impl IconDir {
                 }
                 if req < lo {
                     lo - req
-                } else if req > hi {
-                    req - hi
                 } else {
-                    0
+                    req.saturating_sub(hi)
                 }
             }
             IconDirType::Threshold => {
@@ -159,6 +157,11 @@ impl IconThemeCaches {
     }
 
     #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.exists_len == 0
+    }
+
+    #[must_use]
     pub fn memory_estimate_bytes(&self) -> usize {
         self.exists
             .values()
@@ -235,7 +238,7 @@ impl IconThemeIndex {
                 continue;
             }
             if line.starts_with('[') && line.ends_with(']') {
-                current = line[1..line.len() - 1].trim().to_owned();
+                line[1..line.len() - 1].trim().clone_into(&mut current);
                 sections.entry(current.clone()).or_default();
                 continue;
             }
@@ -250,8 +253,8 @@ impl IconThemeIndex {
             }
         }
         let header = sections.get("Icon Theme").cloned().unwrap_or_default();
-        let directories = split_list(header.get("Directories").map(String::as_str).unwrap_or(""));
-        let inherits = split_list(header.get("Inherits").map(String::as_str).unwrap_or(""));
+        let directories = split_list(header.get("Directories").map_or("", String::as_str));
+        let inherits = split_list(header.get("Inherits").map_or("", String::as_str));
         let mut dirs: HashMap<String, _> = directories
             .iter()
             .filter_map(|dir| Some((dir.clone(), parse_dir(sections.get(dir.as_str())?))))
@@ -305,7 +308,7 @@ fn dir_num<T: std::str::FromStr>(section: &HashMap<String, String>, key: &str, d
 fn parse_dir(section: &HashMap<String, String>) -> IconDir {
     let size = dir_num(section, "Size", 0);
     let scale: u32 = dir_num(section, "Scale", 1);
-    let dir_type = match section.get("Type").map(String::as_str).unwrap_or("") {
+    let dir_type = match section.get("Type").map_or("", String::as_str) {
         "Fixed" => IconDirType::Fixed,
         "Scalable" => IconDirType::Scalable,
         _ => IconDirType::Threshold,
@@ -512,7 +515,7 @@ pub fn parse_ini_value(text: &str, section: &str, key: &str) -> Option<String> {
             .strip_prefix('[')
             .and_then(|rest| rest.strip_suffix(']'))
         {
-            current = name.trim().to_owned();
+            name.trim().clone_into(&mut current);
             continue;
         }
         if current != section {
@@ -714,13 +717,12 @@ impl IconFileBuilder {
         let directory_rank = u32::try_from(directory_rank).unwrap_or(u32::MAX);
         let format_rank = format_rank as u8;
         let raw_name = file_name.to_str().is_none();
-        let rel_id = match self.rel_ids.get(rel) {
-            Some(&id) => id,
-            None => {
-                let id = self.rel_ids.len() as u32;
-                self.rel_ids.insert(rel.to_path_buf(), id);
-                id
-            }
+        let rel_id = if let Some(&id) = self.rel_ids.get(rel) {
+            id
+        } else {
+            let id = self.rel_ids.len() as u32;
+            self.rel_ids.insert(rel.to_path_buf(), id);
+            id
         };
         // Same theme dir under another search root: keep the first. Raw names
         // dedupe on the exact on-disk name, never the lossy base.
@@ -743,14 +745,13 @@ impl IconFileBuilder {
         };
         let dir_id = self.intern_dir(&dir);
         let ext_orig = &lossy[lossy.len() - ext.len()..];
-        let ext_id = match self.ext_ids.get(ext_orig) {
-            Some(&id) => id,
-            None => {
-                let id = self.exts.len() as u16;
-                self.exts.push(ext_orig.to_owned());
-                self.ext_ids.insert(ext_orig.to_owned(), id);
-                id
-            }
+        let ext_id = if let Some(&id) = self.ext_ids.get(ext_orig) {
+            id
+        } else {
+            let id = self.exts.len() as u16;
+            self.exts.push(ext_orig.to_owned());
+            self.ext_ids.insert(ext_orig.to_owned(), id);
+            id
         };
         self.by_name
             .entry(base.into_boxed_str())
@@ -982,9 +983,9 @@ impl IconLookupIndex {
                 continue;
             };
             for (directory_rank, dir) in index.directories.iter().enumerate() {
-                if index.dirs.get(dir).is_none() {
+                if !index.dirs.contains_key(dir) {
                     continue;
-                };
+                }
                 for root in roots_for_theme {
                     let Some(theme_path) = theme_dir(root, theme) else {
                         continue;
@@ -1010,7 +1011,7 @@ impl IconLookupIndex {
             if parsed
                 .borrow()
                 .get(theme)
-                .is_some_and(|entry| entry.is_some())
+                .is_some_and(std::option::Option::is_some)
             {
                 continue;
             }
@@ -1096,7 +1097,7 @@ impl IconLookupIndex {
         let want = explicit.as_deref();
         let mut theme_best: HashMap<u32, (&IndexedIconFile, u64)> = HashMap::new();
         for file in entries {
-            if !want.map_or(true, |want| self.files.ext(file).eq_ignore_ascii_case(want)) {
+            if !want.is_none_or(|want| self.files.ext(file).eq_ignore_ascii_case(want)) {
                 continue;
             }
             let distance = directory_distance(self, file, physical.max(1));
@@ -1514,7 +1515,7 @@ mod tests {
         .expect("selected index.theme");
         INDEX_THEME_READS.with(|c| c.set(0));
         let index = build_index(&data, &["Mine"]);
-        let reads = INDEX_THEME_READS.with(|c| c.get());
+        let reads = INDEX_THEME_READS.with(std::cell::Cell::get);
         let (paths, hit) = index.lookup("once-app", 16);
         let _ = fs::remove_dir_all(&data);
         assert_eq!(
@@ -1573,7 +1574,7 @@ mod tests {
         let copies = index
             .files
             .get("flame-dup-app")
-            .map_or(0, |files| files.len());
+            .map_or(0, <[IndexedIconFile]>::len);
         let _ = fs::remove_dir_all(&first);
         let _ = fs::remove_dir_all(&second);
         assert!(hit);
@@ -1597,7 +1598,10 @@ mod tests {
         let index = build_index(&data, &["RawNames"]);
         let _ = fs::remove_dir_all(&data);
         // Both names lossy-decode to `a\u{FFFD}`; the key must stay exact.
-        let copies = index.files.get("a\u{FFFD}").map_or(0, |files| files.len());
+        let copies = index
+            .files
+            .get("a\u{FFFD}")
+            .map_or(0, <[IndexedIconFile]>::len);
         assert_eq!(
             copies, 2,
             "distinct raw names must not dedupe by lossy base"

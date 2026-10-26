@@ -1,5 +1,5 @@
 //! Sidebar places: persisted GTK-style bookmarks (add/remove/rename/reorder), mounted
-//! removable devices from mountinfo + sysfs, and UDisks2 mount/unmount/eject via `udisksctl`.
+//! removable devices from mountinfo + sysfs, and `UDisks2` mount/unmount/eject via `udisksctl`.
 pub use flamewm_integrations_linux::removable_mounts::udisks_action;
 use flamewm_integrations_linux::removable_mounts::{
     self, by_uuid_dir, is_removable_in, mounted_block_devices, unescape_mount, uuid_blocks,
@@ -21,6 +21,7 @@ pub struct Bookmark {
 }
 
 impl Bookmark {
+    #[must_use]
     pub fn display_name(&self) -> String {
         self.label.clone().unwrap_or_else(|| {
             self.path
@@ -33,6 +34,7 @@ impl Bookmark {
 }
 
 /// Strips control characters and caps length. Used for labels from bookmarks and devices.
+#[must_use]
 pub fn sanitize_label(raw: &str) -> String {
     raw.chars()
         .filter(|c| !c.is_control())
@@ -43,6 +45,7 @@ pub fn sanitize_label(raw: &str) -> String {
 }
 
 /// Encodes an absolute path as a `file://` URI, percent-encoding everything outside the unreserved set.
+#[must_use]
 pub fn file_uri(path: &Path) -> String {
     let escaped: String = path
         .to_string_lossy()
@@ -63,6 +66,7 @@ fn decode_file_uri(raw: &str) -> Option<PathBuf> {
 }
 
 /// Parses a GTK `bookmarks` file. Non-`file://` and malformed lines are ignored.
+#[must_use]
 pub fn parse_bookmarks(text: &str) -> Vec<Bookmark> {
     text.lines()
         .filter_map(|line| {
@@ -131,10 +135,12 @@ pub fn reorder(items: &mut Vec<Bookmark>, from: usize, to: usize) -> bool {
 }
 
 /// Resolves the GTK bookmarks file location (`$XDG_CONFIG_HOME/gtk-3.0/bookmarks`).
+#[must_use]
 pub fn bookmarks_file(config_home: &Path) -> PathBuf {
     config_home.join("gtk-3.0/bookmarks")
 }
 
+#[must_use]
 pub fn load_bookmarks(file: &Path) -> Vec<Bookmark> {
     fs::read_to_string(file)
         .map(|text| parse_bookmarks(&text))
@@ -166,7 +172,8 @@ pub struct MountedDevice {
 }
 
 /// Parses `/proc/self/mountinfo` for removable-media mount points (`/media`, `/run/media`, `/mnt`).
-/// Field layout: id parent maj:min root mount_point opts [optional...] - fstype source superopts.
+/// Field layout: id parent maj:min root `mount_point` opts [optional...] - fstype source superopts.
+#[must_use]
 pub fn parse_mountinfo(text: &str) -> Vec<MountedDevice> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -209,7 +216,7 @@ pub struct NetworkMount {
     pub fstype: String,
 }
 
-/// Filesystem types shown in the Network group: SMB/CIFS, NFS, sshfs, WebDAV (davfs) and the GVFS FUSE root.
+/// Filesystem types shown in the Network group: SMB/CIFS, NFS, sshfs, `WebDAV` (davfs) and the GVFS FUSE root.
 pub const NETWORK_FSTYPES: [&str; 8] = [
     "cifs",
     "smb3",
@@ -223,7 +230,8 @@ pub const NETWORK_FSTYPES: [&str; 8] = [
 pub const GVFS_FSTYPE: &str = "fuse.gvfsd-fuse";
 
 /// Network mounts from `/proc/self/mountinfo` text. Only the fstype selects a line, so pseudo or local mounts never match.
-/// Field layout: id parent maj:min root mount_point opts [optional...] - fstype source superopts.
+/// Field layout: id parent maj:min root `mount_point` opts [optional...] - fstype source superopts.
+#[must_use]
 pub fn parse_network_mounts(text: &str) -> Vec<NetworkMount> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -250,6 +258,7 @@ pub fn parse_network_mounts(text: &str) -> Vec<NetworkMount> {
 }
 
 /// The per-user GVFS FUSE root, `/run/user/<uid>/gvfs`. The uid is the owner of this process's `/proc/self`.
+#[must_use]
 pub fn gvfs_root() -> PathBuf {
     use std::os::unix::fs::MetadataExt;
     let uid = fs::metadata("/proc/self")
@@ -259,6 +268,7 @@ pub fn gvfs_root() -> PathBuf {
 }
 
 /// Share folders directly under the GVFS root, sorted by name. Each is one network location.
+#[must_use]
 pub fn gvfs_shares(root: &Path) -> Vec<PathBuf> {
     let mut shares: Vec<PathBuf> = fs::read_dir(root)
         .into_iter()
@@ -272,6 +282,7 @@ pub fn gvfs_shares(root: &Path) -> Vec<PathBuf> {
 
 /// Sidebar label for a GVFS share folder name such as `smb-share:server=nas,share=media` ("media on nas").
 /// Falls back to the raw folder name when the name has no recognised keys.
+#[must_use]
 pub fn gvfs_label(folder: &str) -> String {
     let params = folder.split_once(':').map_or("", |(_, rest)| rest);
     let value = |key: &str| {
@@ -348,11 +359,7 @@ struct JsonParser<'a> {
 
 impl JsonParser<'_> {
     fn skip_space(&mut self) {
-        while self
-            .bytes
-            .get(self.at)
-            .is_some_and(|b| b.is_ascii_whitespace())
-        {
+        while self.bytes.get(self.at).is_some_and(u8::is_ascii_whitespace) {
             self.at += 1;
         }
     }
@@ -726,6 +733,7 @@ fn unmounted_filesystem(node: &Json, disk_removable: bool) -> Option<BlockDevice
 
 /// Runs `lsblk` and returns unmounted filesystems. A missing or failing lsblk yields no devices.
 /// The extended column set is retried with the legacy set when an older lsblk rejects PARTTYPE.
+#[must_use]
 pub fn unmounted_devices() -> Vec<BlockDevice> {
     // Dev-only hook: a saved `lsblk -J` sample stands in for hardware, so screenshots need no real device.
     if let Some(path) = std::env::var_os("FLAMEWM_EXPLORER_FAKE_DEVICES") {
@@ -751,6 +759,7 @@ fn lsblk_output(columns: &str) -> Option<String> {
 }
 
 /// Name of the drive holding `block_name`: the parent disk of a partition, or the device itself.
+#[must_use]
 pub fn drive_in(sys_block_root: &Path, block_name: &str) -> String {
     let dev = sys_block_root.join(block_name);
     if !dev.join("partition").exists() {

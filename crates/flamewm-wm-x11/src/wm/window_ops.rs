@@ -1,6 +1,6 @@
 use super::*;
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn focus(&mut self, client: Window) -> Result<(), ReplyError> {
         self.focus_with_stacking(client, true)
     }
@@ -247,7 +247,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         let fullscreen = self
             .clients
             .get(&client)
-            .is_some_and(|state| state.is_fullscreen());
+            .is_some_and(super::super::client::ManagedClient::is_fullscreen);
         if enable == fullscreen {
             return Ok(());
         }
@@ -267,7 +267,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         let fullscreen = self
             .clients
             .get(&client)
-            .is_some_and(|state| state.is_fullscreen());
+            .is_some_and(super::super::client::ManagedClient::is_fullscreen);
         self.set_fullscreen(client, !fullscreen)
     }
 

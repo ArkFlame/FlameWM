@@ -23,7 +23,7 @@ pub(crate) fn parse_status_vmrss(text: &str) -> Option<u64> {
     for line in text.lines() {
         let (key, rest) = line.split_once(':')?;
         if key.trim() == "VmRSS" {
-            let mut parts = rest.trim().split_whitespace();
+            let mut parts = rest.split_whitespace();
             return parts.next()?.parse::<u64>().ok();
         }
     }

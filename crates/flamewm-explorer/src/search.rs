@@ -38,6 +38,7 @@ pub struct SearchOutcome {
 }
 
 /// Case-insensitive substring match on the file name. Empty or whitespace-only queries match nothing.
+#[must_use]
 pub fn name_matches(name: &str, query: &str) -> bool {
     let query = query.trim();
     !query.is_empty() && name.to_lowercase().contains(&query.to_lowercase())
@@ -78,7 +79,9 @@ fn walk(
                 let mut batch = Vec::new();
                 loop {
                     let dir = {
-                        let mut state = queue.lock().unwrap_or_else(|poison| poison.into_inner());
+                        let mut state = queue
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         loop {
                             if stop() {
                                 state.dirs.clear();
@@ -93,7 +96,7 @@ fn walk(
                             }
                             state = ready
                                 .wait(state)
-                                .unwrap_or_else(|poison| poison.into_inner());
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                         }
                     };
                     let Some(dir) = dir else {
@@ -143,7 +146,9 @@ fn walk(
                         }
                     }
                     {
-                        let mut state = queue.lock().unwrap_or_else(|poison| poison.into_inner());
+                        let mut state = queue
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         state.dirs.extend(subdirs);
                         state.active -= 1;
                     }
@@ -172,13 +177,13 @@ pub fn search_tree(
     let (truncated, cancelled) = walk(root, query, show_hidden, cancel, MAX_THREADS, &|batch| {
         collected
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .extend(batch);
     });
     SearchOutcome {
         hits: collected
             .into_inner()
-            .unwrap_or_else(|poison| poison.into_inner()),
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
         truncated,
         cancelled,
     }
@@ -194,6 +199,7 @@ impl Debounce {
     pub fn touch(&mut self, now: std::time::Instant) {
         self.last = Some(now);
     }
+    #[must_use]
     pub fn due(&self, now: std::time::Instant) -> bool {
         self.last
             .is_some_and(|last| now.duration_since(last) >= DEBOUNCE)

@@ -147,7 +147,7 @@ fn client_interior_matches_effective_border_per_mode() {
     assert_eq!(lifecycle::client_configure(outer, snapped).2, 800);
 }
 
-/// The ConfigureFrameRoot arm commits the border/geometry, then publishes
+/// The `ConfigureFrameRoot` arm commits the border/geometry, then publishes
 /// the effective extents through the single owner, `set_frame_extents`.
 #[test]
 fn configure_frame_root_arm_publishes_extents_after_commit() {

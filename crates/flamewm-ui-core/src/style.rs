@@ -1,4 +1,4 @@
-//! Canonical FlameWM visual-state and shell-theme tokens ported from the native UI layer.
+//! Canonical `FlameWM` visual-state and shell-theme tokens ported from the native UI layer.
 
 use crate::{Color, Palette};
 
@@ -245,9 +245,9 @@ impl Default for Theme {
     fn default() -> Self {
         Self {
             palette: Palette::default(),
-            accent_hover: Color(0xF064_33),
-            accent_pressed: Color(0xC944_18),
-            accent_muted: Color(0x6B2A_12),
+            accent_hover: Color(0x00F0_6433),
+            accent_pressed: Color(0x00C9_4418),
+            accent_muted: Color(0x006B_2A12),
             shell: ShellMetrics::default(),
             settings: SettingsMetrics::default(),
         }

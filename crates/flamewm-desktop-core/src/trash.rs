@@ -344,7 +344,7 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = mp + if mp < 10 { 3 } else { -9 };
-    year += if month <= 2 { 1 } else { 0 };
+    year += i64::from(month <= 2);
     (year, month, day)
 }
 

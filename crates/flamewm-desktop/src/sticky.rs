@@ -104,7 +104,7 @@ impl StickyState {
     }
 
     /// Re-arms a save whose write failed. The retry delay doubles per consecutive
-    /// failure from PERSIST_DEBOUNCE up to PERSIST_RETRY_CAP, so a persistent failure
+    /// failure from `PERSIST_DEBOUNCE` up to `PERSIST_RETRY_CAP`, so a persistent failure
     /// cannot spin and does not retry at a fixed rate forever.
     fn persist_failed(&mut self, now: Instant) {
         self.persist_failures = self.persist_failures.saturating_add(1);
@@ -129,7 +129,7 @@ struct StickyGesture {
     start_x: f32,
     start_y: f32,
     original: Rect,
-    /// Set once the pointer has moved past STICKY_DRAG_THRESHOLD_PX.
+    /// Set once the pointer has moved past `STICKY_DRAG_THRESHOLD_PX`.
     moved: bool,
 }
 
@@ -236,7 +236,7 @@ pub(crate) fn sync_sticky(
                 None => note.text.clone(),
             };
             document.text(&text_id, text)?;
-            document.font_size(&text_id, note.text_size as f32)?;
+            document.font_size(&text_id, f32::from(note.text_size))?;
             document.font_weight(&text_id, if note.bold { 700 } else { 400 })?;
             document.foreground(
                 &text_id,

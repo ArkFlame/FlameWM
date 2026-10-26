@@ -64,7 +64,7 @@ impl ShowDesktop {
     }
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     /// Toggles show-desktop. Showing iconifies the visible normal windows; hiding restores them.
     pub(super) fn toggle_show_desktop(&mut self) -> Result<(), ReplyError> {
         if super::key_diag_enabled() {

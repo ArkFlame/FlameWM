@@ -2,7 +2,7 @@
 //! frame (chrome) and the client area; both must deliver and the chrome
 //! band must differ from the client mean (visual separation proof).
 
-/// Checkerboard probe over a rect: samples NxN cells, counts delivered and
+/// Checkerboard probe over a rect: samples `NxN` cells, counts delivered and
 /// non-black, returns mean of cell means.
 fn checkerboard(
     canary: &crate::Canary,

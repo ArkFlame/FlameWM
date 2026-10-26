@@ -1,12 +1,12 @@
 //! Cross-client clipboard canary: an owner and a requestor are two independent
 //! X connections (neither is the canary's own connection). CLIPBOARD serves a
-//! small UTF8_STRING payload; PRIMARY serves a payload above the INCR cap, so
-//! its UTF8_STRING transfer runs the INCR property protocol with PropertyNotify
+//! small `UTF8_STRING` payload; PRIMARY serves a payload above the INCR cap, so
+//! its `UTF8_STRING` transfer runs the INCR property protocol with `PropertyNotify`
 //! chunks. TARGETS is requested from both selections. The WM must never take
-//! ownership of either selection during the exchange (no SelectionClear).
+//! ownership of either selection during the exchange (no `SelectionClear`).
 //!
-//! Only selection-protocol messages (ConvertSelection, SelectionRequest,
-//! SelectionNotify, PropertyNotify) are used; no input is synthesized.
+//! Only selection-protocol messages (`ConvertSelection`, `SelectionRequest`,
+//! `SelectionNotify`, `PropertyNotify`) are used; no input is synthesized.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -24,7 +24,7 @@ use x11rb::{CURRENT_TIME, NONE};
 
 /// Payload above this size always takes the INCR path (independent of server limits).
 const INCR_CHUNK_CAP: usize = 256 * 1024;
-/// Owner-side payload for PRIMARY UTF8_STRING: forces several INCR chunks.
+/// Owner-side payload for PRIMARY `UTF8_STRING`: forces several INCR chunks.
 const BIG_PAYLOAD_LEN: usize = 600 * 1024;
 const SMALL_TEXT: &str = "flamewm clipboard \u{2713} \u{e9}\n";
 const WAIT: Duration = Duration::from_secs(10);
@@ -36,8 +36,8 @@ pub fn pattern(len: usize) -> Vec<u8> {
         .collect()
 }
 
-/// INCR slice length: fits one ChangeProperty request and is 4-byte aligned so
-/// GetProperty long_offset advances exactly.
+/// INCR slice length: fits one `ChangeProperty` request and is 4-byte aligned so
+/// `GetProperty` `long_offset` advances exactly.
 pub fn incr_chunk_len(max_request_bytes: usize) -> usize {
     (max_request_bytes.saturating_sub(64) & !3).max(4)
 }
@@ -275,7 +275,7 @@ fn wait_event<C: Connection, F: FnMut(&Event) -> bool>(
     }
 }
 
-/// Reads a property completely, looping on bytes_after. delete=true removes it
+/// Reads a property completely, looping on `bytes_after`. delete=true removes it
 /// once fully read, which is what drives the INCR handshake.
 fn read_property<C: Connection>(
     conn: &C,
@@ -317,6 +317,7 @@ struct CaseResult {
     detail: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_case<C: Connection>(
     conn: &C,
     atoms: Atoms,

@@ -181,10 +181,12 @@ mod calendar_tests {
         assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_NEUTRAL));
         assert_eq!(TODAY_NEUTRAL.r, TODAY_NEUTRAL.g);
         assert_eq!(TODAY_NEUTRAL.g, TODAY_NEUTRAL.b);
-        assert!(
-            TODAY_NEUTRAL.a < 255,
-            "today fill is translucent, not solid"
-        );
+        const {
+            assert!(
+                TODAY_NEUTRAL.a < 255,
+                "today fill is translucent, not solid"
+            );
+        };
     }
 
     #[test]

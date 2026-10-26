@@ -256,7 +256,7 @@ impl<R: IconResolve> IconService<R> {
                 thread::Builder::new()
                     .name(format!("icon-resolver-{number}"))
                     .spawn(move || {
-                        worker_loop(shared, result_tx, wake_tx, cache, completed, factory())
+                        worker_loop(shared, result_tx, wake_tx, cache, completed, factory());
                     })
                     .expect("spawn icon resolver worker"),
             );
@@ -283,12 +283,14 @@ impl<R: IconResolve> IconService<R> {
     /// already in flight or a finished index is still waiting in
     /// [`IconService::poll_theme_rebuild`]. Never performs stat or build I/O
     /// on the calling thread.
+    #[allow(clippy::must_use_candidate)]
     pub fn request_theme_rebuild(&self) -> bool {
         self.theme_rebuilder.request(self.shared_index())
     }
 
     /// Queues an off-thread build of the index for `theme_names` (a resolved theme chain).
     /// Returns `false` while a job is in flight or a finished index is unpolled.
+    #[allow(clippy::must_use_candidate)]
     pub fn request_theme_change(&self, theme_names: Vec<String>) -> bool {
         self.theme_rebuilder
             .request_theme(self.shared_index(), theme_names)
@@ -312,11 +314,10 @@ impl<R: IconResolve> IconService<R> {
     /// The current shared generation-scoped lookup index (Arc clone).
     #[must_use]
     pub fn shared_index(&self) -> Arc<IconLookupIndex> {
-        self.shared
-            .theme
-            .lock()
-            .map(|slot| Arc::clone(&slot))
-            .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner()))
+        self.shared.theme.lock().map_or_else(
+            |poisoned| Arc::clone(&poisoned.into_inner()),
+            |slot| Arc::clone(&slot),
+        )
     }
 
     /// Generation of the current shared index; keys built for new requests
@@ -339,7 +340,7 @@ impl<R: IconResolve> IconService<R> {
                 .shared
                 .theme
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             // A rebuild is based on a snapshot captured when it was queued.
             // Do not let a late result from that snapshot roll the service
             // back after a newer generation has already been installed.
@@ -803,11 +804,10 @@ fn worker_loop<R: IconResolve>(
                 let epoch = shared.theme_epoch.load(Ordering::Acquire);
                 if epoch != applied_epoch {
                     applied_epoch = epoch;
-                    let index = shared
-                        .theme
-                        .lock()
-                        .map(|slot| Arc::clone(&slot))
-                        .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner()));
+                    let index = shared.theme.lock().map_or_else(
+                        |poisoned| Arc::clone(&poisoned.into_inner()),
+                        |slot| Arc::clone(&slot),
+                    );
                     resolver.apply_theme(index);
                 }
                 // Resolution runs without holding the queue lock.

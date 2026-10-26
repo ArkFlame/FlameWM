@@ -1,5 +1,5 @@
-//! Async shell icon loader: one worker thread owns IconResolver.
-//! Main thread never resolves synchronously; it try_sends requests and
+//! Async shell icon loader: one worker thread owns `IconResolver`.
+//! Main thread never resolves synchronously; it `try_sends` requests and
 //! drains completed rasters per tick. No X calls happen in the worker.
 
 use std::borrow::Cow;
@@ -58,8 +58,9 @@ fn resolve_icon_raster(
 }
 
 /// Lookup names for one task or Start name, most specific first: the raw
-/// name, its lowercase, then the segment after the last `.` (WM_CLASS
+/// name, its lowercase, then the segment after the last `.` (`WM_CLASS`
 /// `mini.xterm` yields `xterm`), lowercased. Empty and duplicate names drop.
+#[must_use]
 pub fn icon_name_candidates(name: &str) -> Vec<String> {
     let raw = name.trim();
     let class_segment = raw.rsplit('.').next().unwrap_or(raw);
@@ -161,6 +162,7 @@ impl IconLoader {
         self.generation
     }
 
+    #[must_use]
     pub fn spawn(packaged_root: std::path::PathBuf, theme: String) -> Self {
         let (req_tx, req_rx) = sync_channel::<WorkerMsg>(16);
         let initial_theme = theme.clone();
@@ -244,7 +246,7 @@ impl IconLoader {
         if theme == self.theme {
             return false;
         }
-        self.theme = theme.to_owned();
+        theme.clone_into(&mut self.theme);
         self.bump_generation();
         self.pending.clear();
         self.retry.clear();

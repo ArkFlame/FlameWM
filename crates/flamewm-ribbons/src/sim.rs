@@ -143,18 +143,22 @@ impl Stream {
         }
     }
 
+    #[must_use]
     pub fn position(&self) -> [f64; 2] {
         self.pos
     }
 
+    #[must_use]
     pub fn heading(&self) -> f64 {
         self.theta
     }
 
+    #[must_use]
     pub fn speed(&self) -> f64 {
         self.speed
     }
 
+    #[must_use]
     pub fn history(&self) -> &History {
         &self.history
     }
@@ -206,7 +210,7 @@ fn wrap_angle(x: f64) -> f64 {
 }
 
 fn z_at(t: f64, psi: f64) -> f64 {
-    (1.0 + (TAU * 0.045 * t + psi).sin()) / 2.0
+    f64::midpoint(1.0, (TAU * 0.045 * t + psi).sin())
 }
 
 fn beta_at(t: f64, chi: f64) -> f64 {
@@ -247,12 +251,14 @@ impl Ribbons {
     ///
     /// With several `span_rects` the domain is their union bounds and `covers` masks the gaps;
     /// for independent outputs create one `Ribbons` per output instead.
+    #[must_use]
     pub fn new(config: Config, now: f64) -> Self {
         Self::new_with_speed_factor(config, now, RIBBON_DEFAULT_SPEED_FACTOR)
     }
 
     /// Like `new`, but multiplies the base ribbon speed by `factor` instead of the default.
     /// `factor` does not change RNG draw order, so the same seed gives the same paths, scaled.
+    #[must_use]
     pub fn new_with_speed_factor(config: Config, now: f64, factor: f64) -> Self {
         let factor = if factor.is_finite() {
             factor.clamp(0.0, 4.0)
@@ -305,6 +311,7 @@ impl Ribbons {
     /// Curvier, slower flowing trails for the lock-screen Ribbons presentation.
     /// Keeps the default deterministic engine and its golden frames unchanged.
     /// The extra bend applies only to steering, not to edge containment.
+    #[must_use]
     pub fn new_fluid_style(config: Config, now: f64) -> Self {
         let mut this = Self::new_with_speed_factor(config, now, 0.92);
         this.bend_factor = 1.70;
@@ -376,46 +383,56 @@ impl Ribbons {
     }
 
     /// Current simulation time in seconds.
+    #[must_use]
     pub fn time(&self) -> f64 {
         self.origin_t + self.steps as f64 * DT
     }
 
+    #[must_use]
     pub fn width(&self) -> u32 {
         self.width
     }
 
+    #[must_use]
     pub fn height(&self) -> u32 {
         self.height
     }
 
     /// Screen scale `S = clamp(min(W/1280, H/720), 0.60, 2.50)`.
+    #[must_use]
     pub fn scale(&self) -> f64 {
         self.scale
     }
 
     /// Configured ribbon width in px at 1280x720 (already clamped).
+    #[must_use]
     pub fn width_px(&self) -> f64 {
         self.config.width_px
     }
 
+    #[must_use]
     pub fn num_ribbons(&self) -> usize {
         self.streams.len()
     }
 
+    #[must_use]
     pub fn streams(&self) -> &[Stream] {
         &self.streams
     }
 
     /// SRGB colour of ribbon `i`.
+    #[must_use]
     pub fn colour(&self, i: usize) -> [u8; 3] {
         self.colours[i % self.colours.len()]
     }
 
+    #[must_use]
     pub fn is_masked(&self) -> bool {
         self.masked
     }
 
     /// Whether viewport pixel `(x, y)` lies inside an output rect. Always true when unmasked.
+    #[must_use]
     pub fn covers(&self, x: u32, y: u32) -> bool {
         !self.masked
             || self
@@ -425,6 +442,7 @@ impl Ribbons {
     }
 
     /// Total allocated history capacity across streams, in samples.
+    #[must_use]
     pub fn history_capacity(&self) -> usize {
         self.streams.iter().map(|s| s.history.capacity()).sum()
     }
@@ -458,8 +476,8 @@ mod tests {
         let mut a = Ribbons::new(cfg(6, 42), 0.0);
         let mut b = Ribbons::new(cfg(6, 42), 0.0);
         for k in 1..=900 {
-            a.step_to(k as f64 / 60.0);
-            b.step_to(k as f64 / 60.0);
+            a.step_to(f64::from(k) / 60.0);
+            b.step_to(f64::from(k) / 60.0);
         }
         for (x, y) in a.streams().iter().zip(b.streams()) {
             assert_eq!(x.position(), y.position());
@@ -474,7 +492,7 @@ mod tests {
     fn heading_stays_finite_over_ten_minutes() {
         let mut r = Ribbons::new(cfg(12, 7), 0.0);
         for k in 1..=36_000 {
-            r.step_to(k as f64 / 60.0);
+            r.step_to(f64::from(k) / 60.0);
         }
         for s in r.streams() {
             assert!(s.heading().is_finite() && s.position().iter().all(|v| v.is_finite()));
@@ -515,7 +533,7 @@ mod tests {
             let (w, h) = dims(&r);
             let limit = 0.5 * w.min(h);
             for k in 1..=(60 * 600) {
-                r.step_to(k as f64 / 60.0);
+                r.step_to(f64::from(k) / 60.0);
                 for s in r.streams() {
                     let [x, y] = s.position();
                     let out_x = (-x).max(x - w).max(0.0);
@@ -538,7 +556,7 @@ mod tests {
         assert_eq!(fluid.speed_factor, 0.92);
         // Match real 60Hz progression; one giant step would trigger a reset.
         for i in 1..=120 {
-            let t = i as f64 / 60.0;
+            let t = f64::from(i) / 60.0;
             original.step_to(t);
             fluid.step_to(t);
         }
@@ -568,7 +586,7 @@ mod tests {
                 pos: [0.0, 0.0],
                 z: 0.5,
                 beta: 0.0,
-                t: k as f64 / 60.0,
+                t: f64::from(k) / 60.0,
             });
         }
         assert!(hist.len() <= HISTORY_CAPACITY);
@@ -593,7 +611,7 @@ mod tests {
         let mut r = Ribbons::new(cfg(12, 11), 0.0);
         let cap = r.history_capacity();
         for k in 1..=36_000 {
-            r.step_to(k as f64 / 60.0);
+            r.step_to(f64::from(k) / 60.0);
             assert_eq!(r.history_capacity(), cap);
         }
         for s in r.streams() {

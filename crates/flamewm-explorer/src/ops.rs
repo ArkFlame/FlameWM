@@ -30,6 +30,7 @@ pub enum Verdict {
 
 /// Validates an operation. `dest` is the target directory for `Move`/`Copy`; `dest_writable`
 /// is the caller's access check for that directory.
+#[must_use]
 pub fn validate(
     kind: Kind,
     sources: &[Source],
@@ -75,6 +76,7 @@ pub fn validate(
 }
 
 /// Shortens a directory for display: the home directory becomes `~`.
+#[must_use]
 pub fn display_location(dir: &Path, home: &Path) -> String {
     match dir.strip_prefix(home) {
         Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),

@@ -66,6 +66,80 @@ fn resolve_in_theme_root(theme_root: &Path, path: &Path) -> std::io::Result<std:
     }
 }
 
+fn u32_at(bytes: &[u8], at: usize) -> Result<u32, CursorError> {
+    let end = at.checked_add(4).ok_or(CursorError::Truncated)?;
+    let raw: [u8; 4] = bytes
+        .get(at..end)
+        .and_then(|s| s.try_into().ok())
+        .ok_or(CursorError::Truncated)?;
+    Ok(u32::from_le_bytes(raw))
+}
+
+/// Decode the image frame whose nominal size is nearest 24 (ties prefer the smaller).
+pub fn parse_xcursor_preview(bytes: &[u8]) -> Result<CursorPreview, CursorError> {
+    if bytes.get(0..4) != Some(MAGIC.as_slice()) {
+        return Err(CursorError::BadMagic);
+    }
+    let header_len = u32_at(bytes, 4)? as usize;
+    let ntoc = u32_at(bytes, 12)?;
+    if header_len < 16 {
+        return Err(CursorError::Malformed("header length"));
+    }
+    if ntoc > MAX_TOC {
+        return Err(CursorError::Malformed("toc count"));
+    }
+    let mut best: Option<(u32, u32, usize)> = None;
+    for index in 0..ntoc as usize {
+        let base = index
+            .checked_mul(12)
+            .and_then(|off| off.checked_add(header_len))
+            .ok_or(CursorError::Truncated)?;
+        if u32_at(bytes, base)? != IMAGE_TYPE {
+            continue;
+        }
+        let size = u32_at(bytes, base + 4)?;
+        let pos = u32_at(bytes, base + 8)? as usize;
+        let distance = size.abs_diff(PREVIEW_SIZE);
+        if best.is_none_or(|(d, s, _)| (distance, size) < (d, s)) {
+            best = Some((distance, size, pos));
+        }
+    }
+    let (_, nominal_size, pos) = best.ok_or(CursorError::NoImage)?;
+    let chunk_len = u32_at(bytes, pos)? as usize;
+    if u32_at(bytes, pos + 4)? != IMAGE_TYPE {
+        return Err(CursorError::Malformed("chunk type"));
+    }
+    if chunk_len < IMAGE_HEADER_MIN {
+        return Err(CursorError::Malformed("chunk length"));
+    }
+    let width = u32_at(bytes, pos + 16)?;
+    let height = u32_at(bytes, pos + 20)?;
+    let xhot = u32_at(bytes, pos + 24)?;
+    let yhot = u32_at(bytes, pos + 28)?;
+    if width == 0 || height == 0 || width > MAX_DIM || height > MAX_DIM {
+        return Err(CursorError::Malformed("dimensions"));
+    }
+    if xhot >= width || yhot >= height {
+        return Err(CursorError::Malformed("hotspot"));
+    }
+    let start = pos.checked_add(chunk_len).ok_or(CursorError::Truncated)?;
+    let need = (width as usize) * (height as usize) * 4;
+    let end = start.checked_add(need).ok_or(CursorError::Truncated)?;
+    let pixels = bytes.get(start..end).ok_or(CursorError::Truncated)?;
+    // File pixels are little-endian ARGB words, i.e. bytes B, G, R, A.
+    let mut rgba = Vec::with_capacity(need);
+    for px in pixels.chunks_exact(4) {
+        rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+    }
+    Ok(CursorPreview {
+        nominal_size,
+        width,
+        height,
+        hotspot: (xhot, yhot),
+        rgba,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -169,78 +243,4 @@ mod tests {
         assert_eq!((preview.width, preview.height), (1, 1));
         let _ = fs::remove_dir_all(&root);
     }
-}
-
-fn u32_at(bytes: &[u8], at: usize) -> Result<u32, CursorError> {
-    let end = at.checked_add(4).ok_or(CursorError::Truncated)?;
-    let raw: [u8; 4] = bytes
-        .get(at..end)
-        .and_then(|s| s.try_into().ok())
-        .ok_or(CursorError::Truncated)?;
-    Ok(u32::from_le_bytes(raw))
-}
-
-/// Decode the image frame whose nominal size is nearest 24 (ties prefer the smaller).
-pub fn parse_xcursor_preview(bytes: &[u8]) -> Result<CursorPreview, CursorError> {
-    if bytes.get(0..4) != Some(MAGIC.as_slice()) {
-        return Err(CursorError::BadMagic);
-    }
-    let header_len = u32_at(bytes, 4)? as usize;
-    let ntoc = u32_at(bytes, 12)?;
-    if header_len < 16 {
-        return Err(CursorError::Malformed("header length"));
-    }
-    if ntoc > MAX_TOC {
-        return Err(CursorError::Malformed("toc count"));
-    }
-    let mut best: Option<(u32, u32, usize)> = None;
-    for index in 0..ntoc as usize {
-        let base = index
-            .checked_mul(12)
-            .and_then(|off| off.checked_add(header_len))
-            .ok_or(CursorError::Truncated)?;
-        if u32_at(bytes, base)? != IMAGE_TYPE {
-            continue;
-        }
-        let size = u32_at(bytes, base + 4)?;
-        let pos = u32_at(bytes, base + 8)? as usize;
-        let distance = size.abs_diff(PREVIEW_SIZE);
-        if best.is_none_or(|(d, s, _)| (distance, size) < (d, s)) {
-            best = Some((distance, size, pos));
-        }
-    }
-    let (_, nominal_size, pos) = best.ok_or(CursorError::NoImage)?;
-    let chunk_len = u32_at(bytes, pos)? as usize;
-    if u32_at(bytes, pos + 4)? != IMAGE_TYPE {
-        return Err(CursorError::Malformed("chunk type"));
-    }
-    if chunk_len < IMAGE_HEADER_MIN {
-        return Err(CursorError::Malformed("chunk length"));
-    }
-    let width = u32_at(bytes, pos + 16)?;
-    let height = u32_at(bytes, pos + 20)?;
-    let xhot = u32_at(bytes, pos + 24)?;
-    let yhot = u32_at(bytes, pos + 28)?;
-    if width == 0 || height == 0 || width > MAX_DIM || height > MAX_DIM {
-        return Err(CursorError::Malformed("dimensions"));
-    }
-    if xhot >= width || yhot >= height {
-        return Err(CursorError::Malformed("hotspot"));
-    }
-    let start = pos.checked_add(chunk_len).ok_or(CursorError::Truncated)?;
-    let need = (width as usize) * (height as usize) * 4;
-    let end = start.checked_add(need).ok_or(CursorError::Truncated)?;
-    let pixels = bytes.get(start..end).ok_or(CursorError::Truncated)?;
-    // File pixels are little-endian ARGB words, i.e. bytes B, G, R, A.
-    let mut rgba = Vec::with_capacity(need);
-    for px in pixels.chunks_exact(4) {
-        rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
-    }
-    Ok(CursorPreview {
-        nominal_size,
-        width,
-        height,
-        hotspot: (xhot, yhot),
-        rgba,
-    })
 }

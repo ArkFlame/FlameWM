@@ -2023,13 +2023,13 @@ mod per_output_tests {
         };
         for y in 0..4 {
             for x in 0..8 {
-                assert_eq!(at(&image, x, y), at(&left, x, y), "left output ({x},{y})");
+                assert_eq!(at(image, x, y), at(&left, x, y), "left output ({x},{y})");
             }
         }
         for y in 0..5 {
             for x in 0..6 {
                 assert_eq!(
-                    at(&image, 8 + x, y),
+                    at(image, 8 + x, y),
                     at(&right, x, y),
                     "right output ({x},{y})"
                 );

@@ -1,6 +1,6 @@
-//! Maps the active terminal theme onto FlameWM's live settings snapshot. In `follow-flamewm` mode the background is the
-//! FlameWM surface colour and the cursor and selection use the accent. Translucency comes from the terminal's own
-//! `background_opacity` setting, with FlameWM's wallpaper and surface blur.
+//! Maps the active terminal theme onto `FlameWM`'s live settings snapshot. In `follow-flamewm` mode the background is the
+//! `FlameWM` surface colour and the cursor and selection use the accent. Translucency comes from the terminal's own
+//! `background_opacity` setting, with `FlameWM`'s wallpaper and surface blur.
 use std::path::Path;
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
@@ -10,8 +10,8 @@ use flamewm_ui_x11::backdrop::WindowBackdrop;
 use crate::store::FOLLOW_FLAMEWM;
 use crate::themes::{Palette, Theme, builtin_themes};
 
-/// FlameWM default accent, the same value as flamewm-settings `DEFAULT_ACCENT`.
-pub const DEFAULT_ACCENT: u32 = 0xEF4048;
+/// `FlameWM` default accent, the same value as flamewm-settings `DEFAULT_ACCENT`.
+pub const DEFAULT_ACCENT: u32 = 0x00EF_4048;
 /// Shared default for the surface blur (shell/desktop `surfaceBlurPercent`).
 pub const DEFAULT_BLUR_PERCENT: u8 = 80;
 
@@ -23,6 +23,7 @@ fn text_setting<'a>(snapshot: &'a SettingsSnapshot, key: &str) -> Option<&'a str
 }
 
 /// Alpha for the background: the opacity percent scaled to 0..=255.
+#[must_use]
 pub fn surface_alpha(opacity_percent: u8) -> u8 {
     ((u16::from(opacity_percent.min(100)) * 255) / 100) as u8
 }
@@ -33,16 +34,17 @@ fn accent(snapshot: &SettingsSnapshot) -> u32 {
     };
     match name {
         "red" => DEFAULT_ACCENT,
-        "blue" => 0x3dae_e9,
-        "purple" => 0x9b59b6,
-        "teal" => 0x1abc9c,
-        "green" => 0x27ae60,
-        "amber" => 0xf39c12,
+        "blue" => 0x003d_aee9,
+        "purple" => 0x009b_59b6,
+        "teal" => 0x001a_bc9c,
+        "green" => 0x0027_ae60,
+        "amber" => 0x00f3_9c12,
         other => crate::themes::parse_hex(other).unwrap_or(DEFAULT_ACCENT),
     }
 }
 
 /// Palette for `follow-flamewm`: surface background, accent cursor, accent-tinted selection, and the Dark+ ANSI set.
+#[must_use]
 pub fn follow_palette(snapshot: &SettingsSnapshot) -> Palette {
     let base = builtin_themes()[0].palette.clone();
     let surface = surface_fill(snapshot).rgb;
@@ -62,7 +64,7 @@ pub fn follow_palette(snapshot: &SettingsSnapshot) -> Palette {
     }
 }
 
-/// Resolves the active theme name to a palette. `follow-flamewm` (or an unknown name) uses FlameWM colours or Dark+.
+/// Resolves the active theme name to a palette. `follow-flamewm` (or an unknown name) uses `FlameWM` colours or Dark+.
 pub fn resolve_palette(
     active: &str,
     themes: &[Theme],
@@ -74,11 +76,14 @@ pub fn resolve_palette(
     themes
         .iter()
         .find(|theme| theme.name == active)
-        .map(|theme| theme.palette.clone())
-        .unwrap_or_else(|| builtin_themes()[0].palette.clone())
+        .map_or_else(
+            || builtin_themes()[0].palette.clone(),
+            |theme| theme.palette.clone(),
+        )
 }
 
 /// Backdrop for the window: shared wallpaper settings with the terminal opacity and blur. `None` at 100% opacity.
+#[must_use]
 pub fn window_backdrop(
     snapshot: &SettingsSnapshot,
     packaged_root: &Path,
@@ -138,7 +143,7 @@ mod tests {
             .insert("accent".into(), SettingValue::Text("#3DAEE9".into()));
         let palette = resolve_palette(FOLLOW_FLAMEWM, &[], Some(&snapshot));
         assert_eq!(palette.background, surface_fill(&snapshot).rgb);
-        assert_eq!(palette.cursor, 0x3dae_e9);
+        assert_eq!(palette.cursor, 0x003d_aee9);
     }
 
     #[test]

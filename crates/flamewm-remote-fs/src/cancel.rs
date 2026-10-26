@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub struct Cancel(Arc<AtomicBool>);
 
 impl Cancel {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

@@ -157,7 +157,7 @@ pub enum PowerState {
     Unknown,
 }
 
-/// Aggregate UPower `DisplayDevice` state. `cpu_percent` is sampled only while the battery menu is open.
+/// Aggregate `UPower` `DisplayDevice` state. `cpu_percent` is sampled only while the battery menu is open.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PowerSnapshot {
     pub available: ServiceAvailability,

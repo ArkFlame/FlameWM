@@ -68,7 +68,7 @@ pub enum Command {
     Close(WindowId),
     SwitchWorkspace(usize),
     MoveToWorkspace(WindowId, usize),
-    /// Starts a program through `State::spawn`, so XWayland clients get the compositor's `DISPLAY`.
+    /// Starts a program through `State::spawn`, so `XWayland` clients get the compositor's `DISPLAY`.
     Spawn(Vec<String>),
 }
 
@@ -651,14 +651,16 @@ impl Service {
                             .windows
                             .iter()
                             .find(|window| window.reference.id == *id)
-                            .map(|window| SwitcherEntry {
-                                title: window.title.clone(),
-                                app_id: window.app_id.as_str().to_owned(),
-                            })
-                            .unwrap_or(SwitcherEntry {
-                                title: String::new(),
-                                app_id: String::new(),
-                            })
+                            .map_or(
+                                SwitcherEntry {
+                                    title: String::new(),
+                                    app_id: String::new(),
+                                },
+                                |window| SwitcherEntry {
+                                    title: window.title.clone(),
+                                    app_id: window.app_id.as_str().to_owned(),
+                                },
+                            )
                     })
                     .collect();
                 ControlSignal::WindowSwitcherChanged {
@@ -718,7 +720,7 @@ impl Service {
             .map(|window| window.state_generation)
             .max()
             .unwrap_or(0);
-        *self.published.borrow_mut() = windows.clone();
+        (*self.published.borrow_mut()).clone_from(&windows);
         if let Err(error) = self
             .server
             .emit_signal(&ControlSignal::WindowsSnapshotChanged { revision, windows })
@@ -766,7 +768,7 @@ pub fn install(state: &mut State) -> Result<(), Box<dyn Error>> {
     let mut interval = BUS_TURN_MIN_MS;
     state.loop_handle.insert_source(
         Timer::from_duration(Duration::from_millis(interval)),
-        move |_, _, state| {
+        move |_, (), state| {
             let busy = state
                 .control
                 .clone()

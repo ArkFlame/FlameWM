@@ -132,9 +132,11 @@ impl LayoutItem {
 
     #[must_use]
     pub fn fill(id: impl Into<String>) -> Self {
-        let mut spec = LayoutSpec::default();
-        spec.width = Measure::flex(1);
-        spec.height = Measure::flex(1);
+        let spec = LayoutSpec {
+            width: Measure::flex(1),
+            height: Measure::flex(1),
+            ..LayoutSpec::default()
+        };
         Self {
             id: id.into(),
             span: 1,

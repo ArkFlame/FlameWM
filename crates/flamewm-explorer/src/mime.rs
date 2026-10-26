@@ -1,4 +1,4 @@
-//! Native Open With choices. XDG owns associations; FlameWM owns the chooser UI.
+//! Native Open With choices. XDG owns associations; `FlameWM` owns the chooser UI.
 //! Discovery and `xdg-mime` calls run on a dedicated worker, never the UI thread.
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -94,7 +94,7 @@ struct AssociationChanges {
 fn parse_association_changes(text: &str, mime: &str) -> AssociationChanges {
     let mut changes = AssociationChanges::default();
     let mut group = "";
-    for line in text.lines().map(|line| line.trim()) {
+    for line in text.lines().map(str::trim) {
         if line.is_empty() || line.starts_with('#') { continue; }
         if line.starts_with('[') && line.ends_with(']') {
             group = &line[1..line.len() - 1];
@@ -130,14 +130,11 @@ fn xdg_dirs(variable: &str, fallback: &str) -> Vec<PathBuf> {
 /// Files appear in the exact XDG precedence order, highest-priority first.
 /// Do not apply [Added/Removed Associations] from desktop-specific files.
 fn association_layers() -> Vec<AssociationLayer> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/nonexistent"));
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/nonexistent"), PathBuf::from);
     let config_home = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|s| !s.is_empty()).map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"));
+        .filter(|s| !s.is_empty()).map_or_else(|| home.join(".config"), PathBuf::from);
     let data_home = std::env::var_os("XDG_DATA_HOME")
-        .filter(|s| !s.is_empty()).map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/share"));
+        .filter(|s| !s.is_empty()).map_or_else(|| home.join(".local/share"), PathBuf::from);
     let mut layers = vec![AssociationLayer {
         mimeapps: config_home.join("mimeapps.list"), applications: None,
     }];

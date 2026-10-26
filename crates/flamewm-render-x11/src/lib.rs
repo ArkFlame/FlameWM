@@ -1,3 +1,5 @@
+#![allow(clippy::unnecessary_cast)]
+
 mod lamp;
 mod overlay;
 mod text_mask_cache;

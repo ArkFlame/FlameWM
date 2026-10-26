@@ -277,7 +277,7 @@ pub struct ProductSettings {
     pub lock_background_dim_percent: u16,
     /// Lock-screen profile picture path; empty selects the built-in ring icon.
     pub avatar_image: String,
-    /// Terminal for FlameWM launches: a bare command name or absolute path. Empty selects FlameWM Terminal.
+    /// Terminal for `FlameWM` launches: a bare command name or absolute path. Empty selects `FlameWM` Terminal.
     pub default_terminal: String,
     pub lock_clock_format: LockClockFormat,
     pub lock_show_date: bool,
@@ -620,17 +620,9 @@ impl ProductSettings {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConfigStore {
     current: ProductSettings,
-}
-
-impl Default for ConfigStore {
-    fn default() -> Self {
-        Self {
-            current: ProductSettings::default(),
-        }
-    }
 }
 
 impl ConfigStore {
@@ -712,7 +704,7 @@ impl ConfigStore {
             }
         }
         if has_legacy_taskbar_surface_key && !has_surface_key {
-            snapshot.surface_color = snapshot.taskbar_color.clone();
+            snapshot.surface_color.clone_from(&snapshot.taskbar_color);
             snapshot.surface_opacity = snapshot.taskbar_opacity;
             snapshot.surface_blur_percent = snapshot.taskbar_blur_percent;
         }
@@ -726,8 +718,8 @@ impl ConfigStore {
         // One shared shape: square only when every present legacy button agrees; otherwise circle.
         if !has_button_style && !legacy_square_flags.is_empty() {
             let all_square = legacy_square_flags.iter().all(|square| *square);
-            snapshot.titlebar_button_style =
-                if all_square { "square" } else { "circle" }.to_owned();
+            if all_square { "square" } else { "circle" }
+                .clone_into(&mut snapshot.titlebar_button_style);
         }
         if snapshot.decoration == "ios" {
             "rounded".clone_into(&mut snapshot.decoration);
@@ -817,7 +809,7 @@ impl ConfigStore {
         lines.join("\n")
     }
 
-    /// Linux-first tmp+fsync+rename persistence matching the native ConfigStore contract.
+    /// Linux-first tmp+fsync+rename persistence matching the native `ConfigStore` contract.
     pub fn persist(path: &Path, snapshot: &ProductSettings) -> FlameResult<()> {
         snapshot.validate()?;
         if path.as_os_str().is_empty() {
@@ -1379,8 +1371,10 @@ mod tests {
     #[test]
     fn stale_revision_cannot_replace_effective_state() {
         let mut store = ConfigStore::default();
-        let mut candidate = ProductSettings::default();
-        candidate.revision = 1;
+        let candidate = ProductSettings {
+            revision: 1,
+            ..ProductSettings::default()
+        };
         assert_eq!(
             store
                 .apply_snapshot(candidate)
@@ -1520,12 +1514,14 @@ mod tests {
             BackgroundMode::Solid,
             BackgroundMode::Custom,
         ] {
-            let mut snapshot = ProductSettings::default();
-            snapshot.revision = 9;
-            snapshot.wallpaper = "/home/u/a.png".to_owned();
-            snapshot.wallpaper_mode = mode;
-            snapshot.lock_background_image = "/home/u/bg.png".to_owned();
-            snapshot.lock_background_mode = mode;
+            let snapshot = ProductSettings {
+                revision: 9,
+                wallpaper: "/home/u/a.png".to_owned(),
+                wallpaper_mode: mode,
+                lock_background_image: "/home/u/bg.png".to_owned(),
+                lock_background_mode: mode,
+                ..ProductSettings::default()
+            };
             let text = ConfigStore::serialize(&snapshot);
             let parsed = load(&text).expect("round trip");
             assert_eq!(parsed.wallpaper_mode, mode);
@@ -1533,10 +1529,14 @@ mod tests {
             assert_eq!(parsed.wallpaper, "/home/u/a.png");
             assert_eq!(parsed.lock_background_image, "/home/u/bg.png");
         }
-        let mut clear = ProductSettings::default();
-        clear.lock_background_mode = BackgroundMode::Solid;
-        let mut default = ProductSettings::default();
-        default.lock_background_mode = BackgroundMode::Default;
+        let clear = ProductSettings {
+            lock_background_mode: BackgroundMode::Solid,
+            ..ProductSettings::default()
+        };
+        let default = ProductSettings {
+            lock_background_mode: BackgroundMode::Default,
+            ..ProductSettings::default()
+        };
         assert_ne!(
             ConfigStore::serialize(&clear),
             ConfigStore::serialize(&default),
@@ -1802,8 +1802,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("fixture dir");
         let path = dir.join("settings.conf");
-        let mut settings = ProductSettings::default();
-        settings.revision = 9;
+        let mut settings = ProductSettings {
+            revision: 9,
+            ..ProductSettings::default()
+        };
         settings
             .unknown_keys
             .insert("extension.key".into(), "value".into());
@@ -2042,8 +2044,10 @@ mod tests {
 
     #[test]
     fn wallpaper_path_with_newline_is_rejected() {
-        let mut settings = ProductSettings::default();
-        settings.wallpaper = "bad\npath".to_owned();
+        let settings = ProductSettings {
+            wallpaper: "bad\npath".to_owned(),
+            ..ProductSettings::default()
+        };
         assert_eq!(
             settings.validate().expect_err("control character").code,
             ErrorCode::InvalidArgument
@@ -2052,10 +2056,12 @@ mod tests {
 
     #[test]
     fn base_flags_write_digits_and_optional_flags_write_words() {
-        let mut settings = ProductSettings::default();
-        settings.font_bold = true;
-        settings.sticky_notes_enabled = false;
-        settings.animations_enabled = false;
+        let settings = ProductSettings {
+            font_bold: true,
+            sticky_notes_enabled: false,
+            animations_enabled: false,
+            ..ProductSettings::default()
+        };
         let text = ConfigStore::serialize(&settings);
         assert!(text.contains("fontBold=1\n"));
         assert!(text.contains("stickyNotesEnabled=0\n"));
@@ -2471,8 +2477,10 @@ mod tests {
 
     #[test]
     fn focus_follows_mouse_writes_only_true() {
-        let mut settings = ProductSettings::default();
-        settings.focus_follows_mouse = true;
+        let settings = ProductSettings {
+            focus_follows_mouse: true,
+            ..ProductSettings::default()
+        };
         let text = ConfigStore::serialize(&settings);
         assert!(text.contains("focusFollowsMouse=true\n"));
         assert!(load(&text).expect("round trip").focus_follows_mouse);
