@@ -18,7 +18,9 @@ jobs:
         shell: bash
     steps:
       - name: Install packaging tools
-        run: pacman -Syu --noconfirm --needed git namcap xorg-server-xvfb xorg-xprop xorg-xwininfo
+        run: |
+          sed -i '/^NoExtract/d' /etc/pacman.conf
+          pacman -Syu --noconfirm --needed git namcap xorg-server-xvfb xorg-xprop xorg-xwininfo
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
