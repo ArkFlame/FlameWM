@@ -71,6 +71,9 @@ pub fn frame_control_fallback(
     y: i16,
     _current: Option<FrameControl>,
 ) -> Option<FrameControl> {
+    if titlebar_height == 0 {
+        return None;
+    }
     if y < 0 || y >= titlebar_height.max(1) as i16 {
         return None;
     }

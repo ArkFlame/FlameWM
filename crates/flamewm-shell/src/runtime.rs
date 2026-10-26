@@ -1571,17 +1571,28 @@ impl ShellSurfaces {
     }
 
     /// Each panel gets its own backdrop, or no backdrop if opaque/unavailable/resized.
+    /// Separate mode installs the raw wallpaper as the surface layer: the tint and blur live
+    /// on each element capsule, so the gaps must not be blurred.
     pub fn apply_panel_backdrop(
         &self,
         runtime: &mut SurfaceRuntime,
         opacity_percent: u8,
         blur_percent: u8,
+        separate: bool,
     ) -> Result<(), String> {
+        // In separate mode the surface layer is the raw wallpaper and each capsule carries the
+        // tint and blur, so the snapshot is installed opaque and unblurred.
+        let install = separate || opacity_percent < 100;
+        let (opacity_percent, blur_percent) = if separate {
+            (100, 0)
+        } else {
+            (opacity_percent, blur_percent)
+        };
         for record in &self.panels {
             let panel = record.panel;
             let rect = runtime.surface_device_rect(panel).map_err(ui_error)?;
             let fitting = record.snapshot.as_ref().filter(|snapshot| {
-                opacity_percent < 100
+                install
                     && snapshot.width as f32 == rect.width
                     && snapshot.height as f32 == rect.height
             });

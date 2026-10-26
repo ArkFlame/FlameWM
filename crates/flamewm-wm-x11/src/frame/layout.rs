@@ -33,6 +33,9 @@ pub const RESIZE_T: i32 = 6;
 /// glyph, fill and input children derive their scale from the same metric.
 #[must_use]
 pub fn button_width_for_titlebar(titlebar_h: i32) -> i32 {
+    if titlebar_h <= 0 {
+        return 0;
+    }
     (i64::from(BUTTON_WIDTH) * i64::from(titlebar_h.max(1)) + i64::from(TITLEBAR_H / 2))
         .checked_div(i64::from(TITLEBAR_H))
         .unwrap_or(1)
@@ -40,8 +43,12 @@ pub fn button_width_for_titlebar(titlebar_h: i32) -> i32 {
 }
 
 /// Keep the invisible resize targets proportional to the same titlebar scale.
+/// A hidden titlebar (0) keeps the base thickness so edges stay grabbable.
 #[must_use]
 pub fn resize_thickness_for_titlebar(titlebar_h: i32) -> i32 {
+    if titlebar_h <= 0 {
+        return RESIZE_T;
+    }
     (RESIZE_T * titlebar_h.max(1) + TITLEBAR_H / 2) / TITLEBAR_H
 }
 
@@ -102,7 +109,13 @@ pub fn layout_frame_children(
     let w = outer_w.max(0);
     let h = outer_h.max(0);
     let t = resize_t.max(1);
-    let tb = titlebar_h.max(t + 1);
+    // A hidden titlebar is a real zero band: no title-drag or control row, and the
+    // side strips start at the frame top instead of below a phantom titlebar.
+    let tb = if titlebar_h <= 0 {
+        0
+    } else {
+        titlebar_h.max(t + 1)
+    };
     let cw = controls_width.clamp(0, (w - 2 * t).max(0));
     // Divide the clipped band by thirds without dropping remainder pixels:
     // even the narrowest frame must keep the last Close hit cell flush right.

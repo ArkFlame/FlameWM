@@ -448,7 +448,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         // Map client + input children + frame (renderer flush above).
         self.conn.map_window(window)?;
         for xid in resources.children() {
-            if input_child_mapped(decoration, resources.region_of(xid)) {
+            if input_child_mapped(
+                decoration,
+                resources.region_of(xid),
+                crate::live_settings::titlebars(),
+            ) {
                 self.conn.map_window(xid)?;
             }
         }

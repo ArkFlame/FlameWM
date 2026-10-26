@@ -79,7 +79,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             .map_or(PlacementMode::Floating, |state| state.placement.mode);
         let extents = match self.clients.get(&client).map(|state| state.decoration) {
             None | Some(Decoration::Server) => {
-                frame_extents_for_mode(mode, self.config.frame_border, self.config.titlebar_height)
+                frame_extents_for_mode(mode, self.config.frame_border, self.titlebar_height())
             }
             Some(Decoration::ClientSide | Decoration::None) => [0; 4],
         };
@@ -172,14 +172,14 @@ impl<'a, C: Connection> Wm<'a, C> {
             crate::frame::geometry_shape::scaled_corner_radius(
                 floating,
                 self.decoration_tokens.style,
-                self.config.titlebar_height,
+                self.titlebar_height(),
             ),
         );
         let rects = crate::frame::geometry_shape::bounding_rectangles_with_titlebar(
             outer,
             floating,
             self.decoration_tokens.style,
-            self.config.titlebar_height,
+            self.titlebar_height(),
         );
         self.conn.shape_rectangles(
             ShapeOp::SET,
@@ -214,7 +214,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         let cw = outer.width.saturating_sub(2);
         let ch = outer
             .height
-            .saturating_sub(u32::from(self.config.titlebar_height) + 1);
+            .saturating_sub(u32::from(self.titlebar_height()) + 1);
         // Reset to the full client rect first: intersecting with the previous mask can only
         // shrink, so a grown frame would keep the old, smaller client shape. Also used to
         // restore an unshaped client below.

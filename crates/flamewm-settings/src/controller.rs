@@ -1272,6 +1272,11 @@ mod tests {
             ("settings.toggle.taskbarShowUnknown", false),
             ("settings.toggle.snapPreviewEnabled", true),
             ("settings.toggle.focusFollowsMouse", true),
+            ("settings.toggle.titlebars", true),
+            ("settings.toggle.titlebar", false),
+            ("settings.toggle.taskbarActivities", true),
+            ("settings.toggle.taskbarSeparate", true),
+            ("settings.toggle.taskbarActivity", false),
         ] {
             assert_eq!(crate::parse_action(action).is_ok(), ok, "{action}");
         }
@@ -1767,6 +1772,57 @@ mod tests {
         assert!(!document.visible["focus-mouse-off"]);
         let written = written_values(&requests, "focusFollowsMouse");
         assert_eq!(written, vec![SettingValue::Boolean(true)]);
+    }
+
+    #[test]
+    fn titlebar_and_taskbar_toggles_flip_their_boolean_and_move_the_highlight() {
+        for (key, on_id, off_id) in [
+            ("titlebars", "titlebars-on", "titlebars-off"),
+            (
+                "taskbarActivities",
+                "taskbar-activities-on",
+                "taskbar-activities-off",
+            ),
+            (
+                "taskbarSeparate",
+                "taskbar-separate-on",
+                "taskbar-separate-off",
+            ),
+        ] {
+            let (requests, mut transport) = recording_transport();
+            transport.responses.extend([
+                Ok(ControlResponse::Settings(lock_snapshot(
+                    1,
+                    key,
+                    SettingValue::Boolean(false),
+                ))),
+                Ok(ControlResponse::Settings(lock_snapshot(
+                    2,
+                    key,
+                    SettingValue::Boolean(true),
+                ))),
+            ]);
+            let mut application = settings_application(transport);
+            let mut document = ProbeDocument::default();
+            application
+                .sync(&mut document)
+                .expect("sync initial snapshot");
+            assert!(document.visible[off_id], "{key} starts off");
+            assert!(!document.visible[on_id], "{key} starts off");
+
+            application
+                .handle_action(&release(&format!("settings.toggle.{key}")), &mut document)
+                .expect("toggle");
+
+            assert!(document.visible[on_id], "{key} highlight moves to ON");
+            assert!(!document.visible[off_id], "{key} highlight moves to ON");
+            let written = written_values(&requests, key);
+            assert_eq!(
+                written,
+                vec![SettingValue::Boolean(true)],
+                "{key} writes the flipped boolean"
+            );
+        }
     }
 
     #[test]

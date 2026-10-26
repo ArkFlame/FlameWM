@@ -64,8 +64,26 @@ pub fn project(
 
     match surface {
         SurfaceKind::Panel => {
-            document.background("taskbar", surface_background(snapshot))?;
+            let fill = surface_background(snapshot);
+            crate::projection::set_taskbar_surface(fill);
+            // Separate mode paints the wallpaper (the captured backdrop) across the bar and one
+            // capsule per element; the root must not tint the gaps between them.
+            let separate = bool_setting(snapshot, "taskbarSeparate", true);
+            document.background(
+                "taskbar",
+                if separate {
+                    UiColor { a: 0, ..fill }
+                } else {
+                    fill
+                },
+            )?;
             crate::projection::set_task_accent(accent);
+            // A settings change must also re-apply (or clear) the per-element capsules, so
+            // disabling `taskbarSeparate` cannot leave the last projected fills behind.
+            crate::projection::reapply_element_backgrounds(
+                document,
+                taskbar_items(Some(snapshot)),
+            )?;
             project_clock_at(document, Local::now(), clock_display(snapshot))?;
             project_start_icon(document, custom_start_icon(snapshot))?;
         }
@@ -275,6 +293,13 @@ pub fn taskbar_items(snapshot: Option<&SettingsSnapshot>) -> TaskbarItems {
         ),
         clock: bool_setting(snapshot, "taskbarShowClock", defaults.clock),
         workspaces: bool_setting(snapshot, "taskbarShowWorkspaces", defaults.workspaces),
+        activities: bool_setting(snapshot, "taskbarActivities", defaults.activities),
+        separate: bool_setting(snapshot, "taskbarSeparate", defaults.separate),
+        blur_percent: percent_setting(
+            snapshot,
+            "surfaceBlurPercent",
+            defaults.blur_percent,
+        ),
     }
 }
 
@@ -620,8 +645,24 @@ mod tests {
             .insert("surfaceBlurPercent".to_owned(), SettingValue::Percent(15));
         let mut doc = RecordingUiDoc::default();
         project(&mut doc, &snapshot, SurfaceKind::Panel).expect("panel");
+        // `taskbarSeparate` defaults on: the root paints no tint so the wallpaper shows between
+        // the per-element capsules.
         assert_eq!(
             doc.backgrounds["taskbar"],
+            UiColor {
+                r: 0x44,
+                g: 0x55,
+                b: 0x66,
+                a: 0
+            }
+        );
+        snapshot
+            .values
+            .insert("taskbarSeparate".to_owned(), SettingValue::Boolean(false));
+        let mut unified = RecordingUiDoc::default();
+        project(&mut unified, &snapshot, SurfaceKind::Panel).expect("unified panel");
+        assert_eq!(
+            unified.backgrounds["taskbar"],
             UiColor {
                 r: 0x44,
                 g: 0x55,

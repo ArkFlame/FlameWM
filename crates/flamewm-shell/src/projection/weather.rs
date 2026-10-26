@@ -190,6 +190,7 @@ pub fn project_weather_tray(
 ) -> Result<(), String> {
     let view = tray_view(state, units, shown);
     document.visible("tray-weather", view.visible)?;
+    super::project_tray_button(document, "tray-weather", view.visible)?;
     set_icons(
         document,
         "tray-weather-",

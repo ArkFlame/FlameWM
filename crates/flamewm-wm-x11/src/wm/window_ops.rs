@@ -113,6 +113,11 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     pub(super) fn minimize(&mut self, client: Window) -> Result<(), ReplyError> {
+        // With the running-window area hidden there is no taskbar entry to restore from,
+        // so a minimized window would be unreachable. Keep it on screen instead.
+        if !crate::live_settings::taskbar_activities() {
+            return Ok(());
+        }
         let Some(state) = self.clients.get(&client) else {
             return Ok(());
         };
@@ -251,6 +256,192 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.mark_windows();
         self.publish_window_state(client)?;
         Ok(())
+    }
+
+    /// Toggle fullscreen from a keybind (`Super+F`). Unlike `FullscreenEscape`, this is a
+    /// reversible toggle and never kills the client.
+    pub(super) fn toggle_fullscreen(&mut self, client: Window) -> Result<(), ReplyError> {
+        let fullscreen = self
+            .clients
+            .get(&client)
+            .is_some_and(|state| state.is_fullscreen());
+        self.set_fullscreen(client, !fullscreen)
+    }
+
+    /// `Super+V`: floating becomes the work-area fill ("pseudo-tile"), anything else returns
+    /// to the remembered floating rect. There is no tiling engine to toggle against.
+    pub(super) fn toggle_float(&mut self, client: Window) -> Result<(), ReplyError> {
+        match self
+            .clients
+            .get(&client)
+            .map(|state| state.placement.mode)
+        {
+            Some(PlacementMode::Floating) => self.toggle_maximize(client),
+            Some(_) => self.return_to_floating(client),
+            None => Ok(()),
+        }
+    }
+
+    /// Leaves snap/maximize/fullscreen at the floating restore rect, without a pointer drag.
+    pub(super) fn return_to_floating(&mut self, client: Window) -> Result<(), ReplyError> {
+        let Some(state) = self.clients.get_mut(&client) else {
+            return Ok(());
+        };
+        let restore = state.placement.floating_restore;
+        state.placement.mode = PlacementMode::Floating;
+        state.placement.current = restore;
+        state.placement.resume = None;
+        state.set_outer(restore.to_legacy());
+        self.apply_frame_geometry(client)?;
+        self.layout_input_children(client)?;
+        self.paint_chrome(client)?;
+        self.mark_windows();
+        self.publish_window_state(client)?;
+        Ok(())
+    }
+
+    /// Focus the nearest visible window in `direction` from the active window's centre.
+    pub(super) fn focus_direction(
+        &mut self,
+        direction: flamewm_api::workspace::GridDirection,
+    ) -> Result<(), ReplyError> {
+        match self.directional_target(direction) {
+            Some(target) => self.focus(target),
+            None => Ok(()),
+        }
+    }
+
+    fn directional_target(
+        &self,
+        direction: flamewm_api::workspace::GridDirection,
+    ) -> Option<Window> {
+        use flamewm_api::workspace::GridDirection;
+        let active = self.active?;
+        let origin = self.clients.get(&active)?.outer;
+        let ox = origin.x + i32::try_from(origin.width).unwrap_or(0) / 2;
+        let oy = origin.y + i32::try_from(origin.height).unwrap_or(0) / 2;
+        let mut best: Option<(i64, Window)> = None;
+        for (&client, state) in &self.clients {
+            if client == active
+                || state.kind != WindowKind::Normal
+                || !state.visible_on(self.current_workspace)
+            {
+                continue;
+            }
+            let cx = state.outer.x + i32::try_from(state.outer.width).unwrap_or(0) / 2;
+            let cy = state.outer.y + i32::try_from(state.outer.height).unwrap_or(0) / 2;
+            let (dx, dy) = (cx - ox, cy - oy);
+            let (along, across) = match direction {
+                GridDirection::Left => (-dx, dy.abs()),
+                GridDirection::Right => (dx, dy.abs()),
+                GridDirection::Up => (-dy, dx.abs()),
+                GridDirection::Down => (dy, dx.abs()),
+            };
+            if along <= 0 {
+                continue;
+            }
+            let score = i64::from(along) * 4 + i64::from(across);
+            if best.is_none_or(|(best_score, _)| score < best_score) {
+                best = Some((score, client));
+            }
+        }
+        best.map(|(_, client)| client)
+    }
+
+    /// Keyboard move of the active floating window (`Super+Shift+arrows`).
+    pub(super) fn move_active(
+        &mut self,
+        direction: flamewm_api::workspace::GridDirection,
+    ) -> Result<(), ReplyError> {
+        use flamewm_api::workspace::GridDirection;
+        const STEP: i32 = 40;
+        let Some(client) = self.active else {
+            return Ok(());
+        };
+        let Some(state) = self.clients.get_mut(&client) else {
+            return Ok(());
+        };
+        if !state.is_floating() {
+            return Ok(());
+        }
+        let mut rect = state.outer;
+        let (dx, dy) = match direction {
+            GridDirection::Left => (-STEP, 0),
+            GridDirection::Right => (STEP, 0),
+            GridDirection::Up => (0, -STEP),
+            GridDirection::Down => (0, STEP),
+        };
+        rect.x = rect.x.saturating_add(dx);
+        rect.y = rect.y.saturating_add(dy);
+        state.set_outer(rect);
+        state.placement.current = RootRect::from_legacy(rect);
+        state.placement.floating_restore = state.placement.current;
+        self.apply_frame_geometry(client)?;
+        self.paint_chrome(client)?;
+        self.mark_windows();
+        Ok(())
+    }
+
+    /// Keyboard resize of the active floating window (`Super+equal` / `Super+minus`).
+    pub(super) fn resize_active(&mut self, grow: bool) -> Result<(), ReplyError> {
+        const STEP_W: i32 = 40;
+        const STEP_H: i32 = 30;
+        let Some(client) = self.active else {
+            return Ok(());
+        };
+        let Some(state) = self.clients.get_mut(&client) else {
+            return Ok(());
+        };
+        if !state.is_floating() {
+            return Ok(());
+        }
+        let mut rect = state.outer;
+        rect.width = if grow {
+            rect.width.saturating_add(STEP_W as u32)
+        } else {
+            rect.width.saturating_sub(STEP_W as u32).max(160)
+        };
+        rect.height = if grow {
+            rect.height.saturating_add(STEP_H as u32)
+        } else {
+            rect.height.saturating_sub(STEP_H as u32).max(96)
+        };
+        state.set_outer(rect);
+        state.placement.current = RootRect::from_legacy(rect);
+        state.placement.floating_restore = state.placement.current;
+        self.apply_frame_geometry(client)?;
+        self.layout_input_children(client)?;
+        self.paint_chrome(client)?;
+        self.mark_windows();
+        Ok(())
+    }
+
+    /// `Super+J` / `Super+K`: focus the next/previous visible normal window in stack order.
+    pub(super) fn cycle_window(&mut self, step: i32) -> Result<(), ReplyError> {
+        let tree = self.conn.query_tree(self.screen().root)?.reply()?;
+        let stack: Vec<Window> = tree
+            .children
+            .iter()
+            .rev()
+            .filter_map(|frame| self.frame_to_client.get(frame).copied())
+            .filter(|client| {
+                self.clients.get(client).is_some_and(|state| {
+                    state.kind == WindowKind::Normal
+                        && state.visible_on(self.current_workspace)
+                })
+            })
+            .collect();
+        if stack.is_empty() {
+            return Ok(());
+        }
+        let target = match self.active.and_then(|a| stack.iter().position(|c| *c == a)) {
+            Some(index) => {
+                let len = i32::try_from(stack.len()).unwrap_or(1).max(1);
+                stack[(index as i32 + step).rem_euclid(len) as usize]
+            }
+            None => stack[0],
+        };
+        self.focus(target)
     }
 
     /// Drag-motion preview: candidate from shared `snap_target`, geometry from

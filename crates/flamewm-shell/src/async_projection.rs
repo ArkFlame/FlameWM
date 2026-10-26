@@ -790,8 +790,16 @@ pub fn project_task_slots_async(
             document.visible(&line_id, false)?;
             document.background_clear(&slot_id)?;
         }
-        document.visible(&slot_id, states.get(index).is_some())?;
+        document.visible(
+            &slot_id,
+            view.items.activities && states.get(index).is_some(),
+        )?;
     }
+    crate::projection::project_task_slots_extent(
+        document,
+        crate::projection::task_slots_rendered(states.len(), view.items),
+    )?;
+    document.visible("task-slot-insert", view.items.activities)?;
     Ok(())
 }
 
@@ -832,10 +840,22 @@ pub fn project_panel_geometry(
     for index in 0..TASK_SLOT_COUNT {
         document.visible(
             &format!("task-slot-{}", index + 1),
-            states.get(index).is_some(),
+            view.items.activities && states.get(index).is_some(),
         )?;
     }
+    crate::projection::project_task_slots_extent(
+        document,
+        crate::projection::task_slots_rendered(states.len(), view.items),
+    )?;
+    document.visible("task-slot-insert", view.items.activities)?;
     crate::projection::project_pager_visibility(document, snapshot.workspaces.as_ref())?;
+    crate::projection::project_element_backgrounds(
+        document,
+        view.items,
+        crate::projection::task_slots_rendered(states.len(), view.items),
+        crate::projection::tray_any_visible(&snapshot.system, view.items),
+        view.items.clock,
+    )?;
     Ok(())
 }
 
@@ -1714,6 +1734,7 @@ pub(crate) mod tests {
             battery_only_when_relevant: false,
             clock: false,
             workspaces: false,
+            ..TaskbarItems::default()
         };
         let mut doc = FakeDoc::default();
         project_panel_async(
