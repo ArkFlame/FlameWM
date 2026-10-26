@@ -68,6 +68,8 @@ impl<C: Connection> Wm<'_, C> {
             return Ok(());
         };
         self.focus(client_id)?;
+        let root = self.screen().root;
+        self.snap_preview.prepare(self.conn, root);
         // Route press through controller reduce(); execute FrameEffects diff-aware.
         let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
         let event = FrameEvent::Press { source, pointer };
@@ -273,7 +275,7 @@ impl<C: Connection> Wm<'_, C> {
         );
         self.edge_drag = None;
         if release_from_move {
-            self.snap_preview.hide();
+            self.snap_preview.hide(self.conn);
         }
         let mode_after = self.clients.get(&client_id).map(|s| s.placement.mode);
         let drag_active = release_move.is_some_and(|m| m.anchor.is_activated());
@@ -420,7 +422,7 @@ impl<C: Connection> Wm<'_, C> {
                     }
                 }
             } else if move_active {
-                self.snap_preview.hide();
+                self.snap_preview.hide(self.conn);
             }
             self.evaluate_edge_drag(client_id, pointer, std::time::Instant::now())?;
             return Ok(());

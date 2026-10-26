@@ -2189,7 +2189,7 @@ fn pointer_grab_target(requested: Window, resources: FrameResources) -> bool {
 
 impl<C: Connection> Drop for Wm<'_, C> {
     fn drop(&mut self) {
-        self.snap_preview.hide();
+        self.snap_preview.hide(self.conn);
     }
 }
 

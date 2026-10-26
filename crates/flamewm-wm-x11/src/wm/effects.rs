@@ -149,17 +149,24 @@ impl<C: Connection> Wm<'_, C> {
                     }
                     FrameEffect::SnapPreview { target } => {
                         if target.is_none() {
-                            self.snap_preview.hide();
+                            self.snap_preview.hide(self.conn);
                         }
                     }
                     FrameEffect::DragOutline { rect } => match rect {
-                        Some(frame) => self.snap_preview.show_outline(flamewm_api::Rect {
-                            x: frame.x,
-                            y: frame.y,
-                            width: frame.w,
-                            height: frame.h,
-                        }),
-                        None => self.snap_preview.hide(),
+                        Some(frame) => {
+                            let root = self.screen().root;
+                            self.snap_preview.show_outline(
+                                self.conn,
+                                root,
+                                flamewm_api::Rect {
+                                    x: frame.x,
+                                    y: frame.y,
+                                    width: frame.w,
+                                    height: frame.h,
+                                },
+                            );
+                        }
+                        None => self.snap_preview.hide(self.conn),
                     },
                     FrameEffect::Noop => {}
                 }
@@ -332,7 +339,7 @@ impl<C: Connection> Wm<'_, C> {
         if let Some(session) = self.sessions.get_mut(&client) {
             session.session.cancel();
         }
-        self.snap_preview.hide();
+        self.snap_preview.hide(self.conn);
         self.release_pointer();
     }
 

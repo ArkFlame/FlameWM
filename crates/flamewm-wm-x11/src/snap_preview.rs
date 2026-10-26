@@ -1,78 +1,110 @@
-//! Serialized, border-only snap-preview overlay.
+//! Border-only snap-preview and move/resize outline.
 //!
-//! The preview is a compiled `snap-preview.html` document hosted on a
-//! pass-through overlay surface. Snap targeting and geometry remain owned by
-//! `wm.rs`; this module owns only the surface lifecycle. Since this renderer
-//! has no verified desktop-alpha path, the entire gesture uses the deterministic
-//! border-only material and never captures or installs backdrop pixels.
+//! One override-redirect window on the WM's own connection: its background pixel is the live
+//! accent and its bounding shape is a ring, so the X server paints and restores it with no client
+//! rendering, no backbuffer and no Expose handling. Input passes through (empty input shape).
+//! A move only configures the window; the ring shape is rebuilt only when the size changes.
+//! Snap targeting and geometry remain owned by `wm.rs`; this module owns only the window.
 
 use flamewm_api::Rect;
-use flamewm_render_x11::backdrop;
-use flamewm_ui_x11::{
-    SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiColor,
-    UiDocumentAccess, UiTemplate, decode_document,
-};
 use flamewm_window_core::SnapTarget;
+use x11rb::connection::Connection;
+use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
+use x11rb::protocol::xproto::{
+    AtomEnum, ClipOrdering, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, PropMode,
+    Rectangle, StackMode, Window, WindowClass,
+};
+use x11rb::wrapper::ConnectionExt as _;
 
 use crate::live_settings;
 
-const COMPILED_UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-snap-preview.rwr"));
-
-/// Default fill opacity retained for the WM/settings interface. The
-/// border-only material deliberately does not use opacity.
+/// Default fill opacity retained for the WM/settings interface. The border-only material
+/// deliberately does not use opacity.
 pub const DEFAULT_PREVIEW_OPACITY_PERCENT: u8 = 20;
 
-/// Accept the settings projection while fill rendering is unavailable. Opacity
-/// cannot affect the deterministic border-only surface.
+/// Accept the settings projection; opacity cannot affect the border-only ring.
 pub(crate) fn set_live_opacity(_opacity_percent: u8) {}
 
-/// Ring width matches the `.snap-preview` CSS border (2px); the preview has no corner radius.
-const RING_BORDER_PX: u32 = backdrop::BACKDROP_BORDER_WIDTH_PX;
-const RING_RADIUS_PX: u32 = 0;
+/// Ring width in device pixels.
+const RING_BORDER_PX: u16 = 2;
 
-const FILL_NODE: &str = "snap-preview";
-const BACKDROP_NODE: &str = "snap-preview-backdrop";
+/// `WM_NAME` of the ring window; the X11 canary finds the preview by it.
+const WINDOW_NAME: &[u8] = b"FlameWM snap preview";
 
-/// Opaque live system accent: with no compositor the ring is blended over the window's black
-/// backing, so a translucent alpha would render as a dark tint instead of the accent.
-fn border_color() -> UiColor {
+/// Opaque live system accent as a 24-bit `TrueColor` pixel.
+fn accent_pixel() -> u32 {
     let (r, g, b) = live_settings::accent_rgb();
-    UiColor { r, g, b, a: 0xff }
+    u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
 }
 
-fn apply_border_only_style(document: &mut impl UiDocumentAccess) -> Result<(), String> {
-    document.visible(FILL_NODE, true)?;
-    document.border(FILL_NODE, border_color())?;
-    document.background_clear(FILL_NODE)?;
-    document.visible(BACKDROP_NODE, false)?;
-    Ok(())
+fn checked_size(value: i32) -> Option<u16> {
+    u16::try_from(value).ok().filter(|size| *size > 0)
 }
 
-fn checked_size(value: i32) -> Option<u32> {
-    u32::try_from(value).ok().filter(|size| *size > 0)
+/// The ring as up to four window-local rectangles: top, bottom, left, right. A size thinner than
+/// two borders is one filled rectangle.
+#[must_use]
+pub(crate) fn ring_rectangles(width: u16, height: u16) -> Vec<Rectangle> {
+    let border = RING_BORDER_PX;
+    if width <= 2 * border || height <= 2 * border {
+        return vec![Rectangle {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }];
+    }
+    let inner = height - 2 * border;
+    vec![
+        Rectangle {
+            x: 0,
+            y: 0,
+            width,
+            height: border,
+        },
+        Rectangle {
+            x: 0,
+            y: (height - border) as i16,
+            width,
+            height: border,
+        },
+        Rectangle {
+            x: 0,
+            y: border as i16,
+            width: border,
+            height: inner,
+        },
+        Rectangle {
+            x: (width - border) as i16,
+            y: border as i16,
+            width: border,
+            height: inner,
+        },
+    ]
 }
 
-/// Serialized preview surface: hidden until a drag candidate arrives.
+/// Preview ring: hidden until a drag candidate or outline arrives.
 pub struct SnapPreviewSurface {
-    runtime: Option<SurfaceRuntime>,
-    surface: Option<SurfaceHandle>,
+    window: Option<Window>,
     visible: bool,
     candidate: Option<SnapTarget>,
     geometry: Option<Rect>,
-    /// Size whose ring mask is currently applied to the visible surface.
-    mask_size: Option<(u32, u32)>,
+    /// Size whose ring shape is currently applied.
+    shape_size: Option<(u16, u16)>,
+    /// Accent pixel currently set as the window background.
+    pixel: Option<u32>,
 }
 
 impl SnapPreviewSurface {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            runtime: None,
-            surface: None,
+            window: None,
             visible: false,
             candidate: None,
             geometry: None,
-            mask_size: None,
+            shape_size: None,
+            pixel: None,
         }
     }
 
@@ -94,153 +126,115 @@ impl SnapPreviewSurface {
         self.geometry
     }
 
-    /// True when candidate and geometry are unchanged and the surface is shown.
+    /// True when candidate and geometry are unchanged and the ring is shown.
     #[must_use]
     pub fn is_current(&self, candidate: SnapTarget, geometry: Rect, _opacity: u8) -> bool {
         self.visible && self.candidate == Some(candidate) && self.geometry == Some(geometry)
     }
 
+    /// Creates the ring window ahead of the first drag so the first outline is a single
+    /// configure + map. Requests are only queued; nothing waits on the server.
+    pub fn prepare(&mut self, conn: &impl Connection, root: Window) {
+        if self.window.is_none() {
+            self.window = create_window(conn, root);
+        }
+    }
+
     /// Show or move the preview for a live drag candidate. `None` hides.
-    /// Total without a display: records intent, leaves `visible` false.
-    pub fn update(&mut self, candidate: Option<SnapTarget>, geometry: Option<Rect>, _opacity: u8) {
+    pub fn update(
+        &mut self,
+        conn: &impl Connection,
+        root: Window,
+        candidate: Option<SnapTarget>,
+        geometry: Option<Rect>,
+        _opacity: u8,
+    ) {
         let (Some(candidate), Some(geometry)) = (candidate, geometry) else {
-            self.hide();
+            self.hide(conn);
             return;
         };
         if self.is_current(candidate, geometry, DEFAULT_PREVIEW_OPACITY_PERCENT) {
             return;
         }
-        let Some((width, height)) = checked_size(geometry.width).zip(checked_size(geometry.height))
-        else {
-            self.hide();
-            return;
-        };
-
-        // A visible surface is moved/resized in place; hiding first caused an unmap/map/raise
-        // flicker on every snap-target change.
         self.candidate = Some(candidate);
-        self.geometry = Some(geometry);
-        self.present(geometry, width, height);
+        self.present(conn, root, geometry);
     }
 
-    /// XP-style move/resize outline at `geometry`. Reuses the same border-only surface as the
-    /// snap preview; while already visible only the position and size are updated.
-    pub fn show_outline(&mut self, geometry: Rect) {
+    /// XP-style move/resize outline at `geometry`, on the same ring window as the snap preview.
+    pub fn show_outline(&mut self, conn: &impl Connection, root: Window, geometry: Rect) {
         if self.visible && self.candidate.is_none() && self.geometry == Some(geometry) {
             return;
         }
+        self.candidate = None;
+        self.present(conn, root, geometry);
+    }
+
+    fn present(&mut self, conn: &impl Connection, root: Window, geometry: Rect) {
         let Some((width, height)) = checked_size(geometry.width).zip(checked_size(geometry.height))
         else {
-            self.hide();
+            self.hide(conn);
             return;
         };
-        self.candidate = None;
-        self.geometry = Some(geometry);
-        self.present(geometry, width, height);
-    }
-
-    /// Move/size the overlay and make it visible. Shared by snap and outline paths.
-    fn present(&mut self, geometry: Rect, width: u32, height: u32) {
-        if !self.ensure_surface() {
-            self.visible = false;
-            return;
-        }
-        let (Some(runtime), Some(surface)) = (self.runtime.as_mut(), self.surface) else {
+        self.prepare(conn, root);
+        let Some(window) = self.window else {
             self.visible = false;
             return;
         };
-        // A pure move keeps the window shape, so the ring mask (a per-motion
-        // XShape rebuild) is only reapplied when the size changes.
-        let same_size = self.visible && self.mask_size == Some((width, height));
-        if runtime
-            .move_resize(surface, geometry.x, geometry.y, width, height)
-            .is_err()
-            || (!same_size
-                && runtime
-                    .set_surface_ring_mask(surface, RING_BORDER_PX, RING_RADIUS_PX)
-                    .is_err())
-        {
-            self.hide();
-            return;
+        let mut aux = ConfigureWindowAux::new()
+            .x(geometry.x)
+            .y(geometry.y)
+            .width(u32::from(width))
+            .height(u32::from(height));
+        if !self.visible {
+            aux = aux.stack_mode(StackMode::ABOVE);
         }
-        self.mask_size = Some((width, height));
-        if self.visible {
-            // Pure move: size, content and shape are unchanged and the window background is
-            // the presented backbuffer, so a repaint would only rewrite identical pixels.
-            // A size change already repainted inside `move_resize` (commit_geometry); keep
-            // that redraw so the ring mask ordering is unchanged.
-            if !same_size && runtime.redraw(surface).is_err() {
-                self.hide();
+        let pixel = accent_pixel();
+        let mut ok = conn.configure_window(window, &aux).is_ok();
+        if self.pixel != Some(pixel) {
+            ok &= conn
+                .change_window_attributes(
+                    window,
+                    &x11rb::protocol::xproto::ChangeWindowAttributesAux::new()
+                        .background_pixel(pixel),
+                )
+                .is_ok();
+            if self.visible {
+                ok &= conn.clear_area(false, window, 0, 0, 0, 0).is_ok();
             }
-            return;
+            self.pixel = Some(pixel);
         }
-
-        let styled = runtime.with_document(surface, |document| apply_border_only_style(document));
-        if styled.is_err() || runtime.redraw(surface).is_err() || runtime.show(surface).is_err() {
-            self.hide();
-            return;
+        if self.shape_size != Some((width, height)) {
+            ok &= conn
+                .shape_rectangles(
+                    SO::SET,
+                    SK::BOUNDING,
+                    ClipOrdering::UNSORTED,
+                    window,
+                    0,
+                    0,
+                    &ring_rectangles(width, height),
+                )
+                .is_ok();
+            self.shape_size = Some((width, height));
         }
-        let _ = runtime.raise(surface);
-        self.visible = true;
+        if !self.visible {
+            ok &= conn.map_window(window).is_ok();
+        }
+        self.geometry = Some(geometry);
+        self.visible = ok;
     }
 
-    /// Hide every preview node on release, cancel, unmanage, or shutdown.
-    pub fn hide(&mut self) {
-        // Idle drag motion without a snap target calls hide() on every event. When nothing is
-        // tracked as shown, skip the document rewrite, grab release and unmap round-trip.
+    /// Hide the ring on release, cancel, unmanage, or shutdown.
+    pub fn hide(&mut self, conn: &impl Connection) {
         if !self.visible && self.candidate.is_none() && self.geometry.is_none() {
             return;
         }
-        if let (Some(runtime), Some(surface)) = (self.runtime.as_mut(), self.surface) {
-            let _ = runtime.with_document(surface, |document| {
-                document.visible(FILL_NODE, false)?;
-                document.visible(BACKDROP_NODE, false)?;
-                Ok(())
-            });
-            let _ = runtime.hide(surface);
+        if let Some(window) = self.window.filter(|_| self.visible) {
+            let _ = conn.unmap_window(window);
         }
         self.visible = false;
         self.candidate = None;
         self.geometry = None;
-        self.mask_size = None;
-    }
-
-    /// Lazily create the overlay surface. `false` without a display.
-    fn ensure_surface(&mut self) -> bool {
-        if self.surface.is_some() {
-            return true;
-        }
-        let Ok(mut runtime) = SurfaceRuntime::new() else {
-            return false;
-        };
-        let Ok(document) = decode_document(COMPILED_UI) else {
-            return false;
-        };
-        let config = SurfaceConfig {
-            width: 1,
-            height: 1,
-            title: "FlameWM snap preview".to_owned(),
-            role: SurfaceRole::Overlay,
-            input: SurfaceInputMode::PassThrough,
-            initially_visible: false,
-            x: 0,
-            y: 0,
-        };
-        match runtime.create_surface(UiTemplate::new(document), config) {
-            Ok(handle) => {
-                // Ring mask before any paint or map: the first frame is never a black fill.
-                if runtime
-                    .set_surface_ring_mask(handle, RING_BORDER_PX, RING_RADIUS_PX)
-                    .is_err()
-                {
-                    return false;
-                }
-                self.runtime = Some(runtime);
-                self.surface = Some(handle);
-                true
-            }
-            Err(_) => false,
-        }
     }
 }
 
@@ -248,6 +242,45 @@ impl Default for SnapPreviewSurface {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Override-redirect, input-transparent ring window. `None` when the requests cannot be queued.
+fn create_window(conn: &impl Connection, root: Window) -> Option<Window> {
+    let window = conn.generate_id().ok()?;
+    conn.create_window(
+        x11rb::COPY_DEPTH_FROM_PARENT,
+        window,
+        root,
+        0,
+        0,
+        1,
+        1,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        x11rb::COPY_FROM_PARENT,
+        &CreateWindowAux::new()
+            .override_redirect(1)
+            .background_pixel(accent_pixel())
+            .border_pixel(0),
+    )
+    .ok()?;
+    let _ = conn.change_property8(
+        PropMode::REPLACE,
+        window,
+        AtomEnum::WM_NAME,
+        AtomEnum::STRING,
+        WINDOW_NAME,
+    );
+    let _ = conn.shape_rectangles(
+        SO::SET,
+        SK::INPUT,
+        ClipOrdering::UNSORTED,
+        window,
+        0,
+        0,
+        &[],
+    );
+    Some(window)
 }
 
 #[cfg(test)]
@@ -259,31 +292,38 @@ mod tests {
     }
 
     #[test]
-    fn snap_preview_css_default_is_neutral_not_red() {
-        let css = include_str!("../ui/snap-preview.css").to_ascii_lowercase();
-        assert!(
-            !css.contains("ef4048"),
-            "snap preview CSS still hard-codes the red accent"
-        );
-        assert!(
-            css.contains("#7f878e"),
-            "snap preview CSS default must be the neutral accent"
-        );
+    fn ring_is_four_border_strips_covering_only_the_edges() {
+        let rects = ring_rectangles(100, 50);
+        assert_eq!(rects.len(), 4);
+        let area: u32 = rects
+            .iter()
+            .map(|r| u32::from(r.width) * u32::from(r.height))
+            .sum();
+        assert_eq!(area, 100 * 50 - 96 * 46);
+        let inside = |x: i16, y: i16| {
+            rects.iter().any(|r| {
+                x >= r.x && y >= r.y && x < r.x + r.width as i16 && y < r.y + r.height as i16
+            })
+        };
+        assert!(inside(0, 0) && inside(99, 49) && inside(1, 25) && inside(98, 25));
+        assert!(!inside(50, 25), "the ring centre is clear");
     }
 
     #[test]
-    fn snap_border_follows_stored_accent() {
+    fn tiny_ring_is_one_filled_rectangle() {
+        assert_eq!(ring_rectangles(3, 40).len(), 1);
+        assert_eq!(ring_rectangles(40, 4).len(), 1);
+    }
+
+    #[test]
+    fn border_follows_stored_accent() {
         let mut snapshot = flamewm_api::settings::SettingsSnapshot::new(1);
         snapshot.values.insert(
             "accent".into(),
             flamewm_api::settings::SettingValue::Text("#123456".into()),
         );
         crate::live_settings::sync(&snapshot);
-        let border = border_color();
-        assert_eq!(
-            (border.r, border.g, border.b, border.a),
-            (0x12, 0x34, 0x56, 0xff)
-        );
+        assert_eq!(accent_pixel(), 0x0012_3456);
         crate::live_settings::sync(&flamewm_api::settings::SettingsSnapshot::new(1));
     }
 
@@ -296,59 +336,18 @@ mod tests {
     }
 
     #[test]
-    fn none_candidate_hides() {
-        let mut preview = SnapPreviewSurface::new();
-        preview.update(None, None, DEFAULT_PREVIEW_OPACITY_PERCENT);
-        assert!(!preview.visible());
-        assert_eq!(preview.candidate(), None);
-    }
-
-    #[test]
     fn unchanged_candidate_geometry_is_current_independent_of_opacity() {
         let preview = SnapPreviewSurface {
-            runtime: None,
-            surface: None,
+            window: None,
             visible: true,
             candidate: Some(SnapTarget::LeftHalf),
             geometry: Some(geometry()),
-            mask_size: None,
+            shape_size: None,
+            pixel: None,
         };
         assert!(preview.is_current(SnapTarget::LeftHalf, geometry(), 20));
         assert!(preview.is_current(SnapTarget::LeftHalf, geometry(), 60));
         assert!(!preview.is_current(SnapTarget::RightHalf, geometry(), 20));
         assert!(!preview.is_current(SnapTarget::LeftHalf, Rect::new(960, 0, 960, 1080), 20));
-    }
-
-    #[test]
-    fn hide_clears_candidate_and_visibility() {
-        let mut preview = SnapPreviewSurface {
-            runtime: None,
-            surface: None,
-            visible: true,
-            candidate: Some(SnapTarget::LeftHalf),
-            geometry: Some(geometry()),
-            mask_size: Some((960, 1080)),
-        };
-        preview.hide();
-        assert_eq!(preview.mask_size, None);
-        assert!(!preview.visible());
-        assert_eq!(preview.candidate(), None);
-        assert_eq!(preview.geometry(), None);
-    }
-
-    #[test]
-    fn repeated_document_styling_keeps_deterministic_border_only_material() {
-        let mut document = decode_document(COMPILED_UI).expect("compiled snap preview decodes");
-        for cycle in 0..20 {
-            apply_border_only_style(&mut document)
-                .unwrap_or_else(|error| panic!("border-only document styling {cycle}: {error}"));
-            assert_eq!(border_color().a, 0xff, "border material at cycle {cycle}");
-        }
-    }
-
-    #[test]
-    fn border_color_is_stable_and_does_not_depend_on_fill_opacity() {
-        assert_eq!(border_color().a, 0xff);
-        assert_eq!(DEFAULT_PREVIEW_OPACITY_PERCENT, 20);
     }
 }

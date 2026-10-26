@@ -444,16 +444,15 @@ impl<C: Connection> Wm<'_, C> {
 
     /// Drag-motion preview: candidate from shared `snap_target`, geometry from
     /// shared `snap_geometry`. `None` hides. Skips redraw when unchanged.
-    /// No new native renderer: the compiled snap-preview surface moves/shows.
     pub(super) fn update_snap_preview(&mut self, target: SnapTarget, work: Rect, client: Window) {
         // Preview is cosmetic only: snapping on release is decided by the frame controller.
         if !crate::live_settings::snap_preview_enabled() {
-            self.snap_preview.hide();
+            self.snap_preview.hide(self.conn);
             return;
         }
         move_counters().record_snap_target(snap_target_bits(target));
         if target == SnapTarget::None {
-            self.snap_preview.hide();
+            self.snap_preview.hide(self.conn);
             return;
         }
         let current = self.clients.get(&client).map_or((800, 600), |state| {
@@ -483,7 +482,10 @@ impl<C: Connection> Wm<'_, C> {
         }
         {
             let _guard = flamewm_profiler::start("wm.move.preview");
+            let root = self.screen().root;
             self.snap_preview.update(
+                self.conn,
+                root,
                 Some(target),
                 Some(geometry),
                 snap_preview::DEFAULT_PREVIEW_OPACITY_PERCENT,

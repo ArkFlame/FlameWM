@@ -37,7 +37,7 @@ impl<C: Connection> Wm<'_, C> {
     }
 
     pub(super) fn reconcile_work_area(&mut self) -> Result<(), ReplyError> {
-        self.snap_preview.hide();
+        self.snap_preview.hide(self.conn);
         let ids = self.clients.keys().copied().collect::<Vec<_>>();
         for id in ids {
             let (mode, outer, minimized) = match self.clients.get(&id) {

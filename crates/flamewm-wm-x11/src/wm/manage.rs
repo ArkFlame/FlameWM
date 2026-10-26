@@ -479,7 +479,7 @@ impl<C: Connection> Wm<'_, C> {
         window: Window,
         restore_to_root: bool,
     ) -> Result<(), ReplyError> {
-        self.snap_preview.hide();
+        self.snap_preview.hide(self.conn);
         if let Some(frame) = self.clients.get(&window).map(|state| state.frame) {
             crate::frame::titlebar_backdrop::forget(u64::from(frame));
         }

@@ -1,5 +1,0 @@
-:root { --accent:#7f878e; --accent-strong:#7f878edd; --snap-fill:#7f878e33; }
-html { width:100%; height:100%; }
-body { width:100%; height:100%; margin:0; background:transparent; overflow:hidden; }
-.snap-preview { position:absolute; left:0px; top:0px; width:100%; height:100%; background:transparent; border:2px solid var(--accent-strong); }
-.snap-preview-backdrop { position:absolute; left:0px; top:0px; width:100%; height:100%; }
