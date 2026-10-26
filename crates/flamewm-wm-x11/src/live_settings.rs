@@ -186,10 +186,7 @@ mod tests {
     #[test]
     fn default_terminal_maps_text_and_defaults_empty() {
         assert_eq!(terminal_from_snapshot(&SettingsSnapshot::new(1)), "");
-        let configured = snapshot(&[(
-            "defaultTerminal",
-            SettingValue::Text("kitty".into()),
-        )]);
+        let configured = snapshot(&[("defaultTerminal", SettingValue::Text("kitty".into()))]);
         assert_eq!(terminal_from_snapshot(&configured), "kitty");
     }
 

@@ -126,7 +126,9 @@ mod popup_contract_tests {
             }
             PopupRole::Battery => include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-battery.rwr")),
             PopupRole::Weather => include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-weather.rwr")),
-            PopupRole::Launcher => include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-launcher.rwr")),
+            PopupRole::Launcher => {
+                include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-launcher.rwr"))
+            }
         }
     }
 

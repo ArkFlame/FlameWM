@@ -373,7 +373,9 @@ impl LaunchFeedback {
 /// Convert RGBA8 icon alpha into per-row runs for XShape's 1-bit bounding region.
 /// A small alpha cutoff preserves antialiased edges without expanding transparent padding.
 fn alpha_shape_spans(pixels: &[u8], width: u32, height: u32) -> Option<Vec<(u32, u32, u32)>> {
-    let len = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    let len = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
     if width == 0 || height == 0 || width > 64 || height > 64 || pixels.len() != len {
         return None;
     }
@@ -548,7 +550,10 @@ mod tests {
         for (x, y) in [(1, 1), (2, 1), (2, 2)] {
             rgba[(y * 4 + x) * 4 + 3] = 255;
         }
-        assert_eq!(alpha_shape_spans(&rgba, 4, 4), Some(vec![(1, 1, 3), (2, 2, 3)]));
+        assert_eq!(
+            alpha_shape_spans(&rgba, 4, 4),
+            Some(vec![(1, 1, 3), (2, 2, 3)])
+        );
         assert_eq!(alpha_shape_spans(&[], 4, 4), None);
         assert_eq!(alpha_shape_spans(&vec![0; 16 * 4], 4, 4), None);
     }

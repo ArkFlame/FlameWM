@@ -16,7 +16,10 @@ pub struct ListCache {
 impl ListCache {
     #[must_use]
     pub fn new(ttl: Duration) -> Self {
-        Self { ttl, map: HashMap::new() }
+        Self {
+            ttl,
+            map: HashMap::new(),
+        }
     }
 
     pub fn get(&mut self, key: &str) -> Option<Arc<Vec<Entry>>> {

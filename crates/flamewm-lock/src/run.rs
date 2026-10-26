@@ -1097,7 +1097,10 @@ impl LockLoop {
     fn power_event(&mut self, event: PowerEvent) {
         // A tick only changes the power view while an error message is on screen (TTL expiry).
         let visible_change = !matches!(event, PowerEvent::Tick(_))
-            || self.shown_power.as_ref().is_some_and(|shown| !shown.message.is_empty());
+            || self
+                .shown_power
+                .as_ref()
+                .is_some_and(|shown| !shown.message.is_empty());
         if visible_change {
             self.power_revision += 1;
         }

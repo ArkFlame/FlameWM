@@ -64,16 +64,26 @@ const TEXT: &[&str] = &[
     "fish", "lua", "sql", "tex",
 ];
 const MULTIMEDIA: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tif", "tiff", "avif", "heic", "heif", "ico",
-    "raw", "cr2", "nef", "arw", "mp4", "m4v", "mkv", "webm", "avi", "mov", "wmv", "flv", "mpg",
-    "mpeg", "mp3", "flac", "wav", "ogg", "oga", "opus", "m4a", "aac", "wma",
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tif", "tiff", "avif", "heic", "heif",
+    "ico", "raw", "cr2", "nef", "arw", "mp4", "m4v", "mkv", "webm", "avi", "mov", "wmv", "flv",
+    "mpg", "mpeg", "mp3", "flac", "wav", "ogg", "oga", "opus", "m4a", "aac", "wma",
 ];
 const ARCHIVES: &[&str] = &[
     "zip", "tar", "gz", "tgz", "xz", "txz", "bz2", "tbz2", "7z", "rar", "zst", "lz", "lzma", "lz4",
     "cab",
 ];
 const PACKAGES: &[&str] = &[
-    "deb", "rpm", "appimage", "flatpakref", "flatpak", "snap", "iso", "exe", "msi", "dmg", "pkg",
+    "deb",
+    "rpm",
+    "appimage",
+    "flatpakref",
+    "flatpak",
+    "snap",
+    "iso",
+    "exe",
+    "msi",
+    "dmg",
+    "pkg",
 ];
 
 /// Lowercase final extension of a plain file name, or `None` without a usable stem.
@@ -259,7 +269,12 @@ fn rename_no_replace(from: &Path, to: &Path) -> Result<(), RenameFailure> {
 
 /// Cross-device fallback: copy to a hidden partial beside the target, fsync, publish with
 /// no-replace, then remove the source. The source survives any failure before its removal.
-fn copy_then_commit(source: &Path, folder: &Path, target_name: &str, target: &Path) -> Result<(), RenameFailure> {
+fn copy_then_commit(
+    source: &Path,
+    folder: &Path,
+    target_name: &str,
+    target: &Path,
+) -> Result<(), RenameFailure> {
     let partial = folder.join(format!(".{target_name}.flamewm-partial"));
     let copied = fs::copy(source, &partial).and_then(|_| File::open(&partial)?.sync_all());
     if let Err(error) = copied {
@@ -297,7 +312,9 @@ pub fn move_into_category(dir: &Path, name: &str, category: Category) -> io::Res
         });
         let target = folder.join(&target_name);
         let outcome = match rename_no_replace(&source, &target) {
-            Err(RenameFailure::CrossDevice) => copy_then_commit(&source, &folder, &target_name, &target),
+            Err(RenameFailure::CrossDevice) => {
+                copy_then_commit(&source, &folder, &target_name, &target)
+            }
             other => other,
         };
         match outcome {
@@ -378,7 +395,10 @@ mod tests {
     #[test]
     fn downloads_dir_follows_user_dirs_and_falls_back_to_home() {
         let home = Path::new("/home/u");
-        assert_eq!(downloads_dir(home, None), PathBuf::from("/home/u/Downloads"));
+        assert_eq!(
+            downloads_dir(home, None),
+            PathBuf::from("/home/u/Downloads")
+        );
         assert_eq!(
             downloads_dir(home, Some("XDG_DOWNLOAD_DIR=\"$HOME/Fetch\"\n")),
             PathBuf::from("/home/u/Fetch")

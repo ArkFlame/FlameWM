@@ -23,18 +23,47 @@ const EPS: f32 = 1.0 / 16.0;
 
 /// Arms (left, right, up, down) of each supported box glyph; weight 1 light, 2 heavy, 3 double, 0 none.
 const BOX: &[(char, [u8; 4])] = &[
-    ('─', [1, 1, 0, 0]), ('━', [2, 2, 0, 0]), ('═', [3, 3, 0, 0]),
-    ('│', [0, 0, 1, 1]), ('┃', [0, 0, 2, 2]), ('║', [0, 0, 3, 3]),
-    ('┌', [0, 1, 0, 1]), ('╭', [0, 1, 0, 1]), ('┏', [0, 2, 0, 2]), ('╔', [0, 3, 0, 3]),
-    ('┐', [1, 0, 0, 1]), ('╮', [1, 0, 0, 1]), ('┓', [2, 0, 0, 2]), ('╗', [3, 0, 0, 3]),
-    ('└', [0, 1, 1, 0]), ('╰', [0, 1, 1, 0]), ('┗', [0, 2, 2, 0]), ('╚', [0, 3, 3, 0]),
-    ('┘', [1, 0, 1, 0]), ('╯', [1, 0, 1, 0]), ('┛', [2, 0, 2, 0]), ('╝', [3, 0, 3, 0]),
-    ('├', [0, 1, 1, 1]), ('┣', [0, 2, 2, 2]), ('╠', [0, 3, 3, 3]),
-    ('┤', [1, 0, 1, 1]), ('┫', [2, 0, 2, 2]), ('╣', [3, 0, 3, 3]),
-    ('┬', [1, 1, 0, 1]), ('┳', [2, 2, 0, 2]), ('╦', [3, 3, 0, 3]),
-    ('┴', [1, 1, 1, 0]), ('┻', [2, 2, 2, 0]), ('╩', [3, 3, 3, 0]),
-    ('┼', [1, 1, 1, 1]), ('╋', [2, 2, 2, 2]), ('╬', [3, 3, 3, 3]),
-    ('╴', [1, 0, 0, 0]), ('╵', [0, 0, 1, 0]), ('╶', [0, 1, 0, 0]), ('╷', [0, 0, 0, 1]),
+    ('─', [1, 1, 0, 0]),
+    ('━', [2, 2, 0, 0]),
+    ('═', [3, 3, 0, 0]),
+    ('│', [0, 0, 1, 1]),
+    ('┃', [0, 0, 2, 2]),
+    ('║', [0, 0, 3, 3]),
+    ('┌', [0, 1, 0, 1]),
+    ('╭', [0, 1, 0, 1]),
+    ('┏', [0, 2, 0, 2]),
+    ('╔', [0, 3, 0, 3]),
+    ('┐', [1, 0, 0, 1]),
+    ('╮', [1, 0, 0, 1]),
+    ('┓', [2, 0, 0, 2]),
+    ('╗', [3, 0, 0, 3]),
+    ('└', [0, 1, 1, 0]),
+    ('╰', [0, 1, 1, 0]),
+    ('┗', [0, 2, 2, 0]),
+    ('╚', [0, 3, 3, 0]),
+    ('┘', [1, 0, 1, 0]),
+    ('╯', [1, 0, 1, 0]),
+    ('┛', [2, 0, 2, 0]),
+    ('╝', [3, 0, 3, 0]),
+    ('├', [0, 1, 1, 1]),
+    ('┣', [0, 2, 2, 2]),
+    ('╠', [0, 3, 3, 3]),
+    ('┤', [1, 0, 1, 1]),
+    ('┫', [2, 0, 2, 2]),
+    ('╣', [3, 0, 3, 3]),
+    ('┬', [1, 1, 0, 1]),
+    ('┳', [2, 2, 0, 2]),
+    ('╦', [3, 3, 0, 3]),
+    ('┴', [1, 1, 1, 0]),
+    ('┻', [2, 2, 2, 0]),
+    ('╩', [3, 3, 3, 0]),
+    ('┼', [1, 1, 1, 1]),
+    ('╋', [2, 2, 2, 2]),
+    ('╬', [3, 3, 3, 3]),
+    ('╴', [1, 0, 0, 0]),
+    ('╵', [0, 0, 1, 0]),
+    ('╶', [0, 1, 0, 0]),
+    ('╷', [0, 0, 0, 1]),
 ];
 
 /// Thickness bands (y) of a horizontal stroke by weight. Light is one pixel at a 16 pixel cell.
@@ -59,16 +88,40 @@ fn box_arms([left, right, up, down]: [u8; 4]) -> Vec<Arm> {
     let mut arms = Vec::new();
     // A pair of arms of equal weight is one full-length stroke, which lets a run of them merge into one rectangle.
     if left > 0 && right > 0 {
-        arms.extend(h_strokes(left).iter().map(|&(y0, y1)| Arm::new(0.0, 1.0, y0, y1)));
+        arms.extend(
+            h_strokes(left)
+                .iter()
+                .map(|&(y0, y1)| Arm::new(0.0, 1.0, y0, y1)),
+        );
     } else if left + right > 0 {
-        let (weight, x0, x1) = if left > 0 { (left, 0.0, 0.5 + EPS) } else { (right, 0.5 - EPS, 1.0) };
-        arms.extend(h_strokes(weight).iter().map(|&(y0, y1)| Arm::new(x0, x1, y0, y1)));
+        let (weight, x0, x1) = if left > 0 {
+            (left, 0.0, 0.5 + EPS)
+        } else {
+            (right, 0.5 - EPS, 1.0)
+        };
+        arms.extend(
+            h_strokes(weight)
+                .iter()
+                .map(|&(y0, y1)| Arm::new(x0, x1, y0, y1)),
+        );
     }
     if up > 0 && down > 0 {
-        arms.extend(v_strokes(up).iter().map(|&(x0, x1)| Arm::new(x0, x1, 0.0, 1.0)));
+        arms.extend(
+            v_strokes(up)
+                .iter()
+                .map(|&(x0, x1)| Arm::new(x0, x1, 0.0, 1.0)),
+        );
     } else if up + down > 0 {
-        let (weight, y0, y1) = if up > 0 { (up, 0.0, 0.5 + EPS) } else { (down, 0.5 - EPS, 1.0) };
-        arms.extend(v_strokes(weight).iter().map(|&(x0, x1)| Arm::new(x0, x1, y0, y1)));
+        let (weight, y0, y1) = if up > 0 {
+            (up, 0.0, 0.5 + EPS)
+        } else {
+            (down, 0.5 - EPS, 1.0)
+        };
+        arms.extend(
+            v_strokes(weight)
+                .iter()
+                .map(|&(x0, x1)| Arm::new(x0, x1, y0, y1)),
+        );
     }
     arms
 }
@@ -86,7 +139,12 @@ pub fn blend(from: u32, to: u32, num: u32, den: u32) -> u32 {
 /// cell's resolved colours, so shades blend the two.
 pub fn glyph_rects(ch: char, fg: u32, bg: u32) -> Option<Vec<(Arm, u32)>> {
     if let Some((_, weights)) = BOX.iter().find(|(glyph, _)| *glyph == ch) {
-        return Some(box_arms(*weights).into_iter().map(|arm| (arm, fg)).collect());
+        return Some(
+            box_arms(*weights)
+                .into_iter()
+                .map(|arm| (arm, fg))
+                .collect(),
+        );
     }
     let full = Arm::new(0.0, 1.0, 0.0, 1.0);
     let code = ch as u32;
@@ -113,7 +171,13 @@ pub fn glyph_rects(ch: char, fg: u32, bg: u32) -> Option<Vec<(Arm, u32)>> {
                 (4, Arm::new(0.0, 0.5, 0.5, 1.0)),
                 (8, Arm::new(0.5, 1.0, 0.5, 1.0)),
             ];
-            Some(quarters.into_iter().filter(|(bit, _)| bits & bit != 0).map(|(_, arm)| (arm, fg)).collect())
+            Some(
+                quarters
+                    .into_iter()
+                    .filter(|(bit, _)| bits & bit != 0)
+                    .map(|(_, arm)| (arm, fg))
+                    .collect(),
+            )
         }
         _ => None,
     }
@@ -126,7 +190,10 @@ mod tests {
     #[test]
     fn horizontal_and_vertical_light_lines_are_single_full_bands() {
         let line = glyph_rects('─', 0xffffff, 0).expect("box glyph");
-        assert_eq!(line, vec![(Arm::new(0.0, 1.0, 7.0 / 16.0, 8.0 / 16.0), 0xffffff)]);
+        assert_eq!(
+            line,
+            vec![(Arm::new(0.0, 1.0, 7.0 / 16.0, 8.0 / 16.0), 0xffffff)]
+        );
         let bar = glyph_rects('│', 1, 0).expect("box glyph");
         assert_eq!(bar.len(), 1);
         assert_eq!((bar[0].0.y0, bar[0].0.y1), (0.0, 1.0));
@@ -167,6 +234,9 @@ mod tests {
     fn other_characters_stay_text() {
         assert!(glyph_rects('a', 1, 0).is_none());
         assert!(glyph_rects('中', 1, 0).is_none());
-        assert!(glyph_rects('┄', 1, 0).is_none(), "dashed lines are not in the table");
+        assert!(
+            glyph_rects('┄', 1, 0).is_none(),
+            "dashed lines are not in the table"
+        );
     }
 }

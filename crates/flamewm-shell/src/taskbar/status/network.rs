@@ -69,7 +69,10 @@ pub fn project_visible_rows(
         .iter()
         .filter(|access_point| !is_connected_path(network, &access_point.path))
         .filter(|access_point| {
-            flamewm_shell_core::status::NetworkQuery::matches_needle(&needle, row_label(access_point))
+            flamewm_shell_core::status::NetworkQuery::matches_needle(
+                &needle,
+                row_label(access_point),
+            )
         })
         .collect();
 

@@ -236,10 +236,7 @@ fn stretch_frame_has_no_nan_for_degenerate_rects() {
         for step in 0..=10 {
             let r = stretch_frame(a, b, f64::from(step) / 10.0);
             assert!(
-                r.x.is_finite()
-                    && r.y.is_finite()
-                    && r.width.is_finite()
-                    && r.height.is_finite()
+                r.x.is_finite() && r.y.is_finite() && r.width.is_finite() && r.height.is_finite()
             );
         }
     }

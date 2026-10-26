@@ -26,7 +26,11 @@ pub fn resolve_paste(
 /// Updates the in-app clipboard after a cut batch finished. A cut that moved everything
 /// clears the clipboard; a partial move keeps only the failed sources for a safe retry.
 /// Clipboards that hold other content, or copies, are left untouched.
-pub fn settle_cut(clipboard: Option<FileClip>, sources: &[PathBuf], failed: Vec<PathBuf>) -> Option<FileClip> {
+pub fn settle_cut(
+    clipboard: Option<FileClip>,
+    sources: &[PathBuf],
+    failed: Vec<PathBuf>,
+) -> Option<FileClip> {
     match clipboard {
         Some((paths, true)) if paths == sources => (!failed.is_empty()).then_some((failed, true)),
         other => other,
@@ -45,13 +49,19 @@ mod tests {
     fn system_files_win_over_in_app_copy() {
         let system = Some((vec![p("/ext/a")], false));
         let app = (vec![p("/app/b")], false);
-        assert_eq!(resolve_paste(system, Some(&app), None), Some((vec![p("/ext/a")], false)));
+        assert_eq!(
+            resolve_paste(system, Some(&app), None),
+            Some((vec![p("/ext/a")], false))
+        );
     }
 
     #[test]
     fn system_cut_is_honoured() {
         let system = Some((vec![p("/ext/a")], true));
-        assert_eq!(resolve_paste(system, None, None), Some((vec![p("/ext/a")], true)));
+        assert_eq!(
+            resolve_paste(system, None, None),
+            Some((vec![p("/ext/a")], true))
+        );
     }
 
     #[test]
@@ -63,7 +73,10 @@ mod tests {
     #[test]
     fn falls_back_to_in_app_when_system_list_is_empty() {
         let app = (vec![p("/app/b")], false);
-        assert_eq!(resolve_paste(Some((vec![], true)), Some(&app), None), Some(app.clone()));
+        assert_eq!(
+            resolve_paste(Some((vec![], true)), Some(&app), None),
+            Some(app.clone())
+        );
     }
 
     #[test]
@@ -98,7 +111,10 @@ mod tests {
         let spent = vec![p("/ext/a")];
         let app = (vec![p("/ext/a2")], true);
         let system = Some((vec![p("/ext/a")], true));
-        assert_eq!(resolve_paste(system, Some(&app), Some(&spent)), Some(app.clone()));
+        assert_eq!(
+            resolve_paste(system, Some(&app), Some(&spent)),
+            Some(app.clone())
+        );
     }
 
     #[test]

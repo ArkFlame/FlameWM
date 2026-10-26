@@ -62,8 +62,9 @@ pub fn compile_file(
     for path in &sheets {
         css.push('\n');
         css.push_str(
-            &fs::read_to_string(path)
-                .map_err(|error| format!("failed to read stylesheet {}: {error}", path.display()))?,
+            &fs::read_to_string(path).map_err(|error| {
+                format!("failed to read stylesheet {}: {error}", path.display())
+            })?,
         );
     }
     compile_parsed(&html_source, &css, html, options, Some(base))
@@ -785,7 +786,11 @@ pub fn parse_color_literal(input: &str) -> Option<Color> {
 fn hex_channel(hex: &str, index: usize, width: usize) -> Option<u8> {
     let digits = hex.get(index * width..(index + 1) * width)?;
     let value = u8::from_str_radix(digits, 16).ok()?;
-    Some(if width == 1 { (value << 4) | value } else { value })
+    Some(if width == 1 {
+        (value << 4) | value
+    } else {
+        value
+    })
 }
 
 fn apply_border(
@@ -840,7 +845,10 @@ mod tests {
         )
         .unwrap();
         assert!(style_of(&output, "list").hide_scrollbars);
-        assert_eq!(style_of(&output, "list").overflow_y, flamewm_render_core::Overflow::Auto);
+        assert_eq!(
+            style_of(&output, "list").overflow_y,
+            flamewm_render_core::Overflow::Auto
+        );
         assert!(!style_of(&output, "plain").hide_scrollbars);
     }
 
@@ -1187,7 +1195,13 @@ mod tests {
         );
         assert_eq!(dup.document.assets.len(), 1);
         let image_of = |id: &str| {
-            dup.document.nodes.iter().find(|n| n.id == id).unwrap().image.unwrap()
+            dup.document
+                .nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap()
+                .image
+                .unwrap()
         };
         assert_eq!(image_of("a"), image_of("b"));
     }

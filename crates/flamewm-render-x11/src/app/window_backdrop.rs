@@ -674,8 +674,9 @@ impl X11App {
                 // The root is blurred once per read, so a move only crops the blurred root. The
                 // raw read moves into the blur and is not kept.
                 let blur_percent = state.spec.blur_percent;
-                state.blurred_root = desktop
-                    .map(|root| BlurredCanvas::new(root.width, root.height, root.pixels, 0, blur_percent));
+                state.blurred_root = desktop.map(|root| {
+                    BlurredCanvas::new(root.width, root.height, root.pixels, 0, blur_percent)
+                });
                 state.canvas_epoch += 1;
                 state.desktop_stale = false;
                 state.last_readback = Some(Instant::now());
@@ -697,7 +698,12 @@ impl X11App {
             .blurred_root
             .as_ref()
             .is_some_and(|canvas| canvas.size() == root);
-        if !blurred_fits && state.wallpaper.as_ref().is_none_or(|canvas| canvas.size() != root) {
+        if !blurred_fits
+            && state
+                .wallpaper
+                .as_ref()
+                .is_none_or(|canvas| canvas.size() != root)
+        {
             // No clean root yet: the blurred wallpaper under the whole root is built (or loaded)
             // once, and every later capture only crops it.
             let _compose_span = flamewm_profiler::start("render.backdrop.compose");
@@ -707,7 +713,9 @@ impl X11App {
         let epoch = state.canvas_epoch;
         if pixmap_fits
             && state.captured.as_ref().is_some_and(|old| {
-                old.epoch == epoch && old.root == (rx, ry) && (old.width, old.height) == (width, height)
+                old.epoch == epoch
+                    && old.root == (rx, ry)
+                    && (old.width, old.height) == (width, height)
             })
         {
             // Same canvas, same place, same size: the uploaded snapshot already holds these pixels.
@@ -949,7 +957,9 @@ mod tests {
 
     /// Unblurred 4x3 canvas whose grey value is `y * 4 + x`.
     fn grey_canvas() -> BlurredCanvas {
-        let pixels = (0..12u8).flat_map(|value| [value, value, value, 0xff]).collect();
+        let pixels = (0..12u8)
+            .flat_map(|value| [value, value, value, 0xff])
+            .collect();
         BlurredCanvas::new(4, 3, pixels, 0, 0)
     }
 
@@ -971,14 +981,30 @@ mod tests {
     fn a_covered_patch_lands_at_its_root_origin_only() {
         let pixel = |value: u8| [value, value, value, 0xff];
         let mut canvas = BlurredCanvas::new(4, 3, (0..12).flat_map(|_| pixel(0)).collect(), 0, 0);
-        canvas.paste((1, 1), (2, 2), [7, 8, 9, 10].iter().flat_map(|v| pixel(*v)).collect(), 0, 0);
+        canvas.paste(
+            (1, 1),
+            (2, 2),
+            [7, 8, 9, 10].iter().flat_map(|v| pixel(*v)).collect(),
+            0,
+            0,
+        );
         assert_eq!(
             canvas.crop((0, 0), (4, 3)),
             [0, 0, 0, 0, 0, 7, 8, 0, 0, 9, 10, 0].map(grey).to_vec()
         );
         let before = canvas.crop((0, 0), (4, 3));
-        canvas.paste((3, 0), (2, 1), (0..2).flat_map(|_| pixel(1)).collect(), 0, 0);
-        assert_eq!(canvas.crop((0, 0), (4, 3)), before, "a patch leaving the canvas is not written");
+        canvas.paste(
+            (3, 0),
+            (2, 1),
+            (0..2).flat_map(|_| pixel(1)).collect(),
+            0,
+            0,
+        );
+        assert_eq!(
+            canvas.crop((0, 0), (4, 3)),
+            before,
+            "a patch leaving the canvas is not written"
+        );
     }
 
     #[test]
@@ -1039,7 +1065,11 @@ mod tests {
         let first = root.crop((0, 0), (2, 2));
         let moved = root.crop((1, 1), (2, 2));
         assert_eq!(first, [0, 1, 4, 5].map(grey).to_vec());
-        assert_eq!(moved, [5, 6, 9, 10].map(grey).to_vec(), "same cache, new origin");
+        assert_eq!(
+            moved,
+            [5, 6, 9, 10].map(grey).to_vec(),
+            "same cache, new origin"
+        );
         assert_eq!(
             root_capture_decision(true, true, false),
             RootCapture::ReuseCache,

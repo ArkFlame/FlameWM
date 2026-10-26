@@ -1,12 +1,17 @@
 //! Text selection, click counting, and copy and paste through the system CLIPBOARD and PRIMARY selections.
 
+use super::App;
+use crate::view::Span;
 use std::time::Duration;
 use std::time::Instant;
-use crate::view::Span;
-use super::App;
 
 /// Click count for a press at (`row`, `col`) at `now`, given the previous press.
-pub(super) fn next_click_count(previous: Option<(Instant, usize, usize, u8)>, now: Instant, row: usize, col: usize) -> u8 {
+pub(super) fn next_click_count(
+    previous: Option<(Instant, usize, usize, u8)>,
+    now: Instant,
+    row: usize,
+    col: usize,
+) -> u8 {
     const MULTI_CLICK: Duration = Duration::from_millis(400);
     match previous {
         Some((at, prev_row, prev_col, count))
@@ -38,14 +43,28 @@ pub(super) fn word_bounds(chars: &[char], col: usize) -> Option<(usize, usize)> 
 impl App {
     /// Text of a pane's selection, also kept on the pane for the in-process paste fallback.
     fn copy_selection_in(&mut self, id: u64) -> String {
-        let Some(pane) = self.pane_mut(id) else { return String::new() };
-        let Some(span) = pane.selection else { return String::new() };
+        let Some(pane) = self.pane_mut(id) else {
+            return String::new();
+        };
+        let Some(span) = pane.selection else {
+            return String::new();
+        };
         let screen = &pane.session.screen;
         let mut out = Vec::new();
         for index in span.start.0..=span.end.0 {
-            let Some(line) = screen.line_abs(index) else { continue };
-            let from = if index == span.start.0 { span.start.1 } else { 0 };
-            let to = if index == span.end.0 { span.end.1 } else { line.len().saturating_sub(1) };
+            let Some(line) = screen.line_abs(index) else {
+                continue;
+            };
+            let from = if index == span.start.0 {
+                span.start.1
+            } else {
+                0
+            };
+            let to = if index == span.end.0 {
+                span.end.1
+            } else {
+                line.len().saturating_sub(1)
+            };
             let mut text = String::new();
             for col in from..=to.min(line.len().saturating_sub(1)) {
                 let cell = &line[col];
@@ -78,14 +97,19 @@ impl App {
     /// Counts presses on the same cell within 400 ms: 1, 2 (word), 3 (line), then back to 1.
     pub(super) fn register_click(&mut self, id: u64, abs_row: usize, col: usize) -> u8 {
         let now = Instant::now();
-        let Some(pane) = self.pane_mut(id) else { return 1 };
+        let Some(pane) = self.pane_mut(id) else {
+            return 1;
+        };
         let count = next_click_count(pane.last_click, now, abs_row, col);
         pane.last_click = Some((now, abs_row, col, count));
         count
     }
 
     pub(super) fn select_word(&mut self, id: u64, abs_row: usize, col: usize) {
-        let chars: Vec<char> = match self.pane(id).and_then(|pane| pane.session.screen.line_abs(abs_row)) {
+        let chars: Vec<char> = match self
+            .pane(id)
+            .and_then(|pane| pane.session.screen.line_abs(abs_row))
+        {
             Some(line) => line.iter().map(|cell| cell.ch).collect(),
             None => return,
         };
@@ -95,13 +119,17 @@ impl App {
     }
 
     pub(super) fn select_line(&mut self, id: u64, abs_row: usize) {
-        let last = self.pane_rect(id).map_or(0, |rect| rect.cols.saturating_sub(1));
+        let last = self
+            .pane_rect(id)
+            .map_or(0, |rect| rect.cols.saturating_sub(1));
         self.select_span(id, Span::normalised((abs_row, 0), (abs_row, last)));
     }
 
     /// The focused pane's last in-process selection, the fallback when the system clipboard yields nothing.
     fn selection_text(&self) -> String {
-        self.focused_pane().map(|pane| pane.selection_text.clone()).unwrap_or_default()
+        self.focused_pane()
+            .map(|pane| pane.selection_text.clone())
+            .unwrap_or_default()
     }
 
     /// Ctrl+Shift+C: the selection goes to the system CLIPBOARD. Without an X connection it stays in-process.
@@ -152,7 +180,9 @@ impl App {
             return;
         }
         let Some(id) = self.focused_id() else { return };
-        let bracketed = self.pane(id).is_some_and(|pane| pane.session.screen.bracketed_paste);
+        let bracketed = self
+            .pane(id)
+            .is_some_and(|pane| pane.session.screen.bracketed_paste);
         if let Some(pane) = self.pane_mut(id) {
             pane.input.paste(&text);
             pane.view_offset = 0;

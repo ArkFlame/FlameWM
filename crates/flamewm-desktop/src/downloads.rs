@@ -162,7 +162,10 @@ impl Organizer {
                 self.ignored.remove(&name);
                 continue;
             }
-            if !is_candidate_name(&name) || classify(&name).is_none() || self.ignored.contains(&name) {
+            if !is_candidate_name(&name)
+                || classify(&name).is_none()
+                || self.ignored.contains(&name)
+            {
                 continue;
             }
             let entry = self.tracked.entry(name).or_insert_with(|| Tracked {
@@ -206,7 +209,9 @@ impl Organizer {
                     entry.finished = false;
                 }
                 Some(_) => {
-                    if entry.finished || now.saturating_duration_since(entry.changed_at) >= STABLE_AFTER {
+                    if entry.finished
+                        || now.saturating_duration_since(entry.changed_at) >= STABLE_AFTER
+                    {
                         due.push(name);
                     }
                 }
@@ -286,9 +291,7 @@ pub fn read_events(source: &mut Inotify, queue: &Queue) {
             let gone = event
                 .mask
                 .intersects(EventMask::DELETE | EventMask::MOVED_FROM);
-            queue
-                .borrow_mut()
-                .push((name.to_owned(), finished, gone));
+            queue.borrow_mut().push((name.to_owned(), finished, gone));
         }
         if !any {
             break;
@@ -314,14 +317,20 @@ mod tests {
             let nanos = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_nanos());
-            let root = std::env::temp_dir().join(format!("flamewm-dl-{name}-{}-{nanos}", std::process::id()));
+            let root = std::env::temp_dir()
+                .join(format!("flamewm-dl-{name}-{}-{nanos}", std::process::id()));
             fs::create_dir_all(&root).expect("create temp downloads");
             let notice = root.with_extension("notice");
             let mut organizer = Organizer::new(root.clone(), notice).expect("organizer");
             let source = organizer.take_source().expect("source");
             let queue = organizer.queue();
             organizer.set_enabled(enabled);
-            Self { root, organizer, source, queue }
+            Self {
+                root,
+                organizer,
+                source,
+                queue,
+            }
         }
 
         /// Pumps the same read path the reactor uses, then one organizer tick.
@@ -358,7 +367,9 @@ mod tests {
         let mut harness = Harness::new("rename", true);
         fs::write(harness.root.join("report.pdf.crdownload"), b"partial").unwrap();
         // Partial names are never candidates: no move, even after settling time.
-        assert!(!harness.wait_for(Duration::from_millis(400), |root| root.join("Documents").exists()));
+        assert!(!harness.wait_for(Duration::from_millis(400), |root| {
+            root.join("Documents").exists()
+        }));
         assert!(harness.root.join("report.pdf.crdownload").exists());
 
         fs::rename(
@@ -366,10 +377,18 @@ mod tests {
             harness.root.join("report.pdf"),
         )
         .unwrap();
-        assert!(harness.wait_for(FIVE_SECONDS, |root| root.join("Documents/report.pdf").exists()));
+        assert!(harness.wait_for(FIVE_SECONDS, |root| {
+            root.join("Documents/report.pdf").exists()
+        }));
         assert!(!harness.root.join("report.pdf").exists());
-        assert_eq!(fs::read(harness.root.join("Documents/report.pdf")).unwrap(), b"partial");
-        assert!(harness.organizer.take_notice(), "first real move announces once");
+        assert_eq!(
+            fs::read(harness.root.join("Documents/report.pdf")).unwrap(),
+            b"partial"
+        );
+        assert!(
+            harness.organizer.take_notice(),
+            "first real move announces once"
+        );
         assert!(!harness.organizer.take_notice());
     }
 
@@ -378,8 +397,13 @@ mod tests {
         let mut harness = Harness::new("close", true);
         fs::write(harness.root.join("clip.MP4"), b"video").unwrap();
         let started = Instant::now();
-        assert!(harness.wait_for(FIVE_SECONDS, |root| root.join("Multimedia/clip.MP4").exists()));
-        assert!(started.elapsed() < STABLE_AFTER, "close-write path must not wait for the fallback");
+        assert!(harness.wait_for(FIVE_SECONDS, |root| {
+            root.join("Multimedia/clip.MP4").exists()
+        }));
+        assert!(
+            started.elapsed() < STABLE_AFTER,
+            "close-write path must not wait for the fallback"
+        );
     }
 
     #[test]
@@ -393,11 +417,18 @@ mod tests {
         fs::write(root.join("unknown.xyz"), b"x").unwrap();
         std::os::unix::fs::symlink(root.join("unknown.xyz"), root.join("link.pdf")).unwrap();
         fs::write(root.join("real.pdf"), b"x").unwrap();
-        assert!(harness.wait_for(FIVE_SECONDS, |root| root.join("Documents/real.pdf").exists()));
+        assert!(harness.wait_for(FIVE_SECONDS, |root| {
+            root.join("Documents/real.pdf").exists()
+        }));
         assert!(root.join("folder.pdf").is_dir());
         assert!(root.join(".hidden.pdf").exists());
         assert!(root.join("unknown.xyz").exists());
-        assert!(fs::symlink_metadata(root.join("link.pdf")).unwrap().file_type().is_symlink());
+        assert!(
+            fs::symlink_metadata(root.join("link.pdf"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         harness.pump();
         assert!(!root.join("Documents/folder.pdf").exists());
     }
@@ -410,7 +441,10 @@ mod tests {
         fs::write(harness.root.join("new.pdf"), b"new").unwrap();
         assert!(harness.wait_for(FIVE_SECONDS, |root| root.join("Documents/new.pdf").exists()));
         harness.pump();
-        assert!(harness.root.join("old.pdf").exists(), "baseline file must stay in Downloads");
+        assert!(
+            harness.root.join("old.pdf").exists(),
+            "baseline file must stay in Downloads"
+        );
     }
 
     #[test]
@@ -419,15 +453,22 @@ mod tests {
         fs::create_dir(harness.root.join("Documents")).unwrap();
         fs::write(harness.root.join("Documents/a.pdf"), b"keep").unwrap();
         fs::write(harness.root.join("a.pdf"), b"incoming").unwrap();
-        assert!(harness.wait_for(FIVE_SECONDS, |root| root.join("Documents/a (1).pdf").exists()));
-        assert_eq!(fs::read(harness.root.join("Documents/a.pdf")).unwrap(), b"keep");
+        assert!(harness.wait_for(FIVE_SECONDS, |root| {
+            root.join("Documents/a (1).pdf").exists()
+        }));
+        assert_eq!(
+            fs::read(harness.root.join("Documents/a.pdf")).unwrap(),
+            b"keep"
+        );
     }
 
     #[test]
     fn disabled_organizer_moves_nothing_and_watches_nothing() {
         let mut harness = Harness::new("disabled", false);
         fs::write(harness.root.join("quiet.pdf"), b"x").unwrap();
-        assert!(!harness.wait_for(Duration::from_millis(600), |root| root.join("Documents").exists()));
+        assert!(!harness.wait_for(Duration::from_millis(600), |root| {
+            root.join("Documents").exists()
+        }));
         assert!(harness.root.join("quiet.pdf").exists());
         assert!(!harness.organizer.enabled());
     }
@@ -437,7 +478,9 @@ mod tests {
         let mut harness = Harness::new("live-off", true);
         harness.organizer.set_enabled(false);
         fs::write(harness.root.join("later.pdf"), b"x").unwrap();
-        assert!(!harness.wait_for(Duration::from_millis(600), |root| root.join("Documents").exists()));
+        assert!(!harness.wait_for(Duration::from_millis(600), |root| {
+            root.join("Documents").exists()
+        }));
         harness.organizer.set_enabled(true);
         assert!(harness.organizer.enabled());
     }
@@ -446,7 +489,9 @@ mod tests {
     fn notice_latch_persists_so_restart_does_not_repeat_it() {
         let mut harness = Harness::new("notice", true);
         fs::write(harness.root.join("first.pdf"), b"x").unwrap();
-        assert!(harness.wait_for(FIVE_SECONDS, |root| root.join("Documents/first.pdf").exists()));
+        assert!(harness.wait_for(FIVE_SECONDS, |root| {
+            root.join("Documents/first.pdf").exists()
+        }));
         assert!(harness.organizer.take_notice());
         let notice_path = harness.root.with_extension("notice");
         let mut restarted = Organizer::new(harness.root.clone(), notice_path).unwrap();
@@ -461,6 +506,9 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(harness.root.join("Documents/second.pdf").exists());
-        assert!(!restarted.take_notice(), "persisted latch must suppress the second notice");
+        assert!(
+            !restarted.take_notice(),
+            "persisted latch must suppress the second notice"
+        );
     }
 }

@@ -174,11 +174,25 @@ impl X11Desktop {
         // Pipelined: both root reads are sent before either reply is awaited.
         let support_cookie = self
             .conn
-            .get_property(false, self.root, self.atom("_NET_SUPPORTING_WM_CHECK"), AtomEnum::ANY, 0, u32::MAX)
+            .get_property(
+                false,
+                self.root,
+                self.atom("_NET_SUPPORTING_WM_CHECK"),
+                AtomEnum::ANY,
+                0,
+                u32::MAX,
+            )
             .map_err(io_error)?;
         let list_cookie = self
             .conn
-            .get_property(false, self.root, self.atom("_NET_CLIENT_LIST"), AtomEnum::ANY, 0, u32::MAX)
+            .get_property(
+                false,
+                self.root,
+                self.atom("_NET_CLIENT_LIST"),
+                AtomEnum::ANY,
+                0,
+                u32::MAX,
+            )
             .map_err(io_error)?;
         let support_window = support_cookie
             .reply()
@@ -379,10 +393,50 @@ impl X11Desktop {
         active: Option<Window>,
     ) -> FlameResult<flamewm_api::window::WindowSnapshot> {
         let tree_cookie = self.conn.query_tree(window).map_err(io_error)?;
-        let states_cookie = self.conn.get_property(false, window, self.atom("_NET_WM_STATE"), AtomEnum::ANY, 0, u32::MAX).map_err(io_error)?;
-        let desktop_cookie = self.conn.get_property(false, window, self.atom("_NET_WM_DESKTOP"), AtomEnum::ANY, 0, u32::MAX).map_err(io_error)?;
-        let name_cookie = self.conn.get_property(false, window, self.atom("_NET_WM_NAME"), AtomEnum::ANY, 0, u32::MAX).ok();
-        let class_cookie = self.conn.get_property(false, window, self.atom("WM_CLASS"), AtomEnum::ANY, 0, u32::MAX).map_err(io_error)?;
+        let states_cookie = self
+            .conn
+            .get_property(
+                false,
+                window,
+                self.atom("_NET_WM_STATE"),
+                AtomEnum::ANY,
+                0,
+                u32::MAX,
+            )
+            .map_err(io_error)?;
+        let desktop_cookie = self
+            .conn
+            .get_property(
+                false,
+                window,
+                self.atom("_NET_WM_DESKTOP"),
+                AtomEnum::ANY,
+                0,
+                u32::MAX,
+            )
+            .map_err(io_error)?;
+        let name_cookie = self
+            .conn
+            .get_property(
+                false,
+                window,
+                self.atom("_NET_WM_NAME"),
+                AtomEnum::ANY,
+                0,
+                u32::MAX,
+            )
+            .ok();
+        let class_cookie = self
+            .conn
+            .get_property(
+                false,
+                window,
+                self.atom("WM_CLASS"),
+                AtomEnum::ANY,
+                0,
+                u32::MAX,
+            )
+            .map_err(io_error)?;
         let parent = tree_cookie.reply().map_err(io_error)?.parent;
         let geometry_window = if parent != self.root { parent } else { window };
         let geometry_cookie = self.conn.get_geometry(geometry_window).map_err(io_error)?;
@@ -444,7 +498,10 @@ impl WindowPort for X11Desktop {
         let window = self.check_window(reference)?;
         let display = self.display_snapshot()?;
         let workspace = self.workspace_snapshot()?;
-        let active = self.property32(self.root, "_NET_ACTIVE_WINDOW")?.first().copied();
+        let active = self
+            .property32(self.root, "_NET_ACTIVE_WINDOW")?
+            .first()
+            .copied();
         self.snapshot_window(window, &display, &workspace, active)
     }
     fn snapshot(&self) -> FlameResult<Vec<flamewm_api::window::WindowSnapshot>> {
@@ -462,7 +519,8 @@ impl WindowPort for X11Desktop {
         Ok(windows
             .into_iter()
             .filter_map(|window| {
-                self.snapshot_window(window, &display, &workspace, active).ok()
+                self.snapshot_window(window, &display, &workspace, active)
+                    .ok()
             })
             .collect())
     }

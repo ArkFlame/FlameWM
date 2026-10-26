@@ -34,18 +34,18 @@ use cursor_theme::{SurfaceCursor, share_surface_cursor};
 
 mod clip;
 // Region planner and counters; the live redraw path adopts them once region clipping is enabled.
-#[cfg_attr(not(test), allow(dead_code))]
-mod damage_plan;
-#[cfg(test)]
-mod region_equivalence_tests;
+mod backbuffer_pool;
 mod color;
 mod cursor;
-mod xdnd;
-mod backbuffer_pool;
 mod cursor_theme;
+#[cfg_attr(not(test), allow(dead_code))]
+mod damage_plan;
 mod events;
 mod geometry;
 mod images;
+#[cfg(test)]
+mod region_equivalence_tests;
+mod xdnd;
 pub(crate) use images::upload_argb32_image;
 mod input;
 mod layout_helpers;
@@ -419,15 +419,7 @@ impl X11App {
             let (root_w, root_h) = display_extent(display, screen);
             let mut owned = X11ResourceAllocator::new();
             let created = unsafe {
-                owned.create_pixmap(
-                    display,
-                    window,
-                    width,
-                    height,
-                    depth as u32,
-                    root_w,
-                    root_h,
-                )
+                owned.create_pixmap(display, window, width, height, depth as u32, root_w, root_h)
             };
             match created {
                 Ok((pixmap, bytes)) => {

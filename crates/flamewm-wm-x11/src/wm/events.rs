@@ -1,5 +1,5 @@
-use super::*;
 use super::raw_keys::is_escape_chord;
+use super::*;
 
 impl<'a, C: Connection> Wm<'a, C> {
     /// Dispatches one event. A request that raced a client's destruction (BadWindow and friends)
@@ -55,8 +55,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             Event::FocusOut(_) => self.super_tap.focus_lost(),
             Event::MotionNotify(event) => self.handle_motion(event)?,
             Event::PropertyNotify(event)
-                if event.atom == self.atoms.root_rubber
-                    && event.window == self.screen().root =>
+                if event.atom == self.atoms.root_rubber && event.window == self.screen().root =>
             {
                 self.on_root_rubber_changed()?
             }
@@ -68,7 +67,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             // XInput2 raw key records arrive as unknown generic events; see `raw_keys`.
             Event::Unknown(bytes) => {
                 if key_diag_enabled() {
-                    eprintln!("flamewm: unknown event head={:?}", &bytes[..bytes.len().min(12)]);
+                    eprintln!(
+                        "flamewm: unknown event head={:?}",
+                        &bytes[..bytes.len().min(12)]
+                    );
                 }
                 self.handle_raw_event(&bytes)?
             }
@@ -224,10 +226,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     /// Runs an escape chord from either feed.
-    pub(super) fn dispatch_escape_chord(
-        &mut self,
-        action: &str,
-    ) -> Result<(), ReplyError> {
+    pub(super) fn dispatch_escape_chord(&mut self, action: &str) -> Result<(), ReplyError> {
         let outcome = self.super_tap.press_other();
         self.apply_super_tap(outcome);
         match action {
@@ -445,11 +444,25 @@ impl<'a, C: Connection> Wm<'a, C> {
                 // Pipelined: both root reads are sent before either reply is awaited.
                 let count_cookie = self
                     .conn
-                    .get_property(false, window, self.atoms.net_number_of_desktops, AtomEnum::ANY, 0, 1)
+                    .get_property(
+                        false,
+                        window,
+                        self.atoms.net_number_of_desktops,
+                        AtomEnum::ANY,
+                        0,
+                        1,
+                    )
                     .ok();
                 let names_cookie = self
                     .conn
-                    .get_property(false, window, self.atoms.net_desktop_names, AtomEnum::ANY, 0, u32::MAX)
+                    .get_property(
+                        false,
+                        window,
+                        self.atoms.net_desktop_names,
+                        AtomEnum::ANY,
+                        0,
+                        u32::MAX,
+                    )
                     .ok();
                 let count = count_cookie
                     .and_then(|cookie| cookie.reply().ok())

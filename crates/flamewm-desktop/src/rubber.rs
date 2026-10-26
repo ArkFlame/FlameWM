@@ -242,7 +242,8 @@ mod rubber_tests {
             let rubber = Rect::new(step * 2, 0, 50, 200);
             let mut reference = SelectionModel::default();
             reference.set_rubber(rubber);
-            let expected = reference.hit_test(items.iter().map(|item| (item.id.as_str(), item.rect)));
+            let expected =
+                reference.hit_test(items.iter().map(|item| (item.id.as_str(), item.rect)));
             expected_toggles += expected.symmetric_difference(&previous).count();
             previous = expected.clone();
 
@@ -255,7 +256,9 @@ mod rubber_tests {
         }
         assert_eq!(toggles, expected_toggles);
         assert!(toggles > 0);
-        eprintln!("BENCH rubber_motion_toggles={toggles} rubber_motion_expected_toggles={expected_toggles} rubber_noop_toggles={no_op_toggles}");
+        eprintln!(
+            "BENCH rubber_motion_toggles={toggles} rubber_motion_expected_toggles={expected_toggles} rubber_noop_toggles={no_op_toggles}"
+        );
     }
 
     #[test]
@@ -295,7 +298,11 @@ mod rubber_tests {
         // The refreshed snapshot no longer contains "removed-item".
         drop_missing_selected(&mut selection, &items);
         assert_eq!(
-            selection.selected().iter().map(String::as_str).collect::<Vec<_>>(),
+            selection
+                .selected()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
             ["item-001", "item-002"]
         );
     }

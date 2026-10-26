@@ -53,7 +53,13 @@ mod tests {
     use crate::store::{TerminalConfig, ThemeStore};
 
     /// An App with one `cat` tab, a wake socket whose peer the test can read, and the session channel's sender.
-    fn app_with_tab() -> (App, Sender<SessionEvent>, Receiver<SessionEvent>, UnixStream, u64) {
+    fn app_with_tab() -> (
+        App,
+        Sender<SessionEvent>,
+        Receiver<SessionEvent>,
+        UnixStream,
+        u64,
+    ) {
         let (events_tx, events_rx) = mpsc::channel();
         let (writer, peer) = UnixStream::pair().expect("socket pair");
         let mut app = App::new(
@@ -69,7 +75,12 @@ mod tests {
         );
         app.refresh_metrics();
         app.set_window(640, 384);
-        app.open_tab(Launch { program: "/bin/cat".into(), args: Vec::new(), cwd: None }).expect("cat tab");
+        app.open_tab(Launch {
+            program: "/bin/cat".into(),
+            args: Vec::new(),
+            cwd: None,
+        })
+        .expect("cat tab");
         let id = app.tabs[0].id;
         (app, events_tx, events_rx, peer, id)
     }
@@ -78,12 +89,23 @@ mod tests {
     fn screen_text(app: &App, id: u64) -> String {
         let screen = &app.pane(id).expect("pane").session.screen;
         (0..screen.rows())
-            .map(|row| screen.line(row).iter().map(|cell| cell.ch).collect::<String>().trim_end().to_owned())
+            .map(|row| {
+                screen
+                    .line(row)
+                    .iter()
+                    .map(|cell| cell.ch)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
             .collect()
     }
 
     fn output(id: u64, bytes: &[u8]) -> SessionEvent {
-        SessionEvent::Output { id, bytes: bytes.to_vec() }
+        SessionEvent::Output {
+            id,
+            bytes: bytes.to_vec(),
+        }
     }
 
     #[test]
@@ -147,7 +169,10 @@ mod tests {
         .unwrap();
         assert_eq!(frames.get(), 1);
         let remaining = std::iter::from_fn(|| rx.try_recv().ok()).count();
-        assert!(remaining > 0 && remaining < chunks, "some output parsed, the rest queued: {remaining}");
+        assert!(
+            remaining > 0 && remaining < chunks,
+            "some output parsed, the rest queued: {remaining}"
+        );
         let mut byte = [0_u8; 1];
         peer.read_exact(&mut byte).expect("wake re-armed");
     }

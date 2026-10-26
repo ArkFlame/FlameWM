@@ -468,7 +468,10 @@ impl State {
         let work = self.work_area();
         // Include fullscreen and maximized windows on inactive workspaces. Refit the fullscreen
         // restore rect too, so exiting a game does not bring back an old-size maximized window.
-        let fitted: Vec<WindowId> = self.model.managed().iter()
+        let fitted: Vec<WindowId> = self
+            .model
+            .managed()
+            .iter()
             .filter(|window| window.mode != Mode::Normal)
             .map(|window| window.id)
             .collect();

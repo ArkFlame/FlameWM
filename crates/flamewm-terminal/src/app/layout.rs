@@ -1,8 +1,8 @@
 //! Pane geometry: split rectangles, the pane tree of a tab, and split, close and focus over the active tab.
 
-use std::path::PathBuf;
-use crate::pty::Launch;
 use super::{App, Pane, home_dir};
+use crate::pty::Launch;
+use std::path::PathBuf;
 
 /// Cells between two panes of a split, drawn as a divider.
 pub(super) const DIVIDER: usize = 1;
@@ -40,7 +40,12 @@ impl Rect {
 /// A tab's panes: leaves are shells, splits divide their rectangle between two subtrees.
 pub enum PaneNode {
     Leaf(Box<Pane>),
-    Split { axis: Axis, ratio: f32, a: Box<PaneNode>, b: Box<PaneNode> },
+    Split {
+        axis: Axis,
+        ratio: f32,
+        a: Box<PaneNode>,
+        b: Box<PaneNode>,
+    },
     /// Set only while a leaf is moved out: the edit that empties a slot fills it before it returns.
     Vacant,
 }
@@ -132,7 +137,13 @@ impl PaneNode {
     }
 
     /// Splits the leaf `id` along `axis`, putting `pane` second. The pane comes back when the leaf is not here.
-    fn split_leaf(&mut self, id: u64, axis: Axis, ratio: f32, pane: Box<Pane>) -> Result<(), Box<Pane>> {
+    fn split_leaf(
+        &mut self,
+        id: u64,
+        axis: Axis,
+        ratio: f32,
+        pane: Box<Pane>,
+    ) -> Result<(), Box<Pane>> {
         match std::mem::replace(self, PaneNode::Vacant) {
             PaneNode::Leaf(existing) => {
                 if existing.session.id == id {
@@ -148,9 +159,21 @@ impl PaneNode {
                     Err(pane)
                 }
             }
-            PaneNode::Split { axis: at, ratio: at_ratio, mut a, mut b } => {
-                let result = a.split_leaf(id, axis, ratio, pane).or_else(|pane| b.split_leaf(id, axis, ratio, pane));
-                *self = PaneNode::Split { axis: at, ratio: at_ratio, a, b };
+            PaneNode::Split {
+                axis: at,
+                ratio: at_ratio,
+                mut a,
+                mut b,
+            } => {
+                let result = a
+                    .split_leaf(id, axis, ratio, pane)
+                    .or_else(|pane| b.split_leaf(id, axis, ratio, pane));
+                *self = PaneNode::Split {
+                    axis: at,
+                    ratio: at_ratio,
+                    a,
+                    b,
+                };
                 result
             }
             PaneNode::Vacant => Err(pane),
@@ -163,12 +186,20 @@ impl PaneNode {
         match std::mem::replace(self, PaneNode::Vacant) {
             PaneNode::Leaf(pane) => {
                 if pane.session.id == id {
-                    return Some(Removed { pane, survivor: None });
+                    return Some(Removed {
+                        pane,
+                        survivor: None,
+                    });
                 }
                 *self = PaneNode::Leaf(pane);
                 None
             }
-            PaneNode::Split { axis, ratio, mut a, mut b } => {
+            PaneNode::Split {
+                axis,
+                ratio,
+                mut a,
+                mut b,
+            } => {
                 let Some(removed) = a.remove_leaf(id).or_else(|| b.remove_leaf(id)) else {
                     *self = PaneNode::Split { axis, ratio, a, b };
                     return None;
@@ -180,7 +211,10 @@ impl PaneNode {
                 } else {
                     PaneNode::Split { axis, ratio, a, b }
                 };
-                Some(Removed { survivor: removed.survivor.or_else(|| self.first_id()), pane: removed.pane })
+                Some(Removed {
+                    survivor: removed.survivor.or_else(|| self.first_id()),
+                    pane: removed.pane,
+                })
             }
             PaneNode::Vacant => None,
         }
@@ -200,12 +234,32 @@ pub(super) fn split_rect(rect: Rect, axis: Axis, ratio: f32) -> (Rect, Rect) {
         Axis::Columns => {
             let usable = rect.cols.saturating_sub(DIVIDER);
             let first = first_part(usable, ratio, MIN_PANE_COLS);
-            (Rect { cols: first, ..rect }, Rect { x0: rect.x0 + first + DIVIDER, cols: usable.saturating_sub(first), ..rect })
+            (
+                Rect {
+                    cols: first,
+                    ..rect
+                },
+                Rect {
+                    x0: rect.x0 + first + DIVIDER,
+                    cols: usable.saturating_sub(first),
+                    ..rect
+                },
+            )
         }
         Axis::Rows => {
             let usable = rect.rows.saturating_sub(DIVIDER);
             let first = first_part(usable, ratio, MIN_PANE_ROWS);
-            (Rect { rows: first, ..rect }, Rect { y0: rect.y0 + first + DIVIDER, rows: usable.saturating_sub(first), ..rect })
+            (
+                Rect {
+                    rows: first,
+                    ..rect
+                },
+                Rect {
+                    y0: rect.y0 + first + DIVIDER,
+                    rows: usable.saturating_sub(first),
+                    ..rect
+                },
+            )
         }
     }
 }
@@ -221,13 +275,21 @@ fn first_part(usable: usize, ratio: f32, min: usize) -> usize {
 /// Whether a split at `rect` leaves both halves a usable pane.
 pub(super) fn split_fits(rect: Rect, axis: Axis) -> bool {
     let (first, second) = split_rect(rect, axis, SPLIT_RATIO);
-    first.cols >= MIN_PANE_COLS && second.cols >= MIN_PANE_COLS && first.rows >= MIN_PANE_ROWS && second.rows >= MIN_PANE_ROWS
+    first.cols >= MIN_PANE_COLS
+        && second.cols >= MIN_PANE_COLS
+        && first.rows >= MIN_PANE_ROWS
+        && second.rows >= MIN_PANE_ROWS
 }
 
 impl App {
     /// The whole grid below the tab bar, in cells. Panes are laid out inside it.
     pub(super) fn grid_rect(&self) -> Rect {
-        Rect { x0: 0, y0: 0, cols: self.cols, rows: self.grid_rows }
+        Rect {
+            x0: 0,
+            y0: 0,
+            cols: self.cols,
+            rows: self.grid_rows,
+        }
     }
 
     /// Gives every pane the size of its place in the tree, so each PTY follows its own rectangle.
@@ -236,13 +298,22 @@ impl App {
         let grid = self.grid_rect();
         for tab in &mut self.tabs {
             for (id, rect) in tab.root.rects(grid) {
-                let Some(pane) = tab.root.pane_mut(id) else { continue };
+                let Some(pane) = tab.root.pane_mut(id) else {
+                    continue;
+                };
                 let size = (rect.cols.max(1), rect.rows.max(1));
                 if size == pane.size {
                     continue;
                 }
                 pane.size = size;
-                pane.session.resize(size.0, size.1, ((size.0 as f32 * cell_w) as u16, (size.1 as f32 * cell_h) as u16));
+                pane.session.resize(
+                    size.0,
+                    size.1,
+                    (
+                        (size.0 as f32 * cell_w) as u16,
+                        (size.1 as f32 * cell_h) as u16,
+                    ),
+                );
             }
         }
     }
@@ -274,12 +345,19 @@ impl App {
     /// The pane holding a grid cell, with its rectangle.
     pub(super) fn pane_at(&self, grid_row: usize, col: usize) -> Option<(u64, Rect)> {
         let tab = self.tabs.get(self.active)?;
-        tab.root.rects(self.grid_rect()).into_iter().find(|(_, rect)| rect.contains(grid_row, col))
+        tab.root
+            .rects(self.grid_rect())
+            .into_iter()
+            .find(|(_, rect)| rect.contains(grid_row, col))
     }
 
     pub(super) fn pane_rect(&self, id: u64) -> Option<Rect> {
         let tab = self.tabs.get(self.active)?;
-        tab.root.rects(self.grid_rect()).into_iter().find(|(pane, _)| *pane == id).map(|(_, rect)| rect)
+        tab.root
+            .rects(self.grid_rect())
+            .into_iter()
+            .find(|(pane, _)| *pane == id)
+            .map(|(_, rect)| rect)
     }
 
     pub(super) fn focus_pane(&mut self, id: u64) {
@@ -293,8 +371,12 @@ impl App {
     /// Splits the focused pane along `axis`, starting a shell in the focused shell's directory. Nothing happens when
     /// the halves would be too small to use.
     pub fn split_focused(&mut self, axis: Axis) -> Result<(), String> {
-        let Some(focused) = self.focused_id() else { return Ok(()) };
-        let Some(rect) = self.pane_rect(focused) else { return Ok(()) };
+        let Some(focused) = self.focused_id() else {
+            return Ok(());
+        };
+        let Some(rect) = self.pane_rect(focused) else {
+            return Ok(());
+        };
         if !split_fits(rect, axis) {
             return Ok(());
         }
@@ -302,7 +384,11 @@ impl App {
         let pane = self.start_pane(&Launch::shell(self.split_cwd()), second.cols, second.rows)?;
         let id = pane.session.id;
         let tab = &mut self.tabs[self.active];
-        if tab.root.split_leaf(focused, axis, SPLIT_RATIO, pane).is_err() {
+        if tab
+            .root
+            .split_leaf(focused, axis, SPLIT_RATIO, pane)
+            .is_err()
+        {
             // The focused leaf vanished between the two steps: the new pane is dropped, and its PTY with it.
             return Ok(());
         }
@@ -313,7 +399,10 @@ impl App {
 
     /// Directory a new pane starts in: the focused shell's when it is a readable directory, else home.
     fn split_cwd(&self) -> Option<PathBuf> {
-        self.focused_pane().and_then(|pane| pane.session.working_directory()).filter(|dir| dir.is_dir()).or_else(home_dir)
+        self.focused_pane()
+            .and_then(|pane| pane.session.working_directory())
+            .filter(|dir| dir.is_dir())
+            .or_else(home_dir)
     }
 
     /// Closes the focused pane; the last pane of a tab closes the tab.
@@ -337,7 +426,10 @@ impl App {
             return Some(removed.pane);
         }
         if tab.focused == id {
-            tab.focused = removed.survivor.or_else(|| tab.root.first_id()).unwrap_or(id);
+            tab.focused = removed
+                .survivor
+                .or_else(|| tab.root.first_id())
+                .unwrap_or(id);
         }
         self.relayout();
         Some(removed.pane)

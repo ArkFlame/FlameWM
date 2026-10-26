@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 fn workdir(name: &str) -> PathBuf {
-    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("rfs-{name}-{}", std::process::id()));
+    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("rfs-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&base);
     fs::create_dir_all(&base).unwrap();
     base
@@ -100,7 +101,10 @@ fn lists_1000_entry_directory_streaming_with_latency_report() {
         chunks
     );
     assert_eq!(total, 1001);
-    assert!(first_chunk_len <= 64, "first page must be small so the UI paints early");
+    assert!(
+        first_chunk_len <= 64,
+        "first page must be small so the UI paints early"
+    );
     assert!(chunks > 1, "listing must stream in more than one chunk");
 
     let entries = list_all(&rfs, &url).unwrap();
@@ -137,12 +141,18 @@ fn home_stat_mkdir_rename_remove_roundtrip() {
     assert!(dir.join("work/renamed").is_dir());
 
     let clash = rfs.rename(&renamed, &base).wait();
-    assert!(matches!(clash, Err(Error::AlreadyExists(_))), "rename onto existing must not overwrite: {clash:?}");
+    assert!(
+        matches!(clash, Err(Error::AlreadyExists(_))),
+        "rename onto existing must not overwrite: {clash:?}"
+    );
 
     rfs.remove(&renamed, true).wait().unwrap();
     assert!(!dir.join("work/renamed").exists());
 
-    let home = rfs.home(&Url::parse("fish://127.0.0.1").unwrap()).wait().unwrap();
+    let home = rfs
+        .home(&Url::parse("fish://127.0.0.1").unwrap())
+        .wait()
+        .unwrap();
     assert!(home.path.starts_with('/'));
     assert_eq!(home.path, std::env::var("HOME").unwrap());
 }
@@ -151,8 +161,14 @@ fn home_stat_mkdir_rename_remove_roundtrip() {
 fn refuses_to_remove_root_or_home() {
     let dir = workdir("guard");
     let rfs = client(&dir);
-    assert!(matches!(rfs.remove(&Url::parse("sftp://h/").unwrap(), true).wait(), Err(Error::InvalidUrl(_))));
-    assert!(matches!(rfs.remove(&Url::parse("fish://h").unwrap(), true).wait(), Err(Error::InvalidUrl(_))));
+    assert!(matches!(
+        rfs.remove(&Url::parse("sftp://h/").unwrap(), true).wait(),
+        Err(Error::InvalidUrl(_))
+    ));
+    assert!(matches!(
+        rfs.remove(&Url::parse("fish://h").unwrap(), true).wait(),
+        Err(Error::InvalidUrl(_))
+    ));
 }
 
 #[test]
@@ -225,11 +241,19 @@ fn list_cache_serves_within_ttl_and_invalidates_on_mutation() {
     let url = local_url(&base);
     assert_eq!(list_all(&rfs, &url).unwrap().len(), 1);
     fs::write(base.join("two"), b"2").unwrap();
-    assert_eq!(list_all(&rfs, &url).unwrap().len(), 1, "external change hidden within TTL");
+    assert_eq!(
+        list_all(&rfs, &url).unwrap().len(),
+        1,
+        "external change hidden within TTL"
+    );
     rfs.invalidate(&url);
     assert_eq!(list_all(&rfs, &url).unwrap().len(), 2);
     rfs.mkdir(&url.join("three")).wait().unwrap();
-    assert_eq!(list_all(&rfs, &url).unwrap().len(), 3, "own mutation invalidates listing");
+    assert_eq!(
+        list_all(&rfs, &url).unwrap().len(),
+        3,
+        "own mutation invalidates listing"
+    );
 }
 
 #[test]
@@ -237,7 +261,10 @@ fn smb_and_ftp_are_typed_unsupported() {
     let dir = workdir("unsupported");
     let rfs = client(&dir);
     let url = Url::parse("smb://server/share").unwrap();
-    assert!(matches!(rfs.stat(&url).wait(), Err(Error::UnsupportedProtocol("smb"))));
+    assert!(matches!(
+        rfs.stat(&url).wait(),
+        Err(Error::UnsupportedProtocol("smb"))
+    ));
 }
 
 #[test]
@@ -250,7 +277,12 @@ fn symlinks_to_directories_list_as_directories_and_others_stay_links() {
     std::os::unix::fs::symlink("missing", dir.join("dangling")).unwrap();
     let rfs = client(&dir);
     let rows = list_all(&rfs, &local_url(&dir)).unwrap();
-    let kind = |name: &str| rows.iter().find(|e| e.name == name).unwrap_or_else(|| panic!("{name} listed")).kind;
+    let kind = |name: &str| {
+        rows.iter()
+            .find(|e| e.name == name)
+            .unwrap_or_else(|| panic!("{name} listed"))
+            .kind
+    };
     assert_eq!(kind("dir link"), Kind::Dir);
     assert_eq!(kind("real dir"), Kind::Dir);
     assert_eq!(kind("file link"), Kind::Symlink);

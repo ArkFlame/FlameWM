@@ -18,7 +18,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             // windows and taskbar reservations at the saved desktop layout; only the game
             // framebuffer follows the temporary screen extent. The normal reflow resumes after
             // fullscreen exits and the desktop mode tracker restores the root resolution.
-            let fullscreen: Vec<Window> = self.clients.iter()
+            let fullscreen: Vec<Window> = self
+                .clients
+                .iter()
                 .filter(|(_, state)| state.is_fullscreen())
                 .map(|(&client, _)| client)
                 .collect();

@@ -169,7 +169,10 @@ impl Parser {
                     State::CsiParam => self.csi_param(byte, performer),
                     State::CsiIntermediate => self.csi_intermediate(byte, performer),
                     State::CsiIgnore => self.csi_ignore(byte, performer),
-                    State::OscString | State::OscEscape | State::StringIgnore | State::StringIgnoreEscape => {}
+                    State::OscString
+                    | State::OscEscape
+                    | State::StringIgnore
+                    | State::StringIgnoreEscape => {}
                 }
             }
         }
@@ -194,7 +197,9 @@ impl Parser {
                 } else {
                     self.utf8.push(byte);
                     if self.utf8.len() == self.utf8_need {
-                        let decoded = std::str::from_utf8(&self.utf8).ok().and_then(|text| text.chars().next());
+                        let decoded = std::str::from_utf8(&self.utf8)
+                            .ok()
+                            .and_then(|text| text.chars().next());
                         performer.print(decoded.unwrap_or(char::REPLACEMENT_CHARACTER));
                         self.utf8.clear();
                         self.utf8_need = 0;
@@ -349,8 +354,15 @@ pub(crate) mod recording {
         fn execute(&mut self, byte: u8) {
             self.executed.push(byte);
         }
-        fn csi(&mut self, prefix: Option<u8>, params: &[Vec<u16>], intermediates: &[u8], action: u8) {
-            self.csi.push((prefix, params.to_vec(), intermediates.to_vec(), action));
+        fn csi(
+            &mut self,
+            prefix: Option<u8>,
+            params: &[Vec<u16>],
+            intermediates: &[u8],
+            action: u8,
+        ) {
+            self.csi
+                .push((prefix, params.to_vec(), intermediates.to_vec(), action));
         }
         fn esc(&mut self, intermediates: &[u8], final_byte: u8) {
             self.esc.push((intermediates.to_vec(), final_byte));
@@ -383,14 +395,20 @@ mod tests {
     #[test]
     fn csi_params_split_on_semicolons_and_default_to_zero() {
         let recorder = parse(b"\x1b[12;;5H\x1b[H");
-        assert_eq!(recorder.csi[0], (None, vec![vec![12], vec![0], vec![5]], vec![], b'H'));
+        assert_eq!(
+            recorder.csi[0],
+            (None, vec![vec![12], vec![0], vec![5]], vec![], b'H')
+        );
         assert_eq!(recorder.csi[1], (None, vec![vec![0]], vec![], b'H'));
     }
 
     #[test]
     fn private_marker_and_intermediates_are_reported() {
         let recorder = parse(b"\x1b[?1049h\x1b[3 q");
-        assert_eq!(recorder.csi[0], (Some(b'?'), vec![vec![1049]], vec![], b'h'));
+        assert_eq!(
+            recorder.csi[0],
+            (Some(b'?'), vec![vec![1049]], vec![], b'h')
+        );
         assert_eq!(recorder.csi[1], (None, vec![vec![3]], vec![b' '], b'q'));
     }
 
@@ -407,7 +425,10 @@ mod tests {
         parser.advance(b"\x1b[3", &mut recorder);
         parser.advance(b"1;4", &mut recorder);
         parser.advance(b"2m", &mut recorder);
-        assert_eq!(recorder.csi, vec![(None, vec![vec![31], vec![42]], vec![], b'm')]);
+        assert_eq!(
+            recorder.csi,
+            vec![(None, vec![vec![31], vec![42]], vec![], b'm')]
+        );
     }
 
     #[test]
@@ -430,7 +451,10 @@ mod tests {
     #[test]
     fn escape_sequences_reach_esc_dispatch_with_intermediates() {
         let recorder = parse(b"\x1b7\x1b(0\x1bM");
-        assert_eq!(recorder.esc, vec![(vec![], b'7'), (vec![b'('], b'0'), (vec![], b'M')]);
+        assert_eq!(
+            recorder.esc,
+            vec![(vec![], b'7'), (vec![b'('], b'0'), (vec![], b'M')]
+        );
     }
 
     #[test]

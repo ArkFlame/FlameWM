@@ -21,8 +21,18 @@ pub fn find_ark() -> Option<PathBuf> {
 
 /// Arguments for "Extract Here": extract into the archive's directory, in a subfolder when needed.
 pub fn extract_here_args(archive: &Path) -> Vec<OsString> {
-    let parent = archive.parent().unwrap_or(Path::new("/")).as_os_str().to_owned();
-    vec!["--batch".into(), "--autosubfolder".into(), "--destination".into(), parent, archive.as_os_str().to_owned()]
+    let parent = archive
+        .parent()
+        .unwrap_or(Path::new("/"))
+        .as_os_str()
+        .to_owned();
+    vec![
+        "--batch".into(),
+        "--autosubfolder".into(),
+        "--destination".into(),
+        parent,
+        archive.as_os_str().to_owned(),
+    ]
 }
 
 /// Arguments for compressing absolute `items` into `archive` (created when missing).
@@ -34,7 +44,11 @@ pub fn compress_args(archive: &Path, items: &[PathBuf]) -> Result<Vec<OsString>,
     if items.iter().any(|item| !item.is_absolute()) || !archive.is_absolute() {
         return Err("Compress needs absolute paths".into());
     }
-    let mut args: Vec<OsString> = vec!["--batch".into(), "--add-to".into(), archive.as_os_str().to_owned()];
+    let mut args: Vec<OsString> = vec![
+        "--batch".into(),
+        "--add-to".into(),
+        archive.as_os_str().to_owned(),
+    ];
     args.extend(items.iter().map(|item| item.as_os_str().to_owned()));
     Ok(args)
 }
@@ -54,7 +68,11 @@ pub fn unique_archive_name(dir: &Path, base: &str, extension: &str) -> PathBuf {
 /// Default archive base name: a single item keeps its name; several items become "Archive".
 pub fn default_archive_base(items: &[PathBuf]) -> String {
     match items {
-        [only] => only.file_name().unwrap_or(OsStr::new("Archive")).to_string_lossy().into_owned(),
+        [only] => only
+            .file_name()
+            .unwrap_or(OsStr::new("Archive"))
+            .to_string_lossy()
+            .into_owned(),
         _ => "Archive".to_owned(),
     }
 }
@@ -72,7 +90,11 @@ mod tests {
         let ark = bin.join("ark");
         std::fs::write(&ark, b"#!/bin/sh\n").unwrap();
         let path_var = std::env::join_paths([PathBuf::from("relative"), bin.clone()]).unwrap();
-        assert_eq!(find_ark_in(&path_var), None, "non-executable file must not count");
+        assert_eq!(
+            find_ark_in(&path_var),
+            None,
+            "non-executable file must not count"
+        );
         std::fs::set_permissions(&ark, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(find_ark_in(&path_var), Some(ark.clone()));
         assert_eq!(find_ark_in(OsStr::new("")), None);
@@ -87,21 +109,35 @@ mod tests {
         assert!(args.contains(&OsString::from("/home/u/Docs")));
         assert!(compress_args(Path::new("/x/out.zip"), &[]).is_err());
         assert!(compress_args(Path::new("/x/out.zip"), &[PathBuf::from("-rf")]).is_err());
-        let args = compress_args(Path::new("/x/out.zip"), &[PathBuf::from("/x/a"), PathBuf::from("/x/b")]).unwrap();
+        let args = compress_args(
+            Path::new("/x/out.zip"),
+            &[PathBuf::from("/x/a"), PathBuf::from("/x/b")],
+        )
+        .unwrap();
         assert_eq!(args.len(), 5);
         assert_eq!(args[1], OsString::from("--add-to"));
     }
 
     #[test]
     fn archive_names_do_not_overwrite_existing_entries() {
-        let dir = std::env::temp_dir().join(format!("flamewm-archive-name-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("flamewm-archive-name-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(unique_archive_name(&dir, "Archive", "zip"), dir.join("Archive.zip"));
+        assert_eq!(
+            unique_archive_name(&dir, "Archive", "zip"),
+            dir.join("Archive.zip")
+        );
         std::fs::write(dir.join("Archive.zip"), b"").unwrap();
-        assert_eq!(unique_archive_name(&dir, "Archive", "zip"), dir.join("Archive (2).zip"));
+        assert_eq!(
+            unique_archive_name(&dir, "Archive", "zip"),
+            dir.join("Archive (2).zip")
+        );
         assert_eq!(default_archive_base(&[PathBuf::from("/x/photo")]), "photo");
-        assert_eq!(default_archive_base(&[PathBuf::from("/x/a"), PathBuf::from("/x/b")]), "Archive");
+        assert_eq!(
+            default_archive_base(&[PathBuf::from("/x/a"), PathBuf::from("/x/b")]),
+            "Archive"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

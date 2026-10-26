@@ -442,8 +442,8 @@ mod tests {
         let frame: Vec<u8> = (0..(width * height * 4))
             .map(|i| (i * 7 % 251) as u8)
             .collect();
-        let fast = embed_subrect_argb(width, height, (0, 0), (width, height), &frame)
-            .expect("full frame");
+        let fast =
+            embed_subrect_argb(width, height, (0, 0), (width, height), &frame).expect("full frame");
         assert_eq!(fast.argb, rgba_to_argb(width, height, &frame).unwrap().argb);
     }
 

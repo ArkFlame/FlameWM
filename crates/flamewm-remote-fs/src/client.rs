@@ -2,15 +2,17 @@
 //! returns immediately with a receiver. Listings stream in chunks so the first page can render
 //! before the directory is complete.
 
+use crate::Error;
 use crate::cache::ListCache;
 use crate::cancel::Cancel;
 use crate::entry::{Entry, Kind, parse_ls_numeric};
-use std::collections::HashSet;
 use crate::pool::Pool;
 use crate::shell;
-use crate::transport::{ConnKey, ReadEvent, SshConnector, Transport, classify, ensure_private_dir, POLL};
+use crate::transport::{
+    ConnKey, POLL, ReadEvent, SshConnector, Transport, classify, ensure_private_dir,
+};
 use crate::url::Url;
-use crate::Error;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -44,7 +46,12 @@ impl Default for Config {
     fn default() -> Self {
         let runtime = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::temp_dir().join(format!("flamewm-rfs-{}", std::env::var("USER").unwrap_or_default())));
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "flamewm-rfs-{}",
+                    std::env::var("USER").unwrap_or_default()
+                ))
+            });
         Self {
             ssh: std::env::var_os("FLAMEWM_RFS_SSH").map_or_else(|| "ssh".into(), PathBuf::from),
             keyscan: "ssh-keyscan".into(),
@@ -90,7 +97,9 @@ pub struct Reply<T>(Receiver<Result<T, Error>>);
 
 impl<T> Reply<T> {
     pub fn wait(self) -> Result<T, Error> {
-        self.0.recv().unwrap_or(Err(Error::Io("worker stopped".into())))
+        self.0
+            .recv()
+            .unwrap_or(Err(Error::Io("worker stopped".into())))
     }
 
     pub fn try_take(&self) -> Option<Result<T, Error>> {
@@ -123,7 +132,10 @@ impl RemoteFs {
             control_dir: config.control_dir.clone(),
             connect_timeout_secs: config.connect_timeout_secs,
         };
-        let connector = SshConnector { transport: transport.clone(), idle: config.idle_timeout };
+        let connector = SshConnector {
+            transport: transport.clone(),
+            idle: config.idle_timeout,
+        };
         let shared = Arc::new(Shared {
             transport,
             pool: Pool::new(connector, config.verify_after, config.pool_idle),
@@ -157,7 +169,10 @@ impl RemoteFs {
         Self { tx }
     }
 
-    fn submit<T: Send + 'static>(&self, f: impl FnOnce(&Shared) -> Result<T, Error> + Send + 'static) -> Reply<T> {
+    fn submit<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Shared) -> Result<T, Error> + Send + 'static,
+    ) -> Reply<T> {
         let (tx, rx) = channel();
         let _ = self.tx.send(Box::new(move |sh: &Shared| {
             let _ = tx.send(f(sh));
@@ -169,7 +184,9 @@ impl RemoteFs {
     pub fn list_dir(&self, url: &Url, cancel: &Cancel) -> Receiver<ListEvent> {
         let (tx, rx) = channel();
         let (url, cancel) = (url.clone(), cancel.clone());
-        let _ = self.tx.send(Box::new(move |sh: &Shared| list_job(sh, &url, &cancel, &tx)));
+        let _ = self.tx.send(Box::new(move |sh: &Shared| {
+            list_job(sh, &url, &cancel, &tx)
+        }));
         rx
     }
 
@@ -186,7 +203,10 @@ impl RemoteFs {
             let out = sh.transport.run_checked(&key, shell::HOME, "~", sh.idle)?;
             let home = String::from_utf8_lossy(&out).trim().to_string();
             if !home.starts_with('/') {
-                return Err(Error::Remote { status: 0, message: "unexpected HOME value".into() });
+                return Err(Error::Remote {
+                    status: 0,
+                    message: "unexpected HOME value".into(),
+                });
             }
             let mut resolved = url.clone();
             resolved.path = home;
@@ -198,7 +218,12 @@ impl RemoteFs {
         let url = url.clone();
         self.submit(move |sh| {
             check_mutable(&url)?;
-            mutate(sh, &url, &shell::mkdir(&url.remote_path()), &url.remote_path())
+            mutate(
+                sh,
+                &url,
+                &shell::mkdir(&url.remote_path()),
+                &url.remote_path(),
+            )
         })
     }
 
@@ -206,7 +231,12 @@ impl RemoteFs {
         let url = url.clone();
         self.submit(move |sh| {
             check_mutable(&url)?;
-            mutate(sh, &url, &shell::remove(&url.remote_path(), recursive), &url.remote_path())
+            mutate(
+                sh,
+                &url,
+                &shell::remove(&url.remote_path(), recursive),
+                &url.remote_path(),
+            )
         })
     }
 
@@ -218,7 +248,12 @@ impl RemoteFs {
             if from.conn_key() != to.conn_key() || from.protocol != to.protocol {
                 return Err(Error::UnsupportedProtocol("cross-host rename"));
             }
-            mutate(sh, &from, &shell::rename(&from.remote_path(), &to.remote_path()), &from.remote_path())?;
+            mutate(
+                sh,
+                &from,
+                &shell::rename(&from.remote_path(), &to.remote_path()),
+                &from.remote_path(),
+            )?;
             invalidate_both(sh, &to);
             Ok(())
         })
@@ -268,7 +303,9 @@ impl RemoteFs {
 
     pub fn invalidate(&self, url: &Url) {
         let url = url.clone();
-        let _ = self.tx.send(Box::new(move |sh: &Shared| invalidate_both(sh, &url)));
+        let _ = self
+            .tx
+            .send(Box::new(move |sh: &Shared| invalidate_both(sh, &url)));
     }
 }
 
@@ -301,15 +338,23 @@ fn invalidate_both(sh: &Shared, url: &Url) {
 fn check_mutable(url: &Url) -> Result<(), Error> {
     let p = url.remote_path();
     let trimmed = p.trim_end_matches('/');
-    if matches!(trimmed, "" | "~" | "." | "..") || trimmed.ends_with("/.") || trimmed.ends_with("/..") {
-        return Err(Error::InvalidUrl("refusing to modify root, home or a relative special path".into()));
+    if matches!(trimmed, "" | "~" | "." | "..")
+        || trimmed.ends_with("/.")
+        || trimmed.ends_with("/..")
+    {
+        return Err(Error::InvalidUrl(
+            "refusing to modify root, home or a relative special path".into(),
+        ));
     }
     Ok(())
 }
 
 fn mutate(sh: &Shared, url: &Url, cmd: &str, path: &str) -> Result<(), Error> {
     let key = ensure(sh, url)?;
-    let r = sh.transport.run_checked(&key, cmd, path, sh.idle).map(|_| ());
+    let r = sh
+        .transport
+        .run_checked(&key, cmd, path, sh.idle)
+        .map(|_| ());
     let r = on_err(sh, &key, r);
     if r.is_ok() {
         invalidate_both(sh, url);
@@ -320,10 +365,18 @@ fn mutate(sh: &Shared, url: &Url, cmd: &str, path: &str) -> Result<(), Error> {
 fn stat_entry(sh: &Shared, url: &Url) -> Result<Entry, Error> {
     let key = ensure(sh, url)?;
     let path = url.remote_path();
-    let out = on_err(sh, &key, sh.transport.run_checked(&key, &shell::stat(&path), &path, sh.idle))?;
+    let out = on_err(
+        sh,
+        &key,
+        sh.transport
+            .run_checked(&key, &shell::stat(&path), &path, sh.idle),
+    )?;
     let text = String::from_utf8_lossy(&out);
     let line = text.lines().next().unwrap_or("");
-    let mut e = parse_ls_numeric(line).ok_or_else(|| Error::Remote { status: 0, message: "unparseable stat".into() })?;
+    let mut e = parse_ls_numeric(line).ok_or_else(|| Error::Remote {
+        status: 0,
+        message: "unparseable stat".into(),
+    })?;
     e.name = url.file_name().to_string();
     Ok(e)
 }
@@ -352,10 +405,17 @@ fn list_job(sh: &Shared, url: &Url, cancel: &Cancel, tx: &Sender<ListEvent>) {
     }
 }
 
-fn list_stream(sh: &Shared, url: &Url, cancel: &Cancel, tx: &Sender<ListEvent>) -> Result<Vec<Entry>, Error> {
+fn list_stream(
+    sh: &Shared,
+    url: &Url,
+    cancel: &Cancel,
+    tx: &Sender<ListEvent>,
+) -> Result<Vec<Entry>, Error> {
     let key = ensure(sh, url)?;
     let path = url.remote_path();
-    let mut proc = sh.transport.spawn(&key, &shell::list_with_links(&path), false)?;
+    let mut proc = sh
+        .transport
+        .spawn(&key, &shell::list_with_links(&path), false)?;
     let mut all = Vec::new();
     let mut page = Vec::new();
     let mut carry: Vec<u8> = Vec::new();
@@ -375,7 +435,9 @@ fn list_stream(sh: &Shared, url: &Url, cancel: &Cancel, tx: &Sender<ListEvent>) 
                 if links.is_none() {
                     links = split_link_prefix(&mut carry);
                 }
-                let Some(known) = links.as_ref() else { continue };
+                let Some(known) = links.as_ref() else {
+                    continue;
+                };
                 while let Some(pos) = carry.iter().position(|&b| b == b'\n') {
                     let line = String::from_utf8_lossy(&carry[..pos]).into_owned();
                     carry.drain(..=pos);
@@ -450,7 +512,13 @@ fn mark_link_dir(mut entry: Entry, dir_links: &HashSet<String>) -> Entry {
     entry
 }
 
-fn download_job(sh: &Shared, url: &Url, local: &Path, cancel: &Cancel, tx: &Sender<TransferEvent>) -> Result<u64, Error> {
+fn download_job(
+    sh: &Shared,
+    url: &Url,
+    local: &Path,
+    cancel: &Cancel,
+    tx: &Sender<TransferEvent>,
+) -> Result<u64, Error> {
     let key = ensure(sh, url)?;
     let path = url.remote_path();
     let total = stat_entry(sh, url).ok().map(|e| e.size);
@@ -502,18 +570,31 @@ fn download_job(sh: &Shared, url: &Url, local: &Path, cancel: &Cancel, tx: &Send
 }
 
 fn part_name(local: &Path) -> PathBuf {
-    let name = local.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = local
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     local.with_file_name(format!("{name}.flamewm-part"))
 }
 
-fn upload_job(sh: &Shared, local: &Path, url: &Url, cancel: &Cancel, tx: &Sender<TransferEvent>) -> Result<u64, Error> {
+fn upload_job(
+    sh: &Shared,
+    local: &Path,
+    url: &Url,
+    cancel: &Cancel,
+    tx: &Sender<TransferEvent>,
+) -> Result<u64, Error> {
     let key = ensure(sh, url)?;
     let dst = url.remote_path();
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
     let tmp = format!("{dst}.flamewm-part-{}-{nanos:x}", std::process::id());
     let total = std::fs::metadata(local)?.len();
     let mut src = File::open(local)?;
-    let mut proc = sh.transport.spawn(&key, &shell::write_atomic(&tmp, &dst), true)?;
+    let mut proc = sh
+        .transport
+        .spawn(&key, &shell::write_atomic(&tmp, &dst), true)?;
     let mut buf = vec![0u8; COPY_BLOCK];
     let mut done = 0u64;
     let mut write_failed = false;
@@ -533,7 +614,10 @@ fn upload_job(sh: &Shared, local: &Path, url: &Url, cancel: &Cancel, tx: &Sender
                 break;
             }
             done += n as u64;
-            let _ = tx.send(TransferEvent::Progress { done, total: Some(total) });
+            let _ = tx.send(TransferEvent::Progress {
+                done,
+                total: Some(total),
+            });
         }
         Ok(())
     })();
@@ -543,7 +627,12 @@ fn upload_job(sh: &Shared, local: &Path, url: &Url, cancel: &Cancel, tx: &Sender
         return Ok(done);
     }
     // Best-effort cleanup of the remote temp file; the original destination is untouched.
-    let _ = sh.transport.run(&key, &shell::remove(&tmp, false), sh.idle, &Cancel::default());
+    let _ = sh.transport.run(
+        &key,
+        &shell::remove(&tmp, false),
+        sh.idle,
+        &Cancel::default(),
+    );
     result?;
     Err(classify(status, &stderr, &key, &dst))
 }
@@ -556,17 +645,30 @@ fn probe_host_key(sh: &Shared, url: &Url) -> Result<HostKeyPrompt, Error> {
         .output()
         .map_err(|e| Error::Io(format!("cannot run ssh-keyscan: {e}")))?;
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    let (key_type, line) = pick_host_key(&text).ok_or_else(|| Error::ConnectionLost("no host key offered".into()))?;
+    let (key_type, line) =
+        pick_host_key(&text).ok_or_else(|| Error::ConnectionLost("no host key offered".into()))?;
     let fp = fingerprint(&sh.keygen, &line)?;
-    Ok(HostKeyPrompt { host, port, key_type, fingerprint_sha256: fp, known_hosts_line: line })
+    Ok(HostKeyPrompt {
+        host,
+        port,
+        key_type,
+        fingerprint_sha256: fp,
+        known_hosts_line: line,
+    })
 }
 
 /// Prefer ed25519, then ecdsa, then rsa, from `ssh-keyscan` output.
 #[must_use]
 pub fn pick_host_key(scan_output: &str) -> Option<(String, String)> {
-    let lines: Vec<&str> = scan_output.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()).collect();
+    let lines: Vec<&str> = scan_output
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .collect();
     for want in ["ssh-ed25519", "ecdsa-sha2-nistp256", "ssh-rsa"] {
-        if let Some(l) = lines.iter().find(|l| l.split_whitespace().nth(1) == Some(want)) {
+        if let Some(l) = lines
+            .iter()
+            .find(|l| l.split_whitespace().nth(1) == Some(want))
+        {
             return Some((want.to_string(), (*l).to_string()));
         }
     }
@@ -606,14 +708,27 @@ fn trust_host_key(prompt: &HostKeyPrompt) -> Result<(), Error> {
         ensure_private_dir(dir)?;
     }
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    if existing.lines().any(|l| l.trim() == prompt.known_hosts_line.trim()) {
+    if existing
+        .lines()
+        .any(|l| l.trim() == prompt.known_hosts_line.trim())
+    {
         return Ok(());
     }
-    if existing.lines().any(|l| l.split_whitespace().next() == prompt.known_hosts_line.split_whitespace().next()) {
+    if existing
+        .lines()
+        .any(|l| l.split_whitespace().next() == prompt.known_hosts_line.split_whitespace().next())
+    {
         // Same host name with a different key: never replace automatically.
-        return Err(Error::HostKeyChanged { host: prompt.host.clone(), port: prompt.port });
+        return Err(Error::HostKeyChanged {
+            host: prompt.host.clone(),
+            port: prompt.port,
+        });
     }
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(&path)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(&path)?;
     writeln!(f, "{}", prompt.known_hosts_line.trim_end())?;
     Ok(())
 }
@@ -626,7 +741,10 @@ mod tests {
     fn link_prefix_splits_names_before_the_marker_and_keeps_rows() {
         let mut carry = b"dirlink\0other link\0\x1e\n-rw-r--r-- 1 0 0 3 1700000000 file\n".to_vec();
         let names = split_link_prefix(&mut carry).expect("marker present");
-        assert_eq!(names, HashSet::from(["dirlink".to_string(), "other link".to_string()]));
+        assert_eq!(
+            names,
+            HashSet::from(["dirlink".to_string(), "other link".to_string()])
+        );
         assert_eq!(carry, b"-rw-r--r-- 1 0 0 3 1700000000 file\n");
     }
 
@@ -642,11 +760,25 @@ mod tests {
     #[test]
     fn only_symlinks_named_in_the_prefix_become_directories() {
         let names = HashSet::from(["sub".to_string()]);
-        let link = Entry { name: "sub".into(), kind: Kind::Symlink, size: 4, mtime: 0, mode: 0o777, link_target: Some("real".into()) };
+        let link = Entry {
+            name: "sub".into(),
+            kind: Kind::Symlink,
+            size: 4,
+            mtime: 0,
+            mode: 0o777,
+            link_target: Some("real".into()),
+        };
         assert_eq!(mark_link_dir(link.clone(), &names).kind, Kind::Dir);
-        let other = Entry { name: "other".into(), ..link.clone() };
+        let other = Entry {
+            name: "other".into(),
+            ..link.clone()
+        };
         assert_eq!(mark_link_dir(other, &names).kind, Kind::Symlink);
-        let file = Entry { name: "sub".into(), kind: Kind::File, ..link };
+        let file = Entry {
+            name: "sub".into(),
+            kind: Kind::File,
+            ..link
+        };
         assert_eq!(mark_link_dir(file, &names).kind, Kind::File);
     }
 }

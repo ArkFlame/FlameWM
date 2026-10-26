@@ -793,24 +793,29 @@ fn bench_fixture() -> RuntimeDocument {
         active_style: None,
     }];
     let mut parents = vec![None];
-    let push = |nodes: &mut Vec<CompiledNode>, parents: &mut Vec<Option<u32>>, node: CompiledNode, parent: Option<u32>| -> u32 {
+    let push = |nodes: &mut Vec<CompiledNode>,
+                parents: &mut Vec<Option<u32>>,
+                node: CompiledNode,
+                parent: Option<u32>|
+     -> u32 {
         nodes.push(node);
         parents.push(parent);
         (nodes.len() - 1) as u32
     };
-    let plain = |id: String, kind: NodeKind, image: Option<u16>, style: Style, text: &str| CompiledNode {
-        kind,
-        parent: None,
-        first_child: None,
-        next_sibling: None,
-        id: id.into(),
-        action: std::borrow::Cow::Borrowed(""),
-        text: text.to_string().into(),
-        image,
-        style,
-        hover_style: None,
-        active_style: None,
-    };
+    let plain =
+        |id: String, kind: NodeKind, image: Option<u16>, style: Style, text: &str| CompiledNode {
+            kind,
+            parent: None,
+            first_child: None,
+            next_sibling: None,
+            id: id.into(),
+            action: std::borrow::Cow::Borrowed(""),
+            text: text.to_string().into(),
+            image,
+            style,
+            hover_style: None,
+            active_style: None,
+        };
     let absolute = |left: f32, top: f32, width: f32, height: f32| Style {
         position: Position::Absolute,
         left: Length::Px(left),
@@ -822,7 +827,13 @@ fn bench_fixture() -> RuntimeDocument {
     push(
         &mut nodes,
         &mut parents,
-        plain("wall".into(), NodeKind::Image, Some(0), absolute(0.0, 0.0, 1280.0, 800.0), ""),
+        plain(
+            "wall".into(),
+            NodeKind::Image,
+            Some(0),
+            absolute(0.0, 0.0, 1280.0, 800.0),
+            "",
+        ),
         Some(0),
     );
     for row in 0..4u32 {
@@ -831,13 +842,25 @@ fn bench_fixture() -> RuntimeDocument {
             let icon = push(
                 &mut nodes,
                 &mut parents,
-                plain(format!("icon-{row}-{col}"), NodeKind::Image, Some(1), absolute(x + 40.0, y, 48.0, 48.0), ""),
+                plain(
+                    format!("icon-{row}-{col}"),
+                    NodeKind::Image,
+                    Some(1),
+                    absolute(x + 40.0, y, 48.0, 48.0),
+                    "",
+                ),
                 Some(0),
             );
             let label = push(
                 &mut nodes,
                 &mut parents,
-                plain(format!("label-{row}-{col}"), NodeKind::Element, None, absolute(x, y + 56.0, 128.0, 20.0), ""),
+                plain(
+                    format!("label-{row}-{col}"),
+                    NodeKind::Element,
+                    None,
+                    absolute(x, y + 56.0, 128.0, 20.0),
+                    "",
+                ),
                 Some(0),
             );
             let text_style = Style {
@@ -846,14 +869,25 @@ fn bench_fixture() -> RuntimeDocument {
                     offset_x: 1.0,
                     offset_y: 1.0,
                     blur_radius: 2.0,
-                    color: ColorValue::Literal(Color { r: 0, g: 0, b: 0, a: 160 }),
+                    color: ColorValue::Literal(Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 160,
+                    }),
                 }),
                 ..Style::default()
             };
             push(
                 &mut nodes,
                 &mut parents,
-                plain(format!("text-{row}-{col}"), NodeKind::Text, None, text_style, "Item label"),
+                plain(
+                    format!("text-{row}-{col}"),
+                    NodeKind::Text,
+                    None,
+                    text_style,
+                    "Item label",
+                ),
                 Some(label),
             );
             let _ = icon;
@@ -862,7 +896,13 @@ fn bench_fixture() -> RuntimeDocument {
     push(
         &mut nodes,
         &mut parents,
-        plain("sel".into(), NodeKind::Element, None, absolute(100.0, 100.0, 220.0, 150.0), ""),
+        plain(
+            "sel".into(),
+            NodeKind::Element,
+            None,
+            absolute(100.0, 100.0, 220.0, 150.0),
+            "",
+        ),
         Some(0),
     );
     // Link children in document order: first_child is the first node whose parent is `p`.
@@ -870,7 +910,9 @@ fn bench_fixture() -> RuntimeDocument {
         let parent = parents[index];
         nodes[index].parent = parent;
         if let Some(p) = parent {
-            let siblings: Vec<usize> = (0..nodes.len()).filter(|&j| parents[j] == Some(p)).collect();
+            let siblings: Vec<usize> = (0..nodes.len())
+                .filter(|&j| parents[j] == Some(p))
+                .collect();
             let pos = siblings.iter().position(|&j| j == index).expect("sibling");
             nodes[index].next_sibling = siblings.get(pos + 1).map(|&j| j as u32);
             if pos == 0 {
@@ -887,22 +929,44 @@ fn bench_fixture() -> RuntimeDocument {
                 source: "wall.png".into(),
                 width: 8,
                 height: 8,
-                pixels: (0..64u32).flat_map(|i| [(i * 4) as u8, 90, 160, 255]).collect::<Vec<u8>>().into(),
+                pixels: (0..64u32)
+                    .flat_map(|i| [(i * 4) as u8, 90, 160, 255])
+                    .collect::<Vec<u8>>()
+                    .into(),
             },
             ImageAsset {
                 source: "icon.png".into(),
                 width: 8,
                 height: 8,
-                pixels: (0..64u32).flat_map(|i| [(i * 4) as u8, 200, 90, 128]).collect::<Vec<u8>>().into(),
+                pixels: (0..64u32)
+                    .flat_map(|i| [(i * 4) as u8, 200, 90, 128])
+                    .collect::<Vec<u8>>()
+                    .into(),
             },
         ],
         nodes,
     })
     .expect("bench fixture validates");
-    doc.set_background_color("root", Color { r: 40, g: 44, b: 52, a: 204 })
-        .expect("translucent root");
-    doc.set_background_color("sel", Color { r: 60, g: 120, b: 220, a: 100 })
-        .expect("translucent selection");
+    doc.set_background_color(
+        "root",
+        Color {
+            r: 40,
+            g: 44,
+            b: 52,
+            a: 204,
+        },
+    )
+    .expect("translucent root");
+    doc.set_background_color(
+        "sel",
+        Color {
+            r: 60,
+            g: 120,
+            b: 220,
+            a: 100,
+        },
+    )
+    .expect("translucent selection");
     doc
 }
 
@@ -929,13 +993,16 @@ fn selection_overlay_drag_full_vs_region_timing() {
             full.redraw(&doc_full).expect("full warm-up");
             region.redraw(&doc_region).expect("region warm-up");
             let steps = 200u32;
-            let (mut full_time, mut region_time) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+            let (mut full_time, mut region_time) =
+                (std::time::Duration::ZERO, std::time::Duration::ZERO);
             let mut region_frames = 0u32;
             for step in 0..steps {
                 let x = 100.0 + (step % 300) as f32;
                 let y = 100.0 + (step % 40) as f32;
                 doc_full.set_position_px("sel", x, y).expect("full move");
-                doc_region.set_position_px("sel", x, y).expect("region move");
+                doc_region
+                    .set_position_px("sel", x, y)
+                    .expect("region move");
                 let t = std::time::Instant::now();
                 full.redraw(&doc_full).expect("full redraw");
                 full_time += t.elapsed();

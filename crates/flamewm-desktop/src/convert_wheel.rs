@@ -62,7 +62,10 @@ pub fn highlight_pixels(sector: usize, accent: [u8; 3]) -> Vec<u8> {
         return pixels;
     }
     for (out, hits) in pixels.chunks_exact_mut(4).zip(sector_samples()) {
-        let count = hits.iter().filter(|hit| usize::from(**hit) == sector).count();
+        let count = hits
+            .iter()
+            .filter(|hit| usize::from(**hit) == sector)
+            .count();
         if count != 0 {
             out[..3].copy_from_slice(&accent);
             out[3] = (count * 23) as u8;

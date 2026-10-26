@@ -1,21 +1,27 @@
 //! Grid composition: pane rows composed into window rows, the grid frame, run overlays and the cursor shape.
 
-use std::sync::Arc;
+use super::layout::Rect;
+use super::{App, View};
 use crate::glyphs::Arm;
+use crate::screen::CursorShape;
 use crate::view::GridOptions;
 use crate::view::Row;
 use crate::view::Run;
-use crate::screen::CursorShape;
-use super::{App, View};
-use super::layout::Rect;
+use std::sync::Arc;
 
 /// A pane's runs moved to its column, with the cells past its right edge dropped.
 fn place_runs(line: &[Run], rect: Rect) -> impl Iterator<Item = Run> + '_ {
-    line.iter().filter(move |run| run.col < rect.cols).map(move |run| {
-        let mut run = if run.col + run.cells > rect.cols { clip(run, 0, rect.cols - run.col) } else { run.clone() };
-        run.col += rect.x0;
-        run
-    })
+    line.iter()
+        .filter(move |run| run.col < rect.cols)
+        .map(move |run| {
+            let mut run = if run.col + run.cells > rect.cols {
+                clip(run, 0, rect.cols - run.col)
+            } else {
+                run.clone()
+            };
+            run.col += rect.x0;
+            run
+        })
 }
 
 /// A grid row composed from the pane rows that cover it, kept with those inputs.
@@ -27,11 +33,18 @@ pub(super) struct GridRow {
 
 /// Whether two input lists compose to the same row: the same pane-row allocations at the same rectangles.
 fn same_inputs(old: &[(Row, Rect)], new: &[(Row, Rect)]) -> bool {
-    old.len() == new.len() && old.iter().zip(new).all(|((a, ra), (b, rb))| Arc::ptr_eq(a, b) && ra == rb)
+    old.len() == new.len()
+        && old
+            .iter()
+            .zip(new)
+            .all(|((a, ra), (b, rb))| Arc::ptr_eq(a, b) && ra == rb)
 }
 
 fn compose_row(inputs: &[(Row, Rect)]) -> Row {
-    inputs.iter().flat_map(|(line, rect)| place_runs(line, *rect)).collect()
+    inputs
+        .iter()
+        .flat_map(|(line, rect)| place_runs(line, *rect))
+        .collect()
 }
 
 /// Replaces cells `[col, col + width)` of a row with `menu`, keeping the runs on either side.
@@ -55,8 +68,18 @@ pub(super) fn overlay(row: Vec<Run>, col: usize, width: usize, menu: Run) -> Vec
 /// The part of `run` between cells `from` and `to` (relative to the run). Text is cut by character, one per cell.
 fn clip(run: &Run, from: usize, to: usize) -> Run {
     let text = run.text.chars().skip(from).take(to - from).collect();
-    let shape = run.shape.map(|arm| Arm { x0: (arm.x0 - from as f32).max(0.0), x1: (arm.x1 - from as f32).min((to - from) as f32), ..arm });
-    Run { col: run.col + from, cells: to - from, text, shape, ..run.clone() }
+    let shape = run.shape.map(|arm| Arm {
+        x0: (arm.x0 - from as f32).max(0.0),
+        x1: (arm.x1 - from as f32).min((to - from) as f32),
+        ..arm
+    });
+    Run {
+        col: run.col + from,
+        cells: to - from,
+        text,
+        shape,
+        ..run.clone()
+    }
 }
 
 impl App {
@@ -88,8 +111,17 @@ impl App {
                 }
             }
             View::Settings(settings) => {
-                let palette = settings.preview().cloned().unwrap_or_else(|| self.palette.clone());
-                let body = settings.render(self.cols, self.grid_rows, &self.themes, &palette, &self.config);
+                let palette = settings
+                    .preview()
+                    .cloned()
+                    .unwrap_or_else(|| self.palette.clone());
+                let body = settings.render(
+                    self.cols,
+                    self.grid_rows,
+                    &self.themes,
+                    &palette,
+                    &self.config,
+                );
                 rows.extend(body.into_iter().map(Row::from));
             }
         }
@@ -106,7 +138,9 @@ impl App {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             let focused = tab.focused;
             for (id, rect) in tab.root.rects(grid_rect) {
-                let Some(pane) = tab.root.pane_mut(id) else { continue };
+                let Some(pane) = tab.root.pane_mut(id) else {
+                    continue;
+                };
                 let options = GridOptions {
                     view_offset: pane.view_offset,
                     selection: pane.selection,
@@ -115,7 +149,12 @@ impl App {
                     cursor_shape,
                 };
                 let entry = cache.entry(id).or_default();
-                for (offset, line) in entry.update(&mut pane.session.screen, &self.palette, &options).iter().enumerate().take(rect.rows) {
+                for (offset, line) in entry
+                    .update(&mut pane.session.screen, &self.palette, &options)
+                    .iter()
+                    .enumerate()
+                    .take(rect.rows)
+                {
                     if let Some(target) = inputs.get_mut(rect.y0 + offset) {
                         target.push((line.clone(), rect));
                     }
@@ -128,7 +167,10 @@ impl App {
             .into_iter()
             .map(|row_inputs| match previous.next() {
                 Some(old) if same_inputs(&old.inputs, &row_inputs) => old,
-                _ => GridRow { row: compose_row(&row_inputs), inputs: row_inputs },
+                _ => GridRow {
+                    row: compose_row(&row_inputs),
+                    inputs: row_inputs,
+                },
             })
             .collect();
         let grid = composed.iter().map(|entry| entry.row.clone()).collect();

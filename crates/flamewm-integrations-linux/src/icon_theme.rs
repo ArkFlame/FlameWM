@@ -224,7 +224,6 @@ impl NameMemo {
     }
 }
 
-
 impl IconThemeIndex {
     #[must_use]
     pub fn parse(name: &str, text: &str) -> Self {

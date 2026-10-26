@@ -249,7 +249,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         if !is_escape_chord(&action) {
             return Ok(());
         }
-        if matches!(action.as_str(), ACTION_SHOW_DESKTOP | ACTION_SHOW_DESKTOP_CTRL_ALT) {
+        if matches!(
+            action.as_str(),
+            ACTION_SHOW_DESKTOP | ACTION_SHOW_DESKTOP_CTRL_ALT
+        ) {
             let Ok(cookie) = self.conn.query_pointer(root) else {
                 return Ok(());
             };
@@ -318,12 +321,27 @@ mod tests {
         assert!(!show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, 0));
         assert!(!show_desktop_chord_is_down(ACTION_SHOW_DESKTOP_CTRL_ALT, 0));
         assert!(!show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, MOD_ALT));
-        assert!(!show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, MOD_SUPER | MOD_ALT));
+        assert!(!show_desktop_chord_is_down(
+            ACTION_SHOW_DESKTOP,
+            MOD_SUPER | MOD_ALT
+        ));
         assert!(show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, MOD_SUPER));
-        assert!(show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, MOD_SUPER | MOD_LOCK));
-        assert!(show_desktop_chord_is_down(ACTION_SHOW_DESKTOP, MOD_SUPER | MOD_NUM_LOCK | 0x100));
-        assert!(show_desktop_chord_is_down(ACTION_SHOW_DESKTOP_CTRL_ALT, MOD_CONTROL | MOD_ALT));
-        assert!(!show_desktop_chord_is_down(ACTION_SHOW_DESKTOP_CTRL_ALT, MOD_CONTROL));
+        assert!(show_desktop_chord_is_down(
+            ACTION_SHOW_DESKTOP,
+            MOD_SUPER | MOD_LOCK
+        ));
+        assert!(show_desktop_chord_is_down(
+            ACTION_SHOW_DESKTOP,
+            MOD_SUPER | MOD_NUM_LOCK | 0x100
+        ));
+        assert!(show_desktop_chord_is_down(
+            ACTION_SHOW_DESKTOP_CTRL_ALT,
+            MOD_CONTROL | MOD_ALT
+        ));
+        assert!(!show_desktop_chord_is_down(
+            ACTION_SHOW_DESKTOP_CTRL_ALT,
+            MOD_CONTROL
+        ));
     }
 
     #[test]

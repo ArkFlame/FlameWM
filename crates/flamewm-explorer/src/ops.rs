@@ -30,7 +30,12 @@ pub enum Verdict {
 
 /// Validates an operation. `dest` is the target directory for `Move`/`Copy`; `dest_writable`
 /// is the caller's access check for that directory.
-pub fn validate(kind: Kind, sources: &[Source], dest: Option<&Path>, dest_writable: bool) -> Verdict {
+pub fn validate(
+    kind: Kind,
+    sources: &[Source],
+    dest: Option<&Path>,
+    dest_writable: bool,
+) -> Verdict {
     let mut seen: Vec<&Path> = Vec::new();
     let mut kept: Vec<PathBuf> = Vec::new();
     for source in sources {
@@ -83,13 +88,21 @@ mod tests {
     use super::*;
 
     fn src(path: &str, is_dir: bool) -> Source {
-        Source { path: PathBuf::from(path), exists: true, is_dir }
+        Source {
+            path: PathBuf::from(path),
+            exists: true,
+            is_dir,
+        }
     }
 
     #[test]
     fn empty_and_missing_sources_are_noops() {
         assert_eq!(validate(Kind::Trash, &[], None, true), Verdict::NoOp);
-        let gone = Source { path: "/x/a".into(), exists: false, is_dir: false };
+        let gone = Source {
+            path: "/x/a".into(),
+            exists: false,
+            is_dir: false,
+        };
         assert_eq!(validate(Kind::Delete, &[gone], None, true), Verdict::NoOp);
     }
 
@@ -105,7 +118,10 @@ mod tests {
     #[test]
     fn move_into_same_parent_is_noop_but_copy_is_kept() {
         let sources = [src("/x/a", false)];
-        assert_eq!(validate(Kind::Move, &sources, Some(Path::new("/x")), true), Verdict::NoOp);
+        assert_eq!(
+            validate(Kind::Move, &sources, Some(Path::new("/x")), true),
+            Verdict::NoOp
+        );
         // Copy into the same folder is allowed; the caller keeps both names.
         assert_eq!(
             validate(Kind::Copy, &sources, Some(Path::new("/x")), true),
@@ -126,7 +142,10 @@ mod tests {
         );
         // A file whose name merely prefixes the destination is not a descendant.
         let file = [src("/x/dir", false)];
-        assert_eq!(validate(Kind::Move, &file, Some(Path::new("/x/dir2")), true), Verdict::Run(vec!["/x/dir".into()]));
+        assert_eq!(
+            validate(Kind::Move, &file, Some(Path::new("/x/dir2")), true),
+            Verdict::Run(vec!["/x/dir".into()])
+        );
     }
 
     #[test]
@@ -136,7 +155,10 @@ mod tests {
             validate(Kind::Copy, &sources, Some(Path::new("/ro")), false),
             Verdict::Refuse("Destination is read-only")
         );
-        assert_eq!(validate(Kind::Trash, &sources, None, false), Verdict::Run(vec!["/x/a".into()]));
+        assert_eq!(
+            validate(Kind::Trash, &sources, None, false),
+            Verdict::Run(vec!["/x/a".into()])
+        );
     }
 
     #[test]

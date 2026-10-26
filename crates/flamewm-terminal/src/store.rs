@@ -29,12 +29,22 @@ pub fn parse_toml(text: &str) -> Result<Vec<Entry>, String> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if let Some(name) = line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
             section = name.trim().to_owned();
             continue;
         }
-        let (key, value) = line.split_once('=').ok_or_else(|| format!("line {}: expected key = value", number + 1))?;
-        entries.push(Entry { section: section.clone(), key: key.trim().to_owned(), value: parse_value(value.trim()).map_err(|error| format!("line {}: {error}", number + 1))? });
+        let (key, value) = line
+            .split_once('=')
+            .ok_or_else(|| format!("line {}: expected key = value", number + 1))?;
+        entries.push(Entry {
+            section: section.clone(),
+            key: key.trim().to_owned(),
+            value: parse_value(value.trim())
+                .map_err(|error| format!("line {}: {error}", number + 1))?,
+        });
     }
     Ok(entries)
 }
@@ -62,7 +72,10 @@ fn parse_value(raw: &str) -> Result<Value, String> {
     match bare {
         "true" => Ok(Value::Bool(true)),
         "false" => Ok(Value::Bool(false)),
-        _ => bare.parse::<i64>().map(Value::Int).map_err(|_| format!("unsupported value `{bare}`")),
+        _ => bare
+            .parse::<i64>()
+            .map(Value::Int)
+            .map_err(|_| format!("unsupported value `{bare}`")),
     }
 }
 
@@ -143,10 +156,20 @@ impl TerminalConfig {
             match (entry.key.as_str(), entry.value) {
                 ("theme", Value::Text(name)) => config.theme = name,
                 ("font_size", Value::Int(size)) => config.font_size = size.clamp(6, 40) as u16,
-                ("scrollback", Value::Int(lines)) => config.scrollback = lines.clamp(0, 1_000_000) as usize,
-                ("cursor_style", Value::Text(style)) if matches!(style.as_str(), "block" | "underline" | "bar") => config.cursor_style = style,
-                ("font_family", Value::Text(family)) if !family.trim().is_empty() => config.font_family = family,
-                ("background_opacity", Value::Int(percent)) => config.background_opacity = (percent.clamp(5, 100) / 5 * 5) as u8,
+                ("scrollback", Value::Int(lines)) => {
+                    config.scrollback = lines.clamp(0, 1_000_000) as usize
+                }
+                ("cursor_style", Value::Text(style))
+                    if matches!(style.as_str(), "block" | "underline" | "bar") =>
+                {
+                    config.cursor_style = style
+                }
+                ("font_family", Value::Text(family)) if !family.trim().is_empty() => {
+                    config.font_family = family
+                }
+                ("background_opacity", Value::Int(percent)) => {
+                    config.background_opacity = (percent.clamp(5, 100) / 5 * 5) as u8
+                }
                 _ => {}
             }
         }
@@ -155,12 +178,36 @@ impl TerminalConfig {
 
     pub fn to_toml(&self) -> String {
         write_toml(&[
-            Entry { section: String::new(), key: "theme".into(), value: Value::Text(self.theme.clone()) },
-            Entry { section: String::new(), key: "font_size".into(), value: Value::Int(i64::from(self.font_size)) },
-            Entry { section: String::new(), key: "scrollback".into(), value: Value::Int(self.scrollback as i64) },
-            Entry { section: String::new(), key: "cursor_style".into(), value: Value::Text(self.cursor_style.clone()) },
-            Entry { section: String::new(), key: "font_family".into(), value: Value::Text(self.font_family.clone()) },
-            Entry { section: String::new(), key: "background_opacity".into(), value: Value::Int(i64::from(self.background_opacity)) },
+            Entry {
+                section: String::new(),
+                key: "theme".into(),
+                value: Value::Text(self.theme.clone()),
+            },
+            Entry {
+                section: String::new(),
+                key: "font_size".into(),
+                value: Value::Int(i64::from(self.font_size)),
+            },
+            Entry {
+                section: String::new(),
+                key: "scrollback".into(),
+                value: Value::Int(self.scrollback as i64),
+            },
+            Entry {
+                section: String::new(),
+                key: "cursor_style".into(),
+                value: Value::Text(self.cursor_style.clone()),
+            },
+            Entry {
+                section: String::new(),
+                key: "font_family".into(),
+                value: Value::Text(self.font_family.clone()),
+            },
+            Entry {
+                section: String::new(),
+                key: "background_opacity".into(),
+                value: Value::Int(i64::from(self.background_opacity)),
+            },
         ])
     }
 }
@@ -186,14 +233,26 @@ pub fn slug(name: &str) -> String {
         }
     }
     let trimmed = out.trim_end_matches('-').to_owned();
-    if trimmed.is_empty() { "theme".into() } else { trimmed }
+    if trimmed.is_empty() {
+        "theme".into()
+    } else {
+        trimmed
+    }
 }
 
 /// Serialises a user theme. Every colour is written as `#rrggbb` under `[colors]`.
 pub fn theme_to_toml(theme: &Theme) -> String {
-    let mut entries = vec![Entry { section: String::new(), key: "name".into(), value: Value::Text(theme.name.clone()) }];
+    let mut entries = vec![Entry {
+        section: String::new(),
+        key: "name".into(),
+        value: Value::Text(theme.name.clone()),
+    }];
     for (name, value) in theme.palette.slots() {
-        entries.push(Entry { section: "colors".into(), key: name.into(), value: Value::Text(format_hex(value)) });
+        entries.push(Entry {
+            section: "colors".into(),
+            key: name.into(),
+            value: Value::Text(format_hex(value)),
+        });
     }
     write_toml(&entries)
 }
@@ -202,20 +261,31 @@ pub fn theme_from_toml(text: &str) -> Result<Theme, String> {
     let entries = parse_toml(text)?;
     let name = entries
         .iter()
-        .find_map(|entry| match (entry.section.as_str(), entry.key.as_str(), &entry.value) {
-            ("", "name", Value::Text(name)) if !name.trim().is_empty() => Some(name.trim().to_owned()),
-            _ => None,
-        })
+        .find_map(
+            |entry| match (entry.section.as_str(), entry.key.as_str(), &entry.value) {
+                ("", "name", Value::Text(name)) if !name.trim().is_empty() => {
+                    Some(name.trim().to_owned())
+                }
+                _ => None,
+            },
+        )
         .ok_or("theme file has no name")?;
     let mut palette = builtin_themes()[0].palette.clone();
     for entry in entries.iter().filter(|entry| entry.section == "colors") {
-        let Value::Text(hex) = &entry.value else { return Err(format!("colour `{}` must be a hex string", entry.key)) };
-        let value = parse_hex(hex).ok_or_else(|| format!("colour `{}` is not #rrggbb", entry.key))?;
+        let Value::Text(hex) = &entry.value else {
+            return Err(format!("colour `{}` must be a hex string", entry.key));
+        };
+        let value =
+            parse_hex(hex).ok_or_else(|| format!("colour `{}` is not #rrggbb", entry.key))?;
         if !palette.set_slot(&entry.key, value) {
             return Err(format!("unknown colour `{}`", entry.key));
         }
     }
-    Ok(Theme { name, palette, builtin: false })
+    Ok(Theme {
+        name,
+        palette,
+        builtin: false,
+    })
 }
 
 /// Read/write access to user themes in `dir`. Built-in themes are never written.
@@ -239,12 +309,18 @@ impl ThemeStore {
 
     /// User themes sorted by name. Unreadable files are skipped rather than hiding every other theme.
     pub fn user_themes(&self) -> Vec<Theme> {
-        let Ok(entries) = fs::read_dir(&self.dir) else { return Vec::new() };
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
         let mut themes: Vec<Theme> = entries
             .filter_map(Result::ok)
             .map(|entry| entry.path())
             .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
-            .filter_map(|path| fs::read_to_string(path).ok().and_then(|text| theme_from_toml(&text).ok()))
+            .filter_map(|path| {
+                fs::read_to_string(path)
+                    .ok()
+                    .and_then(|text| theme_from_toml(&text).ok())
+            })
             .collect();
         themes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         themes
@@ -259,7 +335,10 @@ impl ThemeStore {
 
     pub fn save(&self, theme: &Theme) -> io::Result<()> {
         if theme.builtin {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "built-in themes are read-only"));
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "built-in themes are read-only",
+            ));
         }
         fs::create_dir_all(&self.dir)?;
         fs::write(self.path_for(&theme.name), theme_to_toml(theme))
@@ -275,7 +354,11 @@ impl ThemeStore {
             name = format!("{base} {counter}");
             counter += 1;
         }
-        let theme = Theme { name, palette: source.palette.clone(), builtin: false };
+        let theme = Theme {
+            name,
+            palette: source.palette.clone(),
+            builtin: false,
+        };
         self.save(&theme)?;
         Ok(theme)
     }
@@ -288,13 +371,26 @@ impl ThemeStore {
     pub fn rename(&self, old: &str, new: &str) -> io::Result<()> {
         let new = new.trim();
         if new.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "theme name is empty"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "theme name is empty",
+            ));
         }
-        if self.all_themes().iter().any(|t| t.name == new && t.name != old) {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "theme name already exists"));
+        if self
+            .all_themes()
+            .iter()
+            .any(|t| t.name == new && t.name != old)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "theme name already exists",
+            ));
         }
         let Some(mut theme) = self.user_themes().into_iter().find(|t| t.name == old) else {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "no such user theme"));
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "no such user theme",
+            ));
         };
         theme.name = new.to_owned();
         self.save(&theme)?;
@@ -310,7 +406,10 @@ mod tests {
     use super::*;
 
     fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("flamewm-terminal-test-{}-{tag}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "flamewm-terminal-test-{}-{tag}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         dir
     }
@@ -318,9 +417,21 @@ mod tests {
     #[test]
     fn toml_subset_round_trips_strings_ints_bools_and_sections() {
         let entries = vec![
-            Entry { section: String::new(), key: "name".into(), value: Value::Text("a \"quoted\" \\ name".into()) },
-            Entry { section: "s".into(), key: "n".into(), value: Value::Int(-4) },
-            Entry { section: "s".into(), key: "flag".into(), value: Value::Bool(true) },
+            Entry {
+                section: String::new(),
+                key: "name".into(),
+                value: Value::Text("a \"quoted\" \\ name".into()),
+            },
+            Entry {
+                section: "s".into(),
+                key: "n".into(),
+                value: Value::Int(-4),
+            },
+            Entry {
+                section: "s".into(),
+                key: "flag".into(),
+                value: Value::Bool(true),
+            },
         ];
         let text = write_toml(&entries);
         assert_eq!(parse_toml(&text).unwrap(), entries);
@@ -337,11 +448,27 @@ mod tests {
     fn config_defaults_and_clamps() {
         let defaults = TerminalConfig::from_toml("").unwrap();
         assert_eq!(defaults, TerminalConfig::default());
-        let parsed = TerminalConfig::from_toml("theme = \"Nord\"\nfont_size = 99\nscrollback = 50\ncursor_style = \"bar\"\n").unwrap();
-        assert_eq!((parsed.theme.as_str(), parsed.font_size, parsed.scrollback, parsed.cursor_style.as_str()), ("Nord", 40, 50, "bar"));
+        let parsed = TerminalConfig::from_toml(
+            "theme = \"Nord\"\nfont_size = 99\nscrollback = 50\ncursor_style = \"bar\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                parsed.theme.as_str(),
+                parsed.font_size,
+                parsed.scrollback,
+                parsed.cursor_style.as_str()
+            ),
+            ("Nord", 40, 50, "bar")
+        );
         let round = TerminalConfig::from_toml(&parsed.to_toml()).unwrap();
         assert_eq!(round, parsed);
-        assert_eq!(TerminalConfig::from_toml("cursor_style = \"weird\"\n").unwrap().cursor_style, "block");
+        assert_eq!(
+            TerminalConfig::from_toml("cursor_style = \"weird\"\n")
+                .unwrap()
+                .cursor_style,
+            "block"
+        );
     }
 
     #[test]
@@ -368,7 +495,10 @@ mod tests {
         let dir = scratch("store");
         let store = ThemeStore::new(&dir);
         let builtins = builtin_themes();
-        assert!(store.save(&builtins[0]).is_err(), "built-in themes are read-only");
+        assert!(
+            store.save(&builtins[0]).is_err(),
+            "built-in themes are read-only"
+        );
 
         let copy = store.copy_of(&builtins[0]).unwrap();
         assert_eq!(copy.name, "Dark+ copy");
@@ -379,7 +509,10 @@ mod tests {
         store.rename("Dark+ copy", "Ocean").unwrap();
         assert!(store.user_themes().iter().any(|t| t.name == "Ocean"));
         assert!(!store.user_themes().iter().any(|t| t.name == "Dark+ copy"));
-        assert!(store.rename("Ocean", "Light+").is_err(), "cannot take a built-in name");
+        assert!(
+            store.rename("Ocean", "Light+").is_err(),
+            "cannot take a built-in name"
+        );
         assert!(store.rename("Ocean", "  ").is_err());
 
         store.delete("Ocean").unwrap();

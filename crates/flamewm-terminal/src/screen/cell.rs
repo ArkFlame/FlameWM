@@ -31,7 +31,12 @@ pub struct Cell {
 
 impl Cell {
     pub const fn blank(bg: Color) -> Self {
-        Self { ch: ' ', fg: Color::Default, bg, attrs: 0 }
+        Self {
+            ch: ' ',
+            fg: Color::Default,
+            bg,
+            attrs: 0,
+        }
     }
 }
 
@@ -41,7 +46,11 @@ pub type Line = Vec<Cell>;
 /// iterate to `line.len()` and the resize path pads history lines back to the column count.
 pub(super) fn compact_history(mut line: Line) -> Line {
     let blank = Cell::blank(Color::Default);
-    line.truncate(line.iter().rposition(|cell| *cell != blank).map_or(1, |last| last + 1));
+    line.truncate(
+        line.iter()
+            .rposition(|cell| *cell != blank)
+            .map_or(1, |last| last + 1),
+    );
     line.shrink_to_fit();
     line
 }

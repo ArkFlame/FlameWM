@@ -172,14 +172,7 @@ fn control_output_prefers_keyboard_focus_and_rejects_invalid_explicit_targets() 
         "an explicit stale target must not fall back to another panel"
     );
     assert_eq!(
-        super::resolve_control_output(
-            None,
-            &panel_outputs,
-            &connected,
-            None,
-            Some(&b),
-            &primary
-        ),
+        super::resolve_control_output(None, &panel_outputs, &connected, None, Some(&b), &primary),
         Some(b),
         "pointer is the fallback when no window is focused"
     );
@@ -392,12 +385,19 @@ fn stale_start_icons_project_once_while_open() {
             projections += 1;
         }
     }
-    assert_eq!(projections, 2, "one theme projection plus one app-set projection");
+    assert_eq!(
+        projections, 2,
+        "one theme projection plus one app-set projection"
+    );
     assert!(!stale, "the theme refresh consumes the stale flag");
 
     // A hidden Start keeps the flag until it is next projected on open.
     let mut hidden_stale = true;
-    assert!(!super::start_icon_refresh_due(&mut hidden_stale, true, false));
+    assert!(!super::start_icon_refresh_due(
+        &mut hidden_stale,
+        true,
+        false
+    ));
     assert!(hidden_stale);
 }
 

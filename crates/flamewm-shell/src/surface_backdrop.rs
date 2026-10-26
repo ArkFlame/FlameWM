@@ -74,8 +74,7 @@ pub fn solid_backdrop(color: (u8, u8, u8), rect: (i32, i32, u32, u32)) -> RgbaIm
     RgbaImage {
         width,
         height,
-        pixels: [color.0, color.1, color.2, 255]
-            .repeat(pixels / 4),
+        pixels: [color.0, color.1, color.2, 255].repeat(pixels / 4),
     }
 }
 

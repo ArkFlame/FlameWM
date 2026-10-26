@@ -18,7 +18,7 @@ pub mod transport;
 pub mod url;
 
 pub use cancel::Cancel;
-pub use client::{Config, HostKeyPrompt, ListEvent, Reply, RemoteFs, TransferEvent, pick_host_key};
+pub use client::{Config, HostKeyPrompt, ListEvent, RemoteFs, Reply, TransferEvent, pick_host_key};
 pub use entry::{Entry, Kind};
 pub use error::Error;
 pub use url::{Protocol, Url};

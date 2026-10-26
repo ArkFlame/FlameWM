@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::solid::{SolidColorBuffer, SolidColorRenderElement};
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
 };
-use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesTexture;
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
@@ -387,13 +387,24 @@ mod decoration_tests {
         let first = solid(decorations.element(7, Part::Titlebar, rect, TITLE_IDLE));
         let again = solid(decorations.element(7, Part::Titlebar, rect, TITLE_IDLE));
         assert_eq!(first.id(), again.id(), "same window part, same element");
-        assert_eq!(first.current_commit(), again.current_commit(), "unchanged: no damage");
+        assert_eq!(
+            first.current_commit(),
+            again.current_commit(),
+            "unchanged: no damage"
+        );
         let focused = solid(decorations.element(7, Part::Titlebar, rect, TITLE_FOCUSED));
         assert_eq!(focused.id(), first.id());
-        assert_ne!(focused.current_commit(), first.current_commit(), "a colour change is damage");
+        assert_ne!(
+            focused.current_commit(),
+            first.current_commit(),
+            "a colour change is damage"
+        );
         let button = solid(decorations.element(7, Part::Button(Button::Close), rect, BUTTON_CLOSE));
         assert_ne!(button.id(), first.id(), "each part has its own element");
         decorations.retain(|window| window != 7);
-        assert!(decorations.parts.is_empty(), "a closed window's fills are dropped");
+        assert!(
+            decorations.parts.is_empty(),
+            "a closed window's fills are dropped"
+        );
     }
 }

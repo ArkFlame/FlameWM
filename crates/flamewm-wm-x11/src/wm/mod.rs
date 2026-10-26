@@ -126,7 +126,7 @@ use flamewm_api::shortcuts::{
     ACTION_WINDOW_FULLSCREEN, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
     ACTION_WINDOW_RESIZE_GROW, ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH,
     ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
-    workspace_activate_index, workspace_move_index, focus_direction, move_direction,
+    focus_direction, move_direction, workspace_activate_index, workspace_move_index,
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{
@@ -1602,8 +1602,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         }) else {
             return;
         };
-        let identity =
-            flamewm_applications::WindowApplicationIdentity::new(&*instance, &*class, String::new());
+        let identity = flamewm_applications::WindowApplicationIdentity::new(
+            &*instance,
+            &*class,
+            String::new(),
+        );
         let Some(icon_name) = self
             .catalog
             .find_by_window_identity(&identity)
@@ -1939,7 +1942,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         state.set_outer(Rect::new(outer.x, y, outer.width, height as u32));
         if let Some(resources) = self.registry.lookup_by_client(client) {
             for xid in resources.children() {
-                if input_child_mapped(new, resources.region_of(xid), crate::live_settings::titlebars()) {
+                if input_child_mapped(
+                    new,
+                    resources.region_of(xid),
+                    crate::live_settings::titlebars(),
+                ) {
                     self.conn.map_window(xid)?;
                 } else {
                     self.conn.unmap_window(xid)?;
@@ -2010,7 +2017,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             let geometry = self
                 .controller_geometry
                 .fetch(client, children, regions, outputs);
-            (Rc::clone(&geometry.region_map), Rc::clone(&geometry.outputs))
+            (
+                Rc::clone(&geometry.region_map),
+                Rc::clone(&geometry.outputs),
+            )
         };
         let screen_rect = RootRect::new(
             0,

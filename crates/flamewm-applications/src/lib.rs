@@ -1,7 +1,9 @@
+mod directory_open;
 pub mod launch_feedback;
 pub mod terminal;
-mod directory_open;
-pub use directory_open::{DirectoryHandler, DirectorySpawner, decide_directory_handler, open_directory, route_directory};
+pub use directory_open::{
+    DirectoryHandler, DirectorySpawner, decide_directory_handler, open_directory, route_directory,
+};
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
 use flamewm_api::{DesktopAppId, ErrorCode, FlameError, FlameResult};
 use flamewm_session_core::{installed_kwallet_generations, resolve_kwallet_version};
@@ -507,8 +509,14 @@ fn is_repeat_open(
 pub fn open_target(target: &std::ffi::OsStr) -> FlameResult<()> {
     let now = std::time::Instant::now();
     {
-        let mut last = LAST_OPEN.lock().unwrap_or_else(|poison| poison.into_inner());
-        if is_repeat_open(last.as_ref().map(|(t, at)| (t.as_os_str(), *at)), target, now) {
+        let mut last = LAST_OPEN
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if is_repeat_open(
+            last.as_ref().map(|(t, at)| (t.as_os_str(), *at)),
+            target,
+            now,
+        ) {
             return Ok(());
         }
         *last = Some((target.to_os_string(), now));
@@ -784,11 +792,13 @@ fn browser_secret_version(program: &str, args: &[String]) -> FlameResult<Option<
     if helium {
         // Helium's portal/OSCrypt path is not assumed to be KWallet. Only an
         // explicit opt-in applies the KWallet contract to it.
-        return Ok(match std::env::var("FLAMEWM_HELIUM_PASSWORD_STORE").as_deref() {
-            Ok("kwallet6") => Some("6"),
-            Ok("kwallet5") => Some("5"),
-            _ => None,
-        });
+        return Ok(
+            match std::env::var("FLAMEWM_HELIUM_PASSWORD_STORE").as_deref() {
+                Ok("kwallet6") => Some("6"),
+                Ok("kwallet5") => Some("5"),
+                _ => None,
+            },
+        );
     }
     auto_wallet_version()
 }
@@ -1706,8 +1716,11 @@ mod browser_secret_tests {
     #[test]
     fn explicit_backend_is_preserved_and_never_forced() {
         assert_eq!(
-            browser_secret_version("brave-browser", &args(&["brave", "--password-store=kwallet6"]))
-                .unwrap(),
+            browser_secret_version(
+                "brave-browser",
+                &args(&["brave", "--password-store=kwallet6"])
+            )
+            .unwrap(),
             Some("6")
         );
         assert_eq!(
@@ -1716,8 +1729,11 @@ mod browser_secret_tests {
             None
         );
         assert_eq!(
-            browser_secret_version("brave-browser", &args(&["brave", "--password-store=gnome-libsecret"]))
-                .unwrap(),
+            browser_secret_version(
+                "brave-browser",
+                &args(&["brave", "--password-store=gnome-libsecret"])
+            )
+            .unwrap(),
             None
         );
     }

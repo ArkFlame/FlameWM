@@ -191,7 +191,9 @@ impl SurfaceRuntime {
         surface: SurfaceHandle,
         spans: Option<Vec<(u32, u32, u32)>>,
     ) -> Result<(), UiBackendError> {
-        self.controller.set_surface_shape_mask(surface.0, spans).map_err(Into::into)
+        self.controller
+            .set_surface_shape_mask(surface.0, spans)
+            .map_err(Into::into)
     }
 
     pub fn show(&mut self, surface: SurfaceHandle) -> Result<(), UiBackendError> {

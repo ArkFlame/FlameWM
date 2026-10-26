@@ -274,11 +274,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// `Super+V`: floating becomes the work-area fill ("pseudo-tile"), anything else returns
     /// to the remembered floating rect. There is no tiling engine to toggle against.
     pub(super) fn toggle_float(&mut self, client: Window) -> Result<(), ReplyError> {
-        match self
-            .clients
-            .get(&client)
-            .map(|state| state.placement.mode)
-        {
+        match self.clients.get(&client).map(|state| state.placement.mode) {
             Some(PlacementMode::Floating) => self.toggle_maximize(client),
             Some(_) => self.return_to_floating(client),
             None => Ok(()),
@@ -429,8 +425,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             .filter_map(|frame| self.frame_to_client.get(frame).copied())
             .filter(|client| {
                 self.clients.get(client).is_some_and(|state| {
-                    state.kind == WindowKind::Normal
-                        && state.visible_on(self.current_workspace)
+                    state.kind == WindowKind::Normal && state.visible_on(self.current_workspace)
                 })
             })
             .collect();

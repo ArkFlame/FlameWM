@@ -1,10 +1,10 @@
 mod damage;
+#[cfg(test)]
+mod damage_tests;
 mod document;
 mod geometry;
 mod interaction;
 mod style;
-#[cfg(test)]
-mod damage_tests;
 #[cfg(test)]
 mod tests;
 

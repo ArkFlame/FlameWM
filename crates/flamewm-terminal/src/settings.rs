@@ -37,7 +37,9 @@ impl Tab {
 
     fn hint(self) -> &'static str {
         match self {
-            Tab::Theme => "Enter apply  C copy  E edit  R rename  D delete  F follow FlameWM  Left/Right tab  Esc close",
+            Tab::Theme => {
+                "Enter apply  C copy  E edit  R rename  D delete  F follow FlameWM  Left/Right tab  Esc close"
+            }
             Tab::Font => "Up/Down preview a font  Enter save  Esc restore  Left/Right tab",
             Tab::Size => "Up/Down or +/- change size  Enter save  Esc restore  Left/Right tab",
             Tab::Opacity => "Up/Down preview opacity  Enter save  Esc restore  Left/Right tab",
@@ -47,7 +49,11 @@ impl Tab {
     /// Neighbouring tab; the ends do not wrap.
     fn step(self, forward: bool) -> Tab {
         let index = Tab::ALL.iter().position(|tab| *tab == self).unwrap_or(0);
-        let next = if forward { (index + 1).min(Tab::ALL.len() - 1) } else { index.saturating_sub(1) };
+        let next = if forward {
+            (index + 1).min(Tab::ALL.len() - 1)
+        } else {
+            index.saturating_sub(1)
+        };
         Tab::ALL[next]
     }
 }
@@ -59,8 +65,17 @@ pub fn opacity_options() -> Vec<u8> {
 
 /// Monospace font families from fontconfig. The generic `monospace` alias always comes first.
 pub fn mono_fonts() -> Vec<String> {
-    let mut families: Vec<String> = match std::process::Command::new("fc-list").args([":spacing=mono", "family"]).output() {
-        Ok(output) => String::from_utf8_lossy(&output.stdout).lines().filter_map(|line| line.split(',').next()).map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect(),
+    let mut families: Vec<String> = match std::process::Command::new("fc-list")
+        .args([":spacing=mono", "family"])
+        .output()
+    {
+        Ok(output) => String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.split(',').next())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect(),
         Err(_) => Vec::new(),
     };
     families.sort();
@@ -83,7 +98,10 @@ pub enum Command {
     Apply(String),
     Copy(String),
     Delete(String),
-    Rename { old: String, new: String },
+    Rename {
+        old: String,
+        new: String,
+    },
     /// A user theme's working copy changed; persist it.
     Save(Theme),
     /// Shows a theme on the live screen without saving it.
@@ -121,16 +139,32 @@ impl Default for SettingsView {
 
 impl SettingsView {
     pub fn new() -> Self {
-        Self { tab: Tab::Theme, selected: 0, fonts: Vec::new(), font_selected: 0, opacity_selected: 0, slot: 0, mode: Mode::Browse, edit: None, message: String::new() }
+        Self {
+            tab: Tab::Theme,
+            selected: 0,
+            fonts: Vec::new(),
+            font_selected: 0,
+            opacity_selected: 0,
+            slot: 0,
+            mode: Mode::Browse,
+            edit: None,
+            message: String::new(),
+        }
     }
 
     /// The view as it opens: the saved theme, font and opacity are highlighted.
     pub fn open(themes: &[Theme], config: &TerminalConfig, fonts: Vec<String>) -> Self {
         let mut view = Self::new();
         view.focus(themes, &config.theme);
-        view.font_selected = fonts.iter().position(|font| *font == config.font_family).unwrap_or(0);
+        view.font_selected = fonts
+            .iter()
+            .position(|font| *font == config.font_family)
+            .unwrap_or(0);
         view.fonts = fonts;
-        view.opacity_selected = opacity_options().iter().position(|&percent| percent == config.background_opacity).unwrap_or(0);
+        view.opacity_selected = opacity_options()
+            .iter()
+            .position(|&percent| percent == config.background_opacity)
+            .unwrap_or(0);
         view
     }
 
@@ -165,7 +199,11 @@ impl SettingsView {
 
     /// Mouse hover over a theme row (body row, below the tab strip) shows that theme without saving it.
     pub fn hover_theme(&mut self, body_row: usize, rows: usize, themes: &[Theme]) -> Command {
-        if self.tab != Tab::Theme || self.edit.is_some() || self.mode != Mode::Browse || body_row < LIST_TOP {
+        if self.tab != Tab::Theme
+            || self.edit.is_some()
+            || self.mode != Mode::Browse
+            || body_row < LIST_TOP
+        {
             return Command::None;
         }
         let (top, list_rows) = self.list_window(rows);
@@ -179,7 +217,9 @@ impl SettingsView {
     }
 
     fn preview_selected(&self, themes: &[Theme]) -> Command {
-        themes.get(self.selected).map_or(Command::None, |theme| Command::PreviewTheme(theme.name.clone()))
+        themes.get(self.selected).map_or(Command::None, |theme| {
+            Command::PreviewTheme(theme.name.clone())
+        })
     }
 
     pub fn handle_key(&mut self, event: &UiKeyEvent, themes: &[Theme]) -> Command {
@@ -197,7 +237,10 @@ impl SettingsView {
                 "return" | "enter" => {
                     self.mode = Mode::Browse;
                     match selected {
-                        Some(theme) if !buffer.trim().is_empty() => Command::Rename { old: theme.name, new: buffer.trim().to_owned() },
+                        Some(theme) if !buffer.trim().is_empty() => Command::Rename {
+                            old: theme.name,
+                            new: buffer.trim().to_owned(),
+                        },
                         _ => Command::None,
                     }
                 }
@@ -208,7 +251,11 @@ impl SettingsView {
                     Command::None
                 }
                 _ => {
-                    if let Some(text) = event.text.as_deref().filter(|t| !t.chars().any(char::is_control)) {
+                    if let Some(text) = event
+                        .text
+                        .as_deref()
+                        .filter(|t| !t.chars().any(char::is_control))
+                    {
                         self.mode = Mode::Rename(format!("{buffer}{text}"));
                     }
                     Command::None
@@ -248,7 +295,13 @@ impl SettingsView {
                 }
                 _ => {
                     let mut buffer = buffer;
-                    for c in event.text.as_deref().unwrap_or("").chars().filter(char::is_ascii_hexdigit) {
+                    for c in event
+                        .text
+                        .as_deref()
+                        .unwrap_or("")
+                        .chars()
+                        .filter(char::is_ascii_hexdigit)
+                    {
                         if buffer.len() < 6 {
                             buffer.push(c.to_ascii_lowercase());
                         }
@@ -261,7 +314,13 @@ impl SettingsView {
         }
     }
 
-    fn browse_key(&mut self, name: &str, event: &UiKeyEvent, themes: &[Theme], selected: Option<Theme>) -> Command {
+    fn browse_key(
+        &mut self,
+        name: &str,
+        event: &UiKeyEvent,
+        themes: &[Theme],
+        selected: Option<Theme>,
+    ) -> Command {
         if self.edit.is_some() {
             let count = self.edit.as_ref().map_or(0, |t| t.palette.slots().len());
             match name {
@@ -282,22 +341,30 @@ impl SettingsView {
             "right" => self.tab = self.tab.step(true),
             "plus" | "=" => return Command::FontSize(1),
             "minus" | "-" => return Command::FontSize(-1),
-            _ => return match self.tab {
-                Tab::Theme => self.theme_key(name, event, themes, selected),
-                Tab::Font => self.font_key(name),
-                Tab::Size => match name {
-                    "up" => Command::FontSize(1),
-                    "down" => Command::FontSize(-1),
-                    "return" | "enter" => Command::Persist,
-                    _ => Command::None,
-                },
-                Tab::Opacity => self.opacity_key(name),
-            },
+            _ => {
+                return match self.tab {
+                    Tab::Theme => self.theme_key(name, event, themes, selected),
+                    Tab::Font => self.font_key(name),
+                    Tab::Size => match name {
+                        "up" => Command::FontSize(1),
+                        "down" => Command::FontSize(-1),
+                        "return" | "enter" => Command::Persist,
+                        _ => Command::None,
+                    },
+                    Tab::Opacity => self.opacity_key(name),
+                };
+            }
         }
         Command::None
     }
 
-    fn theme_key(&mut self, name: &str, event: &UiKeyEvent, themes: &[Theme], selected: Option<Theme>) -> Command {
+    fn theme_key(
+        &mut self,
+        name: &str,
+        event: &UiKeyEvent,
+        themes: &[Theme],
+        selected: Option<Theme>,
+    ) -> Command {
         match name {
             "up" => {
                 self.selected = self.selected.saturating_sub(1);
@@ -328,7 +395,9 @@ impl SettingsView {
             },
             "r" => match selected {
                 Some(theme) if !theme.builtin => self.mode = Mode::Rename(theme.name),
-                _ => self.message = "Built-in themes cannot be renamed. Press C to copy one.".into(),
+                _ => {
+                    self.message = "Built-in themes cannot be renamed. Press C to copy one.".into()
+                }
             },
             "delete" | "d" => match selected {
                 Some(theme) if !theme.builtin => return Command::Delete(theme.name),
@@ -343,11 +412,16 @@ impl SettingsView {
     fn font_key(&mut self, name: &str) -> Command {
         match name {
             "up" => self.font_selected = self.font_selected.saturating_sub(1),
-            "down" => self.font_selected = (self.font_selected + 1).min(self.fonts.len().saturating_sub(1)),
+            "down" => {
+                self.font_selected =
+                    (self.font_selected + 1).min(self.fonts.len().saturating_sub(1))
+            }
             "return" | "enter" => return Command::Persist,
             _ => return Command::None,
         }
-        self.fonts.get(self.font_selected).map_or(Command::None, |font| Command::Font(font.clone()))
+        self.fonts
+            .get(self.font_selected)
+            .map_or(Command::None, |font| Command::Font(font.clone()))
     }
 
     fn opacity_key(&mut self, name: &str) -> Command {
@@ -362,11 +436,20 @@ impl SettingsView {
     }
 
     /// Settings rows: tab strip, hint, blank, the current tab's body and a status line. `rows` is the body height.
-    pub fn render(&self, cols: usize, rows: usize, themes: &[Theme], palette: &Palette, config: &TerminalConfig) -> Vec<Vec<Run>> {
+    pub fn render(
+        &self,
+        cols: usize,
+        rows: usize,
+        themes: &[Theme],
+        palette: &Palette,
+        config: &TerminalConfig,
+    ) -> Vec<Vec<Run>> {
         let fg = palette.foreground;
         let muted = mix(fg, palette.background, 60);
         let mut out: Vec<Vec<Run>> = Vec::new();
-        let line = |text: String, colour: u32, bg: Option<u32>, bold: bool| vec![text_run(0, &clip(&text, cols), colour, bg, bold)];
+        let line = |text: String, colour: u32, bg: Option<u32>, bold: bool| {
+            vec![text_run(0, &clip(&text, cols), colour, bg, bold)]
+        };
 
         let mut strip = Vec::new();
         let mut col = 0;
@@ -374,7 +457,13 @@ impl SettingsView {
             let active = tab == self.tab;
             let label = format!(" {} ", tab.label());
             let width = label.chars().count();
-            strip.push(text_run(col, &label, fg, active.then_some(palette.selection), active));
+            strip.push(text_run(
+                col,
+                &label,
+                fg,
+                active.then_some(palette.selection),
+                active,
+            ));
             col += width + 1;
         }
         out.push(strip);
@@ -385,43 +474,99 @@ impl SettingsView {
         match self.tab {
             Tab::Theme => {
                 for (index, theme) in themes.iter().enumerate().skip(top).take(list_rows) {
-                    let marker = if theme.name == config.theme { "●" } else { " " };
+                    let marker = if theme.name == config.theme {
+                        "●"
+                    } else {
+                        " "
+                    };
                     let origin = if theme.builtin { "built-in" } else { "custom" };
                     let selected = index == self.selected;
                     let text = format!(" {marker} {:<26} {origin}", theme.name);
-                    out.push(line(text, fg, selected.then_some(palette.selection), selected));
+                    out.push(line(
+                        text,
+                        fg,
+                        selected.then_some(palette.selection),
+                        selected,
+                    ));
                 }
                 if let Some(theme) = &self.edit {
                     out.push(line(format!(" Editing {}", theme.name), fg, None, true));
                     for (index, (slot, value)) in theme.palette.slots().into_iter().enumerate() {
                         let selected = index == self.slot;
                         let text = format!("   {:<16} {}", slot, format_hex(value));
-                        out.push(line(text, fg, if selected { Some(palette.selection) } else { None }, selected));
+                        out.push(line(
+                            text,
+                            fg,
+                            if selected {
+                                Some(palette.selection)
+                            } else {
+                                None
+                            },
+                            selected,
+                        ));
                     }
                 }
             }
             Tab::Font => {
                 if self.fonts.is_empty() {
-                    out.push(line(" No monospace fonts found (fc-list)".into(), muted, None, false));
+                    out.push(line(
+                        " No monospace fonts found (fc-list)".into(),
+                        muted,
+                        None,
+                        false,
+                    ));
                 }
                 for (index, font) in self.fonts.iter().enumerate().skip(top).take(list_rows) {
-                    let marker = if *font == config.font_family { "●" } else { " " };
+                    let marker = if *font == config.font_family {
+                        "●"
+                    } else {
+                        " "
+                    };
                     let selected = index == self.font_selected;
-                    out.push(line(format!(" {marker} {font}"), fg, selected.then_some(palette.selection), selected));
+                    out.push(line(
+                        format!(" {marker} {font}"),
+                        fg,
+                        selected.then_some(palette.selection),
+                        selected,
+                    ));
                 }
             }
-            Tab::Size => out.push(line(format!(" Font size {}  (Up/Down change)", config.font_size), fg, None, true)),
+            Tab::Size => out.push(line(
+                format!(" Font size {}  (Up/Down change)", config.font_size),
+                fg,
+                None,
+                true,
+            )),
             Tab::Opacity => {
-                for (index, percent) in opacity_options().into_iter().enumerate().skip(top).take(list_rows) {
-                    let marker = if percent == config.background_opacity { "●" } else { " " };
+                for (index, percent) in opacity_options()
+                    .into_iter()
+                    .enumerate()
+                    .skip(top)
+                    .take(list_rows)
+                {
+                    let marker = if percent == config.background_opacity {
+                        "●"
+                    } else {
+                        " "
+                    };
                     let selected = index == self.opacity_selected;
-                    out.push(line(format!(" {marker} {percent:>3}%"), fg, selected.then_some(palette.selection), selected));
+                    out.push(line(
+                        format!(" {marker} {percent:>3}%"),
+                        fg,
+                        selected.then_some(palette.selection),
+                        selected,
+                    ));
                 }
             }
         }
         match &self.mode {
             Mode::Rename(buffer) => out.push(line(format!(" Name: {buffer}_"), fg, None, false)),
-            Mode::Hex(buffer) => out.push(line(format!(" Hex: #{buffer}_  (six digits, Enter sets)"), fg, None, false)),
+            Mode::Hex(buffer) => out.push(line(
+                format!(" Hex: #{buffer}_  (six digits, Enter sets)"),
+                fg,
+                None,
+                false,
+            )),
             Mode::Browse => out.push(line(String::new(), fg, None, false)),
         }
         out.push(line(format!(" {}", self.message), muted, None, false));
@@ -438,7 +583,9 @@ fn clip(text: &str, cols: usize) -> String {
 }
 
 fn mix(a: u32, b: u32, weight_a: u32) -> u32 {
-    let channel = |shift: u32| (((a >> shift) & 0xff) * weight_a + ((b >> shift) & 0xff) * (100 - weight_a)) / 100;
+    let channel = |shift: u32| {
+        (((a >> shift) & 0xff) * weight_a + ((b >> shift) & 0xff) * (100 - weight_a)) / 100
+    };
     (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
@@ -449,11 +596,20 @@ mod tests {
     use flamewm_ui_x11::{UiKeyEvent, UiKeyPhase};
 
     fn press(key: &str, text: Option<&str>) -> UiKeyEvent {
-        UiKeyEvent { phase: UiKeyPhase::Press, modifiers: Vec::new(), key: key.into(), text: text.map(str::to_owned) }
+        UiKeyEvent {
+            phase: UiKeyPhase::Press,
+            modifiers: Vec::new(),
+            key: key.into(),
+            text: text.map(str::to_owned),
+        }
     }
 
     fn user_theme(name: &str) -> Theme {
-        Theme { name: name.into(), palette: builtin_themes()[0].palette.clone(), builtin: false }
+        Theme {
+            name: name.into(),
+            palette: builtin_themes()[0].palette.clone(),
+            builtin: false,
+        }
     }
 
     fn fonts() -> Vec<String> {
@@ -464,12 +620,24 @@ mod tests {
     fn builtin_themes_cannot_be_edited_deleted_or_renamed() {
         let themes = builtin_themes();
         let mut view = SettingsView::new();
-        assert_eq!(view.handle_key(&press("e", Some("e")), &themes), Command::None);
+        assert_eq!(
+            view.handle_key(&press("e", Some("e")), &themes),
+            Command::None
+        );
         assert!(view.edit.is_none());
-        assert_eq!(view.handle_key(&press("delete", None), &themes), Command::None);
-        assert_eq!(view.handle_key(&press("r", Some("r")), &themes), Command::None);
+        assert_eq!(
+            view.handle_key(&press("delete", None), &themes),
+            Command::None
+        );
+        assert_eq!(
+            view.handle_key(&press("r", Some("r")), &themes),
+            Command::None
+        );
         assert_eq!(view.mode, Mode::Browse);
-        assert_eq!(view.handle_key(&press("c", Some("c")), &themes), Command::Copy("Dark+".into()));
+        assert_eq!(
+            view.handle_key(&press("c", Some("c")), &themes),
+            Command::Copy("Dark+".into())
+        );
     }
 
     #[test]
@@ -477,18 +645,35 @@ mod tests {
         let themes = builtin_themes();
         let mut view = SettingsView::new();
         view.handle_key(&press("down", None), &themes);
-        assert_eq!(view.handle_key(&press("return", None), &themes), Command::Apply("Light+".into()));
+        assert_eq!(
+            view.handle_key(&press("return", None), &themes),
+            Command::Apply("Light+".into())
+        );
     }
 
     #[test]
     fn arrows_and_hover_preview_themes_without_applying() {
         let themes = builtin_themes();
         let mut view = SettingsView::new();
-        assert_eq!(view.handle_key(&press("down", None), &themes), Command::PreviewTheme("Light+".into()));
+        assert_eq!(
+            view.handle_key(&press("down", None), &themes),
+            Command::PreviewTheme("Light+".into())
+        );
         // Body row 3 is the first list entry; hovering the third entry previews it.
-        assert_eq!(view.hover_theme(LIST_TOP + 2, 40, &themes), Command::PreviewTheme(themes[2].name.clone()));
-        assert_eq!(view.hover_theme(LIST_TOP + 2, 40, &themes), Command::None, "hovering the same row does nothing");
-        assert_eq!(view.hover_theme(0, 40, &themes), Command::None, "the tab strip is not a theme");
+        assert_eq!(
+            view.hover_theme(LIST_TOP + 2, 40, &themes),
+            Command::PreviewTheme(themes[2].name.clone())
+        );
+        assert_eq!(
+            view.hover_theme(LIST_TOP + 2, 40, &themes),
+            Command::None,
+            "hovering the same row does nothing"
+        );
+        assert_eq!(
+            view.hover_theme(0, 40, &themes),
+            Command::None,
+            "the tab strip is not a theme"
+        );
     }
 
     #[test]
@@ -510,9 +695,18 @@ mod tests {
         let themes = builtin_themes();
         let mut view = SettingsView::open(&themes, &TerminalConfig::default(), fonts());
         view.handle_key(&press("right", None), &themes);
-        assert_eq!(view.handle_key(&press("down", None), &themes), Command::Font("Fira Code".into()));
-        assert_eq!(view.handle_key(&press("return", None), &themes), Command::Persist);
-        assert_eq!(view.handle_key(&press("escape", None), &themes), Command::Close);
+        assert_eq!(
+            view.handle_key(&press("down", None), &themes),
+            Command::Font("Fira Code".into())
+        );
+        assert_eq!(
+            view.handle_key(&press("return", None), &themes),
+            Command::Persist
+        );
+        assert_eq!(
+            view.handle_key(&press("escape", None), &themes),
+            Command::Close
+        );
     }
 
     #[test]
@@ -521,9 +715,18 @@ mod tests {
         let mut view = SettingsView::new();
         view.handle_key(&press("right", None), &themes);
         view.handle_key(&press("right", None), &themes);
-        assert_eq!(view.handle_key(&press("up", None), &themes), Command::FontSize(1));
-        assert_eq!(view.handle_key(&press("plus", Some("+")), &themes), Command::FontSize(1));
-        assert_eq!(view.handle_key(&press("return", None), &themes), Command::Persist);
+        assert_eq!(
+            view.handle_key(&press("up", None), &themes),
+            Command::FontSize(1)
+        );
+        assert_eq!(
+            view.handle_key(&press("plus", Some("+")), &themes),
+            Command::FontSize(1)
+        );
+        assert_eq!(
+            view.handle_key(&press("return", None), &themes),
+            Command::Persist
+        );
     }
 
     #[test]
@@ -546,9 +749,18 @@ mod tests {
         }
         assert_eq!(view.tab, Tab::Opacity);
         // The default 80 is the fifth option, so one Down step previews 75.
-        assert_eq!(view.handle_key(&press("down", None), &themes), Command::Opacity(75));
-        assert_eq!(view.handle_key(&press("up", None), &themes), Command::Opacity(80));
-        assert_eq!(view.handle_key(&press("return", None), &themes), Command::Persist);
+        assert_eq!(
+            view.handle_key(&press("down", None), &themes),
+            Command::Opacity(75)
+        );
+        assert_eq!(
+            view.handle_key(&press("up", None), &themes),
+            Command::Opacity(80)
+        );
+        assert_eq!(
+            view.handle_key(&press("return", None), &themes),
+            Command::Persist
+        );
     }
 
     #[test]
@@ -557,14 +769,19 @@ mod tests {
         themes.push(user_theme("Mine"));
         let mut view = SettingsView::new();
         view.selected = themes.len() - 1;
-        assert_eq!(view.handle_key(&press("e", Some("e")), &themes), Command::None);
+        assert_eq!(
+            view.handle_key(&press("e", Some("e")), &themes),
+            Command::None
+        );
         assert!(view.edit.is_some());
         view.handle_key(&press("return", None), &themes);
         for c in "ff8800".chars() {
             view.handle_key(&press(&c.to_string(), Some(&c.to_string())), &themes);
         }
         let command = view.handle_key(&press("return", None), &themes);
-        let Command::Save(saved) = command else { panic!("expected save, got {command:?}") };
+        let Command::Save(saved) = command else {
+            panic!("expected save, got {command:?}")
+        };
         assert_eq!(saved.palette.background, 0xff8800);
     }
 
@@ -578,9 +795,18 @@ mod tests {
         view.handle_key(&press("backspace", None), &themes);
         view.handle_key(&press("x", Some("x")), &themes);
         let command = view.handle_key(&press("return", None), &themes);
-        assert_eq!(command, Command::Rename { old: "Mine".into(), new: "Minx".into() });
+        assert_eq!(
+            command,
+            Command::Rename {
+                old: "Mine".into(),
+                new: "Minx".into()
+            }
+        );
         view.handle_key(&press("r", Some("r")), &themes);
-        assert_eq!(view.handle_key(&press("escape", None), &themes), Command::None);
+        assert_eq!(
+            view.handle_key(&press("escape", None), &themes),
+            Command::None
+        );
         assert_eq!(view.mode, Mode::Browse);
     }
 
@@ -588,10 +814,16 @@ mod tests {
     fn render_fits_the_requested_rows_and_marks_the_active_theme() {
         let themes = builtin_themes();
         let view = SettingsView::new();
-        let config = TerminalConfig { theme: themes[0].name.clone(), ..TerminalConfig::default() };
+        let config = TerminalConfig {
+            theme: themes[0].name.clone(),
+            ..TerminalConfig::default()
+        };
         let rows = view.render(60, 12, &themes, &themes[0].palette, &config);
         assert_eq!(rows.len(), 12);
         assert!(rows[LIST_TOP][0].text.contains('●'));
-        assert!(rows.iter().all(|row| row.iter().all(|run| run.col + run.cells <= 60)));
+        assert!(
+            rows.iter()
+                .all(|row| row.iter().all(|run| run.col + run.cells <= 60))
+        );
     }
 }

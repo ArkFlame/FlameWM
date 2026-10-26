@@ -73,7 +73,10 @@ mod tests {
     #[test]
     fn cardinal_round_trip_keeps_negative_origin_and_colours() {
         let rubber = sample();
-        assert_eq!(RootRubber::from_cardinals(&rubber.to_cardinals()), Some(rubber));
+        assert_eq!(
+            RootRubber::from_cardinals(&rubber.to_cardinals()),
+            Some(rubber)
+        );
     }
 
     #[test]
@@ -81,6 +84,9 @@ mod tests {
         assert_eq!(RootRubber::from_cardinals(&[]), None);
         assert_eq!(RootRubber::from_cardinals(&[0, 0, 0, 10, 0, 0]), None);
         assert_eq!(RootRubber::from_cardinals(&[0, 0, 10, 0, 0, 0]), None);
-        assert_eq!(RootRubber::from_cardinals(&[0, 0, u32::MAX, 10, 0, 0]), None);
+        assert_eq!(
+            RootRubber::from_cardinals(&[0, 0, u32::MAX, 10, 0, 0]),
+            None
+        );
     }
 }

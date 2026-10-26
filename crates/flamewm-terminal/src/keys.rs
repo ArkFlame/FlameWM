@@ -132,7 +132,11 @@ pub fn encode(event: &UiKeyEvent, app_cursor: bool) -> Option<Vec<u8>> {
         return Some(encode_named(named, mods, app_cursor));
     }
     // Printable text (layouts deliver the composed character here).
-    if let Some(text) = event.text.as_deref().filter(|t| !t.is_empty() && !t.chars().any(char::is_control)) {
+    if let Some(text) = event
+        .text
+        .as_deref()
+        .filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
+    {
         let mut bytes = Vec::new();
         if mods.alt {
             bytes.push(0x1b);
@@ -142,7 +146,9 @@ pub fn encode(event: &UiKeyEvent, app_cursor: bool) -> Option<Vec<u8>> {
     }
     if mods.ctrl {
         let mut chars = name.chars();
-        let (Some(c), None) = (chars.next(), chars.next()) else { return None };
+        let (Some(c), None) = (chars.next(), chars.next()) else {
+            return None;
+        };
         let code = match c {
             'a'..='z' => c as u8 - b'a' + 1,
             ' ' | '@' | '2' => 0,
@@ -152,7 +158,11 @@ pub fn encode(event: &UiKeyEvent, app_cursor: bool) -> Option<Vec<u8>> {
             '/' | '7' => 0x1f,
             _ => return None,
         };
-        return Some(if mods.alt { vec![0x1b, code] } else { vec![code] });
+        return Some(if mods.alt {
+            vec![0x1b, code]
+        } else {
+            vec![code]
+        });
     }
     None
 }
@@ -163,16 +173,37 @@ fn encode_named(name: &str, mods: Mods, app_cursor: bool) -> Vec<u8> {
     match name {
         "return" => vec![b'\r'],
         "tab" => {
-            if mods.shift { b"\x1b[Z".to_vec() } else { b"\t".to_vec() }
+            if mods.shift {
+                b"\x1b[Z".to_vec()
+            } else {
+                b"\t".to_vec()
+            }
         }
         "escape" => vec![0x1b],
-        "backspace" => if mods.alt { vec![0x1b, 0x7f] } else { vec![0x7f] },
+        "backspace" => {
+            if mods.alt {
+                vec![0x1b, 0x7f]
+            } else {
+                vec![0x7f]
+            }
+        }
         "f1" | "f2" | "f3" | "f4" => {
-            let letter = match name { "f1" => 'P', "f2" => 'Q', "f3" => 'R', _ => 'S' };
-            if modified { format!("\x1b[1;{param}{letter}").into_bytes() } else { format!("\x1bO{letter}").into_bytes() }
+            let letter = match name {
+                "f1" => 'P',
+                "f2" => 'Q',
+                "f3" => 'R',
+                _ => 'S',
+            };
+            if modified {
+                format!("\x1b[1;{param}{letter}").into_bytes()
+            } else {
+                format!("\x1bO{letter}").into_bytes()
+            }
         }
         other => {
-            let Some((number, final_byte)) = csi_key(other) else { return Vec::new() };
+            let Some((number, final_byte)) = csi_key(other) else {
+                return Vec::new();
+            };
             let arrowlike = matches!(final_byte, 'A' | 'B' | 'C' | 'D' | 'H' | 'F');
             let sequence = if modified {
                 let number = if number.is_empty() { "1" } else { number };
@@ -204,20 +235,50 @@ mod tests {
 
     #[test]
     fn printable_text_and_return_and_backspace() {
-        assert_eq!(encode(&key("a", &[], Some("a")), false), Some(b"a".to_vec()));
-        assert_eq!(encode(&key("return", &[], Some("\r")), false), Some(b"\r".to_vec()));
-        assert_eq!(encode(&key("backspace", &[], None), false), Some(vec![0x7f]));
-        assert_eq!(encode(&key("e", &["alt"], Some("é")), false), Some("\x1bé".as_bytes().to_vec()));
+        assert_eq!(
+            encode(&key("a", &[], Some("a")), false),
+            Some(b"a".to_vec())
+        );
+        assert_eq!(
+            encode(&key("return", &[], Some("\r")), false),
+            Some(b"\r".to_vec())
+        );
+        assert_eq!(
+            encode(&key("backspace", &[], None), false),
+            Some(vec![0x7f])
+        );
+        assert_eq!(
+            encode(&key("e", &["alt"], Some("é")), false),
+            Some("\x1bé".as_bytes().to_vec())
+        );
     }
 
     #[test]
     fn alt_chars_send_escape_prefixed_meta_bytes() {
-        assert_eq!(encode(&key("b", &["alt"], Some("b")), false), Some(b"\x1bb".to_vec()));
-        assert_eq!(encode(&key("f", &["alt"], Some("f")), false), Some(b"\x1bf".to_vec()));
-        assert_eq!(encode(&key("period", &["alt"], Some(".")), false), Some(b"\x1b.".to_vec()));
-        assert_eq!(encode(&key("b", &["alt", "shift"], Some("B")), false), Some(b"\x1bB".to_vec()));
-        assert_eq!(encode(&key("backspace", &["alt"], None), false), Some(b"\x1b\x7f".to_vec()));
-        assert_eq!(encode(&key("left", &["alt"], None), false), Some(b"\x1b[1;3D".to_vec()));
+        assert_eq!(
+            encode(&key("b", &["alt"], Some("b")), false),
+            Some(b"\x1bb".to_vec())
+        );
+        assert_eq!(
+            encode(&key("f", &["alt"], Some("f")), false),
+            Some(b"\x1bf".to_vec())
+        );
+        assert_eq!(
+            encode(&key("period", &["alt"], Some(".")), false),
+            Some(b"\x1b.".to_vec())
+        );
+        assert_eq!(
+            encode(&key("b", &["alt", "shift"], Some("B")), false),
+            Some(b"\x1bB".to_vec())
+        );
+        assert_eq!(
+            encode(&key("backspace", &["alt"], None), false),
+            Some(b"\x1b\x7f".to_vec())
+        );
+        assert_eq!(
+            encode(&key("left", &["alt"], None), false),
+            Some(b"\x1b[1;3D".to_vec())
+        );
     }
 
     #[test]
@@ -225,35 +286,91 @@ mod tests {
         assert_eq!(encode(&key("c", &["ctrl"], None), false), Some(vec![0x03]));
         assert_eq!(encode(&key("d", &["ctrl"], None), false), Some(vec![0x04]));
         assert_eq!(encode(&key("[", &["ctrl"], None), false), Some(vec![0x1b]));
-        assert_eq!(encode(&key("x", &["alt", "ctrl"], None), false), Some(vec![0x1b, 0x18]));
+        assert_eq!(
+            encode(&key("x", &["alt", "ctrl"], None), false),
+            Some(vec![0x1b, 0x18])
+        );
     }
 
     #[test]
     fn arrows_follow_decckm_and_modifiers() {
-        assert_eq!(encode(&key("up", &[], None), false), Some(b"\x1b[A".to_vec()));
-        assert_eq!(encode(&key("up", &[], None), true), Some(b"\x1bOA".to_vec()));
-        assert_eq!(encode(&key("right", &["ctrl"], None), true), Some(b"\x1b[1;5C".to_vec()));
-        assert_eq!(encode(&key("left", &["shift"], None), false), Some(b"\x1b[1;2D".to_vec()));
+        assert_eq!(
+            encode(&key("up", &[], None), false),
+            Some(b"\x1b[A".to_vec())
+        );
+        assert_eq!(
+            encode(&key("up", &[], None), true),
+            Some(b"\x1bOA".to_vec())
+        );
+        assert_eq!(
+            encode(&key("right", &["ctrl"], None), true),
+            Some(b"\x1b[1;5C".to_vec())
+        );
+        assert_eq!(
+            encode(&key("left", &["shift"], None), false),
+            Some(b"\x1b[1;2D".to_vec())
+        );
     }
 
     #[test]
     fn editing_and_function_keys() {
-        assert_eq!(encode(&key("delete", &[], None), false), Some(b"\x1b[3~".to_vec()));
-        assert_eq!(encode(&key("page_up", &[], None), false), Some(b"\x1b[5~".to_vec()));
-        assert_eq!(encode(&key("f1", &[], None), false), Some(b"\x1bOP".to_vec()));
-        assert_eq!(encode(&key("f5", &[], None), false), Some(b"\x1b[15~".to_vec()));
-        assert_eq!(encode(&key("tab", &["shift"], None), false), Some(b"\x1b[Z".to_vec()));
-        assert_eq!(encode(&key("home", &[], None), true), Some(b"\x1bOH".to_vec()));
+        assert_eq!(
+            encode(&key("delete", &[], None), false),
+            Some(b"\x1b[3~".to_vec())
+        );
+        assert_eq!(
+            encode(&key("page_up", &[], None), false),
+            Some(b"\x1b[5~".to_vec())
+        );
+        assert_eq!(
+            encode(&key("f1", &[], None), false),
+            Some(b"\x1bOP".to_vec())
+        );
+        assert_eq!(
+            encode(&key("f5", &[], None), false),
+            Some(b"\x1b[15~".to_vec())
+        );
+        assert_eq!(
+            encode(&key("tab", &["shift"], None), false),
+            Some(b"\x1b[Z".to_vec())
+        );
+        assert_eq!(
+            encode(&key("home", &[], None), true),
+            Some(b"\x1bOH".to_vec())
+        );
     }
 
     #[test]
     fn shortcuts_are_claimed_before_encoding() {
-        let ctrl_shift = Mods { shift: true, ctrl: true, alt: false };
+        let ctrl_shift = Mods {
+            shift: true,
+            ctrl: true,
+            alt: false,
+        };
         assert_eq!(shortcut("c", ctrl_shift), Some(Shortcut::Copy));
         assert_eq!(shortcut("v", ctrl_shift), Some(Shortcut::Paste));
         assert_eq!(shortcut("t", ctrl_shift), Some(Shortcut::NewTab));
-        assert_eq!(shortcut(",", Mods { ctrl: true, ..Mods::default() }), Some(Shortcut::Settings));
-        assert_eq!(shortcut("c", Mods { ctrl: true, ..Mods::default() }), None, "plain Ctrl+C reaches the child");
+        assert_eq!(
+            shortcut(
+                ",",
+                Mods {
+                    ctrl: true,
+                    ..Mods::default()
+                }
+            ),
+            Some(Shortcut::Settings)
+        );
+        assert_eq!(
+            shortcut(
+                "c",
+                Mods {
+                    ctrl: true,
+                    ..Mods::default()
+                }
+            ),
+            None,
+            "plain Ctrl+C reaches the child"
+        );
     }
 
     #[test]
@@ -261,27 +378,91 @@ mod tests {
         assert_eq!(shortcut("f2", Mods::default()), Some(Shortcut::NewTab));
         assert_eq!(shortcut("f3", Mods::default()), Some(Shortcut::PreviousTab));
         assert_eq!(shortcut("f4", Mods::default()), Some(Shortcut::NextTab));
-        assert_eq!(shortcut("F2", Mods::default()), Some(Shortcut::NewTab), "key names arrive in any case");
+        assert_eq!(
+            shortcut("F2", Mods::default()),
+            Some(Shortcut::NewTab),
+            "key names arrive in any case"
+        );
         // Every other F-key stays a function key for the child.
         assert_eq!(shortcut("f1", Mods::default()), None);
         assert_eq!(shortcut("f5", Mods::default()), None);
         assert_eq!(shortcut("f12", Mods::default()), None);
         // Alt or Shift makes it the child's key again, encoded with the modifier.
-        assert_eq!(shortcut("f3", Mods { alt: true, ..Mods::default() }), None);
-        assert_eq!(shortcut("f4", Mods { shift: true, ..Mods::default() }), None);
-        assert_eq!(encode(&key("f3", &["alt"], None), false), Some(b"\x1b[1;3R".to_vec()));
-        assert_eq!(encode(&key("f1", &[], None), false), Some(b"\x1bOP".to_vec()));
-        assert_eq!(encode(&key("f5", &[], None), false), Some(b"\x1b[15~".to_vec()));
+        assert_eq!(
+            shortcut(
+                "f3",
+                Mods {
+                    alt: true,
+                    ..Mods::default()
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            shortcut(
+                "f4",
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            encode(&key("f3", &["alt"], None), false),
+            Some(b"\x1b[1;3R".to_vec())
+        );
+        assert_eq!(
+            encode(&key("f1", &[], None), false),
+            Some(b"\x1bOP".to_vec())
+        );
+        assert_eq!(
+            encode(&key("f5", &[], None), false),
+            Some(b"\x1b[15~".to_vec())
+        );
     }
 
     #[test]
     fn alt_and_altgr_combinations_never_become_shortcuts() {
         // AltGr arrives as Alt (or Ctrl+Alt) with the composed text, and that text belongs to the child.
-        assert_eq!(shortcut("tab", Mods::default()), None, "Tab alone is the shell's");
-        assert_eq!(shortcut("tab", Mods { alt: true, ctrl: true, ..Mods::default() }), None);
-        assert_eq!(shortcut("c", Mods { ctrl: true, alt: true, ..Mods::default() }), None);
-        assert_eq!(encode(&key("c", &["ctrl", "alt"], None), false), Some(vec![0x1b, 0x03]));
-        assert_eq!(encode(&key("c", &["ctrl", "alt"], Some("ć")), false), Some("\x1bć".as_bytes().to_vec()));
-        assert_eq!(encode(&key("e", &["alt"], Some("€")), false), Some("\x1b€".as_bytes().to_vec()));
+        assert_eq!(
+            shortcut("tab", Mods::default()),
+            None,
+            "Tab alone is the shell's"
+        );
+        assert_eq!(
+            shortcut(
+                "tab",
+                Mods {
+                    alt: true,
+                    ctrl: true,
+                    ..Mods::default()
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            shortcut(
+                "c",
+                Mods {
+                    ctrl: true,
+                    alt: true,
+                    ..Mods::default()
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            encode(&key("c", &["ctrl", "alt"], None), false),
+            Some(vec![0x1b, 0x03])
+        );
+        assert_eq!(
+            encode(&key("c", &["ctrl", "alt"], Some("ć")), false),
+            Some("\x1bć".as_bytes().to_vec())
+        );
+        assert_eq!(
+            encode(&key("e", &["alt"], Some("€")), false),
+            Some("\x1b€".as_bytes().to_vec())
+        );
     }
 }

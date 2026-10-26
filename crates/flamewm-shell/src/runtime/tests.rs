@@ -487,9 +487,7 @@ fn panel_context_missing_output_returns_none() {
 fn task_slot_snapshot(outputs: &[&str]) -> ShellSnapshot {
     use flamewm_api::panels::{PanelSnapshot, TaskEntry, TaskEntryKind};
     use flamewm_api::window::WindowState;
-    use flamewm_api::{
-        DesktopAppId, OutputId, PanelEdge, TaskEntryId, WindowRef, WorkspaceRef,
-    };
+    use flamewm_api::{DesktopAppId, OutputId, PanelEdge, TaskEntryId, WindowRef, WorkspaceRef};
     let window_on = |id: u64, output: &str| WindowSnapshot {
         reference: WindowRef::new(id, 1),
         title: String::new(),
@@ -635,7 +633,10 @@ fn running_task_context_menu_pins_and_pinned_menu_unpins() {
     let mut runtime = ShellRuntime::new(task_slot_snapshot(&["A"]));
     runtime.select_panel_output(flamewm_api::OutputId::new("A"));
     let target = runtime.task_target_for_slot(0).unwrap();
-    let menu = context_menu(ContextMenuKind::Task(target.id.clone()), target.output.clone());
+    let menu = context_menu(
+        ContextMenuKind::Task(target.id.clone()),
+        target.output.clone(),
+    );
     assert_eq!(
         runtime.context_menu_request_for_action("task.menu.pin", Some(&menu)),
         Some(ControlRequest::PinApp {
@@ -653,7 +654,10 @@ fn running_task_context_menu_pins_and_pinned_menu_unpins() {
     let mut runtime = ShellRuntime::new(pinned);
     runtime.select_panel_output(flamewm_api::OutputId::new("A"));
     let target = runtime.task_target_for_slot(0).unwrap();
-    let menu = context_menu(ContextMenuKind::Task(target.id.clone()), target.output.clone());
+    let menu = context_menu(
+        ContextMenuKind::Task(target.id.clone()),
+        target.output.clone(),
+    );
     assert_eq!(
         runtime.context_menu_request_for_action("task.menu.unpin", Some(&menu)),
         Some(ControlRequest::UnpinApp {

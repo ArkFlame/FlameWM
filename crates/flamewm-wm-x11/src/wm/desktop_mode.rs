@@ -117,7 +117,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             ModeAction::Restore(desktop) => {
                 if let Some(size) = self.desktop_mode.desktop_size {
                     match self.restore_crtcs(&desktop, size) {
-                        Ok(true) => {},
+                        Ok(true) => {}
                         Ok(false) => eprintln!("flamewm: desktop mode restore rejected by XRandR"),
                         Err(error) => eprintln!("flamewm: desktop mode restore failed: {error}"),
                     }
@@ -161,16 +161,16 @@ impl<'a, C: Connection> Wm<'a, C> {
             });
         }
         let geometry = self.conn.get_geometry(root)?.reply()?;
-        Ok((live, resources.config_timestamp, (geometry.width, geometry.height)))
+        Ok((
+            live,
+            resources.config_timestamp,
+            (geometry.width, geometry.height),
+        ))
     }
 
     /// Restore both the root framebuffer and CRTC mode/placement. A game may change only the
     /// framebuffer size; RRSetCrtcConfig alone will not undo that and panels stay shrunken.
-    fn restore_crtcs(
-        &self,
-        desktop: &[CrtcMode],
-        size: (u16, u16),
-    ) -> Result<bool, ReplyError> {
+    fn restore_crtcs(&self, desktop: &[CrtcMode], size: (u16, u16)) -> Result<bool, ReplyError> {
         let root = self.screen().root;
         let geometry = self.conn.get_geometry(root)?.reply()?;
         let current_size = (geometry.width, geometry.height);
@@ -180,34 +180,41 @@ impl<'a, C: Connection> Wm<'a, C> {
         // size directly could clip a still-active CRTC in the dimension that must shrink.
         let intermediate = (size.0.max(current_size.0), size.1.max(current_size.1));
         if intermediate != current_size {
-            self.conn.randr_set_screen_size(
-                root, intermediate.0, intermediate.1, mm_width, mm_height
-            )?.check()?;
+            self.conn
+                .randr_set_screen_size(root, intermediate.0, intermediate.1, mm_width, mm_height)?
+                .check()?;
         }
         for crtc in desktop {
             // Each mode set can change RandR's config timestamp. Refresh before the next CRTC.
-            let resources = self.conn.randr_get_screen_resources_current(root)?.reply()?;
-            let reply = self.conn.randr_set_crtc_config(
-                crtc.crtc,
-                CURRENT_TIME,
-                resources.config_timestamp,
-                crtc.x,
-                crtc.y,
-                crtc.mode,
-                randr::Rotation::from(crtc.rotation),
-                &crtc.outputs,
-            )?.reply()?;
+            let resources = self
+                .conn
+                .randr_get_screen_resources_current(root)?
+                .reply()?;
+            let reply = self
+                .conn
+                .randr_set_crtc_config(
+                    crtc.crtc,
+                    CURRENT_TIME,
+                    resources.config_timestamp,
+                    crtc.x,
+                    crtc.y,
+                    crtc.mode,
+                    randr::Rotation::from(crtc.rotation),
+                    &crtc.outputs,
+                )?
+                .reply()?;
             if u8::from(reply.status) != u8::from(randr::SetConfig::SUCCESS) {
                 return Ok(false);
             }
         }
         if intermediate != size {
             // Shrink only after every output has been moved into the final framebuffer.
-            self.conn.randr_set_screen_size(root, size.0, size.1, mm_width, mm_height)?.check()?;
+            self.conn
+                .randr_set_screen_size(root, size.0, size.1, mm_width, mm_height)?
+                .check()?;
         }
         Ok(true)
     }
-
 }
 
 #[cfg(test)]
@@ -228,7 +235,10 @@ mod tests {
     #[test]
     fn first_observation_records_desktop_and_tracks() {
         let mut tracker = DesktopModeTracker::default();
-        assert_eq!(tracker.observe(&[crtc(10)], (1920, 1080), false), ModeAction::Track);
+        assert_eq!(
+            tracker.observe(&[crtc(10)], (1920, 1080), false),
+            ModeAction::Track
+        );
         assert!(!tracker.is_borrowed());
     }
 
@@ -236,10 +246,16 @@ mod tests {
     fn mode_change_without_fullscreen_client_is_adopted_as_desktop() {
         let mut tracker = DesktopModeTracker::default();
         tracker.observe(&[crtc(10)], (1920, 1080), false);
-        assert_eq!(tracker.observe(&[crtc(11)], (1920, 1080), false), ModeAction::Track);
+        assert_eq!(
+            tracker.observe(&[crtc(11)], (1920, 1080), false),
+            ModeAction::Track
+        );
         assert!(!tracker.is_borrowed());
         // The adopted mode is now the desktop: returning to 10 is a change, not a restore.
-        assert_eq!(tracker.observe(&[crtc(10)], (1920, 1080), false), ModeAction::Track);
+        assert_eq!(
+            tracker.observe(&[crtc(10)], (1920, 1080), false),
+            ModeAction::Track
+        );
         assert!(!tracker.is_borrowed());
     }
 
@@ -247,10 +263,16 @@ mod tests {
     fn fullscreen_mode_change_is_held_and_not_adopted() {
         let mut tracker = DesktopModeTracker::default();
         tracker.observe(&[crtc(10)], (1920, 1080), false);
-        assert_eq!(tracker.observe(&[crtc(20)], (1920, 1080), true), ModeAction::Hold);
+        assert_eq!(
+            tracker.observe(&[crtc(20)], (1920, 1080), true),
+            ModeAction::Hold
+        );
         assert!(tracker.is_borrowed());
         // Repeated notifications while the game runs keep holding without relayout.
-        assert_eq!(tracker.observe(&[crtc(20)], (1920, 1080), true), ModeAction::Hold);
+        assert_eq!(
+            tracker.observe(&[crtc(20)], (1920, 1080), true),
+            ModeAction::Hold
+        );
     }
 
     #[test]
@@ -262,8 +284,14 @@ mod tests {
             tracker.observe(&[crtc(20)], (1920, 1080), false),
             ModeAction::Restore(vec![crtc(10)])
         );
-        assert!(tracker.is_borrowed(), "stays borrowed until the restore is seen");
-        assert_eq!(tracker.observe(&[crtc(10)], (1920, 1080), false), ModeAction::Track);
+        assert!(
+            tracker.is_borrowed(),
+            "stays borrowed until the restore is seen"
+        );
+        assert_eq!(
+            tracker.observe(&[crtc(10)], (1920, 1080), false),
+            ModeAction::Track
+        );
         assert!(!tracker.is_borrowed());
     }
 
@@ -271,13 +299,19 @@ mod tests {
     fn fullscreen_root_framebuffer_shrink_restores_even_when_crtc_mode_is_unchanged() {
         let mut tracker = DesktopModeTracker::default();
         tracker.observe(&[crtc(10)], (1920, 1080), false);
-        assert_eq!(tracker.observe(&[crtc(10)], (1280, 720), true), ModeAction::Hold);
+        assert_eq!(
+            tracker.observe(&[crtc(10)], (1280, 720), true),
+            ModeAction::Hold
+        );
         assert_eq!(
             tracker.observe(&[crtc(10)], (1280, 720), false),
             ModeAction::Restore(vec![crtc(10)])
         );
         assert_eq!(tracker.desktop_size, Some((1920, 1080)));
-        assert_eq!(tracker.observe(&[crtc(10)], (1920, 1080), false), ModeAction::Track);
+        assert_eq!(
+            tracker.observe(&[crtc(10)], (1920, 1080), false),
+            ModeAction::Track
+        );
     }
 
     #[test]
@@ -301,7 +335,10 @@ mod tests {
         let mut tracker = DesktopModeTracker::default();
         tracker.observe(&[crtc(10)], (1920, 1080), false);
         tracker.observe(&[crtc(20)], (1920, 1080), true);
-        assert_eq!(tracker.observe(&[crtc(10)], (1920, 1080), true), ModeAction::Track);
+        assert_eq!(
+            tracker.observe(&[crtc(10)], (1920, 1080), true),
+            ModeAction::Track
+        );
         assert!(!tracker.is_borrowed());
     }
 }

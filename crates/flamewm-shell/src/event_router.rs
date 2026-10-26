@@ -508,10 +508,8 @@ impl ShellLoop {
         if action == "keyboard.input"
             && event.action.phase == ActionPhase::Release
             && event.action.inside
-            && self.route_launcher_text(
-                runtime,
-                event.action.text.as_deref().unwrap_or_default(),
-            )?
+            && self
+                .route_launcher_text(runtime, event.action.text.as_deref().unwrap_or_default())?
         {
             return Ok(());
         }

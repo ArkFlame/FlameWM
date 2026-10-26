@@ -97,8 +97,14 @@ pub enum UiActionPhase {
 /// logical px. `Enter`/`Over` carry no paths: the data is only converted on drop.
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiDragEvent {
-    Enter { x: f32, y: f32 },
-    Over { x: f32, y: f32 },
+    Enter {
+        x: f32,
+        y: f32,
+    },
+    Over {
+        x: f32,
+        y: f32,
+    },
     Leave,
     Drop {
         x: f32,
@@ -373,11 +379,12 @@ where
     let mut reactor = Reactor::new().map_err(|error| error.to_string())?;
     // Level-triggered registration: a retired source is removed by the reactor, and the reactor
     // itself is dropped when this function returns, so no explicit removal is needed.
-    let _registration = reactor
-        .register_raw_fd_with_action(readable_fd, Interest::READ, move |_, _| {
-            wake_action(drain())
-        })
-        .map_err(|error| error.to_string())?;
+    let _registration =
+        reactor
+            .register_raw_fd_with_action(readable_fd, Interest::READ, move |_, _| {
+                wake_action(drain())
+            })
+            .map_err(|error| error.to_string())?;
     let _second_registration = second_readable
         .map(|(fd, mut second_drain)| {
             reactor

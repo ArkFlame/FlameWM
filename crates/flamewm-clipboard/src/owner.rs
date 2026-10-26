@@ -84,7 +84,13 @@ fn run(
     ready: &mpsc::Sender<Result<(), String>>,
 ) -> Result<(), String> {
     let (conn, screen) = x11rb::connect(display).map_err(err)?;
-    let mut names = vec![selection_name, "TARGETS", "TIMESTAMP", "INCR", TICK_PROPERTY];
+    let mut names = vec![
+        selection_name,
+        "TARGETS",
+        "TIMESTAMP",
+        "INCR",
+        TICK_PROPERTY,
+    ];
     names.extend(payloads.iter().map(|(name, _)| *name));
     let atoms = intern(&conn, &names)?;
     let (selection, tick) = (atoms[0], atoms[4]);

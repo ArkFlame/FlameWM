@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use flamewm_image_core::scale::{scale_rgba, ScaleFilter};
+use flamewm_image_core::scale::{ScaleFilter, scale_rgba};
 use flamewm_image_core::{
     ImageSourceFormat, RgbaImage, WrappedImageFormat, decode_bytes, decode_bytes_at,
     decode_icon_container_at, svg,
@@ -97,7 +97,9 @@ fn read_uint(bytes: &[u8], at: usize, len: usize, big_endian: bool) -> Option<u3
     let value = if big_endian {
         raw.iter().fold(0u32, |acc, b| (acc << 8) | u32::from(*b))
     } else {
-        raw.iter().rev().fold(0u32, |acc, b| (acc << 8) | u32::from(*b))
+        raw.iter()
+            .rev()
+            .fold(0u32, |acc, b| (acc << 8) | u32::from(*b))
     };
     Some(value)
 }
@@ -131,14 +133,18 @@ fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         return None;
     }
     match bytes.get(12..16)? {
-        b"VP8 " if bytes.get(23..26)? == [0x9d, 0x01, 0x2a] => {
-            Some((read_uint(bytes, 26, 2, false)? & 0x3fff, read_uint(bytes, 28, 2, false)? & 0x3fff))
-        }
+        b"VP8 " if bytes.get(23..26)? == [0x9d, 0x01, 0x2a] => Some((
+            read_uint(bytes, 26, 2, false)? & 0x3fff,
+            read_uint(bytes, 28, 2, false)? & 0x3fff,
+        )),
         b"VP8L" if *bytes.get(20)? == 0x2f => {
             let bits = read_uint(bytes, 21, 4, false)?;
             Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
         }
-        b"VP8X" => Some((read_uint(bytes, 24, 3, false)? + 1, read_uint(bytes, 27, 3, false)? + 1)),
+        b"VP8X" => Some((
+            read_uint(bytes, 24, 3, false)? + 1,
+            read_uint(bytes, 27, 3, false)? + 1,
+        )),
         _ => None,
     }
 }
@@ -146,10 +152,14 @@ fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 /// Canvas size from the container header, read without decoding. `None` when the header is not recognised.
 pub fn header_dimensions(bytes: &[u8], format: ImageSourceFormat) -> Option<(u32, u32)> {
     match format {
-        ImageSourceFormat::Png if bytes.get(12..16)? == b"IHDR" => {
-            Some((read_uint(bytes, 16, 4, true)?, read_uint(bytes, 20, 4, true)?))
-        }
-        ImageSourceFormat::Gif => Some((read_uint(bytes, 6, 2, false)?, read_uint(bytes, 8, 2, false)?)),
+        ImageSourceFormat::Png if bytes.get(12..16)? == b"IHDR" => Some((
+            read_uint(bytes, 16, 4, true)?,
+            read_uint(bytes, 20, 4, true)?,
+        )),
+        ImageSourceFormat::Gif => Some((
+            read_uint(bytes, 6, 2, false)?,
+            read_uint(bytes, 8, 2, false)?,
+        )),
         ImageSourceFormat::Jpeg => jpeg_dimensions(bytes),
         ImageSourceFormat::Webp => webp_dimensions(bytes),
         _ => None,
@@ -172,8 +182,13 @@ pub fn fit_dimensions(width: u32, height: u32, edge: u32) -> (u32, u32) {
     if width <= edge && height <= edge {
         return (width, height);
     }
-    let scaled = |num: u32, den: u32| ((u64::from(num) * u64::from(edge)) / u64::from(den)).max(1) as u32;
-    if width >= height { (edge, scaled(height, width)) } else { (scaled(width, height), edge) }
+    let scaled =
+        |num: u32, den: u32| ((u64::from(num) * u64::from(edge)) / u64::from(den)).max(1) as u32;
+    if width >= height {
+        (edge, scaled(height, width))
+    } else {
+        (scaled(width, height), edge)
+    }
 }
 
 /// Fits `source` into a `THUMB_SIZE` square of straight RGBA8, centred, with transparent margins.
@@ -187,7 +202,10 @@ pub fn fit_canvas(source: &RgbaImage) -> Vec<u8> {
     let image = scaled.as_ref().unwrap_or(source);
     let edge = THUMB_SIZE as usize;
     let mut canvas = vec![0u8; edge * edge * 4];
-    let (left, top) = ((THUMB_SIZE - image.width) / 2, (THUMB_SIZE - image.height) / 2);
+    let (left, top) = (
+        (THUMB_SIZE - image.width) / 2,
+        (THUMB_SIZE - image.height) / 2,
+    );
     let row_bytes = image.width as usize * 4;
     for y in 0..image.height as usize {
         let src = y * row_bytes;
@@ -201,7 +219,9 @@ pub fn fit_canvas(source: &RgbaImage) -> Vec<u8> {
 /// that is nothing but alpha, or a broken encoder) is treated as "no thumbnail" so the row keeps
 /// its type icon instead of showing an empty slot.
 pub fn visible_canvas(canvas: &[u8]) -> bool {
-    canvas.chunks_exact(4).any(|pixel| pixel[3] >= MIN_VISIBLE_ALPHA)
+    canvas
+        .chunks_exact(4)
+        .any(|pixel| pixel[3] >= MIN_VISIBLE_ALPHA)
 }
 
 /// Decodes image bytes of a known thumbnail format into a fitted canvas. `None` means "no thumbnail".
@@ -216,8 +236,20 @@ pub fn thumbnail_from_bytes(bytes: &[u8], format: ThumbFormat) -> Option<Vec<u8>
         ThumbFormat::Svg | ThumbFormat::Ico => {
             let (fit_w, fit_h) = fit_dimensions(width, height, THUMB_SIZE);
             let decoded = match format {
-                ThumbFormat::Svg => decode_bytes_at(bytes, ImageSourceFormat::Svg, fit_w, fit_h, ScaleFilter::Area),
-                _ => decode_icon_container_at(bytes, WrappedImageFormat::Ico, fit_w, fit_h, ScaleFilter::Area),
+                ThumbFormat::Svg => decode_bytes_at(
+                    bytes,
+                    ImageSourceFormat::Svg,
+                    fit_w,
+                    fit_h,
+                    ScaleFilter::Area,
+                ),
+                _ => decode_icon_container_at(
+                    bytes,
+                    WrappedImageFormat::Ico,
+                    fit_w,
+                    fit_h,
+                    ScaleFilter::Area,
+                ),
             };
             fit_canvas(&decoded.ok()?)
         }
@@ -276,7 +308,9 @@ impl Thumbnails {
     /// Looks up `key` and marks it most recently used.
     pub fn lookup(&mut self, key: &ThumbKey) -> Lookup {
         self.clock += 1;
-        let Some(slot) = self.entries.get_mut(key) else { return Lookup::Missing };
+        let Some(slot) = self.entries.get_mut(key) else {
+            return Lookup::Missing;
+        };
         slot.used = self.clock;
         match &slot.pixels {
             Some(pixels) => Lookup::Ready(slot.id, Arc::clone(pixels)),
@@ -294,10 +328,18 @@ impl Thumbnails {
         self.pending.remove(&key);
         self.next_id += 1;
         self.clock += 1;
-        let slot = Slot { id: self.next_id, pixels: pixels.map(Arc::new), used: self.clock };
+        let slot = Slot {
+            id: self.next_id,
+            pixels: pixels.map(Arc::new),
+            used: self.clock,
+        };
         self.entries.insert(key, slot);
         while self.entries.len() > CACHE_CAPACITY {
-            let oldest = self.entries.iter().min_by_key(|(_, slot)| slot.used).map(|(key, _)| key.clone());
+            let oldest = self
+                .entries
+                .iter()
+                .min_by_key(|(_, slot)| slot.used)
+                .map(|(key, _)| key.clone());
             let Some(oldest) = oldest else { break };
             self.entries.remove(&oldest);
         }

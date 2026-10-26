@@ -277,7 +277,9 @@ pub fn bump_task_view_epoch() -> u64 {
 
 fn epoch_for_target(target: IconTarget) -> u64 {
     match target {
-        IconTarget::StartSlot(_) | IconTarget::LauncherSlot(_) => START_EPOCH.load(Ordering::SeqCst),
+        IconTarget::StartSlot(_) | IconTarget::LauncherSlot(_) => {
+            START_EPOCH.load(Ordering::SeqCst)
+        }
         IconTarget::TaskSlot(_) => TASK_EPOCH.load(Ordering::SeqCst),
     }
 }
@@ -370,10 +372,11 @@ pub fn apply_cached_binding(
     if !target_in_range(target) {
         return Ok(false);
     }
-    let bound = bindings()
-        .lock()
-        .ok()
-        .and_then(|bindings| bindings.get(&(target, edge)).map(|binding| binding.key.clone()));
+    let bound = bindings().lock().ok().and_then(|bindings| {
+        bindings
+            .get(&(target, edge))
+            .map(|binding| binding.key.clone())
+    });
     let Some((name, w, h)) = bound else {
         return Ok(false);
     };

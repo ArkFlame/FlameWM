@@ -218,7 +218,9 @@ mod ui_scale_tests {
         let _ = document.take_damage();
         let before = document.revision();
         for _ in 0..10 {
-            document.set_text("label", "bench-0").expect("identical text");
+            document
+                .set_text("label", "bench-0")
+                .expect("identical text");
         }
         let identical_text_revs = document.revision() - before;
         let identical_text_damage = document.take_damage();
@@ -430,12 +432,14 @@ mod image_replace_tests {
     #[test]
     fn zero_dims_err() {
         let mut doc = image_doc();
-        assert!(doc
-            .replace_image_for_node("icon", "x".to_string(), 0, 1, vec![0, 0, 0, 255])
-            .is_err());
-        assert!(doc
-            .replace_image_for_node("icon", "x".to_string(), 1, 0, Vec::new())
-            .is_err());
+        assert!(
+            doc.replace_image_for_node("icon", "x".to_string(), 0, 1, vec![0, 0, 0, 255])
+                .is_err()
+        );
+        assert!(
+            doc.replace_image_for_node("icon", "x".to_string(), 1, 0, Vec::new())
+                .is_err()
+        );
         assert!(doc.node_image_override(0).is_none());
     }
 
@@ -452,9 +456,10 @@ mod image_replace_tests {
     #[test]
     fn unknown_id_errs() {
         let mut doc = image_doc();
-        assert!(doc
-            .replace_image_for_node("missing", "x".to_string(), 1, 1, vec![0, 0, 0, 255])
-            .is_err());
+        assert!(
+            doc.replace_image_for_node("missing", "x".to_string(), 1, 1, vec![0, 0, 0, 255])
+                .is_err()
+        );
     }
 
     #[test]
@@ -782,12 +787,16 @@ mod geometry_mutation_tests {
             .unwrap();
         assert_eq!(document.revision(), revision);
         assert_eq!(document.peek_damage(), SurfaceDamage::None);
-        assert!(document
-            .set_position_px("desktop-drag-ghost", f32::NAN, 0.0)
-            .is_err());
-        assert!(document
-            .set_size_px("desktop-drag-ghost", -1.0, 0.0)
-            .is_err());
+        assert!(
+            document
+                .set_position_px("desktop-drag-ghost", f32::NAN, 0.0)
+                .is_err()
+        );
+        assert!(
+            document
+                .set_size_px("desktop-drag-ghost", -1.0, 0.0)
+                .is_err()
+        );
         assert_eq!(document.revision(), revision);
     }
 }

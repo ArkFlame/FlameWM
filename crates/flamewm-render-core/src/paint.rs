@@ -469,7 +469,10 @@ mod node_backdrop_tests {
         root.style.background = ColorValue::Literal(Color::TRANSPARENT);
         let mut capsule = node("start-capsule", 8.0, Some(0), None, None);
         capsule.style.background = ColorValue::Literal(Color {
-            r: 25, g: 27, b: 29, a: 13,
+            r: 25,
+            g: 27,
+            b: 29,
+            a: 13,
         });
         let mut document = RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,
@@ -477,17 +480,30 @@ mod node_backdrop_tests {
             variables: Vec::new(),
             assets: Vec::new(),
             nodes: vec![root, capsule],
-        }).expect("capsule fixture");
+        })
+        .expect("capsule fixture");
         document.set_size_px("start-capsule", 42.0, 44.0).unwrap();
-        document.set_node_backdrop("start-capsule", Some(80)).unwrap();
+        document
+            .set_node_backdrop("start-capsule", Some(80))
+            .unwrap();
         let layout = LayoutEngine::compute(&document, 100.0, 44.0, InteractionState::default());
         let commands = build_paint_commands(&document, &layout, InteractionState::default());
-        assert!(commands.iter().any(|command| matches!(command,
-            PaintCommand::NodeBackdrop { opacity: 13, .. }
-        )), "5% tint must not get an opaque blur");
-        assert!(commands.iter().any(|command| matches!(command,
-            PaintCommand::FillRect { color: Color { a: 13, .. }, .. }
-        )), "tint alpha must remain unchanged");
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, PaintCommand::NodeBackdrop { opacity: 13, .. })),
+            "5% tint must not get an opaque blur"
+        );
+        assert!(
+            commands.iter().any(|command| matches!(
+                command,
+                PaintCommand::FillRect {
+                    color: Color { a: 13, .. },
+                    ..
+                }
+            )),
+            "tint alpha must remain unchanged"
+        );
     }
 
     /// Real-Start-shaped scroll fixture: the 100x50 `pane` is the sized box,
@@ -544,9 +560,11 @@ mod node_backdrop_tests {
             .filter(|c| matches!(c, PaintCommand::ScrollbarTrack { .. }))
             .collect();
         assert!(!tracks.is_empty(), "overflowing content must emit a track");
-        assert!(visible
-            .iter()
-            .any(|c| matches!(c, PaintCommand::ScrollbarThumb { .. })));
+        assert!(
+            visible
+                .iter()
+                .any(|c| matches!(c, PaintCommand::ScrollbarThumb { .. }))
+        );
         // Only the vertical axis overflows, so the only track is the 8px
         // right-edge strip of the 100x50 viewport.
         assert_eq!(tracks.len(), 1, "{tracks:?}");
@@ -571,9 +589,11 @@ mod node_backdrop_tests {
             PaintCommand::ScrollbarTrack { .. } | PaintCommand::ScrollbarThumb { .. }
         )));
         // Clip still wraps the scrolled content, so rows keep scrolling under it.
-        assert!(hidden
-            .iter()
-            .any(|c| matches!(c, PaintCommand::PushClip { .. })));
+        assert!(
+            hidden
+                .iter()
+                .any(|c| matches!(c, PaintCommand::PushClip { .. }))
+        );
         assert!(hidden.iter().any(|c| matches!(c, PaintCommand::PopClip)));
     }
 }

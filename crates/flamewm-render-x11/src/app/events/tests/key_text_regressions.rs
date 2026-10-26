@@ -23,7 +23,10 @@ fn plain_altgr_and_alt_keys_carry_text_while_ctrl_and_super_do_not() {
 #[test]
 fn ctrl_a_is_key_a_with_ctrl_and_no_text() {
     assert_eq!(payload(CONTROL_MASK, 'a' as u64), "Ctrl\u{1f}a\u{1f}");
-    assert_eq!(payload(CONTROL_MASK | SHIFT_MASK, 'A' as u64), "Ctrl+Shift\u{1f}A\u{1f}");
+    assert_eq!(
+        payload(CONTROL_MASK | SHIFT_MASK, 'A' as u64),
+        "Ctrl+Shift\u{1f}A\u{1f}"
+    );
 }
 
 #[test]
@@ -32,5 +35,8 @@ fn plain_and_altgr_keys_carry_their_text() {
     assert_eq!(payload(MOD5_MASK, '@' as u64), "\u{1f}@\u{1f}@");
     assert_eq!(payload(MOD1_MASK, 'q' as u64), "Alt\u{1f}q\u{1f}q");
     assert_eq!(payload(MOD1_MASK, '.' as u64), "Alt\u{1f}.\u{1f}.");
-    assert_eq!(payload(MOD1_MASK, XK_BACK_SPACE), "Alt\u{1f}BackSpace\u{1f}");
+    assert_eq!(
+        payload(MOD1_MASK, XK_BACK_SPACE),
+        "Alt\u{1f}BackSpace\u{1f}"
+    );
 }

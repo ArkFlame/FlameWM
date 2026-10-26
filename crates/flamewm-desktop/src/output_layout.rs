@@ -20,14 +20,19 @@ pub(super) fn resolve_output_layout(
     OutputId,
 ) {
     let outputs = control_client()
-        .and_then(|client| match client.call_with_timeout(&ControlRequest::GetDisplays, std::time::Duration::from_secs(2)) {
-            Ok(ControlResponse::Displays(snapshot)) => Ok(snapshot
-                .outputs
-                .into_iter()
-                .filter(|output| output.connected)
-                .collect::<Vec<_>>()),
-            Ok(response) => Err(format!("GetDisplays returned {response:?}")),
-            Err(error) => Err(error.message),
+        .and_then(|client| {
+            match client.call_with_timeout(
+                &ControlRequest::GetDisplays,
+                std::time::Duration::from_secs(2),
+            ) {
+                Ok(ControlResponse::Displays(snapshot)) => Ok(snapshot
+                    .outputs
+                    .into_iter()
+                    .filter(|output| output.connected)
+                    .collect::<Vec<_>>()),
+                Ok(response) => Err(format!("GetDisplays returned {response:?}")),
+                Err(error) => Err(error.message),
+            }
         })
         .unwrap_or_else(|error| {
             eprintln!("desktop: degraded monitor geometry: {error}; using full root geometry");
@@ -157,7 +162,11 @@ fn output_at(state: &DesktopState, point: Point) -> OutputId {
     output_at_in(&state.output_geometries, &state.default_output, point)
 }
 
-pub(super) fn output_at_in(outputs: &[(OutputId, Rect)], fallback: &OutputId, point: Point) -> OutputId {
+pub(super) fn output_at_in(
+    outputs: &[(OutputId, Rect)],
+    fallback: &OutputId,
+    point: Point,
+) -> OutputId {
     outputs
         .iter()
         .find(|(_, rect)| rect.contains(point))
@@ -274,7 +283,10 @@ pub(super) fn projected_cells(state: &DesktopState) -> Vec<(OutputId, Cell)> {
 
 fn panel_geometries() -> Result<Vec<(OutputId, Rect)>, String> {
     let client = ControlClient::connect(BusKind::Session).map_err(|error| format!("{error:?}"))?;
-    match client.call_with_timeout(&ControlRequest::GetPanels, std::time::Duration::from_secs(2)) {
+    match client.call_with_timeout(
+        &ControlRequest::GetPanels,
+        std::time::Duration::from_secs(2),
+    ) {
         Ok(ControlResponse::Panels(snapshot)) => Ok(snapshot
             .panels
             .into_iter()
@@ -323,4 +335,3 @@ pub(super) fn subtract_panel_strip(mut area: Rect, panel: Rect) -> Rect {
     }
     area
 }
-

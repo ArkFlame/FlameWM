@@ -1,3 +1,4 @@
+#[rustfmt::skip]
 #[path = "../session_app_compat.rs"]
 mod session_app_compat;
 

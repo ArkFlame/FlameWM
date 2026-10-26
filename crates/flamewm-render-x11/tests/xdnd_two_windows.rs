@@ -14,16 +14,16 @@ use flamewm_render_x11::{
     WindowGeometrySlot, X11Config, X11WindowRole, parse_uri_list,
     run_with_controller_events_with_reactor_geometry,
 };
+use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
-    AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux,
-    EventMask, PropMode, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, WindowClass,
+    AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask, PropMode,
+    SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, WindowClass,
 };
-use x11rb::rust_connection::RustConnection;
 use x11rb::protocol::xtest::ConnectionExt as _;
+use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
-use x11rb::CURRENT_TIME;
 
 const TARGET_TITLE: &str = "xdnd-target-test";
 const WAIT: Duration = Duration::from_secs(10);
@@ -183,7 +183,7 @@ fn drop_scenario(display: &str) {
     let events: Arc<Mutex<Vec<ActionEvent>>> = Arc::default();
     let sink = Arc::clone(&events);
     let target = std::thread::spawn(move || {
-            let config = X11Config {
+        let config = X11Config {
             width: 200,
             height: 100,
             x: TARGET_X,
@@ -204,7 +204,9 @@ fn drop_scenario(display: &str) {
             move |event, _document| {
                 let flamewm_render_core::ControllerEvent::Action(action) = event;
                 if action.action.starts_with("__flamewm.window.drag.") {
-                    sink.lock().map_err(|error| error.to_string())?.push(action.clone());
+                    sink.lock()
+                        .map_err(|error| error.to_string())?
+                        .push(action.clone());
                 }
                 Ok(())
             },
@@ -260,7 +262,8 @@ fn drop_scenario(display: &str) {
     let drop_path = std::env::temp_dir().join("xdnd test/ünï.txt");
     let send = |to: u32, kind: u32, data: [u32; 5]| {
         let event = ClientMessageEvent::new(32, to, kind, data);
-        conn.send_event(false, to, EventMask::NO_EVENT, event).expect("send");
+        conn.send_event(false, to, EventMask::NO_EVENT, event)
+            .expect("send");
         conn.flush().expect("flush");
     };
     send(window, enter, [source, 5 << 24, uri_list, text_plain, 0]);
@@ -308,7 +311,10 @@ fn drop_scenario(display: &str) {
         }
         None
     });
-    assert!(served.is_some(), "target requested XdndSelection after the drop");
+    assert!(
+        served.is_some(),
+        "target requested XdndSelection after the drop"
+    );
 
     let finish = next_message(&conn, finished).expect("XdndFinished reply");
     assert_eq!(finish[1] & 1, 1, "drop completed as accepted");
@@ -327,7 +333,11 @@ fn drop_scenario(display: &str) {
         .iter()
         .find(|event| event.action == FILE_DRAG_ENTER_ACTION)
         .expect("enter event delivered");
-    assert_eq!((enter_event.x, enter_event.y), (20.0, 20.0), "window-relative position");
+    assert_eq!(
+        (enter_event.x, enter_event.y),
+        (20.0, 20.0),
+        "window-relative position"
+    );
     let drop_event = seen
         .iter()
         .find(|event| event.action == FILE_DRAG_DROP_ACTION)
@@ -418,8 +428,13 @@ fn drag_scenario(display: &str) {
         names("FLAMEWM_TEST_WAKE"),
     );
     let send = |to: u32, kind: u32, data: [u32; 5]| {
-        conn.send_event(false, to, EventMask::NO_EVENT, ClientMessageEvent::new(32, to, kind, data))
-            .expect("send");
+        conn.send_event(
+            false,
+            to,
+            EventMask::NO_EVENT,
+            ClientMessageEvent::new(32, to, kind, data),
+        )
+        .expect("send");
         conn.flush().expect("flush");
     };
 
@@ -428,19 +443,28 @@ fn drag_scenario(display: &str) {
     begin.store(true, Ordering::SeqCst);
     send(flamewm, wake, [0; 5]);
     let owner = wait_for(|| {
-        (conn.get_selection_owner(xdnd_selection).ok()?.reply().ok()?.owner == flamewm).then_some(())
+        (conn
+            .get_selection_owner(xdnd_selection)
+            .ok()?
+            .reply()
+            .ok()?
+            .owner
+            == flamewm)
+            .then_some(())
     });
     assert!(owner.is_some(), "source owns XdndSelection while dragging");
 
     // Press the button so the release below is a real release; X ignores a release of a
     // button that is not down.
-    conn.xtest_fake_input(4, 1, 0, root, 0, 0, 0).expect("button press");
+    conn.xtest_fake_input(4, 1, 0, root, 0, 0, 0)
+        .expect("button press");
     conn.flush().expect("flush");
 
     // Pointer over the external target: XTEST motion inside its rectangle.
     let (pointer_x, pointer_y) = (TARGET_X_EXTERNAL + 40, TARGET_Y_EXTERNAL + 40);
     let enter_msg = wait_for(|| {
-        conn.xtest_fake_input(6, 0, 0, root, pointer_x as i16, pointer_y as i16, 0).ok()?;
+        conn.xtest_fake_input(6, 0, 0, root, pointer_x as i16, pointer_y as i16, 0)
+            .ok()?;
         conn.flush().ok()?;
         std::thread::sleep(Duration::from_millis(20));
         while let Some(event) = conn.poll_for_event().ok()? {
@@ -461,7 +485,8 @@ fn drag_scenario(display: &str) {
     send(flamewm, status, [target, 1, 0, 0, copy]);
 
     // Release the button: the source drops on the accepting target.
-    conn.xtest_fake_input(5, 1, 0, root, 0, 0, 0).expect("button release");
+    conn.xtest_fake_input(5, 1, 0, root, 0, 0, 0)
+        .expect("button release");
     conn.flush().expect("flush");
     let drop_msg = next_message(&conn, drop_msg).expect("XdndDrop");
     assert_eq!(drop_msg[0], flamewm);

@@ -24,7 +24,11 @@ pub struct Properties {
 /// Reads metadata without following symlinks, so a link describes itself.
 pub fn read(path: &Path) -> io::Result<Properties> {
     let meta = fs::symlink_metadata(path)?;
-    let link_target = if meta.file_type().is_symlink() { fs::read_link(path).ok() } else { None };
+    let link_target = if meta.file_type().is_symlink() {
+        fs::read_link(path).ok()
+    } else {
+        None
+    };
     Ok(Properties {
         path: path.to_path_buf(),
         size: meta.len(),
@@ -46,10 +50,17 @@ pub fn recursive_size(path: &Path, cancel: &AtomicBool) -> io::Result<u64> {
         if cancel.load(Ordering::Relaxed) {
             return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
         }
-        let meta = match fs::symlink_metadata(&dir) { Ok(m) => m, Err(_) => continue };
+        let meta = match fs::symlink_metadata(&dir) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
         total += meta.len();
-        if !meta.is_dir() { continue; }
-        let Ok(children) = fs::read_dir(&dir) else { continue };
+        if !meta.is_dir() {
+            continue;
+        }
+        let Ok(children) = fs::read_dir(&dir) else {
+            continue;
+        };
         pending.extend(children.flatten().map(|c| c.path()));
     }
     Ok(total)
@@ -57,10 +68,17 @@ pub fn recursive_size(path: &Path, cancel: &AtomicBool) -> io::Result<u64> {
 
 /// `rwxr-xr-x` style string for the nine permission bits.
 pub fn mode_string(mode: u32) -> String {
-    (0..9).rev().map(|bit| {
-        let flag = match bit % 3 { 2 => 'r', 1 => 'w', _ => 'x' };
-        if mode >> bit & 1 == 1 { flag } else { '-' }
-    }).collect()
+    (0..9)
+        .rev()
+        .map(|bit| {
+            let flag = match bit % 3 {
+                2 => 'r',
+                1 => 'w',
+                _ => 'x',
+            };
+            if mode >> bit & 1 == 1 { flag } else { '-' }
+        })
+        .collect()
 }
 
 /// Parses an octal chmod value such as `644` or `4755`.
@@ -75,7 +93,10 @@ pub fn parse_mode(text: &str) -> Result<u32, String> {
 /// Applies permission bits. Symlinks are refused: `chmod` would change the target instead.
 pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     if fs::symlink_metadata(path)?.file_type().is_symlink() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "cannot change permissions of a symlink"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cannot change permissions of a symlink",
+        ));
     }
     fs::set_permissions(path, fs::Permissions::from_mode(mode & 0o7777))
 }

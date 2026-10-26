@@ -95,11 +95,7 @@ pub fn bounding_rectangles_with_titlebar(
 /// frame. The titlebar sits above the client, so its top corners stay square;
 /// only the last `radius` rows are inset. A zero radius is one full rectangle.
 #[must_use]
-pub fn client_bottom_rounded_rectangles(
-    width: u32,
-    height: u32,
-    radius: u32,
-) -> Vec<Rectangle> {
+pub fn client_bottom_rounded_rectangles(width: u32, height: u32, radius: u32) -> Vec<Rectangle> {
     if width == 0 || height == 0 {
         return Vec::new();
     }

@@ -59,10 +59,30 @@ pub(crate) fn border_bands(rect: Rect, width: f32) -> [Rect; 4] {
     let w = width.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
     let inner_h = (rect.height - 2.0 * w).max(0.0);
     [
-        Rect { x: rect.x, y: rect.y, width: rect.width, height: w },
-        Rect { x: rect.x, y: rect.y + rect.height - w, width: rect.width, height: w },
-        Rect { x: rect.x, y: rect.y + w, width: w, height: inner_h },
-        Rect { x: rect.x + rect.width - w, y: rect.y + w, width: w, height: inner_h },
+        Rect {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: w,
+        },
+        Rect {
+            x: rect.x,
+            y: rect.y + rect.height - w,
+            width: rect.width,
+            height: w,
+        },
+        Rect {
+            x: rect.x,
+            y: rect.y + w,
+            width: w,
+            height: inner_h,
+        },
+        Rect {
+            x: rect.x + rect.width - w,
+            y: rect.y + w,
+            width: w,
+            height: inner_h,
+        },
     ]
 }
 
@@ -71,31 +91,66 @@ mod tests {
     use super::*;
 
     fn r(x: f32, y: f32, width: f32, height: f32) -> Rect {
-        Rect { x, y, width, height }
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     #[test]
     fn intersect_returns_overlap_and_none_for_disjoint_or_touching() {
-        assert_eq!(intersect(r(0.0, 0.0, 10.0, 10.0), r(5.0, 2.0, 10.0, 4.0)), Some(r(5.0, 2.0, 5.0, 4.0)));
-        assert_eq!(intersect(r(0.0, 0.0, 10.0, 10.0), r(10.0, 0.0, 5.0, 5.0)), None, "edge contact has no area");
-        assert_eq!(intersect(r(0.0, 0.0, 10.0, 10.0), r(20.0, 20.0, 1.0, 1.0)), None);
+        assert_eq!(
+            intersect(r(0.0, 0.0, 10.0, 10.0), r(5.0, 2.0, 10.0, 4.0)),
+            Some(r(5.0, 2.0, 5.0, 4.0))
+        );
+        assert_eq!(
+            intersect(r(0.0, 0.0, 10.0, 10.0), r(10.0, 0.0, 5.0, 5.0)),
+            None,
+            "edge contact has no area"
+        );
+        assert_eq!(
+            intersect(r(0.0, 0.0, 10.0, 10.0), r(20.0, 20.0, 1.0, 1.0)),
+            None
+        );
     }
 
     #[test]
     fn stack_bounds_is_the_nested_intersection() {
-        let stack = [r(0.0, 0.0, 100.0, 100.0), r(10.0, 10.0, 50.0, 80.0), r(0.0, 40.0, 200.0, 200.0)];
+        let stack = [
+            r(0.0, 0.0, 100.0, 100.0),
+            r(10.0, 10.0, 50.0, 80.0),
+            r(0.0, 40.0, 200.0, 200.0),
+        ];
         assert_eq!(stack_bounds(&stack), Some(r(10.0, 40.0, 50.0, 50.0)));
         assert_eq!(stack_bounds(&[]), None);
-        assert_eq!(stack_bounds(&[r(0.0, 0.0, 5.0, 5.0), r(9.0, 9.0, 5.0, 5.0)]), None);
+        assert_eq!(
+            stack_bounds(&[r(0.0, 0.0, 5.0, 5.0), r(9.0, 9.0, 5.0, 5.0)]),
+            None
+        );
     }
 
     #[test]
     fn visible_under_classifies_whole_part_and_hidden() {
         let clip = [r(0.0, 0.0, 100.0, 100.0), r(0.0, 0.0, 100.0, 90.0)];
-        assert_eq!(visible_under(r(10.0, 10.0, 20.0, 20.0), &clip), Visible::Whole);
-        assert_eq!(visible_under(r(10.0, 85.0, 20.0, 20.0), &clip), Visible::Part(r(10.0, 85.0, 20.0, 5.0)));
-        assert_eq!(visible_under(r(10.0, 95.0, 20.0, 5.0), &clip), Visible::Hidden);
-        assert_eq!(visible_under(r(10.0, 95.0, 20.0, 5.0), &[]), Visible::Whole, "no clip leaves it whole");
+        assert_eq!(
+            visible_under(r(10.0, 10.0, 20.0, 20.0), &clip),
+            Visible::Whole
+        );
+        assert_eq!(
+            visible_under(r(10.0, 85.0, 20.0, 20.0), &clip),
+            Visible::Part(r(10.0, 85.0, 20.0, 5.0))
+        );
+        assert_eq!(
+            visible_under(r(10.0, 95.0, 20.0, 5.0), &clip),
+            Visible::Hidden
+        );
+        assert_eq!(
+            visible_under(r(10.0, 95.0, 20.0, 5.0), &[]),
+            Visible::Whole,
+            "no clip leaves it whole"
+        );
     }
 
     #[test]
@@ -106,6 +161,10 @@ mod tests {
         assert_eq!(bands[2], r(0.0, 1.0, 1.0, 6.0));
         assert_eq!(bands[3], r(9.0, 1.0, 1.0, 6.0));
         let area: f32 = bands.iter().map(|b| b.width * b.height).sum();
-        assert_eq!(area, 10.0 * 8.0 - 8.0 * 6.0, "ring area equals outer minus inner");
+        assert_eq!(
+            area,
+            10.0 * 8.0 - 8.0 * 6.0,
+            "ring area equals outer minus inner"
+        );
     }
 }

@@ -242,7 +242,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         // A layout zone wins over the free move: end the drag without moving the frame to the
         // pointer first, then apply only the layout.
         if release_from_move {
-            let fallback = self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer);
+            let fallback = self
+                .clients
+                .get(&client_id)
+                .map_or(self.work_area(), |s| s.outer);
             let target = self.snap_target_at(event.root_x, event.root_y, fallback);
             let action = release_action_for_move(release_move, mode_before, target);
             if action != ReleaseAction::None {

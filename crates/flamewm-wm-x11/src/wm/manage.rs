@@ -245,7 +245,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             .filter(|reply| reply.same_screen);
             match pointer {
                 Some(pointer) => {
-                    let point = RootPoint::new(i32::from(pointer.root_x), i32::from(pointer.root_y));
+                    let point =
+                        RootPoint::new(i32::from(pointer.root_x), i32::from(pointer.root_y));
                     let work_area = self
                         .output_for_point(point.x, point.y, Rect::new(point.x, point.y, 1, 1))
                         .map_or(work_root, |output| RootRect::from_legacy(output.work_area));

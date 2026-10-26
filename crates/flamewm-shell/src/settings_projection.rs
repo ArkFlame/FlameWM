@@ -295,11 +295,7 @@ pub fn taskbar_items(snapshot: Option<&SettingsSnapshot>) -> TaskbarItems {
         workspaces: bool_setting(snapshot, "taskbarShowWorkspaces", defaults.workspaces),
         activities: bool_setting(snapshot, "taskbarActivities", defaults.activities),
         separate: bool_setting(snapshot, "taskbarSeparate", defaults.separate),
-        blur_percent: percent_setting(
-            snapshot,
-            "surfaceBlurPercent",
-            defaults.blur_percent,
-        ),
+        blur_percent: percent_setting(snapshot, "surfaceBlurPercent", defaults.blur_percent),
     }
 }
 

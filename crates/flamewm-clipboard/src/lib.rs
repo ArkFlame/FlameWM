@@ -60,13 +60,21 @@ impl Clipboard {
         if paths.is_empty() || !paths.iter().all(|path| path.is_absolute()) {
             return Err("clipboard files must be a non-empty list of absolute paths".into());
         }
-        owner::spawn(self.display.clone(), "CLIPBOARD", codec::payloads(paths, op))
+        owner::spawn(
+            self.display.clone(),
+            "CLIPBOARD",
+            codec::payloads(paths, op),
+        )
     }
 
     /// Takes CLIPBOARD and serves `text` as UTF8_STRING (and STRING for ASCII text) until another
     /// client replaces it. Returns once the selection is owned.
     pub fn set_text(&self, text: &str) -> Result<(), String> {
-        owner::spawn(self.display.clone(), "CLIPBOARD", codec::text_payloads(text))
+        owner::spawn(
+            self.display.clone(),
+            "CLIPBOARD",
+            codec::text_payloads(text),
+        )
     }
 
     /// Takes PRIMARY (the middle-click selection) and serves `text` like `set_text`.

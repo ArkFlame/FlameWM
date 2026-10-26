@@ -28,7 +28,9 @@ pub fn surface_alpha(opacity_percent: u8) -> u8 {
 }
 
 fn accent(snapshot: &SettingsSnapshot) -> u32 {
-    let Some(name) = text_setting(snapshot, "accent") else { return DEFAULT_ACCENT };
+    let Some(name) = text_setting(snapshot, "accent") else {
+        return DEFAULT_ACCENT;
+    };
     match name {
         "red" => DEFAULT_ACCENT,
         "blue" => 0x3dae_e9,
@@ -46,7 +48,9 @@ pub fn follow_palette(snapshot: &SettingsSnapshot) -> Palette {
     let surface = surface_fill(snapshot).rgb;
     let accent = accent(snapshot);
     let blend = |a: u32, b: u32, weight: u32| {
-        let mix = |shift: u32| (((a >> shift) & 0xff) * weight + ((b >> shift) & 0xff) * (100 - weight)) / 100;
+        let mix = |shift: u32| {
+            (((a >> shift) & 0xff) * weight + ((b >> shift) & 0xff) * (100 - weight)) / 100
+        };
         (mix(16) << 16) | (mix(8) << 8) | mix(0)
     };
     Palette {
@@ -59,7 +63,11 @@ pub fn follow_palette(snapshot: &SettingsSnapshot) -> Palette {
 }
 
 /// Resolves the active theme name to a palette. `follow-flamewm` (or an unknown name) uses FlameWM colours or Dark+.
-pub fn resolve_palette(active: &str, themes: &[Theme], snapshot: Option<&SettingsSnapshot>) -> Palette {
+pub fn resolve_palette(
+    active: &str,
+    themes: &[Theme],
+    snapshot: Option<&SettingsSnapshot>,
+) -> Palette {
     if active == FOLLOW_FLAMEWM {
         return snapshot.map_or_else(|| builtin_themes()[0].palette.clone(), follow_palette);
     }
@@ -71,18 +79,29 @@ pub fn resolve_palette(active: &str, themes: &[Theme], snapshot: Option<&Setting
 }
 
 /// Backdrop for the window: shared wallpaper settings with the terminal opacity and blur. `None` at 100% opacity.
-pub fn window_backdrop(snapshot: &SettingsSnapshot, packaged_root: &Path, opacity: u8) -> Option<WindowBackdrop> {
+pub fn window_backdrop(
+    snapshot: &SettingsSnapshot,
+    packaged_root: &Path,
+    opacity: u8,
+) -> Option<WindowBackdrop> {
     if opacity >= 100 {
         return None;
     }
-    let fit = text_setting(snapshot, "wallpaperFit").unwrap_or("").trim().to_owned();
+    let fit = text_setting(snapshot, "wallpaperFit")
+        .unwrap_or("")
+        .trim()
+        .to_owned();
     let blur = match snapshot.values.get("surfaceBlurPercent") {
         Some(SettingValue::Percent(percent)) => (*percent).min(100),
         _ => DEFAULT_BLUR_PERCENT,
     };
     Some(WindowBackdrop {
         wallpaper: text_setting(snapshot, "wallpaper").unwrap_or("").to_owned(),
-        fit: if fit.is_empty() { "fill".to_owned() } else { fit },
+        fit: if fit.is_empty() {
+            "fill".to_owned()
+        } else {
+            fit
+        },
         packaged_root: packaged_root.to_path_buf(),
         opacity_percent: opacity.min(100),
         blur_percent: blur,
@@ -98,15 +117,25 @@ mod tests {
         assert_eq!(surface_alpha(100), 255);
         assert_eq!(surface_alpha(80), 204);
         let snapshot = SettingsSnapshot::new(1);
-        assert!(window_backdrop(&snapshot, Path::new("/x"), 100).is_none(), "opaque surfaces install no backdrop");
-        assert_eq!(window_backdrop(&snapshot, Path::new("/x"), 80).map(|spec| spec.opacity_percent), Some(80));
+        assert!(
+            window_backdrop(&snapshot, Path::new("/x"), 100).is_none(),
+            "opaque surfaces install no backdrop"
+        );
+        assert_eq!(
+            window_backdrop(&snapshot, Path::new("/x"), 80).map(|spec| spec.opacity_percent),
+            Some(80)
+        );
     }
 
     #[test]
     fn follow_mode_takes_surface_and_accent_from_flamewm() {
         let mut snapshot = SettingsSnapshot::new(1);
-        snapshot.values.insert("surfaceColor".into(), SettingValue::Text("#102030".into()));
-        snapshot.values.insert("accent".into(), SettingValue::Text("#3DAEE9".into()));
+        snapshot
+            .values
+            .insert("surfaceColor".into(), SettingValue::Text("#102030".into()));
+        snapshot
+            .values
+            .insert("accent".into(), SettingValue::Text("#3DAEE9".into()));
         let palette = resolve_palette(FOLLOW_FLAMEWM, &[], Some(&snapshot));
         assert_eq!(palette.background, surface_fill(&snapshot).rgb);
         assert_eq!(palette.cursor, 0x3dae_e9);

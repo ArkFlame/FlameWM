@@ -8,7 +8,11 @@ pub const KIND_MIN: f32 = 80.0;
 
 /// Column indices used by header dividers. Divider `Modified` sits between Name and Modified, and so on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Divider { Modified, Size, Kind }
+pub enum Divider {
+    Modified,
+    Size,
+    Kind,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Widths {
@@ -19,14 +23,22 @@ pub struct Widths {
 
 impl Default for Widths {
     fn default() -> Self {
-        Self { modified: 120.0, size: 100.0, kind: 130.0 }
+        Self {
+            modified: 120.0,
+            size: 100.0,
+            kind: 130.0,
+        }
     }
 }
 
 impl Widths {
     /// Widths read from preferences, raised to their minimums so a hand-edited file cannot break the layout.
     pub fn clamped(self) -> Self {
-        Self { modified: self.modified.max(MODIFIED_MIN), size: self.size.max(SIZE_MIN), kind: self.kind.max(KIND_MIN) }
+        Self {
+            modified: self.modified.max(MODIFIED_MIN),
+            size: self.size.max(SIZE_MIN),
+            kind: self.kind.max(KIND_MIN),
+        }
     }
 
     /// Width of the Name column for a list `total` px wide.
@@ -77,13 +89,23 @@ mod tests {
         w.drag_divider(Divider::Modified, -30.0, 1000.0, false);
         assert_eq!(w.modified, 150.0, "dragging left widens Modified");
         w.drag_divider(Divider::Modified, 10_000.0, 1000.0, false);
-        assert_eq!(w.modified, MODIFIED_MIN, "dragging right narrows Modified to its minimum");
+        assert_eq!(
+            w.modified, MODIFIED_MIN,
+            "dragging right narrows Modified to its minimum"
+        );
         w.drag_divider(Divider::Modified, -10_000.0, 1000.0, false);
-        assert_eq!(w.name_width(1000.0, false), NAME_MIN, "Name never drops below its minimum");
+        assert_eq!(
+            w.name_width(1000.0, false),
+            NAME_MIN,
+            "Name never drops below its minimum"
+        );
         // A window too narrow for any valid split must not panic.
         let mut tiny = Widths::default();
         tiny.drag_divider(Divider::Modified, -5.0, 100.0, true);
-        assert_eq!(tiny.modified, MODIFIED_MIN, "no room to grow, so the column stays at its minimum");
+        assert_eq!(
+            tiny.modified, MODIFIED_MIN,
+            "no room to grow, so the column stays at its minimum"
+        );
     }
 
     #[test]
@@ -94,7 +116,11 @@ mod tests {
         assert_eq!((w.modified, w.size), (145.0, 75.0));
         w.drag_divider(Divider::Kind, -1000.0, 1000.0, true);
         assert_eq!(w.size, SIZE_MIN, "Size stops at its minimum");
-        assert_eq!(w.kind, 130.0 + (75.0 - SIZE_MIN), "Kind absorbed the change");
+        assert_eq!(
+            w.kind,
+            130.0 + (75.0 - SIZE_MIN),
+            "Kind absorbed the change"
+        );
         assert!((w.modified + w.size + w.kind - before).abs() < 1e-3);
     }
 }

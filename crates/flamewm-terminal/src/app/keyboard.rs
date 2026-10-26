@@ -1,15 +1,16 @@
 //! Keyboard input: shortcuts, inline rename, the typed-line tracker and key encoding for the focused child.
 
-use flamewm_ui_x11::UiKeyEvent;
-use flamewm_ui_x11::UiKeyPhase;
+use super::{App, View};
 use crate::keys;
 use crate::keys::Mods;
 use crate::keys::Shortcut;
-use super::{App, View};
+use flamewm_ui_x11::UiKeyEvent;
+use flamewm_ui_x11::UiKeyPhase;
 
 impl App {
     pub(super) fn app_cursor(&self) -> bool {
-        self.focused_pane().is_some_and(|pane| pane.session.screen.app_cursor)
+        self.focused_pane()
+            .is_some_and(|pane| pane.session.screen.app_cursor)
     }
 
     /// Keyboard input: shortcuts first, then the settings view, then the child.
@@ -21,7 +22,10 @@ impl App {
             return;
         }
         if self.rename.is_some() {
-            let text = event.text.as_deref().filter(|t| !t.is_empty() && !t.chars().any(char::is_control));
+            let text = event
+                .text
+                .as_deref()
+                .filter(|t| !t.is_empty() && !t.chars().any(char::is_control));
             match event.key.to_ascii_lowercase().as_str() {
                 "return" | "enter" | "kp_enter" => self.finish_rename(true),
                 "escape" => self.finish_rename(false),
@@ -67,22 +71,31 @@ impl App {
 
     /// Enter on a typed `/theme` line, outside full-screen programs.
     fn theme_command_submitted(&self, event: &UiKeyEvent) -> bool {
-        let enter = matches!(event.key.to_ascii_lowercase().as_str(), "return" | "enter" | "kp_enter");
-        let Some(pane) = self.focused_pane() else { return false };
+        let enter = matches!(
+            event.key.to_ascii_lowercase().as_str(),
+            "return" | "enter" | "kp_enter"
+        );
+        let Some(pane) = self.focused_pane() else {
+            return false;
+        };
         enter && pane.input_line == "/theme" && !pane.session.screen.alt_active()
     }
 
     /// Follows the text sent to the shell. Editing keys the line cannot follow (arrows, Tab, Ctrl) clear it.
     fn track_input_line(&mut self, event: &UiKeyEvent) {
         let mods = Mods::from_names(event.modifiers.iter());
-        let Some(pane) = self.focused_pane_mut() else { return };
+        let Some(pane) = self.focused_pane_mut() else {
+            return;
+        };
         match event.key.to_ascii_lowercase().as_str() {
             "backspace" => {
                 pane.input_line.pop();
             }
             "return" | "enter" | "kp_enter" | "escape" => pane.input_line.clear(),
             _ => match event.text.as_deref() {
-                Some(text) if !mods.ctrl && !mods.alt && !text.chars().any(char::is_control) => pane.input_line.push_str(text),
+                Some(text) if !mods.ctrl && !mods.alt && !text.chars().any(char::is_control) => {
+                    pane.input_line.push_str(text)
+                }
                 _ => pane.input_line.clear(),
             },
         }
@@ -103,7 +116,9 @@ impl App {
             }
         }
         let at_prompt = self.at_prompt();
-        let Some(pane) = self.focused_pane_mut() else { return bytes };
+        let Some(pane) = self.focused_pane_mut() else {
+            return bytes;
+        };
         if let Some(line) = pane.input.key(&name, mods, event.text.as_deref()) {
             if at_prompt {
                 let _ = self.history.record(&line);
@@ -116,12 +131,16 @@ impl App {
     /// terminal does not echo. A password prompt (canonical, no echo) and a program that reads keys with echo on are
     /// both excluded, so what is typed there is never recorded.
     pub(super) fn at_prompt(&self) -> bool {
-        let Some(pane) = self.focused_pane() else { return false };
+        let Some(pane) = self.focused_pane() else {
+            return false;
+        };
         #[cfg(test)]
         if let Some(prompt) = pane.prompt {
             return prompt;
         }
-        !pane.session.screen.alt_active() && !pane.session.pty.canonical() && !pane.session.pty.echoing()
+        !pane.session.screen.alt_active()
+            && !pane.session.pty.canonical()
+            && !pane.session.pty.echoing()
     }
 
     fn shortcut(&mut self, shortcut: Shortcut) {

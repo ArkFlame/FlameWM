@@ -18,7 +18,12 @@ pub struct UiCache {
 }
 
 const fn rgb(value: u32) -> UiColor {
-    UiColor { r: (value >> 16) as u8, g: (value >> 8) as u8, b: value as u8, a: 255 }
+    UiColor {
+        r: (value >> 16) as u8,
+        g: (value >> 8) as u8,
+        b: value as u8,
+        a: 255,
+    }
 }
 
 /// Fits a row into the pool: when a row has more runs than slots, the tail merges into the last slot. Those cells
@@ -48,7 +53,8 @@ impl App {
         self.project_surface(doc)?;
         self.project_font(doc)?;
         let frame = self.frame();
-        self.ui.project_rows(doc, (self.cell_w, self.cell_h), &frame)
+        self.ui
+            .project_rows(doc, (self.cell_w, self.cell_h), &frame)
     }
 
     fn project_surface(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -56,7 +62,10 @@ impl App {
         if self.ui.surface == Some(surface) {
             return Ok(());
         }
-        let color = UiColor { a: self.surface_alpha, ..rgb(self.palette.background) };
+        let color = UiColor {
+            a: self.surface_alpha,
+            ..rgb(self.palette.background)
+        };
         // The window's root node carries the surface fill (the explorer does the same with its root). The grid node is
         // transparent, so the translucent fill shows through it.
         doc.background("terminal", color)?;
@@ -85,7 +94,12 @@ impl App {
 
 impl UiCache {
     /// Writes every pooled row of `frame`. Rows whose runs did not change write nothing.
-    pub fn project_rows(&mut self, doc: &mut impl UiDocumentAccess, cell: (f32, f32), frame: &[Row]) -> Result<(), String> {
+    pub fn project_rows(
+        &mut self,
+        doc: &mut impl UiDocumentAccess,
+        cell: (f32, f32),
+        frame: &[Row],
+    ) -> Result<(), String> {
         if self.rows.len() != POOL_ROWS {
             self.rows = vec![None; POOL_ROWS];
         }
@@ -98,9 +112,18 @@ impl UiCache {
 
     /// Writes one row. A row with the same allocation as last frame, or the same runs in a new allocation, is
     /// skipped without copying its runs; only the handle is kept.
-    fn project_row(&mut self, doc: &mut impl UiDocumentAccess, cell: (f32, f32), row: usize, runs: &Row) -> Result<(), String> {
+    fn project_row(
+        &mut self,
+        doc: &mut impl UiDocumentAccess,
+        cell: (f32, f32),
+        row: usize,
+        runs: &Row,
+    ) -> Result<(), String> {
         let previous = self.rows[row].clone();
-        if previous.as_ref().is_some_and(|prev| Arc::ptr_eq(prev, runs) || prev[..] == runs[..]) {
+        if previous
+            .as_ref()
+            .is_some_and(|prev| Arc::ptr_eq(prev, runs) || prev[..] == runs[..])
+        {
             self.rows[row] = Some(runs.clone());
             return Ok(());
         }
@@ -108,7 +131,10 @@ impl UiCache {
         // `None` (never written) must write every slot, including the hidden ones.
         let previous = previous.as_deref().map(|prev| fit(prev, POOL_RUNS));
         for slot in 0..POOL_RUNS {
-            if previous.as_ref().is_some_and(|prev| prev.get(slot) == fitted.get(slot)) {
+            if previous
+                .as_ref()
+                .is_some_and(|prev| prev.get(slot) == fitted.get(slot))
+            {
                 continue;
             }
             match fitted.get(slot) {
@@ -120,14 +146,30 @@ impl UiCache {
         Ok(())
     }
 
-    fn write_run(doc: &mut impl UiDocumentAccess, cell: (f32, f32), row: usize, slot: usize, run: &Run) -> Result<(), String> {
+    fn write_run(
+        doc: &mut impl UiDocumentAccess,
+        cell: (f32, f32),
+        row: usize,
+        slot: usize,
+        run: &Run,
+    ) -> Result<(), String> {
         let id = run_id(row, slot);
         // nowrap collapses ASCII spaces, so cells are written as no-break spaces to keep their width.
         doc.text(&id, run.text.replace(' ', "\u{a0}"))?;
         let (cell_w, cell_h) = cell;
         let (x, y, w, h) = match run.shape {
-            Some(arm) => ((run.col as f32 + arm.x0) * cell_w, (row as f32 + arm.y0) * cell_h, (arm.x1 - arm.x0) * cell_w, (arm.y1 - arm.y0) * cell_h),
-            None => (run.col as f32 * cell_w, row as f32 * cell_h, run.cells as f32 * cell_w, cell_h),
+            Some(arm) => (
+                (run.col as f32 + arm.x0) * cell_w,
+                (row as f32 + arm.y0) * cell_h,
+                (arm.x1 - arm.x0) * cell_w,
+                (arm.y1 - arm.y0) * cell_h,
+            ),
+            None => (
+                run.col as f32 * cell_w,
+                row as f32 * cell_h,
+                run.cells as f32 * cell_w,
+                cell_h,
+            ),
         };
         doc.position(&id, x, y)?;
         doc.size(&id, w, h)?;
@@ -146,7 +188,15 @@ mod tests {
     use super::*;
 
     fn run(col: usize, text: &str) -> Run {
-        Run { col, cells: text.chars().count(), text: text.into(), fg: 0, bg: None, bold: false, shape: None }
+        Run {
+            col,
+            cells: text.chars().count(),
+            text: text.into(),
+            fg: 0,
+            bg: None,
+            bold: false,
+            shape: None,
+        }
     }
 
     #[test]
@@ -187,30 +237,86 @@ mod bench {
     }
 
     impl UiDocumentAccess for Recorder {
-        fn text(&mut self, _: &str, _: String) -> Result<(), String> { self.calls += 1; self.texts += 1; Ok(()) }
-        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn visible(&mut self, _: &str, _: bool) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn background(&mut self, _: &str, _: UiColor) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn background_clear(&mut self, _: &str) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn border_clear(&mut self, _: &str) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn foreground_clear(&mut self, _: &str) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn overflow(&mut self, _: &str, _: Overflow, _: Overflow) -> Result<(), String> { self.calls += 1; Ok(()) }
-        fn layer(&mut self, _: &str, _: UiLayer) -> Result<(), String> { self.calls += 1; Ok(()) }
+        fn text(&mut self, _: &str, _: String) -> Result<(), String> {
+            self.calls += 1;
+            self.texts += 1;
+            Ok(())
+        }
+        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn visible(&mut self, _: &str, _: bool) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn background(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn background_clear(&mut self, _: &str) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn border_clear(&mut self, _: &str) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn overflow(&mut self, _: &str, _: Overflow, _: Overflow) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+        fn layer(&mut self, _: &str, _: UiLayer) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
     }
 
     /// One htop-like tick: cursor home, then 40 coloured rows. Most cells repeat every tick; two CPU cells change.
     fn htop_tick(tick: usize) -> Vec<u8> {
         let mut out = b"\x1b[H".to_vec();
         for row in 0..40 {
-            let cpu = if row == 3 || row == 17 { (tick * 7 + row) % 100 } else { (row * 2) % 100 };
+            let cpu = if row == 3 || row == 17 {
+                (tick * 7 + row) % 100
+            } else {
+                (row * 2) % 100
+            };
             // Each line fits the 80-column screen so no text wraps into the next row.
             let line = format!(
                 "\x1b[{};1H\x1b[1;32m{:>5} \x1b[0m\x1b[36mroot   \x1b[0m{:>3}% \x1b[33m||||||||||\x1b[0m htop-worker-{:02}  lorem ipsum dolor",
@@ -229,19 +335,26 @@ mod bench {
     #[test]
     fn one_char_edit_projects_one_run_node() {
         let palette = builtin_themes()[0].palette.clone();
-        let options = GridOptions { view_offset: 0, selection: None, cursor: false, cursor_shape: CursorShape::Block };
+        let options = GridOptions {
+            view_offset: 0,
+            selection: None,
+            cursor: false,
+            cursor_shape: CursorShape::Block,
+        };
         let mut screen = Screen::new(80, 42, 0);
         let mut parser = Parser::new();
         let mut cache = RunCache::default();
         let mut ui = UiCache::default();
         parser.advance(b"hello world\r\nsecond line", &mut screen);
         let rows = cache.update(&mut screen, &palette, &options).to_vec();
-        ui.project_rows(&mut Recorder::default(), (8.0, 16.0), &rows).expect("project");
+        ui.project_rows(&mut Recorder::default(), (8.0, 16.0), &rows)
+            .expect("project");
 
         parser.advance(b"\x1b[1;3HX", &mut screen);
         let rows = cache.update(&mut screen, &palette, &options).to_vec();
         let mut doc = Recorder::default();
-        ui.project_rows(&mut doc, (8.0, 16.0), &rows).expect("project");
+        ui.project_rows(&mut doc, (8.0, 16.0), &rows)
+            .expect("project");
         assert_eq!(doc.texts, 1, "one edited run projects one text node");
     }
 
@@ -249,7 +362,12 @@ mod bench {
     fn htop_steady_state_counters() {
         const TICKS: usize = 50;
         let palette = builtin_themes()[0].palette.clone();
-        let options = GridOptions { view_offset: 0, selection: None, cursor: false, cursor_shape: CursorShape::Block };
+        let options = GridOptions {
+            view_offset: 0,
+            selection: None,
+            cursor: false,
+            cursor_shape: CursorShape::Block,
+        };
         let mut screen = Screen::new(80, 42, 0);
         let mut parser = Parser::new();
         let mut cache = RunCache::default();
@@ -257,18 +375,26 @@ mod bench {
 
         parser.advance(&htop_tick(0), &mut screen);
         let mut prev = cache.update(&mut screen, &palette, &options).to_vec();
-        ui.project_rows(&mut Recorder::default(), (8.0, 16.0), &prev).expect("project");
+        ui.project_rows(&mut Recorder::default(), (8.0, 16.0), &prev)
+            .expect("project");
 
-        let (mut dirty, mut rebuilt, mut run_texts, mut texts, mut calls, mut frames) = (0, 0, 0, 0, 0, 0);
+        let (mut dirty, mut rebuilt, mut run_texts, mut texts, mut calls, mut frames) =
+            (0, 0, 0, 0, 0, 0);
         for tick in 1..=TICKS {
             parser.advance(&htop_tick(tick), &mut screen);
             dirty += screen.pending_dirty_rows();
             let rows = cache.update(&mut screen, &palette, &options).to_vec();
             rebuilt += cache.rebuilt;
             // Each run of a rebuilt row owns one text string.
-            run_texts += rows.iter().zip(&prev).filter(|(row, old)| !Arc::ptr_eq(row, old)).map(|(row, _)| row.len()).sum::<usize>();
+            run_texts += rows
+                .iter()
+                .zip(&prev)
+                .filter(|(row, old)| !Arc::ptr_eq(row, old))
+                .map(|(row, _)| row.len())
+                .sum::<usize>();
             let mut doc = Recorder::default();
-            ui.project_rows(&mut doc, (8.0, 16.0), &rows).expect("project");
+            ui.project_rows(&mut doc, (8.0, 16.0), &rows)
+                .expect("project");
             texts += doc.texts;
             calls += doc.calls;
             frames += 1;
@@ -277,7 +403,12 @@ mod bench {
         let per = |total: usize| total as f64 / TICKS as f64;
         eprintln!(
             "htop bench ({TICKS} ticks, per tick): dirty_rows={:.2} rebuilt_rows={:.2} run_text_strings={:.2} projected_text_nodes={:.2} setter_calls={:.2} frames={:.2}",
-            per(dirty), per(rebuilt), per(run_texts), per(texts), per(calls), per(frames)
+            per(dirty),
+            per(rebuilt),
+            per(run_texts),
+            per(texts),
+            per(calls),
+            per(frames)
         );
     }
 }

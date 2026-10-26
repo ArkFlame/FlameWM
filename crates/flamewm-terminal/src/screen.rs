@@ -10,10 +10,10 @@ mod modes;
 mod sgr;
 
 pub use self::cell::{Cell, Color, Line, Pen, attr};
-pub use self::charset::char_width;
-pub use self::modes::{CursorShape, MouseMode};
 use self::cell::{blank_line, compact_history};
+pub use self::charset::char_width;
 use self::charset::dec_graphics;
+pub use self::modes::{CursorShape, MouseMode};
 use self::sgr::extended_color;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,19 +144,31 @@ impl Screen {
     }
 
     fn grid(&self) -> &Vec<Line> {
-        if self.alt_active { &self.alt } else { &self.primary }
+        if self.alt_active {
+            &self.alt
+        } else {
+            &self.primary
+        }
     }
 
     /// Whole live grid, for changes that can move any row (scrolling, mode switches). Marks every row dirty.
     fn grid_mut(&mut self) -> &mut Vec<Line> {
         self.dirty_all = true;
-        if self.alt_active { &mut self.alt } else { &mut self.primary }
+        if self.alt_active {
+            &mut self.alt
+        } else {
+            &mut self.primary
+        }
     }
 
     /// One live-grid row, for cell writes that touch only that row.
     fn row_mut(&mut self, row: usize) -> &mut Line {
         self.dirty_rows[row] = true;
-        let grid = if self.alt_active { &mut self.alt } else { &mut self.primary };
+        let grid = if self.alt_active {
+            &mut self.alt
+        } else {
+            &mut self.primary
+        };
         &mut grid[row]
     }
 
@@ -169,7 +181,12 @@ impl Screen {
     /// Takes the rows changed since the last call, so a renderer rebuilds only those.
     pub fn take_dirty(&mut self) -> Dirty {
         let all = std::mem::take(&mut self.dirty_all);
-        let rows: Vec<usize> = self.dirty_rows.iter().enumerate().filter_map(|(row, dirty)| dirty.then_some(row)).collect();
+        let rows: Vec<usize> = self
+            .dirty_rows
+            .iter()
+            .enumerate()
+            .filter_map(|(row, dirty)| dirty.then_some(row))
+            .collect();
         self.dirty_rows.fill(false);
         if all { Dirty::All } else { Dirty::Rows(rows) }
     }
@@ -189,7 +206,11 @@ impl Screen {
     }
 
     pub fn scrollback_len(&self) -> usize {
-        if self.alt_active { 0 } else { self.scrollback.len() }
+        if self.alt_active {
+            0
+        } else {
+            self.scrollback.len()
+        }
     }
 
     pub fn line_abs(&self, index: usize) -> Option<&Line> {
@@ -232,7 +253,8 @@ impl Screen {
         } else if rows > self.rows {
             let grow = rows - self.rows;
             for _ in 0..grow {
-                if !self.alt_active && self.scrollback.back().is_some() && self.primary.len() < rows {
+                if !self.alt_active && self.scrollback.back().is_some() && self.primary.len() < rows
+                {
                     if let Some(mut line) = self.scrollback.pop_back() {
                         line.resize(cols, Cell::blank(Color::Default));
                         self.primary.insert(0, line);
@@ -321,15 +343,27 @@ impl Screen {
         }
         let saved_top = self.scroll_top;
         self.scroll_top = row;
-        if down { self.scroll_down(count) } else { self.scroll_up(count) }
+        if down {
+            self.scroll_down(count)
+        } else {
+            self.scroll_up(count)
+        }
         self.scroll_top = saved_top;
         self.col = 0;
         self.wrap_next = false;
     }
 
     fn set_cursor(&mut self, row: usize, col: usize) {
-        let (top, bottom) = if self.origin { (self.scroll_top, self.scroll_bottom) } else { (0, self.rows - 1) };
-        let row = if self.origin { (top + row).min(bottom) } else { row.min(bottom) };
+        let (top, bottom) = if self.origin {
+            (self.scroll_top, self.scroll_bottom)
+        } else {
+            (0, self.rows - 1)
+        };
+        let row = if self.origin {
+            (top + row).min(bottom)
+        } else {
+            row.min(bottom)
+        };
         self.row = row;
         self.col = col.min(self.cols - 1);
         self.wrap_next = false;
@@ -389,10 +423,21 @@ impl Screen {
         }
         // Rewriting a cell with the same content changes nothing, so the row stays clean (an htop-style repaint writes
         // the same text every tick).
-        let cell = Cell { ch: c, fg: pen.fg, bg: pen.bg, attrs: pen.attrs | if width == 2 { attr::WIDE } else { 0 } };
-        let spacer = Cell { ch: ' ', fg: pen.fg, bg: pen.bg, attrs: attr::SPACER | pen.attrs };
+        let cell = Cell {
+            ch: c,
+            fg: pen.fg,
+            bg: pen.bg,
+            attrs: pen.attrs | if width == 2 { attr::WIDE } else { 0 },
+        };
+        let spacer = Cell {
+            ch: ' ',
+            fg: pen.fg,
+            bg: pen.bg,
+            attrs: attr::SPACER | pen.attrs,
+        };
         let grid = self.grid();
-        let unchanged = !self.insert && grid[row][col] == cell && (width == 1 || grid[row][col + 1] == spacer);
+        let unchanged =
+            !self.insert && grid[row][col] == cell && (width == 1 || grid[row][col + 1] == spacer);
         if !unchanged {
             let line = self.row_mut(row);
             if line[col].attrs & attr::SPACER != 0 && col > 0 {
@@ -416,7 +461,9 @@ impl Screen {
     }
 
     fn next_tab(&self, col: usize) -> usize {
-        (col + 1..self.cols).find(|c| self.tabs[*c]).unwrap_or(self.cols - 1)
+        (col + 1..self.cols)
+            .find(|c| self.tabs[*c])
+            .unwrap_or(self.cols - 1)
     }
 
     fn set_mode(&mut self, private: bool, code: u16, on: bool) {
@@ -478,7 +525,13 @@ impl Screen {
     }
 
     fn save_state(&self) -> Saved {
-        Saved { row: self.row, col: self.col, pen: self.pen, g1_graphics: self.g1_graphics, use_g1: self.use_g1 }
+        Saved {
+            row: self.row,
+            col: self.col,
+            pen: self.pen,
+            g1_graphics: self.g1_graphics,
+            use_g1: self.use_g1,
+        }
     }
 
     fn restore_state(&mut self, saved: Saved) {
@@ -506,7 +559,11 @@ impl Screen {
                 3 => self.pen.attrs |= attr::ITALIC,
                 4 => {
                     let style = group.get(1).copied().unwrap_or(1);
-                    if style == 0 { self.pen.attrs &= !attr::UNDERLINE } else { self.pen.attrs |= attr::UNDERLINE }
+                    if style == 0 {
+                        self.pen.attrs &= !attr::UNDERLINE
+                    } else {
+                        self.pen.attrs |= attr::UNDERLINE
+                    }
                 }
                 7 => self.pen.attrs |= attr::INVERSE,
                 9 => self.pen.attrs |= attr::STRIKE,
@@ -524,7 +581,11 @@ impl Screen {
                 38 | 48 => {
                     let (color, consumed) = extended_color(group, params, index);
                     if let Some(color) = color {
-                        if code == 38 { self.pen.fg = color } else { self.pen.bg = color }
+                        if code == 38 {
+                            self.pen.fg = color
+                        } else {
+                            self.pen.bg = color
+                        }
                     }
                     index += consumed + 1;
                     continue;
@@ -536,7 +597,11 @@ impl Screen {
     }
 
     fn dsr_position(&self) -> String {
-        let (row, col) = if self.origin { (self.row.saturating_sub(self.scroll_top), self.col) } else { (self.row, self.col) };
+        let (row, col) = if self.origin {
+            (self.row.saturating_sub(self.scroll_top), self.col)
+        } else {
+            (self.row, self.col)
+        };
         format!("\x1b[{};{}R", row + 1, col + 1)
     }
 }
@@ -544,7 +609,11 @@ impl Screen {
 impl Perform for Screen {
     fn print(&mut self, c: char) {
         let c = if (self.use_g1 && self.g1_graphics) || (!self.use_g1 && self.g0_graphics) {
-            if ('\u{5f}'..='\u{7e}').contains(&c) { dec_graphics(c) } else { c }
+            if ('\u{5f}'..='\u{7e}').contains(&c) {
+                dec_graphics(c)
+            } else {
+                c
+            }
         } else {
             c
         };
@@ -583,12 +652,20 @@ impl Perform for Screen {
         let (row, col) = (self.row, self.col);
         match (prefix, intermediates, action) {
             (None, [], b'A') => {
-                let floor = if row >= self.scroll_top && row <= self.scroll_bottom { self.scroll_top } else { 0 };
+                let floor = if row >= self.scroll_top && row <= self.scroll_bottom {
+                    self.scroll_top
+                } else {
+                    0
+                };
                 self.row = row.saturating_sub(n1(0)).max(floor);
                 self.wrap_next = false;
             }
             (None, [], b'B' | b'e') => {
-                let ceiling = if row <= self.scroll_bottom { self.scroll_bottom } else { self.rows - 1 };
+                let ceiling = if row <= self.scroll_bottom {
+                    self.scroll_bottom
+                } else {
+                    self.rows - 1
+                };
                 self.row = (row + n1(0)).min(ceiling);
                 self.wrap_next = false;
             }
@@ -759,7 +836,12 @@ impl Perform for Screen {
         let Some(code) = segments.first() else { return };
         if matches!(code.as_slice(), b"0" | b"2") {
             if let Some(title) = segments.get(1) {
-                self.title = Some(String::from_utf8_lossy(title).chars().filter(|c| !c.is_control()).collect());
+                self.title = Some(
+                    String::from_utf8_lossy(title)
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .collect(),
+                );
             }
         }
     }

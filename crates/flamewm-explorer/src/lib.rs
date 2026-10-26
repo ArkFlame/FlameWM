@@ -1,5 +1,6 @@
 //! Filesystem and navigation model for the native FlameWM explorer.
 //! Filesystem work must be performed by the worker; the UI thread only projects snapshots.
+#![cfg_attr(rustfmt, rustfmt::skip)]
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
@@ -27,6 +28,7 @@ pub mod thumbs;
 pub mod trash;
 pub mod view;
 
+#[rustfmt::skip]
 pub mod jobs;
 /// Row widgets in the template. The list viewport decides how many of them are shown.
 pub const ROW_SLOTS: usize = 24;
@@ -582,6 +584,7 @@ pub fn is_archive(path:&Path)->bool {
         .iter().any(|suffix|name.ends_with(suffix))
 }
 #[cfg(test)]
+#[rustfmt::skip]
 mod tests;
 
 #[cfg(test)]
@@ -694,5 +697,6 @@ extern crate self as flamewm_explorer;
 /// The application entry point, compiled into this library so the multi-call `flamewm-apps`
 /// executable can run it; `src/main.rs` is a one-line wrapper around it.
 #[doc(hidden)]
+#[rustfmt::skip]
 #[path = "main.rs"]
 pub mod entry;

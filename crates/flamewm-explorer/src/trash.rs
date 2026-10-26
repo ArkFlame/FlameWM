@@ -21,7 +21,11 @@ pub struct TrashEntry {
 
 impl TrashEntry {
     pub fn name(&self) -> String {
-        self.stored.file_name().unwrap_or_default().to_string_lossy().into_owned()
+        self.stored
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
@@ -70,7 +74,12 @@ pub fn parse_trashinfo(text: &str) -> Option<(PathBuf, String)> {
         if let Some(value) = line.strip_prefix("Path=") {
             path = percent_decode(value.trim());
         } else if let Some(value) = line.strip_prefix("DeletionDate=") {
-            date = value.trim().chars().filter(|c| !c.is_control()).take(40).collect();
+            date = value
+                .trim()
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(40)
+                .collect();
         }
     }
     let path = path.filter(|p| !p.is_empty() && p.contains('/') && !p.contains('\0'))?;
@@ -89,7 +98,9 @@ pub fn list(base: &Path) -> io::Result<Vec<TrashEntry>> {
         if info.extension().and_then(|e| e.to_str()) != Some("trashinfo") {
             continue;
         }
-        let Some(stem) = info.file_stem().map(PathBuf::from) else { continue };
+        let Some(stem) = info.file_stem().map(PathBuf::from) else {
+            continue;
+        };
         let stored = files_dir.join(&stem);
         if stored.symlink_metadata().is_err() {
             continue;
@@ -98,14 +109,27 @@ pub fn list(base: &Path) -> io::Result<Vec<TrashEntry>> {
         if meta.len() > MAX_INFO_BYTES {
             continue;
         }
-        let Ok(text) = fs::read_to_string(&info) else { continue };
-        let Some((original, deleted)) = parse_trashinfo(&text) else { continue };
-        entries.push(TrashEntry { stored, info, original, deleted });
+        let Ok(text) = fs::read_to_string(&info) else {
+            continue;
+        };
+        let Some((original, deleted)) = parse_trashinfo(&text) else {
+            continue;
+        };
+        entries.push(TrashEntry {
+            stored,
+            info,
+            original,
+            deleted,
+        });
         if entries.len() >= MAX_TRASH_ENTRIES {
             break;
         }
     }
-    entries.sort_by(|a, b| b.deleted.cmp(&a.deleted).then_with(|| a.name().cmp(&b.name())));
+    entries.sort_by(|a, b| {
+        b.deleted
+            .cmp(&a.deleted)
+            .then_with(|| a.name().cmp(&b.name()))
+    });
     Ok(entries)
 }
 
@@ -115,8 +139,15 @@ pub fn unique_destination(original: &Path) -> PathBuf {
         return original.to_path_buf();
     }
     let parent = original.parent().unwrap_or(Path::new("/")).to_path_buf();
-    let stem = original.file_stem().unwrap_or_default().to_string_lossy().into_owned();
-    let ext = original.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let stem = original
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let ext = original
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
     for n in 1u32.. {
         let candidate = parent.join(format!("{stem} (restored {n}){ext}"));
         if candidate.symlink_metadata().is_err() {
@@ -130,7 +161,10 @@ pub fn unique_destination(original: &Path) -> PathBuf {
 /// Returns the final destination. Cross-device restores fail with an error and leave the trash intact.
 pub fn restore(entry: &TrashEntry) -> io::Result<PathBuf> {
     if !entry.original.is_absolute() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Trash record has no absolute original path"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Trash record has no absolute original path",
+        ));
     }
     if let Some(parent) = entry.original.parent() {
         fs::create_dir_all(parent)?;
@@ -150,7 +184,8 @@ mod tests {
     use super::*;
 
     fn temp_base(tag: &str) -> PathBuf {
-        let base = std::env::temp_dir().join(format!("flamewm-trash-test-{tag}-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("flamewm-trash-test-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("files")).unwrap();
         fs::create_dir_all(base.join("info")).unwrap();
@@ -161,7 +196,10 @@ mod tests {
     fn parses_percent_encoded_paths_and_rejects_malformed() {
         assert_eq!(percent_decode("/a%20b/c%C3%A9").as_deref(), Some("/a b/cé"));
         assert_eq!(percent_decode("/bad%2"), None);
-        let (path, date) = parse_trashinfo("[Trash Info]\nPath=/home/u/a%20b.txt\nDeletionDate=2026-10-21T10:00:00\n").unwrap();
+        let (path, date) = parse_trashinfo(
+            "[Trash Info]\nPath=/home/u/a%20b.txt\nDeletionDate=2026-10-21T10:00:00\n",
+        )
+        .unwrap();
         assert_eq!(path, PathBuf::from("/home/u/a b.txt"));
         assert_eq!(date, "2026-10-21T10:00:00");
         assert!(parse_trashinfo("[Trash Info]\nPath=relative\n").is_none());
@@ -175,12 +213,27 @@ mod tests {
         fs::create_dir_all(&origin).unwrap();
         let original = origin.join("note.txt");
         fs::write(base.join("files/note.txt"), b"trashed").unwrap();
-        fs::write(base.join("info/note.txt.trashinfo"), format!("[Trash Info]\nPath={}\nDeletionDate=2026-10-21T09:00:00\n", original.display())).unwrap();
-        fs::write(base.join("info/orphan.trashinfo"), "[Trash Info]\nPath=/x/y\n").unwrap();
+        fs::write(
+            base.join("info/note.txt.trashinfo"),
+            format!(
+                "[Trash Info]\nPath={}\nDeletionDate=2026-10-21T09:00:00\n",
+                original.display()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            base.join("info/orphan.trashinfo"),
+            "[Trash Info]\nPath=/x/y\n",
+        )
+        .unwrap();
         fs::write(&original, b"occupied").unwrap();
 
         let entries = list(&base).unwrap();
-        assert_eq!(entries.len(), 1, "orphan info without stored file must be skipped");
+        assert_eq!(
+            entries.len(),
+            1,
+            "orphan info without stored file must be skipped"
+        );
         let restored = restore(&entries[0]).unwrap();
         assert_eq!(restored, origin.join("note (restored 1).txt"));
         assert_eq!(fs::read(&restored).unwrap(), b"trashed");
@@ -191,7 +244,8 @@ mod tests {
 
     #[test]
     fn move_to_trash_then_restore_round_trips_through_xdg_layout() {
-        let root = std::env::temp_dir().join(format!("flamewm-trash-roundtrip-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("flamewm-trash-roundtrip-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let home = root.join("home");
         let data = root.join("data");
@@ -203,7 +257,8 @@ mod tests {
             .and_then(|s| flamewm_desktop_core::trash::current_uid_from_proc(&s))
             .expect("uid");
 
-        let item = flamewm_desktop_core::trash::Trash::move_to_trash(&file, &home, &data, uid).unwrap();
+        let item =
+            flamewm_desktop_core::trash::Trash::move_to_trash(&file, &home, &data, uid).unwrap();
         assert!(!file.exists(), "source must leave its folder");
         assert!(item.stored.starts_with(data.join("Trash/files")));
         assert!(item.info.starts_with(data.join("Trash/info")));
@@ -229,6 +284,9 @@ mod tests {
             original: PathBuf::from("relative/a"),
             deleted: String::new(),
         };
-        assert_eq!(restore(&entry).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            restore(&entry).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
 }

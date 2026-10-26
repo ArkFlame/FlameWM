@@ -51,13 +51,22 @@ struct Queue {
 
 /// Parallel breadth-first walk from `root`. Symlinks are reported but never traversed.
 /// Hits reach `sink` in batches from any walker thread. Returns `(truncated, cancelled)`.
-fn walk(root: &Path, query: &str, show_hidden: bool, cancel: &AtomicBool, threads: usize,
-    sink: &(dyn Fn(Vec<SearchHit>) + Sync)) -> (bool, bool) {
+fn walk(
+    root: &Path,
+    query: &str,
+    show_hidden: bool,
+    cancel: &AtomicBool,
+    threads: usize,
+    sink: &(dyn Fn(Vec<SearchHit>) + Sync),
+) -> (bool, bool) {
     let query: String = query.trim().chars().take(MAX_QUERY_CHARS).collect();
     if query.is_empty() {
         return (false, false);
     }
-    let queue = Mutex::new(Queue { dirs: VecDeque::from([root.to_path_buf()]), active: 0 });
+    let queue = Mutex::new(Queue {
+        dirs: VecDeque::from([root.to_path_buf()]),
+        active: 0,
+    });
     let ready = Condvar::new();
     let visits = AtomicUsize::new(0);
     let hits = AtomicUsize::new(0);
@@ -82,7 +91,9 @@ fn walk(root: &Path, query: &str, show_hidden: bool, cancel: &AtomicBool, thread
                             if state.active == 0 {
                                 break None;
                             }
-                            state = ready.wait(state).unwrap_or_else(|poison| poison.into_inner());
+                            state = ready
+                                .wait(state)
+                                .unwrap_or_else(|poison| poison.into_inner());
                         }
                     };
                     let Some(dir) = dir else {
@@ -105,14 +116,23 @@ fn walk(root: &Path, query: &str, show_hidden: bool, cancel: &AtomicBool, thread
                                 continue;
                             }
                             let path = item.path();
-                            let Ok(meta) = fs::symlink_metadata(&path) else { continue };
+                            let Ok(meta) = fs::symlink_metadata(&path) else {
+                                continue;
+                            };
                             let directory = meta.is_dir();
                             if name_matches(&name, &query) {
                                 if hits.fetch_add(1, Ordering::Relaxed) >= MAX_HITS {
                                     truncated.store(true, Ordering::Relaxed);
                                     break;
                                 }
-                                batch.push(SearchHit { parent: dir.clone(), path: path.clone(), name, directory, size: meta.len(), modified: meta.modified().ok() });
+                                batch.push(SearchHit {
+                                    parent: dir.clone(),
+                                    path: path.clone(),
+                                    name,
+                                    directory,
+                                    size: meta.len(),
+                                    modified: meta.modified().ok(),
+                                });
                                 if batch.len() >= BATCH {
                                     sink(std::mem::take(&mut batch));
                                 }
@@ -135,17 +155,30 @@ fn walk(root: &Path, query: &str, show_hidden: bool, cancel: &AtomicBool, thread
             });
         }
     });
-    (truncated.load(Ordering::Relaxed), cancel.load(Ordering::Relaxed))
+    (
+        truncated.load(Ordering::Relaxed),
+        cancel.load(Ordering::Relaxed),
+    )
 }
 
 /// Synchronous search built on the parallel walker (tests and one-shot callers).
-pub fn search_tree(root: &Path, query: &str, show_hidden: bool, cancel: &AtomicBool) -> SearchOutcome {
+pub fn search_tree(
+    root: &Path,
+    query: &str,
+    show_hidden: bool,
+    cancel: &AtomicBool,
+) -> SearchOutcome {
     let collected = Mutex::new(Vec::new());
     let (truncated, cancelled) = walk(root, query, show_hidden, cancel, MAX_THREADS, &|batch| {
-        collected.lock().unwrap_or_else(|poison| poison.into_inner()).extend(batch);
+        collected
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .extend(batch);
     });
     SearchOutcome {
-        hits: collected.into_inner().unwrap_or_else(|poison| poison.into_inner()),
+        hits: collected
+            .into_inner()
+            .unwrap_or_else(|poison| poison.into_inner()),
         truncated,
         cancelled,
     }
@@ -162,7 +195,8 @@ impl Debounce {
         self.last = Some(now);
     }
     pub fn due(&self, now: std::time::Instant) -> bool {
-        self.last.is_some_and(|last| now.duration_since(last) >= DEBOUNCE)
+        self.last
+            .is_some_and(|last| now.duration_since(last) >= DEBOUNCE)
     }
     pub fn clear(&mut self) {
         self.last = None;
@@ -180,8 +214,15 @@ struct SearchJob {
 /// Streamed progress of the active search job. `Done` ends it.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SearchEvent {
-    Batch { id: u64, hits: Vec<SearchHit> },
-    Done { id: u64, truncated: bool, cancelled: bool },
+    Batch {
+        id: u64,
+        hits: Vec<SearchHit>,
+    },
+    Done {
+        id: u64,
+        truncated: bool,
+        cancelled: bool,
+    },
 }
 
 /// One worker thread that runs each job's parallel walk. Starting or cancelling a job sets its cancel flag;
@@ -198,34 +239,65 @@ impl SearchWorker {
     pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> std::io::Result<Self> {
         let (jobs_tx, jobs_rx) = mpsc::channel::<SearchJob>();
         let (events_tx, events_rx) = mpsc::channel::<SearchEvent>();
-        thread::Builder::new().name("explorer-search".into()).spawn(move || {
-            while let Ok(job) = jobs_rx.recv() {
-                let id = job.id;
-                let batches = events_tx.clone();
-                let sink = |hits: Vec<SearchHit>| {
-                    if batches.send(SearchEvent::Batch { id, hits }).is_ok() {
-                        wake();
+        thread::Builder::new()
+            .name("explorer-search".into())
+            .spawn(move || {
+                while let Ok(job) = jobs_rx.recv() {
+                    let id = job.id;
+                    let batches = events_tx.clone();
+                    let sink = |hits: Vec<SearchHit>| {
+                        if batches.send(SearchEvent::Batch { id, hits }).is_ok() {
+                            wake();
+                        }
+                    };
+                    let (truncated, cancelled) = walk(
+                        &job.root,
+                        &job.query,
+                        job.show_hidden,
+                        &job.cancel,
+                        MAX_THREADS,
+                        &sink,
+                    );
+                    if events_tx
+                        .send(SearchEvent::Done {
+                            id,
+                            truncated,
+                            cancelled,
+                        })
+                        .is_err()
+                    {
+                        break;
                     }
-                };
-                let (truncated, cancelled) =
-                    walk(&job.root, &job.query, job.show_hidden, &job.cancel, MAX_THREADS, &sink);
-                if events_tx.send(SearchEvent::Done { id, truncated, cancelled }).is_err() {
-                    break;
+                    wake();
                 }
-                wake();
-            }
-        })?;
-        Ok(Self { jobs: jobs_tx, events: events_rx, current: None, next_id: 0 })
+            })?;
+        Ok(Self {
+            jobs: jobs_tx,
+            events: events_rx,
+            current: None,
+            next_id: 0,
+        })
     }
 
     /// Cancels any running search and queues a new one. Returns the job id.
-    pub fn start(&mut self, root: PathBuf, query: String, show_hidden: bool) -> Result<u64, String> {
+    pub fn start(
+        &mut self,
+        root: PathBuf,
+        query: String,
+        show_hidden: bool,
+    ) -> Result<u64, String> {
         self.cancel();
         let cancel = Arc::new(AtomicBool::new(false));
         self.current = Some(Arc::clone(&cancel));
         let id = self.next_id;
         self.jobs
-            .send(SearchJob { id, root, query, show_hidden, cancel })
+            .send(SearchJob {
+                id,
+                root,
+                query,
+                show_hidden,
+                cancel,
+            })
             .map(|()| id)
             .map_err(|_| "Search worker unavailable".to_owned())
     }
@@ -256,7 +328,8 @@ mod tests {
     use std::time::Instant;
 
     fn tree(tag: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("flamewm-search-test-{tag}-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("flamewm-search-test-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("a/deep/Report")).unwrap();
         fs::create_dir_all(root.join(".hidden")).unwrap();
@@ -282,8 +355,15 @@ mod tests {
         let outcome = search_tree(&root, "report", false, &cancel);
         let mut names: Vec<_> = outcome.hits.iter().map(|h| h.name.clone()).collect();
         names.sort();
-        assert_eq!(names, vec!["Report".to_owned(), "report-final.txt".to_owned()]);
-        let hit = outcome.hits.iter().find(|h| h.name == "report-final.txt").unwrap();
+        assert_eq!(
+            names,
+            vec!["Report".to_owned(), "report-final.txt".to_owned()]
+        );
+        let hit = outcome
+            .hits
+            .iter()
+            .find(|h| h.name == "report-final.txt")
+            .unwrap();
         assert_eq!(hit.parent, root.join("a/deep"));
         assert!(!outcome.truncated && !outcome.cancelled);
         let with_hidden = search_tree(&root, "secret", true, &cancel);
@@ -318,7 +398,9 @@ mod tests {
     fn worker_returns_only_latest_job_result() {
         let root = tree("worker");
         let mut worker = SearchWorker::spawn(|| {}).unwrap();
-        worker.start(root.clone(), "zzz-none".into(), false).unwrap();
+        worker
+            .start(root.clone(), "zzz-none".into(), false)
+            .unwrap();
         let id = worker.start(root.clone(), "notes".into(), false).unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut hits = 0;
@@ -326,11 +408,16 @@ mod tests {
         while !done {
             for event in worker.poll() {
                 match event {
-                    SearchEvent::Batch { id: got, hits: batch } => {
+                    SearchEvent::Batch {
+                        id: got,
+                        hits: batch,
+                    } => {
                         assert_eq!(got, id, "only the latest job may report");
                         hits += batch.len();
                     }
-                    SearchEvent::Done { id: got, cancelled, .. } => {
+                    SearchEvent::Done {
+                        id: got, cancelled, ..
+                    } => {
                         assert_eq!(got, id);
                         assert!(!cancelled);
                         done = true;

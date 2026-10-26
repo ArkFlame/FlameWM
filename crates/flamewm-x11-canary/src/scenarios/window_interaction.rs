@@ -350,7 +350,10 @@ fn t07_settle(
 }
 
 /// Bounding-shape extents (min_x, min_y, max_x, max_y) of a window.
-fn t07_bounding_extents(canary: &crate::Canary, window: u32) -> Result<(i32, i32, i32, i32), String> {
+fn t07_bounding_extents(
+    canary: &crate::Canary,
+    window: u32,
+) -> Result<(i32, i32, i32, i32), String> {
     use x11rb::protocol::shape::{ConnectionExt as _, SK};
     let reply = canary
         .conn
@@ -408,12 +411,23 @@ fn t07_client_pixels(canary: &crate::Canary, client: &crate::WinInfo) -> Result<
     let (w, h) = (usize::from(client.width), usize::from(client.height));
     let reply = canary
         .conn
-        .get_image(ImageFormat::Z_PIXMAP, client.id, 0, 0, client.width, client.height, !0)
+        .get_image(
+            ImageFormat::Z_PIXMAP,
+            client.id,
+            0,
+            0,
+            client.width,
+            client.height,
+            !0,
+        )
         .map_err(|e| e.to_string())?
         .reply()
         .map_err(|e| e.to_string())?;
     if reply.data.len() < w * h * 4 {
-        return Err(format!("get_image returned {} bytes for {w}x{h}", reply.data.len()));
+        return Err(format!(
+            "get_image returned {} bytes for {w}x{h}",
+            reply.data.len()
+        ));
     }
     Ok(reply
         .data
@@ -463,7 +477,9 @@ fn t07_content_band(
         return Err("no strip to sample".to_owned());
     }
     if matched * 10 < strip * 9 {
-        return Err(format!("strip {matched}/{strip} px match bg #{bg:06x}; stale band"));
+        return Err(format!(
+            "strip {matched}/{strip} px match bg #{bg:06x}; stale band"
+        ));
     }
     Ok(format!("strip={matched}/{strip}px bg=#{bg:06x}"))
 }
@@ -486,10 +502,7 @@ fn t07_content_after_resize(
     let known = match *offsets {
         Some(known) => known,
         None => {
-            let known = (
-                t07_shape_offset(canary, &c)?,
-                t07_shape_offset(canary, &f)?,
-            );
+            let known = (t07_shape_offset(canary, &c)?, t07_shape_offset(canary, &f)?);
             *offsets = Some(known);
             known
         }

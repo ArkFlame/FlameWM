@@ -626,7 +626,11 @@ fn run() -> Result<i32, Box<dyn Error>> {
             Timer::from_duration(Duration::from_millis(CONTENT_DEADLINE_MS)),
             |_, _, state| {
                 if state.desktop_pending() {
-                    stage_line(Stage::Xwayland, StageStatus::Fail, "no_client_before_deadline");
+                    stage_line(
+                        Stage::Xwayland,
+                        StageStatus::Fail,
+                        "no_client_before_deadline",
+                    );
                     eprintln!(
                         "flamewm-wayland: no desktop after {CONTENT_DEADLINE_MS}ms \
                          (XWayland never became ready); giving the VT back"
