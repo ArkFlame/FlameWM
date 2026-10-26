@@ -228,7 +228,7 @@ f4d77022d552f149365acc3010af4df923307c4766ad72957b4220b2df2abf55  ./assets/web/p
 75e9dbad92fb71e9adc52f33c6e1c0b365445aabcea4399b8d715261fdce367e  ./.cargo/config.toml
 f3eaf105a656ee1b097c7e24205b5ac13a8f9a61d3b77791a83bdda868e0df87  ./Cargo.lock
 b18d8cf6a782d5667043a5558478a2b64b77f923ef1f4c5d4f25473a3a6c05b2  ./Cargo.toml
-0038b796bfaa36be8e962b5e13d93115850c690d2ed1f228b14a7abbeb76c8ee  ./CHANGELOG.md
+765d6356a30b177c678f338ce8b38fce0e91a86dd70d08ce9ee8b5588618421c  ./CHANGELOG.md
 e7ff98c04d7773ea9083be4ed0e1a21c01247cb2d0e5a571de1f3b89d2bcb3f5  ./CONTRIBUTING.md
 8359520adb4e76c7abae89e49faebdfa1f38e8ae1e7585cb969b2fa57661fb0b  ./crates/flamewm-api/Cargo.toml
 759452f7512fd701581258f93ab3e6a2fa48531bd7ebe22e0576840918cb9c5d  ./crates/flamewm-api/src/applications.rs

@@ -2,8 +2,8 @@
 """Ten-second CPU and memory benchmark of a whole FlameWM desktop.
 
 Runs the FlameWM Wayland compositor nested (winit) inside the current desktop, with the shell and
-desktop on its XWayland display, in a private D-Bus session and a throwaway config/cache home, so
-nothing of the user's session or settings is touched. Then:
+desktop on its XWayland display, in a private D-Bus session with temporary home/config/cache.
+The host display and runtime socket are retained only to host the nested compositor. Then:
 
   open   Starts the terminal, explorer and settings windows ("just opening stuff") and, once they
          settle, records per-process memory: PSS/RSS/USS from smaps_rollup and a breakdown of the
@@ -18,7 +18,9 @@ The FlameWM profiler runs in every process (FLAMEWM_PROFILE=1); the per-span rep
 processes that write them land in the output directory next to the JSON report.
 
 Usage:
-  python3 -I tools/bench-flamewm-session.py --bin .target/release --out /tmp/flame-bench
+  python3 -I tools/bench-flamewm-session.py --bin .target/release --out /tmp/flame-bench-001
+
+--out must be a new directory inside the system temp directory or working directory.
 """
 
 from __future__ import annotations
@@ -48,6 +50,60 @@ ROLE_BASENAMES = {
     "Xwayland": "xwayland",
 }
 READY_RE = re.compile(rb"XWayland ready on DISPLAY=:(\d+)")
+# Only display/bootstrap configuration crosses into the benchmark processes. In particular,
+# never pass API tokens, shell startup hooks, preload libraries or other session secrets.
+DISPLAY_ENV = (
+    "PATH", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
+    "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS", "XCURSOR_THEME", "XCURSOR_SIZE",
+)
+
+
+def ensure_safe_output_dir(path: Path) -> Path:
+    """Exclusively create a private output directory; never reuse/delete user data."""
+    target = path.expanduser().resolve(strict=False)
+    roots = (Path(tempfile.gettempdir()).resolve(), Path.cwd().resolve())
+    if not any(target != root and target.is_relative_to(root) for root in roots):
+        raise SystemExit(f"Refusing benchmark output outside the temp directory or cwd: {path}")
+    try:
+        target.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise SystemExit(f"Refusing existing benchmark output directory: {target}") from exc
+    return target
+
+
+def benchmark_environment(home: Path, out: Path, binaries: Path) -> dict[str, str]:
+    """Keep host display connectivity but isolate state and drop unrelated credentials."""
+    env = {key: os.environ[key] for key in DISPLAY_ENV if key in os.environ}
+    # Changing HOME must not make the host X11 authorization cookie undiscoverable.
+    if "XAUTHORITY" not in env and os.environ.get("HOME"):
+        authority = Path(os.environ["HOME"]) / ".Xauthority"
+        if authority.is_file():
+            env["XAUTHORITY"] = str(authority)
+    env.update({
+        "HOME": str(home),
+        "FLAMEWM_WAYLAND_BACKEND": "winit",
+        "FLAMEWM_WAYLAND_SOCKET": f"wayland-flame-bench-{os.getpid()}",
+        "FLAMEWM_WAYLAND_AUTOSTART": f"{binaries}/flamewm-desktop:{binaries}/flamewm-shell",
+        "FLAMEWM_PROFILE": "1",
+        "FLAMEWM_PROFILE_INTERVAL": "10",
+        "FLAMEWM_PROFILE_DIR": str(out),
+        "FLAMEWM_CONFIG_DIR": str(home / "config/flamewm"),
+        "XDG_CONFIG_HOME": str(home / "config"),
+        "XDG_DATA_HOME": str(home / "data"),
+        "XDG_CACHE_HOME": str(home / "cache"),
+        "XDG_STATE_HOME": str(home / "state"),
+    })
+    return env
+
+
+def validate_xwayland(display: str, compositor_pid: int, host_display: str | None) -> None:
+    """Fail closed before injecting XTEST events when the reported display is suspect."""
+    host = re.fullmatch(r":(\d+)(?:\.\d+)?", host_display or "")
+    if host and display == f":{host.group(1)}":
+        raise RuntimeError("Refusing XTEST on the host X11 display")
+    if not any(exe_basename(pid) == "Xwayland" for pid in children_of(compositor_pid)):
+        raise RuntimeError("No Xwayland descendant of the benchmark compositor; refusing XTEST")
 
 
 def exe_basename(pid: int) -> str | None:
@@ -220,58 +276,46 @@ def main() -> int:
         return subprocess.call(["dbus-run-session", "--", sys.executable, "-I", *sys.argv], env=env)
 
     binaries = args.bin.resolve()
-    out = args.out.resolve()
-    if out.exists():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
+    out = ensure_safe_output_dir(args.out)
     home = Path(tempfile.mkdtemp(prefix="flamewm-bench-"))
-    env = dict(os.environ)
-    env.update(
-        {
-            "FLAMEWM_WAYLAND_BACKEND": "winit",
-            "FLAMEWM_WAYLAND_SOCKET": f"wayland-flame-bench-{os.getpid()}",
-            "FLAMEWM_WAYLAND_AUTOSTART": f"{binaries}/flamewm-desktop:{binaries}/flamewm-shell",
-            "FLAMEWM_PROFILE": "1",
-            "FLAMEWM_PROFILE_INTERVAL": "10",
-            "FLAMEWM_PROFILE_DIR": str(out),
-            "FLAMEWM_CONFIG_DIR": str(home / "config/flamewm"),
-            "XDG_CONFIG_HOME": str(home / "config"),
-            "XDG_CACHE_HOME": str(home / "cache"),
-            "XDG_STATE_HOME": str(home / "state"),
-        }
-    )
+    env = benchmark_environment(home, out, binaries)
     log = out / "compositor.log"
-    compositor = subprocess.Popen(
-        [str(binaries / "flamewm-wayland")],
-        env=env,
-        stdout=log.open("wb"),
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
+    compositor: subprocess.Popen | None = None
     report: dict = {"seconds": args.seconds}
-    opened: list[int] = []
+    opened: list[subprocess.Popen] = []
     try:
+        with log.open("wb") as stream:
+            compositor = subprocess.Popen(
+                [str(binaries / "flamewm-wayland")],
+                env=env,
+                stdout=stream,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
         display = wait_ready(log, time.monotonic() + 20)
+        validate_xwayland(display, compositor.pid, os.environ.get("DISPLAY"))
         report["display"] = display
         client_env = dict(env, DISPLAY=display)
         client_env.pop("WAYLAND_DISPLAY", None)
         time.sleep(args.settle)
         for program in ("flamewm-terminal", "flamewm-explorer", "flamewm-settings"):
-            opened.append(
-                subprocess.Popen(
-                    [str(binaries / program)],
-                    env=client_env,
-                    stdout=(out / f"{program}.log").open("wb"),
-                    stderr=subprocess.STDOUT,
-                ).pid
-            )
+            with (out / f"{program}.log").open("wb") as stream:
+                opened.append(
+                    subprocess.Popen(
+                        [str(binaries / program)],
+                        env=client_env,
+                        stdout=stream,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+                )
         time.sleep(args.settle)
-        procs = roles(compositor.pid, *opened)
+        procs = roles(compositor.pid, *(proc.pid for proc in opened))
         report["open"] = {
             f"{role}:{pid}": memory(pid) for pid, role in sorted(procs.items(), key=lambda kv: kv[1])
         }
 
-        procs = roles(compositor.pid, *opened)
+        procs = roles(compositor.pid, *(proc.pid for proc in opened))
         start = {pid: cpu_ticks(pid) for pid in procs}
         start_threads = {pid: thread_ticks(pid) for pid in procs}
         stop = threading.Event()
@@ -307,18 +351,27 @@ def main() -> int:
             f"{role}:{pid}": memory(pid) for pid, role in procs.items() if Path(f"/proc/{pid}").exists()
         }
     finally:
-        doomed = [pid for root in (compositor.pid, *opened) for pid in children_of(root)]
-        os.killpg(compositor.pid, signal.SIGTERM)
-        for pid in doomed:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
+        # Each benchmark client owns a new process group. Never signal arbitrary
+        # /proc descendants: those PIDs may have been reused by unrelated apps.
         try:
-            compositor.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            os.killpg(compositor.pid, signal.SIGKILL)
-        shutil.rmtree(home, ignore_errors=True)
+            processes = ([compositor] if compositor is not None else []) + opened
+            for proc in processes:
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            for proc in processes:
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    proc.wait()
+        finally:
+            # Only this mkdtemp-created directory is automatically destroyed.
+            shutil.rmtree(home, ignore_errors=True)
 
     (out / "report.json").write_text(json.dumps(report, indent=2))
     # `heap + anon` is what the process allocated; PSS also counts its executable and libraries.

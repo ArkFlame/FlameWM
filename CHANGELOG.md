@@ -28,6 +28,7 @@ whole-session CPU median 8.2% -> 4.1%, allocated memory (heap + anonymous) 174 M
 
 ### Tools
 - `tools/bench-flamewm-session.py`: ten-second CPU and memory benchmark of a whole desktop.
+- Hardened benchmark output: only fresh private directories under the system temp or working directory; never recursively delete user-selected output. The benchmark now uses a private home/data/config/cache environment, filters child environment variables, rejects XTEST on the host DISPLAY or without a compositor-owned Xwayland child, and cleans up only its own process groups and temporary home. New security regression tests cover these cases.
 - The terminal writes FlameWM profiler reports like the other apps.
 ## 0.1.2 — Separate-taskbar capsule alpha fix
 
