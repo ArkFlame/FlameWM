@@ -50,7 +50,7 @@ const CALENDAR_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flame
 const BATTERY_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-battery.rwr"));
 const WEATHER_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-weather.rwr"));
 
-/// WM_NAME of each helper-hosted quick popup, and of the main-hosted media popup.
+/// `WM_NAME` of each helper-hosted quick popup, and of the main-hosted media popup.
 pub const AUDIO_POPUP_TITLE: &str = "FlameWM audio";
 pub const NETWORK_POPUP_TITLE: &str = "FlameWM network";
 pub const CALENDAR_POPUP_TITLE: &str = "FlameWM calendar";
@@ -70,6 +70,7 @@ pub const QUICK_POPUP_TITLES: [&str; 6] = [
 ];
 
 /// True when `title` names a quick popup window.
+#[must_use]
 pub fn is_quick_popup_title(title: &str) -> bool {
     QUICK_POPUP_TITLES.contains(&title)
 }
@@ -113,6 +114,7 @@ pub enum QuickControlShutdown {
     Failed,
 }
 
+#[must_use]
 pub const fn quick_control_exit_code(shutdown: QuickControlShutdown) -> i32 {
     match shutdown {
         QuickControlShutdown::Completed => 0,
@@ -147,7 +149,7 @@ impl From<io::Error> for HostError {
 
 /// Snapshot projection for the helper: one [`ControlClient`] fetch round
 /// over the System domain only. No secret is ever carried: secrets travel
-/// via the SecretAgent snapshot, never in this struct or the protocol.
+/// via the `SecretAgent` snapshot, never in this struct or the protocol.
 #[derive(Debug, Clone)]
 pub struct QuickControlSnapshot {
     pub system: flamewm_api::system::SystemSnapshot,
@@ -179,6 +181,7 @@ pub struct QuickControlSnapshot {
 
 impl QuickControlSnapshot {
     /// Every field at its default around `system`.
+    #[must_use]
     pub fn new(system: flamewm_api::system::SystemSnapshot) -> Self {
         Self {
             system,
@@ -263,9 +266,9 @@ struct HostState {
     active_sequence: Option<u64>,
 }
 
-/// Duplicate stdin + O_NONBLOCK on the dup. No unsafe: the std File
-/// duplicate path (try_clone) keeps fd 0 stdio-owned while the clone
-/// gets its own description flags via set_nonblocking.
+/// Duplicate stdin + `O_NONBLOCK` on the dup. No unsafe: the std File
+/// duplicate path (`try_clone`) keeps fd 0 stdio-owned while the clone
+/// gets its own description flags via `set_nonblocking`.
 fn stdin_nonblocking_dup() -> Result<std::fs::File, HostError> {
     let file = std::fs::File::open("/dev/stdin").map_err(HostError::Io)?;
     let flags = rustix::fs::fcntl_getfl(&file)
@@ -316,31 +319,28 @@ fn drain_parent_fd(file: &mut std::fs::File, state: &Arc<Mutex<ParentInput>>) {
                 let Ok(mut guard) = state.lock() else { return };
                 let mut start = 0usize;
                 while start < n {
-                    match buf[start..n].iter().position(|b| *b == b'\n') {
-                        Some(rel) => {
-                            let end = start + rel;
-                            let mut line = core::mem::take(&mut guard.pending);
-                            line.extend_from_slice(&buf[start..end]);
-                            // Strip a trailing CR so CRLF parents stay total.
-                            if line.last() == Some(&b'\r') {
-                                line.pop();
-                            }
-                            push_line(&mut guard, &line);
-                            start = end + 1;
+                    if let Some(rel) = buf[start..n].iter().position(|b| *b == b'\n') {
+                        let end = start + rel;
+                        let mut line = core::mem::take(&mut guard.pending);
+                        line.extend_from_slice(&buf[start..end]);
+                        // Strip a trailing CR so CRLF parents stay total.
+                        if line.last() == Some(&b'\r') {
+                            line.pop();
                         }
-                        None => {
-                            guard.pending.extend_from_slice(&buf[start..n]);
-                            if guard.pending.len() > MAX_LINE_LEN {
-                                guard.pending.clear();
-                                eprintln!("flamewm-quick-control: overlong command line dropped");
-                            }
-                            break;
+                        push_line(&mut guard, &line);
+                        start = end + 1;
+                    } else {
+                        guard.pending.extend_from_slice(&buf[start..n]);
+                        if guard.pending.len() > MAX_LINE_LEN {
+                            guard.pending.clear();
+                            eprintln!("flamewm-quick-control: overlong command line dropped");
                         }
+                        break;
                     }
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(_) => {
                 if let Ok(mut guard) = state.lock() {
                     guard.eof = true;
@@ -358,7 +358,7 @@ fn drain_parent_fd(file: &mut std::fs::File, state: &Arc<Mutex<ParentInput>>) {
 /// command FD + timers/wake -> one event loop. Reuses flamewm-reactor.
 /// The tick drains commands: OPEN closes the current helper popup,
 /// projects, fits, shows/grabs; CLOSE closes; SHUTDOWN stops cleanly.
-/// The surface event callback calls route_helper_event.
+/// The surface event callback calls `route_helper_event`.
 pub fn run_quick_control_host() -> Result<(), HostError> {
     flamewm_profiler::init_process("flamewm-quick-control");
     flamewm_debug::init_process("flamewm-quick-control");
@@ -480,6 +480,7 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
                             continue;
                         }
                         state.snapshot.network_secret_submit_id = None;
+                        #[allow(clippy::single_match_else)]
                         match outcome.result {
                             Ok(()) => clear_network_secret(&mut state.snapshot),
                             Err(()) => {
@@ -815,9 +816,7 @@ fn tick_host(
     }
     let pending = {
         let mut guard = state.borrow_mut();
-        if !guard.system_reprojection_pending {
-            None
-        } else {
+        if guard.system_reprojection_pending {
             guard.system_reprojection_pending = false;
             let open = guard.surfaces.open;
             open.and_then(|kind| {
@@ -826,6 +825,8 @@ fn tick_host(
                     .handle(kind)
                     .map(|surface| (surface, guard.snapshot.clone(), kind))
             })
+        } else {
+            None
         }
     };
     if let Some((surface, snapshot, kind)) = pending {
@@ -834,7 +835,7 @@ fn tick_host(
         let projected = probe_start.elapsed();
         runtime.redraw(surface)?;
         if host_debug_enabled() {
-            let ingress = R2_INGRESS.with(|c| c.take());
+            let ingress = R2_INGRESS.with(std::cell::Cell::take);
             eprintln!(
                 "r2 present t_us={} project_us={} redraw_us={} ingress_to_present_us={}",
                 r2_now_us(),
@@ -874,9 +875,9 @@ fn apply_system_snapshot(
     true
 }
 
-/// True open stages: each label maps to one real turn in open_request
-/// (project, measure, place, prepare/commit_geometry, present,
-/// pointer_grab) plus the total and the real close
+/// True open stages: each label maps to one real turn in `open_request`
+/// (project, measure, place, `prepare/commit_geometry`, present,
+/// `pointer_grab`) plus the total and the real close
 /// (close/ungrab/unmap). No fake spans.
 pub const QUICK_STAGE_LABELS: &[&str] = &[
     "shell.quick.open.total",
@@ -892,6 +893,7 @@ pub const QUICK_STAGE_LABELS: &[&str] = &[
 pub const SLOW_OPEN_THRESHOLD: Duration = Duration::from_micros(16_670);
 
 /// Pure seam: slow-open predicate shared by the log gate.
+#[must_use]
 pub fn is_slow_open(total: Duration) -> bool {
     total >= SLOW_OPEN_THRESHOLD
 }
@@ -912,6 +914,7 @@ pub struct OpenStageTimings {
 }
 
 impl OpenStageTimings {
+    #[must_use]
     pub fn render(&self, kind: QuickControlKind) -> String {
         format!(
             "flamewm-quick-control: slow open kind={kind:?} open.total={:?} project={:?} measure={:?} place={:?} prepare/commit_geometry={:?} present={:?} pointer_grab={:?} close/ungrab/unmap={:?}",
@@ -1321,7 +1324,7 @@ pub fn route_helper_event(
             }
         }
         ActionPhase::Release => snapshot.audio_drag_slot = None,
-        _ => {}
+        ActionPhase::Hover => {}
     }
     if event.action.phase == ActionPhase::Release && event.action.inside {
         match action {
@@ -1382,7 +1385,7 @@ pub fn route_helper_event(
                 return submit_network_secret(snapshot, dispatcher);
             }
             value if value.starts_with("network.filter.") => {
-                snapshot.network_query.filter = value["network.filter.".len()..].to_owned();
+                value["network.filter.".len()..].clone_into(&mut snapshot.network_query.filter);
                 snapshot.network_scroll_offset = 0;
             }
             value if value.starts_with("calendar.") => {
@@ -1516,7 +1519,7 @@ fn submit_network_secret(
     true
 }
 
-/// Builds the SecretAgent submit for the pending identity. An empty password is
+/// Builds the `SecretAgent` submit for the pending identity. An empty password is
 /// never a valid secured-AP credential, so it yields no request.
 fn network_secret_submit_request(
     identity: (u64, u64),
@@ -1673,8 +1676,9 @@ fn helper_control_request(action: &str, snapshot: &QuickControlSnapshot) -> Opti
     crate::taskbar::status::audio::system_action_for_row(system, &row.id, percent, muted)
 }
 
-/// Pure helpers for the close-one/close-none contract: take_close_target
+/// Pure helpers for the close-one/close-none contract: `take_close_target`
 /// consumes open and yields the single kind to close (None = zero calls).
+#[must_use]
 pub fn take_close_target(open: Option<QuickControlKind>) -> Option<QuickControlKind> {
     open
 }
@@ -1689,7 +1693,14 @@ pub struct HelperSurfaces {
     pub slide: Option<SlideConfig>,
 }
 
+impl Default for HelperSurfaces {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HelperSurfaces {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             handles: [None; 5],
@@ -1709,6 +1720,7 @@ impl HelperSurfaces {
     }
 
     /// Existing surface for `kind`, if it has been created.
+    #[must_use]
     pub fn handle(&self, kind: QuickControlKind) -> Option<SurfaceHandle> {
         self.handles[Self::slot(kind)]
     }
@@ -1803,7 +1815,7 @@ fn create_surface(
 }
 
 /// Parent-side helper: restart the supervisor with the J07 static span
-/// (shell.quick_control.restart). Failures are nonfatal: the caller logs
+/// (`shell.quick_control.restart`). Failures are nonfatal: the caller logs
 /// and keeps the shell running without quick-control popups.
 pub fn poll_supervisor_nonfatal(supervisor: &mut QuickControlSupervisor) {
     let _span = crate::runtime::shell_span("shell.quick_control.restart").start();
@@ -1914,8 +1926,10 @@ mod tests {
     fn filtered_sorted_scrolled_network_slot_resolves_the_projected_ap() {
         use flamewm_api::system::{NetworkAccessPointSnapshot, ServiceAvailability, SystemAction};
 
-        let mut system = flamewm_api::system::SystemSnapshot::default();
-        system.revision = 9;
+        let mut system = flamewm_api::system::SystemSnapshot {
+            revision: 9,
+            ..flamewm_api::system::SystemSnapshot::default()
+        };
         system.network.availability = ServiceAvailability::Available;
         system.network.active_access_point_path = "/ap/4".to_owned();
         system.network.access_points = (0..8)
@@ -2296,7 +2310,7 @@ mod tests {
         );
     }
 
-    /// Wi-Fi open with NetworkManager absent (`ServiceAvailability::Unavailable`) must project
+    /// Wi-Fi open with `NetworkManager` absent (`ServiceAvailability::Unavailable`) must project
     /// through the real network artifact without a refusal, so the popup maps and shows the
     /// truthful unavailable state. The secret-error node is written on every open (even empty);
     /// it needs a text child in `network.html`, otherwise `document.text` refuses the whole open.
@@ -2454,8 +2468,10 @@ mod audio_routing_tests {
     }
 
     fn quick(tab: AudioTab, raise_maximum: bool) -> QuickControlSnapshot {
-        let mut system = flamewm_api::system::SystemSnapshot::default();
-        system.revision = 4;
+        let mut system = flamewm_api::system::SystemSnapshot {
+            revision: 4,
+            ..flamewm_api::system::SystemSnapshot::default()
+        };
         system.audio.availability = ServiceAvailability::Available;
         system.audio.endpoints = vec![AudioEndpointSnapshot {
             id: 1,

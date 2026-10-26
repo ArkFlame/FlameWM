@@ -1,4 +1,4 @@
-//! NetworkManager's system-bus source adapter.
+//! `NetworkManager`'s system-bus source adapter.
 
 mod actions;
 mod reply;
@@ -78,7 +78,7 @@ const DEVICE_REASON_SUPPLICANT_CONFIG_FAILED: u32 = 9;
 const DEVICE_REASON_SUPPLICANT_FAILED: u32 = 10;
 const DEVICE_REASON_SUPPLICANT_TIMEOUT: u32 = 11;
 
-/// Values from a NetworkManager root `PropertiesChanged` signal or `GetAll` reply.
+/// Values from a `NetworkManager` root `PropertiesChanged` signal or `GetAll` reply.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetworkManagerProperties {
     pub networking_enabled: Option<bool>,
@@ -182,7 +182,7 @@ struct WifiDevice {
     last_scan: Option<i64>,
 }
 
-/// Event-driven NetworkManager provider. Native replies and signals are sole state authority.
+/// Event-driven `NetworkManager` provider. Native replies and signals are sole state authority.
 pub struct NetworkManagerProvider {
     pump: BusPump,
     controller: NetworkController,
@@ -358,7 +358,7 @@ impl NetworkManagerProvider {
         };
     }
 
-    /// Report a degraded (not absent) NetworkManager state: the shell treats
+    /// Report a degraded (not absent) `NetworkManager` state: the shell treats
     /// `Unknown` as visible but not enabled.
     fn mark_degraded(&mut self) {
         self.reconcile_pending = false;
@@ -434,7 +434,7 @@ fn method_call(service: &str, path: &str, interface: &str, member: &str) -> Flam
         .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))
 }
 
-/// `org.freedesktop.DBus.Properties.GetAll(s interface)` on one NetworkManager object.
+/// `org.freedesktop.DBus.Properties.GetAll(s interface)` on one `NetworkManager` object.
 fn get_all_message(service: &str, path: &str, interface: &str) -> FlameResult<Message> {
     Ok(method_call(service, path, PROPERTIES_INTERFACE, GET_ALL)?.append1(interface.to_owned()))
 }

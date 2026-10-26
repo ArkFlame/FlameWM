@@ -1,4 +1,4 @@
-//! Minimal freedesktop notification server backed by FlameWM's session D-Bus reactor.
+//! Minimal freedesktop notification server backed by `FlameWM`'s session D-Bus reactor.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
@@ -438,7 +438,7 @@ fn parse_hints(
             ("urgency", MessageItem::Byte(1)) => urgency = NotificationUrgency::Normal,
             ("urgency", MessageItem::Byte(2)) => urgency = NotificationUrgency::Critical,
             ("value", MessageItem::Int32(value)) if (0..=100).contains(&value) => {
-                progress = Some(value as u8)
+                progress = Some(value as u8);
             }
             _ => {}
         }

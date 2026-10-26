@@ -1,7 +1,7 @@
 //! Bounded Settings display arrangement. Geometry planning is pure; native effects
 //! occur only after explicit user release and fresh snapshot validation.
 //!
-//! The current control protocol has no atomic RandR topology mutation. Until it
+//! The current control protocol has no atomic `RandR` topology mutation. Until it
 //! does, this is a single argv-based xrandr invocation with mandatory readback,
 //! not a second cached display authority. No shell interpolation or modeset flags.
 use std::collections::BTreeSet;
@@ -47,7 +47,7 @@ pub fn active_outputs(snapshot: &DisplaySnapshot) -> Vec<&OutputSnapshot> {
 /// Move an output one neighboring slot, retaining every active mode, rotation,
 /// primary flag and per-output shell scale. The resulting contiguous horizontal
 /// strip has no transient/overlapping CRTC positions to depend on.
-/// `Ok(None)` is a boundary/no-op, and must never issue a RandR request.
+/// `Ok(None)` is a boundary/no-op, and must never issue a `RandR` request.
 pub fn plan(
     snapshot: &DisplaySnapshot,
     output: &OutputId,
@@ -334,7 +334,7 @@ mod tests {
                 ("eDP-1", Rect::new(5680, 100, 1280, 800)),
             ]
         );
-        assert_eq!(layout.outputs[2].primary, true);
+        assert!(layout.outputs[2].primary);
         assert_eq!(layout.outputs[2].scale, 125);
     }
     #[test]

@@ -304,6 +304,8 @@ impl RuntimeDocument {
     }
 }
 
+pub type NodeImage<'a> = (Option<u16>, u32, u32, &'a str, &'a [u8]);
+
 impl RuntimeDocument {
     pub fn node_by_id(&self, id: &str) -> Option<u32> {
         self.id_index
@@ -358,7 +360,7 @@ impl RuntimeDocument {
 
     pub fn set_visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
         let index = self.require_node(id)?;
-        if self.hidden_nodes.contains(&index) == !visible {
+        if self.hidden_nodes.contains(&index) != visible {
             return Ok(());
         }
         if visible {
@@ -456,7 +458,7 @@ impl RuntimeDocument {
     }
 
     /// Effective image for a node: node-local override wins, else compiled asset.
-    pub fn image_for_node(&self, index: u32) -> Option<(Option<u16>, u32, u32, &str, &[u8])> {
+    pub fn image_for_node(&self, index: u32) -> Option<NodeImage<'_>> {
         if let Some(entry) = self.node_image_overrides.get(&index) {
             return Some((
                 self.document

@@ -93,8 +93,8 @@ fn left_snap_geometry(area: (i32, i32, u32, u32)) -> (i32, i32, u32, u32) {
 }
 
 fn frame_matches(frame: &crate::WinInfo, geometry: (i32, i32, u32, u32)) -> bool {
-    frame.x as i32 == geometry.0
-        && frame.y as i32 == geometry.1
+    i32::from(frame.x) == geometry.0
+        && i32::from(frame.y) == geometry.1
         && u32::from(frame.width) == geometry.2
         && u32::from(frame.height) == geometry.3
 }
@@ -147,17 +147,14 @@ fn t17_atom_values(values: &[u32]) -> String {
         .join(",");
     let remaining = values.len().saturating_sub(8);
     if remaining == 0 {
-        format!("[{}]", shown)
+        format!("[{shown}]")
     } else {
-        format!("[{},...+{}]", shown, remaining)
+        format!("[{shown},...+{remaining}]")
     }
 }
 
 fn t17_current_workarea(canary: &crate::Canary) -> String {
-    root_work_area(canary).map_or_else(
-        || "unavailable".to_owned(),
-        |area| t17_geometry_values(area),
-    )
+    root_work_area(canary).map_or_else(|| "unavailable".to_owned(), t17_geometry_values)
 }
 
 fn t17_optional_geometry(frame: Option<&crate::WinInfo>) -> String {
@@ -197,7 +194,10 @@ fn t17_probe_reply<C, R, E1: std::fmt::Display, E2: std::fmt::Display>(
 
 fn t17_window_probe(canary: &crate::Canary, window: u32) -> T17WindowProbe {
     let mut probe = T17WindowProbe::default();
-    match t17_probe_reply(canary.conn.get_geometry(window), |c| c.reply()) {
+    match t17_probe_reply(
+        canary.conn.get_geometry(window),
+        x11rb::cookie::Cookie::reply,
+    ) {
         Err(error) => {
             probe.x11_error = true;
             probe.geometry = error;
@@ -210,7 +210,10 @@ fn t17_window_probe(canary: &crate::Canary, window: u32) -> T17WindowProbe {
             );
         }
     }
-    match t17_probe_reply(canary.conn.get_window_attributes(window), |c| c.reply()) {
+    match t17_probe_reply(
+        canary.conn.get_window_attributes(window),
+        x11rb::cookie::Cookie::reply,
+    ) {
         Err(error) => {
             probe.x11_error = true;
             probe.attributes = error;
@@ -224,7 +227,7 @@ fn t17_window_probe(canary: &crate::Canary, window: u32) -> T17WindowProbe {
             );
         }
     }
-    match t17_probe_reply(canary.conn.query_tree(window), |c| c.reply()) {
+    match t17_probe_reply(canary.conn.query_tree(window), x11rb::cookie::Cookie::reply) {
         Err(error) => {
             probe.x11_error = true;
             probe.tree = error;
@@ -251,15 +254,18 @@ fn t17_snapshot(canary: &crate::Canary) -> String {
     let desktop = canary
         .prop_u32(canary.root, "_NET_CURRENT_DESKTOP")
         .first()
-        .map_or_else(|| "unavailable".to_owned(), |value| value.to_string());
+        .map_or_else(
+            || "unavailable".to_owned(),
+            std::string::ToString::to_string,
+        );
     let area = root_work_area(canary).map_or_else(
         || "unavailable".to_owned(),
-        |(x, y, width, height)| format!("x:{} y:{} width:{} height:{}", x, y, width, height),
+        |(x, y, width, height)| format!("x:{x} y:{y} width:{width} height:{height}"),
     );
     let active = canary
         .active_window()
         .map_or_else(|| "unavailable".to_owned(), |window| window.to_string());
-    format!("desktop:{} workarea:[{}] active:{}", desktop, area, active)
+    format!("desktop:{desktop} workarea:[{area}] active:{active}")
 }
 
 #[derive(Clone, Copy)]
@@ -308,8 +314,8 @@ fn t17_geometry_matches(
             height: initial_height,
         } => (width > initial_width || height > initial_height) && x == initial_x && y == initial_y,
         T17GeometryExpectation::Exact(geometry) => {
-            x as i32 == geometry.0
-                && y as i32 == geometry.1
+            i32::from(x) == geometry.0
+                && i32::from(y) == geometry.1
                 && u32::from(width) == geometry.2
                 && u32::from(height) == geometry.3
         }
@@ -337,6 +343,7 @@ fn t17_expectation_name(expectation: Option<T17GeometryExpectation>) -> &'static
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn t17_failure(
     canary: &crate::Canary,
     row: &str,
@@ -415,6 +422,7 @@ fn t17_setup_failure(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn t17_restore_diagnostic(
     canary: &crate::Canary,
     client_id: u32,
@@ -1235,7 +1243,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         .then(|| {
             wait_stable_frame(WAIT_MS, || {
                 canary.by_id(frame_id).filter(|frame| {
-                    !frame_matches_known_snap(&frame, baseline_area)
+                    !frame_matches_known_snap(frame, baseline_area)
                         && (frame.x != titlebar_initial_frame.x
                             || frame.y != titlebar_initial_frame.y)
                 })
@@ -1381,8 +1389,7 @@ pub fn run_t18(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     (
         target_ready,
         format!(
-            "scenario=T18 classification=UNVERIFIED admission=static static_admission={} target_surface_ready={} observable=client-pixels-only native_semantic_observable={} native_semantic_observation=SKIPPED failure_mutation=removing-selection-update-is-indistinguishable-at-x11-boundary unsupported={} path=static-admission",
-            target_ready, target_ready, T18_NATIVE_SEMANTIC_OBSERVABLE, T18_LIMITATION
+            "scenario=T18 classification=UNVERIFIED admission=static static_admission={target_ready} target_surface_ready={target_ready} observable=client-pixels-only native_semantic_observable={T18_NATIVE_SEMANTIC_OBSERVABLE} native_semantic_observation=SKIPPED failure_mutation=removing-selection-update-is-indistinguishable-at-x11-boundary unsupported={T18_LIMITATION} path=static-admission"
         ),
     )
 }
@@ -1393,7 +1400,7 @@ mod tests {
 
     #[test]
     fn t18_admission_keeps_native_limit_explicit() {
-        assert!(!T18_NATIVE_SEMANTIC_OBSERVABLE);
+        const { assert!(!T18_NATIVE_SEMANTIC_OBSERVABLE) };
         assert!(T18_LIMITATION.contains("desktop-selection"));
     }
 }

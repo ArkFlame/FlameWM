@@ -1,7 +1,7 @@
-//! Engine-neutral contracts shared by FlameWM product code and a window-manager engine.
+//! Engine-neutral contracts shared by `FlameWM` product code and a window-manager engine.
 //!
-//! This crate intentionally contains no X11, D-Bus, PulseAudio, toolkit, or async-runtime
-//! dependency. FlameWM backends implement the traits in [`ports`].
+//! This crate intentionally contains no X11, D-Bus, `PulseAudio`, toolkit, or async-runtime
+//! dependency. `FlameWM` backends implement the traits in [`ports`].
 
 pub mod applications;
 pub mod background;

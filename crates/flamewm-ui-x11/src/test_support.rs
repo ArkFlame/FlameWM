@@ -4,7 +4,9 @@
 
 use std::collections::HashMap;
 
-use flamewm_render_core::{CompiledNode, NodeKind, Overflow, Style};
+use flamewm_render_core::Overflow;
+#[cfg(test)]
+use flamewm_render_core::{CompiledNode, NodeKind, Style};
 use flamewm_ui_core::style::UiLayer;
 
 use crate::{RuntimeImage, UiColor, UiDocumentAccess};

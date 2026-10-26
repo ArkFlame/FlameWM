@@ -5,10 +5,10 @@
 
 extern crate pulse as libpulse_binding;
 
+pub mod device_watch;
 pub mod icon_service;
 pub mod icon_theme;
 pub mod icons;
-pub mod device_watch;
 pub mod job_view;
 pub mod media_store;
 pub mod mpris;

@@ -1,4 +1,4 @@
-//! Canonical FlameWM product metadata and argv-safe URI validation.
+//! Canonical `FlameWM` product metadata and argv-safe URI validation.
 
 pub const DONATE_URL: &str = "https://paypal.me/LinsaFTW";
 pub const SOURCE_URL: &str = "https://github.com/arkflame/flamewm";

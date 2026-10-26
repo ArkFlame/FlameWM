@@ -56,7 +56,7 @@ impl Default for BackoffConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PulseController {
     generation: u64,
     server_generation: u64,
@@ -65,20 +65,6 @@ pub struct PulseController {
     reconnect_pending: bool,
     backoff: BackoffConfig,
     reconcile_pending: bool,
-}
-
-impl Default for PulseController {
-    fn default() -> Self {
-        Self {
-            generation: 0,
-            server_generation: 0,
-            status: PulseStatus::default(),
-            reconnect_attempts: 0,
-            reconnect_pending: false,
-            backoff: BackoffConfig::default(),
-            reconcile_pending: false,
-        }
-    }
 }
 
 impl PulseController {

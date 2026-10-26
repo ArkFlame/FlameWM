@@ -19,16 +19,15 @@ pub struct WarpRect {
     pub height: f64,
 }
 
+type BoundsAndMatrix = ((i32, i32, u32, u32), [[f64; 3]; 3]);
+
 /// Destination rect `(x, y, width, height)` in overlay-local pixels and the destination-to-source
 /// matrix for one band. Returns `None` for a band with no visible pixels.
 ///
 /// The matrix is relative to the rect origin: the server feeds it `dst_pixel - rect_origin`
 /// (see `XRenderTransformApi::composite_src_relative`), so offsets stay small for narrow
 /// icons on wide windows, where absolute offsets overflow XFixed 16.16.
-pub fn band_transform(
-    band: &LampBand,
-    origin: (f64, f64),
-) -> Option<((i32, i32, u32, u32), [[f64; 3]; 3])> {
+pub fn band_transform(band: &LampBand, origin: (f64, f64)) -> Option<BoundsAndMatrix> {
     let (sx, sy, sw, sh) = band.src;
     let (dx, dy, dw, dh) = band.dst;
     if !(dw > 0.0 && dh > 0.0) {

@@ -48,7 +48,9 @@ fn start_server() -> Option<(TestServer, String)> {
 
 #[test]
 fn set_files_on_one_instance_is_read_by_another() {
-    let _serial = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = SERVER_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some((_server, display)) = start_server() else {
         eprintln!("skipped: Xvfb not available or no free display");
         return;
@@ -87,7 +89,9 @@ fn set_files_on_one_instance_is_read_by_another() {
 
 #[test]
 fn primary_text_is_separate_from_clipboard_text() {
-    let _serial = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = SERVER_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some((_server, display)) = start_server() else {
         eprintln!("skipped: Xvfb not available or no free display");
         return;

@@ -457,6 +457,15 @@ mod tests {
 
     #[test]
     fn secret_never_appears_in_command_encoding() {
+        fn assert_shape(c: &Command) {
+            match *c {
+                Command::Open(_)
+                | Command::Close
+                | Command::CloseSession(_)
+                | Command::Shutdown
+                | Command::Weather(_) => {}
+            }
+        }
         // Type design: Command carries no secret; encoded lines must never
         // echo an out-of-band token.
         let secret = "s3cr3t-token-xyz-9f8e7d6c5b4a";
@@ -471,15 +480,6 @@ mod tests {
         }
         // Compile-time shape check: Command must stay secret-free with
         // exactly these three variants.
-        fn assert_shape(c: &Command) {
-            match *c {
-                Command::Open(_)
-                | Command::Close
-                | Command::CloseSession(_)
-                | Command::Shutdown
-                | Command::Weather(_) => {}
-            }
-        }
         let c = sample();
         assert_shape(&c);
     }

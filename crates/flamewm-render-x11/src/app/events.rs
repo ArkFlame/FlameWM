@@ -2,9 +2,9 @@ use std::borrow::Cow;
 use std::os::raw::{c_char, c_int, c_uint, c_ulong};
 
 use super::input::apply_wheel_scroll;
+use super::xdnd::SELECTION_NOTIFY;
 use super::*;
 use crate::WindowGeometrySlot;
-use super::xdnd::SELECTION_NOTIFY;
 use crate::runtime::{RawPress, RawPressWatch};
 use crate::xinput::{GENERIC_EVENT, generic_cookie};
 
@@ -196,6 +196,7 @@ where
 }
 
 /// Pointer or key ActionEvent; device coordinates are scaled to logical points.
+#[allow(clippy::too_many_arguments)]
 fn action_event(
     scale: f32,
     phase: ActionPhase,
@@ -279,7 +280,10 @@ fn typed_key_payload(state: u32, symbol: u64, payload: &mut String) {
     payload.push(KEY_PAYLOAD_SEPARATOR);
     payload.push_str(&canonical_key_name(symbol));
     payload.push(KEY_PAYLOAD_SEPARATOR);
-    if let Some(key) = inserts_text(state).then(|| printable_key_char(symbol)).flatten() {
+    if let Some(key) = inserts_text(state)
+        .then(|| printable_key_char(symbol))
+        .flatten()
+    {
         payload.push(key);
     }
 }
@@ -946,6 +950,7 @@ impl X11App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) unsafe fn event_loop_with_reactor<F, R, P>(
         &mut self,
         document: &mut RuntimeDocument,
@@ -977,7 +982,10 @@ impl X11App {
             reactor
                 .dispatch(timeout)
                 .map_err(|error| error.to_string())?;
-            if self.backdrop_deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            if self
+                .backdrop_deadline
+                .is_some_and(|d| std::time::Instant::now() >= d)
+            {
                 // Quiet period over: the stale snapshot is recaptured by the paint below.
                 self.backdrop_deadline = None;
                 self.mark_full();

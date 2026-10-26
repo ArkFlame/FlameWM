@@ -1,4 +1,4 @@
-//! `flamewm-remote-fs`: remote file access for the FlameWM explorer.
+//! `flamewm-remote-fs`: remote file access for the `FlameWM` explorer.
 //!
 //! Backends: `sftp://` and `ssh://` (shell-free exec of `ls`/`cat`/`mv` over a multiplexed OpenSSH
 //! connection), and `fish://` (same executor; KDE-fish-style paths with `~` as home). `smb://` and
@@ -18,7 +18,7 @@ pub mod transport;
 pub mod url;
 
 pub use cancel::Cancel;
-pub use client::{Config, HostKeyPrompt, ListEvent, Reply, RemoteFs, TransferEvent, pick_host_key};
+pub use client::{Config, HostKeyPrompt, ListEvent, RemoteFs, Reply, TransferEvent, pick_host_key};
 pub use entry::{Entry, Kind};
 pub use error::Error;
 pub use url::{Protocol, Url};

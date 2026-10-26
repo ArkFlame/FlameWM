@@ -1,8 +1,8 @@
-//! Connection pool. ssh's ControlMaster holds the real socket; the pool decides when a
+//! Connection pool. ssh's `ControlMaster` holds the real socket; the pool decides when a
 //! connection must be (re)established or re-verified, and evicts idle masters.
 
-use crate::transport::ConnKey;
 use crate::Error;
+use crate::transport::ConnKey;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -31,7 +31,12 @@ pub struct Pool<C: Connector> {
 
 impl<C: Connector> Pool<C> {
     pub fn new(conn: C, verify_after: Duration, idle: Duration) -> Self {
-        Self { conn, slots: Mutex::new(HashMap::new()), verify_after, idle }
+        Self {
+            conn,
+            slots: Mutex::new(HashMap::new()),
+            verify_after,
+            idle,
+        }
     }
 
     /// Ensure a live connection for `key`, reusing the existing master when verified recently.
@@ -44,7 +49,10 @@ impl<C: Connector> Pool<C> {
             self.conn.close(&stale);
         }
         let known = {
-            let mut slots = self.slots.lock().map_err(|_| Error::Io("pool poisoned".into()))?;
+            let mut slots = self
+                .slots
+                .lock()
+                .map_err(|_| Error::Io("pool poisoned".into()))?;
             match slots.get_mut(key) {
                 Some(slot) => {
                     slot.used = now;
@@ -66,8 +74,14 @@ impl<C: Connector> Pool<C> {
     }
 
     fn touch(&self, key: &ConnKey, now: Instant, verified: bool) -> Result<(), Error> {
-        let mut slots = self.slots.lock().map_err(|_| Error::Io("pool poisoned".into()))?;
-        let slot = slots.entry(key.clone()).or_insert(Slot { verified: now, used: now });
+        let mut slots = self
+            .slots
+            .lock()
+            .map_err(|_| Error::Io("pool poisoned".into()))?;
+        let slot = slots.entry(key.clone()).or_insert(Slot {
+            verified: now,
+            used: now,
+        });
         slot.used = now;
         if verified {
             slot.verified = now;
@@ -94,7 +108,9 @@ impl<C: Connector> Pool<C> {
     }
 
     fn take_idle(&self, now: Instant) -> Vec<ConnKey> {
-        let Ok(mut slots) = self.slots.lock() else { return Vec::new() };
+        let Ok(mut slots) = self.slots.lock() else {
+            return Vec::new();
+        };
         let stale: Vec<ConnKey> = slots
             .iter()
             .filter(|(_, s)| now.duration_since(s.used) > self.idle)
@@ -138,13 +154,21 @@ mod tests {
     }
 
     fn key(h: &str) -> ConnKey {
-        ConnKey { user: None, host: h.into(), port: 22 }
+        ConnKey {
+            user: None,
+            host: h.into(),
+            port: 22,
+        }
     }
 
     #[test]
     fn reuses_connection_within_verify_window() {
         let fake = std::sync::Arc::new(Fake::default());
-        let pool = Pool::new(fake.clone(), Duration::from_secs(30), Duration::from_secs(300));
+        let pool = Pool::new(
+            fake.clone(),
+            Duration::from_secs(30),
+            Duration::from_secs(300),
+        );
         for _ in 0..10 {
             pool.ensure(&key("a")).unwrap();
         }
@@ -155,10 +179,15 @@ mod tests {
     #[test]
     fn rechecks_after_verify_window_without_reconnecting_when_alive() {
         let fake = std::sync::Arc::new(Fake::default());
-        let pool = Pool::new(fake.clone(), Duration::from_secs(30), Duration::from_secs(300));
+        let pool = Pool::new(
+            fake.clone(),
+            Duration::from_secs(30),
+            Duration::from_secs(300),
+        );
         let t0 = Instant::now();
         pool.ensure_at(&key("a"), t0).unwrap();
-        pool.ensure_at(&key("a"), t0 + Duration::from_secs(31)).unwrap();
+        pool.ensure_at(&key("a"), t0 + Duration::from_secs(31))
+            .unwrap();
         assert_eq!(fake.alive.load(Ordering::SeqCst), 1);
         assert_eq!(fake.establishes.load(Ordering::SeqCst), 1);
     }
@@ -166,12 +195,19 @@ mod tests {
     #[test]
     fn drop_forces_reestablish_and_failures_propagate() {
         let fake = std::sync::Arc::new(Fake::default());
-        let pool = Pool::new(fake.clone(), Duration::from_secs(30), Duration::from_secs(300));
+        let pool = Pool::new(
+            fake.clone(),
+            Duration::from_secs(30),
+            Duration::from_secs(300),
+        );
         pool.ensure(&key("a")).unwrap();
         pool.drop_key(&key("a"));
         assert_eq!(fake.closes.load(Ordering::SeqCst), 1);
         fake.fail_next.store(true, Ordering::SeqCst);
-        assert!(matches!(pool.ensure(&key("a")), Err(Error::ConnectionLost(_))));
+        assert!(matches!(
+            pool.ensure(&key("a")),
+            Err(Error::ConnectionLost(_))
+        ));
         assert!(pool.is_empty());
         pool.ensure(&key("a")).unwrap();
         assert_eq!(pool.len(), 1);
@@ -180,12 +216,22 @@ mod tests {
     #[test]
     fn idle_masters_are_evicted_and_closed() {
         let fake = std::sync::Arc::new(Fake::default());
-        let pool = Pool::new(fake.clone(), Duration::from_secs(30), Duration::from_secs(300));
+        let pool = Pool::new(
+            fake.clone(),
+            Duration::from_secs(30),
+            Duration::from_secs(300),
+        );
         let t0 = Instant::now();
         pool.ensure_at(&key("a"), t0).unwrap();
-        pool.ensure_at(&key("b"), t0 + Duration::from_secs(200)).unwrap();
-        pool.ensure_at(&key("c"), t0 + Duration::from_secs(400)).unwrap();
-        assert_eq!(fake.closes.load(Ordering::SeqCst), 1, "only 'a' is idle >300s");
+        pool.ensure_at(&key("b"), t0 + Duration::from_secs(200))
+            .unwrap();
+        pool.ensure_at(&key("c"), t0 + Duration::from_secs(400))
+            .unwrap();
+        assert_eq!(
+            fake.closes.load(Ordering::SeqCst),
+            1,
+            "only 'a' is idle >300s"
+        );
         assert_eq!(pool.len(), 2);
     }
 }

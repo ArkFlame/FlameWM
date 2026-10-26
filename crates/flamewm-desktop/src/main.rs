@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use flamewm_api::applications::ApplicationLaunchOptions;
-use flamewm_api::settings::SettingsSnapshot;
 #[cfg(test)]
 use flamewm_api::settings::SettingValue;
+use flamewm_api::settings::SettingsSnapshot;
 use flamewm_api::workspace::WorkspaceSnapshot;
 use flamewm_api::{OutputId, Point, Rect};
 use flamewm_applications::DesktopEntry;
@@ -67,48 +67,50 @@ macro_rules! point_fn {
 mod convert_wheel;
 mod downloads;
 mod drag;
-mod install_root;
-mod settings_values;
-mod projection;
 mod icon_names;
 mod icon_raster;
-mod wallpaper_stamp;
+mod install_root;
 mod output_layout;
+mod projection;
 mod rubber;
+mod settings_values;
 mod slots;
 mod sticky;
 #[path = "../ui_contract.rs"]
 mod ui_contract;
 mod wallpaper_fit;
+#[allow(clippy::duplicate_mod)]
 mod wallpaper_loader;
+mod wallpaper_stamp;
 mod workspace_sync;
 
 use drag::{commit_item_drag, hide_drag_ghost, show_drag_ghost, sync_drag_ghost};
-use rubber::{
-    RubberItem, apply_rubber_hits, drop_missing_selected, end_rubber_gesture,
-    normalized_selection_rect, rubber_bounds, rubber_snapshot, set_selection_overlay,
-    sync_selection_visuals,
-};
+use install_root::packaged_root;
+#[cfg(test)]
+use install_root::{installed_data_root, resolve_packaged_root};
+#[cfg(test)]
+use output_layout::PROJECTED_CELLS_CALLS;
 use output_layout::{
     ProjectedCellsCache, desktop_surface_rect, grid_for_output, live_output, pointer_on_output,
     projected_cells, refresh_output_layout, resolve_output_layout,
 };
 #[cfg(test)]
-use output_layout::PROJECTED_CELLS_CALLS;
-#[cfg(test)]
 use output_layout::{
-    grids_for_outputs, normalize_outputs, output_at_in, pointer_point_for_grid, subtract_panel_strip,
+    grids_for_outputs, normalize_outputs, output_at_in, pointer_point_for_grid,
+    subtract_panel_strip,
 };
-use slots::{SlotInputs, apply_pending_icon_results, apply_ready_icons, project_slots};
-use install_root::packaged_root;
+use rubber::{
+    RubberItem, apply_rubber_hits, drop_missing_selected, end_rubber_gesture,
+    normalized_selection_rect, rubber_bounds, rubber_snapshot, set_selection_overlay,
+    sync_selection_visuals,
+};
 #[cfg(test)]
-use install_root::{installed_data_root, resolve_packaged_root};
+use settings_values::{ACCENT_TOKEN_ALPHAS, accent_token_values};
 use settings_values::{
     accent_color, desktop_entry_scale, icon_theme_changed, project_accent_tokens, setting_bool,
     setting_text,
 };
-#[cfg(test)]
-use settings_values::{ACCENT_TOKEN_ALPHAS, accent_token_values};
+use slots::{SlotInputs, apply_pending_icon_results, apply_ready_icons, project_slots};
 
 point_fn!(scan_point, ProfilePoint, "desktop.scan");
 point_fn!(sync_point, ProfilePoint, "desktop.sync_document");
@@ -442,8 +444,12 @@ pub fn main() -> Result<(), String> {
         surface.height as u32,
         packaged_root(),
     )?;
-    request_wallpaper(&mut wallpaper_loader, &settings, &monitor_rects(&output_geometries))
-        .map_err(|_| "wallpaper loader closed during startup".to_owned())?;
+    request_wallpaper(
+        &mut wallpaper_loader,
+        &settings,
+        &monitor_rects(&output_geometries),
+    )
+    .map_err(|_| "wallpaper loader closed during startup".to_owned())?;
     let mut model = DesktopModel::default();
     {
         let _span = scan_point().start();
@@ -979,7 +985,6 @@ fn request_wallpaper(
     }
 }
 
-
 #[cfg(test)]
 #[path = "tests/cursor_reload_tests.rs"]
 mod cursor_reload_tests;
@@ -1003,7 +1008,10 @@ fn refresh_icon_theme(
 }
 
 /// Per-turn refresh of every projection; the first failure stops the pass, never the desktop.
-fn refresh_all(document: &mut impl UiDocumentAccess, state: &mut DesktopState) -> Result<(), String> {
+fn refresh_all(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
     refresh_settings_projection(document, state)?;
     refresh_icon_theme(document, state)?;
     refresh_workspace_projection(document, state)?;
@@ -1120,16 +1128,18 @@ fn selected_deletable_paths(state: &DesktopState) -> Vec<PathBuf> {
         .model
         .items()
         .filter(|item| {
-            state.selection.selected().contains(&item.id) && item.kind != DesktopItemKind::TrashPseudo
+            state.selection.selected().contains(&item.id)
+                && item.kind != DesktopItemKind::TrashPseudo
         })
         .map(|item| item.path.clone())
         .collect()
 }
 
 fn state_path(name: &str) -> Result<PathBuf, String> {
-    let base = env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env::var_os("HOME").unwrap()).join(".local/state"));
+    let base = env::var_os("XDG_STATE_HOME").map_or_else(
+        || PathBuf::from(env::var_os("HOME").unwrap()).join(".local/state"),
+        PathBuf::from,
+    );
     Ok(base.join(name))
 }
 
@@ -1774,7 +1784,7 @@ fn double_click_pressed(state: &DesktopState, id: &str, x: f32, y: f32) -> bool 
     let Some(previous) = state.last_click.as_ref() else {
         return false;
     };
-    let delta_ms = previous.at.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    let delta_ms = previous.at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     double_click_opens(&previous.id, previous.x, previous.y, 0, id, x, y, delta_ms)
 }
 
@@ -1782,7 +1792,7 @@ fn open_item(state: &DesktopState, index: usize) -> Result<(), String> {
     let Some(item) = state.model.items().nth(index) else {
         return Ok(());
     };
-    let outcome = open_item_inner(state, item.kind.clone(), &item.path);
+    let outcome = open_item_inner(state, item.kind, &item.path);
     if let Err(error) = &outcome {
         // Double-click/open boundary: spawn intent failure is logged and
         // counted; the event loop stays alive. Child exit after a successful
@@ -1808,7 +1818,6 @@ fn open_item_inner(state: &DesktopState, kind: DesktopItemKind, path: &Path) -> 
                 .ok_or_else(|| format!("desktop entry is not launchable: {}", path.display()))?;
             entry
                 .launch(&ApplicationLaunchOptions::default())
-                .map(|_| ())
                 .map_err(|error| format!("{error:?}"))
         }
         LauncherOpen::RegularFile if kind == DesktopItemKind::Directory => {
@@ -1967,7 +1976,7 @@ fn handle_menu_action(
                                 )?;
                             }
                             Err(error) => {
-                                report_action_failure("start conversion", error.to_string())
+                                report_action_failure("start conversion", error.to_string());
                             }
                         }
                     }
@@ -2089,11 +2098,10 @@ fn sync_rename_editor(
         .items()
         .enumerate()
         .find(|(_, item)| item.id == rename.item_id)
-        .map(|(slot, _)| {
+        .map_or(state.grid.work_area.origin(), |(slot, _)| {
             let (output, cell) = &cells[slot];
             grid_for_output(state, output).cell_to_pixel(*cell)
-        })
-        .unwrap_or(state.grid.work_area.origin());
+        });
     // Value plus OK/Cancel on one row.
     let width = 300;
     let height = 44;
@@ -2249,7 +2257,7 @@ fn create_shortcut(state: &mut DesktopState) -> Result<(), String> {
 }
 
 /// Freedesktop Trash replaces irreversible deletion. The user's home is
-/// authoritative for XDG_DATA_HOME, and the UID comes from its metadata.
+/// authoritative for `XDG_DATA_HOME`, and the UID comes from its metadata.
 fn move_entry_to_trash(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let home = PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?);
@@ -2258,8 +2266,7 @@ fn move_entry_to_trash(path: &Path) -> Result<(), String> {
         .uid();
     let data_home = env::var_os("XDG_DATA_HOME")
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/share"));
+        .map_or_else(|| home.join(".local/share"), PathBuf::from);
     Trash::move_to_trash(path, &home, &data_home, uid)
         .map(|_| ())
         .map_err(|error| format!("{error:?}"))
@@ -2269,8 +2276,7 @@ fn empty_home_trash() -> Result<(), String> {
     let home = PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?);
     let data_home = env::var_os("XDG_DATA_HOME")
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/share"));
+        .map_or_else(|| home.join(".local/share"), PathBuf::from);
     let location = TrashLocation {
         scope: TrashScope::Home,
         top_directory: None,
@@ -2708,7 +2714,6 @@ fn pointer_point(action: &UiActionEvent, bounds: Rect) -> Point {
         (action.y.round() as i32).clamp(bounds.y, max_y),
     )
 }
-
 
 #[cfg(test)]
 #[path = "tests/work_area_tests.rs"]

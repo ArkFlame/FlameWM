@@ -487,9 +487,7 @@ fn panel_context_missing_output_returns_none() {
 fn task_slot_snapshot(outputs: &[&str]) -> ShellSnapshot {
     use flamewm_api::panels::{PanelSnapshot, TaskEntry, TaskEntryKind};
     use flamewm_api::window::WindowState;
-    use flamewm_api::{
-        DesktopAppId, OutputId, PanelEdge, TaskEntryId, WindowRef, WorkspaceRef,
-    };
+    use flamewm_api::{DesktopAppId, OutputId, PanelEdge, TaskEntryId, WindowRef, WorkspaceRef};
     let window_on = |id: u64, output: &str| WindowSnapshot {
         reference: WindowRef::new(id, 1),
         title: String::new(),
@@ -635,7 +633,10 @@ fn running_task_context_menu_pins_and_pinned_menu_unpins() {
     let mut runtime = ShellRuntime::new(task_slot_snapshot(&["A"]));
     runtime.select_panel_output(flamewm_api::OutputId::new("A"));
     let target = runtime.task_target_for_slot(0).unwrap();
-    let menu = context_menu(ContextMenuKind::Task(target.id.clone()), target.output.clone());
+    let menu = context_menu(
+        ContextMenuKind::Task(target.id.clone()),
+        target.output.clone(),
+    );
     assert_eq!(
         runtime.context_menu_request_for_action("task.menu.pin", Some(&menu)),
         Some(ControlRequest::PinApp {
@@ -653,7 +654,10 @@ fn running_task_context_menu_pins_and_pinned_menu_unpins() {
     let mut runtime = ShellRuntime::new(pinned);
     runtime.select_panel_output(flamewm_api::OutputId::new("A"));
     let target = runtime.task_target_for_slot(0).unwrap();
-    let menu = context_menu(ContextMenuKind::Task(target.id.clone()), target.output.clone());
+    let menu = context_menu(
+        ContextMenuKind::Task(target.id.clone()),
+        target.output.clone(),
+    );
     assert_eq!(
         runtime.context_menu_request_for_action("task.menu.unpin", Some(&menu)),
         Some(ControlRequest::UnpinApp {
@@ -846,8 +850,10 @@ fn workspace_snapshot(
 // MUTATION: keep mapping `workspace-N` to page slot `N - 1`.
 #[test]
 fn pager_cell_actions_activate_the_workspace_in_that_cell() {
-    let mut snapshot = ShellSnapshot::default();
-    snapshot.workspaces = Some(workspace_snapshot(6, 0));
+    let snapshot = ShellSnapshot {
+        workspaces: Some(workspace_snapshot(6, 0)),
+        ..ShellSnapshot::default()
+    };
     let runtime = ShellRuntime::new(snapshot);
     assert_eq!(
         runtime.control_request_for_action("workspace.2"),
@@ -939,8 +945,10 @@ fn global_workspace_snapshot_refreshes_task_views_on_each_output() {
 // empty cell must not open the menu of a neighbouring workspace.
 #[test]
 fn workspace_context_menu_opens_for_the_cell_workspace_only() {
-    let mut snapshot = ShellSnapshot::default();
-    snapshot.workspaces = Some(workspace_snapshot(6, 0));
+    let snapshot = ShellSnapshot {
+        workspaces: Some(workspace_snapshot(6, 0)),
+        ..ShellSnapshot::default()
+    };
     let mut runtime = ShellRuntime::new(snapshot);
     runtime.open_workspace_context_at_cell(6, None);
     match runtime.controls.front() {

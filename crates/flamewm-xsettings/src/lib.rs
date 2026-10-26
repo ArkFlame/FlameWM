@@ -1,4 +1,4 @@
-//! FlameWM XSettings producer owned by the window-manager process.
+//! `FlameWM` `XSettings` producer owned by the window-manager process.
 //!
 //! Owns the `_XSETTINGS_S0` manager selection only when no owner exists yet.
 //! Refuses to replace an existing owner. The pure parts (settings table, blob
@@ -72,7 +72,7 @@ impl Default for XSettingsInput {
     }
 }
 
-/// Appearance policy for published XSettings.
+/// Appearance policy for published `XSettings`.
 ///
 /// Only an explicit `Dark` publishes the dark theme (`Flame-Dark`,
 /// `Gtk/PreferDarkTheme` = 1). `Light` publishes the light theme. `System` has
@@ -151,7 +151,7 @@ pub fn build_settings(input: &XSettingsInput) -> XSettingsSnapshot {
     }
 }
 
-/// String table published alongside the integer settings above. XSettings
+/// String table published alongside the integer settings above. `XSettings`
 /// strings (theme names) travel in the settings blob; keep them next to the
 /// builder so producers cannot drift from `build_settings` keys.
 #[must_use]
@@ -176,7 +176,7 @@ pub fn string_table(input: &XSettingsInput) -> BTreeMap<String, String> {
 
 /// Full published setting table: the integer/theme keys from `build_settings`
 /// plus the canonical GTK font and cursor keys. `Xft/CursorTheme` from
-/// `string_table` is intentionally not published (not a canonical XSettings key).
+/// `string_table` is intentionally not published (not a canonical `XSettings` key).
 #[must_use]
 pub fn published_settings(input: &XSettingsInput) -> BTreeMap<String, XSettingsValue> {
     let mut settings = build_settings(input).settings;

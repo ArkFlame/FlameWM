@@ -59,11 +59,9 @@ impl CompositorHandler for State {
         on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
 
-        if let Some(popup) = self.popups.find_popup(surface) {
-            if let PopupKind::Xdg(xdg) = popup {
-                if !xdg.is_initial_configure_sent() {
-                    let _ = xdg.send_configure();
-                }
+        if let Some(PopupKind::Xdg(xdg)) = self.popups.find_popup(surface) {
+            if !xdg.is_initial_configure_sent() {
+                let _ = xdg.send_configure();
             }
         }
 
@@ -238,7 +236,7 @@ delegate_xdg_shell!(State);
 impl XdgDecorationHandler for State {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(zxdg_toplevel_decoration_v1::Mode::ServerSide)
+            state.decoration_mode = Some(zxdg_toplevel_decoration_v1::Mode::ServerSide);
         });
         toplevel.send_configure();
     }

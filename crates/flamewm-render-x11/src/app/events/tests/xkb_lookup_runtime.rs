@@ -42,11 +42,17 @@ fn xkb_lookup_resolves_levels_across_repeated_mapping_refreshes() {
         let (plain, typed) = unsafe { key_symbols(&event(q, 0)) };
         assert_eq!((plain, typed), ('q' as u64, 'q' as u64), "round {round}");
         let (_, shifted) = unsafe { key_symbols(&event(two, SHIFT_MASK)) };
-        assert_eq!(shifted, '@' as u64, "Shift+2 must decode to @ (round {round})");
+        assert_eq!(
+            shifted, '@' as u64,
+            "Shift+2 must decode to @ (round {round})"
+        );
         assert!(inserts_text(SHIFT_MASK));
         if altgr_q {
             let (_, altgr) = unsafe { key_symbols(&event(q, MOD5_MASK)) };
-            assert_eq!(altgr, '@' as u64, "AltGr+Q must decode to @ (round {round})");
+            assert_eq!(
+                altgr, '@' as u64,
+                "AltGr+Q must decode to @ (round {round})"
+            );
             assert!(inserts_text(MOD5_MASK));
         }
         let (ctrl_plain, _) = unsafe { key_symbols(&event(q, CONTROL_MASK)) };
@@ -54,7 +60,10 @@ fn xkb_lookup_resolves_levels_across_repeated_mapping_refreshes() {
         assert!(!inserts_text(CONTROL_MASK));
         let (_, alt_shifted) = unsafe { key_symbols(&event(two, MOD1_MASK | SHIFT_MASK)) };
         assert_eq!(alt_shifted, '@' as u64);
-        assert!(inserts_text(MOD1_MASK | SHIFT_MASK), "Alt+Shift+2 carries @");
+        assert!(
+            inserts_text(MOD1_MASK | SHIFT_MASK),
+            "Alt+Shift+2 carries @"
+        );
     }
     // SAFETY: display came from XOpenDisplay and is closed exactly once.
     unsafe { XCloseDisplay(display) };

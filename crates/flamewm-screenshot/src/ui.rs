@@ -37,6 +37,7 @@ fn native_color<C: Connection>(conn: &C, screen: usize, rgb: u32) -> Result<u32>
 
 /// Packs one bounded batch of screenshot rows using the server's native pixel format.
 /// The caller owns and reuses the output buffer; padding must remain zero.
+#[allow(clippy::too_many_arguments)]
 fn pack_rows(
     image: &Image,
     buffer: &mut [u8],
@@ -355,7 +356,7 @@ pub fn select_region<C: Connection>(conn: &C, screen: usize, full: &Image) -> Re
         border_gc,
         o.win,
         &CreateGCAux::new()
-            .foreground(0x00ffffff)
+            .foreground(0x00ff_ffff)
             .function(x11rb::protocol::xproto::GX::XOR)
             .subwindow_mode(x11rb::protocol::xproto::SubwindowMode::INCLUDE_INFERIORS),
     )
@@ -506,13 +507,13 @@ fn draw<C: Connection>(conn: &C, dst: u32, gc: u32, s: &Stroke) -> Result<()> {
             .map_err(err)?;
         }
         Tool::Ellipse => {
-            let cx = (f64::from(first.x) + f64::from(last.x)) / 2.0;
-            let cy = (f64::from(first.y) + f64::from(last.y)) / 2.0;
+            let cx = f64::midpoint(f64::from(first.x), f64::from(last.x));
+            let cy = f64::midpoint(f64::from(first.y), f64::from(last.y));
             let rx = (f64::from(first.x) - f64::from(last.x)).abs() / 2.0;
             let ry = (f64::from(first.y) - f64::from(last.y)).abs() / 2.0;
             let mut pts = Vec::with_capacity(49);
             for i in 0..=48 {
-                let angle = (i as f64) * std::f64::consts::TAU / 48.0;
+                let angle = f64::from(i) * std::f64::consts::TAU / 48.0;
                 pts.push(Point {
                     x: (cx + rx * angle.cos()) as i16,
                     y: (cy + ry * angle.sin()) as i16,
@@ -526,8 +527,11 @@ fn draw<C: Connection>(conn: &C, dst: u32, gc: u32, s: &Stroke) -> Result<()> {
 }
 
 fn draw_bar<C: Connection>(conn: &C, window: u32, gc: u32, tool: Tool, color: u32) -> Result<()> {
-    conn.change_gc(gc, &ChangeGCAux::new().foreground(0x202126).line_width(1))
-        .map_err(err)?;
+    conn.change_gc(
+        gc,
+        &ChangeGCAux::new().foreground(0x0020_2126).line_width(1),
+    )
+    .map_err(err)?;
     conn.poly_fill_rectangle(
         window,
         gc,
@@ -539,7 +543,7 @@ fn draw_bar<C: Connection>(conn: &C, window: u32, gc: u32, tool: Tool, color: u3
         }],
     )
     .map_err(err)?;
-    conn.change_gc(gc, &ChangeGCAux::new().foreground(0xffffff))
+    conn.change_gc(gc, &ChangeGCAux::new().foreground(0x00ff_ffff))
         .map_err(err)?;
     let text = format!(
         "FlameWM   P pen  L line  R rect  E oval  A arrow  X redact  C color  U undo  Enter save  Esc cancel  [{tool:?}]"
@@ -570,10 +574,16 @@ pub fn annotate<C: Connection>(conn: &C, screen: usize, image: Image) -> Result<
     let mut strokes: Vec<Stroke> = Vec::new();
     let mut current: Option<Stroke> = None;
     let mut tool = Tool::Pen;
-    let colors = [0xef4048, 0xffffff, 0xffd166, 0x2d9cdb, 0x43c87a]
-        .map(|rgb| native_color(conn, screen, rgb))
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+    let colors = [
+        0x00ef_4048,
+        0x00ff_ffff,
+        0x00ff_d166,
+        0x002d_9cdb,
+        0x0043_c87a,
+    ]
+    .map(|rgb| native_color(conn, screen, rgb))
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
     let mut color_index = 0usize;
     o.repaint()?;
     draw_bar(conn, o.win, o.gc, tool, colors[color_index])?;
@@ -624,12 +634,10 @@ pub fn annotate<C: Connection>(conn: &C, screen: usize, image: Image) -> Result<
                         x: e.event_x.max(0),
                         y: e.event_y.max(36),
                     };
-                    if s.tool == Tool::Pen || s.tool == Tool::Blackout {
+                    if s.tool == Tool::Pen || s.tool == Tool::Blackout || s.points.len() < 2 {
                         s.points.push(p);
-                    } else if s.points.len() < 2 {
-                        s.points.push(p)
                     } else {
-                        s.points[1] = p
+                        s.points[1] = p;
                     }
                     o.repaint()?;
                     draw(conn, o.win, o.gc, s)?;
@@ -644,9 +652,9 @@ pub fn annotate<C: Connection>(conn: &C, screen: usize, image: Image) -> Result<
                     };
                     if s.tool != Tool::Pen && s.tool != Tool::Blackout {
                         if s.points.len() < 2 {
-                            s.points.push(p)
+                            s.points.push(p);
                         } else {
-                            s.points[1] = p
+                            s.points[1] = p;
                         }
                     } else {
                         s.points.push(p);
@@ -694,7 +702,7 @@ mod memory_tests {
                 3,
                 12,
                 32,
-                [0x00ff0000, 0x0000ff00, 0x000000ff],
+                [0x00ff_0000, 0x0000_ff00, 0x0000_00ff],
                 little,
             )
             .unwrap();
@@ -708,7 +716,7 @@ mod memory_tests {
                     1,
                     12,
                     32,
-                    [0x00ff0000, 0x0000ff00, 0x000000ff],
+                    [0x00ff_0000, 0x0000_ff00, 0x0000_00ff],
                     little,
                 )
                 .unwrap();

@@ -52,7 +52,7 @@ impl BatteryGlyph {
 
 /// Tray visibility: the `taskbarShowBattery` setting, service available, and a
 /// battery present. With `only_when_relevant` the Unknown state is also hidden
-/// (UPower unknown). Without it a present battery shows in every state.
+/// (`UPower` unknown). Without it a present battery shows in every state.
 /// Charging shows the charging glyph; the rest show the normal glyph.
 #[must_use]
 pub fn tray_visible(power: &PowerSnapshot, enabled: bool, only_when_relevant: bool) -> bool {
@@ -83,7 +83,7 @@ pub fn rate_text(rate_mw: Option<u32>) -> String {
 pub fn glyph_for_percent(percent: u8) -> BatteryGlyph {
     match percent.min(100) {
         0..=10 => BatteryGlyph::Caution,
-        level => BatteryGlyph::Level((level + 9) / 10 * 10),
+        level => BatteryGlyph::Level(level.div_ceil(10) * 10),
     }
 }
 

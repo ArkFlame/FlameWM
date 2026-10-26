@@ -1549,8 +1549,7 @@ mod tests {
         );
         // The release paint lands two horizontal cells away from the last drag cell.
         let final_origin = (DRAG_SLACK_X as i32 + 10, 3);
-        let released =
-            titlebar_in(&mut state, 3, final_origin, (20, 12), (0, 0, 0), 0, 0).unwrap();
+        let released = titlebar_in(&mut state, 3, final_origin, (20, 12), (0, 0, 0), 0, 0).unwrap();
         // Blur 0 at this origin is a plain crop of the snapshot (no wallpaper fallback).
         assert_eq!(&released[..4], &[10, 10, 3, 255]);
         assert_eq!(
@@ -2024,16 +2023,23 @@ mod per_output_tests {
         };
         for y in 0..4 {
             for x in 0..8 {
-                assert_eq!(at(&image, x, y), at(&left, x, y), "left output ({x},{y})");
+                assert_eq!(at(image, x, y), at(&left, x, y), "left output ({x},{y})");
             }
         }
         for y in 0..5 {
             for x in 0..6 {
-                assert_eq!(at(&image, 8 + x, y), at(&right, x, y), "right output ({x},{y})");
+                assert_eq!(
+                    at(image, 8 + x, y),
+                    at(&right, x, y),
+                    "right output ({x},{y})"
+                );
             }
         }
         let one_root = wallpaper::compose(&natural, 14, 5, WallpaperFit::Fill).unwrap();
-        assert_ne!(image.pixels, one_root.pixels, "one root-wide wallpaper is the old layout");
+        assert_ne!(
+            image.pixels, one_root.pixels,
+            "one root-wide wallpaper is the old layout"
+        );
         let _ = std::fs::remove_file(&path);
     }
 }

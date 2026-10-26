@@ -62,7 +62,11 @@ pub fn mkdir(path: &str) -> String {
 
 #[must_use]
 pub fn remove(path: &str, recursive: bool) -> String {
-    format!("rm {} -- {}", if recursive { "-rf" } else { "-f" }, path_arg(path))
+    format!(
+        "rm {} -- {}",
+        if recursive { "-rf" } else { "-f" },
+        path_arg(path)
+    )
 }
 
 #[must_use]

@@ -194,7 +194,7 @@ enum WorkerResult {
     RemoteBlocked {generation:u64,path:PathBuf,error:RemoteError},
     /// Host key fetched for the trust dialog; `Err` is worded for the status strip.
     HostKeyProbed {url:RemoteUrl,result:Result<HostKeyPrompt,String>},
-    /// Outcome of appending the confirmed host key to known_hosts.
+    /// Outcome of appending the confirmed host key to `known_hosts`.
     HostKeyTrusted {url:RemoteUrl,result:Result<(),String>},
 }
 /// Runs one remote operation on the file worker and reports it through the same result paths as local work.
@@ -247,7 +247,7 @@ fn scan_worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:Uni
 /// Moves one path to the user's Trash and returns the restorable journal entry.
 fn trash_one(path:&Path)->std::io::Result<Undo> {
     let home=home_dir();
-    let data=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share"));
+    let data=std::env::var_os("XDG_DATA_HOME").map_or_else(||home.join(".local/share"), PathBuf::from);
     let uid=fs::read_to_string("/proc/self/status").ok()
         .and_then(|s|flamewm_desktop_core::trash::current_uid_from_proc(&s))
         .ok_or_else(||std::io::Error::new(std::io::ErrorKind::PermissionDenied,"cannot determine current user"))?;
@@ -257,7 +257,7 @@ fn trash_one(path:&Path)->std::io::Result<Undo> {
 }
 /// Undo (`undoing`) or redo the newest entry of the bounded history and report it in status text.
 fn history_step(undoing:bool,trash:&mut dyn FnMut(&Path)->std::io::Result<Undo>)->Result<String,String> {
-    let mut journal=jobs::journal().lock().unwrap_or_else(|poison|poison.into_inner());
+    let mut journal=jobs::journal().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if undoing {
         let Some(entry)=journal.take_last() else {return Err("Nothing to undo".to_owned());};
         match jobs::undo_with(&entry,trash) {
@@ -357,7 +357,7 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
             WorkerJob::Rename{from,to}=>{
                 let done=flamewm_desktop_core::file_actions::rename_entry_no_replace(&from,&to);
                 if done.is_ok() {jobs::record([Undo::Moved{from:from.clone(),to:to.clone()}]);}
-                send_wake(&mut wake,&result,WorkerResult::Completed(done.map(|_|"Renamed".to_owned()).map_err(|e|e.to_string())));
+                send_wake(&mut wake,&result,WorkerResult::Completed(done.map(|()|"Renamed".to_owned()).map_err(|e|e.to_string())));
             }
             WorkerJob::Undo=>{
                 let done=history_step(true,&mut trash_one);
@@ -433,7 +433,7 @@ struct ExplorerApp {
 impl ExplorerApp {
     fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
         let home=home_dir();
-        let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
+        let trash_base=std::env::var_os("XDG_DATA_HOME").map_or_else(||home.join(".local/share"), PathBuf::from).join("Trash");
         let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,field:flamewm_explorer::TextField::default(),rename_target:None,theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
             ark_extracts:Vec::new(),cancel:CancellationToken::new(),menu_overflow:false,context_scroll:0,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
             dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,device_watch:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
@@ -537,7 +537,7 @@ impl ExplorerApp {
             [only]=>only.file_name().unwrap_or(only.as_os_str()).to_string_lossy().into_owned(),
             many=>format!("{} items",many.len()),
         };
-        let location=remote::url_of(&directory).map(|url|remote::display_text(&url)).unwrap_or_else(||ops::display_location(&directory,&home_dir()));
+        let location=remote::url_of(&directory).map_or_else(||ops::display_location(&directory,&home_dir()), |url|remote::display_text(&url));
         let title=if sources.len()==1 {"Copy file?"} else {"Copy items?"};
         self.dialog=Some(Dialog::Confirm{title:title.into(),lines:vec![name,location],pending:Pending::RemoteCopy{sources,directory}});
     }
@@ -678,13 +678,13 @@ impl ExplorerApp {
     }
     /// Show or hide dot files, persisting the choice for the next Explorer window.
     fn toggle_hidden(&mut self) {
-        self.model.hidden=!self.model.hidden;
+        self.model.hidden = !self.model.hidden;
         self.save_prefs();
         self.scan();
     }
     /// Shows or hides the Type column (menu option), persisting the choice.
     fn toggle_show_type(&mut self) {
-        self.show_type=!self.show_type;
+        self.show_type = !self.show_type;
         self.save_prefs();
     }
     fn visible_entries(&self)->Vec<&Entry> {
@@ -697,7 +697,7 @@ impl ExplorerApp {
     }
     /// Rows that fit between the column header and the status strip. Paint, hit-testing and keys all use this.
     fn visible_rows(&self)->usize {
-        let bottom=self.window.1 as f32-STATUS_STRIP_HEIGHT;
+        let bottom=self.window.1-STATUS_STRIP_HEIGHT;
         let fit=((bottom-list_top(self.model.tabs.len()>1))/ROW_HEIGHT).floor();
         fit.clamp(1.0,ROW_SLOTS as f32) as usize
     }
@@ -896,7 +896,7 @@ impl ExplorerApp {
             other=>self.model.status=remote::describe(other),
         }
     }
-    /// Appends the user-confirmed key to known_hosts on a thread (the file write and the check never run on the UI thread).
+    /// Appends the user-confirmed key to `known_hosts` on a thread (the file write and the check never run on the UI thread).
     fn save_host_key(&mut self,url:RemoteUrl,prompt:HostKeyPrompt) {
         let Some((tx,mut wake))=self.events.as_ref().and_then(|(tx,wake)|Some((tx.clone(),wake.try_clone().ok()?))) else {
             self.model.status="Host key save needs the event loop".into();
@@ -1067,7 +1067,7 @@ impl ExplorerApp {
             }
         }
     }
-    /// Opens the configured terminal (FlameWM Terminal by default) in `directory`. Only FlameWM Terminal takes
+    /// Opens the configured terminal (`FlameWM` Terminal by default) in `directory`. Only `FlameWM` Terminal takes
     /// `--working-directory`; other emulators get the directory as their working directory and no command.
     fn spawn_terminal(&mut self,directory:PathBuf) {
         let program=flamewm_applications::terminal::terminal_program();
@@ -1238,7 +1238,7 @@ impl ExplorerApp {
     }
     /// Edits the GTK bookmarks file atomically; the sidebar is rebuilt from the saved file.
     fn mutate_bookmark(&mut self,path:&Path,edit:impl FnOnce(&mut Vec<bookmarks::Bookmark>,usize)->bool) {
-        let config=std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(||home_dir().join(".config"));
+        let config=std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home_dir().join(".config"), PathBuf::from);
         let file=bookmarks::bookmarks_file(&config);
         let mut items=bookmarks::load_bookmarks(&file);
         let Some(index)=items.iter().position(|b|b.path==path) else {self.model.status="Bookmark not found".into();return;};
@@ -1666,12 +1666,13 @@ impl ExplorerApp {
         self.key_inner(key);
         self.write_debug_field();
     }
-    /// Debug-only read-back: FLAMEWM_EXPLORER_DEBUG_FIELD=<file> receives the active field's length and text after each key.
+    /// Debug-only read-back: `FLAMEWM_EXPLORER_DEBUG_FIELD`=<file> receives the active field's length and text after each key.
     fn write_debug_field(&self) {
         let Some(path)=std::env::var_os("FLAMEWM_EXPLORER_DEBUG_FIELD") else {return};
         let mode=match self.edit {Some(EditMode::Path)=>"path",Some(EditMode::Search)=>"search",Some(_)=>"other",None=>"none"};
         let _=std::fs::write(path,format!("{}\n{}\n{}",self.field.text.chars().count(),mode,self.field.text));
     }
+    #[allow(clippy::suspicious_else_formatting)]
     fn key_inner(&mut self,key:&UiKeyEvent) {
         if key.phase!=UiKeyPhase::Press {return;}
         let name=key.key.to_lowercase();
@@ -1864,7 +1865,7 @@ impl ExplorerApp {
             },
             WorkerResult::DeviceDone(outcome)=>{
                 let message=outcome.unwrap_or_else(|error|error);
-                self.model.status=message.clone();
+                self.model.status.clone_from(&message);
                 self.activity=Some(message);
                 self.reload_places();
                 self.refresh_devices();
@@ -1900,7 +1901,7 @@ impl ExplorerApp {
                 self.busy=false;
                 let good=result.is_ok();
                 let message=result.unwrap_or_else(|e|e);
-                self.model.status=message.clone();
+                self.model.status.clone_from(&message);
                 self.progress=None;
                 if good {
                     if let Err(e)=Command::new("notify-send").arg("--app-name=FlameWM Explorer").arg("File operation completed").spawn() {
@@ -2040,19 +2041,16 @@ impl ExplorerApp {
         let origin=self.origin(rows);
         let (track_top,track_h)=self.scrollbar_track();
         let track_x=self.window.0-SCROLLBAR_TRACK_WIDTH;
-        match scroll::thumb_geometry(track_h,self.scroll_total(),rows,origin) {
-            Some((thumb_top,thumb_len))=>{
-                doc.position("scroll-track",track_x,track_top)?;
-                doc.size("scroll-track",SCROLLBAR_TRACK_WIDTH,track_h)?;
-                doc.visible("scroll-track",true)?;
-                doc.position("scroll-thumb",track_x+SCROLLBAR_THUMB_INSET,track_top+thumb_top)?;
-                doc.size("scroll-thumb",SCROLLBAR_THUMB_WIDTH,thumb_len)?;
-                doc.visible("scroll-thumb",true)?;
-            },
-            None=>{
-                doc.visible("scroll-track",false)?;
-                doc.visible("scroll-thumb",false)?;
-            },
+        if let Some((thumb_top,thumb_len)) = scroll::thumb_geometry(track_h,self.scroll_total(),rows,origin) {
+            doc.position("scroll-track",track_x,track_top)?;
+            doc.size("scroll-track",SCROLLBAR_TRACK_WIDTH,track_h)?;
+            doc.visible("scroll-track",true)?;
+            doc.position("scroll-thumb",track_x+SCROLLBAR_THUMB_INSET,track_top+thumb_top)?;
+            doc.size("scroll-thumb",SCROLLBAR_THUMB_WIDTH,thumb_len)?;
+            doc.visible("scroll-thumb",true)?;
+        } else {
+            doc.visible("scroll-track",false)?;
+            doc.visible("scroll-thumb",false)?;
         }
         self.project_rubber(doc)?;
         // Empty list space under the rows is the background context surface (rubber band and background menu).
@@ -2191,9 +2189,9 @@ impl ExplorerApp {
                     doc.background(&format!("name-{slot}"),if self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
                 } else {doc.background(&format!("name-{slot}"),self.theme.clear())?;}
                 self.project_row_icon(doc,slot,entry)?;
-                doc.background(&row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) {
+                doc.background(&row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) || tab.selected_paths.contains(&entry.path) {
                     self.theme.selected()
-                } else if tab.selected_paths.contains(&entry.path){self.theme.selected()}
+                }
                     else if index%2==0{self.theme.clear()}else{self.theme.row_alternate()})?;
             } else {doc.visible(&row,false)?;}
         }
@@ -2380,7 +2378,7 @@ impl ExplorerApp {
             doc.text("openwith-mime","Reading desktop MIME handlers".into())?;
             for slot in 0..CHOICE_ROWS{doc.visible(&format!("openwith-choice-{slot}"),false)?;}
             for id in ["openwith-prev","openwith-next","openwith-all","openwith-once","openwith-always"] {doc.visible(id,false)?;}
-            doc.text("openwith-page","".into())?;
+            doc.text("openwith-page",String::new())?;
         }
         Ok(())
     }
@@ -2414,7 +2412,7 @@ fn run()->Result<(),String>{
     }
     let args=std::env::args_os().skip(1).collect::<Vec<_>>();
     if args.iter().any(|a|matches!(a.to_string_lossy().as_ref(),"--help"|"-h")) {println!("FlameWM Explorer — usage: flamewm-explorer [DIRECTORY]");return Ok(());}
-    let path=args.first().map(PathBuf::from).unwrap_or_else(home_dir);
+    let path=args.first().map_or_else(home_dir, PathBuf::from);
     let directory=if path.is_dir(){path}else if path.is_file(){path.parent().unwrap_or(Path::new("/")).to_path_buf()}else{return Err(format!("not a directory: {}",path.display()));};
     let directory=fs::canonicalize(&directory).map_err(|e|e.to_string())?;
     let (tx,jobs)=mpsc::channel();
@@ -2496,7 +2494,7 @@ fn run()->Result<(),String>{
                 UiControllerEvent::Resized{..}=>"explorer.event.resized",
                 UiControllerEvent::Action(_)=>"explorer.event.action",
                 UiControllerEvent::Key(_)=>"explorer.event.key",
-                _=>"explorer.event.other",
+                UiControllerEvent::Drag(_)=>"explorer.event.other",
             });
             match event {
                 UiControllerEvent::Action(action)=>{
@@ -2526,7 +2524,7 @@ fn run()->Result<(),String>{
                 UiControllerEvent::Drag(UiDragEvent::Drop{payload:flamewm_ui_x11::DropPayload::ArkExtract{service,path},..})=>app.ark_drop(service.clone(),path.clone()),
                 UiControllerEvent::Drag(UiDragEvent::Drop{paths,x,y,..})=>app.external_drop(paths.clone(),*x,*y),
                 // Enter/over/leave do not change the list layout.
-                _=>{},
+                UiControllerEvent::Drag(_)=>{},
             }
             // A row dragged out of the window starts the XDND drag here, once the event is handled.
             if let Some(paths)=app.file_drag_out.take() {
@@ -2607,7 +2605,7 @@ mod icon_slot_tests;
 fn source_facts(paths:&[PathBuf])->Vec<ops::Source> {
     paths.iter().map(|path|{
         let meta=fs::symlink_metadata(path).ok();
-        ops::Source{path:path.clone(),exists:meta.is_some(),is_dir:meta.as_ref().is_some_and(|m|m.is_dir())}
+        ops::Source{path:path.clone(),exists:meta.is_some(),is_dir:meta.as_ref().is_some_and(std::fs::Metadata::is_dir)}
     }).collect()
 }
 /// Parent directory of the first path, used as the location line of a confirmation.

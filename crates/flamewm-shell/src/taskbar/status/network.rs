@@ -53,7 +53,7 @@ fn row_label(access_point: &NetworkAccessPointSnapshot) -> &str {
 
 /// Project the filtered Available AP list (connected AP excluded) into the
 /// exact row slots shown by the network surface. `slot` is the visible slot (not a provider
-/// list index); `path` remains the stable NetworkManager object identity.
+/// list index); `path` remains the stable `NetworkManager` object identity.
 #[must_use]
 pub fn project_visible_rows(
     snapshot: &SystemSnapshot,
@@ -69,7 +69,10 @@ pub fn project_visible_rows(
         .iter()
         .filter(|access_point| !is_connected_path(network, &access_point.path))
         .filter(|access_point| {
-            flamewm_shell_core::status::NetworkQuery::matches_needle(&needle, row_label(access_point))
+            flamewm_shell_core::status::NetworkQuery::matches_needle(
+                &needle,
+                row_label(access_point),
+            )
         })
         .collect();
 
@@ -304,7 +307,7 @@ fn ceil_div(total: usize, per_page: usize) -> usize {
     if total == 0 {
         1
     } else {
-        (total + per_page - 1) / per_page
+        total.div_ceil(per_page)
     }
 }
 
@@ -333,8 +336,10 @@ mod tests {
 
     #[test]
     fn known_path_maps_to_revision_fenced_connect() {
-        let mut snapshot = SystemSnapshot::default();
-        snapshot.revision = 5;
+        let mut snapshot = SystemSnapshot {
+            revision: 5,
+            ..SystemSnapshot::default()
+        };
         snapshot.network.availability = ServiceAvailability::Available;
         snapshot
             .network

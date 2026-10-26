@@ -514,20 +514,19 @@ fn build_plan(
         return Err(ImportError::AmbiguousThemes(candidates));
     };
 
-    let id = match requested_id {
-        Some(id) => id.to_owned(),
-        None => {
-            let name = match basename(&root) {
-                "" => folder_name.unwrap_or(""),
-                name => name,
-            };
-            if name.is_empty() {
-                return Err(ImportError::InvalidTheme(
-                    "theme at archive root needs an explicit id".into(),
-                ));
-            }
-            name.to_owned()
+    let id = if let Some(id) = requested_id {
+        id.to_owned()
+    } else {
+        let name = match basename(&root) {
+            "" => folder_name.unwrap_or(""),
+            name => name,
+        };
+        if name.is_empty() {
+            return Err(ImportError::InvalidTheme(
+                "theme at archive root needs an explicit id".into(),
+            ));
         }
+        name.to_owned()
     };
     validate_id(&id)?;
 

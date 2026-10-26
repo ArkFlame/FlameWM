@@ -27,6 +27,7 @@ impl PanelService {
         self.manager.pointer_output()
     }
 
+    #[must_use]
     pub fn manager(&self) -> &PanelManager {
         &self.manager
     }
@@ -317,7 +318,7 @@ mod tests {
             connected: true,
             primary,
             geometry: Rect::new(x, 0, w, if w == 0 { 0 } else { 1080 }),
-            current_mode: ModeId(if w == 0 { 0 } else { 1 }),
+            current_mode: ModeId(u64::from(w != 0)),
             modes: Vec::new(),
             shell_scale_percent: 100,
         };

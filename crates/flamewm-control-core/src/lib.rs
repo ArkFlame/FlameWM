@@ -2,7 +2,7 @@
 //!
 //! Transport adapters map these typed requests/responses onto
 //! `com.arkflame.FlameWM1` without putting D-Bus into product policy crates. The native WM path
-//! uses the external-reactor `dbus` adapter so FlameWM retains one desktop event loop.
+//! uses the external-reactor `dbus` adapter so `FlameWM` retains one desktop event loop.
 
 use core::fmt;
 use std::collections::BTreeMap;
@@ -57,6 +57,7 @@ impl Version {
         }
     }
 
+    #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         let mut parts = value.split('.');
         let major = parts.next()?.parse().ok()?;
@@ -255,6 +256,12 @@ fn unit(result: Result<(), FlameError>) -> Result<ControlResponse, ControlError>
 }
 
 pub struct Dispatcher;
+
+impl Default for Dispatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Dispatcher {
     #[must_use]

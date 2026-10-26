@@ -44,6 +44,7 @@ const SESSION_LOGOUT_OWNER: &str = "FLAMEWM_SESSION_LOGOUT_OWNER";
 
 static SESSION_LOGOUT_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+#[must_use]
 pub fn session_logout_supported() -> bool {
     session_logout_owner_matches(
         std::env::var_os(SESSION_LOGOUT_OWNER).as_deref(),
@@ -217,6 +218,7 @@ impl X11Desktop {
         push_preorder(&children, self.root, &mut out);
         Ok(out)
     }
+    #[must_use]
     pub fn minimize_message(window: Window) -> (Window, &'static str, [u32; 5]) {
         (window, "WM_CHANGE_STATE", [ICONIC_STATE, 0, 0, 0, 0])
     }
@@ -296,7 +298,7 @@ impl X11Desktop {
         parent: Window,
         atoms: &WindowAtoms,
     ) -> WindowReads<'_> {
-        let geometry_target = if parent != self.root { parent } else { window };
+        let geometry_target = if parent == self.root { window } else { parent };
         let property = |atom: Atom| {
             self.conn
                 .get_property(false, window, atom, AtomEnum::ANY, 0, u32::MAX)
@@ -385,8 +387,7 @@ impl X11Desktop {
                     i32::from(geometry.y) + i32::from(geometry.height) / 2,
                 ))
             })
-            .map(|output| output.id.clone())
-            .unwrap_or_else(|| OutputId::new("default"));
+            .map_or_else(|| OutputId::new("default"), |output| output.id.clone());
         let outer_geometry = Rect::new(
             i32::from(geometry.x),
             i32::from(geometry.y),
@@ -1126,7 +1127,7 @@ impl ApplicationPort for X11Desktop {
         options: &ApplicationLaunchOptions,
     ) -> FlameResult<()> {
         let catalog = self.application_catalog()?;
-        catalog.launch(app, options).map(|_| ())
+        catalog.launch(app, options)
     }
     fn launch_uri(&mut self, uri: &str) -> FlameResult<()> {
         flamewm_applications::open_target(std::ffi::OsStr::new(uri))
@@ -1255,8 +1256,7 @@ impl DisplayPort for X11Desktop {
             .randr_get_output_primary(self.root)
             .ok()
             .and_then(|cookie| cookie.reply().ok())
-            .map(|reply| reply.output)
-            .unwrap_or(0);
+            .map_or(0, |reply| reply.output);
         let mut outputs = Vec::new();
         for output in resources.outputs {
             let info = self

@@ -1,10 +1,10 @@
 //! Settings view state and the commands that persist theme, font and cursor changes.
 
+use super::{App, View};
 use crate::settings::{self, Command, Mode, SettingsView};
 use crate::store::FOLLOW_FLAMEWM;
 use crate::store::TerminalConfig;
 use crate::theme;
-use super::{App, View};
 
 impl App {
     pub fn toggle_settings(&mut self) {
@@ -16,12 +16,19 @@ impl App {
     }
 
     pub(super) fn open_settings(&mut self) {
-        self.view = View::Settings(SettingsView::open(&self.themes, &self.config, settings::mono_fonts()));
+        self.view = View::Settings(SettingsView::open(
+            &self.themes,
+            &self.config,
+            settings::mono_fonts(),
+        ));
     }
 
     /// Leaves settings. Unsaved previews are dropped: the saved configuration is reloaded from disk.
     pub(super) fn close_settings(&mut self) {
-        self.config = std::fs::read_to_string(&self.config_path).ok().and_then(|text| TerminalConfig::from_toml(&text).ok()).unwrap_or_default();
+        self.config = std::fs::read_to_string(&self.config_path)
+            .ok()
+            .and_then(|text| TerminalConfig::from_toml(&text).ok())
+            .unwrap_or_default();
         self.refresh_metrics();
         let (width, height) = self.window;
         self.set_window(width, height);
@@ -45,7 +52,9 @@ impl App {
         match command {
             Command::None => {}
             Command::Close => self.close_settings(),
-            Command::PreviewTheme(name) => self.palette = theme::resolve_palette(&name, &self.themes, self.snapshot.as_ref()),
+            Command::PreviewTheme(name) => {
+                self.palette = theme::resolve_palette(&name, &self.themes, self.snapshot.as_ref());
+            }
             Command::Font(family) => self.config.font_family = family,
             Command::Opacity(percent) => {
                 self.config.background_opacity = percent;
@@ -69,7 +78,8 @@ impl App {
                             if let View::Settings(settings) = &mut self.view {
                                 settings.focus(&self.themes, &copy.name);
                                 settings.mode = Mode::Rename(copy.name.clone());
-                                settings.message = "Copied. Type a new name and press Enter.".into();
+                                settings.message =
+                                    "Copied. Type a new name and press Enter.".into();
                             }
                         }
                         Err(error) => self.settings_message(format!("copy failed: {error}")),
@@ -92,22 +102,20 @@ impl App {
                     settings.selected = settings.selected.min(self.themes.len().saturating_sub(1));
                 }
             }
-            Command::Rename { old, new } => {
-                match self.store.rename(&old, &new) {
-                    Ok(()) => {
-                        if self.config.theme == old {
-                            self.config.theme = new.clone();
-                            self.persist_config();
-                        }
-                        self.reload_themes();
-                        if let View::Settings(settings) = &mut self.view {
-                            settings.focus(&self.themes, &new);
-                        }
-                        self.settings_message(format!("renamed to {new}"));
+            Command::Rename { old, new } => match self.store.rename(&old, &new) {
+                Ok(()) => {
+                    if self.config.theme == old {
+                        self.config.theme.clone_from(&new);
+                        self.persist_config();
                     }
-                    Err(error) => self.settings_message(format!("rename failed: {error}")),
+                    self.reload_themes();
+                    if let View::Settings(settings) = &mut self.view {
+                        settings.focus(&self.themes, &new);
+                    }
+                    self.settings_message(format!("renamed to {new}"));
                 }
-            }
+                Err(error) => self.settings_message(format!("rename failed: {error}")),
+            },
             Command::Save(theme) => {
                 if let Err(error) = self.store.save(&theme) {
                     self.settings_message(format!("save failed: {error}"));

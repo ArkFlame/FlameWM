@@ -74,9 +74,6 @@ pub struct ScrollMetrics {
 }
 
 impl RuntimeDocument {
-    /// Retained-cache key: layout/paint caches are valid while this is
-    /// unchanged for a given viewport size + interaction state.
-
     /// Damage bookkeeping: merge coverage (max), take clears the latch.
     pub fn mark_dirty(&mut self, damage: SurfaceDamage) {
         self.pending_damage = self.pending_damage.merge(damage);

@@ -90,7 +90,10 @@ impl LauncherState {
         if self.count == 0 {
             return;
         }
-        let target = self.selected.saturating_add_signed(delta).min(self.count - 1);
+        let target = self
+            .selected
+            .saturating_add_signed(delta)
+            .min(self.count - 1);
         self.selected = target;
         if target < self.first {
             self.first = target;
@@ -113,13 +116,23 @@ impl LauncherState {
 
     /// Application at result index `index`, in the same order the rows are shown.
     #[must_use]
-    pub fn app_at<'a>(&self, model: &'a StartModel, index: usize) -> Option<&'a DesktopApplication> {
-        results(model, &self.query, &self.recent).get(index).copied()
+    pub fn app_at<'a>(
+        &self,
+        model: &'a StartModel,
+        index: usize,
+    ) -> Option<&'a DesktopApplication> {
+        results(model, &self.query, &self.recent)
+            .get(index)
+            .copied()
     }
 
     /// Application for a visible row slot (0-based within the window).
     #[must_use]
-    pub fn app_for_slot<'a>(&self, model: &'a StartModel, slot: usize) -> Option<&'a DesktopApplication> {
+    pub fn app_for_slot<'a>(
+        &self,
+        model: &'a StartModel,
+        slot: usize,
+    ) -> Option<&'a DesktopApplication> {
         self.app_at(model, self.first + slot)
             .filter(|_| self.first + slot < self.count)
     }
@@ -180,26 +193,26 @@ impl LauncherState {
             let row_id = format!("launcher-row-{row}");
             let label_id = format!("launcher-row-{row}-label");
             let icon_id = format!("launcher-row-{row}-icon");
-            match apps.get(window.start + slot).filter(|_| window.start + slot < window.end) {
-                Some(application) => {
-                    document.text(&label_id, application.name.clone())?;
-                    document.visible(&row_id, true)?;
-                    document.visible(&icon_id, true)?;
-                    crate::async_projection::schedule_visible(
-                        document,
-                        &icon_id,
-                        &mut loader.as_deref_mut(),
-                        IconTarget::LauncherSlot(slot as u8),
-                        &application.icon_name,
-                        ICON_SIZE,
-                        ICON_SIZE,
-                    )?;
-                }
-                None => {
-                    document.text(&label_id, String::new())?;
-                    document.visible(&row_id, false)?;
-                    document.visible(&icon_id, false)?;
-                }
+            if let Some(application) = apps
+                .get(window.start + slot)
+                .filter(|_| window.start + slot < window.end)
+            {
+                document.text(&label_id, application.name.clone())?;
+                document.visible(&row_id, true)?;
+                document.visible(&icon_id, true)?;
+                crate::async_projection::schedule_visible(
+                    document,
+                    &icon_id,
+                    &mut loader.as_deref_mut(),
+                    IconTarget::LauncherSlot(slot as u8),
+                    &application.icon_name,
+                    ICON_SIZE,
+                    ICON_SIZE,
+                )?;
+            } else {
+                document.text(&label_id, String::new())?;
+                document.visible(&row_id, false)?;
+                document.visible(&icon_id, false)?;
             }
         }
         Ok(())
@@ -219,7 +232,11 @@ pub fn results<'a>(
     let all = start_visible_results(model, StartCategory::All, "");
     let mut ordered: Vec<&DesktopApplication> = recent
         .iter()
-        .filter_map(|id| all.iter().copied().find(|application| &application.id == id))
+        .filter_map(|id| {
+            all.iter()
+                .copied()
+                .find(|application| &application.id == id)
+        })
         .collect();
     ordered.extend(
         all.into_iter()
@@ -294,12 +311,19 @@ mod tests {
             count: 20,
             ..LauncherState::default()
         };
-        assert!(state.select_slot(3), "hovering another row changes selection");
+        assert!(
+            state.select_slot(3),
+            "hovering another row changes selection"
+        );
         assert_eq!(state.selected(), 3);
         assert_eq!(state.highlight_y(), (3 * LAUNCHER_ROW_HEIGHT) as f32);
         assert!(!state.select_slot(3), "same row again is a no-op");
         state.move_by(1);
-        assert_eq!(state.selected(), 4, "arrow key continues from the hovered row");
+        assert_eq!(
+            state.selected(),
+            4,
+            "arrow key continues from the hovered row"
+        );
         assert_eq!(state.highlight_y(), (4 * LAUNCHER_ROW_HEIGHT) as f32);
     }
 
@@ -309,10 +333,17 @@ mod tests {
             count: 3,
             ..LauncherState::default()
         };
-        assert!(!state.select_slot(5), "slot past the result count is ignored");
+        assert!(
+            !state.select_slot(5),
+            "slot past the result count is ignored"
+        );
         assert_eq!(state.selected(), 0);
         assert!(state.select_slot(2));
-        assert_eq!(state.window(), 0..3, "hover inside the window does not scroll");
+        assert_eq!(
+            state.window(),
+            0..3,
+            "hover inside the window does not scroll"
+        );
     }
 
     #[test]
@@ -349,6 +380,13 @@ mod tests {
         );
         state.note_launch(&DesktopAppId::new("app-4.desktop"));
         assert_eq!(state.recent[0].as_str(), "app-4.desktop");
-        assert_eq!(state.recent.iter().filter(|id| id.as_str() == "app-4.desktop").count(), 1);
+        assert_eq!(
+            state
+                .recent
+                .iter()
+                .filter(|id| id.as_str() == "app-4.desktop")
+                .count(),
+            1
+        );
     }
 }

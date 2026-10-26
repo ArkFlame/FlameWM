@@ -273,7 +273,7 @@ mod tests {
                 pos: [5.0, 5.0],
                 z: 0.2,
                 beta: 0.1,
-                t: k as f64 / 60.0,
+                t: f64::from(k) / 60.0,
             });
         }
         let (mut tangents, mut out) = (Vec::new(), Vec::new());
@@ -297,10 +297,10 @@ mod taper_tests {
         let mut h = History::new();
         for k in 0..40 {
             h.push(Sample {
-                pos: [k as f64 * 3.0, 10.0],
+                pos: [f64::from(k) * 3.0, 10.0],
                 z: 0.5,
                 beta: 0.0,
-                t: k as f64 / 60.0,
+                t: f64::from(k) / 60.0,
             });
         }
         let (mut tangents, mut out) = (Vec::new(), Vec::new());

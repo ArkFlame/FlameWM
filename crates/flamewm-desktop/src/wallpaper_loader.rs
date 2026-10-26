@@ -115,7 +115,7 @@ impl WorkerControl {
     fn lock(&self) -> MutexGuard<'_, WorkerState> {
         self.state
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -169,7 +169,7 @@ impl WallpaperLoader {
         let worker = thread::Builder::new()
             .name("flamewm-wallpaper-loader".to_owned())
             .spawn(move || {
-                wallpaper_worker(worker_control, (width, height), worker_root, wake_write)
+                wallpaper_worker(worker_control, (width, height), worker_root, wake_write);
             })
             .map_err(|error| format!("failed to start wallpaper loader: {error}"))?;
         Ok(Self {
@@ -326,6 +326,7 @@ impl Drop for WallpaperLoader {
     }
 }
 
+#[allow(clippy::if_not_else)]
 fn wallpaper_worker(
     control: Arc<WorkerControl>,
     target: (u32, u32),
@@ -339,7 +340,7 @@ fn wallpaper_worker(
                 state = control
                     .wake
                     .wait(state)
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
             if state.shutdown {
                 return;

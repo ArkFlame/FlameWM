@@ -51,7 +51,7 @@ pub fn main() {
 }
 
 /// Consume session-core environment so the WM process and every child it
-/// spawns inherit the FlameWM identity (FlameWM, never KDE) plus cursor and
+/// spawns inherit the `FlameWM` identity (`FlameWM`, never KDE) plus cursor and
 /// appearance state. Dark is the default; explicit user values win except
 /// for FlameWM-owned identity keys.
 fn apply_session_environment(existing: &BTreeMap<String, String>, appearance: AppearanceMode) {
@@ -88,9 +88,9 @@ fn session_paths() -> SessionPaths {
 }
 
 /// Pure merge of the session overlay onto the inherited environment. FLAMEWM_*
-/// markers and the owned XDG_CONFIG_DIRS prefix (already computed from the
+/// markers and the owned `XDG_CONFIG_DIRS` prefix (already computed from the
 /// inherited value) always win; every other key only fills an absent variable,
-/// so explicit user QT_*/GTK_* values survive. XDG_CURRENT_DESKTOP=KDE is never
+/// so explicit user QT_*/GTK_* values survive. `XDG_CURRENT_DESKTOP=KDE` is never
 /// copied.
 fn session_overlay(
     inherited: &BTreeMap<String, String>,
@@ -151,9 +151,9 @@ fn is_kde(value: &str) -> bool {
     value.eq_ignore_ascii_case("kde")
 }
 
-/// Start the FlameWM XSettings owner: take `_XSETTINGS_S0` (refusing any
-/// foreign owner) and publish the default FlameWM settings. The WM keeps running
-/// without XSettings ownership when the claim is refused or fails.
+/// Start the `FlameWM` `XSettings` owner: take `_XSETTINGS_S0` (refusing any
+/// foreign owner) and publish the default `FlameWM` settings. The WM keeps running
+/// without `XSettings` ownership when the claim is refused or fails.
 fn claim_xsettings_manager(appearance: AppearanceMode) -> Option<X11XSettingsManager> {
     let input = xsettings_input_from_snapshot(&startup_settings_snapshot(appearance));
     match claim_x11_manager(&published_settings(&input)) {
@@ -239,7 +239,7 @@ impl AppearanceSync {
     }
 }
 
-/// Map WM settings-snapshot values onto the XSettings input. Absent or
+/// Map WM settings-snapshot values onto the `XSettings` input. Absent or
 /// unusable values fall back to `XSettingsInput::default()`.
 ///
 /// `appearance: system` is intentionally NOT resolved to light or dark here:
@@ -273,10 +273,10 @@ fn xsettings_input_with_cursor_env(
         input.appearance = appearance;
     }
     if let Some(icon_theme) = text_value(snapshot, "iconTheme") {
-        input.icon_theme = icon_theme.to_owned();
+        icon_theme.clone_into(&mut input.icon_theme);
     }
     if let Some(font_family) = text_value(snapshot, "fontFamily") {
-        input.font_family = font_family.to_owned();
+        font_family.clone_into(&mut input.font_family);
     }
     if let Some(font_bold) = boolean_value(snapshot, "fontBold") {
         input.font_bold = font_bold;
@@ -290,7 +290,7 @@ fn xsettings_input_with_cursor_env(
     input
 }
 
-/// `cursorSize` is one of the supported pixel sizes; anything else keeps the XSettings default.
+/// `cursorSize` is one of the supported pixel sizes; anything else keeps the `XSettings` default.
 fn cursor_size(snapshot: &SettingsSnapshot) -> Option<u32> {
     match snapshot.values.get("cursorSize") {
         Some(SettingValue::Integer(size)) => u32::try_from(*size)
@@ -314,7 +314,7 @@ fn boolean_value(snapshot: &SettingsSnapshot, key: &str) -> Option<bool> {
     }
 }
 
-/// `fontSizeOffset` is relative; XSettings publishes an absolute point size, so
+/// `fontSizeOffset` is relative; `XSettings` publishes an absolute point size, so
 /// the offset is applied to the default base size and clamped to 1..=72.
 fn font_size_points(snapshot: &SettingsSnapshot) -> Option<u32> {
     let base = i64::from(XSettingsInput::default().font_size_points);
@@ -324,7 +324,7 @@ fn font_size_points(snapshot: &SettingsSnapshot) -> Option<u32> {
     }
 }
 
-/// Each FlameWM process owns its Xcursor registry. Apply the shadow toggle even
+/// Each `FlameWM` process owns its Xcursor registry. Apply the shadow toggle even
 /// when all XSETTINGS fields are unchanged, including the no-manager path.
 fn sync_cursor_shadow(snapshot: &SettingsSnapshot) {
     let enabled = !matches!(
@@ -348,10 +348,10 @@ fn cursor_only_observer() -> SettingsObserver {
     })
 }
 
-/// Live XSettings path. Each settings sync point maps the snapshot and
+/// Live `XSettings` path. Each settings sync point maps the snapshot and
 /// republishes (a no-op when nothing changed). The first failure is logged;
 /// later failures are suppressed so a persistent error cannot flood stderr.
-/// The WM keeps running without XSettings updates.
+/// The WM keeps running without `XSettings` updates.
 /// Split the owned manager into the publish observer and the reactor wake. The
 /// manager is shared through `Rc<RefCell<_>>`; the descriptor is read before the
 /// move so the wake can be registered without borrowing the manager. Without a

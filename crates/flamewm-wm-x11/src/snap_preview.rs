@@ -210,13 +210,11 @@ impl SnapPreviewSurface {
         if self.surface.is_some() {
             return true;
         }
-        let mut runtime = match SurfaceRuntime::new() {
-            Ok(runtime) => runtime,
-            Err(_) => return false,
+        let Ok(mut runtime) = SurfaceRuntime::new() else {
+            return false;
         };
-        let document = match decode_document(COMPILED_UI) {
-            Ok(document) => document,
-            Err(_) => return false,
+        let Ok(document) = decode_document(COMPILED_UI) else {
+            return false;
         };
         let config = SurfaceConfig {
             width: 1,

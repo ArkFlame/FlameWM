@@ -2,7 +2,7 @@
 //!
 //! Pure value objects. No X calls, no x11rb.
 //!
-//! J06 freeze: titlebar 31, buttons 3x38x31, controls_width 114,
+//! J06 freeze: titlebar 31, buttons 3x38x31, `controls_width` 114,
 //! resize thickness 6, min 160x96.
 //!
 //! Children: 8 resize zones + 1 title-drag body + 3 control buttons.

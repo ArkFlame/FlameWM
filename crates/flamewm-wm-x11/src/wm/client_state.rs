@@ -1,6 +1,6 @@
 use super::*;
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn set_wm_state(&self, client: Window, state: u32) -> Result<(), ReplyError> {
         self.conn.change_property32(
             PropMode::REPLACE,
@@ -168,13 +168,11 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         let owner_client = owner.map(|c| c.client);
-        let radius = u32::from(
-            crate::frame::geometry_shape::scaled_corner_radius(
-                floating,
-                self.decoration_tokens.style,
-                self.titlebar_height(),
-            ),
-        );
+        let radius = u32::from(crate::frame::geometry_shape::scaled_corner_radius(
+            floating,
+            self.decoration_tokens.style,
+            self.titlebar_height(),
+        ));
         let rects = crate::frame::geometry_shape::bounding_rectangles_with_titlebar(
             outer,
             floating,
@@ -225,11 +223,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             height: ch.min(u32::from(u16::MAX)) as u16,
         }];
         if radius > 0 && cw > 0 && ch > 0 {
-            let mask = crate::frame::geometry_shape::client_bottom_rounded_rectangles(
-                cw,
-                ch,
-                radius,
-            );
+            let mask =
+                crate::frame::geometry_shape::client_bottom_rounded_rectangles(cw, ch, radius);
             self.conn.shape_rectangles(
                 ShapeOp::SET,
                 ShapeSk::BOUNDING,
@@ -369,10 +364,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             Some(window)
         } else if let Some(client) = self.frame_to_client.get(&window).copied() {
             Some(client)
-        } else if let Some(target) = self.registry.lookup_by_xid(window) {
-            Some(target.client)
         } else {
-            None
+            self.registry
+                .lookup_by_xid(window)
+                .map(|target| target.client)
         }
     }
 
@@ -396,7 +391,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             )
             .ok()
             .and_then(|cookie| cookie.reply().ok())
-            .and_then(|reply| reply.value32().map(|iter| iter.collect::<Vec<_>>()))
+            .and_then(|reply| reply.value32().map(std::iter::Iterator::collect::<Vec<_>>))
             .map_or_else(ClientSizeHints::default, |values| {
                 ClientSizeHints::parse(&values)
             })

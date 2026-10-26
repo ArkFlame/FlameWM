@@ -18,7 +18,7 @@ const START_ICON_SIZE: u32 = 25;
 const MAX_START_ICON_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Neutral grey until a settings snapshot supplies `accent`.
-const DEFAULT_ACCENT: u32 = 0x7f878e;
+const DEFAULT_ACCENT: u32 = 0x007f_878e;
 const DEFAULT_ANIMATION_SPEED: i64 = 100;
 const DEFAULT_START_ANIMATION: &str = "slide";
 const DEFAULT_SURFACE_OPACITY: u8 = 50;
@@ -164,18 +164,21 @@ pub fn project_menu_background(
 }
 
 /// Popup and menu corner radius from the `decoration` setting: Rounded 12, Squared 0.
+#[must_use]
 pub fn popup_corner_radius(snapshot: &SettingsSnapshot) -> f32 {
     let rounded = text_setting(snapshot, "decoration", "rounded") != "squared";
     shape_radius(rounded) as f32
 }
 
 /// Start menu background colour: the shared surface pair, same as [`surface_background`].
+#[must_use]
 pub fn menu_background(snapshot: &SettingsSnapshot) -> UiColor {
     surface_background(snapshot)
 }
 
 /// Shared surface colour with the `surfaceOpacity` alpha (taskbar, popups, desktop menus).
 /// The mapping is owned by `flamewm_ui_core::context_menu::surface_fill`.
+#[must_use]
 pub fn surface_background(snapshot: &SettingsSnapshot) -> UiColor {
     let fill = surface_fill(snapshot);
     UiColor {
@@ -186,7 +189,8 @@ pub fn surface_background(snapshot: &SettingsSnapshot) -> UiColor {
     }
 }
 
-/// Configured Start icon path (`customStartIcon`). `None` keeps the default FlameWM glyph.
+/// Configured Start icon path (`customStartIcon`). `None` keeps the default `FlameWM` glyph.
+#[must_use]
 pub fn custom_start_icon(snapshot: &SettingsSnapshot) -> Option<String> {
     let path = text_setting(snapshot, "customStartIcon", "");
     (!path.trim().is_empty()).then_some(path)
@@ -236,6 +240,7 @@ fn load_start_icon(path: &str) -> Result<RuntimeImage, String> {
 /// Start presentation for the panel edge hosting Start. `start_button` is the Start button's root
 /// device rect `(x, y, width, height)`, which Magic Lamp folds into. `None` keeps the immediate
 /// show: animations disabled, `none`, an unknown style, or Magic Lamp before the button has layout.
+#[must_use]
 pub fn start_slide(
     snapshot: &SettingsSnapshot,
     edge: PanelEdge,
@@ -264,6 +269,7 @@ pub fn start_slide(
 
 /// Accent carries `accentOpacity` as alpha for every accent consumer.
 /// Clock presentation keys; unknown or missing values fall back to the product defaults.
+#[must_use]
 pub fn clock_display(snapshot: &SettingsSnapshot) -> ClockDisplay {
     let defaults = ClockDisplay::default();
     let format = ClockFormat::parse(&text_setting(snapshot, "taskbarClockFormat", "24h"))
@@ -276,6 +282,7 @@ pub fn clock_display(snapshot: &SettingsSnapshot) -> ClockDisplay {
 }
 
 /// Taskbar item visibility keys; a missing snapshot or key means its default.
+#[must_use]
 pub fn taskbar_items(snapshot: Option<&SettingsSnapshot>) -> TaskbarItems {
     let defaults = TaskbarItems::default();
     let Some(snapshot) = snapshot else {
@@ -295,11 +302,7 @@ pub fn taskbar_items(snapshot: Option<&SettingsSnapshot>) -> TaskbarItems {
         workspaces: bool_setting(snapshot, "taskbarShowWorkspaces", defaults.workspaces),
         activities: bool_setting(snapshot, "taskbarActivities", defaults.activities),
         separate: bool_setting(snapshot, "taskbarSeparate", defaults.separate),
-        blur_percent: percent_setting(
-            snapshot,
-            "surfaceBlurPercent",
-            defaults.blur_percent,
-        ),
+        blur_percent: percent_setting(snapshot, "surfaceBlurPercent", defaults.blur_percent),
     }
 }
 
@@ -326,6 +329,7 @@ fn opacity_alpha(percent: u8) -> u8 {
 }
 
 /// Flame-owned icon theme (`iconTheme`); unset resolves to the product default.
+#[must_use]
 pub fn icon_theme_name(snapshot: Option<&SettingsSnapshot>) -> String {
     let default = flamewm_platform::settings::ProductSettings::default().icon_theme;
     snapshot.map_or_else(
@@ -356,6 +360,7 @@ fn integer_setting(snapshot: &SettingsSnapshot, key: &str, default: i64) -> i64 
 }
 
 /// Surface `(opacity, blur)` percents for the taskbar pseudo-transparency backdrop.
+#[must_use]
 pub fn taskbar_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
     (
         percent_setting(snapshot, "surfaceOpacity", DEFAULT_SURFACE_OPACITY),
@@ -365,6 +370,7 @@ pub fn taskbar_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
 
 /// Start popup `(opacity, blur)` percents for its pseudo-transparency backdrop: the shared
 /// `surfaceOpacity` / `surfaceBlurPercent` pair.
+#[must_use]
 pub fn start_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
     taskbar_backdrop_percents(snapshot)
 }
@@ -413,7 +419,7 @@ mod tests {
     fn lock_task_accent() -> std::sync::MutexGuard<'static, ()> {
         TASK_ACCENT_TEST_LOCK
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[test]
@@ -848,9 +854,9 @@ mod tests {
             ("--snap-fill", 0x33),
         ];
         for (hex, rgb) in [
-            ("#3daee9", 0x3daee9_u32),
-            ("#1abc9c", 0x1abc9c),
-            ("#9b59b6", 0x9b59b6),
+            ("#3daee9", 0x003d_aee9_u32),
+            ("#1abc9c", 0x001a_bc9c),
+            ("#9b59b6", 0x009b_59b6),
         ] {
             let mut snapshot = SettingsSnapshot::new(1);
             snapshot
@@ -1032,7 +1038,7 @@ mod tests {
             DEFAULT_ACCENT,
         );
         assert_eq!(bad, rgb(DEFAULT_ACCENT, 255));
-        let missing = color_setting(&SettingsSnapshot::new(1), "surfaceColor", 0x191b1d);
+        let missing = color_setting(&SettingsSnapshot::new(1), "surfaceColor", 0x0019_1b1d);
         assert_eq!(missing.r, 0x19);
     }
 

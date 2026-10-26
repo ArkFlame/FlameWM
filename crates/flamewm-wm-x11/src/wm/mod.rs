@@ -61,7 +61,7 @@ fn unmaximize_target(placement: &PlacementState) -> Option<RootRect> {
     }
 }
 
-/// Consumes one UnmapNotify the WM expects for a frame it hid itself. Returns `true` when the
+/// Consumes one `UnmapNotify` the WM expects for a frame it hid itself. Returns `true` when the
 /// unmap must be ignored. Each count must be added exactly where the WM unmaps a frame.
 fn consume_expected_unmap(ignore_unmap: &mut u8) -> bool {
     if *ignore_unmap > 0 {
@@ -104,7 +104,7 @@ fn trace_restore(id: &'static str, detail: impl FnOnce() -> String) {
     );
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     fn session_of(&self, client: Window) -> InteractionSession {
         self.sessions
             .get(&client)
@@ -126,7 +126,7 @@ use flamewm_api::shortcuts::{
     ACTION_WINDOW_FULLSCREEN, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
     ACTION_WINDOW_RESIZE_GROW, ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH,
     ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
-    workspace_activate_index, workspace_move_index, focus_direction, move_direction,
+    focus_direction, move_direction, workspace_activate_index, workspace_move_index,
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{
@@ -143,7 +143,15 @@ use x11rb::errors::{ReplyError, ReplyOrIdError};
 use x11rb::protocol::damage::{self};
 use x11rb::protocol::randr::{self, ConnectionExt as _};
 use x11rb::protocol::shape::ConnectionExt as _;
-use x11rb::protocol::xproto::*;
+use x11rb::protocol::xproto::{
+    Allow, Atom, AtomEnum, Button, ButtonIndex, ButtonPressEvent, ButtonReleaseEvent,
+    CONFIGURE_NOTIFY_EVENT, ChangeWindowAttributesAux, ClientMessageEvent, ClipOrdering,
+    ConfigWindow, ConfigureNotifyEvent, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt,
+    CreateGCAux, CreateWindowAux, EnterNotifyEvent, EventMask, GetGeometryReply, GrabMode,
+    GrabStatus, ImageFormat, ImageOrder, InputFocus, KeyButMask, KeyPressEvent, KeyReleaseEvent,
+    LeaveNotifyEvent, MapRequestEvent, MapState, ModMask, MotionNotifyEvent, Pixmap, PropMode,
+    Screen, SetMode, StackMode, Window, WindowClass,
+};
 use x11rb::protocol::{ErrorKind, Event};
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -404,7 +412,7 @@ fn drag_edge_ready(
 /// Arms exactly one reactor deadline while a titlebar move is held at an edge.
 /// No busy polling: the ordinary X11 reactor blocks until this deadline or an
 /// input event. A still pointer can therefore complete the dwell without a
-/// second MotionNotify.
+/// second `MotionNotify`.
 fn drag_edge_wait(
     pending: Option<EdgeDragPending>,
     cooldowns: MouseWorkspaceCooldowns,
@@ -446,8 +454,8 @@ fn drag_entry_frame_y(pointer: RootPoint, side: DragEdge) -> i32 {
 
 /// Separate renderer work from the atomic X11 server-grab phase. The move
 /// reducer owns geometry; only its X11-native position/notify effects may run
-/// while other X clients are paused. In particular, PaintChrome uses another
-/// connection and must run after UngrabServer has been flushed.
+/// while other X clients are paused. In particular, `PaintChrome` uses another
+/// connection and must run after `UngrabServer` has been flushed.
 fn defer_drag_arrival_paint(
     mut commit: interaction::PointerCommit,
 ) -> Option<(interaction::PointerCommit, bool)> {
@@ -487,7 +495,7 @@ pub struct WmChangeSet {
     pub workspaces: bool,
     pub panels: bool,
     pub work_area: bool,
-    /// One-shot request from the ToggleStartMenu shortcut; the flush emits it once.
+    /// One-shot request from the `ToggleStartMenu` shortcut; the flush emits it once.
     pub start_menu_toggle: bool,
     /// One-shot request from the Launcher shortcut; the flush emits it once.
     pub launcher_toggle: bool,
@@ -585,10 +593,7 @@ fn env_u16(name: &str, default: u16, min: u16, max: u16) -> u16 {
 }
 
 fn any_conn_err(error: x11rb::errors::ConnectionError) -> AnyError {
-    Box::new(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        error.to_string(),
-    ))
+    Box::new(std::io::Error::other(error.to_string()))
 }
 
 struct ConfigureCounterSet {
@@ -798,6 +803,7 @@ fn emit_move_summary() {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_pointer_trace(
     id: flamewm_debug::DebugEventId,
     phase: &str,
@@ -918,7 +924,7 @@ fn emit_resize_probe(
             point.y.saturating_sub(probe.start_pointer.y),
         )
     });
-    let session_edges = resize_edges(session).or_else(|| match probe.region {
+    let session_edges = resize_edges(session).or(match probe.region {
         FrameRegion::Resize(edges) => Some(edges),
         _ => None,
     });
@@ -1150,7 +1156,7 @@ enum SuperTapOutcome {
 /// Bare-Super tap detector with KDE Meta semantics: a tap is a bare Super press
 /// whose release is not followed by any other key while Super is held.
 ///
-/// X autorepeat on a held key emits a KeyRelease and KeyPress pair that share
+/// X autorepeat on a held key emits a `KeyRelease` and `KeyPress` pair that share
 /// one server timestamp. A release is therefore held as `candidate` and only
 /// completes when the event batch ends (`commit`) or another key arrives; a
 /// same-timestamp Super press cancels it, so repeat pairs never toggle.
@@ -1295,11 +1301,11 @@ pub(crate) struct Wm<'a, C: Connection> {
     output_work_areas: Vec<OutputWorkArea>,
     /// Region map and output bounds for the last controller build; see `ControllerGeometryCache`.
     controller_geometry: ControllerGeometryCache,
-    /// Set by RandR notifications; the runtime refreshes the display snapshot on the next turn.
+    /// Set by `RandR` notifications; the runtime refreshes the display snapshot on the next turn.
     display_topology_dirty: TopologyDirty,
     /// Desktop CRTC modes and the hold/restore state for fullscreen mode changes.
     desktop_mode: desktop_mode::DesktopModeTracker,
-    /// XInput2 raw key feed for escape chords while a client holds the keyboard.
+    /// `XInput2` raw key feed for escape chords while a client holds the keyboard.
     raw_keys: Option<raw_keys::RawKeys>,
     /// Show-desktop toggle state: the iconified set and the active window to focus on restore.
     show_desktop: show_desktop::ShowDesktop,
@@ -1602,8 +1608,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         }) else {
             return;
         };
-        let identity =
-            flamewm_applications::WindowApplicationIdentity::new(&*instance, &*class, String::new());
+        let identity = flamewm_applications::WindowApplicationIdentity::new(
+            &*instance,
+            &*class,
+            String::new(),
+        );
         let Some(icon_name) = self
             .catalog
             .find_by_window_identity(&identity)
@@ -1766,7 +1775,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         )
     }
 
-    /// Consumes the RandR topology-change flag; true when the display snapshot must be refreshed.
+    /// Consumes the `RandR` topology-change flag; true when the display snapshot must be refreshed.
     pub(crate) fn take_display_topology_dirty(&mut self) -> bool {
         self.display_topology_dirty.take()
     }
@@ -1891,7 +1900,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     /// Reads `_MOTIF_WM_HINTS` and `_GTK_FRAME_EXTENTS` and decides who draws
-    /// the frame. Conventions: Motif (Qt frameless, OnlyOffice, Electron) and
+    /// the frame. Conventions: Motif (Qt frameless, `OnlyOffice`, Electron) and
     /// GTK3/4 CSD (Firefox, GNOME apps) report client-drawn frames; Flame adds
     /// no titlebar, border or resize handles for them.
     fn read_decoration(&self, window: Window, kind: WindowKind) -> Decoration {
@@ -1912,10 +1921,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             .reply()
             .ok()?
             .value32()
-            .map(|values| values.collect())
+            .map(std::iter::Iterator::collect)
     }
 
-    /// PropertyNotify on Motif/GTK hints: re-evaluate and rebuild in place.
+    /// `PropertyNotify` on Motif/GTK hints: re-evaluate and rebuild in place.
     /// The client area stays fixed; the frame grows or shrinks by the
     /// titlebar, so nothing is unmapped or remapped.
     fn refresh_decoration(&mut self, client: Window) -> Result<(), ReplyError> {
@@ -1939,7 +1948,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         state.set_outer(Rect::new(outer.x, y, outer.width, height as u32));
         if let Some(resources) = self.registry.lookup_by_client(client) {
             for xid in resources.children() {
-                if input_child_mapped(new, resources.region_of(xid), crate::live_settings::titlebars()) {
+                if input_child_mapped(
+                    new,
+                    resources.region_of(xid),
+                    crate::live_settings::titlebars(),
+                ) {
                     self.conn.map_window(xid)?;
                 } else {
                     self.conn.unmap_window(xid)?;
@@ -2010,13 +2023,16 @@ impl<'a, C: Connection> Wm<'a, C> {
             let geometry = self
                 .controller_geometry
                 .fetch(client, children, regions, outputs);
-            (Rc::clone(&geometry.region_map), Rc::clone(&geometry.outputs))
+            (
+                Rc::clone(&geometry.region_map),
+                Rc::clone(&geometry.outputs),
+            )
         };
         let screen_rect = RootRect::new(
             0,
             0,
-            i32::try_from(self.screen().width_in_pixels).unwrap_or(i32::MAX),
-            i32::try_from(self.screen().height_in_pixels).unwrap_or(i32::MAX),
+            i32::from(self.screen().width_in_pixels),
+            i32::from(self.screen().height_in_pixels),
         );
         let last_title_click = self
             .sessions
@@ -2060,7 +2076,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 }
 
-/// RandR topology-change flag. Set by notifications; consumed once per runtime turn.
+/// `RandR` topology-change flag. Set by notifications; consumed once per runtime turn.
 #[derive(Debug, Default)]
 pub(crate) struct TopologyDirty(bool);
 
@@ -2221,7 +2237,7 @@ pub(crate) fn flamewm_workspace_root() -> std::path::PathBuf {
 /// True when a `_NET_CURRENT_DESKTOP` value differs from the WM's own current
 /// workspace, i.e. the change came from another client rather than our publish.
 fn desktop_change_is_external(published: Option<u32>, own_current: usize) -> bool {
-    published.map_or(true, |value| value as usize != own_current)
+    published.is_none_or(|value| value as usize != own_current)
 }
 
 /// Payload of `_NET_DESKTOP_NAMES` for `count` workspaces: NUL-terminated names.
@@ -2234,12 +2250,11 @@ fn desktop_names_payload(count: usize) -> Vec<u8> {
 /// True when `_NET_NUMBER_OF_DESKTOPS` or `_NET_DESKTOP_NAMES` differ from what
 /// we last published; an identical echo of our own write must not advance the fence.
 fn workspace_metadata_is_external(count: Option<u32>, names: &[u8], own_count: usize) -> bool {
-    count.map_or(true, |value| value as usize != own_count)
-        || !desktop_names_match(names, own_count)
+    count.is_none_or(|value| value as usize != own_count) || !desktop_names_match(names, own_count)
 }
 
 /// True when `names` equals `desktop_names_payload(count)`, checked without building the
-/// payload: this runs on every root desktop-metadata PropertyNotify.
+/// payload: this runs on every root desktop-metadata `PropertyNotify`.
 fn desktop_names_match(names: &[u8], count: usize) -> bool {
     use std::io::Write;
     let mut rest = names;
@@ -2261,7 +2276,7 @@ fn desktop_names_match(names: &[u8], count: usize) -> bool {
 
 /// Mapping a frame is necessary only when workspace membership changes its
 /// actual visibility. In particular, a minimized frame remains unmapped when
-/// moved, and a hidden frame must not accumulate unmatched ignore_unmap counts.
+/// moved, and a hidden frame must not accumulate unmatched `ignore_unmap` counts.
 fn frame_visibility_delta(before: bool, after: bool) -> Option<bool> {
     (before != after).then_some(after)
 }

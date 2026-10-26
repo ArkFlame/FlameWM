@@ -103,7 +103,7 @@ pub struct Rgba8Raster {
     pub fallback_reason: Option<RasterError>,
 }
 
-/// Compatibility alias for the J06 RuntimeImage bridge consumers
+/// Compatibility alias for the J06 `RuntimeImage` bridge consumers
 /// (`flamewm-shell`/`flamewm-desktop` projections). The aliased pixels are
 /// RGBA8 straight alpha; use [`Rgba8Raster::to_rgb8_black_background`] for the
 /// legacy opaque black-background projection.
@@ -1154,6 +1154,7 @@ pub const DEFAULT_ICON_THEME: &str = "PlagueSur";
 /// Theme search chain: `FLAMEWM_ICON_THEME`, the Flame `iconTheme`
 /// preference, the desktop's configured theme (kdeglobals, then GTK), then
 /// Breeze. hicolor is appended by the inheritance chain.
+#[must_use]
 pub fn theme_chain(preferred: Option<&str>) -> Vec<String> {
     let mut theme_names: Vec<String> = Vec::new();
     if let Some(value) = env::var_os("FLAMEWM_ICON_THEME")

@@ -9,15 +9,15 @@ pub struct AlphaColor {
     pub alpha: u8,
 }
 
-pub const ACCENT: Rgb = Rgb(0xef4048);
-pub const DESKTOP: Rgb = Rgb(0x000000);
-pub const PANEL: Rgb = Rgb(0x1b1e20);
-pub const SURFACE: Rgb = Rgb(0x202326);
-pub const SIDEBAR: Rgb = Rgb(0x1b1e20);
-pub const TEXT: Rgb = Rgb(0xf1f2f3);
-pub const MUTED: Rgb = Rgb(0xaeb4bb);
-pub const STICKY_BACKGROUND: Rgb = Rgb(0xffe56b);
-pub const STICKY_TEXT: Rgb = Rgb(0x171717);
+pub const ACCENT: Rgb = Rgb(0x00ef_4048);
+pub const DESKTOP: Rgb = Rgb(0x0000_0000);
+pub const PANEL: Rgb = Rgb(0x001b_1e20);
+pub const SURFACE: Rgb = Rgb(0x0020_2326);
+pub const SIDEBAR: Rgb = Rgb(0x001b_1e20);
+pub const TEXT: Rgb = Rgb(0x00f1_f2f3);
+pub const MUTED: Rgb = Rgb(0x00ae_b4bb);
+pub const STICKY_BACKGROUND: Rgb = Rgb(0x00ff_e56b);
+pub const STICKY_TEXT: Rgb = Rgb(0x0017_1717);
 
 pub const ACCENT_SOFT: AlphaColor = AlphaColor {
     color: ACCENT,

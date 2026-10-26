@@ -19,9 +19,9 @@ pub fn project_network(
     )
 }
 
-/// Full network projection: Networks header, WiFi toggle, search filter over
+/// Full network projection: Networks header, `WiFi` toggle, search filter over
 /// the full snapshot, Connected/Available grouping, full AP scroll/
-/// virtualization, secure Connect via SecretAgent. No fake hotspot/QR/
+/// virtualization, secure Connect via `SecretAgent`. No fake hotspot/QR/
 /// traffic. The secret value itself is never projected.
 pub fn project_network_full(
     document: &mut impl UiDocumentAccess,
@@ -88,7 +88,7 @@ pub fn project_network_full(
             let row = window.get(slot);
             let (mut name, mut status) = (String::new(), String::new());
             if let Some(row) = row {
-                name = row.label.clone();
+                name.clone_from(&row.label);
                 status = format!("{}%", row.strength_percent);
                 if row.secured {
                     status.push_str(" · secured");

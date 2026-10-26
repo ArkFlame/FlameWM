@@ -34,9 +34,7 @@ impl BackgroundService {
             return Ok(());
         }
         port.project_background(&state)?;
-        if let Err(error) = port.reload_background() {
-            return Err(error);
-        }
+        port.reload_background()?;
         self.current = Some(state);
         self.revision = self.revision.saturating_add(1);
         Ok(())

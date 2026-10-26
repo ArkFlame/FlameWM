@@ -1899,7 +1899,6 @@ fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, ControlError> {
             } else {
                 None
             },
-            ..Default::default()
         },
         media: MediaSnapshot {
             availability: parse_availability(dict_string(dict, "mediaAvailability")?)?,
@@ -2724,11 +2723,11 @@ mod tests {
             .insert("Dark".to_owned(), SettingValue::Boolean(true));
         snapshot
             .values
-            .insert("AccentColor".to_owned(), SettingValue::Rgb(0xEF4048));
+            .insert("AccentColor".to_owned(), SettingValue::Rgb(0x00EF_4048));
         let dict = settings_dict(&snapshot);
         assert_eq!(dict.get("revision"), Some(&WireValue::U64(9)));
         assert_eq!(dict.get("Dark"), Some(&WireValue::Bool(true)));
-        assert_eq!(dict.get("AccentColor"), Some(&WireValue::U32(0xEF4048)));
+        assert_eq!(dict.get("AccentColor"), Some(&WireValue::U32(0x00EF_4048)));
     }
 
     #[test]
@@ -3092,7 +3091,6 @@ mod tests {
                     known: true,
                 }],
                 pending_secret: None,
-                ..Default::default()
             },
             media: MediaSnapshot {
                 availability: ServiceAvailability::Available,

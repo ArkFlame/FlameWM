@@ -58,7 +58,9 @@ fn invalid(why: &str) -> Error {
 
 impl Url {
     pub fn parse(input: &str) -> Result<Self, Error> {
-        let (scheme, rest) = input.split_once("://").ok_or_else(|| invalid("missing scheme"))?;
+        let (scheme, rest) = input
+            .split_once("://")
+            .ok_or_else(|| invalid("missing scheme"))?;
         let protocol = match scheme.to_ascii_lowercase().as_str() {
             "sftp" => Protocol::Sftp,
             "fish" => Protocol::Fish,
@@ -82,14 +84,24 @@ impl Url {
         let user = match user {
             Some(u) => {
                 let u = percent_decode(u)?;
-                check_chars(&u, "user", |c| c.is_ascii_alphanumeric() || "._-+".contains(c))?;
+                check_chars(&u, "user", |c| {
+                    c.is_ascii_alphanumeric() || "._-+".contains(c)
+                })?;
                 Some(u)
             }
             None => None,
         };
-        check_chars(&host, "host", |c| c.is_ascii_alphanumeric() || ".-_:".contains(c))?;
+        check_chars(&host, "host", |c| {
+            c.is_ascii_alphanumeric() || ".-_:".contains(c)
+        })?;
         let path = percent_decode(raw_path)?;
-        Ok(Self { protocol, user, host, port, path })
+        Ok(Self {
+            protocol,
+            user,
+            host,
+            port,
+            path,
+        })
     }
 
     #[must_use]
@@ -99,7 +111,11 @@ impl Url {
 
     #[must_use]
     pub fn conn_key(&self) -> ConnKey {
-        ConnKey { user: self.user.clone(), host: self.host.clone(), port: self.port_or_default() }
+        ConnKey {
+            user: self.user.clone(),
+            host: self.host.clone(),
+            port: self.port_or_default(),
+        }
     }
 
     /// Path as the remote shell should see it: `~` for home, otherwise an absolute or relative path.
@@ -127,7 +143,11 @@ impl Url {
 
     #[must_use]
     pub fn join(&self, name: &str) -> Self {
-        let base = if self.path.is_empty() { "/~" } else { self.path.trim_end_matches('/') };
+        let base = if self.path.is_empty() {
+            "/~"
+        } else {
+            self.path.trim_end_matches('/')
+        };
         let mut child = self.clone();
         child.path = format!("{base}/{name}");
         child
@@ -142,7 +162,11 @@ impl Url {
         }
         let idx = p.rfind('/')?;
         let mut parent = self.clone();
-        parent.path = if idx == 0 { "/".to_string() } else { p[..idx].to_string() };
+        parent.path = if idx == 0 {
+            "/".to_string()
+        } else {
+            p[..idx].to_string()
+        };
         Some(parent)
     }
 }
@@ -164,12 +188,18 @@ impl fmt::Display for Url {
 
 fn parse_hostport(s: &str) -> Result<(String, Option<u16>), Error> {
     let (host, port_str) = if let Some(inner) = s.strip_prefix('[') {
-        let end = inner.find(']').ok_or_else(|| invalid("unterminated IPv6 literal"))?;
+        let end = inner
+            .find(']')
+            .ok_or_else(|| invalid("unterminated IPv6 literal"))?;
         let after = &inner[end + 1..];
         let port = if after.is_empty() {
             None
         } else {
-            Some(after.strip_prefix(':').ok_or_else(|| invalid("bad host syntax"))?)
+            Some(
+                after
+                    .strip_prefix(':')
+                    .ok_or_else(|| invalid("bad host syntax"))?,
+            )
         };
         (&inner[..end], port)
     } else {
@@ -211,7 +241,9 @@ fn percent_decode(s: &str) -> Result<String, Error> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' {
-            let hex = bytes.get(i + 1..i + 3).ok_or_else(|| invalid("truncated percent escape"))?;
+            let hex = bytes
+                .get(i + 1..i + 3)
+                .ok_or_else(|| invalid("truncated percent escape"))?;
             let hex = std::str::from_utf8(hex).map_err(|_| invalid("bad percent escape"))?;
             out.push(u8::from_str_radix(hex, 16).map_err(|_| invalid("bad percent escape"))?);
             i += 3;
@@ -261,8 +293,14 @@ mod tests {
     fn rejects_bad_input() {
         assert!(Url::parse("nonsense").is_err());
         assert!(Url::parse("gopher://h/").is_err());
-        assert!(Url::parse("sftp://user:secret@h/").is_err(), "passwords in URL must be refused");
-        assert!(Url::parse("sftp://-oProxyCommand=evil/").is_err(), "option injection");
+        assert!(
+            Url::parse("sftp://user:secret@h/").is_err(),
+            "passwords in URL must be refused"
+        );
+        assert!(
+            Url::parse("sftp://-oProxyCommand=evil/").is_err(),
+            "option injection"
+        );
         assert!(Url::parse("sftp://h:0/").is_err());
         assert!(Url::parse("sftp://h:99999/").is_err());
         assert!(Url::parse("sftp:///path").is_err());
@@ -277,7 +315,10 @@ mod tests {
         assert_eq!(child.path, "/srv/www");
         assert_eq!(child.file_name(), "www");
         assert_eq!(child.parent().unwrap().path, "/srv");
-        assert_eq!(Url::parse("sftp://h/srv").unwrap().parent().unwrap().path, "/");
+        assert_eq!(
+            Url::parse("sftp://h/srv").unwrap().parent().unwrap().path,
+            "/"
+        );
         assert!(Url::parse("sftp://h/").unwrap().parent().is_none());
         let home = Url::parse("fish://h").unwrap().join("a");
         assert_eq!(home.path, "/~/a");

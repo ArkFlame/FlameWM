@@ -1,7 +1,7 @@
-//! Engine-neutral window-manager capability contracts owned by FlameWM.
+//! Engine-neutral window-manager capability contracts owned by `FlameWM`.
 //!
 //! These contracts model mature EWMH/ICCCM behaviors that the executable engine already owns.
-//! FlameWM may expose them through product UX, but must never create a second authoritative
+//! `FlameWM` may expose them through product UX, but must never create a second authoritative
 //! stacking/show-desktop/moveresize state machine above the engine.
 
 use crate::{FlameError, FlameResult, Point, WindowRef};

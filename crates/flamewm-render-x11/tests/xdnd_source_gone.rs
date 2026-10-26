@@ -206,8 +206,13 @@ fn xdnd_target_survives_source_destroyed_mid_drag() {
     )
     .expect("source window");
     let send = |to: u32, kind: u32, data: [u32; 5]| {
-        conn.send_event(false, to, EventMask::NO_EVENT, ClientMessageEvent::new(32, to, kind, data))
-            .expect("send");
+        conn.send_event(
+            false,
+            to,
+            EventMask::NO_EVENT,
+            ClientMessageEvent::new(32, to, kind, data),
+        )
+        .expect("send");
     };
     send(window, enter, [source, 5 << 24, uri_list, text_plain, 0]);
     let (root_x, root_y) = (TARGET_X + 20, TARGET_Y + 20);

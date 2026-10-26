@@ -1,7 +1,7 @@
-//! Directory opening is a typed FlameWM decision. Folders never reach the KDE/XDG
+//! Directory opening is a typed `FlameWM` decision. Folders never reach the KDE/XDG
 //! opener: the effective `inode/directory` default (user `mimeapps.list` first, then
-//! the XDG config/data search order) selects FlameWM Explorer or an installed,
-//! non-FlameWM desktop entry; any uncertainty selects FlameWM Explorer.
+//! the XDG config/data search order) selects `FlameWM` Explorer or an installed,
+//! non-FlameWM desktop entry; any uncertainty selects `FlameWM` Explorer.
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,7 +18,7 @@ const DIRECTORY_MIME: &str = "inode/directory";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DirectoryHandler {
     FlameExplorer,
-    /// An installed desktop entry that the user explicitly chose (not FlameWM Explorer).
+    /// An installed desktop entry that the user explicitly chose (not `FlameWM` Explorer).
     Desktop(String),
 }
 
@@ -85,7 +85,7 @@ pub fn default_in_mimeapps(content: &str, mime: &str) -> Option<String> {
 }
 
 /// Pure decision: the first mimeapps file that names a directory default wins.
-/// Missing, unknown or uninstalled defaults fall back to FlameWM Explorer.
+/// Missing, unknown or uninstalled defaults fall back to `FlameWM` Explorer.
 #[must_use]
 pub fn decide_directory_handler(
     mimeapps_texts: &[Option<String>],
@@ -138,18 +138,26 @@ impl DirectorySpawner for SystemSpawner {
     fn spawn_explorer(&mut self, binary: &Path, directory: &Path) -> FlameResult<()> {
         let mut command = Command::new(binary);
         command.arg(directory);
-        spawn_with_startup(&mut command, "FlameWM Explorer", "system-file-manager", "flamewm-explorer", true)
+        spawn_with_startup(
+            &mut command,
+            "FlameWM Explorer",
+            "system-file-manager",
+            "flamewm-explorer",
+            true,
+        )
     }
 
     fn launch_desktop(&mut self, id: &str, directory: &Path) -> FlameResult<()> {
         let catalog = ApplicationCatalog::discover_file_handlers()?;
         let mut options = ApplicationLaunchOptions::default();
-        options.extra_args.push(directory.to_string_lossy().into_owned());
+        options
+            .extra_args
+            .push(directory.to_string_lossy().into_owned());
         catalog.launch(&DesktopAppId::new(id), &options)
     }
 }
 
-/// Open a folder through FlameWM's own handler resolution. Never calls kde-open/xdg-open.
+/// Open a folder through `FlameWM`'s own handler resolution. Never calls kde-open/xdg-open.
 pub fn open_directory(directory: &Path) -> FlameResult<()> {
     let handler = decide_directory_handler(&read_mimeapps(), installed_desktop_entry);
     route_directory(&handler, directory, &explorer_binary(), &mut SystemSpawner)
@@ -179,42 +187,70 @@ mod tests {
 
     impl DirectorySpawner for Recorder {
         fn spawn_explorer(&mut self, binary: &Path, directory: &Path) -> FlameResult<()> {
-            self.calls.push(format!("explorer {} {}", binary.display(), directory.display()));
+            self.calls.push(format!(
+                "explorer {} {}",
+                binary.display(),
+                directory.display()
+            ));
             Ok(())
         }
         fn launch_desktop(&mut self, id: &str, directory: &Path) -> FlameResult<()> {
-            self.calls.push(format!("desktop {id} {}", directory.display()));
+            self.calls
+                .push(format!("desktop {id} {}", directory.display()));
             Ok(())
         }
     }
 
-    const DOLPHIN_DEFAULT: &str = "[Default Applications]\ninode/directory=org.kde.dolphin.desktop;\n";
-    const EXPLORER_DEFAULT: &str = "[Default Applications]\ninode/directory=flamewm-explorer.desktop\n";
+    const DOLPHIN_DEFAULT: &str =
+        "[Default Applications]\ninode/directory=org.kde.dolphin.desktop;\n";
+    const EXPLORER_DEFAULT: &str =
+        "[Default Applications]\ninode/directory=flamewm-explorer.desktop\n";
     const DOLPHIN_INSTALLED: fn(&str) -> bool = |id| id == "org.kde.dolphin.desktop";
 
     #[test]
     fn directory_without_mimeapps_spawns_flamewm_explorer_with_path() {
         let mut recorder = Recorder::default();
         let handler = decide_directory_handler(&[None, None], DOLPHIN_INSTALLED);
-        route_directory(&handler, Path::new("/home/u/New Folder"), Path::new("/bin/flamewm-explorer"), &mut recorder)
-            .unwrap();
-        assert_eq!(recorder.calls, ["explorer /bin/flamewm-explorer /home/u/New Folder"]);
+        route_directory(
+            &handler,
+            Path::new("/home/u/New Folder"),
+            Path::new("/bin/flamewm-explorer"),
+            &mut recorder,
+        )
+        .unwrap();
+        assert_eq!(
+            recorder.calls,
+            ["explorer /bin/flamewm-explorer /home/u/New Folder"]
+        );
     }
 
     #[test]
     fn dolphin_system_default_does_not_win_over_user_flamewm_explorer_choice() {
         let mut recorder = Recorder::default();
-        let texts = [Some(EXPLORER_DEFAULT.to_owned()), Some(DOLPHIN_DEFAULT.to_owned())];
+        let texts = [
+            Some(EXPLORER_DEFAULT.to_owned()),
+            Some(DOLPHIN_DEFAULT.to_owned()),
+        ];
         let handler = decide_directory_handler(&texts, DOLPHIN_INSTALLED);
         assert_eq!(handler, DirectoryHandler::FlameExplorer);
-        route_directory(&handler, Path::new("/tmp/d"), Path::new("flamewm-explorer"), &mut recorder).unwrap();
+        route_directory(
+            &handler,
+            Path::new("/tmp/d"),
+            Path::new("flamewm-explorer"),
+            &mut recorder,
+        )
+        .unwrap();
         assert_eq!(recorder.calls, ["explorer flamewm-explorer /tmp/d"]);
     }
 
     #[test]
     fn explicit_installed_desktop_choice_is_honoured_without_kde_opener() {
-        let handler = decide_directory_handler(&[Some(DOLPHIN_DEFAULT.to_owned())], DOLPHIN_INSTALLED);
-        assert_eq!(handler, DirectoryHandler::Desktop("org.kde.dolphin.desktop".into()));
+        let handler =
+            decide_directory_handler(&[Some(DOLPHIN_DEFAULT.to_owned())], DOLPHIN_INSTALLED);
+        assert_eq!(
+            handler,
+            DirectoryHandler::Desktop("org.kde.dolphin.desktop".into())
+        );
     }
 
     #[test]
@@ -226,7 +262,16 @@ mod tests {
     #[test]
     fn default_parser_reads_only_default_applications_section() {
         let text = "[Added Associations]\ninode/directory=a.desktop;\n[Default Applications]\ninode/directory=b.desktop;c.desktop;\n";
-        assert_eq!(default_in_mimeapps(text, "inode/directory").as_deref(), Some("b.desktop"));
-        assert_eq!(default_in_mimeapps("[Added Associations]\ninode/directory=a.desktop;\n", "inode/directory"), None);
+        assert_eq!(
+            default_in_mimeapps(text, "inode/directory").as_deref(),
+            Some("b.desktop")
+        );
+        assert_eq!(
+            default_in_mimeapps(
+                "[Added Associations]\ninode/directory=a.desktop;\n",
+                "inode/directory"
+            ),
+            None
+        );
     }
 }

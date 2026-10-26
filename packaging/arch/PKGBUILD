@@ -1,0 +1,80 @@
+# Maintainer: ArkFlame Studios <maintainers@arkflame.dev>
+pkgname=flamewm-git
+pkgver=0.1.2
+pkgrel=1
+pkgdesc='Rust X11 desktop session and window manager with a preliminary Wayland compositor'
+arch=('x86_64')
+url='https://github.com/ArkFlame/FlameWM'
+license=('LGPL-2.0-only' 'MIT' 'LGPL-3.0-or-later' 'GPL-3.0-only')
+depends=(
+  'bash'
+  'dbus'
+  'fontconfig'
+  'glibc'
+  'libgcc'
+  'libglvnd'
+  'libinput'
+  'libpulse'
+  'libx11'
+  'libxcomposite'
+  'libxcursor'
+  'libxext'
+  'libxft'
+  'libxi'
+  'libxkbcommon'
+  'libxrender'
+  'mesa'
+  'pam'
+  'python'
+  'systemd-libs'
+  'xorg-xwayland'
+)
+makedepends=('cargo' 'git' 'pkgconf')
+optdepends=(
+  'xdg-utils: open files and links with their default applications'
+  'xorg-xrandr: display layout settings and restore at login'
+  'xorg-xprop: deferred XDG autostart after the window manager is ready'
+  'dex: XDG autostart entries'
+  'dunst: notification daemon for the session'
+  'libnotify: Explorer notifications'
+  'udisks2: mount removable drives from Explorer'
+  'ark: archive extraction from Explorer'
+  'imagemagick: desktop Convert wheel'
+  'ffmpeg: screen recording'
+  'ttf-ibm-plex: default interface font (falls back to Noto Sans or DejaVu Sans)'
+  'polkit-kde-agent: authentication agent for privileged actions'
+  'xdg-desktop-portal-kde: preferred OpenURI and FileChooser portal backend'
+  'xdg-desktop-portal-gtk: fallback portal backend'
+  'kwallet-pam: unlock KWallet at login'
+  'libxkbcommon-x11: nested --backend=nested compositor inside an X11 session'
+)
+provides=("flamewm=${pkgver%%.r*}")
+conflicts=('flamewm' 'mcmojave-cursors' 'mcmojave-cursors-git')
+backup=('etc/pam.d/flamewm-lock' 'etc/xdg/menus/flamewm-applications.menu')
+source=('flamewm::git+https://github.com/ArkFlame/FlameWM.git')
+sha256sums=('SKIP')
+
+pkgver() {
+  cd flamewm
+  printf '%s.r%s.g%s' "$(./scripts/version)" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd flamewm
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  cd flamewm
+  export CARGO_TARGET_DIR=target
+  export CARGO_PROFILE_RELEASE_STRIP=false
+  cargo build --frozen --release --workspace --features flamewm-wm-wayland/drm
+  target/release/flamewm-wayland --capabilities | grep -Fxq 'drm_compiled=true'
+}
+
+package() {
+  cd flamewm
+  CARGO_TARGET_DIR=target ./scripts/package --stage "$pkgdir" \
+    --libexecdir /usr/lib/flamewm --pam packaging/arch/flamewm-lock.pam
+  install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname" LICENSES/*
+}

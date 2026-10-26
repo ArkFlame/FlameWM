@@ -1,4 +1,4 @@
-//! Wave 3 audio stress: 200 typed ops through the real PulseAdapter.
+//! Wave 3 audio stress: 200 typed ops through the real `PulseAdapter`.
 //! Restores original default-sink volume+mute in a finally path even on failure.
 
 use std::time::{Duration, Instant};
@@ -42,6 +42,7 @@ fn restore(adapter: &PulseAdapter, target: AudioTarget, volume: u8, muted: bool)
 
 #[test]
 fn pulse_provider_stress() {
+    const TOTAL_OPS: usize = 200;
     let adapter = PulseAdapter::connect(|_| {}).expect("PulseAdapter::connect must succeed");
 
     let first = wait_ready(&adapter)
@@ -62,12 +63,11 @@ fn pulse_provider_stress() {
     let mut seed: u64 = 0x1234_5678_9abc_def1;
     let mut next_rand = move || {
         seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         (5 + (seed >> 33) % 96) as u8
     };
 
-    const TOTAL_OPS: usize = 200;
     let mut completed: usize = 0;
     let mut failure: Option<String> = None;
     let mut last_target = orig_target;

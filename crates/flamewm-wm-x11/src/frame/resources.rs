@@ -19,7 +19,7 @@ pub const MASK_LEAVE_WINDOW: u32 = 0x20;
 pub const MASK_POINTER_MOTION: u32 = 0x40;
 pub const MASK_EXPOSURE: u32 = 0x8000;
 
-/// Combined native mask for every frame input child. Includes LEAVE_WINDOW
+/// Combined native mask for every frame input child. Includes `LEAVE_WINDOW`
 /// so hover/highlight state clears when the pointer exits a child.
 pub const INPUT_CHILD_EVENT_MASK: u32 = MASK_BUTTON_PRESS
     | MASK_BUTTON_RELEASE

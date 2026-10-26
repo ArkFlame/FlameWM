@@ -347,7 +347,7 @@ mod tests {
     }
 }
 
-/// Volume and mute writes carry their own PulseAudio generation fences, so the
+/// Volume and mute writes carry their own `PulseAudio` generation fences, so the
 /// snapshot-wide revision is not required for them. Battery-menu visibility toggles
 /// are idempotent and must not be rejected because power or CPU samples moved the revision.
 #[must_use]

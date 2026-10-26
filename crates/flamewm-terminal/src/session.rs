@@ -34,7 +34,8 @@ impl Session {
         events: Sender<SessionEvent>,
         wake: UnixStream,
     ) -> Result<Self, String> {
-        let mut pty = PtyProcess::spawn(launch, size).map_err(|error| format!("start {}: {error}", launch.program))?;
+        let mut pty = PtyProcess::spawn(launch, size)
+            .map_err(|error| format!("start {}: {error}", launch.program))?;
         let reader = pty.take_reader().ok_or("pty reader missing")?;
         let notice_wake = wake.try_clone().map_err(|error| error.to_string())?;
         let pacer = spawn_pacer(wake)?;
@@ -42,7 +43,12 @@ impl Session {
             .name(format!("flamewm-terminal-read-{id}"))
             .spawn(move || read_loop(id, reader, events, pacer, notice_wake))
             .map_err(|error| error.to_string())?;
-        Ok(Self { id, pty, parser: Parser::new(), screen: Screen::new(size.cols as usize, size.rows as usize, scrollback) })
+        Ok(Self {
+            id,
+            pty,
+            parser: Parser::new(),
+            screen: Screen::new(size.cols as usize, size.rows as usize, scrollback),
+        })
     }
 
     /// Feeds child output through the parser, then writes any replies (cursor reports, DA) back to the child.
@@ -71,6 +77,7 @@ impl Session {
     }
 
     /// Working directory of the child, read from `/proc`; used to start new tabs in the same place.
+    #[must_use]
     pub fn working_directory(&self) -> Option<std::path::PathBuf> {
         std::fs::read_link(format!("/proc/{}/cwd", self.pty.id())).ok()
     }
@@ -104,7 +111,9 @@ fn spawn_pacer(mut wake: UnixStream) -> Result<Sender<()>, String> {
         .spawn(move || {
             let mut last_wake: Option<Instant> = None;
             while queued.recv().is_ok() {
-                if let Some(at) = last_wake.and_then(|at| (at + FRAME).checked_duration_since(Instant::now())) {
+                if let Some(at) =
+                    last_wake.and_then(|at| (at + FRAME).checked_duration_since(Instant::now()))
+                {
                     std::thread::sleep(at);
                 }
                 // Everything the reader queued before this point is covered by the wake below.
@@ -119,21 +128,37 @@ fn spawn_pacer(mut wake: UnixStream) -> Result<Sender<()>, String> {
     Ok(signal)
 }
 
-fn read_loop(id: u64, mut reader: File, events: Sender<SessionEvent>, pacer: Sender<()>, notice_wake: UnixStream) {
-    let _notice = ExitNotice { id, events: events.clone(), wake: notice_wake };
+fn read_loop(
+    id: u64,
+    mut reader: File,
+    events: Sender<SessionEvent>,
+    pacer: Sender<()>,
+    notice_wake: UnixStream,
+) {
+    let _notice = ExitNotice {
+        id,
+        events: events.clone(),
+        wake: notice_wake,
+    };
     let mut buffer = vec![0_u8; 16 * 1024];
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => return,
             Ok(count) => {
-                if events.send(SessionEvent::Output { id, bytes: buffer[..count].to_vec() }).is_err() {
+                if events
+                    .send(SessionEvent::Output {
+                        id,
+                        bytes: buffer[..count].to_vec(),
+                    })
+                    .is_err()
+                {
                     return;
                 }
                 if pacer.send(()).is_err() {
                     return;
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             // EIO is how Linux ends a PTY once the child's session is gone; any other error also ends the tab.
             Err(_) => return,
         }
@@ -157,18 +182,21 @@ mod tests {
             args: vec!["-c".into(), format!("head -c {FLOOD} /dev/zero")],
             cwd: None,
         };
-        let size = PtySize { cols: 80, rows: 24, pixel_width: 0, pixel_height: 0 };
+        let size = PtySize {
+            cols: 80,
+            rows: 24,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
         let started = Instant::now();
         let _session = Session::start(1, &launch, size, 0, events_tx, writer).expect("start flood");
         let (mut bytes, mut chunks) = (0_usize, 0_usize);
-        loop {
-            match events_rx.recv_timeout(Duration::from_secs(30)).expect("event before timeout") {
-                SessionEvent::Output { bytes: chunk, .. } => {
-                    bytes += chunk.len();
-                    chunks += 1;
-                }
-                SessionEvent::Exited { .. } => break,
-            }
+        while let SessionEvent::Output { bytes: chunk, .. } = events_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("event before timeout")
+        {
+            bytes += chunk.len();
+            chunks += 1;
         }
         let elapsed = started.elapsed();
         // Every wake is one byte on the socket. Exited's own wake may still be in flight, which only lowers the count.
@@ -186,7 +214,13 @@ mod tests {
         assert_eq!(bytes, FLOOD, "every output byte is forwarded");
         assert!(chunks >= 16, "the flood arrives in many reads ({chunks})");
         let frames = elapsed.as_millis() as usize / FRAME.as_millis() as usize;
-        assert!(wakes <= frames + 3, "{wakes} wakes in {elapsed:?} exceeds the frame cadence");
-        assert!(wakes * 4 <= chunks, "{wakes} wakes for {chunks} reads: no coalescing");
+        assert!(
+            wakes <= frames + 3,
+            "{wakes} wakes in {elapsed:?} exceeds the frame cadence"
+        );
+        assert!(
+            wakes * 4 <= chunks,
+            "{wakes} wakes for {chunks} reads: no coalescing"
+        );
     }
 }

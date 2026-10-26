@@ -307,7 +307,7 @@ SESSION="${FLAMEWM_WAYLAND_BINARY:-/usr/bin/flamewm-wayland}"
 # the XWayland DISPLAY once XWayland is ready. The X11 WM (flamewm-wm) is not started here: its
 # control and settings services are provided by flamewm-desktop-services below.
 BINDIR="${FLAMEWM_BINDIR:-/usr/bin}"
-BRIDGE="${FLAMEWM_SERVICES_BINARY:-/usr/libexec/flamewm/flamewm-desktop-services}"
+BRIDGE="${FLAMEWM_SERVICES_BINARY:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/flamewm-desktop-services}"
 export FLAMEWM_WAYLAND_SESSION=1
 export FLAMEWM_WAYLAND_AUTOSTART="${FLAMEWM_WAYLAND_AUTOSTART:-$BINDIR/flamewm-desktop:$BINDIR/flamewm-shell}"
 

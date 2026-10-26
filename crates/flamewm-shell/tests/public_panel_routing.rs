@@ -5,6 +5,6 @@ use flamewm_shell::{ShellRuntime, ShellSurfaces};
 
 #[test]
 fn shell_binary_panel_routing_methods_are_public() {
-    let _set_origin = ShellRuntime::select_panel_output;
-    let _route_surface = ShellSurfaces::select_input_output;
+    let _ = ShellRuntime::select_panel_output;
+    let _ = ShellSurfaces::select_input_output;
 }

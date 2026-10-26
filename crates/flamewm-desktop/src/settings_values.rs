@@ -45,7 +45,7 @@ pub(crate) fn percent_alpha(percent: u8) -> u8 {
 }
 
 /// Neutral grey until the settings snapshot supplies `accent` (mirrors the shell default).
-const NEUTRAL_ACCENT: u32 = 0x7f878e;
+const NEUTRAL_ACCENT: u32 = 0x007f_878e;
 /// Accent-derived tokens of `ui/shell/flamewm.css`, with the alpha each keeps in its `:root`.
 pub(crate) const ACCENT_TOKEN_ALPHAS: [(&str, u8); 9] = [
     ("--accent", 0xff),

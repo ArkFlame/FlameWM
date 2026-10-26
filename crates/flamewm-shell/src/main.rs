@@ -60,7 +60,7 @@ impl NotificationHost {
         let x = output
             .geometry
             .x
-            .saturating_add(i32::try_from(output.geometry.width).unwrap_or(i32::MAX))
+            .saturating_add(output.geometry.width)
             .saturating_sub(i32::try_from(NOTIFICATION_WIDTH).unwrap_or(i32::MAX))
             .saturating_sub(16);
         let y = output.geometry.y.saturating_add(16);
@@ -139,7 +139,7 @@ impl NotificationHost {
             }
             return Ok(());
         }
-        self.visible = next.clone();
+        self.visible.clone_from(&next);
         if let Some(notification) = next {
             runtime
                 .with_document(self.surface, |document| {
@@ -324,7 +324,7 @@ fn execute() -> Result<(), String> {
     let repeat_due = Arc::clone(&clock_due);
     reactor
         .register_timer(Duration::from_millis(plan.interval_ms), true, move || {
-            repeat_due.store(true, Ordering::Release)
+            repeat_due.store(true, Ordering::Release);
         })
         .map_err(|error| format!("register clock timer: {error}"))?;
 
@@ -351,7 +351,7 @@ fn execute() -> Result<(), String> {
                     |snapshot| {
                         mutation_state
                             .borrow_mut()
-                            .apply_settings_snapshot(snapshot)
+                            .apply_settings_snapshot(snapshot);
                     },
                 );
                 flamewm_reactor::FdAction::Continue
@@ -393,7 +393,7 @@ fn execute() -> Result<(), String> {
     // revision-only signals are ignored for normal refresh. The tick
     // drains applied domains once per turn.
     let signal_client = ControlSignalClient::connect(BusKind::Session)
-        .map_err(|error| format!("subscribe control signals: {}", error))?;
+        .map_err(|error| format!("subscribe control signals: {error}"))?;
     // Leak the client for process lifetime: its pump fd must stay open for the
     // reactor registration below, and the reactor never owns the descriptor.
     let signal_client: &'static ControlSignalClient = Box::leak(Box::new(signal_client));
@@ -447,7 +447,7 @@ fn execute() -> Result<(), String> {
     if flamewm_profiler::enabled() {
         reactor
             .register_timer(Duration::from_secs(profile_interval), true, move || {
-                profile_flag.store(true, Ordering::Release)
+                profile_flag.store(true, Ordering::Release);
             })
             .map_err(|error| format!("register profile timer: {error}"))?;
     }
@@ -520,9 +520,10 @@ fn execute() -> Result<(), String> {
 /// Parent helper program: re-exec this binary with the helper role flag so
 /// no second binary or install path is required.
 fn current_exe_program() -> String {
-    std::env::current_exe()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "flamewm-shell".to_owned())
+    std::env::current_exe().map_or_else(
+        |_| "flamewm-shell".to_owned(),
+        |path| path.to_string_lossy().into_owned(),
+    )
 }
 
 fn project_panel_critical(

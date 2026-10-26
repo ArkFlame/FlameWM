@@ -84,7 +84,7 @@ impl RangeState {
         }
     }
 
-    /// Map a pointer coordinate on a [track_start, track_start+track_len]
+    /// Map a pointer coordinate on a [`track_start`, `track_start+track_len`]
     /// track to a snapped range value.
     #[must_use]
     pub fn value_from_pointer(

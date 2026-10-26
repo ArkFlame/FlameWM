@@ -39,7 +39,15 @@ const SECRET_MARKERS: [&str; 14] = [
     "--pass",
 ];
 /// Words that mark a variable name, long option or `-u user:pass` value as a credential.
-const SECRET_WORDS: [&str; 7] = ["pass", "pwd", "secret", "token", "key", "auth", "credential"];
+const SECRET_WORDS: [&str; 7] = [
+    "pass",
+    "pwd",
+    "secret",
+    "token",
+    "key",
+    "auth",
+    "credential",
+];
 
 /// Ordering of a command: uses first, then recency (the sequence number of its last line).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -73,25 +81,32 @@ pub struct Trie {
 
 impl Default for Trie {
     fn default() -> Self {
-        Self { nodes: vec![Node::default()], commands: Vec::new(), ids: HashMap::new() }
+        Self {
+            nodes: vec![Node::default()],
+            commands: Vec::new(),
+            ids: HashMap::new(),
+        }
     }
 }
 
 impl Trie {
     /// Adds `uses` to `text` and marks it as used at sequence `seq` (later than every earlier use).
     pub fn add(&mut self, text: &str, uses: u64, seq: u64) {
-        let id = match self.ids.get(text) {
-            Some(&id) => {
-                let command = &mut self.commands[id];
-                command.rank = Rank { count: command.rank.count + uses, seq };
-                id
-            }
-            None => {
-                let id = self.commands.len();
-                self.commands.push(Command { text: text.to_owned(), rank: Rank { count: uses, seq } });
-                self.ids.insert(text.to_owned(), id);
-                id
-            }
+        let id = if let Some(&id) = self.ids.get(text) {
+            let command = &mut self.commands[id];
+            command.rank = Rank {
+                count: command.rank.count + uses,
+                seq,
+            };
+            id
+        } else {
+            let id = self.commands.len();
+            self.commands.push(Command {
+                text: text.to_owned(),
+                rank: Rank { count: uses, seq },
+            });
+            self.ids.insert(text.to_owned(), id);
+            id
         };
         let rank = self.commands[id].rank;
         let mut node = 0;
@@ -101,14 +116,13 @@ impl Trie {
             if slot.is_none_or(|(best, best_id)| best_id == id || rank > best) {
                 *slot = Some((rank, id));
             }
-            node = match self.child(node, c) {
-                Some(next) => next,
-                None => {
-                    self.nodes.push(Node::default());
-                    let next = self.nodes.len() - 1;
-                    self.nodes[node].children.push((c, next));
-                    next
-                }
+            node = if let Some(next) = self.child(node, c) {
+                next
+            } else {
+                self.nodes.push(Node::default());
+                let next = self.nodes.len() - 1;
+                self.nodes[node].children.push((c, next));
+                next
             };
         }
         if self.commands.len() > 2 * MAX_COMMANDS {
@@ -117,12 +131,20 @@ impl Trie {
     }
 
     fn child(&self, node: usize, c: char) -> Option<usize> {
-        self.nodes[node].children.iter().find(|(ch, _)| *ch == c).map(|&(_, next)| next)
+        self.nodes[node]
+            .children
+            .iter()
+            .find(|(ch, _)| *ch == c)
+            .map(|&(_, next)| next)
     }
 
     /// Rebuilds the trie from the `MAX_COMMANDS` highest-ranked commands, so the store stays bounded.
     fn prune(&mut self) {
-        let mut kept: Vec<(Rank, String)> = self.commands.drain(..).map(|command| (command.rank, command.text)).collect();
+        let mut kept: Vec<(Rank, String)> = self
+            .commands
+            .drain(..)
+            .map(|command| (command.rank, command.text))
+            .collect();
         kept.sort_by(|a, b| b.0.cmp(&a.0));
         kept.truncate(MAX_COMMANDS);
         *self = Self::default();
@@ -132,6 +154,7 @@ impl Trie {
     }
 
     /// The best stored command that starts with `prefix` and is longer than it.
+    #[must_use]
     pub fn best_extension(&self, prefix: &str) -> Option<&str> {
         let mut node = 0;
         for c in prefix.chars() {
@@ -141,6 +164,7 @@ impl Trie {
         Some(&self.commands[id].text)
     }
 
+    #[must_use]
     pub fn uses(&self, text: &str) -> Option<u64> {
         self.ids.get(text).map(|&id| self.commands[id].rank.count)
     }
@@ -148,8 +172,12 @@ impl Trie {
 
 /// Whether a command may be stored: not blank, not space-prefixed (HISTCONTROL=ignorespace), short, single line,
 /// and free of obvious secret markers.
+#[must_use]
 pub fn admissible(command: &str) -> bool {
-    if command.trim().is_empty() || command.len() > MAX_COMMAND_BYTES || command.starts_with([' ', '\t']) {
+    if command.trim().is_empty()
+        || command.len() > MAX_COMMAND_BYTES
+        || command.starts_with([' ', '\t'])
+    {
         return false;
     }
     if command.contains(['\n', '\r']) {
@@ -160,6 +188,7 @@ pub fn admissible(command: &str) -> bool {
 
 /// Whether a command line carries a credential: secret words in the text, `scheme://user:pass@host`, a secret
 /// assignment (`export TOKEN=x`, `KEY=x cmd`), a secret-named long option, `-p<pass>`, `-u user:pass`, or `sudo -S`.
+#[must_use]
 pub fn secret_bearing(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
     if SECRET_MARKERS.iter().any(|marker| lower.contains(marker)) || url_with_credentials(&lower) {
@@ -198,13 +227,21 @@ pub fn secret_bearing(command: &str) -> bool {
 fn url_with_credentials(lower: &str) -> bool {
     lower.match_indices("://").any(|(at, _)| {
         let rest = &lower[at + 3..];
-        let authority = rest.split(['/', ' ', '\t', '"', '\'']).next().unwrap_or_default();
-        authority.split_once('@').is_some_and(|(userinfo, _)| userinfo.contains(':'))
+        let authority = rest
+            .split(['/', ' ', '\t', '"', '\''])
+            .next()
+            .unwrap_or_default();
+        authority
+            .split_once('@')
+            .is_some_and(|(userinfo, _)| userinfo.contains(':'))
     })
 }
 
 fn escape(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('\n', "\\n").replace('\t', "\\t").replace('\r', "\\r")
+    text.replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\t', "\\t")
+        .replace('\r', "\\r")
 }
 
 fn unescape(text: &str) -> String {
@@ -231,8 +268,12 @@ fn unescape(text: &str) -> String {
 fn compact_lines(text: &str) -> String {
     let mut totals: HashMap<String, (u64, usize)> = HashMap::new();
     for (index, line) in text.lines().enumerate() {
-        let Some((count, escaped)) = line.split_once('\t') else { continue };
-        let Ok(uses) = count.parse::<u64>() else { continue };
+        let Some((count, escaped)) = line.split_once('\t') else {
+            continue;
+        };
+        let Ok(uses) = count.parse::<u64>() else {
+            continue;
+        };
         let command = unescape(escaped);
         if uses == 0 || !admissible(&command) {
             continue;
@@ -241,7 +282,10 @@ fn compact_lines(text: &str) -> String {
         entry.0 += uses;
         entry.1 = index;
     }
-    let mut ordered: Vec<(usize, u64, String)> = totals.into_iter().map(|(text, (uses, last))| (last, uses, text)).collect();
+    let mut ordered: Vec<(usize, u64, String)> = totals
+        .into_iter()
+        .map(|(text, (uses, last))| (last, uses, text))
+        .collect();
     ordered.sort_unstable_by_key(|entry| entry.0);
     let mut out = String::new();
     for (_, uses, command) in ordered {
@@ -254,8 +298,12 @@ fn compact_lines(text: &str) -> String {
 /// entries (`: time:dur;command`), plain zsh and bash lines are accepted; multi-line entries and bash timestamps are
 /// skipped.
 fn shell_history_lines(path: &Path) -> String {
-    let Ok(mut file) = File::open(path) else { return String::new() };
-    let Ok(meta) = file.metadata() else { return String::new() };
+    let Ok(mut file) = File::open(path) else {
+        return String::new();
+    };
+    let Ok(meta) = file.metadata() else {
+        return String::new();
+    };
     let start = meta.len().saturating_sub(SEED_CAP_BYTES);
     if file.seek(SeekFrom::Start(start)).is_err() {
         return String::new();
@@ -266,7 +314,11 @@ fn shell_history_lines(path: &Path) -> String {
     }
     let text = String::from_utf8_lossy(&bytes);
     // A cut in the middle of the file starts with a partial line; drop it.
-    let body = if start > 0 { text.split_once('\n').map_or("", |(_, rest)| rest) } else { &text };
+    let body = if start > 0 {
+        text.split_once('\n').map_or("", |(_, rest)| rest)
+    } else {
+        &text
+    };
     let mut out = String::new();
     let mut continued = false;
     for line in body.lines() {
@@ -274,7 +326,10 @@ fn shell_history_lines(path: &Path) -> String {
         if was_continued || continued || line.starts_with('#') {
             continue;
         }
-        let command = match line.strip_prefix(": ").and_then(|rest| rest.split_once(';')) {
+        let command = match line
+            .strip_prefix(": ")
+            .and_then(|rest| rest.split_once(';'))
+        {
             Some((_, command)) => command,
             None => line,
         };
@@ -338,13 +393,17 @@ fn purge_filtered(path: &Path) -> io::Result<()> {
 
 /// The store locations: `$XDG_DATA_HOME/flamewm/terminal-history` and the user's shell history files.
 pub fn default_locations() -> (Option<PathBuf>, Vec<PathBuf>) {
-    let home = std::env::var_os("HOME").filter(|v| !v.is_empty()).map(PathBuf::from);
+    let home = std::env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
     let data = std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| home.as_ref().map(|home| home.join(".local/share")));
     let store = data.map(|data| data.join("flamewm/terminal-history"));
-    let seeds = home.map(|home| vec![home.join(".zsh_history"), home.join(".bash_history")]).unwrap_or_default();
+    let seeds = home
+        .map(|home| vec![home.join(".zsh_history"), home.join(".bash_history")])
+        .unwrap_or_default();
     (store, seeds)
 }
 
@@ -367,13 +426,19 @@ pub struct History {
 
 impl History {
     /// Opens the store. When it does not exist yet, it is created from the shell history files.
+    #[must_use]
     pub fn open(path: Option<PathBuf>, seeds: &[PathBuf]) -> Self {
         if let Some(path) = &path {
-            if !path.exists() {
-                let body = compact_lines(&seeds.iter().map(|seed| shell_history_lines(seed)).collect::<String>());
-                let _ = atomic_write(path, &body);
-            } else {
+            if path.exists() {
                 let _ = purge_filtered(path);
+            } else {
+                let body = compact_lines(
+                    &seeds
+                        .iter()
+                        .map(|seed| shell_history_lines(seed))
+                        .collect::<String>(),
+                );
+                let _ = atomic_write(path, &body);
             }
         }
         let mut history = Self {
@@ -390,14 +455,19 @@ impl History {
         history
     }
 
+    #[must_use]
     pub fn open_default() -> Self {
         let (path, seeds) = default_locations();
         Self::open(path, &seeds)
     }
 
     /// The best suffix that completes `prefix` from the store. Empty or absent when nothing extends it.
+    #[must_use]
     pub fn suggest(&self, prefix: &str) -> Option<&str> {
-        self.trie.best_extension(prefix).and_then(|command| command.strip_prefix(prefix)).filter(|suffix| !suffix.is_empty())
+        self.trie
+            .best_extension(prefix)
+            .and_then(|command| command.strip_prefix(prefix))
+            .filter(|suffix| !suffix.is_empty())
     }
 
     /// Picks up other windows' new lines, at most once a second. Called on key presses, never per frame.
@@ -410,7 +480,9 @@ impl History {
     /// Applies the store lines past `offset`. A complete line only: a partly written last line waits for the next sync.
     pub fn sync(&mut self) -> io::Result<()> {
         self.checked = Some(Instant::now());
-        let Some(path) = self.path.clone() else { return Ok(()) };
+        let Some(path) = self.path.clone() else {
+            return Ok(());
+        };
         let mut file = match File::open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -418,7 +490,9 @@ impl History {
         };
         let meta = file.metadata()?;
         let ident = (meta.dev(), meta.ino());
-        let same = self.file == Some(ident) && meta.len() >= self.offset && self.head_matches(&mut file)?;
+        let same = self.file == Some(ident)
+            && meta.len() >= self.offset
+            && self.head_matches(&mut file)?;
         if !same {
             self.trie = Trie::default();
             self.offset = 0;
@@ -435,7 +509,9 @@ impl History {
         if self.head.is_empty() {
             self.head = bytes[..bytes.len().min(HEAD_BYTES)].to_vec();
         }
-        let Some(end) = bytes.iter().rposition(|&b| b == b'\n') else { return Ok(()) };
+        let Some(end) = bytes.iter().rposition(|&b| b == b'\n') else {
+            return Ok(());
+        };
         for line in bytes[..end].split(|&b| b == b'\n') {
             self.apply(&String::from_utf8_lossy(line));
         }
@@ -453,8 +529,12 @@ impl History {
     }
 
     fn apply(&mut self, line: &str) {
-        let Some((count, escaped)) = line.split_once('\t') else { return };
-        let Ok(uses) = count.parse::<u64>() else { return };
+        let Some((count, escaped)) = line.split_once('\t') else {
+            return;
+        };
+        let Ok(uses) = count.parse::<u64>() else {
+            return;
+        };
         let command = unescape(escaped);
         if uses == 0 || !admissible(&command) {
             return;
@@ -465,7 +545,9 @@ impl History {
 
     /// Counts one use of `command` in the store and in this window. Filtered commands are not stored.
     pub fn record(&mut self, command: &str) -> io::Result<()> {
-        let Some(path) = self.path.clone() else { return Ok(()) };
+        let Some(path) = self.path.clone() else {
+            return Ok(());
+        };
         if !admissible(command) {
             return Ok(());
         }
@@ -480,6 +562,7 @@ impl History {
         Ok(())
     }
 
+    #[must_use]
     pub fn uses(&self, command: &str) -> Option<u64> {
         self.trie.uses(command)
     }
@@ -497,7 +580,11 @@ pub struct LineInput {
 
 impl Default for LineInput {
     fn default() -> Self {
-        Self { chars: Vec::new(), cursor: 0, known: true }
+        Self {
+            chars: Vec::new(),
+            cursor: 0,
+            known: true,
+        }
     }
 }
 
@@ -506,11 +593,13 @@ fn printable(text: &str) -> bool {
 }
 
 impl LineInput {
+    #[must_use]
     pub fn text(&self) -> String {
         self.chars.iter().collect()
     }
 
     /// True when a suggestion may be drawn: the line is exact and the cursor sits at its end.
+    #[must_use]
     pub fn is_ready(&self) -> bool {
         self.known && !self.chars.is_empty() && self.cursor == self.chars.len()
     }
@@ -606,17 +695,27 @@ mod tests {
     use super::*;
 
     fn tmp_dir(name: &str) -> PathBuf {
-        let dir = PathBuf::from("/tmp").join(format!("flamewm-suggest-{name}-{}-{}", std::process::id(), nanos()));
+        let dir = PathBuf::from("/tmp").join(format!(
+            "flamewm-suggest-{name}-{}-{}",
+            std::process::id(),
+            nanos()
+        ));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
 
     fn nanos() -> u128 {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     }
 
     fn ctrl() -> Mods {
-        Mods { ctrl: true, ..Mods::default() }
+        Mods {
+            ctrl: true,
+            ..Mods::default()
+        }
     }
 
     fn type_text(line: &mut LineInput, text: &str) {
@@ -644,7 +743,11 @@ mod tests {
     fn trie_never_suggests_the_prefix_itself() {
         let mut trie = Trie::default();
         trie.add("ls", 10, 1);
-        assert_eq!(trie.best_extension("ls"), None, "an exact match is not an extension");
+        assert_eq!(
+            trie.best_extension("ls"),
+            None,
+            "an exact match is not an extension"
+        );
         trie.add("ls -la", 1, 2);
         assert_eq!(trie.best_extension("ls"), Some("ls -la"));
     }
@@ -657,7 +760,11 @@ mod tests {
         for i in 0..(2 * MAX_COMMANDS + 10) {
             trie.add(&format!("cmd{i:05}"), 1, 2 + i as u64);
         }
-        assert!(trie.commands.len() <= 2 * MAX_COMMANDS, "{} commands kept", trie.commands.len());
+        assert!(
+            trie.commands.len() <= 2 * MAX_COMMANDS,
+            "{} commands kept",
+            trie.commands.len()
+        );
         assert_eq!(trie.best_extension("git"), Some("git status"));
         assert_eq!(trie.uses("git status"), Some(500));
     }
@@ -669,7 +776,11 @@ mod tests {
         trie.add("cargo test", 2, 2);
         assert_eq!(trie.best_extension("cargo "), Some("cargo build"));
         trie.add("cargo test", 3, 3);
-        assert_eq!(trie.best_extension("cargo "), Some("cargo test"), "5 uses beat 4");
+        assert_eq!(
+            trie.best_extension("cargo "),
+            Some("cargo test"),
+            "5 uses beat 4"
+        );
         assert_eq!(trie.uses("cargo test"), Some(5));
     }
 
@@ -684,7 +795,10 @@ mod tests {
     #[test]
     fn admissible_filters_secrets_and_leading_space() {
         assert!(admissible("git commit -m \"test\""));
-        assert!(!admissible(" git status"), "space-prefixed commands are private");
+        assert!(
+            !admissible(" git status"),
+            "space-prefixed commands are private"
+        );
         assert!(!admissible("   "));
         assert!(!admissible("mysql -p password=hunter2"));
         assert!(!admissible("curl -H X TOKEN=abc"));
@@ -703,7 +817,8 @@ mod tests {
 
     #[test]
     fn compact_sums_counts_and_keeps_last_use_order() {
-        let text = "1\tgit status\n1\tgit commit\n2\tgit status\n1\tgit commit\n0\tbroken\nnot a line\n";
+        let text =
+            "1\tgit status\n1\tgit commit\n2\tgit status\n1\tgit commit\n0\tbroken\nnot a line\n";
         // `git status` last used at line 2, `git commit` at line 3: status is older, so it comes first.
         assert_eq!(compact_lines(text), "3\tgit status\n2\tgit commit\n");
     }
@@ -750,7 +865,14 @@ mod tests {
         ] {
             assert!(!admissible(secret), "must be filtered: {secret}");
         }
-        for plain in ["ls -la", "git status", "sudo apt update", "cargo test -p flamewm-terminal", "ssh host", "cd /tmp"] {
+        for plain in [
+            "ls -la",
+            "git status",
+            "sudo apt update",
+            "cargo test -p flamewm-terminal",
+            "ssh host",
+            "cd /tmp",
+        ] {
             assert!(admissible(plain), "must be kept: {plain}");
         }
     }
@@ -759,7 +881,11 @@ mod tests {
     fn stored_secrets_are_removed_when_the_store_loads() {
         let dir = tmp_dir("purge");
         let path = dir.join("terminal-history");
-        fs::write(&path, "2\tls\n1\texport TOKEN=abc\n1\tcurl https://a:b@host/x\n3\tgit status\n").unwrap();
+        fs::write(
+            &path,
+            "2\tls\n1\texport TOKEN=abc\n1\tcurl https://a:b@host/x\n3\tgit status\n",
+        )
+        .unwrap();
         let history = History::open(Some(path.clone()), &[]);
         assert_eq!(history.uses("ls"), Some(2));
         assert_eq!(history.uses("export TOKEN=abc"), None);
@@ -799,7 +925,10 @@ mod tests {
         other.sync().unwrap();
         assert_eq!(history.uses("make"), Some(200_002));
         assert_eq!(other.uses("make"), Some(200_002));
-        assert!(fs::metadata(&path).unwrap().len() < 100, "compacted to one line");
+        assert!(
+            fs::metadata(&path).unwrap().len() < 100,
+            "compacted to one line"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -809,12 +938,21 @@ mod tests {
         let path = dir.join("terminal-history");
         let mut history = History::open(Some(path.clone()), &[]);
         // Distinct commands cannot fold, so compaction leaves the store above COMPACT_BYTES.
-        let body: String = (0..40_000).map(|i| format!("1\tcommand-{i:08}-padding-padding-padding\n")).collect();
+        let body: String = (0..40_000)
+            .map(|i| format!("1\tcommand-{i:08}-padding-padding-padding\n"))
+            .collect();
         fs::write(&path, body).unwrap();
         history.record("ls").unwrap();
         let after = fs::metadata(&path).unwrap().len();
-        assert!(after > COMPACT_BYTES, "still above the limit after folding: {after}");
-        assert!(history.compact_at >= after * 2, "next compaction waits for the store to double: {}", history.compact_at);
+        assert!(
+            after > COMPACT_BYTES,
+            "still above the limit after folding: {after}"
+        );
+        assert!(
+            history.compact_at >= after * 2,
+            "next compaction waits for the store to double: {}",
+            history.compact_at
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -832,7 +970,11 @@ mod tests {
         assert_eq!(history.uses("ls -la"), Some(2));
         assert_eq!(history.uses("secret password=1"), None);
         assert_eq!(history.suggest("git s"), Some("tatus"));
-        assert_eq!(fs::read_to_string(&zsh).unwrap().lines().count(), 4, "history files untouched");
+        assert_eq!(
+            fs::read_to_string(&zsh).unwrap().lines().count(),
+            4,
+            "history files untouched"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -872,7 +1014,10 @@ mod tests {
         assert!(line.is_ready());
         assert_eq!(line.key("backspace", Mods::default(), None), None);
         assert_eq!(line.text(), "git commit");
-        assert_eq!(line.key("return", Mods::default(), Some("\r")), Some("git commit".to_owned()));
+        assert_eq!(
+            line.key("return", Mods::default(), Some("\r")),
+            Some("git commit".to_owned())
+        );
         assert_eq!(line.text(), "", "Enter starts an empty line");
         assert!(!line.is_ready(), "an empty line has no suggestion");
     }
@@ -882,7 +1027,10 @@ mod tests {
         let mut line = LineInput::default();
         type_text(&mut line, "abc");
         line.key("left", Mods::default(), None);
-        assert!(!line.is_ready(), "cursor left of the end hides the suggestion");
+        assert!(
+            !line.is_ready(),
+            "cursor left of the end hides the suggestion"
+        );
         line.key("end", Mods::default(), None);
         assert!(line.is_ready());
         line.key("a", ctrl(), None);
@@ -908,9 +1056,17 @@ mod tests {
         line.key("up", Mods::default(), None);
         type_text(&mut line, "t");
         assert!(!line.is_ready(), "history recall makes the line unknown");
-        assert_eq!(line.key("return", Mods::default(), Some("\r")), None, "unknown line is not submitted");
+        assert_eq!(
+            line.key("return", Mods::default(), Some("\r")),
+            None,
+            "unknown line is not submitted"
+        );
         type_text(&mut line, "ls");
-        assert_eq!(line.key("return", Mods::default(), Some("\r")), Some("ls".to_owned()), "a new line is known again");
+        assert_eq!(
+            line.key("return", Mods::default(), Some("\r")),
+            Some("ls".to_owned()),
+            "a new line is known again"
+        );
     }
 
     #[test]

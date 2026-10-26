@@ -51,8 +51,9 @@ const TASKBAR_ELEMENT_HEIGHT: f32 = 44.0;
 
 /// Taskbar task icon raster edge in device pixels. The icon node is laid out
 /// in logical px and scaled by the panel's UI scale, so requesting only 25 px
-/// upscales it blurrily on HiDPI outputs; requesting the scaled edge matches
+/// upscales it blurrily on `HiDPI` outputs; requesting the scaled edge matches
 /// how desktop entries request icons.
+#[must_use]
 pub fn task_icon_px(output: Option<&flamewm_api::display::OutputSnapshot>) -> u32 {
     let scale =
         crate::runtime::panel_ui_scale(output.map_or(100, |output| output.shell_scale_percent));
@@ -306,6 +307,7 @@ pub(crate) fn project_pager(
     Ok(())
 }
 
+#[must_use]
 pub fn taskbar_css_height(logical_size: u16) -> f32 {
     if logical_size == 0 {
         TASKBAR_DEFAULT_HEIGHT
@@ -318,6 +320,7 @@ pub fn taskbar_css_height(logical_size: u16) -> f32 {
 /// lays out in CSS px at `scale_percent`, so dividing by the scale keeps the
 /// bar exactly one window wide. Unsupported scales fall back to 100%, as the
 /// panel surface does when it applies its UI scale.
+#[must_use]
 pub fn taskbar_css_width(device_width: i32, scale_percent: u16) -> f32 {
     let percent = if (100..=200).contains(&scale_percent) && scale_percent % 5 == 0 {
         scale_percent
@@ -338,10 +341,7 @@ pub(crate) fn project_taskbar_height(
     let Some(panel) = view.panel else {
         return Ok(());
     };
-    let scale_percent = view
-        .output
-        .map(|output| output.shell_scale_percent)
-        .unwrap_or(100);
+    let scale_percent = view.output.map_or(100, |output| output.shell_scale_percent);
     document.size(
         "taskbar",
         taskbar_css_width(panel.geometry.width, scale_percent),
@@ -778,7 +778,7 @@ pub fn project_start(
     let results = start_visible_results(model, category, query);
     for (name, value) in PRESENTATION_CATEGORIES {
         let visible = match value {
-            StartCategory::Power => session_available(session),
+            StartCategory::Power => session_available(*session),
             _ if value == category => true,
             _ if searching => !results.is_empty(),
             _ => !start_visible_results(model, value, query).is_empty(),
@@ -791,7 +791,7 @@ pub fn project_start(
         if query.trim().is_empty() {
             "Search applications".to_owned()
         } else {
-            format!("{} ({})", query, count)
+            format!("{query} ({count})")
         },
     )?;
     Ok(())
@@ -1033,7 +1033,7 @@ fn month_name(month: u8) -> &'static str {
 }
 
 #[must_use]
-pub(crate) fn session_available(session: &SessionCapabilities) -> bool {
+pub(crate) fn session_available(session: SessionCapabilities) -> bool {
     session.lock || session.logout || session.suspend || session.reboot || session.shutdown
 }
 
@@ -1444,6 +1444,7 @@ mod panel_template_tests {
     // hidden there, so that path's case fails) or skip the glyph bucket.
     #[test]
     fn tray_battery_button_follows_power_bucket_on_real_artifact() {
+        type Projector = fn(&mut flamewm_ui_x11::UiDocument, &crate::ShellSnapshot);
         let glyphs = glyph_node_ids("tray-battery-");
         let avail = ServiceAvailability::Available;
         let cases: [(PowerSnapshot, Option<&str>); 14] = [
@@ -1512,10 +1513,7 @@ mod panel_template_tests {
         for (power, expected) in cases {
             let mut snapshot = crate::ShellSnapshot::default();
             snapshot.system.power = power;
-            let paths: [(
-                &str,
-                fn(&mut flamewm_ui_x11::UiDocument, &crate::ShellSnapshot),
-            ); 3] = [
+            let paths: [(&str, Projector); 3] = [
                 ("sync project", |document, snapshot| {
                     let mut resolver = flamewm_integrations_linux::icons::IconResolver::new(
                         std::path::PathBuf::new(),

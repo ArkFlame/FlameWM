@@ -157,9 +157,9 @@ pub fn visible_row_count_for_kind(
 ) -> usize {
     match kind {
         crate::ContextMenuKind::Task(id) => task_menu_for_entry(panels, windows, id).len(),
-        crate::ContextMenuKind::Workspace { index } => workspaces
-            .map(|snapshot| workspace_menu(snapshot, *index).len())
-            .unwrap_or(0),
+        crate::ContextMenuKind::Workspace { index } => {
+            workspaces.map_or(0, |snapshot| workspace_menu(snapshot, *index).len())
+        }
         crate::ContextMenuKind::Taskbar => taskbar_menu().len(),
     }
 }

@@ -1,6 +1,6 @@
 //! libdbus-backed, external-reactor D-Bus pump.
 //!
-//! FlameWM deliberately does not use `dbus-tokio` or a second event loop. The FlameWM desktop backend
+//! `FlameWM` deliberately does not use `dbus-tokio` or a second event loop. The `FlameWM` desktop backend
 //! registers `watch()` with its own `MainLoopPort`, then calls `on_ready()` when that fd fires.
 //! After each turn it re-reads `watch()` and adjusts the engine registration if libdbus changed the
 //! read/write interest.

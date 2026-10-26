@@ -1,4 +1,4 @@
-//! FlameWM Settings application state and control-client contracts.
+//! `FlameWM` Settings application state and control-client contracts.
 //!
 //! The GUI process is intentionally separate from the WM process. It owns only transient UI state
 //! and cached immutable snapshots; all authoritative mutations cross Flame Control.
@@ -220,13 +220,13 @@ impl<T: ControlTransport> SettingsClient<T> {
             .map_or(0, |modes| modes.len().saturating_sub(DISPLAY_MODE_SLOTS))
     }
 
-    /// ModeId behind slot `slot` of the selected output, if that slot exists.
+    /// `ModeId` behind slot `slot` of the selected output, if that slot exists.
     #[must_use]
     pub fn display_mode_for_slot(&self, slot: usize) -> Option<ModeId> {
         self.display_mode_slots().get(slot).map(|mode| mode.id)
     }
 
-    /// ModeId at `index` across every mode of the selected output, including modes beyond
+    /// `ModeId` at `index` across every mode of the selected output, including modes beyond
     /// [`DISPLAY_MODE_SLOTS`] (indices `0..DISPLAY_MODE_SLOTS` are the slots, the rest overflow).
     #[must_use]
     pub fn display_mode_for_index(&self, index: usize) -> Option<ModeId> {
@@ -839,7 +839,7 @@ mod tests {
     }
 
     /// Stateful stand-in for the WM: every hotkey write bumps the settings revision as well as the
-    /// shortcut revision, and ApplySettings refuses any expected revision that is not current.
+    /// shortcut revision, and `ApplySettings` refuses any expected revision that is not current.
     #[derive(Default)]
     struct RevisionServer {
         settings_revision: u64,
@@ -1405,7 +1405,11 @@ mod tests {
         let mut client = SettingsClient::new(transport);
         client.refresh_displays().expect("refresh");
         assert_eq!(
-            client.ui().selected_output.as_ref().map(|id| id.as_str()),
+            client
+                .ui()
+                .selected_output
+                .as_ref()
+                .map(flamewm_api::OutputId::as_str),
             Some("DP-B")
         );
 

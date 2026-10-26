@@ -48,7 +48,7 @@ impl From<std::io::Error> for SupervisorError {
     }
 }
 
-/// Pure seam: classify a write failure. WouldBlock becomes
+/// Pure seam: classify a write failure. `WouldBlock` becomes
 /// backpressure (nonfatal); anything else stays an I/O error.
 fn classify_write_error(error: std::io::Error) -> SupervisorError {
     if error.kind() == std::io::ErrorKind::WouldBlock {
@@ -58,7 +58,7 @@ fn classify_write_error(error: std::io::Error) -> SupervisorError {
     }
 }
 
-/// Pure seam: CLOSE/SHUTDOWN swallow WouldBlock (best-effort).
+/// Pure seam: CLOSE/SHUTDOWN swallow `WouldBlock` (best-effort).
 fn close_result(result: Result<(), SupervisorError>) -> Result<(), SupervisorError> {
     match result {
         Err(SupervisorError::WouldBlock) => Ok(()),
@@ -133,8 +133,8 @@ impl QuickControlSupervisor {
     }
 
     /// Spawn the host after the panel is up. Marks child stdin
-    /// O_NONBLOCK (rustix) so parent writes never block the shell loop;
-    /// a full pipe surfaces as WouldBlock backpressure (nonfatal).
+    /// `O_NONBLOCK` (rustix) so parent writes never block the shell loop;
+    /// a full pipe surfaces as `WouldBlock` backpressure (nonfatal).
     pub fn start_after_panel(&mut self) -> Result<(), SupervisorError> {
         if self.child.is_some() {
             return Ok(());
@@ -144,8 +144,8 @@ impl QuickControlSupervisor {
         Ok(())
     }
 
-    /// Nonblocking write of one encoded line. WouldBlock maps to
-    /// SupervisorError::WouldBlock (nonfatal backpressure), never blocks.
+    /// Nonblocking write of one encoded line. `WouldBlock` maps to
+    /// `SupervisorError::WouldBlock` (nonfatal backpressure), never blocks.
     fn send(&mut self, cmd: &Command) -> Result<(), SupervisorError> {
         use std::io::Write;
         let child = self.child.as_mut().ok_or(SupervisorError::NotRunning)?;
@@ -156,13 +156,13 @@ impl QuickControlSupervisor {
     }
 
     /// Pushes the weather feed to the popup host over the same stdin line channel as OPEN.
-    /// WouldBlock is nonfatal backpressure; the caller may retry on a later tick.
+    /// `WouldBlock` is nonfatal backpressure; the caller may retry on a later tick.
     pub fn push_weather(&mut self, feed: WeatherFeed) -> Result<(), SupervisorError> {
         self.send(&Command::Weather(feed))
     }
 
     /// OPEN coalesces to newest: the newest request replaces any stalled
-    /// one; no synchronous retry after WouldBlock, the next tick's newest
+    /// one; no synchronous retry after `WouldBlock`, the next tick's newest
     /// state wins (caller passes latest state).
     pub fn open(&mut self, req: OpenRequest) -> Result<(), SupervisorError> {
         coalesce_pending_open(&mut self.pending, req.clone());
@@ -189,7 +189,7 @@ impl QuickControlSupervisor {
         self.open(req)
     }
 
-    /// CLOSE/SHUTDOWN are best-effort: WouldBlock is swallowed so a stalled
+    /// CLOSE/SHUTDOWN are best-effort: `WouldBlock` is swallowed so a stalled
     /// pipe never blocks shutdown paths.
     pub fn close(&mut self) -> Result<(), SupervisorError> {
         close_result(self.send(&Command::Close))
@@ -230,7 +230,7 @@ impl QuickControlSupervisor {
                     }
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => break,
-                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
                 Err(error) => return Err(classify_write_error(error)),
             }
         }
@@ -296,7 +296,7 @@ impl QuickControlSupervisor {
     }
 
     #[must_use]
-    pub fn restart_count(self: &Self) -> u32 {
+    pub fn restart_count(&self) -> u32 {
         self.restarts
     }
 }
@@ -438,13 +438,13 @@ mod tests {
 
     #[test]
     fn full_stdin_pipe_is_nonblocking_wouldblock_immediate() {
+        use std::io::Write;
         // Writes must return WouldBlock instead of blocking the parent.
         let mut sup = stalled_supervisor();
-        use std::io::Write;
         let stdin = sup.child.as_mut().unwrap().stdin.as_mut().unwrap();
         // Fill the pipe until the kernel refuses; must stay nonblocking.
         let start = std::time::Instant::now();
-        let chunk = [0u8; 65536];
+        let chunk = vec![0u8; 65536];
         let mut saw_wouldblock = false;
         for _ in 0..256 {
             match stdin.write(&chunk) {
@@ -476,16 +476,15 @@ mod tests {
 
     #[test]
     fn open_after_stall_stays_nonblocking() {
+        use std::io::Write;
         // Direct WouldBlock mapping: a second OPEN after backpressure
         // returns immediately rather than blocking the shell loop.
         let mut sup = stalled_supervisor();
-        use std::io::Write;
-        let chunk = [0u8; 65536];
+        let chunk = vec![0u8; 65536];
         for _ in 0..256 {
             let stdin = sup.child.as_mut().unwrap().stdin.as_mut().unwrap();
-            match stdin.write(&chunk) {
-                Ok(_) => {}
-                Err(_) => break,
+            if stdin.write(&chunk).is_err() {
+                break;
             }
         }
         let start = std::time::Instant::now();

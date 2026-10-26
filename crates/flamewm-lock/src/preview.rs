@@ -23,6 +23,7 @@ pub struct PreviewInput {
 
 impl PreviewInput {
     /// Builds a sample from the raw pointer mask, keeping only the button bits.
+    #[must_use]
     pub fn new(x: i32, y: i32, mask: u32, keys: [u8; 32]) -> Self {
         Self {
             x,
@@ -36,6 +37,7 @@ impl PreviewInput {
 /// `true` when the preview must close. Inside the grace window nothing dismisses.
 /// After it: any change of pointer position (even 1 px), any newly pressed mouse
 /// button, or any newly pressed key.
+#[must_use]
 pub fn dismisses(since_map: Duration, previous: &PreviewInput, current: &PreviewInput) -> bool {
     if since_map < PREVIEW_GRACE {
         return false;

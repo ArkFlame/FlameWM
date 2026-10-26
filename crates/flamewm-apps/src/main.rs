@@ -1,4 +1,4 @@
-//! One executable for the FlameWM applications, installed once with every application name as a
+//! One executable for the `FlameWM` applications, installed once with every application name as a
 //! hard link to it.
 //!
 //! The applications statically link the same renderer, image decoders, X11 and D-Bus code. As

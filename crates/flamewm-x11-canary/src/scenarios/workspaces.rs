@@ -42,9 +42,9 @@ fn current_workspace(canary: &crate::Canary) -> Option<u32> {
 
 /// Sticky colour of one pixel from its `r, g, b` channels.
 fn classify(r: u8, g: u8, b: u8) -> StickyPixel {
-    if r >= 220 && g >= 190 && g <= 250 && b <= 140 && r > g + 20 {
+    if r >= 220 && (190..=250).contains(&g) && b <= 140 && r > g + 20 {
         StickyPixel::Yellow
-    } else if r >= 160 && r <= 225 && g >= 200 && b >= 70 && b <= 190 && g > r + 15 {
+    } else if (160..=225).contains(&r) && g >= 200 && (70..=190).contains(&b) && g > r + 15 {
         StickyPixel::Green
     } else {
         StickyPixel::Other
@@ -93,6 +93,7 @@ fn color_probe(bounds: ColorBounds) -> (i16, i16) {
     )
 }
 
+#[allow(clippy::option_option)]
 fn sticky_scan(canary: &crate::Canary, color: StickyPixel) -> Option<Option<ColorBounds>> {
     let (width, height) = canary.root_geometry();
     let data = canary
@@ -117,7 +118,7 @@ fn sticky_pixel(canary: &crate::Canary, point: (i16, i16)) -> StickyPixel {
     classify(r, g, b)
 }
 
-fn sticky_signature(canary: &crate::Canary, probes: &[(i16, i16); 2]) -> StickySignature {
+fn sticky_signature(canary: &crate::Canary, probes: [(i16, i16); 2]) -> StickySignature {
     StickySignature {
         yellow_probe: sticky_pixel(canary, probes[0]),
         green_probe: sticky_pixel(canary, probes[1]),
@@ -270,7 +271,7 @@ pub fn run_t21_t22(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
         return fail("scenario=T21-T22 switched_B_not_observable_on_workspace_1".to_owned());
     };
     let switched_yellow = sticky_color_present(canary, StickyPixel::Yellow);
-    let switched = sticky_signature(canary, &[yellow_probe, green_probe]);
+    let switched = sticky_signature(canary, [yellow_probe, green_probe]);
     if switched != expected_sticky_signature(1) || switched_yellow != Some(false) {
         return fail(format!(
             "scenario=T21-T22 switched_invalid workspace=1 A_present={switched_yellow:?} B={:?} expected=A-absent/B-visible",
@@ -281,7 +282,7 @@ pub fn run_t21_t22(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
         return fail("scenario=T21-T22 setup_workspace=0 failed after_discovering_B".to_owned());
     }
     let probes = [yellow_probe, green_probe];
-    let mut before = sticky_signature(canary, &probes);
+    let mut before = sticky_signature(canary, probes);
     if before != expected_sticky_signature(0) {
         return fail(format!(
             "scenario=T21-T22 baseline_invalid_after_probe_setup A={:?} B={:?} expected=A-visible/B-absent",
@@ -295,7 +296,7 @@ pub fn run_t21_t22(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
     let mut clicked = 0usize;
     let mut max_us = 0u128;
     for iteration in 0..WORKSPACE_CONVERGENCE_SAMPLES {
-        let target = if iteration % 2 == 0 { 1 } else { 0 };
+        let target = u32::from(iteration % 2 == 0);
         let sent = real_workspace_click(canary, target);
         if sent {
             clicked += 1;
@@ -307,7 +308,7 @@ pub fn run_t21_t22(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
         let mut converged = false;
         while Instant::now() <= deadline {
             observed = current_workspace(canary);
-            after = sticky_signature(canary, &probes);
+            after = sticky_signature(canary, probes);
             if observed == Some(target) && after == expected_sticky_signature(target) {
                 converged = true;
                 break;
@@ -483,7 +484,7 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     )
 }
 
-/// T12: workspace churn — cycle _NET_CURRENT_DESKTOP, verify targets follow
+/// T12: workspace churn — cycle _`NET_CURRENT_DESKTOP`, verify targets follow
 /// visibility (viewable on current or sticky-listed), then restore.
 pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     if canary.intern("_NET_CURRENT_DESKTOP").is_none() {

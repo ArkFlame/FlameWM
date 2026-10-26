@@ -276,8 +276,8 @@ fn area_pixel(natural: &RgbaImage, column: &(usize, Vec<f32>), row: &(usize, Vec
         for (col_offset, col_weight) in column.1.iter().enumerate() {
             let weight = row_weight * col_weight;
             let index = (base + column.0 + col_offset) * 4;
-            for channel in 0..4 {
-                acc[channel] += weight * f32::from(natural.pixels[index + channel]);
+            for (sum, &value) in acc.iter_mut().zip(&natural.pixels[index..index + 4]) {
+                *sum += weight * f32::from(value);
             }
         }
     }
@@ -614,12 +614,21 @@ mod output_layout_tests {
                 pixels.extend_from_slice(&[(x * 37) as u8, (y * 91) as u8, 200, 255]);
             }
         }
-        RgbaImage { width, height, pixels }
+        RgbaImage {
+            width,
+            height,
+            pixels,
+        }
     }
 
     fn at(image: &RgbaImage, x: u32, y: u32) -> [u8; 4] {
         let i = (y * image.width + x) as usize * 4;
-        [image.pixels[i], image.pixels[i + 1], image.pixels[i + 2], image.pixels[i + 3]]
+        [
+            image.pixels[i],
+            image.pixels[i + 1],
+            image.pixels[i + 2],
+            image.pixels[i + 3],
+        ]
     }
 
     #[test]
@@ -649,8 +658,8 @@ mod output_layout_tests {
         let natural = gradient(64, 32);
         let fit = parse("fill");
         let outputs = [(0, 0, 8u32, 4u32), (8, 0, 6, 5)];
-        let whole = compose_outputs_region(&natural, (14, 5), &outputs, fit, (0, 0, 14, 5))
-            .expect("whole");
+        let whole =
+            compose_outputs_region(&natural, (14, 5), &outputs, fit, (0, 0, 14, 5)).expect("whole");
         let crop = compose_outputs_region(&natural, (14, 5), &outputs, fit, (5, 1, 6, 3))
             .expect("seam crop");
         for y in 0..3 {
@@ -665,11 +674,11 @@ mod output_layout_tests {
         let natural = gradient(64, 32);
         let fit = parse("fill");
         let outputs = [(0, 0, 8u32, 4u32)];
-        let partial = compose_outputs_region(&natural, (8, 6), &outputs, fit, (0, 0, 8, 6))
-            .expect("partial");
+        let partial =
+            compose_outputs_region(&natural, (8, 6), &outputs, fit, (0, 0, 8, 6)).expect("partial");
         assert_eq!(at(&partial, 3, 5), BACKGROUND, "row below the output");
-        let single = compose_outputs_region(&natural, (14, 5), &[], fit, (0, 0, 14, 5))
-            .expect("one root");
+        let single =
+            compose_outputs_region(&natural, (14, 5), &[], fit, (0, 0, 14, 5)).expect("one root");
         let direct = compose(&natural, 14, 5, fit).expect("direct");
         assert_eq!(single.pixels, direct.pixels);
         assert!(compose_outputs_region(&natural, (14, 5), &outputs, fit, (0, 0, 0, 3)).is_none());

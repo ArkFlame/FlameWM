@@ -515,7 +515,7 @@ pub struct Animator {
 }
 
 impl Animator {
-    /// Creates an animator. `xrender_transform` is the XRender transform capability;
+    /// Creates an animator. `xrender_transform` is the `XRender` transform capability;
     /// without it every transition is immediate, so no fake effect is drawn.
     #[must_use]
     pub fn new(xrender_transform: bool, settings: Settings) -> Self {
@@ -629,23 +629,21 @@ impl Animator {
         self.timeline.prune(now);
         let timeline = &self.timeline;
         let mut out = Vec::with_capacity(self.flights.len());
-        self.flights
-            .retain(|flight| match timeline.progress(flight.id, now) {
-                Some(progress) => {
-                    out.push(Tick::Frame {
-                        client: flight.client,
-                        progress,
-                    });
-                    true
-                }
-                None => {
-                    out.push(Tick::Complete {
-                        client: flight.client,
-                        effect: flight.effect,
-                    });
-                    false
-                }
-            });
+        self.flights.retain(|flight| {
+            if let Some(progress) = timeline.progress(flight.id, now) {
+                out.push(Tick::Frame {
+                    client: flight.client,
+                    progress,
+                });
+                true
+            } else {
+                out.push(Tick::Complete {
+                    client: flight.client,
+                    effect: flight.effect,
+                });
+                false
+            }
+        });
         out
     }
 
@@ -824,12 +822,12 @@ mod tests {
         let forward_end = t0 + Duration::from_millis(200);
         let p_forward = match a.tick(forward_end)[0] {
             Tick::Frame { progress, .. } => progress,
-            other => panic!("expected frame, got {other:?}"),
+            other @ Tick::Complete { .. } => panic!("expected frame, got {other:?}"),
         };
         a.start(7, Effect::Restore, forward_end);
         let p_back = match a.tick(forward_end + Duration::from_millis(1))[0] {
             Tick::Frame { progress, .. } => progress,
-            other => panic!("expected frame, got {other:?}"),
+            other @ Tick::Complete { .. } => panic!("expected frame, got {other:?}"),
         };
         assert!(p_back <= p_forward, "reverse must not jump forward");
     }

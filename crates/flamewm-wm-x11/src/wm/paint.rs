@@ -23,7 +23,7 @@ pub(crate) fn chrome_wait_cap(
     Some(wait.map_or(remaining, |wait| wait.min(remaining)))
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     /// True while `client` has an activated move; its titlebar repaints are paced.
     fn is_moving(&self, client: Window) -> bool {
         matches!(
@@ -224,37 +224,38 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         // Single chrome paint path: delegate scene build to chrome_runtime
         // (J08 paint_plan seam); this owner only bridges cached rasters.
-        let titlebar_height = u16::try_from(self.extents_for(client).titlebar_h)
-            .unwrap_or(self.titlebar_height());
+        let titlebar_height =
+            u16::try_from(self.extents_for(client).titlebar_h).unwrap_or(self.titlebar_height());
         if titlebar_height == 0 {
             // No band to paint; the frame keeps its flat background and the client covers it.
             return Ok(());
         }
         let Some((chrome_state, identity, icon, frame, outer)) =
             self.clients.get(&client).map(|state| {
-            (
-                chrome_runtime::ChromeState {
-                    frame_w: state.outer.width.max(1),
-                    frame_h: state.outer.height.max(1),
-                    titlebar_height,
-                    active: self.active.is_none_or(|current| current == client),
-                    hover: state.hover_control,
-                    pressed: self.pressed_control(client),
-                    maximized: state.is_maximized(),
-                    fullscreen: state.is_fullscreen(),
-                    floating: state.is_floating(),
-                    tokens: self.decoration_tokens,
-                },
-                chrome_runtime::ChromeIdentity {
-                    title: state.title.clone(),
-                    wm_instance: state.wm_instance.clone(),
-                    wm_class: state.wm_class.clone(),
-                },
-                state.icon.clone(),
-                state.frame,
-                state.outer,
-            )
-        }) else {
+                (
+                    chrome_runtime::ChromeState {
+                        frame_w: state.outer.width.max(1),
+                        frame_h: state.outer.height.max(1),
+                        titlebar_height,
+                        active: self.active.is_none_or(|current| current == client),
+                        hover: state.hover_control,
+                        pressed: self.pressed_control(client),
+                        maximized: state.is_maximized(),
+                        fullscreen: state.is_fullscreen(),
+                        floating: state.is_floating(),
+                        tokens: self.decoration_tokens,
+                    },
+                    chrome_runtime::ChromeIdentity {
+                        title: state.title.clone(),
+                        wm_instance: state.wm_instance.clone(),
+                        wm_class: state.wm_class.clone(),
+                    },
+                    state.icon.clone(),
+                    state.frame,
+                    state.outer,
+                )
+            })
+        else {
             return Ok(());
         };
         let _paint_guard = flamewm_profiler::start("wm.chrome.paint");
@@ -269,12 +270,9 @@ impl<'a, C: Connection> Wm<'a, C> {
         runtime.scene_for(&identity, chrome_state, icon);
         if let Some(renderer) = self.renderer.as_ref() {
             let mut renderer = renderer.borrow_mut();
-            if let Err(error) = runtime.paint_cached(
-                &mut renderer,
-                u64::from(frame),
-                (outer.x, outer.y),
-                root,
-            ) {
+            if let Err(error) =
+                runtime.paint_cached(&mut renderer, u64::from(frame), (outer.x, outer.y), root)
+            {
                 // A failed chrome paint leaves the frame's dark background visible
                 // during resize/maximize. Surface the error instead of silently
                 // continuing as though the titlebar was painted successfully.

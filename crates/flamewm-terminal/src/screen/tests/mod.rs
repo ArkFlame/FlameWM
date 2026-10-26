@@ -7,7 +7,14 @@ fn feed(screen: &mut Screen, bytes: &[u8]) {
 }
 
 fn text(screen: &Screen, row: usize) -> String {
-    screen.line(row).iter().filter(|c| c.attrs & attr::SPACER == 0).map(|c| c.ch).collect::<String>().trim_end().to_owned()
+    screen
+        .line(row)
+        .iter()
+        .filter(|c| c.attrs & attr::SPACER == 0)
+        .map(|c| c.ch)
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
 }
 
 #[test]
@@ -46,12 +53,24 @@ fn decawm_off_overwrites_the_last_column() {
 #[test]
 fn sgr_sets_attributes_and_colours_in_all_forms() {
     let mut screen = Screen::new(40, 2, 10);
-    feed(&mut screen, b"\x1b[1;3;4;7mA\x1b[0m\x1b[31;42mB\x1b[38;5;200mC\x1b[38;2;1;2;3;48:2::9:8:7mD\x1b[91mE");
+    feed(
+        &mut screen,
+        b"\x1b[1;3;4;7mA\x1b[0m\x1b[31;42mB\x1b[38;5;200mC\x1b[38;2;1;2;3;48:2::9:8:7mD\x1b[91mE",
+    );
     let row = screen.line(0);
-    assert_eq!(row[0].attrs, attr::BOLD | attr::ITALIC | attr::UNDERLINE | attr::INVERSE);
-    assert_eq!((row[1].fg, row[1].bg, row[1].attrs), (Color::Indexed(1), Color::Indexed(2), 0));
+    assert_eq!(
+        row[0].attrs,
+        attr::BOLD | attr::ITALIC | attr::UNDERLINE | attr::INVERSE
+    );
+    assert_eq!(
+        (row[1].fg, row[1].bg, row[1].attrs),
+        (Color::Indexed(1), Color::Indexed(2), 0)
+    );
     assert_eq!(row[2].fg, Color::Indexed(200));
-    assert_eq!((row[3].fg, row[3].bg), (Color::Rgb(1, 2, 3), Color::Rgb(9, 8, 7)));
+    assert_eq!(
+        (row[3].fg, row[3].bg),
+        (Color::Rgb(1, 2, 3), Color::Rgb(9, 8, 7))
+    );
     assert_eq!(row[4].fg, Color::Indexed(9));
 }
 
@@ -65,7 +84,11 @@ fn scroll_region_limits_linefeed_scrolling_and_keeps_outside_rows() {
     assert_eq!(text(&screen, 2), "4");
     assert_eq!(text(&screen, 3), "");
     assert_eq!(text(&screen, 4), "5");
-    assert_eq!(screen.scrollback_len(), 0, "a partial region must not feed scrollback");
+    assert_eq!(
+        screen.scrollback_len(),
+        0,
+        "a partial region must not feed scrollback"
+    );
 }
 
 #[test]
@@ -114,13 +137,19 @@ fn insert_and_delete_characters_shift_the_line() {
 fn device_status_and_attributes_produce_replies() {
     let mut screen = Screen::new(10, 5, 0);
     feed(&mut screen, b"\x1b[3;7H\x1b[6n\x1b[c\x1b[5n");
-    assert_eq!(String::from_utf8(screen.take_replies()).unwrap(), "\x1b[3;7R\x1b[?62;22c\x1b[0n");
+    assert_eq!(
+        String::from_utf8(screen.take_replies()).unwrap(),
+        "\x1b[3;7R\x1b[?62;22c\x1b[0n"
+    );
 }
 
 #[test]
 fn modes_and_title_are_tracked() {
     let mut screen = Screen::new(10, 5, 0);
-    feed(&mut screen, b"\x1b[?1h\x1b[?2004h\x1b[?25l\x1b]2;vim\x07\x1b[6 q");
+    feed(
+        &mut screen,
+        b"\x1b[?1h\x1b[?2004h\x1b[?25l\x1b]2;vim\x07\x1b[6 q",
+    );
     assert!(screen.app_cursor);
     assert!(screen.bracketed_paste);
     assert!(!screen.cursor_visible);
@@ -174,9 +203,17 @@ fn rewriting_identical_cells_leaves_rows_clean() {
     feed(&mut screen, b"\x1b[31mab\x1b[0m");
     assert_eq!(screen.take_dirty(), Dirty::All);
     feed(&mut screen, b"\x1b[H\x1b[31mab\x1b[0m\x1b[K");
-    assert_eq!(screen.take_dirty(), Dirty::Rows(vec![]), "identical text and erase of blank cells mark nothing");
+    assert_eq!(
+        screen.take_dirty(),
+        Dirty::Rows(vec![]),
+        "identical text and erase of blank cells mark nothing"
+    );
     feed(&mut screen, b"\x1b[1;2Hz");
-    assert_eq!(screen.take_dirty(), Dirty::Rows(vec![0]), "a changed cell marks its row");
+    assert_eq!(
+        screen.take_dirty(),
+        Dirty::Rows(vec![0]),
+        "a changed cell marks its row"
+    );
 }
 
 #[test]
@@ -192,12 +229,22 @@ fn block_art_row_stays_within_the_run_pool() {
     let mut screen = Screen::new(40, 1, 10);
     let mut bytes = Vec::new();
     for i in 0..40 {
-        bytes.extend_from_slice(format!("\x1b[38;2;{};0;0m█", if i % 2 == 0 { 200 } else { 100 }).as_bytes());
+        bytes.extend_from_slice(
+            format!("\x1b[38;2;{};0;0m█", if i % 2 == 0 { 200 } else { 100 }).as_bytes(),
+        );
     }
     feed(&mut screen, &bytes);
     let palette = crate::themes::builtin_themes()[0].palette.clone();
-    let options = crate::view::GridOptions { view_offset: 0, selection: None, cursor: false, cursor_shape: CursorShape::Block };
+    let options = crate::view::GridOptions {
+        view_offset: 0,
+        selection: None,
+        cursor: false,
+        cursor_shape: CursorShape::Block,
+    };
     let runs = &crate::view::grid_runs(&screen, &palette, &options)[0];
     assert_eq!(runs.len(), 40);
-    assert!(runs.len() <= crate::pool::POOL_RUNS, "a row past the pool would lose its block shapes");
+    assert!(
+        runs.len() <= crate::pool::POOL_RUNS,
+        "a row past the pool would lose its block shapes"
+    );
 }

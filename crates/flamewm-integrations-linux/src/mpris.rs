@@ -557,7 +557,7 @@ fn parse_property_changes(
         let value = unwrap_variant(value);
         match (interface, key.as_str()) {
             (MPRIS_ROOT_INTERFACE, "Identity") => {
-                changes.identity = Some(item_string(&value, "MPRIS identity")?)
+                changes.identity = Some(item_string(&value, "MPRIS identity")?);
             }
             (MPRIS_PLAYER_INTERFACE, "PlaybackStatus") => {
                 changes.playback = Some(
@@ -567,19 +567,19 @@ fn parse_property_changes(
                         "Stopped" => PlaybackState::Stopped,
                         _ => PlaybackState::Unavailable,
                     },
-                )
+                );
             }
             (MPRIS_PLAYER_INTERFACE, "CanPlay") => {
-                changes.can_play = Some(item_bool(&value, "MPRIS CanPlay")?)
+                changes.can_play = Some(item_bool(&value, "MPRIS CanPlay")?);
             }
             (MPRIS_PLAYER_INTERFACE, "CanPause") => {
-                changes.can_pause = Some(item_bool(&value, "MPRIS CanPause")?)
+                changes.can_pause = Some(item_bool(&value, "MPRIS CanPause")?);
             }
             (MPRIS_PLAYER_INTERFACE, "CanGoNext") => {
-                changes.can_next = Some(item_bool(&value, "MPRIS CanGoNext")?)
+                changes.can_next = Some(item_bool(&value, "MPRIS CanGoNext")?);
             }
             (MPRIS_PLAYER_INTERFACE, "CanGoPrevious") => {
-                changes.can_previous = Some(item_bool(&value, "MPRIS CanGoPrevious")?)
+                changes.can_previous = Some(item_bool(&value, "MPRIS CanGoPrevious")?);
             }
             (MPRIS_PLAYER_INTERFACE, "Metadata") => parse_metadata(&value, &mut changes)?,
             _ => {}

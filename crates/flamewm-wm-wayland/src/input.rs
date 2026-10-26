@@ -183,7 +183,7 @@ impl State {
                 }
             }
             ACTION_OPEN_TERMINAL_SUPER | ACTION_OPEN_TERMINAL_CTRL_ALT => {
-                self.spawn("flamewm-terminal", &[])
+                self.spawn("flamewm-terminal", &[]);
             }
             ACTION_OPEN_FILES_SUPER | ACTION_OPEN_FILES_CTRL_ALT => {
                 let home = std::env::var_os("HOME").unwrap_or_else(|| "/".into());
@@ -191,7 +191,7 @@ impl State {
             }
             ACTION_SCREENSHOT_FULL => self.spawn("flamewm-screenshot", &["--full", "--copy"]),
             ACTION_SCREENSHOT_REGION => {
-                self.spawn("flamewm-screenshot", &["--region", "--annotate", "--copy"])
+                self.spawn("flamewm-screenshot", &["--region", "--annotate", "--copy"]);
             }
             ACTION_SCREENSHOT_WINDOW => self.spawn("flamewm-screenshot", &["--active", "--copy"]),
             // The shell owns the launcher and start menu; it listens for the same control signals

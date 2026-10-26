@@ -242,6 +242,7 @@ impl ExternalDecorationRenderer {
     /// Draw `text` with `font` family at (`x`, `baseline`) in `color`.
     /// NUL bytes are rejected explicitly; a missing Xft backend errors
     /// (no fallback paint). Caller supplies pixel size and weight.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_title(
         &mut self,
         text: &str,

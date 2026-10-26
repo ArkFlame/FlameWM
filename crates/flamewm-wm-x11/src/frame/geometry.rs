@@ -488,7 +488,7 @@ pub fn plan_initial_map(
 
 /// Only the unpositioned first map of a normal top-level window may follow the mouse.
 /// A non-zero pre-map origin without position flags is ambiguous: it may have
-/// come from an application ConfigureWindow, so we conservatively preserve it.
+/// come from an application `ConfigureWindow`, so we conservatively preserve it.
 #[must_use]
 pub fn can_place_near_pointer(
     adopt: bool,
@@ -1292,12 +1292,12 @@ mod tests {
             frame_to_client_root(p.frame, EXT).size_u32()
         };
         let fixed = min_max((275, 116), (275, 116));
-        assert_eq!(client_size(fixed.clone(), 100, 50), (275, 116));
-        assert_eq!(client_size(fixed.clone(), 10, 10), (275, 116));
+        assert_eq!(client_size(fixed, 100, 50), (275, 116));
+        assert_eq!(client_size(fixed, 10, 10), (275, 116));
         assert_eq!(client_size(fixed, 400, 300), (275, 116));
         let ranged = min_max((200, 100), (300, 200));
-        assert_eq!(client_size(ranged.clone(), 50, 50), (200, 100));
-        assert_eq!(client_size(ranged.clone(), 500, 500), (300, 200));
+        assert_eq!(client_size(ranged, 50, 50), (200, 100));
+        assert_eq!(client_size(ranged, 500, 500), (300, 200));
         let incs = ClientSizeHints {
             base: Some((0, 0)),
             inc: Some((10, 20)),

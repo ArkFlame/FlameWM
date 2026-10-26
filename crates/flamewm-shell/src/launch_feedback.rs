@@ -1,6 +1,6 @@
 //! Passive X11 startup-notification observer and cursor-adjacent icon overlay.
 //! No global cursor changes, pointer grabs or idle polling. One retained overlay is
-//! created only on demand and its XShape input region is empty.
+//! created only on demand and its `XShape` input region is empty.
 
 use std::os::fd::RawFd;
 use std::path::PathBuf;
@@ -119,7 +119,7 @@ impl LaunchFeedback {
         );
     }
 
-    /// No motion events are assumed to originate from XFixes cursor-image subscriptions.
+    /// No motion events are assumed to originate from `XFixes` cursor-image subscriptions.
     /// One active-only query per 50ms follows the pointer above *all* client windows.
     pub fn tick(
         &mut self,
@@ -150,7 +150,7 @@ impl LaunchFeedback {
             })
             .unwrap_or("breeze");
         if self.icon_theme != icon_theme {
-            self.icon_theme = icon_theme.to_owned();
+            icon_theme.clone_into(&mut self.icon_theme);
             if let Some(loader) = &mut self.loader {
                 loader.set_theme(icon_theme);
             }
@@ -167,8 +167,7 @@ impl LaunchFeedback {
         };
         let output = output_at(displays, px, py);
         let scale = output
-            .map(|o| u32::from(o.shell_scale_percent))
-            .unwrap_or(100)
+            .map_or(100, |o| u32::from(o.shell_scale_percent))
             .clamp(50, 400);
         let side = ((BASE_ICON as u32 * scale + 50) / 100).clamp(8, 64);
         // Compare borrowed sequence fields before allocating a new request key.
@@ -365,15 +364,14 @@ impl LaunchFeedback {
         }
         Ok(())
     }
-    pub fn counters(&self) -> flamewm_applications::launch_feedback::Counters {
-        self.sequences.counters
-    }
 }
 
-/// Convert RGBA8 icon alpha into per-row runs for XShape's 1-bit bounding region.
+/// Convert RGBA8 icon alpha into per-row runs for `XShape`'s 1-bit bounding region.
 /// A small alpha cutoff preserves antialiased edges without expanding transparent padding.
 fn alpha_shape_spans(pixels: &[u8], width: u32, height: u32) -> Option<Vec<(u32, u32, u32)>> {
-    let len = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    let len = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
     if width == 0 || height == 0 || width > 64 || height > 64 || pixels.len() != len {
         return None;
     }
@@ -447,7 +445,7 @@ fn badge_position(
     scale: u32,
     output: Option<&OutputSnapshot>,
 ) -> (i32, i32) {
-    let offset = ((BASE_OFFSET as i64 * i64::from(scale) + 50) / 100) as i32;
+    let offset = ((i64::from(BASE_OFFSET) * i64::from(scale) + 50) / 100) as i32;
     let (mut x, mut y) = (px.saturating_add(offset), py.saturating_add(offset));
     if let Some(out) = output {
         let r = out.geometry;
@@ -548,9 +546,12 @@ mod tests {
         for (x, y) in [(1, 1), (2, 1), (2, 2)] {
             rgba[(y * 4 + x) * 4 + 3] = 255;
         }
-        assert_eq!(alpha_shape_spans(&rgba, 4, 4), Some(vec![(1, 1, 3), (2, 2, 3)]));
+        assert_eq!(
+            alpha_shape_spans(&rgba, 4, 4),
+            Some(vec![(1, 1, 3), (2, 2, 3)])
+        );
         assert_eq!(alpha_shape_spans(&[], 4, 4), None);
-        assert_eq!(alpha_shape_spans(&vec![0; 16 * 4], 4, 4), None);
+        assert_eq!(alpha_shape_spans(&[0; 16 * 4], 4, 4), None);
     }
 
     #[test]

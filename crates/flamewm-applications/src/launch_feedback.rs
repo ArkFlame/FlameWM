@@ -28,6 +28,7 @@ pub enum MessageKind {
 }
 
 /// Values use the startup-notification quoting/escaping rules, not shell syntax.
+#[must_use]
 pub fn parse_message(message: &str) -> Option<StartupMessage> {
     if message.len() > MAX_MESSAGE || message.as_bytes().contains(&0) {
         return None;
@@ -206,11 +207,11 @@ impl Sequences {
                 sequence.icon.clone_from(&sequence.wm_class);
             } else if let Some(bin) = message.values.get("BIN") {
                 // Executable paths are not theme icon names; use their basename.
-                sequence.icon = std::path::Path::new(bin)
+                std::path::Path::new(bin)
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or(bin)
-                    .to_owned();
+                    .clone_into(&mut sequence.icon);
             }
         }
     }
@@ -252,15 +253,18 @@ impl Sequences {
         self.pending_changes
             .retain(|_, (at, _)| now.saturating_duration_since(*at) <= Duration::from_secs(60));
     }
+    #[must_use]
     pub fn visible(&self) -> Option<&Sequence> {
         self.active
             .values()
             .filter(|seq| !seq.silent)
             .max_by_key(|seq| seq.started)
     }
+    #[must_use]
     pub fn active(&self) -> bool {
         !self.active.is_empty()
     }
+    #[must_use]
     pub fn next_deadline(&self) -> Option<Instant> {
         self.active.values().map(|s| s.started + TIMEOUT).min()
     }
@@ -295,6 +299,7 @@ pub fn new_id() -> String {
 
 /// Native broadcast uses a unique unmapped sender window; no cursor mutation or X grab.
 /// Failure to contact X is nonfatal and must never prevent the actual launch.
+#[must_use]
 pub fn broadcast(kind: MessageKind, id: &str, name: &str, icon: &str, wm_class: &str) -> bool {
     let Ok((conn, screen)) = x11rb::connect(None) else {
         return false;

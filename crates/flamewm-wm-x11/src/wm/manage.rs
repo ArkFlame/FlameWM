@@ -1,6 +1,6 @@
 use super::*;
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn scan_existing(&mut self) -> Result<(), ReplyOrIdError> {
         let root = self.screen().root;
         let tree = self.conn.query_tree(root)?.reply()?;
@@ -245,7 +245,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             .filter(|reply| reply.same_screen);
             match pointer {
                 Some(pointer) => {
-                    let point = RootPoint::new(i32::from(pointer.root_x), i32::from(pointer.root_y));
+                    let point =
+                        RootPoint::new(i32::from(pointer.root_x), i32::from(pointer.root_y));
                     let work_area = self
                         .output_for_point(point.x, point.y, Rect::new(point.x, point.y, 1, 1))
                         .map_or(work_root, |output| RootRect::from_legacy(output.work_area));
@@ -275,8 +276,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             WindowClass::INPUT_OUTPUT,
             0,
             &CreateWindowAux::new()
-                .background_pixel(0x1b1e20)
-                .border_pixel(0x1b1e20)
+                .background_pixel(0x001b_1e20)
+                .border_pixel(0x001b_1e20)
                 .event_mask(
                     EventMask::EXPOSURE
                         | EventMask::SUBSTRUCTURE_NOTIFY
@@ -441,7 +442,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         let floating = self
             .clients
             .get(&window)
-            .is_some_and(|state| state.is_floating());
+            .is_some_and(super::super::client::ManagedClient::is_floating);
         self.clear_frame_shape(frame, outer, floating)?;
         self.bind_child_cursors(window);
 

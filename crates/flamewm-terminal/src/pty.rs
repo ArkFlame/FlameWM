@@ -37,9 +37,17 @@ pub struct Launch {
 
 impl Launch {
     /// The user's shell (`$SHELL`, else `/bin/sh`), started in `cwd`.
+    #[must_use]
     pub fn shell(cwd: Option<std::path::PathBuf>) -> Self {
-        let program = std::env::var("SHELL").ok().filter(|value| !value.trim().is_empty()).unwrap_or_else(|| "/bin/sh".into());
-        Self { program, args: Vec::new(), cwd }
+        let program = std::env::var("SHELL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "/bin/sh".into());
+        Self {
+            program,
+            args: Vec::new(),
+            cwd,
+        }
     }
 }
 
@@ -48,11 +56,16 @@ impl PtyProcess {
     pub fn spawn(launch: &Launch, size: PtySize) -> io::Result<Self> {
         // Close-on-exec: a child holding the master never sees the terminal hang up, so closing the window would
         // leave the shell and everything it started running.
-        let master: OwnedFd = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)?;
+        let master: OwnedFd =
+            openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)?;
         grantpt(&master)?;
         unlockpt(&master)?;
         let slave_name = ptsname(&master, Vec::new())?;
-        let slave_path = Path::new(std::ffi::OsStr::new(slave_name.to_str().map_err(|error| io::Error::other(error.to_string()))?));
+        let slave_path = Path::new(std::ffi::OsStr::new(
+            slave_name
+                .to_str()
+                .map_err(|error| io::Error::other(error.to_string()))?,
+        ));
         tcsetwinsize(&master, winsize(size))?;
         let master = File::from(master);
         let slave = OpenOptions::new().read(true).write(true).open(slave_path)?;
@@ -65,24 +78,43 @@ impl PtyProcess {
             .name("flamewm-terminal-write".into())
             .spawn(move || {
                 for bytes in queue {
-                    if writable.write_all(&bytes).and_then(|()| writable.flush()).is_err() {
+                    if writable
+                        .write_all(&bytes)
+                        .and_then(|()| writable.flush())
+                        .is_err()
+                    {
                         break;
                     }
                 }
             })?;
-        Ok(Self { child, master, writer, reader: Some(reader) })
+        Ok(Self {
+            child,
+            master,
+            writer,
+            reader: Some(reader),
+        })
     }
 
     /// Whether the line discipline is canonical. Shell line editors clear ICANON while they read keys at the prompt, so
     /// a set flag means a program reads cooked lines (sudo, cat, a REPL) rather than the prompt. Errors count as canonical.
+    #[must_use]
     pub fn canonical(&self) -> bool {
-        rustix::termios::tcgetattr(&self.master).map_or(true, |attrs| attrs.local_modes.contains(rustix::termios::LocalModes::ICANON))
+        rustix::termios::tcgetattr(&self.master).map_or(true, |attrs| {
+            attrs
+                .local_modes
+                .contains(rustix::termios::LocalModes::ICANON)
+        })
     }
 
     /// Whether the terminal echoes typed input. A shell line editor turns echo off and draws the line itself, while
     /// a password prompt also turns it off; the prompt check therefore needs both flags.
+    #[must_use]
     pub fn echoing(&self) -> bool {
-        rustix::termios::tcgetattr(&self.master).map_or(true, |attrs| attrs.local_modes.contains(rustix::termios::LocalModes::ECHO))
+        rustix::termios::tcgetattr(&self.master).map_or(true, |attrs| {
+            attrs
+                .local_modes
+                .contains(rustix::termios::LocalModes::ECHO)
+        })
     }
 
     /// The master read side, owned by the reader thread. Returns `None` after the first call.
@@ -92,7 +124,9 @@ impl PtyProcess {
 
     /// Queues bytes for the child; the writer thread performs the blocking write.
     pub fn write(&self, bytes: Vec<u8>) -> io::Result<()> {
-        self.writer.send(bytes).map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "terminal writer stopped"))
+        self.writer
+            .send(bytes)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "terminal writer stopped"))
     }
 
     pub fn resize(&self, size: PtySize) -> io::Result<()> {
@@ -102,7 +136,12 @@ impl PtyProcess {
     /// The kernel's window size for this terminal, which is what the child sees.
     pub fn winsize(&self) -> io::Result<PtySize> {
         let size = rustix::termios::tcgetwinsize(&self.master)?;
-        Ok(PtySize { cols: size.ws_col, rows: size.ws_row, pixel_width: size.ws_xpixel, pixel_height: size.ws_ypixel })
+        Ok(PtySize {
+            cols: size.ws_col,
+            rows: size.ws_row,
+            pixel_width: size.ws_xpixel,
+            pixel_height: size.ws_ypixel,
+        })
     }
 
     pub fn kill(&mut self) {
@@ -110,6 +149,7 @@ impl PtyProcess {
         let _ = self.child.wait();
     }
 
+    #[must_use]
     pub fn id(&self) -> u32 {
         self.child.id()
     }
@@ -124,18 +164,29 @@ impl Drop for PtyProcess {
 }
 
 fn winsize(size: PtySize) -> Winsize {
-    Winsize { ws_row: size.rows, ws_col: size.cols, ws_xpixel: size.pixel_width, ws_ypixel: size.pixel_height }
+    Winsize {
+        ws_row: size.rows,
+        ws_col: size.cols,
+        ws_xpixel: size.pixel_width,
+        ws_ypixel: size.pixel_height,
+    }
 }
 
 fn spawn_child(launch: &Launch, slave: &File) -> io::Result<Child> {
     let env = |command: &mut Command| {
-        command.env("TERM", "xterm-256color").env("COLORTERM", "truecolor").env("TERM_PROGRAM", "FlameWM");
+        command
+            .env("TERM", "xterm-256color")
+            .env("COLORTERM", "truecolor")
+            .env("TERM_PROGRAM", "FlameWM");
         if let Some(cwd) = &launch.cwd {
             command.current_dir(cwd);
         }
     };
     let stdio = |command: &mut Command| -> io::Result<()> {
-        command.stdin(Stdio::from(slave.try_clone()?)).stdout(Stdio::from(slave.try_clone()?)).stderr(Stdio::from(slave.try_clone()?));
+        command
+            .stdin(Stdio::from(slave.try_clone()?))
+            .stdout(Stdio::from(slave.try_clone()?))
+            .stderr(Stdio::from(slave.try_clone()?));
         Ok(())
     };
     // `setsid -c` makes the slave the controlling terminal; without util-linux the shell still runs, without job control.
@@ -167,12 +218,21 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn size() -> PtySize {
-        PtySize { cols: 80, rows: 24, pixel_width: 0, pixel_height: 0 }
+        PtySize {
+            cols: 80,
+            rows: 24,
+            pixel_width: 0,
+            pixel_height: 0,
+        }
     }
 
     #[test]
     fn echo_runs_on_a_pty_and_output_is_readable() {
-        let launch = Launch { program: "/bin/sh".into(), args: vec!["-c".into(), "echo hi".into()], cwd: None };
+        let launch = Launch {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "echo hi".into()],
+            cwd: None,
+        };
         let mut process = PtyProcess::spawn(&launch, size()).expect("spawn echo on pty");
         let mut reader = process.take_reader().expect("reader");
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -185,13 +245,20 @@ mod tests {
                 Err(_) => break,
             }
         }
-        assert!(String::from_utf8_lossy(&output).contains("hi"), "pty output: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output).contains("hi"),
+            "pty output: {output:?}"
+        );
     }
 
     #[test]
     fn the_child_does_not_inherit_the_master() {
         let script = "for fd in /proc/$$/fd/*; do readlink \"$fd\"; done; echo done";
-        let launch = Launch { program: "/bin/sh".into(), args: vec!["-c".into(), script.into()], cwd: None };
+        let launch = Launch {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into()],
+            cwd: None,
+        };
         let mut process = PtyProcess::spawn(&launch, size()).expect("spawn fd listing on pty");
         let mut reader = process.take_reader().expect("reader");
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -206,7 +273,10 @@ mod tests {
         }
         let listing = String::from_utf8_lossy(&output);
         assert!(listing.contains("done"), "fd listing: {listing}");
-        assert!(!listing.contains("ptmx"), "child holds the pty master: {listing}");
+        assert!(
+            !listing.contains("ptmx"),
+            "child holds the pty master: {listing}"
+        );
     }
 
     #[test]

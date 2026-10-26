@@ -10,6 +10,7 @@ pub const RESIZE_INTERVAL: Duration = Duration::from_millis(250);
 pub const MIN_THUMB: f32 = 24.0;
 
 /// Largest visual lead, in rows, between the drawn rows and their resting origin.
+#[must_use]
 pub fn max_lead(rows: usize) -> f32 {
     rows.max(1) as f32 * 2.0
 }
@@ -27,14 +28,21 @@ fn ease_out_cubic(t: f32) -> f32 {
 
 impl RowGlide {
     /// Offset in rows at `now`. Exactly zero once the glide has run its course, so it never drifts.
+    #[must_use]
     pub fn offset(&self, now: Instant) -> f32 {
         let Some(start) = self.start else { return 0.0 };
         let t = now.saturating_duration_since(start).as_secs_f32() / GLIDE_DURATION.as_secs_f32();
-        if t >= 1.0 { 0.0 } else { self.from * (1.0 - ease_out_cubic(t)) }
+        if t >= 1.0 {
+            0.0
+        } else {
+            self.from * (1.0 - ease_out_cubic(t))
+        }
     }
 
+    #[must_use]
     pub fn is_animating(&self, now: Instant) -> bool {
-        self.start.is_some_and(|start| now.saturating_duration_since(start) < GLIDE_DURATION)
+        self.start
+            .is_some_and(|start| now.saturating_duration_since(start) < GLIDE_DURATION)
     }
 
     /// The window origin moved by `step` rows. The rows stay where they are on screen, then glide to rest.
@@ -46,7 +54,10 @@ impl RowGlide {
         }
         let lead = max_lead(rows);
         let from = (self.offset(now) + step as f32).clamp(-lead, lead);
-        *self = Self { from, start: Some(now) };
+        *self = Self {
+            from,
+            start: Some(now),
+        };
     }
 }
 
@@ -90,11 +101,14 @@ impl ResizeGate {
 }
 
 /// Scrollbar thumb length for `total` items with `rows` visible. `None` when everything fits.
+#[must_use]
 pub fn thumb_length(track: f32, total: usize, rows: usize) -> Option<f32> {
-    (rows > 0 && total > rows).then(|| (track * rows as f32 / total as f32).clamp(MIN_THUMB.min(track), track))
+    (rows > 0 && total > rows)
+        .then(|| (track * rows as f32 / total as f32).clamp(MIN_THUMB.min(track), track))
 }
 
 /// Thumb `(top, length)` within a track of `track` pixels, for the window origin `origin`.
+#[must_use]
 pub fn thumb_geometry(track: f32, total: usize, rows: usize, origin: usize) -> Option<(f32, f32)> {
     let length = thumb_length(track, total, rows)?;
     let max_origin = (total - rows) as f32;
@@ -103,8 +117,11 @@ pub fn thumb_geometry(track: f32, total: usize, rows: usize, origin: usize) -> O
 }
 
 /// Origin after dragging the thumb by `dy` pixels from `start_origin`. Clamped to the list.
+#[must_use]
 pub fn drag_origin(track: f32, total: usize, rows: usize, start_origin: usize, dy: f32) -> usize {
-    let Some(length) = thumb_length(track, total, rows) else { return 0 };
+    let Some(length) = thumb_length(track, total, rows) else {
+        return 0;
+    };
     let travel = track - length;
     if travel <= 0.0 {
         return start_origin.min(total - rows);
@@ -129,11 +146,14 @@ mod tests {
         for _ in 0..100 {
             origin += 3;
             glide.origin_moved(3, now, rows);
-            assert!(glide.offset(now).abs() <= max_lead(rows) + 1e-4, "lead must stay bounded");
+            assert!(
+                glide.offset(now).abs() <= max_lead(rows) + 1e-4,
+                "lead must stay bounded"
+            );
             now += Duration::from_millis(2);
         }
         assert_eq!(origin, 300);
-        let last_event = now - Duration::from_millis(2);
+        let last_event = now.checked_sub(Duration::from_millis(2)).unwrap();
         assert!(glide.is_animating(last_event));
         let settled = last_event + Duration::from_millis(200);
         assert_eq!(glide.offset(settled), 0.0, "settled exactly, not drifting");
@@ -171,19 +191,44 @@ mod tests {
         let mut gate = ResizeGate::default();
         assert_eq!(gate.offer((800, 600), t0), Resize::Apply);
         let ms = |n| t0 + Duration::from_millis(n);
-        assert_eq!(gate.offer((820, 600), ms(50)), Resize::Defer(Duration::from_millis(200)));
-        assert_eq!(gate.offer((900, 700), ms(100)), Resize::Defer(Duration::from_millis(150)));
-        assert_eq!(gate.flush(ms(250)), Some((900, 700)), "trailing edge applies the final size");
+        assert_eq!(
+            gate.offer((820, 600), ms(50)),
+            Resize::Defer(Duration::from_millis(200))
+        );
+        assert_eq!(
+            gate.offer((900, 700), ms(100)),
+            Resize::Defer(Duration::from_millis(150))
+        );
+        assert_eq!(
+            gate.flush(ms(250)),
+            Some((900, 700)),
+            "trailing edge applies the final size"
+        );
         assert_eq!(gate.flush(ms(260)), None, "nothing left to apply");
-        assert_eq!(gate.offer((1000, 700), ms(300)), Resize::Defer(Duration::from_millis(200)));
-        assert_eq!(gate.offer((1000, 700), ms(600)), Resize::Apply, "quiet interval applies at once");
+        assert_eq!(
+            gate.offer((1000, 700), ms(300)),
+            Resize::Defer(Duration::from_millis(200))
+        );
+        assert_eq!(
+            gate.offer((1000, 700), ms(600)),
+            Resize::Apply,
+            "quiet interval applies at once"
+        );
     }
 
     #[test]
     fn scrollbar_thumb_reflects_viewport_and_position() {
-        assert_eq!(thumb_length(300.0, 10, 10), None, "everything fits: no scrollbar");
+        assert_eq!(
+            thumb_length(300.0, 10, 10),
+            None,
+            "everything fits: no scrollbar"
+        );
         assert_eq!(thumb_length(300.0, 30, 10), Some(100.0));
-        assert_eq!(thumb_length(300.0, 3000, 10), Some(MIN_THUMB), "very long lists keep a grabbable thumb");
+        assert_eq!(
+            thumb_length(300.0, 3000, 10),
+            Some(MIN_THUMB),
+            "very long lists keep a grabbable thumb"
+        );
         assert_eq!(thumb_geometry(300.0, 30, 10, 0), Some((0.0, 100.0)));
         assert_eq!(thumb_geometry(300.0, 30, 10, 20), Some((200.0, 100.0)));
     }
@@ -193,8 +238,20 @@ mod tests {
         // 30 items, 10 visible, 100 px thumb on a 300 px track: 200 px of travel for 20 rows.
         assert_eq!(drag_origin(300.0, 30, 10, 0, 100.0), 10);
         assert_eq!(drag_origin(300.0, 30, 10, 10, -50.0), 5);
-        assert_eq!(drag_origin(300.0, 30, 10, 0, 10_000.0), 20, "clamped to the last window");
-        assert_eq!(drag_origin(300.0, 30, 10, 5, -10_000.0), 0, "clamped to the first window");
-        assert_eq!(drag_origin(300.0, 5, 10, 0, 50.0), 0, "no scrolling when everything fits");
+        assert_eq!(
+            drag_origin(300.0, 30, 10, 0, 10_000.0),
+            20,
+            "clamped to the last window"
+        );
+        assert_eq!(
+            drag_origin(300.0, 30, 10, 5, -10_000.0),
+            0,
+            "clamped to the first window"
+        );
+        assert_eq!(
+            drag_origin(300.0, 5, 10, 0, 50.0),
+            0,
+            "no scrolling when everything fits"
+        );
     }
 }

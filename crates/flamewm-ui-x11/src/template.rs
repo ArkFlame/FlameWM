@@ -408,7 +408,7 @@ impl UiDocumentAccess for UiDocument {
     document_access_methods!();
 }
 
-impl<'a> UiDocumentAccess for UiDocumentView<'a> {
+impl UiDocumentAccess for UiDocumentView<'_> {
     document_access_methods!();
 }
 
@@ -450,7 +450,7 @@ fn set_toggle(
     } else {
         2
     };
-    document.set_position_px(knob_id, left as f32, 2.0)
+    document.set_position_px(knob_id, f32::from(left), 2.0)
 }
 
 fn replace_rgba8_shared(
@@ -486,9 +486,9 @@ fn validate_dimensions(width: u32, height: u32, len: usize) -> Result<(), String
 }
 
 /// Visible-shape mask geometry for a rounded popup/menu surface: row spans
-/// (y, x_start, x_end_exclusive) in surface pixels, cut from the root
+/// (y, `x_start`, `x_end_exclusive`) in surface pixels, cut from the root
 /// background radius plus content bounds. Render-side copy used by the
-/// render-owned XShape bounding-mask bridge; kept in sync with the
+/// render-owned `XShape` bounding-mask bridge; kept in sync with the
 /// identical pure function in `flamewm-render-core::paint` so the geometry
 /// can be verified without a display.
 #[cfg(test)]
@@ -569,7 +569,7 @@ mod tests {
 
     fn px(source: &str, pixels: [u8; 4]) -> RuntimeImage {
         RuntimeImage {
-            source: source.to_string().into(),
+            source: source.to_string(),
             width: 1,
             height: 1,
             pixels: pixels.to_vec(),
@@ -612,7 +612,7 @@ mod tests {
             .image_rgba8(
                 "icon",
                 RuntimeImage {
-                    source: "bad".to_string().into(),
+                    source: "bad".to_string(),
                     width: 1,
                     height: 1,
                     pixels: vec![1, 2, 3],
@@ -748,7 +748,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        revisions.sort();
+        revisions.sort_unstable();
         let a = doc.document.node_by_id("a").expect("a index");
         let b = doc.document.node_by_id("b").expect("b index");
         assert_eq!(revisions, vec![(a, 2), (b, 1)]);
@@ -820,7 +820,7 @@ mod tests {
         }
         let count = doc.document.document.nodes.len();
         let mut z_order: Vec<u32> = (0..count as u32).collect();
-        z_order.sort_by_key(|index| (doc.document.effective_z_index(*index), *index as i64));
+        z_order.sort_by_key(|index| (doc.document.effective_z_index(*index), i64::from(*index)));
         let layout = flamewm_render_core::LayoutResult {
             boxes,
             contents: vec![flamewm_render_core::Rect::default(); count],

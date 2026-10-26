@@ -228,7 +228,7 @@ fn application(
             ControlResponse::Displays(displays),
             ControlResponse::Shortcuts(ShortcutSnapshot {
                 revision: 1,
-                bindings: Default::default(),
+                bindings: BTreeMap::default(),
             }),
             ControlResponse::Panels(flamewm_api::panels::PanelsSnapshot {
                 revision: 1,

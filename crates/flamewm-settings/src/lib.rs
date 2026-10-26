@@ -37,7 +37,7 @@ const WEBSITE_URI: &str = "https://wm.arkflame.com";
 
 /// Canonical product version: the workspace version inherited by this crate.
 const APP_VERSION: &str = env!("FLAMEWM_SETTINGS_VERSION");
-/// Authoritative accent for the native FlameWM preset.
+/// Authoritative accent for the native `FlameWM` preset.
 const DEFAULT_ACCENT: &str = "#EF4048";
 /// Nodes whose compiled colour is the accent and must follow live accent changes.
 /// Every `toggle-on` id in ui/settings.html must be listed here (checked by a test).
@@ -178,7 +178,7 @@ const ABOUT_VERSION_NODE: &str = "about-version";
 /// Taskbar rows are optional in the compiled markup.
 const OUTPUT_PAGE_SLOTS: usize = 4;
 
-/// Process-local monotonic milliseconds for the in-process ControlTransport path.
+/// Process-local monotonic milliseconds for the in-process `ControlTransport` path.
 /// The D-Bus wire adapter replaces this value with the reactor's monotonic clock.
 fn monotonic_now_ms() -> u64 {
     static ORIGIN: OnceLock<Instant> = OnceLock::new();
@@ -616,7 +616,7 @@ pub struct SettingsApplication<T: ControlTransport> {
     /// Resolved cursor theme last loaded into this window's live cursor owners.
     applied_cursor_theme: Option<String>,
     /// Pointer origin for an output card; motion remains local, only release
-    /// causes a native RandR request.
+    /// causes a native `RandR` request.
     monitor_drag: Option<(usize, f32, u64, OutputId)>,
     /// Non-authoritative drag preview, bound to the original output and generation.
     scale_drag: Option<(OutputId, u64, u16)>,
@@ -770,7 +770,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 self.scale_slider_focused = true;
             }
             UiActionPhase::Motion | UiActionPhase::Release => {
-                let Some((id, generation, _)) = self.scale_drag.as_ref().cloned() else {
+                let Some((id, generation, _)) = self.scale_drag.clone() else {
                     return Ok(());
                 };
                 let Some(text) = event.text.as_deref() else {
@@ -1001,7 +1001,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             .map_or(0, |snapshot| snapshot.outputs.len())
     }
 
-    /// Stable visual left-to-right ordering derived from actual RandR geometry,
+    /// Stable visual left-to-right ordering derived from actual `RandR` geometry,
     /// not X server enumeration order. Output IDs remain the native authority.
     fn ordered_output_indices(&self) -> Vec<usize> {
         let Some(snapshot) = self.client.displays() else {
@@ -1191,7 +1191,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             SettingsAction::ColorSwatch { key, value } => self.apply_text(key, value.to_owned())?,
             SettingsAction::PercentStep(key, direction) => {
-                self.step_percent(key, direction, 100)?
+                self.step_percent(key, direction, 100)?;
             }
             SettingsAction::IntegerStep {
                 key,
@@ -1961,7 +1961,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("lockShowDate", "lock-date-on", "lock-date-off"),
             ("lockShowUsername", "lock-username-on", "lock-username-off"),
             ("lockOnSuspend", "lock-suspend-on", "lock-suspend-off"),
-            ("organizeDownloads", "downloads-organize-on", "downloads-organize-off"),
+            (
+                "organizeDownloads",
+                "downloads-organize-on",
+                "downloads-organize-off",
+            ),
             (
                 "taskbarShowSeconds",
                 "taskbar-seconds-on",
@@ -2860,7 +2864,7 @@ fn parse_hex_color(text: &str) -> Result<String, String> {
     }
 }
 
-/// Palette cell at `hue` (0..PICKER_HUES) and `shade` (0..PICKER_SHADES): HSL with
+/// Palette cell at `hue` (`0..PICKER_HUES`) and `shade` (`0..PICKER_SHADES)`: HSL with
 /// fixed saturation and six lightness steps, lightest first.
 fn picker_grid_color(hue: usize, shade: usize) -> String {
     const LIGHTNESS: [f64; PICKER_SHADES] = [0.88, 0.72, 0.56, 0.42, 0.28, 0.14];
@@ -2881,7 +2885,7 @@ fn picker_grid_color(hue: usize, shade: usize) -> String {
     format!("#{:02X}{:02X}{:02X}", channel(r), channel(g), channel(b))
 }
 
-/// Neutral palette cell `step` (0..PICKER_GREYS), black to white.
+/// Neutral palette cell `step` (`0..PICKER_GREYS`), black to white.
 fn picker_grey(step: usize) -> String {
     let value = (step * 255 / (PICKER_GREYS - 1)) as u8;
     format!("#{value:02X}{value:02X}{value:02X}")
@@ -3752,10 +3756,12 @@ mod value_text_tests {
             name: format!("Theme {n}"),
             preview: None,
         };
-        let mut transport = ScriptedTransport::default();
-        transport.responses = (0..8)
-            .map(|_| Ok(ControlResponse::Settings(SettingsSnapshot::new(1))))
-            .collect();
+        let transport = ScriptedTransport {
+            responses: (0..8)
+                .map(|_| Ok(ControlResponse::Settings(SettingsSnapshot::new(1))))
+                .collect(),
+            ..ScriptedTransport::default()
+        };
         let requests = transport.requests.clone();
         let mut app = SettingsApplication::new(transport);
         app.themes = ThemeRegistry {

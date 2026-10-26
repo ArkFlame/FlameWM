@@ -65,7 +65,11 @@ pub fn blend_bgr(bgr: &mut [u8], src: [u8; 4]) {
 /// Part of `area` (a shadow's root rect) that the rubber changed from `old` to `new` touches:
 /// the bounding box of both bands clipped to `area`. `None` when neither band reaches it.
 #[must_use]
-pub fn damage_region(area: Rect, old: Option<&RootRubber>, new: Option<&RootRubber>) -> Option<Rect> {
+pub fn damage_region(
+    area: Rect,
+    old: Option<&RootRubber>,
+    new: Option<&RootRubber>,
+) -> Option<Rect> {
     [old, new]
         .into_iter()
         .flatten()
@@ -85,7 +89,10 @@ pub fn compose_region(
     focused: bool,
     rubber: Option<&RootRubber>,
 ) -> Vec<u8> {
-    debug_assert!(intersect(area, region) == Some(region), "region outside shadow area");
+    debug_assert!(
+        intersect(area, region) == Some(region),
+        "region outside shadow area"
+    );
     let stride = area.width as usize * 4;
     let mut out = Vec::with_capacity(region.width as usize * region.height as usize * 4);
     for y in region.y..region.bottom() {
@@ -201,7 +208,11 @@ mod tests {
                 if rubber_coverage(&band, x, y).is_some() {
                     differs += usize::from(composed[at..at + 3] != plain[plain_at..plain_at + 3]);
                 } else {
-                    assert_eq!(composed[at..at + 3], plain[plain_at..plain_at + 3], "({x},{y})");
+                    assert_eq!(
+                        composed[at..at + 3],
+                        plain[plain_at..plain_at + 3],
+                        "({x},{y})"
+                    );
                 }
             }
         }

@@ -37,7 +37,7 @@ use crate::view::LockView;
 use crate::x11::{KeyBatch, PointerState, Session, grab_with_retry};
 
 const GRAB_TIMEOUT: Duration = Duration::from_secs(2);
-/// Handles root ConfigureNotify promptly while still keeping activity sampling bounded.
+/// Handles root `ConfigureNotify` promptly while still keeping activity sampling bounded.
 const TICK: Duration = Duration::from_millis(50);
 /// Poll interval of the preview: pointer and keyboard are read by polling.
 const PREVIEW_POLL: Duration = Duration::from_millis(50);
@@ -588,12 +588,12 @@ fn watch_control_signals(reactor: &mut Reactor, pending: Rc<RefCell<Vec<ControlS
     };
     let result = reactor.register_raw_fd_with_action(watch.fd, interest, move |_, _| {
         let pending = Rc::clone(&pending);
-        if let Err(error) = client.on_ready(|signal| match signal {
-            signal @ ControlSignal::SettingsSnapshotChanged { .. }
-            | signal @ ControlSignal::DisplaysSnapshotChanged { .. } => {
+        if let Err(error) = client.on_ready(|signal| {
+            if let signal @ (ControlSignal::SettingsSnapshotChanged { .. }
+            | ControlSignal::DisplaysSnapshotChanged { .. }) = signal
+            {
                 pending.borrow_mut().push(signal);
             }
-            _ => {}
         }) {
             eprintln!("flamewm-lock: read settings/display update failed: {error}");
         }
@@ -756,7 +756,7 @@ impl LockLoop {
         let background_dirty = self.live_background_dirty;
         let update_visible_background = self.saver.phase() != Phase::RibbonsActive;
         let canvas = if background_dirty {
-            document::shared_root_background(&settings, root)
+            document::shared_root_background(settings, root)
         } else {
             None
         };
@@ -766,14 +766,14 @@ impl LockLoop {
             if typography_dirty {
                 let result = runtime
                     .with_document(surface.handle, |view| {
-                        document::apply_typography(view, &settings)
+                        document::apply_typography(view, settings)
                     })
                     .and_then(|()| runtime.redraw(surface.handle));
                 typography_ok &= result.is_ok();
             }
             if background_dirty {
                 let background =
-                    document::background_for_output(&settings, root, surface.rect, canvas.as_ref());
+                    document::background_for_output(settings, root, surface.rect, canvas.as_ref());
                 surface.base_background = background.clone();
                 if update_visible_background {
                     let result = runtime
@@ -1072,7 +1072,7 @@ impl LockLoop {
     fn key(&mut self, key: Key, now: Instant) {
         match key {
             Key::Enter if self.power.view().confirm.is_some() => {
-                self.power_event(PowerEvent::Confirm)
+                self.power_event(PowerEvent::Confirm);
             }
             Key::Function(number) => {
                 if let Some(button) = usize::from(number)
@@ -1097,7 +1097,10 @@ impl LockLoop {
     fn power_event(&mut self, event: PowerEvent) {
         // A tick only changes the power view while an error message is on screen (TTL expiry).
         let visible_change = !matches!(event, PowerEvent::Tick(_))
-            || self.shown_power.as_ref().is_some_and(|shown| !shown.message.is_empty());
+            || self
+                .shown_power
+                .as_ref()
+                .is_some_and(|shown| !shown.message.is_empty());
         if visible_change {
             self.power_revision += 1;
         }
@@ -1333,7 +1336,7 @@ mod tests {
     }
 
     /// Needs a live X display (`DISPLAY`). Creates and drops the render stack
-    /// normally: a regression here is a SIGSEGV at XCloseDisplay.
+    /// normally: a regression here is a SIGSEGV at `XCloseDisplay`.
     #[test]
     #[ignore = "requires DISPLAY"]
     fn runtime_drops_cleanly_after_xft_and_xrender_load() {

@@ -38,7 +38,7 @@ pub fn scale_and_premultiply_into(
                 u32::from(src[off + 2]),
                 u32::from(src[off + 3]),
             );
-            let prem = |c: u32| ((c * a + 127) / 255) as u32;
+            let prem = |c: u32| ((c * a + 127) / 255);
             out.push((a << 24) | (prem(r) << 16) | (prem(g) << 8) | prem(b));
         }
     }
@@ -60,7 +60,11 @@ pub fn premultiply_masked_into(
     for y in 0..height {
         for x in 0..width {
             let off = (y as usize * width as usize + x as usize) * 4;
-            let a = if keep(x, y) { u32::from(src[off + 3]) } else { 0 };
+            let a = if keep(x, y) {
+                u32::from(src[off + 3])
+            } else {
+                0
+            };
             if a == 0 {
                 out.push(0);
                 continue;

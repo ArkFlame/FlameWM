@@ -30,7 +30,7 @@ use crate::services::workspaces::{WorkspaceService, count_store_path};
 use crate::shortcuts::ShortcutRegistry;
 use crate::system::{SystemActionHandler, SystemService};
 
-/// Process composition root for FlameWM product state.
+/// Process composition root for `FlameWM` product state.
 ///
 /// The engine adapter is owned once. Product services never retain pointers/references into it;
 /// every command borrows the required port for exactly the duration of that command. This avoids
@@ -115,8 +115,8 @@ impl<E: EnginePorts> PlatformHost<E> {
 
     /// Applies persisted per-output shell scales to the display snapshot at startup.
     ///
-    /// Entries for outputs that are not connected are skipped (NotFound) with a one-line stderr diagnostic. Entries rejected by the
-    /// setter as invalid (InvalidArgument) are skipped so a bad persisted value cannot block startup.
+    /// Entries for outputs that are not connected are skipped (`NotFound`) with a one-line stderr diagnostic. Entries rejected by the
+    /// setter as invalid (`InvalidArgument`) are skipped so a bad persisted value cannot block startup.
     /// The generation is re-read per entry because each applied scale bumps it.
     fn seed_persisted_shell_scales(&mut self) -> FlameResult<()> {
         for (output, scale) in &self.settings.current().per_output_scale {

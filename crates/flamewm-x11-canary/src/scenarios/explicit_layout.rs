@@ -3,7 +3,7 @@
 //! down. Each reached position must stay at least 1/4 visible on both axes. The
 //! window is then recentred, snapped to the top-left corner and maximized to check
 //! that snap and maximize still use the work area. Screenshots and the case list
-//! go to --shot-dir; tools/flamewm_layout_probe.py samples the taskbar pixels.
+//! go to --shot-dir; `tools/flamewm_layout_probe.py` samples the taskbar pixels.
 
 use std::fs;
 use std::path::Path;
@@ -25,7 +25,7 @@ const CLIENT_NAME: &str = "overflow-canary";
 const CLIENT_BG: u32 = 0x0000_ff00;
 const CLIENT_AT: (i16, i16) = (100, 100);
 const CLIENT_SIZE: (u16, u16) = (600, 400);
-/// Canonical frame layout (mirrors snap_border): 6px resize strip, 31px titlebar, 114px controls.
+/// Canonical frame layout (mirrors `snap_border)`: 6px resize strip, 31px titlebar, 114px controls.
 const RESIZE_T: i32 = 6;
 const TITLEBAR_H: i32 = 31;
 const CONTROLS_W: i32 = 114;
@@ -124,12 +124,12 @@ fn drag_step(f: Rect, screen: (i32, i32), target: (i32, i32)) -> Option<((i16, i
     let px = match dx.signum() {
         -1 => xhi,
         1 => xlo,
-        _ => (xlo + xhi) / 2,
+        _ => i32::midpoint(xlo, xhi),
     };
     let py = match dy.signum() {
         -1 => yhi,
         1 => ylo,
-        _ => (ylo + yhi) / 2,
+        _ => i32::midpoint(ylo, yhi),
     };
     let mx = dx.clamp(MARGIN_X - px, sw - 1 - MARGIN_X - px);
     let my = dy.clamp(MARGIN_Y - py, sh - 1 - MARGIN_Y - py);
@@ -407,7 +407,7 @@ fn keep_visible_bounds(outer: Rect, screen: (i32, i32)) -> ((i32, i32), (i32, i3
 }
 
 /// G2 explicit-window-clamp: the titlebar route cannot lift the frame above y=0, so the 3/4
-/// overflow limit is driven by client ConfigureRequest (XMoveWindow to +-10000) in all four
+/// overflow limit is driven by client `ConfigureRequest` (`XMoveWindow` to +-10000) in all four
 /// directions. Each landing must equal the keep-visible bound exactly. The titlebar route
 /// is measured (not asserted) with the pointer at the top margin and at the y=0 edge.
 pub fn run_clamp(canary: &crate::Canary, args: &[String]) -> (bool, String) {

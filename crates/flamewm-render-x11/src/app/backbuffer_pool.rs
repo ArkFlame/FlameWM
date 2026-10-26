@@ -20,7 +20,11 @@ fn fit_axis(current: u32, need: u32, root: u32) -> u32 {
 /// Capacity after a window of `need` is presented. Grow-only per axis: an axis already large
 /// enough keeps its current size. Returns `current` unchanged when the window fits.
 #[must_use]
-pub(crate) fn grown_capacity(current: (u32, u32), need: (u32, u32), root: (u32, u32)) -> (u32, u32) {
+pub(crate) fn grown_capacity(
+    current: (u32, u32),
+    need: (u32, u32),
+    root: (u32, u32),
+) -> (u32, u32) {
     (
         fit_axis(current.0, need.0, root.0),
         fit_axis(current.1, need.1, root.1),
@@ -75,9 +79,19 @@ mod tests {
 
     #[test]
     fn settle_shrinks_only_when_more_than_twice_oversize() {
-        assert_eq!(settled_capacity((1300, 400), (600, 400), ROOT), Some((856, 656)));
-        assert_eq!(settled_capacity((600, 1000), (600, 400), ROOT), Some((856, 656)));
-        assert_eq!(settled_capacity((1200, 800), (600, 400), ROOT), None, "exactly 2x is not oversize");
+        assert_eq!(
+            settled_capacity((1300, 400), (600, 400), ROOT),
+            Some((856, 656))
+        );
+        assert_eq!(
+            settled_capacity((600, 1000), (600, 400), ROOT),
+            Some((856, 656))
+        );
+        assert_eq!(
+            settled_capacity((1200, 800), (600, 400), ROOT),
+            None,
+            "exactly 2x is not oversize"
+        );
         assert_eq!(settled_capacity((1200, 800), (700, 500), ROOT), None);
         assert_eq!(settled_capacity((1000, 600), (600, 400), ROOT), None);
         assert_eq!(settled_capacity((800, 600), (600, 400), ROOT), None);
@@ -94,6 +108,9 @@ mod tests {
                 cap = next;
             }
         }
-        assert_eq!(allocations, 2, "a 300-step drag reallocates twice, not 300 times");
+        assert_eq!(
+            allocations, 2,
+            "a 300-step drag reallocates twice, not 300 times"
+        );
     }
 }

@@ -16,6 +16,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libdbus-1-dev libpulse-dev \
+            libx11-dev libxi-dev libxft-dev libxkbcommon-dev libinput-dev libgbm-dev libdrm-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.88.0

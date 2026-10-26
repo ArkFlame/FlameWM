@@ -30,8 +30,8 @@ use crate::xlib::{
     ALLOC_NONE, CW_BACK_PIXEL, CW_COLORMAP, CW_OVERRIDE_REDIRECT, Colormap, Display,
     INPUT_OUTPUT_CLASS, Pixmap, TRANSPARENT_CLEAR_PIXEL, Window, XCreateColormap, XCreatePixmap,
     XCreateWindow, XDefaultDepth, XDefaultScreen, XDefaultVisual, XDestroyWindow, XDisplayHeight,
-    XDisplayWidth, XFlush, XFreeColormap, XInternAtom, XMapWindow, XRaiseWindow,
-    XRootWindow, XSetWindowAttributes, XSync,
+    XDisplayWidth, XFlush, XFreeColormap, XInternAtom, XMapWindow, XRaiseWindow, XRootWindow,
+    XSetWindowAttributes, XSync,
 };
 use crate::xrender_transform::{PICT_STANDARD_RGB_24, XRenderTransformApi};
 use crate::xshape::{XShapeBridge, rounded_mask_spans};
@@ -76,7 +76,7 @@ pub fn compositing_manager_running(display: *mut Display) -> bool {
     // SAFETY: the display is live per the caller contract; the name is a static NUL-terminated
     // string and `only_if_exists` keeps the atom lookup from creating it.
     unsafe {
-        let atom = XInternAtom(display, b"_NET_WM_CM_S0\0".as_ptr().cast(), 1);
+        let atom = XInternAtom(display, c"_NET_WM_CM_S0".as_ptr().cast(), 1);
         atom != 0 && XGetSelectionOwner(display, atom) != 0
     }
 }
@@ -246,6 +246,7 @@ fn enclose(x0: f64, y0: f64, x1: f64, y1: f64) -> (i32, i32, u32, u32) {
 }
 
 impl WarpOverlay {
+    #[allow(clippy::too_many_arguments)]
     fn empty(
         display: *mut Display,
         api: XRenderTransformApi,
@@ -426,7 +427,7 @@ impl WarpOverlay {
     /// Opens a window-open scale-and-fade on an ARGB window at root position `(x, y)`.
     /// The window is exactly the capture's size. Errors without an ARGB visual, so the effect
     /// is never drawn as a fade on an opaque surface.
-    pub fn begin_fade(
+    pub(crate) fn begin_fade(
         display: *mut Display,
         capture: CapturedImage,
         x: i32,
@@ -951,7 +952,7 @@ unsafe fn capture_backdrop(
     let (root, screen_w, screen_h) = unsafe {
         let screen = XDefaultScreen(display);
         (
-            u64::from(XRootWindow(display, screen)),
+            XRootWindow(display, screen),
             XDisplayWidth(display, screen),
             XDisplayHeight(display, screen),
         )

@@ -268,7 +268,7 @@ struct Frame {
 }
 
 thread_local! {
-    static STACK: std::cell::RefCell<([Frame; MAX_DEPTH], usize)> = std::cell::RefCell::new((
+    static STACK: std::cell::RefCell<([Frame; MAX_DEPTH], usize)> = const { std::cell::RefCell::new((
         [Frame {
             idx: 0,
             start_wall: 0,
@@ -277,7 +277,7 @@ thread_local! {
             child_cpu: 0,
         }; MAX_DEPTH],
         0,
-    ));
+    )) };
 }
 
 /// Push a frame; returns false when nesting overflows (span still timed).
@@ -550,14 +550,14 @@ mod tests {
         }
         // Labels 65..N (past the old 64 cap) resolve to distinct slots.
         let mut idxs = [0usize; N];
-        for i in 0..N {
-            idxs[i] = slot_for(cap_span_label(i));
+        for (i, idx) in idxs.iter_mut().enumerate() {
+            *idx = slot_for(cap_span_label(i));
         }
         let mut sorted = idxs.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), N);
-        assert!(N > 64);
+        const { assert!(N > 64) };
         reset_for_test();
     }
 }

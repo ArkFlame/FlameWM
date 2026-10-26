@@ -1,7 +1,7 @@
 //! Ribbons screensaver frames for the lock background: the animation is rendered
 //! on the CPU and returned as straight RGBA8 for the image replace path.
 //!
-//! Spans the whole lock surface (the root window), which covers every RandR output.
+//! Spans the whole lock surface (the root window), which covers every `RandR` output.
 //! Per-output independent ribbons are not implemented.
 use std::time::Instant;
 
@@ -25,6 +25,7 @@ pub struct RibbonFrames {
 }
 
 impl RibbonFrames {
+    #[must_use]
     pub fn new(width: u32, height: u32, saver: &SaverConfig, now: Instant) -> Self {
         let quality = if u64::from(width) * u64::from(height) > FULL_RES_PIXELS {
             Quality::Quarter

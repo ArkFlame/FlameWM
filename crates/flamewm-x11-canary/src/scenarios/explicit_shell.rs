@@ -2,7 +2,7 @@
 //! desktop background menu settings row (S2) and audio popup tab switching
 //! (S3). Pointer and keyboard input is XTEST only (real input path). Menu rows
 //! are counted by sampling the menu pixels; screenshots are written with
-//! ImageMagick `import` into the required `--shot-dir`. Never part of `all`.
+//! `ImageMagick` `import` into the required `--shot-dir`. Never part of `all`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -80,7 +80,7 @@ fn rect_of(w: &WinInfo) -> (i32, i32, u32, u32) {
     )
 }
 
-/// Root-relative RGB sample of a rectangle (ZPixmap, 4 bytes per pixel).
+/// Root-relative RGB sample of a rectangle (`ZPixmap`, 4 bytes per pixel).
 fn grab(canary: &Canary, rect: (i32, i32, u32, u32)) -> Option<Vec<u8>> {
     let (x, y, w, h) = rect;
     let data = canary
@@ -198,7 +198,7 @@ fn taskbar_points(panel: &WinInfo) -> ((i16, i16), (i16, i16)) {
     (empty, start)
 }
 
-/// S1: taskbar background Button3 opens one "FlameWM Settings" row; Escape and
+/// S1: taskbar background Button3 opens one "`FlameWM` Settings" row; Escape and
 /// outside click dismiss; left click on start still opens the start menu.
 pub fn run_s1(canary: &Canary, args: &[String]) -> (bool, String) {
     let (dir, panel) = match shot_dir_and_panel(canary, args) {
@@ -330,7 +330,7 @@ pub fn run_s2(canary: &Canary, args: &[String]) -> (bool, String) {
     ];
     let mut launched = 0usize;
     if let Some((top, bottom)) = settings_row {
-        let click_y = ((top + bottom) / 2) as i16;
+        let click_y = i32::midpoint(top, bottom) as i16;
         let clicked = real_click(canary, anchor.0 + 60, click_y, 1);
         let spawned = wait_for(Duration::from_secs(8), || {
             settings_pids().len() > before.len()
@@ -387,7 +387,7 @@ fn differing_permille(a: &[u8], b: &[u8], w: u32) -> u32 {
 
 /// S3: audio popup Devices<->Applications switching 30x with pixel checks, and
 /// the popup stays open while the pointer sweeps over the taskbar (taskbar
-/// receives EnterNotify).
+/// receives `EnterNotify`).
 pub fn run_s3(canary: &Canary, args: &[String]) -> (bool, String) {
     let (dir, panel) = match shot_dir_and_panel(canary, args) {
         Ok(v) => v,
@@ -444,20 +444,21 @@ pub fn run_s3(canary: &Canary, args: &[String]) -> (bool, String) {
             &mut ref_apps
         };
         match reference {
-            None => match capture() {
-                Some(now) => *reference = Some(now),
-                None => {
+            None => {
+                if let Some(now) = capture() {
+                    *reference = Some(now);
+                } else {
                     failures.push(format!("#{i} {name}: capture failed"));
                     continue;
                 }
-            },
+            }
             Some(expected) => {
                 // Bounded settle: the tab must show its reference state within 1.5s.
                 // First-attempt misses are counted, never hidden.
                 let differs_now = |_canary: &Canary| {
-                    capture()
-                        .map(|now| differing_permille(&now, expected, content.2))
-                        .unwrap_or(u32::MAX)
+                    capture().map_or(u32::MAX, |now| {
+                        differing_permille(&now, expected, content.2)
+                    })
                 };
                 let mut diff = differs_now(canary);
                 if diff > SAME_TAB_MAX_PERMILLE {
@@ -485,7 +486,7 @@ pub fn run_s3(canary: &Canary, args: &[String]) -> (bool, String) {
         switches_ok += 1;
     }
     let other_tab_diff = match (&ref_devices, &ref_apps) {
-        (Some(d), Some(a)) => differing_permille(d, a, content.2) as i64,
+        (Some(d), Some(a)) => i64::from(differing_permille(d, a, content.2)),
         _ => -1,
     };
     checks.push((
@@ -509,7 +510,7 @@ pub fn run_s3(canary: &Canary, args: &[String]) -> (bool, String) {
     let mut sweep_ok = xtest_motion(canary, x0, cy);
     let steps = 20i32;
     for step in 1..=steps {
-        let x = x0 as i32 + (x1 as i32 - x0 as i32) * step / steps;
+        let x = i32::from(x0) + (i32::from(x1) - i32::from(x0)) * step / steps;
         sweep_ok &= xtest_motion(canary, x as i16, cy);
         sleep(Duration::from_millis(20));
     }
@@ -552,7 +553,7 @@ const OSD_VOLUME_MAX: f64 = 150.0;
 const OSD_FILL_TOLERANCE: f64 = 0.03;
 const OSD_HIDE_LIMIT: Duration = Duration::from_millis(1500);
 const OSD_LEVELS: [u8; 5] = [0, 25, 50, 100, 150];
-/// Private PipeWire null sink from tools/flamewm_osd_audio_acceptance.py (never the host sink).
+/// Private `PipeWire` null sink from `tools/flamewm_osd_audio_acceptance.py` (never the host sink).
 const SINK_NAME: &str = "alsa_output.pci-0000_00_1f.3.analog-stereo";
 
 fn summarize(checks: &[(&str, bool, String)]) -> (bool, String) {
@@ -602,7 +603,7 @@ fn pw_props(id: u32, props: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// Sets the private sink to `percent`. PipeWire maps pulse percent as 100 * cbrt(channel).
+/// Sets the private sink to `percent`. `PipeWire` maps pulse percent as 100 * cbrt(channel).
 fn set_sink_percent(percent: u8) -> bool {
     let Some(id) = sink_node_id() else {
         return false;
@@ -666,7 +667,7 @@ fn focus_state(canary: &Canary) -> Option<(u32, u32)> {
     Some((focus, active))
 }
 
-/// Private override-redirect window that lies beneath the OSD card; it selects ButtonPress.
+/// Private override-redirect window that lies beneath the OSD card; it selects `ButtonPress`.
 fn open_beneath(canary: &Canary, rect: (i16, i16, u16, u16)) -> Option<u32> {
     let wid = canary.conn.generate_id().ok()?;
     canary
@@ -695,7 +696,7 @@ fn open_beneath(canary: &Canary, rect: (i16, i16, u16, u16)) -> Option<u32> {
     Some(wid)
 }
 
-/// True when a ButtonPress targeted at `wid` arrives within `timeout`.
+/// True when a `ButtonPress` targeted at `wid` arrives within `timeout`.
 fn press_seen(canary: &Canary, wid: u32, timeout: Duration) -> bool {
     let mut seen = false;
     wait_for(timeout, || {
@@ -802,7 +803,7 @@ pub fn run_osd(canary: &Canary, args: &[String]) -> (bool, String) {
         if index == 0 {
             focus_ok &= focus_state(canary) == focus_before;
         }
-        let size_ok = (card.width as u32, card.height as u32) == OSD_BODY;
+        let size_ok = (u32::from(card.width), u32::from(card.height)) == OSD_BODY;
         let centre_x_ok = (i32::from(card.x) - expected_x).abs() <= 1;
         let centre_y_ok = (i32::from(card.y) - expected_y).abs() <= 1;
         let cap = grab(canary, rect_of(&card));

@@ -269,9 +269,9 @@ pub fn parts_menu_rect(work_area: Rect, anchor: Point, parts: &[MenuPart]) -> Re
     context_menu::menu_rect(work_area, anchor, size)
 }
 
-pub const SELECTION_ACCENT_RGB: u32 = 0xff5533;
-pub const SELECTION_FILL_BASE_RGB: u32 = 0x111111;
-pub const SELECTION_BORDER_BASE_RGB: u32 = 0xe6e6e6;
+pub const SELECTION_ACCENT_RGB: u32 = 0x00ff_5533;
+pub const SELECTION_FILL_BASE_RGB: u32 = 0x0011_1111;
+pub const SELECTION_BORDER_BASE_RGB: u32 = 0x00e6_e6e6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DesktopSelectionMaterial {
@@ -366,21 +366,21 @@ mod tests {
     }
     #[test]
     fn material_blend_matches_native_integer_blend() {
-        assert_eq!(blend_rgb(0xff5533, 0x111111, 20), 0x401e17);
+        assert_eq!(blend_rgb(0x00ff_5533, 0x0011_1111, 20), 0x0040_1e17);
     }
     #[test]
     fn zero_opacity_returns_background() {
-        assert_eq!(blend_rgb(0xff5533, 0x111111, 0), 0x111111);
+        assert_eq!(blend_rgb(0x00ff_5533, 0x0011_1111, 0), 0x0011_1111);
     }
     #[test]
     fn full_opacity_returns_foreground() {
-        assert_eq!(blend_rgb(0xff5533, 0x111111, 100), 0xff5533);
+        assert_eq!(blend_rgb(0x00ff_5533, 0x0011_1111, 100), 0x00ff_5533);
     }
     #[test]
     fn default_selection_material_matches_native_colors_and_opacity() {
         let m = selection_material(20, 60);
-        assert_eq!(m.fill_rgb, 0x401e17);
-        assert_eq!(m.border_rgb, blend_rgb(0xff5533, 0xe6e6e6, 60));
+        assert_eq!(m.fill_rgb, 0x0040_1e17);
+        assert_eq!(m.border_rgb, blend_rgb(0x00ff_5533, 0x00e6_e6e6, 60));
     }
     #[test]
     fn default_watermark_uses_current_native_size() {

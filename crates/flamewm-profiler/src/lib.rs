@@ -36,28 +36,6 @@ pub(crate) fn now_mono_ns() -> u64 {
     clock_ns(rustix::time::ClockId::Monotonic)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn thread_cpu_clock_does_not_advance_while_sleeping() {
-        let cpu_start = now_cpu_ns();
-        let mono_start = now_mono_ns();
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        let mono_delta = now_mono_ns() - mono_start;
-        let cpu_delta = now_cpu_ns() - cpu_start;
-        assert!(
-            mono_delta >= 50_000_000,
-            "monotonic advanced {mono_delta} ns"
-        );
-        assert!(
-            cpu_delta < 25_000_000,
-            "thread CPU clock advanced {cpu_delta} ns during sleep"
-        );
-    }
-}
-
 struct Config {
     pub(crate) enabled: bool,
     pub(crate) interval_secs: u64,
@@ -102,4 +80,26 @@ pub fn init_process(name: &'static str) {
 #[must_use]
 pub fn profile_interval_secs() -> u64 {
     config().interval_secs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thread_cpu_clock_does_not_advance_while_sleeping() {
+        let cpu_start = now_cpu_ns();
+        let mono_start = now_mono_ns();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let mono_delta = now_mono_ns() - mono_start;
+        let cpu_delta = now_cpu_ns() - cpu_start;
+        assert!(
+            mono_delta >= 50_000_000,
+            "monotonic advanced {mono_delta} ns"
+        );
+        assert!(
+            cpu_delta < 25_000_000,
+            "thread CPU clock advanced {cpu_delta} ns during sleep"
+        );
+    }
 }

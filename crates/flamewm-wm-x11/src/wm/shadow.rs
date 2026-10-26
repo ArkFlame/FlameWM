@@ -88,7 +88,11 @@ impl ShadowScene {
             bump = true;
         }
         // A window that travelled over the root leaves different pixels behind once it settles.
-        if self.dragging.iter().any(|client| !dragging.contains(client)) {
+        if self
+            .dragging
+            .iter()
+            .any(|client| !dragging.contains(client))
+        {
             bump = true;
         }
         self.dragging = dragging;
@@ -128,7 +132,7 @@ fn shadow_aux(rect: Rect, sibling: Window) -> ConfigureWindowAux {
         .stack_mode(StackMode::BELOW)
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     /// Bring shadow windows in line with the current frames. Called once per
     /// reactor turn; cheap when nothing changed.
     pub(super) fn reconcile_frame_shadows(&mut self) -> Result<(), ReplyOrIdError> {
@@ -168,13 +172,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             if prev.is_none() && motion {
                 continue;
             }
-            match shadow::plan_shadow(
-                prev,
-                want.outer,
-                want.focused,
-                motion,
-                generation,
-            ) {
+            match shadow::plan_shadow(prev, want.outer, want.focused, motion, generation) {
                 ShadowAction::Noop => {}
                 ShadowAction::Move => self.move_frame_shadow(want.frame, want.outer)?,
                 ShadowAction::Reshade => {
@@ -359,27 +357,24 @@ impl<'a, C: Connection> Wm<'a, C> {
         let result = self.refresh_shadow(outer, focused, win, sibling);
         self.conn.ungrab_server()?;
         let shown = result?;
-        match shown {
-            Some((raw, pixmap)) => {
-                self.frame_shadows.insert(
-                    frame,
-                    FrameShadow {
-                        win,
-                        state: ShadowState {
-                            shaded: outer,
-                            focused,
-                            generation,
-                            placed: outer,
-                        },
-                        pixmap,
-                        raw,
+        if let Some((raw, pixmap)) = shown {
+            self.frame_shadows.insert(
+                frame,
+                FrameShadow {
+                    win,
+                    state: ShadowState {
+                        shaded: outer,
+                        focused,
+                        generation,
+                        placed: outer,
                     },
-                );
-            }
-            None => {
-                self.conn.destroy_window(win)?;
-                self.frame_shadows.remove(&frame);
-            }
+                    pixmap,
+                    raw,
+                },
+            );
+        } else {
+            self.conn.destroy_window(win)?;
+            self.frame_shadows.remove(&frame);
         }
         if let Some(old) = previous {
             self.conn.free_pixmap(old)?;
@@ -431,19 +426,20 @@ impl<'a, C: Connection> Wm<'a, C> {
             &ChangeWindowAttributesAux::new().background_pixmap(pixmap),
         )?;
         self.conn.free_gc(gc)?;
-        self.conn.configure_window(win, &shadow_aux(rect, sibling))?;
+        self.conn
+            .configure_window(win, &shadow_aux(rect, sibling))?;
         // One rounded square: the fixed small radius cuts all four corners. The
         // window area inside the frame is cut away too, so only the cast shows.
         let mask: Vec<x11rb::protocol::xproto::Rectangle> =
             shadow::clip_spans_outside_frame(shadow::shadow_spans(rect), rect, outer)
-            .into_iter()
-            .map(|(row, start, end)| x11rb::protocol::xproto::Rectangle {
-                x: start as i16,
-                y: row as i16,
-                width: end.saturating_sub(start) as u16,
-                height: 1,
-            })
-            .collect();
+                .into_iter()
+                .map(|(row, start, end)| x11rb::protocol::xproto::Rectangle {
+                    x: start as i16,
+                    y: row as i16,
+                    width: end.saturating_sub(start) as u16,
+                    height: 1,
+                })
+                .collect();
         self.conn.shape_rectangles(
             ShapeOp::SET,
             ShapeSk::BOUNDING,
@@ -463,10 +459,17 @@ impl<'a, C: Connection> Wm<'a, C> {
         let root = self.screen().root;
         let values: Vec<u32> = self
             .conn
-            .get_property(false, root, self.atoms.root_rubber, AtomEnum::CARDINAL, 0, 6)?
+            .get_property(
+                false,
+                root,
+                self.atoms.root_rubber,
+                AtomEnum::CARDINAL,
+                0,
+                6,
+            )?
             .reply()?
             .value32()
-            .map(|values| values.collect())
+            .map(std::iter::Iterator::collect)
             .unwrap_or_default();
         let next = RootRubber::from_cardinals(&values);
         let previous = std::mem::replace(&mut self.shadow_scene.rubber, next);
@@ -475,8 +478,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         for held in self.frame_shadows.values() {
             let area = shadow::shadow_rect(held.state.shaded);
-            let Some(region) =
-                shadow_rubber::damage_region(area, previous.as_ref(), next.as_ref())
+            let Some(region) = shadow_rubber::damage_region(area, previous.as_ref(), next.as_ref())
             else {
                 continue;
             };

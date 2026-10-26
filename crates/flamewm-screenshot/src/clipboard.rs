@@ -1,5 +1,5 @@
 //! Native X11 image/png clipboard ownership, including ICCCM INCR for large screenshots.
-//! The owner blocks in WaitForEvent and exits when another application replaces it.
+//! The owner blocks in `WaitForEvent` and exits when another application replaces it.
 
 use std::path::Path;
 use x11rb::NONE;

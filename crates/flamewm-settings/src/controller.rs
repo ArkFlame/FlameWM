@@ -94,21 +94,30 @@ mod tests {
     fn settings_application(
         transport: RecordingTransport,
     ) -> SettingsApplication<RecordingTransport> {
-        loaded_application(transport, |client| client.refresh_settings())
+        loaded_application(
+            transport,
+            flamewm_settings_core::SettingsClient::refresh_settings,
+        )
     }
 
     /// Controller over `transport`, with the queued display snapshot already loaded.
     fn displays_application(
         transport: RecordingTransport,
     ) -> SettingsApplication<RecordingTransport> {
-        loaded_application(transport, |client| client.refresh_displays())
+        loaded_application(
+            transport,
+            flamewm_settings_core::SettingsClient::refresh_displays,
+        )
     }
 
     /// Controller over `transport`, with the queued shortcut snapshot already loaded.
     fn shortcuts_application(
         transport: RecordingTransport,
     ) -> SettingsApplication<RecordingTransport> {
-        loaded_application(transport, |client| client.refresh_shortcuts())
+        loaded_application(
+            transport,
+            flamewm_settings_core::SettingsClient::refresh_shortcuts,
+        )
     }
 
     /// Values written to `key` by `ApplySettings` requests, in request order.
@@ -986,7 +995,7 @@ mod tests {
                 .iter()
                 .find(|(row, _)| row == key)
                 .expect("animation row");
-            for option in values.iter() {
+            for option in *values {
                 assert_eq!(
                     document.highlighted[&crate::animation_style_node(key, option)],
                     option == value,
@@ -1937,7 +1946,7 @@ mod tests {
     }
 
     /// A session whose snapshot holds `initial` for the surface colours. One queued
-    /// response per expected ApplySettings call keeps the transport in step.
+    /// response per expected `ApplySettings` call keeps the transport in step.
     fn color_session(
         initial: &str,
         applies: usize,
@@ -2394,7 +2403,9 @@ mod tests {
             transport
                 .responses
                 .push_back(Ok(ControlResponse::Displays(pending)));
-            if !expected_pending {
+            if expected_pending {
+                transport.responses.push_back(response);
+            } else {
                 let mut settled = two_mode_display_snapshot();
                 settled.outputs[0].current_mode = if action.ends_with("keep") {
                     ModeId(8)
@@ -2405,8 +2416,6 @@ mod tests {
                 transport
                     .responses
                     .push_back(Ok(ControlResponse::Displays(settled)));
-            } else {
-                transport.responses.push_back(response);
             }
             let mut application = displays_application(transport);
             let mut document = ProbeDocument::default();

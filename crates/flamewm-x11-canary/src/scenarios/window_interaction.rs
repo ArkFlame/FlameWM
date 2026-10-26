@@ -72,6 +72,11 @@ fn diagnostic(observed: bool, detail: impl Into<String>) -> (bool, String) {
 /// T06: a real-pointer drag must move the frame and leave it at that position
 /// after the XTEST button release.
 pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
+    // Mirror the canonical frame layout: the title-drag child is the
+    // titlebar band below the 6px top strip and left of the 114px controls.
+    const TITLEBAR_H: i16 = 31;
+    const CONTROLS_WIDTH: i16 = 114;
+    const RESIZE_T: i16 = 6;
     let Some(work_area) = super::interaction_regressions::root_work_area(canary) else {
         return diagnostic(
             false,
@@ -118,11 +123,6 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             ),
         );
     };
-    // Mirror the canonical frame layout: the title-drag child is the
-    // titlebar band below the 6px top strip and left of the 114px controls.
-    const TITLEBAR_H: i16 = 31;
-    const CONTROLS_WIDTH: i16 = 114;
-    const RESIZE_T: i16 = 6;
     let title_drag_width =
         (baseline.width as i16).saturating_sub(RESIZE_T.saturating_mul(2) + CONTROLS_WIDTH);
     let from = (
@@ -158,7 +158,7 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let max_x = work_right - i64::from(baseline.width);
     let min_y = work_top;
     let max_y = work_bottom - i64::from(baseline.height);
-    if work_area.2 <= 0 || work_area.3 <= 0 || max_x < min_x || max_y < min_y {
+    if work_area.2 == 0 || work_area.3 == 0 || max_x < min_x || max_y < min_y {
         return diagnostic(
             false,
             format!(
@@ -312,7 +312,7 @@ impl Insets {
 
 const T07_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Drains queued events, keeping the newest ConfigureNotify size reported for `client`.
+/// Drains queued events, keeping the newest `ConfigureNotify` size reported for `client`.
 fn drain_client_configure(canary: &crate::Canary, client: u32, last: &mut Option<(u16, u16)>) {
     while let Ok(Some(event)) = canary.conn.poll_for_event() {
         if let x11rb::protocol::Event::ConfigureNotify(e) = event {
@@ -323,13 +323,15 @@ fn drain_client_configure(canary: &crate::Canary, client: u32, last: &mut Option
     }
 }
 
-/// Waits up to T07_SETTLE for the frame to equal client plus the baseline insets.
+type SettledFrame = (crate::WinInfo, crate::WinInfo, Option<(u16, u16)>);
+
+/// Waits up to `T07_SETTLE` for the frame to equal client plus the baseline insets.
 fn t07_settle(
     canary: &crate::Canary,
     client_id: u32,
     frame_id: u32,
     insets: Insets,
-) -> Option<(crate::WinInfo, crate::WinInfo, Option<(u16, u16)>)> {
+) -> Option<SettledFrame> {
     let deadline = std::time::Instant::now() + T07_SETTLE;
     let mut last = None;
     loop {
@@ -349,8 +351,11 @@ fn t07_settle(
     }
 }
 
-/// Bounding-shape extents (min_x, min_y, max_x, max_y) of a window.
-fn t07_bounding_extents(canary: &crate::Canary, window: u32) -> Result<(i32, i32, i32, i32), String> {
+/// Bounding-shape extents (`min_x`, `min_y`, `max_x`, `max_y`) of a window.
+fn t07_bounding_extents(
+    canary: &crate::Canary,
+    window: u32,
+) -> Result<(i32, i32, i32, i32), String> {
     use x11rb::protocol::shape::{ConnectionExt as _, SK};
     let reply = canary
         .conn
@@ -399,7 +404,7 @@ fn t07_shape_matches(
             want.2, want.3, window.width, window.height
         ));
     }
-    Ok(format!("{label}-shape={}x{}", x1, y1))
+    Ok(format!("{label}-shape={x1}x{y1}"))
 }
 
 /// Client pixels in row-major order, 0xRRGGBB low 24 bits.
@@ -408,12 +413,23 @@ fn t07_client_pixels(canary: &crate::Canary, client: &crate::WinInfo) -> Result<
     let (w, h) = (usize::from(client.width), usize::from(client.height));
     let reply = canary
         .conn
-        .get_image(ImageFormat::Z_PIXMAP, client.id, 0, 0, client.width, client.height, !0)
+        .get_image(
+            ImageFormat::Z_PIXMAP,
+            client.id,
+            0,
+            0,
+            client.width,
+            client.height,
+            !0,
+        )
         .map_err(|e| e.to_string())?
         .reply()
         .map_err(|e| e.to_string())?;
     if reply.data.len() < w * h * 4 {
-        return Err(format!("get_image returned {} bytes for {w}x{h}", reply.data.len()));
+        return Err(format!(
+            "get_image returned {} bytes for {w}x{h}",
+            reply.data.len()
+        ));
     }
     Ok(reply
         .data
@@ -463,19 +479,23 @@ fn t07_content_band(
         return Err("no strip to sample".to_owned());
     }
     if matched * 10 < strip * 9 {
-        return Err(format!("strip {matched}/{strip} px match bg #{bg:06x}; stale band"));
+        return Err(format!(
+            "strip {matched}/{strip} px match bg #{bg:06x}; stale band"
+        ));
     }
     Ok(format!("strip={matched}/{strip}px bg=#{bg:06x}"))
 }
 
-/// One named check after a resize release: the client, its frame, the last ConfigureNotify, both
+type ShapeOffsets = ((i32, i32), (i32, i32));
+
+/// One named check after a resize release: the client, its frame, the last `ConfigureNotify`, both
 /// bounding shapes, and the newly exposed client pixels all describe the new size.
 fn t07_content_after_resize(
     canary: &crate::Canary,
     client_id: u32,
     frame_id: u32,
     insets: Insets,
-    offsets: &mut Option<((i32, i32), (i32, i32))>,
+    offsets: &mut Option<ShapeOffsets>,
     prev: (u16, u16),
 ) -> Result<String, String> {
     let (c, f, last) = t07_settle(canary, client_id, frame_id, insets)
@@ -483,16 +503,12 @@ fn t07_content_after_resize(
     // The first geometry-changing resize fixes the shape offset (size minus shape extent) for
     // client and frame; every later resize must keep it. A shape that is not re-applied after
     // growth changes the offset and fails here.
-    let known = match *offsets {
-        Some(known) => known,
-        None => {
-            let known = (
-                t07_shape_offset(canary, &c)?,
-                t07_shape_offset(canary, &f)?,
-            );
-            *offsets = Some(known);
-            known
-        }
+    let known = if let Some(known) = *offsets {
+        known
+    } else {
+        let known = (t07_shape_offset(canary, &c)?, t07_shape_offset(canary, &f)?);
+        *offsets = Some(known);
+        known
     };
     let now = Insets::of(&c, &f);
     if now != insets {
@@ -518,9 +534,10 @@ fn t07_content_after_resize(
 /// T07: real 8-way resize via corner/edge drags; at least one drag changes
 /// geometry and the pure 6px edge contract still classifies all 8 points.
 /// Named check `t07-client-content-after-resize`: after every geometry-changing release, the
-/// client matches frame minus the baseline insets, its last ConfigureNotify, both bounding shapes,
+/// client matches frame minus the baseline insets, its last `ConfigureNotify`, both bounding shapes,
 /// and its newly exposed pixels all describe the new size.
 pub fn run_t07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
+    use x11rb::protocol::xproto::ConnectionExt as _;
     let Some(target) = resolve_target(canary, args) else {
         return (false, "no target path=real-pointer".to_owned());
     };
@@ -560,7 +577,6 @@ pub fn run_t07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let mut offsets: Option<((i32, i32), (i32, i32))> = None;
     let mask = x11rb::protocol::xproto::ChangeWindowAttributesAux::new()
         .event_mask(x11rb::protocol::xproto::EventMask::STRUCTURE_NOTIFY);
-    use x11rb::protocol::xproto::ConnectionExt as _;
     let subscribed = canary
         .conn
         .change_window_attributes(target.id, &mask)

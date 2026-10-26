@@ -101,8 +101,8 @@ impl ClientSizeHints {
 
 /// X11 window gravity values (`XDefineCursor` numbering: Forget=0,
 /// NorthWest=1 .. SouthEast=9, Static=10). Live owner for gravity
-/// interpretation; `frame::geometry` consumes this for MapRequest /
-/// ConfigureRequest reference-point conversion.
+/// interpretation; `frame::geometry` consumes this for `MapRequest` /
+/// `ConfigureRequest` reference-point conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum WinGravity {
@@ -149,8 +149,8 @@ impl WinGravity {
     /// Anchor numerator over denominator 2 along (x, y).
     /// NorthWest=(0,0), Center=(1,1), SouthEast=(2,2).
     /// Static keeps the client origin fixed and is handled separately
-    /// by callers; its anchor here matches NorthWest.
-    /// Forget has no defined anchor and behaves as NorthWest.
+    /// by callers; its anchor here matches `NorthWest`.
+    /// Forget has no defined anchor and behaves as `NorthWest`.
     #[must_use]
     pub const fn anchor_num(self) -> (i32, i32) {
         match self {
@@ -270,7 +270,7 @@ pub fn constrain_frame_size(
 mod tests {
     use super::*;
 
-    fn flags(values: &mut Vec<u32>, flag: u32) {
+    fn flags(values: &mut [u32], flag: u32) {
         values[0] |= flag;
     }
 

@@ -508,7 +508,7 @@ fn unpremultiply_pixel(src: &[f32], dst: &mut [u8]) {
 }
 
 /// Rounds to nearest in `[0, 255]`. Avoids `f32::round`, which is a libm call
-/// without SSE4.1 on the default x86_64 target.
+/// without SSE4.1 on the default `x86_64` target.
 fn to_u8(value: f32) -> u8 {
     (value.clamp(0.0, 255.0) + 0.5) as u8
 }

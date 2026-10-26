@@ -1,5 +1,6 @@
-//! Filesystem and navigation model for the native FlameWM explorer.
+//! Filesystem and navigation model for the native `FlameWM` explorer.
 //! Filesystem work must be performed by the worker; the UI thread only projects snapshots.
+#![cfg_attr(rustfmt, rustfmt::skip)]
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
@@ -27,13 +28,14 @@ pub mod thumbs;
 pub mod trash;
 pub mod view;
 
+#[rustfmt::skip]
 pub mod jobs;
 /// Row widgets in the template. The list viewport decides how many of them are shown.
 pub const ROW_SLOTS: usize = 24;
 
 /// Window row shown by DOM list slot `slot`. The smooth-scroll glide keeps slot 0 as a buffer above
 /// the window, so slot k shows window row k-1. Paint and hit-testing both use this mapping.
-pub fn row_slot_index(origin: usize, slot: usize) -> isize {
+#[must_use] pub fn row_slot_index(origin: usize, slot: usize) -> isize {
     origin as isize + slot as isize - 1
 }
 pub const MAX_LISTED_ENTRIES: usize = 100_000;
@@ -52,15 +54,15 @@ pub struct Entry {
     lower_name: String,
 }
 impl Entry {
-    pub fn new(path: PathBuf, name: String, directory: bool, symlink: bool, size: u64, modified: Option<SystemTime>) -> Self {
+    #[must_use] pub fn new(path: PathBuf, name: String, directory: bool, symlink: bool, size: u64, modified: Option<SystemTime>) -> Self {
         let lower_name = name.to_lowercase();
         Self { path, name, directory, symlink, size, modified, lower_name }
     }
-    pub fn size_label(&self) -> String {
+    #[must_use] pub fn size_label(&self) -> String {
         if self.directory { return "—".into(); }
         view::human_size(self.size)
     }
-    pub fn modified_label(&self) -> String {
+    #[must_use] pub fn modified_label(&self) -> String {
         self.modified.map_or_else(|| "—".into(), |m| view::date_label(m, chrono::Local::now()))
     }
 }
@@ -110,7 +112,7 @@ pub struct Tab {
     filter_cache: RefCell<Option<(u64, String, usize)>>,
 }
 impl Tab {
-    pub fn new(path: PathBuf) -> Self { Self { selected_paths:HashSet::new(), history: vec![path], cursor:0, entries:Vec::new(), selected:None, anchor:None, scroll:0, search:String::new(), loading:true, revision:0, filter_cache:RefCell::new(None) } }
+    #[must_use] pub fn new(path: PathBuf) -> Self { Self { selected_paths:HashSet::new(), history: vec![path], cursor:0, entries:Vec::new(), selected:None, anchor:None, scroll:0, search:String::new(), loading:true, revision:0, filter_cache:RefCell::new(None) } }
     /// Replaces the listing; the filtered-count cache is invalidated.
     pub fn set_entries(&mut self, items: Vec<Entry>) { self.entries=items; self.revision+=1; }
     pub fn extend_entries(&mut self, items: Vec<Entry>) { self.entries.extend(items); self.revision+=1; }
@@ -234,8 +236,8 @@ pub struct Explorer {
     pub hidden: bool, pub sort: SortBy, pub status: String, pub clipboard: Option<(Vec<PathBuf>, bool)>,
 }
 impl Explorer {
-    pub fn new(path: PathBuf) -> Self { Self { tabs: vec![Tab::new(path)], active:0, generation:1, hidden:false, sort:SortBy::Name, status:"Loading…".into(), clipboard:None } }
-    pub fn tab(&self) -> &Tab { &self.tabs[self.active] }
+    #[must_use] pub fn new(path: PathBuf) -> Self { Self { tabs: vec![Tab::new(path)], active:0, generation:1, hidden:false, sort:SortBy::Name, status:"Loading…".into(), clipboard:None } }
+    #[must_use] pub fn tab(&self) -> &Tab { &self.tabs[self.active] }
     pub fn tab_mut(&mut self) -> &mut Tab { &mut self.tabs[self.active] }
     pub fn switch_tab(&mut self, index:usize) -> bool { if index>=self.tabs.len() { false } else {self.active=index;true} }
     pub fn close_tab(&mut self) { if self.tabs.len()>1 {self.tabs.remove(self.active);self.active=self.active.min(self.tabs.len()-1);} }
@@ -282,7 +284,7 @@ impl Explorer {
 pub enum PlaceGroup { Places, Devices, Network, Pinned }
 
 impl PlaceGroup {
-    pub fn heading(self) -> &'static str {
+    #[must_use] pub fn heading(self) -> &'static str {
         match self { Self::Places => "Places", Self::Devices => "Devices", Self::Network => "Network", Self::Pinned => "Pinned Folders" }
     }
 }
@@ -300,7 +302,7 @@ pub struct Place {
     pub device:Option<String>,
 }
 impl Place {
-    pub fn mounted(&self)->bool {!self.path.as_os_str().is_empty()}
+    #[must_use] pub fn mounted(&self)->bool {!self.path.as_os_str().is_empty()}
 }
 
 /// One sidebar row: a group heading, or an index into the places list.
@@ -320,7 +322,7 @@ pub fn sidebar_rows(places:&[Place]) -> Vec<SidebarRow> {
 }
 pub fn home_dir() -> PathBuf {std::env::var_os("HOME").map(PathBuf::from).filter(|p|p.is_dir()).unwrap_or_else(||PathBuf::from("/"))}
 pub fn user_dir(name:&str, fallback:&str, home:&Path) -> PathBuf {
-    let base=std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".config"));
+    let base=std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from);
     let content=fs::read_to_string(base.join("user-dirs.dirs")).unwrap_or_default();
     for line in content.lines() {
         if let Some((key,val))=line.trim().split_once('=') {
@@ -334,14 +336,14 @@ pub fn user_dir(name:&str, fallback:&str, home:&Path) -> PathBuf {
     home.join(fallback)
 }
 pub fn add_bookmark(path:&Path,home:&Path)->io::Result<()> {
-    let base=std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".config"));
+    use std::fs::OpenOptions;
+    let base=std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from);
     let dest=base.join("gtk-3.0/bookmarks");
     let escaped=path.to_string_lossy().bytes().map(|b|if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {(b as char).to_string()}else{format!("%{b:02X}")}).collect::<String>();
     let uri=format!("file://{escaped}");
     let current=fs::read_to_string(&dest).unwrap_or_default();
     if current.lines().any(|line|line.split_whitespace().next()==Some(uri.as_str())) {return Ok(());}
     fs::create_dir_all(dest.parent().unwrap_or(home))?;
-    use std::fs::OpenOptions;
     let mut file=OpenOptions::new().append(true).create(true).open(dest)?;
     writeln!(file,"{uri}")
 }
@@ -369,12 +371,12 @@ pub fn places(home:&Path,unmounted:&[places::BlockDevice]) -> Vec<Place> {
         places.push(favorite(name,user_dir(id,dir,home),icon));
     }
     places.push(Place{name:"Local Disk".into(),path:PathBuf::from("/"),removable:false,group:PlaceGroup::Devices,icon:"drive",device:None});
-    let base=std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".config"));
+    let base=std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from);
     if let Ok(source)=fs::read_to_string(base.join("gtk-3.0/bookmarks")) {
         for line in source.lines().take(128) {
             let mut words=line.splitn(2,' ');
             if let Some(path)=words.next().and_then(unescape_uri).filter(|p|p.is_dir()) {
-                let name=words.next().map(str::to_owned).unwrap_or_else(||path.file_name().unwrap_or_default().to_string_lossy().into_owned());
+                let name=words.next().map_or_else(||path.file_name().unwrap_or_default().to_string_lossy().into_owned(), str::to_owned);
                 places.push(Place{name,path,removable:false,group:PlaceGroup::Pinned,icon:"folder",device:None});
             }
         }
@@ -396,7 +398,7 @@ pub fn places(home:&Path,unmounted:&[places::BlockDevice]) -> Vec<Place> {
 }
 
 /// Network locations from mountinfo text: cifs/nfs/sshfs/WebDAV mounts, and each share under the GVFS FUSE root.
-pub fn network_places(mountinfo:&str,gvfs_root:&Path)->Vec<Place> {
+#[must_use] pub fn network_places(mountinfo:&str,gvfs_root:&Path)->Vec<Place> {
     let mut out=Vec::new();
     for mount in places::parse_network_mounts(mountinfo) {
         if mount.fstype==places::GVFS_FSTYPE {
@@ -424,7 +426,7 @@ fn network_place(name:String,path:PathBuf)->Place {
 /// Sidebar row for a present but unmounted filesystem: no path, so `mounted()` is false.
 /// The drive/removable distinction comes from `lsblk`: an internal partition is listed too, but keeps
 /// the internal-drive glyph and is not presented as removable media.
-pub fn unmounted_place(device:&places::BlockDevice)->Place {
+#[must_use] pub fn unmounted_place(device:&places::BlockDevice)->Place {
     let icon=if device.removable {"usb"} else {"drive"};
     Place{name:device.label.clone(),path:PathBuf::new(),removable:device.removable,group:PlaceGroup::Devices,icon,device:Some(device.device.clone())}
 }
@@ -433,7 +435,7 @@ pub fn unmounted_place(device:&places::BlockDevice)->Place {
 pub fn copy_entry(from: &Path, to: &Path, report: &mut impl FnMut(u64)) -> io::Result<()> {
     jobs::copy_publish(from, to, false, &jobs::CancellationToken::new(), report)
 }
-pub fn destination_for(from: &Path, directory: &Path) -> PathBuf {
+#[must_use] pub fn destination_for(from: &Path, directory: &Path) -> PathBuf {
     let name = from.file_name().unwrap_or_default().to_string_lossy();
     let target = directory.join(name.as_ref());
     if fs::symlink_metadata(&target).is_err() { return target; }
@@ -444,7 +446,7 @@ pub fn destination_for(from: &Path, directory: &Path) -> PathBuf {
     directory.join(format!("{name} (overflow)"))
 }
 /// Duplicate target: `name (copy).ext`, then `name (copy 2).ext`, never the source name itself.
-pub fn duplicate_destination(from: &Path, directory: &Path) -> PathBuf {
+#[must_use] pub fn duplicate_destination(from: &Path, directory: &Path) -> PathBuf {
     let name = from.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let (stem, ext) = match from.extension() {
         Some(ext) if from.is_file() => {
@@ -492,7 +494,7 @@ impl BatchReport {
         self.cancelled|=other.cancelled;
         self.undo.extend(other.undo);
     }
-    pub fn message(&self, verb:&str)->String {
+    #[must_use] pub fn message(&self, verb:&str)->String {
         let mut text=self.summary(verb);
         if self.skipped>0 {text.push_str(&format!(", {} skipped",self.skipped));}
         if self.cancelled {text=format!("Cancelled: {text}");}
@@ -528,13 +530,13 @@ pub fn transfer_batch(sources:&[PathBuf], directory:&Path, move_it:bool, report:
 /// A drop follows the file-manager convention: move within one filesystem,
 /// copy across filesystem boundaries; Ctrl forces a copy. Cut/Paste remains
 /// an explicit move and is not affected by this policy.
-pub fn drop_moves(force_copy:bool, source_dev:u64, destination_dev:u64)->bool {
+#[must_use] pub fn drop_moves(force_copy:bool, source_dev:u64, destination_dev:u64)->bool {
     !force_copy && source_dev==destination_dev
 }
 
 /// A drop does nothing when it would not change the file system: the target is one of the dragged items,
 /// lies inside one of them (a folder into itself), or is the folder the items already live in (no copy, no "name (1)").
-pub fn drop_is_noop(sources:&[PathBuf], target:&Path)->bool {
+#[must_use] pub fn drop_is_noop(sources:&[PathBuf], target:&Path)->bool {
     sources.iter().any(|source| target==source.as_path() || target.starts_with(source))
         || (!sources.is_empty() && sources.iter().all(|source| source.parent()==Some(target)))
 }
@@ -548,7 +550,7 @@ pub fn transfer_drop_batch(sources:&[PathBuf], directory:&Path, force_copy:bool,
 pub fn move_entry(from: &Path, to: &Path, report: &mut impl FnMut(u64)) -> io::Result<()> {
     jobs::move_publish(from, to, false, &jobs::CancellationToken::new(), report)
 }
-pub fn display_location(path:&Path, home:&Path)->String {
+#[must_use] pub fn display_location(path:&Path, home:&Path)->String {
     if let Some(url)=remote::url_of(path) {return remote::display_text(&url);}
     if path==home {return "~".into();}
     if let Ok(rest)=path.strip_prefix(home) {return format!("~/{}",rest.display());}
@@ -576,12 +578,13 @@ pub fn parse_address(text:&str, home:&Path)->Result<AddressTarget,String> {
     if trimmed.starts_with('/') {return Ok(AddressTarget::Local(PathBuf::from(trimmed)));}
     Err("Enter an absolute path, ~/path, or supported remote URL".into())
 }
-pub fn is_archive(path:&Path)->bool {
+#[must_use] pub fn is_archive(path:&Path)->bool {
     let name=path.file_name().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
     [".zip",".7z",".rar",".tar",".tar.gz",".tgz",".tar.bz2",".tbz2",".tar.xz",".txz",".tar.zst",".jar",".deb"]
         .iter().any(|suffix|name.ends_with(suffix))
 }
 #[cfg(test)]
+#[rustfmt::skip]
 mod tests;
 
 #[cfg(test)]
@@ -616,7 +619,7 @@ impl TextField {
         self.selection = Some((0, end));
         self.caret = end;
     }
-    pub fn has_selection(&self) -> bool {
+    #[must_use] pub fn has_selection(&self) -> bool {
         self.selection.is_some_and(|(a, b)| a != b)
     }
     pub fn insert(&mut self, text: &str) {
@@ -648,7 +651,7 @@ impl TextField {
         self.caret = to.min(self.len());
     }
     /// The text with a `|` at the caret.
-    pub fn display(&self) -> String {
+    #[must_use] pub fn display(&self) -> String {
         let at = self.byte_at(self.caret);
         format!("{}|{}", &self.text[..at], &self.text[at..])
     }
@@ -673,7 +676,7 @@ impl TextField {
 
 /// Windows-style rename selection in chars: a file selects its stem so typing keeps the extension.
 /// Folders, names without an extension and dot-files select everything.
-pub fn rename_selection(name: &str, folder: bool) -> (usize, usize) {
+#[must_use] pub fn rename_selection(name: &str, folder: bool) -> (usize, usize) {
     let total = name.chars().count();
     match name.rfind('.') {
         Some(dot) if !folder && dot > 0 => (0, name[..dot].chars().count()),
@@ -694,5 +697,6 @@ extern crate self as flamewm_explorer;
 /// The application entry point, compiled into this library so the multi-call `flamewm-apps`
 /// executable can run it; `src/main.rs` is a one-line wrapper around it.
 #[doc(hidden)]
+#[rustfmt::skip]
 #[path = "main.rs"]
 pub mod entry;

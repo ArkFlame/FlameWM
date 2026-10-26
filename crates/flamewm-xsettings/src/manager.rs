@@ -1,4 +1,4 @@
-//! XSettings manager ownership and publication over an abstract X11 port.
+//! `XSettings` manager ownership and publication over an abstract X11 port.
 //!
 //! [`acquire_manager`] implements the claim sequence: refuse a foreign owner,
 //! create a manager window, obtain a server timestamp, take the selection,
@@ -25,8 +25,8 @@ pub struct SelectionClear {
     pub selection: String,
 }
 
-/// Whether FlameWM still owns `_XSETTINGS_S0`. `Lost` is terminal for the
-/// process: FlameWM never reclaims the selection from a new owner.
+/// Whether `FlameWM` still owns `_XSETTINGS_S0`. `Lost` is terminal for the
+/// process: `FlameWM` never reclaims the selection from a new owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagerOwnership {
     Owned,
@@ -68,7 +68,7 @@ pub trait ManagerPort {
         window: u32,
         timestamp: u32,
     ) -> FlameResult<()>;
-    /// Send the XSettings `MANAGER` client message to the root window.
+    /// Send the `XSettings` `MANAGER` client message to the root window.
     fn announce_manager(&mut self, timestamp: u32, selection: &str, window: u32)
     -> FlameResult<()>;
     /// Replace the `_XSETTINGS_SETTINGS` property on the manager window.
@@ -82,7 +82,7 @@ pub trait ManagerPort {
     fn wake_fd(&self) -> Option<RawFd>;
 }
 
-/// A live XSettings manager: owns the selection through its port and tracks the
+/// A live `XSettings` manager: owns the selection through its port and tracks the
 /// published state so later publications compute serials correctly.
 #[derive(Debug)]
 pub struct XSettingsManager<P: ManagerPort> {
@@ -133,7 +133,7 @@ impl<P: ManagerPort> XSettingsManager<P> {
     }
 
     /// Consume pending manager-connection events. A `SelectionClear` for our
-    /// window and selection moves `Owned -> Lost` and is logged once; FlameWM
+    /// window and selection moves `Owned -> Lost` and is logged once; `FlameWM`
     /// does not fight the new owner. Returns `true` when this call lost ownership.
     pub fn drain_events(&mut self) -> FlameResult<bool> {
         let mut lost_now = false;

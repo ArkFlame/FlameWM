@@ -886,13 +886,19 @@ mod tests {
 
     #[test]
     fn flex_grow_fills_available_width() {
-        let mut left = Style::default();
-        left.flex_grow = 1.0;
-        let mut right = Style::default();
-        right.width = Length::Px(20.0);
-        let mut root_style = Style::default();
-        root_style.display = Display::Flex;
-        root_style.height = Length::Px(40.0);
+        let left = Style {
+            flex_grow: 1.0,
+            ..Style::default()
+        };
+        let right = Style {
+            width: Length::Px(20.0),
+            ..Style::default()
+        };
+        let root_style = Style {
+            display: Display::Flex,
+            height: Length::Px(40.0),
+            ..Style::default()
+        };
         let document = CompiledDocument {
             source_fingerprint: 0,
             root: 0,
@@ -989,9 +995,11 @@ mod tests {
     }
 
     fn fixed_doc(w: f32, h: f32) -> RuntimeDocument {
-        let mut root_style = Style::default();
-        root_style.width = Length::Px(w);
-        root_style.height = Length::Px(h);
+        let root_style = Style {
+            width: Length::Px(w),
+            height: Length::Px(h),
+            ..Style::default()
+        };
         RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,
             root: 0,
@@ -1015,13 +1023,17 @@ mod tests {
     }
 
     fn overflow_auto_doc() -> RuntimeDocument {
-        let mut root_style = Style::default();
-        root_style.width = Length::Px(200.0);
-        root_style.height = Length::Px(100.0);
-        root_style.overflow_y = Overflow::Auto;
-        let mut child_style = Style::default();
-        child_style.width = Length::Px(180.0);
-        child_style.height = Length::Px(500.0);
+        let root_style = Style {
+            width: Length::Px(200.0),
+            height: Length::Px(100.0),
+            overflow_y: Overflow::Auto,
+            ..Style::default()
+        };
+        let child_style = Style {
+            width: Length::Px(180.0),
+            height: Length::Px(500.0),
+            ..Style::default()
+        };
         RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,
             root: 0,
@@ -1060,12 +1072,16 @@ mod tests {
     }
 
     fn popup_wrapper_doc() -> RuntimeDocument {
-        let mut wrapper_style = Style::default();
-        wrapper_style.width = Length::Percent(1.0);
-        wrapper_style.height = Length::Percent(1.0);
-        let mut popup_style = Style::default();
-        popup_style.width = Length::Px(200.0);
-        popup_style.height = Length::Px(100.0);
+        let wrapper_style = Style {
+            width: Length::Percent(1.0),
+            height: Length::Percent(1.0),
+            ..Style::default()
+        };
+        let popup_style = Style {
+            width: Length::Px(200.0),
+            height: Length::Px(100.0),
+            ..Style::default()
+        };
         RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,
             root: 0,
@@ -1156,11 +1172,10 @@ mod tests {
             hover_style: None,
             active_style: None,
         };
-        let px = |w: f32, h: f32| {
-            let mut s = Style::default();
-            s.width = Length::Px(w);
-            s.height = Length::Px(h);
-            s
+        let px = |w: f32, h: f32| Style {
+            width: Length::Px(w),
+            height: Length::Px(h),
+            ..Style::default()
         };
         let mut root = px(300.0, 200.0);
         root.overflow_y = Overflow::Auto;
@@ -1173,14 +1188,20 @@ mod tests {
         abs.top = Length::Px(0.0);
         let mut hidden = px(10.0, 10.0);
         hidden.display = Display::None;
-        let mut hidden_leaf = Style::default();
-        hidden_leaf.display = Display::None;
-        let mut col = Style::default();
-        col.display = Display::Flex;
-        col.flex_direction = FlexDirection::Column;
-        col.height = Length::Px(60.0);
-        let mut grow = Style::default();
-        grow.flex_grow = 1.0;
+        let hidden_leaf = Style {
+            display: Display::None,
+            ..Style::default()
+        };
+        let col = Style {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            height: Length::Px(60.0),
+            ..Style::default()
+        };
+        let grow = Style {
+            flex_grow: 1.0,
+            ..Style::default()
+        };
         let mut inner_abs = px(15.0, 15.0);
         inner_abs.position = Position::Absolute;
         inner_abs.left = Length::Px(10.0);

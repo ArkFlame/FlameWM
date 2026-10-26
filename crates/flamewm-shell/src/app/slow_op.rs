@@ -11,9 +11,6 @@ pub(crate) const SHELL_SLOW_COOLDOWN_MS: u64 = 500;
 /// C07 slow-operation note: when `started`->now exceeds one 60Hz frame,
 /// emit `shell.operation.slow` debug with a 500ms per-op cooldown.
 pub(crate) fn shell_slow_note(op: &'static str, started: Instant) {
-    if started.elapsed().as_nanos() <= SHELL_SLOW_TOTAL_NS {
-        return;
-    }
     fn last_for(op: &str) -> Option<&'static std::sync::atomic::AtomicU64> {
         use std::sync::atomic::AtomicU64;
         static START: AtomicU64 = AtomicU64::new(0);
@@ -25,6 +22,9 @@ pub(crate) fn shell_slow_note(op: &'static str, started: Instant) {
             "workspace" => Some(&WORKSPACE),
             _ => None,
         }
+    }
+    if started.elapsed().as_nanos() <= SHELL_SLOW_TOTAL_NS {
+        return;
     }
     let wall_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

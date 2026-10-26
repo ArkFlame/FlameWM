@@ -382,7 +382,7 @@ fn ceil_div(total: usize, per_page: usize) -> usize {
     if total == 0 {
         1
     } else {
-        (total + per_page - 1) / per_page
+        total.div_ceil(per_page)
     }
 }
 
@@ -393,8 +393,10 @@ mod tests {
 
     #[test]
     fn endpoint_row_maps_to_revision_fenced_volume_action() {
-        let mut snapshot = SystemSnapshot::default();
-        snapshot.revision = 9;
+        let mut snapshot = SystemSnapshot {
+            revision: 9,
+            ..SystemSnapshot::default()
+        };
         snapshot.audio.availability = ServiceAvailability::Available;
         snapshot.audio.generation = 3;
         snapshot.audio.server_generation = 4;
@@ -452,8 +454,10 @@ mod tests {
     }
 
     fn sink_fixture(availability: ServiceAvailability) -> SystemSnapshot {
-        let mut snapshot = SystemSnapshot::default();
-        snapshot.revision = 5;
+        let mut snapshot = SystemSnapshot {
+            revision: 5,
+            ..SystemSnapshot::default()
+        };
         snapshot.audio.availability = availability;
         snapshot.audio.generation = 1;
         snapshot.audio.server_generation = 2;

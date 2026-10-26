@@ -23,9 +23,11 @@ pub fn logical_to_physical(logical: u16, scale_percent: u16) -> i32 {
 }
 
 fn effective_scale(scale_percent: u16) -> u16 {
-    is_supported_scale(scale_percent)
-        .then_some(scale_percent)
-        .unwrap_or(100)
+    if is_supported_scale(scale_percent) {
+        scale_percent
+    } else {
+        100
+    }
 }
 
 /// Taskbar layout from `taskbarStyle`, `taskbarFloatingMargin` and `taskbarFloatingRadius`.
@@ -250,14 +252,15 @@ impl PanelManager {
     pub fn active_output(&self) -> Option<OutputId> {
         // Current native Shell contract: focused window output, then primary, then first.
         // Pointer location no longer redirects keyboard Start toggling.
-        for candidate in [
+        for output in [
             self.focused_frame_output.as_ref(),
             self.primary_output.as_ref(),
-        ] {
-            if let Some(output) = candidate {
-                if self.panels.contains_key(output) {
-                    return Some(output.clone());
-                }
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if self.panels.contains_key(output) {
+                return Some(output.clone());
             }
         }
         self.panels.keys().next().cloned()
@@ -277,7 +280,6 @@ impl PanelManager {
         self.panels.keys().cloned().collect()
     }
 
-    #[must_use]
     pub fn panels(&self) -> impl Iterator<Item = &OutputPanel> {
         self.panels.values()
     }

@@ -26,6 +26,7 @@ POLKIT_CANDIDATES = (
     "/usr/lib/polkit-kde-authentication-agent-1",
     "/usr/libexec/polkit-gnome-authentication-agent-1",
     "/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1",
+    "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1",
 )
 NOTIFIER_CANDIDATES = ("dunst", "xfce4-notifyd", "lxqt-notificationd")
 CLIPBOARD_CANDIDATES = ("xfce4-clipman", "qlipper", "copyq")

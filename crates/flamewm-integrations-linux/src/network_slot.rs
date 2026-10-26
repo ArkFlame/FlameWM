@@ -1,7 +1,7 @@
-//! Fail-soft ownership of the optional NetworkManager system-bus provider.
+//! Fail-soft ownership of the optional `NetworkManager` system-bus provider.
 //!
 //! An unreachable system bus must not abort the desktop: the slot degrades to
-//! `Unavailable`, which publishes the same snapshot as a missing NetworkManager.
+//! `Unavailable`, which publishes the same snapshot as a missing `NetworkManager`.
 
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -13,7 +13,7 @@ use flamewm_dbus_reactor::BusWatch;
 
 use crate::network_manager::NetworkManagerProvider;
 
-/// NetworkManager provider slot. `Unavailable` keeps the reason and a never-ready fd so the
+/// `NetworkManager` provider slot. `Unavailable` keeps the reason and a never-ready fd so the
 /// reactor registration shape is unchanged without any timer or polling.
 pub enum NetworkManagerSlot {
     Connected(NetworkManagerProvider),

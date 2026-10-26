@@ -5,7 +5,7 @@ fn desktop_configure_is_forced_to_bottom_and_keeps_geometry() {
         .y(0)
         .width(1350)
         .height(641)
-        .sibling(0x200000)
+        .sibling(0x0020_0000)
         .stack_mode(StackMode::ABOVE);
     let aux = desktop_stack_policy(raise_request, WindowKind::Desktop);
     assert_eq!(aux.stack_mode, Some(StackMode::BELOW));
@@ -25,7 +25,7 @@ fn desktop_configure_is_forced_to_bottom_and_keeps_geometry() {
 #[test]
 fn non_desktop_configure_keeps_stack_intent() {
     let request = ConfigureWindowAux::new()
-        .sibling(0x200000)
+        .sibling(0x0020_0000)
         .stack_mode(StackMode::ABOVE);
     for kind in [
         WindowKind::Normal,
@@ -35,7 +35,7 @@ fn non_desktop_configure_keeps_stack_intent() {
     ] {
         let aux = desktop_stack_policy(request, kind);
         assert_eq!(aux.stack_mode, Some(StackMode::ABOVE), "{kind:?}");
-        assert_eq!(aux.sibling, Some(0x200000), "{kind:?}");
+        assert_eq!(aux.sibling, Some(0x0020_0000), "{kind:?}");
     }
 }
 
@@ -454,10 +454,9 @@ fn cursor_kind_covers_eight_directions() {
     use flamewm_render_core::CursorKind;
     let edges = |left, top, right, bottom| ResizeEdges {
         left,
-        top,
         right,
+        top,
         bottom,
-        ..ResizeEdges::default()
     };
     let cases = [
         (
@@ -496,8 +495,10 @@ fn cursor_kind_covers_eight_directions() {
 #[test]
 fn start_menu_toggle_flag_defaults_to_false() {
     assert!(!WmChangeSet::default().start_menu_toggle);
-    let mut changes = WmChangeSet::default();
-    changes.start_menu_toggle = true;
+    let mut changes = WmChangeSet {
+        start_menu_toggle: true,
+        ..WmChangeSet::default()
+    };
     let drained = changes.take();
     assert!(drained.start_menu_toggle);
     assert!(!changes.start_menu_toggle);

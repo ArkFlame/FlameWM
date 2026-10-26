@@ -27,7 +27,7 @@ pub(crate) fn write_atomic_text(path: &Path, text: &str) -> io::Result<()> {
                 }
             },
         ) {
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             result => return result,
         }
     }

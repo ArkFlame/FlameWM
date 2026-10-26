@@ -1,11 +1,11 @@
-//! XWayland hosting and X11 window bookkeeping.
+//! `XWayland` hosting and X11 window bookkeeping.
 //!
 //! smithay runs the X11 window manager side (`X11Wm`); this module decides how X11 windows enter
-//! the compositor model. Normal windows join `WindowModel` and receive FlameWM frames.
+//! the compositor model. Normal windows join `WindowModel` and receive `FlameWM` frames.
 //! Override-redirect windows (menus, tooltips), docks and the desktop are unmanaged: they are
 //! drawn at their own geometry, never framed or moved by the compositor. Docks reserve their
 //! strut from the work area. smithay 0.7 does not expose `_NET_WM_WINDOW_TYPE` or
-//! `_NET_WM_STRUT*`, so they are read through a second X connection to the XWayland display.
+//! `_NET_WM_STRUT*`, so they are read through a second X connection to the `XWayland` display.
 
 use std::error::Error;
 use std::os::fd::OwnedFd;
@@ -28,7 +28,7 @@ use smithay::xwayland::{X11Surface, X11Wm, XWayland, XWaylandEvent, XwmHandler};
 use crate::model::{Rect, ResizeEdge as Edge, WindowId};
 use crate::state::{Grab, State};
 
-/// Window role as far as FlameWM cares about it.
+/// Window role as far as `FlameWM` cares about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Dock,
@@ -72,7 +72,7 @@ impl Props {
             .get_property(false, window, property, ty, 0, 64)
             .ok()
             .and_then(|cookie| cookie.reply().ok())
-            .and_then(|reply| reply.value32().map(|values| values.collect()))
+            .and_then(|reply| reply.value32().map(std::iter::Iterator::collect))
             .unwrap_or_default()
     }
 
@@ -121,7 +121,7 @@ pub struct Unmanaged {
     pub strut: Option<[i32; 4]>,
 }
 
-/// Spawns XWayland and returns the source to insert into the loop. `Ready` starts the WM.
+/// Spawns `XWayland` and returns the source to insert into the loop. `Ready` starts the WM.
 pub fn spawn_xwayland(
     dh: &smithay::reexports::wayland_server::DisplayHandle,
     handle: &LoopHandle<'static, State>,
@@ -137,7 +137,7 @@ pub fn spawn_xwayland(
     )?;
     let wm_handle = handle.clone();
     let wm_client = client.clone();
-    handle.insert_source(xwayland, move |event, _, state| match event {
+    handle.insert_source(xwayland, move |event, (), state| match event {
         XWaylandEvent::Ready {
             x11_socket,
             display_number,
@@ -171,7 +171,7 @@ impl State {
             .map_or(Kind::Other, |props| props.kind(window.window_id()))
     }
 
-    /// XWayland is serving: keep the WM and the properties connection, then start the session clients.
+    /// `XWayland` is serving: keep the WM and the properties connection, then start the session clients.
     pub fn xwayland_ready(&mut self, wm: X11Wm, display: u32) {
         self.props = match Props::connect(display) {
             Ok(props) => Some(props),
@@ -343,21 +343,21 @@ impl XwmHandler for State {
         _reorder: Option<Reorder>,
     ) {
         // Managed windows keep the model geometry; unmanaged ones get what they asked for.
-        let geometry = match self.x11_id(&window).and_then(|id| self.model.get(id)) {
-            Some(managed) => Rectangle::<i32, Logical>::new(
+        let geometry = if let Some(managed) = self.x11_id(&window).and_then(|id| self.model.get(id))
+        {
+            Rectangle::<i32, Logical>::new(
                 Point::from((managed.rect.x, managed.rect.y)),
                 Size::from((managed.rect.w, managed.rect.h)),
-            ),
-            None => {
-                let current = window.geometry();
-                Rectangle::<i32, Logical>::new(
-                    Point::from((x.unwrap_or(current.loc.x), y.unwrap_or(current.loc.y))),
-                    Size::from((
-                        w.map_or(current.size.w, |value| value as i32),
-                        h.map_or(current.size.h, |value| value as i32),
-                    )),
-                )
-            }
+            )
+        } else {
+            let current = window.geometry();
+            Rectangle::<i32, Logical>::new(
+                Point::from((x.unwrap_or(current.loc.x), y.unwrap_or(current.loc.y))),
+                Size::from((
+                    w.map_or(current.size.w, |value| value as i32),
+                    h.map_or(current.size.h, |value| value as i32),
+                )),
+            )
         };
         let _ = window.configure(geometry);
     }

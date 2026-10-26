@@ -50,6 +50,7 @@ pub enum SaverMode {
 }
 
 impl SaverConfig {
+    #[must_use]
     pub fn ribbons(&self) -> bool {
         self.mode == SaverMode::Ribbons
     }
@@ -227,6 +228,7 @@ fn saver_from_lookup<'a>(lookup: &impl Fn(&str) -> Option<&'a str>) -> SaverConf
 }
 
 /// Parses `#RRGGBB` (case-insensitive) into RGB bytes.
+#[must_use]
 pub fn parse_hex_color(text: &str) -> Option<[u8; 3]> {
     let hex = text.strip_prefix('#')?;
     if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -288,17 +290,17 @@ mod tests {
 
     #[test]
     fn background_percentages_parse_clamp_and_default() {
-        let defaults = LockSettings::default();
-        assert_eq!((defaults.blur_percent, defaults.dim_percent), (40, 25));
         static PAIRS: &[(&str, &str)] = &[
             ("lockBackgroundBlurPercent", "250"),
             ("lockBackgroundDimPercent", "-4"),
         ];
+        static DIM: &[(&str, &str)] = &[("lockBackgroundDimPercent", "99")];
+        static JUNK: &[(&str, &str)] = &[("lockBackgroundBlurPercent", "soft")];
+        let defaults = LockSettings::default();
+        assert_eq!((defaults.blur_percent, defaults.dim_percent), (40, 25));
         let clamped = LockSettings::from_lookup(lookup_from(PAIRS));
         assert_eq!((clamped.blur_percent, clamped.dim_percent), (100, 0));
-        static DIM: &[(&str, &str)] = &[("lockBackgroundDimPercent", "99")];
         assert_eq!(LockSettings::from_lookup(lookup_from(DIM)).dim_percent, 80);
-        static JUNK: &[(&str, &str)] = &[("lockBackgroundBlurPercent", "soft")];
         assert_eq!(
             LockSettings::from_lookup(lookup_from(JUNK)).blur_percent,
             40
@@ -308,11 +310,11 @@ mod tests {
     #[test]
     fn avatar_image_must_be_an_absolute_path() {
         static ABS: &[(&str, &str)] = &[("avatarImage", " /home/u/face.png ")];
+        static REL: &[(&str, &str)] = &[("avatarImage", "face.png")];
         assert_eq!(
             LockSettings::from_lookup(lookup_from(ABS)).avatar_image,
             Some(PathBuf::from("/home/u/face.png"))
         );
-        static REL: &[(&str, &str)] = &[("avatarImage", "face.png")];
         assert_eq!(
             LockSettings::from_lookup(lookup_from(REL)).avatar_image,
             None

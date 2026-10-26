@@ -1,4 +1,4 @@
-//! FlameWM Screenshot: an on-demand, native Rust/X11 capture, selection,
+//! `FlameWM` Screenshot: an on-demand, native Rust/X11 capture, selection,
 //! annotation, export and clipboard utility. No Qt/GTK/WebView process.
 
 mod capture;
@@ -92,7 +92,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 match kind {
                     "--output" => {
                         o.output = Some(PathBuf::from(value));
-                        o.save = true
+                        o.save = true;
                     }
                     "--delay" => {
                         let seconds = value.parse::<f64>().map_err(|_| "delay must be a number")?;
@@ -147,12 +147,9 @@ fn parse(args: &[String]) -> Result<Options, String> {
 
 fn pictures_dir() -> PathBuf {
     // XDG user-dirs is intentionally not parsed as shell: unsafe interpolation must never execute.
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"));
+    let home = std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from);
+    let config =
+        std::env::var_os("XDG_CONFIG_HOME").map_or_else(|| home.join(".config"), PathBuf::from);
     if let Ok(contents) = fs::read_to_string(config.join("user-dirs.dirs")) {
         for line in contents.lines() {
             if let Some((_, value)) = line.trim().split_once('=') {

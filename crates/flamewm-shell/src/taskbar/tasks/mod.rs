@@ -127,7 +127,7 @@ pub fn begin_reorder(panels: &PanelsSnapshot, source: usize) -> Option<TaskReord
             flamewm_api::panels::TaskEntryKind::Window { window } => {
                 strip.add_window(entry.app_id.clone(), window);
             }
-        };
+        }
     }
     Some(TaskReorderSession {
         revision: panels.revision,

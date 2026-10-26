@@ -172,14 +172,7 @@ fn control_output_prefers_keyboard_focus_and_rejects_invalid_explicit_targets() 
         "an explicit stale target must not fall back to another panel"
     );
     assert_eq!(
-        super::resolve_control_output(
-            None,
-            &panel_outputs,
-            &connected,
-            None,
-            Some(&b),
-            &primary
-        ),
+        super::resolve_control_output(None, &panel_outputs, &connected, None, Some(&b), &primary),
         Some(b),
         "pointer is the fallback when no window is focused"
     );
@@ -294,12 +287,15 @@ fn start_slide_pass_also_arms_popup_slide_without_start_button_target() {
         .and_then(|(_, rest)| rest.split_once("\n    }\n"))
         .map(|(body, _)| body)
         .expect("apply_start_slide must exist");
+    let body: String = body.split_whitespace().collect();
     assert!(
         body.contains("self.surfaces.set_popup_slide(popup_slide);"),
         "apply_start_slide must arm the popup slide on every Start-slide refresh"
     );
     assert!(
-        body.contains("crate::entry::settings_projection::start_slide(snapshot, self.surfaces.panel_edge(), None)"),
+        body.contains(
+            "crate::entry::settings_projection::start_slide(snapshot,self.surfaces.panel_edge(),None"
+        ),
         "popup slide must use the shared start_slide owner with no Magic Lamp target"
     );
 }
@@ -392,12 +388,19 @@ fn stale_start_icons_project_once_while_open() {
             projections += 1;
         }
     }
-    assert_eq!(projections, 2, "one theme projection plus one app-set projection");
+    assert_eq!(
+        projections, 2,
+        "one theme projection plus one app-set projection"
+    );
     assert!(!stale, "the theme refresh consumes the stale flag");
 
     // A hidden Start keeps the flag until it is next projected on open.
     let mut hidden_stale = true;
-    assert!(!super::start_icon_refresh_due(&mut hidden_stale, true, false));
+    assert!(!super::start_icon_refresh_due(
+        &mut hidden_stale,
+        true,
+        false
+    ));
     assert!(hidden_stale);
 }
 

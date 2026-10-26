@@ -12,10 +12,12 @@ use std::fs;
 use std::io;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 
-use flamewm_remote_fs::{Cancel as RemoteCancel, Entry as RemoteEntry, Error, Kind, RemoteFs, TransferEvent, Url};
+use flamewm_remote_fs::{
+    Cancel as RemoteCancel, Entry as RemoteEntry, Error, Kind, RemoteFs, TransferEvent, Url,
+};
 
 use crate::jobs::CancellationToken;
-use crate::{destination_for, BatchReport, Entry};
+use crate::{BatchReport, Entry, destination_for};
 
 /// Names tried before a copy or new folder gives up on finding a free name.
 const MAX_NAMES: usize = 100;
@@ -55,14 +57,21 @@ impl RemoteOps for RemoteFs {
 /// Creates `New Folder`, or `New Folder N` for the first free N, inside `parent`. Returns the created name.
 pub fn new_folder(fs: &impl RemoteOps, parent: &Url) -> Result<String, Error> {
     for n in 1..=MAX_NAMES {
-        let name = if n == 1 { "New Folder".to_owned() } else { format!("New Folder {n}") };
+        let name = if n == 1 {
+            "New Folder".to_owned()
+        } else {
+            format!("New Folder {n}")
+        };
         match fs.mkdir(&parent.join(&name)) {
             Ok(()) => return Ok(name),
-            Err(Error::AlreadyExists(_)) => continue,
+            Err(Error::AlreadyExists(_)) => {}
             Err(error) => return Err(error),
         }
     }
-    Err(Error::AlreadyExists(format!("no free folder name under {}", parent.file_name())))
+    Err(Error::AlreadyExists(format!(
+        "no free folder name under {}",
+        parent.file_name()
+    )))
 }
 
 /// Recursive delete of each URL. Per-item failures are recorded and the batch continues.
@@ -70,7 +79,9 @@ pub fn delete_items(fs: &impl RemoteOps, urls: &[Url]) -> BatchReport {
     let mut report = BatchReport::default();
     for url in urls {
         let path = to_path(url);
-        let outcome = fs.remove(url, true).map_err(|error| io::Error::other(describe(&error)));
+        let outcome = fs
+            .remove(url, true)
+            .map_err(|error| io::Error::other(describe(&error)));
         report.record(&path, outcome);
     }
     report
@@ -90,17 +101,26 @@ pub fn rename_item(fs: &impl RemoteOps, from: &Url, to: &Url) -> Result<(), Erro
 
 /// Copies files in either direction between this machine and a remote folder. Folders, and copies between
 /// two remote folders, fail per item. Cancelling stops before the next item and removes partial output.
-pub fn copy_items(fs: &impl RemoteOps, sources: &[PathBuf], directory: &Path, cancel: &CancellationToken,
-    events: &mut impl FnMut(CopyEvent)) -> BatchReport {
+pub fn copy_items(
+    fs: &impl RemoteOps,
+    sources: &[PathBuf],
+    directory: &Path,
+    cancel: &CancellationToken,
+    events: &mut impl FnMut(CopyEvent),
+) -> BatchReport {
     let mut report = BatchReport::default();
-    events(CopyEvent::Total(sources.iter().map(|source| size_of(fs, source)).sum()));
+    events(CopyEvent::Total(
+        sources.iter().map(|source| size_of(fs, source)).sum(),
+    ));
     let mut base = 0_u64;
     for source in sources {
         if cancel.is_cancelled() {
             report.cancelled = true;
             break;
         }
-        match copy_one(fs, source, directory, cancel, base, &mut |bytes| events(CopyEvent::Progress(bytes))) {
+        match copy_one(fs, source, directory, cancel, base, &mut |bytes| {
+            events(CopyEvent::Progress(bytes));
+        }) {
             Ok(bytes) => {
                 base += bytes;
                 report.record(source, Ok(()));
@@ -144,36 +164,67 @@ impl std::fmt::Display for CopyError {
     }
 }
 
-fn copy_one(fs: &impl RemoteOps, source: &Path, directory: &Path, cancel: &CancellationToken,
-    base: u64, progress: &mut impl FnMut(u64)) -> Result<u64, CopyError> {
-    let name = source.file_name().and_then(|n| n.to_str()).ok_or(CopyError::Refused("source has no name"))?;
+fn copy_one(
+    fs: &impl RemoteOps,
+    source: &Path,
+    directory: &Path,
+    cancel: &CancellationToken,
+    base: u64,
+    progress: &mut impl FnMut(u64),
+) -> Result<u64, CopyError> {
+    let name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or(CopyError::Refused("source has no name"))?;
     let cancel_remote = RemoteCancel::new();
     match (url_of(source), url_of(directory)) {
         (None, Some(folder)) => {
-            if !fs::metadata(source).map_or(false, |meta| meta.is_file()) {
-                return Err(CopyError::Refused("folders cannot be copied to remote folders yet"));
+            if !fs::metadata(source).is_ok_and(|meta| meta.is_file()) {
+                return Err(CopyError::Refused(
+                    "folders cannot be copied to remote folders yet",
+                ));
             }
             let target = free_remote_name(fs, &folder, name)?;
-            Ok(drive(fs.upload(source, &target, &cancel_remote), cancel, &cancel_remote, base, progress)?)
+            Ok(drive(
+                fs.upload(source, &target, &cancel_remote),
+                cancel,
+                &cancel_remote,
+                base,
+                progress,
+            )?)
         }
         (Some(from), None) => {
             if fs.stat(&from)?.kind == Kind::Dir {
-                return Err(CopyError::Refused("folders cannot be copied from remote folders yet"));
+                return Err(CopyError::Refused(
+                    "folders cannot be copied from remote folders yet",
+                ));
             }
             let target = destination_for(&to_path(&from), directory);
-            Ok(drive(fs.download(&from, &target, &cancel_remote), cancel, &cancel_remote, base, progress)?)
+            Ok(drive(
+                fs.download(&from, &target, &cancel_remote),
+                cancel,
+                &cancel_remote,
+                base,
+                progress,
+            )?)
         }
-        (Some(_), Some(_)) => Err(CopyError::Refused("copying between two remote folders is not supported yet")),
+        (Some(_), Some(_)) => Err(CopyError::Refused(
+            "copying between two remote folders is not supported yet",
+        )),
         (None, None) => Err(CopyError::Refused("neither side is a remote folder")),
     }
 }
 
 fn free_remote_name(fs: &impl RemoteOps, folder: &Url, name: &str) -> Result<Url, Error> {
     for n in 1..=MAX_NAMES {
-        let candidate = if n == 1 { name.to_owned() } else { format!("{name} ({n})") };
+        let candidate = if n == 1 {
+            name.to_owned()
+        } else {
+            format!("{name} ({n})")
+        };
         let url = folder.join(&candidate);
         match fs.stat(&url) {
-            Ok(_) => continue,
+            Ok(_) => {}
             Err(Error::NotFound(_)) => return Ok(url),
             Err(error) => return Err(error),
         }
@@ -182,8 +233,13 @@ fn free_remote_name(fs: &impl RemoteOps, folder: &Url, name: &str) -> Result<Url
 }
 
 /// Waits for one transfer, forwarding progress and turning a local cancel into a remote cancel.
-fn drive(events: Receiver<TransferEvent>, cancel: &CancellationToken, remote_cancel: &RemoteCancel, base: u64,
-    progress: &mut impl FnMut(u64)) -> Result<u64, Error> {
+fn drive(
+    events: Receiver<TransferEvent>,
+    cancel: &CancellationToken,
+    remote_cancel: &RemoteCancel,
+    base: u64,
+    progress: &mut impl FnMut(u64),
+) -> Result<u64, Error> {
     loop {
         match events.recv_timeout(Duration::from_millis(50)) {
             Ok(TransferEvent::Progress { done, .. }) => progress(base + done),
@@ -197,7 +253,9 @@ fn drive(events: Receiver<TransferEvent>, cancel: &CancellationToken, remote_can
                     remote_cancel.cancel();
                 }
             }
-            Err(RecvTimeoutError::Disconnected) => return Err(Error::Io("transfer ended unexpectedly".into())),
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(Error::Io("transfer ended unexpectedly".into()));
+            }
         }
     }
 }
@@ -234,8 +292,19 @@ mod ops_tests {
             if !self.existing.borrow().contains(&key) {
                 return Err(Error::NotFound(key));
             }
-            let kind = if self.dirs.borrow().contains(&key) { Kind::Dir } else { Kind::File };
-            Ok(RemoteEntry { name: url.file_name().into(), kind, size: 4, mtime: 0, mode: 0o644, link_target: None })
+            let kind = if self.dirs.borrow().contains(&key) {
+                Kind::Dir
+            } else {
+                Kind::File
+            };
+            Ok(RemoteEntry {
+                name: url.file_name().into(),
+                kind,
+                size: 4,
+                mtime: 0,
+                mode: 0o644,
+                link_target: None,
+            })
         }
         fn mkdir(&self, url: &Url) -> Result<(), Error> {
             let key = url.to_string();
@@ -256,20 +325,37 @@ mod ops_tests {
         }
         fn remove(&self, url: &Url, _recursive: bool) -> Result<(), Error> {
             self.removed.borrow_mut().push(url.to_string());
-            if self.existing.borrow_mut().remove(&url.to_string()) { Ok(()) } else { Err(Error::NotFound(url.to_string())) }
+            if self.existing.borrow_mut().remove(&url.to_string()) {
+                Ok(())
+            } else {
+                Err(Error::NotFound(url.to_string()))
+            }
         }
-        fn download(&self, _url: &Url, local: &Path, cancel: &RemoteCancel) -> Receiver<TransferEvent> {
+        fn download(
+            &self,
+            _url: &Url,
+            local: &Path,
+            cancel: &RemoteCancel,
+        ) -> Receiver<TransferEvent> {
             let (tx, rx) = channel();
             if cancel.is_cancelled() {
                 let _ = tx.send(TransferEvent::Failed(Error::Cancelled));
             } else {
                 fs::write(local, b"data").unwrap();
-                let _ = tx.send(TransferEvent::Progress { done: 4, total: Some(4) });
+                let _ = tx.send(TransferEvent::Progress {
+                    done: 4,
+                    total: Some(4),
+                });
                 let _ = tx.send(TransferEvent::Done { bytes: 4 });
             }
             rx
         }
-        fn upload(&self, local: &Path, url: &Url, _cancel: &RemoteCancel) -> Receiver<TransferEvent> {
+        fn upload(
+            &self,
+            local: &Path,
+            url: &Url,
+            _cancel: &RemoteCancel,
+        ) -> Receiver<TransferEvent> {
             let (tx, rx) = channel();
             let bytes = fs::read(local).unwrap();
             let len = bytes.len() as u64;
@@ -285,8 +371,14 @@ mod ops_tests {
     }
 
     fn scratch(tag: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("flamewm-remote-ops-{tag}-{}-{nanos}", std::process::id()));
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "flamewm-remote-ops-{tag}-{}-{nanos}",
+            std::process::id()
+        ));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -296,15 +388,25 @@ mod ops_tests {
         let parent = url("sftp://u@h/srv");
         let fake = FakeRemote::with(&[parent.join("New Folder")]);
         assert_eq!(new_folder(&fake, &parent).unwrap(), "New Folder 2");
-        assert!(fake.dirs.borrow().contains(&parent.join("New Folder 2").to_string()));
+        assert!(
+            fake.dirs
+                .borrow()
+                .contains(&parent.join("New Folder 2").to_string())
+        );
     }
 
     #[test]
     fn delete_reports_each_item_and_keeps_going_after_failures() {
         let fake = FakeRemote::with(&[url("sftp://u@h/srv/a")]);
-        let report = delete_items(&fake, &[url("sftp://u@h/srv/missing"), url("sftp://u@h/srv/a")]);
+        let report = delete_items(
+            &fake,
+            &[url("sftp://u@h/srv/missing"), url("sftp://u@h/srv/a")],
+        );
         assert_eq!((report.completed, report.failed), (1, 1));
-        assert_eq!(report.failed_sources, vec![to_path(&url("sftp://u@h/srv/missing"))]);
+        assert_eq!(
+            report.failed_sources,
+            vec![to_path(&url("sftp://u@h/srv/missing"))]
+        );
         assert_eq!(fake.removed.borrow().len(), 2);
     }
 
@@ -316,7 +418,9 @@ mod ops_tests {
         let source = to_path(&url("sftp://u@h/srv/file.txt"));
         let cancel = CancellationToken::new();
         let mut seen = Vec::new();
-        let report = copy_items(&fake, &[source], &dir, &cancel, &mut |event| seen.push(event));
+        let report = copy_items(&fake, &[source], &dir, &cancel, &mut |event| {
+            seen.push(event);
+        });
         assert_eq!(report.completed, 1, "{report:?}");
         assert_eq!(fs::read(dir.join("file.txt")).unwrap(), b"local old");
         assert_eq!(fs::read(dir.join("file.txt (2)")).unwrap(), b"data");
@@ -334,10 +438,24 @@ mod ops_tests {
         let renamed = url("sftp://u@h/srv").join("note.txt (2)").to_string();
         let destination = to_path(&url("sftp://u@h/srv"));
         let sources = vec![dir.join("note.txt"), dir.join("folder")];
-        let report = copy_items(&fake, &sources, &destination, &CancellationToken::new(), &mut |_| {});
+        let report = copy_items(
+            &fake,
+            &sources,
+            &destination,
+            &CancellationToken::new(),
+            &mut |_| {},
+        );
         assert_eq!((report.completed, report.failed), (1, 1), "{report:?}");
-        assert_eq!(fake.uploads.borrow().get(&renamed).map(Vec::as_slice), Some(&b"hello"[..]));
-        assert!(report.first_error.unwrap().contains("folders cannot be copied"));
+        assert_eq!(
+            fake.uploads.borrow().get(&renamed).map(Vec::as_slice),
+            Some(&b"hello"[..])
+        );
+        assert!(
+            report
+                .first_error
+                .unwrap()
+                .contains("folders cannot be copied")
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -349,8 +467,13 @@ mod ops_tests {
         let fake = FakeRemote::default();
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let report = copy_items(&fake, &[dir.join("a"), dir.join("b")], &to_path(&url("sftp://u@h/srv")), &cancel,
-            &mut |_| {});
+        let report = copy_items(
+            &fake,
+            &[dir.join("a"), dir.join("b")],
+            &to_path(&url("sftp://u@h/srv")),
+            &cancel,
+            &mut |_| {},
+        );
         assert!(report.cancelled);
         assert_eq!((report.completed, report.failed), (0, 0));
         assert!(fake.uploads.borrow().is_empty());
@@ -360,10 +483,20 @@ mod ops_tests {
     #[test]
     fn copy_between_two_remote_folders_is_refused_per_item() {
         let fake = FakeRemote::with(&[url("sftp://u@h/srv/x")]);
-        let report = copy_items(&fake, &[to_path(&url("sftp://u@h/srv/x"))], &to_path(&url("sftp://u@h/other")),
-            &CancellationToken::new(), &mut |_| {});
+        let report = copy_items(
+            &fake,
+            &[to_path(&url("sftp://u@h/srv/x"))],
+            &to_path(&url("sftp://u@h/other")),
+            &CancellationToken::new(),
+            &mut |_| {},
+        );
         assert_eq!(report.failed, 1);
-        assert!(report.first_error.unwrap().contains("between two remote folders"));
+        assert!(
+            report
+                .first_error
+                .unwrap()
+                .contains("between two remote folders")
+        );
     }
 }
 
@@ -371,11 +504,16 @@ mod ops_tests {
 pub const RECENT_LIMIT: usize = 8;
 
 /// True for schemes this explorer lists through `flamewm-remote-fs`.
+#[must_use]
 pub fn is_remote_scheme(scheme: &str) -> bool {
-    matches!(scheme.to_ascii_lowercase().as_str(), "sftp" | "ssh" | "fish")
+    matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "sftp" | "ssh" | "fish"
+    )
 }
 
 /// The URL behind a remote tab or entry path; `None` for local paths.
+#[must_use]
 pub fn url_of(path: &Path) -> Option<Url> {
     let text = path.to_str()?;
     let (scheme, _) = text.split_once("://")?;
@@ -385,17 +523,20 @@ pub fn url_of(path: &Path) -> Option<Url> {
     Url::parse(text).ok()
 }
 
+#[must_use]
 pub fn is_remote(path: &Path) -> bool {
     url_of(path).is_some()
 }
 
 /// Tab/entry path form of a URL. Never pass the result to local filesystem calls.
+#[must_use]
 pub fn to_path(url: &Url) -> PathBuf {
     PathBuf::from(url.to_string())
 }
 
 /// Explorer entry for a remote child of `dir`. Symlinks to directories arrive as `Kind::Dir` (resolved by
 /// `flamewm-remote-fs`); other symlinks stay symlinks.
+#[must_use]
 pub fn entry_of(dir: &Url, item: &RemoteEntry) -> Entry {
     Entry::new(
         to_path(&dir.join(&item.name)),
@@ -408,6 +549,7 @@ pub fn entry_of(dir: &Url, item: &RemoteEntry) -> Entry {
 }
 
 /// Status-strip wording for a typed remote error. Never includes secrets; never trusts a host key.
+#[must_use]
 pub fn describe(error: &Error) -> String {
     match error {
         Error::HostKeyUnknown { host, port } => format!(
@@ -416,8 +558,15 @@ pub fn describe(error: &Error) -> String {
         Error::HostKeyChanged { host, port } => {
             format!("Host key for {host}:{port} changed. Connection refused.")
         }
-        Error::AuthFailed { host, password_possible } => {
-            let hint = if *password_possible { " The server wants a password, which is not supported." } else { "" };
+        Error::AuthFailed {
+            host,
+            password_possible,
+        } => {
+            let hint = if *password_possible {
+                " The server wants a password, which is not supported."
+            } else {
+                ""
+            };
             format!("Authentication failed for {host}. Add a key or load an ssh agent.{hint}")
         }
         Error::Timeout(_) => "Remote host timed out. Try again.".to_owned(),
@@ -428,11 +577,14 @@ pub fn describe(error: &Error) -> String {
 
 /// Human-facing URL text: the canonical form without a default port (`sftp://u@h/x`, not `:22`).
 /// Canonical text stays unchanged for recents and cache keys.
+#[must_use]
 pub fn display_text(url: &Url) -> String {
     // sftp, ssh and fish all default to port 22 (`Url::parse` fills it in).
     const DEFAULT_PORT: &str = ":22";
     let text = url.to_string();
-    let Some(start) = text.find("://").map(|i| i + 3) else { return text };
+    let Some(start) = text.find("://").map(|i| i + 3) else {
+        return text;
+    };
     let end = text[start..].find('/').map_or(text.len(), |i| start + i);
     match text[start..end].strip_suffix(DEFAULT_PORT) {
         Some(host) => format!("{}{}{}", &text[..start], host, &text[end..]),
@@ -444,23 +596,35 @@ pub fn display_text(url: &Url) -> String {
 pub fn cache_root() -> PathBuf {
     std::env::var_os("XDG_CACHE_HOME")
         .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache"))
+        .map_or_else(
+            || PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache"),
+            PathBuf::from,
+        )
         .join("flamewm-explorer")
         .join("remote")
 }
 
 /// Per-URL cache file. Every open downloads again, so the cache never serves stale content.
+#[must_use]
 pub fn cache_path(root: &Path, url: &Url, name: &str) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     url.to_string().hash(&mut hasher);
-    root.join(format!("{:016x}", hasher.finish())).join(safe_file_name(name))
+    root.join(format!("{:016x}", hasher.finish()))
+        .join(safe_file_name(name))
 }
 
 /// Keeps a remote file name usable as one local path component.
+#[must_use]
 pub fn safe_file_name(name: &str) -> String {
-    let cleaned: String = name.chars().map(|c| if c == '/' || c.is_control() { '_' } else { c }).collect();
-    if cleaned.is_empty() || cleaned == "." || cleaned == ".." { "download".to_owned() } else { cleaned }
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c == '/' || c.is_control() { '_' } else { c })
+        .collect();
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        "download".to_owned()
+    } else {
+        cleaned
+    }
 }
 
 /// Moves `url` to the front of the recent list, dropping duplicates and anything beyond the limit.
@@ -486,7 +650,10 @@ mod tests {
         assert!(is_remote(&path));
         // Url::parse fills the default port, so compare canonical text.
         assert_eq!(url_of(&path).map(|u| u.to_string()), Some(home.to_string()));
-        assert_eq!(home.to_string(), "sftp://ubuntu@play.arkflame.com:22/home/ubuntu");
+        assert_eq!(
+            home.to_string(),
+            "sftp://ubuntu@play.arkflame.com:22/home/ubuntu"
+        );
         assert!(!is_remote(Path::new("/home/ubuntu")));
         assert!(!is_remote(Path::new("smb://server/share")));
         assert!(!is_remote(Path::new("relative/sftp")));
@@ -514,19 +681,47 @@ mod tests {
         assert_eq!(entry.path, to_path(&dir.join("a b.txt")));
         assert!(!entry.directory && !entry.symlink);
         assert_eq!(entry.size, 12);
-        assert_eq!(entry.modified, Some(UNIX_EPOCH + Duration::from_secs(1_700_000_000)));
-        let unknown = RemoteEntry { mtime: 0, kind: Kind::Dir, ..file.clone() };
+        assert_eq!(
+            entry.modified,
+            Some(UNIX_EPOCH + Duration::from_secs(1_700_000_000))
+        );
+        let unknown = RemoteEntry {
+            mtime: 0,
+            kind: Kind::Dir,
+            ..file.clone()
+        };
         let folder = entry_of(&dir, &unknown);
         assert!(folder.directory && folder.modified.is_none());
-        assert!(entry_of(&dir, &RemoteEntry { kind: Kind::Symlink, ..file }).symlink);
+        assert!(
+            entry_of(
+                &dir,
+                &RemoteEntry {
+                    kind: Kind::Symlink,
+                    ..file
+                }
+            )
+            .symlink
+        );
     }
 
     #[test]
     fn host_key_and_auth_errors_never_suggest_trusting_silently() {
-        let unknown = describe(&Error::HostKeyUnknown { host: "play".into(), port: 22 });
+        let unknown = describe(&Error::HostKeyUnknown {
+            host: "play".into(),
+            port: 22,
+        });
         assert!(unknown.contains("Not trusted automatically"));
-        assert!(describe(&Error::HostKeyChanged { host: "play".into(), port: 22 }).contains("refused"));
-        let auth = describe(&Error::AuthFailed { host: "play".into(), password_possible: true });
+        assert!(
+            describe(&Error::HostKeyChanged {
+                host: "play".into(),
+                port: 22
+            })
+            .contains("refused")
+        );
+        let auth = describe(&Error::AuthFailed {
+            host: "play".into(),
+            password_possible: true,
+        });
         assert!(auth.contains("password"));
         assert!(describe(&Error::ConnectionLost("reset".into())).starts_with("Connection lost"));
     }
@@ -550,6 +745,12 @@ mod tests {
         assert_eq!(recent[0], "sftp://u@h10:22/");
         remember(&mut recent, &url("sftp://u@h5/"));
         assert_eq!(recent[0], "sftp://u@h5:22/");
-        assert_eq!(recent.iter().filter(|r| r.as_str() == "sftp://u@h5:22/").count(), 1);
+        assert_eq!(
+            recent
+                .iter()
+                .filter(|r| r.as_str() == "sftp://u@h5:22/")
+                .count(),
+            1
+        );
     }
 }

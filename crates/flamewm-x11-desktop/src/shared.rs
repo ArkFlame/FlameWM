@@ -19,7 +19,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::RustConnection;
 
-/// An applied-but-not-yet-kept RandR mode change, with the state needed to revert it.
+/// An applied-but-not-yet-kept `RandR` mode change, with the state needed to revert it.
 #[derive(Debug, Clone, Copy)]
 pub struct PendingMode {
     pub transaction: TransactionId,
@@ -70,6 +70,7 @@ pub fn feature_snapshot(states: &[u32], atom: impl Fn(&str) -> Atom) -> WindowFe
     }
 }
 
+#[must_use]
 pub fn workspace_snapshot(
     count: usize,
     active_index: usize,
@@ -91,6 +92,7 @@ pub fn workspace_snapshot(
     }
 }
 
+#[must_use]
 pub fn base_work_areas(work_area: Rect, outputs: &[OutputSnapshot]) -> Vec<(OutputId, Rect)> {
     outputs
         .iter()
@@ -103,6 +105,7 @@ pub fn base_work_areas(work_area: Rect, outputs: &[OutputSnapshot]) -> Vec<(Outp
         .collect()
 }
 
+#[must_use]
 pub fn display_modes(
     output_modes: &[randr::Mode],
     resource_modes: &[randr::ModeInfo],
@@ -116,8 +119,9 @@ pub fn display_modes(
             refresh_millihz: if mode.htotal == 0 || mode.vtotal == 0 {
                 0
             } else {
-                ((mode.dot_clock as u64 * 1000) / u64::from(mode.htotal) / u64::from(mode.vtotal))
-                    as i32
+                ((u64::from(mode.dot_clock) * 1000)
+                    / u64::from(mode.htotal)
+                    / u64::from(mode.vtotal)) as i32
             },
             preferred: output_modes.first() == Some(&mode.id),
         })
@@ -188,6 +192,7 @@ pub fn root_work_area(property32: impl Fn(&str) -> FlameResult<Vec<u32>>) -> Fla
     area.is_valid().then_some(area).ok_or_else(invalid)
 }
 
+#[must_use]
 pub fn text_from_bytes(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes)
         .trim_end_matches('\0')

@@ -298,7 +298,7 @@ mod tests {
         out
     }
 
-    /// A bottom-up BI_RGB DIB with an AND mask. `pixels` are tightly packed BGRA rows, top row
+    /// A bottom-up `BI_RGB` DIB with an AND mask. `pixels` are tightly packed BGRA rows, top row
     /// first, and `mask` tightly packed 1-bit rows; the helper pads each row to the DIB stride.
     fn dib(
         width: u32,
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn pixel_data_shorter_than_the_header_promises_is_an_error() {
-        let mut payload = dib(4, 4, 32, &[], &vec![0; 4 * 16], &vec![0; 4 * 4]);
+        let mut payload = dib(4, 4, 32, &[], &[0; 4 * 16], &[0; 4 * 4]);
         payload.truncate(payload.len() - 20);
         assert!(decode(&ico(&payload, 4, 4, 32)).is_err());
     }

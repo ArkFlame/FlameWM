@@ -1,4 +1,4 @@
-//! FlameWM QuickSwitch policy for deterministic window cycling.
+//! `FlameWM` `QuickSwitch` policy for deterministic window cycling.
 //!
 //! Keyboard grabbing and the popup window remain desktop/native-renderer responsibilities. This
 //! model only owns deterministic candidate filtering, advance, accept and cancel semantics.
@@ -32,21 +32,11 @@ pub struct QuickSwitchCandidate {
     pub skip_taskbar: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct QuickSwitchModel {
     candidates: Vec<QuickSwitchCandidate>,
     selected: Option<usize>,
     original_active: Option<WindowRef>,
-}
-
-impl Default for QuickSwitchModel {
-    fn default() -> Self {
-        Self {
-            candidates: Vec::new(),
-            selected: None,
-            original_active: None,
-        }
-    }
 }
 
 impl QuickSwitchModel {

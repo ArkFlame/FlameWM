@@ -2,7 +2,7 @@
 //!
 //! The WM owns the selection and the focus change. The shell only renders the snapshot this
 //! module publishes as `WindowSwitcherChanged`; if nothing renders it, the switch still works.
-//! Keys arrive from the XInput2 raw feed (see `raw_keys`), so the switcher works while a
+//! Keys arrive from the `XInput2` raw feed (see `raw_keys`), so the switcher works while a
 //! fullscreen client holds the keyboard. The pure parts (`Mru`, `switcher_order`, `Switcher`)
 //! carry no X state and are unit tested; the `Wm` glue at the bottom performs the X calls.
 
@@ -177,7 +177,7 @@ fn closed_signal() -> ControlSignal {
     }
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     /// Alt+Tab press. Opens the switcher on the first press, steps it on later ones.
     pub(super) fn switcher_step(&mut self, step: Step) -> Result<(), ReplyError> {
         if self.switcher.is_open() {

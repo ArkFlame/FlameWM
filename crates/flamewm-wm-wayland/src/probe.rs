@@ -219,8 +219,8 @@ fn environment(report: &mut Report) {
 ///
 /// Returns true when this process resolved its own session, it is class `user` and it is active.
 fn logind(report: &mut Report, native: bool) -> bool {
-    let session = match env::var("XDG_SESSION_ID").ok().filter(|id| !id.is_empty()) {
-        Some(id) => busctl(&[
+    let session = if let Some(id) = env::var("XDG_SESSION_ID").ok().filter(|id| !id.is_empty()) {
+        busctl(&[
             "call",
             LOGIND,
             LOGIND_PATH,
@@ -228,19 +228,18 @@ fn logind(report: &mut Report, native: bool) -> bool {
             "GetSession",
             "s",
             &id,
-        ]),
-        None => {
-            let pid = std::process::id().to_string();
-            busctl(&[
-                "call",
-                LOGIND,
-                LOGIND_PATH,
-                LOGIND_MANAGER,
-                "GetSessionByPID",
-                "u",
-                &pid,
-            ])
-        }
+        ])
+    } else {
+        let pid = std::process::id().to_string();
+        busctl(&[
+            "call",
+            LOGIND,
+            LOGIND_PATH,
+            LOGIND_MANAGER,
+            "GetSessionByPID",
+            "u",
+            &pid,
+        ])
     }
     .and_then(|out| last_quoted(&out));
     let Some(path) = session else {
@@ -333,9 +332,7 @@ fn drm_nodes(report: &mut Report, native: bool, usable_session: bool) {
         "DRM card nodes",
         &format!("{} in /dev/dri", cards.len()),
     );
-    if !usable_session {
-        report.info("direct-open skipped", "no active user session");
-    } else {
+    if usable_session {
         for card in &cards {
             let path = Path::new("/dev/dri").join(card);
             match OpenOptions::new().read(true).write(true).open(&path) {
@@ -349,6 +346,8 @@ fn drm_nodes(report: &mut Report, native: bool, usable_session: bool) {
                 ),
             }
         }
+    } else {
+        report.info("direct-open skipped", "no active user session");
     }
 
     let mut renders = list_names(Path::new("/dev/dri"), "renderD");

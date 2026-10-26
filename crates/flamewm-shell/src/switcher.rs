@@ -8,12 +8,12 @@
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use flamewm_api::Rect;
 use flamewm_api::settings::SettingsSnapshot;
+use flamewm_api::Rect;
 use flamewm_control_wire::SwitcherEntry;
 use flamewm_ui_x11::{
-    SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError,
-    UiDocumentAccess, UiTemplate, decode_document,
+    decode_document, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime,
+    UiBackendError, UiDocumentAccess, UiTemplate,
 };
 
 use crate::settings_projection::{self, SurfaceKind};
@@ -95,7 +95,11 @@ impl SwitcherController {
     /// The pending show deadline, if the card is waiting out its hold delay.
     #[must_use]
     pub fn deadline(&self) -> Option<Instant> {
-        if self.visible { None } else { self.show_at }
+        if self.visible {
+            None
+        } else {
+            self.show_at
+        }
     }
 
     /// Applies at most one WM snapshot, shows the card when its delay has passed, and repaints
@@ -161,13 +165,12 @@ impl SwitcherController {
         settings: Option<&SettingsSnapshot>,
     ) -> Result<(), UiBackendError> {
         let (output, scale) = target();
-        let surface = match self.surface {
-            Some(surface) => surface,
-            None => {
-                let surface = create(runtime)?;
-                self.surface = Some(surface);
-                surface
-            }
+        let surface = if let Some(surface) = self.surface {
+            surface
+        } else {
+            let surface = create(runtime)?;
+            self.surface = Some(surface);
+            surface
         };
         let scale = runtime.apply_output_scale(surface, scale)?;
         let (width, height) = card_size(frame.entries.len());

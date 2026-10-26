@@ -81,7 +81,6 @@ impl From<PopupRefusal> for PopupError {
 }
 
 /// Pure anchor gate: `None` or degenerate rects refuse, never `(0, 0)`.
-#[must_use]
 pub fn resolve_anchor(anchor: Option<Rect>) -> Result<Rect, PopupError> {
     let anchor = anchor.ok_or(PopupError::NoSourceAnchor)?;
     if anchor.width <= 0 || anchor.height <= 0 {
@@ -91,7 +90,6 @@ pub fn resolve_anchor(anchor: Option<Rect>) -> Result<Rect, PopupError> {
 }
 
 /// Pure intrinsic gate: `None` or degenerate sizes refuse measurement.
-#[must_use]
 pub fn measure_intrinsic(size: Option<Size>) -> Result<Size, PopupError> {
     let size = size.ok_or(PopupError::PendingLayout)?;
     if size.width <= 0 || size.height <= 0 {
@@ -164,7 +162,6 @@ pub fn report_start_placement(placement: StartPlacement) {
 
 /// Retained-device anchor for a raw panel source node id. Hard
 /// `NoSourceAnchor` when no retained layout exists.
-#[must_use]
 pub fn resolve_source_rect(
     runtime: &SurfaceRuntime,
     panel: SurfaceHandle,
@@ -215,6 +212,7 @@ pub fn measure_node(
 /// Shared open transaction: resolve anchor -> measure node -> fit ->
 /// prepare (`move_resize`) -> present (`show`) -> grab. Start roles use
 /// the fitted engine; other roles use the aligned engine.
+#[allow(clippy::too_many_arguments)]
 pub fn open_popup(
     runtime: &mut SurfaceRuntime,
     panel: SurfaceHandle,

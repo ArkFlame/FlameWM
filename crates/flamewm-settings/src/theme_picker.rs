@@ -42,6 +42,7 @@ pub enum PickerKind {
 }
 
 impl PickerKind {
+    #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "icon" => Some(Self::Icon),
@@ -51,6 +52,7 @@ impl PickerKind {
     }
 
     /// The persisted setting this picker writes.
+    #[must_use]
     pub fn setting_key(self) -> &'static str {
         match self {
             Self::Icon => "iconTheme",
@@ -59,6 +61,7 @@ impl PickerKind {
     }
 
     /// Markup id of the select box that shows the current value.
+    #[must_use]
     pub fn select_box(self) -> &'static str {
         match self {
             Self::Icon => "icon-theme-value",
@@ -67,6 +70,7 @@ impl PickerKind {
     }
 
     /// Markup id stem shared by the picker's container, rows, previews and pager.
+    #[must_use]
     pub fn node(self) -> &'static str {
         match self {
             Self::Icon => "theme-icon",
@@ -74,6 +78,7 @@ impl PickerKind {
         }
     }
 
+    #[must_use]
     pub fn word(self) -> &'static str {
         match self {
             Self::Icon => "icon",
@@ -107,6 +112,7 @@ pub struct ThemeRegistry {
 }
 
 impl ThemeRegistry {
+    #[must_use]
     pub fn items(&self, kind: PickerKind) -> &[ThemeItem] {
         match kind {
             PickerKind::Icon => &self.icon,
@@ -115,10 +121,11 @@ impl ThemeRegistry {
     }
 
     /// Borrow the already-rasterized thumbnail for the selected directory id.
-    /// An unset icon theme uses FlameWM's PlagueSur default; absent or legacy
+    /// An unset icon theme uses `FlameWM`'s `PlagueSur` default; absent or legacy
     /// themes return `None` so the UI can show its static fallback placeholder.
     /// Replacing this registry after an off-thread scan also replaces the cache;
     /// changes to the setting require only a new lookup, never a disk read.
+    #[must_use]
     pub fn selected_preview(&self, kind: PickerKind, value: &str) -> Option<&PreviewImage> {
         let id = if value.is_empty() && kind == PickerKind::Icon {
             BUNDLED_ICON_THEMES[0]
@@ -132,6 +139,7 @@ impl ThemeRegistry {
     }
 
     /// Installed name for `value`, then the legacy icon label, else the value verbatim.
+    #[must_use]
     pub fn label(&self, kind: PickerKind, value: &str) -> String {
         if value.is_empty() {
             return "Default".to_owned();
@@ -148,7 +156,7 @@ impl ThemeRegistry {
     }
 }
 
-/// FlameWM's bundled icon themes stay at the top of the picker.
+/// `FlameWM`'s bundled icon themes stay at the top of the picker.
 pub const BUNDLED_ICON_THEMES: [&str; 2] = ["PlagueSur", "Fluent"];
 
 /// Upstream Fluent Yellow directories can use a different id; retain that
@@ -163,10 +171,11 @@ fn fluent_yellow(item: &ThemeItem) -> bool {
 }
 
 /// Pin bundled defaults first, then keep every discoverable installed theme.
+#[must_use]
 pub fn with_bundled_icon_themes(mut icon: Vec<ThemeItem>) -> Vec<ThemeItem> {
     let mut chosen = Vec::with_capacity(BUNDLED_ICON_THEMES.len());
     if let Some(mut plague) = icon.iter().find(|item| item.id == "PlagueSur").cloned() {
-        plague.name = "PlagueSur".to_owned();
+        "PlagueSur".clone_into(&mut plague.name);
         chosen.push(plague);
     } else {
         chosen.push(ThemeItem {
@@ -176,7 +185,7 @@ pub fn with_bundled_icon_themes(mut icon: Vec<ThemeItem>) -> Vec<ThemeItem> {
         });
     }
     if let Some(mut fluent) = icon.iter().find(|item| fluent_yellow(item)).cloned() {
-        fluent.name = "Fluent".to_owned();
+        "Fluent".clone_into(&mut fluent.name);
         chosen.push(fluent);
     } else {
         chosen.push(ThemeItem {
@@ -197,6 +206,7 @@ pub fn with_bundled_icon_themes(mut icon: Vec<ThemeItem>) -> Vec<ThemeItem> {
 }
 
 /// Every installed cursor theme with a decodable pointer preview is selectable.
+#[must_use]
 pub fn with_installed_cursor_themes(cursor: Vec<ThemeItem>) -> Vec<ThemeItem> {
     let mut themes: Vec<ThemeItem> = cursor
         .into_iter()
@@ -207,7 +217,7 @@ pub fn with_installed_cursor_themes(cursor: Vec<ThemeItem>) -> Vec<ThemeItem> {
             if cursor_theme_family(&item.id) == Some(CursorThemeFamily::McMojave)
                 && item.id.eq_ignore_ascii_case("McMojave-cursors")
             {
-                item.name = "McMojave".to_owned();
+                "McMojave".clone_into(&mut item.name);
             }
             Some(item)
         })
@@ -302,6 +312,7 @@ fn env_var(name: &str) -> Option<String> {
     env::var(name).ok()
 }
 
+#[must_use]
 pub fn theme_data_dirs_from_env() -> Vec<PathBuf> {
     theme_data_dirs(
         env_var("HOME").as_deref(),
@@ -310,6 +321,7 @@ pub fn theme_data_dirs_from_env() -> Vec<PathBuf> {
     )
 }
 
+#[must_use]
 pub fn user_icons_dir_from_env() -> Option<PathBuf> {
     user_data_home(
         env_var("HOME").as_deref(),
@@ -368,6 +380,7 @@ where
         .map_err(|error| install_error_message(&error))
 }
 
+#[must_use]
 pub fn install_error_message(error: &ImportError) -> String {
     match error {
         ImportError::UnsupportedFormat(name) => format!(

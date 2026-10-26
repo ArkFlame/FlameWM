@@ -41,6 +41,7 @@ impl WallpaperChooserWake {
         Ok(Self { reader, id })
     }
 
+    #[must_use]
     pub fn raw_fd(&self) -> RawFd {
         self.reader.as_raw_fd()
     }

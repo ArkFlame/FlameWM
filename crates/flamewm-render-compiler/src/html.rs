@@ -257,7 +257,7 @@ fn parse_tag(input: &str) -> Result<(String, BTreeMap<String, String>), String> 
                 chars.next();
                 let start = chars.peek().map(|(i, _)| *i).unwrap_or(input.len());
                 let mut end = input.len();
-                while let Some((index, ch)) = chars.next() {
+                for (index, ch) in chars.by_ref() {
                     if ch == quote {
                         end = index;
                         break;

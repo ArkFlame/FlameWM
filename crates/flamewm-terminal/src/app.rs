@@ -16,12 +16,7 @@ pub use layout::{Axis, PaneNode, Rect};
 pub use pointer::mouse_report;
 pub use tabs::{Hit, Rename};
 
-use std::collections::HashMap;
-use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
-use std::time::Instant;
-use std::sync::mpsc::Sender;
-use flamewm_api::settings::SettingsSnapshot;
+use self::grid::GridRow;
 use crate::pty::Launch;
 use crate::pty::PtySize;
 use crate::session::Session;
@@ -29,14 +24,19 @@ use crate::session::SessionEvent;
 use crate::settings::SettingsView;
 use crate::store::TerminalConfig;
 use crate::store::ThemeStore;
+use crate::suggest::History;
+use crate::suggest::LineInput;
 use crate::theme;
 use crate::themes::Palette;
 use crate::themes::Theme;
 use crate::view::RunCache;
 use crate::view::Span;
-use crate::suggest::History;
-use crate::suggest::LineInput;
-use self::grid::GridRow;
+use flamewm_api::settings::SettingsSnapshot;
+use std::collections::HashMap;
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
+use std::sync::mpsc::Sender;
+use std::time::Instant;
 
 /// Cell pitch as a fraction of the font size for the bundled monospace face (advance and line height).
 const CELL_WIDTH_RATIO: f32 = 0.6;
@@ -124,6 +124,8 @@ pub struct App {
 }
 
 impl App {
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: TerminalConfig,
         config_path: PathBuf,
@@ -181,14 +183,17 @@ impl App {
 
     pub fn reload_themes(&mut self) {
         self.themes = self.store.all_themes();
-        self.palette = theme::resolve_palette(&self.config.theme, &self.themes, self.snapshot.as_ref());
+        self.palette =
+            theme::resolve_palette(&self.config.theme, &self.themes, self.snapshot.as_ref());
         self.surface_alpha = theme::surface_alpha(self.config.background_opacity);
     }
 
     /// Grid size for a window in logical px. Row 0 is the tab bar.
     pub fn grid_for(&self, width: u32, height: u32) -> (usize, usize) {
         let cols = ((width as f32 / self.cell_w).floor() as usize).clamp(10, 400);
-        let rows = ((height as f32 / self.cell_h).floor() as usize).saturating_sub(1).clamp(4, MAX_GRID_ROWS);
+        let rows = ((height as f32 / self.cell_h).floor() as usize)
+            .saturating_sub(1)
+            .clamp(4, MAX_GRID_ROWS);
         (cols, rows)
     }
 
@@ -220,11 +225,23 @@ impl App {
     }
 
     /// Starts a pane with a fresh session id, so output and exit route back to that leaf alone.
-    fn start_pane(&mut self, launch: &Launch, cols: usize, rows: usize) -> Result<Box<Pane>, String> {
+    fn start_pane(
+        &mut self,
+        launch: &Launch,
+        cols: usize,
+        rows: usize,
+    ) -> Result<Box<Pane>, String> {
         let id = self.next_id;
         self.next_id += 1;
         let wake = self.wake.try_clone().map_err(|error| error.to_string())?;
-        let session = Session::start(id, launch, self.pty_size(cols.max(1), rows.max(1)), self.config.scrollback, self.events.clone(), wake)?;
+        let session = Session::start(
+            id,
+            launch,
+            self.pty_size(cols.max(1), rows.max(1)),
+            self.config.scrollback,
+            self.events.clone(),
+            wake,
+        )?;
         Ok(Box::new(Pane {
             session,
             input: LineInput::default(),
@@ -275,5 +292,8 @@ impl App {
 
 /// The user's home directory, when it exists.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").filter(|value| !value.is_empty()).map(PathBuf::from).filter(|dir| dir.is_dir())
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_dir())
 }

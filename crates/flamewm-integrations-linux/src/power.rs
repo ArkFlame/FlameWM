@@ -1,6 +1,6 @@
-//! UPower `DisplayDevice` source and CPU-usage sampling for the battery menu.
+//! `UPower` `DisplayDevice` source and CPU-usage sampling for the battery menu.
 //!
-//! The system-bus connection is fail-soft: when UPower or the system bus is absent the provider
+//! The system-bus connection is fail-soft: when `UPower` or the system bus is absent the provider
 //! publishes `ServiceAvailability::Unavailable`. The sysfs/uevent fallback is not implemented.
 
 use std::os::fd::AsRawFd;
@@ -21,7 +21,7 @@ const PROPERTIES_CHANGED: &str = "PropertiesChanged";
 const GET_ALL: &str = "GetAll";
 const PROC_STAT: &str = "/proc/stat";
 
-/// Maps UPower `State`: 1 charging, 2 discharging, 3 empty, 4 fully charged. Pending states (5, 6)
+/// Maps `UPower` `State`: 1 charging, 2 discharging, 3 empty, 4 fully charged. Pending states (5, 6)
 /// and unknown values are reported as `Unknown` rather than guessed.
 #[must_use]
 pub fn power_state_from_upower(value: u32) -> PowerState {
@@ -48,7 +48,7 @@ pub fn power_rate_mw(state: PowerState, watts: f64) -> Option<u32> {
     Some((watts * 1000.0).round() as u32)
 }
 
-/// Rounds a UPower percentage to 0..=100; NaN is treated as 0.
+/// Rounds a `UPower` percentage to 0..=100; NaN is treated as 0.
 #[must_use]
 pub fn clamp_percent(value: f64) -> u8 {
     if value.is_nan() {
@@ -151,7 +151,7 @@ enum Event {
     },
 }
 
-/// Fail-soft UPower `DisplayDevice` provider on the system bus.
+/// Fail-soft `UPower` `DisplayDevice` provider on the system bus.
 pub struct PowerProvider {
     pump: Option<BusPump>,
     dormant: UnixStream,
@@ -164,7 +164,7 @@ pub struct PowerProvider {
 }
 
 impl PowerProvider {
-    /// An unreachable system bus or absent UPower degrades to `Unavailable`; only socketpair
+    /// An unreachable system bus or absent `UPower` degrades to `Unavailable`; only socketpair
     /// creation failure is an error.
     pub fn connect() -> FlameResult<Self> {
         let (peer, dormant) = UnixStream::pair()
@@ -249,7 +249,7 @@ impl PowerProvider {
         self.snapshot
     }
 
-    /// Drains one bounded reactor turn and applies UPower replies and property changes.
+    /// Drains one bounded reactor turn and applies `UPower` replies and property changes.
     pub fn on_ready(&mut self) -> FlameResult<usize> {
         let Some(pump) = self.pump.as_ref() else {
             return Ok(0);

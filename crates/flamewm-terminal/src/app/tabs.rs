@@ -1,10 +1,10 @@
 //! Tab lifecycle, the tab bar with its hit areas, and inline tab rename.
 
+use super::layout::PaneNode;
+use super::{App, Tab, View};
 use crate::pty::Launch;
 use crate::view::Run;
 use crate::view::text_run;
-use super::{App, Tab, View};
-use super::layout::PaneNode;
 
 /// Inline tab rename in progress: the tab index and the text typed so far.
 pub struct Rename {
@@ -28,14 +28,21 @@ impl App {
         let id = pane.session.id;
         // The banner belongs to the first tab only.
         self.banner = self.tabs.is_empty();
-        self.tabs.push(Tab { id, title: None, root: PaneNode::Leaf(pane), focused: id });
+        self.tabs.push(Tab {
+            id,
+            title: None,
+            root: PaneNode::Leaf(pane),
+            focused: id,
+        });
         self.active = self.tabs.len() - 1;
         Ok(())
     }
 
     /// Opens a tab in the focused pane's working directory (the shell when the directory is unknown).
     pub fn open_tab_here(&mut self) -> Result<(), String> {
-        let cwd = self.focused_pane().and_then(|pane| pane.session.working_directory());
+        let cwd = self
+            .focused_pane()
+            .and_then(|pane| pane.session.working_directory());
         self.open_tab(Launch::shell(cwd))
     }
 
@@ -62,8 +69,16 @@ impl App {
     /// Title shown for tab `index`: the name set by Rename Tab, else the focused shell's title, else a default.
     fn tab_title(&self, index: usize) -> String {
         let tab = &self.tabs[index];
-        let shell = tab.root.pane(tab.focused).or_else(|| tab.root.leaf()).and_then(|pane| pane.session.screen.title.clone());
-        let title = tab.title.clone().or(shell).unwrap_or_else(|| format!("Terminal {}", index + 1));
+        let shell = tab
+            .root
+            .pane(tab.focused)
+            .or_else(|| tab.root.leaf())
+            .and_then(|pane| pane.session.screen.title.clone());
+        let title = tab
+            .title
+            .clone()
+            .or(shell)
+            .unwrap_or_else(|| format!("Terminal {}", index + 1));
         title.chars().take(24).collect()
     }
 
@@ -95,7 +110,13 @@ impl App {
                 let colour = if active { fg } else { muted };
                 runs.push(text_run(col, &label, colour, bg, active));
                 hits.push((col, col + label.chars().count(), Hit::Tab(index)));
-                runs.push(text_run(col + label.chars().count(), "× ", colour, bg, false));
+                runs.push(text_run(
+                    col + label.chars().count(),
+                    "× ",
+                    colour,
+                    bg,
+                    false,
+                ));
                 hits.push((col + label.chars().count(), col + width, Hit::Close(index)));
                 col += width;
             }
@@ -107,7 +128,9 @@ impl App {
 
     /// Ends an inline rename. A blank name clears the custom title, so the shell's title shows again.
     pub(super) fn finish_rename(&mut self, commit: bool) {
-        let Some(rename) = self.rename.take() else { return };
+        let Some(rename) = self.rename.take() else {
+            return;
+        };
         if let (true, Some(tab)) = (commit, self.tabs.get_mut(rename.tab)) {
             let name = rename.text.trim();
             tab.title = (!name.is_empty()).then(|| name.to_owned());
@@ -116,7 +139,13 @@ impl App {
 
     pub(super) fn tab_hit(&mut self, hit: Hit) {
         match hit {
-            Hit::Tab(index) => self.active = if index < self.tabs.len() { index } else { self.active },
+            Hit::Tab(index) => {
+                self.active = if index < self.tabs.len() {
+                    index
+                } else {
+                    self.active
+                }
+            }
             Hit::Close(index) => self.close_tab(index),
             Hit::NewTab => {
                 let _ = self.open_tab_here();

@@ -8,7 +8,7 @@ pub(crate) const ICON_TILE_PX: u32 = 44;
 /// the 50% label and independent of renderer node-group alpha support.
 pub(crate) fn fade_ghost_pixels(pixels: &mut [u8]) {
     for pixel in pixels.chunks_exact_mut(4) {
-        pixel[3] = ((u16::from(pixel[3]) + 1) / 2) as u8;
+        pixel[3] = u16::from(pixel[3]).div_ceil(2) as u8;
     }
 }
 

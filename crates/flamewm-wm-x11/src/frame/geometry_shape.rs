@@ -5,7 +5,7 @@
 //! radius is 0/1, or mid-span; corner insets otherwise. The radius policy
 //! is owned by skin (`corner_radius`). Bounding-region assembly lives here
 //! over safe `x11rb` rectangles; the live mask apply lives in `render-x11`'s
-//! XShape bridge.
+//! `XShape` bridge.
 
 use flamewm_render_x11::external_rounded_row_inset;
 use flamewm_skin::recipes::decoration::{DecorationStyle, corner_radius};
@@ -26,7 +26,7 @@ pub fn scaled_corner_radius(floating: bool, style: DecorationStyle, titlebar_h: 
     value.min(u32::from(u16::MAX)) as u16
 }
 
-/// Canonical row spans (y, x_start, x_end_exclusive) for a rounded rect:
+/// Canonical row spans (y, `x_start`, `x_end_exclusive`) for a rounded rect:
 /// float rounded mask, single full-width rows when rectangular.
 #[must_use]
 pub fn rounded_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u32, u32, u32)> {
@@ -95,11 +95,7 @@ pub fn bounding_rectangles_with_titlebar(
 /// frame. The titlebar sits above the client, so its top corners stay square;
 /// only the last `radius` rows are inset. A zero radius is one full rectangle.
 #[must_use]
-pub fn client_bottom_rounded_rectangles(
-    width: u32,
-    height: u32,
-    radius: u32,
-) -> Vec<Rectangle> {
+pub fn client_bottom_rounded_rectangles(width: u32, height: u32, radius: u32) -> Vec<Rectangle> {
     if width == 0 || height == 0 {
         return Vec::new();
     }

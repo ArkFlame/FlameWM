@@ -6,6 +6,7 @@
 //! - mounted now: remember it;
 //! - unmounted, remembered, and not seen mounted at the previous pass: mount it;
 //! - unmounted, remembered, and seen mounted at the previous pass: the user unmounted it, so forget it.
+//!
 //! An explicit user eject or unmount forgets the UUID before the action runs.
 use std::collections::BTreeSet;
 use std::env;
@@ -57,7 +58,9 @@ pub fn state_path() -> PathBuf {
 }
 
 fn valid_uuid(uuid: &str) -> bool {
-    !uuid.is_empty() && uuid.len() <= MAX_UUID_LEN && uuid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    !uuid.is_empty()
+        && uuid.len() <= MAX_UUID_LEN
+        && uuid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 /// Parses the state file: one UUID per line, invalid lines and duplicates ignored.
@@ -71,6 +74,7 @@ pub fn parse(text: &str) -> Vec<String> {
     out
 }
 
+#[must_use]
 pub fn load(path: &Path) -> Vec<String> {
     parse(&fs::read_to_string(path).unwrap_or_default())
 }
@@ -93,8 +97,12 @@ pub fn save(path: &Path, known: &[String]) -> io::Result<()> {
 }
 
 impl Memory {
+    #[must_use]
     pub fn load(path: &Path) -> Self {
-        Self { known: load(path), seen_mounted: BTreeSet::new() }
+        Self {
+            known: load(path),
+            seen_mounted: BTreeSet::new(),
+        }
     }
 
     /// Adds `uuid` to the remembered list; returns true when the list changed.
@@ -122,16 +130,24 @@ impl Memory {
         for uuid in &plan.remember {
             changed |= self.remember(uuid);
         }
-        self.seen_mounted = devices.iter().filter(|d| d.removable && d.mounted).map(|d| d.uuid.clone()).collect();
+        self.seen_mounted = devices
+            .iter()
+            .filter(|d| d.removable && d.mounted)
+            .map(|d| d.uuid.clone())
+            .collect();
         changed
     }
 }
 
 /// Decides the mounts, remembers and forgets for one pass. Pure: no udisks, no filesystem access.
+#[must_use]
 pub fn plan(memory: &Memory, devices: &[Device]) -> Plan {
     let mut plan = Plan::default();
-    for device in devices.iter().filter(|d| d.removable && valid_uuid(&d.uuid)) {
-        let known = memory.known.iter().any(|known| *known == device.uuid);
+    for device in devices
+        .iter()
+        .filter(|d| d.removable && valid_uuid(&d.uuid))
+    {
+        let known = memory.known.contains(&device.uuid);
         if device.mounted {
             if !known && !plan.remember.contains(&device.uuid) {
                 plan.remember.push(device.uuid.clone());
@@ -151,28 +167,48 @@ pub fn plan(memory: &Memory, devices: &[Device]) -> Plan {
 
 /// Removes control characters and caps the length of a udisks2 error message.
 fn bounded_message(raw: &str) -> String {
-    raw.chars().filter(|c| !c.is_control()).take(300).collect::<String>().trim().to_owned()
+    raw.chars()
+        .filter(|c| !c.is_control())
+        .take(300)
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 
 /// Mount-table escapes used by `/proc/self/mountinfo` mount points.
+#[must_use]
 pub fn unescape_mount(text: &str) -> String {
-    text.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n").replace("\\134", "\\")
+    text.replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
 }
 
 /// Mounted block devices from `/proc/self/mountinfo` text: `(block_name, mount_point)` for every
-/// `/dev/<name>` source, whatever the mount point. Field layout: id parent maj:min root mount_point
+/// `/dev/<name>` source, whatever the mount point. Field layout: id parent maj:min root `mount_point`
 /// opts [optional...] - fstype source superopts.
+#[must_use]
 pub fn mounted_block_devices(mountinfo: &str) -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     for line in mountinfo.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
-        let Some(separator) = fields.iter().position(|field| *field == "-") else { continue };
-        let (Some(mount), Some(source)) = (fields.get(4), fields.get(separator + 2)) else { continue };
-        let Some(block_name) = source.strip_prefix("/dev/").filter(|name| !name.is_empty() && !name.contains('/')) else {
+        let Some(separator) = fields.iter().position(|field| *field == "-") else {
+            continue;
+        };
+        let (Some(mount), Some(source)) = (fields.get(4), fields.get(separator + 2)) else {
+            continue;
+        };
+        let Some(block_name) = source
+            .strip_prefix("/dev/")
+            .filter(|name| !name.is_empty() && !name.contains('/'))
+        else {
             continue;
         };
         let mount_point = PathBuf::from(unescape_mount(mount));
-        if !out.iter().any(|(name, existing)| name == block_name && *existing == mount_point) {
+        if !out
+            .iter()
+            .any(|(name, existing)| name == block_name && *existing == mount_point)
+        {
             out.push((block_name.to_owned(), mount_point));
         }
     }
@@ -180,20 +216,31 @@ pub fn mounted_block_devices(mountinfo: &str) -> Vec<(String, PathBuf)> {
 }
 
 /// True when sysfs marks the block device, or its parent disk, as removable.
+#[must_use]
 pub fn is_removable_in(sys_block_root: &Path, block_name: &str) -> bool {
-    let flag = |dir: PathBuf| fs::read_to_string(dir.join("removable")).map(|v| v.trim() == "1").unwrap_or(false);
+    let flag = |dir: PathBuf| {
+        fs::read_to_string(dir.join("removable"))
+            .map(|v| v.trim() == "1")
+            .unwrap_or(false)
+    };
     let dev = sys_block_root.join(block_name);
     flag(dev.clone()) || flag(dev.join(".."))
 }
 
+#[must_use]
 pub fn is_removable(block_name: &str) -> bool {
     is_removable_in(Path::new("/sys/class/block"), block_name)
 }
 
 /// Accepts only `/dev/<name>` block paths without shell metacharacters or traversal.
+#[must_use]
 pub fn valid_device_path(device: &str) -> bool {
     device.strip_prefix("/dev/").is_some_and(|name| {
-        !name.is_empty() && name.len() <= 255 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        !name.is_empty()
+            && name.len() <= 255
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     })
 }
 
@@ -205,8 +252,16 @@ pub fn udisks_args(action: &str, device: &str) -> Result<Vec<String>, String> {
     if !valid_device_path(device) {
         return Err("Refusing invalid device path".into());
     }
-    let subcommand = if action == "eject" { "power-off" } else { action };
-    Ok(vec![subcommand.to_owned(), "-b".to_owned(), device.to_owned()])
+    let subcommand = if action == "eject" {
+        "power-off"
+    } else {
+        action
+    };
+    Ok(vec![
+        subcommand.to_owned(),
+        "-b".to_owned(),
+        device.to_owned(),
+    ])
 }
 
 /// Runs `udisksctl` for one device operation. Returns trimmed stdout on success, a bounded stderr message on failure.
@@ -218,15 +273,22 @@ pub fn udisks_action(action: &str, device: &str) -> Result<String, String> {
         .output()
         .map_err(|error| format!("udisksctl unavailable: {error}"))?;
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().chars().take(512).collect())
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .chars()
+            .take(512)
+            .collect())
     } else {
         Err(bounded_message(&String::from_utf8_lossy(&output.stderr)))
     }
 }
 
 /// Filesystem UUID and block name pairs from a `/dev/disk/by-uuid` directory (present filesystems only).
+#[must_use]
 pub fn uuid_blocks(by_uuid: &Path) -> Vec<(String, String)> {
-    let Ok(entries) = fs::read_dir(by_uuid) else { return Vec::new() };
+    let Ok(entries) = fs::read_dir(by_uuid) else {
+        return Vec::new();
+    };
     entries
         .filter_map(|entry| {
             let entry = entry.ok()?;
@@ -238,6 +300,7 @@ pub fn uuid_blocks(by_uuid: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
+#[must_use]
 pub fn by_uuid_dir() -> PathBuf {
     PathBuf::from("/dev/disk/by-uuid")
 }
@@ -263,11 +326,17 @@ pub fn removable_devices(
 /// pass), applies the plan, saves when it changed, and asks udisks2 to mount what the plan lists.
 /// Blocks on udisks2, so it runs on a background thread only.
 pub fn remount_pass(memory: &Mutex<Memory>) {
-    let Ok(mut memory) = memory.lock() else { return };
+    let Ok(mut memory) = memory.lock() else {
+        return;
+    };
     let path = state_path();
     memory.known = load(&path);
     let mountinfo = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
-    let devices = removable_devices(&uuid_blocks(&by_uuid_dir()), &mounted_block_devices(&mountinfo), is_removable);
+    let devices = removable_devices(
+        &uuid_blocks(&by_uuid_dir()),
+        &mounted_block_devices(&mountinfo),
+        is_removable,
+    );
     let plan = plan(&memory, &devices);
     if memory.apply(&plan, &devices) {
         let _ = save(&path, &memory.known);
@@ -284,10 +353,13 @@ pub struct RemovableMountWorker {
 }
 
 impl RemovableMountWorker {
+    #[must_use]
     pub fn start() -> Self {
         let memory = Arc::new(Mutex::new(Memory::load(&state_path())));
         let initial = Arc::clone(&memory);
-        let _ = thread::Builder::new().name("removable-mounts".into()).spawn(move || remount_pass(&initial));
+        let _ = thread::Builder::new()
+            .name("removable-mounts".into())
+            .spawn(move || remount_pass(&initial));
         let watch = DeviceWatch::spawn(move || remount_pass(&memory)).ok();
         Self { _watch: watch }
     }
@@ -298,7 +370,12 @@ mod tests {
     use super::*;
 
     fn device(uuid: &str, block: &str, removable: bool, mounted: bool) -> Device {
-        Device { uuid: uuid.into(), block: block.into(), removable, mounted }
+        Device {
+            uuid: uuid.into(),
+            block: block.into(),
+            removable,
+            mounted,
+        }
     }
 
     fn memory(known: &[&str], seen: &[&str]) -> Memory {
@@ -310,8 +387,18 @@ mod tests {
 
     #[test]
     fn known_unmounted_device_is_mounted_again() {
-        let plan = plan(&memory(&["abc"], &[]), &[device("abc", "sdb1", true, false)]);
-        assert_eq!(plan, Plan { remember: vec![], forget: vec![], mount: vec!["sdb1".into()] });
+        let plan = plan(
+            &memory(&["abc"], &[]),
+            &[device("abc", "sdb1", true, false)],
+        );
+        assert_eq!(
+            plan,
+            Plan {
+                remember: vec![],
+                forget: vec![],
+                mount: vec!["sdb1".into()]
+            }
+        );
     }
 
     #[test]
@@ -323,14 +410,20 @@ mod tests {
 
     #[test]
     fn unmount_while_present_is_respected_and_forgotten() {
-        let plan = plan(&memory(&["abc"], &["abc"]), &[device("abc", "sdb1", true, false)]);
+        let plan = plan(
+            &memory(&["abc"], &["abc"]),
+            &[device("abc", "sdb1", true, false)],
+        );
         assert_eq!(plan.forget, vec!["abc".to_owned()]);
         assert!(plan.mount.is_empty());
     }
 
     #[test]
     fn unknown_and_internal_devices_are_never_touched() {
-        let devices = [device("new", "sdc1", true, false), device("int", "nvme0n1p6", false, false)];
+        let devices = [
+            device("new", "sdc1", true, false),
+            device("int", "nvme0n1p6", false, false),
+        ];
         let plan = plan(&memory(&["int"], &[]), &devices);
         assert_eq!(plan, Plan::default());
     }
@@ -353,7 +446,10 @@ mod tests {
 
     #[test]
     fn apply_updates_known_and_seen_for_the_next_pass() {
-        let devices = [device("abc", "sdb1", true, true), device("old", "sdc1", true, false)];
+        let devices = [
+            device("abc", "sdb1", true, true),
+            device("old", "sdc1", true, false),
+        ];
         let mut state = memory(&["old"], &[]);
         let plan = plan(&state, &devices);
         assert_eq!(plan.mount, vec!["sdc1".to_owned()]);

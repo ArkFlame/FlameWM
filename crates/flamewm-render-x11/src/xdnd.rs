@@ -281,12 +281,27 @@ pub fn direct_save_uri(dir: &std::path::Path, name: &str) -> Option<String> {
 /// Drop-target events for the window owner. Coordinates are window-relative logical px.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DropEvent {
-    Enter { x: i32, y: i32 },
-    Over { x: i32, y: i32 },
+    Enter {
+        x: i32,
+        y: i32,
+    },
+    Over {
+        x: i32,
+        y: i32,
+    },
     Leave,
-    Drop { x: i32, y: i32, paths: Vec<PathBuf> },
+    Drop {
+        x: i32,
+        y: i32,
+        paths: Vec<PathBuf>,
+    },
     /// Ark drag-out: the source offered a DBus service and object path to extract into.
-    Extract { x: i32, y: i32, service: String, path: String },
+    Extract {
+        x: i32,
+        y: i32,
+        service: String,
+        path: String,
+    },
 }
 
 /// Protocol messages the drop target must send.
@@ -327,7 +342,7 @@ pub struct DropTarget {
 
 impl DropTarget {
     /// `XdndEnter` with a `text/uri-list`/`text/plain` format (or none). Replies nothing.
-#[allow(dead_code)] // paths-only API kept for callers/tests
+    #[allow(dead_code)] // paths-only API kept for callers/tests
     pub fn enter(&mut self, enter: &Enter, format: Option<u64>) {
         self.enter_offer(enter, format.map(Offer::Paths));
     }
@@ -415,9 +430,12 @@ impl DropTarget {
     }
 
     /// Converted `text/uri-list` (or `text/plain`) paths for a pending drop.
-#[allow(dead_code)] // paths-only API kept for callers/tests
+    #[allow(dead_code)] // paths-only API kept for callers/tests
     pub fn selection(&mut self, data: Option<Vec<PathBuf>>) -> (Vec<DropEvent>, Vec<Reply>) {
-        if !matches!(self.session.as_ref().map(|s| &s.stage), Some(Stage::Paths { .. })) {
+        if !matches!(
+            self.session.as_ref().map(|s| &s.stage),
+            Some(Stage::Paths { .. })
+        ) {
             return (Vec::new(), Vec::new());
         }
         self.complete_paths(data)
@@ -438,7 +456,10 @@ impl DropTarget {
                 self.complete_paths(paths)
             }
             Stage::ArkService { time, path_atom } => {
-                match data.and_then(|bytes| ark_text(&bytes)).filter(|s| valid_bus_name(s)) {
+                match data
+                    .and_then(|bytes| ark_text(&bytes))
+                    .filter(|s| valid_bus_name(s))
+                {
                     Some(service) => {
                         if let Some(session) = self.session.as_mut() {
                             session.stage = Stage::ArkPath { time, service };
@@ -455,7 +476,10 @@ impl DropTarget {
                 }
             }
             Stage::ArkPath { service, .. } => {
-                match data.and_then(|bytes| ark_text(&bytes)).filter(|p| valid_object_path(p)) {
+                match data
+                    .and_then(|bytes| ark_text(&bytes))
+                    .filter(|p| valid_object_path(p))
+                {
                     Some(path) => {
                         let session = self.session.take().expect("session present");
                         let (x, y) = session.position;
@@ -518,13 +542,7 @@ mod tests {
     use super::*;
 
     fn enter(source: u64, version: i64, types: [i64; 3]) -> Enter {
-        decode_enter([
-            source as i64,
-            version << 24,
-            types[0],
-            types[1],
-            types[2],
-        ])
+        decode_enter([source as i64, version << 24, types[0], types[1], types[2]])
     }
 
     const URI: u64 = 100;
@@ -678,10 +696,7 @@ mod tests {
             encode_uri_list(&[PathBuf::from("/a b/c.txt")]),
             b"file:///a%20b/c.txt\r\n"
         );
-        let paths = vec![
-            PathBuf::from("/tmp/x y%z/ünï"),
-            PathBuf::from("/plain"),
-        ];
+        let paths = vec![PathBuf::from("/tmp/x y%z/ünï"), PathBuf::from("/plain")];
         assert_eq!(parse_uri_list(&encode_uri_list(&paths)), paths);
     }
 
@@ -705,7 +720,12 @@ mod tests {
 mod ark_and_guard_tests {
     use super::*;
 
-    const ATOMS: FormatAtoms = FormatAtoms { uri_list: 1, ark_service: 2, ark_path: 3, text_plain: 4 };
+    const ATOMS: FormatAtoms = FormatAtoms {
+        uri_list: 1,
+        ark_service: 2,
+        ark_path: 3,
+        text_plain: 4,
+    };
 
     fn enter(source: u64, types: [i64; 3]) -> Enter {
         decode_enter([source as i64, 5 << 24, types[0], types[1], types[2]])
@@ -714,9 +734,19 @@ mod ark_and_guard_tests {
     #[test]
     fn offer_prefers_uri_list_then_ark_pair_then_plain() {
         assert_eq!(choose_offer(&[4, 1, 2, 3], &ATOMS), Some(Offer::Paths(1)));
-        assert_eq!(choose_offer(&[2, 3, 4], &ATOMS), Some(Offer::Ark { service: 2, path: 3 }));
+        assert_eq!(
+            choose_offer(&[2, 3, 4], &ATOMS),
+            Some(Offer::Ark {
+                service: 2,
+                path: 3
+            })
+        );
         assert_eq!(choose_offer(&[2, 4], &ATOMS), Some(Offer::Paths(4)));
-        assert_eq!(choose_offer(&[3], &ATOMS), None, "ark path alone is not usable");
+        assert_eq!(
+            choose_offer(&[3], &ATOMS),
+            None,
+            "ark path alone is not usable"
+        );
         assert_eq!(choose_offer(&[999], &ATOMS), None);
     }
 
@@ -753,7 +783,10 @@ mod ark_and_guard_tests {
         let deadline = Deadline::new(1_000, SELECTION_TIMEOUT_MS);
         assert!(!deadline.expired(1_499));
         assert!(deadline.expired(1_500));
-        assert!(!deadline.expired(900), "a clock behind the start never reports expiry");
+        assert!(
+            !deadline.expired(900),
+            "a clock behind the start never reports expiry"
+        );
     }
 
     #[test]
@@ -764,14 +797,23 @@ mod ark_and_guard_tests {
         assert_eq!(parse_direct_save_reply(b""), DirectSaveOutcome::Failed);
         let deadline = Deadline::new(0, SELECTION_TIMEOUT_MS);
         assert_eq!(direct_save_poll(None, &deadline, 10), None);
-        assert_eq!(direct_save_poll(None, &deadline, 600), Some(DirectSaveOutcome::Failed));
-        assert_eq!(direct_save_poll(Some(b"S"), &deadline, 600), Some(DirectSaveOutcome::Saved));
+        assert_eq!(
+            direct_save_poll(None, &deadline, 600),
+            Some(DirectSaveOutcome::Failed)
+        );
+        assert_eq!(
+            direct_save_poll(Some(b"S"), &deadline, 600),
+            Some(DirectSaveOutcome::Saved)
+        );
     }
 
     #[test]
     fn direct_save_uri_encodes_and_rejects_bad_names() {
         let dir = std::path::Path::new("/home/u/My Docs");
-        assert_eq!(direct_save_uri(dir, "a b.txt").as_deref(), Some("file:///home/u/My%20Docs/a%20b.txt"));
+        assert_eq!(
+            direct_save_uri(dir, "a b.txt").as_deref(),
+            Some("file:///home/u/My%20Docs/a%20b.txt")
+        );
         assert_eq!(direct_save_uri(std::path::Path::new("rel"), "a"), None);
         assert_eq!(direct_save_uri(dir, "../etc"), None);
     }
@@ -779,10 +821,25 @@ mod ark_and_guard_tests {
     #[test]
     fn ark_drop_converts_service_then_path_then_extracts() {
         let mut target = DropTarget::default();
-        target.enter_offer(&enter(7, [2, 3, 0]), Some(Offer::Ark { service: 2, path: 3 }));
+        target.enter_offer(
+            &enter(7, [2, 3, 0]),
+            Some(Offer::Ark {
+                service: 2,
+                path: 3,
+            }),
+        );
         let (_, replies) = target.position(7, 10, 20);
-        assert_eq!(replies, vec![Reply::Status { source: 7, accepted: true }]);
-        assert_eq!(target.drop_requested(7, 9), vec![Reply::Convert { format: 2, time: 9 }]);
+        assert_eq!(
+            replies,
+            vec![Reply::Status {
+                source: 7,
+                accepted: true
+            }]
+        );
+        assert_eq!(
+            target.drop_requested(7, 9),
+            vec![Reply::Convert { format: 2, time: 9 }]
+        );
         let (events, replies) = target.selection_bytes(Some(b"org.kde.ark-42\n".to_vec()));
         assert!(events.is_empty());
         assert_eq!(replies, vec![Reply::Convert { format: 3, time: 9 }]);
@@ -796,29 +853,59 @@ mod ark_and_guard_tests {
                 path: "/DndExtract".into(),
             }]
         );
-        assert_eq!(replies, vec![Reply::Finished { source: 7, accepted: true }]);
+        assert_eq!(
+            replies,
+            vec![Reply::Finished {
+                source: 7,
+                accepted: true
+            }]
+        );
     }
 
     #[test]
     fn ark_invalid_service_or_path_is_refused_without_event() {
         let mut target = DropTarget::default();
-        target.enter_offer(&enter(7, [2, 3, 0]), Some(Offer::Ark { service: 2, path: 3 }));
+        target.enter_offer(
+            &enter(7, [2, 3, 0]),
+            Some(Offer::Ark {
+                service: 2,
+                path: 3,
+            }),
+        );
         target.drop_requested(7, 1);
         let (events, replies) = target.selection_bytes(Some(b"../evil".to_vec()));
         assert!(events.is_empty());
-        assert_eq!(replies, vec![Reply::Finished { source: 7, accepted: false }]);
+        assert_eq!(
+            replies,
+            vec![Reply::Finished {
+                source: 7,
+                accepted: false
+            }]
+        );
         // session is gone: a further selection does nothing
-        assert_eq!(target.selection_bytes(Some(b"org.kde.ark".to_vec())), (vec![], vec![]));
+        assert_eq!(
+            target.selection_bytes(Some(b"org.kde.ark".to_vec())),
+            (vec![], vec![])
+        );
     }
 
     #[test]
     fn ark_refused_conversion_or_oversized_payload_finishes_not_accepted() {
         let mut target = DropTarget::default();
-        target.enter_offer(&enter(7, [2, 3, 0]), Some(Offer::Ark { service: 2, path: 3 }));
+        target.enter_offer(
+            &enter(7, [2, 3, 0]),
+            Some(Offer::Ark {
+                service: 2,
+                path: 3,
+            }),
+        );
         target.drop_requested(7, 1);
         assert_eq!(
             target.selection_bytes(None).1,
-            vec![Reply::Finished { source: 7, accepted: false }]
+            vec![Reply::Finished {
+                source: 7,
+                accepted: false
+            }]
         );
 
         let mut target = DropTarget::default();
@@ -827,7 +914,10 @@ mod ark_and_guard_tests {
         let huge = vec![b'a'; MAX_DROP_PAYLOAD_BYTES + 1];
         assert_eq!(
             target.selection_bytes(Some(huge)).1,
-            vec![Reply::Finished { source: 7, accepted: false }]
+            vec![Reply::Finished {
+                source: 7,
+                accepted: false
+            }]
         );
     }
 
@@ -839,14 +929,27 @@ mod ark_and_guard_tests {
         let (events, _) = target.selection_bytes(Some(b"file:///tmp/a%20b\r\n".to_vec()));
         assert_eq!(
             events,
-            vec![DropEvent::Drop { x: 0, y: 0, paths: vec![PathBuf::from("/tmp/a b")] }]
+            vec![DropEvent::Drop {
+                x: 0,
+                y: 0,
+                paths: vec![PathBuf::from("/tmp/a b")]
+            }]
         );
     }
 
     #[test]
     fn stale_selection_without_drop_does_nothing() {
         let mut target = DropTarget::default();
-        target.enter_offer(&enter(7, [2, 3, 0]), Some(Offer::Ark { service: 2, path: 3 }));
-        assert_eq!(target.selection_bytes(Some(b"org.kde.ark-1".to_vec())), (vec![], vec![]));
+        target.enter_offer(
+            &enter(7, [2, 3, 0]),
+            Some(Offer::Ark {
+                service: 2,
+                path: 3,
+            }),
+        );
+        assert_eq!(
+            target.selection_bytes(Some(b"org.kde.ark-1".to_vec())),
+            (vec![], vec![])
+        );
     }
 }

@@ -29,10 +29,12 @@ impl PopupState {
         runtime.hide(surface)
     }
 
+    #[must_use]
     pub fn is_open(&self) -> bool {
         self.open.is_some()
     }
 
+    #[must_use]
     pub fn active(&self) -> Option<SurfaceHandle> {
         self.open
     }

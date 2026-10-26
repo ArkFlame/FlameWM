@@ -6,9 +6,10 @@
 use std::path::PathBuf;
 
 fn default_path(args: &[String]) -> PathBuf {
-    crate::arg(args, "--digest")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(".agents/runtime/pre009/J07/t13-digest.txt"))
+    crate::arg(args, "--digest").map_or_else(
+        || PathBuf::from(".agents/runtime/pre009/J07/t13-digest.txt"),
+        PathBuf::from,
+    )
 }
 
 /// T13: `--run a|b`. Run A writes digest; run B compares. Deterministic,

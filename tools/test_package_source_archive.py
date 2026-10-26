@@ -116,6 +116,17 @@ class SourceArchiveTests(unittest.TestCase):
         self.assertIn("FLAMEWM-SOURCE-CHECK:", result.stdout)
         self.assertEqual(before, sorted(p.relative_to(self.root).as_posix() for p in self.root.rglob("*")))
 
+    def test_check_mode_skips_executables_of_an_absent_optional_tree(self):
+        self.manifest.write_text(self.manifest.read_text() + ".vendor/reference/\n@exec .vendor/reference/run\n")
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_check_mode_still_rejects_missing_executable_of_a_present_tree(self):
+        self.manifest.write_text(self.manifest.read_text() + "@exec crates/missing.sh\n")
+        result = self.check()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("registered executable missing from source manifest: crates/missing.sh", result.stderr)
+
     def test_check_mode_rejects_unregistered_executable_with_canonical_message(self):
         path = self.root / "crates/unregistered.sh"
         path.write_text("#!/bin/sh\n", encoding="utf-8")

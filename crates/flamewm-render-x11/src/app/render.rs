@@ -1,5 +1,5 @@
 use super::clip::{Visible, visible_under};
-use super::damage_plan::{PixelRegion, RegionInput, RedrawPlan, command_bounds, plan_region_paint};
+use super::damage_plan::{PixelRegion, RedrawPlan, RegionInput, command_bounds, plan_region_paint};
 use super::primitives::{scale_rect, snap_device_rect};
 use super::*;
 use crate::external_drawable::match_argb32_visual;
@@ -43,6 +43,7 @@ fn scroll_fingerprint(document: &RuntimeDocument) -> u64 {
 impl X11App {
     /// Soft alpha shadow uses the canonical Xft glyph coverage once, the shared
     /// bounded Gaussian blur, then a transient premultiplied ARGB32 XRender blit.
+    #[allow(clippy::too_many_arguments)]
     fn paint_text_shadow(
         &mut self,
         x: f32,
@@ -68,7 +69,12 @@ impl X11App {
             SHADOW_SCRATCH.with(|slot| slot.replace(scratch));
             return Ok(false);
         };
-        let ShadowScratch { blur, rgba, argb, mask } = &mut scratch;
+        let ShadowScratch {
+            blur,
+            rgba,
+            argb,
+            mask,
+        } = &mut scratch;
         rgba.clear();
         rgba.resize(w as usize * h as usize * 4, 0);
         for (out, &coverage) in rgba.chunks_exact_mut(4).zip(mask.iter()) {
@@ -313,7 +319,9 @@ impl X11App {
         }
         let (used, visits) = match region_done {
             Some(done) => done,
-            None => (RedrawPlan::Full, unsafe { self.paint_full(document, scale)? }),
+            None => (RedrawPlan::Full, unsafe {
+                self.paint_full(document, scale)?
+            }),
         };
         unsafe { self.bind_presented_backbuffer_as_window_background()? };
         // Single shape per changed frame, from retained commands.
@@ -506,7 +514,10 @@ impl X11App {
 
     /// Full relayout and repaint for a window size change or Expose. A retained scene can
     /// predate the new size or the document state the resize hand-off just applied.
-    pub(crate) unsafe fn repaint_full(&mut self, document: &mut RuntimeDocument) -> Result<(), String> {
+    pub(crate) unsafe fn repaint_full(
+        &mut self,
+        document: &mut RuntimeDocument,
+    ) -> Result<(), String> {
         self.mark_full();
         unsafe { self.redraw_if_dirty(document)? };
         Ok(())
@@ -792,13 +803,7 @@ impl X11App {
                 let radius = (*radius * scale).round().max(0.0) as u32;
                 // SAFETY: redraw is entered only with the app's initialized X11 resources.
                 unsafe {
-                    self.paint_node_backdrop(
-                        *node,
-                        device,
-                        radius,
-                        *blur_percent,
-                        *opacity,
-                    )?
+                    self.paint_node_backdrop(*node, device, radius, *blur_percent, *opacity)?
                 };
             }
             PaintCommand::FillRect {
@@ -955,7 +960,13 @@ impl X11App {
                             None => {
                                 // SAFETY: same initialized backbuffer/display contract as `paint`.
                                 unsafe {
-                                    xrender.blit_argb32_over(cached.pixmap, dx, dy, width, height)?
+                                    xrender.blit_argb32_over(
+                                        cached.pixmap,
+                                        dx,
+                                        dy,
+                                        width,
+                                        height,
+                                    )?
                                 };
                             }
                             Some((x0, y0, x1, y1)) if x1 > x0 && y1 > y0 => {
@@ -1333,13 +1344,18 @@ mod shape_latch_tests {
         let latch = Cell::new(None);
         let a = [(0u32, 10u32, 20u32), (1, 9, 18)];
         let b = [(0u32, 10u32, 21u32)];
-        let applies = |spans: &[(u32, u32, u32)], win| usize::from(shape_needs_apply(&latch, win, spans));
+        let applies =
+            |spans: &[(u32, u32, u32)], win| usize::from(shape_needs_apply(&latch, win, spans));
         let total = applies(&a, 7) + applies(&a, 7) + applies(&a, 7);
         assert_eq!(total, 1, "100 identical frames must apply the shape once");
         assert_eq!(applies(&b, 7), 1, "changed spans re-apply");
         assert_eq!(applies(&b, 8), 1, "another window re-applies");
         latch.set(None); // clipped writer reset
-        assert_eq!(applies(&b, 8), 1, "after a clipped mask the base mask re-applies");
+        assert_eq!(
+            applies(&b, 8),
+            1,
+            "after a clipped mask the base mask re-applies"
+        );
     }
 }
 
@@ -1397,14 +1413,26 @@ mod layout_reuse_tests {
                 app.redraw(&doc).expect("first redraw");
                 let first = layout_passes_on_this_thread();
                 for step in 0..25u32 {
-                    let color = if step % 2 == 0 { Color::BLACK } else { Color::TRANSPARENT };
+                    let color = if step % 2 == 0 {
+                        Color::BLACK
+                    } else {
+                        Color::TRANSPARENT
+                    };
                     doc.set_background_color("box", color).expect("color");
                     app.redraw(&doc).expect("repaint");
                 }
-                assert_eq!(layout_passes_on_this_thread(), first, "color edits must not relayout");
+                assert_eq!(
+                    layout_passes_on_this_thread(),
+                    first,
+                    "color edits must not relayout"
+                );
                 doc.set_font_size_px("box", 21.0).expect("size");
                 app.redraw(&doc).expect("geometry repaint");
-                assert_eq!(layout_passes_on_this_thread(), first + 1, "geometry edit relayouts once");
+                assert_eq!(
+                    layout_passes_on_this_thread(),
+                    first + 1,
+                    "geometry edit relayouts once"
+                );
             }
             // Owner order (see runtime.rs): take deferred native handles, drop the app, close
             // the display, and only then release the handles.

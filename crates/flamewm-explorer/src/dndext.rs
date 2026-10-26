@@ -1,8 +1,8 @@
-//! Ark drag-out target: asks the source's DBus service (`org.kde.ark.DndExtract`) to extract
+//! Ark drag-out target: asks the source's `DBus` service (`org.kde.ark.DndExtract`) to extract
 //! the dragged selection into the explorer's current folder.
 //!
 //! The XDND payload is validated by `flamewm_ui_x11` re-exports of the protocol owner. This
-//! module owns only the DBus call: it runs `gdbus` with a hard timeout on a worker thread,
+//! module owns only the `DBus` call: it runs `gdbus` with a hard timeout on a worker thread,
 //! catches panics, and reports the extracted entries. Nothing here deletes or overwrites:
 //! entries that appear during the call are reported, and a failed call leaves its output in
 //! place for the user to see.
@@ -42,8 +42,8 @@ pub struct ExtractReport {
     pub created: Vec<String>,
 }
 
-/// Checks the DBus names and that `dest` is an existing absolute directory without control
-/// characters (it is passed as a GVariant string).
+/// Checks the `DBus` names and that `dest` is an existing absolute directory without control
+/// characters (it is passed as a `GVariant` string).
 pub fn validate_request(service: &str, path: &str, dest: &Path) -> Result<(), ExtractError> {
     if !valid_bus_name(service) {
         return Err(ExtractError::Rejected("invalid DBus service name".into()));
@@ -54,16 +54,20 @@ pub fn validate_request(service: &str, path: &str, dest: &Path) -> Result<(), Ex
     let Some(text) = dest.to_str() else {
         return Err(ExtractError::Rejected("destination is not UTF-8".into()));
     };
-    if !dest.is_absolute() || text.chars().any(|c| c.is_control()) {
-        return Err(ExtractError::Rejected("destination must be an absolute path".into()));
+    if !dest.is_absolute() || text.chars().any(char::is_control) {
+        return Err(ExtractError::Rejected(
+            "destination must be an absolute path".into(),
+        ));
     }
     if !dest.is_dir() {
-        return Err(ExtractError::Rejected("destination is not a directory".into()));
+        return Err(ExtractError::Rejected(
+            "destination is not a directory".into(),
+        ));
     }
     Ok(())
 }
 
-/// GVariant string literal for `text` (single-quoted, backslash and quote escaped).
+/// `GVariant` string literal for `text` (single-quoted, backslash and quote escaped).
 fn gvariant_string(text: &str) -> String {
     let escaped = text.replace('\\', "\\\\").replace('\'', "\\'");
     format!("'{escaped}'")
@@ -129,6 +133,7 @@ pub fn run_with_timeout(
 }
 
 /// Name in `dir` that is not taken yet: `name`, then `name (2)`, `name (3)`, ...
+#[must_use]
 pub fn free_name(dir: &Path, name: &str) -> String {
     if !dir.join(name).exists() {
         return name.to_string();
@@ -137,7 +142,7 @@ pub fn free_name(dir: &Path, name: &str) -> String {
         Some(index) if index > 0 => (&name[..index], &name[index..]),
         _ => (name, ""),
     };
-    (2..)
+    (2_u32..=u32::MAX)
         .map(|n| format!("{stem} ({n}){ext}"))
         .find(|candidate| !dir.join(candidate).exists())
         .unwrap_or_else(|| name.to_string())
@@ -203,6 +208,7 @@ fn extract_blocking(service: &str, path: &str, dest: &Path) -> Result<ExtractRep
 /// Starts an extraction on a worker thread. Validation happens first and synchronously, so an
 /// invalid request never spawns anything. The result arrives on the returned channel; a dropped
 /// sender (worker died) is reported by the receiver as a disconnect, never a hang.
+#[must_use]
 pub fn spawn_ark_extract(
     service: String,
     path: String,
@@ -245,8 +251,14 @@ mod tests {
     fn validation_rejects_bad_names_relative_and_missing_destinations() {
         let dir = temp_dir("validate");
         assert!(validate_request("org.kde.ark-1", "/DndExtract", &dir).is_ok());
-        assert!(matches!(validate_request("ark", "/x", &dir), Err(ExtractError::Rejected(_))));
-        assert!(matches!(validate_request("org.kde.ark", "x", &dir), Err(ExtractError::Rejected(_))));
+        assert!(matches!(
+            validate_request("ark", "/x", &dir),
+            Err(ExtractError::Rejected(_))
+        ));
+        assert!(matches!(
+            validate_request("org.kde.ark", "x", &dir),
+            Err(ExtractError::Rejected(_))
+        ));
         assert!(matches!(
             validate_request("org.kde.ark", "/x", Path::new("relative")),
             Err(ExtractError::Rejected(_))
@@ -280,9 +292,17 @@ mod tests {
 
     #[test]
     fn child_exit_status_and_message_are_reported() {
-        let ok = run_with_timeout("sh", &["-c".into(), "echo hi".into()], Duration::from_secs(2));
+        let ok = run_with_timeout(
+            "sh",
+            &["-c".into(), "echo hi".into()],
+            Duration::from_secs(2),
+        );
         assert_eq!(ok, Ok((true, "hi".into())));
-        let failed = run_with_timeout("sh", &["-c".into(), "echo nope >&2; exit 3".into()], Duration::from_secs(2));
+        let failed = run_with_timeout(
+            "sh",
+            &["-c".into(), "echo nope >&2; exit 3".into()],
+            Duration::from_secs(2),
+        );
         assert_eq!(failed, Ok((false, "nope".into())));
     }
 
@@ -297,17 +317,31 @@ mod tests {
         let dir = temp_dir("commit");
         std::fs::write(dir.join("new.txt"), b"keep").expect("seed");
         let report = stage_and_commit(&dir, |stage| {
-            std::fs::write(stage.join("new.txt"), b"extracted").map_err(|e| ExtractError::Failed(e.to_string()))?;
-            std::fs::create_dir(stage.join("folder")).map_err(|e| ExtractError::Failed(e.to_string()))?;
+            std::fs::write(stage.join("new.txt"), b"extracted")
+                .map_err(|e| ExtractError::Failed(e.to_string()))?;
+            std::fs::create_dir(stage.join("folder"))
+                .map_err(|e| ExtractError::Failed(e.to_string()))?;
             Ok(())
         })
         .expect("commit");
-        assert_eq!(report.created, vec!["folder".to_string(), "new (2).txt".to_string()]);
-        assert_eq!(std::fs::read(dir.join("new.txt")).expect("existing"), b"keep");
-        assert_eq!(std::fs::read(dir.join("new (2).txt")).expect("moved"), b"extracted");
+        assert_eq!(
+            report.created,
+            vec!["folder".to_string(), "new (2).txt".to_string()]
+        );
+        assert_eq!(
+            std::fs::read(dir.join("new.txt")).expect("existing"),
+            b"keep"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("new (2).txt")).expect("moved"),
+            b"extracted"
+        );
         assert!(dir.join("folder").is_dir());
-        let leftovers: Vec<_> = std::fs::read_dir(&dir).expect("list").flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with(".flamewm-ark")).collect();
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("list")
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".flamewm-ark"))
+            .collect();
         assert!(leftovers.is_empty(), "staging directory is removed");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -317,12 +351,16 @@ mod tests {
         let dir = temp_dir("partial");
         std::fs::write(dir.join("keep.txt"), b"x").expect("seed");
         let result = stage_and_commit(&dir, |stage| {
-            std::fs::write(stage.join("partial.bin"), b"half").map_err(|e| ExtractError::Failed(e.to_string()))?;
+            std::fs::write(stage.join("partial.bin"), b"half")
+                .map_err(|e| ExtractError::Failed(e.to_string()))?;
             Err(ExtractError::Failed("boom".into()))
         });
         assert_eq!(result, Err(ExtractError::Failed("boom".into())));
-        let names: Vec<String> = std::fs::read_dir(&dir).expect("list").flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .expect("list")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
         assert_eq!(names, vec!["keep.txt".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -340,7 +378,11 @@ mod tests {
 
     #[test]
     fn invalid_request_never_spawns_and_reports_on_channel() {
-        let rx = spawn_ark_extract("bad".into(), "/x".into(), PathBuf::from("/nonexistent-dest"));
+        let rx = spawn_ark_extract(
+            "bad".into(),
+            "/x".into(),
+            PathBuf::from("/nonexistent-dest"),
+        );
         assert!(matches!(rx.recv(), Ok(Err(ExtractError::Rejected(_)))));
     }
 }

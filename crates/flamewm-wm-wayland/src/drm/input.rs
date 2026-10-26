@@ -18,17 +18,14 @@ pub(super) fn handle_input(
             state.request_redraw();
         }
         InputEvent::Keyboard { event } => {
-            match vt_for_key(state, &event) {
-                // Ctrl+Alt+Fn is consumed here: the session switches and the key never reaches clients.
-                Some(vt) => {
-                    if let Err(error) = drm.borrow_mut().session.change_vt(vt) {
-                        eprintln!("flamewm-wayland: VT switch to {vt} failed: {error}");
-                    }
+            // Ctrl+Alt+Fn is consumed here: the session switches and the key never reaches clients.
+            if let Some(vt) = vt_for_key(state, &event) {
+                if let Err(error) = drm.borrow_mut().session.change_vt(vt) {
+                    eprintln!("flamewm-wayland: VT switch to {vt} failed: {error}");
                 }
-                None => {
-                    state.process_input::<LibinputInputBackend>(InputEvent::Keyboard { event });
-                    sync_leds(state, drm);
-                }
+            } else {
+                state.process_input::<LibinputInputBackend>(InputEvent::Keyboard { event });
+                sync_leds(state, drm);
             }
         }
         InputEvent::DeviceAdded { mut device } => {
@@ -64,7 +61,7 @@ fn sync_leds(state: &State, drm: &Rc<RefCell<Drm>>) {
     }
 }
 
-/// Ctrl+Alt+F1..F12 (evdev KEY_F1..KEY_F12) select virtual terminals 1..12.
+/// Ctrl+Alt+F1..F12 (evdev `KEY_F1..KEY_F12`) select virtual terminals 1..12.
 fn vt_for_key(state: &State, event: &impl KeyboardKeyEvent<LibinputInputBackend>) -> Option<i32> {
     if event.state() != KeyState::Pressed {
         return None;

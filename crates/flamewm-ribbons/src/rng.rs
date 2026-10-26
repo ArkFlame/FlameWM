@@ -1,4 +1,4 @@
-/// SplitMix64: small, seedable, deterministic generator. Only used at construction time.
+/// `SplitMix64`: small, seedable, deterministic generator. Only used at construction time.
 #[derive(Clone, Copy, Debug)]
 pub struct SplitMix64(u64);
 

@@ -1,6 +1,6 @@
-//! Minimal xdg-shell test client for the FlameWM Wayland compositor.
+//! Minimal xdg-shell test client for the `FlameWM` Wayland compositor.
 //!
-//! Draws one solid ARGB8888 window through wl_shm (pixels are written to an unlinked file in
+//! Draws one solid ARGB8888 window through `wl_shm` (pixels are written to an unlinked file in
 //! `XDG_RUNTIME_DIR`, so no mmap or unsafe code is needed). Environment:
 //! - `FLAMEWM_TEST_COLOR` (hex, default `2E86C1`), `FLAMEWM_TEST_SIZE` (default `320x200`),
 //! - `FLAMEWM_TEST_HOLD_MS` (default `6000`): how long the window stays mapped.
@@ -34,7 +34,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
         state: &mut Self,
         registry: &wl_registry::WlRegistry,
         event: wl_registry::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
@@ -46,7 +46,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
         {
             match interface.as_str() {
                 "wl_compositor" => {
-                    state.compositor = Some(registry.bind(name, version.min(4), qh, ()))
+                    state.compositor = Some(registry.bind(name, version.min(4), qh, ()));
                 }
                 "wl_shm" => state.shm = Some(registry.bind(name, 1, qh, ())),
                 "xdg_wm_base" => state.wm_base = Some(registry.bind(name, 1, qh, ())),
@@ -61,7 +61,7 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for App {
         _: &mut Self,
         base: &xdg_wm_base::XdgWmBase,
         event: xdg_wm_base::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -76,7 +76,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for App {
         state: &mut Self,
         _: &xdg_surface::XdgSurface,
         event: xdg_surface::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -91,7 +91,7 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
         state: &mut Self,
         _: &xdg_toplevel::XdgToplevel,
         event: xdg_toplevel::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {

@@ -68,10 +68,10 @@ pub fn plan_shadow(
         return ShadowAction::Reshade;
     };
     if gesture_active {
-        return if current != prev.placed {
-            ShadowAction::Move
-        } else {
+        return if current == prev.placed {
             ShadowAction::Noop
+        } else {
+            ShadowAction::Move
         };
     }
     if prev.shaded != current || prev.focused != focused || prev.generation != root_generation {
@@ -349,7 +349,10 @@ mod tests {
         for (row, start, end) in spans {
             let y = area.y + row as i32;
             if y >= FRAME.y && y < frame_bottom {
-                assert!(start >= frame_right_in_area, "row {row} starts inside frame");
+                assert!(
+                    start >= frame_right_in_area,
+                    "row {row} starts inside frame"
+                );
             }
             assert!(start <= end);
         }
@@ -382,8 +385,7 @@ mod tests {
                 plan_shadow(Some(prev), current, focused, true, generation),
                 ShadowAction::Reshade
             );
-            if prev.shaded != current || prev.focused != focused || prev.generation != generation
-            {
+            if prev.shaded != current || prev.focused != focused || prev.generation != generation {
                 assert_eq!(
                     plan_shadow(Some(prev), current, focused, false, generation),
                     ShadowAction::Reshade
@@ -420,15 +422,33 @@ mod tests {
     fn plan_focus_change_reshades_only_affected_frames() {
         let generation = 9;
         assert_eq!(
-            plan_shadow(Some(shaded(FRAME, true, generation)), FRAME, false, false, generation),
+            plan_shadow(
+                Some(shaded(FRAME, true, generation)),
+                FRAME,
+                false,
+                false,
+                generation
+            ),
             ShadowAction::Reshade
         );
         assert_eq!(
-            plan_shadow(Some(shaded(OTHER, false, generation)), OTHER, true, false, generation),
+            plan_shadow(
+                Some(shaded(OTHER, false, generation)),
+                OTHER,
+                true,
+                false,
+                generation
+            ),
             ShadowAction::Reshade
         );
         assert_eq!(
-            plan_shadow(Some(shaded(OTHER, false, generation)), OTHER, false, false, generation),
+            plan_shadow(
+                Some(shaded(OTHER, false, generation)),
+                OTHER,
+                false,
+                false,
+                generation
+            ),
             ShadowAction::Noop
         );
     }

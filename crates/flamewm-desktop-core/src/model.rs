@@ -39,7 +39,6 @@ pub struct DesktopModel {
 }
 
 impl DesktopModel {
-    #[must_use]
     pub fn items(&self) -> impl Iterator<Item = &DesktopItem> {
         self.items.values()
     }
@@ -87,7 +86,7 @@ impl DesktopModel {
         // The converter publishes atomically; suppress only its private
         // in-progress files, not user-created dotfiles in general.
         entries.retain(|entry| !crate::conversion::is_temporary_convert_name(&entry.file_name()));
-        entries.sort_by_key(|entry| entry.file_name());
+        entries.sort_by_key(std::fs::DirEntry::file_name);
 
         // Stored cells are reserved before any unstored entry is placed, so a
         // new entry never takes the cell of a stored entry that sorts after it.
@@ -111,37 +110,34 @@ impl DesktopModel {
             let name = entry.file_name().to_string_lossy().into_owned();
             let id = path.to_string_lossy().into_owned();
             let kind = classify(&entry)?;
-            let position = match self.positions.get(&path).cloned() {
-                Some(mut position) => {
-                    position.output = migrated_output(&position.output, default_output);
-                    if let Some(grid) = grids.get(&position.output) {
-                        let wanted = grid.clamp_cell(position.cell);
-                        let output_assigned = assigned.entry(position.output.clone()).or_default();
-                        position.cell = if output_assigned.insert(wanted) {
-                            wanted
-                        } else {
-                            let used = occupied.entry(position.output.clone()).or_default();
-                            let cell = first_free(used, *grid);
-                            used.insert(cell);
-                            output_assigned.insert(cell);
-                            cell
-                        };
-                    }
-                    position
+            let position = if let Some(mut position) = self.positions.get(&path).cloned() {
+                position.output = migrated_output(&position.output, default_output);
+                if let Some(grid) = grids.get(&position.output) {
+                    let wanted = grid.clamp_cell(position.cell);
+                    let output_assigned = assigned.entry(position.output.clone()).or_default();
+                    position.cell = if output_assigned.insert(wanted) {
+                        wanted
+                    } else {
+                        let used = occupied.entry(position.output.clone()).or_default();
+                        let cell = first_free(used, *grid);
+                        used.insert(cell);
+                        output_assigned.insert(cell);
+                        cell
+                    };
                 }
-                None => {
-                    let grid = grids.get(default_output).copied().unwrap_or(fallback_grid);
-                    let cells = occupied.entry(default_output.clone()).or_default();
-                    let cell = first_free(cells, grid);
-                    cells.insert(cell);
-                    assigned
-                        .entry(default_output.clone())
-                        .or_default()
-                        .insert(cell);
-                    StoredPosition {
-                        output: default_output.clone(),
-                        cell,
-                    }
+                position
+            } else {
+                let grid = grids.get(default_output).copied().unwrap_or(fallback_grid);
+                let cells = occupied.entry(default_output.clone()).or_default();
+                let cell = first_free(cells, grid);
+                cells.insert(cell);
+                assigned
+                    .entry(default_output.clone())
+                    .or_default()
+                    .insert(cell);
+                StoredPosition {
+                    output: default_output.clone(),
+                    cell,
                 }
             };
             let cell = grids

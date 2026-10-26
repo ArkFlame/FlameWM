@@ -407,15 +407,19 @@ mod tests {
     }
 
     fn fixture_with_height(height: Option<f32>) -> RuntimeDocument {
-        let mut scroller = Style::default();
-        scroller.width = Length::Px(300.0);
-        scroller.overflow_y = Overflow::Auto;
+        let mut scroller = Style {
+            width: Length::Px(300.0),
+            overflow_y: Overflow::Auto,
+            ..Style::default()
+        };
         if let Some(h) = height {
             scroller.height = Length::Px(h);
         }
-        let mut tall = Style::default();
-        tall.width = Length::Px(180.0);
-        tall.height = Length::Px(500.0);
+        let mut tall = Style {
+            width: Length::Px(180.0),
+            height: Length::Px(500.0),
+            ..Style::default()
+        };
         tall.background =
             flamewm_render_core::ColorValue::Literal(flamewm_render_core::Color::rgb(9, 9, 9));
         let node = |parent, first_child, style: Style| CompiledNode {
@@ -531,10 +535,12 @@ mod tests {
         visible_rows: usize,
         root_height: f32,
     ) -> RuntimeDocument {
-        let mut root = Style::default();
-        root.width = Length::Px(800.0);
-        root.height = Length::Px(root_height);
-        root.overflow_y = Overflow::Auto;
+        let root = Style {
+            width: Length::Px(800.0),
+            height: Length::Px(root_height),
+            overflow_y: Overflow::Auto,
+            ..Style::default()
+        };
         let mut nodes = vec![CompiledNode {
             kind: NodeKind::Element,
             parent: None,
@@ -551,12 +557,14 @@ mod tests {
         let count = rows * slots;
         for pool in 0..count {
             let (row, slot) = (pool / slots, pool % slots);
-            let mut style = Style::default();
-            style.position = flamewm_render_core::Position::Absolute;
-            style.left = Length::Px((slot % 4) as f32 * 180.0);
-            style.top = Length::Px(row as f32 * 16.0);
-            style.width = Length::Px(170.0);
-            style.height = Length::Px(16.0);
+            let mut style = Style {
+                position: flamewm_render_core::Position::Absolute,
+                left: Length::Px((slot % 4) as f32 * 180.0),
+                top: Length::Px(row as f32 * 16.0),
+                width: Length::Px(170.0),
+                height: Length::Px(16.0),
+                ..Style::default()
+            };
             if slot % 2 == 0 {
                 style.background = flamewm_render_core::ColorValue::Variable(0);
             }

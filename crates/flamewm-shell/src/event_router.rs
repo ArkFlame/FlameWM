@@ -262,7 +262,7 @@ pub(crate) fn quick_popup_group(kind: QuickControlKind) -> &'static str {
 }
 
 /// True when an observed root press lands outside every quick popup. `title` is
-/// the WM_NAME of the top-level window under the pointer.
+/// the `WM_NAME` of the top-level window under the pointer.
 pub(crate) fn raw_press_is_outside_quick_popups(title: Option<&str>) -> bool {
     !title.is_some_and(is_quick_popup_title)
 }
@@ -508,10 +508,8 @@ impl ShellLoop {
         if action == "keyboard.input"
             && event.action.phase == ActionPhase::Release
             && event.action.inside
-            && self.route_launcher_text(
-                runtime,
-                event.action.text.as_deref().unwrap_or_default(),
-            )?
+            && self
+                .route_launcher_text(runtime, event.action.text.as_deref().unwrap_or_default())?
         {
             return Ok(());
         }
@@ -1205,7 +1203,7 @@ mod tests {
     #[test]
     fn latch_expires_so_a_later_genuine_click_reopens() {
         let now = Instant::now();
-        let inside = now + DISMISS_LATCH_TTL - Duration::from_millis(1);
+        let inside = now + (DISMISS_LATCH_TTL - Duration::from_millis(1));
         let expired = now + DISMISS_LATCH_TTL + Duration::from_millis(1);
         let mut latch = latch_for("start", now);
         assert!(latch_consumes_opener(&mut latch, "start.toggle", inside));

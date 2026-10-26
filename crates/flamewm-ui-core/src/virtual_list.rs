@@ -17,8 +17,7 @@ impl VirtualListModel {
         }
         let first = (self.scroll_offset / self.row_height) as usize;
         let first = first.min(self.row_count);
-        let rows_visible =
-            ((self.viewport_height + self.row_height - 1) / self.row_height) as usize;
+        let rows_visible = self.viewport_height.div_ceil(self.row_height) as usize;
         let last = (first + rows_visible.max(1)).min(self.row_count);
         (first, last)
     }

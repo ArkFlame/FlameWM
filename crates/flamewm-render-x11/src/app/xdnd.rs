@@ -15,11 +15,14 @@ use flamewm_render_core::{ActionEvent, ActionPhase, RuntimeDocument};
 
 use super::*;
 use crate::config::{
-    FILE_DRAG_DROP_ACTION, FILE_DRAG_ENTER_ACTION, FILE_DRAG_EXTRACT_ACTION, FILE_DRAG_LEAVE_ACTION,
-    FILE_DRAG_OVER_ACTION, FileDragSlot,
+    FILE_DRAG_DROP_ACTION, FILE_DRAG_ENTER_ACTION, FILE_DRAG_EXTRACT_ACTION,
+    FILE_DRAG_LEAVE_ACTION, FILE_DRAG_OVER_ACTION, FileDragSlot,
 };
 use crate::xdnd::{self as protocol, DropEvent, DropTarget, FormatAtoms, Reply};
-use crate::xlib_ext::{XConvertSelection, XGetSelectionOwner, XGetWindowProperty, XSendEvent, XSetSelectionOwner, XTranslateCoordinates};
+use crate::xlib_ext::{
+    XConvertSelection, XGetSelectionOwner, XGetWindowProperty, XSendEvent, XSetSelectionOwner,
+    XTranslateCoordinates,
+};
 
 const SELECTION_CLEAR: c_int = 29;
 const SELECTION_REQUEST: c_int = 30;
@@ -119,7 +122,11 @@ impl XdndState {
     /// # Safety
     ///
     /// `display` and `window` must be live and owned by the caller.
-    pub(crate) unsafe fn setup(display: *mut Display, window: Window, file_drag: FileDragSlot) -> Self {
+    pub(crate) unsafe fn setup(
+        display: *mut Display,
+        window: Window,
+        file_drag: FileDragSlot,
+    ) -> Self {
         let atoms = XdndAtoms::intern(display);
         let version: [c_long; 1] = [protocol::XDND_VERSION as c_long];
         // SAFETY: the buffer holds one 32-bit property unit, matching format 32 (c_long items).
@@ -244,7 +251,13 @@ unsafe fn send_client(
             message_type: message,
             format: 32,
             data: ClientMessageData {
-                l: [window as c_long, payload[0], payload[1], payload[2], payload[3]],
+                l: [
+                    window as c_long,
+                    payload[0],
+                    payload[1],
+                    payload[2],
+                    payload[3],
+                ],
             },
         };
         XSendEvent(display, to, 0, 0, &mut event);
@@ -290,7 +303,12 @@ fn drag_action_event(event: DropEvent) -> ActionEvent {
         DropEvent::Enter { x, y } => (FILE_DRAG_ENTER_ACTION, x, y, None),
         DropEvent::Over { x, y } => (FILE_DRAG_OVER_ACTION, x, y, None),
         DropEvent::Leave => (FILE_DRAG_LEAVE_ACTION, 0, 0, None),
-        DropEvent::Extract { x, y, service, path } => (
+        DropEvent::Extract {
+            x,
+            y,
+            service,
+            path,
+        } => (
             FILE_DRAG_EXTRACT_ACTION,
             x,
             y,
@@ -473,7 +491,9 @@ impl X11App {
             unsafe { self.handle_xdnd_selection_notify_inner(event, document, on_action) }
         }));
         outcome.unwrap_or_else(|_| {
-            eprintln!("FLAMEWM_XDND_PANIC contained in handle_xdnd_selection_notify; drop session reset");
+            eprintln!(
+                "FLAMEWM_XDND_PANIC contained in handle_xdnd_selection_notify; drop session reset"
+            );
             if let Some(state) = self.xdnd.as_mut() {
                 state.target = DropTarget::default();
             }
@@ -536,7 +556,11 @@ impl X11App {
                             protocol::status_flags(accepted) as c_long,
                             0,
                             0,
-                            if accepted { atoms.action_copy as c_long } else { 0 },
+                            if accepted {
+                                atoms.action_copy as c_long
+                            } else {
+                                0
+                            },
                         ],
                     );
                 },
@@ -548,7 +572,11 @@ impl X11App {
                         self.window,
                         [
                             protocol::status_flags(accepted) as c_long,
-                            if accepted { atoms.action_copy as c_long } else { 0 },
+                            if accepted {
+                                atoms.action_copy as c_long
+                            } else {
+                                0
+                            },
                             0,
                             0,
                         ],
@@ -598,7 +626,12 @@ impl X11App {
     /// # Safety
     ///
     /// Display must be live.
-    unsafe fn xdnd_target_at(&self, x_root: i32, y_root: i32, aware: Atom) -> Option<(Window, u64)> {
+    unsafe fn xdnd_target_at(
+        &self,
+        x_root: i32,
+        y_root: i32,
+        aware: Atom,
+    ) -> Option<(Window, u64)> {
         // SAFETY: display is live; out-pointers reference locals.
         unsafe {
             let root = XRootWindow(self.display, self.screen);
@@ -629,7 +662,9 @@ impl X11App {
                 .find_map(|&window| {
                     read_property(self.display, window, aware, false)
                         .and_then(|(_, format, bytes)| {
-                            (format == 32).then(|| longs(&bytes).first().copied()).flatten()
+                            (format == 32)
+                                .then(|| longs(&bytes).first().copied())
+                                .flatten()
                         })
                         .map(|version| (window, version))
                 })
@@ -733,7 +768,8 @@ impl X11App {
                         continue;
                     }
                     // SAFETY: display is live.
-                    let found = unsafe { self.xdnd_target_at(motion.x_root, motion.y_root, atoms.aware) };
+                    let found =
+                        unsafe { self.xdnd_target_at(motion.x_root, motion.y_root, atoms.aware) };
                     if found.map(|f| f.0) != target.map(|t| t.0) {
                         if let Some((old, _)) = target {
                             unsafe { send_client(display, old, atoms.leave, window, [0; 4]) };
@@ -756,7 +792,8 @@ impl X11App {
                     if let Some((w, _)) = target
                         && last_position != Some((motion.x_root, motion.y_root))
                     {
-                        let packed = protocol::pack_position(motion.x_root, motion.y_root) as c_long;
+                        let packed =
+                            protocol::pack_position(motion.x_root, motion.y_root) as c_long;
                         unsafe {
                             send_client(
                                 display,
@@ -778,7 +815,13 @@ impl X11App {
                     match target {
                         Some((w, true)) => {
                             unsafe {
-                                send_client(display, w, atoms.drop_, window, [0, time as c_long, 0, 0])
+                                send_client(
+                                    display,
+                                    w,
+                                    atoms.drop_,
+                                    window,
+                                    [0, time as c_long, 0, 0],
+                                )
                             };
                             dropped = Some((w, Instant::now() + FINISH_TIMEOUT));
                         }
@@ -810,7 +853,8 @@ impl X11App {
                         && let Some(state) = target.as_mut()
                     {
                         // SAFETY: format-32 client message; `l` is the live arm.
-                        state.1 = unsafe { client.data.l[1] } & (protocol::STATUS_ACCEPT as c_long) != 0;
+                        state.1 =
+                            unsafe { client.data.l[1] } & (protocol::STATUS_ACCEPT as c_long) != 0;
                     } else if client.message_type == atoms.finished
                         && dropped.map(|d| d.0) == Some(from)
                     {

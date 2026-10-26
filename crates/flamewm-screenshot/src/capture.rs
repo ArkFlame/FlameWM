@@ -5,9 +5,7 @@ use std::io::Cursor;
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::xfixes::ConnectionExt as _;
-use x11rb::protocol::xproto::{
-    AtomEnum, ConnectionExt as _, ImageFormat, ImageOrder, Window,
-};
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, ImageFormat, ImageOrder, Window};
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -133,7 +131,7 @@ fn component(value: u32, mask: u32) -> u8 {
     (((u64::from((value & mask) >> shift) * 255) + u64::from(max) / 2) / u64::from(max)) as u8
 }
 
-/// Decodes XImage ZPixmap bytes, including native padding and 16/24/32 bpp.
+/// Decodes `XImage` `ZPixmap` bytes, including native padding and 16/24/32 bpp.
 pub fn decode_ximage<C: Connection>(
     conn: &C,
     screen: usize,
@@ -221,7 +219,7 @@ fn decode_32bpp_in_place(data: &mut [u8], masks: [u32; 3], little: bool) {
     }
 }
 
-/// Own the X11 GetImage reply so a normal tightly-packed 32-bpp frame can
+/// Own the X11 `GetImage` reply so a normal tightly-packed 32-bpp frame can
 /// become the returned RGBA frame without making a second full-size copy.
 pub fn decode_ximage_owned<C: Connection>(
     conn: &C,
@@ -357,7 +355,7 @@ pub fn window_rect<C: Connection>(conn: &C, root: Window, window: Window) -> Res
     })
 }
 
-/// Blend the live ARGB cursor image into a root-relative screenshot. XGetImage
+/// Blend the live ARGB cursor image into a root-relative screenshot. `XGetImage`
 /// excludes hardware cursor sprites; this explicit option avoids surprising users.
 pub fn blend_cursor<C: Connection>(conn: &C, image: &mut Image, root_rect: Rect) -> Result<()> {
     let cursor = conn

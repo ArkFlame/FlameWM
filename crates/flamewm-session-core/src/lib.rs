@@ -307,9 +307,15 @@ pub fn resolve_kwallet_version(
 #[must_use]
 pub fn installed_kwallet_generations() -> (bool, bool) {
     let installed6 = Path::new("/usr/bin/kwalletd6").is_file()
-        || service_runs("/usr/share/dbus-1/services/org.kde.kwalletd6.service", "kwalletd6");
+        || service_runs(
+            "/usr/share/dbus-1/services/org.kde.kwalletd6.service",
+            "kwalletd6",
+        );
     let installed5 = Path::new("/usr/bin/kwalletd5").is_file()
-        || service_runs("/usr/share/dbus-1/services/org.kde.kwalletd5.service", "kwalletd5");
+        || service_runs(
+            "/usr/share/dbus-1/services/org.kde.kwalletd5.service",
+            "kwalletd5",
+        );
     (installed5, installed6)
 }
 
@@ -580,6 +586,18 @@ pub fn default_paths_from_home(bindir: impl AsRef<Path>, home: impl AsRef<Path>)
             .join("share"),
         bindir,
         config_home: home.as_ref().join(".config"),
+    }
+}
+
+/// Apply computed session environment to the current process. Centralizes
+/// the single `std::env::set_var` owner (Rust 2024 marks it `unsafe`
+/// because it races with `getenv` on other threads; call before spawning
+/// threads/children, matching long-standing launcher practice).
+#[allow(unsafe_code)]
+pub fn apply_current_process_env(vars: &std::collections::BTreeMap<String, String>) {
+    for (key, value) in vars {
+        // SAFETY: launcher single-threaded setup before thread spawn.
+        unsafe { std::env::set_var(key, value) };
     }
 }
 
@@ -1001,17 +1019,5 @@ mod tests {
             supervisor.child_exited(ChildExit::ExitCode(1)),
             SupervisorDecision::GiveUp
         );
-    }
-}
-
-/// Apply computed session environment to the current process. Centralizes
-/// the single `std::env::set_var` owner (Rust 2024 marks it `unsafe`
-/// because it races with `getenv` on other threads; call before spawning
-/// threads/children, matching long-standing launcher practice).
-#[allow(unsafe_code)]
-pub fn apply_current_process_env(vars: &std::collections::BTreeMap<String, String>) {
-    for (key, value) in vars {
-        // SAFETY: launcher single-threaded setup before thread spawn.
-        unsafe { std::env::set_var(key, value) };
     }
 }

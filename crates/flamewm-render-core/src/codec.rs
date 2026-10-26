@@ -732,8 +732,10 @@ mod tests {
     }
 
     fn roundtrip_node(treatment: ImageTreatment) -> CompiledDocument {
-        let mut style = Style::default();
-        style.image_treatment = treatment;
+        let style = Style {
+            image_treatment: treatment,
+            ..Style::default()
+        };
         CompiledDocument {
             source_fingerprint: 1,
             root: 0,

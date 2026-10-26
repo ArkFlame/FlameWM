@@ -195,7 +195,7 @@ fn read_windows(conn: &RustConnection, root: Window, atom: Atom) -> Vec<Window> 
     conn.get_property(false, root, atom, AtomEnum::WINDOW, 0, 4096)
         .ok()
         .and_then(|cookie| cookie.reply().ok())
-        .and_then(|reply| reply.value32().map(|iter| iter.collect::<Vec<_>>()))
+        .and_then(|reply| reply.value32().map(std::iter::Iterator::collect::<Vec<_>>))
         .unwrap_or_default()
 }
 

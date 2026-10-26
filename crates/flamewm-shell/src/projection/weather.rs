@@ -53,6 +53,7 @@ pub fn condition_label(condition: WeatherCondition) -> &'static str {
 /// Weekday abbreviation for an ISO `YYYY-MM-DD` date (Sakamoto's method).
 #[must_use]
 pub fn weekday_label(date: &str) -> Option<&'static str> {
+    const OFFSETS: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
     let mut parts = date.splitn(3, '-');
     let mut year: i32 = parts.next()?.parse().ok()?;
     let month: usize = parts.next()?.parse().ok()?;
@@ -60,7 +61,6 @@ pub fn weekday_label(date: &str) -> Option<&'static str> {
     if !(1..=12).contains(&month) {
         return None;
     }
-    const OFFSETS: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
     if month < 3 {
         year -= 1;
     }

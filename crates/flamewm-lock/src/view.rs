@@ -20,6 +20,7 @@ pub struct LockView {
 }
 
 impl LockView {
+    #[must_use]
     pub fn project(
         settings: &LockSettings,
         now: Option<LocalTime>,
@@ -49,6 +50,7 @@ impl LockView {
 }
 
 /// Avatar letter: first character of the user name, upper-cased.
+#[must_use]
 pub fn initial_of(username: &str) -> String {
     username
         .chars()

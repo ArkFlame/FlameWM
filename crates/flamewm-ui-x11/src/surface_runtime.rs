@@ -122,6 +122,7 @@ pub struct SurfaceRuntime {
 
 impl SurfaceRuntime {
     /// True while at least one surface is registered with the controller.
+    #[must_use]
     pub fn has_surfaces(&self) -> bool {
         self.controller.has_surfaces()
     }
@@ -191,7 +192,9 @@ impl SurfaceRuntime {
         surface: SurfaceHandle,
         spans: Option<Vec<(u32, u32, u32)>>,
     ) -> Result<(), UiBackendError> {
-        self.controller.set_surface_shape_mask(surface.0, spans).map_err(Into::into)
+        self.controller
+            .set_surface_shape_mask(surface.0, spans)
+            .map_err(Into::into)
     }
 
     pub fn show(&mut self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
@@ -256,7 +259,7 @@ impl SurfaceRuntime {
         self.move_resize_traced(surface, x, y, width, height, None)
     }
 
-    /// Traced SurfaceRuntime request: records the ui-request stage under the
+    /// Traced `SurfaceRuntime` request: records the ui-request stage under the
     /// caller's txn, then forwards the same txn to the controller. No X
     /// roundtrip; observed/retained stages stay in the native owner.
     pub fn move_resize_traced(
@@ -352,6 +355,7 @@ impl SurfaceRuntime {
         self.controller.watch_root_changes();
     }
 
+    #[must_use]
     pub fn root_geometry(&self) -> (u32, u32) {
         self.controller.root_geometry()
     }
@@ -412,6 +416,7 @@ impl SurfaceRuntime {
             .map_err(UiBackendError::Renderer)
     }
 
+    #[must_use]
     pub fn connection_fd(&self) -> RawFd {
         self.controller.connection_fd()
     }
@@ -494,6 +499,7 @@ impl SurfaceRuntime {
 
     /// Retained scroll offset for one node: render-owned document state is
     /// the authority; the runtime mirror only seeds drag math.
+    #[must_use]
     pub fn scroll_offset(
         &self,
         surface: SurfaceHandle,
@@ -537,11 +543,10 @@ impl SurfaceRuntime {
         max_x: f32,
         max_y: f32,
     ) -> flamewm_render_core::ScrollState {
-        let next = self
-            .controller
-            .document_mut(surface.0)
-            .map(|document| document.set_scroll_offset(node, offset, (max_x, max_y)))
-            .unwrap_or_else(|_| offset.clamped(max_x, max_y));
+        let next = self.controller.document_mut(surface.0).map_or_else(
+            |_| offset.clamped(max_x, max_y),
+            |document| document.set_scroll_offset(node, offset, (max_x, max_y)),
+        );
         self.scroll_offsets.insert((surface.0.get(), node), next);
         next
     }
@@ -624,6 +629,7 @@ impl SurfaceRuntime {
     }
 
     /// Node rect by string id from retained layout (root-space device rect).
+    #[must_use]
     pub fn node_device_rect_by_id(
         &self,
         surface: SurfaceHandle,
@@ -663,9 +669,15 @@ impl SurfaceRuntime {
         max_device_h: f32,
     ) -> Result<(f32, f32), UiBackendError> {
         self.measure_device_size(surface, max_device_w, max_device_h, |doc, w, h| {
-            flamewm_render_core::LayoutEngine::measure_node(doc, node, w, h, Default::default())
-                .map(|size| (size.width, size.height))
-                .map_err(|error| error.to_string())
+            flamewm_render_core::LayoutEngine::measure_node(
+                doc,
+                node,
+                w,
+                h,
+                flamewm_render_core::InteractionState::default(),
+            )
+            .map(|size| (size.width, size.height))
+            .map_err(|error| error.to_string())
         })
     }
 
@@ -801,9 +813,11 @@ fn default_layout(document: &RuntimeDocument) -> flamewm_render_core::LayoutResu
 }
 
 fn effective_output_scale(scale: f32) -> f32 {
-    (scale.is_finite() && (0.5..=4.0).contains(&scale))
-        .then_some(scale)
-        .unwrap_or(1.0)
+    if scale.is_finite() && (0.5..=4.0).contains(&scale) {
+        scale
+    } else {
+        1.0
+    }
 }
 
 #[cfg(test)]

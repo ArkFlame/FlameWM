@@ -131,7 +131,16 @@ impl X11App {
         let root = unsafe { XRootWindow(self.display, self.screen) };
         let (mut rx, mut ry, mut child) = (0, 0, 0);
         unsafe {
-            XTranslateCoordinates(self.display, self.window, root, 0, 0, &mut rx, &mut ry, &mut child)
+            XTranslateCoordinates(
+                self.display,
+                self.window,
+                root,
+                0,
+                0,
+                &mut rx,
+                &mut ry,
+                &mut child,
+            )
         };
         let (width, height) = (self.width, self.height);
         let Some(captured_root) = self
@@ -160,7 +169,10 @@ impl X11App {
             Some(pixmap) => pixmap,
             None => {
                 let words = {
-                    let Some(captured) = self.window_backdrop.as_ref().and_then(|s| s.captured.as_ref())
+                    let Some(captured) = self
+                        .window_backdrop
+                        .as_ref()
+                        .and_then(|s| s.captured.as_ref())
                     else {
                         return Ok(());
                     };
@@ -270,7 +282,14 @@ impl NodeBackdropCache {
     ) -> Option<Pixmap> {
         self.used.insert(node);
         self.entries
-            .insert(node, NodeBackdropEntry { key, source, pixmap })
+            .insert(
+                node,
+                NodeBackdropEntry {
+                    key,
+                    source,
+                    pixmap,
+                },
+            )
             .map(|old| old.pixmap)
     }
 
@@ -400,16 +419,22 @@ impl X11App {
             blur_percent,
             opacity,
         };
-        let Ok(capture) = crate::backdrop::capture_drawable_rect(self.display, self.backbuffer, clip)
+        let Ok(capture) =
+            crate::backdrop::capture_drawable_rect(self.display, self.backbuffer, clip)
         else {
             return Ok(());
         };
         let pixmap = match self.node_backdrops.hit(node, key, &capture.pixels) {
             Some(pixmap) => pixmap,
             None => {
-                let Some(words) =
-                    node_backdrop_words(capture.pixels.clone(), clip, rect, radius, blur_percent, opacity)
-                else {
+                let Some(words) = node_backdrop_words(
+                    capture.pixels.clone(),
+                    clip,
+                    rect,
+                    radius,
+                    blur_percent,
+                    opacity,
+                ) else {
                     return Ok(());
                 };
                 let pixmap = unsafe { self.upload_argb_pixmap(&words, clip.2, clip.3)? };
@@ -497,8 +522,8 @@ mod tests {
             }
         }
         let square = [0x40, 0x80, 0xc0, 255].repeat(12 * 12);
-        let words =
-            node_backdrop_words(square, (0, 0, 12, 12), (0, 0, 12, 12), 0, 50, 255).expect("blur on");
+        let words = node_backdrop_words(square, (0, 0, 12, 12), (0, 0, 12, 12), 0, 50, 255)
+            .expect("blur on");
         assert!(
             words.iter().all(|word| word >> 24 == 0xff),
             "radius 0 is full rect"
@@ -538,8 +563,16 @@ mod tests {
         let mut cache = NodeBackdropCache::default();
         let source = vec![1_u8; 16];
         assert_eq!(cache.store(3, key(80), source.clone(), 7), None);
-        assert_eq!(cache.hit(3, key(80), &source), Some(7), "same geometry and pixels reuse the blur");
-        assert_eq!(cache.hit(3, key(80), &[2_u8; 16]), None, "changed pixels beneath miss");
+        assert_eq!(
+            cache.hit(3, key(80), &source),
+            Some(7),
+            "same geometry and pixels reuse the blur"
+        );
+        assert_eq!(
+            cache.hit(3, key(80), &[2_u8; 16]),
+            None,
+            "changed pixels beneath miss"
+        );
         assert_eq!(cache.hit(3, key(40), &source), None, "blur change misses");
         assert_eq!(
             cache.store(3, key(40), source.clone(), 8),

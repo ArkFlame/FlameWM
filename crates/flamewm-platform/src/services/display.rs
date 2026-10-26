@@ -549,7 +549,7 @@ mod tests {
     }
 
     /// Fake two-output topology with native-like revert semantics: a revert restores the previous
-    /// ModeId on the output that the transaction changed, and only that output.
+    /// `ModeId` on the output that the transaction changed, and only that output.
     struct TwoOutputPort {
         outputs: Vec<FakeOutput>,
         generation: u64,

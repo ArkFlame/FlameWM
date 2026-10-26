@@ -84,7 +84,7 @@ pub fn root_to_rect(root: RootRect) -> Rect {
     root.to_legacy()
 }
 
-/// Floating placement with current == floating_restore and no resume.
+/// Floating placement with current == `floating_restore` and no resume.
 #[must_use]
 pub fn placement_floating(current: RootRect) -> PlacementState {
     PlacementState {

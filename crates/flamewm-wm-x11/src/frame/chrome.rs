@@ -354,7 +354,9 @@ pub fn render(
         _ => Ok(()),
     };
     let _title_guard = flamewm_profiler::start("wm.chrome.render.title");
-    let draw_result = if !scene.title.is_empty() {
+    let draw_result = if scene.title.is_empty() {
+        Ok(())
+    } else {
         renderer.draw_title(
             &scene.title,
             TITLE_FONT_FAMILY,
@@ -369,8 +371,6 @@ pub fn render(
                 a: 255,
             },
         )
-    } else {
-        Ok(())
     };
     let _controls_guard = flamewm_profiler::start("wm.chrome.render.controls");
     let controls_result = crate::chrome::control_blits_for_height(
@@ -436,8 +436,8 @@ mod tests {
         let px = titlebar_fill_pixels(1, &scene, 2, (0, 0), (800, 600));
         assert_eq!(px.len(), scene.frame_w as usize * 2 * 4);
         assert!(px.chunks_exact(4).all(|p| p[3] == 255));
-        assert_eq!(PANEL.0, 0x1b1e20);
-        assert_eq!(TEXT.0, 0xf1f2f3);
+        assert_eq!(PANEL.0, 0x001b_1e20);
+        assert_eq!(TEXT.0, 0x00f1_f2f3);
         assert_eq!(scene.title_color, (0xf1, 0xf2, 0xf3));
         assert_eq!(scene.title_family, "IBM Plex Sans");
         assert_eq!(scene.title_family, Typography::RWR_0_0_9.family);

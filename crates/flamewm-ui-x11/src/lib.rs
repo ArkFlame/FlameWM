@@ -1,4 +1,4 @@
-//! Typed product-facing boundary between FlameWM UI and the X11 renderer.
+//! Typed product-facing boundary between `FlameWM` UI and the X11 renderer.
 
 pub mod backdrop;
 mod event_source;
@@ -62,10 +62,12 @@ pub struct UiActionEvent {
 }
 
 impl UiActionEvent {
+    #[must_use]
     pub const fn ctrl_down(&self) -> bool {
         self.modifiers & (1 << 2) != 0
     }
 
+    #[must_use]
     pub const fn shift_down(&self) -> bool {
         self.modifiers & (1 << 0) != 0
     }
@@ -97,8 +99,14 @@ pub enum UiActionPhase {
 /// logical px. `Enter`/`Over` carry no paths: the data is only converted on drop.
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiDragEvent {
-    Enter { x: f32, y: f32 },
-    Over { x: f32, y: f32 },
+    Enter {
+        x: f32,
+        y: f32,
+    },
+    Over {
+        x: f32,
+        y: f32,
+    },
     Leave,
     Drop {
         x: f32,
@@ -111,7 +119,7 @@ pub enum UiDragEvent {
 }
 
 /// What a drop carries. `Uris` data is in `Drop::paths`. The Ark payload asks the owner to
-/// extract the source's selection into the window's current folder over DBus.
+/// extract the source's selection into the window's current folder over `DBus`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DropPayload {
     Uris,
@@ -277,6 +285,7 @@ pub fn root_geometry() -> Result<(u32, u32), String> {
 
 /// Reactor-backed window loop with a root press observer: while `press_watch` is armed, each root press is delivered to
 /// `on_press` (logical px, observed only, never consumed).
+#[allow(clippy::too_many_arguments)]
 pub fn run_with_controller_events_role_with_presses_and_reactor_geometry<F, P, R>(
     document: UiDocument,
     config: UiWindowConfig,
@@ -299,7 +308,7 @@ where
         .then(flamewm_render_x11::FileDragSlot::default);
     let mut x11 = x11_config(config, role);
     x11.backdrop = backdrop;
-    x11.file_drag = file_drag.clone();
+    x11.file_drag.clone_from(&file_drag);
     let press_drag = file_drag.clone();
     let reactor_drag = file_drag.clone();
     flamewm_render_x11::run_with_controller_events_with_reactor_geometry(
@@ -355,6 +364,7 @@ fn wake_action(drain: UiWakeDrain) -> FdAction {
 
 /// Same reactor-backed window loop with a second independent readable wake source.
 /// Both drains only queue data; document access stays in `on_wake`.
+#[allow(clippy::too_many_arguments)]
 pub fn run_with_controller_events_role_and_two_readable_fds<F, W, D>(
     document: UiDocument,
     config: UiWindowConfig,
@@ -373,11 +383,12 @@ where
     let mut reactor = Reactor::new().map_err(|error| error.to_string())?;
     // Level-triggered registration: a retired source is removed by the reactor, and the reactor
     // itself is dropped when this function returns, so no explicit removal is needed.
-    let _registration = reactor
-        .register_raw_fd_with_action(readable_fd, Interest::READ, move |_, _| {
-            wake_action(drain())
-        })
-        .map_err(|error| error.to_string())?;
+    let _registration =
+        reactor
+            .register_raw_fd_with_action(readable_fd, Interest::READ, move |_, _| {
+                wake_action(drain())
+            })
+            .map_err(|error| error.to_string())?;
     let _second_registration = second_readable
         .map(|(fd, mut second_drain)| {
             reactor

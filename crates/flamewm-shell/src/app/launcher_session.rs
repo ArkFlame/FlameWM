@@ -23,10 +23,7 @@ impl ShellLoop {
         // The launcher owns the screen: Start, task menu, media and quick helpers close first.
         self.close_transients(runtime)?;
         self.close_quick_control_nonfatal();
-        let Ok(transition) = self
-            .popup_session
-            .open(PopupKind::Launcher, target.clone())
-        else {
+        let Ok(transition) = self.popup_session.open(PopupKind::Launcher, target.clone()) else {
             return Ok(());
         };
         self.launcher.open(&self.start_model);

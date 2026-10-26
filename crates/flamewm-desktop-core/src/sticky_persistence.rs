@@ -44,8 +44,9 @@ pub fn persist_to_xdg(store: &StickyNoteStore) -> FlameResult<()> {
     persist(&state_path()?, store)
 }
 
+#[must_use]
 pub fn serialize(store: &StickyNoteStore) -> String {
-    let mut output = format!("v2\t{}\n", if store.enabled() { 1 } else { 0 });
+    let mut output = format!("v2\t{}\n", i32::from(store.enabled()));
     for note in store.notes() {
         output.push_str(&format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -64,7 +65,7 @@ pub fn serialize(store: &StickyNoteStore) -> String {
             note.foreground.green,
             note.foreground.blue,
             note.text_size,
-            if note.bold { 1 } else { 0 }
+            i32::from(note.bold)
         ));
     }
     output
@@ -102,19 +103,19 @@ pub fn parse(text: &str) -> FlameResult<StickyNoteStore> {
             }
         };
         let note = StickyNote {
-            id: string(&fields[0])?,
-            workspace: number(&fields[1])?,
-            output: OutputId::new(string(&fields[2])?),
+            id: string(fields[0])?,
+            workspace: number(fields[1])?,
+            output: OutputId::new(string(fields[2])?),
             rect: Rect::new(
-                number(&fields[3])?,
-                number(&fields[4])?,
-                number(&fields[5])?,
-                number(&fields[6])?,
+                number(fields[3])?,
+                number(fields[4])?,
+                number(fields[5])?,
+                number(fields[6])?,
             ),
-            text: string(&fields[7])?,
-            background: Rgb::new(byte(&fields[8])?, byte(&fields[9])?, byte(&fields[10])?),
-            foreground: Rgb::new(byte(&fields[11])?, byte(&fields[12])?, byte(&fields[13])?),
-            text_size: number(&fields[14])?,
+            text: string(fields[7])?,
+            background: Rgb::new(byte(fields[8])?, byte(fields[9])?, byte(fields[10])?),
+            foreground: Rgb::new(byte(fields[11])?, byte(fields[12])?, byte(fields[13])?),
+            text_size: number(fields[14])?,
             bold,
         };
         if note.id.is_empty()

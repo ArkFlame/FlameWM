@@ -109,6 +109,7 @@ pub fn run_flow(session: &mut dyn PamSession) -> Outcome {
 }
 
 /// Authenticates `username` with `password` through the `flamewm-lock` PAM service.
+#[must_use]
 pub fn authenticate(username: &str, password: &str) -> Outcome {
     let Ok(library) = DynamicPam::load_from(&LIBRARY_NAMES) else {
         return Outcome::Unavailable;
@@ -157,7 +158,7 @@ impl DynamicPam {
         });
         let conv = Box::new(PamConv {
             conv: Some(conversation),
-            appdata_ptr: &*answers as *const Answers as *mut c_void,
+            appdata_ptr: &raw const *answers as *mut c_void,
         });
         Ok(LibPamSession {
             library: self,
@@ -198,8 +199,8 @@ impl PamSession for LibPamSession<'_> {
             (self.library.start)(
                 service.as_ptr(),
                 self.user.as_ptr(),
-                &*self.conv,
-                &mut self.handle,
+                &raw const *self.conv,
+                &raw mut self.handle,
             )
         };
         if rc == PAM_SUCCESS { Ok(()) } else { Err(rc) }
@@ -256,7 +257,7 @@ unsafe extern "C" fn conversation(
     };
     // SAFETY: calloc returns zeroed memory; libpam releases it with free().
     let array =
-        unsafe { calloc(count_usize, std::mem::size_of::<PamResponse>()) } as *mut PamResponse;
+        unsafe { calloc(count_usize, std::mem::size_of::<PamResponse>()) }.cast::<PamResponse>();
     if array.is_null() {
         return PAM_BUF_ERR;
     }
@@ -264,7 +265,7 @@ unsafe extern "C" fn conversation(
         let Some(text) = reply else { continue };
         let bytes = text.as_bytes();
         // SAFETY: allocates bytes.len() + 1 zeroed bytes for a NUL-terminated copy.
-        let buffer = unsafe { calloc(bytes.len() + 1, 1) } as *mut c_char;
+        let buffer = unsafe { calloc(bytes.len() + 1, 1) }.cast::<c_char>();
         if buffer.is_null() {
             // SAFETY: `array` and earlier buffers were allocated by calloc above.
             unsafe { free_responses(array, count_usize) };
@@ -272,7 +273,7 @@ unsafe extern "C" fn conversation(
         }
         // SAFETY: `buffer` has room for bytes.len() bytes; `array[index]` is in range.
         unsafe {
-            ptr::copy_nonoverlapping(bytes.as_ptr(), buffer as *mut u8, bytes.len());
+            ptr::copy_nonoverlapping(bytes.as_ptr(), buffer.cast::<u8>(), bytes.len());
             (*array.add(index)).resp = buffer;
         }
     }
@@ -286,17 +287,17 @@ unsafe extern "C" fn conversation(
 unsafe fn free_responses(array: *mut PamResponse, count: usize) {
     for index in 0..count {
         // SAFETY: index is within the calloc'ed array.
-        unsafe { free((*array.add(index)).resp as *mut c_void) };
+        unsafe { free((*array.add(index)).resp.cast::<c_void>()) };
     }
     // SAFETY: `array` came from calloc.
-    unsafe { free(array as *mut c_void) };
+    unsafe { free(array.cast::<c_void>()) };
 }
 
 /// # Safety
 /// `handle` must be a live dlopen handle and `F` a fn pointer type matching the symbol.
 unsafe fn resolve<F: Copy>(handle: *mut c_void, symbol: &'static [u8]) -> Result<F, String> {
     // SAFETY: `handle` is live and `symbol` is NUL-terminated.
-    let raw = unsafe { dlsym(handle, symbol.as_ptr() as *const c_char) };
+    let raw = unsafe { dlsym(handle, symbol.as_ptr().cast::<c_char>()) };
     if raw.is_null() {
         return Err(format!(
             "missing symbol {}",

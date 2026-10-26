@@ -35,6 +35,7 @@ pub fn category_for_action(action: &str) -> Option<StartCategory> {
         .map(|(_, category)| *category)
 }
 
+#[must_use]
 pub fn state(applications: Vec<DesktopApplication>) -> StartState {
     StartModel::new(applications)
 }

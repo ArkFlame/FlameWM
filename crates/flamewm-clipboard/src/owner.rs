@@ -1,5 +1,5 @@
 //! Owner side: a background thread that holds CLIPBOARD and answers requests until
-//! another client claims the selection (SelectionClear) or the connection dies.
+//! another client claims the selection (`SelectionClear`) or the connection dies.
 
 use std::sync::{Arc, mpsc};
 
@@ -38,7 +38,7 @@ pub(crate) fn spawn(
     ready_rx.recv().map_err(err)?
 }
 
-/// Helper window for selection traffic: input-only, with PropertyNotify for ICCCM INCR.
+/// Helper window for selection traffic: input-only, with `PropertyNotify` for ICCCM INCR.
 pub(crate) fn helper_window(conn: &RustConnection, screen: usize) -> Result<u32, String> {
     let root = conn.setup().roots[screen].root;
     let window = conn.generate_id().map_err(err)?;
@@ -84,7 +84,13 @@ fn run(
     ready: &mpsc::Sender<Result<(), String>>,
 ) -> Result<(), String> {
     let (conn, screen) = x11rb::connect(display).map_err(err)?;
-    let mut names = vec![selection_name, "TARGETS", "TIMESTAMP", "INCR", TICK_PROPERTY];
+    let mut names = vec![
+        selection_name,
+        "TARGETS",
+        "TIMESTAMP",
+        "INCR",
+        TICK_PROPERTY,
+    ];
     names.extend(payloads.iter().map(|(name, _)| *name));
     let atoms = intern(&conn, &names)?;
     let (selection, tick) = (atoms[0], atoms[4]);

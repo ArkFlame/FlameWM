@@ -259,6 +259,7 @@ impl X11ResourceAllocator {
     ///
     /// # Safety
     /// `display`/`drawable` must be live on the calling thread.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn create_pixmap(
         &mut self,
         display: *mut Display,
@@ -481,7 +482,7 @@ mod tests {
 
     #[test]
     fn process_ledger_aggregates_multiple_owners_and_releases_only_the_owner() {
-        let display = 1usize as *mut Display;
+        let display = std::ptr::dangling_mut::<Display>();
         let mut ledger = ProcessPixmapLedger::default();
         assert!(ledger.register(10, display, 101, 100));
         assert!(ledger.register(11, display, 102, 50));

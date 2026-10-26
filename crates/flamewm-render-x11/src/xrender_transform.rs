@@ -253,7 +253,7 @@ impl XRenderTransformApi {
             set(
                 display,
                 picture,
-                b"bilinear\0".as_ptr() as *const c_char,
+                c"bilinear".as_ptr() as *const c_char,
                 std::ptr::null_mut(),
                 0,
             )

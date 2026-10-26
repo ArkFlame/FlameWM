@@ -17,7 +17,7 @@ const NETWORK_POPUP: &str = "FlameWM network";
 const PANEL: &str = "FlameWM panel";
 const CYCLES: usize = 10;
 
-/// Toggle one opener CYCLES times. Returns (opens_ok, closes_ok, stays_closed_ok, detail).
+/// Toggle one opener CYCLES times. Returns (`opens_ok`, `closes_ok`, `stays_closed_ok`, detail).
 fn toggle(canary: &Canary, point: (i16, i16), popup: &str) -> (usize, usize, usize, String) {
     let (mut opens, mut closes, mut stays) = (0usize, 0usize, 0usize);
     let mut failures = Vec::new();

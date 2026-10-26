@@ -218,7 +218,7 @@ pub(super) fn parse_message(message: &Message) -> Option<Result<Incoming, FlameE
     None
 }
 
-/// `StateChanged(new_state, old_state, reason)` from a NetworkManager device.
+/// `StateChanged(new_state, old_state, reason)` from a `NetworkManager` device.
 pub(super) fn parse_device_state_changed(
     items: Vec<MessageItem>,
     path: String,
@@ -235,7 +235,7 @@ pub(super) fn parse_device_state_changed(
     })
 }
 
-/// Answers a SecretAgent call with a D-Bus error so NetworkManager gets a reply and the reactor
+/// Answers a `SecretAgent` call with a D-Bus error so `NetworkManager` gets a reply and the reactor
 /// keeps running. Nothing secret-bearing is echoed: only the fixed error name and text.
 fn secret_agent_error(message: &Message, name: &str, text: &str) -> FlameResult<SecretAgentCall> {
     let name =
@@ -301,7 +301,7 @@ pub(super) fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAg
                 reply: (!message.get_no_reply()).then(|| message.method_return()),
             })
         }
-        Some(SAVE_SECRETS) | Some(DELETE_SECRETS) => Ok(SecretAgentCall::SendReply {
+        Some(SAVE_SECRETS | DELETE_SECRETS) => Ok(SecretAgentCall::SendReply {
             reply: (!message.get_no_reply()).then(|| message.method_return()),
         }),
         _ => secret_agent_error(
@@ -363,14 +363,14 @@ pub(super) fn parse_property_dict(
             "NetworkingEnabled" => properties.networking_enabled = Some(item_bool(&value, &key)?),
             "WirelessEnabled" => properties.wireless_enabled = Some(item_bool(&value, &key)?),
             "PrimaryConnection" => {
-                properties.primary_connection = Some(item_object_path(&value, &key)?)
+                properties.primary_connection = Some(item_object_path(&value, &key)?);
             }
             "State" => properties.state = Some(item_u32(&value, &key)?),
             "ActiveConnection" => {
-                properties.active_connection = Some(item_object_path(&value, &key)?)
+                properties.active_connection = Some(item_object_path(&value, &key)?);
             }
             "ActiveAccessPoint" => {
-                properties.active_access_point = Some(item_object_path(&value, &key)?)
+                properties.active_access_point = Some(item_object_path(&value, &key)?);
             }
             "LastScan" => properties.last_scan = Some(item_i64(&value, &key)?),
             _ => {}
@@ -422,7 +422,7 @@ pub(super) fn parse_access_point_properties(
         let value = unwrap_variant(value);
         match key.as_str() {
             "Ssid" => {
-                properties.ssid = String::from_utf8_lossy(&item_bytes(&value, &key)?).into_owned()
+                properties.ssid = String::from_utf8_lossy(&item_bytes(&value, &key)?).into_owned();
             }
             "Strength" => properties.strength_percent = item_byte(&value, &key)?,
             "Flags" => flags = item_u32(&value, &key)?,

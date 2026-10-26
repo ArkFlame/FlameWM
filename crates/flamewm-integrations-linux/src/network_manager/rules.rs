@@ -1,14 +1,14 @@
 use super::*;
 
 /// Interfaces whose `PropertiesChanged` the WM consumes. Device.Statistics (TxBytes/RxBytes)
-/// is deliberately absent: NetworkManager emits it on a ~500 ms cadence and it drives no state.
+/// is deliberately absent: `NetworkManager` emits it on a ~500 ms cadence and it drives no state.
 pub(super) const NM_PROPERTY_INTERFACES: [&str; 3] = [
     "org.freedesktop.NetworkManager",
     "org.freedesktop.NetworkManager.Device",
     "org.freedesktop.NetworkManager.Device.Wireless",
 ];
 
-/// Match rule for NetworkManager `PropertiesChanged` of one interface (arg0 = interface name),
+/// Match rule for `NetworkManager` `PropertiesChanged` of one interface (arg0 = interface name),
 /// so the bus only wakes the WM for interfaces it consumes.
 pub(super) fn properties_changed_rule(interface: &str) -> String {
     format!(
@@ -19,9 +19,9 @@ pub(super) fn properties_changed_rule(interface: &str) -> String {
 /// Refresh work implied by one wireless device `PropertiesChanged` signal.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct DeviceRefresh {
-    /// Re-read the device (ActiveConnection / ActiveAccessPoint); its reply re-queues the AP list.
+    /// Re-read the device (`ActiveConnection` / `ActiveAccessPoint`); its reply re-queues the AP list.
     pub(super) device: bool,
-    /// Re-read the device's access-point list (ActiveAccessPoint or LastScan changed).
+    /// Re-read the device's access-point list (`ActiveAccessPoint` or `LastScan` changed).
     pub(super) access_points: bool,
 }
 

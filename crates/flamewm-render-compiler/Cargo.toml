@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2021"
 license = "MIT"
 repository.workspace = true
-rust-version = "1.70"
+rust-version.workspace = true
 description = "Build-time HTML/CSS compiler for FlameWM Render"
 
 [dependencies]

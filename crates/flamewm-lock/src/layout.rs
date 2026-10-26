@@ -42,10 +42,12 @@ pub struct Fit {
 }
 
 impl Fit {
+    #[must_use]
     pub fn map_point(&self, x: f64, y: f64) -> (f64, f64) {
         (self.ox + x * self.s, self.oy + y * self.s)
     }
 
+    #[must_use]
     pub fn map_rect(&self, rect: RefRect) -> RefRect {
         let (x, y) = self.map_point(rect.x, rect.y);
         RefRect::new(x, y, rect.w * self.s, rect.h * self.s)
@@ -53,6 +55,7 @@ impl Fit {
 }
 
 /// Scales the reference canvas to fit `out_w` x `out_h`, centred, clamped to [`MAX_SCALE`].
+#[must_use]
 pub fn fit(out_w: u32, out_h: u32) -> Fit {
     let (w, h) = (f64::from(out_w), f64::from(out_h));
     let s = (w / REF_W).min(h / REF_H).min(MAX_SCALE);
@@ -115,6 +118,7 @@ pub const CHEVRON_LIFT_EM: f64 = 0.17;
 pub const CHEVRON_SHIFT_X_EM: f64 = 0.07;
 
 /// The chevron glyph box: the submit circle moved so the glyph ink centre lands on the circle centre.
+#[must_use]
 pub fn chevron_box(circle: RefRect, font_px: f64) -> RefRect {
     shifted_x(
         lifted(circle, font_px * CHEVRON_LIFT_EM),
@@ -146,6 +150,7 @@ pub struct LockLayout {
 }
 
 impl LockLayout {
+    #[must_use]
     pub fn for_output(out_w: u32, out_h: u32) -> Self {
         let fit = fit(out_w, out_h);
         let place = |rect: RefRect, font: f64| Placed {
@@ -177,6 +182,7 @@ impl LockLayout {
 }
 
 /// `rect` moved up by `dy` reference px.
+#[must_use]
 pub fn lifted(rect: RefRect, dy: f64) -> RefRect {
     RefRect {
         y: rect.y - dy,
@@ -185,6 +191,7 @@ pub fn lifted(rect: RefRect, dy: f64) -> RefRect {
 }
 
 /// Moves a rect horizontally by `dx` output pixels.
+#[must_use]
 pub fn shifted_x(rect: RefRect, dx: f64) -> RefRect {
     RefRect {
         x: rect.x + dx,
@@ -201,22 +208,27 @@ fn scaled_font(reference_px: f64, s: f64) -> u32 {
 }
 
 /// Vertical gaps (reference px) between stacked elements, for layout checks.
+#[must_use]
 pub fn gap_time_to_date() -> f64 {
     DATE.y - CLOCK.bottom()
 }
 
+#[must_use]
 pub fn gap_date_to_avatar() -> f64 {
     AVATAR.y - DATE.bottom()
 }
 
+#[must_use]
 pub fn gap_avatar_to_username() -> f64 {
     USERNAME.y - AVATAR.bottom()
 }
 
+#[must_use]
 pub fn gap_username_to_password() -> f64 {
     PASSWORD.y - USERNAME.bottom()
 }
 
+#[must_use]
 pub fn gap_password_to_power_row() -> f64 {
     POWER_CENTRE_Y - POWER_ICON / 2.0 - PASSWORD.bottom()
 }

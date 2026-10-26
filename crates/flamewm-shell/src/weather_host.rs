@@ -149,6 +149,7 @@ impl Default for WeatherHost {
 
 /// Production fetch: Open-Meteo through the curl fetcher, on a worker thread.
 /// If the thread cannot start, the dropped sender reports a transport error.
+#[must_use]
 pub fn spawn_weather_fetch(location: WeatherLocation) -> mpsc::Receiver<WeatherResult> {
     let (tx, rx) = mpsc::channel();
     let _ = std::thread::Builder::new()
@@ -162,6 +163,7 @@ pub fn spawn_weather_fetch(location: WeatherLocation) -> mpsc::Receiver<WeatherR
 type SearchResult = Result<Vec<WeatherLocation>, WeatherError>;
 
 /// Production geocoding search on a worker thread (same fetcher as the forecast).
+#[must_use]
 pub fn spawn_location_search(query: String) -> mpsc::Receiver<SearchResult> {
     let (tx, rx) = mpsc::channel();
     let _ = std::thread::Builder::new()
@@ -416,8 +418,10 @@ mod tests {
 
     #[test]
     fn location_search_ignores_blank_and_applies_results() {
-        let mut search = LocationSearch::default();
-        search.query = "   ".to_owned();
+        let mut search = LocationSearch {
+            query: "   ".to_owned(),
+            ..LocationSearch::default()
+        };
         assert!(!search.submit(search_fixture(Ok(Vec::new()))));
         assert_eq!(search.status, SearchStatus::Idle);
 
@@ -451,8 +455,10 @@ mod tests {
 
     #[test]
     fn location_search_reports_empty_and_failed_results() {
-        let mut search = LocationSearch::default();
-        search.query = "zzz".to_owned();
+        let mut search = LocationSearch {
+            query: "zzz".to_owned(),
+            ..LocationSearch::default()
+        };
         search.submit(search_fixture(Ok(Vec::new())));
         search.poll();
         assert_eq!(search.status, SearchStatus::NoMatches);
@@ -465,8 +471,10 @@ mod tests {
 
     #[test]
     fn dropped_search_worker_reports_transport_failure() {
-        let mut search = LocationSearch::default();
-        search.query = "Oslo".to_owned();
+        let mut search = LocationSearch {
+            query: "Oslo".to_owned(),
+            ..LocationSearch::default()
+        };
         search.submit(|_| mpsc::channel().1);
         // The sender was dropped immediately: the worker vanished without a result.
         assert!(search.poll());
@@ -475,8 +483,10 @@ mod tests {
 
     #[test]
     fn reset_clears_the_picker_session() {
-        let mut search = LocationSearch::default();
-        search.query = "Berlin".to_owned();
+        let mut search = LocationSearch {
+            query: "Berlin".to_owned(),
+            ..LocationSearch::default()
+        };
         search.submit(search_fixture(Ok(vec![location()])));
         search.poll();
         search.reset();

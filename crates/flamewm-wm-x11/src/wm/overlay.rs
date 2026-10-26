@@ -1,6 +1,6 @@
 use super::*;
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     /// Single WM-owned frame corner radius used by every transition path,
     /// including the direct ARGB open-fade fast path.
     fn transition_corner_radius(&self, client: Window) -> u32 {
@@ -54,7 +54,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 let capture = renderer.borrow().capture_window(u64::from(frame))?;
                 (capture, false, anim_rect(outer))
             }
-            _ => {
+            Effect::Minimize => {
                 let capture = renderer.borrow().capture_window(u64::from(frame))?;
                 (capture, false, self.minimize_target_for(client, outer))
             }

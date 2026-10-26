@@ -174,7 +174,7 @@ impl Canary {
                         bytes
                             .split(|b| *b == 0)
                             .filter(|p| !p.is_empty())
-                            .last()
+                            .next_back()
                             .map_or(String::new(), |p| String::from_utf8_lossy(p).into_owned())
                     } else {
                         String::from_utf8_lossy(&bytes)
@@ -417,9 +417,8 @@ impl Canary {
     }
 
     pub(crate) fn prop_u32(&self, window: Window, name: &str) -> Vec<u32> {
-        let atom = match self.intern(name) {
-            Some(a) => a,
-            None => return Vec::new(),
+        let Some(atom) = self.intern(name) else {
+            return Vec::new();
         };
         let bytes = self.prop_bytes(window, atom);
         bytes
@@ -570,7 +569,7 @@ fn resolve_target(canary: &Canary, args: &[String]) -> WinInfo {
         if hits.is_empty() {
             fail(&format!("no window matches {name:?}"));
         }
-        hits.sort_by_key(|w| !(w.map_state == u8::from(MapState::VIEWABLE)));
+        hits.sort_by_key(|w| (w.map_state != u8::from(MapState::VIEWABLE)));
         return hits.remove(0);
     }
     fail("need --window <id> or --name <substr>");
@@ -838,7 +837,7 @@ fn cmd_sr08(canary: &Canary, args: &[String]) {
         let data = canary.sample(id, 0, 0, w, h).unwrap_or_else(|e| fail(&e));
         samples.push((id, 0, 0, w, h, data));
     } else if let Some(name) = arg(args, "--name") {
-        let target = resolve_target(canary, &vec!["x".to_owned(), "--name".to_owned(), name]);
+        let target = resolve_target(canary, &["x".to_owned(), "--name".to_owned(), name]);
         let w = target.width.max(1).min(256);
         let h = target.height.max(1).min(256);
         let data = canary
@@ -905,9 +904,8 @@ fn cmd_sr08(canary: &Canary, args: &[String]) {
 /// the target window; reports per-point delivery.
 fn cmd_sr15(canary: &Canary, args: &[String]) {
     let target = resolve_target(canary, args);
-    let points: Vec<(i16, i16)> = match arg(args, "--points") {
-        Some(spec) => spec
-            .split(';')
+    let points: Vec<(i16, i16)> = if let Some(spec) = arg(args, "--points") {
+        spec.split(';')
             .filter(|p| !p.trim().is_empty())
             .map(|p| {
                 let mut it = p.split(',');
@@ -925,19 +923,18 @@ fn cmd_sr15(canary: &Canary, args: &[String]) {
                     .unwrap_or_else(|_| fail("--points must be x,y;..."));
                 (x, y)
             })
-            .collect(),
-        None => {
-            // 3x3 grid over the window.
-            let w = i32::from(target.width.max(1));
-            let h = i32::from(target.height.max(1));
-            let mut pts = Vec::new();
-            for ry in [1, 2, 3] {
-                for rx in [1, 2, 3] {
-                    pts.push(((w * rx / 4) as i16, (h * ry / 4) as i16));
-                }
+            .collect()
+    } else {
+        // 3x3 grid over the window.
+        let w = i32::from(target.width.max(1));
+        let h = i32::from(target.height.max(1));
+        let mut pts = Vec::new();
+        for ry in [1, 2, 3] {
+            for rx in [1, 2, 3] {
+                pts.push(((w * rx / 4) as i16, (h * ry / 4) as i16));
             }
-            pts
         }
+        pts
     };
     let mut ok = 0;
     let mut results: Vec<String> = Vec::new();
@@ -982,7 +979,7 @@ fn cmd_sr15(canary: &Canary, args: &[String]) {
 fn cmd_stacking(canary: &Canary, args: &[String]) {
     let order = canary.stacking_order().unwrap_or_else(|e| fail(&e));
     if has(args, "--json") {
-        let items: Vec<String> = order.iter().map(|id| id.to_string()).collect();
+        let items: Vec<String> = order.iter().map(std::string::ToString::to_string).collect();
         println!(
             "{{\"stacking\":[{}],\"count\":{}}}",
             items.join(","),
@@ -1031,13 +1028,11 @@ fn cmd_click_at(canary: &Canary, args: &[String]) {
         .unwrap_or_else(|| fail("click-at needs --y <n>"))
         .parse()
         .unwrap_or_else(|_| fail("--y must be a number"));
-    let button: u8 = arg(args, "--button")
-        .map(|v| {
-            v.parse()
-                .unwrap_or_else(|_| fail("--button must be 1, 2, or 3"))
-        })
-        .unwrap_or(3);
-    if button < 1 || button > 3 {
+    let button: u8 = arg(args, "--button").map_or(3, |v| {
+        v.parse()
+            .unwrap_or_else(|_| fail("--button must be 1, 2, or 3"))
+    });
+    if !(1..=3).contains(&button) {
         fail("--button must be 1, 2, or 3");
     }
     if x < 0 || y < 0 || x >= info.width as i16 || y >= info.height as i16 {
@@ -1115,30 +1110,29 @@ fn cmd_profile_startup(canary: &Canary, args: &[String]) {
     }
 }
 
-/// profile-pss: read /proc/<pid>/smaps_rollup for a pid or name pattern.
+/// profile-pss: read /proc/<pid>/`smaps_rollup` for a pid or name pattern.
 fn cmd_profile_pss(args: &[String]) {
-    let pid: u32 = match arg(args, "--pid") {
-        Some(v) => v.parse().unwrap_or_else(|_| fail("--pid must be a number")),
-        None => {
-            let pat = arg(args, "--pattern")
-                .unwrap_or_else(|| fail("profile-pss needs --pid <n> or --pattern <substr>"));
-            let out = std::process::Command::new("pgrep")
-                .arg("-f")
-                .arg(&pat)
-                .output()
-                .unwrap_or_else(|_| fail("pgrep failed"));
-            let first = String::from_utf8_lossy(&out.stdout)
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_owned();
-            if first.is_empty() {
-                fail(&format!("no process matches {pat:?}"));
-            }
-            first
-                .parse()
-                .unwrap_or_else(|_| fail("pgrep returned non-numeric pid"))
+    let pid: u32 = if let Some(v) = arg(args, "--pid") {
+        v.parse().unwrap_or_else(|_| fail("--pid must be a number"))
+    } else {
+        let pat = arg(args, "--pattern")
+            .unwrap_or_else(|| fail("profile-pss needs --pid <n> or --pattern <substr>"));
+        let out = std::process::Command::new("pgrep")
+            .arg("-f")
+            .arg(&pat)
+            .output()
+            .unwrap_or_else(|_| fail("pgrep failed"));
+        let first = String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_owned();
+        if first.is_empty() {
+            fail(&format!("no process matches {pat:?}"));
         }
+        first
+            .parse()
+            .unwrap_or_else(|_| fail("pgrep returned non-numeric pid"))
     };
     let path = format!("/proc/{pid}/smaps_rollup");
     let text =
@@ -1158,15 +1152,9 @@ fn cmd_profile_pss(args: &[String]) {
         }
     }
     if has(args, "--json") {
-        println!(
-            "{{\"pid\":{},\"pss_kb\":{},\"rss_kb\":{},\"swap_kb\":{}}}",
-            pid, pss, rss, swap
-        );
+        println!("{{\"pid\":{pid},\"pss_kb\":{pss},\"rss_kb\":{rss},\"swap_kb\":{swap}}}");
     } else {
-        println!(
-            "CANARY_PROFILE_PSS pid={} pss={}kB rss={}kB swap={}kB",
-            pid, pss, rss, swap
-        );
+        println!("CANARY_PROFILE_PSS pid={pid} pss={pss}kB rss={rss}kB swap={swap}kB");
     }
 }
 
@@ -1178,12 +1166,9 @@ fn cmd_profile_idle(args: &[String]) {
     std::thread::sleep(Duration::from_secs(secs));
     let elapsed_ms = start.elapsed().as_millis();
     if has(args, "--json") {
-        println!("{{\"idle_secs\":{},\"elapsed_ms\":{}}}", secs, elapsed_ms);
+        println!("{{\"idle_secs\":{secs},\"elapsed_ms\":{elapsed_ms}}}");
     } else {
-        println!(
-            "CANARY_PROFILE_IDLE idle_secs={} elapsed_ms={}",
-            secs, elapsed_ms
-        );
+        println!("CANARY_PROFILE_IDLE idle_secs={secs} elapsed_ms={elapsed_ms}");
     }
 }
 
@@ -1274,9 +1259,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     // j12-selection: selection mid-drag probe (motion delivery on target).
     if scenario == "all" || scenario == "selection" {
         let target = canary.find("flame").into_iter().next();
-        let delivered = target
-            .map(|w| canary.send_motion(w.id, 8, 8).is_ok())
-            .unwrap_or(false);
+        let delivered = target.is_some_and(|w| canary.send_motion(w.id, 8, 8).is_ok());
         results.push(check(
             "selection-mid-drag",
             delivered,
@@ -1286,9 +1269,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     // j12-desktop-menu: desktop right-click target resolvable (button 3).
     if scenario == "all" || scenario == "desktop-menu" {
         let target = canary.find("flame").into_iter().next();
-        let ok = target
-            .map(|w| canary.send_button_detail(w.id, 8, 8, true, 3).is_ok())
-            .unwrap_or(false);
+        let ok = target.is_some_and(|w| canary.send_button_detail(w.id, 8, 8, true, 3).is_ok());
         if let Some(w) = canary.find("flame").into_iter().next() {
             let _ = canary.send_button_detail(w.id, 8, 8, false, 3);
         }
@@ -1297,7 +1278,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     // j12-context: shell context popup matrix via SR07 rows.
     if scenario == "all" || scenario == "context" {
         let tree = canary.root_tree();
-        let popups = tree.map(|t| t.children.len()).unwrap_or(0);
+        let popups = tree.map_or(0, |t| t.children.len());
         results.push(check(
             "shell-context-popup",
             true,
@@ -1320,8 +1301,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
         let target = canary.find("flame").into_iter().next();
         let (id, w, h) = target
             .as_ref()
-            .map(|w| (w.id, w.width, w.height))
-            .unwrap_or((canary.root, 800, 600));
+            .map_or((canary.root, 800, 600), |w| (w.id, w.width, w.height));
         let press = canary.send_button(id, 16, 16, true).is_ok();
         let mut motions = 0;
         for (mx, my) in [(24, 24), (40, 40), (56, 56)] {
@@ -1339,14 +1319,12 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     // j12-entry-menu: entry/menu click delivery (button 1 press+release).
     if scenario == "all" || scenario == "entry-menu" {
         let target = canary.find("flame").into_iter().next();
-        let ok = target
-            .map(|w| {
-                let x = (w.width / 4).max(4) as i16;
-                let y = (w.height / 4).max(4) as i16;
-                canary.send_button(w.id, x, y, true).is_ok()
-                    && canary.send_button(w.id, x, y, false).is_ok()
-            })
-            .unwrap_or(false);
+        let ok = target.is_some_and(|w| {
+            let x = (w.width / 4).max(4) as i16;
+            let y = (w.height / 4).max(4) as i16;
+            canary.send_button(w.id, x, y, true).is_ok()
+                && canary.send_button(w.id, x, y, false).is_ok()
+        });
         results.push(check("entry-menu-click", ok, format!("click={ok}")));
     }
     // j12-rename: NOREPLACE contract file reference (honest scoped check:
@@ -1403,7 +1381,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     if scenario == "all" || scenario == "audio-network" {
         let audio = canary.find("audio").len() + canary.find("volume").len();
         let network = canary.find("network").len() + canary.find("wifi").len();
-        let toplevel = canary.root_tree().map(|t| t.children.len()).unwrap_or(0);
+        let toplevel = canary.root_tree().map_or(0, |t| t.children.len());
         results.push(check(
             "audio-network-popups",
             toplevel > 0,
@@ -1460,17 +1438,15 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     // j12-chrome-capture: bounded chrome capture (frame geometry + 32px sample, no full-screen hash).
     if scenario == "all" || scenario == "chrome-capture" {
         let target = canary.find("flame").into_iter().next();
-        let (geom_ok, non_black) = target
-            .map(|w| {
-                let sw = w.width.max(1).min(32);
-                let sh = w.height.max(1).min(32);
-                let nb = canary
-                    .sample(w.id, 0, 0, sw, sh)
-                    .map(|d| !Canary::pixel_stats(&d).0)
-                    .unwrap_or(false);
-                (w.width > 0 && w.height > 0, nb)
-            })
-            .unwrap_or((false, false));
+        let (geom_ok, non_black) = target.map_or((false, false), |w| {
+            let sw = w.width.max(1).min(32);
+            let sh = w.height.max(1).min(32);
+            let nb = canary
+                .sample(w.id, 0, 0, sw, sh)
+                .map(|d| !Canary::pixel_stats(&d).0)
+                .unwrap_or(false);
+            (w.width > 0 && w.height > 0, nb)
+        });
         results.push(check(
             "chrome-capture",
             geom_ok,
@@ -1936,16 +1912,13 @@ fn cmd_j13(canary: &Canary, args: &[String]) {
     // sticky OR same workspace); live probe counts sticky-flagged normals.
     if scenario == "all" || scenario == "sticky-create" {
         let ws_atom = canary.intern("_NET_CURRENT_DESKTOP");
-        let cur: u32 = ws_atom
-            .map(|a| {
-                canary
-                    .prop_bytes(canary.root, a)
-                    .chunks_exact(4)
-                    .next()
-                    .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
-                    .unwrap_or(0)
-            })
-            .unwrap_or(0);
+        let cur: u32 = ws_atom.map_or(0, |a| {
+            canary
+                .prop_bytes(canary.root, a)
+                .chunks_exact(4)
+                .next()
+                .map_or(0, |c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+        });
         let sticky_atom = canary.intern("_NET_WM_STATE_STICKY");
         let all = canary.all();
         let mut sticky = 0;
@@ -1980,30 +1953,24 @@ fn cmd_j13(canary: &Canary, args: &[String]) {
         for tile in [16u16, 32, 64] {
             let w = rw.min(tile).max(1);
             let h = rh.min(tile).max(1);
-            match canary.sample(canary.root, 0, 0, w, h) {
-                Ok(d) => {
-                    let (az, px, _, _, _) = Canary::pixel_stats(&d);
-                    notes.push(format!("root@{w}x{h}:px={px},black={az}"));
-                }
-                Err(_) => {
-                    ok = false;
-                    notes.push(format!("root@{w}x{h}:err"));
-                }
+            if let Ok(d) = canary.sample(canary.root, 0, 0, w, h) {
+                let (az, px, _, _, _) = Canary::pixel_stats(&d);
+                notes.push(format!("root@{w}x{h}:px={px},black={az}"));
+            } else {
+                ok = false;
+                notes.push(format!("root@{w}x{h}:err"));
             }
         }
         if let Some(w) = target {
             for tile in [16u16, 32] {
                 let sw = w.width.max(1).min(tile);
                 let sh = w.height.max(1).min(tile);
-                match canary.sample(w.id, 0, 0, sw, sh) {
-                    Ok(d) => {
-                        let (az, px, _, _, _) = Canary::pixel_stats(&d);
-                        notes.push(format!("win{}@{sw}x{sh}:px={px},black={az}", w.id));
-                    }
-                    Err(_) => {
-                        ok = false;
-                        notes.push(format!("win{}:err", w.id));
-                    }
+                if let Ok(d) = canary.sample(w.id, 0, 0, sw, sh) {
+                    let (az, px, _, _, _) = Canary::pixel_stats(&d);
+                    notes.push(format!("win{}@{sw}x{sh}:px={px},black={az}", w.id));
+                } else {
+                    ok = false;
+                    notes.push(format!("win{}:err", w.id));
                 }
             }
         }
@@ -2030,11 +1997,10 @@ fn canary_now_ns() -> u64 {
 /// whole-screen hash (geometry + EWMH atoms only).
 fn cmd_interaction_perf(canary: &Canary, args: &[String]) {
     let cycles: u32 = arg(args, "--cycles")
-        .map(|v| {
+        .map_or(100, |v| {
             v.parse()
                 .unwrap_or_else(|_| fail("--cycles must be a number"))
         })
-        .unwrap_or(100)
         .clamp(1, 100);
     let json = has(args, "--json");
     let mut seq: u64 = 0;
@@ -2161,8 +2127,7 @@ fn cmd_interaction_perf(canary: &Canary, args: &[String]) {
                 failed.push(format!("cycle {cycle} activate {} send failed", labels[i]));
             } else if active.is_some() && active != Some(*w) {
                 failed.push(format!(
-                    "cycle {cycle} active follows activation: want {w} got {:?}",
-                    active
+                    "cycle {cycle} active follows activation: want {w} got {active:?}"
                 ));
             }
         }

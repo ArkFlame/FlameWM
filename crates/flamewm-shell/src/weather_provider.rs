@@ -1,4 +1,4 @@
-//! Open-Meteo provider and CurlFetcher for the weather data layer.
+//! Open-Meteo provider and `CurlFetcher` for the weather data layer.
 //!
 //! LICENSING: Open-Meteo's free API is for noncommercial use only and its data
 //! requires attribution ([`OPEN_METEO_ATTRIBUTION`]). Check the current terms

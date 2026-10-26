@@ -13,6 +13,7 @@ pub(super) fn project_slots(
     };
     let cells = &cache.cells;
     let generation = projection::theme_generation();
+    #[allow(clippy::needless_range_loop)]
     for index in 0..SLOT_COUNT {
         let item = items.get(index).copied();
         if let Some(item) = item {
@@ -98,57 +99,7 @@ impl SlotInputs {
     }
 }
 
-#[cfg(test)]
-mod slot_input_tests {
-    use super::*;
-
-    #[test]
-    fn empty_slots_clear_on_first_pass_then_only_when_they_held_a_tile() {
-        let empty_pass = |primed: bool, held: [bool; 3]| {
-            held.iter()
-                .filter(|&&held_tile| empty_slot_needs_clear(primed, held_tile))
-                .count()
-        };
-        assert_eq!(empty_pass(false, [false, false, false]), 3, "first pass clears every slot");
-        assert_eq!(empty_pass(true, [false, false, false]), 0, "unchanged empty slots skip");
-        assert_eq!(empty_pass(true, [false, true, false]), 1, "occupied-to-empty clears once");
-    }
-
-    fn tile() -> SlotInputs {
-        SlotInputs {
-            kind: DesktopItemKind::File,
-            label: "notes.txt".to_owned(),
-            point: Point::new(10, 20),
-            icon: None,
-            scale: 100,
-            generation: 1,
-        }
-    }
-
-    #[test]
-    fn identical_tile_inputs_match_and_each_projection_input_change_mismatches() {
-        let base = tile();
-        assert!(base == tile(), "unchanged inputs must skip re-projection");
-        assert!(base != SlotInputs { kind: DesktopItemKind::Directory, ..tile() });
-        assert!(base != SlotInputs { label: "other".to_owned(), ..tile() });
-        assert!(base != SlotInputs { point: Point::new(11, 20), ..tile() });
-        assert!(base != SlotInputs { icon: Some("x".to_owned()), ..tile() });
-        assert!(base != SlotInputs { scale: 150, ..tile() });
-        assert!(base != SlotInputs { generation: 2, ..tile() }, "theme change must re-project");
-    }
-
-    #[test]
-    fn stale_theme_generation_result_is_rejected_after_reprojection() {
-        let current = projection::ParallelIconService::icon_key(DesktopItemKind::File, None);
-        let mut stale = current.clone();
-        stale.theme_generation = current.theme_generation.wrapping_add(1);
-        assert!(slot_expects_key(Some(&current), &current));
-        assert!(!slot_expects_key(Some(&current), &stale));
-        assert!(!slot_expects_key(None, &current));
-    }
-}
-
-/// Wake-driven icon completion: the IconService wake FD sets the pending
+/// Wake-driven icon completion: the `IconService` wake FD sets the pending
 /// flag (no inotify/click dependency); this drains the service and applies
 /// each result only to slots whose tracked [`IconKey`] still matches, then
 /// redraws each affected tile surface exactly once via the document marks.
@@ -191,9 +142,14 @@ pub(super) fn apply_ready_icons(
                 continue;
             };
             if slot_expects_key(Some(&expected), &key) {
-                state
-                    .icons
-                    .apply_if_current(document, index, kind, &expected, &key, raster.clone())?;
+                state.icons.apply_if_current(
+                    document,
+                    index,
+                    kind,
+                    &expected,
+                    &key,
+                    raster.clone(),
+                )?;
             }
         }
     }
@@ -216,4 +172,97 @@ pub(super) fn apply_ready_icons(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod slot_input_tests {
+    use super::*;
+
+    #[test]
+    fn empty_slots_clear_on_first_pass_then_only_when_they_held_a_tile() {
+        let empty_pass = |primed: bool, held: [bool; 3]| {
+            held.iter()
+                .filter(|&&held_tile| empty_slot_needs_clear(primed, held_tile))
+                .count()
+        };
+        assert_eq!(
+            empty_pass(false, [false, false, false]),
+            3,
+            "first pass clears every slot"
+        );
+        assert_eq!(
+            empty_pass(true, [false, false, false]),
+            0,
+            "unchanged empty slots skip"
+        );
+        assert_eq!(
+            empty_pass(true, [false, true, false]),
+            1,
+            "occupied-to-empty clears once"
+        );
+    }
+
+    fn tile() -> SlotInputs {
+        SlotInputs {
+            kind: DesktopItemKind::File,
+            label: "notes.txt".to_owned(),
+            point: Point::new(10, 20),
+            icon: None,
+            scale: 100,
+            generation: 1,
+        }
+    }
+
+    #[test]
+    fn identical_tile_inputs_match_and_each_projection_input_change_mismatches() {
+        let base = tile();
+        assert!(base == tile(), "unchanged inputs must skip re-projection");
+        assert!(
+            base != SlotInputs {
+                kind: DesktopItemKind::Directory,
+                ..tile()
+            }
+        );
+        assert!(
+            base != SlotInputs {
+                label: "other".to_owned(),
+                ..tile()
+            }
+        );
+        assert!(
+            base != SlotInputs {
+                point: Point::new(11, 20),
+                ..tile()
+            }
+        );
+        assert!(
+            base != SlotInputs {
+                icon: Some("x".to_owned()),
+                ..tile()
+            }
+        );
+        assert!(
+            base != SlotInputs {
+                scale: 150,
+                ..tile()
+            }
+        );
+        assert!(
+            base != SlotInputs {
+                generation: 2,
+                ..tile()
+            },
+            "theme change must re-project"
+        );
+    }
+
+    #[test]
+    fn stale_theme_generation_result_is_rejected_after_reprojection() {
+        let current = projection::ParallelIconService::icon_key(DesktopItemKind::File, None);
+        let mut stale = current.clone();
+        stale.theme_generation = current.theme_generation.wrapping_add(1);
+        assert!(slot_expects_key(Some(&current), &current));
+        assert!(!slot_expects_key(Some(&current), &stale));
+        assert!(!slot_expects_key(None, &current));
+    }
 }

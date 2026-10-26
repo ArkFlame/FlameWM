@@ -71,7 +71,7 @@ pub fn panel_popup_rect(
 
 /// Panel work area: pure rect math from resolved snapshot rects.
 /// Subtracts the panel strip along `edge` from `output_rect` using the
-/// already-scaled `panel_rect` (HiDPI baked in). Clamps to non-negative
+/// already-scaled `panel_rect` (`HiDPI` baked in). Clamps to non-negative
 /// extents; handles negative origins.
 #[must_use]
 pub fn work_area_for_panel(output_rect: Rect, panel_rect: Rect, edge: PanelEdge) -> Rect {
@@ -158,7 +158,6 @@ impl std::fmt::Display for PopupRefusal {
 /// `PopoverGeometry::place_aligned` + the given align, clamped to the work
 /// area. Refuses `PendingAnchor`/`PendingLayout` instead of falling back
 /// to 0,0.
-#[must_use]
 pub fn measured_popup_rect(
     source: Option<Rect>,
     intrinsic: Option<Size>,
@@ -188,7 +187,6 @@ pub struct StartPlacement {
     pub content_was_capped: bool,
 }
 
-#[must_use]
 pub fn fitted_start_placement(
     anchor: Rect,
     intrinsic: Size,
@@ -819,13 +817,13 @@ mod panel_popup_edge_tests {
             match expected_edge {
                 PopoverEdge::Above => assert!(rect.bottom() <= geometry.y, "{edge:?}: {rect:?}"),
                 PopoverEdge::Below => {
-                    assert!(rect.y >= geometry.bottom(), "{edge:?}: {rect:?}")
+                    assert!(rect.y >= geometry.bottom(), "{edge:?}: {rect:?}");
                 }
                 PopoverEdge::Right => {
-                    assert!(rect.x >= geometry.right(), "{edge:?}: {rect:?}")
+                    assert!(rect.x >= geometry.right(), "{edge:?}: {rect:?}");
                 }
                 PopoverEdge::Left => {
-                    assert!(rect.right() <= geometry.x, "{edge:?}: {rect:?}")
+                    assert!(rect.right() <= geometry.x, "{edge:?}: {rect:?}");
                 }
             }
         }

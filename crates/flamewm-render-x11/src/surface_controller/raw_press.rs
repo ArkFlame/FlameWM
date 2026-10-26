@@ -134,7 +134,7 @@ pub(crate) unsafe fn xi_raw_press_opcode(display: *mut Display) -> Option<std::o
         let mut first_error: std::os::raw::c_int = 0;
         if XQueryExtension(
             display,
-            b"XInputExtension\0".as_ptr().cast(),
+            c"XInputExtension".as_ptr().cast(),
             &mut opcode,
             &mut first_event,
             &mut first_error,

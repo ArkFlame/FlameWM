@@ -59,16 +59,17 @@ thread_local! {
     // Reactor-thread only: enqueue and drain both run on the shell loop.
     // Queue ids correlate replies; invocation ids fence replies from older
     // Start-menu sessions after a close/reopen.
-    static PENDING_LAUNCHES: RefCell<Vec<(u64, u64, String)>> = RefCell::new(Vec::new());
-    static LAUNCH_OUTCOMES: RefCell<VecDeque<StartLaunchOutcome>> = RefCell::new(VecDeque::new());
-    static PENDING_NETWORK_SECRETS: RefCell<Vec<(u64, (u64, u64))>> = RefCell::new(Vec::new());
-    static NETWORK_SECRET_OUTCOMES: RefCell<VecDeque<NetworkSecretOutcome>> = RefCell::new(VecDeque::new());
-    static PENDING_WEATHER_PICKS: RefCell<Vec<(u64, WeatherPick)>> = RefCell::new(Vec::new());
-    static WEATHER_PICK_OUTCOMES: RefCell<VecDeque<WeatherPickOutcome>> = RefCell::new(VecDeque::new());
+    static PENDING_LAUNCHES: RefCell<Vec<(u64, u64, String)>> = const { RefCell::new(Vec::new()) };
+    static LAUNCH_OUTCOMES: RefCell<VecDeque<StartLaunchOutcome>> = const { RefCell::new(VecDeque::new()) };
+    static PENDING_NETWORK_SECRETS: RefCell<Vec<(u64, (u64, u64))>> = const { RefCell::new(Vec::new()) };
+    static NETWORK_SECRET_OUTCOMES: RefCell<VecDeque<NetworkSecretOutcome>> = const { RefCell::new(VecDeque::new()) };
+    static PENDING_WEATHER_PICKS: RefCell<Vec<(u64, WeatherPick)>> = const { RefCell::new(Vec::new()) };
+    static WEATHER_PICK_OUTCOMES: RefCell<VecDeque<WeatherPickOutcome>> = const { RefCell::new(VecDeque::new()) };
 }
 
 /// Enqueue a weather location settings transaction; its result is reported by
 /// [`take_weather_pick_outcomes`]. Never blocks.
+#[must_use]
 pub fn enqueue_weather_pick(
     dispatcher: Option<&Arc<MutationDispatcher>>,
     pick: WeatherPick,
@@ -78,10 +79,12 @@ pub fn enqueue_weather_pick(
     Some(id)
 }
 
+#[must_use]
 pub fn take_weather_pick_outcomes() -> Vec<WeatherPickOutcome> {
     WEATHER_PICK_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
 }
 
+#[must_use]
 pub fn enqueue_network_secret(
     dispatcher: Option<&Arc<MutationDispatcher>>,
     identity: (u64, u64),
@@ -92,6 +95,7 @@ pub fn enqueue_network_secret(
     Some(id)
 }
 
+#[must_use]
 pub fn take_network_secret_outcomes() -> Vec<NetworkSecretOutcome> {
     NETWORK_SECRET_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
 }
@@ -108,7 +112,7 @@ pub fn enqueue_start_launch(
     let invocation = NEXT_INVOCATION.fetch_add(1, Ordering::Relaxed);
     match enqueue_action(dispatcher, request) {
         Some(id) => {
-            PENDING_LAUNCHES.with(|pending| pending.borrow_mut().push((id, invocation, app)))
+            PENDING_LAUNCHES.with(|pending| pending.borrow_mut().push((id, invocation, app)));
         }
         None => record_launch_outcome(StartLaunchOutcome::Failed {
             invocation,
@@ -120,6 +124,7 @@ pub fn enqueue_start_launch(
 }
 
 /// Take all launch outcomes recorded since the last call, oldest first.
+#[must_use]
 pub fn take_launch_outcomes() -> Vec<StartLaunchOutcome> {
     LAUNCH_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
 }
@@ -164,6 +169,7 @@ fn take_pending_launch(id: u64) -> Option<(u64, String)> {
 
 /// Enqueue one control mutation; returns the queue id on success, `None`
 /// on full/closed queue (counted, stderr diagnostic, loop survives).
+#[allow(clippy::must_use_candidate)]
 pub fn enqueue_action(
     dispatcher: Option<&Arc<MutationDispatcher>>,
     request: ControlRequest,
@@ -231,7 +237,7 @@ pub fn drain_results_with_settings(
                         Ok(_) => Ok(None),
                         Err(error) => Err(error.code),
                     },
-                })
+                });
             });
         }
         if let Some(identity) = network_identity {
@@ -240,7 +246,7 @@ pub fn drain_results_with_settings(
                     id: result.id,
                     identity,
                     result: result.outcome.as_ref().map(|_| ()).map_err(|_| ()),
-                })
+                });
             });
         }
         let launch_outcome =

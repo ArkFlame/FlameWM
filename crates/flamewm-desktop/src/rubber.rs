@@ -175,7 +175,7 @@ fn publish_root_rubber(state: &mut DesktopState, overlay: Option<Rect>) -> Resul
         return Ok(());
     };
     let rubber = overlay.map(|rect| root_rubber_payload(rect, fill_alpha, accent).to_cardinals());
-    publisher.set(rubber.as_ref().map(|values| values.as_slice()))
+    publisher.set(rubber.as_ref().map(<[u32; 6]>::as_slice))
 }
 
 /// The root-space description of the overlay the desktop is painting at `rect`.
@@ -212,7 +212,7 @@ mod rubber_tests {
             .map(|i| RubberItem {
                 slot: format!("desktop-item-{i}"),
                 id: format!("item-{i:03}"),
-                rect: Rect::new((i % 10) as i32 * 20, (i / 10) as i32 * 20, 16, 16),
+                rect: Rect::new((i % 10) * 20, (i / 10) * 20, 16, 16),
             })
             .collect()
     }
@@ -242,7 +242,8 @@ mod rubber_tests {
             let rubber = Rect::new(step * 2, 0, 50, 200);
             let mut reference = SelectionModel::default();
             reference.set_rubber(rubber);
-            let expected = reference.hit_test(items.iter().map(|item| (item.id.as_str(), item.rect)));
+            let expected =
+                reference.hit_test(items.iter().map(|item| (item.id.as_str(), item.rect)));
             expected_toggles += expected.symmetric_difference(&previous).count();
             previous = expected.clone();
 
@@ -255,7 +256,9 @@ mod rubber_tests {
         }
         assert_eq!(toggles, expected_toggles);
         assert!(toggles > 0);
-        eprintln!("BENCH rubber_motion_toggles={toggles} rubber_motion_expected_toggles={expected_toggles} rubber_noop_toggles={no_op_toggles}");
+        eprintln!(
+            "BENCH rubber_motion_toggles={toggles} rubber_motion_expected_toggles={expected_toggles} rubber_noop_toggles={no_op_toggles}"
+        );
     }
 
     #[test]
@@ -295,7 +298,11 @@ mod rubber_tests {
         // The refreshed snapshot no longer contains "removed-item".
         drop_missing_selected(&mut selection, &items);
         assert_eq!(
-            selection.selected().iter().map(String::as_str).collect::<Vec<_>>(),
+            selection
+                .selected()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
             ["item-001", "item-002"]
         );
     }

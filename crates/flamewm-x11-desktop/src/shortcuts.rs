@@ -190,7 +190,7 @@ pub trait KeycodeLookup {
     fn keycodes_for(&self, keysym: u32) -> Vec<u8>;
 }
 
-/// Snapshot of the server keyboard mapping (GetKeyboardMapping).
+/// Snapshot of the server keyboard mapping (`GetKeyboardMapping`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KeyboardTable {
     min_keycode: u8,
@@ -259,7 +259,7 @@ pub fn is_bare_typing_chord(chord: KeyChord) -> bool {
 }
 
 /// Resolves a chord to every keycode that produces its keysym, expanded over
-/// the NumLock and CapsLock variants so locked keyboards still fire.
+/// the `NumLock` and `CapsLock` variants so locked keyboards still fire.
 ///
 /// A bare typing key resolves to no grab at all: `XGrabKey` would swallow the key everywhere.
 pub fn resolve(
@@ -555,7 +555,7 @@ mod tests {
         }
     }
 
-    /// Records held grabs and fails a configured grab to simulate BadAccess.
+    /// Records held grabs and fails a configured grab to simulate `BadAccess`.
     #[derive(Default)]
     struct FakeBackend {
         held: BTreeSet<Grab>,
@@ -908,7 +908,7 @@ mod tests {
         let mut backend = FakeBackend::default();
         grabs.commit(&mut backend).expect("grabs commit");
         for entry in grabs.active() {
-            eprintln!("{:?}", entry);
+            eprintln!("{entry:?}");
         }
 
         for entry in grabs.active() {

@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+cd "$ROOT"
+
+fail() { printf 'FLAMEWM-ARCH-ERROR: %s\n' "$1" >&2; exit 1; }
+on_error() {
+    local status=$?
+    printf 'FLAMEWM-ARCH-ERROR: build/package/verification failed (exit %s, line %s); do not install an older package.\n' "$status" "$1" >&2
+    exit "$status"
+}
+trap 'on_error "$LINENO"' ERR
+
+UPSTREAM='git+https://github.com/ArkFlame/FlameWM.git'
+WORK="$ROOT/.target/arch"
+PKGDIR="$WORK/packages"
+
+command -v makepkg >/dev/null 2>&1 || fail 'makepkg not found (install pacman and base-devel)'
+command -v git >/dev/null 2>&1 || fail 'git not found'
+command -v bsdtar >/dev/null 2>&1 || fail 'bsdtar not found (install libarchive)'
+[[ "$(uname -m)" == x86_64 ]] || fail "packaging/arch/PKGBUILD targets x86_64; detected $(uname -m)"
+[[ "$ROOT" != *[\'\#\|\&\\]* ]] || fail "checkout path contains a character makepkg sources cannot carry: $ROOT"
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail 'build-arch packages a git checkout; clone the repository first'
+grep -Fq "'flamewm::$UPSTREAM'" packaging/arch/PKGBUILD || fail "packaging/arch/PKGBUILD no longer sources $UPSTREAM"
+
+VERSION="$(./scripts/version)"
+COMMIT="$(git rev-parse HEAD)"
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    printf 'FLAMEWM-ARCH-NOTICE: uncommitted changes are not packaged; makepkg builds commit %s\n' "$COMMIT" >&2
+fi
+
+rm -rf "$WORK"
+mkdir -p "$WORK/recipe" "$WORK/sources" "$WORK/build" "$PKGDIR"
+sed "s|'flamewm::$UPSTREAM'|'flamewm::git+file://$ROOT#commit=$COMMIT'|" packaging/arch/PKGBUILD > "$WORK/recipe/PKGBUILD"
+grep -Fq "git+file://$ROOT#commit=$COMMIT" "$WORK/recipe/PKGBUILD" || fail 'could not point the PKGBUILD at this checkout'
+
+printf 'FLAMEWM-ARCH: building flamewm-git from commit %s (workspace version %s)\n' "$COMMIT" "$VERSION"
+(
+    cd "$WORK/recipe"
+    SRCDEST="$WORK/sources" BUILDDIR="$WORK/build" PKGDEST="$PKGDIR" makepkg --cleanbuild --force "$@"
+)
+
+package=""
+for candidate in "$PKGDIR"/flamewm-git-[0-9]*.pkg.tar.*; do
+    [[ -f "$candidate" && "$candidate" != *.sig ]] || continue
+    [[ -z "$package" ]] || fail "more than one flamewm-git package in $PKGDIR"
+    package="$candidate"
+done
+[[ -n "$package" ]] || fail "makepkg produced no flamewm-git package in $PKGDIR"
+
+pkginfo="$(bsdtar -xOf "$package" .PKGINFO)"
+pkgver="$(sed -n 's/^pkgver = //p' <<<"$pkginfo")"
+[[ "$pkgver" == "$VERSION".r* ]] || fail "package version $pkgver does not start with workspace version $VERSION"
+contents="$(bsdtar -tf "$package")"
+for required in \
+    usr/bin/flamewm-session usr/bin/flamewm-terminal usr/bin/flamewm-wayland \
+    usr/lib/flamewm/flamewm-session-wrapper usr/lib/flamewm/flamewm-wayland-session \
+    usr/lib/flamewm/flamewm-desktop-services etc/pam.d/flamewm-lock \
+    usr/share/xsessions/flamewm.desktop usr/share/wayland-sessions/flamewm-wayland.desktop \
+    usr/share/applications/flamewm-terminal.desktop; do
+    grep -Fxq "$required" <<<"$contents" || fail "package is missing $required"
+done
+! grep -q '^usr/libexec/' <<<"$contents" || fail 'package installs into /usr/libexec; Arch helpers belong in /usr/lib/flamewm'
+grep -Fxq 'Exec=/usr/lib/flamewm/flamewm-session-wrapper' <<<"$(bsdtar -xOf "$package" usr/share/xsessions/flamewm.desktop)" \
+    || fail 'X11 session entry does not launch /usr/lib/flamewm/flamewm-session-wrapper'
+grep -Fxq 'auth       include      system-auth' <<<"$(bsdtar -xOf "$package" etc/pam.d/flamewm-lock)" \
+    || fail 'PAM service is not the Arch system-auth layout'
+
+if command -v namcap >/dev/null 2>&1; then
+    printf 'FLAMEWM-ARCH: namcap report\n'
+    namcap packaging/arch/PKGBUILD "$package" || fail 'namcap failed to run'
+else
+    printf 'FLAMEWM-ARCH-NOTICE: namcap not installed; package lint skipped\n' >&2
+fi
+
+printf '\nFLAMEWM-ARCH-READY: %s\n' "$package"
+printf 'To install or upgrade: sudo pacman -U "%s"\n' "$package"

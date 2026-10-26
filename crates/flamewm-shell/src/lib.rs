@@ -16,10 +16,10 @@ pub mod quick_controls;
 pub mod runtime;
 #[path = "settings_projection.rs"]
 pub mod settings_projection;
-pub mod switcher;
 pub mod start;
 pub mod status;
 pub mod surface_backdrop;
+pub mod switcher;
 pub mod weather_auto;
 pub mod weather_host;
 mod weather_provider;

@@ -18,7 +18,7 @@ use crate::frame::session::InteractionSession;
 
 // ---- FROZEN INTERFACE (mirrors J06 `wm_configure_tests` stubs) ----
 
-/// Observation class for a ConfigureNotify event window id.
+/// Observation class for a `ConfigureNotify` event window id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotifyClass {
     SyntheticEchoDrop,
@@ -139,7 +139,7 @@ pub fn observe_client(
 
 // ---- Synthetic notify contract ----
 
-/// Synthetic ConfigureNotify payload: current client-root geometry.
+/// Synthetic `ConfigureNotify` payload: current client-root geometry.
 /// Refusal paths (and accepted commits) acknowledge exactly this; the
 /// frame is never moved by a notify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,7 +186,7 @@ pub const fn carry_stack_intent(
     (decision, has_stack)
 }
 
-/// Client-root origin for a ConfigureRequest mask, verbatim ICCCM 4.1.5:
+/// Client-root origin for a `ConfigureRequest` mask, verbatim ICCCM 4.1.5:
 /// request coords are already root coords; missing axes keep the previous
 /// origin. No frame-offset subtraction applies.
 #[must_use]

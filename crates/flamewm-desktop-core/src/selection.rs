@@ -92,7 +92,8 @@ impl SelectionModel {
         };
         item_rects
             .into_iter()
-            .filter_map(|(id, rect)| rect.intersects(rubber).then(|| id.to_owned()))
+            .filter(|&(_, rect)| rect.intersects(rubber))
+            .map(|(id, _)| id.to_owned())
             .collect()
     }
 }
@@ -104,6 +105,7 @@ pub const DOUBLE_CLICK_MAX_DIST_PX: f32 = 4.0;
 /// Pure double-click decision. Times are X event milliseconds; callers pass a
 /// monotonic fallback when the event carries no timestamp.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn double_click_opens(
     prev_id: &str,
     prev_x: f32,

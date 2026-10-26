@@ -14,11 +14,12 @@ pub struct Rect {
 }
 
 impl Rect {
+    #[must_use]
     pub fn contains(&self, x: i64, y: i64) -> bool {
-        x >= self.x as i64
-            && y >= self.y as i64
-            && x < self.x as i64 + self.w as i64
-            && y < self.y as i64 + self.h as i64
+        x >= i64::from(self.x)
+            && y >= i64::from(self.y)
+            && x < i64::from(self.x) + i64::from(self.w)
+            && y < i64::from(self.y) + i64::from(self.h)
     }
 }
 
@@ -72,12 +73,12 @@ pub(crate) fn union_bounds(rects: &[Rect]) -> Rect {
     let (x0, y0, x1, y1) = rects.iter().fold(
         (i64::MAX, i64::MAX, i64::MIN, i64::MIN),
         |(a, b, c, d), r| {
-            let (x, y) = (r.x as i64, r.y as i64);
+            let (x, y) = (i64::from(r.x), i64::from(r.y));
             (
                 a.min(x),
                 b.min(y),
-                c.max(x + r.w as i64),
-                d.max(y + r.h as i64),
+                c.max(x + i64::from(r.w)),
+                d.max(y + i64::from(r.h)),
             )
         },
     );

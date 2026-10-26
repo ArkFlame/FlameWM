@@ -48,7 +48,14 @@ fn parse_mode(s: &str) -> Option<(Kind, u32)> {
         _ => Kind::Other,
     };
     let mut mode = 0u32;
-    for (idx, bit) in [(1, 0o400), (2, 0o200), (4, 0o40), (5, 0o20), (7, 0o4), (8, 0o2)] {
+    for (idx, bit) in [
+        (1, 0o400),
+        (2, 0o200),
+        (4, 0o40),
+        (5, 0o20),
+        (7, 0o4),
+        (8, 0o2),
+    ] {
         if b[idx] != b'-' {
             mode |= bit;
         }
@@ -80,7 +87,14 @@ fn build(mode_str: &str, size: u64, mtime: i64, name_raw: &str) -> Option<Entry>
     if name.is_empty() || name == "." || name == ".." {
         return None;
     }
-    Some(Entry { name: name.to_string(), kind, size, mtime, mode, link_target })
+    Some(Entry {
+        name: name.to_string(),
+        kind,
+        size,
+        mtime,
+        mode,
+        link_target,
+    })
 }
 
 /// Parse one line of `ls -lAn --time-style=+%s`.
@@ -118,7 +132,9 @@ pub fn parse_longname(line: &str, now_year: i64) -> Option<Entry> {
     build(mode, size.parse().ok()?, mtime, name)
 }
 
-const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 /// Days-from-civil (Howard Hinnant), UTC.
 fn civil_to_epoch(year: i64, month: i64, day: i64, hour: i64, minute: i64) -> i64 {
@@ -151,7 +167,8 @@ mod tests {
 
     #[test]
     fn parses_numeric_ls_file_dir_and_symlink() {
-        let f = parse_ls_numeric("-rw-r--r-- 1 1000 1000 1234 1700000000 notes with spaces.txt").unwrap();
+        let f = parse_ls_numeric("-rw-r--r-- 1 1000 1000 1234 1700000000 notes with spaces.txt")
+            .unwrap();
         assert_eq!(f.kind, Kind::File);
         assert_eq!(f.size, 1234);
         assert_eq!(f.mtime, 1_700_000_000);
@@ -177,11 +194,19 @@ mod tests {
 
     #[test]
     fn parses_sftp_longname_dialect() {
-        let e = parse_longname("-rw-r--r--    1 1000     1000       2048 Oct 22 10:30 readme.md", 2026).unwrap();
+        let e = parse_longname(
+            "-rw-r--r--    1 1000     1000       2048 Oct 22 10:30 readme.md",
+            2026,
+        )
+        .unwrap();
         assert_eq!(e.size, 2048);
         assert_eq!(e.name, "readme.md");
         assert_eq!(e.mtime, civil_to_epoch(2026, 10, 22, 10, 30));
-        let old = parse_longname("drwxr-xr-x    2 root     root         4096 Mar  3  2019 old", 2026).unwrap();
+        let old = parse_longname(
+            "drwxr-xr-x    2 root     root         4096 Mar  3  2019 old",
+            2026,
+        )
+        .unwrap();
         assert_eq!(old.kind, Kind::Dir);
         assert_eq!(old.mtime, civil_to_epoch(2019, 3, 3, 0, 0));
     }

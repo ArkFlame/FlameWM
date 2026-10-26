@@ -1,5 +1,8 @@
+#![allow(clippy::unnecessary_cast)]
+
 mod lamp;
 mod overlay;
+mod text_mask_cache;
 mod warp;
 mod xcomposite;
 mod xft;
@@ -9,7 +12,6 @@ mod xlib_ext;
 mod xrender;
 mod xrender_aa;
 mod xrender_transform;
-mod text_mask_cache;
 mod xshape;
 
 pub use lamp::PanelEdge;
@@ -28,19 +30,18 @@ use flamewm_render_core::RuntimeDocument;
 pub use flamewm_render_core::{ActionEvent, ActionPhase, ControllerEvent};
 
 mod app;
-mod xdnd;
 mod config;
 mod external_decoration;
 mod external_drawable;
 mod ffi;
 mod native;
+mod xdnd;
 pub use native::xresource::{ResourceLedger, process_pixmap_ledger};
 mod runtime;
 mod surface_controller;
 
 use app::X11App;
 pub use config::*;
-pub use xdnd::{encode_uri_list, parse_uri_list, safe_file_name, valid_bus_name, valid_object_path};
 pub use external_decoration::{
     ExternalDecorationRenderer, apply_cursor_shadow, apply_cursor_theme,
 };
@@ -53,3 +54,6 @@ pub use native::target::GeometryCommit;
 pub use native::{PresentationState, presenter_error};
 pub use runtime::*;
 pub use surface_controller::*;
+pub use xdnd::{
+    encode_uri_list, parse_uri_list, safe_file_name, valid_bus_name, valid_object_path,
+};

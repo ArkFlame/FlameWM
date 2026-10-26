@@ -29,6 +29,7 @@ pub struct ControlPower {
 }
 
 impl ControlPower {
+    #[must_use]
     pub fn connect(kind: BusKind) -> Self {
         Self::from_connect(|| ControlClient::connect(kind))
     }
@@ -116,6 +117,7 @@ pub enum PowerButton {
 }
 
 impl PowerButton {
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Sleep => "Sleep",
@@ -126,6 +128,7 @@ impl PowerButton {
     }
 
     /// `Other` is enabled only when it has an entry to show (log out).
+    #[must_use]
     pub fn enabled(self, caps: SessionCapabilities) -> bool {
         match self {
             Self::Sleep => caps.suspend,
@@ -145,6 +148,7 @@ pub enum Confirmable {
 
 impl Confirmable {
     /// Label of the confirm button.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Restart => "Restart",
@@ -155,6 +159,7 @@ impl Confirmable {
 
 /// Maps a lock UI action name to the power event it means. Only the power row,
 /// the confirm strip, and the Other list use these names; unknown names map to `None`.
+#[must_use]
 pub fn ui_action(name: &str) -> Option<PowerEvent> {
     match name {
         "lock.power.0" => Some(PowerEvent::Click(POWER_ORDER[0])),
@@ -205,6 +210,7 @@ pub struct PowerUi {
 }
 
 impl PowerUi {
+    #[must_use]
     pub fn new(capabilities: SessionCapabilities) -> Self {
         Self {
             capabilities,
@@ -213,6 +219,7 @@ impl PowerUi {
         }
     }
 
+    #[must_use]
     pub fn state(&self) -> &PowerState {
         &self.state
     }
@@ -312,6 +319,7 @@ impl PowerUi {
     }
 
     /// What the power row shows: enabled icons, the open confirm strip or list, and any error.
+    #[must_use]
     pub fn view(&self) -> PowerView {
         PowerView {
             enabled: POWER_ORDER.map(|button| button.enabled(self.capabilities)),

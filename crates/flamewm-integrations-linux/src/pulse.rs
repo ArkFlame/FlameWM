@@ -141,7 +141,7 @@ impl PulseAdapter {
         lock(&self.controller).generation()
     }
 
-    /// Queue one real PulseAudio object mutation. Snapshot publication waits for the matching
+    /// Queue one real `PulseAudio` object mutation. Snapshot publication waits for the matching
     /// provider subscription/reconcile path rather than synthesizing optimistic state.
     pub fn set_volume(&self, action: AudioVolumeAction) -> FlameResult<()> {
         let intent = lock(&self.controller).set_volume(action)?;
@@ -251,7 +251,7 @@ impl PulseAdapter {
 }
 
 impl PulseAdapter {
-    /// Success callback for one queued write. PulseAudio reports the async
+    /// Success callback for one queued write. `PulseAudio` reports the async
     /// outcome only here, so a rejected write is diagnosed and reconciled
     /// against the server instead of being silently treated as applied.
     fn write_failure_callback(

@@ -24,6 +24,7 @@ pub enum Quality {
 
 impl Quality {
     /// Downscale factor applied to the viewport for the accumulation buffers.
+    #[must_use]
     pub fn factor(self) -> usize {
         match self {
             Self::Full => 1,
@@ -55,6 +56,7 @@ pub struct Rasterizer {
 }
 
 impl Rasterizer {
+    #[must_use]
     pub fn new(quality: Quality) -> Self {
         let glow = (0..GLOW_LUT_LEN)
             .map(|i| {
@@ -79,6 +81,7 @@ impl Rasterizer {
         }
     }
 
+    #[must_use]
     pub fn quality(&self) -> Quality {
         self.quality
     }
@@ -221,9 +224,9 @@ fn splat_stream(
                 continue;
             }
             let mix = WHITE_MIX * core[i];
-            for c in 0..3 {
-                let colour = col[c] + (1.0 - col[c]) * mix;
-                transmit[i][c] *= 1.0 - a * colour;
+            for (channel, &base) in transmit[i].iter_mut().zip(&col) {
+                let colour = base + (1.0 - base) * mix;
+                *channel *= 1.0 - a * colour;
             }
         }
     }
@@ -268,7 +271,7 @@ fn splat(
         // Empty rows (`lo > hi`) and NaN spans fall back to the bounding box, never past it.
         let xs = ((lo - 0.5).floor() - 1.0).max(x0 as f64);
         let xe = ((hi - 0.5).ceil() + 2.0).min(x1 as f64);
-        if !(xs < xe) {
+        if xs.partial_cmp(&xe) != Some(std::cmp::Ordering::Less) {
             continue;
         }
         let (xs, xe) = (xs as usize, xe as usize);

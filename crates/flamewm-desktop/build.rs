@@ -172,7 +172,7 @@ fn validate_text_targets(output: &CompileOutput) {
 }
 
 /// Dynamic button labels/hub text must be a single text child; otherwise
-/// RuntimeDocument::set_text fails at the first right-click during startup.
+/// `RuntimeDocument::set_text` fails at the first right-click during startup.
 fn assert_dynamic_text_target(output: &CompileOutput, id: &str) {
     let node = output
         .document

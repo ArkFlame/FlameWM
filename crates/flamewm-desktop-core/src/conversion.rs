@@ -1,5 +1,5 @@
 //! Desktop image conversion policy. Decoder/encoder delegates to the optional
-//! system ImageMagick installation; no shell, no unbounded in-memory decoding.
+//! system `ImageMagick` installation; no shell, no unbounded in-memory decoding.
 //! File creation is atomic in the source directory and NEVER overwrites files.
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
@@ -18,7 +18,7 @@ const MAX_CONCURRENT_CONVERSIONS: usize = 2;
 const CONVERSION_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// A bounded provider slot prevents repeated menu clicks from starting an
-/// unlimited number of ImageMagick decoders. Every return path releases it.
+/// unlimited number of `ImageMagick` decoders. Every return path releases it.
 struct ConversionSlot;
 
 impl ConversionSlot {
@@ -102,6 +102,7 @@ fn wait_for_converter_with_timeout(
 
 /// Temporary converter files are never desktop icons; only the final atomic
 /// rename produces a visible entry.
+#[must_use]
 pub fn is_temporary_convert_name(name: &std::ffi::OsStr) -> bool {
     name.to_str()
         .is_some_and(|text| text.starts_with(".flamewm-convert-"))
@@ -114,6 +115,7 @@ const SOURCE_EXTENSIONS: &[&str] = &[
     "png", "webp", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "ico", "avif", "heic", "heif",
 ];
 
+#[must_use]
 pub fn image_source(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
@@ -124,6 +126,7 @@ pub fn image_source(path: &Path) -> bool {
         })
 }
 
+#[must_use]
 pub fn offered_formats(path: &Path) -> Vec<&'static str> {
     if image_source(path) {
         return FORMAT_CHOICES[..9]
@@ -163,7 +166,7 @@ pub fn offered_formats(path: &Path) -> Vec<&'static str> {
     }
 }
 
-/// ImageMagick writes numbered sibling files when a multi-frame input is
+/// `ImageMagick` writes numbered sibling files when a multi-frame input is
 /// converted to a single-frame container (e.g. GIF -> JPG or PNG). Select only
 /// frame zero for those outputs; otherwise the reserved temporary remains
 /// empty and invisible numbered files accumulate in the desktop directory.
@@ -192,7 +195,7 @@ fn destination(source: &Path, format: &str, attempt: u32) -> Result<PathBuf, Str
 
 /// The UI may show a non-authoritative prediction in this location until
 /// the worker publishes. A concurrent writer can still claim it first; the
-/// successful result path returned by convert_file remains authoritative.
+/// successful result path returned by `convert_file` remains authoritative.
 pub fn predicted_destination(source: &Path, format: &str) -> Result<PathBuf, String> {
     if !offered_formats(source).contains(&format) {
         return Err("target format not offered for this file".to_owned());
@@ -237,7 +240,7 @@ pub fn convert_image(source: &Path, format: &str) -> Result<PathBuf, String> {
                 reserved = Some(temp);
                 break;
             }
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(err) => return Err(format!("create temporary conversion file: {err}")),
         }
     }
@@ -292,7 +295,7 @@ pub fn convert_image(source: &Path, format: &str) -> Result<PathBuf, String> {
 }
 
 /// File conversion entry point. Image handling remains on the established
-/// bounded ImageMagick provider; document formats use bounded external providers.
+/// bounded `ImageMagick` provider; document formats use bounded external providers.
 /// The caller must run this off the UI thread.
 pub fn convert_file(source: &Path, format: &str) -> Result<PathBuf, String> {
     if image_source(source) {
@@ -398,7 +401,7 @@ pub fn convert_file(source: &Path, format: &str) -> Result<PathBuf, String> {
             }
             match rename_entry_no_replace(&temp, &dest) {
                 Ok(()) => return Ok(dest),
-                Err(err) if fs::symlink_metadata(&dest).is_ok() => continue,
+                Err(_) if fs::symlink_metadata(&dest).is_ok() => {}
                 Err(err) => return Err(format!("publish converted document: {err:?}")),
             }
         }

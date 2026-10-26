@@ -10,8 +10,8 @@ pub(super) enum SecretAgentCall {
     CancelGetSecrets {
         reply: Option<Message>,
     },
-    /// A reply owed to NetworkManager that changes no secret state: an empty return for
-    /// SaveSecrets/DeleteSecrets (the agent stores nothing), or UnknownMethod for other members.
+    /// A reply owed to `NetworkManager` that changes no secret state: an empty return for
+    /// SaveSecrets/DeleteSecrets (the agent stores nothing), or `UnknownMethod` for other members.
     SendReply {
         reply: Option<Message>,
     },
@@ -25,7 +25,7 @@ pub(super) struct SecretContext {
 }
 
 /// Which password request is open. A new network's password creates its profile on submit;
-/// a saved profile's password is accepted only as the answer to NetworkManager's own request.
+/// a saved profile's password is accepted only as the answer to `NetworkManager`'s own request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SecretPrompt {
     NewNetwork { access_point: String },
@@ -53,7 +53,7 @@ pub(super) fn secret_submit_plan(prompt: &SecretPrompt) -> SecretSubmitPlan {
 }
 
 impl NetworkManagerProvider {
-    /// Queue supported NetworkManager requests. Native signals remain sole snapshot authority.
+    /// Queue supported `NetworkManager` requests. Native signals remain sole snapshot authority.
     pub fn perform_action(
         &mut self,
         action: SystemAction,
@@ -94,7 +94,7 @@ impl NetworkManagerProvider {
                 let is_open_unknown =
                     self.access_points
                         .get(&access_point_path)
-                        .map_or(false, |access_point| {
+                        .is_some_and(|access_point| {
                             !access_point.secured
                                 && !snapshot
                                     .access_points
@@ -450,7 +450,7 @@ impl NetworkManagerProvider {
         result
     }
 
-    /// Open the password prompt for an unknown secured network. Nothing reaches NetworkManager
+    /// Open the password prompt for an unknown secured network. Nothing reaches `NetworkManager`
     /// until the user submits, so a cancelled prompt leaves no profile behind.
     pub(super) fn prompt_new_network(&mut self, access_point: String) -> FlameResult<()> {
         if self.secret_or_attempt_pending() {
@@ -598,7 +598,7 @@ impl NetworkManagerProvider {
         }
     }
 
-    /// The saved-profile AP a NetworkManager GetSecrets request may be answered for.
+    /// The saved-profile AP a `NetworkManager` `GetSecrets` request may be answered for.
     pub(super) fn saved_secret_access_point(&self) -> Option<String> {
         match &self.secret_prompt {
             Some(SecretPrompt::SavedNetwork { access_point }) => Some(access_point.clone()),
@@ -663,7 +663,7 @@ impl NetworkManagerProvider {
     }
 }
 
-/// Full settings for `Connection.Update`: the GetSettings sections are kept, and only the
+/// Full settings for `Connection.Update`: the `GetSettings` sections are kept, and only the
 /// wireless-security `psk` is replaced with psk-flags NONE (0) so the password is stored.
 pub(super) fn saved_profile_update_settings(
     settings: MessageItem,
@@ -757,7 +757,7 @@ fn string_dict(what: &str, entries: Vec<(String, MessageItem)>) -> FlameResult<M
         .map_err(|_| FlameError::invalid(format!("NetworkManager {what} settings are invalid")))
 }
 
-/// The `connection` section shared by open and secured AddAndActivateConnection.
+/// The `connection` section shared by open and secured `AddAndActivateConnection`.
 fn connection_entries(ssid: String) -> Vec<(String, MessageItem)> {
     vec![
         ("id".to_owned(), MessageItem::Str(ssid)),
@@ -812,7 +812,7 @@ pub(super) fn user_canceled_reply(reply: Message) -> FlameResult<Message> {
     Ok(reply.error(&name, &message))
 }
 
-/// Queue one RequestScan per device. A failed queue clears the controller's pending scan so a
+/// Queue one `RequestScan` per device. A failed queue clears the controller's pending scan so a
 /// later Scan is not blocked; replies already in flight complete harmlessly.
 pub(super) fn queue_scan_requests<F>(
     controller: &mut NetworkController,
@@ -833,7 +833,7 @@ where
 }
 
 /// `RegisterWithCapabilities(s identifier, u capabilities)`. The agent object path is not an
-/// argument: NetworkManager calls back on the caller's unique name at SECRET_AGENT_PATH.
+/// argument: `NetworkManager` calls back on the caller's unique name at `SECRET_AGENT_PATH`.
 pub(super) fn secret_agent_registration_message() -> FlameResult<Message> {
     method_call(
         NETWORK_MANAGER_SERVICE,

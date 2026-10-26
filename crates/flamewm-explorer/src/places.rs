@@ -1,11 +1,14 @@
 //! Sidebar places: persisted GTK-style bookmarks (add/remove/rename/reorder), mounted
-//! removable devices from mountinfo + sysfs, and UDisks2 mount/unmount/eject via `udisksctl`.
+//! removable devices from mountinfo + sysfs, and `UDisks2` mount/unmount/eject via `udisksctl`.
+pub use flamewm_integrations_linux::removable_mounts::udisks_action;
+use flamewm_integrations_linux::removable_mounts::{
+    self, by_uuid_dir, is_removable_in, mounted_block_devices, unescape_mount, uuid_blocks,
+    valid_device_path,
+};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use flamewm_integrations_linux::removable_mounts::{self, by_uuid_dir, is_removable_in, mounted_block_devices, unescape_mount, uuid_blocks, valid_device_path};
-pub use flamewm_integrations_linux::removable_mounts::udisks_action;
 
 pub const MAX_BOOKMARKS: usize = 128;
 const MAX_LABEL_CHARS: usize = 120;
@@ -18,19 +21,31 @@ pub struct Bookmark {
 }
 
 impl Bookmark {
+    #[must_use]
     pub fn display_name(&self) -> String {
         self.label.clone().unwrap_or_else(|| {
-            self.path.file_name().unwrap_or(self.path.as_os_str()).to_string_lossy().into_owned()
+            self.path
+                .file_name()
+                .unwrap_or(self.path.as_os_str())
+                .to_string_lossy()
+                .into_owned()
         })
     }
 }
 
 /// Strips control characters and caps length. Used for labels from bookmarks and devices.
+#[must_use]
 pub fn sanitize_label(raw: &str) -> String {
-    raw.chars().filter(|c| !c.is_control()).take(MAX_LABEL_CHARS).collect::<String>().trim().to_owned()
+    raw.chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_LABEL_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 
 /// Encodes an absolute path as a `file://` URI, percent-encoding everything outside the unreserved set.
+#[must_use]
 pub fn file_uri(path: &Path) -> String {
     let escaped: String = path
         .to_string_lossy()
@@ -51,6 +66,7 @@ fn decode_file_uri(raw: &str) -> Option<PathBuf> {
 }
 
 /// Parses a GTK `bookmarks` file. Non-`file://` and malformed lines are ignored.
+#[must_use]
 pub fn parse_bookmarks(text: &str) -> Vec<Bookmark> {
     text.lines()
         .filter_map(|line| {
@@ -69,7 +85,12 @@ pub fn render_bookmarks(items: &[Bookmark]) -> String {
     let mut out = String::new();
     for item in items.iter().take(MAX_BOOKMARKS) {
         out.push_str(&file_uri(&item.path));
-        if let Some(label) = item.label.as_deref().map(sanitize_label).filter(|l| !l.is_empty()) {
+        if let Some(label) = item
+            .label
+            .as_deref()
+            .map(sanitize_label)
+            .filter(|l| !l.is_empty())
+        {
             out.push(' ');
             out.push_str(&label);
         }
@@ -83,7 +104,10 @@ pub fn add(items: &mut Vec<Bookmark>, path: &Path) -> bool {
     if items.len() >= MAX_BOOKMARKS || items.iter().any(|b| b.path == path) {
         return false;
     }
-    items.push(Bookmark { path: path.to_path_buf(), label: None });
+    items.push(Bookmark {
+        path: path.to_path_buf(),
+        label: None,
+    });
     true
 }
 
@@ -92,7 +116,9 @@ pub fn remove(items: &mut Vec<Bookmark>, index: usize) -> Option<Bookmark> {
 }
 
 pub fn rename(items: &mut [Bookmark], index: usize, label: &str) -> bool {
-    let Some(item) = items.get_mut(index) else { return false };
+    let Some(item) = items.get_mut(index) else {
+        return false;
+    };
     let label = sanitize_label(label);
     item.label = (!label.is_empty()).then_some(label);
     true
@@ -109,17 +135,23 @@ pub fn reorder(items: &mut Vec<Bookmark>, from: usize, to: usize) -> bool {
 }
 
 /// Resolves the GTK bookmarks file location (`$XDG_CONFIG_HOME/gtk-3.0/bookmarks`).
+#[must_use]
 pub fn bookmarks_file(config_home: &Path) -> PathBuf {
     config_home.join("gtk-3.0/bookmarks")
 }
 
+#[must_use]
 pub fn load_bookmarks(file: &Path) -> Vec<Bookmark> {
-    fs::read_to_string(file).map(|text| parse_bookmarks(&text)).unwrap_or_default()
+    fs::read_to_string(file)
+        .map(|text| parse_bookmarks(&text))
+        .unwrap_or_default()
 }
 
 /// Atomically replaces the bookmarks file (write temp file, fsync, rename).
 pub fn save_bookmarks(file: &Path, items: &[Bookmark]) -> io::Result<()> {
-    let parent = file.parent().ok_or_else(|| io::Error::other("bookmarks path has no parent"))?;
+    let parent = file
+        .parent()
+        .ok_or_else(|| io::Error::other("bookmarks path has no parent"))?;
     fs::create_dir_all(parent)?;
     let temp = parent.join(".bookmarks.flamewm-tmp");
     {
@@ -140,19 +172,30 @@ pub struct MountedDevice {
 }
 
 /// Parses `/proc/self/mountinfo` for removable-media mount points (`/media`, `/run/media`, `/mnt`).
-/// Field layout: id parent maj:min root mount_point opts [optional...] - fstype source superopts.
+/// Field layout: id parent maj:min root `mount_point` opts [optional...] - fstype source superopts.
+#[must_use]
 pub fn parse_mountinfo(text: &str) -> Vec<MountedDevice> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for line in text.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
-        let Some(sep) = fields.iter().position(|f| *f == "-") else { continue };
-        let (Some(mount), Some(source)) = (fields.get(4), fields.get(sep + 2)) else { continue };
+        let Some(sep) = fields.iter().position(|f| *f == "-") else {
+            continue;
+        };
+        let (Some(mount), Some(source)) = (fields.get(4), fields.get(sep + 2)) else {
+            continue;
+        };
         let mount = unescape_mount(mount);
-        if !(mount.starts_with("/media/") || mount.starts_with("/run/media/") || mount.starts_with("/mnt/")) {
+        if !(mount.starts_with("/media/")
+            || mount.starts_with("/run/media/")
+            || mount.starts_with("/mnt/"))
+        {
             continue;
         }
-        let Some(block_name) = source.strip_prefix("/dev/").filter(|n| !n.is_empty() && !n.contains('/')) else {
+        let Some(block_name) = source
+            .strip_prefix("/dev/")
+            .filter(|n| !n.is_empty() && !n.contains('/'))
+        else {
             continue;
         };
         if seen.insert(mount.clone()) {
@@ -173,38 +216,59 @@ pub struct NetworkMount {
     pub fstype: String,
 }
 
-/// Filesystem types shown in the Network group: SMB/CIFS, NFS, sshfs, WebDAV (davfs) and the GVFS FUSE root.
-pub const NETWORK_FSTYPES: [&str; 8] = ["cifs", "smb3", "nfs", "nfs4", "fuse.sshfs", "davfs", "fuse.davfs", "fuse.gvfsd-fuse"];
+/// Filesystem types shown in the Network group: SMB/CIFS, NFS, sshfs, `WebDAV` (davfs) and the GVFS FUSE root.
+pub const NETWORK_FSTYPES: [&str; 8] = [
+    "cifs",
+    "smb3",
+    "nfs",
+    "nfs4",
+    "fuse.sshfs",
+    "davfs",
+    "fuse.davfs",
+    "fuse.gvfsd-fuse",
+];
 pub const GVFS_FSTYPE: &str = "fuse.gvfsd-fuse";
 
 /// Network mounts from `/proc/self/mountinfo` text. Only the fstype selects a line, so pseudo or local mounts never match.
-/// Field layout: id parent maj:min root mount_point opts [optional...] - fstype source superopts.
+/// Field layout: id parent maj:min root `mount_point` opts [optional...] - fstype source superopts.
+#[must_use]
 pub fn parse_network_mounts(text: &str) -> Vec<NetworkMount> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for line in text.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
-        let Some(sep) = fields.iter().position(|f| *f == "-") else { continue };
-        let (Some(mount), Some(fstype)) = (fields.get(4), fields.get(sep + 1)) else { continue };
+        let Some(sep) = fields.iter().position(|f| *f == "-") else {
+            continue;
+        };
+        let (Some(mount), Some(fstype)) = (fields.get(4), fields.get(sep + 1)) else {
+            continue;
+        };
         if !NETWORK_FSTYPES.contains(fstype) {
             continue;
         }
         let mount_point = PathBuf::from(unescape_mount(mount));
         if seen.insert(mount_point.clone()) {
-            out.push(NetworkMount { mount_point, fstype: (*fstype).to_owned() });
+            out.push(NetworkMount {
+                mount_point,
+                fstype: (*fstype).to_owned(),
+            });
         }
     }
     out
 }
 
 /// The per-user GVFS FUSE root, `/run/user/<uid>/gvfs`. The uid is the owner of this process's `/proc/self`.
+#[must_use]
 pub fn gvfs_root() -> PathBuf {
     use std::os::unix::fs::MetadataExt;
-    let uid = fs::metadata("/proc/self").map(|meta| meta.uid()).unwrap_or(0);
+    let uid = fs::metadata("/proc/self")
+        .map(|meta| meta.uid())
+        .unwrap_or(0);
     PathBuf::from(format!("/run/user/{uid}/gvfs"))
 }
 
 /// Share folders directly under the GVFS root, sorted by name. Each is one network location.
+#[must_use]
 pub fn gvfs_shares(root: &Path) -> Vec<PathBuf> {
     let mut shares: Vec<PathBuf> = fs::read_dir(root)
         .into_iter()
@@ -218,9 +282,14 @@ pub fn gvfs_shares(root: &Path) -> Vec<PathBuf> {
 
 /// Sidebar label for a GVFS share folder name such as `smb-share:server=nas,share=media` ("media on nas").
 /// Falls back to the raw folder name when the name has no recognised keys.
+#[must_use]
 pub fn gvfs_label(folder: &str) -> String {
     let params = folder.split_once(':').map_or("", |(_, rest)| rest);
-    let value = |key: &str| params.split(',').find_map(|pair| pair.strip_prefix(key)?.strip_prefix('=').map(str::to_owned));
+    let value = |key: &str| {
+        params
+            .split(',')
+            .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('=').map(str::to_owned))
+    };
     let label = match (value("share"), value("server").or_else(|| value("host"))) {
         (Some(share), Some(server)) => format!("{share} on {server}"),
         (Some(share), None) => share,
@@ -273,7 +342,10 @@ impl Json {
         }
     }
     fn parse(text: &str) -> Option<Json> {
-        let mut parser = JsonParser { bytes: text.as_bytes(), at: 0 };
+        let mut parser = JsonParser {
+            bytes: text.as_bytes(),
+            at: 0,
+        };
         let value = parser.value(0)?;
         parser.skip_space();
         (parser.at == parser.bytes.len()).then_some(value)
@@ -287,7 +359,7 @@ struct JsonParser<'a> {
 
 impl JsonParser<'_> {
     fn skip_space(&mut self) {
-        while self.bytes.get(self.at).is_some_and(|b| b.is_ascii_whitespace()) {
+        while self.bytes.get(self.at).is_some_and(u8::is_ascii_whitespace) {
             self.at += 1;
         }
     }
@@ -352,10 +424,18 @@ impl JsonParser<'_> {
             b'n' => self.literal("null", Json::Null),
             _ => {
                 let start = self.at;
-                while self.bytes.get(self.at).is_some_and(|b| b"+-.eE0123456789".contains(b)) {
+                while self
+                    .bytes
+                    .get(self.at)
+                    .is_some_and(|b| b"+-.eE0123456789".contains(b))
+                {
                     self.at += 1;
                 }
-                std::str::from_utf8(&self.bytes[start..self.at]).ok()?.parse::<f64>().ok().map(Json::Num)
+                std::str::from_utf8(&self.bytes[start..self.at])
+                    .ok()?
+                    .parse::<f64>()
+                    .ok()
+                    .map(Json::Num)
             }
         }
     }
@@ -387,7 +467,8 @@ impl JsonParser<'_> {
                         b'b' => '\u{8}',
                         b'f' => '\u{c}',
                         b'u' => {
-                            let hex = std::str::from_utf8(self.bytes.get(self.at..self.at + 4)?).ok()?;
+                            let hex =
+                                std::str::from_utf8(self.bytes.get(self.at..self.at + 4)?).ok()?;
                             self.at += 4;
                             char::from_u32(u32::from_str_radix(hex, 16).ok()?).unwrap_or('\u{fffd}')
                         }
@@ -416,7 +497,12 @@ pub const LSBLK_COLUMNS_LEGACY: &str = "NAME,FSTYPE,MOUNTPOINT,LABEL,SIZE";
 /// Argument vector for an `lsblk -J` query with the given column list.
 #[must_use]
 pub fn lsblk_args(columns: &str) -> Vec<String> {
-    vec!["-J".to_owned(), "-b".to_owned(), "-o".to_owned(), columns.to_owned()]
+    vec![
+        "-J".to_owned(),
+        "-b".to_owned(),
+        "-o".to_owned(),
+        columns.to_owned(),
+    ]
 }
 
 /// GPT partition type GUIDs that are firmware, recovery or a container member: never user media.
@@ -446,8 +532,14 @@ const SYSTEM_PART_TYPES_MBR: [&str; 6] = [
 ];
 
 /// Labels that mark firmware or recovery media on images without a readable partition table.
-const SYSTEM_PART_LABELS: [&str; 6] =
-    ["efi", "efi system partition", "vtoyefi", "bios boot", "microsoft reserved", "system reserved"];
+const SYSTEM_PART_LABELS: [&str; 6] = [
+    "efi",
+    "efi system partition",
+    "vtoyefi",
+    "bios boot",
+    "microsoft reserved",
+    "system reserved",
+];
 
 /// Mount points that belong to the boot chain. A disk that holds one of them is never offered as
 /// removable media, whatever its other partitions look like.
@@ -462,7 +554,9 @@ const MBR_BOOT_FLAG: u64 = 0x80;
 /// by one; a disk without partitions is listed itself. Mounted, swap, encryption/RAID/LVM members, unformatted,
 /// tiny nodes, firmware/recovery partitions and disks that hold the boot chain are skipped.
 pub fn parse_lsblk(text: &str) -> Vec<BlockDevice> {
-    let Some(root) = Json::parse(text) else { return Vec::new() };
+    let Some(root) = Json::parse(text) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for disk in root.get("blockdevices").map_or(&[][..], Json::items) {
         let partitions = disk.get("children").map_or(&[][..], Json::items);
@@ -471,9 +565,17 @@ pub fn parse_lsblk(text: &str) -> Vec<BlockDevice> {
         if holds_boot_mount(disk, partitions) {
             continue;
         }
-        let nodes: Vec<&Json> = if partitions.is_empty() { vec![disk] } else { partitions.iter().collect() };
+        let nodes: Vec<&Json> = if partitions.is_empty() {
+            vec![disk]
+        } else {
+            partitions.iter().collect()
+        };
         let disk_removable = node_removable(disk);
-        out.extend(nodes.into_iter().filter_map(|node| unmounted_filesystem(node, disk_removable)));
+        out.extend(
+            nodes
+                .into_iter()
+                .filter_map(|node| unmounted_filesystem(node, disk_removable)),
+        );
     }
     out
 }
@@ -497,18 +599,29 @@ fn node_text<'a>(node: &'a Json, key: &str) -> &'a str {
 /// Every mount point a node reports, in both the single `mountpoint` and the `mountpoints` array form.
 fn mount_points(node: &Json) -> Vec<&str> {
     let mut out: Vec<&str> = Vec::new();
-    if let Some(single) = node.get("mountpoint").and_then(Json::text).filter(|m| !m.is_empty()) {
+    if let Some(single) = node
+        .get("mountpoint")
+        .and_then(Json::text)
+        .filter(|m| !m.is_empty())
+    {
         out.push(single);
     }
     if let Some(list) = node.get("mountpoints") {
-        out.extend(list.items().iter().filter_map(Json::text).filter(|m| !m.is_empty()));
+        out.extend(
+            list.items()
+                .iter()
+                .filter_map(Json::text)
+                .filter(|m| !m.is_empty()),
+        );
     }
     out
 }
 
 fn is_boot_mount(mount: &str) -> bool {
     BOOT_MOUNT_POINTS.contains(&mount)
-        || mount.strip_prefix("/boot/").is_some_and(|rest| !rest.is_empty())
+        || mount
+            .strip_prefix("/boot/")
+            .is_some_and(|rest| !rest.is_empty())
 }
 
 /// True when the disk itself or any of its partitions is mounted as part of the boot chain.
@@ -520,7 +633,10 @@ fn holds_boot_mount(disk: &Json, partitions: &[Json]) -> bool {
 
 /// Parses a `PARTFLAGS` hex value (`0x80`, `0x4`, `0x8000000000000000`) into its bits.
 fn part_flags_bits(flags: &str) -> Option<u64> {
-    let hex = flags.trim().strip_prefix("0x").or_else(|| flags.trim().strip_prefix("0X"))?;
+    let hex = flags
+        .trim()
+        .strip_prefix("0x")
+        .or_else(|| flags.trim().strip_prefix("0X"))?;
     u64::from_str_radix(hex, 16).ok()
 }
 
@@ -529,7 +645,8 @@ fn part_flags_bits(flags: &str) -> Option<u64> {
 fn is_system_partition(node: &Json) -> bool {
     let part_type = node_text(node, "parttype").to_ascii_lowercase();
     if !part_type.is_empty()
-        && (SYSTEM_PART_TYPES.contains(&part_type.as_str()) || SYSTEM_PART_TYPES_MBR.contains(&part_type.as_str()))
+        && (SYSTEM_PART_TYPES.contains(&part_type.as_str())
+            || SYSTEM_PART_TYPES_MBR.contains(&part_type.as_str()))
     {
         return true;
     }
@@ -561,12 +678,24 @@ fn unmounted_filesystem(node: &Json, disk_removable: bool) -> Option<BlockDevice
     let fstype = node.get("fstype").and_then(Json::text).unwrap_or("");
     // lsblk reports the node kind for newer versions; members of a container hold no filesystem.
     let kind = node_text(node, "type");
-    if kind.starts_with("crypt") || kind.starts_with("lvm") || kind.starts_with("raid") || kind == "swap" {
+    if kind.starts_with("crypt")
+        || kind.starts_with("lvm")
+        || kind.starts_with("raid")
+        || kind == "swap"
+    {
         return None;
     }
     // Encrypted, RAID and LVM members hold no mountable filesystem of their own.
-    let member = matches!(fstype, "swap" | "crypto_LUKS" | "LVM2_member" | "linux_raid_member");
-    if fstype.is_empty() || member || name.starts_with("loop") || name.starts_with("ram") || name.starts_with("zram") {
+    let member = matches!(
+        fstype,
+        "swap" | "crypto_LUKS" | "LVM2_member" | "linux_raid_member"
+    );
+    if fstype.is_empty()
+        || member
+        || name.starts_with("loop")
+        || name.starts_with("ram")
+        || name.starts_with("zram")
+    {
         return None;
     }
     // Dolphin hides tiny system partitions; lsblk -b reports sizes in bytes.
@@ -588,18 +717,29 @@ fn unmounted_filesystem(node: &Json, disk_removable: bool) -> Option<BlockDevice
     if mounted || !valid_device_path(&device) {
         return None;
     }
-    let label = node.get("label").and_then(Json::text).map(sanitize_label).filter(|l| !l.is_empty());
+    let label = node
+        .get("label")
+        .and_then(Json::text)
+        .map(sanitize_label)
+        .filter(|l| !l.is_empty());
     // A partition inherits the removability of the drive it lives on.
     let removable = node_removable(node) || disk_removable;
-    Some(BlockDevice { device, label: label.unwrap_or_else(|| format!("Volume ({name})")), removable })
+    Some(BlockDevice {
+        device,
+        label: label.unwrap_or_else(|| format!("Volume ({name})")),
+        removable,
+    })
 }
 
 /// Runs `lsblk` and returns unmounted filesystems. A missing or failing lsblk yields no devices.
 /// The extended column set is retried with the legacy set when an older lsblk rejects PARTTYPE.
+#[must_use]
 pub fn unmounted_devices() -> Vec<BlockDevice> {
     // Dev-only hook: a saved `lsblk -J` sample stands in for hardware, so screenshots need no real device.
     if let Some(path) = std::env::var_os("FLAMEWM_EXPLORER_FAKE_DEVICES") {
-        return fs::read_to_string(path).map(|text| parse_lsblk(&text)).unwrap_or_default();
+        return fs::read_to_string(path)
+            .map(|text| parse_lsblk(&text))
+            .unwrap_or_default();
     }
     lsblk_output(LSBLK_COLUMNS)
         .or_else(|| lsblk_output(LSBLK_COLUMNS_LEGACY))
@@ -608,11 +748,18 @@ pub fn unmounted_devices() -> Vec<BlockDevice> {
 }
 
 fn lsblk_output(columns: &str) -> Option<String> {
-    let output = Command::new("lsblk").args(lsblk_args(columns)).output().ok()?;
-    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    let output = Command::new("lsblk")
+        .args(lsblk_args(columns))
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Name of the drive holding `block_name`: the parent disk of a partition, or the device itself.
+#[must_use]
 pub fn drive_in(sys_block_root: &Path, block_name: &str) -> String {
     let dev = sys_block_root.join(block_name);
     if !dev.join("partition").exists() {
@@ -620,7 +767,11 @@ pub fn drive_in(sys_block_root: &Path, block_name: &str) -> String {
     }
     fs::canonicalize(&dev)
         .ok()
-        .and_then(|path| path.parent()?.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .and_then(|path| {
+            path.parent()?
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
         .unwrap_or_else(|| block_name.to_owned())
 }
 
@@ -656,14 +807,21 @@ fn eject_filesystem_then_drive(
 }
 
 /// Another partition of `drive` that is still mounted, as `(device, mount_point)`.
-fn mounted_sibling(mountinfo: &str, sys_block_root: &Path, drive: &str, device: &str) -> Option<(String, PathBuf)> {
+fn mounted_sibling(
+    mountinfo: &str,
+    sys_block_root: &Path,
+    drive: &str,
+    device: &str,
+) -> Option<(String, PathBuf)> {
     let name = device.trim_start_matches("/dev/");
-    mounted_block_devices(mountinfo).into_iter().find_map(|(block_name, mount_point)| {
-        if block_name == name || drive_in(sys_block_root, &block_name) != drive {
-            return None;
-        }
-        Some((format!("/dev/{block_name}"), mount_point))
-    })
+    mounted_block_devices(mountinfo)
+        .into_iter()
+        .find_map(|(block_name, mount_point)| {
+            if block_name == name || drive_in(sys_block_root, &block_name) != drive {
+                return None;
+            }
+            Some((format!("/dev/{block_name}"), mount_point))
+        })
 }
 
 fn read_mountinfo() -> String {
@@ -673,13 +831,25 @@ fn read_mountinfo() -> String {
 /// Eject a device through sysfs and udisks2, for the real system. Refuses a non-removable drive
 /// unless the caller says the user confirmed it.
 pub fn eject_device(device: &str) -> Result<String, String> {
-    eject_device_in(Path::new("/sys/class/block"), &read_mountinfo(), device, false, udisks_action)
+    eject_device_in(
+        Path::new("/sys/class/block"),
+        &read_mountinfo(),
+        device,
+        false,
+        udisks_action,
+    )
 }
 
 /// Eject a device the user explicitly asked to eject (sidebar eject button or menu). The click *is*
 /// the confirmation for an internal drive; the mounted-sibling guard still applies.
 pub fn eject_device_confirmed(device: &str) -> Result<String, String> {
-    eject_device_in(Path::new("/sys/class/block"), &read_mountinfo(), device, true, udisks_action)
+    eject_device_in(
+        Path::new("/sys/class/block"),
+        &read_mountinfo(),
+        device,
+        true,
+        udisks_action,
+    )
 }
 
 /// Whole eject decision, with the block-device tree and the mount table injected so it is testable
@@ -704,9 +874,12 @@ pub fn eject_device_in(
     }
     let drive = drive_in(sys_block_root, name);
     if !confirmed && !is_removable_in(sys_block_root, name) {
-        return Err("Refusing to eject an internal drive: confirm the eject for this device".into());
+        return Err(
+            "Refusing to eject an internal drive: confirm the eject for this device".into(),
+        );
     }
-    if let Some((sibling, mount_point)) = mounted_sibling(mountinfo, sys_block_root, &drive, device) {
+    if let Some((sibling, mount_point)) = mounted_sibling(mountinfo, sys_block_root, &drive, device)
+    {
         return Err(format!(
             "the drive still holds the mounted partition {sibling} ({}): unmount it first",
             mount_point.display()
@@ -719,10 +892,19 @@ pub fn eject_device_in(
 /// Reads the state file fresh: the session's remount worker saves the same file.
 pub fn set_remembered(device: &str, remember: bool) {
     let block = device.trim_start_matches("/dev/");
-    let Some((uuid, _)) = uuid_blocks(&by_uuid_dir()).into_iter().find(|(_, name)| name == block) else { return };
+    let Some((uuid, _)) = uuid_blocks(&by_uuid_dir())
+        .into_iter()
+        .find(|(_, name)| name == block)
+    else {
+        return;
+    };
     let path = removable_mounts::state_path();
     let mut known = removable_mounts::Memory::load(&path);
-    let changed = if remember { known.remember(&uuid) } else { known.forget(&uuid) };
+    let changed = if remember {
+        known.remember(&uuid)
+    } else {
+        known.forget(&uuid)
+    };
     if changed {
         let _ = removable_mounts::save(&path, &known.known);
     }
@@ -730,12 +912,13 @@ pub fn set_remembered(device: &str, remember: bool) {
 
 #[cfg(test)]
 mod tests {
-    use flamewm_integrations_linux::removable_mounts::{removable_devices, udisks_args};
     use super::*;
+    use flamewm_integrations_linux::removable_mounts::{removable_devices, udisks_args};
 
     #[test]
     fn bookmark_round_trip_preserves_labels_and_rejects_non_file_uris() {
-        let items = parse_bookmarks("file:///home/u/My%20Docs Work\nsftp://host/x\nfile:///tmp/a\n");
+        let items =
+            parse_bookmarks("file:///home/u/My%20Docs Work\nsftp://host/x\nfile:///tmp/a\n");
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].path, PathBuf::from("/home/u/My Docs"));
         assert_eq!(items[0].display_name(), "Work");
@@ -752,7 +935,14 @@ mod tests {
         assert!(add(&mut items, Path::new("/c")));
         assert!(!add(&mut items, Path::new("/a")));
         assert!(reorder(&mut items, 2, 0));
-        assert_eq!(items.iter().map(|b| b.path.clone()).collect::<Vec<_>>(), vec![PathBuf::from("/c"), PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert_eq!(
+            items.iter().map(|b| b.path.clone()).collect::<Vec<_>>(),
+            vec![
+                PathBuf::from("/c"),
+                PathBuf::from("/a"),
+                PathBuf::from("/b")
+            ]
+        );
         assert!(rename(&mut items, 1, "  Alpha\u{7}  "));
         assert_eq!(items[1].label.as_deref(), Some("Alpha"));
         assert!(rename(&mut items, 1, "   "));
@@ -767,7 +957,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("flamewm-places-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let file = bookmarks_file(&dir);
-        let items = vec![Bookmark { path: PathBuf::from("/srv/data"), label: Some("Data".into()) }];
+        let items = vec![Bookmark {
+            path: PathBuf::from("/srv/data"),
+            label: Some("Data".into()),
+        }];
         save_bookmarks(&file, &items).unwrap();
         assert_eq!(load_bookmarks(&file), items);
         assert!(!dir.join("gtk-3.0/.bookmarks.flamewm-tmp").exists());
@@ -789,7 +982,10 @@ mod tests {
 garbage line with no separator
 ";
         let mounts = parse_network_mounts(text);
-        let found: Vec<(&str, &str)> = mounts.iter().map(|m| (m.mount_point.to_str().unwrap(), m.fstype.as_str())).collect();
+        let found: Vec<(&str, &str)> = mounts
+            .iter()
+            .map(|m| (m.mount_point.to_str().unwrap(), m.fstype.as_str()))
+            .collect();
         assert_eq!(
             found,
             vec![
@@ -804,18 +1000,40 @@ garbage line with no separator
 
     #[test]
     fn gvfs_folder_names_become_share_labels() {
-        assert_eq!(gvfs_label("smb-share:server=nas,share=media"), "media on nas");
+        assert_eq!(
+            gvfs_label("smb-share:server=nas,share=media"),
+            "media on nas"
+        );
         assert_eq!(gvfs_label("sftp:host=example.com,user=me"), "example.com");
         assert_eq!(gvfs_label("plain"), "plain");
     }
 
     #[test]
     fn removable_devices_reports_mount_state_and_removable_flag() {
-        let pairs = vec![("AAAA-1111".to_owned(), "sdb1".to_owned()), ("BBBB".to_owned(), "nvme0n1p6".to_owned())];
+        let pairs = vec![
+            ("AAAA-1111".to_owned(), "sdb1".to_owned()),
+            ("BBBB".to_owned(), "nvme0n1p6".to_owned()),
+        ];
         let mounted = vec![("sdb1".to_owned(), PathBuf::from("/run/media/u/Stick"))];
         let devices = removable_devices(&pairs, &mounted, |block| block == "sdb1");
-        assert_eq!(devices[0], removable_mounts::Device { uuid: "AAAA-1111".into(), block: "sdb1".into(), removable: true, mounted: true });
-        assert_eq!(devices[1], removable_mounts::Device { uuid: "BBBB".into(), block: "nvme0n1p6".into(), removable: false, mounted: false });
+        assert_eq!(
+            devices[0],
+            removable_mounts::Device {
+                uuid: "AAAA-1111".into(),
+                block: "sdb1".into(),
+                removable: true,
+                mounted: true
+            }
+        );
+        assert_eq!(
+            devices[1],
+            removable_mounts::Device {
+                uuid: "BBBB".into(),
+                block: "nvme0n1p6".into(),
+                removable: false,
+                mounted: false
+            }
+        );
     }
 
     #[test]
@@ -832,14 +1050,18 @@ garbage line with no separator
                     40 25 8:33 / /media/u/Dup rw - vfat /dev/sdc1 rw\n";
         let devices = parse_mountinfo(text);
         assert_eq!(devices.len(), 2);
-        assert_eq!(devices[0].mount_point, PathBuf::from("/run/media/u/My Stick"));
+        assert_eq!(
+            devices[0].mount_point,
+            PathBuf::from("/run/media/u/My Stick")
+        );
         assert_eq!(devices[0].block_name, "sdb1");
         assert_eq!(devices[1].block_name, "sdc1");
     }
 
     #[test]
     fn removable_flag_is_read_from_device_or_parent_disk() {
-        let root = std::env::temp_dir().join(format!("flamewm-sysblock-test-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("flamewm-sysblock-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("sdb/sdb1")).unwrap();
         // Mirror /sys/class/block: the entry is a symlink into the parent disk's directory.
@@ -854,9 +1076,18 @@ garbage line with no separator
 
     #[test]
     fn udisks_commands_are_built_as_argument_vectors() {
-        assert_eq!(udisks_args("mount", "/dev/sdb1").unwrap(), ["mount", "-b", "/dev/sdb1"]);
-        assert_eq!(udisks_args("unmount", "/dev/sdb1").unwrap(), ["unmount", "-b", "/dev/sdb1"]);
-        assert_eq!(udisks_args("eject", "/dev/sdb").unwrap(), ["power-off", "-b", "/dev/sdb"]);
+        assert_eq!(
+            udisks_args("mount", "/dev/sdb1").unwrap(),
+            ["mount", "-b", "/dev/sdb1"]
+        );
+        assert_eq!(
+            udisks_args("unmount", "/dev/sdb1").unwrap(),
+            ["unmount", "-b", "/dev/sdb1"]
+        );
+        assert_eq!(
+            udisks_args("eject", "/dev/sdb").unwrap(),
+            ["power-off", "-b", "/dev/sdb"]
+        );
         assert!(udisks_args("format", "/dev/sdb1").is_err());
         assert!(udisks_args("mount", "/dev/sdb1; rm -rf ~").is_err());
         assert!(udisks_args("mount", "sdb1").is_err());
@@ -880,7 +1111,14 @@ garbage line with no separator
             {"name":"sdq","rm":true,"hotplug":true,"children":[
                 {"name":"sdq1","rm":true,"fstype":"vfat","mountpoint":null,"label":"EFI","size":104857600},
                 {"name":"sdq2","rm":true,"fstype":"exfat","mountpoint":null,"label":"Big","size":8000000000}]}]}"#;
-        assert_eq!(parse_lsblk(sample), vec![BlockDevice { device: "/dev/sdq2".into(), label: "Big".into(), removable: true }]);
+        assert_eq!(
+            parse_lsblk(sample),
+            vec![BlockDevice {
+                device: "/dev/sdq2".into(),
+                label: "Big".into(),
+                removable: true
+            }]
+        );
     }
 
     #[test]
@@ -905,14 +1143,32 @@ garbage line with no separator
         assert_eq!(
             parse_lsblk(sample),
             vec![
-                BlockDevice { device: "/dev/sda2".into(), label: "Windows".into(), removable: false },
-                BlockDevice { device: "/dev/sdb2".into(), label: "Stick é".into(), removable: true },
-                BlockDevice { device: "/dev/sdc".into(), label: "Volume (sdc)".into(), removable: true },
-                BlockDevice { device: "/dev/sde".into(), label: "Camera".into(), removable: true },
+                BlockDevice {
+                    device: "/dev/sda2".into(),
+                    label: "Windows".into(),
+                    removable: false
+                },
+                BlockDevice {
+                    device: "/dev/sdb2".into(),
+                    label: "Stick é".into(),
+                    removable: true
+                },
+                BlockDevice {
+                    device: "/dev/sdc".into(),
+                    label: "Volume (sdc)".into(),
+                    removable: true
+                },
+                BlockDevice {
+                    device: "/dev/sde".into(),
+                    label: "Camera".into(),
+                    removable: true
+                },
             ]
         );
         assert!(parse_lsblk("not json").is_empty());
-        assert!(parse_lsblk(r#"{"blockdevices": [{"name":"sdf","rm":true,"fstype":"vfat"}"#).is_empty());
+        assert!(
+            parse_lsblk(r#"{"blockdevices": [{"name":"sdf","rm":true,"fstype":"vfat"}"#).is_empty()
+        );
     }
 
     #[test]
@@ -938,7 +1194,10 @@ garbage line with no separator
         });
         assert!(result.is_ok());
         assert_eq!(calls, ["unmount /dev/sdb1", "eject /dev/sdb"]);
-        assert_eq!(udisks_args("eject", "/dev/sdb").unwrap(), ["power-off", "-b", "/dev/sdb"]);
+        assert_eq!(
+            udisks_args("eject", "/dev/sdb").unwrap(),
+            ["power-off", "-b", "/dev/sdb"]
+        );
     }
 
     #[test]
@@ -946,7 +1205,11 @@ garbage line with no separator
         let mut calls = Vec::new();
         let ok = eject_with("/dev/sdb1", "/dev/sdb", |action, _| {
             calls.push(action.to_owned());
-            if action == "unmount" { Err("Error unmounting /dev/sdb1: Not mounted".into()) } else { Ok(String::new()) }
+            if action == "unmount" {
+                Err("Error unmounting /dev/sdb1: Not mounted".into())
+            } else {
+                Ok(String::new())
+            }
         });
         assert!(ok.is_ok());
         assert_eq!(calls, ["unmount", "eject"]);
@@ -956,19 +1219,39 @@ garbage line with no separator
             calls.push(action.to_owned());
             Err("Error unmounting /dev/sdb1: Device or resource busy".into())
         });
-        assert_eq!(busy.unwrap_err(), "the device is busy: close files or programs using it, then try again");
+        assert_eq!(
+            busy.unwrap_err(),
+            "the device is busy: close files or programs using it, then try again"
+        );
         assert_eq!(calls, ["unmount"]);
     }
 
     #[test]
     fn eject_device_refuses_invalid_paths_before_running_anything() {
-        assert_eq!(eject_device("/dev/sdb1; rm -rf ~").unwrap_err(), "Refusing invalid device path");
+        assert_eq!(
+            eject_device("/dev/sdb1; rm -rf ~").unwrap_err(),
+            "Refusing invalid device path"
+        );
     }
 
     #[test]
     fn lsblk_query_asks_for_partition_identity_columns() {
-        for column in ["NAME", "FSTYPE", "MOUNTPOINT", "LABEL", "SIZE", "TYPE", "TRAN", "RM", "PARTTYPE", "PARTFLAGS"] {
-            assert!(LSBLK_COLUMNS.split(',').any(|name| name == column), "missing {column}");
+        for column in [
+            "NAME",
+            "FSTYPE",
+            "MOUNTPOINT",
+            "LABEL",
+            "SIZE",
+            "TYPE",
+            "TRAN",
+            "RM",
+            "PARTTYPE",
+            "PARTFLAGS",
+        ] {
+            assert!(
+                LSBLK_COLUMNS.split(',').any(|name| name == column),
+                "missing {column}"
+            );
         }
         assert_eq!(lsblk_args(LSBLK_COLUMNS), ["-J", "-b", "-o", LSBLK_COLUMNS]);
         // The fallback stays queryable by lsblk versions without PARTTYPE.
@@ -994,8 +1277,16 @@ garbage line with no separator
         assert_eq!(
             parse_lsblk(sample),
             vec![
-                BlockDevice { device: "/dev/nvme0n1p6".into(), label: "Data".into(), removable: false },
-                BlockDevice { device: "/dev/sdc3".into(), label: "Camera".into(), removable: true },
+                BlockDevice {
+                    device: "/dev/nvme0n1p6".into(),
+                    label: "Data".into(),
+                    removable: false
+                },
+                BlockDevice {
+                    device: "/dev/sdc3".into(),
+                    label: "Camera".into(),
+                    removable: true
+                },
             ]
         );
     }
@@ -1014,11 +1305,22 @@ garbage line with no separator
         assert_eq!(
             parse_lsblk(sample),
             vec![
-                BlockDevice { device: "/dev/sda5".into(), label: "Media".into(), removable: false },
-                BlockDevice { device: "/dev/sda6".into(), label: "Work".into(), removable: false },
+                BlockDevice {
+                    device: "/dev/sda5".into(),
+                    label: "Media".into(),
+                    removable: false
+                },
+                BlockDevice {
+                    device: "/dev/sda6".into(),
+                    label: "Work".into(),
+                    removable: false
+                },
             ]
         );
-        assert_eq!(part_flags_bits("0x8000000000000000"), Some(0x8000_0000_0000_0000));
+        assert_eq!(
+            part_flags_bits("0x8000000000000000"),
+            Some(0x8000_0000_0000_0000)
+        );
         assert_eq!(part_flags_bits("garbage"), None);
     }
 
@@ -1032,7 +1334,14 @@ garbage line with no separator
                 {"name":"sdb1","type":"part","fstype":"LVM2_member","label":"","size":1073741824},
                 {"name":"sdb2","type":"part","fstype":"swap","label":"","size":1073741824},
                 {"name":"sdb3","type":"part","fstype":"ext4","label":"Data","size":1073741824}]}]}"#;
-        assert_eq!(parse_lsblk(sample), vec![BlockDevice { device: "/dev/sdb3".into(), label: "Data".into(), removable: false }]);
+        assert_eq!(
+            parse_lsblk(sample),
+            vec![BlockDevice {
+                device: "/dev/sdb3".into(),
+                label: "Data".into(),
+                removable: false
+            }]
+        );
     }
 
     #[test]
@@ -1045,7 +1354,14 @@ garbage line with no separator
                 {"name":"sda2","type":"part","fstype":"ntfs","label":"Windows","size":500000000000}]},
             {"name":"sdb","type":"disk","rm":true,"children":[
                 {"name":"sdb1","type":"part","fstype":"exfat","label":"Stick","size":67108864000}]}]}"#;
-        assert_eq!(parse_lsblk(sample), vec![BlockDevice { device: "/dev/sdb1".into(), label: "Stick".into(), removable: true }]);
+        assert_eq!(
+            parse_lsblk(sample),
+            vec![BlockDevice {
+                device: "/dev/sdb1".into(),
+                label: "Stick".into(),
+                removable: true
+            }]
+        );
         assert!(is_boot_mount("/boot"));
         assert!(is_boot_mount("/boot/efi"));
         assert!(is_boot_mount("/boot/grub2"));
@@ -1109,7 +1425,11 @@ garbage line with no separator
         let mut calls = Vec::new();
         let outcome = eject_device_in(&root, "", "/dev/sdb1", false, |action, device| {
             calls.push(format!("{action} {device}"));
-            if action == "unmount" { Err("Error unmounting /dev/sdb1: Not mounted".into()) } else { Ok(String::new()) }
+            if action == "unmount" {
+                Err("Error unmounting /dev/sdb1: Not mounted".into())
+            } else {
+                Ok(String::new())
+            }
         });
         assert!(outcome.is_ok());
         assert_eq!(calls, ["unmount /dev/sdb1", "eject /dev/sdb"]);
@@ -1124,7 +1444,10 @@ garbage line with no separator
             calls.push(format!("{action} {device}"));
             Err("Error unmounting /dev/sdb1: Device or resource busy".into())
         });
-        assert_eq!(outcome.unwrap_err(), "the device is busy: close files or programs using it, then try again");
+        assert_eq!(
+            outcome.unwrap_err(),
+            "the device is busy: close files or programs using it, then try again"
+        );
         assert_eq!(calls, ["unmount /dev/sdb1"]);
         let _ = fs::remove_dir_all(&root);
     }
@@ -1141,7 +1464,10 @@ garbage line with no separator
         let message = outcome.unwrap_err();
         assert!(message.contains("/dev/sdb2"), "{message}");
         assert!(message.contains("/run/media/u/Other"), "{message}");
-        assert!(calls.is_empty(), "nothing must be unmounted or powered off: {calls:?}");
+        assert!(
+            calls.is_empty(),
+            "nothing must be unmounted or powered off: {calls:?}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1169,7 +1495,13 @@ garbage line with no separator
     fn eject_refuses_device_mapper_volumes_and_bogus_paths() {
         let root = fake_sysblock("mapper", "1");
         let mut calls = 0;
-        for device in ["/dev/dm-0", "/dev/md0", "/dev/mapper/vg-root", "/dev/../etc/passwd", "sdb1"] {
+        for device in [
+            "/dev/dm-0",
+            "/dev/md0",
+            "/dev/mapper/vg-root",
+            "/dev/../etc/passwd",
+            "sdb1",
+        ] {
             let outcome = eject_device_in(&root, "", device, true, |_, _| {
                 calls += 1;
                 Ok(String::new())
