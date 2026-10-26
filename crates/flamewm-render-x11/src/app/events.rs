@@ -316,6 +316,18 @@ where
     result
 }
 
+/// Logs a dropped foreign event: the first ones, then every power of two, so a storm stays
+/// visible without flooding the log.
+fn note_foreign_event_dropped(event: &XEvent) {
+    static DROPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = DROPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if count <= 4 || count.is_power_of_two() {
+        // SAFETY: type_ and xany are the common prefix of every XEvent.
+        let (kind, window) = unsafe { (event.type_, event.xany.window) };
+        eprintln!("FLAMEWM_EVENT_FOREIGN_DROPPED type={kind} window={window:#x} count={count}");
+    }
+}
+
 impl X11App {
     pub(crate) unsafe fn event_loop_once<F>(
         &mut self,
@@ -390,8 +402,10 @@ impl X11App {
             }
             // SAFETY: xany is the common XEvent prefix and is valid for every event type.
             if self.single_event && unsafe { event.xany.window } != self.window {
-                // SAFETY: The event was returned by XNextEvent and remains initialized.
-                unsafe { XPutBackEvent(self.display, &event as *const XEvent as *mut XEvent) };
+                // Nothing else reads this display, so an event for another window is dropped.
+                // Putting it back would hand the same event to the next pass forever: the loop
+                // spins at full CPU and never reads input, paints or resizes again.
+                note_foreign_event_dropped(&event);
                 return Ok(());
             }
             // SAFETY: type_ is the common discriminator at the start of every XEvent variant.
