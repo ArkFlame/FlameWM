@@ -480,9 +480,6 @@ impl<C: Connection> Wm<'_, C> {
         restore_to_root: bool,
     ) -> Result<(), ReplyError> {
         self.snap_preview.hide(self.conn);
-        if let Some(frame) = self.clients.get(&window).map(|state| state.frame) {
-            crate::frame::titlebar_backdrop::forget(u64::from(frame));
-        }
         // The client is leaving: drop its flight and overlay without applying an end state. A
         // running close keeps its afterimage, which finishes on its own timeline.
         if !animation::survives_unmanage(self.animator.running(window)) {

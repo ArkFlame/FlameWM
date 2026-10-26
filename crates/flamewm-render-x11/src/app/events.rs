@@ -393,21 +393,9 @@ impl X11App {
                     // document change (a shrink), so the last Expose of a run relayouts
                     // and repaints. Coalesce counts.
                     if unsafe { event.xexpose.count } == 0 {
-                        // A window moving above a covered surface exposes it: what covers it changed.
-                        self.note_window_covered_change();
                         // SAFETY: The caller owns a live X11 display and app resources.
                         unsafe { self.repaint_full(document)? };
                     }
-                }
-                crate::xlib_ext::VISIBILITY_NOTIFY => {
-                    // SAFETY: the discriminator identifies XVisibilityEvent, which shares the
-                    // XEvent prefix; the union is at least as large as the event.
-                    let visibility = unsafe {
-                        *(std::ptr::addr_of!(event).cast::<crate::xlib_ext::XVisibilityEvent>())
-                    };
-                    self.note_window_visibility(
-                        visibility.state == crate::xlib_ext::VISIBILITY_UNOBSCURED,
-                    );
                 }
                 MAP_NOTIFY => {
                     // Native presenter: MapNotify advances Painted -> Mapped.
@@ -972,24 +960,11 @@ impl X11App {
             unsafe { self.sync_raw_press_observer(press_watch) };
             // XNextEvent can leave already-read events in Xlib's queue after
             // single_event returns. Avoid blocking on the fd reactor in that case.
-            let mut timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
+            let timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
                 .then_some(std::time::Duration::ZERO);
-            // A frozen window snapshot wakes at the end of its quiet period, even when nothing else arrives.
-            if let Some(deadline) = self.backdrop_deadline {
-                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                timeout = Some(timeout.map_or(remaining, |t| t.min(remaining)));
-            }
             reactor
                 .dispatch(timeout)
                 .map_err(|error| error.to_string())?;
-            if self
-                .backdrop_deadline
-                .is_some_and(|d| std::time::Instant::now() >= d)
-            {
-                // Quiet period over: the stale snapshot is recaptured by the paint below.
-                self.backdrop_deadline = None;
-                self.mark_full();
-            }
             on_reactor(document)?;
             // Pending geometry request (if any) is applied before the damage
             // gate so the resized window repaints in this same wake.

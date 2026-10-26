@@ -236,8 +236,6 @@ pub(crate) struct X11App {
     pub(crate) window_backdrop: Option<window_backdrop::WindowBackdropState>,
     /// Latest client size from ConfigureNotify, reported once the X queue drains.
     pub(crate) pending_window_resize: Option<(u32, u32)>,
-    /// Trailing wake ending the quiet period of a frozen window snapshot (`window_backdrop`).
-    pub(crate) backdrop_deadline: Option<std::time::Instant>,
     /// Window backdrop generation the backbuffer was last painted over (`window_backdrop`).
     pub(crate) window_backdrop_painted: Option<u64>,
     pub(crate) node_backdrops: surface_backdrop::NodeBackdropCache,
@@ -378,8 +376,7 @@ impl X11App {
             | BUTTON_PRESS_MASK
             | BUTTON_RELEASE_MASK
             | KEY_PRESS_MASK
-            | KEY_RELEASE_MASK
-            | crate::xlib_ext::VISIBILITY_CHANGE_MASK;
+            | KEY_RELEASE_MASK;
         unsafe {
             XSelectInput(display, window, event_mask);
         }
@@ -634,7 +631,6 @@ impl X11App {
             surface_backdrop: None,
             window_backdrop_pixmap: None,
             pending_window_resize: None,
-            backdrop_deadline: None,
             window_backdrop_painted: None,
             window_backdrop: config
                 .backdrop

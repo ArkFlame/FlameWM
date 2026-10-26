@@ -368,9 +368,7 @@ fn translucent_text_fixture() -> RuntimeDocument {
     doc
 }
 
-/// Opacity-80 steps: text edits and a caret move must take Region over the unchanged backdrop;
-/// a root stack change with an edit must bump the backdrop generation and take Full, then the
-/// next edits return to Region over the refreshed backdrop.
+/// Opacity-80 steps: text edits and a caret move must take Region over the unchanged backdrop.
 fn backdrop_script() -> Vec<(&'static str, Step, bool)> {
     vec![
         ("initial paint over window backdrop", |_| Ok(()), false),
@@ -384,52 +382,17 @@ fn backdrop_script() -> Vec<(&'static str, Step, bool)> {
             |d| d.set_position_px("caret", 68.0, 10.0),
             true,
         ),
-        (
-            "root/desktop change with a one-character edit",
-            |d| d.set_text("label", "a long line of text that runs past the clip edge"),
-            false,
-        ),
-        (
-            "one-character edit after root change",
-            |d| d.set_text("label", "a lang line of text that runs past the clip edge"),
-            true,
-        ),
-        (
-            "caret moved back after root change",
-            |d| d.set_position_px("caret", 60.0, 10.0),
-            true,
-        ),
     ]
 }
 
-/// Before a step labelled as a root change: stack a new top-level window on the root and wait out
-/// the root stack probe interval, so the step's redraw sees the changed root.
-fn root_change_before(label: &str, display: *mut Display) {
-    if !label.starts_with("root/desktop change") {
-        return;
-    }
-    // SAFETY: the display is open for the whole comparison.
-    unsafe {
-        let root = XRootWindow(display, XDefaultScreen(display));
-        XCreateSimpleWindow(display, root, 0, 0, 8, 8, 0, 0, 0);
-        XFlush(display);
-    }
-    std::thread::sleep(
-        super::window_backdrop::SCENE_PROBE_INTERVAL + std::time::Duration::from_millis(100),
-    );
-}
-
-fn no_hook(_: &str, _: *mut Display) {}
-
 /// Runs `script` on a Full app and a Region-enabled app over `make`, asserting the planner's
-/// path and 0 differing backbuffer pixels after every step. `before` runs ahead of each step on
-/// the display. Closes `display`; returns the Region step count.
+/// path and 0 differing backbuffer pixels after every step. Closes `display`; returns the Region
+/// step count.
 unsafe fn compare_region_and_full(
     display: *mut Display,
     make: fn() -> RuntimeDocument,
     script: Vec<(&'static str, Step, bool)>,
     backdrop: Option<crate::backdrop::WindowBackdrop>,
-    before: fn(&str, *mut Display),
 ) -> usize {
     // SAFETY: the caller keeps `display` open for the whole call.
     unsafe {
@@ -450,7 +413,6 @@ unsafe fn compare_region_and_full(
         let mut region_steps = 0usize;
         let mut previous = readback(display, &full);
         for (label, step, expect_region) in script {
-            before(label, display);
             step(&mut doc_full).expect("full mutation");
             step(&mut doc_region).expect("region mutation");
             let before = region.render_counters.clip_area_px;
@@ -524,8 +486,7 @@ fn with_test_display(body: impl FnOnce(*mut Display)) -> bool {
 fn region_paint_matches_full_for_every_scripted_event() {
     with_test_display(|display| {
         // SAFETY: the display is open for the body's duration.
-        let region_steps =
-            unsafe { compare_region_and_full(display, fixture, script(), None, no_hook) };
+        let region_steps = unsafe { compare_region_and_full(display, fixture, script(), None) };
         assert!(
             region_steps >= 5,
             "Region path must be exercised by the scripted events"
@@ -538,7 +499,7 @@ fn region_paint_matches_full_for_text_scenarios() {
     with_test_display(|display| {
         // SAFETY: the display is open for the body's duration.
         let region_steps =
-            unsafe { compare_region_and_full(display, text_fixture, text_script(), None, no_hook) };
+            unsafe { compare_region_and_full(display, text_fixture, text_script(), None) };
         assert!(
             region_steps >= 3,
             "text edit, caret and row translation must take Region"
@@ -556,11 +517,10 @@ fn region_paint_matches_full_over_window_backdrop_at_opacity_80() {
                 translucent_text_fixture,
                 backdrop_script(),
                 Some(opacity_80_backdrop()),
-                root_change_before,
             )
         };
         assert!(
-            region_steps >= 4,
+            region_steps >= 2,
             "edits and caret over an unchanged backdrop must take Region"
         );
     });
@@ -1086,7 +1046,6 @@ fn region_paint_matches_full_for_images_shadows_and_overlay() {
                 image_fixture,
                 image_script(),
                 Some(opacity_80_backdrop()),
-                no_hook,
             )
         };
         assert!(
