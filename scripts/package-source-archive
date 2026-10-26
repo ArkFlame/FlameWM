@@ -16,6 +16,7 @@ EXCLUDED_NAMES = {"id_rsa", "id_ed25519", "credentials", "credentials.json", "se
 def members(root: Path, manifest: Path) -> list[tuple[Path, str]]:
     found: dict[str, Path] = {}
     executables: set[str] = set()
+    absent_trees: list[PurePosixPath] = []
     for raw in manifest.read_text(encoding="utf-8").splitlines():
         entry = raw.strip()
         if not entry or entry.startswith("#"):
@@ -34,6 +35,8 @@ def members(root: Path, manifest: Path) -> list[tuple[Path, str]]:
             raise ValueError(f"unsafe manifest path: {entry}")
         source = root.joinpath(*path.parts)
         if not source.exists() and not source.is_symlink():
+            if tree:
+                absent_trees.append(path)
             continue
         candidates = source.rglob("*") if tree and source.is_dir() else [source]
         for candidate in candidates:
@@ -48,7 +51,8 @@ def members(root: Path, manifest: Path) -> list[tuple[Path, str]]:
                 if PurePosixPath(target).is_absolute() or not (candidate.parent / target).resolve(strict=False).is_relative_to(root):
                     raise ValueError(f"unsafe symlink: {relative} -> {target}")
             found[relative] = candidate
-    absent = executables - found.keys()
+    absent = {name for name in executables - found.keys()
+              if not any(PurePosixPath(name).is_relative_to(tree) for tree in absent_trees)}
     if absent:
         raise ValueError(f"registered executable missing from source manifest: {', '.join(sorted(absent))}")
     for relative, source in found.items():
