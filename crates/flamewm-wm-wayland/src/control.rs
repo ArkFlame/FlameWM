@@ -37,7 +37,9 @@ use flamewm_api::{
 use flamewm_control_dbus::{ControlServer, ControlSignal};
 use flamewm_control_wire::SwitcherEntry;
 use flamewm_platform::host::PlatformHost;
+use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::{Interest, Mode, PostAction};
 use smithay::wayland::compositor;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
@@ -755,16 +757,27 @@ impl Service {
     }
 }
 
-/// Bus turn timer: polls every `BUS_TURN_MIN_MS` while busy and backs off to `BUS_TURN_MAX_MS` while
-/// idle, so an idle compositor does not wake 100 times a second. Every loop dispatch also runs a
-/// turn, so an idle compositor still answers within the back-off bound.
+/// Fallback bus turn timer: the bus fd wakes a turn as soon as a message arrives, so the timer only
+/// covers a send libdbus could not flush at once. It runs every `BUS_TURN_MIN_MS` while busy and
+/// backs off to `BUS_TURN_MAX_MS` while idle, so an idle compositor wakes once a second at most.
 const BUS_TURN_MIN_MS: u64 = 10;
-const BUS_TURN_MAX_MS: u64 = 100;
+const BUS_TURN_MAX_MS: u64 = 1000;
 
-/// Installs the service: connects, schedules the bus turns and stores the service on `State`.
+/// Installs the service: connects, turns it on every bus fd wake plus the fallback timer, and
+/// stores the service on `State`.
 pub fn install(state: &mut State) -> Result<(), Box<dyn Error>> {
     let service = Rc::new(Service::connect(state)?);
+    let bus = flamewm_reactor::BorrowedRawFd(service.server.watch().fd);
     state.control = Some(service);
+    state.loop_handle.insert_source(
+        Generic::new(bus, Interest::READ, Mode::Level),
+        |_, _, state| {
+            if let Some(service) = state.control.clone() {
+                service.turn(state);
+            }
+            Ok(PostAction::Continue)
+        },
+    )?;
     let mut interval = BUS_TURN_MIN_MS;
     state.loop_handle.insert_source(
         Timer::from_duration(Duration::from_millis(interval)),
