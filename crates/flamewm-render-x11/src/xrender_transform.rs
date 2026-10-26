@@ -75,7 +75,7 @@ struct XTransform {
 
 // Xrender.h PictStandard* enum: ARGB32 = 0, RGB24 = 1, A8 = 2. RGB24 = 2 selected A8 (alpha only).
 pub(crate) const PICT_STANDARD_RGB_24: c_int = 1;
-const PICT_STANDARD_ARGB_32: c_int = 0;
+pub(crate) const PICT_STANDARD_ARGB_32: c_int = 0;
 const PICT_OP_SRC: c_int = 1;
 const PICT_OP_OVER: c_int = 3;
 
@@ -275,6 +275,40 @@ impl XRenderTransformApi {
     ) {
         // SAFETY: forwarded contract; no mask.
         unsafe { self.composite_op(display, PICT_OP_SRC, src, 0, dst, rect) };
+    }
+
+    /// Source-replace copy of `src` into `dst` over `rect`, reading `src` from `src_origin`.
+    ///
+    /// # Safety
+    ///
+    /// `display`, `src` and `dst` must be live on the same display.
+    pub(crate) unsafe fn composite_src_from(
+        &self,
+        display: *mut Display,
+        src: Picture,
+        dst: Picture,
+        rect: (i32, i32, u32, u32),
+        src_origin: (i32, i32),
+    ) {
+        let (x, y, width, height) = rect;
+        // SAFETY: caller contract on `display`/`src`/`dst`; no mask.
+        unsafe {
+            (self.base.composite)(
+                display,
+                PICT_OP_SRC,
+                src,
+                0,
+                dst,
+                src_origin.0,
+                src_origin.1,
+                0,
+                0,
+                x,
+                y,
+                width,
+                height,
+            )
+        };
     }
 
     /// Source-replace copy of `src` (through its transform) into `dst` over `rect`. The server

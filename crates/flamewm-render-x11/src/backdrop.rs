@@ -562,6 +562,77 @@ pub fn desktop_canvas(
 /// that a read racing that repaint must be redone. Deleted when the desktop surface goes away.
 pub const DESKTOP_FRAME_PROPERTY: &str = "_FLAMEWM_DESKTOP_FRAME";
 
+/// A desktop frame read back from [`DESKTOP_FRAME_PROPERTY`]: the pixmap and its window's root
+/// origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DesktopFrame {
+    pub(crate) pixmap: Pixmap,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+}
+
+/// Parses the [`DESKTOP_FRAME_PROPERTY`] words; `None` when malformed.
+fn desktop_frame_from_words(words: &[u32]) -> Option<DesktopFrame> {
+    let [pixmap, x, y, width, height, _serial] = *words else {
+        return None;
+    };
+    (pixmap != 0 && width > 0 && height > 0).then_some(DesktopFrame {
+        pixmap: Pixmap::from(pixmap),
+        x: x as i32,
+        y: y as i32,
+    })
+}
+
+/// The desktop frame currently published on the root of `display`; `None` without a desktop.
+///
+/// # Safety
+///
+/// `display` must be live.
+pub(crate) unsafe fn published_desktop_frame(display: *mut Display) -> Option<DesktopFrame> {
+    let name = std::ffi::CString::new(DESKTOP_FRAME_PROPERTY).ok()?;
+    // SAFETY: live display per the contract; `only_if_exists` keeps the lookup from creating it.
+    let atom = unsafe { XInternAtom(display, name.as_ptr(), 1) };
+    if atom == 0 {
+        return None;
+    }
+    let root = unsafe { XRootWindow(display, XDefaultScreen(display)) };
+    let (mut actual_type, mut actual_format, mut items, mut after) = (0, 0, 0, 0);
+    let mut data: *mut u8 = std::ptr::null_mut();
+    // SAFETY: all out-pointers reference live locals; Xlib allocates `data`, freed below.
+    let status = unsafe {
+        crate::xlib_ext::XGetWindowProperty(
+            display,
+            root,
+            atom,
+            0,
+            6,
+            0,
+            XA_CARDINAL,
+            &mut actual_type,
+            &mut actual_format,
+            &mut items,
+            &mut after,
+            &mut data,
+        )
+    };
+    if status != 0 || data.is_null() {
+        return None;
+    }
+    let words: Vec<u32> = if actual_format == 32 {
+        // SAFETY: format-32 properties come back as `items` C longs at `data`.
+        unsafe {
+            std::slice::from_raw_parts(data.cast::<std::os::raw::c_long>(), items as usize)
+                .iter()
+                .map(|&word| word as u32)
+                .collect()
+        }
+    } else {
+        Vec::new()
+    };
+    unsafe { XFree(data.cast()) };
+    desktop_frame_from_words(&words)
+}
+
 /// What the desktop layer is made of, as the desktop draws it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesktopSource {
@@ -821,6 +892,20 @@ pub fn recapture_due(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_frame_words_parse_and_reject_malformed() {
+        assert_eq!(
+            desktop_frame_from_words(&[7, 0, (-3i32) as u32, 1280, 800, 9]),
+            Some(DesktopFrame {
+                pixmap: 7,
+                x: 0,
+                y: -3,
+            })
+        );
+        assert_eq!(desktop_frame_from_words(&[0, 0, 0, 1280, 800, 9]), None);
+        assert_eq!(desktop_frame_from_words(&[7, 0, 0, 1280, 800]), None);
+    }
 
     #[test]
     fn full_opacity_and_zero_blur_never_blur() {
