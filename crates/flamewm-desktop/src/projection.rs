@@ -10,13 +10,13 @@ use flamewm_ui_core::context_menu::{menu_surface, surface_fill};
 use flamewm_ui_core::style::UiLayer;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
-pub use crate::icon_names::{file_icon_name, icon_purpose, launcher_icon_name};
-use crate::icon_names::icon_semantic;
+pub use crate::entry::icon_names::{file_icon_name, icon_purpose, launcher_icon_name};
+use crate::entry::icon_names::icon_semantic;
 #[cfg(test)]
-use crate::icon_names::icon_name;
-use crate::icon_raster::{ICON_TILE_PX, fade_ghost_pixels, flame_fallback_raster, runtime_image};
-use crate::wallpaper_loader::{WallpaperPresentation, WallpaperRaster};
-use crate::wallpaper_stamp::{WALLPAPER_STAMP, WallpaperStamp, wallpaper_matches, wallpaper_stamp};
+use crate::entry::icon_names::icon_name;
+use crate::entry::icon_raster::{ICON_TILE_PX, fade_ghost_pixels, flame_fallback_raster, runtime_image};
+use crate::entry::wallpaper_loader::{WallpaperPresentation, WallpaperRaster};
+use crate::entry::wallpaper_stamp::{WALLPAPER_STAMP, WallpaperStamp, wallpaper_matches, wallpaper_stamp};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

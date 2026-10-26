@@ -4485,3 +4485,11 @@ mod accent_node_tests {
         );
     }
 }
+
+extern crate self as flamewm_settings;
+
+/// The application entry point, compiled into this library so the multi-call `flamewm-apps`
+/// executable can run it; `src/main.rs` is a one-line wrapper around it.
+#[doc(hidden)]
+#[path = "main.rs"]
+pub mod entry;

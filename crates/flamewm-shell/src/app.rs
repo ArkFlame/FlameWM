@@ -19,7 +19,7 @@ use flamewm_shell_core::popup::PopupRefusal;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
 use flamewm_ui_x11::{SurfaceRuntime, UiBackendError};
 
-use crate::event_router::quick_popup_group;
+use crate::entry::event_router::quick_popup_group;
 
 mod helpers;
 mod launcher_session;
@@ -60,7 +60,7 @@ pub(crate) struct ShellLoop {
     pub(crate) launcher: flamewm_shell::launcher::LauncherState,
     pub(crate) task_drag: Option<flamewm_shell::taskbar::tasks::drag::TaskDrag>,
     pub(crate) task_press_target: Option<(usize, flamewm_shell::runtime::TaskSlotTarget)>,
-    pub(crate) start_drag: Option<crate::event_router::StartAppDrag>,
+    pub(crate) start_drag: Option<crate::entry::event_router::StartAppDrag>,
     pub(crate) start_open: bool,
     /// Start error line for a failed launch; cleared on success or reopen.
     pub(crate) start_error: Option<String>,
@@ -93,7 +93,7 @@ pub(crate) struct ShellLoop {
     /// Kind of the quick-control popup currently open, if any.
     pub(crate) quick_kind_open: Option<flamewm_shell::quick_controls::QuickControlKind>,
     /// Group closed by the latest outside-press dismissal; consumes its opener.
-    pub(crate) dismiss_latch: Option<crate::event_router::DismissLatch>,
+    pub(crate) dismiss_latch: Option<crate::entry::event_router::DismissLatch>,
     /// One-shot: task-slot icons re-requested once the loader exists.
     pub(crate) task_icon_prime_armed: bool,
     /// Last `_NET_WM_ICON_GEOMETRY` written per task client window. Per shell
@@ -269,7 +269,7 @@ impl ShellLoop {
                 &snapshot,
             ));
         self.weather_feed_pending = true;
-        let theme = crate::settings_projection::icon_theme_name(Some(&snapshot));
+        let theme = crate::entry::settings_projection::icon_theme_name(Some(&snapshot));
         if let Some(loader) = self.icon_loader.as_mut() {
             if loader.set_theme(&theme) {
                 // Re-prime task slots so they re-request under the new theme.
@@ -284,7 +284,7 @@ impl ShellLoop {
             self.audio_settings.raise_maximum = *raise;
         }
         // A hidden taskbar item closes its open quick-control popup.
-        let items = crate::settings_projection::taskbar_items(Some(&snapshot));
+        let items = crate::entry::settings_projection::taskbar_items(Some(&snapshot));
         if self
             .quick_kind_open
             .is_some_and(|kind| !quick_kind_shown(kind, items))
@@ -728,7 +728,7 @@ impl ShellLoop {
                     }
                     // The popup's final root-space rect is known inside open_context_menu. Compose
                     // only that wallpaper region before its first show.
-                    let backdrop = crate::settings_projection::start_backdrop_percents(&settings);
+                    let backdrop = crate::entry::settings_projection::start_backdrop_percents(&settings);
                     self.context_menu = Some(state.clone());
                     let _measure = shell_stage!("shell.context.open.measure");
                     let _place = shell_stage!("shell.context.open.place");
@@ -1196,7 +1196,7 @@ impl ShellLoop {
 
     pub(crate) fn ensure_loader(&mut self) {
         if self.icon_loader.is_none() {
-            let theme = crate::settings_projection::icon_theme_name(self.settings_cache.as_ref());
+            let theme = crate::entry::settings_projection::icon_theme_name(self.settings_cache.as_ref());
             self.icon_loader = Some(IconLoader::spawn(self.loader_root.clone(), theme));
         }
     }
@@ -1602,7 +1602,7 @@ impl ShellLoop {
     ) -> bool {
         let loader = &mut self.icon_loader;
         let icon_cache = &mut self.task_icon_cache;
-        let items = crate::settings_projection::taskbar_items(self.settings_cache.as_ref());
+        let items = crate::entry::settings_projection::taskbar_items(self.settings_cache.as_ref());
         let panel_outputs = self.surfaces.panel_outputs();
         let projected = projection::for_each_panel_record(
             snapshot,
@@ -1858,7 +1858,7 @@ impl ShellLoop {
                     windows: true,
                     ..Default::default()
                 };
-                let items = crate::settings_projection::taskbar_items(self.settings_cache.as_ref());
+                let items = crate::entry::settings_projection::taskbar_items(self.settings_cache.as_ref());
                 let panel_outputs = self.surfaces.panel_outputs();
                 let mut projection_ok = true;
                 for (handle, _) in panel_outputs {
@@ -1924,7 +1924,7 @@ impl ShellLoop {
             let clock = self
                 .settings_cache
                 .as_ref()
-                .map(crate::settings_projection::clock_display)
+                .map(crate::entry::settings_projection::clock_display)
                 .unwrap_or_default();
             for (handle, _) in self.surfaces.panel_outputs() {
                 runtime.with_document(handle, |document| {
@@ -2044,7 +2044,7 @@ impl ShellLoop {
                 )
             });
         let slide = self.settings_cache.as_ref().and_then(|snapshot| {
-            crate::settings_projection::start_slide(
+            crate::entry::settings_projection::start_slide(
                 snapshot,
                 self.surfaces.panel_edge(),
                 start_button,
@@ -2058,7 +2058,7 @@ impl ShellLoop {
         // Same Start preference and speed for task menu, media, and status popups. Magic Lamp
         // has no popup target, so the popup slide never takes the start_button path.
         let popup_slide = self.settings_cache.as_ref().and_then(|snapshot| {
-            crate::settings_projection::start_slide(snapshot, self.surfaces.panel_edge(), None)
+            crate::entry::settings_projection::start_slide(snapshot, self.surfaces.panel_edge(), None)
         });
         self.surfaces.set_popup_slide(popup_slide);
     }
@@ -2068,11 +2068,11 @@ impl ShellLoop {
         let Some(settings) = self.settings_cache.as_ref() else {
             return;
         };
-        let (opacity, blur) = crate::settings_projection::taskbar_backdrop_percents(settings);
+        let (opacity, blur) = crate::entry::settings_projection::taskbar_backdrop_percents(settings);
         let wallpaper_path = text_setting(settings, "wallpaper");
         let fit_name = text_setting(settings, "wallpaperFit");
         let root = flamewm_ui_x11::backdrop::root_geometry().ok();
-        let packaged_root = crate::packaged_root();
+        let packaged_root = crate::entry::packaged_root();
         let wallpaper = |rect| {
             let (width, height) = root?;
             flamewm_shell::surface_backdrop::wallpaper_source(
@@ -2106,7 +2106,7 @@ impl ShellLoop {
             flamewm_image_core::wallpaper::parse(&text("wallpaperFit")),
             (width, height),
             rect,
-            &crate::packaged_root(),
+            &crate::entry::packaged_root(),
         );
         let Some(region) = region else {
             flamewm_shell::surface_backdrop::backdrop_trace(format_args!(
@@ -2122,7 +2122,7 @@ impl ShellLoop {
         let Some(settings) = self.settings_cache.as_ref() else {
             return;
         };
-        let percents = crate::settings_projection::start_backdrop_percents(settings);
+        let percents = crate::entry::settings_projection::start_backdrop_percents(settings);
         if let Err(error) = runtime.set_popup_backdrop(self.surfaces.start, Some(percents)) {
             eprintln!("flamewm-shell: start backdrop failed (nonfatal): {error:?}");
         }
@@ -2151,7 +2151,7 @@ impl ShellLoop {
         }
         let feed = self.weather.feed();
         let units = feed.settings.units;
-        let shown = crate::settings_projection::taskbar_items(self.settings_cache.as_ref()).weather;
+        let shown = crate::entry::settings_projection::taskbar_items(self.settings_cache.as_ref()).weather;
         // All native monitor panels own independent retained documents. A weather
         // tick must update every panel, not just the primary surface (a stale
         // second monitor otherwise keeps the previous condition/temperature).
@@ -2200,33 +2200,33 @@ impl ShellLoop {
         // surfaceOpacity/surfaceColor settings into all of them.
         for panel in self.surfaces.panel_handles() {
             runtime.with_document(panel, |document| {
-                crate::settings_projection::project(
+                crate::entry::settings_projection::project(
                     document,
                     &snapshot,
-                    crate::settings_projection::SurfaceKind::Panel,
+                    crate::entry::settings_projection::SurfaceKind::Panel,
                 )
             })?;
         }
         for (surface, kind) in [
             (
                 self.surfaces.launcher,
-                crate::settings_projection::SurfaceKind::Launcher,
+                crate::entry::settings_projection::SurfaceKind::Launcher,
             ),
             (
                 self.surfaces.start,
-                crate::settings_projection::SurfaceKind::Start,
+                crate::entry::settings_projection::SurfaceKind::Start,
             ),
             (
                 self.surfaces.task_menu,
-                crate::settings_projection::SurfaceKind::TaskMenu,
+                crate::entry::settings_projection::SurfaceKind::TaskMenu,
             ),
             (
                 self.surfaces.media,
-                crate::settings_projection::SurfaceKind::Media,
+                crate::entry::settings_projection::SurfaceKind::Media,
             ),
         ] {
             runtime.with_document(surface, |document| {
-                crate::settings_projection::project(document, &snapshot, kind)
+                crate::entry::settings_projection::project(document, &snapshot, kind)
             })?;
         }
         // The focused task underline takes its colour from the settings accent; re-project the task slots
@@ -2240,7 +2240,7 @@ impl ShellLoop {
             ..Default::default()
         };
         let loader = &mut self.icon_loader;
-        let items = crate::settings_projection::taskbar_items(self.settings_cache.as_ref());
+        let items = crate::entry::settings_projection::taskbar_items(self.settings_cache.as_ref());
         let icon_cache = &mut self.task_icon_cache;
         let _ = projection::for_each_panel_record(
             &shell_snapshot,

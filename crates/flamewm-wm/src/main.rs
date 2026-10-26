@@ -19,7 +19,7 @@ use flamewm_xsettings::{
     X11XSettingsManager, XSettingsInput, claim_x11_manager, published_settings,
 };
 
-fn main() {
+pub fn main() {
     let inherited: BTreeMap<String, String> = env::vars().collect();
     // Resolved once: the XSETTINGS claim, the session environment, and the owned
     // appearance files must all agree on the same mode from the first publish.

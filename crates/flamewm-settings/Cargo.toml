@@ -1,5 +1,6 @@
 [package]
 name = "flamewm-settings"
+autobins = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -28,4 +29,4 @@ workspace = true
 
 [[bin]]
 name = "flamewm-settings"
-path = "src/main.rs"
+path = "src/bin/flamewm-settings.rs"

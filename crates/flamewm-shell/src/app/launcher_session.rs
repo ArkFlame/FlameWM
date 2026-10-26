@@ -179,7 +179,7 @@ impl ShellLoop {
         let Some(settings) = self.settings_cache.as_ref() else {
             return;
         };
-        let percents = crate::settings_projection::start_backdrop_percents(settings);
+        let percents = crate::entry::settings_projection::start_backdrop_percents(settings);
         if let Err(error) = runtime.set_popup_backdrop(self.surfaces.launcher, Some(percents)) {
             eprintln!("flamewm-shell: launcher backdrop failed (nonfatal): {error:?}");
         }

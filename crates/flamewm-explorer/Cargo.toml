@@ -1,5 +1,6 @@
 [package]
 name = "flamewm-explorer"
+autobins = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -34,4 +35,4 @@ workspace = true
 
 [[bin]]
 name = "flamewm-explorer"
-path = "src/main.rs"
+path = "src/bin/flamewm-explorer.rs"

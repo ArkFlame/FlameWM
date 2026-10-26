@@ -5,7 +5,7 @@ use flamewm_ui_x11::{
     ActionPhase, PointerButton, SurfaceEvent, SurfaceRuntime, UiBackendError, UiDocumentAccess,
 };
 
-use crate::app::{is_popup_refusal, shell_slow_note, ShellLoop};
+use crate::entry::app::{is_popup_refusal, shell_slow_note, ShellLoop};
 use flamewm_shell::quick_controls::host::is_quick_popup_title;
 use flamewm_shell::quick_controls::QuickControlKind;
 use flamewm_shell::runtime::InteractionContext;
@@ -725,7 +725,7 @@ impl ShellLoop {
                 self.start_drag = slot_of(action, "start.app.")
                     .filter(|_| primary && self.start_open)
                     .and_then(|slot| {
-                        crate::projection::start_application_for_slot(
+                        crate::entry::projection::start_application_for_slot(
                             &self.start_model,
                             self.start_category,
                             &self.start_query,

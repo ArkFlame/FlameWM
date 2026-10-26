@@ -25,7 +25,7 @@ use flamewm_terminal::wake::{self, ALL_TABS_CLOSED};
 const UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-terminal.rwr"));
 const DEFAULT_WINDOW: (u32, u32) = (880, 540);
 
-fn main() {
+pub fn main() {
     if let Err(error) = run() {
         if error != ALL_TABS_CLOSED {
             eprintln!("flamewm-terminal: {error}");

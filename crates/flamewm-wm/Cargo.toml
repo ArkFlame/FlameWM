@@ -28,7 +28,7 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "flamewm"
-path = "src/main.rs"
+path = "src/bin/flamewm.rs"
 
 [[bin]]
 name = "flamewm-session"

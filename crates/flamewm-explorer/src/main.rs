@@ -2404,7 +2404,7 @@ fn packaged_root()->PathBuf {
     });
     installed.filter(|root|root.join("assets").is_dir()).unwrap_or(source)
 }
-fn main(){if let Err(error)=run(){eprintln!("flamewm-explorer: {error}");std::process::exit(1);}}
+pub fn main(){if let Err(error)=run(){eprintln!("flamewm-explorer: {error}");std::process::exit(1);}}
 fn run()->Result<(),String>{
     flamewm_profiler::init_process("flamewm-explorer");
     if flamewm_profiler::enabled() {

@@ -9,7 +9,7 @@ use flamewm_api::Rect;
 use flamewm_api::background::WallpaperFit;
 use flamewm_integrations_linux::icons::{IconOrigin, Rgba8Raster};
 
-use crate::wallpaper_fit;
+use crate::entry::wallpaper_fit;
 
 use flamewm_image_core::wallpaper::DEFAULT_WALLPAPER_PATH;
 use flamewm_image_core::{RgbaImage, wallpaper::BACKGROUND};

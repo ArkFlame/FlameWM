@@ -1,5 +1,6 @@
 [package]
 name = "flamewm-terminal"
+autobins = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -30,4 +31,4 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "flamewm-terminal"
-path = "src/main.rs"
+path = "src/bin/flamewm-terminal.rs"

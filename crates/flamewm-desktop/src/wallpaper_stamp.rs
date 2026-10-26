@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use crate::wallpaper_loader::WallpaperRaster;
+use crate::entry::wallpaper_loader::WallpaperRaster;
 
 /// Identity of the wallpaper last written to the document. The pixel buffer
 /// pointer and length change whenever the loader replaces the raster, so an
