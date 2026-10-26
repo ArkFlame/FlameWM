@@ -422,6 +422,7 @@ pub const QUEUED_AFTER_READING: c_int = 1;
 pub const PROP_MODE_REPLACE: c_int = 0;
 pub const XA_ATOM: Atom = 4;
 pub const XA_CARDINAL: Atom = 6;
+pub const XA_WINDOW: Atom = 33;
 pub const CW_OVERRIDE_REDIRECT: c_ulong = 1 << 9;
 pub const GRAB_MODE_ASYNC: c_int = 1;
 pub const CURRENT_TIME: Time = 0;

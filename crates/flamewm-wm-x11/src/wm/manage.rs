@@ -284,6 +284,12 @@ impl<C: Connection> Wm<'_, C> {
                         | EventMask::SUBSTRUCTURE_REDIRECT,
                 ),
         )?;
+        if self.redirect_frames {
+            // Before the first map: the frame's off-screen contents are valid from the start.
+            use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
+            self.conn
+                .composite_redirect_window(frame, Redirect::AUTOMATIC)?;
+        }
 
         // Grab-server only for save-set/reparent/structural-configure.
         // Reparent offset + client configure from the lifecycle contract

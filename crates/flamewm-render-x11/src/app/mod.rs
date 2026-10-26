@@ -49,6 +49,7 @@ mod xdnd;
 pub(crate) use images::upload_argb32_image;
 mod input;
 mod layout_helpers;
+mod live_backdrop;
 mod primitives;
 mod raw_press;
 mod render;
@@ -242,6 +243,8 @@ pub(crate) struct X11App {
     pub(crate) window_backdrop: Option<window_backdrop::WindowBackdropState>,
     /// Latest client size from ConfigureNotify, reported once the X queue drains.
     pub(crate) pending_window_resize: Option<(u32, u32)>,
+    /// When a throttled live window backdrop refresh is due.
+    pub(crate) backdrop_deadline: Option<std::time::Instant>,
     /// Window backdrop generation the backbuffer was last painted over (`window_backdrop`).
     pub(crate) window_backdrop_painted: Option<u64>,
     pub(crate) node_backdrops: surface_backdrop::NodeBackdropCache,
@@ -641,6 +644,7 @@ impl X11App {
             surface_backdrop: None,
             window_backdrop_pixmap: None,
             pending_window_resize: None,
+            backdrop_deadline: None,
             window_backdrop_painted: None,
             window_backdrop: config
                 .backdrop

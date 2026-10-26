@@ -363,6 +363,14 @@ impl X11App {
                 }
                 continue;
             }
+            // Root stacking changes and damage on frames behind a live window backdrop carry no
+            // window of ours; handle them before the window filter, which would put them back.
+            if self.note_live_backdrop_event(&event) {
+                if self.single_event {
+                    return Ok(());
+                }
+                continue;
+            }
             // SAFETY: type_ is the common discriminator at the start of every XEvent variant.
             if unsafe { event.type_ } == MAPPING_NOTIFY {
                 // Keymap changed (layout switch, setxkbmap, xmodmap). Refresh Xlib's cache so
@@ -963,11 +971,23 @@ impl X11App {
             unsafe { self.sync_raw_press_observer(press_watch) };
             // XNextEvent can leave already-read events in Xlib's queue after
             // single_event returns. Avoid blocking on the fd reactor in that case.
-            let timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
+            let mut timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
                 .then_some(std::time::Duration::ZERO);
+            // A throttled live backdrop refresh wakes the loop when it is due.
+            if let Some(deadline) = self.backdrop_deadline {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                timeout = Some(timeout.map_or(remaining, |t| t.min(remaining)));
+            }
             reactor
                 .dispatch(timeout)
                 .map_err(|error| error.to_string())?;
+            if self
+                .backdrop_deadline
+                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            {
+                self.backdrop_deadline = None;
+                self.mark_full();
+            }
             on_reactor(document)?;
             // Pending geometry request (if any) is applied before the damage
             // gate so the resized window repaints in this same wake.

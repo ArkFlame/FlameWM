@@ -63,5 +63,49 @@ unsafe extern "C" {
         dest_y_return: *mut c_int,
         child_return: *mut Window,
     ) -> c_int;
+    pub fn XQueryTree(
+        display: *mut Display,
+        window: Window,
+        root_return: *mut Window,
+        parent_return: *mut Window,
+        children_return: *mut *mut Window,
+        nchildren_return: *mut c_uint,
+    ) -> c_int;
     pub fn free(ptr: *mut c_void);
+    pub fn XGetWindowAttributes(
+        display: *mut Display,
+        window: Window,
+        attributes: *mut XWindowAttributes,
+    ) -> c_int;
+}
+
+/// `IsViewable` map state: the window and all its ancestors are mapped.
+pub const IS_VIEWABLE: c_int = 2;
+
+/// Xlib `XWindowAttributes`.
+#[repr(C)]
+pub struct XWindowAttributes {
+    pub x: c_int,
+    pub y: c_int,
+    pub width: c_int,
+    pub height: c_int,
+    pub border_width: c_int,
+    pub depth: c_int,
+    pub visual: *mut c_void,
+    pub root: Window,
+    pub class: c_int,
+    pub bit_gravity: c_int,
+    pub win_gravity: c_int,
+    pub backing_store: c_int,
+    pub backing_planes: c_ulong,
+    pub backing_pixel: c_ulong,
+    pub save_under: Bool,
+    pub colormap: c_ulong,
+    pub map_installed: Bool,
+    pub map_state: c_int,
+    pub all_event_masks: c_long,
+    pub your_event_mask: c_long,
+    pub do_not_propagate_mask: c_long,
+    pub override_redirect: Bool,
+    pub screen: *mut c_void,
 }

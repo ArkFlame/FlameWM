@@ -1,14 +1,17 @@
-//! Window-level pseudo-transparency: the desktop layer under a whole Normal window.
+//! Window-level pseudo-transparency: what lies behind a whole Normal window.
 //!
-//! There is no compositor, so what lies under a translucent window is never read back from the
-//! root: a root read holds other windows as they were at that instant (they move, close or are
-//! still unpainted), and baking them in left permanent ghosts and black marks behind the window.
-//! Every translucent FlameWM surface instead blends over the same desktop layer, the blurred
-//! wallpaper canvas shared through `backdrop::wallpaper_canvas` (about half a megabyte at 1080p,
-//! cached on disk across processes). A move or resize only crops that canvas at the new origin:
-//! no root read, no hide, no stacking probe and no timer.
+//! There is no compositor, and the root is never read back: a root read holds other windows as
+//! they were at that instant (they move, close or are still unpainted), and baking them in left
+//! permanent ghosts and black marks behind the window.
+//!
+//! When the WM redirects its frames, the backdrop is live: the desktop and the frames stacked
+//! below this window, composed on the server from their own pixmaps (see `live_backdrop`) and
+//! refreshed when they change, at most every `LIVE_INTERVAL`. Otherwise the window blends over the
+//! desktop layer, the blurred wallpaper canvas shared through `backdrop::wallpaper_canvas` (about
+//! half a megabyte at 1080p, cached on disk across processes), and a move only crops it.
 
 use super::X11App;
+use super::live_backdrop::{LIVE_INTERVAL, LiveScene};
 use crate::backdrop::{BlurredCanvas, WindowBackdrop, recapture_due};
 use crate::xlib::*;
 use crate::xlib_ext::XTranslateCoordinates;
@@ -29,6 +32,8 @@ pub(crate) struct WindowBackdropState {
     /// Bumped exactly when the window backdrop pixels change. A backbuffer painted at generation
     /// `g` holds this backdrop only while the generation is still `g`.
     pub(crate) generation: u64,
+    /// Live backdrop of the windows behind; `None` until tried, `Some(None)` when unavailable.
+    live: Option<Option<LiveScene>>,
 }
 
 /// Cropped ARGB snapshot as uploaded, with the root position of its top-left pixel.
@@ -65,6 +70,7 @@ impl WindowBackdropState {
             captured: None,
             mirror: None,
             generation: 0,
+            live: None,
         }
     }
 }
@@ -95,6 +101,18 @@ impl X11App {
         let snapshot_size = self.window_backdrop_pixmap.map(|b| (b.width, b.height));
         let queued = unsafe { XEventsQueued(self.display, crate::xlib::QUEUED_AFTER_READING) } > 0;
         if !recapture_due(snapshot_size, (self.width, self.height), queued) {
+            return;
+        }
+        let last_live = self
+            .window_backdrop
+            .as_ref()
+            .and_then(|state| state.live.as_ref()?.as_ref()?.last_refresh);
+        if let Some(due) = last_live
+            .map(|at| at + LIVE_INTERVAL)
+            .filter(|due| *due > std::time::Instant::now())
+        {
+            // A live refresh ran moments ago: keep the current backdrop and wake when it is due.
+            self.backdrop_deadline = Some(self.backdrop_deadline.map_or(due, |at| at.min(due)));
             return;
         }
         if let Some(state) = self.window_backdrop.as_mut() {
@@ -133,36 +151,41 @@ impl X11App {
             )
         };
         let (width, height) = (self.width, self.height);
-        let state = self
-            .window_backdrop
-            .as_mut()
-            .ok_or("window backdrop: no spec")?;
-        if state
-            .canvas
-            .as_ref()
-            .is_none_or(|canvas| canvas.size() != root)
-        {
-            let _compose_span = flamewm_profiler::start("render.backdrop.compose");
-            state.canvas = Some(crate::backdrop::wallpaper_canvas(&state.spec, root)?);
-        }
-        let pixmap_fits = self
-            .window_backdrop_pixmap
-            .is_some_and(|pixmap| (pixmap.width, pixmap.height) == (width, height));
-        let state = self
-            .window_backdrop
-            .as_mut()
-            .ok_or("window backdrop: no spec")?;
-        if pixmap_fits
-            && state.captured.as_ref().is_some_and(|old| {
-                old.root == (rx, ry) && (old.width, old.height) == (width, height)
-            })
-        {
-            return Ok(());
-        }
-        let canvas = state.canvas.as_ref().ok_or("window backdrop: no canvas")?;
-        let crop_span = flamewm_profiler::start("render.backdrop.crop");
-        let words = canvas.crop((rx, ry), (width, height));
-        drop(crop_span);
+        let live = unsafe { self.compose_live_backdrop((rx, ry, width, height)) };
+        let words = match live {
+            Some(words) => words,
+            None => {
+                let state = self
+                    .window_backdrop
+                    .as_mut()
+                    .ok_or("window backdrop: no spec")?;
+                if state
+                    .canvas
+                    .as_ref()
+                    .is_none_or(|canvas| canvas.size() != root)
+                {
+                    let _compose_span = flamewm_profiler::start("render.backdrop.compose");
+                    state.canvas = Some(crate::backdrop::wallpaper_canvas(&state.spec, root)?);
+                }
+                let pixmap_fits = self
+                    .window_backdrop_pixmap
+                    .is_some_and(|pixmap| (pixmap.width, pixmap.height) == (width, height));
+                let state = self
+                    .window_backdrop
+                    .as_mut()
+                    .ok_or("window backdrop: no spec")?;
+                if pixmap_fits
+                    && state.captured.as_ref().is_some_and(|old| {
+                        old.root == (rx, ry) && (old.width, old.height) == (width, height)
+                    })
+                {
+                    return Ok(());
+                }
+                let canvas = state.canvas.as_ref().ok_or("window backdrop: no canvas")?;
+                let _crop_span = flamewm_profiler::start("render.backdrop.crop");
+                canvas.crop((rx, ry), (width, height))
+            }
+        };
         if words.len() != width as usize * height as usize {
             return Err("window backdrop: snapshot size mismatch".to_string());
         }
@@ -210,6 +233,48 @@ impl X11App {
         Ok(())
     }
 
+    /// What lies behind the window at root `rect`, composed live from the desktop and the frames
+    /// below it; `None` keeps the desktop layer (no redirected frames, or no Composite/Damage).
+    unsafe fn compose_live_backdrop(&mut self, rect: (i32, i32, u32, u32)) -> Option<Vec<u32>> {
+        let (display, screen, window) = (self.display, self.screen, self.window);
+        let state = self.window_backdrop.as_mut()?;
+        let blur_percent = state.spec.blur_percent;
+        let live = state
+            .live
+            .get_or_insert_with(|| unsafe { LiveScene::new(display, screen) })
+            .as_mut()?;
+        let _span = flamewm_profiler::start("render.backdrop.live");
+        unsafe { live.compose(display, screen, window, rect, blur_percent) }
+    }
+
+    /// Routes a live-backdrop event (root stacking or geometry, or damage on a frame behind).
+    /// Returns whether the event was consumed. A relevant change refreshes the backdrop now, or
+    /// once [`LIVE_INTERVAL`] has passed since the last refresh.
+    pub(crate) fn note_live_backdrop_event(&mut self, event: &XEvent) -> bool {
+        let Some(live) = self
+            .window_backdrop
+            .as_ref()
+            .and_then(|state| state.live.as_ref()?.as_ref())
+        else {
+            return false;
+        };
+        let (consumed, relevant) = live.classify(event);
+        if relevant {
+            let due = live
+                .last_refresh
+                .map_or_else(std::time::Instant::now, |at| at + LIVE_INTERVAL);
+            if let Some(state) = self.window_backdrop.as_mut() {
+                state.stale = true;
+            }
+            if due <= std::time::Instant::now() {
+                self.mark_full();
+            } else {
+                self.backdrop_deadline = Some(self.backdrop_deadline.map_or(due, |at| at.min(due)));
+            }
+        }
+        consumed
+    }
+
     /// Whether the window snapshot the backbuffer was last painted over is still the current one
     /// (same generation, same size). Only then may a region paint reuse the backbuffer's backdrop.
     pub(crate) fn window_backdrop_unchanged(&self) -> bool {
@@ -232,9 +297,14 @@ impl X11App {
         if let Some(old) = self.window_backdrop_pixmap.take() {
             unsafe { crate::native::xresource::free_pixmap_raw(self.display, old.pixmap) };
         }
+        let display = self.display;
         if let Some(state) = self.window_backdrop.as_mut() {
             state.captured = None;
             state.generation += 1;
+            if let Some(Some(mut live)) = state.live.take() {
+                // SAFETY: the app's display is live until after Drop releases its resources.
+                unsafe { live.release(display) };
+            }
         }
         self.drop_mirror_fill();
     }

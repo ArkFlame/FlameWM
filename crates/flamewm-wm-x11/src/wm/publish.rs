@@ -192,6 +192,20 @@ impl<C: Connection> Wm<'_, C> {
             AtomEnum::WINDOW,
             &windows,
         )?;
+        if self.redirect_frames {
+            let frames: Vec<Window> = tree
+                .children
+                .iter()
+                .copied()
+                .filter(|frame| self.frame_to_client.contains_key(frame))
+                .collect();
+            self.set_property32(
+                root,
+                self.atoms.redirected_frames,
+                AtomEnum::WINDOW,
+                &frames,
+            )?;
+        }
         self.client_list_published = Some((client_list, windows));
         Ok(())
     }

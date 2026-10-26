@@ -246,7 +246,7 @@ thread_local! {
 /// Blur runs on a snapshot shrunk by this factor once the radius is large: the blur cost falls with
 /// the pixel count, and the soft result is upscaled bilinearly. Below twice the factor the blur is
 /// already cheap, so it stays at full resolution.
-const BLUR_DOWNSCALE: u32 = 4;
+pub(crate) const BLUR_DOWNSCALE: u32 = 4;
 
 /// Opaque ARGB32 words (0xFFRRGGBB) for a straight RGBA8 snapshot, blurred per
 /// [`blur_radius_px`]. Takes ownership so the blur runs in place without a copy.
@@ -274,7 +274,7 @@ pub fn blurred_argb_words(
 }
 
 /// Gaussian blur through the shared scratch buffers. A failure keeps the input pixels.
-fn blur_in_place_slice(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
+pub(crate) fn blur_in_place_slice(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
     let blurred = BLUR_SCRATCH.with(|scratch| {
         flamewm_image_core::blur::gaussian_blur_rgba_with(
             &mut scratch.borrow_mut(),
@@ -561,6 +561,12 @@ pub fn desktop_canvas(
 /// without reading the root. It is rewritten after every present: the serial change tells the WM
 /// that a read racing that repaint must be redone. Deleted when the desktop surface goes away.
 pub const DESKTOP_FRAME_PROPERTY: &str = "_FLAMEWM_DESKTOP_FRAME";
+
+/// Root property on which the WM lists the frames it redirects automatically through Composite
+/// (`WINDOW[]`, bottom to top). Their contents stay valid off screen even where other windows
+/// cover them, so translucent app windows compose what lies behind them from these pixmaps.
+/// Absent when the WM does not redirect (no Composite, or a compositing manager runs).
+pub const REDIRECTED_FRAMES_PROPERTY: &str = "_FLAMEWM_REDIRECTED_FRAMES";
 
 /// A desktop frame read back from [`DESKTOP_FRAME_PROPERTY`]: the pixmap and its window's root
 /// origin.
