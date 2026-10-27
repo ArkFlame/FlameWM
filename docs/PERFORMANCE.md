@@ -65,9 +65,9 @@ across 400x250 px and back, which takes about 1.6 s of the 5 s.
 | Start popup open and close | 0.0 | 0.0 | 4.0 | 0.0 | 14.0 | 20.0 |
 
 - WM, desktop and shell together use 40.1 MiB PSS at idle, just above the 40 MiB target.
-- With contents shown while dragging, the translucent terminal recrops its blurred
-  backdrop on every move step. Before the separable crop it used 53.9% of a core in the
-  same case.
+- With contents shown while dragging, the translucent terminal updates its blurred
+  backdrop on every move step, computing only the strips the move exposes. Before that
+  change and the separable crop it used 53.9% of a core in the same case.
 - Frame-time p95 has **not been measured**.
 - Not measured here: the installed `.deb`, a real GPU driver, a real NetworkManager session.
 - Two outputs are covered by the visual checks (`--layout dual`), not by these numbers.
