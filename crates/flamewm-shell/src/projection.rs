@@ -309,6 +309,17 @@ fn project_pager_layout(
     Ok(())
 }
 
+/// The pager is decorative when fewer than two workspaces exist: the workspace
+/// projection deliberately emits no cells in that case. Hide its entire node
+/// (including its separate-taskbar capsule) instead of leaving an empty border.
+/// Reused by the synchronous and asynchronous panel paths.
+pub(crate) fn workspace_pager_visible(
+    items: TaskbarItems,
+    snapshot: Option<&flamewm_api::workspace::WorkspaceSnapshot>,
+) -> bool {
+    items.workspaces && snapshot.is_some_and(|workspaces| workspaces.count > 1)
+}
+
 /// Pager columns, box and cell visibility for the live snapshot; no labels or
 /// fills (the `PanelsChanged` geometry pass uses this alone).
 pub(crate) fn project_pager_visibility(
@@ -597,7 +608,10 @@ pub fn project_panel(
     document.visible("task-slot-insert", view.items.activities)?;
 
     project_pager(document, snapshot.workspaces.as_ref())?;
-    document.visible("workspace-pager", view.items.workspaces)?;
+    document.visible(
+        "workspace-pager",
+        workspace_pager_visible(view.items, snapshot.workspaces.as_ref()),
+    )?;
 
     project_clock(document)?;
     project_status_tray(document, &snapshot.system, view.items)?;
@@ -1294,6 +1308,30 @@ mod panel_template_tests {
             active_index,
             last_index: None,
             names: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn single_workspace_has_no_pager_capsule_and_multiple_workspaces_restore_it() {
+        let items = TaskbarItems::default();
+        let single = pager_snapshot(1, 0);
+        let multiple = pager_snapshot(2, 0);
+        assert!(!workspace_pager_visible(items, None));
+        assert!(!workspace_pager_visible(items, Some(&single)));
+        assert!(workspace_pager_visible(items, Some(&multiple)));
+        assert!(!workspace_pager_visible(TaskbarItems { workspaces: false, ..items }, Some(&multiple)));
+
+        // Reproject both transitions into the same document. The empty pager
+        // must not leave a separate-mode glass outline or a layout gap.
+        let mut document = decode_panel();
+        for (snapshot, expected) in [(&single, false), (&multiple, true), (&single, false)] {
+            project_pager(&mut document, Some(snapshot)).expect("pager projects");
+            document.visible("workspace-pager", workspace_pager_visible(items, Some(snapshot)))
+                .expect("pager visibility projects");
+            let (_, _, width, height) = document
+                .layout_box_by_id("workspace-pager", (1080.0, 72.0))
+                .expect("pager node exists");
+            assert_eq!(width > 0.0 && height > 0.0, expected);
         }
     }
 
