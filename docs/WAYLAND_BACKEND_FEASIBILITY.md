@@ -1,6 +1,6 @@
 # Wayland Backend Feasibility
 
-Status: historical feasibility analysis, superseded. A preliminary Wayland session now ships
+Status: historical feasibility analysis, superseded. A Wayland session now ships
 (`crates/flamewm-wm-wayland`, binary `flamewm-wayland`, session entry `FlameWM (Wayland)`); its
 implementation, diagnostics and unverified list are in [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md). Keep
 this document as the pre-implementation record of what was counted and proposed, not as a
@@ -116,7 +116,7 @@ Each milestone is independently revertible. The X11 path is untouched by P0–P2
 ## 5. Non-goals
 
 - No Wayland support claim here. Nothing in this document is shipped. (Superseded in scope: a
-  preliminary Wayland session does ship now, documented in [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md),
+  Wayland session does ship now, documented in [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md),
   and it is not claimed to be validated on hardware.)
 - No X11 release delay. X11 milestones and releases proceed independently.
 - No XWayland in the first phases.

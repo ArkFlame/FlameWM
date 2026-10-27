@@ -4,8 +4,9 @@ Status: the compositor runs as a nested window (winit) and as a real tty composi
 `drm`) that takes its seat from systemd-logind over D-Bus. The nested backend and the build, test and
 wrapper chain are exercised on this host. The native backend compiles and is unit-tested; the
 recorded hardware attempt (a LightDM login) did not come up - a text cursor, then back to the greeter
-- and is still under investigation. No successful hardware start is on record, so the session ships
-as preliminary and the X11 session stays the default.
+- and is still under investigation. No successful hardware start is on record, so the X11 session
+stays the default. Nested, native Wayland clients (`foot`, `weston-simple-shm`) and XWayland were
+checked on 2026-10-28 on Xorg's dummy driver with software GL.
 
 Claims carry their evidence: **code** marks something readable in the sources with no runtime
 evidence behind it; commands that actually produced a result on this host are listed under "Proven

@@ -14,7 +14,7 @@ Do not commit generated build output, local runtime coordination state, credenti
 
 ## Wayland session changes
 
-The Wayland session (`crates/flamewm-wm-wayland`, wrapper `scripts/flamewm-wayland-session`, session entry `packaging/flamewm-wayland.desktop`) is preliminary. Read `docs/WAYLAND_PLAN.md` before touching it, keep the X11 session the default and supported path, and keep the wrapper's `--capabilities` gate (`drm_compiled=true`) intact.
+The Wayland session (`crates/flamewm-wm-wayland`, wrapper `scripts/flamewm-wayland-session`, session entry `packaging/flamewm-wayland.desktop`) has no hardware login on record yet. Read `docs/WAYLAND_PLAN.md` before touching it, keep the X11 session the default and supported path, and keep the wrapper's `--capabilities` gate (`drm_compiled=true`) intact.
 
 Additional checks for Wayland changes, none of which proves a hardware session:
 
@@ -24,5 +24,5 @@ cargo test -p flamewm-wm-wayland --features drm
 ./scripts/tests/wayland-session-matrix.sh
 ```
 
-A nested run, a unit test or a successful package build is not evidence that the native DRM session works. No successful hardware login is on record; describe the session as preliminary and do not claim hardware validation you did not perform.
+A nested run, a unit test or a successful package build is not evidence that the native DRM session works. No successful hardware login is on record; state what you ran and do not claim hardware validation you did not perform.
 

@@ -1,9 +1,8 @@
 # Install
 
-FlameWM installs two sessions from one package: **FlameWM** (X11), which is the supported default
-and needs the X11, Xft, and Fontconfig runtime libraries, and **FlameWM (Wayland)**, a preliminary
-compositor session that is not yet validated on real hardware. Neither session replaces an existing
-display manager; both are selected from its session chooser.
+FlameWM installs two sessions from one package: **FlameWM** (X11), the default, which needs the
+X11, Xft, and Fontconfig runtime libraries, and **FlameWM (Wayland)**. Neither session replaces an
+existing display manager; both are selected from its session chooser.
 
 Build and package on an x86_64 Linux machine with the Rust toolchain and
 FlameWM build dependencies installed:
@@ -34,8 +33,7 @@ it also writes `flamewm_VERSION_amd64.deb`.
 Install the Debian artifact with your normal package manager, or unpack the
 Linux archive under `/` as root. Select `FlameWM` from your display manager's
 session chooser to log in to the X11 session. `FlameWM (Wayland)` is also
-registered; it is preliminary, so read [Wayland session](#wayland-session-preliminary)
-below before selecting it.
+registered; read [Wayland session](#wayland-session) below before selecting it.
 
 ## Arch Linux
 
@@ -111,7 +109,7 @@ Wayland session is a real compositor (`crates/flamewm-wm-wayland`), not a
 re-registered X11 entry, but its native DRM/LightDM login has **not** been
 validated on real hardware yet.
 
-### Wayland session (preliminary)
+### Wayland session
 
 The session wrapper starts `flamewm-wayland` and only continues when
 `flamewm-wayland --capabilities` reports `drm_compiled=true`; a build without
@@ -119,7 +117,7 @@ the DRM feature exits 2 with `stage=capabilities status=fail
 detail=drm_feature_missing`. The nested developer backend (`--backend=nested`)
 is never used by the session entry.
 
-Manual test procedure, unvalidated on this host:
+Manual test procedure (not yet run on real hardware):
 
 1. Install the `.deb` while logged into a working X11 session.
 2. Run `flamewm-wayland --capabilities` and confirm the output is
@@ -172,8 +170,8 @@ dpkg-deb --contents .target/dist/flamewm_0.1.2_amd64.deb | grep -E '/xsessions/f
 python3 -I tools/flamewm_deb_acceptance.py --deb .target/dist/flamewm_0.1.2_amd64.deb
 ```
 
-FlameWM ships an X11 session and a preliminary Wayland session. Only the X11
-session is currently supported; the Wayland session awaits hardware validation.
+FlameWM ships an X11 session and a Wayland session. X11 is the default; no
+Wayland login on real hardware is on record yet.
 
 
 ### Troubleshooting a rejected `.deb`
