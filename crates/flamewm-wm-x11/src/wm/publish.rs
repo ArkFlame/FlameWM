@@ -210,6 +210,27 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
+    /// Publishes the wallpaper layout titlebars use, so panels, popups and app windows in other
+    /// processes blend over the same per-output wallpaper the desktop draws.
+    pub(super) fn publish_wallpaper_layout(&mut self) -> Result<(), ReplyError> {
+        let words = crate::frame::titlebar_backdrop::wallpaper_layout()
+            .into_iter()
+            .flat_map(|(x, y, width, height)| [x as u32, y as u32, width, height])
+            .collect::<Vec<_>>();
+        if self.wallpaper_layout_published.as_ref() == Some(&words) {
+            return Ok(());
+        }
+        let root = self.screen().root;
+        self.set_property32(
+            root,
+            self.atoms.wallpaper_outputs,
+            AtomEnum::CARDINAL,
+            &words,
+        )?;
+        self.wallpaper_layout_published = Some(words);
+        Ok(())
+    }
+
     pub(super) fn publish_active(&self) -> Result<(), ReplyError> {
         let root = self.screen().root;
         self.set_property32(

@@ -68,6 +68,8 @@ pub struct Atoms {
     pub desktop_frame: Atom,
     /// Frames the WM redirects (`flamewm_render_x11::backdrop::REDIRECTED_FRAMES_PROPERTY`).
     pub redirected_frames: Atom,
+    /// Wallpaper layout (`flamewm_render_x11::backdrop::WALLPAPER_OUTPUTS_PROPERTY`).
+    pub wallpaper_outputs: Atom,
 }
 
 impl Atoms {
@@ -134,6 +136,10 @@ impl Atoms {
             redirected_frames: atom(
                 conn,
                 flamewm_render_x11::backdrop::REDIRECTED_FRAMES_PROPERTY,
+            )?,
+            wallpaper_outputs: atom(
+                conn,
+                flamewm_render_x11::backdrop::WALLPAPER_OUTPUTS_PROPERTY,
             )?,
         })
     }

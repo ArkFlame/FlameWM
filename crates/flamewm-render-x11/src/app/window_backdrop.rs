@@ -16,12 +16,16 @@ use crate::backdrop::{BlurredCanvas, WindowBackdrop, recapture_due};
 use crate::xlib::*;
 use crate::xlib_ext::XTranslateCoordinates;
 
+/// An output rect in root coordinates (`x, y, width, height`).
+type OutputRect = (i32, i32, u32, u32);
+
 /// Per-window state: the spec, the desktop canvas and the uploaded snapshot.
 #[derive(Debug)]
 pub(crate) struct WindowBackdropState {
     pub(crate) spec: WindowBackdrop,
-    /// Blurred desktop layer under the whole root, built (or loaded) once per root size.
-    canvas: Option<BlurredCanvas>,
+    /// Blurred desktop layer under the whole root, built (or loaded) once per root size and
+    /// wallpaper output layout.
+    canvas: Option<(Vec<OutputRect>, BlurredCanvas)>,
     /// The window moved or resized since the snapshot was cropped.
     pub(crate) stale: bool,
     /// Last cropped snapshot and the root origin it was cropped at. A resized window mirror-extends
@@ -159,13 +163,16 @@ impl X11App {
                     .window_backdrop
                     .as_mut()
                     .ok_or("window backdrop: no spec")?;
+                // SAFETY: the window's display is live.
+                let outputs = unsafe { crate::backdrop::published_wallpaper_outputs(self.display) };
                 if state
                     .canvas
                     .as_ref()
-                    .is_none_or(|canvas| canvas.size() != root)
+                    .is_none_or(|(layout, canvas)| canvas.size() != root || *layout != outputs)
                 {
                     let _compose_span = flamewm_profiler::start("render.backdrop.compose");
-                    state.canvas = Some(crate::backdrop::wallpaper_canvas(&state.spec, root)?);
+                    let canvas = crate::backdrop::wallpaper_canvas(&state.spec, root, &outputs)?;
+                    state.canvas = Some((outputs, canvas));
                 }
                 let pixmap_fits = self
                     .window_backdrop_pixmap
@@ -181,7 +188,7 @@ impl X11App {
                 {
                     return Ok(());
                 }
-                let canvas = state.canvas.as_ref().ok_or("window backdrop: no canvas")?;
+                let (_, canvas) = state.canvas.as_ref().ok_or("window backdrop: no canvas")?;
                 let _crop_span = flamewm_profiler::start("render.backdrop.crop");
                 canvas.crop((rx, ry), (width, height))
             }

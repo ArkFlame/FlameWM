@@ -595,11 +595,60 @@ fn desktop_frame_from_words(words: &[u32]) -> Option<DesktopFrame> {
 ///
 /// `display` must be live.
 pub(crate) unsafe fn published_desktop_frame(display: *mut Display) -> Option<DesktopFrame> {
-    let name = std::ffi::CString::new(DESKTOP_FRAME_PROPERTY).ok()?;
+    // SAFETY: live display per the contract.
+    desktop_frame_from_words(&unsafe { root_cardinals(display, DESKTOP_FRAME_PROPERTY, 6) })
+}
+
+/// Root property on which the WM publishes the wallpaper layout the desktop draws:
+/// `CARDINAL[4n]` = `x`, `y` (two's complement), `width`, `height` per output in root coordinates.
+/// Empty or absent means one wallpaper over the whole root (a single output or `shareWallpaper`).
+pub const WALLPAPER_OUTPUTS_PROPERTY: &str = "_FLAMEWM_WALLPAPER_OUTPUTS";
+
+/// Most outputs read from [`WALLPAPER_OUTPUTS_PROPERTY`].
+const WALLPAPER_OUTPUTS_MAX: usize = 16;
+
+/// Parses [`WALLPAPER_OUTPUTS_PROPERTY`] words; empty rects and a trailing partial rect are
+/// dropped.
+fn wallpaper_outputs_from_words(words: &[u32]) -> Vec<(i32, i32, u32, u32)> {
+    words
+        .chunks_exact(4)
+        .filter(|rect| rect[2] > 0 && rect[3] > 0)
+        .map(|rect| (rect[0] as i32, rect[1] as i32, rect[2], rect[3]))
+        .collect()
+}
+
+/// The wallpaper layout the WM published on the root of `display`; empty means one wallpaper
+/// over the root.
+///
+/// # Safety
+///
+/// `display` must be live.
+pub(crate) unsafe fn published_wallpaper_outputs(
+    display: *mut Display,
+) -> Vec<(i32, i32, u32, u32)> {
+    // SAFETY: live display per the contract.
+    wallpaper_outputs_from_words(&unsafe {
+        root_cardinals(
+            display,
+            WALLPAPER_OUTPUTS_PROPERTY,
+            WALLPAPER_OUTPUTS_MAX * 4,
+        )
+    })
+}
+
+/// Up to `max_words` format-32 `CARDINAL` words of the root property `name`; empty when absent.
+///
+/// # Safety
+///
+/// `display` must be live.
+unsafe fn root_cardinals(display: *mut Display, name: &str, max_words: usize) -> Vec<u32> {
+    let Ok(name) = std::ffi::CString::new(name) else {
+        return Vec::new();
+    };
     // SAFETY: live display per the contract; `only_if_exists` keeps the lookup from creating it.
     let atom = unsafe { XInternAtom(display, name.as_ptr(), 1) };
     if atom == 0 {
-        return None;
+        return Vec::new();
     }
     let root = unsafe { XRootWindow(display, XDefaultScreen(display)) };
     let (mut actual_type, mut actual_format, mut items, mut after) = (0, 0, 0, 0);
@@ -611,7 +660,7 @@ pub(crate) unsafe fn published_desktop_frame(display: *mut Display) -> Option<De
             root,
             atom,
             0,
-            6,
+            max_words as _,
             0,
             XA_CARDINAL,
             &mut actual_type,
@@ -622,7 +671,7 @@ pub(crate) unsafe fn published_desktop_frame(display: *mut Display) -> Option<De
         )
     };
     if status != 0 || data.is_null() {
-        return None;
+        return Vec::new();
     }
     let words: Vec<u32> = if actual_format == 32 {
         // SAFETY: format-32 properties come back as `items` C longs at `data`.
@@ -636,7 +685,7 @@ pub(crate) unsafe fn published_desktop_frame(display: *mut Display) -> Option<De
         Vec::new()
     };
     unsafe { XFree(data.cast()) };
-    desktop_frame_from_words(&words)
+    words
 }
 
 /// What the desktop layer is made of, as the desktop draws it.
@@ -659,8 +708,11 @@ const DESKTOP_FALLBACK_RGB: [u8; 3] = [0x23, 0x26, 0x29];
 #[derive(Debug)]
 pub struct DesktopLayer {
     source: DesktopSource,
-    canvas: Option<((u32, u32), u8, Option<BlurredCanvas>)>,
+    canvas: Option<(CanvasLayout, Option<BlurredCanvas>)>,
 }
+
+/// Root size, output layout and blur a [`DesktopLayer`] canvas was built for.
+type CanvasLayout = ((u32, u32), Vec<(i32, i32, u32, u32)>, u8);
 
 impl DesktopLayer {
     #[must_use]
@@ -677,10 +729,12 @@ impl DesktopLayer {
     }
 
     /// Opaque ARGB32 words of the layer under the root-space `rect`, blurred as a surface at
-    /// `opacity_percent` and `blur_percent` would be. A solid or undecodable wallpaper is flat.
+    /// `opacity_percent` and `blur_percent` would be, with the wallpaper laid out over `outputs`
+    /// like the desktop draws it. A solid or undecodable wallpaper is flat.
     pub fn crop(
         &mut self,
         root: (u32, u32),
+        outputs: &[(i32, i32, u32, u32)],
         rect: (i32, i32, u32, u32),
         opacity_percent: u8,
         blur_percent: u8,
@@ -700,8 +754,8 @@ impl DesktopLayer {
             return flamewm_image_core::wallpaper::decode_file(path)
                 .ok()
                 .and_then(|natural| {
-                    flamewm_image_core::wallpaper::compose_region(
-                        &natural, root.0, root.1, fit, rect,
+                    flamewm_image_core::wallpaper::compose_outputs_region(
+                        &natural, root, outputs, fit, rect,
                     )
                 })
                 .map_or_else(
@@ -720,33 +774,32 @@ impl DesktopLayer {
         if self
             .canvas
             .as_ref()
-            .is_none_or(|(size, blur, _)| (*size, *blur) != (root, blur_percent))
+            .is_none_or(|((size, layout, blur), _)| {
+                (*size, layout.as_slice(), *blur) != (root, outputs, blur_percent)
+            })
         {
-            let canvas = desktop_canvas(path, fit, &[], root, blur_percent)
+            let canvas = desktop_canvas(path, fit, outputs, root, blur_percent)
                 .map_err(|error| eprintln!("flamewm-render-x11: desktop layer: {error}"))
                 .ok();
-            self.canvas = Some((root, blur_percent, canvas));
+            self.canvas = Some(((root, outputs.to_vec(), blur_percent), canvas));
         }
-        match self
-            .canvas
-            .as_ref()
-            .and_then(|(_, _, canvas)| canvas.as_ref())
-        {
+        match self.canvas.as_ref().and_then(|(_, canvas)| canvas.as_ref()) {
             Some(canvas) => canvas.crop((x, y), (width, height)),
             None => flat(DESKTOP_FALLBACK_RGB),
         }
     }
 }
 
-/// [`desktop_canvas`] for a window backdrop spec: one wallpaper over the whole root.
+/// [`desktop_canvas`] for a window backdrop spec, laid out over `outputs`.
 pub(crate) fn wallpaper_canvas(
     spec: &WindowBackdrop,
     root: (u32, u32),
+    outputs: &[(i32, i32, u32, u32)],
 ) -> Result<BlurredCanvas, String> {
     desktop_canvas(
         &wallpaper_file(&spec.wallpaper, &spec.packaged_root),
         flamewm_image_core::wallpaper::parse(&spec.fit),
-        &[],
+        outputs,
         root,
         spec.blur_percent,
     )
@@ -898,6 +951,16 @@ pub fn recapture_due(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wallpaper_output_words_parse_signed_rects_and_drop_empty_or_partial() {
+        let left = (-1280_i32) as u32;
+        assert_eq!(
+            wallpaper_outputs_from_words(&[left, 0, 1280, 800, 0, 0, 1920, 1080, 5, 5, 0, 9, 1]),
+            vec![(-1280, 0, 1280, 800), (0, 0, 1920, 1080)]
+        );
+        assert!(wallpaper_outputs_from_words(&[]).is_empty());
+    }
 
     #[test]
     fn desktop_frame_words_parse_and_reject_malformed() {
