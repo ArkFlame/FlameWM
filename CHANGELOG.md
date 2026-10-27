@@ -25,11 +25,11 @@
 - Anti-alias native minimize/maximize/close circle backplates using 4x4 sample coverage, with the SVG glyph still composited in front. No new renderer, compositor process or polling loop.
 - Make X11 floating-frame shadow clipping follow the same frame radius as the window shape. Shade and retain only the right/bottom strips extended into exposed corner notches; invalidate the shadow shape on radius/style changes. Preserve the earlier square/zero-radius behavior and compact-shadow interfaces for callers/tests.
 - Added focused Rust regression tests and 5 source/geometry preflight tests. 19 targeted Python checks passed; an unrelated historical visual-source suite has 3 pre-existing failures also reproduced on untouched Pass 14. Cargo and graphical X11 visual checks could not be run in this environment.
-- See `docs/FLAMEWM_PASS15_ROUNDED_GLASS_AND_BUILD_MERGE_2026-10-27.md`.
+- See `docs/history/FLAMEWM_PASS15_ROUNDED_GLASS_AND_BUILD_MERGE_2026-10-27.md`.
 
 ## 2026-10-27 — Pass 14: Reference-backed CSS/scroll optimization and GPU architecture audit
 
-- Audited the supplied COSMIC Epoch, CreamUI and Coconut source snapshots against the current FlameWM Rust render architecture; findings and GPU readiness gates are documented in `docs/FLAMEWM_REFERENCE_UI_GPU_RESEARCH_PASS14_2026-10-27.md`.
+- Audited the supplied COSMIC Epoch, CreamUI and Coconut source snapshots against the current FlameWM Rust render architecture; findings and GPU readiness gates are documented in `docs/history/FLAMEWM_REFERENCE_UI_GPU_RESEARCH_PASS14_2026-10-27.md`.
 - Expand the build-time FlameWM CSS compiler with uniform `border: none`, `border: 0` and `border: 0px` resets; keep existing solid-border handling, strict rejection of unsupported complex borders and zero runtime dependencies. Align Task Manager preflight checks.
 - Skip document layout/damage invalidation and offset-map insertion for clamped wheel input that does not change a scroll position. Preserve movement and clamp-on-content-shrink semantics.
 - Wayland already uses Smithay OpenGL ES; X11 already uses server-side XRender where available. Do not add a redundant Vulkan/wgpu renderer or a misleading software toggle until equivalent backends and measured benefit exist.
