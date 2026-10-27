@@ -260,6 +260,13 @@ class Session:
         ids = result.stdout.split()
         return int(ids[0]) if ids else None
 
+    def apply_boolean_setting(self, key, value):
+        bus = ["busctl", f"--address={self.env['DBUS_SESSION_BUS_ADDRESS']}", "--json=short", "call",
+               "com.arkflame.FlameWM1", "/com/arkflame/FlameWM1", "com.arkflame.FlameWM1.Settings"]
+        snapshot = json.loads(run(bus + ["GetSnapshot"], self.env).stdout)["data"][0]
+        revision = snapshot["revision"]["data"]
+        run(bus + ["Apply", "ta{sv}", str(revision), "1", key, "b", "true" if value else "false"], self.env)
+
     def stop(self):
         for name, process, log in reversed(self.processes):
             if isinstance(process, int):
@@ -428,6 +435,8 @@ def run_bench(args):
     session = Session("single", args.bin_dir, args.out, args.display)
     try:
         session.start()
+        if args.contents_while_dragging:
+            session.apply_boolean_setting("showContentWhileDragging", True)
         terminal = session.spawn("flamewm-terminal", ["flamewm-terminal"])
         client = wait_until(lambda: session.xdotool_search("flamewm-terminal", by="--class"), 10, 0.2)
         if not client:
@@ -456,9 +465,12 @@ def print_markdown(report):
         if data.get("status") != "ran":
             print(f"| {case} | - | skipped: {data.get('reason')} |")
             continue
-        for role, stats in data["summary"].items():
-            if isinstance(stats, dict) and "median" in stats:
-                print(f"| {case} | {role} | {stats['median']:.1f} ({stats['min']:.1f}-{stats['max']:.1f}) |")
+        summary = data["summary"]
+        rows = list(summary["cpu_pct_one_core_by_role"].items())
+        if summary["cpu_pct_one_core_total"]:
+            rows.append(("total", summary["cpu_pct_one_core_total"]))
+        for role, stats in rows:
+            print(f"| {case} | {role} | {stats['median']:.1f} ({stats['min']:.1f}-{stats['max']:.1f}) |")
 
 
 def main(argv=None):
@@ -470,12 +482,14 @@ def main(argv=None):
     parser.add_argument("--display", type=int, default=91, help="X display number (default 91)")
     parser.add_argument("--window", type=float, default=5.0, help="bench: seconds per sample")
     parser.add_argument("--repeat", type=int, default=3, help="bench: repeats per case")
+    parser.add_argument("--contents-while-dragging", action="store_true",
+                        help="bench: move windows live instead of dragging an outline")
     args = parser.parse_args(argv)
     if args.bin_dir:
         args.bin_dir = str(Path(args.bin_dir).resolve())
     if args.out:
         args.out.mkdir(parents=True, exist_ok=True)
-    missing = [tool for tool in ("Xorg", "xrandr", "xdotool", "import", "xterm", "dbus-daemon")
+    missing = [tool for tool in ("Xorg", "xrandr", "xdotool", "import", "xterm", "dbus-daemon", "busctl")
                if not shutil.which(tool)]
     if missing:
         print(f"error: missing tools: {', '.join(missing)}", file=sys.stderr)
