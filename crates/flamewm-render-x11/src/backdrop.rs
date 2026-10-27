@@ -237,6 +237,10 @@ pub fn blur_radius_px(opacity_percent: u8, blur_percent: u8) -> f32 {
     f32::from(blur_percent.min(100)) / 100.0 * MAX_BLUR_RADIUS_PX
 }
 
+/// Keep ordinary downsampled surface blurs reusable, but never retain a
+/// full-resolution RGBA-f32 desktop image (tens of MiB) after the operation.
+const BLUR_SCRATCH_RETAIN_BUDGET_BYTES: usize = 4 * 1024 * 1024;
+
 thread_local! {
     /// Blur work buffers shared by every snapshot blur on the display thread.
     static BLUR_SCRATCH: std::cell::RefCell<flamewm_image_core::blur::BlurScratch> =
@@ -262,6 +266,9 @@ pub fn blurred_argb_words(
     let radius = blur_radius_px(opacity_percent, blur_percent);
     if radius >= 2.0 * BLUR_DOWNSCALE as f32 {
         let (mut small, small_w, small_h) = box_downscale(&rgba, width, height, BLUR_DOWNSCALE);
+        // The original full-resolution input is no longer needed. Release it
+        // before the costly blur/upsample rather than keeping both alive.
+        drop(rgba);
         blur_in_place_slice(&mut small, small_w, small_h, radius / BLUR_DOWNSCALE as f32);
         return bilinear_argb_words(&small, small_w, small_h, width, height);
     }
@@ -276,13 +283,16 @@ pub fn blurred_argb_words(
 /// Gaussian blur through the shared scratch buffers. A failure keeps the input pixels.
 pub(crate) fn blur_in_place_slice(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
     let blurred = BLUR_SCRATCH.with(|scratch| {
-        flamewm_image_core::blur::gaussian_blur_rgba_with(
-            &mut scratch.borrow_mut(),
+        let mut scratch = scratch.borrow_mut();
+        let result = flamewm_image_core::blur::gaussian_blur_rgba_with(
+            &mut scratch,
             pixels,
             width,
             height,
             radius,
-        )
+        );
+        scratch.release_if_over_budget(BLUR_SCRATCH_RETAIN_BUDGET_BYTES);
+        result
     });
     if let Err(error) = blurred {
         eprintln!("flamewm-render-x11: backdrop blur skipped: {error:?}");
@@ -405,6 +415,7 @@ impl BlurredCanvas {
         let radius = blur_radius_px(opacity_percent, blur_percent);
         let pixels = if radius >= 2.0 * BLUR_DOWNSCALE as f32 {
             let (mut small, small_w, small_h) = box_downscale(&rgba, width, height, BLUR_DOWNSCALE);
+            drop(rgba); // Release large input before blur; only the small canvas is retained.
             blur_in_place_slice(&mut small, small_w, small_h, radius / BLUR_DOWNSCALE as f32);
             CanvasPixels::Scaled {
                 small,

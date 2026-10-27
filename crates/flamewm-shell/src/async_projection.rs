@@ -20,9 +20,12 @@ use crate::ShellSnapshot;
 pub const TASK_SLOT_COUNT: usize = 8;
 pub const START_APP_SLOT_COUNT: usize = 8;
 
+// Retain a large working set across taskbar, Start, and launcher views.
+// The icon resolver has already rasterized every image to its requested
+// physical display size; no extra downscale or lossy preview is necessary.
 const ICON_CACHE_ENTRY_BUDGET: usize = 2048;
-/// Straight RGBA8 pixel bytes retained by the icon cache (8 MiB).
-const ICON_CACHE_BYTE_BUDGET: usize = 8 * 1024 * 1024;
+/// Maximum retained RGBA8 icon pixel payload (32 MiB, not a fixed allocation).
+const ICON_CACHE_BYTE_BUDGET: usize = 32 * 1024 * 1024;
 
 pub type IconCacheKey = (String, u32, u32);
 
@@ -155,7 +158,11 @@ impl IconCache {
             }
         }
         let stamp = self.next_stamp();
-        let key: Arc<str> = Arc::from(name);
+        // Multiple physical sizes of one icon name share its Arc<str> key.
+        // Avoid allocating a duplicate string for each HiDPI variant.
+        let key: Arc<str> = self.entries.get_key_value(name)
+            .map(|(existing, _)| Arc::clone(existing))
+            .unwrap_or_else(|| Arc::from(name));
         self.bytes += bytes;
         self.len += 1;
         self.order.push_back((key.clone(), size, stamp));
@@ -1930,6 +1937,26 @@ pub(crate) mod tests {
         assert!(cache.contains(&keys[0].0, (keys[0].1, keys[0].2)));
         assert!(cache.contains(&keys[2].0, (keys[2].1, keys[2].2)));
         assert_eq!(cache.bytes, 3 * 4);
+    }
+
+    #[test]
+    fn default_icon_cache_is_bounded_for_an_idle_shell() {
+        let cache = IconCache::new(ICON_CACHE_ENTRY_BUDGET);
+        assert_eq!(cache.entry_budget, 2048);
+        assert_eq!(cache.byte_budget, 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn icon_cache_shares_name_storage_between_icon_sizes() {
+        let mut cache = IconCache::with_budgets(10, 4096);
+        cache.insert("browser", (16, 16), test_image("small").into());
+        cache.insert("browser", (32, 32), test_image("large").into());
+        let first = &cache.order[0].0;
+        let second = &cache.order[1].0;
+        assert!(Arc::ptr_eq(first, second), "size variants share an icon-name allocation");
+        assert_eq!(cache.len, 2);
+        assert!(cache.get("browser", (16, 16)).is_some());
+        assert!(cache.get("browser", (32, 32)).is_some());
     }
 
     #[test]

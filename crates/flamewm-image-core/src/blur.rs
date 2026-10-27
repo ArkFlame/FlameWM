@@ -65,6 +65,41 @@ impl BlurScratch {
     pub fn release(&mut self) {
         *self = Self::default();
     }
+
+    /// Discard unusually large temporary buffers once their output is complete.
+    /// A small scratch remains reusable; a one-off full-resolution blur must not
+    /// permanently pin tens of MiB in an otherwise idle UI process.
+    /// This is deliberately called *after* emission, never during a blur.
+    pub fn release_if_over_budget(&mut self, max_bytes: usize) {
+        let float_bytes = std::mem::size_of::<f32>();
+        let tap_bytes = std::mem::size_of::<(usize, usize, f32)>();
+        let mut sizes = [
+            self.work.capacity().saturating_mul(float_bytes),
+            self.down.capacity().saturating_mul(float_bytes),
+            self.line.capacity().saturating_mul(float_bytes),
+            self.band.capacity().saturating_mul(float_bytes),
+            self.taps.capacity().saturating_mul(tap_bytes),
+        ];
+        let mut retained = sizes.iter().fold(0usize, |sum, bytes| sum.saturating_add(*bytes));
+        // Retire the largest allocation first, retaining useful smaller scratch
+        // (row/band buffers and taps) whenever it fits the budget. This avoids
+        // reallocation on the next small blur after a one-off oversized image.
+        while retained > max_bytes {
+            let Some((index, &bytes)) = sizes.iter().enumerate().max_by_key(|(_, size)| **size)
+            else { break };
+            if bytes == 0 { break; }
+            match index {
+                0 => self.work = Vec::new(),
+                1 => self.down = Vec::new(),
+                2 => self.line = Vec::new(),
+                3 => self.band = Vec::new(),
+                4 => self.taps = Vec::new(),
+                _ => unreachable!(),
+            }
+            sizes[index] = 0;
+            retained = retained.saturating_sub(bytes);
+        }
+    }
 }
 
 /// Blurs straight RGBA8 `pixels` in place.
@@ -270,10 +305,13 @@ fn blur_emit(
     bilinear_upscale_straight(&scratch.down, dw, dh, factor, win, dst, &mut scratch.taps);
 }
 
-/// Resizes `buf` to `len` zeroed floats. Capacity far above `len` is released so
-/// buffers follow the current request instead of the largest one ever seen.
+/// Retains already-initialized storage for full-overwrite scratch buffers.
+/// `work`, `down`, and `line` are entirely overwritten before consumption;
+/// `band` copies every used column and explicitly clears its accumulator.
+/// Avoid writing zeros over the entire buffer before immediately replacing
+/// them with blur samples. Newly grown tail elements are initialized safely.
 fn fit_f32(buf: &mut Vec<f32>, len: usize) {
-    buf.clear();
+    buf.truncate(len);
     if buf.capacity() > len.saturating_mul(2).saturating_add(SHRINK_SLACK) {
         buf.shrink_to(len);
     }
@@ -1131,6 +1169,56 @@ mod tests {
         assert_eq!(scratch.line.capacity(), 0);
         assert_eq!(scratch.band.capacity(), 0);
         assert_eq!(scratch.down.capacity(), 0);
+    }
+
+    #[test]
+    fn fit_f32_preserves_overwritten_scratch_instead_of_zeroing_it() {
+        let mut buffer = vec![3.0_f32; 16];
+        fit_f32(&mut buffer, 16);
+        assert_eq!(buffer, vec![3.0; 16]);
+        fit_f32(&mut buffer, 4);
+        assert_eq!(buffer, vec![3.0; 4]);
+        fit_f32(&mut buffer, 8);
+        assert_eq!(&buffer[..4], &[3.0; 4]);
+        assert_eq!(&buffer[4..], &[0.0; 4]);
+    }
+
+    #[test]
+    fn release_if_over_budget_keeps_useful_small_scratch() {
+        let mut scratch = BlurScratch::new();
+        scratch.work = vec![1.0; 100_000];
+        scratch.down = vec![2.0; 32];
+        scratch.line = vec![3.0; 128];
+        scratch.band = vec![4.0; 128];
+        scratch.taps = vec![(0, 0, 0.5); 8];
+        scratch.release_if_over_budget(4096);
+        assert_eq!(scratch.work.capacity(), 0);
+        assert!(scratch.down.capacity() >= 32);
+        assert!(scratch.line.capacity() >= 128);
+        assert!(scratch.band.capacity() >= 128);
+        assert!(scratch.taps.capacity() >= 8);
+    }
+
+    #[test]
+    fn release_if_over_budget_preserves_output_and_small_scratch_reuse() {
+        let original = noisy(128, 64);
+        let mut scratch = BlurScratch::new();
+        let mut actual = original.clone();
+        gaussian_blur_rgba_with(&mut scratch, &mut actual, 128, 64, 3.0).unwrap();
+        let expected = actual.clone();
+        // 128*64*4 floats alone exceed this budget. Releasing scratch
+        // after emitting pixels must not alter the result.
+        scratch.release_if_over_budget(1024);
+        assert_eq!(scratch.work.capacity(), 0);
+        assert_eq!(scratch.down.capacity(), 0);
+        assert_eq!(actual, expected);
+
+        let mut again = original;
+        gaussian_blur_rgba_with(&mut scratch, &mut again, 128, 64, 3.0).unwrap();
+        assert_eq!(again, expected);
+        let settled = scratch.work.capacity();
+        scratch.release_if_over_budget(1_048_576);
+        assert_eq!(scratch.work.capacity(), settled);
     }
 
     #[test]

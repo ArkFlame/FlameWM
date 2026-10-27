@@ -82,6 +82,13 @@ class SharedSurfaceCargoTests(unittest.TestCase):
             target.write_text(target.read_text() + "new input\n")
             self.assertEqual(run(self.root, executor=self.cargo), ["flamewm-terminal"])
 
+    def test_image_core_blur_change_invalidates_only_image_core(self):
+        self.assertEqual(run(self.root, executor=self.cargo), list(CRATES))
+        src = self.root / "crates/flamewm-image-core/src/lib.rs"
+        src.write_text(src.read_text() + "// optimized blur scratch retention\n")
+        self.assertEqual(run(self.root, executor=self.cargo), ["flamewm-image-core"])
+        self.assertEqual(run(self.root, executor=self.cargo), [])
+
     def test_pass17_frame_and_renderer_changes_invalidate_only_respective_crates(self):
         self.assertEqual(run(self.root, executor=self.cargo), list(CRATES))
         for crate in ("flamewm-wm-x11", "flamewm-render-x11", "flamewm-render-core"):

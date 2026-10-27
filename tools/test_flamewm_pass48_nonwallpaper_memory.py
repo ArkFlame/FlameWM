@@ -43,7 +43,7 @@ class NonWallpaperAllocationContracts(unittest.TestCase):
     def test_other_existing_source_optimizations_preserved(self):
         self.assertIn('pub fn crop(mut self, rect: Rect)', source('crates/flamewm-screenshot/src/capture.rs'))
         self.assertIn('const MAX_IMAGE_CACHE_BYTES: usize = 16 * 1024 * 1024;', source('crates/flamewm-render-x11/src/app/images.rs'))
-        self.assertIn('const ICON_CACHE_BYTE_BUDGET: usize = 8 * 1024 * 1024;', source('crates/flamewm-shell/src/async_projection.rs'))
+        self.assertIn('const ICON_CACHE_BYTE_BUDGET: usize = 32 * 1024 * 1024;', source('crates/flamewm-shell/src/async_projection.rs'))
         self.assertIn('pub const CAPTURE_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;', source('crates/flamewm-wm-x11/src/animation.rs'))
 
 if __name__ == '__main__':

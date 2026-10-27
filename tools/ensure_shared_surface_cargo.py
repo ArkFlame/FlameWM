@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # independently when its own content changes (not on every Xephyr launch).
 CRATES = (
     "flamewm-skin", "flamewm-ui-core", "flamewm-ui-x11",
-    "flamewm-render-core", "flamewm-render-compiler", "flamewm-render-x11",
+    "flamewm-image-core", "flamewm-render-core", "flamewm-render-compiler", "flamewm-render-x11",
     "flamewm-wm-x11", "flamewm-shell", "flamewm-terminal",
     "flamewm-task-manager",
 )
