@@ -1,3 +1,14 @@
+## 2026-10-28 — Two screens, visual checks and release packages
+
+- Fix the release build, Clippy and three stale tests left by the light-outline pass.
+- Count an output that scans out from a CRTC as a display even when its driver reports it disconnected. The second screen used to get no wallpaper, panel or work area.
+- Lay out panel, popup and app-window backdrops per output from the new `_FLAMEWM_WALLPAPER_OUTPUTS` root property, so they match the desktop on every screen.
+- Open the terminal's pty slave with `O_NOCTTY`; a terminal started as a session leader no longer dies with SIGHUP before its window appears.
+- Crop window backdrops separably and recompute only the strips a move exposes. Terminal CPU while dragging with live contents drops from 53.9% to about 24% of a core.
+- Add `tools/flamewm_visual_tests.py`: headless checks on one and two screens, run by the Arch CI job, plus a CPU and memory bench. Measured figures are in `docs/PERFORMANCE.md`.
+- Add `.github/workflows/release.yml`: a `v<version>` tag builds the Arch package and the `.deb`, attaches them to a GitHub release and, with `AUR_SSH_PRIVATE_KEY` set, updates the `flamewm-git` AUR package.
+- Move dated pass reports and handoff notes to `docs/history/`, drop the root links to `scripts/`, and remove the stale `MANIFEST.sha256`.
+- Add README screenshots, issue and pull request templates, and starter tasks in `CONTRIBUTING.md`. The Wayland session is described by what was tested instead of being labelled preliminary.
 ## 2026-10-27 — Pass 17: Separated taskbar, workspace capsules, lower window contour, terminal TUI
 
 - Hide the *root border* along with the root fill in `taskbarSeparate` mode; keep the root contour in unified mode and preserve the live `surfaceBorderColor`/`surfaceBorderOpacity` shared contract for individual capsules.
