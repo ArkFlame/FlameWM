@@ -14,9 +14,9 @@ Process selection (allowlist only; nothing is signalled or modified):
 
 Cases:
   idle            No input is injected. Always runs.
-  rubber-band     XTEST drag on empty desktop (needs python-xlib + XTEST).
+  rubber-band     XTEST drag on empty desktop and back (needs python-xlib + XTEST).
   start-toggle    XTEST click at --start-xy (needs python-xlib + XTEST).
-  window-move     XTEST drag from --move-from to --move-to (needs python-xlib + XTEST).
+  window-move     XTEST drag from --move-from to --move-to and back (needs python-xlib + XTEST).
   hover-sweep     XTEST motion only, no button press, repeated across
                   --hover-from/--hover-to for the whole sample window. This is
                   the pointer-motion workload: subtract the stationary
@@ -177,16 +177,20 @@ def _xtest_ops(d):
 def _drag_workload(d, start, end, steps=60, step_s=0.012):
     move, press, release = _xtest_ops(d)
 
-    def run(_duration):
-        move(*start)
+    def drag(origin, target):
+        move(*origin)
         press()
         time.sleep(0.05)
         for i in range(1, steps + 1):
-            move(start[0] + (end[0] - start[0]) * i // steps,
-                 start[1] + (end[1] - start[1]) * i // steps)
+            move(origin[0] + (target[0] - origin[0]) * i // steps,
+                 origin[1] + (target[1] - origin[1]) * i // steps)
             time.sleep(step_s)
         release()
         time.sleep(0.12)
+
+    def run(_duration):
+        drag(start, end)
+        drag(end, start)
     return run
 
 
