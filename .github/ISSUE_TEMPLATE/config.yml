@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security issue
+    url: https://github.com/ArkFlame/FlameWM/blob/main/SECURITY.md
+    about: Report vulnerabilities privately as described in SECURITY.md.

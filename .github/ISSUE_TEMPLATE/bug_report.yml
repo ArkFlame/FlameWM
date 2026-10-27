@@ -1,0 +1,41 @@
+name: Bug report
+description: Something in FlameWM behaves wrongly or crashes.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: Session
+      options:
+        - X11
+        - Wayland
+        - Xephyr or nested development session
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: FlameWM version or commit
+      placeholder: 0.1.2, or the output of git rev-parse --short HEAD
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Distribution, GPU driver and monitor layout
+      placeholder: Arch Linux, amdgpu, two 1920x1080 screens
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and screenshots
+      description: >-
+        Session logs, for example ~/.cache/flamewm/wayland-session.log or the display manager's
+        session log. A screenshot or short recording helps with visual bugs.
+      render: text

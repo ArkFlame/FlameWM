@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest a change to the desktop, the shell or the tools around it.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do
+      description: The task you cannot do today, or what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: How it could work. Mention the crate or screen if you know it.
