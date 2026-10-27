@@ -61,6 +61,14 @@ unsafe fn paint_runs(
     Ok(())
 }
 
+/// Preserve the original round ring when it is partially clipped. Turning
+/// each clipped side into a rectangle drops curved corners entirely.
+fn clipped_run(start: i32, len: u32, clip: Rect) -> Option<(i32,u32)> {
+    let left = start.max(clip.x.ceil() as i32);
+    let right = start.saturating_add(len as i32).min((clip.x + clip.width).floor() as i32);
+    (right > left).then_some((left, (right-left) as u32))
+}
+
 /// Per-sub-scanline left boundary offsets (device px, from the corner row's left)
 /// of a rounded corner, or `None` when `row` is not a rounded corner row.
 fn corner_edges(height: u32, radius: u32, row: u32) -> Option<[f64; EDGE_SAMPLES as usize]> {
@@ -254,6 +262,19 @@ pub(crate) unsafe fn stroke_rounded_rect(
     stroke_width: f32,
     color: Color,
 ) -> Result<(), String> {
+    unsafe { stroke_rounded_rect_clipped(backend, rect, radius, stroke_width, color, None) }
+}
+
+/// A clipped AA border keeps its original geometry and rejects only pixels outside the clip.
+/// The clip bounds come from the same retained paint-stack intersection as all other commands.
+pub(crate) unsafe fn stroke_rounded_rect_clipped(
+    backend: &mut XRenderBackend,
+    rect: Rect,
+    radius: f32,
+    stroke_width: f32,
+    color: Color,
+    clip: Option<Rect>,
+) -> Result<(), String> {
     let (x, y) = (rect.x.round() as i32, rect.y.round() as i32);
     let (width, height) = (rect.width.round() as u32, rect.height.round() as u32);
     if width == 0 || height == 0 || color.a == 0 {
@@ -265,9 +286,24 @@ pub(crate) unsafe fn stroke_rounded_rect(
         crate::native::rounded::clamp_radius(width, height, radius.round().max(0.0) as u32);
 
     for row in 0..height {
+        let py = y + row as i32;
+        if let Some(clip) = clip {
+            if py < clip.y.ceil() as i32 || py >= (clip.y + clip.height).floor() as i32 {
+                continue;
+            }
+        }
         let runs = stroke_row_runs(width, height, radius, thickness, row);
-        // SAFETY: validated inputs above.
-        unsafe { paint_runs(backend, (x, y), row, &runs, color)? };
+        if let Some(clip) = clip {
+            for &(start, len, coverage) in &runs {
+                if let Some((left, visible)) = clipped_run(x + start as i32,len,clip) {
+                    // SAFETY: clipping a row run only reduces the destination region.
+                    unsafe { fill_box(backend,left,py,visible,1,scaled(color,coverage))? };
+                }
+            }
+        } else {
+            // SAFETY: validated inputs above.
+            unsafe { paint_runs(backend, (x, y), row, &runs, color)? };
+        }
     }
     Ok(())
 }
@@ -394,5 +430,21 @@ mod tests {
         };
         assert_eq!(scaled(color, 1.0), color);
         assert_eq!(scaled(color, 0.5).a, 100);
+    }
+}
+
+#[cfg(test)]
+mod clipped_arc_tests {
+    use super::*;
+    #[test]
+    fn clipped_runs_preserve_partial_corner_coverage() {
+        let rect = Rect { x: 0.0,y:0.0,width:12.0,height:12.0 };
+        let runs = stroke_row_runs(12,12,5,1,0);
+        assert!(runs.iter().any(|&(_,_,alpha)| alpha < 1.0 && alpha > 0.0));
+        assert!(runs.iter().any(|&(x,len,_)| clipped_run(x as i32,len,rect).is_some()));
+        let right = Rect {x:10.0,y:0.0,width:2.0,height:12.0};
+        assert!(runs.iter().any(|&(x,len,_)| clipped_run(x as i32,len,right).is_some()));
+        let outside = Rect {x:20.0,y:0.0,width:2.0,height:12.0};
+        assert!(runs.iter().all(|&(x,len,_)| clipped_run(x as i32,len,outside).is_none()));
     }
 }

@@ -798,14 +798,27 @@ fn apply_border(
     input: &str,
     variables: &HashMap<String, u16>,
 ) -> Result<(), String> {
-    let parts: Vec<&str> = input.split_ascii_whitespace().collect();
-    if parts.len() != 3 || parts[1] != "solid" {
-        return Err(format!(
-            "border shorthand '{input}' is unsupported; expected '<px> solid <color>'"
-        ));
+    let input = input.trim();
+    // Reset shorthands are common in app stylesheets. A width of zero already
+    // disables the canonical uniform border painter, so no new paint path is needed.
+    if matches!(input, "none" | "0" | "0px") {
+        style.border_width = 0.0;
+        // A shorthand resets the preceding border color as well as its width.
+        style.border_color = ColorValue::Literal(Color::TRANSPARENT);
+        return Ok(());
     }
-    style.border_width = parse_px(parts[0])?;
-    style.border_color = parse_color_value(parts[2], variables)?;
+    let mut parts = input.split_ascii_whitespace();
+    let (Some(width), Some("solid"), Some(color), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(format!(
+            "border shorthand '{input}' is unsupported; expected 'none', '0', or '<px> solid <color>'"
+        ));
+    };
+    let width = parse_px(width)?;
+    let color = parse_color_value(color, variables)?;
+    style.border_width = width;
+    style.border_color = color;
     Ok(())
 }
 
@@ -834,6 +847,44 @@ mod tests {
             .unwrap()
             .style
             .clone()
+    }
+
+    #[test]
+    fn css_border_reset_shorthands_preserve_uniform_painter_semantics() {
+        let html = r#"<body><style>
+            .base { border: 2px solid #ef4444; }
+            .none { border: 2px solid #ef4444; border: none; }
+            .zero { border: 2px solid #ef4444; border: 0; }
+            .pixel-zero { border: 2px solid #ef4444; border: 0px; }
+            .restore { border: none; border: 1px solid #ffffff40; }
+        </style>
+        <div id="base" class="base">b</div>
+        <div id="none" class="none">n</div>
+        <div id="zero" class="zero">z</div>
+        <div id="pixel-zero" class="pixel-zero">p</div>
+        <div id="restore" class="restore">r</div></body>"#;
+        let output = compile_body(html);
+        assert_eq!(style_of(&output, "base").border_width, 2.0);
+        for id in ["none", "zero", "pixel-zero"] {
+            assert_eq!(style_of(&output, id).border_width, 0.0, "{id}");
+            assert_eq!(style_of(&output, id).border_color,
+                ColorValue::Literal(Color::TRANSPARENT));
+        }
+        assert_eq!(style_of(&output, "restore").border_width, 1.0);
+        assert_eq!(style_of(&output, "restore").border_color,
+            ColorValue::Literal(Color { r: 255, g: 255, b: 255, a: 64 }));
+        let encoded = flamewm_render_core::encode(&output.document).unwrap();
+        assert_eq!(flamewm_render_core::decode(&encoded).unwrap(), output.document);
+    }
+
+    #[test]
+    fn css_border_reset_rejects_unsupported_values_without_partial_mutation() {
+        for value in ["hidden", "dashed", "2px dashed red", "1px", "10", "auto", "2px solid"] {
+            assert!(compile_str(
+                &format!("<body><style>div {{ border: {value}; }}</style><div>ok</div></body>"),
+                "", CompileOptions::default(),
+            ).is_err(), "bad border value {value} must fail");
+        }
     }
 
     #[test]

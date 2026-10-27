@@ -8,7 +8,7 @@ from pathlib import Path
 from subprocess import CompletedProcess
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ensure_shared_surface_cargo import CRATES, UI_INPUTS, run
+from ensure_shared_surface_cargo import CRATES, UI_INPUTS, UI_TREES, SHARED_UI_INPUTS, run
 
 
 class CargoFixture:
@@ -45,7 +45,10 @@ class SharedSurfaceCargoTests(unittest.TestCase):
             (directory / "src").mkdir(parents=True)
             (directory / "Cargo.toml").write_text("[package]\nname = '" + crate + "'\n")
             (directory / "src/lib.rs").write_text("pub fn current() {}\n")
-        for ui in UI_INPUTS:
+        sources = list(UI_INPUTS)
+        sources.extend(f"{folder}/sample.html" for folder in UI_TREES.values())
+        sources.extend(rel for names in SHARED_UI_INPUTS.values() for rel in names)
+        for ui in sources:
             path = self.root / ui
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("fixture\n")
@@ -63,6 +66,45 @@ class SharedSurfaceCargoTests(unittest.TestCase):
         self.assertEqual(run(self.root, executor=self.cargo), ["flamewm-task-manager"])
         self.assertEqual(self.cargo.cleaned.count("flamewm-ui-x11"), 1)
         self.assertEqual(self.cargo.cleaned.count("flamewm-task-manager"), 2)
+
+    def test_pass17_shell_css_and_template_changes_invalidate_shell_only(self):
+        self.assertEqual(run(self.root, executor=self.cargo), list(CRATES))
+        for file in ("ui/shell/sample.html", "ui/shared/menu.css"):
+            target = self.root / file
+            target.write_text(target.read_text() + "new ui input\n")
+            self.assertEqual(run(self.root, executor=self.cargo), ["flamewm-shell"])
+        self.assertEqual(self.cargo.cleaned.count("flamewm-shell"), 3)
+
+    def test_pass17_terminal_pool_and_html_changes_invalidate_terminal_only(self):
+        self.assertEqual(run(self.root, executor=self.cargo), list(CRATES))
+        for file in ("crates/flamewm-terminal/src/lib.rs", "ui/terminal/sample.html"):
+            target = self.root / file
+            target.write_text(target.read_text() + "new input\n")
+            self.assertEqual(run(self.root, executor=self.cargo), ["flamewm-terminal"])
+
+    def test_pass17_frame_and_renderer_changes_invalidate_only_respective_crates(self):
+        self.assertEqual(run(self.root, executor=self.cargo), list(CRATES))
+        for crate in ("flamewm-wm-x11", "flamewm-render-x11", "flamewm-render-core"):
+            file = self.root / "crates" / crate / "src/lib.rs"
+            file.write_text(file.read_text() + "// repaint\n")
+            self.assertEqual(run(self.root, executor=self.cargo), [crate])
+
+    def test_archived_backdated_sources_still_invalidate_by_content(self):
+        import os
+        self.assertEqual(run(self.root, executor=self.cargo), list(CRATES))
+        source = self.root / "ui/shell/sample.html"
+        stamp = source.stat().st_mtime
+        source.write_text("changed source, but restored archive timestamp")
+        os.utime(source, (stamp - 86400, stamp - 86400))
+        self.assertEqual(run(self.root, executor=self.cargo), ["flamewm-shell"])
+        self.assertEqual(run(self.root, executor=self.cargo), [])
+
+    def test_missing_shell_ui_folder_does_not_clean_anything(self):
+        (self.root / "ui/shell/sample.html").unlink()
+        (self.root / "ui/shell").rmdir()
+        with self.assertRaisesRegex(RuntimeError, "Missing UI input directory"):
+            run(self.root, executor=self.cargo)
+        self.assertEqual(self.cargo.cleaned, [])
 
     def test_failed_metadata_does_not_clean(self):
         self.cargo.metadata["workspace_root"] = "/untrusted"

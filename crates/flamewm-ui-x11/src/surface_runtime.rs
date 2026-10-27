@@ -518,7 +518,10 @@ impl SurfaceRuntime {
                 offset_x: delta.dx.clamp(0.0, max_x.max(0.0)),
                 offset_y: delta.dy.clamp(0.0, max_y.max(0.0)),
             });
-        self.scroll_offsets.insert((surface.0.get(), node), next);
+        let key = (surface.0.get(), node);
+        if self.scroll_offsets.get(&key).copied().unwrap_or_default() != next {
+            self.scroll_offsets.insert(key, next);
+        }
         next
     }
 

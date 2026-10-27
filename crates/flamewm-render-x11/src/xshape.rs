@@ -195,8 +195,8 @@ fn clip_spans_iter(
     let (x0, y0, x1, y1) = clip;
     spans
         .iter()
-        .filter(|(y, _, _)| *y >= y0 && *y < y1)
-        .filter_map(|&(y, start, end)| {
+        .filter(move |(y, _, _)| *y >= y0 && *y < y1)
+        .filter_map(move |&(y, start, end)| {
             let (start, end) = (start.max(x0), end.min(x1));
             (end > start).then_some((y, start, end))
         })

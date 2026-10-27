@@ -111,6 +111,29 @@ pub(crate) fn taskbar_surface() -> UiColor {
     }
 }
 
+/// Shared inner contour applied to the separate-panel capsules.
+/// The panel settings projection supplies the same token as popup and frame borders.
+static TASKBAR_BORDER_ARGB: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x3fff_ffff);
+
+pub(crate) fn set_taskbar_border(color: UiColor) {
+    let packed = (u32::from(color.a) << 24)
+        | (u32::from(color.r) << 16)
+        | (u32::from(color.g) << 8)
+        | u32::from(color.b);
+    TASKBAR_BORDER_ARGB.store(packed, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn taskbar_border() -> UiColor {
+    let packed = TASKBAR_BORDER_ARGB.load(std::sync::atomic::Ordering::Relaxed);
+    UiColor {
+        a: (packed >> 24) as u8,
+        r: (packed >> 16) as u8,
+        g: (packed >> 8) as u8,
+        b: packed as u8,
+    }
+}
+
 /// Same 8px rounding the taskbar elements use on hover (`ui/shell/flamewm.css`), so a
 /// separate-mode capsule and its hover highlight share one shape.
 const ELEMENT_RADIUS: f32 = 8.0;
@@ -139,29 +162,41 @@ pub(crate) fn project_element_backgrounds(
         TRANSPARENT_FILL
     };
     let blur = items.separate.then_some(items.blur_percent);
+    let stroke = taskbar_border();
+    let contour = |shown: bool| if items.separate && shown {
+        stroke
+    } else {
+        TRANSPARENT_FILL
+    };
     // The capsules own the background; start/clock buttons keep their CSS hover on top.
     document.background("start-capsule", fill)?;
+    document.border("start-capsule", contour(true))?;
     document.corner_radius("start-capsule", ELEMENT_RADIUS)?;
     document.node_backdrop("start-capsule", blur)?;
     // A capsule with no icons inside is not painted at all.
     let capsule = |shown: bool| if shown { fill } else { TRANSPARENT_FILL };
     let capsule_blur = |shown: bool| (items.separate && shown).then_some(items.blur_percent);
     document.background("tray-group", capsule(tray_visible))?;
+    document.border("tray-group", contour(tray_visible))?;
     document.corner_radius("tray-group", ELEMENT_RADIUS)?;
     document.node_backdrop("tray-group", capsule_blur(tray_visible))?;
     document.background("clock-capsule", capsule(clock_visible))?;
+    document.border("clock-capsule", contour(clock_visible))?;
     document.corner_radius("clock-capsule", ELEMENT_RADIUS)?;
     document.node_backdrop("clock-capsule", capsule_blur(clock_visible))?;
-    // No capsule behind the workspace selector: its cells carry the selector's own fills.
-    document.background("workspace-pager", TRANSPARENT_FILL)?;
-    document.corner_radius("workspace-pager", 0.0)?;
-    document.node_backdrop("workspace-pager", None)?;
+    // The pager is a single capsule, just like Start, tasks, tray and clock.
+    // Its existing individual workspace cells still own their active/hover fills.
+    document.background("workspace-pager", capsule(items.workspaces))?;
+    document.border("workspace-pager", contour(items.workspaces))?;
+    document.corner_radius("workspace-pager", ELEMENT_RADIUS)?;
+    document.node_backdrop("workspace-pager", capsule_blur(items.workspaces))?;
     let slots = if items.separate && rendered_slots > 0 {
         taskbar_surface()
     } else {
         TRANSPARENT_FILL
     };
     document.background("task-slots", slots)?;
+    document.border("task-slots", contour(rendered_slots > 0))?;
     document.corner_radius("task-slots", ELEMENT_RADIUS)?;
     document.node_backdrop(
         "task-slots",

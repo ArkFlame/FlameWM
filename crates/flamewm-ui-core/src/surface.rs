@@ -107,6 +107,65 @@ mod surface_blend_tests {
     }
 }
 
+/// Fractional coverage of a 1px inner outline on a rounded surface.
+/// Both the native titlebar and UI renderer use the same surface material; this
+/// pure geometry is reusable without coupling the skin to an X11 backend.
+#[must_use]
+pub fn inner_contour_coverage(w: u32, h: u32, radius: u32, x: u32, y: u32) -> u8 {
+    if w == 0 || h == 0 || x >= w || y >= h {
+        return 0;
+    }
+    // Only pixels within one pixel of the outside can contribute.
+    let r = radius.min(w.min(h) / 2);
+    let near_left = x <= r;
+    let near_right = x.saturating_add(r).saturating_add(1) >= w;
+    let near_top = y <= r;
+    let near_bottom = y.saturating_add(r).saturating_add(1) >= h;
+    if !(near_left || near_right) || !(near_top || near_bottom) {
+        if x >= 1 && y >= 1 && x + 1 < w && y + 1 < h {
+            return 0;
+        }
+    }
+    fn inside(x: f32, y: f32, w: f32, h: f32, r: f32) -> bool {
+        if x < 0.0 || y < 0.0 || x >= w || y >= h { return false; }
+        if r <= 0.0 { return true; }
+        let cx = x.clamp(r, w - r);
+        let cy = y.clamp(r, h - r);
+        let dx = x - cx;
+        let dy = y - cy;
+        dx * dx + dy * dy <= r * r
+    }
+    let outer_r = r as f32;
+    let inner_r = outer_r - 1.0;
+    let mut hits = 0_u32;
+    for sy in 0..4 {
+        for sx in 0..4 {
+            let px = x as f32 + (sx as f32 + 0.5) / 4.0;
+            let py = y as f32 + (sy as f32 + 0.5) / 4.0;
+            if inside(px, py, w as f32, h as f32, outer_r)
+                && (w <= 2 || h <= 2 || !inside(px - 1.0, py - 1.0,
+                    (w - 2) as f32, (h - 2) as f32, inner_r.max(0.0)))
+            { hits += 1; }
+        }
+    }
+    ((hits * 255 + 8) / 16) as u8
+}
+
+#[cfg(test)]
+mod rounded_contour_tests {
+    use super::inner_contour_coverage as alpha;
+    #[test]
+    fn outlined_corners_curve_and_interior_stays_empty() {
+        assert_eq!(alpha(100, 60, 12, 0, 0), 0);
+        assert!(alpha(100, 60, 12, 11, 0) > 0);
+        assert!(alpha(100, 60, 12, 0, 11) > 0);
+        assert_eq!(alpha(100, 60, 12, 30, 30), 0);
+        assert!(alpha(100, 60, 12, 99, 49) > 0);
+        assert_eq!(alpha(100, 60, 0, 30, 30), 0);
+        assert_eq!(alpha(100, 60, 0, 0, 0), 255);
+    }
+}
+
 /// Parses `#rrggbb` or bare `rrggbb` into 0xRRGGBB.
 fn parse_rgb(text: &str) -> Option<u32> {
     let hex = text.strip_prefix('#').unwrap_or(text);

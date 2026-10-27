@@ -1026,8 +1026,8 @@ impl X11App {
                 let rect = scale_rect(*rect, scale);
                 let width = *width * scale;
                 let radius = *radius * scale;
-                // XRender ignores the GC clip stack: a border cut by a clip is drawn as its
-                // four edge bands, each cut to the clip (corner radius dropped).
+                // XRender ignores the GC clip stack; the AA painter clips rounded
+                // edge runs explicitly without replacing their arc with square bands.
                 let visible = visible_under(rect, &self.clip_stack);
                 if let Some(xrender) = self.xrender.as_mut() {
                     match visible {
@@ -1040,18 +1040,14 @@ impl X11App {
                                 )?
                             };
                         }
-                        Visible::Part(_) => {
-                            for band in super::clip::border_bands(rect, width) {
-                                let cut = match visible_under(band, &self.clip_stack) {
-                                    Visible::Hidden => continue,
-                                    Visible::Whole => band,
-                                    Visible::Part(part) => part,
-                                };
-                                // SAFETY: same initialized backbuffer/display contract as `paint`.
-                                unsafe {
-                                    crate::xrender_aa::fill_rounded_rect(xrender, cut, 0.0, *color)?
-                                };
-                            }
+                        Visible::Part(part) => {
+                            // Clip the native AA ring rather than replacing its curved
+                            // corners with square rectangular border bands.
+                            unsafe {
+                                crate::xrender_aa::stroke_rounded_rect_clipped(
+                                    xrender, rect, radius, width, *color, Some(part),
+                                )?
+                            };
                         }
                     }
                     return Ok(());

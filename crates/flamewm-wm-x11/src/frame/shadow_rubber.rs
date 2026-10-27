@@ -46,6 +46,20 @@ pub fn visible_shadow_regions(area: Rect, frame: Rect) -> [Option<Rect>; 2] {
     ]
 }
 
+/// Include the narrow bottom/right corner bands exposed by a rounded frame. The
+/// old compact snapshot covered only the square-cut shape and could not restore
+/// rubber-band pixels inside the newly visible curved notch.
+#[must_use]
+pub fn visible_shadow_regions_rounded(area: Rect, frame: Rect, radius: u32) -> [Option<Rect>; 2] {
+    let radius = radius.min(frame.width.min(frame.height) / 2) as i32;
+    let right = (frame.right() - radius).clamp(area.x, area.right());
+    let bottom = (frame.bottom() - radius).clamp(area.y, area.bottom());
+    [
+        intersect(area, Rect::new(right,area.y,(area.right()-right) as u32,area.height)),
+        intersect(area, Rect::new(area.x,bottom,(right-area.x) as u32,(area.bottom()-bottom) as u32)),
+    ]
+}
+
 /// Only retain the raw desktop pixels that can actually appear in a shadow.
 /// Each row is tightly packed BGRX; the original full frame is released after presentation.
 pub struct ShadowBands {
@@ -62,6 +76,22 @@ impl ShadowBands {
     pub fn capture(raw: &[u8], area: Rect, frame: Rect) -> Self {
         let stride = area.width as usize * 4;
         let strips = visible_shadow_regions(area, frame).map(|region| {
+            region.map(|region| {
+                let mut pixels = Vec::with_capacity(region.width as usize * region.height as usize * 4);
+                for y in region.y..region.bottom() {
+                    let start = (y - area.y) as usize * stride + (region.x - area.x) as usize * 4;
+                    pixels.extend_from_slice(&raw[start..start + region.width as usize * 4]);
+                }
+                ShadowStrip { region, pixels }
+            })
+        });
+        Self { strips }
+    }
+
+    #[must_use]
+    pub fn capture_rounded(raw: &[u8], area: Rect, frame: Rect, radius: u32) -> Self {
+        let stride = area.width as usize * 4;
+        let strips = visible_shadow_regions_rounded(area, frame, radius).map(|region| {
             region.map(|region| {
                 let mut pixels = Vec::with_capacity(region.width as usize * region.height as usize * 4);
                 for y in region.y..region.bottom() {
@@ -104,6 +134,28 @@ pub fn visible_damage_regions(
         return [None, None];
     };
     visible_shadow_regions(area, frame).map(|region| region.and_then(|r| intersect(r, changed)))
+}
+
+/// Existing damage geometry, extended only for the small rounded-corner notches.
+#[must_use]
+pub fn visible_motion_damage_regions_rounded(
+    area: Rect, frame: Rect, radius: u32,
+    old: Option<&RootRubber>, new: Option<&RootRubber>,
+) -> [Option<Rect>; 4] {
+    if radius == 0 {
+        return visible_motion_damage_regions(area,frame,old,new);
+    }
+    // The old two-edge optimization assumes a rectangular shadow, so applying it
+    // to the newly exposed corner could miss damage after the selection shrinks.
+    // Keep the conservative damage bound for the small curved region.
+    let changed = damage_region(area,old,new);
+    let mut result = [None,None,None,None];
+    if let Some(changed) = changed {
+        for (i, region) in visible_shadow_regions_rounded(area,frame,radius).into_iter().enumerate() {
+            result[i] = region.and_then(|r| intersect(r,changed));
+        }
+    }
+    result
 }
 
 /// For a selection rectangle resized from the same top-left corner, the existing fill and

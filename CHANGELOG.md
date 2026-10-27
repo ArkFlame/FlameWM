@@ -1,3 +1,29 @@
+## 2026-10-27 — Pass 17: Separated taskbar, workspace capsules, lower window contour, terminal TUI
+
+- Hide the *root border* along with the root fill in `taskbarSeparate` mode; keep the root contour in unified mode and preserve the live `surfaceBorderColor`/`surfaceBorderOpacity` shared contract for individual capsules.
+- Give `workspace-pager` the same 1px border geometry, surface fill, blur, and 8px radius as Start, task slots, tray and clock when separated; retain its individual square workspace buttons and active workspace highlighting. Clear the pager capsule in unified mode.
+- Draw the missing bottom-left/bottom-right floating window contour with a compact bottom-only RGBA strip using the same `flamewm-ui-core::surface::inner_contour_coverage` and native renderer used by the titlebar. Alpha-composite only where coverage is nonzero; do not allocate full-frame buffers or introduce a new X11 window.
+- Expand the terminal's build-time bounded run pool from 64 to 128 per row. The original 64-node limit was known to merge multi-colour block glyphs into a text run when overflowed; this specifically impacted dense OpenCode/htop TUI art. The tradeoff is approximately 6,144 additional precompiled hidden run nodes at the 96-row maximum, and potentially higher terminal memory. No new background threads or work per unchanged row.
+- Add Rust regression tests for separated/unified border projection, bottom contour geometry and dense terminal runs. Static/integer-geometry checks are not a substitute for native Rust compilation, a terminal screenshot or live visual verification.
+
+## 2026-10-27 — Pass 15: Round-glass contours, corner-shadow masking, Task Manager build merge
+
+- Integrate the separate Command Code session's verified source edits for Task Manager: eliminate duplicate `priority` fields/initializer, dereference the borrowed resize height, and remove two unused imports. Update the outdated source-contract assertion that expected the non-compiling un-dereferenced resize call.
+- Keep one Surfaces contour owner: share the configured `surfaceBorderColor`/`surfaceBorderOpacity` from `flamewm-ui-core` and `flamewm-ui-x11` with the panel root and all four separate-mode capsules; define their physical 1px CSS border widths so live color projection actually paints.
+- Draw the X11 titlebar's curved upper outline with a reusable supersampled 1px inner-contour coverage function; preserve opaque titlebar pixels, configured border alpha, and frame clipping. Preserve partial rounded-ring coverage in the shared XRender stroke path when a clip cuts a surface.
+- Anti-alias native minimize/maximize/close circle backplates using 4x4 sample coverage, with the SVG glyph still composited in front. No new renderer, compositor process or polling loop.
+- Make X11 floating-frame shadow clipping follow the same frame radius as the window shape. Shade and retain only the right/bottom strips extended into exposed corner notches; invalidate the shadow shape on radius/style changes. Preserve the earlier square/zero-radius behavior and compact-shadow interfaces for callers/tests.
+- Added focused Rust regression tests and 5 source/geometry preflight tests. 19 targeted Python checks passed; an unrelated historical visual-source suite has 3 pre-existing failures also reproduced on untouched Pass 14. Cargo and graphical X11 visual checks could not be run in this environment.
+- See `docs/FLAMEWM_PASS15_ROUNDED_GLASS_AND_BUILD_MERGE_2026-10-27.md`.
+
+## 2026-10-27 — Pass 14: Reference-backed CSS/scroll optimization and GPU architecture audit
+
+- Audited the supplied COSMIC Epoch, CreamUI and Coconut source snapshots against the current FlameWM Rust render architecture; findings and GPU readiness gates are documented in `docs/FLAMEWM_REFERENCE_UI_GPU_RESEARCH_PASS14_2026-10-27.md`.
+- Expand the build-time FlameWM CSS compiler with uniform `border: none`, `border: 0` and `border: 0px` resets; keep existing solid-border handling, strict rejection of unsupported complex borders and zero runtime dependencies. Align Task Manager preflight checks.
+- Skip document layout/damage invalidation and offset-map insertion for clamped wheel input that does not change a scroll position. Preserve movement and clamp-on-content-shrink semantics.
+- Wayland already uses Smithay OpenGL ES; X11 already uses server-side XRender where available. Do not add a redundant Vulkan/wgpu renderer or a misleading software toggle until equivalent backends and measured benefit exist.
+- Source/package checks and targeted Python tests passed. New Rust tests are included but could not be executed without Cargo; native GPU, CPU/PSS and visual parity are **not** verified here.
+
 ## 2026-10-27 — Pass 13: Fix missing direct dependency in X11 surface adapter
 
 - Add `flamewm-api` as a direct dependency of `flamewm-ui-x11`, matching `surface_style.rs` imports of `flamewm_api::settings::SettingsSnapshot` and its Rust unit-test import of `SettingValue`.

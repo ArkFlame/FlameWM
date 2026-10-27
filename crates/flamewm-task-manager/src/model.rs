@@ -2,7 +2,6 @@
 //! PID plus process start-time is the authority for selecting a live process.
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
 
 #[derive(Clone, Debug, Default)]
 pub struct Process {

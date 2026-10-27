@@ -392,22 +392,40 @@ impl FillMask {
 /// straight-alpha glyph over it. Pixels outside the mask are untouched.
 fn paint_fill_behind(raster: &mut flamewm_image_core::RgbaImage, fill: [u8; 4], mask: FillMask) {
     let size = raster.width as f32;
+    const SAMPLES: u32 = 4;
     for y in 0..raster.height {
         for x in 0..raster.width {
-            if !mask.contains(x as f32 + 0.5, y as f32 + 0.5, size) {
+            let coverage = (0..SAMPLES)
+                .flat_map(|sy| (0..SAMPLES).map(move |sx| (sx, sy)))
+                .filter(|&(sx, sy)| {
+                    mask.contains(
+                        x as f32 + (sx as f32 + 0.5) / SAMPLES as f32,
+                        y as f32 + (sy as f32 + 0.5) / SAMPLES as f32,
+                        size,
+                    )
+                })
+                .count() as u16;
+            if coverage == 0 {
                 continue;
             }
+            let disk_coverage = (coverage * 255 + 8) / 16;
             let offset = ((y * raster.width + x) * 4) as usize;
             let pixel = &mut raster.pixels[offset..offset + 4];
             let glyph_alpha = u16::from(pixel[3]);
-            let disk_alpha = 255 - glyph_alpha;
-            for channel in 0..3 {
-                pixel[channel] = ((u16::from(pixel[channel]) * glyph_alpha
-                    + u16::from(fill[channel]) * disk_alpha
-                    + 127)
-                    / 255) as u8;
+            // The original glyph remains on top. Only uncovered portions receive the AA fill.
+            let fill_alpha = (disk_coverage * u16::from(fill[3]) + 127) / 255;
+            let total_alpha = glyph_alpha + (fill_alpha * (255 - glyph_alpha) + 127) / 255;
+            if total_alpha == 0 {
+                continue;
             }
-            pixel[3] = 255;
+            for channel in 0..3 {
+                let premultiplied = u32::from(pixel[channel]) * u32::from(glyph_alpha)
+                    + (u32::from(fill[channel]) * u32::from(fill_alpha)
+                        * u32::from(255 - glyph_alpha) + 127) / 255;
+                pixel[channel] = ((premultiplied + u32::from(total_alpha) / 2)
+                    / u32::from(total_alpha)).min(255) as u8;
+            }
+            pixel[3] = total_alpha as u8;
         }
     }
 }
@@ -1072,6 +1090,18 @@ mod tests {
 
     fn put(snapshot: &mut SettingsSnapshot, key: &str, value: SettingValue) {
         snapshot.values.insert(key.to_owned(), value);
+    }
+
+    #[test]
+    fn circle_hover_has_fractional_edge_alpha_and_preserves_centre() {
+        let mut glyph = flamewm_image_core::RgbaImage::from_rgba8(
+            16, 16, vec![0_u8; 16 * 16 * 4],
+        ).expect("valid glyph buffer");
+        paint_fill_behind(&mut glyph, [241, 242, 243, 255], FillMask::Circle);
+        assert_eq!(glyph.pixels[(8 * 16 + 8) * 4 + 3], 255);
+        assert_eq!(glyph.pixels[3], 0);
+        assert!(glyph.pixels.chunks_exact(4).any(|p| p[3] > 0 && p[3] < 255),
+            "the hover disk must anti-alias its circumference");
     }
 
     #[test]

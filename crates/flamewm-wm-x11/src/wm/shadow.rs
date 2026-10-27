@@ -110,6 +110,7 @@ mod shadow_shape_tests {
 /// One shadow window of a frame and what it currently shows.
 pub(super) struct FrameShadow {
     win: Window,
+    radius: u32,
     state: ShadowState,
     /// Pixmap behind `win`'s background. Kept (not freed after use) so a live desktop rubber band
     /// can be recomposed into it without a readback.
@@ -342,6 +343,9 @@ impl<C: Connection> Wm<'_, C> {
         // Re-shading a batch must not synchronously query the same X11 stacking tree once per
         // frame. Managed frames cannot change stacking during this synchronous reconcile pass.
         let mut bottom_frame = None;
+        let current_radius = u32::from(crate::frame::geometry_shape::scaled_corner_radius(
+            true, self.decoration_tokens.style, self.titlebar_height(),
+        ));
         for want in &wanted {
             let prev = self.frame_shadows.get(&want.frame).map(|held| held.state);
             // A frame first seen while frames are still moving waits for the settle: shading it
@@ -349,7 +353,14 @@ impl<C: Connection> Wm<'_, C> {
             if prev.is_none() && motion {
                 continue;
             }
-            match shadow::plan_shadow(prev, want.outer, want.focused, motion, generation) {
+            let shape_changed = self.frame_shadows.get(&want.frame)
+                .is_some_and(|held| held.radius != current_radius);
+            let decision = if shape_changed && !motion {
+                ShadowAction::Reshade
+            } else {
+                shadow::plan_shadow(prev, want.outer, want.focused, motion, generation)
+            };
+            match decision {
                 ShadowAction::Noop => {}
                 ShadowAction::Move => self.move_frame_shadow(want.frame, want.outer)?,
                 ShadowAction::Reshade => {
@@ -536,13 +547,18 @@ impl<C: Connection> Wm<'_, C> {
         let previous_shape = self.frame_shadows.get(&frame).map(|held| {
             (held.win, held.state.shaded.width, held.state.shaded.height)
         });
-        let update_shape = needs_shadow_shape_update(previous_shape, win, outer);
-        let shown = self.refresh_shadow(outer, focused, win, sibling, update_shape)?;
+        let radius = u32::from(crate::frame::geometry_shape::scaled_corner_radius(
+            true, self.decoration_tokens.style, self.titlebar_height(),
+        ));
+        let update_shape = needs_shadow_shape_update(previous_shape, win, outer)
+            || self.frame_shadows.get(&frame).is_some_and(|held| held.radius != radius);
+        let shown = self.refresh_shadow(outer, focused, win, sibling, update_shape, radius)?;
         if let Some((raw, pixmap)) = shown {
             self.frame_shadows.insert(
                 frame,
                 FrameShadow {
                     win,
+                    radius,
                     state: ShadowState {
                         shaded: outer,
                         focused,
@@ -572,15 +588,16 @@ impl<C: Connection> Wm<'_, C> {
         win: Window,
         sibling: Window,
         update_shape: bool,
+        radius: u32,
     ) -> Result<Option<(shadow_rubber::ShadowBands, Pixmap)>, ReplyOrIdError> {
         let root = self.screen().root;
         let rect = shadow::shadow_rect(outer);
         let Some(raw) = self.desktop_snapshot(rect, outer)? else {
             return Ok(None);
         };
-        let raw_bands = shadow_rubber::ShadowBands::capture(&raw, rect, outer);
+        let raw_bands = shadow_rubber::ShadowBands::capture_rounded(&raw, rect, outer, radius);
         let mut pixels = raw;
-        shadow::shade_visible_shadow(outer, focused, &mut pixels);
+        shadow::shade_visible_shadow_rounded(outer, focused, radius, &mut pixels);
         if pixels.len() + 32 > self.conn.maximum_request_bytes() {
             return Ok(None);
         }
@@ -616,7 +633,7 @@ impl<C: Connection> Wm<'_, C> {
         // window area inside the frame is cut away too, so only the cast shows.
         if update_shape {
             let mask: Vec<x11rb::protocol::xproto::Rectangle> =
-                shadow::shadow_mask_rectangles(rect, outer)
+                shadow::rounded_shadow_mask_rectangles(rect, outer, radius)
                     .into_iter()
                     .map(|(x, y, width, height)| x11rb::protocol::xproto::Rectangle {
                         x: x as i16,
@@ -670,9 +687,10 @@ impl<C: Connection> Wm<'_, C> {
         let update = (|| -> Result<(), ReplyOrIdError> {
             for held in self.frame_shadows.values() {
                 let area = shadow::shadow_rect(held.state.shaded);
-                let regions = shadow_rubber::visible_motion_damage_regions(
+                let regions = shadow_rubber::visible_motion_damage_regions_rounded(
                     area,
                     held.state.shaded,
+                    held.radius,
                     previous.as_ref(),
                     next.as_ref(),
                 );

@@ -54,6 +54,6 @@ class TaskManagerSourceContract(unittest.TestCase):
     def test_initial_viewport_matches_fixed_header(self):
         source = (ROOT / "crates/flamewm-task-manager/src/lib.rs").read_text()
         self.assertIn("viewport: visible_rows(HEIGHT)", source)
-        self.assertIn("app.viewport = visible_rows(height)", source)
+        self.assertIn("app.viewport = visible_rows(*height)", source)
 
 if __name__ == "__main__": unittest.main()

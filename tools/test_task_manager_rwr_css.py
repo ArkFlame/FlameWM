@@ -32,10 +32,11 @@ def unsupported_properties(source: str) -> list[str]:
             name, value = name.strip(), value.strip()
             if name.startswith("--"):
                 continue
-            # The native compiler accepts `border: <px> solid <color>`, not
-            # browser shorthands like `border: 0` or `border: none`.
+            # The native compiler supports zero/none border resets and uniform
+            # `<px> solid <color>` borders. Reject all other shorthands.
             border = value.split() if name == "border" else ()
-            invalid_border = name == "border" and (
+            border_reset = name == "border" and value in {"0", "0px", "none"}
+            invalid_border = name == "border" and not border_reset and (
                 len(border) != 3
                 or border[1] != "solid"
                 or not re.fullmatch(r"(?:0|[0-9]+(?:\.[0-9]+)?px)", border[0])
@@ -62,8 +63,10 @@ class NativeTaskManagerCssTests(unittest.TestCase):
         self.assertEqual(len(unsupported_properties(bad)), 3)
 
     def test_border_reset_is_validated_at_value_level(self):
-        self.assertEqual(unsupported_properties("button { border: 0; }"), ["border:0"])
-        self.assertEqual(unsupported_properties("button { border: none; }"), ["border:none"])
+        self.assertEqual(unsupported_properties("button { border: 0; }"), [])
+        self.assertEqual(unsupported_properties("button { border: none; }"), [])
+        self.assertEqual(unsupported_properties("button { border: 0px; }"), [])
+        self.assertEqual(unsupported_properties("button { border: 1px dashed red; }"), ["border:1px dashed red"])
         self.assertEqual(unsupported_properties("button { border-width: none; }"), ["border-width:none"])
         self.assertEqual(unsupported_properties("button { border-width: 0; }"), [])
         self.assertEqual(unsupported_properties("button { border: 1px solid var(--border); }"), [])

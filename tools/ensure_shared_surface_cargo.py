@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Refresh only changed shared-surface and Task Manager release artifacts.
+"""Invalidate stale release artifacts for FlameWM's native UI and WM owners.
 
-Extracting a source tarball can preserve mtimes older than Cargo's cached rlibs.
-Cargo may then reuse old definitions even though the source modules are correct.
-A content digest, scoped to the crates affected by Pass 9/10, prevents that.
+Extracted archive sources can have timestamps OLDER than already compiled rlibs.
+Cargo's normal mtime checks may therefore reuse an old Shell, Terminal, WM,
+or embedded .rwr UI even after a successful `cargo build`. Source-content
+hashing invalidates only owners whose inputs changed; unchanged ones are cheap.
 """
 from __future__ import annotations
 
@@ -15,15 +16,30 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CRATES = ("flamewm-skin", "flamewm-ui-core", "flamewm-ui-x11", "flamewm-task-manager")
+# Preserve one shared gate for the full visual stack. Each package is cleaned
+# independently when its own content changes (not on every Xephyr launch).
+CRATES = (
+    "flamewm-skin", "flamewm-ui-core", "flamewm-ui-x11",
+    "flamewm-render-core", "flamewm-render-compiler", "flamewm-render-x11",
+    "flamewm-wm-x11", "flamewm-shell", "flamewm-terminal",
+    "flamewm-task-manager",
+)
 UI_INPUTS = ("ui/task-manager/task-manager.css", "ui/task-manager/task-manager.html")
+UI_TREES = {"flamewm-shell": "ui/shell", "flamewm-terminal": "ui/terminal"}
+SHARED_UI_INPUTS = {"flamewm-shell": ("ui/shared/menu.css",)}
 
 
 def content_digest(root: Path, crate: str) -> str:
     directory = root / "crates" / crate
     sources = [directory / "Cargo.toml"] + sorted(directory.rglob("*.rs"))
     if crate == "flamewm-task-manager":
-        sources += [root / name for name in UI_INPUTS]
+        sources.extend(root / name for name in UI_INPUTS)
+    if crate in UI_TREES:
+        ui_dir = root / UI_TREES[crate]
+        if not ui_dir.is_dir():
+            raise RuntimeError(f"Missing UI input directory: {ui_dir}")
+        sources.extend(sorted(path for path in ui_dir.rglob("*") if path.is_file()))
+        sources.extend(root / name for name in SHARED_UI_INPUTS.get(crate, ()))
     digest = hashlib.sha256()
     for source in sources:
         if not source.is_file():

@@ -255,30 +255,82 @@ fn titlebar_fill_pixels(
 
 /// Render the 1px contour inside the titlebar's native pixels. Its colour is the
 /// same Surfaces token as panel/popups; no X11 round trip or overlay window.
-fn composite_surface_contour(pixels: &mut [u8], width: u32, height: u32, radius: u16, tokens: &ChromeTokens) {
-    if width == 0 || height == 0 || tokens.surface_border_alpha == 0 { return; }
-    let Some(total) = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4)) else { return; };
+fn composite_surface_contour(
+    pixels: &mut [u8], width: u32, titlebar_height: u32, frame_height: u32,
+    radius: u16, tokens: &ChromeTokens,
+) {
+    if width < 2 || titlebar_height == 0 || frame_height < 2 || tokens.surface_border_alpha == 0 {
+        return;
+    }
+    let Some(total) = (width as usize).checked_mul(titlebar_height as usize)
+        .and_then(|n| n.checked_mul(4)) else { return; };
     if pixels.len() < total { return; }
-    let contour = flamewm_ui_core::surface::SurfaceFill {
+    let stroke = flamewm_ui_core::surface::SurfaceFill {
         rgb: tokens.surface_border_rgb.0,
         alpha: tokens.surface_border_alpha,
     };
-    let mut mix = |x: u32, y: u32| {
-        let offset = (y as usize * width as usize + x as usize) * 4;
-        let base = u32::from_be_bytes([
-            0, pixels[offset], pixels[offset + 1], pixels[offset + 2],
-        ]);
-        let blended = flamewm_ui_core::surface::blend_surface_over_rgb(base, contour);
-        pixels[offset] = (blended >> 16) as u8;
-        pixels[offset + 1] = (blended >> 8) as u8;
-        pixels[offset + 2] = blended as u8;
-    };
-    let r = u32::from(radius).min(width / 2).min(height);
-    for x in r..width.saturating_sub(r) { mix(x, 0); }
-    for y in 1..height {
-        // Avoid coloring fully clipped rounded corners.
-        if y >= r { mix(0, y); if width > 1 { mix(width - 1, y); } }
+    let r = u32::from(radius).min(width / 2).min(frame_height / 2);
+    // Top perimeter and both side arcs. There is no horizontal border at the bottom of
+    // the titlebar: that is the interior of the complete client frame.
+    for y in 0..titlebar_height {
+        let reach = if y <= r { r.saturating_add(2) } else { 1 };
+        for x in 0..width {
+            if y > 0 && x >= reach && x < width.saturating_sub(reach) { continue; }
+            let coverage = flamewm_ui_core::surface::inner_contour_coverage(
+                width, frame_height, r, x, y,
+            );
+            if coverage == 0 { continue; }
+            let alpha = (u16::from(stroke.alpha) * u16::from(coverage) + 127) / 255;
+            let at = (y as usize * width as usize + x as usize) * 4;
+            let base = u32::from_be_bytes([0, pixels[at], pixels[at + 1], pixels[at + 2]]);
+            let blended = flamewm_ui_core::surface::blend_surface_over_rgb(
+                base, flamewm_ui_core::surface::SurfaceFill { alpha: alpha as u8, ..stroke },
+            );
+            pixels[at] = (blended >> 16) as u8;
+            pixels[at + 1] = (blended >> 8) as u8;
+            pixels[at + 2] = blended as u8;
+        }
     }
+}
+
+/// The native titlebar occupies only the first rows of the frame. Paint the
+/// lower rounded arc on the *same* parent drawable, behind the shaped client;
+/// otherwise the two bottom corner contours disappear even though the
+/// top corner contour is present in `composite_surface_contour`.
+///
+/// This uses the shared 1px coverage function and emits only a small RGBA
+/// strip (at most radius+1 rows), not a full-frame bitmap. The source is
+/// transparent away from the stroke, so PictOpOver preserves the client and
+/// backdrop rather than painting a black rectangle in the rounded notch.
+fn bottom_contour_strip(
+    width: u32, height: u32, radius: u16, tokens: &ChromeTokens,
+) -> Option<(u32, Vec<u8>)> {
+    if width < 2 || height < 2 || tokens.surface_border_alpha == 0 {
+        return None;
+    }
+    let radius = u32::from(radius).min(width / 2).min(height / 2);
+    if radius == 0 { return None; }
+    let rows = radius.saturating_add(1).min(height);
+    let bytes = (width as usize).checked_mul(rows as usize)?.checked_mul(4)?;
+    let mut pixels = vec![0_u8; bytes];
+    let rgb = tokens.surface_border_rgb.0;
+    for local_y in 0..rows {
+        let y = height - rows + local_y;
+        for x in 0..width {
+            let coverage = flamewm_ui_core::surface::inner_contour_coverage(
+                width, height, radius, x, y,
+            );
+            if coverage == 0 { continue; }
+            let alpha = (u16::from(tokens.surface_border_alpha) * u16::from(coverage) + 127) / 255;
+            if alpha == 0 { continue; }
+            let at = (local_y as usize * width as usize + x as usize) * 4;
+            pixels[at] = (rgb >> 16) as u8;
+            pixels[at + 1] = (rgb >> 8) as u8;
+            pixels[at + 2] = rgb as u8;
+            pixels[at + 3] = alpha as u8;
+        }
+    }
+    Some((rows, pixels))
 }
 
 /// Execute a scene against the renderer. Passes 12.0/600 to `draw_title`;
@@ -327,7 +379,10 @@ pub fn render(
             scene.titlebar_height,
             &plates,
         );
-        composite_surface_contour(&mut pixels, scene.frame_w, titlebar_h as u32, scene.radius, &scene.tokens);
+        composite_surface_contour(
+            &mut pixels, scene.frame_w, titlebar_h as u32, scene.frame_h,
+            scene.radius, &scene.tokens,
+        );
         drop(pixels_guard);
         let _blit_guard = flamewm_profiler::start("wm.chrome.render.fill.blit");
         renderer.blit_rgba(
@@ -405,6 +460,23 @@ pub fn render(
             },
         )
     });
+    // Bottom arc shares the titlebar contour color/coverage. Only the
+    // lower radius rows are uploaded; XRender blends transparent pixels away.
+    let bottom_result = if let Some((rows, pixels)) = bottom_contour_strip(
+        scene.frame_w, scene.frame_h, scene.radius, &scene.tokens,
+    ) {
+        renderer.blit_rgba(
+            &pixels, scene.frame_w, rows,
+            Rect {
+                x: 0.0,
+                y: (scene.frame_h - rows) as f32,
+                width: scene.frame_w as f32,
+                height: rows as f32,
+            },
+        )
+    } else {
+        Ok(())
+    };
     let shape_guard = flamewm_profiler::start("wm.chrome.render.shape");
     let shape_result = renderer.apply_shape(u32::from(scene.radius));
     drop(shape_guard);
@@ -415,6 +487,7 @@ pub fn render(
     icon_result?;
     draw_result?;
     controls_result?;
+    bottom_result?;
     shape_result?;
     Ok(())
 }
@@ -423,6 +496,40 @@ pub fn render(
 mod tests {
     use super::*;
     use flamewm_skin::palette::PANEL;
+
+    #[test]
+    fn bottom_contour_draws_both_rounded_corners_and_centre_edge() {
+        let tokens = ChromeTokens::default();
+        let w = 120;
+        let h = 100;
+        let radius = 12;
+        let (rows, pixels) = bottom_contour_strip(w, h, radius, &tokens).expect("bottom strip");
+        let alpha = |x: usize, y: usize| pixels[(y * w as usize + x) * 4 + 3];
+        assert_eq!(rows, 13);
+        assert_eq!(alpha(0, 12), 0, "bottom-left outer corner must stay clipped");
+        assert_eq!(alpha(119, 12), 0, "bottom-right outer corner must stay clipped");
+        assert!(alpha(11, 12) > 0, "bottom-left arc must join bottom edge");
+        assert!(alpha(108, 12) > 0, "bottom-right arc must join bottom edge");
+        assert!(alpha(60, 12) > 0, "bottom edge must be continuous");
+        assert_eq!(alpha(60, 0), 0, "inner area stays transparent");
+        let mut disabled = tokens;
+        disabled.surface_border_alpha = 0;
+        assert!(bottom_contour_strip(w, h, radius, &disabled).is_none());
+        assert!(bottom_contour_strip(w, h, 0, &tokens).is_none());
+    }
+
+    #[test]
+    fn titlebar_contour_follows_the_rounded_corner_instead_of_ending_at_radius() {
+        let width = 100_u32;
+        let mut pixels = vec![0_u8; width as usize * 31 * 4];
+        let tokens = ChromeTokens::default();
+        composite_surface_contour(&mut pixels,width,31,150,12,&tokens);
+        let red = |x: usize,y:usize| pixels[(y * width as usize + x) * 4];
+        assert_eq!(red(0,0),0, "the clipped outer corner stays empty");
+        assert!(red(11,0)>0, "the top arc must join the straight border");
+        assert!(red(0,20)>0, "the side contour must remain visible");
+        assert_eq!(red(30,15),0, "the centre stays free of border paint");
+    }
 
     #[test]
     fn plan_uses_skin_values_exactly() {

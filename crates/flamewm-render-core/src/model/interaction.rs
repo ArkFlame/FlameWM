@@ -112,6 +112,9 @@ impl RuntimeDocument {
             offset_y: cur.offset_y + delta.dy,
         }
         .clamped(max.0, max.1);
+        if next == cur {
+            return cur;
+        }
         self.scroll_offsets.insert(index, next);
         self.touch_light();
         self.mark_dirty(SurfaceDamage::Full);

@@ -68,6 +68,7 @@ pub fn project(
         SurfaceKind::Panel => {
             let fill = surface_background(snapshot);
             crate::projection::set_taskbar_surface(fill);
+            crate::projection::set_taskbar_border(flamewm_ui_x11::surface_style::surface_border(snapshot));
             // Separate mode paints the wallpaper (the captured backdrop) across the bar and one
             // capsule per element; the root must not tint the gaps between them.
             let separate = bool_setting(snapshot, "taskbarSeparate", true);
@@ -79,6 +80,11 @@ pub fn project(
                     fill
                 },
             )?;
+            // A transparent fill alone does not suppress the separately projected 1px
+            // contour. Only the per-node capsules have outlines in separated mode.
+            if separate {
+                document.border("taskbar", UiColor { a: 0, ..fill })?;
+            }
             crate::projection::set_task_accent(accent);
             // A settings change must also re-apply (or clear) the per-element capsules, so
             // disabling `taskbarSeparate` cannot leave the last projected fills behind.
@@ -442,7 +448,12 @@ mod tests {
             (SurfaceKind::Osd, "osd"),
         ] {
             project(&mut doc, &snapshot, kind).expect("shared surface projection");
-            assert_eq!(doc.borders[root], contour, "{root}");
+            if kind == SurfaceKind::Panel {
+                // Separate mode owns only node borders, not the transparent bar root.
+                assert_eq!(doc.borders[root].a, 0, "{root}");
+            } else {
+                assert_eq!(doc.borders[root], contour, "{root}");
+            }
         }
         for popup in ["audio-popup", "wifi-popup", "calendar-popup", "weather-popup"] {
             project_menu_background(&mut doc, &snapshot, popup).expect("popup projection");
@@ -684,6 +695,9 @@ mod tests {
         project(&mut doc, &snapshot, SurfaceKind::Panel).expect("panel");
         // `taskbarSeparate` defaults on: the root paints no tint so the wallpaper shows between
         // the per-element capsules.
+        assert_eq!(doc.borders["taskbar"].a, 0, "separated bar root has no contour");
+        assert_eq!(doc.borders["workspace-pager"].a, 63, "pager matches other capsules");
+        assert_eq!(doc.backgrounds["workspace-pager"].a, 51, "pager uses shared surface fill");
         assert_eq!(
             doc.backgrounds["taskbar"],
             UiColor {
@@ -707,6 +721,8 @@ mod tests {
                 a: 51
             }
         );
+        assert!(unified.borders["taskbar"].a > 0, "unified bar owns its border");
+        assert_eq!(unified.borders["workspace-pager"].a, 0, "unified bar clears pager contour");
         assert_eq!(taskbar_backdrop_percents(&snapshot), (20, 15));
     }
 
