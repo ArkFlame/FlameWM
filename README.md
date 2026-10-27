@@ -13,7 +13,7 @@ One package ships two sessions: **FlameWM** on X11, the default, and **FlameWM (
 | **Minimize** | **Two screens** |
 | ![Window minimizing into the taskbar](assets/screenshots/minimize.gif) | ![Wallpaper and a panel on each of two screens](assets/screenshots/two-screens.webp) |
 
-The screenshots come from the headless test session (`tools/flamewm_visual_tests.py`) on Xorg's dummy driver.
+The screenshots in this table come from the headless test session (`tools/flamewm_visual_tests.py`) on Xorg's dummy driver.
 
 Version and release history: [`Cargo.toml`](Cargo.toml) (`workspace.package.version`), and [`CHANGELOG.md`](CHANGELOG.md).
 
