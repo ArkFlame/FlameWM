@@ -35,18 +35,42 @@ The compiler crate uses package-specific `opt-level=2`; parser speed is not stea
 
 ## Measured status
 
-Measurements from a development machine. They are not release certification.
+Measured on 2026-10-28 with `tools/flamewm_visual_tests.py bench`: Xorg with the dummy
+driver at 1280x800, the release build, an Intel Core i5-6500 and an otherwise idle
+machine. They are development figures, not release certification. Rerun them with:
 
-| Scenario | Result | Against target |
-| --- | --- | --- |
-| Harness, no theme, combined WM + shell, idle | about 35 MiB RSS; about 21 MiB PSS | PSS is below the 40 MiB PSS target. |
-| Real session with an icon theme | about 80 MiB RSS | Not evaluated against the PSS target; PSS not reported. |
+```sh
+python3 -I tools/flamewm_visual_tests.py --bin-dir .target/release bench
+python3 -I tools/flamewm_visual_tests.py --bin-dir .target/release --contents-while-dragging bench
+```
 
-- The memory tooling in `tools/flamewm_mem_phase_compare.py` uses a 34 MiB threshold (35651584 B) on combined WM + shell PSS and RSS. That threshold is **not reached for RSS** in the figures above.
-- The X server process is separate and is excluded from these figures.
+The bench starts a session with one `flamewm-terminal` window, then samples
+`/proc/<pid>/stat` over 5 s windows, five times per case. CPU is percent of one core
+averaged over the whole window. A `window-move` sample holds one drag of the terminal
+across 400x250 px and back, which takes about 1.6 s of the 5 s.
+
+| Measure | Result |
+| --- | --- |
+| Session start to panels mapped | about 750 ms |
+| Idle PSS: WM / desktop / shell / session | 12.2 / 16.4 / 11.5 / 1.5 MiB |
+| Idle PSS: `flamewm-terminal` | 18.1 MiB |
+| Idle CPU, every FlameWM process and Xorg | 0.0-0.2% |
+| Start popup visible after the click | 310-335 ms |
+| Drag feedback after the first motion | 5-7 ms |
+
+| Case (CPU % of one core, median of 5) | WM | Desktop | Shell | Terminal | Xorg | Total |
+| --- | --- | --- | --- | --- | --- | --- |
+| Window drag, outline (default) | 1.6 | 0.0 | 3.2 | 0.5 | 5.3 | 11.0 |
+| Window drag, contents while dragging | 4.2 | 0.5 | 1.0 | 21.0 | 20.7 | 47.6 |
+| Start popup open and close | 0.0 | 0.0 | 4.0 | 0.0 | 14.0 | 20.0 |
+
+- WM, desktop and shell together use 40.1 MiB PSS at idle, just above the 40 MiB target.
+- With contents shown while dragging, the translucent terminal recrops its blurred
+  backdrop on every move step. Before the separable crop it used 53.9% of a core in the
+  same case.
 - Frame-time p95 has **not been measured**.
-- Idle CPU/wakeups, startup latency, and interaction latency are not recorded in this document.
-- Not run: the installed `.deb`, two-output RandR, and a real NetworkManager session.
+- Not measured here: the installed `.deb`, a real GPU driver, a real NetworkManager session.
+- Two outputs are covered by the visual checks (`--layout dual`), not by these numbers.
 
 ## Profiler (`flamewm-profiler`, frozen seams R01-R06)
 
