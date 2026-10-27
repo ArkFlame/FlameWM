@@ -1,6 +1,6 @@
+<img width="1080" height="1440" alt="image" src="https://github.com/user-attachments/assets/44501e7d-7012-47ee-9830-50ccb9caa126" />
 ![FlameWM](assets/branding/flamewm-wordmark.png)
-
-![FlameWM preview](assets/branding/flamewm-real-screenshot-preview.webp)
+<img width="1351" height="638" alt="image" src="https://github.com/user-attachments/assets/3d26a31c-0727-418d-af8a-82382998b37b" />
 
 # FlameWM
 
