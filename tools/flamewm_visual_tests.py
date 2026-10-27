@@ -173,12 +173,14 @@ class Session:
         address, pid = bus.stdout.split()[:2]
         self.processes.append(("dbus", int(pid), None))
         self.env["DBUS_SESSION_BUS_ADDRESS"] = address
+        started = time.monotonic()
         self.spawn("session", ["flamewm-session"])
         self.x = xdisplay.Display(self.display_name)
         if not wait_until(self.wm_ready, 20, 0.1):
             raise RuntimeError(f"window manager did not start; see {self.temp / 'session.log'}")
         if not wait_until(lambda: self.windows_named("FlameWM panel", viewable=True), 20, 0.2):
             raise RuntimeError("no panel mapped")
+        self.startup_ms = (time.monotonic() - started) * 1000
         wait_until(lambda: len(self.windows_named("FlameWM panel", viewable=True)) >= len(self.outputs), 5, 0.2)
         time.sleep(3)
 
@@ -450,15 +452,43 @@ def run_bench(args):
                  "--cases", "idle,window-move,start-toggle", "--allow-input",
                  "--start-xy", f"24,{OUTPUT_SIZE[1] - 24}",
                  "--move-from", f"{grab[0]},{grab[1]}", "--move-to", f"{grab[0] + 400},{grab[1] + 250}"]
+        memory = session_pss(session.display_name)
         report = json.loads(run(bench, session.env, timeout=600).stdout)
         terminal.terminate()
+        report["startup_ms"] = round(session.startup_ms)
+        report["idle_pss_kib"] = memory
         print(json.dumps(report, indent=2))
         print_markdown(report)
     finally:
         session.stop()
 
 
+def session_pss(display_name):
+    """PSS in KiB of every flamewm* process on `display_name`, by executable name."""
+    pss = {}
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            name = (entry / "comm").read_text().strip()
+            environ = (entry / "environ").read_bytes().split(b"\0")
+            if not name.startswith("flamewm") or f"DISPLAY={display_name}".encode() not in environ:
+                continue
+            for line in (entry / "smaps_rollup").read_text().splitlines():
+                if line.startswith("Pss:"):
+                    pss[name] = pss.get(name, 0) + int(line.split()[1])
+        except OSError:
+            continue
+    return dict(sorted(pss.items()))
+
+
 def print_markdown(report):
+    print(f"\nSession start to panels mapped: {report['startup_ms']} ms\n")
+    print("| Process | Idle PSS |")
+    print("| --- | --- |")
+    for name, kib in report["idle_pss_kib"].items():
+        print(f"| {name} | {kib / 1024:.1f} MiB |")
+    print(f"| total | {sum(report['idle_pss_kib'].values()) / 1024:.1f} MiB |")
     print("\n| Case | Role | CPU % of one core (median, min-max) |")
     print("| --- | --- | --- |")
     for case, data in report["cases"].items():
