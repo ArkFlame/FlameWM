@@ -254,8 +254,8 @@ class Session:
         time.sleep(1.0)
         return process, client
 
-    def xdotool_search(self, title):
-        result = run(["xdotool", "search", "--onlyvisible", "--name", f"^{title}$"], self.env, check=False)
+    def xdotool_search(self, title, by="--name"):
+        result = run(["xdotool", "search", "--onlyvisible", by, f"^{title}$"], self.env, check=False)
         ids = result.stdout.split()
         return int(ids[0]) if ids else None
 
@@ -428,7 +428,7 @@ def run_bench(args):
     try:
         session.start()
         terminal = session.spawn("flamewm-terminal", ["flamewm-terminal"])
-        client = wait_until(lambda: session.xdotool_search("Terminal") or session.xdotool_search(".*[Tt]erminal.*"), 10, 0.2)
+        client = wait_until(lambda: session.xdotool_search("flamewm-terminal", by="--class"), 10, 0.2)
         if not client:
             raise RuntimeError("flamewm-terminal never mapped")
         session.xdotool("windowmove", client, 300, 200)
