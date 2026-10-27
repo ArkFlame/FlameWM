@@ -961,10 +961,12 @@ mod glass_contour_tests {
     use super::*;
     #[test]
     fn frame_border_uses_configured_shared_surface_contour() {
-        let mut t = ChromeTokens::default();
-        t.titlebar_bg = Rgb(0);
-        t.surface_border_rgb = Rgb(0x00ff_ffff);
-        t.surface_border_alpha = 0;
+        let mut t = ChromeTokens {
+            titlebar_bg: Rgb(0),
+            surface_border_rgb: Rgb(0x00ff_ffff),
+            surface_border_alpha: 0,
+            ..ChromeTokens::default()
+        };
         assert_eq!(frame_border_pixel(&t), 0);
         t.surface_border_alpha = 255;
         assert_eq!(frame_border_pixel(&t), 0x00ff_ffff);

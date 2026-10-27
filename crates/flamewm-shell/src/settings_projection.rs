@@ -6,7 +6,9 @@ use flamewm_image_core::{decode_bytes_at, ImageSourceFormat};
 use flamewm_platform::chrome::{parse_hex_rgb, ACCENT_SOFT_ALPHA};
 use flamewm_platform::settings::ClockFormat;
 use flamewm_ui_core::context_menu::shape_radius;
-use flamewm_ui_x11::surface_style::{project_surface_border, surface_background as shared_surface_background};
+use flamewm_ui_x11::surface_style::{
+    project_surface_border, surface_background as shared_surface_background,
+};
 use flamewm_ui_x11::{RuntimeImage, SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
 
 use crate::projection::{project_clock_at, ClockDisplay, TaskbarItems};
@@ -432,11 +434,15 @@ mod tests {
             "surfaceBorderColor".to_owned(),
             SettingValue::Text("#306090".to_owned()),
         );
-        snapshot.values.insert(
-            "surfaceBorderOpacity".to_owned(),
-            SettingValue::Percent(40),
-        );
-        let contour = UiColor { r: 0x30, g: 0x60, b: 0x90, a: 102 };
+        snapshot
+            .values
+            .insert("surfaceBorderOpacity".to_owned(), SettingValue::Percent(40));
+        let contour = UiColor {
+            r: 0x30,
+            g: 0x60,
+            b: 0x90,
+            a: 102,
+        };
         let mut doc = RecordingUiDoc::default();
         for (kind, root) in [
             (SurfaceKind::Panel, "taskbar"),
@@ -455,11 +461,18 @@ mod tests {
                 assert_eq!(doc.borders[root], contour, "{root}");
             }
         }
-        for popup in ["audio-popup", "wifi-popup", "calendar-popup", "weather-popup"] {
+        for popup in [
+            "audio-popup",
+            "wifi-popup",
+            "calendar-popup",
+            "weather-popup",
+        ] {
             project_menu_background(&mut doc, &snapshot, popup).expect("popup projection");
             assert_eq!(doc.borders[popup], contour, "{popup}");
         }
-        snapshot.values.insert("surfaceBorderOpacity".to_owned(), SettingValue::Percent(0));
+        snapshot
+            .values
+            .insert("surfaceBorderOpacity".to_owned(), SettingValue::Percent(0));
         project(&mut doc, &snapshot, SurfaceKind::Start).expect("contour disabled");
         assert_eq!(doc.borders["start-menu"].a, 0);
     }

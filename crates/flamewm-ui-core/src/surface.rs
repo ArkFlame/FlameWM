@@ -1,7 +1,7 @@
-//! Canonical FlameWM surface material contract, renderer neutral.
+//! Canonical `FlameWM` surface material contract, renderer neutral.
 //! Settings, Explorer, Terminal, Shell and WM decorations share these fill,
-//! contour and alpha-blending rules. The renderer-specific UiColor mapping
-//! lives in flamewm-ui-x11::surface_style.
+//! contour and alpha-blending rules. The renderer-specific `UiColor` mapping
+//! lives in `flamewm-ui-x11::surface_style`.
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
@@ -65,11 +65,23 @@ mod surface_stroke_contract_tests {
     #[test]
     fn border_is_independent_from_surface_opacity_and_accepts_zero() {
         let mut s = SettingsSnapshot::new(1);
-        s.values.insert("surfaceOpacity".into(), SettingValue::Percent(100));
-        s.values.insert("surfaceBorderColor".into(), SettingValue::Text("#112233".into()));
-        s.values.insert("surfaceBorderOpacity".into(), SettingValue::Percent(0));
-        assert_eq!(surface_stroke(&s), SurfaceFill { rgb:0x0011_2233, alpha:0 });
-        s.values.insert("surfaceBorderOpacity".into(), SettingValue::Percent(100));
+        s.values
+            .insert("surfaceOpacity".into(), SettingValue::Percent(100));
+        s.values.insert(
+            "surfaceBorderColor".into(),
+            SettingValue::Text("#112233".into()),
+        );
+        s.values
+            .insert("surfaceBorderOpacity".into(), SettingValue::Percent(0));
+        assert_eq!(
+            surface_stroke(&s),
+            SurfaceFill {
+                rgb: 0x0011_2233,
+                alpha: 0
+            }
+        );
+        s.values
+            .insert("surfaceBorderOpacity".into(), SettingValue::Percent(100));
         assert_eq!(surface_stroke(&s).alpha, 255);
     }
 }
@@ -98,9 +110,14 @@ mod surface_blend_tests {
                 for fg in [0, 0x00ab_cdef, 0x00ff_ffff] {
                     let expected = [16, 8, 0].into_iter().fold(0, |out, shift| {
                         out | (((((fg >> shift) & 255) * u32::from(alpha)
-                            + ((bg >> shift) & 255) * (255 - u32::from(alpha))) / 255) << shift)
+                            + ((bg >> shift) & 255) * (255 - u32::from(alpha)))
+                            / 255)
+                            << shift)
                     });
-                    assert_eq!(blend_surface_over_rgb(bg, SurfaceFill { rgb: fg, alpha }), expected);
+                    assert_eq!(
+                        blend_surface_over_rgb(bg, SurfaceFill { rgb: fg, alpha }),
+                        expected
+                    );
                 }
             }
         }
@@ -174,4 +191,3 @@ fn parse_rgb(text: &str) -> Option<u32> {
     }
     u32::from_str_radix(hex, 16).ok()
 }
-

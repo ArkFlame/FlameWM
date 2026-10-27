@@ -145,6 +145,7 @@ fn shadow_spans_iter(rect: Rect) -> impl Iterator<Item = (u32, u32, u32)> {
 }
 
 #[must_use]
+#[cfg(test)]
 pub fn shadow_spans(rect: Rect) -> Vec<(u32, u32, u32)> {
     shadow_spans_iter(rect).collect()
 }
@@ -169,6 +170,7 @@ fn clipped_shadow_rows(area: Rect, frame: Rect) -> impl Iterator<Item = (u32, u3
 /// shadow window only shows outside the window. Rows beside the frame keep the
 /// full band; rows below it keep their full width, since that is the cast.
 #[must_use]
+#[cfg(test)]
 pub fn clip_spans_outside_frame(
     spans: Vec<(u32, u32, u32)>,
     rect: Rect,
@@ -327,6 +329,7 @@ pub fn shade_visible_shadow_rounded(frame: Rect, focused: bool, radius: u32, pix
 /// Alpha is highest at the frame's right/bottom edge and falls off with the
 /// 45-degree cast distance, so the band reads as a simple drop shadow rather
 /// than a hard border.
+#[cfg(test)]
 pub fn shade_shadow(frame: Rect, focused: bool, pixels: &mut [u8]) {
     let area = shadow_rect(frame);
     let (w, h) = (area.width as i32, area.height as i32);
@@ -483,13 +486,14 @@ mod tests {
                 let mut expected = vec![160; area.width as usize * area.height as usize * 4];
                 let mut actual = expected.clone();
                 let keep_table = shadow_keep_table(focused);
-                for (row, start, end) in
-                    clip_spans_outside_frame(shadow_spans(area), area, frame)
-                {
+                for (row, start, end) in clip_spans_outside_frame(shadow_spans(area), area, frame) {
                     for col in start..end {
                         let at = (row as usize * area.width as usize + col as usize) * 4;
                         let keep = shadow_keep_from_table(
-                            &keep_table, frame, area.x + col as i32, area.y + row as i32,
+                            &keep_table,
+                            frame,
+                            area.x + col as i32,
+                            area.y + row as i32,
                         );
                         for channel in &mut expected[at..at + 3] {
                             *channel = ((u32::from(*channel) * keep) >> 8) as u8;
@@ -507,7 +511,12 @@ mod tests {
         let frame = Rect::new(0, 0, 1280, 720);
         let area = shadow_rect(frame);
         let packed = shadow_mask_rectangles(area, frame);
-        assert!(packed.len() < 50, "{} rectangles instead of {} rows", packed.len(), area.height);
+        assert!(
+            packed.len() < 50,
+            "{} rectangles instead of {} rows",
+            packed.len(),
+            area.height
+        );
     }
 
     #[test]
@@ -584,9 +593,7 @@ mod tests {
             let mut visible = full.clone();
             shade_shadow(FRAME, focused, &mut full);
             shade_visible_shadow(FRAME, focused, &mut visible);
-            for (row, start, end) in
-                clip_spans_outside_frame(shadow_spans(area), area, FRAME)
-            {
+            for (row, start, end) in clip_spans_outside_frame(shadow_spans(area), area, FRAME) {
                 for col in start..end {
                     let at = (row as usize * area.width as usize + col as usize) * 4;
                     assert_eq!(&visible[at..at + 4], &full[at..at + 4]);
