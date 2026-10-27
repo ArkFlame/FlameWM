@@ -90,7 +90,7 @@ impl XShapeBridge {
         spans: &[(u32, u32, u32)],
         clip: ClipRect,
     ) -> Result<(), String> {
-        let rects = spans_to_rects(&clip_spans(spans, clip));
+        let rects = spans_to_rects(clip_spans_iter(spans, clip));
         // SAFETY: `window` is live per the caller contract.
         unsafe { self.set_rects(window, SHAPE_BOUNDING, &rects) };
         Ok(())
@@ -122,7 +122,7 @@ impl XShapeBridge {
         kind: c_int,
         spans: &[(u32, u32, u32)],
     ) -> Result<(), String> {
-        let rects = spans_to_rects(spans);
+        let rects = spans_to_rects(spans.iter().copied());
         if rects.is_empty() {
             return Err("rounded shape mask has no visible rows".to_string());
         }
@@ -155,12 +155,12 @@ impl XShapeBridge {
 /// Window-local clip rectangle as (x0, y0, x1_exclusive, y1_exclusive).
 pub(crate) type ClipRect = (u32, u32, u32, u32);
 
-fn spans_to_rects(spans: &[(u32, u32, u32)]) -> Vec<XRectangle> {
+fn spans_to_rects(spans: impl IntoIterator<Item = (u32, u32, u32)>) -> Vec<XRectangle> {
     // Adjacent rows with identical coverage form one XShape rectangle. A
     // full-height frame is one rectangle rather than hundreds of 1px calls;
     // curved corners retain their exact independently covered rows.
     let mut rects: Vec<XRectangle> = Vec::new();
-    for &(y, start, end) in spans {
+    for (y, start, end) in spans {
         if end <= start {
             continue;
         }
@@ -188,7 +188,10 @@ fn spans_to_rects(spans: &[(u32, u32, u32)]) -> Vec<XRectangle> {
 }
 
 /// Intersects row spans with `clip`; order is preserved so YX-sorted Shape requests stay valid.
-pub(crate) fn clip_spans(spans: &[(u32, u32, u32)], clip: ClipRect) -> Vec<(u32, u32, u32)> {
+fn clip_spans_iter(
+    spans: &[(u32, u32, u32)],
+    clip: ClipRect,
+) -> impl Iterator<Item = (u32, u32, u32)> + '_ {
     let (x0, y0, x1, y1) = clip;
     spans
         .iter()
@@ -197,7 +200,11 @@ pub(crate) fn clip_spans(spans: &[(u32, u32, u32)], clip: ClipRect) -> Vec<(u32,
             let (start, end) = (start.max(x0), end.min(x1));
             (end > start).then_some((y, start, end))
         })
-        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn clip_spans(spans: &[(u32, u32, u32)], clip: ClipRect) -> Vec<(u32, u32, u32)> {
+    clip_spans_iter(spans, clip).collect()
 }
 
 /// Pure geometry shared with the `flamewm-ui-x11` span tests: row spans
@@ -253,7 +260,7 @@ mod tests {
     #[test]
     fn coalesced_rectangles_keep_exact_rounded_coverage() {
         let spans = rounded_mask_spans(100, 80, 12);
-        let rects = spans_to_rects(&spans);
+        let rects = spans_to_rects(spans.iter().copied());
         assert!(rects.len() < spans.len() / 2);
         let covered = |x: u32, y: u32| {
             rects.iter().any(|r| {
@@ -344,6 +351,21 @@ mod tests {
                 (7, 2, 6),
             ]
         );
+    }
+
+    #[test]
+    fn streamed_clipped_mask_matches_owned_clip_pipeline() {
+        for (width, height, radius) in [(2, 2, 0), (32, 8, 4), (480, 360, 14), (1, 400, 0)] {
+            let rows = rounded_mask_spans(width, height, radius);
+            for clip in [(0, 0, width, height), (0, 0, width / 2, height / 2),
+                (1, 1, width, height), (0, height, width, height + 10),
+                (width, 0, width + 10, height)] {
+                let legacy = spans_to_rects(clip_spans(&rows, clip));
+                let streamed = spans_to_rects(clip_spans_iter(&rows, clip));
+                let tuples = |items: Vec<XRectangle>| items.into_iter().map(|r| (r.x, r.y, r.width, r.height)).collect::<Vec<_>>();
+                assert_eq!(tuples(legacy), tuples(streamed), "{width}x{height} clip={clip:?}");
+            }
+        }
     }
 
     #[test]

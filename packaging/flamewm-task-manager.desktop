@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=FlameWM Task Manager
+GenericName=System Monitor
+Comment=Monitor CPU, memory, swap, and running processes
+Exec=flamewm-task-manager
+TryExec=flamewm-task-manager
+Icon=utilities-system-monitor
+Terminal=false
+StartupNotify=true
+StartupWMClass=flamewm-task-manager
+Categories=System;Monitor;Utility;
+Keywords=htop;processes;cpu;memory;system;performance;

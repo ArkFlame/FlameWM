@@ -120,12 +120,17 @@ if [[ "$BUILD" == 1 ]]; then
   python3 -I tools/verify_desktop_conversion_contract.py
   # Catch strict RWR-incompatible Convert wheel CSS before costly Cargo cache cleanup.
   python3 -I tools/test_desktop_convert_css_contract.py -q
+  python3 -I tools/test_task_manager_rwr_css.py -q
+  # Fail before the release build if a shared X11 adapter adds an undeclared direct dependency.
+  python3 -I tools/test_shared_surface_dependency.py -q
   # Cargo may reuse pre-Convert desktop-core rlibs after an archive extraction
   # restores source mtimes older than the previous build. Verify the path crate
   # and invalidate only its release cache on a source-content change.
   python3 -I tools/ensure_desktop_conversion_cargo.py --profile release --include-ui
+  # Shared crates and embedded Task Manager UI may also retain stale archive fingerprints.
+  python3 -I tools/ensure_shared_surface_cargo.py
   echo "[1/5] Building FlameWM WM + desktop + shell + settings + Explorer + X11 canary"
-  cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-explorer -p flamewm-terminal -p flamewm-x11-canary
+  cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-explorer -p flamewm-terminal -p flamewm-task-manager -p flamewm-x11-canary
   # The Settings UI is embedded into the executable at compile time. Assert
   # that the exact binary Xephyr will launch contains the newly added control;
   # a successful Cargo exit must not masquerade as a successful UI update.
@@ -603,6 +608,14 @@ if [[ -n "$terminal_bin" && -x "$terminal_bin" ]]; then
     "$ROOT/packaging/flamewm-terminal.desktop" >"$XDG_DATA_HOME/applications/flamewm-terminal.desktop"
 else
   echo "[xephyr] flamewm-terminal not found; nested terminal entry is absent" >&2
+fi
+
+# Expose the checkout Task Manager to the nested Start menu without invoking an installed copy.
+task_manager_bin="$TARGET_DIR/release/flamewm-task-manager"
+[[ -x "$task_manager_bin" ]] || task_manager_bin="$(command -v flamewm-task-manager || true)"
+if [[ -n "$task_manager_bin" && -x "$task_manager_bin" ]]; then
+  sed -e "s|^Exec=flamewm-task-manager|Exec=$task_manager_bin|" -e "s|^TryExec=flamewm-task-manager|TryExec=$task_manager_bin|" \
+    "$ROOT/packaging/flamewm-task-manager.desktop" >"$XDG_DATA_HOME/applications/flamewm-task-manager.desktop"
 fi
 
 # Application discovery may prefer an installed .desktop entry with a stale

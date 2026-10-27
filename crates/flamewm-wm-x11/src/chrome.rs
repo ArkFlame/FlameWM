@@ -925,6 +925,36 @@ pub fn set_live_chrome_tokens(tokens: ChromeTokens) {
     }
 }
 
+/// X11 frame borders are 24-bit opaque pixels. Blend the shared 1px
+/// contour against the surface colour instead of leaving a fixed dark seam.
+#[must_use]
+pub fn frame_border_pixel(tokens: &ChromeTokens) -> u32 {
+    flamewm_ui_core::surface::blend_surface_over_rgb(
+        tokens.titlebar_bg.0,
+        flamewm_ui_core::surface::SurfaceFill {
+            rgb: tokens.surface_border_rgb.0,
+            alpha: tokens.surface_border_alpha,
+        },
+    )
+}
+
+#[cfg(test)]
+mod glass_contour_tests {
+    use super::*;
+    #[test]
+    fn frame_border_uses_configured_shared_surface_contour() {
+        let mut t = ChromeTokens::default();
+        t.titlebar_bg = Rgb(0);
+        t.surface_border_rgb = Rgb(0x00ff_ffff);
+        t.surface_border_alpha = 0;
+        assert_eq!(frame_border_pixel(&t), 0);
+        t.surface_border_alpha = 255;
+        assert_eq!(frame_border_pixel(&t), 0x00ff_ffff);
+        t.surface_border_alpha = 63;
+        assert_eq!(frame_border_pixel(&t), 0x003f_3f3f);
+    }
+}
+
 /// Current live chrome tokens (skin defaults until settings publish).
 #[must_use]
 pub fn live_chrome_tokens() -> ChromeTokens {
@@ -981,8 +1011,11 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
         hover: parse_settings_color(text(&format!("titlebar{name}HoverColor"))),
         pressed: parse_settings_color(text(&format!("titlebar{name}PressedColor"))),
     };
+    let stroke = flamewm_ui_core::surface::surface_stroke(snapshot);
     ChromeTokens {
         style,
+        surface_border_rgb: Rgb(stroke.rgb),
+        surface_border_alpha: stroke.alpha,
         titlebar_bg,
         titlebar_alpha,
         titlebar_blur_percent,

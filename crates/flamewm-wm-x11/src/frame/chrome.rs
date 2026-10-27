@@ -253,6 +253,34 @@ fn titlebar_fill_pixels(
     )
 }
 
+/// Render the 1px contour inside the titlebar's native pixels. Its colour is the
+/// same Surfaces token as panel/popups; no X11 round trip or overlay window.
+fn composite_surface_contour(pixels: &mut [u8], width: u32, height: u32, radius: u16, tokens: &ChromeTokens) {
+    if width == 0 || height == 0 || tokens.surface_border_alpha == 0 { return; }
+    let Some(total) = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4)) else { return; };
+    if pixels.len() < total { return; }
+    let contour = flamewm_ui_core::surface::SurfaceFill {
+        rgb: tokens.surface_border_rgb.0,
+        alpha: tokens.surface_border_alpha,
+    };
+    let mut mix = |x: u32, y: u32| {
+        let offset = (y as usize * width as usize + x as usize) * 4;
+        let base = u32::from_be_bytes([
+            0, pixels[offset], pixels[offset + 1], pixels[offset + 2],
+        ]);
+        let blended = flamewm_ui_core::surface::blend_surface_over_rgb(base, contour);
+        pixels[offset] = (blended >> 16) as u8;
+        pixels[offset + 1] = (blended >> 8) as u8;
+        pixels[offset + 2] = blended as u8;
+    };
+    let r = u32::from(radius).min(width / 2).min(height);
+    for x in r..width.saturating_sub(r) { mix(x, 0); }
+    for y in 1..height {
+        // Avoid coloring fully clipped rounded corners.
+        if y >= r { mix(0, y); if width > 1 { mix(width - 1, y); } }
+    }
+}
+
 /// Execute a scene against the renderer. Passes 12.0/600 to `draw_title`;
 /// blits the native icon raster and the cached control glyphs at exact
 /// skin control geometry (38px buttons, 16px glyphs, icon slot at 6px
@@ -299,6 +327,7 @@ pub fn render(
             scene.titlebar_height,
             &plates,
         );
+        composite_surface_contour(&mut pixels, scene.frame_w, titlebar_h as u32, scene.radius, &scene.tokens);
         drop(pixels_guard);
         let _blit_guard = flamewm_profiler::start("wm.chrome.render.fill.blit");
         renderer.blit_rgba(

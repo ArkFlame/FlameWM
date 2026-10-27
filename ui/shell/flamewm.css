@@ -79,7 +79,7 @@ input { cursor:text; }
 .about-link:hover { border-color:var(--accent); background:#383c40; }
 .about-link img { width:18px; height:18px; }
 .terminal-body { height:359px; display:flex; flex-direction:column; gap:8px; padding:18px; background:#0c0d0e; color:#d5d8da; font-size:13px; border-radius:6px; }
-.start-menu { position:absolute; left:0px; top:0px; width:550px; min-height:349px; display:flex; flex-direction:row; background:#1e2123; color:var(--text); border:1px solid #474b4f; border-radius:18px; }
+.start-menu { position:absolute; left:0px; top:0px; width:550px; min-height:349px; display:flex; flex-direction:row; background:#1e2123; color:var(--text); border:1px solid #ffffff3f; border-radius:18px; }
 .start-left-pane { width:292px; min-height:349px; display:flex; flex-direction:column; justify-content:flex-end; }
 .start-content-pane { border-radius:18px; width:258px; min-height:420px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:transparent; color:var(--text); overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
 .start-categories { padding:6px 5px 5px 5px; flex-grow:1; display:flex; flex-direction:column; }
@@ -91,11 +91,11 @@ input { cursor:text; }
 .start-search-field { flex-grow:1; height:32px; padding-left:10px; display:flex; align-items:center; gap:8px; color:#9ca3a9; background:transparent; border:1px solid #454a4f; border-radius:8px; }
 .start-search-field img { width:15px; height:15px; }
 .start-search-field div { flex-grow:1; display:flex; align-items:center; }
-.start-submenu { position:absolute; left:0px; top:0px; width:258px; min-height:0px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:#1e2123; color:var(--text); border:1px solid #474b4f; border-radius:12px; overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
+.start-submenu { position:absolute; left:0px; top:0px; width:258px; min-height:0px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:#1e2123; color:var(--text); border:1px solid #ffffff3f; border-radius:12px; overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
 .start-group, .calendar-days { width:100%; display:flex; flex-direction:column; }
 .start-app { width:248px; height:36px; padding:0px 9px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:3px; cursor:default; }
 .start-app:hover { background:var(--accent-soft); }.start-status { min-height:18px; padding:4px 8px; display:flex; align-items:center; color:#ff8a8f; font-size:11px; }
-.taskbar { position:absolute; left:0px; top:0px; width:100%; height:44px; display:flex; align-items:center; padding:0px 2px; background:var(--panel); }
+.taskbar { border:1px solid #ffffff3f; box-sizing:border-box; position:absolute; left:0px; top:0px; width:100%; height:44px; display:flex; align-items:center; padding:0px 2px; background:var(--panel); }
 /* Separate-mode capsule: owns the painted background so the child button keeps its CSS hover. */
 .capsule { height:44px; display:flex; align-items:center; position:relative; }
 .task-button { width:42px; height:44px; position:relative; display:flex; align-items:center; justify-content:center; background:transparent; }
@@ -130,7 +130,7 @@ input { cursor:text; }
    from the intrinsic document extent (single measured show). These rules
    only bound the content (max-height + scroll); they never fix the popup
    size, so no blank or 0,0 frame is mapped before measurement. */
-.tray-popup { position:absolute; left:0px; top:0px; width:310px; padding:13px; display:flex; flex-direction:column; gap:10px; background:transparent; color:var(--text); border:1px solid #474b4f; border-radius:6px; }
+.tray-popup { position:absolute; left:0px; top:0px; width:310px; padding:13px; display:flex; flex-direction:column; gap:10px; background:transparent; color:var(--text); border:1px solid #ffffff3f; border-radius:6px; }
 .media-popup, .audio-popup, .wifi-popup { left:0px; top:0px; right:auto; bottom:auto; }
 .clock-popup { left:0px; top:0px; right:auto; bottom:auto; width:286px; gap:0px; }
 .popup-title { font-size:16px; font-weight:500; }
@@ -252,7 +252,7 @@ input { cursor:text; }
 .tray-weather-temp { font-size:10px; color:var(--text); }
 
 /* Top-center application launcher: Start's search field, rows and surface tokens only. */
-.launcher-popup { position:absolute; left:0px; top:0px; width:600px; padding:8px; box-sizing:border-box; display:flex; flex-direction:column; background:var(--surface); color:var(--text); border:1px solid var(--desktop-hover-border); border-radius:18px; }
+.launcher-popup { position:absolute; left:0px; top:0px; width:600px; padding:8px; box-sizing:border-box; display:flex; flex-direction:column; background:var(--surface); color:var(--text); border:1px solid #ffffff3f; border-radius:18px; }
 .launcher-search { height:40px; margin:0px; }
 .launcher-query { font-size:14px; white-space:nowrap; overflow:hidden; }
 .launcher-list { position:relative; margin-top:6px; display:flex; flex-direction:column; }

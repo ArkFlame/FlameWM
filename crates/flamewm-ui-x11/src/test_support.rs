@@ -35,6 +35,7 @@ pub struct RecordingUiDoc {
     pub visible: HashMap<String, bool>,
     pub toggles: HashMap<String, bool>,
     pub backgrounds: HashMap<String, UiColor>,
+    pub borders: HashMap<String, UiColor>,
     pub foregrounds: HashMap<String, UiColor>,
     pub variables: HashMap<String, UiColor>,
     pub images: HashMap<String, (u32, u32)>,
@@ -80,7 +81,8 @@ impl UiDocumentAccess for RecordingUiDoc {
         self.backgrounds.insert(id.to_owned(), color);
         Ok(())
     }
-    fn border(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
+    fn border(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+        self.borders.insert(id.to_owned(), color);
         Ok(())
     }
     fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
@@ -96,7 +98,8 @@ impl UiDocumentAccess for RecordingUiDoc {
         self.cleared.push(id.to_owned());
         Ok(())
     }
-    fn border_clear(&mut self, _id: &str) -> Result<(), String> {
+    fn border_clear(&mut self, id: &str) -> Result<(), String> {
+        self.borders.remove(id);
         Ok(())
     }
     fn foreground_clear(&mut self, _id: &str) -> Result<(), String> {

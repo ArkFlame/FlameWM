@@ -87,6 +87,7 @@ for source in \
     "$ROOT/packaging/flamewm-screenshot.desktop" \
     "$ROOT/packaging/flamewm-explorer.desktop" \
     "$ROOT/packaging/flamewm-terminal.desktop" \
+    "$ROOT/packaging/flamewm-task-manager.desktop" \
     "$ROOT/packaging/flamewm-session.desktop" \
     "$ROOT/packaging/menus/flamewm-applications.menu" \
     "$ROOT/packaging/notifications/dunstrc" \
@@ -120,7 +121,7 @@ for binary in flamewm-apps flamewm-session flamewm-screenshot flamewm-render-x11
 done
 # The WM, desktop, shell, settings, explorer and terminal are one multi-call executable
 # (crates/flamewm-apps); each name is a hard link to it, so the processes share its code pages.
-for application in flamewm flamewm-desktop flamewm-shell flamewm-settings flamewm-explorer flamewm-terminal; do
+for application in flamewm flamewm-desktop flamewm-shell flamewm-settings flamewm-explorer flamewm-terminal flamewm-task-manager; do
     ln "$STAGE/usr/bin/flamewm-apps" "$STAGE/usr/bin/$application"
 done
 install -m 0644 "$PAM_SOURCE" "$STAGE/etc/pam.d/flamewm-lock"
@@ -128,6 +129,7 @@ install -m 0644 "$ROOT/packaging/flamewm.desktop" "$STAGE/usr/share/applications
 install -m 0644 "$ROOT/packaging/flamewm-screenshot.desktop" "$STAGE/usr/share/applications/flamewm-screenshot.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-explorer.desktop" "$STAGE/usr/share/applications/flamewm-explorer.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-terminal.desktop" "$STAGE/usr/share/applications/flamewm-terminal.desktop"
+install -m 0644 "$ROOT/packaging/flamewm-task-manager.desktop" "$STAGE/usr/share/applications/flamewm-task-manager.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-wayland.desktop" "$STAGE/usr/share/wayland-sessions/flamewm-wayland.desktop"
 if [[ "$LIBEXECDIR" != /usr/libexec/flamewm ]]; then

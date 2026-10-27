@@ -569,7 +569,7 @@ fn resolve_target(canary: &Canary, args: &[String]) -> WinInfo {
         if hits.is_empty() {
             fail(&format!("no window matches {name:?}"));
         }
-        hits.sort_by_key(|w| (w.map_state != u8::from(MapState::VIEWABLE)));
+        hits.sort_by_key(|w| w.map_state != u8::from(MapState::VIEWABLE));
         return hits.remove(0);
     }
     fail("need --window <id> or --name <substr>");

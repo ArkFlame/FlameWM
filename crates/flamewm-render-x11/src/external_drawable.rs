@@ -735,7 +735,7 @@ pub fn external_symbolic_argb(
                 0
             };
             let eff_a = (sa * u32::from(fg.a) + 127) / 255;
-            let prem = |c: u32| ((c * eff_a + 127) / 255);
+            let prem = |c: u32| (c * eff_a + 127) / 255;
             out.push(
                 (eff_a << 24)
                     | (prem(u32::from(fg.r)) << 16)

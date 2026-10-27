@@ -1,7 +1,7 @@
 :root { --accent:#ef4048; --accent-soft:#ef404838; --surface:#202326; --sidebar:#1b1e20; --card:#25282b; --line:#3d4145; --line-soft:#35393d; --control:#17191b; --text:#f1f2f3; --muted:#aeb4bb; --quiet:#7f878e; }
 * { box-sizing:border-box; }
 html { width:100%; height:100%; }
-body { width:100%; height:100%; margin:0; display:flex; overflow:hidden; background:var(--surface); color:var(--text); font-size:13px; }
+body { border:1px solid #ffffff3f; width:100%; height:100%; margin:0; display:flex; overflow:hidden; background:var(--surface); color:var(--text); font-size:13px; }
 button { padding:0; border-width:0; border-color:transparent; background:transparent; color:var(--text); font-size:13px; cursor:default; }
 .settings-nav { width:208px; height:100%; flex-grow:0; display:flex; flex-direction:column; position:relative; padding:0; background:var(--sidebar); }
 .settings-brand { width:208px; height:72px; display:flex; align-items:center; justify-content:center; }

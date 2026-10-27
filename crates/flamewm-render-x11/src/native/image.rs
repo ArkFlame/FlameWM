@@ -38,7 +38,7 @@ pub fn scale_and_premultiply_into(
                 u32::from(src[off + 2]),
                 u32::from(src[off + 3]),
             );
-            let prem = |c: u32| ((c * a + 127) / 255);
+            let prem = |c: u32| (c * a + 127) / 255;
             out.push((a << 24) | (prem(r) << 16) | (prem(g) << 8) | prem(b));
         }
     }

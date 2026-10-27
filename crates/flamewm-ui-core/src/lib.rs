@@ -10,6 +10,7 @@ pub mod popover;
 pub mod range;
 pub mod scroll;
 pub mod style;
+pub mod surface;
 pub mod virtual_list;
 
 use flamewm_api::{OutputId, Point, Rect};

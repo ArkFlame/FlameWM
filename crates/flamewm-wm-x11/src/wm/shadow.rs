@@ -35,6 +35,78 @@ use flamewm_api::root_rubber::RootRubber;
 use std::hash::{Hash, Hasher};
 use x11rb::protocol::shape::{SK as ShapeSk, SO as ShapeOp};
 
+/// Resolve the bottom managed frame once per reconcile batch. A failed X11 query retains the
+/// previous per-frame fallback (`own`) and permits the next frame to retry the query.
+fn cached_shadow_sibling(
+    cached: &mut Option<Window>,
+    own: Window,
+    query: impl FnOnce() -> Option<Window>,
+) -> Window {
+    if let Some(bottom) = *cached {
+        return bottom;
+    }
+    match query() {
+        Some(bottom) => {
+            *cached = Some(bottom);
+            bottom
+        }
+        None => own,
+    }
+}
+
+#[cfg(test)]
+mod reconcile_batch_tests {
+    use super::cached_shadow_sibling;
+    use std::cell::Cell;
+
+    #[test]
+    fn successful_tree_lookup_is_shared_but_failure_preserves_per_frame_fallback() {
+        let count = Cell::new(0);
+        let mut cached = None;
+        let query = || {
+            count.set(count.get() + 1);
+            Some(42)
+        };
+        assert_eq!(cached_shadow_sibling(&mut cached, 10, query), 42);
+        assert_eq!(cached_shadow_sibling(&mut cached, 20, query), 42);
+        assert_eq!(count.get(), 1);
+        let mut failed = None;
+        assert_eq!(cached_shadow_sibling(&mut failed, 10, || None), 10);
+        assert_eq!(cached_shadow_sibling(&mut failed, 20, || None), 20);
+        assert_eq!(failed, None);
+    }
+}
+
+/// Shape is expressed in shadow-window coordinates, so position and colour changes leave
+/// the X Shape mask unchanged. A new window or different dimensions require the mask again.
+fn needs_shadow_shape_update(previous: Option<(Window, u32, u32)>, win: Window, outer: Rect) -> bool {
+    previous.is_none_or(|(old_win, width, height)| {
+        old_win != win || width != outer.width || height != outer.height
+    })
+}
+
+#[cfg(test)]
+mod shadow_shape_tests {
+    use super::{needs_shadow_shape_update, Rect};
+
+    #[test]
+    fn only_size_or_shadow_window_identity_invalidates_shape() {
+        let old = Rect::new(100, 200, 1280, 720);
+        assert!(needs_shadow_shape_update(None, 7, old));
+        assert!(!needs_shadow_shape_update(Some((7, 1280, 720)), 7, old));
+        assert!(!needs_shadow_shape_update(
+            Some((7, 1280, 720)), 7, Rect::new(-1920, -500, 1280, 720)
+        ));
+        assert!(needs_shadow_shape_update(Some((7, 1280, 720)), 8, old));
+        assert!(needs_shadow_shape_update(
+            Some((7, 1280, 720)), 7, Rect::new(100, 200, 1281, 720)
+        ));
+        assert!(needs_shadow_shape_update(
+            Some((7, 1280, 720)), 7, Rect::new(100, 200, 1280, 721)
+        ));
+    }
+}
+
 /// One shadow window of a frame and what it currently shows.
 pub(super) struct FrameShadow {
     win: Window,
@@ -43,7 +115,7 @@ pub(super) struct FrameShadow {
     /// can be recomposed into it without a readback.
     pixmap: Pixmap,
     /// Unshaded root snapshot of `shadow_rect(state.shaded)`, BGRX.
-    raw: Vec<u8>,
+    raw: shadow_rubber::ShadowBands,
 }
 
 /// One frame the current turn wants shadowed.
@@ -67,6 +139,13 @@ pub(super) struct ShadowScene {
     geometry: Option<u64>,
     /// Clients owning an activated move/resize at the last reconcile (sorted).
     dragging: Vec<Window>,
+    // Retain temporary capacity across reactor turns instead of allocating one list per wake.
+    // Both drag buffers are swapped after comparing settled gestures.
+    next_dragging: Vec<Window>,
+    wanted_scratch: Vec<WantedShadow>,
+    membership_scratch: Vec<(Window, usize, bool)>,
+    geometry_scratch: Vec<(Window, i32, i32, u32, u32)>,
+    outputs_scratch: Vec<(i32, i32, u32, u32)>,
     seeded: bool,
     /// Live desktop rubber band currently composed into the shadows (root property mirror).
     rubber: Option<RootRubber>,
@@ -113,10 +192,9 @@ impl ShadowScene {
         membership: u64,
         backdrop: u64,
         geometry: Option<u64>,
-        mut dragging: Vec<Window>,
     ) -> u64 {
-        dragging.sort_unstable();
-        dragging.dedup();
+        self.next_dragging.sort_unstable();
+        self.next_dragging.dedup();
         let mut bump = !self.seeded;
         self.seeded = true;
         if self.backdrop != backdrop {
@@ -131,11 +209,12 @@ impl ShadowScene {
         if self
             .dragging
             .iter()
-            .any(|client| !dragging.contains(client))
+            .any(|client| !self.next_dragging.contains(client))
         {
             bump = true;
         }
-        self.dragging = dragging;
+        std::mem::swap(&mut self.dragging, &mut self.next_dragging);
+        self.next_dragging.clear();
         if let Some(geometry) = geometry {
             if self.geometry != Some(geometry) {
                 // The very first idle turn only seeds the baseline.
@@ -156,6 +235,50 @@ fn hash_of<T: Hash>(value: T) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(test)]
+mod scratch_equivalence_tests {
+    use super::{ShadowScene, hash_of};
+
+    #[test]
+    fn borrowed_reused_vectors_hash_identically_to_legacy_owned_snapshots() {
+        let membership = vec![(9_u32, 1_usize, false), (12, 2, true)];
+        let geometry = vec![(9_u32, -100_i32, 40_i32, 1600_u32, 900_u32)];
+        let outputs = vec![(-1920_i32, 0_i32, 1920_u32, 1080_u32), (0, 0, 1280, 800)];
+        assert_eq!(hash_of((2_usize, membership.clone())), hash_of((2_usize, &membership)));
+        assert_eq!(hash_of((0_usize, geometry.clone())), hash_of((0_usize, &geometry)));
+        assert_eq!(
+            hash_of((4_u64, 1920_u16, 1080_u16, outputs.clone(), Some(3_u32))),
+            hash_of((4_u64, 1920_u16, 1080_u16, &outputs, Some(3_u32))),
+        );
+    }
+
+    #[test]
+    fn swapping_reusable_drag_buffers_preserves_settle_generation_semantics() {
+        let mut scene = ShadowScene::default();
+        let g0 = scene.advance(11, 22, Some(33));
+        assert_eq!(scene.advance(11, 22, Some(33)), g0);
+
+        scene.next_dragging.extend([15, 5, 15]);
+        let start = scene.advance(11, 22, None);
+        assert_eq!(start, g0, "beginning a gesture is not a settled redraw");
+        assert_eq!(scene.dragging, vec![5, 15]);
+        assert!(scene.next_dragging.is_empty());
+        let capacity = scene.next_dragging.capacity();
+
+        scene.next_dragging.extend([5, 15]);
+        assert_eq!(scene.advance(11, 22, None), start);
+        scene.next_dragging.push(15);
+        assert_eq!(scene.advance(11, 22, None), start);
+        let settled = scene.advance(11, 22, Some(33));
+        assert_eq!(settled, start.wrapping_add(1));
+        assert!(scene.dragging.is_empty());
+        assert!(scene.next_dragging.is_empty());
+        assert!(scene.next_dragging.capacity() >= capacity);
+        assert_eq!(scene.advance(11, 22, Some(33)), settled);
+        assert_eq!(scene.advance(11, 23, Some(33)), settled.wrapping_add(1));
+    }
 }
 
 fn shadow_geometry(rect: Rect) -> ConfigureWindowAux {
@@ -180,19 +303,22 @@ impl<C: Connection> Wm<'_, C> {
             && self.screen().root_depth == 24
             && self.conn.setup().image_byte_order == ImageOrder::LSB_FIRST
             && self.desktop_frame()?.is_some();
-        let wanted: Vec<WantedShadow> = if usable {
-            self.clients
-                .values()
-                .filter(|c| c.is_floating() && c.visible_on(self.current_workspace))
-                .map(|c| WantedShadow {
-                    frame: c.frame,
-                    outer: c.outer,
-                    focused: self.active == Some(c.client),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // Local ownership permits native mutations below; return the allocation to the scene
+        // after the batch so ordinary pointer and provider wakes do not reallocate per frame.
+        let mut wanted = std::mem::take(&mut self.shadow_scene.wanted_scratch);
+        wanted.clear();
+        if usable {
+            wanted.extend(
+                self.clients
+                    .values()
+                    .filter(|c| c.is_floating() && c.visible_on(self.current_workspace))
+                    .map(|c| WantedShadow {
+                        frame: c.frame,
+                        outer: c.outer,
+                        focused: self.active == Some(c.client),
+                    }),
+            );
+        }
         let gone: Vec<Window> = self
             .frame_shadows
             .keys()
@@ -205,8 +331,18 @@ impl<C: Connection> Wm<'_, C> {
                 self.conn.free_pixmap(shadow.pixmap)?;
             }
         }
+        // With no eligible frames and no retained shadows, nothing depends on the current
+        // generation. Seed it on the first frame instead of allocating/sorting three separate
+        // state snapshots for every pointer, input, or provider wake in an empty/fullscreen desk.
+        if wanted.is_empty() && self.frame_shadows.is_empty() {
+            self.shadow_scene.wanted_scratch = wanted;
+            return Ok(());
+        }
         let (generation, motion) = self.advance_shadow_generation();
-        for want in wanted {
+        // Re-shading a batch must not synchronously query the same X11 stacking tree once per
+        // frame. Managed frames cannot change stacking during this synchronous reconcile pass.
+        let mut bottom_frame = None;
+        for want in &wanted {
             let prev = self.frame_shadows.get(&want.frame).map(|held| held.state);
             // A frame first seen while frames are still moving waits for the settle: shading it
             // now would need the root readback a live move must never do.
@@ -226,16 +362,21 @@ impl<C: Connection> Wm<'_, C> {
                         Some(held) => held.win,
                         None => self.create_shadow_window()?,
                     };
+                    let sibling = cached_shadow_sibling(&mut bottom_frame, want.frame, || {
+                        self.shadow_sibling()
+                    });
                     self.refresh_frame_shadow(
                         want.frame,
                         want.outer,
                         want.focused,
                         win,
                         generation,
+                        sibling,
                     )?;
                 }
             }
         }
+        self.shadow_scene.wanted_scratch = wanted;
         Ok(())
     }
 
@@ -243,15 +384,16 @@ impl<C: Connection> Wm<'_, C> {
     /// Also reports whether frames are still moving this turn (a gesture or a flight), in which
     /// case nothing may re-shade.
     fn advance_shadow_generation(&mut self) -> (u64, bool) {
-        let dragging: Vec<Window> = self
-            .sessions
-            .iter()
-            .filter(|(_, state)| drag_activated(&state.session))
-            .map(|(client, _)| *client)
-            .collect();
+        self.shadow_scene.next_dragging.clear();
+        self.shadow_scene.next_dragging.extend(
+            self.sessions
+                .iter()
+                .filter(|(_, state)| drag_activated(&state.session))
+                .map(|(client, _)| *client),
+        );
         // The same "something is flying" predicate `transition_wait` uses to cap the reactor
         // wait: geometry is only meaningful once both are quiet.
-        let motion = !dragging.is_empty() || self.animator.is_active();
+        let motion = !self.shadow_scene.next_dragging.is_empty() || self.animator.is_active();
         let membership = self.shadow_membership_hash();
         let backdrop = self.shadow_backdrop_hash();
         // Geometry is only comparable between two quiet turns: a dragged or animating frame
@@ -263,64 +405,64 @@ impl<C: Connection> Wm<'_, C> {
         };
         let generation = self
             .shadow_scene
-            .advance(membership, backdrop, geometry, dragging);
+            .advance(membership, backdrop, geometry);
         (generation, motion)
     }
 
     /// Which windows the root currently shows: a map/unmap/workspace change re-shades.
-    fn shadow_membership_hash(&self) -> u64 {
-        let mut items: Vec<(Window, usize, bool)> = self
-            .clients
-            .values()
-            .filter(|c| c.visible_on(self.current_workspace))
-            .map(|c| (c.frame, c.workspace, c.sticky))
-            .collect();
+    fn shadow_membership_hash(&mut self) -> u64 {
+        let items = &mut self.shadow_scene.membership_scratch;
+        items.clear();
+        items.extend(
+            self.clients
+                .values()
+                .filter(|c| c.visible_on(self.current_workspace))
+                .map(|c| (c.frame, c.workspace, c.sticky)),
+        );
         items.sort_unstable();
-        hash_of((self.current_workspace, items))
+        hash_of((self.current_workspace, &*items))
     }
 
     /// Wallpaper source plus output layout: a change invalidates every strip's pixels.
-    fn shadow_backdrop_hash(&self) -> u64 {
-        let outputs: Vec<(i32, i32, u32, u32)> = self
-            .output_work_areas
-            .iter()
-            .map(|output| {
-                let rect = output.geometry;
-                (rect.x, rect.y, rect.width, rect.height)
-            })
-            .collect();
-        let screen = self.screen();
+    fn shadow_backdrop_hash(&mut self) -> u64 {
+        let (screen_width, screen_height) = {
+            let screen = self.screen();
+            (screen.width_in_pixels, screen.height_in_pixels)
+        };
+        let outputs = &mut self.shadow_scene.outputs_scratch;
+        outputs.clear();
+        outputs.extend(self.output_work_areas.iter().map(|output| {
+            let rect = output.geometry;
+            (rect.x, rect.y, rect.width, rect.height)
+        }));
         hash_of((
             self.decoration_tokens.backdrop_revision,
-            screen.width_in_pixels,
-            screen.height_in_pixels,
-            outputs,
+            screen_width,
+            screen_height,
+            &*outputs,
             self.shadow_scene.desktop,
         ))
     }
 
     /// Managed geometry while idle: a window that moved (or settled) re-shades the rest once.
-    fn shadow_geometry_hash(&self) -> u64 {
-        let mut items: Vec<(Window, i32, i32, u32, u32)> = self
-            .clients
-            .values()
-            .filter(|c| c.visible_on(self.current_workspace))
-            .map(|c| (c.frame, c.outer.x, c.outer.y, c.outer.width, c.outer.height))
-            .collect();
+    fn shadow_geometry_hash(&mut self) -> u64 {
+        let items = &mut self.shadow_scene.geometry_scratch;
+        items.clear();
+        items.extend(
+            self.clients
+                .values()
+                .filter(|c| c.visible_on(self.current_workspace))
+                .map(|c| (c.frame, c.outer.x, c.outer.y, c.outer.width, c.outer.height)),
+        );
         items.sort_unstable();
-        hash_of((self.current_workspace, items))
+        hash_of((self.current_workspace, &*items))
     }
 
     /// The lowest managed frame, used as the sibling for every shadow so the shadow sits below
     /// all managed windows (and above the desktop). Falls back to the frame's own window.
-    fn shadow_sibling(&self, own: Window) -> Window {
+    fn shadow_sibling(&self) -> Option<Window> {
         let root = self.screen().root;
-        let Ok(cookie) = self.conn.query_tree(root) else {
-            return own;
-        };
-        let Ok(reply) = cookie.reply() else {
-            return own;
-        };
+        let reply = self.conn.query_tree(root).ok()?.reply().ok()?;
         let frames: std::collections::HashSet<Window> =
             self.clients.values().map(|client| client.frame).collect();
         reply
@@ -328,7 +470,6 @@ impl<C: Connection> Wm<'_, C> {
             .iter()
             .copied()
             .find(|window| frames.contains(window))
-            .unwrap_or(own)
     }
 
     /// Slide the shadow with its frame. One `configure_window`, no readback.
@@ -384,14 +525,19 @@ impl<C: Connection> Wm<'_, C> {
         focused: bool,
         win: Window,
         generation: u64,
+        sibling: Window,
     ) -> Result<(), ReplyOrIdError> {
         let _guard = flamewm_profiler::start("wm.shadow.refresh");
-        // Stack below every managed frame, not just below this one: an opaque snapshot above a
-        // neighbour's titlebar paints stale/black pixels over that titlebar. Bottom-of-stack keeps
-        // the shadow on the desktop and never over another window.
-        let sibling = self.shadow_sibling(frame);
+        // The caller resolved the bottom managed frame once for this batch. Placing all shadows
+        // beneath it prevents a stale shadow snapshot from covering another client's titlebar.
         let previous = self.frame_shadows.get(&frame).map(|held| held.pixmap);
-        let shown = self.refresh_shadow(outer, focused, win, sibling)?;
+        // X Shape is window-local: position, focus and backdrop changes cannot alter its
+        // silhouette. Only a new shadow window or a changed frame size needs a new mask.
+        let previous_shape = self.frame_shadows.get(&frame).map(|held| {
+            (held.win, held.state.shaded.width, held.state.shaded.height)
+        });
+        let update_shape = needs_shadow_shape_update(previous_shape, win, outer);
+        let shown = self.refresh_shadow(outer, focused, win, sibling, update_shape)?;
         if let Some((raw, pixmap)) = shown {
             self.frame_shadows.insert(
                 frame,
@@ -425,14 +571,16 @@ impl<C: Connection> Wm<'_, C> {
         focused: bool,
         win: Window,
         sibling: Window,
-    ) -> Result<Option<(Vec<u8>, Pixmap)>, ReplyOrIdError> {
+        update_shape: bool,
+    ) -> Result<Option<(shadow_rubber::ShadowBands, Pixmap)>, ReplyOrIdError> {
         let root = self.screen().root;
         let rect = shadow::shadow_rect(outer);
         let Some(raw) = self.desktop_snapshot(rect, outer)? else {
             return Ok(None);
         };
-        let mut pixels = raw.clone();
-        shadow::shade_shadow(outer, focused, &mut pixels);
+        let raw_bands = shadow_rubber::ShadowBands::capture(&raw, rect, outer);
+        let mut pixels = raw;
+        shadow::shade_visible_shadow(outer, focused, &mut pixels);
         if pixels.len() + 32 > self.conn.maximum_request_bytes() {
             return Ok(None);
         }
@@ -466,27 +614,29 @@ impl<C: Connection> Wm<'_, C> {
             .configure_window(win, &shadow_aux(rect, sibling))?;
         // One rounded square: the fixed small radius cuts all four corners. The
         // window area inside the frame is cut away too, so only the cast shows.
-        let mask: Vec<x11rb::protocol::xproto::Rectangle> =
-            shadow::clip_spans_outside_frame(shadow::shadow_spans(rect), rect, outer)
-                .into_iter()
-                .map(|(row, start, end)| x11rb::protocol::xproto::Rectangle {
-                    x: start as i16,
-                    y: row as i16,
-                    width: end.saturating_sub(start) as u16,
-                    height: 1,
-                })
-                .collect();
-        self.conn.shape_rectangles(
-            ShapeOp::SET,
-            ShapeSk::BOUNDING,
-            ClipOrdering::UNSORTED,
-            win,
-            0,
-            0,
-            &mask,
-        )?;
+        if update_shape {
+            let mask: Vec<x11rb::protocol::xproto::Rectangle> =
+                shadow::shadow_mask_rectangles(rect, outer)
+                    .into_iter()
+                    .map(|(x, y, width, height)| x11rb::protocol::xproto::Rectangle {
+                        x: x as i16,
+                        y: y as i16,
+                        width: width as u16,
+                        height: height as u16,
+                    })
+                    .collect();
+            self.conn.shape_rectangles(
+                ShapeOp::SET,
+                ShapeSk::BOUNDING,
+                ClipOrdering::UNSORTED,
+                win,
+                0,
+                0,
+                &mask,
+            )?;
+        }
         self.conn.map_window(win)?;
-        Ok(Some((raw, pixmap)))
+        Ok(Some((raw_bands, pixmap)))
     }
 
     /// The desktop published or withdrew the live rubber band. Recompose only the shadow regions
@@ -512,22 +662,49 @@ impl<C: Connection> Wm<'_, C> {
         if previous == next {
             return Ok(());
         }
-        for held in self.frame_shadows.values() {
-            let area = shadow::shadow_rect(held.state.shaded);
-            let Some(region) = shadow_rubber::damage_region(area, previous.as_ref(), next.as_ref())
-            else {
-                continue;
-            };
-            let pixels = shadow_rubber::compose_region(
-                &held.raw,
-                area,
-                region,
-                held.state.shaded,
-                held.state.focused,
-                next.as_ref(),
-            );
-            self.put_shadow_region(held, area, region, &pixels)?;
-        }
+        // One graphics context per property change, not per intersecting shadow. Keep the
+        // output allocation across all strips/windows in this update, while dropping it before
+        // the next event so large selection operations do not inflate the idle working set.
+        let mut gc = None;
+        let mut pixels = Vec::new();
+        let update = (|| -> Result<(), ReplyOrIdError> {
+            for held in self.frame_shadows.values() {
+                let area = shadow::shadow_rect(held.state.shaded);
+                let regions = shadow_rubber::visible_motion_damage_regions(
+                    area,
+                    held.state.shaded,
+                    previous.as_ref(),
+                    next.as_ref(),
+                );
+                if regions.iter().all(Option::is_none) {
+                    continue;
+                }
+                let shared_gc = if let Some(gc) = gc {
+                    gc
+                } else {
+                    let created = self.conn.generate_id()?;
+                    self.conn.create_gc(created, root, &CreateGCAux::new())?;
+                    gc = Some(created);
+                    created
+                };
+                for region in regions.into_iter().flatten() {
+                    shadow_rubber::compose_visible_region_into(
+                        &held.raw,
+                        region,
+                        held.state.shaded,
+                        held.state.focused,
+                        next.as_ref(),
+                        &mut pixels,
+                    );
+                    self.put_shadow_region(held, area, region, &pixels, shared_gc)?;
+                }
+            }
+            Ok(())
+        })();
+        // Attempt GC cleanup even if an X11 image upload failed partway through the batch.
+        let cleanup = gc.map(|created| self.conn.free_gc(created)).transpose();
+        update?;
+        cleanup?;
         Ok(())
     }
 
@@ -539,14 +716,12 @@ impl<C: Connection> Wm<'_, C> {
         area: Rect,
         region: Rect,
         pixels: &[u8],
+        gc: u32,
     ) -> Result<(), ReplyOrIdError> {
-        let root = self.screen().root;
         let stride = region.width as usize * 4;
         let rows_per_request =
             (self.conn.maximum_request_bytes().saturating_sub(64) / stride.max(1)).max(1);
         let (dst_x, dst_y) = (region.x - area.x, region.y - area.y);
-        let gc = self.conn.generate_id()?;
-        self.conn.create_gc(gc, root, &CreateGCAux::new())?;
         for (index, band) in pixels.chunks(rows_per_request * stride).enumerate() {
             let rows = band.len() / stride;
             self.conn.put_image(
@@ -562,7 +737,6 @@ impl<C: Connection> Wm<'_, C> {
                 band,
             )?;
         }
-        self.conn.free_gc(gc)?;
         self.conn.clear_area(
             false,
             held.win,

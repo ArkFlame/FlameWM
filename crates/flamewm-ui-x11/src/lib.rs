@@ -10,6 +10,7 @@ mod root_property;
 pub use root_property::RootCardinalPublisher;
 mod reconcile;
 mod surface_runtime;
+pub mod surface_style;
 mod template;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

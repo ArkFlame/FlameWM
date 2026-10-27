@@ -14,6 +14,7 @@
 .target/release/flamewm-render-inspect   usr/bin/flamewm-render-inspect
 .target/release/flamewm-lock             usr/bin/flamewm-lock
 .target/release/flamewm-terminal         usr/bin/flamewm-terminal
+.target/release/flamewm-task-manager     usr/bin/flamewm-task-manager
 .target/release/flamewm-wayland          usr/bin/flamewm-wayland
 packaging/pam.d/flamewm-lock             etc/pam.d/flamewm-lock
 assets/                                  usr/share/flamewm/assets/
@@ -28,6 +29,7 @@ packaging/flamewm.desktop                usr/share/applications/flamewm.desktop
 packaging/flamewm-screenshot.desktop      usr/share/applications/flamewm-screenshot.desktop
 packaging/flamewm-explorer.desktop        usr/share/applications/flamewm-explorer.desktop
 packaging/flamewm-terminal.desktop        usr/share/applications/flamewm-terminal.desktop
+packaging/flamewm-task-manager.desktop    usr/share/applications/flamewm-task-manager.desktop
 packaging/flamewm-session.desktop        usr/share/xsessions/flamewm.desktop
 packaging/flamewm-wayland.desktop        usr/share/wayland-sessions/flamewm-wayland.desktop
 packaging/menus/flamewm-applications.menu  etc/xdg/menus/flamewm-applications.menu

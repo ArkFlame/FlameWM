@@ -104,43 +104,8 @@ pub const fn shape_radius(rounded: bool) -> i32 {
     if rounded { 12 } else { 0 }
 }
 
-/// Shared Surfaces fill for desktop menus: `surfaceColor` RGB with the `surfaceOpacity` alpha.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SurfaceFill {
-    pub rgb: u32,
-    pub alpha: u8,
-}
-
-const DEFAULT_SURFACE_COLOR: u32 = 0x0019_1b1d;
-const DEFAULT_SURFACE_OPACITY: u8 = 50;
-
-/// Maps `surfaceColor` / `surfaceOpacity` to a fill. Same mapping as the shell
-/// `settings_projection::surface_background`; invalid colours fall back to the default.
-#[must_use]
-pub fn surface_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
-    let rgb = match snapshot.values.get("surfaceColor") {
-        Some(SettingValue::Text(value)) => parse_rgb(value),
-        _ => None,
-    }
-    .unwrap_or(DEFAULT_SURFACE_COLOR);
-    let percent = match snapshot.values.get("surfaceOpacity") {
-        Some(SettingValue::Percent(value)) => (*value).min(100),
-        _ => DEFAULT_SURFACE_OPACITY,
-    };
-    SurfaceFill {
-        rgb,
-        alpha: ((u16::from(percent) * 255) / 100) as u8,
-    }
-}
-
-/// Parses `#rrggbb` or bare `rrggbb` into 0xRRGGBB.
-fn parse_rgb(text: &str) -> Option<u32> {
-    let hex = text.strip_prefix('#').unwrap_or(text);
-    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    u32::from_str_radix(hex, 16).ok()
-}
+// Legacy context-menu imports remain valid; all materials now have one shared owner.
+pub use crate::surface::{SurfaceFill, blend_surface_over_rgb, surface_fill, surface_stroke};
 
 /// Shared row model for desktop and taskbar context menus (single owner: this module).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

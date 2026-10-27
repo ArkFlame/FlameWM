@@ -3,7 +3,7 @@
 :root { --accent:#00000000; --accent-soft:#00000030; --card:#00000000; --line:#00000000; --hover:#00000000; --menu:#00000000; --sidebar:#00000000; --text:#f1f2f3; --muted:#f1f2f3; }
 * { box-sizing:border-box; }
 html { width:100%; height:100%; }
-body { width:100%; height:100%; margin:0; color:var(--text); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
+body { border:1px solid #ffffff3f; width:100%; height:100%; margin:0; color:var(--text); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
 button { background:transparent; color:var(--text); cursor:default; font-size:13px; border-width:0px; padding:0px; display:flex; align-items:center; justify-content:center; }
 button:hover { background:var(--hover); }
 button:active { background:var(--hover); }
@@ -66,7 +66,7 @@ button:active { background:var(--hover); }
 .usage-track { width:114px; height:4px; flex-grow:0; background:var(--card); border-radius:2px; }
 .usage-fill { width:0px; height:4px; background:var(--accent); border-radius:2px; }
 
-.context { position:absolute; top:105px; left:330px; width:210px; padding:5px; display:flex; flex-direction:column; background:var(--menu); border:1px solid var(--hover); border-radius:11px; }
+.context { position:absolute; top:105px; left:330px; width:210px; padding:5px; display:flex; flex-direction:column; background:var(--menu); border:1px solid #ffffff3f; border-radius:11px; }
 .menu-row { justify-content:flex-start; width:198px; height:31px; padding-left:11px; gap:9px; border-radius:3px; }
 /* Menu icons sit left of the label; the set is drawn in a fixed stroke colour (see icons/). */
 .menu-ico { width:16px; height:16px; flex-grow:0; }

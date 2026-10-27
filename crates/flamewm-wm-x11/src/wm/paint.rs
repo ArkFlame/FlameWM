@@ -103,6 +103,11 @@ impl<C: Connection> Wm<'_, C> {
             else {
                 continue;
             };
+            self.conn.change_window_attributes(
+                frame,
+                &ChangeWindowAttributesAux::new()
+                    .border_pixel(crate::chrome::frame_border_pixel(&tokens)),
+            )?;
             self.clear_frame_shape(frame, outer, floating)?;
             self.paint_chrome(client)?;
         }

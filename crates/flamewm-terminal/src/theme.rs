@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
-use flamewm_ui_core::context_menu::surface_fill;
+use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::backdrop::WindowBackdrop;
 
 use crate::store::FOLLOW_FLAMEWM;

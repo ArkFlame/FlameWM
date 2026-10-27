@@ -15,6 +15,7 @@ pub struct UiCache {
     rows: Vec<Option<Row>>,
     font: Option<(u16, String)>,
     surface: Option<(u32, u8)>,
+    surface_stroke: Option<UiColor>,
 }
 
 const fn rgb(value: u32) -> UiColor {
@@ -59,7 +60,7 @@ impl App {
 
     fn project_surface(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let surface = (self.palette.background, self.surface_alpha);
-        if self.ui.surface == Some(surface) {
+        if self.ui.surface == Some(surface) && self.ui.surface_stroke == Some(self.surface_stroke) {
             return Ok(());
         }
         let color = UiColor {
@@ -69,6 +70,8 @@ impl App {
         // The window's root node carries the surface fill (the explorer does the same with its root). The grid node is
         // transparent, so the translucent fill shows through it.
         doc.background("terminal", color)?;
+        doc.border("terminal", self.surface_stroke)?;
+        self.ui.surface_stroke = Some(self.surface_stroke);
         // No node backdrop: a root blur made every paint read back and re-blur the whole window. The window backdrop
         // already supplies the blurred desktop, and the translucent fill composites over it.
         self.ui.surface = Some(surface);

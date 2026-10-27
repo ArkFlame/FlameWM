@@ -235,6 +235,8 @@ pub struct ProductSettings {
     pub surface_color: String,
     pub surface_opacity: u8,
     pub surface_blur_percent: u8,
+    pub surface_border_color: String,
+    pub surface_border_opacity: u8,
     pub start_button_text: String,
     pub custom_start_icon: String,
     pub sticky_notes_enabled: bool,
@@ -347,6 +349,8 @@ impl Default for ProductSettings {
             surface_color: "#191b1d".to_owned(),
             surface_opacity: 50,
             surface_blur_percent: 80,
+            surface_border_color: "#FFFFFF".to_owned(),
+            surface_border_opacity: 25,
             start_button_text: String::new(),
             custom_start_icon: String::new(),
             sticky_notes_enabled: true,
@@ -462,6 +466,10 @@ impl ProductSettings {
     pub fn validate(&self) -> FlameResult<()> {
         validate_color(&self.taskbar_color, false, "taskbarColor")?;
         validate_color(&self.surface_color, false, "surfaceColor")?;
+        validate_color(&self.surface_border_color, false, "surfaceBorderColor")?;
+        if self.surface_border_opacity > 100 {
+            return invalid("surfaceBorderOpacity must be 0..100");
+        }
         validate_color(&self.accent, true, "accent")?;
         if self
             .wallpaper
@@ -1049,6 +1057,8 @@ stable_settings! {
     (false, taskbar, "surfaceColor", surface_color),
     (false, taskbar, "surfaceOpacity", surface_opacity),
     (false, taskbar, "surfaceBlurPercent", surface_blur_percent),
+    (false, taskbar, "surfaceBorderColor", surface_border_color),
+    (false, taskbar, "surfaceBorderOpacity", surface_border_opacity),
     (true, taskbar, "startButtonText", start_button_text),
     (true, taskbar, "customStartIcon", custom_start_icon),
     (true, desktop, "stickyNotesEnabled", sticky_notes_enabled),

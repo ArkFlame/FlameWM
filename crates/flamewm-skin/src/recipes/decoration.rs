@@ -52,6 +52,9 @@ pub struct ChromeTokens {
     pub titlebar_alpha: u8,
     /// `surfaceBlurPercent` (0..=100): blur of what is behind the titlebar.
     pub titlebar_blur_percent: u8,
+    /// Shared one-pixel inner glass contour (RRGGBB + straight alpha).
+    pub surface_border_rgb: Rgb,
+    pub surface_border_alpha: u8,
     /// Bumped when the backdrop source (wallpaper) changes so frames repaint.
     pub backdrop_revision: u32,
     pub buttons: [ButtonTokens; 3],
@@ -66,6 +69,8 @@ impl Default for ChromeTokens {
             titlebar_bg: DEFAULT_SURFACE_RGB,
             titlebar_alpha: DEFAULT_SURFACE_ALPHA,
             titlebar_blur_percent: DEFAULT_SURFACE_BLUR_PERCENT,
+            surface_border_rgb: Rgb(0x00ff_ffff),
+            surface_border_alpha: 63,
             backdrop_revision: 0,
             buttons: [ButtonTokens::default(); 3],
             window_shadows: true,

@@ -140,7 +140,7 @@ pub(crate) fn symbolic_foreground_argb32(
             let off = (sy * sw as usize + sx) * 4;
             let sa = u32::from(pixels[off + 3]);
             let eff_a = (sa * u32::from(fg.a) + 127) / 255;
-            let prem = |c: u32| ((c * eff_a + 127) / 255);
+            let prem = |c: u32| (c * eff_a + 127) / 255;
             out.push(
                 (eff_a << 24)
                     | (prem(u32::from(fg.r)) << 16)
@@ -185,6 +185,9 @@ pub(crate) struct X11App {
     pub(crate) shape_override: Option<Vec<(u32, u32, u32)>>,
     #[allow(dead_code)]
     pub(crate) visual: *mut Visual,
+    /// The server's visual set is immutable for this Display; avoid XMatchVisualInfo for each
+    /// image upload/text shadow in a busy desktop surface.
+    pub(crate) argb_visual: Option<*mut Visual>,
     pub(crate) alpha_mode: SurfaceAlphaMode,
     pub(crate) surface: Option<NativeSurfaceTarget>,
     pub(crate) wm_delete: Atom,
@@ -205,6 +208,9 @@ pub(crate) struct X11App {
     pub(crate) cached_layout_key: Option<LayoutKey>,
     /// Hash of the bounding-shape spans last applied to `window` (None = unknown/clipped).
     pub(crate) shape_applied: std::cell::Cell<Option<u64>>,
+    /// Fixed dock/ring shape applied to this window. A paint does not change its geometry;
+    /// avoid rebuilding and sorting thousands of coverage spans on every unrelated repaint.
+    pub(crate) static_shape_applied: std::cell::Cell<Option<render::StaticShapeKey>>,
     pub(crate) pending_damage: SurfaceDamage,
     /// Region painting for the opaque subset. **Opt-in** (`FLAMEWM_RENDER_REGION=1`): the live path
     /// paints Full, plus `RedrawPlan::Skip` when nothing changed. The incremental path is not safe
@@ -297,7 +303,8 @@ impl X11App {
         // Canonical scene creation: prefer a depth-32 TrueColor ARGB visual
         // validated by native/surface_format; fall back to the default visual
         // (opaque or shape-backed) only when no real alpha channel exists.
-        if let Some(argb_visual) = match_argb32_visual(display, screen) {
+        let argb_visual = match_argb32_visual(display, screen);
+        if let Some(argb_visual) = argb_visual {
             let alpha_mask = unsafe { visual_alpha_mask(display, argb_visual) };
             match validate_argb32_visual(32, TRUE_COLOR_CLASS, alpha_mask) {
                 // No compositor is claimed in the default Xephyr path, so a
@@ -611,6 +618,7 @@ impl X11App {
             ring_mask: None,
             shape_override: None,
             visual,
+            argb_visual,
             alpha_mode,
             surface: Some(surface),
             wm_delete,
@@ -626,6 +634,7 @@ impl X11App {
             paint_nodes: Default::default(),
             cached_layout_key: None,
             shape_applied: std::cell::Cell::new(None),
+            static_shape_applied: std::cell::Cell::new(None),
             pending_damage: SurfaceDamage::Full,
             // Opt-in: the incremental path needs the Xft/clip work before it is safe for real
             // content (see the field docs). FLAMEWM_RENDER_REGION=1 enables it for evaluation.

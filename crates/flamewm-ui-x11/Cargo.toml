@@ -12,6 +12,7 @@ description = "FlameWM typed UI bridge for the X11 renderer"
 test-support = []
 
 [dependencies]
+flamewm-api = { path = "../flamewm-api" }
 flamewm-ui = { path = "../flamewm-ui" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-skin = { path = "../flamewm-skin" }

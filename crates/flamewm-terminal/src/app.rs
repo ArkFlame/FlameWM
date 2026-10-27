@@ -99,6 +99,7 @@ pub struct App {
     pub snapshot: Option<SettingsSnapshot>,
     pub palette: Palette,
     pub surface_alpha: u8,
+    pub surface_stroke: flamewm_ui_x11::UiColor,
     pub view: View,
     /// System CLIPBOARD handle. `None` when no X connection is available; copy and paste then stay in-process.
     pub clipboard: Option<flamewm_clipboard::Clipboard>,
@@ -152,6 +153,7 @@ impl App {
             store,
             snapshot,
             surface_alpha: 255,
+            surface_stroke: flamewm_ui_x11::UiColor { r:255, g:255, b:255, a:63 },
             view: View::Terminal,
             clipboard: None,
             events,
@@ -186,6 +188,9 @@ impl App {
         self.palette =
             theme::resolve_palette(&self.config.theme, &self.themes, self.snapshot.as_ref());
         self.surface_alpha = theme::surface_alpha(self.config.background_opacity);
+        if let Some(snapshot) = self.snapshot.as_ref() {
+            self.surface_stroke = flamewm_ui_x11::surface_style::surface_border(snapshot);
+        }
     }
 
     /// Grid size for a window in logical px. Row 0 is the tab bar.

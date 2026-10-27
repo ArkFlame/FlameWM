@@ -18,6 +18,7 @@ flamewm-explorer = { path = "../flamewm-explorer" }
 flamewm-settings = { path = "../flamewm-settings" }
 flamewm-shell = { path = "../flamewm-shell" }
 flamewm-terminal = { path = "../flamewm-terminal" }
+flamewm-task-manager = { path = "../flamewm-task-manager" }
 flamewm-wm = { path = "../flamewm-wm" }
 
 [lints]

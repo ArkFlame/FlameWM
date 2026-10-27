@@ -2151,15 +2151,20 @@ impl ExplorerApp {
         let glide=self.glide.offset(Instant::now());
         // One snapshot of the source for all slots, same sequence as `entry_at`; slot k maps to position k-1+origin.
         let first=origin.saturating_sub(1);
-        let window:Vec<&Entry>=match self.search_rows.as_ref() {
-            Some(results)=>results.iter().skip(first).take(ROW_SLOTS).collect(),
-            None=>tab.visible().skip(first).take(ROW_SLOTS).collect(),
-        };
+        let mut window: [Option<&Entry>; ROW_SLOTS] = [None; ROW_SLOTS];
+        match self.search_rows.as_ref() {
+            Some(results)=>{
+                for (slot, entry) in results.iter().skip(first).take(ROW_SLOTS).enumerate() { window[slot]=Some(entry); }
+            },
+            None=>{
+                for (slot, entry) in tab.visible().skip(first).take(ROW_SLOTS).enumerate() { window[slot]=Some(entry); }
+            },
+        }
         for slot in 0..ROW_SLOTS {
             let row=format!("row-{slot}");
             let index=flamewm_explorer::row_slot_index(origin,slot);
             let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
-            let entry=if slot<=rows+1 {usize::try_from(index).ok().and_then(|i|i.checked_sub(first)).and_then(|p|window.get(p).copied())} else {None};
+            let entry=if slot<=rows+1 {usize::try_from(index).ok().and_then(|i|i.checked_sub(first)).and_then(|p|window.get(p).copied().flatten())} else {None};
             let in_view=y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5;
             if let Some(entry)=entry {
                 // Contents are set even off-view, so a row that glides into view later already shows its entry.

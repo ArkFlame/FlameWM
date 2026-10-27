@@ -4,7 +4,7 @@
 //! blended into the raw root snapshot first and the shadow darkens the result, pixel by pixel.
 //! Nothing here touches X: the WM owns the pixmap and the damage it asks for.
 
-use crate::frame::shadow::keep_at;
+use crate::frame::shadow::{shadow_keep_from_table, shadow_keep_table};
 use crate::geometry::Rect;
 use flamewm_api::root_rubber::{ROOT_RUBBER_BORDER_PX, RootRubber};
 
@@ -26,6 +26,149 @@ fn union(a: Rect, b: Rect) -> Rect {
     let x1 = a.right().max(b.right());
     let y1 = a.bottom().max(b.bottom());
     Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
+}
+
+/// Two disjoint pixel strips containing every visible part of an X11 frame shadow.
+/// The frame masks its interior, so retaining or repainting those hidden pixels is wasteful.
+#[must_use]
+pub fn visible_shadow_regions(area: Rect, frame: Rect) -> [Option<Rect>; 2] {
+    let right = frame.right().clamp(area.x, area.right());
+    let bottom = frame.bottom().clamp(area.y, area.bottom());
+    [
+        intersect(
+            area,
+            Rect::new(right, area.y, (area.right() - right) as u32, area.height),
+        ),
+        intersect(
+            area,
+            Rect::new(area.x, bottom, (right - area.x) as u32, (area.bottom() - bottom) as u32),
+        ),
+    ]
+}
+
+/// Only retain the raw desktop pixels that can actually appear in a shadow.
+/// Each row is tightly packed BGRX; the original full frame is released after presentation.
+pub struct ShadowBands {
+    strips: [Option<ShadowStrip>; 2],
+}
+
+struct ShadowStrip {
+    region: Rect,
+    pixels: Vec<u8>,
+}
+
+impl ShadowBands {
+    #[must_use]
+    pub fn capture(raw: &[u8], area: Rect, frame: Rect) -> Self {
+        let stride = area.width as usize * 4;
+        let strips = visible_shadow_regions(area, frame).map(|region| {
+            region.map(|region| {
+                let mut pixels = Vec::with_capacity(region.width as usize * region.height as usize * 4);
+                for y in region.y..region.bottom() {
+                    let start = (y - area.y) as usize * stride + (region.x - area.x) as usize * 4;
+                    pixels.extend_from_slice(&raw[start..start + region.width as usize * 4]);
+                }
+                ShadowStrip { region, pixels }
+            })
+        });
+        Self { strips }
+    }
+
+    fn pixel(&self, x: i32, y: i32) -> [u8; 3] {
+        for strip in self.strips.iter().flatten() {
+            let rect = strip.region;
+            if x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom() {
+                let at = ((y - rect.y) as usize * rect.width as usize + (x - rect.x) as usize) * 4;
+                return [strip.pixels[at], strip.pixels[at + 1], strip.pixels[at + 2]];
+            }
+        }
+        unreachable!("only visible shadow regions may read compacted raw pixels")
+    }
+
+    #[cfg(test)]
+    fn stored_bytes(&self) -> usize {
+        self.strips.iter().flatten().map(|strip| strip.pixels.len()).sum()
+    }
+}
+
+/// Split damage into the visible right/bottom strips. A rectangle which crosses the hidden
+/// frame interior never causes a full-frame pixel upload to Xorg.
+#[must_use]
+pub fn visible_damage_regions(
+    area: Rect,
+    frame: Rect,
+    old: Option<&RootRubber>,
+    new: Option<&RootRubber>,
+) -> [Option<Rect>; 2] {
+    let Some(changed) = damage_region(area, old, new) else {
+        return [None, None];
+    };
+    visible_shadow_regions(area, frame).map(|region| region.and_then(|r| intersect(r, changed)))
+}
+
+/// For a selection rectangle resized from the same top-left corner, the existing fill and
+/// top/left border do not change. Only its trailing right/bottom edges need compositing. This
+/// keeps mouse motion from uploading the entire accumulated selection area to Xorg.
+///
+/// Fallback to the conservative damage bound for moved rectangles or changed colours. The four
+/// slots are the two non-overlapping edge bands intersected with the two visible shadow strips.
+#[must_use]
+pub fn visible_motion_damage_regions(
+    area: Rect,
+    frame: Rect,
+    old: Option<&RootRubber>,
+    new: Option<&RootRubber>,
+) -> [Option<Rect>; 4] {
+    if let (Some(previous), Some(current)) = (old, new) {
+        if previous.x == current.x
+            && previous.y == current.y
+            && previous.fill == current.fill
+            && previous.border == current.border
+        {
+            let previous_rect = band_rect(previous);
+            let current_rect = band_rect(current);
+            let right = previous_rect.right().max(current_rect.right());
+            let bottom = previous_rect.bottom().max(current_rect.bottom());
+            let width_changed = previous.width != current.width;
+            let height_changed = previous.height != current.height;
+            let x_edge = previous_rect.right().min(current_rect.right())
+                .saturating_sub(ROOT_RUBBER_BORDER_PX)
+                .max(previous.x);
+            let y_edge = previous_rect.bottom().min(current_rect.bottom())
+                .saturating_sub(ROOT_RUBBER_BORDER_PX)
+                .max(previous.y);
+            // The vertical edge also covers the bottom-right corner; the horizontal edge stops
+            // there to avoid sending the same pixels twice.
+            let edges = [
+                width_changed.then(|| {
+                    Rect::new(
+                        x_edge,
+                        previous.y,
+                        right.saturating_sub(x_edge) as u32,
+                        bottom.saturating_sub(previous.y) as u32,
+                    )
+                }),
+                height_changed.then(|| {
+                    Rect::new(
+                        previous.x,
+                        y_edge,
+                        (if width_changed { x_edge } else { right })
+                            .saturating_sub(previous.x) as u32,
+                        bottom.saturating_sub(y_edge) as u32,
+                    )
+                }),
+            ];
+            let visible = visible_shadow_regions(area, frame);
+            return [
+                edges[0].and_then(|edge| visible[0].and_then(|strip| intersect(edge, strip))),
+                edges[0].and_then(|edge| visible[1].and_then(|strip| intersect(edge, strip))),
+                edges[1].and_then(|edge| visible[0].and_then(|strip| intersect(edge, strip))),
+                edges[1].and_then(|edge| visible[1].and_then(|strip| intersect(edge, strip))),
+            ];
+        }
+    }
+    let conservative = visible_damage_regions(area, frame, old, new);
+    [conservative[0], conservative[1], None, None]
 }
 
 /// Straight RGBA colour the rubber paints at root pixel `(x, y)`, or `None` outside the band.
@@ -89,27 +232,96 @@ pub fn compose_region(
     focused: bool,
     rubber: Option<&RootRubber>,
 ) -> Vec<u8> {
-    debug_assert!(
-        intersect(area, region) == Some(region),
-        "region outside shadow area"
-    );
     let stride = area.width as usize * 4;
-    let mut out = Vec::with_capacity(region.width as usize * region.height as usize * 4);
+    compose_pixels(region, frame, focused, rubber, |x, y| {
+        let at = (y - area.y) as usize * stride + (x - area.x) as usize * 4;
+        [raw[at], raw[at + 1], raw[at + 2]]
+    })
+}
+
+/// Pixel-equivalent to `compose_region` for every visible shadow pixel, but reads only the
+/// compact retained strips. Called exclusively with regions from `visible_damage_regions`.
+#[must_use]
+pub fn compose_visible_region(
+    raw: &ShadowBands,
+    region: Rect,
+    frame: Rect,
+    focused: bool,
+    rubber: Option<&RootRubber>,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    compose_visible_region_into(raw, region, frame, focused, rubber, &mut out);
+    out
+}
+
+/// Same pixels as `compose_visible_region`, but retain the allocation between damage regions.
+/// The X11 WM can upload one region and refill this buffer for the next without reallocating.
+pub fn compose_visible_region_into(
+    raw: &ShadowBands,
+    region: Rect,
+    frame: Rect,
+    focused: bool,
+    rubber: Option<&RootRubber>,
+    out: &mut Vec<u8>,
+) {
+    // Every production damage region is clipped to exactly one retained strip. Resolve that
+    // strip once instead of checking both strip bounds for every pixel in the hot loop.
+    if let Some(strip) = raw.strips.iter().flatten().find(|strip| {
+        region.x >= strip.region.x
+            && region.y >= strip.region.y
+            && region.right() <= strip.region.right()
+            && region.bottom() <= strip.region.bottom()
+    }) {
+        let stride = strip.region.width as usize * 4;
+        compose_pixels_into(region, frame, focused, rubber, |x, y| {
+            let at = (y - strip.region.y) as usize * stride
+                + (x - strip.region.x) as usize * 4;
+            [strip.pixels[at], strip.pixels[at + 1], strip.pixels[at + 2]]
+        }, out);
+    } else {
+        // Preserve the original lookup for any future caller that supplies a region spanning
+        // multiple strips; the current WM never takes this fallback.
+        compose_pixels_into(region, frame, focused, rubber, |x, y| raw.pixel(x, y), out);
+    }
+}
+
+fn compose_pixels(
+    region: Rect,
+    frame: Rect,
+    focused: bool,
+    rubber: Option<&RootRubber>,
+    raw_pixel: impl FnMut(i32, i32) -> [u8; 3],
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    compose_pixels_into(region, frame, focused, rubber, raw_pixel, &mut out);
+    out
+}
+
+fn compose_pixels_into(
+    region: Rect,
+    frame: Rect,
+    focused: bool,
+    rubber: Option<&RootRubber>,
+    mut raw_pixel: impl FnMut(i32, i32) -> [u8; 3],
+    out: &mut Vec<u8>,
+) {
+    out.clear();
+    out.reserve(region.width as usize * region.height as usize * 4);
+    let keep_table = shadow_keep_table(focused);
     for y in region.y..region.bottom() {
         for x in region.x..region.right() {
-            let at = (y - area.y) as usize * stride + (x - area.x) as usize * 4;
-            let mut px = [raw[at], raw[at + 1], raw[at + 2], 0];
+            let [b, g, r] = raw_pixel(x, y);
+            let mut px = [b, g, r, 0];
             if let Some(color) = rubber.and_then(|rubber| rubber_coverage(rubber, x, y)) {
                 blend_bgr(&mut px[..3], color);
             }
-            let keep = keep_at(frame, focused, x, y);
+            let keep = shadow_keep_from_table(&keep_table, frame, x, y);
             for channel in &mut px[..3] {
                 *channel = ((u32::from(*channel) * keep) >> 8) as u8;
             }
             out.extend_from_slice(&px);
         }
     }
-    out
 }
 
 #[cfg(test)]
@@ -139,6 +351,171 @@ mod tests {
         (0..area.width as usize * area.height as usize)
             .flat_map(|i| [(i % 251) as u8, (i % 113) as u8, (i % 67) as u8, 0])
             .collect()
+    }
+
+    #[test]
+    fn compact_shadow_retains_only_visible_pixels() {
+        let area = shadow_rect(FRAME);
+        let full = snapshot(area);
+        let bands = ShadowBands::capture(&full, area, FRAME);
+        assert!(bands.stored_bytes() < full.len() / 4);
+        for region in visible_shadow_regions(area, FRAME).into_iter().flatten() {
+            for y in region.y..region.bottom() {
+                for x in region.x..region.right() {
+                    let at = ((y - area.y) as usize * area.width as usize + (x - area.x) as usize) * 4;
+                    assert_eq!(bands.pixel(x, y), [full[at], full[at + 1], full[at + 2]]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compact_composition_is_pixel_identical_on_visible_strips() {
+        let area = shadow_rect(FRAME);
+        let raw = snapshot(area);
+        let compact = ShadowBands::capture(&raw, area, FRAME);
+        let cases = [
+            (None, None),
+            (None, Some(rubber(240, 200, 30, 20))),
+            (Some(rubber(290, 230, 100, 100)), Some(rubber(105, 115, 300, 160))),
+            (Some(rubber(100, 150, 120, 100)), None),
+        ];
+        for (old, new) in cases {
+            for region in visible_damage_regions(area, FRAME, old.as_ref(), new.as_ref())
+                .into_iter().flatten()
+            {
+                for focused in [false, true] {
+                    assert_eq!(
+                        compose_visible_region(&compact, region, FRAME, focused, new.as_ref()),
+                        compose_region(&raw, area, region, FRAME, focused, new.as_ref()),
+                        "region={region:?}, focused={focused}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reusable_composition_matches_owned_output_after_grow_shrink_and_style_change() {
+        let area = shadow_rect(FRAME);
+        let raw = snapshot(area);
+        let compact = ShadowBands::capture(&raw, area, FRAME);
+        let strips: Vec<_> = visible_shadow_regions(area, FRAME)
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(strips.len(), 2);
+        let narrow = Rect::new(strips[0].x, strips[0].y, 1, 1);
+        let broad = strips[1];
+        let mut reusable = Vec::new();
+        for (region, focused, overlay) in [
+            (narrow, false, None),
+            (broad, true, Some(rubber(100, 200, 400, 300))),
+            (narrow, true, None),
+            (broad, false, None),
+        ] {
+            compose_visible_region_into(
+                &compact,
+                region,
+                FRAME,
+                focused,
+                overlay.as_ref(),
+                &mut reusable,
+            );
+            assert_eq!(
+                reusable,
+                compose_region(&raw, area, region, FRAME, focused, overlay.as_ref()),
+            );
+            assert_eq!(reusable.len(), region.width as usize * region.height as usize * 4);
+        }
+        compose_visible_region_into(
+            &compact,
+            Rect::new(0, 0, 0, 0),
+            FRAME,
+            false,
+            None,
+            &mut reusable,
+        );
+        assert!(reusable.is_empty(), "no stale bytes after a zero-sized update");
+    }
+
+    #[test]
+    fn damage_never_repaints_the_occluded_frame_interior() {
+        let area = shadow_rect(FRAME);
+        let all = rubber(area.x, area.y, area.width, area.height);
+        let regions = visible_damage_regions(area, FRAME, None, Some(&all));
+        let affected: u64 = regions.iter().flatten().map(|r| u64::from(r.width) * u64::from(r.height)).sum();
+        assert!(affected > 0);
+        assert!(affected * 4 < u64::from(area.width) * u64::from(area.height));
+        for region in regions.into_iter().flatten() {
+            for y in region.y..region.bottom() {
+                for x in region.x..region.right() {
+                    assert!(x >= FRAME.right() || y >= FRAME.bottom());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stationary_origin_resize_only_damages_changed_pixels() {
+        let frame = Rect::new(-15, -12, 37, 29);
+        let area = shadow_rect(frame);
+        for origin_x in [-20, 0, 18, 27] {
+            for origin_y in [-18, 0, 11, 23] {
+                for old_width in [1, 2, 3, 9, 30, 55] {
+                    for new_width in [1, 2, 6, 10, 28, 65] {
+                        for (old_height, new_height) in [(1, 2), (12, 7), (7, 32), (24, 24)] {
+                            let before = rubber(origin_x, origin_y, old_width, old_height);
+                            let after = rubber(origin_x, origin_y, new_width, new_height);
+                            let dirty = visible_motion_damage_regions(
+                                area, frame, Some(&before), Some(&after),
+                            );
+                            for visible in visible_shadow_regions(area, frame).into_iter().flatten() {
+                                for y in visible.y..visible.bottom() {
+                                    for x in visible.x..visible.right() {
+                                        if rubber_coverage(&before, x, y) != rubber_coverage(&after, x, y) {
+                                            assert!(
+                                                dirty.iter().flatten().any(|rect| {
+                                                    x >= rect.x && x < rect.right()
+                                                        && y >= rect.y && y < rect.bottom()
+                                                }),
+                                                "uncovered change at ({x}, {y}), old={old_width}x{old_height}, new={new_width}x{new_height}",
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn changed_colours_or_origin_preserve_the_conservative_fallback() {
+        let area = shadow_rect(FRAME);
+        let first = rubber(200, 200, 55, 55);
+        let moved = rubber(201, 200, 55, 55);
+        let recoloured = RootRubber { fill: [1, 2, 3, 4], ..first };
+        for next in [moved, recoloured] {
+            let old = visible_damage_regions(area, FRAME, Some(&first), Some(&next));
+            let new = visible_motion_damage_regions(area, FRAME, Some(&first), Some(&next));
+            assert_eq!(new, [old[0], old[1], None, None]);
+        }
+    }
+
+    #[test]
+    fn growing_selection_does_not_recompose_its_unchanged_interior() {
+        let area = shadow_rect(FRAME);
+        let start = rubber(200, 150, 150, 130);
+        let end = rubber(200, 150, 151, 131);
+        let old = visible_damage_regions(area, FRAME, Some(&start), Some(&end));
+        let optimized = visible_motion_damage_regions(area, FRAME, Some(&start), Some(&end));
+        let pixels = |regions: &[Option<Rect>]| -> u64 {
+            regions.iter().flatten().map(|r| u64::from(r.width) * u64::from(r.height)).sum()
+        };
+        assert!(pixels(&optimized) < pixels(&old));
     }
 
     #[test]

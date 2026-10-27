@@ -15,7 +15,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
 BINARIES = ("flamewm-apps", "flamewm", "flamewm-session", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
-            "flamewm-screenshot", "flamewm-explorer", "flamewm-render-x11", "flamewm-render-compile",
+            "flamewm-screenshot", "flamewm-explorer", "flamewm-task-manager", "flamewm-render-x11", "flamewm-render-compile",
             "flamewm-render-inspect", "flamewm-lock", "flamewm-terminal", "flamewm-wayland")
 # Stub for the --capabilities contract: key=value lines, exit 0, no device access.
 CAPABILITY_STUB = "#!/bin/sh\nprintf 'backend=native\\ndrm_compiled=true\\n'\nexit 0\n"
@@ -33,7 +33,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
         self.root.mkdir()
         for file in ("Cargo.toml", "LICENSE", "README.md", "packaging/flamewm.desktop",
                      "packaging/flamewm-session.desktop", "packaging/flamewm-screenshot.desktop",
-                     "packaging/flamewm-explorer.desktop", "packaging/flamewm-terminal.desktop",
+                     "packaging/flamewm-explorer.desktop", "packaging/flamewm-terminal.desktop", "packaging/flamewm-task-manager.desktop",
                      "packaging/pam.d/flamewm-lock",
                      "packaging/menus/flamewm-applications.menu", "packaging/notifications/dunstrc",
                      "packaging/install-manifest.txt", "packaging/debian/control.in",

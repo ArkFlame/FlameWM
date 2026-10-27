@@ -1140,7 +1140,7 @@ fn panel_reconciliation_plan(
     plan.remove.extend(
         existing
             .iter()
-            .filter(|&(id, _)| (!desired.iter().any(|context| context.output.id == *id)))
+            .filter(|&(id, _)| !desired.iter().any(|context| context.output.id == *id))
             .map(|(id, _)| id.clone()),
     );
     plan

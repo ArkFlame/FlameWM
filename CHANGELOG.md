@@ -1,3 +1,91 @@
+## 2026-10-27 — Pass 13: Fix missing direct dependency in X11 surface adapter
+
+- Add `flamewm-api` as a direct dependency of `flamewm-ui-x11`, matching `surface_style.rs` imports of `flamewm_api::settings::SettingsSnapshot` and its Rust unit-test import of `SettingValue`.
+- Synchronize the `flamewm-ui-x11` entry in `Cargo.lock` so `--locked` builds accept the manifest update.
+- Add a dependency regression preflight before the Xephyr release build, verifying both manifests and avoiding another expensive build ending at `E0433`.
+- The four reported `unused_parens` warnings are already corrected in the supplied Pass 12 source; no renderer arithmetic or sort logic was changed. Shadow reference helpers remain unchanged to preserve differential regression coverage.
+- Native Rust compilation and visual testing remain pending until a Rust/X11 workstation runs the build.
+
+## 2026-10-27 — Pass 12: Fix Task Manager CSS border reset build failure
+
+- Replace the unsupported `border:0` shorthand in `ui/task-manager/task-manager.css` with `border-width:0`. The FlameWM Render compiler accepts zero border width and preserves the button appearance, but requires three tokens for the `border` shorthand.
+- Extend the existing Xephyr Task Manager CSS preflight to reject unsupported border shorthand values before the Cargo release build. Add regression cases for `border:0`, `border:none`, `border-width:none`, and valid equivalents.
+- No compositor, process actions, renderer, or task-manager layout mechanics were changed. Native Cargo compilation still requires a Rust-enabled host.
+
+## 2026-10-27 — Pass 11: Xephyr build/cache and Task Manager CSS repair
+
+- Fix the native Task Manager stylesheet to use only CSS properties supported by the strict FlameWM Render compiler. Replace unsupported per-edge borders with existing border rendering and auto margins with flex layout; keep action IDs and process controls unchanged.
+- Protect shared-surface crate builds against restored archive timestamps via content-hash-driven, package-scoped release cache invalidation for `flamewm-skin`, `flamewm-ui-core`, `flamewm-ui-x11` and `flamewm-task-manager`. This addresses old rlibs missing the source-present `surface`/`surface_style` modules and `ChromeTokens` fields.
+- Run the CSS preflight and cache validation before the Xephyr release build. Add regression tests using fake Cargo metadata/clean without affecting user build artifacts.
+- The earlier redundant-parentheses warnings were already resolved in Pass 10 and remain untouched. Native Rust compilation and graphical behavior still require workstation verification.
+
+## 2026-10-27 — Native Task Manager / build consistency
+
+- Added `flamewm-task-manager`, a native single-window htop-style process monitor with a fixed per-core CPU, memory, swap, load, threads and uptime header above a scrollable process table. Uses the same 1px glass surface contour and FlameWM accent as the other applications. No sidebar or permanent system-monitor daemon.
+- Process sampling uses a 1-second off-UI-thread procfs worker with a bounded one-entry delivery channel and cached immutable command lines; PID/start-time identity is rechecked before explicit renice or SIGTERM actions. Right click offers fixed nice values, F7/F8 increment/decrement nice, and F9 requires termination confirmation. No `sudo` or command-shell interpretation.
+- Integrated the task manager into the existing multi-call binary, source/installed package manifests, `.desktop` launchers, Xephyr nested session and Cargo.lock. Existing package regression fixtures now include the new desktop entry.
+- Pass 9 already resolves `surface_stroke` compatibility re-export and `ChromeTokens.surface_border_rgb`/`surface_border_alpha` definitions from the previously reported Pass 8 failures; removed five related redundant-parenthesis compiler warnings.
+- Live native build and visual verification are required on Linux: Rust toolchain and graphics display are unavailable in the packaging environment.
+
+## Unreleased — shared surface materials and X Shape clipping, performance pass 9 (2026-10-27)
+
+- Move the surface fill, 1px contour and RGB alpha-blend rules into the renderer-neutral `flamewm-ui-core::surface` owner. Retain re-exports from `context_menu` so existing consumers remain source-compatible.
+- Add the single X11 `surface_style` adapter for RGBA conversion and border projection. Share it across Shell, Explorer, Terminal and Settings, and use the same blend in WM frame borders and native titlebar pixels. Preserve Explorer's development-only opacity override and Terminal's independent theme fill.
+- Stream X Shape clipping directly into the rectangle merger instead of allocating an intermediate clipped span vector on every animated/clipped popup mask update; preserve the owned test helper.
+- Focused Python suites: 181 passed. Three older `surface_icon_slide` assertions fail identically on the untouched Pass 8 archive. Independent 50,000 RGB blend and 1,200 clipped-mask pipeline comparisons pass. Rust compilation and native graphical profiling were unavailable.
+- See `docs/PERFORMANCE_SHARED_SURFACES_PASS9_2026-10-27.md` for source ownership, impact, and verification limits.
+
+## Unreleased — shared glass surfaces, Explorer edge and scroll allocation, pass 8 (2026-10-27)
+
+- Add one configurable 1px inner Surfaces contour (`surfaceBorderColor`, `surfaceBorderOpacity`; default white/25%) shared by panel, popup roots, Explorer, Terminal, Settings, and native window chrome.
+- Replace the hardcoded near-black X11 frame border with a contour-derived pixel and repaint existing frames when settings change. Source-level cause of Explorer right-edge seam identified, subject to live visual confirmation.
+- Avoid a temporary heap vector on every Explorer row-scroll projection using a fixed-size stack window. Add Rust contour conformance checks. Python suite: 89 passed, 3 baseline-existing failures; Rust/native graphics not available. See `docs/FLAMEWM_PASS8_GLASS_CONTOUR_EXPLORER_SCROLL_2026-10-27.md`.
+
+## Unreleased — X11 shadow row streaming, performance pass 7 (2026-10-27)
+
+- Stream X Shape/shadow-shading row spans directly instead of allocating and clipping two full-height vectors per affected operation; preserve the existing owned span APIs for compatibility and differential tests.
+- Keep mask geometry, rounded/tapered edges, frame clipping, RGBA/BGRX pixel arithmetic, focus behavior and X11 upload paths unchanged.
+- Add Rust equivalence tests for degenerate/negative-coordinate geometries, packed masks and exact shaded bytes. Independent 6,000-layout / 2,577,763-row geometry check and 36 selected Python regressions pass. Rust compilation and live graphical CPU/PSS verification are pending. See `docs/PERFORMANCE_X11_SHADOW_ROW_STREAMING_PASS7_2026-10-27.md`.
+
+## Unreleased — X11 selection-shadow allocation and GC optimization, pass 6 (2026-10-27)
+
+- Reuse one temporary BGRX compositing buffer across all damaged shadow regions per desktop-selection update; release it at the end of the event.
+- Create one X11 graphics context lazily per update instead of per affected window, with cleanup attempted even on upload errors.
+- Resolve the visible compact shadow strip once per region instead of checking both strips per pixel, preserving the original lookup for nonstandard regions.
+- Add Rust pixel-equivalence regression coverage and verify 1,018,240 random strip offsets and 36 Python tests. Rust compilation and graphical tests remain pending. See `docs/PERFORMANCE_X11_SELECTION_SHADOW_PASS6_2026-10-27.md`.
+
+## Unreleased — X11 shadow shape-mask protocol optimization, pass 5 (2026-10-27)
+
+- Merge vertically adjacent, identical X Shape rows into one rectangle while preserving the pixel-exact mask (including taper, rounded corner and frame interior exclusion). For a 1280×720 frame, 729 nonempty row rectangles become 32.
+- Skip rebuilding/resending the X Shape mask when an existing shadow is reshaded without resizing; changes in focus, backdrop or window position do not change the window-local silhouette. New windows and width/height changes still update the mask.
+- Add Rust shape-coverage and invalidation tests, plus independent geometry checks. Selected Python regressions pass; Rust compilation and live X11 results remain pending. See `docs/PERFORMANCE_X11_SHAPE_MASK_PASS5_2026-10-27.md`.
+
+## Unreleased — X11 shadow CPU/allocation optimization, pass 4 (2026-10-27)
+
+- Reuse wanted-frame, membership, geometry, output-layout and dragging buffers across X11 WM shadow reconciliation turns. Preserve sorting, hash contents and generation transitions while eliminating warm-state `Vec` allocator churn.
+- Precompute the existing shadow opacity falloff at its 17 possible visible distances, replacing repeated floating-point work inside selection-shadow recomposition and initial visible-window shadow shading with integer lookups; retain the previous functions as visual-parity references.
+- Add hash/gesture generation and per-pixel attenuation equivalence unit tests. Python regression suites and an independent float32 surrogate pass; Rust and graphical release verification remain pending. See `docs/PERFORMANCE_X11_SHADOW_CPU_PASS4_2026-10-27.md`.
+
+## Unreleased — X11 desktop selection shadow-damage optimization, pass 3 (2026-10-27)
+
+- Avoid recompositing unchanged selection-fill pixels under X11 floating-window shadows: when a rubber rectangle changes size without moving its top-left origin or colours, invalidate only the right/bottom edge bands, clipped to the visible shadow strips. Other movement and style changes retain the conservative path.
+- Reuse one X11 graphics context for the affected regions of each shadow during selection updates, with cleanup attempted even when a region upload fails.
+- Add Rust pixel-coverage and fallback-path regressions. An independent 2,400-case geometry differential passed. See `docs/PERFORMANCE_X11_SELECTION_DAMAGE_PASS3_2026-10-27.md`; Rust compilation and live visual proof remain pending.
+
+## Unreleased — X11 interaction hot-path optimization, pass 2 (2026-10-27)
+
+- Cache X11 ARGB visual discovery per display rather than repeating it during text-shadow and image uploads.
+- Memoize fixed dock/ring XShape geometry with exact dimensions/parameters and invalidation after clipping/errors; leave dynamic coverage shapes unchanged.
+- Avoid shadow generation/hashing when no floating/retained shadows exist, and reuse one successful X11 root-stacking lookup per batch of shadow refreshes.
+- Add targeted Rust tests and document source-grounded savings, exclusions, and outstanding live validation in `docs/PERFORMANCE_X11_HOTPATH_PASS2_2026-10-27.md`.
+
+## Unreleased — X11 shadow working-set optimization (2026-10-27)
+
+- Retain only the right/bottom BGRX strips visible through the frame shadow's X Shape mask, instead of a full unshaded per-window snapshot. The full temporary readback is released after the initial upload; no additional persistent cache is introduced.
+- Restrict live desktop-selection shadow recomposition and X11 image transfers to those visible bands rather than the old/new bounding region across the hidden frame interior. Pixel blending/shading logic remains shared with the original reference path.
+- Shade only shaped, visible pixels when creating/refocusing window shadows. Keep the X11 pixmap, window shape, event/drag ordering, and Wayland paths unchanged.
+- Add strip coverage, compact/full compositing equivalence, shading equivalence and memory-ratio unit tests. See `docs/PERFORMANCE_SHADOW_STRIPS_2026-10-27.md` for calculated gains and missing runtime verification.
+
 ## Unreleased — Wayland cursor, CPU and memory pass
 
 Measured with `tools/bench-flamewm-session.py` (nested Wayland session, shell and desktop on

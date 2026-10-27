@@ -119,35 +119,50 @@ fn corner_inset(row: u32, radius: u32) -> u32 {
 /// Those two diagonal cuts make the shadow meet the window smoothly instead of
 /// ending in a hard square cut. The visible bottom-right corner keeps the small
 /// fixed radius.
-#[must_use]
-pub fn shadow_spans(rect: Rect) -> Vec<(u32, u32, u32)> {
+// Row generation is shared by the owned compatibility API and the hot paths below.
+// Streaming it avoids allocating a frame-height vector only to clip and discard it.
+fn shadow_spans_iter(rect: Rect) -> impl Iterator<Item = (u32, u32, u32)> {
     let (w, h) = (rect.width, rect.height);
-    if w == 0 || h == 0 {
-        return Vec::new();
-    }
     let band = (OFFSET + SPREAD) as u32;
     let chamfer = band.min(w).min(h);
     let radius = RADIUS.min(w).min(h);
-    (0..h)
-        .map(|row| {
-            let mut start = 0;
-            let mut end = w;
-            // 45-degree taper from the frame's top-right corner.
-            if row < chamfer {
-                end = w.saturating_sub(chamfer - row);
-            }
-            // 45-degree taper from the frame's bottom-left corner.
-            if row + chamfer >= h {
-                start = (row + chamfer).saturating_sub(h);
-            }
-            // Keep the visible bottom-right corner softly rounded.
-            if radius > 0 && row + radius >= h {
-                let inset = corner_inset(row + radius - h, radius);
-                end = end.min(w.saturating_sub(inset));
-            }
-            (row, start.min(end), end.max(start))
-        })
-        .collect()
+    let rows = if w == 0 { 0 } else { h };
+    (0..rows).map(move |row| {
+        let mut start = 0;
+        let mut end = w;
+        if row < chamfer {
+            end = w.saturating_sub(chamfer - row);
+        }
+        if row + chamfer >= h {
+            start = (row + chamfer).saturating_sub(h);
+        }
+        if radius > 0 && row + radius >= h {
+            let inset = corner_inset(row + radius - h, radius);
+            end = end.min(w.saturating_sub(inset));
+        }
+        (row, start.min(end), end.max(start))
+    })
+}
+
+#[must_use]
+pub fn shadow_spans(rect: Rect) -> Vec<(u32, u32, u32)> {
+    shadow_spans_iter(rect).collect()
+}
+
+// Masks and visible shading consume rows once. Keep the original owned
+// clip_spans_outside_frame API available for callers and equivalence tests.
+fn clipped_shadow_rows(area: Rect, frame: Rect) -> impl Iterator<Item = (u32, u32, u32)> {
+    let frame_bottom = frame.y + frame.height as i32;
+    let frame_right = frame.x + frame.width as i32;
+    let cut = (frame_right - area.x).max(0) as u32;
+    shadow_spans_iter(area).map(move |(row, start, end)| {
+        let y = area.y + row as i32;
+        if y >= frame.y && y < frame_bottom {
+            (row, start.max(cut).min(end), end)
+        } else {
+            (row, start, end)
+        }
+    })
 }
 
 /// Removes the part of `spans` (rows of `rect`) that lies inside `frame`, so the
@@ -176,6 +191,29 @@ pub fn clip_spans_outside_frame(
         .collect()
 }
 
+/// Pack adjacent identical X Shape rows into taller rectangles. The shape remains the
+/// exact union of `clip_spans_outside_frame` (including its taper and rounded corner), but
+/// a long right-hand strip needs one rectangle instead of one protocol item per pixel row.
+/// Returned tuples are `(x, y, width, height)` relative to the shadow window.
+#[must_use]
+pub fn shadow_mask_rectangles(area: Rect, frame: Rect) -> Vec<(u32, u32, u32, u32)> {
+    let mut rectangles: Vec<(u32, u32, u32, u32)> = Vec::new();
+    for (row, start, end) in clipped_shadow_rows(area, frame) {
+        if start == end {
+            continue;
+        }
+        let width = end - start;
+        if let Some(last) = rectangles.last_mut() {
+            if last.0 == start && last.2 == width && last.1 + last.3 == row {
+                last.3 += 1;
+                continue;
+            }
+        }
+        rectangles.push((start, row, width, 1));
+    }
+    rectangles
+}
+
 /// Keep factor (0..=256) for the shadow at root pixel `(x, y)` of `frame`'s shadow area: a
 /// channel is scaled by `keep / 256`. Pointwise, so a sub-region can be shaded on its own.
 #[must_use]
@@ -196,6 +234,32 @@ pub fn keep_at(frame: Rect, focused: bool, x: i32, y: i32) -> u32 {
     (256.0 * (1.0 - alpha)) as u32
 }
 
+/// The shadow profile has a fixed 16-pixel reach. Computing its floating-point falloff
+/// for every uploaded pixel is unnecessary: the same distance always has the same keep factor.
+/// These entries come from `keep_at` itself to preserve its rounding and appearance exactly.
+const KEEP_TABLE_LEN: usize = (OFFSET + SPREAD + 1) as usize;
+
+#[must_use]
+pub(crate) fn shadow_keep_table(focused: bool) -> [u32; KEEP_TABLE_LEN] {
+    let reference = Rect::new(0, 0, 1, 1);
+    std::array::from_fn(|distance| keep_at(reference, focused, distance as i32, 0))
+}
+
+/// Pure integer lookup. Pixels beyond the fade radius retain their original colour (keep=256).
+#[must_use]
+pub(crate) fn shadow_keep_from_table(
+    table: &[u32; KEEP_TABLE_LEN],
+    frame: Rect,
+    x: i32,
+    y: i32,
+) -> u32 {
+    let right_edge = frame.x + frame.width as i32;
+    let bottom_edge = frame.y + frame.height as i32;
+    let dx = (x - right_edge + 1).max(0);
+    let dy = (y - bottom_edge + 1).max(0);
+    table[(dx.max(dy) as usize).min(KEEP_TABLE_LEN - 1)]
+}
+
 /// Darken the snapshot pixels (BGRX rows of `shadow_rect(frame)`) in place.
 /// Alpha is highest at the frame's right/bottom edge and falls off with the
 /// 45-degree cast distance, so the band reads as a simple drop shadow rather
@@ -210,6 +274,28 @@ pub fn shade_shadow(frame: Rect, focused: bool, pixels: &mut [u8]) {
         for col in 0..w {
             let keep = keep_at(frame, focused, area.x + col, area.y + row);
             let at = ((row * w + col) * 4) as usize;
+            for channel in &mut pixels[at..at + 3] {
+                *channel = ((u32::from(*channel) * keep) >> 8) as u8;
+            }
+        }
+    }
+}
+
+/// Shade only the right/bottom bands admitted by the X Shape mask. Pixels under the frame are
+/// never presented; the original full-frame shader remains available for pure equivalence tests.
+pub fn shade_visible_shadow(frame: Rect, focused: bool, pixels: &mut [u8]) {
+    let area = shadow_rect(frame);
+    let stride = area.width as usize * 4;
+    if pixels.len() != stride * area.height as usize {
+        return;
+    }
+    let keep_table = shadow_keep_table(focused);
+    for (row, start, end) in clipped_shadow_rows(area, frame) {
+        let y = area.y + row as i32;
+        for col in start..end {
+            let x = area.x + col as i32;
+            let at = row as usize * stride + col as usize * 4;
+            let keep = shadow_keep_from_table(&keep_table, frame, x, y);
             for channel in &mut pixels[at..at + 3] {
                 *channel = ((u32::from(*channel) * keep) >> 8) as u8;
             }
@@ -258,6 +344,130 @@ mod tests {
     }
 
     #[test]
+    fn packed_xshape_mask_has_exact_original_pixel_coverage() {
+        let cases = [
+            Rect::new(100, 100, 200, 150),
+            Rect::new(-1920, -1080, 1280, 720),
+            Rect::new(0, 0, 1, 1),
+            Rect::new(300, -200, 11, 24),
+            Rect::new(-200, 100, 8, 3),
+        ];
+        for frame in cases {
+            let area = shadow_rect(frame);
+            let original = clip_spans_outside_frame(shadow_spans(area), area, frame);
+            let packed = shadow_mask_rectangles(area, frame);
+            let mut expected = vec![false; area.width as usize * area.height as usize];
+            let mut actual = expected.clone();
+            for (row, start, end) in &original {
+                for x in *start..*end {
+                    expected[*row as usize * area.width as usize + x as usize] = true;
+                }
+            }
+            for &(x, y, width, height) in &packed {
+                assert!(x + width <= area.width && y + height <= area.height);
+                for row in y..y + height {
+                    for col in x..x + width {
+                        let at = row as usize * area.width as usize + col as usize;
+                        assert!(!actual[at], "packed rectangles must not overlap");
+                        actual[at] = true;
+                    }
+                }
+            }
+            assert_eq!(actual, expected, "frame={frame:?}");
+            assert!(packed.len() <= original.len());
+        }
+    }
+
+    #[test]
+    fn streamed_rows_match_owned_clipped_spans_including_edge_cases() {
+        // Compare against the unchanged owned public path, not merely two calls to the iterator.
+        for width in [0, 1, 2, 3, 6, 11, 16, 20, 320, 1280] {
+            for height in [0, 1, 2, 3, 6, 11, 16, 20, 200, 720] {
+                let frame = Rect::new(-1920, -75, width, height);
+                let area = shadow_rect(frame);
+                let expected = clip_spans_outside_frame(shadow_spans(area), area, frame);
+                let actual: Vec<_> = clipped_shadow_rows(area, frame).collect();
+                assert_eq!(actual, expected, "frame={frame:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_preserves_mask_rectangles_and_shaded_pixels() {
+        for frame in [
+            FRAME,
+            Rect::new(-1920, 0, 1, 1),
+            Rect::new(0, -1080, 16, 9),
+            Rect::new(50, 50, 1280, 720),
+        ] {
+            let area = shadow_rect(frame);
+            let mut expected_rectangles: Vec<(u32, u32, u32, u32)> = Vec::new();
+            for (row, start, end) in clip_spans_outside_frame(shadow_spans(area), area, frame) {
+                if start == end {
+                    continue;
+                }
+                let width = end - start;
+                if let Some(last) = expected_rectangles.last_mut() {
+                    if last.0 == start && last.2 == width && last.1 + last.3 == row {
+                        last.3 += 1;
+                        continue;
+                    }
+                }
+                expected_rectangles.push((start, row, width, 1));
+            }
+            assert_eq!(shadow_mask_rectangles(area, frame), expected_rectangles);
+            for focused in [false, true] {
+                let mut expected = vec![160; area.width as usize * area.height as usize * 4];
+                let mut actual = expected.clone();
+                let keep_table = shadow_keep_table(focused);
+                for (row, start, end) in
+                    clip_spans_outside_frame(shadow_spans(area), area, frame)
+                {
+                    for col in start..end {
+                        let at = (row as usize * area.width as usize + col as usize) * 4;
+                        let keep = shadow_keep_from_table(
+                            &keep_table, frame, area.x + col as i32, area.y + row as i32,
+                        );
+                        for channel in &mut expected[at..at + 3] {
+                            *channel = ((u32::from(*channel) * keep) >> 8) as u8;
+                        }
+                    }
+                }
+                shade_visible_shadow(frame, focused, &mut actual);
+                assert_eq!(actual, expected, "frame={frame:?}, focused={focused}");
+            }
+        }
+    }
+
+    #[test]
+    fn large_shadow_shape_collapses_repeated_rows() {
+        let frame = Rect::new(0, 0, 1280, 720);
+        let area = shadow_rect(frame);
+        let packed = shadow_mask_rectangles(area, frame);
+        assert!(packed.len() < 50, "{} rectangles instead of {} rows", packed.len(), area.height);
+    }
+
+    #[test]
+    fn integer_keep_table_matches_original_float_function_for_every_shadow_distance() {
+        for frame in [FRAME, MOVED, OTHER, Rect::new(-1920, -1080, 200, 150)] {
+            let area = shadow_rect(frame);
+            for focused in [false, true] {
+                let table = shadow_keep_table(focused);
+                for y in (area.y..area.bottom()).step_by(3) {
+                    for x in (area.x..area.right()).step_by(3) {
+                        assert_eq!(
+                            shadow_keep_from_table(&table, frame, x, y),
+                            keep_at(frame, focused, x, y),
+                            "frame={frame:?}, focused={focused}, x={x}, y={y}",
+                        );
+                    }
+                }
+                assert_eq!(table[KEEP_TABLE_LEN - 1], 256);
+            }
+        }
+    }
+
+    #[test]
     fn shadow_is_a_square_offset_down_right() {
         let area = shadow_rect(FRAME);
         assert_eq!(area.x, FRAME.x + OFFSET);
@@ -301,6 +511,25 @@ mod tests {
             spans[area.height as usize / 2],
             (area.height / 2, 0, area.width)
         );
+    }
+
+    #[test]
+    fn visible_shading_matches_full_shading_on_the_x_shape_mask() {
+        let area = shadow_rect(FRAME);
+        for focused in [false, true] {
+            let mut full = vec![200u8; area.width as usize * area.height as usize * 4];
+            let mut visible = full.clone();
+            shade_shadow(FRAME, focused, &mut full);
+            shade_visible_shadow(FRAME, focused, &mut visible);
+            for (row, start, end) in
+                clip_spans_outside_frame(shadow_spans(area), area, FRAME)
+            {
+                for col in start..end {
+                    let at = (row as usize * area.width as usize + col as usize) * 4;
+                    assert_eq!(&visible[at..at + 4], &full[at..at + 4]);
+                }
+            }
+        }
     }
 
     #[test]

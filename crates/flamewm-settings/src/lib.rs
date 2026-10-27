@@ -1815,6 +1815,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn sync_nodes(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        if let Some(snapshot) = self.client.settings() {
+            flamewm_ui_x11::surface_style::project_surface_border(document, "settings-root", snapshot)?;
+        }
         document.position("nav-selection", 8.0, nav_top(self.nav_index()))?;
         if let Some(SettingValue::Text(accent)) = self.setting_value("accent") {
             document.background("nav-selection", accent_color(accent)?)?;
@@ -2488,6 +2491,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(value) = percent("surfaceOpacity") {
             document.text("surface-opacity-value", format!("{value}%"))?;
         }
+        if let Some(value) = percent("surfaceBorderOpacity") {
+            document.text("surface-border-opacity-value", format!("{value}%"))?;
+        }
         if let Some(value) = text("customStartIcon") {
             document.text("start-icon-value", start_icon_label(&value))?;
         }
@@ -2633,7 +2639,8 @@ fn step(value: &str) -> Option<i8> {
 }
 
 /// Color rows in the Appearance page: action target and the `#RRGGBB` setting.
-const COLOR_TARGETS: [(&str, &str); 3] = [
+const COLOR_TARGETS: [(&str, &str); 4] = [
+    ("border", "surfaceBorderColor"),
     ("surface", "surfaceColor"),
     ("accent", "accent"),
     ("lockbackground", "lockBackgroundColor"),
@@ -3308,6 +3315,9 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     }
     if let Some(rest) = action.strip_prefix("settings.picker.") {
         return parse_color_picker(rest);
+    }
+    if let Some(direction) = action.strip_prefix("settings.surface-border-opacity.").and_then(step) {
+        return Ok(SettingsAction::PercentStep("surfaceBorderOpacity", direction));
     }
     if let Some(direction) = action.strip_prefix("settings.surface-blur.").and_then(step) {
         return Ok(SettingsAction::PercentStep("surfaceBlurPercent", direction));
@@ -4021,6 +4031,14 @@ mod value_text_tests {
 
     #[test]
     fn taskbar_and_screensaver_actions_parse_to_their_exact_typed_targets() {
+        assert_action!(
+            "settings.surface-border-opacity.up",
+            Ok(SettingsAction::PercentStep("surfaceBorderOpacity", 1))
+        );
+        assert_action!(
+            "settings.surface-border-opacity.down",
+            Ok(SettingsAction::PercentStep("surfaceBorderOpacity", -1))
+        );
         assert_action!(
             "settings.surface-blur.up",
             Ok(SettingsAction::PercentStep("surfaceBlurPercent", 1))

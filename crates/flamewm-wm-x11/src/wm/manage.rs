@@ -263,7 +263,7 @@ impl<C: Connection> Wm<'_, C> {
         };
         let outer = crate::client::root_to_rect(frame_rect);
 
-        // Create frame UNMAPPED with panel bg #1b1e20 (not black).
+        // Create frame with the same configurable contour as its titlebar.
         self.conn.create_window(
             COPY_DEPTH_FROM_PARENT,
             frame,
@@ -277,7 +277,7 @@ impl<C: Connection> Wm<'_, C> {
             0,
             &CreateWindowAux::new()
                 .background_pixel(0x001b_1e20)
-                .border_pixel(0x001b_1e20)
+                .border_pixel(crate::chrome::frame_border_pixel(&self.decoration_tokens))
                 .event_mask(
                     EventMask::EXPOSURE
                         | EventMask::SUBSTRUCTURE_NOTIFY

@@ -5,7 +5,8 @@
 use std::path::Path;
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
-use flamewm_ui_core::context_menu::surface_fill;
+use flamewm_ui_core::surface::surface_fill;
+use flamewm_ui_x11::surface_style::surface_border;
 use flamewm_ui_x11::backdrop::WindowBackdrop;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
@@ -32,6 +33,7 @@ pub struct ExplorerTheme {
     accent: UiColor,
     surface: UiColor,
     surface_alpha: u8,
+    stroke: UiColor,
     font_family: Option<String>,
     font_size_offset: i32,
     font_bold: bool,
@@ -112,6 +114,7 @@ impl ExplorerTheme {
             accent: rgb(DEFAULT_ACCENT),
             surface: rgb(0),
             surface_alpha: 0,
+            stroke: white(63),
             font_family: None,
             font_size_offset: 0,
             font_bold: false,
@@ -146,6 +149,7 @@ impl ExplorerTheme {
         theme.surface = rgb(fill.rgb);
         let percent = surface_opacity_percent(snapshot);
         theme.surface_alpha = ((u16::from(percent) * 255) / 100) as u8;
+        theme.stroke = surface_border(snapshot);
         theme
     }
     /// Root fill: the surface once, translucent when the window backdrop shows the wallpaper through it.
@@ -232,6 +236,10 @@ impl ExplorerTheme {
         }
         // The root fill carries the live surfaceOpacity alpha, applied once; children draw no second surface.
         doc.background("explorer", self.root())?;
+        doc.border("explorer", self.stroke)?;
+        for popup in ["context-popup", "progress-popup", "dialog", "openwith-dialog"] {
+            doc.border(popup, self.stroke)?;
+        }
         doc.ui_font_defaults(self.font_size_offset as f32, self.font_bold)?;
         if let Some(family) = &self.font_family {
             doc.font_family(family.clone())?;

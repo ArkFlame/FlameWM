@@ -2,7 +2,6 @@ use super::clip::{Visible, visible_under};
 use super::damage_plan::{PixelRegion, RedrawPlan, RegionInput, command_bounds, plan_region_paint};
 use super::primitives::{scale_rect, snap_device_rect};
 use super::*;
-use crate::external_drawable::match_argb32_visual;
 use crate::native::coverage::{build_coverage, build_coverage_scaled};
 use crate::xshape::ClipRect;
 use flamewm_image_core::blur::BlurScratch;
@@ -38,6 +37,67 @@ fn scroll_fingerprint(document: &RuntimeDocument) -> u64 {
     // interaction state plus revision here. Full scroll-list hashing lives
     // in the document-owned mark path (scroll writes mark Full).
     hash
+}
+
+/// Only shapes independent of paint commands may skip coverage reconstruction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StaticShapeKey {
+    Ring { size: (u32, u32), border: u32, radius: u32 },
+    Dock { size: (u32, u32), radius: u32 },
+}
+
+fn fixed_shape_unchanged(
+    last: Option<StaticShapeKey>,
+    current: Option<StaticShapeKey>,
+    server_shape_valid: bool,
+) -> bool {
+    current.is_some() && last == current && server_shape_valid
+}
+
+fn static_shape_key(
+    width: u32,
+    height: u32,
+    ring: Option<(u32, u32)>,
+    dock_radius: u32,
+) -> Option<StaticShapeKey> {
+    if let Some((border, radius)) = ring {
+        Some(StaticShapeKey::Ring { size: (width, height), border, radius })
+    } else if dock_radius > 0 {
+        Some(StaticShapeKey::Dock { size: (width, height), radius: dock_radius })
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod static_shape_tests {
+    use super::*;
+
+    #[test]
+    fn static_shape_changes_on_resize_or_style_and_dynamic_masks_are_not_memoized() {
+        let dock = static_shape_key(1920, 50, None, 12).unwrap();
+        assert_eq!(dock, static_shape_key(1920, 50, None, 12).unwrap());
+        assert_ne!(dock, static_shape_key(1920, 49, None, 12).unwrap());
+        assert_ne!(dock, static_shape_key(1920, 50, None, 13).unwrap());
+        assert_ne!(dock, static_shape_key(1920, 50, Some((2, 12)), 12).unwrap());
+        assert_ne!(static_shape_key(1920, 50, Some((2, 12)), 12),
+                   static_shape_key(1920, 50, Some((3, 12)), 12));
+        assert_eq!(static_shape_key(1920, 50, None, 0), None);
+    }
+
+    #[test]
+    fn invalidated_shape_latch_does_not_skip_reapplication() {
+        let key = static_shape_key(800, 48, None, 12);
+        assert!(fixed_shape_unchanged(key, key, true));
+        // A slide or an overlay mask writer invalidates the server shape latch.
+        assert!(!fixed_shape_unchanged(key, key, false));
+        assert!(!fixed_shape_unchanged(
+            key,
+            static_shape_key(801, 48, None, 12),
+            true,
+        ));
+        assert!(!fixed_shape_unchanged(key, None, true));
+    }
 }
 
 impl X11App {
@@ -100,7 +160,8 @@ impl X11App {
             max_x = max_x.min((clip.x + clip.width).ceil() as i32);
             max_y = max_y.min((clip.y + clip.height).ceil() as i32);
         }
-        let Some(visual) = match_argb32_visual(self.display, self.screen) else {
+        let Some(visual) = self.argb_visual else {
+            SHADOW_SCRATCH.with(|slot| slot.replace(scratch));
             return Ok(false);
         };
         crate::native::image::premultiply_masked_into(argb, rgba, w, h, |xx, yy| {
@@ -186,7 +247,7 @@ impl X11App {
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        let Some(visual) = match_argb32_visual(self.display, self.screen) else {
+        let Some(visual) = self.argb_visual else {
             return Err("no 32-bit TrueColor visual for ARGB32 upload".to_string());
         };
         unsafe { self.upload_argb32_words(pixmap, visual, argb, width, height) }
@@ -821,6 +882,16 @@ impl X11App {
         }
     }
 
+    /// A fixed ring/dock silhouette depends on geometry and radius, never on paint commands.
+    /// Coverage-based shapes and caller-supplied alpha silhouettes deliberately bypass the cache.
+    /// A clipped slide invalidates `shape_applied`, which forces the next fixed mask to re-apply.
+    pub(crate) fn static_shape_key(&self) -> Option<StaticShapeKey> {
+        if self.shape_override.is_some() {
+            return None;
+        }
+        static_shape_key(self.width, self.height, self.ring_mask, self.dock_corner_radius)
+    }
+
     /// Scale-aware shape refresh: coverage matches the paint path for
     /// rect/radius/stroke/clip in device pixels; text stays skipped.
     /// `backdrop_radius` (device px) rounds the retained-backdrop mask.
@@ -833,6 +904,14 @@ impl X11App {
         let Some(bridge) = self.xshape.as_ref() else {
             return;
         };
+        let static_key = self.static_shape_key();
+        if fixed_shape_unchanged(
+            self.static_shape_applied.get(),
+            static_key,
+            self.shape_applied.get().is_some(),
+        ) {
+            return;
+        }
         // A retained backdrop is composited under translucent fills, so the snapshot must stay
         // visible across the whole rounded shape; coverage would drop the translucent area and
         // show the live desktop (unblurred) instead. Corners outside the radius stay transparent.
@@ -842,11 +921,15 @@ impl X11App {
         }
         // Identical spans leave the server-side bounding region unchanged; skip the XShape request.
         if !shape_needs_apply(&self.shape_applied, self.window, &spans) {
+            self.static_shape_applied.set(static_key);
             return;
         }
         if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &spans) } {
             self.shape_applied.set(None);
+            self.static_shape_applied.set(None);
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
+        } else {
+            self.static_shape_applied.set(static_key);
         }
     }
 
