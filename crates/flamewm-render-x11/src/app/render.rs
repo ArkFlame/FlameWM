@@ -1066,7 +1066,12 @@ impl X11App {
                             // corners with square rectangular border bands.
                             unsafe {
                                 crate::xrender_aa::stroke_rounded_rect_clipped(
-                                    xrender, rect, radius, width, *color, Some(part),
+                                    xrender,
+                                    rect,
+                                    radius,
+                                    width,
+                                    *color,
+                                    Some(part),
                                 )?
                             };
                         }

@@ -124,6 +124,21 @@ mod surface_blend_tests {
     }
 }
 
+/// Whether `(x, y)` lies inside a `w` x `h` rectangle rounded by `r`.
+fn inside(x: f32, y: f32, w: f32, h: f32, r: f32) -> bool {
+    if x < 0.0 || y < 0.0 || x >= w || y >= h {
+        return false;
+    }
+    if r <= 0.0 {
+        return true;
+    }
+    let cx = x.clamp(r, w - r);
+    let cy = y.clamp(r, h - r);
+    let dx = x - cx;
+    let dy = y - cy;
+    dx * dx + dy * dy <= r * r
+}
+
 /// Fractional coverage of a 1px inner outline on a rounded surface.
 /// Both the native titlebar and UI renderer use the same surface material; this
 /// pure geometry is reusable without coupling the skin to an X11 backend.
@@ -138,19 +153,13 @@ pub fn inner_contour_coverage(w: u32, h: u32, radius: u32, x: u32, y: u32) -> u8
     let near_right = x.saturating_add(r).saturating_add(1) >= w;
     let near_top = y <= r;
     let near_bottom = y.saturating_add(r).saturating_add(1) >= h;
-    if !(near_left || near_right) || !(near_top || near_bottom) {
-        if x >= 1 && y >= 1 && x + 1 < w && y + 1 < h {
-            return 0;
-        }
-    }
-    fn inside(x: f32, y: f32, w: f32, h: f32, r: f32) -> bool {
-        if x < 0.0 || y < 0.0 || x >= w || y >= h { return false; }
-        if r <= 0.0 { return true; }
-        let cx = x.clamp(r, w - r);
-        let cy = y.clamp(r, h - r);
-        let dx = x - cx;
-        let dy = y - cy;
-        dx * dx + dy * dy <= r * r
+    if (!(near_left || near_right) || !(near_top || near_bottom))
+        && x >= 1
+        && y >= 1
+        && x + 1 < w
+        && y + 1 < h
+    {
+        return 0;
     }
     let outer_r = r as f32;
     let inner_r = outer_r - 1.0;
@@ -160,9 +169,18 @@ pub fn inner_contour_coverage(w: u32, h: u32, radius: u32, x: u32, y: u32) -> u8
             let px = x as f32 + (sx as f32 + 0.5) / 4.0;
             let py = y as f32 + (sy as f32 + 0.5) / 4.0;
             if inside(px, py, w as f32, h as f32, outer_r)
-                && (w <= 2 || h <= 2 || !inside(px - 1.0, py - 1.0,
-                    (w - 2) as f32, (h - 2) as f32, inner_r.max(0.0)))
-            { hits += 1; }
+                && (w <= 2
+                    || h <= 2
+                    || !inside(
+                        px - 1.0,
+                        py - 1.0,
+                        (w - 2) as f32,
+                        (h - 2) as f32,
+                        inner_r.max(0.0),
+                    ))
+            {
+                hits += 1;
+            }
         }
     }
     ((hits * 255 + 8) / 16) as u8

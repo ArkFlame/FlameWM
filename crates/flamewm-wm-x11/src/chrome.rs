@@ -391,8 +391,8 @@ impl FillMask {
 /// Fills the glyph-edge mask with `fill` (opaque) and composites the
 /// straight-alpha glyph over it. Pixels outside the mask are untouched.
 fn paint_fill_behind(raster: &mut flamewm_image_core::RgbaImage, fill: [u8; 4], mask: FillMask) {
-    let size = raster.width as f32;
     const SAMPLES: u32 = 4;
+    let size = raster.width as f32;
     for y in 0..raster.height {
         for x in 0..raster.width {
             let coverage = (0..SAMPLES)
@@ -420,10 +420,14 @@ fn paint_fill_behind(raster: &mut flamewm_image_core::RgbaImage, fill: [u8; 4], 
             }
             for channel in 0..3 {
                 let premultiplied = u32::from(pixel[channel]) * u32::from(glyph_alpha)
-                    + (u32::from(fill[channel]) * u32::from(fill_alpha)
-                        * u32::from(255 - glyph_alpha) + 127) / 255;
+                    + (u32::from(fill[channel])
+                        * u32::from(fill_alpha)
+                        * u32::from(255 - glyph_alpha)
+                        + 127)
+                        / 255;
                 pixel[channel] = ((premultiplied + u32::from(total_alpha) / 2)
-                    / u32::from(total_alpha)).min(255) as u8;
+                    / u32::from(total_alpha))
+                .min(255) as u8;
             }
             pixel[3] = total_alpha as u8;
         }
@@ -1096,14 +1100,15 @@ mod tests {
 
     #[test]
     fn circle_hover_has_fractional_edge_alpha_and_preserves_centre() {
-        let mut glyph = flamewm_image_core::RgbaImage::from_rgba8(
-            16, 16, vec![0_u8; 16 * 16 * 4],
-        ).expect("valid glyph buffer");
+        let mut glyph = flamewm_image_core::RgbaImage::from_rgba8(16, 16, vec![0_u8; 16 * 16 * 4])
+            .expect("valid glyph buffer");
         paint_fill_behind(&mut glyph, [241, 242, 243, 255], FillMask::Circle);
         assert_eq!(glyph.pixels[(8 * 16 + 8) * 4 + 3], 255);
         assert_eq!(glyph.pixels[3], 0);
-        assert!(glyph.pixels.chunks_exact(4).any(|p| p[3] > 0 && p[3] < 255),
-            "the hover disk must anti-alias its circumference");
+        assert!(
+            glyph.pixels.chunks_exact(4).any(|p| p[3] > 0 && p[3] < 255),
+            "the hover disk must anti-alias its circumference"
+        );
     }
 
     #[test]

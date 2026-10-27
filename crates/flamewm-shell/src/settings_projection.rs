@@ -70,7 +70,9 @@ pub fn project(
         SurfaceKind::Panel => {
             let fill = surface_background(snapshot);
             crate::projection::set_taskbar_surface(fill);
-            crate::projection::set_taskbar_border(flamewm_ui_x11::surface_style::surface_border(snapshot));
+            crate::projection::set_taskbar_border(flamewm_ui_x11::surface_style::surface_border(
+                snapshot,
+            ));
             // Separate mode paints the wallpaper (the captured backdrop) across the bar and one
             // capsule per element; the root must not tint the gaps between them.
             let separate = bool_setting(snapshot, "taskbarSeparate", true);
@@ -708,9 +710,18 @@ mod tests {
         project(&mut doc, &snapshot, SurfaceKind::Panel).expect("panel");
         // `taskbarSeparate` defaults on: the root paints no tint so the wallpaper shows between
         // the per-element capsules.
-        assert_eq!(doc.borders["taskbar"].a, 0, "separated bar root has no contour");
-        assert_eq!(doc.borders["workspace-pager"].a, 63, "pager matches other capsules");
-        assert_eq!(doc.backgrounds["workspace-pager"].a, 51, "pager uses shared surface fill");
+        assert_eq!(
+            doc.borders["taskbar"].a, 0,
+            "separated bar root has no contour"
+        );
+        assert_eq!(
+            doc.borders["workspace-pager"].a, 63,
+            "pager matches other capsules"
+        );
+        assert_eq!(
+            doc.backgrounds["workspace-pager"].a, 51,
+            "pager uses shared surface fill"
+        );
         assert_eq!(
             doc.backgrounds["taskbar"],
             UiColor {
@@ -734,8 +745,14 @@ mod tests {
                 a: 51
             }
         );
-        assert!(unified.borders["taskbar"].a > 0, "unified bar owns its border");
-        assert_eq!(unified.borders["workspace-pager"].a, 0, "unified bar clears pager contour");
+        assert!(
+            unified.borders["taskbar"].a > 0,
+            "unified bar owns its border"
+        );
+        assert_eq!(
+            unified.borders["workspace-pager"].a, 0,
+            "unified bar clears pager contour"
+        );
         assert_eq!(taskbar_backdrop_percents(&snapshot), (20, 15));
     }
 
