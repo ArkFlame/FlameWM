@@ -271,9 +271,14 @@ mod scratch_equivalence_tests {
         scene.next_dragging.extend([5, 15]);
         assert_eq!(scene.advance(11, 22, None), start);
         scene.next_dragging.push(15);
-        assert_eq!(scene.advance(11, 22, None), start);
+        let first_settled = scene.advance(11, 22, None);
+        assert_eq!(
+            first_settled,
+            start.wrapping_add(1),
+            "a frame leaving the gesture re-shades"
+        );
         let settled = scene.advance(11, 22, Some(33));
-        assert_eq!(settled, start.wrapping_add(1));
+        assert_eq!(settled, first_settled.wrapping_add(1));
         assert!(scene.dragging.is_empty());
         assert!(scene.next_dragging.is_empty());
         assert!(scene.next_dragging.capacity() >= capacity);

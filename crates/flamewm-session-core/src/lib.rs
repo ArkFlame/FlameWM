@@ -824,11 +824,15 @@ mod tests {
         // an XDG_CONFIG_DIRS prefix. QT_QPA_PLATFORMTHEME=kde is set only when
         // the KDE platform theme plugin is installed and no value is inherited.
         // GTK_THEME and QT_STYLE_OVERRIDE stay forbidden.
-        let xdg = environment
-            .get("XDG_CONFIG_DIRS")
-            .expect("owned kdeglobals channel");
-        assert!(xdg.starts_with(&format!("{}:", owned_appearance_root(&paths).display())));
-        let expected_theme = kde_platform_theme_installed(&existing).then_some("kde");
+        let kde_plugin = kde_platform_theme_installed(&existing);
+        match environment.get("XDG_CONFIG_DIRS") {
+            Some(xdg) => {
+                assert!(kde_plugin, "owned kdeglobals channel needs the KDE plugin");
+                assert!(xdg.starts_with(&format!("{}:", owned_appearance_root(&paths).display())));
+            }
+            None => assert!(!kde_plugin, "owned kdeglobals channel"),
+        }
+        let expected_theme = kde_plugin.then_some("kde");
         assert_eq!(
             environment.get("QT_QPA_PLATFORMTHEME").map(String::as_str),
             expected_theme
