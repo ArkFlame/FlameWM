@@ -328,15 +328,28 @@ fn box_downscale(rgba: &[u8], width: u32, height: u32, factor: u32) -> (Vec<u8>,
 /// Bilinear taps `(lower index, upper index, weight of the upper tap out of 256)` mapping each of
 /// `out` target coordinates onto a source of `len` samples.
 fn bilinear_taps(len: u32, out: u32) -> Vec<(usize, usize, u32)> {
+    (0..out).map(|i| bilinear_tap(len, out, i)).collect()
+}
+
+/// The [`bilinear_taps`] entry for target coordinate `i`.
+#[inline]
+fn bilinear_tap(len: u32, out: u32, i: u32) -> (usize, usize, u32) {
     let scale = len as f32 / out as f32;
-    (0..out)
-        .map(|i| {
-            let f = ((i as f32 + 0.5) * scale - 0.5).clamp(0.0, (len - 1) as f32);
-            let lo = f.floor();
-            let hi = (lo as u32 + 1).min(len - 1);
-            (lo as usize, hi as usize, ((f - lo) * 256.0).round() as u32)
-        })
-        .collect()
+    let f = ((i as f32 + 0.5) * scale - 0.5).clamp(0.0, (len - 1) as f32);
+    let lo = f.floor();
+    let hi = (lo as u32 + 1).min(len - 1);
+    (lo as usize, hi as usize, ((f - lo) * 256.0).round() as u32)
+}
+
+/// One source row blended horizontally at every column tap, unrounded (`channel * 256`), so the
+/// vertical blend in [`BlurredCanvas::crop`] yields exactly the words of [`bilinear_word`].
+fn horizontal_line(row: &[u8], cols: &[(usize, usize, u32)], line: &mut [u32]) {
+    for (&(a, b, wx), out) in cols.iter().zip(line.chunks_exact_mut(3)) {
+        for (channel, value) in out.iter_mut().enumerate() {
+            *value =
+                u32::from(row[a * 4 + channel]) * (256 - wx) + u32::from(row[b * 4 + channel]) * wx;
+        }
+    }
 }
 
 /// One opaque ARGB32 word blended from two source rows at a column tap and a row weight.
@@ -495,25 +508,101 @@ impl BlurredCanvas {
                 small_w,
                 small_h,
             } => {
-                let (cols, rows) = (
-                    bilinear_taps(*small_w, self.width),
-                    bilinear_taps(*small_h, self.height),
-                );
+                // Separable: each source row is blended horizontally once per crop, and every
+                // output row only blends two of those lines. Taps cover the crop, not the root.
+                let cols = (0..size.0)
+                    .map(|x| {
+                        bilinear_tap(*small_w, self.width, clamp(origin.0, x, self.width) as u32)
+                    })
+                    .collect::<Vec<_>>();
                 let stride = *small_w as usize * 4;
+                let line_len = size.0 as usize * 3;
+                let mut top = (usize::MAX, vec![0u32; line_len]);
+                let mut bottom = (usize::MAX, vec![0u32; line_len]);
                 for y in 0..size.1 {
-                    let (r0, r1, wy) = rows[clamp(origin.1, y, self.height)];
-                    let (top_row, bottom_row) = (&small[r0 * stride..], &small[r1 * stride..]);
-                    out.extend((0..size.0).map(|x| {
-                        bilinear_word(
-                            top_row,
-                            bottom_row,
-                            cols[clamp(origin.0, x, self.width)],
-                            wy,
-                        )
-                    }));
+                    let (r0, r1, wy) = bilinear_tap(
+                        *small_h,
+                        self.height,
+                        clamp(origin.1, y, self.height) as u32,
+                    );
+                    if top.0 != r0 {
+                        if bottom.0 == r0 {
+                            std::mem::swap(&mut top, &mut bottom);
+                        } else {
+                            horizontal_line(&small[r0 * stride..], &cols, &mut top.1);
+                            top.0 = r0;
+                        }
+                    }
+                    if bottom.0 != r1 && r1 != r0 {
+                        horizontal_line(&small[r1 * stride..], &cols, &mut bottom.1);
+                        bottom.0 = r1;
+                    }
+                    let lower = if r1 == r0 { &top.1 } else { &bottom.1 };
+                    out.extend(top.1.chunks_exact(3).zip(lower.chunks_exact(3)).map(
+                        |(upper, lower)| {
+                            let mut word = 0xff00_0000u32;
+                            for channel in 0..3usize {
+                                let value =
+                                    (upper[channel] * (256 - wy) + lower[channel] * wy + (1 << 15))
+                                        >> 16;
+                                word |= value << (16 - 8 * channel);
+                            }
+                            word
+                        },
+                    ));
                 }
             }
         }
+        out
+    }
+
+    /// [`Self::crop`] at `origin`, reusing `previous`, the same-sized crop at `previous_origin`:
+    /// the overlap is copied and only the newly exposed strips are computed.
+    #[must_use]
+    pub fn recrop(
+        &self,
+        previous: &[u32],
+        previous_origin: (i32, i32),
+        origin: (i32, i32),
+        size: (u32, u32),
+    ) -> Vec<u32> {
+        let (width, height) = (size.0 as usize, size.1 as usize);
+        let dx = i64::from(origin.0) - i64::from(previous_origin.0);
+        let dy = i64::from(origin.1) - i64::from(previous_origin.1);
+        if previous.len() != width * height
+            || dx.unsigned_abs() >= width as u64
+            || dy.unsigned_abs() >= height as u64
+        {
+            return self.crop(origin, size);
+        }
+        let (dx, dy) = (dx as isize, dy as isize);
+        let (w, h) = (width as isize, height as isize);
+        // New columns x0..x1 and rows y0..y1 were inside the previous crop.
+        let (x0, x1) = ((-dx).max(0) as usize, (w - dx).min(w) as usize);
+        let (y0, y1) = ((-dy).max(0) as usize, (h - dy).min(h) as usize);
+        let mut out = vec![0u32; width * height];
+        for y in y0..y1 {
+            let source = (y as isize + dy) as usize * width + (x0 as isize + dx) as usize;
+            out[y * width + x0..y * width + x1]
+                .copy_from_slice(&previous[source..source + (x1 - x0)]);
+        }
+        let mut fill = |left: usize, top: usize, columns: usize, rows: usize| {
+            if columns == 0 || rows == 0 {
+                return;
+            }
+            let block = self.crop(
+                (origin.0 + left as i32, origin.1 + top as i32),
+                (columns as u32, rows as u32),
+            );
+            for (row, words) in block.chunks_exact(columns).enumerate() {
+                let start = (top + row) * width + left;
+                out[start..start + columns].copy_from_slice(words);
+            }
+        };
+        fill(0, 0, width, y0);
+        fill(0, y1, width, height - y1);
+        fill(0, y0, x0, y1 - y0);
+        fill(x1, y0, width - x1, y1 - y0);
         out
     }
 }
@@ -606,11 +695,60 @@ fn desktop_frame_from_words(words: &[u32]) -> Option<DesktopFrame> {
 ///
 /// `display` must be live.
 pub(crate) unsafe fn published_desktop_frame(display: *mut Display) -> Option<DesktopFrame> {
-    let name = std::ffi::CString::new(DESKTOP_FRAME_PROPERTY).ok()?;
+    // SAFETY: live display per the contract.
+    desktop_frame_from_words(&unsafe { root_cardinals(display, DESKTOP_FRAME_PROPERTY, 6) })
+}
+
+/// Root property on which the WM publishes the wallpaper layout the desktop draws:
+/// `CARDINAL[4n]` = `x`, `y` (two's complement), `width`, `height` per output in root coordinates.
+/// Empty or absent means one wallpaper over the whole root (a single output or `shareWallpaper`).
+pub const WALLPAPER_OUTPUTS_PROPERTY: &str = "_FLAMEWM_WALLPAPER_OUTPUTS";
+
+/// Most outputs read from [`WALLPAPER_OUTPUTS_PROPERTY`].
+const WALLPAPER_OUTPUTS_MAX: usize = 16;
+
+/// Parses [`WALLPAPER_OUTPUTS_PROPERTY`] words; empty rects and a trailing partial rect are
+/// dropped.
+fn wallpaper_outputs_from_words(words: &[u32]) -> Vec<(i32, i32, u32, u32)> {
+    words
+        .chunks_exact(4)
+        .filter(|rect| rect[2] > 0 && rect[3] > 0)
+        .map(|rect| (rect[0] as i32, rect[1] as i32, rect[2], rect[3]))
+        .collect()
+}
+
+/// The wallpaper layout the WM published on the root of `display`; empty means one wallpaper
+/// over the root.
+///
+/// # Safety
+///
+/// `display` must be live.
+pub(crate) unsafe fn published_wallpaper_outputs(
+    display: *mut Display,
+) -> Vec<(i32, i32, u32, u32)> {
+    // SAFETY: live display per the contract.
+    wallpaper_outputs_from_words(&unsafe {
+        root_cardinals(
+            display,
+            WALLPAPER_OUTPUTS_PROPERTY,
+            WALLPAPER_OUTPUTS_MAX * 4,
+        )
+    })
+}
+
+/// Up to `max_words` format-32 `CARDINAL` words of the root property `name`; empty when absent.
+///
+/// # Safety
+///
+/// `display` must be live.
+unsafe fn root_cardinals(display: *mut Display, name: &str, max_words: usize) -> Vec<u32> {
+    let Ok(name) = std::ffi::CString::new(name) else {
+        return Vec::new();
+    };
     // SAFETY: live display per the contract; `only_if_exists` keeps the lookup from creating it.
     let atom = unsafe { XInternAtom(display, name.as_ptr(), 1) };
     if atom == 0 {
-        return None;
+        return Vec::new();
     }
     let root = unsafe { XRootWindow(display, XDefaultScreen(display)) };
     let (mut actual_type, mut actual_format, mut items, mut after) = (0, 0, 0, 0);
@@ -622,7 +760,7 @@ pub(crate) unsafe fn published_desktop_frame(display: *mut Display) -> Option<De
             root,
             atom,
             0,
-            6,
+            max_words as _,
             0,
             XA_CARDINAL,
             &mut actual_type,
@@ -633,7 +771,7 @@ pub(crate) unsafe fn published_desktop_frame(display: *mut Display) -> Option<De
         )
     };
     if status != 0 || data.is_null() {
-        return None;
+        return Vec::new();
     }
     let words: Vec<u32> = if actual_format == 32 {
         // SAFETY: format-32 properties come back as `items` C longs at `data`.
@@ -647,7 +785,7 @@ pub(crate) unsafe fn published_desktop_frame(display: *mut Display) -> Option<De
         Vec::new()
     };
     unsafe { XFree(data.cast()) };
-    desktop_frame_from_words(&words)
+    words
 }
 
 /// What the desktop layer is made of, as the desktop draws it.
@@ -670,8 +808,11 @@ const DESKTOP_FALLBACK_RGB: [u8; 3] = [0x23, 0x26, 0x29];
 #[derive(Debug)]
 pub struct DesktopLayer {
     source: DesktopSource,
-    canvas: Option<((u32, u32), u8, Option<BlurredCanvas>)>,
+    canvas: Option<(CanvasLayout, Option<BlurredCanvas>)>,
 }
+
+/// Root size, output layout and blur a [`DesktopLayer`] canvas was built for.
+type CanvasLayout = ((u32, u32), Vec<(i32, i32, u32, u32)>, u8);
 
 impl DesktopLayer {
     #[must_use]
@@ -688,10 +829,12 @@ impl DesktopLayer {
     }
 
     /// Opaque ARGB32 words of the layer under the root-space `rect`, blurred as a surface at
-    /// `opacity_percent` and `blur_percent` would be. A solid or undecodable wallpaper is flat.
+    /// `opacity_percent` and `blur_percent` would be, with the wallpaper laid out over `outputs`
+    /// like the desktop draws it. A solid or undecodable wallpaper is flat.
     pub fn crop(
         &mut self,
         root: (u32, u32),
+        outputs: &[(i32, i32, u32, u32)],
         rect: (i32, i32, u32, u32),
         opacity_percent: u8,
         blur_percent: u8,
@@ -711,8 +854,8 @@ impl DesktopLayer {
             return flamewm_image_core::wallpaper::decode_file(path)
                 .ok()
                 .and_then(|natural| {
-                    flamewm_image_core::wallpaper::compose_region(
-                        &natural, root.0, root.1, fit, rect,
+                    flamewm_image_core::wallpaper::compose_outputs_region(
+                        &natural, root, outputs, fit, rect,
                     )
                 })
                 .map_or_else(
@@ -731,33 +874,32 @@ impl DesktopLayer {
         if self
             .canvas
             .as_ref()
-            .is_none_or(|(size, blur, _)| (*size, *blur) != (root, blur_percent))
+            .is_none_or(|((size, layout, blur), _)| {
+                (*size, layout.as_slice(), *blur) != (root, outputs, blur_percent)
+            })
         {
-            let canvas = desktop_canvas(path, fit, &[], root, blur_percent)
+            let canvas = desktop_canvas(path, fit, outputs, root, blur_percent)
                 .map_err(|error| eprintln!("flamewm-render-x11: desktop layer: {error}"))
                 .ok();
-            self.canvas = Some((root, blur_percent, canvas));
+            self.canvas = Some(((root, outputs.to_vec(), blur_percent), canvas));
         }
-        match self
-            .canvas
-            .as_ref()
-            .and_then(|(_, _, canvas)| canvas.as_ref())
-        {
+        match self.canvas.as_ref().and_then(|(_, canvas)| canvas.as_ref()) {
             Some(canvas) => canvas.crop((x, y), (width, height)),
             None => flat(DESKTOP_FALLBACK_RGB),
         }
     }
 }
 
-/// [`desktop_canvas`] for a window backdrop spec: one wallpaper over the whole root.
+/// [`desktop_canvas`] for a window backdrop spec, laid out over `outputs`.
 pub(crate) fn wallpaper_canvas(
     spec: &WindowBackdrop,
     root: (u32, u32),
+    outputs: &[(i32, i32, u32, u32)],
 ) -> Result<BlurredCanvas, String> {
     desktop_canvas(
         &wallpaper_file(&spec.wallpaper, &spec.packaged_root),
         flamewm_image_core::wallpaper::parse(&spec.fit),
-        &[],
+        outputs,
         root,
         spec.blur_percent,
     )
@@ -909,6 +1051,40 @@ pub fn recapture_due(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recrop_matches_a_fresh_crop_for_every_shift() {
+        let (width, height) = (96, 64);
+        let rgba: Vec<u8> = (0..width * height * 4)
+            .map(|i| ((i * 37) ^ (i >> 5)) as u8)
+            .collect();
+        for blur in [0, 100] {
+            let canvas = BlurredCanvas::new(width, height, rgba.clone(), 40, blur);
+            let size = (31, 23);
+            let previous_origin = (10, -4);
+            let previous = canvas.crop(previous_origin, size);
+            for dx in [-40, -31, -7, -1, 0, 1, 5, 30, 31, 80] {
+                for dy in [-30, -23, -3, 0, 2, 22, 23, 70] {
+                    let origin = (previous_origin.0 + dx, previous_origin.1 + dy);
+                    assert_eq!(
+                        canvas.recrop(&previous, previous_origin, origin, size),
+                        canvas.crop(origin, size),
+                        "blur={blur} shift=({dx}, {dy})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wallpaper_output_words_parse_signed_rects_and_drop_empty_or_partial() {
+        let left = (-1280_i32) as u32;
+        assert_eq!(
+            wallpaper_outputs_from_words(&[left, 0, 1280, 800, 0, 0, 1920, 1080, 5, 5, 0, 9, 1]),
+            vec![(-1280, 0, 1280, 800), (0, 0, 1920, 1080)]
+        );
+        assert!(wallpaper_outputs_from_words(&[]).is_empty());
+    }
 
     #[test]
     fn desktop_frame_words_parse_and_reject_malformed() {

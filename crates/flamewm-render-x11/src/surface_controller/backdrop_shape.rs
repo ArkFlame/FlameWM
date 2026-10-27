@@ -84,7 +84,10 @@ impl SurfaceController {
                 XDisplayHeight(self.display, self.screen).max(0) as u32,
             )
         };
-        Some(self.desktop.as_mut()?.crop(root, rect, opacity, blur))
+        let desktop = self.desktop.as_mut()?;
+        // SAFETY: the controller owns a live display.
+        let outputs = unsafe { crate::backdrop::published_wallpaper_outputs(self.display) };
+        Some(desktop.crop(root, &outputs, rect, opacity, blur))
     }
 
     /// Installs the desktop layer under an unmapped popup's translucent fills, rounded to its

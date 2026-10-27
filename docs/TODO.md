@@ -268,7 +268,7 @@ This is the canonical implementation backlog after 0.0.2. A checked item means a
 
 ## Phase 8 — session/product integration
 
-- [x] FlameWM session desktop file: `/usr/share/xsessions/flamewm.desktop` (`FlameWM (X11)`) and the preliminary `/usr/share/wayland-sessions/flamewm-wayland.desktop` (`FlameWM (Wayland)`).
+- [x] FlameWM session desktop file: `/usr/share/xsessions/flamewm.desktop` (`FlameWM (X11)`) and `/usr/share/wayland-sessions/flamewm-wayland.desktop` (`FlameWM (Wayland)`).
 - [ ] startup/shutdown lifecycle.
 - [ ] external notification-daemon policy.
 - [ ] Polkit agent policy.
@@ -295,7 +295,7 @@ This is the canonical implementation backlog after 0.0.2. A checked item means a
 - [ ] `./scripts/xephyr` real interactive smoke green.
 - [ ] `./scripts/verify-visual` reviewed against approved reference.
 
-## Phase 10 — Wayland session (preliminary)
+## Phase 10 — Wayland session
 
 The session ships; the X11 session remains the supported default. Implementation record:
 `docs/WAYLAND_PLAN.md`.

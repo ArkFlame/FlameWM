@@ -16,12 +16,18 @@ use crate::backdrop::{BlurredCanvas, WindowBackdrop, recapture_due};
 use crate::xlib::*;
 use crate::xlib_ext::XTranslateCoordinates;
 
+/// An output rect in root coordinates (`x, y, width, height`).
+type OutputRect = (i32, i32, u32, u32);
+
 /// Per-window state: the spec, the desktop canvas and the uploaded snapshot.
 #[derive(Debug)]
 pub(crate) struct WindowBackdropState {
     pub(crate) spec: WindowBackdrop,
-    /// Blurred desktop layer under the whole root, built (or loaded) once per root size.
-    canvas: Option<BlurredCanvas>,
+    /// Blurred desktop layer under the whole root, built (or loaded) once per root size and
+    /// wallpaper output layout.
+    canvas: Option<(Vec<OutputRect>, BlurredCanvas)>,
+    /// Bumped whenever `canvas` is rebuilt; a snapshot cropped from an older canvas is not reused.
+    canvas_epoch: u64,
     /// The window moved or resized since the snapshot was cropped.
     pub(crate) stale: bool,
     /// Last cropped snapshot and the root origin it was cropped at. A resized window mirror-extends
@@ -43,6 +49,8 @@ pub(crate) struct CapturedSnapshot {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) root: (i32, i32),
+    /// The canvas epoch the words were cropped from; `None` for a live composition.
+    pub(crate) canvas_epoch: Option<u64>,
 }
 
 /// Scene size and snapshot origin (snapshot root position minus the window's root position)
@@ -66,6 +74,7 @@ impl WindowBackdropState {
         Self {
             spec,
             canvas: None,
+            canvas_epoch: 0,
             stale: true,
             captured: None,
             mirror: None,
@@ -152,20 +161,24 @@ impl X11App {
         };
         let (width, height) = (self.width, self.height);
         let live = unsafe { self.compose_live_backdrop((rx, ry, width, height)) };
-        let words = match live {
-            Some(words) => words,
+        let (words, canvas_epoch) = match live {
+            Some(words) => (words, None),
             None => {
                 let state = self
                     .window_backdrop
                     .as_mut()
                     .ok_or("window backdrop: no spec")?;
+                // SAFETY: the window's display is live.
+                let outputs = unsafe { crate::backdrop::published_wallpaper_outputs(self.display) };
                 if state
                     .canvas
                     .as_ref()
-                    .is_none_or(|canvas| canvas.size() != root)
+                    .is_none_or(|(layout, canvas)| canvas.size() != root || *layout != outputs)
                 {
                     let _compose_span = flamewm_profiler::start("render.backdrop.compose");
-                    state.canvas = Some(crate::backdrop::wallpaper_canvas(&state.spec, root)?);
+                    let canvas = crate::backdrop::wallpaper_canvas(&state.spec, root, &outputs)?;
+                    state.canvas = Some((outputs, canvas));
+                    state.canvas_epoch = state.canvas_epoch.wrapping_add(1);
                 }
                 let pixmap_fits = self
                     .window_backdrop_pixmap
@@ -181,9 +194,17 @@ impl X11App {
                 {
                     return Ok(());
                 }
-                let canvas = state.canvas.as_ref().ok_or("window backdrop: no canvas")?;
+                let (_, canvas) = state.canvas.as_ref().ok_or("window backdrop: no canvas")?;
                 let _crop_span = flamewm_profiler::start("render.backdrop.crop");
-                canvas.crop((rx, ry), (width, height))
+                // A moved window shows the same canvas shifted: reuse the overlap of the last crop.
+                let epoch = state.canvas_epoch;
+                let words = match state.captured.as_ref().filter(|old| {
+                    old.canvas_epoch == Some(epoch) && (old.width, old.height) == (width, height)
+                }) {
+                    Some(old) => canvas.recrop(&old.words, old.root, (rx, ry), (width, height)),
+                    None => canvas.crop((rx, ry), (width, height)),
+                };
+                (words, Some(epoch))
             }
         };
         if words.len() != width as usize * height as usize {
@@ -216,6 +237,7 @@ impl X11App {
                 width,
                 height,
                 root: (rx, ry),
+                canvas_epoch,
             });
         }
         if let Some(pixmap) = upload? {

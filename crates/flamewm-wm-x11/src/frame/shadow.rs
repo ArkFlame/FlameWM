@@ -145,12 +145,14 @@ fn shadow_spans_iter(rect: Rect) -> impl Iterator<Item = (u32, u32, u32)> {
 }
 
 #[must_use]
+#[cfg(test)]
 pub fn shadow_spans(rect: Rect) -> Vec<(u32, u32, u32)> {
     shadow_spans_iter(rect).collect()
 }
 
 // Masks and visible shading consume rows once. Keep the original owned
 // clip_spans_outside_frame API available for callers and equivalence tests.
+#[cfg(test)]
 fn clipped_shadow_rows(area: Rect, frame: Rect) -> impl Iterator<Item = (u32, u32, u32)> {
     let frame_bottom = frame.y + frame.height as i32;
     let frame_right = frame.x + frame.width as i32;
@@ -169,6 +171,7 @@ fn clipped_shadow_rows(area: Rect, frame: Rect) -> impl Iterator<Item = (u32, u3
 /// shadow window only shows outside the window. Rows beside the frame keep the
 /// full band; rows below it keep their full width, since that is the cast.
 #[must_use]
+#[cfg(test)]
 pub fn clip_spans_outside_frame(
     spans: Vec<(u32, u32, u32)>,
     rect: Rect,
@@ -195,7 +198,9 @@ pub fn clip_spans_outside_frame(
 /// rounded bounding mask. The historical rectangular cut dropped these pixels,
 /// leaving a transparent square where the cast should continue behind the frame.
 fn clipped_shadow_rows_with_radius(
-    area: Rect, frame: Rect, radius: u32,
+    area: Rect,
+    frame: Rect,
+    radius: u32,
 ) -> impl Iterator<Item = (u32, u32, u32)> {
     let frame_bottom = frame.y + frame.height as i32;
     let frame_right = frame.x + frame.width as i32;
@@ -203,9 +208,14 @@ fn clipped_shadow_rows_with_radius(
     shadow_spans_iter(area).map(move |(row, start, end)| {
         let y = area.y + row as i32;
         if y >= frame.y && y < frame_bottom {
-            let inset = if r == 0 { 0 } else {
+            let inset = if r == 0 {
+                0
+            } else {
                 flamewm_render_x11::external_rounded_row_inset(
-                    frame.width, frame.height, r, (y - frame.y) as u32,
+                    frame.width,
+                    frame.height,
+                    r,
+                    (y - frame.y) as u32,
                 )
             };
             let right_edge = frame_right - inset as i32;
@@ -219,10 +229,16 @@ fn clipped_shadow_rows_with_radius(
 
 /// Shape rows that include a rounded frame's exposed corner notches.
 #[must_use]
-pub fn rounded_shadow_mask_rectangles(area: Rect, frame: Rect, radius: u32) -> Vec<(u32, u32, u32, u32)> {
+pub fn rounded_shadow_mask_rectangles(
+    area: Rect,
+    frame: Rect,
+    radius: u32,
+) -> Vec<(u32, u32, u32, u32)> {
     let mut rectangles: Vec<(u32, u32, u32, u32)> = Vec::new();
     for (row, start, end) in clipped_shadow_rows_with_radius(area, frame, radius) {
-        if start == end { continue; }
+        if start == end {
+            continue;
+        }
         let width = end - start;
         if let Some(last) = rectangles.last_mut() {
             if last.0 == start && last.2 == width && last.1 + last.3 == row {
@@ -240,6 +256,7 @@ pub fn rounded_shadow_mask_rectangles(area: Rect, frame: Rect, radius: u32) -> V
 /// a long right-hand strip needs one rectangle instead of one protocol item per pixel row.
 /// Returned tuples are `(x, y, width, height)` relative to the shadow window.
 #[must_use]
+#[cfg(test)]
 pub fn shadow_mask_rectangles(area: Rect, frame: Rect) -> Vec<(u32, u32, u32, u32)> {
     let mut rectangles: Vec<(u32, u32, u32, u32)> = Vec::new();
     for (row, start, end) in clipped_shadow_rows(area, frame) {
@@ -308,7 +325,9 @@ pub(crate) fn shadow_keep_from_table(
 pub fn shade_visible_shadow_rounded(frame: Rect, focused: bool, radius: u32, pixels: &mut [u8]) {
     let area = shadow_rect(frame);
     let stride = area.width as usize * 4;
-    if pixels.len() != stride * area.height as usize { return; }
+    if pixels.len() != stride * area.height as usize {
+        return;
+    }
     let keep_table = shadow_keep_table(focused);
     for (row, start, end) in clipped_shadow_rows_with_radius(area, frame, radius) {
         let y = area.y + row as i32;
@@ -327,6 +346,7 @@ pub fn shade_visible_shadow_rounded(frame: Rect, focused: bool, radius: u32, pix
 /// Alpha is highest at the frame's right/bottom edge and falls off with the
 /// 45-degree cast distance, so the band reads as a simple drop shadow rather
 /// than a hard border.
+#[cfg(test)]
 pub fn shade_shadow(frame: Rect, focused: bool, pixels: &mut [u8]) {
     let area = shadow_rect(frame);
     let (w, h) = (area.width as i32, area.height as i32);
@@ -346,6 +366,7 @@ pub fn shade_shadow(frame: Rect, focused: bool, pixels: &mut [u8]) {
 
 /// Shade only the right/bottom bands admitted by the X Shape mask. Pixels under the frame are
 /// never presented; the original full-frame shader remains available for pure equivalence tests.
+#[cfg(test)]
 pub fn shade_visible_shadow(frame: Rect, focused: bool, pixels: &mut [u8]) {
     let area = shadow_rect(frame);
     let stride = area.width as usize * 4;
@@ -483,13 +504,14 @@ mod tests {
                 let mut expected = vec![160; area.width as usize * area.height as usize * 4];
                 let mut actual = expected.clone();
                 let keep_table = shadow_keep_table(focused);
-                for (row, start, end) in
-                    clip_spans_outside_frame(shadow_spans(area), area, frame)
-                {
+                for (row, start, end) in clip_spans_outside_frame(shadow_spans(area), area, frame) {
                     for col in start..end {
                         let at = (row as usize * area.width as usize + col as usize) * 4;
                         let keep = shadow_keep_from_table(
-                            &keep_table, frame, area.x + col as i32, area.y + row as i32,
+                            &keep_table,
+                            frame,
+                            area.x + col as i32,
+                            area.y + row as i32,
                         );
                         for channel in &mut expected[at..at + 3] {
                             *channel = ((u32::from(*channel) * keep) >> 8) as u8;
@@ -507,7 +529,12 @@ mod tests {
         let frame = Rect::new(0, 0, 1280, 720);
         let area = shadow_rect(frame);
         let packed = shadow_mask_rectangles(area, frame);
-        assert!(packed.len() < 50, "{} rectangles instead of {} rows", packed.len(), area.height);
+        assert!(
+            packed.len() < 50,
+            "{} rectangles instead of {} rows",
+            packed.len(),
+            area.height
+        );
     }
 
     #[test]
@@ -584,9 +611,7 @@ mod tests {
             let mut visible = full.clone();
             shade_shadow(FRAME, focused, &mut full);
             shade_visible_shadow(FRAME, focused, &mut visible);
-            for (row, start, end) in
-                clip_spans_outside_frame(shadow_spans(area), area, FRAME)
-            {
+            for (row, start, end) in clip_spans_outside_frame(shadow_spans(area), area, FRAME) {
                 for col in start..end {
                     let at = (row as usize * area.width as usize + col as usize) * 4;
                     assert_eq!(&visible[at..at + 4], &full[at..at + 4]);
@@ -749,23 +774,28 @@ mod tests {
 #[cfg(test)]
 mod rounded_shadow_corner_tests {
     use super::*;
-    fn contains(rects: &[(u32,u32,u32,u32)], x: u32, y: u32) -> bool {
-        rects.iter().any(|&(rx,ry,rw,rh)| x>=rx && x<rx+rw && y>=ry && y<ry+rh)
+    fn contains(rects: &[(u32, u32, u32, u32)], x: u32, y: u32) -> bool {
+        rects
+            .iter()
+            .any(|&(rx, ry, rw, rh)| x >= rx && x < rx + rw && y >= ry && y < ry + rh)
     }
     #[test]
     fn rounded_frame_notch_has_cast_without_leaking_under_the_client() {
-        let frame = Rect::new(100,100,200,150);
+        let frame = Rect::new(100, 100, 200, 150);
         let area = shadow_rect(frame);
-        let rectangular = shadow_mask_rectangles(area,frame);
-        let round = rounded_shadow_mask_rectangles(area,frame,12);
-        let y = frame.bottom()-1;
-        let x = frame.right()-3;
-        let col = (x-area.x) as u32;
-        let row = (y-area.y) as u32;
-        assert!(!contains(&rectangular,col,row));
-        assert!(contains(&round,col,row));
-        let inside = ((frame.right()-15-area.x) as u32, (frame.bottom()-15-area.y) as u32);
-        assert!(!contains(&round,inside.0,inside.1));
-        assert_eq!(rounded_shadow_mask_rectangles(area,frame,0),rectangular);
+        let rectangular = shadow_mask_rectangles(area, frame);
+        let round = rounded_shadow_mask_rectangles(area, frame, 12);
+        let y = frame.bottom() - 1;
+        let x = frame.right() - 3;
+        let col = (x - area.x) as u32;
+        let row = (y - area.y) as u32;
+        assert!(!contains(&rectangular, col, row));
+        assert!(contains(&round, col, row));
+        let inside = (
+            (frame.right() - 15 - area.x) as u32,
+            (frame.bottom() - 15 - area.y) as u32,
+        );
+        assert!(!contains(&round, inside.0, inside.1));
+        assert_eq!(rounded_shadow_mask_rectangles(area, frame, 0), rectangular);
     }
 }

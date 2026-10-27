@@ -52,7 +52,7 @@ Historical reference (not present in this checkout; not current oracle approval)
 project_sources/visual/rwr-0.0.6-target-xephyr.png
 ```
 
-## Wayland session gate (preliminary)
+## Wayland session gate
 
 The Wayland session has its own gates; none of them replaces a hardware login. Source, wrapper and
 packaging evidence:
@@ -82,8 +82,8 @@ and never gates startup.
    by itself.
 
 No successful native DRM/LightDM login has been recorded. A login that returns to the greeter after
-showing a text cursor has been reported and is under investigation, so the Wayland session must be
-described as preliminary in any report. See [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md).
+showing a text cursor has been reported and is under investigation, so a report must not claim a
+hardware login it did not perform. See [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md).
 
 ## Release gate status
 

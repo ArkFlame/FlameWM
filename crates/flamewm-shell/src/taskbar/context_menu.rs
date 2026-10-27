@@ -305,7 +305,7 @@ mod taskbar_menu_tests {
             .lines()
             .find(|line| line.starts_with(".context-menu {"))
             .expect("shared menu frame rule");
-        assert!(frame.contains("border:1px solid #474b4f"), "{frame}");
+        assert!(frame.contains("border:1px solid #ffffff3f"), "{frame}");
         assert!(
             !TASK_MENU_HTML.contains("style="),
             "task menu markup must not override the frame inline"
