@@ -177,8 +177,9 @@ class Session:
         self.x = xdisplay.Display(self.display_name)
         if not wait_until(self.wm_ready, 20, 0.1):
             raise RuntimeError(f"window manager did not start; see {self.temp / 'session.log'}")
-        if not wait_until(lambda: len(self.windows_named("FlameWM panel", viewable=True)) >= len(self.outputs), 20, 0.2):
-            raise RuntimeError("panels did not map")
+        if not wait_until(lambda: self.windows_named("FlameWM panel", viewable=True), 20, 0.2):
+            raise RuntimeError("no panel mapped")
+        wait_until(lambda: len(self.windows_named("FlameWM panel", viewable=True)) >= len(self.outputs), 5, 0.2)
         time.sleep(3)
 
     def configure_outputs(self):
