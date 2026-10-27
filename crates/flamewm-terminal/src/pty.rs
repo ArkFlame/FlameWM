@@ -4,6 +4,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Sender};
@@ -68,7 +69,13 @@ impl PtyProcess {
         ));
         tcsetwinsize(&master, winsize(size))?;
         let master = File::from(master);
-        let slave = OpenOptions::new().read(true).write(true).open(slave_path)?;
+        // NOCTTY: a terminal started as a session leader (setsid launchers) would otherwise take the slave as its
+        // own controlling terminal and get SIGHUP when the shell's session claims it.
+        let slave = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(rustix::fs::OFlags::NOCTTY.bits() as i32)
+            .open(slave_path)?;
         let child = spawn_child(launch, &slave)?;
         drop(slave);
         let reader = master.try_clone()?;
