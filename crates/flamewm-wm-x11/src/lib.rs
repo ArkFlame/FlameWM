@@ -947,7 +947,10 @@ impl DisplayPort for X11Desktop {
                 .map_err(io_error)?
                 .reply()
                 .map_err(io_error)?;
-            if u8::from(info.connection) != u8::from(randr::Connection::CONNECTED) {
+            // X lists any output scanning out from a CRTC as a monitor, even when the
+            // driver cannot sense a sink (virtual heads, some docks). Follow that rule.
+            if u8::from(info.connection) != u8::from(randr::Connection::CONNECTED) && info.crtc == 0
+            {
                 continue;
             }
             let modes = shared::display_modes(&info.modes, &resources.modes);

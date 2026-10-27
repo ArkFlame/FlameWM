@@ -2,7 +2,7 @@
 pkgname=flamewm-git
 pkgver=0.1.2
 pkgrel=1
-pkgdesc='Rust X11 desktop session and window manager with a preliminary Wayland compositor'
+pkgdesc='Rust desktop session and window manager for X11, with a Wayland compositor'
 arch=('x86_64')
 url='https://github.com/ArkFlame/FlameWM'
 license=('LGPL-2.0-only' 'MIT' 'LGPL-3.0-or-later' 'GPL-3.0-only')

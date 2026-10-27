@@ -55,6 +55,7 @@ pub(crate) fn visible_under(rect: Rect, stack: &[Rect]) -> Visible {
 
 /// The four edge bands of a `width`-thick border inside `rect`: top, bottom, left, right.
 /// Bands overlap at the corners only when `width` exceeds half the smaller side.
+#[cfg(test)]
 pub(crate) fn border_bands(rect: Rect, width: f32) -> [Rect; 4] {
     let w = width.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
     let inner_h = (rect.height - 2.0 * w).max(0.0);

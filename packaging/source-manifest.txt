@@ -11,7 +11,6 @@ Cargo.lock
 Cargo.toml
 LICENSE
 LICENSES/
-MANIFEST.sha256
 README.md
 SECURITY.md
 assets/
@@ -24,13 +23,6 @@ scripts/
 tools/
 ui/
 .vendor/RustWebRender-0.0.9/
-bench-memory
-check
-doctor
-lint
-package
-verify-visual
-xephyr
 @exec assets/web/github.svg
 @exec assets/web/paypal.svg
 @exec scripts/prepare-ibm-plex
@@ -56,6 +48,7 @@ xephyr
 @exec scripts/build-arch
 @exec scripts/bench-memory
 @exec scripts/check
+@exec scripts/cleanup_bloat_v1.sh
 @exec scripts/package-source-archive
 @exec scripts/settings-acceptance
 @exec tools/performance_bundle.py
@@ -81,13 +74,6 @@ xephyr
 @exec .vendor/RustWebRender-0.0.9/reference/flamewm-html-css-js-v8/assets/FONTAWESOME_LICENSE.txt
 @exec .vendor/RustWebRender-0.0.9/reference/flamewm-html-css-js-v8/assets/github.svg
 @exec .vendor/RustWebRender-0.0.9/reference/flamewm-html-css-js-v8/assets/paypal.svg
-@exec bench-memory
-@exec check
-@exec doctor
-@exec lint
-@exec package
-@exec verify-visual
-@exec xephyr
 @exec scripts/flamewm-session-wrapper
 @exec scripts/flamewm-wayland-session
 @exec tools/flamewm_desktop_services.py

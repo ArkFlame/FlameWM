@@ -2,8 +2,8 @@
 
 ## 1. Product boundary
 
-FlameWM is now an independent Rust desktop with two sessions: the supported X11 window manager and
-a preliminary Wayland compositor.
+FlameWM is now an independent Rust desktop with two sessions: the X11 window manager, which is the
+default, and a Wayland compositor.
 
 Historical IceWM-derived code is **reference material only**. Production behavior may be learned from it, but production ownership lives in FlameWM crates.
 
@@ -13,7 +13,7 @@ Historical IceWM-derived code is **reference material only**. Production behavio
        | engineering evidence only
        v
 crates/flamewm-wm             X11 WM authority
-crates/flamewm-wm-wayland     Wayland compositor authority (preliminary)
+crates/flamewm-wm-wayland     Wayland compositor authority
 crates/flamewm-platform       product services/policy
 crates/flamewm-*-core         pure product models
 crates/flamewm-shell          V8 shell controller
@@ -99,7 +99,7 @@ flamewm-shell process         desktop/panel/popovers/settings presentation
 
 Long-term convergence keeps one state authority and minimizes process duplication. The UI controller consumes typed state/events and issues commands; it never constructs a second hidden WM.
 
-## 8. Wayland session boundary (preliminary)
+## 8. Wayland session boundary
 
 `crates/flamewm-wm-wayland` (binary `flamewm-wayland`, Smithay 0.7) owns the Wayland session. It is
 a separate compositor, not a second mode of `flamewm-wm-x11`:

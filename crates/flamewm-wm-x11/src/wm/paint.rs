@@ -90,6 +90,7 @@ impl<C: Connection> Wm<'_, C> {
             return Ok(());
         }
         self.decoration_tokens = tokens;
+        self.publish_wallpaper_layout()?;
         if titlebars_changed {
             self.titlebars_applied = titlebars;
             self.reflow_titlebars(titlebars)?;

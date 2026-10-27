@@ -64,6 +64,17 @@ fn effective_layout(state: &State) -> Vec<(i32, i32, u32, u32)> {
     }
 }
 
+/// The layout titlebars compose the wallpaper for (root `x, y, w, h` per output); empty is one
+/// wallpaper over the root.
+#[must_use]
+pub fn wallpaper_layout() -> Vec<(i32, i32, u32, u32)> {
+    STATE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(effective_layout))
+        .unwrap_or_default()
+}
+
 /// Publish the WM output rects (root coordinates). The canvas is rebuilt only when the layout
 /// changes.
 pub fn set_wallpaper_outputs(outputs: &[(i32, i32, u32, u32)]) {

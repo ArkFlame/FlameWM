@@ -1277,6 +1277,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     frame_extents_published: HashMap<Window, [u32; 4]>,
     /// Last `_NET_CLIENT_LIST` and `_NET_CLIENT_LIST_STACKING` pair published; skips identical re-publishes.
     client_list_published: Option<(Vec<Window>, Vec<Window>)>,
+    /// Last wallpaper layout published on the root; skips identical re-publishes.
+    wallpaper_layout_published: Option<Vec<u32>>,
     /// Frames are redirected automatically through Composite (no compositing manager runs), so
     /// their contents stay valid off screen for translucent windows above them.
     redirect_frames: bool,
@@ -1487,6 +1489,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             frame_to_client: HashMap::new(),
             frame_extents_published: HashMap::new(),
             client_list_published: None,
+            wallpaper_layout_published: None,
             redirect_frames: automatic_frame_redirect_available(conn, screen_num),
             registry: FrameRegistry::new(),
             sessions: HashMap::new(),
@@ -1810,6 +1813,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 })
                 .collect::<Vec<_>>();
             crate::frame::titlebar_backdrop::set_wallpaper_outputs(&geometries);
+            self.publish_wallpaper_layout()?;
             self.reconcile_work_area()?;
         }
         Ok(())

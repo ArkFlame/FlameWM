@@ -5,7 +5,15 @@
 
 FlameWM is a clean-room window manager and desktop shell written in Rust. The shell UI is authored as HTML/CSS and compiled at build time into native Rust rendering, with no browser runtime.
 
-One package ships two sessions: **FlameWM** (X11, the supported default) and **FlameWM (Wayland)**, a preliminary compositor session that has not been validated on real hardware yet. See [Wayland session (preliminary)](#wayland-session-preliminary).
+One package ships two sessions: **FlameWM** on X11, the default, and **FlameWM (Wayland)**. See [Wayland session](#wayland-session).
+
+| Explorer and Terminal | Start menu |
+| --- | --- |
+| ![Explorer and Terminal over a blurred wallpaper](assets/screenshots/desktop.webp) | ![Start menu over translucent windows](assets/screenshots/start-menu.webp) |
+| **Minimize** | **Two screens** |
+| ![Window minimizing into the taskbar](assets/screenshots/minimize.gif) | ![Wallpaper and a panel on each of two screens](assets/screenshots/two-screens.webp) |
+
+The screenshots in this table come from the headless test session (`tools/flamewm_visual_tests.py`) on Xorg's dummy driver.
 
 Version and release history: [`Cargo.toml`](Cargo.toml) (`workspace.package.version`), and [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -13,18 +21,16 @@ Version and release history: [`Cargo.toml`](Cargo.toml) (`workspace.package.vers
 
 - Source-level release. Remaining product surfaces are tracked in [`docs/TODO.md`](docs/TODO.md).
 - FlameWM does not claim parity with the historical IceWM or FlameWM C implementations.
-- Memory has been measured on a development machine only; see [Memory](#memory) for exactly what was and was not measured. The performance contract is in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
+- Idle memory, CPU and interaction latency are measured in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md), along with the performance contract.
 
-## Wayland session (preliminary)
+## Wayland session
 
-The `.deb` installs two session entries in one package. The X11 session stays the supported
-default; the Wayland session is **preliminary and experimental**, and it has not been validated on
-real hardware.
+The `.deb` and the Arch package install two session entries. X11 is the default.
 
-| Session | Session entry | Started by | Status |
+| Session | Session entry | Started by | Notes |
 | --- | --- | --- | --- |
-| `FlameWM` (X11) | `/usr/share/xsessions/flamewm.desktop` | `flamewm-session-wrapper` on Xorg | Stable, recommended default |
-| `FlameWM (Wayland)` | `/usr/share/wayland-sessions/flamewm-wayland.desktop` | DRM/KMS (native) or nested winit | Preliminary, unvalidated on hardware |
+| `FlameWM` (X11) | `/usr/share/xsessions/flamewm.desktop` | `flamewm-session-wrapper` on Xorg | Default |
+| `FlameWM (Wayland)` | `/usr/share/wayland-sessions/flamewm-wayland.desktop` | DRM/KMS (native) or nested winit | See [known issues](#wayland-known-issues) |
 
 The session entry runs
 `/usr/libexec/flamewm/flamewm-wayland-session --backend=drm`; the wrapper starts
@@ -37,8 +43,10 @@ reporting `drm_compiled=true`. The compositor is `crates/flamewm-wm-wayland` (Sm
   and resume.
 - Dirty-driven frame scheduling: a redraw request is drawn or deferred to the queued frame, never
   painted by an idle timer.
-- XWayland, so the existing shell, desktop, launcher and settings X11 clients run unchanged. Native
-  Wayland shell clients do not exist yet.
+- Native Wayland clients through `xdg-shell` with server-side decorations, plus `wlr-layer-shell`,
+  `xdg-output`, `wp-viewporter` and the data device. `foot` and `weston-simple-shm` run in the
+  nested session.
+- XWayland, so the shell, desktop, launcher and settings run unchanged as X11 clients.
 - Nested developer backend: `--backend=nested` opens a winit window inside an existing Wayland or
   X11 session (output transform `Flipped180`, window sized to the host, compositor-drawn cursor). This is a
   developer mode only, not a product session.
@@ -46,8 +54,8 @@ reporting `drm_compiled=true`. The compositor is `crates/flamewm-wm-wayland` (Sm
 Runtime dependencies added by the package on top of the X11 stack: `libgbm1`, `libdrm2`,
 `libinput10`, `libudev1`, `libegl1`, `libgles2`, `xwayland`.
 
-Install and select the Wayland session (read [Current limitations](#wayland-current-limitations)
-first; install from a working X11 session so recovery stays available):
+Install and select the Wayland session (read the [known issues](#wayland-known-issues) first and
+install from a working X11 session, so recovery stays available):
 
 ```bash
 sudo dpkg -i .target/dist/flamewm_<version>_amd64.deb
@@ -75,13 +83,14 @@ the session exit code.
 **Recovery:** choose **FlameWM** (X11) at the login screen. The package ships both sessions, and the
 Wayland wrapper does not fall back to X11 by itself.
 
-### Wayland current limitations
+### Wayland known issues
 
-- Not validated on real hardware: no successful native DRM/LightDM login has been recorded. A
-  reported failed login (text cursor, then the greeter returns) is under investigation and is not
-  fixed. Treat the session as experimental and keep the X11 session as your daily driver.
-- The shell, desktop, launcher, settings and screenshot clients are still X11 programs running on
-  XWayland; layer-shell support exists in the compositor but nothing shipped uses it yet.
+- No successful native DRM/LightDM login is on record. One reported login fails: a text cursor
+  shows, then the greeter returns. That report is not fixed yet.
+- The shell, desktop, launcher, settings and screenshot clients are X11 programs running on
+  XWayland; nothing shipped uses the compositor's layer-shell support yet.
+- The compositor does not offer `cursor-shape`, `text-input` (IME) or `xdg-toplevel-icon`; clients
+  fall back to client-side cursors and run without an input method.
 - No session lock, no screenshot/portal integration, no portal-driven capture.
 - One connected connector drives the scene; further connectors show the same scene. No output
   layout, per-output scale, gamma or DPMS. Animated cursors show their first frame.
@@ -95,7 +104,7 @@ Wayland wrapper does not fall back to X11 by itself.
 ## Features
 
 - X11 window manager with reparenting, focus and activation, minimize/maximize/fullscreen, interactive move and resize, and snap previews (`crates/flamewm-wm`, `crates/flamewm-wm-x11`).
-- Preliminary Wayland compositor session (`crates/flamewm-wm-wayland`): native DRM/KMS backend and a nested winit developer backend, with XWayland for the existing shell and desktop clients. Not yet validated on hardware; the X11 session remains the default.
+- Wayland compositor session (`crates/flamewm-wm-wayland`): native DRM/KMS backend, a nested winit developer backend, native Wayland clients and XWayland for the shell and desktop.
 - Virtual workspaces with keyboard switching.
 - Desktop with icons, context menus, and wallpaper loading (`crates/flamewm-desktop`, `crates/flamewm-integrations-linux`).
 - Panel, Start menu, and status popovers rendered by the shell (`crates/flamewm-shell`).
@@ -107,11 +116,11 @@ Wayland wrapper does not fall back to X11 by itself.
 
 ## X11 session limitations
 
-- The X11 session is the supported default. The Wayland session is preliminary; see [Wayland session (preliminary)](#wayland-session-preliminary).
+- The X11 session is the default; see [Wayland session](#wayland-session) for the other one.
 - Requires X11, Xft, and Fontconfig runtime libraries.
 - The renderer crate (`crates/flamewm-render-x11`) is the explicit Xlib/Xft FFI boundary; the window manager itself uses safe `x11rb` protocol APIs.
 - FlameWM does not replace a display manager. Select it from the session chooser after installation.
-- Multi-output (two-output RandR) layouts have not been tested.
+- Two-output RandR layouts run in the headless visual checks (`--layout dual`): wallpaper, panels, backdrops and window placement on both screens. Real multi-monitor hardware, hotplug and mixed resolutions have not been tested.
 - Wayland background: [`docs/WAYLAND_PLAN.md`](docs/WAYLAND_PLAN.md) describes the implementation that ships and its unverified areas. [`docs/WAYLAND_BACKEND_FEASIBILITY.md`](docs/WAYLAND_BACKEND_FEASIBILITY.md) is the historical pre-implementation analysis and is superseded by that plan.
 
 ## Default shortcuts
@@ -154,8 +163,8 @@ The native annotation toolbar supports `P` freehand, `L` line, `R` rectangle,
 Recording requires `ffmpeg` with X11grab and H.264 encoding; no recording
 process runs while the feature is unused. X11 captures visible screen pixels;
 obscured windows are not independently redirected. The tool reads the X11
-display only: there is no Wayland capture path, and under the preliminary
-Wayland session it is limited to what XWayland sees and is unvalidated. Text
+display only: there is no Wayland capture path, and under the Wayland session
+it is limited to what XWayland sees. Text
 annotations, OCR, recording audio, advanced video editing and Spectacle/KDE
 DBus API compatibility are not currently implemented.
 
@@ -201,7 +210,14 @@ The interactive contract is a release build. Debug builds are not accepted as pr
 
 Visual comparison (`./scripts/verify-visual`) and the other acceptance scripts under `scripts/` and `tools/` are separate gates and must be run explicitly.
 
-Wayland development (preliminary; no display or hardware needed for the first two):
+Headless visual checks start Xorg with the dummy driver on one and two screens and check for black outputs, missing panels, popup and drag latency, shadows and leftover marks. They need `xf86-video-dummy`, `xdotool`, ImageMagick, `xterm` and `python-xlib`, and run in the Arch CI job:
+
+```bash
+python3 -I tools/flamewm_visual_tests.py --bin-dir .target/release --out .target/visual
+python3 -I tools/flamewm_visual_tests.py --bin-dir .target/release bench   # CPU and memory figures
+```
+
+Wayland development (the first two need no display or hardware):
 
 ```bash
 ./scripts/build-deb                        # release build with --features flamewm-wm-wayland/drm
@@ -215,7 +231,9 @@ The release build preflights the `libinput`, `gbm`, `libdrm` and `libudev` devel
 
 `./scripts/package` writes the Linux archive, the source archive, and, when `dpkg-deb` is available, the `.deb` under `.target/dist/` (file names follow the workspace version printed by `scripts/version`; for example `flamewm_<version>_amd64.deb`). See [`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/PACKAGING.md`](docs/PACKAGING.md).
 
-**Neither installed session has been accepted end to end in this revision.** Install, upgrade and uninstall are documented from `scripts/package` and `packaging/debian/control.in`. The X11 session is the documented default; the Wayland session has no successful hardware login on record (see [Wayland current limitations](#wayland-current-limitations)).
+Tagged versions (`v<version>`) attach the Arch package and the `.deb` to a [GitHub release](https://github.com/ArkFlame/FlameWM/releases).
+
+The Arch CI job installs the package, starts the X11 session on a virtual display and runs the visual checks. No installed session has been accepted on real hardware in this revision, and the Wayland session has no successful hardware login on record (see [Wayland known issues](#wayland-known-issues)).
 
 Install:
 
@@ -246,16 +264,9 @@ Without `dpkg` (not tested), the Linux archive can be unpacked as root. Its entr
 tar -xzf .target/dist/flamewm-<version>-linux-x86_64.tar.gz --strip-components=1 -C /
 ```
 
-## Memory
+## Memory and CPU
 
-Measured on a private Xephyr display. Five paired release runs each of an older build and the current build:
-
-- Combined WM + Shell idle RSS: median about 30.7 MB (older build) and 31.1 MB (current build); maximum 31.23 MB.
-- All 10 runs were under the 34 MiB (35,651,584 B) target.
-- PSS about 14.7 MB.
-- The current build is not measurably smaller than the older build.
-- Not included: the desktop process (about 44 MB RSS) and X server memory.
-- Not measured: real Xorg, frame p95, and full-session numbers.
+Idle PSS on Xorg with the dummy driver at 1280x800: WM 12.2 MiB, desktop 16.4 MiB, shell 11.5 MiB. The session uses no measurable CPU at idle. Drag, popup and startup figures, and how to rerun them, are in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md#measured-status).
 
 ## Crate architecture
 
@@ -265,7 +276,7 @@ Crate roles are taken from the workspace `Cargo.toml` manifests. Layering rules 
 | --- | --- |
 | `crates/flamewm-wm` | Binary `flamewm`; X11 window manager authority, built on `flamewm-wm-x11` |
 | `crates/flamewm-wm-x11` | X11 window manager library (`x11rb`): client discovery, frames, focus, workspaces, snap geometry |
-| `crates/flamewm-wm-wayland` | Binary `flamewm-wayland`; preliminary Smithay-based Wayland compositor (DRM/KMS and nested winit backends) |
+| `crates/flamewm-wm-wayland` | Binary `flamewm-wayland`; Smithay-based Wayland compositor (DRM/KMS and nested winit backends) |
 | `crates/flamewm-platform` | Product services and policy (settings, shortcuts) |
 | `crates/flamewm-*-core` | Pure product models (for example `flamewm-settings-core`, `flamewm-shell-core`) |
 | `crates/flamewm-shell` | V8 shell controller: panel, Start, popovers |
@@ -287,7 +298,8 @@ The `.vendor/` directory holds historical reference corpora only. No active crat
 
 - [`CHANGELOG.md`](CHANGELOG.md): release history.
 - [`docs/INSTALL.md`](docs/INSTALL.md), [`docs/PACKAGING.md`](docs/PACKAGING.md): install and packaging.
-- [`docs/WAYLAND_PLAN.md`](docs/WAYLAND_PLAN.md): Wayland session implementation, diagnostics and the unverified list.
+- [`docs/WAYLAND_PLAN.md`](docs/WAYLAND_PLAN.md): Wayland session implementation, diagnostics and what is still unverified.
+- [`docs/history/`](docs/history/): dated pass reports and handoff notes from earlier development.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): product boundary and ownership.
 - [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): performance contract and targets.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).

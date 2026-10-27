@@ -78,9 +78,8 @@ python3 -I tools/flamewm_deb_acceptance.py --deb .target/dist/flamewm_0.1.2_amd6
 Do **not** use `--force-architecture`. Install from the actual `dist` path
 (or copy the `.deb` to an accessible location first). The package carries
 `/usr/share/xsessions/flamewm.desktop` for the X11 session selector and
-`/usr/share/wayland-sessions/flamewm-wayland.desktop` for the preliminary
-Wayland session (see [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md)); the X11 session is
-the supported default.
+`/usr/share/wayland-sessions/flamewm-wayland.desktop` for the Wayland session
+(see [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md)); the X11 session is the default.
 
 ## One-command fresh Debian build (recommended)
 
@@ -105,7 +104,7 @@ A full Rust toolchain and all FlameWM runtime assets are needed. The smaller
 source handoff archives intentionally omit bulky assets; overlay them onto the
 original checkout without deleting its `assets/` tree.
 
-## Wayland session packaging (preliminary)
+## Wayland session packaging
 
 `scripts/build-deb` builds with `--features flamewm-wm-wayland/drm` and
 `scripts/dev-deb` uses the same feature list with the `fast` profile, so a
@@ -119,9 +118,30 @@ existing X11 dependencies: `libgbm1, libdrm2, libinput10, libudev1, libegl1,
 libgles2, xwayland`. Seat access is implemented against systemd-logind over
 D-Bus, so no seat library (`libseat`) and no `seatd` is packaged or required.
 
-The Wayland session itself is preliminary and unvalidated on hardware. See
+No Wayland login on real hardware is on record yet. See
 [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md) for the implementation, the diagnostics and
 the list of unverified items.
+
+## Release workflow
+
+`.github/workflows/release.yml` runs when a `v<version>` tag is pushed. It fails
+unless the tag matches `scripts/version`, then builds the Arch package with
+`scripts/build-arch` and the `.deb` with `scripts/build-deb`, and attaches both
+with a `SHA256SUMS` file to a GitHub release with generated notes.
+
+The same run updates the `flamewm-git` AUR package: it copies
+`packaging/arch/PKGBUILD`, regenerates `.SRCINFO` and pushes both. This step is
+skipped until a maintainer stores the AUR account's SSH private key as the
+`AUR_SSH_PRIVATE_KEY` repository secret. The commit identity comes from the
+optional `AUR_GIT_NAME` and `AUR_GIT_EMAIL` repository variables.
+
+To release, bump `workspace.package.version` in `Cargo.toml`, add the
+`CHANGELOG.md` entry, merge, then tag the merge commit:
+
+```bash
+git tag v0.1.3
+git push origin v0.1.3
+```
 
 ## Imported source archives and stale Cargo compiled APIs
 
