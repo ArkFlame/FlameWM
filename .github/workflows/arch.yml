@@ -67,6 +67,17 @@ jobs:
       - name: Session log
         if: always()
         run: cat session.log || true
+      - name: Visual checks on one and two screens
+        run: |
+          pacman -S --noconfirm --needed xorg-server xf86-video-dummy xorg-xrandr xdotool imagemagick xterm python-xlib
+          python3 -I tools/flamewm_visual_tests.py --layout both --display 93 --out visual
+      - name: Upload visual check screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-checks
+          path: visual/
+          if-no-files-found: ignore
       - name: Remove the package
         run: |
           pkill -u tester || true
