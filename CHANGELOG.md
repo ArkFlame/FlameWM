@@ -59,58 +59,58 @@
 - Add the single X11 `surface_style` adapter for RGBA conversion and border projection. Share it across Shell, Explorer, Terminal and Settings, and use the same blend in WM frame borders and native titlebar pixels. Preserve Explorer's development-only opacity override and Terminal's independent theme fill.
 - Stream X Shape clipping directly into the rectangle merger instead of allocating an intermediate clipped span vector on every animated/clipped popup mask update; preserve the owned test helper.
 - Focused Python suites: 181 passed. Three older `surface_icon_slide` assertions fail identically on the untouched Pass 8 archive. Independent 50,000 RGB blend and 1,200 clipped-mask pipeline comparisons pass. Rust compilation and native graphical profiling were unavailable.
-- See `docs/PERFORMANCE_SHARED_SURFACES_PASS9_2026-10-27.md` for source ownership, impact, and verification limits.
+- See `docs/history/PERFORMANCE_SHARED_SURFACES_PASS9_2026-10-27.md` for source ownership, impact, and verification limits.
 
 ## Unreleased — shared glass surfaces, Explorer edge and scroll allocation, pass 8 (2026-10-27)
 
 - Add one configurable 1px inner Surfaces contour (`surfaceBorderColor`, `surfaceBorderOpacity`; default white/25%) shared by panel, popup roots, Explorer, Terminal, Settings, and native window chrome.
 - Replace the hardcoded near-black X11 frame border with a contour-derived pixel and repaint existing frames when settings change. Source-level cause of Explorer right-edge seam identified, subject to live visual confirmation.
-- Avoid a temporary heap vector on every Explorer row-scroll projection using a fixed-size stack window. Add Rust contour conformance checks. Python suite: 89 passed, 3 baseline-existing failures; Rust/native graphics not available. See `docs/FLAMEWM_PASS8_GLASS_CONTOUR_EXPLORER_SCROLL_2026-10-27.md`.
+- Avoid a temporary heap vector on every Explorer row-scroll projection using a fixed-size stack window. Add Rust contour conformance checks. Python suite: 89 passed, 3 baseline-existing failures; Rust/native graphics not available. See `docs/history/FLAMEWM_PASS8_GLASS_CONTOUR_EXPLORER_SCROLL_2026-10-27.md`.
 
 ## Unreleased — X11 shadow row streaming, performance pass 7 (2026-10-27)
 
 - Stream X Shape/shadow-shading row spans directly instead of allocating and clipping two full-height vectors per affected operation; preserve the existing owned span APIs for compatibility and differential tests.
 - Keep mask geometry, rounded/tapered edges, frame clipping, RGBA/BGRX pixel arithmetic, focus behavior and X11 upload paths unchanged.
-- Add Rust equivalence tests for degenerate/negative-coordinate geometries, packed masks and exact shaded bytes. Independent 6,000-layout / 2,577,763-row geometry check and 36 selected Python regressions pass. Rust compilation and live graphical CPU/PSS verification are pending. See `docs/PERFORMANCE_X11_SHADOW_ROW_STREAMING_PASS7_2026-10-27.md`.
+- Add Rust equivalence tests for degenerate/negative-coordinate geometries, packed masks and exact shaded bytes. Independent 6,000-layout / 2,577,763-row geometry check and 36 selected Python regressions pass. Rust compilation and live graphical CPU/PSS verification are pending. See `docs/history/PERFORMANCE_X11_SHADOW_ROW_STREAMING_PASS7_2026-10-27.md`.
 
 ## Unreleased — X11 selection-shadow allocation and GC optimization, pass 6 (2026-10-27)
 
 - Reuse one temporary BGRX compositing buffer across all damaged shadow regions per desktop-selection update; release it at the end of the event.
 - Create one X11 graphics context lazily per update instead of per affected window, with cleanup attempted even on upload errors.
 - Resolve the visible compact shadow strip once per region instead of checking both strips per pixel, preserving the original lookup for nonstandard regions.
-- Add Rust pixel-equivalence regression coverage and verify 1,018,240 random strip offsets and 36 Python tests. Rust compilation and graphical tests remain pending. See `docs/PERFORMANCE_X11_SELECTION_SHADOW_PASS6_2026-10-27.md`.
+- Add Rust pixel-equivalence regression coverage and verify 1,018,240 random strip offsets and 36 Python tests. Rust compilation and graphical tests remain pending. See `docs/history/PERFORMANCE_X11_SELECTION_SHADOW_PASS6_2026-10-27.md`.
 
 ## Unreleased — X11 shadow shape-mask protocol optimization, pass 5 (2026-10-27)
 
 - Merge vertically adjacent, identical X Shape rows into one rectangle while preserving the pixel-exact mask (including taper, rounded corner and frame interior exclusion). For a 1280×720 frame, 729 nonempty row rectangles become 32.
 - Skip rebuilding/resending the X Shape mask when an existing shadow is reshaded without resizing; changes in focus, backdrop or window position do not change the window-local silhouette. New windows and width/height changes still update the mask.
-- Add Rust shape-coverage and invalidation tests, plus independent geometry checks. Selected Python regressions pass; Rust compilation and live X11 results remain pending. See `docs/PERFORMANCE_X11_SHAPE_MASK_PASS5_2026-10-27.md`.
+- Add Rust shape-coverage and invalidation tests, plus independent geometry checks. Selected Python regressions pass; Rust compilation and live X11 results remain pending. See `docs/history/PERFORMANCE_X11_SHAPE_MASK_PASS5_2026-10-27.md`.
 
 ## Unreleased — X11 shadow CPU/allocation optimization, pass 4 (2026-10-27)
 
 - Reuse wanted-frame, membership, geometry, output-layout and dragging buffers across X11 WM shadow reconciliation turns. Preserve sorting, hash contents and generation transitions while eliminating warm-state `Vec` allocator churn.
 - Precompute the existing shadow opacity falloff at its 17 possible visible distances, replacing repeated floating-point work inside selection-shadow recomposition and initial visible-window shadow shading with integer lookups; retain the previous functions as visual-parity references.
-- Add hash/gesture generation and per-pixel attenuation equivalence unit tests. Python regression suites and an independent float32 surrogate pass; Rust and graphical release verification remain pending. See `docs/PERFORMANCE_X11_SHADOW_CPU_PASS4_2026-10-27.md`.
+- Add hash/gesture generation and per-pixel attenuation equivalence unit tests. Python regression suites and an independent float32 surrogate pass; Rust and graphical release verification remain pending. See `docs/history/PERFORMANCE_X11_SHADOW_CPU_PASS4_2026-10-27.md`.
 
 ## Unreleased — X11 desktop selection shadow-damage optimization, pass 3 (2026-10-27)
 
 - Avoid recompositing unchanged selection-fill pixels under X11 floating-window shadows: when a rubber rectangle changes size without moving its top-left origin or colours, invalidate only the right/bottom edge bands, clipped to the visible shadow strips. Other movement and style changes retain the conservative path.
 - Reuse one X11 graphics context for the affected regions of each shadow during selection updates, with cleanup attempted even when a region upload fails.
-- Add Rust pixel-coverage and fallback-path regressions. An independent 2,400-case geometry differential passed. See `docs/PERFORMANCE_X11_SELECTION_DAMAGE_PASS3_2026-10-27.md`; Rust compilation and live visual proof remain pending.
+- Add Rust pixel-coverage and fallback-path regressions. An independent 2,400-case geometry differential passed. See `docs/history/PERFORMANCE_X11_SELECTION_DAMAGE_PASS3_2026-10-27.md`; Rust compilation and live visual proof remain pending.
 
 ## Unreleased — X11 interaction hot-path optimization, pass 2 (2026-10-27)
 
 - Cache X11 ARGB visual discovery per display rather than repeating it during text-shadow and image uploads.
 - Memoize fixed dock/ring XShape geometry with exact dimensions/parameters and invalidation after clipping/errors; leave dynamic coverage shapes unchanged.
 - Avoid shadow generation/hashing when no floating/retained shadows exist, and reuse one successful X11 root-stacking lookup per batch of shadow refreshes.
-- Add targeted Rust tests and document source-grounded savings, exclusions, and outstanding live validation in `docs/PERFORMANCE_X11_HOTPATH_PASS2_2026-10-27.md`.
+- Add targeted Rust tests and document source-grounded savings, exclusions, and outstanding live validation in `docs/history/PERFORMANCE_X11_HOTPATH_PASS2_2026-10-27.md`.
 
 ## Unreleased — X11 shadow working-set optimization (2026-10-27)
 
 - Retain only the right/bottom BGRX strips visible through the frame shadow's X Shape mask, instead of a full unshaded per-window snapshot. The full temporary readback is released after the initial upload; no additional persistent cache is introduced.
 - Restrict live desktop-selection shadow recomposition and X11 image transfers to those visible bands rather than the old/new bounding region across the hidden frame interior. Pixel blending/shading logic remains shared with the original reference path.
 - Shade only shaped, visible pixels when creating/refocusing window shadows. Keep the X11 pixmap, window shape, event/drag ordering, and Wayland paths unchanged.
-- Add strip coverage, compact/full compositing equivalence, shading equivalence and memory-ratio unit tests. See `docs/PERFORMANCE_SHADOW_STRIPS_2026-10-27.md` for calculated gains and missing runtime verification.
+- Add strip coverage, compact/full compositing equivalence, shading equivalence and memory-ratio unit tests. See `docs/history/PERFORMANCE_SHADOW_STRIPS_2026-10-27.md` for calculated gains and missing runtime verification.
 
 ## Unreleased — Wayland cursor, CPU and memory pass
 
@@ -222,7 +222,7 @@ whole-session CPU median 8.2% -> 4.1%, allocated memory (heap + anonymous) 174 M
 - Display desktop launcher Name metadata, including locale values, independently from launchability.
 - Register Super+E / Ctrl+Alt+E and Super+T / Ctrl+Alt+T through canonical X11 shortcut grabs.
 - Add a read-only installed-system diagnostic for KDE Wallet service visibility, MIME defaults, and monitor topology.
-- Full draggable monitor arrangement, live drag-ghost visibility, and KDE Wallet/MIME provider integration still require native work. See docs/FLAMEWM_PASS23_INSTALLED_PRODUCTION_STABILITY.md.
+- Full draggable monitor arrangement, live drag-ghost visibility, and KDE Wallet/MIME provider integration still require native work. See docs/history/FLAMEWM_PASS23_INSTALLED_PRODUCTION_STABILITY.md.
 
 
 ## Pass 22 — Debian release recovery (2026-10-19)
