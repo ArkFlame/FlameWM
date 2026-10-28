@@ -499,7 +499,9 @@ impl Application {
             return Ok(());
         }
         if matches!(event.phase, UiActionPhase::Hover | UiActionPhase::Motion) {
-            let next = event.action.strip_prefix("tm.row.")
+            let next = event
+                .action
+                .strip_prefix("tm.row.")
                 .and_then(|slot| slot.parse::<usize>().ok())
                 .filter(|slot| *slot < self.rows.len());
             if next != self.hovered {
