@@ -268,6 +268,14 @@ fn run_session(
             FdAction::Continue
         },
     )?;
+    let _heap_trim_registration = reactor
+        .borrow_mut()
+        .register_timer(
+            STARTUP_HEAP_TRIM_DELAY,
+            false,
+            flamewm_render_x11::release_free_heap,
+        )
+        .map_err(|error| AnyError::from(io::Error::other(error.to_string())))?;
     // Settings owner wake: SelectionClear on the manager connection is observed
     // without waiting for the next publish. A failed registration leaves the WM
     // running without live XSettings wake, like a refused claim.
@@ -789,6 +797,9 @@ struct ProviderRegistration {
     events: FdEvents,
     token: RegistrationToken,
 }
+
+/// Once startup (catalog, icon index, first frames) has settled, its freed heap is handed back.
+const STARTUP_HEAP_TRIM_DELAY: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// CPU sample cadence while the battery menu is open.
 const POWER_CPU_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);

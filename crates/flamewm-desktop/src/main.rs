@@ -275,6 +275,9 @@ fn update_gauges(state: &DesktopState) {
     icon_gauge().set(state.icons.memory_estimate_bytes() as u64);
 }
 
+/// Once startup (wallpaper decode, icon loads, first paints) has settled, its freed heap is handed
+/// back.
+const STARTUP_HEAP_TRIM_DELAY: Duration = Duration::from_secs(10);
 const SLOT_COUNT: usize = 128;
 const BLANK_ROW_IDS: [&str; 5] = [
     "menu-row-terminal",
@@ -593,6 +596,13 @@ pub fn main() -> Result<(), String> {
             )
             .map_err(|error| format!("register profiler timer: {error}"))?;
     }
+    reactor
+        .register_timer(
+            STARTUP_HEAP_TRIM_DELAY,
+            false,
+            flamewm_ui_x11::release_free_heap,
+        )
+        .map_err(|error| format!("register startup heap trim: {error}"))?;
     sticky::attach_persist_wake(&mut state_cell.borrow_mut().sticky, &reactor);
     // Panel strut changes arrive as control signals. The signal handler only
     // sets this flag; the reactor tick re-resolves the work area once per burst.
