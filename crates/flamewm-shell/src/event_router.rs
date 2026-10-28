@@ -5,9 +5,9 @@ use flamewm_ui_x11::{
     ActionPhase, PointerButton, SurfaceEvent, SurfaceRuntime, UiBackendError, UiDocumentAccess,
 };
 
-use crate::entry::app::{is_popup_refusal, shell_slow_note, ShellLoop};
-use flamewm_shell::quick_controls::host::is_quick_popup_title;
+use crate::entry::app::{ShellLoop, is_popup_refusal, shell_slow_note};
 use flamewm_shell::quick_controls::QuickControlKind;
+use flamewm_shell::quick_controls::host::is_quick_popup_title;
 use flamewm_shell::runtime::InteractionContext;
 
 /// C07 stage helper: open a static profiler span. Static labels only.
@@ -1086,7 +1086,10 @@ mod tests {
             general_settings_launch("taskbar.menu.settings"),
             Some("flamewm-settings")
         );
-        assert_eq!(general_settings_launch("taskbar.menu.task-manager"), Some(TASK_MANAGER_PROGRAM));
+        assert_eq!(
+            general_settings_launch("taskbar.menu.task-manager"),
+            Some(TASK_MANAGER_PROGRAM)
+        );
         assert_eq!(general_settings_launch("taskbar.menu.new-desktop"), None);
         assert_eq!(general_settings_launch("task.menu.close"), None);
     }
