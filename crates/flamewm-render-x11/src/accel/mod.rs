@@ -1,0 +1,230 @@
+mod gles;
+
+use std::cell::RefCell;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, Ordering};
+
+pub const RENDER_ACCELERATION_SETTING: &str = "renderAcceleration";
+
+const MIN_GPU_PIXELS: usize = 64 * 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RenderAcceleration {
+    #[default]
+    Cpu,
+    Gpu,
+}
+
+impl RenderAcceleration {
+    #[must_use]
+    pub fn from_setting(value: &str) -> Self {
+        if value.trim().eq_ignore_ascii_case("gpu") {
+            Self::Gpu
+        } else {
+            Self::Cpu
+        }
+    }
+
+    #[must_use]
+    pub const fn as_setting(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Gpu => "gpu",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AccelerationStatus {
+    pub requested: RenderAcceleration,
+    pub gpu_renderer: Option<String>,
+    pub gpu_error: Option<String>,
+}
+
+static REQUESTED: AtomicU8 = AtomicU8::new(0);
+static STATUS: Mutex<(Option<String>, Option<String>)> = Mutex::new((None, None));
+
+enum GpuSlot {
+    Untried,
+    Ready(Box<gles::GpuBlur>),
+    Failed,
+}
+
+thread_local! {
+    static GPU: RefCell<GpuSlot> = const { RefCell::new(GpuSlot::Untried) };
+}
+
+pub fn set_render_acceleration(mode: RenderAcceleration) {
+    let previous = REQUESTED.swap(mode as u8, Ordering::Relaxed);
+    if previous != mode as u8 && mode == RenderAcceleration::Gpu {
+        GPU.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if matches!(*slot, GpuSlot::Failed) {
+                *slot = GpuSlot::Untried;
+            }
+        });
+    }
+}
+
+#[must_use]
+pub fn render_acceleration() -> RenderAcceleration {
+    if REQUESTED.load(Ordering::Relaxed) == RenderAcceleration::Gpu as u8 {
+        RenderAcceleration::Gpu
+    } else {
+        RenderAcceleration::Cpu
+    }
+}
+
+#[must_use]
+pub fn render_acceleration_status() -> AccelerationStatus {
+    let (gpu_renderer, gpu_error) = STATUS
+        .lock()
+        .map(|status| status.clone())
+        .unwrap_or_default();
+    AccelerationStatus {
+        requested: render_acceleration(),
+        gpu_renderer,
+        gpu_error,
+    }
+}
+
+fn record(renderer: Option<String>, error: Option<String>) {
+    if let Ok(mut status) = STATUS.lock() {
+        *status = (renderer, error);
+    }
+}
+
+pub(crate) fn gpu_blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: f32) -> bool {
+    if render_acceleration() != RenderAcceleration::Gpu
+        || radius < 0.5
+        || (width as usize) * (height as usize) < MIN_GPU_PIXELS
+    {
+        return false;
+    }
+    GPU.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if matches!(*slot, GpuSlot::Untried) {
+            *slot = match gles::GpuBlur::new() {
+                Ok(gpu) => {
+                    eprintln!("flamewm-render-x11: GPU acceleration on {}", gpu.renderer());
+                    record(Some(gpu.renderer().to_owned()), None);
+                    GpuSlot::Ready(Box::new(gpu))
+                }
+                Err(error) => {
+                    eprintln!(
+                        "flamewm-render-x11: GPU acceleration unavailable, using CPU: {error}"
+                    );
+                    record(None, Some(error));
+                    GpuSlot::Failed
+                }
+            };
+        }
+        let GpuSlot::Ready(gpu) = &mut *slot else {
+            return false;
+        };
+        match gpu.blur_rgba(pixels, width, height, radius / 2.0) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("flamewm-render-x11: GPU blur failed, using CPU: {error}");
+                record(None, Some(error));
+                *slot = GpuSlot::Failed;
+                false
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setting_values_parse_case_insensitively_and_default_to_cpu() {
+        assert_eq!(
+            RenderAcceleration::from_setting("GPU"),
+            RenderAcceleration::Gpu
+        );
+        assert_eq!(
+            RenderAcceleration::from_setting(" gpu "),
+            RenderAcceleration::Gpu
+        );
+        assert_eq!(
+            RenderAcceleration::from_setting("cpu"),
+            RenderAcceleration::Cpu
+        );
+        assert_eq!(
+            RenderAcceleration::from_setting("vulkan"),
+            RenderAcceleration::Cpu
+        );
+        assert_eq!(RenderAcceleration::Gpu.as_setting(), "gpu");
+    }
+
+    #[test]
+    fn gaussian_weights_are_normalized_and_bounded() {
+        for sigma in [0.3_f32, 1.0, 3.0, 6.0, 40.0] {
+            let weights = gles::gaussian_weights(sigma);
+            let total = weights[0] + 2.0 * weights[1..].iter().sum::<f32>();
+            assert!((total - 1.0).abs() < 1e-4, "sigma {sigma}: {total}");
+            assert!(weights.len() <= 33);
+            assert!(weights.windows(2).all(|pair| pair[0] >= pair[1]));
+        }
+        assert_eq!(gles::downscale_factor(3.0), 1);
+        assert_eq!(gles::downscale_factor(6.0), 2);
+        assert_eq!(gles::downscale_factor(12.0), 4);
+    }
+
+    #[test]
+    fn gpu_blur_matches_the_cpu_blur_when_a_gpu_is_present() {
+        let (width, height) = (160_u32, 120_u32);
+        let source: Vec<u8> = (0..width * height)
+            .flat_map(|index| {
+                let x = index % width;
+                let y = index / width;
+                let stripe = if (x / 20 + y / 20) % 2 == 0 { 230 } else { 30 };
+                [
+                    stripe,
+                    (x * 255 / width) as u8,
+                    (y * 255 / height) as u8,
+                    255,
+                ]
+            })
+            .collect();
+        for radius in [4.0_f32, 12.0, 24.0] {
+            let mut cpu = source.clone();
+            flamewm_image_core::blur::gaussian_blur_rgba(&mut cpu, width, height, radius)
+                .expect("cpu blur");
+            let mut gpu = source.clone();
+            let mut context = match gles::GpuBlur::new() {
+                Ok(context) => context,
+                Err(error) => {
+                    eprintln!("skipping GPU comparison: {error}");
+                    return;
+                }
+            };
+            context
+                .blur_rgba(&mut gpu, width, height, radius / 2.0)
+                .expect("gpu blur");
+            let margin = (radius * 2.0) as u32;
+            let mut total = 0_u64;
+            let mut count = 0_u64;
+            for y in margin..height - margin {
+                for x in margin..width - margin {
+                    let index = ((y * width + x) * 4) as usize;
+                    for channel in 0..4 {
+                        total += u64::from(cpu[index + channel].abs_diff(gpu[index + channel]));
+                        count += 1;
+                    }
+                }
+            }
+            let mean = total as f64 / count as f64;
+            assert!(
+                mean < 6.0,
+                "radius {radius}: mean channel difference {mean:.2}"
+            );
+            eprintln!(
+                "GPU {} radius {radius}: mean difference {mean:.2}",
+                context.renderer()
+            );
+        }
+    }
+}
