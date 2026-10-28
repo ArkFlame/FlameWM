@@ -1,3 +1,9 @@
+## 2026-10-28 — Idle Desktop memory and live backdrops on move
+
+- Idle Desktop drops to 26.0 MiB PSS. Xft and its font libraries load on the first text draw, icon theme directories and index files are scanned on the first themed lookup, and identical node styles in compiled documents are shared.
+- A moved window's translucent backdrop now updates as soon as it lands instead of on the next mouse move: the render loop no longer blocks while damage is latched.
+- `tools/flamewm_visual_tests.py idle-memory` reports idle CPU, can open the apps (`--suite`), list each process's largest mappings (`--detail`) and run the binaries laid out like the package (`--packaged`).
+
 ## 2026-10-28 — Lower idle memory and a new Task Manager
 
 - Cut idle session memory from 51.3 MiB to 39.2 MiB PSS with the default wallpaper, and to 31.1 MiB with a black solid one: the desktop no longer keeps a second copy of the wallpaper, release builds use fat LTO, the icon index stores its names in one buffer, and the WM, desktop and shell hand freed heap back once startup settles.
