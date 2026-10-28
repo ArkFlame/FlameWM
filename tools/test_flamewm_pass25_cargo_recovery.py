@@ -21,13 +21,13 @@ class Pass25DesktopCoreRecoveryTests(unittest.TestCase):
         gate = script.index('python3 -I tools/ensure_desktop_conversion_cargo.py --profile release --include-ui\n')
         cargo = script.index('cargo build --release --workspace')
         self.assertLess(gate, cargo)
-        self.assertLess(script.index('rm -rf "$DIST"'), gate)
+        self.assertLess(script.index('rm -rf "${DEB_LANE_ARTIFACTS[@]}"'), gate)
         self.assertNotIn('--include-ui --force', script)
 
     def test_build_deb_preflights_source_manifest_before_gate_and_cargo(self):
         script = (ROOT / 'scripts/build-deb').read_text()
         preflight = script.index('scripts/package-source-archive --check "$ROOT" packaging/source-manifest.txt')
-        self.assertLess(script.index('rm -rf "$DIST"'), preflight)
+        self.assertLess(script.index('rm -rf "${DEB_LANE_ARTIFACTS[@]}"'), preflight)
         self.assertLess(preflight, script.index('tools/ensure_desktop_conversion_cargo.py'))
         self.assertLess(preflight, script.index('cargo build --release --workspace'))
 
