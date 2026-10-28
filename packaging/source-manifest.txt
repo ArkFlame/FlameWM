@@ -1,4 +1,5 @@
 # Source archive allowlist: one root-relative path per line; trailing slash includes a tree.
+FINISH_LINE_VERIFICATION.md
 AGENTS.md
 .cargo/
 .github/
