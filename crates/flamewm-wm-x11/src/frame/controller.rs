@@ -100,6 +100,7 @@ pub struct ControllerState {
     pub last_title_click: Option<TitleClick>,
     /// `false`: motion only moves an outline; the real frame/client change on release.
     pub contents_while_dragging: bool,
+    pub window_margin: i32,
     /// Pointer and snap target of the last move motion applied; a repeat is skipped.
     pub last_motion: Option<(RootPoint, flamewm_window_core::SnapTarget)>,
 }
@@ -138,8 +139,19 @@ impl ControllerState {
             extents,
             last_title_click: None,
             contents_while_dragging: true,
+            window_margin: 0,
             last_motion: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_window_margin(mut self, margin: i32) -> Self {
+        self.window_margin = margin.max(0);
+        self
+    }
+
+    fn layout_rect(&self, tile: RootRect) -> RootRect {
+        margined_rect(tile, self.work_area, self.window_margin)
     }
 
     #[must_use]
@@ -304,6 +316,15 @@ fn release_tail(contents_while_dragging: bool, effects: Vec<FrameEffect>) -> Vec
         tail.insert(0, FrameEffect::DragOutline { rect: None });
     }
     tail
+}
+
+fn margined_rect(tile: RootRect, work_area: RootRect, margin: i32) -> RootRect {
+    let rect = flamewm_window_core::apply_window_margin(
+        flamewm_api::Rect::new(tile.x, tile.y, tile.w, tile.h),
+        flamewm_api::Rect::new(work_area.x, work_area.y, work_area.w, work_area.h),
+        margin,
+    );
+    RootRect::new(rect.x, rect.y, rect.width, rect.height)
 }
 
 fn snap_rect(work_area: RootRect, target: SnapTarget) -> RootRect {
@@ -684,7 +705,7 @@ pub fn reduce_owned(
             (state, effects)
         }
         FrameEvent::Snap { target } => {
-            let rect = snap_rect(state.work_area, target);
+            let rect = state.layout_rect(snap_rect(state.work_area, target));
             state.session = InteractionSession::Idle;
             if state.placement.mode == PlacementMode::Floating {
                 state.placement.resume = Some(PlacementSnapshot {
@@ -794,7 +815,7 @@ fn toggle_placement(
 }
 
 fn toggle_max(state: ControllerState) -> (ControllerState, Vec<FrameEffect>) {
-    let work_area = state.work_area;
+    let work_area = state.layout_rect(state.work_area);
     toggle_placement(state, PlacementMode::Maximized, work_area)
 }
 
@@ -1217,6 +1238,20 @@ mod tests {
             target: Some(SnapTarget::Left)
         }));
         assert!(has_frame(&e1, 0, 0));
+    }
+
+    #[test]
+    fn window_margin_insets_snapped_and_maximized_frames() {
+        let s0 = floating_state().with_window_margin(2);
+        let (snapped, _) = reduce(
+            &s0,
+            FrameEvent::Snap {
+                target: SnapTarget::Left,
+            },
+        );
+        assert_eq!(snapped.placement.current, RootRect::new(2, 2, 957, 1076));
+        let (maximized, _) = reduce(&s0, FrameEvent::ToggleMax);
+        assert_eq!(maximized.placement.current, RootRect::new(2, 2, 1916, 1076));
     }
 
     #[test]
