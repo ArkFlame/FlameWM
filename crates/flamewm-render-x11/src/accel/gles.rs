@@ -721,7 +721,7 @@ impl GpuBlur {
         }
     }
 
-    pub(crate) fn blur_rgba(
+    pub(crate) fn blur_sigma(
         &mut self,
         pixels: &mut [u8],
         width: u32,

@@ -7,6 +7,55 @@ use std::sync::atomic::{AtomicU8, Ordering};
 pub const RENDER_ACCELERATION_SETTING: &str = "renderAcceleration";
 
 const MIN_GPU_PIXELS: usize = 64 * 64;
+const CPU_SCRATCH_RETAIN_BUDGET_BYTES: usize = 4 * 1024 * 1024;
+
+pub(crate) trait PixelBackend {
+    fn blur_rgba(
+        &mut self,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        radius: f32,
+    ) -> Result<(), String>;
+}
+
+#[derive(Default)]
+struct CpuPixels {
+    scratch: flamewm_image_core::blur::BlurScratch,
+}
+
+impl PixelBackend for CpuPixels {
+    fn blur_rgba(
+        &mut self,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        radius: f32,
+    ) -> Result<(), String> {
+        let result = flamewm_image_core::blur::gaussian_blur_rgba_with(
+            &mut self.scratch,
+            pixels,
+            width,
+            height,
+            radius,
+        );
+        self.scratch
+            .release_if_over_budget(CPU_SCRATCH_RETAIN_BUDGET_BYTES);
+        result.map_err(|error| format!("{error:?}"))
+    }
+}
+
+impl PixelBackend for gles::GpuBlur {
+    fn blur_rgba(
+        &mut self,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        radius: f32,
+    ) -> Result<(), String> {
+        self.blur_sigma(pixels, width, height, radius / 2.0)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RenderAcceleration {
@@ -52,6 +101,7 @@ enum GpuSlot {
 
 thread_local! {
     static GPU: RefCell<GpuSlot> = const { RefCell::new(GpuSlot::Untried) };
+    static CPU: RefCell<CpuPixels> = RefCell::default();
 }
 
 pub fn set_render_acceleration(mode: RenderAcceleration) {
@@ -122,7 +172,7 @@ pub(crate) fn gpu_blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: 
         let GpuSlot::Ready(gpu) = &mut *slot else {
             return false;
         };
-        match gpu.blur_rgba(pixels, width, height, radius / 2.0) {
+        match PixelBackend::blur_rgba(gpu.as_mut(), pixels, width, height, radius) {
             Ok(()) => true,
             Err(error) => {
                 eprintln!("flamewm-render-x11: GPU blur failed, using CPU: {error}");
@@ -132,6 +182,16 @@ pub(crate) fn gpu_blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: 
             }
         }
     })
+}
+
+pub(crate) fn blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
+    if gpu_blur_rgba(pixels, width, height, radius) {
+        return;
+    }
+    let result = CPU.with(|cpu| cpu.borrow_mut().blur_rgba(pixels, width, height, radius));
+    if let Err(error) = result {
+        eprintln!("flamewm-render-x11: backdrop blur skipped: {error}");
+    }
 }
 
 #[cfg(test)]
@@ -201,8 +261,7 @@ mod tests {
                     return;
                 }
             };
-            context
-                .blur_rgba(&mut gpu, width, height, radius / 2.0)
+            PixelBackend::blur_rgba(&mut context, &mut gpu, width, height, radius)
                 .expect("gpu blur");
             let margin = (radius * 2.0) as u32;
             let mut total = 0_u64;
