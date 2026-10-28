@@ -91,6 +91,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
+use flamewm_api::graphics::{DisplayProtocol, choose_provider};
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::winit::{WinitEvent, init_from_attributes};
 use smithay::output::Scale;
@@ -100,8 +101,6 @@ use smithay::reexports::calloop::{EventLoop, Interest, LoopHandle, Mode, PostAct
 use smithay::reexports::wayland_server::Display;
 use smithay::reexports::winit::dpi::PhysicalSize;
 use smithay::reexports::winit::window::WindowAttributes;
-use smithay::reexports::x11rb::connection::Connection;
-use smithay::reexports::x11rb::rust_connection::RustConnection;
 use smithay::utils::Transform;
 use smithay::wayland::socket::ListeningSocketSource;
 
@@ -456,6 +455,12 @@ fn abort_startup(reason: &str) {
 fn run() -> Result<i32, Box<dyn Error>> {
     // Before any thread or child exists: XWayland, the session clients and the compositor's own
     // pointer read the theme from this process's environment.
+    let graphics_request = std::env::var("FLAMEWM_WAYLAND_RENDER_PROVIDER").ok();
+    let graphics = choose_provider(DisplayProtocol::Wayland, graphics_request.as_deref(), false)?;
+    eprintln!(
+        "FLAMEWM_RENDER_PROVIDER {} gpu=driver-dependent",
+        graphics.name()
+    );
     cursor::export_session_theme(cursor::saved_theme().as_deref());
     let explicit = std::env::var("FLAMEWM_WAYLAND_BACKEND").ok();
     let backend = select_backend(explicit.as_deref());
@@ -746,39 +751,25 @@ fn init_winit(
     Ok(())
 }
 
-/// Initial size of the nested window. Without one winit picks 1280x800, so the compositor shows up
-/// smaller than the host screen and the rest of the host is unpainted. An explicit override wins;
-/// a Wayland host is asked to maximize us; an X11 host gets the root size, because there may be no
-/// window manager to tile the window (Xephyr).
+/// Match the Xephyr development viewport unless the caller supplies a size. Using the
+/// host root size (or maximizing the nested winit window) used to hide FlameWM's bottom
+/// panel behind the host desktop panel/titlebar, especially at fractional host scaling.
+/// Both native and X11 development harnesses must start with the same *content* size.
+const NESTED_DEFAULT_WIDTH: u32 = 1350;
+const NESTED_DEFAULT_HEIGHT: u32 = 641;
+
 fn nested_window_attributes() -> WindowAttributes {
-    if let Some((width, height)) = explicit_window_size() {
-        return WindowAttributes::default().with_inner_size(PhysicalSize::new(width, height));
-    }
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        // Wayland host: let its compositor tile us to the usable area.
-        return WindowAttributes::default().with_maximized(true);
-    }
-    match host_root_size() {
-        Some((width, height)) => {
-            WindowAttributes::default().with_inner_size(PhysicalSize::new(width, height))
-        }
-        None => WindowAttributes::default(),
-    }
+    let (width, height) =
+        explicit_window_size().unwrap_or((NESTED_DEFAULT_WIDTH, NESTED_DEFAULT_HEIGHT));
+    WindowAttributes::default()
+        .with_title("FlameWM Wayland (nested)")
+        .with_inner_size(PhysicalSize::new(width, height))
 }
 
 fn explicit_window_size() -> Option<(u32, u32)> {
     let width = std::env::var("FLAMEWM_WAYLAND_WIDTH").ok()?.parse().ok()?;
     let height = std::env::var("FLAMEWM_WAYLAND_HEIGHT").ok()?.parse().ok()?;
     Some((width, height))
-}
-
-fn host_root_size() -> Option<(u32, u32)> {
-    let (connection, screen) = RustConnection::connect(None).ok()?;
-    let root = connection.setup().roots.get(screen)?;
-    Some((
-        u32::from(root.width_in_pixels),
-        u32::from(root.height_in_pixels),
-    ))
 }
 
 #[cfg(test)]

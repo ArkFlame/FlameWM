@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Run FlameWM as a nested full Wayland desktop, using the same content size as ./scripts/xephyr.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$ROOT"
+if [[ "${1:-}" == "--help" ]]; then
+  echo 'Usage: ./scripts/wayland  (FLAMEWM_WAYLAND_BUILD=0 to skip release build)'
+  echo 'FLAMEWM_WAYLAND_WIDTH/HEIGHT=1350/641 (same as Xephyr defaults)'
+  exit 0
+fi
+[[ $# -eq 0 ]] || { echo 'No positional arguments supported' >&2; exit 2; }
+[[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] || { echo 'Nested backend requires an existing graphical session.' >&2; exit 1; }
+if ! command -v dbus-run-session >/dev/null; then echo 'Install dbus-run-session' >&2; exit 1; fi
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/.target}"
+[[ "$TARGET_DIR" == /* ]] || TARGET_DIR="$ROOT/$TARGET_DIR"
+export CARGO_TARGET_DIR="$TARGET_DIR"
+export FLAMEWM_WAYLAND_BACKEND=winit
+export FLAMEWM_WAYLAND_WIDTH="${FLAMEWM_WAYLAND_WIDTH:-1350}"
+export FLAMEWM_WAYLAND_HEIGHT="${FLAMEWM_WAYLAND_HEIGHT:-641}"
+export XDG_MENU_PREFIX=flamewm-
+export RWR_UI_FONT="${RWR_UI_FONT:-IBM Plex Sans}"
+if [[ "${FLAMEWM_WAYLAND_BUILD:-1}" == 1 ]]; then
+  # Catch malformed workspace features before Cargo traverses and obscures the failing owner.
+  python3 -I tools/verify_cargo_manifests.py
+  command -v cargo >/dev/null || { echo 'cargo is required' >&2; exit 1; }
+  cargo build --release -p flamewm-wm-wayland -p flamewm-desktop -p flamewm-shell \
+      -p flamewm-terminal -p flamewm-explorer -p flamewm-settings -p flamewm-task-manager
+elif [[ "${FLAMEWM_WAYLAND_BUILD:-1}" != 0 ]]; then
+  echo 'FLAMEWM_WAYLAND_BUILD must be 0 or 1' >&2; exit 2
+fi
+for bin in flamewm-wayland flamewm-shell flamewm-desktop; do
+  [[ -x "$TARGET_DIR/release/$bin" ]] || { echo "Missing $TARGET_DIR/release/$bin" >&2; exit 1; }
+done
+export PATH="$TARGET_DIR/release:$PATH"
+export FLAMEWM_WAYLAND_AUTOSTART="${FLAMEWM_WAYLAND_AUTOSTART:-$TARGET_DIR/release/flamewm-desktop:$TARGET_DIR/release/flamewm-shell}"
+# One private D-Bus session and an independent XWayland, never the host DISPLAY.
+exec dbus-run-session -- "$TARGET_DIR/release/flamewm-wayland"

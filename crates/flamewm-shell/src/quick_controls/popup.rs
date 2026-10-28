@@ -291,12 +291,16 @@ mod tests {
 
     #[test]
     fn popup_slide_follows_the_start_preference_and_panel_edge() {
-        let on = SettingsSnapshot::new(1);
+        let mut on = SettingsSnapshot::new(1);
+        on.values.insert(
+            "startAnimation".to_owned(),
+            SettingValue::Text("slide".to_owned()),
+        );
         assert_eq!(
             popup_slide(&on, PanelEdge::Top),
             Some(SlideConfig::slide(SlideEdge::Top, 100))
         );
-        let mut off = SettingsSnapshot::new(1);
+        let mut off = on.clone();
         off.values
             .insert("animationsEnabled".to_owned(), SettingValue::Boolean(false));
         assert_eq!(

@@ -2082,7 +2082,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_slide_up_migrates_to_slide_and_stays_unwritten_at_default() {
+    fn legacy_slide_up_migrates_to_slide_and_is_written_canonically() {
         let parsed = load("revision=2\nstartAnimation=slide-up\n").expect("legacy alias");
         assert_eq!(parsed.start_animation, AnimationStyle::Slide);
         assert_eq!(
@@ -2090,10 +2090,7 @@ mod tests {
             SettingValue::Text("slide".to_owned())
         );
         let serialized = ConfigStore::serialize(&parsed);
-        assert!(
-            !serialized.contains("startAnimation"),
-            "default style stays unwritten"
-        );
+        assert!(serialized.contains("startAnimation=slide\n"));
         assert!(!serialized.contains("slide-up"));
     }
 
@@ -2142,11 +2139,8 @@ mod tests {
     #[test]
     fn animation_style_precedence_treats_disabled_or_none_as_none() {
         let mut settings = ProductSettings::default();
-        assert_eq!(settings.start_animation_style(), AnimationStyle::Slide);
-        assert_eq!(
-            settings.minimize_animation_style(),
-            AnimationStyle::MagicLamp
-        );
+        assert_eq!(settings.start_animation_style(), AnimationStyle::None);
+        assert_eq!(settings.minimize_animation_style(), AnimationStyle::None);
         assert_eq!(settings.maximize_animation_style(), AnimationStyle::None);
         assert_eq!(settings.window_open_animation_style(), AnimationStyle::None);
 
@@ -2210,9 +2204,15 @@ mod tests {
         assert_eq!(parsed.window_open_animation_style(), AnimationStyle::None);
         let serialized = ConfigStore::serialize(&parsed);
         assert!(serialized.contains("startAnimation=fade\n"));
-        assert!(serialized.contains("minimizeAnimation=none\n"));
+        assert!(
+            !serialized.contains("minimizeAnimation"),
+            "default stays unwritten"
+        );
         assert!(!serialized.contains("windowOpenAnimationEnabled="));
-        assert!(serialized.contains("windowCloseAnimation=none\n"));
+        assert!(
+            !serialized.contains("windowCloseAnimation"),
+            "default stays unwritten"
+        );
         assert_eq!(load(&serialized).expect("round trip"), parsed);
 
         let mut enabled = parsed;

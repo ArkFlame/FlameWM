@@ -1131,7 +1131,8 @@ mod tests {
 
     #[test]
     fn start_slide_maps_each_panel_edge() {
-        let snapshot = SettingsSnapshot::new(1);
+        let snapshot =
+            slide_snapshot(&[("startAnimation", SettingValue::Text("slide".to_owned()))]);
         let edge_of = |edge| start_slide(&snapshot, edge, None).map(|slide| slide.edge);
         assert_eq!(edge_of(PanelEdge::Bottom), Some(SlideEdge::Bottom));
         assert_eq!(edge_of(PanelEdge::Top), Some(SlideEdge::Top));
@@ -1140,8 +1141,14 @@ mod tests {
     }
 
     #[test]
-    fn start_slide_missing_keys_default_enabled_at_base_speed() {
-        let slide = start_slide(&SettingsSnapshot::new(1), PanelEdge::Bottom, None).expect("slide");
+    fn start_slide_missing_keys_default_to_immediate_and_slide_uses_base_speed() {
+        assert_eq!(
+            start_slide(&SettingsSnapshot::new(1), PanelEdge::Bottom, None),
+            None
+        );
+        let snapshot =
+            slide_snapshot(&[("startAnimation", SettingValue::Text("slide".to_owned()))]);
+        let slide = start_slide(&snapshot, PanelEdge::Bottom, None).expect("slide");
         assert_eq!(slide, SlideConfig::slide(SlideEdge::Bottom, 100));
     }
 
@@ -1221,7 +1228,10 @@ mod tests {
     #[test]
     fn start_slide_clamps_speed_to_supported_range() {
         let speed = |value| {
-            let snapshot = slide_snapshot(&[("animationSpeed", SettingValue::Integer(value))]);
+            let snapshot = slide_snapshot(&[
+                ("startAnimation", SettingValue::Text("slide".to_owned())),
+                ("animationSpeed", SettingValue::Integer(value)),
+            ]);
             start_slide(&snapshot, PanelEdge::Top, None)
                 .expect("slide")
                 .speed

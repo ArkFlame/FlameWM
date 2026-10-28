@@ -1,3 +1,5 @@
+#![cfg(feature = "pulse-audio")]
+
 //! Wave 3 audio stress: 200 typed ops through the real `PulseAdapter`.
 //! Restores original default-sink volume+mute in a finally path even on failure.
 

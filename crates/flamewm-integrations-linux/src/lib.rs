@@ -3,6 +3,7 @@
 //! This crate owns the native D-Bus adapters, while the reactor-neutral lifecycle and snapshot
 //! rules remain in `flamewm-integrations-core`.
 
+#[cfg(feature = "pulse-audio")]
 extern crate pulse as libpulse_binding;
 
 pub mod device_watch;
@@ -17,6 +18,7 @@ pub mod network_slot;
 pub mod notifications;
 pub mod portal_file_chooser;
 pub mod power;
+#[cfg(feature = "pulse-audio")]
 pub mod pulse;
 pub mod removable_mounts;
 pub mod themes;

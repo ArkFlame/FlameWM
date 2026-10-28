@@ -2,6 +2,7 @@
 //! toplevels in step with the pure `model::WindowModel`.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::Duration;
@@ -344,6 +345,8 @@ pub struct State {
     pub xwm: Option<X11Wm>,
     /// Managed X11 windows, keyed by the model identifier.
     pub x11: Vec<(WindowId, X11Surface)>,
+    /// Titles cached on map; never roundtrip to XWayland in the renderer hot path.
+    pub titles: HashMap<WindowId, String>,
     /// Override-redirect windows, docks and the desktop; the last entry is the topmost.
     pub unmanaged: Vec<Unmanaged>,
     /// DISPLAY number of the running `XWayland` server.
@@ -433,6 +436,7 @@ impl State {
             xwayland_shell,
             xwm: None,
             x11: Vec::new(),
+            titles: HashMap::new(),
             unmanaged: Vec::new(),
             display_number: None,
             props: None,
@@ -484,6 +488,13 @@ impl State {
             self.apply_geometry(id);
         }
         self.request_redraw();
+    }
+
+    pub fn window_title(&self, id: WindowId) -> &str {
+        self.titles
+            .get(&id)
+            .map(String::as_str)
+            .unwrap_or("FlameWM")
     }
 
     pub fn alloc_id(&mut self) -> WindowId {
@@ -791,6 +802,19 @@ fn set_state(
 /// Serial helper shared by handlers and input.
 pub fn next_serial() -> Serial {
     SERIAL_COUNTER.next_serial()
+}
+
+/// Child handles must not be abandoned when the nested compositor window closes: XWayland
+/// clients can otherwise survive and keep old DISPLAY/socket resources alive across tests.
+impl Drop for State {
+    fn drop(&mut self) {
+        for mut child in self.children.get_mut().drain(..) {
+            if matches!(child.try_wait(), Ok(None)) {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
 }
 
 #[cfg(test)]

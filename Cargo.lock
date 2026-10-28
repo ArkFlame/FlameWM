@@ -758,6 +758,7 @@ name = "flamewm-render-x11"
 version = "0.1.3"
 dependencies = [
  "calloop 0.14.4",
+ "flamewm-api",
  "flamewm-image-core",
  "flamewm-profiler",
  "flamewm-reactor",
@@ -943,6 +944,7 @@ dependencies = [
  "flamewm-platform",
  "flamewm-reactor",
  "flamewm-session-core",
+ "flamewm-skin",
  "log",
  "rustix 1.1.4",
  "smithay",

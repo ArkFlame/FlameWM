@@ -9,9 +9,13 @@ use std::collections::BTreeMap;
 use flamewm_api::shortcuts::KeyBinding;
 use flamewm_api::workspace::{GridDirection, MAX_WORKSPACES, grid_neighbor};
 
-pub const TITLEBAR_HEIGHT: i32 = 28;
-pub const BUTTON_SIZE: i32 = 16;
-pub const BUTTON_GAP: i32 = 6;
+pub const TITLEBAR_HEIGHT: i32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME
+    .metrics
+    .titlebar as i32;
+pub const BUTTON_SIZE: i32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME
+    .metrics
+    .button_width as i32;
+pub const BUTTON_GAP: i32 = 0;
 pub const RESIZE_GRIP: i32 = 12;
 pub const MIN_CLIENT_W: i32 = 120;
 pub const MIN_CLIENT_H: i32 = 80;
@@ -387,12 +391,7 @@ pub fn button_rect(frame: Rect, button: Button) -> Rect {
         Button::Maximize => right - 2 * slot,
         Button::Minimize => right - 3 * slot,
     };
-    Rect::new(
-        x,
-        frame.y + (TITLEBAR_HEIGHT - BUTTON_SIZE) / 2,
-        BUTTON_SIZE,
-        BUTTON_SIZE,
-    )
+    Rect::new(x, frame.y, BUTTON_SIZE, TITLEBAR_HEIGHT)
 }
 
 fn button_at(frame: Rect, px: f64, py: f64) -> Option<Button> {

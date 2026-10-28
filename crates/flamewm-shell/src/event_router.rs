@@ -1086,7 +1086,10 @@ mod tests {
             general_settings_launch("taskbar.menu.settings"),
             Some("flamewm-settings")
         );
-        assert_eq!(general_settings_launch("taskbar.menu.task-manager"), Some(TASK_MANAGER_PROGRAM));
+        assert_eq!(
+            general_settings_launch("taskbar.menu.task-manager"),
+            Some(TASK_MANAGER_PROGRAM)
+        );
         assert_eq!(general_settings_launch("taskbar.menu.new-desktop"), None);
         assert_eq!(general_settings_launch("task.menu.close"), None);
     }

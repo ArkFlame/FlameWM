@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-dbus = { version = "=0.9.12", default-features = false }
+dbus.workspace = true
 flamewm-api = { path = "../flamewm-api" }
 flamewm-integrations-core = { path = "../flamewm-integrations-core" }
 

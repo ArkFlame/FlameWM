@@ -2,6 +2,7 @@
 """Build a deterministic source archive from packaging/source-manifest.txt."""
 import gzip
 import os
+import subprocess
 from pathlib import Path, PurePosixPath
 import sys
 import tarfile
@@ -69,14 +70,19 @@ def write_archive(root: Path, manifest: Path, output: Path) -> None:
     # Validate the *entire* allowlist before opening an output. A missing
     # executable registry entry must never leave a misleading partial .tar.gz.
     entries = members(root, manifest)
+    manifest_guard = root / "tools/verify_cargo_manifests.py"
+    if (root / "Cargo.toml").is_file() and manifest_guard.is_file():
+        subprocess.run([sys.executable, "-I", str(manifest_guard), str(root)], check=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{output.name}.", dir=output.parent)
     try:
-        with os.fdopen(fd, "wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as zipped:
+        with os.fdopen(fd, "wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, compresslevel=3, mtime=0) as zipped:
             with tarfile.open(fileobj=zipped, mode="w|", format=tarfile.PAX_FORMAT) as archive:
                 for source, rel in entries:
                     if not source.resolve(strict=False).is_relative_to(root):
                         raise ValueError(f"path escapes source root: {rel}")
-                    info = archive.gettarinfo(str(source), arcname=f"{root.name}/{rel}")
+                    # Root-relative entries allow `tar -xzf <archive> -C <repo>` without
+                    # creating a nested flamewm/ tree that compiles stale source.
+                    info = archive.gettarinfo(str(source), arcname=rel)
                     info.uid = info.gid = 0
                     info.uname = info.gname = ""
                     info.mtime = int(os.environ.get("SOURCE_DATE_EPOCH", "0"))
@@ -86,6 +92,9 @@ def write_archive(root: Path, manifest: Path, output: Path) -> None:
                             archive.addfile(info, stream)
                     else:
                         archive.addfile(info)
+        # mkstemp creates mode 0600; published source releases must be readable
+        # by the user who downloads them, not just the builder's uid.
+        os.chmod(temporary, 0o644)
         os.replace(temporary, output)
     finally:
         if os.path.exists(temporary):
@@ -96,7 +105,10 @@ def check(root: Path, manifest: Path) -> int:
     """Read-only preflight: the same members() validation, no archive or output written."""
     try:
         entries = members(root.resolve(), manifest)
-    except (OSError, ValueError) as error:
+        manifest_guard = root / "tools/verify_cargo_manifests.py"
+        if (root / "Cargo.toml").is_file() and manifest_guard.is_file():
+            subprocess.run([sys.executable, "-I", str(manifest_guard), str(root)], check=True)
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"FLAMEWM-SOURCE-CHECK: BLOCKED: {error}", file=sys.stderr)
         return 2
     print(f"FLAMEWM-SOURCE-CHECK: {len(entries)} source members and executable registry validated")

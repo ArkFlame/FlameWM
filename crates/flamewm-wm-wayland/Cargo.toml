@@ -22,20 +22,20 @@ flamewm-control-wire = { path = "../flamewm-control-wire" }
 flamewm-platform = { path = "../flamewm-platform" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-session-core = { path = "../flamewm-session-core" }
+flamewm-skin = { path = "../flamewm-skin" }
 # A direct `log` dependency only so this crate can install a subscriber for smithay's own
 # diagnostics; the crate is already in the dependency graph through smithay.
 log = "0.4"
 # xcursor theme files for the compositor-drawn pointer; already in the graph through winit.
 xcursor = "0.3"
 rustix = { workspace = true, features = ["process"] }
-dbus = { version = "=0.9.12", default-features = false, optional = true }
+dbus = { workspace = true, optional = true }
 smithay = { version = "0.7", default-features = false, features = [
     "backend_winit",
     "backend_egl",
     "renderer_glow",
     "wayland_frontend",
     "desktop",
-    "backend_drm",
     "xwayland",
 ] }
 
@@ -45,6 +45,7 @@ smithay = { version = "0.7", default-features = false, features = [
 # No libseat: the session comes from systemd-logind, so the binary links only desktop-stock libraries.
 drm = [
     "dep:dbus",
+    "smithay/backend_drm",
     "smithay/backend_gbm",
     "smithay/backend_libinput",
     "smithay/backend_session",

@@ -5,6 +5,7 @@ use std::mem::MaybeUninit;
 use std::ptr;
 use std::rc::Rc;
 
+use flamewm_api::graphics::{DisplayProtocol, GraphicsProvider, choose_provider};
 use flamewm_render_core::{
     ActionEvent, ActionPhase, Color, CursorKind, InteractionState, LayoutEngine, LayoutResult,
     PaintCommand, PointerButton, Rect, RuntimeDocument, SurfaceDamage,
@@ -46,7 +47,7 @@ mod images;
 #[cfg(test)]
 mod region_equivalence_tests;
 mod xdnd;
-pub(crate) use images::upload_argb32_image;
+pub(crate) use images::{upload_argb32_image, upload_opaque_argb32_image};
 mod input;
 mod layout_helpers;
 mod live_backdrop;
@@ -320,22 +321,34 @@ impl X11App {
         let supported_argb = argb_visual.and_then(|visual| {
             let mask = unsafe { visual_alpha_mask(display, visual) };
             validate_argb32_visual(32, TRUE_COLOR_CLASS, mask)
-                .ok().map(|mode| (visual, mode))
+                .ok()
+                .map(|mode| (visual, mode))
         });
-        let (visual, depth, alpha_mode) = if config.role == X11WindowRole::Dock && compositor {
-            supported_argb.map_or_else(
-                || unsafe {
-                    (XDefaultVisual(display, screen), XDefaultDepth(display, screen),
-                     fallback_mode(shape_available(display)))
-                },
-                |(visual, mode)| (visual, 32, mode),
-            )
-        } else {
-            unsafe {
-                (XDefaultVisual(display, screen), XDefaultDepth(display, screen),
-                 fallback_mode(shape_available(display)))
-            }
-        };
+        // Core X11 cannot blend an ARGB dock surface: choose an opaque visual up front
+        // rather than producing a transparent/black panel after disabling XRender.
+        let core_requested =
+            std::env::var("FLAMEWM_X11_RENDER_PROVIDER").is_ok_and(|value| value.trim() == "core");
+        let (visual, depth, mut alpha_mode) =
+            if config.role == X11WindowRole::Dock && compositor && !core_requested {
+                supported_argb.map_or_else(
+                    || unsafe {
+                        (
+                            XDefaultVisual(display, screen),
+                            XDefaultDepth(display, screen),
+                            fallback_mode(shape_available(display)),
+                        )
+                    },
+                    |(visual, mode)| (visual, 32, mode),
+                )
+            } else {
+                unsafe {
+                    (
+                        XDefaultVisual(display, screen),
+                        XDefaultDepth(display, screen),
+                        fallback_mode(shape_available(display)),
+                    )
+                }
+            };
         if visual.is_null() {
             return Err("no usable visual for native surface".to_string());
         }
@@ -487,16 +500,37 @@ impl X11App {
         if let Some(font) = fonts.values().next().copied() {
             unsafe { XSetFont(display, gc, (*font).fid) };
         }
-        let xrender = match unsafe { XRenderBackend::new(display, backbuffer, visual) } {
-            Ok(backend) => {
-                eprintln!("FLAMEWM_RENDER_ALPHA_BACKEND xrender");
-                Some(backend)
-            }
+        let provider_request = std::env::var("FLAMEWM_X11_RENDER_PROVIDER").ok();
+        let mut xrender = match unsafe { XRenderBackend::new(display, backbuffer, visual) } {
+            Ok(backend) => Some(backend),
             Err(error) => {
                 eprintln!("FLAMEWM_RENDER_ALPHA_BACKEND opaque-fallback reason={error}");
                 None
             }
         };
+        let provider = match choose_provider(
+            DisplayProtocol::X11,
+            provider_request.as_deref(),
+            xrender.is_some(),
+        ) {
+            Ok(provider) => provider,
+            Err(error) => {
+                // A user-requested unavailable provider is an observable configuration failure,
+                // never a claim that GPU drawing was enabled.
+                eprintln!("FLAMEWM_RENDER_PROVIDER_ERROR {error}; using core fallback");
+                GraphicsProvider::XCore
+            }
+        };
+        if provider == GraphicsProvider::XCore {
+            xrender = None;
+            // Do not ask the renderer to produce translucent XRender operations when the
+            // selected provider has no compositing backend. Shape masks still work.
+            alpha_mode = SurfaceAlphaMode::OpaqueFallback;
+        }
+        eprintln!(
+            "FLAMEWM_RENDER_PROVIDER {} gpu=driver-dependent",
+            provider.name()
+        );
         // Shape bridge is render-owned: popup/menu rounded corners. Failure is
         // explicit degraded-rectangle mode, never a silent transparency claim.
         let xshape = match unsafe { XShapeBridge::new(display) } {

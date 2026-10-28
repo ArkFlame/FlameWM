@@ -148,6 +148,83 @@ pub(crate) unsafe fn upload_argb32_image(
     Ok(())
 }
 
+/// Upload a fully opaque ARGB32 image into a pixmap matching its X11 target depth.
+/// Core X11 cannot blend, and XCopyArea requires source/destination depths to match.
+/// The caller checks alpha before reaching this path.
+///
+/// # Safety
+/// `display`, `pixmap`, and the native X11 resources must remain valid during upload.
+pub(crate) unsafe fn upload_opaque_argb32_image(
+    display: *mut Display,
+    screen: i32,
+    pixmap: Pixmap,
+    depth: u32,
+    argb: &[u32],
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| "opaque X11 upload size overflow".to_string())?;
+    if argb.len() != expected || !argb.iter().all(|word| word >> 24 == 255) {
+        return Err("core X11 upload requires exactly width*height opaque pixels".to_string());
+    }
+    let visual = if depth == unsafe { XDefaultDepth(display, screen) } as u32 {
+        unsafe { XDefaultVisual(display, screen) }
+    } else {
+        let mut info: XVisualInfo = unsafe { std::mem::zeroed() };
+        if unsafe { XMatchVisualInfo(display, screen, depth as i32, TRUE_COLOR_CLASS, &mut info) }
+            == 0
+        {
+            return Err(format!("no TrueColor visual for core X11 depth {depth}"));
+        }
+        info.visual
+    };
+    if visual.is_null() {
+        return Err(format!("no usable visual for core X11 depth {depth}"));
+    }
+    let (ximage, _) = unsafe {
+        create_zeroed_ximage(
+            display,
+            visual,
+            depth,
+            "core X11 opaque upload",
+            width,
+            height,
+        )?
+    };
+    let head = unsafe { &*(ximage as *const XImageHead) };
+    for (index, &word) in argb.iter().enumerate() {
+        let color = rgb_to_pixel(
+            ((word >> 16) & 255) as u8,
+            ((word >> 8) & 255) as u8,
+            (word & 255) as u8,
+            head.red_mask as u64,
+            head.green_mask as u64,
+            head.blue_mask as u64,
+        );
+        unsafe {
+            XPutPixel(
+                ximage,
+                (index % width as usize) as i32,
+                (index / width as usize) as i32,
+                color as _,
+            )
+        };
+    }
+    let gc = unsafe { XCreateGC(display, pixmap, 0, ptr::null_mut()) };
+    if gc.is_null() {
+        unsafe { XDestroyImage(ximage) };
+        return Err("XCreateGC failed for opaque core X11 upload".to_string());
+    }
+    unsafe {
+        XPutImage(display, pixmap, gc, ximage, 0, 0, 0, 0, width, height);
+        XFreeGC(display, gc);
+        XDestroyImage(ximage);
+    }
+    Ok(())
+}
+
 pub(crate) fn image_cache_key(
     node: u32,
     asset_id: u16,

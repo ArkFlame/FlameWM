@@ -453,7 +453,7 @@ mod clipped_arc_tests {
                 .any(|&(x, len, _)| clipped_run(x as i32, len, rect).is_some())
         );
         let right = Rect {
-            x: 10.0,
+            x: 5.0,
             y: 0.0,
             width: 2.0,
             height: 12.0,

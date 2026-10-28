@@ -99,15 +99,30 @@ impl<E: EnginePorts> PlatformHost<E> {
         Ok(())
     }
 
+    /// The legacy single-output settings key is `default`. XWayland's RandR output is
+    /// named `wayland-0`; resolve this alias only when exactly one output is connected.
+    /// Never guess an output on multi-monitor systems.
+    fn persisted_output_id(&self, name: &str) -> OutputId {
+        if name == "default" {
+            if let Some(snapshot) = self.displays.cached() {
+                let mut connected = snapshot.outputs.iter().filter(|out| out.connected);
+                if let Some(only) = connected.next() {
+                    if connected.next().is_none() {
+                        return only.id.clone();
+                    }
+                }
+            }
+        }
+        OutputId::new(name.to_owned())
+    }
+
     /// Re-applies persisted panel edges after panels exist for the connected outputs. An entry for a
     /// disconnected output is skipped with a stderr diagnostic so it cannot block startup.
     fn seed_persisted_panel_edges(&mut self) {
         for (output, edge) in &self.settings.current().panel_edges {
             let revision = self.panels.revision();
-            if let Err(error) =
-                self.panels
-                    .set_edge(&OutputId::new(output.clone()), *edge, revision)
-            {
+            let target = self.persisted_output_id(output);
+            if let Err(error) = self.panels.set_edge(&target, *edge, revision) {
                 eprintln!("flamewm: persisted panel edge for {output} not applied: {error}");
             }
         }
@@ -121,10 +136,8 @@ impl<E: EnginePorts> PlatformHost<E> {
     fn seed_persisted_shell_scales(&mut self) -> FlameResult<()> {
         for (output, scale) in &self.settings.current().per_output_scale {
             let generation = self.cached_generation();
-            match self
-                .displays
-                .set_shell_scale(&OutputId::new(output.clone()), *scale, generation)
-            {
+            let target = self.persisted_output_id(output);
+            match self.displays.set_shell_scale(&target, *scale, generation) {
                 Ok(_) => {}
                 Err(error) if error.code == ErrorCode::NotFound => {
                     let connected = self.displays.cached().map_or_else(

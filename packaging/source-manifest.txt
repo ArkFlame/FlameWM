@@ -23,8 +23,6 @@ scripts/
 tools/
 ui/
 .vendor/RustWebRender-0.0.9/
-@exec assets/web/github.svg
-@exec assets/web/paypal.svg
 @exec scripts/prepare-ibm-plex
 @exec scripts/version
 @exec scripts/build-deb
@@ -76,6 +74,7 @@ ui/
 @exec .vendor/RustWebRender-0.0.9/reference/flamewm-html-css-js-v8/assets/paypal.svg
 @exec scripts/flamewm-session-wrapper
 @exec scripts/flamewm-wayland-session
+@exec scripts/wayland
 @exec tools/flamewm_desktop_services.py
 @exec tools/flamewm-test
 @exec tools/test-bin/dbus-run-session
@@ -85,3 +84,6 @@ ui/
 
 @exec scripts/flamewm-nested-smoke
 @exec tools/cpak_package.py
+@exec tools/test_bench_flamewm_memory_owners.py
+@exec tools/bench-flamewm-memory-owners.py
+@exec tools/audit-flamewm-dependencies.py

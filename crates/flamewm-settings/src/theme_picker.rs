@@ -636,7 +636,9 @@ mod tests {
             theme_data_dirs(Some("/home/u"), None, Some("/opt/share:")),
             vec![
                 PathBuf::from("/home/u/.local/share"),
-                PathBuf::from("/opt/share")
+                PathBuf::from("/opt/share"),
+                PathBuf::from("/usr/local/share"),
+                PathBuf::from("/usr/share"),
             ]
         );
         assert_eq!(

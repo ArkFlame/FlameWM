@@ -52,7 +52,7 @@ class SourceArchiveTests(unittest.TestCase):
         self.archive(second)
         self.assertEqual(hashlib.sha256(first.read_bytes()).digest(), hashlib.sha256(second.read_bytes()).digest())
         with tarfile.open(first, "r:gz") as archive:
-            entries = {item.name.removeprefix("flamewm/"): item for item in archive.getmembers()}
+            entries = {item.name: item for item in archive.getmembers()}
         self.assertTrue({"crates/tracked.rs", "crates/untracked.rs", "crates/run.sh", "assets/icon.svg", "assets/icon-link", "root-check", "ui/assets"} <= entries.keys())
         self.assertFalse(any(word in name.lower() for name in entries for word in ("private-canary", "pycache", ".env", ".pem")))
         self.assertEqual(entries["crates/run.sh"].mode & 0o777, 0o755)
@@ -66,8 +66,31 @@ class SourceArchiveTests(unittest.TestCase):
         extracted = self.root / "extracted"
         with tarfile.open(first, "r:gz") as archive:
             archive.extractall(extracted)
-        self.assertTrue((extracted / "flamewm/ui/assets").is_symlink())
-        self.assertTrue((extracted / "flamewm/ui/assets").is_dir())
+        self.assertTrue((extracted / "ui/assets").is_symlink())
+        self.assertTrue((extracted / "ui/assets").is_dir())
+
+    def test_published_archive_is_readable_by_ordinary_users(self):
+        out = self.root / "public.tar.gz"
+        self.archive(out)
+        self.assertEqual(out.stat().st_mode & 0o777, 0o644)
+
+    def test_archive_is_root_relative_not_nested(self):
+        out = self.root / "root-relative.tar.gz"
+        self.archive(out)
+        with tarfile.open(out, "r:gz") as archive:
+            names = {item.name for item in archive.getmembers()}
+        self.assertIn("crates/tracked.rs", names)
+        self.assertNotIn("flamewm/crates/tracked.rs", names)
+
+    def test_workspace_manifest_guard_rejects_dependency_inside_features(self):
+        (self.root / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/*"]\n')
+        crate = self.root / "crates/invalid"
+        crate.mkdir()
+        (crate / "Cargo.toml").write_text('[package]\nname = "invalid"\nversion = "0.1.0"\n[features]\nrustix = { workspace = true, features = ["event"] }\n')
+        guard = ROOT / "tools/verify_cargo_manifests.py"
+        result = subprocess.run([sys.executable, "-I", str(guard), str(self.root)], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be an array of strings", result.stderr)
 
     def test_real_source_manifest_registers_executable_version_script(self):
         registry = (ROOT / "packaging/source-manifest.txt").read_text(encoding="utf-8")
@@ -83,7 +106,7 @@ class SourceArchiveTests(unittest.TestCase):
         out = self.root / "version.tgz"
         self.archive(out)
         with tarfile.open(out, "r:gz") as archive:
-            self.assertEqual(archive.getmember("flamewm/scripts/version").mode & 0o111, 0o111)
+            self.assertEqual(archive.getmember("scripts/version").mode & 0o111, 0o111)
 
     def test_rejects_manifest_traversal_and_absolute_paths(self):
         for invalid in ("../outside\n", "/etc/passwd\n"):

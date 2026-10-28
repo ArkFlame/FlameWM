@@ -12,8 +12,9 @@ use std::os::fd::OwnedFd;
 
 use smithay::delegate_xwayland_shell;
 use smithay::reexports::calloop::LoopHandle;
+use smithay::reexports::x11rb::connection::Connection;
 use smithay::reexports::x11rb::protocol::xproto::{
-    Atom, AtomEnum, ConnectionExt, Window as X11Window,
+    Atom, AtomEnum, ConnectionExt, CreateWindowAux, Window as X11Window, WindowClass,
 };
 use smithay::reexports::x11rb::rust_connection::RustConnection;
 use smithay::utils::{Logical, Point, Rectangle, Size};
@@ -46,6 +47,9 @@ pub struct Props {
     strut_partial: Atom,
     net_wm_state: Atom,
     fullscreen: Atom,
+    net_wm_name: Atom,
+    /// Unmapped InputOnly window retaining the _NET_WM_CM_S0 selection for XWayland.
+    _compositor_owner: Option<X11Window>,
 }
 
 impl Props {
@@ -62,9 +66,52 @@ impl Props {
             strut_partial: atom("_NET_WM_STRUT_PARTIAL")?,
             net_wm_state: atom("_NET_WM_STATE")?,
             fullscreen: atom("_NET_WM_STATE_FULLSCREEN")?,
+            net_wm_name: atom("_NET_WM_NAME")?,
+            _compositor_owner: None,
             conn,
         };
         Ok(props)
+    }
+
+    /// Smithay really composites the XWayland client buffers, including their alpha. Advertise
+    /// that fact to X11 clients on this *private XWayland display* before launching Shell.
+    /// Do not displace a pre-existing CM owner, and keep the owner window alive for our lifetime.
+    fn claim_compositor(&mut self) -> Result<bool, Box<dyn Error>> {
+        let selection = self
+            .conn
+            .intern_atom(false, b"_NET_WM_CM_S0")?
+            .reply()?
+            .atom;
+        if self.conn.get_selection_owner(selection)?.reply()?.owner != 0 {
+            return Ok(false);
+        }
+        let root = self.conn.setup().roots[0].root;
+        let owner = self.conn.generate_id()?;
+        self.conn
+            .create_window(
+                0,
+                owner,
+                root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                0,
+                &CreateWindowAux::new(),
+            )?
+            .check()?;
+        self.conn
+            .set_selection_owner(owner, selection, 0_u32)?
+            .check()?;
+        let actual = self.conn.get_selection_owner(selection)?.reply()?.owner;
+        if actual != owner {
+            self.conn.destroy_window(owner)?.check()?;
+            return Ok(false);
+        }
+        self._compositor_owner = Some(owner);
+        Ok(true)
     }
 
     fn read32(&self, window: X11Window, property: Atom, ty: AtomEnum) -> Vec<u32> {
@@ -74,6 +121,28 @@ impl Props {
             .and_then(|cookie| cookie.reply().ok())
             .and_then(|reply| reply.value32().map(std::iter::Iterator::collect))
             .unwrap_or_default()
+    }
+
+    /// One-time title read when mapping the window. X11 title strings are not in Wayland
+    /// buffer pixels; the compositor needs the WM_NAME to paint its native titlebar.
+    pub fn title(&self, window: X11Window) -> Option<String> {
+        for property in [self.net_wm_name, AtomEnum::WM_NAME.into()] {
+            let Ok(cookie) = self
+                .conn
+                .get_property(false, window, property, AtomEnum::ANY, 0, 256)
+            else {
+                continue;
+            };
+            let Ok(reply) = cookie.reply() else {
+                continue;
+            };
+            let value = String::from_utf8_lossy(&reply.value);
+            let title = value.split('\0').next().unwrap_or("").trim();
+            if !title.is_empty() {
+                return Some(title.to_owned());
+            }
+        }
+        None
     }
 
     /// `_NET_WM_STATE_FULLSCREEN` set before the map request, which smithay does not report.
@@ -174,7 +243,20 @@ impl State {
     /// `XWayland` is serving: keep the WM and the properties connection, then start the session clients.
     pub fn xwayland_ready(&mut self, wm: X11Wm, display: u32) {
         self.props = match Props::connect(display) {
-            Ok(props) => Some(props),
+            Ok(mut props) => {
+                match props.claim_compositor() {
+                    Ok(true) => {
+                        eprintln!("flamewm-wayland: XWayland ARGB compositor selection active")
+                    }
+                    Ok(false) => {
+                        eprintln!("flamewm-wayland: XWayland compositor selection already owned")
+                    }
+                    Err(error) => eprintln!(
+                        "flamewm-wayland: XWayland compositor selection unavailable: {error}"
+                    ),
+                }
+                Some(props)
+            }
             Err(error) => {
                 eprintln!(
                     "flamewm-wayland: X11 property connection failed: {error}; docks unavailable"
@@ -208,6 +290,12 @@ impl State {
                 .is_some_and(|props| props.is_fullscreen(window.window_id()));
         self.model
             .add(id, Rect::new(cascade.x, cascade.y, w, h), workspace);
+        let title = self
+            .props
+            .as_ref()
+            .and_then(|props| props.title(window.window_id()))
+            .unwrap_or_else(|| "FlameWM".to_owned());
+        self.titles.insert(id, title);
         self.x11.push((id, window));
         if wants_fullscreen {
             let output = self.output_rect();
@@ -255,6 +343,7 @@ impl State {
         };
         let (id, _) = self.x11.remove(index);
         self.model.remove(id);
+        self.titles.remove(&id);
         if self.grab.is_some_and(
             |grab| matches!(grab, Grab::Move { id: g, .. } | Grab::Resize { id: g, .. } if g == id),
         ) {

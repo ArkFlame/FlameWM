@@ -9,7 +9,7 @@ repository.workspace = true
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
 flamewm-session-core = { path = "../flamewm-session-core" }
-dbus = { version = "=0.9.12", default-features = false }
+dbus.workspace = true
 x11rb.workspace = true
 
 [lints]

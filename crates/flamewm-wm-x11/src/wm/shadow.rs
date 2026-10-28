@@ -282,9 +282,11 @@ mod scratch_equivalence_tests {
         scene.next_dragging.extend([5, 15]);
         assert_eq!(scene.advance(11, 22, None), start);
         scene.next_dragging.push(15);
-        assert_eq!(scene.advance(11, 22, None), start);
+        // Window 5 settled while 15 keeps moving: the root behind 5 changed.
+        let partial = scene.advance(11, 22, None);
+        assert_eq!(partial, start.wrapping_add(1));
         let settled = scene.advance(11, 22, Some(33));
-        assert_eq!(settled, start.wrapping_add(1));
+        assert_eq!(settled, partial.wrapping_add(1));
         assert!(scene.dragging.is_empty());
         assert!(scene.next_dragging.is_empty());
         assert!(scene.next_dragging.capacity() >= capacity);

@@ -301,7 +301,13 @@ mod taskbar_menu_tests {
             .iter()
             .map(|row| format!("context-{}", row.id))
             .collect();
-        assert_eq!(policy_ids, vec!["context-taskbar-settings".to_owned(), "context-taskbar-task-manager".to_owned()]);
+        assert_eq!(
+            policy_ids,
+            vec![
+                "context-taskbar-settings".to_owned(),
+                "context-taskbar-task-manager".to_owned()
+            ]
+        );
     }
 
     #[test]

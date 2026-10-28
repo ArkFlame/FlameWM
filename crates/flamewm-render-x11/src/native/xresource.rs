@@ -5,7 +5,7 @@
 //! process-wide accounting. Pure validation/ledger math is unit-testable without X.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::super::xlib::{
@@ -88,6 +88,9 @@ pub fn refresh_image_gauge(bytes: u64) {
 
 static TRAP_LOCK: Mutex<()> = Mutex::new(());
 static TRAP_FIRED: AtomicBool = AtomicBool::new(false);
+static TRAP_ERROR: AtomicU8 = AtomicU8::new(0);
+static TRAP_REQUEST: AtomicU8 = AtomicU8::new(0);
+static TRAP_RESOURCE: AtomicU64 = AtomicU64::new(0);
 static NEXT_OWNER_ID: AtomicU64 = AtomicU64::new(1);
 static PROCESS_PIXMAPS: OnceLock<Mutex<ProcessPixmapLedger>> = OnceLock::new();
 
@@ -189,8 +192,13 @@ pub fn process_pixmap_ledger() -> ResourceLedger {
 
 unsafe extern "C" fn trap_handler(
     _display: *mut Display,
-    _event: *mut XErrorEvent,
+    event: *mut XErrorEvent,
 ) -> std::os::raw::c_int {
+    if let Some(event) = unsafe { event.as_ref() } {
+        TRAP_ERROR.store(event.error_code, Ordering::SeqCst);
+        TRAP_REQUEST.store(event.request_code, Ordering::SeqCst);
+        TRAP_RESOURCE.store(event.resourceid as u64, Ordering::SeqCst);
+    }
     TRAP_FIRED.store(true, Ordering::SeqCst);
     0
 }
@@ -286,6 +294,9 @@ impl X11ResourceAllocator {
         // reported by this call's XSync and misattributed to this pixmap.
         unsafe { XSync(display, 0 as Bool) };
         TRAP_FIRED.store(false, Ordering::SeqCst);
+        TRAP_ERROR.store(0, Ordering::SeqCst);
+        TRAP_REQUEST.store(0, Ordering::SeqCst);
+        TRAP_RESOURCE.store(0, Ordering::SeqCst);
         // SAFETY: display/drawable are live per the caller contract.
         let pixmap = unsafe { XCreatePixmap(display, drawable, width, height, depth) };
         unsafe { XSync(display, 0 as Bool) };
@@ -293,7 +304,10 @@ impl X11ResourceAllocator {
         if TRAP_FIRED.load(Ordering::SeqCst) || pixmap == 0 {
             self.note_failure();
             return Err(format!(
-                "XCreatePixmap failed for {width}x{height}x{depth} pixmap"
+                "XCreatePixmap failed for {width}x{height}x{depth} pixmap: X11 error={} request={} resource=0x{:x}",
+                TRAP_ERROR.load(Ordering::SeqCst),
+                TRAP_REQUEST.load(Ordering::SeqCst),
+                TRAP_RESOURCE.load(Ordering::SeqCst)
             ));
         }
         if !process_register(self.owner_id, display, pixmap, bytes) {

@@ -107,7 +107,12 @@ impl App {
         self.history.refresh();
         let name = event.key.to_ascii_lowercase();
         let mods = Mods::from_names(event.modifiers.iter());
-        if !mods.ctrl && !mods.alt && !mods.shift && name == "right" && self.at_prompt() {
+        if !mods.ctrl
+            && !mods.alt
+            && !mods.shift
+            && matches!(name.as_str(), "right" | "tab")
+            && self.at_prompt()
+        {
             if let Some(suffix) = self.ghost().map(str::to_owned) {
                 if let Some(pane) = self.focused_pane_mut() {
                     pane.input.insert_str(&suffix);

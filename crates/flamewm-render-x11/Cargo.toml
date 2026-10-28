@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Minimal native X11 backend for FlameWM Render"
 
 [dependencies]
+flamewm-api = { path = "../flamewm-api" }
 flamewm-render-core = { path = "../flamewm-render-core" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-profiler = { path = "../flamewm-profiler" }

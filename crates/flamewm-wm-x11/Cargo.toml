@@ -11,7 +11,7 @@ calloop.workspace = true
 flamewm-api = { path = "../flamewm-api" }
 flamewm-applications = { path = "../flamewm-applications" }
 flamewm-image-core = { path = "../flamewm-image-core" }
-flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
+flamewm-integrations-linux = { path = "../flamewm-integrations-linux", features = ["pulse-audio"] }
 flamewm-window-core = { path = "../flamewm-window-core" }
 flamewm-platform = { path = "../flamewm-platform" }
 flamewm-profiler = { path = "../flamewm-profiler" }

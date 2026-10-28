@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-dbus = { version = "=0.9.12", default-features = false }
+dbus.workspace = true
 flate2 = "=1.1.10"
 flamewm-api = { path = "../flamewm-api" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
@@ -15,8 +15,13 @@ flamewm-debug = { path = "../flamewm-debug" }
 flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-integrations-core = { path = "../flamewm-integrations-core" }
 flamewm-profiler = { path = "../flamewm-profiler" }
-pulse = { package = "libpulse-binding", version = "=2.30.1", default-features = true }
+pulse = { package = "libpulse-binding", version = "=2.30.1", default-features = true, optional = true }
 rustix = { workspace = true, features = ["event", "net", "pipe"] }
+
+[features]
+default = []
+# PipeWire-Pulse implements the PulseAudio wire protocol. Only the X11 WM owns volume UI.
+pulse-audio = ["dep:pulse"]
 
 [lints]
 workspace = true

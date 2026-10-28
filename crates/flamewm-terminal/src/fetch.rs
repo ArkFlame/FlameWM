@@ -2,8 +2,8 @@
 //! The same code serves the `flamefetch` command and FlameWM Terminal's initial shell.
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
-use std::os::unix::process::CommandExt;
 use std::os::fd::AsFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

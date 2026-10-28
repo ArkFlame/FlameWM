@@ -774,8 +774,7 @@ mod tests {
     fn invisible_cursor_rgb_does_not_bleed_into_shadow() {
         let mut pixels = vec![0x00ff_ff00u32; 24 * 24];
         pixels[3 * 24 + 3] = 0xffff_ffff;
-        let (out, width, _, xhot, yhot) =
-            shadow_frame(&pixels, 24, 24, 3, 3).unwrap();
+        let (out, width, _, xhot, yhot) = shadow_frame(&pixels, 24, 24, 3, 3).unwrap();
         let center = yhot as usize * width as usize + xhot as usize;
         assert_eq!(out[center], 0xffff_ffff);
         assert_eq!(out[center - 1] & 0x00ff_ffff, 0);

@@ -695,7 +695,11 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    const ON: Settings = Settings::DEFAULT;
+    const ON: Settings = Settings {
+        minimize: Style::MagicLamp,
+        close: Style::Fade,
+        ..Settings::DEFAULT
+    };
 
     fn animator() -> Animator {
         Animator::new(true, ON)
@@ -926,7 +930,7 @@ mod tests {
         assert_eq!(mapped.maximize, Style::None);
         assert_eq!(
             mapped.minimize,
-            Style::MagicLamp,
+            Settings::DEFAULT.minimize,
             "missing keys keep the default"
         );
         assert_eq!(
@@ -1215,7 +1219,7 @@ mod style_tests {
     fn missing_style_keys_keep_defaults() {
         let mapped = settings_from_snapshot(&SettingsSnapshot::new(1));
         assert_eq!(mapped, Settings::DEFAULT);
-        assert_eq!(mapped.minimize, Style::MagicLamp);
+        assert_eq!(mapped.minimize, Settings::DEFAULT.minimize);
         assert_eq!(mapped.maximize, Style::None);
         assert_eq!(mapped.open, Style::None);
     }
@@ -1248,7 +1252,7 @@ mod style_tests {
             ("windowOpenAnimation", text("magic-lamp")),
             ("maximizeAnimation", SettingValue::Integer(3)),
         ]));
-        assert_eq!(mapped.minimize, Style::MagicLamp);
+        assert_eq!(mapped.minimize, Settings::DEFAULT.minimize);
         assert_eq!(mapped.open, Style::None);
         assert_eq!(mapped.maximize, Style::None);
     }
@@ -1298,7 +1302,10 @@ mod style_tests {
 
     #[test]
     fn close_style_defaults_to_fade_and_accepts_only_none_or_fade() {
-        assert_eq!(settings_from_snapshot(&snapshot(&[])).close, Style::Fade);
+        assert_eq!(
+            settings_from_snapshot(&snapshot(&[])).close,
+            Settings::DEFAULT.close
+        );
         let none = settings_from_snapshot(&snapshot(&[("windowCloseAnimation", text("none"))]));
         assert_eq!(none.close, Style::None);
         assert_eq!(effect_style(none, Effect::Close), Style::None);
@@ -1307,7 +1314,11 @@ mod style_tests {
         for not_offered in ["scale", "magic-lamp", "Fade", ""] {
             let mapped =
                 settings_from_snapshot(&snapshot(&[("windowCloseAnimation", text(not_offered))]));
-            assert_eq!(mapped.close, Style::Fade, "{not_offered} keeps the default");
+            assert_eq!(
+                mapped.close,
+                Settings::DEFAULT.close,
+                "{not_offered} keeps the default"
+            );
         }
     }
 
@@ -1329,12 +1340,21 @@ mod style_tests {
         );
 
         assert_eq!(
-            Animator::new(false, Settings::DEFAULT).start(7, Effect::Close, t0),
+            Animator::new(
+                false,
+                Settings {
+                    close: Style::Fade,
+                    ..Settings::DEFAULT
+                }
+            )
+            .start(7, Effect::Close, t0),
             Begin::Immediate
         );
 
-        let slow =
-            settings_from_snapshot(&snapshot(&[("animationSpeed", SettingValue::Integer(50))]));
+        let slow = settings_from_snapshot(&snapshot(&[
+            ("animationSpeed", SettingValue::Integer(50)),
+            ("windowCloseAnimation", text("fade")),
+        ]));
         let just_after_base = t0 + Duration::from_millis(u64::from(CLOSE_MS) + 1);
         let mut slow_animator = Animator::new(true, slow);
         assert_eq!(slow_animator.start(7, Effect::Close, t0), Begin::Started);
@@ -1346,7 +1366,13 @@ mod style_tests {
             "0.5x runs longer"
         );
 
-        let mut normal = Animator::new(true, Settings::DEFAULT);
+        let mut normal = Animator::new(
+            true,
+            Settings {
+                close: Style::Fade,
+                ..Settings::DEFAULT
+            },
+        );
         assert_eq!(normal.start(7, Effect::Close, t0), Begin::Started);
         assert_eq!(
             normal.tick(just_after_base),

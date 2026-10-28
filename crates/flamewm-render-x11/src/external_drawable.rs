@@ -7,6 +7,7 @@ use std::collections::{HashMap, VecDeque};
 use std::ffi::CString;
 use std::ptr;
 
+use flamewm_api::graphics::{DisplayProtocol, GraphicsProvider, choose_provider};
 use flamewm_render_core::{Color, Rect, RuntimeDocument};
 
 use super::native::cursor::DeferredNativeLibraryHandles;
@@ -15,7 +16,8 @@ use super::xft::{XftBackend, xft_measure_estimate};
 use super::xlib::*;
 use super::xrender::XRenderBackend;
 use super::xshape::{XShapeBridge, rounded_mask_spans};
-use crate::app::upload_argb32_image;
+use crate::app::{upload_argb32_image, upload_opaque_argb32_image};
+use crate::xlib_ext::XGetGeometry;
 
 /// Persistent RGBA native cache key: content identity plus raster size and
 /// palette. `content_hash` is FNV-1a over the source RGBA8 bytes; `palette`
@@ -34,6 +36,33 @@ struct ExternalImageKey {
 struct ExternalCachedImage {
     pixmap: Pixmap,
     bytes: usize,
+}
+
+/// XCopyArea requires identical depths. Query once per uncached core blit; a
+/// retarget clears the cache so it can never mix pixmaps from different drawables.
+unsafe fn external_drawable_depth(
+    display: *mut Display,
+    drawable: Drawable,
+) -> Result<u32, String> {
+    let (mut root, mut x, mut y) = (0, 0, 0);
+    let (mut width, mut height, mut border, mut depth) = (0, 0, 0, 0);
+    let status = unsafe {
+        XGetGeometry(
+            display,
+            drawable,
+            &mut root,
+            &mut x,
+            &mut y,
+            &mut width,
+            &mut height,
+            &mut border,
+            &mut depth,
+        )
+    };
+    if status == 0 || depth == 0 {
+        return Err("XGetGeometry failed for core-X11 drawable depth".to_string());
+    }
+    Ok(depth)
 }
 
 /// Max cached native pixmaps / total native bytes for the image LRU.
@@ -205,13 +234,28 @@ impl ExternalDrawableTarget {
                 None
             }
         };
-        let xrender = match unsafe { XRenderBackend::new(display, drawable, visual) } {
+        let requested = std::env::var("FLAMEWM_X11_RENDER_PROVIDER").ok();
+        let mut xrender = match unsafe { XRenderBackend::new(display, drawable, visual) } {
             Ok(backend) => Some(backend),
             Err(error) => {
                 eprintln!("FLAMEWM_RENDER_ALPHA_BACKEND external-opaque-fallback reason={error}");
                 None
             }
         };
+        let provider = match choose_provider(
+            DisplayProtocol::X11,
+            requested.as_deref(),
+            xrender.is_some(),
+        ) {
+            Ok(provider) => provider,
+            Err(error) => {
+                eprintln!("FLAMEWM_RENDER_PROVIDER_ERROR external: {error}; using core fallback");
+                GraphicsProvider::XCore
+            }
+        };
+        if provider == GraphicsProvider::XCore {
+            xrender = None;
+        }
         let xshape = match unsafe { XShapeBridge::new(display) } {
             Ok(bridge) => Some(bridge),
             Err(error) => {
@@ -268,6 +312,9 @@ impl ExternalDrawableTarget {
         if let Some(xrender) = self.xrender.as_mut() {
             unsafe { xrender.set_drawable(drawable) }?;
         }
+        // Cached core-X11 pixmaps have the source drawable's depth. A new target
+        // may use another visual/depth, so never reuse them across retargets.
+        self.invalidate_image_cache();
         if let Some(xft) = self.xft.as_mut() {
             unsafe { xft.set_drawable(drawable) };
         }
@@ -470,9 +517,19 @@ impl ExternalDrawableTarget {
             (view.display, view.gc, view.screen)
         };
         let drawable = self.drawable;
-        // Built at most once per call: reused for the upload on miss and for
-        // the no-XRender alpha check below.
+        // The X11 core copy path has no alpha blending. Reject unsupported paints
+        // before creating a pixmap or altering the live destination drawable.
         let mut built: Option<Vec<u32>> = None;
+        if self.xrender.is_none() {
+            if require_xrender {
+                return Err("external semantic icon requires XRender (unavailable)".to_string());
+            }
+            let words = argb();
+            if has_non_opaque_word(&words) {
+                return Err("external alpha blit requires XRender (unavailable)".to_string());
+            }
+            built = Some(words);
+        }
         let pixmap = match self.image_cache.get(&key).copied() {
             Some(cached) => {
                 image_lru_touch(&mut self.image_lru, key);
@@ -481,34 +538,58 @@ impl ExternalDrawableTarget {
             None => {
                 let root_w = unsafe { XDisplayWidth(view_display, view_screen) }.max(1) as u32;
                 let root_h = unsafe { XDisplayHeight(view_display, view_screen) }.max(1) as u32;
-                let (fresh, bytes) = unsafe {
-                    self.allocator
-                        .create_pixmap(view_display, drawable, w, h, 32, root_w, root_h)
-                }
-                .map_err(|error| format!("external image cache: {error}"))?;
-                let visual = match match_argb32_visual(view_display, view_screen) {
-                    Some(visual) => visual,
-                    None => {
-                        unsafe { self.allocator.free_pixmap(view_display, fresh, bytes) };
-                        return Err("no 32-bit TrueColor visual for external blit".to_string());
-                    }
+                let depth = if self.xrender.is_some() {
+                    32
+                } else {
+                    // XCopyArea is invalid when the source and destination depths differ.
+                    // Query the *actual* drawable, not the root/default visual.
+                    unsafe { external_drawable_depth(view_display, drawable)? }
                 };
-                let words = argb();
-                if let Err(error) = unsafe {
-                    upload_argb32_image(
+                let (fresh, bytes) = unsafe {
+                    self.allocator.create_pixmap(
                         view_display,
-                        fresh,
-                        visual,
-                        &words,
+                        drawable,
                         w,
                         h,
-                        "external ARGB32 upload",
+                        depth,
+                        root_w,
+                        root_h,
                     )
-                } {
+                }
+                .map_err(|error| format!("external image cache: {error}"))?;
+                let words = built.take().unwrap_or_else(argb);
+                let upload = if self.xrender.is_some() {
+                    match match_argb32_visual(view_display, view_screen) {
+                        Some(visual) => unsafe {
+                            upload_argb32_image(
+                                view_display,
+                                fresh,
+                                visual,
+                                &words,
+                                w,
+                                h,
+                                "external ARGB32 upload",
+                            )
+                        },
+                        None => Err("no 32-bit TrueColor visual for external blit".to_string()),
+                    }
+                } else {
+                    unsafe {
+                        upload_opaque_argb32_image(
+                            view_display,
+                            view_screen,
+                            fresh,
+                            depth,
+                            &words,
+                            w,
+                            h,
+                        )
+                    }
+                };
+                if let Err(error) = upload {
                     unsafe { self.allocator.free_pixmap(view_display, fresh, bytes) };
                     return Err(error);
                 }
-                built = Some(words);
                 self.image_cache.insert(
                     key,
                     ExternalCachedImage {
@@ -535,9 +616,7 @@ impl ExternalDrawableTarget {
         if let Some(xrender) = self.xrender.as_mut() {
             return unsafe { xrender.blit_argb32_over(pixmap, dx, dy, w, h) };
         }
-        if require_xrender {
-            return Err("external semantic icon requires XRender (unavailable)".to_string());
-        }
+        // Preflight above proved this image opaque; core X11 copy is now safe.
         unsafe {
             XCopyArea(
                 view_display,
@@ -552,10 +631,6 @@ impl ExternalDrawableTarget {
                 dy,
             )
         };
-        // Without XRender there is no true alpha; report it explicitly.
-        if has_non_opaque_word(&built.unwrap_or_else(argb)) {
-            return Err("external alpha blit requires XRender (unavailable)".to_string());
-        }
         Ok(())
     }
 
@@ -645,16 +720,37 @@ impl<'a> NativeDrawableRenderer<'a> {
         let w = dest.width.round().max(1.0) as u32;
         let h = dest.height.round().max(1.0) as u32;
         let argb = crate::native::image::scale_and_premultiply(rgba8, src_w, src_h, w, h);
+        // A core-X11 copy cannot blend alpha or copy a 32-bit pixmap into a 24-bit
+        // backbuffer. Validate opacity before allocating any server-side object.
+        let core = self.app.xrender.is_none();
+        if core && has_non_opaque_word(&argb) {
+            return Err("rgba_blit needs XRender for non-opaque pixels".to_string());
+        }
+        let depth = if core { self.app.depth as u32 } else { 32 };
         let root = unsafe { XRootWindow(self.app.display, self.app.screen) };
         let root_w = unsafe { XDisplayWidth(self.app.display, self.app.screen) }.max(1) as u32;
         let root_h = unsafe { XDisplayHeight(self.app.display, self.app.screen) }.max(1) as u32;
         let (pixmap, bytes) = unsafe {
             self.app
                 .allocator
-                .create_pixmap(self.app.display, root, w, h, 32, root_w, root_h)
+                .create_pixmap(self.app.display, root, w, h, depth, root_w, root_h)
         }
         .map_err(|error| format!("rgba_blit: {error}"))?;
-        let result = unsafe { self.app.upload_argb32_pub(pixmap, &argb, w, h) };
+        let result = if core {
+            unsafe {
+                upload_opaque_argb32_image(
+                    self.app.display,
+                    self.app.screen,
+                    pixmap,
+                    depth,
+                    &argb,
+                    w,
+                    h,
+                )
+            }
+        } else {
+            unsafe { self.app.upload_argb32_pub(pixmap, &argb, w, h) }
+        };
         if let Err(error) = result {
             unsafe {
                 self.app

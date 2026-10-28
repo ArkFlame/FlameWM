@@ -325,45 +325,11 @@ fn fallback_control_glyph(
     edge: u32,
     rgba: [u8; 4],
 ) -> Option<flamewm_image_core::RgbaImage> {
-    if !(4..=128).contains(&edge) {
-        return None;
-    }
-    let mut pixels = vec![0_u8; (edge as usize) * (edge as usize) * 4];
-    let put = |x: u32, y: u32, pixels: &mut [u8]| {
-        if x < edge && y < edge {
-            let at = ((y * edge + x) * 4) as usize;
-            pixels[at..at + 4].copy_from_slice(&rgba);
-        }
-    };
-    let low = edge / 4;
-    let high = edge - low - 1;
-    let mid = edge / 2;
-    let stroke = (edge / 12).max(1);
-    for i in low..=high {
-        for k in 0..stroke {
-            match role {
-                ControlRole::Minimize => put(i, mid + k, &mut pixels),
-                ControlRole::Maximize => {
-                    put(i, low + k, &mut pixels);
-                    put(i, high.saturating_sub(k), &mut pixels);
-                    put(low + k, i, &mut pixels);
-                    put(high.saturating_sub(k), i, &mut pixels);
-                }
-                ControlRole::Restore => {
-                    put(i, low + k, &mut pixels);
-                    put(high.saturating_sub(k), i, &mut pixels);
-                    if i > low + stroke {
-                        put(i - stroke, high.saturating_sub(k), &mut pixels);
-                    }
-                    if i < high - stroke {
-                        put(low + stroke + k, i, &mut pixels);
-                    }
-                }
-                ControlRole::Close => {
-                    put(i, i.saturating_add(k), &mut pixels);
-                    put(i, low + high - i + k, &mut pixels);
-                }
-            }
+    let rgb = (u32::from(rgba[0]) << 16) | (u32::from(rgba[1]) << 8) | u32::from(rgba[2]);
+    let mut pixels = recipe::control_glyph_rgba(role.skin(), edge, rgb)?;
+    if rgba[3] != 255 {
+        for px in pixels.chunks_exact_mut(4) {
+            px[3] = ((u16::from(px[3]) * u16::from(rgba[3]) + 127) / 255) as u8;
         }
     }
     flamewm_image_core::RgbaImage::from_rgba8(edge, edge, pixels)
@@ -908,6 +874,33 @@ pub fn icon_dest_rect(titlebar_height: u16) -> (f32, f32, f32) {
     )
 }
 
+/// Available title width in native X11 pixels, using the same button/icon exclusion
+/// geometry as the Wayland title rasterizer.
+#[must_use]
+pub fn live_title_available_width(frame_width: u32, titlebar_h: u16) -> i32 {
+    use crate::frame::layout::controls_width_for_titlebar;
+    let height = i32::from(titlebar_h);
+    let base = i32::from(WINDOW_CHROME.metrics.titlebar);
+    let scale = |value: i32| (value.saturating_mul(height) + base / 2) / base;
+    let left = scale(recipe::ICON_PAD_LEFT)
+        + i32::from(icon_slot_for(titlebar_h))
+        + scale(recipe::TITLE_PAD);
+    let right = i32::try_from(frame_width)
+        .unwrap_or(i32::MAX)
+        .saturating_sub(controls_width_for_titlebar(height));
+    recipe::title_available_width(left, right, scale(recipe::TITLE_PAD))
+}
+
+fn title_advance(ch: char) -> i32 {
+    if ch.is_ascii() {
+        7
+    } else if is_wide(ch) {
+        12
+    } else {
+        8
+    }
+}
+
 /// Renderer-owned title measurement for Xft IBM Plex Sans 12px semibold
 /// (skin typography title). Proportional advance estimate: ASCII 7px, CJK
 /// 12px, other 8px; keeps the skin `center_title_x` contract without the
@@ -916,13 +909,7 @@ pub fn icon_dest_rect(titlebar_height: u16) -> (f32, f32, f32) {
 pub fn title_text_width(title: &str) -> i32 {
     let mut width = 0_i32;
     for ch in title.chars().take(TITLE_MAX_CHARS) {
-        let advance = if ch.is_ascii() {
-            7
-        } else if is_wide(ch) {
-            12
-        } else {
-            8
-        };
+        let advance = title_advance(ch);
         width = width.saturating_add(advance);
     }
     width

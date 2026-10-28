@@ -110,14 +110,21 @@ pub fn plan_scene_with_titlebar(
         super::geometry_shape::scaled_corner_radius(floating, tokens.style, titlebar_height);
     let logical_h = u32::from(WINDOW_CHROME.metrics.titlebar);
     let scaled = |value: u32| (value * u32::from(titlebar_height) + logical_h / 2) / logical_h;
-    let title_width = i32::try_from(scaled(crate::chrome::title_text_width(title).max(0) as u32))
+    let available = crate::chrome::live_title_available_width(frame_w, titlebar_height);
+    let title = flamewm_skin::recipes::window_chrome::elide_title(
+        title,
+        available.saturating_mul(i32::from(WINDOW_CHROME.metrics.titlebar))
+            / i32::from(titlebar_height.max(1)),
+        |ch| crate::chrome::title_text_width(&ch.to_string()),
+    );
+    let title_width = i32::try_from(scaled(crate::chrome::title_text_width(&title).max(0) as u32))
         .unwrap_or(i32::MAX);
     let title_x = crate::chrome::live_title_x_for_height(frame_w, title_width, titlebar_height);
     ChromeScene {
         frame_w,
         frame_h,
         titlebar_height,
-        title: title.to_owned(),
+        title,
         title_family: Typography::RWR_0_0_9.family,
         title_size_px: u16::try_from(scaled(u32::from(title_style.size_px)))
             .unwrap_or(u16::MAX)
