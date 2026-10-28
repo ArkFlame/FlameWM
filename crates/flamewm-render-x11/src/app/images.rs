@@ -132,7 +132,7 @@ pub(crate) unsafe fn upload_words_image(
     what: &str,
 ) -> Result<(), String> {
     if visual.is_null() {
-        return Err(format!("{what}: visual is NULL"));
+        return Err(format!("{what}: ARGB32 visual is NULL"));
     }
     let (ximage, total) =
         unsafe { create_zeroed_ximage(display, visual, depth, what, width, height)? };
