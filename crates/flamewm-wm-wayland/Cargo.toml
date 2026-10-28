@@ -38,6 +38,7 @@ smithay = { version = "0.7", default-features = false, features = [
     "desktop",
     "xwayland",
 ] }
+fontdue = { version = "0.9", default-features = false }
 
 [features]
 # Real-hardware tty backend (logind session over D-Bus, udev, DRM/KMS, GBM, libinput). Needs the libinput,

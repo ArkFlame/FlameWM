@@ -299,25 +299,54 @@ fn chrome_pixels(
     // text/size changes. The source atlas is deliberately tiny for safe nested startup.
     let right_occupied = width.saturating_sub(slot);
     let available = chrome::title_available_width(0, right_occupied, chrome::TITLE_PAD);
-    let visible_title = chrome::elide_title(title, available, |_| 6);
-    let chars: Vec<char> = visible_title.chars().collect();
-    let text_width = chars.len() as i32 * 6;
-    let start_x = chrome::center_title_x(width, text_width, 0, right_occupied, chrome::TITLE_PAD);
-    let baseline = (TITLEBAR_HEIGHT - 7) / 2;
-    for (i, c) in chars.into_iter().enumerate() {
-        let bitmap = glyph(c);
-        for (y, row) in bitmap.into_iter().enumerate() {
-            for x in 0..5 {
-                if row & (1 << (4 - x)) != 0 {
-                    put(
-                        &mut out,
-                        w,
-                        h,
-                        start_x + i as i32 * 6 + x,
-                        baseline + y as i32,
-                        GLYPH,
-                        if active { 230 } else { 166 },
-                    );
+    let alpha = if active { 230 } else { 166 };
+    let px = (TITLEBAR_HEIGHT as f32 * 0.42).max(8.0);
+    let drawn = crate::font::with_glyphs(px, |glyph_of| {
+        let visible = chrome::elide_title(title, available, |c| glyph_of(c).advance);
+        let text_width: i32 = visible.chars().map(|c| glyph_of(c).advance).sum();
+        let start_x =
+            chrome::center_title_x(width, text_width, 0, right_occupied, chrome::TITLE_PAD);
+        // Baseline places the x-height optically centred in the bar.
+        let baseline = TITLEBAR_HEIGHT / 2 + (px * 0.36).round() as i32;
+        let mut pen = start_x;
+        for c in visible.chars() {
+            let glyph = glyph_of(c);
+            for (index, coverage) in glyph.coverage.iter().enumerate() {
+                if *coverage == 0 || glyph.width == 0 {
+                    continue;
+                }
+                let gx = pen + glyph.left + (index % glyph.width) as i32;
+                let gy = baseline - glyph.top + (index / glyph.width) as i32;
+                // Never paint into the controls strip, whatever the glyph overhang.
+                if gx < right_occupied {
+                    let a = (u32::from(*coverage) * u32::from(alpha) / 255) as u8;
+                    put(&mut out, w, h, gx, gy, GLYPH, a);
+                }
+            }
+            pen += glyph.advance;
+        }
+    });
+    if drawn.is_none() {
+        let visible_title = chrome::elide_title(title, available, |_| 6);
+        let chars: Vec<char> = visible_title.chars().collect();
+        let text_width = chars.len() as i32 * 6;
+        let start_x =
+            chrome::center_title_x(width, text_width, 0, right_occupied, chrome::TITLE_PAD);
+        let baseline = (TITLEBAR_HEIGHT - 7) / 2;
+        for (i, c) in chars.into_iter().enumerate() {
+            for (y, row) in glyph(c).into_iter().enumerate() {
+                for x in 0..5 {
+                    if row & (1 << (4 - x)) != 0 {
+                        put(
+                            &mut out,
+                            w,
+                            h,
+                            start_x + i as i32 * 6 + x,
+                            baseline + y as i32,
+                            GLYPH,
+                            alpha,
+                        );
+                    }
                 }
             }
         }
@@ -665,6 +694,33 @@ mod decoration_tests {
                 chrome_pixels(width, true, false, Some(Button::Close), "Long window title").len(),
                 width as usize * TITLEBAR_HEIGHT as usize * 4,
             );
+        }
+    }
+
+    #[test]
+    fn proportional_title_renders_unicode_inside_the_title_region_only() {
+        let width = 320;
+        let blank = chrome_pixels(width, true, false, None, "");
+        let titled = chrome_pixels(width, true, false, None, "Terminal \u{2014} \u{dc}n\u{ef}code");
+        let strip = (width - chrome::controls_width()) as usize;
+        let mut changed = 0;
+        for (index, (a, b)) in blank.chunks_exact(4).zip(titled.chunks_exact(4)).enumerate() {
+            if a != b {
+                changed += 1;
+                assert!(index % width as usize <= strip, "title pixel inside controls strip");
+            }
+        }
+        assert!(changed > 40, "real glyphs should cover many pixels, got {changed}");
+        if let Ok(dir) = std::env::var("FLAMEWM_DUMP_CHROME") {
+            let mut ppm = format!("P6\n{width} {TITLEBAR_HEIGHT}\n255\n").into_bytes();
+            for px in titled.chunks_exact(4) {
+                let a = u32::from(px[3]);
+                let bg = 0x40u32;
+                for c in &px[..3] {
+                    ppm.push(((u32::from(*c) * a + bg * (255 - a)) / 255) as u8);
+                }
+            }
+            std::fs::write(format!("{dir}/titlebar.ppm"), ppm).unwrap();
         }
     }
 

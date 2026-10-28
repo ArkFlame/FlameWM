@@ -67,6 +67,7 @@ mod cursor;
 #[allow(unsafe_code)]
 // EGL display and renderer creation are unsafe in smithay; no other module may.
 mod drm;
+mod font;
 mod handlers;
 mod input;
 // Compiled without the `drm` feature too: the D-Bus surface and the `Session` impl are the only
