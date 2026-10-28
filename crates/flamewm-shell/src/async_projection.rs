@@ -160,9 +160,10 @@ impl IconCache {
         let stamp = self.next_stamp();
         // Multiple physical sizes of one icon name share its Arc<str> key.
         // Avoid allocating a duplicate string for each HiDPI variant.
-        let key: Arc<str> = self.entries.get_key_value(name)
-            .map(|(existing, _)| Arc::clone(existing))
-            .unwrap_or_else(|| Arc::from(name));
+        let key: Arc<str> = self
+            .entries
+            .get_key_value(name)
+            .map_or_else(|| Arc::from(name), |(existing, _)| Arc::clone(existing));
         self.bytes += bytes;
         self.len += 1;
         self.order.push_back((key.clone(), size, stamp));
@@ -1953,7 +1954,10 @@ pub(crate) mod tests {
         cache.insert("browser", (32, 32), test_image("large").into());
         let first = &cache.order[0].0;
         let second = &cache.order[1].0;
-        assert!(Arc::ptr_eq(first, second), "size variants share an icon-name allocation");
+        assert!(
+            Arc::ptr_eq(first, second),
+            "size variants share an icon-name allocation"
+        );
         assert_eq!(cache.len, 2);
         assert!(cache.get("browser", (16, 16)).is_some());
         assert!(cache.get("browser", (32, 32)).is_some());

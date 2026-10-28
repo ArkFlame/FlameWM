@@ -416,12 +416,13 @@ impl RuntimeDocument {
                 rgba8.len()
             ));
         }
-        if self.node_image_overrides.get(&index).is_some_and(|entry| {
-            entry.width == width
-                && entry.height == height
-                && entry.source == source
-                && (Arc::ptr_eq(&entry.rgba8, &rgba8) || entry.rgba8 == rgba8)
-        }) {
+        if let Some(entry) = self.node_image_overrides.get_mut(&index)
+            && entry.width == width
+            && entry.height == height
+            && entry.source == source
+            && (Arc::ptr_eq(&entry.rgba8, &rgba8) || entry.rgba8 == rgba8)
+        {
+            entry.rgba8 = rgba8;
             return Ok(());
         }
         let revision = self

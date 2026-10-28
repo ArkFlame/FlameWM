@@ -650,21 +650,43 @@ struct IndexedIconFile {
     format_rank: u8,
 }
 
+/// One base name of [`IconFileIndex`]: its bytes in `name_bytes` and its
+/// files in `entries`.
+#[derive(Clone, Copy, Debug)]
+struct IndexedIconName {
+    name_start: u32,
+    name_end: u32,
+    start: u32,
+    len: u32,
+}
+
 /// Real name -> existing-files index. Each file is a 16-byte record; base
-/// names, directories and extensions are stored once.
+/// names, directories and extensions are stored once. Base names share one
+/// string and are looked up by binary search, so the index makes no
+/// allocation per name.
 #[derive(Debug, Default)]
 pub struct IconFileIndex {
-    /// Base name -> (start, len) range into `entries`, build order kept.
-    names: HashMap<Box<str>, (u32, u32)>,
+    name_bytes: String,
+    /// Sorted by base name; each names a build-ordered range of `entries`.
+    names: Vec<IndexedIconName>,
     entries: Vec<IndexedIconFile>,
     dirs: Vec<PathBuf>,
     exts: Vec<String>,
 }
 
 impl IconFileIndex {
+    fn name(&self, name: &IndexedIconName) -> &str {
+        &self.name_bytes[name.name_start as usize..name.name_end as usize]
+    }
+
     fn get(&self, base: &str) -> Option<&[IndexedIconFile]> {
-        let &(start, len) = self.names.get(base)?;
-        self.entries.get(start as usize..(start + len) as usize)
+        let found = self
+            .names
+            .binary_search_by(|name| self.name(name).cmp(base))
+            .ok()?;
+        let name = self.names[found];
+        self.entries
+            .get(name.start as usize..(name.start + name.len) as usize)
     }
 
     fn ext(&self, file: &IndexedIconFile) -> &str {
@@ -792,13 +814,25 @@ impl IconFileBuilder {
         drop(dir_ids);
         drop(ext_ids);
         let total: usize = by_name.values().map(Vec::len).sum();
-        let mut names = HashMap::with_capacity(by_name.len());
+        let name_total: usize = by_name.keys().map(|name| name.len()).sum();
+        let mut sorted: Vec<_> = by_name.into_iter().collect();
+        sorted.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        let mut name_bytes = String::with_capacity(name_total);
+        let mut names = Vec::with_capacity(sorted.len());
         let mut entries = Vec::with_capacity(total);
-        for (name, files) in by_name {
-            names.insert(name, (entries.len() as u32, files.len() as u32));
+        for (name, files) in sorted {
+            let name_start = name_bytes.len() as u32;
+            name_bytes.push_str(&name);
+            names.push(IndexedIconName {
+                name_start,
+                name_end: name_bytes.len() as u32,
+                start: entries.len() as u32,
+                len: files.len() as u32,
+            });
             entries.extend(files.into_iter().map(|(file, _)| file));
         }
         IconFileIndex {
+            name_bytes,
             names,
             entries,
             dirs,

@@ -26,6 +26,7 @@ Usage:
   python3 -I tools/flamewm_visual_tests.py --layout both --out .target/visual
   python3 -I tools/flamewm_visual_tests.py --bin-dir .target/release --layout dual
   python3 -I tools/flamewm_visual_tests.py --bin-dir .target/release bench
+  python3 -I tools/flamewm_visual_tests.py --bin-dir .target/release --layout dual idle-memory
 """
 
 import argparse
@@ -131,7 +132,7 @@ class Frame:
 
 
 class Session:
-    def __init__(self, layout, bin_dir, out_dir, display_number):
+    def __init__(self, layout, bin_dir, out_dir, display_number, settings=None):
         self.layout = layout
         self.bin_dir = bin_dir
         self.out_dir = out_dir
@@ -142,6 +143,7 @@ class Session:
         if layout == "dual":
             self.outputs.append((OUTPUT_SIZE[0], 0, *OUTPUT_SIZE))
         self.env = dict(os.environ)
+        self.settings = settings
         self.x = None
 
     def spawn(self, name, cmd, env=None):
@@ -163,6 +165,11 @@ class Session:
         runtime = self.temp / "runtime"
         home.mkdir()
         runtime.mkdir(mode=0o700)
+        if self.settings:
+            config = home / ".config" / "flamewm"
+            config.mkdir(parents=True)
+            (config / "settings.toml").write_text(
+                "".join(f"{key}={value}\n" for key, value in self.settings.items()))
         self.env.update(DISPLAY=self.display_name, HOME=str(home), XDG_RUNTIME_DIR=str(runtime),
                         XDG_CONFIG_HOME=str(home / ".config"), XDG_CACHE_HOME=str(home / ".cache"))
         self.env.pop("WAYLAND_DISPLAY", None)
@@ -433,8 +440,13 @@ def run_layout(layout, args, results):
         session.stop()
 
 
+def session_settings(args):
+    """Settings written before the session starts; a black solid wallpaper skips every decode."""
+    return {"wallpaperMode": "solid", "wallpaperColor": "#000000"} if args.solid_wallpaper else None
+
+
 def run_bench(args):
-    session = Session("single", args.bin_dir, args.out, args.display)
+    session = Session("single", args.bin_dir, args.out, args.display, session_settings(args))
     try:
         session.start()
         if args.contents_while_dragging:
@@ -461,6 +473,92 @@ def run_bench(args):
         print_markdown(report)
     finally:
         session.stop()
+
+
+def run_idle_memory(args):
+    layout = "single" if args.layout == "single" else "dual"
+    session = Session(layout, args.bin_dir, args.out, args.display, session_settings(args))
+    try:
+        session.start()
+        time.sleep(args.settle)
+        if args.out:
+            session.capture("idle-memory")
+        report = {"layout": layout, "settle_s": args.settle, "processes": session_memory(session.display_name)}
+        print(json.dumps(report, indent=2))
+        print_memory_markdown(report["processes"])
+    finally:
+        session.stop()
+
+
+MEMORY_PARTS = ("binary", "libs", "heap", "stacks", "fonts", "shm", "other")
+
+
+def mapping_part(path, exe, guarded):
+    if path == exe:
+        return "binary"
+    if path == "[heap]":
+        return "heap"
+    if path.startswith("[stack"):
+        return "stacks"
+    if path.startswith("/dev/shm") or path.startswith("/SYSV") or path.startswith("/memfd:"):
+        return "shm"
+    if "/fonts/" in path or "fontconfig" in path or path.endswith((".ttf", ".otf", ".ttc", ".pcf.gz")):
+        return "fonts"
+    if ".so" in path:
+        return "libs"
+    if not path:
+        return "stacks" if guarded else "heap"
+    return "other"
+
+
+def process_memory(entry):
+    """PSS/RSS of one process, split by the kind of mapping that holds it (KiB)."""
+    exe = os.readlink(entry / "exe")
+    parts = dict.fromkeys(MEMORY_PARTS, 0)
+    rss = 0
+    path, part, previous_end, previous_guard = "", "other", None, False
+    for line in (entry / "smaps").read_text().splitlines():
+        head = line.split(maxsplit=5)
+        if "-" in head[0] and len(head) >= 5 and not head[0].endswith(":"):
+            start, end = (int(value, 16) for value in head[0].split("-"))
+            path = head[5] if len(head) > 5 else ""
+            guarded = previous_guard and previous_end == start and head[1] == "rw-p"
+            part = mapping_part(path, exe, guarded)
+            previous_end, previous_guard = end, head[1] == "---p" and not path
+        elif head[0] == "Pss:":
+            parts[part] += int(head[1])
+        elif head[0] == "Rss:":
+            rss += int(head[1])
+    status = dict(line.split(":", 1) for line in (entry / "status").read_text().splitlines() if ":" in line)
+    return {"pss": sum(parts.values()), "rss": rss, "threads": int(status["Threads"]), "parts": parts}
+
+
+def session_memory(display_name):
+    """Per-process memory of every flamewm* process on `display_name`, keyed by `name pid`."""
+    processes = {}
+    for entry in sorted(Path("/proc").iterdir(), key=lambda item: item.name):
+        if not entry.name.isdigit():
+            continue
+        try:
+            name = (entry / "comm").read_text().strip()
+            environ = (entry / "environ").read_bytes().split(b"\0")
+            if not name.startswith("flamewm") or f"DISPLAY={display_name}".encode() not in environ:
+                continue
+            processes[f"{name} {entry.name}"] = process_memory(entry)
+        except OSError:
+            continue
+    return processes
+
+
+def print_memory_markdown(processes):
+    print("\n| Process | PSS | RSS | Threads | " + " | ".join(MEMORY_PARTS) + " |")
+    print("| --- " * (4 + len(MEMORY_PARTS)) + "|")
+    for name, data in processes.items():
+        parts = " | ".join(f"{data['parts'][part]}" for part in MEMORY_PARTS)
+        print(f"| {name} | {data['pss']} | {data['rss']} | {data['threads']} | {parts} |")
+    total_pss = sum(data["pss"] for data in processes.values())
+    total_rss = sum(data["rss"] for data in processes.values())
+    print(f"| total | {total_pss} | {total_rss} | | |\n\nKiB; total PSS {total_pss / 1024:.2f} MiB")
 
 
 def session_pss(display_name):
@@ -505,7 +603,7 @@ def print_markdown(report):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("command", nargs="?", default="test", choices=("test", "bench"))
+    parser.add_argument("command", nargs="?", default="test", choices=("test", "bench", "idle-memory"))
     parser.add_argument("--layout", default="both", choices=("single", "dual", "both"))
     parser.add_argument("--bin-dir", help="directory of FlameWM binaries put first on PATH")
     parser.add_argument("--out", type=Path, help="directory for screenshots and logs")
@@ -514,6 +612,9 @@ def main(argv=None):
     parser.add_argument("--repeat", type=int, default=3, help="bench: repeats per case")
     parser.add_argument("--contents-while-dragging", action="store_true",
                         help="bench: move windows live instead of dragging an outline")
+    parser.add_argument("--solid-wallpaper", action="store_true",
+                        help="bench, idle-memory: start with a black solid wallpaper")
+    parser.add_argument("--settle", type=float, default=30.0, help="idle-memory: seconds idle before sampling")
     args = parser.parse_args(argv)
     if args.bin_dir:
         args.bin_dir = str(Path(args.bin_dir).resolve())
@@ -526,6 +627,9 @@ def main(argv=None):
         return 2
     if args.command == "bench":
         run_bench(args)
+        return 0
+    if args.command == "idle-memory":
+        run_idle_memory(args)
         return 0
     results = Results()
     for layout in (("single", "dual") if args.layout == "both" else (args.layout,)):

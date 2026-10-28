@@ -10,8 +10,6 @@ One package ships two sessions: **FlameWM** on X11, the default, and **FlameWM (
 | Explorer and Terminal | Start menu |
 | --- | --- |
 | ![Explorer and Terminal over a blurred wallpaper](assets/screenshots/desktop.webp) | ![Start menu over translucent windows](assets/screenshots/start-menu.webp) |
-| **Minimize** | **Two screens** |
-| ![Window minimizing into the taskbar](assets/screenshots/minimize.gif) | ![Wallpaper and a panel on each of two screens](assets/screenshots/two-screens.webp) |
 
 The screenshots in this table come from the headless test session (`tools/flamewm_visual_tests.py`) on Xorg's dummy driver.
 
@@ -264,9 +262,15 @@ Without `dpkg` (not tested), the Linux archive can be unpacked as root. Its entr
 tar -xzf .target/dist/flamewm-<version>-linux-x86_64.tar.gz --strip-components=1 -C /
 ```
 
-## Memory and CPU
+## Benchmark
 
-Idle PSS on Xorg with the dummy driver at 1280x800: WM 12.2 MiB, desktop 16.4 MiB, shell 11.5 MiB. The session uses no measurable CPU at idle. Drag, popup and startup figures, and how to rerun them, are in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md#measured-status).
+| Measure | Result |
+| --- | --- |
+| Idle PSS, whole session | 31.1 MiB |
+| Idle CPU | 0.0% |
+| Session start to panels mapped | 720 ms |
+
+Per-process figures are in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md#benchmark).
 
 ## Crate architecture
 

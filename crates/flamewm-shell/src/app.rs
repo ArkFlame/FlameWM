@@ -1920,6 +1920,7 @@ impl ShellLoop {
                 })?;
                 runtime.redraw(handle)?;
             }
+            flamewm_ui_x11::release_free_heap();
 
             let date = (now.year(), now.month() as u8, now.day() as u8);
             if self.date_tracker.date_changed(date) {
