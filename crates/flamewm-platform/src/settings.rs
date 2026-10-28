@@ -2004,7 +2004,10 @@ mod tests {
 
     #[test]
     fn render_acceleration_defaults_to_cpu_and_accepts_only_cpu_or_gpu() {
-        assert_eq!(load("revision=2\n").expect("unset").render_acceleration, "cpu");
+        assert_eq!(
+            load("revision=2\n").expect("unset").render_acceleration,
+            "cpu"
+        );
         assert_eq!(
             load("revision=2\nrenderAcceleration=gpu\n")
                 .expect("gpu")
