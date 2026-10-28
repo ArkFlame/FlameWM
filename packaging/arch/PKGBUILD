@@ -1,6 +1,6 @@
 # Maintainer: ArkFlame Studios <maintainers@arkflame.dev>
 pkgname=flamewm-git
-pkgver=0.1.2
+pkgver=0.1.3
 pkgrel=1
 pkgdesc='Rust desktop session and window manager for X11, with a Wayland compositor'
 arch=('x86_64')

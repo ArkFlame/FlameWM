@@ -9,6 +9,11 @@ use std::process::Command;
 
 const BUILTIN_LOGO: &str = include_str!("../../../assets/flamefetch/logo.txt");
 const COMPACT_LOGO: &str = include_str!("../../../assets/flamefetch/compact-logo.txt");
+const IMAGE_LOGO: &[u8] = include_bytes!("../../../assets/branding/flamewm-start.svg");
+/// Logo raster edge in pixels; displayed as `IMAGE_COLS` x `IMAGE_ROWS` cells (about 1:2 cell aspect).
+const IMAGE_PIXELS: u32 = 256;
+const IMAGE_COLS: u32 = 24;
+const IMAGE_ROWS: u32 = 12;
 const DEFAULT_MODULES: &[&str] = &[
     "os", "host", "kernel", "uptime", "packages", "shell", "display", "de", "wm", "terminal",
     "cpu", "gpu", "memory", "swap", "disk",
@@ -35,7 +40,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             startup: true,
-            logo: "builtin".into(),
+            logo: "auto".into(),
             logo_color: "#EF4048".into(),
             key_color: "#EF4048".into(),
             layout: Layout::Auto,
@@ -188,7 +193,7 @@ pub fn cli_main(args: impl IntoIterator<Item = String>) -> Result<(), String> {
         match arg.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "flamefetch — native one-shot Linux system information\n  --no-logo     Hide logo\n  --logo PATH   Custom ASCII logo\n  --layout auto|compact|full\n  --config PATH Configuration file\n  --no-color    Disable ANSI colors\n  --no-palette  Hide terminal color blocks\n  --version     Print version"
+                    "flamefetch — native one-shot Linux system information\n  --no-logo     Hide logo\n  --logo VALUE  auto (image when supported), builtin, none, or ASCII file path\n  --layout auto|compact|full\n  --config PATH Configuration file\n  --no-color    Disable ANSI colors\n  --no-palette  Hide terminal color blocks\n  --version     Print version"
                 );
                 return Ok(());
             }
@@ -424,7 +429,7 @@ fn logo_lines(config: &Config, cols: usize, rows: usize) -> Vec<String> {
     if config.logo == "none" {
         return Vec::new();
     }
-    let raw = if config.logo == "builtin" {
+    let raw = if matches!(config.logo.as_str(), "builtin" | "auto") {
         BUILTIN_LOGO.to_owned()
     } else {
         let path = Path::new(&config.logo);
@@ -450,11 +455,68 @@ fn logo_lines(config: &Config, cols: usize, rows: usize) -> Vec<String> {
     };
     if use_full {
         full
-    } else if config.logo == "builtin" {
+    } else if matches!(config.logo.as_str(), "builtin" | "auto") {
         COMPACT_LOGO.lines().map(str::to_owned).collect()
     } else {
         full
     }
+}
+/// Terminals that implement the kitty graphics protocol. FlameWM Terminal is not listed: it ignores APC strings.
+fn kitty_graphics_supported(env: impl Fn(&str) -> Option<String>) -> bool {
+    env("KITTY_WINDOW_ID").is_some()
+        || env("TERM").is_some_and(|term| term == "xterm-kitty")
+        || env("TERM_PROGRAM").is_some_and(|program| matches!(program.as_str(), "ghostty" | "WezTerm"))
+}
+fn base64(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0_u32, |acc, (i, byte)| acc | (u32::from(*byte) << (16 - 8 * i)));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+/// Kitty graphics protocol: raw RGBA, transmitted and displayed in 4096-byte base64 chunks.
+fn kitty_image(width: u32, height: u32, rgba: &[u8]) -> String {
+    let payload = base64(rgba);
+    let mut out = String::with_capacity(payload.len() + 256);
+    let mut chunks = payload.as_bytes().chunks(4096).peekable();
+    let mut first = true;
+    while let Some(chunk) = chunks.next() {
+        let more = u8::from(chunks.peek().is_some());
+        if first {
+            out.push_str(&format!(
+                "\x1b_Ga=T,f=32,s={width},v={height},c={IMAGE_COLS},r={IMAGE_ROWS},q=2,m={more};"
+            ));
+            first = false;
+        } else {
+            out.push_str(&format!("\x1b_Gm={more};"));
+        }
+        out.push_str(&String::from_utf8_lossy(chunk));
+        out.push_str("\x1b\\");
+    }
+    out
+}
+/// The logo as an inline kitty image, or None when the terminal is not a supporting one or rasterizing fails.
+fn logo_image(
+    config: &Config,
+    tty: bool,
+    env: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    if config.logo != "auto" || !tty || !kitty_graphics_supported(env) {
+        return None;
+    }
+    let image = flamewm_image_core::svg::render(IMAGE_LOGO, IMAGE_PIXELS, IMAGE_PIXELS).ok()?;
+    Some(kitty_image(image.width, image.height, &image.pixels))
 }
 fn render(writer: &mut impl Write, config: &Config, colored: bool, tty: bool) -> io::Result<()> {
     let memory = mem_values();
@@ -464,7 +526,12 @@ fn render(writer: &mut impl Write, config: &Config, colored: bool, tty: bool) ->
         .filter_map(|s| get_module(s, memory))
         .collect();
     let (width, rows) = terminal_dimensions();
-    let logo = logo_lines(config, width, rows);
+    let image = logo_image(config, tty, |key| std::env::var(key).ok());
+    let logo = if image.is_some() {
+        Vec::new()
+    } else {
+        logo_lines(config, width, rows)
+    };
     let max_logo_width = logo.iter().map(|s| s.chars().count()).max().unwrap_or(0);
     let side_by_side = !logo.is_empty() && width >= max_logo_width + 32;
     let (logo_ansi, key_ansi) = if colored {
@@ -489,7 +556,12 @@ fn render(writer: &mut impl Write, config: &Config, colored: bool, tty: bool) ->
                 .map(|(key, value)| format!("{key_ansi}{key}:{reset} {value}")),
         )
         .collect();
-    if side_by_side {
+    if let Some(image) = image {
+        writeln!(writer, "{image}")?;
+        for line in info {
+            writeln!(writer, "{line}")?;
+        }
+    } else if side_by_side {
         for row in 0..logo.len().max(info.len()) {
             let left = logo.get(row).map(String::as_str).unwrap_or("");
             write!(
@@ -548,6 +620,59 @@ mod tests {
         render(&mut output, &c, false, false).unwrap();
         let out = String::from_utf8(output).unwrap();
         assert!(out.contains("OS:") && !out.contains("\x1b["));
+    }
+    #[test]
+    fn base64_matches_rfc4648_padding() {
+        assert_eq!(base64(b"Man"), "TWFu");
+        assert_eq!(base64(b"Ma"), "TWE=");
+        assert_eq!(base64(b"M"), "TQ==");
+        assert_eq!(base64(b""), "");
+    }
+    #[test]
+    fn kitty_protocol_is_selected_only_for_supporting_terminals() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| (*v).to_owned())
+            }
+        };
+        assert!(kitty_graphics_supported(env(&[("KITTY_WINDOW_ID", "3")])));
+        assert!(kitty_graphics_supported(env(&[("TERM", "xterm-kitty")])));
+        assert!(kitty_graphics_supported(env(&[("TERM_PROGRAM", "ghostty")])));
+        assert!(!kitty_graphics_supported(env(&[("TERM_PROGRAM", "FlameWM"), ("TERM", "xterm-256color")])));
+        assert!(!kitty_graphics_supported(env(&[])));
+    }
+    #[test]
+    fn kitty_image_is_chunked_with_continuation_flags() {
+        let out = kitty_image(2, 2, &[0_u8; 4000]);
+        let frames: Vec<&str> = out.split("\x1b\\").filter(|f| !f.is_empty()).collect();
+        assert_eq!(frames.len(), 2);
+        assert!(frames[0].starts_with("\x1b_Ga=T,f=32,s=2,v=2,c=24,r=12,q=2,m=1;"));
+        assert!(frames[1].starts_with("\x1b_Gm=0;"));
+        assert_eq!(out.matches("\x1b_G").count(), 2);
+    }
+    #[test]
+    fn logo_image_falls_back_without_supporting_tty() {
+        let c = Config::default();
+        let kitty = |key: &str| (key == "KITTY_WINDOW_ID").then(|| "1".to_owned());
+        let image = logo_image(&c, true, kitty).expect("svg logo rasterizes");
+        assert!(image.starts_with("\x1b_Ga=T,f=32,s=256,v=256,c=24,r=12,q=2,m=1;"));
+        assert!(logo_image(&c, false, kitty).is_none());
+        assert!(logo_image(&c, true, |_| None).is_none());
+        let mut builtin = Config::default();
+        builtin.logo = "builtin".into();
+        assert!(logo_image(&builtin, true, kitty).is_none());
+    }
+    #[test]
+    fn unsupported_terminal_keeps_ascii_logo() {
+        let c = Config::default();
+        let mut output = Vec::new();
+        render(&mut output, &c, false, false).unwrap();
+        let out = String::from_utf8(output).unwrap();
+        assert!(!out.contains("\x1b_G"));
+        assert!(out.contains("OS:"));
     }
     #[test]
     fn colors_accept_only_rgb_hex() {

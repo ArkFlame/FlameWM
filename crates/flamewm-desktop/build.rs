@@ -118,7 +118,7 @@ fn main() {
 const WIDGET_SLOTS: usize = 8;
 const WIDGET_LINES: usize = 6;
 const WIDGET_SPANS: usize = 6;
-const WIDGET_CONFIG_ROWS: usize = 16;
+const WIDGET_CONFIG_ROWS: usize = 17;
 const WIDGET_KINDS: [(&str, &str, &str); 5] = [
     (
         "clock",

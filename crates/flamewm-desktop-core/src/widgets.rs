@@ -189,7 +189,7 @@ impl WidgetKind {
                 OptionSpec::toggle("bold", "Bold time", true),
                 OptionSpec::color("textColor", "Time color", WHITE),
                 OptionSpec::color("accentColor", "Date color", SKY),
-                OptionSpec::choice("align", "Alignment", &ALIGNMENTS, 0),
+                OptionSpec::choice("align", "Alignment", &ALIGNMENTS, 1),
             ],
             Self::Cpu | Self::Memory => vec![
                 OptionSpec::toggle("showTitle", "Show title", true),
@@ -235,6 +235,7 @@ impl WidgetKind {
                 "%",
             ),
             OptionSpec::step("radius", "Corner radius", 0, 40, 2, 16, "px"),
+            OptionSpec::step("backdropBlur", "Backdrop blur", 0, 100, 10, 0, "%"),
         ]);
         options
     }
@@ -373,6 +374,36 @@ impl OptionSpec {
     }
 }
 
+/// Horizontal stick to the nearest screen side: `gap` is the distance from the
+/// left edge (`right == false`) or the right edge (`right == true`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeAnchor {
+    pub right: bool,
+    pub gap: i32,
+}
+
+impl EdgeAnchor {
+    #[must_use]
+    pub fn of(rect: Rect, bounds: Rect) -> Self {
+        let right = rect.x + rect.width / 2 > bounds.x + bounds.width / 2;
+        let gap = if right {
+            bounds.right() - rect.right()
+        } else {
+            rect.x - bounds.x
+        };
+        Self { right, gap }
+    }
+
+    #[must_use]
+    fn x_in(self, width: i32, bounds: Rect) -> i32 {
+        if self.right {
+            bounds.right() - self.gap - width
+        } else {
+            bounds.x + self.gap
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Widget {
     pub id: u32,
@@ -380,6 +411,8 @@ pub struct Widget {
     pub rect: Rect,
     pub locked: bool,
     pub template: String,
+    /// `None` until resolved against screen bounds (new or legacy-absolute widgets).
+    anchor: Option<EdgeAnchor>,
     values: BTreeMap<String, i64>,
 }
 
@@ -397,6 +430,7 @@ impl Widget {
             } else {
                 String::new()
             },
+            anchor: None,
             values: BTreeMap::new(),
         }
     }
@@ -509,6 +543,7 @@ impl WidgetStore {
         );
         let mut widget = Widget::new(id, kind, origin);
         widget.rect = widget.rect.clamp_inside(bounds);
+        widget.anchor = Some(EdgeAnchor::of(widget.rect, bounds));
         self.widgets.push(widget);
         Some(id)
     }
@@ -539,9 +574,25 @@ impl WidgetStore {
         Some(widget.locked)
     }
 
+    /// Re-records the horizontal anchor of a widget after a user move or resize.
+    pub fn anchor_to(&mut self, id: u32, bounds: Rect) {
+        if let Some(widget) = self.get_mut(id) {
+            widget.anchor = Some(EdgeAnchor::of(widget.rect, bounds));
+        }
+    }
+
+    /// Places every widget from its edge anchor for `bounds`, so a right-side
+    /// widget keeps its distance from the right edge when the screen changes.
+    /// Unresolved (legacy absolute) anchors pick the nearest side here.
     pub fn clamp_all(&mut self, bounds: Rect) {
         for widget in &mut self.widgets {
-            widget.rect = widget.rect.clamp_inside(bounds);
+            let anchor = *widget
+                .anchor
+                .get_or_insert_with(|| EdgeAnchor::of(widget.rect, bounds));
+            let x = anchor.x_in(widget.rect.width, bounds);
+            widget.rect = Rect::new(x, widget.rect.y, widget.rect.width, widget.rect.height)
+                .clamp_inside(bounds);
+            widget.anchor = Some(EdgeAnchor::of(widget.rect, bounds));
         }
     }
 }
@@ -608,8 +659,11 @@ pub fn serialize(store: &WidgetStore) -> String {
             .map(|(key, value)| format!("{key}={value}"))
             .collect::<Vec<_>>()
             .join(",");
+        let anchor = widget.anchor.map_or_else(String::new, |anchor| {
+            format!("{}{}", if anchor.right { 'r' } else { 'l' }, anchor.gap)
+        });
         output.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             widget.id,
             widget.kind.id(),
             widget.rect.x,
@@ -618,6 +672,7 @@ pub fn serialize(store: &WidgetStore) -> String {
             widget.rect.height,
             i32::from(widget.locked),
             hex(widget.template.as_bytes()),
+            anchor,
             values
         ));
     }
@@ -635,9 +690,20 @@ pub fn parse(text: &str) -> FlameResult<WidgetStore> {
             break;
         }
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() != 9 {
-            return Err(FlameError::invalid("invalid desktop widget record"));
-        }
+        // 9 fields: legacy record without an edge anchor (resolved on first clamp).
+        let (anchor_field, values_field) = match fields.len() {
+            9 => ("", fields[8]),
+            10 => (fields[8], fields[9]),
+            _ => return Err(FlameError::invalid("invalid desktop widget record")),
+        };
+        let anchor = match anchor_field.chars().next() {
+            None => None,
+            Some(side @ ('l' | 'r')) => Some(EdgeAnchor {
+                right: side == 'r',
+                gap: number(&anchor_field[1..])?,
+            }),
+            Some(_) => return Err(FlameError::invalid("invalid desktop widget anchor")),
+        };
         let Some(kind) = WidgetKind::from_id(fields[1]) else {
             continue;
         };
@@ -666,7 +732,8 @@ pub fn parse(text: &str) -> FlameResult<WidgetStore> {
         widget.rect = rect;
         widget.locked = locked;
         widget.template = template;
-        for pair in fields[8].split(',').filter(|pair| !pair.is_empty()) {
+        widget.anchor = anchor;
+        for pair in values_field.split(',').filter(|pair| !pair.is_empty()) {
             let (key, value) = pair
                 .split_once('=')
                 .ok_or_else(|| FlameError::invalid("invalid desktop widget option"))?;
@@ -789,5 +856,67 @@ mod tests {
         assert_eq!(parse(&extra).expect("unknown kind").widgets().len(), 2);
         assert!(parse("v9\n").is_err());
         assert!(parse("v1\n1\tclock\t0\t0\t10\t10\t2\t\t\n").is_err());
+    }
+
+    #[test]
+    fn right_anchored_widget_keeps_its_gap_when_the_screen_shrinks() {
+        let mut store = WidgetStore::default();
+        let id = store.add(WidgetKind::Cpu, bounds()).expect("id");
+        store.get_mut(id).expect("widget").rect = Rect::new(1600, 50, 220, 110);
+        store.anchor_to(id, bounds());
+        assert_eq!(
+            store.get(id).expect("widget").anchor,
+            Some(EdgeAnchor {
+                right: true,
+                gap: 100,
+            })
+        );
+        store.clamp_all(Rect::new(0, 0, 1350, 641));
+        let rect = store.get(id).expect("widget").rect;
+        assert_eq!((rect.x, rect.right()), (1030, 1250));
+        assert_eq!(rect.y, 50);
+    }
+
+    #[test]
+    fn left_anchored_widget_keeps_its_x_and_legacy_records_pick_the_nearest_side() {
+        let mut store = WidgetStore::default();
+        let id = store.add(WidgetKind::Clock, bounds()).expect("id");
+        store.get_mut(id).expect("widget").rect = Rect::new(40, 30, 340, 150);
+        store.anchor_to(id, bounds());
+        store.clamp_all(Rect::new(0, 0, 1350, 641));
+        assert_eq!(store.get(id).expect("widget").rect.x, 40);
+
+        // Legacy 9-field record with an absolute x on the right half of the old screen.
+        let legacy = "v1\n3\tcpu\t1500\t20\t220\t110\t0\t\tbackdropBlur=40\n";
+        let mut loaded = parse(legacy).expect("legacy");
+        loaded.clamp_all(Rect::new(0, 0, 1350, 641));
+        let widget = loaded.get(3).expect("widget");
+        assert_eq!(widget.rect.right(), 1350);
+        assert_eq!(widget.value("backdropBlur"), 40);
+        assert_eq!(
+            serialize(&loaded).lines().nth(1).expect("record").split('\t').nth(8),
+            Some("r0")
+        );
+    }
+
+    #[test]
+    fn anchored_widgets_stay_inside_the_screen() {
+        let mut store = WidgetStore::default();
+        let id = store.add(WidgetKind::Media, bounds()).expect("id");
+        store.get_mut(id).expect("widget").rect = Rect::new(1600, 900, 320, 120);
+        store.anchor_to(id, bounds());
+        store.clamp_all(Rect::new(0, 0, 800, 600));
+        let rect = store.get(id).expect("widget").rect;
+        assert!(rect.x >= 0 && rect.right() <= 800, "{rect:?}");
+        assert!(rect.y >= 0 && rect.bottom() <= 600, "{rect:?}");
+        assert!(parse("v1\n1\tclock\t0\t0\t340\t150\t0\t\tz0\t\n").is_err());
+    }
+
+    #[test]
+    fn clock_defaults_to_centered_alignment() {
+        let clock = Widget::new(1, WidgetKind::Clock, Point::new(0, 0));
+        assert_eq!(clock.align(), TextAlign::Center);
+        let cpu = Widget::new(2, WidgetKind::Cpu, Point::new(0, 0));
+        assert_eq!(cpu.align(), TextAlign::Left);
     }
 }

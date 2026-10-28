@@ -321,7 +321,9 @@ pub(crate) fn plan_region_paint(input: RegionInput<'_>) -> RedrawPlan {
     // redraw: if the document changed or damage was latched, an identical command list is not proof
     // that the pixels are current (a retained asset can change without its command fields changing).
     let Some(region) = diff_region(old, input.new, input.viewport) else {
-        if input.interaction_only {
+        // `None` also means a changed command count (a hover style that adds a border or
+        // shadow emits one more command). Only equal lists may skip.
+        if input.interaction_only && old == input.new {
             if plan_debug_enabled() {
                 eprintln!("FLAMEWM_PLAN skip reason=identical_commands");
             }
@@ -505,6 +507,33 @@ mod region_tests {
             plan_region_paint(RegionInput {
                 full_latched: true,
                 ..input
+            }),
+            RedrawPlan::Full
+        );
+    }
+
+    /// A hover style that adds a command (for example a border) changes the command count. That
+    /// is a real change and must repaint on pointer input, never be mistaken for "identical".
+    #[test]
+    fn hover_that_adds_a_command_repaints_on_input() {
+        let old = vec![fill(0.0, 0.0, 10.0, 10.0, 255)];
+        let new = vec![
+            fill(0.0, 0.0, 10.0, 10.0, 255),
+            fill(0.0, 0.0, 10.0, 10.0, 128),
+        ];
+        assert_eq!(
+            plan_region_paint(RegionInput {
+                old: Some(&old),
+                new: &new,
+                scale: 1.0,
+                viewport: VIEW,
+                enabled: true,
+                viewport_unchanged: true,
+                backdrops: false,
+                translucent: true,
+                interaction_only: true,
+                full_latched: false,
+                base_valid: true,
             }),
             RedrawPlan::Full
         );

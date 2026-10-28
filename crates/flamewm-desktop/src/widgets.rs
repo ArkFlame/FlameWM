@@ -28,7 +28,7 @@ use crate::entry::{
     DesktopState, MenuKind, MenuState, hide_menus, pointer_button, pointer_on_output, sync_menu,
 };
 
-pub(crate) const CONFIG_ROWS: usize = 16;
+pub(crate) const CONFIG_ROWS: usize = 17;
 const GALLERY_SIZE: (i32, i32) = (560, 590);
 const CONFIG_WIDTH: i32 = 420;
 const CONFIG_HEADER_HEIGHT: i32 = 62;
@@ -248,6 +248,12 @@ fn percent_to_alpha(percent: i64) -> u8 {
     ((percent.clamp(0, 100) * 255 + 50) / 100) as u8
 }
 
+/// Backdrop blur strength for a widget card; `None` (0%) draws no blur.
+fn widget_backdrop(widget: &Widget) -> Option<u8> {
+    let blur = widget.value("backdropBlur").clamp(0, 100);
+    (blur > 0).then_some(blur as u8)
+}
+
 pub(crate) fn widget_bounds(state: &DesktopState) -> Rect {
     state
         .output_grids
@@ -387,6 +393,7 @@ pub(crate) fn sync_widgets(
             ),
         )?;
         document.corner_radius(&id, widget.value("radius") as f32)?;
+        document.node_backdrop(&id, widget_backdrop(&widget))?;
         document.visible(&format!("{id}-resize"), !widget.locked)?;
         document.visible(&format!("{id}-clock"), widget.kind == WidgetKind::Clock)?;
         document.visible(
@@ -1019,6 +1026,7 @@ pub(crate) fn handle_action(
                 }
             };
             state.widgets.store.set_rect(widget.id, rect);
+            state.widgets.store.anchor_to(widget.id, bounds);
             if release {
                 state.widgets.persist();
             }
@@ -1301,5 +1309,15 @@ mod tests {
         assert_eq!(percent_to_alpha(0), 0);
         assert_eq!(percent_to_alpha(70), 179);
         assert_eq!(percent_to_alpha(140), 255);
+    }
+
+    #[test]
+    fn backdrop_blur_is_off_by_default_and_follows_the_setting() {
+        let mut widget = Widget::new(1, WidgetKind::Memory, Point::new(0, 0));
+        assert_eq!(widget_backdrop(&widget), None);
+        widget.set_value("backdropBlur", 40);
+        assert_eq!(widget_backdrop(&widget), Some(40));
+        widget.set_value("backdropBlur", 150);
+        assert_eq!(widget_backdrop(&widget), Some(100));
     }
 }

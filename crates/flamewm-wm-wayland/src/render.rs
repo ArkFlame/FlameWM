@@ -27,6 +27,7 @@ use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::model::{Button, Hit, Mode, Rect, TITLEBAR_HEIGHT, WindowId};
 use crate::state::State;
+use flamewm_image_core::{Rect as ImageRect, RgbaImage, frosted_backdrop};
 use flamewm_skin::recipes::window_chrome::{self as chrome, WindowControlRole};
 
 render_elements! {
@@ -40,6 +41,8 @@ const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
 // Shared Xephyr skin metrics and palette, never per-backend coloured-square placeholders.
 const SURFACE: u32 = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB.0;
 const SURFACE_ALPHA: u8 = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_ALPHA;
+/// Blur radius at 100% surface blur. Same value as the X11 `MAX_BLUR_RADIUS_PX` (render-x11).
+const MAX_BLUR_RADIUS_PX: f32 = 24.0;
 /// Light hover disk for minimize/maximize, matching the X11 control material.
 const LIGHT_HOVER: u32 = 0x00f1_f2f3;
 const GLYPH: u32 = flamewm_skin::palette::TEXT.0;
@@ -53,9 +56,20 @@ const CLOSE_HOVER: u32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME
 #[derive(Default)]
 pub struct Decorations {
     parts: HashMap<WindowId, ChromeBuffer>,
+    /// Blurred desktop layer (straight RGBA, output-sized) that translucent titlebars blend over.
+    desktop: Option<DesktopBackdrop>,
+}
+
+struct DesktopBackdrop {
+    width: usize,
+    height: usize,
+    /// Number of desktop-layer X11 surfaces the capture saw; a change means recapture.
+    below: usize,
+    pixels: Vec<u8>,
 }
 
 struct ChromeBuffer {
+    origin: (i32, i32),
     width: i32,
     active: bool,
     maximized: bool,
@@ -65,6 +79,39 @@ struct ChromeBuffer {
 }
 
 impl Decorations {
+    /// Whether the cached desktop capture still matches the output and the desktop layer.
+    fn desktop_current(&self, size: (usize, usize), below: usize) -> bool {
+        self.desktop
+            .as_ref()
+            .is_some_and(|d| (d.width, d.height, d.below) == (size.0, size.1, below))
+    }
+
+    /// Replaces the desktop capture. Titlebars baked from the old one are rebuilt.
+    fn set_desktop(&mut self, size: (usize, usize), below: usize, pixels: Vec<u8>) {
+        self.parts.clear();
+        self.desktop = Some(DesktopBackdrop {
+            width: size.0,
+            height: size.1,
+            below,
+            pixels,
+        });
+    }
+
+    /// Blurred desktop under a `w` x `h` titlebar at `origin`, clamped to the output edges.
+    fn crop(&self, origin: (i32, i32), w: usize, h: usize) -> Option<Vec<u8>> {
+        let desktop = self.desktop.as_ref()?;
+        let mut out = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            let sy = (origin.1 + y as i32).clamp(0, desktop.height as i32 - 1) as usize;
+            for x in 0..w {
+                let sx = (origin.0 + x as i32).clamp(0, desktop.width as i32 - 1) as usize;
+                let at = (sy * desktop.width + sx) * 4;
+                out.extend_from_slice(&desktop.pixels[at..at + 4]);
+            }
+        }
+        Some(out)
+    }
+
     fn element(
         &mut self,
         renderer: &mut GlowRenderer,
@@ -80,15 +127,26 @@ impl Decorations {
             self.parts.remove(&window);
             return None;
         }
+        let origin = (rect.x, rect.y);
         let stale = self.parts.get(&window).is_none_or(|part| {
-            part.width != rect.w
+            part.origin != origin
+                || part.width != rect.w
                 || part.active != active
                 || part.maximized != maximized
                 || part.hover != hover
                 || part.title != title
         });
         if stale {
-            let pixels = chrome_pixels(rect.w, active, maximized, hover, title);
+            // The blurred desktop is cropped at the titlebar origin, so a moved titlebar is rebuilt.
+            let backdrop = self.crop(origin, rect.w as usize, TITLEBAR_HEIGHT as usize);
+            let pixels = chrome_pixels_over(
+                rect.w,
+                active,
+                maximized,
+                hover,
+                title,
+                backdrop.as_deref(),
+            );
             let buffer = MemoryRenderBuffer::from_slice(
                 &pixels,
                 Fourcc::Argb8888,
@@ -100,6 +158,7 @@ impl Decorations {
             self.parts.insert(
                 window,
                 ChromeBuffer {
+                    origin,
                     width: rect.w,
                     active,
                     maximized,
@@ -198,12 +257,27 @@ fn glyph(c: char) -> [u8; 7] {
     }
 }
 
+#[cfg(test)]
 fn chrome_pixels(
     width: i32,
     active: bool,
     maximized: bool,
     hover: Option<Button>,
     title: &str,
+) -> Vec<u8> {
+    chrome_pixels_over(width, active, maximized, hover, title, None)
+}
+
+/// Titlebar pixels. With `backdrop` (straight RGBA, one opaque pixel per titlebar pixel, the
+/// blurred desktop beneath) the translucent fill composes over it, so the bar is opaque inside
+/// its rounded shape and matches the X11 baked titlebar.
+fn chrome_pixels_over(
+    width: i32,
+    active: bool,
+    maximized: bool,
+    hover: Option<Button>,
+    title: &str,
+    backdrop: Option<&[u8]>,
 ) -> Vec<u8> {
     let w = width.max(1).min(32767) as usize;
     let h = TITLEBAR_HEIGHT as usize;
@@ -226,6 +300,11 @@ fn chrome_pixels(
                 let distance = ((dx as f32 + 0.5).powi(2) + (dy as f32 + 0.5).powi(2)).sqrt();
                 (radius as f32 + 0.5 - distance).clamp(0.0, 1.0)
             });
+            if let Some(back) = backdrop {
+                let at = (y as usize * w + x as usize) * 4;
+                let rgb = u32::from_be_bytes([0, back[at], back[at + 1], back[at + 2]]);
+                put(&mut out, w, h, x, y, rgb, (255.0 * coverage).round() as u8);
+            }
             let alpha = (f32::from(SURFACE_ALPHA) * coverage).round() as u8;
             put(&mut out, w, h, x, y, SURFACE, alpha);
             if y == 0 || x == 0 || x == w as i32 - 1 {
@@ -389,7 +468,6 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
     let layers: Vec<_> = map.layers().cloned().collect();
     drop(map);
     let mut out: Vec<Elem> = Vec::new();
-    let mut back: Vec<Elem> = Vec::new();
     let mut decorations = state.decorations.borrow_mut();
     decorations.retain(|window| state.model.get(window).is_some());
     for group in [Layer::Overlay, Layer::Top] {
@@ -479,15 +557,24 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
         }
     }
 
+    out.extend(desktop_elements(state, renderer));
+    out
+}
+
+/// The desktop layer: bottom and background layer surfaces, then the X11 desktop background
+/// (`below` unmanaged windows). Everything the blurred desktop capture is made from.
+fn desktop_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
+    let map = layer_map_for_output(&state.output);
+    let layers: Vec<_> = map.layers().cloned().collect();
+    drop(map);
+    let mut out: Vec<Elem> = Vec::new();
     for layer in layers
         .iter()
         .rev()
         .filter(|l| matches!(l.layer(), Layer::Bottom | Layer::Background))
     {
-        back.extend(layer_elements(state, renderer, layer));
+        out.extend(layer_elements(state, renderer, layer));
     }
-    out.extend(back);
-    // X11 desktop background sits beneath the wallpaper layers' siblings: last in the list.
     for entry in state.unmanaged.iter().rev().filter(|entry| entry.below) {
         if let Some(surface) = entry.surface.wl_surface() {
             let geometry = entry.surface.geometry();
@@ -500,6 +587,60 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
         }
     }
     out
+}
+
+/// Captures and blurs the desktop layer when the cached capture is missing, the output changed
+/// size, or the number of desktop X11 surfaces changed. Steady-state frames read nothing back.
+/// A wallpaper change alone does not change those inputs, so it shows after the next such change.
+fn refresh_desktop_backdrop(
+    state: &State,
+    renderer: &mut GlowRenderer,
+    size: Size<i32, Physical>,
+) -> Result<(), Box<dyn Error>> {
+    let below = state.unmanaged.iter().filter(|entry| entry.below).count();
+    let dims = (size.w.max(1) as usize, size.h.max(1) as usize);
+    if state
+        .decorations
+        .borrow()
+        .desktop_current(dims, below)
+    {
+        return Ok(());
+    }
+    let elements = desktop_elements(state, renderer);
+    let buffer_size: Size<i32, Buffer> = Size::from((size.w, size.h));
+    let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
+    let mut tracker = OutputDamageTracker::from_output(&state.output);
+    {
+        let mut target = renderer.bind(&mut texture)?;
+        tracker.render_output(renderer, &mut target, 0, &elements, CLEAR)?;
+    }
+    let target = renderer.bind(&mut texture)?;
+    let mapping =
+        renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), Fourcc::Abgr8888)?;
+    let sharp = renderer.map_texture(&mapping)?.to_vec();
+    let blur_percent = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_BLUR_PERCENT;
+    let radius = MAX_BLUR_RADIUS_PX * f32::from(blur_percent) / 100.0;
+    let source = RgbaImage {
+        width: dims.0 as u32,
+        height: dims.1 as u32,
+        pixels: sharp,
+    };
+    let blurred = frosted_backdrop(
+        &source,
+        ImageRect {
+            x: 0,
+            y: 0,
+            width: dims.0 as u32,
+            height: dims.1 as u32,
+        },
+        radius,
+        None,
+    );
+    state
+        .decorations
+        .borrow_mut()
+        .set_desktop(dims, below, blurred.pixels);
+    Ok(())
 }
 
 fn layer_elements(
@@ -534,6 +675,7 @@ fn render_into(
     backend: &mut WinitGraphicsBackend<GlowRenderer>,
 ) -> Result<(), Box<dyn Error>> {
     let size = backend.window_size();
+    refresh_desktop_backdrop(state, backend.renderer(), size)?;
     let mut elements =
         state
             .cursors

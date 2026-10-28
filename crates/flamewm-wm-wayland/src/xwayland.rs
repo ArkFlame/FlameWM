@@ -383,6 +383,9 @@ impl XWaylandShellHandler for State {
                 self.set_focus(Some(id));
             }
         }
+        // Pointer focus is only resolved on motion, and an unmanaged window (taskbar, dock) has no
+        // wl_surface until this callback, so a pointer resting over it never got focus until moved.
+        self.on_motion(self.pointer, 0);
     }
 }
 
