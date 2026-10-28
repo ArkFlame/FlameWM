@@ -1,6 +1,6 @@
-//! Canonical FlameWM surface material contract, renderer neutral.
+//! Canonical `FlameWM` surface material contract, renderer neutral.
 //! Settings, Explorer, Terminal, Shell and WM decorations share these fill,
-//! contour and alpha-blending rules. The renderer-specific UiColor mapping
+//! contour and alpha-blending rules. The renderer-specific `UiColor` mapping
 //! lives in flamewm-ui-x11::surface_style.
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
@@ -129,20 +129,6 @@ mod surface_blend_tests {
 /// pure geometry is reusable without coupling the skin to an X11 backend.
 #[must_use]
 pub fn inner_contour_coverage(w: u32, h: u32, radius: u32, x: u32, y: u32) -> u8 {
-    if w == 0 || h == 0 || x >= w || y >= h {
-        return 0;
-    }
-    // Only pixels within one pixel of the outside can contribute.
-    let r = radius.min(w.min(h) / 2);
-    let near_left = x <= r;
-    let near_right = x.saturating_add(r).saturating_add(1) >= w;
-    let near_top = y <= r;
-    let near_bottom = y.saturating_add(r).saturating_add(1) >= h;
-    if !(near_left || near_right) || !(near_top || near_bottom) {
-        if x >= 1 && y >= 1 && x + 1 < w && y + 1 < h {
-            return 0;
-        }
-    }
     fn inside(x: f32, y: f32, w: f32, h: f32, r: f32) -> bool {
         if x < 0.0 || y < 0.0 || x >= w || y >= h {
             return false;
@@ -155,6 +141,23 @@ pub fn inner_contour_coverage(w: u32, h: u32, radius: u32, x: u32, y: u32) -> u8
         let dx = x - cx;
         let dy = y - cy;
         dx * dx + dy * dy <= r * r
+    }
+    if w == 0 || h == 0 || x >= w || y >= h {
+        return 0;
+    }
+    // Only pixels within one pixel of the outside can contribute.
+    let r = radius.min(w.min(h) / 2);
+    let near_left = x <= r;
+    let near_right = x.saturating_add(r).saturating_add(1) >= w;
+    let near_top = y <= r;
+    let near_bottom = y.saturating_add(r).saturating_add(1) >= h;
+    if (!(near_left || near_right) || !(near_top || near_bottom))
+        && x >= 1
+        && y >= 1
+        && x + 1 < w
+        && y + 1 < h
+    {
+        return 0;
     }
     let outer_r = r as f32;
     let inner_r = outer_r - 1.0;
