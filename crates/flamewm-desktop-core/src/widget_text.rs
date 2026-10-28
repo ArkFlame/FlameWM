@@ -338,6 +338,30 @@ pub fn fit_lines(mut lines: Vec<Vec<Span>>) -> Vec<Vec<Span>> {
     lines
 }
 
+#[must_use]
+pub fn display_text(text: &str) -> String {
+    text.replace(' ', "\u{a0}")
+}
+
+#[must_use]
+pub fn estimate_text_width(text: &str, font_size: f32, bold: bool) -> f32 {
+    let ems: f32 = text
+        .chars()
+        .map(|ch| match ch {
+            ' ' | '\u{a0}' => 0.30,
+            'i' | 'j' | 'l' | '!' | '|' | '\'' | '.' | ',' | ':' | ';' => 0.30,
+            'f' | 't' | 'r' | '(' | ')' | '[' | ']' | '-' => 0.40,
+            'm' | 'w' | 'M' | 'W' | '%' | '@' => 0.90,
+            '0'..='9' => 0.60,
+            'A'..='Z' => 0.68,
+            _ if ch.is_ascii() => 0.56,
+            _ => 0.75,
+        })
+        .sum();
+    let weight = if bold { 1.06 } else { 1.0 };
+    (ems * font_size.max(0.0) * weight).ceil()
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CpuTimes {
     pub busy: u64,
@@ -529,6 +553,18 @@ mod tests {
         assert_eq!(memory.percent(), Some(75));
         assert_eq!(format_gib(memory.used_kib()), "11.4");
         assert!(parse_meminfo("MemFree: 1 kB\n").is_none());
+    }
+
+    #[test]
+    fn display_text_keeps_spaces_and_width_grows_with_glyph_class() {
+        assert_eq!(display_text(" a b "), "\u{a0}a\u{a0}b\u{a0}");
+        let narrow = estimate_text_width("iiii", 20.0, false);
+        let wide = estimate_text_width("MMMM", 20.0, false);
+        assert!(wide > narrow * 2.0);
+        assert!(
+            estimate_text_width("CPU 9%", 18.0, true) > estimate_text_width("CPU 9%", 18.0, false)
+        );
+        assert_eq!(estimate_text_width("", 18.0, false), 0.0);
     }
 
     #[test]
