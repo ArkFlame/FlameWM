@@ -2505,6 +2505,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             if let Some(value) = integer(row.key) {
                 let label = if row.key == "screensaverRibbonWidthTenths" {
                     format!("{:.1} px", value as f64 / 10.0)
+                } else if row.key == "windowMargin" {
+                    format!("{value} px")
                 } else {
                     value.to_string()
                 };
@@ -2681,7 +2683,14 @@ struct IntegerStepper {
     maximum: i64,
 }
 
-const INTEGER_STEPPERS: [IntegerStepper; 8] = [
+const INTEGER_STEPPERS: [IntegerStepper; 9] = [
+    IntegerStepper {
+        slug: "window-margin",
+        key: "windowMargin",
+        step: 1,
+        minimum: 0,
+        maximum: 32,
+    },
     IntegerStepper {
         slug: "taskbar-floating-margin",
         key: "taskbarFloatingMargin",
@@ -4060,6 +4069,15 @@ mod value_text_tests {
         assert!(parse_action("settings.taskbar-blur.up").is_err());
         assert!(parse_action("settings.taskbar-opacity.up").is_err());
         assert!(parse_action("settings.start-menu-blur.down").is_err());
+        assert_action!(
+            "settings.window-margin.down",
+            Ok(SettingsAction::IntegerStep {
+                key: "windowMargin",
+                delta: -1,
+                minimum: 0,
+                maximum: 32
+            })
+        );
         assert_action!(
             "settings.taskbar-floating-margin.up",
             Ok(SettingsAction::IntegerStep {
