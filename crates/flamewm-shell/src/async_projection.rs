@@ -163,8 +163,7 @@ impl IconCache {
         let key: Arc<str> = self
             .entries
             .get_key_value(name)
-            .map(|(existing, _)| Arc::clone(existing))
-            .unwrap_or_else(|| Arc::from(name));
+            .map_or_else(|| Arc::from(name), |(existing, _)| Arc::clone(existing));
         self.bytes += bytes;
         self.len += 1;
         self.order.push_back((key.clone(), size, stamp));
