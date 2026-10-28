@@ -40,6 +40,23 @@ pub use template::{
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
+pub use flamewm_render_x11::{
+    AccelerationStatus, RenderAcceleration, render_acceleration, render_acceleration_status,
+};
+
+pub fn apply_render_acceleration(snapshot: &flamewm_api::settings::SettingsSnapshot) {
+    let mode = match snapshot
+        .values
+        .get(flamewm_render_x11::RENDER_ACCELERATION_SETTING)
+    {
+        Some(flamewm_api::settings::SettingValue::Text(value)) => {
+            RenderAcceleration::from_setting(value)
+        }
+        _ => RenderAcceleration::Cpu,
+    };
+    flamewm_render_x11::set_render_acceleration(mode);
+}
+
 use calloop::Interest;
 use flamewm_reactor::{FdAction, Reactor};
 
