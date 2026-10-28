@@ -37,7 +37,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
                      "packaging/pam.d/flamewm-lock",
                      "packaging/menus/flamewm-applications.menu", "packaging/notifications/dunstrc",
                      "packaging/install-manifest.txt", "packaging/debian/control.in",
-                     "packaging/debian/copyright", "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/build-deb", "scripts/check-cargo", "scripts/package",
+                     "packaging/debian/copyright", "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/build-deb", "scripts/check-cargo", "scripts/package", "scripts/dist-checksums",
                      "scripts/package-source-archive", "scripts/flamewm-session-wrapper",
                      "scripts/flamewm-wayland-session", "packaging/flamewm-wayland.desktop",
                      "tools/flamewm_desktop_services.py"):
@@ -66,7 +66,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
                             else "#!/bin/sh\necho FlameWM fixture\n", encoding="utf-8")
             stub.chmod(0o755)
         self.manifest = self.root / "packaging/source-manifest.txt"
-        self.manifest.write_text("scripts/\ntools/\nassets/\n@exec scripts/version\n@exec scripts/build-deb\n@exec scripts/check-cargo\n@exec scripts/package\n@exec scripts/package-source-archive\n@exec scripts/flamewm-session-wrapper\n@exec scripts/flamewm-wayland-session\n@exec tools/flamewm_desktop_services.py\n", encoding="utf-8")
+        self.manifest.write_text("scripts/\ntools/\nassets/\n@exec scripts/version\n@exec scripts/build-deb\n@exec scripts/check-cargo\n@exec scripts/package\n@exec scripts/dist-checksums\n@exec scripts/package-source-archive\n@exec scripts/flamewm-session-wrapper\n@exec scripts/flamewm-wayland-session\n@exec tools/flamewm_desktop_services.py\n", encoding="utf-8")
 
         tools = self.root / 'tools'
         tools.mkdir(exist_ok=True)

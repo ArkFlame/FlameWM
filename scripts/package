@@ -39,12 +39,12 @@ fi
 # never overwrite or be mistaken for the production .deb.
 PROFILE="${FLAMEWM_PACKAGE_PROFILE:-release}"
 case "$PROFILE" in
-    release) PKG_VERSION="$VERSION"; DIST="$ROOT/.target/dist" ;;
-    fast) PKG_VERSION="$VERSION~dev"; DIST="$ROOT/.target/dev-dist" ;;
+    release) PKG_VERSION="$VERSION"; DIST="$ROOT/.target/dist"; STAGE_ROOT="$ROOT/.target/stage" ;;
+    fast) PKG_VERSION="$VERSION~dev"; DIST="$ROOT/.target/dev-dist"; STAGE_ROOT="$ROOT/.target/dev-stage" ;;
     *) fail "unknown FLAMEWM_PACKAGE_PROFILE: $PROFILE (expected release or fast)" ;;
 esac
 BUILD_DIR="$TARGET_DIR/$PROFILE"
-STAGE="${STAGE_ONLY:-$DIST/flamewm-$PKG_VERSION}"
+STAGE="${STAGE_ONLY:-$STAGE_ROOT/flamewm-$PKG_VERSION}"
 SOURCE_ARCHIVE="$DIST/flamewm-$PKG_VERSION-source.tar.gz"
 LINUX_ARCHIVE="$DIST/flamewm-$PKG_VERSION-linux-x86_64.tar.gz"
 DEB="$DIST/flamewm_${PKG_VERSION}_amd64.deb"
@@ -70,8 +70,8 @@ if [[ -z "$STAGE_ONLY" ]] && command -v dpkg-deb >/dev/null 2>&1; then
 fi
 [[ -d "$BUILD_DIR" ]] || fail "missing $PROFILE build directory: $BUILD_DIR"
 if [[ -z "$STAGE_ONLY" ]]; then
-    mkdir -p "$DIST"
-    rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$PKG_VERSION.tar.gz" "$DIST/SHA256SUMS"
+    mkdir -p "$DIST" "$STAGE_ROOT"
+    rm -rf "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$PKG_VERSION.tar.gz" "$DIST/SHA256SUMS" "$DIST/flamewm-$PKG_VERSION"
 fi
 
 for binary in flamewm-apps flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
@@ -222,8 +222,6 @@ rm -rf "$STAGE/DEBIAN"
 
 # Keep source and installable binary artifacts distinct and reproducible.
 tar --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" --owner=0 --group=0 --numeric-owner \
-    -czf "$LINUX_ARCHIVE" -C "$DIST" "flamewm-$PKG_VERSION"
-ARTIFACTS=("$SOURCE_ARCHIVE" "$LINUX_ARCHIVE")
-[[ -f "$DEB" ]] && ARTIFACTS+=("$DEB")
-sha256sum "${ARTIFACTS[@]}" | sed "s#  $DIST/#  #" > "$DIST/SHA256SUMS"
+    -czf "$LINUX_ARCHIVE" -C "$STAGE_ROOT" "flamewm-$PKG_VERSION"
+"$ROOT/scripts/dist-checksums" "$DIST" >/dev/null
 printf 'OK package: %s\n' "$DIST"
