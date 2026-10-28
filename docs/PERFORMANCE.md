@@ -35,26 +35,41 @@ The compiler crate uses package-specific `opt-level=2`; parser speed is not stea
 
 ## Benchmark
 
-| Process | Idle PSS |
-| --- | --- |
-| `flamewm` | 7.6 MiB |
-| `flamewm-desktop` | 9.2 MiB |
-| `flamewm-shell` | 10.4 MiB |
-| `flamewm-shell --quick-control-host` | 2.5 MiB |
-| `flamewm-session` | 1.5 MiB |
-| **Total** | **31.1 MiB** |
-| `flamewm-task-manager` (open) | 12.7 MiB |
+### Idle Desktop
+
+| Process | PSS | Code | Libraries | Heap | Fonts | CPU |
+| --- | --- | --- | --- | --- | --- | --- |
+| `flamewm-session` | 1.5 MiB | 0.8 MiB | 0.4 MiB | 0.3 MiB | 0.0 MiB | 0.0% |
+| `flamewm` | 5.6 MiB | 2.9 MiB | 1.9 MiB | 0.7 MiB | 0.0 MiB | 0.0% |
+| `flamewm-desktop` | 5.2 MiB | 3.0 MiB | 1.4 MiB | 0.9 MiB | 0.0 MiB | 0.0% |
+| `flamewm-shell` | 11.0 MiB | 2.9 MiB | 4.7 MiB | 2.3 MiB | 1.0 MiB | 0.0% |
+| `flamewm-shell --quick-control-host` | 2.7 MiB | 1.1 MiB | 1.3 MiB | 0.3 MiB | 0.0 MiB | 0.0% |
+| **Total** | **26.0 MiB** | **10.6 MiB** | **9.7 MiB** | **4.4 MiB** | **1.0 MiB** | **0.0%** |
+
+### Idle Suite
+
+| Process | PSS | CPU |
+| --- | --- | --- |
+| `flamewm-session` | 1.4 MiB | 0.0% |
+| `flamewm` | 8.8 MiB | 0.0% |
+| `flamewm-desktop` | 3.9 MiB | 0.0% |
+| `flamewm-shell` | 8.4 MiB | 0.1% |
+| `flamewm-shell --quick-control-host` | 2.1 MiB | 0.0% |
+| `flamewm-terminal` | 20.2 MiB | 0.0% |
+| `flamewm-explorer` | 11.4 MiB | 0.0% |
+| `flamewm-task-manager` | 12.6 MiB | 0.8% |
+| **Total** | **68.7 MiB** | **0.9%** |
+
+### Interaction
 
 | CPU, % of one core | WM | Desktop | Shell | Terminal | Xorg | Total |
 | --- | --- | --- | --- | --- | --- | --- |
-| Idle | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
-| Window drag | 1.6 | 0.5 | 4.4 | 0.5 | 8.2 | 15.9 |
+| Window drag | 1.6 | 0.5 | 4.4 | 0.5 | 8.2 | 15.3 |
 | Start popup open and close | 0.0 | 0.0 | 8.0 | 0.0 | 26.0 | 37.9 |
-| Task Manager open | | | | | | 0.7 |
 
 | Measure | Result |
 | --- | --- |
-| Session start to panels mapped | 720 ms |
+| Session start to panels mapped | 719 ms |
 
 ## Profiler (`flamewm-profiler`, frozen seams R01-R06)
 
