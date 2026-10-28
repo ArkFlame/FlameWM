@@ -417,11 +417,24 @@ fn child_filter(paths: &[PathBuf], explicit: Option<&str>) -> Vec<PathBuf> {
     scored.into_iter().map(|(p, _)| p.clone()).collect()
 }
 
+fn read_theme_index(roots: &[PathBuf], theme: &str) -> Option<IconThemeIndex> {
+    roots.iter().find_map(|root| {
+        let index_file = theme_dir(root, theme)?.join("index.theme");
+        if !index_file.is_file() {
+            return None;
+        }
+        let text = fs::read_to_string(index_file).ok()?;
+        #[cfg(test)]
+        INDEX_THEME_READS.with(|c| c.set(c.get() + 1));
+        Some(IconThemeIndex::parse(theme, &text))
+    })
+}
+
 fn directory_distance(index: &IconLookupIndex, file: &IndexedIconFile, physical: u32) -> u64 {
     let dirs = index
         .ordered_themes
         .get(file.theme_rank as usize)
-        .and_then(|theme| index.indexes.get(theme)?.as_ref());
+        .and_then(|theme| index.indexes().get(theme)?.as_ref());
     dirs.and_then(|d| d.dirs.get(d.directories.get(file.directory_rank as usize)?))
         .map_or(u64::MAX / 2, |e| e.distance(physical))
 }
@@ -846,6 +859,8 @@ impl IconFileBuilder {
 /// `/usr/share/pixmaps`).
 #[derive(Debug, Default)]
 struct IconScan {
+    /// Parsed `index.theme` per theme (`None` = no index on disk).
+    indexes: HashMap<String, Option<IconThemeIndex>>,
     files: IconFileIndex,
     pixmaps: HashMap<String, Vec<PathBuf>>,
 }
@@ -858,12 +873,11 @@ pub struct IconLookupIndex {
     pub roots: Vec<PathBuf>,
     /// Ordered theme chain (seeds + inheritance, Breeze before hicolor).
     pub ordered_themes: Vec<String>,
-    /// Parsed `index.theme` per theme (`None` = no index on disk).
-    pub indexes: HashMap<String, Option<IconThemeIndex>>,
     /// Per-theme roots that actually carry the theme directory.
     pub theme_roots: HashMap<String, Vec<PathBuf>>,
-    /// Real name -> existing-files index and pixmaps, scanned on the first
-    /// lookup so processes that never resolve a themed icon keep no copy.
+    /// Parsed `index.theme` per theme, the real name -> existing-files index
+    /// and pixmaps, all produced on the first lookup so processes that never
+    /// resolve a themed icon keep no copy.
     scan: std::sync::OnceLock<IconScan>,
     /// Top-level roots `mtime` snapshot + last check (5s cooldown owner).
     pub watch_mtime: Option<std::time::SystemTime>,
@@ -929,9 +943,12 @@ impl IconLookupIndex {
             generation,
             roots,
             ordered_themes,
-            indexes,
             theme_roots,
-            scan: std::sync::OnceLock::from(IconScan { files, pixmaps }),
+            scan: std::sync::OnceLock::from(IconScan {
+                indexes,
+                files,
+                pixmaps,
+            }),
             watch_mtime: None,
             last_mtime_check: std::sync::Mutex::new(None),
             theme_names,
@@ -963,20 +980,7 @@ impl IconLookupIndex {
             if let Some(hit) = parsed.borrow().get(theme) {
                 return hit.clone();
             }
-            let mut found = None;
-            for root in &roots {
-                let Some(dir) = theme_dir(root, theme) else {
-                    continue;
-                };
-                if dir.join("index.theme").is_file() {
-                    if let Ok(text) = fs::read_to_string(dir.join("index.theme")) {
-                        #[cfg(test)]
-                        INDEX_THEME_READS.with(|c| c.set(c.get() + 1));
-                        found = Some(IconThemeIndex::parse(theme, &text));
-                        break;
-                    }
-                }
-            }
+            let found = read_theme_index(&roots, theme);
             parsed.borrow_mut().insert(theme.to_owned(), found.clone());
             found
         };
@@ -1014,7 +1018,7 @@ impl IconLookupIndex {
         let mut index = Self::new_full(
             roots,
             ordered,
-            parsed.into_inner(),
+            HashMap::new(),
             theme_roots,
             IconFileIndex::default(),
             HashMap::new(),
@@ -1030,9 +1034,14 @@ impl IconLookupIndex {
     fn scan(&self) -> IconScan {
         // Real name -> existing-files index: read each declared dir once,
         // record actual supported files only.
+        let indexes: HashMap<String, Option<IconThemeIndex>> = self
+            .ordered_themes
+            .iter()
+            .map(|theme| (theme.clone(), read_theme_index(&self.roots, theme)))
+            .collect();
         let mut files = IconFileBuilder::default();
         for (theme_rank, theme) in self.ordered_themes.iter().enumerate() {
-            let Some(Some(index)) = self.indexes.get(theme) else {
+            let Some(Some(index)) = indexes.get(theme) else {
                 continue;
             };
             let Some(roots_for_theme) = self.theme_roots.get(theme) else {
@@ -1064,11 +1073,7 @@ impl IconLookupIndex {
         }
         // Store per-file distance lazily at lookup (size-dependent).
         for (theme_rank, theme) in self.ordered_themes.iter().enumerate() {
-            if self
-                .indexes
-                .get(theme)
-                .is_some_and(std::option::Option::is_some)
-            {
+            if indexes.get(theme).is_some_and(std::option::Option::is_some) {
                 continue;
             }
             let Some(roots_for_theme) = self.theme_roots.get(theme) else {
@@ -1109,9 +1114,14 @@ impl IconLookupIndex {
             }
         }
         IconScan {
+            indexes,
             files: files.finish(),
             pixmaps,
         }
+    }
+
+    fn indexes(&self) -> &HashMap<String, Option<IconThemeIndex>> {
+        &self.scan.get_or_init(|| self.scan()).indexes
     }
 
     fn files(&self) -> &IconFileIndex {
@@ -1575,7 +1585,7 @@ mod tests {
         )
         .expect("selected index.theme");
         INDEX_THEME_READS.with(|c| c.set(0));
-        let index = build_index(&data, &["Mine"]);
+        let index = IconLookupIndex::build(&["Mine".to_owned()], &[data.clone()], 1);
         let reads = INDEX_THEME_READS.with(std::cell::Cell::get);
         let (paths, hit) = index.lookup("once-app", 16);
         let _ = fs::remove_dir_all(&data);
