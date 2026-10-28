@@ -93,6 +93,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use flamewm_api::graphics::{DisplayProtocol, choose_provider};
+use flamewm_render_core::RenderAcceleration;
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::winit::{WinitEvent, init_from_attributes};
 use smithay::output::Scale;
@@ -446,6 +447,25 @@ fn main() {
 /// Marks the startup as aborted when the compositor never reached [`Stage::Ready`]: the session
 /// wrapper's exit watchdog reports that case as a failure and needs the stage it died in. Nothing is
 /// printed when the loop ran and `stage=ready` was already reported, so a normal exit stays clean.
+/// Logs the saved `renderAcceleration` in the shared `RenderAcceleration` vocabulary. The compositor
+/// composites through smithay's GL renderer, so the shared pixel backends do not run here yet.
+fn report_render_acceleration() {
+    let requested = std::fs::read_to_string(control::settings_path())
+        .ok()
+        .and_then(|text| {
+            flamewm_platform::settings::ConfigStore::default()
+                .parse_snapshot(&text)
+                .ok()
+        })
+        .map_or(RenderAcceleration::Cpu, |settings| {
+            RenderAcceleration::from_setting(&settings.render_acceleration)
+        });
+    eprintln!(
+        "FLAMEWM_RENDER_ACCELERATION {} pixel-backends=x11-only",
+        requested.as_setting()
+    );
+}
+
 fn abort_startup(reason: &str) {
     if !stage_reported(Stage::Ready) {
         stage_line(Stage::Ready, StageStatus::Fail, reason);
@@ -462,6 +482,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
         "FLAMEWM_RENDER_PROVIDER {} (real GL driver reported as FLAMEWM_GL_RENDERER)",
         graphics.name()
     );
+    report_render_acceleration();
     cursor::export_session_theme(cursor::saved_theme().as_deref());
     let explicit = std::env::var("FLAMEWM_WAYLAND_BACKEND").ok();
     let backend = select_backend(explicit.as_deref());

@@ -4,7 +4,9 @@ use std::cell::RefCell;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-pub use flamewm_render_core::{PixelBackend, RenderAcceleration};
+use crate::native::rounded::row_inset;
+
+pub use flamewm_render_core::{PixelBackend, RenderAcceleration, RoundedRect};
 
 pub const RENDER_ACCELERATION_SETTING: &str = "renderAcceleration";
 
@@ -35,6 +37,57 @@ impl PixelBackend for CpuPixels {
             .release_if_over_budget(CPU_SCRATCH_RETAIN_BUDGET_BYTES);
         result.map_err(|error| format!("{error:?}"))
     }
+
+    fn fill_rounded_rect(
+        &mut self,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        outer: RoundedRect,
+        hole: Option<RoundedRect>,
+        color: [u8; 4],
+    ) -> Result<(), String> {
+        if pixels.len() != width as usize * height as usize * 4 {
+            return Err("pixel buffer does not match its size".to_owned());
+        }
+        let alpha = f32::from(color[3]) / 255.0;
+        for row in 0..outer.height {
+            let y = outer.y + row as i32;
+            if !(0..height as i32).contains(&y) {
+                continue;
+            }
+            let inset = row_inset(outer.width, outer.height, outer.radius, row) as i32;
+            let start = (outer.x + inset).max(0);
+            let end = (outer.x + outer.width as i32 - inset).min(width as i32);
+            for x in start..end {
+                if hole.is_some_and(|hole| inside_rounded(hole, x, y)) {
+                    continue;
+                }
+                let index = (y as usize * width as usize + x as usize) * 4;
+                let pixel = &mut pixels[index..index + 4];
+                for channel in 0..3 {
+                    pixel[channel] = (f32::from(color[channel]) * alpha
+                        + f32::from(pixel[channel]) * (1.0 - alpha))
+                        .round() as u8;
+                }
+                pixel[3] = (f32::from(color[3]) + f32::from(pixel[3]) * (1.0 - alpha)).round() as u8;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether device pixel (`x`, `y`) lies inside `rect`'s rounded outline, using the same row
+/// insets as the outer fill.
+fn inside_rounded(rect: RoundedRect, x: i32, y: i32) -> bool {
+    let (Ok(row), Ok(column)) = (u32::try_from(y - rect.y), u32::try_from(x - rect.x)) else {
+        return false;
+    };
+    if row >= rect.height || column >= rect.width {
+        return false;
+    }
+    let inset = row_inset(rect.width, rect.height, rect.radius, row);
+    column >= inset && column < rect.width - inset
 }
 
 impl PixelBackend for gles::GpuBlur {
@@ -46,6 +99,18 @@ impl PixelBackend for gles::GpuBlur {
         radius: f32,
     ) -> Result<(), String> {
         self.blur_sigma(pixels, width, height, radius / 2.0)
+    }
+
+    fn fill_rounded_rect(
+        &mut self,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        outer: RoundedRect,
+        hole: Option<RoundedRect>,
+        color: [u8; 4],
+    ) -> Result<(), String> {
+        self.rounded_fill(pixels, width, height, outer, hole, color)
     }
 }
 
@@ -121,11 +186,11 @@ fn record(renderer: Option<String>, error: Option<String>) {
     }
 }
 
-pub(crate) fn gpu_blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: f32) -> bool {
-    if render_acceleration() != RenderAcceleration::Gpu
-        || radius < 0.5
-        || (width as usize) * (height as usize) < MIN_GPU_PIXELS
-    {
+/// Runs one pixel operation on the GPU when `renderAcceleration` is `gpu` and the GPU is healthy.
+/// `false` means the operation did not run on the GPU and the caller must run it on the CPU; the
+/// GPU contract leaves the frame untouched on error, so the CPU sees the original pixels.
+fn try_gpu(op: &mut dyn FnMut(&mut dyn PixelBackend) -> Result<(), String>) -> bool {
+    if render_acceleration() != RenderAcceleration::Gpu {
         return false;
     }
     GPU.with(|slot| {
@@ -149,10 +214,11 @@ pub(crate) fn gpu_blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: 
         let GpuSlot::Ready(gpu) = &mut *slot else {
             return false;
         };
-        match PixelBackend::blur_rgba(gpu.as_mut(), pixels, width, height, radius) {
+        let backend: &mut dyn PixelBackend = &mut **gpu;
+        match op(backend) {
             Ok(()) => true,
             Err(error) => {
-                eprintln!("flamewm-render-x11: GPU blur failed, using CPU: {error}");
+                eprintln!("flamewm-render-x11: GPU pixel op failed, using CPU: {error}");
                 record(None, Some(error));
                 *slot = GpuSlot::Failed;
                 false
@@ -161,7 +227,14 @@ pub(crate) fn gpu_blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: 
     })
 }
 
-pub(crate) fn blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
+pub(crate) fn gpu_blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: f32) -> bool {
+    if radius < 0.5 || (width as usize) * (height as usize) < MIN_GPU_PIXELS {
+        return false;
+    }
+    try_gpu(&mut |backend| backend.blur_rgba(pixels, width, height, radius))
+}
+
+pub fn blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
     if gpu_blur_rgba(pixels, width, height, radius) {
         return;
     }
@@ -171,14 +244,62 @@ pub(crate) fn blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: f32)
     }
 }
 
+/// Source-over `color` through `outer` minus `hole`. Runs on the GPU when `renderAcceleration` is
+/// `gpu`, and on the CPU otherwise or after any GPU failure.
+pub fn fill_rounded_rect(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    outer: RoundedRect,
+    hole: Option<RoundedRect>,
+    color: [u8; 4],
+) -> Result<(), String> {
+    let outer = outer.normalized();
+    let hole = hole.map(RoundedRect::normalized);
+    let mut op = |backend: &mut dyn PixelBackend| {
+        backend.fill_rounded_rect(pixels, width, height, outer, hole, color)
+    };
+    if try_gpu(&mut op) {
+        return Ok(());
+    }
+    CPU.with(|cpu| op(&mut *cpu.borrow_mut()))
+}
+
+/// Source-over ring of `thickness` pixels inside `rect`, through the same selection as
+/// [`fill_rounded_rect`].
+pub fn stroke_rounded_rect(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    rect: RoundedRect,
+    thickness: u32,
+    color: [u8; 4],
+) -> Result<(), String> {
+    let outer = rect.normalized();
+    fill_rounded_rect(
+        pixels,
+        width,
+        height,
+        outer,
+        Some(outer.inset(thickness)),
+        color,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn frame(width: u32, height: u32, seed: u32) -> Vec<u8> {
+        (0..width * height * 4)
+            .map(|i| (i.wrapping_mul(37).wrapping_add(seed) % 251) as u8)
+            .collect()
+    }
+
     #[test]
     fn cpu_backend_output_matches_the_image_core_blur() {
         let (width, height) = (96_u32, 80_u32);
-        let source: Vec<u8> = (0..width * height * 4).map(|i| (i * 37 % 251) as u8).collect();
+        let source = frame(width, height, 0);
         let mut expected = source.clone();
         flamewm_image_core::blur::gaussian_blur_rgba(&mut expected, width, height, 9.0)
             .expect("reference blur");
@@ -190,19 +311,85 @@ mod tests {
     }
 
     #[test]
+    fn cpu_fill_is_hard_edged_and_composites_source_over() {
+        let (width, height) = (16_u32, 16_u32);
+        let mut pixels = vec![0_u8; (width * height * 4) as usize];
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
+        let rect = RoundedRect { x: 2, y: 2, width: 12, height: 12, radius: 4 }.normalized();
+        fill_rounded_rect(&mut pixels, width, height, rect, None, [255, 0, 0, 255])
+            .expect("cpu fill");
+        let at = |x: u32, y: u32| {
+            let index = ((y * width + x) * 4) as usize;
+            [pixels[index], pixels[index + 1], pixels[index + 2]]
+        };
+        assert_eq!(at(8, 8), [255, 0, 0], "interior is painted");
+        assert_eq!(at(2, 2), [0, 0, 0], "rounded corner stays unpainted");
+        assert_eq!(at(0, 0), [0, 0, 0], "outside the rect is untouched");
+        assert_eq!(at(13, 13), [0, 0, 0], "bottom-right corner stays unpainted");
+    }
+
+    #[test]
+    fn cpu_stroke_paints_the_ring_and_keeps_the_interior() {
+        let (width, height) = (16_u32, 16_u32);
+        let mut pixels = vec![40_u8; (width * height * 4) as usize];
+        let rect = RoundedRect { x: 0, y: 0, width: 16, height: 16, radius: 0 };
+        stroke_rounded_rect(&mut pixels, width, height, rect, 2, [255, 255, 255, 255])
+            .expect("cpu stroke");
+        let at = |x: u32, y: u32| pixels[((y * width + x) * 4) as usize];
+        assert_eq!(at(0, 8), 255, "left edge ring");
+        assert_eq!(at(1, 8), 255, "second ring pixel");
+        assert_eq!(at(2, 8), 40, "first interior pixel");
+        assert_eq!(at(8, 8), 40, "centre");
+    }
+
+    #[test]
+    fn translucent_fill_uses_the_documented_source_over_formula() {
+        let mut pixels = [0, 0, 255, 255].repeat(4);
+        fill_rounded_rect(
+            &mut pixels,
+            2,
+            2,
+            RoundedRect { x: 0, y: 0, width: 2, height: 2, radius: 0 },
+            None,
+            [255, 0, 0, 128],
+        )
+        .expect("translucent fill");
+        // a = 128/255: rgb = src*a + dst*(1-a), alpha = 128 + 255*(1-a).
+        assert_eq!(&pixels[0..4], &[128, 0, 127, 255]);
+    }
+
+    #[test]
     fn failing_gpu_backend_leaves_pixels_for_the_cpu_fallback() {
         struct FailingGpu;
         impl PixelBackend for FailingGpu {
             fn blur_rgba(&mut self, _: &mut [u8], _: u32, _: u32, _: f32) -> Result<(), String> {
                 Err("simulated GL failure".to_owned())
             }
+            fn fill_rounded_rect(
+                &mut self,
+                _: &mut [u8],
+                _: u32,
+                _: u32,
+                _: RoundedRect,
+                _: Option<RoundedRect>,
+                _: [u8; 4],
+            ) -> Result<(), String> {
+                Err("simulated GL failure".to_owned())
+            }
         }
         let (width, height) = (96_u32, 80_u32);
-        let source: Vec<u8> = (0..width * height * 4).map(|i| (i * 13 % 255) as u8).collect();
+        let source = frame(width, height, 13);
         let mut pixels = source.clone();
-        // `gpu_blur_rgba` returns false on this Err, so the CPU path below runs on the same frame.
+        // `try_gpu` falls back to the CPU on this Err, so the frame must still be the source.
         assert!(FailingGpu.blur_rgba(&mut pixels, width, height, 9.0).is_err());
-        assert_eq!(pixels, source, "a failed GPU pass must not touch the frame");
+        assert_eq!(pixels, source, "a failed GPU blur must not touch the frame");
+        let rect = RoundedRect { x: 4, y: 4, width: 40, height: 30, radius: 8 };
+        assert!(FailingGpu
+            .fill_rounded_rect(&mut pixels, width, height, rect, None, [9, 9, 9, 255])
+            .is_err());
+        assert_eq!(pixels, source, "a failed GPU fill must not touch the frame");
         CpuPixels::default()
             .blur_rgba(&mut pixels, width, height, 9.0)
             .expect("cpu fallback");
@@ -278,5 +465,76 @@ mod tests {
                 context.renderer()
             );
         }
+    }
+
+    #[test]
+    fn gpu_rounded_fill_and_stroke_match_the_cpu_when_a_gpu_is_present() {
+        let Ok(mut context) = gles::GpuBlur::new() else {
+            eprintln!("skipping GPU fill comparison: no GPU");
+            return;
+        };
+        let (width, height) = (160_u32, 120_u32);
+        let source = frame(width, height, 7);
+        let outer = RoundedRect { x: 10, y: 8, width: 120, height: 90, radius: 20 }.normalized();
+        let cases = [
+            (outer, None),
+            (outer, Some(outer.inset(6))),
+        ];
+        for (outer, hole) in cases {
+            let mut cpu = source.clone();
+            let mut gpu = source.clone();
+            CpuPixels::default()
+                .fill_rounded_rect(&mut cpu, width, height, outer, hole, [200, 60, 30, 170])
+                .expect("cpu fill");
+            PixelBackend::fill_rounded_rect(
+                &mut context,
+                &mut gpu,
+                width,
+                height,
+                outer,
+                hole,
+                [200, 60, 30, 170],
+            )
+            .expect("gpu fill");
+            // The CPU floors each row inset and the shader samples pixel centres, so corner arcs
+            // may disagree by a pixel. Every other pixel must match within rounding.
+            let differing = cpu
+                .chunks_exact(4)
+                .zip(gpu.chunks_exact(4))
+                .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2))
+                .count();
+            let outline = 2 * (outer.width + outer.height) as usize;
+            assert!(
+                differing <= outline,
+                "{differing} pixels differ by over 2, outline budget {outline}"
+            );
+        }
+    }
+
+    #[test]
+    fn gles_errors_leave_the_frame_untouched() {
+        let Ok(mut context) = gles::GpuBlur::new() else {
+            eprintln!("skipping GLES error check: no GPU");
+            return;
+        };
+        // Wider than any GL texture limit: rejected before any GL call writes the frame.
+        let width = 1_u32 << 16;
+        let source = frame(width, 1, 3);
+        let mut blur = source.clone();
+        assert!(PixelBackend::blur_rgba(&mut context, &mut blur, width, 1, 9.0).is_err());
+        assert_eq!(blur, source);
+        let mut fill = source.clone();
+        let rect = RoundedRect { x: 0, y: 0, width, height: 1, radius: 0 };
+        assert!(PixelBackend::fill_rounded_rect(
+            &mut context,
+            &mut fill,
+            width,
+            1,
+            rect,
+            None,
+            [1, 2, 3, 255],
+        )
+        .is_err());
+        assert_eq!(fill, source);
     }
 }

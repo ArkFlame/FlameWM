@@ -20,6 +20,7 @@ flamewm-applications = { path = "../flamewm-applications" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
 flamewm-control-wire = { path = "../flamewm-control-wire" }
 flamewm-platform = { path = "../flamewm-platform" }
+flamewm-render-core = { path = "../flamewm-render-core" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-session-core = { path = "../flamewm-session-core" }
 flamewm-skin = { path = "../flamewm-skin" }

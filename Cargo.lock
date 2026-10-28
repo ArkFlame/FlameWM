@@ -954,6 +954,7 @@ dependencies = [
  "flamewm-image-core",
  "flamewm-platform",
  "flamewm-reactor",
+ "flamewm-render-core",
  "flamewm-session-core",
  "flamewm-skin",
  "fontdue",

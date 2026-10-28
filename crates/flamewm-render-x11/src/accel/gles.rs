@@ -2,6 +2,7 @@ use std::ffi::{CStr, CString, c_char, c_float, c_int, c_uint, c_void};
 use std::ptr;
 
 use crate::ffi::dynamic_library::DynamicLibrary;
+use flamewm_render_core::RoundedRect;
 
 type EglDisplay = *mut c_void;
 type EglConfig = *mut c_void;
@@ -59,9 +60,42 @@ const GL_MAX_TEXTURE_SIZE: GlEnum = 0x0D33;
 const GL_RENDERER: GlEnum = 0x1F01;
 const GL_TEXTURE0: GlEnum = 0x84C0;
 const GL_BLEND: GlEnum = 0x0BE2;
+const GL_ONE: GlEnum = 1;
+const GL_SRC_ALPHA: GlEnum = 0x0302;
+const GL_ONE_MINUS_SRC_ALPHA: GlEnum = 0x0303;
 const GL_NO_ERROR: GlEnum = 0;
 
 const MAX_TAPS: usize = 33;
+/// Hard-edged rounded-rect coverage, matching the CPU row insets: a fragment is inside when its
+/// pixel centre lies within the signed distance of the rounded rectangle.
+const ROUNDED_SHADER: &str = "#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform vec4 u_outer;
+uniform float u_outer_radius;
+uniform vec4 u_hole;
+uniform float u_hole_radius;
+uniform int u_hole_enabled;
+uniform vec4 u_color;
+float rounded_cover(vec4 rect, float radius, vec2 p) {
+    vec2 center = rect.xy + rect.zw * 0.5;
+    vec2 half_extent = rect.zw * 0.5 - vec2(radius);
+    vec2 d = abs(p - center) - half_extent;
+    float signed_dist = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
+    return signed_dist <= 0.0 ? 1.0 : 0.0;
+}
+void main() {
+    vec2 p = gl_FragCoord.xy;
+    float cover = rounded_cover(u_outer, u_outer_radius, p);
+    if (u_hole_enabled == 1) {
+        cover *= 1.0 - rounded_cover(u_hole, u_hole_radius, p);
+    }
+    gl_FragColor = vec4(u_color.rgb, u_color.a * cover);
+}
+";
+
 const POSITION_ATTRIBUTE: GlUint = 0;
 
 const VERTEX_SHADER: &str = "attribute vec2 a_position;
@@ -268,6 +302,10 @@ struct Gl {
     uniform1i: unsafe extern "C" fn(GlInt, GlInt),
     uniform2f: unsafe extern "C" fn(GlInt, c_float, c_float),
     uniform1fv: unsafe extern "C" fn(GlInt, GlSizei, *const c_float),
+    uniform1f: unsafe extern "C" fn(GlInt, c_float),
+    uniform4f: unsafe extern "C" fn(GlInt, c_float, c_float, c_float, c_float),
+    enable: unsafe extern "C" fn(GlEnum),
+    blend_func_separate: unsafe extern "C" fn(GlEnum, GlEnum, GlEnum, GlEnum),
     gen_buffers: unsafe extern "C" fn(GlSizei, *mut GlUint),
     delete_buffers: unsafe extern "C" fn(GlSizei, *const GlUint),
     bind_buffer: unsafe extern "C" fn(GlEnum, GlUint),
@@ -319,6 +357,10 @@ impl Gl {
                 uniform1i: library.symbol(b"glUniform1i\0")?,
                 uniform2f: library.symbol(b"glUniform2f\0")?,
                 uniform1fv: library.symbol(b"glUniform1fv\0")?,
+                uniform1f: library.symbol(b"glUniform1f\0")?,
+                uniform4f: library.symbol(b"glUniform4f\0")?,
+                enable: library.symbol(b"glEnable\0")?,
+                blend_func_separate: library.symbol(b"glBlendFuncSeparate\0")?,
                 gen_buffers: library.symbol(b"glGenBuffers\0")?,
                 delete_buffers: library.symbol(b"glDeleteBuffers\0")?,
                 bind_buffer: library.symbol(b"glBindBuffer\0")?,
@@ -346,6 +388,12 @@ struct Program {
     step: GlInt,
     weights: GlInt,
     taps: GlInt,
+    outer: GlInt,
+    outer_radius: GlInt,
+    hole: GlInt,
+    hole_radius: GlInt,
+    hole_enabled: GlInt,
+    color: GlInt,
 }
 
 struct RenderTarget {
@@ -363,7 +411,10 @@ pub(crate) struct GpuBlur {
     surface: EglSurface,
     copy: Program,
     blur: Program,
+    rounded: Program,
     quad: GlUint,
+    /// Reused readback buffer; the caller's frame is replaced only after a successful GL pass.
+    readback: Vec<u8>,
     max_texture_size: i32,
     renderer: String,
 }
@@ -496,6 +547,8 @@ impl GpuBlur {
         let mut gpu = Self {
             copy: Program::empty(),
             blur: Program::empty(),
+            rounded: Program::empty(),
+            readback: Vec::new(),
             quad: 0,
             max_texture_size,
             renderer,
@@ -515,6 +568,7 @@ impl GpuBlur {
         unsafe {
             self.copy = self.program(COPY_SHADER)?;
             self.blur = self.program(BLUR_SHADER)?;
+            self.rounded = self.program(ROUNDED_SHADER)?;
             let vertices: [f32; 8] = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
             (self.gl.gen_buffers)(1, &mut self.quad);
             (self.gl.bind_buffer)(GL_ARRAY_BUFFER, self.quad);
@@ -599,6 +653,12 @@ impl GpuBlur {
                 step: uniform(c"u_step"),
                 weights: uniform(c"u_weights"),
                 taps: uniform(c"u_taps"),
+                outer: uniform(c"u_outer"),
+                outer_radius: uniform(c"u_outer_radius"),
+                hole: uniform(c"u_hole"),
+                hole_radius: uniform(c"u_hole_radius"),
+                hole_enabled: uniform(c"u_hole_enabled"),
+                color: uniform(c"u_color"),
             })
         }
     }
@@ -721,13 +781,8 @@ impl GpuBlur {
         }
     }
 
-    pub(crate) fn blur_sigma(
-        &mut self,
-        pixels: &mut [u8],
-        width: u32,
-        height: u32,
-        sigma: f32,
-    ) -> Result<(), String> {
+    /// Checks that `len` bytes are one RGBA8 frame of `width`x`height` that fits the GPU limit.
+    fn frame_size(&self, len: usize, width: u32, height: u32) -> Result<(i32, i32), String> {
         let (w, h) = (width as i32, height as i32);
         if w < 1 || h < 1 || w > self.max_texture_size || h > self.max_texture_size {
             return Err(format!(
@@ -735,12 +790,117 @@ impl GpuBlur {
                 self.max_texture_size
             ));
         }
-        if pixels.len() != width as usize * height as usize * 4 {
+        if len != width as usize * height as usize * 4 {
             return Err("pixel buffer does not match its size".to_owned());
         }
+        Ok((w, h))
+    }
+
+    /// Takes the reusable readback buffer, sized for one frame of `len` bytes.
+    fn staging(&mut self, len: usize) -> Vec<u8> {
+        let mut staged = std::mem::take(&mut self.readback);
+        staged.resize(len, 0);
+        staged
+    }
+
+    /// Reads `target` into `out`, which holds exactly one frame, and reports any GL error.
+    unsafe fn read_back(&self, target: &RenderTarget, out: &mut [u8]) -> Result<(), String> {
+        // SAFETY: a context is current; `target` is live and `out` holds width*height RGBA8 bytes.
+        unsafe {
+            (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, target.framebuffer);
+            (self.gl.read_pixels)(
+                0,
+                0,
+                target.width,
+                target.height,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                out.as_mut_ptr().cast(),
+            );
+            (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
+            self.check("readback")
+        }
+    }
+
+    /// Source-over `color` through `outer` minus `hole`, computed by the rounded-rect shader. The
+    /// caller's frame is replaced only when the GL pass and its readback both succeed.
+    pub(crate) fn rounded_fill(
+        &mut self,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        outer: RoundedRect,
+        hole: Option<RoundedRect>,
+        color: [u8; 4],
+    ) -> Result<(), String> {
+        let (w, h) = self.frame_size(pixels.len(), width, height)?;
+        if outer.width == 0 || outer.height == 0 {
+            return Ok(());
+        }
+        // SAFETY: the owned context is made current before any GL call; every handle is released below.
+        if unsafe { (self.egl.make_current)(self.display, self.surface, self.surface, self.context) } == 0 {
+            return Err("eglMakeCurrent failed".to_owned());
+        }
+        let mut staged = self.staging(pixels.len());
+        // SAFETY: the context is current and `pixels` holds one w*h RGBA8 frame.
+        let result = unsafe {
+            self.target(w, h, pixels.as_ptr().cast()).and_then(|target| {
+                self.rounded_pass(&target, outer, hole, color);
+                let read = self.read_back(&target, &mut staged);
+                self.release(&target);
+                read
+            })
+        };
+        if result.is_ok() {
+            pixels.copy_from_slice(&staged);
+        }
+        self.readback = staged;
+        result
+    }
+
+    /// Blends the rounded-rect quad over the frame attached to `target`. Blending is
+    /// `rgb = src * a + dst * (1 - a)` and `alpha = a + dst.a * (1 - a)`, as the trait documents.
+    unsafe fn rounded_pass(
+        &self,
+        target: &RenderTarget,
+        outer: RoundedRect,
+        hole: Option<RoundedRect>,
+        color: [u8; 4],
+    ) {
+        let rect = |rect: RoundedRect| [rect.x as f32, rect.y as f32, rect.width as f32, rect.height as f32];
+        let [r, g, b, a] = color.map(|channel| f32::from(channel) / 255.0);
+        // SAFETY: a context is current; `target` is live and owned by the caller.
+        unsafe {
+            (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, target.framebuffer);
+            (self.gl.viewport)(0, 0, target.width, target.height);
+            (self.gl.use_program)(self.rounded.id);
+            let [x, y, w, h] = rect(outer);
+            (self.gl.uniform4f)(self.rounded.outer, x, y, w, h);
+            (self.gl.uniform1f)(self.rounded.outer_radius, outer.radius as f32);
+            let [x, y, w, h] = hole.map_or([0.0; 4], rect);
+            (self.gl.uniform4f)(self.rounded.hole, x, y, w, h);
+            (self.gl.uniform1f)(self.rounded.hole_radius, hole.map_or(0.0, |hole| hole.radius as f32));
+            (self.gl.uniform1i)(self.rounded.hole_enabled, i32::from(hole.is_some()));
+            (self.gl.uniform4f)(self.rounded.color, r, g, b, a);
+            (self.gl.enable)(GL_BLEND);
+            (self.gl.blend_func_separate)(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            (self.gl.draw_arrays)(GL_TRIANGLE_STRIP, 0, 4);
+            (self.gl.disable)(GL_BLEND);
+        }
+    }
+
+    pub(crate) fn blur_sigma(
+        &mut self,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        sigma: f32,
+    ) -> Result<(), String> {
+        let (w, h) = self.frame_size(pixels.len(), width, height)?;
         let factor = downscale_factor(sigma);
         let small = ((w + factor - 1) / factor, (h + factor - 1) / factor);
         let weights = gaussian_weights(sigma / factor as f32);
+        let mut staged = self.staging(pixels.len());
         // SAFETY: the context owned by `self` is made current on this thread before any GL call;
         // every texture and framebuffer created here is released before returning.
         unsafe {
@@ -783,22 +943,16 @@ impl GpuBlur {
                 targets.push(self.target(w, h, ptr::null())?);
                 let output = targets.len() - 1;
                 self.copy_pass(&targets[current], &targets[output], 2, GL_LINEAR);
-                (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, targets[output].framebuffer);
-                (self.gl.read_pixels)(
-                    0,
-                    0,
-                    w,
-                    h,
-                    GL_RGBA,
-                    GL_UNSIGNED_BYTE,
-                    pixels.as_mut_ptr().cast(),
-                );
-                self.check("blur")
+                self.read_back(&targets[output], &mut staged)
             })();
             (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
             for target in &targets {
                 self.release(target);
             }
+            if result.is_ok() {
+                pixels.copy_from_slice(&staged);
+            }
+            self.readback = staged;
             result
         }
     }
@@ -813,6 +967,12 @@ impl Program {
             step: -1,
             weights: -1,
             taps: -1,
+            outer: -1,
+            outer_radius: -1,
+            hole: -1,
+            hole_radius: -1,
+            hole_enabled: -1,
+            color: -1,
         }
     }
 }
@@ -825,7 +985,7 @@ impl Drop for GpuBlur {
             if self.quad != 0 {
                 (self.gl.delete_buffers)(1, &self.quad);
             }
-            for program in [self.copy.id, self.blur.id] {
+            for program in [self.copy.id, self.blur.id, self.rounded.id] {
                 if program != 0 {
                     (self.gl.delete_program)(program);
                 }

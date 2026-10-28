@@ -16,8 +16,9 @@ mod xrender_transform;
 mod xshape;
 
 pub use accel::{
-    AccelerationStatus, RENDER_ACCELERATION_SETTING, RenderAcceleration, probe_gpu_renderer,
-    render_acceleration, render_acceleration_status, set_render_acceleration,
+    AccelerationStatus, RENDER_ACCELERATION_SETTING, RenderAcceleration, blur_rgba,
+    fill_rounded_rect, probe_gpu_renderer, render_acceleration, render_acceleration_status,
+    set_render_acceleration, stroke_rounded_rect,
 };
 pub use lamp::PanelEdge;
 pub use overlay::{TransitionDirection, TransitionStyle, WarpOverlay, fade_alpha};
