@@ -26,39 +26,69 @@ def sha256_file(path: Path) -> str:
 # re-accepted here. Non-pinned owners keep full token-identity checks.
 ACCEPTED_OWNERS: dict[str, dict[str, str]] = {
     "crates/flamewm-render-core/src/lib.rs": {
-        "sha256": "40a7187113d2a68deeb7495ae57f4839ef5abea04ab04765b3390cdf0d97d4ee",
-        "delta": "exports text_layout module and IntrinsicSize/IntrinsicMeasureError re-exports",
-        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+        "sha256": "2f2865f6d19690adede3fe8192451e29c2f315e38fa1acbbb733f4981a487be6",
+        "delta": "adds PixelBackend, PixelOp, RoundedRect and RenderAcceleration (shared CPU/GPU renderer domain) on top of text_layout exports",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
     },
     "crates/flamewm-render-core/src/codec.rs": {
-        "sha256": "74a6131d4870938bb3733fe0f10a1f0550b311a3b171cd4ecfbaa0c8279b5ea3",
-        "delta": "format v3 straight RGBA8 pixels with v2 legacy decode path; FlameWM Render error strings",
-        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+        "sha256": "4a197baf032b3de42c1a935dc3b2f5d82a5db6af3ff59433c9ffd23e3af1628f",
+        "delta": "shares identical node styles when decoding compiled documents; clippy cleanups",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
     },
     "crates/flamewm-render-compiler/src/compile.rs": {
-        "sha256": "4506ea4e22149774a6ca29e535d07192c2fbe2902c02758af5f76876641eeccd",
-        "delta": "imports and lowers ImageTreatment, Overflow and TextWrap style fields",
-        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+        "sha256": "0fcab5b20b7df30f6d9a4ba95e6f01240b4414c765a67e3d42a6f686c9f4977a",
+        "delta": "shares identical node styles on lowering; rustfmt after upstream merge",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
     },
     "crates/flamewm-render-x11/src/xlib.rs": {
-        "sha256": "d462d492c91f7adf73a4e8a0c6aa47e1c33950b5a1050d2c2ff52b6cf6c6e3c4",
-        "delta": "adds XVisualInfo and further Xlib FFI declarations and constants",
-        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+        "sha256": "9aea42ba4ad0c8305164ac1d59a5674336604f0556c13db4803d7583c29b330d",
+        "delta": "adds CW_BORDER_PIXEL and further Xlib FFI constants (ARGB border pixel fix)",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
     },
     "crates/flamewm-render-x11/src/xft.rs": {
-        "sha256": "5c02e6231a6f0e8556c19e17cadc34d446b2873584c96fd2e86da242caf324ee",
-        "delta": "trims unused std imports and adjusts FFI import set",
-        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+        "sha256": "dc1fcf075108436305c73c80e16ded1fae0a27ab45d85d1e95eab16b0de5f171",
+        "delta": "text_alpha_mask plus clip, scroll and backdrop support added since 0.0.9",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
     },
     "crates/flamewm-render-x11/src/xrender.rs": {
-        "sha256": "d97ed6586ca0dbed088cd2f1ea29450e379b7987dd1706c0c33854872dc857e6",
-        "delta": "trims unused std imports and adjusts FFI import set",
-        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+        "sha256": "7399150d9a44138f6ae0d88d659cf3583f0a5085b17665c95c9cd5972518cebb",
+        "delta": "clippy cleanups and memory-footprint changes since 0.0.9",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+    },
+    "crates/flamewm-render-compiler/src/css.rs": {
+        "sha256": "04092a882c05e37af5d03dd4eecf482585887f9e05fdbea69ae32dba45c9745e",
+        "delta": "clippy and debloat rewrites (iterator chains, is_some_and) since 0.0.9",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+    },
+    "crates/flamewm-render-compiler/src/html.rs": {
+        "sha256": "0066cbd5597997934025a20a9ccf94904958ead7127b667595587be1fcd06b4d",
+        "delta": "clippy and debloat rewrites (iterator style and link collectors) since 0.0.9",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+    },
+    "crates/flamewm-render-compiler/src/bin/flamewm-render-inspect.rs": {
+        "sha256": "dadff8cbd8e98fa4b674f9e4b10433927adcc4eb04fd24bd1459a88ba3cb278e",
+        "delta": "rwr-inspect renamed with FlameWM Render naming and later updates",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
     },
 }
 
 # Split items pinned by SHA-256 of the exact item body at the current owner.
 ACCEPTED_ITEMS: dict[tuple[str, str], dict[str, str]] = {
+    ("crates/flamewm-render-x11/src/config.rs", "pub struct X11Config"): {
+        "sha256": "bfbcb053b0db6217ee6b2decb7c69857c37748f0b3a7eff1fcb2734952923582",
+        "delta": "X11Config fields grew since 0.0.9 (xdnd, backdrop, acceleration settings)",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+    },
+    ("crates/flamewm-render-x11/src/config.rs", "impl Default for X11Config"): {
+        "sha256": "85ca9f3208b8341ab3ded8de2379585e8df3278e61a56801e2da75ad2ce5a8d3",
+        "delta": "X11Config defaults follow the added fields",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+    },
+    ("crates/flamewm-render-x11/src/app/events.rs", "fn keyboard_text"): {
+        "sha256": "b3dd46897484d141462d6deaff89771939e7e6a17d06268918489a79048cd1ff",
+        "delta": "keyboard_text moved into app/events.rs with later input fixes",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+    },
     ("crates/flamewm-render-x11/src/runtime.rs", "pub fn run_with_controller<F>"): {
         "sha256": "b0f49a5f79b362b0cd2d2ab41b9997201e3b865944438569a8a7488ac02aae11",
         "delta": "run_with_controller body differs from 0.0.9 (controller/event-seam wiring)",
@@ -374,7 +404,7 @@ for path, anchor, description in [
     ("crates/flamewm-render-x11/src/app/events.rs", "XEventsQueued(self.display, QUEUED_AFTER_READING)", "motion coalescing"),
     ("crates/flamewm-render-x11/src/app/events.rs", "XPeekEvent(self.display", "motion coalescing"),
     ("crates/flamewm-render-x11/src/app/events.rs", "ActionPhase::Motion", "motion dispatch"),
-    ("crates/flamewm-render-x11/src/app/events.rs", "inside: hover == Some(index)", "motion dispatch"),
+    ("crates/flamewm-render-x11/src/app/events.rs", "hover == Some(index),", "motion dispatch"),
     ("crates/flamewm-render-x11/src/app/mod.rs", "XSetGraphicsExposures(display, gc, 0)", "image copy"),
     ("crates/flamewm-render-x11/src/app/render.rs", "XCopyArea(\n                    self.display,\n                    self.backbuffer,", "present copy"),
     ("crates/flamewm-render-x11/src/app/mod.rs", "_NET_WM_WINDOW_TYPE", "EWMH role"),

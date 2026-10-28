@@ -38,7 +38,8 @@ CONST_RE = re.compile(r"const\s+(\w*(?:_IDS|NODE\w*))\s*:[^=]*=\s*&\[(?P<body>.*
 STRING_RE = re.compile(r'"([^"]*)"')
 ID_RE = re.compile(r'id="([^"]+)"')
 # Node templates the desktop build script injects into its document (escaped quotes in Rust source).
-GENERATED_ID_RE = re.compile(r'id=\\?"([^"\\]+)\\?"')
+# Ids written as `id="..."` markup, or passed to a generator as `&format!("{w}-...")`.
+GENERATED_ID_RE = re.compile(r'id=\\?"([^"\\]+)\\?"|&format!\("(\{[^{}"]*\}-[^"{}]+)"\)')
 GENERATED_SOURCES = {"crates/flamewm-desktop/src": "crates/flamewm-desktop/build.rs"}
 ACTION_RE = re.compile(r'data-action="([^"]+)"')
 CLASS_ATTR_RE = re.compile(r'class="([^"]*)"')
@@ -107,7 +108,10 @@ def check_document(root, html_rel, owner_dir, css_rels, errors, warnings):
 
     generated = []
     if owner_dir in GENERATED_SOURCES:
-        generated = GENERATED_ID_RE.findall((root / GENERATED_SOURCES[owner_dir]).read_text(encoding="utf-8"))
+        generated = [
+            a or b
+            for a, b in GENERATED_ID_RE.findall((root / GENERATED_SOURCES[owner_dir]).read_text(encoding="utf-8"))
+        ]
     generated_templates = [template_regex(node) for node in generated if "{" in node]
     sources = rust_sources(root / owner_dir)
     joined = "\n".join(sources)
