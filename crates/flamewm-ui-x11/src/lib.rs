@@ -41,7 +41,8 @@ use std::os::fd::RawFd;
 use std::path::PathBuf;
 
 pub use flamewm_render_x11::{
-    AccelerationStatus, RenderAcceleration, render_acceleration, render_acceleration_status,
+    AccelerationStatus, RenderAcceleration, probe_gpu_renderer, render_acceleration,
+    render_acceleration_status,
 };
 
 pub fn apply_render_acceleration(snapshot: &flamewm_api::settings::SettingsSnapshot) {

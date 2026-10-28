@@ -138,6 +138,17 @@ pub fn render_acceleration_status() -> AccelerationStatus {
     }
 }
 
+static PROBE: Mutex<Option<Result<String, String>>> = Mutex::new(None);
+
+pub fn probe_gpu_renderer() -> Result<String, String> {
+    let mut cached = PROBE
+        .lock()
+        .map_err(|_| "GPU probe state is poisoned".to_owned())?;
+    cached
+        .get_or_insert_with(|| gles::GpuBlur::new().map(|gpu| gpu.renderer().to_owned()))
+        .clone()
+}
+
 fn record(renderer: Option<String>, error: Option<String>) {
     if let Ok(mut status) = STATUS.lock() {
         *status = (renderer, error);
