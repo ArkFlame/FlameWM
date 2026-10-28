@@ -8,8 +8,9 @@ use flamewm_api::{Point, Rect};
 use flamewm_desktop_core::sticky::Rgb;
 use flamewm_desktop_core::widget_text::{
     CpuTimes, MAX_LINE_SPANS, MAX_TEMPLATE_CHARS, MAX_TEMPLATE_LINES, MemoryUsage, Placeholders,
-    SpanStyle, WallTime, count_cpus, cpu_percent, expand_placeholders, fit_lines, format_date,
-    format_gib, format_time, format_uptime, parse_cpu_times, parse_markup, parse_meminfo,
+    SpanStyle, WallTime, count_cpus, cpu_percent, display_text, estimate_text_width,
+    expand_placeholders, fit_lines, format_date, format_gib, format_time, format_uptime,
+    parse_cpu_times, parse_markup, parse_meminfo,
 };
 use flamewm_desktop_core::widgets::{
     MAX_WIDGETS, OptionControl, TextAlign, Widget, WidgetKind, WidgetStore, move_widget_rect,
@@ -28,7 +29,7 @@ use crate::entry::{
 };
 
 pub(crate) const CONFIG_ROWS: usize = 16;
-const GALLERY_SIZE: (i32, i32) = (560, 520);
+const GALLERY_SIZE: (i32, i32) = (560, 590);
 const CONFIG_WIDTH: i32 = 420;
 const CONFIG_HEADER_HEIGHT: i32 = 62;
 const CONFIG_ROW_HEIGHT: i32 = 32;
@@ -643,12 +644,17 @@ fn sync_custom(
                 continue;
             };
             let text = expand_placeholders(&span.text, placeholders);
+            document.size(
+                &span_id,
+                estimate_text_width(&text, size, span.style.bold),
+                (size * 1.3).ceil(),
+            )?;
             document.text(
                 &span_id,
                 if text.is_empty() {
                     "\u{200b}".to_owned()
                 } else {
-                    text
+                    display_text(&text)
                 },
             )?;
             document.font_size(&span_id, size)?;
