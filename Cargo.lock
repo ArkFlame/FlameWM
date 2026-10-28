@@ -603,6 +603,7 @@ name = "flamewm-desktop"
 version = "0.1.3"
 dependencies = [
  "calloop 0.14.4",
+ "chrono",
  "flamewm-api",
  "flamewm-applications",
  "flamewm-control-core",
