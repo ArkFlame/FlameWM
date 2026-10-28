@@ -43,6 +43,7 @@ ui/
 @exec scripts/release-gate
 @exec scripts/xephyr
 @exec scripts/package
+@exec scripts/dist-checksums
 @exec scripts/install-deps-ubuntu.sh
 @exec scripts/install-deps-arch.sh
 @exec scripts/build-arch
