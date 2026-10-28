@@ -115,6 +115,7 @@ impl X11App {
         text: &str,
         family: &str,
     ) -> Result<bool, String> {
+        self.ensure_xft();
         if self.xrender.is_none() || self.xft.is_none() {
             return Ok(false);
         }
@@ -561,6 +562,9 @@ impl X11App {
                 command,
                 PaintCommand::Text { .. } | PaintCommand::TextShadow { .. }
             );
+            if needs_xft {
+                self.ensure_xft();
+            }
             if needs_xft && self.xft.is_none() {
                 return Err("region text needs the Xft backend".to_string());
             }
@@ -1301,6 +1305,7 @@ impl X11App {
                         Some((x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
                     }
                 };
+                self.ensure_xft();
                 if let Some(xft) = self.xft.as_mut() {
                     // SAFETY: same initialized backbuffer/display contract as `paint`.
                     unsafe { xft.set_preferred_family(document.ui_font_family()) };
