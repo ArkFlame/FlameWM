@@ -600,6 +600,7 @@ impl<'a> NativeDrawableRenderer<'a> {
         weight: u16,
         text: &str,
     ) -> Result<(), String> {
+        self.app.ensure_xft();
         if let Some(xft) = self.app.xft.as_mut() {
             unsafe { xft.set_preferred_family(document.ui_font_family()) };
             return unsafe { xft.draw_text(x, y, color, size, weight, text) };

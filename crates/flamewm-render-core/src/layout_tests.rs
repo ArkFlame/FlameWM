@@ -12,7 +12,7 @@ fn rows_document(rows: &[(String, Style)]) -> RuntimeDocument {
         action: std::borrow::Cow::Borrowed(""),
         text: "".to_string().into(),
         image: None,
-        style: Style::default(),
+        style: Style::default().into(),
         hover_style: None,
         active_style: None,
     }];
@@ -28,7 +28,7 @@ fn rows_document(rows: &[(String, Style)]) -> RuntimeDocument {
             action: std::borrow::Cow::Borrowed(""),
             text: "".to_string().into(),
             image: None,
-            style: style.clone(),
+            style: style.clone().into(),
             hover_style: None,
             active_style: None,
         });
@@ -41,7 +41,7 @@ fn rows_document(rows: &[(String, Style)]) -> RuntimeDocument {
             action: std::borrow::Cow::Borrowed(""),
             text: text.clone().into(),
             image: None,
-            style: Style::default(),
+            style: Style::default().into(),
             hover_style: None,
             active_style: None,
         });
@@ -73,7 +73,7 @@ fn geometry_node(
         action: std::borrow::Cow::Borrowed(""),
         text: "".to_string().into(),
         image: None,
-        style,
+        style: style.into(),
         hover_style: None,
         active_style: None,
     }

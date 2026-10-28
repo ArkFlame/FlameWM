@@ -42,8 +42,15 @@ fn scroll_fingerprint(document: &RuntimeDocument) -> u64 {
 /// Only shapes independent of paint commands may skip coverage reconstruction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StaticShapeKey {
-    Ring { size: (u32, u32), border: u32, radius: u32 },
-    Dock { size: (u32, u32), radius: u32 },
+    Ring {
+        size: (u32, u32),
+        border: u32,
+        radius: u32,
+    },
+    Dock {
+        size: (u32, u32),
+        radius: u32,
+    },
 }
 
 fn fixed_shape_unchanged(
@@ -61,9 +68,16 @@ fn static_shape_key(
     dock_radius: u32,
 ) -> Option<StaticShapeKey> {
     if let Some((border, radius)) = ring {
-        Some(StaticShapeKey::Ring { size: (width, height), border, radius })
+        Some(StaticShapeKey::Ring {
+            size: (width, height),
+            border,
+            radius,
+        })
     } else if dock_radius > 0 {
-        Some(StaticShapeKey::Dock { size: (width, height), radius: dock_radius })
+        Some(StaticShapeKey::Dock {
+            size: (width, height),
+            radius: dock_radius,
+        })
     } else {
         None
     }
@@ -80,8 +94,10 @@ mod static_shape_tests {
         assert_ne!(dock, static_shape_key(1920, 49, None, 12).unwrap());
         assert_ne!(dock, static_shape_key(1920, 50, None, 13).unwrap());
         assert_ne!(dock, static_shape_key(1920, 50, Some((2, 12)), 12).unwrap());
-        assert_ne!(static_shape_key(1920, 50, Some((2, 12)), 12),
-                   static_shape_key(1920, 50, Some((3, 12)), 12));
+        assert_ne!(
+            static_shape_key(1920, 50, Some((2, 12)), 12),
+            static_shape_key(1920, 50, Some((3, 12)), 12)
+        );
         assert_eq!(static_shape_key(1920, 50, None, 0), None);
     }
 
@@ -115,6 +131,7 @@ impl X11App {
         text: &str,
         family: &str,
     ) -> Result<bool, String> {
+        self.ensure_xft();
         if self.xrender.is_none() || self.xft.is_none() {
             return Ok(false);
         }
@@ -561,6 +578,9 @@ impl X11App {
                 command,
                 PaintCommand::Text { .. } | PaintCommand::TextShadow { .. }
             );
+            if needs_xft {
+                self.ensure_xft();
+            }
             if needs_xft && self.xft.is_none() {
                 return Err("region text needs the Xft backend".to_string());
             }
@@ -889,7 +909,12 @@ impl X11App {
         if self.shape_override.is_some() {
             return None;
         }
-        static_shape_key(self.width, self.height, self.ring_mask, self.dock_corner_radius)
+        static_shape_key(
+            self.width,
+            self.height,
+            self.ring_mask,
+            self.dock_corner_radius,
+        )
     }
 
     /// Scale-aware shape refresh: coverage matches the paint path for
@@ -1045,7 +1070,12 @@ impl X11App {
                             // corners with square rectangular border bands.
                             unsafe {
                                 crate::xrender_aa::stroke_rounded_rect_clipped(
-                                    xrender, rect, radius, width, *color, Some(part),
+                                    xrender,
+                                    rect,
+                                    radius,
+                                    width,
+                                    *color,
+                                    Some(part),
                                 )?
                             };
                         }
@@ -1301,6 +1331,7 @@ impl X11App {
                         Some((x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
                     }
                 };
+                self.ensure_xft();
                 if let Some(xft) = self.xft.as_mut() {
                     // SAFETY: same initialized backbuffer/display contract as `paint`.
                     unsafe { xft.set_preferred_family(document.ui_font_family()) };
@@ -1554,7 +1585,7 @@ mod layout_reuse_tests {
                 action: std::borrow::Cow::Borrowed(""),
                 text: "".to_string().into(),
                 image: None,
-                style: Style::default(),
+                style: Style::default().into(),
                 hover_style: None,
                 active_style: None,
             }],

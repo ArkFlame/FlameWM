@@ -46,18 +46,59 @@ mod tests {
     #[test]
     fn default_material_and_contour_follow_shared_contract() {
         let snapshot = SettingsSnapshot::new(1);
-        assert_eq!(surface_background(&snapshot), UiColor { r: 25, g: 27, b: 29, a: 127 });
-        assert_eq!(surface_border(&snapshot), UiColor { r: 255, g: 255, b: 255, a: 63 });
+        assert_eq!(
+            surface_background(&snapshot),
+            UiColor {
+                r: 25,
+                g: 27,
+                b: 29,
+                a: 127
+            }
+        );
+        assert_eq!(
+            surface_border(&snapshot),
+            UiColor {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 63
+            }
+        );
     }
 
     #[test]
     fn border_and_fill_are_independently_configurable() {
         let mut snapshot = SettingsSnapshot::new(1);
-        snapshot.values.insert("surfaceColor".into(), SettingValue::Text("#123456".into()));
-        snapshot.values.insert("surfaceOpacity".into(), SettingValue::Percent(0));
-        snapshot.values.insert("surfaceBorderColor".into(), SettingValue::Text("#FEDCBA".into()));
-        snapshot.values.insert("surfaceBorderOpacity".into(), SettingValue::Percent(100));
-        assert_eq!(surface_background(&snapshot), UiColor { r: 0x12, g: 0x34, b: 0x56, a: 0 });
-        assert_eq!(surface_border(&snapshot), UiColor { r: 0xfe, g: 0xdc, b: 0xba, a: 255 });
+        snapshot
+            .values
+            .insert("surfaceColor".into(), SettingValue::Text("#123456".into()));
+        snapshot
+            .values
+            .insert("surfaceOpacity".into(), SettingValue::Percent(0));
+        snapshot.values.insert(
+            "surfaceBorderColor".into(),
+            SettingValue::Text("#FEDCBA".into()),
+        );
+        snapshot
+            .values
+            .insert("surfaceBorderOpacity".into(), SettingValue::Percent(100));
+        assert_eq!(
+            surface_background(&snapshot),
+            UiColor {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+                a: 0
+            }
+        );
+        assert_eq!(
+            surface_border(&snapshot),
+            UiColor {
+                r: 0xfe,
+                g: 0xdc,
+                b: 0xba,
+                a: 255
+            }
+        );
     }
 }

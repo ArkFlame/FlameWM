@@ -93,3 +93,24 @@ fn typed_key_projection_uses_shortcut_modifier_order_and_canonical_names() {
     assert_eq!(printable_key_text(u64::from(b'A')), Some("A".to_string()));
     assert_eq!(printable_key_text(XK_ESCAPE), None);
 }
+
+#[test]
+fn reactor_never_blocks_with_latched_damage_but_still_honours_the_backdrop_deadline() {
+    use super::reactor_wait_timeout;
+    use std::time::Duration;
+    let wait = Some(Duration::from_millis(30));
+    assert_eq!(reactor_wait_timeout(false, false, None), None);
+    assert_eq!(reactor_wait_timeout(false, false, wait), wait);
+    assert_eq!(
+        reactor_wait_timeout(false, true, None),
+        Some(Duration::ZERO)
+    );
+    assert_eq!(
+        reactor_wait_timeout(true, false, wait),
+        Some(Duration::ZERO)
+    );
+    assert_eq!(
+        reactor_wait_timeout(false, true, wait),
+        Some(Duration::ZERO)
+    );
+}

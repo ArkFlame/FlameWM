@@ -173,6 +173,9 @@ pub(crate) struct X11App {
     pub(crate) xcursor: Option<Rc<RefCell<SurfaceCursor>>>,
     pub(crate) fonts: HashMap<u8, *mut XFontStructHead>,
     pub(crate) xft: Option<XftBackend>,
+    /// Xft (fontconfig, FreeType, HarfBuzz) loads on the first text draw, so a surface that never
+    /// draws text never pays for those libraries.
+    xft_pending: bool,
     pub(crate) xrender: Option<XRenderBackend>,
     pub(crate) xshape: Option<XShapeBridge>,
     /// Floating dock corner radius in window px. Non-zero keeps the coverage refresh from
@@ -476,16 +479,6 @@ impl X11App {
         if let Some(font) = fonts.values().next().copied() {
             unsafe { XSetFont(display, gc, (*font).fid) };
         }
-        let xft = match unsafe { XftBackend::new(display, screen, backbuffer, visual, colormap) } {
-            Ok(backend) => {
-                eprintln!("FLAMEWM_RENDER_TEXT_BACKEND xft preferred=IBM_Plex_Sans");
-                Some(backend)
-            }
-            Err(error) => {
-                eprintln!("FLAMEWM_RENDER_TEXT_BACKEND core-x11 reason={error}");
-                None
-            }
-        };
         let xrender = match unsafe { XRenderBackend::new(display, backbuffer, visual) } {
             Ok(backend) => {
                 eprintln!("FLAMEWM_RENDER_ALPHA_BACKEND xrender");
@@ -611,7 +604,8 @@ impl X11App {
             current_cursor: None,
             xcursor: Some(xcursor),
             fonts,
-            xft,
+            xft: None,
+            xft_pending: true,
             xrender,
             xshape,
             dock_corner_radius: 0,
@@ -672,6 +666,29 @@ impl X11App {
             raw_presses: Vec::new(),
             xdnd,
         })
+    }
+
+    pub(crate) fn ensure_xft(&mut self) {
+        if !self.xft_pending {
+            return;
+        }
+        self.xft_pending = false;
+        // SAFETY: display, backbuffer, visual and colormap are live resources owned by `self`.
+        match unsafe {
+            XftBackend::new(
+                self.display,
+                self.screen,
+                self.backbuffer,
+                self.visual,
+                self.colormap,
+            )
+        } {
+            Ok(backend) => {
+                eprintln!("FLAMEWM_RENDER_TEXT_BACKEND xft preferred=IBM_Plex_Sans");
+                self.xft = Some(backend);
+            }
+            Err(error) => eprintln!("FLAMEWM_RENDER_TEXT_BACKEND core-x11 reason={error}"),
+        }
     }
 
     pub(crate) fn root_extent(&self) -> (u32, u32) {

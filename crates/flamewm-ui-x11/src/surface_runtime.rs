@@ -824,7 +824,7 @@ mod intrinsic_tests {
         flamewm_render_core::CompiledNode {
             parent,
             first_child,
-            style,
+            style: style.into(),
             ..crate::test_support::compiled_node(id, flamewm_render_core::NodeKind::Element)
         }
     }

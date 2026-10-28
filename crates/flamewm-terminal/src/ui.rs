@@ -212,10 +212,17 @@ mod tests {
     fn dense_tui_row_preserves_per_cell_colors_within_supported_width() {
         // OpenCode's dense coloured block art used to overflow the 64-node pool,
         // silently turning the tail into a single-colored text run.
-        let runs: Vec<Run> = (0..120).map(|i| Run {
-            col: i, cells: 1, text: "█".into(),
-            fg: i as u32, bg: None, bold: false, shape: None,
-        }).collect();
+        let runs: Vec<Run> = (0..120)
+            .map(|i| Run {
+                col: i,
+                cells: 1,
+                text: "█".into(),
+                fg: i as u32,
+                bg: None,
+                bold: false,
+                shape: None,
+            })
+            .collect();
         assert!(POOL_RUNS >= 120);
         let fitted = fit(&runs, POOL_RUNS);
         assert_eq!(&*fitted, runs.as_slice());

@@ -56,7 +56,7 @@ fn main() -> ExitCode {
                 eprintln!("flamewm-task-manager: {error}");
                 return ExitCode::FAILURE;
             }
-        },
+        }
         _ => {
             eprintln!(
                 "flamewm-apps: start an application through its link: {}",

@@ -1,5 +1,7 @@
 use crate::model::*;
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 // One table per wire enum: the tag bytes live here once, for both directions.
 trait Wire: Sized {
@@ -192,6 +194,7 @@ fn decode_with(bytes: &[u8], borrow: Option<&'static [u8]>) -> Result<CompiledDo
         });
     }
 
+    let mut styles = HashMap::new();
     let mut nodes = Vec::with_capacity(node_count);
     for _ in 0..node_count {
         let kind = reader.tag()?;
@@ -202,9 +205,9 @@ fn decode_with(bytes: &[u8], borrow: Option<&'static [u8]>) -> Result<CompiledDo
         let action = reader.string(borrow)?;
         let text = reader.string(borrow)?;
         let image = reader.opt_u16()?;
-        let style = reader.style_versioned(version)?;
-        let hover_style = reader.opt_style(version)?.map(Box::new);
-        let active_style = reader.opt_style(version)?.map(Box::new);
+        let style = reader.shared_style(version, &mut styles)?;
+        let hover_style = reader.opt_shared_style(version, &mut styles)?;
+        let active_style = reader.opt_shared_style(version, &mut styles)?;
         nodes.push(CompiledNode {
             kind,
             parent,
@@ -451,9 +454,26 @@ impl<'a> Reader<'a> {
             v => Err(format!("invalid {name} {v}")),
         }
     }
-    fn opt_style(&mut self, version: u16) -> Result<Option<Style>, String> {
+    fn shared_style(
+        &mut self,
+        version: u16,
+        styles: &mut HashMap<&'a [u8], Arc<Style>>,
+    ) -> Result<Arc<Style>, String> {
+        let start = self.cursor;
+        let style = self.style_versioned(version)?;
+        let bytes = self.bytes;
+        let wire = &bytes[start..self.cursor];
+        Ok(Arc::clone(
+            styles.entry(wire).or_insert_with(|| Arc::new(style)),
+        ))
+    }
+    fn opt_shared_style(
+        &mut self,
+        version: u16,
+        styles: &mut HashMap<&'a [u8], Arc<Style>>,
+    ) -> Result<Option<Arc<Style>>, String> {
         if self.u8()? != 0 {
-            Ok(Some(self.style_versioned(version)?))
+            self.shared_style(version, styles).map(Some)
         } else {
             Ok(None)
         }
@@ -620,7 +640,7 @@ mod tests {
                 action: Cow::Borrowed(""),
                 text: Cow::Borrowed(""),
                 image: None,
-                style: Style::default(),
+                style: Style::default().into(),
                 hover_style: None,
                 active_style: None,
             }],
@@ -651,7 +671,7 @@ mod tests {
                 action: Cow::Borrowed(""),
                 text: Cow::Borrowed(""),
                 image: Some(0),
-                style: Style::default(),
+                style: Style::default().into(),
                 hover_style: None,
                 active_style: None,
             }],
@@ -750,11 +770,36 @@ mod tests {
                 action: Cow::Borrowed(""),
                 text: Cow::Borrowed(""),
                 image: None,
-                style,
+                style: style.into(),
                 hover_style: None,
                 active_style: None,
             }],
         }
+    }
+
+    #[test]
+    fn decode_shares_identical_styles_between_nodes() {
+        let mut document = roundtrip_node(ImageTreatment::Original);
+        let mut other = document.nodes[0].clone();
+        other.hover_style = Some(Arc::clone(&other.style));
+        let mut distinct = document.nodes[0].clone();
+        Arc::make_mut(&mut distinct.style).hide_scrollbars = true;
+        document.nodes.push(other);
+        document.nodes.push(distinct);
+        let decoded = decode(&encode(&document).unwrap()).unwrap();
+        assert_eq!(decoded, document);
+        assert!(Arc::ptr_eq(
+            &decoded.nodes[0].style,
+            &decoded.nodes[1].style
+        ));
+        assert!(Arc::ptr_eq(
+            &decoded.nodes[1].style,
+            decoded.nodes[1].hover_style.as_ref().unwrap()
+        ));
+        assert!(!Arc::ptr_eq(
+            &decoded.nodes[0].style,
+            &decoded.nodes[2].style
+        ));
     }
 
     #[test]
@@ -770,8 +815,8 @@ mod tests {
     #[test]
     fn v4_roundtrip_preserves_wrap_fields() {
         let mut document = roundtrip_node(ImageTreatment::Original);
-        document.nodes[0].style.text_wrap = TextWrap::Wrap;
-        document.nodes[0].style.break_anywhere = true;
+        std::sync::Arc::make_mut(&mut document.nodes[0].style).text_wrap = TextWrap::Wrap;
+        std::sync::Arc::make_mut(&mut document.nodes[0].style).break_anywhere = true;
         let decoded = decode(&encode(&document).unwrap()).unwrap();
         assert_eq!(decoded, document);
     }
@@ -818,7 +863,7 @@ mod tests {
     #[test]
     fn v6_shadow_roundtrip_preserves_offset_and_color() {
         let mut document = roundtrip_node(ImageTreatment::Original);
-        document.nodes[0].style.text_shadow = Some(TextShadow {
+        std::sync::Arc::make_mut(&mut document.nodes[0].style).text_shadow = Some(TextShadow {
             offset_x: -1.0,
             offset_y: 2.0,
             blur_radius: 2.0,
@@ -835,7 +880,7 @@ mod tests {
     #[test]
     fn v6_shadow_decodes_with_zero_blur() {
         let mut doc = roundtrip_node(ImageTreatment::Original);
-        doc.nodes[0].style.text_shadow = Some(TextShadow {
+        std::sync::Arc::make_mut(&mut doc.nodes[0].style).text_shadow = Some(TextShadow {
             offset_x: 1.0,
             offset_y: -2.0,
             blur_radius: 3.0,
@@ -890,7 +935,7 @@ mod tests {
     #[test]
     fn v8_roundtrip_preserves_hide_scrollbars() {
         let mut document = roundtrip_node(ImageTreatment::Original);
-        document.nodes[0].style.hide_scrollbars = true;
+        std::sync::Arc::make_mut(&mut document.nodes[0].style).hide_scrollbars = true;
         let decoded = decode(&encode(&document).unwrap()).unwrap();
         assert!(decoded.nodes[0].style.hide_scrollbars);
         assert_eq!(decoded, document);
@@ -899,7 +944,7 @@ mod tests {
     #[test]
     fn v7_style_decodes_without_hide_scrollbars() {
         let mut document = roundtrip_node(ImageTreatment::Original);
-        document.nodes[0].style.hide_scrollbars = true;
+        std::sync::Arc::make_mut(&mut document.nodes[0].style).hide_scrollbars = true;
         let mut bytes = encode(&document).unwrap();
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_BLUR_LEGACY.to_le_bytes());
         // The v7 layout has no hide-scrollbars byte, and it sits immediately

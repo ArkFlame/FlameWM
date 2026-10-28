@@ -190,7 +190,7 @@ impl<'a> Compiler<'a> {
                 action: std::borrow::Cow::Borrowed(""),
                 text: source.text.clone().into(),
                 image: None,
-                style,
+                style: style.into(),
                 hover_style: None,
                 active_style: None,
             });
@@ -223,9 +223,9 @@ impl<'a> Compiler<'a> {
             action: action.into(),
             text: std::borrow::Cow::Borrowed(""),
             image,
-            style: base.clone(),
-            hover_style: hover_style.map(Box::new),
-            active_style: active_style.map(Box::new),
+            style: base.clone().into(),
+            hover_style: hover_style.map(Into::into),
+            active_style: active_style.map(Into::into),
         });
 
         let mut first_child = None;
@@ -846,6 +846,7 @@ mod tests {
             .find(|node| node.id == id)
             .unwrap()
             .style
+            .as_ref()
             .clone()
     }
 
@@ -867,23 +868,48 @@ mod tests {
         assert_eq!(style_of(&output, "base").border_width, 2.0);
         for id in ["none", "zero", "pixel-zero"] {
             assert_eq!(style_of(&output, id).border_width, 0.0, "{id}");
-            assert_eq!(style_of(&output, id).border_color,
-                ColorValue::Literal(Color::TRANSPARENT));
+            assert_eq!(
+                style_of(&output, id).border_color,
+                ColorValue::Literal(Color::TRANSPARENT)
+            );
         }
         assert_eq!(style_of(&output, "restore").border_width, 1.0);
-        assert_eq!(style_of(&output, "restore").border_color,
-            ColorValue::Literal(Color { r: 255, g: 255, b: 255, a: 64 }));
+        assert_eq!(
+            style_of(&output, "restore").border_color,
+            ColorValue::Literal(Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 64
+            })
+        );
         let encoded = flamewm_render_core::encode(&output.document).unwrap();
-        assert_eq!(flamewm_render_core::decode(&encoded).unwrap(), output.document);
+        assert_eq!(
+            flamewm_render_core::decode(&encoded).unwrap(),
+            output.document
+        );
     }
 
     #[test]
     fn css_border_reset_rejects_unsupported_values_without_partial_mutation() {
-        for value in ["hidden", "dashed", "2px dashed red", "1px", "10", "auto", "2px solid"] {
-            assert!(compile_str(
-                &format!("<body><style>div {{ border: {value}; }}</style><div>ok</div></body>"),
-                "", CompileOptions::default(),
-            ).is_err(), "bad border value {value} must fail");
+        for value in [
+            "hidden",
+            "dashed",
+            "2px dashed red",
+            "1px",
+            "10",
+            "auto",
+            "2px solid",
+        ] {
+            assert!(
+                compile_str(
+                    &format!("<body><style>div {{ border: {value}; }}</style><div>ok</div></body>"),
+                    "",
+                    CompileOptions::default(),
+                )
+                .is_err(),
+                "bad border value {value} must fail"
+            );
         }
     }
 

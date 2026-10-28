@@ -282,19 +282,30 @@ impl X11App {
         };
         let (consumed, relevant) = live.classify(event);
         if relevant {
-            let due = live
-                .last_refresh
-                .map_or_else(std::time::Instant::now, |at| at + LIVE_INTERVAL);
-            if let Some(state) = self.window_backdrop.as_mut() {
-                state.stale = true;
-            }
-            if due <= std::time::Instant::now() {
-                self.mark_full();
-            } else {
-                self.backdrop_deadline = Some(self.backdrop_deadline.map_or(due, |at| at.min(due)));
-            }
+            self.request_window_backdrop_refresh();
         }
         consumed
+    }
+
+    /// The backdrop needs recomputing: repaint now, or when [`LIVE_INTERVAL`] has passed since the
+    /// last live refresh. Painting earlier would only redraw the old backdrop.
+    pub(crate) fn request_window_backdrop_refresh(&mut self) {
+        let Some(state) = self.window_backdrop.as_mut() else {
+            return;
+        };
+        state.stale = true;
+        let due = state
+            .live
+            .as_ref()
+            .and_then(|live| live.as_ref()?.last_refresh)
+            .map(|at| at + LIVE_INTERVAL)
+            .filter(|due| *due > std::time::Instant::now());
+        match due {
+            Some(due) => {
+                self.backdrop_deadline = Some(self.backdrop_deadline.map_or(due, |at| at.min(due)));
+            }
+            None => self.mark_full(),
+        }
     }
 
     /// Whether the window snapshot the backbuffer was last painted over is still the current one

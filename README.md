@@ -264,11 +264,10 @@ tar -xzf .target/dist/flamewm-<version>-linux-x86_64.tar.gz --strip-components=1
 
 ## Benchmark
 
-| Measure | Result |
+| Idle Desktop | Result |
 | --- | --- |
-| Idle PSS, whole session | 31.1 MiB |
+| Idle PSS | 25.8 MiB |
 | Idle CPU | 0.0% |
-| Session start to panels mapped | 720 ms |
 
 Per-process figures are in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md#benchmark).
 
