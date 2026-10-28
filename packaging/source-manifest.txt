@@ -59,6 +59,7 @@ ui/
 @exec tools/verify_rwr_promotion.py
 @exec tools/performance_retention.py
 @exec tools/bench-flamewm-memory.py
+@exec tools/test_bench_flamewm_memory_owners.py
 @exec tools/fast-bench.sh
 @exec tools/bench-cargo-build.sh
 @exec .vendor/RustWebRender-0.0.9/verify-visual
@@ -88,3 +89,4 @@ ui/
 
 @exec scripts/flamewm-nested-smoke
 @exec tools/cpak_package.py
+@exec tools/bench-flamewm-memory-owners.py
