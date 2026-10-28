@@ -114,8 +114,12 @@ fn render_inner(
     // Supersample small taskbar/menu SVGs to preserve subpixel edges.
     // Larger images retain the original single-pass raster path.
     let factor = if width <= 48 && height <= 48 { 2 } else { 1 };
-    let render_width = width.checked_mul(factor).ok_or("SVG raster width overflow")?;
-    let render_height = height.checked_mul(factor).ok_or("SVG raster height overflow")?;
+    let render_width = width
+        .checked_mul(factor)
+        .ok_or("SVG raster width overflow")?;
+    let render_height = height
+        .checked_mul(factor)
+        .ok_or("SVG raster height overflow")?;
     check_size_limits(render_width, render_height)?;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(render_width, render_height)
         .ok_or("requested dimensions overflow")?;
