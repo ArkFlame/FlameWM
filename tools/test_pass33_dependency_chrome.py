@@ -1,3 +1,4 @@
+import re
 #!/usr/bin/env python3
 """Source-contract checks; live compositor and Cargo checks remain separate gates."""
 import pathlib
@@ -41,16 +42,16 @@ class AudioDependencyContract(unittest.TestCase):
 class RenderSafetyContract(unittest.TestCase):
     def test_smithay_api_result_is_converted_to_option(self):
         src = (ROOT / 'crates/flamewm-wm-wayland/src/render.rs').read_text()
-        self.assertIn(').ok().map(Elem::Memory)', src)
-        self.assertIn('chrome::control_button_geometries', src)
-        self.assertIn('chrome::center_title_x', src)
-        self.assertIn('managed.mode == Mode::Maximized', src)
-        self.assertIn('part.maximized != maximized', src)
-        self.assertIn('if rect.w <= 0 || rect.w > 32_767', src)
+        self.assertIn(').ok().map(Elem::Memory)', re.sub(r'\s+', '', src))
+        self.assertIn(re.sub(r'\s+', '', 'chrome::control_button_geometries'), re.sub(r'\s+', '', src))
+        self.assertIn(re.sub(r'\s+', '', 'chrome::center_title_x'), re.sub(r'\s+', '', src))
+        self.assertIn(re.sub(r'\s+', '', 'managed.mode == Mode::Maximized'), re.sub(r'\s+', '', src))
+        self.assertIn(re.sub(r'\s+', '', 'part.maximized != maximized'), re.sub(r'\s+', '', src))
+        self.assertIn(re.sub(r'\s+', '', 'if rect.w <= 0 || rect.w > 32_767'), re.sub(r'\s+', '', src))
 
     def test_xwayland_selection_owner_timestamp_is_correct_type(self):
         src = (ROOT / 'crates/flamewm-wm-wayland/src/xwayland.rs').read_text()
-        self.assertIn('set_selection_owner(owner, selection, 0_u32)', src)
+        self.assertIn(re.sub(r'\s+', '', 'set_selection_owner(owner, selection, 0_u32)'), re.sub(r'\s+', '', src))
 
     def test_opaque_fallback_cannot_damage_before_reporting_alpha_error(self):
         src = (ROOT / 'crates/flamewm-render-x11/src/external_drawable.rs').read_text()

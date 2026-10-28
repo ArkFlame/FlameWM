@@ -1,3 +1,4 @@
+import re
 #!/usr/bin/env python3
 """Regression gates for the reported mixed-source build and invalid X11 core blits.
 
@@ -53,10 +54,10 @@ class CargoSourceConsistency(unittest.TestCase):
 class X11FallbackDepthSafety(unittest.TestCase):
     def test_cached_external_drawable_uses_actual_depth_and_cache_reset(self):
         source = (ROOT / "crates/flamewm-render-x11/src/external_drawable.rs").read_text()
-        self.assertIn('XGetGeometry(display, drawable', source)
-        self.assertIn('unsafe { external_drawable_depth(view_display, drawable)? }', source)
-        self.assertIn('upload_opaque_argb32_image(view_display, view_screen, fresh, depth, &words, w, h)', source)
-        self.assertIn('create_pixmap(view_display, drawable, w, h, depth, root_w, root_h)', source)
+        self.assertIn('XGetGeometry(display,drawable', re.sub(r'\s+', '', source))
+        self.assertIn(re.sub(r'\s+', '', 'unsafe { external_drawable_depth(view_display, drawable)? }'), re.sub(r'\s+', '', source))
+        self.assertIn(re.sub(r'\s+', '', 'upload_opaque_argb32_image(view_display, view_screen, fresh, depth, &words, w, h,)'), re.sub(r'\s+', '', source))
+        self.assertIn(re.sub(r'\s+', '', 'create_pixmap(view_display, drawable, w, h, depth, root_w, root_h)'), re.sub(r'\s+', '', source))
         self.assertIn('self.invalidate_image_cache();', source[source.index('pub unsafe fn retarget('):source.index('fn session_view(')])
         self.assertNotIn('built = Some(words);\n                self.image_cache.insert(', source)
 

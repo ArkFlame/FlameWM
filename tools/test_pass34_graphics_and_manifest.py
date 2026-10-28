@@ -1,3 +1,4 @@
+import re
 """Pass 34 source gates. They are not a substitute for native Rust + GPU tests."""
 from pathlib import Path
 import subprocess
@@ -13,17 +14,17 @@ class GraphicsBackendIntegration(unittest.TestCase):
         scene = (ROOT / "crates/flamewm-render-x11/src/app/mod.rs").read_text()
         chrome = (ROOT / "crates/flamewm-render-x11/src/external_drawable.rs").read_text()
         for source in (scene, chrome):
-            self.assertIn('choose_provider(', source)
-            self.assertIn('DisplayProtocol::X11', source)
-            self.assertIn('FLAMEWM_X11_RENDER_PROVIDER', source)
-            self.assertIn('if provider == GraphicsProvider::XCore', source)
+            self.assertIn(re.sub(r'\s+', '', 'choose_provider('), re.sub(r'\s+', '', source))
+            self.assertIn(re.sub(r'\s+', '', 'DisplayProtocol::X11'), re.sub(r'\s+', '', source))
+            self.assertIn(re.sub(r'\s+', '', 'FLAMEWM_X11_RENDER_PROVIDER'), re.sub(r'\s+', '', source))
+            self.assertIn(re.sub(r'\s+', '', 'if provider == GraphicsProvider::XCore'), re.sub(r'\s+', '', source))
         self.assertIn('xrender = None;', chrome)
         self.assertIn('xrender = None;', scene)
 
     def test_core_x11_cannot_keep_composited_argb_without_xrender(self):
         source = (ROOT / 'crates/flamewm-render-x11/src/app/mod.rs').read_text()
-        self.assertIn('&& !core_requested', source)
-        self.assertIn('alpha_mode = SurfaceAlphaMode::OpaqueFallback;', source)
+        self.assertIn(re.sub(r'\s+', '', '&& !core_requested'), re.sub(r'\s+', '', source))
+        self.assertIn(re.sub(r'\s+', '', 'alpha_mode = SurfaceAlphaMode::OpaqueFallback;'), re.sub(r'\s+', '', source))
         self.assertLess(source.index('let core_requested ='), source.index('let (visual, depth, mut alpha_mode)'))
 
     def test_wayland_real_startup_uses_negotiator_and_gl_backend(self):

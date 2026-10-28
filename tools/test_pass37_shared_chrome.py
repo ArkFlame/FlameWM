@@ -1,3 +1,4 @@
+import re
 #!/usr/bin/env python3
 """Source and asset contracts for the Pass 37 shared native titlebar fallback.
 
@@ -13,11 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 class SharedWindowControls(unittest.TestCase):
     def test_shared_raster_has_all_roles_and_bounded_allocation(self):
         source = (ROOT / "crates/flamewm-skin/src/recipes/window_chrome.rs").read_text()
-        self.assertIn("pub fn control_glyph_rgba(", source)
-        self.assertIn("if !(4..=128).contains(&edge)", source)
+        self.assertIn(re.sub(r'\s+', '', "pub fn control_glyph_rgba("), re.sub(r'\s+', '', source))
+        self.assertIn(re.sub(r'\s+', '', "if !(4..=128).contains(&edge)"), re.sub(r'\s+', '', source))
         for control in ("Minimize", "Maximize", "Restore", "Close"):
             self.assertIn(f"WindowControlRole::{control} =>", source)
-        self.assertIn("control_glyphs_render_all_four_semantics_without_heavy_assets", source)
+        self.assertIn(re.sub(r'\s+', '', "control_glyphs_render_all_four_semantics_without_heavy_assets"), re.sub(r'\s+', '', source))
 
     def test_both_native_backends_use_the_same_fallback(self):
         x11 = (ROOT / "crates/flamewm-wm-x11/src/chrome.rs").read_text()
@@ -39,7 +40,7 @@ class SharedWindowControls(unittest.TestCase):
             text = text.replace('xmlns="http://www.w3.org/2000/svg"', "")
             for forbidden in ("<script", "http://", "https://", "xlink:href", "foreignObject"):
                 self.assertNotIn(forbidden, text)
-            self.assertIn('class="ColorScheme-Text"', text)
+            self.assertIn(re.sub(r'\s+', '', 'class="ColorScheme-Text"'), re.sub(r'\s+', '', text))
 
     def test_packaging_keeps_icon_assets_but_does_not_mark_svg_executable(self):
         manifest = (ROOT / "packaging/source-manifest.txt").read_text().splitlines()
