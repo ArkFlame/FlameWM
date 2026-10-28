@@ -476,7 +476,7 @@ impl X11App {
                     let height = configure.height.max(1) as u32;
                     if self.window_backdrop.is_some() {
                         self.mark_window_backdrop_stale();
-                        self.mark_full();
+                        self.request_window_backdrop_refresh();
                     }
                     if width != self.width || height != self.height {
                         self.width = width;
