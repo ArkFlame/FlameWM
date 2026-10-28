@@ -39,26 +39,26 @@ The compiler crate uses package-specific `opt-level=2`; parser speed is not stea
 
 | Process | PSS | Code | Libraries | Heap | Fonts | CPU |
 | --- | --- | --- | --- | --- | --- | --- |
-| `flamewm-session` | 1.5 MiB | 0.8 MiB | 0.4 MiB | 0.3 MiB | 0.0 MiB | 0.0% |
-| `flamewm` | 5.6 MiB | 2.9 MiB | 1.9 MiB | 0.7 MiB | 0.0 MiB | 0.0% |
-| `flamewm-desktop` | 5.2 MiB | 3.0 MiB | 1.4 MiB | 0.9 MiB | 0.0 MiB | 0.0% |
-| `flamewm-shell` | 11.0 MiB | 2.9 MiB | 4.7 MiB | 2.3 MiB | 1.0 MiB | 0.0% |
-| `flamewm-shell --quick-control-host` | 2.7 MiB | 1.1 MiB | 1.3 MiB | 0.3 MiB | 0.0 MiB | 0.0% |
-| **Total** | **26.0 MiB** | **10.6 MiB** | **9.7 MiB** | **4.4 MiB** | **1.0 MiB** | **0.0%** |
+| `flamewm-session` | 1.5 MiB | 0.8 MiB | 0.5 MiB | 0.3 MiB | 0.0 MiB | 0.0% |
+| `flamewm` | 5.5 MiB | 2.8 MiB | 1.9 MiB | 0.7 MiB | 0.0 MiB | 0.0% |
+| `flamewm-desktop` | 5.0 MiB | 2.8 MiB | 1.3 MiB | 0.9 MiB | 0.0 MiB | 0.0% |
+| `flamewm-shell` | 11.0 MiB | 2.8 MiB | 4.7 MiB | 2.3 MiB | 1.0 MiB | 0.0% |
+| `flamewm-shell --quick-control-host` | 2.8 MiB | 1.2 MiB | 1.3 MiB | 0.3 MiB | 0.0 MiB | 0.0% |
+| **Total** | **25.8 MiB** | **10.4 MiB** | **9.6 MiB** | **4.4 MiB** | **1.0 MiB** | **0.0%** |
 
 ### Idle Suite
 
 | Process | PSS | CPU |
 | --- | --- | --- |
-| `flamewm-session` | 1.4 MiB | 0.0% |
+| `flamewm-session` | 1.5 MiB | 0.0% |
 | `flamewm` | 8.8 MiB | 0.0% |
-| `flamewm-desktop` | 3.9 MiB | 0.0% |
-| `flamewm-shell` | 8.4 MiB | 0.1% |
+| `flamewm-desktop` | 3.8 MiB | 0.0% |
+| `flamewm-shell` | 8.4 MiB | 0.0% |
 | `flamewm-shell --quick-control-host` | 2.1 MiB | 0.0% |
-| `flamewm-terminal` | 20.2 MiB | 0.0% |
-| `flamewm-explorer` | 11.4 MiB | 0.0% |
-| `flamewm-task-manager` | 12.6 MiB | 0.8% |
-| **Total** | **68.7 MiB** | **0.9%** |
+| `flamewm-terminal` | 19.8 MiB | 0.0% |
+| `flamewm-explorer` | 11.5 MiB | 0.0% |
+| `flamewm-task-manager` | 12.6 MiB | 0.6% |
+| **Total** | **68.5 MiB** | **0.6%** |
 
 ### Interaction
 

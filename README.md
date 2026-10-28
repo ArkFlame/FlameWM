@@ -266,7 +266,7 @@ tar -xzf .target/dist/flamewm-<version>-linux-x86_64.tar.gz --strip-components=1
 
 | Idle Desktop | Result |
 | --- | --- |
-| Idle PSS | 26.0 MiB |
+| Idle PSS | 25.8 MiB |
 | Idle CPU | 0.0% |
 
 Per-process figures are in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md#benchmark).
