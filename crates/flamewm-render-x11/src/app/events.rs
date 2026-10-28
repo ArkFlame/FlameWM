@@ -18,6 +18,21 @@ pub(crate) fn newest_configure<T>(first: T, mut next_matching: impl FnMut() -> O
     newest
 }
 
+/// How long the reactor may block. A handled event can latch damage without painting (a live
+/// backdrop change, a window move that keeps its size); the paint gate runs after the dispatch,
+/// so blocking with damage pending would show the stale frame until the next unrelated event.
+pub(crate) fn reactor_wait_timeout(
+    events_queued: bool,
+    damage_pending: bool,
+    backdrop_wait: Option<std::time::Duration>,
+) -> Option<std::time::Duration> {
+    let ready = (events_queued || damage_pending).then_some(std::time::Duration::ZERO);
+    match (ready, backdrop_wait) {
+        (Some(ready), Some(wait)) => Some(ready.min(wait)),
+        (ready, wait) => ready.or(wait),
+    }
+}
+
 #[cfg(test)]
 #[path = "events/tests/key_text_regressions.rs"]
 mod key_text_regressions;
@@ -985,13 +1000,15 @@ impl X11App {
             unsafe { self.sync_raw_press_observer(press_watch) };
             // XNextEvent can leave already-read events in Xlib's queue after
             // single_event returns. Avoid blocking on the fd reactor in that case.
-            let mut timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
-                .then_some(std::time::Duration::ZERO);
             // A throttled live backdrop refresh wakes the loop when it is due.
-            if let Some(deadline) = self.backdrop_deadline {
-                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                timeout = Some(timeout.map_or(remaining, |t| t.min(remaining)));
-            }
+            let backdrop_wait = self
+                .backdrop_deadline
+                .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()));
+            let timeout = reactor_wait_timeout(
+                unsafe { XEventsQueued(self.display, 0) } > 0,
+                !self.pending_damage.is_empty(),
+                backdrop_wait,
+            );
             reactor
                 .dispatch(timeout)
                 .map_err(|error| error.to_string())?;
