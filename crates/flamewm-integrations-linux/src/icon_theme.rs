@@ -286,6 +286,41 @@ impl IconThemeIndex {
         }
     }
 
+    /// Reads only the `Inherits` list of the `[Icon Theme]` section, without
+    /// building the per-directory tables of [`IconThemeIndex::parse`].
+    fn parse_inherits(name: &str, mut reader: impl std::io::BufRead) -> Option<Self> {
+        let mut line = String::new();
+        let mut section = String::new();
+        let mut inherits = None;
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).ok()? == 0 {
+                break;
+            }
+            let text = line.trim();
+            if text.is_empty() || text.starts_with('#') || text.starts_with(';') {
+                continue;
+            }
+            if text.starts_with('[') && text.ends_with(']') {
+                text[1..text.len() - 1].trim().clone_into(&mut section);
+                continue;
+            }
+            if section != "Icon Theme" {
+                continue;
+            }
+            if let Some((key, value)) = text.split_once('=') {
+                if key.trim() == "Inherits" {
+                    inherits = Some(value.trim().to_owned());
+                }
+            }
+        }
+        Some(Self {
+            name: name.to_owned(),
+            inherits: split_list(inherits.as_deref().unwrap_or("")),
+            ..Self::default()
+        })
+    }
+
     #[must_use]
     pub fn load(theme_dir: &Path) -> Option<Self> {
         let name = theme_dir
@@ -415,6 +450,19 @@ fn child_filter(paths: &[PathBuf], explicit: Option<&str>) -> Vec<PathBuf> {
         .collect();
     scored.sort_by_key(|(_, r)| *r);
     scored.into_iter().map(|(p, _)| p.clone()).collect()
+}
+
+fn read_theme_inherits(roots: &[PathBuf], theme: &str) -> Option<IconThemeIndex> {
+    roots.iter().find_map(|root| {
+        let index_file = theme_dir(root, theme)?.join("index.theme");
+        if !index_file.is_file() {
+            return None;
+        }
+        let file = fs::File::open(index_file).ok()?;
+        #[cfg(test)]
+        INDEX_THEME_READS.with(|c| c.set(c.get() + 1));
+        IconThemeIndex::parse_inherits(theme, std::io::BufReader::new(file))
+    })
 }
 
 fn read_theme_index(roots: &[PathBuf], theme: &str) -> Option<IconThemeIndex> {
@@ -980,7 +1028,7 @@ impl IconLookupIndex {
             if let Some(hit) = parsed.borrow().get(theme) {
                 return hit.clone();
             }
-            let found = read_theme_index(&roots, theme);
+            let found = read_theme_inherits(&roots, theme);
             parsed.borrow_mut().insert(theme.to_owned(), found.clone());
             found
         };
@@ -1308,6 +1356,23 @@ mod tests {
             unique_paths(input),
             vec![PathBuf::from("/b"), PathBuf::from("/a")]
         );
+    }
+
+    #[test]
+    fn inherits_only_parse_matches_full_parse() {
+        let texts = [
+            "[Icon Theme]\nName=Test\nInherits=Breeze,hicolor\n\n[16x16/apps]\nInherits=Other\n",
+            "# c\nInherits=Early\n[ Icon Theme ]\n; c\nInherits = A , B \nInherits=C\n[x]\n[Icon Theme]\nName=T\n",
+            "[Icon Theme]\nName=NoInherits\n",
+            "",
+        ];
+        for text in texts {
+            let full = IconThemeIndex::parse("T", text);
+            let light =
+                IconThemeIndex::parse_inherits("T", text.as_bytes()).expect("in-memory read");
+            assert_eq!(light.inherits, full.inherits, "{text:?}");
+            assert_eq!(light.name, full.name);
+        }
     }
 
     #[test]
