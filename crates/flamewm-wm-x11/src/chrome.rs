@@ -325,11 +325,45 @@ fn fallback_control_glyph(
     edge: u32,
     rgba: [u8; 4],
 ) -> Option<flamewm_image_core::RgbaImage> {
-    let rgb = (u32::from(rgba[0]) << 16) | (u32::from(rgba[1]) << 8) | u32::from(rgba[2]);
-    let mut pixels = recipe::control_glyph_rgba(role.skin(), edge, rgb)?;
-    if rgba[3] != 255 {
-        for px in pixels.chunks_exact_mut(4) {
-            px[3] = ((u16::from(px[3]) * u16::from(rgba[3]) + 127) / 255) as u8;
+    if !(4..=128).contains(&edge) {
+        return None;
+    }
+    let mut pixels = vec![0_u8; (edge as usize) * (edge as usize) * 4];
+    let put = |x: u32, y: u32, pixels: &mut [u8]| {
+        if x < edge && y < edge {
+            let at = ((y * edge + x) * 4) as usize;
+            pixels[at..at + 4].copy_from_slice(&rgba);
+        }
+    };
+    let low = edge / 4;
+    let high = edge - low - 1;
+    let mid = edge / 2;
+    let stroke = (edge / 12).max(1);
+    for i in low..=high {
+        for k in 0..stroke {
+            match role {
+                ControlRole::Minimize => put(i, mid + k, &mut pixels),
+                ControlRole::Maximize => {
+                    put(i, low + k, &mut pixels);
+                    put(i, high.saturating_sub(k), &mut pixels);
+                    put(low + k, i, &mut pixels);
+                    put(high.saturating_sub(k), i, &mut pixels);
+                }
+                ControlRole::Restore => {
+                    put(i, low + k, &mut pixels);
+                    put(high.saturating_sub(k), i, &mut pixels);
+                    if i > low + stroke {
+                        put(i - stroke, high.saturating_sub(k), &mut pixels);
+                    }
+                    if i < high - stroke {
+                        put(low + stroke + k, i, &mut pixels);
+                    }
+                }
+                ControlRole::Close => {
+                    put(i, i.saturating_add(k), &mut pixels);
+                    put(i, low + high - i + k, &mut pixels);
+                }
+            }
         }
     }
     flamewm_image_core::RgbaImage::from_rgba8(edge, edge, pixels)

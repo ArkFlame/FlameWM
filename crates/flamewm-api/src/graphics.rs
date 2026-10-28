@@ -9,9 +9,9 @@ pub enum DisplayProtocol {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphicsProvider {
-    /// Server-side XRender compositing. GPU execution depends on the X server/driver.
+    /// Server-side `XRender` compositing. GPU execution depends on the X server/driver.
     XRender,
-    /// Standard X11 core operations when XRender is unavailable or deliberately disabled.
+    /// Standard X11 core operations when `XRender` is unavailable or deliberately disabled.
     XCore,
     /// Smithay's OpenGL ES renderer. The GL driver may itself be software-rendered.
     Gles,

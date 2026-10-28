@@ -282,7 +282,7 @@ fn chrome_pixels(
                 }
             }
         }
-        if let Some(glyph) = chrome::control_glyph_rgba(role, glyph_edge, GLYPH) {
+        if let Some(glyph) = breeze_glyph(role, glyph_edge) {
             let start_x = center - glyph_edge as i32 / 2;
             let start_y = cy - glyph_edge as i32 / 2;
             for (index, rgba) in glyph.chunks_exact(4).enumerate() {
@@ -822,4 +822,39 @@ mod renderer_class_tests {
             "Mesa Intel(R) UHD Graphics (TGL GT1)"
         ));
     }
+}
+
+/// Breeze control glyph rasterised from the same SVG asset X11 uses (cached per role/size).
+fn breeze_glyph(role: chrome::WindowControlRole, edge: u32) -> Option<Vec<u8>> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<(u8, u32), Option<Vec<u8>>>>> = OnceLock::new();
+    let key = (role as u8, edge);
+    let mut cache = CACHE.get_or_init(Default::default).lock().ok()?;
+    cache
+        .entry(key)
+        .or_insert_with(|| {
+            let rel = role.icon_role().source().path;
+            let bytes = std::fs::read(packaged_root().join(rel)).ok()?;
+            let mut scheme = flamewm_image_core::SvgColorScheme::flame_default();
+            scheme.text = [(GLYPH >> 16) as u8, (GLYPH >> 8) as u8, GLYPH as u8, 255];
+            flamewm_image_core::svg::render_with_color_scheme(&bytes, edge, edge, &scheme)
+                .ok()
+                .map(|image| image.pixels)
+        })
+        .clone()
+}
+
+fn packaged_root() -> std::path::PathBuf {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            let bin = exe.parent()?;
+            let usr = bin.parent()?;
+            (bin.file_name()? == "bin" && usr.file_name()? == "usr")
+                .then(|| usr.join("share/flamewm"))
+        })
+        .filter(|root| root.join("assets").is_dir())
+        .unwrap_or(manifest)
 }

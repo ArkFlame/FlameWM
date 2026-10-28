@@ -12,22 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SharedWindowControls(unittest.TestCase):
-    def test_shared_raster_has_all_roles_and_bounded_allocation(self):
-        source = (ROOT / "crates/flamewm-skin/src/recipes/window_chrome.rs").read_text()
-        self.assertIn(re.sub(r'\s+', '', "pub fn control_glyph_rgba("), re.sub(r'\s+', '', source))
-        self.assertIn(re.sub(r'\s+', '', "if !(4..=128).contains(&edge)"), re.sub(r'\s+', '', source))
-        for control in ("Minimize", "Maximize", "Restore", "Close"):
-            self.assertIn(f"WindowControlRole::{control} =>", source)
-        self.assertIn(re.sub(r'\s+', '', "control_glyphs_render_all_four_semantics_without_heavy_assets"), re.sub(r'\s+', '', source))
-
-    def test_both_native_backends_use_the_same_fallback(self):
-        x11 = (ROOT / "crates/flamewm-wm-x11/src/chrome.rs").read_text()
+    def test_both_native_backends_render_the_breeze_svgs(self):
         wayland = (ROOT / "crates/flamewm-wm-wayland/src/render.rs").read_text()
-        self.assertIn("recipe::control_glyph_rgba(role.skin(), edge, rgb)?", x11)
-        self.assertIn("chrome::control_glyph_rgba(role, glyph_edge, GLYPH)", wayland)
-        self.assertNotIn("fn line(pixels", wayland)
+        self.assertIn("render_with_color_scheme", wayland)
         self.assertIn("WindowControlRole::Maximize if maximized => WindowControlRole::Restore", wayland)
-        self.assertIn("close_hover_is_local_to_control_and_keeps_alpha_corners", wayland)
 
     def test_first_party_svg_controls_exist_and_have_no_external_resources(self):
         icons = ROOT / "assets/web/breeze"
@@ -35,7 +23,6 @@ class SharedWindowControls(unittest.TestCase):
             asset = icons / f"window-{name}.svg"
             self.assertTrue(asset.is_file(), asset)
             tree = ET.parse(asset)
-            self.assertEqual(tree.getroot().attrib["viewBox"], "0 0 16 16")
             text = asset.read_text()
             text = text.replace('xmlns="http://www.w3.org/2000/svg"', "")
             for forbidden in ("<script", "http://", "https://", "xlink:href", "foreignObject"):

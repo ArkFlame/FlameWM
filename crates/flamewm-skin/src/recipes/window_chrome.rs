@@ -166,77 +166,6 @@ pub fn control_button_geometries(titlebar: SceneRect) -> [ControlGeometry; 3] {
     })
 }
 
-/// Fallback titlebar-control artwork shared by X11 and Wayland. The SVG icon theme may be
-/// absent on minimal installs; this small antialiased raster preserves recognizable controls
-/// without a runtime icon dependency. Pixels are straight RGBA8 (not premultiplied).
-/// The caller chooses a material/foreground color and composites it using its native backend.
-#[must_use]
-pub fn control_glyph_rgba(role: WindowControlRole, edge: u32, rgb: u32) -> Option<Vec<u8>> {
-    if !(4..=128).contains(&edge) {
-        return None;
-    }
-    let side = edge as f32;
-    let scale = side / 16.0;
-    let center = (side - 1.0) * 0.5;
-    let at = |x: f32, y: f32| (center + x * scale, center + y * scale);
-    let mut strokes = Vec::with_capacity(8);
-    let mut segment = |ax: f32, ay: f32, bx: f32, by: f32| {
-        strokes.push((at(ax, ay), at(bx, by)));
-    };
-    match role {
-        WindowControlRole::Minimize => segment(-5.0, 4.0, 5.0, 4.0),
-        WindowControlRole::Maximize => {
-            segment(-5.0, -5.0, 5.0, -5.0);
-            segment(5.0, -5.0, 5.0, 5.0);
-            segment(5.0, 5.0, -5.0, 5.0);
-            segment(-5.0, 5.0, -5.0, -5.0);
-        }
-        WindowControlRole::Restore => {
-            segment(-4.0, -2.0, 4.0, -2.0);
-            segment(4.0, -2.0, 4.0, 5.0);
-            segment(4.0, 5.0, -4.0, 5.0);
-            segment(-4.0, 5.0, -4.0, -2.0);
-            segment(-2.0, -4.0, 5.0, -4.0);
-            segment(5.0, -4.0, 5.0, 3.0);
-        }
-        WindowControlRole::Close => {
-            segment(-5.0, -5.0, 5.0, 5.0);
-            segment(-5.0, 5.0, 5.0, -5.0);
-        }
-    }
-    let mut pixels = vec![0_u8; edge as usize * edge as usize * 4];
-    for y in 0..edge {
-        for x in 0..edge {
-            let px = x as f32;
-            let py = y as f32;
-            let distance = strokes
-                .iter()
-                .map(|&(a, b)| {
-                    let vx = b.0 - a.0;
-                    let vy = b.1 - a.1;
-                    let length2 = vx * vx + vy * vy;
-                    let t = if length2 > 0.0 {
-                        ((px - a.0) * vx + (py - a.1) * vy) / length2
-                    } else {
-                        0.0
-                    }
-                    .clamp(0.0, 1.0);
-                    let dx = px - (a.0 + t * vx);
-                    let dy = py - (a.1 + t * vy);
-                    (dx * dx + dy * dy).sqrt()
-                })
-                .fold(f32::INFINITY, f32::min);
-            let alpha = ((1.1 * scale - distance).clamp(0.0, 1.0) * 255.0).round() as u8;
-            let index = (y as usize * edge as usize + x as usize) * 4;
-            pixels[index] = (rgb >> 16) as u8;
-            pixels[index + 1] = (rgb >> 8) as u8;
-            pixels[index + 2] = rgb as u8;
-            pixels[index + 3] = alpha;
-        }
-    }
-    Some(pixels)
-}
-
 /// Available title text width after respecting the left icon and right control strip.
 /// Both native backends must shorten the title *before* computing its centered origin;
 /// center_title_x alone cannot prevent overlap when the title exceeds this space.
@@ -303,28 +232,6 @@ pub fn center_title_x(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn control_glyphs_render_all_four_semantics_without_heavy_assets() {
-        for role in [
-            WindowControlRole::Minimize,
-            WindowControlRole::Maximize,
-            WindowControlRole::Restore,
-            WindowControlRole::Close,
-        ] {
-            let pixels = control_glyph_rgba(role, 16, 0x00_f1_f2_f3).unwrap();
-            assert_eq!(pixels.len(), 16 * 16 * 4);
-            assert!(pixels.chunks_exact(4).any(|px| px[3] > 0));
-            assert_eq!(pixels[3], 0, "icon corner must stay transparent");
-            assert_eq!(&pixels[0..3], &[0xf1, 0xf2, 0xf3]);
-        }
-        assert!(control_glyph_rgba(WindowControlRole::Close, 0, 0).is_none());
-        assert!(control_glyph_rgba(WindowControlRole::Close, 129, 0).is_none());
-        assert_ne!(
-            control_glyph_rgba(WindowControlRole::Maximize, 16, 0),
-            control_glyph_rgba(WindowControlRole::Restore, 16, 0),
-        );
-    }
 
     #[test]
     fn center_formula_matches_flame_contract() {
