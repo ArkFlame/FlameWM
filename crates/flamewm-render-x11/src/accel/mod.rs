@@ -70,7 +70,8 @@ impl PixelBackend for CpuPixels {
                         + f32::from(pixel[channel]) * (1.0 - alpha))
                         .round() as u8;
                 }
-                pixel[3] = (f32::from(color[3]) + f32::from(pixel[3]) * (1.0 - alpha)).round() as u8;
+                pixel[3] =
+                    (f32::from(color[3]) + f32::from(pixel[3]) * (1.0 - alpha)).round() as u8;
             }
         }
         Ok(())
@@ -296,10 +297,21 @@ pub fn stroke_rounded_rect(
     )
 }
 
+/// Runs `ops` on the GPU only. `false` means the GPU did not run them and the frame is untouched,
+/// so the caller keeps its own painter; the CPU batch is not used because its edges differ.
+pub(crate) fn try_gpu_batch(pixels: &mut [u8], width: u32, height: u32, ops: &[PixelOp]) -> bool {
+    try_gpu(&mut |backend| backend.paint_batch(pixels, width, height, ops))
+}
+
 /// Applies `ops` (normalized, see [`PixelOp::normalized`]) to one frame through the same selection
 /// as the single-op calls: one GPU upload and readback when `renderAcceleration` is `gpu`, otherwise
 /// the CPU batch. Any GPU failure leaves the frame untouched and runs the batch on the CPU.
-pub fn paint_batch(pixels: &mut [u8], width: u32, height: u32, ops: &[PixelOp]) -> Result<(), String> {
+pub fn paint_batch(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    ops: &[PixelOp],
+) -> Result<(), String> {
     let mut op = |backend: &mut dyn PixelBackend| backend.paint_batch(pixels, width, height, ops);
     if try_gpu(&mut op) {
         return Ok(());
@@ -338,7 +350,14 @@ mod tests {
         for pixel in pixels.chunks_exact_mut(4) {
             pixel[3] = 255;
         }
-        let rect = RoundedRect { x: 2, y: 2, width: 12, height: 12, radius: 4 }.normalized();
+        let rect = RoundedRect {
+            x: 2,
+            y: 2,
+            width: 12,
+            height: 12,
+            radius: 4,
+        }
+        .normalized();
         fill_rounded_rect(&mut pixels, width, height, rect, None, [255, 0, 0, 255])
             .expect("cpu fill");
         let at = |x: u32, y: u32| {
@@ -355,7 +374,13 @@ mod tests {
     fn cpu_stroke_paints_the_ring_and_keeps_the_interior() {
         let (width, height) = (16_u32, 16_u32);
         let mut pixels = vec![40_u8; (width * height * 4) as usize];
-        let rect = RoundedRect { x: 0, y: 0, width: 16, height: 16, radius: 0 };
+        let rect = RoundedRect {
+            x: 0,
+            y: 0,
+            width: 16,
+            height: 16,
+            radius: 0,
+        };
         stroke_rounded_rect(&mut pixels, width, height, rect, 2, [255, 255, 255, 255])
             .expect("cpu stroke");
         let at = |x: u32, y: u32| pixels[((y * width + x) * 4) as usize];
@@ -372,7 +397,13 @@ mod tests {
             &mut pixels,
             2,
             2,
-            RoundedRect { x: 0, y: 0, width: 2, height: 2, radius: 0 },
+            RoundedRect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+                radius: 0,
+            },
             None,
             [255, 0, 0, 128],
         )
@@ -404,12 +435,24 @@ mod tests {
         let source = frame(width, height, 13);
         let mut pixels = source.clone();
         // `try_gpu` falls back to the CPU on this Err, so the frame must still be the source.
-        assert!(FailingGpu.blur_rgba(&mut pixels, width, height, 9.0).is_err());
+        assert!(
+            FailingGpu
+                .blur_rgba(&mut pixels, width, height, 9.0)
+                .is_err()
+        );
         assert_eq!(pixels, source, "a failed GPU blur must not touch the frame");
-        let rect = RoundedRect { x: 4, y: 4, width: 40, height: 30, radius: 8 };
-        assert!(FailingGpu
-            .fill_rounded_rect(&mut pixels, width, height, rect, None, [9, 9, 9, 255])
-            .is_err());
+        let rect = RoundedRect {
+            x: 4,
+            y: 4,
+            width: 40,
+            height: 30,
+            radius: 8,
+        };
+        assert!(
+            FailingGpu
+                .fill_rounded_rect(&mut pixels, width, height, rect, None, [9, 9, 9, 255])
+                .is_err()
+        );
         assert_eq!(pixels, source, "a failed GPU fill must not touch the frame");
         CpuPixels::default()
             .blur_rgba(&mut pixels, width, height, 9.0)
@@ -422,16 +465,36 @@ mod tests {
 
     /// Two panels, a stroke and a translucent fill, optionally followed by a blur.
     fn batch_ops(with_blur: bool) -> Vec<PixelOp> {
-        let outer = RoundedRect { x: 10, y: 8, width: 120, height: 90, radius: 20 };
-        let inner = RoundedRect { x: 40, y: 30, width: 70, height: 40, radius: 8 };
+        let outer = RoundedRect {
+            x: 10,
+            y: 8,
+            width: 120,
+            height: 90,
+            radius: 20,
+        };
+        let inner = RoundedRect {
+            x: 40,
+            y: 30,
+            width: 70,
+            height: 40,
+            radius: 8,
+        };
         let mut ops = vec![
-            PixelOp::FillRoundedRect { outer, hole: None, color: [200, 60, 30, 170] },
+            PixelOp::FillRoundedRect {
+                outer,
+                hole: None,
+                color: [200, 60, 30, 170],
+            },
             PixelOp::FillRoundedRect {
                 outer,
                 hole: Some(outer.inset(3)),
                 color: [240, 240, 250, 255],
             },
-            PixelOp::FillRoundedRect { outer: inner, hole: None, color: [10, 90, 200, 128] },
+            PixelOp::FillRoundedRect {
+                outer: inner,
+                hole: None,
+                color: [10, 90, 200, 128],
+            },
         ];
         if with_blur {
             ops.push(PixelOp::Blur { radius: 12.0 });
@@ -439,7 +502,13 @@ mod tests {
         ops.into_iter().map(PixelOp::normalized).collect()
     }
 
-    fn apply_single(backend: &mut dyn PixelBackend, pixels: &mut [u8], width: u32, height: u32, op: PixelOp) {
+    fn apply_single(
+        backend: &mut dyn PixelBackend,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        op: PixelOp,
+    ) {
         match op {
             PixelOp::FillRoundedRect { outer, hole, color } => {
                 backend.fill_rounded_rect(pixels, width, height, outer, hole, color)
@@ -487,32 +556,19 @@ mod tests {
         let (width, height) = (160_u32, 120_u32);
         let source = frame(width, height, 13);
         let mut pixels = source.clone();
-        assert!(FailsOnBlur
-            .paint_batch(&mut pixels, width, height, &batch_ops(true))
-            .is_err());
-        assert_eq!(pixels, source, "a failed batch must not keep its earlier ops");
-    }
-
-    /// The largest number of pixels that differ by more than 2 in any channel, and the outline
-    /// budget that the corner arcs may use.
-    fn fill_disagreements(cpu: &[u8], gpu: &[u8], ops: &[PixelOp]) -> (usize, usize) {
-        let differing = cpu
-            .chunks_exact(4)
-            .zip(gpu.chunks_exact(4))
-            .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2))
-            .count();
-        let budget = ops
-            .iter()
-            .map(|op| match op {
-                PixelOp::FillRoundedRect { outer, .. } => 2 * (outer.width + outer.height) as usize,
-                PixelOp::Blur { .. } => 0,
-            })
-            .sum();
-        (differing, budget)
+        assert!(
+            FailsOnBlur
+                .paint_batch(&mut pixels, width, height, &batch_ops(true))
+                .is_err()
+        );
+        assert_eq!(
+            pixels, source,
+            "a failed batch must not keep its earlier ops"
+        );
     }
 
     #[test]
-    fn gpu_batch_matches_gpu_single_ops_and_the_cpu_batch() {
+    fn gpu_batch_matches_gpu_single_ops_and_the_cpu_blur() {
         let Ok(mut gpu) = gles::GpuBlur::new() else {
             eprintln!("skipping GPU batch check: no GPU");
             return;
@@ -521,28 +577,33 @@ mod tests {
         let source = frame(width, height, 9);
 
         let fills = batch_ops(false);
-        let mut cpu = source.clone();
-        CpuPixels::default().paint_batch(&mut cpu, width, height, &fills).expect("cpu fills");
         let mut batch = source.clone();
         PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &fills).expect("gpu batch");
         let mut single = source.clone();
         for op in &fills {
             apply_single(&mut gpu, &mut single, width, height, *op);
         }
-        assert_eq!(batch, single, "one batch must equal the per-op GPU results exactly");
-        let (differing, budget) = fill_disagreements(&cpu, &batch, &fills);
-        assert!(differing <= budget, "{differing} GPU fill pixels differ from CPU, budget {budget}");
+        assert_eq!(
+            batch, single,
+            "one batch must equal the per-op GPU results exactly"
+        );
 
         let blurred = batch_ops(true);
         let mut cpu = source.clone();
-        CpuPixels::default().paint_batch(&mut cpu, width, height, &blurred).expect("cpu batch");
+        CpuPixels::default()
+            .paint_batch(&mut cpu, width, height, &blurred)
+            .expect("cpu batch");
         let mut batch = source.clone();
-        PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &blurred).expect("gpu batch");
+        PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &blurred)
+            .expect("gpu batch");
         let mut single = source;
         for op in &blurred {
             apply_single(&mut gpu, &mut single, width, height, *op);
         }
-        assert_eq!(batch, single, "blur batch must equal the per-op GPU results exactly");
+        assert_eq!(
+            batch, single,
+            "blur batch must equal the per-op GPU results exactly"
+        );
         // The blur tolerance matches `gpu_blur_matches_the_cpu_blur_when_a_gpu_is_present`.
         let margin = 24;
         let mut total = 0_u64;
@@ -628,25 +689,86 @@ mod tests {
         }
     }
 
+    /// Source-over `color` through the XRender AA coverage of `outer`, or of the ring between
+    /// `outer` and `hole` (whose inset is the stroke width). This is the reference the GPU must match.
+    fn xrender_reference(
+        outer: RoundedRect,
+        hole: Option<RoundedRect>,
+        color: [u8; 4],
+        source: &[u8],
+        width: u32,
+    ) -> Vec<u8> {
+        let mut out = source.to_vec();
+        let thickness = hole.map(|hole| (hole.x - outer.x) as u32);
+        for row in 0..outer.height {
+            let runs = match thickness {
+                Some(thickness) => crate::xrender_aa::stroke_row_runs(
+                    outer.width,
+                    outer.height,
+                    outer.radius,
+                    thickness,
+                    row,
+                ),
+                None => {
+                    crate::xrender_aa::fill_row_runs(outer.width, outer.height, outer.radius, row)
+                }
+            };
+            let y = (outer.y + row as i32) as usize;
+            for (start, len, coverage) in runs {
+                for col in start..start + len {
+                    let index = (y * width as usize + (outer.x as usize + col as usize)) * 4;
+                    let alpha = f32::from(color[3]) / 255.0 * coverage;
+                    for channel in 0..3 {
+                        out[index + channel] = (f32::from(color[channel]) * alpha
+                            + f32::from(out[index + channel]) * (1.0 - alpha))
+                            .round() as u8;
+                    }
+                    out[index + 3] =
+                        (alpha * 255.0 + f32::from(out[index + 3]) * (1.0 - alpha)).round() as u8;
+                }
+            }
+        }
+        out
+    }
+
+    /// Largest and mean per-channel difference between `actual` and `expected` inside `rect`.
+    fn channel_error(expected: &[u8], actual: &[u8], width: u32, rect: RoundedRect) -> (u8, f32) {
+        let (mut max, mut total, mut count) = (0_u8, 0_u32, 0_u32);
+        for y in rect.y..rect.y + rect.height as i32 {
+            for x in rect.x..rect.x + rect.width as i32 {
+                let index = (y as usize * width as usize + x as usize) * 4;
+                for channel in 0..4 {
+                    let diff = expected[index + channel].abs_diff(actual[index + channel]);
+                    max = max.max(diff);
+                    total += u32::from(diff);
+                    count += 1;
+                }
+            }
+        }
+        (max, total as f32 / count as f32)
+    }
+
     #[test]
-    fn gpu_rounded_fill_and_stroke_match_the_cpu_when_a_gpu_is_present() {
+    fn gpu_rounded_fill_and_stroke_match_the_xrender_aa_reference() {
         let Ok(mut context) = gles::GpuBlur::new() else {
             eprintln!("skipping GPU fill comparison: no GPU");
             return;
         };
         let (width, height) = (160_u32, 120_u32);
         let source = frame(width, height, 7);
-        let outer = RoundedRect { x: 10, y: 8, width: 120, height: 90, radius: 20 }.normalized();
-        let cases = [
-            (outer, None),
-            (outer, Some(outer.inset(6))),
-        ];
+        let outer = RoundedRect {
+            x: 10,
+            y: 8,
+            width: 120,
+            height: 90,
+            radius: 20,
+        }
+        .normalized();
+        let cases = [(outer, None), (outer, Some(outer.inset(6)))];
         for (outer, hole) in cases {
-            let mut cpu = source.clone();
+            let color = [200, 60, 30, 170];
+            let reference = xrender_reference(outer, hole, color, &source, width);
             let mut gpu = source.clone();
-            CpuPixels::default()
-                .fill_rounded_rect(&mut cpu, width, height, outer, hole, [200, 60, 30, 170])
-                .expect("cpu fill");
             PixelBackend::fill_rounded_rect(
                 &mut context,
                 &mut gpu,
@@ -654,20 +776,21 @@ mod tests {
                 height,
                 outer,
                 hole,
-                [200, 60, 30, 170],
+                color,
             )
             .expect("gpu fill");
-            // The CPU floors each row inset and the shader samples pixel centres, so corner arcs
-            // may disagree by a pixel. Every other pixel must match within rounding.
-            let differing = cpu
-                .chunks_exact(4)
-                .zip(gpu.chunks_exact(4))
-                .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2))
-                .count();
-            let outline = 2 * (outer.width + outer.height) as usize;
+            let (max, mean) = channel_error(&reference, &gpu, width, outer);
+            // Stated tolerance: the GPU one-pixel ramp samples pixel centres while XRender averages
+            // four sub-scanlines per corner row, so the largest corner-arc difference is 8/255 on the
+            // Mesa Intel UHD (measured). The mean over the whole rect must stay below 0.5.
+            eprintln!("GPU AA vs XRender reference: max {max}, mean {mean:.3}");
             assert!(
-                differing <= outline,
-                "{differing} pixels differ by over 2, outline budget {outline}"
+                max <= 8,
+                "max channel error {max} against the XRender AA reference"
+            );
+            assert!(
+                mean < 0.5,
+                "mean channel error {mean:.3} against the XRender AA reference"
             );
         }
     }
@@ -685,17 +808,25 @@ mod tests {
         assert!(PixelBackend::blur_rgba(&mut context, &mut blur, width, 1, 9.0).is_err());
         assert_eq!(blur, source);
         let mut fill = source.clone();
-        let rect = RoundedRect { x: 0, y: 0, width, height: 1, radius: 0 };
-        assert!(PixelBackend::fill_rounded_rect(
-            &mut context,
-            &mut fill,
+        let rect = RoundedRect {
+            x: 0,
+            y: 0,
             width,
-            1,
-            rect,
-            None,
-            [1, 2, 3, 255],
-        )
-        .is_err());
+            height: 1,
+            radius: 0,
+        };
+        assert!(
+            PixelBackend::fill_rounded_rect(
+                &mut context,
+                &mut fill,
+                width,
+                1,
+                rect,
+                None,
+                [1, 2, 3, 255],
+            )
+            .is_err()
+        );
         assert_eq!(fill, source);
     }
 }

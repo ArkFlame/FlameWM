@@ -43,6 +43,7 @@ mod cursor_theme;
 mod damage_plan;
 mod events;
 mod geometry;
+mod gpu_frame;
 mod images;
 #[cfg(test)]
 mod region_equivalence_tests;

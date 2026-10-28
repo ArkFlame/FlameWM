@@ -84,7 +84,8 @@ float rounded_cover(vec4 rect, float radius, vec2 p) {
     vec2 half_extent = rect.zw * 0.5 - vec2(radius);
     vec2 d = abs(p - center) - half_extent;
     float signed_dist = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-    return signed_dist <= 0.0 ? 1.0 : 0.0;
+    // Coverage ramps across the one-pixel band around the edge, matching the XRender AA edge.
+    return clamp(0.5 - signed_dist, 0.0, 1.0);
 }
 void main() {
     vec2 p = gl_FragCoord.xy;
@@ -838,18 +839,22 @@ impl GpuBlur {
             return Ok(());
         }
         // SAFETY: the owned context is made current before any GL call; every handle is released below.
-        if unsafe { (self.egl.make_current)(self.display, self.surface, self.surface, self.context) } == 0 {
+        if unsafe {
+            (self.egl.make_current)(self.display, self.surface, self.surface, self.context)
+        } == 0
+        {
             return Err("eglMakeCurrent failed".to_owned());
         }
         let mut staged = self.staging(pixels.len());
         // SAFETY: the context is current and `pixels` holds one w*h RGBA8 frame.
         let result = unsafe {
-            self.target(w, h, pixels.as_ptr().cast()).and_then(|target| {
-                self.rounded_pass(&target, outer, hole, color);
-                let read = self.read_back(&target, &mut staged);
-                self.release(&target);
-                read
-            })
+            self.target(w, h, pixels.as_ptr().cast())
+                .and_then(|target| {
+                    self.rounded_pass(&target, outer, hole, color);
+                    let read = self.read_back(&target, &mut staged);
+                    self.release(&target);
+                    read
+                })
         };
         if result.is_ok() {
             pixels.copy_from_slice(&staged);
@@ -867,7 +872,14 @@ impl GpuBlur {
         hole: Option<RoundedRect>,
         color: [u8; 4],
     ) {
-        let rect = |rect: RoundedRect| [rect.x as f32, rect.y as f32, rect.width as f32, rect.height as f32];
+        let rect = |rect: RoundedRect| {
+            [
+                rect.x as f32,
+                rect.y as f32,
+                rect.width as f32,
+                rect.height as f32,
+            ]
+        };
         let [r, g, b, a] = color.map(|channel| f32::from(channel) / 255.0);
         // SAFETY: a context is current; `target` is live and owned by the caller.
         unsafe {
@@ -879,11 +891,19 @@ impl GpuBlur {
             (self.gl.uniform1f)(self.rounded.outer_radius, outer.radius as f32);
             let [x, y, w, h] = hole.map_or([0.0; 4], rect);
             (self.gl.uniform4f)(self.rounded.hole, x, y, w, h);
-            (self.gl.uniform1f)(self.rounded.hole_radius, hole.map_or(0.0, |hole| hole.radius as f32));
+            (self.gl.uniform1f)(
+                self.rounded.hole_radius,
+                hole.map_or(0.0, |hole| hole.radius as f32),
+            );
             (self.gl.uniform1i)(self.rounded.hole_enabled, i32::from(hole.is_some()));
             (self.gl.uniform4f)(self.rounded.color, r, g, b, a);
             (self.gl.enable)(GL_BLEND);
-            (self.gl.blend_func_separate)(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            (self.gl.blend_func_separate)(
+                GL_SRC_ALPHA,
+                GL_ONE_MINUS_SRC_ALPHA,
+                GL_ONE,
+                GL_ONE_MINUS_SRC_ALPHA,
+            );
             (self.gl.draw_arrays)(GL_TRIANGLE_STRIP, 0, 4);
             (self.gl.disable)(GL_BLEND);
         }
@@ -988,7 +1008,11 @@ impl GpuBlur {
     ///
     /// # Safety
     /// The context owned by `self` must be current, and `source` must belong to it.
-    unsafe fn blur_target(&self, source: &RenderTarget, sigma: f32) -> Result<RenderTarget, String> {
+    unsafe fn blur_target(
+        &self,
+        source: &RenderTarget,
+        sigma: f32,
+    ) -> Result<RenderTarget, String> {
         let mut intermediates = Vec::new();
         // SAFETY: forwarded from this function's contract.
         let result = unsafe { self.blur_passes(source, sigma, &mut intermediates) };

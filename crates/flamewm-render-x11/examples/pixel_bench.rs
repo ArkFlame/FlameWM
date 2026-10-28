@@ -107,12 +107,10 @@ fn run(mode: RenderAcceleration) {
         blur_rgba(pixels, WIDTH, HEIGHT, 12.0);
     });
     measure("fill rounded 600x300 r24", |pixels| {
-        fill_rounded_rect(pixels, WIDTH, HEIGHT, panel, None, [30, 40, 50, 160])
-            .expect("fill");
+        fill_rounded_rect(pixels, WIDTH, HEIGHT, panel, None, [30, 40, 50, 160]).expect("fill");
     });
     measure("stroke rounded 600x300 t2", |pixels| {
-        stroke_rounded_rect(pixels, WIDTH, HEIGHT, panel, 2, [220, 220, 230, 255])
-            .expect("stroke");
+        stroke_rounded_rect(pixels, WIDTH, HEIGHT, panel, 2, [220, 220, 230, 255]).expect("stroke");
     });
     let ops = frame_batch();
     measure("frame batch 60f+20s+2b per-op", |pixels| {
@@ -120,6 +118,22 @@ fn run(mode: RenderAcceleration) {
     });
     measure("frame batch 60f+20s+2b paint_batch", |pixels| {
         paint_batch(pixels, WIDTH, HEIGHT, &ops).expect("batch");
+    });
+    let fills: Vec<PixelOp> = ops
+        .iter()
+        .copied()
+        .filter(|op| !matches!(op, PixelOp::Blur { .. }))
+        .collect();
+    let blurs: Vec<PixelOp> = ops
+        .iter()
+        .copied()
+        .filter(|op| matches!(op, PixelOp::Blur { .. }))
+        .collect();
+    measure("batch fills+strokes only (60f+20s)", |pixels| {
+        paint_batch(pixels, WIDTH, HEIGHT, &fills).expect("fills");
+    });
+    measure("batch blurs only (2b)", |pixels| {
+        paint_batch(pixels, WIDTH, HEIGHT, &blurs).expect("blurs");
     });
     let status = render_acceleration_status();
     println!(

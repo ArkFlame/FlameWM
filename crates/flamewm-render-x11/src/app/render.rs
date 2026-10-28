@@ -427,7 +427,52 @@ impl X11App {
     }
 
     /// Full clear, surface backdrop, every command, node backdrops, then present.
+    /// Whole-frame GPU paint for `renderAcceleration=gpu`: one upload of the transparent scene,
+    /// one readback, then one ARGB upload to the backbuffer. `None` keeps the XRender path, which
+    /// also takes every GPU failure, so a frame never mixes the two painters.
+    unsafe fn paint_full_gpu(&mut self, scale: f32) -> Option<u64> {
+        if crate::accel::render_acceleration() != crate::accel::RenderAcceleration::Gpu
+            || self.xrender.is_none()
+            || self.argb_visual.is_none()
+            || self.surface_backdrop.is_some()
+            || self.window_backdrop_pixmap.is_some()
+            || !self.clip_stack.is_empty()
+        {
+            return None;
+        }
+        let cached = self.cached_paint.as_ref()?;
+        let count = cached.commands.len() as u64;
+        let ops = super::gpu_frame::frame_ops(&cached.commands, scale)?;
+        let (width, height) = (self.width, self.height);
+        // The scene starts transparent, exactly as `clear_scene` leaves it.
+        let mut rgba = vec![0_u8; width as usize * height as usize * 4];
+        if !crate::accel::try_gpu_batch(&mut rgba, width, height, &ops) {
+            return None;
+        }
+        let mut words = Vec::new();
+        crate::native::image::premultiply_masked_into(&mut words, &rgba, width, height, |_, _| {
+            true
+        });
+        // SAFETY: the backbuffer and the ARGB visual belong to this app; checked above.
+        unsafe { self.upload_argb32_pub(self.backbuffer, &words, width, height) }
+            .ok()
+            .map(|()| {
+                static LOGGED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!(
+                        "FLAMEWM_RENDER_GPU_FRAME whole-frame gpu paint active ({width}x{height})"
+                    );
+                }
+                count
+            })
+    }
+
     unsafe fn paint_full(&mut self, document: &RuntimeDocument, scale: f32) -> Result<u64, String> {
+        if let Some(count) = unsafe { self.paint_full_gpu(scale) } {
+            unsafe { self.present_scene()? };
+            return Ok(count);
+        }
         {
             let _clear_guard = flamewm_profiler::start("render.clear");
             self.clear_scene()?;

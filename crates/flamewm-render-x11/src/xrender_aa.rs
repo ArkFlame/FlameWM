@@ -141,7 +141,7 @@ fn push_run(runs: &mut Vec<Run>, start: u32, len: u32, coverage: f32) {
 }
 
 /// Runs covering one row of a filled `width x height` rounded rect.
-fn fill_row_runs(width: u32, height: u32, radius: u32, row: u32) -> Vec<Run> {
+pub(crate) fn fill_row_runs(width: u32, height: u32, radius: u32, row: u32) -> Vec<Run> {
     let mut runs = Vec::new();
     if corner_edges(height, radius, row).is_none() {
         push_run(&mut runs, 0, width, 1.0);
@@ -165,7 +165,13 @@ fn fill_row_runs(width: u32, height: u32, radius: u32, row: u32) -> Vec<Run> {
 
 /// Runs covering one row of a stroked rounded rect: outer boundary minus the
 /// inner rounded boundary, both anti-aliased. Interior (between inner edges) is empty.
-fn stroke_row_runs(width: u32, height: u32, radius: u32, thickness: u32, row: u32) -> Vec<Run> {
+pub(crate) fn stroke_row_runs(
+    width: u32,
+    height: u32,
+    radius: u32,
+    thickness: u32,
+    row: u32,
+) -> Vec<Run> {
     let inner_present = row >= thickness
         && row < height.saturating_sub(thickness)
         && width > thickness * 2
