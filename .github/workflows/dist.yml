@@ -1,0 +1,117 @@
+name: Distribution build
+
+on:
+  workflow_dispatch:
+    inputs:
+      push_cpak:
+        description: Push the cpak image to GHCR and write its digest-pinned cpak.json
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      push_cpak:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  arch:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install packaging tools
+        run: |
+          sed -i '/^NoExtract/d' /etc/pacman.conf
+          pacman -Syu --noconfirm --needed git namcap
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build the Arch package
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          chown -R builder: "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sudo -u builder -H ./scripts/build-arch --syncdeps --noconfirm
+          test -n "$(find .target/dist -name 'flamewm-git-[0-9]*.pkg.tar.zst')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-arch
+          path: .target/dist/flamewm-git-*.pkg.tar.zst
+          if-no-files-found: error
+
+  deb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config python3 dpkg-dev \
+            libdbus-1-dev libpulse-dev libx11-dev libxi-dev libxft-dev libxkbcommon-dev \
+            libinput-dev libgbm-dev libdrm-dev libudev-dev xwayland
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the Debian package and archives
+        run: ./scripts/build-deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-deb
+          path: |
+            .target/dist/*.deb
+            .target/dist/*.tar.gz
+          if-no-files-found: error
+
+  cpak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        if: inputs.push_cpak
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build the cpak image
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/flamewm-terminal"
+          if [ "${{ inputs.push_cpak }}" = "true" ]; then
+            ./scripts/build-cpak --engine docker --image "$image" --push
+          else
+            ./scripts/build-cpak --engine docker --image "$image"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-cpak
+          path: .target/dist/flamewm-terminal-*
+          if-no-files-found: error
+
+  collect:
+    needs: [arch, deb, cpak]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: Checksum the distribution
+        run: |
+          cd dist
+          sha256sum -- * >SHA256SUMS
+          ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flamewm-dist
+          path: dist/
+          if-no-files-found: error
