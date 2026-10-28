@@ -580,6 +580,7 @@ pub fn main() -> Result<(), String> {
             &state.wallpaper_loader.state().presentation,
         )?;
     }
+    flamewm_ui_x11::apply_render_acceleration(&state_cell.borrow().settings);
     for error in flamewm_ui_x11::apply_cursor_shadow(setting_bool(
         &state_cell.borrow().settings,
         "cursorShadow",
@@ -1147,6 +1148,7 @@ fn refresh_settings_projection(
         update_wheel_hover(document, state, Some(sector))?;
     }
     sync_cursor_theme(state);
+    flamewm_ui_x11::apply_render_acceleration(&state.settings);
     for error in
         flamewm_ui_x11::apply_cursor_shadow(setting_bool(&state.settings, "cursorShadow", true))
     {
