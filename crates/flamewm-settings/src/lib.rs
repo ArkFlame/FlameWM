@@ -2028,6 +2028,14 @@ impl<T: ControlTransport> SettingsApplication<T> {
         )?;
         self.sync_option_setting(
             document,
+            "renderAcceleration",
+            &[
+                ("cpu", "render-acceleration-cpu"),
+                ("gpu", "render-acceleration-gpu"),
+            ],
+        )?;
+        self.sync_option_setting(
+            document,
             "titlebarButtonStyle",
             &[
                 ("circle", "titlebar-button-style-circle"),
@@ -3548,6 +3556,14 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             key: "decoration",
             value: "squared",
         }),
+        "settings.render-acceleration.cpu" => Ok(SettingsAction::TextSelect {
+            key: "renderAcceleration",
+            value: "cpu",
+        }),
+        "settings.render-acceleration.gpu" => Ok(SettingsAction::TextSelect {
+            key: "renderAcceleration",
+            value: "gpu",
+        }),
         "settings.start-icon.choose" => Ok(SettingsAction::StartIconChoose),
         "settings.start-icon.clear" => Ok(SettingsAction::StartIconClear),
         "settings.titlebar.button-style.circle" => Ok(SettingsAction::TextSelect {
@@ -3931,6 +3947,13 @@ mod value_text_tests {
             Ok(SettingsAction::TextSelect {
                 key: "decoration",
                 value: "squared"
+            })
+        );
+        assert_action!(
+            "settings.render-acceleration.gpu",
+            Ok(SettingsAction::TextSelect {
+                key: "renderAcceleration",
+                value: "gpu"
             })
         );
         assert_action!(
