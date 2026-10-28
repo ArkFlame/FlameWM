@@ -110,6 +110,17 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     );
     ACCENT_RGB.store(pack_rgb(accent_from_snapshot(snapshot)), Ordering::Relaxed);
     WINDOW_MARGIN.store(window_margin_from_snapshot(snapshot), Ordering::Relaxed);
+    flamewm_render_x11::set_render_acceleration(
+        match snapshot
+            .values
+            .get(flamewm_render_x11::RENDER_ACCELERATION_SETTING)
+        {
+            Some(SettingValue::Text(value)) => {
+                flamewm_render_x11::RenderAcceleration::from_setting(value)
+            }
+            _ => flamewm_render_x11::RenderAcceleration::Cpu,
+        },
+    );
     flamewm_applications::terminal::set_configured_terminal(&terminal_from_snapshot(snapshot));
 }
 
