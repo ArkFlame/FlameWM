@@ -3,7 +3,8 @@
 `./scripts/package` is packaging-only. It never runs Cargo, compiles sources,
 or runs tests. It validates that current executable release artifacts exist in
 `.target/release`, copies files according to `packaging/install-manifest.txt`,
-and stages `flamewm-VERSION` under `.target/dist`.
+and stages `flamewm-VERSION` under `.target/stage`, so `.target/dist` holds only
+artifacts meant for upload.
 
 Archive metadata is normalized with sorted entries, numeric owner/group zero,
 and `SOURCE_DATE_EPOCH` (default `0`). The reproducible outputs are
@@ -15,6 +16,33 @@ archives. Debian metadata comes from `packaging/debian/control.in` and
 `copyright`. Absence of `dpkg-deb` is allowed; missing release binaries or
 package sources are errors. `SHA256SUMS` covers every artifact that was
 emitted.
+
+## Distribution directory
+
+Every packaging lane publishes into `.target/dist`, and nothing else is written there:
+
+| Lane | Command | Artifacts |
+| --- | --- | --- |
+| Debian | `./scripts/build-deb` | `flamewm_VERSION_amd64.deb`, `flamewm-VERSION-source.tar.gz`, `flamewm-VERSION-linux-x86_64.tar.gz` |
+| Arch | `./scripts/build-arch` | `flamewm-git-VERSION.rN.gHASH-1-x86_64.pkg.tar.zst` |
+| cpak | `./scripts/build-cpak` | `flamewm-terminal-VERSION-cpak.oci.tar`, plus `flamewm-terminal-VERSION-cpak.json` with `--push` |
+
+Each lane replaces only its own artifacts, then `./scripts/dist-checksums` rewrites
+`SHA256SUMS` over everything in the directory. `./scripts/build-dist` runs every lane whose tools
+are installed (or the lanes named by `--deb`, `--arch`, `--cpak`) and verifies the checksums.
+`.github/workflows/dist.yml` runs the three lanes on GitHub and uploads them together as the
+`flamewm-dist` artifact; it can be started by hand and is reused by the release workflow.
+
+## cpak application image
+
+`./scripts/build-cpak` exports the committed `HEAD` with `git archive`, builds
+`packaging/cpak/Containerfile` with podman, docker or buildah, checks that `flamewm-terminal` and
+`flamefetch` run in the image and saves it as an OCI archive. The Containerfile compiles the
+workspace inside `archlinux:base-devel`, stages it with `scripts/package --stage`, and
+`tools/cpak_package.py prune` removes the host login sessions and PAM service, so the runtime image
+always matches the glibc it was built against. `--push` publishes `IMAGE:VERSION` (default
+`ghcr.io/arkflame/flamewm-terminal`, or `--image NAME`) and writes the cpak v3 manifest pinned to
+the digest the registry reported. See `packaging/cpak/USAGE.md` for installing it with cpak.
 
 
 `./scripts/package --stage DESTDIR` runs only the install step: it validates the release
@@ -40,7 +68,7 @@ service.
 
 `./scripts/build-arch` points a copy of the PKGBUILD at the checkout's committed `HEAD`
 (`git+file://...#commit=`), runs `makepkg --cleanbuild --force` under `.target/arch` (sources,
-build tree and packages stay there) and verifies the produced package: version prefix, session
+build tree and packages stay there), copies the verified package into `.target/dist` and verifies the produced package: version prefix, session
 entries, helpers in `/usr/lib/flamewm`, no `/usr/libexec`, and the Arch PAM service, followed by
 `namcap` when installed. `.github/workflows/arch.yml` runs it in `archlinux:base-devel` on every
 push and pull request, then installs the package, checks every installed ELF with `ldd`, starts
@@ -125,9 +153,9 @@ the list of unverified items.
 ## Release workflow
 
 `.github/workflows/release.yml` runs when a `v<version>` tag is pushed. It fails
-unless the tag matches `scripts/version`, then builds the Arch package with
-`scripts/build-arch` and the `.deb` with `scripts/build-deb`, and attaches both
-with a `SHA256SUMS` file to a GitHub release with generated notes.
+unless the tag matches `scripts/version`, then runs the distribution workflow (Arch package, `.deb` and archives, and the
+cpak image, which it pushes to GHCR) and attaches every artifact, the digest-pinned cpak manifest
+and a `SHA256SUMS` file to a GitHub release with generated notes.
 
 The same run updates the `flamewm-git` AUR package: it copies
 `packaging/arch/PKGBUILD`, regenerates `.SRCINFO` and pushes both. This step is

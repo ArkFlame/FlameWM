@@ -51,6 +51,7 @@ impl From<Readiness> for FdReadiness {
 pub struct Reactor {
     event_loop: EventLoop<'static, ()>,
     wake: WakeDeadline,
+    owned_wakes: Vec<WakeDeadline>,
 }
 
 /// Shared wake deadline: dispatch never sleeps past it. Owners set it from their tick without
@@ -83,6 +84,11 @@ pub fn bounded_timeout(
     Some(timeout.map_or(until, |timeout| timeout.min(until)))
 }
 
+#[must_use]
+pub fn earliest_deadline(deadlines: impl IntoIterator<Item = Option<Instant>>) -> Option<Instant> {
+    deadlines.into_iter().flatten().min()
+}
+
 /// A descriptor owned elsewhere, as an `AsFd` source for any calloop loop. The owner keeps it
 /// open for as long as the source is registered.
 pub struct BorrowedRawFd(pub RawFd);
@@ -109,7 +115,23 @@ impl Reactor {
         Ok(Self {
             event_loop: EventLoop::try_new()?,
             wake: WakeDeadline::default(),
+            owned_wakes: Vec::new(),
         })
+    }
+
+    #[must_use]
+    pub fn owned_wake_deadline(&mut self) -> WakeDeadline {
+        let wake = WakeDeadline::default();
+        self.owned_wakes.push(wake.clone());
+        wake
+    }
+
+    fn earliest_wake(&self) -> Option<Instant> {
+        earliest_deadline(
+            std::iter::once(&self.wake)
+                .chain(&self.owned_wakes)
+                .map(WakeDeadline::get),
+        )
     }
 
     /// Handle to the shared wake deadline consumed by [`Reactor::dispatch`].
@@ -339,7 +361,7 @@ impl Reactor {
     /// Dispatches pending events, waiting no longer than `timeout` for the next event.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> calloop::Result<()> {
         let requested = timeout;
-        let wake = self.wake.get();
+        let wake = self.earliest_wake();
         let timeout = bounded_timeout(timeout, wake, Instant::now());
         if timer_trace_enabled() {
             let source = if timeout != requested {
@@ -388,6 +410,31 @@ mod wake_tests {
         let ms = Duration::from_millis;
         let got = bounded_timeout(timeout.map(ms), at.map(|t| now + ms(t)), now);
         assert_eq!(got, expected.map(ms));
+    }
+
+    #[test]
+    fn earliest_deadline_ignores_unset_slots() {
+        let now = Instant::now();
+        let soon = now + Duration::from_millis(5);
+        let later = now + Duration::from_millis(50);
+        assert_eq!(earliest_deadline([None, None]), None);
+        assert_eq!(
+            earliest_deadline([Some(later), None, Some(soon)]),
+            Some(soon)
+        );
+    }
+
+    #[test]
+    fn owned_wake_slots_do_not_overwrite_the_shared_slot() {
+        let mut reactor = Reactor::new().expect("reactor");
+        let shared = reactor.wake_deadline();
+        let owned = reactor.owned_wake_deadline();
+        let now = Instant::now();
+        shared.set(Some(now + Duration::from_secs(5)));
+        owned.set(Some(now + Duration::from_secs(1)));
+        assert_eq!(reactor.earliest_wake(), Some(now + Duration::from_secs(1)));
+        owned.set(None);
+        assert_eq!(reactor.earliest_wake(), Some(now + Duration::from_secs(5)));
     }
 
     #[test]

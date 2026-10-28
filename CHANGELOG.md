@@ -1,3 +1,12 @@
+## 2026-10-28 — Desktop widgets, window margin, GPU rendering and one dist directory
+
+- Add desktop widgets: time and date, CPU and memory ring gauges, a media player and a custom text widget. Add them from **Add Widgets** in the desktop menu (a gallery with a preview of each), drag to move, drag the corner grip to resize, and right-click to configure, lock or remove. Every widget has its own settings (elements on/off, sizes, colors, alignment, background, radius) and they are saved in `~/.local/state/desktop-widgets.state`.
+- The custom widget takes `%username%`, `%hostname%`, `%time%`, `%date%`, `%weekday%`, `%cpu%`, `%memory%` and `%uptime%`, and MiniMessage-style tags such as `<white>`, `<red_background>`, `<#8cc8ff>`, `<bold>` and `<reset>`.
+- Add the `windowMargin` setting (default 2 px, 0 to 32): snapped and maximized windows keep that gap from each other, the screen edges and the taskbar, and the snap preview shows the same rectangle.
+- Add the `renderAcceleration` setting (CPU or GPU, under Appearance). CPU and GPU implement one pixel backend; GPU runs backdrop and menu blurs through OpenGL ES on an offscreen EGL context, switches live, and falls back to CPU when no GPU context can be made. A 1920x1080 blur takes 12 ms instead of 49 to 117 ms on an RTX 3050.
+- Every packaging lane now publishes into `.target/dist`: `build-deb` (`.deb` and archives), `build-arch` (the pacman package) and the new `build-cpak` (cpak OCI image, plus a digest-pinned `cpak.json` with `--push`). `build-dist` runs the lanes that can run here, and `.github/workflows/dist.yml` builds all three and uploads them as one artifact.
+- The cpak image is now compiled from source inside `archlinux:base-devel`, so it no longer depends on the host's glibc.
+
 ## 2026-10-28 — Idle Desktop memory and live backdrops on move
 
 - Idle Desktop drops to 25.8 MiB PSS. Xft and its font libraries load on the first text draw, icon theme directories and index files are scanned on the first themed lookup, and identical node styles in compiled documents are shared.

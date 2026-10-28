@@ -19,17 +19,18 @@ export CARGO_TARGET_DIR="$TARGET_DIR"
 VERSION="$(./scripts/version)"
 DIST="$ROOT/.target/dist"
 DEB="$DIST/flamewm_${VERSION}_amd64.deb"
+DEB_LANE_ARTIFACTS=("$DEB" "$DIST/flamewm-$VERSION-source.tar.gz" "$DIST/flamewm-$VERSION-linux-x86_64.tar.gz" "$DIST/flamewm-$VERSION" "$DIST/SHA256SUMS")
 
 on_error() {
     local status=$?
     printf 'FLAMEWM-DEB-ERROR: build/package/verification failed (exit %s, line %s).\n' "$status" "$1" >&2
     printf 'FLAMEWM-DEB-ERROR: do not install an older .deb; correct the failure and rerun ./scripts/build-deb.\n' >&2
+    rm -rf "${DEB_LANE_ARTIFACTS[@]}"
     exit "$status"
 }
 trap 'on_error "$LINENO"' ERR
 
-# Clear the complete distribution directory before any build or preflight.
-rm -rf "$DIST"
+rm -rf "${DEB_LANE_ARTIFACTS[@]}"
 mkdir -p "$DIST"
 
 # Create the explicit cache root (mkdir -p), then require it to be writable.

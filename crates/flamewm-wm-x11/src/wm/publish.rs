@@ -47,7 +47,13 @@ impl<C: Connection> Wm<'_, C> {
             if minimized {
                 continue;
             }
-            let next = rehome_outer(mode, outer, &self.output_work_areas, self.work_area());
+            let next = rehome_outer(
+                mode,
+                outer,
+                &self.output_work_areas,
+                self.work_area(),
+                crate::live_settings::window_margin(),
+            );
             if next != outer {
                 if let Some(state) = self.clients.get_mut(&id) {
                     state.set_outer(next);

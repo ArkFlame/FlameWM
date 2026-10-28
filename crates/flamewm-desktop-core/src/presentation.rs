@@ -166,6 +166,7 @@ pub enum BlankDesktopAction {
     OpenTerminal,
     CreateNewFolder,
     NewStickyNote,
+    AddWidgets,
     AddVirtualDesktop,
     DesktopAndWallpaper,
 }
@@ -176,6 +177,7 @@ impl BlankDesktopAction {
             Self::OpenTerminal => "Open Terminal",
             Self::CreateNewFolder => "Create New Folder",
             Self::NewStickyNote => "New Sticky Note",
+            Self::AddWidgets => "Add Widgets",
             Self::AddVirtualDesktop => "Add Virtual Desktop",
             Self::DesktopAndWallpaper => flamewm_ui_core::context_menu::SETTINGS_ROW_LABEL,
         }
@@ -191,6 +193,7 @@ pub fn blank_context_menu(sticky_enabled: bool) -> Vec<BlankDesktopAction> {
     if sticky_enabled {
         actions.push(BlankDesktopAction::NewStickyNote);
     }
+    actions.push(BlankDesktopAction::AddWidgets);
     actions.push(BlankDesktopAction::AddVirtualDesktop);
     actions.push(BlankDesktopAction::DesktopAndWallpaper);
     actions
@@ -323,7 +326,7 @@ mod tests {
     }
     #[test]
     fn sticky_menu_item_is_conditional() {
-        assert_eq!(blank_context_menu(false).len(), 4);
+        assert_eq!(blank_context_menu(false).len(), 5);
         assert_eq!(
             blank_context_menu(true)[2],
             BlankDesktopAction::NewStickyNote
@@ -352,9 +355,10 @@ mod tests {
     }
     #[test]
     fn blank_menu_row_visibility_follows_sticky_flag() {
-        // 4 rows without sticky, 5 with: hidden rows stay display:none.
-        assert_eq!(menu_height_for_rows(blank_context_menu(false).len()), 134);
-        assert_eq!(menu_height_for_rows(blank_context_menu(true).len()), 165);
+        // 5 rows without sticky, 6 with: hidden rows stay display:none.
+        assert_eq!(menu_height_for_rows(blank_context_menu(false).len()), 165);
+        assert_eq!(menu_height_for_rows(blank_context_menu(true).len()), 196);
+        assert!(blank_context_menu(false).contains(&BlankDesktopAction::AddWidgets));
         assert!(!blank_context_menu(false).contains(&BlankDesktopAction::NewStickyNote));
         assert!(blank_context_menu(true).contains(&BlankDesktopAction::NewStickyNote));
     }

@@ -32,6 +32,7 @@ while IFS='  ' read -r checksum artifact; do
     [[ -n "$artifact" ]] || fail 'package checksum manifest contains an empty artifact'
     case "$artifact" in
         "flamewm-$version-source.tar.gz"|"flamewm-$version-linux-x86_64.tar.gz"|"flamewm_${version}_amd64.deb") ;;
+        "flamewm-git-$version".r*-x86_64.pkg.tar.*|"flamewm-terminal-$version-cpak.oci.tar"|"flamewm-terminal-$version-cpak.json") ;;
         *) fail "unexpected package artifact or version: $artifact" ;;
     esac
 done < "$checksums"

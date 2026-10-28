@@ -189,6 +189,7 @@ pub struct ProductSettings {
     pub desktop_entry_scale_percent: u16,
     pub window_snap_preview_fill_opacity: u8,
     pub snap_preview_enabled: bool,
+    pub window_margin: u16,
     /// `false` (XP style): move/resize shows an outline and applies the geometry on release.
     pub show_content_while_dragging: bool,
     /// `windowShadows`: Win7-style frame shadows behind floating windows.
@@ -246,6 +247,7 @@ pub struct ProductSettings {
     pub start_menu_blur_percent: u8,
     pub accent_opacity: u8,
     pub decoration: String,
+    pub render_acceleration: String,
     pub titlebar_button_style: String,
     pub titlebar_minimize_color: String,
     pub titlebar_minimize_hover_color: String,
@@ -314,6 +316,7 @@ impl Default for ProductSettings {
             desktop_entry_scale_percent: 100,
             window_snap_preview_fill_opacity: 20,
             snap_preview_enabled: true,
+            window_margin: 2,
             show_content_while_dragging: false,
             window_shadows: true,
             titlebars: true,
@@ -360,6 +363,7 @@ impl Default for ProductSettings {
             start_menu_blur_percent: 80,
             accent_opacity: 100,
             decoration: "rounded".to_owned(),
+            render_acceleration: "cpu".to_owned(),
             titlebar_button_style: "circle".to_owned(),
             titlebar_minimize_color: String::new(),
             titlebar_minimize_hover_color: String::new(),
@@ -496,6 +500,9 @@ impl ProductSettings {
         if !(34..=72).contains(&self.taskbar_height) {
             return invalid("taskbarHeight must be 34..72");
         }
+        if self.window_margin > 32 {
+            return invalid("windowMargin must be 0..32");
+        }
         if self.taskbar_floating_margin > 32 {
             return invalid("taskbarFloatingMargin must be 0..32");
         }
@@ -551,6 +558,9 @@ impl ProductSettings {
         }
         if self.accent_opacity > 100 {
             return invalid("accentOpacity must be 0..100");
+        }
+        if !matches!(self.render_acceleration.as_str(), "cpu" | "gpu") {
+            return invalid("renderAcceleration must be cpu or gpu");
         }
         if !matches!(self.decoration.as_str(), "rounded" | "squared") {
             return invalid("decoration must be rounded or squared");
@@ -1087,6 +1097,7 @@ stable_settings! {
     (false, time, "autoTimeZone", auto_time_zone),
     (false, desktop, "wallpaperFit", wallpaper_fit),
     (false, windows, "snapPreviewEnabled", snap_preview_enabled),
+    (false, windows, "windowMargin", window_margin),
     (false, windows, "showContentWhileDragging", show_content_while_dragging),
     (true, windows, "windowShadows", window_shadows),
     (false, windows, "titlebars", titlebars),
@@ -1095,6 +1106,7 @@ stable_settings! {
     (false, appearance, "cursorShadow", cursor_shadow),
     (false, appearance, "accentOpacity", accent_opacity),
     (false, appearance, "decoration", decoration),
+    (false, appearance, "renderAcceleration", render_acceleration),
     (false, windows, "titlebarButtonStyle", titlebar_button_style),
     (false, windows, "titlebarMinimizeColor", titlebar_minimize_color),
     (false, windows, "titlebarMinimizeHoverColor", titlebar_minimize_hover_color),
@@ -1988,6 +2000,33 @@ mod tests {
         let squared = load("revision=2\ndecoration=squared\n").expect("squared");
         assert_eq!(squared.decoration, "squared");
         assert!(load("revision=2\ndecoration=neon\n").is_err());
+    }
+
+    #[test]
+    fn render_acceleration_defaults_to_cpu_and_accepts_only_cpu_or_gpu() {
+        assert_eq!(
+            load("revision=2\n").expect("unset").render_acceleration,
+            "cpu"
+        );
+        assert_eq!(
+            load("revision=2\nrenderAcceleration=gpu\n")
+                .expect("gpu")
+                .render_acceleration,
+            "gpu"
+        );
+        assert!(load("revision=2\nrenderAcceleration=vulkan\n").is_err());
+    }
+
+    #[test]
+    fn window_margin_defaults_to_two_and_rejects_values_past_thirty_two() {
+        assert_eq!(load("revision=2\n").expect("unset").window_margin, 2);
+        assert_eq!(
+            load("revision=2\nwindowMargin=0\n")
+                .expect("zero")
+                .window_margin,
+            0
+        );
+        assert!(load("revision=2\nwindowMargin=33\n").is_err());
     }
 
     #[test]

@@ -82,6 +82,7 @@ mod wallpaper_fit;
 #[allow(clippy::duplicate_mod)]
 mod wallpaper_loader;
 mod wallpaper_stamp;
+mod widgets;
 mod workspace_sync;
 
 use drag::{commit_item_drag, hide_drag_ghost, show_drag_ghost, sync_drag_ghost};
@@ -279,10 +280,11 @@ fn update_gauges(state: &DesktopState) {
 /// back.
 const STARTUP_HEAP_TRIM_DELAY: Duration = Duration::from_secs(10);
 const SLOT_COUNT: usize = 128;
-const BLANK_ROW_IDS: [&str; 5] = [
+const BLANK_ROW_IDS: [&str; 6] = [
     "menu-row-terminal",
     "menu-row-folder",
     "menu-row-note",
+    "menu-row-widgets",
     "menu-row-desktop",
     "menu-row-settings",
 ];
@@ -306,6 +308,9 @@ enum MenuKind {
     Entry,
     ConvertWheel,
     Sticky,
+    Widget,
+    WidgetGallery,
+    WidgetConfig,
 }
 
 struct MenuState {
@@ -340,6 +345,7 @@ struct DesktopState {
     projected_cache: Option<ProjectedCellsCache>,
     layout_path: PathBuf,
     sticky: sticky::StickyState,
+    widgets: widgets::WidgetState,
     selection: SelectionModel,
     selection_start: Option<Point>,
     selection_output: Option<OutputId>,
@@ -471,6 +477,12 @@ pub fn main() -> Result<(), String> {
     }
     let sticky_path = sticky_persistence::state_path().map_err(|error| format!("{error:?}"))?;
     let sticky = sticky_persistence::load(&sticky_path).map_err(|error| format!("{error:?}"))?;
+    let widget_path =
+        flamewm_desktop_core::widgets::state_path().map_err(|error| format!("{error:?}"))?;
+    let widget_store = flamewm_desktop_core::widgets::load(&widget_path).unwrap_or_else(|error| {
+        eprintln!("desktop: widget state unreadable, starting empty: {error:?}");
+        flamewm_desktop_core::widgets::WidgetStore::default()
+    });
     let dirty = Arc::new(AtomicBool::new(false));
     let icons_pending = Arc::new(AtomicBool::new(false));
     let downloads_dir = flamewm_downloads_core::downloads_dir(&home, user_dirs.as_deref());
@@ -514,6 +526,7 @@ pub fn main() -> Result<(), String> {
                 sticky_path,
                 setting_bool(&settings, "stickyNotesEnabled", true),
             ),
+            widgets: widgets::WidgetState::new(widget_store, widget_path),
             selection: SelectionModel::default(),
             selection_start: None,
             selection_output: None,
@@ -567,6 +580,7 @@ pub fn main() -> Result<(), String> {
             &state.wallpaper_loader.state().presentation,
         )?;
     }
+    flamewm_ui_x11::apply_render_acceleration(&state_cell.borrow().settings);
     for error in flamewm_ui_x11::apply_cursor_shadow(setting_bool(
         &state_cell.borrow().settings,
         "cursorShadow",
@@ -575,6 +589,7 @@ pub fn main() -> Result<(), String> {
         eprintln!("desktop: cursor shadow: {error}");
     }
     projection::assign_document_layers(&mut document)?;
+    widgets::assign_layers(&mut document)?;
     projection::initialize_transient_visibility(&mut document)?;
     {
         let _span = sync_point().start();
@@ -604,6 +619,40 @@ pub fn main() -> Result<(), String> {
         )
         .map_err(|error| format!("register startup heap trim: {error}"))?;
     sticky::attach_persist_wake(&mut state_cell.borrow_mut().sticky, &reactor);
+    {
+        let wake = reactor.owned_wake_deadline();
+        let mut state = state_cell.borrow_mut();
+        state.widgets.attach_wake(wake);
+        let bounds = widgets::widget_bounds(&state);
+        state.widgets.store.clamp_all(bounds);
+    }
+    match flamewm_integrations_linux::MprisProvider::connect() {
+        Ok(mut provider) => match provider.start() {
+            Ok(()) => {
+                let watch = provider.watch();
+                let interest = if watch
+                    .events
+                    .contains(flamewm_api::ports::FdEvents::WRITABLE)
+                {
+                    calloop::Interest::BOTH
+                } else {
+                    calloop::Interest::READ
+                };
+                let media_cell = std::rc::Rc::clone(&state_cell);
+                let registration =
+                    reactor.register_raw_fd_with_action(watch.fd, interest, move |_, _| {
+                        widgets::refresh_media(&mut media_cell.borrow_mut());
+                        FdAction::Continue
+                    });
+                warn_degraded("media widget", registration);
+                let mut state = state_cell.borrow_mut();
+                state.widgets.mpris = Some(provider);
+                widgets::refresh_media(&mut state);
+            }
+            Err(error) => eprintln!("desktop: media widget unavailable: {}", error.message),
+        },
+        Err(error) => eprintln!("desktop: media widget unavailable: {}", error.message),
+    }
     // Panel strut changes arrive as control signals. The signal handler only
     // sets this flag; the reactor tick re-resolves the work area once per burst.
     let panels_dirty = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -895,6 +944,9 @@ pub fn main() -> Result<(), String> {
                 if let Err(error) = refresh_all(document, &mut state) {
                     eprintln!("desktop: refresh failed (continuing): {error}");
                 }
+                if let Err(error) = widgets::poll(document, &mut state) {
+                    eprintln!("desktop: widget refresh failed: {error}");
+                }
                 let result = sticky::flush_persist_if_due(document, &mut state);
                 match result {
                     Ok(()) => {
@@ -1096,6 +1148,7 @@ fn refresh_settings_projection(
         update_wheel_hover(document, state, Some(sector))?;
     }
     sync_cursor_theme(state);
+    flamewm_ui_x11::apply_render_acceleration(&state.settings);
     for error in
         flamewm_ui_x11::apply_cursor_shadow(setting_bool(&state.settings, "cursorShadow", true))
     {
@@ -1282,6 +1335,7 @@ fn sync_document(
     sync_rename_editor(document, state)?;
     sync_drag_ghost(document, state)?;
     sticky::sync_sticky(document, state)?;
+    widgets::sync_widgets(document, state)?;
     update_gauges(state);
     Ok(())
 }
@@ -1298,6 +1352,7 @@ fn handle_desktop_key(
         || !key.modifiers.is_empty()
         || state.rename.is_some()
         || sticky::is_editing(state)
+        || state.widgets.is_editing()
     {
         return Ok(());
     }
@@ -1420,6 +1475,9 @@ fn handle_event(
         if sticky::is_editing(state) {
             return sticky::handle_text_input(action, document, state);
         }
+        if state.widgets.is_editing() {
+            return widgets::handle_text_input(action, document, state);
+        }
         if action.text.as_deref() == Some("\u{7f}") && state.pending_delete.is_none() {
             let paths = selected_deletable_paths(state);
             if !paths.is_empty() {
@@ -1432,6 +1490,9 @@ fn handle_event(
     }
     if action.action == "keyboard.confirm" && state.rename.is_some() {
         return confirm_rename(document, state);
+    }
+    if widgets::is_widget_action(&action.action) {
+        return widgets::handle_action(action, document, state);
     }
     if action.phase == UiActionPhase::Release
         && action.inside
@@ -1485,6 +1546,7 @@ fn is_menu_action(action: &str) -> bool {
         "menu.terminal"
             | "menu.folder"
             | "menu.note"
+            | "menu.widgets"
             | "menu.desktop"
             | "menu.settings"
             | "entry.empty-trash"
@@ -1524,13 +1586,15 @@ fn cancel_transient(
     state.pending_delete = None;
     state.rename = None;
     sticky::cancel_edit_and_gesture(state);
+    widgets::cancel_transient(state);
     hide_drag_ghost(document, state)?;
     set_selection_overlay(document, state, None)?;
     hide_menus(document, &mut state.menu_rects)?;
     hide_confirm(document, &mut state.menu_rects)?;
     sync_selection_visuals(document, state)?;
     sync_rename_editor(document, state)?;
-    sticky::sync_sticky(document, state)
+    sticky::sync_sticky(document, state)?;
+    widgets::sync_widgets(document, state)
 }
 
 fn handle_surface(
@@ -1888,6 +1952,19 @@ fn handle_menu_action(
             sticky::create_note(state, anchor);
             state.menu = None;
             sync_document(document, state)?;
+        }
+        "menu.widgets" => {
+            let anchor = state.menu.as_ref().map_or_else(
+                || {
+                    grid_for_output(state, &state.default_output)
+                        .work_area
+                        .origin()
+                },
+                |menu| menu.anchor,
+            );
+            state.menu = None;
+            hide_menus(document, &mut state.menu_rects)?;
+            widgets::open_gallery(document, state, anchor)?;
         }
         "menu.desktop" => {
             insert_workspace_after(mutation_dispatcher, state)?;
@@ -2303,6 +2380,7 @@ fn blank_row_id(action: BlankDesktopAction) -> &'static str {
         BlankDesktopAction::OpenTerminal => "menu-row-terminal",
         BlankDesktopAction::CreateNewFolder => "menu-row-folder",
         BlankDesktopAction::NewStickyNote => "menu-row-note",
+        BlankDesktopAction::AddWidgets => "menu-row-widgets",
         BlankDesktopAction::AddVirtualDesktop => "menu-row-desktop",
         BlankDesktopAction::DesktopAndWallpaper => "menu-row-settings",
     }
@@ -2328,6 +2406,7 @@ fn hide_menus(
     document.visible("desktop-convert-wheel", false)?;
     document.visible("convert-wheel-highlight", false)?;
     document.visible("sticky-menu", false)?;
+    widgets::hide_panels(document)?;
     projection::clear_menu_backdrop(document, "desktop-menu")?;
     projection::clear_menu_backdrop(document, "desktop-entry-menu")?;
     projection::clear_menu_backdrop(document, "desktop-convert-wheel")?;
@@ -2553,6 +2632,27 @@ fn sync_menu(document: &mut impl UiDocumentAccess, state: &mut DesktopState) -> 
             }
             state.menu_rects.push(placed);
             document.visible("desktop-convert-wheel", true)?;
+        }
+        MenuKind::Widget => {
+            let rows = widgets::widget_menu_rows(document, state)?;
+            if rows == 0 {
+                state.menu = None;
+                return Ok(());
+            }
+            place_menu_parts(
+                document,
+                state,
+                "widget-menu",
+                &menu_output,
+                menu_anchor,
+                &blank_menu_parts(rows),
+            )?;
+        }
+        MenuKind::WidgetGallery => {
+            widgets::place_gallery(document, state, menu_bounds)?;
+        }
+        MenuKind::WidgetConfig => {
+            widgets::place_config(document, state, menu_bounds)?;
         }
         MenuKind::Sticky => {
             let parts = {

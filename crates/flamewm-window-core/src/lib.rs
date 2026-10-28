@@ -79,6 +79,47 @@ pub fn snap_geometry(target: SnapTarget, work_area: Rect, current: Size) -> Rect
     }
 }
 
+#[must_use]
+pub fn apply_window_margin(tile: Rect, work_area: Rect, margin: i32) -> Rect {
+    let margin = margin.max(0);
+    if margin == 0 {
+        return tile;
+    }
+    let leading_inner = margin - margin / 2;
+    let trailing_inner = margin / 2;
+    let left = if tile.x <= work_area.x {
+        margin
+    } else {
+        leading_inner
+    };
+    let top = if tile.y <= work_area.y {
+        margin
+    } else {
+        leading_inner
+    };
+    let right = if tile.right() >= work_area.right() {
+        margin
+    } else {
+        trailing_inner
+    };
+    let bottom = if tile.bottom() >= work_area.bottom() {
+        margin
+    } else {
+        trailing_inner
+    };
+    let width = tile.width.saturating_sub(left + right);
+    let height = tile.height.saturating_sub(top + bottom);
+    if width < 1 || height < 1 {
+        return tile;
+    }
+    Rect::new(
+        tile.x.saturating_add(left),
+        tile.y.saturating_add(top),
+        width,
+        height,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,5 +200,49 @@ mod tests {
             snap_geometry(SnapTarget::BottomRightQuarter, work, current),
             Rect::new(961, 541, 960, 540)
         );
+    }
+
+    #[test]
+    fn window_margin_insets_outer_edges_fully_and_splits_shared_edges() {
+        let work = Rect::new(0, 44, 1920, 1036);
+        let current = Size::new(800, 600);
+        let left = apply_window_margin(snap_geometry(SnapTarget::LeftHalf, work, current), work, 2);
+        let right =
+            apply_window_margin(snap_geometry(SnapTarget::RightHalf, work, current), work, 2);
+        assert_eq!(left, Rect::new(2, 46, 957, 1032));
+        assert_eq!(right, Rect::new(961, 46, 957, 1032));
+        assert_eq!(right.x - left.right(), 2);
+        assert_eq!(
+            apply_window_margin(work, work, 2),
+            Rect::new(2, 46, 1916, 1032)
+        );
+    }
+
+    #[test]
+    fn window_margin_of_odd_width_keeps_the_exact_gap_between_tiles() {
+        let work = Rect::new(0, 0, 1000, 800);
+        let current = Size::new(800, 600);
+        let top_left = apply_window_margin(
+            snap_geometry(SnapTarget::TopLeftQuarter, work, current),
+            work,
+            5,
+        );
+        let bottom_right = apply_window_margin(
+            snap_geometry(SnapTarget::BottomRightQuarter, work, current),
+            work,
+            5,
+        );
+        assert_eq!(bottom_right.x - top_left.right(), 5);
+        assert_eq!(bottom_right.y - top_left.bottom(), 5);
+        assert_eq!(top_left.x, 5);
+        assert_eq!(work.right() - bottom_right.right(), 5);
+    }
+
+    #[test]
+    fn zero_or_oversized_margin_keeps_the_tile() {
+        let work = Rect::new(0, 0, 10, 10);
+        assert_eq!(apply_window_margin(work, work, 0), work);
+        assert_eq!(apply_window_margin(work, work, -3), work);
+        assert_eq!(apply_window_margin(work, work, 8), work);
     }
 }

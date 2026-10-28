@@ -2059,7 +2059,8 @@ impl<'a, C: Connection> Wm<'a, C> {
                 region_map,
             )
             .with_outputs(outputs)
-            .with_contents_while_dragging(crate::live_settings::show_content_while_dragging()),
+            .with_contents_while_dragging(crate::live_settings::show_content_while_dragging())
+            .with_window_margin(crate::live_settings::window_margin()),
         );
         if let Some(controller) = controller.as_mut() {
             controller.last_title_click = last_title_click;
@@ -2115,10 +2116,18 @@ fn rehome_outer(
     outer: Rect,
     outputs: &[OutputWorkArea],
     global: Rect,
+    window_margin: i32,
 ) -> Rect {
     match mode {
         PlacementMode::Fullscreen => outer,
-        PlacementMode::Maximized => work_area_for_rect_in(outputs, global, outer),
+        PlacementMode::Maximized => {
+            let work_area = to_core_rect(work_area_for_rect_in(outputs, global, outer));
+            from_core_rect(flamewm_window_core::apply_window_margin(
+                work_area,
+                work_area,
+                window_margin,
+            ))
+        }
         PlacementMode::Snapped(_) => {
             outer.clamp_inside(work_area_for_rect_in(outputs, global, outer))
         }

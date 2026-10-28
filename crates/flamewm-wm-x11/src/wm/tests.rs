@@ -844,6 +844,7 @@ fn removed_output_rehomes_floating_snapped_and_maximized_clients() {
         Rect::new(2500, 900, 400, 300),
         &surviving,
         global,
+        0,
     );
     assert_eq!(floating, Rect::new(1820, 900, 400, 300));
     let snapped = rehome_outer(
@@ -851,6 +852,7 @@ fn removed_output_rehomes_floating_snapped_and_maximized_clients() {
         Rect::new(2900, 0, 960, 1040),
         &surviving,
         global,
+        0,
     );
     assert_eq!(snapped, Rect::new(960, 0, 960, 1040));
     let maximized = rehome_outer(
@@ -858,18 +860,27 @@ fn removed_output_rehomes_floating_snapped_and_maximized_clients() {
         Rect::new(2000, 0, 1920, 1040),
         &surviving,
         global,
+        0,
     );
     assert_eq!(maximized, Rect::new(0, 0, 1920, 1040));
+    let margined = rehome_outer(
+        PlacementMode::Maximized,
+        Rect::new(2000, 0, 1920, 1040),
+        &surviving,
+        global,
+        2,
+    );
+    assert_eq!(margined, Rect::new(2, 2, 1916, 1036));
     // Fullscreen is left to its own owner; reconcile must not move it.
     let fullscreen = Rect::new(2000, 0, 1920, 1080);
     assert_eq!(
-        rehome_outer(PlacementMode::Fullscreen, fullscreen, &surviving, global),
+        rehome_outer(PlacementMode::Fullscreen, fullscreen, &surviving, global, 0),
         fullscreen
     );
     // A client already inside the surviving layout is untouched.
     let inside = Rect::new(100, 100, 300, 200);
     assert_eq!(
-        rehome_outer(PlacementMode::Floating, inside, &surviving, global),
+        rehome_outer(PlacementMode::Floating, inside, &surviving, global, 0),
         inside
     );
 }
@@ -904,14 +915,15 @@ fn negative_origin_outputs_clamp_without_unsigned_wrap() {
             PlacementMode::Floating,
             Rect::new(-1900, -50, 400, 300),
             &outputs,
-            global
+            global,
+            0
         ),
         Rect::new(-1900, -50, 400, 300)
     );
     // Lives entirely on the negative-y output: already inside its work area, unchanged.
     let above = Rect::new(100, -1000, 400, 300);
     assert_eq!(
-        rehome_outer(PlacementMode::Floating, above, &outputs, global),
+        rehome_outer(PlacementMode::Floating, above, &outputs, global, 0),
         above
     );
     // Fully outside every output: pulled to the nearest output so 1/4 (100 px) stays visible.
@@ -920,7 +932,8 @@ fn negative_origin_outputs_clamp_without_unsigned_wrap() {
             PlacementMode::Floating,
             Rect::new(-2500, 100, 400, 300),
             &outputs,
-            global
+            global,
+            0
         ),
         Rect::new(-2220, 100, 400, 300)
     );
@@ -930,7 +943,8 @@ fn negative_origin_outputs_clamp_without_unsigned_wrap() {
             PlacementMode::Snapped(crate::frame::model::SnapTarget::Left),
             Rect::new(-2500, 100, 400, 300),
             &outputs,
-            global
+            global,
+            0
         ),
         Rect::new(0, 100, 400, 300)
     );

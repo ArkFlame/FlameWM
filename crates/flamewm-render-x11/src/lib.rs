@@ -1,5 +1,6 @@
 #![allow(clippy::unnecessary_cast)]
 
+mod accel;
 mod lamp;
 mod overlay;
 mod text_mask_cache;
@@ -14,6 +15,10 @@ mod xrender_aa;
 mod xrender_transform;
 mod xshape;
 
+pub use accel::{
+    AccelerationStatus, RENDER_ACCELERATION_SETTING, RenderAcceleration, probe_gpu_renderer,
+    render_acceleration, render_acceleration_status, set_render_acceleration,
+};
 pub use lamp::PanelEdge;
 pub use overlay::{TransitionDirection, TransitionStyle, WarpOverlay, fade_alpha};
 pub use warp::WarpRect;

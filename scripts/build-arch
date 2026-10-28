@@ -15,6 +15,7 @@ trap 'on_error "$LINENO"' ERR
 UPSTREAM='git+https://github.com/ArkFlame/FlameWM.git'
 WORK="$ROOT/.target/arch"
 PKGDIR="$WORK/packages"
+DIST="$ROOT/.target/dist"
 
 command -v makepkg >/dev/null 2>&1 || fail 'makepkg not found (install pacman and base-devel)'
 command -v git >/dev/null 2>&1 || fail 'git not found'
@@ -74,5 +75,11 @@ else
     printf 'FLAMEWM-ARCH-NOTICE: namcap not installed; package lint skipped\n' >&2
 fi
 
-printf '\nFLAMEWM-ARCH-READY: %s\n' "$package"
-printf 'To install or upgrade: sudo pacman -U "%s"\n' "$package"
+mkdir -p "$DIST"
+find "$DIST" -maxdepth 1 -type f -name 'flamewm-git-*.pkg.tar.*' -delete
+published="$DIST/$(basename "$package")"
+cp -f "$package" "$published"
+./scripts/dist-checksums "$DIST" >/dev/null
+
+printf '\nFLAMEWM-ARCH-READY: %s\n' "$published"
+printf 'To install or upgrade: sudo pacman -U "%s"\n' "$published"

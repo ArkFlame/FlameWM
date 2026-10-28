@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+cd "$ROOT"
+
+fail() { printf 'FLAMEWM-DIST-ERROR: %s\n' "$1" >&2; exit 1; }
+
+lanes=()
+for argument in "$@"; do
+    case "$argument" in
+        --deb|--arch|--cpak) lanes+=("${argument#--}") ;;
+        -h|--help) printf 'usage: scripts/build-dist [--deb] [--arch] [--cpak]\n'; exit 0 ;;
+        *) fail "unknown argument: $argument (usage: scripts/build-dist [--deb] [--arch] [--cpak])" ;;
+    esac
+done
+
+available() {
+    case "$1" in
+        deb) command -v dpkg-deb >/dev/null 2>&1 && command -v dpkg >/dev/null 2>&1 ;;
+        arch) command -v makepkg >/dev/null 2>&1 ;;
+        cpak) command -v podman >/dev/null 2>&1 || command -v docker >/dev/null 2>&1 || command -v buildah >/dev/null 2>&1 ;;
+    esac
+}
+
+if (( ${#lanes[@]} == 0 )); then
+    for lane in deb arch cpak; do
+        if available "$lane"; then
+            lanes+=("$lane")
+        else
+            printf 'FLAMEWM-DIST-NOTICE: skipping the %s lane; its build tools are not installed\n' "$lane" >&2
+        fi
+    done
+fi
+(( ${#lanes[@]} > 0 )) || fail 'no packaging lane can run here (need dpkg-deb, makepkg or a container engine)'
+
+for lane in "${lanes[@]}"; do
+    available "$lane" || fail "the $lane lane was requested but its build tools are not installed"
+    printf '\nFLAMEWM-DIST: building the %s lane\n' "$lane"
+    "./scripts/build-$lane"
+done
+
+DIST="$ROOT/.target/dist"
+./scripts/dist-checksums "$DIST"
+(cd "$DIST" && sha256sum --check --quiet SHA256SUMS) || fail 'dist checksum verification failed'
+printf '\nFLAMEWM-DIST-READY: %s\n' "$DIST"
+(cd "$DIST" && ls -1 --size --human-readable -- *)

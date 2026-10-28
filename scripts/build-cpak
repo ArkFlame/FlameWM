@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+cd "$ROOT"
+
+fail() { printf 'FLAMEWM-CPAK-ERROR: %s\n' "$1" >&2; exit 1; }
+usage() {
+    printf 'usage: scripts/build-cpak [--engine podman|docker|buildah] [--image NAME] [--push]\n' >&2
+    exit 2
+}
+
+VERSION="$(./scripts/version)"
+IMAGE="${FLAMEWM_CPAK_IMAGE:-ghcr.io/arkflame/flamewm-terminal}"
+ENGINE=""
+PUSH=0
+while (( $# )); do
+    case "$1" in
+        --engine) (( $# >= 2 )) || usage; ENGINE="$2"; shift 2 ;;
+        --image) (( $# >= 2 )) || usage; IMAGE="$2"; shift 2 ;;
+        --push) PUSH=1; shift ;;
+        -h|--help) usage ;;
+        *) printf 'FLAMEWM-CPAK-ERROR: unknown argument: %s\n' "$1" >&2; usage ;;
+    esac
+done
+[[ "$IMAGE" =~ ^[a-z0-9][a-z0-9._/:-]*$ && "$IMAGE" != *@* ]] \
+    || fail "image name must be a lowercase repository without tag or digest: $IMAGE"
+
+if [[ -z "$ENGINE" ]]; then
+    for candidate in podman docker buildah; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            ENGINE="$candidate"
+            break
+        fi
+    done
+fi
+case "$ENGINE" in
+    podman|docker|buildah) command -v "$ENGINE" >/dev/null 2>&1 || fail "$ENGINE not found" ;;
+    '') fail 'no container engine found (install podman, docker or buildah)' ;;
+    *) fail "unsupported engine: $ENGINE" ;;
+esac
+command -v git >/dev/null 2>&1 || fail 'git not found'
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail 'build-cpak packages a git checkout; clone the repository first'
+
+DIST="$ROOT/.target/dist"
+WORK="$ROOT/.target/cpak"
+CONTEXT="$WORK/context"
+TAG="$IMAGE:$VERSION"
+ARCHIVE="$DIST/flamewm-terminal-$VERSION-cpak.oci.tar"
+MANIFEST="$DIST/flamewm-terminal-$VERSION-cpak.json"
+COMMIT="$(git rev-parse HEAD)"
+
+cleanup_failed() {
+    local status=$?
+    rm -f "$ARCHIVE" "$MANIFEST"
+    printf 'FLAMEWM-CPAK-ERROR: build failed (exit %s, line %s); no cpak artifact was published\n' "$status" "$1" >&2
+    exit "$status"
+}
+trap 'cleanup_failed "$LINENO"' ERR
+
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    printf 'FLAMEWM-CPAK-NOTICE: uncommitted changes are not packaged; the image builds commit %s\n' "$COMMIT" >&2
+fi
+
+rm -rf "$WORK"
+mkdir -p "$CONTEXT" "$DIST"
+rm -f "$ARCHIVE" "$MANIFEST"
+git archive --format=tar "$COMMIT" | tar -x -C "$CONTEXT"
+cp packaging/cpak/Containerfile "$WORK/Containerfile"
+
+printf 'FLAMEWM-CPAK: building %s from commit %s with %s\n' "$TAG" "$COMMIT" "$ENGINE"
+case "$ENGINE" in
+    podman) podman build --pull=newer -f "$WORK/Containerfile" -t "$TAG" "$CONTEXT" ;;
+    docker) docker build --pull -f "$WORK/Containerfile" -t "$TAG" "$CONTEXT" ;;
+    buildah) buildah bud --pull -f "$WORK/Containerfile" -t "$TAG" "$CONTEXT" ;;
+esac
+
+for binary in /usr/bin/flamewm-terminal /usr/bin/flamefetch; do
+    case "$ENGINE" in
+        podman|docker) "$ENGINE" run --rm --entrypoint /usr/bin/test "$TAG" -x "$binary" ;;
+        buildah)
+            container="$(buildah from "$TAG")"
+            buildah run "$container" -- /usr/bin/test -x "$binary"
+            buildah rm "$container" >/dev/null ;;
+    esac
+done
+case "$ENGINE" in
+    podman|docker) "$ENGINE" run --rm --entrypoint /usr/bin/flamefetch "$TAG" >/dev/null ;;
+    buildah)
+        container="$(buildah from "$TAG")"
+        buildah run "$container" -- /usr/bin/flamefetch >/dev/null
+        buildah rm "$container" >/dev/null ;;
+esac
+
+case "$ENGINE" in
+    podman) podman save --format oci-archive -o "$ARCHIVE" "$TAG" ;;
+    docker) docker save -o "$ARCHIVE" "$TAG" ;;
+    buildah) buildah push "$TAG" "oci-archive:$ARCHIVE:$TAG" ;;
+esac
+[[ -s "$ARCHIVE" ]] || fail "image archive was not written: $ARCHIVE"
+
+if (( PUSH )); then
+    digest_file="$WORK/digest"
+    case "$ENGINE" in
+        podman) podman push --digestfile "$digest_file" "$TAG" ;;
+        buildah) buildah push --digestfile "$digest_file" "$TAG" ;;
+        docker)
+            docker push "$TAG" >/dev/null
+            docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$TAG" \
+                | sed -n "s#^$IMAGE@##p" | head -n1 > "$digest_file" ;;
+    esac
+    digest="$(tr -d '[:space:]' < "$digest_file")"
+    [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "registry did not report a digest for $TAG"
+    python3 -I tools/cpak_package.py manifest --image "$IMAGE@$digest" --output "$MANIFEST"
+fi
+
+./scripts/dist-checksums "$DIST" >/dev/null
+trap - ERR
+
+printf '\nFLAMEWM-CPAK-READY: %s\n' "$ARCHIVE"
+if (( PUSH )); then
+    printf 'FLAMEWM-CPAK-READY: %s (image %s@%s)\n' "$MANIFEST" "$IMAGE" "$digest"
+    printf 'Validate with: cpak validate %s && cpak test %s --binary /usr/bin/flamefetch\n' "$MANIFEST" "$MANIFEST"
+else
+    printf 'Load locally with: %s load -i %s\n' "$ENGINE" "$ARCHIVE"
+    printf 'Rerun with --push to publish %s and write the digest-pinned cpak.json\n' "$TAG"
+fi

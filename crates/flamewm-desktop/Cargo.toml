@@ -25,6 +25,7 @@ flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 flamewm-session-core = { path = "../flamewm-session-core" }
 calloop.workspace = true
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
 inotify.workspace = true
 
 [build-dependencies]

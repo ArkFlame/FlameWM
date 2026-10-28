@@ -2028,6 +2028,14 @@ impl<T: ControlTransport> SettingsApplication<T> {
         )?;
         self.sync_option_setting(
             document,
+            "renderAcceleration",
+            &[
+                ("cpu", "render-acceleration-cpu"),
+                ("gpu", "render-acceleration-gpu"),
+            ],
+        )?;
+        self.sync_option_setting(
+            document,
             "titlebarButtonStyle",
             &[
                 ("circle", "titlebar-button-style-circle"),
@@ -2084,6 +2092,22 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn sync_appearance(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let gpu_selected = self
+            .text_setting("renderAcceleration")
+            .is_ok_and(|value| value == "gpu");
+        optional_text(
+            document,
+            "render-acceleration-note",
+            if gpu_selected {
+                match flamewm_ui_x11::probe_gpu_renderer() {
+                    Ok(renderer) => format!("GPU blur and backdrops run on {renderer}"),
+                    Err(error) => format!("GPU unavailable, using CPU: {error}"),
+                }
+            } else {
+                "CPU renders blur and backdrops. GPU moves that work to the graphics card and switches live"
+                    .to_owned()
+            },
+        );
         self.sync_color_rows(document)?;
         self.sync_color_picker(document)?;
         for (key, id) in [
@@ -2505,6 +2529,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             if let Some(value) = integer(row.key) {
                 let label = if row.key == "screensaverRibbonWidthTenths" {
                     format!("{:.1} px", value as f64 / 10.0)
+                } else if row.key == "windowMargin" {
+                    format!("{value} px")
                 } else {
                     value.to_string()
                 };
@@ -2681,7 +2707,14 @@ struct IntegerStepper {
     maximum: i64,
 }
 
-const INTEGER_STEPPERS: [IntegerStepper; 8] = [
+const INTEGER_STEPPERS: [IntegerStepper; 9] = [
+    IntegerStepper {
+        slug: "window-margin",
+        key: "windowMargin",
+        step: 1,
+        minimum: 0,
+        maximum: 32,
+    },
     IntegerStepper {
         slug: "taskbar-floating-margin",
         key: "taskbarFloatingMargin",
@@ -3539,6 +3572,14 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             key: "decoration",
             value: "squared",
         }),
+        "settings.render-acceleration.cpu" => Ok(SettingsAction::TextSelect {
+            key: "renderAcceleration",
+            value: "cpu",
+        }),
+        "settings.render-acceleration.gpu" => Ok(SettingsAction::TextSelect {
+            key: "renderAcceleration",
+            value: "gpu",
+        }),
         "settings.start-icon.choose" => Ok(SettingsAction::StartIconChoose),
         "settings.start-icon.clear" => Ok(SettingsAction::StartIconClear),
         "settings.titlebar.button-style.circle" => Ok(SettingsAction::TextSelect {
@@ -3925,6 +3966,13 @@ mod value_text_tests {
             })
         );
         assert_action!(
+            "settings.render-acceleration.gpu",
+            Ok(SettingsAction::TextSelect {
+                key: "renderAcceleration",
+                value: "gpu"
+            })
+        );
+        assert_action!(
             "settings.appearance.apps.dark",
             Ok(SettingsAction::TextSelect {
                 key: "appearance",
@@ -4060,6 +4108,15 @@ mod value_text_tests {
         assert!(parse_action("settings.taskbar-blur.up").is_err());
         assert!(parse_action("settings.taskbar-opacity.up").is_err());
         assert!(parse_action("settings.start-menu-blur.down").is_err());
+        assert_action!(
+            "settings.window-margin.down",
+            Ok(SettingsAction::IntegerStep {
+                key: "windowMargin",
+                delta: -1,
+                minimum: 0,
+                maximum: 32
+            })
+        );
         assert_action!(
             "settings.taskbar-floating-margin.up",
             Ok(SettingsAction::IntegerStep {

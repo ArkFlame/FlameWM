@@ -461,10 +461,15 @@ impl<C: Connection> Wm<'_, C> {
                 i32::try_from(state.outer.height).unwrap_or(600),
             )
         });
-        let geometry = core_snap_geometry(
-            target,
-            to_core_rect(work),
-            flamewm_api::Size::new(current.0, current.1),
+        let core_work = to_core_rect(work);
+        let geometry = flamewm_window_core::apply_window_margin(
+            core_snap_geometry(
+                target,
+                core_work,
+                flamewm_api::Size::new(current.0, current.1),
+            ),
+            core_work,
+            crate::live_settings::window_margin(),
         );
         let geometry = from_core_rect(geometry);
         let geometry = flamewm_api::Rect::new(
