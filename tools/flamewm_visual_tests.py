@@ -132,7 +132,7 @@ class Frame:
 
 
 class Session:
-    def __init__(self, layout, bin_dir, out_dir, display_number):
+    def __init__(self, layout, bin_dir, out_dir, display_number, settings=None):
         self.layout = layout
         self.bin_dir = bin_dir
         self.out_dir = out_dir
@@ -143,6 +143,7 @@ class Session:
         if layout == "dual":
             self.outputs.append((OUTPUT_SIZE[0], 0, *OUTPUT_SIZE))
         self.env = dict(os.environ)
+        self.settings = settings
         self.x = None
 
     def spawn(self, name, cmd, env=None):
@@ -164,6 +165,11 @@ class Session:
         runtime = self.temp / "runtime"
         home.mkdir()
         runtime.mkdir(mode=0o700)
+        if self.settings:
+            config = home / ".config" / "flamewm"
+            config.mkdir(parents=True)
+            (config / "settings.toml").write_text(
+                "".join(f"{key}={value}\n" for key, value in self.settings.items()))
         self.env.update(DISPLAY=self.display_name, HOME=str(home), XDG_RUNTIME_DIR=str(runtime),
                         XDG_CONFIG_HOME=str(home / ".config"), XDG_CACHE_HOME=str(home / ".cache"))
         self.env.pop("WAYLAND_DISPLAY", None)
@@ -434,8 +440,13 @@ def run_layout(layout, args, results):
         session.stop()
 
 
+def session_settings(args):
+    """Settings written before the session starts; a black solid wallpaper skips every decode."""
+    return {"wallpaperMode": "solid", "wallpaperColor": "#000000"} if args.solid_wallpaper else None
+
+
 def run_bench(args):
-    session = Session("single", args.bin_dir, args.out, args.display)
+    session = Session("single", args.bin_dir, args.out, args.display, session_settings(args))
     try:
         session.start()
         if args.contents_while_dragging:
@@ -466,7 +477,7 @@ def run_bench(args):
 
 def run_idle_memory(args):
     layout = "single" if args.layout == "single" else "dual"
-    session = Session(layout, args.bin_dir, args.out, args.display)
+    session = Session(layout, args.bin_dir, args.out, args.display, session_settings(args))
     try:
         session.start()
         time.sleep(args.settle)
@@ -601,6 +612,8 @@ def main(argv=None):
     parser.add_argument("--repeat", type=int, default=3, help="bench: repeats per case")
     parser.add_argument("--contents-while-dragging", action="store_true",
                         help="bench: move windows live instead of dragging an outline")
+    parser.add_argument("--solid-wallpaper", action="store_true",
+                        help="bench, idle-memory: start with a black solid wallpaper")
     parser.add_argument("--settle", type=float, default=30.0, help="idle-memory: seconds idle before sampling")
     args = parser.parse_args(argv)
     if args.bin_dir:

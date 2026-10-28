@@ -1,3 +1,10 @@
+## 2026-10-28 — Lower idle memory and a new Task Manager
+
+- Cut idle session memory from 51.3 MiB to 39.2 MiB PSS with the default wallpaper, and to 31.1 MiB with a black solid one: the desktop no longer keeps a second copy of the wallpaper, release builds use fat LTO, the icon index stores its names in one buffer, and the WM, desktop and shell hand freed heap back once startup settles.
+- Redesign the Task Manager as one page: htop-style processor meters and CPU, memory and network graphs on top, a Windows 11 style process table below, and the shared FlameWM context menu for End task and priority.
+- Add `idle-memory` and `--solid-wallpaper` to `tools/flamewm_visual_tests.py`.
+- Drop the minimize and two-screens screenshots from the README.
+
 ## 2026-10-28 — Two screens, visual checks and release packages
 
 - Fix the release build, Clippy and three stale tests left by the light-outline pass.

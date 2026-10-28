@@ -2,6 +2,7 @@
 //! PID plus process start-time is the authority for selecting a live process.
 use std::collections::HashMap;
 use std::fs;
+use std::time::Instant;
 
 #[derive(Clone, Debug, Default)]
 pub struct Process {
@@ -35,6 +36,8 @@ pub struct Snapshot {
     pub tasks: usize,
     pub threads: u64,
     pub running: usize,
+    pub net_rx: f64,
+    pub net_tx: f64,
 }
 
 #[derive(Default)]
@@ -43,6 +46,7 @@ pub struct Sampler {
     prev_cores: Vec<Cpu>,
     prev_tasks: HashMap<u32, (u64, u64)>,
     user_cache: Option<HashMap<u32, String>>,
+    prev_net: Option<(u64, u64, Instant)>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -173,6 +177,24 @@ fn memory() -> (u64, u64, u64, u64) {
         swap_total.saturating_sub(get("SwapFree")),
     )
 }
+/// Received and transmitted byte totals of every interface but loopback in `/proc/net/dev`.
+pub fn parse_net_dev(text: &str) -> (u64, u64) {
+    text.lines()
+        .skip(2)
+        .filter_map(|line| {
+            let (name, counters) = line.split_once(':')?;
+            if name.trim() == "lo" {
+                return None;
+            }
+            let mut fields = counters.split_whitespace();
+            let rx = fields.next()?.parse::<u64>().ok()?;
+            let tx = fields.nth(7)?.parse::<u64>().ok()?;
+            Some((rx, tx))
+        })
+        .fold((0, 0), |(rx, tx), (r, t)| {
+            (rx.saturating_add(r), tx.saturating_add(t))
+        })
+}
 fn user_names() -> HashMap<u32, String> {
     // /etc/passwd is read once by the worker, not on each frame or in the UI callback.
     fs::read_to_string("/etc/passwd")
@@ -286,6 +308,16 @@ impl Sampler {
             }
         }
         result.tasks = result.processes.len();
+        let (rx, tx) = parse_net_dev(&fs::read_to_string("/proc/net/dev").unwrap_or_default());
+        let sampled = Instant::now();
+        if let Some((prev_rx, prev_tx, at)) = self.prev_net {
+            let seconds = sampled.duration_since(at).as_secs_f64();
+            if seconds > 0.0 {
+                result.net_rx = rx.saturating_sub(prev_rx) as f64 / seconds;
+                result.net_tx = tx.saturating_sub(prev_tx) as f64 / seconds;
+            }
+        }
+        self.prev_net = Some((rx, tx, sampled));
         self.prev_global = Some(now);
         self.prev_cores = cores;
         self.prev_tasks = previous;
@@ -374,6 +406,12 @@ mod tests {
             ),
             0.0
         );
+    }
+    #[test]
+    fn net_dev_totals_skip_loopback_and_header() {
+        let text = "Inter-|   Receive |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes\n    lo: 500 5 0 0 0 0 0 0 500 5 0 0 0 0 0 0\n  eth0: 1000 10 0 0 0 0 0 0 250 3 0 0 0 0 0 0\n wlan0: 24 1 0 0 0 0 0 0 6 1 0 0 0 0 0 0\n";
+        assert_eq!(parse_net_dev(text), (1024, 256));
+        assert_eq!(parse_net_dev(""), (0, 0));
     }
     #[test]
     fn priorities_are_bounded_without_unsigned_overflow() {
