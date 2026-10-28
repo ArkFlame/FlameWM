@@ -47,6 +47,7 @@ ui/
 @exec scripts/install-deps-ubuntu.sh
 @exec scripts/install-deps-arch.sh
 @exec scripts/build-arch
+@exec scripts/build-cpak
 @exec scripts/bench-memory
 @exec scripts/check
 @exec scripts/cleanup_bloat_v1.sh
