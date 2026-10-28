@@ -701,16 +701,32 @@ mod decoration_tests {
     fn proportional_title_renders_unicode_inside_the_title_region_only() {
         let width = 320;
         let blank = chrome_pixels(width, true, false, None, "");
-        let titled = chrome_pixels(width, true, false, None, "Terminal \u{2014} \u{dc}n\u{ef}code");
+        let titled = chrome_pixels(
+            width,
+            true,
+            false,
+            None,
+            "Terminal \u{2014} \u{dc}n\u{ef}code",
+        );
         let strip = (width - chrome::controls_width()) as usize;
         let mut changed = 0;
-        for (index, (a, b)) in blank.chunks_exact(4).zip(titled.chunks_exact(4)).enumerate() {
+        for (index, (a, b)) in blank
+            .chunks_exact(4)
+            .zip(titled.chunks_exact(4))
+            .enumerate()
+        {
             if a != b {
                 changed += 1;
-                assert!(index % width as usize <= strip, "title pixel inside controls strip");
+                assert!(
+                    index % width as usize <= strip,
+                    "title pixel inside controls strip"
+                );
             }
         }
-        assert!(changed > 40, "real glyphs should cover many pixels, got {changed}");
+        assert!(
+            changed > 40,
+            "real glyphs should cover many pixels, got {changed}"
+        );
         if let Ok(dir) = std::env::var("FLAMEWM_DUMP_CHROME") {
             let mut ppm = format!("P6\n{width} {TITLEBAR_HEIGHT}\n255\n").into_bytes();
             for px in titled.chunks_exact(4) {
@@ -768,5 +784,42 @@ mod decoration_tests {
         let left = (15 * 400 + 200) * 4 + 3;
         let near_control = (15 * 400 + 365) * 4 + 3;
         assert!(first[left] > 0 && first[near_control] > 0);
+    }
+}
+
+/// True for Mesa's CPU rasterizers: GLES works but nothing is hardware accelerated.
+pub fn is_software_renderer(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    ["llvmpipe", "softpipe", "swrast", "software rasterizer"]
+        .iter()
+        .any(|soft| lower.contains(soft))
+}
+
+/// Logs the real GL driver once, so "gles" is never mistaken for hardware acceleration.
+#[allow(unsafe_code)] // glGetString is a read-only query on the current context.
+pub fn log_gl_renderer(renderer: &mut GlowRenderer, backend: &str) {
+    use smithay::reexports::glow::HasContext;
+    let name = renderer
+        .with_context(|gl| unsafe { gl.get_parameter_string(smithay::reexports::glow::RENDERER) })
+        .unwrap_or_else(|_| "unknown".to_owned());
+    let class = if is_software_renderer(&name) {
+        "software"
+    } else {
+        "hardware"
+    };
+    eprintln!("FLAMEWM_GL_RENDERER backend={backend} renderer=\"{name}\" class={class}");
+}
+
+#[cfg(test)]
+mod renderer_class_tests {
+    use super::is_software_renderer;
+
+    #[test]
+    fn mesa_cpu_rasterizers_are_software() {
+        assert!(is_software_renderer("llvmpipe (LLVM 19.1.0, 256 bits)"));
+        assert!(is_software_renderer("Software Rasterizer"));
+        assert!(!is_software_renderer(
+            "Mesa Intel(R) UHD Graphics (TGL GT1)"
+        ));
     }
 }

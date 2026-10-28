@@ -320,7 +320,8 @@ fn init_backend(
     let step = Instant::now();
     eprintln!("flamewm-wayland: init phase=renderer");
     // SAFETY: the context is current only on this thread, the single compositor thread.
-    let renderer = unsafe { GlowRenderer::new(context)? };
+    let mut renderer = unsafe { GlowRenderer::new(context)? };
+    crate::render::log_gl_renderer(&mut renderer, "drm");
     let formats: Vec<Format> = renderer.dmabuf_formats().into_iter().collect();
     timing.renderer_ms = step.elapsed().as_millis();
     stage_line(
@@ -1487,7 +1488,8 @@ fn rebuild(state: &mut State, drm: &Rc<RefCell<Drm>>, fd: OwnedFd) -> Result<(),
     let egl = unsafe { EGLDisplay::new(gbm.clone())? };
     let context = EGLContext::new(&egl)?;
     // SAFETY: single compositor thread; the context is current only here.
-    let renderer = unsafe { GlowRenderer::new(context)? };
+    let mut renderer = unsafe { GlowRenderer::new(context)? };
+    crate::render::log_gl_renderer(&mut renderer, "drm");
     let formats: Vec<Format> = renderer.dmabuf_formats().into_iter().collect();
 
     let mut d = drm.borrow_mut();

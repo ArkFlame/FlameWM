@@ -459,7 +459,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
     let graphics_request = std::env::var("FLAMEWM_WAYLAND_RENDER_PROVIDER").ok();
     let graphics = choose_provider(DisplayProtocol::Wayland, graphics_request.as_deref(), false)?;
     eprintln!(
-        "FLAMEWM_RENDER_PROVIDER {} gpu=driver-dependent",
+        "FLAMEWM_RENDER_PROVIDER {} (real GL driver reported as FLAMEWM_GL_RENDERER)",
         graphics.name()
     );
     cursor::export_session_theme(cursor::saved_theme().as_deref());
@@ -723,7 +723,9 @@ fn init_winit(
     state: &mut State,
     handle: &LoopHandle<'static, State>,
 ) -> Result<(), Box<dyn Error>> {
-    let (backend, winit_source) = init_from_attributes::<GlowRenderer>(nested_window_attributes())?;
+    let (mut backend, winit_source) =
+        init_from_attributes::<GlowRenderer>(nested_window_attributes())?;
+    render::log_gl_renderer(backend.renderer(), "winit");
     let size = backend.window_size();
     let mode = smithay::output::Mode {
         size,
