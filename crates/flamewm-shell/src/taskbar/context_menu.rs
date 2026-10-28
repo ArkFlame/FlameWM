@@ -1,12 +1,12 @@
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::window::WindowSnapshot;
 use flamewm_api::workspace::WorkspaceSnapshot;
+use flamewm_ui_core::context_menu::{settings_row, MenuRow, MenuRowKind};
 use flamewm_ui_core::MenuEntry;
-use flamewm_ui_core::context_menu::{MenuRow, MenuRowKind, settings_row};
 
 pub use flamewm_shell_core::menu_policy::{
-    TASK_ROW_ACTIVATE, TASK_ROW_CLOSE, TASK_ROW_PIN, TASK_ROW_UNPIN, WORKSPACE_ROW_ACTIVATE,
-    WORKSPACE_ROW_INSERT_AFTER, WORKSPACE_ROW_REMOVE, task_menu_for_entry,
+    task_menu_for_entry, TASK_ROW_ACTIVATE, TASK_ROW_CLOSE, TASK_ROW_PIN, TASK_ROW_UNPIN,
+    WORKSPACE_ROW_ACTIVATE, WORKSPACE_ROW_INSERT_AFTER, WORKSPACE_ROW_REMOVE,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,7 +183,7 @@ mod taskbar_menu_tests {
     use super::*;
     use flamewm_shell_core::popup::context_menu_size;
     use flamewm_ui_core::context_menu::{
-        MENU_MIN_WIDTH, MENU_PADDING, MenuRowKind, ROW_HEIGHT, ROW_ICON_SIZE, settings_row,
+        settings_row, MenuRowKind, MENU_MIN_WIDTH, MENU_PADDING, ROW_HEIGHT, ROW_ICON_SIZE,
     };
 
     const TASK_MENU_HTML: &str = include_str!("../../../../ui/shell/task-menu.html");
