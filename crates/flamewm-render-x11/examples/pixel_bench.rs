@@ -51,7 +51,7 @@ fn panel(index: u32, width: u32, height: u32, radius: u32) -> RoundedRect {
 }
 
 /// 60 fills, then a blur, 20 strokes, then a second blur.
-fn frame_batch() -> Vec<PixelOp> {
+fn frame_batch() -> Vec<PixelOp<'static>> {
     let mut ops = Vec::new();
     for index in 0..60 {
         ops.push(PixelOp::FillRoundedRect {
@@ -74,7 +74,7 @@ fn frame_batch() -> Vec<PixelOp> {
 }
 
 /// The same batch through the single-op API, one call per op.
-fn apply_per_op(pixels: &mut [u8], ops: &[PixelOp]) {
+fn apply_per_op(pixels: &mut [u8], ops: &[PixelOp<'_>]) {
     for op in ops {
         match *op {
             // The batch's strokes are the only ops with a hole, and they are 2 px rings.
@@ -89,6 +89,9 @@ fn apply_per_op(pixels: &mut [u8], ops: &[PixelOp]) {
                 color,
             } => fill_rounded_rect(pixels, WIDTH, HEIGHT, outer, None, color).expect("fill"),
             PixelOp::Blur { radius } => blur_rgba(pixels, WIDTH, HEIGHT, radius),
+            blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
+                flamewm_render_core::composite_cpu(pixels, WIDTH, HEIGHT, blend).expect("blend")
+            }
         }
     }
 }

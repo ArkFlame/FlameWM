@@ -1,5 +1,8 @@
 use super::clip::{Visible, visible_under};
 use super::damage_plan::{PixelRegion, RedrawPlan, RegionInput, command_bounds, plan_region_paint};
+use flamewm_render_core::ImageTreatment;
+
+use super::gpu_frame::{self, FrameSource};
 use super::primitives::{scale_rect, snap_device_rect};
 use super::*;
 use crate::native::coverage::{build_coverage, build_coverage_scaled};
@@ -117,11 +120,13 @@ mod static_shape_tests {
 }
 
 impl X11App {
-    /// Soft alpha shadow uses the canonical Xft glyph coverage once, the shared
-    /// bounded Gaussian blur, then a transient premultiplied ARGB32 XRender blit.
+    /// Blurred shadow for one text run: the canonical Xft glyph coverage, then the shared bounded
+    /// Gaussian blur, left as straight RGBA in `scratch.rgba`. Returns the device placement, or
+    /// `None` when Xft cannot draw the glyphs.
     #[allow(clippy::too_many_arguments)]
-    fn paint_text_shadow(
+    fn text_shadow_rgba(
         &mut self,
+        scratch: &mut ShadowScratch,
         x: f32,
         baseline: f32,
         color: Color,
@@ -130,28 +135,23 @@ impl X11App {
         radius: f32,
         text: &str,
         family: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<Option<(i32, i32, u32, u32)>, String> {
         self.ensure_xft();
         if self.xrender.is_none() || self.xft.is_none() {
-            return Ok(false);
+            return Ok(None);
         }
         let pad = (radius * 3.0).ceil() as u32 + 4;
-        let mut scratch = SHADOW_SCRATCH.take();
         let dims = {
             let xft = self.xft.as_mut().expect("checked Xft");
             unsafe { xft.set_preferred_family(family) };
             unsafe { xft.text_alpha_mask(size, weight, text, pad, &mut scratch.mask) }
         };
         let Ok((w, h)) = dims else {
-            SHADOW_SCRATCH.with(|slot| slot.replace(scratch));
-            return Ok(false);
+            return Ok(None);
         };
         let ShadowScratch {
-            blur,
-            rgba,
-            argb,
-            mask,
-        } = &mut scratch;
+            blur, rgba, mask, ..
+        } = scratch;
         rgba.clear();
         rgba.resize(w as usize * h as usize * 4, 0);
         for (out, &coverage) in rgba.chunks_exact_mut(4).zip(mask.iter()) {
@@ -166,6 +166,45 @@ impl X11App {
             .map_err(|e| format!("text shadow blur: {e:?}"))?;
         let dx = x.round() as i32 - pad as i32 - 4;
         let dy = baseline.round() as i32 - pad as i32 - size.ceil() as i32;
+        Ok(Some((dx, dy, w, h)))
+    }
+
+    /// Soft alpha shadow uses the canonical Xft glyph coverage once, the shared
+    /// bounded Gaussian blur, then a transient premultiplied ARGB32 XRender blit.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_text_shadow(
+        &mut self,
+        x: f32,
+        baseline: f32,
+        color: Color,
+        size: f32,
+        weight: u16,
+        radius: f32,
+        text: &str,
+        family: &str,
+    ) -> Result<bool, String> {
+        let mut scratch = SHADOW_SCRATCH.take();
+        let placed = self.text_shadow_rgba(
+            &mut scratch,
+            x,
+            baseline,
+            color,
+            size,
+            weight,
+            radius,
+            text,
+            family,
+        );
+        let (dx, dy, w, h) = match placed {
+            Ok(Some(dims)) => dims,
+            other => {
+                SHADOW_SCRATCH.with(|slot| slot.replace(scratch));
+                return other.map(|_| false);
+            }
+        };
+        let ShadowScratch {
+            rgba, argb, ..
+        } = &mut scratch;
         // The XRender target does not inherit the GC clip stack. Keep only the
         // pixels inside every retained clip (intersection of the clip bounds);
         // the rest is transparent in the premultiplied upload.
@@ -430,25 +469,21 @@ impl X11App {
     /// Whole-frame GPU paint for `renderAcceleration=gpu`: one upload of the transparent scene,
     /// one readback, then one ARGB upload to the backbuffer. `None` keeps the XRender path, which
     /// also takes every GPU failure, so a frame never mixes the two painters.
-    unsafe fn paint_full_gpu(&mut self, scale: f32) -> Option<u64> {
-        if crate::accel::render_acceleration() != crate::accel::RenderAcceleration::Gpu
-            || self.xrender.is_none()
-            || self.argb_visual.is_none()
-            || self.surface_backdrop.is_some()
-            || self.window_backdrop_pixmap.is_some()
-            || !self.clip_stack.is_empty()
-        {
+    unsafe fn paint_full_gpu(&mut self, document: &RuntimeDocument, scale: f32) -> Option<u64> {
+        let gpu = crate::accel::render_acceleration() == crate::accel::RenderAcceleration::Gpu;
+        let scene_ready = self.xrender.is_some() && self.argb_visual.is_some();
+        let backdrops = self.surface_backdrop.is_some() || self.window_backdrop_pixmap.is_some();
+        if !gpu_frame::lowering_allowed(gpu, scene_ready, backdrops, !self.clip_stack.is_empty()) {
             return None;
         }
-        let cached = self.cached_paint.as_ref()?;
+        // The commands leave `self` while text masks and images are read from the app, then go
+        // back, so a `None` below never drops the retained scene.
+        let cached = self.cached_paint.take()?;
         let count = cached.commands.len() as u64;
-        let ops = super::gpu_frame::frame_ops(&cached.commands, scale)?;
+        let rgba = self.gpu_frame_pixels(&cached.commands, document, scale);
+        self.cached_paint = Some(cached);
+        let rgba = rgba?;
         let (width, height) = (self.width, self.height);
-        // The scene starts transparent, exactly as `clear_scene` leaves it.
-        let mut rgba = vec![0_u8; width as usize * height as usize * 4];
-        if !crate::accel::try_gpu_batch(&mut rgba, width, height, &ops) {
-            return None;
-        }
         let mut words = Vec::new();
         crate::native::image::premultiply_masked_into(&mut words, &rgba, width, height, |_, _| {
             true
@@ -468,8 +503,179 @@ impl X11App {
             })
     }
 
+    /// The RGBA8 pixels of one whole frame on the GPU, or `None` when a command keeps the XRender
+    /// path or the GPU batch fails. Text masks and images come from the same sources the XRender
+    /// painter uses, so the GPU frame composites the same coverage and pixels.
+    fn gpu_frame_pixels(
+        &mut self,
+        commands: &[PaintCommand],
+        document: &RuntimeDocument,
+        scale: f32,
+    ) -> Option<Vec<u8>> {
+        if let Some(kind) = gpu_frame::unsupported_kind(commands) {
+            static LOGGED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                eprintln!("FLAMEWM_RENDER_GPU_FRAME xrender fallback first-kind={kind}");
+            }
+            return None;
+        }
+        let sources = self.gpu_frame_sources(commands, document, scale)?;
+        let ops = gpu_frame::frame_ops(commands, scale, &sources)?;
+        let (width, height) = (self.width, self.height);
+        // The scene starts transparent, exactly as `clear_scene` leaves it.
+        let mut rgba = vec![0_u8; width as usize * height as usize * 4];
+        crate::accel::try_gpu_batch(&mut rgba, width, height, &ops).then_some(rgba)
+    }
+
+    /// One source per text, text shadow and image command, in command order.
+    fn gpu_frame_sources(
+        &mut self,
+        commands: &[PaintCommand],
+        document: &RuntimeDocument,
+        scale: f32,
+    ) -> Option<Vec<FrameSource>> {
+        let mut sources = Vec::new();
+        for command in commands {
+            if matches!(
+                command,
+                PaintCommand::Text { .. } | PaintCommand::TextShadow { .. } | PaintCommand::Image { .. }
+            ) {
+                sources.push(self.gpu_source(command, document, scale)?);
+            }
+        }
+        Some(sources)
+    }
+
+    /// The coverage or premultiplied pixels for one command, computed exactly as the XRender
+    /// painter computes them. `None` when the XRender painter would fail for this command too.
+    fn gpu_source(
+        &mut self,
+        command: &PaintCommand,
+        document: &RuntimeDocument,
+        scale: f32,
+    ) -> Option<FrameSource> {
+        match command {
+            PaintCommand::Text {
+                x,
+                y,
+                color,
+                size,
+                weight,
+                text,
+            } => {
+                let (x, y, size) = (*x * scale, *y * scale, *size * scale);
+                self.ensure_xft();
+                let xft = self.xft.as_mut()?;
+                // SAFETY: same initialized display and Xft contract as the XRender text draw.
+                unsafe { xft.set_preferred_family(document.ui_font_family()) };
+                let mut alpha = Vec::new();
+                // With no padding the glyph origin sits 4px in and `ceil(size)` down the mask,
+                // which places it where `draw_text` puts the baseline at `round(y)`.
+                // SAFETY: same contract as above.
+                let (width, height) =
+                    unsafe { xft.text_alpha_mask(size, *weight, text, 0, &mut alpha) }.ok()?;
+                Some(FrameSource::Mask {
+                    x: x.round() as i32 - 4,
+                    y: y.round() as i32 - size.ceil() as i32,
+                    width,
+                    height,
+                    alpha,
+                    color: [color.r, color.g, color.b, color.a],
+                })
+            }
+            PaintCommand::TextShadow {
+                x,
+                y,
+                color,
+                size,
+                weight,
+                blur_radius,
+                text,
+            } => {
+                let (x, y, size) = (*x * scale, *y * scale, *size * scale);
+                let radius = (*blur_radius * scale).clamp(0.0, 8.0);
+                let mut scratch = SHADOW_SCRATCH.take();
+                let placed = self.text_shadow_rgba(
+                    &mut scratch,
+                    x,
+                    y,
+                    *color,
+                    size,
+                    *weight,
+                    radius,
+                    text,
+                    document.ui_font_family(),
+                );
+                let source = match placed {
+                    Ok(Some((dx, dy, width, height))) => Some(FrameSource::Mask {
+                        x: dx,
+                        y: dy,
+                        width,
+                        height,
+                        // The blurred alpha already carries the shadow colour's alpha.
+                        alpha: scratch.rgba.iter().skip(3).step_by(4).copied().collect(),
+                        color: [color.r, color.g, color.b, 255],
+                    }),
+                    _ => None,
+                };
+                SHADOW_SCRATCH.with(|slot| slot.replace(scratch));
+                source
+            }
+            PaintCommand::Image {
+                rect,
+                node,
+                treatment,
+                tint,
+                ..
+            } => {
+                let (x, y, width, height) = snap_device_rect(*rect, scale);
+                let (_, src_w, src_h, _, pixels) = document.image_for_node(*node)?;
+                // The XRender blit's own conversion: decoded pixels become premultiplied ARGB32
+                // words, so the GPU composites the same colours. Tint is the same default too.
+                let words = match treatment {
+                    ImageTreatment::Original => crate::native::image::scale_and_premultiply(
+                        pixels, src_w, src_h, width, height,
+                    ),
+                    ImageTreatment::SymbolicForeground => super::symbolic_foreground_argb32(
+                        pixels,
+                        src_w,
+                        src_h,
+                        width,
+                        height,
+                        (*tint).unwrap_or(Color {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 255,
+                        }),
+                    ),
+                };
+                let rgba: Vec<u8> = words
+                    .iter()
+                    .flat_map(|&word| {
+                        [
+                            (word >> 16) as u8,
+                            (word >> 8) as u8,
+                            word as u8,
+                            (word >> 24) as u8,
+                        ]
+                    })
+                    .collect();
+                Some(FrameSource::Image {
+                    x,
+                    y,
+                    width,
+                    height,
+                    rgba,
+                })
+            }
+            _ => None,
+        }
+    }
+
     unsafe fn paint_full(&mut self, document: &RuntimeDocument, scale: f32) -> Result<u64, String> {
-        if let Some(count) = unsafe { self.paint_full_gpu(scale) } {
+        if let Some(count) = unsafe { self.paint_full_gpu(document, scale) } {
             unsafe { self.present_scene()? };
             return Ok(count);
         }

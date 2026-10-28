@@ -11,7 +11,7 @@ pub use layout::{
     layout_passes_on_this_thread,
 };
 pub use model::*;
-pub use pixels::{PixelBackend, PixelOp, RenderAcceleration, RoundedRect};
+pub use pixels::{PixelBackend, PixelOp, RenderAcceleration, RoundedRect, composite_cpu};
 pub use paint::{
     PaintCommand, build_paint_commands, build_paint_commands_with_scroll, emit_scroll_chrome,
     scroll_clip, scrollbar_visible,

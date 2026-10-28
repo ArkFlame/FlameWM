@@ -119,7 +119,7 @@ impl PixelBackend for gles::GpuBlur {
         pixels: &mut [u8],
         width: u32,
         height: u32,
-        ops: &[PixelOp],
+        ops: &[PixelOp<'_>],
     ) -> Result<(), String> {
         self.paint_ops(pixels, width, height, ops)
     }
@@ -299,7 +299,7 @@ pub fn stroke_rounded_rect(
 
 /// Runs `ops` on the GPU only. `false` means the GPU did not run them and the frame is untouched,
 /// so the caller keeps its own painter; the CPU batch is not used because its edges differ.
-pub(crate) fn try_gpu_batch(pixels: &mut [u8], width: u32, height: u32, ops: &[PixelOp]) -> bool {
+pub(crate) fn try_gpu_batch(pixels: &mut [u8], width: u32, height: u32, ops: &[PixelOp<'_>]) -> bool {
     try_gpu(&mut |backend| backend.paint_batch(pixels, width, height, ops))
 }
 
@@ -310,7 +310,7 @@ pub fn paint_batch(
     pixels: &mut [u8],
     width: u32,
     height: u32,
-    ops: &[PixelOp],
+    ops: &[PixelOp<'_>],
 ) -> Result<(), String> {
     let mut op = |backend: &mut dyn PixelBackend| backend.paint_batch(pixels, width, height, ops);
     if try_gpu(&mut op) {
@@ -464,7 +464,7 @@ mod tests {
     }
 
     /// Two panels, a stroke and a translucent fill, optionally followed by a blur.
-    fn batch_ops(with_blur: bool) -> Vec<PixelOp> {
+    fn batch_ops(with_blur: bool) -> Vec<PixelOp<'static>> {
         let outer = RoundedRect {
             x: 10,
             y: 8,
@@ -507,13 +507,16 @@ mod tests {
         pixels: &mut [u8],
         width: u32,
         height: u32,
-        op: PixelOp,
+        op: PixelOp<'_>,
     ) {
         match op {
             PixelOp::FillRoundedRect { outer, hole, color } => {
                 backend.fill_rounded_rect(pixels, width, height, outer, hole, color)
             }
             PixelOp::Blur { radius } => backend.blur_rgba(pixels, width, height, radius),
+            blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
+                backend.paint_batch(pixels, width, height, std::slice::from_ref(&blend))
+            }
         }
         .expect("single op");
     }
@@ -619,6 +622,76 @@ mod tests {
         }
         let mean = total as f64 / count as f64;
         assert!(mean < 6.0, "blur batch mean channel difference {mean:.2}");
+    }
+
+    /// A text-like coverage mask, one partly outside the frame, and a premultiplied image, blended
+    /// over a noisy frame. Returns the per-channel (max, mean) absolute difference between the CPU
+    /// batch and the GPU batch, or `None` when no GPU is present.
+    fn blend_difference() -> Option<(u8, f64)> {
+        let mut gpu = gles::GpuBlur::new().ok()?;
+        let (width, height) = (96_u32, 64_u32);
+        let source = frame(width, height, 5);
+        let coverage: Vec<u8> = (0..24 * 12).map(|i| ((i * 37) % 256) as u8).collect();
+        let image: Vec<u8> = (0..16 * 10)
+            .flat_map(|i| {
+                let a = ((i * 29) % 256) as u8;
+                let premultiplied = |c: u8| ((u16::from(c) * u16::from(a) + 127) / 255) as u8;
+                [premultiplied(200), premultiplied(40), premultiplied(90), a]
+            })
+            .collect();
+        let ops = [
+            PixelOp::BlendMask {
+                x: 5,
+                y: 7,
+                width: 24,
+                height: 12,
+                mask: &coverage,
+                color: [220, 230, 255, 255],
+            },
+            PixelOp::BlendMask {
+                x: -4,
+                y: 50,
+                width: 24,
+                height: 12,
+                mask: &coverage,
+                color: [10, 20, 30, 180],
+            },
+            PixelOp::BlendImage {
+                x: 60,
+                y: 20,
+                width: 16,
+                height: 10,
+                rgba: &image,
+            },
+        ];
+        let mut cpu = source.clone();
+        CpuPixels::default()
+            .paint_batch(&mut cpu, width, height, &ops)
+            .expect("cpu blend");
+        let mut batch = source;
+        PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &ops).expect("gpu blend");
+        let mut max = 0_u8;
+        let mut total = 0_u64;
+        for (a, b) in cpu.iter().zip(&batch) {
+            let diff = a.abs_diff(*b);
+            max = max.max(diff);
+            total += u64::from(diff);
+        }
+        Some((max, total as f64 / cpu.len() as f64))
+    }
+
+    #[test]
+    fn gpu_blend_ops_match_the_cpu_within_the_measured_tolerance() {
+        let Some((max, mean)) = blend_difference() else {
+            eprintln!("skipping GPU blend check: no GPU");
+            return;
+        };
+        eprintln!("GPU blend vs CPU blend: max {max}, mean {mean:.4} per channel");
+        // Measured 2026-10-28 with `cargo test -p flamewm-render-x11 --lib -- --nocapture`
+        // (the log shows libEGL "failed to create dri2 screen" warnings; the GL renderer name was not
+        // recorded): max 1 level, mean 0.0046 per channel.
+        assert!(max <= 1, "blend max channel difference {max}");
+        assert!(mean < 0.05, "blend mean channel difference {mean:.4}");
     }
 
     #[test]

@@ -97,6 +97,45 @@ void main() {
 }
 ";
 
+/// Tinted coverage mask: the texture's alpha is the coverage, `u_rect` places it in frame pixels
+/// (row 0 at the bottom of the GL viewport, as the rounded shader), and texels outside it are
+/// transparent so the blend leaves the frame unchanged.
+const MASK_SHADER: &str = "#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform sampler2D u_texture;
+uniform vec4 u_rect;
+uniform vec4 u_color;
+void main() {
+    vec2 uv = (gl_FragCoord.xy - u_rect.xy) / u_rect.zw;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x >= 1.0 || uv.y >= 1.0) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+    gl_FragColor = vec4(u_color.rgb, u_color.a * texture2D(u_texture, uv).a);
+}
+";
+
+/// Premultiplied RGBA image placed by `u_rect`; blended with `ONE, ONE_MINUS_SRC_ALPHA`.
+const IMAGE_SHADER: &str = "#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform sampler2D u_texture;
+uniform vec4 u_rect;
+void main() {
+    vec2 uv = (gl_FragCoord.xy - u_rect.xy) / u_rect.zw;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x >= 1.0 || uv.y >= 1.0) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+    gl_FragColor = texture2D(u_texture, uv);
+}
+";
+
 const POSITION_ATTRIBUTE: GlUint = 0;
 
 const VERTEX_SHADER: &str = "attribute vec2 a_position;
@@ -395,6 +434,15 @@ struct Program {
     hole_radius: GlInt,
     hole_enabled: GlInt,
     color: GlInt,
+    rect: GlInt,
+}
+
+/// Which blend a texture takes in [`GpuBlur::blend_texture`].
+enum Blend {
+    /// Straight colour (0..1 per channel) through the texture's alpha coverage.
+    Mask([f32; 4]),
+    /// Premultiplied RGBA8 composited as XRender `PictOpOver`.
+    Premultiplied,
 }
 
 struct RenderTarget {
@@ -413,6 +461,8 @@ pub(crate) struct GpuBlur {
     copy: Program,
     blur: Program,
     rounded: Program,
+    mask: Program,
+    image: Program,
     quad: GlUint,
     /// Reused readback buffer; the caller's frame is replaced only after a successful GL pass.
     readback: Vec<u8>,
@@ -549,6 +599,8 @@ impl GpuBlur {
             copy: Program::empty(),
             blur: Program::empty(),
             rounded: Program::empty(),
+            mask: Program::empty(),
+            image: Program::empty(),
             readback: Vec::new(),
             quad: 0,
             max_texture_size,
@@ -570,6 +622,8 @@ impl GpuBlur {
             self.copy = self.program(COPY_SHADER)?;
             self.blur = self.program(BLUR_SHADER)?;
             self.rounded = self.program(ROUNDED_SHADER)?;
+            self.mask = self.program(MASK_SHADER)?;
+            self.image = self.program(IMAGE_SHADER)?;
             let vertices: [f32; 8] = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
             (self.gl.gen_buffers)(1, &mut self.quad);
             (self.gl.bind_buffer)(GL_ARRAY_BUFFER, self.quad);
@@ -660,6 +714,7 @@ impl GpuBlur {
                 hole_radius: uniform(c"u_hole_radius"),
                 hole_enabled: uniform(c"u_hole_enabled"),
                 color: uniform(c"u_color"),
+                rect: uniform(c"u_rect"),
             })
         }
     }
@@ -674,19 +729,25 @@ impl GpuBlur {
         }
     }
 
-    unsafe fn target(
+    /// A `width` x `height` RGBA8 texture filled from `pixels` (NULL leaves it undefined), with
+    /// clamped edges and `filter` sampling. The caller deletes it.
+    ///
+    /// # Safety
+    /// A context must be current; `pixels` is NULL or points to `width * height * 4` bytes.
+    unsafe fn upload_texture(
         &self,
         width: i32,
         height: i32,
         pixels: *const c_void,
-    ) -> Result<RenderTarget, String> {
-        // SAFETY: a context is current; `pixels` is NULL or points to width*height RGBA8 bytes.
+        filter: GlInt,
+    ) -> GlUint {
+        // SAFETY: forwarded from this function's contract.
         unsafe {
             let mut texture = 0;
             (self.gl.gen_textures)(1, &mut texture);
             (self.gl.bind_texture)(GL_TEXTURE_2D, texture);
-            (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+            (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
             (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
             (self.gl.tex_image_2d)(
@@ -700,6 +761,19 @@ impl GpuBlur {
                 GL_UNSIGNED_BYTE,
                 pixels,
             );
+            texture
+        }
+    }
+
+    unsafe fn target(
+        &self,
+        width: i32,
+        height: i32,
+        pixels: *const c_void,
+    ) -> Result<RenderTarget, String> {
+        // SAFETY: a context is current; `pixels` is NULL or points to width*height RGBA8 bytes.
+        unsafe {
+            let texture = self.upload_texture(width, height, pixels, GL_LINEAR);
             let mut framebuffer = 0;
             (self.gl.gen_framebuffers)(1, &mut framebuffer);
             (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, framebuffer);
@@ -909,6 +983,90 @@ impl GpuBlur {
         }
     }
 
+    /// Uploads `pixels` (RGBA8 for `rect`'s size) and blends it over `current` at `rect`. The texture
+    /// is freed whether or not the GL calls succeed, and `current` changes only through the blend.
+    ///
+    /// # Safety
+    /// The context owned by `self` must be current, and `current` must belong to it.
+    unsafe fn blend_texture(
+        &self,
+        current: &RenderTarget,
+        rect: (i32, i32, u32, u32),
+        pixels: &[u8],
+        blend: Blend,
+    ) -> Result<(), String> {
+        let (x, y, width, height) = rect;
+        let (w, h) = (width as i32, height as i32);
+        if w > self.max_texture_size || h > self.max_texture_size {
+            return Err(format!(
+                "{width}x{height} blend exceeds the GPU texture limit {}",
+                self.max_texture_size
+            ));
+        }
+        // SAFETY: the caller made the context current; the texture is deleted below.
+        unsafe {
+            let texture = self.upload_texture(w, h, pixels.as_ptr().cast(), GL_NEAREST);
+            let rect = [x as f32, y as f32, width as f32, height as f32];
+            let result = self.check("blend texture upload").and_then(|()| {
+                match blend {
+                    Blend::Mask(color) => self.blend_pass(current, &self.mask, rect, Some(color), texture, false),
+                    Blend::Premultiplied => self.blend_pass(current, &self.image, rect, None, texture, true),
+                }
+                self.check("blend pass")
+            });
+            (self.gl.delete_textures)(1, &texture);
+            result
+        }
+    }
+
+    /// Draws a full-frame quad with `program`, which keeps only the texels inside `rect`, and blends
+    /// it over `current`. Masks blend straight colour through alpha; premultiplied images use
+    /// `ONE, ONE_MINUS_SRC_ALPHA`.
+    ///
+    /// # Safety
+    /// The context owned by `self` must be current, and `current` and `texture` must belong to it.
+    unsafe fn blend_pass(
+        &self,
+        current: &RenderTarget,
+        program: &Program,
+        rect: [f32; 4],
+        color: Option<[f32; 4]>,
+        texture: GlUint,
+        premultiplied: bool,
+    ) {
+        // SAFETY: a context is current; `current` and `texture` are live and owned by the caller.
+        unsafe {
+            (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, current.framebuffer);
+            (self.gl.viewport)(0, 0, current.width, current.height);
+            (self.gl.use_program)(program.id);
+            (self.gl.active_texture)(GL_TEXTURE0);
+            (self.gl.bind_texture)(GL_TEXTURE_2D, texture);
+            (self.gl.uniform1i)(program.texture, 0);
+            (self.gl.uniform4f)(program.rect, rect[0], rect[1], rect[2], rect[3]);
+            if let Some([r, g, b, a]) = color {
+                (self.gl.uniform4f)(program.color, r, g, b, a);
+            }
+            (self.gl.enable)(GL_BLEND);
+            if premultiplied {
+                (self.gl.blend_func_separate)(
+                    GL_ONE,
+                    GL_ONE_MINUS_SRC_ALPHA,
+                    GL_ONE,
+                    GL_ONE_MINUS_SRC_ALPHA,
+                );
+            } else {
+                (self.gl.blend_func_separate)(
+                    GL_SRC_ALPHA,
+                    GL_ONE_MINUS_SRC_ALPHA,
+                    GL_ONE,
+                    GL_ONE_MINUS_SRC_ALPHA,
+                );
+            }
+            (self.gl.draw_arrays)(GL_TRIANGLE_STRIP, 0, 4);
+            (self.gl.disable)(GL_BLEND);
+        }
+    }
+
     pub(crate) fn blur_sigma(
         &mut self,
         pixels: &mut [u8],
@@ -948,7 +1106,7 @@ impl GpuBlur {
         pixels: &mut [u8],
         width: u32,
         height: u32,
-        ops: &[PixelOp],
+        ops: &[PixelOp<'_>],
     ) -> Result<(), String> {
         let (w, h) = self.frame_size(pixels.len(), width, height)?;
         let mut staged = self.staging(pixels.len());
@@ -982,13 +1140,66 @@ impl GpuBlur {
     ///
     /// # Safety
     /// The context owned by `self` must be current, and `current` must belong to it.
-    unsafe fn apply_ops(&self, current: &mut RenderTarget, ops: &[PixelOp]) -> Result<(), String> {
+    unsafe fn apply_ops(
+        &self,
+        current: &mut RenderTarget,
+        ops: &[PixelOp<'_>],
+    ) -> Result<(), String> {
         for op in ops {
             match *op {
                 PixelOp::FillRoundedRect { outer, hole, color } => {
                     if outer.width > 0 && outer.height > 0 {
                         // SAFETY: forwarded from this function's contract.
                         unsafe { self.rounded_pass(current, outer, hole, color) };
+                    }
+                }
+                PixelOp::BlendMask {
+                    x,
+                    y,
+                    width,
+                    height,
+                    mask,
+                    color,
+                } => {
+                    if mask.len() != width as usize * height as usize {
+                        return Err("blend mask does not match its size".to_owned());
+                    }
+                    if width > 0 && height > 0 {
+                        // Coverage expands to RGBA so the mask shares the RGBA texture upload.
+                        let expanded: Vec<u8> =
+                            mask.iter().flat_map(|&coverage| [0, 0, 0, coverage]).collect();
+                        let color = color.map(|channel| f32::from(channel) / 255.0);
+                        // SAFETY: forwarded from this function's contract.
+                        unsafe {
+                            self.blend_texture(
+                                current,
+                                (x, y, width, height),
+                                &expanded,
+                                Blend::Mask(color),
+                            )?
+                        };
+                    }
+                }
+                PixelOp::BlendImage {
+                    x,
+                    y,
+                    width,
+                    height,
+                    rgba,
+                } => {
+                    if rgba.len() != width as usize * height as usize * 4 {
+                        return Err("blend image does not match its size".to_owned());
+                    }
+                    if width > 0 && height > 0 {
+                        // SAFETY: forwarded from this function's contract.
+                        unsafe {
+                            self.blend_texture(
+                                current,
+                                (x, y, width, height),
+                                rgba,
+                                Blend::Premultiplied,
+                            )?
+                        };
                     }
                 }
                 PixelOp::Blur { radius } => {
@@ -1091,6 +1302,7 @@ impl Program {
             hole_radius: -1,
             hole_enabled: -1,
             color: -1,
+            rect: -1,
         }
     }
 }
@@ -1103,7 +1315,13 @@ impl Drop for GpuBlur {
             if self.quad != 0 {
                 (self.gl.delete_buffers)(1, &self.quad);
             }
-            for program in [self.copy.id, self.blur.id, self.rounded.id] {
+            for program in [
+                self.copy.id,
+                self.blur.id,
+                self.rounded.id,
+                self.mask.id,
+                self.image.id,
+            ] {
                 if program != 0 {
                     (self.gl.delete_program)(program);
                 }
