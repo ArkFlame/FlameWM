@@ -1559,7 +1559,7 @@ mod layout_reuse_tests {
                 action: std::borrow::Cow::Borrowed(""),
                 text: "".to_string().into(),
                 image: None,
-                style: Style::default(),
+                style: Style::default().into(),
                 hover_style: None,
                 active_style: None,
             }],

@@ -23,7 +23,7 @@ pub(crate) fn compiled_node(id: &str, kind: NodeKind) -> CompiledNode {
         action: std::borrow::Cow::Borrowed(""),
         text: std::borrow::Cow::Borrowed(""),
         image: None,
-        style: Style::default(),
+        style: Style::default().into(),
         hover_style: None,
         active_style: None,
     }

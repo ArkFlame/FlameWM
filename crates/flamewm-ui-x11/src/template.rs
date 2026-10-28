@@ -672,7 +672,8 @@ mod tests {
                 width: Length::Px(10.0),
                 height: Length::Px(10.0),
                 ..Style::default()
-            },
+            }
+            .into(),
             ..node(id, NodeKind::Image)
         };
         make_doc(
@@ -788,7 +789,8 @@ mod tests {
             style: Style {
                 background: ColorValue::Literal(color),
                 ..Style::default()
-            },
+            }
+            .into(),
             ..node(id, NodeKind::Element)
         }
     }
@@ -880,7 +882,8 @@ mod tests {
                 width: flamewm_render_core::Length::Px(50.0),
                 height: flamewm_render_core::Length::Px(20.0),
                 ..Style::default()
-            },
+            }
+            .into(),
             ..node("box", NodeKind::Element)
         };
         let root = CompiledNode {
@@ -904,7 +907,8 @@ mod tests {
                 width: flamewm_render_core::Length::Px(50.0),
                 height: flamewm_render_core::Length::Px(20.0),
                 ..Style::default()
-            },
+            }
+            .into(),
             ..node("box", NodeKind::Element)
         };
         let root = CompiledNode {

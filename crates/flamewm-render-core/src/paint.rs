@@ -366,7 +366,7 @@ mod shape_tests {
             action: std::borrow::Cow::Borrowed(""),
             text: std::borrow::Cow::Borrowed(""),
             image: None,
-            style,
+            style: style.into(),
             hover_style: None,
             active_style: None,
         };
@@ -427,7 +427,7 @@ mod node_backdrop_tests {
             action: std::borrow::Cow::Borrowed(""),
             text: std::borrow::Cow::Borrowed(""),
             image: None,
-            style,
+            style: style.into(),
             hover_style: None,
             active_style: None,
         }
@@ -437,7 +437,8 @@ mod node_backdrop_tests {
     fn node_backdrop_radius_is_the_menu_node_radius_not_the_root() {
         // Root (desktop window) radius 0; menu child radius 12, like project_menu_surface.
         let mut root = node("desktop", 0.0, None, Some(1), None);
-        root.style.background = ColorValue::Literal(Color::TRANSPARENT);
+        std::sync::Arc::make_mut(&mut root.style).background =
+            ColorValue::Literal(Color::TRANSPARENT);
         let mut document = RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,
             root: 0,
@@ -470,9 +471,10 @@ mod node_backdrop_tests {
         // A separate taskbar capsule has an opaque wallpaper underneath it. Its
         // blur must NOT replace the wallpaper with a fully opaque layer at 5%.
         let mut root = node("taskbar", 0.0, None, Some(1), None);
-        root.style.background = ColorValue::Literal(Color::TRANSPARENT);
+        std::sync::Arc::make_mut(&mut root.style).background =
+            ColorValue::Literal(Color::TRANSPARENT);
         let mut capsule = node("start-capsule", 8.0, Some(0), None, None);
-        capsule.style.background = ColorValue::Literal(Color {
+        std::sync::Arc::make_mut(&mut capsule.style).background = ColorValue::Literal(Color {
             r: 25,
             g: 27,
             b: 29,
@@ -525,13 +527,14 @@ mod node_backdrop_tests {
     ///   from the parent and keep the scroller's extent content-driven.
     fn scroll_list(hide_scrollbars: bool) -> Vec<PaintCommand> {
         let mut root = node("root", 0.0, None, Some(1), None);
-        root.style.background = ColorValue::Literal(Color::TRANSPARENT);
+        std::sync::Arc::make_mut(&mut root.style).background =
+            ColorValue::Literal(Color::TRANSPARENT);
         let mut pane = node("pane", 0.0, Some(0), Some(2), None);
-        pane.style.display = Display::Flex;
-        pane.style.flex_direction = FlexDirection::Row;
+        std::sync::Arc::make_mut(&mut pane.style).display = Display::Flex;
+        std::sync::Arc::make_mut(&mut pane.style).flex_direction = FlexDirection::Row;
         let mut list = node("list", 0.0, Some(1), Some(3), None);
-        list.style.overflow_y = Overflow::Auto;
-        list.style.hide_scrollbars = hide_scrollbars;
+        std::sync::Arc::make_mut(&mut list.style).overflow_y = Overflow::Auto;
+        std::sync::Arc::make_mut(&mut list.style).hide_scrollbars = hide_scrollbars;
         let mut document = RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,
             root: 0,

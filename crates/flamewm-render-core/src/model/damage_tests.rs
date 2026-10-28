@@ -31,7 +31,7 @@ fn node(
         action: std::borrow::Cow::Borrowed(""),
         text: text.to_string().into(),
         image: None,
-        style,
+        style: style.into(),
         hover_style: None,
         active_style: None,
     }

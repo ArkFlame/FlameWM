@@ -190,7 +190,7 @@ impl<'a> Compiler<'a> {
                 action: std::borrow::Cow::Borrowed(""),
                 text: source.text.clone().into(),
                 image: None,
-                style,
+                style: style.into(),
                 hover_style: None,
                 active_style: None,
             });
@@ -223,9 +223,9 @@ impl<'a> Compiler<'a> {
             action: action.into(),
             text: std::borrow::Cow::Borrowed(""),
             image,
-            style: base.clone(),
-            hover_style: hover_style.map(Box::new),
-            active_style: active_style.map(Box::new),
+            style: base.clone().into(),
+            hover_style: hover_style.map(Into::into),
+            active_style: active_style.map(Into::into),
         });
 
         let mut first_child = None;
@@ -846,6 +846,7 @@ mod tests {
             .find(|node| node.id == id)
             .unwrap()
             .style
+            .as_ref()
             .clone()
     }
 

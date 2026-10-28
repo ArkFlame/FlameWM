@@ -22,10 +22,11 @@ pub struct CompiledNode {
     pub action: Cow<'static, str>,
     pub text: Cow<'static, str>,
     pub image: Option<u16>,
-    pub style: Style,
-    /// Boxed: most nodes have no interaction styles, so keeping them inline bloats every node.
-    pub hover_style: Option<Box<Style>>,
-    pub active_style: Option<Box<Style>>,
+    /// Shared: decoded documents reuse one allocation for every node with identical style bytes.
+    pub style: Arc<Style>,
+    /// Shared and optional: most nodes have no interaction styles.
+    pub hover_style: Option<Arc<Style>>,
+    pub active_style: Option<Arc<Style>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

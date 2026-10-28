@@ -29,7 +29,7 @@ fn fixture() -> RuntimeDocument {
             action: std::borrow::Cow::Borrowed(""),
             text: "".to_string().into(),
             image: None,
-            style,
+            style: style.into(),
             hover_style: None,
             active_style: None,
         }
@@ -228,7 +228,7 @@ fn text_fixture() -> RuntimeDocument {
         action: std::borrow::Cow::Borrowed(""),
         text: "".to_string().into(),
         image: None,
-        style,
+        style: style.into(),
         hover_style: None,
         active_style: None,
     };
@@ -243,7 +243,7 @@ fn text_fixture() -> RuntimeDocument {
             .to_string()
             .into(),
         image: None,
-        style: Style::default(),
+        style: Style::default().into(),
         hover_style: None,
         active_style: None,
     };
@@ -548,7 +548,7 @@ fn image_fixture() -> RuntimeDocument {
             action: std::borrow::Cow::Borrowed(""),
             text: "".to_string().into(),
             image,
-            style,
+            style: style.into(),
             hover_style: None,
             active_style: None,
         }
@@ -651,7 +651,8 @@ fn image_fixture() -> RuntimeDocument {
                         }),
                     }),
                     ..Style::default()
-                },
+                }
+                .into(),
                 ..node(
                     "label-text",
                     NodeKind::Text,
@@ -748,7 +749,8 @@ fn bench_fixture() -> RuntimeDocument {
             width: Length::Px(1280.0),
             height: Length::Px(800.0),
             ..Style::default()
-        },
+        }
+        .into(),
         hover_style: None,
         active_style: None,
     }];
@@ -772,7 +774,7 @@ fn bench_fixture() -> RuntimeDocument {
             action: std::borrow::Cow::Borrowed(""),
             text: text.to_string().into(),
             image,
-            style,
+            style: style.into(),
             hover_style: None,
             active_style: None,
         };

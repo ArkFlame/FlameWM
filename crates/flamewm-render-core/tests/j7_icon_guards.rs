@@ -31,7 +31,7 @@ fn image_doc(treatment: ImageTreatment, color: ColorValue) -> RuntimeDocument {
             action: std::borrow::Cow::Borrowed(""),
             text: std::borrow::Cow::Borrowed(""),
             image: Some(0),
-            style,
+            style: style.into(),
             hover_style: None,
             active_style: None,
         }],

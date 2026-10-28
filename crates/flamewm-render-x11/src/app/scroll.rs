@@ -431,7 +431,7 @@ mod tests {
             action: std::borrow::Cow::Borrowed(""),
             text: std::borrow::Cow::Borrowed(""),
             image: None,
-            style,
+            style: style.into(),
             hover_style: None,
             active_style: None,
         };
@@ -550,7 +550,7 @@ mod tests {
             action: std::borrow::Cow::Borrowed(""),
             text: std::borrow::Cow::Borrowed(""),
             image: None,
-            style: root,
+            style: root.into(),
             hover_style: None,
             active_style: None,
         }];
@@ -582,8 +582,8 @@ mod tests {
                 action: std::borrow::Cow::Borrowed(""),
                 text: std::borrow::Cow::Owned(format!("row {row:02} run {slot:02} lorem")),
                 image: None,
-                style,
-                hover_style: Some(Box::new(hover)),
+                style: style.into(),
+                hover_style: Some(hover.into()),
                 active_style: None,
             });
         }
