@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::native::rounded::row_inset;
 
-pub use flamewm_render_core::{PixelBackend, RenderAcceleration, RoundedRect};
+pub use flamewm_render_core::{PixelBackend, PixelOp, RenderAcceleration, RoundedRect};
 
 pub const RENDER_ACCELERATION_SETTING: &str = "renderAcceleration";
 
@@ -111,6 +111,16 @@ impl PixelBackend for gles::GpuBlur {
         color: [u8; 4],
     ) -> Result<(), String> {
         self.rounded_fill(pixels, width, height, outer, hole, color)
+    }
+
+    fn paint_batch(
+        &mut self,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        ops: &[PixelOp],
+    ) -> Result<(), String> {
+        self.paint_ops(pixels, width, height, ops)
     }
 }
 
@@ -286,6 +296,17 @@ pub fn stroke_rounded_rect(
     )
 }
 
+/// Applies `ops` (normalized, see [`PixelOp::normalized`]) to one frame through the same selection
+/// as the single-op calls: one GPU upload and readback when `renderAcceleration` is `gpu`, otherwise
+/// the CPU batch. Any GPU failure leaves the frame untouched and runs the batch on the CPU.
+pub fn paint_batch(pixels: &mut [u8], width: u32, height: u32, ops: &[PixelOp]) -> Result<(), String> {
+    let mut op = |backend: &mut dyn PixelBackend| backend.paint_batch(pixels, width, height, ops);
+    if try_gpu(&mut op) {
+        return Ok(());
+    }
+    CPU.with(|cpu| op(&mut *cpu.borrow_mut()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,6 +418,146 @@ mod tests {
         flamewm_image_core::blur::gaussian_blur_rgba(&mut expected, width, height, 9.0)
             .expect("reference blur");
         assert_eq!(pixels, expected);
+    }
+
+    /// Two panels, a stroke and a translucent fill, optionally followed by a blur.
+    fn batch_ops(with_blur: bool) -> Vec<PixelOp> {
+        let outer = RoundedRect { x: 10, y: 8, width: 120, height: 90, radius: 20 };
+        let inner = RoundedRect { x: 40, y: 30, width: 70, height: 40, radius: 8 };
+        let mut ops = vec![
+            PixelOp::FillRoundedRect { outer, hole: None, color: [200, 60, 30, 170] },
+            PixelOp::FillRoundedRect {
+                outer,
+                hole: Some(outer.inset(3)),
+                color: [240, 240, 250, 255],
+            },
+            PixelOp::FillRoundedRect { outer: inner, hole: None, color: [10, 90, 200, 128] },
+        ];
+        if with_blur {
+            ops.push(PixelOp::Blur { radius: 12.0 });
+        }
+        ops.into_iter().map(PixelOp::normalized).collect()
+    }
+
+    fn apply_single(backend: &mut dyn PixelBackend, pixels: &mut [u8], width: u32, height: u32, op: PixelOp) {
+        match op {
+            PixelOp::FillRoundedRect { outer, hole, color } => {
+                backend.fill_rounded_rect(pixels, width, height, outer, hole, color)
+            }
+            PixelOp::Blur { radius } => backend.blur_rgba(pixels, width, height, radius),
+        }
+        .expect("single op");
+    }
+
+    #[test]
+    fn cpu_batch_is_byte_identical_to_sequential_single_ops() {
+        let (width, height) = (160_u32, 120_u32);
+        let source = frame(width, height, 21);
+        let ops = batch_ops(true);
+        let mut batch = source.clone();
+        paint_batch(&mut batch, width, height, &ops).expect("cpu batch");
+        let mut sequential = source;
+        let mut cpu = CpuPixels::default();
+        for op in &ops {
+            apply_single(&mut cpu, &mut sequential, width, height, *op);
+        }
+        assert_eq!(batch, sequential);
+    }
+
+    #[test]
+    fn batch_error_after_a_successful_op_leaves_the_frame_untouched() {
+        /// Fills on the CPU and fails every blur, so the first op succeeds before the failure.
+        struct FailsOnBlur;
+        impl PixelBackend for FailsOnBlur {
+            fn blur_rgba(&mut self, _: &mut [u8], _: u32, _: u32, _: f32) -> Result<(), String> {
+                Err("simulated GL failure".to_owned())
+            }
+            fn fill_rounded_rect(
+                &mut self,
+                pixels: &mut [u8],
+                width: u32,
+                height: u32,
+                outer: RoundedRect,
+                hole: Option<RoundedRect>,
+                color: [u8; 4],
+            ) -> Result<(), String> {
+                CpuPixels::default().fill_rounded_rect(pixels, width, height, outer, hole, color)
+            }
+        }
+        let (width, height) = (160_u32, 120_u32);
+        let source = frame(width, height, 13);
+        let mut pixels = source.clone();
+        assert!(FailsOnBlur
+            .paint_batch(&mut pixels, width, height, &batch_ops(true))
+            .is_err());
+        assert_eq!(pixels, source, "a failed batch must not keep its earlier ops");
+    }
+
+    /// The largest number of pixels that differ by more than 2 in any channel, and the outline
+    /// budget that the corner arcs may use.
+    fn fill_disagreements(cpu: &[u8], gpu: &[u8], ops: &[PixelOp]) -> (usize, usize) {
+        let differing = cpu
+            .chunks_exact(4)
+            .zip(gpu.chunks_exact(4))
+            .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2))
+            .count();
+        let budget = ops
+            .iter()
+            .map(|op| match op {
+                PixelOp::FillRoundedRect { outer, .. } => 2 * (outer.width + outer.height) as usize,
+                PixelOp::Blur { .. } => 0,
+            })
+            .sum();
+        (differing, budget)
+    }
+
+    #[test]
+    fn gpu_batch_matches_gpu_single_ops_and_the_cpu_batch() {
+        let Ok(mut gpu) = gles::GpuBlur::new() else {
+            eprintln!("skipping GPU batch check: no GPU");
+            return;
+        };
+        let (width, height) = (160_u32, 120_u32);
+        let source = frame(width, height, 9);
+
+        let fills = batch_ops(false);
+        let mut cpu = source.clone();
+        CpuPixels::default().paint_batch(&mut cpu, width, height, &fills).expect("cpu fills");
+        let mut batch = source.clone();
+        PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &fills).expect("gpu batch");
+        let mut single = source.clone();
+        for op in &fills {
+            apply_single(&mut gpu, &mut single, width, height, *op);
+        }
+        assert_eq!(batch, single, "one batch must equal the per-op GPU results exactly");
+        let (differing, budget) = fill_disagreements(&cpu, &batch, &fills);
+        assert!(differing <= budget, "{differing} GPU fill pixels differ from CPU, budget {budget}");
+
+        let blurred = batch_ops(true);
+        let mut cpu = source.clone();
+        CpuPixels::default().paint_batch(&mut cpu, width, height, &blurred).expect("cpu batch");
+        let mut batch = source.clone();
+        PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &blurred).expect("gpu batch");
+        let mut single = source;
+        for op in &blurred {
+            apply_single(&mut gpu, &mut single, width, height, *op);
+        }
+        assert_eq!(batch, single, "blur batch must equal the per-op GPU results exactly");
+        // The blur tolerance matches `gpu_blur_matches_the_cpu_blur_when_a_gpu_is_present`.
+        let margin = 24;
+        let mut total = 0_u64;
+        let mut count = 0_u64;
+        for y in margin..height - margin {
+            for x in margin..width - margin {
+                let index = ((y * width + x) * 4) as usize;
+                for channel in 0..4 {
+                    total += u64::from(cpu[index + channel].abs_diff(batch[index + channel]));
+                    count += 1;
+                }
+            }
+        }
+        let mean = total as f64 / count as f64;
+        assert!(mean < 6.0, "blur batch mean channel difference {mean:.2}");
     }
 
     #[test]

@@ -65,6 +65,35 @@ impl RoundedRect {
     }
 }
 
+/// One step of a frame batch. Steps apply in order to the same frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PixelOp {
+    /// Source-over `color` through `outer` minus `hole`, as [`PixelBackend::fill_rounded_rect`].
+    /// A stroke is a fill whose `hole` is the rectangle inset by the stroke width.
+    FillRoundedRect {
+        outer: RoundedRect,
+        hole: Option<RoundedRect>,
+        color: [u8; 4],
+    },
+    /// Whole-frame blur, as [`PixelBackend::blur_rgba`].
+    Blur { radius: f32 },
+}
+
+impl PixelOp {
+    /// The op with its rectangles normalized, as the backends require.
+    #[must_use]
+    pub fn normalized(self) -> Self {
+        match self {
+            Self::FillRoundedRect { outer, hole, color } => Self::FillRoundedRect {
+                outer: outer.normalized(),
+                hole: hole.map(RoundedRect::normalized),
+                color,
+            },
+            blur @ Self::Blur { .. } => blur,
+        }
+    }
+}
+
 /// Pixel operations on straight RGBA8 buffers.
 ///
 /// Fills are hard-edged: a pixel is either inside the rounded rectangle or not. Compositing is
@@ -92,6 +121,30 @@ pub trait PixelBackend {
         hole: Option<RoundedRect>,
         color: [u8; 4],
     ) -> Result<(), String>;
+
+    /// Applies `ops` in order to one frame whose op rectangles are normalized. The default runs
+    /// each op on a scratch copy and copies it back only when every op succeeds. A GPU backend
+    /// overrides it to upload the frame once, run every op on the frame-resident target and read
+    /// it back once.
+    fn paint_batch(
+        &mut self,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        ops: &[PixelOp],
+    ) -> Result<(), String> {
+        let mut scratch = pixels.to_vec();
+        for op in ops {
+            match *op {
+                PixelOp::FillRoundedRect { outer, hole, color } => {
+                    self.fill_rounded_rect(&mut scratch, width, height, outer, hole, color)?;
+                }
+                PixelOp::Blur { radius } => self.blur_rgba(&mut scratch, width, height, radius)?,
+            }
+        }
+        pixels.copy_from_slice(&scratch);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

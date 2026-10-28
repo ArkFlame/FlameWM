@@ -2,7 +2,7 @@ use std::ffi::{CStr, CString, c_char, c_float, c_int, c_uint, c_void};
 use std::ptr;
 
 use crate::ffi::dynamic_library::DynamicLibrary;
-use flamewm_render_core::RoundedRect;
+use flamewm_render_core::{PixelOp, RoundedRect};
 
 type EglDisplay = *mut c_void;
 type EglConfig = *mut c_void;
@@ -897,9 +897,6 @@ impl GpuBlur {
         sigma: f32,
     ) -> Result<(), String> {
         let (w, h) = self.frame_size(pixels.len(), width, height)?;
-        let factor = downscale_factor(sigma);
-        let small = ((w + factor - 1) / factor, (h + factor - 1) / factor);
-        let weights = gaussian_weights(sigma / factor as f32);
         let mut staged = self.staging(pixels.len());
         // SAFETY: the context owned by `self` is made current on this thread before any GL call;
         // every texture and framebuffer created here is released before returning.
@@ -909,51 +906,148 @@ impl GpuBlur {
                 return Err("eglMakeCurrent failed".to_owned());
             }
             let source = self.target(w, h, pixels.as_ptr().cast())?;
-            let mut targets = vec![source];
-            let result = (|| {
-                targets.push(self.target(w, h, ptr::null())?);
-                self.copy_pass(&targets[0], &targets[1], 1, GL_NEAREST);
-                let mut current = 1;
-                let mut size = (w, h);
-                while size.0 > small.0 || size.1 > small.1 {
-                    let next = (
-                        ((size.0 + 1) / 2).max(small.0),
-                        ((size.1 + 1) / 2).max(small.1),
-                    );
-                    targets.push(self.target(next.0, next.1, ptr::null())?);
-                    let last = targets.len() - 1;
-                    self.copy_pass(&targets[current], &targets[last], 0, GL_LINEAR);
-                    current = last;
-                    size = next;
-                }
-                targets.push(self.target(size.0, size.1, ptr::null())?);
-                let scratch = targets.len() - 1;
-                self.blur_pass(
-                    &targets[current],
-                    &targets[scratch],
-                    (1.0 / size.0 as f32, 0.0),
-                    &weights,
-                );
-                self.blur_pass(
-                    &targets[scratch],
-                    &targets[current],
-                    (0.0, 1.0 / size.1 as f32),
-                    &weights,
-                );
-                targets.push(self.target(w, h, ptr::null())?);
-                let output = targets.len() - 1;
-                self.copy_pass(&targets[current], &targets[output], 2, GL_LINEAR);
-                self.read_back(&targets[output], &mut staged)
-            })();
+            let result = self.blur_target(&source, sigma).and_then(|output| {
+                let read = self.read_back(&output, &mut staged);
+                self.release(&output);
+                read
+            });
+            self.release(&source);
             (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
-            for target in &targets {
-                self.release(target);
-            }
             if result.is_ok() {
                 pixels.copy_from_slice(&staged);
             }
             self.readback = staged;
             result
+        }
+    }
+
+    /// Applies `ops` to one frame: the frame is uploaded once, every op runs on the frame-resident
+    /// target, and one readback returns the result. `pixels` changes only when every op succeeds.
+    pub(crate) fn paint_ops(
+        &mut self,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        ops: &[PixelOp],
+    ) -> Result<(), String> {
+        let (w, h) = self.frame_size(pixels.len(), width, height)?;
+        let mut staged = self.staging(pixels.len());
+        // SAFETY: the context owned by `self` is made current before any GL call, and every target
+        // created here is released before returning.
+        unsafe {
+            if (self.egl.make_current)(self.display, self.surface, self.surface, self.context) == 0
+            {
+                self.readback = staged;
+                return Err("eglMakeCurrent failed".to_owned());
+            }
+            let result = self
+                .target(w, h, pixels.as_ptr().cast())
+                .and_then(|mut current| {
+                    let result = self
+                        .apply_ops(&mut current, ops)
+                        .and_then(|()| self.read_back(&current, &mut staged));
+                    self.release(&current);
+                    result
+                });
+            (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
+            if result.is_ok() {
+                pixels.copy_from_slice(&staged);
+            }
+            self.readback = staged;
+            result
+        }
+    }
+
+    /// Runs `ops` in order on `current`. A blur replaces `current` with its output target.
+    ///
+    /// # Safety
+    /// The context owned by `self` must be current, and `current` must belong to it.
+    unsafe fn apply_ops(&self, current: &mut RenderTarget, ops: &[PixelOp]) -> Result<(), String> {
+        for op in ops {
+            match *op {
+                PixelOp::FillRoundedRect { outer, hole, color } => {
+                    if outer.width > 0 && outer.height > 0 {
+                        // SAFETY: forwarded from this function's contract.
+                        unsafe { self.rounded_pass(current, outer, hole, color) };
+                    }
+                }
+                PixelOp::Blur { radius } => {
+                    // SAFETY: forwarded from this function's contract; `current` is replaced only
+                    // after its successor exists, and the predecessor is released exactly once.
+                    let next = unsafe { self.blur_target(current, radius / 2.0)? };
+                    unsafe { self.release(current) };
+                    *current = next;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Blurs `source` into a new frame-sized target and returns it to the caller, who releases it.
+    /// Intermediate targets are released before returning.
+    ///
+    /// # Safety
+    /// The context owned by `self` must be current, and `source` must belong to it.
+    unsafe fn blur_target(&self, source: &RenderTarget, sigma: f32) -> Result<RenderTarget, String> {
+        let mut intermediates = Vec::new();
+        // SAFETY: forwarded from this function's contract.
+        let result = unsafe { self.blur_passes(source, sigma, &mut intermediates) };
+        for target in &intermediates {
+            // SAFETY: each intermediate was created by `blur_passes` and is released once here.
+            unsafe { self.release(target) };
+        }
+        result
+    }
+
+    /// The blur passes behind [`Self::blur_target`]. Every created target is pushed onto
+    /// `intermediates` before it can fail, except the returned output.
+    ///
+    /// # Safety
+    /// Same contract as [`Self::blur_target`].
+    unsafe fn blur_passes(
+        &self,
+        source: &RenderTarget,
+        sigma: f32,
+        intermediates: &mut Vec<RenderTarget>,
+    ) -> Result<RenderTarget, String> {
+        let (w, h) = (source.width, source.height);
+        let factor = downscale_factor(sigma);
+        let small = ((w + factor - 1) / factor, (h + factor - 1) / factor);
+        let weights = gaussian_weights(sigma / factor as f32);
+        // SAFETY: the context is current and every target belongs to it, per this function's contract.
+        unsafe {
+            intermediates.push(self.target(w, h, ptr::null())?);
+            let mut current = intermediates.len() - 1;
+            self.copy_pass(source, &intermediates[current], 1, GL_NEAREST);
+            let mut size = (w, h);
+            while size.0 > small.0 || size.1 > small.1 {
+                let next = (
+                    ((size.0 + 1) / 2).max(small.0),
+                    ((size.1 + 1) / 2).max(small.1),
+                );
+                intermediates.push(self.target(next.0, next.1, ptr::null())?);
+                let last = intermediates.len() - 1;
+                self.copy_pass(&intermediates[current], &intermediates[last], 0, GL_LINEAR);
+                current = last;
+                size = next;
+            }
+            intermediates.push(self.target(size.0, size.1, ptr::null())?);
+            let scratch = intermediates.len() - 1;
+            self.blur_pass(
+                &intermediates[current],
+                &intermediates[scratch],
+                (1.0 / size.0 as f32, 0.0),
+                &weights,
+            );
+            self.blur_pass(
+                &intermediates[scratch],
+                &intermediates[current],
+                (0.0, 1.0 / size.1 as f32),
+                &weights,
+            );
+            let output = self.target(w, h, ptr::null())?;
+            self.copy_pass(&intermediates[current], &output, 2, GL_LINEAR);
+            Ok(output)
         }
     }
 }
