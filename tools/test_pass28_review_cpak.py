@@ -31,10 +31,9 @@ class CpakContracts(unittest.TestCase):
         self.assertEqual(manifest['override']['filesystem'], [])
         self.assertTrue(manifest['override']['displayX11'])
 
-    def test_prepared_payload_cannot_install_host_login_sessions(self):
+    def test_pruned_payload_cannot_install_host_login_sessions(self):
         with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
-            payload = root / 'staged'
+            payload = Path(d) / 'staged'
             for bin in ('flamefetch', 'flamewm-terminal'):
                 f = payload / 'usr/bin' / bin
                 f.parent.mkdir(parents=True, exist_ok=True)
@@ -42,19 +41,37 @@ class CpakContracts(unittest.TestCase):
             desktop = payload / 'usr/share/applications/flamewm-terminal.desktop'
             desktop.parent.mkdir(parents=True)
             desktop.write_text('Exec=flamewm-terminal\nTryExec=flamewm-terminal\n')
-            for rel in ('usr/share/xsessions', 'usr/share/wayland-sessions', 'etc/pam.d'):
+            for rel in cpak.HOST_SESSION_PATHS:
                 f = payload / rel / 'test'
                 f.parent.mkdir(parents=True)
                 f.write_text('dangerous host session entry')
-            out = root / 'context'
-            cpak.prepare(out, payload)
-            self.assertEqual((out / 'payload/usr/share/applications/flamewm-terminal.desktop').read_text(),
+            cpak.prune(payload)
+            self.assertEqual(desktop.read_text(),
                              'Exec=/usr/bin/flamewm-terminal\nTryExec=/usr/bin/flamewm-terminal\n')
-            for rel in ('usr/share/xsessions', 'usr/share/wayland-sessions', 'etc/pam.d'):
-                self.assertFalse((out / 'payload' / rel).exists())
-            self.assertTrue((out / 'Containerfile').is_file())
+            for rel in cpak.HOST_SESSION_PATHS:
+                self.assertFalse((payload / rel).exists())
+            cpak.prune(payload)
+            self.assertEqual(desktop.read_text(),
+                             'Exec=/usr/bin/flamewm-terminal\nTryExec=/usr/bin/flamewm-terminal\n')
+
+    def test_prune_refuses_a_payload_without_the_terminal(self):
+        with tempfile.TemporaryDirectory() as d:
             with self.assertRaises(ValueError):
-                cpak.prepare(out, payload)
+                cpak.prune(Path(d))
+
+    def test_manifest_refuses_to_overwrite(self):
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d) / 'cpak.json'
+            output.write_text('{}')
+            with self.assertRaises(ValueError):
+                cpak.write_manifest('ghcr.io/arkflame/flamewm@sha256:' + 'a' * 64, output)
+
+    def test_container_build_compiles_inside_the_image_and_prunes(self):
+        containerfile = (ROOT / 'packaging/cpak/Containerfile').read_text()
+        self.assertIn('AS build', containerfile)
+        self.assertIn('cargo build --locked --release --workspace', containerfile)
+        self.assertIn('tools/cpak_package.py prune /payload', containerfile)
+        self.assertIn('COPY --from=build /payload/ /', containerfile)
 
     def test_session_supervisor_retains_restart_plans(self):
         src = (ROOT / 'crates/flamewm-wm/src/bin/flamewm-session.rs').read_text()
