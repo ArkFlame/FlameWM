@@ -528,7 +528,7 @@ impl X11App {
             alpha_mode = SurfaceAlphaMode::OpaqueFallback;
         }
         eprintln!(
-            "FLAMEWM_RENDER_PROVIDER {} gpu=driver-dependent",
+            "FLAMEWM_RENDER_PROVIDER {} paint=cpu-side (GPU only for blur via renderAcceleration=gpu)",
             provider.name()
         );
         // Shape bridge is render-owned: popup/menu rounded corners. Failure is

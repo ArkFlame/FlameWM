@@ -14,4 +14,6 @@ Not 100%. A5 X11 GPU covers blur only (PR #14); several measurements were not ta
 
 Legacy `tools/test_*.py`: 53 failures before, 51 after this work (pre-existing, unrelated); `tools/verify_rwr_promotion.py` fails (references nonexistent crates/rustwebrender-*).
 
-Skipped: `./scripts/check`, `./scripts/xephyr`, `./scripts/verify-visual`, release-profile builds, PSS/VRAM/CPU benchmarks.
+Xephyr: `FLAMEWM_XEPHYR_BUILD=0 FLAMEWM_XEPHYR_CANARY=1 ./scripts/xephyr` after `cargo build --release --workspace` (exit 0, 10m37s) -> `FLAMEWM_XEPHYR_CANARY_PASS`, provider `xrender`, screenshot shows System Settings with centered title, glyph min/max/close, rounded corners. Nested Wayland titlebar was verified from rendered pixels, not a side-by-side live screenshot.
+
+Skipped: full `./scripts/check`, interactive `./scripts/verify-visual`,  PSS/VRAM/CPU benchmarks.
