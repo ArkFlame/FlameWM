@@ -227,7 +227,9 @@ fn sync_activation_environment(environment: &BTreeMap<String, String>) {
     match command.status() {
         Ok(status) if status.success() => (),
         Ok(status) => {
-            eprintln!("{SESSION_LOG_PREFIX}: D-Bus activation environment not synchronized: {status}");
+            eprintln!(
+                "{SESSION_LOG_PREFIX}: D-Bus activation environment not synchronized: {status}"
+            );
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {
             eprintln!(
