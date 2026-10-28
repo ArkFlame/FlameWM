@@ -320,20 +320,27 @@ impl X11App {
         let supported_argb = argb_visual.and_then(|visual| {
             let mask = unsafe { visual_alpha_mask(display, visual) };
             validate_argb32_visual(32, TRUE_COLOR_CLASS, mask)
-                .ok().map(|mode| (visual, mode))
+                .ok()
+                .map(|mode| (visual, mode))
         });
         let (visual, depth, alpha_mode) = if config.role == X11WindowRole::Dock && compositor {
             supported_argb.map_or_else(
                 || unsafe {
-                    (XDefaultVisual(display, screen), XDefaultDepth(display, screen),
-                     fallback_mode(shape_available(display)))
+                    (
+                        XDefaultVisual(display, screen),
+                        XDefaultDepth(display, screen),
+                        fallback_mode(shape_available(display)),
+                    )
                 },
                 |(visual, mode)| (visual, 32, mode),
             )
         } else {
             unsafe {
-                (XDefaultVisual(display, screen), XDefaultDepth(display, screen),
-                 fallback_mode(shape_available(display)))
+                (
+                    XDefaultVisual(display, screen),
+                    XDefaultDepth(display, screen),
+                    fallback_mode(shape_available(display)),
+                )
             }
         };
         if visual.is_null() {
