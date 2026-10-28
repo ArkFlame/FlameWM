@@ -206,16 +206,9 @@ mod tests {
     fn window_margin_insets_outer_edges_fully_and_splits_shared_edges() {
         let work = Rect::new(0, 44, 1920, 1036);
         let current = Size::new(800, 600);
-        let left = apply_window_margin(
-            snap_geometry(SnapTarget::LeftHalf, work, current),
-            work,
-            2,
-        );
-        let right = apply_window_margin(
-            snap_geometry(SnapTarget::RightHalf, work, current),
-            work,
-            2,
-        );
+        let left = apply_window_margin(snap_geometry(SnapTarget::LeftHalf, work, current), work, 2);
+        let right =
+            apply_window_margin(snap_geometry(SnapTarget::RightHalf, work, current), work, 2);
         assert_eq!(left, Rect::new(2, 46, 957, 1032));
         assert_eq!(right, Rect::new(961, 46, 957, 1032));
         assert_eq!(right.x - left.right(), 2);
