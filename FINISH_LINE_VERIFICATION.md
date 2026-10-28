@@ -18,4 +18,6 @@ Xephyr: `FLAMEWM_XEPHYR_BUILD=0 FLAMEWM_XEPHYR_CANARY=1 ./scripts/xephyr` after 
 
 Wayland (2026-10-28): nested run with `FLAMEWM_WAYLAND_DUMP` framebuffer readback shows wallpaper, desktop icons, widgets and taskbar (workspaces, tray, clock) matching Xephyr; with `flamewm-terminal` autostarted the window has a titlebar (title, minimize/maximize/close) and a taskbar entry. The tray showed no battery icon where Xephyr did (not investigated). Hover disk verified live (`FLAMEWM_WAYLAND_DUMP_POINTER=882,75`: light disk behind the pointer on the maximize button). The drag outline needs button events and was not exercised live.
 
-Skipped: DRM/TTY run (needs a real TTY), hardware-GPU whole-frame timings (EGL fell back to llvmpipe in the live runs), Wayland drag-outline live check, PSS/VRAM/CPU benchmarks.
+Hardware GPU (2026-10-28, `cargo run --release -p flamewm-render-x11 --example pixel_bench`, 1350x641, Mesa Intel UHD TGL GT1, hardware): CPU frame batch 99.9 ms vs GPU `paint_batch` 30.8 ms (per-op GPU 286 ms); blur r12 46.3 vs 6.6 ms; fills+strokes only 8.7 ms CPU vs 27.5 ms GPU (readback dominates, so GPU loses on fill-only frames). Live Xephyr runs still used llvmpipe. Idle memory from the Wayland run profile: desktop PSS 88.3 MB / RSS 169.9 MB, wm PSS 5.6 MB; CPU ~0% idle; VRAM not measured.
+
+Skipped: DRM/TTY run (needs a real TTY), live whole-frame timings on the hardware GPU (live runs fell back to llvmpipe), Wayland drag-outline live check, VRAM and loaded-CPU benchmarks.
