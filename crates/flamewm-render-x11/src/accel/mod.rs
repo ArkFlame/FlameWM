@@ -299,7 +299,12 @@ pub fn stroke_rounded_rect(
 
 /// Runs `ops` on the GPU only. `false` means the GPU did not run them and the frame is untouched,
 /// so the caller keeps its own painter; the CPU batch is not used because its edges differ.
-pub(crate) fn try_gpu_batch(pixels: &mut [u8], width: u32, height: u32, ops: &[PixelOp<'_>]) -> bool {
+pub(crate) fn try_gpu_batch(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    ops: &[PixelOp<'_>],
+) -> bool {
     try_gpu(&mut |backend| backend.paint_batch(pixels, width, height, ops))
 }
 
@@ -322,6 +327,26 @@ pub fn paint_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_setting_never_runs_the_gpu_batch_and_leaves_tiny_and_empty_frames_untouched() {
+        set_render_acceleration(RenderAcceleration::Cpu);
+        let mut tiny = vec![7_u8; 2 * 2 * 4];
+        assert!(!try_gpu_batch(&mut tiny, 2, 2, &[]));
+        let ops = [PixelOp::FillRoundedRect {
+            outer: RoundedRect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+                radius: 0,
+            },
+            hole: None,
+            color: [1, 2, 3, 255],
+        }];
+        assert!(!try_gpu_batch(&mut tiny, 2, 2, &ops));
+        assert!(tiny.iter().all(|&byte| byte == 7));
+    }
 
     fn frame(width: u32, height: u32, seed: u32) -> Vec<u8> {
         (0..width * height * 4)
@@ -692,6 +717,55 @@ mod tests {
         // recorded): max 1 level, mean 0.0046 per channel.
         assert!(max <= 1, "blend max channel difference {max}");
         assert!(mean < 0.05, "blend mean channel difference {mean:.4}");
+    }
+
+    #[test]
+    fn gpu_full_frame_image_over_a_transparent_frame_matches_the_cpu() {
+        let Ok(mut gpu) = gles::GpuBlur::new() else {
+            return;
+        };
+        let (width, height) = (1350_u32, 641_u32);
+        let image: Vec<u8> = (0..width * height)
+            .flat_map(|i| [(i % 251) as u8, 90, 160, 255])
+            .collect();
+        let ops = [PixelOp::BlendImage {
+            x: 0,
+            y: 0,
+            width,
+            height,
+            rgba: &image,
+        }];
+        let mut cpu = vec![0_u8; (width * height * 4) as usize];
+        CpuPixels::default()
+            .paint_batch(&mut cpu, width, height, &ops)
+            .expect("cpu");
+        let mut batch = vec![0_u8; cpu.len()];
+        PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &ops).expect("gpu");
+        let max = cpu.iter().zip(&batch).map(|(a, b)| a.abs_diff(*b)).max();
+        eprintln!("FULLFRAME cpu[0..4]={:?} gpu[0..4]={:?} max={max:?}", &cpu[..4], &batch[..4]);
+        assert!(max.unwrap_or(0) <= 1);
+    }
+
+    #[test]
+    fn gpu_translucent_fill_over_a_transparent_frame_matches_the_cpu() {
+        let Ok(mut gpu) = gles::GpuBlur::new() else {
+            return;
+        };
+        let (width, height) = (64_u32, 64_u32);
+        let ops = [PixelOp::FillRoundedRect {
+            outer: RoundedRect { x: 8, y: 8, width: 40, height: 40, radius: 6 },
+            hole: None,
+            color: [200, 100, 50, 128],
+        }];
+        let mut cpu = vec![0_u8; (width * height * 4) as usize];
+        CpuPixels::default().paint_batch(&mut cpu, width, height, &ops).expect("cpu");
+        let mut batch = vec![0_u8; cpu.len()];
+        PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &ops).expect("gpu");
+        let i = (30 * width + 30) as usize * 4;
+        eprintln!("TRANSLUCENT cpu={:?} gpu={:?}", &cpu[i..i + 4], &batch[i..i + 4]);
+        let max = cpu.iter().zip(&batch).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        let centre = (cpu[i..i + 4] == batch[i..i + 4]) as u8;
+        assert!(centre == 1 && max <= 80, "max {max}");
     }
 
     #[test]

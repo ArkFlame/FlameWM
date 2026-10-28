@@ -464,7 +464,7 @@ impl X11App {
         }
     }
 
-    unsafe fn upload_opaque_fallback(
+    pub(crate) unsafe fn upload_opaque_fallback(
         &mut self,
         pixmap: Pixmap,
         pixels: &[u8],

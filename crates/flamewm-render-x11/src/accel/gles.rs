@@ -1009,8 +1009,12 @@ impl GpuBlur {
             let rect = [x as f32, y as f32, width as f32, height as f32];
             let result = self.check("blend texture upload").and_then(|()| {
                 match blend {
-                    Blend::Mask(color) => self.blend_pass(current, &self.mask, rect, Some(color), texture, false),
-                    Blend::Premultiplied => self.blend_pass(current, &self.image, rect, None, texture, true),
+                    Blend::Mask(color) => {
+                        self.blend_pass(current, &self.mask, rect, Some(color), texture, false)
+                    }
+                    Blend::Premultiplied => {
+                        self.blend_pass(current, &self.image, rect, None, texture, true)
+                    }
                 }
                 self.check("blend pass")
             });
@@ -1166,8 +1170,10 @@ impl GpuBlur {
                     }
                     if width > 0 && height > 0 {
                         // Coverage expands to RGBA so the mask shares the RGBA texture upload.
-                        let expanded: Vec<u8> =
-                            mask.iter().flat_map(|&coverage| [0, 0, 0, coverage]).collect();
+                        let expanded: Vec<u8> = mask
+                            .iter()
+                            .flat_map(|&coverage| [0, 0, 0, coverage])
+                            .collect();
                         let color = color.map(|channel| f32::from(channel) / 255.0);
                         // SAFETY: forwarded from this function's contract.
                         unsafe {

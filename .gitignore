@@ -32,3 +32,4 @@ icon-theme.cache
 /assets/theme-sources/*
 !/assets/theme-sources/SHA256SUMS
 /.vendor/
+/target-*/
