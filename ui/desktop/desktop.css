@@ -74,7 +74,7 @@ body { position:relative; background:#000000; color:#f1f2f3; font-size:13px; }
 .widget-custom { display:flex; flex-direction:column; justify-content:center; gap:3px; flex-grow:1; overflow:hidden; }
 .widget-span { white-space:nowrap; padding-left:0px; padding-right:0px; border-radius:4px; }
 .widget-editor { position:absolute; left:12px; right:12px; top:12px; bottom:12px; white-space:normal; overflow-wrap:anywhere; overflow:hidden; font-size:14px; background:#0b0c10cc; color:#f4f6fb; border:1px solid #8cc8ff; border-radius:8px; padding:8px; cursor:text; }
-.widget-resize { position:absolute; right:0px; bottom:0px; width:16px; height:16px; border-radius:4px; background:#ffffff1a; cursor:nwse-resize; }
+.widget-resize { position:absolute; right:2px; bottom:2px; width:12px; height:12px; border-radius:6px; background:#ffffff14; cursor:nwse-resize; }
 
 .widget-gallery { width:560px; padding:14px; gap:8px; }
 .widget-config { width:420px; padding:14px; gap:4px; }
@@ -96,9 +96,9 @@ body { position:relative; background:#000000; color:#f1f2f3; font-size:13px; }
 .widget-card-icons img { width:14px; height:14px; }
 .widget-card-preview-custom { display:flex; flex-direction:column; align-items:center; gap:4px; }
 .widget-card-markup { display:flex; flex-direction:row; gap:4px; }
-.widget-card-chip { font-size:12px; font-weight:700; padding-left:4px; padding-right:4px; border-radius:3px; color:#ffffff; white-space:nowrap; }
-.widget-card-chip-red { background:#ff5555; }
-.widget-card-chip-blue { background:#5555ff; }
+.widget-card-chip { height:18px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; border-radius:3px; color:#ffffff; white-space:nowrap; }
+.widget-card-chip-red { width:62px; background:#ff5555; }
+.widget-card-chip-blue { width:78px; background:#5555ff; }
 .widget-card-copy { display:flex; flex-direction:column; gap:3px; flex-grow:1; min-width:0px; }
 .widget-card-title { font-size:14px; font-weight:700; white-space:nowrap; }
 .widget-card-text { font-size:12px; opacity:0.75; white-space:normal; }
