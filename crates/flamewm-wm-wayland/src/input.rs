@@ -216,8 +216,8 @@ impl State {
                 Grab::Move { id, pointer, start } => {
                     let dx = (location.x - pointer.0).round() as i32;
                     let dy = (location.y - pointer.1).round() as i32;
-                    self.model.move_to(id, start.x + dx, start.y + dy);
-                    self.apply_geometry(id);
+                    let _ = start;
+                    self.move_outline = Some((id, dx, dy));
                 }
                 Grab::Resize {
                     id,
@@ -312,6 +312,12 @@ impl State {
         let mut consumed = ends_grab;
 
         if !pressed {
+            if let (Some(Grab::Move { id, start, .. }), Some((_, dx, dy))) =
+                (self.grab, self.move_outline.take())
+            {
+                self.model.move_to(id, start.x + dx, start.y + dy);
+                self.apply_geometry(id);
+            }
             self.grab = None;
         }
         // Super+left moves and Ctrl+Super+right resizes from anywhere on the frame or client, the

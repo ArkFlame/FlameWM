@@ -52,6 +52,7 @@ pub const TRANSPARENT_CLEAR_PIXEL: c_ulong = 0;
 pub const CW_BACK_PIXMAP: c_ulong = 1 << 0;
 pub const CW_BACK_PIXEL: c_ulong = 1 << 1;
 pub const CW_BORDER_PIXMAP: c_ulong = 1 << 2;
+pub const CW_BORDER_PIXEL: c_ulong = 1 << 3;
 pub const CW_COLORMAP: c_ulong = 1 << 13;
 
 #[repr(C)]

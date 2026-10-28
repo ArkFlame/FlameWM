@@ -379,7 +379,9 @@ impl X11App {
             colormap,
             cursor: 0,
         };
-        let mut valuemask = CW_BACK_PIXEL | CW_COLORMAP;
+        // Border pixel is mandatory when the window depth differs from the root's (ARGB32 on a
+        // 24-bit root); strict servers such as XWayland reject the window with BadMatch otherwise.
+        let mut valuemask = CW_BACK_PIXEL | CW_BORDER_PIXEL | CW_COLORMAP;
         let override_redirect = matches!(
             config.role,
             X11WindowRole::PopupMenu | X11WindowRole::DropdownMenu | X11WindowRole::Overlay

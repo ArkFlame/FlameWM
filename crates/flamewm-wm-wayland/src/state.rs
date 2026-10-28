@@ -320,6 +320,8 @@ pub struct State {
     /// Server-side titlebar fills, stable across frames (see `render::Decorations`).
     pub decorations: RefCell<crate::render::Decorations>,
     pub grab: Option<Grab>,
+    /// Outline-move preview `(window, dx, dy)`: contents stay put until release, like X11.
+    pub move_outline: Option<(WindowId, i32, i32)>,
     /// Bare Super press that has not been combined with another key yet.
     pub super_tap: bool,
     /// Keycodes whose press was consumed as a shortcut; their release is consumed too.
@@ -422,6 +424,7 @@ impl State {
             cursors: crate::cursor::Cursors::from_env(),
             decorations: RefCell::default(),
             grab: None,
+            move_outline: None,
             super_tap: false,
             swallowed_keys: Vec::new(),
             backend: None,

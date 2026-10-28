@@ -40,6 +40,8 @@ const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
 // Shared Xephyr skin metrics and palette, never per-backend coloured-square placeholders.
 const SURFACE: u32 = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB.0;
 const SURFACE_ALPHA: u8 = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_ALPHA;
+/// Light hover disk for minimize/maximize, matching the X11 control material.
+const LIGHT_HOVER: u32 = 0x00f1_f2f3;
 const GLYPH: u32 = flamewm_skin::palette::TEXT.0;
 const BORDER: u32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME.border.0;
 const CLOSE_HOVER: u32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME
@@ -255,7 +257,8 @@ fn chrome_pixels(
         };
         let center = geometry.bounds.x + geometry.bounds.width / 2;
         let cy = geometry.bounds.height / 2;
-        if hover == Some(button) && button == Button::Close {
+        let hovered = hover == Some(button);
+        if hovered {
             // Hover is a disk like the X11 default; do not paint an opaque square over the
             // rounded semi-transparent titlebar. The glyph stays legible on red.
             let radius = glyph_edge as f32 / 2.0;
@@ -275,14 +278,18 @@ fn chrome_pixels(
                             h,
                             x,
                             y,
-                            CLOSE_HOVER,
+                            if button == Button::Close {
+                                CLOSE_HOVER
+                            } else {
+                                LIGHT_HOVER
+                            },
                             (coverage * 255.0).round() as u8,
                         );
                     }
                 }
             }
         }
-        if let Some(glyph) = breeze_glyph(role, glyph_edge) {
+        if let Some(glyph) = breeze_glyph(role, glyph_edge, hovered && button != Button::Close) {
             let start_x = center - glyph_edge as i32 / 2;
             let start_y = cy - glyph_edge as i32 / 2;
             for (index, rgba) in glyph.chunks_exact(4).enumerate() {
@@ -404,6 +411,27 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
         }
     }
 
+    if let Some((id, dx, dy)) = state.move_outline {
+        if let Some(managed) = state.model.get(id) {
+            let f = managed.frame();
+            let (x, y) = (f.x + dx, f.y + dy);
+            let (w, h) = (f.w, f.h);
+            let edge = |x, y, w, h| {
+                Elem::Solid(SolidColorRenderElement::new(
+                    smithay::backend::renderer::element::Id::new(),
+                    Rectangle::new((x, y).into(), (w, h).into()),
+                    smithay::backend::renderer::utils::CommitCounter::default(),
+                    [0.95, 0.95, 0.96, 0.9],
+                    Kind::Unspecified,
+                ))
+            };
+            let t = 2;
+            out.insert(0, edge(x, y, w, t));
+            out.insert(0, edge(x, y + h - t, w, t));
+            out.insert(0, edge(x, y, t, h));
+            out.insert(0, edge(x + w - t, y, t, h));
+        }
+    }
     let hovered_button = state.model.hit(state.pointer.x, state.pointer.y);
     for id in state.model.visible_top_first() {
         let Some(managed) = state.model.get(id).cloned() else {
@@ -825,11 +853,11 @@ mod renderer_class_tests {
 }
 
 /// Breeze control glyph rasterised from the same SVG asset X11 uses (cached per role/size).
-fn breeze_glyph(role: chrome::WindowControlRole, edge: u32) -> Option<Vec<u8>> {
+fn breeze_glyph(role: chrome::WindowControlRole, edge: u32, dark: bool) -> Option<Vec<u8>> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<HashMap<(u8, u32), Option<Vec<u8>>>>> = OnceLock::new();
-    let key = (role as u8, edge);
+    static CACHE: OnceLock<Mutex<HashMap<(u8, u32, bool), Option<Vec<u8>>>>> = OnceLock::new();
+    let key = (role as u8, edge, dark);
     let mut cache = CACHE.get_or_init(Default::default).lock().ok()?;
     cache
         .entry(key)
@@ -837,7 +865,11 @@ fn breeze_glyph(role: chrome::WindowControlRole, edge: u32) -> Option<Vec<u8>> {
             let rel = role.icon_role().source().path;
             let bytes = std::fs::read(packaged_root().join(rel)).ok()?;
             let mut scheme = flamewm_image_core::SvgColorScheme::flame_default();
-            scheme.text = [(GLYPH >> 16) as u8, (GLYPH >> 8) as u8, GLYPH as u8, 255];
+            scheme.text = if dark {
+                [0x1b, 0x1e, 0x20, 255]
+            } else {
+                [(GLYPH >> 16) as u8, (GLYPH >> 8) as u8, GLYPH as u8, 255]
+            };
             flamewm_image_core::svg::render_with_color_scheme(&bytes, edge, edge, &scheme)
                 .ok()
                 .map(|image| image.pixels)
