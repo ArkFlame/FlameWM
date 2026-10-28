@@ -16,6 +16,6 @@ Not 100%. X11 GPU whole-frame paint works (opt-in); Wayland DRM/TTY, live PulseA
 
 Xephyr: `FLAMEWM_XEPHYR_BUILD=0 FLAMEWM_XEPHYR_CANARY=1 ./scripts/xephyr` after `cargo build --release --workspace` (exit 0, 10m37s) -> `FLAMEWM_XEPHYR_CANARY_PASS`, provider `xrender`, screenshot shows System Settings with centered title, glyph min/max/close, rounded corners. Nested Wayland titlebar was verified from rendered pixels, not a side-by-side live screenshot.
 
-Wayland (2026-10-28): nested run with `FLAMEWM_WAYLAND_DUMP` framebuffer readback shows wallpaper, desktop icons, widgets and taskbar (workspaces, tray, clock) matching Xephyr; with `flamewm-terminal` autostarted the window has a titlebar (title, minimize/maximize/close) and a taskbar entry. The tray showed no battery icon where Xephyr did (not investigated). Hover disks and drag outline were not exercised live.
+Wayland (2026-10-28): nested run with `FLAMEWM_WAYLAND_DUMP` framebuffer readback shows wallpaper, desktop icons, widgets and taskbar (workspaces, tray, clock) matching Xephyr; with `flamewm-terminal` autostarted the window has a titlebar (title, minimize/maximize/close) and a taskbar entry. The tray showed no battery icon where Xephyr did (not investigated). Hover disk verified live (`FLAMEWM_WAYLAND_DUMP_POINTER=882,75`: light disk behind the pointer on the maximize button). The drag outline needs button events and was not exercised live.
 
-Skipped: DRM/TTY run (needs a real TTY), hardware-GPU whole-frame timings (EGL fell back to llvmpipe in the live runs), Wayland hover/drag live check, PSS/VRAM/CPU benchmarks.
+Skipped: DRM/TTY run (needs a real TTY), hardware-GPU whole-frame timings (EGL fell back to llvmpipe in the live runs), Wayland drag-outline live check, PSS/VRAM/CPU benchmarks.
