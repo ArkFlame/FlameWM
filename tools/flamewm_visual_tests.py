@@ -480,17 +480,68 @@ def run_idle_memory(args):
     session = Session(layout, args.bin_dir, args.out, args.display, session_settings(args))
     try:
         session.start()
+        if args.suite:
+            for app in SUITE_APPS:
+                session.spawn(app, [app])
         time.sleep(args.settle)
         if args.out:
-            session.capture("idle-memory")
-        report = {"layout": layout, "settle_s": args.settle, "processes": session_memory(session.display_name)}
+            session.capture("idle-suite" if args.suite else "idle-memory")
+        cpu = session_cpu(session.display_name, args.cpu_window)
+        processes = session_memory(session.display_name, detail=args.detail)
+        for key, data in processes.items():
+            data["cpu_pct"] = cpu.get(key, 0.0)
+        report = {"layout": layout, "suite": args.suite, "settle_s": args.settle,
+                  "cpu_window_s": args.cpu_window, "processes": processes}
         print(json.dumps(report, indent=2))
-        print_memory_markdown(report["processes"])
+        print_memory_markdown(processes)
+        if args.detail:
+            print_memory_detail(processes)
     finally:
         session.stop()
 
 
 MEMORY_PARTS = ("binary", "libs", "heap", "stacks", "fonts", "shm", "other")
+# "Idle Suite" opens these on top of the bare session ("Idle Desktop").
+SUITE_APPS = ("flamewm-terminal", "flamewm-explorer", "flamewm-task-manager")
+DETAIL_ROWS = 12
+
+
+def session_pids(display_name):
+    """`name pid` -> /proc entry of every flamewm* process on `display_name`."""
+    found = {}
+    for entry in sorted(Path("/proc").iterdir(), key=lambda item: item.name):
+        if not entry.name.isdigit():
+            continue
+        try:
+            name = (entry / "comm").read_text().strip()
+            environ = (entry / "environ").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if name.startswith("flamewm") and f"DISPLAY={display_name}".encode() in environ:
+            found[f"{name} {entry.name}"] = entry
+    return found
+
+
+def cpu_ticks(entry):
+    fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+    return int(fields[11]) + int(fields[12])
+
+
+def session_cpu(display_name, window):
+    """Percent of one core each process used over `window` seconds of idle."""
+    before = {}
+    for key, entry in session_pids(display_name).items():
+        with contextlib.suppress(OSError):
+            before[key] = (entry, cpu_ticks(entry))
+    started = time.monotonic()
+    time.sleep(window)
+    elapsed = time.monotonic() - started
+    hertz = os.sysconf("SC_CLK_TCK")
+    usage = {}
+    for key, (entry, ticks) in before.items():
+        with contextlib.suppress(OSError):
+            usage[key] = round(100.0 * (cpu_ticks(entry) - ticks) / hertz / elapsed, 2)
+    return usage
 
 
 def mapping_part(path, exe, guarded):
@@ -511,12 +562,13 @@ def mapping_part(path, exe, guarded):
     return "other"
 
 
-def process_memory(entry):
+def process_memory(entry, detail=False):
     """PSS/RSS of one process, split by the kind of mapping that holds it (KiB)."""
     exe = os.readlink(entry / "exe")
     parts = dict.fromkeys(MEMORY_PARTS, 0)
     rss = 0
     path, part, previous_end, previous_guard = "", "other", None, False
+    by_mapping = {}
     for line in (entry / "smaps").read_text().splitlines():
         head = line.split(maxsplit=5)
         if "-" in head[0] and len(head) >= 5 and not head[0].endswith(":"):
@@ -527,38 +579,46 @@ def process_memory(entry):
             previous_end, previous_guard = end, head[1] == "---p" and not path
         elif head[0] == "Pss:":
             parts[part] += int(head[1])
+            label = path or f"[anon {part}]"
+            by_mapping[label] = by_mapping.get(label, 0) + int(head[1])
         elif head[0] == "Rss:":
             rss += int(head[1])
     status = dict(line.split(":", 1) for line in (entry / "status").read_text().splitlines() if ":" in line)
-    return {"pss": sum(parts.values()), "rss": rss, "threads": int(status["Threads"]), "parts": parts}
+    result = {"pss": sum(parts.values()), "rss": rss, "threads": int(status["Threads"]), "parts": parts}
+    if detail:
+        top = sorted(by_mapping.items(), key=lambda item: -item[1])[:DETAIL_ROWS]
+        result["mappings"] = [{"mapping": name, "pss": pss} for name, pss in top]
+    return result
 
 
-def session_memory(display_name):
+def session_memory(display_name, detail=False):
     """Per-process memory of every flamewm* process on `display_name`, keyed by `name pid`."""
     processes = {}
-    for entry in sorted(Path("/proc").iterdir(), key=lambda item: item.name):
-        if not entry.name.isdigit():
-            continue
-        try:
-            name = (entry / "comm").read_text().strip()
-            environ = (entry / "environ").read_bytes().split(b"\0")
-            if not name.startswith("flamewm") or f"DISPLAY={display_name}".encode() not in environ:
-                continue
-            processes[f"{name} {entry.name}"] = process_memory(entry)
-        except OSError:
-            continue
+    for key, entry in session_pids(display_name).items():
+        with contextlib.suppress(OSError):
+            processes[key] = process_memory(entry, detail)
     return processes
 
 
 def print_memory_markdown(processes):
-    print("\n| Process | PSS | RSS | Threads | " + " | ".join(MEMORY_PARTS) + " |")
-    print("| --- " * (4 + len(MEMORY_PARTS)) + "|")
+    print("\n| Process | PSS | RSS | Threads | CPU % | " + " | ".join(MEMORY_PARTS) + " |")
+    print("| --- " * (5 + len(MEMORY_PARTS)) + "|")
     for name, data in processes.items():
         parts = " | ".join(f"{data['parts'][part]}" for part in MEMORY_PARTS)
-        print(f"| {name} | {data['pss']} | {data['rss']} | {data['threads']} | {parts} |")
+        cpu = data.get("cpu_pct", 0.0)
+        print(f"| {name} | {data['pss']} | {data['rss']} | {data['threads']} | {cpu:.2f} | {parts} |")
     total_pss = sum(data["pss"] for data in processes.values())
     total_rss = sum(data["rss"] for data in processes.values())
-    print(f"| total | {total_pss} | {total_rss} | | |\n\nKiB; total PSS {total_pss / 1024:.2f} MiB")
+    total_cpu = sum(data.get("cpu_pct", 0.0) for data in processes.values())
+    print(f"| total | {total_pss} | {total_rss} | | {total_cpu:.2f} | |\n\n"
+          f"KiB; total PSS {total_pss / 1024:.2f} MiB; total CPU {total_cpu:.2f}% of one core")
+
+
+def print_memory_detail(processes):
+    for name, data in processes.items():
+        print(f"\n{name}: largest mappings (PSS KiB)")
+        for row in data.get("mappings", []):
+            print(f"  {row['pss']:>7}  {row['mapping']}")
 
 
 def session_pss(display_name):
@@ -614,6 +674,12 @@ def main(argv=None):
                         help="bench: move windows live instead of dragging an outline")
     parser.add_argument("--solid-wallpaper", action="store_true",
                         help="bench, idle-memory: start with a black solid wallpaper")
+    parser.add_argument("--suite", action="store_true",
+                        help="idle-memory: also open " + ", ".join(SUITE_APPS) + " (Idle Suite)")
+    parser.add_argument("--detail", action="store_true",
+                        help="idle-memory: list each process's largest mappings")
+    parser.add_argument("--cpu-window", type=float, default=10.0,
+                        help="idle-memory: seconds of idle CPU sampling")
     parser.add_argument("--settle", type=float, default=30.0, help="idle-memory: seconds idle before sampling")
     args = parser.parse_args(argv)
     if args.bin_dir:
