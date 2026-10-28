@@ -1,0 +1,12 @@
+{
+  "schema": "flamewm-memory-map-owners/1",
+  "duration_seconds": 10.0,
+  "sampling": "start/mid/end",
+  "units": "KiB",
+  "limitations": "Mapping PSS is not Rust allocation site or X11 server pixmap ownership",
+  "captures": [
+    {},
+    {},
+    {}
+  ]
+}

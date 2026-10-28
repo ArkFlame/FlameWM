@@ -1,7 +1,7 @@
-//! Canonical `FlameWM` surface material contract, renderer neutral.
+//! Canonical FlameWM surface material contract, renderer neutral.
 //! Settings, Explorer, Terminal, Shell and WM decorations share these fill,
-//! contour and alpha-blending rules. The renderer-specific `UiColor` mapping
-//! lives in `flamewm-ui-x11::surface_style`.
+//! contour and alpha-blending rules. The renderer-specific UiColor mapping
+//! lives in flamewm-ui-x11::surface_style.
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
@@ -65,23 +65,11 @@ mod surface_stroke_contract_tests {
     #[test]
     fn border_is_independent_from_surface_opacity_and_accepts_zero() {
         let mut s = SettingsSnapshot::new(1);
-        s.values
-            .insert("surfaceOpacity".into(), SettingValue::Percent(100));
-        s.values.insert(
-            "surfaceBorderColor".into(),
-            SettingValue::Text("#112233".into()),
-        );
-        s.values
-            .insert("surfaceBorderOpacity".into(), SettingValue::Percent(0));
-        assert_eq!(
-            surface_stroke(&s),
-            SurfaceFill {
-                rgb: 0x0011_2233,
-                alpha: 0
-            }
-        );
-        s.values
-            .insert("surfaceBorderOpacity".into(), SettingValue::Percent(100));
+        s.values.insert("surfaceOpacity".into(), SettingValue::Percent(100));
+        s.values.insert("surfaceBorderColor".into(), SettingValue::Text("#112233".into()));
+        s.values.insert("surfaceBorderOpacity".into(), SettingValue::Percent(0));
+        assert_eq!(surface_stroke(&s), SurfaceFill { rgb:0x0011_2233, alpha:0 });
+        s.values.insert("surfaceBorderOpacity".into(), SettingValue::Percent(100));
         assert_eq!(surface_stroke(&s).alpha, 255);
     }
 }
@@ -110,33 +98,13 @@ mod surface_blend_tests {
                 for fg in [0, 0x00ab_cdef, 0x00ff_ffff] {
                     let expected = [16, 8, 0].into_iter().fold(0, |out, shift| {
                         out | (((((fg >> shift) & 255) * u32::from(alpha)
-                            + ((bg >> shift) & 255) * (255 - u32::from(alpha)))
-                            / 255)
-                            << shift)
+                            + ((bg >> shift) & 255) * (255 - u32::from(alpha))) / 255) << shift)
                     });
-                    assert_eq!(
-                        blend_surface_over_rgb(bg, SurfaceFill { rgb: fg, alpha }),
-                        expected
-                    );
+                    assert_eq!(blend_surface_over_rgb(bg, SurfaceFill { rgb: fg, alpha }), expected);
                 }
             }
         }
     }
-}
-
-/// Whether `(x, y)` lies inside a `w` x `h` rectangle rounded by `r`.
-fn inside(x: f32, y: f32, w: f32, h: f32, r: f32) -> bool {
-    if x < 0.0 || y < 0.0 || x >= w || y >= h {
-        return false;
-    }
-    if r <= 0.0 {
-        return true;
-    }
-    let cx = x.clamp(r, w - r);
-    let cy = y.clamp(r, h - r);
-    let dx = x - cx;
-    let dy = y - cy;
-    dx * dx + dy * dy <= r * r
 }
 
 /// Fractional coverage of a 1px inner outline on a rounded surface.
@@ -153,13 +121,19 @@ pub fn inner_contour_coverage(w: u32, h: u32, radius: u32, x: u32, y: u32) -> u8
     let near_right = x.saturating_add(r).saturating_add(1) >= w;
     let near_top = y <= r;
     let near_bottom = y.saturating_add(r).saturating_add(1) >= h;
-    if (!(near_left || near_right) || !(near_top || near_bottom))
-        && x >= 1
-        && y >= 1
-        && x + 1 < w
-        && y + 1 < h
-    {
-        return 0;
+    if !(near_left || near_right) || !(near_top || near_bottom) {
+        if x >= 1 && y >= 1 && x + 1 < w && y + 1 < h {
+            return 0;
+        }
+    }
+    fn inside(x: f32, y: f32, w: f32, h: f32, r: f32) -> bool {
+        if x < 0.0 || y < 0.0 || x >= w || y >= h { return false; }
+        if r <= 0.0 { return true; }
+        let cx = x.clamp(r, w - r);
+        let cy = y.clamp(r, h - r);
+        let dx = x - cx;
+        let dy = y - cy;
+        dx * dx + dy * dy <= r * r
     }
     let outer_r = r as f32;
     let inner_r = outer_r - 1.0;
@@ -169,18 +143,9 @@ pub fn inner_contour_coverage(w: u32, h: u32, radius: u32, x: u32, y: u32) -> u8
             let px = x as f32 + (sx as f32 + 0.5) / 4.0;
             let py = y as f32 + (sy as f32 + 0.5) / 4.0;
             if inside(px, py, w as f32, h as f32, outer_r)
-                && (w <= 2
-                    || h <= 2
-                    || !inside(
-                        px - 1.0,
-                        py - 1.0,
-                        (w - 2) as f32,
-                        (h - 2) as f32,
-                        inner_r.max(0.0),
-                    ))
-            {
-                hits += 1;
-            }
+                && (w <= 2 || h <= 2 || !inside(px - 1.0, py - 1.0,
+                    (w - 2) as f32, (h - 2) as f32, inner_r.max(0.0)))
+            { hits += 1; }
         }
     }
     ((hits * 255 + 8) / 16) as u8
@@ -209,3 +174,4 @@ fn parse_rgb(text: &str) -> Option<u32> {
     }
     u32::from_str_radix(hex, 16).ok()
 }
+

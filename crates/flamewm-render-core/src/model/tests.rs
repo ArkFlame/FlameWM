@@ -89,7 +89,9 @@ mod paint_revision_tests {
         let layout_revision = doc.layout_revision();
         // No scrollable extent: wheel inputs must neither repaint nor grow the map.
         for _ in 0..100 {
-            let result = doc.apply_scroll_delta(0, ScrollDelta { dx: 0.0, dy: 48.0 }, (0.0, 0.0));
+            let result = doc.apply_scroll_delta(
+                0, ScrollDelta { dx: 0.0, dy: 48.0 }, (0.0, 0.0)
+            );
             assert_eq!(result, ScrollState::default());
         }
         assert_eq!(doc.revision(), revision);
@@ -98,40 +100,29 @@ mod paint_revision_tests {
         assert!(doc.scroll_offsets.is_empty());
 
         // Real scrolling still invalidates and the final overscroll is a no-op.
-        let result = doc.apply_scroll_delta(0, ScrollDelta { dx: 0.0, dy: 24.0 }, (0.0, 48.0));
+        let result = doc.apply_scroll_delta(
+            0, ScrollDelta { dx: 0.0, dy: 24.0 }, (0.0, 48.0)
+        );
         assert_eq!(result.offset_y, 24.0);
         assert_eq!(doc.revision(), revision + 1);
         assert_eq!(doc.peek_damage(), SurfaceDamage::Full);
         let _ = doc.take_damage();
-        assert_eq!(
-            doc.apply_scroll_delta(
-                0,
-                ScrollDelta {
-                    dx: 0.0,
-                    dy: 1000.0
-                },
-                (0.0, 48.0)
-            )
-            .offset_y,
-            48.0
-        );
+        assert_eq!(doc.apply_scroll_delta(
+            0, ScrollDelta { dx: 0.0, dy: 1000.0 }, (0.0, 48.0)
+        ).offset_y, 48.0);
         let final_revision = doc.revision();
         let _ = doc.take_damage();
         for _ in 0..100 {
-            assert_eq!(
-                doc.apply_scroll_delta(0, ScrollDelta { dx: 0.0, dy: 5.0 }, (0.0, 48.0))
-                    .offset_y,
-                48.0
-            );
+            assert_eq!(doc.apply_scroll_delta(
+                0, ScrollDelta { dx: 0.0, dy: 5.0 }, (0.0, 48.0)
+            ).offset_y, 48.0);
         }
         assert_eq!(doc.revision(), final_revision);
         assert_eq!(doc.peek_damage(), SurfaceDamage::None);
         // Clamping after content shrink still invalidates if the offset changes.
-        assert_eq!(
-            doc.apply_scroll_delta(0, ScrollDelta { dx: 0.0, dy: 0.0 }, (0.0, 10.0))
-                .offset_y,
-            10.0
-        );
+        assert_eq!(doc.apply_scroll_delta(
+            0, ScrollDelta { dx: 0.0, dy: 0.0 }, (0.0, 10.0)
+        ).offset_y, 10.0);
         assert_eq!(doc.revision(), final_revision + 1);
     }
 

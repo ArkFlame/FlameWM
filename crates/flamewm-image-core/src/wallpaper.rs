@@ -99,66 +99,123 @@ pub fn compose_region(
     fit: WallpaperFit,
     rect: (i32, i32, u32, u32),
 ) -> Option<RgbaImage> {
+    let (width, height) = (rect.2, rect.3);
+    // Validate before allocation, preserving the previous rejection semantics.
+    let x0 = u32::try_from(rect.0).ok()?;
+    let y0 = u32::try_from(rect.1).ok()?;
+    if natural.width == 0 || natural.height == 0 || width == 0 || height == 0
+        || x0.checked_add(width)? > root_w
+        || y0.checked_add(height)? > root_h
+    {
+        return None;
+    }
+    let length = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    let mut pixels = Vec::with_capacity(length);
+    emit_region(natural, root_w, root_h, fit, rect, |_, _, pixel| {
+        pixels.extend_from_slice(pixel);
+    })?;
+    Some(RgbaImage { width, height, pixels })
+}
+
+/// Write the region directly into an existing RGBA8 canvas without allocating a
+/// second region-sized pixel buffer. Used for per-output wallpaper composition:
+/// it preserves the same area-filter and integer-rounded pixel output as
+/// [`compose_region`], including Fill, Fit, Center, Stretch and Tile.
+///
+/// The destination rectangle must fit `canvas` and its packed RGBA8 storage.
+/// Invalid dimensions return `None` before writing any pixels.
+pub fn compose_region_into(
+    natural: &RgbaImage,
+    root_w: u32,
+    root_h: u32,
+    fit: WallpaperFit,
+    rect: (i32, i32, u32, u32),
+    canvas: &mut RgbaImage,
+    dest: (u32, u32),
+) -> Option<()> {
     if root_w == 0 || root_h == 0 || natural.width == 0 || natural.height == 0 {
         return None;
     }
     let (rx, ry, width, height) = rect;
     let x0 = u32::try_from(rx).ok()?;
     let y0 = u32::try_from(ry).ok()?;
-    if width == 0
-        || height == 0
+    if width == 0 || height == 0
+        || x0.checked_add(width)? > root_w
+        || y0.checked_add(height)? > root_h
+        || dest.0.checked_add(width)? > canvas.width
+        || dest.1.checked_add(height)? > canvas.height
+    {
+        return None;
+    }
+    let stride = (canvas.width as usize).checked_mul(4)?;
+    let required = stride.checked_mul(canvas.height as usize)?;
+    if canvas.pixels.len() != required {
+        return None;
+    }
+    emit_region(natural, root_w, root_h, fit, rect, |ix, iy, pixel| {
+        let index = (dest.1 as usize + iy) * stride + (dest.0 as usize + ix) * 4;
+        canvas.pixels[index..index + 4].copy_from_slice(pixel);
+    })
+}
+
+/// The single source of the pixel-sampling logic for owned contiguous regions
+/// and regions written directly into a larger output canvas.
+fn emit_region(
+    natural: &RgbaImage,
+    root_w: u32,
+    root_h: u32,
+    fit: WallpaperFit,
+    rect: (i32, i32, u32, u32),
+    mut emit: impl FnMut(usize, usize, &[u8]),
+) -> Option<()> {
+    if root_w == 0 || root_h == 0 || natural.width == 0 || natural.height == 0 {
+        return None;
+    }
+    let (rx, ry, width, height) = rect;
+    let x0 = u32::try_from(rx).ok()?;
+    let y0 = u32::try_from(ry).ok()?;
+    if width == 0 || height == 0
         || x0.checked_add(width)? > root_w
         || y0.checked_add(height)? > root_h
     {
         return None;
     }
     let (nw, nh) = (u64::from(natural.width), u64::from(natural.height));
-    let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
     match layer(natural, root_w, root_h, fit)? {
         Layer::Tiled => {
-            for y in y0..y0 + height {
-                for x in x0..x0 + width {
+            for (j, y) in (y0..y0 + height).enumerate() {
+                for (i, x) in (x0..x0 + width).enumerate() {
                     let source = (((u64::from(y) % nh) * nw + u64::from(x) % nw) * 4) as usize;
-                    pixels.extend_from_slice(&natural.pixels[source..source + 4]);
+                    emit(i, j, &natural.pixels[source..source + 4]);
                 }
             }
         }
-        Layer::Scaled {
-            width: sw,
-            height: sh,
-            x,
-            y,
-        } => {
-            // Per canvas row/column: the area taps into the scaled layer, or `None` outside it.
+        Layer::Scaled { width: sw, height: sh, x, y } => {
+            // Keep the identical area_tap sequence and float accumulation order.
             let taps = |start: u32, len: u32, origin: i64, src: u64, dst: u64| {
                 (start..start + len)
                     .map(|c| {
                         let s = i64::from(c) - origin;
-                        (0..dst as i64)
-                            .contains(&s)
+                        (0..dst as i64).contains(&s)
                             .then(|| area_tap(src as usize, dst as usize, s as usize))
                     })
                     .collect::<Vec<_>>()
             };
             let column_taps = taps(x0, width, x, nw, u64::from(sw));
             let row_taps = taps(y0, height, y, nh, u64::from(sh));
-            for row in &row_taps {
-                for column in &column_taps {
+            for (j, row) in row_taps.iter().enumerate() {
+                for (i, column) in column_taps.iter().enumerate() {
                     match (row, column) {
                         (Some(row), Some(column)) => {
-                            pixels.extend_from_slice(&area_pixel(natural, column, row));
+                            emit(i, j, &area_pixel(natural, column, row));
                         }
-                        _ => pixels.extend_from_slice(&BACKGROUND),
+                        _ => emit(i, j, &BACKGROUND),
                     }
                 }
             }
         }
     }
-    Some(RgbaImage {
-        width,
-        height,
-        pixels,
-    })
+    Some(())
 }
 
 /// How the natural image maps onto the root canvas for one fit.
@@ -195,12 +252,7 @@ pub fn compose_outputs_region(
     if rw == 0 || rh == 0 {
         return None;
     }
-    let mut pixels: Vec<u8> = BACKGROUND
-        .iter()
-        .copied()
-        .cycle()
-        .take(rw as usize * rh as usize * 4)
-        .collect();
+    let mut canvas = solid(rw, rh, BACKGROUND)?;
     for &(ox, oy, ow, oh) in outputs {
         let x0 = rx.max(ox);
         let y0 = ry.max(oy);
@@ -210,19 +262,12 @@ pub fn compose_outputs_region(
             continue;
         }
         let (w, h) = ((x1 - x0) as u32, (y1 - y0) as u32);
-        let piece = compose_region(natural, ow, oh, fit, (x0 - ox, y0 - oy, w, h))?;
-        for row in 0..h as usize {
-            let dst = ((y0 - ry) as usize + row) * rw as usize + (x0 - rx) as usize;
-            let src = row * w as usize * 4;
-            pixels[dst * 4..(dst + w as usize) * 4]
-                .copy_from_slice(&piece.pixels[src..src + w as usize * 4]);
-        }
+        compose_region_into(
+            natural, ow, oh, fit, (x0 - ox, y0 - oy, w, h),
+            &mut canvas, ((x0 - rx) as u32, (y0 - ry) as u32),
+        )?;
     }
-    Some(RgbaImage {
-        width: rw,
-        height: rh,
-        pixels,
-    })
+    Some(canvas)
 }
 
 fn layer(natural: &RgbaImage, width: u32, height: u32, fit: WallpaperFit) -> Option<Layer> {
@@ -683,4 +728,31 @@ mod output_layout_tests {
         assert_eq!(single.pixels, direct.pixels);
         assert!(compose_outputs_region(&natural, (14, 5), &outputs, fit, (0, 0, 0, 3)).is_none());
     }
+    #[test]
+    fn strided_region_write_matches_owned_region_and_keeps_canvas_storage() {
+        let image = gradient(7, 5);
+        for fit in [WallpaperFit::Fill, WallpaperFit::Fit, WallpaperFit::Stretch,
+                    WallpaperFit::Center, WallpaperFit::Tile] {
+            let region = compose_region(&image, 9, 7, fit, (2, 1, 5, 4))
+                .expect("reference region");
+            let mut output = solid(12, 10, BACKGROUND).expect("output");
+            let ptr = output.pixels.as_ptr();
+            let len = output.pixels.len();
+            compose_region_into(&image, 9, 7, fit, (2, 1, 5, 4), &mut output, (3, 4))
+                .expect("strided region");
+            assert_eq!(output.pixels.as_ptr(), ptr, "no output reallocation");
+            assert_eq!(output.pixels.len(), len);
+            for row in 0..4usize {
+                let actual = ((row + 4) * 12 + 3) * 4;
+                let source = row * 5 * 4;
+                assert_eq!(&output.pixels[actual..actual + 20],
+                    &region.pixels[source..source + 20], "{fit:?} row {row}");
+            }
+            let before = output.pixels.clone();
+            assert!(compose_region_into(&image, 9, 7, fit, (2, 1, 5, 4),
+                &mut output, (10, 9)).is_none());
+            assert_eq!(output.pixels, before, "invalid destination is nonmutating");
+        }
+    }
+
 }

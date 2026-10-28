@@ -26,8 +26,8 @@ impl App {
     pub fn open_tab(&mut self, launch: Launch) -> Result<(), String> {
         let pane = self.start_pane(&launch, self.cols, self.grid_rows)?;
         let id = pane.session.id;
-        // The banner belongs to the first tab only.
-        self.banner = self.tabs.is_empty();
+        // Flamefetch now prints into the PTY once before the first shell prompt.
+        self.banner = false;
         self.tabs.push(Tab {
             id,
             title: None,

@@ -65,12 +65,7 @@ fn test_app() -> App {
         snapshot: None,
         palette: builtin_themes()[0].palette.clone(),
         surface_alpha: 255,
-        surface_stroke: flamewm_ui_x11::UiColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 63,
-        },
+        surface_stroke: flamewm_ui_x11::UiColor { r:255, g:255, b:255, a:63 },
         view: View::Terminal,
         clipboard: None,
         events,
@@ -719,7 +714,7 @@ fn banner_and_menu_geometry_stay_in_window_coordinates() {
     let mut app = test_app();
     app.open_tab(cat()).expect("tab");
     // The banner only shows for a single-leaf tab.
-    assert!(app.banner_rows() > 0);
+    assert_eq!(app.banner_rows(), 0);
     app.menu = Some((1, 2));
     let frame = app.frame();
     let item = frame[1]
@@ -737,29 +732,9 @@ fn banner_and_menu_geometry_stay_in_window_coordinates() {
 }
 
 #[test]
-fn banner_art_spells_flamewm_with_every_glyph() {
-    let art = &BANNER[..BANNER_ART_ROWS];
-    let width = art[0].chars().count();
-    assert!(
-        art.iter().all(|row| row.chars().count() == width),
-        "art rows must share one width"
-    );
-    // Seven letters, six distinct glyphs; the E glyph's middle row is the one that is easiest to lose.
-    assert!(
-        art[1].contains("| ____|"),
-        "the E glyph is missing from the banner"
-    );
-    // Slanted: each row down starts one column further left than the row above.
-    let indent = |row: &str| row.chars().take_while(|c| *c == ' ').count();
-    assert!(
-        art.windows(2).all(|pair| indent(pair[0]) > indent(pair[1])),
-        "the art must lean right"
-    );
-    assert_eq!(
-        art.iter().filter(|row| row.contains('_')).count(),
-        BANNER_ART_ROWS,
-        "every art row carries glyph strokes"
-    );
+fn legacy_overlay_is_disabled_for_flamefetch_startup() {
+    assert_eq!(BANNER.len(), 0);
+    assert_eq!(BANNER_ART_ROWS, 0);
 }
 
 #[test]

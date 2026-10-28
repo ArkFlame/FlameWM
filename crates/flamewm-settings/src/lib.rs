@@ -1816,11 +1816,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     fn sync_nodes(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         if let Some(snapshot) = self.client.settings() {
-            flamewm_ui_x11::surface_style::project_surface_border(
-                document,
-                "settings-root",
-                snapshot,
-            )?;
+            flamewm_ui_x11::surface_style::project_surface_border(document, "settings-root", snapshot)?;
         }
         document.position("nav-selection", 8.0, nav_top(self.nav_index()))?;
         if let Some(SettingValue::Text(accent)) = self.setting_value("accent") {
@@ -3320,14 +3316,8 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some(rest) = action.strip_prefix("settings.picker.") {
         return parse_color_picker(rest);
     }
-    if let Some(direction) = action
-        .strip_prefix("settings.surface-border-opacity.")
-        .and_then(step)
-    {
-        return Ok(SettingsAction::PercentStep(
-            "surfaceBorderOpacity",
-            direction,
-        ));
+    if let Some(direction) = action.strip_prefix("settings.surface-border-opacity.").and_then(step) {
+        return Ok(SettingsAction::PercentStep("surfaceBorderOpacity", direction));
     }
     if let Some(direction) = action.strip_prefix("settings.surface-blur.").and_then(step) {
         return Ok(SettingsAction::PercentStep("surfaceBlurPercent", direction));

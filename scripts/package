@@ -121,7 +121,7 @@ for binary in flamewm-apps flamewm-session flamewm-screenshot flamewm-render-x11
 done
 # The WM, desktop, shell, settings, explorer and terminal are one multi-call executable
 # (crates/flamewm-apps); each name is a hard link to it, so the processes share its code pages.
-for application in flamewm flamewm-desktop flamewm-shell flamewm-settings flamewm-explorer flamewm-terminal flamewm-task-manager; do
+for application in flamewm flamewm-desktop flamewm-shell flamewm-settings flamewm-explorer flamewm-terminal flamewm-task-manager flamefetch; do
     ln "$STAGE/usr/bin/flamewm-apps" "$STAGE/usr/bin/$application"
 done
 install -m 0644 "$PAM_SOURCE" "$STAGE/etc/pam.d/flamewm-lock"

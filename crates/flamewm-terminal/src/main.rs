@@ -29,6 +29,11 @@ const UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-terminal.rwr
 const DEFAULT_WINDOW: (u32, u32) = (880, 540);
 
 pub fn main() {
+    let mut arguments = std::env::args().skip(1);
+    if arguments.next().as_deref() == Some("--flamefetch-shell") {
+        let shell = arguments.next().unwrap_or_else(|| "/bin/sh".into());
+        flamewm_terminal::fetch::exec_shell(&shell, &arguments.collect::<Vec<_>>());
+    }
     if let Err(error) = run() {
         if error != ALL_TABS_CLOSED {
             eprintln!("flamewm-terminal: {error}");
@@ -123,7 +128,15 @@ fn run() -> Result<(), String> {
         None,
     );
     app.clipboard = flamewm_clipboard::Clipboard::connect().ok();
+    let normal_shell = options.command.is_none();
     let launch = options.command.unwrap_or_else(|| Launch::shell(cwd));
+    let launch = if normal_shell && flamewm_terminal::fetch::startup_enabled() {
+        if let Ok(exe) = std::env::current_exe() {
+            let mut args = vec!["--flamefetch-shell".to_owned(), launch.program];
+            args.extend(launch.args);
+            Launch { program: exe.to_string_lossy().into_owned(), args, cwd: launch.cwd }
+        } else { launch }
+    } else { launch };
     app.open_tab(launch)?;
     let backdrop = snapshot
         .as_ref()

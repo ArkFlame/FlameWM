@@ -15,6 +15,7 @@
 .target/release/flamewm-lock             usr/bin/flamewm-lock
 .target/release/flamewm-terminal         usr/bin/flamewm-terminal
 .target/release/flamewm-task-manager     usr/bin/flamewm-task-manager
+.target/release/flamefetch              usr/bin/flamefetch
 .target/release/flamewm-wayland          usr/bin/flamewm-wayland
 packaging/pam.d/flamewm-lock             etc/pam.d/flamewm-lock
 assets/                                  usr/share/flamewm/assets/

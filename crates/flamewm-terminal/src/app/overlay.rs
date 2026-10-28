@@ -10,18 +10,9 @@ use crate::view::Row;
 use crate::view::Run;
 use crate::view::text_run;
 
-/// Startup banner: `FlameWM` art, then the `/theme` hint. Drawn above the shell until its output scrolls.
-pub(super) const BANNER: [&str; 7] = [
-    r"     _____   _         _       __  __   _____  __        __  __  __ ",
-    r"   |  ___| | |       / \     |  \/  | | ____| \ \      / / |  \/  | ",
-    r"  | |_    | |      / _ \    | |\/| | |  _|    \ \ /\ / /  | |\/| |  ",
-    r" |  _|   | |___  / ___ \   | |  | | | |___    \ V  V /   | |  | |   ",
-    r"|_|     |_____| /_/   \_\ |_|  |_| |_____|    \_/\_/    |_|  |_|    ",
-    "",
-    "/theme - Change the Terminal theme.",
-];
-
-pub(super) const BANNER_ART_ROWS: usize = 5;
+/// The old in-window ASCII overlay is retired. Flamefetch renders on the PTY instead.
+pub(super) const BANNER: [&str; 0] = [];
+pub(super) const BANNER_ART_ROWS: usize = 0;
 
 /// Right-click menu items, in display order. Indexes are matched in `menu_action`.
 pub(super) const MENU: [&str; 8] = [

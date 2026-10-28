@@ -1956,12 +1956,7 @@ mod tests {
     ) {
         let (requests, mut transport) = recording_transport();
         let mut snapshot = SettingsSnapshot::new(7);
-        for key in [
-            "surfaceColor",
-            "surfaceBorderColor",
-            "lockBackgroundColor",
-            "accent",
-        ] {
+        for key in ["surfaceColor", "surfaceBorderColor", "lockBackgroundColor", "accent"] {
             snapshot
                 .values
                 .insert(key.to_owned(), SettingValue::Text(initial.to_owned()));

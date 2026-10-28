@@ -26,7 +26,7 @@ CRATES = (
 )
 UI_INPUTS = ("ui/task-manager/task-manager.css", "ui/task-manager/task-manager.html")
 UI_TREES = {"flamewm-shell": "ui/shell", "flamewm-terminal": "ui/terminal"}
-SHARED_UI_INPUTS = {"flamewm-shell": ("ui/shared/menu.css",)}
+SHARED_UI_INPUTS = {"flamewm-shell": ("ui/shared/menu.css",), "flamewm-terminal": ("assets/flamefetch/logo.txt",)}
 
 
 def content_digest(root: Path, crate: str) -> str:

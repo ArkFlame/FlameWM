@@ -2,6 +2,7 @@
 //! wires these to the `FlameWM` window loop.
 pub mod app;
 pub mod glyphs;
+pub mod fetch;
 pub mod keys;
 pub mod parser;
 pub mod pool;

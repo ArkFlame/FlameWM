@@ -357,26 +357,13 @@ mod tests {
     fn streamed_clipped_mask_matches_owned_clip_pipeline() {
         for (width, height, radius) in [(2, 2, 0), (32, 8, 4), (480, 360, 14), (1, 400, 0)] {
             let rows = rounded_mask_spans(width, height, radius);
-            for clip in [
-                (0, 0, width, height),
-                (0, 0, width / 2, height / 2),
-                (1, 1, width, height),
-                (0, height, width, height + 10),
-                (width, 0, width + 10, height),
-            ] {
+            for clip in [(0, 0, width, height), (0, 0, width / 2, height / 2),
+                (1, 1, width, height), (0, height, width, height + 10),
+                (width, 0, width + 10, height)] {
                 let legacy = spans_to_rects(clip_spans(&rows, clip));
                 let streamed = spans_to_rects(clip_spans_iter(&rows, clip));
-                let tuples = |items: Vec<XRectangle>| {
-                    items
-                        .into_iter()
-                        .map(|r| (r.x, r.y, r.width, r.height))
-                        .collect::<Vec<_>>()
-                };
-                assert_eq!(
-                    tuples(legacy),
-                    tuples(streamed),
-                    "{width}x{height} clip={clip:?}"
-                );
+                let tuples = |items: Vec<XRectangle>| items.into_iter().map(|r| (r.x, r.y, r.width, r.height)).collect::<Vec<_>>();
+                assert_eq!(tuples(legacy), tuples(streamed), "{width}x{height} clip={clip:?}");
             }
         }
     }

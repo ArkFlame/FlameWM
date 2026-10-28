@@ -515,14 +515,17 @@ fn compose_per_monitor(
         let Some(rect) = monitor.intersection(root) else {
             continue;
         };
-        let image = wallpaper_fit::compose(natural, rect.width as u32, rect.height as u32, fit)?;
-        for row in 0..rect.height as usize {
-            let source = row * rect.width as usize * 4;
-            let destination = ((rect.y as usize + row) * width as usize + rect.x as usize) * 4;
-            let length = rect.width as usize * 4;
-            canvas.pixels[destination..destination + length]
-                .copy_from_slice(&image.pixels[source..source + length]);
-        }
+        // Compose directly into the root image instead of allocating a full
+        // second RGBA image for each output and then copying its rows.
+        flamewm_image_core::wallpaper::compose_region_into(
+            natural,
+            rect.width as u32,
+            rect.height as u32,
+            fit,
+            (0, 0, rect.width as u32, rect.height as u32),
+            &mut canvas,
+            (rect.x as u32, rect.y as u32),
+        )?;
         composed = true;
     }
     composed.then_some(canvas)

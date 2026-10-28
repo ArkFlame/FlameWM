@@ -163,12 +163,10 @@ pub(crate) fn project_element_backgrounds(
     };
     let blur = items.separate.then_some(items.blur_percent);
     let stroke = taskbar_border();
-    let contour = |shown: bool| {
-        if items.separate && shown {
-            stroke
-        } else {
-            TRANSPARENT_FILL
-        }
+    let contour = |shown: bool| if items.separate && shown {
+        stroke
+    } else {
+        TRANSPARENT_FILL
     };
     // The capsules own the background; start/clock buttons keep their CSS hover on top.
     document.background("start-capsule", fill)?;
@@ -1321,24 +1319,14 @@ mod panel_template_tests {
         assert!(!workspace_pager_visible(items, None));
         assert!(!workspace_pager_visible(items, Some(&single)));
         assert!(workspace_pager_visible(items, Some(&multiple)));
-        assert!(!workspace_pager_visible(
-            TaskbarItems {
-                workspaces: false,
-                ..items
-            },
-            Some(&multiple)
-        ));
+        assert!(!workspace_pager_visible(TaskbarItems { workspaces: false, ..items }, Some(&multiple)));
 
         // Reproject both transitions into the same document. The empty pager
         // must not leave a separate-mode glass outline or a layout gap.
         let mut document = decode_panel();
         for (snapshot, expected) in [(&single, false), (&multiple, true), (&single, false)] {
             project_pager(&mut document, Some(snapshot)).expect("pager projects");
-            document
-                .visible(
-                    "workspace-pager",
-                    workspace_pager_visible(items, Some(snapshot)),
-                )
+            document.visible("workspace-pager", workspace_pager_visible(items, Some(snapshot)))
                 .expect("pager visibility projects");
             let (_, _, width, height) = document
                 .layout_box_by_id("workspace-pager", (1080.0, 72.0))

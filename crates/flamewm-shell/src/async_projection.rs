@@ -895,10 +895,7 @@ fn project_panel_scoped(
         project_pager_async(document, view.snapshot)?;
         document.visible(
             "workspace-pager",
-            crate::projection::workspace_pager_visible(
-                view.items,
-                view.snapshot.workspaces.as_ref(),
-            ),
+            crate::projection::workspace_pager_visible(view.items, view.snapshot.workspaces.as_ref()),
         )?;
     }
     if scope.tray {
@@ -1468,12 +1465,11 @@ pub(crate) mod tests {
     fn asynchronous_workspace_count_transition_hides_empty_capsule() {
         use crate::runtime::ChangedDomains;
         let _guard = icon_test_lock().lock();
-        let changed = ChangedDomains {
-            workspaces: true,
-            ..ChangedDomains::default()
-        };
+        let changed = ChangedDomains { workspaces: true, ..ChangedDomains::default() };
         let mut snapshot = ShellSnapshot::default();
-        let pager = |snapshot: &ShellSnapshot| project_changed(PanelView::first(snapshot), changed);
+        let pager = |snapshot: &ShellSnapshot| {
+            project_changed(PanelView::first(snapshot), changed)
+        };
         snapshot.workspaces = Some(flamewm_api::workspace::WorkspaceSnapshot {
             revision: 1,
             count: 1,
@@ -1481,25 +1477,11 @@ pub(crate) mod tests {
             last_index: None,
             names: Vec::new(),
         });
-        assert_eq!(
-            pager(&snapshot).visible.get("workspace-pager"),
-            Some(&false)
-        );
-        snapshot
-            .workspaces
-            .as_mut()
-            .expect("workspace snapshot")
-            .count = 2;
+        assert_eq!(pager(&snapshot).visible.get("workspace-pager"), Some(&false));
+        snapshot.workspaces.as_mut().expect("workspace snapshot").count = 2;
         assert_eq!(pager(&snapshot).visible.get("workspace-pager"), Some(&true));
-        snapshot
-            .workspaces
-            .as_mut()
-            .expect("workspace snapshot")
-            .count = 1;
-        assert_eq!(
-            pager(&snapshot).visible.get("workspace-pager"),
-            Some(&false)
-        );
+        snapshot.workspaces.as_mut().expect("workspace snapshot").count = 1;
+        assert_eq!(pager(&snapshot).visible.get("workspace-pager"), Some(&false));
     }
 
     // REGRESSION: the async pager pass projects the same two-row topology as

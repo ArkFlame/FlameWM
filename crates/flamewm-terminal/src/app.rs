@@ -153,12 +153,7 @@ impl App {
             store,
             snapshot,
             surface_alpha: 255,
-            surface_stroke: flamewm_ui_x11::UiColor {
-                r: 255,
-                g: 255,
-                b: 255,
-                a: 63,
-            },
+            surface_stroke: flamewm_ui_x11::UiColor { r:255, g:255, b:255, a:63 },
             view: View::Terminal,
             clipboard: None,
             events,
