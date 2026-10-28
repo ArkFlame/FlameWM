@@ -2092,6 +2092,22 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn sync_appearance(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let gpu_selected = self
+            .text_setting("renderAcceleration")
+            .is_ok_and(|value| value == "gpu");
+        optional_text(
+            document,
+            "render-acceleration-note",
+            if gpu_selected {
+                match flamewm_ui_x11::probe_gpu_renderer() {
+                    Ok(renderer) => format!("GPU blur and backdrops run on {renderer}"),
+                    Err(error) => format!("GPU unavailable, using CPU: {error}"),
+                }
+            } else {
+                "CPU renders blur and backdrops. GPU moves that work to the graphics card and switches live"
+                    .to_owned()
+            },
+        );
         self.sync_color_rows(document)?;
         self.sync_color_picker(document)?;
         for (key, id) in [
