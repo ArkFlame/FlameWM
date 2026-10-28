@@ -116,16 +116,35 @@ pub(crate) unsafe fn upload_argb32_image(
     height: u32,
     what: &str,
 ) -> Result<(), String> {
+    unsafe { upload_words_image(display, pixmap, visual, 32, argb, width, height, what) }
+}
+
+/// Uploads 32-bit `0xAARRGGBB` words as an image of `depth` (the alpha byte is ignored at depth 24).
+/// The caller checks that the visual's channel layout is the standard one for a depth below 32.
+pub(crate) unsafe fn upload_words_image(
+    display: *mut Display,
+    pixmap: Pixmap,
+    visual: *mut Visual,
+    depth: u32,
+    argb: &[u32],
+    width: u32,
+    height: u32,
+    what: &str,
+) -> Result<(), String> {
     if visual.is_null() {
-        return Err(format!("{what}: ARGB32 visual is NULL"));
+        return Err(format!("{what}: visual is NULL"));
     }
     let (ximage, total) =
-        unsafe { create_zeroed_ximage(display, visual, 32, what, width, height)? };
+        unsafe { create_zeroed_ximage(display, visual, depth, what, width, height)? };
     let head = unsafe { &*(ximage as *const XImageHead) };
     let bytes_per_line = head.bytes_per_line as usize;
     if bytes_per_line % std::mem::size_of::<u32>() != 0 {
         unsafe { XDestroyImage(ximage) };
         return Err(format!("{what}: XImage row stride is not word-aligned"));
+    }
+    if depth < 32 && (head.red_mask != 0x00ff_0000 || head.blue_mask != 0xff) {
+        unsafe { XDestroyImage(ximage) };
+        return Err(format!("{what}: non-standard channel layout"));
     }
     let stride = bytes_per_line / std::mem::size_of::<u32>();
     let raw = unsafe { std::slice::from_raw_parts_mut(head.data as *mut u32, total / 4) };

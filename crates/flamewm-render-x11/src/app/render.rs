@@ -504,9 +504,23 @@ impl X11App {
         let uploaded = if self.depth == 32 {
             unsafe { self.upload_argb32_pub(self.backbuffer, &words, width, height) }
         } else {
+            // SAFETY: the default visual and the backbuffer belong to this app.
+            let visual = unsafe { XDefaultVisual(self.display, self.screen) };
             unsafe {
-                self.upload_opaque_fallback(self.backbuffer, &rgba, width, height, width, height)
+                super::images::upload_words_image(
+                    self.display,
+                    self.backbuffer,
+                    visual,
+                    self.depth as u32,
+                    &words,
+                    width,
+                    height,
+                    "GPU frame upload",
+                )
             }
+            .or_else(|_| unsafe {
+                self.upload_opaque_fallback(self.backbuffer, &rgba, width, height, width, height)
+            })
         };
         uploaded
             .ok()
