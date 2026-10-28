@@ -17,6 +17,8 @@ const DEFAULT_TITLEBARS: bool = true;
 const DEFAULT_TASKBAR_ACTIVITIES: bool = true;
 /// Neutral grey until a settings snapshot supplies `accent`.
 const DEFAULT_ACCENT_RGB: (u8, u8, u8) = (0x7f, 0x87, 0x8e);
+const DEFAULT_WINDOW_MARGIN: u32 = 2;
+const MAX_WINDOW_MARGIN: u32 = 32;
 
 static SNAP_PREVIEW_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_SNAP_PREVIEW_ENABLED);
 static FOCUS_FOLLOWS_MOUSE: AtomicBool = AtomicBool::new(DEFAULT_FOCUS_FOLLOWS_MOUSE);
@@ -28,6 +30,7 @@ static TASKBAR_ACTIVITIES: AtomicBool = AtomicBool::new(DEFAULT_TASKBAR_ACTIVITI
 static SHARE_WALLPAPER: AtomicBool = AtomicBool::new(false);
 /// Live `accent` packed as `0x00RRGGBB`.
 static ACCENT_RGB: AtomicU32 = AtomicU32::new(pack_rgb(DEFAULT_ACCENT_RGB));
+static WINDOW_MARGIN: AtomicU32 = AtomicU32::new(DEFAULT_WINDOW_MARGIN);
 
 const fn pack_rgb((r, g, b): (u8, u8, u8)) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | b as u32
@@ -77,6 +80,16 @@ fn accent_from_snapshot(snapshot: &SettingsSnapshot) -> (u8, u8, u8) {
     }
 }
 
+fn window_margin_from_snapshot(snapshot: &SettingsSnapshot) -> u32 {
+    match snapshot.values.get("windowMargin") {
+        Some(SettingValue::Integer(value)) => u32::try_from(*value)
+            .ok()
+            .filter(|margin| *margin <= MAX_WINDOW_MARGIN)
+            .unwrap_or(DEFAULT_WINDOW_MARGIN),
+        _ => DEFAULT_WINDOW_MARGIN,
+    }
+}
+
 /// Called from the single settings sync point on the WM thread.
 pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     let (snap_preview, focus_follows_mouse) = window_behaviour_from_snapshot(snapshot);
@@ -96,6 +109,7 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
         Ordering::Relaxed,
     );
     ACCENT_RGB.store(pack_rgb(accent_from_snapshot(snapshot)), Ordering::Relaxed);
+    WINDOW_MARGIN.store(window_margin_from_snapshot(snapshot), Ordering::Relaxed);
     flamewm_applications::terminal::set_configured_terminal(&terminal_from_snapshot(snapshot));
 }
 
@@ -103,6 +117,10 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
 pub(crate) fn accent_rgb() -> (u8, u8, u8) {
     let packed = ACCENT_RGB.load(Ordering::Relaxed);
     ((packed >> 16) as u8, (packed >> 8) as u8, packed as u8)
+}
+
+pub(crate) fn window_margin() -> i32 {
+    WINDOW_MARGIN.load(Ordering::Relaxed) as i32
 }
 
 pub(crate) fn snap_preview_enabled() -> bool {
@@ -136,6 +154,24 @@ pub(crate) fn taskbar_activities() -> bool {
 #[cfg(test)]
 mod show_content_tests {
     use super::*;
+
+    #[test]
+    fn window_margin_defaults_to_two_and_rejects_out_of_range_values() {
+        assert_eq!(window_margin_from_snapshot(&SettingsSnapshot::new(1)), 2);
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("windowMargin".into(), SettingValue::Integer(8));
+        assert_eq!(window_margin_from_snapshot(&snapshot), 8);
+        snapshot
+            .values
+            .insert("windowMargin".into(), SettingValue::Integer(99));
+        assert_eq!(window_margin_from_snapshot(&snapshot), 2);
+        snapshot
+            .values
+            .insert("windowMargin".into(), SettingValue::Integer(-1));
+        assert_eq!(window_margin_from_snapshot(&snapshot), 2);
+    }
 
     #[test]
     fn show_content_defaults_off_and_maps_booleans() {
