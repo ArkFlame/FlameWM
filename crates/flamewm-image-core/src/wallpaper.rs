@@ -103,18 +103,27 @@ pub fn compose_region(
     // Validate before allocation, preserving the previous rejection semantics.
     let x0 = u32::try_from(rect.0).ok()?;
     let y0 = u32::try_from(rect.1).ok()?;
-    if natural.width == 0 || natural.height == 0 || width == 0 || height == 0
+    if natural.width == 0
+        || natural.height == 0
+        || width == 0
+        || height == 0
         || x0.checked_add(width)? > root_w
         || y0.checked_add(height)? > root_h
     {
         return None;
     }
-    let length = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    let length = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
     let mut pixels = Vec::with_capacity(length);
     emit_region(natural, root_w, root_h, fit, rect, |_, _, pixel| {
         pixels.extend_from_slice(pixel);
     })?;
-    Some(RgbaImage { width, height, pixels })
+    Some(RgbaImage {
+        width,
+        height,
+        pixels,
+    })
 }
 
 /// Write the region directly into an existing RGBA8 canvas without allocating a
@@ -139,7 +148,8 @@ pub fn compose_region_into(
     let (rx, ry, width, height) = rect;
     let x0 = u32::try_from(rx).ok()?;
     let y0 = u32::try_from(ry).ok()?;
-    if width == 0 || height == 0
+    if width == 0
+        || height == 0
         || x0.checked_add(width)? > root_w
         || y0.checked_add(height)? > root_h
         || dest.0.checked_add(width)? > canvas.width
@@ -174,7 +184,8 @@ fn emit_region(
     let (rx, ry, width, height) = rect;
     let x0 = u32::try_from(rx).ok()?;
     let y0 = u32::try_from(ry).ok()?;
-    if width == 0 || height == 0
+    if width == 0
+        || height == 0
         || x0.checked_add(width)? > root_w
         || y0.checked_add(height)? > root_h
     {
@@ -190,13 +201,19 @@ fn emit_region(
                 }
             }
         }
-        Layer::Scaled { width: sw, height: sh, x, y } => {
+        Layer::Scaled {
+            width: sw,
+            height: sh,
+            x,
+            y,
+        } => {
             // Keep the identical area_tap sequence and float accumulation order.
             let taps = |start: u32, len: u32, origin: i64, src: u64, dst: u64| {
                 (start..start + len)
                     .map(|c| {
                         let s = i64::from(c) - origin;
-                        (0..dst as i64).contains(&s)
+                        (0..dst as i64)
+                            .contains(&s)
                             .then(|| area_tap(src as usize, dst as usize, s as usize))
                     })
                     .collect::<Vec<_>>()
@@ -263,8 +280,13 @@ pub fn compose_outputs_region(
         }
         let (w, h) = ((x1 - x0) as u32, (y1 - y0) as u32);
         compose_region_into(
-            natural, ow, oh, fit, (x0 - ox, y0 - oy, w, h),
-            &mut canvas, ((x0 - rx) as u32, (y0 - ry) as u32),
+            natural,
+            ow,
+            oh,
+            fit,
+            (x0 - ox, y0 - oy, w, h),
+            &mut canvas,
+            ((x0 - rx) as u32, (y0 - ry) as u32),
         )?;
     }
     Some(canvas)
@@ -731,10 +753,14 @@ mod output_layout_tests {
     #[test]
     fn strided_region_write_matches_owned_region_and_keeps_canvas_storage() {
         let image = gradient(7, 5);
-        for fit in [WallpaperFit::Fill, WallpaperFit::Fit, WallpaperFit::Stretch,
-                    WallpaperFit::Center, WallpaperFit::Tile] {
-            let region = compose_region(&image, 9, 7, fit, (2, 1, 5, 4))
-                .expect("reference region");
+        for fit in [
+            WallpaperFit::Fill,
+            WallpaperFit::Fit,
+            WallpaperFit::Stretch,
+            WallpaperFit::Center,
+            WallpaperFit::Tile,
+        ] {
+            let region = compose_region(&image, 9, 7, fit, (2, 1, 5, 4)).expect("reference region");
             let mut output = solid(12, 10, BACKGROUND).expect("output");
             let ptr = output.pixels.as_ptr();
             let len = output.pixels.len();
@@ -745,14 +771,18 @@ mod output_layout_tests {
             for row in 0..4usize {
                 let actual = ((row + 4) * 12 + 3) * 4;
                 let source = row * 5 * 4;
-                assert_eq!(&output.pixels[actual..actual + 20],
-                    &region.pixels[source..source + 20], "{fit:?} row {row}");
+                assert_eq!(
+                    &output.pixels[actual..actual + 20],
+                    &region.pixels[source..source + 20],
+                    "{fit:?} row {row}"
+                );
             }
             let before = output.pixels.clone();
-            assert!(compose_region_into(&image, 9, 7, fit, (2, 1, 5, 4),
-                &mut output, (10, 9)).is_none());
+            assert!(
+                compose_region_into(&image, 9, 7, fit, (2, 1, 5, 4), &mut output, (10, 9))
+                    .is_none()
+            );
             assert_eq!(output.pixels, before, "invalid destination is nonmutating");
         }
     }
-
 }

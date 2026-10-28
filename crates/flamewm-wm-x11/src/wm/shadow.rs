@@ -79,7 +79,11 @@ mod reconcile_batch_tests {
 
 /// Shape is expressed in shadow-window coordinates, so position and colour changes leave
 /// the X Shape mask unchanged. A new window or different dimensions require the mask again.
-fn needs_shadow_shape_update(previous: Option<(Window, u32, u32)>, win: Window, outer: Rect) -> bool {
+fn needs_shadow_shape_update(
+    previous: Option<(Window, u32, u32)>,
+    win: Window,
+    outer: Rect,
+) -> bool {
     previous.is_none_or(|(old_win, width, height)| {
         old_win != win || width != outer.width || height != outer.height
     })
@@ -87,7 +91,7 @@ fn needs_shadow_shape_update(previous: Option<(Window, u32, u32)>, win: Window, 
 
 #[cfg(test)]
 mod shadow_shape_tests {
-    use super::{needs_shadow_shape_update, Rect};
+    use super::{Rect, needs_shadow_shape_update};
 
     #[test]
     fn only_size_or_shadow_window_identity_invalidates_shape() {
@@ -95,14 +99,20 @@ mod shadow_shape_tests {
         assert!(needs_shadow_shape_update(None, 7, old));
         assert!(!needs_shadow_shape_update(Some((7, 1280, 720)), 7, old));
         assert!(!needs_shadow_shape_update(
-            Some((7, 1280, 720)), 7, Rect::new(-1920, -500, 1280, 720)
+            Some((7, 1280, 720)),
+            7,
+            Rect::new(-1920, -500, 1280, 720)
         ));
         assert!(needs_shadow_shape_update(Some((7, 1280, 720)), 8, old));
         assert!(needs_shadow_shape_update(
-            Some((7, 1280, 720)), 7, Rect::new(100, 200, 1281, 720)
+            Some((7, 1280, 720)),
+            7,
+            Rect::new(100, 200, 1281, 720)
         ));
         assert!(needs_shadow_shape_update(
-            Some((7, 1280, 720)), 7, Rect::new(100, 200, 1280, 721)
+            Some((7, 1280, 720)),
+            7,
+            Rect::new(100, 200, 1280, 721)
         ));
     }
 }
@@ -188,12 +198,7 @@ impl DesktopFrame {
 
 impl ShadowScene {
     /// Advance the root generation for this turn and return its new value.
-    fn advance(
-        &mut self,
-        membership: u64,
-        backdrop: u64,
-        geometry: Option<u64>,
-    ) -> u64 {
+    fn advance(&mut self, membership: u64, backdrop: u64, geometry: Option<u64>) -> u64 {
         self.next_dragging.sort_unstable();
         self.next_dragging.dedup();
         let mut bump = !self.seeded;
@@ -247,8 +252,14 @@ mod scratch_equivalence_tests {
         let membership = vec![(9_u32, 1_usize, false), (12, 2, true)];
         let geometry = vec![(9_u32, -100_i32, 40_i32, 1600_u32, 900_u32)];
         let outputs = vec![(-1920_i32, 0_i32, 1920_u32, 1080_u32), (0, 0, 1280, 800)];
-        assert_eq!(hash_of((2_usize, membership.clone())), hash_of((2_usize, &membership)));
-        assert_eq!(hash_of((0_usize, geometry.clone())), hash_of((0_usize, &geometry)));
+        assert_eq!(
+            hash_of((2_usize, membership.clone())),
+            hash_of((2_usize, &membership))
+        );
+        assert_eq!(
+            hash_of((0_usize, geometry.clone())),
+            hash_of((0_usize, &geometry))
+        );
         assert_eq!(
             hash_of((4_u64, 1920_u16, 1080_u16, outputs.clone(), Some(3_u32))),
             hash_of((4_u64, 1920_u16, 1080_u16, &outputs, Some(3_u32))),
@@ -344,7 +355,9 @@ impl<C: Connection> Wm<'_, C> {
         // frame. Managed frames cannot change stacking during this synchronous reconcile pass.
         let mut bottom_frame = None;
         let current_radius = u32::from(crate::frame::geometry_shape::scaled_corner_radius(
-            true, self.decoration_tokens.style, self.titlebar_height(),
+            true,
+            self.decoration_tokens.style,
+            self.titlebar_height(),
         ));
         for want in &wanted {
             let prev = self.frame_shadows.get(&want.frame).map(|held| held.state);
@@ -353,7 +366,9 @@ impl<C: Connection> Wm<'_, C> {
             if prev.is_none() && motion {
                 continue;
             }
-            let shape_changed = self.frame_shadows.get(&want.frame)
+            let shape_changed = self
+                .frame_shadows
+                .get(&want.frame)
                 .is_some_and(|held| held.radius != current_radius);
             let decision = if shape_changed && !motion {
                 ShadowAction::Reshade
@@ -414,9 +429,7 @@ impl<C: Connection> Wm<'_, C> {
         } else {
             Some(self.shadow_geometry_hash())
         };
-        let generation = self
-            .shadow_scene
-            .advance(membership, backdrop, geometry);
+        let generation = self.shadow_scene.advance(membership, backdrop, geometry);
         (generation, motion)
     }
 
@@ -544,14 +557,20 @@ impl<C: Connection> Wm<'_, C> {
         let previous = self.frame_shadows.get(&frame).map(|held| held.pixmap);
         // X Shape is window-local: position, focus and backdrop changes cannot alter its
         // silhouette. Only a new shadow window or a changed frame size needs a new mask.
-        let previous_shape = self.frame_shadows.get(&frame).map(|held| {
-            (held.win, held.state.shaded.width, held.state.shaded.height)
-        });
+        let previous_shape = self
+            .frame_shadows
+            .get(&frame)
+            .map(|held| (held.win, held.state.shaded.width, held.state.shaded.height));
         let radius = u32::from(crate::frame::geometry_shape::scaled_corner_radius(
-            true, self.decoration_tokens.style, self.titlebar_height(),
+            true,
+            self.decoration_tokens.style,
+            self.titlebar_height(),
         ));
         let update_shape = needs_shadow_shape_update(previous_shape, win, outer)
-            || self.frame_shadows.get(&frame).is_some_and(|held| held.radius != radius);
+            || self
+                .frame_shadows
+                .get(&frame)
+                .is_some_and(|held| held.radius != radius);
         let shown = self.refresh_shadow(outer, focused, win, sibling, update_shape, radius)?;
         if let Some((raw, pixmap)) = shown {
             self.frame_shadows.insert(

@@ -41,7 +41,12 @@ pub fn visible_shadow_regions(area: Rect, frame: Rect) -> [Option<Rect>; 2] {
         ),
         intersect(
             area,
-            Rect::new(area.x, bottom, (right - area.x) as u32, (area.bottom() - bottom) as u32),
+            Rect::new(
+                area.x,
+                bottom,
+                (right - area.x) as u32,
+                (area.bottom() - bottom) as u32,
+            ),
         ),
     ]
 }
@@ -55,8 +60,19 @@ pub fn visible_shadow_regions_rounded(area: Rect, frame: Rect, radius: u32) -> [
     let right = (frame.right() - radius).clamp(area.x, area.right());
     let bottom = (frame.bottom() - radius).clamp(area.y, area.bottom());
     [
-        intersect(area, Rect::new(right,area.y,(area.right()-right) as u32,area.height)),
-        intersect(area, Rect::new(area.x,bottom,(right-area.x) as u32,(area.bottom()-bottom) as u32)),
+        intersect(
+            area,
+            Rect::new(right, area.y, (area.right() - right) as u32, area.height),
+        ),
+        intersect(
+            area,
+            Rect::new(
+                area.x,
+                bottom,
+                (right - area.x) as u32,
+                (area.bottom() - bottom) as u32,
+            ),
+        ),
     ]
 }
 
@@ -77,7 +93,8 @@ impl ShadowBands {
         let stride = area.width as usize * 4;
         let strips = visible_shadow_regions(area, frame).map(|region| {
             region.map(|region| {
-                let mut pixels = Vec::with_capacity(region.width as usize * region.height as usize * 4);
+                let mut pixels =
+                    Vec::with_capacity(region.width as usize * region.height as usize * 4);
                 for y in region.y..region.bottom() {
                     let start = (y - area.y) as usize * stride + (region.x - area.x) as usize * 4;
                     pixels.extend_from_slice(&raw[start..start + region.width as usize * 4]);
@@ -93,7 +110,8 @@ impl ShadowBands {
         let stride = area.width as usize * 4;
         let strips = visible_shadow_regions_rounded(area, frame, radius).map(|region| {
             region.map(|region| {
-                let mut pixels = Vec::with_capacity(region.width as usize * region.height as usize * 4);
+                let mut pixels =
+                    Vec::with_capacity(region.width as usize * region.height as usize * 4);
                 for y in region.y..region.bottom() {
                     let start = (y - area.y) as usize * stride + (region.x - area.x) as usize * 4;
                     pixels.extend_from_slice(&raw[start..start + region.width as usize * 4]);
@@ -117,7 +135,11 @@ impl ShadowBands {
 
     #[cfg(test)]
     fn stored_bytes(&self) -> usize {
-        self.strips.iter().flatten().map(|strip| strip.pixels.len()).sum()
+        self.strips
+            .iter()
+            .flatten()
+            .map(|strip| strip.pixels.len())
+            .sum()
     }
 }
 
@@ -139,20 +161,26 @@ pub fn visible_damage_regions(
 /// Existing damage geometry, extended only for the small rounded-corner notches.
 #[must_use]
 pub fn visible_motion_damage_regions_rounded(
-    area: Rect, frame: Rect, radius: u32,
-    old: Option<&RootRubber>, new: Option<&RootRubber>,
+    area: Rect,
+    frame: Rect,
+    radius: u32,
+    old: Option<&RootRubber>,
+    new: Option<&RootRubber>,
 ) -> [Option<Rect>; 4] {
     if radius == 0 {
-        return visible_motion_damage_regions(area,frame,old,new);
+        return visible_motion_damage_regions(area, frame, old, new);
     }
     // The old two-edge optimization assumes a rectangular shadow, so applying it
     // to the newly exposed corner could miss damage after the selection shrinks.
     // Keep the conservative damage bound for the small curved region.
-    let changed = damage_region(area,old,new);
-    let mut result = [None,None,None,None];
+    let changed = damage_region(area, old, new);
+    let mut result = [None, None, None, None];
     if let Some(changed) = changed {
-        for (i, region) in visible_shadow_regions_rounded(area,frame,radius).into_iter().enumerate() {
-            result[i] = region.and_then(|r| intersect(r,changed));
+        for (i, region) in visible_shadow_regions_rounded(area, frame, radius)
+            .into_iter()
+            .enumerate()
+        {
+            result[i] = region.and_then(|r| intersect(r, changed));
         }
     }
     result
@@ -183,10 +211,14 @@ pub fn visible_motion_damage_regions(
             let bottom = previous_rect.bottom().max(current_rect.bottom());
             let width_changed = previous.width != current.width;
             let height_changed = previous.height != current.height;
-            let x_edge = previous_rect.right().min(current_rect.right())
+            let x_edge = previous_rect
+                .right()
+                .min(current_rect.right())
                 .saturating_sub(ROOT_RUBBER_BORDER_PX)
                 .max(previous.x);
-            let y_edge = previous_rect.bottom().min(current_rect.bottom())
+            let y_edge = previous_rect
+                .bottom()
+                .min(current_rect.bottom())
                 .saturating_sub(ROOT_RUBBER_BORDER_PX)
                 .max(previous.y);
             // The vertical edge also covers the bottom-right corner; the horizontal edge stops
@@ -204,8 +236,8 @@ pub fn visible_motion_damage_regions(
                     Rect::new(
                         previous.x,
                         y_edge,
-                        (if width_changed { x_edge } else { right })
-                            .saturating_sub(previous.x) as u32,
+                        (if width_changed { x_edge } else { right }).saturating_sub(previous.x)
+                            as u32,
                         bottom.saturating_sub(y_edge) as u32,
                     )
                 }),
@@ -325,11 +357,17 @@ pub fn compose_visible_region_into(
             && region.bottom() <= strip.region.bottom()
     }) {
         let stride = strip.region.width as usize * 4;
-        compose_pixels_into(region, frame, focused, rubber, |x, y| {
-            let at = (y - strip.region.y) as usize * stride
-                + (x - strip.region.x) as usize * 4;
-            [strip.pixels[at], strip.pixels[at + 1], strip.pixels[at + 2]]
-        }, out);
+        compose_pixels_into(
+            region,
+            frame,
+            focused,
+            rubber,
+            |x, y| {
+                let at = (y - strip.region.y) as usize * stride + (x - strip.region.x) as usize * 4;
+                [strip.pixels[at], strip.pixels[at + 1], strip.pixels[at + 2]]
+            },
+            out,
+        );
     } else {
         // Preserve the original lookup for any future caller that supplies a region spanning
         // multiple strips; the current WM never takes this fallback.
@@ -414,7 +452,8 @@ mod tests {
         for region in visible_shadow_regions(area, FRAME).into_iter().flatten() {
             for y in region.y..region.bottom() {
                 for x in region.x..region.right() {
-                    let at = ((y - area.y) as usize * area.width as usize + (x - area.x) as usize) * 4;
+                    let at =
+                        ((y - area.y) as usize * area.width as usize + (x - area.x) as usize) * 4;
                     assert_eq!(bands.pixel(x, y), [full[at], full[at + 1], full[at + 2]]);
                 }
             }
@@ -429,12 +468,16 @@ mod tests {
         let cases = [
             (None, None),
             (None, Some(rubber(240, 200, 30, 20))),
-            (Some(rubber(290, 230, 100, 100)), Some(rubber(105, 115, 300, 160))),
+            (
+                Some(rubber(290, 230, 100, 100)),
+                Some(rubber(105, 115, 300, 160)),
+            ),
             (Some(rubber(100, 150, 120, 100)), None),
         ];
         for (old, new) in cases {
             for region in visible_damage_regions(area, FRAME, old.as_ref(), new.as_ref())
-                .into_iter().flatten()
+                .into_iter()
+                .flatten()
             {
                 for focused in [false, true] {
                     assert_eq!(
@@ -478,7 +521,10 @@ mod tests {
                 reusable,
                 compose_region(&raw, area, region, FRAME, focused, overlay.as_ref()),
             );
-            assert_eq!(reusable.len(), region.width as usize * region.height as usize * 4);
+            assert_eq!(
+                reusable.len(),
+                region.width as usize * region.height as usize * 4
+            );
         }
         compose_visible_region_into(
             &compact,
@@ -488,7 +534,10 @@ mod tests {
             None,
             &mut reusable,
         );
-        assert!(reusable.is_empty(), "no stale bytes after a zero-sized update");
+        assert!(
+            reusable.is_empty(),
+            "no stale bytes after a zero-sized update"
+        );
     }
 
     #[test]
@@ -496,7 +545,11 @@ mod tests {
         let area = shadow_rect(FRAME);
         let all = rubber(area.x, area.y, area.width, area.height);
         let regions = visible_damage_regions(area, FRAME, None, Some(&all));
-        let affected: u64 = regions.iter().flatten().map(|r| u64::from(r.width) * u64::from(r.height)).sum();
+        let affected: u64 = regions
+            .iter()
+            .flatten()
+            .map(|r| u64::from(r.width) * u64::from(r.height))
+            .sum();
         assert!(affected > 0);
         assert!(affected * 4 < u64::from(area.width) * u64::from(area.height));
         for region in regions.into_iter().flatten() {
@@ -520,16 +573,24 @@ mod tests {
                             let before = rubber(origin_x, origin_y, old_width, old_height);
                             let after = rubber(origin_x, origin_y, new_width, new_height);
                             let dirty = visible_motion_damage_regions(
-                                area, frame, Some(&before), Some(&after),
+                                area,
+                                frame,
+                                Some(&before),
+                                Some(&after),
                             );
-                            for visible in visible_shadow_regions(area, frame).into_iter().flatten() {
+                            for visible in visible_shadow_regions(area, frame).into_iter().flatten()
+                            {
                                 for y in visible.y..visible.bottom() {
                                     for x in visible.x..visible.right() {
-                                        if rubber_coverage(&before, x, y) != rubber_coverage(&after, x, y) {
+                                        if rubber_coverage(&before, x, y)
+                                            != rubber_coverage(&after, x, y)
+                                        {
                                             assert!(
                                                 dirty.iter().flatten().any(|rect| {
-                                                    x >= rect.x && x < rect.right()
-                                                        && y >= rect.y && y < rect.bottom()
+                                                    x >= rect.x
+                                                        && x < rect.right()
+                                                        && y >= rect.y
+                                                        && y < rect.bottom()
                                                 }),
                                                 "uncovered change at ({x}, {y}), old={old_width}x{old_height}, new={new_width}x{new_height}",
                                             );
@@ -549,7 +610,10 @@ mod tests {
         let area = shadow_rect(FRAME);
         let first = rubber(200, 200, 55, 55);
         let moved = rubber(201, 200, 55, 55);
-        let recoloured = RootRubber { fill: [1, 2, 3, 4], ..first };
+        let recoloured = RootRubber {
+            fill: [1, 2, 3, 4],
+            ..first
+        };
         for next in [moved, recoloured] {
             let old = visible_damage_regions(area, FRAME, Some(&first), Some(&next));
             let new = visible_motion_damage_regions(area, FRAME, Some(&first), Some(&next));
@@ -565,7 +629,11 @@ mod tests {
         let old = visible_damage_regions(area, FRAME, Some(&start), Some(&end));
         let optimized = visible_motion_damage_regions(area, FRAME, Some(&start), Some(&end));
         let pixels = |regions: &[Option<Rect>]| -> u64 {
-            regions.iter().flatten().map(|r| u64::from(r.width) * u64::from(r.height)).sum()
+            regions
+                .iter()
+                .flatten()
+                .map(|r| u64::from(r.width) * u64::from(r.height))
+                .sum()
         };
         assert!(pixels(&optimized) < pixels(&old));
     }

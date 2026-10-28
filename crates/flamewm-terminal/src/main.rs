@@ -134,9 +134,17 @@ fn run() -> Result<(), String> {
         if let Ok(exe) = std::env::current_exe() {
             let mut args = vec!["--flamefetch-shell".to_owned(), launch.program];
             args.extend(launch.args);
-            Launch { program: exe.to_string_lossy().into_owned(), args, cwd: launch.cwd }
-        } else { launch }
-    } else { launch };
+            Launch {
+                program: exe.to_string_lossy().into_owned(),
+                args,
+                cwd: launch.cwd,
+            }
+        } else {
+            launch
+        }
+    } else {
+        launch
+    };
     app.open_tab(launch)?;
     let backdrop = snapshot
         .as_ref()
