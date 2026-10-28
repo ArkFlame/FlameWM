@@ -661,6 +661,27 @@ def print_markdown(report):
             print(f"| {case} | {role} | {stats['median']:.1f} ({stats['min']:.1f}-{stats['max']:.1f}) |")
 
 
+# Mirrors scripts/package: these names are hard links to the one multi-call flamewm-apps.
+MULTI_CALL_APPS = ("flamewm", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
+                   "flamewm-explorer", "flamewm-terminal", "flamewm-task-manager")
+
+
+def stage_packaged(bin_dir):
+    """A bin dir laid out like the installed package, built from hard links into `bin_dir`."""
+    source = Path(bin_dir)
+    multi_call = source / "flamewm-apps"
+    if not multi_call.is_file():
+        raise SystemExit(f"error: --packaged needs {multi_call}; build flamewm-apps first")
+    staged = source / "packaged"
+    shutil.rmtree(staged, ignore_errors=True)
+    staged.mkdir()
+    for entry in source.iterdir():
+        if entry.is_file() and os.access(entry, os.X_OK) and entry.name.startswith("flamewm"):
+            target = multi_call if entry.name in MULTI_CALL_APPS else entry
+            os.link(target, staged / entry.name)
+    return str(staged)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("command", nargs="?", default="test", choices=("test", "bench", "idle-memory"))
@@ -674,6 +695,8 @@ def main(argv=None):
                         help="bench: move windows live instead of dragging an outline")
     parser.add_argument("--solid-wallpaper", action="store_true",
                         help="bench, idle-memory: start with a black solid wallpaper")
+    parser.add_argument("--packaged", action="store_true",
+                        help="run the binaries laid out like the package (multi-call hard links)")
     parser.add_argument("--suite", action="store_true",
                         help="idle-memory: also open " + ", ".join(SUITE_APPS) + " (Idle Suite)")
     parser.add_argument("--detail", action="store_true",
@@ -684,6 +707,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.bin_dir:
         args.bin_dir = str(Path(args.bin_dir).resolve())
+    if args.packaged:
+        args.bin_dir = stage_packaged(args.bin_dir or ".target/release")
     if args.out:
         args.out.mkdir(parents=True, exist_ok=True)
     missing = [tool for tool in ("Xorg", "xrandr", "xdotool", "import", "xterm", "dbus-daemon", "busctl")
