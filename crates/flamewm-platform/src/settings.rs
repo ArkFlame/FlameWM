@@ -189,6 +189,7 @@ pub struct ProductSettings {
     pub desktop_entry_scale_percent: u16,
     pub window_snap_preview_fill_opacity: u8,
     pub snap_preview_enabled: bool,
+    pub window_margin: u16,
     /// `false` (XP style): move/resize shows an outline and applies the geometry on release.
     pub show_content_while_dragging: bool,
     /// `windowShadows`: Win7-style frame shadows behind floating windows.
@@ -314,6 +315,7 @@ impl Default for ProductSettings {
             desktop_entry_scale_percent: 100,
             window_snap_preview_fill_opacity: 20,
             snap_preview_enabled: true,
+            window_margin: 2,
             show_content_while_dragging: false,
             window_shadows: true,
             titlebars: true,
@@ -495,6 +497,9 @@ impl ProductSettings {
         }
         if !(34..=72).contains(&self.taskbar_height) {
             return invalid("taskbarHeight must be 34..72");
+        }
+        if self.window_margin > 32 {
+            return invalid("windowMargin must be 0..32");
         }
         if self.taskbar_floating_margin > 32 {
             return invalid("taskbarFloatingMargin must be 0..32");
@@ -1087,6 +1092,7 @@ stable_settings! {
     (false, time, "autoTimeZone", auto_time_zone),
     (false, desktop, "wallpaperFit", wallpaper_fit),
     (false, windows, "snapPreviewEnabled", snap_preview_enabled),
+    (false, windows, "windowMargin", window_margin),
     (false, windows, "showContentWhileDragging", show_content_while_dragging),
     (true, windows, "windowShadows", window_shadows),
     (false, windows, "titlebars", titlebars),
@@ -1988,6 +1994,18 @@ mod tests {
         let squared = load("revision=2\ndecoration=squared\n").expect("squared");
         assert_eq!(squared.decoration, "squared");
         assert!(load("revision=2\ndecoration=neon\n").is_err());
+    }
+
+    #[test]
+    fn window_margin_defaults_to_two_and_rejects_values_past_thirty_two() {
+        assert_eq!(load("revision=2\n").expect("unset").window_margin, 2);
+        assert_eq!(
+            load("revision=2\nwindowMargin=0\n")
+                .expect("zero")
+                .window_margin,
+            0
+        );
+        assert!(load("revision=2\nwindowMargin=33\n").is_err());
     }
 
     #[test]
