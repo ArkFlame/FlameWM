@@ -30,6 +30,9 @@ const NOTIFICATION_ARTIFACT: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-notification.rwr"));
 const NOTIFICATION_WIDTH: u32 = 360;
 const NOTIFICATION_HEIGHT: u32 = 148;
+/// Once the startup burst (icon loads, backdrop decode, first paints) has settled, its freed
+/// heap is handed back; later churn is trimmed on the minute clock tick.
+const STARTUP_HEAP_TRIM_DELAY: Duration = Duration::from_secs(10);
 
 struct NotificationHost {
     provider: flamewm_integrations_linux::notifications::NotificationProvider,
@@ -321,6 +324,13 @@ fn execute() -> Result<(), String> {
             repeat_due.store(true, Ordering::Release);
         })
         .map_err(|error| format!("register clock timer: {error}"))?;
+    reactor
+        .register_timer(
+            STARTUP_HEAP_TRIM_DELAY,
+            false,
+            flamewm_ui_x11::release_free_heap,
+        )
+        .map_err(|error| format!("register startup heap trim: {error}"))?;
 
     let state = Rc::new(RefCell::new(ShellLoop::new(
         flamewm_shell::ShellRuntime::new(snapshot),

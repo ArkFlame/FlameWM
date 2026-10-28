@@ -365,6 +365,23 @@ pub fn return_large_frees_to_system() {
     }
 }
 
+/// Hands free heap pages back to the system. Freed chunks between live ones are not returned by
+/// the trim threshold, so after its startup burst the shell kept about 1.4 MB of freed heap
+/// resident. Call it from an existing idle point, never from a hot path.
+pub fn release_free_heap() {
+    #[cfg(target_env = "gnu")]
+    {
+        unsafe extern "C" {
+            fn malloc_trim(pad: usize) -> c_int;
+        }
+        // SAFETY: glibc's `malloc_trim` takes the arena locks and only releases free pages;
+        // live allocations are unaffected.
+        unsafe {
+            malloc_trim(0);
+        }
+    }
+}
+
 /// Install the process-lifetime IO-error handler exactly once. Call after
 /// each successful XOpenDisplay; the latch is process-wide by design.
 pub fn install_x_io_error_handler() {
