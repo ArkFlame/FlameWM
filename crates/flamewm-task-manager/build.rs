@@ -6,7 +6,12 @@ use std::{
 fn main() {
     let base = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest"));
     let src = base.join("../../ui/task-manager");
-    for file in ["task-manager.html", "task-manager.css"] {
+    for file in [
+        "task-manager.html",
+        "task-manager.css",
+        "graph.ppm",
+        "../shared/menu.css",
+    ] {
         println!("cargo:rerun-if-changed={}", src.join(file).display());
     }
     let result = compile_file(
