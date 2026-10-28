@@ -867,4 +867,29 @@ mod tests {
             "unavailable retry callback must return without calling Mainloop::lock from the callback thread"
         );
     }
+
+    /// Needs a running PulseAudio-compatible server (PulseAudio or `pipewire-pulse`):
+    /// `cargo test -p flamewm-integrations-linux --features pulse-audio -- --ignored live_server`.
+    #[test]
+    #[ignore = "needs a live PulseAudio-compatible server"]
+    fn live_server_reports_a_sink_and_volume() {
+        let adapter = PulseAdapter::connect(|_| {}).expect("connect to the live server");
+        let mut snapshot = adapter.snapshot();
+        for _ in 0..50 {
+            if !snapshot.sink_name.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            snapshot = adapter.snapshot();
+        }
+        eprintln!(
+            "LIVE_PULSE sink={} volume={} muted={} endpoints={} streams={}",
+            snapshot.sink_name,
+            snapshot.volume_percent,
+            snapshot.muted,
+            snapshot.endpoints.len(),
+            snapshot.streams.len()
+        );
+        assert!(!snapshot.sink_name.is_empty(), "no default sink reported");
+    }
 }
