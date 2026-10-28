@@ -24,76 +24,31 @@ jobs:
           fi
           echo "version=${version}" >>"$GITHUB_OUTPUT"
 
-  arch:
+  dist:
     needs: version
-    runs-on: ubuntu-latest
-    container: archlinux:base-devel
-    timeout-minutes: 120
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Install packaging tools
-        run: |
-          sed -i '/^NoExtract/d' /etc/pacman.conf
-          pacman -Syu --noconfirm --needed git namcap
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Build the Arch package
-        run: |
-          useradd -m builder
-          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
-          chown -R builder: "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          sudo -u builder -H ./scripts/build-arch --syncdeps --noconfirm
-          mkdir -p dist
-          find .target/arch/packages -name 'flamewm-git-[0-9]*.pkg.tar.zst' ! -name '*-debug-*' -exec cp {} dist/ \;
-          test -n "$(ls dist)"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: arch-package
-          path: dist/
-
-  deb:
-    needs: version
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential pkg-config python3 dpkg-dev \
-            libdbus-1-dev libpulse-dev libx11-dev libxi-dev libxft-dev libxkbcommon-dev \
-            libinput-dev libgbm-dev libdrm-dev libudev-dev xwayland
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.88.0
-      - uses: Swatinem/rust-cache@v2
-      - name: Build the Debian package
-        run: ./scripts/build-deb
-      - uses: actions/upload-artifact@v4
-        with:
-          name: deb-package
-          path: .target/dist/*.deb
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/dist.yml
+    with:
+      push_cpak: true
 
   release:
-    needs: [version, arch, deb]
+    needs: [version, dist]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: flamewm-dist
           path: dist
-          merge-multiple: true
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd dist
-          sha256sum -- * >SHA256SUMS
+          sha256sum --check SHA256SUMS
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --title "FlameWM ${{ needs.version.outputs.version }}" --generate-notes -- *
 
