@@ -237,16 +237,6 @@ pub fn blur_radius_px(opacity_percent: u8, blur_percent: u8) -> f32 {
     f32::from(blur_percent.min(100)) / 100.0 * MAX_BLUR_RADIUS_PX
 }
 
-/// Keep ordinary downsampled surface blurs reusable, but never retain a
-/// full-resolution RGBA-f32 desktop image (tens of MiB) after the operation.
-const BLUR_SCRATCH_RETAIN_BUDGET_BYTES: usize = 4 * 1024 * 1024;
-
-thread_local! {
-    /// Blur work buffers shared by every snapshot blur on the display thread.
-    static BLUR_SCRATCH: std::cell::RefCell<flamewm_image_core::blur::BlurScratch> =
-        std::cell::RefCell::default();
-}
-
 /// Blur runs on a snapshot shrunk by this factor once the radius is large: the blur cost falls with
 /// the pixel count, and the soft result is upscaled bilinearly. Below twice the factor the blur is
 /// already cheap, so it stays at full resolution.
@@ -289,24 +279,7 @@ fn opaque_argb_words(rgba: &[u8]) -> Vec<u32> {
 
 /// Gaussian blur through the shared scratch buffers. A failure keeps the input pixels.
 pub(crate) fn blur_in_place_slice(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
-    if crate::accel::gpu_blur_rgba(pixels, width, height, radius) {
-        return;
-    }
-    let blurred = BLUR_SCRATCH.with(|scratch| {
-        let mut scratch = scratch.borrow_mut();
-        let result = flamewm_image_core::blur::gaussian_blur_rgba_with(
-            &mut scratch,
-            pixels,
-            width,
-            height,
-            radius,
-        );
-        scratch.release_if_over_budget(BLUR_SCRATCH_RETAIN_BUDGET_BYTES);
-        result
-    });
-    if let Err(error) = blurred {
-        eprintln!("flamewm-render-x11: backdrop blur skipped: {error:?}");
-    }
+    crate::accel::blur_rgba(pixels, width, height, radius);
 }
 
 /// Averages `factor` by `factor` blocks (edge blocks average what is inside the image).
