@@ -26,6 +26,7 @@ Usage:
   python3 -I tools/flamewm_visual_tests.py --layout both --out .target/visual
   python3 -I tools/flamewm_visual_tests.py --bin-dir .target/release --layout dual
   python3 -I tools/flamewm_visual_tests.py --bin-dir .target/release bench
+  python3 -I tools/flamewm_visual_tests.py --bin-dir .target/release --layout dual idle-memory
 """
 
 import argparse
@@ -463,6 +464,92 @@ def run_bench(args):
         session.stop()
 
 
+def run_idle_memory(args):
+    layout = "single" if args.layout == "single" else "dual"
+    session = Session(layout, args.bin_dir, args.out, args.display)
+    try:
+        session.start()
+        time.sleep(args.settle)
+        if args.out:
+            session.capture("idle-memory")
+        report = {"layout": layout, "settle_s": args.settle, "processes": session_memory(session.display_name)}
+        print(json.dumps(report, indent=2))
+        print_memory_markdown(report["processes"])
+    finally:
+        session.stop()
+
+
+MEMORY_PARTS = ("binary", "libs", "heap", "stacks", "fonts", "shm", "other")
+
+
+def mapping_part(path, exe, guarded):
+    if path == exe:
+        return "binary"
+    if path == "[heap]":
+        return "heap"
+    if path.startswith("[stack"):
+        return "stacks"
+    if path.startswith("/dev/shm") or path.startswith("/SYSV") or path.startswith("/memfd:"):
+        return "shm"
+    if "/fonts/" in path or "fontconfig" in path or path.endswith((".ttf", ".otf", ".ttc", ".pcf.gz")):
+        return "fonts"
+    if ".so" in path:
+        return "libs"
+    if not path:
+        return "stacks" if guarded else "heap"
+    return "other"
+
+
+def process_memory(entry):
+    """PSS/RSS of one process, split by the kind of mapping that holds it (KiB)."""
+    exe = os.readlink(entry / "exe")
+    parts = dict.fromkeys(MEMORY_PARTS, 0)
+    rss = 0
+    path, part, previous_end, previous_guard = "", "other", None, False
+    for line in (entry / "smaps").read_text().splitlines():
+        head = line.split(maxsplit=5)
+        if "-" in head[0] and len(head) >= 5 and not head[0].endswith(":"):
+            start, end = (int(value, 16) for value in head[0].split("-"))
+            path = head[5] if len(head) > 5 else ""
+            guarded = previous_guard and previous_end == start and head[1] == "rw-p"
+            part = mapping_part(path, exe, guarded)
+            previous_end, previous_guard = end, head[1] == "---p" and not path
+        elif head[0] == "Pss:":
+            parts[part] += int(head[1])
+        elif head[0] == "Rss:":
+            rss += int(head[1])
+    status = dict(line.split(":", 1) for line in (entry / "status").read_text().splitlines() if ":" in line)
+    return {"pss": sum(parts.values()), "rss": rss, "threads": int(status["Threads"]), "parts": parts}
+
+
+def session_memory(display_name):
+    """Per-process memory of every flamewm* process on `display_name`, keyed by `name pid`."""
+    processes = {}
+    for entry in sorted(Path("/proc").iterdir(), key=lambda item: item.name):
+        if not entry.name.isdigit():
+            continue
+        try:
+            name = (entry / "comm").read_text().strip()
+            environ = (entry / "environ").read_bytes().split(b"\0")
+            if not name.startswith("flamewm") or f"DISPLAY={display_name}".encode() not in environ:
+                continue
+            processes[f"{name} {entry.name}"] = process_memory(entry)
+        except OSError:
+            continue
+    return processes
+
+
+def print_memory_markdown(processes):
+    print("\n| Process | PSS | RSS | Threads | " + " | ".join(MEMORY_PARTS) + " |")
+    print("| --- " * (4 + len(MEMORY_PARTS)) + "|")
+    for name, data in processes.items():
+        parts = " | ".join(f"{data['parts'][part]}" for part in MEMORY_PARTS)
+        print(f"| {name} | {data['pss']} | {data['rss']} | {data['threads']} | {parts} |")
+    total_pss = sum(data["pss"] for data in processes.values())
+    total_rss = sum(data["rss"] for data in processes.values())
+    print(f"| total | {total_pss} | {total_rss} | | |\n\nKiB; total PSS {total_pss / 1024:.2f} MiB")
+
+
 def session_pss(display_name):
     """PSS in KiB of every flamewm* process on `display_name`, by executable name."""
     pss = {}
@@ -505,7 +592,7 @@ def print_markdown(report):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("command", nargs="?", default="test", choices=("test", "bench"))
+    parser.add_argument("command", nargs="?", default="test", choices=("test", "bench", "idle-memory"))
     parser.add_argument("--layout", default="both", choices=("single", "dual", "both"))
     parser.add_argument("--bin-dir", help="directory of FlameWM binaries put first on PATH")
     parser.add_argument("--out", type=Path, help="directory for screenshots and logs")
@@ -514,6 +601,7 @@ def main(argv=None):
     parser.add_argument("--repeat", type=int, default=3, help="bench: repeats per case")
     parser.add_argument("--contents-while-dragging", action="store_true",
                         help="bench: move windows live instead of dragging an outline")
+    parser.add_argument("--settle", type=float, default=30.0, help="idle-memory: seconds idle before sampling")
     args = parser.parse_args(argv)
     if args.bin_dir:
         args.bin_dir = str(Path(args.bin_dir).resolve())
@@ -526,6 +614,9 @@ def main(argv=None):
         return 2
     if args.command == "bench":
         run_bench(args)
+        return 0
+    if args.command == "idle-memory":
+        run_idle_memory(args)
         return 0
     results = Results()
     for layout in (("single", "dual") if args.layout == "both" else (args.layout,)):

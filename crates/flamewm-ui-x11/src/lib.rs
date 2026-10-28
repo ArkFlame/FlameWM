@@ -20,8 +20,8 @@ pub use event_source::{
 };
 pub use flamewm_render_x11::{
     DockEdge, GeometryTrace, RawPress, RawPressWatch, WindowGeometry, WindowGeometrySlot,
-    X11WindowIdentity, apply_cursor_shadow, apply_cursor_theme, safe_file_name, valid_bus_name,
-    valid_object_path,
+    X11WindowIdentity, apply_cursor_shadow, apply_cursor_theme, release_free_heap, safe_file_name,
+    valid_bus_name, valid_object_path,
 };
 pub use input::{
     SurfaceEvent, UiInputEvent, WHEEL_SCROLL_STEP, pointer_button_from_raw, wheel_scroll_delta,

@@ -80,14 +80,20 @@ impl BlurScratch {
             self.band.capacity().saturating_mul(float_bytes),
             self.taps.capacity().saturating_mul(tap_bytes),
         ];
-        let mut retained = sizes.iter().fold(0usize, |sum, bytes| sum.saturating_add(*bytes));
+        let mut retained = sizes
+            .iter()
+            .fold(0usize, |sum, bytes| sum.saturating_add(*bytes));
         // Retire the largest allocation first, retaining useful smaller scratch
         // (row/band buffers and taps) whenever it fits the budget. This avoids
         // reallocation on the next small blur after a one-off oversized image.
         while retained > max_bytes {
             let Some((index, &bytes)) = sizes.iter().enumerate().max_by_key(|(_, size)| **size)
-            else { break };
-            if bytes == 0 { break; }
+            else {
+                break;
+            };
+            if bytes == 0 {
+                break;
+            }
             match index {
                 0 => self.work = Vec::new(),
                 1 => self.down = Vec::new(),

@@ -10,8 +10,6 @@ One package ships two sessions: **FlameWM** on X11, the default, and **FlameWM (
 | Explorer and Terminal | Start menu |
 | --- | --- |
 | ![Explorer and Terminal over a blurred wallpaper](assets/screenshots/desktop.webp) | ![Start menu over translucent windows](assets/screenshots/start-menu.webp) |
-| **Minimize** | **Two screens** |
-| ![Window minimizing into the taskbar](assets/screenshots/minimize.gif) | ![Wallpaper and a panel on each of two screens](assets/screenshots/two-screens.webp) |
 
 The screenshots in this table come from the headless test session (`tools/flamewm_visual_tests.py`) on Xorg's dummy driver.
 
