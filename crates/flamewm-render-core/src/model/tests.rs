@@ -431,6 +431,7 @@ mod ui_scale_tests {
 #[cfg(test)]
 mod image_replace_tests {
     use super::*;
+    use std::sync::Arc;
 
     fn image_doc() -> RuntimeDocument {
         fixture_document(
@@ -474,6 +475,21 @@ mod image_replace_tests {
         assert_eq!(entry.source, "b");
         assert_eq!(doc.image_revision_for_node(0), 2);
         assert_eq!(doc.document.assets[0].source, "old");
+    }
+
+    #[test]
+    fn equal_shared_replace_adopts_caller_buffer_without_bumping() {
+        let mut doc = image_doc();
+        let first = Arc::new(vec![1, 2, 3, 255]);
+        doc.replace_image_for_node_shared("icon", "a".to_string(), 1, 1, Arc::clone(&first))
+            .expect("first replace");
+        let second = Arc::new(vec![1, 2, 3, 255]);
+        doc.replace_image_for_node_shared("icon", "a".to_string(), 1, 1, Arc::clone(&second))
+            .expect("equal replace");
+        let entry = doc.node_image_override(0).expect("override stored");
+        assert!(Arc::ptr_eq(&entry.rgba8, &second));
+        assert_eq!(Arc::strong_count(&first), 1);
+        assert_eq!(doc.image_revision_for_node(0), 1);
     }
 
     #[test]
