@@ -55,7 +55,10 @@ fn main() {
         })
         .collect::<Vec<_>>()
         .join("\n  ");
-    let html = html.replace("<!--ITEMS-->", &items);
+    let html = html
+        .replace("<!--ITEMS-->", &items)
+        .replace("<!--WIDGETS-->", &widget_slots())
+        .replace("<!--WIDGET-PANELS-->", &widget_panels());
 
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     let staged_ui = out.join("desktop");
@@ -110,6 +113,156 @@ fn main() {
         .collect::<Vec<_>>();
     validate_compiled_desktop_nodes(&decoded_ids);
     fs::write(out.join("flamewm-desktop.rwr"), bytes).expect("write validated desktop UI");
+}
+
+const WIDGET_SLOTS: usize = 8;
+const WIDGET_LINES: usize = 6;
+const WIDGET_SPANS: usize = 6;
+const WIDGET_CONFIG_ROWS: usize = 16;
+const WIDGET_KINDS: [(&str, &str, &str); 5] = [
+    (
+        "clock",
+        "Time and date",
+        "Clock with weekday and date, side by side or stacked.",
+    ),
+    ("cpu", "CPU usage", "Processor load as a circular gauge."),
+    ("memory", "Memory usage", "RAM in use as a circular gauge."),
+    (
+        "media",
+        "Media player",
+        "Now playing, with previous, play and next.",
+    ),
+    (
+        "custom",
+        "Custom text",
+        "Your own text with %placeholders% and <color> tags.",
+    ),
+];
+
+fn aligned_line(id: &str, class: &str, content: &str) -> String {
+    format!(
+        "<div id=\"{id}\" class=\"widget-line {class}\"><div id=\"{id}-lead\" class=\"widget-spacer\"></div>{content}<div id=\"{id}-trail\" class=\"widget-spacer\"></div></div>"
+    )
+}
+
+fn widget_slots() -> String {
+    (1..=WIDGET_SLOTS)
+        .map(|n| {
+            let w = format!("widget-{n}");
+            let clock = format!(
+                "<div id=\"{w}-clock\" class=\"widget-clock\"><div id=\"{w}-clock-stack\" class=\"widget-clock-stack\">{}{}</div>{}</div>",
+                aligned_line(
+                    &format!("{w}-clock-time-line"),
+                    "",
+                    &format!("<div id=\"{w}-clock-time\" class=\"widget-clock-time\">&#8203;</div>")
+                ),
+                aligned_line(
+                    &format!("{w}-clock-date-line"),
+                    "",
+                    &format!("<div id=\"{w}-clock-date\" class=\"widget-clock-date\">&#8203;</div>")
+                ),
+                aligned_line(
+                    &format!("{w}-clock-row"),
+                    "widget-clock-row",
+                    &format!(
+                        "<div id=\"{w}-clock-row-time\" class=\"widget-clock-time\">&#8203;</div><div id=\"{w}-clock-row-date\" class=\"widget-clock-date widget-clock-row-date\">&#8203;</div>"
+                    )
+                ),
+            );
+            let gauge = format!(
+                "<div id=\"{w}-gauge\" class=\"widget-gauge\">\
+<div id=\"{w}-gauge-main\" class=\"widget-gauge-main\">\
+<div id=\"{w}-gauge-ring\" class=\"widget-gauge-ring\"><img id=\"{w}-gauge-image\" class=\"widget-gauge-image\" src=\"assets/breeze/folder.svg\">\
+<div id=\"{w}-gauge-center\" class=\"widget-gauge-center\"><div id=\"{w}-gauge-percent\" class=\"widget-gauge-percent\">&#8203;</div></div></div>\
+<div id=\"{w}-gauge-copy\" class=\"widget-gauge-copy\"><div id=\"{w}-gauge-title\" class=\"widget-gauge-title\">&#8203;</div>\
+<div id=\"{w}-gauge-value\" class=\"widget-gauge-value\">&#8203;</div><div id=\"{w}-gauge-detail\" class=\"widget-gauge-detail\">&#8203;</div></div>\
+</div><div id=\"{w}-gauge-caption\" class=\"widget-gauge-caption\">&#8203;</div></div>"
+            );
+            let media = format!(
+                "<div id=\"{w}-media\" class=\"widget-media\">\
+<div id=\"{w}-media-player\" class=\"widget-media-player\">&#8203;</div>\
+<div id=\"{w}-media-title\" class=\"widget-media-title\">&#8203;</div>\
+<div id=\"{w}-media-artist\" class=\"widget-media-artist\">&#8203;</div>\
+<div id=\"{w}-media-controls\" class=\"widget-media-controls\">\
+<button id=\"{w}-media-prev\" class=\"widget-media-button\" data-action=\"widget.{n}.media.prev\"><img src=\"assets/breeze/media-skip-backward.svg\"></button>\
+<button id=\"{w}-media-play\" class=\"widget-media-button\" data-action=\"widget.{n}.media.play\"><img id=\"{w}-media-play-icon\" src=\"assets/breeze/media-playback-start.svg\"><img id=\"{w}-media-pause-icon\" src=\"assets/breeze/media-playback-pause.svg\"></button>\
+<button id=\"{w}-media-next\" class=\"widget-media-button\" data-action=\"widget.{n}.media.next\"><img src=\"assets/breeze/media-skip-forward.svg\"></button>\
+</div></div>"
+            );
+            let lines = (1..=WIDGET_LINES)
+                .map(|l| {
+                    let spans = (1..=WIDGET_SPANS)
+                        .map(|s| {
+                            format!(
+                                "<div id=\"{w}-line-{l}-span-{s}\" class=\"widget-span\">&#8203;</div>"
+                            )
+                        })
+                        .collect::<String>();
+                    aligned_line(&format!("{w}-line-{l}"), "", &spans)
+                })
+                .collect::<String>();
+            let custom = format!(
+                "<div id=\"{w}-custom\" class=\"widget-custom\">{lines}</div><div id=\"{w}-editor\" class=\"widget-editor\">&#8203;</div>"
+            );
+            format!(
+                "<div id=\"{w}\" class=\"widget\" data-action=\"widget.{n}.move\" hidden>{clock}{gauge}{media}{custom}\
+<div id=\"{w}-resize\" class=\"widget-resize\" data-action=\"widget.{n}.resize\"></div></div>"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n  ")
+}
+
+fn widget_card_preview(kind: &str) -> String {
+    match kind {
+        "clock" => "<div class=\"widget-card-preview-clock\"><div id=\"widget-card-clock-time\" class=\"widget-card-big\">10:02</div><div id=\"widget-card-clock-date\" class=\"widget-card-small\">Wednesday, 29 June</div></div>".to_owned(),
+        "cpu" | "memory" => format!(
+            "<img id=\"widget-card-{kind}-image\" class=\"widget-card-ring\" src=\"assets/breeze/folder.svg\">"
+        ),
+        "media" => "<div class=\"widget-card-preview-media\"><div class=\"widget-card-small\">Now playing</div><div class=\"widget-card-medium\">Song title</div><div class=\"widget-card-icons\"><img src=\"assets/breeze/media-skip-backward.svg\"><img src=\"assets/breeze/media-playback-start.svg\"><img src=\"assets/breeze/media-skip-forward.svg\"></div></div>".to_owned(),
+        _ => "<div class=\"widget-card-preview-custom\"><div class=\"widget-card-markup\"><div class=\"widget-card-chip widget-card-chip-red\">Welcome,</div><div class=\"widget-card-chip widget-card-chip-blue\">%username%</div></div><div class=\"widget-card-small\">%date% %time%</div></div>".to_owned(),
+    }
+}
+
+fn widget_panels() -> String {
+    let cards = WIDGET_KINDS
+        .iter()
+        .map(|(kind, title, text)| {
+            let text = text.replace('<', "&lt;").replace('>', "&gt;");
+            format!(
+                "<div id=\"widget-card-{kind}\" class=\"widget-card\"><div class=\"widget-card-preview\">{}</div>\
+<div class=\"widget-card-copy\"><div class=\"widget-card-title\">{title}</div><div class=\"widget-card-text\">{text}</div></div>\
+<button id=\"widget-card-{kind}-add\" class=\"widget-card-add\" data-action=\"widget.gallery.add.{kind}\">Add</button></div>",
+                widget_card_preview(kind)
+            )
+        })
+        .collect::<String>();
+    let rows = (0..WIDGET_CONFIG_ROWS)
+        .map(|r| {
+            format!(
+                "<div id=\"widget-config-row-{r}\" class=\"widget-config-row\"><div id=\"widget-config-row-{r}-label\" class=\"widget-config-label\">&#8203;</div>\
+<div id=\"widget-config-row-{r}-swatch\" class=\"widget-config-swatch\"></div>\
+<button id=\"widget-config-row-{r}-down\" class=\"widget-config-step\" data-action=\"widget.config.{r}.down\">&lt;</button>\
+<div id=\"widget-config-row-{r}-value\" class=\"widget-config-value\">&#8203;</div>\
+<button id=\"widget-config-row-{r}-up\" class=\"widget-config-step\" data-action=\"widget.config.{r}.up\">&gt;</button></div>"
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<section id=\"widget-menu\" class=\"sticky-menu context-menu\" data-action=\"widget.menu.surface\">\
+<button id=\"widget-row-configure\" class=\"menu-row\" data-action=\"widget.menu.configure\"><img src=\"assets/breeze/configure.svg\"><span>Configure Widget</span></button>\
+<button id=\"widget-row-edit\" class=\"menu-row\" data-action=\"widget.menu.edit\"><img src=\"assets/breeze/edit-rename.svg\"><span>Edit Text</span></button>\
+<button id=\"widget-row-lock\" class=\"menu-row\" data-action=\"widget.menu.lock\"><img src=\"assets/breeze/system-lock-screen.svg\"><span id=\"widget-row-lock-label\">Lock Position</span></button>\
+<button id=\"widget-row-gallery\" class=\"menu-row\" data-action=\"widget.menu.gallery\"><img src=\"assets/breeze/list-add.svg\"><span>Add Widgets</span></button>\
+<button id=\"widget-row-remove\" class=\"menu-row\" data-action=\"widget.menu.remove\"><img src=\"assets/breeze/edit-delete.svg\"><span>Remove Widget</span></button>\
+</section>\n  \
+<section id=\"widget-gallery\" class=\"widget-gallery context-menu\" data-action=\"widget.gallery.surface\">\
+<div class=\"widget-panel-header\"><div class=\"widget-panel-heading\"><div class=\"widget-panel-title\">Widgets</div><div id=\"widget-gallery-count\" class=\"widget-panel-subtitle\">&#8203;</div></div>\
+<button id=\"widget-gallery-close\" class=\"widget-panel-close\" data-action=\"widget.gallery.close\">Done</button></div>{cards}</section>\n  \
+<section id=\"widget-config\" class=\"widget-config context-menu\" data-action=\"widget.config.surface\">\
+<div class=\"widget-panel-header\"><div class=\"widget-panel-heading\"><div id=\"widget-config-title\" class=\"widget-panel-title\">&#8203;</div><div class=\"widget-panel-subtitle\">Changes apply immediately</div></div>\
+<button id=\"widget-config-close\" class=\"widget-panel-close\" data-action=\"widget.config.close\">Done</button></div>{rows}</section>"
+    )
 }
 
 fn validate_compiled_desktop_nodes(ids: &[&str]) {
