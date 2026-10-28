@@ -712,6 +712,7 @@ fn refresh_settings_for_open(state: &std::rc::Rc<std::cell::RefCell<HostState>>)
                 cursor_theme,
                 ..
             } = &mut *host;
+            flamewm_ui_x11::apply_render_acceleration(&snapshot.settings);
             cursor_theme.sync_snapshot(&snapshot.settings);
         }
         Err(error) => eprintln!(

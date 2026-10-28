@@ -263,6 +263,7 @@ impl ShellLoop {
             return;
         }
         self.settings_revision = snapshot.revision;
+        flamewm_ui_x11::apply_render_acceleration(&snapshot);
         self.cursor_theme.sync_snapshot(&snapshot);
         self.weather
             .apply_settings(flamewm_shell_core::weather::WeatherSettings::from_snapshot(
