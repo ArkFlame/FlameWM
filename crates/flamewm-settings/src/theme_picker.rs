@@ -301,11 +301,20 @@ pub fn theme_data_dirs(
     xdg_data_home: Option<&str>,
     xdg_data_dirs: Option<&str>,
 ) -> Vec<PathBuf> {
-    icons::xdg_data_search_dirs(
+    let mut roots = icons::xdg_data_search_dirs(
         home.map(OsStr::new),
         xdg_data_home.map(OsStr::new),
         xdg_data_dirs,
-    )
+    );
+    // XDG_DATA_DIRS may be replaced by a sandbox/session; packaged themes in the
+    // standard system locations must remain visible in the installed-theme picker.
+    for system in ["/usr/local/share", "/usr/share"] {
+        let system = PathBuf::from(system);
+        if !roots.contains(&system) {
+            roots.push(system);
+        }
+    }
+    roots
 }
 
 fn env_var(name: &str) -> Option<String> {

@@ -23,7 +23,7 @@ const MAX_START_ICON_BYTES: u64 = 8 * 1024 * 1024;
 /// Neutral grey until a settings snapshot supplies `accent`.
 const DEFAULT_ACCENT: u32 = 0x007f_878e;
 const DEFAULT_ANIMATION_SPEED: i64 = 100;
-const DEFAULT_START_ANIMATION: &str = "slide";
+const DEFAULT_START_ANIMATION: &str = "none";
 const DEFAULT_SURFACE_OPACITY: u8 = 50;
 const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
 const DEFAULT_ACCENT_OPACITY: u8 = 100;

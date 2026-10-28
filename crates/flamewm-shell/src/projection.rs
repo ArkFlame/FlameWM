@@ -913,6 +913,7 @@ pub fn project_context_menu(
         "context-workspace-insert-after",
         "context-workspace-remove",
         "context-taskbar-settings",
+        "context-taskbar-task-manager",
     ] {
         document.visible(id, false)?;
     }

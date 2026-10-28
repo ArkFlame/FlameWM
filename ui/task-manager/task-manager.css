@@ -4,14 +4,10 @@ html { width:100%; height:100%; }
 body { display:flex; flex-direction:column; width:100%; height:100%; margin:0; overflow:hidden; border:1px solid var(--border); font-size:12px; color:var(--text); }
 button { background:transparent; color:var(--text); cursor:default; border-width:0; padding:0; font-size:12px; }
 .header { width:100%; height:50px; flex-grow:0; display:flex; flex-direction:row; align-items:center; padding:0 16px; gap:10px; }
-.brand-mark { width:14px; height:14px; flex-grow:0; border-radius:4px; background:var(--accent); }
-.brand { font-size:14px; font-weight:600; }
 .summary { color:var(--muted); font-size:11px; margin-left:6px; white-space:nowrap; overflow:hidden; }
-.header-spacer { flex-grow:1; min-width:0; }
+.header-spacer { flex-grow:1; }
 .search { width:240px; height:30px; flex-grow:0; padding:0 12px; border-radius:6px; background:var(--card); border:1px solid var(--line); color:var(--muted); display:flex; align-items:center; justify-content:flex-start; white-space:nowrap; overflow:hidden; }
 .search:hover { border-color:var(--accent); }
-.live-dot { width:7px; height:7px; flex-grow:0; border-radius:4px; background:var(--accent); }
-.live { color:var(--accent); font-size:11px; white-space:nowrap; }
 
 .metrics { width:100%; height:196px; flex-grow:0; display:flex; flex-direction:row; padding:0 16px 14px 16px; gap:12px; }
 .card { height:182px; flex-grow:0; display:flex; flex-direction:column; gap:8px; padding:12px; border-radius:8px; background:var(--card); border:1px solid var(--line); }

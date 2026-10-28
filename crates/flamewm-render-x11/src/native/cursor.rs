@@ -136,8 +136,13 @@ fn shadow_frame(
             let a = original >> 24;
             let bg_a = result[pos] >> 24;
             let out_a = a + ((bg_a * (255 - a) + 127) / 255);
-            // Preserve the original artwork's RGB values and add only a dark edge.
-            result[pos] = (out_a << 24) | (original & 0x00ff_ffff);
+            // Xcursor colors are premultiplied. Mask RGB by source alpha so
+            // hidden garbage RGB never becomes a dark rectangular fringe.
+            let rgb = original & 0x00ff_ffff;
+            let r = ((rgb >> 16) & 0xff).min(a);
+            let g = ((rgb >> 8) & 0xff).min(a);
+            let b = (rgb & 0xff).min(a);
+            result[pos] = (out_a << 24) | (r << 16) | (g << 8) | b;
         }
     }
     Some((result, w, h, xhot + pad, yhot + pad))
@@ -763,6 +768,17 @@ mod tests {
         reload_cache(loader, &mut cache, None, theme, false).expect("initial theme");
         loader.frees.clear();
         cache
+    }
+
+    #[test]
+    fn invisible_cursor_rgb_does_not_bleed_into_shadow() {
+        let mut pixels = vec![0x00ff_ff00u32; 24 * 24];
+        pixels[3 * 24 + 3] = 0xffff_ffff;
+        let (out, width, _, xhot, yhot) =
+            shadow_frame(&pixels, 24, 24, 3, 3).unwrap();
+        let center = yhot as usize * width as usize + xhot as usize;
+        assert_eq!(out[center], 0xffff_ffff);
+        assert_eq!(out[center - 1] & 0x00ff_ffff, 0);
     }
 
     #[test]

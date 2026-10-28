@@ -257,6 +257,8 @@ pub(crate) struct X11App {
     /// Window backdrop generation the backbuffer was last painted over (`window_backdrop`).
     pub(crate) window_backdrop_painted: Option<u64>,
     pub(crate) node_backdrops: surface_backdrop::NodeBackdropCache,
+    /// Initial stand-alone window stays unmapped until the first complete scene copy.
+    initial_map_pending: bool,
     pub(crate) pointer_button: Option<u32>,
     pub(crate) pointer_grabbed: bool,
     /// Input focus displaced when this popup took it (window, revert_to).
@@ -307,26 +309,32 @@ impl X11App {
         // validated by native/surface_format; fall back to the default visual
         // (opaque or shape-backed) only when no real alpha channel exists.
         let argb_visual = match_argb32_visual(display, screen);
-        if let Some(argb_visual) = argb_visual {
-            let alpha_mask = unsafe { visual_alpha_mask(display, argb_visual) };
-            match validate_argb32_visual(32, TRUE_COLOR_CLASS, alpha_mask) {
-                // No compositor is claimed in the default Xephyr path, so a
-                // depth-32 window cannot blend fractionally with the desktop.
-                // Keep the ARGB32 scene for in-scene alpha, but present via
-                // the shape-backed mode unless a compositing manager owns its
-                // selection. Never claim fractional desktop translucency here.
-                Ok(_) => {
-                    eprintln!("FLAMEWM_RENDER_SURFACE_FORMAT shape-backed (no compositor claim)")
-                }
-                Err(error) => eprintln!("FLAMEWM_RENDER_SURFACE_FORMAT degraded reason={error}"),
-            }
-        }
-        let (visual, depth, alpha_mode) = unsafe {
-            (
-                XDefaultVisual(display, screen),
-                XDefaultDepth(display, screen),
-                fallback_mode(shape_available(display)),
+        // Genuine desktop-through-panel alpha requires a compositing manager.
+        // Other surface roles continue using their prior presentation contract.
+        let compositor = {
+            let name = CString::new(format!("_NET_WM_CM_S{screen}"))
+                .expect("static compositor atom without NUL");
+            let atom = unsafe { XInternAtom(display, name.as_ptr(), 1) };
+            atom != 0 && unsafe { crate::xlib_ext::XGetSelectionOwner(display, atom) } != 0
+        };
+        let supported_argb = argb_visual.and_then(|visual| {
+            let mask = unsafe { visual_alpha_mask(display, visual) };
+            validate_argb32_visual(32, TRUE_COLOR_CLASS, mask)
+                .ok().map(|mode| (visual, mode))
+        });
+        let (visual, depth, alpha_mode) = if config.role == X11WindowRole::Dock && compositor {
+            supported_argb.map_or_else(
+                || unsafe {
+                    (XDefaultVisual(display, screen), XDefaultDepth(display, screen),
+                     fallback_mode(shape_available(display)))
+                },
+                |(visual, mode)| (visual, 32, mode),
             )
+        } else {
+            unsafe {
+                (XDefaultVisual(display, screen), XDefaultDepth(display, screen),
+                 fallback_mode(shape_available(display)))
+            }
         };
         if visual.is_null() {
             return Err("no usable visual for native surface".to_string());
@@ -565,12 +573,9 @@ impl X11App {
             PresentationState::CreatedHidden
         };
 
-        unsafe {
-            if initially_visible {
-                XMapWindow(display, window);
-            }
-            XFlush(display);
-        }
+        // Never expose the default black X11 window background before first paint.
+        // Controller-managed popups are created hidden and mapped by their owner.
+        unsafe { XFlush(display) };
         let picture =
             u64::from(alpha_mode == SurfaceAlphaMode::CompositedArgb32 && xrender.is_some());
         let mut surface = NativeSurfaceTarget::create_plan(
@@ -654,6 +659,7 @@ impl X11App {
                 .clone()
                 .map(window_backdrop::WindowBackdropState::new),
             node_backdrops: Default::default(),
+            initial_map_pending: initially_visible,
             pointer_button: None,
             pointer_grabbed: false,
             saved_input_focus: None,

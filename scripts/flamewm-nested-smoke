@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Bounded, nested-only Wayland compositor smoke test. Never opens DRM/logind or a VT.
+set -Eeuo pipefail
+if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
+  printf '%s\n' 'Usage: scripts/flamewm-nested-smoke [--dry-run]' 'Runs a 10-second winit-only compositor smoke test and records a private startup log.'
+  exit 0
+fi
+if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != --dry-run ]]; }; then
+  echo 'Usage: scripts/flamewm-nested-smoke [--dry-run]' >&2
+  exit 2
+fi
+if [[ -z "${WAYLAND_DISPLAY:-}" && -z "${DISPLAY:-}" ]]; then
+  echo 'FLAMEWM-NESTED: no existing Wayland/X11 graphical display. On a TTY, do not run a nested compositor; use a verified display-manager login.' >&2
+  exit 2
+fi
+if [[ -z "${XDG_RUNTIME_DIR:-}" || ! -d "${XDG_RUNTIME_DIR:-/nonexistent}" ]]; then
+  echo 'FLAMEWM-NESTED: XDG_RUNTIME_DIR is unavailable; no compositor launched.' >&2
+  exit 2
+fi
+command -v timeout >/dev/null || { echo 'FLAMEWM-NESTED: timeout utility required' >&2; exit 2; }
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/.target}"
+[[ "$TARGET_DIR" == /* ]] || TARGET_DIR="$ROOT/$TARGET_DIR"
+BIN="${FLAMEWM_WAYLAND_BIN:-$TARGET_DIR/release/flamewm-wayland}"
+[[ -x "$BIN" ]] || { echo "FLAMEWM-NESTED: binary not executable: $BIN (build it before testing)" >&2; exit 2; }
+SOCKET="wayland-flame-smoke-$$"
+# A unique output socket prevents interfering with a running FlameWM compositor.
+if [[ "${1:-}" == --dry-run ]]; then
+  printf 'FLAMEWM-NESTED: backend=winit socket=%s binary=%s duration=10s\n' "$SOCKET" "$BIN"
+  exit 0
+fi
+CACHE="${XDG_CACHE_HOME:-${HOME:?}/.cache}/flamewm"
+umask 077
+mkdir -p "$CACHE"
+LOG="$(mktemp "$CACHE/nested-smoke-XXXXXXXX.log")"
+printf 'FLAMEWM-NESTED: launching winit only; 10-second bounded run; log=%s\n' "$LOG"
+# Disable client autostart: the smoke test should not modify session bus, startup files, or the host desktop.
+set +e
+FLAMEWM_WAYLAND_BACKEND=winit FLAMEWM_WAYLAND_SOCKET="$SOCKET" \
+  FLAMEWM_WAYLAND_AUTOSTART='' RUST_BACKTRACE=1 RUST_BACKTRACE_ON_ABORT=1 \
+  timeout --signal=TERM --kill-after=2s 10s "$BIN" >"$LOG" 2>&1
+status=$?
+set -e
+if [[ $status == 124 ]]; then
+  echo "FLAMEWM-NESTED: PASS survived 10s without an early exit; log=$LOG"
+  exit 0
+fi
+printf 'FLAMEWM-NESTED: exited status=%s; log=%s\n' "$status" "$LOG" >&2
+printf '%s\n' 'FLAMEWM-NESTED: this is diagnostic evidence, not proof that native TTY/DRM works.' >&2
+exit 1

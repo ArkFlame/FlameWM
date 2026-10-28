@@ -860,6 +860,12 @@ impl X11App {
         }
         {
             let _flush_guard = flamewm_profiler::start("render.flush");
+            // XCopyArea precedes XMapWindow on first presentation, so first
+            // observable frame is the finished document rather than black.
+            if self.initial_map_pending {
+                unsafe { XMapWindow(self.display, self.window) };
+                self.initial_map_pending = false;
+            }
             unsafe { XFlush(self.display) };
         }
         Ok(())

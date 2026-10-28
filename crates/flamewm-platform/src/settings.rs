@@ -375,13 +375,13 @@ impl Default for ProductSettings {
             cursor_shadow: true,
             animations_enabled: true,
             animation_speed: 100,
-            start_animation: AnimationStyle::Slide,
+            start_animation: AnimationStyle::None,
             start_animation_enabled: true,
-            minimize_animation: AnimationStyle::MagicLamp,
+            minimize_animation: AnimationStyle::None,
             maximize_animation: AnimationStyle::None,
             window_open_animation: AnimationStyle::None,
             window_open_animation_enabled: false,
-            window_close_animation: AnimationStyle::Fade,
+            window_close_animation: AnimationStyle::None,
             minimize_animation_enabled: true,
             maximize_animation_enabled: false,
             lock_background_color: "#232629".to_owned(),
@@ -1846,11 +1846,11 @@ mod tests {
         assert!(defaults.titlebar_close_color.is_empty());
         assert!(defaults.cursor_theme.is_empty());
         assert_eq!(defaults.animation_speed, 100);
-        assert_eq!(defaults.start_animation, AnimationStyle::Slide);
-        assert_eq!(defaults.minimize_animation, AnimationStyle::MagicLamp);
+        assert_eq!(defaults.start_animation, AnimationStyle::None);
+        assert_eq!(defaults.minimize_animation, AnimationStyle::None);
         assert_eq!(defaults.maximize_animation, AnimationStyle::None);
         assert_eq!(defaults.window_open_animation, AnimationStyle::None);
-        assert_eq!(defaults.window_close_animation, AnimationStyle::Fade);
+        assert_eq!(defaults.window_close_animation, AnimationStyle::None);
         assert!(!defaults.maximize_animation_enabled);
 
         let text = ConfigStore::serialize(&defaults);

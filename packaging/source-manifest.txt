@@ -82,3 +82,6 @@ ui/
 @exec scripts/enable-post31-desktop-integration
 @exec scripts/apply-pass33-merge
 @exec scripts/apply-pass30-cargo-layout
+
+@exec scripts/flamewm-nested-smoke
+@exec tools/cpak_package.py

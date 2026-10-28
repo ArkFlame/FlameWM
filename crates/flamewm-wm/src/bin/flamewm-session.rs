@@ -28,6 +28,8 @@ use signal_hook::low_level::pipe;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 
+const SESSION_LOG_PREFIX: &str = "flamewm-session";
+const SHUTDOWN_SIGNAL: &str = "session shutdown signal received";
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const TICK: Duration = Duration::from_millis(100);
 const STARTUP_GRACE: Duration = Duration::from_millis(500);
@@ -45,7 +47,7 @@ struct Running {
 
 fn main() {
     if let Err(error) = execute() {
-        eprintln!("flamewm-session: {error}");
+        eprintln!("{SESSION_LOG_PREFIX}: {error}");
         std::process::exit(1);
     }
 }
@@ -81,7 +83,7 @@ fn execute() -> Result<(), String> {
     // Generate only FlameWM-owned XDG overlays; never mutate existing Brave
     // profiles, wallet contents, Plasma configuration, or desktop identities.
     if let Err(error) = session_app_compat::configure(&home, &mut plan.processes) {
-        eprintln!("flamewm-session: KDE app compatibility degraded: {error}");
+        eprintln!("{SESSION_LOG_PREFIX}: KDE app compatibility degraded: {error}");
     }
     if plan.processes.len() != 3
         || plan.processes[0].role != SessionRole::WindowManager
@@ -119,7 +121,7 @@ fn execute() -> Result<(), String> {
     })();
     let cleanup = stop_all(&mut running);
     match (result, cleanup) {
-        (Err(error), Ok(())) if error == "session shutdown signal received" => Ok(()),
+        (Err(error), Ok(())) if error == SHUTDOWN_SIGNAL => Ok(()),
         (Err(error), Err(cleanup)) => Err(format!("{error}; cleanup failed: {cleanup}")),
         (Err(error), Ok(())) => Err(error),
         (Ok(()), Err(cleanup)) => Err(format!("cleanup failed: {cleanup}")),
@@ -173,8 +175,8 @@ fn restore_saved_display_order() {
         .status()
     {
         Ok(status) if status.success() => (),
-        Ok(status) => eprintln!("flamewm-session: monitor order restore rejected: {status}"),
-        Err(error) => eprintln!("flamewm-session: monitor order restore unavailable: {error}"),
+        Ok(status) => eprintln!("{SESSION_LOG_PREFIX}: monitor order restore rejected: {status}"),
+        Err(error) => eprintln!("{SESSION_LOG_PREFIX}: monitor order restore unavailable: {error}"),
     }
 }
 
@@ -225,14 +227,14 @@ fn sync_activation_environment(environment: &BTreeMap<String, String>) {
     match command.status() {
         Ok(status) if status.success() => (),
         Ok(status) => {
-            eprintln!("flamewm-session: D-Bus activation environment not synchronized: {status}");
+            eprintln!("{SESSION_LOG_PREFIX}: D-Bus activation environment not synchronized: {status}");
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {
             eprintln!(
-                "flamewm-session: dbus-update-activation-environment unavailable; portal session integration degraded"
+                "{SESSION_LOG_PREFIX}: dbus-update-activation-environment unavailable; portal session integration degraded"
             );
         }
-        Err(error) => eprintln!("flamewm-session: activation environment: {error}"),
+        Err(error) => eprintln!("{SESSION_LOG_PREFIX}: activation environment: {error}"),
     }
 }
 
@@ -312,7 +314,7 @@ fn wait_for_wakeup(timeout: Option<Duration>) -> Result<(), String> {
 
 fn check_stop(stop_requested: &AtomicBool) -> Result<(), String> {
     if stop_requested.load(Ordering::Relaxed) {
-        Err("session shutdown signal received".to_owned())
+        Err(SHUTDOWN_SIGNAL.to_owned())
     } else {
         Ok(())
     }

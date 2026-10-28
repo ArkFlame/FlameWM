@@ -44,11 +44,10 @@ impl Launch {
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "/bin/sh".into());
-        Self {
-            program,
-            args: Vec::new(),
-            cwd,
-        }
+        // Interactive line editing, history, and completion belong to the selected shell.
+        // Explicit `-i` also covers users who launch the terminal from a noninteractive session.
+        let args = vec!["-i".into()];
+        Self { program, args, cwd }
     }
 }
 
@@ -381,6 +380,6 @@ mod tests {
     fn launch_shell_defaults_to_env_or_sh() {
         let launch = Launch::shell(None);
         assert!(!launch.program.is_empty());
-        assert!(launch.args.is_empty());
+        assert_eq!(launch.args, vec!["-i"]);
     }
 }

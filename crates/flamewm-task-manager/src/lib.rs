@@ -106,6 +106,7 @@ struct Application {
     query: String,
     first: usize,
     selected: Option<(u32, u64)>,
+    hovered: Option<usize>,
     rows: Vec<(u32, u64)>,
     context: bool,
     confirm: bool,
@@ -128,6 +129,7 @@ impl Application {
             query: String::new(),
             first: 0,
             selected: None,
+            hovered: None,
             rows: Vec::new(),
             context: false,
             confirm: false,
@@ -419,6 +421,8 @@ impl Application {
             let row = format!("row-{slot}");
             if self.selected == Some((p.pid, p.start)) {
                 doc.background(&row, rgba(accent, 60))?;
+            } else if self.hovered == Some(slot) {
+                doc.background(&row, rgba(accent, 32))?;
             } else {
                 doc.background_clear(&row)?;
             }
@@ -491,6 +495,28 @@ impl Application {
                 }
                 self.context = false;
                 return self.paint(doc);
+            }
+            return Ok(());
+        }
+        if matches!(event.phase, UiActionPhase::Hover | UiActionPhase::Motion) {
+            let next = event.action.strip_prefix("tm.row.")
+                .and_then(|slot| slot.parse::<usize>().ok())
+                .filter(|slot| *slot < self.rows.len());
+            if next != self.hovered {
+                let previous = std::mem::replace(&mut self.hovered, next);
+                let accent = accent_color(&self.theme);
+                for slot in [previous, next].into_iter().flatten() {
+                    let id = format!("row-{slot}");
+                    if let Some((pid, start)) = self.rows.get(slot).copied() {
+                        if self.selected == Some((pid, start)) {
+                            doc.background(&id, rgba(accent, 60))?;
+                        } else if next == Some(slot) {
+                            doc.background(&id, rgba(accent, 32))?;
+                        } else {
+                            doc.background_clear(&id)?;
+                        }
+                    }
+                }
             }
             return Ok(());
         }

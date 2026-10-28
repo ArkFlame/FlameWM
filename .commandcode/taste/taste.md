@@ -1,2 +1,1 @@
-# Taste
-See [taste/taste.md](taste/taste.md)
+- Prefers that changes not be made without explicit approval. Confidence: 0.9

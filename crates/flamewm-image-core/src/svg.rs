@@ -111,17 +111,41 @@ fn render_inner(
         resvg::usvg::Tree::from_data_nested(bytes, &options).map_err(|error| error.to_string())?
     };
     let (svg_width, svg_height) = finite_size(&tree)?;
-    let mut pixmap =
-        resvg::tiny_skia::Pixmap::new(width, height).ok_or("requested dimensions overflow")?;
+    // Supersample small taskbar/menu SVGs to preserve subpixel edges.
+    // Larger images retain the original single-pass raster path.
+    let factor = if width <= 48 && height <= 48 { 2 } else { 1 };
+    let render_width = width.checked_mul(factor).ok_or("SVG raster width overflow")?;
+    let render_height = height.checked_mul(factor).ok_or("SVG raster height overflow")?;
+    check_size_limits(render_width, render_height)?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(render_width, render_height)
+        .ok_or("requested dimensions overflow")?;
     let transform = resvg::tiny_skia::Transform::from_scale(
-        width as f32 / svg_width,
-        height as f32 / svg_height,
+        render_width as f32 / svg_width,
+        render_height as f32 / svg_height,
     );
     resvg::render(&tree, transform, &mut pixmap.as_mut());
-    if pixmap.width() != width || pixmap.height() != height {
-        return Err("raster dimensions do not match request".to_string());
-    }
-    let mut pixels = pixmap.take();
+    let raw = pixmap.take();
+    let mut pixels = if factor == 2 {
+        let mut out = vec![0u8; width as usize * height as usize * 4];
+        let src_stride = render_width as usize * 4;
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let dst = (y * width as usize + x) * 4;
+                let top = (2 * y) * src_stride + (2 * x) * 4;
+                for channel in 0..4 {
+                    let sum = u32::from(raw[top + channel])
+                        + u32::from(raw[top + 4 + channel])
+                        + u32::from(raw[top + src_stride + channel])
+                        + u32::from(raw[top + src_stride + 4 + channel]);
+                    out[dst + channel] = ((sum + 2) / 4) as u8;
+                }
+            }
+        }
+        out
+    } else {
+        raw
+    };
+    // Average in premultiplied space before converting to straight RGBA.
     unpremultiply_swapped_in_place(&mut pixels);
     RgbaImage::from_rgba8(width, height, pixels)
         .ok_or_else(|| "requested dimensions overflow".to_string())

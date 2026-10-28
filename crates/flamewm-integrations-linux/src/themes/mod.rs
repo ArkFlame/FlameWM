@@ -81,7 +81,13 @@ impl ThemeCatalog {
                     continue;
                 };
                 let index = dir.join("index.theme");
-                if !dir.is_dir() || !index.is_file() {
+                if !dir.is_dir() {
+                    continue;
+                }
+                // Cursor-only packages frequently omit index.theme. A usable cursors/ directory
+                // is sufficient to expose them in Settings without mislabelling them as icons.
+                let has_cursors = dir.join("cursors").join("left_ptr").is_file();
+                if !index.is_file() && !has_cursors {
                     continue;
                 }
                 let text = fs::read_to_string(&index);
@@ -103,8 +109,8 @@ impl ThemeCatalog {
                     let valid = readable && parsed.directories.iter().any(|d| dir.join(d).is_dir());
                     push(ThemeKind::Icon, name.clone(), valid);
                 }
-                if dir.join("cursors").is_dir() && seen.insert((ThemeKind::Cursor, id.clone())) {
-                    push(ThemeKind::Cursor, name, readable);
+                if has_cursors && seen.insert((ThemeKind::Cursor, id.clone())) {
+                    push(ThemeKind::Cursor, name, true);
                 }
             }
         }

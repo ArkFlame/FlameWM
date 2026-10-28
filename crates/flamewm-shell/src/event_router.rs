@@ -23,7 +23,9 @@ const OUTSIDE_RELEASE_ACTION: &str = "surface.outside.release";
 const TRAY_VOLUME_ACTION: &str = "volume.open";
 const TASKBAR_SURFACE_ACTION: &str = "taskbar.surface";
 const TASKBAR_MENU_SETTINGS_ACTION: &str = "taskbar.menu.settings";
+const TASKBAR_MENU_TASK_MANAGER_ACTION: &str = "taskbar.menu.task-manager";
 const GENERAL_SETTINGS_PROGRAM: &str = "flamewm-settings";
+const TASK_MANAGER_PROGRAM: &str = "flamewm-task-manager";
 const START_DRAG_THRESHOLD_PX: f32 = 6.0;
 
 #[derive(Debug, Clone)]
@@ -127,7 +129,11 @@ fn task_drag_can_start(
 
 /// Program to spawn for a taskbar-menu row action; `None` for other actions.
 fn general_settings_launch(action: &str) -> Option<&'static str> {
-    (action == TASKBAR_MENU_SETTINGS_ACTION).then_some(GENERAL_SETTINGS_PROGRAM)
+    match action {
+        TASKBAR_MENU_SETTINGS_ACTION => Some(GENERAL_SETTINGS_PROGRAM),
+        TASKBAR_MENU_TASK_MANAGER_ACTION => Some(TASK_MANAGER_PROGRAM),
+        _ => None,
+    }
 }
 
 /// Slot number (1-based in the action id) after `prefix`; `None` for other actions.
@@ -1080,6 +1086,7 @@ mod tests {
             general_settings_launch("taskbar.menu.settings"),
             Some("flamewm-settings")
         );
+        assert_eq!(general_settings_launch("taskbar.menu.task-manager"), Some(TASK_MANAGER_PROGRAM));
         assert_eq!(general_settings_launch("taskbar.menu.new-desktop"), None);
         assert_eq!(general_settings_launch("task.menu.close"), None);
     }

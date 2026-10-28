@@ -147,10 +147,10 @@ impl Settings {
     pub const DEFAULT: Self = Self {
         enabled: true,
         speed: 100,
-        minimize: Style::MagicLamp,
+        minimize: Style::None,
         maximize: Style::None,
         open: Style::None,
-        close: Style::Fade,
+        close: Style::None,
     };
 }
 

@@ -1,7 +1,7 @@
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::window::WindowSnapshot;
 use flamewm_api::workspace::WorkspaceSnapshot;
-use flamewm_ui_core::context_menu::{settings_row, MenuRow};
+use flamewm_ui_core::context_menu::{settings_row, MenuRow, MenuRowKind};
 use flamewm_ui_core::MenuEntry;
 
 pub use flamewm_shell_core::menu_policy::{
@@ -134,12 +134,23 @@ pub fn workspace_action(
     }
 }
 
-/// Taskbar-background menu: exactly one row that opens general settings.
+/// Taskbar-background actions, with stable ids used by the context-menu projection.
 pub const TASKBAR_ROW_SETTINGS: &str = "taskbar-settings";
+pub const TASKBAR_ROW_TASK_MANAGER: &str = "taskbar-task-manager";
 
 #[must_use]
 pub fn taskbar_menu() -> Vec<MenuRow> {
-    vec![settings_row(TASKBAR_ROW_SETTINGS)]
+    vec![
+        settings_row(TASKBAR_ROW_SETTINGS),
+        MenuRow {
+            id: TASKBAR_ROW_TASK_MANAGER,
+            label: "Task Manager",
+            icon: Some("utilities-system-monitor"),
+            enabled: true,
+            visible: true,
+            kind: MenuRowKind::Action,
+        },
+    ]
 }
 
 /// Visible context-menu row count for a menu kind. Row identity is the
@@ -195,7 +206,7 @@ mod taskbar_menu_tests {
     #[test]
     fn every_markup_menu_row_has_canonical_icon_size_and_action() {
         let rows = menu_rows(TASK_MENU_HTML);
-        assert_eq!(rows.len(), 8);
+        assert_eq!(rows.len(), 9);
         for line in rows {
             assert!(
                 line.contains(&format!(
@@ -233,6 +244,10 @@ mod taskbar_menu_tests {
                 format!("context-{TASKBAR_ROW_SETTINGS}"),
                 "taskbar.menu.settings",
             ),
+            (
+                format!("context-{TASKBAR_ROW_TASK_MANAGER}"),
+                "taskbar.menu.task-manager",
+            ),
         ];
         for (id, action) in expected {
             let row = row_for(TASK_MENU_HTML, &id);
@@ -243,10 +258,10 @@ mod taskbar_menu_tests {
     #[test]
     fn taskbar_kind_size_matches_its_single_settings_row() {
         let rows = taskbar_menu();
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 2);
         let size = context_menu_size(rows.len());
         assert_eq!(size.width, MENU_MIN_WIDTH);
-        assert_eq!(size.height, 2 * MENU_PADDING + ROW_HEIGHT);
+        assert_eq!(size.height, 2 * MENU_PADDING + 2 * ROW_HEIGHT);
     }
 
     #[test]
@@ -286,13 +301,15 @@ mod taskbar_menu_tests {
             .iter()
             .map(|row| format!("context-{}", row.id))
             .collect();
-        assert_eq!(policy_ids, vec!["context-taskbar-settings".to_owned()]);
+        assert_eq!(policy_ids, vec!["context-taskbar-settings".to_owned(), "context-taskbar-task-manager".to_owned()]);
     }
 
     #[test]
     fn taskbar_background_menu_has_exactly_one_flamewm_settings_row() {
         let rows = taskbar_menu();
-        assert_eq!(rows, vec![settings_row(TASKBAR_ROW_SETTINGS)]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], settings_row(TASKBAR_ROW_SETTINGS));
+        assert_eq!(rows[1].label, "Task Manager");
         assert_eq!(rows[0].kind, MenuRowKind::Action);
         assert_eq!(rows[0].label, "FlameWM Settings");
         assert_eq!(rows[0].icon, Some("preferences-desktop"));

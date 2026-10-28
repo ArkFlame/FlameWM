@@ -3,11 +3,12 @@
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::os::unix::process::CommandExt;
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const BUILTIN_LOGO: &str = include_str!("../../../assets/flamefetch/logo.txt");
-const COMPACT_LOGO: &str = "        .::::.\n     .:++++++++:.\n   .:++++++++++++:.\n  :+++++::...:++++:\n :++++:     :++++:\n :+++:    .:++++:\n :++:    .:++++:\n  :+.   .:++++:\n       .:++++:\n     .:++++:\n    :++++:\n   :+++:\n  :++:\n  :::";
+const COMPACT_LOGO: &str = include_str!("../../../assets/flamefetch/compact-logo.txt");
 const DEFAULT_MODULES: &[&str] = &[
     "os", "host", "kernel", "uptime", "packages", "shell", "display", "de", "wm", "terminal",
     "cpu", "gpu", "memory", "swap", "disk",
@@ -161,7 +162,19 @@ pub fn exec_shell(shell: &str, args: &[String]) -> ! {
         true,
         true,
     );
-    let error = Command::new(shell).args(args).exec();
+    // A PTY alone does not force every shell to enable its interactive line editor.
+    // Explicit interactive mode restores readline/ZLE history and Tab completion
+    // when Flamefetch's one-shot exec wrapper replaces the initial shell.
+    let interactive = args.is_empty()
+        && matches!(
+            Path::new(shell).file_name().and_then(|name| name.to_str()),
+            Some("bash" | "zsh" | "fish" | "sh")
+        );
+    let mut command = Command::new(shell);
+    if interactive {
+        command.arg("-i");
+    }
+    let error = command.args(args).exec();
     eprintln!("flamewm-terminal: cannot execute shell {shell}: {error}");
     std::process::exit(127)
 }
@@ -227,7 +240,7 @@ pub fn cli_main(args: impl IntoIterator<Item = String>) -> Result<(), String> {
 }
 
 fn read_small(path: &str, max: usize) -> String {
-    let Ok(mut file) = File::open(path) else {
+    let Ok(file) = File::open(path) else {
         return String::new();
     };
     let mut data = Vec::new();
@@ -389,8 +402,13 @@ fn truecolor(s: &str) -> Option<String> {
         n & 255
     ))
 }
-fn columns() -> usize {
-    std::env::var("COLUMNS")
+fn terminal_dimensions() -> (usize, usize) {
+    if let Ok(size) = rustix::termios::tcgetwinsize(io::stdout().as_fd()) {
+        if size.ws_col > 0 && size.ws_row > 0 {
+            return (size.ws_col as usize, size.ws_row as usize);
+        }
+    }
+    let cols = std::env::var("COLUMNS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .or_else(|| {
@@ -399,9 +417,10 @@ fn columns() -> usize {
                 .and_then(|v| v.parse().ok())
         })
         .unwrap_or(100)
-        .clamp(20, 400)
+        .clamp(20, 400);
+    (cols, 28)
 }
-fn logo_lines(config: &Config, cols: usize) -> Vec<String> {
+fn logo_lines(config: &Config, cols: usize, rows: usize) -> Vec<String> {
     if config.logo == "none" {
         return Vec::new();
     }
@@ -427,7 +446,7 @@ fn logo_lines(config: &Config, cols: usize) -> Vec<String> {
     let use_full = match config.layout {
         Layout::Full => true,
         Layout::Compact => false,
-        Layout::Auto => width + 44 <= cols && full.len() <= 28,
+        Layout::Auto => width + 32 <= cols && full.len() + 3 <= rows,
     };
     if use_full {
         full
@@ -444,8 +463,8 @@ fn render(writer: &mut impl Write, config: &Config, colored: bool, tty: bool) ->
         .iter()
         .filter_map(|s| get_module(s, memory))
         .collect();
-    let width = columns();
-    let logo = logo_lines(config, width);
+    let (width, rows) = terminal_dimensions();
+    let logo = logo_lines(config, width, rows);
     let max_logo_width = logo.iter().map(|s| s.chars().count()).max().unwrap_or(0);
     let side_by_side = !logo.is_empty() && width >= max_logo_width + 32;
     let (logo_ansi, key_ansi) = if colored {
@@ -512,7 +531,7 @@ mod tests {
     fn compact_logo_fits_terminal() {
         let c = Config::default();
         assert!(
-            logo_lines(&c, 80)
+            logo_lines(&c, 80, 28)
                 .iter()
                 .map(|s| s.chars().count())
                 .max()
