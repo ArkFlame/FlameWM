@@ -247,6 +247,7 @@ pub struct ProductSettings {
     pub start_menu_blur_percent: u8,
     pub accent_opacity: u8,
     pub decoration: String,
+    pub render_acceleration: String,
     pub titlebar_button_style: String,
     pub titlebar_minimize_color: String,
     pub titlebar_minimize_hover_color: String,
@@ -362,6 +363,7 @@ impl Default for ProductSettings {
             start_menu_blur_percent: 80,
             accent_opacity: 100,
             decoration: "rounded".to_owned(),
+            render_acceleration: "cpu".to_owned(),
             titlebar_button_style: "circle".to_owned(),
             titlebar_minimize_color: String::new(),
             titlebar_minimize_hover_color: String::new(),
@@ -556,6 +558,9 @@ impl ProductSettings {
         }
         if self.accent_opacity > 100 {
             return invalid("accentOpacity must be 0..100");
+        }
+        if !matches!(self.render_acceleration.as_str(), "cpu" | "gpu") {
+            return invalid("renderAcceleration must be cpu or gpu");
         }
         if !matches!(self.decoration.as_str(), "rounded" | "squared") {
             return invalid("decoration must be rounded or squared");
@@ -1101,6 +1106,7 @@ stable_settings! {
     (false, appearance, "cursorShadow", cursor_shadow),
     (false, appearance, "accentOpacity", accent_opacity),
     (false, appearance, "decoration", decoration),
+    (false, appearance, "renderAcceleration", render_acceleration),
     (false, windows, "titlebarButtonStyle", titlebar_button_style),
     (false, windows, "titlebarMinimizeColor", titlebar_minimize_color),
     (false, windows, "titlebarMinimizeHoverColor", titlebar_minimize_hover_color),
@@ -1994,6 +2000,18 @@ mod tests {
         let squared = load("revision=2\ndecoration=squared\n").expect("squared");
         assert_eq!(squared.decoration, "squared");
         assert!(load("revision=2\ndecoration=neon\n").is_err());
+    }
+
+    #[test]
+    fn render_acceleration_defaults_to_cpu_and_accepts_only_cpu_or_gpu() {
+        assert_eq!(load("revision=2\n").expect("unset").render_acceleration, "cpu");
+        assert_eq!(
+            load("revision=2\nrenderAcceleration=gpu\n")
+                .expect("gpu")
+                .render_acceleration,
+            "gpu"
+        );
+        assert!(load("revision=2\nrenderAcceleration=vulkan\n").is_err());
     }
 
     #[test]
