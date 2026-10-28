@@ -2,6 +2,7 @@ pub mod codec;
 pub mod layout;
 pub mod model;
 pub mod paint;
+pub mod pixels;
 pub mod text_layout;
 
 pub use codec::{decode, decode_static, encode};
@@ -10,6 +11,7 @@ pub use layout::{
     layout_passes_on_this_thread,
 };
 pub use model::*;
+pub use pixels::{PixelBackend, RenderAcceleration};
 pub use paint::{
     PaintCommand, build_paint_commands, build_paint_commands_with_scroll, emit_scroll_chrome,
     scroll_clip, scrollbar_visible,

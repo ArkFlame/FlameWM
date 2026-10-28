@@ -4,20 +4,12 @@ use std::cell::RefCell;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+pub use flamewm_render_core::{PixelBackend, RenderAcceleration};
+
 pub const RENDER_ACCELERATION_SETTING: &str = "renderAcceleration";
 
 const MIN_GPU_PIXELS: usize = 64 * 64;
 const CPU_SCRATCH_RETAIN_BUDGET_BYTES: usize = 4 * 1024 * 1024;
-
-pub(crate) trait PixelBackend {
-    fn blur_rgba(
-        &mut self,
-        pixels: &mut [u8],
-        width: u32,
-        height: u32,
-        radius: f32,
-    ) -> Result<(), String>;
-}
 
 #[derive(Default)]
 struct CpuPixels {
@@ -54,32 +46,6 @@ impl PixelBackend for gles::GpuBlur {
         radius: f32,
     ) -> Result<(), String> {
         self.blur_sigma(pixels, width, height, radius / 2.0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RenderAcceleration {
-    #[default]
-    Cpu,
-    Gpu,
-}
-
-impl RenderAcceleration {
-    #[must_use]
-    pub fn from_setting(value: &str) -> Self {
-        if value.trim().eq_ignore_ascii_case("gpu") {
-            Self::Gpu
-        } else {
-            Self::Cpu
-        }
-    }
-
-    #[must_use]
-    pub const fn as_setting(self) -> &'static str {
-        match self {
-            Self::Cpu => "cpu",
-            Self::Gpu => "gpu",
-        }
     }
 }
 
@@ -210,24 +176,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn setting_values_parse_case_insensitively_and_default_to_cpu() {
-        assert_eq!(
-            RenderAcceleration::from_setting("GPU"),
-            RenderAcceleration::Gpu
-        );
-        assert_eq!(
-            RenderAcceleration::from_setting(" gpu "),
-            RenderAcceleration::Gpu
-        );
-        assert_eq!(
-            RenderAcceleration::from_setting("cpu"),
-            RenderAcceleration::Cpu
-        );
-        assert_eq!(
-            RenderAcceleration::from_setting("vulkan"),
-            RenderAcceleration::Cpu
-        );
-        assert_eq!(RenderAcceleration::Gpu.as_setting(), "gpu");
+    fn cpu_backend_output_matches_the_image_core_blur() {
+        let (width, height) = (96_u32, 80_u32);
+        let source: Vec<u8> = (0..width * height * 4).map(|i| (i * 37 % 251) as u8).collect();
+        let mut expected = source.clone();
+        flamewm_image_core::blur::gaussian_blur_rgba(&mut expected, width, height, 9.0)
+            .expect("reference blur");
+        let mut actual = source;
+        CpuPixels::default()
+            .blur_rgba(&mut actual, width, height, 9.0)
+            .expect("cpu backend blur");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn failing_gpu_backend_leaves_pixels_for_the_cpu_fallback() {
+        struct FailingGpu;
+        impl PixelBackend for FailingGpu {
+            fn blur_rgba(&mut self, _: &mut [u8], _: u32, _: u32, _: f32) -> Result<(), String> {
+                Err("simulated GL failure".to_owned())
+            }
+        }
+        let (width, height) = (96_u32, 80_u32);
+        let source: Vec<u8> = (0..width * height * 4).map(|i| (i * 13 % 255) as u8).collect();
+        let mut pixels = source.clone();
+        // `gpu_blur_rgba` returns false on this Err, so the CPU path below runs on the same frame.
+        assert!(FailingGpu.blur_rgba(&mut pixels, width, height, 9.0).is_err());
+        assert_eq!(pixels, source, "a failed GPU pass must not touch the frame");
+        CpuPixels::default()
+            .blur_rgba(&mut pixels, width, height, 9.0)
+            .expect("cpu fallback");
+        let mut expected = source;
+        flamewm_image_core::blur::gaussian_blur_rgba(&mut expected, width, height, 9.0)
+            .expect("reference blur");
+        assert_eq!(pixels, expected);
     }
 
     #[test]
