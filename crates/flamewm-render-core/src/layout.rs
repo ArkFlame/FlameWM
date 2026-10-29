@@ -539,11 +539,14 @@ impl<'a> Engine<'a> {
             return (width, height);
         }
 
-        let measured = self.measure_node(index, avail_w, avail_h);
-        let mut width = forced_w
-            .or_else(|| style.width.resolve(avail_w))
-            .unwrap_or(measured.0.min(avail_w));
+        let explicit_width = forced_w.or_else(|| style.width.resolve(avail_w));
         let mut height = forced_h.or_else(|| style.height.resolve(avail_h));
+        let measured = if explicit_width.is_some() && height.is_some() {
+            (0.0, 0.0)
+        } else {
+            self.measure_node(index, avail_w, avail_h)
+        };
+        let mut width = explicit_width.unwrap_or(measured.0.min(avail_w));
         width = clamp_length(width, style.min_width, style.max_width, avail_w);
         let provisional_height = height.unwrap_or(measured.1.min(avail_h));
         let content_x = x + style.padding.left;
