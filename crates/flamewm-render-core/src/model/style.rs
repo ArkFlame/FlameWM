@@ -550,6 +550,9 @@ impl RuntimeDocument {
     }
 
     pub fn effective_z_index(&self, mut index: u32) -> i32 {
+        if self.z_index_overrides.is_empty() {
+            return 0;
+        }
         loop {
             if let Some(z) = self.z_index_overrides.get(&index) {
                 return *z;
