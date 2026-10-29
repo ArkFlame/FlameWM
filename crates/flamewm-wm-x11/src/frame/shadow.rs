@@ -164,27 +164,53 @@ pub fn shadow_spans(rect: Rect) -> Vec<(u32, u32, u32)> {
     shadow_spans_iter(rect, RADIUS).collect()
 }
 
-/// Shape rectangles of the silhouette rows of `area`, packed where rows repeat. Returned tuples
-/// are `(x, y, width, height)` relative to the shadow window.
+/// Shape rectangles of the ring of `area`: the silhouette rows of the shadow minus the frame's
+/// rounded interior (`frame` in root space, `radius` its corner radius). The frame covers that
+/// interior, so the shadow window never holds pixels under the window. Runs that repeat on the
+/// next row are packed. Returned tuples are `(x, y, width, height)` relative to the shadow window.
 #[must_use]
 pub fn rounded_shadow_mask_rectangles(
     area: Rect,
-    _frame: Rect,
+    frame: Rect,
     radius: u32,
 ) -> Vec<(u32, u32, u32, u32)> {
     let mut rectangles: Vec<(u32, u32, u32, u32)> = Vec::new();
+    let mut push = |start: u32, row: u32, width: u32| {
+        if let Some(last) = rectangles.last_mut() {
+            if last.0 == start && last.2 == width && last.1 + last.3 == row {
+                last.3 += 1;
+                return;
+            }
+        }
+        rectangles.push((start, row, width, 1));
+    };
+    let frame_top = frame.y - area.y;
+    let frame_bottom = frame_top + frame.height as i32;
     for (row, start, end) in shadow_spans_iter(area, radius) {
         if start == end {
             continue;
         }
-        let width = end - start;
-        if let Some(last) = rectangles.last_mut() {
-            if last.0 == start && last.2 == width && last.1 + last.3 == row {
-                last.3 += 1;
-                continue;
+        let y = area.y + row as i32;
+        // Rows the frame does not cover have no interior: the whole silhouette span is ring.
+        if (row as i32) < frame_top || (row as i32) >= frame_bottom {
+            push(start, row, end - start);
+            continue;
+        }
+        let mut run: Option<u32> = None;
+        for x in start..end {
+            let outside = rounded_signed_distance(frame, radius, area.x + x as i32, y) > 0.0;
+            match (outside, run) {
+                (true, None) => run = Some(x),
+                (false, Some(from)) => {
+                    push(from, row, x - from);
+                    run = None;
+                }
+                _ => {}
             }
         }
-        rectangles.push((start, row, width, 1));
+        if let Some(from) = run {
+            push(from, row, end - from);
+        }
     }
     rectangles
 }
@@ -556,6 +582,31 @@ mod tests {
         assert!(!contains(area.x, area.y));
         assert!(contains(frame.x - SPREAD, frame.y + 60), "the ring is present on the left");
         assert!(contains(frame.right() + SPREAD - 1, frame.y + 60), "the ring is present on the right");
+    }
+
+    #[test]
+    fn rounded_interior_is_trimmed_out_of_the_shadow_window() {
+        let frame = Rect::new(100, 100, 200, 150);
+        let area = shadow_rect(frame);
+        let round = rounded_shadow_mask_rectangles(area, frame, 24);
+        let contains = |x: i32, y: i32| {
+            let (cx, cy) = ((x - area.x) as u32, (y - area.y) as u32);
+            round.iter().any(|&(rx, ry, rw, rh)| cx >= rx && cx < rx + rw && cy >= ry && cy < ry + rh)
+        };
+        // Every pixel whose centre lies inside the frame's rounded outline is outside the mask.
+        let mut interior = 0;
+        for y in frame.y..frame.bottom() {
+            for x in frame.x..frame.right() {
+                if rounded_signed_distance(frame, 24, x, y) <= 0.0 {
+                    interior += 1;
+                    assert!(!contains(x, y), "interior pixel ({x},{y}) must not be shaped");
+                }
+            }
+        }
+        assert!(interior > 0);
+        // The ring just outside the outline stays shaped.
+        assert!(contains(frame.x - 1, frame.y + 60));
+        assert!(contains(frame.x + 60, frame.y - 1));
     }
 
     #[test]

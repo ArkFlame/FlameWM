@@ -432,6 +432,16 @@ impl<C: Connection> Wm<'_, C> {
                     self.move_frame_shadow(want.frame, want.outer)?;
                 }
                 ShadowAction::Reshade => {
+                    // The shadow follows its frame in this same batch: the position is a
+                    // configure with no read, so it can never trail the frame's configure.
+                    // Position-only: a size change needs the new pixmap and shape first.
+                    let position_only = self.frame_shadows.get(&want.frame).is_some_and(|held| {
+                        held.state.shaded.width == want.outer.width
+                            && held.state.shaded.height == want.outer.height
+                    });
+                    if position_only {
+                        self.move_frame_shadow(want.frame, want.outer)?;
+                    }
                     // A read now would bake the live rubber band into the snapshot. The frame keeps
                     // its state and is re-shaded by the first turn after the rubber ends.
                     if self.shadow_scene.rubber.is_some() {
