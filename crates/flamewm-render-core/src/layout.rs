@@ -201,7 +201,7 @@ impl LayoutEngine {
         // Content extent: intrinsic measure unconstrained on the scroll axis.
         let mut contents = vec![Rect::default(); document.document.nodes.len()];
         for (index, entry) in boxes.iter().enumerate() {
-            let style = document.runtime_style(index as u32, interaction);
+            let style = document.runtime_style_cow(index as u32, interaction);
             let scrolls_x = matches!(
                 style.overflow_x,
                 Overflow::Auto | Overflow::Scroll | Overflow::Hidden
@@ -335,14 +335,14 @@ fn isolated_leaf_parent(
     let scrolls = |style: &Style| {
         style.overflow_x != Overflow::Visible || style.overflow_y != Overflow::Visible
     };
-    let style = document.runtime_style(index, interaction);
+    let style = document.runtime_style_cow(index, interaction);
     if style.position != Position::Absolute || scrolls(&style) {
         return None;
     }
     let mut child = node.first_child;
     while let Some(current) = child {
         let text = &document.document.nodes[current as usize];
-        if text.kind != NodeKind::Text || scrolls(&document.runtime_style(current, interaction)) {
+        if text.kind != NodeKind::Text || scrolls(&document.runtime_style_cow(current, interaction)) {
             return None;
         }
         child = text.next_sibling;
@@ -350,7 +350,7 @@ fn isolated_leaf_parent(
     let mut ancestor = Some(parent);
     while let Some(current) = ancestor {
         let node = &document.document.nodes[current as usize];
-        let style = document.runtime_style(current, interaction);
+        let style = document.runtime_style_cow(current, interaction);
         // Scrolling ancestors (Auto/Scroll) get their extents and offsets re-fitted after
         // compute; hidden ones do not move children and absolute children never size them.
         if moved.contains(&current)
@@ -373,8 +373,8 @@ struct Engine<'a> {
 }
 
 impl<'a> Engine<'a> {
-    fn style(&self, index: u32) -> Style {
-        self.document.runtime_style(index, self.interaction)
+    fn style(&self, index: u32) -> std::borrow::Cow<'a, Style> {
+        self.document.runtime_style_cow(index, self.interaction)
     }
 
     /// Sibling-link walk in document order. Borrows the document (`'a`), not

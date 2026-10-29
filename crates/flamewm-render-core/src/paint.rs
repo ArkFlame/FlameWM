@@ -132,7 +132,7 @@ pub fn build_paint_commands_with_scroll(
         if !document.is_effectively_visible(index as u32) {
             continue;
         }
-        let style = document.runtime_style(index as u32, interaction);
+        let style = document.runtime_style_cow(index as u32, interaction);
         if style.display == Display::None {
             continue;
         }
@@ -365,7 +365,7 @@ pub fn root_corner_radius(document: &RuntimeDocument, interaction: InteractionSt
         return 0.0;
     }
     document
-        .runtime_style(root, interaction)
+        .runtime_style_cow(root, interaction)
         .border_radius
         .max(0.0)
 }
