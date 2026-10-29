@@ -314,44 +314,82 @@ pub fn composite_cpu(
     if source_len != rect_width as usize * rect_height as usize * stride {
         return Err("blend source does not match its size".to_owned());
     }
+    // Columns of the rectangle that land inside the frame, shared by every row.
+    let col_start = (-(x.min(0)) as i64).min(i64::from(rect_width)) as u32;
+    let col_end = (i64::from(width) - i64::from(x)).clamp(0, i64::from(rect_width)) as u32;
+    if col_start >= col_end {
+        return Ok(());
+    }
+    let span = (col_end - col_start) as usize;
+    let frame_x = (x + col_start as i32) as usize;
     for row in 0..rect_height {
         let frame_y = y + row as i32;
         if !(0..height as i32).contains(&frame_y) {
             continue;
         }
-        for column in 0..rect_width {
-            let frame_x = x + column as i32;
-            if !(0..width as i32).contains(&frame_x) {
-                continue;
+        let src_index = row as usize * rect_width as usize + col_start as usize;
+        let dst_start = (frame_y as usize * width as usize + frame_x) * 4;
+        let dst = &mut pixels[dst_start..dst_start + span * 4];
+        match op {
+            PixelOp::BlendMask { mask, color, .. } => {
+                blend_mask_span(dst, &mask[src_index..src_index + span], color);
             }
-            let source = (row as usize * rect_width as usize + column as usize) * stride;
-            let index = (frame_y as usize * width as usize + frame_x as usize) * 4;
-            let dst = &mut pixels[index..index + 4];
-            match op {
-                PixelOp::BlendMask { mask, color, .. } => {
-                    let alpha = f32::from(color[3]) * f32::from(mask[source]) / 65_025.0;
-                    for channel in 0..3 {
-                        dst[channel] = (f32::from(color[channel]) * alpha
-                            + f32::from(dst[channel]) * (1.0 - alpha))
-                            .round() as u8;
-                    }
-                    dst[3] = (alpha * 255.0 + f32::from(dst[3]) * (1.0 - alpha)).round() as u8;
-                }
-                PixelOp::BlendImage { rgba, .. } => {
-                    let src = &rgba[source..source + 4];
-                    let alpha = f32::from(src[3]) / 255.0;
-                    for channel in 0..3 {
-                        dst[channel] = (f32::from(src[channel])
-                            + f32::from(dst[channel]) * (1.0 - alpha))
-                            .round() as u8;
-                    }
-                    dst[3] = (f32::from(src[3]) + f32::from(dst[3]) * (1.0 - alpha)).round() as u8;
-                }
-                _ => {}
+            PixelOp::BlendImage { rgba, .. } => {
+                blend_image_span(dst, &rgba[src_index * 4..(src_index + span) * 4]);
             }
+            _ => {}
         }
     }
     Ok(())
+}
+
+/// Integer `round(t / 255)` for `t <= 255 * 255`, exact for every input in that range.
+#[inline]
+fn div255(t: u32) -> u32 {
+    let t = t + 128;
+    (t + (t >> 8)) >> 8
+}
+
+/// Source-over of straight `color` through per-pixel `mask` coverage onto RGBA8 `dst`.
+/// Zero coverage leaves the pixel, full coverage writes the colour, and the rest blend.
+fn blend_mask_span(dst: &mut [u8], mask: &[u8], color: [u8; 4]) {
+    let colour_alpha = u32::from(color[3]);
+    for (pixel, &coverage) in dst.chunks_exact_mut(4).zip(mask) {
+        let a = div255(colour_alpha * u32::from(coverage));
+        match a {
+            0 => {}
+            255 => pixel.copy_from_slice(&[color[0], color[1], color[2], 255]),
+            _ => {
+                let inverse = 255 - a;
+                for channel in 0..3 {
+                    pixel[channel] = div255(
+                        u32::from(color[channel]) * a + u32::from(pixel[channel]) * inverse,
+                    ) as u8;
+                }
+                pixel[3] = (a + div255(u32::from(pixel[3]) * inverse)) as u8;
+            }
+        }
+    }
+}
+
+/// Premultiplied source-over of `rgba` onto RGBA8 `dst`. Transparent source pixels leave the
+/// destination, opaque ones copy.
+fn blend_image_span(dst: &mut [u8], rgba: &[u8]) {
+    for (pixel, src) in dst.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+        match src[3] {
+            0 => {}
+            255 => pixel.copy_from_slice(src),
+            alpha => {
+                let inverse = u32::from(255 - alpha);
+                for channel in 0..3 {
+                    pixel[channel] = (u32::from(src[channel])
+                        + div255(u32::from(pixel[channel]) * inverse))
+                        as u8;
+                }
+                pixel[3] = (u32::from(alpha) + div255(u32::from(pixel[3]) * inverse)) as u8;
+            }
+        }
+    }
 }
 
 /// Pixel operations on straight RGBA8 buffers.
@@ -539,6 +577,70 @@ mod tests {
         Cpu.paint_batch(&mut frame, 3, 1, &[op]).expect("mask blends");
         assert_eq!(&frame[0..4], &[150, 50, 50, 255]);
         assert_eq!(&frame[4..], &[100, 100, 100, 255, 100, 100, 100, 255]);
+    }
+
+    /// The float rule the integer spans replaced, per pixel.
+    fn float_composite(pixels: &mut [u8], width: u32, op: PixelOp<'_>, x: i32, y: i32, rect_w: u32, rect_h: u32) {
+        for row in 0..rect_h {
+            for col in 0..rect_w {
+                let (fx, fy) = (x + col as i32, y + row as i32);
+                if fx < 0 || fy < 0 || fx >= width as i32 || fy >= (pixels.len() / 4 / width as usize) as i32 {
+                    continue;
+                }
+                let s = (row * rect_w + col) as usize;
+                let i = (fy as usize * width as usize + fx as usize) * 4;
+                let dst = &mut pixels[i..i + 4];
+                match op {
+                    PixelOp::BlendMask { mask, color, .. } => {
+                        let a = f32::from(color[3]) * f32::from(mask[s]) / 65_025.0;
+                        for c in 0..3 {
+                            dst[c] = (f32::from(color[c]) * a + f32::from(dst[c]) * (1.0 - a)).round() as u8;
+                        }
+                        dst[3] = (a * 255.0 + f32::from(dst[3]) * (1.0 - a)).round() as u8;
+                    }
+                    PixelOp::BlendImage { rgba, .. } => {
+                        let src = &rgba[s * 4..s * 4 + 4];
+                        let a = f32::from(src[3]) / 255.0;
+                        for c in 0..3 {
+                            dst[c] = (f32::from(src[c]) + f32::from(dst[c]) * (1.0 - a)).round() as u8;
+                        }
+                        dst[3] = (f32::from(src[3]) + f32::from(dst[3]) * (1.0 - a)).round() as u8;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn integer_blend_spans_stay_within_one_level_of_the_float_rule() {
+        let (width, height) = (23_u32, 17_u32);
+        let base: Vec<u8> = (0..width * height * 4).map(|i| (i * 37 % 256) as u8).collect();
+        let mask: Vec<u8> = (0..12 * 9).map(|i| (i * 29 % 256) as u8).collect();
+        let rgba: Vec<u8> = (0..12 * 9).flat_map(|i| {
+            let a = (i * 53 % 256) as u8;
+            [a / 2, (a / 3) , (a / 5), a]
+        }).collect();
+        for (x, y) in [(-4, -3), (0, 0), (15, 10), (20, 14), (-20, 5)] {
+            for color in [[200, 10, 90, 255], [30, 200, 60, 128], [0, 0, 0, 1]] {
+                let op = PixelOp::BlendMask { x, y, width: 12, height: 9, mask: &mask, color };
+                let mut got = base.clone();
+                composite_cpu(&mut got, width, height, op).expect("mask");
+                let mut want = base.clone();
+                float_composite(&mut want, width, op, x, y, 12, 9);
+                for (g, w) in got.iter().zip(&want) {
+                    assert!(g.abs_diff(*w) <= 1, "mask at {x},{y} colour {color:?}: {g} vs {w}");
+                }
+            }
+            let op = PixelOp::BlendImage { x, y, width: 12, height: 9, rgba: &rgba };
+            let mut got = base.clone();
+            composite_cpu(&mut got, width, height, op).expect("image");
+            let mut want = base.clone();
+            float_composite(&mut want, width, op, x, y, 12, 9);
+            for (g, w) in got.iter().zip(&want) {
+                assert!(g.abs_diff(*w) <= 1, "image at {x},{y}: {g} vs {w}");
+            }
+        }
     }
 
     #[test]

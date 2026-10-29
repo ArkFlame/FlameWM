@@ -59,36 +59,45 @@ impl PixelBackend for CpuPixels {
             let inset = row_inset(outer.width, outer.height, outer.radius, row) as i32;
             let start = (outer.x + inset).max(0);
             let end = (outer.x + outer.width as i32 - inset).min(width as i32);
-            for x in start..end {
-                if hole.is_some_and(|hole| inside_rounded(hole, x, y)) {
-                    continue;
+            // The hole's uncovered span on this row, resolved once per row instead of per pixel.
+            // Pixels in `hole_start..hole_end` are inside the hole and keep the frame.
+            let (hole_start, hole_end) = hole
+                .and_then(|hole| hole_row_span(hole, y))
+                .unwrap_or((end, end));
+            let row_base = y as usize * width as usize * 4;
+            for (from, to) in [(start, hole_start.min(end)), (hole_end.max(start), end)] {
+                if from < to {
+                    let span = &mut pixels[row_base + from as usize * 4..row_base + to as usize * 4];
+                    blend_span(span, color, alpha);
                 }
-                let index = (y as usize * width as usize + x as usize) * 4;
-                let pixel = &mut pixels[index..index + 4];
-                for channel in 0..3 {
-                    pixel[channel] = (f32::from(color[channel]) * alpha
-                        + f32::from(pixel[channel]) * (1.0 - alpha))
-                        .round() as u8;
-                }
-                pixel[3] =
-                    (f32::from(color[3]) + f32::from(pixel[3]) * (1.0 - alpha)).round() as u8;
             }
         }
         Ok(())
     }
 }
 
-/// Whether device pixel (`x`, `y`) lies inside `rect`'s rounded outline, using the same row
-/// insets as the outer fill.
-fn inside_rounded(rect: RoundedRect, x: i32, y: i32) -> bool {
-    let (Ok(row), Ok(column)) = (u32::try_from(y - rect.y), u32::try_from(x - rect.x)) else {
-        return false;
-    };
-    if row >= rect.height || column >= rect.width {
-        return false;
+/// Source-over `color` (straight, coverage `alpha`) onto every RGBA pixel of `span`, with the
+/// rounding of the single-pixel fill.
+fn blend_span(span: &mut [u8], color: [u8; 4], alpha: f32) {
+    let inverse = 1.0 - alpha;
+    let [cr, cg, cb, ca] = color.map(f32::from);
+    for pixel in span.chunks_exact_mut(4) {
+        pixel[0] = (cr * alpha + f32::from(pixel[0]) * inverse).round() as u8;
+        pixel[1] = (cg * alpha + f32::from(pixel[1]) * inverse).round() as u8;
+        pixel[2] = (cb * alpha + f32::from(pixel[2]) * inverse).round() as u8;
+        pixel[3] = (ca + f32::from(pixel[3]) * inverse).round() as u8;
     }
-    let inset = row_inset(rect.width, rect.height, rect.radius, row);
-    column >= inset && column < rect.width - inset
+}
+
+/// Device x range `[start, end)` of `rect`'s rounded outline on device row `y`, using the same row
+/// insets as the outer fill, or `None` when `y` is outside `rect`. An empty range is `Some` with
+/// `start == end`.
+fn hole_row_span(rect: RoundedRect, y: i32) -> Option<(i32, i32)> {
+    let row = u32::try_from(y - rect.y).ok().filter(|row| *row < rect.height)?;
+    let inset = row_inset(rect.width, rect.height, rect.radius, row) as i32;
+    let start = rect.x.saturating_add(inset);
+    let end = rect.x.saturating_add(rect.width as i32).saturating_sub(inset);
+    Some((start, end.max(start)))
 }
 
 impl PixelBackend for gles::GpuBlur {
@@ -337,6 +346,67 @@ pub fn paint_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The per-pixel rule the row-span fill replaces: a pixel is skipped when the hole covers it.
+    fn per_pixel_fill(
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        outer: RoundedRect,
+        hole: Option<RoundedRect>,
+        color: [u8; 4],
+    ) {
+        let alpha = f32::from(color[3]) / 255.0;
+        for y in 0..height as i32 {
+            for x in 0..width as i32 {
+                let (Ok(row), Ok(col)) = (u32::try_from(y - outer.y), u32::try_from(x - outer.x)) else {
+                    continue;
+                };
+                if row >= outer.height || col >= outer.width {
+                    continue;
+                }
+                let inset = row_inset(outer.width, outer.height, outer.radius, row);
+                if col < inset || col >= outer.width - inset {
+                    continue;
+                }
+                let in_hole = hole.is_some_and(|hole| {
+                    hole_row_span(hole, y).is_some_and(|(s, e)| x >= s && x < e)
+                });
+                if in_hole {
+                    continue;
+                }
+                let index = (y as usize * width as usize + x as usize) * 4;
+                for c in 0..3 {
+                    pixels[index + c] = (f32::from(color[c]) * alpha
+                        + f32::from(pixels[index + c]) * (1.0 - alpha))
+                        .round() as u8;
+                }
+                pixels[index + 3] =
+                    (f32::from(color[3]) + f32::from(pixels[index + 3]) * (1.0 - alpha)).round() as u8;
+            }
+        }
+    }
+
+    #[test]
+    fn row_span_fill_matches_the_per_pixel_rule_with_holes_and_edges() {
+        let (width, height) = (64_u32, 48_u32);
+        let frame: Vec<u8> = (0..width * height * 4).map(|i| (i * 7 % 251) as u8).collect();
+        let cases = [
+            (RoundedRect { x: 5, y: 4, width: 40, height: 30, radius: 9 }, Some(RoundedRect { x: 7, y: 6, width: 36, height: 26, radius: 7 })),
+            (RoundedRect { x: -10, y: -6, width: 50, height: 40, radius: 12 }, Some(RoundedRect { x: -8, y: -4, width: 46, height: 36, radius: 10 })),
+            (RoundedRect { x: 30, y: 20, width: 60, height: 40, radius: 0 }, None),
+            (RoundedRect { x: 10, y: 10, width: 20, height: 20, radius: 3 }, Some(RoundedRect { x: 12, y: 12, width: 2, height: 2, radius: 1 })),
+        ];
+        for (outer, hole) in cases {
+            let mut expected = frame.clone();
+            per_pixel_fill(&mut expected, width, height, outer, hole, [30, 40, 50, 160]);
+            let mut got = frame.clone();
+            CpuPixels::default()
+                .fill_rounded_rect(&mut got, width, height, outer, hole, [30, 40, 50, 160])
+                .expect("fill");
+            assert_eq!(got, expected, "outer {outer:?} hole {hole:?}");
+        }
+    }
 
     #[test]
     fn cpu_setting_never_runs_the_gpu_batch_and_leaves_tiny_and_empty_frames_untouched() {

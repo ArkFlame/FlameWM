@@ -272,8 +272,10 @@ fn blur_stage(
     let sigma = radius / 2.0;
     let (factor, grid, dw, dh, sigma) = if radius <= DOWNSCALE_RADIUS {
         fit_f32(&mut scratch.work, w * h * 4);
-        for (i, dst) in scratch.work.chunks_exact_mut(4).enumerate() {
-            premultiply_pixel(&sample(i % w, i / w), dst);
+        for (y, row) in scratch.work.chunks_exact_mut(w * 4).enumerate() {
+            for (x, dst) in row.chunks_exact_mut(4).enumerate() {
+                premultiply_pixel(&sample(x, y), dst);
+            }
         }
         (1, &mut scratch.work, w, h, sigma)
     } else {
@@ -382,26 +384,35 @@ fn clamp_index(index: isize, last: isize) -> usize {
 /// copied to `line` first so the sliding window reads unmodified inputs.
 fn box_horizontal(buf: &mut [f32], line: &mut Vec<f32>, w: usize, r: usize) {
     let stride = w * 4;
-    fit_f32(line, stride);
+    let pad = r * 4;
+    // `line` holds the row edge-padded by `r` on both sides, so the window of output `x` is the
+    // contiguous span `[x, x + 2r]` and needs no clamping. The sums use the same order as the
+    // clamped form, so the output is bit-identical.
+    // One extra tail pixel: the final slide reads one past the last window's `add` slot.
+    fit_f32(line, stride + 2 * pad + 4);
     let inv = 1.0 / (2 * r + 1) as f32;
-    let ri = r as isize;
-    let last = w as isize - 1;
     for row in buf.chunks_exact_mut(stride) {
-        line.copy_from_slice(row);
+        let (head, rest) = line.split_at_mut(pad);
+        let (body, tail) = rest.split_at_mut(stride);
+        body.copy_from_slice(row);
+        for chunk in head.chunks_exact_mut(4) {
+            chunk.copy_from_slice(&row[..4]);
+        }
+        for chunk in tail.chunks_exact_mut(4) {
+            chunk.copy_from_slice(&row[stride - 4..]);
+        }
         let mut sum = [0.0f32; 4];
-        for k in -ri..=ri {
-            let p = clamp_index(k, last) * 4;
+        for window in line[..(2 * r + 1) * 4].chunks_exact(4) {
             for c in 0..4 {
-                sum[c] += line[p + c];
+                sum[c] += window[c];
             }
         }
-        for x in 0..w {
-            let o = x * 4;
+        for (x, out) in row.chunks_exact_mut(4).enumerate() {
             for c in 0..4 {
-                row[o + c] = sum[c] * inv;
+                out[c] = sum[c] * inv;
             }
-            let add = clamp_index(x as isize + ri + 1, last) * 4;
-            let sub = clamp_index(x as isize - ri, last) * 4;
+            let add = (x + 2 * r + 1) * 4;
+            let sub = x * 4;
             for c in 0..4 {
                 sum[c] += line[add + c] - line[sub + c];
             }
