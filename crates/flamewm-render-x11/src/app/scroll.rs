@@ -256,6 +256,8 @@ pub(crate) struct PaintNodeCache {
     variables: Vec<Color>,
     /// Boxed: most nodes of a large pooled document are hidden and keep only an empty slot.
     nodes: Vec<Option<Box<NodeEntry>>>,
+    /// Cached visibility state for all nodes, computed once per paint rebuild.
+    visibility: Vec<bool>,
     #[cfg(test)]
     hits: usize,
     #[cfg(test)]
@@ -333,8 +335,7 @@ fn paint_memo(
 ) {
     for &index in nodes {
         let slot = &mut cache.nodes[index as usize];
-        if !document.is_effectively_visible(index) {
-            // Paint skips hidden nodes before resolving anything else: nothing to emit or keep.
+        if !cache.visibility.get(index as usize).copied().unwrap_or(false) {
             *slot = None;
             continue;
         }
@@ -386,6 +387,13 @@ pub(crate) fn build_scrolled_paint_cached(
         cache.nodes.clear();
         cache.nodes.resize_with(count, || None);
         cache.variables.clone_from(&document.variable_values);
+    }
+    if cache.visibility.len() != count {
+        cache.visibility.clear();
+        cache.visibility.resize(count, false);
+    }
+    for (i, visible) in cache.visibility.iter_mut().enumerate() {
+        *visible = document.is_effectively_visible(i as u32);
     }
     build_clipped(document, layout, interaction, |layout, nodes, out| {
         paint_memo(document, cache, interaction, layout, nodes, out);
