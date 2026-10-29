@@ -116,30 +116,105 @@ struct ClipChain {
     depth: u32,
 }
 
-/// Clip chains as shared ids. `ids[node]` indexes `chains`, the chain of clipping ancestors
-/// that `node` inherits. A chain is created only where a clipping node's children begin, so
-/// unclipped subtrees share their parent's chain. Chains link to their parent by index, so a
-/// clipping node costs one link rather than a copy of its whole ancestor rectangle list.
+/// The document tree as flat arrays: nodes in pre-order with each subtree contiguous, so a walk
+/// that skips hidden subtrees is a linear scan instead of a sibling-pointer chase through every
+/// node. Compiled node links never change after load, so it is built once per document.
+#[derive(Default)]
+pub(crate) struct TreeIndex {
+    key: Option<(usize, u32, usize)>,
+    preorder: Vec<u32>,
+    /// Pre-order position one past the subtree that starts at the same position.
+    subtree_end: Vec<u32>,
+    /// Parent of each node, `u32::MAX` for the root (or a detached node).
+    parent: Vec<u32>,
+}
+
+impl TreeIndex {
+    fn sync(&mut self, document: &RuntimeDocument) {
+        let nodes = &document.document.nodes;
+        let key = (nodes.len(), document.document.root, nodes.as_ptr() as usize);
+        if self.key == Some(key) {
+            return;
+        }
+        self.key = Some(key);
+        self.preorder.clear();
+        self.parent.clear();
+        self.parent.resize(nodes.len(), u32::MAX);
+        let mut stack = vec![document.document.root];
+        while let Some(index) = stack.pop() {
+            self.preorder.push(index);
+            for child in children(document, index) {
+                self.parent[child as usize] = index;
+                stack.push(child);
+            }
+        }
+        let mut size = vec![1u32; nodes.len()];
+        for &index in self.preorder.iter().rev() {
+            let parent = self.parent[index as usize];
+            if parent != u32::MAX {
+                size[parent as usize] += size[index as usize];
+            }
+        }
+        self.subtree_end = self
+            .preorder
+            .iter()
+            .enumerate()
+            .map(|(position, &index)| position as u32 + size[index as usize])
+            .collect();
+    }
+}
+
+/// Per-frame scratch of `build_clipped`, kept by the window so its buffers are reused.
+#[derive(Default)]
+pub(crate) struct PaintScratch {
+    tree: TreeIndex,
+    /// `is_effectively_visible` per node after a build.
+    visible: Vec<bool>,
+    child_chain: Vec<u32>,
+}
+
+/// Visibility and clip chains in one pass over the visible tree. `ids[node]` indexes `chains`,
+/// the chain of clipping ancestors that `node` inherits. A chain is created only where a clipping
+/// node's children begin, so unclipped subtrees share their parent's chain. Chains link to their
+/// parent by index, so a clipping node costs one link rather than a copy of its whole ancestor
+/// rectangle list. A hidden subtree paints nothing and is dropped from the paint order, so it is
+/// skipped whole (most nodes of a pooled document are hidden).
 fn clip_chains(
     document: &RuntimeDocument,
     layout: &LayoutResult,
     interaction: Interaction,
+    scratch: &mut PaintScratch,
 ) -> (Vec<u32>, Vec<ClipChain>, bool) {
-    let mut ids = vec![0u32; document.document.nodes.len()];
+    let count = document.document.nodes.len();
+    scratch.tree.sync(document);
+    scratch.visible.clear();
+    scratch.visible.resize(count, false);
+    scratch.child_chain.clear();
+    scratch.child_chain.resize(count, 0);
+    let mut ids = vec![0u32; count];
     let mut chains = vec![ClipChain {
         parent: 0,
         rect: Rect::default(),
         depth: 0,
     }];
-    // A hidden subtree paints nothing and is dropped from the paint order, so it is not walked
-    // at all (most nodes of a pooled document are hidden).
-    let mut stack = vec![document.document.root];
     let mut any_clip = false;
-    while let Some(index) = stack.pop() {
+    let tree = &scratch.tree;
+    let mut position = 0;
+    while position < tree.preorder.len() {
+        let index = tree.preorder[position];
         if !document.is_visible(index) {
+            position = tree.subtree_end[position] as usize;
             continue;
         }
-        let mut id = ids[index as usize];
+        position += 1;
+        scratch.visible[index as usize] = true;
+        let parent = tree.parent[index as usize];
+        let mut id = if parent == u32::MAX {
+            0
+        } else {
+            scratch.child_chain[parent as usize]
+        };
+        ids[index as usize] = id;
         if clips_descendants(document, index, interaction) {
             let depth = chains[id as usize].depth + 1;
             chains.push(ClipChain {
@@ -150,10 +225,7 @@ fn clip_chains(
             id = (chains.len() - 1) as u32;
             any_clip = true;
         }
-        for child in children(document, index) {
-            ids[child as usize] = id;
-            stack.push(child);
-        }
+        scratch.child_chain[index as usize] = id;
     }
     (ids, chains, any_clip)
 }
@@ -161,18 +233,17 @@ fn clip_chains(
 /// Walks the visible part of the paint z-order in runs of equal clip chains (compared by
 /// content, so run boundaries match a per-node comparison). `paint_run` appends the commands of
 /// one contiguous run of z-order nodes; each run is wrapped in its PushClip/PopClip pairs.
-/// `visible` is scratch, left holding `is_effectively_visible` per node.
+/// `scratch.visible` is left holding `is_effectively_visible` per node.
 fn build_clipped(
     document: &RuntimeDocument,
     layout: &mut LayoutResult,
     interaction: Interaction,
-    visible: &mut Vec<bool>,
+    scratch: &mut PaintScratch,
     mut paint_run: impl FnMut(&mut LayoutResult, &[u32], &mut Vec<PaintCommand>),
 ) -> Vec<PaintCommand> {
-    visible.resize(document.document.nodes.len(), false);
-    fill_visibility(document, visible);
-    let (ids, chains, any_clip) = clip_chains(document, layout, interaction);
+    let (ids, chains, any_clip) = clip_chains(document, layout, interaction, scratch);
     let full_order = std::mem::take(&mut layout.z_order);
+    let visible = &scratch.visible;
     let order: Vec<u32> = full_order
         .iter()
         .copied()
@@ -247,7 +318,7 @@ pub(crate) fn build_scrolled_paint(
     layout: &mut LayoutResult,
     interaction: Interaction,
 ) -> Vec<PaintCommand> {
-    build_clipped(document, layout, interaction, &mut Vec::new(), |layout, nodes, out| {
+    build_clipped(document, layout, interaction, &mut PaintScratch::default(), |layout, nodes, out| {
         layout.z_order.clear();
         layout.z_order.extend_from_slice(nodes);
         out.extend(build_paint_commands_with_scroll(
@@ -267,8 +338,7 @@ pub(crate) struct PaintNodeCache {
     variables: Vec<Color>,
     /// Boxed: most nodes of a large pooled document are hidden and keep only an empty slot.
     nodes: Vec<Option<Box<NodeEntry>>>,
-    /// Cached visibility state for all nodes, computed once per paint rebuild.
-    visibility: Vec<bool>,
+    scratch: PaintScratch,
     #[cfg(test)]
     hits: usize,
     #[cfg(test)]
@@ -391,19 +461,6 @@ fn paint_memo(
     }
 }
 
-/// `visible[node]` = `is_effectively_visible(node)` for every node under the root, in one walk.
-fn fill_visibility(document: &RuntimeDocument, visible: &mut [bool]) {
-    visible.fill(false);
-    let mut stack = vec![document.document.root];
-    while let Some(index) = stack.pop() {
-        if !document.is_visible(index) {
-            continue;
-        }
-        visible[index as usize] = true;
-        stack.extend(children(document, index));
-    }
-}
-
 /// Same output as `build_scrolled_paint`, re-emitting only the nodes whose inputs changed
 /// since the previous call that used `cache`.
 pub(crate) fn build_scrolled_paint_cached(
@@ -418,16 +475,16 @@ pub(crate) fn build_scrolled_paint_cached(
         cache.nodes.resize_with(count, || None);
         cache.variables.clone_from(&document.variable_values);
     }
-    let mut visible = std::mem::take(&mut cache.visibility);
-    let out = build_clipped(document, layout, interaction, &mut visible, |layout, nodes, out| {
+    let mut scratch = std::mem::take(&mut cache.scratch);
+    let out = build_clipped(document, layout, interaction, &mut scratch, |layout, nodes, out| {
         paint_memo(document, cache, interaction, layout, nodes, out);
     });
-    for (slot, &shown) in cache.nodes.iter_mut().zip(&visible) {
+    for (slot, &shown) in cache.nodes.iter_mut().zip(&scratch.visible) {
         if !shown {
             *slot = None;
         }
     }
-    cache.visibility = visible;
+    cache.scratch = scratch;
     out
 }
 
@@ -443,6 +500,26 @@ mod tests {
     /// scroll extent from auto-height content, as the settings page does.
     fn fixture() -> RuntimeDocument {
         fixture_with_height(None)
+    }
+
+    #[test]
+    fn tree_index_keeps_every_subtree_contiguous() {
+        let document = fixture();
+        let mut tree = TreeIndex::default();
+        tree.sync(&document);
+        assert_eq!(tree.preorder.len(), document.document.nodes.len());
+        assert_eq!(tree.preorder[0], document.document.root);
+        for (position, &index) in tree.preorder.iter().enumerate() {
+            let end = tree.subtree_end[position] as usize;
+            assert!(end > position && end <= tree.preorder.len());
+            for &inner in &tree.preorder[position + 1..end] {
+                let mut ancestor = tree.parent[inner as usize];
+                while ancestor != index && ancestor != u32::MAX {
+                    ancestor = tree.parent[ancestor as usize];
+                }
+                assert_eq!(ancestor, index, "node {inner} sits inside subtree of {index}");
+            }
+        }
     }
 
     fn fixture_with_height(height: Option<f32>) -> RuntimeDocument {
