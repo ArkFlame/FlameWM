@@ -203,6 +203,10 @@ impl LayoutEngine {
         // Content extent: intrinsic measure unconstrained on the scroll axis.
         let mut contents = vec![Rect::default(); document.document.nodes.len()];
         for (index, entry) in boxes.iter().enumerate() {
+            if !document.is_visible(index as u32) {
+                contents[index] = entry.rect;
+                continue;
+            }
             let style = document.runtime_style_cow(index as u32, interaction);
             let scrolls_x = matches!(
                 style.overflow_x,
