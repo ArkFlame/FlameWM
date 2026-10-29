@@ -168,8 +168,8 @@ fn run_session(
         })
         .inspect_err(|_| integrations.borrow_mut().stop())?,
     );
-    // Best effort: starts the helper once so the first volume key steps from a real snapshot.
-    // The helper exits after its idle period; the last published snapshot stays until the next use.
+    // Best effort: the one eager spawn. It starts the helper so the first volume key steps from a
+    // real snapshot. The helper exits after its idle period; the last snapshot stays until next use.
     let _ = pulse.request_snapshot();
     let audio_updates = Rc::new(RefCell::new(Vec::<AudioSnapshot>::new()));
     let audio_updates_for_callback = Rc::clone(&audio_updates);
