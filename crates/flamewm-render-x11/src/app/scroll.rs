@@ -51,6 +51,9 @@ pub(crate) fn fit_scroll_extents(
     // One work stack reused across scrollers; each walk drains it back to empty.
     let mut pending: Vec<u32> = Vec::new();
     for index in 0..document.document.nodes.len() as u32 {
+        if !document.is_visible(index) {
+            continue;
+        }
         let style = document.runtime_style_cow(index, interaction);
         if !matches!(style.overflow_y, Overflow::Auto | Overflow::Scroll) {
             continue;
