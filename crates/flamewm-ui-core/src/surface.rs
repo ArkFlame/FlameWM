@@ -50,6 +50,13 @@ pub fn surface_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
 /// Tint. Reduce transparency yields the opaque Dock solid.
 #[must_use]
 pub fn dock_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
+    // Inherit is the shared surface: same surfaceColor, glass alpha and reduce-transparency solid
+    // as popups and widgets, so the taskbar cannot drift from them.
+    if crate::glass::appearance_from_settings(snapshot).taskbar_mode
+        == crate::glass::TaskbarMode::Inherit
+    {
+        return surface_fill(snapshot);
+    }
     let material = crate::glass::resolve(
         crate::glass::MaterialRole::Dock,
         crate::glass::appearance_from_settings(snapshot),
@@ -105,7 +112,7 @@ mod surface_stroke_contract_tests {
     fn shared_contour_is_the_dark_glass_hairline_by_default() {
         let stroke = surface_stroke(&SettingsSnapshot::new(1));
         assert_eq!(stroke.rgb, 0x00ff_ffff);
-        assert_eq!(stroke.alpha, 43);
+        assert_eq!(stroke.alpha, 63);
     }
     #[test]
     fn border_is_independent_from_surface_opacity_and_accepts_zero() {
@@ -436,7 +443,10 @@ mod glass_settings_contract_tests {
 
     #[test]
     fn dock_fill_follows_taskbar_material_mode() {
-        let blur_only = dock_fill(&SettingsSnapshot::new(1));
+        let blur_only = dock_fill(&with(&[(
+            "taskbarMaterialMode",
+            SettingValue::Text("blur-only".into()),
+        )]));
         assert_eq!((blur_only.rgb, blur_only.alpha), (0x00ff_ffff, 20));
         let inherit = dock_fill(&with(&[(
             "taskbarMaterialMode",
@@ -449,6 +459,20 @@ mod glass_settings_contract_tests {
             ("taskbarOpacityPercent", SettingValue::Percent(50)),
         ]));
         assert_eq!((custom.rgb, custom.alpha), (0x0058_79ee, 128));
+    }
+
+    #[test]
+    fn inherit_taskbar_fill_is_exactly_the_shared_surface_fill() {
+        for reduce in [false, true] {
+            let snapshot = with(&[
+                ("reduceTransparency", SettingValue::Boolean(reduce)),
+                ("surfaceColor", SettingValue::Text("#333333".into())),
+                ("taskbarMaterialMode", SettingValue::Text("inherit".into())),
+            ]);
+            let dock = dock_fill(&snapshot);
+            let surface = surface_fill(&snapshot);
+            assert_eq!((dock.rgb, dock.alpha), (surface.rgb, surface.alpha), "reduce={reduce}");
+        }
     }
 
     #[test]

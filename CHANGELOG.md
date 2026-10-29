@@ -1,3 +1,20 @@
+## 2026-10-29 — Widget grid
+
+- The widget grid covers the whole primary work area: columns and rows are computed from the usable area, and cells stretch so the grid fills it edge to edge inside a 16px margin (8px gutters). Cells are close to square (target about 104px at 100%). The grid recomputes on resolution, scale, taskbar size or position, and output changes; widgets reflow proportionally.
+- Drag and resize snap to any cell. Dropping a widget on a same-size widget swaps them; otherwise the dropped widget takes the nearest free cell. Lock Position is respected.
+- While a widget is dragged or resized, every grid cell shows a faint outline. The outlines are removed on release and cost nothing while idle.
+- The drag ghost is accent-tinted on a valid cell (including the nearest free cell after a collision) and error-tinted when nothing fits.
+- Custom widgets can be 1x1, 2x1, 2x2, 3x2 or 4x2 cells. Other kinds keep their own allowed sizes; a size they do not allow snaps to the nearest one.
+- Widgets resize only from their borders and corners. Dragging the left or top edge moves the anchor cell; the opposite edge stays fixed. Sizes snap to the nearest allowed span for the kind and are clamped inside the grid. The circular resize handle and the right-click "Size" rows are removed.
+- Widget settings start at the system defaults. "Custom accent" and "Custom surface" are off by default; turning one on reveals its colour rows. Clock date size, corner radius and per-card backdrop blur are no longer options: cards use the global blur and a fixed radius. Existing settings migrate: an explicit accent turns Custom accent on, and `inheritSurface=0` turns Custom surface on.
+- Known limit: the widget layout is kept for the primary output only. Widgets are not stored per output, and the grid is not laid out on secondary outputs.
+
+## 2026-10-29 — Glass settings polish
+
+- The taskbar material now inherits the shared surface glass by default (fill, opacity and blur match windows, widgets and menus). `taskbarMaterialMode=blur-only` and `custom-tint` still work when chosen explicitly; existing settings files keep their stored values.
+- The "Glassify contrast zones" option is removed. Contrast zones are always glassified; `glassifyContrastZones` in an old settings file is ignored.
+- Settings group zones use a 20% black overlay on glass. With Reduce Transparency they become a solid, darker shade of the window colour.
+
 ## 2026-10-29 — File wheel audio and video conversion
 
 - The file wheel now offers audio (MP3, M4A, WAV, FLAC, OGG, Opus, AIFF, WMA) and video (MP4, MOV, MKV, WebM, AVI, WMV, GIF, MP3 export) conversions. They run through ffmpeg, which is detected at runtime; without it these entries are not offered. Outputs are saved beside the original under a free name, and the original is never replaced.

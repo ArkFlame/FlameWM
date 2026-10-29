@@ -785,7 +785,7 @@ fn rgba(rgb: u32, alpha: u8) -> UiColor {
 fn accent_color(snapshot: &SettingsSnapshot) -> u32 {
     let name = match snapshot.values.get("accent") {
         Some(SettingValue::Text(text)) => text.as_str(),
-        _ => "red",
+        _ => "#539bff",
     };
     match name {
         "red" => 0x00ef_4048,
@@ -797,7 +797,7 @@ fn accent_color(snapshot: &SettingsSnapshot) -> u32 {
         _ => u32::from_str_radix(name.strip_prefix('#').unwrap_or(name), 16)
             .ok()
             .filter(|_| name.trim_start_matches('#').len() == 6)
-            .unwrap_or(0x00ef_4048),
+            .unwrap_or(0x0053_9bff),
     }
 }
 
@@ -1003,7 +1003,7 @@ mod tests {
     #[test]
     fn default_accent_and_surface_match_flamewm_settings() {
         let snap = SettingsSnapshot::new(0);
-        assert_eq!(accent_color(&snap), 0x00ef_4048);
+        assert_eq!(accent_color(&snap), 0x0053_9bff);
         assert_eq!(surface_fill(&snap).alpha, 31);
     }
     #[test]

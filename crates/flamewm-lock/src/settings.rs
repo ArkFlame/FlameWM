@@ -70,7 +70,7 @@ impl Default for SaverConfig {
 }
 
 pub const DEFAULT_BACKGROUND: [u8; 3] = [0x23, 0x26, 0x29];
-pub const DEFAULT_ACCENT: &str = "#3daee9";
+pub const DEFAULT_ACCENT: &str = "#539BFF";
 pub const DEFAULT_FONT_FAMILY: &str = "Noto Sans";
 
 impl Default for LockSettings {

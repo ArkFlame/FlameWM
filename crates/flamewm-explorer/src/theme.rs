@@ -11,7 +11,7 @@ use flamewm_ui_x11::backdrop::WindowBackdrop;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
 /// `FlameWM` default accent, the same value as flamewm-settings `DEFAULT_ACCENT`. Used only when no settings snapshot supplies `accent`.
-pub const DEFAULT_ACCENT: u32 = 0x00EF_4048;
+pub const DEFAULT_ACCENT: u32 = 0x0053_9BFF;
 /// Shared defaults (flamewm-ui-core `DEFAULT_SURFACE_OPACITY`, shell/desktop `surfaceBlurPercent`).
 const DEFAULT_SURFACE_OPACITY: u8 = 50;
 const DEFAULT_BLUR_PERCENT: u8 = 80;
@@ -121,7 +121,7 @@ impl ExplorerTheme {
         };
         if let Some(SettingValue::Text(name)) = snapshot.values.get("accent") {
             theme.accent = rgb(match name.as_str() {
-                "red" => DEFAULT_ACCENT,
+                "red" => 0x00EF_4048,
                 "blue" => 0x003d_aee9,
                 "purple" => 0x009b_59b6,
                 "teal" => 0x001a_bc9c,
@@ -275,7 +275,7 @@ mod tests {
         let defaults = ExplorerTheme::from_snapshot(&SettingsSnapshot::new(1));
         assert_eq!(
             (defaults.accent.r, defaults.accent.g, defaults.accent.b),
-            (0xEF, 0x40, 0x48)
+            (0x53, 0x9B, 0xFF)
         );
         let mut settings = SettingsSnapshot::new(2);
         settings
@@ -296,7 +296,7 @@ mod tests {
         let bad = ExplorerTheme::from_snapshot(&settings);
         assert_eq!(
             (bad.accent.r, bad.accent.g, bad.accent.b),
-            (0xEF, 0x40, 0x48)
+            (0x53, 0x9B, 0xFF)
         );
     }
 

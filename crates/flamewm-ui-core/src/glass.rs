@@ -52,14 +52,22 @@ pub struct GlassPreset {
     pub glass_blur_px: u8,
 }
 
+/// Shared rim fade for every glass surface: the bottom rim is this percent of the top rim, so the
+/// highlight sits on the upper edge and the sides and bottom stay subtle (Tahoe control-centre look).
+pub const RIM_FADE_PERCENT: u8 = 25;
+
+/// Shared rim alpha (`surfaceBorderOpacity` default, and `--rim` in every glass sheet as `#ffffff3f`).
+/// The Settings help text and platform default read this same value.
+pub const RIM_PERCENT: u8 = 25;
+
 pub const DARK: GlassPreset = GlassPreset {
     tint_rgb: 0x00ea_f4ff,
     tint_percent: 12,
     blur_percent: 70,
     rim_rgb: 0x00ff_ffff,
-    rim_percent: 17,
+    rim_percent: RIM_PERCENT,
     saturation_percent: 170,
-    rim_fade_percent: 100,
+    rim_fade_percent: RIM_FADE_PERCENT,
     shadow_percent: 0,
     highlight_percent: 14,
     glass_opacity_percent: 12,
@@ -71,9 +79,9 @@ pub const LIGHT: GlassPreset = GlassPreset {
     tint_percent: 5,
     blur_percent: 33,
     rim_rgb: 0x00ff_ffff,
-    rim_percent: 23,
+    rim_percent: RIM_PERCENT,
     saturation_percent: 155,
-    rim_fade_percent: 100,
+    rim_fade_percent: RIM_FADE_PERCENT,
     shadow_percent: 0,
     highlight_percent: 20,
     glass_opacity_percent: 5,
@@ -136,7 +144,15 @@ mod tests {
         assert_eq!(DARK.tint_rgb, 0x00ea_f4ff);
         assert_eq!(DARK.blur_percent, 70);
         assert!(LIGHT.tint_percent < DARK.tint_percent);
-        assert!(LIGHT.rim_percent > DARK.rim_percent);
+        assert_eq!(LIGHT.rim_percent, DARK.rim_percent);
+        assert_eq!(DARK.rim_percent, RIM_PERCENT);
+    }
+
+    #[test]
+    fn both_presets_share_a_top_weighted_rim_fade() {
+        assert_eq!(DARK.rim_fade_percent, RIM_FADE_PERCENT);
+        assert_eq!(LIGHT.rim_fade_percent, RIM_FADE_PERCENT);
+        assert!(RIM_FADE_PERCENT < 100);
     }
 
     #[test]
@@ -210,8 +226,6 @@ pub enum TaskbarMode {
 /// Resolved appearance inputs, one per persisted setting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Appearance {
-    /// `glassifyContrastZones`.
-    pub glassify_contrast_zones: bool,
     /// `reduceTransparency`.
     pub reduce_transparency: bool,
     /// `glassOpacityPercent` (4..=42).
@@ -229,11 +243,10 @@ pub struct Appearance {
 impl Default for Appearance {
     fn default() -> Self {
         Self {
-            glassify_contrast_zones: false,
             reduce_transparency: false,
             glass_opacity_percent: 12,
             glass_blur_px: 28,
-            taskbar_mode: TaskbarMode::BlurOnly,
+            taskbar_mode: TaskbarMode::Inherit,
             taskbar_opacity_percent: 8,
             taskbar_custom_tint: 0x5879ee,
         }
@@ -265,9 +278,7 @@ impl ResolvedMaterial {
 
 /// Dark-theme solid chrome and the opaque fallback color.
 pub const STANDARD_RGB: u32 = 0x0017_2135;
-const CONTRAST_RGB: u32 = 0x000f_1726;
 const CONTRAST_GLASS_RGB: u32 = 0x0018_253e;
-const CONTRAST_ALPHA_PERMILLE: u16 = 880;
 const CONTRAST_GLASS_ALPHA_PERMILLE: u16 = 280;
 const CONTRAST_GLASS_BLUR_PX: u16 = 26;
 const CLEAR_ALPHA_PERMILLE: u16 = 45;
@@ -305,8 +316,8 @@ pub fn taskbar_blur_px(glass_blur_px: u8) -> u16 {
     (u16::from(glass_blur_px) + TASKBAR_BLUR_OFFSET_PX).max(TASKBAR_BLUR_MIN_PX)
 }
 
-/// Pure role resolver. Precedence: reduce transparency, then Dock, then glassified ContrastZone,
-/// then the role default. Blur is scaled by output scale and dropped without backdrop support.
+/// Pure role resolver. Precedence: reduce transparency, then Dock, then the role default.
+/// ContrastZone is always glassified; it is not a setting. Blur is scaled by output scale and dropped without backdrop support.
 #[must_use]
 pub fn resolve(
     role: MaterialRole,
@@ -329,12 +340,11 @@ pub fn resolve(
     } else {
         match role {
             MaterialRole::StandardContent => (STANDARD_RGB, 1000, 0),
-            MaterialRole::ContrastZone if appearance.glassify_contrast_zones => (
+            MaterialRole::ContrastZone => (
                 CONTRAST_GLASS_RGB,
                 CONTRAST_GLASS_ALPHA_PERMILLE,
                 CONTRAST_GLASS_BLUR_PX,
             ),
-            MaterialRole::ContrastZone => (CONTRAST_RGB, CONTRAST_ALPHA_PERMILLE, 0),
             MaterialRole::GlassRegular => {
                 let (rgb, alpha, blur) = regular(appearance);
                 (rgb, alpha, blur)
@@ -391,7 +401,8 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
     let mode = match snapshot.values.get("taskbarMaterialMode") {
         Some(SettingValue::Text(value)) if value == "inherit" => TaskbarMode::Inherit,
         Some(SettingValue::Text(value)) if value == "custom-tint" => TaskbarMode::CustomTint,
-        _ => TaskbarMode::BlurOnly,
+        Some(SettingValue::Text(value)) if value == "blur-only" => TaskbarMode::BlurOnly,
+        _ => defaults.taskbar_mode,
     };
     let legacy_blur_px = percent("surfaceBlurPercent")
         .map(|value| (u16::from(value.min(100)) * 40 / 100) as u8);
@@ -410,7 +421,6 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
         _ => None,
     };
     Appearance {
-        glassify_contrast_zones: flag("glassifyContrastZones", defaults.glassify_contrast_zones),
         reduce_transparency: flag("reduceTransparency", defaults.reduce_transparency),
         glass_opacity_percent,
         glass_blur_px,
@@ -464,13 +474,8 @@ mod resolver_tests {
     ];
     const CAPS: RendererCaps = RendererCaps { backdrop_blur: true };
 
-    fn with(
-        glassify: bool,
-        reduce: bool,
-        mode: TaskbarMode,
-    ) -> Appearance {
+    fn with(reduce: bool, mode: TaskbarMode) -> Appearance {
         Appearance {
-            glassify_contrast_zones: glassify,
             reduce_transparency: reduce,
             taskbar_mode: mode,
             ..Appearance::default()
@@ -480,35 +485,34 @@ mod resolver_tests {
     #[test]
     fn defaults_match_handoff() {
         let a = Appearance::default();
-        assert!(!a.glassify_contrast_zones && !a.reduce_transparency);
+        assert!(!a.reduce_transparency);
         assert_eq!((a.glass_opacity_percent, a.glass_blur_px), (12, 28));
-        assert_eq!(a.taskbar_mode, TaskbarMode::BlurOnly);
+        assert_eq!(a.taskbar_mode, TaskbarMode::Inherit);
         assert_eq!((a.taskbar_opacity_percent, a.taskbar_custom_tint), (8, 0x5879ee));
     }
 
     #[test]
-    fn standard_content_is_solid_and_never_glassified() {
-        for glassify in [false, true] {
-            let m = resolve(MaterialRole::StandardContent, with(glassify, false, TaskbarMode::BlurOnly), 100, CAPS);
-            assert_eq!(m, ResolvedMaterial { tint_rgb: STANDARD_RGB, alpha_permille: 1000, blur_px: 0 });
-        }
+    fn missing_or_invalid_taskbar_mode_inherits_surface_glass() {
+        let empty = SettingsSnapshot::new(0);
+        assert_eq!(appearance_from_settings(&empty).taskbar_mode, TaskbarMode::Inherit);
     }
 
     #[test]
-    fn contrast_zone_is_semi_opaque_by_default_and_glassy_when_on() {
-        let off = resolve(MaterialRole::ContrastZone, with(false, false, TaskbarMode::BlurOnly), 100, CAPS);
-        assert_eq!((off.alpha_permille, off.blur_px), (880, 0));
-        let on = resolve(MaterialRole::ContrastZone, with(true, false, TaskbarMode::BlurOnly), 100, CAPS);
-        assert_eq!((on.tint_rgb, on.alpha_permille, on.blur_px), (CONTRAST_GLASS_RGB, 280, 26));
+    fn standard_content_is_solid() {
+        let m = resolve(MaterialRole::StandardContent, with(false, TaskbarMode::BlurOnly), 100, CAPS);
+        assert_eq!(m, ResolvedMaterial { tint_rgb: STANDARD_RGB, alpha_permille: 1000, blur_px: 0 });
     }
 
     #[test]
-    fn dock_is_never_implicitly_glassified() {
-        // Glassify on must not change BlurOnly dock beyond its own mode.
-        let off = resolve(MaterialRole::Dock, with(false, false, TaskbarMode::BlurOnly), 100, CAPS);
-        let on = resolve(MaterialRole::Dock, with(true, false, TaskbarMode::BlurOnly), 100, CAPS);
-        assert_eq!(off, on);
-        assert_eq!((off.tint_rgb, off.alpha_permille, off.blur_px), (NEUTRAL_RGB, 80, 34));
+    fn contrast_zone_is_always_glassified() {
+        let m = resolve(MaterialRole::ContrastZone, with(false, TaskbarMode::BlurOnly), 100, CAPS);
+        assert_eq!((m.tint_rgb, m.alpha_permille, m.blur_px), (CONTRAST_GLASS_RGB, 280, 26));
+    }
+
+    #[test]
+    fn dock_blur_only_uses_its_own_material() {
+        let m = resolve(MaterialRole::Dock, with(false, TaskbarMode::BlurOnly), 100, CAPS);
+        assert_eq!((m.tint_rgb, m.alpha_permille, m.blur_px), (NEUTRAL_RGB, 80, 34));
     }
 
     #[test]
@@ -517,7 +521,7 @@ mod resolver_tests {
         let regular_ = resolve(MaterialRole::GlassRegular, base, 100, CAPS);
         let inherit = resolve(MaterialRole::Dock, Appearance { taskbar_mode: TaskbarMode::Inherit, ..base }, 100, CAPS);
         assert_eq!(inherit, regular_);
-        let blur = resolve(MaterialRole::Dock, base, 100, CAPS);
+        let blur = resolve(MaterialRole::Dock, Appearance { taskbar_mode: TaskbarMode::BlurOnly, ..base }, 100, CAPS);
         assert_eq!((blur.tint_rgb, blur.alpha_permille, blur.blur_px), (NEUTRAL_RGB, 80, 16));
         let custom = resolve(
             MaterialRole::Dock,
@@ -529,21 +533,19 @@ mod resolver_tests {
     }
 
     #[test]
-    fn reduce_transparency_wins_over_every_role_mode_and_glassify() {
+    fn reduce_transparency_wins_over_every_role_and_mode() {
         for role in ALL_ROLES {
             for mode in MODES {
-                for glassify in [false, true] {
-                    let m = resolve(role, with(glassify, true, mode), 150, CAPS);
-                    assert!(m.is_opaque(), "{role:?} {mode:?} glassify={glassify}");
-                    assert_eq!(m.blur_px, 0, "{role:?} {mode:?} glassify={glassify}");
-                }
+                let m = resolve(role, with(true, mode), 150, CAPS);
+                assert!(m.is_opaque(), "{role:?} {mode:?}");
+                assert_eq!(m.blur_px, 0, "{role:?} {mode:?}");
             }
         }
     }
 
     #[test]
     fn reduce_transparency_keeps_custom_tint_only_for_dock() {
-        let a = with(false, true, TaskbarMode::CustomTint);
+        let a = with(true, TaskbarMode::CustomTint);
         assert_eq!(resolve(MaterialRole::Dock, a, 100, CAPS).tint_rgb, 0x5879ee);
         assert_eq!(resolve(MaterialRole::GlassRegular, a, 100, CAPS).tint_rgb, STANDARD_RGB);
     }
@@ -568,11 +570,9 @@ mod resolver_tests {
     fn every_role_and_mode_resolves_within_bounds() {
         for role in ALL_ROLES {
             for mode in MODES {
-                for glassify in [false, true] {
-                    let m = resolve(role, with(glassify, false, mode), 100, CAPS);
-                    assert!(m.alpha_permille <= 1000);
-                    assert!(m.blur_px <= 60);
-                }
+                let m = resolve(role, with(false, mode), 100, CAPS);
+                assert!(m.alpha_permille <= 1000);
+                assert!(m.blur_px <= 60);
             }
         }
     }

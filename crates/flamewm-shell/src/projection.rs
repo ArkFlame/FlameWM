@@ -1262,6 +1262,8 @@ mod panel_template_tests {
     // 44 px border box, so the capsule grows to y=0, h=44 over the bar border).
     #[test]
     fn separate_mode_nodes_share_one_top_and_height() {
+        let _scale = taskbar_scale::test_lock();
+        taskbar_scale::set_factor(1.0);
         for logical in [34_u16, 44, 72] {
             let mut doc = decode_panel();
             let factor = taskbar_scale::scale_for_height(logical);
@@ -1398,6 +1400,8 @@ mod panel_template_tests {
     // and the rightmost nodes fall outside and this test fails.
     #[test]
     fn panel_clock_pager_tray_lay_out_inside_scaled_window() {
+        let _scale = taskbar_scale::test_lock();
+        taskbar_scale::set_factor(1.0);
         let mut document = decode_panel();
         // Live panel: 1350x90 device px window, 125% output scale, logical 72.
         let output = flamewm_api::OutputId::new("HDMI-1");
@@ -1489,6 +1493,8 @@ mod panel_template_tests {
 
     #[test]
     fn single_workspace_has_no_pager_capsule_and_multiple_workspaces_restore_it() {
+        let _scale = taskbar_scale::test_lock();
+        taskbar_scale::set_factor(1.0);
         let items = TaskbarItems::default();
         let single = pager_snapshot(1, 0);
         let multiple = pager_snapshot(2, 0);
@@ -1535,6 +1541,8 @@ mod panel_template_tests {
     // shift every later cell right).
     #[test]
     fn pager_cells_follow_the_two_row_workspace_topology() {
+        let _scale = taskbar_scale::test_lock();
+        taskbar_scale::set_factor(1.0);
         let viewport = (1080.0, 72.0);
         let mut document = decode_panel();
         document

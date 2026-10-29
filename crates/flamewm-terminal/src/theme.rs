@@ -11,7 +11,7 @@ use crate::store::FOLLOW_FLAMEWM;
 use crate::themes::{Palette, Theme, builtin_themes};
 
 /// `FlameWM` default accent, the same value as flamewm-settings `DEFAULT_ACCENT`.
-pub const DEFAULT_ACCENT: u32 = 0x00EF_4048;
+pub const DEFAULT_ACCENT: u32 = 0x0053_9BFF;
 /// Shared default for the surface blur (shell/desktop `surfaceBlurPercent`).
 pub const DEFAULT_BLUR_PERCENT: u8 = 80;
 
@@ -33,7 +33,7 @@ fn accent(snapshot: &SettingsSnapshot) -> u32 {
         return DEFAULT_ACCENT;
     };
     match name {
-        "red" => DEFAULT_ACCENT,
+        "red" => 0x00EF_4048,
         "blue" => 0x003d_aee9,
         "purple" => 0x009b_59b6,
         "teal" => 0x001a_bc9c,

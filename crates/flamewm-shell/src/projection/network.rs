@@ -76,6 +76,8 @@ pub fn project_network_full(
             // The shared toggle recipe paints a fixed skin red; the on-track follows the live accent.
             document.background("network-wifi-track", crate::projection::task_accent())?;
         }
+        // The connected tile follows the live accent; the stylesheet keeps no fixed blue.
+        document.background("network-connected-tile", crate::projection::task_accent())?;
         document.visible("network-scan", popover.can_scan)?;
         document.visible("network-disconnect", popover.can_disconnect)?;
         document.visible("network-secret", popover.secret_masked)?;

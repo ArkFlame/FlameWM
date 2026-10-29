@@ -328,7 +328,11 @@ mod taskbar_menu_tests {
             .lines()
             .find(|line| line.starts_with(".context-menu {"))
             .expect("shared menu frame rule");
-        assert!(frame.contains("border:1px solid #ffffff3f"), "{frame}");
+        assert!(frame.contains("border:1px solid var(--rim)"), "{frame}");
+        assert!(
+            SHARED_MENU_CSS.contains("--rim:#ffffff3f"),
+            "shared menu sheet must declare the literal --rim token"
+        );
         assert!(
             !TASK_MENU_HTML.contains("style="),
             "task menu markup must not override the frame inline"

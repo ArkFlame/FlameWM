@@ -107,7 +107,8 @@ pub const WINDOW_CHROME: WindowChromeRecipe = WindowChromeRecipe {
         WindowControlRole::Close,
     ],
     titlebar_background: PANEL,
-    border: Rgb(0x0046_484b),
+    // Shared rim `#ffffff3f` (CSS `--rim`, 25%) composited over PANEL, so Wayland matches the X11 rim.
+    border: Rgb(0x0053_5657),
     close_hover: Rgb(0x00e8_1123),
 };
 
@@ -116,7 +117,7 @@ pub const ICON_SLOT_PAD_Y: u16 = 4;
 /// Minimum icon slot edge when the titlebar is short.
 pub const ICON_SLOT_MIN: u16 = 8;
 /// Left padding before the icon slot.
-pub const ICON_PAD_LEFT: i32 = 6;
+pub const ICON_PAD_LEFT: i32 = 13;
 /// Padding between the occupied edges and the centered title.
 pub const TITLE_PAD: i32 = 6;
 

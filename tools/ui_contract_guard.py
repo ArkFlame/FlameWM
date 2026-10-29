@@ -141,6 +141,80 @@ def check_document(root, html_rel, owner_dir, css_rels, errors, warnings):
             errors.append(f"{html_rel}: data-action '{action}' has no handler in {owner_dir}")
 
 
+RIM_SHEETS = [
+    "ui/desktop/desktop.css",
+    "ui/finder/finder.css",
+    "ui/settings.css",
+    "ui/shared/menu.css",
+    "ui/shell/flamewm.css",
+    "ui/flamewm.css",
+    "ui/explorer/explorer.css",
+    "ui/terminal/terminal.css",
+    "ui/task-manager/task-manager.css",
+    "ui/lock/lock.css",
+]
+# Literal colour inside a border declaration. `transparent` and zero alpha are allowed.
+RIM_LITERAL_RE = re.compile(
+    r"(?<![\w-])border[a-z-]*\s*:[^;}{]*?(#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\))"
+)
+RIM_DECL_RE = re.compile(r"--rim\s*:\s*([^;}]+)")
+PLATFORM_FADE_RE = re.compile(r"surface_rim_fade_percent:\s*(\d+)")
+GLASS_FADE_RE = re.compile(r"pub const RIM_FADE_PERCENT:\s*u8\s*=\s*(\d+)")
+RIM_PERCENT_RE = re.compile(r"pub const RIM_PERCENT:\s*u8\s*=\s*(\d+)")
+PLATFORM_OPACITY_RE = re.compile(r"surface_border_opacity:\s*(\d+)")
+
+
+def check_rim_tokens(root, errors):
+    """Shared rim contract: one `--rim` value across every glass sheet, no literal border colours
+    in those sheets, and the platform default rim fade equal to the ui-core owner value."""
+    if not (root / "crates/flamewm-ui-core/src/glass.rs").exists():
+        return  # partial fixture tree: no rim owner to compare against
+    values = {}
+    for rel in RIM_SHEETS:
+        path = root / rel
+        if not path.exists():
+            errors.append(f"missing rim sheet {rel}")
+            continue
+        text = path.read_text()
+        for match in RIM_LITERAL_RE.finditer(text):
+            colour = match.group(1)
+            if re.fullmatch(r"#0+|#0{8}", colour, re.IGNORECASE):
+                continue
+            errors.append(f"{rel}: hardcoded border colour '{colour}' (use var(--rim))")
+        decl = RIM_DECL_RE.search(text)
+        if not decl:
+            errors.append(f"{rel}: missing shared --rim token")
+        else:
+            values[rel] = decl.group(1).strip()
+    if len(set(values.values())) > 1:
+        errors.append(f"--rim differs across sheets: {values}")
+
+    glass_text = (root / "crates/flamewm-ui-core/src/glass.rs").read_text()
+    percent = RIM_PERCENT_RE.search(glass_text)
+    if not percent:
+        errors.append("RIM_PERCENT owner not found in glass.rs")
+    else:
+        expected = f"#ffffff{int(percent.group(1)) * 255 // 100:02x}"
+        for rel, value in values.items():
+            if value.lower() != expected:
+                errors.append(f"{rel}: --rim {value} != RIM_PERCENT colour {expected}")
+        opacity = PLATFORM_OPACITY_RE.search((root / "crates/flamewm-platform/src/settings.rs").read_text())
+        if not opacity or opacity.group(1) != percent.group(1):
+            errors.append("platform surface_border_opacity default != RIM_PERCENT")
+
+    platform = root / "crates/flamewm-platform/src/settings.rs"
+    glass = root / "crates/flamewm-ui-core/src/glass.rs"
+    platform_match = PLATFORM_FADE_RE.search(platform.read_text())
+    glass_match = GLASS_FADE_RE.search(glass.read_text())
+    if not platform_match or not glass_match:
+        errors.append("rim fade owner or platform default not found")
+    elif platform_match.group(1) != glass_match.group(1):
+        errors.append(
+            f"surface_rim_fade_percent default {platform_match.group(1)} != "
+            f"RIM_FADE_PERCENT {glass_match.group(1)}"
+        )
+
+
 def main(root=None):
     root = Path(root) if root else Path(__file__).resolve().parents[1]
     errors, warnings = [], []
@@ -149,6 +223,7 @@ def main(root=None):
             errors.append(f"missing document {html_rel}")
             continue
         check_document(root, html_rel, owner_dir, css_rels, errors, warnings)
+    check_rim_tokens(root, errors)
     for warning in warnings:
         print(f"warning: {warning}")
     for error in errors:

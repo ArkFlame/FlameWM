@@ -22,6 +22,7 @@ Environment controls include:
   FLAMEWM_XEPHYR_SHELL_BIN=PATH   Override direct shell binary
   FLAMEWM_XEPHYR_CANARY_BIN=PATH  Override X11 canary binary
   FLAMEWM_XEPHYR_DEBUG_CRASH=1    Enable crash-debug Rust environment
+  FLAMEWM_XEPHYR_HOST_GL=1        Keep host GL (hardware) instead of forcing LIBGL_ALWAYS_SOFTWARE=1
   FLAMEWM_XEPHYR_OUTPUT_DIR=PATH  Root for invocation logs and screenshots
   FLAMEWM_XEPHYR_EVIDENCE_ROOT=PATH Root for profiler evidence (default: .performance)
   FLAMEWM_XEPHYR_DEBUG_ROOT=PATH  Root for debug logs (default: .debug)
@@ -576,7 +577,10 @@ nested_env(){
 unset WAYLAND_DISPLAY WAYLAND_SOCKET
 export GDK_BACKEND=x11 GDK_DEBUG="${GDK_DEBUG:+$GDK_DEBUG,}no-portals" GTK_USE_PORTAL=0
 export QT_QPA_PLATFORM=xcb QT_XCB_GL_INTEGRATION=none QT_QUICK_BACKEND=software QT_NO_XDG_DESKTOP_PORTAL=1
-export LIBGL_ALWAYS_SOFTWARE=1
+# FLAMEWM_XEPHYR_HOST_GL=1 keeps the host GL driver (hardware GPU) for GPU-path measurement.
+if [[ "${FLAMEWM_XEPHYR_HOST_GL:-0}" != 1 ]]; then
+  export LIBGL_ALWAYS_SOFTWARE=1
+fi
 # Private XDG homes for nested apps: host ~/.config and ~/.local/share are not
 # written or used for defaults. FlameWM config stays in the host profile path.
 export FLAMEWM_CONFIG_DIR="${FLAMEWM_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME:-/nonexistent}/.config}/flamewm}"

@@ -1,4 +1,5 @@
-.context-menu { position:absolute; left:0px; top:0px; min-width:205px; padding:5px; display:flex; flex-direction:column; color:#f1f2f3; border:1px solid #ffffff3f; border-radius:12px; box-sizing:border-box; cursor:default; }
+:root { --rim:#ffffff3f; }
+.context-menu { position:absolute; left:0px; top:0px; min-width:205px; padding:5px; display:flex; flex-direction:column; color:#f1f2f3; border:1px solid var(--rim); border-radius:12px; box-sizing:border-box; cursor:default; }
 .context-menu .menu-row, .context-menu .menu-header, .context-menu button { border-width:0px; box-sizing:border-box; }
 .menu-row { min-width:195px; height:31px; display:flex; align-items:center; gap:9px; padding-left:8px; background:transparent; color:#f1f2f3; border-width:0px; border-color:transparent; border-radius:3px; box-sizing:border-box; cursor:default; }
 .menu-row:hover { background:var(--accent-soft); }

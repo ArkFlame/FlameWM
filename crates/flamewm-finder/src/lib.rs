@@ -69,7 +69,8 @@ const PLACEHOLDERS: [&str; 4] = [
 const TEXT_RGB: u32 = 0x00f5_f5f7;
 const MUTED_RGB: u32 = 0x00a1_a1a6;
 const SUBTLE_RGB: u32 = 0x0086_868b;
-const ACCENT_RGB: u32 = 0x000a_84ff;
+/// Settings `accent` default; keep equal to `DEFAULT_ACCENT` in `flamewm-platform/src/settings.rs`.
+const ACCENT_RGB: u32 = 0x0053_9bff;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Overlay {
@@ -99,10 +100,11 @@ struct Palette {
 }
 
 impl Palette {
-    /// Light text on dark glass, dark text on light glass, and the `accentColor` setting when set.
+    /// Light text on dark glass, dark text on light glass, and the Settings `accent` colour.
     fn for_theme(theme: &SettingsSnapshot) -> Self {
-        let accent = match theme.values.get("accentColor") {
-            Some(SettingValue::Rgb(rgb)) => *rgb & 0x00ff_ffff,
+        let accent = match theme.values.get("accent") {
+            Some(SettingValue::Text(hex)) => u32::from_str_radix(hex.trim_start_matches('#'), 16)
+                .map_or(ACCENT_RGB, |rgb| rgb & 0x00ff_ffff),
             _ => ACCENT_RGB,
         };
         if luminance(surface_fill(theme).rgb) > 150 {
@@ -1065,6 +1067,14 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn palette_accent_follows_the_settings_accent_key() {
+        let mut theme = SettingsSnapshot::new(1);
+        assert_eq!(Palette::for_theme(&theme).accent, ACCENT_RGB);
+        theme.values.insert("accent".to_owned(), SettingValue::Text("#EF4048".to_owned()));
+        assert_eq!(Palette::for_theme(&theme).accent, 0x00ef_4048);
+    }
+
     use super::*;
 
     #[test]

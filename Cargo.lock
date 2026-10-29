@@ -869,6 +869,7 @@ name = "flamewm-shell-core"
 version = "0.1.3"
 dependencies = [
  "flamewm-api",
+ "flamewm-platform",
  "flamewm-ui-core",
 ]
 

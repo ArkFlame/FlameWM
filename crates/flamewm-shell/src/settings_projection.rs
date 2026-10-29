@@ -753,6 +753,11 @@ mod tests {
         snapshot
             .values
             .insert("glassBlurPx".to_owned(), SettingValue::Percent(28));
+        // Blur Only is an explicit choice now; the default taskbar mode is Inherit.
+        snapshot.values.insert(
+            "taskbarMaterialMode".to_owned(),
+            SettingValue::Text("blur-only".to_owned()),
+        );
         let mut doc = RecordingUiDoc::default();
         project(&mut doc, &snapshot, SurfaceKind::Panel).expect("panel");
         // `taskbarSeparate` defaults on: the root paints no tint so the wallpaper shows between
@@ -762,7 +767,10 @@ mod tests {
             "separated bar root has no contour"
         );
         assert_eq!(
-            doc.borders["workspace-pager"].a, 43,
+            doc.borders["workspace-pager"].a,
+            // Shared rim alpha: RIM_PERCENT of 255, the same derivation as surface_stroke.
+            u8::try_from(u16::from(flamewm_ui_core::glass::RIM_PERCENT) * 255 / 100)
+                .expect("rim alpha fits u8"),
             "pager matches other capsules"
         );
         // Taskbar capsules use the Dock material (Blur Only: neutral white at 8%, alpha 20), not the

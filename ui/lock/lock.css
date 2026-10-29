@@ -1,3 +1,4 @@
+:root { --rim:#ffffff3f; }
 body.lock-body {
   margin: 0;
   width: 100%;
@@ -49,7 +50,7 @@ body.lock-body {
 .lock-field {
   background-color: rgba(255, 255, 255, 0.18);
   border-width: 1px;
-  border-color: rgba(255, 255, 255, 0.38);
+  border-color: var(--rim);
   border-radius: 999px;
 }
 .lock-field-shade {
@@ -76,7 +77,7 @@ body.lock-body {
 .lock-submit {
   background-color: rgba(255, 255, 255, 0.18);
   border-width: 1px;
-  border-color: rgba(255, 255, 255, 0.38);
+  border-color: var(--rim);
   color: #FFFFFF;
   display: flex;
   align-items: center;
@@ -99,7 +100,7 @@ body.lock-body {
 }
 .lock-strip {
   background-color: #2A2E32;
-  border: 1px solid #CCD6EB;
+  border: 1px solid var(--rim);
   border-radius: 4px;
 }
 .lock-strip-text {
