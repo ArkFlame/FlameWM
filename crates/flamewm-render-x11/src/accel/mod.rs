@@ -539,7 +539,9 @@ mod tests {
                 backend.fill_rounded_rect(pixels, width, height, outer, hole, color)
             }
             PixelOp::Blur { radius } => backend.blur_rgba(pixels, width, height, radius),
-            blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
+            blend @ (PixelOp::BlendMask { .. }
+            | PixelOp::BlendImage { .. }
+            | PixelOp::RimGradient { .. }) => {
                 backend.paint_batch(pixels, width, height, std::slice::from_ref(&blend))
             }
         }
@@ -975,5 +977,40 @@ mod tests {
             .is_err()
         );
         assert_eq!(fill, source);
+    }
+
+    #[test]
+    fn rim_gradient_is_a_ring_that_eases_from_top_to_bottom() {
+        let (width, height) = (40_u32, 30_u32);
+        let outer = RoundedRect {
+            x: 4,
+            y: 3,
+            width: 32,
+            height: 24,
+            radius: 6,
+        };
+        let rim = |fade_percent| {
+            let mut frame = vec![0_u8; (width * height * 4) as usize];
+            let op = PixelOp::RimGradient {
+                outer,
+                color: [255, 255, 255, 200],
+                fade_percent,
+            };
+            CpuPixels::default()
+                .paint_batch(&mut frame, width, height, &[op])
+                .expect("rim");
+            frame
+        };
+        let alpha = |frame: &[u8], x: u32, y: u32| frame[((y * width + x) * 4 + 3) as usize];
+        let flat = rim(100);
+        assert_eq!(alpha(&flat, 20, 3), 200, "top edge carries the full rim alpha");
+        assert_eq!(alpha(&flat, 20, 26), 200, "fade 100 keeps the bottom edge");
+        assert_eq!(alpha(&flat, 20, 15), 0, "the interior is never painted");
+        assert_eq!(alpha(&flat, 4, 3), 0, "the rounded corner stays outside the ring");
+        let fading = rim(0);
+        assert_eq!(alpha(&fading, 20, 3), 200);
+        assert_eq!(alpha(&fading, 20, 26), 0, "fade 0 clears the bottom edge");
+        let mid = alpha(&fading, 4, 14);
+        assert!(mid > 0 && mid < 200, "the left edge eases between the ends, got {mid}");
     }
 }

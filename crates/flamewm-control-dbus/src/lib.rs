@@ -140,6 +140,7 @@ fn handle_call<E: EnginePorts>(
     };
     let shortcut_request = request.clone();
     let response = dispatcher.dispatch(host, request).map_err(to_flame_error)?;
+    let published_changed = matches!(response, ControlResponse::Changed(true));
     if let ControlResponse::CaptureLease(lease) = &response {
         capture_owner.borrow_mut().record_begin(&sender, *lease);
     }
@@ -167,6 +168,11 @@ fn handle_call<E: EnginePorts>(
     signals.extend(shortcut_change_signal(&shortcut_request, || {
         host.shortcut_snapshot().revision
     }));
+    if let (ControlRequest::PublishWeatherFeed { .. }, true) = (&shortcut_request, published_changed) {
+        signals.push(ControlSignal::WeatherFeedChanged {
+            snapshot: host.weather_feed_snapshot(),
+        });
+    }
     Ok((output, signals))
 }
 
@@ -823,6 +829,16 @@ mod tests {
         );
 
         assert_bus_round_trip(ControlSignal::SystemChanged { revision: 37 });
+    }
+
+    #[test]
+    fn weather_feed_signal_round_trips_over_bus() {
+        assert_bus_round_trip(ControlSignal::WeatherFeedChanged {
+            snapshot: flamewm_api::weather::WeatherFeedSnapshot {
+                revision: 2,
+                payload: "feed\u{1f}payload".to_owned(),
+            },
+        });
     }
 
     // CONTRACT-REGRESSION: a remote StaleRevision method error must retain its

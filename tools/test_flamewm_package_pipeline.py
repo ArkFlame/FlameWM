@@ -34,6 +34,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
         for file in ("Cargo.toml", "LICENSE", "README.md", "packaging/flamewm.desktop",
                      "packaging/flamewm-session.desktop", "packaging/flamewm-screenshot.desktop",
                      "packaging/flamewm-explorer.desktop", "packaging/flamewm-terminal.desktop", "packaging/flamewm-task-manager.desktop",
+                     "packaging/flamewm-finder.desktop", "packaging/icons/flamewm-finder.svg",
                      "packaging/pam.d/flamewm-lock",
                      "packaging/menus/flamewm-applications.menu", "packaging/notifications/dunstrc",
                      "packaging/install-manifest.txt", "packaging/debian/control.in",

@@ -26,6 +26,25 @@ pub enum PaintCommand {
         width: f32,
         radius: f32,
     },
+    /// Soft drop shadow outside `rect`, painted before the surface fill: `spread` 1px rings,
+    /// ring `k` at `k..k+1` px outside the edge with alpha from [`shadow_ring_alpha`].
+    SurfaceShadow {
+        rect: Rect,
+        radius: f32,
+        spread: u8,
+        offset_y: f32,
+        peak: u8,
+    },
+    /// 1px rim with a top-to-bottom alpha gradient (`color.a` at the top edge fading to
+    /// `fade_percent` of it at the bottom) plus a 1px white gloss of alpha `gloss` just inside
+    /// the top edge.
+    SurfaceRim {
+        rect: Rect,
+        radius: f32,
+        color: Color,
+        fade_percent: u8,
+        gloss: u8,
+    },
     Image {
         rect: Rect,
         asset: u16,
@@ -127,6 +146,16 @@ pub fn build_paint_commands_with_scroll(
         }
         if node.kind == NodeKind::Element || node.kind == NodeKind::Image {
             let background = apply_opacity(document.resolve_color(style.background), style.opacity);
+            let material = document.surface_material(index as u32);
+            if let Some(material) = material.filter(|m| m.shadow_spread > 0 && m.shadow_peak > 0) {
+                commands.push(PaintCommand::SurfaceShadow {
+                    rect,
+                    radius: style.border_radius.max(0.0),
+                    spread: material.shadow_spread,
+                    offset_y: material.shadow_offset_y,
+                    peak: material.shadow_peak,
+                });
+            }
             if background.a != 0 {
                 if let Some(blur_percent) = document.node_backdrop_blur(index as u32) {
                     if background.a < 255 {
@@ -146,7 +175,15 @@ pub fn build_paint_commands_with_scroll(
                 });
             }
             let border = apply_opacity(document.resolve_color(style.border_color), style.opacity);
-            if style.border_width > 0.0 && border.a != 0 {
+            if let (Some(material), true) = (material, style.border_width > 0.0 && border.a != 0) {
+                commands.push(PaintCommand::SurfaceRim {
+                    rect,
+                    radius: style.border_radius.max(0.0),
+                    color: border,
+                    fade_percent: material.rim_fade_percent,
+                    gloss: material.gloss_alpha,
+                });
+            } else if style.border_width > 0.0 && border.a != 0 {
                 commands.push(PaintCommand::StrokeRect {
                     rect,
                     color: border,

@@ -1004,7 +1004,7 @@ mod tests {
     fn default_accent_and_surface_match_flamewm_settings() {
         let snap = SettingsSnapshot::new(0);
         assert_eq!(accent_color(&snap), 0x00ef_4048);
-        assert_eq!(surface_fill(&snap).alpha, 127);
+        assert_eq!(surface_fill(&snap).alpha, 31);
     }
     #[test]
     fn load_colors_run_from_teal_through_amber_to_red() {

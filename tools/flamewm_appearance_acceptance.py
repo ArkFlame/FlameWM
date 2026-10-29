@@ -1314,7 +1314,7 @@ def ap08(s: Session) -> dict:
         "[Desktop Entry]\nType=Application\nName=AP08 Probe\nExec=true\nIcon=folder\nCategories=Utility;\n",
         encoding="utf-8")
 
-    if not s.restart({"iconTheme": "McMojave-circle", "surfaceOpacity": "100"}):
+    if not s.restart({"iconTheme": "MacTahoe", "surfaceOpacity": "100"}):
         return entry("AP08", FAIL, "WM or shell exited during restart")
     def start_menu_shot(name: str):
         s.input(key=base.SHORTCUT_DEFAULT_BINDING)
@@ -1340,9 +1340,9 @@ def ap08(s: Session) -> dict:
     # the private XDG_DATA_HOME so the WM can resolve them by name (symlinks into the repository assets).
     icons = s.ctx.run / "xdg-data" / "icons"
     icons.mkdir(parents=True, exist_ok=True)
-    mojave = icons / "McMojave-cursors"
+    mojave = icons / "MacTahoe-dark-cursors"
     if not mojave.exists():
-        mojave.symlink_to(base.ROOT / "assets" / "themes" / "cursors" / "McMojave-cursors")
+        mojave.symlink_to(base.ROOT / "assets" / "themes" / "cursors" / "MacTahoe-dark-cursors")
     breeze = icons / "FlameWM-Breeze-Dark"
     if not breeze.exists():
         breeze.mkdir()
@@ -1523,7 +1523,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--only", default=None, metavar="AP07,AP08",
                    help="debug: run only these scenarios; the others stay NOT_RUN so the verdict cannot be PASS")
     p.add_argument("--icon-theme-alt", default="breeze-dark")
-    p.add_argument("--cursor-theme-base", default="McMojave-cursors")
+    p.add_argument("--cursor-theme-base", default="MacTahoe-dark-cursors")
     p.add_argument("--cursor-theme-alt", default="FlameWM-Breeze-Dark")
     p.add_argument("--taskbar-slot", metavar="X,Y,W,H", default=None,
                    help="expected taskbar slot rect for AP07 _NET_WM_ICON_GEOMETRY (optional)")

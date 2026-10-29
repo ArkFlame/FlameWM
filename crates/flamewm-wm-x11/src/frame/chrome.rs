@@ -257,6 +257,7 @@ fn titlebar_fill_pixels(
         scene.bg,
         scene.bg_alpha,
         scene.tokens.titlebar_blur_percent,
+        u32::from(scene.radius),
     )
 }
 
@@ -287,6 +288,22 @@ fn composite_surface_contour(
         alpha: tokens.surface_border_alpha,
     };
     let r = u32::from(radius).min(width / 2).min(frame_height / 2);
+    // Gloss: a 1px inset highlight on row 1 of the straight top edge, between the corner arcs.
+    let gloss = flamewm_ui_core::surface::SurfaceFill {
+        rgb: 0x00ff_ffff,
+        alpha: ((tokens.highlight_percent.min(100) * 255) / 100) as u8,
+    };
+    if gloss.alpha > 0 && titlebar_height > 1 && width > 2 * r + 1 {
+        let at_row = |x: u32| (width as usize + x as usize) * 4;
+        for x in r..width - r {
+            let at = at_row(x);
+            let base = u32::from_be_bytes([0, pixels[at], pixels[at + 1], pixels[at + 2]]);
+            let blended = flamewm_ui_core::surface::blend_surface_over_rgb(base, gloss);
+            pixels[at] = (blended >> 16) as u8;
+            pixels[at + 1] = (blended >> 8) as u8;
+            pixels[at + 2] = blended as u8;
+        }
+    }
     // Top perimeter and both side arcs. There is no horizontal border at the bottom of
     // the titlebar: that is the interior of the complete client frame.
     for y in 0..titlebar_height {
@@ -300,14 +317,21 @@ fn composite_surface_contour(
             if coverage == 0 {
                 continue;
             }
-            let alpha = (u16::from(stroke.alpha) * u16::from(coverage) + 127) / 255;
+            // Rim brightens at the top and fades toward the bottom of the frame.
+            let rim_alpha = flamewm_ui_core::surface::rim_alpha_at(
+                stroke.alpha,
+                tokens.rim_fade_percent,
+                y,
+                frame_height,
+            );
+            let alpha = (u16::from(rim_alpha) * u16::from(coverage) + 127) / 255;
             let at = (y as usize * width as usize + x as usize) * 4;
             let base = u32::from_be_bytes([0, pixels[at], pixels[at + 1], pixels[at + 2]]);
             let blended = flamewm_ui_core::surface::blend_surface_over_rgb(
                 base,
                 flamewm_ui_core::surface::SurfaceFill {
                     alpha: alpha as u8,
-                    ..stroke
+                    rgb: stroke.rgb,
                 },
             );
             pixels[at] = (blended >> 16) as u8;
@@ -593,8 +617,8 @@ mod tests {
             true,
             &flamewm_skin::recipes::decoration::ChromeTokens::default(),
         );
-        assert_eq!(scene.bg, (0x19, 0x1b, 0x1d));
-        assert_eq!(scene.bg_alpha, 127);
+        assert_eq!(scene.bg, (0x33, 0x33, 0x33));
+        assert_eq!(scene.bg_alpha, 165);
         assert_eq!(scene.tokens.titlebar_blur_percent, 80);
         // Unavailable renderer (no XRender, no display): flat opaque fill, no error.
         let px = titlebar_fill_pixels(&scene, 2, (0, 0), (800, 600));
@@ -612,7 +636,7 @@ mod tests {
         assert_eq!(scene.icon_edge, 13);
         assert_eq!(scene.icon_edge, WINDOW_CHROME.metrics.icon);
         assert_eq!(scene.baseline, 20.0);
-        assert_eq!(scene.radius, 12);
+        assert_eq!(scene.radius, 24);
     }
 
     #[test]
@@ -704,7 +728,7 @@ mod tests {
             true,
             &flamewm_skin::recipes::decoration::ChromeTokens::default(),
         );
-        assert_eq!(floating.radius, 12);
+        assert_eq!(floating.radius, 24);
     }
 
     #[test]

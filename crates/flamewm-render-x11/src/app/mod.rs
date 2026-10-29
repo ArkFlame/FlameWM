@@ -365,7 +365,7 @@ impl X11App {
         };
         let mut attributes = XSetWindowAttributes {
             background_pixmap: 0,
-            background_pixel: TRANSPARENT_CLEAR_PIXEL,
+            background_pixel: render::scene_clear_pixel(depth),
             border_pixmap: 0,
             border_pixel: 0,
             bit_gravity: 0,

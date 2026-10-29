@@ -20,11 +20,13 @@ pub const ACTION_OPEN_FILES_SUPER: &str = "OpenFilesSuper";
 pub const ACTION_OPEN_FILES_CTRL_ALT: &str = "OpenFilesCtrlAlt";
 pub const ACTION_OPEN_TERMINAL_SUPER: &str = "OpenTerminalSuper";
 pub const ACTION_OPEN_TERMINAL_CTRL_ALT: &str = "OpenTerminalCtrlAlt";
+pub const ACTION_OPEN_FINDER: &str = "OpenFinder";
+pub const ACTION_OPEN_FINDER_CTRL_ALT: &str = "OpenFinderCtrlAlt";
 pub const ACTION_VOLUME_UP: &str = "VolumeUp";
 pub const ACTION_VOLUME_DOWN: &str = "VolumeDown";
 pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
 
-pub const ACTIONS: [&str; 56] = [
+pub const ACTIONS: [&str; 58] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_LAUNCHER,
     ACTION_WORKSPACE_LEFT,
@@ -81,6 +83,8 @@ pub const ACTIONS: [&str; 56] = [
     ACTION_OPEN_FILES_CTRL_ALT,
     ACTION_OPEN_TERMINAL_SUPER,
     ACTION_OPEN_TERMINAL_CTRL_ALT,
+    ACTION_OPEN_FINDER,
+    ACTION_OPEN_FINDER_CTRL_ALT,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -220,7 +224,7 @@ impl Default for ShortcutRegistry {
             ),
             (
                 ACTION_WINDOW_FULLSCREEN.to_owned(),
-                KeyBinding::assigned("Super+F"),
+                KeyBinding::assigned("Super+Shift+F"),
             ),
             (
                 ACTION_WINDOW_FLOAT.to_owned(),
@@ -294,6 +298,14 @@ impl Default for ShortcutRegistry {
             (
                 ACTION_OPEN_TERMINAL_CTRL_ALT.to_owned(),
                 KeyBinding::assigned("Ctrl+Alt+T"),
+            ),
+            (
+                ACTION_OPEN_FINDER.to_owned(),
+                KeyBinding::assigned("Super+F"),
+            ),
+            (
+                ACTION_OPEN_FINDER_CTRL_ALT.to_owned(),
+                KeyBinding::assigned("Ctrl+Alt+F"),
             ),
             (
                 ACTION_SESSION_LOCK.to_owned(),
@@ -378,7 +390,10 @@ impl ShortcutRegistry {
 
         // Duplicates never fail the set: the first action (registry order) keeps the key.
         let mut seen = std::collections::BTreeSet::new();
-        for binding in candidate.values_mut() {
+        for action in ACTIONS {
+            let Some(binding) = candidate.get_mut(action) else {
+                continue;
+            };
             if binding
                 .0
                 .as_ref()
@@ -501,7 +516,7 @@ mod tests {
 
     #[test]
     fn launcher_is_a_registered_action_with_super_space_default() {
-        assert_eq!(ACTIONS.len(), 56);
+        assert_eq!(ACTIONS.len(), 58);
         assert!(ACTIONS.contains(&ACTION_LAUNCHER));
         let defaults = ShortcutRegistry::default();
         assert_eq!(
@@ -684,5 +699,46 @@ mod tests {
         let effective = crate::services::shortcuts::effective_registry(&BTreeMap::new())
             .expect("defaults are valid");
         assert_eq!(effective, registry);
+    }
+
+    #[test]
+    fn finder_has_super_f_and_ctrl_alt_f_and_fullscreen_moves_off_super_f() {
+        let registry = ShortcutRegistry::default();
+        assert_eq!(
+            registry.binding(ACTION_OPEN_FINDER),
+            Some(&KeyBinding::assigned("Super+F"))
+        );
+        assert_eq!(
+            registry.binding(ACTION_OPEN_FINDER_CTRL_ALT),
+            Some(&KeyBinding::assigned("Ctrl+Alt+F"))
+        );
+        assert_eq!(
+            registry.binding(ACTION_WINDOW_FULLSCREEN),
+            Some(&KeyBinding::assigned("Super+Shift+F"))
+        );
+        let effective = crate::services::shortcuts::effective_registry(&BTreeMap::new())
+            .expect("defaults are valid");
+        assert_eq!(effective, registry);
+    }
+
+    #[test]
+    fn stored_fullscreen_override_on_super_f_keeps_it_and_finder_keeps_ctrl_alt_f() {
+        let mut persisted = BTreeMap::new();
+        persisted.insert(ACTION_WINDOW_FULLSCREEN.to_owned(), "Super+F".to_owned());
+        let effective = crate::services::shortcuts::effective_registry(&persisted)
+            .expect("persisted override is valid");
+        assert_eq!(
+            effective.binding(ACTION_WINDOW_FULLSCREEN),
+            Some(&KeyBinding::assigned("Super+F"))
+        );
+        // Stored user choices win over the new default: registry order keeps fullscreen on Super+F.
+        assert_eq!(
+            effective.binding(ACTION_OPEN_FINDER),
+            Some(&KeyBinding::unassigned())
+        );
+        assert_eq!(
+            effective.binding(ACTION_OPEN_FINDER_CTRL_ALT),
+            Some(&KeyBinding::assigned("Ctrl+Alt+F"))
+        );
     }
 }

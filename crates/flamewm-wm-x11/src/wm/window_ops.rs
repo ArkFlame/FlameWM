@@ -261,7 +261,7 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
-    /// Toggle fullscreen from a keybind (`Super+F`). Unlike `FullscreenEscape`, this is a
+    /// Toggle fullscreen from a keybind (`Super+Shift+F`). Unlike `FullscreenEscape`, this is a
     /// reversible toggle and never kills the client.
     pub(super) fn toggle_fullscreen(&mut self, client: Window) -> Result<(), ReplyError> {
         let fullscreen = self
@@ -501,7 +501,7 @@ impl<C: Connection> Wm<'_, C> {
 
     pub(super) fn apply_frame_geometry(&mut self, client: Window) -> Result<(), ReplyError> {
         let (frame, outer, floating) = match self.clients.get(&client) {
-            Some(state) => (state.frame, state.outer, state.is_floating()),
+            Some(state) => (state.frame, state.outer, state.has_rounded_frame()),
             None => return Ok(()),
         };
         let extents = self.extents_for(client);

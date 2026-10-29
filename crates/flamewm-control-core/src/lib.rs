@@ -39,6 +39,7 @@ pub const IFACE_SESSION: &str = "com.arkflame.FlameWM1.Session";
 pub const IFACE_WINDOWS: &str = "com.arkflame.FlameWM1.Windows";
 pub const IFACE_APPLICATIONS: &str = "com.arkflame.FlameWM1.Applications";
 pub const IFACE_SYSTEM: &str = "com.arkflame.FlameWM1.System";
+pub const IFACE_WEATHER: &str = "com.arkflame.FlameWM1.Weather";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version {
@@ -191,6 +192,13 @@ pub enum ControlRequest {
         action: SystemAction,
         expected_revision: u64,
     },
+    /// Latest shell-published weather payload (revision 0 when none).
+    GetWeatherFeed,
+    /// Shell publishes the encoded weather feed; the host answers `Changed` and the bus
+    /// emits `WeatherFeedChanged` only when the payload changed.
+    PublishWeatherFeed {
+        payload: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +219,7 @@ pub enum ControlResponse {
     SessionCapabilities(SessionCapabilities),
     Changed(bool),
     System(SystemSnapshot),
+    WeatherFeed(flamewm_api::weather::WeatherFeedSnapshot),
     Unit,
 }
 
@@ -427,6 +436,12 @@ impl Dispatcher {
                 action,
                 expected_revision,
             } => unit(host.system_action(action, expected_revision))?,
+            ControlRequest::GetWeatherFeed => {
+                ControlResponse::WeatherFeed(host.weather_feed_snapshot())
+            }
+            ControlRequest::PublishWeatherFeed { payload } => {
+                ControlResponse::Changed(host.publish_weather_feed(payload).map_err(ControlError::from)?)
+            }
         };
         Ok(response)
     }

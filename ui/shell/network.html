@@ -5,24 +5,25 @@
   <title>FlameWM network</title>
   <link rel="stylesheet" href="flamewm.css">
   <style>
-    #wifi-popup.network-popup { width:461px; height:453px; box-sizing:border-box; padding:12px; gap:8px; background:var(--surface); border:1px solid #353638; border-radius:6px; overflow:hidden; }
+    #wifi-popup.network-popup { width:461px; height:453px; box-sizing:border-box; padding:14px; gap:8px; background:var(--surface); border:1px solid #ffffff1f; border-radius:24px; overflow:hidden; }
     .network-header { width:100%; height:32px; display:flex; align-items:center; justify-content:space-between; }
-    .network-title { font-size:16px; font-weight:600; color:#f1f2f3; }
+    .network-title { font-size:17px; font-weight:700; color:#f1f2f3; }
     .network-controls { width:100%; height:30px; display:flex; align-items:center; gap:8px; }
     .network-search { width:153px; height:30px; display:flex; align-items:center; gap:6px; }
     .network-search-box { position:relative; flex-grow:1; height:30px; box-sizing:border-box; background:#1b1d20; border:1px solid #353638; border-radius:4px; overflow:hidden; }
     .network-search-box input { position:absolute; left:0px; top:0px; width:100%; height:100%; box-sizing:border-box; background:transparent; color:transparent; border:0px solid #00000000; padding:0px 8px; }
     .network-filter-value { position:absolute; left:8px; top:0px; right:8px; height:100%; display:flex; align-items:center; color:#f1f2f3; }
     .network-filter-placeholder { position:absolute; left:8px; top:0px; right:8px; height:100%; display:flex; align-items:center; color:#aeb4bb; }
-    .network-group-title { width:100%; height:20px; color:#aeb4bb; font-size:11px; font-weight:600; }
-    .network-connected-row { width:100%; height:44px; box-sizing:border-box; display:flex; align-items:center; gap:10px; padding:0px 8px; background:#1a1c1f; border-radius:4px; }
-    .network-row { width:100%; height:44px; box-sizing:border-box; display:flex; align-items:center; gap:10px; padding:0px 8px; background:transparent; color:#f1f2f3; border-radius:4px; cursor:default; }
-    .network-row:hover { background:#1a1c1f; }
-    .network-tile { width:28px; height:28px; padding:4px; box-sizing:border-box; border-radius:6px; background:var(--accent); }
+    .network-group-title { width:100%; height:22px; color:#aeb4bb; font-size:13px; font-weight:600; }
+    .network-connected-row { width:100%; height:48px; box-sizing:border-box; display:flex; align-items:center; gap:10px; padding:0px 8px; background:#ffffff14; border-radius:16px; }
+    .network-row { width:100%; height:48px; box-sizing:border-box; display:flex; align-items:center; gap:10px; padding:0px 8px; background:transparent; color:#f1f2f3; border-radius:16px; cursor:default; }
+    .network-row:hover { background:#ffffff14; }
+    .network-connected-row .network-tile { background:#0a84ff; }
+    .network-tile { width:30px; height:30px; padding:6px; box-sizing:border-box; border-radius:999px; background:#ffffff24; }
     .network-text { flex-grow:1; display:flex; flex-direction:column; justify-content:center; }
-    .network-name { font-size:13px; font-weight:700; color:#f1f2f3; }
+    .network-name { font-size:14px; font-weight:500; color:#f1f2f3; }
     .network-status { font-size:11px; color:#aeb4bb; }
-    .network-action { height:24px; padding:0px 8px; border:1px solid #353638; border-radius:4px; color:#f1f2f3; background:#23262a; }
+    .network-action { height:24px; padding:0px 10px; border:0px solid #00000000; border-radius:999px; color:#f1f2f3; background:#ffffff24; }
     .network-connect { font-size:11px; color:var(--accent); }
     .network-chevron { width:12px; height:12px; }
     .network-slots { width:100%; max-height:200px; display:flex; flex-direction:column; gap:2px; overflow-y:auto; }
@@ -33,8 +34,8 @@
     #network-secret-input { position:absolute; left:0px; top:0px; width:100%; height:100%; box-sizing:border-box; background:transparent; color:transparent; border:0px solid #00000000; padding:0px 8px; }
     #network-secret-error { width:100%; height:16px; overflow:hidden; font-size:11px; color:#e8a0a0; }
     #network-wifi-toggle { width:120px; height:30px; display:flex; flex-direction:row; align-items:center; gap:6px; padding:0px 8px; background:transparent; border:0px solid #00000000; color:#f1f2f3; }
-    .network-wifi-track { position:relative; width:39px; height:19px; border-radius:10px; background:#42474b; }
-    .network-wifi-knob { position:absolute; left:2px; top:2px; width:15px; height:15px; border-radius:8px; background:#ffffff; }
+    .network-wifi-track { position:relative; width:44px; height:24px; border-radius:999px; background:#42474b; }
+    .network-wifi-knob { position:absolute; left:3px; top:3px; width:18px; height:18px; border-radius:999px; background:#ffffff; }
   </style>
 </head>
 <body class="popup-body">

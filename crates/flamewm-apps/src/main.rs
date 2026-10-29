@@ -11,12 +11,13 @@ use std::path::Path;
 use std::process::ExitCode;
 
 /// The applications, by the executable name each one is installed as.
-const APPLICATIONS: [&str; 8] = [
+const APPLICATIONS: [&str; 9] = [
     "flamewm",
     "flamewm-desktop",
     "flamewm-shell",
     "flamewm-terminal",
     "flamewm-explorer",
+    "flamewm-finder",
     "flamewm-settings",
     "flamewm-task-manager",
     "flamefetch",
@@ -44,6 +45,12 @@ fn main() -> ExitCode {
         "flamewm-shell" => flamewm_shell::entry::main(),
         "flamewm-terminal" => flamewm_terminal::entry::main(),
         "flamewm-explorer" => flamewm_explorer::entry::main(),
+        "flamewm-finder" => {
+            if let Err(error) = flamewm_finder::run() {
+                eprintln!("flamewm-finder: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
         "flamewm-settings" => flamewm_settings::entry::main(),
         "flamefetch" => {
             if let Err(error) = flamewm_terminal::fetch::cli_main(std::env::args().skip(1)) {

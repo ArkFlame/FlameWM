@@ -427,7 +427,7 @@ impl LiveScene {
         } {
             Ok(picture) => picture,
             Err(_) => {
-                unsafe { XFreePixmap(display, pixmap) };
+                unsafe { crate::native::xresource::free_pixmap_raw(display, pixmap) };
                 return None;
             }
         };
@@ -613,7 +613,7 @@ impl LiveScene {
                 self.api
                     .create_standard_picture(display, pixmap, PICT_STANDARD_RGB_24)
             }) else {
-                unsafe { XFreePixmap(display, pixmap) };
+                unsafe { crate::native::xresource::free_pixmap_raw(display, pixmap) };
                 return;
             };
             self.named.insert(
@@ -680,7 +680,7 @@ impl LiveScene {
     unsafe fn free_named(&self, display: *mut Display, named: NamedFrame) {
         unsafe {
             self.api.free_picture(display, named.picture);
-            XFreePixmap(display, named.pixmap);
+            crate::native::xresource::free_pixmap_raw(display, named.pixmap);
         }
     }
 
@@ -688,7 +688,7 @@ impl LiveScene {
         if let Some(target) = self.target.take() {
             unsafe {
                 self.api.free_picture(display, target.picture);
-                XFreePixmap(display, target.pixmap);
+                crate::native::xresource::free_pixmap_raw(display, target.pixmap);
             }
         }
     }

@@ -37,20 +37,18 @@ class PerOutputOpacity(unittest.TestCase):
         self.assertIn('self.settings_projection_pending = true;', resync)
 
 class OnlyTwoIconThemes(unittest.TestCase):
-    def test_two_visible_themes_and_original_fluent_id(self):
+    def test_bundled_default_is_mactahoe_and_cursor_registry_intact(self):
         picker = src('crates/flamewm-settings/src/theme_picker.rs')
-        self.assertIn('BUNDLED_ICON_THEMES: [&str; 2] = ["PlagueSur", "Fluent"]', picker)
-        self.assertIn('icon.drain(..).find(fluent_yellow)', picker)
-        self.assertIn('fluent.name = "Fluent".to_owned()', picker)
+        self.assertIn('BUNDLED_ICON_THEMES: [&str; 1] = ["MacTahoe"]', picker)
         self.assertIn('registry.cursor.push', picker)
-        self.assertNotIn('BUNDLED_ICON_THEMES: [&str; 2] = ["PlagueSur", "candy-icons"]', picker)
+        self.assertNotIn('PlagueSur', picker)
 
     def test_no_old_icon_packs_in_binary_package(self):
         pkg = src('scripts/package')
-        install = pkg.split('# Only PlagueSur and Fluent are selectable icon themes.',1)[1]
-        self.assertNotIn('cp -a "$ROOT/assets/themes/icons/candy-icons"', install)
-        self.assertNotIn('cp -a "$ROOT/assets/themes/icons/McMojave-circle"', install)
-        self.assertIn('for theme in PlagueSur Fluent', install)
+        install = pkg.split('# Shipped default icon theme (MacTahoe)',1)[1]
+        self.assertNotIn('candy-icons', install)
+        self.assertNotIn('McMojave-circle', install)
+        self.assertIn('assets/themes/icons/MacTahoe"', install)
         manifest = src('packaging/install-manifest.txt')
         self.assertNotIn('assets/themes/icons/candy-icons ',manifest)
         self.assertNotIn('assets/themes/icons/McMojave-circle ',manifest)

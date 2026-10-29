@@ -8,10 +8,38 @@
 //! has no exact pixel-op form yet, so that frame keeps the XRender path. `NodeBackdrop` reads the
 //! pixels already painted under it, so it keeps the XRender path too. The two painters never mix.
 
-use flamewm_render_core::{Color, PaintCommand, PixelOp, Rect, RoundedRect};
+use flamewm_render_core::{
+    Color, PaintCommand, PixelOp, Rect, RoundedRect, gloss_line, shadow_rings,
+};
 
 use super::clip::{Visible, stack_bounds, visible_under};
 use super::primitives::scale_rect;
+
+/// The pixel op for a 1px-or-wider ring of `rect`, or `None` when a clip hides it. A ring cut by a
+/// clip has no exact pixel-op form yet, so it returns `Err`.
+fn stroke_op(
+    rect: Rect,
+    radius: f32,
+    width: f32,
+    color: Color,
+    scale: f32,
+    stack: &[Rect],
+) -> Result<Option<PixelOp<'static>>, &'static str> {
+    let device = scale_rect(rect, scale);
+    match visible_under(device, stack) {
+        Visible::Hidden => return Ok(None),
+        Visible::Whole => {}
+        // A ring cut by a clip needs a clipped AA stroke; no exact pixel op yet.
+        Visible::Part(_) => return Err("StrokeClipped"),
+    }
+    let outer = device_rect(device, radius * scale).ok_or(FRACTIONAL)?;
+    let thickness = whole(width * scale).ok_or(FRACTIONAL)?;
+    Ok(Some(PixelOp::FillRoundedRect {
+        outer,
+        hole: Some(outer.inset(thickness)),
+        color: rgba(color),
+    }))
+}
 
 /// Pixels for one text, text shadow or image command, gathered before the frame is lowered. The
 /// variants keep the same order as the commands that need them.
@@ -99,20 +127,69 @@ pub(crate) fn frame_ops<'a>(
                 width,
                 radius,
             } => {
+                if let Some(op) = stroke_op(rect, radius, width, color, scale, &stack)? {
+                    ops.push(op);
+                }
+            }
+            // Same 1px rings the XRender painter strokes, so the two painters cover the same pixels.
+            PaintCommand::SurfaceShadow {
+                rect,
+                radius,
+                spread,
+                offset_y,
+                peak,
+            } => {
+                for (ring, ring_radius, alpha) in
+                    shadow_rings(rect, radius, u32::from(spread), peak, offset_y)
+                {
+                    if alpha == 0 {
+                        continue;
+                    }
+                    let black = Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: alpha,
+                    };
+                    if let Some(op) = stroke_op(ring, ring_radius, 1.0, black, scale, &stack)? {
+                        ops.push(op);
+                    }
+                }
+            }
+            PaintCommand::SurfaceRim {
+                rect,
+                radius,
+                color,
+                fade_percent,
+                gloss,
+            } => {
                 let device = scale_rect(rect, scale);
                 match visible_under(device, &stack) {
                     Visible::Hidden => continue,
                     Visible::Whole => {}
-                    // A ring cut by a clip needs a clipped AA stroke; no exact pixel op yet.
+                    // The XRender rim clips per band; a clipped rim has no exact pixel op yet.
                     Visible::Part(_) => return Err("StrokeClipped"),
                 }
-                let outer = device_rect(device, radius * scale).ok_or(FRACTIONAL)?;
-                let thickness = whole(width * scale).ok_or(FRACTIONAL)?;
-                ops.push(PixelOp::FillRoundedRect {
-                    outer,
-                    hole: Some(outer.inset(thickness)),
+                ops.push(PixelOp::RimGradient {
+                    outer: device_rect(device, radius * scale).ok_or(FRACTIONAL)?,
                     color: rgba(color),
+                    fade_percent,
                 });
+                if gloss > 0 {
+                    if let Some(line) = gloss_line(rect, radius) {
+                        let white = Color {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: gloss,
+                        };
+                        ops.push(PixelOp::FillRoundedRect {
+                            outer: device_rect(scale_rect(line, scale), 0.0).ok_or(FRACTIONAL)?,
+                            hole: None,
+                            color: rgba(white),
+                        });
+                    }
+                }
             }
             // The XRender painter draws nothing for a track, so the GPU frame skips it too.
             PaintCommand::ScrollbarTrack { .. } => {}
@@ -383,6 +460,63 @@ mod tests {
         assert!(
             frame_ops(&[], 1.0, &[mask_source()]).is_err(),
             "an unused source means the frame and the sources disagree"
+        );
+    }
+
+    #[test]
+    fn surface_shadow_and_rim_lower_to_pixel_ops() {
+        let surface = Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 100.0,
+            height: 40.0,
+        };
+        let shadow = PaintCommand::SurfaceShadow {
+            rect: surface,
+            radius: 8.0,
+            spread: 4,
+            offset_y: 0.0,
+            peak: 90,
+        };
+        let ops = frame_ops(std::slice::from_ref(&shadow), 1.0, &[]).expect("shadow lowers");
+        assert_eq!(ops.len(), 4, "one 1px ring per shadow pixel of spread");
+        assert!(ops.iter().all(|op| matches!(
+            op,
+            PixelOp::FillRoundedRect { hole: Some(_), .. }
+        )));
+        let rim = PaintCommand::SurfaceRim {
+            rect: surface,
+            radius: 8.0,
+            color: Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 40,
+            },
+            fade_percent: 6,
+            gloss: 30,
+        };
+        let ops = frame_ops(std::slice::from_ref(&rim), 1.0, &[]).expect("rim lowers");
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(
+            ops[0],
+            PixelOp::RimGradient {
+                fade_percent: 6,
+                ..
+            }
+        ));
+        assert!(matches!(ops[1], PixelOp::FillRoundedRect { hole: None, .. }));
+        let clip = PaintCommand::PushClip {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 200.0,
+            },
+        };
+        assert_eq!(
+            frame_ops(&[clip, rim], 1.0, &[]).err(),
+            Some("StrokeClipped")
         );
     }
 

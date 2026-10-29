@@ -104,10 +104,10 @@ def check_conffiles(text):
     return [f"conffiles={text!r} expected={CONFFILES!r}"]
 
 
-# The bundled Xcursor pack remains mandatory. PlagueSur/Fluent icon packs are
+# The bundled Xcursor pack remains mandatory. The MacTahoe icon theme is
 # installable choices; their upstream archives are not shipped without license evidence.
 ICON_THEMES = ["FlameWM-Breeze-Dark"]
-ALLOWED_ICON_THEMES = frozenset((*ICON_THEMES, "McMojave-cursors", "PlagueSur", "Fluent"))
+ALLOWED_ICON_THEMES = frozenset((*ICON_THEMES, "MacTahoe-dark-cursors", "MacTahoe"))
 LICENSES_PREFIX = "usr/share/doc/flamewm/LICENSES/"
 COPYRIGHT_PATH = "usr/share/doc/flamewm/copyright"
 

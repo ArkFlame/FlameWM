@@ -9,6 +9,23 @@ use crate::native::coverage::{build_coverage, build_coverage_scaled};
 use crate::xshape::ClipRect;
 use flamewm_image_core::blur::BlurScratch;
 
+/// Row bands used to ease a Liquid Glass rim top to bottom on the XRender path.
+const RIM_BANDS: u32 = 12;
+
+/// Overlap of two rectangles, `None` when they do not share an area.
+fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.width).min(b.x + b.width);
+    let y1 = (a.y + a.height).min(b.y + b.height);
+    (x1 > x0 && y1 > y0).then_some(Rect {
+        x: x0,
+        y: y0,
+        width: x1 - x0,
+        height: y1 - y0,
+    })
+}
+
 /// Per-thread shadow work buffers. The display thread is the only shadow painter,
 /// so every text shadow reuses the blur scratch and staging buffers instead of
 /// reallocating them per paint.
@@ -845,7 +862,9 @@ impl X11App {
         scale: f32,
     ) -> Result<u64, String> {
         let _region_guard = flamewm_profiler::start("render.region");
-        unsafe { XSetForeground(self.display, self.gc, TRANSPARENT_CLEAR_PIXEL) };
+        // Same depth-aware clear as `clear_scene`: a depth-24 backbuffer has no alpha, so 0 would
+        // be opaque black in the repainted corners.
+        unsafe { XSetForeground(self.display, self.gc, scene_clear_pixel(self.depth)) };
         unsafe { XSetClipMask(self.display, self.gc, 0) };
         self.gc_clip = None;
         unsafe {
@@ -1028,8 +1047,9 @@ impl X11App {
     /// Transparent ARGB scene clear: 0x00000000, never root_background/BLACK.
     pub(crate) fn clear_scene(&mut self) -> Result<(), String> {
         // Depth-32 ARGB scene: pixel 0 == 0x00000000 transparent clear.
-        // XRender fills composite over this; the GC path fills pixel 0 too.
-        unsafe { XSetForeground(self.display, self.gc, TRANSPARENT_CLEAR_PIXEL) };
+        // Depth-24 has no alpha: 0x00000000 would be opaque black under the panel corners.
+        let clear = scene_clear_pixel(self.depth);
+        unsafe { XSetForeground(self.display, self.gc, clear) };
         unsafe { XSetClipMask(self.display, self.gc, 0) };
         self.gc_clip = None;
         unsafe {
@@ -1378,6 +1398,131 @@ impl X11App {
                 unsafe {
                     self.paint_node_backdrop(*node, device, radius, *blur_percent, *opacity)?
                 };
+            }
+            PaintCommand::SurfaceShadow {
+                rect,
+                radius,
+                spread,
+                offset_y,
+                peak,
+            } => {
+                // The shadow is an XRender ring stack; the GC path cannot blend it.
+                if self.xrender.is_none() {
+                    return Ok(());
+                }
+                for (ring, ring_radius, alpha) in flamewm_render_core::shadow_rings(
+                    *rect,
+                    *radius,
+                    u32::from(*spread),
+                    *peak,
+                    *offset_y,
+                ) {
+                    if alpha == 0 {
+                        continue;
+                    }
+                    let color = Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: alpha,
+                    };
+                    let stroke = PaintCommand::StrokeRect {
+                        rect: ring,
+                        color,
+                        width: 1.0,
+                        radius: ring_radius,
+                    };
+                    // SAFETY: same initialized backbuffer/display contract as `paint`.
+                    unsafe { self.paint(&stroke, document, scale)? };
+                }
+            }
+            PaintCommand::SurfaceRim {
+                rect,
+                radius,
+                color,
+                fade_percent,
+                gloss,
+            } => {
+                let Some(xrender) = self.xrender.as_mut() else {
+                    // Without XRender the rim degrades to the flat 1px contour.
+                    let stroke = PaintCommand::StrokeRect {
+                        rect: *rect,
+                        color: *color,
+                        width: 1.0,
+                        radius: *radius,
+                    };
+                    // SAFETY: same initialized display contract as `paint`.
+                    return unsafe { self.paint(&stroke, document, scale) };
+                };
+                let device = scale_rect(*rect, scale);
+                let radius = *radius * scale;
+                let clip = match visible_under(device, &self.clip_stack) {
+                    Visible::Hidden => return Ok(()),
+                    Visible::Whole => None,
+                    Visible::Part(part) => Some(part),
+                };
+                // One clipped 1px ring per row band; each band carries the gradient alpha of its
+                // middle row, so the rim eases top to bottom in steps of at most `RIM_BANDS`.
+                let rows = device.height.round().max(1.0) as u32;
+                let bands = rows.min(RIM_BANDS);
+                for band in 0..bands {
+                    let y0 = device.height * band as f32 / bands as f32;
+                    let y1 = device.height * (band + 1) as f32 / bands as f32;
+                    let mid = ((y0 + y1) * 0.5).round() as u32;
+                    let alpha = flamewm_render_core::rim_alpha_at(
+                        color.a,
+                        u32::from(*fade_percent),
+                        mid,
+                        rows,
+                    );
+                    let band_rect = Rect {
+                        x: device.x,
+                        y: device.y + y0,
+                        width: device.width,
+                        height: y1 - y0,
+                    };
+                    let Some(band_clip) = intersect_rect(band_rect, clip.unwrap_or(band_rect))
+                    else {
+                        continue;
+                    };
+                    if alpha == 0 {
+                        continue;
+                    }
+                    let tint = Color { a: alpha, ..*color };
+                    // SAFETY: same initialized backbuffer/display contract as `paint`.
+                    unsafe {
+                        crate::xrender_aa::stroke_rounded_rect_clipped(
+                            xrender,
+                            device,
+                            radius,
+                            scale,
+                            tint,
+                            Some(band_clip),
+                        )?
+                    };
+                }
+                if *gloss > 0 {
+                    let line = flamewm_render_core::gloss_line(*rect, radius / scale)
+                        .map(|line| scale_rect(line, scale));
+                    if let Some(line) = line {
+                        let line = match clip {
+                            Some(part) => intersect_rect(line, part),
+                            None => Some(line),
+                        };
+                        if let Some(line) = line {
+                            let white = Color {
+                                r: 255,
+                                g: 255,
+                                b: 255,
+                                a: *gloss,
+                            };
+                            // SAFETY: same initialized backbuffer/display contract as `paint`.
+                            unsafe {
+                                crate::xrender_aa::fill_rounded_rect(xrender, line, 0.0, white)?
+                            };
+                        }
+                    }
+                }
             }
             PaintCommand::FillRect {
                 rect,
@@ -1783,6 +1928,19 @@ pub(crate) fn backdrop_corner_radius_px(
     flamewm_render_core::paint::surface_shape_pixels(width, height, radius * document.ui_scale()).2
 }
 
+/// Desktop colour a depth-24 scene is cleared to: its pixels are opaque, so 0x00000000 would
+/// paint black under node corners and the panel's rounded edge.
+pub(crate) const OPAQUE_SCENE_CLEAR_PIXEL: std::os::raw::c_ulong = 0x0023_2629;
+
+/// Clear pixel for a backbuffer of `depth`: transparent on ARGB (depth 32), desktop colour otherwise.
+pub(crate) fn scene_clear_pixel(depth: i32) -> std::os::raw::c_ulong {
+    if depth >= 32 {
+        TRANSPARENT_CLEAR_PIXEL
+    } else {
+        OPAQUE_SCENE_CLEAR_PIXEL
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{background_bind_plan, popup_mask_spans};
@@ -2016,5 +2174,16 @@ mod layout_reuse_tests {
             XCloseDisplay(display);
             drop(deferred);
         }
+    }
+}
+
+#[cfg(test)]
+mod scene_clear_tests {
+    use super::*;
+
+    #[test]
+    fn depth24_scene_clear_is_never_opaque_black() {
+        assert_ne!(scene_clear_pixel(24), 0, "corner pixels must not be 0x000000 on depth 24");
+        assert_eq!(scene_clear_pixel(32), TRANSPARENT_CLEAR_PIXEL);
     }
 }

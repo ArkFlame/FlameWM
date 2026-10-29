@@ -14,13 +14,13 @@ use crate::geometry::Rect;
 /// Cast offset from the frame's top-left, in pixels (45 degrees).
 pub const OFFSET: i32 = 6;
 /// How far the shadow extends beyond the offset at the right and bottom.
-pub const SPREAD: i32 = 10;
+pub const SPREAD: i32 = 14;
 /// Fixed corner radius of the cast square.
 pub const RADIUS: u32 = 6;
-/// Peak darkening (0..=1) at the frame edge for a focused frame.
-pub const PEAK_FOCUSED: f32 = 0.52;
+/// Peak darkening (0..=1) at the frame edge for a focused frame. Soft: quadratic falloff to 0.
+pub const PEAK_FOCUSED: f32 = 0.20;
 /// Peak darkening (0..=1) at the frame edge for an unfocused frame.
-pub const PEAK_UNFOCUSED: f32 = 0.30;
+pub const PEAK_UNFOCUSED: f32 = 0.12;
 
 /// What the WM must do to one frame's shadow window this turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,6 +97,23 @@ pub fn shadow_rect(frame: Rect) -> Rect {
     }
 }
 
+/// Opaque desktop colour (BGRX, Z_PIXMAP 24-bit) a shadow snapshot starts from. Any region the
+/// desktop read does not cover keeps this colour instead of 0x000000, so it never shows black.
+pub const SNAPSHOT_BASE_BGRX: [u8; 4] = [0x20, 0x1e, 0x1b, 0x00];
+
+/// Local `(x, y, w, h)` of the desktop read for a shadow snapshot of `area`: the whole shadow rect.
+/// A cast-only read leaves the frame's rounded-corner notches (inside the frame rect) unfilled.
+#[must_use]
+pub fn snapshot_read_rect(area: Rect) -> (i32, i32, i32, i32) {
+    (0, 0, area.width.max(1) as i32, area.height.max(1) as i32)
+}
+
+/// A `width` x `height` BGRX snapshot pre-filled with the desktop colour.
+#[must_use]
+pub fn snapshot_base(width: usize, height: usize) -> Vec<u8> {
+    SNAPSHOT_BASE_BGRX.repeat(width * height)
+}
+
 /// Circular horizontal inset of a rounded corner at `row` (0 = the extreme
 /// row). Used only for the visible bottom-right corner.
 fn corner_inset(row: u32, radius: u32) -> u32 {
@@ -117,15 +134,15 @@ fn corner_inset(row: u32, radius: u32) -> u32 {
 /// frame's top-right corner to its full width over [`OFFSET`] + [`SPREAD`]
 /// rows, and the bottom band tapers the same way from the bottom-left corner.
 /// Those two diagonal cuts make the shadow meet the window smoothly instead of
-/// ending in a hard square cut. The visible bottom-right corner keeps the small
-/// fixed radius.
+/// ending in a hard square cut. The visible bottom-right corner uses `radius`,
+/// the owning frame's corner radius (`RADIUS` for the frame-less legacy API).
 // Row generation is shared by the owned compatibility API and the hot paths below.
 // Streaming it avoids allocating a frame-height vector only to clip and discard it.
-fn shadow_spans_iter(rect: Rect) -> impl Iterator<Item = (u32, u32, u32)> {
+fn shadow_spans_iter(rect: Rect, radius: u32) -> impl Iterator<Item = (u32, u32, u32)> {
     let (w, h) = (rect.width, rect.height);
     let band = (OFFSET + SPREAD) as u32;
     let chamfer = band.min(w).min(h);
-    let radius = RADIUS.min(w).min(h);
+    let radius = radius.min(w).min(h);
     let rows = if w == 0 { 0 } else { h };
     (0..rows).map(move |row| {
         let mut start = 0;
@@ -146,7 +163,7 @@ fn shadow_spans_iter(rect: Rect) -> impl Iterator<Item = (u32, u32, u32)> {
 
 #[must_use]
 pub fn shadow_spans(rect: Rect) -> Vec<(u32, u32, u32)> {
-    shadow_spans_iter(rect).collect()
+    shadow_spans_iter(rect, RADIUS).collect()
 }
 
 // Masks and visible shading consume rows once. Keep the original owned
@@ -155,7 +172,7 @@ fn clipped_shadow_rows(area: Rect, frame: Rect) -> impl Iterator<Item = (u32, u3
     let frame_bottom = frame.y + frame.height as i32;
     let frame_right = frame.x + frame.width as i32;
     let cut = (frame_right - area.x).max(0) as u32;
-    shadow_spans_iter(area).map(move |(row, start, end)| {
+    shadow_spans_iter(area, RADIUS).map(move |(row, start, end)| {
         let y = area.y + row as i32;
         if y >= frame.y && y < frame_bottom {
             (row, start.max(cut).min(end), end)
@@ -202,7 +219,7 @@ fn clipped_shadow_rows_with_radius(
     let frame_bottom = frame.y + frame.height as i32;
     let frame_right = frame.x + frame.width as i32;
     let r = radius.min(frame.width.min(frame.height) / 2);
-    shadow_spans_iter(area).map(move |(row, start, end)| {
+    shadow_spans_iter(area, radius).map(move |(row, start, end)| {
         let y = area.y + row as i32;
         if y >= frame.y && y < frame_bottom {
             let inset = if r == 0 {
@@ -790,6 +807,42 @@ mod rounded_shadow_corner_tests {
             (frame.bottom() - 15 - area.y) as u32,
         );
         assert!(!contains(&round, inside.0, inside.1));
-        assert_eq!(rounded_shadow_mask_rectangles(area, frame, 0), rectangular);
+        // A square frame casts a square corner: the cast follows the frame radius.
+        assert!(contains(&rounded_shadow_mask_rectangles(area, frame, 0), area.width - 1, area.height - 1));
+    }
+
+    #[test]
+    fn cast_corner_follows_the_frame_radius() {
+        let rect = Rect { x: 0, y: 0, width: 200, height: 120 };
+        let area = |radius| shadow_spans_iter(rect, radius).map(|(_, s, e)| e - s).sum::<u32>();
+        assert!(area(24) < area(RADIUS), "a 24px frame rounds its cast more than the legacy 6px");
+        assert_eq!(shadow_spans(rect), shadow_spans_iter(rect, RADIUS).collect::<Vec<_>>());
+    }
+}
+
+#[cfg(test)]
+mod snapshot_base_tests {
+    use super::*;
+
+    #[test]
+    fn desktop_read_covers_the_rounded_corner_notches() {
+        // Regression: a read limited to the right/bottom cast left the top-right notch (inside the
+        // frame rect) on the base colour, which shaded to a flat #151719 sliver.
+        let frame = Rect { x: 90, y: 59, width: 484, height: 347 };
+        let area = shadow_rect(frame);
+        let (x, y, w, h) = snapshot_read_rect(area);
+        // A notch pixel inside the frame rect and inside the shadow rect (rows start at frame.y + OFFSET).
+        let notch = (frame.right() - 2 - area.x, frame.y + 8 - area.y);
+        assert!(notch.0 >= x && notch.0 < x + w && notch.1 >= y && notch.1 < y + h);
+        assert_eq!((x, y, w, h), (0, 0, area.width as i32, area.height as i32));
+    }
+
+    #[test]
+    fn uncovered_snapshot_pixels_are_never_black() {
+        let pixels = snapshot_base(7, 5);
+        assert_eq!(pixels.len(), 7 * 5 * 4);
+        for px in pixels.chunks_exact(4) {
+            assert_ne!(&px[..3], &[0, 0, 0], "uncovered shadow pixel must not be black");
+        }
     }
 }

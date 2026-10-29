@@ -1149,7 +1149,7 @@ fn valid_icon_name(name: &str) -> bool {
 }
 
 /// Product default icon theme, searched after the configured theme and before Breeze.
-pub const DEFAULT_ICON_THEME: &str = "PlagueSur";
+pub const DEFAULT_ICON_THEME: &str = "MacTahoe";
 
 /// Theme search chain: `FLAMEWM_ICON_THEME`, the Flame `iconTheme`
 /// preference, the desktop's configured theme (kdeglobals, then GTK), then
@@ -1923,10 +1923,10 @@ mod tests {
         let resolver = IconResolver::from_environment_with_theme(
             std::env::temp_dir(),
             0,
-            Some("McMojave-circle"),
+            Some("MacTahoe"),
         );
         let names = &resolver.shared_index().theme_names;
-        let preferred = names.iter().position(|name| name == "McMojave-circle");
+        let preferred = names.iter().position(|name| name == "MacTahoe");
         let breeze = names.iter().position(|name| name == "Breeze");
         assert!(preferred.is_some(), "startup preference missing: {names:?}");
         assert!(

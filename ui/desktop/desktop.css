@@ -44,7 +44,13 @@ body { position:relative; background:#000000; color:#f1f2f3; font-size:13px; }
 .convert-wheel-pos-6 { left:11px; top:148px; }
 .convert-wheel-pos-7 { left:44px; top:69px; }
 
-.widget { position:absolute; left:120px; top:120px; width:320px; height:140px; padding:16px; display:flex; flex-direction:column; justify-content:center; box-sizing:border-box; background:#1e2030b3; color:#f4f6fb; border-radius:16px; overflow:hidden; cursor:default; }
+/* File wheel block: mode labels (Convert, Tools, Actions) are longer than
+   format names, so the wedge text is smaller. Additive overrides only. */
+.context-menu .convert-wheel-option { font-size:13px; font-weight:650; }
+.convert-wheel-hub { font-size:13px; font-weight:700; }
+/* End file wheel block */
+
+.widget { position:absolute; left:120px; top:120px; width:320px; height:140px; padding:11px 15px; display:flex; flex-direction:column; justify-content:center; box-sizing:border-box; background:#1e2030b3; color:#f4f6fb; border-radius:18px; overflow:hidden; cursor:default; }
 .widget-line { display:flex; flex-direction:row; align-items:center; gap:0px; }
 .widget-spacer { flex-grow:1; height:1px; }
 .widget-clock { display:flex; flex-direction:column; justify-content:center; flex-grow:1; }
@@ -52,6 +58,8 @@ body { position:relative; background:#000000; color:#f1f2f3; font-size:13px; }
 .widget-clock-time { font-size:52px; font-weight:700; white-space:nowrap; text-shadow:0px 2px 4px #00000066; }
 .widget-clock-date { font-size:16px; font-weight:600; white-space:nowrap; color:#8cc8ff; text-shadow:0px 1px 4px #00000066; }
 .widget-clock-row { gap:14px; }
+.widget-history { display:flex; flex-direction:column; flex-grow:1; }
+.widget-history-image { width:100%; height:100%; }
 .widget-gauge { display:flex; flex-direction:column; justify-content:center; align-items:center; flex-grow:1; gap:6px; }
 .widget-gauge-main { display:flex; flex-direction:row; align-items:center; gap:14px; }
 .widget-gauge-ring { position:relative; width:72px; height:72px; flex-grow:0; }
@@ -71,10 +79,49 @@ body { position:relative; background:#000000; color:#f1f2f3; font-size:13px; }
 .widget-media-button { width:30px; height:30px; padding:0px; display:flex; align-items:center; justify-content:center; background:#ffffff1f; border:0px solid transparent; border-radius:15px; cursor:default; }
 .widget-media-button:hover { background:#ffffff40; }
 .widget-media-button img { width:16px; height:16px; display:block; }
+.widget-media-head { display:flex; flex-direction:row; align-items:center; gap:10px; }
+.widget-media-art { width:44px; height:44px; display:flex; align-items:center; justify-content:center; border-radius:10px; background:#8cc8ff33; }
+.widget-media-art img { width:24px; height:24px; display:block; }
+.widget-media-text { display:flex; flex-direction:column; gap:2px; flex-grow:1; overflow:hidden; }
+.widget-media-controls { justify-content:center; }
+.widget-weather { display:flex; flex-direction:column; justify-content:space-between; flex-grow:1; overflow:hidden; }
+.widget-weather-head { display:flex; flex-direction:row; justify-content:space-between; }
+.widget-weather-left { display:flex; flex-direction:column; gap:0px; }
+.widget-weather-right { display:flex; flex-direction:column; align-items:flex-end; gap:2px; }
+.widget-weather-city { font-size:15px; font-weight:600; white-space:nowrap; }
+.widget-weather-temp { font-size:50px; font-weight:300; white-space:nowrap; }
+.widget-weather-condition { font-size:14px; font-weight:600; white-space:nowrap; }
+.widget-weather-range { font-size:13px; font-weight:600; white-space:nowrap; opacity:0.85; }
+.widget-weather-hours { display:flex; flex-direction:row; justify-content:space-between; }
+.widget-weather-attr { font-size:10px; font-weight:600; white-space:normal; opacity:0.85; }
+.widget-weather-hour { display:flex; flex-direction:column; align-items:center; gap:2px; flex-grow:1; }
+.widget-weather-hour-time { font-size:12px; font-weight:600; white-space:nowrap; }
+.widget-weather-hour-temp { font-size:14px; font-weight:600; white-space:nowrap; }
+.widget-calendar { display:flex; flex-direction:column; gap:2px; flex-grow:1; overflow:hidden; }
+.widget-cal-month { font-size:11px; font-weight:700; white-space:nowrap; }
+.widget-cal-row { display:flex; flex-direction:row; }
+.widget-cal-cell { width:24px; height:24px; display:flex; align-items:center; justify-content:center; border-radius:12px; font-size:12px; font-weight:500; white-space:nowrap; }
+.widget-cal-wd { font-size:11px; font-weight:700; opacity:0.7; }
+.widget-analog { position:absolute; left:0px; top:0px; }
+.widget-analog-image { position:absolute; left:0px; top:0px; width:100%; height:100%; display:block; }
+.widget-analog-n { position:absolute; width:20px; height:20px; margin-left:-10px; margin-top:-10px; display:flex; align-items:center; justify-content:center; font-weight:700; white-space:nowrap; }
+.widget-analog-n1 { left:70%; top:15.4%; }
+.widget-analog-n2 { left:84.6%; top:30%; }
+.widget-analog-n3 { left:90%; top:50%; }
+.widget-analog-n4 { left:84.6%; top:70%; }
+.widget-analog-n5 { left:70%; top:84.6%; }
+.widget-analog-n6 { left:50%; top:90%; }
+.widget-analog-n7 { left:30%; top:84.6%; }
+.widget-analog-n8 { left:15.4%; top:70%; }
+.widget-analog-n9 { left:10%; top:50%; }
+.widget-analog-n10 { left:15.4%; top:30%; }
+.widget-analog-n11 { left:30%; top:15.4%; }
+.widget-analog-n12 { left:50%; top:10%; }
 .widget-custom { display:flex; flex-direction:column; justify-content:center; gap:3px; flex-grow:1; overflow:hidden; }
 .widget-span { white-space:nowrap; padding-left:0px; padding-right:0px; border-radius:4px; }
 .widget-editor { position:absolute; left:12px; right:12px; top:12px; bottom:12px; white-space:normal; overflow-wrap:anywhere; overflow:hidden; font-size:14px; background:#0b0c10cc; color:#f4f6fb; border:1px solid #8cc8ff; border-radius:8px; padding:8px; cursor:text; }
 .widget-resize { position:absolute; right:2px; bottom:2px; width:12px; height:12px; border-radius:6px; background:#ffffff14; cursor:nwse-resize; }
+.widget-ghost { position:absolute; left:0px; top:0px; width:0px; height:0px; box-sizing:border-box; border:2px solid #8cc8ffb3; background:#8cc8ff1a; border-radius:18px; }
 
 .widget-gallery { width:560px; padding:14px; gap:8px; }
 .widget-config { width:420px; padding:14px; gap:4px; }

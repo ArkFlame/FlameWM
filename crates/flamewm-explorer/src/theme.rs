@@ -147,8 +147,11 @@ impl ExplorerTheme {
         // opacity percent (dev override included) so it matches the backdrop's opacity exactly.
         let fill = surface_fill(snapshot);
         theme.surface = rgb(fill.rgb);
-        let percent = surface_opacity_percent(snapshot);
-        theme.surface_alpha = ((u16::from(percent) * 255) / 100) as u8;
+        // Shared glass alpha (ui-core `surface_fill`); the dev override keeps its percent mapping.
+        theme.surface_alpha = match dev_surface_percent_override() {
+            Some(percent) => ((u16::from(percent) * 255) / 100) as u8,
+            None => fill.alpha,
+        };
         theme.stroke = surface_border(snapshot);
         theme
     }
@@ -254,7 +257,7 @@ mod tests {
     fn muted_text_is_opaque_and_dimmer_than_full_white() {
         let muted = ExplorerTheme::default().muted();
         assert_eq!(muted.a, 255);
-        assert!(muted.r < 245 && muted.r > ExplorerTheme::default().surface.r);
+        assert!(muted.r < 255 && muted.r > ExplorerTheme::default().surface.r);
     }
     #[test]
     fn unknown_values_preserve_defaults() {
@@ -311,7 +314,7 @@ mod tests {
             .values
             .insert("fontSizeOffset".into(), SettingValue::Integer(9));
         let mapped = ExplorerTheme::from_snapshot(&settings);
-        assert_eq!(mapped.surface_alpha, 127);
+        assert_eq!(mapped.surface_alpha, 128);
         assert_eq!(mapped.font_family.as_deref(), Some("Noto Sans"));
         assert_eq!(mapped.font_size_offset, 4);
         settings
@@ -323,9 +326,9 @@ mod tests {
         let low = ExplorerTheme::from_snapshot(&settings);
         assert_eq!(low.font_size_offset, -2);
         assert_eq!(low.font_family, None);
-        // Missing surfaceOpacity uses the shared taskbar default (50%), not an opaque literal.
+        // Missing surfaceOpacity/glassOpacityPercent uses the shared glass default (12%), not an opaque literal.
         let defaults = ExplorerTheme::from_snapshot(&SettingsSnapshot::new(1));
-        assert_eq!(defaults.surface_alpha, 127);
+        assert_eq!(defaults.surface_alpha, 31);
     }
 
     #[test]
@@ -340,12 +343,12 @@ mod tests {
         let live = ExplorerTheme::from_snapshot(&settings);
         let fill = surface_fill(&settings);
         assert_eq!(live.surface_alpha, fill.alpha);
-        assert_eq!(live.surface_alpha, 178);
+        assert_eq!(live.surface_alpha, 179);
         assert_eq!(
             (live.surface.r, live.surface.g, live.surface.b),
             (0x44, 0x55, 0x66)
         );
-        assert_eq!(live.root().a, 178);
+        assert_eq!(live.root().a, 179);
         settings
             .values
             .insert("surfaceOpacity".into(), SettingValue::Percent(100));

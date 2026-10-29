@@ -71,7 +71,7 @@ fn main() {
     stage_tree(&breeze, &staged_assets.join("breeze"));
     // These three local menu glyphs are not part of the selectable system icon
     // themes. Always bundle them with the desktop RWR so the same UI is shown
-    // with PlagueSur, Fluent and a minimal installed asset directory.
+    // with MacTahoe, Fluent and a minimal installed asset directory.
     let menu_icons = root.join("ui/desktop/icons");
     for icon in [
         "flamewm-convert.svg",
@@ -118,8 +118,19 @@ fn main() {
 const WIDGET_SLOTS: usize = 8;
 const WIDGET_LINES: usize = 6;
 const WIDGET_SPANS: usize = 6;
-const WIDGET_CONFIG_ROWS: usize = 17;
-const WIDGET_KINDS: [(&str, &str, &str); 5] = [
+const WIDGET_CONFIG_ROWS: usize = 18;
+const WEEKDAY_INITIALS: [&str; 7] = ["S", "M", "T", "W", "T", "F", "S"];
+const WIDGET_KINDS: [(&str, &str, &str); 10] = [
+    (
+        "weather",
+        "Weather",
+        "City, current temperature and the next six hours.",
+    ),
+    (
+        "calendar",
+        "Calendar month",
+        "Current month with today marked.",
+    ),
     (
         "clock",
         "Time and date",
@@ -127,6 +138,21 @@ const WIDGET_KINDS: [(&str, &str, &str); 5] = [
     ),
     ("cpu", "CPU usage", "Processor load as a circular gauge."),
     ("memory", "Memory usage", "RAM in use as a circular gauge."),
+    (
+        "history",
+        "CPU and RAM graph",
+        "Rolling CPU and memory history as a sparkline.",
+    ),
+    (
+        "network",
+        "Network traffic",
+        "Download and upload rates as a sparkline.",
+    ),
+    (
+        "ring",
+        "Display ring",
+        "Circular gauge for CPU or RAM, with a percentage.",
+    ),
     (
         "media",
         "Media player",
@@ -169,6 +195,16 @@ fn widget_slots() -> String {
                     )
                 ),
             );
+            let numerals: String = (1..=12)
+                .map(|n| {
+                    format!(
+                        "<div id=\"{w}-analog-n{n}\" class=\"widget-analog-n widget-analog-n{n}\">{n}</div>"
+                    )
+                })
+                .collect();
+            let analog = format!(
+                "<div id=\"{w}-analog\" class=\"widget-analog\" hidden><img id=\"{w}-analog-image\" class=\"widget-analog-image\" src=\"assets/breeze/folder.svg\">{numerals}</div>"
+            );
             let gauge = format!(
                 "<div id=\"{w}-gauge\" class=\"widget-gauge\">\
 <div id=\"{w}-gauge-main\" class=\"widget-gauge-main\">\
@@ -178,16 +214,65 @@ fn widget_slots() -> String {
 <div id=\"{w}-gauge-value\" class=\"widget-gauge-value\">&#8203;</div><div id=\"{w}-gauge-detail\" class=\"widget-gauge-detail\">&#8203;</div></div>\
 </div><div id=\"{w}-gauge-caption\" class=\"widget-gauge-caption\">&#8203;</div></div>"
             );
+            let history = format!(
+                "<div id=\"{w}-history\" class=\"widget-history\" hidden><img id=\"{w}-history-image\" class=\"widget-history-image\" src=\"assets/breeze/folder.svg\"></div>"
+            );
+            let network = format!(
+                "<div id=\"{w}-network\" class=\"widget-history\" hidden><img id=\"{w}-network-image\" class=\"widget-history-image\" src=\"assets/breeze/folder.svg\"></div>"
+            );
             let media = format!(
                 "<div id=\"{w}-media\" class=\"widget-media\">\
+<div id=\"{w}-media-head\" class=\"widget-media-head\">\
+<div id=\"{w}-media-art\" class=\"widget-media-art\"><img src=\"assets/breeze/folder-music.svg\"></div>\
+<div id=\"{w}-media-text\" class=\"widget-media-text\">\
 <div id=\"{w}-media-player\" class=\"widget-media-player\">&#8203;</div>\
 <div id=\"{w}-media-title\" class=\"widget-media-title\">&#8203;</div>\
 <div id=\"{w}-media-artist\" class=\"widget-media-artist\">&#8203;</div>\
+</div></div>\
 <div id=\"{w}-media-controls\" class=\"widget-media-controls\">\
 <button id=\"{w}-media-prev\" class=\"widget-media-button\" data-action=\"widget.{n}.media.prev\"><img src=\"assets/breeze/media-skip-backward.svg\"></button>\
 <button id=\"{w}-media-play\" class=\"widget-media-button\" data-action=\"widget.{n}.media.play\"><img id=\"{w}-media-play-icon\" src=\"assets/breeze/media-playback-start.svg\"><img id=\"{w}-media-pause-icon\" src=\"assets/breeze/media-playback-pause.svg\"></button>\
 <button id=\"{w}-media-next\" class=\"widget-media-button\" data-action=\"widget.{n}.media.next\"><img src=\"assets/breeze/media-skip-forward.svg\"></button>\
 </div></div>"
+            );
+            let hours: String = (1..=6)
+                .map(|h| {
+                    format!(
+                        "<div id=\"{w}-weather-hour-{h}\" class=\"widget-weather-hour\"><div id=\"{w}-weather-hour-{h}-time\" class=\"widget-weather-hour-time\">&#8203;</div><div id=\"{w}-weather-hour-{h}-temp\" class=\"widget-weather-hour-temp\">&#8203;</div></div>"
+                    )
+                })
+                .collect();
+            let weather = format!(
+                "<div id=\"{w}-weather\" class=\"widget-weather\" hidden>\
+<div id=\"{w}-weather-head\" class=\"widget-weather-head\">\
+<div id=\"{w}-weather-left\" class=\"widget-weather-left\"><div id=\"{w}-weather-city\" class=\"widget-weather-city\">&#8203;</div><div id=\"{w}-weather-temp\" class=\"widget-weather-temp\">&#8203;</div></div>\
+<div id=\"{w}-weather-right\" class=\"widget-weather-right\"><div id=\"{w}-weather-condition\" class=\"widget-weather-condition\">&#8203;</div><div id=\"{w}-weather-range\" class=\"widget-weather-range\">&#8203;</div></div>\
+</div><div id=\"{w}-weather-hours\" class=\"widget-weather-hours\">{hours}</div>\
+<div id=\"{w}-weather-attr\" class=\"widget-weather-attr\" hidden>&#8203;</div></div>"
+            );
+            let weekdays: String = WEEKDAY_INITIALS
+                .iter()
+                .enumerate()
+                .map(|(c, initial)| {
+                    format!("<div id=\"{w}-cal-wd-{c}\" class=\"widget-cal-cell widget-cal-wd\">{initial}</div>")
+                })
+                .collect();
+            let weeks: String = (0..6)
+                .map(|r| {
+                    let cells: String = (0..7)
+                        .map(|c| {
+                            format!(
+                                "<div id=\"{w}-cal-{r}-{c}\" class=\"widget-cal-cell\">&#8203;</div>"
+                            )
+                        })
+                        .collect();
+                    format!("<div class=\"widget-cal-row\">{cells}</div>")
+                })
+                .collect();
+            let calendar = format!(
+                "<div id=\"{w}-calendar\" class=\"widget-calendar\" hidden>\
+<div id=\"{w}-cal-month\" class=\"widget-cal-month\">&#8203;</div>\
+<div class=\"widget-cal-row\">{weekdays}</div>{weeks}</div>"
             );
             let lines = (1..=WIDGET_LINES)
                 .map(|l| {
@@ -205,12 +290,14 @@ fn widget_slots() -> String {
                 "<div id=\"{w}-custom\" class=\"widget-custom\">{lines}</div><div id=\"{w}-editor\" class=\"widget-editor\">&#8203;</div>"
             );
             format!(
-                "<div id=\"{w}\" class=\"widget\" data-action=\"widget.{n}.move\" hidden>{clock}{gauge}{media}{custom}\
+                "<div id=\"{w}\" class=\"widget\" data-action=\"widget.{n}.move\" hidden>{clock}{analog}{gauge}{history}{network}{media}{weather}{calendar}{custom}\
 <div id=\"{w}-resize\" class=\"widget-resize\" data-action=\"widget.{n}.resize\"></div></div>"
             )
         })
         .collect::<Vec<_>>()
         .join("\n  ")
+        // Drag ghost: the target cell outline shown while a widget is moved or resized.
+        + "\n  <div id=\"widget-ghost\" class=\"widget-ghost\" hidden></div>"
 }
 
 fn widget_card_preview(kind: &str) -> String {
@@ -219,6 +306,8 @@ fn widget_card_preview(kind: &str) -> String {
         "cpu" | "memory" => format!(
             "<img id=\"widget-card-{kind}-image\" class=\"widget-card-ring\" src=\"assets/breeze/folder.svg\">"
         ),
+        "weather" => "<div class=\"widget-card-preview-weather\"><div class=\"widget-card-small\">Weather</div><div class=\"widget-card-big\">--&#176;</div></div>".to_owned(),
+        "calendar" => "<div class=\"widget-card-preview-calendar\"><div class=\"widget-card-small\">MONTH</div><div class=\"widget-card-small\">S M T W T F S</div></div>".to_owned(),
         "media" => "<div class=\"widget-card-preview-media\"><div class=\"widget-card-small\">Now playing</div><div class=\"widget-card-medium\">Song title</div><div class=\"widget-card-icons\"><img src=\"assets/breeze/media-skip-backward.svg\"><img src=\"assets/breeze/media-playback-start.svg\"><img src=\"assets/breeze/media-skip-forward.svg\"></div></div>".to_owned(),
         _ => "<div class=\"widget-card-preview-custom\"><div class=\"widget-card-markup\"><div class=\"widget-card-chip widget-card-chip-red\">Welcome,</div><div class=\"widget-card-chip widget-card-chip-blue\">%username%</div></div><div class=\"widget-card-small\">%date% %time%</div></div>".to_owned(),
     }
@@ -253,6 +342,10 @@ fn widget_panels() -> String {
 <button id=\"widget-row-configure\" class=\"menu-row\" data-action=\"widget.menu.configure\"><img src=\"assets/breeze/configure.svg\"><span>Configure Widget</span></button>\
 <button id=\"widget-row-edit\" class=\"menu-row\" data-action=\"widget.menu.edit\"><img src=\"assets/breeze/edit-rename.svg\"><span>Edit Text</span></button>\
 <button id=\"widget-row-lock\" class=\"menu-row\" data-action=\"widget.menu.lock\"><img src=\"assets/breeze/system-lock-screen.svg\"><span id=\"widget-row-lock-label\">Lock Position</span></button>\
+<button id=\"widget-row-size-1x1\" class=\"menu-row\" data-action=\"widget.menu.size.1x1\"><img src=\"assets/breeze/list-add.svg\"><span>Size 1 x 1</span></button>\
+<button id=\"widget-row-size-2x1\" class=\"menu-row\" data-action=\"widget.menu.size.2x1\"><img src=\"assets/breeze/list-add.svg\"><span>Size 2 x 1</span></button>\
+<button id=\"widget-row-size-1x2\" class=\"menu-row\" data-action=\"widget.menu.size.1x2\"><img src=\"assets/breeze/list-add.svg\"><span>Size 1 x 2</span></button>\
+<button id=\"widget-row-size-2x2\" class=\"menu-row\" data-action=\"widget.menu.size.2x2\"><img src=\"assets/breeze/list-add.svg\"><span>Size 2 x 2</span></button>\
 <button id=\"widget-row-gallery\" class=\"menu-row\" data-action=\"widget.menu.gallery\"><img src=\"assets/breeze/list-add.svg\"><span>Add Widgets</span></button>\
 <button id=\"widget-row-remove\" class=\"menu-row\" data-action=\"widget.menu.remove\"><img src=\"assets/breeze/edit-delete.svg\"><span>Remove Widget</span></button>\
 </section>\n  \

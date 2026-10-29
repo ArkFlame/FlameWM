@@ -12,7 +12,7 @@ use crate::storage::write_atomic_text;
 
 /// Every action the shortcut registry can bind is persistable; this allowlist used to lag it,
 /// so a file overriding e.g. `OpenTerminalSuper` was rejected as a whole.
-const KNOWN_HOTKEYS: [&str; 56] = crate::shortcuts::ACTIONS;
+const KNOWN_HOTKEYS: [&str; 58] = crate::shortcuts::ACTIONS;
 
 /// Generates `as_str` (wire text) and `parse` (wire text to variant) from one variant table.
 macro_rules! wire_enum {
@@ -100,7 +100,7 @@ wire_enum!(WallpaperFit {
 
 /// Translucent surface policy for the taskbar or Start menu.
 ///
-/// `blur_percent` (0..=100) maps to a blur radius of `blur_percent / 100 * 24` px at 1x. Blur is
+/// `blur_percent` (0..=100) maps to a blur radius of `blur_percent / 100 * 40` px at 1x (Tahoe blur range 30-40 px). Blur is
 /// only applied when `opacity_percent < 100`; at 100% the radius is always 0.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Backdrop {
@@ -238,6 +238,28 @@ pub struct ProductSettings {
     pub surface_blur_percent: u8,
     pub surface_border_color: String,
     pub surface_border_opacity: u8,
+    /// `surfaceSaturationPercent` (0..=200): backdrop saturation, 100 is identity.
+    pub surface_saturation_percent: u8,
+    /// `surfaceRimFadePercent` (0..=100): bottom rim alpha as a percent of the top rim.
+    pub surface_rim_fade_percent: u8,
+    /// `surfaceShadowPercent` (0..=100): peak alpha of the soft drop shadow.
+    pub surface_shadow_percent: u8,
+    /// `surfaceHighlightPercent` (0..=100): alpha of the 1px inset top gloss.
+    pub surface_highlight_percent: u8,
+    /// `glassifyContrastZones`: opt-in translucent contrast zones. Default off.
+    pub glassify_contrast_zones: bool,
+    /// `reduceTransparency`: all materials opaque with no blur, overrides glassify. Default off.
+    pub reduce_transparency: bool,
+    /// `glassOpacityPercent` (4..=42): `GlassRegular` tint alpha.
+    pub glass_opacity_percent: u8,
+    /// `glassBlurPx` (0..=54): `GlassRegular` backdrop blur in logical px.
+    pub glass_blur_px: u8,
+    /// `taskbarMaterialMode`: `blur-only` | `inherit` | `custom-tint`.
+    pub taskbar_material_mode: String,
+    /// `taskbarOpacityPercent` (0..=75): taskbar tint alpha in Blur Only and Custom Tint.
+    pub taskbar_opacity_percent: u8,
+    /// `taskbarCustomTint` (`#RRGGBB`): used only in Custom Tint mode.
+    pub taskbar_custom_tint: String,
     pub start_button_text: String,
     pub custom_start_icon: String,
     pub sticky_notes_enabled: bool,
@@ -304,8 +326,8 @@ impl Default for ProductSettings {
     fn default() -> Self {
         Self {
             revision: 1,
-            accent: "#EF4048".to_owned(),
-            icon_theme: "PlagueSur".to_owned(),
+            accent: "#539BFF".to_owned(),
+            icon_theme: "MacTahoe".to_owned(),
             appearance: AppearanceMode::Dark,
             wallpaper: String::new(),
             wallpaper_mode: BackgroundMode::Default,
@@ -349,17 +371,28 @@ impl Default for ProductSettings {
             auto_location_enabled: true,
             auto_time_zone_enabled: true,
             auto_time_zone: String::new(),
-            surface_color: "#191b1d".to_owned(),
-            surface_opacity: 50,
-            surface_blur_percent: 80,
+            surface_color: "#333333".to_owned(),
+            surface_opacity: 65,
+            surface_blur_percent: 70,
             surface_border_color: "#FFFFFF".to_owned(),
-            surface_border_opacity: 25,
+            surface_border_opacity: 8,
+            surface_saturation_percent: 165,
+            surface_rim_fade_percent: 6,
+            surface_shadow_percent: 0,
+            surface_highlight_percent: 18,
+            glassify_contrast_zones: false,
+            reduce_transparency: false,
+            glass_opacity_percent: 12,
+            glass_blur_px: 28,
+            taskbar_material_mode: "blur-only".to_owned(),
+            taskbar_opacity_percent: 8,
+            taskbar_custom_tint: "#5879EE".to_owned(),
             start_button_text: String::new(),
             custom_start_icon: String::new(),
             sticky_notes_enabled: true,
             organize_downloads: false,
-            start_menu_color: "#191b1d".to_owned(),
-            start_menu_opacity: 50,
+            start_menu_color: "#333333".to_owned(),
+            start_menu_opacity: 65,
             start_menu_blur_percent: 80,
             accent_opacity: 100,
             decoration: "rounded".to_owned(),
@@ -474,6 +507,34 @@ impl ProductSettings {
         if self.surface_border_opacity > 100 {
             return invalid("surfaceBorderOpacity must be 0..100");
         }
+        if self.surface_saturation_percent > 200 {
+            return invalid("surfaceSaturationPercent must be 0..200");
+        }
+        if self.surface_rim_fade_percent > 100 {
+            return invalid("surfaceRimFadePercent must be 0..100");
+        }
+        if self.surface_shadow_percent > 100 {
+            return invalid("surfaceShadowPercent must be 0..100");
+        }
+        if self.surface_highlight_percent > 100 {
+            return invalid("surfaceHighlightPercent must be 0..100");
+        }
+        if !(4..=42).contains(&self.glass_opacity_percent) {
+            return invalid("glassOpacityPercent must be 4..42");
+        }
+        if self.glass_blur_px > 54 {
+            return invalid("glassBlurPx must be 0..54");
+        }
+        if !matches!(
+            self.taskbar_material_mode.as_str(),
+            "blur-only" | "inherit" | "custom-tint"
+        ) {
+            return invalid("taskbarMaterialMode must be blur-only, inherit or custom-tint");
+        }
+        if self.taskbar_opacity_percent > 75 {
+            return invalid("taskbarOpacityPercent must be 0..75");
+        }
+        validate_color(&self.taskbar_custom_tint, false, "taskbarCustomTint")?;
         validate_color(&self.accent, true, "accent")?;
         if self
             .wallpaper
@@ -936,7 +997,7 @@ fn backdrop(opacity_percent: u8, blur_percent: u8) -> Backdrop {
     let radius_px = if opacity_percent >= 100 {
         0.0
     } else {
-        f32::from(blur_percent) / 100.0 * 24.0
+        f32::from(blur_percent) / 100.0 * 40.0
     };
     Backdrop {
         opacity_percent,
@@ -1069,6 +1130,17 @@ stable_settings! {
     (false, taskbar, "surfaceBlurPercent", surface_blur_percent),
     (false, taskbar, "surfaceBorderColor", surface_border_color),
     (false, taskbar, "surfaceBorderOpacity", surface_border_opacity),
+    (false, taskbar, "surfaceSaturationPercent", surface_saturation_percent),
+    (false, taskbar, "surfaceRimFadePercent", surface_rim_fade_percent),
+    (false, taskbar, "surfaceShadowPercent", surface_shadow_percent),
+    (false, taskbar, "surfaceHighlightPercent", surface_highlight_percent),
+    (false, glass, "glassifyContrastZones", glassify_contrast_zones),
+    (false, glass, "reduceTransparency", reduce_transparency),
+    (false, glass, "glassOpacityPercent", glass_opacity_percent),
+    (false, glass, "glassBlurPx", glass_blur_px),
+    (false, glass, "taskbarMaterialMode", taskbar_material_mode),
+    (false, glass, "taskbarOpacityPercent", taskbar_opacity_percent),
+    (false, glass, "taskbarCustomTint", taskbar_custom_tint),
     (true, taskbar, "startButtonText", start_button_text),
     (true, taskbar, "customStartIcon", custom_start_icon),
     (true, desktop, "stickyNotesEnabled", sticky_notes_enabled),
@@ -1332,7 +1404,7 @@ mod tests {
     fn defaults_match_current_flamewm_product_contract() {
         let settings = ProductSettings::default();
         assert_eq!(settings.revision, 1);
-        assert_eq!(settings.accent, "#EF4048");
+        assert_eq!(settings.accent, "#539BFF");
         assert_eq!(settings.taskbar_height, 44);
         assert_eq!(settings.desktop_selection_fill_opacity, 20);
         assert_eq!(settings.window_snap_preview_fill_opacity, 20);
@@ -1342,7 +1414,7 @@ mod tests {
     #[test]
     fn unset_icon_theme_defaults_to_plaguesur_and_writes_nothing() {
         let parsed = load("revision=2\n").expect("valid snapshot");
-        assert_eq!(parsed.icon_theme, "PlagueSur");
+        assert_eq!(parsed.icon_theme, "MacTahoe");
         assert!(!ConfigStore::serialize(&parsed).contains("iconTheme"));
     }
 
@@ -1690,13 +1762,14 @@ mod tests {
         assert_eq!(defaults.taskbar_floating_radius, 12);
         assert_eq!(defaults.taskbar_blur_percent, 80);
         assert_eq!(defaults.start_menu_blur_percent, 80);
+        assert_eq!(defaults.surface_blur_percent, 70);
         let taskbar = defaults.taskbar_backdrop();
-        assert_eq!(taskbar.opacity_percent, 50);
-        assert_eq!(taskbar.blur_percent, 80);
-        assert!((taskbar.radius_px - 19.2).abs() < 1e-4);
+        assert_eq!(taskbar.opacity_percent, 65);
+        assert_eq!(taskbar.blur_percent, 70);
+        assert!((taskbar.radius_px - 28.0).abs() < 1e-4);
         let start = defaults.start_menu_backdrop();
-        assert_eq!(start.opacity_percent, 50);
-        assert!((start.radius_px - 19.2).abs() < 1e-4);
+        assert_eq!(start.opacity_percent, 65);
+        assert!((start.radius_px - 32.0).abs() < 1e-4);
         let text = ConfigStore::serialize(&defaults);
         assert!(!text.contains("taskbarStyle"));
         assert!(!text.contains("taskbarBlurPercent"));
@@ -1849,8 +1922,8 @@ mod tests {
     #[test]
     fn new_appearance_keys_default_and_stay_unwritten_when_unchanged() {
         let defaults = ProductSettings::default();
-        assert_eq!(defaults.start_menu_color, "#191b1d");
-        assert_eq!(defaults.start_menu_opacity, 50);
+        assert_eq!(defaults.start_menu_color, "#333333");
+        assert_eq!(defaults.start_menu_opacity, 65);
         assert_eq!(defaults.taskbar_opacity, 50);
         assert_eq!(defaults.accent_opacity, 100);
         assert_eq!(defaults.decoration, "rounded");
@@ -1936,9 +2009,9 @@ mod tests {
     #[test]
     fn surface_defaults_and_legacy_taskbar_surface_promotes() {
         let defaults = ProductSettings::default();
-        assert_eq!(defaults.surface_color, "#191b1d");
-        assert_eq!(defaults.surface_opacity, 50);
-        assert_eq!(defaults.surface_blur_percent, 80);
+        assert_eq!(defaults.surface_color, "#333333");
+        assert_eq!(defaults.surface_opacity, 65);
+        assert_eq!(defaults.surface_blur_percent, 70);
         assert!(!ConfigStore::serialize(&defaults).contains("surface"));
 
         let legacy =
@@ -2547,5 +2620,102 @@ mod tests {
             assert_eq!(WallpaperFit::parse(fit.as_str()), Some(fit));
         }
         assert_eq!(WallpaperFit::parse("Tile"), None);
+    }
+}
+
+#[cfg(test)]
+mod glass_settings_tests {
+    use super::*;
+
+    #[test]
+    fn glass_rows_form_their_own_reset_section() {
+        let glass: Vec<_> = STABLE_SETTINGS
+            .iter()
+            .filter(|row| row.section == "glass")
+            .map(|row| row.key)
+            .collect();
+        assert_eq!(
+            glass,
+            [
+                "glassifyContrastZones",
+                "reduceTransparency",
+                "glassOpacityPercent",
+                "glassBlurPx",
+                "taskbarMaterialMode",
+                "taskbarOpacityPercent",
+                "taskbarCustomTint",
+            ]
+        );
+    }
+
+    #[test]
+    fn resetting_glass_section_keeps_unrelated_appearance_and_taskbar_values() {
+        let defaults = ProductSettings::default();
+        let mut settings = ProductSettings {
+            accent: "#123456".to_owned(),
+            glass_blur_px: 40,
+            taskbar_opacity_percent: 60,
+            reduce_transparency: true,
+            ..ProductSettings::default()
+        };
+        for row in STABLE_SETTINGS.iter().filter(|row| row.section == "glass") {
+            (row.set)(&mut settings, &defaults, None, row.key).expect("reset glass row");
+        }
+        assert_eq!(settings.glass_blur_px, 28);
+        assert_eq!(settings.taskbar_opacity_percent, 8);
+        assert!(!settings.reduce_transparency);
+        assert_eq!(settings.accent, "#123456");
+    }
+
+    #[test]
+    fn glass_keys_absent_from_the_file_read_as_defaults() {
+        let settings = ConfigStore::default()
+            .parse_snapshot("revision=2\n")
+            .expect("legacy file without glass keys");
+        assert!(!settings.glassify_contrast_zones);
+        assert!(!settings.reduce_transparency);
+        assert_eq!(settings.glass_opacity_percent, 12);
+        assert_eq!(settings.glass_blur_px, 28);
+        assert_eq!(settings.taskbar_material_mode, "blur-only");
+        assert_eq!(settings.taskbar_opacity_percent, 8);
+        assert_eq!(settings.taskbar_custom_tint, "#5879EE");
+    }
+
+    #[test]
+    fn glass_keys_round_trip_through_config_store() {
+        let settings = ProductSettings {
+            glassify_contrast_zones: true,
+            reduce_transparency: true,
+            glass_opacity_percent: 42,
+            glass_blur_px: 54,
+            taskbar_material_mode: "custom-tint".to_owned(),
+            taskbar_opacity_percent: 75,
+            taskbar_custom_tint: "#3DAEE9".to_owned(),
+            ..ProductSettings::default()
+        };
+        let text = ConfigStore::serialize(&settings);
+        assert!(text.contains("glassBlurPx=54\n"));
+        assert!(text.contains("taskbarMaterialMode=custom-tint\n"));
+        let reloaded = ConfigStore::default()
+            .parse_snapshot(&text)
+            .expect("glass round trip");
+        assert_eq!(reloaded, settings);
+    }
+
+    #[test]
+    fn glass_bounds_are_enforced_by_validate() {
+        assert!(ProductSettings::default().validate().is_ok());
+        for mutate in [
+            |s: &mut ProductSettings| s.glass_opacity_percent = 3,
+            |s: &mut ProductSettings| s.glass_opacity_percent = 43,
+            |s: &mut ProductSettings| s.glass_blur_px = 55,
+            |s: &mut ProductSettings| s.taskbar_opacity_percent = 76,
+            |s: &mut ProductSettings| s.taskbar_material_mode = "glassy".to_owned(),
+            |s: &mut ProductSettings| s.taskbar_custom_tint = "blue".to_owned(),
+        ] {
+            let mut settings = ProductSettings::default();
+            mutate(&mut settings);
+            assert!(settings.validate().is_err());
+        }
     }
 }

@@ -100,6 +100,14 @@ pub enum PixelOp<'a> {
         height: u32,
         rgba: &'a [u8],
     },
+    /// The 1px rim of `outer` (its hole is `outer.inset(1)`) with a top-to-bottom alpha gradient:
+    /// `color[3]` at the top row, `fade_percent` of it at the bottom row, as
+    /// [`crate::surface_material::rim_alpha_at`]. Colour is `color` straight.
+    RimGradient {
+        outer: RoundedRect,
+        color: [u8; 4],
+        fade_percent: u8,
+    },
 }
 
 impl PixelOp<'_> {
@@ -111,6 +119,15 @@ impl PixelOp<'_> {
                 outer: outer.normalized(),
                 hole: hole.map(RoundedRect::normalized),
                 color,
+            },
+            Self::RimGradient {
+                outer,
+                color,
+                fade_percent,
+            } => Self::RimGradient {
+                outer: outer.normalized(),
+                color,
+                fade_percent,
             },
             other => other,
         }
@@ -244,11 +261,70 @@ pub trait PixelBackend {
                 blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
                     composite_cpu(&mut scratch, width, height, blend)?;
                 }
+                PixelOp::RimGradient {
+                    outer,
+                    color,
+                    fade_percent,
+                } => {
+                    let (x, y, mask) = rim_mask(self, outer, color, fade_percent)?;
+                    composite_cpu(
+                        &mut scratch,
+                        width,
+                        height,
+                        PixelOp::BlendMask {
+                            x,
+                            y,
+                            width: outer.width,
+                            height: outer.height,
+                            mask: &mask,
+                            color: [color[0], color[1], color[2], 255],
+                        },
+                    )?;
+                }
             }
         }
         pixels.copy_from_slice(&scratch);
         Ok(())
     }
+}
+
+/// Coverage mask of a [`PixelOp::RimGradient`]: the ring's hard-edged coverage from the backend's
+/// own fill rule, scaled per row by the rim gradient. Returns the device origin and the row-major
+/// mask. The fill runs in a scratch frame the size of the rim, so the frame is not copied.
+fn rim_mask<B: PixelBackend + ?Sized>(
+    backend: &mut B,
+    outer: RoundedRect,
+    color: [u8; 4],
+    fade_percent: u8,
+) -> Result<(i32, i32, Vec<u8>), String> {
+    let (width, height) = (outer.width, outer.height);
+    let local = RoundedRect { x: 0, y: 0, ..outer };
+    let mut coverage = vec![0_u8; width as usize * height as usize * 4];
+    if width > 0 && height > 0 {
+        backend.fill_rounded_rect(
+            &mut coverage,
+            width,
+            height,
+            local,
+            Some(local.inset(1)),
+            [255, 255, 255, 255],
+        )?;
+    }
+    let mut mask = Vec::with_capacity(width as usize * height as usize);
+    for row in 0..height {
+        let alpha = u16::from(crate::surface_material::rim_alpha_at(
+            color[3],
+            u32::from(fade_percent),
+            row,
+            height,
+        ));
+        for column in 0..width {
+            let index = (row as usize * width as usize + column as usize) * 4 + 3;
+            let cover = u16::from(coverage[index]);
+            mask.push(((alpha * cover + 127) / 255) as u8);
+        }
+    }
+    Ok((outer.x, outer.y, mask))
 }
 
 #[cfg(test)]

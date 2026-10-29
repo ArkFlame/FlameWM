@@ -19,8 +19,8 @@ use flamewm_api::shortcuts::{
     ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_SWITCH, workspace_direction,
 };
 use flamewm_platform::shortcuts::{
-    ACTION_OPEN_FILES_CTRL_ALT, ACTION_OPEN_FILES_SUPER, ACTION_OPEN_TERMINAL_CTRL_ALT,
-    ACTION_OPEN_TERMINAL_SUPER,
+    ACTION_OPEN_FILES_CTRL_ALT, ACTION_OPEN_FILES_SUPER, ACTION_OPEN_FINDER,
+    ACTION_OPEN_FINDER_CTRL_ALT, ACTION_OPEN_TERMINAL_CTRL_ALT, ACTION_OPEN_TERMINAL_SUPER,
 };
 
 use crate::model::{Button, Hit, Mods, ResizeEdge, WindowId};
@@ -182,6 +182,7 @@ impl State {
                     self.apply_geometry(id);
                 }
             }
+            ACTION_OPEN_FINDER | ACTION_OPEN_FINDER_CTRL_ALT => self.spawn("flamewm-finder", &[]),
             ACTION_OPEN_TERMINAL_SUPER | ACTION_OPEN_TERMINAL_CTRL_ALT => {
                 self.spawn("flamewm-terminal", &[]);
             }

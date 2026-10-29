@@ -305,6 +305,11 @@ impl<T: ControlTransport> SettingsClient<T> {
         }])
     }
 
+    /// Applies several keys in one authoritative transaction (for example a glass preset).
+    pub fn apply_settings(&mut self, changes: Vec<SettingsChange>) -> Result<(), ControlError> {
+        self.apply_changes(changes)
+    }
+
     /// Apply one native Settings-page transaction and replace the cached snapshot only after the
     /// authoritative WM process accepts it. This is the common immediate-apply path.
     fn apply_changes(&mut self, changes: Vec<SettingsChange>) -> Result<(), ControlError> {
@@ -1125,6 +1130,50 @@ mod tests {
         ));
         drop(requests);
         assert_eq!(client.settings().map(|snapshot| snapshot.revision), Some(6));
+    }
+
+    #[test]
+    fn glass_section_reset_and_preset_send_one_transaction_each() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let transport = RecordingTransport {
+            responses: VecDeque::from([
+                Ok(ControlResponse::Settings(SettingsSnapshot::new(3))),
+                Ok(ControlResponse::Settings(SettingsSnapshot::new(4))),
+                Ok(ControlResponse::Settings(SettingsSnapshot::new(5))),
+            ]),
+            requests: requests.clone(),
+        };
+        let mut client = SettingsClient::new(transport);
+        client.refresh_settings().expect("initial settings snapshot");
+        client
+            .apply_settings(vec![
+                SettingsChange {
+                    key: "glassOpacityPercent".to_owned(),
+                    value: Some(SettingValue::Percent(23)),
+                },
+                SettingsChange {
+                    key: "glassBlurPx".to_owned(),
+                    value: Some(SettingValue::Percent(13)),
+                },
+            ])
+            .expect("glass preset");
+        client.reset_section("glass").expect("glass reset");
+
+        let requests = requests.borrow();
+        assert!(matches!(
+            requests.get(1),
+            Some(ControlRequest::ApplySettings(transaction))
+                if transaction.expected_revision == 3
+                    && transaction.reset_section.is_none()
+                    && transaction.changes.len() == 2
+        ));
+        assert!(matches!(
+            requests.get(2),
+            Some(ControlRequest::ApplySettings(transaction))
+                if transaction.expected_revision == 4
+                    && transaction.changes.is_empty()
+                    && transaction.reset_section.as_deref() == Some("glass")
+        ));
     }
 
     #[test]

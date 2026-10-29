@@ -17,6 +17,7 @@ crates/flamewm-wm-wayland     Wayland compositor authority
 crates/flamewm-platform       product services/policy
 crates/flamewm-*-core         pure product models
 crates/flamewm-shell          V8 shell controller
+crates/flamewm-finder          file finder window (Super+F, Ctrl+Alt+F), bounded filename index
 crates/flamewm-render-*       compiled HTML/CSS renderer
 ```
 

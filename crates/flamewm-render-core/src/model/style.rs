@@ -333,6 +333,28 @@ impl RuntimeDocument {
         Ok(())
     }
 
+    /// Liquid Glass material for a node (drop shadow outside its rect, gradient rim). `None` clears it.
+    pub fn set_surface_material(
+        &mut self,
+        id: &str,
+        material: Option<crate::surface_material::SurfaceMaterial>,
+    ) -> Result<(), String> {
+        let index = self.require_node(id)?;
+        let changed = match material {
+            Some(material) => self.node_surfaces.insert(index, material) != Some(material),
+            None => self.node_surfaces.remove(&index).is_some(),
+        };
+        if changed {
+            self.touch();
+        }
+        Ok(())
+    }
+
+    /// Surface material requested for a node, if any.
+    pub fn surface_material(&self, index: u32) -> Option<crate::surface_material::SurfaceMaterial> {
+        self.node_surfaces.get(&index).copied()
+    }
+
     /// Blur percent requested for a node's backdrop, if any.
     pub fn node_backdrop_blur(&self, index: u32) -> Option<u8> {
         self.node_backdrops.get(&index).copied()

@@ -17,6 +17,7 @@ use std::sync::Mutex;
 use flamewm_api::background::WallpaperFit;
 use flamewm_image_core::wallpaper::DEFAULT_WALLPAPER_PATH;
 use flamewm_render_x11::backdrop::{BlurredCanvas, blur_radius_px, desktop_canvas};
+use flamewm_ui_core::surface::saturate_rgb;
 
 /// Backdrop used when no wallpaper pixels are available (frame background colour).
 pub const FALLBACK_BACKDROP: [u8; 3] = [0x1b, 0x1e, 0x20];
@@ -126,6 +127,17 @@ pub fn blend_over(src: u8, alpha: u8, dst: u8) -> u8 {
     ((u32::from(src) * a + u32::from(dst) * (255 - a) + 127) / 255) as u8
 }
 
+/// Scales each opaque ARGB32 word's colour saturation by `percent` (100 is identity). The per-pixel
+/// op commutes with the blur that built the canvas, so saturating the crop matches saturating it.
+fn saturate_words(words: &mut [u32], percent: u32) {
+    if percent == 100 {
+        return;
+    }
+    for word in words.iter_mut() {
+        *word = (*word & 0xff00_0000) | saturate_rgb(*word & 0x00ff_ffff, percent);
+    }
+}
+
 /// Opaque RGBA of `rgb @ alpha` over each opaque ARGB32 word of `backdrop`.
 fn compose_words(backdrop: &[u32], rgb: (u8, u8, u8), alpha: u8) -> Vec<u8> {
     let mut out = Vec::with_capacity(backdrop.len() * 4);
@@ -177,6 +189,7 @@ pub fn flat_pixels(width: u32, height: u32, rgb: (u8, u8, u8), alpha: u8) -> Vec
 }
 
 /// Opaque RGBA titlebar pixels for the frame at root `origin`, `width` x `height`.
+/// `corner_radius` is the frame's top corner radius (0 for square frames).
 #[must_use]
 pub fn titlebar_pixels(
     origin: (i32, i32),
@@ -186,6 +199,7 @@ pub fn titlebar_pixels(
     rgb: (u8, u8, u8),
     alpha: u8,
     blur_percent: u8,
+    corner_radius: u32,
 ) -> Vec<u8> {
     let Ok(mut guard) = STATE.lock() else {
         return flat_pixels(width, height, rgb, alpha);
@@ -198,9 +212,62 @@ pub fn titlebar_pixels(
         rgb,
         alpha,
         blur_percent,
+        corner_radius,
     )
 }
 
+/// Coverage (0..=255) of pixel `(x, y)` inside a top corner arc of radius `radius`, from a 4x4
+/// supersample. `None` outside the corner squares. The arc is mirrored for the right corner.
+fn corner_coverage(x: u32, y: u32, width: u32, radius: u32) -> Option<u8> {
+    let col = if x < radius {
+        x
+    } else if x + radius >= width {
+        width - 1 - x
+    } else {
+        return None;
+    };
+    if y >= radius {
+        return None;
+    }
+    let r = radius as f32;
+    let mut hits = 0_u32;
+    for sy in 0..4 {
+        for sx in 0..4 {
+            let px = col as f32 + (sx as f32 + 0.5) / 4.0;
+            let py = y as f32 + (sy as f32 + 0.5) / 4.0;
+            if (r - px).powi(2) + (r - py).powi(2) <= r * r {
+                hits += 1;
+            }
+        }
+    }
+    Some((hits * 255 / 16) as u8)
+}
+
+/// Blends the binary XShape edge of the top corners: each partly covered pixel is mixed with the
+/// desktop word behind it, so the arc reads as anti-aliased instead of stair-stepped. Fully
+/// covered pixels and the straight edges are untouched.
+fn antialias_top_corners(pixels: &mut [u8], backdrop: &[u32], width: u32, height: u32, radius: u32) {
+    let radius = radius.min(width / 2);
+    for y in 0..height.min(radius) {
+        for x in (0..radius).chain(width - radius..width) {
+            let Some(cover) = corner_coverage(x, y, width, radius) else {
+                continue;
+            };
+            if cover == 255 {
+                continue;
+            }
+            let index = (y * width + x) as usize;
+            let word = backdrop[index];
+            let at = index * 4;
+            let behind = [(word >> 16) as u8, (word >> 8) as u8, word as u8];
+            for (channel, under) in behind.into_iter().enumerate() {
+                pixels[at + channel] = blend_over(pixels[at + channel], cover, under);
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn titlebar_in(
     state: &mut State,
     origin: (i32, i32),
@@ -209,6 +276,7 @@ fn titlebar_in(
     rgb: (u8, u8, u8),
     alpha: u8,
     blur_percent: u8,
+    corner_radius: u32,
 ) -> Vec<u8> {
     if !is_translucent(alpha) {
         return flat_pixels(width, height, rgb, alpha);
@@ -245,7 +313,13 @@ fn titlebar_in(
         .as_ref()
         .and_then(|(_, canvas)| canvas.as_ref())
     {
-        Some(canvas) => compose_words(&canvas.crop(origin, (width, height)), rgb, alpha),
+        Some(canvas) => {
+            let mut backdrop = canvas.crop(origin, (width, height));
+            saturate_words(&mut backdrop, crate::live_settings::saturation_percent());
+            let mut pixels = compose_words(&backdrop, rgb, alpha);
+            antialias_top_corners(&mut pixels, &backdrop, width, height, corner_radius);
+            pixels
+        }
         None => flat_pixels(width, height, rgb, alpha),
     }
 }
@@ -308,7 +382,7 @@ mod tests {
     fn opaque_titlebar_is_flat_and_builds_no_canvas() {
         let mut state = State::default();
         set_source_in(&mut state, WallpaperSource::Solid([1, 2, 3]));
-        let px = titlebar_in(&mut state, (0, 0), (8, 8), (4, 2), (9, 8, 7), 255, 80);
+        let px = titlebar_in(&mut state, (0, 0), (8, 8), (4, 2), (9, 8, 7), 255, 80, 0);
         assert_eq!(px, [9, 8, 7, 255].repeat(8));
         assert!(state.canvas.is_none());
         assert!(!is_translucent(255) && is_translucent(254));
@@ -322,7 +396,7 @@ mod tests {
             set_source_in(&mut state, WallpaperSource::Solid([200, 100, 0])),
             first
         );
-        let px = titlebar_in(&mut state, (5, 5), (8, 8), (2, 1), (0, 0, 0), 127, 80);
+        let px = titlebar_in(&mut state, (5, 5), (8, 8), (2, 1), (0, 0, 0), 127, 80, 0);
         assert_eq!(px, [100, 50, 0, 255].repeat(2));
         assert_ne!(
             set_source_in(&mut state, WallpaperSource::Solid([0, 0, 0])),
@@ -341,7 +415,7 @@ mod tests {
                 outputs: Vec::new(),
             },
         );
-        let px = titlebar_in(&mut state, (0, 0), (16, 8), (3, 2), (0, 0, 0), 127, 80);
+        let px = titlebar_in(&mut state, (0, 0), (16, 8), (3, 2), (0, 0, 0), 127, 80, 0);
         assert_eq!(px, flat_pixels(3, 2, (0, 0, 0), 127));
     }
 
@@ -360,16 +434,18 @@ mod tests {
             .flat_map(|i| [(i % 64 * 4) as u8, (i / 64 * 8) as u8, 7, 255])
             .collect();
         let canvas = BlurredCanvas::new(64, 32, rgba, 0, 80);
-        let expected = compose_words(&canvas.crop((10, 4), (20, 6)), (0, 0, 0), 127);
+        let mut crop = canvas.crop((10, 4), (20, 6));
+        saturate_words(&mut crop, crate::live_settings::saturation_percent());
+        let expected = compose_words(&crop, (0, 0, 0), 127);
         let key = CanvasKey {
             generation: state.generation,
             root: (64, 32),
             blur_percent: 80,
         };
         state.canvas = Some((key, Some(canvas)));
-        let px = titlebar_in(&mut state, (10, 4), (64, 32), (20, 6), (0, 0, 0), 127, 80);
+        let px = titlebar_in(&mut state, (10, 4), (64, 32), (20, 6), (0, 0, 0), 127, 80, 0);
         assert_eq!(px, expected);
-        let moved = titlebar_in(&mut state, (30, 9), (64, 32), (20, 6), (0, 0, 0), 127, 80);
+        let moved = titlebar_in(&mut state, (30, 9), (64, 32), (20, 6), (0, 0, 0), 127, 80, 0);
         assert_ne!(
             moved, px,
             "a move recrops the same canvas at the new origin"
@@ -400,5 +476,37 @@ mod tests {
             state.source.as_ref(),
             Some(WallpaperSource::Image { outputs, .. }) if outputs == &[(0, 0, 32, 16)]
         ));
+    }
+
+    #[test]
+    fn saturation_is_identity_at_100_and_desaturates_at_0() {
+        let mut words = [0xff20_40c0_u32, 0xff80_8080];
+        saturate_words(&mut words, 100);
+        assert_eq!(words, [0xff20_40c0, 0xff80_8080]);
+        saturate_words(&mut words, 0);
+        assert_eq!(words, [0xff44_4444, 0xff80_8080]);
+    }
+
+    #[test]
+    fn corner_coverage_is_zero_outside_the_arc_and_rises_inward() {
+        let (w, r) = (200, 24);
+        assert_eq!(corner_coverage(24, 0, w, r), None, "straight top edge");
+        assert_eq!(corner_coverage(0, 0, w, r), Some(0), "outer corner pixel");
+        assert_eq!(corner_coverage(w - 1, 0, w, r), Some(0), "mirrored right corner");
+        let row: Vec<u8> = (0..r).map(|x| corner_coverage(x, 12, w, r).unwrap_or(255)).collect();
+        assert!(row.windows(2).all(|p| p[0] <= p[1]), "coverage rises inward: {row:?}");
+    }
+
+    #[test]
+    fn top_corner_edge_blends_toward_the_desktop_behind_it() {
+        let (w, h, r) = (200_u32, 31_u32, 24_u32);
+        let backdrop = vec![0x00ff_ffff_u32; (w * h) as usize];
+        let mut pixels = vec![0_u8; (w * h * 4) as usize];
+        antialias_top_corners(&mut pixels, &backdrop, w, h, r);
+        let red = |x: u32, y: u32| pixels[((y * w + x) * 4) as usize];
+        assert_eq!(red(0, 0), 255, "outside the arc shows the desktop");
+        assert_eq!(red(100, 0), 0, "straight edge is untouched");
+        let partial = (0..r).any(|y| (0..r).any(|x| red(x, y) > 0 && red(x, y) < 255));
+        assert!(partial, "arc has partially covered pixels");
     }
 }

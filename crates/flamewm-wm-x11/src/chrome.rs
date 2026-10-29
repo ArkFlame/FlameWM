@@ -1013,20 +1013,14 @@ pub fn live_chrome_tokens() -> ChromeTokens {
 /// the desktop menu Surfaces fill). Malformed colour falls back to the skin default;
 /// `surfaceBlurPercent` is the third element (applied by `frame::titlebar_backdrop`).
 fn surface_tokens(snapshot: &SettingsSnapshot) -> (Rgb, u8, u8) {
-    let rgb = match snapshot.values.get("surfaceColor") {
-        Some(SettingValue::Text(value)) => parse_settings_color(value),
-        _ => None,
-    }
-    .unwrap_or(flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB);
-    let percent = match snapshot.values.get("surfaceOpacity") {
-        Some(SettingValue::Percent(value)) => (*value).min(100),
-        _ => 50,
-    };
-    let blur = match snapshot.values.get("surfaceBlurPercent") {
-        Some(SettingValue::Percent(value)) => (*value).min(100),
-        _ => flamewm_skin::recipes::decoration::DEFAULT_SURFACE_BLUR_PERCENT,
-    };
-    (rgb, ((u16::from(percent) * 255) / 100) as u8, blur)
+    // Titlebars take the shared glass material: glassOpacityPercent alpha, the regular glass blur,
+    // and an opaque solid under reduceTransparency (blur 0).
+    let fill = flamewm_ui_core::surface::surface_fill(snapshot);
+    (
+        Rgb(fill.rgb),
+        fill.alpha,
+        flamewm_ui_core::surface::surface_blur_percent(snapshot),
+    )
 }
 
 /// Map WM settings onto skin chrome tokens. Empty or malformed colors fall back
@@ -1055,10 +1049,13 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
         pressed: parse_settings_color(text(&format!("titlebar{name}PressedColor"))),
     };
     let stroke = flamewm_ui_core::surface::surface_stroke(snapshot);
+    let material = flamewm_ui_core::surface::glass_material(snapshot);
     ChromeTokens {
         style,
         surface_border_rgb: Rgb(stroke.rgb),
         surface_border_alpha: stroke.alpha,
+        rim_fade_percent: material.rim_fade_percent,
+        highlight_percent: material.highlight_percent,
         titlebar_bg,
         titlebar_alpha,
         titlebar_blur_percent,
@@ -1224,7 +1221,7 @@ mod tests {
         let tokens = chrome_tokens_from_settings(&snapshot);
         assert_eq!(tokens.style, DecorationStyle::Squared);
         assert_eq!(tokens.titlebar_bg, Rgb(0x0020_2326));
-        assert_eq!(tokens.titlebar_alpha, 127);
+        assert_eq!(tokens.titlebar_alpha, 128);
         assert!(
             tokens
                 .buttons
@@ -1255,10 +1252,11 @@ mod tests {
             chrome_tokens_from_settings(&snapshot).titlebar_alpha
         };
         assert_eq!(alpha(0), 0);
-        assert_eq!(alpha(50), 127);
+        assert_eq!(alpha(50), 128);
         assert_eq!(alpha(100), 255);
         snapshot.values.remove("surfaceOpacity");
-        assert_eq!(chrome_tokens_from_settings(&snapshot).titlebar_alpha, 127);
+        // Absent glass key: the regular glass default (12%) is 31.
+        assert_eq!(chrome_tokens_from_settings(&snapshot).titlebar_alpha, 31);
     }
 
     #[test]
@@ -1272,9 +1270,9 @@ mod tests {
         let tokens = chrome_tokens_from_settings(&snapshot);
         assert_eq!(
             tokens.titlebar_bg,
-            flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB
+            Rgb(flamewm_ui_core::glass::DARK.tint_rgb)
         );
-        assert_eq!(tokens.titlebar_alpha, 127);
+        assert_eq!(tokens.titlebar_alpha, 31);
     }
 
     #[test]
@@ -1555,7 +1553,7 @@ mod tests {
             ControlPolicy::for_state(false, false).roles[1],
             ControlRole::Maximize
         );
-        assert_eq!(corner_radius(true, DecorationStyle::Rounded), 12);
+        assert_eq!(corner_radius(true, DecorationStyle::Rounded), 24);
         assert_eq!(corner_radius(false, DecorationStyle::Rounded), 0);
     }
 

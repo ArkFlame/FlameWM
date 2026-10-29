@@ -26,6 +26,13 @@ pub fn scaled_corner_radius(floating: bool, style: DecorationStyle, titlebar_h: 
     value.min(u32::from(u16::MAX)) as u16
 }
 
+/// Client area of a frame: it sits at `(0, titlebar)` and spans the full frame width and the
+/// rest of the height. The border never inflates the client (see `FrameExtents::delta`).
+#[must_use]
+pub fn client_area_size(outer: Rect, titlebar_h: u16) -> (u32, u32) {
+    (outer.width, outer.height.saturating_sub(u32::from(titlebar_h)))
+}
+
 /// Canonical row spans (y, `x_start`, `x_end_exclusive`) for a rounded rect:
 /// float rounded mask, single full-width rows when rectangular.
 #[must_use]
@@ -141,6 +148,18 @@ mod tests {
     }
 
     #[test]
+    fn client_area_fills_the_frame_below_the_titlebar() {
+        // Regression: a `width - 2` / `height - titlebar - 1` client shape left the frame's
+        // dark background visible on the right two columns and bottom row.
+        let outer = Rect { x: 0, y: 0, width: 484, height: 347 };
+        assert_eq!(client_area_size(outer, 31), (484, 316));
+        let (cw, ch) = client_area_size(outer, 31);
+        let full = client_bottom_rounded_rectangles(cw, ch, 0);
+        assert_eq!((full[0].x, full[0].width), (0, 484));
+        assert_eq!(full[0].height, 316);
+    }
+
+    #[test]
     fn client_bottom_corners_round_while_the_top_stays_square() {
         let rects = client_bottom_rounded_rectangles(200, 120, 12);
         assert_eq!(rects.len(), 120);
@@ -156,7 +175,7 @@ mod tests {
 
     #[test]
     fn corner_radius_matches_physical_titlebar_scale() {
-        for (height, expected) in [(31, 12), (42, 16), (62, 24)] {
+        for (height, expected) in [(31, 24), (42, 33), (62, 48)] {
             assert_eq!(
                 scaled_corner_radius(true, DecorationStyle::Rounded, height),
                 expected
@@ -182,6 +201,22 @@ mod tests {
             );
             assert!(!rects.is_empty());
             assert!(!covers(&rects, 499, 0));
+        }
+    }
+
+    #[test]
+    fn rounded_mask_is_mirror_symmetric_left_to_right() {
+        // mask(x, y) == mask(W-1-x, y): the right corners must cut exactly like the left ones.
+        for (w, h, r) in [(120_u32, 80_u32, 24_u32), (121, 81, 24), (97, 53, 7)] {
+            let spans = rounded_mask_spans(w, h, r);
+            for (row, start, end) in spans {
+                assert_eq!(
+                    w - end,
+                    start,
+                    "row {row} of {w}x{h} r={r}: right inset {} != left inset {start}",
+                    w - end
+                );
+            }
         }
     }
 

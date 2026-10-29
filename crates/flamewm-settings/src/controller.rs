@@ -137,6 +137,10 @@ mod tests {
     }
 
     impl UiDocumentAccess for ProbeDocument {
+        fn color_variable(&mut self, _name: &str, _color: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+
         fn text(&mut self, id: &str, text: String) -> Result<(), String> {
             crate::ui_contract::require_markup_id(id)?;
             self.texts.insert(id.to_owned(), text);

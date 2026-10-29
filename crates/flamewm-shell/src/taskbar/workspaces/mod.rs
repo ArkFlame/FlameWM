@@ -4,7 +4,8 @@ use flamewm_control_core::ControlRequest;
 
 pub use flamewm_shell_core::workspaces::{
     cell_index, cell_left, pager_cell, pager_columns, pager_width, project as core_project,
-    workspace_labels, WorkspaceView, PAGER_CELLS, PAGER_COLUMNS, PAGER_HEIGHT,
+    workspace_labels, WorkspaceView, PAGER_CELLS, PAGER_CELL_GAP, PAGER_CELL_HEIGHT,
+    PAGER_CELL_WIDTH, PAGER_COLUMNS, PAGER_HEIGHT,
 };
 
 /// Pager projection with the J07 static shell span (`shell.pager.project`).

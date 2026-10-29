@@ -24,7 +24,7 @@ if [[ "${FLAMEWM_WAYLAND_BUILD:-1}" == 1 ]]; then
   python3 -I tools/verify_cargo_manifests.py
   command -v cargo >/dev/null || { echo 'cargo is required' >&2; exit 1; }
   cargo build --release -p flamewm-wm-wayland -p flamewm-desktop -p flamewm-shell \
-      -p flamewm-terminal -p flamewm-explorer -p flamewm-settings -p flamewm-task-manager
+      -p flamewm-terminal -p flamewm-explorer -p flamewm-finder -p flamewm-settings -p flamewm-task-manager
 elif [[ "${FLAMEWM_WAYLAND_BUILD:-1}" != 0 ]]; then
   echo 'FLAMEWM_WAYLAND_BUILD must be 0 or 1' >&2; exit 2
 fi

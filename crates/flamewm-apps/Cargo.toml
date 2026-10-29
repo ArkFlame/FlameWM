@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 flamewm-desktop = { path = "../flamewm-desktop" }
 flamewm-explorer = { path = "../flamewm-explorer" }
+flamewm-finder = { path = "../flamewm-finder" }
 flamewm-settings = { path = "../flamewm-settings" }
 flamewm-shell = { path = "../flamewm-shell" }
 flamewm-terminal = { path = "../flamewm-terminal" }

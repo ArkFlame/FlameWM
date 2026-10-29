@@ -155,7 +155,7 @@ mod tests {
         let next = runtime.scene_for(&identity(), scaled, None);
         assert_ne!(first, *next);
         assert_eq!(next.titlebar_height, 62);
-        assert_eq!(next.radius, 24);
+        assert_eq!(next.radius, 48);
         assert!(next.title_size_px > first.title_size_px);
     }
 

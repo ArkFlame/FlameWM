@@ -2,6 +2,7 @@
 
 pub mod context_menu;
 pub mod controls;
+pub mod glass;
 pub mod icons;
 pub mod image;
 pub mod layout;

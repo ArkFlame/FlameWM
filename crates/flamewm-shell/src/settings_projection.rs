@@ -25,7 +25,7 @@ const DEFAULT_ACCENT: u32 = 0x007f_878e;
 const DEFAULT_ANIMATION_SPEED: i64 = 100;
 const DEFAULT_START_ANIMATION: &str = "none";
 const DEFAULT_SURFACE_OPACITY: u8 = 50;
-const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
+const DEFAULT_SURFACE_BLUR_PERCENT: u8 = flamewm_ui_core::glass::DARK.blur_percent;
 const DEFAULT_ACCENT_OPACITY: u8 = 100;
 const DEFAULT_FONT_FAMILY: &str = "IBM Plex Sans";
 
@@ -68,7 +68,15 @@ pub fn project(
 
     match surface {
         SurfaceKind::Panel => {
-            let fill = surface_background(snapshot);
+            // Taskbar capsule fill is the Dock material (Blur Only / Inherit / Custom Tint), not the
+            // generic surface pair; reduceTransparency makes it the opaque Dock solid.
+            let dock = flamewm_ui_core::surface::dock_fill(snapshot);
+            let fill = UiColor {
+                r: (dock.rgb >> 16) as u8,
+                g: (dock.rgb >> 8) as u8,
+                b: dock.rgb as u8,
+                a: dock.alpha,
+            };
             crate::projection::set_taskbar_surface(fill);
             crate::projection::set_taskbar_border(flamewm_ui_x11::surface_style::surface_border(
                 snapshot,
@@ -103,6 +111,10 @@ pub fn project(
             // Start shares the surfaceColor/surfaceOpacity pair with the taskbar and popups.
             document.background(root, surface_background(snapshot))?;
             document.corner_radius(root, popup_corner_radius(snapshot))?;
+            document.surface_material(
+                root,
+                Some(flamewm_ui_core::surface::surface_material_values(snapshot)),
+            )?;
             // Opaque interior token: the menu root already carries the surface alpha, so the
             // search field must not apply surfaceOpacity a second time.
             document.background(
@@ -309,7 +321,8 @@ pub fn taskbar_items(snapshot: Option<&SettingsSnapshot>) -> TaskbarItems {
         workspaces: bool_setting(snapshot, "taskbarShowWorkspaces", defaults.workspaces),
         activities: bool_setting(snapshot, "taskbarActivities", defaults.activities),
         separate: bool_setting(snapshot, "taskbarSeparate", defaults.separate),
-        blur_percent: percent_setting(snapshot, "surfaceBlurPercent", defaults.blur_percent),
+        blur_percent: blur_px_to_percent(dock_material(snapshot).blur_px),
+        material: Some(flamewm_ui_core::surface::surface_material_values(snapshot)),
     }
 }
 
@@ -369,17 +382,47 @@ fn integer_setting(snapshot: &SettingsSnapshot, key: &str, default: i64) -> i64 
 /// Surface `(opacity, blur)` percents for the taskbar pseudo-transparency backdrop.
 #[must_use]
 pub fn taskbar_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
+    let dock = dock_material(snapshot);
     (
-        percent_setting(snapshot, "surfaceOpacity", DEFAULT_SURFACE_OPACITY),
-        percent_setting(snapshot, "surfaceBlurPercent", DEFAULT_SURFACE_BLUR_PERCENT),
+        u8::try_from(dock.alpha_permille / 10).unwrap_or(100),
+        blur_px_to_percent(dock.blur_px),
     )
+}
+
+/// Resolved taskbar/Dock material for the current appearance settings. The Dock role never
+/// reads the content glass tint, the contrast zone or `surfaceOpacity`.
+#[must_use]
+pub fn dock_material(snapshot: &SettingsSnapshot) -> flamewm_ui_core::glass::ResolvedMaterial {
+    flamewm_ui_core::glass::resolve(
+        flamewm_ui_core::glass::MaterialRole::Dock,
+        glass_appearance(snapshot),
+        100,
+        flamewm_ui_core::glass::RendererCaps {
+            backdrop_blur: true,
+        },
+    )
+}
+
+/// Maps the persisted glass settings to the resolver input. Absent or invalid keys use defaults.
+#[must_use]
+pub fn glass_appearance(snapshot: &SettingsSnapshot) -> flamewm_ui_core::glass::Appearance {
+    flamewm_ui_core::glass::appearance_from_settings(snapshot)
+}
+
+/// Blur px at 1x to the `surfaceBlurPercent` scale (`px / 40 * 100`), capped at 100.
+fn blur_px_to_percent(blur_px: u16) -> u8 {
+    let percent = (u32::from(blur_px) * 100 + 20) / 40;
+    u8::try_from(percent.min(100)).unwrap_or(100)
 }
 
 /// Start popup `(opacity, blur)` percents for its pseudo-transparency backdrop: the shared
 /// `surfaceOpacity` / `surfaceBlurPercent` pair.
 #[must_use]
 pub fn start_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
-    taskbar_backdrop_percents(snapshot)
+    (
+        percent_setting(snapshot, "surfaceOpacity", DEFAULT_SURFACE_OPACITY),
+        percent_setting(snapshot, "surfaceBlurPercent", DEFAULT_SURFACE_BLUR_PERCENT),
+    )
 }
 
 fn percent_setting(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
@@ -522,7 +565,7 @@ mod tests {
                 r: 0x10,
                 g: 0x20,
                 b: 0x30,
-                a: 127
+                a: 128
             }
         );
         assert_eq!(
@@ -584,10 +627,10 @@ mod tests {
         assert_eq!(
             doc.backgrounds["start-menu"],
             UiColor {
-                r: 0x19,
-                g: 0x1b,
-                b: 0x1d,
-                a: 127
+                r: 0xea,
+                g: 0xf4,
+                b: 0xff,
+                a: 31
             }
         );
     }
@@ -621,10 +664,10 @@ mod tests {
         assert_eq!(
             surface_background(&SettingsSnapshot::new(1)),
             UiColor {
-                r: 0x19,
-                g: 0x1b,
-                b: 0x1d,
-                a: 127
+                r: 0xea,
+                g: 0xf4,
+                b: 0xff,
+                a: 31
             }
         );
     }
@@ -682,7 +725,7 @@ mod tests {
                 r: 0x44,
                 g: 0x55,
                 b: 0x66,
-                a: 25
+                a: 26
             }
         );
         project(&mut doc, &snapshot, SurfaceKind::Start).expect("start");
@@ -706,6 +749,10 @@ mod tests {
         snapshot
             .values
             .insert("surfaceBlurPercent".to_owned(), SettingValue::Percent(15));
+        // The glass key is authoritative; the legacy surface keys only seed it when absent.
+        snapshot
+            .values
+            .insert("glassBlurPx".to_owned(), SettingValue::Percent(28));
         let mut doc = RecordingUiDoc::default();
         project(&mut doc, &snapshot, SurfaceKind::Panel).expect("panel");
         // `taskbarSeparate` defaults on: the root paints no tint so the wallpaper shows between
@@ -715,19 +762,21 @@ mod tests {
             "separated bar root has no contour"
         );
         assert_eq!(
-            doc.borders["workspace-pager"].a, 63,
+            doc.borders["workspace-pager"].a, 43,
             "pager matches other capsules"
         );
+        // Taskbar capsules use the Dock material (Blur Only: neutral white at 8%, alpha 20), not the
+        // legacy surfaceColor/surfaceOpacity pair, which still drives popups and menus.
         assert_eq!(
-            doc.backgrounds["workspace-pager"].a, 51,
-            "pager uses shared surface fill"
+            doc.backgrounds["workspace-pager"].a, 20,
+            "pager uses the Dock material fill"
         );
         assert_eq!(
             doc.backgrounds["taskbar"],
             UiColor {
-                r: 0x44,
-                g: 0x55,
-                b: 0x66,
+                r: 0xff,
+                g: 0xff,
+                b: 0xff,
                 a: 0
             }
         );
@@ -739,10 +788,10 @@ mod tests {
         assert_eq!(
             unified.backgrounds["taskbar"],
             UiColor {
-                r: 0x44,
-                g: 0x55,
-                b: 0x66,
-                a: 51
+                r: 0xff,
+                g: 0xff,
+                b: 0xff,
+                a: 20
             }
         );
         assert!(
@@ -753,7 +802,8 @@ mod tests {
             unified.borders["workspace-pager"].a, 0,
             "unified bar clears pager contour"
         );
-        assert_eq!(taskbar_backdrop_percents(&snapshot), (20, 15));
+        // Dock material is independent of surfaceOpacity/surfaceBlurPercent (Blur Only: 8%, 34px).
+        assert_eq!(taskbar_backdrop_percents(&snapshot), (8, 85));
     }
 
     #[test]
@@ -1058,23 +1108,31 @@ mod tests {
     }
 
     #[test]
-    fn workspace_pager_rules_stay_square() {
+    fn workspace_pager_cells_are_borderless_and_share_one_radius() {
         let css = include_str!("../../../ui/shell/flamewm.css");
         let rules = css_rules(css);
         for (selector, body) in &rules {
             if selector.contains("workspace-button") {
                 if let Some(radius) = border_radius_px(body) {
-                    assert!(radius <= 1.0, "pager radius {radius}px in `{selector}`");
+                    assert_eq!(radius, 5.0, "pager radius {radius}px in `{selector}`");
                 }
+                assert!(
+                    !body.contains("border-color"),
+                    "pager cell `{selector}` must not paint an outline"
+                );
             }
         }
-        for required in [".workspace-button:hover", ".workspace-button.active"] {
+        for required in [
+            ".workspace-button",
+            ".workspace-button:hover",
+            ".workspace-button.active",
+        ] {
             let body = rules
                 .iter()
                 .find(|(selector, _)| *selector == required)
                 .map(|(_, body)| *body)
                 .expect(required);
-            assert_eq!(border_radius_px(body), Some(1.0), "{required} radius");
+            assert_eq!(border_radius_px(body), Some(5.0), "{required} radius");
         }
     }
 
@@ -1115,8 +1173,8 @@ mod tests {
             DEFAULT_ACCENT,
         );
         assert_eq!(bad, rgb(DEFAULT_ACCENT, 255));
-        let missing = color_setting(&SettingsSnapshot::new(1), "surfaceColor", 0x0019_1b1d);
-        assert_eq!(missing.r, 0x19);
+        let missing = color_setting(&SettingsSnapshot::new(1), "surfaceColor", 0x0033_3333);
+        assert_eq!(missing.r, 0x33);
     }
 
     fn slide_snapshot(pairs: &[(&str, SettingValue)]) -> SettingsSnapshot {
@@ -1246,10 +1304,10 @@ mod tests {
     fn icon_theme_name_prefers_snapshot_then_product_default() {
         let set = snapshot_with("iconTheme", "ThemeX");
         assert_eq!(icon_theme_name(Some(&set)), "ThemeX");
-        assert_eq!(icon_theme_name(None), "PlagueSur");
+        assert_eq!(icon_theme_name(None), "MacTahoe");
         assert_eq!(
             icon_theme_name(Some(&SettingsSnapshot::new(1))),
-            "PlagueSur"
+            "MacTahoe"
         );
     }
 }

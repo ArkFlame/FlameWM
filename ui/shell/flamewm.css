@@ -79,52 +79,53 @@ input { cursor:text; }
 .about-link:hover { border-color:var(--accent); background:#383c40; }
 .about-link img { width:18px; height:18px; }
 .terminal-body { height:359px; display:flex; flex-direction:column; gap:8px; padding:18px; background:#0c0d0e; color:#d5d8da; font-size:13px; border-radius:6px; }
-.start-menu { position:absolute; left:0px; top:0px; width:550px; min-height:349px; display:flex; flex-direction:row; background:#1e2123; color:var(--text); border:1px solid #ffffff3f; border-radius:18px; }
+.start-menu { position:absolute; left:0px; top:0px; width:550px; min-height:349px; display:flex; flex-direction:row; background:#1c2740; color:var(--text); border:1px solid #ffffff3f; border-radius:12px; }
 .start-left-pane { width:292px; min-height:349px; display:flex; flex-direction:column; justify-content:flex-end; }
-.start-content-pane { border-radius:18px; width:258px; min-height:420px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:transparent; color:var(--text); overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
+.start-content-pane { border-radius:12px; width:258px; min-height:420px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:transparent; color:var(--text); overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
 .start-categories { padding:6px 5px 5px 5px; flex-grow:1; display:flex; flex-direction:column; }
-.start-category { width:280px; height:37px; padding:0px 9px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:3px; cursor:default; }
+.start-category { width:280px; height:37px; padding:0px 9px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:9px; cursor:default; }
 .start-category:hover { background:var(--accent-soft); }.start-category div { flex-grow:1; }
 .start-category .chevron { width:12px; height:12px; }
 /* Just the bar: no outer card behind or around the search field. */
 .start-search { height:45px; margin:0px 6px 6px 6px; padding:0px 7px; display:flex; align-items:center; background:transparent; color:var(--text); border:0px solid transparent; cursor:default; }
-.start-search-field { flex-grow:1; height:32px; padding-left:10px; display:flex; align-items:center; gap:8px; color:#9ca3a9; background:transparent; border:1px solid #454a4f; border-radius:8px; }
+.start-search-field { flex-grow:1; height:32px; padding-left:10px; display:flex; align-items:center; gap:8px; color:#9ca3a9; background:transparent; border:1px solid #454a4f; border-radius:12px; }
 .start-search-field img { width:15px; height:15px; }
 .start-search-field div { flex-grow:1; display:flex; align-items:center; }
-.start-submenu { position:absolute; left:0px; top:0px; width:258px; min-height:0px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:#1e2123; color:var(--text); border:1px solid #ffffff3f; border-radius:12px; overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
+.start-submenu { position:absolute; left:0px; top:0px; width:258px; min-height:0px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:#1c2740; color:var(--text); border:1px solid #ffffff3f; border-radius:12px; overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
 .start-group, .calendar-days { width:100%; display:flex; flex-direction:column; }
-.start-app { width:248px; height:36px; padding:0px 9px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:3px; cursor:default; }
-.start-app:hover { background:var(--accent-soft); }.start-status { min-height:18px; padding:4px 8px; display:flex; align-items:center; color:#ff8a8f; font-size:11px; }
-.taskbar { border:1px solid #ffffff3f; box-sizing:border-box; position:absolute; left:0px; top:0px; width:100%; height:44px; display:flex; align-items:center; padding:0px 2px; background:var(--panel); }
+.start-app { width:248px; height:36px; padding:0px 9px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:9px; cursor:default; }
+.start-app:hover { background:var(--accent-soft); }.start-status { min-height:18px; padding:4px 8px; display:flex; align-items:center; color:#ff9c9f; font-size:11px; }
+.taskbar { border:1px solid #ffffff3f; box-sizing:border-box; position:absolute; left:0px; top:0px; width:100%; height:44px; display:flex; align-items:center; padding:1px 2px; background:var(--panel); }
 /* Keep border geometry present even when color is projected at runtime. The one shared
    surface setting owns opacity and color for the root and every separate-mode capsule. */
 .capsule, .task-slots, .tray-group, .workspace-pager { box-sizing:border-box; border:1px solid #ffffff3f; }
-/* Separate-mode capsule: owns the painted background so the child button keeps its CSS hover. */
-.capsule { height:44px; display:flex; align-items:center; position:relative; }
-.task-button { width:42px; height:44px; position:relative; display:flex; align-items:center; justify-content:center; background:transparent; }
+/* Separate-mode capsule: owns the painted background so the child button keeps its CSS hover.
+   `height:100%` is the bar's content box (padding 1px top/bottom inside the 1px border). */
+.capsule { height:100%; display:flex; align-items:center; position:relative; }
+.task-button { width:42px; height:100%; position:relative; display:flex; align-items:center; justify-content:center; background:transparent; }
 .task-button, .task-slot, .tray-button, .clock, .workspace-button, .media-control { box-sizing:border-box; }
 .task-button:hover, .task-slot:hover, .tray-button:hover, .clock:hover, .media-control:hover { background:var(--hover-fill); border-radius:8px; }
 .task-button.disabled:hover, .task-slot.disabled:hover, .tray-button.disabled:hover, .clock.disabled:hover, .workspace-button.disabled:hover { background:transparent; }
 .task-start-icon, .task-slot-icon { width:25px; height:25px; display:block; }
 .task-button img { width:25px; height:25px; }
-.task-slots { height:44px; display:flex; background:transparent; position:relative; }
+.task-slots { height:100%; display:flex; background:transparent; position:relative; }
 .task-slot-insert { position:absolute; left:0px; top:6px; width:0px; height:0px; background:var(--accent); }
-.task-slot { width:42px; height:44px; position:relative; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--text); cursor:default; }.task-slot-label { position:absolute; left:0px; top:0px; width:0px; height:0px; overflow:hidden; }
+.task-slot { width:42px; height:100%; position:relative; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--text); cursor:default; }.task-slot-label { position:absolute; left:0px; top:0px; width:0px; height:0px; overflow:hidden; }
 .task-slot .underline { background:transparent; }
 .task-slot.running .underline { background:#87919b; }
 .task-slot.focused .underline { left:5px; right:5px; width:auto; height:3px; background:var(--accent); }
 .underline { position:absolute; left:7px; bottom:0px; width:28px; height:2px; }
 .task-progress { position:absolute; left:7px; bottom:4px; height:2px; width:0px; background:var(--accent); }
 .browser-line { background:#87919b; }.settings-line { background:#87919b; }.terminal-line { background:#87919b; }
-.taskbar-spacer { flex-grow:1; height:44px; }
+.taskbar-spacer { flex-grow:1; height:100%; }
 /* Element gaps are invisible under the unified root fill but separate the capsules when the
    root is transparent (`taskbarSeparate`). */
 #taskbar > * { margin: 0 2px; }
 /* Panel wallpaper layer: the shell sizes it to the panel, so it starts collapsed. */
-.tray-group { height:44px; display:flex; position:relative; background:transparent; }
-.tray-button { width:30px; height:44px; display:flex; align-items:center; justify-content:center; background:transparent; }
+.tray-group { height:100%; display:flex; position:relative; background:transparent; }
+.tray-button { width:30px; height:100%; display:flex; align-items:center; justify-content:center; background:transparent; }
 .tray-button img { width:17px; height:17px; }
-.clock { width:74px; height:44px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:2px 4px 1px 4px; background:transparent; }
+.clock { width:74px; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:2px 4px 1px 4px; background:transparent; }
 .clock-time { width:66px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600; }.date { width:66px; display:flex; align-items:center; justify-content:center; font-size:10px; color:#c9cdd1; }
 .window-border-overlay { position:absolute; left:0px; top:0px; width:100%; height:100%; background:transparent; border:1px solid #5a5d61; border-radius:6px; }
 
@@ -138,10 +139,10 @@ input { cursor:text; }
 .clock-popup { left:0px; top:0px; right:auto; bottom:auto; width:286px; gap:0px; }
 .popup-title { font-size:16px; font-weight:500; }
 .popup-subtitle { color:#abb2b8; font-size:11px; }
-.media-popup { display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; width:276px; height:80px; padding:8px 10px; gap:6px; }
+.media-popup { display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; width:276px; height:80px; padding:8px 10px; gap:6px; border-radius:24px; }
 .media-title { width:100%; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; }
 .media-controls { display:flex; align-items:center; justify-content:center; gap:14px; }
-.media-control { width:36px; height:32px; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--text); border-radius:3px; cursor:default; }.media-control.is-disabled { opacity:0.4; cursor:default; }
+.media-control { width:36px; height:36px; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--text); border-radius:999px; cursor:default; }.media-control.is-disabled { opacity:0.4; cursor:default; }
 .media-control.is-disabled:hover { background:transparent; }
 .volume-line { height:34px; display:flex; align-items:center; gap:8px; }
 .volume-icon-button { width:30px; height:30px; display:flex; align-items:center; justify-content:center; background:transparent; border-radius:3px; }
@@ -172,11 +173,11 @@ input { cursor:text; }
 .step-control { display:flex; align-items:center; gap:5px; }
 .step-button { width:28px; height:28px; display:flex; align-items:center; justify-content:center; border:1px solid #4a5056; border-radius:4px; background:#202326; font-size:16px; }
 .step-button:hover { border-color:var(--accent); background:#303438; }
-.workspace-pager { width:51px; height:44px; display:flex; flex-direction:row; align-items:center; justify-content:center; gap:1px; padding:4px 3px; overflow:hidden; }
+.workspace-pager { width:51px; height:100%; display:flex; flex-direction:row; align-items:center; justify-content:center; gap:1px; padding:4px 3px; overflow:hidden; }
 .workspace-column { position:absolute; top:0px; width:22px; height:33px; display:flex; flex-direction:column; gap:1px; }
-.workspace-button { width:22px; height:16px; display:flex; align-items:center; justify-content:center; border:1px solid #51565b; border-radius:1px; background:transparent; font-size:9px; }
-.workspace-button:hover { border-color:var(--accent); border-radius:1px; }
-.workspace-button.active { color:white; border-color:var(--accent); background:var(--accent-soft); border-radius:1px; font-weight:700; }
+.workspace-button { width:22px; height:16px; display:flex; align-items:center; justify-content:center; border:0px solid transparent; border-radius:5px; background:#00000080; font-size:9px; }
+.workspace-button:hover { background:#7f878e26; border-radius:5px; }
+.workspace-button.active { color:white; background:var(--accent-soft); border-radius:5px; font-weight:700; }
 .files-line, .code-line { background:#87919b; }
 .browser-window { left:182px; top:84px; width:790px; height:470px; }
 .files-window { left:145px; top:92px; width:760px; height:450px; }
@@ -231,10 +232,10 @@ input { cursor:text; }
 .sticky-title { font-size:15px; font-weight:700; }
 .sticky-copy { width:166px; display:flex; flex-direction:column; gap:0px; font-size:13px; }
 .sticky-line { width:166px; height:18px; display:flex; align-items:center; }
-.toast { position:absolute; left:470px; top:18px; min-width:310px; height:36px; padding:0px 14px; display:flex; align-items:center; justify-content:center; background:#25282b; border:1px solid #555b60; border-radius:5px; }
+.toast { position:absolute; left:470px; top:18px; min-width:310px; height:36px; padding:0px 14px; display:flex; align-items:center; justify-content:center; background:#25314a; border:1px solid #ffffff2e; border-radius:12px; }
 .notification-body { width:360px; height:148px; padding:0px; background:transparent; color:var(--text); }
-.notification-card { position:absolute; left:0px; top:0px; width:360px; height:148px; padding:14px; display:flex; flex-direction:column; align-items:flex-start; gap:6px; background:#25282b; color:var(--text); border:1px solid #555b60; border-radius:8px; }
-.notification-app { width:100%; color:#aeb4bb; font-size:11px; }
+.notification-card { position:absolute; left:0px; top:0px; width:360px; height:148px; padding:14px; display:flex; flex-direction:column; align-items:flex-start; gap:6px; background:#25314a; color:var(--text); border:1px solid #ffffff2e; border-radius:12px; }
+.notification-app { width:100%; color:#aeb9cc; font-size:11px; }
 .notification-summary { width:100%; font-size:14px; font-weight:600; }
 .notification-copy { width:100%; color:#d2d6da; font-size:12px; }
 .notification-progress { position:absolute; left:14px; right:14px; bottom:10px; height:4px; display:flex; background:#44494e; border-radius:2px; }
@@ -243,7 +244,7 @@ input { cursor:text; }
 
 /* 0.0.8 parity: native context surfaces and task-entry state. */
 .compact-context { width:205px; }
-.menu-value { flex-grow:1; display:flex; justify-content:flex-end; color:#aeb4bb; }
+.menu-value { flex-grow:1; display:flex; justify-content:flex-end; color:#aeb9cc; }
 .sticky-menu-settings { width:195px; display:flex; flex-direction:column; }
 .underline { left:9px; bottom:2px; width:24px; height:2px; border-radius:2px; background:#87919b; }
 

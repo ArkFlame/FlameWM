@@ -16,5 +16,7 @@ pub mod sticky;
 pub mod sticky_persistence;
 pub mod trash;
 pub mod watcher;
+pub mod weather_feed;
+pub mod widget_grid;
 pub mod widget_text;
 pub mod widgets;

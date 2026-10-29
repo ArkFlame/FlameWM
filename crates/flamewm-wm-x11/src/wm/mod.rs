@@ -130,8 +130,9 @@ use flamewm_api::shortcuts::{
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{
-    ACTION_OPEN_FILES_CTRL_ALT, ACTION_OPEN_FILES_SUPER, ACTION_OPEN_TERMINAL_CTRL_ALT,
-    ACTION_OPEN_TERMINAL_SUPER, ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP,
+    ACTION_OPEN_FILES_CTRL_ALT, ACTION_OPEN_FILES_SUPER, ACTION_OPEN_FINDER,
+    ACTION_OPEN_FINDER_CTRL_ALT, ACTION_OPEN_TERMINAL_CTRL_ALT, ACTION_OPEN_TERMINAL_SUPER,
+    ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP,
 };
 use flamewm_platform::system::MediaAudioKey;
 use flamewm_window_core::{

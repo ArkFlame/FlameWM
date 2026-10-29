@@ -49,10 +49,10 @@ mod tests {
         assert_eq!(
             surface_background(&snapshot),
             UiColor {
-                r: 25,
-                g: 27,
-                b: 29,
-                a: 127
+                r: 234,
+                g: 244,
+                b: 255,
+                a: 31
             }
         );
         assert_eq!(
@@ -61,7 +61,7 @@ mod tests {
                 r: 255,
                 g: 255,
                 b: 255,
-                a: 63
+                a: 43
             }
         );
     }

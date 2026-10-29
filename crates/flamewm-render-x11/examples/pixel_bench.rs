@@ -92,6 +92,8 @@ fn apply_per_op(pixels: &mut [u8], ops: &[PixelOp<'_>]) {
             blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
                 flamewm_render_core::composite_cpu(pixels, WIDTH, HEIGHT, blend).expect("blend")
             }
+            // The bench batch has no rim gradient; the batch path covers it.
+            PixelOp::RimGradient { .. } => {}
         }
     }
 }

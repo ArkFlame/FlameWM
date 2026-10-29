@@ -27,6 +27,7 @@ use flamewm_api::{ModeId, OutputId};
 use flamewm_control_core::{ControlError, ControlRequest};
 use flamewm_integrations_linux::media_store::{MediaKind, MediaStore, import_for_setting};
 use flamewm_settings_core::{ControlTransport, DISPLAY_MODE_SLOTS, SettingsClient, SettingsPage};
+use flamewm_ui_core::glass;
 use flamewm_ui_x11::{
     UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess, UiKeyEvent, UiKeyPhase, UiWindowConfig,
 };
@@ -38,11 +39,13 @@ const WEBSITE_URI: &str = "https://wm.arkflame.com";
 /// Canonical product version: the workspace version inherited by this crate.
 const APP_VERSION: &str = env!("FLAMEWM_SETTINGS_VERSION");
 /// Authoritative accent for the native `FlameWM` preset.
-const DEFAULT_ACCENT: &str = "#EF4048";
+const DEFAULT_ACCENT: &str = "#539BFF";
 /// Nodes whose compiled colour is the accent and must follow live accent changes.
 /// Every `toggle-on` id in ui/settings.html must be listed here (checked by a test).
 const ACCENT_NODE_IDS: &[&str] = &[
     "nav-selection-accent",
+    "glassify-on",
+    "reduce-transparency-on",
     "anim-global-on",
     "anim-start-on",
     "anim-window-on",
@@ -568,6 +571,10 @@ enum SettingsAction {
     },
     /// Steps a percent setting by 5 within 0..=100.
     PercentStep(&'static str, i8),
+    /// Writes every surface glass option of one preset in one transaction.
+    GlassPreset(glass::GlassPreset),
+    /// Resets the `glass` settings section only; surface and window keys are kept.
+    ResetGlass,
     /// Adds `delta` to an integer setting and clamps the result to `minimum..=maximum`.
     IntegerStep {
         key: &'static str,
@@ -579,6 +586,9 @@ enum SettingsAction {
     AnimationSpeedSlider,
     /// Drag-only selected output scale slider; only Release changes runtime scale.
     DisplayScaleSlider,
+    /// Drag-only glass slider in `GLASS_SLIDERS`; the value arrives as event text, see
+    /// `handle_glass_slider_drag`.
+    GlassSlider,
     /// Advances a text setting through `values`, wrapping.
     TextCycle {
         key: &'static str,
@@ -688,6 +698,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         if event.action == ANIMATION_SPEED_SLIDER {
             return self.handle_animation_speed_drag(event, document);
+        }
+        if let Some(slider) = glass_slider(&event.action) {
+            return self.handle_glass_slider_drag(slider, event, document);
         }
         if let Some(raw_slot) = event.action.strip_prefix("settings.display.select.") {
             if let Ok(slot) = raw_slot.parse::<usize>() {
@@ -834,6 +847,38 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 .map_err(control_error)?;
         }
         self.settle(document)
+    }
+
+    /// Live drag for the glass sliders: the native track reports 0..=100 on Motion and Release.
+    /// The taskbar opacity slider is inert while the taskbar inherits its material.
+    fn handle_glass_slider_drag(
+        &mut self,
+        slider: &GlassSlider,
+        event: &UiActionEvent,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
+        if !matches!(event.phase, UiActionPhase::Motion | UiActionPhase::Release) {
+            return Ok(());
+        }
+        let Some(text) = event.text.as_deref() else {
+            return Ok(());
+        };
+        if slider.key == "taskbarOpacityPercent" && self.taskbar_inherits() {
+            return Ok(());
+        }
+        let value = glass_slider_value(text, slider)?;
+        if self.number_setting(slider.key) != Some(value) {
+            let value = u8::try_from(value).map_err(|_| "glass slider value out of range")?;
+            self.client
+                .apply_setting(slider.key, SettingValue::Percent(value))
+                .map_err(control_error)?;
+        }
+        self.settle(document)
+    }
+
+    /// `taskbarMaterialMode` is `inherit`, which makes the taskbar opacity unavailable.
+    fn taskbar_inherits(&self) -> bool {
+        matches!(self.text_setting("taskbarMaterialMode"), Ok(mode) if mode == "inherit")
     }
 
     pub fn handle_key_event(
@@ -1191,7 +1236,19 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             SettingsAction::ColorSwatch { key, value } => self.apply_text(key, value.to_owned())?,
             SettingsAction::PercentStep(key, direction) => {
-                self.step_percent(key, direction, 100)?;
+                let maximum = if key == "surfaceSaturationPercent" { 200 } else { 100 };
+                self.step_percent(key, direction, maximum)?;
+            }
+            SettingsAction::GlassPreset(preset) => {
+                let changes = preset
+                    .settings_values()
+                    .into_iter()
+                    .map(|(key, value)| flamewm_api::settings::SettingsChange {
+                        key: key.to_owned(),
+                        value: Some(value),
+                    })
+                    .collect();
+                self.client.apply_settings(changes).map_err(control_error)?;
             }
             SettingsAction::IntegerStep {
                 key,
@@ -1200,7 +1257,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 maximum,
             } => self.step_integer(key, delta, minimum, maximum)?,
             // Value is applied from the drag text in `handle_animation_speed_drag`.
-            SettingsAction::AnimationSpeedSlider | SettingsAction::DisplayScaleSlider => {}
+            SettingsAction::AnimationSpeedSlider
+            | SettingsAction::DisplayScaleSlider
+            | SettingsAction::GlassSlider => {}
+            SettingsAction::ResetGlass => {
+                self.client.reset_section("glass").map_err(control_error)?;
+            }
             SettingsAction::TextCycle { key, values } => {
                 let current = self.text_setting(key)?;
                 self.apply_text(key, cycle_text(values, &current).to_owned())?;
@@ -1770,6 +1832,15 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
     }
 
+    /// A percent or integer value as an integer, for keys that the wire types either way.
+    fn number_setting(&self, key: &str) -> Option<i64> {
+        match self.setting_value(key)? {
+            SettingValue::Percent(value) => Some(i64::from(*value)),
+            SettingValue::Integer(value) => Some(*value),
+            _ => None,
+        }
+    }
+
     fn integer_setting(&self, key: &str) -> Result<i64, String> {
         match self.setting_value(key) {
             Some(SettingValue::Integer(value)) => Ok(*value),
@@ -1821,10 +1892,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 "settings-root",
                 snapshot,
             )?;
+            project_glass_roles(document, snapshot)?;
         }
         document.position("nav-selection", 8.0, nav_top(self.nav_index()))?;
         if let Some(SettingValue::Text(accent)) = self.setting_value("accent") {
-            document.background("nav-selection", accent_color(accent)?)?;
+            document.background("nav-selection", solid_color(accent)?)?;
             sync_accent_nodes(document, accent)?;
             for name in ["red", "blue", "purple", "teal"] {
                 let palette = accent_for_swatch(name);
@@ -1980,6 +2052,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ),
             ("taskbarShowDate", "taskbar-date-on", "taskbar-date-off"),
             ("snapPreviewEnabled", "snap-preview-on", "snap-preview-off"),
+            ("glassifyContrastZones", "glassify-on", "glassify-off"),
+            ("reduceTransparency", "reduce-transparency-on", "reduce-transparency-off"),
             (
                 "showContentWhileDragging",
                 "show-content-on",
@@ -2085,10 +2159,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let thumb = ratio * ANIMATION_SPEED_TRACK_TRAVEL as f32;
         document.size(
             "display-scale-fill",
-            thumb + ANIMATION_SPEED_THUMB as f32,
-            12.0,
+            thumb + (ANIMATION_SPEED_THUMB / 2.0) as f32,
+            GLASS_SLIDER_TRACK_HEIGHT as f32,
         )?;
-        document.position("display-scale-thumb", thumb, 10.0)
+        document.position("display-scale-thumb", thumb, 8.5)
     }
 
     fn sync_appearance(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -2110,8 +2184,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
         );
         self.sync_color_rows(document)?;
         self.sync_color_picker(document)?;
+        self.sync_glass_rows(document)?;
         for (key, id) in [
             ("surfaceBlurPercent", "surface-blur-value"),
+            ("surfaceSaturationPercent", "surface-saturation-value"),
+            ("surfaceRimFadePercent", "surface-rim-fade-value"),
+            ("surfaceShadowPercent", "surface-shadow-value"),
+            ("surfaceHighlightPercent", "surface-highlight-value"),
             ("accentOpacity", "accent-opacity-value"),
         ] {
             if let Ok(value) = self.percent_setting(key) {
@@ -2126,10 +2205,58 @@ impl<T: ControlTransport> SettingsApplication<T> {
             let ratio = (speed - ANIMATION_SPEED_MIN) as f64
                 / (ANIMATION_SPEED_MAX - ANIMATION_SPEED_MIN) as f64;
             let fill = ratio * ANIMATION_SPEED_TRACK_TRAVEL;
-            let fill_width = (fill + ANIMATION_SPEED_THUMB).min(ANIMATION_SPEED_TRACK_WIDTH);
-            document.size("animation-speed-fill", fill_width as f32, 12.0)?;
-            document.position("animation-speed-thumb", fill as f32, 0.0)?;
+            let fill_width = (fill + ANIMATION_SPEED_THUMB / 2.0).min(ANIMATION_SPEED_TRACK_WIDTH);
+            document.size("animation-speed-fill", fill_width as f32, GLASS_SLIDER_TRACK_HEIGHT as f32)?;
+            document.position("animation-speed-thumb", fill as f32, GLASS_SLIDER_THUMB_TOP as f32)?;
         }
+        Ok(())
+    }
+
+    /// Projects the glass sliders, the taskbar material segments and the twins that show
+    /// the unavailable state (inherit mode hides the opacity slider, blur-only and inherit hide the tint).
+    fn sync_glass_rows(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let accent = self.accent()?;
+        for slider in &GLASS_SLIDERS {
+            let Some(value) = self.number_setting(slider.key) else {
+                continue;
+            };
+            let ratio = (value - slider.minimum) as f64 / (slider.maximum - slider.minimum) as f64;
+            let fill = ratio.clamp(0.0, 1.0) * GLASS_SLIDER_TRAVEL;
+            let fill_width = (fill + GLASS_SLIDER_THUMB / 2.0).min(GLASS_SLIDER_TRACK_WIDTH);
+            let label = if slider.key == "glassBlurPx" {
+                format!("{value} px")
+            } else {
+                format!("{value}%")
+            };
+            document.text(&format!("{}-value", slider.slug), label)?;
+            document.size(
+                &format!("{}-fill", slider.slug),
+                fill_width as f32,
+                GLASS_SLIDER_TRACK_HEIGHT as f32,
+            )?;
+            document.position(
+                &format!("{}-thumb", slider.slug),
+                fill as f32,
+                GLASS_SLIDER_THUMB_TOP as f32,
+            )?;
+        }
+        let mode = self.text_setting("taskbarMaterialMode").ok();
+        highlight_options(
+            document,
+            mode.as_deref(),
+            &[
+                ("blur-only", "taskbar-material-blur-only"),
+                ("inherit", "taskbar-material-inherit"),
+                ("custom-tint", "taskbar-material-custom-tint"),
+            ],
+            accent,
+        )?;
+        let inherits = mode.as_deref() == Some("inherit");
+        document.visible("taskbar-opacity-live", !inherits)?;
+        document.visible("taskbar-opacity-off", inherits)?;
+        let custom = mode.as_deref() == Some("custom-tint");
+        document.visible("taskbar-tint-live", custom)?;
+        document.visible("taskbar-tint-off", !custom)?;
         Ok(())
     }
 
@@ -2621,6 +2748,66 @@ fn is_modifier_key(key: &str) -> bool {
 }
 
 const ANIMATION_SPEED_SLIDER: &str = "slider.animation-speed";
+
+/// One glass slider: its drag action, the integer-valued percent or px key it writes, its
+/// inclusive range, and the HTML slug of its value text, fill and thumb nodes.
+struct GlassSlider {
+    action: &'static str,
+    key: &'static str,
+    minimum: i64,
+    maximum: i64,
+    slug: &'static str,
+}
+
+static GLASS_SLIDERS: [GlassSlider; 3] = [
+    GlassSlider {
+        action: "slider.glass-opacity",
+        key: "glassOpacityPercent",
+        minimum: 4,
+        maximum: 42,
+        slug: "glass-opacity",
+    },
+    GlassSlider {
+        action: "slider.glass-blur",
+        key: "glassBlurPx",
+        minimum: 0,
+        maximum: 54,
+        slug: "glass-blur",
+    },
+    GlassSlider {
+        action: "slider.taskbar-opacity",
+        key: "taskbarOpacityPercent",
+        minimum: 0,
+        maximum: 75,
+        slug: "taskbar-opacity",
+    },
+];
+
+/// Must match the `.slider-track` width in ui/settings.css.
+const GLASS_SLIDER_TRACK_WIDTH: f64 = 180.0;
+const GLASS_SLIDER_THUMB: f64 = 15.0;
+/// Track height and thumb top from `.slider-track` / `.slider-thumb` in ui/settings.css.
+const GLASS_SLIDER_TRACK_HEIGHT: f64 = 6.0;
+const GLASS_SLIDER_THUMB_TOP: f64 = 0.0;
+const GLASS_SLIDER_TRAVEL: f64 = GLASS_SLIDER_TRACK_WIDTH - GLASS_SLIDER_THUMB;
+
+fn glass_slider(action: &str) -> Option<&'static GlassSlider> {
+    GLASS_SLIDERS.iter().find(|slider| slider.action == action)
+}
+
+/// Maps a native track percent (0..=100) into `minimum..=maximum`, rounded to the nearest unit.
+fn glass_slider_value(text: &str, slider: &GlassSlider) -> Result<i64, String> {
+    let percent: f64 = text
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid {} slider value '{text}'", slider.key))?;
+    if !percent.is_finite() {
+        return Err(format!("invalid {} slider value '{text}'", slider.key));
+    }
+    let span = (slider.maximum - slider.minimum) as f64;
+    let raw = slider.minimum as f64 + percent.clamp(0.0, 100.0) / 100.0 * span;
+    Ok((raw.round() as i64).clamp(slider.minimum, slider.maximum))
+}
 const DISPLAY_SCALE_SLIDER: &str = "slider.display-scale";
 
 fn display_scale_from_slider(text: &str) -> Result<u16, String> {
@@ -2640,7 +2827,7 @@ const ANIMATION_SPEED_MAX: i64 = 200;
 const ANIMATION_SPEED_STEP: f64 = 5.0;
 /// Must match the `.slider-track` width in ui/settings.css.
 const ANIMATION_SPEED_TRACK_WIDTH: f64 = 180.0;
-const ANIMATION_SPEED_THUMB: f64 = 12.0;
+const ANIMATION_SPEED_THUMB: f64 = 15.0;
 const ANIMATION_SPEED_TRACK_TRAVEL: f64 = ANIMATION_SPEED_TRACK_WIDTH - ANIMATION_SPEED_THUMB;
 
 /// Maps a native slider value (track percent 0..=100) to `animationSpeed`
@@ -2660,6 +2847,14 @@ fn animation_speed_from_slider(text: &str) -> Result<i64, String> {
     Ok(snapped.clamp(ANIMATION_SPEED_MIN, ANIMATION_SPEED_MAX))
 }
 
+/// Surface glass steppers: action prefix and the percent key each one moves.
+const GLASS_STEP_KEYS: [(&str, &str); 4] = [
+    ("settings.surface-saturation.", "surfaceSaturationPercent"),
+    ("settings.surface-rim-fade.", "surfaceRimFadePercent"),
+    ("settings.surface-shadow.", "surfaceShadowPercent"),
+    ("settings.surface-highlight.", "surfaceHighlightPercent"),
+];
+
 fn step(value: &str) -> Option<i8> {
     match value {
         "down" => Some(-1),
@@ -2669,11 +2864,12 @@ fn step(value: &str) -> Option<i8> {
 }
 
 /// Color rows in the Appearance page: action target and the `#RRGGBB` setting.
-const COLOR_TARGETS: [(&str, &str); 4] = [
+const COLOR_TARGETS: [(&str, &str); 5] = [
     ("border", "surfaceBorderColor"),
     ("surface", "surfaceColor"),
     ("accent", "accent"),
     ("lockbackground", "lockBackgroundColor"),
+    ("taskbarTint", "taskbarCustomTint"),
 ];
 
 /// Minutes offered by the lock-screen idle timeout segments; 0 means never.
@@ -2983,9 +3179,16 @@ fn shortcut_label(owner: &str) -> String {
         .map_or_else(|| owner.to_owned(), |row| row.label.to_owned())
 }
 
+/// Brand block height above the first sidebar row; must match `.settings-brand` in ui/settings.css.
+const NAV_BRAND_HEIGHT_PX: f32 = 72.0;
+/// Sidebar row pitch (no gap between rows); must match `.nav-row` height in ui/settings.css.
+const NAV_ROW_PITCH_PX: f32 = 30.0;
+
+/// Top of the active-row indicator for sidebar index `index`, from the same layout as the CSS rows.
 fn nav_top(index: usize) -> f32 {
-    72.0 + index as f32 * 32.0
+    NAV_BRAND_HEIGHT_PX + index as f32 * NAV_ROW_PITCH_PX
 }
+
 
 /// Deletes the managed copy behind a cleared Start icon. Empty, unmanaged and
 /// already-missing paths are left alone; the store never deletes foreign files.
@@ -3093,7 +3296,36 @@ fn sync_accent_nodes(document: &mut impl UiDocumentAccess, accent: &str) -> Resu
     for id in ACCENT_NODE_IDS {
         document.background(id, color)?;
     }
-    Ok(())
+    document.color_variable("--accent", color)?;
+    document.color_variable("--accent-soft", UiColor { a: 0x38, ..color })
+}
+
+/// Window body glass (GlassRegular, the menu surface material), backdrop blur beneath it, and the
+/// grouped-card fill (ContrastZone). The sidebar and content areas stay transparent and show this body.
+/// Every value comes from `glass::resolve`, so Reduce transparency makes the body opaque with no blur.
+fn project_glass_roles(
+    document: &mut impl UiDocumentAccess,
+    snapshot: &flamewm_api::settings::SettingsSnapshot,
+) -> Result<(), String> {
+    use flamewm_ui_core::glass::{MaterialRole, RendererCaps, ResolvedMaterial};
+    let appearance = flamewm_ui_core::glass::appearance_from_settings(snapshot);
+    let caps = RendererCaps {
+        backdrop_blur: true,
+    };
+    let resolve = |role| flamewm_ui_core::glass::resolve(role, appearance, 100, caps);
+    let rgba = |material: ResolvedMaterial| UiColor {
+        r: (material.tint_rgb >> 16) as u8,
+        g: (material.tint_rgb >> 8) as u8,
+        b: material.tint_rgb as u8,
+        a: (u32::from(material.alpha_permille.min(1000)) * 255 / 1000) as u8,
+    };
+    let body = resolve(MaterialRole::GlassRegular);
+    document.background("settings-root", rgba(body))?;
+    document.node_backdrop(
+        "settings-root",
+        Some(flamewm_ui_core::glass::blur_percent_from_px(body.blur_px)),
+    )?;
+    document.color_variable("--card", rgba(resolve(MaterialRole::ContrastZone)))
 }
 
 fn accent_color(value: &str) -> Result<UiColor, String> {
@@ -3274,7 +3506,9 @@ fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-const TOGGLE_KEYS: [&str; 32] = [
+const TOGGLE_KEYS: [&str; 34] = [
+    "glassifyContrastZones",
+    "reduceTransparency",
     "showContentWhileDragging",
     "windowShadows",
     "stickyNotesEnabled",
@@ -3365,6 +3599,20 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some(direction) = action.strip_prefix("settings.surface-blur.").and_then(step) {
         return Ok(SettingsAction::PercentStep("surfaceBlurPercent", direction));
     }
+    for (slug, key) in GLASS_STEP_KEYS {
+        if let Some(direction) = action
+            .strip_prefix(slug)
+            .and_then(step)
+        {
+            return Ok(SettingsAction::PercentStep(key, direction));
+        }
+    }
+    match action {
+        "settings.glass.dark" => return Ok(SettingsAction::GlassPreset(glass::DARK)),
+        "settings.glass.light" => return Ok(SettingsAction::GlassPreset(glass::LIGHT)),
+        "settings.glass.reset" => return Ok(SettingsAction::ResetGlass),
+        _ => {}
+    }
     if let Some(direction) = action
         .strip_prefix("settings.surface-opacity.")
         .and_then(step)
@@ -3397,6 +3645,9 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     }
     if action == ANIMATION_SPEED_SLIDER {
         return Ok(SettingsAction::AnimationSpeedSlider);
+    }
+    if glass_slider(action).is_some() {
+        return Ok(SettingsAction::GlassSlider);
     }
     if action == DISPLAY_SCALE_SLIDER {
         return Ok(SettingsAction::DisplayScaleSlider);
@@ -3571,6 +3822,18 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.decoration.squared" => Ok(SettingsAction::TextSelect {
             key: "decoration",
             value: "squared",
+        }),
+        "settings.taskbar.material.blur-only" => Ok(SettingsAction::TextSelect {
+            key: "taskbarMaterialMode",
+            value: "blur-only",
+        }),
+        "settings.taskbar.material.inherit" => Ok(SettingsAction::TextSelect {
+            key: "taskbarMaterialMode",
+            value: "inherit",
+        }),
+        "settings.taskbar.material.custom-tint" => Ok(SettingsAction::TextSelect {
+            key: "taskbarMaterialMode",
+            value: "custom-tint",
         }),
         "settings.render-acceleration.cpu" => Ok(SettingsAction::TextSelect {
             key: "renderAcceleration",
@@ -4102,6 +4365,23 @@ mod value_text_tests {
             Ok(SettingsAction::PercentStep("surfaceBlurPercent", 1))
         );
         assert_action!(
+            "settings.surface-saturation.down",
+            Ok(SettingsAction::PercentStep("surfaceSaturationPercent", -1))
+        );
+        assert_action!(
+            "settings.surface-highlight.up",
+            Ok(SettingsAction::PercentStep("surfaceHighlightPercent", 1))
+        );
+        assert_action!(
+            "settings.glass.dark",
+            Ok(SettingsAction::GlassPreset(glass::DARK))
+        );
+        assert_action!(
+            "settings.glass.light",
+            Ok(SettingsAction::GlassPreset(glass::LIGHT))
+        );
+        assert!(parse_action("settings.glass.neon").is_err());
+        assert_action!(
             "settings.surface-opacity.down",
             Ok(SettingsAction::PercentStep("surfaceOpacity", -1))
         );
@@ -4223,6 +4503,67 @@ mod value_text_tests {
         // 37.5% -> 90.625 -> snaps to 90, not the raw 90.625.
         assert_eq!(animation_speed_from_slider("37.5"), Ok(90));
         assert_eq!(animation_speed_from_slider(" 37.5 "), Ok(90));
+    }
+
+    #[test]
+    fn glass_sliders_map_track_percent_into_their_inclusive_ranges() {
+        let opacity = glass_slider("slider.glass-opacity").expect("opacity slider");
+        assert_eq!(glass_slider_value("0", opacity), Ok(4));
+        assert_eq!(glass_slider_value("100", opacity), Ok(42));
+        assert_eq!(glass_slider_value("50", opacity), Ok(23));
+        assert_eq!(glass_slider_value("-5", opacity), Ok(4));
+        assert_eq!(glass_slider_value("140", opacity), Ok(42));
+        let blur = glass_slider("slider.glass-blur").expect("blur slider");
+        assert_eq!(glass_slider_value("0", blur), Ok(0));
+        assert_eq!(glass_slider_value("100", blur), Ok(54));
+        let taskbar = glass_slider("slider.taskbar-opacity").expect("taskbar slider");
+        assert_eq!(glass_slider_value("100", taskbar), Ok(75));
+        assert!(glass_slider_value("NaN", taskbar).is_err());
+        assert!(glass_slider_value("", taskbar).is_err());
+        assert!(glass_slider("slider.glass-neon").is_none());
+    }
+
+    #[test]
+    fn glass_controls_parse_to_their_actions() {
+        assert!(matches!(
+            parse_action("slider.glass-blur"),
+            Ok(SettingsAction::GlassSlider)
+        ));
+        assert!(matches!(
+            parse_action("settings.glass.reset"),
+            Ok(SettingsAction::ResetGlass)
+        ));
+        assert!(matches!(
+            parse_action("settings.taskbar.material.custom-tint"),
+            Ok(SettingsAction::TextSelect {
+                key: "taskbarMaterialMode",
+                value: "custom-tint",
+            })
+        ));
+        assert!(matches!(
+            parse_action("settings.toggle.reduceTransparency"),
+            Ok(SettingsAction::Toggle("reduceTransparency"))
+        ));
+        assert!(matches!(
+            parse_action("settings.toggle.glassifyContrastZones"),
+            Ok(SettingsAction::Toggle("glassifyContrastZones"))
+        ));
+        assert!(parse_action("settings.taskbar.material.neon").is_err());
+    }
+
+    #[test]
+    fn taskbar_tint_uses_the_shared_colour_row_and_picker() {
+        assert!(matches!(
+            parse_action("settings.color.taskbarTint.preset.2"),
+            Ok(SettingsAction::ColorSwatch {
+                key: "taskbarCustomTint",
+                value: "#3DAEE9",
+            })
+        ));
+        assert!(matches!(
+            parse_action("settings.picker.open.taskbarTint"),
+            Ok(SettingsAction::ColorPickerOpen("taskbarCustomTint"))
+        ));
     }
 
     #[test]
@@ -4417,6 +4758,10 @@ mod accent_node_tests {
     }
 
     impl UiDocumentAccess for ColorDocument {
+        fn color_variable(&mut self, _name: &str, _color: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+
         fn text(&mut self, _id: &str, _text: String) -> Result<(), String> {
             crate::ui_contract::require_markup_id(_id)
         }
@@ -4603,3 +4948,32 @@ extern crate self as flamewm_settings;
 #[doc(hidden)]
 #[path = "main.rs"]
 pub mod entry;
+
+#[cfg(test)]
+mod nav_indicator_layout_tests {
+    use super::{NAV_BRAND_HEIGHT_PX, NAV_ROW_PITCH_PX, nav_top};
+
+    const CSS: &str = include_str!("../../../ui/settings.css");
+    const HTML: &str = include_str!("../../../ui/settings.html");
+
+    fn px_in_rule(selector: &str, property: &str) -> f32 {
+        let start = CSS.find(selector).expect("selector in settings.css");
+        let body = &CSS[start..];
+        let body = &body[..body.find('}').expect("rule end")];
+        let at = body.find(&format!("{property}:")).expect("property in rule") + property.len() + 1;
+        let value: String = body[at..].chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        value.parse().expect("px value")
+    }
+
+    #[test]
+    fn indicator_top_matches_css_row_layout_for_every_page() {
+        let rows = HTML.matches("data-action=\"settings.page.").count();
+        assert_eq!(rows, 12, "sidebar page rows in settings.html");
+        assert_eq!(px_in_rule(".settings-brand {", "height"), NAV_BRAND_HEIGHT_PX);
+        assert_eq!(px_in_rule(".nav-row {", "height"), NAV_ROW_PITCH_PX);
+        for index in 0..rows {
+            let expected = NAV_BRAND_HEIGHT_PX + index as f32 * px_in_rule(".nav-row {", "height");
+            assert_eq!(nav_top(index), expected, "indicator for row {index}");
+        }
+    }
+}

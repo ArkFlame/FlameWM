@@ -121,7 +121,7 @@ impl ThemeRegistry {
     }
 
     /// Borrow the already-rasterized thumbnail for the selected directory id.
-    /// An unset icon theme uses `FlameWM`'s `PlagueSur` default; absent or legacy
+    /// An unset icon theme uses `FlameWM`'s `MacTahoe` default; absent or legacy
     /// themes return `None` so the UI can show its static fallback placeholder.
     /// Replacing this registry after an off-thread scan also replaces the cache;
     /// changes to the setting require only a new lookup, never a disk read.
@@ -156,51 +156,28 @@ impl ThemeRegistry {
     }
 }
 
-/// `FlameWM`'s bundled icon themes stay at the top of the picker.
-pub const BUNDLED_ICON_THEMES: [&str; 2] = ["PlagueSur", "Fluent"];
+/// `FlameWM`'s shipped default icon theme stays at the top of the picker.
+pub const BUNDLED_ICON_THEMES: [&str; 1] = ["MacTahoe"];
 
-/// Upstream Fluent Yellow directories can use a different id; retain that
-/// filesystem id for icon lookup while presenting the product name as Fluent.
-fn fluent_yellow(item: &ThemeItem) -> bool {
-    let name = item.name.to_ascii_lowercase();
-    let id = item.id.to_ascii_lowercase();
-    id == "fluent"
-        || name == "fluent"
-        || ((id.contains("fluent") || name.contains("fluent"))
-            && (id.contains("yellow") || name.contains("yellow")))
-}
-
-/// Pin bundled defaults first, then keep every discoverable installed theme.
+/// Pin the bundled default first, then keep every discoverable installed theme.
 #[must_use]
 pub fn with_bundled_icon_themes(mut icon: Vec<ThemeItem>) -> Vec<ThemeItem> {
-    let mut chosen = Vec::with_capacity(BUNDLED_ICON_THEMES.len());
-    if let Some(mut plague) = icon.iter().find(|item| item.id == "PlagueSur").cloned() {
-        "PlagueSur".clone_into(&mut plague.name);
-        chosen.push(plague);
-    } else {
-        chosen.push(ThemeItem {
-            id: "PlagueSur".to_owned(),
-            name: "PlagueSur".to_owned(),
+    let mut pinned = match icon.iter().position(|item| item.id == BUNDLED_ICON_THEMES[0]) {
+        Some(index) => icon.swap_remove(index),
+        None => ThemeItem {
+            id: BUNDLED_ICON_THEMES[0].to_owned(),
+            name: String::new(),
             preview: None,
-        });
-    }
-    if let Some(mut fluent) = icon.iter().find(|item| fluent_yellow(item)).cloned() {
-        "Fluent".clone_into(&mut fluent.name);
-        chosen.push(fluent);
-    } else {
-        chosen.push(ThemeItem {
-            id: "Fluent".to_owned(),
-            name: "Fluent".to_owned(),
-            preview: None,
-        });
-    }
-    icon.retain(|item| !chosen.iter().any(|pinned| pinned.id == item.id));
+        },
+    };
+    BUNDLED_ICON_THEMES[0].clone_into(&mut pinned.name);
     icon.sort_by(|a, b| {
         a.name
             .to_ascii_lowercase()
             .cmp(&b.name.to_ascii_lowercase())
             .then_with(|| a.id.to_ascii_lowercase().cmp(&b.id.to_ascii_lowercase()))
     });
+    let mut chosen = vec![pinned];
     chosen.extend(icon);
     chosen
 }
@@ -214,17 +191,17 @@ pub fn with_installed_cursor_themes(cursor: Vec<ThemeItem>) -> Vec<ThemeItem> {
             // An unrenderable or absent left_ptr must not appear as a selectable
             // cursor with a misleading thumbnail.
             item.preview.as_ref()?;
-            if cursor_theme_family(&item.id) == Some(CursorThemeFamily::McMojave)
-                && item.id.eq_ignore_ascii_case("McMojave-cursors")
+            if cursor_theme_family(&item.id) == Some(CursorThemeFamily::MacTahoe)
+                && item.id.eq_ignore_ascii_case("MacTahoe-dark-cursors")
             {
-                "McMojave".clone_into(&mut item.name);
+                "MacTahoe".clone_into(&mut item.name);
             }
             Some(item)
         })
         .collect();
     themes.sort_by(|a, b| {
         let order = |item: &ThemeItem| match cursor_theme_family(&item.id) {
-            Some(CursorThemeFamily::McMojave) => 0,
+            Some(CursorThemeFamily::MacTahoe) => 0,
             Some(CursorThemeFamily::Oxygen) => 1,
             None => 2,
         };
@@ -483,19 +460,15 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let empty = with_bundled_icon_themes(Vec::new());
-        assert_eq!(ids(&empty), ["PlagueSur", "Fluent"]);
+        assert_eq!(ids(&empty), ["MacTahoe"]);
         let found = with_bundled_icon_themes(vec![
             item("Papirus", "Papirus"),
-            item("Fluent-Yellow", "Fluent Yellow"),
-            item("PlagueSur", "Custom display name"),
+            item("MacTahoe", "Custom display name"),
             item("candy-icons", "Candy"),
         ]);
-        assert_eq!(
-            ids(&found),
-            ["PlagueSur", "Fluent-Yellow", "candy-icons", "Papirus"]
-        );
-        assert_eq!(names(&found), ["PlagueSur", "Fluent", "Candy", "Papirus"]);
-        assert_eq!(found.len(), 4);
+        assert_eq!(ids(&found), ["MacTahoe", "candy-icons", "Papirus"]);
+        assert_eq!(names(&found), ["MacTahoe", "Candy", "Papirus"]);
+        assert_eq!(found.len(), 3);
         let only_cursor = item("Bibata", "Bibata");
         let mut registry = ThemeRegistry::default();
         registry.cursor.push(only_cursor);
@@ -551,12 +524,12 @@ mod tests {
         let mut registry = ThemeRegistry {
             icon: vec![ThemeItem {
                 preview: Some(image.clone()),
-                ..item("PlagueSur", "PlagueSur")
+                ..item("MacTahoe", "MacTahoe")
             }],
             cursor: vec![],
         };
         let preview = registry
-            .selected_preview(PickerKind::Icon, "PlagueSur")
+            .selected_preview(PickerKind::Icon, "MacTahoe")
             .expect("cached");
         assert!(std::ptr::eq(
             preview,
@@ -574,7 +547,7 @@ mod tests {
         registry = ThemeRegistry::default(); // a rescan invalidates the old cache
         assert!(
             registry
-                .selected_preview(PickerKind::Icon, "PlagueSur")
+                .selected_preview(PickerKind::Icon, "MacTahoe")
                 .is_none()
         );
     }
@@ -593,10 +566,10 @@ mod tests {
         let picked = with_installed_cursor_themes(vec![
             with_preview("Bibata-Modern-Ice", "Bibata"),
             with_preview("Oxygen_Black", "Oxygen Black"),
-            with_preview("McMojave-cursors", "Upstream name"),
+            with_preview("MacTahoe-dark-cursors", "Upstream name"),
             with_preview("oxy-white", "Oxy White"),
             item("Oxygen_Blue", "Oxygen Blue"), // no usable preview
-            with_preview("McMojaveX", "Not a McMojave variant"),
+            with_preview("MacTahoeX", "Not a MacTahoe variant"),
         ]);
         assert_eq!(
             picked
@@ -604,14 +577,14 @@ mod tests {
                 .map(|item| item.id.as_str())
                 .collect::<Vec<_>>(),
             [
-                "McMojave-cursors",
+                "MacTahoe-dark-cursors",
                 "oxy-white",
                 "Oxygen_Black",
                 "Bibata-Modern-Ice",
-                "McMojaveX"
+                "MacTahoeX"
             ]
         );
-        assert_eq!(picked[0].name, "McMojave");
+        assert_eq!(picked[0].name, "MacTahoe");
         assert_eq!(picked[2].name, "Oxygen Black");
         assert_eq!(PICKER_SLOTS, 6);
         assert_eq!(SELECTED_ICON_PREVIEW_NODE, "icon-theme-selected-preview");

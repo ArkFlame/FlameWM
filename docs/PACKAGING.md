@@ -76,7 +76,7 @@ the X11 session on Xvfb and removes the package again.
 
 ## Multi-call applications
 
-`flamewm`, `flamewm-desktop`, `flamewm-shell`, `flamewm-settings`, `flamewm-explorer` and
+`flamewm`, `flamewm-desktop`, `flamewm-shell`, `flamewm-settings`, `flamewm-explorer`, `flamewm-finder` and
 `flamewm-terminal` are installed as hard links to one executable, `/usr/bin/flamewm-apps`
 (`crates/flamewm-apps`), which runs the application named by `argv[0]`. The applications link the
 same renderer, image decoders, X11 and D-Bus code; as one file the kernel shares those pages

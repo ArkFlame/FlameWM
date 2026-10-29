@@ -6,7 +6,7 @@ impl<C: Connection> Wm<'_, C> {
     fn transition_corner_radius(&self, client: Window) -> u32 {
         self.clients.get(&client).map_or(0, |state| {
             u32::from(flamewm_skin::recipes::decoration::corner_radius(
-                state.is_floating(),
+                state.has_rounded_frame(),
                 self.decoration_tokens.style,
             ))
         })

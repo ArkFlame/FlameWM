@@ -8,6 +8,7 @@ pub mod quickswitch;
 pub mod start_menu;
 pub mod status;
 pub mod weather;
+pub mod weather_view;
 pub mod workspaces;
 
 use std::cmp::Ordering;

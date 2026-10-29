@@ -11,8 +11,10 @@ use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 use crate::start::{StartCategory, PRESENTATION_CATEGORIES};
 use crate::taskbar::workspaces::{
     cell_left, pager_cell, pager_columns, pager_width, project as project_workspaces,
-    WorkspaceView, PAGER_CELLS, PAGER_COLUMNS, PAGER_HEIGHT,
+    WorkspaceView, PAGER_CELLS, PAGER_CELL_GAP, PAGER_CELL_HEIGHT, PAGER_CELL_WIDTH,
+    PAGER_COLUMNS,
 };
+use crate::taskbar_scale::{self, scaled};
 use crate::ShellSnapshot;
 use flamewm_shell_core::start_menu::{bucket_for_application, StartBucket};
 use flamewm_shell_core::{task_visual_states_on_output_and_workspace, StartModel};
@@ -46,8 +48,53 @@ const TASK_ICON_LOGICAL_PX: f32 = 25.0;
 const TASK_SLOT_WIDTH: f32 = 42.0;
 /// `.tray-button` width in CSS px.
 const TRAY_BUTTON_WIDTH: f32 = 30.0;
-/// Height of one taskbar element row in CSS px (`.task-slots`, `.tray-button`).
-const TASKBAR_ELEMENT_HEIGHT: f32 = 44.0;
+/// `.tray-button img` edge in CSS px.
+const TRAY_ICON_LOGICAL_PX: f32 = 17.0;
+/// `.clock` width in CSS px.
+const CLOCK_WIDTH: f32 = 74.0;
+/// Clock time and date font sizes in CSS px.
+const CLOCK_TIME_FONT: f32 = 14.0;
+const CLOCK_DATE_FONT: f32 = 10.0;
+/// `.workspace-button` and `.tray-weather-temp` font sizes in CSS px.
+const PAGER_CELL_FONT: f32 = 9.0;
+const TRAY_WEATHER_FONT: f32 = 10.0;
+/// Tray glyph nodes (the `img` children of tray buttons) that share `.tray-button img` sizing.
+const TRAY_GLYPH_IDS: &[&str] = &[
+    "tray-play-icon",
+    "tray-pause-icon",
+    "tray-volume-icon",
+    "tray-volume-muted-icon",
+    "tray-wifi",
+    "tray-weather-clear",
+    "tray-weather-few-clouds",
+    "tray-weather-fog",
+    "tray-weather-none-available",
+    "tray-weather-overcast",
+    "tray-weather-showers",
+    "tray-weather-showers-scattered",
+    "tray-weather-snow",
+    "tray-weather-storm",
+    "tray-battery-caution",
+    "tray-battery-caution-charging",
+    "tray-battery-020",
+    "tray-battery-020-charging",
+    "tray-battery-030",
+    "tray-battery-030-charging",
+    "tray-battery-040",
+    "tray-battery-040-charging",
+    "tray-battery-050",
+    "tray-battery-050-charging",
+    "tray-battery-060",
+    "tray-battery-060-charging",
+    "tray-battery-070",
+    "tray-battery-070-charging",
+    "tray-battery-080",
+    "tray-battery-080-charging",
+    "tray-battery-090",
+    "tray-battery-090-charging",
+    "tray-battery-100",
+    "tray-battery-100-charging",
+];
 
 /// Taskbar task icon raster edge in device pixels. The icon node is laid out
 /// in logical px and scaled by the panel's UI scale, so requesting only 25 px
@@ -88,9 +135,9 @@ pub(crate) fn task_accent() -> UiColor {
 }
 
 /// Surface fill each separate-mode element capsule paints, fed by the settings projection.
-/// Default matches `ProductSettings::default()`: surfaceColor `#191b1d` at 50% opacity.
+/// Default matches `ProductSettings::default()`: surfaceColor `#333333` at 65% opacity.
 static TASKBAR_SURFACE_ARGB: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(0x8019_1b1d);
+    std::sync::atomic::AtomicU32::new(0xA533_3333);
 
 /// Records the surface fill used by the separate-taskbar capsules.
 pub fn set_taskbar_surface(color: UiColor) {
@@ -162,6 +209,7 @@ pub(crate) fn project_element_backgrounds(
         TRANSPARENT_FILL
     };
     let blur = items.separate.then_some(items.blur_percent);
+    let material = |shown: bool| (items.separate && shown).then_some(items.material).flatten();
     let stroke = taskbar_border();
     let contour = |shown: bool| {
         if items.separate && shown {
@@ -175,6 +223,7 @@ pub(crate) fn project_element_backgrounds(
     document.border("start-capsule", contour(true))?;
     document.corner_radius("start-capsule", ELEMENT_RADIUS)?;
     document.node_backdrop("start-capsule", blur)?;
+    document.surface_material("start-capsule", material(true))?;
     // A capsule with no icons inside is not painted at all.
     let capsule = |shown: bool| if shown { fill } else { TRANSPARENT_FILL };
     let capsule_blur = |shown: bool| (items.separate && shown).then_some(items.blur_percent);
@@ -182,16 +231,19 @@ pub(crate) fn project_element_backgrounds(
     document.border("tray-group", contour(tray_visible))?;
     document.corner_radius("tray-group", ELEMENT_RADIUS)?;
     document.node_backdrop("tray-group", capsule_blur(tray_visible))?;
+    document.surface_material("tray-group", material(tray_visible))?;
     document.background("clock-capsule", capsule(clock_visible))?;
     document.border("clock-capsule", contour(clock_visible))?;
     document.corner_radius("clock-capsule", ELEMENT_RADIUS)?;
     document.node_backdrop("clock-capsule", capsule_blur(clock_visible))?;
+    document.surface_material("clock-capsule", material(clock_visible))?;
     // The pager is a single capsule, just like Start, tasks, tray and clock.
     // Its existing individual workspace cells still own their active/hover fills.
     document.background("workspace-pager", capsule(items.workspaces))?;
     document.border("workspace-pager", contour(items.workspaces))?;
     document.corner_radius("workspace-pager", ELEMENT_RADIUS)?;
     document.node_backdrop("workspace-pager", capsule_blur(items.workspaces))?;
+    document.surface_material("workspace-pager", material(items.workspaces))?;
     let slots = if items.separate && rendered_slots > 0 {
         taskbar_surface()
     } else {
@@ -204,6 +256,7 @@ pub(crate) fn project_element_backgrounds(
         "task-slots",
         (items.separate && rendered_slots > 0).then_some(items.blur_percent),
     )?;
+    document.surface_material("task-slots", material(rendered_slots > 0))?;
     Ok(())
 }
 
@@ -260,12 +313,12 @@ pub(crate) fn pager_active_fill() -> UiColor {
     }
 }
 
-/// Inactive pager cell fill (matches the `.workspace-button` background).
+/// Inactive pager cell fill (matches the `.workspace-button` background): 50% black.
 const PAGER_IDLE_FILL: UiColor = UiColor {
-    r: 36,
-    g: 39,
-    b: 42,
-    a: 255,
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 128,
 };
 
 /// Projected workspaces paired with the pager cell each one occupies, using the
@@ -292,11 +345,20 @@ fn project_pager_layout(
     cells: &[(usize, WorkspaceView)],
 ) -> Result<(), String> {
     let columns = pager_columns(snapshot.map_or(0, |snapshot| snapshot.count));
-    document.size("workspace-pager", pager_width(columns), PAGER_HEIGHT)?;
+    document.size(
+        "workspace-pager",
+        scaled(pager_width(columns)),
+        taskbar_scale::node_height(taskbar_scale::factor()),
+    )?;
     for column in 0..PAGER_COLUMNS {
         let column_id = format!("workspace-column-{}", column + 1);
         if column < columns {
-            document.position(&column_id, cell_left(column), 0.0)?;
+            document.position(&column_id, scaled(cell_left(column)), 0.0)?;
+            document.size(
+                &column_id,
+                scaled(PAGER_CELL_WIDTH),
+                scaled(2.0 * PAGER_CELL_HEIGHT + PAGER_CELL_GAP),
+            )?;
             document.visible(&column_id, true)?;
         } else {
             document.visible(&column_id, false)?;
@@ -344,6 +406,12 @@ pub(crate) fn project_pager(
     project_pager_layout(document, snapshot, &cells)?;
     for (cell, workspace) in cells {
         let cell_id = format!("workspace-{cell}");
+        document.size(
+            &cell_id,
+            scaled(PAGER_CELL_WIDTH),
+            scaled(PAGER_CELL_HEIGHT),
+        )?;
+        document.font_size(&cell_id, scaled(PAGER_CELL_FONT))?;
         document.text(&cell_id, workspace.label.clone())?;
         let fill = if workspace.active {
             pager_active_fill()
@@ -386,6 +454,8 @@ pub(crate) fn project_taskbar_height(
     document: &mut impl UiDocumentAccess,
     view: PanelView<'_>,
 ) -> Result<(), String> {
+    let logical_size = view.panel.map_or(0, |panel| panel.logical_size);
+    taskbar_scale::set_factor(taskbar_scale::scale_for_height(logical_size));
     let Some(panel) = view.panel else {
         return Ok(());
     };
@@ -394,7 +464,48 @@ pub(crate) fn project_taskbar_height(
         "taskbar",
         taskbar_css_width(panel.geometry.width, scale_percent),
         taskbar_css_height(panel.logical_size),
-    )
+    )?;
+    project_taskbar_metrics(document)
+}
+
+/// Sizes the fixed-px taskbar nodes and fonts by the taskbar factor, so the contents track the
+/// `taskbarHeight` setting along with the bar itself.
+fn project_taskbar_metrics(document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    let factor = taskbar_scale::factor();
+    let icon = scaled(TASK_ICON_LOGICAL_PX);
+    let node = taskbar_scale::node_height(factor);
+    // Children of a bordered capsule fill its content box, never its border box.
+    let inner = taskbar_scale::inner_node_height(factor);
+    let start = taskbar_scale::start_edge(factor);
+    // Explicit sizes are border-box: the capsule is a node_height square and its button the inner one.
+    document.size("start-capsule", node, node)?;
+    document.size("task-start", start, start)?;
+    document.size("task-start-icon", icon, icon)?;
+    document.size("taskbar-spacer", 0.0, node)?;
+    document.size("clock-button", scaled(CLOCK_WIDTH), inner)?;
+    document.font_size("clock-time", scaled(CLOCK_TIME_FONT))?;
+    document.font_size("clock-date", scaled(CLOCK_DATE_FONT))?;
+    document.font_size("tray-weather-temp", scaled(TRAY_WEATHER_FONT))?;
+    for slot in 1..=TASK_SLOT_COUNT {
+        document.size(
+            &format!("task-slot-{slot}"),
+            scaled(TASK_SLOT_WIDTH),
+            inner,
+        )?;
+        document.size(&format!("task-slot-{slot}-icon"), icon, icon)?;
+    }
+    let glyph = scaled(TRAY_ICON_LOGICAL_PX);
+    for id in TRAY_GLYPH_IDS {
+        document.size(id, glyph, glyph)?;
+    }
+    Ok(())
+}
+
+/// Raster edge for a task icon on `output` at the current taskbar factor. The displayed icon
+/// node is sized by the same factor, so the request matches the drawn size.
+#[must_use]
+pub fn task_icon_device_px(output: Option<&flamewm_api::display::OutputSnapshot>) -> u32 {
+    (task_icon_px(output) as f32 * taskbar_scale::factor()).round() as u32
 }
 
 /// Borrowed single-panel view. `output` and `panel` are the record's own
@@ -427,6 +538,8 @@ pub struct TaskbarItems {
     pub separate: bool,
     /// `surfaceBlurPercent`: blur applied behind each separate-mode capsule.
     pub blur_percent: u8,
+    /// Liquid Glass shadow/rim/gloss for separate-mode capsules; `None` paints none.
+    pub material: Option<flamewm_ui_core::surface::SurfaceMaterialValues>,
 }
 
 impl Default for TaskbarItems {
@@ -442,6 +555,7 @@ impl Default for TaskbarItems {
             activities: true,
             separate: true,
             blur_percent: 80,
+            material: None,
         }
     }
 }
@@ -577,7 +691,7 @@ pub fn project_panel(
                 .map(|application| application.name.as_str())
                 .filter(|name| !name.is_empty())
                 .unwrap_or(state.app_id.as_str());
-            let px = task_icon_px(view.output);
+            let px = task_icon_device_px(view.output);
             let icon = resolve_icon(icon_resolver, &state.icon_name, IconSize::new(px, px))?;
             document.image_rgb8(&icon_id, icon)?;
             document.text(&label_id, label.to_owned())?;
@@ -641,10 +755,11 @@ pub(crate) fn project_task_slots_extent(
     document: &mut impl UiDocumentAccess,
     rendered: usize,
 ) -> Result<(), String> {
+    let factor = taskbar_scale::factor();
     document.size(
         "task-slots",
-        rendered as f32 * TASK_SLOT_WIDTH,
-        TASKBAR_ELEMENT_HEIGHT,
+        taskbar_scale::task_slots_width(rendered, TASK_SLOT_WIDTH, factor),
+        taskbar_scale::node_height(factor),
     )
 }
 
@@ -656,8 +771,8 @@ pub(crate) fn project_tray_button(
 ) -> Result<(), String> {
     document.size(
         id,
-        if shown { TRAY_BUTTON_WIDTH } else { 0.0 },
-        TASKBAR_ELEMENT_HEIGHT,
+        scaled(if shown { TRAY_BUTTON_WIDTH } else { 0.0 }),
+        taskbar_scale::inner_node_height(taskbar_scale::factor()),
     )
 }
 
@@ -1141,6 +1256,64 @@ mod panel_template_tests {
         flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel artifact must decode")
     }
 
+    // Every separated-mode capsule shares one top edge (the bar's 1 px border) and one
+    // border-box height; the start capsule is square; children fill the inner box.
+    // MUTATION: restore `height:100%` on `.capsule` or `.tray-group` (resolves against the
+    // 44 px border box, so the capsule grows to y=0, h=44 over the bar border).
+    #[test]
+    fn separate_mode_nodes_share_one_top_and_height() {
+        for logical in [34_u16, 44, 72] {
+            let mut doc = decode_panel();
+            let factor = taskbar_scale::scale_for_height(logical);
+            taskbar_scale::set_factor(factor);
+            let (bar_w, bar_h) = (1350.0_f32, taskbar_css_height(logical));
+            doc.size("taskbar", bar_w, bar_h).expect("taskbar sizes");
+            project_taskbar_metrics(&mut doc).expect("metrics project");
+            project_task_slots_extent(&mut doc, 3).expect("slots extent");
+            project_pager(&mut doc, Some(&pager_snapshot(4, 0))).expect("pager projects");
+            doc.visible("workspace-pager", true).expect("pager visible");
+            project_element_backgrounds(&mut doc, TaskbarItems::default(), 3, true, true)
+                .expect("backgrounds project");
+            let rect = |id: &str| {
+                doc.layout_box_by_id(id, (bar_w, bar_h))
+                    .unwrap_or_else(|| panic!("h={logical}: node '{id}' has no layout box"))
+            };
+            let node = taskbar_scale::node_height(factor);
+            let inner = taskbar_scale::inner_node_height(factor);
+            let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+            for id in [
+                "start-capsule",
+                "task-slots",
+                "workspace-pager",
+                "tray-group",
+                "clock-capsule",
+            ] {
+                let (_, y, _, h) = rect(id);
+                assert!(
+                    close(y, 1.0) && close(h, node),
+                    "h={logical}: {id} y={y} h={h}, expected y=1 h={node}"
+                );
+            }
+            let (_, _, start_w, start_h) = rect("start-capsule");
+            assert!(
+                close(start_w, start_h),
+                "h={logical}: start capsule {start_w}x{start_h} not square"
+            );
+            let (_, start_button_y, start_button_w, start_button_h) = rect("task-start");
+            assert!(
+                close(start_button_w, inner) && close(start_button_h, inner),
+                "h={logical}: start button is not the inner square"
+            );
+            assert!(close(start_button_y, 2.0), "h={logical}: start button off-centre");
+            let (_, _, _, slot_h) = rect("task-slot-1");
+            let (_, clock_y, _, clock_h) = rect("clock-button");
+            assert!(
+                close(slot_h, inner) && close(clock_h, inner) && close(clock_y, 2.0),
+                "h={logical}: slot {slot_h} / clock {clock_h}@{clock_y} must fill the inner box"
+            );
+        }
+    }
+
     fn power_snapshot(
         available: ServiceAvailability,
         present: bool,
@@ -1385,8 +1558,8 @@ mod panel_template_tests {
         let (pager_x, pager_y, pager_width_px, pager_height) = rect(&document, "workspace-pager");
         assert_eq!(
             (pager_width_px, pager_height),
-            (51.0, 44.0),
-            "four workspaces keep today's two-column pager box"
+            (51.0, crate::taskbar_scale::node_height(1.0)),
+            "four workspaces keep today's two-column pager box at the shared node height"
         );
         for (index, cell, column, row) in [
             (0usize, 1usize, 0usize, 0usize),

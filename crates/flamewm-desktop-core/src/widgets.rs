@@ -8,11 +8,14 @@ use flamewm_api::{FlameError, FlameResult, Point, Rect};
 use crate::atomic_file::io_error;
 use crate::persistence::{hex, unhex};
 use crate::sticky::Rgb;
+use crate::widget_grid::{self, GridMetrics, Placement, Span};
 
 pub const MAX_WIDGETS: usize = 8;
 pub const MIN_WIDGET_SIZE: i32 = 64;
 pub const STATE_FILE_NAME: &str = "desktop-widgets.state";
 pub const CASCADE_STEP: i32 = 28;
+/// Per-card keys that override the global surface while `inheritSurface` is off.
+pub const SURFACE_OVERRIDE_KEYS: [&str; 3] = ["background", "backgroundOpacity", "backdropBlur"];
 
 pub const DEFAULT_CUSTOM_TEMPLATE: &str = "It's <aqua>%weekday%</aqua>\n<bold>Hope your day is going well, %username%!</bold>\n<gray>%date% · %time%</gray>\n<white><red_background> CPU %cpu% </red_background> <blue_background> RAM %memory% </blue_background>";
 
@@ -109,15 +112,25 @@ pub enum WidgetKind {
     Memory,
     Media,
     Custom,
+    Weather,
+    Calendar,
+    History,
+    Network,
+    Ring,
 }
 
 impl WidgetKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 10] = [
         Self::Clock,
         Self::Cpu,
         Self::Memory,
         Self::Media,
         Self::Custom,
+        Self::Weather,
+        Self::Calendar,
+        Self::History,
+        Self::Network,
+        Self::Ring,
     ];
 
     #[must_use]
@@ -128,6 +141,11 @@ impl WidgetKind {
             Self::Memory => "memory",
             Self::Media => "media",
             Self::Custom => "custom",
+            Self::Weather => "weather",
+            Self::Calendar => "calendar",
+            Self::History => "history",
+            Self::Network => "network",
+            Self::Ring => "ring",
         }
     }
 
@@ -144,6 +162,11 @@ impl WidgetKind {
             Self::Memory => "Memory usage",
             Self::Media => "Media player",
             Self::Custom => "Custom text",
+            Self::Weather => "Weather",
+            Self::Calendar => "Calendar month",
+            Self::History => "CPU and RAM graph",
+            Self::Network => "Network traffic",
+            Self::Ring => "Display ring",
         }
     }
 
@@ -155,6 +178,11 @@ impl WidgetKind {
             Self::Memory => "RAM in use as a circular gauge.",
             Self::Media => "Now playing, with previous, play and next.",
             Self::Custom => "Your own text with %placeholders% and <color> tags.",
+            Self::Weather => "City, current temperature and the next six forecast days.",
+            Self::Calendar => "Current month with today marked.",
+            Self::History => "Rolling CPU and memory history as a sparkline.",
+            Self::Network => "Download and upload rates as a sparkline.",
+            Self::Ring => "Circular gauge for CPU or RAM, with a percentage.",
         }
     }
 
@@ -162,21 +190,28 @@ impl WidgetKind {
     pub const fn default_size(self) -> (i32, i32) {
         match self {
             Self::Clock => (340, 150),
-            Self::Cpu | Self::Memory => (220, 110),
+            Self::Cpu | Self::Memory | Self::Ring => (220, 110),
             Self::Media => (320, 120),
             Self::Custom => (380, 170),
+            Self::Weather => (340, 190),
+            Self::Calendar => (200, 230),
+            Self::History | Self::Network => (220, 110),
         }
     }
 
     #[must_use]
     pub const fn ticks_every_second(self) -> bool {
-        matches!(self, Self::Cpu | Self::Memory | Self::Custom)
+        matches!(
+            self,
+            Self::Cpu | Self::Memory | Self::Ring | Self::History | Self::Network | Self::Custom
+        )
     }
 
     #[must_use]
     pub fn options(self) -> Vec<OptionSpec> {
         let mut options = match self {
             Self::Clock => vec![
+                OptionSpec::choice("style", "Style", &["Digital", "Analog"], 0),
                 OptionSpec::toggle("showTime", "Show time", true),
                 OptionSpec::toggle("showSeconds", "Show seconds", false),
                 OptionSpec::toggle("use24Hour", "24-hour clock", true),
@@ -191,7 +226,8 @@ impl WidgetKind {
                 OptionSpec::color("accentColor", "Date color", SKY),
                 OptionSpec::choice("align", "Alignment", &ALIGNMENTS, 1),
             ],
-            Self::Cpu | Self::Memory => vec![
+            Self::Cpu | Self::Memory | Self::Ring => vec![
+                OptionSpec::choice("metric", "Metric", &["CPU", "Memory"], 0),
                 OptionSpec::toggle("showTitle", "Show title", true),
                 OptionSpec::toggle("showPercent", "Show percentage", true),
                 OptionSpec::toggle("showDetails", "Show details", true),
@@ -218,8 +254,31 @@ impl WidgetKind {
                 OptionSpec::color("textColor", "Default color", WHITE),
                 OptionSpec::choice("align", "Alignment", &ALIGNMENTS, 0),
             ],
+            Self::Weather => vec![
+                OptionSpec::toggle("showHourly", "Show forecast row", true),
+                OptionSpec::color("textColor", "Text color", WHITE),
+                OptionSpec::color("accentColor", "Accent color", SKY),
+            ],
+            Self::History => vec![
+                OptionSpec::toggle("showCpu", "Show CPU line", true),
+                OptionSpec::toggle("showMemory", "Show RAM line", true),
+                OptionSpec::color("cpuColor", "CPU line color", SKY),
+                OptionSpec::color("memoryColor", "RAM line color", ORANGE),
+            ],
+            Self::Network => vec![
+                OptionSpec::toggle("showRx", "Show download line", true),
+                OptionSpec::toggle("showTx", "Show upload line", true),
+                OptionSpec::color("rxColor", "Download color", SKY),
+                OptionSpec::color("txColor", "Upload color", ORANGE),
+            ],
+            Self::Calendar => vec![
+                OptionSpec::toggle("showMonth", "Show month name", true),
+                OptionSpec::color("textColor", "Text color", WHITE),
+                OptionSpec::color("accentColor", "Today marker color", WHITE),
+            ],
         };
         options.extend([
+            OptionSpec::toggle("inheritSurface", "Use global surface", true),
             OptionSpec::color(
                 "background",
                 "Background",
@@ -234,11 +293,58 @@ impl WidgetKind {
                 if self == Self::Clock { 0 } else { 70 },
                 "%",
             ),
-            OptionSpec::step("radius", "Corner radius", 0, 40, 2, 16, "px"),
+            OptionSpec::step("radius", "Corner radius", 0, 40, 2, 18, "px"),
             OptionSpec::step("backdropBlur", "Backdrop blur", 0, 100, 10, 0, "%"),
         ]);
         options
     }
+}
+
+/// Sunday=0..Saturday=6 for a Gregorian date (Sakamoto's method).
+#[must_use]
+pub fn weekday_sunday_first(year: i32, month: u32, day: u32) -> u32 {
+    const OFFSETS: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = if month < 3 { year - 1 } else { year };
+    let m = month.clamp(1, 12) as usize;
+    (y + y / 4 - y / 100 + y / 400 + OFFSETS[m - 1] + day as i32).rem_euclid(7) as u32
+}
+
+#[must_use]
+pub fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// Six Sunday-first weeks of `month`; `0` marks a cell outside the month.
+#[must_use]
+pub fn calendar_weeks(year: i32, month: u32) -> [[u32; 7]; 6] {
+    let mut weeks = [[0_u32; 7]; 6];
+    let first = weekday_sunday_first(year, month, 1) as usize;
+    let total = days_in_month(year, month);
+    for day in 1..=total {
+        let cell = first + day as usize - 1;
+        weeks[cell / 7][cell % 7] = day;
+    }
+    weeks
+}
+
+/// Hour labels for the forecast row, starting at `hour` (0..=23), 12-hour style.
+#[must_use]
+pub fn hour_labels(hour: u32) -> [String; 6] {
+    std::array::from_fn(|index| {
+        let h = (hour + index as u32) % 24;
+        let (display, suffix) = match h {
+            0 => (12, "AM"),
+            1..=11 => (h, "AM"),
+            12 => (12, "PM"),
+            _ => (h - 12, "PM"),
+        };
+        format!("{display} {suffix}")
+    })
 }
 
 pub const ALIGNMENTS: [&str; 3] = ["Left", "Center", "Right"];
@@ -413,6 +519,8 @@ pub struct Widget {
     pub template: String,
     /// `None` until resolved against screen bounds (new or legacy-absolute widgets).
     anchor: Option<EdgeAnchor>,
+    /// Grid cell and span. `None` for legacy free-position widgets not yet migrated.
+    pub grid: Option<Placement>,
     values: BTreeMap<String, i64>,
 }
 
@@ -431,6 +539,7 @@ impl Widget {
                 String::new()
             },
             anchor: None,
+            grid: None,
             values: BTreeMap::new(),
         }
     }
@@ -465,12 +574,28 @@ impl Widget {
         TextAlign::from_index(self.value("align"))
     }
 
+    /// True when the card takes colour, opacity and blur from the global surface settings.
+    /// An explicit `inheritSurface` wins; otherwise a card saved with any per-card
+    /// background, opacity or blur override keeps those overrides.
+    #[must_use]
+    pub fn inherits_surface(&self) -> bool {
+        match self.values.get("inheritSurface") {
+            Some(value) => *value != 0,
+            None => !SURFACE_OVERRIDE_KEYS
+                .iter()
+                .any(|key| self.values.contains_key(*key)),
+        }
+    }
+
     pub fn set_value(&mut self, key: &str, value: i64) -> bool {
         let Some(spec) = self.spec(key) else {
             return false;
         };
         let value = spec.normalize(value);
-        if value == spec.default {
+        if key == "inheritSurface" {
+            // Stored even at its default, so a card with overrides never reads as inheriting.
+            self.values.insert(key.to_owned(), value);
+        } else if value == spec.default {
             self.values.remove(key);
         } else {
             self.values.insert(key.to_owned(), value);
@@ -526,26 +651,136 @@ impl WidgetStore {
     }
 
     pub fn add(&mut self, kind: WidgetKind, bounds: Rect) -> Option<u32> {
+        self.add_on_grid(kind, GridMetrics::for_work_area(bounds, 100))
+    }
+
+    /// Adds a widget in the first free cell of `metrics` (row-major, left side).
+    /// Returns `None` when the store is full or no cell fits the default span.
+    pub fn add_on_grid(&mut self, kind: WidgetKind, metrics: GridMetrics) -> Option<u32> {
         if self.is_full() {
             return None;
         }
+        self.layout_grid(metrics);
+        let placement = metrics.first_free(widget_grid::default_span(kind), &self.placements())?;
         let id = self
             .widgets
             .iter()
             .map(|widget| widget.id)
             .max()
             .map_or(1, |id| id.saturating_add(1));
-        let (width, height) = kind.default_size();
-        let offset = CASCADE_STEP * self.widgets.len() as i32;
-        let origin = Point::new(
-            bounds.x + (bounds.width - width) / 2 + offset,
-            bounds.y + (bounds.height - height) / 3 + offset,
-        );
-        let mut widget = Widget::new(id, kind, origin);
-        widget.rect = widget.rect.clamp_inside(bounds);
-        widget.anchor = Some(EdgeAnchor::of(widget.rect, bounds));
+        let mut widget = Widget::new(id, kind, Point::new(0, 0));
+        widget.grid = Some(placement);
+        widget.rect = metrics.rect_of(placement);
+        widget.anchor = Some(EdgeAnchor::of(widget.rect, metrics.work));
         self.widgets.push(widget);
         Some(id)
+    }
+
+    /// Grid placements of every grid-placed widget.
+    #[must_use]
+    pub fn placements(&self) -> Vec<Placement> {
+        self.widgets.iter().filter_map(|widget| widget.grid).collect()
+    }
+
+    /// Moves a grid widget to `placement` if it fits and collides with no other widget.
+    pub fn place_on_grid(&mut self, id: u32, placement: Placement, metrics: GridMetrics) -> bool {
+        if !placement.fits(metrics) {
+            return false;
+        }
+        let others: Vec<Placement> = self
+            .widgets
+            .iter()
+            .filter(|widget| widget.id != id)
+            .filter_map(|widget| widget.grid)
+            .collect();
+        if others.iter().any(|other| metrics.collides(placement, *other)) {
+            return false;
+        }
+        let Some(widget) = self.get_mut(id) else {
+            return false;
+        };
+        if widget.locked {
+            return false;
+        }
+        widget.grid = Some(placement);
+        widget.rect = metrics.rect_of(placement);
+        widget.anchor = Some(EdgeAnchor::of(widget.rect, metrics.work));
+        true
+    }
+
+    /// Fresh-profile store: the grid's default arrangement (`widget_grid::default_layout`).
+    #[must_use]
+    pub fn with_default_layout(metrics: GridMetrics) -> Self {
+        let mut store = Self::default();
+        for (kind, slot) in widget_grid::default_layout(metrics) {
+            let Some(placement) = slot else {
+                continue;
+            };
+            let mut widget = Widget::new(store.widgets.len() as u32 + 1, kind, Point::new(0, 0));
+            widget.grid = Some(placement);
+            widget.rect = metrics.rect_of(placement);
+            widget.anchor = Some(EdgeAnchor::of(widget.rect, metrics.work));
+            store.widgets.push(widget);
+        }
+        store
+    }
+
+    /// Drops a grid widget whose top-left is `origin`: snaps to the nearest cell on the
+    /// side of the drop point, or the nearest free cell when that one is taken.
+    pub fn drop_on_grid(&mut self, id: u32, origin: Point, metrics: GridMetrics) -> bool {
+        match self.preview_drop(id, origin, metrics) {
+            Some(slot) => self.place_on_grid(id, slot, metrics),
+            None => false,
+        }
+    }
+
+    /// Cell a drop at `origin` would take (the drag ghost). Equals the snapped cell when it
+    /// is free, otherwise the nearest free cell (collision push). `None` when nothing fits.
+    #[must_use]
+    pub fn preview_drop(&self, id: u32, origin: Point, metrics: GridMetrics) -> Option<Placement> {
+        let span = self.get(id).and_then(|widget| widget.grid)?.span;
+        let width = metrics.span_px(span).0;
+        let right = origin.x + width / 2 > metrics.work.x + metrics.work.width / 2;
+        let want = metrics.snap(origin, span, right);
+        metrics.nearest_free(want, &self.placements_except(id))
+    }
+
+    /// Cell a resize to `span` would take, keeping the current cell when it is free.
+    #[must_use]
+    pub fn preview_resize(&self, id: u32, span: Span, metrics: GridMetrics) -> Option<Placement> {
+        let current = self.get(id).and_then(|widget| widget.grid)?;
+        let want = Placement { span, ..current };
+        metrics.nearest_free(want, &self.placements_except(id))
+    }
+
+    fn placements_except(&self, id: u32) -> Vec<Placement> {
+        self.widgets
+            .iter()
+            .filter(|widget| widget.id != id)
+            .filter_map(|widget| widget.grid)
+            .collect()
+    }
+
+    /// Changes a grid widget's span, keeping its cell when it still fits and is free,
+    /// otherwise moving it to the nearest free cell for the new span.
+    pub fn resize_on_grid(&mut self, id: u32, span: Span, metrics: GridMetrics) -> bool {
+        let Some(current) = self.get(id).and_then(|widget| widget.grid) else {
+            return false;
+        };
+        let want = Placement { span, ..current };
+        if self.place_on_grid(id, want, metrics) {
+            return true;
+        }
+        let others: Vec<Placement> = self
+            .widgets
+            .iter()
+            .filter(|widget| widget.id != id)
+            .filter_map(|widget| widget.grid)
+            .collect();
+        match metrics.nearest_free(want, &others) {
+            Some(slot) => self.place_on_grid(id, slot, metrics),
+            None => false,
+        }
     }
 
     pub fn remove(&mut self, id: u32) -> bool {
@@ -585,13 +820,42 @@ impl WidgetStore {
     /// widget keeps its distance from the right edge when the screen changes.
     /// Unresolved (legacy absolute) anchors pick the nearest side here.
     pub fn clamp_all(&mut self, bounds: Rect) {
+        self.layout_grid(GridMetrics::for_work_area(bounds, 100));
+    }
+
+    /// Lays every widget out on `metrics`. Grid widgets reflow to their cells (keeping
+    /// their side); legacy free-position widgets snap to the nearest free cell. A legacy
+    /// widget with no free cell keeps its clamped pixel rect (non-destructive).
+    pub fn layout_grid(&mut self, metrics: GridMetrics) {
+        let bounds = metrics.work;
+        let placed_items: Vec<Placement> = self.placements();
+        let mut slots = metrics.reflow(&placed_items).into_iter();
         for widget in &mut self.widgets {
-            let anchor = *widget
-                .anchor
-                .get_or_insert_with(|| EdgeAnchor::of(widget.rect, bounds));
-            let x = anchor.x_in(widget.rect.width, bounds);
-            widget.rect = Rect::new(x, widget.rect.y, widget.rect.width, widget.rect.height)
-                .clamp_inside(bounds);
+            if widget.grid.is_some() {
+                widget.grid = slots.next().flatten();
+            }
+        }
+        let mut placed = self.placements();
+        for widget in &mut self.widgets {
+            if widget.grid.is_none() {
+                let span = widget_grid::default_span(widget.kind);
+                if let Some(slot) = metrics.migrate(widget.rect, span, &placed) {
+                    placed.push(slot);
+                    widget.grid = Some(slot);
+                }
+            }
+        }
+        for widget in &mut self.widgets {
+            widget.rect = match widget.grid {
+                Some(placement) => metrics.rect_of(placement),
+                None => {
+                    let x = widget
+                        .anchor
+                        .map_or(widget.rect.x, |anchor| anchor.x_in(widget.rect.width, bounds));
+                    Rect::new(x, widget.rect.y, widget.rect.width, widget.rect.height)
+                        .clamp_inside(bounds)
+                }
+            };
             widget.anchor = Some(EdgeAnchor::of(widget.rect, bounds));
         }
     }
@@ -662,8 +926,18 @@ pub fn serialize(store: &WidgetStore) -> String {
         let anchor = widget.anchor.map_or_else(String::new, |anchor| {
             format!("{}{}", if anchor.right { 'r' } else { 'l' }, anchor.gap)
         });
+        let grid = widget.grid.map_or_else(String::new, |cell| {
+            format!(
+                "{},{},{},{},{}",
+                cell.col,
+                cell.row,
+                cell.span.w,
+                cell.span.h,
+                if cell.right { 'r' } else { 'l' }
+            )
+        });
         output.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             widget.id,
             widget.kind.id(),
             widget.rect.x,
@@ -673,7 +947,8 @@ pub fn serialize(store: &WidgetStore) -> String {
             i32::from(widget.locked),
             hex(widget.template.as_bytes()),
             anchor,
-            values
+            values,
+            grid
         ));
     }
     output
@@ -691,11 +966,14 @@ pub fn parse(text: &str) -> FlameResult<WidgetStore> {
         }
         let fields: Vec<&str> = line.split('\t').collect();
         // 9 fields: legacy record without an edge anchor (resolved on first clamp).
-        let (anchor_field, values_field) = match fields.len() {
-            9 => ("", fields[8]),
-            10 => (fields[8], fields[9]),
+        // 11 fields: current record with a trailing grid cell (absent in older records).
+        let (anchor_field, values_field, grid_field) = match fields.len() {
+            9 => ("", fields[8], ""),
+            10 => (fields[8], fields[9], ""),
+            11 => (fields[8], fields[9], fields[10]),
             _ => return Err(FlameError::invalid("invalid desktop widget record")),
         };
+        let grid = parse_grid(grid_field)?;
         let anchor = match anchor_field.chars().next() {
             None => None,
             Some(side @ ('l' | 'r')) => Some(EdgeAnchor {
@@ -733,6 +1011,7 @@ pub fn parse(text: &str) -> FlameResult<WidgetStore> {
         widget.locked = locked;
         widget.template = template;
         widget.anchor = anchor;
+        widget.grid = grid;
         for pair in values_field.split(',').filter(|pair| !pair.is_empty()) {
             let (key, value) = pair
                 .split_once('=')
@@ -742,6 +1021,31 @@ pub fn parse(text: &str) -> FlameResult<WidgetStore> {
         store.widgets.push(widget);
     }
     Ok(store)
+}
+
+/// Parses `col,row,w,h,side` (side `l` or `r`); an empty field is no grid cell.
+fn parse_grid(field: &str) -> FlameResult<Option<Placement>> {
+    if field.is_empty() {
+        return Ok(None);
+    }
+    let parts: Vec<&str> = field.split(',').collect();
+    if parts.len() != 5 {
+        return Err(FlameError::invalid("invalid desktop widget grid cell"));
+    }
+    let right = match parts[4] {
+        "l" => false,
+        "r" => true,
+        _ => return Err(FlameError::invalid("invalid desktop widget grid side")),
+    };
+    Ok(Some(Placement {
+        col: number(parts[0])?,
+        row: number(parts[1])?,
+        span: Span {
+            w: number(parts[2])?,
+            h: number(parts[3])?,
+        },
+        right,
+    }))
 }
 
 fn number<T: std::str::FromStr>(value: &str) -> FlameResult<T> {
@@ -801,14 +1105,15 @@ mod tests {
     }
 
     #[test]
-    fn store_caps_widgets_and_cascades_new_ones() {
+    fn store_caps_widgets_and_places_new_ones_in_free_cells() {
         let mut store = WidgetStore::default();
         let first = store.add(WidgetKind::Clock, bounds()).expect("first");
         let second = store.add(WidgetKind::Clock, bounds()).expect("second");
         assert_ne!(first, second);
         let a = store.get(first).expect("a").rect;
         let b = store.get(second).expect("b").rect;
-        assert_eq!((b.x - a.x, b.y - a.y), (CASCADE_STEP, CASCADE_STEP));
+        assert_ne!(a.origin(), b.origin());
+        assert!(!a.intersects(b));
         while store.add(WidgetKind::Cpu, bounds()).is_some() {}
         assert_eq!(store.widgets().len(), MAX_WIDGETS);
         assert!(store.remove(first));
@@ -852,7 +1157,7 @@ mod tests {
         store.toggle_lock(custom);
         let text = serialize(&store);
         assert_eq!(parse(&text).expect("parse"), store);
-        let extra = format!("{text}9\tweather\t0\t0\t100\t100\t0\t\t\n");
+        let extra = format!("{text}9\tsparkle\t0\t0\t100\t100\t0\t\t\n");
         assert_eq!(parse(&extra).expect("unknown kind").widgets().len(), 2);
         assert!(parse("v9\n").is_err());
         assert!(parse("v1\n1\tclock\t0\t0\t10\t10\t2\t\t\n").is_err());
@@ -862,19 +1167,25 @@ mod tests {
     fn right_anchored_widget_keeps_its_gap_when_the_screen_shrinks() {
         let mut store = WidgetStore::default();
         let id = store.add(WidgetKind::Cpu, bounds()).expect("id");
-        store.get_mut(id).expect("widget").rect = Rect::new(1600, 50, 220, 110);
-        store.anchor_to(id, bounds());
+        let metrics = GridMetrics::for_work_area(bounds(), 100);
+        let right_cell = Placement {
+            col: 0,
+            row: 0,
+            span: Span::SINGLE,
+            right: true,
+        };
+        assert!(store.place_on_grid(id, right_cell, metrics));
+        store.clamp_all(Rect::new(0, 0, 1350, 641));
+        let widget = store.get(id).expect("widget");
+        assert_eq!(widget.rect.right(), 1350 - 16);
+        assert_eq!(widget.rect.y, 16);
         assert_eq!(
-            store.get(id).expect("widget").anchor,
+            widget.anchor,
             Some(EdgeAnchor {
                 right: true,
-                gap: 100,
+                gap: 16,
             })
         );
-        store.clamp_all(Rect::new(0, 0, 1350, 641));
-        let rect = store.get(id).expect("widget").rect;
-        assert_eq!((rect.x, rect.right()), (1030, 1250));
-        assert_eq!(rect.y, 50);
     }
 
     #[test]
@@ -884,18 +1195,19 @@ mod tests {
         store.get_mut(id).expect("widget").rect = Rect::new(40, 30, 340, 150);
         store.anchor_to(id, bounds());
         store.clamp_all(Rect::new(0, 0, 1350, 641));
-        assert_eq!(store.get(id).expect("widget").rect.x, 40);
+        // Grid cells are the layout: a left widget sits in the first left cell.
+        assert_eq!(store.get(id).expect("widget").rect.x, 16);
 
         // Legacy 9-field record with an absolute x on the right half of the old screen.
         let legacy = "v1\n3\tcpu\t1500\t20\t220\t110\t0\t\tbackdropBlur=40\n";
         let mut loaded = parse(legacy).expect("legacy");
         loaded.clamp_all(Rect::new(0, 0, 1350, 641));
         let widget = loaded.get(3).expect("widget");
-        assert_eq!(widget.rect.right(), 1350);
+        assert_eq!(widget.rect.right(), 1350 - 16);
         assert_eq!(widget.value("backdropBlur"), 40);
         assert_eq!(
             serialize(&loaded).lines().nth(1).expect("record").split('\t').nth(8),
-            Some("r0")
+            Some("r16")
         );
     }
 
@@ -918,5 +1230,96 @@ mod tests {
         assert_eq!(clock.align(), TextAlign::Center);
         let cpu = Widget::new(2, WidgetKind::Cpu, Point::new(0, 0));
         assert_eq!(cpu.align(), TextAlign::Left);
+    }
+
+    #[test]
+    fn calendar_weeks_place_first_day_and_month_length() {
+        // 2026-01-01 is a Thursday; January has 31 days.
+        let jan = calendar_weeks(2026, 1);
+        assert_eq!(jan[0], [0, 0, 0, 0, 1, 2, 3]);
+        assert_eq!(jan[4], [25, 26, 27, 28, 29, 30, 31]);
+        assert_eq!(jan[5], [0; 7]);
+        // 2028 is a leap year: February has 29 days and starts on a Tuesday.
+        let feb = calendar_weeks(2028, 2);
+        assert_eq!(feb[0], [0, 0, 1, 2, 3, 4, 5]);
+        assert_eq!(days_in_month(2028, 2), 29);
+        assert_eq!(days_in_month(2100, 2), 28);
+        assert_eq!(days_in_month(2000, 2), 29);
+        let total: u32 = calendar_weeks(2026, 10)
+            .iter()
+            .flatten()
+            .filter(|day| **day != 0)
+            .count() as u32;
+        assert_eq!(total, 31);
+    }
+
+    #[test]
+    fn hour_labels_wrap_midnight_and_use_twelve_hour_style() {
+        assert_eq!(
+            hour_labels(9),
+            ["9 AM", "10 AM", "11 AM", "12 PM", "1 PM", "2 PM"]
+        );
+        assert_eq!(hour_labels(22)[2], "12 AM");
+        assert_eq!(hour_labels(0)[0], "12 AM");
+    }
+}
+
+#[cfg(test)]
+mod surface_inheritance_tests {
+    use super::*;
+
+    fn card(kind: WidgetKind) -> Widget {
+        Widget::new(1, kind, Point { x: 0, y: 0 })
+    }
+
+    #[test]
+    fn new_cards_inherit_the_global_surface() {
+        assert!(card(WidgetKind::Clock).inherits_surface());
+        assert!(card(WidgetKind::Cpu).inherits_surface());
+    }
+
+    #[test]
+    fn explicit_toggle_off_keeps_per_card_overrides_and_back_on_restores_inheritance() {
+        let mut widget = card(WidgetKind::Clock);
+        assert!(widget.set_value("inheritSurface", 0));
+        assert!(!widget.inherits_surface());
+        assert!(widget.set_value("backdropBlur", 40));
+        assert_eq!(widget.value("backdropBlur"), 40);
+        assert!(widget.set_value("inheritSurface", 1));
+        assert!(widget.inherits_surface());
+    }
+
+    #[test]
+    fn legacy_card_with_saved_background_override_does_not_inherit() {
+        let mut widget = card(WidgetKind::Custom);
+        assert!(widget.set_value("background", 5));
+        assert!(!widget.inherits_surface());
+        assert_eq!(widget.value("background"), 5);
+    }
+
+    #[test]
+    fn override_key_round_trips_through_persist_format() {
+        let mut widget = card(WidgetKind::Media);
+        widget.set_value("inheritSurface", 0);
+        assert!(widget.stored_values().contains_key("inheritSurface"));
+        assert_eq!(widget.stored_values().get("inheritSurface"), Some(&0));
+    }
+
+    #[test]
+    fn history_kind_exposes_line_toggles_and_fits_one_cell() {
+        assert_eq!(WidgetKind::from_id("history"), Some(WidgetKind::History));
+        let keys: Vec<_> = WidgetKind::History.options().iter().map(|spec| spec.key).collect();
+        assert!(keys.contains(&"showCpu") && keys.contains(&"showMemory"));
+        let widget = Widget::new(1, WidgetKind::History, Point::new(0, 0));
+        assert!(widget.inherits_surface());
+    }
+
+    #[test]
+    fn ring_kind_defaults_to_cpu_and_offers_memory() {
+        assert_eq!(WidgetKind::from_id("ring"), Some(WidgetKind::Ring));
+        let widget = Widget::new(1, WidgetKind::Ring, Point::new(0, 0));
+        assert_eq!(widget.value("metric"), 0);
+        assert!(widget.spec("metric").is_some());
+        assert!(widget.inherits_surface());
     }
 }

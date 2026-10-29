@@ -25,6 +25,7 @@ use crate::services::panels::PanelService;
 use crate::services::session::SessionService;
 use crate::services::settings::SettingsService;
 use crate::services::shortcuts::{ShortcutService, effective_registry};
+use crate::services::weather::WeatherFeedService;
 use crate::services::windows::WindowService;
 use crate::services::workspaces::{WorkspaceService, count_store_path};
 use crate::shortcuts::ShortcutRegistry;
@@ -49,6 +50,7 @@ pub struct PlatformHost<E: EnginePorts> {
     session: SessionService,
     background: BackgroundService,
     system: SystemService,
+    weather: WeatherFeedService,
 }
 
 impl<E: EnginePorts> PlatformHost<E> {
@@ -68,6 +70,7 @@ impl<E: EnginePorts> PlatformHost<E> {
             session: SessionService,
             background: BackgroundService::default(),
             system: SystemService::default(),
+            weather: WeatherFeedService::default(),
         }
     }
 
@@ -628,6 +631,17 @@ impl<E: EnginePorts> PlatformHost<E> {
 
     pub fn session_action(&mut self, action: SessionAction) -> FlameResult<()> {
         self.session.perform(&mut self.engine, action)
+    }
+
+    /// Latest weather payload published by the shell (revision 0 when none was published).
+    #[must_use]
+    pub fn weather_feed_snapshot(&self) -> flamewm_api::weather::WeatherFeedSnapshot {
+        self.weather.snapshot()
+    }
+
+    /// Caches a shell-published weather payload; `true` when the cached payload changed.
+    pub fn publish_weather_feed(&mut self, payload: String) -> FlameResult<bool> {
+        self.weather.publish(payload)
     }
 
     #[must_use]

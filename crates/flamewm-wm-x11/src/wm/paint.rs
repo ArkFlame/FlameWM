@@ -99,7 +99,7 @@ impl<C: Connection> Wm<'_, C> {
             let Some((frame, outer, floating)) = self
                 .clients
                 .get(&client)
-                .map(|state| (state.frame, state.outer, state.is_floating()))
+                .map(|state| (state.frame, state.outer, state.has_rounded_frame()))
             else {
                 continue;
             };
@@ -190,7 +190,7 @@ impl<C: Connection> Wm<'_, C> {
                         pressed: self.pressed_control(client),
                         maximized: state.is_maximized(),
                         fullscreen: state.is_fullscreen(),
-                        floating: state.is_floating(),
+                        floating: state.has_rounded_frame(),
                         tokens: self.decoration_tokens,
                     },
                     chrome_runtime::ChromeIdentity {

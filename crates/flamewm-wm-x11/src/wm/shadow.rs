@@ -325,7 +325,7 @@ impl<C: Connection> Wm<'_, C> {
             wanted.extend(
                 self.clients
                     .values()
-                    .filter(|c| c.is_floating() && c.visible_on(self.current_workspace))
+                    .filter(|c| c.has_rounded_frame() && c.visible_on(self.current_workspace))
                     .map(|c| WantedShadow {
                         frame: c.frame,
                         outer: c.outer,
@@ -613,7 +613,24 @@ impl<C: Connection> Wm<'_, C> {
     ) -> Result<Option<(shadow_rubber::ShadowBands, Pixmap)>, ReplyOrIdError> {
         let root = self.screen().root;
         let rect = shadow::shadow_rect(outer);
-        let Some(raw) = self.desktop_snapshot(rect, outer)? else {
+        // The root readback must not contain any shadow's pixels: a cast read through another
+        // cast would darken twice. Unmap every shadow for the one read, then map the others back.
+        // Only refreshes reach here, so an idle desktop does no extra work.
+        let others: Vec<Window> = self
+            .frame_shadows
+            .values()
+            .map(|held| held.win)
+            .filter(|&other| other != win)
+            .collect();
+        self.conn.unmap_window(win)?;
+        for &other in &others {
+            self.conn.unmap_window(other)?;
+        }
+        let snapshot = self.desktop_snapshot(rect, outer);
+        for &other in &others {
+            self.conn.map_window(other)?;
+        }
+        let Some(raw) = snapshot? else {
             return Ok(None);
         };
         let raw_bands = shadow_rubber::ShadowBands::capture_rounded(&raw, rect, outer, radius);
@@ -817,23 +834,28 @@ impl<C: Connection> Wm<'_, C> {
     /// frame covers and anything outside the desktop frame stay zero (never visible). `None`
     /// without a desktop frame, or when the frame was replaced between its publish and this read
     /// (its property change re-shades).
-    fn desktop_snapshot(&self, rect: Rect, outer: Rect) -> Result<Option<Vec<u8>>, ReplyOrIdError> {
-        let Some(desktop) = self.shadow_scene.desktop else {
+    fn desktop_snapshot(&self, rect: Rect, _outer: Rect) -> Result<Option<Vec<u8>>, ReplyOrIdError> {
+        // Only with a presented desktop frame (the usable gate); the pixels come from the root.
+        if self.shadow_scene.desktop.is_none() {
             return Ok(None);
-        };
+        }
         let (w, h) = (rect.width.max(1) as usize, rect.height.max(1) as usize);
-        let mut pixels = vec![0u8; w * h * 4];
-        let right = (outer.x + outer.width as i32 - rect.x).clamp(0, w as i32);
-        let bottom = (outer.y + outer.height as i32 - rect.y).clamp(0, h as i32);
-        let bands = [
-            (right, 0, w as i32 - right, bottom),
-            (0, bottom, w as i32, h as i32 - bottom),
-        ];
+        // Start from the desktop colour: an uncovered region must not stay 0x000000.
+        let mut pixels = crate::frame::shadow::snapshot_base(w, h);
+        // Read the whole shadow rect: the frame's rounded corners leave notches inside `outer`
+        // that a cast-only read never fills, and those notches would keep the base colour.
+        let bands = [crate::frame::shadow::snapshot_read_rect(rect)];
         for (bx, by, bw, bh) in bands {
-            let x0 = (rect.x + bx).max(desktop.x);
-            let y0 = (rect.y + by).max(desktop.y);
-            let x1 = (rect.x + bx + bw).min(desktop.x + desktop.width as i32);
-            let y1 = (rect.y + by + bh).min(desktop.y + desktop.height as i32);
+            // Root contents under the shadow: desktop, widget windows and anything stacked below
+            // this shadow. The screen bounds the read; uncovered parts keep the base colour.
+            let (sw, sh) = (
+                i32::from(self.screen().width_in_pixels),
+                i32::from(self.screen().height_in_pixels),
+            );
+            let x0 = (rect.x + bx).max(0);
+            let y0 = (rect.y + by).max(0);
+            let x1 = (rect.x + bx + bw).min(sw);
+            let y1 = (rect.y + by + bh).min(sh);
             if x1 <= x0 || y1 <= y0 {
                 continue;
             }
@@ -842,9 +864,9 @@ impl<C: Connection> Wm<'_, C> {
                 .conn
                 .get_image(
                     ImageFormat::Z_PIXMAP,
-                    desktop.pixmap,
-                    (x0 - desktop.x) as i16,
-                    (y0 - desktop.y) as i16,
+                    self.screen().root,
+                    x0 as i16,
+                    y0 as i16,
                     cw as u16,
                     ch as u16,
                     u32::MAX,

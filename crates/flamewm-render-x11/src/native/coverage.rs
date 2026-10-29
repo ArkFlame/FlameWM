@@ -61,6 +61,12 @@ pub fn build_coverage_scaled(
                 color,
                 radius: r,
                 ..
+            }
+            | PaintCommand::SurfaceRim {
+                rect,
+                color,
+                radius: r,
+                ..
             } => {
                 if color.a == 0 {
                     continue;
@@ -77,7 +83,8 @@ pub fn build_coverage_scaled(
             // by nothing here: text does not grow the shape mask.
             PaintCommand::Text { .. }
             | PaintCommand::TextShadow { .. }
-            | PaintCommand::NodeBackdrop { .. } => {}
+            | PaintCommand::NodeBackdrop { .. }
+            | PaintCommand::SurfaceShadow { .. } => {}
             PaintCommand::PushClip { rect } => clips.push(scale_rect(*rect)),
             PaintCommand::PopClip => {
                 clips.pop();

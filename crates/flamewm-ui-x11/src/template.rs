@@ -111,6 +111,15 @@ pub trait UiDocumentAccess {
     fn node_backdrop(&mut self, _id: &str, _blur_percent: Option<u8>) -> Result<(), String> {
         Ok(())
     }
+    /// Liquid Glass drop shadow and rim for a surface root. `None` clears it; documents without
+    /// material support ignore it.
+    fn surface_material(
+        &mut self,
+        _id: &str,
+        _material: Option<flamewm_ui_core::surface::SurfaceMaterialValues>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String>;
     fn background_clear(&mut self, id: &str) -> Result<(), String>;
     fn border_clear(&mut self, id: &str) -> Result<(), String>;
@@ -350,6 +359,23 @@ macro_rules! document_access_methods {
 
         fn node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
             self.document.set_node_backdrop(id, blur_percent)
+        }
+
+        fn surface_material(
+            &mut self,
+            id: &str,
+            material: Option<flamewm_ui_core::surface::SurfaceMaterialValues>,
+        ) -> Result<(), String> {
+            self.document.set_surface_material(
+                id,
+                material.map(|values| flamewm_render_core::SurfaceMaterial {
+                    shadow_spread: values.shadow_spread,
+                    shadow_peak: values.shadow_peak,
+                    shadow_offset_y: 8.0,
+                    rim_fade_percent: values.rim_fade_percent,
+                    gloss_alpha: values.gloss_alpha,
+                }),
+            )
         }
 
         fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {

@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::memory::{
     MemoryRenderBuffer, MemoryRenderBufferRenderElement,
 };
@@ -15,8 +14,10 @@ use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
 };
+use smithay::backend::renderer::element::{Element, Kind};
 use smithay::backend::renderer::gles::GlesTexture;
 use smithay::backend::renderer::glow::GlowRenderer;
+use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
 use smithay::backend::winit::WinitGraphicsBackend;
 use smithay::desktop::utils::send_frames_surface_tree;
@@ -58,13 +59,24 @@ pub struct Decorations {
     parts: HashMap<WindowId, ChromeBuffer>,
     /// Blurred desktop layer (straight RGBA, output-sized) that translucent titlebars blend over.
     desktop: Option<DesktopBackdrop>,
+    /// Blurred desktop under override-redirect XWayland surfaces, keyed by their rect. Cleared
+    /// with the desktop capture it was cropped from.
+    surfaces: HashMap<(i32, i32, i32, i32), MemoryRenderBuffer>,
+}
+
+/// Opaque ARGB8888 bytes (little-endian B, G, R, A) from straight RGBA pixels.
+fn opaque_argb_bytes(rgba: &[u8]) -> Vec<u8> {
+    rgba.chunks_exact(4)
+        .flat_map(|px| [px[2], px[1], px[0], 255])
+        .collect()
 }
 
 struct DesktopBackdrop {
     width: usize,
     height: usize,
-    /// Number of desktop-layer X11 surfaces the capture saw; a change means recapture.
-    below: usize,
+    /// Commit counter of every desktop-layer element the capture saw. A wallpaper repaint is a
+    /// new commit on its surface, so it changes this and triggers a recapture.
+    commits: Vec<CommitCounter>,
     pixels: Vec<u8>,
 }
 
@@ -79,20 +91,21 @@ struct ChromeBuffer {
 }
 
 impl Decorations {
-    /// Whether the cached desktop capture still matches the output and the desktop layer.
-    fn desktop_current(&self, size: (usize, usize), below: usize) -> bool {
-        self.desktop
-            .as_ref()
-            .is_some_and(|d| (d.width, d.height, d.below) == (size.0, size.1, below))
+    /// Whether the cached desktop capture still matches the output and the desktop layer's commits.
+    fn desktop_current(&self, size: (usize, usize), commits: &[CommitCounter]) -> bool {
+        self.desktop.as_ref().is_some_and(|d| {
+            d.width == size.0 && d.height == size.1 && d.commits.as_slice() == commits
+        })
     }
 
-    /// Replaces the desktop capture. Titlebars baked from the old one are rebuilt.
-    fn set_desktop(&mut self, size: (usize, usize), below: usize, pixels: Vec<u8>) {
+    /// Replaces the desktop capture. Titlebars and surface backdrops baked from the old one are rebuilt.
+    fn set_desktop(&mut self, size: (usize, usize), commits: Vec<CommitCounter>, pixels: Vec<u8>) {
         self.parts.clear();
+        self.surfaces.clear();
         self.desktop = Some(DesktopBackdrop {
             width: size.0,
             height: size.1,
-            below,
+            commits,
             pixels,
         });
     }
@@ -181,6 +194,42 @@ impl Decorations {
         .map(Elem::Memory)
     }
 
+    /// Blurred desktop under an override-redirect surface at `rect`. Placed beneath the surface,
+    /// so only its translucent pixels show it; opaque pixels cover it.
+    fn surface_backdrop(&mut self, renderer: &mut GlowRenderer, rect: Rect) -> Option<Elem> {
+        if rect.w <= 0 || rect.h <= 0 || rect.w > 32_767 || rect.h > 32_767 {
+            return None;
+        }
+        let key = (rect.x, rect.y, rect.w, rect.h);
+        if !self.surfaces.contains_key(&key) {
+            // Bounded: a menu moved around leaves stale rects behind, so start over when full.
+            if self.surfaces.len() >= 32 {
+                self.surfaces.clear();
+            }
+            let pixels = self.crop((rect.x, rect.y), rect.w as usize, rect.h as usize)?;
+            let buffer = MemoryRenderBuffer::from_slice(
+                &opaque_argb_bytes(&pixels),
+                Fourcc::Argb8888,
+                (rect.w, rect.h),
+                1,
+                Transform::Normal,
+                None,
+            );
+            self.surfaces.insert(key, buffer);
+        }
+        MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            Point::from((f64::from(rect.x), f64::from(rect.y))),
+            self.surfaces.get(&key)?,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        )
+        .ok()
+        .map(Elem::Memory)
+    }
+
     fn retain(&mut self, live: impl Fn(WindowId) -> bool) {
         self.parts.retain(|window, _| live(*window));
     }
@@ -257,6 +306,17 @@ fn glyph(c: char) -> [u8; 7] {
     }
 }
 
+/// Top-corner radius of a Wayland titlebar. The skin decoration owner supplies the system
+/// Rounded radius for floating (non-maximized) windows, scaled from the logical titlebar to
+/// the physical titlebar height. Maximized windows stay square. Clamped to half the width.
+fn titlebar_corner_radius(maximized: bool, width: i32, height: i32) -> i32 {
+    use flamewm_skin::recipes::decoration::{DecorationStyle, corner_radius};
+    let logical = u32::from(corner_radius(!maximized, DecorationStyle::Rounded));
+    let logical_h = u32::from(flamewm_skin::recipes::window_chrome::WINDOW_CHROME.metrics.titlebar);
+    let scaled = (logical * height.max(0) as u32 + logical_h / 2) / logical_h.max(1);
+    (scaled as i32).min(width.max(0) / 2)
+}
+
 #[cfg(test)]
 fn chrome_pixels(
     width: i32,
@@ -284,9 +344,7 @@ fn chrome_pixels_over(
     let mut out = vec![0u8; w * h * 4];
     // Rounded top corners use alpha, not an opaque bounding rectangle. The actual pixels
     // underneath remain visible via Smithay's compositor.
-    let radius = flamewm_skin::recipes::window_chrome::WINDOW_CHROME
-        .metrics
-        .radius as i32;
+    let radius = titlebar_corner_radius(maximized, w as i32, h as i32);
     for y in 0..h as i32 {
         for x in 0..w as i32 {
             let corner = if y < radius && x < radius {
@@ -486,6 +544,19 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                 geometry.loc.x,
                 geometry.loc.y,
             ));
+            // Translucent X11 menus and tooltips blur the desktop beneath them, as titlebars do.
+            // Docks (struts) are excluded: they are not glass and the taskbar is opaque.
+            if entry.strut.is_none() {
+                let rect = Rect::new(
+                    geometry.loc.x,
+                    geometry.loc.y,
+                    geometry.size.w,
+                    geometry.size.h,
+                );
+                if let Some(backdrop) = decorations.surface_backdrop(renderer, rect) {
+                    out.push(backdrop);
+                }
+            }
         }
     }
 
@@ -590,23 +661,20 @@ fn desktop_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
 }
 
 /// Captures and blurs the desktop layer when the cached capture is missing, the output changed
-/// size, or the number of desktop X11 surfaces changed. Steady-state frames read nothing back.
-/// A wallpaper change alone does not change those inputs, so it shows after the next such change.
-fn refresh_desktop_backdrop(
+/// size, or any desktop-layer element committed (a wallpaper repaint, a surface added or removed).
+/// Steady-state frames read nothing back; they only compare commit counters. Called by both the
+/// winit and DRM render paths before they build the frame.
+pub(crate) fn refresh_desktop_backdrop(
     state: &State,
     renderer: &mut GlowRenderer,
     size: Size<i32, Physical>,
 ) -> Result<(), Box<dyn Error>> {
-    let below = state.unmanaged.iter().filter(|entry| entry.below).count();
     let dims = (size.w.max(1) as usize, size.h.max(1) as usize);
-    if state
-        .decorations
-        .borrow()
-        .desktop_current(dims, below)
-    {
+    let elements = desktop_elements(state, renderer);
+    let commits: Vec<CommitCounter> = elements.iter().map(Element::current_commit).collect();
+    if state.decorations.borrow().desktop_current(dims, &commits) {
         return Ok(());
     }
-    let elements = desktop_elements(state, renderer);
     let buffer_size: Size<i32, Buffer> = Size::from((size.w, size.h));
     let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
     let mut tracker = OutputDamageTracker::from_output(&state.output);
@@ -639,7 +707,7 @@ fn refresh_desktop_backdrop(
     state
         .decorations
         .borrow_mut()
-        .set_desktop(dims, below, blurred.pixels);
+        .set_desktop(dims, commits, blurred.pixels);
     Ok(())
 }
 
@@ -834,6 +902,33 @@ mod decoration_tests {
     }
 
     #[test]
+    fn titlebar_corner_radius_is_system_radius_clamped_and_square_when_maximized() {
+        assert_eq!(titlebar_corner_radius(false, 200, 31), 24, "system Rounded radius");
+        assert_eq!(titlebar_corner_radius(true, 200, 31), 0, "maximized is square");
+        assert_eq!(titlebar_corner_radius(false, 10, 31), 5, "clamped to half width");
+        assert_eq!(titlebar_corner_radius(false, 200, 0), 0, "zero height");
+    }
+
+    #[test]
+    fn titlebar_top_corners_are_antialiased_at_system_radius() {
+        let pixels = chrome_pixels(200, true, false, None, "Terminal");
+        let alpha = |x: usize, y: usize| pixels[(y * 200 + x) * 4 + 3];
+        assert_eq!(alpha(0, 0), 0, "outer corner pixel is outside the arc");
+        let partial = (0..24).any(|y| (0..24).any(|x| {
+            let a = alpha(x, y);
+            a > 0 && a < SURFACE_ALPHA
+        }));
+        assert!(partial, "the 24px arc has partially covered pixels");
+        assert_eq!(alpha(24, 1), SURFACE_ALPHA, "straight top edge past the radius is full");
+    }
+
+    #[test]
+    fn maximized_titlebar_corner_is_not_cut() {
+        let pixels = chrome_pixels(200, true, true, None, "Terminal");
+        assert!(pixels[3] > 0, "square corner stays opaque");
+    }
+
+    #[test]
     fn close_hover_is_local_to_control_and_keeps_alpha_corners() {
         let idle = chrome_pixels(400, true, false, None, "Terminal");
         let hover = chrome_pixels(400, true, false, Some(Button::Close), "Terminal");
@@ -847,6 +942,21 @@ mod decoration_tests {
             hover[index(10, 15)..index(10, 15) + 4]
         );
         assert_eq!(hover[3], 0, "antialiased corners must not become opaque");
+    }
+
+    #[test]
+    fn desktop_capture_is_reused_until_size_or_commits_change() {
+        let commit = |n: usize| CommitCounter::from(n);
+        let mut cache = Decorations::default();
+        assert!(!cache.desktop_current((4, 3), &[]), "empty cache must miss");
+        cache.set_desktop((4, 3), vec![commit(1), commit(7)], vec![0; 4 * 3 * 4]);
+        assert!(cache.desktop_current((4, 3), &[commit(1), commit(7)]));
+        // Wallpaper repaint: same surfaces and size, one surface committed again.
+        assert!(!cache.desktop_current((4, 3), &[commit(1), commit(8)]));
+        // Surface added or removed on the desktop layer.
+        assert!(!cache.desktop_current((4, 3), &[commit(1)]));
+        // Output resized.
+        assert!(!cache.desktop_current((5, 3), &[commit(1), commit(7)]));
     }
 
     #[test]
@@ -1031,4 +1141,29 @@ fn packaged_root() -> std::path::PathBuf {
         })
         .filter(|root| root.join("assets").is_dir())
         .unwrap_or(manifest)
+}
+
+#[cfg(test)]
+mod surface_backdrop_tests {
+    use super::*;
+
+    #[test]
+    fn opaque_argb_bytes_swap_rgb_to_little_endian_bgra() {
+        assert_eq!(
+            opaque_argb_bytes(&[0x11, 0x22, 0x33, 0x00]),
+            vec![0x33, 0x22, 0x11, 0xff]
+        );
+    }
+
+    #[test]
+    fn crop_clamps_to_the_output_and_keeps_desktop_pixels() {
+        // 2x2 desktop: pixel (x, y) has R = 10 * (2y + x) + 1.
+        let pixels: Vec<u8> = (0..4u8).flat_map(|i| [10 * i + 1, 0, 0, 255]).collect();
+        let mut decorations = Decorations::default();
+        decorations.set_desktop((2, 2), Vec::new(), pixels);
+        // A 2x2 crop at (1, 1) reads (1,1), then clamps the rest to the bottom-right pixel.
+        let crop = decorations.crop((1, 1), 2, 2).expect("desktop set");
+        let reds: Vec<u8> = crop.chunks_exact(4).map(|px| px[0]).collect();
+        assert_eq!(reds, vec![31, 31, 31, 31]);
+    }
 }

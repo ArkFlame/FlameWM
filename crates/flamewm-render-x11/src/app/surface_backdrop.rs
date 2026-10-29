@@ -375,13 +375,11 @@ pub(crate) fn node_backdrop_words(
     for (index, word) in words.iter_mut().enumerate() {
         let px = cx + (index as u32 % width) as i32;
         let py = cy + (index as u32 / width) as i32;
+        // The blurred wallpaper is opaque inside the rounded shape. The node's translucent fill
+        // (`opacity` is its alpha) is painted over it by the caller, so scaling the blur by that
+        // alpha too would weight the blur by alpha squared and leave the glass visually unblurred.
         *word = if inside_rounded(px, py, node, radius) {
-            // Source pixels are opaque; XRender expects PREMULTIPLIED ARGB.
-            // Without scaling this alpha, any nonzero surfaceOpacity produces
-            // an entirely opaque blur layer underneath its translucent tint.
-            let scale = u32::from(opacity);
-            let component = |shift: u32| (((*word >> shift) & 0xff_u32) * scale + 127) / 255;
-            (scale << 24) | (component(16) << 16) | (component(8) << 8) | component(0)
+            0xff00_0000 | (*word & 0x00ff_ffff)
         } else {
             0
         };
@@ -531,18 +529,17 @@ mod tests {
     }
 
     #[test]
-    fn translucent_capsule_blur_preserves_wallpaper_visibility() {
-        // At 5% opacity the blurred layer must contribute 13/255, not 255/255.
-        // The fill is composited separately; this test catches the opaque second layer.
+    fn translucent_node_blur_is_opaque_under_its_fill() {
+        // The node's fill alpha is composited separately, so the blurred layer stays opaque
+        // inside the shape at any node opacity. Scaling it here weights the blur by alpha squared.
         let rgba = [0x40, 0x80, 0xc0, 255].repeat(12 * 12);
         let rect = (0, 0, 12, 12);
         assert!(node_backdrop_words(rgba.clone(), rect, rect, 0, 50, 0).is_none());
-        let faint = node_backdrop_words(rgba.clone(), rect, rect, 0, 50, 13).unwrap();
-        assert!(faint.iter().all(|word| word >> 24 == 13));
-        assert_eq!(faint[0], 0x0d_03_07_0a, "RGB must be premultiplied");
-        let opaque = node_backdrop_words(rgba, rect, rect, 0, 50, 255).unwrap();
-        assert!(opaque.iter().all(|word| word >> 24 == 255));
-        assert_eq!(opaque[0], 0xff_40_80_c0);
+        for opacity in [13, 41, 255] {
+            let words = node_backdrop_words(rgba.clone(), rect, rect, 0, 50, opacity).unwrap();
+            assert!(words.iter().all(|word| word >> 24 == 255), "opacity {opacity}");
+            assert_eq!(words[0], 0xff_40_80_c0, "opacity {opacity}");
+        }
     }
 
     #[test]

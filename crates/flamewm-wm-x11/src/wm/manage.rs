@@ -448,7 +448,7 @@ impl<C: Connection> Wm<'_, C> {
         let floating = self
             .clients
             .get(&window)
-            .is_some_and(super::super::client::ManagedClient::is_floating);
+            .is_some_and(super::super::client::ManagedClient::has_rounded_frame);
         self.clear_frame_shape(frame, outer, floating)?;
         self.bind_child_cursors(window);
 

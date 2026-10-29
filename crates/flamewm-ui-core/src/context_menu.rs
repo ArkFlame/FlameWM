@@ -228,8 +228,8 @@ mod tests {
         assert_eq!(
             fill,
             SurfaceFill {
-                rgb: 0x0019_1b1d,
-                alpha: 127
+                rgb: 0x00ea_f4ff,
+                alpha: 31
             }
         );
     }
@@ -239,18 +239,29 @@ mod tests {
         let mut snapshot = snapshot_with("surfaceColor", SettingValue::Text("#1E2123".into()));
         snapshot
             .values
-            .insert("surfaceOpacity".into(), SettingValue::Percent(100));
+            .insert("glassOpacityPercent".into(), SettingValue::Percent(42));
         assert_eq!(
             surface_fill(&snapshot),
             SurfaceFill {
                 rgb: 0x001e_2123,
-                alpha: 255
+                alpha: 107
             }
         );
         snapshot
             .values
-            .insert("surfaceOpacity".into(), SettingValue::Percent(0));
-        assert_eq!(surface_fill(&snapshot).alpha, 0);
+            .insert("glassOpacityPercent".into(), SettingValue::Percent(4));
+        assert_eq!(surface_fill(&snapshot).alpha, 10);
+        // reduceTransparency: opaque solid, the surfaceColor tint is ignored.
+        snapshot
+            .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(true));
+        assert_eq!(
+            surface_fill(&snapshot),
+            SurfaceFill {
+                rgb: 0x0017_2135,
+                alpha: 255
+            }
+        );
     }
 
     #[test]
@@ -258,15 +269,15 @@ mod tests {
         let bare = snapshot_with("surfaceColor", SettingValue::Text("ef4048".into()));
         assert_eq!(surface_fill(&bare).rgb, 0x00ef_4048);
         let invalid = snapshot_with("surfaceColor", SettingValue::Text("#zzzzzz".into()));
-        assert_eq!(surface_fill(&invalid).rgb, 0x0019_1b1d);
+        assert_eq!(surface_fill(&invalid).rgb, 0x00ea_f4ff);
     }
 
     #[test]
     fn surface_fill_alpha_is_independent_of_colour_value() {
-        let snapshot = snapshot_with("surfaceOpacity", SettingValue::Percent(50));
+        let snapshot = snapshot_with("glassOpacityPercent", SettingValue::Percent(42));
         let fill = surface_fill(&snapshot);
-        assert_eq!(fill.alpha, 127);
-        assert_eq!(fill.rgb, 0x0019_1b1d);
+        assert_eq!(fill.alpha, 107);
+        assert_eq!(fill.rgb, 0x00ea_f4ff);
     }
 }
 
@@ -419,8 +430,8 @@ mod shared_row_tests {
         assert_eq!(
             rounded.fill,
             SurfaceFill {
-                rgb: 0x0019_1b1d,
-                alpha: 127
+                rgb: 0x00ea_f4ff,
+                alpha: 31
             }
         );
         let mut squared = SettingsSnapshot::new(1);

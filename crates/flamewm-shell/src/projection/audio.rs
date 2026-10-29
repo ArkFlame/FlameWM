@@ -76,7 +76,7 @@ pub fn project_audio_full(
         document.position(
             &format!("audio-slot-{n}-thumb"),
             audio_thumb_left(shown, spec.max),
-            0.0,
+            AUDIO_THUMB_TOP,
         )?;
         document.visible(&format!("audio-slot-{n}-icon-out"), !is_stream && !is_input)?;
         document.visible(&format!("audio-slot-{n}-icon-in"), !is_stream && is_input)?;
@@ -93,6 +93,9 @@ pub fn project_audio_full(
     }
     Ok(())
 }
+
+/// Thumb top in lane coordinates: centres the 12px thumb on the 16px track (`.audio-thumb` in ui/shell/audio.html).
+const AUDIO_THUMB_TOP: f32 = 2.0;
 
 /// Thumb left edge in lane coordinates (the `.audio-lane` starts 6px left of the
 /// track so every offset stays non-negative): the 12px thumb is centred on
@@ -326,17 +329,17 @@ mod audio_template_tests {
         let capped = fixture(AudioTab::Devices, false);
         assert_eq!(
             capped.positions.get("audio-slot-1-thumb"),
-            Some(&(350.0, 0.0))
+            Some(&(350.0, 2.0))
         );
         assert_eq!(
             capped.positions.get("audio-slot-2-thumb"),
-            Some(&(140.0, 0.0))
+            Some(&(140.0, 2.0))
         );
         // Raise maximum: 120% of 150 is 280 px of fill, so the thumb centre is 280.
         let raised = fixture(AudioTab::Devices, true);
         assert_eq!(
             raised.positions.get("audio-slot-1-thumb"),
-            Some(&(280.0, 0.0))
+            Some(&(280.0, 2.0))
         );
     }
 

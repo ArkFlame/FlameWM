@@ -130,7 +130,7 @@ if [[ "$BUILD" == 1 ]]; then
   # Shared crates and embedded Task Manager UI may also retain stale archive fingerprints.
   python3 -I tools/ensure_shared_surface_cargo.py
   echo "[1/5] Building FlameWM WM + desktop + shell + settings + Explorer + X11 canary"
-  cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-explorer -p flamewm-terminal -p flamewm-task-manager -p flamewm-x11-canary
+  cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-explorer -p flamewm-finder -p flamewm-terminal -p flamewm-task-manager -p flamewm-x11-canary
   # The Settings UI is embedded into the executable at compile time. Assert
   # that the exact binary Xephyr will launch contains the newly added control;
   # a successful Cargo exit must not masquerade as a successful UI update.
@@ -237,7 +237,7 @@ run_debug_retention
   echo "profile=$([ "${FLAMEWM_PROFILE:-1}" = 1 ] && echo 1 || echo 0)"
   echo "profile_interval=${FLAMEWM_PROFILE_INTERVAL:-10}"
   echo "profile_top=${FLAMEWM_PROFILE_TOP:-8}"
-  echo "xcursor_theme=${FLAMEWM_CURSOR_THEME:-auto (McMojave/Oxygen/Breeze)}"
+  echo "xcursor_theme=${FLAMEWM_CURSOR_THEME:-auto (MacTahoe/Oxygen/Breeze)}"
   echo "xcursor_size=${FLAMEWM_CURSOR_SIZE:-24}"
   echo "xcursor_path=${FLAMEWM_CURSOR_PATH:-$ROOT/.target/stage-icons}"
   echo "command=$0 $*"
@@ -443,7 +443,7 @@ require_alive(){
 # Wayland compositor; identify the session as an X11 FlameWM session.
 # J11 production appearance/session consumer: same env the flamewm launcher
 # applies — FlameWM identity (never KDE), XCURSOR_* cursor theme (bundled
-# McMojave -> Oxygen -> emergency Breeze fallback), and the guarded toolkit theme
+# MacTahoe -> Oxygen -> emergency Breeze fallback), and the guarded toolkit theme
 # (explicit user values pass through; harness never selects toolkit styles).
 session_appearance_env(){
   : "${FLAMEWM_CURSOR_SIZE:=24}"
@@ -461,7 +461,7 @@ session_appearance_env(){
       [[ -d "$source/cursors" && -f "$source/index.theme" && -f "$source/cursors/left_ptr" ]] || continue
       theme="${source##*/}"
       case "${theme,,}" in
-        mcmojave|mcmojave[-_]*|oxygen|oxygen[-_]*|oxy|oxy[-_]*) ;;
+        mactahoe|mactahoe[-_]*|oxygen|oxygen[-_]*|oxy|oxy[-_]*) ;;
         *) continue ;;
       esac
       if [[ ! -e "$FLAMEWM_CURSOR_PATH/$theme" && ! -L "$FLAMEWM_CURSOR_PATH/$theme" ]]; then
@@ -508,8 +508,8 @@ session_appearance_env(){
   fi
   if ! cursor_is_installed "$selected"; then
     selected=''
-    if cursor_is_installed McMojave-cursors && cursor_pointer_exists McMojave-cursors; then
-      selected=McMojave-cursors
+    if cursor_is_installed MacTahoe-dark-cursors && cursor_pointer_exists MacTahoe-dark-cursors; then
+      selected=MacTahoe-dark-cursors
     else
       # Deterministic variant order if the canonical id is not installed.
       for cursor_root in "${cursor_roots[@]}"; do
@@ -517,7 +517,7 @@ session_appearance_env(){
           [[ -d "$candidate/cursors" && -f "$candidate/cursors/left_ptr" ]] || continue
           theme="${candidate##*/}"
           case "${theme,,}" in
-            mcmojave|mcmojave[-_]*) candidates+=("0:$theme") ;;
+            mactahoe|mactahoe[-_]*) candidates+=("0:$theme") ;;
             oxygen|oxygen[-_]*|oxy|oxy[-_]*) candidates+=("1:$theme") ;;
           esac
         done
@@ -533,7 +533,7 @@ session_appearance_env(){
   fi
   FLAMEWM_CURSOR_THEME="$selected"
   if ! cursor_is_installed "$FLAMEWM_CURSOR_THEME"; then
-    echo "FLAMEWM_XEPHYR_FAIL: no usable cursor theme (McMojave, Oxygen or bundled Breeze) in configured roots" >&2
+    echo "FLAMEWM_XEPHYR_FAIL: no usable cursor theme (MacTahoe, Oxygen or bundled Breeze) in configured roots" >&2
     return 1
   fi
   # Empty unless the user set it: an empty value is no override, so the WM resolves
@@ -616,6 +616,14 @@ task_manager_bin="$TARGET_DIR/release/flamewm-task-manager"
 if [[ -n "$task_manager_bin" && -x "$task_manager_bin" ]]; then
   sed -e "s|^Exec=flamewm-task-manager|Exec=$task_manager_bin|" -e "s|^TryExec=flamewm-task-manager|TryExec=$task_manager_bin|" \
     "$ROOT/packaging/flamewm-task-manager.desktop" >"$XDG_DATA_HOME/applications/flamewm-task-manager.desktop"
+fi
+
+# Expose the checkout Finder to the nested Start menu and to the Ctrl+Alt+F shortcut.
+finder_bin="$TARGET_DIR/release/flamewm-finder"
+[[ -x "$finder_bin" ]] || finder_bin="$(command -v flamewm-finder || true)"
+if [[ -n "$finder_bin" && -x "$finder_bin" ]]; then
+  sed -e "s|^Exec=flamewm-finder|Exec=$finder_bin|" -e "s|^TryExec=flamewm-finder|TryExec=$finder_bin|" \
+    "$ROOT/packaging/flamewm-finder.desktop" >"$XDG_DATA_HOME/applications/flamewm-finder.desktop"
 fi
 
 # Application discovery may prefer an installed .desktop entry with a stale

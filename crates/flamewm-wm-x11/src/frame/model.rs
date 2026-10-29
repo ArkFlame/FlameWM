@@ -191,6 +191,15 @@ pub enum PlacementMode {
     Fullscreen,
 }
 
+impl PlacementMode {
+    /// Frame takes the configured corner radius and mask: floating and snapped
+    /// (layout) windows. Maximized and fullscreen stay rectangular.
+    #[must_use]
+    pub const fn rounded_frame(self) -> bool {
+        matches!(self, Self::Floating | Self::Snapped(_))
+    }
+}
+
 /// Value-only snapshot of a placement (resume target).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PlacementSnapshot {
@@ -347,5 +356,25 @@ mod frame_border_tests {
     fn configured_zero_stays_zero() {
         assert_eq!(frame_border_for_mode(PlacementMode::Floating, 0), 0);
         assert_eq!(frame_border_for_mode(PlacementMode::Maximized, 0), 0);
+    }
+}
+
+#[cfg(test)]
+mod rounded_frame_tests {
+    use super::*;
+    use flamewm_skin::recipes::decoration::{DecorationStyle, corner_radius};
+
+    #[test]
+    fn layout_windows_follow_the_configured_radius_and_max_fullscreen_stay_square() {
+        let snapped = PlacementMode::Snapped(SnapTarget::Left);
+        for mode in [PlacementMode::Floating, snapped] {
+            assert!(mode.rounded_frame(), "{mode:?}");
+            assert_eq!(corner_radius(mode.rounded_frame(), DecorationStyle::Rounded), 24);
+            assert_eq!(corner_radius(mode.rounded_frame(), DecorationStyle::Squared), 0);
+        }
+        for mode in [PlacementMode::Maximized, PlacementMode::Fullscreen] {
+            assert!(!mode.rounded_frame(), "{mode:?}");
+            assert_eq!(corner_radius(mode.rounded_frame(), DecorationStyle::Rounded), 0);
+        }
     }
 }

@@ -106,6 +106,12 @@ impl ManagedClient {
         self.placement.mode == PlacementMode::Floating
     }
 
+    /// Rounded frame mask, glass corner radius: floating and snapped windows.
+    #[must_use]
+    pub fn has_rounded_frame(&self) -> bool {
+        self.placement.mode.rounded_frame()
+    }
+
     #[must_use]
     pub fn is_maximized(&self) -> bool {
         self.placement.mode == PlacementMode::Maximized

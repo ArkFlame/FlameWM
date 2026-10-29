@@ -28,7 +28,7 @@ use flamewm_api::{
 };
 use flamewm_control_core::{
     ControlError, ControlRequest, ControlResponse, IFACE_APPLICATIONS, IFACE_DISPLAYS,
-    IFACE_PANELS, IFACE_ROOT, IFACE_SESSION, IFACE_SETTINGS, IFACE_SHORTCUTS, IFACE_SYSTEM,
+    IFACE_PANELS, IFACE_ROOT, IFACE_SESSION, IFACE_SETTINGS, IFACE_SHORTCUTS, IFACE_SYSTEM, IFACE_WEATHER,
     IFACE_WINDOWS, IFACE_WORKSPACES, Version,
 };
 
@@ -345,6 +345,13 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
             })
         }
         (IFACE_PANELS, "GetSnapshot") => nullary(call, ControlRequest::GetPanels),
+        (IFACE_WEATHER, "GetSnapshot") => nullary(call, ControlRequest::GetWeatherFeed),
+        (IFACE_WEATHER, "Publish") => {
+            expect_arity(call, 1)?;
+            Ok(ControlRequest::PublishWeatherFeed {
+                payload: required_string(&call.args[0], "payload")?.to_owned(),
+            })
+        }
         (IFACE_PANELS, "SetEdge") => {
             expect_arity(call, 3)?;
             Ok(ControlRequest::SetPanelEdge {
@@ -537,6 +544,12 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
             expected_revision,
         } => named_call(IFACE_SHORTCUTS, "ResetBinding", action, *expected_revision),
         ControlRequest::GetPanels => nullary_call(IFACE_PANELS, "GetSnapshot"),
+        ControlRequest::GetWeatherFeed => nullary_call(IFACE_WEATHER, "GetSnapshot"),
+        ControlRequest::PublishWeatherFeed { payload } => WireCall::new(
+            IFACE_WEATHER,
+            "Publish",
+            vec![WireValue::String(payload.clone())],
+        ),
         ControlRequest::SetPanelEdge {
             output,
             edge,
@@ -693,6 +706,9 @@ pub fn encode_reply(
                 *capabilities,
             ))]
         }
+        (IFACE_WEATHER, "GetSnapshot", ControlResponse::WeatherFeed(snapshot)) => {
+            vec![WireValue::Dict(weather_feed_dict(snapshot))]
+        }
         (IFACE_SYSTEM, "GetSnapshot", ControlResponse::System(snapshot)) => {
             vec![WireValue::Dict(system_dict(snapshot))]
         }
@@ -768,6 +784,9 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
         (IFACE_SESSION, "GetCapabilities") => Ok(ControlResponse::SessionCapabilities(
             session_capabilities(required_string_array(single_reply(reply)?, "capabilities")?),
         )),
+        (IFACE_WEATHER, "GetSnapshot") => Ok(ControlResponse::WeatherFeed(weather_feed_snapshot(
+            required_dict(single_reply(reply)?, "snapshot")?,
+        )?)),
         (IFACE_SYSTEM, "GetSnapshot") => Ok(ControlResponse::System(system_snapshot(
             required_dict(single_reply(reply)?, "snapshot")?,
         )?)),
@@ -792,6 +811,7 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
         )
         | (IFACE_WORKSPACES, "Activate" | "InsertAfter" | "Remove")
         | (IFACE_DISPLAYS, "Keep" | "Revert" | "SetShellScale")
+        | (IFACE_WEATHER, "Publish")
         | (IFACE_SHORTCUTS, "SetBinding" | "ClearBinding" | "ResetBinding" | "EndCapture")
         | (IFACE_PANELS, "SetEdge" | "SetSize" | "Pin" | "Unpin" | "Reorder")
         | (
@@ -1223,6 +1243,9 @@ pub enum ControlSignal {
     SystemChanged {
         revision: u64,
     },
+    WeatherFeedChanged {
+        snapshot: flamewm_api::weather::WeatherFeedSnapshot,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1245,6 +1268,11 @@ pub fn encode_signal(signal: &ControlSignal) -> WireSignal {
                 WireValue::U64(*revision),
                 WireValue::Array(windows.iter().map(window_wire_value).collect()),
             ],
+        },
+        ControlSignal::WeatherFeedChanged { snapshot } => WireSignal {
+            interface: IFACE_WEATHER.to_owned(),
+            member: "FeedChanged".to_owned(),
+            args: vec![WireValue::Dict(weather_feed_dict(snapshot))],
         },
         ControlSignal::SystemChanged { revision } => WireSignal {
             interface: IFACE_SYSTEM.to_owned(),
@@ -1353,6 +1381,12 @@ pub fn decode_signal(signal: &WireSignal) -> Result<ControlSignal, ControlError>
                     .collect::<Result<Vec<_>, _>>()?,
             })
         }
+        (IFACE_WEATHER, "FeedChanged") => {
+            expect_arity(&call, 1)?;
+            Ok(ControlSignal::WeatherFeedChanged {
+                snapshot: weather_feed_snapshot(required_dict(&call.args[0], "snapshot")?)?,
+            })
+        }
         (IFACE_SYSTEM, "SystemChanged") => Ok(ControlSignal::SystemChanged {
             revision: signal_revision(&call)?,
         }),
@@ -1441,6 +1475,22 @@ fn switcher_entry(value: &WireValue) -> Result<SwitcherEntry, ControlError> {
     Ok(SwitcherEntry {
         title: dict_string(dict, "title")?.to_owned(),
         app_id: dict_string(dict, "appId")?.to_owned(),
+    })
+}
+
+fn weather_feed_dict(snapshot: &flamewm_api::weather::WeatherFeedSnapshot) -> WireDict {
+    dict_of([
+        ("revision", WireValue::U64(snapshot.revision)),
+        ("payload", WireValue::String(snapshot.payload.clone())),
+    ])
+}
+
+fn weather_feed_snapshot(
+    dict: &WireDict,
+) -> Result<flamewm_api::weather::WeatherFeedSnapshot, ControlError> {
+    Ok(flamewm_api::weather::WeatherFeedSnapshot {
+        revision: dict_u64(dict, "revision")?,
+        payload: dict_string(dict, "payload")?.to_owned(),
     })
 }
 
@@ -2294,6 +2344,13 @@ fn setting_value_for_key(key: &str, value: &WireValue) -> Result<SettingValue, C
         | "startMenuOpacity"
         | "surfaceOpacity"
         | "surfaceBlurPercent"
+        | "surfaceSaturationPercent"
+        | "surfaceRimFadePercent"
+        | "surfaceShadowPercent"
+        | "surfaceHighlightPercent"
+        | "glassOpacityPercent"
+        | "glassBlurPx"
+        | "taskbarOpacityPercent"
         | "startMenuBlurPercent"
         | "accentOpacity" => {
             let percent = required_u32(value, key)?;
@@ -3203,6 +3260,25 @@ mod tests {
     }
 
     #[test]
+    fn weather_feed_requests_and_reply_round_trip_through_wire() {
+        let call = assert_request_round_trip(&ControlRequest::GetWeatherFeed);
+        assert_eq!((call.interface.as_str(), call.member.as_str()), (IFACE_WEATHER, "GetSnapshot"));
+        let publish = assert_request_round_trip(&ControlRequest::PublishWeatherFeed {
+            payload: "a\u{1f}b".to_owned(),
+        });
+        assert_eq!((publish.interface.as_str(), publish.member.as_str()), (IFACE_WEATHER, "Publish"));
+        let feed = flamewm_api::weather::WeatherFeedSnapshot { revision: 4, payload: "p".to_owned() };
+        assert_reply_round_trip(
+            &nullary_call(IFACE_WEATHER, "GetSnapshot"),
+            &ControlResponse::WeatherFeed(feed.clone()),
+        );
+        let signal = ControlSignal::WeatherFeedChanged { snapshot: feed };
+        let wire = encode_signal(&signal);
+        assert_eq!((wire.interface.as_str(), wire.member.as_str()), (IFACE_WEATHER, "FeedChanged"));
+        assert_eq!(decode_signal(&wire).expect("feed signal decodes"), signal);
+    }
+
+    #[test]
     fn system_call_round_trips_through_wire_mapping() {
         let call = assert_request_round_trip(&ControlRequest::GetSystem);
         assert_eq!(call.interface, IFACE_SYSTEM);
@@ -3553,6 +3629,46 @@ mod hotkey_capture_lease_wire_tests {
         );
         assert!(decode_call(&end_wrong_type).is_err());
     }
+    #[test]
+    fn glass_keys_decode_to_their_persisted_wire_types() {
+        for (key, value) in [
+            ("glassOpacityPercent", WireValue::U32(42)),
+            ("glassBlurPx", WireValue::U32(54)),
+            ("taskbarOpacityPercent", WireValue::U32(75)),
+        ] {
+            assert!(
+                matches!(
+                    super::setting_value_for_key(key, &value).expect("percent"),
+                    SettingValue::Percent(_)
+                ),
+                "{key}"
+            );
+        }
+        assert_eq!(
+            super::setting_value_for_key("glassifyContrastZones", &WireValue::Bool(true))
+                .expect("switch"),
+            SettingValue::Boolean(true)
+        );
+        assert_eq!(
+            super::setting_value_for_key("reduceTransparency", &WireValue::Bool(false))
+                .expect("switch"),
+            SettingValue::Boolean(false)
+        );
+        assert_eq!(
+            super::setting_value_for_key(
+                "taskbarMaterialMode",
+                &WireValue::String("custom-tint".to_owned())
+            )
+            .expect("mode"),
+            SettingValue::Text("custom-tint".to_owned())
+        );
+        assert_eq!(
+            super::setting_value_for_key("taskbarCustomTint", &WireValue::String("#3DAEE9".into()))
+                .expect("tint"),
+            SettingValue::Text("#3DAEE9".to_owned())
+        );
+    }
+
     #[test]
     fn blur_percent_keys_decode_as_percent_like_the_opacities() {
         for key in [

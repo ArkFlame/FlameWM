@@ -1,0 +1,28 @@
+[package]
+name = "flamewm-finder"
+autobins = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FlameWM native file finder: filename search over the home folder in one glass window"
+
+[dependencies]
+flamewm-api = { path = "../flamewm-api" }
+flamewm-control-core = { path = "../flamewm-control-core" }
+flamewm-control-dbus = { path = "../flamewm-control-dbus" }
+flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
+flamewm-ui-core = { path = "../flamewm-ui-core" }
+flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
+rustix = { workspace = true, features = ["process"] }
+
+[build-dependencies]
+flamewm-render-compiler = { path = "../flamewm-render-compiler" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "flamewm-finder"
+path = "src/main.rs"

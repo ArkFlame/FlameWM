@@ -60,6 +60,21 @@ fn t10_settings_snapshot_changed_projects_payload_without_fetch_or_rescan() {
 }
 
 #[test]
+fn t11_settings_projection_resyncs_inheriting_widget_surfaces() {
+    // CONTRACT: a live surface change (colour, opacity, blur) reaches inheriting widget cards in the
+    // same settings projection that projects the menus; they must not wait for a widget tick.
+    // FAILURE MUTATION: remove the widgets::sync_widgets call after the menu surface loop.
+    let projection = settings_projection_source();
+    let menus = projection
+        .find("projection::project_menu_surface")
+        .expect("menu surface projection");
+    let widgets = projection
+        .find("widgets::sync_widgets(document, state)?;")
+        .expect("widget surface resync in settings projection");
+    assert!(widgets > menus, "widget resync must follow the menu surface projection");
+}
+
+#[test]
 fn t10_settings_projection_applies_sticky_selection_and_wallpaper_together() {
     // CONTRACT: one settings transition updates every desktop-owned visual affected by
     // settings: sticky visibility, selection appearance, and wallpaper presentation.

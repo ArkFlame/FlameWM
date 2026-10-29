@@ -69,6 +69,10 @@ impl StrictDocument {
 }
 
 impl UiDocumentAccess for StrictDocument {
+        fn color_variable(&mut self, _name: &str, _color: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+
     fn text(&mut self, id: &str, text: String) -> Result<(), String> {
         self.known(id)?;
         self.texts.insert(id.to_owned(), text);

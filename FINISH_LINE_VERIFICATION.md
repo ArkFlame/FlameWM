@@ -25,3 +25,17 @@ Live Xephyr desktop, `render.present` over the first 13 presents (llvmpipe, 1350
 Live Xephyr steady state (flamewm-desktop, 25 s window after 12 s warm-up, /proc/<pid>/stat, llvmpipe): CPU default 15 ticks (~0.6% of a core), RSS 27 MB; `renderAcceleration=gpu` 561 ticks (~22% of a core), RSS 165 MB. GPU mode costs far more CPU and memory here (software GL context plus full-frame readback on every widget update); keep it opt-in. VRAM not measured.
 
 Skipped: DRM/TTY run (needs a real TTY), live whole-frame timings on the hardware GPU (live runs fell back to llvmpipe), Wayland drag-outline live check, VRAM and hardware-GL live CPU benchmarks.
+
+## Verification refresh 2026-10-29 (fresh runs, cargo under `flock`, `--offline`, `CARGO_TARGET_DIR=$PWD/target-rel`)
+
+- `cargo test --workspace --offline --no-fail-fast` (RUST_TEST_THREADS=2): exit 0; 125 result suites, 3843 passed, 0 failed.
+- `cargo check --workspace --all-targets --offline`: exit 0 (dead-code warnings in flamewm-ui-core, flamewm-wm-x11 remain).
+- `cargo build --release --workspace --offline` (after `tools/ensure_desktop_conversion_cargo.py --profile release --include-ui`): exit 0, 9m58s.
+- `flamewm-render-compile ui/index.html` + `flamewm-render-inspect`: exit 0 (1051 nodes, 17 variables, 73 assets). Removed the unsupported `font-family` from the `body` rule in `ui/flamewm.css` (compiler has no font-family support).
+- `./scripts/package-source-archive --check . packaging/source-manifest.txt`: exit 0 (13907 members). `flamewm-finder` added to `packaging/install-manifest.txt`; `test_package_source_archive.py` exit 0.
+- Gates exit 0: `tools/verify_desktop_conversion_contract.py`, `tools/ui_contract_guard.py`, `tools/test_ui_contract_guard.py`, `tools/test_desktop_convert_css_contract.py`, `tools/test_package_source_archive.py`; `tools/test_pass29_wayland_visual_contract.py` prints OK.
+- `./scripts/check` NOT GREEN: stops at `tools/verify_rwr_promotion.py` with `accepted baseline hash mismatch: crates/flamewm-render-core/src/lib.rs`. The working-tree file adds `pub mod surface_material` and re-exports (sha256 now `c1f862a9ed44bc804dbc1f50a117f3bbffa20bf42916d3d92a7484374742d9d1`; pinned value is `2f2865f6...`). Needs user re-acceptance or a revert; not re-accepted here. Steps after that gate in `scripts/check` were run individually as listed above.
+- Contract tests `test_flamewm_desktop_pass18_contract.py` (1 of 6 fail), `pass17` (4 of 7), `test_flamewm_pass19_wheel_icons_ribbons.py` (2 of 6) fail with identical counts at HEAD (checked via `git archive HEAD`); source-string assertions, not fixed.
+- Hygiene: reference-name hygiene grep over tracked diff and untracked files = 0; `.vendor` added lines = 0; nothing staged; `/target-*/` ignored by `.gitignore:35`; `docs/OPENCODE_GPU_CONTINUATION_20261028.md` is untracked, not staged.
+- Fixed this pass: explorer theme alpha and tests aligned to shared `surface_fill`; shortcut duplicate resolution now follows registry (`ACTIONS`) order instead of BTreeMap order; audio thumb top 2px and value label moved to top 12px to clear the 150% thumb; stale default-alpha expectations (task-manager, ui-x11) updated to the shared glass default (31).
+- Not run: Xephyr/Wayland runtime, `verify-visual`, clippy (not installed). No benchmark numbers changed.

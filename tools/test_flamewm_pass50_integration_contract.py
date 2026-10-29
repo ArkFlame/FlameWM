@@ -61,7 +61,7 @@ class Pass50Integration(unittest.TestCase):
         picker = source('crates/flamewm-settings/src/theme_picker.rs')
         session = source('crates/flamewm-session-core/src/lib.rs')
         self.assertIn('with_curated_cursor_themes(', picker)
-        self.assertIn('MCMOJAVE_CURSOR_THEME_ID', session)
+        self.assertIn('MACTAHOE_CURSOR_THEME_ID', session)
         self.assertIn('CursorThemeFamily::Oxygen', picker)
         self.assertIn('CURSOR_THEME_ID: &str = "FlameWM-Breeze-Dark"', session)
 

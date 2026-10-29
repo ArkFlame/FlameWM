@@ -20,12 +20,12 @@ pub use appearance::{
 /// cursor family, and for explicit saved selections from earlier FlameWM builds.
 pub const CURSOR_THEME_ID: &str = "FlameWM-Breeze-Dark";
 /// Preferred theme on a fresh profile, when present under XCURSOR_PATH.
-pub const MCMOJAVE_CURSOR_THEME_ID: &str = "McMojave-cursors";
+pub const MACTAHOE_CURSOR_THEME_ID: &str = "MacTahoe-dark-cursors";
 pub const CURSOR_SIZE: &str = "24";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorThemeFamily {
-    McMojave,
+    MacTahoe,
     Oxygen,
 }
 
@@ -40,8 +40,8 @@ pub fn cursor_theme_family(id: &str) -> Option<CursorThemeFamily> {
                 .strip_prefix(prefix)
                 .is_some_and(|rest| rest.starts_with('-') || rest.starts_with('_'))
     };
-    if variant("mcmojave") {
-        Some(CursorThemeFamily::McMojave)
+    if variant("mactahoe") {
+        Some(CursorThemeFamily::MacTahoe)
     } else if variant("oxygen") || variant("oxy") {
         Some(CursorThemeFamily::Oxygen)
     } else {
@@ -50,7 +50,7 @@ pub fn cursor_theme_family(id: &str) -> Option<CursorThemeFamily> {
 }
 
 /// Resolve the cursor used by the WM and XSETTINGS. Explicit installed ids
-/// (including older third-party choices) win. Otherwise choose McMojave,
+/// (including older third-party choices) win. Otherwise choose MacTahoe,
 /// then a verified installed Oxygen variant, then bundled Breeze as a last
 /// resort. Never creates, deletes, or mutates host cursor directories.
 #[must_use]
@@ -79,10 +79,10 @@ pub fn resolve_cursor_theme(requested: &str, search_path: &str) -> String {
                 .is_file()
         })
     };
-    if installed(MCMOJAVE_CURSOR_THEME_ID) && has_pointer(MCMOJAVE_CURSOR_THEME_ID) {
-        return MCMOJAVE_CURSOR_THEME_ID.to_owned();
+    if installed(MACTAHOE_CURSOR_THEME_ID) && has_pointer(MACTAHOE_CURSOR_THEME_ID) {
+        return MACTAHOE_CURSOR_THEME_ID.to_owned();
     }
-    // Other McMojave variants are valid independent theme directory ids.
+    // Other MacTahoe variants are valid independent theme directory ids.
     // Sort for deterministic selection when multiple system roots exist.
     let mut candidates = Vec::new();
     for root in &roots {
@@ -102,7 +102,7 @@ pub fn resolve_cursor_theme(requested: &str, search_path: &str) -> String {
     candidates.dedup();
     if let Some(id) = candidates
         .iter()
-        .find(|id| cursor_theme_family(id) == Some(CursorThemeFamily::McMojave))
+        .find(|id| cursor_theme_family(id) == Some(CursorThemeFamily::MacTahoe))
     {
         return id.clone();
     }
@@ -871,14 +871,14 @@ mod tests {
         // Nothing installed: bundled FlameWM theme.
         assert_eq!(resolve_cursor_theme("", &search), CURSOR_THEME_ID);
         assert_eq!(resolve_cursor_theme("Missing", &search), CURSOR_THEME_ID);
-        // Bundled McMojave wins over the FlameWM default when present.
-        install_cursor_theme(&root, MCMOJAVE_CURSOR_THEME_ID);
-        assert_eq!(resolve_cursor_theme("", &search), MCMOJAVE_CURSOR_THEME_ID);
+        // Bundled MacTahoe wins over the FlameWM default when present.
+        install_cursor_theme(&root, MACTAHOE_CURSOR_THEME_ID);
+        assert_eq!(resolve_cursor_theme("", &search), MACTAHOE_CURSOR_THEME_ID);
         assert_eq!(
             resolve_cursor_theme("Missing", &search),
-            MCMOJAVE_CURSOR_THEME_ID
+            MACTAHOE_CURSOR_THEME_ID
         );
-        // An installed Oxygen theme wins when McMojave is missing.
+        // An installed Oxygen theme wins when MacTahoe is missing.
         let oxygen_only = cursor_test_root("oxygen-only");
         install_cursor_theme(&oxygen_only, "Oxygen_Black");
         assert_eq!(
@@ -897,12 +897,12 @@ mod tests {
         std::fs::create_dir_all(root.join("Broken")).expect("broken theme");
         assert_eq!(
             resolve_cursor_theme("Broken", &search),
-            MCMOJAVE_CURSOR_THEME_ID
+            MACTAHOE_CURSOR_THEME_ID
         );
         // Path-like names never resolve outside the search roots.
         assert_eq!(
             resolve_cursor_theme("../Custom", &search),
-            MCMOJAVE_CURSOR_THEME_ID
+            MACTAHOE_CURSOR_THEME_ID
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -933,12 +933,12 @@ mod tests {
     #[test]
     fn cursor_families_reject_lookalikes_and_variant_selection_is_stable() {
         assert_eq!(
-            cursor_theme_family("McMojave-cursors"),
-            Some(CursorThemeFamily::McMojave)
+            cursor_theme_family("MacTahoe-dark-cursors"),
+            Some(CursorThemeFamily::MacTahoe)
         );
         assert_eq!(
-            cursor_theme_family("McMojave_Dark"),
-            Some(CursorThemeFamily::McMojave)
+            cursor_theme_family("MacTahoe_Dark"),
+            Some(CursorThemeFamily::MacTahoe)
         );
         assert_eq!(
             cursor_theme_family("Oxygen_Black"),
@@ -949,7 +949,7 @@ mod tests {
             Some(CursorThemeFamily::Oxygen)
         );
         for unknown in [
-            "McMojaveX",
+            "MacTahoeX",
             "Oxygenated",
             "oxywhatever",
             "Bibata",
@@ -962,10 +962,10 @@ mod tests {
         install_cursor_theme(&root, "Oxygen_Black");
         let search = root.display().to_string();
         assert_eq!(resolve_cursor_theme("", &search), "Oxygen_Black");
-        install_cursor_theme(&root, "McMojave_Dark");
-        assert_eq!(resolve_cursor_theme("", &search), "McMojave_Dark");
-        install_cursor_theme(&root, MCMOJAVE_CURSOR_THEME_ID);
-        assert_eq!(resolve_cursor_theme("", &search), MCMOJAVE_CURSOR_THEME_ID);
+        install_cursor_theme(&root, "MacTahoe_Dark");
+        assert_eq!(resolve_cursor_theme("", &search), "MacTahoe_Dark");
+        install_cursor_theme(&root, MACTAHOE_CURSOR_THEME_ID);
+        assert_eq!(resolve_cursor_theme("", &search), MACTAHOE_CURSOR_THEME_ID);
         assert_eq!(
             resolve_cursor_theme("Oxygen_White", &search),
             "Oxygen_White"
@@ -992,7 +992,7 @@ mod tests {
     fn session_env_and_resolver_agree_on_installed_bundled_theme() {
         let root = cursor_test_root("env");
         // Session search root is <data_root>/icons.
-        install_cursor_theme(&root.join("icons"), MCMOJAVE_CURSOR_THEME_ID);
+        install_cursor_theme(&root.join("icons"), MACTAHOE_CURSOR_THEME_ID);
         let paths = SessionPaths {
             bindir: "/usr/bin".into(),
             config_home: "/home/test/.config".into(),
@@ -1002,7 +1002,7 @@ mod tests {
         let environment = &plan.processes[0].environment;
         assert_eq!(
             environment.get("XCURSOR_THEME").map(String::as_str),
-            Some(MCMOJAVE_CURSOR_THEME_ID)
+            Some(MACTAHOE_CURSOR_THEME_ID)
         );
         let _ = std::fs::remove_dir_all(&root);
     }

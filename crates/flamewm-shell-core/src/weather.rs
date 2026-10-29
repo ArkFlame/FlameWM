@@ -15,6 +15,9 @@ use flamewm_api::settings::{SettingValue, SettingsChange, SettingsSnapshot};
 
 const NAME_MAX_CHARS: usize = 80;
 
+/// Attribution required wherever Open-Meteo forecast data is shown.
+pub const OPEN_METEO_ATTRIBUTION: &str = "Weather data by Open-Meteo.com (CC BY 4.0)";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WeatherError {
     InvalidLocation(&'static str),

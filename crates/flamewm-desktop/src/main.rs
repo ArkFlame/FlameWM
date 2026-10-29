@@ -17,7 +17,9 @@ use flamewm_applications::DesktopEntry;
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::{ControlClient, ControlSignalClient, MutationDispatcher};
 use flamewm_dbus_reactor::BusKind;
-use flamewm_desktop_core::conversion::{convert_file, offered_formats};
+use flamewm_desktop_core::conversion::{
+    active_conversions, cancel_conversions, convert_file, offered_formats, offered_tools, run_tool,
+};
 use flamewm_desktop_core::file_actions::{
     CommandIntent, EntryMenuAction, LauncherOpen, create_new_folder, entry_context_menu,
     launcher_open_kind, open_terminal, rename_entry_no_replace, shortcut_destination,
@@ -65,6 +67,7 @@ macro_rules! point_fn {
 }
 
 mod convert_wheel;
+use convert_wheel::{WheelAction, WheelMode};
 mod downloads;
 mod drag;
 mod icon_names;
@@ -361,6 +364,7 @@ struct DesktopState {
     /// Rects of the menus and confirm currently shown (logical px); empty when none is open.
     menu_rects: Vec<Rect>,
     wheel_hover: Option<usize>,
+    wheel_mode: WheelMode,
     pending_delete: Option<Vec<PathBuf>>,
     last_click: Option<ClickRecord>,
     dirty: Arc<AtomicBool>,
@@ -374,6 +378,9 @@ struct DesktopState {
     workspace_present_span: Option<flamewm_profiler::SpanGuard>,
     settings: SettingsSnapshot,
     settings_visual_dirty: bool,
+    /// Shell-published forecast feed (the same payload the tray reads); revision 0 when none.
+    weather: flamewm_api::weather::WeatherFeedSnapshot,
+    weather_visual_dirty: bool,
     downloads: downloads::Organizer,
     /// Resolved cursor theme last loaded into the live cursor owners.
     applied_cursor_theme: Option<String>,
@@ -479,6 +486,8 @@ pub fn main() -> Result<(), String> {
     let sticky = sticky_persistence::load(&sticky_path).map_err(|error| format!("{error:?}"))?;
     let widget_path =
         flamewm_desktop_core::widgets::state_path().map_err(|error| format!("{error:?}"))?;
+    // A missing widget state file means a fresh profile: it gets the default grid layout.
+    let widget_fresh = !widget_path.exists();
     let widget_store = flamewm_desktop_core::widgets::load(&widget_path).unwrap_or_else(|error| {
         eprintln!("desktop: widget state unreadable, starting empty: {error:?}");
         flamewm_desktop_core::widgets::WidgetStore::default()
@@ -543,6 +552,7 @@ pub fn main() -> Result<(), String> {
             menu: None,
             menu_rects: Vec::new(),
             wheel_hover: None,
+            wheel_mode: WheelMode::default(),
             pending_delete: None,
             last_click: None,
             dirty: Arc::clone(&dirty),
@@ -556,6 +566,8 @@ pub fn main() -> Result<(), String> {
             workspace_present_span: None,
             settings,
             settings_visual_dirty: false,
+            weather: query_weather_feed(),
+            weather_visual_dirty: true,
             downloads,
             applied_cursor_theme: None,
             icon_theme: String::new(),
@@ -623,8 +635,16 @@ pub fn main() -> Result<(), String> {
         let wake = reactor.owned_wake_deadline();
         let mut state = state_cell.borrow_mut();
         state.widgets.attach_wake(wake);
-        let bounds = widgets::widget_bounds(&state);
-        state.widgets.store.clamp_all(bounds);
+        let metrics = widgets::widget_metrics(&state);
+        if widget_fresh && state.widgets.store.widgets().is_empty() {
+            state.widgets.store =
+                flamewm_desktop_core::widgets::WidgetStore::with_default_layout(metrics);
+            // The wake was armed against the empty store; re-derive the tick deadline.
+            state.widgets.rearm_after_store_replace();
+            state.widgets.persist();
+        } else {
+            state.widgets.store.layout_grid(metrics);
+        }
     }
     match flamewm_integrations_linux::MprisProvider::connect() {
         Ok(mut provider) => match provider.start() {
@@ -730,6 +750,11 @@ pub fn main() -> Result<(), String> {
                                 ..
                             } => {
                                 panels_flag.set(true);
+                            }
+                            flamewm_control_wire::ControlSignal::WeatherFeedChanged { snapshot } => {
+                                let mut state = state_cell.borrow_mut();
+                                state.weather = snapshot;
+                                state.weather_visual_dirty = true;
                             }
                             _ => {}
                         }
@@ -911,6 +936,8 @@ pub fn main() -> Result<(), String> {
                         state.output_grids = next_grids;
                         state.default_output = next_default;
                         state.grid = grid_for_output(&state, &state.default_output);
+                        let metrics = widgets::widget_metrics(&state);
+                        state.widgets.store.layout_grid(metrics);
                         let monitors = monitor_rects(&state.output_geometries);
                         let DesktopState {
                             wallpaper_loader,
@@ -983,6 +1010,28 @@ fn query_workspaces() -> WorkspaceSnapshot {
             _ => fallback,
         },
         Err(_) => fallback,
+    }
+}
+
+/// Startup read of the shell's cached forecast. Live changes arrive as `WeatherFeedChanged`;
+/// an unreachable host leaves the widget in its "No data" state.
+fn query_weather_feed() -> flamewm_api::weather::WeatherFeedSnapshot {
+    match control_client() {
+        Ok(client) => match client.call(&ControlRequest::GetWeatherFeed) {
+            Ok(ControlResponse::WeatherFeed(snapshot)) => snapshot,
+            Ok(response) => {
+                eprintln!("desktop: startup GetWeatherFeed returned {response:?}; no forecast");
+                flamewm_api::weather::WeatherFeedSnapshot::default()
+            }
+            Err(error) => {
+                eprintln!("desktop: startup GetWeatherFeed failed: {}", error.message);
+                flamewm_api::weather::WeatherFeedSnapshot::default()
+            }
+        },
+        Err(error) => {
+            eprintln!("desktop: weather feed subscription degraded: {error}");
+            flamewm_api::weather::WeatherFeedSnapshot::default()
+        }
     }
 }
 
@@ -1069,12 +1118,25 @@ fn refresh_icon_theme(
     sync_document(document, state)
 }
 
+/// Re-projects the weather widgets when the shell publishes a new feed.
+fn refresh_weather_projection(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    if !state.weather_visual_dirty {
+        return Ok(());
+    }
+    state.weather_visual_dirty = false;
+    widgets::sync_widgets(document, state)
+}
+
 /// Per-turn refresh of every projection; the first failure stops the pass, never the desktop.
 fn refresh_all(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
     refresh_settings_projection(document, state)?;
+    refresh_weather_projection(document, state)?;
     refresh_icon_theme(document, state)?;
     refresh_workspace_projection(document, state)?;
     refresh_if_changed(document, state)?;
@@ -1142,6 +1204,8 @@ fn refresh_settings_projection(
     for id in projection::MENU_SURFACE_IDS {
         projection::project_menu_surface(document, id, &state.settings)?;
     }
+    // Inheriting widget cards read the same global surface fill and blur as the menus above.
+    widgets::sync_widgets(document, state)?;
     // Redraw the active radial hover with the current accent after live theme
     // changes; clearing the stamp forces regeneration of the one segment only.
     if let Some(sector) = state.wheel_hover.take() {
@@ -1388,7 +1452,142 @@ fn wheel_hit_at(state: &DesktopState, x: f32, y: f32) -> Option<usize> {
         .as_ref()
         .and_then(|id| state.model.items().find(|item| &item.id == id))
         .map(|item| &item.path)?;
-    (index < offered_formats(path).len()).then_some(index)
+    (index < wheel_slot_labels(state.wheel_mode, Some(path)).len()).then_some(index)
+}
+
+/// Labels for the eight segments of the current mode. Actions need no file.
+fn wheel_slot_labels(mode: WheelMode, path: Option<&Path>) -> Vec<String> {
+    match (mode, path) {
+        (WheelMode::Actions, _) => WheelAction::ALL
+            .iter()
+            .map(|action| action.label().to_owned())
+            .collect(),
+        (_, None) => Vec::new(),
+        (WheelMode::Convert, Some(path)) => offered_formats(path)
+            .iter()
+            .map(|format| format.to_ascii_uppercase())
+            .collect(),
+        (WheelMode::Tools, Some(path)) => offered_tools(path)
+            .iter()
+            .map(|tool| tool.label().to_owned())
+            .collect(),
+    }
+}
+
+fn set_wheel_slot_labels(
+    document: &mut impl UiDocumentAccess,
+    mode: WheelMode,
+    path: Option<&Path>,
+) -> Result<(), String> {
+    let labels = wheel_slot_labels(mode, path);
+    for slot in 0..8 {
+        let id = format!("convert-slot-{slot}");
+        let label = labels.get(slot);
+        document.visible(&id, label.is_some())?;
+        if let Some(label) = label {
+            document.text(&id, label.clone())?;
+        }
+    }
+    Ok(())
+}
+
+fn wheel_path(state: &DesktopState) -> Option<PathBuf> {
+    state
+        .menu
+        .as_ref()?
+        .selected_id
+        .as_ref()
+        .and_then(|id| state.model.items().find(|item| &item.id == id))
+        .map(|item| item.path.clone())
+}
+
+/// Switches the open wheel's mode: relabels every segment and clears the hover.
+fn set_wheel_mode(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+    mode: WheelMode,
+) -> Result<(), String> {
+    state.wheel_mode = mode;
+    state.wheel_hover = None;
+    document.visible("convert-wheel-highlight", false)?;
+    let path = wheel_path(state);
+    set_wheel_slot_labels(document, mode, path.as_deref())?;
+    document.text("convert-wheel-hub-text", mode.label().to_owned())
+}
+
+/// Runs a Tools or Actions segment. Convert segments are handled by the caller.
+fn run_wheel_slot(
+    slot: usize,
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+    mutation_dispatcher: Option<&Arc<MutationDispatcher>>,
+) -> Result<(), String> {
+    let Some(path) = wheel_path(state) else {
+        return Ok(());
+    };
+    match state.wheel_mode {
+        WheelMode::Convert => Ok(()),
+        WheelMode::Tools => {
+            let Some(tool) = offered_tools(&path).get(slot).copied() else {
+                return Ok(());
+            };
+            state.menu = None;
+            sync_menu(document, state)?;
+            // Tools write beside the source; the desktop picks up the new file
+            // through its file watcher. The worker never touches UI state.
+            let spawned = std::thread::Builder::new()
+                .name("flamewm-tool".to_owned())
+                .spawn(move || {
+                    if let Err(error) = run_tool(&path, tool) {
+                        report_action_failure("file tool", error);
+                    }
+                });
+            if let Err(error) = spawned {
+                report_action_failure("start file tool", error.to_string());
+            }
+            Ok(())
+        }
+        WheelMode::Actions => {
+            let Some(action) = WheelAction::ALL.get(slot).copied() else {
+                return Ok(());
+            };
+            match action {
+                WheelAction::Open => {
+                    let selected = state.menu.as_ref().and_then(|menu| menu.selected_id.clone());
+                    let index = state
+                        .model
+                        .items()
+                        .position(|item| Some(&item.id) == selected.as_ref());
+                    state.menu = None;
+                    sync_menu(document, state)?;
+                    if let Some(index) = index {
+                        open_item(state, index)?;
+                    }
+                    Ok(())
+                }
+                WheelAction::Reveal => {
+                    let parent = path.parent().map(Path::to_path_buf);
+                    state.menu = None;
+                    sync_menu(document, state)?;
+                    if let Some(parent) = parent {
+                        if let Err(error) = flamewm_applications::open_directory(&parent) {
+                            report_action_failure("reveal item", format!("{error:?}"));
+                        }
+                    }
+                    Ok(())
+                }
+                WheelAction::Rename => {
+                    handle_menu_action("entry.rename", document, state, mutation_dispatcher)
+                }
+                WheelAction::Shortcut => {
+                    handle_menu_action("entry.shortcut", document, state, mutation_dispatcher)
+                }
+                WheelAction::Trash => {
+                    handle_menu_action("entry.delete", document, state, mutation_dispatcher)
+                }
+            }
+        }
+    }
 }
 
 fn update_wheel_hover(
@@ -1441,7 +1640,43 @@ fn handle_event(
         // All descendants (including the hub, labels and highlight) resolve the
         // same local polar geometry. Hover and click cannot disagree because a
         // retained rectangular label happens to sit above a different sector.
+        // Keyboard: Tab cycles the mode and digits 1-8 pick a segment. Escape falls through.
+        if action.action == "keyboard.input" {
+            match action.text.as_deref() {
+                Some("\t") => {
+                    let next = state.wheel_mode.next();
+                    return set_wheel_mode(document, state, next);
+                }
+                Some(text) => {
+                    let index = text
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|number| (1..=8).contains(number))
+                        .map(|number| number - 1);
+                    if let Some(index) = index {
+                        let count = wheel_slot_labels(state.wheel_mode, wheel_path(state).as_deref()).len();
+                        if index < count {
+                            return handle_menu_action(
+                                &format!("convert.slot.{index}"),
+                                document,
+                                state,
+                                mutation_dispatcher,
+                            );
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
         if matches!(action.phase, UiActionPhase::Hover | UiActionPhase::Motion) {
+            let alt = action.modifiers & (1 << 3) != 0;
+            if let Some(mode) =
+                WheelMode::from_modifiers(action.shift_down(), action.ctrl_down(), alt)
+            {
+                if mode != state.wheel_mode {
+                    set_wheel_mode(document, state, mode)?;
+                }
+            }
             let sector = wheel_hit_at(state, action.x, action.y);
             update_wheel_hover(document, state, sector)?;
         }
@@ -1462,11 +1697,21 @@ fn handle_event(
                     mutation_dispatcher,
                 );
             }
+            if let Some(bounds) = wheel_bounds(state) {
+                if convert_wheel::in_hub(action.x - bounds.x as f32, action.y - bounds.y as f32) {
+                    let next = state.wheel_mode.next();
+                    return set_wheel_mode(document, state, next);
+                }
+            }
             return Ok(());
         }
     }
     if action.action == "keyboard.input" {
         if action.text.as_deref() == Some("") {
+            // Escape also stops file conversions and tools that are still running.
+            if active_conversions() > 0 {
+                cancel_conversions();
+            }
             return cancel_transient(document, state);
         }
         if state.rename.is_some() {
@@ -1992,6 +2237,7 @@ fn handle_menu_action(
             if !supported {
                 return Ok(());
             }
+            state.wheel_mode = WheelMode::default();
             if let Some(menu) = state.menu.as_mut() {
                 menu.kind = MenuKind::ConvertWheel;
             }
@@ -2005,6 +2251,9 @@ fn handle_menu_action(
             else {
                 return Ok(());
             };
+            if state.wheel_mode != WheelMode::Convert {
+                return run_wheel_slot(slot, document, state, mutation_dispatcher);
+            }
             let path = state
                 .menu
                 .as_ref()
@@ -2587,24 +2836,8 @@ fn sync_menu(document: &mut impl UiDocumentAccess, state: &mut DesktopState) -> 
                 .as_ref()
                 .and_then(|id| state.model.items().find(|item| &item.id == id))
                 .map(|item| &item.path);
-            let formats = path.map_or_else(Vec::new, |path| offered_formats(path));
-            for slot in 0..8 {
-                let id = format!("convert-slot-{slot}");
-                let choice = formats.get(slot).copied();
-                document.visible(&id, choice.is_some())?;
-                if let Some(choice) = choice {
-                    document.text(&id, choice.to_ascii_uppercase())?;
-                }
-            }
-            if let Some(path) = path {
-                let size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
-                let label = if size >= 1_000_000 {
-                    format!("{:.1} MB", size as f64 / 1_000_000.0)
-                } else {
-                    format!("{} KB", size / 1000)
-                };
-                document.text("convert-wheel-hub-text", label)?;
-            }
+            set_wheel_slot_labels(document, state.wheel_mode, path.map(PathBuf::as_path))?;
+            document.text("convert-wheel-hub-text", state.wheel_mode.label().to_owned())?;
             let size = (328, 328);
             let placed = clamp_menu_anchor(
                 menu_bounds,

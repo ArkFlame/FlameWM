@@ -509,6 +509,38 @@ fn system_action_reports_explicit_stale_and_unsupported_errors() {
 }
 
 #[test]
+fn weather_feed_publish_caches_latest_payload_and_reports_only_changes() {
+    use flamewm_control_core::{ControlResponse, Dispatcher};
+    let path = settings_path("weather_feed");
+    let mut host = PlatformHost::new(FakeDesktop::new(), path);
+    host.start().expect("host starts");
+    let dispatcher = Dispatcher::new();
+    let get = |dispatcher: &Dispatcher, host: &mut PlatformHost<FakeDesktop>| {
+        match dispatcher.dispatch(host, ControlRequest::GetWeatherFeed).expect("get") {
+            ControlResponse::WeatherFeed(snapshot) => snapshot,
+            other => panic!("unexpected reply {other:?}"),
+        }
+    };
+    assert_eq!(get(&dispatcher, &mut host).revision, 0);
+    let publish = |dispatcher: &Dispatcher, host: &mut PlatformHost<FakeDesktop>, payload: &str| {
+        dispatcher
+            .dispatch(host, ControlRequest::PublishWeatherFeed { payload: payload.to_owned() })
+            .expect("publish")
+    };
+    assert_eq!(publish(&dispatcher, &mut host, "v1"), ControlResponse::Changed(true));
+    assert_eq!(publish(&dispatcher, &mut host, "v1"), ControlResponse::Changed(false));
+    let cached = get(&dispatcher, &mut host);
+    assert_eq!((cached.revision, cached.payload.as_str()), (1, "v1"));
+    assert_eq!(publish(&dispatcher, &mut host, "v2"), ControlResponse::Changed(true));
+    assert_eq!(get(&dispatcher, &mut host).revision, 2);
+    let oversized = "x".repeat(flamewm_api::weather::MAX_WEATHER_FEED_BYTES + 1);
+    assert!(dispatcher
+        .dispatch(&mut host, ControlRequest::PublishWeatherFeed { payload: oversized })
+        .is_err());
+    assert_eq!(get(&dispatcher, &mut host).payload, "v2");
+}
+
+#[test]
 fn canonical_dbus_protocol_keeps_snapshot_signals_with_legacy_compat() {
     const XML: &str = include_str!("../protocol/com.arkflame.FlameWM1.xml");
     for member in [
@@ -520,6 +552,7 @@ fn canonical_dbus_protocol_keeps_snapshot_signals_with_legacy_compat() {
         "WorkspacesSnapshotChanged",
         "PanelsChanged",
         "PanelsSnapshotChanged",
+        "FeedChanged",
     ] {
         assert!(XML.contains(&format!("name=\"{member}\"")));
     }

@@ -38,6 +38,18 @@ pub(crate) fn stack_bounds(stack: &[Rect]) -> Option<Rect> {
     iter.try_fold(first, intersect)
 }
 
+/// Sub-pixel slack for edge equality: a child that fills its clip exactly (a hover
+/// fill inside a capsule) can differ by float rounding after device scaling. Treating
+/// that as `Part` would drop the fill's corner radius and paint a square hover.
+const EDGE_EPSILON: f32 = 0.01;
+
+fn same_rect(a: Rect, b: Rect) -> bool {
+    (a.x - b.x).abs() <= EDGE_EPSILON
+        && (a.y - b.y).abs() <= EDGE_EPSILON
+        && (a.width - b.width).abs() <= EDGE_EPSILON
+        && (a.height - b.height).abs() <= EDGE_EPSILON
+}
+
 /// Classifies `rect` against the clip stack. An empty stack leaves it whole.
 pub(crate) fn visible_under(rect: Rect, stack: &[Rect]) -> Visible {
     if stack.is_empty() {
@@ -48,7 +60,7 @@ pub(crate) fn visible_under(rect: Rect, stack: &[Rect]) -> Visible {
     };
     match intersect(rect, bounds) {
         None => Visible::Hidden,
-        Some(part) if part == rect => Visible::Whole,
+        Some(part) if same_rect(part, rect) => Visible::Whole,
         Some(part) => Visible::Part(part),
     }
 }
@@ -151,6 +163,19 @@ mod tests {
             visible_under(r(10.0, 95.0, 20.0, 5.0), &[]),
             Visible::Whole,
             "no clip leaves it whole"
+        );
+    }
+
+    #[test]
+    fn visible_under_keeps_whole_for_sub_pixel_edge_rounding() {
+        // A hover fill that exactly fills its capsule's clip, off by float rounding.
+        let clip = [r(10.0, 20.0, 42.5, 40.0)];
+        let fill = r(10.0 + 1e-4, 20.0 - 1e-4, 42.5 - 2e-4, 40.0);
+        assert_eq!(visible_under(fill, &clip), Visible::Whole);
+        assert_eq!(
+            visible_under(r(10.0, 20.0, 42.5, 41.0), &clip),
+            Visible::Part(r(10.0, 20.0, 42.5, 40.0)),
+            "a real overhang is still cut"
         );
     }
 

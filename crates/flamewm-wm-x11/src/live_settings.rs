@@ -28,6 +28,9 @@ static TITLEBARS: AtomicBool = AtomicBool::new(DEFAULT_TITLEBARS);
 static TASKBAR_ACTIVITIES: AtomicBool = AtomicBool::new(DEFAULT_TASKBAR_ACTIVITIES);
 /// `shareWallpaper`: one wallpaper spans the outputs instead of one copy per output.
 static SHARE_WALLPAPER: AtomicBool = AtomicBool::new(false);
+/// `surfaceSaturationPercent`: backdrop saturation behind translucent titlebars (100 is identity).
+static SATURATION_PERCENT: AtomicU32 =
+    AtomicU32::new(flamewm_ui_core::glass::DARK.saturation_percent as u32);
 /// Live `accent` packed as `0x00RRGGBB`.
 static ACCENT_RGB: AtomicU32 = AtomicU32::new(pack_rgb(DEFAULT_ACCENT_RGB));
 static WINDOW_MARGIN: AtomicU32 = AtomicU32::new(DEFAULT_WINDOW_MARGIN);
@@ -108,6 +111,10 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
         boolean_setting(snapshot, "shareWallpaper", false),
         Ordering::Relaxed,
     );
+    SATURATION_PERCENT.store(
+        flamewm_ui_core::surface::glass_material(snapshot).saturation_percent,
+        Ordering::Relaxed,
+    );
     ACCENT_RGB.store(pack_rgb(accent_from_snapshot(snapshot)), Ordering::Relaxed);
     WINDOW_MARGIN.store(window_margin_from_snapshot(snapshot), Ordering::Relaxed);
     flamewm_render_x11::set_render_acceleration(
@@ -140,6 +147,11 @@ pub(crate) fn snap_preview_enabled() -> bool {
 
 pub(crate) fn focus_follows_mouse() -> bool {
     FOCUS_FOLLOWS_MOUSE.load(Ordering::Relaxed)
+}
+
+/// `surfaceSaturationPercent` (Dark preset default); 100 leaves the backdrop unchanged.
+pub(crate) fn saturation_percent() -> u32 {
+    SATURATION_PERCENT.load(Ordering::Relaxed)
 }
 
 /// `shareWallpaper` (default `false`): whether the desktop shares one wallpaper over all outputs.

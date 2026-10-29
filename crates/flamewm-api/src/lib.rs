@@ -21,6 +21,7 @@ pub mod settings;
 pub mod shell_bootstrap;
 pub mod shortcuts;
 pub mod system;
+pub mod weather;
 pub mod window;
 pub mod wm_features;
 pub mod workspace;

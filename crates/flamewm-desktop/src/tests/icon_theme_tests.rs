@@ -15,7 +15,7 @@ fn icon_theme_change_detects_new_and_removed_values() {
     let papirus = snapshot_with_theme(Some("Papirus"));
     assert!(icon_theme_changed("", &papirus));
     assert!(!icon_theme_changed("Papirus", &papirus));
-    assert!(icon_theme_changed("PlagueSur", &papirus));
+    assert!(icon_theme_changed("MacTahoe", &papirus));
     assert!(icon_theme_changed("Papirus", &snapshot_with_theme(None)));
     assert!(!icon_theme_changed("", &snapshot_with_theme(None)));
 }

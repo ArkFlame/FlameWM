@@ -17,7 +17,7 @@ use flamewm_shell_core::weather::{
     WeatherSnapshot,
 };
 
-pub const OPEN_METEO_ATTRIBUTION: &str = "Weather data by Open-Meteo.com (CC BY 4.0)";
+pub use flamewm_shell_core::weather::OPEN_METEO_ATTRIBUTION;
 pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 pub const MAX_FORECAST_DAYS: usize = 7;
 const SEARCH_RESULTS: usize = 5;

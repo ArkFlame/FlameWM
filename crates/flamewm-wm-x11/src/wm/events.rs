@@ -152,6 +152,12 @@ impl<C: Connection> Wm<'_, C> {
                     eprintln!("flamewm: file explorer shortcut failed: {error}");
                 }
             }
+            // The finder toggles: a second press stops the open window (see flamewm-finder).
+            ACTION_OPEN_FINDER | ACTION_OPEN_FINDER_CTRL_ALT => {
+                if let Err(error) = std::process::Command::new("flamewm-finder").spawn() {
+                    eprintln!("flamewm: finder shortcut failed: {error}");
+                }
+            }
             ACTION_OPEN_TERMINAL_SUPER | ACTION_OPEN_TERMINAL_CTRL_ALT => {
                 // The resolver owns the choice: `defaultTerminal` override, else FlameWM Terminal.
                 let program = flamewm_applications::terminal::terminal_program();

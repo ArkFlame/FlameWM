@@ -787,7 +787,7 @@ pub fn project_task_slots_async(
                 .filter(|name| !name.is_empty())
                 .unwrap_or(state.app_id.as_str());
             document.text(&label_id, label.to_owned())?;
-            let px = crate::projection::task_icon_px(view.output);
+            let px = crate::projection::task_icon_device_px(view.output);
             schedule_visible(
                 document,
                 &icon_id,

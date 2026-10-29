@@ -1,3 +1,9 @@
+use std::env;
+use std::path::{Path, PathBuf};
+
+use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_ui_core::glass::{self, MaterialRole, RendererCaps};
+use flamewm_ui_x11::backdrop::WindowBackdrop;
 use flamewm_ui_x11::{UiDocument, decode_document};
 
 const COMPILED_UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-settings.rwr"));
@@ -7,6 +13,56 @@ pub const SETTINGS_DEFAULT_HEIGHT: u32 = 540;
 
 pub fn document() -> Result<UiDocument, String> {
     decode_document(COMPILED_UI)
+}
+
+/// The settings document with the window-level wallpaper backdrop under its translucent body glass.
+/// Opacity is the resolved GlassRegular alpha, so Reduce transparency installs no backdrop.
+pub fn document_with_backdrop(
+    snapshot: Option<&SettingsSnapshot>,
+) -> Result<UiDocument, String> {
+    Ok(decode_document(COMPILED_UI)?.with_window_backdrop(window_backdrop(snapshot)))
+}
+
+fn window_backdrop(snapshot: Option<&SettingsSnapshot>) -> WindowBackdrop {
+    let text = |key: &str| match snapshot.and_then(|value| value.values.get(key)) {
+        Some(SettingValue::Text(value)) => value.clone(),
+        _ => String::new(),
+    };
+    let fit = text("wallpaperFit");
+    let empty = SettingsSnapshot::new(0);
+    let appearance = glass::appearance_from_settings(snapshot.unwrap_or(&empty));
+    let body = glass::resolve(
+        MaterialRole::GlassRegular,
+        appearance,
+        100,
+        RendererCaps {
+            backdrop_blur: true,
+        },
+    );
+    WindowBackdrop {
+        wallpaper: text("wallpaper"),
+        fit: if fit.is_empty() { "fill".into() } else { fit },
+        packaged_root: packaged_root(),
+        opacity_percent: u8::try_from(u32::from(body.alpha_permille.min(1000)) / 10).unwrap_or(100),
+        blur_percent: glass::blur_percent_from_px(body.blur_px),
+    }
+}
+
+/// Packaged asset root for the default wallpaper: the install prefix, else the source checkout.
+fn packaged_root() -> PathBuf {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let installed = env::current_exe().ok().and_then(|exe| {
+        let bin = exe.parent()?;
+        let usr = bin.parent()?;
+        (bin.file_name()? == "bin" && usr.file_name()? == "usr").then(|| usr.join("share/flamewm"))
+    });
+    installed
+        .filter(|root| root.join("assets").is_dir())
+        .unwrap_or(source)
 }
 
 #[cfg(test)]
@@ -39,6 +95,10 @@ mod tests {
         "snap-opacity-value",
         "desktop-entry-size-value",
         "surface-blur-value",
+        "surface-saturation-value",
+        "surface-rim-fade-value",
+        "surface-shadow-value",
+        "surface-highlight-value",
         "surface-opacity-value",
         "start-icon-value",
         "file-manager-value",
@@ -162,8 +222,7 @@ mod tests {
 
     #[test]
     fn display_outputs_are_compact_numbered_entries_without_duplicate_previews() {
-        let selection = css_rule(CSS, ".display-output-selector");
-        assert_eq!(css_value(selection, "flex-direction"), Some("column"));
+        assert!(CSS.contains(".display-output-selector { width:100%; display:flex; flex-direction:column;"));
         assert!(!HTML.contains("display-topology-map"));
         assert!(!HTML.contains("monitor-screen"));
         assert!(!CSS.contains(".display-layout"));
@@ -210,10 +269,10 @@ mod tests {
     }
 
     #[test]
-    fn auto_location_toggle_stacks_under_its_description_so_it_stays_visible() {
-        // A long description on a side-by-side row pushed the toggle off the right edge at 820px.
+    fn auto_location_toggle_shares_its_row_with_the_description() {
+        // Right-aligned like the other switches; the description wraps inside the copy column.
         assert!(HTML.contains(
-            "<div class=\"setting-block lock-stacked\"><div class=\"setting-copy\"><div class=\"setting-title\">Automatically detect my location</div>"
+            "<div class=\"setting-block\"><div class=\"setting-copy\"><div class=\"setting-title\">Automatically detect my location</div>"
         ));
         assert!(HTML.contains("Approximate location from your IP address (ipwho.is, ipinfo.io). Only the city is stored."));
     }
@@ -244,6 +303,74 @@ mod tests {
         assert!(!HTML.contains("settings.taskbar-blur"));
         assert!(!HTML.contains("settings.taskbar-opacity"));
         assert_eq!(HTML.matches("id=\"color-surface-wheel\"").count(), 1);
+    }
+
+    #[test]
+    fn glass_rows_bind_their_controls_on_the_surfaces_page() {
+        let surfaces = page_between(HTML, "page-surfaces", "page-animations");
+        for (id, action) in [
+            ("glassify-on", "settings.toggle.glassifyContrastZones"),
+            ("glassify-off", "settings.toggle.glassifyContrastZones"),
+            ("reduce-transparency-on", "settings.toggle.reduceTransparency"),
+            ("reduce-transparency-off", "settings.toggle.reduceTransparency"),
+            ("taskbar-material-blur-only", "settings.taskbar.material.blur-only"),
+            ("taskbar-material-inherit", "settings.taskbar.material.inherit"),
+            ("taskbar-material-custom-tint", "settings.taskbar.material.custom-tint"),
+            ("glass-reset", "settings.glass.reset"),
+            ("color-taskbarTint-wheel", "settings.picker.open.taskbarTint"),
+        ] {
+            assert!(
+                surfaces.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
+                "{id} must bind {action} on the surfaces page"
+            );
+        }
+        for (track, slug) in [
+            ("slider.glass-opacity", "glass-opacity"),
+            ("slider.glass-blur", "glass-blur"),
+            ("slider.taskbar-opacity", "taskbar-opacity"),
+        ] {
+            assert!(surfaces.contains(&format!("data-action=\"{track}\"")));
+            for suffix in ["value", "fill", "thumb"] {
+                assert!(
+                    surfaces.contains(&format!("id=\"{slug}-{suffix}\"")),
+                    "{slug}-{suffix} must exist for the slider"
+                );
+            }
+        }
+        assert!(surfaces.contains("id=\"color-taskbarTint-current\""));
+        assert!(surfaces.contains("id=\"color-taskbarTint-preset-5\""));
+        assert!(surfaces.contains("id=\"color-taskbarTint-selected-5\""));
+        assert!(surfaces.contains("id=\"taskbar-tint-live\""));
+        assert!(surfaces.contains("Reset glass settings"));
+    }
+
+    #[test]
+    fn glass_disabled_states_are_inert_twins_not_clickable_controls() {
+        let surfaces = page_between(HTML, "page-surfaces", "page-animations");
+        // Inherit mode shows the inert opacity twin instead of the live slider.
+        let twin = surfaces
+            .split("id=\"taskbar-opacity-off\"")
+            .nth(1)
+            .expect("taskbar opacity twin");
+        let twin = &twin[..twin.find("</div></div>").expect("twin end")];
+        assert!(surfaces.contains("<div class=\"slider-control is-disabled\" id=\"taskbar-opacity-off\">"));
+        assert!(!twin.contains("data-action"), "disabled twin must not be clickable");
+        assert!(surfaces.contains("<div class=\"value-pill value is-disabled\" id=\"taskbar-tint-off\">"));
+        let live = surfaces
+            .split("id=\"taskbar-opacity-live\"")
+            .nth(1)
+            .expect("live taskbar opacity slider");
+        assert!(live.contains("data-action=\"slider.taskbar-opacity\""));
+    }
+
+    #[test]
+    fn glass_rows_draw_no_element_shadows() {
+        let rest = HTML
+            .split_once("id=\"glass-dark\"")
+            .map(|(_, rest)| rest)
+            .expect("glass preset row");
+        let glass = rest.split_once("Window frame").map_or(rest, |(glass, _)| glass);
+        assert!(!glass.contains("shadow"), "glass rows must not use shadows");
     }
 
     #[test]
@@ -295,8 +422,8 @@ mod tests {
     #[test]
     fn settings_source_preserves_native_canvas_and_page_contract() {
         assert!(css_rule(CSS, "body").contains("width:100%"));
-        assert!(css_rule(CSS, ".settings-nav").contains("width:208px"));
-        assert!(CSS.contains(".nav-selection { position:absolute; left:8px; width:192px;"));
+        assert!(css_rule(CSS, ".settings-nav").contains("width:187px"));
+        assert!(CSS.contains(".nav-selection { position:absolute; left:8px; width:171px;"));
     }
 
     #[test]
@@ -326,7 +453,7 @@ mod tests {
                 "T02 root does not match {width}x{height} viewport: {root}"
             );
             assert!(
-                css_value(nav, "width") == Some("208px")
+                css_value(nav, "width") == Some("187px")
                     && css_value(nav, "height") == Some("100%")
             );
             assert!(

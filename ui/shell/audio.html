@@ -6,30 +6,30 @@
   <link rel="stylesheet" href="flamewm.css">
   <style>
     body { margin:0px; }
-    .tray-popup.audio-popup { position:absolute; left:0px; top:0px; width:459px; height:460px; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:8px; background:var(--surface); }
+    .tray-popup.audio-popup { position:absolute; left:0px; top:0px; width:459px; height:460px; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:24px; background:var(--surface); }
     .audio-header { position:relative; height:48px; display:flex; flex-direction:row; align-items:center; padding:0px 14px; gap:10px; }
     .audio-back { width:28px; height:28px; background:transparent; border-width:0px; border-radius:6px; }
     .audio-back .symbolic-icon { width:16px; height:16px; }
     .audio-tabs { height:44px; padding:4px 14px 6px 14px; display:flex; flex-direction:row; gap:4px; }
-    .audio-tab { flex:1; height:34px; padding:0px; display:flex; align-items:center; justify-content:center; background:transparent; border-width:0px; border-radius:6px; font-size:14px; font-weight:700; color:#f0f0f0; }
+    .audio-tab { flex:1; height:34px; padding:0px; display:flex; align-items:center; justify-content:center; background:#ffffff1a; border-width:0px; border-radius:999px; font-size:13px; font-weight:600; color:#f0f0f0; }
     .audio-list { position:relative; height:336px; overflow-y:auto; }
-    .audio-group { position:relative; width:459px; height:84px; }
-    .audio-slot-label { position:absolute; left:58px; top:10px; font-size:13px; font-weight:700; color:var(--text); }
+    .audio-group { position:relative; width:431px; height:84px; margin:0px 14px 8px 14px; background:#ffffff14; border-radius:18px; }
+    .audio-slot-label { position:absolute; left:16px; top:12px; font-size:14px; font-weight:600; color:var(--text); }
     .audio-row-icon { position:absolute; left:16px; top:30px; width:20px; height:20px; }
-    .audio-lane { position:absolute; left:52px; top:31px; width:362px; height:12px; }
-    .audio-track { position:absolute; left:6px; top:3px; width:350px; height:6px; background:#42474b; border-radius:3px; }
-    .audio-track-fill { position:absolute; left:0px; top:0px; width:0px; height:6px; background:var(--accent); border-radius:3px; }
-    .audio-thumb { position:absolute; left:0px; top:0px; width:12px; height:12px; border-radius:6px; background:#ffffff; }
-    .audio-row-value { position:absolute; left:414px; top:28px; width:40px; font-size:12px; color:var(--text); }
-    .audio-mute { position:absolute; left:58px; top:48px; width:28px; height:28px; padding:0px; background:#333436; border-width:0px; border-radius:6px; }
+    .audio-lane { position:absolute; left:52px; top:31px; width:362px; height:16px; }
+    .audio-track { position:absolute; left:6px; top:0px; width:350px; height:16px; background:#ffffff33; border-radius:8px; }
+    .audio-track-fill { position:absolute; left:0px; top:0px; width:0px; height:16px; background:#ffffff; border-radius:8px; }
+    .audio-thumb { position:absolute; left:0px; top:2px; width:12px; height:12px; border-radius:6px; background:transparent; }
+    .audio-row-value { position:absolute; left:372px; top:12px; width:40px; font-size:12px; font-weight:600; color:var(--text); }
+    .audio-mute { position:absolute; left:16px; top:50px; width:28px; height:28px; padding:0px; background:#ffffff1f; border-width:0px; border-radius:999px; }
     .audio-mute .symbolic-icon { position:absolute; left:6px; top:6px; width:16px; height:16px; }
-    .audio-separator { position:absolute; left:14px; right:14px; bottom:0px; height:1px; background:#42474b; }
+    .audio-separator { position:absolute; left:14px; right:14px; bottom:0px; height:0px; background:transparent; }
     .audio-empty { position:absolute; left:58px; top:24px; font-size:12px; color:var(--text); }
     .audio-footer { position:relative; height:32px; display:flex; flex-direction:row; align-items:center; padding:0px 14px; }
     .audio-footer-sep { position:absolute; left:14px; right:14px; top:0px; height:1px; background:#42474b; }
     .audio-raise-label { flex-grow:1; font-size:12px; color:var(--text); }
-    .audio-raise-track { position:relative; width:39px; height:19px; border-radius:10px; background:#42474b; }
-    .audio-raise-knob { position:absolute; left:2px; top:2px; width:15px; height:15px; border-radius:8px; background:#ffffff; }
+    .audio-raise-track { position:relative; width:39px; height:19px; border-radius:999px; background:#42474b; }
+    .audio-raise-knob { position:absolute; left:2px; top:2px; width:15px; height:15px; border-radius:999px; background:#ffffff; }
   </style>
 </head>
 <body class="popup-body">

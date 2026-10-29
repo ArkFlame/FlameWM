@@ -132,7 +132,7 @@ impl<C: Connection> Wm<'_, C> {
                     }
                     FrameEffect::ApplyShape => {
                         let (frame, floating, outer) = match self.clients.get(&client) {
-                            Some(state) => (state.frame, state.is_floating(), state.outer),
+                            Some(state) => (state.frame, state.has_rounded_frame(), state.outer),
                             None => continue,
                         };
                         self.clear_frame_shape(frame, outer, floating)?;

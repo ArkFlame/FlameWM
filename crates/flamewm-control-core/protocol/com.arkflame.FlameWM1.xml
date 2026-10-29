@@ -279,4 +279,16 @@
       <arg name="snapshot" type="a{sv}"/>
     </signal>
   </interface>
+  <!-- Weather: the shell publishes the forecast; the control host caches and fans it out. -->
+  <interface name="com.arkflame.FlameWM1.Weather">
+    <method name="GetSnapshot">
+      <arg name="snapshot" type="a{sv}" direction="out"/>
+    </method>
+    <method name="Publish">
+      <arg name="payload" type="s" direction="in"/>
+    </method>
+    <signal name="FeedChanged">
+      <arg name="snapshot" type="a{sv}"/>
+    </signal>
+  </interface>
 </node>

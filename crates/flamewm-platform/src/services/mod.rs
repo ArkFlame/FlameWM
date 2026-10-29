@@ -5,5 +5,6 @@ pub mod panels;
 pub mod session;
 pub mod settings;
 pub mod shortcuts;
+pub mod weather;
 pub mod windows;
 pub mod workspaces;

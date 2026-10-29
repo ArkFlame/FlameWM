@@ -1244,7 +1244,7 @@ impl ShellLoop {
                         .outputs
                         .iter()
                         .find(|output| output.id == output_id);
-                    (handle, projection::task_icon_px(output))
+                    (handle, projection::task_icon_device_px(output))
                 })
                 .collect()
         };
@@ -2127,9 +2127,18 @@ impl ShellLoop {
             }
         }
         self.push_weather_feed();
+        self.publish_weather_feed();
         if !tray_ok {
             self.weather_feed_pending = true;
         }
+    }
+
+    /// Publishes the same encoded feed to the control host, which caches it for the desktop
+    /// widget. Nonblocking submit; the host bumps its revision only when the payload changes.
+    fn publish_weather_feed(&self) {
+        self.submit(flamewm_control_core::ControlRequest::PublishWeatherFeed {
+            payload: self.weather.feed().encode(),
+        });
     }
 
     /// Nonblocking feed push. A full pipe re-arms the pending flag for the next tick;

@@ -1,12 +1,12 @@
 //! Window decoration policy and typed titlebar style tokens (single owner).
 //!
-//! Eligibility: only a `Floating` window gets the rounded mask. Snapped,
-//! maximized, fullscreen windows are rectangular.
+//! Eligibility: `Floating` and snapped (layout) windows get the rounded mask.
+//! Maximized and fullscreen windows are rectangular.
 
 use crate::palette::Rgb;
 
 /// Corner radius of the `Rounded` style for floating windows.
-pub const ROUNDED_RADIUS: u16 = 12;
+pub const ROUNDED_RADIUS: u16 = 24;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DecorationStyle {
@@ -36,9 +36,9 @@ pub struct ButtonTokens {
 }
 
 /// Settings default for `surfaceColor` (shared Surfaces RGB).
-pub const DEFAULT_SURFACE_RGB: Rgb = Rgb(0x0019_1b1d);
-/// Settings default for `surfaceOpacity` 50% as an 8-bit alpha (`50 * 255 / 100`).
-pub const DEFAULT_SURFACE_ALPHA: u8 = 127;
+pub const DEFAULT_SURFACE_RGB: Rgb = Rgb(0x0033_3333);
+/// Settings default for `surfaceOpacity` 65% (Tahoe dark) as an 8-bit alpha (`65 * 255 / 100`).
+pub const DEFAULT_SURFACE_ALPHA: u8 = 165;
 /// Settings default for `surfaceBlurPercent`.
 pub const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
 
@@ -55,6 +55,10 @@ pub struct ChromeTokens {
     /// Shared one-pixel inner glass contour (RRGGBB + straight alpha).
     pub surface_border_rgb: Rgb,
     pub surface_border_alpha: u8,
+    /// `surfaceRimFadePercent`: bottom rim alpha as a percent of the top rim.
+    pub rim_fade_percent: u32,
+    /// `surfaceHighlightPercent`: alpha of the 1px inset top gloss.
+    pub highlight_percent: u32,
     /// Bumped when the backdrop source (wallpaper) changes so frames repaint.
     pub backdrop_revision: u32,
     pub buttons: [ButtonTokens; 3],
@@ -70,7 +74,9 @@ impl Default for ChromeTokens {
             titlebar_alpha: DEFAULT_SURFACE_ALPHA,
             titlebar_blur_percent: DEFAULT_SURFACE_BLUR_PERCENT,
             surface_border_rgb: Rgb(0x00ff_ffff),
-            surface_border_alpha: 63,
+            surface_border_alpha: 20,
+            rim_fade_percent: 6,
+            highlight_percent: 18,
             backdrop_revision: 0,
             buttons: [ButtonTokens::default(); 3],
             window_shadows: true,
@@ -78,7 +84,8 @@ impl Default for ChromeTokens {
     }
 }
 
-/// Corner radius for a frame: 0 unless the window is `Floating`.
+/// Corner radius for a frame: 0 unless the window is rounded-eligible
+/// (`Floating` or snapped; the caller passes that flag).
 #[must_use]
 pub const fn corner_radius(floating: bool, style: DecorationStyle) -> u16 {
     if !floating {
@@ -102,8 +109,8 @@ mod tests {
     }
 
     #[test]
-    fn rounded_is_twelve_for_floating_only() {
-        assert_eq!(corner_radius(true, DecorationStyle::Rounded), 12);
+    fn rounded_is_twenty_four_for_floating_only() {
+        assert_eq!(corner_radius(true, DecorationStyle::Rounded), 24);
         assert_eq!(
             corner_radius(true, DecorationStyle::Rounded),
             ROUNDED_RADIUS

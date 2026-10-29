@@ -24,7 +24,7 @@ pub fn run(options: SettingsLaunchOptions) -> Result<(), String> {
     );
     application.client_mut().set_page(options.page);
     application.appearance_tab = options.appearance_tab;
-    let mut document = view::document()?;
+    let mut document = view::document_with_backdrop(application.client().settings())?;
     if let Err(message) = application.refresh(&mut document) {
         application.report_error(&mut document, message);
     }

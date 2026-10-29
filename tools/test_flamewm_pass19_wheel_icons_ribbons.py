@@ -46,7 +46,8 @@ class ConvertWheelSourceTests(unittest.TestCase):
 
     def test_wheel_hit_test_shared_for_hover_and_click(self):
         main = source("crates/flamewm-desktop/src/main.rs")
-        handling = main[main.index("fn handle_event(") : main.index('if action.action == "keyboard.input"', main.index("fn handle_event("))]
+        # The wheel's own keyboard block sits inside this handler; the boundary is the top-level keyboard block.
+        handling = main[main.index("fn handle_event(") : main.index('\n    if action.action == "keyboard.input"', main.index("fn handle_event("))]
         self.assertGreaterEqual(handling.count("wheel_hit_at(state, action.x, action.y)"), 2)
         self.assertIn("update_wheel_hover(document, state, sector)", handling)
         self.assertIn("handle_menu_action(&format!(\"convert.slot.{index}\")", handling)

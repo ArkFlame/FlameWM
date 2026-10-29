@@ -7,6 +7,7 @@ use flamewm_integrations_linux::icons::{
     IconKey, IconRequest, IconResolver, IconSize, Rgba8Raster,
 };
 use flamewm_ui_core::context_menu::{menu_surface, surface_fill};
+use flamewm_ui_core::surface::surface_material_values;
 use flamewm_ui_core::style::UiLayer;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
@@ -166,19 +167,19 @@ pub fn project_menu_surface(
         },
     )?;
     // Translucent menus blur the wallpaper beneath them; 0 clears the backdrop.
-    let blur = match snapshot.values.get("surfaceBlurPercent") {
-        Some(SettingValue::Percent(value)) => (*value).min(100),
-        _ => DEFAULT_SURFACE_BLUR_PERCENT,
-    };
-    document.node_backdrop(id, Some(blur))
+    document.node_backdrop(id, Some(surface_blur_percent(snapshot)))?;
+    document.surface_material(id, Some(surface_material_values(snapshot)))
 }
 
-/// Settings default for `surfaceBlurPercent` (shell `Settings::default`).
-const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
+/// Global `surfaceBlurPercent` (0..=100) that menus and inheriting widgets blur beneath them.
+pub(crate) fn surface_blur_percent(snapshot: &SettingsSnapshot) -> u8 {
+    flamewm_ui_core::surface::surface_blur_percent(snapshot)
+}
 
-/// Clears a desktop menu root's node backdrop (menu hidden).
+/// Clears a desktop menu root's node backdrop and glass material (menu hidden).
 pub fn clear_menu_backdrop(document: &mut impl UiDocumentAccess, id: &str) -> Result<(), String> {
-    document.node_backdrop(id, None)
+    document.node_backdrop(id, None)?;
+    document.surface_material(id, None)
 }
 
 /// Semantic layer assignment, run once at document init. Static ids plus the
@@ -877,7 +878,8 @@ mod tests {
             );
         }
         for (id, color) in &probe.fills {
-            assert_eq!(color.a, 127, "surfaceOpacity 50% must reach {id}");
+            // 50% of 255 is 127.5; the surface alpha rounds half up (see surface_fill).
+            assert_eq!(color.a, 128, "surfaceOpacity 50% must reach {id}");
         }
     }
 
@@ -1225,6 +1227,10 @@ mod tests {
     }
 
     /// Polls `apply_icon_theme` until the requested chain is installed.
+    /// THEME_GENERATION is process-global and each service numbers its own generations, so
+    /// parallel theme tests race on it. Tests that read or bump it take this lock.
+    static THEME_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn await_icon_theme(icons: &mut ParallelIconService, theme: &str) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !icons.apply_icon_theme(theme) {
@@ -1238,6 +1244,7 @@ mod tests {
 
     #[test]
     fn apply_icon_theme_installs_requested_chain_and_bumps_generation() {
+        let _theme_guard = THEME_STATE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         let mut icons = ParallelIconService::spawn(
             std::env::temp_dir().join("flamewm-projection-apply-theme-no-such-root"),
         );
@@ -1252,6 +1259,7 @@ mod tests {
 
     #[test]
     fn apply_icon_theme_stays_satisfied_after_watch_refresh() {
+        let _theme_guard = THEME_STATE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // A watch refresh rebuilds from the installed chain, so the pending icon theme request
         // must still read as satisfied; otherwise icon_theme_pending would stay true and retry
         // request_theme_change on every tick.
@@ -1267,6 +1275,7 @@ mod tests {
 
     #[test]
     fn refresh_theme_unchanged_index_returns_false_and_keeps_mirror() {
+        let _theme_guard = THEME_STATE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         let mut icons = ParallelIconService::spawn(
             std::env::temp_dir().join("flamewm-projection-refresh-theme-no-such-root"),
         );

@@ -1,3 +1,22 @@
+## 2026-10-29 — File wheel audio and video conversion
+
+- The file wheel now offers audio (MP3, M4A, WAV, FLAC, OGG, Opus, AIFF, WMA) and video (MP4, MOV, MKV, WebM, AVI, WMV, GIF, MP3 export) conversions. They run through ffmpeg, which is detected at runtime; without it these entries are not offered. Outputs are saved beside the original under a free name, and the original is never replaced.
+- Media conversion checks the ffmpeg encoders before offering a target, and the media time limit is now 30 minutes.
+- The file wheel has three modes: Convert, Tools and Actions. Hold Shift, Ctrl or Alt while hovering to pick a mode, or click the hub to cycle. Tools offers image (resize, JPEG, strip metadata, rotate, grayscale via ImageMagick), audio and video presets (ffmpeg), ZIP and SHA-256. Actions offers Open, Reveal, Rename, Create Shortcut, Trash.
+- Subtitle files (SRT and VTT) convert between each other.
+- Tools also offers tar.gz archives, and Extract for ZIP and tar.gz files (into a new folder beside the archive; existing files are never replaced).
+- Keyboard: with the wheel open, Tab cycles the mode and digits 1 to 8 pick a segment. Escape stops running conversions and tools.
+- Wheel look: rounded wedge corners, a centre hub that shows the mode name, and an accent-colored glow around the highlighted segment.
+- `appearance=light` in settings now selects the Light glass preset for menus and the wheel when no explicit glass values are set.
+- Not yet included: drag and drop onto the wheel, a progress readout for media jobs, per-segment icons, sound on hover, and arrow-key selection (arrow keys are not delivered to the desktop as text).
+
+## 2026-10-28 — File finder
+
+- Add `flamewm-finder`, a glass file search window over a bounded filename index. Open it with Super+F or Ctrl+Alt+F; a second press or Escape closes it.
+- The finder searches file names and paths, with filters `type:`, `in:` and `~`. Results show as a list, or as a grid of tiles with Left, Right, Up and Down; Ctrl+G switches a result list to tiles. The home view shows recent files as tiles.
+- Type `>` or `/` for commands (keyboard help, duplicate files, index setup, home folder), and `@` for folder scopes.
+- Super+F now opens the finder. WindowFullscreen's default moves to Super+Shift+F. Saved shortcut settings are kept as they are, so a saved fullscreen binding on Super+F keeps it and the finder then uses Ctrl+Alt+F only.
+
 ## 2026-10-28 — Desktop widgets, window margin, GPU rendering and one dist directory
 
 - Add desktop widgets: time and date, CPU and memory ring gauges, a media player and a custom text widget. Add them from **Add Widgets** in the desktop menu (a gallery with a preview of each), drag to move, drag the corner grip to resize, and right-click to configure, lock or remove. Every widget has its own settings (elements on/off, sizes, colors, alignment, background, radius) and they are saved in `~/.local/state/desktop-widgets.state`.

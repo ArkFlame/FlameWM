@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=FlameWM Finder
+GenericName=File Search
+Comment=Find files by name in FlameWM
+Exec=flamewm-finder
+TryExec=flamewm-finder
+Icon=flamewm-finder
+Terminal=false
+StartupNotify=true
+StartupWMClass=flamewm-finder
+Categories=System;FileTools;Utility;
+Keywords=find;search;files;locate;spotlight;
+X-FlameWM-Shortcut=Super+F;Ctrl+Alt+F
