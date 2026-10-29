@@ -384,6 +384,19 @@ fn paint_memo(
     }
 }
 
+/// `visible[node]` = `is_effectively_visible(node)` for every node under the root, in one walk.
+fn fill_visibility(document: &RuntimeDocument, visible: &mut [bool]) {
+    visible.fill(false);
+    let mut stack = vec![document.document.root];
+    while let Some(index) = stack.pop() {
+        if !document.is_visible(index) {
+            continue;
+        }
+        visible[index as usize] = true;
+        stack.extend(children(document, index));
+    }
+}
+
 /// Same output as `build_scrolled_paint`, re-emitting only the nodes whose inputs changed
 /// since the previous call that used `cache`.
 pub(crate) fn build_scrolled_paint_cached(
@@ -402,9 +415,7 @@ pub(crate) fn build_scrolled_paint_cached(
         cache.visibility.clear();
         cache.visibility.resize(count, false);
     }
-    for (i, visible) in cache.visibility.iter_mut().enumerate() {
-        *visible = document.is_effectively_visible(i as u32);
-    }
+    fill_visibility(document, &mut cache.visibility);
     build_clipped(document, layout, interaction, |layout, nodes, out| {
         paint_memo(document, cache, interaction, layout, nodes, out);
     })
