@@ -41,9 +41,9 @@ ACCEPTED_OWNERS: dict[str, dict[str, str]] = {
         "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
     },
     "crates/flamewm-render-x11/src/xlib.rs": {
-        "sha256": "9aea42ba4ad0c8305164ac1d59a5674336604f0556c13db4803d7583c29b330d",
-        "delta": "adds CW_BORDER_PIXEL and further Xlib FFI constants (ARGB border pixel fix)",
-        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+        "sha256": "46b00226cc1d82999e295863d7a024b53f89944670dcc1b8732ac659f06565cb",
+        "delta": "adds CW_BORDER_PIXEL and further Xlib FFI constants (ARGB border pixel fix); return_large_frees_to_system also sets a single malloc arena",
+        "reason": "re-accepted after reviewed post-baseline changes (2026-10-29)",
     },
     "crates/flamewm-render-x11/src/xft.rs": {
         "sha256": "dc1fcf075108436305c73c80e16ded1fae0a27ab45d85d1e95eab16b0de5f171",
