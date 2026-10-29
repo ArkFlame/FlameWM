@@ -1,4 +1,5 @@
 pub mod codec;
+pub mod hash;
 pub mod layout;
 pub mod model;
 pub mod paint;
