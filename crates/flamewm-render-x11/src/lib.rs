@@ -24,7 +24,7 @@ pub use lamp::PanelEdge;
 pub use overlay::{TransitionDirection, TransitionStyle, WarpOverlay, fade_alpha};
 pub use warp::WarpRect;
 pub use xcomposite::CapturedImage;
-pub use xlib::release_free_heap;
+pub use xlib::{release_free_heap, return_large_frees_to_system};
 
 pub mod backdrop;
 

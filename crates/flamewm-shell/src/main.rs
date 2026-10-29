@@ -191,6 +191,7 @@ fn display_text(value: &str, max_chars: usize) -> String {
 }
 
 pub fn main() {
+    flamewm_ui_x11::return_large_frees_to_system();
     // J07 role branching at process entry: `--quick-control-host` runs the
     // helper role (profiler `flamewm-quick-control`, owns
     // audio/network/calendar surfaces); otherwise the normal shell role

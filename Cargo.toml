@@ -61,6 +61,17 @@ strip = "symbols"
 [profile.release.package.flamewm-render-compiler]
 opt-level = 2
 
+# Idle-footprint bins: size-optimised code keeps fewer text pages resident. Hot rendering crates
+# (flamewm-render-x11, flamewm-wm-x11, flamewm-ui-x11) keep opt-level 3.
+[profile.release.package.flamewm-wm]
+opt-level = "s"
+
+[profile.release.package.flamewm-desktop]
+opt-level = "s"
+
+[profile.release.package.flamewm-shell]
+opt-level = "s"
+
 [profile.release.build-override]
 opt-level = 2
 

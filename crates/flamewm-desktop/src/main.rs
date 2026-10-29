@@ -437,6 +437,8 @@ struct OriginalItem {
 }
 
 pub fn main() -> Result<(), String> {
+    // Before any thread starts: one malloc arena for the whole process (see the helper docs).
+    flamewm_ui_x11::return_large_frees_to_system();
     flamewm_profiler::init_process("flamewm-desktop");
     flamewm_debug::init_process("desktop");
     let home = PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?);

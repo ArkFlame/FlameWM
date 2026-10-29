@@ -346,10 +346,12 @@ pub fn install_x_protocol_error_handler() {
 /// Allocations at least this large are served by `mmap` and returned to the system on free.
 const MMAP_THRESHOLD_BYTES: c_int = 1024 * 1024;
 
-/// Pins glibc's mmap threshold once per process. glibc raises the threshold to the size of every
-/// large block freed, so after one wallpaper decode or capture every later multi-megabyte buffer
-/// was carved from the heap and stayed resident after it was freed (the desktop kept about 33 MB
-/// of freed wallpaper buffers). A fixed threshold hands every large buffer back on free.
+/// Pins glibc's allocator tunables once per process; call at process entry, before threads start.
+/// The mmap threshold stops glibc raising it to the size of every large block freed, so after one
+/// wallpaper decode or capture every later multi-megabyte buffer was carved from the heap and
+/// stayed resident (the desktop kept about 33 MB of freed wallpaper buffers). The single arena
+/// stops each worker thread from reserving and keeping its own heap arena (idle workers each held
+/// a resident arena). Both only change allocator policy; live allocations are unaffected.
 pub fn return_large_frees_to_system() {
     #[cfg(target_env = "gnu")]
     {
@@ -358,10 +360,12 @@ pub fn return_large_frees_to_system() {
             fn mallopt(param: c_int, value: c_int) -> c_int;
         }
         const M_MMAP_THRESHOLD: c_int = -3;
+        const M_ARENA_MAX: c_int = -8;
         // SAFETY: glibc's `mallopt` takes the arena lock and only changes allocator tunables;
         // live allocations are unaffected.
         ONCE.call_once(|| unsafe {
             mallopt(M_MMAP_THRESHOLD, MMAP_THRESHOLD_BYTES);
+            mallopt(M_ARENA_MAX, 1);
         });
     }
 }

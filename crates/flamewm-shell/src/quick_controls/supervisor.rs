@@ -105,6 +105,10 @@ pub struct QuickControlSupervisor {
     restarts: u32,
     max_restarts: u32,
     shut_down: bool,
+    /// Set once the panel is up; the host is spawned on first use, not at shell start.
+    armed: bool,
+    /// Latest weather feed, replayed to every host spawn so a lazily started host has it before OPEN.
+    weather: Option<WeatherFeed>,
     pending: Option<OpenRequest>,
     response_bytes: Vec<u8>,
     open_results: VecDeque<OpenResult>,
@@ -125,6 +129,8 @@ impl QuickControlSupervisor {
             restarts: 0,
             max_restarts,
             shut_down: false,
+            armed: false,
+            weather: None,
             pending: None,
             response_bytes: Vec::new(),
             open_results: VecDeque::new(),
@@ -132,16 +138,32 @@ impl QuickControlSupervisor {
         }
     }
 
-    /// Spawn the host after the panel is up. Marks child stdin
+    /// Arms the host after the panel is up. The host process is spawned lazily on the first OPEN,
+    /// so an idle desktop runs no helper process. Marks child stdin
     /// `O_NONBLOCK` (rustix) so parent writes never block the shell loop;
     /// a full pipe surfaces as `WouldBlock` backpressure (nonfatal).
     pub fn start_after_panel(&mut self) -> Result<(), SupervisorError> {
-        if self.child.is_some() {
+        self.shut_down = false;
+        self.armed = true;
+        Ok(())
+    }
+
+    /// Spawns the host and replays the cached weather feed, so the host holds it before OPEN.
+    fn spawn_child(&mut self) -> Result<(), SupervisorError> {
+        let child = spawn_host(&self.program)?;
+        self.child = Some(child);
+        if let Some(feed) = self.weather.clone() {
+            // A full pipe on a fresh host is nonfatal: the next push resends the cached feed.
+            let _ = self.send(&Command::Weather(feed));
+        }
+        Ok(())
+    }
+
+    fn ensure_child(&mut self) -> Result<(), SupervisorError> {
+        if self.child.is_some() || !self.armed || self.shut_down {
             return Ok(());
         }
-        self.shut_down = false;
-        self.child = Some(spawn_host(&self.program)?);
-        Ok(())
+        self.spawn_child()
     }
 
     /// Nonblocking write of one encoded line. `WouldBlock` maps to
@@ -158,6 +180,11 @@ impl QuickControlSupervisor {
     /// Pushes the weather feed to the popup host over the same stdin line channel as OPEN.
     /// `WouldBlock` is nonfatal backpressure; the caller may retry on a later tick.
     pub fn push_weather(&mut self, feed: WeatherFeed) -> Result<(), SupervisorError> {
+        self.weather = Some(feed.clone());
+        if self.child.is_none() {
+            // Not spawned yet: the cached feed is replayed on spawn.
+            return Ok(());
+        }
         self.send(&Command::Weather(feed))
     }
 
@@ -165,6 +192,7 @@ impl QuickControlSupervisor {
     /// one; no synchronous retry after `WouldBlock`, the next tick's newest
     /// state wins (caller passes latest state).
     pub fn open(&mut self, req: OpenRequest) -> Result<(), SupervisorError> {
+        self.ensure_child()?;
         coalesce_pending_open(&mut self.pending, req.clone());
         let result = self.send(&Command::Open(req));
         if result.is_ok() {
@@ -270,7 +298,7 @@ impl QuickControlSupervisor {
             return Err(SupervisorError::RestartBudgetExhausted);
         }
         self.restarts += 1;
-        self.child = Some(spawn_host(&self.program)?);
+        self.spawn_child()?;
         Ok(Some(status))
     }
 
@@ -380,7 +408,7 @@ mod tests {
     fn fake_child_nonzero_exit_is_nonfatal() {
         // `false` exits 1 immediately: poll reaps it and restarts.
         let mut sup = QuickControlSupervisor::with_max_restarts("false".to_owned(), 5);
-        sup.start_after_panel().expect("spawn false");
+        sup.start_after_panel().expect("arm"); sup.ensure_child().expect("spawn false");
         // Wait briefly for the trivial child to exit.
         for _ in 0..50 {
             if sup.poll().is_ok() && sup.restart_count() > 0 {
@@ -395,7 +423,7 @@ mod tests {
     #[test]
     fn restart_budget_is_bounded() {
         let mut sup = QuickControlSupervisor::with_max_restarts("false".to_owned(), 1);
-        sup.start_after_panel().expect("spawn");
+        sup.start_after_panel().expect("arm"); sup.ensure_child().expect("spawn");
         let mut exhausted = false;
         for _ in 0..400 {
             match sup.poll() {
