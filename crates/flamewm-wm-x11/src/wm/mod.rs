@@ -1124,6 +1124,7 @@ where
         // After the drain: an effect begun by a drained event (e.g. try_start_open) must cap the wait.
         let wait = wm.transition_wait(wait);
         let wait = wm.deferred_chrome_wait(wait);
+        let wait = wm.shadow_content_wait(wait);
         let wait = drag_edge_wait(
             wm.edge_drag,
             wm.mouse_workspace_cooldowns,

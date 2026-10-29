@@ -195,6 +195,8 @@ pub(super) struct ShadowScene {
     /// The desktop presented new pixels (its frame property changed). Consumed by the first quiet
     /// turn, which bumps the generation so every ring is re-shaded from the new content once.
     pub(super) content_changed: bool,
+    /// When the last present-triggered refresh ran; the rate limit spaces the next one.
+    last_content_bump: Option<std::time::Instant>,
     /// Work counters; logged per change under `FLAMEWM_SHADOW_DIAG=1`.
     pub(super) stats: ShadowStats,
 }
@@ -210,7 +212,17 @@ pub(super) struct ShadowStats {
     pub(super) moved: u64,
     /// Shadows re-stacked beneath the lowest frame.
     pub(super) restacked: u64,
+    /// Present-triggered content refreshes that ran (rate-limited to `CONTENT_MIN_INTERVAL`).
+    pub(super) content_refreshes: u64,
+    /// Turns a present was held back by the rate limit.
+    pub(super) content_skipped: u64,
+    /// Ring re-shades timed, and their total wall time in nanoseconds.
+    pub(super) reshades: u64,
+    pub(super) reshade_nanos: u64,
 }
+
+/// Minimum spacing of present-triggered content refreshes: about 30 Hz per desktop.
+const CONTENT_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
 
 /// Set once from `FLAMEWM_SHADOW_DIAG=1`; diagnostics are silent otherwise.
 fn shadow_diag_enabled() -> bool {
@@ -272,8 +284,22 @@ impl ShadowScene {
         }
         // Desktop content (widgets, wallpaper) that changed under the rings. Only a quiet turn may
         // consume it: a gesture or flight must not re-shade, and the flag waits for the settle.
-        if geometry.is_some() && std::mem::take(&mut self.content_changed) {
-            bump = true;
+        if geometry.is_some() && self.content_changed {
+            let now = std::time::Instant::now();
+            let due = self
+                .last_content_bump
+                .map_or(true, |at| now.duration_since(at) >= CONTENT_MIN_INTERVAL);
+            if due {
+                self.content_changed = false;
+                self.last_content_bump = Some(now);
+                self.stats.content_refreshes += 1;
+                if shadow_diag_enabled() {
+                    eprintln!("flamewm: shadow content refresh stats={:?}", self.stats);
+                }
+                bump = true;
+            } else {
+                self.stats.content_skipped += 1;
+            }
         }
         std::mem::swap(&mut self.dragging, &mut self.next_dragging);
         self.next_dragging.clear();
@@ -460,6 +486,7 @@ impl<C: Connection> Wm<'_, C> {
                         None => self.create_shadow_window()?,
                     };
                     let sibling = bottom.unwrap_or(want.frame);
+                    let started = std::time::Instant::now();
                     self.refresh_frame_shadow(
                         want.frame,
                         want.outer,
@@ -468,11 +495,35 @@ impl<C: Connection> Wm<'_, C> {
                         generation,
                         sibling,
                     )?;
+                    self.shadow_scene.stats.reshades += 1;
+                    self.shadow_scene.stats.reshade_nanos +=
+                        u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
                 }
             }
         }
         self.shadow_scene.wanted_scratch = wanted;
         Ok(())
+    }
+
+    /// Wake the reactor when a rate-limited present refresh becomes due. Only capped while the
+    /// limit holds the refresh back, so it never spins once the interval has passed.
+    pub(super) fn shadow_content_wait(
+        &self,
+        wait: Option<std::time::Duration>,
+    ) -> Option<std::time::Duration> {
+        let scene = &self.shadow_scene;
+        let Some(at) = scene.last_content_bump else {
+            return wait;
+        };
+        if !scene.content_changed {
+            return wait;
+        }
+        let elapsed = at.elapsed();
+        if elapsed >= CONTENT_MIN_INTERVAL {
+            return wait;
+        }
+        let remaining = CONTENT_MIN_INTERVAL - elapsed;
+        Some(wait.map_or(remaining, |w| w.min(remaining)))
     }
 
     /// Beneath the lowest managed frame, restack every shadow that a frame restack (raise, lower,
@@ -759,18 +810,29 @@ impl<C: Connection> Wm<'_, C> {
         let pixmap = self.conn.generate_id()?;
         let (w, h) = (rect.width.max(1) as u16, rect.height.max(1) as u16);
         self.conn.create_pixmap(24, pixmap, root, w, h)?;
-        self.conn.put_image(
-            ImageFormat::Z_PIXMAP,
-            pixmap,
-            gc,
-            w,
-            h,
-            0,
-            0,
-            0,
-            24,
-            &pixels,
-        )?;
+        // Upload only the ring bands: the window is shaped to the ring, so the interior of the
+        // pixmap is never drawn and never needs its pixels.
+        let stride = rect.width.max(1) as usize * 4;
+        for (rx, ry, rw, rh) in shadow::ring_read_rects(rect, outer, radius) {
+            let (rx, ry, rw, rh) = (rx as usize, ry as usize, rw as usize, rh as usize);
+            let mut band = Vec::with_capacity(rw * rh * 4);
+            for row in ry..ry + rh {
+                let at = row * stride + rx * 4;
+                band.extend_from_slice(&pixels[at..at + rw * 4]);
+            }
+            self.conn.put_image(
+                ImageFormat::Z_PIXMAP,
+                pixmap,
+                gc,
+                rw as u16,
+                rh as u16,
+                rx as i16,
+                ry as i16,
+                0,
+                24,
+                &band,
+            )?;
+        }
         // The window holds the pixmap by reference once it is its background; the caller frees it
         // when the shadow is replaced or destroyed.
         self.conn.change_window_attributes(
