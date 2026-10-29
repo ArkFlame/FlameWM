@@ -19,6 +19,10 @@ const DOWNSCALE_RADIUS: f32 = 12.0;
 const DOWNSCALE_FACTOR: usize = 4;
 /// Extra float capacity tolerated before `fit_f32` releases memory.
 const SHRINK_SLACK: usize = 4096;
+/// Inverse of 255, used in premultiplied conversions.
+const INV_255: f32 = 1.0 / 255.0;
+/// 255.0 for unpremultiplied conversions.
+const F255: f32 = 255.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlurError {
@@ -542,7 +546,7 @@ fn bilinear_upscale_straight(
 /// Straight RGBA8 to premultiplied float (colour scaled by alpha, 0..255 range).
 fn premultiply_pixel(src: &[u8], dst: &mut [f32]) {
     let a = f32::from(src[3]);
-    let k = a * (1.0 / 255.0);
+    let k = a * INV_255;
     dst[0] = f32::from(src[0]) * k;
     dst[1] = f32::from(src[1]) * k;
     dst[2] = f32::from(src[2]) * k;
@@ -552,12 +556,12 @@ fn premultiply_pixel(src: &[u8], dst: &mut [f32]) {
 /// Premultiplied float back to straight RGBA8. Alpha below half a unit yields
 /// fully transparent black.
 fn unpremultiply_pixel(src: &[f32], dst: &mut [u8]) {
-    let a = src[3].clamp(0.0, 255.0);
+    let a = src[3].clamp(0.0, F255);
     if a < 0.5 {
         dst.copy_from_slice(&[0, 0, 0, 0]);
         return;
     }
-    let k = 255.0 / a;
+    let k = F255 / a;
     for c in 0..3 {
         dst[c] = to_u8(src[c] * k);
     }
@@ -572,8 +576,8 @@ fn to_u8(value: f32) -> u8 {
 
 /// Source-over composite of straight `top` onto straight `pixel`, in place.
 fn composite_over(pixel: &mut [u8], top: [u8; 4]) {
-    let ab = f32::from(pixel[3]) / 255.0;
-    let at = f32::from(top[3]) / 255.0;
+    let ab = f32::from(pixel[3]) * INV_255;
+    let at = f32::from(top[3]) * INV_255;
     let ao = at + ab * (1.0 - at);
     if ao <= 0.0 {
         pixel.copy_from_slice(&[0, 0, 0, 0]);
@@ -583,7 +587,7 @@ fn composite_over(pixel: &mut [u8], top: [u8; 4]) {
         let value = (f32::from(top[c]) * at + f32::from(pixel[c]) * ab * (1.0 - at)) / ao;
         pixel[c] = to_u8(value);
     }
-    pixel[3] = to_u8(ao * 255.0);
+    pixel[3] = to_u8(ao * F255);
 }
 
 #[cfg(test)]
