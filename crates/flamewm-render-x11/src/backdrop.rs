@@ -328,9 +328,10 @@ fn bilinear_tap(len: u32, out: u32, i: u32) -> (usize, usize, u32) {
 /// vertical blend in [`BlurredCanvas::crop`] yields exactly the words of [`bilinear_word`].
 fn horizontal_line(row: &[u8], cols: &[(usize, usize, u32)], line: &mut [u32]) {
     for (&(a, b, wx), out) in cols.iter().zip(line.chunks_exact_mut(3)) {
+        let (a_off, b_off) = (a * 4, b * 4);
         for (channel, value) in out.iter_mut().enumerate() {
             *value =
-                u32::from(row[a * 4 + channel]) * (256 - wx) + u32::from(row[b * 4 + channel]) * wx;
+                u32::from(row[a_off + channel]) * (256 - wx) + u32::from(row[b_off + channel]) * wx;
         }
     }
 }
