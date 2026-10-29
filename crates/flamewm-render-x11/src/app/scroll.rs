@@ -15,7 +15,7 @@ pub(crate) fn is_scroll_container(
     interaction: Interaction,
 ) -> bool {
     matches!(
-        document.runtime_style(index, interaction).overflow_y,
+        document.runtime_style_cow(index, interaction).overflow_y,
         Overflow::Auto | Overflow::Scroll
     )
 }
@@ -27,7 +27,7 @@ pub(crate) fn clips_descendants(
     index: u32,
     interaction: Interaction,
 ) -> bool {
-    let style = document.runtime_style(index, interaction);
+    let style = document.runtime_style_cow(index, interaction);
     [style.overflow_x, style.overflow_y]
         .iter()
         .any(|mode| matches!(mode, Overflow::Hidden | Overflow::Auto | Overflow::Scroll))
@@ -51,7 +51,7 @@ pub(crate) fn fit_scroll_extents(
     // One work stack reused across scrollers; each walk drains it back to empty.
     let mut pending: Vec<u32> = Vec::new();
     for index in 0..document.document.nodes.len() as u32 {
-        let style = document.runtime_style(index, interaction);
+        let style = document.runtime_style_cow(index, interaction);
         if !matches!(style.overflow_y, Overflow::Auto | Overflow::Scroll) {
             continue;
         }
@@ -326,7 +326,7 @@ impl NodeKey {
         index: u32,
         cached_style: &Style,
     ) -> bool {
-        cached_style == &document.runtime_style(index, interaction)
+        *cached_style == *document.runtime_style_cow(index, interaction)
     }
 }
 
