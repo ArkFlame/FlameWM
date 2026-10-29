@@ -264,12 +264,18 @@ tar -xzf .target/dist/flamewm-<version>-linux-x86_64.tar.gz --strip-components=1
 
 ## Benchmark
 
-| Idle Desktop | Result |
-| --- | --- |
-| Idle PSS | 25.8 MiB |
-| Idle CPU | 0.0% |
+Measured 2026-10-29 (noisy shared machine; see the method notes in the performance doc).
 
-Per-process figures are in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md#benchmark).
+| Idle session (WM, desktop, shell) | Result |
+| --- | --- |
+| Idle RSS, total | 45.6 MiB (earlier measurement: 53.6 MB) |
+| Idle PSS, total | 23.1 MiB |
+| Goal | 10 MB idle PSS, **not achieved** |
+
+Run the pixel benchmark with `cargo run --release -p flamewm-render-x11 --example pixel_bench`.
+Print the per-process RSS and PSS table with `BENCH_DISPLAY=:166 tools/bench_mem.sh idle`
+on a running Xephyr session. Method, per-process table and pixel figures are in
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md#benchmark).
 
 ## Crate architecture
 

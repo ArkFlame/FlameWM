@@ -27,7 +27,8 @@ The compiler crate uses package-specific `opt-level=2`; parser speed is not stea
 
 ## Acceptance targets
 
-- combined Flame-owned graphical process PSS <= 40 MiB target;
+- combined Flame-owned graphical process PSS <= 40 MiB target (met by the 2026-10-29 idle figures below);
+- goal: combined idle PSS <= 10 MB. **Not achieved.** Current idle PSS is 23.1 MiB.
 - near-zero idle CPU outside real events/timers;
 - no visible drag backlog in Xephyr;
 - no stale motion rendered after release;
@@ -35,41 +36,97 @@ The compiler crate uses package-specific `opt-level=2`; parser speed is not stea
 
 ## Benchmark
 
-### Idle Desktop
+Measured 2026-10-29 on Intel TGL UHD (Mesa), Linux 7.0. Figures are not a
+release claim. The machine was shared with other builds, so treat every number
+as a noisy sample (see [Noise and method](#noise-and-method)).
 
-| Process | PSS | Code | Libraries | Heap | Fonts | CPU |
-| --- | --- | --- | --- | --- | --- | --- |
-| `flamewm-session` | 1.5 MiB | 0.8 MiB | 0.5 MiB | 0.3 MiB | 0.0 MiB | 0.0% |
-| `flamewm` | 5.5 MiB | 2.8 MiB | 1.9 MiB | 0.7 MiB | 0.0 MiB | 0.0% |
-| `flamewm-desktop` | 5.0 MiB | 2.8 MiB | 1.3 MiB | 0.9 MiB | 0.0 MiB | 0.0% |
-| `flamewm-shell` | 11.0 MiB | 2.8 MiB | 4.7 MiB | 2.3 MiB | 1.0 MiB | 0.0% |
-| `flamewm-shell --quick-control-host` | 2.8 MiB | 1.2 MiB | 1.3 MiB | 0.3 MiB | 0.0 MiB | 0.0% |
-| **Total** | **25.8 MiB** | **10.4 MiB** | **9.6 MiB** | **4.4 MiB** | **1.0 MiB** | **0.0%** |
+### How to run
 
-### Idle Suite
+Pixel operations (CPU and GPU backends, 1350x641 frame):
 
-| Process | PSS | CPU |
+```sh
+CARGO_TARGET_DIR=$PWD/target-rel CARGO_BUILD_JOBS=2 \
+  flock -w 1800 /tmp/flamewm-cargo.lock \
+  cargo run --release --offline -p flamewm-render-x11 --example pixel_bench
+```
+
+Source: [`crates/flamewm-render-x11/examples/pixel_bench.rs`](../crates/flamewm-render-x11/examples/pixel_bench.rs).
+Each row is the median of 25 iterations inside one run. Repeat the run and take the minimum per row.
+
+Per-process memory (RSS and PSS) on a running session. Start a FlameWM session
+on a nested Xephyr display, wait for it to idle, then:
+
+```sh
+BENCH_DISPLAY=:166 tools/bench_mem.sh idle
+```
+
+[`tools/bench_mem.sh`](../tools/bench_mem.sh) selects processes whose `DISPLAY`
+matches `BENCH_DISPLAY` and prints RSS and PSS per process from
+`/proc/<pid>/smaps_rollup`. PSS divides shared pages between the processes that map
+them, so the PSS total is the footprint to compare. RSS double-counts shared pages.
+
+### Memory, idle (RSS / PSS, MiB)
+
+Values recorded in the 2026-10-29 session measurement. They were not re-run in this pass.
+
+| Process | RSS | PSS |
 | --- | --- | --- |
-| `flamewm-session` | 1.5 MiB | 0.0% |
-| `flamewm` | 8.8 MiB | 0.0% |
-| `flamewm-desktop` | 3.8 MiB | 0.0% |
-| `flamewm-shell` | 8.4 MiB | 0.0% |
-| `flamewm-shell --quick-control-host` | 2.1 MiB | 0.0% |
-| `flamewm-terminal` | 19.8 MiB | 0.0% |
-| `flamewm-explorer` | 11.5 MiB | 0.0% |
-| `flamewm-task-manager` | 12.6 MiB | 0.6% |
-| **Total** | **68.5 MiB** | **0.6%** |
+| `flamewm` (WM) | 10.7 | 5.5 |
+| `flamewm-desktop` | 19.1 | 10.4 |
+| `flamewm-shell` | 15.8 | 7.1 |
+| **Total** | **45.6** | **23.1** |
 
-### Interaction
+Earlier measurement: 53.6 MB RSS total. The per-process rows above are the 2026-10-29
+figures; the earlier per-process split is not recorded here. The sum of the PSS
+rows is 23.0 because of rounding.
 
-| CPU, % of one core | WM | Desktop | Shell | Terminal | Xorg | Total |
-| --- | --- | --- | --- | --- | --- | --- |
-| Window drag | 1.6 | 0.5 | 4.4 | 0.5 | 8.2 | 15.3 |
-| Start popup open and close | 0.0 | 0.0 | 8.0 | 0.0 | 26.0 | 37.9 |
+### Pixel operations (`pixel_bench`, min of 15 runs, ms)
 
-| Measure | Result |
-| --- | --- |
-| Session start to panels mapped | 719 ms |
+Run 2026-10-29 with the release `pixel_bench` built from the workspace, one binary copy for all runs.
+Machine load average during the 15 runs was 56 to 81. Raw per-run output is not committed.
+
+| Operation | CPU | GPU (Mesa TGL) |
+| --- | --- | --- |
+| blur radius 12, full frame | 58.09 | 4.84 |
+| fill rounded 600x300 r24 | 4.00 | 3.83 |
+| stroke rounded 600x300 t2 | 0.07 | 3.73 |
+| selection fill+stroke 320x210 | 1.34 | 8.51 |
+| move outline 800x500 r12 t2 | 0.11 | 3.84 |
+| alpha blend mask 1000x700 | 4.86 | 6.91 |
+| blur radius 28 on 800x500 | 10.05 | 2.18 |
+| frame batch 60 fills + 20 strokes + 2 blurs, per-op calls | 133.45 | 468.33 |
+| same batch, one `paint_batch` call | 162.22 | 29.84 |
+| batch fills + strokes only (60f + 20s) | 14.54 | 27.37 |
+| batch blurs only (2 blurs) | 143.42 | 6.24 |
+
+What these rows show:
+
+- On this machine under this load, the GPU backend is faster than the CPU backend for blur
+  and the frame batch via `paint_batch` (29.8 ms GPU vs 162.2 ms CPU). The GPU fill, stroke and
+  selection rows are slower than CPU, which is consistent with per-call upload and readback cost.
+- The GPU per-op batch (468 ms) shows that per-call upload and readback is the dominant cost, not the
+  draw itself. This is why the batch API exists.
+- In this run, CPU `paint_batch` (162 ms) is not faster than CPU per-op (133 ms). The earlier
+  2026-10-29 baseline (median of 25, pre-optimization, measured at lower load) showed 112.5 ms
+  for `paint_batch` against 167.8 ms per-op. These runs are not comparable, because
+  the baseline was measured at different load and the machine was busy here. This pass does
+  not show an improvement over the baseline, and it does not show a regression.
+
+### Interaction and CPU
+
+Not re-measured in this pass. Earlier interaction tables (drag and Start-popup CPU,
+session-to-panels latency) were removed from this document because they do not reflect the
+current build.
+
+## Noise and method
+
+- Use the minimum of at least 15 runs per row. The minimum is the least-disturbed sample; the median and maximum
+  include other load on the machine.
+- Load average was 56 to 81 during the pixel runs, from other builds on the same box. Results are
+  not valid as absolute numbers on an idle machine. Re-run on an idle machine before quoting a
+  number outside this document.
+- Each run is one process. Memory figures come from a single idle snapshot per session.
+- Debug builds are not performance evidence.
 
 ## Profiler (`flamewm-profiler`, frozen seams R01-R06)
 
