@@ -14,8 +14,8 @@ pub const MAX_WIDGETS: usize = 8;
 pub const MIN_WIDGET_SIZE: i32 = 64;
 pub const STATE_FILE_NAME: &str = "desktop-widgets.state";
 pub const CASCADE_STEP: i32 = 28;
-/// Per-card keys that override the global surface while `inheritSurface` is off.
-pub const SURFACE_OVERRIDE_KEYS: [&str; 3] = ["background", "backgroundOpacity", "backdropBlur"];
+/// Per-card keys that override the global surface while `customSurface` is on.
+pub const SURFACE_OVERRIDE_KEYS: [&str; 2] = ["background", "backgroundOpacity"];
 
 pub const DEFAULT_CUSTOM_TEMPLATE: &str = "It's <aqua>%weekday%</aqua>\n<bold>Hope your day is going well, %username%!</bold>\n<gray>%date% · %time%</gray>\n<white><red_background> CPU %cpu% </red_background> <blue_background> RAM %memory% </blue_background>";
 
@@ -96,8 +96,11 @@ const WHITE: i64 = 0;
 const SLATE: i64 = 2;
 const NIGHT: i64 = 3;
 const ORANGE: i64 = 7;
+#[cfg(test)]
 const SKY: i64 = 11;
 const BLUE: i64 = 12;
+/// Colour option value meaning "follow the live Settings accent"; outside the palette range.
+pub const ACCENT_COLOR: i64 = -1;
 
 #[must_use]
 pub fn palette_color(index: i64) -> Rgb {
@@ -220,10 +223,9 @@ impl WidgetKind {
                 OptionSpec::toggle("showYear", "Show year", false),
                 OptionSpec::toggle("sideBySide", "Time and date side by side", false),
                 OptionSpec::step("timeSize", "Time size", 16, 120, 4, 52, "px"),
-                OptionSpec::step("dateSize", "Date size", 8, 48, 2, 16, "px"),
                 OptionSpec::toggle("bold", "Bold time", true),
                 OptionSpec::color("textColor", "Time color", WHITE),
-                OptionSpec::color("accentColor", "Date color", SKY),
+                OptionSpec::color("accentColor", "Date color", ACCENT_COLOR),
                 OptionSpec::choice("align", "Alignment", &ALIGNMENTS, 1),
             ],
             Self::Cpu | Self::Memory | Self::Ring => vec![
@@ -236,7 +238,7 @@ impl WidgetKind {
                 OptionSpec::color(
                     "ringColor",
                     "Ring color",
-                    if self == Self::Cpu { SKY } else { ORANGE },
+                    if self == Self::Cpu { ACCENT_COLOR } else { ORANGE },
                 ),
                 OptionSpec::color("trackColor", "Track color", SLATE),
                 OptionSpec::color("textColor", "Text color", WHITE),
@@ -246,7 +248,7 @@ impl WidgetKind {
                 OptionSpec::toggle("showPlayer", "Show player name", true),
                 OptionSpec::toggle("showControls", "Show controls", true),
                 OptionSpec::color("textColor", "Text color", WHITE),
-                OptionSpec::color("accentColor", "Accent color", SKY),
+                OptionSpec::color("accentColor", "Accent color", ACCENT_COLOR),
             ],
             Self::Custom => vec![
                 OptionSpec::step("textSize", "Text size", 8, 72, 2, 18, "px"),
@@ -257,18 +259,18 @@ impl WidgetKind {
             Self::Weather => vec![
                 OptionSpec::toggle("showHourly", "Show forecast row", true),
                 OptionSpec::color("textColor", "Text color", WHITE),
-                OptionSpec::color("accentColor", "Accent color", SKY),
+                OptionSpec::color("accentColor", "Accent color", ACCENT_COLOR),
             ],
             Self::History => vec![
                 OptionSpec::toggle("showCpu", "Show CPU line", true),
                 OptionSpec::toggle("showMemory", "Show RAM line", true),
-                OptionSpec::color("cpuColor", "CPU line color", SKY),
+                OptionSpec::color("cpuColor", "CPU line color", ACCENT_COLOR),
                 OptionSpec::color("memoryColor", "RAM line color", ORANGE),
             ],
             Self::Network => vec![
                 OptionSpec::toggle("showRx", "Show download line", true),
                 OptionSpec::toggle("showTx", "Show upload line", true),
-                OptionSpec::color("rxColor", "Download color", SKY),
+                OptionSpec::color("rxColor", "Download color", ACCENT_COLOR),
                 OptionSpec::color("txColor", "Upload color", ORANGE),
             ],
             Self::Calendar => vec![
@@ -277,8 +279,15 @@ impl WidgetKind {
                 OptionSpec::color("accentColor", "Today marker color", WHITE),
             ],
         };
+        // Accent override: the accent row exists only with `customAccent` on, and until then
+        // the card follows the live Settings accent.
+        if let Some(at) = options.iter().position(|spec| spec.key == "accentColor") {
+            options.insert(at, OptionSpec::toggle("customAccent", "Custom accent", false));
+        }
+        // Surface override: colour and opacity rows exist only with `customSurface` on;
+        // off, the card inherits the global surface.
         options.extend([
-            OptionSpec::toggle("inheritSurface", "Use global surface", true),
+            OptionSpec::toggle("customSurface", "Custom surface", false),
             OptionSpec::color(
                 "background",
                 "Background",
@@ -293,10 +302,23 @@ impl WidgetKind {
                 if self == Self::Clock { 0 } else { 70 },
                 "%",
             ),
-            OptionSpec::step("radius", "Corner radius", 0, 40, 2, 18, "px"),
-            OptionSpec::step("backdropBlur", "Backdrop blur", 0, 100, 10, 0, "%"),
         ]);
         options
+    }
+
+    /// Options shown in the widget settings for `widget`'s current values: override rows
+    /// (custom accent, custom surface) appear only while their toggle is on.
+    #[must_use]
+    pub fn visible_options(self, values: &BTreeMap<String, i64>) -> Vec<OptionSpec> {
+        let on = |key: &str| values.get(key).is_some_and(|value| *value != 0);
+        self.options()
+            .into_iter()
+            .filter(|spec| match spec.key {
+                "accentColor" => on("customAccent"),
+                key if SURFACE_OVERRIDE_KEYS.contains(&key) => on("customSurface"),
+                _ => true,
+            })
+            .collect()
     }
 }
 
@@ -377,6 +399,8 @@ pub enum OptionControl {
         unit: &'static str,
     },
     Color,
+    /// Colour that also accepts `ACCENT_COLOR`, which follows the live Settings accent.
+    AccentColor,
     Choice(&'static [&'static str]),
 }
 
@@ -421,10 +445,15 @@ impl OptionSpec {
     }
 
     const fn color(key: &'static str, label: &'static str, default: i64) -> Self {
+        let control = if default == ACCENT_COLOR {
+            OptionControl::AccentColor
+        } else {
+            OptionControl::Color
+        };
         Self {
             key,
             label,
-            control: OptionControl::Color,
+            control,
             default,
         }
     }
@@ -450,7 +479,10 @@ impl OptionSpec {
             OptionControl::Step {
                 minimum, maximum, ..
             } => value.clamp(minimum, maximum),
-            OptionControl::Color => value.rem_euclid(PALETTE.len() as i64),
+            OptionControl::AccentColor if value == ACCENT_COLOR => value,
+            OptionControl::Color | OptionControl::AccentColor => {
+                value.rem_euclid(PALETTE.len() as i64)
+            }
             OptionControl::Choice(choices) => value.rem_euclid(choices.len().max(1) as i64),
         }
     }
@@ -461,6 +493,19 @@ impl OptionSpec {
         match self.control {
             OptionControl::Toggle => i64::from(value == 0),
             OptionControl::Step { step, .. } => self.normalize(value + direction * step),
+            OptionControl::AccentColor => {
+                // Palette slots plus one accent slot; stepping wraps through all of them.
+                let palette = PALETTE.len() as i64;
+                let position = if value == ACCENT_COLOR {
+                    palette
+                } else {
+                    value.rem_euclid(palette)
+                };
+                match (position + direction).rem_euclid(palette + 1) {
+                    slot if slot == palette => ACCENT_COLOR,
+                    slot => slot,
+                }
+            }
             OptionControl::Color | OptionControl::Choice(_) => self.normalize(value + direction),
         }
     }
@@ -470,7 +515,10 @@ impl OptionSpec {
         match self.control {
             OptionControl::Toggle => if value != 0 { "On" } else { "Off" }.to_owned(),
             OptionControl::Step { unit, .. } => format!("{value} {unit}"),
-            OptionControl::Color => PALETTE[self.normalize(value) as usize].name.to_owned(),
+            OptionControl::AccentColor if value == ACCENT_COLOR => "Accent".to_owned(),
+            OptionControl::Color | OptionControl::AccentColor => {
+                PALETTE[self.normalize(value) as usize].name.to_owned()
+            }
             OptionControl::Choice(choices) => choices
                 .get(self.normalize(value) as usize)
                 .copied()
@@ -569,22 +617,28 @@ impl Widget {
         palette_color(self.value(key))
     }
 
+    /// Colour option resolved against the live accent: `ACCENT_COLOR` yields `accent`.
+    #[must_use]
+    pub fn color_or_accent(&self, key: &str, accent: Rgb) -> Rgb {
+        if key == "accentColor" && !self.flag("customAccent") {
+            return accent;
+        }
+        match self.value(key) {
+            ACCENT_COLOR => accent,
+            index => palette_color(index),
+        }
+    }
+
     #[must_use]
     pub fn align(&self) -> TextAlign {
         TextAlign::from_index(self.value("align"))
     }
 
-    /// True when the card takes colour, opacity and blur from the global surface settings.
-    /// An explicit `inheritSurface` wins; otherwise a card saved with any per-card
-    /// background, opacity or blur override keeps those overrides.
+    /// True when the card takes colour and opacity from the global surface settings
+    /// (`customSurface` off, the default).
     #[must_use]
     pub fn inherits_surface(&self) -> bool {
-        match self.values.get("inheritSurface") {
-            Some(value) => *value != 0,
-            None => !SURFACE_OVERRIDE_KEYS
-                .iter()
-                .any(|key| self.values.contains_key(*key)),
-        }
+        !self.flag("customSurface")
     }
 
     pub fn set_value(&mut self, key: &str, value: i64) -> bool {
@@ -592,10 +646,7 @@ impl Widget {
             return false;
         };
         let value = spec.normalize(value);
-        if key == "inheritSurface" {
-            // Stored even at its default, so a card with overrides never reads as inheriting.
-            self.values.insert(key.to_owned(), value);
-        } else if value == spec.default {
+        if value == spec.default {
             self.values.remove(key);
         } else {
             self.values.insert(key.to_owned(), value);
@@ -620,6 +671,8 @@ impl Widget {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WidgetStore {
     widgets: Vec<Widget>,
+    /// Grid (cols, rows) the cells were last laid out on; drives proportional reflow.
+    grid_size: Option<(i32, i32)>,
 }
 
 impl WidgetStore {
@@ -654,14 +707,15 @@ impl WidgetStore {
         self.add_on_grid(kind, GridMetrics::for_work_area(bounds, 100))
     }
 
-    /// Adds a widget in the first free cell of `metrics` (row-major, left side).
-    /// Returns `None` when the store is full or no cell fits the default span.
+    /// Adds a widget in the free cell nearest the centre of the grid, at the kind's
+    /// default size. Returns `None` when the store is full or nothing fits.
     pub fn add_on_grid(&mut self, kind: WidgetKind, metrics: GridMetrics) -> Option<u32> {
         if self.is_full() {
             return None;
         }
         self.layout_grid(metrics);
-        let placement = metrics.first_free(widget_grid::default_span(kind), &self.placements())?;
+        let span = widget_grid::default_span(kind);
+        let placement = metrics.nearest_free_to(span, metrics.center(), &self.placements())?;
         let id = self
             .widgets
             .iter()
@@ -682,30 +736,30 @@ impl WidgetStore {
         self.widgets.iter().filter_map(|widget| widget.grid).collect()
     }
 
-    /// Moves a grid widget to `placement` if it fits and collides with no other widget.
+    /// Moves a grid widget to `placement` if its kind allows that size, it fits, and it
+    /// overlaps no other widget. Locked widgets never move.
     pub fn place_on_grid(&mut self, id: u32, placement: Placement, metrics: GridMetrics) -> bool {
-        if !placement.fits(metrics) {
-            return false;
-        }
-        let others: Vec<Placement> = self
-            .widgets
-            .iter()
-            .filter(|widget| widget.id != id)
-            .filter_map(|widget| widget.grid)
-            .collect();
-        if others.iter().any(|other| metrics.collides(placement, *other)) {
-            return false;
-        }
-        let Some(widget) = self.get_mut(id) else {
+        let placement = metrics.from_right(placement);
+        let Some(widget) = self.get(id) else {
             return false;
         };
-        if widget.locked {
+        if widget.locked
+            || !widget_grid::allowed_spans(widget.kind).contains(&placement.span)
+            || !placement.fits(metrics)
+            || self.placements_except(id).iter().any(|other| metrics.collides(placement, *other))
+        {
             return false;
         }
-        widget.grid = Some(placement);
-        widget.rect = metrics.rect_of(placement);
-        widget.anchor = Some(EdgeAnchor::of(widget.rect, metrics.work));
+        self.set_cell(id, placement, metrics);
         true
+    }
+
+    fn set_cell(&mut self, id: u32, placement: Placement, metrics: GridMetrics) {
+        if let Some(widget) = self.get_mut(id) {
+            widget.grid = Some(placement);
+            widget.rect = metrics.rect_of(placement);
+            widget.anchor = Some(EdgeAnchor::of(widget.rect, metrics.work));
+        }
     }
 
     /// Fresh-profile store: the grid's default arrangement (`widget_grid::default_layout`).
@@ -722,34 +776,93 @@ impl WidgetStore {
             widget.anchor = Some(EdgeAnchor::of(widget.rect, metrics.work));
             store.widgets.push(widget);
         }
+        store.grid_size = Some((metrics.cols, metrics.rows));
         store
     }
 
-    /// Drops a grid widget whose top-left is `origin`: snaps to the nearest cell on the
-    /// side of the drop point, or the nearest free cell when that one is taken.
+    /// Another unlocked widget of the same size whose cell is exactly `want`, when it is
+    /// the only widget there. Dropping onto it swaps the two.
+    fn swap_partner(&self, id: u32, want: Placement, metrics: GridMetrics) -> Option<u32> {
+        let span = self.get(id)?.grid?.span;
+        let others: Vec<(u32, Placement)> = self
+            .widgets
+            .iter()
+            .filter(|widget| widget.id != id)
+            .filter_map(|widget| widget.grid.map(|cell| (widget.id, cell)))
+            .collect();
+        let hits: Vec<&(u32, Placement)> = others
+            .iter()
+            .filter(|(_, cell)| metrics.collides(want, *cell))
+            .collect();
+        match hits.as_slice() {
+            [(partner, cell)]
+                if cell.span == span
+                    && cell.col == want.col
+                    && cell.row == want.row
+                    && self.get(*partner).is_some_and(|widget| !widget.locked) =>
+            {
+                Some(*partner)
+            }
+            _ => None,
+        }
+    }
+
+    /// Drops a grid widget whose top-left is `origin`. Snaps to the nearest cell; a
+    /// same-size widget there is swapped with the dragged one, otherwise the dragged
+    /// widget takes the nearest free cell (push).
     pub fn drop_on_grid(&mut self, id: u32, origin: Point, metrics: GridMetrics) -> bool {
+        let Some(span) = self.get(id).and_then(|widget| widget.grid).map(|cell| cell.span) else {
+            return false;
+        };
+        let want = metrics.snap(origin, span);
+        if let Some(partner) = self.swap_partner(id, want, metrics) {
+            let Some(old) = self.get(id).and_then(|widget| widget.grid) else {
+                return false;
+            };
+            self.set_cell(partner, old, metrics);
+            self.set_cell(id, want, metrics);
+            return true;
+        }
         match self.preview_drop(id, origin, metrics) {
             Some(slot) => self.place_on_grid(id, slot, metrics),
             None => false,
         }
     }
 
-    /// Cell a drop at `origin` would take (the drag ghost). Equals the snapped cell when it
-    /// is free, otherwise the nearest free cell (collision push). `None` when nothing fits.
+    /// Cell a drop at `origin` would take (the drag ghost): the snapped cell when it is
+    /// free or holds a swap partner, otherwise the nearest free cell (collision push).
+    /// `None` when nothing fits.
     #[must_use]
     pub fn preview_drop(&self, id: u32, origin: Point, metrics: GridMetrics) -> Option<Placement> {
         let span = self.get(id).and_then(|widget| widget.grid)?.span;
-        let width = metrics.span_px(span).0;
-        let right = origin.x + width / 2 > metrics.work.x + metrics.work.width / 2;
-        let want = metrics.snap(origin, span, right);
+        let want = metrics.snap(origin, span);
+        if self.swap_partner(id, want, metrics).is_some() {
+            return Some(want);
+        }
         metrics.nearest_free(want, &self.placements_except(id))
+    }
+
+    /// Cell an edge drag to `want` would take: `want` when free, else the nearest free cell.
+    #[must_use]
+    pub fn preview_placement(&self, id: u32, want: Placement, metrics: GridMetrics) -> Option<Placement> {
+        let want = metrics.from_right(want);
+        metrics.nearest_free(want, &self.placements_except(id))
+    }
+
+    /// Places widget `id` at `want`, or at the nearest free cell when `want` is taken.
+    pub fn place_nearest(&mut self, id: u32, want: Placement, metrics: GridMetrics) -> bool {
+        match self.preview_placement(id, want, metrics) {
+            Some(slot) => self.place_on_grid(id, slot, metrics),
+            None => false,
+        }
     }
 
     /// Cell a resize to `span` would take, keeping the current cell when it is free.
     #[must_use]
     pub fn preview_resize(&self, id: u32, span: Span, metrics: GridMetrics) -> Option<Placement> {
-        let current = self.get(id).and_then(|widget| widget.grid)?;
-        let want = Placement { span, ..current };
+        let widget = self.get(id)?;
+        let current = widget.grid?;
+        let want = Placement { span: widget_grid::fit_span(widget.kind, span), ..current };
         metrics.nearest_free(want, &self.placements_except(id))
     }
 
@@ -761,23 +874,20 @@ impl WidgetStore {
             .collect()
     }
 
-    /// Changes a grid widget's span, keeping its cell when it still fits and is free,
-    /// otherwise moving it to the nearest free cell for the new span.
+    /// Changes a grid widget's span to the nearest size its kind allows, keeping its cell
+    /// when it still fits and is free, otherwise moving it to the nearest free cell.
     pub fn resize_on_grid(&mut self, id: u32, span: Span, metrics: GridMetrics) -> bool {
-        let Some(current) = self.get(id).and_then(|widget| widget.grid) else {
+        let Some(widget) = self.get(id) else {
             return false;
         };
-        let want = Placement { span, ..current };
+        let Some(current) = widget.grid else {
+            return false;
+        };
+        let want = Placement { span: widget_grid::fit_span(widget.kind, span), ..current };
         if self.place_on_grid(id, want, metrics) {
             return true;
         }
-        let others: Vec<Placement> = self
-            .widgets
-            .iter()
-            .filter(|widget| widget.id != id)
-            .filter_map(|widget| widget.grid)
-            .collect();
-        match metrics.nearest_free(want, &others) {
+        match metrics.nearest_free(want, &self.placements_except(id)) {
             Some(slot) => self.place_on_grid(id, slot, metrics),
             None => false,
         }
@@ -823,13 +933,23 @@ impl WidgetStore {
         self.layout_grid(GridMetrics::for_work_area(bounds, 100));
     }
 
-    /// Lays every widget out on `metrics`. Grid widgets reflow to their cells (keeping
-    /// their side); legacy free-position widgets snap to the nearest free cell. A legacy
-    /// widget with no free cell keeps its clamped pixel rect (non-destructive).
+    /// Lays every widget out on `metrics`. Legacy right-anchored cells become left columns,
+    /// sizes are clamped to what each kind allows, and cells reflow proportionally from the
+    /// previous grid size. Legacy free-position widgets snap to the nearest free cell; a
+    /// legacy widget with no free cell keeps its clamped pixel rect (non-destructive).
     pub fn layout_grid(&mut self, metrics: GridMetrics) {
         let bounds = metrics.work;
+        for widget in &mut self.widgets {
+            if let Some(cell) = widget.grid {
+                let cell = metrics.from_right(cell);
+                widget.grid = Some(Placement {
+                    span: widget_grid::fit_span(widget.kind, cell.span),
+                    ..cell
+                });
+            }
+        }
         let placed_items: Vec<Placement> = self.placements();
-        let mut slots = metrics.reflow(&placed_items).into_iter();
+        let mut slots = metrics.reflow(&placed_items, self.grid_size).into_iter();
         for widget in &mut self.widgets {
             if widget.grid.is_some() {
                 widget.grid = slots.next().flatten();
@@ -858,6 +978,7 @@ impl WidgetStore {
             };
             widget.anchor = Some(EdgeAnchor::of(widget.rect, bounds));
         }
+        self.grid_size = Some((metrics.cols, metrics.rows));
     }
 }
 
@@ -870,24 +991,6 @@ pub fn move_widget_rect(original: Rect, dx: i32, dy: i32, bounds: Rect) -> Rect 
         original.height,
     )
     .clamp_inside(bounds)
-}
-
-#[must_use]
-pub fn resize_widget_rect(original: Rect, dx: i32, dy: i32, bounds: Rect) -> Rect {
-    let max_width = (bounds.right() - original.x).max(MIN_WIDGET_SIZE);
-    let max_height = (bounds.bottom() - original.y).max(MIN_WIDGET_SIZE);
-    Rect::new(
-        original.x,
-        original.y,
-        original
-            .width
-            .saturating_add(dx)
-            .clamp(MIN_WIDGET_SIZE, max_width),
-        original
-            .height
-            .saturating_add(dy)
-            .clamp(MIN_WIDGET_SIZE, max_height),
-    )
 }
 
 pub fn state_path() -> FlameResult<PathBuf> {
@@ -916,6 +1019,9 @@ pub fn persist(path: &Path, store: &WidgetStore) -> FlameResult<()> {
 #[must_use]
 pub fn serialize(store: &WidgetStore) -> String {
     let mut output = String::from("v1\n");
+    if let Some((cols, rows)) = store.grid_size {
+        output.push_str(&format!("grid\t{cols}\t{rows}\n"));
+    }
     for widget in &store.widgets {
         let values = widget
             .values
@@ -960,6 +1066,17 @@ pub fn parse(text: &str) -> FlameResult<WidgetStore> {
         return Err(FlameError::invalid("invalid desktop widget state header"));
     }
     let mut store = WidgetStore::default();
+    // Optional grid line written after the header (absent in older files).
+    let mut lines = lines.peekable();
+    if let Some(line) = lines.peek().copied() {
+        if let Some(size) = line.strip_prefix("grid\t") {
+            let (cols, rows) = size
+                .split_once('\t')
+                .ok_or_else(|| FlameError::invalid("invalid desktop widget grid size"))?;
+            store.grid_size = Some((number(cols)?, number(rows)?));
+            lines.next();
+        }
+    }
     for line in lines.filter(|line| !line.is_empty()) {
         if store.is_full() {
             break;
@@ -1012,15 +1129,47 @@ pub fn parse(text: &str) -> FlameResult<WidgetStore> {
         widget.template = template;
         widget.anchor = anchor;
         widget.grid = grid;
+        let mut pairs = Vec::new();
         for pair in values_field.split(',').filter(|pair| !pair.is_empty()) {
             let (key, value) = pair
                 .split_once('=')
                 .ok_or_else(|| FlameError::invalid("invalid desktop widget option"))?;
-            widget.set_value(key, number(value)?);
+            pairs.push((key, number(value)?));
         }
+        apply_option_pairs(&mut widget, &pairs);
         store.widgets.push(widget);
     }
     Ok(store)
+}
+
+/// Applies saved option pairs and migrates retired ones: `inheritSurface=0` or any saved
+/// per-card surface override becomes `customSurface=1`, an explicit accent becomes
+/// `customAccent=1`, and the removed `radius`, `backdropBlur` and `dateSize` are dropped.
+fn apply_option_pairs(widget: &mut Widget, pairs: &[(&str, i64)]) {
+    let inherit = pairs
+        .iter()
+        .find(|(key, _)| *key == "inheritSurface")
+        .map(|(_, value)| *value);
+    let overrides = pairs
+        .iter()
+        .any(|(key, _)| SURFACE_OVERRIDE_KEYS.contains(key));
+    for &(key, value) in pairs {
+        match key {
+            "inheritSurface" | "radius" | "backdropBlur" | "dateSize" => {}
+            "accentColor" => {
+                widget.set_value(key, value);
+                if value != ACCENT_COLOR {
+                    widget.set_value("customAccent", 1);
+                }
+            }
+            _ => {
+                widget.set_value(key, value);
+            }
+        }
+    }
+    if inherit == Some(0) || (inherit.is_none() && overrides) {
+        widget.set_value("customSurface", 1);
+    }
 }
 
 /// Parses `col,row,w,h,side` (side `l` or `r`); an empty field is no grid cell.
@@ -1134,14 +1283,10 @@ mod tests {
     }
 
     #[test]
-    fn move_and_resize_stay_inside_bounds_and_above_the_minimum() {
+    fn move_stays_inside_bounds() {
         let area = Rect::new(0, 0, 500, 400);
         let moved = move_widget_rect(Rect::new(100, 100, 200, 100), 1000, -1000, area);
         assert_eq!(moved, Rect::new(300, 0, 200, 100));
-        let shrunk = resize_widget_rect(Rect::new(100, 100, 200, 100), -500, -500, area);
-        assert_eq!(shrunk.size(), flamewm_api::Size::new(64, 64));
-        let grown = resize_widget_rect(Rect::new(100, 100, 200, 100), 1000, 1000, area);
-        assert_eq!(grown, Rect::new(100, 100, 400, 300));
     }
 
     #[test]
@@ -1195,8 +1340,10 @@ mod tests {
         store.get_mut(id).expect("widget").rect = Rect::new(40, 30, 340, 150);
         store.anchor_to(id, bounds());
         store.clamp_all(Rect::new(0, 0, 1350, 641));
-        // Grid cells are the layout: a left widget sits in the first left cell.
-        assert_eq!(store.get(id).expect("widget").rect.x, 16);
+        // Grid cells are the layout: the widget sits on its own reflowed cell.
+        let small = GridMetrics::for_work_area(Rect::new(0, 0, 1350, 641), 100);
+        let cell = store.get(id).expect("widget").grid.expect("cell");
+        assert_eq!(store.get(id).expect("widget").rect, small.rect_of(cell));
 
         // Legacy 9-field record with an absolute x on the right half of the old screen.
         let legacy = "v1\n3\tcpu\t1500\t20\t220\t110\t0\t\tbackdropBlur=40\n";
@@ -1204,9 +1351,9 @@ mod tests {
         loaded.clamp_all(Rect::new(0, 0, 1350, 641));
         let widget = loaded.get(3).expect("widget");
         assert_eq!(widget.rect.right(), 1350 - 16);
-        assert_eq!(widget.value("backdropBlur"), 40);
+        assert!(!widget.stored_values().contains_key("backdropBlur"), "retired key is dropped");
         assert_eq!(
-            serialize(&loaded).lines().nth(1).expect("record").split('\t').nth(8),
+            serialize(&loaded).lines().nth(2).expect("record").split('\t').nth(8),
             Some("r16")
         );
     }
@@ -1273,36 +1420,80 @@ mod surface_inheritance_tests {
     }
 
     #[test]
+    fn accent_defaults_follow_the_live_accent_and_explicit_palette_picks_do_not() {
+        let accent = Rgb { red: 0xef, green: 0x40, blue: 0x48 };
+        assert_eq!(card(WidgetKind::Clock).value("accentColor"), ACCENT_COLOR);
+        assert_eq!(card(WidgetKind::Clock).color_or_accent("accentColor", accent), accent);
+        assert_eq!(card(WidgetKind::Cpu).color_or_accent("ringColor", accent), accent);
+        assert_eq!(
+            card(WidgetKind::Memory).color_or_accent("ringColor", accent),
+            palette_color(ORANGE)
+        );
+        // An explicit pick is ignored until the custom-accent toggle is on.
+        let mut picked = card(WidgetKind::Clock);
+        assert!(picked.set_value("accentColor", SKY));
+        assert_eq!(picked.color_or_accent("accentColor", accent), accent);
+        assert!(picked.set_value("customAccent", 1));
+        assert_eq!(picked.color_or_accent("accentColor", accent), palette_color(SKY));
+        let mut stepping = card(WidgetKind::Clock);
+        assert!(stepping.set_value("accentColor", 0));
+        assert!(stepping.step_value("accentColor", -1));
+        assert_eq!(stepping.value("accentColor"), ACCENT_COLOR);
+        assert!(stepping.step_value("accentColor", 1));
+        assert_eq!(stepping.value("accentColor"), 0);
+    }
+
+    #[test]
     fn new_cards_inherit_the_global_surface() {
         assert!(card(WidgetKind::Clock).inherits_surface());
         assert!(card(WidgetKind::Cpu).inherits_surface());
     }
 
     #[test]
-    fn explicit_toggle_off_keeps_per_card_overrides_and_back_on_restores_inheritance() {
+    fn custom_surface_keeps_overrides_and_turning_it_off_restores_inheritance() {
         let mut widget = card(WidgetKind::Clock);
-        assert!(widget.set_value("inheritSurface", 0));
+        assert!(widget.set_value("customSurface", 1));
         assert!(!widget.inherits_surface());
-        assert!(widget.set_value("backdropBlur", 40));
-        assert_eq!(widget.value("backdropBlur"), 40);
-        assert!(widget.set_value("inheritSurface", 1));
+        assert!(widget.set_value("backgroundOpacity", 40));
+        assert_eq!(widget.value("backgroundOpacity"), 40);
+        assert!(widget.set_value("customSurface", 0));
         assert!(widget.inherits_surface());
     }
 
     #[test]
-    fn legacy_card_with_saved_background_override_does_not_inherit() {
+    fn custom_surface_background_override_does_not_inherit() {
         let mut widget = card(WidgetKind::Custom);
         assert!(widget.set_value("background", 5));
+        assert!(widget.inherits_surface(), "colour is ignored while customSurface is off");
+        assert!(widget.set_value("customSurface", 1));
         assert!(!widget.inherits_surface());
         assert_eq!(widget.value("background"), 5);
     }
 
     #[test]
-    fn override_key_round_trips_through_persist_format() {
+    fn custom_surface_key_round_trips_through_persist_format() {
         let mut widget = card(WidgetKind::Media);
-        widget.set_value("inheritSurface", 0);
-        assert!(widget.stored_values().contains_key("inheritSurface"));
-        assert_eq!(widget.stored_values().get("inheritSurface"), Some(&0));
+        widget.set_value("customSurface", 1);
+        assert!(widget.stored_values().contains_key("customSurface"));
+        assert_eq!(widget.stored_values().get("customSurface"), Some(&1));
+    }
+
+    #[test]
+    fn retired_settings_migrate_to_toggles() {
+        // Old inheritSurface=0 means a custom surface; old explicit accent means a custom accent.
+        let mut widget = card(WidgetKind::Clock);
+        apply_option_pairs(&mut widget, &[("inheritSurface", 0), ("accentColor", SKY), ("radius", 30), ("backdropBlur", 40), ("dateSize", 20)]);
+        assert!(!widget.inherits_surface());
+        assert_eq!(widget.value("customAccent"), 1);
+        assert_eq!(widget.value("accentColor"), SKY);
+        for key in ["inheritSurface", "radius", "backdropBlur", "dateSize"] {
+            assert!(!widget.stored_values().contains_key(key), "{key} must be dropped");
+        }
+        // Defaults stay default: an inheriting card with no explicit accent gets no toggles.
+        let mut plain = card(WidgetKind::Clock);
+        apply_option_pairs(&mut plain, &[("inheritSurface", 1), ("accentColor", ACCENT_COLOR)]);
+        assert!(plain.inherits_surface());
+        assert_eq!(plain.value("customAccent"), 0);
     }
 
     #[test]

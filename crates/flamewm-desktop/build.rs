@@ -171,6 +171,9 @@ fn aligned_line(id: &str, class: &str, content: &str) -> String {
     )
 }
 
+/// Grid-overlay capacity: 32 columns by 18 rows. Must match `WIDGET_OVERLAY_CELLS` in `widgets.rs`.
+const WIDGET_OVERLAY_CELLS: usize = 32 * 18;
+
 fn widget_slots() -> String {
     (1..=WIDGET_SLOTS)
         .map(|n| {
@@ -289,13 +292,32 @@ fn widget_slots() -> String {
             let custom = format!(
                 "<div id=\"{w}-custom\" class=\"widget-custom\">{lines}</div><div id=\"{w}-editor\" class=\"widget-editor\">&#8203;</div>"
             );
+            // Border and corner bands resize the widget; they sit after the content so they
+            // win hit-testing inside the card.
+            let edges: String = ["n", "s", "e", "w", "ne", "nw", "se", "sw"]
+                .iter()
+                .map(|edge| {
+                    format!(
+                        "<div id=\"{w}-edge-{edge}\" class=\"widget-edge widget-edge-{edge}\" data-action=\"widget.{n}.resize-{edge}\"></div>"
+                    )
+                })
+                .collect();
             format!(
-                "<div id=\"{w}\" class=\"widget\" data-action=\"widget.{n}.move\" hidden>{clock}{analog}{gauge}{history}{network}{media}{weather}{calendar}{custom}\
-<div id=\"{w}-resize\" class=\"widget-resize\" data-action=\"widget.{n}.resize\"></div></div>"
+                "<div id=\"{w}\" class=\"widget\" data-action=\"widget.{n}.move\" hidden>{clock}{analog}{gauge}{history}{network}{media}{weather}{calendar}{custom}{edges}</div>"
             )
         })
         .collect::<Vec<_>>()
         .join("\n  ")
+        // Slot overlay pool: one hidden outline per possible grid cell (up to 32x18),
+        // shown only while a widget is being dragged or resized. Emitted before the
+        // ghost so the ghost paints above the outlines in the shared overlay layer.
+        + "\n  "
+        + &(0..WIDGET_OVERLAY_CELLS)
+            .map(|index| {
+                format!("<div id=\"widget-slot-{index}\" class=\"widget-slot-cell\" hidden></div>")
+            })
+            .collect::<Vec<_>>()
+            .join("")
         // Drag ghost: the target cell outline shown while a widget is moved or resized.
         + "\n  <div id=\"widget-ghost\" class=\"widget-ghost\" hidden></div>"
 }
@@ -342,10 +364,6 @@ fn widget_panels() -> String {
 <button id=\"widget-row-configure\" class=\"menu-row\" data-action=\"widget.menu.configure\"><img src=\"assets/breeze/configure.svg\"><span>Configure Widget</span></button>\
 <button id=\"widget-row-edit\" class=\"menu-row\" data-action=\"widget.menu.edit\"><img src=\"assets/breeze/edit-rename.svg\"><span>Edit Text</span></button>\
 <button id=\"widget-row-lock\" class=\"menu-row\" data-action=\"widget.menu.lock\"><img src=\"assets/breeze/system-lock-screen.svg\"><span id=\"widget-row-lock-label\">Lock Position</span></button>\
-<button id=\"widget-row-size-1x1\" class=\"menu-row\" data-action=\"widget.menu.size.1x1\"><img src=\"assets/breeze/list-add.svg\"><span>Size 1 x 1</span></button>\
-<button id=\"widget-row-size-2x1\" class=\"menu-row\" data-action=\"widget.menu.size.2x1\"><img src=\"assets/breeze/list-add.svg\"><span>Size 2 x 1</span></button>\
-<button id=\"widget-row-size-1x2\" class=\"menu-row\" data-action=\"widget.menu.size.1x2\"><img src=\"assets/breeze/list-add.svg\"><span>Size 1 x 2</span></button>\
-<button id=\"widget-row-size-2x2\" class=\"menu-row\" data-action=\"widget.menu.size.2x2\"><img src=\"assets/breeze/list-add.svg\"><span>Size 2 x 2</span></button>\
 <button id=\"widget-row-gallery\" class=\"menu-row\" data-action=\"widget.menu.gallery\"><img src=\"assets/breeze/list-add.svg\"><span>Add Widgets</span></button>\
 <button id=\"widget-row-remove\" class=\"menu-row\" data-action=\"widget.menu.remove\"><img src=\"assets/breeze/edit-delete.svg\"><span>Remove Widget</span></button>\
 </section>\n  \

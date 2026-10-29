@@ -3645,11 +3645,6 @@ mod hotkey_capture_lease_wire_tests {
             );
         }
         assert_eq!(
-            super::setting_value_for_key("glassifyContrastZones", &WireValue::Bool(true))
-                .expect("switch"),
-            SettingValue::Boolean(true)
-        );
-        assert_eq!(
             super::setting_value_for_key("reduceTransparency", &WireValue::Bool(false))
                 .expect("switch"),
             SettingValue::Boolean(false)

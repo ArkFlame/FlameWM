@@ -1,28 +1,24 @@
-//! Grid placement for desktop widgets: cell metrics, spans, snapping, collisions,
-//! migration and reflow. Pure math only; the widget store and UI call these functions.
+//! Slot grid for desktop widgets: full-area cell metrics, spans, per-kind sizes,
+//! snapping, collisions, reflow and migration. Pure math only; the widget store and
+//! the desktop UI call these functions.
 //!
-//! A placement is a cell index counted from the left margin (`right == false`) or from
-//! the right margin (`right == true`). Collisions are decided on pixel rectangles so
-//! left and right placements share one occupancy check.
+//! The grid always covers the usable work area edge to edge inside the margin. The
+//! column and row counts come from the target cell size; the lanes then stretch to
+//! fill the remainder exactly, so `margin + cells + gutters + margin == work size` on
+//! both axes. Placements are cells counted from the left and top margins; there is no
+//! side anchoring in the grid itself.
 
 use flamewm_api::{Point, Rect};
 
 use crate::widgets::WidgetKind;
 
-/// Target cell edge in logical pixels at 100% scale.
+/// Target cell edge in logical pixels at 100% scale. Counts are rounded to the nearest
+/// whole number, so the stretched cells stay close to this size.
 pub const TARGET_CELL: i32 = 104;
-/// Smallest cell edge used when the work area is short, in logical pixels.
-pub const MIN_CELL: i32 = 80;
 /// Uniform gutter between cells, in logical pixels.
 pub const GUTTER: i32 = 8;
-/// Distance from the work-area edge to the first cell, in logical pixels.
+/// Distance from the work-area edge to the outer cells, in logical pixels.
 pub const MARGIN: i32 = 16;
-/// Share of the work-area width used by the widget column block, in percent.
-pub const WIDGET_WIDTH_PERCENT: i32 = 30;
-pub const MIN_COLUMNS: i32 = 3;
-pub const MAX_COLUMNS: i32 = 6;
-/// The cell edge shrinks until at least this many rows fit.
-pub const MIN_ROWS: i32 = 5;
 
 /// Widget size in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +32,17 @@ impl Span {
     pub const WIDE: Self = Self { w: 2, h: 1 };
     pub const TALL: Self = Self { w: 1, h: 2 };
     pub const LARGE: Self = Self { w: 2, h: 2 };
-    pub const ALL: [Self; 4] = [Self::SINGLE, Self::WIDE, Self::TALL, Self::LARGE];
+    /// Custom-only sizes: three cells wide and four cells wide, two tall.
+    pub const WIDE3: Self = Self { w: 3, h: 2 };
+    pub const WIDE4: Self = Self { w: 4, h: 2 };
+    pub const ALL: [Self; 6] = [
+        Self::SINGLE,
+        Self::WIDE,
+        Self::TALL,
+        Self::LARGE,
+        Self::WIDE3,
+        Self::WIDE4,
+    ];
 
     #[must_use]
     pub fn label(self) -> String {
@@ -49,7 +55,7 @@ impl Span {
     }
 }
 
-/// Default size of each widget kind in the grid.
+/// Default size of each widget kind. Add a kind here and in `allowed_spans`.
 #[must_use]
 pub const fn default_span(kind: WidgetKind) -> Span {
     match kind {
@@ -64,7 +70,112 @@ pub const fn default_span(kind: WidgetKind) -> Span {
     }
 }
 
-/// A widget's cell position. `col` counts from the side named by `right`.
+/// Sizes a kind may take. Every `default_span` must appear here.
+#[must_use]
+pub const fn allowed_spans(kind: WidgetKind) -> &'static [Span] {
+    match kind {
+        WidgetKind::Clock
+        | WidgetKind::Cpu
+        | WidgetKind::Memory
+        | WidgetKind::History
+        | WidgetKind::Network
+        | WidgetKind::Ring => &[Span::SINGLE, Span::WIDE, Span::LARGE],
+        WidgetKind::Custom => &[Span::SINGLE, Span::WIDE, Span::LARGE, Span::WIDE3, Span::WIDE4],
+        WidgetKind::Media => &[Span::WIDE, Span::LARGE],
+        WidgetKind::Weather | WidgetKind::Calendar => &[Span::WIDE, Span::LARGE],
+    }
+}
+
+/// The allowed size closest to `requested` (Manhattan in cells, first listed on ties).
+#[must_use]
+pub fn fit_span(kind: WidgetKind, requested: Span) -> Span {
+    allowed_spans(kind)
+        .iter()
+        .copied()
+        .min_by_key(|span| (span.w - requested.w).abs() + (span.h - requested.h).abs())
+        .unwrap_or_else(|| default_span(kind))
+}
+
+/// The edges a border drag moves. Opposite edges stay fixed while a border moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Edges {
+    pub left: bool,
+    pub right: bool,
+    pub top: bool,
+    pub bottom: bool,
+}
+
+impl Edges {
+    /// Edge or corner named by its compass direction: `n`, `s`, `e`, `w`, `ne`, `nw`, `se`, `sw`.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        let (left, right, top, bottom) = match name {
+            "n" => (false, false, true, false),
+            "s" => (false, false, false, true),
+            "e" => (false, true, false, false),
+            "w" => (true, false, false, false),
+            "ne" => (false, true, true, false),
+            "nw" => (true, false, true, false),
+            "se" => (false, true, false, true),
+            "sw" => (true, false, false, true),
+            _ => return None,
+        };
+        Some(Self { left, right, top, bottom })
+    }
+}
+
+/// Placement after dragging `edges` of `current` to the pixel rectangle `rect`. Opposite
+/// edges stay put, the span is the allowed size nearest the dragged extent, and a moved
+/// left or top edge moves the anchor cell so the opposite edge stays fixed.
+#[must_use]
+pub fn edge_resize(
+    kind: WidgetKind,
+    current: Placement,
+    edges: Edges,
+    rect: Rect,
+    metrics: GridMetrics,
+) -> Placement {
+    let current = metrics.from_right(current);
+    // Left/top boundaries sit at `origin + k * pitch`; right/bottom boundaries at
+    // `origin + k * pitch - gutter`, so the gutter is added before rounding.
+    let left_index = |px: i32, origin: i32, pitch: i32| (px - origin + pitch / 2).div_euclid(pitch.max(1));
+    let right_index = |px: i32, origin: i32, pitch: i32| {
+        (px - origin + metrics.gutter + pitch / 2).div_euclid(pitch.max(1))
+    };
+    let x0 = metrics.work.x + metrics.margin;
+    let y0 = metrics.work.y + metrics.margin;
+    let right_fixed = current.col + current.span.w;
+    let bottom_fixed = current.row + current.span.h;
+    let (col, width) = if edges.left && !edges.right {
+        let left = left_index(rect.x, x0, metrics.pitch_x);
+        (left, right_fixed - left)
+    } else if edges.right && !edges.left {
+        (current.col, right_index(rect.right(), x0, metrics.pitch_x) - current.col)
+    } else {
+        (current.col, current.span.w)
+    };
+    let (row, height) = if edges.top && !edges.bottom {
+        let top = left_index(rect.y, y0, metrics.pitch_y);
+        (top, bottom_fixed - top)
+    } else if edges.bottom && !edges.top {
+        (current.row, right_index(rect.bottom(), y0, metrics.pitch_y) - current.row)
+    } else {
+        (current.row, current.span.h)
+    };
+    let span = fit_span(kind, Span { w: width.max(1), h: height.max(1) });
+    let col = if edges.left && !edges.right { right_fixed - span.w } else { col };
+    let row = if edges.top && !edges.bottom { bottom_fixed - span.h } else { row };
+    Placement::left(
+        col.clamp(0, (metrics.cols - span.w).max(0)),
+        row.clamp(0, (metrics.rows - span.h).max(0)),
+        span,
+    )
+}
+
+/// A widget's cell position, counted from the left and top margins.
+///
+/// `right` is only set while reading a legacy record that anchored the widget to the
+/// right edge; `GridMetrics::from_right` converts it to a left column before use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Placement {
     pub col: i32,
@@ -79,6 +190,7 @@ impl Placement {
         Self { col, row, span, right: false }
     }
 
+    /// Whether the cells stay inside the grid.
     #[must_use]
     pub const fn fits(self, metrics: GridMetrics) -> bool {
         self.col >= 0
@@ -90,79 +202,123 @@ impl Placement {
     }
 }
 
-/// Cell geometry derived from one work area and one scale factor.
+/// Grid geometry for one work area and one scale factor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridMetrics {
     pub work: Rect,
-    /// Cell edge in device pixels.
-    pub cell: i32,
-    /// Gutter in device pixels; `cell + gutter` is the pitch.
+    /// Gutter in device pixels.
     pub gutter: i32,
     /// Margin from the work-area edge in device pixels.
     pub margin: i32,
     pub cols: i32,
     pub rows: i32,
+    /// Nominal column pitch (cell width + gutter) in device pixels.
+    pub pitch_x: i32,
+    /// Nominal row pitch (cell height + gutter) in device pixels.
+    pub pitch_y: i32,
 }
 
 fn scale_px(logical: i32, scale_percent: i32) -> i32 {
     (logical * scale_percent + 50) / 100
 }
 
-fn rows_for(height: i32, margin: i32, cell: i32, gutter: i32) -> i32 {
-    ((height - 2 * margin + gutter) / (cell + gutter)).max(0)
+/// Nearest whole number of pitches that fit in `len` between the margins.
+fn count_for(len: i32, margin: i32, gutter: i32, pitch: i32) -> i32 {
+    let usable = (len - 2 * margin + gutter).max(0);
+    ((usable + pitch / 2) / pitch).max(1)
+}
+
+/// Start of lane `index` of `count` lanes that exactly fill `start..start+len`:
+/// lane edges are `margin + index * (usable + gutter) / count`, rounded.
+fn lane(start: i32, len: i32, margin: i32, gutter: i32, count: i32, index: i32) -> i32 {
+    let total = len - 2 * margin + gutter;
+    start + margin + (index * total + count / 2) / count
+}
+
+/// Round-trip of a value between two axis ranges, clamped to the new range.
+fn rescale_axis(value: i32, old_range: i32, new_range: i32) -> i32 {
+    let new_range = new_range.max(0);
+    if old_range <= 0 {
+        return value.clamp(0, new_range);
+    }
+    let scaled = (i64::from(value) * i64::from(new_range) * 2 + i64::from(old_range))
+        / (2 * i64::from(old_range));
+    (scaled as i32).clamp(0, new_range)
 }
 
 impl GridMetrics {
     /// Builds the grid for `work` (device pixels) at `scale_percent` (100 = 1x).
-    ///
-    /// The cell starts at `TARGET_CELL` and shrinks only while fewer than `MIN_ROWS`
-    /// rows fit. Columns are the number of pitches that fit in `WIDGET_WIDTH_PERCENT`
-    /// of the work width, clamped to `MIN_COLUMNS..=MAX_COLUMNS`.
     #[must_use]
     pub fn for_work_area(work: Rect, scale_percent: i32) -> Self {
         let scale = scale_percent.clamp(50, 400);
         let gutter = scale_px(GUTTER, scale);
         let margin = scale_px(MARGIN, scale);
-        let min_cell = scale_px(MIN_CELL, scale);
-        let mut cell = scale_px(TARGET_CELL, scale);
-        while cell > min_cell && rows_for(work.height, margin, cell, gutter) < MIN_ROWS {
-            cell -= 1;
+        let pitch = scale_px(TARGET_CELL, scale) + gutter;
+        let cols = count_for(work.width, margin, gutter, pitch);
+        let rows = count_for(work.height, margin, gutter, pitch);
+        let total_x = (work.width - 2 * margin + gutter).max(0);
+        let total_y = (work.height - 2 * margin + gutter).max(0);
+        Self {
+            work,
+            gutter,
+            margin,
+            cols,
+            rows,
+            pitch_x: total_x / cols,
+            pitch_y: total_y / rows,
         }
-        let rows = rows_for(work.height, margin, cell, gutter);
-        let share = work.width * WIDGET_WIDTH_PERCENT / 100;
-        let cols = ((share + gutter) / (cell + gutter)).clamp(MIN_COLUMNS, MAX_COLUMNS);
-        Self { work, cell, gutter, margin, cols, rows }
     }
 
+    /// Nominal cell size in device pixels (before lane rounding).
     #[must_use]
-    pub const fn pitch(self) -> i32 {
-        self.cell + self.gutter
+    pub const fn cell_size(self) -> (i32, i32) {
+        (self.pitch_x - self.gutter, self.pitch_y - self.gutter)
     }
 
-    /// Pixel size of a span: `n` cells plus `n - 1` gutters per axis.
+    /// Centre of the work area, where new widgets appear.
     #[must_use]
-    pub const fn span_px(self, span: Span) -> (i32, i32) {
-        (
-            span.w * self.cell + (span.w - 1) * self.gutter,
-            span.h * self.cell + (span.h - 1) * self.gutter,
+    pub const fn center(self) -> Point {
+        Point::new(
+            self.work.x + self.work.width / 2,
+            self.work.y + self.work.height / 2,
         )
     }
 
-    /// Pixel rectangle of a placement inside the work area.
+    /// Nominal pixel size of a span: `n` cells plus `n - 1` gutters per axis.
     #[must_use]
-    pub fn rect_of(self, placement: Placement) -> Rect {
-        let (width, height) = self.span_px(placement.span);
-        let offset = placement.col * self.pitch();
-        let x = if placement.right {
-            self.work.right() - self.margin - offset - width
-        } else {
-            self.work.x + self.margin + offset
-        };
-        let y = self.work.y + self.margin + placement.row * self.pitch();
-        Rect::new(x, y, width, height)
+    pub const fn span_px(self, span: Span) -> (i32, i32) {
+        let (cell_w, cell_h) = self.cell_size();
+        (
+            span.w * cell_w + (span.w - 1) * self.gutter,
+            span.h * cell_h + (span.h - 1) * self.gutter,
+        )
     }
 
-    /// Span whose pixel size is closest to `width` x `height` (ties keep `Span::ALL` order).
+    /// Pixel rectangle of a placement. Outer edges sit exactly on the margins.
+    #[must_use]
+    pub fn rect_of(self, placement: Placement) -> Rect {
+        let x0 = lane(self.work.x, self.work.width, self.margin, self.gutter, self.cols, placement.col);
+        let x1 = lane(
+            self.work.x,
+            self.work.width,
+            self.margin,
+            self.gutter,
+            self.cols,
+            placement.col + placement.span.w,
+        ) - self.gutter;
+        let y0 = lane(self.work.y, self.work.height, self.margin, self.gutter, self.rows, placement.row);
+        let y1 = lane(
+            self.work.y,
+            self.work.height,
+            self.margin,
+            self.gutter,
+            self.rows,
+            placement.row + placement.span.h,
+        ) - self.gutter;
+        Rect::new(x0, y0, x1 - x0, y1 - y0)
+    }
+
+    /// Span whose pixel size is closest to `width` x `height`.
     #[must_use]
     pub fn span_for_px(self, width: i32, height: i32) -> Span {
         Span::ALL
@@ -174,21 +330,18 @@ impl GridMetrics {
             .unwrap_or(Span::SINGLE)
     }
 
-    /// Nearest placement on `want`'s side whose top-left is closest to `point`.
-    /// The result is not checked for collisions.
+    /// Cell whose top-left is nearest to `point` (not checked for collisions).
     #[must_use]
-    pub fn snap(self, point: Point, span: Span, right: bool) -> Placement {
-        let pitch = self.pitch();
-        let (width, _) = self.span_px(span);
-        let col_px = if right {
-            self.work.right() - self.margin - (point.x + width)
-        } else {
-            point.x - (self.work.x + self.margin)
-        };
-        let row_px = point.y - (self.work.y + self.margin);
-        let col = (col_px + pitch / 2).div_euclid(pitch).clamp(0, self.cols - span.w);
-        let row = (row_px + pitch / 2).div_euclid(pitch).clamp(0, self.rows - span.h);
-        Placement { col, row, span, right }
+    pub fn snap(self, point: Point, span: Span) -> Placement {
+        let col = ((point.x - (self.work.x + self.margin)) + self.pitch_x / 2)
+            .div_euclid(self.pitch_x.max(1))
+            .min(self.cols - span.w)
+            .max(0);
+        let row = ((point.y - (self.work.y + self.margin)) + self.pitch_y / 2)
+            .div_euclid(self.pitch_y.max(1))
+            .min(self.rows - span.h)
+            .max(0);
+        Placement::left(col, row, span)
     }
 
     /// Whether two placements overlap in pixels. Gutters keep neighbours apart.
@@ -199,25 +352,36 @@ impl GridMetrics {
         ra.x < rb.right() && rb.x < ra.right() && ra.y < rb.bottom() && rb.y < ra.bottom()
     }
 
-    fn candidates(self, span: Span, right: bool) -> impl Iterator<Item = Placement> {
+    /// Fits the grid and overlaps none of `occupied`.
+    #[must_use]
+    pub fn is_free(self, placement: Placement, occupied: &[Placement]) -> bool {
+        placement.fits(self) && occupied.iter().all(|other| !self.collides(placement, *other))
+    }
+
+    /// Converts a legacy right-anchored cell to a left column in this grid.
+    #[must_use]
+    pub const fn from_right(self, placement: Placement) -> Placement {
+        if placement.right {
+            Placement {
+                col: self.cols - placement.col - placement.span.w,
+                right: false,
+                ..placement
+            }
+        } else {
+            placement
+        }
+    }
+
+    fn candidates(self, span: Span) -> impl Iterator<Item = Placement> {
         let cols = (self.cols - span.w).max(-1);
         let rows = (self.rows - span.h).max(-1);
-        (0..=rows).flat_map(move |row| {
-            (0..=cols).map(move |col| Placement { col, row, span, right })
-        })
+        (0..=rows).flat_map(move |row| (0..=cols).map(move |col| Placement::left(col, row, span)))
     }
 
-    /// First free cell in row-major order, on the left side.
-    #[must_use]
-    pub fn first_free(self, span: Span, occupied: &[Placement]) -> Option<Placement> {
-        self.candidates(span, false)
-            .find(|candidate| occupied.iter().all(|other| !self.collides(*candidate, *other)))
-    }
-
-    /// Free cell closest (Manhattan distance in cells) to `want`, on `want`'s side.
+    /// Free cell closest (Manhattan distance in cells) to `want`; ties row-major.
     #[must_use]
     pub fn nearest_free(self, want: Placement, occupied: &[Placement]) -> Option<Placement> {
-        self.candidates(want.span, want.right)
+        self.candidates(want.span)
             .filter(|candidate| occupied.iter().all(|other| !self.collides(*candidate, *other)))
             .min_by_key(|candidate| {
                 (
@@ -228,19 +392,40 @@ impl GridMetrics {
             })
     }
 
-    /// Re-places widgets after the grid changed. Kept items retain their slot when they
-    /// still fit and do not overlap an earlier kept item; the rest move to the nearest
-    /// free cell, or `None` when the grid has no room left.
+    /// Free cell whose centre is nearest to `point`; ties row-major.
     #[must_use]
-    pub fn reflow(self, items: &[Placement]) -> Vec<Option<Placement>> {
+    pub fn nearest_free_to(self, span: Span, point: Point, occupied: &[Placement]) -> Option<Placement> {
+        self.candidates(span)
+            .filter(|candidate| occupied.iter().all(|other| !self.collides(*candidate, *other)))
+            .min_by_key(|candidate| {
+                let rect = self.rect_of(*candidate);
+                let dx = i64::from(rect.x + rect.width / 2 - point.x);
+                let dy = i64::from(rect.y + rect.height / 2 - point.y);
+                (dx * dx + dy * dy, candidate.row, candidate.col)
+            })
+    }
+
+    /// Re-places items after the grid changed. `from` is the previous grid size; when
+    /// known, each item keeps its relative position on the new grid (proportional
+    /// reflow). Items that no longer fit or overlap an earlier item move to the nearest
+    /// free cell; `None` means the grid has no room left for that item.
+    #[must_use]
+    pub fn reflow(self, items: &[Placement], from: Option<(i32, i32)>) -> Vec<Option<Placement>> {
         let mut placed: Vec<Placement> = Vec::with_capacity(items.len());
         let mut out = Vec::with_capacity(items.len());
         for item in items {
-            let kept = item.fits(self) && placed.iter().all(|other| !self.collides(*item, *other));
-            let slot = if kept {
-                Some(*item)
+            let scaled = match from {
+                Some((old_cols, old_rows)) => Placement {
+                    col: rescale_axis(item.col, old_cols - item.span.w, self.cols - item.span.w),
+                    row: rescale_axis(item.row, old_rows - item.span.h, self.rows - item.span.h),
+                    ..*item
+                },
+                None => *item,
+            };
+            let slot = if self.is_free(scaled, &placed) {
+                Some(scaled)
             } else {
-                self.nearest_free(*item, &placed)
+                self.nearest_free(scaled, &placed)
             };
             if let Some(slot) = slot {
                 placed.push(slot);
@@ -250,12 +435,19 @@ impl GridMetrics {
         out
     }
 
-    /// Cell for a widget whose free pixel rect is `rect` (legacy absolute position).
-    /// The side follows the rect centre, as the edge anchoring does.
+    /// Cell for a widget with a legacy pixel rect and no grid cell. Right-half rects
+    /// map to the right-hand columns, as the legacy edge anchoring did.
     #[must_use]
     pub fn migrate(self, rect: Rect, span: Span, occupied: &[Placement]) -> Option<Placement> {
         let right = rect.x + rect.width / 2 > self.work.x + self.work.width / 2;
-        let want = self.snap(rect.origin(), span, right);
+        if right {
+            // Distance from the right edge, counted as a column from the right margin.
+            let from_right = Point::new(self.work.x + self.work.right() - rect.right(), rect.y);
+            let mirrored = self.snap(from_right, span);
+            let want = Placement::left(self.cols - span.w - mirrored.col, mirrored.row, span);
+            return self.nearest_free(want, occupied);
+        }
+        let want = self.snap(rect.origin(), span);
         self.nearest_free(want, occupied)
     }
 }
@@ -273,15 +465,15 @@ const DEFAULT_SLOTS: [(WidgetKind, i32, i32); 9] = [
     (WidgetKind::Memory, 3, 3),
 ];
 
-/// Places the default arrangement on `metrics`. Slots that no longer fit (smaller
-/// grids) move to the nearest free cell, and `None` means the grid is full.
+/// Places the default arrangement on `metrics`. Slots that no longer fit move to the
+/// nearest free cell, and `None` means the grid is full.
 #[must_use]
 pub fn default_layout(metrics: GridMetrics) -> Vec<(WidgetKind, Option<Placement>)> {
     let mut placed: Vec<Placement> = Vec::with_capacity(DEFAULT_SLOTS.len());
     let mut out = Vec::with_capacity(DEFAULT_SLOTS.len());
     for (kind, col, row) in DEFAULT_SLOTS {
         let want = Placement::left(col, row, default_span(kind));
-        let slot = if want.fits(metrics) && placed.iter().all(|other| !metrics.collides(want, *other)) {
+        let slot = if metrics.is_free(want, &placed) {
             Some(want)
         } else {
             metrics.nearest_free(want, &placed)
@@ -302,303 +494,273 @@ mod tests {
         Rect::new(0, 0, width, height)
     }
 
+    /// Asserts the cells and gutters fill the work area exactly inside the margins.
+    fn assert_fills(metrics: GridMetrics) {
+        let first = metrics.rect_of(Placement::left(0, 0, Span::SINGLE));
+        let last = metrics.rect_of(Placement::left(metrics.cols - 1, metrics.rows - 1, Span::SINGLE));
+        let work = metrics.work;
+        assert_eq!(first.x, work.x + metrics.margin, "left edge");
+        assert_eq!(first.y, work.y + metrics.margin, "top edge");
+        assert_eq!(last.right(), work.right() - metrics.margin, "right edge");
+        assert_eq!(last.bottom(), work.bottom() - metrics.margin, "bottom edge");
+        // sum(cells) + sum(gutters) + 2 margins == work size, on both axes.
+        let cells_x: i32 = (0..metrics.cols)
+            .map(|c| metrics.rect_of(Placement::left(c, 0, Span::SINGLE)).width)
+            .sum();
+        let cells_y: i32 = (0..metrics.rows)
+            .map(|r| metrics.rect_of(Placement::left(0, r, Span::SINGLE)).height)
+            .sum();
+        assert_eq!(
+            cells_x + (metrics.cols - 1) * metrics.gutter + 2 * metrics.margin,
+            work.width
+        );
+        assert_eq!(
+            cells_y + (metrics.rows - 1) * metrics.gutter + 2 * metrics.margin,
+            work.height
+        );
+    }
+
     #[test]
-    fn full_hd_at_100_percent_gives_five_by_nine_cells() {
+    fn full_hd_at_100_percent_covers_the_whole_width() {
         // 1080 minus a 36 px taskbar strut.
         let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        assert_eq!((metrics.cell, metrics.gutter, metrics.margin), (104, 8, 16));
-        assert_eq!((metrics.cols, metrics.rows), (5, 9));
-        assert_eq!(metrics.pitch(), 112);
+        assert_eq!((metrics.cols, metrics.rows), (17, 9));
+        assert_eq!(metrics.gutter, 8);
+        assert_eq!(metrics.margin, 16);
+        assert_fills(metrics);
     }
 
     #[test]
-    fn qhd_at_100_percent_caps_columns_at_six() {
+    fn full_hd_without_strut_keeps_nine_rows() {
+        let metrics = GridMetrics::for_work_area(work(1920, 1080), 100);
+        assert_eq!((metrics.cols, metrics.rows), (17, 9));
+        assert_fills(metrics);
+    }
+
+    #[test]
+    fn hd_laptop_gives_twelve_by_six_and_fills() {
+        let metrics = GridMetrics::for_work_area(work(1366, 732), 100);
+        assert_eq!((metrics.cols, metrics.rows), (12, 6));
+        assert_fills(metrics);
+    }
+
+    #[test]
+    fn qhd_fills_with_scaled_grid() {
         let metrics = GridMetrics::for_work_area(work(2560, 1404), 100);
-        assert_eq!((metrics.cell, metrics.cols, metrics.rows), (104, 6, 12));
+        assert_eq!((metrics.cols, metrics.rows), (23, 12));
+        assert_fills(metrics);
     }
 
     #[test]
-    fn hd_laptop_keeps_three_columns_and_six_rows() {
-        let metrics = GridMetrics::for_work_area(work(1366, 732), 100);
-        assert_eq!((metrics.cols, metrics.rows), (3, 6));
-    }
-
-    #[test]
-    fn scale_150_uses_scaled_cell_and_fewer_columns() {
+    fn scale_150_uses_scaled_gutter_and_margin() {
         let metrics = GridMetrics::for_work_area(work(1920, 1044), 150);
-        assert_eq!((metrics.cell, metrics.gutter, metrics.margin), (156, 12, 24));
-        assert_eq!((metrics.cols, metrics.rows), (3, 6));
-        assert_eq!(metrics.pitch(), 168);
+        assert_eq!((metrics.gutter, metrics.margin), (12, 24));
+        assert_eq!((metrics.cols, metrics.rows), (11, 6));
+        assert_fills(metrics);
     }
 
     #[test]
-    fn short_work_area_shrinks_cell_to_keep_min_rows() {
-        let metrics = GridMetrics::for_work_area(work(1280, 560), 100);
-        assert!(metrics.rows >= MIN_ROWS);
-        assert!(metrics.cell < 104 && metrics.cell >= 80);
-    }
-
-    #[test]
-    fn spans_are_cells_plus_gutters() {
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        assert_eq!(metrics.span_px(Span::SINGLE), (104, 104));
-        assert_eq!(metrics.span_px(Span::WIDE), (216, 104));
-        assert_eq!(metrics.span_px(Span::TALL), (104, 216));
-        assert_eq!(metrics.span_px(Span::LARGE), (216, 216));
-    }
-
-    #[test]
-    fn neighbouring_cells_are_separated_by_exactly_one_gutter() {
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let a = metrics.rect_of(Placement::left(0, 0, Span::SINGLE));
-        let b = metrics.rect_of(Placement::left(1, 0, Span::SINGLE));
-        let c = metrics.rect_of(Placement::left(0, 1, Span::SINGLE));
-        assert_eq!(b.x - a.right(), 8);
-        assert_eq!(c.y - a.bottom(), 8);
-        assert_eq!((a.x, a.y), (16, 16));
-    }
-
-    #[test]
-    fn right_placement_is_flush_with_right_margin() {
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let rect = metrics.rect_of(Placement { col: 0, row: 0, span: Span::LARGE, right: true });
-        assert_eq!(rect.right(), 1920 - 16);
-        assert_eq!(rect.width, 216);
-    }
-
-    #[test]
-    fn snap_rounds_to_nearest_cell_and_clamps_to_grid() {
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        // Pitch 112; 16 + 112 + 40 px lands nearest column 1.
-        let snapped = metrics.snap(Point::new(16 + 112 + 40, 16 + 112 * 2 + 10), Span::SINGLE, false);
-        assert_eq!((snapped.col, snapped.row), (1, 2));
-        let far = metrics.snap(Point::new(5000, 5000), Span::LARGE, false);
-        assert_eq!((far.col, far.row), (3, 7));
-    }
-
-    #[test]
-    fn adjacent_cells_do_not_collide_but_overlapping_ones_do() {
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let a = Placement::left(0, 0, Span::WIDE);
-        assert!(!metrics.collides(a, Placement::left(2, 0, Span::SINGLE)));
-        assert!(metrics.collides(a, Placement::left(1, 0, Span::SINGLE)));
-        assert!(metrics.collides(a, Placement::left(1, 0, Span::TALL)));
-    }
-
-    #[test]
-    fn first_free_is_row_major_and_skips_occupied_cells() {
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let occupied = [Placement::left(0, 0, Span::WIDE), Placement::left(2, 0, Span::SINGLE)];
-        assert_eq!(
-            metrics.first_free(Span::SINGLE, &occupied),
-            Some(Placement::left(3, 0, Span::SINGLE))
-        );
-        let large = [Placement::left(0, 0, Span::LARGE)];
-        let slot = metrics.first_free(Span::LARGE, &large).expect("free");
-        assert_eq!((slot.col, slot.row), (2, 0));
-    }
-
-    #[test]
-    fn nearest_free_pushes_past_collisions() {
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let occupied = [Placement::left(1, 1, Span::SINGLE)];
-        let slot = metrics.nearest_free(Placement::left(1, 1, Span::SINGLE), &occupied).expect("free");
-        // Both (1, 0) and (0, 1) are one cell away; the row-major tie-break picks (1, 0).
-        assert_eq!((slot.col, slot.row), (1, 0));
-    }
-
-    #[test]
-    fn reflow_moves_items_that_no_longer_fit() {
-        let big = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let small = GridMetrics::for_work_area(work(1366, 732), 100);
-        assert_eq!((big.cols, small.cols), (5, 3));
-        let items = [Placement::left(4, 0, Span::SINGLE), Placement::left(0, 0, Span::SINGLE)];
-        let placed = small.reflow(&items);
-        assert_eq!(placed[1], Some(Placement::left(0, 0, Span::SINGLE)));
-        let moved = placed[0].expect("moved");
-        assert!(moved.fits(small));
-        assert!(!small.collides(moved, Placement::left(0, 0, Span::SINGLE)));
-    }
-
-    #[test]
-    fn right_anchored_widget_stays_flush_right_across_resolutions() {
-        let big = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let small = GridMetrics::for_work_area(work(1366, 732), 100);
-        let right = Placement { col: 0, row: 0, span: Span::SINGLE, right: true };
-        let kept = small.reflow(&[right])[0].expect("fits");
-        assert!(kept.right);
-        assert_eq!(small.rect_of(kept).right(), 1366 - 16);
-        assert_eq!(big.rect_of(right).right(), 1920 - 16);
-    }
-
-    #[test]
-    fn migration_keeps_side_and_resolves_overlap() {
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let left = metrics.migrate(Rect::new(30, 40, 216, 216), Span::LARGE, &[]).expect("left");
-        assert!(!left.right);
-        assert_eq!((left.col, left.row), (0, 0));
-        let right = metrics.migrate(Rect::new(1650, 40, 216, 216), Span::LARGE, &[]).expect("right");
-        assert!(right.right);
-        let blocked = [Placement::left(0, 0, Span::LARGE)];
-        let moved = metrics.migrate(Rect::new(30, 40, 216, 216), Span::LARGE, &blocked).expect("moved");
-        assert!(!metrics.collides(moved, blocked[0]));
-    }
-
-    #[test]
-    fn default_layout_is_collision_free_and_fits_full_hd() {
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let layout = default_layout(metrics);
-        let placed: Vec<Placement> = layout.iter().map(|(_, slot)| slot.expect("fits")).collect();
-        for (index, (kind, slot)) in layout.iter().enumerate() {
-            let slot = slot.expect("slot");
-            assert_eq!(slot.span, default_span(*kind));
-            assert!(slot.fits(metrics));
-            for other in &placed[index + 1..] {
-                assert!(!metrics.collides(slot, *other));
+    fn fill_holds_across_sizes_scales_and_taskbar_heights() {
+        for &(w, h) in &[(1280, 720), (1366, 768), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160)] {
+            for &strut in &[0, 36, 48, 72] {
+                for &scale in &[100, 125, 150, 200] {
+                    assert_fills(GridMetrics::for_work_area(work(w, h - strut), scale));
+                }
             }
         }
     }
 
     #[test]
-    fn default_layout_reflows_on_small_grid() {
+    fn centre_cells_are_reachable_and_inside() {
+        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
+        let mid = metrics.rect_of(Placement::left(metrics.cols / 2, metrics.rows / 2, Span::SINGLE));
+        assert!(mid.x > 800 && mid.x < 1100, "centre column at {}", mid.x);
+    }
+
+    #[test]
+    fn snap_and_nearest_free_to_centre_work() {
+        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
+        let target = metrics.rect_of(Placement::left(8, 4, Span::SINGLE));
+        assert_eq!(metrics.snap(target.origin(), Span::SINGLE), Placement::left(8, 4, Span::SINGLE));
+        let occupied = [Placement::left(8, 4, Span::SINGLE)];
+        let free = metrics.nearest_free_to(Span::SINGLE, metrics.center(), &occupied).unwrap();
+        assert_ne!(free, occupied[0]);
+        assert!(metrics.is_free(free, &occupied));
+    }
+
+    #[test]
+    fn collisions_are_resolved_by_nearest_free_cell() {
+        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
+        let occupied = [Placement::left(3, 3, Span::SINGLE)];
+        let slot = metrics.nearest_free(Placement::left(3, 3, Span::SINGLE), &occupied).unwrap();
+        assert_eq!((slot.col - 3).abs() + (slot.row - 3).abs(), 1);
+    }
+
+    #[test]
+    fn reflow_keeps_relative_position_when_grid_shrinks() {
+        let big = GridMetrics::for_work_area(work(1920, 1044), 100);
+        let small = GridMetrics::for_work_area(work(1366, 732), 100);
+        let items = [Placement::left(16 - 2, 0, Span::SINGLE)]; // right-most column on 17
+        let slots = small.reflow(&items, Some((big.cols, big.rows)));
+        let slot = slots[0].unwrap();
+        assert!(slot.fits(small));
+        assert_eq!(slot.col, small.cols - 1 - 1, "right side stays on the right");
+    }
+
+    #[test]
+    fn reflow_without_previous_size_keeps_cells_that_still_fit() {
         let metrics = GridMetrics::for_work_area(work(1366, 732), 100);
+        let items = [Placement::left(1, 1, Span::LARGE), Placement::left(11, 5, Span::SINGLE)];
+        let slots = metrics.reflow(&items, None);
+        assert_eq!(slots[0], Some(Placement::left(1, 1, Span::LARGE)));
+        assert_eq!(slots[1], Some(Placement::left(11, 5, Span::SINGLE)));
+    }
+
+    #[test]
+    fn reflow_moves_overlapping_items_to_free_cells() {
+        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
+        let items = [Placement::left(0, 0, Span::LARGE), Placement::left(1, 1, Span::SINGLE)];
+        let slots = metrics.reflow(&items, None);
+        let a = slots[0].unwrap();
+        let b = slots[1].unwrap();
+        assert!(!metrics.collides(a, b));
+    }
+
+    #[test]
+    fn right_anchored_legacy_cells_map_to_right_columns() {
+        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
+        let legacy = Placement { col: 0, row: 0, span: Span::WIDE, right: true };
+        let left = metrics.from_right(legacy);
+        assert_eq!(left.col, metrics.cols - 2);
+        assert!(!left.right);
+        assert_eq!(metrics.rect_of(left).right(), metrics.work.right() - metrics.margin);
+    }
+
+    #[test]
+    fn migrate_maps_right_half_pixel_rects_to_right_columns() {
+        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
+        let rect = Rect::new(1920 - 16 - 104, 16, 104, 104);
+        let slot = metrics.migrate(rect, Span::SINGLE, &[]).unwrap();
+        assert_eq!(slot.col, metrics.cols - 1);
+    }
+
+    #[test]
+    fn span_sizes_are_allowed_per_kind() {
+        assert_eq!(fit_span(WidgetKind::Clock, Span::TALL), Span::SINGLE);
+        assert_eq!(fit_span(WidgetKind::Media, Span::SINGLE), Span::WIDE);
+        assert_eq!(fit_span(WidgetKind::Weather, Span::SINGLE), Span::WIDE);
+        assert_eq!(fit_span(WidgetKind::Clock, Span::LARGE), Span::LARGE);
+    }
+
+    #[test]
+    fn every_default_span_is_an_allowed_span() {
+        for kind in WidgetKind::ALL {
+            assert!(allowed_spans(kind).contains(&default_span(kind)), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn custom_kind_allows_three_and_four_wide_sizes_only_for_custom() {
+        assert_eq!(Span::from_label("3x2"), Some(Span::WIDE3));
+        assert_eq!(Span::from_label("4x2"), Some(Span::WIDE4));
+        assert!(allowed_spans(WidgetKind::Custom).contains(&Span::WIDE4));
+        assert!(allowed_spans(WidgetKind::Custom).contains(&Span::WIDE3));
+        assert_eq!(fit_span(WidgetKind::Custom, Span { w: 4, h: 2 }), Span::WIDE4);
+        assert_eq!(fit_span(WidgetKind::Clock, Span::WIDE4), Span::LARGE);
+        assert!(!allowed_spans(WidgetKind::Clock).contains(&Span::WIDE3));
+    }
+
+    #[test]
+    fn default_layout_places_every_kind_on_a_full_grid() {
+        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
         let layout = default_layout(metrics);
-        let placed: Vec<Placement> = layout.iter().filter_map(|(_, slot)| *slot).collect();
-        assert_eq!(placed.len(), layout.len());
-        for (index, slot) in placed.iter().enumerate() {
-            assert!(slot.fits(metrics));
-            for other in &placed[index + 1..] {
-                assert!(!metrics.collides(*slot, *other));
+        assert!(layout.iter().all(|(_, slot)| slot.is_some()));
+        let cells: Vec<Placement> = layout.iter().filter_map(|(_, slot)| *slot).collect();
+        for (i, a) in cells.iter().enumerate() {
+            for b in &cells[i + 1..] {
+                assert!(!metrics.collides(*a, *b));
             }
         }
     }
 
     #[test]
-    fn store_add_fills_first_free_cells_row_major() {
-        use crate::widgets::{WidgetKind, WidgetStore};
+    fn span_for_px_picks_the_closest_span() {
         let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let mut store = WidgetStore::default();
-        store.add_on_grid(WidgetKind::Clock, metrics).expect("clock");
-        store.add_on_grid(WidgetKind::Calendar, metrics).expect("calendar");
-        store.add_on_grid(WidgetKind::Clock, metrics).expect("clock 2");
-        assert_eq!(
-            store.placements(),
-            vec![
-                Placement::left(0, 0, Span::SINGLE),
-                Placement::left(1, 0, Span::LARGE),
-                Placement::left(3, 0, Span::SINGLE),
-            ]
-        );
+        let (w, h) = metrics.span_px(Span::LARGE);
+        assert_eq!(metrics.span_for_px(w, h), Span::LARGE);
+        let (w, h) = metrics.span_px(Span::WIDE);
+        assert_eq!(metrics.span_for_px(w, h), Span::WIDE);
+    }
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use super::*;
+
+    fn metrics() -> GridMetrics {
+        GridMetrics::for_work_area(Rect::new(0, 0, 1920, 1080), 100)
+    }
+
+    fn edges(name: &str) -> Edges {
+        Edges::from_name(name).expect("edge name")
     }
 
     #[test]
-    fn grid_layout_survives_serialize_round_trip() {
-        use crate::widgets::{self, WidgetKind, WidgetStore};
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let mut store = WidgetStore::default();
-        store.add_on_grid(WidgetKind::Weather, metrics).expect("weather");
-        store.add_on_grid(WidgetKind::Clock, metrics).expect("clock");
-        let parsed = widgets::parse(&widgets::serialize(&store)).expect("parse");
-        assert_eq!(parsed.placements(), store.placements());
-        let rects: Vec<_> = parsed.widgets().iter().map(|w| w.rect).collect();
-        let expected: Vec<_> = store.widgets().iter().map(|w| w.rect).collect();
-        assert_eq!(rects, expected);
+    fn names_map_to_edges_and_corners() {
+        assert_eq!(edges("n"), Edges { left: false, right: false, top: true, bottom: false });
+        assert_eq!(edges("se"), Edges { left: false, right: true, top: false, bottom: true });
+        assert_eq!(edges("sw"), Edges { left: true, right: false, top: false, bottom: true });
+        assert!(Edges::from_name("x").is_none());
     }
 
     #[test]
-    fn legacy_free_position_records_snap_to_nearest_free_cells() {
-        use crate::widgets;
-        // Two 9-field legacy records (no anchor, no grid) stacked on the same pixels.
-        let text = "v1\n1\tclock\t30\t40\t340\t150\t0\t\t\n2\tclock\t32\t42\t340\t150\t0\t\t\n";
-        let mut store = widgets::parse(text).expect("legacy parse");
-        assert!(store.placements().is_empty());
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        store.layout_grid(metrics);
-        let placed = store.placements();
-        assert_eq!(placed.len(), 2);
-        assert!(!metrics.collides(placed[0], placed[1]));
-        assert_eq!(placed[0], Placement::left(0, 0, Span::SINGLE));
-        assert_eq!(store.widgets()[0].rect, metrics.rect_of(placed[0]));
+    fn right_edge_drag_widens_to_two_cells() {
+        let m = metrics();
+        let current = Placement::left(0, 0, Span::SINGLE);
+        let rect = m.rect_of(Placement::left(0, 0, Span::WIDE));
+        assert_eq!(edge_resize(WidgetKind::Clock, current, edges("e"), rect, m), Placement::left(0, 0, Span::WIDE));
     }
 
     #[test]
-    fn resize_on_grid_moves_to_free_cell_when_span_grows() {
-        use crate::widgets::{WidgetKind, WidgetStore};
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let mut store = WidgetStore::default();
-        let clock = store.add_on_grid(WidgetKind::Clock, metrics).expect("clock");
-        let other = store.add_on_grid(WidgetKind::Clock, metrics).expect("other");
-        assert!(store.resize_on_grid(clock, Span::LARGE, metrics));
-        let grown = store.get(clock).expect("clock").grid.expect("cell");
-        assert_eq!(grown.span, Span::LARGE);
-        assert!(!metrics.collides(grown, store.get(other).expect("other").grid.expect("cell")));
-        assert_eq!(store.get(clock).expect("clock").rect.width, 216);
+    fn left_edge_drag_moves_anchor_and_keeps_right_edge() {
+        let m = metrics();
+        // Custom 3x2 at cols 3..5; drag left edge to col 1 gives 5 cols -> WIDE4 anchored at col 2.
+        let current = Placement::left(3, 0, Span::WIDE3);
+        let rect = m.rect_of(Placement { span: Span { w: 5, h: 2 }, ..Placement::left(1, 0, Span::SINGLE) });
+        let got = edge_resize(WidgetKind::Custom, current, edges("w"), rect, m);
+        assert_eq!(got, Placement::left(2, 0, Span::WIDE4));
+        assert_eq!(got.col + got.span.w, 6, "right edge stays fixed");
     }
 
     #[test]
-    fn drop_snaps_to_cell_then_to_nearest_free_when_taken() {
-        use crate::widgets::{WidgetKind, WidgetStore};
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let mut store = WidgetStore::default();
-        let first = store.add_on_grid(WidgetKind::Clock, metrics).expect("first");
-        let second = store.add_on_grid(WidgetKind::Clock, metrics).expect("second");
-        // Drop the second clock onto the first clock's cell: it must move to a free cell.
-        assert!(store.drop_on_grid(second, Point::new(20, 20), metrics));
-        let a = store.get(first).expect("a").grid.expect("cell");
-        let b = store.get(second).expect("b").grid.expect("cell");
-        assert_ne!(a, b);
-        assert!(!metrics.collides(a, b));
-        // A free drop lands on the snapped cell.
-        assert!(store.drop_on_grid(second, Point::new(16 + 2 * 112, 16 + 3 * 112), metrics));
-        assert_eq!(store.get(second).expect("b").grid.expect("cell").col, 2);
+    fn top_edge_drag_moves_row_and_keeps_bottom_edge() {
+        let m = metrics();
+        let current = Placement::left(0, 4, Span::LARGE);
+        let rect = m.rect_of(Placement { span: Span { w: 1, h: 3 }, ..Placement::left(0, 3, Span::SINGLE) });
+        let got = edge_resize(WidgetKind::Custom, current, edges("n"), rect, m);
+        assert_eq!(got.row + got.span.h, 6, "bottom edge stays fixed");
+        assert_eq!(got.span.h, 2, "3 rows requested, nearest allowed height is 2");
     }
 
     #[test]
-    fn default_layout_store_has_one_widget_per_slot() {
-        use crate::widgets::{WidgetKind, WidgetStore};
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let store = WidgetStore::with_default_layout(metrics);
-        assert_eq!(store.widgets().len(), 9);
-        assert!(store.widgets().iter().all(|widget| widget.inherits_surface()));
-        assert_eq!(store.count_of(WidgetKind::Calendar), 1);
-        let calendar = store.widgets().iter().find(|w| w.kind == WidgetKind::Calendar).expect("calendar");
-        assert_eq!(calendar.rect.width, 216);
+    fn right_edge_drag_past_grid_clamps_inside_grid() {
+        let m = metrics();
+        let last = m.cols - 1;
+        let current = Placement::left(last, 0, Span::SINGLE);
+        // Dragged two columns past the last one: wants WIDE at `last`, which must clamp to `last - 1`.
+        let rect = m.rect_of(Placement { span: Span { w: 2, h: 1 }, ..current });
+        let got = edge_resize(WidgetKind::Clock, current, edges("e"), rect, m);
+        assert!(got.fits(m), "placement stays inside the grid: {got:?}");
+        assert_eq!(got.span, Span::WIDE, "Clock is limited to 2x1 here");
+        assert_eq!(got.col, last - 1);
     }
 
     #[test]
-    fn preview_matches_the_cell_a_drop_or_resize_lands_on() {
-        use crate::widgets::{WidgetKind, WidgetStore};
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let mut store = WidgetStore::default();
-        let first = store.add_on_grid(WidgetKind::Clock, metrics).expect("first");
-        let second = store.add_on_grid(WidgetKind::Clock, metrics).expect("second");
-        // The drop point sits on the first clock's cell: the preview is the pushed cell.
-        let origin = Point::new(20, 20);
-        let preview = store.preview_drop(second, origin, metrics).expect("preview");
-        assert!(!metrics.collides(preview, store.get(first).expect("a").grid.expect("cell")));
-        assert!(store.drop_on_grid(second, origin, metrics));
-        assert_eq!(store.get(second).expect("b").grid, Some(preview));
-
-        let resize = store.preview_resize(second, Span::LARGE, metrics).expect("resize");
-        assert_eq!(resize.span, Span::LARGE);
-        assert!(store.resize_on_grid(second, Span::LARGE, metrics));
-        assert_eq!(store.get(second).expect("b").grid.expect("cell").span, Span::LARGE);
-    }
-
-    #[test]
-    fn span_for_px_picks_nearest_span() {
-        let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        assert_eq!(metrics.span_for_px(104, 104), Span::SINGLE);
-        assert_eq!(metrics.span_for_px(230, 110), Span::WIDE);
-        assert_eq!(metrics.span_for_px(120, 240), Span::TALL);
-        assert_eq!(metrics.span_for_px(400, 400), Span::LARGE);
-    }
-
-    #[test]
-    fn span_labels_round_trip() {
-        for span in Span::ALL {
-            assert_eq!(Span::from_label(&span.label()), Some(span));
-        }
-        assert_eq!(Span::from_label("3x3"), None);
+    fn far_corner_drag_clamps_clock_to_large() {
+        let m = metrics();
+        let current = Placement::left(0, 0, Span::SINGLE);
+        let rect = m.rect_of(Placement { span: Span { w: m.cols, h: m.rows }, ..current });
+        let got = edge_resize(WidgetKind::Clock, current, edges("se"), rect, m);
+        assert_eq!(got, Placement::left(0, 0, Span::LARGE));
     }
 }

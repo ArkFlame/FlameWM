@@ -14,13 +14,14 @@ use flamewm_desktop_core::widget_text::{
     expand_placeholders, fit_lines, format_date, format_gib, format_time, format_uptime,
     parse_cpu_times, parse_markup, parse_meminfo,
 };
-use flamewm_desktop_core::widget_grid::{GridMetrics, Placement, Span};
+use flamewm_desktop_core::widget_grid::{self, Edges, GridMetrics, Placement, Span};
 use flamewm_desktop_core::widgets::{
     MAX_WIDGETS, OptionControl, TextAlign, Widget, WidgetKind, WidgetStore, move_widget_rect,
-    palette_color, resize_widget_rect,
+    palette_color,
 };
 use flamewm_integrations_linux::MprisProvider;
 use flamewm_reactor::{WakeDeadline, wall_clock_delay_ms};
+use flamewm_ui_core::Color;
 use flamewm_ui_core::style::UiLayer;
 use flamewm_ui_core::surface::surface_material_values;
 use flamewm_ui_x11::{
@@ -52,7 +53,27 @@ enum TickRate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GestureMode {
     Move,
-    Resize,
+    Resize(Edges),
+}
+
+/// Pixel rectangle after dragging only the `edges` of `original` by (`dx`, `dy`). Opposite
+/// edges stay put; each side keeps at least one pixel and the result stays inside `bounds`.
+fn edge_drag_rect(original: Rect, edges: Edges, dx: i32, dy: i32, bounds: Rect) -> Rect {
+    let (mut left, mut top) = (original.x, original.y);
+    let (mut right, mut bottom) = (original.right(), original.bottom());
+    if edges.left {
+        left = (left + dx).min(right - 1);
+    }
+    if edges.right {
+        right = (right + dx).max(left + 1);
+    }
+    if edges.top {
+        top = (top + dy).min(bottom - 1);
+    }
+    if edges.bottom {
+        bottom = (bottom + dy).max(top + 1);
+    }
+    Rect::new(left, top, right - left, bottom - top).clamp_inside(bounds)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -206,10 +227,16 @@ impl Samples {
     }
 }
 
+/// Slot-overlay capacity in cells: 32 columns by 18 rows. Must match `build.rs`.
+const WIDGET_OVERLAY_COLS: usize = 32;
+const WIDGET_OVERLAY_CELLS: usize = WIDGET_OVERLAY_COLS * 18;
+
 pub(crate) struct WidgetState {
     pub(crate) store: WidgetStore,
     path: PathBuf,
     gesture: Option<Gesture>,
+    /// True while the slot overlay is shown (from the first drag motion until release).
+    slot_overlay: bool,
     editing: Option<TemplateEdit>,
     samples: Samples,
     media: MediaSnapshot,
@@ -229,6 +256,7 @@ impl WidgetState {
             store,
             path,
             gesture: None,
+            slot_overlay: false,
             editing: None,
             samples: Samples::default(),
             media: MediaSnapshot::default(),
@@ -468,11 +496,12 @@ fn percent_to_alpha(percent: i64) -> u8 {
     ((percent.clamp(0, 100) * 255 + 50) / 100) as u8
 }
 
-/// Backdrop blur strength for a widget card; `None` (0%) draws no blur.
-fn widget_backdrop(widget: &Widget) -> Option<u8> {
-    let blur = widget.value("backdropBlur").clamp(0, 100);
-    (blur > 0).then_some(blur as u8)
-}
+/// Corner radius shared by every widget card.
+const WIDGET_RADIUS: f32 = 18.0;
+/// Date line size of clock widgets.
+const WIDGET_DATE_SIZE: f32 = 16.0;
+/// Edge and corner resize bands of each widget, named by compass direction.
+const WIDGET_EDGES: [&str; 8] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 
 /// Values one widget card hands the document: fill, backdrop blur and corner radius.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -484,10 +513,11 @@ pub(crate) struct WidgetSurface {
 
 /// Inheriting cards take the global surface fill and blur; others use their own options.
 pub(crate) fn widget_surface(widget: &Widget, settings: &SettingsSnapshot) -> WidgetSurface {
-    let radius = widget.value("radius") as f32;
+    let radius = WIDGET_RADIUS;
+    let blur = projection::surface_blur_percent(settings);
+    let blur = (blur > 0).then_some(blur);
     if widget.inherits_surface() {
         let fill = flamewm_ui_core::surface::surface_fill(settings);
-        let blur = projection::surface_blur_percent(settings);
         WidgetSurface {
             fill: UiColor {
                 r: (fill.rgb >> 16) as u8,
@@ -495,7 +525,7 @@ pub(crate) fn widget_surface(widget: &Widget, settings: &SettingsSnapshot) -> Wi
                 b: fill.rgb as u8,
                 a: fill.alpha,
             },
-            blur: (blur > 0).then_some(blur),
+            blur,
             radius,
         }
     } else {
@@ -504,27 +534,97 @@ pub(crate) fn widget_surface(widget: &Widget, settings: &SettingsSnapshot) -> Wi
                 widget.color("background"),
                 percent_to_alpha(widget.value("backgroundOpacity")),
             ),
-            blur: widget_backdrop(widget),
+            blur,
             radius,
         }
     }
 }
 
-/// Shows the drag ghost over `target`'s cell, or hides it.
+/// Shows the drag ghost over `target`'s cell, accent-tinted when the cell is a valid
+/// landing and error-tinted when nothing fits, or hides it.
 fn sync_ghost(
     document: &mut impl UiDocumentAccess,
     metrics: GridMetrics,
-    target: Option<Placement>,
+    accent: Rgb,
+    target: Option<(Placement, bool)>,
 ) -> Result<(), String> {
     match target {
-        Some(cell) => {
+        Some((cell, valid)) => {
             let rect = metrics.rect_of(cell);
+            let tint = if valid { accent } else { danger_rgb() };
             document.position("widget-ghost", rect.x as f32, rect.y as f32)?;
             document.size("widget-ghost", rect.width as f32, rect.height as f32)?;
+            document.background("widget-ghost", color(tint, 0x38))?;
+            document.border("widget-ghost", color(tint, 0xdd))?;
             document.visible("widget-ghost", true)
         }
         None => document.visible("widget-ghost", false),
     }
+}
+
+fn danger_rgb() -> Rgb {
+    let value = Color::DANGER.0;
+    Rgb::new((value >> 16) as u8, (value >> 8) as u8, value as u8)
+}
+
+/// Shows one outline per grid cell across the whole work area. Called once when a drag
+/// starts; idle desktops never run it.
+fn show_slot_overlay(
+    document: &mut impl UiDocumentAccess,
+    metrics: GridMetrics,
+) -> Result<(), String> {
+    for index in 0..WIDGET_OVERLAY_CELLS {
+        let id = format!("widget-slot-{index}");
+        let col = (index % WIDGET_OVERLAY_COLS) as i32;
+        let row = (index / WIDGET_OVERLAY_COLS) as i32;
+        if col < metrics.cols && row < metrics.rows {
+            let rect = metrics.rect_of(Placement::left(col, row, Span::SINGLE));
+            document.position(&id, rect.x as f32, rect.y as f32)?;
+            document.size(&id, rect.width as f32, rect.height as f32)?;
+            document.visible(&id, true)?;
+        } else {
+            document.visible(&id, false)?;
+        }
+    }
+    Ok(())
+}
+
+/// Cell a live gesture would land on, with whether it is a valid landing. A cell that is
+/// free (or holds a same-size swap partner) is valid. When the snapped cell collides and
+/// a nearer free cell exists, the ghost moves there and is valid. When nothing fits, the
+/// ghost stays on the snapped cell, clamped inside the grid, and is invalid.
+fn gesture_ghost(
+    state: &DesktopState,
+    id: u32,
+    mode: GestureMode,
+    rect: Rect,
+    metrics: GridMetrics,
+) -> Option<(Placement, bool)> {
+    let widget = state.widgets.store.get(id)?;
+    let current = widget.grid?;
+    match mode {
+        GestureMode::Move => {
+            let snapped = metrics.snap(rect.origin(), current.span);
+            match state.widgets.store.preview_drop(id, rect.origin(), metrics) {
+                Some(cell) => Some((cell, true)),
+                None => Some((snapped, false)),
+            }
+        }
+        GestureMode::Resize(edges) => {
+            let want = widget_grid::edge_resize(widget.kind, current, edges, rect, metrics);
+            match state.widgets.store.preview_placement(id, want, metrics) {
+                Some(cell) => Some((cell, true)),
+                None => Some((want, false)),
+            }
+        }
+    }
+}
+
+fn hide_slot_overlay(document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    for index in 0..WIDGET_OVERLAY_CELLS {
+        document.visible(&format!("widget-slot-{index}"), false)?;
+    }
+    Ok(())
 }
 
 /// Widget grid for the current work area and UI scale.
@@ -532,13 +632,10 @@ pub(crate) fn widget_metrics(state: &DesktopState) -> GridMetrics {
     GridMetrics::for_work_area(widget_bounds(state), i32::from(state.grid.scale_percent))
 }
 
+/// Work area the widget grid covers: the primary output (`state.grid` follows
+/// `default_output`), never a union of every output.
 pub(crate) fn widget_bounds(state: &DesktopState) -> Rect {
-    state
-        .output_grids
-        .values()
-        .map(|grid| grid.work_area)
-        .reduce(Rect::union)
-        .unwrap_or(state.grid.work_area)
+    state.grid.work_area
 }
 
 #[must_use]
@@ -619,6 +716,9 @@ pub(crate) fn assign_layers(document: &mut impl UiDocumentAccess) -> Result<(), 
     }
     // Drag ghost sits above every widget slot while a gesture is live.
     document.layer("widget-ghost", UiLayer::Overlay)?;
+    for index in 0..WIDGET_OVERLAY_CELLS {
+        document.layer(&format!("widget-slot-{index}"), UiLayer::Overlay)?;
+    }
     document.layer("widget-menu", UiLayer::Popover)?;
     document.layer("widget-gallery", UiLayer::Popover)?;
     document.layer("widget-config", UiLayer::Popover)
@@ -680,7 +780,9 @@ pub(crate) fn sync_widgets(
         document.corner_radius(&id, surface.radius)?;
         document.node_backdrop(&id, surface.blur)?;
         document.surface_material(&id, Some(surface_material_values(&state.settings)))?;
-        document.visible(&format!("{id}-resize"), !widget.locked)?;
+        for edge in WIDGET_EDGES {
+            document.visible(&format!("{id}-edge-{edge}"), !widget.locked)?;
+        }
         let analog = is_analog(&widget);
         document.visible(
             &format!("{id}-clock"),
@@ -722,15 +824,16 @@ pub(crate) fn sync_widgets(
             widget.kind == WidgetKind::Custom && editing.is_none(),
         )?;
         document.visible(&format!("{id}-editor"), editing.is_some())?;
+        let accent = projection_accent(state);
         match widget.kind {
             WidgetKind::Clock if analog => sync_analog(document, state, slot, &widget, time)?,
-            WidgetKind::Clock => sync_clock(document, &id, &widget, time)?,
+            WidgetKind::Clock => sync_clock(document, &id, &widget, time, accent)?,
             WidgetKind::Cpu | WidgetKind::Memory | WidgetKind::Ring => {
                 sync_gauge(document, state, slot, &widget)?;
             }
-            WidgetKind::Media => sync_media(document, &id, &widget, &state.widgets.media)?,
-            WidgetKind::Weather => sync_weather(document, &id, &widget, &state.weather)?,
-            WidgetKind::Calendar => sync_calendar(document, &id, &widget, time)?,
+            WidgetKind::Media => sync_media(document, &id, &widget, &state.widgets.media, accent)?,
+            WidgetKind::Weather => sync_weather(document, &id, &widget, &state.weather, accent)?,
+            WidgetKind::Calendar => sync_calendar(document, &id, &widget, time, accent)?,
             WidgetKind::History => sync_history(document, state, slot, &widget)?,
             WidgetKind::Network => sync_network(document, state, slot, &widget)?,
             WidgetKind::Custom => {
@@ -767,7 +870,7 @@ fn sync_analog(
     document.position(&format!("{id}-analog"), left, top)?;
     document.size(&format!("{id}-analog"), side, side)?;
     let hands = widget.color("textColor");
-    let accent = widget.color("accentColor");
+    let accent = widget.color_or_accent("accentColor", projection_accent(state));
     let key = FaceKey {
         size,
         second: u32::from(time.hour) * 3600 + u32::from(time.minute) * 60 + u32::from(time.second),
@@ -799,6 +902,7 @@ fn sync_clock(
     id: &str,
     widget: &Widget,
     time: WallTime,
+    accent: Rgb,
 ) -> Result<(), String> {
     // One-cell cards keep only the time, fitted to the card width.
     let compact = widget.rect.width < COMPACT_CARD_WIDTH;
@@ -813,7 +917,7 @@ fn sync_clock(
     );
     let date_text = format_date(time, widget.flag("showWeekday"), widget.flag("showYear"));
     let time_color = color(widget.color("textColor"), 255);
-    let date_color = color(widget.color("accentColor"), 255);
+    let date_color = color(widget.color_or_accent("accentColor", accent), 255);
     let weight = if widget.flag("bold") { 700 } else { 400 };
     let align = widget.align();
     document.visible(&format!("{id}-clock-stack"), !side_by_side)?;
@@ -828,7 +932,7 @@ fn sync_clock(
         document.text(&time_id, time_text.clone())?;
         document.text(&date_id, date_text.clone())?;
         document.font_size(&time_id, time_size)?;
-        document.font_size(&date_id, widget.value("dateSize") as f32)?;
+        document.font_size(&date_id, WIDGET_DATE_SIZE)?;
         document.font_weight(&time_id, weight)?;
         document.foreground(&time_id, time_color)?;
         document.foreground(&date_id, date_color)?;
@@ -930,7 +1034,7 @@ fn sync_gauge(
         size: ring_size as u32,
         thickness: widget.value("thickness") as u32,
         percent: percent.unwrap_or(0),
-        ring: widget.color("ringColor"),
+        ring: widget.color_or_accent("ringColor", projection_accent(state)),
         track: widget.color("trackColor"),
     };
     if state.widgets.rings[slot] != Some(key) {
@@ -1010,7 +1114,7 @@ fn sync_history(
         series.push((&samples.memory_history, widget.color("memoryColor")));
     }
     if widget.flag("showCpu") {
-        series.push((&samples.cpu_history, widget.color("cpuColor")));
+        series.push((&samples.cpu_history, widget.color_or_accent("cpuColor", projection_accent(state))));
     }
     sync_graph(document, slot, widget, "history", &series)
 }
@@ -1029,7 +1133,7 @@ fn sync_network(
         series.push((&tx, widget.color("txColor")));
     }
     if widget.flag("showRx") {
-        series.push((&rx, widget.color("rxColor")));
+        series.push((&rx, widget.color_or_accent("rxColor", projection_accent(state))));
     }
     sync_graph(document, slot, widget, "network", &series)
 }
@@ -1082,9 +1186,10 @@ fn sync_weather(
     id: &str,
     widget: &Widget,
     weather: &flamewm_api::weather::WeatherFeedSnapshot,
+    accent: Rgb,
 ) -> Result<(), String> {
     let text = color(widget.color("textColor"), 255);
-    let accent = color(widget.color("accentColor"), 255);
+    let accent = color(widget.color_or_accent("accentColor", accent), 255);
     let view = flamewm_desktop_core::weather_feed::weather_widget_view(weather);
     // City name is one line at 15px semibold: ellipsise it to the card's inner width.
     // The width estimate reads semibold ~8% narrow, so keep a 10% margin.
@@ -1127,10 +1232,11 @@ fn sync_calendar(
     id: &str,
     widget: &Widget,
     time: WallTime,
+    accent: Rgb,
 ) -> Result<(), String> {
     let text = color(widget.color("textColor"), 255);
     let clear = color(widget.color("background"), 0);
-    let marker = color(widget.color("accentColor"), 255);
+    let marker = color(widget.color_or_accent("accentColor", accent), 255);
     let ink = color(flamewm_desktop_core::sticky::Rgb::new(16, 16, 16), 255);
     let month = usize::from(time.month.clamp(1, 12)) - 1;
     document.visible(&format!("{id}-cal-month"), widget.flag("showMonth"))?;
@@ -1167,6 +1273,7 @@ fn sync_media(
     id: &str,
     widget: &Widget,
     media: &MediaSnapshot,
+    accent: Rgb,
 ) -> Result<(), String> {
     let available =
         media.availability == ServiceAvailability::Available && !media.active_bus_name.is_empty();
@@ -1204,7 +1311,7 @@ fn sync_media(
     document.foreground(&format!("{id}-media-artist"), text)?;
     document.foreground(
         &format!("{id}-media-player"),
-        color(widget.color("accentColor"), 255),
+        color(widget.color_or_accent("accentColor", accent), 255),
     )
 }
 
@@ -1448,7 +1555,7 @@ pub(crate) fn place_gallery(
                     if kind == WidgetKind::Cpu {
                         accent
                     } else {
-                        preview.color("ringColor")
+                        preview.color_or_accent("ringColor", accent)
                     },
                     preview.color("trackColor"),
                 ),
@@ -1481,7 +1588,7 @@ pub(crate) fn place_config(
         state.menu = None;
         return Ok(());
     };
-    let options = widget.kind.options();
+    let options = widget.kind.visible_options(widget.stored_values());
     for row in 0..CONFIG_ROWS {
         let row_id = format!("widget-config-row-{row}");
         let Some(spec) = options.get(row) else {
@@ -1491,13 +1598,15 @@ pub(crate) fn place_config(
         let value = widget.value(spec.key);
         document.text(&format!("{row_id}-label"), spec.label.to_owned())?;
         document.text(&format!("{row_id}-value"), spec.label_for(value))?;
-        let is_color = spec.control == OptionControl::Color;
+        let is_color = matches!(spec.control, OptionControl::Color | OptionControl::AccentColor);
         document.visible(&format!("{row_id}-swatch"), is_color)?;
         if is_color {
-            document.background(
-                &format!("{row_id}-swatch"),
-                color(palette_color(value), 255),
-            )?;
+            let swatch = if value == flamewm_desktop_core::widgets::ACCENT_COLOR {
+                projection_accent(state)
+            } else {
+                palette_color(value)
+            };
+            document.background(&format!("{row_id}-swatch"), color(swatch, 255))?;
         }
         document.visible(&row_id, true)?;
     }
@@ -1541,8 +1650,7 @@ pub(crate) fn widget_menu_rows(
         }
         .to_owned(),
     )?;
-    // Four size rows (1x1, 2x1, 1x2, 2x2) follow the lock row.
-    Ok(if custom { 9 } else { 8 })
+    Ok(if custom { 5 } else { 4 })
 }
 
 pub(crate) fn is_widget_action(action: &str) -> bool {
@@ -1603,10 +1711,9 @@ pub(crate) fn handle_action(
     if pointer_button(action) != PointerButton::Primary {
         return Ok(());
     }
-    let mode = if name.ends_with(".resize") {
-        GestureMode::Resize
-    } else {
-        GestureMode::Move
+    let mode = match name.rsplit_once(".resize-").and_then(|(_, edge)| Edges::from_name(edge)) {
+        Some(edges) => GestureMode::Resize(edges),
+        None => GestureMode::Move,
     };
     match action.phase {
         UiActionPhase::Press => {
@@ -1656,8 +1763,8 @@ pub(crate) fn handle_action(
                 GestureMode::Move => {
                     move_widget_rect(gesture.original, dx as i32, dy as i32, bounds)
                 }
-                GestureMode::Resize => {
-                    resize_widget_rect(gesture.original, dx as i32, dy as i32, bounds)
+                GestureMode::Resize(edges) => {
+                    edge_drag_rect(gesture.original, edges, dx as i32, dy as i32, bounds)
                 }
             };
             // Live drag follows the pointer freely; release snaps to the grid.
@@ -1668,27 +1775,38 @@ pub(crate) fn handle_action(
                     GestureMode::Move => {
                         state.widgets.store.drop_on_grid(widget.id, rect.origin(), metrics);
                     }
-                    GestureMode::Resize => {
-                        let span = metrics.span_for_px(rect.width, rect.height);
-                        state.widgets.store.resize_on_grid(widget.id, span, metrics);
+                    GestureMode::Resize(edges) => {
+                        if let Some(current) =
+                            state.widgets.store.get(widget.id).and_then(|w| w.grid.map(|g| (w.kind, g)))
+                        {
+                            let (kind, current) = current;
+                            let want = widget_grid::edge_resize(kind, current, edges, rect, metrics);
+                            state.widgets.store.place_nearest(widget.id, want, metrics);
+                        }
                     }
                 }
                 state.widgets.persist();
             }
             state.widgets.store.anchor_to(widget.id, bounds);
-            // Ghost: the cell this gesture would land on; hidden once released.
+            // Slot outlines exist only while a drag or resize is live.
+            if release {
+                if state.widgets.slot_overlay {
+                    hide_slot_overlay(document)?;
+                    state.widgets.slot_overlay = false;
+                }
+            } else if !state.widgets.slot_overlay {
+                show_slot_overlay(document, widget_metrics(state))?;
+                state.widgets.slot_overlay = true;
+            }
+            // Ghost: the cell this gesture would land on, hidden once released.
             let metrics = widget_metrics(state);
-            let ghost = match (release, gesture.mode) {
-                (true, _) => None,
-                (false, GestureMode::Move) => {
-                    state.widgets.store.preview_drop(widget.id, rect.origin(), metrics)
-                }
-                (false, GestureMode::Resize) => {
-                    let span = metrics.span_for_px(rect.width, rect.height);
-                    state.widgets.store.preview_resize(widget.id, span, metrics)
-                }
+            let ghost = if release {
+                None
+            } else {
+                gesture_ghost(state, widget.id, gesture.mode, rect, metrics)
             };
-            sync_ghost(document, metrics, ghost)?;
+            let accent = projection_accent(state);
+            sync_ghost(document, metrics, accent, ghost)?;
             // Lift the dragged card above sibling slots while the gesture is live.
             if let Some(slot) = state
                 .widgets
@@ -1756,12 +1874,6 @@ fn handle_menu(
             }
             state.widgets.store.remove(id);
         }
-        size if size.starts_with("size.") => {
-            if let Some(span) = Span::from_label(&size["size.".len()..]) {
-                let metrics = widget_metrics(state);
-                state.widgets.store.resize_on_grid(id, span, metrics);
-            }
-        }
         _ => return Ok(()),
     }
     state.menu = None;
@@ -1823,10 +1935,15 @@ fn handle_config(
     let Some(id) = selected_widget(state) else {
         return Ok(());
     };
-    let Some(widget) = state.widgets.store.get_mut(id) else {
+    let Some(spec) = state
+        .widgets
+        .store
+        .get(id)
+        .and_then(|widget| widget.kind.visible_options(widget.stored_values()).get(row).copied())
+    else {
         return Ok(());
     };
-    let Some(spec) = widget.kind.options().get(row).copied() else {
+    let Some(widget) = state.widgets.store.get_mut(id) else {
         return Ok(());
     };
     widget.step_value(spec.key, direction);
@@ -2085,13 +2202,17 @@ mod tests {
     }
 
     #[test]
-    fn backdrop_blur_is_off_by_default_and_follows_the_setting() {
-        let mut widget = Widget::new(1, WidgetKind::Memory, Point::new(0, 0));
-        assert_eq!(widget_backdrop(&widget), None);
-        widget.set_value("backdropBlur", 40);
-        assert_eq!(widget_backdrop(&widget), Some(40));
-        widget.set_value("backdropBlur", 150);
-        assert_eq!(widget_backdrop(&widget), Some(100));
+    fn edge_drag_moves_only_the_dragged_edges() {
+        let bounds = Rect::new(0, 0, 1000, 800);
+        let original = Rect::new(100, 100, 200, 100);
+        let right = Edges::from_name("e").expect("edge");
+        assert_eq!(edge_drag_rect(original, right, 50, 999, bounds), Rect::new(100, 100, 250, 100));
+        let left = Edges::from_name("w").expect("edge");
+        assert_eq!(edge_drag_rect(original, left, 50, 0, bounds), Rect::new(150, 100, 150, 100));
+        // Dragging a left edge past the right edge keeps one pixel instead of inverting.
+        assert_eq!(edge_drag_rect(original, left, 900, 0, bounds).width, 1);
+        let corner = Edges::from_name("nw").expect("edge");
+        assert_eq!(edge_drag_rect(original, corner, -20, -30, bounds), Rect::new(80, 70, 220, 130));
     }
 
     fn settings_with(values: &[(&str, flamewm_api::settings::SettingValue)]) -> SettingsSnapshot {
@@ -2116,34 +2237,33 @@ mod tests {
     }
 
     #[test]
-    fn inheriting_card_ignores_its_own_background_and_blur_options() {
+    fn card_without_custom_surface_ignores_its_own_colour_and_opacity() {
         let mut widget = Widget::new(1, WidgetKind::Memory, Point::new(0, 0));
-        assert!(widget.set_value("inheritSurface", 1));
+        assert!(widget.inherits_surface());
         assert!(widget.set_value("backgroundOpacity", 90));
-        assert!(widget.set_value("backdropBlur", 10));
         let inherited = widget_surface(&widget, &SettingsSnapshot::new(1));
         assert_eq!(inherited.blur, Some(70));
         assert_eq!(inherited.fill.a, 31);
     }
 
     #[test]
-    fn overriding_card_uses_its_own_colour_opacity_blur_and_radius() {
+    fn custom_surface_uses_its_own_colour_and_opacity_with_global_blur() {
         let mut widget = Widget::new(1, WidgetKind::Cpu, Point::new(0, 0));
-        assert!(widget.set_value("inheritSurface", 0));
+        assert!(widget.set_value("customSurface", 1));
         assert!(widget.set_value("background", 0));
         assert!(widget.set_value("backgroundOpacity", 70));
-        assert!(widget.set_value("backdropBlur", 60));
-        assert!(widget.set_value("radius", 30));
         let surface = widget_surface(&widget, &settings_with(&[]));
         assert_eq!(surface.fill.a, 179);
-        assert_eq!(surface.blur, Some(60));
-        assert_eq!(surface.radius, 30.0);
-        // A global surface change must not leak into an overriding card.
-        let global = settings_with(&[(
+        assert_eq!(surface.blur, Some(70));
+        assert_eq!(surface.radius, WIDGET_RADIUS);
+        // A global blur change follows every card; the custom colour stays put.
+        let no_blur = settings_with(&[(
             "surfaceBlurPercent",
             flamewm_api::settings::SettingValue::Percent(0),
         )]);
-        assert_eq!(widget_surface(&widget, &global), surface);
+        let global = widget_surface(&widget, &no_blur);
+        assert_eq!(global.blur, None);
+        assert_eq!(global.fill, surface.fill);
     }
 
     #[test]
