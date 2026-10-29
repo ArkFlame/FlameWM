@@ -509,6 +509,9 @@ impl RuntimeDocument {
     }
 
     pub fn is_effectively_visible(&self, mut index: u32) -> bool {
+        if self.hidden_nodes.is_empty() {
+            return true;
+        }
         loop {
             if !self.is_visible(index) {
                 return false;
