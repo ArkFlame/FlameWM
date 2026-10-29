@@ -627,7 +627,7 @@ where
     }
     if let Some(key) = media_audio_key {
         // A rejected write (stale generation, no sink, Pulse down) must not stop the WM.
-        if let Err(error) = host.media_audio_key(key) {
+        if let Err(error) = host.media_audio_key(key, crate::live_settings::volume_cap_percent()) {
             eprintln!("flamewm: media key {key:?} was not applied: {error:?}");
         }
     }

@@ -15,18 +15,18 @@ pub enum AudioTab {
 }
 
 /// Persisted audio UX settings. `raise_maximum` caps the slider at 100/150
-/// and persists via the `audioRaiseMaximum` settings key.
+/// and persists via the shared `flamewm_platform::system::AUDIO_RAISE_MAXIMUM_KEY`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AudioSettings {
     pub raise_maximum: bool,
 }
 
 impl AudioSettings {
-    pub const SETTINGS_KEY: &str = "audioRaiseMaximum";
+    pub const SETTINGS_KEY: &str = flamewm_platform::system::AUDIO_RAISE_MAXIMUM_KEY;
 
     #[must_use]
     pub fn max_percent(self) -> u8 {
-        if self.raise_maximum { 150 } else { 100 }
+        flamewm_platform::system::volume_cap_percent(self.raise_maximum)
     }
 
     /// Slider spec for a row volume under the current cap.

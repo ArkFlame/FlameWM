@@ -22,11 +22,10 @@ pub const OSD_HEIGHT: i32 = 37;
 pub const OSD_RADIUS: i32 = 18;
 pub const TRACK_W: i32 = 129;
 pub const TRACK_H: i32 = 5;
-pub const VOLUME_MAX: u8 = 150;
 pub const HOLD: Duration = Duration::from_millis(1200);
 pub const FADE: Duration = Duration::from_millis(180);
 
-/// One audio level as the shell observes it in the snapshot.
+/// One audio level as the shell observes it in the snapshot, clamped to the live cap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Level {
     pub volume: u8,
@@ -34,21 +33,22 @@ pub struct Level {
 }
 
 impl Level {
+    /// `max` is the live volume cap (`AudioSettings::max_percent`): 150 with raise maximum, else 100.
     #[must_use]
-    pub fn new(volume: u8, muted: bool) -> Self {
+    pub fn new(volume: u8, muted: bool, max: u8) -> Self {
         Self {
-            volume: volume.min(VOLUME_MAX),
+            volume: volume.min(max),
             muted,
         }
     }
 
-    /// Filled track width in logical px. Muted shows an empty track.
+    /// Filled track width in logical px, full at the cap. Muted shows an empty track.
     #[must_use]
-    pub fn fill_width(self) -> i32 {
-        if self.muted {
+    pub fn fill_width(self, max: u8) -> i32 {
+        if self.muted || max == 0 {
             return 0;
         }
-        i32::from(self.volume) * TRACK_W / i32::from(VOLUME_MAX)
+        i32::from(self.volume) * TRACK_W / i32::from(max)
     }
 
     #[must_use]
@@ -199,17 +199,19 @@ impl OsdController {
     }
 
     /// Feeds one snapshot level, hides at the deadline, then re-arms the timer.
-    /// `None` means no default endpoint is known. `settings` styles the card
+    /// `None` means no default endpoint is known. `max` is the live volume cap the
+    /// fill and label scale to. `settings` styles the card
     /// (accent, surface fill, backdrop) on every show; `None` keeps the stylesheet defaults.
     pub fn update(
         &mut self,
         runtime: &mut SurfaceRuntime,
         level: Option<Level>,
+        max: u8,
         target: impl FnOnce() -> (Rect, f32),
         settings: Option<&SettingsSnapshot>,
         now: Instant,
     ) -> Result<(), UiBackendError> {
-        let result = self.observe(runtime, level, target, settings, now);
+        let result = self.observe(runtime, level, max, target, settings, now);
         result.and_then(|()| self.expire(runtime, now))
     }
 
@@ -217,6 +219,7 @@ impl OsdController {
         &mut self,
         runtime: &mut SurfaceRuntime,
         level: Option<Level>,
+        max: u8,
         target: impl FnOnce() -> (Rect, f32),
         settings: Option<&SettingsSnapshot>,
         now: Instant,
@@ -245,7 +248,7 @@ impl OsdController {
             let (opacity, blur) = settings_projection::start_backdrop_percents(settings);
             runtime.set_popup_backdrop(surface, Some((opacity, blur)))?;
         }
-        runtime.with_document(surface, |document| paint(document, level))?;
+        runtime.with_document(surface, |document| paint(document, level, max))?;
         runtime.move_resize(
             surface,
             card.x,
@@ -283,11 +286,11 @@ fn create(runtime: &mut SurfaceRuntime) -> Result<SurfaceHandle, UiBackendError>
     )
 }
 
-fn paint(document: &mut impl UiDocumentAccess, level: Level) -> Result<(), String> {
+fn paint(document: &mut impl UiDocumentAccess, level: Level, max: u8) -> Result<(), String> {
     let muted = level.muted;
     document.visible("osd-icon-high", !muted)?;
     document.visible("osd-icon-muted", muted)?;
-    document.size("osd-fill", level.fill_width() as f32, TRACK_H as f32)?;
+    document.size("osd-fill", level.fill_width(max) as f32, TRACK_H as f32)?;
     document.text("osd-text", level.label())
 }
 
@@ -380,7 +383,7 @@ mod tests {
 
     #[test]
     fn fill_width_at_zero_quarter_half_full_and_max() {
-        let fill = |volume| Level::new(volume, false).fill_width();
+        let fill = |volume| Level::new(volume, false, 150).fill_width(150);
         assert_eq!(fill(0), 0);
         assert_eq!(fill(25), 21);
         assert_eq!(fill(50), 43);
@@ -390,14 +393,38 @@ mod tests {
 
     #[test]
     fn volume_above_max_clamps_to_150() {
-        assert_eq!(Level::new(200, false).fill_width(), TRACK_W);
-        assert_eq!(Level::new(200, false).label(), "150%");
+        assert_eq!(Level::new(200, false, 150).fill_width(150), TRACK_W);
+        assert_eq!(Level::new(200, false, 150).label(), "150%");
+    }
+
+    #[test]
+    fn without_raise_maximum_the_card_caps_at_100_percent() {
+        let level = Level::new(120, false, 100);
+        assert_eq!(level.label(), "100%");
+        assert_eq!(level.fill_width(100), TRACK_W);
+        assert_eq!(Level::new(60, false, 100).fill_width(100), 77);
+        assert_eq!(Level::new(60, false, 100).label(), "60%");
+    }
+
+    #[test]
+    fn raise_maximum_shows_up_to_150_percent() {
+        assert_eq!(Level::new(120, false, 150).label(), "120%");
+        assert_eq!(Level::new(120, false, 150).fill_width(150), 103);
+    }
+
+    #[test]
+    fn lowering_the_cap_moves_an_over_cap_volume_and_shows_the_card() {
+        let mut state = OsdState::new();
+        let t0 = Instant::now();
+        state.observe(Level::new(120, false, 150), t0);
+        assert!(state.observe(Level::new(120, false, 100), t0));
+        assert_eq!(state.deadline(), Some(t0 + HOLD));
     }
 
     #[test]
     fn mute_shows_empty_track_and_muted_label() {
-        let level = Level::new(80, true);
-        assert_eq!(level.fill_width(), 0);
+        let level = Level::new(80, true, 150);
+        assert_eq!(level.fill_width(150), 0);
         assert_eq!(level.label(), "Muted");
     }
 
@@ -414,7 +441,7 @@ mod tests {
     #[test]
     fn baseline_observation_does_not_show() {
         let mut state = OsdState::new();
-        assert!(!state.observe(Level::new(40, false), Instant::now()));
+        assert!(!state.observe(Level::new(40, false, 150), Instant::now()));
         assert_eq!(state.deadline(), None);
     }
 
@@ -422,9 +449,9 @@ mod tests {
     fn unchanged_level_does_not_reset_deadline() {
         let mut state = OsdState::new();
         let t0 = Instant::now();
-        state.observe(Level::new(40, false), t0);
-        assert!(!state.observe(Level::new(40, false), t0 + Duration::from_millis(500)));
-        assert!(state.observe(Level::new(45, false), t0 + Duration::from_millis(500)));
+        state.observe(Level::new(40, false, 150), t0);
+        assert!(!state.observe(Level::new(40, false, 150), t0 + Duration::from_millis(500)));
+        assert!(state.observe(Level::new(45, false, 150), t0 + Duration::from_millis(500)));
         assert_eq!(
             state.deadline(),
             Some(t0 + Duration::from_millis(500) + HOLD)
@@ -435,9 +462,9 @@ mod tests {
     fn coalesced_changes_keep_one_deadline_that_moves_forward() {
         let mut state = OsdState::new();
         let t0 = Instant::now();
-        state.observe(Level::new(40, false), t0);
-        state.observe(Level::new(45, false), t0 + Duration::from_millis(100));
-        state.observe(Level::new(50, false), t0 + Duration::from_millis(900));
+        state.observe(Level::new(40, false, 150), t0);
+        state.observe(Level::new(45, false, 150), t0 + Duration::from_millis(100));
+        state.observe(Level::new(50, false, 150), t0 + Duration::from_millis(900));
         assert_eq!(
             state.deadline(),
             Some(t0 + Duration::from_millis(900) + HOLD)
@@ -453,8 +480,8 @@ mod tests {
     fn hold_then_fade_then_hide_leaves_no_deadline() {
         let mut state = OsdState::new();
         let t0 = Instant::now();
-        state.observe(Level::new(40, false), t0);
-        state.observe(Level::new(41, false), t0);
+        state.observe(Level::new(40, false, 150), t0);
+        state.observe(Level::new(41, false, 150), t0);
         assert!(!state.expire(t0 + (HOLD - Duration::from_millis(1))));
         assert!(!state.expire(t0 + HOLD));
         assert_eq!(state.deadline(), Some(t0 + HOLD + FADE));
@@ -467,11 +494,11 @@ mod tests {
     fn change_during_fade_restarts_hold() {
         let mut state = OsdState::new();
         let t0 = Instant::now();
-        state.observe(Level::new(40, false), t0);
-        state.observe(Level::new(41, false), t0);
+        state.observe(Level::new(40, false, 150), t0);
+        state.observe(Level::new(41, false, 150), t0);
         assert!(!state.expire(t0 + HOLD));
         let t1 = t0 + HOLD + Duration::from_millis(50);
-        assert!(state.observe(Level::new(41, true), t1));
+        assert!(state.observe(Level::new(41, true, 150), t1));
         assert_eq!(state.deadline(), Some(t1 + HOLD));
         assert!(!state.expire(t1 + (HOLD - Duration::from_millis(1))));
     }

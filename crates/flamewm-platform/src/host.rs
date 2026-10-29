@@ -654,8 +654,13 @@ impl<E: EnginePorts> PlatformHost<E> {
     }
 
     /// Dispatches a media key to the default output sink through the system action path.
-    pub fn media_audio_key(&mut self, key: crate::system::MediaAudioKey) -> FlameResult<()> {
-        self.system.media_audio_key(key)
+    /// `cap` is the live volume cap from the shared "raise maximum volume" setting.
+    pub fn media_audio_key(
+        &mut self,
+        key: crate::system::MediaAudioKey,
+        cap: u8,
+    ) -> FlameResult<()> {
+        self.system.media_audio_key(key, cap)
     }
 
     pub fn system_action(

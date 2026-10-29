@@ -34,6 +34,13 @@ static SATURATION_PERCENT: AtomicU32 =
 /// Live `accent` packed as `0x00RRGGBB`.
 static ACCENT_RGB: AtomicU32 = AtomicU32::new(pack_rgb(DEFAULT_ACCENT_RGB));
 static WINDOW_MARGIN: AtomicU32 = AtomicU32::new(DEFAULT_WINDOW_MARGIN);
+/// Shared `audioRaiseMaximum`: false until a snapshot says otherwise, matching the shell default.
+static AUDIO_RAISE_MAXIMUM: AtomicBool = AtomicBool::new(false);
+
+/// Live volume cap for the media keys, from the shared "raise maximum volume" value.
+pub(crate) fn volume_cap_percent() -> u8 {
+    flamewm_platform::system::volume_cap_percent(AUDIO_RAISE_MAXIMUM.load(Ordering::Relaxed))
+}
 
 const fn pack_rgb((r, g, b): (u8, u8, u8)) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | b as u32
@@ -117,6 +124,14 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     );
     ACCENT_RGB.store(pack_rgb(accent_from_snapshot(snapshot)), Ordering::Relaxed);
     WINDOW_MARGIN.store(window_margin_from_snapshot(snapshot), Ordering::Relaxed);
+    AUDIO_RAISE_MAXIMUM.store(
+        boolean_setting(
+            snapshot,
+            flamewm_platform::system::AUDIO_RAISE_MAXIMUM_KEY,
+            false,
+        ),
+        Ordering::Relaxed,
+    );
     flamewm_render_x11::set_render_acceleration(
         match snapshot
             .values
@@ -231,6 +246,22 @@ mod tests {
             window_behaviour_from_snapshot(&SettingsSnapshot::new(1)),
             (true, false)
         );
+    }
+
+    #[test]
+    fn raise_maximum_drives_the_media_key_cap_live() {
+        let key = flamewm_platform::system::AUDIO_RAISE_MAXIMUM_KEY;
+        let raise = |value| {
+            AUDIO_RAISE_MAXIMUM.store(
+                boolean_setting(&snapshot(&[(key, SettingValue::Boolean(value))]), key, false),
+                Ordering::Relaxed,
+            );
+            volume_cap_percent()
+        };
+        assert_eq!(raise(true), 150);
+        assert_eq!(raise(false), 100);
+        AUDIO_RAISE_MAXIMUM.store(false, Ordering::Relaxed);
+        assert_eq!(volume_cap_percent(), 100);
     }
 
     #[test]

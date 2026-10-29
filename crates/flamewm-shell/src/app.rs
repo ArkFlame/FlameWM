@@ -1972,15 +1972,17 @@ impl ShellLoop {
     /// and hides at the single deadline. Nonfatal: a failure never stops the loop.
     fn tick_osd(&mut self, runtime: &mut SurfaceRuntime) {
         let snapshot = self.shell.snapshot();
+        // The live "raise maximum volume" cap, the same value the mixer slider uses.
+        let max = self.audio_settings.max_percent();
         let level =
             flamewm_shell::taskbar::status::audio::default_endpoint_row(&snapshot.system.audio)
-                .map(|row| flamewm_shell::osd::Level::new(row.volume_percent, row.muted));
+                .map(|row| flamewm_shell::osd::Level::new(row.volume_percent, row.muted, max));
         // Same output source as the panel scale: the shown panel's placement output. The lookup is
         // lazy: the controller calls it only when the card shows, so idle ticks allocate nothing.
         let target = || active_output_target(&self.surfaces, snapshot);
         let now = Instant::now();
         let settings = self.settings_cache.as_ref();
-        if let Err(error) = self.osd.update(runtime, level, target, settings, now) {
+        if let Err(error) = self.osd.update(runtime, level, max, target, settings, now) {
             eprintln!("flamewm-shell: volume OSD failed (nonfatal): {error:?}");
         }
     }

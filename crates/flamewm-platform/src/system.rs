@@ -11,6 +11,21 @@ pub type SystemActionHandler = Box<dyn FnMut(SystemAction, SystemSnapshot) -> Fl
 pub const MEDIA_VOLUME_STEP: u8 = 5;
 /// Highest volume the system action path accepts.
 pub const MAX_VOLUME_PERCENT: u8 = 150;
+/// Volume cap without "raise maximum volume" (over-amplification).
+pub const BASE_VOLUME_PERCENT: u8 = 100;
+/// Settings key of the "Raise maximum volume" toggle. The audio mixer, the volume OSD and
+/// the WM media keys all read this one key; it is the only owner of the name.
+pub const AUDIO_RAISE_MAXIMUM_KEY: &str = "audioRaiseMaximum";
+
+/// Volume cap for the shared "raise maximum volume" value: 150 when raised, else 100.
+#[must_use]
+pub fn volume_cap_percent(raise_maximum: bool) -> u8 {
+    if raise_maximum {
+        MAX_VOLUME_PERCENT
+    } else {
+        BASE_VOLUME_PERCENT
+    }
+}
 
 /// Media keys that adjust the default output endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,15 +35,14 @@ pub enum MediaAudioKey {
     VolumeMute,
 }
 
-/// Returns `current` moved one media-key step up or down, clamped to 0..=150.
+/// Returns `current` moved one media-key step up or down, clamped to `0..=cap`.
 #[must_use]
-pub fn stepped_volume(current: u8, up: bool) -> u8 {
+pub fn stepped_volume(current: u8, up: bool, cap: u8) -> u8 {
+    let cap = cap.min(MAX_VOLUME_PERCENT);
     if up {
-        current
-            .saturating_add(MEDIA_VOLUME_STEP)
-            .min(MAX_VOLUME_PERCENT)
+        current.saturating_add(MEDIA_VOLUME_STEP).min(cap)
     } else {
-        current.saturating_sub(MEDIA_VOLUME_STEP)
+        current.saturating_sub(MEDIA_VOLUME_STEP).min(cap)
     }
 }
 
@@ -172,7 +186,8 @@ impl SystemService {
     /// Applies a media key to the default output sink through `perform_action`,
     /// the same typed path the UI uses. The write is fenced by the current audio
     /// generation. With no default sink there is nothing to adjust and this is a no-op.
-    pub fn media_audio_key(&mut self, key: MediaAudioKey) -> FlameResult<()> {
+    /// `cap` is the live volume cap (`volume_cap_percent` of the shared setting).
+    pub fn media_audio_key(&mut self, key: MediaAudioKey, cap: u8) -> FlameResult<()> {
         let revision = self.snapshot.revision;
         let generation = self.snapshot.audio.generation;
         let server_generation = self.snapshot.audio.server_generation;
@@ -196,6 +211,7 @@ impl SystemService {
                     percent: stepped_volume(
                         endpoint.volume_percent,
                         key == MediaAudioKey::VolumeUp,
+                        cap,
                     ),
                     generation,
                     server_generation,
@@ -405,12 +421,53 @@ mod media_key_tests {
 
     #[test]
     fn step_moves_five_percent_and_clamps_to_0_through_150() {
-        assert_eq!(stepped_volume(40, true), 45);
-        assert_eq!(stepped_volume(40, false), 35);
-        assert_eq!(stepped_volume(148, true), 150);
-        assert_eq!(stepped_volume(150, true), 150);
-        assert_eq!(stepped_volume(3, false), 0);
-        assert_eq!(stepped_volume(0, false), 0);
+        assert_eq!(stepped_volume(40, true, 150), 45);
+        assert_eq!(stepped_volume(40, false, 150), 35);
+        assert_eq!(stepped_volume(148, true, 150), 150);
+        assert_eq!(stepped_volume(150, true, 150), 150);
+        assert_eq!(stepped_volume(3, false, 150), 0);
+        assert_eq!(stepped_volume(0, false, 150), 0);
+    }
+
+    #[test]
+    fn step_clamps_to_the_live_cap_when_raise_maximum_is_off() {
+        let cap = volume_cap_percent(false);
+        assert_eq!(stepped_volume(98, true, cap), 100);
+        assert_eq!(stepped_volume(100, true, cap), 100);
+        assert_eq!(stepped_volume(120, true, cap), 100);
+        assert_eq!(stepped_volume(120, false, cap), 100);
+        assert_eq!(stepped_volume(60, false, cap), 55);
+    }
+
+    #[test]
+    fn volume_cap_follows_the_shared_raise_maximum_value() {
+        assert_eq!(AUDIO_RAISE_MAXIMUM_KEY, "audioRaiseMaximum");
+        assert_eq!(volume_cap_percent(false), 100);
+        assert_eq!(volume_cap_percent(true), 150);
+    }
+
+    #[test]
+    fn volume_up_is_capped_at_100_without_raise_maximum() {
+        let (mut service, seen) = service_with(vec![sink(2, true, 98, false)]);
+        service
+            .media_audio_key(MediaAudioKey::VolumeUp, volume_cap_percent(false))
+            .expect("dispatch");
+        assert!(matches!(
+            seen.borrow().as_slice(),
+            [SystemAction::SetVolume(AudioVolumeAction { percent: 100, .. })]
+        ));
+    }
+
+    #[test]
+    fn volume_up_reaches_150_with_raise_maximum() {
+        let (mut service, seen) = service_with(vec![sink(2, true, 148, false)]);
+        service
+            .media_audio_key(MediaAudioKey::VolumeUp, volume_cap_percent(true))
+            .expect("dispatch");
+        assert!(matches!(
+            seen.borrow().as_slice(),
+            [SystemAction::SetVolume(AudioVolumeAction { percent: 150, .. })]
+        ));
     }
 
     #[test]
@@ -418,7 +475,7 @@ mod media_key_tests {
         let (mut service, seen) =
             service_with(vec![sink(1, false, 10, false), sink(2, true, 40, false)]);
         service
-            .media_audio_key(MediaAudioKey::VolumeUp)
+            .media_audio_key(MediaAudioKey::VolumeUp, MAX_VOLUME_PERCENT)
             .expect("dispatch");
         assert_eq!(
             seen.borrow().as_slice(),
@@ -438,7 +495,7 @@ mod media_key_tests {
     fn volume_down_at_zero_dispatches_zero_not_underflow() {
         let (mut service, seen) = service_with(vec![sink(2, true, 0, false)]);
         service
-            .media_audio_key(MediaAudioKey::VolumeDown)
+            .media_audio_key(MediaAudioKey::VolumeDown, MAX_VOLUME_PERCENT)
             .expect("dispatch");
         assert!(matches!(
             seen.borrow().as_slice(),
@@ -453,7 +510,7 @@ mod media_key_tests {
     fn mute_key_toggles_the_current_default_sink_state() {
         let (mut service, seen) = service_with(vec![sink(2, true, 40, true)]);
         service
-            .media_audio_key(MediaAudioKey::VolumeMute)
+            .media_audio_key(MediaAudioKey::VolumeMute, MAX_VOLUME_PERCENT)
             .expect("dispatch");
         assert!(matches!(
             seen.borrow().as_slice(),
@@ -470,10 +527,10 @@ mod media_key_tests {
     fn no_default_sink_is_a_noop_without_handler_call() {
         let (mut service, seen) = service_with(vec![sink(1, false, 40, false)]);
         service
-            .media_audio_key(MediaAudioKey::VolumeUp)
+            .media_audio_key(MediaAudioKey::VolumeUp, MAX_VOLUME_PERCENT)
             .expect("no-op");
         service
-            .media_audio_key(MediaAudioKey::VolumeMute)
+            .media_audio_key(MediaAudioKey::VolumeMute, MAX_VOLUME_PERCENT)
             .expect("no-op");
         assert!(seen.borrow().is_empty());
     }
