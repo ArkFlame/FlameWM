@@ -309,8 +309,6 @@ mod tests {
     fn glass_rows_bind_their_controls_on_the_surfaces_page() {
         let surfaces = page_between(HTML, "page-surfaces", "page-animations");
         for (id, action) in [
-            ("glassify-on", "settings.toggle.glassifyContrastZones"),
-            ("glassify-off", "settings.toggle.glassifyContrastZones"),
             ("reduce-transparency-on", "settings.toggle.reduceTransparency"),
             ("reduce-transparency-off", "settings.toggle.reduceTransparency"),
             ("taskbar-material-blur-only", "settings.taskbar.material.blur-only"),
@@ -345,17 +343,13 @@ mod tests {
     }
 
     #[test]
-    fn glass_disabled_states_are_inert_twins_not_clickable_controls() {
+    fn taskbar_material_rows_are_hidden_when_not_applicable() {
         let surfaces = page_between(HTML, "page-surfaces", "page-animations");
-        // Inherit mode shows the inert opacity twin instead of the live slider.
-        let twin = surfaces
-            .split("id=\"taskbar-opacity-off\"")
-            .nth(1)
-            .expect("taskbar opacity twin");
-        let twin = &twin[..twin.find("</div></div>").expect("twin end")];
-        assert!(surfaces.contains("<div class=\"slider-control is-disabled\" id=\"taskbar-opacity-off\">"));
-        assert!(!twin.contains("data-action"), "disabled twin must not be clickable");
-        assert!(surfaces.contains("<div class=\"value-pill value is-disabled\" id=\"taskbar-tint-off\">"));
+        // Inherit and custom-tint modes each hide the row that does not apply; no disabled twins are drawn.
+        assert!(!surfaces.contains("taskbar-opacity-off"));
+        assert!(!surfaces.contains("taskbar-tint-off"));
+        assert!(surfaces.contains("id=\"taskbar-opacity-row\""));
+        assert!(surfaces.contains("id=\"taskbar-tint-row\""));
         let live = surfaces
             .split("id=\"taskbar-opacity-live\"")
             .nth(1)

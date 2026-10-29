@@ -170,10 +170,15 @@ impl AnimationStyle {
     }
 }
 
+/// System accent used everywhere while `accentCustom` is off.
+pub const DEFAULT_ACCENT: &str = "#539BFF";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductSettings {
     pub revision: u64,
     pub accent: String,
+    /// When false the system accent (`DEFAULT_ACCENT`) applies everywhere; `accent` is ignored.
+    pub accent_custom: bool,
     pub icon_theme: String,
     pub appearance: AppearanceMode,
     /// Saved custom wallpaper path; used only when `wallpaper_mode` is `Custom`.
@@ -246,15 +251,13 @@ pub struct ProductSettings {
     pub surface_shadow_percent: u8,
     /// `surfaceHighlightPercent` (0..=100): alpha of the 1px inset top gloss.
     pub surface_highlight_percent: u8,
-    /// `glassifyContrastZones`: opt-in translucent contrast zones. Default off.
-    pub glassify_contrast_zones: bool,
-    /// `reduceTransparency`: all materials opaque with no blur, overrides glassify. Default off.
+    /// `reduceTransparency`: all materials opaque with no blur. Default off.
     pub reduce_transparency: bool,
     /// `glassOpacityPercent` (4..=42): `GlassRegular` tint alpha.
     pub glass_opacity_percent: u8,
     /// `glassBlurPx` (0..=54): `GlassRegular` backdrop blur in logical px.
     pub glass_blur_px: u8,
-    /// `taskbarMaterialMode`: `blur-only` | `inherit` | `custom-tint`.
+    /// `taskbarMaterialMode`: `inherit` (default) | `blur-only` | `custom-tint`.
     pub taskbar_material_mode: String,
     /// `taskbarOpacityPercent` (0..=75): taskbar tint alpha in Blur Only and Custom Tint.
     pub taskbar_opacity_percent: u8,
@@ -326,7 +329,8 @@ impl Default for ProductSettings {
     fn default() -> Self {
         Self {
             revision: 1,
-            accent: "#539BFF".to_owned(),
+            accent: DEFAULT_ACCENT.to_owned(),
+            accent_custom: false,
             icon_theme: "MacTahoe".to_owned(),
             appearance: AppearanceMode::Dark,
             wallpaper: String::new(),
@@ -375,16 +379,15 @@ impl Default for ProductSettings {
             surface_opacity: 65,
             surface_blur_percent: 70,
             surface_border_color: "#FFFFFF".to_owned(),
-            surface_border_opacity: 8,
+            surface_border_opacity: 25,
             surface_saturation_percent: 165,
-            surface_rim_fade_percent: 6,
+            surface_rim_fade_percent: 25,
             surface_shadow_percent: 0,
             surface_highlight_percent: 18,
-            glassify_contrast_zones: false,
             reduce_transparency: false,
             glass_opacity_percent: 12,
             glass_blur_px: 28,
-            taskbar_material_mode: "blur-only".to_owned(),
+            taskbar_material_mode: "inherit".to_owned(),
             taskbar_opacity_percent: 8,
             taskbar_custom_tint: "#5879EE".to_owned(),
             start_button_text: String::new(),
@@ -717,6 +720,7 @@ impl ConfigStore {
         let mut has_wallpaper_mode = false;
         let mut has_lock_background_mode = false;
         let mut has_button_style = false;
+        let mut has_accent_custom = false;
         // Legacy per-button styles: read only, each reduced to "is square".
         let mut legacy_square_flags = Vec::new();
         for raw in text.lines() {
@@ -740,6 +744,7 @@ impl ConfigStore {
             has_wallpaper_mode |= key == "wallpaperMode";
             has_lock_background_mode |= key == "lockBackgroundMode";
             has_button_style |= key == "titlebarButtonStyle";
+            has_accent_custom |= key == "accentCustom";
             if let Some(row) = stable_setting(key) {
                 (row.parse)(&mut snapshot, value, key)?;
                 continue;
@@ -752,6 +757,8 @@ impl ConfigStore {
                 }
                 // Legacy titlebar background colour: tolerated and ignored, never stored or written.
                 "titlebarColor" => {}
+                // Removed contrast-zone option: tolerated and dropped; contrast zones are always glass.
+                "glassifyContrastZones" => {}
                 // Legacy taskbar surface keys: read only, promoted to surface* below.
                 "taskbarColor" => snapshot.taskbar_color = Slot::from_text(value, key)?,
                 "taskbarOpacity" => snapshot.taskbar_opacity = Slot::from_text(value, key)?,
@@ -799,6 +806,13 @@ impl ConfigStore {
             let all_square = legacy_square_flags.iter().all(|square| *square);
             if all_square { "square" } else { "circle" }
                 .clone_into(&mut snapshot.titlebar_button_style);
+        }
+        // Files without the toggle migrate: an explicit non-default accent means custom.
+        if !has_accent_custom {
+            snapshot.accent_custom = snapshot.accent != DEFAULT_ACCENT;
+        }
+        if !snapshot.accent_custom {
+            DEFAULT_ACCENT.clone_into(&mut snapshot.accent);
         }
         if snapshot.decoration == "ios" {
             "rounded".clone_into(&mut snapshot.decoration);
@@ -1109,6 +1123,7 @@ macro_rules! stable_settings {
 
 stable_settings! {
     (true, appearance, "accent", accent),
+    (false, appearance, "accentCustom", accent_custom),
     (true, appearance, "appearance", appearance),
     (true, desktop, "wallpaper", wallpaper),
     (false, desktop, "wallpaperMode", wallpaper_mode),
@@ -1134,7 +1149,6 @@ stable_settings! {
     (false, taskbar, "surfaceRimFadePercent", surface_rim_fade_percent),
     (false, taskbar, "surfaceShadowPercent", surface_shadow_percent),
     (false, taskbar, "surfaceHighlightPercent", surface_highlight_percent),
-    (false, glass, "glassifyContrastZones", glassify_contrast_zones),
     (false, glass, "reduceTransparency", reduce_transparency),
     (false, glass, "glassOpacityPercent", glass_opacity_percent),
     (false, glass, "glassBlurPx", glass_blur_px),
@@ -1404,7 +1418,8 @@ mod tests {
     fn defaults_match_current_flamewm_product_contract() {
         let settings = ProductSettings::default();
         assert_eq!(settings.revision, 1);
-        assert_eq!(settings.accent, "#539BFF");
+        assert_eq!(settings.accent, DEFAULT_ACCENT);
+        assert!(!settings.accent_custom);
         assert_eq!(settings.taskbar_height, 44);
         assert_eq!(settings.desktop_selection_fill_opacity, 20);
         assert_eq!(settings.window_snap_preview_fill_opacity, 20);
@@ -2637,7 +2652,6 @@ mod glass_settings_tests {
         assert_eq!(
             glass,
             [
-                "glassifyContrastZones",
                 "reduceTransparency",
                 "glassOpacityPercent",
                 "glassBlurPx",
@@ -2672,19 +2686,26 @@ mod glass_settings_tests {
         let settings = ConfigStore::default()
             .parse_snapshot("revision=2\n")
             .expect("legacy file without glass keys");
-        assert!(!settings.glassify_contrast_zones);
         assert!(!settings.reduce_transparency);
         assert_eq!(settings.glass_opacity_percent, 12);
         assert_eq!(settings.glass_blur_px, 28);
-        assert_eq!(settings.taskbar_material_mode, "blur-only");
+        assert_eq!(settings.taskbar_material_mode, "inherit");
         assert_eq!(settings.taskbar_opacity_percent, 8);
         assert_eq!(settings.taskbar_custom_tint, "#5879EE");
     }
 
     #[test]
+    fn removed_glassify_key_is_tolerated_and_dropped() {
+        let settings = ConfigStore::default()
+            .parse_snapshot("revision=2\nglassifyContrastZones=1\n")
+            .expect("removed key must not fail the file");
+        assert!(!settings.unknown_keys.contains_key("glassifyContrastZones"));
+        assert!(!ConfigStore::serialize(&settings).contains("glassifyContrastZones"));
+    }
+
+    #[test]
     fn glass_keys_round_trip_through_config_store() {
         let settings = ProductSettings {
-            glassify_contrast_zones: true,
             reduce_transparency: true,
             glass_opacity_percent: 42,
             glass_blur_px: 54,
@@ -2717,5 +2738,42 @@ mod glass_settings_tests {
             mutate(&mut settings);
             assert!(settings.validate().is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod accent_custom_tests {
+    use super::{ConfigStore, DEFAULT_ACCENT};
+
+    fn parse(text: &str) -> super::ProductSettings {
+        ConfigStore::default().parse_snapshot(text).expect("parse")
+    }
+
+    #[test]
+    fn accent_custom_defaults_off_and_uses_system_accent() {
+        let settings = parse("revision=1\naccent=#112233\naccentCustom=false\n");
+        assert!(!settings.accent_custom);
+        assert_eq!(settings.accent, DEFAULT_ACCENT);
+    }
+
+    #[test]
+    fn explicit_non_default_accent_migrates_to_custom() {
+        let settings = parse("revision=1\naccent=#112233\n");
+        assert!(settings.accent_custom);
+        assert_eq!(settings.accent, "#112233");
+    }
+
+    #[test]
+    fn default_accent_without_toggle_stays_off() {
+        let settings = parse("revision=1\naccent=#539BFF\n");
+        assert!(!settings.accent_custom);
+        assert_eq!(settings.accent, DEFAULT_ACCENT);
+    }
+
+    #[test]
+    fn custom_accent_is_kept_when_toggle_is_on() {
+        let settings = parse("revision=1\naccent=#112233\naccentCustom=true\n");
+        assert!(settings.accent_custom);
+        assert_eq!(settings.accent, "#112233");
     }
 }

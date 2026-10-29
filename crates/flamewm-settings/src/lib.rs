@@ -44,7 +44,7 @@ const DEFAULT_ACCENT: &str = "#539BFF";
 /// Every `toggle-on` id in ui/settings.html must be listed here (checked by a test).
 const ACCENT_NODE_IDS: &[&str] = &[
     "nav-selection-accent",
-    "glassify-on",
+    "accent-custom-on",
     "reduce-transparency-on",
     "anim-global-on",
     "anim-start-on",
@@ -92,6 +92,12 @@ const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "cursor-shadow-on",
         "cursor-shadow-off",
         true,
+    ),
+    (
+        "accentCustom",
+        "accent-custom-on",
+        "accent-custom-off",
+        false,
     ),
     (
         "taskbarShowWeather",
@@ -575,6 +581,8 @@ enum SettingsAction {
     GlassPreset(glass::GlassPreset),
     /// Resets the `glass` settings section only; surface and window keys are kept.
     ResetGlass,
+    /// Focuses the sidebar search field so typed text filters the page list.
+    SearchFocus,
     /// Adds `delta` to an integer setting and clamps the result to `minimum..=maximum`.
     IntegerStep {
         key: &'static str,
@@ -632,6 +640,9 @@ pub struct SettingsApplication<T: ControlTransport> {
     scale_drag: Option<(OutputId, u64, u16)>,
     /// Arrow keys affect scale only after the slider is focused by pointer.
     scale_slider_focused: bool,
+    /// Sidebar search text and whether the search field takes typed text.
+    nav_query: String,
+    nav_search_focused: bool,
     file_manager_label: String,
 }
 
@@ -656,6 +667,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             monitor_drag: None,
             scale_drag: None,
             scale_slider_focused: false,
+            nav_query: String::new(),
+            nav_search_focused: false,
             file_manager_label: "FlameWM Explorer".into(),
         }
     }
@@ -756,6 +769,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         if event.phase != UiActionPhase::Release || !event.inside {
             return Ok(());
+        }
+        if event.action == KEYBOARD_INPUT_ACTION && self.nav_search_focused {
+            self.nav_search_text(event.text.as_deref().unwrap_or_default());
+            return self.settle(document);
         }
         if event.action == KEYBOARD_INPUT_ACTION && self.color_picker.is_some() {
             self.color_picker_text(event.text.as_deref().unwrap_or_default())?;
@@ -878,7 +895,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// `taskbarMaterialMode` is `inherit`, which makes the taskbar opacity unavailable.
     fn taskbar_inherits(&self) -> bool {
-        matches!(self.text_setting("taskbarMaterialMode"), Ok(mode) if mode == "inherit")
+        self.text_setting("taskbarMaterialMode")
+            .map_or(true, |mode| mode == "inherit")
     }
 
     pub fn handle_key_event(
@@ -1216,6 +1234,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 self.client
                     .apply_setting(key, SettingValue::Boolean(enabled))
                     .map_err(control_error)?;
+                // Custom accent off means the system accent everywhere: reset the stored value.
+                if key == "accentCustom" && !enabled {
+                    self.apply_text("accent", DEFAULT_ACCENT.to_owned())?;
+                }
             }
             SettingsAction::SelectionOpacity(direction) => {
                 self.step_percent("DesktopSelectionFillOpacity", direction, 60)?;
@@ -1260,6 +1282,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::AnimationSpeedSlider
             | SettingsAction::DisplayScaleSlider
             | SettingsAction::GlassSlider => {}
+            SettingsAction::SearchFocus => self.nav_search_focused = true,
             SettingsAction::ResetGlass => {
                 self.client.reset_section("glass").map_err(control_error)?;
             }
@@ -1517,6 +1540,25 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Applies typed keys to the picker: Escape closes, Enter applies, Backspace
     /// edits and hex digits append only while the field is focused.
+    /// Edits the sidebar search query from typed text: printable characters append, backspace
+    /// deletes, Escape clears and leaves the field, Enter leaves it with the filter kept.
+    fn nav_search_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            match ch {
+                '\u{1b}' => {
+                    self.nav_query.clear();
+                    self.nav_search_focused = false;
+                }
+                '\n' | '\r' => self.nav_search_focused = false,
+                '\u{8}' => {
+                    self.nav_query.pop();
+                }
+                ch if !ch.is_control() => self.nav_query.push(ch),
+                _ => {}
+            }
+        }
+    }
+
     fn color_picker_text(&mut self, text: &str) -> Result<(), String> {
         for ch in text.chars() {
             match ch {
@@ -1895,6 +1937,17 @@ impl<T: ControlTransport> SettingsApplication<T> {
             project_glass_roles(document, snapshot)?;
         }
         document.position("nav-selection", 8.0, nav_top(self.nav_index()))?;
+        let filtering = !self.nav_query.is_empty();
+        for (slug, label) in NAV_PAGES {
+            document.visible(&format!("nav-{slug}"), nav_matches(label, &self.nav_query))?;
+        }
+        document.visible("nav-selection", !filtering)?;
+        let search_text = match (self.nav_search_focused, self.nav_query.is_empty()) {
+            (false, true) => "Search".to_owned(),
+            (true, _) => format!("{}|", self.nav_query),
+            (false, false) => self.nav_query.clone(),
+        };
+        document.text("nav-search-text", search_text)?;
         if let Some(SettingValue::Text(accent)) = self.setting_value("accent") {
             document.background("nav-selection", solid_color(accent)?)?;
             sync_accent_nodes(document, accent)?;
@@ -1960,10 +2013,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     self.accent()?
                 } else {
                     UiColor {
-                        r: 89,
-                        g: 96,
-                        b: 104,
-                        a: 255,
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                        a: 0x1a,
                     }
                 },
             )?;
@@ -2052,7 +2105,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ),
             ("taskbarShowDate", "taskbar-date-on", "taskbar-date-off"),
             ("snapPreviewEnabled", "snap-preview-on", "snap-preview-off"),
-            ("glassifyContrastZones", "glassify-on", "glassify-off"),
             ("reduceTransparency", "reduce-transparency-on", "reduce-transparency-off"),
             (
                 "showContentWhileDragging",
@@ -2240,7 +2292,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 GLASS_SLIDER_THUMB_TOP as f32,
             )?;
         }
-        let mode = self.text_setting("taskbarMaterialMode").ok();
+        let mode = Some(
+            self.text_setting("taskbarMaterialMode")
+                .unwrap_or_else(|_| "inherit".to_owned()),
+        );
         highlight_options(
             document,
             mode.as_deref(),
@@ -2252,11 +2307,17 @@ impl<T: ControlTransport> SettingsApplication<T> {
             accent,
         )?;
         let inherits = mode.as_deref() == Some("inherit");
+        document.visible("taskbar-opacity-row", !inherits)?;
         document.visible("taskbar-opacity-live", !inherits)?;
-        document.visible("taskbar-opacity-off", inherits)?;
         let custom = mode.as_deref() == Some("custom-tint");
+        document.visible("taskbar-tint-row", custom)?;
         document.visible("taskbar-tint-live", custom)?;
-        document.visible("taskbar-tint-off", !custom)?;
+        // Custom accent off hides the swatches and picker; the system accent applies.
+        let custom_accent = matches!(
+            self.setting_value("accentCustom"),
+            Some(SettingValue::Boolean(true))
+        );
+        document.visible("accent-custom-row", custom_accent)?;
         Ok(())
     }
 
@@ -3183,10 +3244,32 @@ fn shortcut_label(owner: &str) -> String {
 const NAV_BRAND_HEIGHT_PX: f32 = 72.0;
 /// Sidebar row pitch (no gap between rows); must match `.nav-row` height in ui/settings.css.
 const NAV_ROW_PITCH_PX: f32 = 30.0;
+/// Search field block (30 px field plus 6 px bottom margin) between the brand and the rows.
+const NAV_SEARCH_BLOCK_PX: f32 = 36.0;
+/// Sidebar pages in row order, with the labels the search filters on.
+const NAV_PAGES: [(&str, &str); 12] = [
+    ("theme", "Theme"),
+    ("start-menu", "Start Menu"),
+    ("surfaces", "Surfaces"),
+    ("animations", "Animations"),
+    ("lock-screen", "Lock Screen"),
+    ("screensaver", "Screensaver"),
+    ("desktop", "Desktop"),
+    ("taskbar", "Taskbar"),
+    ("displays", "Displays"),
+    ("fonts", "Fonts"),
+    ("hotkeys", "Hotkeys"),
+    ("about", "About"),
+];
+
+/// Case-insensitive contains match; an empty query shows every page.
+fn nav_matches(label: &str, query: &str) -> bool {
+    query.is_empty() || label.to_lowercase().contains(&query.to_lowercase())
+}
 
 /// Top of the active-row indicator for sidebar index `index`, from the same layout as the CSS rows.
 fn nav_top(index: usize) -> f32 {
-    NAV_BRAND_HEIGHT_PX + index as f32 * NAV_ROW_PITCH_PX
+    NAV_BRAND_HEIGHT_PX + NAV_SEARCH_BLOCK_PX + index as f32 * NAV_ROW_PITCH_PX
 }
 
 
@@ -3214,7 +3297,7 @@ fn remove_managed_media(path: &str) -> Result<(), String> {
 /// Authoritative accent value behind each palette swatch in the Appearance page.
 fn accent_for_swatch(name: &str) -> Option<&'static str> {
     match name {
-        "red" => Some(DEFAULT_ACCENT),
+        "red" => Some("#EF4048"),
         "blue" => Some("#3DAEE9"),
         "purple" => Some("#9B59B6"),
         "teal" => Some("#1ABC9C"),
@@ -3301,7 +3384,7 @@ fn sync_accent_nodes(document: &mut impl UiDocumentAccess, accent: &str) -> Resu
 }
 
 /// Window body glass (GlassRegular, the menu surface material), backdrop blur beneath it, and the
-/// grouped-card fill (ContrastZone). The sidebar and content areas stay transparent and show this body.
+/// grouped-card overlay. The sidebar and content areas stay transparent and show this body.
 /// Every value comes from `glass::resolve`, so Reduce transparency makes the body opaque with no blur.
 fn project_glass_roles(
     document: &mut impl UiDocumentAccess,
@@ -3325,7 +3408,47 @@ fn project_glass_roles(
         "settings-root",
         Some(flamewm_ui_core::glass::blur_percent_from_px(body.blur_px)),
     )?;
-    document.color_variable("--card", rgba(resolve(MaterialRole::ContrastZone)))
+    // Group fill: a black overlay at 20% alpha on the shared body glass. Reduce Transparency
+    // makes the body opaque, so the same 20% darkening is applied to its solid colour instead.
+    document.color_variable("--card", card_fill(appearance.reduce_transparency, body.tint_rgb))
+}
+
+/// The group-zone fill: a 20% black overlay on glass, or a solid 20%-darker shade of the
+/// opaque body when Reduce Transparency is on.
+fn card_fill(reduce_transparency: bool, body_rgb: u32) -> UiColor {
+    if reduce_transparency {
+        let shade = |channel: u32| ((channel * 4) / 5) as u8;
+        UiColor {
+            r: shade(body_rgb >> 16 & 0xff),
+            g: shade(body_rgb >> 8 & 0xff),
+            b: shade(body_rgb & 0xff),
+            a: 0xff,
+        }
+    } else {
+        UiColor {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0x33,
+        }
+    }
+}
+
+#[cfg(test)]
+mod card_fill_tests {
+    use super::*;
+
+    #[test]
+    fn glass_zone_is_translucent_black_overlay() {
+        let fill = card_fill(false, 0x0018_253e);
+        assert_eq!((fill.r, fill.g, fill.b, fill.a), (0, 0, 0, 0x33));
+    }
+
+    #[test]
+    fn reduce_transparency_zone_is_opaque_darker_body() {
+        let fill = card_fill(true, 0x00ff_ffff);
+        assert_eq!((fill.r, fill.g, fill.b, fill.a), (204, 204, 204, 255));
+    }
 }
 
 fn accent_color(value: &str) -> Result<UiColor, String> {
@@ -3507,7 +3630,6 @@ fn integer_choice_action(
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
 const TOGGLE_KEYS: [&str; 34] = [
-    "glassifyContrastZones",
     "reduceTransparency",
     "showContentWhileDragging",
     "windowShadows",
@@ -3538,6 +3660,7 @@ const TOGGLE_KEYS: [&str; 34] = [
     "focusFollowsMouse",
     "shareWallpaper",
     "cursorShadow",
+    "accentCustom",
     "titlebars",
     "taskbarActivities",
     "taskbarSeparate",
@@ -3611,6 +3734,7 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.glass.dark" => return Ok(SettingsAction::GlassPreset(glass::DARK)),
         "settings.glass.light" => return Ok(SettingsAction::GlassPreset(glass::LIGHT)),
         "settings.glass.reset" => return Ok(SettingsAction::ResetGlass),
+        "settings.search.focus" => return Ok(SettingsAction::SearchFocus),
         _ => {}
     }
     if let Some(direction) = action
@@ -4269,6 +4393,16 @@ mod value_text_tests {
     }
 
     #[test]
+    fn red_swatch_selects_red_not_the_default_blue() {
+        // Regression: the red swatch once mapped to DEFAULT_ACCENT, so clicking red saved the blue default.
+        assert_action!(
+            "settings.accent.red",
+            Ok(SettingsAction::AccentSwatch(value)) if value == "#EF4048"
+        );
+        assert_ne!(accent_for_swatch("red"), Some(DEFAULT_ACCENT));
+    }
+
+    #[test]
     fn accent_reset_and_start_icon_actions_parse_to_their_typed_targets() {
         assert!(parse_action("settings.accent.reset").is_err());
         assert_action!(
@@ -4543,10 +4677,6 @@ mod value_text_tests {
         assert!(matches!(
             parse_action("settings.toggle.reduceTransparency"),
             Ok(SettingsAction::Toggle("reduceTransparency"))
-        ));
-        assert!(matches!(
-            parse_action("settings.toggle.glassifyContrastZones"),
-            Ok(SettingsAction::Toggle("glassifyContrastZones"))
         ));
         assert!(parse_action("settings.taskbar.material.neon").is_err());
     }
@@ -4951,7 +5081,7 @@ pub mod entry;
 
 #[cfg(test)]
 mod nav_indicator_layout_tests {
-    use super::{NAV_BRAND_HEIGHT_PX, NAV_ROW_PITCH_PX, nav_top};
+    use super::{NAV_BRAND_HEIGHT_PX, NAV_ROW_PITCH_PX, NAV_SEARCH_BLOCK_PX, nav_top};
 
     const CSS: &str = include_str!("../../../ui/settings.css");
     const HTML: &str = include_str!("../../../ui/settings.html");
@@ -4972,7 +5102,9 @@ mod nav_indicator_layout_tests {
         assert_eq!(px_in_rule(".settings-brand {", "height"), NAV_BRAND_HEIGHT_PX);
         assert_eq!(px_in_rule(".nav-row {", "height"), NAV_ROW_PITCH_PX);
         for index in 0..rows {
-            let expected = NAV_BRAND_HEIGHT_PX + index as f32 * px_in_rule(".nav-row {", "height");
+            let expected = NAV_BRAND_HEIGHT_PX
+                + NAV_SEARCH_BLOCK_PX
+                + index as f32 * px_in_rule(".nav-row {", "height");
             assert_eq!(nav_top(index), expected, "indicator for row {index}");
         }
     }
