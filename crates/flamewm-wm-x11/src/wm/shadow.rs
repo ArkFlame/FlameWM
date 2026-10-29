@@ -192,6 +192,9 @@ pub(super) struct ShadowScene {
     desktop: Option<DesktopFrame>,
     /// `desktop` matches the property; cleared by its `PropertyNotify`.
     pub(super) desktop_read: bool,
+    /// The desktop presented new pixels (its frame property changed). Consumed by the first quiet
+    /// turn, which bumps the generation so every ring is re-shaded from the new content once.
+    pub(super) content_changed: bool,
     /// Work counters; logged per change under `FLAMEWM_SHADOW_DIAG=1`.
     pub(super) stats: ShadowStats,
 }
@@ -265,6 +268,11 @@ impl ShadowScene {
             .iter()
             .any(|client| !self.next_dragging.contains(client))
         {
+            bump = true;
+        }
+        // Desktop content (widgets, wallpaper) that changed under the rings. Only a quiet turn may
+        // consume it: a gesture or flight must not re-shade, and the flag waits for the settle.
+        if geometry.is_some() && std::mem::take(&mut self.content_changed) {
             bump = true;
         }
         std::mem::swap(&mut self.dragging, &mut self.next_dragging);
@@ -729,7 +737,7 @@ impl<C: Connection> Wm<'_, C> {
     ) -> Result<ShadowUpdate, ReplyOrIdError> {
         let root = self.screen().root;
         let rect = shadow::shadow_rect(outer);
-        let Some(raw) = self.desktop_snapshot(rect)? else {
+        let Some(raw) = self.desktop_snapshot(rect, outer, radius)? else {
             return Ok(ShadowUpdate::Unshaded);
         };
         let raw_bands = shadow_rubber::ShadowBands::capture_rounded(&raw, rect, outer, radius);
@@ -946,48 +954,53 @@ impl<C: Connection> Wm<'_, C> {
     /// never darken itself. The area outside the desktop stays the base colour (never visible
     /// on a desktop that covers the screen). `None` without a desktop frame or when the read
     /// fails (the desktop freed the pixmap; its property change re-shades).
-    fn desktop_snapshot(&self, rect: Rect) -> Result<Option<Vec<u8>>, ReplyOrIdError> {
+    fn desktop_snapshot(
+        &self,
+        rect: Rect,
+        frame: Rect,
+        radius: u32,
+    ) -> Result<Option<Vec<u8>>, ReplyOrIdError> {
         let Some(desktop) = self.shadow_scene.desktop else {
             return Ok(None);
         };
         let (w, h) = (rect.width.max(1) as usize, rect.height.max(1) as usize);
         // Start from the desktop colour: an uncovered region must not stay 0x000000.
         let mut pixels = crate::frame::shadow::snapshot_base(w, h);
-        // Read the whole shadow rect: the frame's rounded corners leave notches inside `outer`
-        // that a cast-only read never fills, and those notches would keep the base colour.
-        let (bx, by, bw, bh) = crate::frame::shadow::snapshot_read_rect(rect);
-        {
+        // Read only the ring: the bands outside the frame rect and the corner squares that hold
+        // the rounded notches. The frame's interior is covered by the window and never shaded.
+        for (bx, by, bw, bh) in crate::frame::shadow::ring_read_rects(rect, frame, radius) {
             // Intersect with the desktop surface, in root space.
             let x0 = (rect.x + bx).max(desktop.x);
             let y0 = (rect.y + by).max(desktop.y);
             let x1 = (rect.x + bx + bw).min(desktop.x + desktop.width as i32);
             let y1 = (rect.y + by + bh).min(desktop.y + desktop.height as i32);
-            if x1 > x0 && y1 > y0 {
-                let (cw, ch) = ((x1 - x0) as usize, (y1 - y0) as usize);
-                let Ok(reply) = self
-                    .conn
-                    .get_image(
-                        ImageFormat::Z_PIXMAP,
-                        desktop.pixmap,
-                        (x0 - desktop.x) as i16,
-                        (y0 - desktop.y) as i16,
-                        cw as u16,
-                        ch as u16,
-                        u32::MAX,
-                    )?
-                    .reply()
-                else {
-                    return Ok(None);
-                };
-                if !matches!(reply.depth, 24 | 32) || reply.data.len() != cw * ch * 4 {
-                    return Ok(None);
-                }
-                let (ox, oy) = ((x0 - rect.x) as usize, (y0 - rect.y) as usize);
-                for row in 0..ch {
-                    let src = &reply.data[row * cw * 4..(row + 1) * cw * 4];
-                    let dst = ((oy + row) * w + ox) * 4;
-                    pixels[dst..dst + cw * 4].copy_from_slice(src);
-                }
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
+            let (cw, ch) = ((x1 - x0) as usize, (y1 - y0) as usize);
+            let Ok(reply) = self
+                .conn
+                .get_image(
+                    ImageFormat::Z_PIXMAP,
+                    desktop.pixmap,
+                    (x0 - desktop.x) as i16,
+                    (y0 - desktop.y) as i16,
+                    cw as u16,
+                    ch as u16,
+                    u32::MAX,
+                )?
+                .reply()
+            else {
+                return Ok(None);
+            };
+            if !matches!(reply.depth, 24 | 32) || reply.data.len() != cw * ch * 4 {
+                return Ok(None);
+            }
+            let (ox, oy) = ((x0 - rect.x) as usize, (y0 - rect.y) as usize);
+            for row in 0..ch {
+                let src = &reply.data[row * cw * 4..(row + 1) * cw * 4];
+                let dst = ((oy + row) * w + ox) * 4;
+                pixels[dst..dst + cw * 4].copy_from_slice(src);
             }
         }
         Ok(Some(pixels))

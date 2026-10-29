@@ -63,6 +63,7 @@ impl<C: Connection> Wm<'_, C> {
                 if event.atom == self.atoms.desktop_frame && event.window == self.screen().root =>
             {
                 self.shadow_scene.desktop_read = false;
+                self.shadow_scene.content_changed = true;
             }
             Event::PropertyNotify(event) => self.handle_property(event.window, event.atom)?,
             Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => {

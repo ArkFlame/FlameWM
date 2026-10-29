@@ -127,6 +127,8 @@ fn run_session(
     settings_observer: Option<SettingsObserver>,
     settings_wake: Option<SettingsWake>,
 ) -> Result<(), AnyError> {
+    // One malloc arena and the mmap threshold, pinned before the WM starts its workers.
+    flamewm_render_x11::return_large_frees_to_system();
     flamewm_profiler::init_process("flamewm-wm");
     flamewm_debug::init_process("wm");
     let (settings_path, settings_source) = settings_path();

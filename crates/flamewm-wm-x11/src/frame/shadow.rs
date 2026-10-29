@@ -108,6 +108,34 @@ pub fn snapshot_read_rect(area: Rect) -> (i32, i32, i32, i32) {
     (0, 0, area.width.max(1) as i32, area.height.max(1) as i32)
 }
 
+/// Local `(x, y, w, h)` desktop reads that cover the ring of `area` around a frame whose rounded
+/// outline is `frame` (corner radius `radius`): the four bands outside the frame rect plus the four
+/// corner squares, which hold the rounded corners' notches. The frame's interior is never read.
+#[must_use]
+pub fn ring_read_rects(area: Rect, frame: Rect, radius: u32) -> Vec<(i32, i32, i32, i32)> {
+    let (ax, ay) = (area.x, area.y);
+    let (aw, ah) = (area.width as i32, area.height as i32);
+    let (fx, fy) = (frame.x - ax, frame.y - ay);
+    let (fw, fh) = (frame.width as i32, frame.height as i32);
+    let r = (radius as i32).min(fw / 2).min(fh / 2).max(0);
+    let mut rects = vec![
+        (0, 0, aw, fy),
+        (0, fy + fh, aw, ah - (fy + fh)),
+        (0, fy, fx, fh),
+        (fx + fw, fy, aw - (fx + fw), fh),
+    ];
+    if r > 0 {
+        rects.extend([
+            (fx, fy, r, r),
+            (fx + fw - r, fy, r, r),
+            (fx, fy + fh - r, r, r),
+            (fx + fw - r, fy + fh - r, r, r),
+        ]);
+    }
+    rects.retain(|&(_, _, w, h)| w > 0 && h > 0);
+    rects
+}
+
 /// A `width` x `height` BGRX snapshot pre-filled with the desktop colour.
 #[must_use]
 pub fn snapshot_base(width: usize, height: usize) -> Vec<u8> {
@@ -312,10 +340,21 @@ pub fn shade_visible_shadow_rounded(frame: Rect, focused: bool, radius: u32, pix
         return;
     }
     let keep_table = shadow_keep_table(focused);
+    // Pixels inside the frame's rounded outline are never visible: skip them outright. The
+    // straight band between the corner arcs is inside by construction, so only corner rows
+    // need the distance test.
+    let r = (radius as i32).min(frame.width as i32 / 2).min(frame.height as i32 / 2).max(0);
     for (row, start, end) in shadow_spans_iter(area, radius) {
         let y = area.y + row as i32;
         for col in start..end {
             let x = area.x + col as i32;
+            let straight = x >= frame.x
+                && x < frame.x + frame.width as i32
+                && y >= frame.y + r
+                && y < frame.y + frame.height as i32 - r;
+            if straight || (radius > 0 && rounded_signed_distance(frame, radius, x, y) <= 0.0) {
+                continue;
+            }
             let at = row as usize * stride + col as usize * 4;
             let keep = shadow_keep_from_table(&keep_table, frame, radius, focused, x, y);
             for channel in &mut pixels[at..at + 3] {
@@ -607,6 +646,34 @@ mod tests {
         // The ring just outside the outline stays shaped.
         assert!(contains(frame.x - 1, frame.y + 60));
         assert!(contains(frame.x + 60, frame.y - 1));
+    }
+
+    #[test]
+    fn ring_reads_cover_every_visible_ring_pixel_and_no_interior() {
+        let frame = Rect::new(100, 100, 200, 150);
+        let area = shadow_rect(frame);
+        let reads = ring_read_rects(area, frame, 24);
+        let read = |lx: i32, ly: i32| {
+            reads
+                .iter()
+                .any(|&(x, y, w, h)| lx >= x && lx < x + w && ly >= y && ly < y + h)
+        };
+        let r = 24;
+        for ly in 0..area.height as i32 {
+            for lx in 0..area.width as i32 {
+                let (x, y) = (area.x + lx, area.y + ly);
+                let d = rounded_signed_distance(frame, 24, x, y);
+                let in_straight = x >= frame.x
+                    && x < frame.right()
+                    && y >= frame.y + r
+                    && y < frame.bottom() - r;
+                if d > 0.0 {
+                    assert!(read(lx, ly), "visible ring pixel ({x},{y}) is not read");
+                } else if in_straight {
+                    assert!(!read(lx, ly), "frame interior pixel ({x},{y}) is read");
+                }
+            }
+        }
     }
 
     #[test]
