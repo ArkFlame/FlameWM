@@ -34,8 +34,14 @@ fn measure_in(name: &str, width: u32, height: u32, mut op: impl FnMut(&mut [u8])
         })
         .collect();
     samples.sort();
+    // Min is the noise-robust figure on a loaded machine; the median is kept beside it.
+    let min = samples[0];
     let median = samples[ITERATIONS / 2];
-    println!("  {name:<34} {:>9.3} ms", median.as_secs_f64() * 1000.0);
+    println!(
+        "  {name:<34} min {:>9.3} ms  median {:>9.3} ms",
+        min.as_secs_f64() * 1000.0,
+        median.as_secs_f64() * 1000.0
+    );
 }
 
 /// Deterministic panel positions spread over the frame, so every run measures the same batch.
