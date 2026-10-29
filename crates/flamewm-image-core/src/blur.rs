@@ -17,8 +17,6 @@ const MIN_BLUR_RADIUS: f32 = 0.5;
 const DOWNSCALE_RADIUS: f32 = 12.0;
 /// Integer downscale factor used above `DOWNSCALE_RADIUS`.
 const DOWNSCALE_FACTOR: usize = 4;
-/// Columns per vertical-pass band in `box_vertical`.
-const VERTICAL_BAND: usize = 8;
 /// Extra float capacity tolerated before `fit_f32` releases memory.
 const SHRINK_SLACK: usize = 4096;
 
@@ -315,7 +313,7 @@ fn blur_emit(
 
 /// Retains already-initialized storage for full-overwrite scratch buffers.
 /// `work`, `down`, and `line` are entirely overwritten before consumption;
-/// `band` copies every used column and explicitly clears its accumulator.
+/// `band` is overwritten row by row before use and its accumulator is cleared.
 /// Avoid writing zeros over the entire buffer before immediately replacing
 /// them with blur samples. Newly grown tail elements are initialized safely.
 fn fit_f32(buf: &mut Vec<f32>, len: usize) {
@@ -420,42 +418,46 @@ fn box_horizontal(buf: &mut [f32], line: &mut Vec<f32>, w: usize, r: usize) {
     }
 }
 
-/// Vertical box pass over `buf` (`w` x `h`), in place. Columns are processed in
-/// bands of `VERTICAL_BAND`: each band is copied to `band`, so every output element
-/// sees the same operations in the same order as an unbanded pass.
+/// Vertical box pass over `buf` (`w` x `h`), in place, one whole row at a time. Each output
+/// element sees the same operations in the same order as the per-column form.
 fn box_vertical(buf: &mut [f32], band: &mut Vec<f32>, w: usize, h: usize, r: usize) {
     let stride = w * 4;
     let inv = 1.0 / (2 * r + 1) as f32;
     let ri = r as isize;
     let last = h as isize - 1;
-    let bstride = VERTICAL_BAND * 4;
-    fit_f32(band, h * bstride + bstride);
-    let (col, acc) = band.split_at_mut(h * bstride);
-    for x0 in (0..w).step_by(VERTICAL_BAND) {
-        let n = VERTICAL_BAND.min(w - x0) * 4;
-        let off = x0 * 4;
-        for y in 0..h {
-            col[y * bstride..y * bstride + n]
-                .copy_from_slice(&buf[y * stride + off..y * stride + off + n]);
+    // Whole rows, contiguous, so the adds and subtracts vectorize. `buf` row `y` is overwritten
+    // at step `y`, but later steps still subtract it, so a ring of the last `r + 1` original rows
+    // is kept in `band`. The ring rows follow the subtract order, and the accumulator sits after
+    // them. The add row is read from `buf`, which still holds originals for rows after `y`.
+    let slots = r + 1;
+    fit_f32(band, (slots + 1) * stride);
+    let (saved, acc) = band.split_at_mut(slots * stride);
+    acc.fill(0.0);
+    for k in -ri..=ri {
+        let o = clamp_index(k, last) * stride;
+        for (a, s) in acc.iter_mut().zip(&buf[o..o + stride]) {
+            *a += *s;
         }
-        let acc = &mut acc[..n];
-        acc.fill(0.0);
-        for k in -ri..=ri {
-            let o = clamp_index(k, last) * bstride;
-            for (a, s) in acc.iter_mut().zip(&col[o..o + n]) {
-                *a += *s;
-            }
+    }
+    for y in 0..h {
+        let slot = (y % slots) * stride;
+        saved[slot..slot + stride].copy_from_slice(&buf[y * stride..(y + 1) * stride]);
+        for (d, a) in buf[y * stride..(y + 1) * stride].iter_mut().zip(acc.iter()) {
+            *d = *a * inv;
         }
-        for y in 0..h {
-            let out = &mut buf[y * stride + off..y * stride + off + n];
-            for (d, a) in out.iter_mut().zip(acc.iter()) {
-                *d = *a * inv;
-            }
-            let add = clamp_index(y as isize + ri + 1, last) * bstride;
-            let sub = clamp_index(y as isize - ri, last) * bstride;
-            for i in 0..n {
-                acc[i] += col[add + i] - col[sub + i];
-            }
+        let add_row = clamp_index(y as isize + ri + 1, last);
+        let sub_row = clamp_index(y as isize - ri, last);
+        // The last row is already overwritten in `buf`, so take a row `<= y` from the ring.
+        let add: &[f32] = if add_row > y {
+            &buf[add_row * stride..(add_row + 1) * stride]
+        } else {
+            let s = (add_row % slots) * stride;
+            &saved[s..s + stride]
+        };
+        let s = (sub_row % slots) * stride;
+        let sub = &saved[s..s + stride];
+        for ((a, p), q) in acc.iter_mut().zip(add).zip(sub) {
+            *a += *p - *q;
         }
     }
 }
