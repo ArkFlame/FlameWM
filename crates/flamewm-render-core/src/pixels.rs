@@ -108,6 +108,137 @@ pub enum PixelOp<'a> {
         color: [u8; 4],
         fade_percent: u8,
     },
+    /// A node backdrop: the blur (`radius` px, as [`PixelBackend::blur_rgba`]) of the pixels under
+    /// `clip` (device x, y, width, height, inside the frame), written opaque where
+    /// [`inside_node_shape`] holds for the rounded rect `node` with corner `corner`. Pixels outside
+    /// that shape keep the frame. A zero radius or an empty clip is a no-op.
+    BackdropBlur {
+        clip: (i32, i32, u32, u32),
+        node: (i32, i32, u32, u32),
+        corner: u32,
+        radius: f32,
+    },
+    /// `FillRoundedRect` composited only inside `clip` (device x, y, width, height, inside the
+    /// frame). Pixels outside `clip` keep the frame, as a clipped AA stroke leaves them.
+    FillRoundedRectClipped {
+        outer: RoundedRect,
+        hole: Option<RoundedRect>,
+        color: [u8; 4],
+        clip: (i32, i32, u32, u32),
+    },
+}
+
+/// The clipped rounded fill on the CPU: the fill runs on a copy of the `clip` rows, shifted to the
+/// copy's origin, and only those rows are written back. Pixels outside `clip` are never touched.
+#[allow(clippy::too_many_arguments)]
+fn fill_clipped_cpu<B: PixelBackend + ?Sized>(
+    backend: &mut B,
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    outer: RoundedRect,
+    hole: Option<RoundedRect>,
+    color: [u8; 4],
+    clip: (i32, i32, u32, u32),
+) -> Result<(), String> {
+    if pixels.len() != width as usize * height as usize * 4 {
+        return Err("clipped fill frame does not match its size".to_owned());
+    }
+    let (x, y, w, h) = clip;
+    if w == 0 || h == 0 {
+        return Ok(());
+    }
+    if x < 0 || y < 0 || i64::from(x) + i64::from(w) > i64::from(width) || i64::from(y) + i64::from(h) > i64::from(height)
+    {
+        return Err("fill clip leaves the frame".to_owned());
+    }
+    let stride = width as usize * 4;
+    let row_bytes = w as usize * 4;
+    let mut region = Vec::with_capacity(row_bytes * h as usize);
+    for row in 0..h as usize {
+        let start = (y as usize + row) * stride + x as usize * 4;
+        region.extend_from_slice(&pixels[start..start + row_bytes]);
+    }
+    let shift = |rect: RoundedRect| RoundedRect {
+        x: rect.x - x,
+        y: rect.y - y,
+        ..rect
+    };
+    backend.fill_rounded_rect(&mut region, w, h, shift(outer), hole.map(shift), color)?;
+    for row in 0..h as usize {
+        let start = (y as usize + row) * stride + x as usize * 4;
+        pixels[start..start + row_bytes]
+            .copy_from_slice(&region[row * row_bytes..(row + 1) * row_bytes]);
+    }
+    Ok(())
+}
+
+/// Whether pixel `(px, py)` lies inside the rounded rect `node` (device x, y, width, height) with
+/// corner radius `radius`, sampled at the pixel centre. The hard-edged test the node backdrop uses.
+#[must_use]
+pub fn inside_node_shape(px: i32, py: i32, node: (i32, i32, u32, u32), radius: u32) -> bool {
+    let (x, y, width, height) = node;
+    let lx = (px - x) as f32 + 0.5;
+    let ly = (py - y) as f32 + 0.5;
+    let (w, h) = (width as f32, height as f32);
+    if lx < 0.0 || ly < 0.0 || lx > w || ly > h {
+        return false;
+    }
+    let r = (radius as f32).min(w / 2.0).min(h / 2.0);
+    let cx = lx.clamp(r, w - r);
+    let cy = ly.clamp(r, h - r);
+    (lx - cx).powi(2) + (ly - cy).powi(2) <= r * r
+}
+
+/// [`PixelOp::BackdropBlur`] on any backend: blurs the `clip` region through `backend.blur_rgba`
+/// and writes it opaque inside the node shape. The clip must lie inside the frame.
+///
+/// # Errors
+/// Returns `Err` when the clip leaves the frame, the frame length is wrong, or the blur fails.
+/// `pixels` is untouched on error.
+#[allow(clippy::too_many_arguments)]
+pub fn backdrop_blur_cpu<B: PixelBackend + ?Sized>(
+    backend: &mut B,
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    clip: (i32, i32, u32, u32),
+    node: (i32, i32, u32, u32),
+    corner: u32,
+    radius: f32,
+) -> Result<(), String> {
+    if pixels.len() != width as usize * height as usize * 4 {
+        return Err("backdrop frame does not match its size".to_owned());
+    }
+    let (x, y, w, h) = clip;
+    if w == 0 || h == 0 || radius <= 0.0 {
+        return Ok(());
+    }
+    if x < 0 || y < 0 || i64::from(x) + i64::from(w) > i64::from(width) || i64::from(y) + i64::from(h) > i64::from(height)
+    {
+        return Err("backdrop clip leaves the frame".to_owned());
+    }
+    let stride = width as usize * 4;
+    let row_bytes = w as usize * 4;
+    let mut region = Vec::with_capacity(row_bytes * h as usize);
+    for row in 0..h as usize {
+        let start = (y as usize + row) * stride + x as usize * 4;
+        region.extend_from_slice(&pixels[start..start + row_bytes]);
+    }
+    backend.blur_rgba(&mut region, w, h, radius)?;
+    for row in 0..h as i32 {
+        for col in 0..w as i32 {
+            let (px, py) = (x + col, y + row);
+            if !inside_node_shape(px, py, node, corner) {
+                continue;
+            }
+            let source = (row as usize * w as usize + col as usize) * 4;
+            let dest = py as usize * stride + px as usize * 4;
+            pixels[dest..dest + 3].copy_from_slice(&region[source..source + 3]);
+            pixels[dest + 3] = 255;
+        }
+    }
+    Ok(())
 }
 
 impl PixelOp<'_> {
@@ -128,6 +259,17 @@ impl PixelOp<'_> {
                 outer: outer.normalized(),
                 color,
                 fade_percent,
+            },
+            Self::FillRoundedRectClipped {
+                outer,
+                hole,
+                color,
+                clip,
+            } => Self::FillRoundedRectClipped {
+                outer: outer.normalized(),
+                hole: hole.map(RoundedRect::normalized),
+                color,
+                clip,
             },
             other => other,
         }
@@ -258,6 +400,18 @@ pub trait PixelBackend {
                     self.fill_rounded_rect(&mut scratch, width, height, outer, hole, color)?;
                 }
                 PixelOp::Blur { radius } => self.blur_rgba(&mut scratch, width, height, radius)?,
+                PixelOp::FillRoundedRectClipped {
+                    outer,
+                    hole,
+                    color,
+                    clip,
+                } => fill_clipped_cpu(self, &mut scratch, width, height, outer, hole, color, clip)?,
+                PixelOp::BackdropBlur {
+                    clip,
+                    node,
+                    corner,
+                    radius,
+                } => backdrop_blur_cpu(self, &mut scratch, width, height, clip, node, corner, radius)?,
                 blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
                     composite_cpu(&mut scratch, width, height, blend)?;
                 }
@@ -266,7 +420,7 @@ pub trait PixelBackend {
                     color,
                     fade_percent,
                 } => {
-                    let (x, y, mask) = rim_mask(self, outer, color, fade_percent)?;
+                    let (x, y, mask) = rim_gradient_mask(self, outer, color, fade_percent)?;
                     composite_cpu(
                         &mut scratch,
                         width,
@@ -291,7 +445,7 @@ pub trait PixelBackend {
 /// Coverage mask of a [`PixelOp::RimGradient`]: the ring's hard-edged coverage from the backend's
 /// own fill rule, scaled per row by the rim gradient. Returns the device origin and the row-major
 /// mask. The fill runs in a scratch frame the size of the rim, so the frame is not copied.
-fn rim_mask<B: PixelBackend + ?Sized>(
+pub fn rim_gradient_mask<B: PixelBackend + ?Sized>(
     backend: &mut B,
     outer: RoundedRect,
     color: [u8; 4],

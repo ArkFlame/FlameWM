@@ -25,11 +25,14 @@ fn trace_paint(message: impl FnOnce() -> String) {
 }
 
 /// Retained server pixmap holding one ARGB32 backdrop snapshot.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct SurfaceBackdrop {
     pub(crate) pixmap: Pixmap,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    /// Premultiplied RGBA8 copy of the snapshot for the GPU frame, which composites the same
+    /// pixels the XRender blit does. `None` when the snapshot has no byte copy.
+    pub(crate) rgba: Option<Vec<u8>>,
 }
 
 impl X11App {
@@ -50,10 +53,15 @@ impl X11App {
         }
         let pixmap = unsafe { self.upload_argb_pixmap(argb, width, height)? };
         self.clear_surface_backdrop();
+        let rgba = argb
+            .iter()
+            .flat_map(|&w| [(w >> 16) as u8, (w >> 8) as u8, w as u8, (w >> 24) as u8])
+            .collect();
         self.surface_backdrop = Some(SurfaceBackdrop {
             pixmap,
             width,
             height,
+            rgba: Some(rgba),
         });
         Ok(())
     }
@@ -203,7 +211,8 @@ impl X11App {
     ///
     /// Must run on the app's display thread after `clear_scene`.
     pub(crate) unsafe fn paint_surface_backdrop(&mut self) -> Result<(), String> {
-        let Some(backdrop) = self.surface_backdrop.or(self.window_backdrop_pixmap) else {
+        let Some(backdrop) = self.surface_backdrop.as_ref().or(self.window_backdrop_pixmap.as_ref())
+        else {
             trace_paint(|| "no-backdrop".to_string());
             return Ok(());
         };
@@ -320,6 +329,18 @@ impl NodeBackdropCache {
     }
 }
 
+/// The device rect a node backdrop is painted under: its scaled rect, rounded to whole pixels, at
+/// least one pixel wide and high. Shared by the XRender and GPU painters.
+pub(crate) fn node_device_rect(rect: flamewm_render_core::Rect, scale: f32) -> (i32, i32, u32, u32) {
+    let rect = super::primitives::scale_rect(rect, scale);
+    (
+        rect.x.round() as i32,
+        rect.y.round() as i32,
+        rect.width.round().max(1.0) as u32,
+        rect.height.round().max(1.0) as u32,
+    )
+}
+
 /// Device rect clipped to a scene of `scene` size; `None` when nothing is visible.
 pub(crate) fn node_backdrop_clip(
     rect: (i32, i32, u32, u32),
@@ -343,17 +364,7 @@ pub(crate) fn node_backdrop_clip(
 
 /// Whether pixel `(px, py)` (device px) lies inside the node's rounded rect `node`.
 fn inside_rounded(px: i32, py: i32, node: (i32, i32, u32, u32), radius: u32) -> bool {
-    let (x, y, width, height) = node;
-    let lx = (px - x) as f32 + 0.5;
-    let ly = (py - y) as f32 + 0.5;
-    let (w, h) = (width as f32, height as f32);
-    if lx < 0.0 || ly < 0.0 || lx > w || ly > h {
-        return false;
-    }
-    let r = (radius as f32).min(w / 2.0).min(h / 2.0);
-    let cx = lx.clamp(r, w - r);
-    let cy = ly.clamp(r, h - r);
-    (lx - cx).powi(2) + (ly - cy).powi(2) <= r * r
+    flamewm_render_core::pixels::inside_node_shape(px, py, node, radius)
 }
 
 /// Blurred premultiplied ARGB words for the clipped capture `rgba` (`clip` size), masked by the

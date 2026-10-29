@@ -751,10 +751,10 @@ impl<'a> Engine<'a> {
             return;
         }
         {
-            let left = style.left.resolve(width);
-            let right = style.right.resolve(width);
-            let top = style.top.resolve(height);
-            let bottom = style.bottom.resolve(height);
+            let left = style.left.resolve_offset(width);
+            let right = style.right.resolve_offset(width);
+            let top = style.top.resolve_offset(height);
+            let bottom = style.bottom.resolve_offset(height);
             let forced_w = style.width.resolve(width).or_else(|| match (left, right) {
                 (Some(left), Some(right)) => Some((width - left - right).max(0.0)),
                 _ => None,

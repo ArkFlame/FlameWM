@@ -5,8 +5,9 @@
 //! XRender painter resolves them (`visible_under`): a fill or thumb cut by a clip becomes its visible
 //! rectangle with the corner radius dropped, a hidden primitive is skipped, an image is drawn only
 //! when wholly visible, and glyph masks are cropped to the Xft clip bounds. A stroke cut by a clip
-//! has no exact pixel-op form yet, so that frame keeps the XRender path. `NodeBackdrop` reads the
-//! pixels already painted under it, so it keeps the XRender path too. The two painters never mix.
+//! has no exact pixel-op form yet, so that frame keeps the XRender path. A `NodeBackdrop` lowers to
+//! a `BackdropBlur` op that blurs the pixels already painted under it on the GPU, in command order;
+//! the surface snapshot starts the frame as a `BlendImage`. The two painters never mix.
 
 use flamewm_render_core::{
     Color, PaintCommand, PixelOp, Rect, RoundedRect, gloss_line, shadow_rings,
@@ -14,6 +15,7 @@ use flamewm_render_core::{
 
 use super::clip::{Visible, stack_bounds, visible_under};
 use super::primitives::scale_rect;
+use super::surface_backdrop::{node_backdrop_clip, node_device_rect};
 
 /// The pixel op for a 1px-or-wider ring of `rect`, or `None` when a clip hides it. A ring cut by a
 /// clip has no exact pixel-op form yet, so it returns `Err`.
@@ -26,18 +28,30 @@ fn stroke_op(
     stack: &[Rect],
 ) -> Result<Option<PixelOp<'static>>, &'static str> {
     let device = scale_rect(rect, scale);
-    match visible_under(device, stack) {
+    let visible = match visible_under(device, stack) {
         Visible::Hidden => return Ok(None),
-        Visible::Whole => {}
-        // A ring cut by a clip needs a clipped AA stroke; no exact pixel op yet.
-        Visible::Part(_) => return Err("StrokeClipped"),
-    }
+        Visible::Whole => None,
+        Visible::Part(part) => Some(part),
+    };
     let outer = device_rect(device, radius * scale).ok_or(FRACTIONAL)?;
     let thickness = whole(width * scale).ok_or(FRACTIONAL)?;
-    Ok(Some(PixelOp::FillRoundedRect {
+    let (outer, hole, color) = (outer, Some(outer.inset(thickness)), rgba(color));
+    let Some(part) = visible else {
+        return Ok(Some(PixelOp::FillRoundedRect { outer, hole, color }));
+    };
+    // XRender clips the AA ring to the pixels whose rows and columns lie inside `part`: from the
+    // first whole pixel at or after its left/top edge up to the last one before its right/bottom.
+    let (left, top) = (part.x.ceil() as i32, part.y.ceil() as i32);
+    let right = (part.x + part.width).floor() as i32;
+    let bottom = (part.y + part.height).floor() as i32;
+    if right <= left || bottom <= top {
+        return Ok(None);
+    }
+    Ok(Some(PixelOp::FillRoundedRectClipped {
         outer,
-        hole: Some(outer.inset(thickness)),
-        color: rgba(color),
+        hole,
+        color,
+        clip: (left, top, (right - left) as u32, (bottom - top) as u32),
     }))
 }
 
@@ -66,37 +80,55 @@ pub(crate) enum FrameSource {
     },
 }
 
-/// Whether the GPU frame may run: `renderAcceleration=gpu`, a scene with a backbuffer, and no
-/// backdrop the XRender path blends. Pure so the CPU gate is testable without X.
-#[must_use]
-pub(crate) fn lowering_allowed(gpu: bool, scene_ready: bool, backdrops: bool) -> bool {
-    gpu && scene_ready && !backdrops
+/// Counts one frame that took the XRender path for `reason`, under a static profiler label, so a
+/// profile report shows every fallback reason per scene. Unknown reasons count as `other`.
+pub(crate) fn count_fallback(reason: &str) {
+    let label = match reason {
+        "StrokeClipped" => "render.gpu_frame.fallback.StrokeClipped",
+        "FractionalGeometry" => "render.gpu_frame.fallback.FractionalGeometry",
+        "SourceMismatch" => "render.gpu_frame.fallback.SourceMismatch",
+        "BackdropBytes" => "render.gpu_frame.fallback.BackdropBytes",
+        "WindowBackdrop" => "render.gpu_frame.fallback.WindowBackdrop",
+        "BackdropSize" => "render.gpu_frame.fallback.BackdropSize",
+        "source-failed" => "render.gpu_frame.fallback.source-failed",
+        "gpu-batch" => "render.gpu_frame.fallback.gpu-batch",
+        _ => "render.gpu_frame.fallback.other",
+    };
+    flamewm_profiler::CounterPoint::new(label).increment();
 }
 
-/// Every distinct command kind that keeps the XRender path for the whole frame, in first-seen order.
-/// The census is complete, not stopped at the first match, so one log line lists every blocker.
+/// Whether the GPU frame may run: `renderAcceleration=gpu` and a scene with a backbuffer. Pure so
+/// the CPU gate is testable without X; backdrops are lowered or named by [`frame_ops`].
 #[must_use]
-pub(crate) fn unsupported_kinds(commands: &[PaintCommand]) -> Vec<&'static str> {
-    let mut kinds: Vec<&'static str> = Vec::new();
-    for command in commands {
-        if let PaintCommand::NodeBackdrop { .. } = command {
-            if !kinds.contains(&"NodeBackdrop") {
-                kinds.push("NodeBackdrop");
-            }
-        }
-    }
-    kinds
+pub(crate) fn lowering_allowed(gpu: bool, scene_ready: bool) -> bool {
+    gpu && scene_ready
 }
 
-/// Pixel ops for `commands` at device `scale`, taking the pixels of each text, text shadow and
-/// image command from `sources` in command order. `Err` names why the frame must take the XRender
-/// path, including when the sources and commands do not line up exactly.
+/// Pixel ops for `commands` at device `scale` on a `scene` sized frame, taking the pixels of each
+/// text, text shadow and image command from `sources` in command order. `backdrop` is the retained
+/// surface snapshot (width, height, premultiplied RGBA8), composited first as the XRender painter
+/// does. `Err` names why the frame must take the XRender path, including when the sources and
+/// commands do not line up exactly.
 pub(crate) fn frame_ops<'a>(
     commands: &[PaintCommand],
     scale: f32,
     sources: &'a [FrameSource],
+    scene: (u32, u32),
+    backdrop: Option<(u32, u32, &'a [u8])>,
 ) -> Result<Vec<PixelOp<'a>>, &'static str> {
-    let mut ops = Vec::with_capacity(commands.len());
+    let mut ops = Vec::with_capacity(commands.len() + 1);
+    if let Some((width, height, rgba)) = backdrop {
+        if (width, height) != scene {
+            return Err(BACKDROP_SIZE);
+        }
+        ops.push(PixelOp::BlendImage {
+            x: 0,
+            y: 0,
+            width,
+            height,
+            rgba,
+        });
+    }
     let mut stack: Vec<Rect> = Vec::new();
     let mut sources = sources.iter();
     for command in commands {
@@ -159,9 +191,8 @@ pub(crate) fn frame_ops<'a>(
             PaintCommand::SurfaceRim {
                 rect,
                 radius,
-                color,
-                fade_percent,
                 gloss,
+                ..
             } => {
                 let device = scale_rect(rect, scale);
                 match visible_under(device, &stack) {
@@ -170,11 +201,26 @@ pub(crate) fn frame_ops<'a>(
                     // The XRender rim clips per band; a clipped rim has no exact pixel op yet.
                     Visible::Part(_) => return Err("StrokeClipped"),
                 }
-                ops.push(PixelOp::RimGradient {
-                    outer: device_rect(device, radius * scale).ok_or(FRACTIONAL)?,
-                    color: rgba(color),
-                    fade_percent,
-                });
+                // The rim's mask comes from the CPU batch, in source order, and is composited as
+                // the CPU batch composites it: the rim colour at full alpha through that mask.
+                match sources.next().ok_or(SOURCE_MISMATCH)? {
+                    FrameSource::Mask {
+                        x,
+                        y,
+                        width,
+                        height,
+                        alpha,
+                        color,
+                    } => ops.push(PixelOp::BlendMask {
+                        x: *x,
+                        y: *y,
+                        width: *width,
+                        height: *height,
+                        mask: alpha.as_slice(),
+                        color: *color,
+                    }),
+                    FrameSource::Image { .. } => return Err(SOURCE_MISMATCH),
+                }
                 if gloss > 0 {
                     if let Some(line) = gloss_line(rect, radius) {
                         let white = Color {
@@ -250,7 +296,30 @@ pub(crate) fn frame_ops<'a>(
                 }),
                 FrameSource::Mask { .. } => return Err(SOURCE_MISMATCH),
             },
-            PaintCommand::NodeBackdrop { .. } => return Err("NodeBackdrop"),
+            PaintCommand::NodeBackdrop {
+                rect,
+                radius,
+                blur_percent,
+                opacity,
+                ..
+            } => {
+                // The XRender painter paints nothing for these, so the GPU frame paints nothing.
+                if blur_percent == 0 || opacity == 0 {
+                    continue;
+                }
+                // The XRender blit ignores the clip stack (`set_destination_clip` is the only
+                // picture clip, and region paints reset it), so the node backdrop ignores it too.
+                let device = node_device_rect(rect, scale);
+                let Some(clip) = node_backdrop_clip(device, scene) else {
+                    continue;
+                };
+                ops.push(PixelOp::BackdropBlur {
+                    clip,
+                    node: device,
+                    corner: (radius * scale).round().max(0.0) as u32,
+                    radius: crate::backdrop::blur_radius_px(0, blur_percent),
+                });
+            }
         }
     }
     // A leftover source means a command was skipped: refuse rather than paint a different frame.
@@ -262,6 +331,36 @@ pub(crate) fn frame_ops<'a>(
 
 const FRACTIONAL: &str = "FractionalGeometry";
 const SOURCE_MISMATCH: &str = "SourceMismatch";
+const BACKDROP_SIZE: &str = "BackdropSize";
+
+/// The rim gradient source for a `SurfaceRim` visible under `stack`: its CPU coverage mask at the
+/// device rect, composited in the rim colour. `None` when the rim is hidden or has no mask, and the
+/// frame then takes the XRender path through [`frame_ops`]' source check.
+pub(crate) fn rim_mask_source(
+    rect: Rect,
+    radius: f32,
+    color: Color,
+    fade_percent: u8,
+    scale: f32,
+    stack: &[Rect],
+) -> Option<FrameSource> {
+    let device = scale_rect(rect, scale);
+    if !matches!(visible_under(device, stack), Visible::Whole) {
+        return None;
+    }
+    let outer = device_rect(device, radius * scale)?;
+    let (x, y, alpha) =
+        crate::accel::cpu_rim_gradient_mask(outer, rgba(color), fade_percent).ok()?;
+    let rgb = rgba(color);
+    Some(FrameSource::Mask {
+        x,
+        y,
+        width: outer.width,
+        height: outer.height,
+        alpha,
+        color: [rgb[0], rgb[1], rgb[2], 255],
+    })
+}
 
 /// The rect and radius a fill paints under `stack`, as the XRender painter cuts them: `None` when
 /// hidden, unchanged when whole, and the visible rectangle with a square corner when cut.
@@ -405,7 +504,7 @@ mod tests {
             width: 2.0,
             radius: 8.0,
         };
-        let ops = frame_ops(&[fill(10.0, 50.0, 6.0), stroke], 1.0, &[]).expect("supported frame");
+        let ops = frame_ops(&[fill(10.0, 50.0, 6.0), stroke], 1.0, &[], SCENE, None).expect("supported frame");
         assert_eq!(ops.len(), 2);
         let PixelOp::FillRoundedRect { hole, .. } = ops[1] else {
             panic!("stroke lowers to a fill with a hole");
@@ -438,14 +537,14 @@ mod tests {
                 rgba: vec![0; 8],
             },
         ];
-        let ops = frame_ops(&[text(), image], 1.0, &sources).expect("real frame shape");
+        let ops = frame_ops(&[text(), image], 1.0, &sources, SCENE, None).expect("real frame shape");
         assert!(matches!(ops[0], PixelOp::BlendMask { x: 3, width: 2, .. }));
         assert!(matches!(ops[1], PixelOp::BlendImage { x: 1, width: 2, .. }));
     }
 
     #[test]
     fn a_text_command_without_its_source_keeps_the_xrender_path() {
-        assert!(frame_ops(&[fill(0.0, 10.0, 0.0), text()], 1.0, &[]).is_err());
+        assert!(frame_ops(&[fill(0.0, 10.0, 0.0), text()], 1.0, &[], SCENE, None).is_err());
         let image = FrameSource::Image {
             x: 0,
             y: 0,
@@ -454,11 +553,11 @@ mod tests {
             rgba: vec![0; 4],
         };
         assert!(
-            frame_ops(&[text()], 1.0, std::slice::from_ref(&image)).is_err(),
+            frame_ops(&[text()], 1.0, std::slice::from_ref(&image), SCENE, None).is_err(),
             "a mask slot cannot take an image"
         );
         assert!(
-            frame_ops(&[], 1.0, &[mask_source()]).is_err(),
+            frame_ops(&[], 1.0, &[mask_source()], SCENE, None).is_err(),
             "an unused source means the frame and the sources disagree"
         );
     }
@@ -478,7 +577,7 @@ mod tests {
             offset_y: 0.0,
             peak: 90,
         };
-        let ops = frame_ops(std::slice::from_ref(&shadow), 1.0, &[]).expect("shadow lowers");
+        let ops = frame_ops(std::slice::from_ref(&shadow), 1.0, &[], SCENE, None).expect("shadow lowers");
         assert_eq!(ops.len(), 4, "one 1px ring per shadow pixel of spread");
         assert!(ops.iter().all(|op| matches!(
             op,
@@ -496,12 +595,19 @@ mod tests {
             fade_percent: 6,
             gloss: 30,
         };
-        let ops = frame_ops(std::slice::from_ref(&rim), 1.0, &[]).expect("rim lowers");
+        let rim_color = Color {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 40,
+        };
+        let sources = [rim_mask_source(surface, 8.0, rim_color, 6, 1.0, &[]).expect("rim mask")];
+        let ops = frame_ops(std::slice::from_ref(&rim), 1.0, &sources, SCENE, None).expect("rim lowers");
         assert_eq!(ops.len(), 2);
         assert!(matches!(
             ops[0],
-            PixelOp::RimGradient {
-                fade_percent: 6,
+            PixelOp::BlendMask {
+                color: [255, 255, 255, 255],
                 ..
             }
         ));
@@ -515,40 +621,108 @@ mod tests {
             },
         };
         assert_eq!(
-            frame_ops(&[clip, rim], 1.0, &[]).err(),
+            frame_ops(&[clip, rim], 1.0, &[], SCENE, None).err(),
             Some("StrokeClipped")
         );
     }
 
-    #[test]
-    fn node_backdrops_keep_the_xrender_path_and_every_one_is_named() {
-        let backdrop = PaintCommand::NodeBackdrop {
+    const SCENE: (u32, u32) = (1000, 1000);
+
+    fn node(x: f32, y: f32, size: f32, radius: f32, blur_percent: u8, opacity: u8) -> PaintCommand {
+        PaintCommand::NodeBackdrop {
             rect: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 10.0,
-                height: 10.0,
+                x,
+                y,
+                width: size,
+                height: size,
             },
-            radius: 4.0,
-            blur_percent: 50,
-            opacity: 128,
+            radius,
+            blur_percent,
+            opacity,
             node: 1,
-        };
+        }
+    }
+
+    #[test]
+    fn node_backdrop_lowers_to_a_blur_of_its_clip_at_device_geometry() {
+        let ops = frame_ops(&[node(0.0, 0.0, 10.0, 4.0, 50, 128)], 1.0, &[], SCENE, None)
+            .expect("unclipped node backdrop lowers");
+        assert!(matches!(
+            ops.as_slice(),
+            [PixelOp::BackdropBlur {
+                clip: (0, 0, 10, 10),
+                node: (0, 0, 10, 10),
+                corner: 4,
+                radius,
+            }] if *radius == 12.0
+        ));
+        let ops = frame_ops(&[node(10.0, 10.0, 10.0, 4.0, 50, 128)], 1.5, &[], SCENE, None)
+            .expect("scaled node backdrop lowers");
+        assert!(matches!(
+            ops.as_slice(),
+            [PixelOp::BackdropBlur {
+                clip: (15, 15, 15, 15),
+                node: (15, 15, 15, 15),
+                corner: 6,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn node_backdrop_keeps_command_order_around_fills() {
+        let commands = [
+            fill(0.0, 10.0, 0.0),
+            node(0.0, 0.0, 10.0, 4.0, 50, 128),
+            fill(20.0, 10.0, 0.0),
+        ];
+        let ops = frame_ops(&commands, 1.0, &[], SCENE, None).expect("mixed frame lowers");
+        assert!(matches!(
+            ops.as_slice(),
+            [
+                PixelOp::FillRoundedRect { .. },
+                PixelOp::BackdropBlur { .. },
+                PixelOp::FillRoundedRect { .. }
+            ]
+        ));
+    }
+
+    #[test]
+    fn node_backdrop_that_paints_nothing_lowers_to_no_op() {
+        let no_blur = [node(0.0, 0.0, 10.0, 4.0, 0, 128)];
+        let no_opacity = [node(0.0, 0.0, 10.0, 4.0, 50, 0)];
+        let off_scene = [node(2000.0, 0.0, 10.0, 4.0, 50, 128)];
+        for commands in [&no_blur[..], &no_opacity[..], &off_scene[..]] {
+            assert!(frame_ops(commands, 1.0, &[], SCENE, None).expect("lowers").is_empty());
+        }
+    }
+
+    #[test]
+    fn node_backdrop_ignores_the_clip_stack_as_the_xrender_blit_does() {
+        let cut = [clip(0.0, 0.0, 50.0, 50.0), node(0.0, 0.0, 10.0, 4.0, 50, 128)];
+        let ops = frame_ops(&cut, 1.0, &[], SCENE, None).expect("lowers under a clip");
+        assert!(matches!(ops.as_slice(), [PixelOp::BackdropBlur { .. }]));
+    }
+
+    #[test]
+    fn surface_snapshot_composites_first_and_must_match_the_scene() {
+        let rgba = [1_u8, 2, 3, 255, 4, 5, 6, 255];
+        let ops = frame_ops(&[], 1.0, &[], (2, 1), Some((2, 1, &rgba))).expect("snapshot lowers");
+        assert!(matches!(
+            ops.as_slice(),
+            [PixelOp::BlendImage { x: 0, y: 0, width: 2, height: 1, rgba: r }] if *r == rgba
+        ));
         assert_eq!(
-            unsupported_kinds(&[backdrop.clone(), fill(0.0, 10.0, 0.0), backdrop.clone()]),
-            vec!["NodeBackdrop"]
+            frame_ops(&[], 1.0, &[], (2, 2), Some((2, 1, &rgba))).err(),
+            Some("BackdropSize")
         );
-        assert!(
-            unsupported_kinds(&[fill(0.0, 10.0, 0.0), text(), clip(0.0, 0.0, 5.0, 5.0)]).is_empty()
-        );
-        assert_eq!(frame_ops(&[backdrop], 1.0, &[]).err(), Some("NodeBackdrop"));
     }
 
     #[test]
     fn clipped_fills_and_thumbs_cut_to_the_visible_part_with_a_square_corner() {
         // Half of a rounded fill sits below a clip ending at y=12: it becomes the visible rect.
         let commands = [clip(0.0, 0.0, 100.0, 12.0), fill(10.0, 50.0, 6.0)];
-        let ops = frame_ops(&commands, 1.0, &[]).expect("clipped fill lowers");
+        let ops = frame_ops(&commands, 1.0, &[], SCENE, None).expect("clipped fill lowers");
         let PixelOp::FillRoundedRect { outer, .. } = ops[0] else {
             panic!("fill lowers");
         };
@@ -560,11 +734,11 @@ mod tests {
 
         // Entirely outside the clip: nothing is drawn, the frame still lowers.
         let hidden = [clip(0.0, 0.0, 5.0, 5.0), fill(10.0, 50.0, 6.0)];
-        assert_eq!(frame_ops(&hidden, 1.0, &[]).expect("hidden fill").len(), 0);
+        assert_eq!(frame_ops(&hidden, 1.0, &[], SCENE, None).expect("hidden fill").len(), 0);
     }
 
     #[test]
-    fn a_stroke_cut_by_a_clip_keeps_the_xrender_path() {
+    fn a_stroke_cut_by_a_clip_lowers_to_a_ring_clipped_to_the_visible_pixels() {
         let stroke = PaintCommand::StrokeRect {
             rect: Rect {
                 x: 0.0,
@@ -581,9 +755,22 @@ mod tests {
             width: 2.0,
             radius: 8.0,
         };
+        let ops = frame_ops(&[clip(0.5, 0.0, 20.0, 20.5), stroke.clone()], 1.0, &[], SCENE, None)
+            .expect("cut stroke lowers");
+        // Columns from ceil(0.5) = 1 to floor(20.5) = 20, rows from 0 to floor(20.5) = 20.
+        assert!(matches!(
+            ops.as_slice(),
+            [PixelOp::FillRoundedRectClipped {
+                clip: (1, 0, 19, 20),
+                ..
+            }]
+        ));
         assert_eq!(
-            frame_ops(&[clip(0.0, 0.0, 20.0, 20.0), stroke], 1.0, &[]).err(),
-            Some("StrokeClipped")
+            frame_ops(&[clip(0.0, 0.0, 0.5, 0.5), stroke], 1.0, &[], SCENE, None)
+                .expect("no whole pixel left")
+                .len(),
+            0,
+            "a clip with no whole pixel hides the stroke"
         );
     }
 
@@ -618,23 +805,22 @@ mod tests {
 
     #[test]
     fn cpu_mode_never_lowers_a_frame() {
-        assert!(!lowering_allowed(false, true, false));
-        assert!(!lowering_allowed(true, false, false), "no scene");
-        assert!(!lowering_allowed(true, true, true), "backdrop");
-        assert!(lowering_allowed(true, true, false));
+        assert!(!lowering_allowed(false, true));
+        assert!(!lowering_allowed(true, false), "no scene");
+        assert!(lowering_allowed(true, true));
     }
 
     #[test]
     fn fractional_device_geometry_keeps_the_xrender_path() {
-        assert!(frame_ops(&[fill(10.5, 50.0, 6.0)], 1.0, &[]).is_err());
+        assert!(frame_ops(&[fill(10.5, 50.0, 6.0)], 1.0, &[], SCENE, None).is_err());
         assert!(
-            frame_ops(&[fill(10.0, 51.0, 6.0)], 1.5, &[]).is_err(),
+            frame_ops(&[fill(10.0, 51.0, 6.0)], 1.5, &[], SCENE, None).is_err(),
             "76.5 device px wide"
         );
         assert!(
-            frame_ops(&[fill(10.0, 50.0, 6.0)], 1.5, &[]).is_ok(),
+            frame_ops(&[fill(10.0, 50.0, 6.0)], 1.5, &[], SCENE, None).is_ok(),
             "whole at 1.5x"
         );
-        assert!(frame_ops(&[fill(10.0, 50.0, 6.0)], 2.0, &[]).is_ok());
+        assert!(frame_ops(&[fill(10.0, 50.0, 6.0)], 2.0, &[], SCENE, None).is_ok());
     }
 }

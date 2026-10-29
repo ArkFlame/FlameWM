@@ -33,6 +33,29 @@ impl Length {
             Self::Percent(value) => Some((available * value).max(0.0)),
         }
     }
+
+    /// Resolves `left`/`right`/`top`/`bottom` offsets, which CSS allows to be negative
+    /// (an absolute child may sit outside its containing block). Sizes use `resolve`.
+    pub fn resolve_offset(self, available: f32) -> Option<f32> {
+        match self {
+            Self::Auto => None,
+            Self::Px(value) => Some(value),
+            Self::Percent(value) => Some(available * value),
+        }
+    }
+}
+
+#[cfg(test)]
+mod length_tests {
+    use super::Length;
+
+    #[test]
+    fn negative_offsets_survive_while_sizes_clamp() {
+        assert_eq!(Length::Px(-15.0).resolve_offset(200.0), Some(-15.0));
+        assert_eq!(Length::Percent(-0.5).resolve_offset(200.0), Some(-100.0));
+        assert_eq!(Length::Px(-15.0).resolve(200.0), Some(0.0));
+        assert_eq!(Length::Auto.resolve_offset(200.0), None);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

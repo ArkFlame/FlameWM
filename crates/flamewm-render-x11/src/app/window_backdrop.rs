@@ -107,7 +107,7 @@ impl X11App {
         {
             return;
         }
-        let snapshot_size = self.window_backdrop_pixmap.map(|b| (b.width, b.height));
+        let snapshot_size = self.window_backdrop_pixmap.as_ref().map(|b| (b.width, b.height));
         let queued = unsafe { XEventsQueued(self.display, crate::xlib::QUEUED_AFTER_READING) } > 0;
         if !recapture_due(snapshot_size, (self.width, self.height), queued) {
             return;
@@ -182,6 +182,7 @@ impl X11App {
                 }
                 let pixmap_fits = self
                     .window_backdrop_pixmap
+                    .as_ref()
                     .is_some_and(|pixmap| (pixmap.width, pixmap.height) == (width, height));
                 let state = self
                     .window_backdrop
@@ -247,6 +248,7 @@ impl X11App {
                         pixmap,
                         width,
                         height,
+                        rgba: None,
                     })
             {
                 unsafe { crate::native::xresource::free_pixmap_raw(self.display, old.pixmap) };
@@ -312,6 +314,7 @@ impl X11App {
     /// (same generation, same size). Only then may a region paint reuse the backbuffer's backdrop.
     pub(crate) fn window_backdrop_unchanged(&self) -> bool {
         self.window_backdrop_pixmap
+            .as_ref()
             .is_some_and(|b| (b.width, b.height) == (self.width, self.height))
             && self.window_backdrop_painted.is_some()
             && self.window_backdrop_painted == self.window_backdrop.as_ref().map(|s| s.generation)
@@ -321,6 +324,7 @@ impl X11App {
     pub(crate) fn record_window_backdrop_painted(&mut self) {
         self.window_backdrop_painted = self
             .window_backdrop_pixmap
+            .as_ref()
             .and(self.window_backdrop.as_ref())
             .map(|state| state.generation);
     }

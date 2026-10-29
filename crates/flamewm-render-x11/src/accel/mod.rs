@@ -255,6 +255,16 @@ pub fn blur_rgba(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
     }
 }
 
+/// The coverage mask of a rim gradient, as the CPU batch computes it, so a GPU frame composites
+/// the same mask the CPU frame does. The mask runs on the CPU and is uploaded as a blend mask.
+pub(crate) fn cpu_rim_gradient_mask(
+    outer: RoundedRect,
+    color: [u8; 4],
+    fade_percent: u8,
+) -> Result<(i32, i32, Vec<u8>), String> {
+    flamewm_render_core::pixels::rim_gradient_mask(&mut CpuPixels::default(), outer, color, fade_percent)
+}
+
 /// Source-over `color` through `outer` minus `hole`. Runs on the GPU when `renderAcceleration` is
 /// `gpu`, and on the CPU otherwise or after any GPU failure.
 pub fn fill_rounded_rect(
@@ -541,7 +551,9 @@ mod tests {
             PixelOp::Blur { radius } => backend.blur_rgba(pixels, width, height, radius),
             blend @ (PixelOp::BlendMask { .. }
             | PixelOp::BlendImage { .. }
-            | PixelOp::RimGradient { .. }) => {
+            | PixelOp::RimGradient { .. }
+            | PixelOp::BackdropBlur { .. }
+            | PixelOp::FillRoundedRectClipped { .. }) => {
                 backend.paint_batch(pixels, width, height, std::slice::from_ref(&blend))
             }
         }
@@ -1012,5 +1024,217 @@ mod tests {
         assert_eq!(alpha(&fading, 20, 26), 0, "fade 0 clears the bottom edge");
         let mid = alpha(&fading, 4, 14);
         assert!(mid > 0 && mid < 200, "the left edge eases between the ends, got {mid}");
+    }
+
+    /// The clip rows of a `width` wide frame as the node backdrop path captures them.
+    fn clip_rows(frame: &[u8], width: u32, clip: (i32, i32, u32, u32)) -> Vec<u8> {
+        let (x, y, w, h) = clip;
+        (0..h)
+            .flat_map(|row| {
+                let start = (((y as u32 + row) * width + x as u32) * 4) as usize;
+                frame[start..start + w as usize * 4].to_vec()
+            })
+            .collect()
+    }
+
+    /// The CPU node backdrop words: the blur of the clip, opaque inside the node shape and zero
+    /// outside, as `surface_backdrop::node_backdrop_words` builds them.
+    fn cpu_node_words(frame: &[u8], width: u32, blur_percent: u8) -> Vec<u32> {
+        let (cx, _, cw, _) = BACKDROP_CLIP;
+        let blurred = crate::backdrop::blurred_argb_words(
+            BACKDROP_CLIP.2,
+            BACKDROP_CLIP.3,
+            clip_rows(frame, width, BACKDROP_CLIP),
+            0,
+            blur_percent,
+        );
+        blurred
+            .into_iter()
+            .enumerate()
+            .map(|(index, word)| {
+                let px = cx + (index as u32 % cw) as i32;
+                let py = BACKDROP_CLIP.1 + (index as u32 / cw) as i32;
+                if flamewm_render_core::pixels::inside_node_shape(px, py, BACKDROP_NODE, BACKDROP_CORNER) {
+                    0xff00_0000 | (word & 0x00ff_ffff)
+                } else {
+                    0
+                }
+            })
+            .collect()
+    }
+
+    const BACKDROP_CLIP: (i32, i32, u32, u32) = (10, 10, 60, 50);
+    const BACKDROP_NODE: (i32, i32, u32, u32) = (14, 14, 40, 30);
+    const BACKDROP_CORNER: u32 = 6;
+    /// Largest per-channel difference the GPU blur may show against the CPU node backdrop. The CPU
+    /// reference box-downscales at this radius and the GPU blurs at sigma radius/2; the worst
+    /// channel measured 22 on the Intel UHD host, bounded here with a margin of 2.
+    const GPU_BACKDROP_TOLERANCE: u8 = 24;
+
+    #[test]
+    fn cpu_backdrop_blur_op_matches_the_cpu_node_backdrop_words_exactly() {
+        set_render_acceleration(RenderAcceleration::Cpu);
+        let (width, height) = (96_u32, 80_u32);
+        let source = frame(width, height, 3);
+        // Blur percent 20 gives a 4.8 px radius, below the downscale threshold, so both paths run
+        // the same full-resolution blur and must agree bit for bit inside the node shape.
+        let words = cpu_node_words(&source, width, 20);
+        let mut actual = source.clone();
+        flamewm_render_core::pixels::backdrop_blur_cpu(
+            &mut CpuPixels::default(),
+            &mut actual,
+            width,
+            height,
+            BACKDROP_CLIP,
+            BACKDROP_NODE,
+            BACKDROP_CORNER,
+            crate::backdrop::blur_radius_px(0, 20),
+        )
+        .expect("cpu backdrop blur");
+        let (cx, cy, cw, ch) = BACKDROP_CLIP;
+        for row in 0..ch {
+            for col in 0..cw {
+                let (px, py) = (cx + col as i32, cy + row as i32);
+                let at = ((py as u32 * width + px as u32) * 4) as usize;
+                let word = words[(row * cw + col) as usize];
+                if flamewm_render_core::pixels::inside_node_shape(px, py, BACKDROP_NODE, BACKDROP_CORNER) {
+                    let got = [actual[at], actual[at + 1], actual[at + 2]];
+                    let want = [(word >> 16) as u8, (word >> 8) as u8, word as u8];
+                    assert_eq!(got, want, "inside pixel ({px},{py})");
+                    assert_eq!(actual[at + 3], 255, "opaque inside ({px},{py})");
+                } else {
+                    assert_eq!(word, 0, "outside words are zero ({px},{py})");
+                    assert_eq!(&actual[at..at + 4], &source[at..at + 4], "outside untouched");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gpu_backdrop_op_matches_the_cpu_node_backdrop_within_the_blur_tolerance() {
+        let Ok(mut gpu) = gles::GpuBlur::new() else {
+            eprintln!("skipping GPU backdrop check: no GPU");
+            return;
+        };
+        set_render_acceleration(RenderAcceleration::Cpu);
+        let (width, height) = (96_u32, 80_u32);
+        let source = frame(width, height, 3);
+        let words = cpu_node_words(&source, width, 50);
+        let ops = [PixelOp::BackdropBlur {
+            clip: BACKDROP_CLIP,
+            node: BACKDROP_NODE,
+            corner: BACKDROP_CORNER,
+            radius: crate::backdrop::blur_radius_px(0, 50),
+        }];
+        let mut actual = source.clone();
+        PixelBackend::paint_batch(&mut gpu, &mut actual, width, height, &ops).expect("gpu backdrop");
+        let (cx, cy, cw, ch) = BACKDROP_CLIP;
+        let mut worst = 0_u8;
+        for row in 0..ch {
+            for col in 0..cw {
+                let (px, py) = (cx + col as i32, cy + row as i32);
+                let at = ((py as u32 * width + px as u32) * 4) as usize;
+                let word = words[(row * cw + col) as usize];
+                if flamewm_render_core::pixels::inside_node_shape(px, py, BACKDROP_NODE, BACKDROP_CORNER) {
+                    let want = [(word >> 16) as u8, (word >> 8) as u8, word as u8];
+                    for channel in 0..3 {
+                        worst = worst.max(actual[at + channel].abs_diff(want[channel]));
+                    }
+                    assert_eq!(actual[at + 3], 255, "opaque inside ({px},{py})");
+                } else {
+                    assert_eq!(&actual[at..at + 4], &source[at..at + 4], "outside untouched");
+                }
+            }
+        }
+        eprintln!("gpu backdrop vs cpu node words: worst channel diff {worst}");
+        assert!(worst <= GPU_BACKDROP_TOLERANCE, "worst channel diff {worst}");
+    }
+
+    const CLIPPED_OUTER: RoundedRect = RoundedRect {
+        x: 6,
+        y: 4,
+        width: 40,
+        height: 30,
+        radius: 9,
+    };
+    const CLIPPED_CLIP: (i32, i32, u32, u32) = (20, 10, 25, 22);
+
+    #[test]
+    fn cpu_clipped_fill_equals_the_unclipped_fill_inside_the_clip_and_keeps_the_frame_outside() {
+        let (width, height) = (64_u32, 48_u32);
+        let source = frame(width, height, 5);
+        let mut full = source.clone();
+        CpuPixels::default()
+            .paint_batch(
+                &mut full,
+                width,
+                height,
+                &[PixelOp::FillRoundedRect {
+                    outer: CLIPPED_OUTER,
+                    hole: Some(CLIPPED_OUTER.inset(3)),
+                    color: [200, 60, 30, 160],
+                }],
+            )
+            .expect("cpu fill");
+        let mut clipped = source.clone();
+        CpuPixels::default()
+            .paint_batch(
+                &mut clipped,
+                width,
+                height,
+                &[PixelOp::FillRoundedRectClipped {
+                    outer: CLIPPED_OUTER,
+                    hole: Some(CLIPPED_OUTER.inset(3)),
+                    color: [200, 60, 30, 160],
+                    clip: CLIPPED_CLIP,
+                }],
+            )
+            .expect("cpu clipped fill");
+        let (cx, cy, cw, ch) = CLIPPED_CLIP;
+        for py in 0..height as i32 {
+            for px in 0..width as i32 {
+                let at = ((py as u32 * width + px as u32) * 4) as usize;
+                let inside = px >= cx && px < cx + cw as i32 && py >= cy && py < cy + ch as i32;
+                let want = if inside { &full[at..at + 4] } else { &source[at..at + 4] };
+                assert_eq!(&clipped[at..at + 4], want, "pixel ({px},{py})");
+            }
+        }
+    }
+
+    #[test]
+    fn gpu_clipped_fill_matches_the_xrender_reference_and_leaves_the_frame_outside_the_clip() {
+        let Ok(mut gpu) = gles::GpuBlur::new() else {
+            eprintln!("skipping GPU clipped fill check: no GPU");
+            return;
+        };
+        let (width, height) = (64_u32, 48_u32);
+        let source = frame(width, height, 5);
+        let ops = [PixelOp::FillRoundedRectClipped {
+            outer: CLIPPED_OUTER,
+            hole: Some(CLIPPED_OUTER.inset(3)),
+            color: [200, 60, 30, 160],
+            clip: CLIPPED_CLIP,
+        }];
+        // The production reference is the XRender painter; the CPU backend differs from it here.
+        let reference = xrender_reference(CLIPPED_OUTER, Some(CLIPPED_OUTER.inset(3)), [200, 60, 30, 160], &source, width);
+        let mut batch = source.clone();
+        PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &ops).expect("gpu clipped fill");
+        let (cx, cy, cw, ch) = CLIPPED_CLIP;
+        let mut worst = 0_u8;
+        for py in 0..height as i32 {
+            for px in 0..width as i32 {
+                let at = ((py as u32 * width + px as u32) * 4) as usize;
+                let inside = px >= cx && px < cx + cw as i32 && py >= cy && py < cy + ch as i32;
+                if inside {
+                    for channel in 0..4 {
+                        worst = worst.max(batch[at + channel].abs_diff(reference[at + channel]));
+                    }
+                } else {
+                    assert_eq!(&batch[at..at + 4], &source[at..at + 4], "outside ({px},{py})");
+                }
+            }
+        }
+        eprintln!("gpu clipped fill vs xrender reference: worst channel diff {worst}");
+        assert!(worst <= 8, "worst channel diff {worst}");
     }
 }

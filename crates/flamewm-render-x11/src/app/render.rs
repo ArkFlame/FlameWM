@@ -1,4 +1,13 @@
-use super::clip::{Visible, visible_under};
+use super::clip::{Visible, intersect, visible_under};
+
+/// Picture clip for a partly visible fill: the visible part, cut to the active region paint
+/// when there is one. `None` means nothing of the fill lies inside the region.
+fn partial_fill_clip(part: Rect, region: Option<Rect>) -> Option<Rect> {
+    match region {
+        None => Some(part),
+        Some(region) => intersect(part, region),
+    }
+}
 use super::damage_plan::{PixelRegion, RedrawPlan, RegionInput, command_bounds, plan_region_paint};
 use flamewm_render_core::ImageTreatment;
 
@@ -497,8 +506,7 @@ impl X11App {
     unsafe fn paint_full_gpu(&mut self, document: &RuntimeDocument, scale: f32) -> Option<u64> {
         let gpu = crate::accel::render_acceleration() == crate::accel::RenderAcceleration::Gpu;
         let scene_ready = self.xrender.is_some() && self.argb_visual.is_some();
-        let backdrops = self.surface_backdrop.is_some() || self.window_backdrop_pixmap.is_some();
-        if !gpu_frame::lowering_allowed(gpu, scene_ready, backdrops) {
+        if !gpu_frame::lowering_allowed(gpu, scene_ready) {
             return None;
         }
         // The commands leave `self` while text masks and images are read from the app, then go
@@ -562,26 +570,56 @@ impl X11App {
         document: &RuntimeDocument,
         scale: f32,
     ) -> Option<Vec<u8>> {
-        let blockers = gpu_frame::unsupported_kinds(commands);
-        if !blockers.is_empty() {
-            log_gpu_fallback(&format!("blockers={}", blockers.join(",")));
-            return None;
-        }
         let Some(sources) = self.gpu_frame_sources(commands, document, scale) else {
+            gpu_frame::count_fallback("source-failed");
             log_gpu_fallback("reason=source-failed");
             return None;
         };
-        let ops = match gpu_frame::frame_ops(commands, scale, &sources) {
-            Ok(ops) => ops,
+        let backdrop = match self.gpu_backdrop() {
+            Ok(backdrop) => backdrop,
             Err(reason) => {
+                gpu_frame::count_fallback(reason);
                 log_gpu_fallback(&format!("reason={reason}"));
                 return None;
             }
         };
         let (width, height) = (self.width, self.height);
+        let ops = match gpu_frame::frame_ops(
+            commands,
+            scale,
+            &sources,
+            (width, height),
+            backdrop,
+        ) {
+            Ok(ops) => ops,
+            Err(reason) => {
+                gpu_frame::count_fallback(reason);
+                log_gpu_fallback(&format!("reason={reason}"));
+                return None;
+            }
+        };
         // The scene starts transparent, exactly as `clear_scene` leaves it.
         let mut rgba = vec![0_u8; width as usize * height as usize * 4];
-        crate::accel::try_gpu_batch(&mut rgba, width, height, &ops).then_some(rgba)
+        if crate::accel::try_gpu_batch(&mut rgba, width, height, &ops) {
+            flamewm_profiler::CounterPoint::new("render.gpu_frame.lowered").increment();
+            Some(rgba)
+        } else {
+            gpu_frame::count_fallback("gpu-batch");
+            None
+        }
+    }
+
+    /// The retained backdrop the GPU frame starts from: the surface snapshot with its byte copy.
+    /// A window backdrop has no byte copy, so it keeps the XRender path with a named reason.
+    fn gpu_backdrop(&self) -> Result<Option<(u32, u32, &[u8])>, &'static str> {
+        match (&self.surface_backdrop, &self.window_backdrop_pixmap) {
+            (Some(backdrop), _) => match backdrop.rgba.as_deref() {
+                Some(rgba) => Ok(Some((backdrop.width, backdrop.height, rgba))),
+                None => Err("BackdropBytes"),
+            },
+            (None, Some(_)) => Err("WindowBackdrop"),
+            (None, None) => Ok(None),
+        }
     }
 
     /// One source per text, text shadow and image command, in command order.
@@ -603,6 +641,25 @@ impl X11App {
                 | PaintCommand::TextShadow { .. }
                 | PaintCommand::Image { .. } => {
                     sources.push(self.gpu_source(command, document, scale, &stack)?);
+                }
+                PaintCommand::SurfaceRim {
+                    rect,
+                    radius,
+                    color,
+                    fade_percent,
+                    ..
+                } => {
+                    // A hidden or clipped rim has no source; the frame builder skips or names it.
+                    if let Some(source) = gpu_frame::rim_mask_source(
+                        *rect,
+                        *radius,
+                        *color,
+                        *fade_percent,
+                        scale,
+                        &stack,
+                    ) {
+                        sources.push(source);
+                    }
                 }
                 _ => {}
             }
@@ -808,7 +865,12 @@ impl X11App {
     }
 
     unsafe fn paint_full(&mut self, document: &RuntimeDocument, scale: f32) -> Result<u64, String> {
-        if let Some(count) = unsafe { self.paint_full_gpu(document, scale) } {
+        // Counts every whole-frame attempt; the `render.clear` count is the XRender frames.
+        let gpu = {
+            let _gpu_guard = flamewm_profiler::start("render.gpu_frame");
+            unsafe { self.paint_full_gpu(document, scale) }
+        };
+        if let Some(count) = gpu {
             unsafe { self.present_scene()? };
             return Ok(count);
         }
@@ -1386,13 +1448,7 @@ impl X11App {
                 opacity,
                 node,
             } => {
-                let rect = scale_rect(*rect, scale);
-                let device = (
-                    rect.x.round() as i32,
-                    rect.y.round() as i32,
-                    rect.width.round().max(1.0) as u32,
-                    rect.height.round().max(1.0) as u32,
-                );
+                let device = super::surface_backdrop::node_device_rect(*rect, scale);
                 let radius = (*radius * scale).round().max(0.0) as u32;
                 // SAFETY: redraw is entered only with the app's initialized X11 resources.
                 unsafe {
@@ -1536,12 +1592,48 @@ impl X11App {
                 // XRender ignores the GC clip stack: cut the fill to it. A cut fill keeps
                 // straight edges (its corner radius is dropped at the clip edge).
                 let visible = visible_under(rect, &self.clip_stack);
+                // A partly clipped fill keeps its corner radius through a picture clip. Region
+                // paints own the destination clip, so the clip is the part intersected with the
+                // region and the restore goes back to the region, never the whole window.
+                let region_rect = self.region_text_clip.map(|region| Rect {
+                    x: region.x as f32,
+                    y: region.y as f32,
+                    width: region.width as f32,
+                    height: region.height as f32,
+                });
+                let (full_width, full_height) = (self.width, self.height);
+                let restore_rect = region_rect.unwrap_or(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: full_width as f32,
+                    height: full_height as f32,
+                });
                 if let Some(xrender) = self.xrender.as_mut() {
-                    let (rect, radius) = match visible {
+                    let (rect, radius, picture_clip) = match visible {
                         Visible::Hidden => return Ok(()),
-                        Visible::Whole => (rect, radius),
-                        Visible::Part(part) => (part, 0.0),
+                        Visible::Whole => (rect, radius, None),
+                        Visible::Part(part) => match partial_fill_clip(part, region_rect) {
+                            None => return Ok(()),
+                            Some(clip) => (rect, radius, Some(clip)),
+                        },
                     };
+                    if let Some(part) = picture_clip {
+                        let to_clip = |r: Rect| XRectangle {
+                            x: r.x.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16,
+                            y: r.y.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16,
+                            width: r.width.round().max(0.0).min(u16::MAX as f32) as u16,
+                            height: r.height.round().max(0.0).min(u16::MAX as f32) as u16,
+                        };
+                        // SAFETY: same initialized backbuffer/display contract as `paint`.
+                        unsafe { xrender.set_destination_clip(to_clip(part))? };
+                        // SAFETY: same contract; the clip is restored below on every path.
+                        let filled =
+                            unsafe { crate::xrender_aa::fill_rounded_rect(xrender, rect, radius, *color) };
+                        let reset = unsafe { xrender.set_destination_clip(to_clip(restore_rect)) };
+                        filled?;
+                        reset?;
+                        return Ok(());
+                    }
                     // SAFETY: same initialized backbuffer/display contract as `paint`.
                     unsafe { crate::xrender_aa::fill_rounded_rect(xrender, rect, radius, *color)? };
                     return Ok(());
@@ -2185,5 +2277,42 @@ mod scene_clear_tests {
     fn depth24_scene_clear_is_never_opaque_black() {
         assert_ne!(scene_clear_pixel(24), 0, "corner pixels must not be 0x000000 on depth 24");
         assert_eq!(scene_clear_pixel(32), TRANSPARENT_CLEAR_PIXEL);
+    }
+}
+
+#[cfg(test)]
+mod partial_fill_clip_tests {
+    use super::partial_fill_clip;
+    use flamewm_render_core::Rect;
+
+    fn r(x: f32, y: f32, width: f32, height: f32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn partial_fill_without_region_keeps_its_visible_part() {
+        let part = r(10.0, 85.0, 20.0, 5.0);
+        assert_eq!(partial_fill_clip(part, None), Some(part));
+    }
+
+    #[test]
+    fn partial_fill_in_region_paint_is_cut_to_the_region() {
+        // The corner radius is kept by the picture clip; the clip must not leave the region.
+        let region = r(0.0, 80.0, 50.0, 20.0);
+        assert_eq!(
+            partial_fill_clip(r(10.0, 85.0, 60.0, 5.0), Some(region)),
+            Some(r(10.0, 85.0, 40.0, 5.0))
+        );
+    }
+
+    #[test]
+    fn partial_fill_outside_region_paint_is_dropped() {
+        let region = r(0.0, 80.0, 50.0, 20.0);
+        assert_eq!(partial_fill_clip(r(60.0, 85.0, 20.0, 5.0), Some(region)), None);
     }
 }
