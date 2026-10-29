@@ -153,11 +153,44 @@ pub fn scale_icon_to_slot(icon: &IconImage, slot: u32) -> Option<IconImage> {
     })
 }
 
+/// Corner radius of the app-icon squircle, as a fraction of the slot edge (Tahoe app icons).
+pub const ICON_SQUIRCLE_RADIUS_PERMILLE: u32 = 220;
+
+/// Clip an app icon to a rounded squircle, antialiased on the edge.
+///
+/// Coverage comes from the signed distance to a rounded square of radius `22%` of the edge and
+/// multiplies the existing alpha. Square or antialiased-square tiles lose their sharp corners;
+/// round or inset artwork lies inside the squircle and is left unchanged.
+pub fn squircle_mask_opaque_tile(argb: &mut [u32], width: u32, height: u32) {
+    let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 || argb.len() != w * h {
+        return;
+    }
+    let edge = w.min(h) as f32;
+    let half = edge / 2.0;
+    let radius = edge * ICON_SQUIRCLE_RADIUS_PERMILLE as f32 / 1000.0;
+    let inner = half - radius;
+    for y in 0..h {
+        for x in 0..w {
+            let qx = (x as f32 + 0.5 - half).abs() - inner;
+            let qy = (y as f32 + 0.5 - half).abs() - inner;
+            let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+            let distance = outside + qx.max(qy).min(0.0) - radius;
+            let coverage = (0.5 - distance).clamp(0.0, 1.0);
+            let pixel = &mut argb[y * w + x];
+            let a = *pixel >> 24;
+            let masked = (a as f32 * coverage).round() as u32;
+            *pixel = (*pixel & 0x00ff_ffff) | (masked << 24);
+        }
+    }
+}
+
 /// Straight RGBA8 raster for a native `_NET_WM_ICON` selection, scaled into
 /// the square titlebar slot (canonical blit input for `blit_rgba`).
 #[must_use]
 pub fn native_icon_rgba(icon: &IconImage, slot: u32) -> Option<flamewm_image_core::RgbaImage> {
-    let scaled = scale_icon_to_slot(icon, slot)?;
+    let mut scaled = scale_icon_to_slot(icon, slot)?;
+    squircle_mask_opaque_tile(&mut scaled.argb, scaled.width, scaled.height);
     let mut pixels = Vec::with_capacity(scaled.argb.len() * 4);
     for pixel in &scaled.argb {
         pixels.push(((pixel >> 16) & 0xff) as u8);
@@ -1572,6 +1605,37 @@ mod tests {
         assert_eq!(style_of("rounded"), DecorationStyle::Rounded);
         assert_eq!(style_of("squared"), DecorationStyle::Squared);
         assert_eq!(style_of("bogus"), DecorationStyle::Rounded);
+    }
+
+    #[test]
+    fn squircle_mask_rounds_square_tiles_and_keeps_round_icons() {
+        let edge = 40_u32;
+        let opaque = 0xff20_2020_u32;
+        let mut tile = vec![opaque; (edge * edge) as usize];
+        squircle_mask_opaque_tile(&mut tile, edge, edge);
+        let alpha = |x: u32, y: u32| tile[(y * edge + x) as usize] >> 24;
+        // Sharp corner pixel is outside the 22% squircle: fully transparent.
+        assert_eq!(alpha(0, 0), 0);
+        assert_eq!(alpha(39, 39), 0);
+        // Edge midpoints and centre stay opaque.
+        assert_eq!(alpha(20, 0), 255);
+        assert_eq!(alpha(0, 20), 255);
+        assert_eq!(alpha(20, 20), 255);
+        // Colour is preserved where the mask keeps the pixel.
+        assert_eq!(tile[(20 * edge + 20) as usize] & 0x00ff_ffff, 0x0020_2020);
+        // A round icon (inscribed circle, transparent corners) lies inside the squircle: unchanged.
+        let mut round = vec![0_u32; (edge * edge) as usize];
+        for y in 0..edge {
+            for x in 0..edge {
+                let (dx, dy) = (x as f32 + 0.5 - 20.0, y as f32 + 0.5 - 20.0);
+                if (dx * dx + dy * dy).sqrt() <= 19.0 {
+                    round[(y * edge + x) as usize] = opaque;
+                }
+            }
+        }
+        let before = round.clone();
+        squircle_mask_opaque_tile(&mut round, edge, edge);
+        assert_eq!(round, before);
     }
 
     #[test]

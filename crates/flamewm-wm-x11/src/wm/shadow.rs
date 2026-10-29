@@ -5,11 +5,13 @@
 //! so exposes repaint without WM work. Pixels are refreshed only on map,
 //! resize, focus change and hide.
 //!
-//! The pixels come from the frame the desktop surface presents (its backbuffer
-//! pixmap, published on the root), never from the root: a root read held other
-//! windows and unpainted areas as they were at that instant, and baked them into
-//! the shadow as stale ghosts and dark marks. The shadow sits below every frame,
-//! so the desktop is all it can ever show. No server grab and no unmap is needed.
+//! The pixels come from the desktop surface's presented backbuffer (published on
+//! the root). That pixmap holds the wallpaper and the widgets, which are UI layers
+//! of the desktop surface, so a shadow darkens widgets exactly as it darkens the
+//! wallpaper. It never reads the root, so no shadow is unmapped for a read and no
+//! other window is baked in. Each shadow sits beneath the lowest managed frame,
+//! above the desktop: it darkens what is beneath it and no window above it.
+//! Restacking is checked once per reactor turn (`restack_frame_shadows`).
 //!
 //! Every reactor turn asks `frame::shadow::plan_shadow` what each frame needs:
 //!
@@ -35,45 +37,57 @@ use flamewm_api::root_rubber::RootRubber;
 use std::hash::{Hash, Hasher};
 use x11rb::protocol::shape::{SK as ShapeSk, SO as ShapeOp};
 
-/// Resolve the bottom managed frame once per reconcile batch. A failed X11 query retains the
-/// previous per-frame fallback (`own`) and permits the next frame to retry the query.
-fn cached_shadow_sibling(
-    cached: &mut Option<Window>,
-    own: Window,
-    query: impl FnOnce() -> Option<Window>,
-) -> Window {
-    if let Some(bottom) = *cached {
-        return bottom;
-    }
-    match query() {
-        Some(bottom) => {
-            *cached = Some(bottom);
-            bottom
-        }
-        None => own,
-    }
+/// The lowest managed frame in root stacking order (`children` is bottom-to-top, as
+/// `XQueryTree` reports it). Every shadow is stacked directly beneath it, so no shadow lies above
+/// any managed frame and the desktop-darkened pixels can never cover a window.
+fn lowest_frame(children: &[Window], frames: &[Window]) -> Option<Window> {
+    children
+        .iter()
+        .copied()
+        .find(|window| frames.contains(window))
+}
+
+/// Shadows that sit at or above `bottom` in root stacking order and must be restacked beneath it.
+/// Empty when every shadow already lies below the lowest frame (the common case).
+fn shadows_above_bottom(children: &[Window], shadows: &[Window], bottom: Window) -> Vec<Window> {
+    let Some(bottom_index) = children.iter().position(|window| *window == bottom) else {
+        return Vec::new();
+    };
+    shadows
+        .iter()
+        .copied()
+        .filter(|shadow| {
+            children
+                .iter()
+                .position(|window| window == shadow)
+                .is_some_and(|index| index > bottom_index)
+        })
+        .collect()
 }
 
 #[cfg(test)]
-mod reconcile_batch_tests {
-    use super::cached_shadow_sibling;
-    use std::cell::Cell;
+mod stacking_tests {
+    use super::{lowest_frame, shadows_above_bottom};
 
     #[test]
-    fn successful_tree_lookup_is_shared_but_failure_preserves_per_frame_fallback() {
-        let count = Cell::new(0);
-        let mut cached = None;
-        let query = || {
-            count.set(count.get() + 1);
-            Some(42)
-        };
-        assert_eq!(cached_shadow_sibling(&mut cached, 10, query), 42);
-        assert_eq!(cached_shadow_sibling(&mut cached, 20, query), 42);
-        assert_eq!(count.get(), 1);
-        let mut failed = None;
-        assert_eq!(cached_shadow_sibling(&mut failed, 10, || None), 10);
-        assert_eq!(cached_shadow_sibling(&mut failed, 20, || None), 20);
-        assert_eq!(failed, None);
+    fn bottom_is_the_lowest_frame_not_the_desktop_or_a_shadow() {
+        // desktop(1) < shadow(50) < frame A(10) < frame B(20) < widget-free top(99)
+        let children = [1, 50, 10, 20, 99];
+        assert_eq!(lowest_frame(&children, &[10, 20]), Some(10));
+        assert_eq!(lowest_frame(&children, &[99]), Some(99));
+        assert_eq!(lowest_frame(&children, &[7]), None);
+    }
+
+    #[test]
+    fn shadow_above_the_lowest_frame_is_restacked_and_others_are_not() {
+        // A raised over B: bottom is now B; shadow of A (60) sits below A but above B.
+        let children = [1, 50, 20, 60, 10];
+        assert_eq!(shadows_above_bottom(&children, &[50, 60], 20), vec![60]);
+        // Shadows already beneath the bottom frame need no work.
+        assert!(shadows_above_bottom(&[1, 50, 60, 10], &[50, 60], 10).is_empty());
+        // A shadow not yet in the tree or a missing bottom is left alone.
+        assert!(shadows_above_bottom(&[1, 10], &[50], 10).is_empty());
+        assert!(shadows_above_bottom(&[1, 50], &[50], 10).is_empty());
     }
 }
 
@@ -129,6 +143,19 @@ pub(super) struct FrameShadow {
     raw: shadow_rubber::ShadowBands,
 }
 
+/// Outcome of shading one shadow window.
+enum ShadowUpdate {
+    /// New pixels were uploaded behind the window; `raw` is the snapshot they came from.
+    Painted {
+        raw: shadow_rubber::ShadowBands,
+        pixmap: Pixmap,
+    },
+    /// The desktop under the ring and the shading inputs are unchanged: nothing was uploaded.
+    Unchanged,
+    /// No pixels could be produced (no desktop frame, request too large): the caller hides it.
+    Unshaded,
+}
+
 /// One frame the current turn wants shadowed.
 struct WantedShadow {
     frame: Window,
@@ -165,6 +192,27 @@ pub(super) struct ShadowScene {
     desktop: Option<DesktopFrame>,
     /// `desktop` matches the property; cleared by its `PropertyNotify`.
     pub(super) desktop_read: bool,
+    /// Work counters; logged per change under `FLAMEWM_SHADOW_DIAG=1`.
+    pub(super) stats: ShadowStats,
+}
+
+/// Per-turn shadow work, cumulative for the session.
+#[derive(Default, Debug, Clone, Copy)]
+pub(super) struct ShadowStats {
+    /// Shadows re-shaded from a desktop read whose pixels changed.
+    pub(super) repainted: u64,
+    /// Re-shade requests whose desktop pixels were unchanged (no pixel upload).
+    pub(super) unchanged: u64,
+    /// Shadows moved with their frame (`configure_window` only).
+    pub(super) moved: u64,
+    /// Shadows re-stacked beneath the lowest frame.
+    pub(super) restacked: u64,
+}
+
+/// Set once from `FLAMEWM_SHADOW_DIAG=1`; diagnostics are silent otherwise.
+fn shadow_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("FLAMEWM_SHADOW_DIAG").is_ok_and(|v| v == "1"))
 }
 
 /// The desktop surface's presented frame: its backbuffer pixmap, the window's root rect and the
@@ -353,9 +401,9 @@ impl<C: Connection> Wm<'_, C> {
             return Ok(());
         }
         let (generation, motion) = self.advance_shadow_generation();
-        // Re-shading a batch must not synchronously query the same X11 stacking tree once per
-        // frame. Managed frames cannot change stacking during this synchronous reconcile pass.
-        let mut bottom_frame = None;
+        // One root tree query per turn: the lowest frame anchors every shadow, and any shadow a
+        // frame restack lifted above it is put back beneath it before anything else is drawn.
+        let bottom = self.restack_frame_shadows()?;
         let current_radius = u32::from(crate::frame::geometry_shape::scaled_corner_radius(
             true,
             self.decoration_tokens.style,
@@ -364,7 +412,7 @@ impl<C: Connection> Wm<'_, C> {
         for want in &wanted {
             let prev = self.frame_shadows.get(&want.frame).map(|held| held.state);
             // A frame first seen while frames are still moving waits for the settle: shading it
-            // now would need the root readback a live move must never do.
+            // now would need the desktop read a live move must never do.
             if prev.is_none() && motion {
                 continue;
             }
@@ -379,9 +427,12 @@ impl<C: Connection> Wm<'_, C> {
             };
             match decision {
                 ShadowAction::Noop => {}
-                ShadowAction::Move => self.move_frame_shadow(want.frame, want.outer)?,
+                ShadowAction::Move => {
+                    self.shadow_scene.stats.moved += 1;
+                    self.move_frame_shadow(want.frame, want.outer)?;
+                }
                 ShadowAction::Reshade => {
-                    // A readback now would bake the live rubber into the snapshot. The frame keeps
+                    // A read now would bake the live rubber band into the snapshot. The frame keeps
                     // its state and is re-shaded by the first turn after the rubber ends.
                     if self.shadow_scene.rubber.is_some() {
                         continue;
@@ -390,9 +441,7 @@ impl<C: Connection> Wm<'_, C> {
                         Some(held) => held.win,
                         None => self.create_shadow_window()?,
                     };
-                    let sibling = cached_shadow_sibling(&mut bottom_frame, want.frame, || {
-                        self.shadow_sibling()
-                    });
+                    let sibling = bottom.unwrap_or(want.frame);
                     self.refresh_frame_shadow(
                         want.frame,
                         want.outer,
@@ -406,6 +455,38 @@ impl<C: Connection> Wm<'_, C> {
         }
         self.shadow_scene.wanted_scratch = wanted;
         Ok(())
+    }
+
+    /// Beneath the lowest managed frame, restack every shadow that a frame restack (raise, lower,
+    /// focus, map) lifted to or above it. Returns that lowest frame for this turn, `None` when
+    /// no managed frame is in the tree.
+    fn restack_frame_shadows(&mut self) -> Result<Option<Window>, ReplyOrIdError> {
+        let root = self.screen().root;
+        let children: Vec<Window> = self.conn.query_tree(root)?.reply()?.children;
+        // Only frames on this workspace are stacked; an unmapped frame's place is meaningless.
+        let frames: Vec<Window> = self
+            .clients
+            .values()
+            .filter(|c| c.visible_on(self.current_workspace))
+            .map(|client| client.frame)
+            .collect();
+        let Some(bottom) = lowest_frame(&children, &frames) else {
+            return Ok(None);
+        };
+        let shadows: Vec<Window> = self.frame_shadows.values().map(|held| held.win).collect();
+        for shadow in shadows_above_bottom(&children, &shadows, bottom) {
+            self.conn.configure_window(
+                shadow,
+                &ConfigureWindowAux::new()
+                    .sibling(bottom)
+                    .stack_mode(StackMode::BELOW),
+            )?;
+            self.shadow_scene.stats.restacked += 1;
+            if shadow_diag_enabled() {
+                eprintln!("flamewm: shadow restack win={shadow:#x} beneath={bottom:#x}");
+            }
+        }
+        Ok(Some(bottom))
     }
 
     /// Advance the root generation: bump it when the root behind some strip may have changed.
@@ -484,20 +565,6 @@ impl<C: Connection> Wm<'_, C> {
         hash_of((self.current_workspace, &*items))
     }
 
-    /// The lowest managed frame, used as the sibling for every shadow so the shadow sits below
-    /// all managed windows (and above the desktop). Falls back to the frame's own window.
-    fn shadow_sibling(&self) -> Option<Window> {
-        let root = self.screen().root;
-        let reply = self.conn.query_tree(root).ok()?.reply().ok()?;
-        let frames: std::collections::HashSet<Window> =
-            self.clients.values().map(|client| client.frame).collect();
-        reply
-            .children
-            .iter()
-            .copied()
-            .find(|window| frames.contains(window))
-    }
-
     /// Slide the shadow with its frame. One `configure_window`, no readback.
     fn move_frame_shadow(&mut self, frame: Window, outer: Rect) -> Result<(), ReplyOrIdError> {
         let Some(held) = self.frame_shadows.get(&frame) else {
@@ -573,26 +640,63 @@ impl<C: Connection> Wm<'_, C> {
                 .frame_shadows
                 .get(&frame)
                 .is_some_and(|held| held.radius != radius);
-        let shown = self.refresh_shadow(outer, focused, win, sibling, update_shape, radius)?;
-        if let Some((raw, pixmap)) = shown {
-            self.frame_shadows.insert(
-                frame,
-                FrameShadow {
-                    win,
-                    radius,
-                    state: ShadowState {
-                        shaded: outer,
-                        focused,
-                        generation,
-                        placed: outer,
+        let held_raw = self
+            .frame_shadows
+            .get(&frame)
+            .filter(|held| {
+                held.win == win
+                    && !update_shape
+                    && held.state.shaded == outer
+                    && held.state.focused == focused
+            })
+            .map(|held| &held.raw);
+        let shown = self.refresh_shadow(
+            outer,
+            focused,
+            win,
+            sibling,
+            update_shape,
+            radius,
+            held_raw,
+        )?;
+        match shown {
+            ShadowUpdate::Painted { raw, pixmap } => {
+                self.shadow_scene.stats.repainted += 1;
+                if shadow_diag_enabled() {
+                    eprintln!(
+                        "flamewm: shadow repaint frame={frame:#x} stats={:?}",
+                        self.shadow_scene.stats
+                    );
+                }
+                self.frame_shadows.insert(
+                    frame,
+                    FrameShadow {
+                        win,
+                        radius,
+                        state: ShadowState {
+                            shaded: outer,
+                            focused,
+                            generation,
+                            placed: outer,
+                        },
+                        pixmap,
+                        raw,
                     },
-                    pixmap,
-                    raw,
-                },
-            );
-        } else {
-            self.conn.destroy_window(win)?;
-            self.frame_shadows.remove(&frame);
+                );
+            }
+            ShadowUpdate::Unchanged => {
+                // Same silhouette and same desktop pixels under the ring: keep the pixmap as is.
+                self.shadow_scene.stats.unchanged += 1;
+                if let Some(held) = self.frame_shadows.get_mut(&frame) {
+                    held.state.generation = generation;
+                    held.state.placed = outer;
+                }
+                return Ok(());
+            }
+            ShadowUpdate::Unshaded => {
+                self.conn.destroy_window(win)?;
+                self.frame_shadows.remove(&frame);
+            }
         }
         if let Some(old) = previous {
             self.conn.free_pixmap(old)?;
@@ -600,8 +704,9 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
-    /// Returns the unshaded snapshot and the pixmap now behind the window, or `None` when the
-    /// shadow could not be shaded (no snapshot, request too large); the caller then hides it.
+    /// Shades one shadow from a read of the desktop backbuffer. The read never touches the root,
+    /// so no window (and no other shadow) is unmapped or read back: a shadow is only ever
+    /// repainted in place, and only when the desktop pixels under its ring actually changed.
     fn refresh_shadow(
         &self,
         outer: Rect,
@@ -610,34 +715,26 @@ impl<C: Connection> Wm<'_, C> {
         sibling: Window,
         update_shape: bool,
         radius: u32,
-    ) -> Result<Option<(shadow_rubber::ShadowBands, Pixmap)>, ReplyOrIdError> {
+        held_raw: Option<&shadow_rubber::ShadowBands>,
+    ) -> Result<ShadowUpdate, ReplyOrIdError> {
         let root = self.screen().root;
         let rect = shadow::shadow_rect(outer);
-        // The root readback must not contain any shadow's pixels: a cast read through another
-        // cast would darken twice. Unmap every shadow for the one read, then map the others back.
-        // Only refreshes reach here, so an idle desktop does no extra work.
-        let others: Vec<Window> = self
-            .frame_shadows
-            .values()
-            .map(|held| held.win)
-            .filter(|&other| other != win)
-            .collect();
-        self.conn.unmap_window(win)?;
-        for &other in &others {
-            self.conn.unmap_window(other)?;
-        }
-        let snapshot = self.desktop_snapshot(rect, outer);
-        for &other in &others {
-            self.conn.map_window(other)?;
-        }
-        let Some(raw) = snapshot? else {
-            return Ok(None);
+        let Some(raw) = self.desktop_snapshot(rect)? else {
+            return Ok(ShadowUpdate::Unshaded);
         };
         let raw_bands = shadow_rubber::ShadowBands::capture_rounded(&raw, rect, outer, radius);
+        // Nothing the shadow shows changed: only its stacking and position are re-applied.
+        if let Some(held) = held_raw {
+            if *held == raw_bands && !update_shape {
+                self.conn
+                    .configure_window(win, &shadow_aux(rect, sibling))?;
+                return Ok(ShadowUpdate::Unchanged);
+            }
+        }
         let mut pixels = raw;
         shadow::shade_visible_shadow_rounded(outer, focused, radius, &mut pixels);
         if pixels.len() + 32 > self.conn.maximum_request_bytes() {
-            return Ok(None);
+            return Ok(ShadowUpdate::Unshaded);
         }
         let gc = self.conn.generate_id()?;
         self.conn.create_gc(gc, root, &CreateGCAux::new())?;
@@ -691,7 +788,10 @@ impl<C: Connection> Wm<'_, C> {
             )?;
         }
         self.conn.map_window(win)?;
-        Ok(Some((raw_bands, pixmap)))
+        Ok(ShadowUpdate::Painted {
+            raw: raw_bands,
+            pixmap,
+        })
     }
 
     /// The desktop published or withdrew the live rubber band. Recompose only the shadow regions
@@ -829,60 +929,55 @@ impl<C: Connection> Wm<'_, C> {
         Ok(frame)
     }
 
-    /// BGRX desktop pixels of the shadow `rect` of frame `outer`, read from the presented desktop
-    /// frame. Only the visible cast is read (the band right of and below the frame); the area the
-    /// frame covers and anything outside the desktop frame stay zero (never visible). `None`
-    /// without a desktop frame, or when the frame was replaced between its publish and this read
-    /// (its property change re-shades).
-    fn desktop_snapshot(&self, rect: Rect, _outer: Rect) -> Result<Option<Vec<u8>>, ReplyOrIdError> {
-        // Only with a presented desktop frame (the usable gate); the pixels come from the root.
-        if self.shadow_scene.desktop.is_none() {
+    /// BGRX desktop pixels of the shadow `rect`, read from the desktop surface's presented
+    /// backbuffer. That pixmap is the whole desktop as painted: wallpaper, the widgets (they are
+    /// UI layers of the desktop surface, not windows) and nothing else. It holds no shadow, no
+    /// frame and no unpainted root, so the read needs no unmap and no grab, and a shadow can
+    /// never darken itself. The area outside the desktop stays the base colour (never visible
+    /// on a desktop that covers the screen). `None` without a desktop frame or when the read
+    /// fails (the desktop freed the pixmap; its property change re-shades).
+    fn desktop_snapshot(&self, rect: Rect) -> Result<Option<Vec<u8>>, ReplyOrIdError> {
+        let Some(desktop) = self.shadow_scene.desktop else {
             return Ok(None);
-        }
+        };
         let (w, h) = (rect.width.max(1) as usize, rect.height.max(1) as usize);
         // Start from the desktop colour: an uncovered region must not stay 0x000000.
         let mut pixels = crate::frame::shadow::snapshot_base(w, h);
         // Read the whole shadow rect: the frame's rounded corners leave notches inside `outer`
         // that a cast-only read never fills, and those notches would keep the base colour.
-        let bands = [crate::frame::shadow::snapshot_read_rect(rect)];
-        for (bx, by, bw, bh) in bands {
-            // Root contents under the shadow: desktop, widget windows and anything stacked below
-            // this shadow. The screen bounds the read; uncovered parts keep the base colour.
-            let (sw, sh) = (
-                i32::from(self.screen().width_in_pixels),
-                i32::from(self.screen().height_in_pixels),
-            );
-            let x0 = (rect.x + bx).max(0);
-            let y0 = (rect.y + by).max(0);
-            let x1 = (rect.x + bx + bw).min(sw);
-            let y1 = (rect.y + by + bh).min(sh);
-            if x1 <= x0 || y1 <= y0 {
-                continue;
-            }
-            let (cw, ch) = ((x1 - x0) as usize, (y1 - y0) as usize);
-            let Ok(reply) = self
-                .conn
-                .get_image(
-                    ImageFormat::Z_PIXMAP,
-                    self.screen().root,
-                    x0 as i16,
-                    y0 as i16,
-                    cw as u16,
-                    ch as u16,
-                    u32::MAX,
-                )?
-                .reply()
-            else {
-                return Ok(None);
-            };
-            if !matches!(reply.depth, 24 | 32) || reply.data.len() != cw * ch * 4 {
-                return Ok(None);
-            }
-            let (ox, oy) = ((x0 - rect.x) as usize, (y0 - rect.y) as usize);
-            for row in 0..ch {
-                let src = &reply.data[row * cw * 4..(row + 1) * cw * 4];
-                let dst = ((oy + row) * w + ox) * 4;
-                pixels[dst..dst + cw * 4].copy_from_slice(src);
+        let (bx, by, bw, bh) = crate::frame::shadow::snapshot_read_rect(rect);
+        {
+            // Intersect with the desktop surface, in root space.
+            let x0 = (rect.x + bx).max(desktop.x);
+            let y0 = (rect.y + by).max(desktop.y);
+            let x1 = (rect.x + bx + bw).min(desktop.x + desktop.width as i32);
+            let y1 = (rect.y + by + bh).min(desktop.y + desktop.height as i32);
+            if x1 > x0 && y1 > y0 {
+                let (cw, ch) = ((x1 - x0) as usize, (y1 - y0) as usize);
+                let Ok(reply) = self
+                    .conn
+                    .get_image(
+                        ImageFormat::Z_PIXMAP,
+                        desktop.pixmap,
+                        (x0 - desktop.x) as i16,
+                        (y0 - desktop.y) as i16,
+                        cw as u16,
+                        ch as u16,
+                        u32::MAX,
+                    )?
+                    .reply()
+                else {
+                    return Ok(None);
+                };
+                if !matches!(reply.depth, 24 | 32) || reply.data.len() != cw * ch * 4 {
+                    return Ok(None);
+                }
+                let (ox, oy) = ((x0 - rect.x) as usize, (y0 - rect.y) as usize);
+                for row in 0..ch {
+                    let src = &reply.data[row * cw * 4..(row + 1) * cw * 4];
+                    let dst = ((oy + row) * w + ox) * 4;
+                    pixels[dst..dst + cw * 4].copy_from_slice(src);
+                }
             }
         }
         Ok(Some(pixels))
