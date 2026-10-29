@@ -137,6 +137,7 @@ impl LayoutEngine {
             document,
             interaction,
             boxes: &mut empty,
+            measures: Default::default(),
         };
         // Finite popup constraint only; never f32::MAX here.
         let (w, h) = probe.measure_node(node, max_w, max_h);
@@ -188,6 +189,7 @@ impl LayoutEngine {
             document,
             interaction,
             boxes: &mut boxes,
+            measures: Default::default(),
         };
         engine.layout_node(
             document.document.root,
@@ -219,6 +221,7 @@ impl LayoutEngine {
                 document,
                 interaction,
                 boxes: &mut empty,
+                measures: Default::default(),
             };
             let avail_w = if scrolls_x {
                 f32::MAX / 1024.0
@@ -289,6 +292,7 @@ impl LayoutResult {
             document,
             interaction,
             boxes: &mut self.boxes,
+            measures: Default::default(),
         };
         for &(index, parent) in &plan {
             // A full compute never visits a hidden box or its text, so they keep the default box.
@@ -372,6 +376,10 @@ struct Engine<'a> {
     document: &'a RuntimeDocument,
     interaction: InteractionState,
     boxes: &'a mut [LayoutBox],
+    /// `measure_node` results for this pass, keyed by node and the exact available size bits.
+    /// Measuring reads only the document, so a node measured twice under one constraint (by its
+    /// parent's measure and again by its own layout) returns the stored size.
+    measures: std::cell::RefCell<crate::hash::FastMap<(u32, u32, u32), (f32, f32)>>,
 }
 
 impl<'a> Engine<'a> {
@@ -393,6 +401,16 @@ impl<'a> Engine<'a> {
     }
 
     fn measure_node(&self, index: u32, avail_w: f32, avail_h: f32) -> (f32, f32) {
+        let key = (index, avail_w.to_bits(), avail_h.to_bits());
+        if let Some(&size) = self.measures.borrow().get(&key) {
+            return size;
+        }
+        let size = self.measure_node_uncached(index, avail_w, avail_h);
+        self.measures.borrow_mut().insert(key, size);
+        size
+    }
+
+    fn measure_node_uncached(&self, index: u32, avail_w: f32, avail_h: f32) -> (f32, f32) {
         let node = &self.document.document.nodes[index as usize];
         let style = self.style(index);
         if style.display == Display::None {
@@ -1262,6 +1280,7 @@ mod tests {
             document: &doc,
             interaction: InteractionState::default(),
             boxes: &mut [],
+            measures: Default::default(),
         };
         assert_eq!(engine.children(0).collect::<Vec<_>>(), vec![1, 2, 3, 4]);
         assert_eq!(engine.children(1).collect::<Vec<_>>(), vec![5, 6, 7]);
