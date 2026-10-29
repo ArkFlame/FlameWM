@@ -131,14 +131,16 @@ fn clip_chains(
         rect: Rect::default(),
         depth: 0,
     }];
-    // A hidden subtree paints nothing, so its overflow never clips anything: it keeps its parent's
-    // chain and its styles are not resolved (most nodes of a pooled document are hidden).
-    let mut stack = vec![(document.document.root, false)];
+    // A hidden subtree paints nothing and is dropped from the paint order, so it is not walked
+    // at all (most nodes of a pooled document are hidden).
+    let mut stack = vec![document.document.root];
     let mut any_clip = false;
-    while let Some((index, hidden_ancestor)) = stack.pop() {
+    while let Some(index) = stack.pop() {
+        if !document.is_visible(index) {
+            continue;
+        }
         let mut id = ids[index as usize];
-        let hidden = hidden_ancestor || !document.is_visible(index);
-        if !hidden && clips_descendants(document, index, interaction) {
+        if clips_descendants(document, index, interaction) {
             let depth = chains[id as usize].depth + 1;
             chains.push(ClipChain {
                 parent: id,
@@ -150,23 +152,32 @@ fn clip_chains(
         }
         for child in children(document, index) {
             ids[child as usize] = id;
-            stack.push((child, hidden));
+            stack.push(child);
         }
     }
     (ids, chains, any_clip)
 }
 
-/// Walks the paint z-order in runs of equal clip chains (compared by content, so run
-/// boundaries match a per-node comparison). `paint_run` appends the commands of one contiguous
-/// run of z-order nodes; each run is wrapped in its PushClip/PopClip pairs.
+/// Walks the visible part of the paint z-order in runs of equal clip chains (compared by
+/// content, so run boundaries match a per-node comparison). `paint_run` appends the commands of
+/// one contiguous run of z-order nodes; each run is wrapped in its PushClip/PopClip pairs.
+/// `visible` is scratch, left holding `is_effectively_visible` per node.
 fn build_clipped(
     document: &RuntimeDocument,
     layout: &mut LayoutResult,
     interaction: Interaction,
+    visible: &mut Vec<bool>,
     mut paint_run: impl FnMut(&mut LayoutResult, &[u32], &mut Vec<PaintCommand>),
 ) -> Vec<PaintCommand> {
+    visible.resize(document.document.nodes.len(), false);
+    fill_visibility(document, visible);
     let (ids, chains, any_clip) = clip_chains(document, layout, interaction);
-    let order = std::mem::take(&mut layout.z_order);
+    let full_order = std::mem::take(&mut layout.z_order);
+    let order: Vec<u32> = full_order
+        .iter()
+        .copied()
+        .filter(|&index| visible.get(index as usize).copied().unwrap_or(false))
+        .collect();
     let mut out = Vec::with_capacity(order.len());
     if !any_clip {
         paint_run(layout, &order, &mut out);
@@ -193,7 +204,7 @@ fn build_clipped(
             start = end;
         }
     }
-    layout.z_order = order;
+    layout.z_order = full_order;
     out
 }
 
@@ -236,7 +247,7 @@ pub(crate) fn build_scrolled_paint(
     layout: &mut LayoutResult,
     interaction: Interaction,
 ) -> Vec<PaintCommand> {
-    build_clipped(document, layout, interaction, |layout, nodes, out| {
+    build_clipped(document, layout, interaction, &mut Vec::new(), |layout, nodes, out| {
         layout.z_order.clear();
         layout.z_order.extend_from_slice(nodes);
         out.extend(build_paint_commands_with_scroll(
@@ -342,10 +353,6 @@ fn paint_memo(
 ) {
     for &index in nodes {
         let slot = &mut cache.nodes[index as usize];
-        if !cache.visibility.get(index as usize).copied().unwrap_or(false) {
-            *slot = None;
-            continue;
-        }
         if let Some(entry) = slot
             .as_ref()
             .filter(|entry| entry.key.matches(document, layout, interaction, index) && NodeKey::style_matches(document, interaction, index, &entry.style))
@@ -411,14 +418,17 @@ pub(crate) fn build_scrolled_paint_cached(
         cache.nodes.resize_with(count, || None);
         cache.variables.clone_from(&document.variable_values);
     }
-    if cache.visibility.len() != count {
-        cache.visibility.clear();
-        cache.visibility.resize(count, false);
-    }
-    fill_visibility(document, &mut cache.visibility);
-    build_clipped(document, layout, interaction, |layout, nodes, out| {
+    let mut visible = std::mem::take(&mut cache.visibility);
+    let out = build_clipped(document, layout, interaction, &mut visible, |layout, nodes, out| {
         paint_memo(document, cache, interaction, layout, nodes, out);
-    })
+    });
+    for (slot, &shown) in cache.nodes.iter_mut().zip(&visible) {
+        if !shown {
+            *slot = None;
+        }
+    }
+    cache.visibility = visible;
+    out
 }
 
 #[cfg(test)]
