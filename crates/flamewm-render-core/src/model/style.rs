@@ -564,6 +564,38 @@ impl RuntimeDocument {
         }
     }
 
+    /// `effective_z_index` of every node, resolved once per ancestor chain. `None` when no node
+    /// carries a z-index override, so every node sits at 0 and document order is paint order.
+    pub fn effective_z_indices(&self) -> Option<Vec<i32>> {
+        if self.z_index_overrides.is_empty() {
+            return None;
+        }
+        let nodes = &self.document.nodes;
+        let mut resolved: Vec<Option<i32>> = vec![None; nodes.len()];
+        let mut chain = Vec::new();
+        for start in 0..nodes.len() as u32 {
+            let mut index = start;
+            let z = loop {
+                if let Some(z) = resolved[index as usize] {
+                    break z;
+                }
+                if let Some(&z) = self.z_index_overrides.get(&index) {
+                    break z;
+                }
+                chain.push(index);
+                match nodes[index as usize].parent {
+                    Some(parent) if chain.len() <= nodes.len() => index = parent,
+                    _ => break 0,
+                }
+            };
+            resolved[index as usize].get_or_insert(z);
+            for node in chain.drain(..) {
+                resolved[node as usize] = Some(z);
+            }
+        }
+        Some(resolved.into_iter().map(|z| z.unwrap_or(0)).collect())
+    }
+
     pub fn runtime_style(&self, index: u32, interaction: InteractionState) -> Style {
         self.runtime_style_cow(index, interaction).into_owned()
     }

@@ -249,9 +249,11 @@ impl LayoutEngine {
             };
         }
         let mut z_order: Vec<u32> = (0..document.document.nodes.len() as u32).collect();
-        // Keys are unique (index tiebreak), so unstable sort yields the same
-        // order as the stable sort without its scratch allocation.
-        z_order.sort_unstable_by_key(|index| (document.effective_z_index(*index), *index as i64));
+        if let Some(z_indices) = document.effective_z_indices() {
+            // Keys are unique (index tiebreak), so unstable sort yields the same
+            // order as the stable sort without its scratch allocation.
+            z_order.sort_unstable_by_key(|&index| (z_indices[index as usize], index));
+        }
         LayoutResult {
             boxes,
             contents,
