@@ -1,0 +1,20 @@
+[package]
+name = "flamewm-audio-helper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "PulseAudio bridge process for the FlameWM window manager; spawned lazily and exits when idle"
+publish = false
+
+[[bin]]
+name = "flamewm-audio-helper"
+path = "src/main.rs"
+
+[dependencies]
+flamewm-api = { path = "../flamewm-api" }
+flamewm-integrations-linux = { path = "../flamewm-integrations-linux", features = ["pulse-audio"] }
+
+[lints]
+workspace = true

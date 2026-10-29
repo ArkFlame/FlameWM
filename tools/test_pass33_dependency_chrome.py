@@ -19,7 +19,8 @@ class AudioDependencyContract(unittest.TestCase):
         self.assertTrue(pulse['optional'])
         self.assertEqual(lib['features']['default'], [])
         self.assertIn('dep:pulse', lib['features']['pulse-audio'])
-        self.assertIn('pulse-audio', manifest('flamewm-wm-x11')['dependencies']['flamewm-integrations-linux']['features'])
+        self.assertNotIn('pulse-audio', manifest('flamewm-wm-x11')['dependencies']['flamewm-integrations-linux'].get('features', []))
+        self.assertIn('pulse-audio', manifest('flamewm-audio-helper')['dependencies']['flamewm-integrations-linux']['features'])
         for consumer in ('flamewm-desktop', 'flamewm-settings', 'flamewm-explorer', 'flamewm-shell'):
             self.assertNotIn('pulse-audio', manifest(consumer)['dependencies']['flamewm-integrations-linux'].get('features', []))
 

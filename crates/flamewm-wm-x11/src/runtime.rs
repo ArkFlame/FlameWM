@@ -19,7 +19,7 @@ use flamewm_applications::ApplicationCatalog;
 use flamewm_control_dbus::ControlServer;
 use flamewm_control_wire::ControlSignal;
 use flamewm_integrations_linux::{
-    LinuxIntegrationRuntime, LinuxIntegrationSource, pulse::PulseAdapter,
+    LinuxIntegrationRuntime, LinuxIntegrationSource, audio_helper::AudioHelper,
 };
 use flamewm_platform::host::PlatformHost;
 use flamewm_reactor::{FdAction, FdReadiness, Reactor};
@@ -161,13 +161,16 @@ fn run_session(
         })
         .inspect_err(|_| integrations.borrow_mut().stop())?;
     let pulse = Rc::new(
-        PulseAdapter::connect(move |snapshot| {
+        AudioHelper::connect(move |snapshot| {
             if audio_sender.try_send(snapshot).is_ok() {
                 let _ = audio_writer.write(&[1]);
             }
         })
         .inspect_err(|_| integrations.borrow_mut().stop())?,
     );
+    // Best effort: starts the helper once so the first volume key steps from a real snapshot.
+    // The helper exits after its idle period; the last published snapshot stays until the next use.
+    let _ = pulse.request_snapshot();
     let audio_updates = Rc::new(RefCell::new(Vec::<AudioSnapshot>::new()));
     let audio_updates_for_callback = Rc::clone(&audio_updates);
     let _audio_registration = match reactor.borrow_mut().register_fd_with_source_action(

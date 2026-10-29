@@ -74,7 +74,7 @@ if [[ -z "$STAGE_ONLY" ]]; then
     rm -rf "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$PKG_VERSION.tar.gz" "$DIST/SHA256SUMS" "$DIST/flamewm-$PKG_VERSION"
 fi
 
-for binary in flamewm-apps flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
+for binary in flamewm-apps flamewm-audio-helper flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
     [[ -x "$BUILD_DIR/$binary" ]] || fail "missing $PROFILE binary: $BUILD_DIR/$binary"
 done
 
@@ -118,7 +118,7 @@ fi
 mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/flamewm" "$STAGE/etc/pam.d" \
     "$STAGE/usr/share/applications" "$STAGE/usr/share/xsessions" "$STAGE/usr/share/wayland-sessions" "$STAGE/usr/share/doc/flamewm"
 
-for binary in flamewm-apps flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
+for binary in flamewm-apps flamewm-audio-helper flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
     install -m 0755 "$BUILD_DIR/$binary" "$STAGE/usr/bin/$binary"
 done
 # The WM, desktop, shell, settings, explorer and terminal are one multi-call executable

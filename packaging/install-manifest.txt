@@ -4,6 +4,7 @@
 # installed as hard links to flamewm-apps (one multi-call executable, shared code pages).
 .target/release/flamewm                  usr/bin/flamewm
 .target/release/flamewm-session          usr/bin/flamewm-session
+.target/release/flamewm-audio-helper     usr/bin/flamewm-audio-helper
 .target/release/flamewm-desktop          usr/bin/flamewm-desktop
 .target/release/flamewm-shell            usr/bin/flamewm-shell
 .target/release/flamewm-settings         usr/bin/flamewm-settings

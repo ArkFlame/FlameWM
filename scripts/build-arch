@@ -55,7 +55,7 @@ pkgver="$(sed -n 's/^pkgver = //p' <<<"$pkginfo")"
 [[ "$pkgver" == "$VERSION".r* ]] || fail "package version $pkgver does not start with workspace version $VERSION"
 contents="$(bsdtar -tf "$package")"
 for required in \
-    usr/bin/flamewm-session usr/bin/flamewm-terminal usr/bin/flamewm-wayland \
+    usr/bin/flamewm-session usr/bin/flamewm-terminal usr/bin/flamewm-wayland usr/bin/flamewm-audio-helper \
     usr/lib/flamewm/flamewm-session-wrapper usr/lib/flamewm/flamewm-wayland-session \
     usr/lib/flamewm/flamewm-desktop-services etc/pam.d/flamewm-lock \
     usr/share/xsessions/flamewm.desktop usr/share/wayland-sessions/flamewm-wayland.desktop \

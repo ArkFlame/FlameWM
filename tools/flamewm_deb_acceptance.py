@@ -28,6 +28,7 @@ def workspace_version() -> str:
 BINARIES = [
     "flamewm",
     "flamewm-session",
+    "flamewm-audio-helper",
     "flamewm-desktop",
     "flamewm-shell",
     "flamewm-settings",

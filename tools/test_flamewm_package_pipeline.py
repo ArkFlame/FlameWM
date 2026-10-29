@@ -14,7 +14,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-BINARIES = ("flamewm-apps", "flamewm", "flamewm-session", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
+BINARIES = ("flamewm-apps", "flamewm-audio-helper", "flamewm", "flamewm-session", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
             "flamewm-screenshot", "flamewm-explorer", "flamewm-task-manager", "flamewm-render-x11", "flamewm-render-compile",
             "flamewm-render-inspect", "flamewm-lock", "flamewm-terminal", "flamewm-wayland")
 # Stub for the --capabilities contract: key=value lines, exit 0, no device access.
@@ -59,6 +59,9 @@ class DebianReleasePipelineTests(unittest.TestCase):
         (cursor / "index.theme").write_text("[Icon Theme]\nName=Breeze Dark\n", encoding="utf-8")
         (self.root / "assets/web/breeze").mkdir(parents=True)
         (self.root / "assets/web/breeze/application-menu.svg").write_text("<svg/>")
+        for theme in ("assets/themes/icons/MacTahoe", "assets/themes/cursors/MacTahoe-dark-cursors"):
+            (self.root / theme).mkdir(parents=True)
+            (self.root / theme / "index.theme").write_text("[Icon Theme]\nName=MacTahoe\n", encoding="utf-8")
         release = self.root / ".target/release"
         release.mkdir(parents=True)
         for binary in BINARIES:

@@ -14,16 +14,16 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-BINARIES = ("flamewm-apps", "flamewm-session", "flamewm-screenshot", "flamewm-render-x11",
+BINARIES = ("flamewm-apps", "flamewm-audio-helper", "flamewm-session", "flamewm-screenshot", "flamewm-render-x11",
             "flamewm-render-compile", "flamewm-render-inspect", "flamewm-lock", "flamewm-wayland")
 COPIED = ("Cargo.toml", "LICENSE", "README.md", "packaging/flamewm.desktop",
           "packaging/flamewm-session.desktop", "packaging/flamewm-wayland.desktop", "packaging/flamewm-screenshot.desktop",
           "packaging/flamewm-explorer.desktop", "packaging/flamewm-terminal.desktop", "packaging/flamewm-task-manager.desktop",
-          "packaging/pam.d/flamewm-lock", "packaging/menus/flamewm-applications.menu",
+          "packaging/flamewm-finder.desktop", "packaging/icons/flamewm-finder.svg", "packaging/pam.d/flamewm-lock", "packaging/menus/flamewm-applications.menu",
           "packaging/notifications/dunstrc", "packaging/install-manifest.txt",
           "packaging/debian/control.in", "packaging/debian/copyright",
           "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/package",
-          "scripts/package-source-archive", "scripts/flamewm-session-wrapper", "scripts/flamewm-wayland-session", "scripts/dev-deb",
+          "scripts/dist-checksums", "scripts/package-source-archive", "scripts/flamewm-session-wrapper", "scripts/flamewm-wayland-session", "scripts/dev-deb",
           "tools/flamewm_desktop_services.py")
 FAKE_CARGO = """#!/bin/sh
 printf 'CARGO_TARGET_DIR=%s ARGS=%s\\n' "$CARGO_TARGET_DIR" "$*" >> "$FLAMEWM_FAKE_EVENTS"
@@ -60,8 +60,11 @@ class DevDebLaneTests(unittest.TestCase):
         (cursor / "index.theme").write_text("[Icon Theme]\nName=Breeze Dark\n", encoding="utf-8")
         (self.root / "assets/web/breeze").mkdir(parents=True)
         (self.root / "assets/web/breeze/application-menu.svg").write_text("<svg/>")
+        for theme in ("assets/themes/icons/MacTahoe", "assets/themes/cursors/MacTahoe-dark-cursors"):
+            (self.root / theme).mkdir(parents=True)
+            (self.root / theme / "index.theme").write_text("[Icon Theme]\nName=MacTahoe\n", encoding="utf-8")
         (self.root / "packaging/source-manifest.txt").write_text(
-            "scripts/\ntools/\nassets/\n@exec scripts/version\n@exec scripts/package\n"
+            "scripts/\ntools/\nassets/\n@exec scripts/version\n@exec scripts/package\n@exec scripts/dist-checksums\n"
             "@exec scripts/package-source-archive\n@exec scripts/flamewm-session-wrapper\n@exec scripts/flamewm-wayland-session\n"
             "@exec scripts/dev-deb\n@exec tools/flamewm_desktop_services.py\n", encoding="utf-8")
         # Stale production binaries: the fast lane must never consume these.
