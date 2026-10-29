@@ -2618,54 +2618,45 @@ fn parent_dir(paths:&[PathBuf])->PathBuf {
     paths.first().and_then(|p|p.parent()).unwrap_or(Path::new("/")).to_path_buf()
 }
 
-/// Converts `flamewm-remote-fs` listing chunks on this thread and forwards them to the UI loop. A panic
-/// becomes a visible failure instead of a silent stop.
+/// Converts `flamewm-remote-fs` listing chunks on this thread and forwards them to the UI loop.
 fn forward_listing(generation:u64,path:PathBuf,url:RemoteUrl,events:Receiver<ListEvent>,tx:Sender<WorkerResult>,mut wake:UnixStream) {
-    let outcome=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
-        loop {
-            match events.recv() {
-                Ok(ListEvent::Chunk(items))=>{
-                    let rows=items.iter().map(|item|remote::entry_of(&url,item)).collect();
-                    send_wake(&mut wake,&tx,WorkerResult::RemoteRows{generation,path:path.clone(),rows});
-                },
-                Ok(ListEvent::Done{..})=>{
-                    send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path:path.clone(),failure:None});
-                    return;
-                },
-                Ok(ListEvent::Failed(flamewm_remote_fs::Error::Cancelled))=>return,
-                Ok(ListEvent::Failed(error))=>{
-                    if matches!(error,flamewm_remote_fs::Error::HostKeyUnknown{..}|flamewm_remote_fs::Error::AuthFailed{..}) {
-                        send_wake(&mut wake,&tx,WorkerResult::RemoteBlocked{generation,path:path.clone(),error});
-                    } else {
-                        send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path:path.clone(),failure:Some(remote::describe(&error))});
-                    }
-                    return;
-                },
-                Err(_)=>{
-                    send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path:path.clone(),failure:Some("Remote listing ended unexpectedly".into())});
-                    return;
-                },
-            }
+    loop {
+        match events.recv() {
+            Ok(ListEvent::Chunk(items))=>{
+                let rows=items.iter().map(|item|remote::entry_of(&url,item)).collect();
+                send_wake(&mut wake,&tx,WorkerResult::RemoteRows{generation,path:path.clone(),rows});
+            },
+            Ok(ListEvent::Done{..})=>{
+                send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path:path.clone(),failure:None});
+                return;
+            },
+            Ok(ListEvent::Failed(flamewm_remote_fs::Error::Cancelled))=>return,
+            Ok(ListEvent::Failed(error))=>{
+                if matches!(error,flamewm_remote_fs::Error::HostKeyUnknown{..}|flamewm_remote_fs::Error::AuthFailed{..}) {
+                    send_wake(&mut wake,&tx,WorkerResult::RemoteBlocked{generation,path:path.clone(),error});
+                } else {
+                    send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path:path.clone(),failure:Some(remote::describe(&error))});
+                }
+                return;
+            },
+            Err(_)=>{
+                send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path:path.clone(),failure:Some("Remote listing ended unexpectedly".into())});
+                return;
+            },
         }
-    }));
-    if outcome.is_err() {
-        send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path,failure:Some("Remote listing failed internally".into())});
     }
 }
 
 /// Waits for a remote download and reports the local cache path, or the error, to the UI loop.
 fn forward_download(local:PathBuf,transfers:Receiver<TransferEvent>,tx:Sender<WorkerResult>,mut wake:UnixStream) {
-    let outcome=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<PathBuf,String>{
-        loop {
-            match transfers.recv() {
-                Ok(TransferEvent::Done{..})=>return Ok(local.clone()),
-                Ok(TransferEvent::Progress{..})=>{},
-                Ok(TransferEvent::Failed(error))=>return Err(remote::describe(&error)),
-                Err(_)=>return Err("Download ended unexpectedly".into()),
-            }
+    let result:Result<PathBuf,String>=loop {
+        match transfers.recv() {
+            Ok(TransferEvent::Done{..})=>break Ok(local.clone()),
+            Ok(TransferEvent::Progress{..})=>{},
+            Ok(TransferEvent::Failed(error))=>break Err(remote::describe(&error)),
+            Err(_)=>break Err("Download ended unexpectedly".into()),
         }
-    }));
-    let result=outcome.unwrap_or_else(|_|Err("Download failed internally".into()));
+    };
     send_wake(&mut wake,&tx,WorkerResult::RemoteDownloaded(result));
 }
 

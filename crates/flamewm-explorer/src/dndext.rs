@@ -32,8 +32,6 @@ pub enum ExtractError {
     Timeout,
     /// The call returned an error. `message` is trimmed and bounded.
     Failed(String),
-    /// The worker panicked; the panic was contained.
-    Panicked,
 }
 
 /// Successful extraction: entries that did not exist before the call.
@@ -222,11 +220,7 @@ pub fn spawn_ark_extract(
     let spawned = thread::Builder::new()
         .name("flamewm-ark-extract".into())
         .spawn(move || {
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                extract_blocking(&service, &path, &dest)
-            }))
-            .unwrap_or(Err(ExtractError::Panicked));
-            let _ = tx.send(outcome);
+            let _ = tx.send(extract_blocking(&service, &path, &dest));
         });
     if let Err(error) = spawned {
         let (tx, rx) = mpsc::channel();

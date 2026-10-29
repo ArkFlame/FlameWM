@@ -21,6 +21,15 @@ use flamewm_ui_x11::{SurfaceRuntime, UiBackendError};
 
 use crate::entry::event_router::quick_popup_group;
 
+/// Minimum gap between clock-driven heap trims; churn is handed back at most this often.
+const CLOCK_HEAP_TRIM_INTERVAL: Duration = Duration::from_secs(600);
+
+thread_local! {
+    /// When the last clock-driven heap trim ran (UI thread only).
+    static LAST_CLOCK_HEAP_TRIM: std::cell::Cell<Option<Instant>> =
+        const { std::cell::Cell::new(None) };
+}
+
 mod helpers;
 mod launcher_session;
 mod quick_popups;
@@ -1921,7 +1930,17 @@ impl ShellLoop {
                 })?;
                 runtime.redraw(handle)?;
             }
-            flamewm_ui_x11::release_free_heap();
+            // Heap trim is gated to once per CLOCK_HEAP_TRIM_INTERVAL, not every clock tick.
+            let now_instant = std::time::Instant::now();
+            LAST_CLOCK_HEAP_TRIM.with(|last| {
+                if last
+                    .get()
+                    .is_none_or(|at| now_instant.duration_since(at) >= CLOCK_HEAP_TRIM_INTERVAL)
+                {
+                    last.set(Some(now_instant));
+                    flamewm_ui_x11::release_free_heap();
+                }
+            });
 
             let date = (now.year(), now.month() as u8, now.day() as u8);
             if self.date_tracker.date_changed(date) {
