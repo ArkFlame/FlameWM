@@ -224,6 +224,35 @@ pub(super) struct ShadowStats {
 /// Minimum spacing of present-triggered content refreshes: about 30 Hz per desktop.
 const CONTENT_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
 
+/// What the present-triggered content policy does on one turn. The reshade trigger and the reactor
+/// wake cap both come from `content_refresh`, so a capped refresh always has a wake at its due time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContentRefresh {
+    /// Nothing pending, or frames are moving (the flag waits for the settle).
+    Idle,
+    /// Pending on a quiet turn and due: re-shade now.
+    Refresh,
+    /// Pending on a quiet turn but capped: the trailing refresh is due after this delay.
+    WaitFor(std::time::Duration),
+}
+
+fn content_refresh(
+    pending: bool,
+    quiet: bool,
+    last: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> ContentRefresh {
+    if !pending || !quiet {
+        return ContentRefresh::Idle;
+    }
+    match last {
+        Some(at) if now.saturating_duration_since(at) < CONTENT_MIN_INTERVAL => {
+            ContentRefresh::WaitFor(CONTENT_MIN_INTERVAL - now.saturating_duration_since(at))
+        }
+        _ => ContentRefresh::Refresh,
+    }
+}
+
 /// Set once from `FLAMEWM_SHADOW_DIAG=1`; diagnostics are silent otherwise.
 fn shadow_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -262,6 +291,17 @@ impl DesktopFrame {
 impl ShadowScene {
     /// Advance the root generation for this turn and return its new value.
     fn advance(&mut self, membership: u64, backdrop: u64, geometry: Option<u64>) -> u64 {
+        self.advance_at(membership, backdrop, geometry, std::time::Instant::now())
+    }
+
+    /// `advance` with the clock injected, so the content rate limit is testable without sleeping.
+    fn advance_at(
+        &mut self,
+        membership: u64,
+        backdrop: u64,
+        geometry: Option<u64>,
+        now: std::time::Instant,
+    ) -> u64 {
         self.next_dragging.sort_unstable();
         self.next_dragging.dedup();
         let mut bump = !self.seeded;
@@ -284,12 +324,13 @@ impl ShadowScene {
         }
         // Desktop content (widgets, wallpaper) that changed under the rings. Only a quiet turn may
         // consume it: a gesture or flight must not re-shade, and the flag waits for the settle.
-        if geometry.is_some() && self.content_changed {
-            let now = std::time::Instant::now();
-            let due = self
-                .last_content_bump
-                .map_or(true, |at| now.duration_since(at) >= CONTENT_MIN_INTERVAL);
-            if due {
+        match content_refresh(
+            self.content_changed,
+            geometry.is_some(),
+            self.last_content_bump,
+            now,
+        ) {
+            ContentRefresh::Refresh => {
                 self.content_changed = false;
                 self.last_content_bump = Some(now);
                 self.stats.content_refreshes += 1;
@@ -297,9 +338,9 @@ impl ShadowScene {
                     eprintln!("flamewm: shadow content refresh stats={:?}", self.stats);
                 }
                 bump = true;
-            } else {
-                self.stats.content_skipped += 1;
             }
+            ContentRefresh::WaitFor(_) => self.stats.content_skipped += 1,
+            ContentRefresh::Idle => {}
         }
         std::mem::swap(&mut self.dragging, &mut self.next_dragging);
         self.next_dragging.clear();
@@ -374,6 +415,89 @@ mod scratch_equivalence_tests {
         assert!(scene.next_dragging.capacity() >= capacity);
         assert_eq!(scene.advance(11, 22, Some(33)), settled);
         assert_eq!(scene.advance(11, 23, Some(33)), settled.wrapping_add(1));
+    }
+}
+
+#[cfg(test)]
+mod content_refresh_tests {
+    use super::{CONTENT_MIN_INTERVAL, ContentRefresh, ShadowScene, content_refresh};
+    use crate::frame::shadow::{ShadowAction, ShadowState, plan_shadow};
+    use crate::geometry::Rect;
+    use std::time::{Duration, Instant};
+
+    const MS: fn(u64) -> Duration = Duration::from_millis;
+
+    #[test]
+    fn idle_unless_pending_and_quiet() {
+        let t = Instant::now();
+        assert_eq!(content_refresh(false, true, None, t), ContentRefresh::Idle);
+        assert_eq!(content_refresh(true, false, None, t), ContentRefresh::Idle);
+        assert_eq!(content_refresh(true, false, Some(t), t), ContentRefresh::Idle);
+    }
+
+    #[test]
+    fn trailing_refresh_is_due_exactly_at_the_cap() {
+        let t = Instant::now();
+        assert_eq!(content_refresh(true, true, Some(t), t + MS(10)), ContentRefresh::WaitFor(MS(23)));
+        assert_eq!(
+            content_refresh(true, true, Some(t), t + CONTENT_MIN_INTERVAL - MS(1)),
+            ContentRefresh::WaitFor(MS(1))
+        );
+        assert_eq!(content_refresh(true, true, Some(t), t + MS(33)), ContentRefresh::Refresh);
+    }
+
+    /// Two presents 10 ms apart: the second is capped, and the scene must still refresh at 33 ms
+    /// with no further desktop event. Generation bumps once per refresh, never on the capped turn.
+    #[test]
+    fn capped_present_is_refreshed_by_the_wake_at_the_cap() {
+        let mut scene = ShadowScene::default();
+        let t = Instant::now();
+        let g0 = scene.advance_at(1, 2, Some(3), t);
+        scene.content_changed = true;
+        let g1 = scene.advance_at(1, 2, Some(3), t + MS(0));
+        assert_eq!(g1, g0.wrapping_add(1));
+        assert!(!scene.content_changed);
+
+        scene.content_changed = true;
+        let capped = scene.advance_at(1, 2, Some(3), t + MS(10));
+        assert_eq!(capped, g1, "capped present must not bump the generation");
+        assert!(scene.content_changed, "pending flag survives until the cap expires");
+        assert_eq!(scene.stats.content_skipped, 1);
+
+        let trailing = scene.advance_at(1, 2, Some(3), t + MS(33));
+        assert_eq!(trailing, g1.wrapping_add(1), "trailing refresh fires at the cap");
+        assert!(!scene.content_changed);
+        assert_eq!(scene.stats.content_refreshes, 2);
+    }
+
+    /// A present that lands mid-gesture waits for the settle, then refreshes on the first quiet turn.
+    #[test]
+    fn present_during_motion_waits_for_the_settle() {
+        let mut scene = ShadowScene::default();
+        let t = Instant::now();
+        scene.advance_at(1, 2, Some(3), t);
+        scene.content_changed = true;
+        let moving = scene.advance_at(1, 2, None, t + MS(100));
+        assert!(scene.content_changed);
+        let settled = scene.advance_at(1, 2, Some(3), t + MS(101));
+        assert!(!scene.content_changed);
+        assert_eq!(settled, moving.wrapping_add(1));
+    }
+
+    /// Drag: while a gesture runs, a frame that moved gets its shadow moved in the same batch,
+    /// never left at the old place (the batch flushes once per turn).
+    #[test]
+    fn drag_step_moves_shadow_with_frame() {
+        let placed = Rect { x: 100, y: 100, width: 200, height: 150 };
+        let moved = Rect { x: 130, y: 90, width: 200, height: 150 };
+        let prev = ShadowState {
+            shaded: placed,
+            focused: true,
+            generation: 7,
+            placed,
+        };
+        assert_eq!(plan_shadow(Some(prev), moved, true, true, 7), ShadowAction::Move);
+        assert_eq!(plan_shadow(Some(prev), placed, true, true, 7), ShadowAction::Noop);
     }
 }
 
@@ -512,18 +636,27 @@ impl<C: Connection> Wm<'_, C> {
         wait: Option<std::time::Duration>,
     ) -> Option<std::time::Duration> {
         let scene = &self.shadow_scene;
-        let Some(at) = scene.last_content_bump else {
-            return wait;
-        };
-        if !scene.content_changed {
-            return wait;
+        match content_refresh(
+            scene.content_changed,
+            !self.shadow_motion(),
+            scene.last_content_bump,
+            std::time::Instant::now(),
+        ) {
+            ContentRefresh::WaitFor(remaining) => {
+                Some(wait.map_or(remaining, |w| w.min(remaining)))
+            }
+            ContentRefresh::Idle | ContentRefresh::Refresh => wait,
         }
-        let elapsed = at.elapsed();
-        if elapsed >= CONTENT_MIN_INTERVAL {
-            return wait;
-        }
-        let remaining = CONTENT_MIN_INTERVAL - elapsed;
-        Some(wait.map_or(remaining, |w| w.min(remaining)))
+    }
+
+    /// Something is flying: a gesture is activated or an animation runs. Geometry is only
+    /// comparable, and content only refreshable, once both are quiet.
+    fn shadow_motion(&self) -> bool {
+        self.animator.is_active()
+            || self
+                .sessions
+                .values()
+                .any(|state| drag_activated(&state.session))
     }
 
     /// Beneath the lowest managed frame, restack every shadow that a frame restack (raise, lower,
@@ -571,7 +704,7 @@ impl<C: Connection> Wm<'_, C> {
         );
         // The same "something is flying" predicate `transition_wait` uses to cap the reactor
         // wait: geometry is only meaningful once both are quiet.
-        let motion = !self.shadow_scene.next_dragging.is_empty() || self.animator.is_active();
+        let motion = self.shadow_motion();
         let membership = self.shadow_membership_hash();
         let backdrop = self.shadow_backdrop_hash();
         // Geometry is only comparable between two quiet turns: a dragged or animating frame

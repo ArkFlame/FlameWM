@@ -733,3 +733,69 @@ mod tests {
         }
     }
 }
+
+/// Compose micro-benchmark: run with
+/// `cargo test -p flamewm-wm-x11 --offline --release compose_bench -- --ignored --nocapture`.
+/// Prints min-of-N wall time per full ring compose (all four strips, rounded, focused and not).
+#[cfg(test)]
+mod compose_bench {
+    use super::*;
+    use crate::frame::shadow::{SPREAD, shadow_rect};
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    const FRAME: Rect = Rect {
+        x: 100,
+        y: 100,
+        width: 800,
+        height: 600,
+    };
+    const RADIUS: u32 = 10;
+    const RUNS: usize = 15;
+    const ITERS: usize = 4;
+
+    #[test]
+    #[ignore = "timing harness, run explicitly"]
+    fn compose_bench_min_of_n() {
+        let area = shadow_rect(FRAME);
+        let raw: Vec<u8> = (0..area.width as usize * area.height as usize)
+            .flat_map(|i| [(i % 251) as u8, (i % 113) as u8, (i % 67) as u8, 0])
+            .collect();
+        let compact = ShadowBands::capture_rounded(&raw, area, FRAME, RADIUS);
+        let strips: Vec<Rect> = visible_shadow_regions_rounded(area, FRAME, RADIUS)
+            .into_iter()
+            .flatten()
+            .collect();
+        let overlay = RootRubber {
+            x: FRAME.x + 50,
+            y: FRAME.y + 50,
+            width: 300,
+            height: 200,
+            fill: [0x20, 0x40, 0x80, 0x80],
+            border: [0xff, 0x00, 0x00, 0xff],
+        };
+        let mut out = Vec::new();
+        let mut best = [u128::MAX; 2];
+        for run in 0..RUNS {
+            for (slot, rubber) in [None, Some(&overlay)].into_iter().enumerate() {
+                let started = Instant::now();
+                for _ in 0..ITERS {
+                    for focused in [false, true] {
+                        for region in &strips {
+                            compose_visible_region_into(
+                                &compact, *region, FRAME, focused, rubber, &mut out,
+                            );
+                            black_box(&out);
+                        }
+                    }
+                }
+                let nanos = started.elapsed().as_nanos() / ITERS as u128;
+                if run > 0 {
+                    best[slot] = best[slot].min(nanos);
+                }
+            }
+        }
+        let px: usize = strips.iter().map(|r| r.width as usize * r.height as usize).sum();
+        println!("compose_bench spread={SPREAD} radius={RADIUS} strips_px={px} min_ns_plain={} min_ns_rubber={}", best[0], best[1]);
+    }
+}
