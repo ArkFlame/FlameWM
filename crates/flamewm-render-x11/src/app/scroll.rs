@@ -266,6 +266,7 @@ pub(crate) struct PaintNodeCache {
 
 struct NodeEntry {
     key: NodeKey,
+    style: Style,
     commands: Vec<PaintCommand>,
 }
 
@@ -274,7 +275,6 @@ struct NodeEntry {
 /// nothing and are not memoised. Image nodes are never memoised because their emission reads asset
 /// pixels and revisions.
 struct NodeKey {
-    style: Style,
     rect: Rect,
     content: Rect,
     text: String,
@@ -294,11 +294,10 @@ impl NodeKey {
     fn capture(
         document: &RuntimeDocument,
         layout: &LayoutResult,
-        interaction: Interaction,
+        _interaction: Interaction,
         index: u32,
     ) -> Self {
         Self {
-            style: document.runtime_style(index, interaction),
             rect: node_rect(layout, index),
             content: layout.content_extent(index),
             text: document.text_for(index).to_owned(),
@@ -311,7 +310,7 @@ impl NodeKey {
         &self,
         document: &RuntimeDocument,
         layout: &LayoutResult,
-        interaction: Interaction,
+        _interaction: Interaction,
         index: u32,
     ) -> bool {
         self.blur == document.node_backdrop_blur(index)
@@ -319,7 +318,15 @@ impl NodeKey {
             && self.rect == node_rect(layout, index)
             && self.content == layout.content_extent(index)
             && self.text == document.text_for(index)
-            && self.style == document.runtime_style(index, interaction)
+    }
+
+    fn style_matches(
+        document: &RuntimeDocument,
+        interaction: Interaction,
+        index: u32,
+        cached_style: &Style,
+    ) -> bool {
+        cached_style == &document.runtime_style(index, interaction)
     }
 }
 
@@ -341,7 +348,7 @@ fn paint_memo(
         }
         if let Some(entry) = slot
             .as_ref()
-            .filter(|entry| entry.key.matches(document, layout, interaction, index))
+            .filter(|entry| entry.key.matches(document, layout, interaction, index) && NodeKey::style_matches(document, interaction, index, &entry.style))
         {
             out.extend_from_slice(&entry.commands);
             #[cfg(test)]
@@ -354,22 +361,25 @@ fn paint_memo(
         {
             cache.misses += 1;
         }
-        let key = (document.document.nodes[index as usize].kind != NodeKind::Image)
-            .then(|| NodeKey::capture(document, layout, interaction, index));
-        layout.z_order.clear();
-        layout.z_order.push(index);
-        let commands = build_paint_commands_with_scroll(document, layout, interaction, &|i| {
-            document.scroll_offset(i)
-        });
-        match key {
-            Some(key) => {
-                out.extend_from_slice(&commands);
-                *slot = Some(Box::new(NodeEntry { key, commands }));
-            }
-            None => {
-                out.extend(commands);
-                *slot = None;
-            }
+        let is_image = document.document.nodes[index as usize].kind == NodeKind::Image;
+        if !is_image {
+            let key = NodeKey::capture(document, layout, interaction, index);
+            let style = document.runtime_style(index, interaction);
+            layout.z_order.clear();
+            layout.z_order.push(index);
+            let commands = build_paint_commands_with_scroll(document, layout, interaction, &|i| {
+                document.scroll_offset(i)
+            });
+            out.extend_from_slice(&commands);
+            *slot = Some(Box::new(NodeEntry { key, style, commands }));
+        } else {
+            layout.z_order.clear();
+            layout.z_order.push(index);
+            let commands = build_paint_commands_with_scroll(document, layout, interaction, &|i| {
+                document.scroll_offset(i)
+            });
+            out.extend(commands);
+            *slot = None;
         }
     }
 }
