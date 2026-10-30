@@ -3,11 +3,14 @@
 //!
 //! No UI dependencies, no async runtime, no TLS. Remote endpoints are refused.
 
+mod download;
 mod http;
 mod hermes;
 mod lifecycle;
-mod sse;
+mod process;
+mod sha256;
 mod speech;
+mod sse;
 mod store;
 
 pub use hermes::{
@@ -19,9 +22,16 @@ pub use lifecycle::{
     detect, install_plan, parse_version, start_gateway, transition, wait_until_ready,
     AssistantState, Detected, InstallPlan, LifeEvent, Paths, INSTALL_SCRIPT_URL,
 };
+pub use download::{check_pinned, default_models_dir, verify, CurlFetcher, DiskModelStore, Fetcher};
+pub use process::{
+    default_config_path, expand, start_recording, ProcessRunner, Recording, SpeechConfig,
+    SystemRunner,
+};
+pub use sha256::Sha256;
 pub use speech::{
-    ModelManifest, ModelStore, Speech, Transcriber, UnconfiguredModelStore, UnconfiguredSpeech,
-    UnconfiguredTranscriber,
+    default_manifests, encode_wav, CommandSpeech, CommandTranscriber, ModelManifest, ModelStore,
+    Speech, Stopper, Transcriber, UnconfiguredModelStore, UnconfiguredSpeech,
+    UnconfiguredTranscriber, UNPINNED,
 };
 pub use store::{ChatStore, Message, MsgState, Role, SessionState};
 
@@ -50,6 +60,10 @@ pub enum AssistantError {
     Store(String),
     /// A speech or model capability has no implementation configured.
     NotConfigured(String),
+    /// A model has no pinned SHA-256, so it cannot be verified and is not downloaded.
+    ChecksumUnavailable(String),
+    /// A downloaded or installed model does not match its manifest.
+    ChecksumMismatch(String),
 }
 
 impl AssistantError {
@@ -71,6 +85,7 @@ impl fmt::Display for AssistantError {
             Self::Io(m) => write!(f, "I/O error: {m}"),
             Self::Store(m) => write!(f, "history store error: {m}"),
             Self::NotConfigured(m) => f.write_str(m),
+            Self::ChecksumUnavailable(m) | Self::ChecksumMismatch(m) => f.write_str(m),
         }
     }
 }

@@ -26,10 +26,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_assistant_core::{
-    AssistantError, AssistantState, CancelToken, ChatStore, Detected, HermesClient, HermesConfig,
-    LifeEvent, Message, MsgState, Paths, Role, SessionState, Speech, TurnEvent, TurnOutcome,
-    TurnRequest, UnconfiguredSpeech, candidate_urls, detect, discover, install_plan, read_env,
-    start_gateway, transition, wait_until_ready, DEFAULT_BASE_URL,
+    default_config_path, AssistantError, AssistantState, CancelToken, ChatStore, Detected, HermesClient, HermesConfig,
+    LifeEvent, Message, MsgState, Paths, Recording, Role, SessionState, Speech, SpeechConfig,
+    Stopper, TurnEvent, TurnOutcome, TurnRequest, Transcriber, candidate_urls, default_manifests,
+    detect, discover, install_plan, read_env, start_gateway, transition, wait_until_ready,
+    CommandSpeech, CommandTranscriber, CurlFetcher, DiskModelStore, ModelManifest, ModelStore,
+    SystemRunner, DEFAULT_BASE_URL,
 };
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
@@ -62,6 +64,34 @@ enum Msg {
     Started(Result<String, String>),
     Turn(TurnEvent),
     TurnDone(Result<TurnOutcome, AssistantError>),
+    /// Model download progress: bytes done and total (0 when unknown).
+    Download(u64, u64),
+    /// A model download finished for the given kind.
+    Fetched(SpeechKind, Result<PathBuf, AssistantError>),
+    /// A transcript, or the reason none was produced.
+    Heard(Result<String, AssistantError>),
+    /// Speech finished, was stopped, or failed.
+    Spoke(Result<(), AssistantError>),
+}
+
+/// The two on-demand models. Each maps to one manifest in `default_manifests`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpeechKind {
+    Stt,
+    Tts,
+}
+
+impl SpeechKind {
+    fn manifest(self) -> ModelManifest {
+        let name = match self {
+            Self::Stt => "stt-phonon-2",
+            Self::Tts => "tts-phonon-local",
+        };
+        default_manifests()
+            .into_iter()
+            .find(|m| m.name == name)
+            .expect("manifest for every speech kind")
+    }
 }
 
 /// Sends a message to the window and pokes its wake pipe.
@@ -100,6 +130,16 @@ struct Assistant {
     cancel: CancelToken,
     notice: String,
     tts_on: bool,
+    /// Parsed `assistant-speech.conf`, or the reason it could not be read.
+    speech_cfg: Result<SpeechConfig, String>,
+    /// Open microphone capture while the user is recording.
+    recording: Option<Recording>,
+    /// Model currently being downloaded.
+    downloading: Option<SpeechKind>,
+    /// Text waiting for the TTS model to finish downloading.
+    pending_speech: Option<String>,
+    speaking: bool,
+    speech_stop: Option<Stopper>,
 }
 
 impl model::Pager for ChatStore {
@@ -150,6 +190,10 @@ impl Assistant {
         let speech_out = flag(&theme, "assistant.textToSpeech");
         let total = store.len() as u64;
         let history = History::open(&mut store, total)?;
+        let speech_cfg = match default_config_path() {
+            Some(path) => SpeechConfig::load(&path).map_err(|error| error.to_string()),
+            None => Ok(SpeechConfig::default()),
+        };
         Ok(Self {
             paths,
             bus,
@@ -169,6 +213,12 @@ impl Assistant {
             cancel: CancelToken::new(),
             notice: String::new(),
             tts_on: false,
+            speech_cfg,
+            recording: None,
+            downloading: None,
+            pending_speech: None,
+            speaking: false,
+            speech_stop: None,
         })
     }
 
@@ -234,6 +284,24 @@ impl Assistant {
             }
             Msg::Turn(TurnEvent::Delta(text)) => self.history.append_pending(&text),
             Msg::TurnDone(result) => self.finish_turn(result),
+            Msg::Download(done, total) => {
+                if total > 0 {
+                    self.notice = format!("Downloading models {}%", done.saturating_mul(100) / total);
+                } else {
+                    self.notice = "Downloading models...".into();
+                }
+            }
+            Msg::Fetched(kind, result) => self.fetched(kind, result),
+            Msg::Heard(result) => self.heard(result),
+            Msg::Spoke(result) => {
+                self.speaking = false;
+                self.speech_stop = None;
+                if let Err(error) = result {
+                    if error != AssistantError::Cancelled {
+                        self.notice = error.to_string();
+                    }
+                }
+            }
         }
     }
 
@@ -317,8 +385,173 @@ impl Assistant {
     }
 
     fn cancel(&mut self) {
+        if self.speaking || self.pending_speech.is_some() {
+            self.stop_speech();
+            return;
+        }
+        if let Some(recording) = self.recording.take() {
+            let _ = recording.finish();
+            self.notice = "Recording discarded.".into();
+            return;
+        }
         if self.working {
             self.cancel.cancel();
+        }
+    }
+
+    /// Mic press: start recording, or stop and transcribe. Downloads the STT model first if absent.
+    fn toggle_mic(&mut self) {
+        if !self.speech_in {
+            self.notice = "Speech input is off. Enable it in Settings > Assistant.".into();
+            return;
+        }
+        if let Some(recording) = self.recording.take() {
+            let samples = recording.finish();
+            if samples.is_empty() {
+                self.notice = "No audio was captured.".into();
+            } else {
+                self.transcribe(samples);
+            }
+            return;
+        }
+        if self.downloading.is_some() {
+            return;
+        }
+        let cfg = match self.speech_config() {
+            Some(cfg) => cfg,
+            None => return,
+        };
+        if self.installed_model(SpeechKind::Stt).is_none() {
+            self.fetch_model(SpeechKind::Stt);
+            return;
+        }
+        let argv = match flamewm_assistant_core::expand(&cfg.record, &[]) {
+            Ok(argv) => argv,
+            Err(error) => {
+                self.notice = error.to_string();
+                return;
+            }
+        };
+        match flamewm_assistant_core::start_recording(&argv) {
+            Ok(recording) => {
+                self.recording = Some(recording);
+                self.notice = "Listening... press the mic again to stop.".into();
+            }
+            Err(error) => self.notice = error.to_string(),
+        }
+    }
+
+    fn transcribe(&mut self, samples: Vec<i16>) {
+        let Some(cfg) = self.speech_config() else { return };
+        let Some(template) = cfg.transcribe.clone() else {
+            self.notice = "Speech-to-text is not configured: set transcribe_command.".into();
+            return;
+        };
+        let Some(model) = self.installed_model(SpeechKind::Stt) else {
+            self.notice = "The speech model is not installed.".into();
+            return;
+        };
+        self.notice = "Transcribing...".into();
+        let bus = self.bus.clone();
+        thread::spawn(move || {
+            let mut stt = CommandTranscriber::new(Box::new(SystemRunner), &template, model, CancelToken::new());
+            bus.send(Msg::Heard(stt.transcribe(&samples)));
+        });
+    }
+
+    fn heard(&mut self, result: Result<String, AssistantError>) {
+        match result {
+            Ok(text) if text.trim().is_empty() => self.notice = "No speech was recognized.".into(),
+            Ok(text) => {
+                model::insert_text(&mut self.input, text.trim());
+                self.notice.clear();
+            }
+            Err(error) => self.notice = error.to_string(),
+        }
+    }
+
+    /// Speaks a reply. Downloads the TTS model first when it is missing.
+    fn speak(&mut self, text: String) {
+        let Some(cfg) = self.speech_config() else { return };
+        let Some(synth) = cfg.synthesize.clone() else {
+            self.notice = "Text-to-speech is not configured: set synthesize_command.".into();
+            return;
+        };
+        let Some(model) = self.installed_model(SpeechKind::Tts) else {
+            self.pending_speech = Some(text);
+            self.fetch_model(SpeechKind::Tts);
+            return;
+        };
+        self.stop_speech();
+        let mut speech = CommandSpeech::new(
+            Box::new(SystemRunner),
+            &synth,
+            &cfg.play,
+            model,
+            self.paths.state_dir.join("speech"),
+        );
+        self.speaking = true;
+        self.speech_stop = Some(speech.stopper());
+        let bus = self.bus.clone();
+        thread::spawn(move || bus.send(Msg::Spoke(speech.speak(&text))));
+    }
+
+    fn stop_speech(&mut self) {
+        if let Some(stopper) = self.speech_stop.take() {
+            stopper.stop();
+        }
+        self.speaking = false;
+        self.pending_speech = None;
+    }
+
+    fn fetched(&mut self, kind: SpeechKind, result: Result<PathBuf, AssistantError>) {
+        self.downloading = None;
+        match result {
+            Ok(_) => {
+                self.notice = match kind {
+                    SpeechKind::Stt => "Speech model ready. Press the mic to speak.".into(),
+                    SpeechKind::Tts => "Voice model ready.".into(),
+                };
+                if let Some(text) = self.pending_speech.take() {
+                    self.speak(text);
+                }
+            }
+            Err(error) => {
+                self.pending_speech = None;
+                self.notice = error.to_string();
+            }
+        }
+    }
+
+    fn fetch_model(&mut self, kind: SpeechKind) {
+        let Some(dir) = flamewm_assistant_core::default_models_dir() else {
+            self.notice = "No data directory is available for speech models.".into();
+            return;
+        };
+        self.downloading = Some(kind);
+        self.notice = "Downloading models...".into();
+        let bus = self.bus.clone();
+        thread::spawn(move || {
+            let mut store = DiskModelStore::new(dir, CurlFetcher::default());
+            let manifest = kind.manifest();
+            let result = store.fetch(&manifest, &mut |done, total| bus.send(Msg::Download(done, total)));
+            bus.send(Msg::Fetched(kind, result));
+        });
+    }
+
+    fn installed_model(&self, kind: SpeechKind) -> Option<PathBuf> {
+        let dir = flamewm_assistant_core::default_models_dir()?;
+        DiskModelStore::new(dir, CurlFetcher::default()).installed(&kind.manifest().name)
+    }
+
+    /// The parsed speech config, or a notice naming the problem.
+    fn speech_config(&mut self) -> Option<SpeechConfig> {
+        match &self.speech_cfg {
+            Ok(cfg) => Some(cfg.clone()),
+            Err(error) => {
+                self.notice = format!("Speech config is invalid: {error}");
+                None
+            }
         }
     }
 
@@ -364,10 +597,7 @@ impl Assistant {
                 self.remember_session(session);
                 self.save(Role::Assistant, &text, None, MsgState::Complete);
                 if self.tts_on {
-                    let mut speech = UnconfiguredSpeech;
-                    if let Err(error) = speech.speak(&text) {
-                        self.notice = error.to_string();
-                    }
+                    self.speak(text);
                 }
             }
             Ok(TurnOutcome::Cancelled { partial: streamed }) => {
@@ -437,13 +667,15 @@ impl Assistant {
             "assistant.tts" => {
                 if self.speech_out {
                     self.tts_on = !self.tts_on;
+                    if !self.tts_on {
+                        self.stop_speech();
+                    }
+                } else {
+                    self.notice = "Text-to-speech is off. Enable it in Settings > Assistant.".into();
                 }
             }
-            "assistant.mic" | "assistant.record" => {
-                if self.speech_in {
-                    self.notice = "Speech input is not configured.".into();
-                }
-            }
+            "assistant.speak-stop" => self.stop_speech(),
+            "assistant.mic" | "assistant.record" => self.toggle_mic(),
             _ => {}
         }
     }
@@ -525,6 +757,7 @@ impl Assistant {
         let empty = self.input.is_empty();
         let mic = self.speech_in && empty && !self.working;
         doc.visible("working", self.working)?;
+        doc.visible("speaking", self.speaking)?;
         doc.visible("placeholder", empty)?;
         doc.visible("input", !empty)?;
         doc.text("input", self.input.clone())?;
