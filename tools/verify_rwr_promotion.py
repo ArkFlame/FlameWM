@@ -26,9 +26,9 @@ def sha256_file(path: Path) -> str:
 # re-accepted here. Non-pinned owners keep full token-identity checks.
 ACCEPTED_OWNERS: dict[str, dict[str, str]] = {
     "crates/flamewm-render-core/src/lib.rs": {
-        "sha256": "c1f862a9ed44bc804dbc1f50a117f3bbffa20bf42916d3d92a7484374742d9d1",
-        "delta": "adds PixelBackend, PixelOp, RoundedRect and RenderAcceleration (shared CPU/GPU renderer domain) and the surface_material module and re-exports on top of text_layout exports",
-        "reason": "re-accepted after reviewed post-baseline changes (2026-10-29)",
+        "sha256": "8af861a9971a7be225749a7f8a0899bf61360ff7f483ecab69aee66c32b9ea1a",
+        "delta": "adds PixelBackend, PixelOp, RoundedRect and RenderAcceleration (shared CPU/GPU renderer domain) and the surface_material module and re-exports on top of text_layout exports, plus the hash module (fast integer-keyed maps)",
+        "reason": "re-accepted after reviewing merged PR #15 (2026-10-30)",
     },
     "crates/flamewm-render-core/src/codec.rs": {
         "sha256": "4a197baf032b3de42c1a935dc3b2f5d82a5db6af3ff59433c9ffd23e3af1628f",
