@@ -183,6 +183,25 @@ pub(crate) fn capture_drawable_rect(
     };
     let row_out_len = (width_px as usize) * 4;
     let mut pixels = vec![0u8; row_out_len * (height_px as usize)];
+    let plain_bgrx = bytes_per_pixel == 4
+        && byte_order == 0
+        && (red_mask, green_mask, blue_mask) == (0xff_0000, 0xff_00, 0xff)
+        && bytes_per_line >= row_out_len
+        && data.len() >= bytes_per_line * (height_px as usize - 1) + row_out_len;
+    if plain_bgrx {
+        for (row, out_row) in pixels.chunks_exact_mut(row_out_len).enumerate() {
+            let source = &data[row * bytes_per_line..row * bytes_per_line + row_out_len];
+            for (out, pixel) in out_row.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+                out.copy_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+            }
+        }
+        unsafe { XDestroyImage(image) };
+        return Ok(BackdropCapture {
+            width: width_px,
+            height: height_px,
+            pixels,
+        });
+    }
     for (row, out_row) in pixels.chunks_exact_mut(row_out_len).enumerate() {
         let row_base = row.saturating_mul(bytes_per_line);
         for (col, out) in out_row.chunks_exact_mut(4).enumerate() {
