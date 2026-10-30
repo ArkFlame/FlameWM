@@ -143,7 +143,8 @@ post-build `flamewm-wayland --capabilities` check for `drm_compiled=true`.
 
 `packaging/debian/control.in` adds the Wayland runtime set on top of the
 existing X11 dependencies: `libgbm1, libdrm2, libinput10, libudev1, libegl1,
-libgles2, xwayland`. Seat access is implemented against systemd-logind over
+libgles2, xwayland`. The full classification (Depends, Recommends, Suggests, and
+the Arch mapping) is in [`DEPENDENCIES.md`](DEPENDENCIES.md). Seat access is implemented against systemd-logind over
 D-Bus, so no seat library (`libseat`) and no `seatd` is packaged or required.
 
 No Wayland login on real hardware is on record yet. See

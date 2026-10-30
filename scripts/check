@@ -8,6 +8,7 @@ python3 -I tools/ui_contract_guard.py
 python3 -I -m unittest discover -s tools -p 'test_ui_contract_guard.py' -q
 python3 -I -m unittest discover -s tools -p 'test_desktop_convert_css_contract.py' -q
 python3 -I -m unittest discover -s tools -p 'test_package_source_archive.py' -q
+python3 -I -m unittest discover -s tools -p 'test_flamewm_package_dependencies.py' -q
 cargo metadata --format-version 1 --no-deps >/dev/null
 python3 -I tools/ensure_desktop_conversion_cargo.py --profile dev --include-ui
 cargo check --workspace --all-targets

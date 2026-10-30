@@ -141,7 +141,7 @@ reported and is still under investigation; no successful hardware login of the
 native backend is on record.
 
 The desktop **Convert** wheel runs ImageMagick (`magick` or `convert`) as an
-optional subprocess. The Debian package recommends `imagemagick`; when it is
+optional subprocess. The Debian package suggests `imagemagick`; when it is
 absent, install it with `sudo apt install imagemagick`. Exact AVIF/HEIC format
 support depends on the installed ImageMagick delegates and security policy.
 

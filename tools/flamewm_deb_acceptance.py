@@ -38,8 +38,9 @@ BINARIES = [
     "flamewm-lock",
     "flamewm-wayland",
 ]
-REQUIRED_DEPENDS = ["libx11-6", "libxi6", "libxft2", "libfontconfig1", "libdbus-1-3", "libpulse0",
-                    "libpam0g", "libpam-runtime", "python3"]
+REQUIRED_DEPENDS = ["libc6", "libgcc-s1", "libx11-6", "libxi6", "libxkbcommon0", "libxft2", "libfontconfig1",
+                    "libdbus-1-3", "libpulse0", "libpam0g", "libpam-runtime", "libgbm1", "libdrm2",
+                    "libinput10", "libudev1", "libegl1", "libgles2", "python3", "xwayland"]
 FORBIDDEN_RECOMMENDS = {"ffmpeg", "imagemagick", "poppler-utils", "pandoc", "x11-xserver-utils",
                         "xdg-desktop-portal-kde", "dbus-user-session", "kwallet6", "libpam-kwallet5",
                         "dex", "lxqt-policykit", "xfce4-notifyd", "x11-utils"}
