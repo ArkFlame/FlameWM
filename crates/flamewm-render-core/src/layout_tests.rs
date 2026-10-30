@@ -419,3 +419,52 @@ fn text_edit_damage_follows_box_change() {
         SurfaceDamage::None
     );
 }
+
+#[test]
+fn hidden_scroller_does_not_contribute_scroll_extent() {
+    let scroller = Style {
+        width: Length::Px(50.0),
+        overflow_y: Overflow::Auto,
+        ..Style::default()
+    };
+    let tall = Style {
+        height: Length::Px(300.0),
+        ..Style::default()
+    };
+    let nodes = vec![
+        geometry_node(
+            NodeKind::Element,
+            None,
+            Some(1),
+            None,
+            "root",
+            Style::default(),
+        ),
+        geometry_node(
+            NodeKind::Element,
+            Some(0),
+            Some(2),
+            None,
+            "scroller",
+            scroller,
+        ),
+        geometry_node(NodeKind::Element, Some(1), None, None, "tall", tall),
+    ];
+    let mut document = RuntimeDocument::new(CompiledDocument {
+        source_fingerprint: 0,
+        root: 0,
+        variables: Vec::new(),
+        assets: Vec::new(),
+        nodes,
+    })
+    .expect("scroll document validates");
+
+    let visible = LayoutEngine::compute(&document, 200.0, 200.0, InteractionState::default());
+    assert!(visible.content_extent(1).height >= 300.0);
+
+    document
+        .set_visible("scroller", false)
+        .expect("hide scroller");
+    let hidden = LayoutEngine::compute(&document, 200.0, 200.0, InteractionState::default());
+    assert!(hidden.content_extent(1).height < 300.0);
+}

@@ -982,3 +982,57 @@ mod z_index_tests {
         assert_eq!(bulk, vec![0, 0, 7, 3, 7, -2]);
     }
 }
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+    use crate::layout::LayoutEngine;
+    use crate::paint::{PaintCommand, build_paint_commands};
+
+    /// root > panel (40x40 red fill) > label (text).
+    fn panel_document() -> RuntimeDocument {
+        let painted = Style {
+            width: Length::Px(40.0),
+            height: Length::Px(40.0),
+            background: ColorValue::Literal(Color::rgb(200, 30, 30)),
+            ..Style::default()
+        };
+        let mut root = fixture_node(NodeKind::Element, "root", "", None);
+        root.first_child = Some(1);
+        let mut panel = fixture_node(NodeKind::Element, "panel", "", None);
+        panel.parent = Some(0);
+        panel.first_child = Some(2);
+        panel.style = painted.into();
+        let mut label = fixture_node(NodeKind::Text, "label", "hi", None);
+        label.parent = Some(1);
+        fixture_document(vec![root, panel, label], Vec::new())
+    }
+
+    fn panel_fills(document: &RuntimeDocument) -> usize {
+        let layout = LayoutEngine::compute(document, 100.0, 100.0, InteractionState::default());
+        let panel_rect = layout.boxes[1].rect;
+        build_paint_commands(document, &layout, InteractionState::default())
+            .iter()
+            .filter(|command| {
+                matches!(command, PaintCommand::FillRect { rect, .. } if *rect == panel_rect)
+            })
+            .count()
+    }
+
+    #[test]
+    fn hidden_ancestor_hides_descendants_from_paint_and_visibility() {
+        let mut document = panel_document();
+        assert!(document.is_effectively_visible(2));
+        assert_eq!(panel_fills(&document), 1);
+
+        document.set_visible("panel", false).expect("hide panel");
+        assert!(!document.is_effectively_visible(1));
+        assert!(!document.is_effectively_visible(2));
+        assert!(document.is_effectively_visible(0));
+        assert_eq!(panel_fills(&document), 0);
+
+        document.set_visible("panel", true).expect("show panel");
+        assert!(document.is_effectively_visible(2));
+        assert_eq!(panel_fills(&document), 1);
+    }
+}
