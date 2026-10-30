@@ -23,11 +23,18 @@ pub fn explain(error: &AssistantError, url: &str) -> String {
         }
         AssistantError::Unreachable(_) => format!("Hermes is not reachable at {url}. Start it, then retry."),
         AssistantError::Timeout => "Hermes did not answer in time. Retry, or stop the reply.".into(),
+        AssistantError::RunFailed(message) if message.contains("not logged in") || message.contains("not logged into") => {
+            "Hermes is not logged in: run `hermes auth` (or `hermes model`), then Retry.".into()
+        }
         AssistantError::RunFailed(message) => format!("Hermes could not finish the reply: {}", first_line(message)),
         AssistantError::Protocol(_) => "Hermes sent a reply this app could not read. Retry.".into(),
         other => first_line(&other.to_string()),
     }
 }
+
+/// Start-job result when a Hermes gateway is already running. Starting a second one
+/// would conflict, so the app asks the user before running `hermes gateway restart`.
+pub const RESTART_NEEDED: &str = "Hermes needs a quick restart to let Flamy talk to it. Restart now?";
 
 fn first_line(text: &str) -> String {
     text.lines().next().unwrap_or("").trim().to_owned()
@@ -197,10 +204,22 @@ pub fn run_streaming(
 }
 
 fn spawn_reader(pipe: impl Read + Send + 'static, tx: std::sync::mpsc::Sender<String>) -> std::thread::JoinHandle<()> {
+    // Byte-wise so one non-UTF-8 line cannot stop the reader and block the child on a full pipe.
     std::thread::spawn(move || {
-        for line in BufReader::new(pipe).lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
-                break;
+        let mut reader = BufReader::new(pipe);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    while matches!(buf.last(), Some(b'\n' | b'\r')) {
+                        buf.pop();
+                    }
+                    if tx.send(String::from_utf8_lossy(&buf).into_owned()).is_err() {
+                        break;
+                    }
+                }
             }
         }
     })
@@ -220,6 +239,7 @@ mod tests {
             (AssistantError::Timeout, "did not answer in time"),
             (AssistantError::RunFailed("not logged in\nmore".into()), "not logged in"),
             (AssistantError::Protocol("x".into()), "could not read"),
+            (AssistantError::RunFailed("Hermes is not logged into Nous Portal.".into()), "hermes auth"),
         ];
         for (error, want) in cases {
             let line = explain(&error, url);

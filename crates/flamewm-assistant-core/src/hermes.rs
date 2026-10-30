@@ -17,9 +17,8 @@ use crate::sse::SseParser;
 use crate::{AssistantError, CancelToken};
 
 pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8642";
-/// Ports probed after the configured URL: the documented default and the port
-/// the live API server was seen on.
-pub const PROBE_PORTS: [u16; 2] = [8642, 8645];
+/// Ports probed after the configured URL and the `.env` port: the documented default.
+pub const PROBE_PORTS: [u16; 1] = [8642];
 /// Header carrying the Hermes session id on the chat-completions route. Kept for
 /// compatibility; runs carry the session in the body as `session_id`.
 pub const SESSION_HEADER: &str = "X-Hermes-Session-Id";
@@ -764,7 +763,6 @@ mod tests {
             vec![
                 "http://127.0.0.1:8642".to_owned(),
                 "http://127.0.0.1:9001".to_owned(),
-                "http://127.0.0.1:8645".to_owned(),
             ]
         );
     }

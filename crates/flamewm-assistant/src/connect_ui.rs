@@ -4,7 +4,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -104,14 +104,92 @@ pub(super) fn start_job(paths: &Paths, binary: &Path, url: &str) -> Result<Strin
         .map_err(|error| explain(&error, url))
 }
 
-/// Runs the user-confirmed installer. Each output line goes to the window and the log.
+const LINE_CHARS: usize = 300;
+
+/// Makes one installer output line safe for a single-line label: drops ANSI escapes and the
+/// replacement character, keeps the last segment of a carriage-return progress line, turns tabs
+/// into spaces, removes other control characters and collapses spaces.
+pub(super) fn sanitize_line(raw: &str) -> String {
+    let plain = strip_ansi(raw);
+    let last = plain.split('\r').rev().find(|part| !part.trim().is_empty()).unwrap_or("");
+    let clean: String = last
+        .chars()
+        .filter(|c| *c != '\u{FFFD}')
+        .map(|c| if c == '\t' { ' ' } else { c })
+        .filter(|c| !c.is_control())
+        .collect();
+    clean.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(LINE_CHARS).collect()
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek().copied() {
+            // CSI: parameter bytes, then one final byte in 0x40..=0x7e.
+            Some('[') => {
+                chars.next();
+                for d in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&d) {
+                        break;
+                    }
+                }
+            }
+            // OSC: ends with BEL or ESC \.
+            Some(']') => {
+                chars.next();
+                while let Some(d) = chars.next() {
+                    if d == '\u{7}' {
+                        break;
+                    }
+                    if d == '\u{1b}' {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            // Any other two-byte escape.
+            Some(_) => {
+                chars.next();
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+/// Runs the user-confirmed installer. Each output line goes to the log; the window gets the
+/// newest sanitized line at most about five times a second, and the final one before it returns.
 pub(super) fn install_job(paths: &Paths, bus: &Bus) -> Result<Detected, String> {
     let plan = install_plan();
-    let progress = bus.clone();
+    let latest = Arc::new(Mutex::new(None::<String>));
+    let done = Arc::new(AtomicBool::new(false));
+    let flusher = {
+        let (latest, done, bus) = (Arc::clone(&latest), Arc::clone(&done), bus.clone());
+        thread::spawn(move || loop {
+            let finished = done.load(Ordering::SeqCst);
+            if let Some(line) = latest.lock().ok().and_then(|mut slot| slot.take()) {
+                bus.send(Msg::Progress(line));
+            }
+            if finished {
+                break;
+            }
+            thread::sleep(Duration::from_millis(200));
+        })
+    };
     let code = run_streaming(&plan.shell_command, &paths.log_path(), &CancelToken::new(), &mut |line| {
-        progress.send(Msg::Progress(line.to_owned()));
-    })
-    .map_err(|error| error.to_string())?;
+        let clean = sanitize_line(line);
+        if let (false, Ok(mut slot)) = (clean.is_empty(), latest.lock()) {
+            *slot = Some(clean);
+        }
+    });
+    done.store(true, Ordering::SeqCst);
+    let _ = flusher.join();
+    let code = code.map_err(|error| error.to_string())?;
     if code != Some(0) {
         return Err(format!("the installer exited with status {code:?}"));
     }
@@ -137,5 +215,32 @@ mod tests {
         assert_eq!(elapsed_text(0), "0s");
         assert_eq!(elapsed_text(59), "59s");
         assert_eq!(elapsed_text(61), "1m 01s");
+    }
+
+    #[test]
+    fn sanitize_strips_ansi_sequences() {
+        assert_eq!(sanitize_line("\u{1b}[1;32mSuccess\u{1b}[0m done"), "Success done");
+        assert_eq!(sanitize_line("\u{1b}]0;title\u{7}Ready"), "Ready");
+        assert_eq!(sanitize_line("\u{1b}]8;;http://x\u{1b}\\link\u{1b}c"), "link");
+    }
+
+    #[test]
+    fn sanitize_keeps_last_carriage_return_segment() {
+        assert_eq!(sanitize_line("10%\r20%\r100% done\r"), "100% done");
+        assert_eq!(sanitize_line("fetch 5/9\r   \r"), "fetch 5/9");
+    }
+
+    #[test]
+    fn sanitize_truncates_long_lines_and_drops_controls() {
+        let long = sanitize_line(&"a".repeat(500));
+        assert_eq!(long.chars().count(), LINE_CHARS);
+        assert_eq!(sanitize_line("x\u{0}y\tz\u{7f}"), "xy z");
+        assert_eq!(sanitize_line("   \t  "), "");
+    }
+
+    #[test]
+    fn sanitize_handles_non_utf8_bytes() {
+        let raw = String::from_utf8_lossy(&[b'o', b'k', 0xff, b'!']).into_owned();
+        assert_eq!(sanitize_line(&raw), "ok!");
     }
 }

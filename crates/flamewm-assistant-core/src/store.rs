@@ -491,13 +491,13 @@ mod tests {
             store
                 .set_session(SessionState {
                     hermes_session: Some("sess-42".into()),
-                    hermes_url: Some("http://127.0.0.1:8645".into()),
+                    hermes_url: Some("http://127.0.0.1:8642".into()),
                 })
                 .unwrap();
         }
         let store = ChatStore::open(&dir).unwrap();
         assert_eq!(store.session().hermes_session.as_deref(), Some("sess-42"));
-        assert_eq!(store.session().hermes_url.as_deref(), Some("http://127.0.0.1:8645"));
+        assert_eq!(store.session().hermes_url.as_deref(), Some("http://127.0.0.1:8642"));
         assert!(!dir.join("state.tmp").exists());
     }
 

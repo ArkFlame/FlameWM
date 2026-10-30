@@ -120,6 +120,8 @@ struct Assistant {
     working: bool,
     cancel: CancelToken,
     notice: String,
+    /// Newest sanitized installer output line, shown under "Installing Hermes...".
+    install_line: String,
     /// The last prompt sent, restored into the input by Retry.
     last_prompt: String,
     tts_on: bool,
@@ -212,6 +214,7 @@ impl Assistant {
             working: false,
             cancel: CancelToken::new(),
             notice: String::new(),
+            install_line: String::new(),
             last_prompt: String::new(),
             tts_on: false,
             speech_cfg,
@@ -267,12 +270,14 @@ impl Assistant {
             }
             Msg::Installed(Ok(found)) => {
                 self.installing = false;
+                self.install_line.clear();
                 self.binary = Some(found.binary);
                 self.state = transition(&self.state, LifeEvent::Detected(Some(found.version)));
                 self.start();
             }
             Msg::Installed(Err(message)) => {
                 self.installing = false;
+                self.install_line.clear();
                 self.state = transition(&self.state, LifeEvent::Failed(message));
             }
             Msg::Started(Ok(url)) => {
@@ -290,7 +295,7 @@ impl Assistant {
             Msg::Turn(TurnEvent::Delta(text)) => self.history.append_pending(&text),
             Msg::Turn(event @ TurnEvent::Activity(_)) => connect_ui::on_turn_activity(self, event),
             Msg::Tick(secs) => connect_ui::working_tick(self, secs),
-            Msg::Progress(line) => self.notice = line.chars().take(160).collect(),
+            Msg::Progress(line) => self.install_line = line,
             Msg::TurnDone(result) => self.finish_turn(result),
             Msg::VoiceProgress(percent, label) => self.notice = voice_setup_ui::progress_notice(percent, &label),
             Msg::VoiceSetup(result) => self.fetched(result),
@@ -355,6 +360,7 @@ impl Assistant {
     fn install(&mut self) {
         self.confirm = false;
         self.installing = true;
+        self.install_line.clear();
         self.notice.clear();
         let paths = self.paths.clone();
         let bus = self.bus.clone();
@@ -793,7 +799,8 @@ impl Assistant {
         match screen {
             Screen::Loading => {
                 let text = if self.installing { "Installing Hermes..." } else { "Loading..." };
-                doc.text("loading-text", text.to_owned())
+                doc.text("loading-text", text.to_owned())?;
+                doc.text("loading-detail", or_blank(self.install_line.clone()))
             }
             Screen::Connect => doc.text("connect-status", or_blank(self.status_text())),
             Screen::Confirm => doc.text("install-cmd", install_plan().shell_command),
@@ -1045,9 +1052,9 @@ mod tests {
         let mut theme = SettingsSnapshot::new(1);
         assert_eq!(hermes_url(&theme), DEFAULT_BASE_URL);
         assert!(!flag(&theme, "assistant.speechToText"));
-        theme.values.insert("assistant.hermesUrl".into(), SettingValue::Text(" http://127.0.0.1:8645 ".into()));
+        theme.values.insert("assistant.hermesUrl".into(), SettingValue::Text(" http://127.0.0.1:8642 ".into()));
         theme.values.insert("assistant.speechToText".into(), SettingValue::Boolean(true));
-        assert_eq!(hermes_url(&theme), "http://127.0.0.1:8645");
+        assert_eq!(hermes_url(&theme), "http://127.0.0.1:8642");
         assert!(flag(&theme, "assistant.speechToText"));
         assert!(!flag(&theme, "assistant.textToSpeech"));
     }
