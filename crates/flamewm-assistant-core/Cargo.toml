@@ -1,0 +1,15 @@
+[package]
+name = "flamewm-assistant-core"
+autobins = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FlameWM assistant core: loopback Hermes HTTP client, lifecycle state machine, chat history store and speech traits"
+
+[dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
