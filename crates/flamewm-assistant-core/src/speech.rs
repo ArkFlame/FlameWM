@@ -46,22 +46,28 @@ pub trait ModelStore {
     fn installed(&self, name: &str) -> Option<PathBuf>;
 }
 
-/// Manifests for the two Phonon models. URLs and checksums could not be determined offline, so
-/// both are `unpinned` and fetching them fails with a clear error instead of guessing.
-/// Replace with pinned values once verified against the upstream artifacts.
+/// Pinned manifests for the two Phonon models. Each URL is a Hugging Face `resolve/<commit>` path
+/// (never `main`); the sha256 is the LFS oid published for that commit and was matched against a
+/// local download of each file.
+///
+/// - `tts-phonon-local`: `gradium/phonon-31m-en` `model.q8.gguf` (Apache-2.0, ungated). The
+///   companion files `config.json`, `tokenizer.json` and `default-voice.safetensors` at the same
+///   commit are NOT covered by this single-file manifest; see docs/DEPENDENCIES.md.
+/// - `stt-phonon-2`: `FermionResearch/Phonon-2` `phonon-2.bps.tar.zst` (CC-BY-4.0 weights, ungated).
+///   This is the packed model archive; its consumer format is not verified by this crate.
 pub fn default_manifests() -> Vec<ModelManifest> {
     vec![
         ModelManifest {
             name: "tts-phonon-local".into(),
-            url: UNPINNED.into(),
-            sha256: UNPINNED.into(),
-            size_bytes: 0,
+            url: "https://huggingface.co/gradium/phonon-31m-en/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/model.q8.gguf".into(),
+            sha256: "a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae".into(),
+            size_bytes: 64_512_352,
         },
         ModelManifest {
             name: "stt-phonon-2".into(),
-            url: UNPINNED.into(),
-            sha256: UNPINNED.into(),
-            size_bytes: 0,
+            url: "https://huggingface.co/FermionResearch/Phonon-2/resolve/3e6ab3a81d73b4d424ff34cc72535deb606378ef/phonon-2.bps.tar.zst".into(),
+            sha256: "98125795b6dda72f5c6eee9ba33d19815df65dcb18b50a357bf9f73c9935309e".into(),
+            size_bytes: 163_515_201,
         },
     ]
 }
@@ -305,12 +311,28 @@ mod tests {
     }
 
     #[test]
-    fn default_manifests_are_unpinned_and_never_guessed() {
-        for manifest in default_manifests() {
-            assert_eq!(manifest.url, UNPINNED);
-            assert_eq!(manifest.sha256, UNPINNED);
-            assert!(crate::download::check_pinned(&manifest).is_err());
+    fn default_manifests_are_pinned_to_commits_and_pass_check_pinned() {
+        let manifests = default_manifests();
+        assert_eq!(manifests.len(), 2);
+        for manifest in &manifests {
+            assert!(manifest.url.starts_with("https://huggingface.co/"), "{}", manifest.url);
+            assert!(manifest.url.contains("/resolve/"), "{}", manifest.url);
+            assert!(!manifest.url.contains("/resolve/main/"), "{}", manifest.url);
+            assert_ne!(manifest.sha256, UNPINNED);
+            assert!(manifest.size_bytes > 0);
+            assert!(crate::download::check_pinned(manifest).is_ok(), "{}", manifest.name);
         }
+    }
+
+    #[test]
+    fn unpinned_manifest_is_still_refused() {
+        let manifest = ModelManifest {
+            name: "stt-phonon-2".into(),
+            url: UNPINNED.into(),
+            sha256: UNPINNED.into(),
+            size_bytes: 0,
+        };
+        assert!(crate::download::check_pinned(&manifest).is_err());
     }
 
     #[test]

@@ -152,6 +152,45 @@ is not installed with FlameWM. To use it, install Hermes separately, set `API_SE
 in `~/.hermes/.env`, and open the assistant; it offers Connect to hermes when the server is not
 running. Speech input and output are off until enabled in Settings.
 
+## Assistant speech (optional)
+
+Speech is off by default and no model is downloaded until you opt in. The pinned model manifests
+are in `crates/flamewm-assistant-core/src/speech.rs` (`default_manifests`). Both are Hugging Face
+files pinned to a commit and checked by SHA-256 before use.
+
+| Role | Model | Artifact (pinned) | Size | License | Gated |
+|---|---|---|---|---|---|
+| Speech-to-text | `FermionResearch/Phonon-2` | `phonon-2.bps.tar.zst` @ `3e6ab3a8` | 163,515,201 B | CC-BY-4.0 weights; Apache-2.0 code | no |
+| Text-to-speech | `gradium/phonon-31m-en` | `model.q8.gguf` @ `92741c5b` | 64,512,352 B | Apache-2.0 | no |
+
+Checksums: `phonon-2.bps.tar.zst` sha256 `98125795b6dda72f5c6eee9ba33d19815df65dcb18b50a357bf9f73c9935309e`;
+`model.q8.gguf` sha256 `a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae`. Both were
+downloaded and hashed locally.
+
+Runtime, as documented by each upstream (not run in this repository):
+
+- **Phonon-2 (STT)**: `pip install fermion-research` (Python 3.10+), then
+  `phonon transcribe recording.wav`. The CLI takes a model name (`phonon-2`) and a file path, not a
+  model path or stdin. The upstream README documents Apple silicon with MLX, plus Linux x86-64/Arm
+  CPU and Docker (`ghcr.io/fermionresearch/phonon-cpu:2.0.7`). Linux is not run-verified here.
+- **Phonon 31m (TTS)**: `uvx ptts --lang en --quant q8 --voice Easton "Hello." -o speech.wav`
+  (PyPI `ptts` 0.5.0, Python 3.9+, or the standalone binary from the upstream releases). CPU only
+  per upstream. The CLI takes text as an argument and writes `-o`; it does not read stdin or write a
+  WAV to stdout.
+
+Gaps and limits:
+
+- The manifests download one file each. The Phonon 31m runtime also needs `config.json`,
+  `tokenizer.json` and `default-voice.safetensors` at the same commit (`92741c5b`). These are not
+  fetched by FlameWM, so the TTS model is not usable from the manifest alone.
+- The Phonon-2 archive is a packed format. This repository does not verify how a runtime consumes it.
+- Because the CLI contracts do not match the `{model}`/stdin/stdout command templates, the
+  `transcribe_command` and `synthesize_command` keys stay unset. To use speech, set them in the speech
+  config file to commands that you have verified on your machine. The default `record_command` and
+  `play_command` remain `arecord` and `aplay`.
+- `gradium/phonon-40m-*` (French, German, Spanish, Portuguese and multilingual) are CC-BY-NC-4.0
+  and gated. They are not pinned and are not for commercial use.
+
 ## Install the `.deb` on another computer (SDDM)
 
 The build creates `.target/dist/flamewm_0.1.2_amd64.deb`. Copy it to the
