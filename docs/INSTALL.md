@@ -154,40 +154,60 @@ running. Speech input and output are off until enabled in Settings.
 
 ## Assistant speech (optional)
 
-Speech is off by default and no model is downloaded until you opt in. The pinned model manifests
-are in `crates/flamewm-assistant-core/src/speech.rs` (`default_manifests`). Both are Hugging Face
-files pinned to a commit and checked by SHA-256 before use.
+Speech is off by default and no model is downloaded until you opt in. The pinned manifests are in
+`crates/flamewm-assistant-core/src/speech.rs` (`default_manifests`). Each model is a directory of
+files pinned to one Hugging Face commit. Every file is checked by size and SHA-256 before use, and a
+file that fails is deleted. Verified files are kept, so an interrupted download resumes.
 
-| Role | Model | Artifact (pinned) | Size | License | Gated |
+| Role | Model | Pinned files (commit) | Total size | License | Gated |
 |---|---|---|---|---|---|
-| Speech-to-text | `FermionResearch/Phonon-2` | `phonon-2.bps.tar.zst` @ `3e6ab3a8` | 163,515,201 B | CC-BY-4.0 weights; Apache-2.0 code | no |
-| Text-to-speech | `gradium/phonon-31m-en` | `model.q8.gguf` @ `92741c5b` | 64,512,352 B | Apache-2.0 | no |
+| Speech-to-text | `FermionResearch/Phonon-2` | `phonon-2.bps.tar.zst` (`3e6ab3a8`) | 163,515,201 B | CC-BY-4.0 weights; Apache-2.0 code | no |
+| Text-to-speech | `gradium/phonon-31m-en` | `model.q8.gguf`, `config.json`, `tokenizer.json`, `default-voice.safetensors` (`92741c5b`) | 65,051,089 B | Apache-2.0 | no |
 
-Checksums: `phonon-2.bps.tar.zst` sha256 `98125795b6dda72f5c6eee9ba33d19815df65dcb18b50a357bf9f73c9935309e`;
-`model.q8.gguf` sha256 `a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae`. Both were
-downloaded and hashed locally.
+SHA-256 (LFS oid from the HF tree API, or the content hash of a local download for the non-LFS files):
 
-Runtime, as documented by each upstream (not run in this repository):
+- `phonon-2.bps.tar.zst` `98125795b6dda72f5c6eee9ba33d19815df65dcb18b50a357bf9f73c9935309e`
+- `model.q8.gguf` `a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae`
+- `config.json` `b5d0f88353638370d94035b7d73d7d6577c0554d78f8d7ecfd40490aae39ae85` (4,634 B)
+- `tokenizer.json` `691a00068fa7b989f2f3e5ae5daa2d1a5bb319f2d5360deafcfb19a8bb6e7936` (277,967 B)
+- `default-voice.safetensors` `dc537478eaadc1a5257fcda2e3501ab81e14c111a5d95a5838f350db2afd0f1a` (256,136 B)
 
-- **Phonon-2 (STT)**: `pip install fermion-research` (Python 3.10+), then
-  `phonon transcribe recording.wav`. The CLI takes a model name (`phonon-2`) and a file path, not a
-  model path or stdin. The upstream README documents Apple silicon with MLX, plus Linux x86-64/Arm
-  CPU and Docker (`ghcr.io/fermionresearch/phonon-cpu:2.0.7`). Linux is not run-verified here.
-- **Phonon 31m (TTS)**: `uvx ptts --lang en --quant q8 --voice Easton "Hello." -o speech.wav`
-  (PyPI `ptts` 0.5.0, Python 3.9+, or the standalone binary from the upstream releases). CPU only
-  per upstream. The CLI takes text as an argument and writes `-o`; it does not read stdin or write a
-  WAV to stdout.
+Install the runtimes (commands from upstream PyPI and model-card docs; not run in this repository):
+
+- **Speech-to-text (Phonon-2), Linux x86-64 or Arm CPU**: Python 3.10+.
+  ```
+  python3 -m pip install --no-deps torch --index-url https://download.pytorch.org/whl/cpu
+  python3 -m pip install fermion-research
+  phonon transcribe recording.wav
+  ```
+  Docker alternative (documented tag `phonon-cpu:2.0.9` on PyPI; the model card cites 2.0.7):
+  `docker run --rm -v "$PWD":/audio -v phonon-cache:/home/phonon/.cache ghcr.io/fermionresearch/phonon-cpu:2.0.9 transcribe phonon-2 /audio/recording.wav`.
+  Apple silicon: `pip install "fermion-research[mlx]"` (MLX; not tested here).
+- **Text-to-speech (Phonon 31m), Linux x86-64**: Python 3.9+.
+  ```
+  python3 -m pip install ptts
+  python3 -m ptts --lang en --model <dir> "Hello." -o speech.wav
+  ```
+  `<dir>` is a local checkpoint directory holding the four pinned TTS files. `ptts --lang en --model <dir> ...`
+  is the same command as `python3 -m ptts`. The x86-64 wheels need AVX2, FMA and F16C; older CPUs need
+  a source build with Rust. CPU only.
+- **Unpacking the Phonon-2 archive**: needs GNU tar with zstd support and the `zstd` program:
+  `tar --zstd -xf phonon-2.bps.tar.zst -C <dir>`. The core helper `extract_zstd_tar` runs the same
+  command; the app does not call it yet.
 
 Gaps and limits:
 
-- The manifests download one file each. The Phonon 31m runtime also needs `config.json`,
-  `tokenizer.json` and `default-voice.safetensors` at the same commit (`92741c5b`). These are not
-  fetched by FlameWM, so the TTS model is not usable from the manifest alone.
-- The Phonon-2 archive is a packed format. This repository does not verify how a runtime consumes it.
-- Because the CLI contracts do not match the `{model}`/stdin/stdout command templates, the
-  `transcribe_command` and `synthesize_command` keys stay unset. To use speech, set them in the speech
-  config file to commands that you have verified on your machine. The default `record_command` and
-  `play_command` remain `arecord` and `aplay`.
+- `transcribe_command` and `synthesize_command` stay unset because no documented invocation of either
+  runtime matches the `{model}`, stdin and stdout contract. The `fermion` CLI takes a model name and a
+  file path and caches its own copy of Phonon-2. The `ptts` CLI takes the text as an argument and
+  writes `-o`; it does not read stdin or write WAV to stdout. Until you set these keys yourself in
+  the speech config file, to commands you have verified on your machine, the core exposes the hints
+  `TRANSCRIBE_SETUP_HINT` and `SYNTHESIZE_SETUP_HINT` for the UI to show. The default `record_command`
+  and `play_command` remain `arecord` and `aplay`.
+- The pinned Phonon-2 archive is not read by the documented runtime path. Its consumer format is not
+  verified here.
+- Optional system tools: `curl` (downloads), and `tar` with zstd plus `zstd` (archive unpacking).
+  No package declares them.
 - `gradium/phonon-40m-*` (French, German, Spanish, Portuguese and multilingual) are CC-BY-NC-4.0
   and gated. They are not pinned and are not for commercial use.
 

@@ -22,16 +22,19 @@ pub use lifecycle::{
     detect, install_plan, parse_version, start_gateway, transition, wait_until_ready,
     AssistantState, Detected, InstallPlan, LifeEvent, Paths, INSTALL_SCRIPT_URL,
 };
-pub use download::{check_pinned, default_models_dir, verify, CurlFetcher, DiskModelStore, Fetcher};
+pub use download::{
+    check_pinned, default_models_dir, extract_zstd_tar, verify, verify_file, CurlFetcher,
+    DiskModelStore, Fetcher,
+};
 pub use process::{
     default_config_path, expand, start_recording, ProcessRunner, Recording, SpeechConfig,
     SystemRunner,
 };
 pub use sha256::Sha256;
 pub use speech::{
-    default_manifests, encode_wav, CommandSpeech, CommandTranscriber, ModelManifest, ModelStore,
-    Speech, Stopper, Transcriber, UnconfiguredModelStore, UnconfiguredSpeech,
-    UnconfiguredTranscriber, UNPINNED,
+    default_manifests, encode_wav, CommandSpeech, CommandTranscriber, ModelFile, ModelManifest,
+    ModelStore, Speech, Stopper, Transcriber, UnconfiguredModelStore, UnconfiguredSpeech,
+    UnconfiguredTranscriber, SYNTHESIZE_SETUP_HINT, TRANSCRIBE_SETUP_HINT, UNPINNED,
 };
 pub use store::{ChatStore, Message, MsgState, Role, SessionState};
 

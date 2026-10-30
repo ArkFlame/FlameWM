@@ -26,49 +26,103 @@ pub trait Speech {
     fn stop(&mut self);
 }
 
-/// A downloadable model. `sha256` must be checked before the file is used.
+/// One pinned file of a model. `sha256` and `size_bytes` must be checked before the file is used.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ModelManifest {
-    pub name: String,
+pub struct ModelFile {
+    /// Path relative to the model directory: plain components, no `..`, no absolute paths.
+    pub path: String,
     pub url: String,
     pub sha256: String,
     pub size_bytes: u64,
 }
 
+/// A downloadable model: every file the runtime needs, all pinned to one upstream commit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelManifest {
+    pub name: String,
+    pub files: Vec<ModelFile>,
+}
+
+impl ModelManifest {
+    /// Single-file manifest; `file` is the relative path inside the model directory.
+    pub fn single(name: &str, file: &str, url: &str, sha256: &str, size_bytes: u64) -> Self {
+        Self {
+            name: name.into(),
+            files: vec![ModelFile {
+                path: file.into(),
+                url: url.into(),
+                sha256: sha256.into(),
+                size_bytes,
+            }],
+        }
+    }
+
+    /// Sum of the pinned file sizes; the denominator of aggregated download progress.
+    pub fn total_bytes(&self) -> u64 {
+        self.files.iter().map(|file| file.size_bytes).sum()
+    }
+}
+
 /// On-demand model storage. Only runs after explicit user opt-in.
 pub trait ModelStore {
-    /// Returns the verified local path, reporting `(done, total)` bytes while downloading.
+    /// Downloads every missing file and returns the verified model directory. Reports aggregated
+    /// `(done, total)` bytes across all files while downloading.
     fn fetch(
         &mut self,
         manifest: &ModelManifest,
         progress: &mut dyn FnMut(u64, u64),
     ) -> Result<PathBuf, AssistantError>;
+    /// The model directory when every pinned file is present with its pinned size.
     fn installed(&self, name: &str) -> Option<PathBuf>;
 }
 
+/// UI hint shown while `transcribe_command` is unset. No documented invocation of the STT runtime
+/// takes a local model path or stdin, so no template ships.
+pub const TRANSCRIBE_SETUP_HINT: &str = "Speech-to-text has no verified command. Install fermion-research (pip), then set transcribe_command in assistant-speech.conf to a command that prints the transcript for a WAV file.";
+
+/// UI hint shown while `synthesize_command` is unset. The ptts CLI takes text as an argument and
+/// writes `-o <file>`; it does not read stdin or write WAV to stdout, which the template contract needs.
+pub const SYNTHESIZE_SETUP_HINT: &str = "Text-to-speech has no verified command. Install ptts (pip or uvx) and set synthesize_command in assistant-speech.conf to a command that writes WAV to stdout.";
+
+const TTS_COMMIT: &str = "92741c5b07d085ff840e26fea8ce43110b87852f";
+const STT_COMMIT: &str = "3e6ab3a81d73b4d424ff34cc72535deb606378ef";
+
 /// Pinned manifests for the two Phonon models. Each URL is a Hugging Face `resolve/<commit>` path
-/// (never `main`); the sha256 is the LFS oid published for that commit and was matched against a
-/// local download of each file.
+/// (never `main`). sha256 is the LFS oid for LFS files; for the small non-LFS TTS files it is the
+/// content hash of a local download at that commit. Sizes come from the HF tree API.
 ///
-/// - `tts-phonon-local`: `gradium/phonon-31m-en` `model.q8.gguf` (Apache-2.0, ungated). The
-///   companion files `config.json`, `tokenizer.json` and `default-voice.safetensors` at the same
-///   commit are NOT covered by this single-file manifest; see docs/DEPENDENCIES.md.
+/// - `tts-phonon-local`: `gradium/phonon-31m-en` at one commit (Apache-2.0, ungated). The directory
+///   holds `model.q8.gguf`, `config.json`, `tokenizer.json` and `default-voice.safetensors`.
 /// - `stt-phonon-2`: `FermionResearch/Phonon-2` `phonon-2.bps.tar.zst` (CC-BY-4.0 weights, ungated).
 ///   This is the packed model archive; its consumer format is not verified by this crate.
 pub fn default_manifests() -> Vec<ModelManifest> {
+    let tts = |path: &str, sha256: &str, size_bytes: u64| ModelFile {
+        path: path.into(),
+        url: format!("https://huggingface.co/gradium/phonon-31m-en/resolve/{TTS_COMMIT}/{path}"),
+        sha256: sha256.into(),
+        size_bytes,
+    };
     vec![
         ModelManifest {
             name: "tts-phonon-local".into(),
-            url: "https://huggingface.co/gradium/phonon-31m-en/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/model.q8.gguf".into(),
-            sha256: "a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae".into(),
-            size_bytes: 64_512_352,
+            files: vec![
+                tts("model.q8.gguf", "a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae", 64_512_352),
+                tts("config.json", "b5d0f88353638370d94035b7d73d7d6577c0554d78f8d7ecfd40490aae39ae85", 4_634),
+                tts("tokenizer.json", "691a00068fa7b989f2f3e5ae5daa2d1a5bb319f2d5360deafcfb19a8bb6e7936", 277_967),
+                tts(
+                    "default-voice.safetensors",
+                    "dc537478eaadc1a5257fcda2e3501ab81e14c111a5d95a5838f350db2afd0f1a",
+                    256_136,
+                ),
+            ],
         },
-        ModelManifest {
-            name: "stt-phonon-2".into(),
-            url: "https://huggingface.co/FermionResearch/Phonon-2/resolve/3e6ab3a81d73b4d424ff34cc72535deb606378ef/phonon-2.bps.tar.zst".into(),
-            sha256: "98125795b6dda72f5c6eee9ba33d19815df65dcb18b50a357bf9f73c9935309e".into(),
-            size_bytes: 163_515_201,
-        },
+        ModelManifest::single(
+            "stt-phonon-2",
+            "phonon-2.bps.tar.zst",
+            &format!("https://huggingface.co/FermionResearch/Phonon-2/resolve/{STT_COMMIT}/phonon-2.bps.tar.zst"),
+            "98125795b6dda72f5c6eee9ba33d19815df65dcb18b50a357bf9f73c9935309e",
+            163_515_201,
+        ),
     ]
 }
 
@@ -296,12 +350,7 @@ mod tests {
             Err(AssistantError::NotConfigured(_))
         ));
         assert!(matches!(UnconfiguredSpeech.speak("hi"), Err(AssistantError::NotConfigured(_))));
-        let manifest = ModelManifest {
-            name: "stt".into(),
-            url: "https://example.invalid/m".into(),
-            sha256: String::new(),
-            size_bytes: 0,
-        };
+        let manifest = ModelManifest::single("stt", "m.bin", "https://example.invalid/m", "", 0);
         let mut progress = |_: u64, _: u64| {};
         assert!(matches!(
             UnconfiguredModelStore.fetch(&manifest, &mut progress),
@@ -314,24 +363,26 @@ mod tests {
     fn default_manifests_are_pinned_to_commits_and_pass_check_pinned() {
         let manifests = default_manifests();
         assert_eq!(manifests.len(), 2);
+        let tts = manifests.iter().find(|m| m.name == "tts-phonon-local").expect("tts");
+        let paths: Vec<&str> = tts.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["model.q8.gguf", "config.json", "tokenizer.json", "default-voice.safetensors"]);
         for manifest in &manifests {
-            assert!(manifest.url.starts_with("https://huggingface.co/"), "{}", manifest.url);
-            assert!(manifest.url.contains("/resolve/"), "{}", manifest.url);
-            assert!(!manifest.url.contains("/resolve/main/"), "{}", manifest.url);
-            assert_ne!(manifest.sha256, UNPINNED);
-            assert!(manifest.size_bytes > 0);
             assert!(crate::download::check_pinned(manifest).is_ok(), "{}", manifest.name);
+            for file in &manifest.files {
+                assert!(file.url.starts_with("https://huggingface.co/"), "{}", file.url);
+                assert!(file.url.contains("/resolve/"), "{}", file.url);
+                assert!(!file.url.contains("/resolve/main/"), "{}", file.url);
+                assert_ne!(file.sha256, UNPINNED);
+                assert!(file.size_bytes > 0);
+            }
         }
+        // Every TTS file comes from the single pinned commit.
+        assert!(tts.files.iter().all(|f| f.url.contains("/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/")));
     }
 
     #[test]
     fn unpinned_manifest_is_still_refused() {
-        let manifest = ModelManifest {
-            name: "stt-phonon-2".into(),
-            url: UNPINNED.into(),
-            sha256: UNPINNED.into(),
-            size_bytes: 0,
-        };
+        let manifest = ModelManifest::single("stt-phonon-2", "m.bin", UNPINNED, UNPINNED, 0);
         assert!(crate::download::check_pinned(&manifest).is_err());
     }
 

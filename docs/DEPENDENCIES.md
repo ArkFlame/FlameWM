@@ -104,10 +104,12 @@ Table of record for what FlameWM needs at runtime and how each need is packaged.
   over loopback HTTP. Hermes is not packaged and not declared; the assistant shows a Connect
   screen when it is missing and installs only after explicit confirmation. The FlameWM packages
   work without it.
-- **Assistant speech models (optional, on-demand)**: Phonon-2 (STT, CC-BY-4.0, ungated, 163 MB)
-  and Phonon 31m (TTS, Apache-2.0, ungated, 64.5 MB q8). Pinned in `speech.rs`; downloaded only
-  after opt-in and never bundled. Runtimes (`fermion-research`, `ptts`) are not declared or
-  packaged. Details and gaps are in `docs/INSTALL.md` under "Assistant speech (optional)".
+- **Assistant speech models (optional, on-demand)**: Phonon-2 (STT, CC-BY-4.0, ungated, 163 MB, one
+  file) and Phonon 31m (TTS, Apache-2.0, ungated, 65 MB across four files at one commit). Pinned in
+  `speech.rs`; downloaded only after opt-in and never bundled. Runtimes (`fermion-research`, `ptts`,
+  pip-installed) are not declared or packaged. Optional tools used at runtime: `curl` (download),
+  `tar` with zstd and `zstd` (unpacking the Phonon-2 archive). Details and gaps are in
+  `docs/INSTALL.md` under "Assistant speech (optional)".
 
 ## Session registration
 
