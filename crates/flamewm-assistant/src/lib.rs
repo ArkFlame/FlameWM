@@ -28,10 +28,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_assistant_core::{
-    apply_defaults, default_config_path, default_voice_dir, expand, human_error, key_or_default, ready_model,
-    start_recording, ArkClient, ArkConfig, AssistantError, CancelToken, ChatStore, CommandSpeech, CommandTranscriber,
-    Message, MsgState, Recording, Role, SessionState, Speech, SpeechConfig, Stopper, SystemRunner, Transcriber, Turn,
-    DEFAULT_MODEL, FALLBACK_MODELS, HISTORY_TURNS,
+    apply_defaults, default_config_path, default_voice_dir, endpoint, expand, human_error, key_or_default, proxy_models,
+    ready_model, resolve, start_recording, AssistantError, CancelToken, ChatStore, CommandSpeech, CommandTranscriber,
+    Message, MsgState, OpenAiClient, Provider, Recording, Role, Selection, SessionState, Speech, SpeechConfig, Stopper,
+    SystemRunner, Transcriber, Turn, FALLBACK_MODELS, HISTORY_TURNS,
 };
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
@@ -43,7 +43,7 @@ use flamewm_ui_x11::{
     run_with_controller_events_role_and_two_readable_fds,
 };
 
-use model::{History, KeyCmd, Row, SLOTS};
+use model::{History, KeyCmd, MenuRow, Row, SLOTS};
 
 /// Rows in the model picker; longer lists page with prev and next.
 const MODEL_ROWS: usize = 8;
@@ -60,10 +60,15 @@ const KEY_TINT: u32 = 0x00ff_ffff;
 enum Msg {
     /// Model ids from `GET /models`, or the reason ARK AI could not be reached.
     Checked(Result<Vec<String>, AssistantError>),
+    /// Model ids of the running Hermes proxy, or `None` when it is not running.
+    Proxy(Option<Vec<String>>),
+    /// A line for the notice, such as a fallback from the proxy to ARK AI.
+    Notice(String),
     /// One streamed text piece of the running reply.
     Delta(String),
     /// The reply finished with its full text, or ended with the reason it did not.
-    TurnDone(Result<String, AssistantError>),
+    /// The label names the endpoint that answered, for error text.
+    TurnDone(Result<String, AssistantError>, &'static str),
     /// Voice setup progress: percent and the step it is on.
     VoiceProgress(u8, String),
     /// The voice setup finished, with the TTS model directory or the reason it failed.
@@ -110,10 +115,12 @@ struct Assistant {
     speech_in: bool,
     speech_out: bool,
     link: Link,
-    /// Model ids for the picker: the server's list, or the built-in fallback when it failed.
+    /// ARK AI model ids: the server's list, or the built-in fallback when it failed.
     models: Vec<String>,
-    /// Model chosen in the picker; `None` means the default model.
-    model: Option<String>,
+    /// Model ids of the running Hermes proxy; `None` when it is not running.
+    proxy: Option<Vec<String>>,
+    /// Provider and model the next turn uses.
+    selection: Selection,
     model_menu: bool,
     model_page: usize,
     /// Typed filter for the model picker; the keyboard edits it while the menu is open.
@@ -176,7 +183,10 @@ impl Assistant {
         let speech_out = flag(&theme, "assistant.textToSpeech");
         let total = store.len() as u64;
         let history = History::open(&mut store, total)?;
-        let saved_model = store.session().model.clone();
+        let selection = {
+            let session = store.session();
+            Selection::from_state(session.provider.as_deref(), session.model.as_deref())
+        };
         let speech_cfg = match default_config_path() {
             Some(path) => SpeechConfig::load(&path).map_err(|error| error.to_string()),
             None => Ok(SpeechConfig::default()),
@@ -190,7 +200,8 @@ impl Assistant {
             speech_out,
             link: Link::Checking,
             models: fallback_models(),
-            model: saved_model,
+            proxy: None,
+            selection,
             model_menu: false,
             model_page: 0,
             model_query: String::new(),
@@ -214,19 +225,23 @@ impl Assistant {
         })
     }
 
-    fn ark_config(&self) -> ArkConfig {
-        ArkConfig { api_key: self.api_key.clone(), ..ArkConfig::default() }
-    }
-
-    /// Lists the models on a worker thread. The result tells the window whether ARK AI answered.
+    /// Lists ARK AI models and probes the Hermes proxy, each on a worker thread. The ARK result
+    /// tells the window whether ARK AI answered.
     fn check(&mut self) {
         self.link = Link::Checking;
-        let config = self.ark_config();
+        let key = self.api_key.clone();
         let bus = self.bus.clone();
         thread::spawn(move || {
-            let result = ArkClient::new(config).and_then(|client| client.list_models());
+            let result = OpenAiClient::new(endpoint(Provider::Ark, &key)).and_then(|client| client.list_models());
             bus.send(Msg::Checked(result));
         });
+        self.probe_proxy();
+    }
+
+    /// Looks for the Hermes proxy on a worker thread. Runs at open and when the model menu opens.
+    fn probe_proxy(&self) {
+        let bus = self.bus.clone();
+        thread::spawn(move || bus.send(Msg::Proxy(proxy_models())));
     }
 
     fn on_msg(&mut self, msg: Msg) {
@@ -239,10 +254,12 @@ impl Assistant {
             Msg::Checked(Err(error)) => {
                 self.link = Link::Offline;
                 self.models = fallback_models();
-                self.notice = human_error(&error);
+                self.notice = human_error(&error, Provider::Ark.title());
             }
+            Msg::Proxy(models) => self.proxy = models,
+            Msg::Notice(text) => self.notice = text,
             Msg::Delta(text) => self.history.append_pending(&text),
-            Msg::TurnDone(result) => self.finish_turn(result),
+            Msg::TurnDone(result, label) => self.finish_turn(result, label),
             Msg::VoiceProgress(percent, label) => self.notice = voice_setup_ui::progress_notice(percent, &label),
             Msg::VoiceSetup(result) => self.fetched(result),
             Msg::Heard(result) => self.heard(result),
@@ -285,11 +302,11 @@ impl Assistant {
             self.set_osd(OsdState::Working);
         }
         self.history.set_pending(Some(String::new()));
-        let config = self.ark_config();
-        let model = self.model.clone().unwrap_or_else(|| DEFAULT_MODEL.to_owned());
+        let selected = self.selection.clone();
+        let key = self.api_key.clone();
         let bus = self.bus.clone();
         let cancel = self.cancel.clone();
-        thread::spawn(move || turn_job(&bus, config, &model, &turns, &cancel));
+        thread::spawn(move || turn_job(&bus, &selected, &key, &turns, &cancel));
     }
 
     /// The last messages on screen as chat turns, oldest first. The server keeps no session, so
@@ -307,7 +324,7 @@ impl Assistant {
             .collect()
     }
 
-    fn finish_turn(&mut self, result: Result<String, AssistantError>) {
+    fn finish_turn(&mut self, result: Result<String, AssistantError>, label: &str) {
         self.working = false;
         let partial = self.history.take_pending().unwrap_or_default();
         match result {
@@ -331,7 +348,7 @@ impl Assistant {
                 if matches!(error, AssistantError::Unreachable(_) | AssistantError::Timeout) {
                     self.link = Link::Offline;
                 }
-                self.notice = human_error(&error);
+                self.notice = human_error(&error, label);
             }
         }
         if !self.speaking {
@@ -339,9 +356,14 @@ impl Assistant {
         }
     }
 
-    /// Models shown in the picker: the ids matching the typed filter, as indices into `models`.
-    fn model_matches(&self) -> Vec<usize> {
-        model::filter_models(&self.models, &self.model_query)
+    /// Rows of the model picker: ARK AI first, then the proxy when it is running. Each group
+    /// has a header row, and the filter applies to every group.
+    fn menu_rows(&self) -> Vec<MenuRow> {
+        let mut groups: Vec<(Provider, &[String])> = vec![(Provider::Ark, self.models.as_slice())];
+        if let Some(ids) = &self.proxy {
+            groups.push((Provider::HermesProxy, ids.as_slice()));
+        }
+        model::menu_rows(&groups, &self.model_query)
     }
 
     /// Adds `text` to the picker filter (or removes the last character) and starts at page 1.
@@ -358,23 +380,40 @@ impl Assistant {
     fn toggle_model_menu(&mut self) {
         self.model_menu = !self.model_menu;
         self.model_query.clear();
-        let matches = self.model_matches();
-        let position = self
-            .model
-            .as_ref()
-            .and_then(|m| matches.iter().position(|&i| self.models[i] == *m));
+        if self.model_menu {
+            self.probe_proxy();
+        }
+        let current = self.selection.clone();
+        let position = self.menu_rows().iter().position(|row| {
+            matches!(row, MenuRow::Model { provider, id } if *provider == current.provider && *id == current.model)
+        });
         self.model_page = position.map_or(0, |p| p / MODEL_ROWS);
     }
 
-    /// Makes the row `slot` of the current page the model used from the next turn on, and saves it.
-    fn select_model(&mut self, slot: usize) {
-        let matches = self.model_matches();
-        let Some(&index) = matches.get(self.model_page * MODEL_ROWS + slot) else { return };
-        self.model = Some(self.models[index].clone());
+    /// Makes the model on row `slot` of the current page the one used from the next turn on, and
+    /// saves it. Header rows do nothing.
+    fn select_row(&mut self, slot: usize) {
+        let rows = self.menu_rows();
+        let Some(MenuRow::Model { provider, id }) = rows.get(self.model_page * MODEL_ROWS + slot) else { return };
+        self.selection = Selection { provider: *provider, model: id.clone() };
         self.model_menu = false;
-        let state = SessionState { model: self.model.clone() };
+        let state = self.session_state();
         if let Err(error) = self.store.set_session(state) {
             self.notice = format!("Could not save the model: {error}");
+        }
+    }
+
+    /// Slot of the first model row on the current page, for the Enter key.
+    fn first_model_slot(&self) -> Option<usize> {
+        let rows = self.menu_rows();
+        let start = self.model_page * MODEL_ROWS;
+        (0..MODEL_ROWS).find(|slot| matches!(rows.get(start + slot), Some(MenuRow::Model { .. })))
+    }
+
+    fn session_state(&self) -> SessionState {
+        SessionState {
+            provider: Some(self.selection.provider.id().to_owned()),
+            model: Some(self.selection.model.clone()),
         }
     }
 
@@ -385,8 +424,8 @@ impl Assistant {
             self.notice = "Stop the reply before clearing the chat.".into();
             return;
         }
-        let model = self.model.clone();
-        let cleared = self.store.clear().and_then(|()| self.store.set_session(SessionState { model }));
+        let state = self.session_state();
+        let cleared = self.store.clear().and_then(|()| self.store.set_session(state));
         match cleared {
             Ok(()) => {
                 self.history.clear();
@@ -642,12 +681,12 @@ impl Assistant {
             "assistant.model-toggle" => self.toggle_model_menu(),
             "assistant.model-prev" => self.model_page = self.model_page.saturating_sub(1),
             "assistant.model-next" => {
-                let last = self.model_matches().len().saturating_sub(1) / MODEL_ROWS;
+                let last = self.menu_rows().len().saturating_sub(1) / MODEL_ROWS;
                 self.model_page = (self.model_page + 1).min(last);
             }
             action if action.starts_with("assistant.model.") => {
                 if let Ok(slot) = action["assistant.model.".len()..].parse::<usize>() {
-                    self.select_model(slot);
+                    self.select_row(slot);
                 }
             }
             "assistant.clear" => self.clear_confirm = true,
@@ -688,7 +727,11 @@ impl Assistant {
                     self.model_page = 0;
                 }
                 KeyCmd::Cancel => self.model_menu = false,
-                KeyCmd::Submit => self.select_model(0),
+                KeyCmd::Submit => {
+                    if let Some(slot) = self.first_model_slot() {
+                        self.select_row(slot);
+                    }
+                }
                 KeyCmd::Newline | KeyCmd::Ignore => {}
             }
             return;
@@ -715,22 +758,32 @@ impl Assistant {
     }
 
     fn paint_models(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
-        doc.text("model", model_label(self.model.as_deref()))?;
+        doc.text("model", model_label(&self.selection.model))?;
         let open = self.model_menu;
         doc.visible("model-menu", open)?;
-        let matches = self.model_matches();
-        let empty = open && matches.is_empty();
-        doc.visible("model-empty", empty)?;
+        let rows = self.menu_rows();
+        doc.visible("model-empty", open && rows.is_empty())?;
         doc.visible("model-hint", open && self.model_query.is_empty())?;
         doc.text("model-query", self.model_query.clone())?;
-        let pages = matches.len().div_ceil(MODEL_ROWS).max(1);
+        let pages = rows.len().div_ceil(MODEL_ROWS).max(1);
         doc.text("model-page", format!("{} / {}", self.model_page + 1, pages))?;
         for slot in 0..MODEL_ROWS {
-            let index = self.model_page * MODEL_ROWS + slot;
-            let id = matches.get(index).map(|&i| &self.models[i]);
-            doc.visible(&format!("mrow-{slot}"), open && id.is_some())?;
-            if let Some(id) = id {
-                let current = self.model.as_deref().unwrap_or(DEFAULT_MODEL) == id.as_str();
+            let row = rows.get(self.model_page * MODEL_ROWS + slot);
+            let header = match row {
+                Some(MenuRow::Header(provider)) => Some(*provider),
+                _ => None,
+            };
+            doc.visible(&format!("mhead-{slot}"), open && header.is_some())?;
+            if let Some(provider) = header {
+                doc.text(&format!("mhead-text-{slot}"), provider.title().to_owned())?;
+            }
+            let model_row = match row {
+                Some(MenuRow::Model { provider, id }) => Some((*provider, id)),
+                _ => None,
+            };
+            doc.visible(&format!("mrow-{slot}"), open && model_row.is_some())?;
+            if let Some((provider, id)) = model_row {
+                let current = provider == self.selection.provider && *id == self.selection.model;
                 doc.text(&format!("mtext-{slot}"), id.clone())?;
                 doc.visible(&format!("mcheck-{slot}"), current)?;
             }
@@ -759,6 +812,9 @@ impl Assistant {
         doc.visible("empty", no_rows)?;
         doc.text("subtitle", chat_header::subtitle(self.link, self.working).to_owned())?;
         doc.visible("retry", self.link == Link::Offline)?;
+        let ark = self.selection.provider == Provider::Ark;
+        doc.visible("powered-ark", ark)?;
+        doc.visible("powered-hermes", !ark)?;
         let mic = self.speech_in && empty && !self.working;
         self.paint_models(doc)?;
         doc.visible("clear-confirm", self.clear_confirm)?;
@@ -803,8 +859,7 @@ fn api_key_setting(theme: &SettingsSnapshot) -> String {
 }
 
 /// Short header label for a model id: the part after the last `/`, cut to 18 characters.
-fn model_label(model: Option<&str>) -> String {
-    let Some(id) = model else { return DEFAULT_MODEL.into() };
+fn model_label(id: &str) -> String {
     let name = id.rsplit('/').next().unwrap_or(id);
     if name.chars().count() > 18 {
         format!("{}...", name.chars().take(15).collect::<String>())
@@ -820,11 +875,27 @@ fn accent(theme: &SettingsSnapshot) -> u32 {
     }
 }
 
-/// One streamed reply. Each text piece and the final result go back to the window.
-fn turn_job(bus: &Bus, config: ArkConfig, model: &str, turns: &[Turn], cancel: &CancelToken) {
-    let result = ArkClient::new(config)
-        .and_then(|client| client.chat(model, turns, cancel, &mut |delta| bus.send(Msg::Delta(delta.to_owned()))));
-    bus.send(Msg::TurnDone(result));
+/// One streamed reply. A selected Hermes proxy is probed first; when it is gone the turn falls back
+/// to ARK AI with a notice. Each text piece and the final result go back to the window.
+fn turn_job(bus: &Bus, selected: &Selection, ark_key: &str, turns: &[Turn], cancel: &CancelToken) {
+    let proxy_up = if selected.provider == Provider::HermesProxy {
+        let found = proxy_models();
+        let up = found.is_some();
+        bus.send(Msg::Proxy(found));
+        up
+    } else {
+        true
+    };
+    let (used, notice) = resolve(selected, proxy_up);
+    if let Some(notice) = notice {
+        bus.send(Msg::Notice(notice));
+    }
+    let ep = endpoint(used.provider, ark_key);
+    let label = ep.label;
+    let result = OpenAiClient::new(ep).and_then(|client| {
+        client.chat(&used.model, turns, cancel, &mut |delta| bus.send(Msg::Delta(delta.to_owned())))
+    });
+    bus.send(Msg::TurnDone(result, label));
 }
 
 /// Drains the wake pipe. It carries only "something changed" bytes, so the data is discarded.
@@ -1032,9 +1103,8 @@ mod tests {
 
     #[test]
     fn model_label_and_fit_are_short_and_stable() {
-        assert_eq!(model_label(None), DEFAULT_MODEL);
-        assert_eq!(model_label(Some("pro")), "pro");
-        assert_eq!(model_label(Some("org/long-model-name-here-x")), "long-model-name...");
+        assert_eq!(model_label("pro"), "pro");
+        assert_eq!(model_label("org/long-model-name-here-x"), "long-model-name...");
     }
 
     #[test]

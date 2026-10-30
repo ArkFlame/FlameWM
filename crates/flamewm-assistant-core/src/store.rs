@@ -98,7 +98,9 @@ pub struct Message {
 /// Assistant settings persisted across restarts.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionState {
-    /// Model id chosen in the picker; `None` means the server default.
+    /// Provider id (`ark` or `hermes`) chosen in the picker; `None` is a legacy ARK-only state.
+    pub provider: Option<String>,
+    /// Model id chosen in the picker; `None` means the provider default.
     pub model: Option<String>,
 }
 
@@ -263,7 +265,7 @@ impl ChatStore {
 
     /// Replaces the session state atomically.
     pub fn set_session(&mut self, state: SessionState) -> Result<(), AssistantError> {
-        let value = json!({"model": state.model});
+        let value = json!({"provider": state.provider, "model": state.model});
         write_atomic(&self.dir.join(STATE_FILE), value.to_string().as_bytes())?;
         self.session = state;
         Ok(())
@@ -371,7 +373,7 @@ fn read_session(dir: &Path) -> SessionState {
         return SessionState::default();
     };
     let field = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
-    SessionState { model: field("model") }
+    SessionState { provider: field("provider"), model: field("model") }
 }
 
 /// Writes through a temp file, fsyncs it, renames over `path`, then fsyncs the directory.
@@ -490,15 +492,18 @@ mod tests {
             let mut store = ChatStore::open(&dir).unwrap();
             assert_eq!(store.session(), &SessionState::default());
             store
-                .set_session(SessionState { model: Some("flash".into()) })
+                .set_session(SessionState { provider: Some("ark".into()), model: Some("flash".into()) })
                 .unwrap();
         }
         let store = ChatStore::open(&dir).unwrap();
         assert_eq!(store.session().model.as_deref(), Some("flash"));
+        assert_eq!(store.session().provider.as_deref(), Some("ark"));
         assert!(!dir.join("state.tmp").exists());
         // A legacy state file with retired Hermes keys still loads its model.
         std::fs::write(dir.join("state.json"), br#"{"hermes_session":"s","hermes_url":"http://x","model":"pro"}"#).unwrap();
-        assert_eq!(ChatStore::open(&dir).unwrap().session().model.as_deref(), Some("pro"));
+        let legacy = ChatStore::open(&dir).unwrap();
+        assert_eq!(legacy.session().model.as_deref(), Some("pro"));
+        assert_eq!(legacy.session().provider, None);
     }
 
     #[test]
@@ -507,7 +512,9 @@ mod tests {
         {
             let mut store = ChatStore::open(&dir).unwrap();
             store.append(Role::User, "gone", Some("s"), None, MsgState::Complete).unwrap();
-            store.set_session(SessionState { model: Some("lite".into()) }).unwrap();
+            store
+                .set_session(SessionState { provider: Some("hermes".into()), model: Some("lite".into()) })
+                .unwrap();
             store.clear().unwrap();
             assert!(store.is_empty());
             assert_eq!(store.session().model, None);

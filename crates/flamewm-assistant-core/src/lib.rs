@@ -1,10 +1,13 @@
-//! FlameWM assistant core: the ARK AI chat client, the durable chat history store,
-//! and speech/model traits. Model and voice downloads use the same curl-based fetcher.
+//! FlameWM assistant core: the ARK AI and Hermes proxy chat providers, the durable chat
+//! history store, and speech/model traits. Model and voice downloads use the same curl-based fetcher.
 //!
 //! No UI dependencies and no async runtime. HTTPS is delegated to `curl`.
 
 mod ark;
 mod download;
+mod hermes;
+mod openai;
+mod provider;
 mod process;
 mod sha256;
 mod speech;
@@ -21,9 +24,12 @@ pub use process::{
     SystemRunner,
 };
 pub use ark::{
-    human_error, key_or_default, masked_key, parse_models, validate_key, ArkClient, ArkConfig, Turn,
-    ARK_BASE_URL, DEFAULT_API_KEY, DEFAULT_MODEL, FALLBACK_MODELS, HISTORY_TURNS, SYSTEM_PROMPT,
+    key_or_default, masked_key, validate_key, ARK_BASE_URL, DEFAULT_API_KEY, DEFAULT_MODEL,
+    FALLBACK_MODELS,
 };
+pub use hermes::PROXY_BASE_URL;
+pub use openai::{human_error, Endpoint, OpenAiClient, Turn, HISTORY_TURNS, SYSTEM_PROMPT};
+pub use provider::{endpoint, proxy_models, resolve, Provider, Selection};
 pub use sha256::Sha256;
 pub use speech::{
     encode_wav, tts_manifest, CommandSpeech, CommandTranscriber, ModelFile, ModelManifest,
@@ -140,6 +146,22 @@ pub(crate) mod test_support {
             seen
         });
         (url, handle)
+    }
+
+    /// A complete response with a correct Content-Length.
+    pub fn reply(status: &str, content_type: &str, body: &str) -> Vec<Vec<u8>> {
+        vec![format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()]
+    }
+
+    /// An SSE stream: a head, then one piece per event.
+    pub fn sse(events: &[&str]) -> Vec<Vec<u8>> {
+        let mut pieces = vec![b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n".to_vec()];
+        pieces.extend(events.iter().map(|e| format!("data: {e}\n\n").into_bytes()));
+        pieces
     }
 
     pub fn read_request(conn: &mut TcpStream) -> String {

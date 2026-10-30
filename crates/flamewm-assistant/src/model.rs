@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 
-use flamewm_assistant_core::{Message, Role};
+use flamewm_assistant_core::{Message, Provider, Role};
 
 /// Bubble slots that exist in the document. Node count stays bounded by this.
 pub const SLOTS: usize = 12;
@@ -467,6 +467,79 @@ pub fn filter_models(models: &[String], query: &str) -> Vec<usize> {
         .filter(|(_, id)| needle.is_empty() || id.to_lowercase().contains(&needle))
         .map(|(index, _)| index)
         .collect()
+}
+
+/// One row of the grouped model picker. A provider's models sit under its header row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MenuRow {
+    Header(Provider),
+    Model { provider: Provider, id: String },
+}
+
+/// Flattened picker rows for `groups`, in order. The query filters ids in every group, and a group
+/// with no match is dropped together with its header.
+pub fn menu_rows(groups: &[(Provider, &[String])], query: &str) -> Vec<MenuRow> {
+    let mut rows = Vec::new();
+    for (provider, ids) in groups {
+        let matches = filter_models(ids, query);
+        if matches.is_empty() {
+            continue;
+        }
+        rows.push(MenuRow::Header(*provider));
+        rows.extend(matches.into_iter().map(|index| MenuRow::Model { provider: *provider, id: ids[index].clone() }));
+    }
+    rows
+}
+
+#[cfg(test)]
+mod menu_rows_tests {
+    use super::{menu_rows, MenuRow};
+    use flamewm_assistant_core::Provider;
+
+    fn ark() -> Vec<String> {
+        ["lite", "flash", "pro"].iter().map(|s| s.to_string()).collect()
+    }
+
+    fn proxy() -> Vec<String> {
+        ["a/b:free", "c/d"].iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn each_provider_group_starts_with_its_header() {
+        let (ark, proxy) = (ark(), proxy());
+        let rows = menu_rows(&[(Provider::Ark, &ark), (Provider::HermesProxy, &proxy)], "");
+        assert_eq!(rows.len(), 1 + 3 + 1 + 2);
+        assert_eq!(rows[0], MenuRow::Header(Provider::Ark));
+        assert_eq!(rows[4], MenuRow::Header(Provider::HermesProxy));
+        assert_eq!(rows[5], MenuRow::Model { provider: Provider::HermesProxy, id: "a/b:free".into() });
+    }
+
+    #[test]
+    fn missing_proxy_group_has_no_header() {
+        let ark = ark();
+        let rows = menu_rows(&[(Provider::Ark, &ark)], "");
+        assert_eq!(rows.len(), 4);
+        assert!(rows.iter().all(|row| !matches!(row, MenuRow::Model { provider: Provider::HermesProxy, .. })));
+    }
+
+    #[test]
+    fn search_spans_groups_and_hides_groups_without_matches() {
+        let (ark, proxy) = (ark(), proxy());
+        let rows = menu_rows(&[(Provider::Ark, &ark), (Provider::HermesProxy, &proxy)], "free");
+        assert_eq!(
+            rows,
+            vec![
+                MenuRow::Header(Provider::HermesProxy),
+                MenuRow::Model { provider: Provider::HermesProxy, id: "a/b:free".into() },
+            ]
+        );
+    }
+
+    #[test]
+    fn no_match_anywhere_is_empty() {
+        let (ark, proxy) = (ark(), proxy());
+        assert!(menu_rows(&[(Provider::Ark, &ark), (Provider::HermesProxy, &proxy)], "zzz").is_empty());
+    }
 }
 
 #[cfg(test)]
