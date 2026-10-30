@@ -1313,6 +1313,18 @@ impl X11App {
             // observable frame is the finished document rather than black.
             if self.initial_map_pending {
                 unsafe { XMapWindow(self.display, self.window) };
+                if self.role == X11WindowRole::PopupMenu {
+                    // Override-redirect popups are never focused by the WM; typing needs focus.
+                    // SAFETY: live display and the window just mapped above.
+                    unsafe {
+                        crate::surface_controller::raw_press::XSetInputFocus(
+                            self.display,
+                            self.window,
+                            crate::surface_controller::raw_press::REVERT_TO_POINTER_ROOT,
+                            0,
+                        );
+                    }
+                }
                 self.initial_map_pending = false;
             }
             unsafe { XFlush(self.display) };

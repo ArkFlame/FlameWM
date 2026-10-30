@@ -42,3 +42,25 @@ The assistant window chats with two OpenAI-compatible providers. Both use one cl
   returned HTTP 200, `text/event-stream`, 12 `data:` frames.
 - Not verified here: the real Hermes proxy was not used by tests or screenshots. Screenshots on a
   scratch display are not yet taken.
+
+## Taskbar button and popover
+
+- `assistant.taskbarIcon` (default on) shows a white brain button in the taskbar, next to the
+  tray items. It shows only while `assistant.enabled` is also on. Settings > Assistant >
+  "Show assistant in taskbar" flips it.
+- The button (`tray-assistant`, `ui/shell/panel.html`, icon `assets/web/breeze/assistant-brain.svg`)
+  sends `assistant.open`. The shell resolves the button rect and runs
+  `flamewm-assistant --popover X Y WIDTH HEIGHT` with device pixels.
+- Choice: the popover reuses the assistant binary, not the shell's in-process popup machinery. The
+  shell's popups are rendered from build-time artifacts; hosting the chat there would duplicate the
+  assistant UI. The popover is an override-redirect window (`UiWindowRole::PopupMenu`, `_NET_WM_WINDOW_TYPE_POPUP_MENU`),
+  so the WM draws no frame or titlebar.
+- Placement: centred on the button, above it for a button in the lower half of the root and below
+  it otherwise, kept on the root (`popover::origin`).
+- Dismissal: a root press outside the popover and the button, or Escape, exits it. A press on the
+  button is left to the shell: its release launches `flamewm-assistant --popover` again, and
+  `instance::claim` stops the open window, the same toggle as Super+C.
+- Super+C and Settings > Open assistant still open the normal window.
+- Limits: the popover does not take keyboard focus by itself, so Escape works only when the pointer
+  is over it or the X focus is on it. Presses are compared in logical pixels, which match device
+  pixels at the default scale only.

@@ -185,7 +185,13 @@ const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "assistant.enabled",
         "assistant-enabled-on",
         "assistant-enabled-off",
-        false,
+        true,
+    ),
+    (
+        "assistant.taskbarIcon",
+        "assistant-taskbar-icon-on",
+        "assistant-taskbar-icon-off",
+        true,
     ),
     (
         "assistant.speechToText",
@@ -1302,6 +1308,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 self.client
                     .apply_setting(key, SettingValue::Boolean(enabled))
                     .map_err(control_error)?;
+                if enabled && SPEECH_TOGGLES.contains(&key) {
+                    start_voice_setup()?;
+                }
                 // Custom accent off means the system accent everywhere: reset the stored value.
                 if key == "accentCustom" && !enabled {
                     self.apply_text("accent", DEFAULT_ACCENT.to_owned())?;
@@ -3780,7 +3789,7 @@ fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-const TOGGLE_KEYS: [&str; 37] = [
+const TOGGLE_KEYS: [&str; 38] = [
     "reduceTransparency",
     "showContentWhileDragging",
     "windowShadows",
@@ -3816,9 +3825,26 @@ const TOGGLE_KEYS: [&str; 37] = [
     "taskbarActivities",
     "taskbarSeparate",
     "assistant.enabled",
+    "assistant.taskbarIcon",
     "assistant.speechToText",
     "assistant.textToSpeech",
 ];
+
+/// Speech toggles whose turn-on starts the background voice setup (models download once).
+const SPEECH_TOGGLES: [&str; 2] = ["assistant.speechToText", "assistant.textToSpeech"];
+
+/// Starts `flamewm-assistant --voice-setup` without waiting for it. A waiter thread reaps the child.
+/// The setup is idempotent: a finished or already running setup makes the new process exit at once.
+fn start_voice_setup() -> Result<(), String> {
+    let mut child = std::process::Command::new("flamewm-assistant")
+        .arg("--voice-setup")
+        .spawn()
+        .map_err(|error| format!("Could not start the voice setup: {error}"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
 
 /// Parses one `data-action` value. Unknown IDs are errors, never silent no-ops.
 fn parse_action(action: &str) -> Result<SettingsAction, String> {

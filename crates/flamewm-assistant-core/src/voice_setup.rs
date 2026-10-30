@@ -3,9 +3,12 @@
 //! and verifies its own model into a cache inside the same directory. Two wrapper scripts adapt the
 //! runtimes to the stdin/stdout contract of [`SpeechConfig`]. Nothing is installed system-wide.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+
+use rustix::fs::{flock, FlockOperation};
 
 use crate::download::{CurlFetcher, DiskModelStore};
 use crate::process::SystemRunner;
@@ -15,6 +18,9 @@ use crate::{default_models_dir, AssistantError, CancelToken, ProcessRunner, Spee
 const TORCH_INDEX: &str = "https://download.pytorch.org/whl/cpu";
 const TTS_MODEL: &str = "tts-phonon-local";
 const READY: &str = "ready";
+const LOCK: &str = "setup.lock";
+/// Message of the `Io` error when another process (Settings or a window) holds the setup lock.
+pub const SETUP_BUSY: &str = "voice setup is already running in another process";
 const VENV_HINT: &str = "Install python3-venv (Debian or Ubuntu: sudo apt install python3-venv) and retry.";
 const NET_HINT: &str = "Check the network to pypi.org, files.pythonhosted.org, download.pytorch.org and huggingface.co, then retry.";
 
@@ -53,7 +59,8 @@ pub fn setup_default(progress: &mut dyn FnMut(u8, &str)) -> Result<PathBuf, Assi
 }
 
 /// Creates or repairs the voice directory and returns the TTS model directory. The ready marker is
-/// written last, so an interrupted or failed setup is never reported as ready.
+/// written last, so an interrupted or failed setup is never reported as ready. A finished setup
+/// returns at once, and a second process cannot start while one holds the setup lock.
 pub fn setup(
     dir: &Path,
     runner: &mut dyn ProcessRunner,
@@ -65,8 +72,13 @@ pub fn setup(
     if text.chars().any(char::is_whitespace) {
         return Err(AssistantError::Config(format!("the voice directory path must not contain spaces: {text}")));
     }
-    let _ = fs::remove_file(dir.join(READY));
     fs::create_dir_all(dir)?;
+    let _lock = SetupLock::acquire(dir)?;
+    if let Some(model) = ready_model(dir) {
+        progress(100, "Voice ready");
+        return Ok(model);
+    }
+    let _ = fs::remove_file(dir.join(READY));
 
     let venv = dir.join("venv");
     let pip = path_arg(&venv.join("bin/pip"));
@@ -141,6 +153,24 @@ fn step(what: &str, hint: &str, result: Result<(), AssistantError>) -> Result<()
         Err(AssistantError::Cancelled) => Err(AssistantError::Cancelled),
         Err(error) => Err(AssistantError::Io(format!("{what} failed: {error}. {hint}"))),
         Ok(()) => Ok(()),
+    }
+}
+
+/// Exclusive, non-blocking `flock` on `voice/setup.lock`. The kernel releases it when the file closes,
+/// so a crashed setup never leaves the lock held.
+struct SetupLock(File);
+
+impl SetupLock {
+    fn acquire(dir: &Path) -> Result<Self, AssistantError> {
+        let file = fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join(LOCK))?;
+        flock(&file, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
+            if error.kind() == io::ErrorKind::WouldBlock {
+                AssistantError::Io(SETUP_BUSY.into())
+            } else {
+                AssistantError::Io(format!("cannot lock the voice setup: {error}"))
+            }
+        })?;
+        Ok(Self(file))
     }
 }
 
@@ -311,6 +341,34 @@ mod tests {
         assert!(transcribe.contains("venv/bin/phonon-2") && transcribe.contains("FERMION_CACHE_DIR="));
         let mode = fs::metadata(dir.join("bin/speak")).expect("meta").permissions().mode();
         assert_eq!(mode & 0o111, 0o111);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_setup_is_refused_while_the_lock_is_held() {
+        let dir = scratch("busy");
+        fs::create_dir_all(&dir).expect("dir");
+        let held = SetupLock::acquire(&dir).expect("first lock");
+        let mut runner = FakeRunner::default();
+        let mut store = FakeStore::default();
+        let error = setup(&dir, &mut runner, &mut store, &CancelToken::new(), &mut |_, _| {}).expect_err("busy");
+        assert_eq!(error, AssistantError::Io(SETUP_BUSY.into()));
+        assert!(runner.calls.is_empty() && store.fetches == 0, "no work while busy");
+        drop(held);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_finished_setup_is_not_repeated() {
+        let dir = scratch("idempotent");
+        setup(&dir, &mut FakeRunner::default(), &mut FakeStore::default(), &CancelToken::new(), &mut |_, _| {})
+            .expect("first setup");
+        let mut runner = FakeRunner::default();
+        let mut store = FakeStore::default();
+        let model = setup(&dir, &mut runner, &mut store, &CancelToken::new(), &mut |_, _| {}).expect("second setup");
+        assert_eq!(model, dir.join("models/tts-phonon-local"));
+        assert!(runner.calls.is_empty(), "{:?}", runner.calls);
+        assert_eq!(store.fetches, 0);
         let _ = fs::remove_dir_all(&dir);
     }
 

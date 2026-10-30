@@ -49,6 +49,8 @@ ui/
 @exec scripts/build-cpak
 @exec scripts/build-dist
 @exec scripts/bench-memory
+@exec tools/bench_mem.sh
+@exec tools/flamewm_cpu_workloads.py
 @exec scripts/check
 @exec scripts/cleanup_bloat_v1.sh
 @exec scripts/package-source-archive

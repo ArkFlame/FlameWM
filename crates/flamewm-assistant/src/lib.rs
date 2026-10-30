@@ -7,8 +7,12 @@
 mod chat_header;
 mod instance;
 mod model;
+mod popover;
 pub mod osd;
 pub mod osd_host;
+pub mod voice_background;
+/// Argument that runs the background voice setup instead of the window (see `voice_background`).
+pub const VOICE_SETUP_ARG: &str = "--voice-setup";
 mod voice_setup_ui;
 
 use osd::{Osd, OsdEvent, OsdInput, OsdState};
@@ -38,9 +42,9 @@ use flamewm_control_dbus::ControlClient;
 use flamewm_dbus_reactor::BusKind;
 use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::{
-    UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess, UiKeyEvent, UiKeyPhase,
-    UiWakeDrain, UiWindowConfig, UiWindowRole, X11WindowIdentity, decode_document,
-    run_with_controller_events_role_and_two_readable_fds,
+    RawPress, RawPressWatch, UiActionEvent, UiActionPhase, UiColor, UiControllerEvent,
+    UiDocumentAccess, UiKeyEvent, UiKeyPhase, UiWakeDrain, UiWindowConfig, UiWindowRole,
+    X11WindowIdentity, decode_document, run_with_controller_events_role_two_readable_and_presses,
 };
 
 use model::{History, KeyCmd, MenuRow, Row, SLOTS};
@@ -49,7 +53,7 @@ use model::{History, KeyCmd, MenuRow, Row, SLOTS};
 const MODEL_ROWS: usize = 8;
 const UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-assistant.rwr"));
 const WIDTH: u32 = 460;
-const HEIGHT: u32 = 680;
+const HEIGHT: u32 = 780;
 /// Wheel notches move the viewport by this many messages.
 const WHEEL_STEP: isize = 3;
 /// Settings `accent` default; keep equal to `DEFAULT_ACCENT` in `flamewm-platform/src/settings.rs`.
@@ -697,6 +701,9 @@ impl Assistant {
         }
         match event.action.as_str() {
             "assistant.retry" => self.check(),
+            "assistant.powered" => {
+                let _ = std::process::Command::new("xdg-open").arg("https://ai.arkflame.com").spawn();
+            }
             "assistant.send" => self.submit(),
             "assistant.model-toggle" => self.toggle_model_menu(),
             "assistant.model-prev" => self.model_page = self.model_page.saturating_sub(1),
@@ -778,7 +785,7 @@ impl Assistant {
     }
 
     fn paint_models(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
-        doc.text("model", model_label(&self.selection.model))?;
+        doc.text("model", model_label(&pretty_model(&self.selection.model)))?;
         let open = self.model_menu;
         doc.visible("model-menu", open)?;
         let rows = self.menu_rows();
@@ -804,7 +811,7 @@ impl Assistant {
             doc.visible(&format!("mrow-{slot}"), open && model_row.is_some())?;
             if let Some((provider, id)) = model_row {
                 let current = provider == self.selection.provider && *id == self.selection.model;
-                doc.text(&format!("mtext-{slot}"), id.clone())?;
+                doc.text(&format!("mtext-{slot}"), pretty_model(id))?;
                 doc.visible(&format!("mcheck-{slot}"), current)?;
             }
         }
@@ -817,10 +824,14 @@ impl Assistant {
             let row = rows.get(slot);
             let user = row.filter(|row| row.role == Role::User);
             let other = row.filter(|row| row.role != Role::User);
-            doc.visible(&format!("u-{slot}"), user.is_some())?;
+            // A wrapping message gets the fixed-width bubble so painted wrap matches measured height.
+            let wide = user.is_some_and(|row| model::wraps(&row.text));
+            doc.visible(&format!("u-{slot}"), user.is_some() && !wide)?;
+            doc.visible(&format!("uw-{slot}"), wide)?;
             doc.visible(&format!("a-{slot}"), other.is_some())?;
             if let Some(row) = user {
                 doc.text(&format!("ut-{slot}"), row.text.clone())?;
+                doc.text(&format!("utw-{slot}"), row.text.clone())?;
             }
             if let Some(row) = other {
                 doc.text(&format!("at-{slot}"), row.text.clone())?;
@@ -828,7 +839,8 @@ impl Assistant {
         }
         let empty = self.input.is_empty();
         let no_rows = rows.is_empty();
-        doc.visible("list", !no_rows)?;
+        doc.visible("list", !no_rows && !self.model_menu)?;
+        doc.visible("menu-fill", self.model_menu)?;
         doc.visible("empty", no_rows)?;
         doc.text("subtitle", chat_header::subtitle(self.status_link(), self.working).to_owned())?;
         doc.visible("retry", self.status_link() == Link::Offline)?;
@@ -843,7 +855,9 @@ impl Assistant {
         doc.visible("speaking", self.speaking)?;
         doc.visible("placeholder", empty)?;
         doc.visible("input", !empty)?;
-        doc.text("input", self.input.clone())?;
+        doc.visible("caret-empty", empty)?;
+        doc.visible("caret", !empty)?;
+        doc.text("input", model::keep_trailing_space(&self.input))?;
         doc.visible("record", self.speech_in && !self.working)?;
         doc.visible("mic", mic)?;
         doc.visible("send", !self.working && !mic)?;
@@ -878,6 +892,18 @@ fn api_key_setting(theme: &SettingsSnapshot) -> String {
     }
 }
 
+/// Display name for a model id: `solar-pro` -> `Solar Pro`.
+fn pretty_model(id: &str) -> String {
+    id.split(['-', '_'])
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            chars.next().map_or_else(String::new, |first| first.to_uppercase().chain(chars).collect())
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Short header label for a model id: the part after the last `/`, cut to 18 characters.
 fn model_label(id: &str) -> String {
     let name = id.rsplit('/').next().unwrap_or(id);
@@ -891,6 +917,9 @@ fn model_label(id: &str) -> String {
 fn accent(theme: &SettingsSnapshot) -> u32 {
     match theme.values.get("accent") {
         Some(SettingValue::Rgb(rgb)) => rgb & 0x00ff_ffff,
+        Some(SettingValue::Text(hex)) => {
+            u32::from_str_radix(hex.trim_start_matches('#'), 16).map_or(ACCENT_RGB, |rgb| rgb & 0x00ff_ffff)
+        }
         _ => ACCENT_RGB,
     }
 }
@@ -980,18 +1009,43 @@ pub fn run() -> Result<(), String> {
     if instance::claim(&pid_file, Path::new("/proc")) == instance::Claim::Toggled {
         return Ok(());
     }
-    let result = show(state_dir);
+    let result = show(state_dir, None);
     instance::release(&pid_file);
     result
 }
 
-fn show(state_dir: PathBuf) -> Result<(), String> {
+/// Parses `X Y WIDTH HEIGHT` after `--popover`.
+#[must_use]
+pub fn popover_anchor(args: &[String]) -> Option<popover::Anchor> {
+    popover::parse_args(args)
+}
+
+/// Taskbar popover: the same toggle as `run`, but the window is an undecorated popup above `anchor`.
+pub fn run_popover(anchor: popover::Anchor) -> Result<(), String> {
+    let state_dir = state_dir().ok_or("no home directory for the assistant")?;
+    let runtime_dir = env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    let pid_file = instance::pid_path(runtime_dir.as_deref(), Some(&state_dir))
+        .ok_or("no runtime or state folder for the assistant pid file")?;
+    if instance::claim(&pid_file, Path::new("/proc")) == instance::Claim::Toggled {
+        return Ok(());
+    }
+    let result = show(state_dir, Some(anchor));
+    instance::release(&pid_file);
+    match result {
+        Err(error) if error == popover::DISMISSED => Ok(()),
+        other => other,
+    }
+}
+
+fn show(state_dir: PathBuf, anchor: Option<popover::Anchor>) -> Result<(), String> {
     let theme = initial_settings();
     let backdrop = window_backdrop(&theme);
     let mut document = decode_document(UI)?.with_window_backdrop(backdrop);
     let store = ChatStore::open(&state_dir).map_err(|error| error.to_string())?;
 
     let root_size = flamewm_ui_x11::root_geometry().unwrap_or((1280, 800));
+    let window_height = anchor.map_or(HEIGHT, |anchor| HEIGHT.min(popover::max_height(root_size, anchor) as u32));
+    model::set_window_height(window_height as usize);
     let (mut wake_reader, wake_writer) = nonblocking_pair()?;
     let (tx, rx) = mpsc::channel::<Msg>();
     let bus = Bus { tx, wake: Arc::new(wake_writer) };
@@ -1003,26 +1057,73 @@ fn show(state_dir: PathBuf) -> Result<(), String> {
     let app = Rc::new(RefCell::new(app));
     let event_app = Rc::clone(&app);
     let wake_app = Rc::clone(&app);
-    run_with_controller_events_role_and_two_readable_fds(
+    let identity = X11WindowIdentity {
+        instance: "flamewm-assistant".into(),
+        class: "flamewm-assistant".into(),
+    };
+    let (config, role, press_watch) = match anchor {
+        None => (
+            UiWindowConfig {
+                width: WIDTH,
+                height: HEIGHT,
+                x: centred(root_size, WIDTH, 0),
+                y: centred(root_size, HEIGHT, 1),
+                title: "FlameWM Assistant".into(),
+                identity: Some(identity),
+            },
+            UiWindowRole::Normal,
+            RawPressWatch::default(),
+        ),
+        Some(anchor) => {
+            let size = (WIDTH as i32, window_height as i32);
+            let (x, y) = popover::origin(root_size, size, anchor);
+            let watch = RawPressWatch::default();
+            watch.set(true);
+            (
+                UiWindowConfig {
+                    width: WIDTH,
+                    height: window_height,
+                    x,
+                    y,
+                    title: "FlameWM Assistant".into(),
+                    identity: Some(identity),
+                },
+                UiWindowRole::PopupMenu,
+                watch,
+            )
+        }
+    };
+    let popover_rects = anchor.map(|anchor| {
+        let (x, y) = popover::origin(root_size, (WIDTH as i32, window_height as i32), anchor);
+        [[x, y, WIDTH as i32, window_height as i32], anchor]
+    });
+    let popover_open = anchor.is_some();
+    run_with_controller_events_role_two_readable_and_presses(
         document,
-        UiWindowConfig {
-            width: WIDTH,
-            height: HEIGHT,
-            x: centred(root_size, WIDTH, 0),
-            y: centred(root_size, HEIGHT, 1),
-            title: "FlameWM Assistant".into(),
-            identity: Some(X11WindowIdentity {
-                instance: "flamewm-assistant".into(),
-                class: "flamewm-assistant".into(),
-            }),
-        },
-        UiWindowRole::Normal,
+        config,
+        role,
         fd,
         move || drain(&mut wake_reader),
         None,
+        press_watch,
+        move |press: &RawPress, _doc: &mut flamewm_ui_x11::UiDocumentView<'_>| {
+            match popover_rects {
+                Some(rects) if popover::is_outside(press, &rects) => {
+                    Err(popover::DISMISSED.to_owned())
+                }
+                _ => Ok(()),
+            }
+        },
         move |event, doc| {
             let mut app = event_app.borrow_mut();
             match event {
+                UiControllerEvent::Key(key)
+                    if popover_open
+                        && key.phase == UiKeyPhase::Press
+                        && key.key == "Escape" =>
+                {
+                    return Err(popover::DISMISSED.to_owned());
+                }
                 UiControllerEvent::Action(action) => app.action(action),
                 UiControllerEvent::Key(key) => app.key(key),
                 UiControllerEvent::Drag(_) | UiControllerEvent::Resized { .. } => {}
@@ -1140,6 +1241,19 @@ mod tests {
     fn blank_text_keeps_a_line_box() {
         assert_eq!(or_blank(String::new()), "\u{200b}");
         assert_eq!(or_blank("x".into()), "x");
+    }
+
+    #[test]
+    fn accent_reads_the_settings_hex_text() {
+        let mut theme = SettingsSnapshot::new(1);
+        theme.values.insert("accent".to_owned(), SettingValue::Text("#EF4048".to_owned()));
+        assert_eq!(accent(&theme), 0x00ef_4048);
+    }
+
+    #[test]
+    fn pretty_model_title_cases_words() {
+        assert_eq!(pretty_model("solar-pro"), "Solar Pro");
+        assert_eq!(pretty_model("pro"), "Pro");
     }
 
     #[test]

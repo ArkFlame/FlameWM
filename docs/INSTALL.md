@@ -154,10 +154,12 @@ not install or start Hermes. Speech input and output are off until enabled in Se
 
 ## Assistant speech (optional)
 
-Speech is off by default. Nothing is downloaded or installed until you turn speech on and press the
-mic (or a reply is read aloud) for the first time. That press runs **Set up voice**, which does the
-whole setup in one step. The assistant window shows progress (`Setting up voice 40%...`) and the
-reason for any failure:
+Speech is off by default. Turning on speech to text or text to speech in Settings > Assistant starts
+**Set up voice** in the background (`flamewm-assistant --voice-setup`), which does the whole setup in
+one step. It retries up to three times (60 s apart) and records progress and the final state, or the
+reason for a failure, in `voice/status`. Pressing the mic or reading a reply aloud before it finishes
+shows the same setup in the assistant window. Setup is idempotent: a finished setup is not repeated,
+and a second setup waits for the first one's lock instead of running alongside it:
 
 1. Creates a private virtual environment at `$XDG_DATA_HOME/flamewm/assistant/voice/venv` (default
    `~/.local/share/flamewm/assistant/voice/venv`). It needs `python3` 3.10 or newer with `venv`

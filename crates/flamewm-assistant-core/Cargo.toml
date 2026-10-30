@@ -10,6 +10,7 @@ description = "FlameWM assistant core: ARK AI chat client, chat history store, s
 
 [dependencies]
 serde_json = { workspace = true }
+rustix = { workspace = true, features = ["fs"] }
 
 [lints]
 workspace = true

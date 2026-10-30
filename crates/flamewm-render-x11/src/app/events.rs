@@ -63,7 +63,7 @@ fn keyboard_text(symbol: u64) -> Option<String> {
 /// entries must give it keyboard focus so Delete is delivered there. Other
 /// roles retain their existing focus owner.
 fn desktop_takes_focus_on_press(role: X11WindowRole, button: u32) -> bool {
-    role == X11WindowRole::Desktop && matches!(button, 1 | 3)
+    matches!(role, X11WindowRole::Desktop | X11WindowRole::PopupMenu) && matches!(button, 1 | 3)
 }
 
 const TYPED_KEY_ACTION: &str = "__flamewm.ui.key";

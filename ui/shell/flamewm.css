@@ -113,7 +113,7 @@ input { cursor:text; }
 .task-slot { width:42px; height:100%; position:relative; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--text); cursor:default; }.task-slot-label { position:absolute; left:0px; top:0px; width:0px; height:0px; overflow:hidden; }
 .task-slot .underline { background:transparent; }
 .task-slot.running .underline { background:#87919b; }
-.task-slot.focused .underline { left:5px; right:5px; width:auto; height:3px; background:var(--accent); }
+.task-slot.focused .underline { left:7px; width:28px; height:3px; background:var(--accent); }
 .underline { position:absolute; left:7px; bottom:0px; width:28px; height:2px; }
 .task-progress { position:absolute; left:7px; bottom:4px; height:2px; width:0px; background:var(--accent); }
 .browser-line { background:#87919b; }.settings-line { background:#87919b; }.terminal-line { background:#87919b; }

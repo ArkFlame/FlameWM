@@ -310,9 +310,11 @@ pub struct ProductSettings {
     pub default_terminal: String,
     /// `assistant.enabled`: allows the assistant and grabs its chords (Super+C, Ctrl+Alt+C).
     pub assistant_enabled: bool,
-    /// `assistant.speechToText`: reserved for the speech input follow-up; off by default.
+    /// `assistant.taskbarIcon`: shows the assistant button in the taskbar; on by default.
+    pub assistant_taskbar_icon: bool,
+    /// `assistant.speechToText`: speech input; turning it on starts the background voice setup. Off by default.
     pub assistant_speech_to_text: bool,
-    /// `assistant.textToSpeech`: reserved for the speech output follow-up; off by default.
+    /// `assistant.textToSpeech`: speech output; turning it on starts the background voice setup. Off by default.
     pub assistant_text_to_speech: bool,
     /// `assistant.apiKey`: ARK AI key; empty uses the built-in default key.
     pub assistant_api_key: String,
@@ -439,7 +441,8 @@ impl Default for ProductSettings {
             lock_background_dim_percent: 25,
             avatar_image: String::new(),
             default_terminal: String::new(),
-            assistant_enabled: false,
+            assistant_enabled: true,
+            assistant_taskbar_icon: true,
             assistant_speech_to_text: false,
             assistant_text_to_speech: false,
             assistant_api_key: String::new(),
@@ -1148,6 +1151,7 @@ stable_settings! {
     (false, desktop, "shareWallpaper", share_wallpaper),
     (false, desktop, "defaultTerminal", default_terminal),
     (false, assistant, "assistant.enabled", assistant_enabled),
+    (false, assistant, "assistant.taskbarIcon", assistant_taskbar_icon),
     (false, assistant, "assistant.speechToText", assistant_speech_to_text),
     (false, assistant, "assistant.textToSpeech", assistant_text_to_speech),
     (false, assistant, "assistant.apiKey", assistant_api_key),
@@ -1609,6 +1613,15 @@ mod tests {
             value.clone_into(&mut settings.assistant_api_key);
             assert!(settings.validate().is_err(), "{value:?} must be rejected");
         }
+    }
+
+    #[test]
+    fn assistant_taskbar_icon_defaults_on_and_parses_off() {
+        assert!(ProductSettings::default().assistant_taskbar_icon);
+        let parsed = load("assistant.taskbarIcon=0\n").expect("taskbar icon key parses");
+        assert!(!parsed.assistant_taskbar_icon);
+        let text = assert_round_trip(&parsed);
+        assert!(text.contains("assistant.taskbarIcon=false"));
     }
 
     #[test]

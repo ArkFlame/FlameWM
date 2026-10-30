@@ -528,6 +528,8 @@ pub struct TaskbarItems {
     pub weather: bool,
     pub volume: bool,
     pub network: bool,
+    /// Brain button: `assistant.enabled` and `assistant.taskbarIcon` both on.
+    pub assistant: bool,
     pub battery: bool,
     pub battery_only_when_relevant: bool,
     pub clock: bool,
@@ -548,6 +550,7 @@ impl Default for TaskbarItems {
             weather: true,
             volume: true,
             network: true,
+            assistant: true,
             battery: true,
             battery_only_when_relevant: false,
             clock: true,
@@ -828,6 +831,9 @@ pub(crate) fn project_status_tray(
         ),
     )?;
     let volume = status.audio.visible && items.volume;
+    let assistant = items.assistant;
+    document.visible("tray-assistant", assistant)?;
+    project_tray_button(document, "tray-assistant", assistant)?;
     document.visible("tray-volume", volume)?;
     project_tray_button(document, "tray-volume", volume)?;
     document.visible("tray-volume-icon", !status.audio.muted)?;

@@ -36,7 +36,7 @@ pub use speech::{
     ModelStore, Speech, Stopper, Transcriber, UnconfiguredModelStore, UnconfiguredSpeech,
     UnconfiguredTranscriber, UNPINNED,
 };
-pub use voice_setup::{apply_defaults, default_voice_dir, ready_model, setup_default};
+pub use voice_setup::{apply_defaults, default_voice_dir, ready_model, setup_default, SETUP_BUSY};
 pub use store::{ChatStore, Message, MsgState, Role, SessionState};
 
 use std::fmt;

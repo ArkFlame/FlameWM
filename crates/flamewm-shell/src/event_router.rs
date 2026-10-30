@@ -454,6 +454,16 @@ impl ShellLoop {
         }
 
         if event.action.phase == ActionPhase::Release && event.action.inside {
+            if action == crate::assistant_popover::ACTION {
+                self.shell.dispatch("popover.close");
+                self.close_quick_control_nonfatal();
+                if let Some(panel) = self.surfaces.panel_for_output(&output) {
+                    if let Err(error) = crate::assistant_popover::launch(runtime, panel) {
+                        eprintln!("flamewm-shell: {error}");
+                    }
+                }
+                return self.apply_controls(runtime);
+            }
             if let Some(program) = general_settings_launch(action) {
                 if let Err(error) = std::process::Command::new(program).spawn() {
                     eprintln!("flamewm-shell: spawn {program}: {error}");

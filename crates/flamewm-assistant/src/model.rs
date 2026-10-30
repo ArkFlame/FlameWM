@@ -2,12 +2,13 @@
 //! for the chat list and the key rules for the composer. No UI or I/O types live here, so
 //! every rule is unit-tested without an X11 session.
 
-use std::collections::VecDeque;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
 
 use flamewm_assistant_core::{Message, Provider, Role};
 
 /// Bubble slots that exist in the document. Node count stays bounded by this.
-pub const SLOTS: usize = 12;
+pub const SLOTS: usize = 24;
 /// Messages fetched per page from the store.
 pub const PAGE: usize = 40;
 /// Messages kept in memory. Messages beyond the viewport are dropped from the far side.
@@ -16,9 +17,22 @@ pub const MAX_LOADED: usize = 96;
 const NEAR_TOP: usize = 3;
 /// Input length limit in characters.
 pub const MAX_INPUT: usize = 4_000;
-/// Pixels the bubble list may use. The window is 680 px tall; the composer, notice and working
+/// Pixels the bubble list may use. The window is 780 px tall; the composer, notice and working
 /// row take the rest. Bubble heights are estimates, so the budget leaves room for error.
-const LIST_BUDGET: usize = 400;
+const LIST_BUDGET: usize = 500;
+/// Height of the window around the list: header, composer, notice and paddings.
+pub const CHROME_PX: usize = 280;
+static LIST_BUDGET_PX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(LIST_BUDGET);
+
+/// Sets the list budget for a window of `height` pixels (a popover can be shorter than `HEIGHT`).
+pub fn set_window_height(height: usize) {
+    let budget = height.saturating_sub(CHROME_PX).clamp(120, LIST_BUDGET);
+    LIST_BUDGET_PX.store(budget, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn list_budget() -> usize {
+    LIST_BUDGET_PX.load(std::sync::atomic::Ordering::Relaxed)
+}
 /// Body font size and the text width inside a bubble (max-width 330 px less 13 px padding a side).
 /// Heights come from the renderer's own text layout, so the budget matches what is drawn.
 const BODY_PX: f32 = 14.0;
@@ -51,16 +65,45 @@ fn bubble_px(text: impl AsRef<str>) -> usize {
     layout.height.ceil() as usize + BUBBLE_PAD_PX
 }
 
+/// True when the text needs more than one line in a bubble.
+pub fn wraps(text: &str) -> bool {
+    bubble_px(shown(text)) > bubble_px("x")
+}
+
+/// Input text with a trailing space made non-breaking, so the caret moves after it.
+pub fn keep_trailing_space(text: &str) -> String {
+    match text.strip_suffix(' ') {
+        Some(head) => format!("{head}\u{a0}"),
+        None => text.to_owned(),
+    }
+}
+
 /// How many messages, taken in order, fit `slots` and the budget after `base` pixels.
-fn fitting<'a>(msgs: impl Iterator<Item = &'a Message>, base: usize, slots: usize) -> usize {
+fn fitting<'a>(
+    msgs: impl Iterator<Item = &'a Message>,
+    base: usize,
+    slots: usize,
+    cache: &RefCell<HashMap<u64, (usize, usize)>>,
+) -> usize {
     let mut total = base;
     let mut count = 0;
     for msg in msgs {
         if count >= slots {
             break;
         }
-        let height = bubble_px(shown(&msg.text));
-        if total + height > LIST_BUDGET {
+        // Layout is the costly part and runs on every paint, so heights are cached per message.
+        let len = msg.text.len();
+        let cached = cache.borrow().get(&msg.seq).filter(|(l, _)| *l == len).map(|(_, h)| *h);
+        let height = cached.unwrap_or_else(|| {
+            let h = bubble_px(shown(&msg.text));
+            let mut cache = cache.borrow_mut();
+            if cache.len() > 4 * MAX_LOADED {
+                cache.clear();
+            }
+            cache.insert(msg.seq, (len, h));
+            h
+        });
+        if total + height > list_budget() {
             break;
         }
         total += height;
@@ -94,6 +137,8 @@ pub struct History {
     follow: bool,
     /// Streaming assistant text for the turn in flight.
     pending: Option<String>,
+    /// Bubble heights by seq: `(text length, pixels)`.
+    heights: RefCell<HashMap<u64, (usize, usize)>>,
 }
 
 impl History {
@@ -109,6 +154,7 @@ impl History {
             top: 0,
             follow: true,
             pending: None,
+            heights: RefCell::default(),
         };
         history.top = history.max_top();
         Ok(history)
@@ -127,8 +173,8 @@ impl History {
     /// counted from the newest message. Keeps the newest message and the composer on screen.
     fn max_top(&self) -> usize {
         let base = self.pending_height();
-        let count = fitting(self.msgs.iter().rev(), base, self.capacity());
-        self.msgs.len() - count
+        let count = fitting(self.msgs.iter().rev(), base, self.capacity(), &self.heights);
+        self.msgs.len().saturating_sub(count)
     }
 
     fn pending_height(&self) -> usize {
@@ -240,7 +286,7 @@ impl History {
 
     /// Bubbles for the viewport, oldest first, at most `SLOTS` in total.
     pub fn rows(&self) -> Vec<Row> {
-        let count = fitting(self.msgs.iter().skip(self.top), self.pending_height(), self.capacity());
+        let count = fitting(self.msgs.iter().skip(self.top), self.pending_height(), self.capacity(), &self.heights);
         let mut rows: Vec<Row> = self
             .msgs
             .iter()

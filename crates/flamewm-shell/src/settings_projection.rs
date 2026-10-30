@@ -311,6 +311,8 @@ pub fn taskbar_items(snapshot: Option<&SettingsSnapshot>) -> TaskbarItems {
         weather: bool_setting(snapshot, "taskbarShowWeather", defaults.weather),
         volume: bool_setting(snapshot, "taskbarShowVolume", defaults.volume),
         network: bool_setting(snapshot, "taskbarShowNetwork", defaults.network),
+        assistant: bool_setting(snapshot, "assistant.enabled", defaults.assistant)
+            && bool_setting(snapshot, "assistant.taskbarIcon", defaults.assistant),
         battery: bool_setting(snapshot, "taskbarShowBattery", defaults.battery),
         battery_only_when_relevant: bool_setting(
             snapshot,

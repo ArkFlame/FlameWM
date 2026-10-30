@@ -278,6 +278,8 @@ pub enum UiWindowRole {
     Normal,
     Desktop,
     Dock,
+    /// Override-redirect popup: no WM frame or titlebar, not managed by the WM.
+    PopupMenu,
 }
 
 fn x11_config(config: UiWindowConfig, role: UiWindowRole) -> flamewm_render_x11::X11Config {
@@ -294,6 +296,7 @@ fn x11_config(config: UiWindowConfig, role: UiWindowRole) -> flamewm_render_x11:
             UiWindowRole::Normal => flamewm_render_x11::X11WindowRole::Normal,
             UiWindowRole::Desktop => flamewm_render_x11::X11WindowRole::Desktop,
             UiWindowRole::Dock => flamewm_render_x11::X11WindowRole::Dock,
+            UiWindowRole::PopupMenu => flamewm_render_x11::X11WindowRole::PopupMenu,
         },
     }
 }
@@ -389,13 +392,48 @@ pub fn run_with_controller_events_role_and_two_readable_fds<F, W, D>(
     config: UiWindowConfig,
     role: UiWindowRole,
     readable_fd: RawFd,
-    mut drain: D,
+    drain: D,
     second_readable: Option<(RawFd, Box<dyn FnMut() -> UiWakeDrain>)>,
     on_event: F,
     on_wake: W,
 ) -> Result<(), String>
 where
     F: for<'a> FnMut(&UiControllerEvent, &mut UiDocumentView<'a>) -> Result<(), String>,
+    W: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
+    D: FnMut() -> UiWakeDrain + 'static,
+{
+    run_with_controller_events_role_two_readable_and_presses(
+        document,
+        config,
+        role,
+        readable_fd,
+        drain,
+        second_readable,
+        RawPressWatch::default(),
+        |_, _| Ok(()),
+        on_event,
+        on_wake,
+    )
+}
+
+/// Two-readable loop that also reports root presses while `press_watch` is armed. An `Err` from
+/// `on_press` or `on_event` ends the loop with that error, which popovers use to dismiss themselves.
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_controller_events_role_two_readable_and_presses<F, W, D, P>(
+    document: UiDocument,
+    config: UiWindowConfig,
+    role: UiWindowRole,
+    readable_fd: RawFd,
+    mut drain: D,
+    second_readable: Option<(RawFd, Box<dyn FnMut() -> UiWakeDrain>)>,
+    press_watch: RawPressWatch,
+    on_press: P,
+    on_event: F,
+    on_wake: W,
+) -> Result<(), String>
+where
+    F: for<'a> FnMut(&UiControllerEvent, &mut UiDocumentView<'a>) -> Result<(), String>,
+    P: for<'a> FnMut(&RawPress, &mut UiDocumentView<'a>) -> Result<(), String>,
     W: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
     D: FnMut() -> UiWakeDrain + 'static,
 {
@@ -423,8 +461,8 @@ where
         role,
         &mut reactor,
         WindowGeometrySlot::default(),
-        RawPressWatch::default(),
-        |_, _| Ok(()),
+        press_watch,
+        on_press,
         on_event,
         on_wake,
     )
