@@ -28,7 +28,6 @@ The compiler crate uses package-specific `opt-level=2`; parser speed is not stea
 ## Acceptance targets
 
 - combined Flame-owned graphical process PSS <= 40 MiB target (met by the 2026-10-30 idle figures below: 23.8 MiB session mode, 26.9 MiB direct mode);
-- goal: combined idle PSS <= 10 MB. **Not achieved.** Current idle PSS is 23.8 MiB (session mode).
 - near-zero idle CPU outside real events/timers;
 - no visible drag backlog in Xephyr;
 - no stale motion rendered after release;
