@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use flamewm_assistant_core::{
     candidate_urls, discover, enable_api_server, explain, gateway_running, install_plan, read_env,
-    run_streaming, start_gateway, wait_until_ready, AssistantError, CancelToken, Detected, MsgState,
+    restart_gateway, run_streaming, start_gateway, wait_until_ready, AssistantError, CancelToken, Detected, MsgState,
     Paths, Role, TurnEvent,
 };
 
@@ -85,23 +85,44 @@ pub(super) fn failed(app: &mut Assistant, error: &AssistantError) {
 
 /// Starts the gateway unless it already answers. Enables the API server in `~/.hermes/.env`
 /// first when it is off (a minimal change with a backup), then waits until it reports healthy.
-pub(super) fn start_job(paths: &Paths, binary: &Path, url: &str) -> Result<String, String> {
+pub(super) fn start_job(paths: &Paths, binary: &Path, url: &str) -> Result<StartJob, String> {
     let mut env = read_env(&paths.hermes_home);
     if let Some((found, _)) = discover(&candidate_urls(Some(url), &env), env.api_key.as_deref()) {
-        return Ok(found);
+        return Ok(StartJob::Ready(found));
     }
     if !env.api_server_enabled || env.api_key.is_none() {
         enable_api_server(&paths.hermes_home.join(".env")).map_err(|error| explain(&error, url))?;
         env = read_env(&paths.hermes_home);
     }
     if gateway_running(&paths.hermes_home) {
-        return Err("Hermes is already running but its API server is not answering. Run `hermes gateway restart`, then Retry.".into());
+        // A second gateway would conflict with the running one: the user confirms a restart first.
+        return Ok(StartJob::RestartNeeded);
     }
     let candidates = candidate_urls(Some(url), &env);
     start_gateway(binary, paths, &env).map_err(|error| explain(&error, url))?;
     wait_until_ready(&candidates, env.api_key.as_deref(), CONNECT_DEADLINE, &CancelToken::new())
+        .map(|(found, _)| StartJob::Ready(found))
+        .map_err(|error| explain(&error, url))
+}
+
+/// Restarts the running gateway after the user confirmed it, then waits until it reports healthy.
+pub(super) fn restart_job(paths: &Paths, binary: &Path, url: &str) -> Result<String, String> {
+    let env = read_env(&paths.hermes_home);
+    let candidates = candidate_urls(Some(url), &env);
+    restart_gateway(binary).map_err(|error| explain(&error, url))?;
+    wait_until_ready(&candidates, env.api_key.as_deref(), CONNECT_DEADLINE, &CancelToken::new())
         .map(|(found, _)| found)
         .map_err(|error| explain(&error, url))
+}
+
+/// Shown on the connect screen when a Hermes gateway is already running: a second gateway would
+/// conflict, so the app asks once before running `hermes gateway restart`.
+pub(super) const RESTART_NEEDED: &str = "Hermes needs a quick restart to let Flamy talk to it. Restart now?";
+
+/// Result of the start job: a healthy URL, or a running gateway that needs a confirmed restart.
+pub(super) enum StartJob {
+    Ready(String),
+    RestartNeeded,
 }
 
 const LINE_CHARS: usize = 300;

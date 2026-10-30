@@ -22,7 +22,7 @@ pub use hermes::{
     SHORT_ANSWER_SYSTEM,
 };
 pub use lifecycle::{
-    detect, install_plan, parse_version, start_gateway, transition, wait_until_ready,
+    detect, install_plan, parse_version, restart_gateway, start_gateway, transition, wait_until_ready,
     AssistantState, Detected, InstallPlan, LifeEvent, Paths, INSTALL_SCRIPT_URL,
 };
 pub use download::{
@@ -33,7 +33,7 @@ pub use process::{
     default_config_path, expand, start_recording, ProcessRunner, Recording, SpeechConfig,
     SystemRunner,
 };
-pub use connect::{enable_api_server, explain, gateway_running, run_streaming, Enabled, RESTART_NEEDED};
+pub use connect::{enable_api_server, explain, gateway_running, run_streaming, Enabled};
 pub use runs::{is_terminal, RunStatus};
 pub use sha256::Sha256;
 pub use speech::{

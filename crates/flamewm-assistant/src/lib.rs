@@ -66,7 +66,7 @@ enum Msg {
     /// Detection result and the URL of a healthy server, when one answered.
     Probed(Option<Detected>, Option<String>),
     Installed(Result<Detected, String>),
-    Started(Result<String, String>),
+    Started(Result<connect_ui::StartJob, String>),
     Turn(TurnEvent),
     TurnDone(Result<TurnOutcome, AssistantError>),
     /// Whole seconds since the running turn started.
@@ -114,6 +114,8 @@ struct Assistant {
     probing: bool,
     installing: bool,
     confirm: bool,
+    /// The connect screen asks to restart a running gateway (one confirm, then the restart runs).
+    restart_confirm: bool,
     store: ChatStore,
     history: History,
     input: String,
@@ -208,6 +210,7 @@ impl Assistant {
             probing: true,
             installing: false,
             confirm: false,
+            restart_confirm: false,
             store,
             history,
             input: String::new(),
@@ -280,9 +283,13 @@ impl Assistant {
                 self.install_line.clear();
                 self.state = transition(&self.state, LifeEvent::Failed(message));
             }
-            Msg::Started(Ok(url)) => {
+            Msg::Started(Ok(connect_ui::StartJob::Ready(url))) => {
                 let version = version_of(&self.state);
                 self.state = transition(&self.state, LifeEvent::Healthy { version, url });
+            }
+            Msg::Started(Ok(connect_ui::StartJob::RestartNeeded)) => {
+                self.restart_confirm = true;
+                self.state = transition(&self.state, LifeEvent::Failed(connect_ui::RESTART_NEEDED.into()));
             }
             Msg::Started(Err(message)) => {
                 self.state = transition(&self.state, LifeEvent::Failed(message));
@@ -339,6 +346,7 @@ impl Assistant {
     /// Starts the gateway (or finds it already running) on a worker thread.
     fn start(&mut self) {
         self.notice.clear();
+        self.restart_confirm = false;
         self.state = transition(&self.state, LifeEvent::StartRequested);
         if !matches!(self.state, AssistantState::Starting { .. }) {
             return;
@@ -352,6 +360,27 @@ impl Assistant {
         let bus = self.bus.clone();
         thread::spawn(move || {
             let result = connect_ui::start_job(&paths, &binary, &url);
+            bus.send(Msg::Started(result));
+        });
+    }
+
+    /// Restarts the running gateway after the user confirmed it, on a worker thread.
+    fn restart(&mut self) {
+        self.restart_confirm = false;
+        self.notice.clear();
+        self.state = transition(&self.state, LifeEvent::StartRequested);
+        if !matches!(self.state, AssistantState::Starting { .. }) {
+            return;
+        }
+        let Some(binary) = self.binary.clone() else {
+            self.state = transition(&self.state, LifeEvent::Failed("Hermes is not installed".into()));
+            return;
+        };
+        let paths = self.paths.clone();
+        let url = self.url.clone();
+        let bus = self.bus.clone();
+        thread::spawn(move || {
+            let result = connect_ui::restart_job(&paths, &binary, &url).map(connect_ui::StartJob::Ready);
             bus.send(Msg::Started(result));
         });
     }
@@ -726,6 +755,8 @@ impl Assistant {
             "assistant.connect" => self.connect(),
             "assistant.install-confirm" => self.install(),
             "assistant.install-cancel" => self.confirm = false,
+            "assistant.restart-confirm" => self.restart(),
+            "assistant.restart-cancel" => self.restart_confirm = false,
             "assistant.send" => self.submit(),
             "assistant.clear" => self.clear_confirm = true,
             "assistant.clear-cancel" => self.clear_confirm = false,
@@ -795,6 +826,8 @@ impl Assistant {
         doc.visible("loading", screen == Screen::Loading)?;
         doc.visible("connect", screen == Screen::Connect)?;
         doc.visible("confirm", screen == Screen::Confirm)?;
+        doc.visible("restart-confirm", self.restart_confirm)?;
+        doc.visible("connect-btn", !self.restart_confirm)?;
         doc.visible("chat", screen == Screen::Chat)?;
         match screen {
             Screen::Loading => {

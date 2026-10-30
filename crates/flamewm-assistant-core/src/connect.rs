@@ -32,10 +32,6 @@ pub fn explain(error: &AssistantError, url: &str) -> String {
     }
 }
 
-/// Start-job result when a Hermes gateway is already running. Starting a second one
-/// would conflict, so the app asks the user before running `hermes gateway restart`.
-pub const RESTART_NEEDED: &str = "Hermes needs a quick restart to let Flamy talk to it. Restart now?";
-
 fn first_line(text: &str) -> String {
     text.lines().next().unwrap_or("").trim().to_owned()
 }

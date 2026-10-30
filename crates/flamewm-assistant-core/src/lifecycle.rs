@@ -222,6 +222,23 @@ pub fn start_gateway(binary: &Path, paths: &Paths, env: &HermesEnv) -> Result<Pa
     Ok(log)
 }
 
+/// Restarts a running gateway with `hermes gateway restart --yes --detach`: `--yes` skips the
+/// CLI's live-session prompt (the app already asked the user once) and `--detach` starts the
+/// replacement in the background. Blocks until the command exits; health is checked separately.
+pub fn restart_gateway(binary: &Path) -> Result<(), AssistantError> {
+    let output = Command::new(binary)
+        .args(["gateway", "restart", "--yes", "--detach"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| AssistantError::Unreachable(format!("cannot run {}: {e}", binary.display())))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let last = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output").trim().to_owned();
+    Err(AssistantError::RunFailed(format!("hermes gateway restart failed: {last}")))
+}
+
 fn log_stdio(log: &Path) -> Result<(Stdio, Stdio), AssistantError> {
     let file: File = OpenOptions::new().create(true).append(true).open(log)?;
     let clone = file.try_clone()?;
@@ -362,4 +379,22 @@ mod tests {
         let urls = crate::candidate_urls(None, &env);
         eprintln!("detected={detected:?} urls={urls:?} found={:?}", discover(&urls, env.api_key.as_deref()));
     }
+
+    #[test]
+    fn restart_gateway_runs_restart_with_yes_and_detach() {
+        let dir = test_dir("lifecycle-restart");
+        let log = dir.join("args.txt");
+        let bin = fake_binary(&dir, "hermes", &format!("echo \"$@\" > '{}'", log.display()));
+        restart_gateway(&bin).unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "gateway restart --yes --detach");
+    }
+
+    #[test]
+    fn restart_gateway_reports_last_stderr_line() {
+        let dir = test_dir("lifecycle-restart-fail");
+        let bin = fake_binary(&dir, "hermes", "echo first >&2\necho 'boom: no service' >&2\nexit 3");
+        let error = restart_gateway(&bin).unwrap_err().to_string();
+        assert!(error.contains("boom: no service"), "{error}");
+    }
+
 }
