@@ -110,3 +110,43 @@ Table of record for what FlameWM needs at runtime and how each need is packaged.
 
 Both entries point at files that `scripts/package` installs. No dependency is needed
 to register them, beyond the display manager that lists wayland-sessions and xsessions.
+
+## Linked libraries
+
+Before-set: `readelf -d` NEEDED on the existing `target-rel/release` binaries, which predate the libXi change (sizes in bytes).
+
+| Binary | Size | NEEDED before |
+| --- | --- | --- |
+| flamewm | 4966160 | libX11, libdbus-1, libgcc_s, libm, libc |
+| flamewm-desktop | 9398784 | libX11, libXi, libdbus-1, libgcc_s, libm, libc |
+| flamewm-apps | 28709288 | libX11, libXi, libdbus-1, libgcc_s, libm, libc |
+| flamewm-settings | 12309704 | libX11, libXi, libdbus-1, libgcc_s, libm, libc |
+| flamewm-explorer | 4658448 | libdbus-1, libX11, libXi, libgcc_s, libm, libc |
+| flamewm-finder | 2970704 | libX11, libXi, libdbus-1, libgcc_s, libm, libc |
+| flamewm-lock | 3613864 | libX11, libdbus-1, libXi, libgcc_s, libm, libc |
+| flamewm-session | 871800 | libdbus-1, libgcc_s, libc |
+| flamewm-audio-helper | 443288 | libpulse, libgcc_s, libc |
+| flamewm-render-x11 | 2372640 | libX11, libXi, libgcc_s, libm, libc |
+| flamefetch | 1819416 | libgcc_s, libm, libc |
+
+After-set: not rebuilt. The libXi removal is verified only by `cargo test -p flamewm-render-x11 --lib raw_press` (5 passed). Expected effect is removal of libXi from the render-x11 dependents; confirm with a release build and `readelf -d`.
+
+### Ranking (install risk on Debian/Ubuntu/MX desktop x ease of replacement)
+
+| Rank | Library / executable | Where | Risk | Ease | Decision |
+| --- | --- | --- | --- | --- | --- |
+| 1 | libXi | render-x11 XInput2 | low | easy | dlopen'd (commit 82528fb2) |
+| 2 | libpulse | audio-helper only | low | n/a | already isolated from the WM |
+| 3 | libdbus-1 | control bus via `dbus` 0.9.12 in about a dozen crates | very low | high | kept: core IPC transport |
+| 4 | libX11 | Xlib FFI boundary for all GUI binaries | none on X desktops | high | kept |
+| 5 | libc, libm, libgcc_s | all | none | n/a | kept |
+
+External executables (`Command::new`) are runtime tools (xrandr, xdg-open, systemctl, loginctl, udisksctl, fc-list, ffmpeg, xz) and are not replaced.
+
+### libXi change
+
+`XIQueryVersion` and `XISelectEvents` are resolved with `DynamicLibrary` on first use and the library stays mapped for process lifetime. If libXi is absent, `FLAMEWM_XI unavailable` is logged once and raw-press dismissal is disabled. FocusOut and Escape still dismiss popups.
+
+### Intentionally kept NEEDED libraries
+
+libX11, libdbus-1, libc, libm and libgcc_s stay linked. Each is either the X11 session boundary, the core IPC transport, or part of the base C runtime, and replacing any of them is a multi-crate rewrite with no install-risk gain on the target desktops.
