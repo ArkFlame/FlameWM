@@ -11,7 +11,7 @@ use crate::hermes::{discover, HermesEnv, ServerHealth};
 use crate::{AssistantError, CancelToken};
 
 pub const INSTALL_SCRIPT_URL: &str = "https://hermes-agent.nousresearch.com/install.sh";
-const PROBE_LIMIT: Duration = Duration::from_secs(5);
+const PROBE_LIMIT: Duration = Duration::from_secs(15);
 
 /// Filesystem locations. Build with `Paths::for_user` or explicitly in tests.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,7 +34,11 @@ impl Paths {
             .unwrap_or_else(|| home.join(".local/state"));
         Some(Self {
             hermes_home: home.join(".hermes"),
-            binary_candidates: vec![home.join(".local/bin/hermes"), PathBuf::from("hermes")],
+            binary_candidates: vec![
+                home.join(".local/bin/hermes"),
+                home.join(".hermes/hermes-agent/.hermes/bin/hermes"),
+                PathBuf::from("hermes"),
+            ],
             state_dir: state_base.join("flamewm").join("assistant"),
         })
     }
@@ -53,14 +57,25 @@ pub struct Detected {
 
 /// Runs `<candidate> --version` for each candidate and returns the first that succeeds.
 /// A candidate containing a path separator must exist as a file.
+///
+/// A binary that exists but whose version probe failed (slow start, busy machine) still counts as
+/// installed, with an empty version. Only a missing binary means "not installed".
 pub fn detect(candidates: &[PathBuf]) -> Option<Detected> {
-    candidates.iter().find_map(|candidate| {
-        if candidate.components().count() > 1 && !candidate.is_file() {
-            return None;
-        }
-        let output = run_capture(candidate, &["--version"], PROBE_LIMIT)?;
-        Some(Detected { binary: candidate.clone(), version: parse_version(&output) })
-    })
+    let exists = |candidate: &PathBuf| {
+        if candidate.components().count() > 1 { candidate.is_file() } else { true }
+    };
+    candidates
+        .iter()
+        .filter(|candidate| exists(candidate))
+        .find_map(|candidate| {
+            let output = run_capture(candidate, &["--version"], PROBE_LIMIT)?;
+            Some(Detected { binary: candidate.clone(), version: parse_version(&output) })
+        })
+        .or_else(|| {
+            candidates.iter().find(|candidate| candidate.components().count() > 1 && candidate.is_file()).map(|binary| {
+                Detected { binary: binary.clone(), version: String::new() }
+            })
+        })
 }
 
 /// Extracts `0.22.5` from `Hermes Agent v0.22.5 (2026.9.24) · stable`. Falls back to the first line.
@@ -312,6 +327,14 @@ mod tests {
         let found = detect(&[missing.clone(), failing, good.clone()]).unwrap();
         assert_eq!(found, Detected { binary: good, version: "9.8.7".into() });
         assert_eq!(detect(&[missing]), None);
+    }
+
+    #[test]
+    fn existing_binary_with_failing_version_probe_is_still_installed() {
+        let dir = test_dir("detect-slow");
+        let failing = fake_binary(&dir, "hermes", "exit 3");
+        let found = detect(std::slice::from_ref(&failing)).unwrap();
+        assert_eq!(found, Detected { binary: failing, version: String::new() });
     }
 
     #[test]
