@@ -127,6 +127,7 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 
 .lock-stacked { flex-direction:column; align-items:stretch; }
 .lock-path { flex-grow:1; min-width:0; overflow:hidden; white-space:nowrap; }
+#assistant-hermes-url-field { width:0; min-width:80px; }
 
 /* Colour presets: one row per colour target, same circle pattern as the accent row. */
 .preset-row { width:206px; display:flex; justify-content:flex-end; align-items:center; gap:4px; min-width:0; }
