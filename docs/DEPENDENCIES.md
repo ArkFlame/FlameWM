@@ -101,10 +101,10 @@ Table of record for what FlameWM needs at runtime and how each need is packaged.
   installs the bus; dependency relation not verified here).
 - **Desktop applications launched by the user** (dolphin, konsole, flamewm-finder): chosen
   by the user, not dependencies.
-- **Hermes agent (optional runtime)**: `flamewm-assistant` talks to a local Hermes API server
-  over loopback HTTP. Hermes is not packaged and not declared; the assistant shows a Connect
-  screen when it is missing and installs only after explicit confirmation. The FlameWM packages
-  work without it.
+- **Hermes model proxy (optional runtime)**: when a Hermes OpenAI-compatible proxy already runs on
+  loopback (`127.0.0.1:8645`), `flamewm-assistant` lists its models as a second provider. Hermes is
+  not packaged or declared, and FlameWM never installs or starts it. The FlameWM packages work
+  without it.
 - **Assistant speech models (optional, on-demand)**: Phonon-2 (STT, CC-BY-4.0, ungated, 163 MB, one
   file) and Phonon 31m (TTS, Apache-2.0, ungated, 65 MB across four files at one commit). Pinned in
   `speech.rs`; downloaded only after opt-in and never bundled. Runtimes (`fermion-research`, `ptts`,

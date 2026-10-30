@@ -145,12 +145,12 @@ optional subprocess. The Debian package suggests `imagemagick`; when it is
 absent, install it with `sudo apt install imagemagick`. Exact AVIF/HEIC format
 support depends on the installed ImageMagick delegates and security policy.
 
-## Optional: Hermes assistant
+## Optional: Hermes model proxy
 
-`flamewm-assistant` (Super+C) is a chat window for a local Hermes agent. Hermes is optional and
-is not installed with FlameWM. To use it, install Hermes separately, set `API_SERVER_ENABLED=true`
-in `~/.hermes/.env`, and open the assistant; it offers Connect to hermes when the server is not
-running. Speech input and output are off until enabled in Settings.
+`flamewm-assistant` (Super+C) chats with ARK AI by default. If a Hermes model proxy is already
+running on `127.0.0.1:8645`, its models appear under a Hermes group in the model menu. FlameWM does
+not install or start Hermes. Speech input and output are off until enabled in Settings. See
+[`ASSISTANT.md`](ASSISTANT.md) for the providers.
 
 ## Assistant speech (optional)
 

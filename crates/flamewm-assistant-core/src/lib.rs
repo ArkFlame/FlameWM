@@ -128,6 +128,15 @@ pub(crate) mod test_support {
     /// in pieces to exercise framing across reads. Returns the base URL and the
     /// raw request heads seen, in order.
     pub fn serve(responses: Vec<Vec<Vec<u8>>>) -> (String, JoinHandle<Vec<String>>) {
+        serve_held(responses, Duration::from_millis(400))
+    }
+
+    /// Like `serve`, but answers each connection without the stall, for timing-bound probes.
+    pub fn serve_prompt(responses: Vec<Vec<Vec<u8>>>) -> (String, JoinHandle<Vec<String>>) {
+        serve_held(responses, Duration::ZERO)
+    }
+
+    fn serve_held(responses: Vec<Vec<Vec<u8>>>, hold: Duration) -> (String, JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let url = format!("http://{}", listener.local_addr().expect("addr"));
         let handle = thread::spawn(move || {
@@ -141,7 +150,7 @@ pub(crate) mod test_support {
                     thread::sleep(Duration::from_millis(5));
                 }
                 // Hold the connection open briefly so cancel tests see a stall.
-                thread::sleep(Duration::from_millis(400));
+                thread::sleep(hold);
             }
             seen
         });

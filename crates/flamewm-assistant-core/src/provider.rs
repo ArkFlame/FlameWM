@@ -1,6 +1,7 @@
 //! Chat providers and the selection that is persisted between runs.
 
 use crate::openai::Endpoint;
+use crate::CancelToken;
 use crate::{ark, hermes};
 
 /// Where a chat turn goes. Both share one OpenAI-compatible implementation.
@@ -74,8 +75,8 @@ pub fn endpoint(provider: Provider, ark_key: &str) -> Endpoint {
 }
 
 /// Model ids of the running Hermes proxy, or `None` when it is not running.
-pub fn proxy_models() -> Option<Vec<String>> {
-    hermes::probe(&hermes::base_url())
+pub fn proxy_models(cancel: &CancelToken) -> Option<Vec<String>> {
+    hermes::probe(&hermes::base_url(), cancel)
 }
 
 #[cfg(test)]

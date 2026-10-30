@@ -63,10 +63,10 @@ The full status is in [`docs/WAYLAND_PLAN.md`](docs/WAYLAND_PLAN.md).
 The assistant is an optional ARK AI chat window. It is off by default.
 
 1. Open **Settings > Assistant** and enable it. Super+C and Ctrl+Alt+C are grabbed only while it is enabled.
-2. Install Hermes separately. FlameWM does not install it. Set `API_SERVER_ENABLED=true` in `~/.hermes/.env`.
-3. Press Super+C or Ctrl+Alt+C. The assistant uses the shared public ARK AI key by default. Set your own key (starts with `ark_`) in Settings > Assistant.
+2. Press Super+C or Ctrl+Alt+C. The assistant uses the shared public ARK AI key by default. Set your own key (starts with `ark_`) in Settings > Assistant.
+3. Optional: a Hermes model proxy on `127.0.0.1:8645` is detected automatically and listed as its own group in the model menu. FlameWM does not install or start it.
 
-Voice is optional. The assistant window can run a one-click setup that creates a private Python virtual environment and downloads the speech models. See [`docs/INSTALL.md`](docs/INSTALL.md#assistant-speech-optional) and [Hermes setup](docs/INSTALL.md#optional-hermes-assistant).
+Voice is optional. The assistant window can run a one-click setup that creates a private Python virtual environment and downloads the speech models. See [`docs/INSTALL.md`](docs/INSTALL.md#assistant-speech-optional) and [the proxy provider](docs/ASSISTANT.md).
 
 ## Keyboard shortcuts
 

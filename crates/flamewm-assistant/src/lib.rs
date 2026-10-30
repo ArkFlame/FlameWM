@@ -21,7 +21,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -119,6 +119,8 @@ struct Assistant {
     models: Vec<String>,
     /// Model ids of the running Hermes proxy; `None` when it is not running.
     proxy: Option<Vec<String>>,
+    /// True once a proxy probe has answered, so the subtitle can tell "checking" from "offline".
+    proxy_checked: bool,
     /// Provider and model the next turn uses.
     selection: Selection,
     model_menu: bool,
@@ -201,6 +203,7 @@ impl Assistant {
             link: Link::Checking,
             models: fallback_models(),
             proxy: None,
+            proxy_checked: false,
             selection,
             model_menu: false,
             model_page: 0,
@@ -232,16 +235,30 @@ impl Assistant {
         let key = self.api_key.clone();
         let bus = self.bus.clone();
         thread::spawn(move || {
-            let result = OpenAiClient::new(endpoint(Provider::Ark, &key)).and_then(|client| client.list_models());
+            let result = OpenAiClient::new(endpoint(Provider::Ark, &key))
+                .and_then(|client| client.list_models(&CancelToken::new()));
             bus.send(Msg::Checked(result));
         });
         self.probe_proxy();
     }
 
     /// Looks for the Hermes proxy on a worker thread. Runs at open and when the model menu opens.
-    fn probe_proxy(&self) {
+    fn probe_proxy(&mut self) {
+        self.proxy_checked = false;
         let bus = self.bus.clone();
-        thread::spawn(move || bus.send(Msg::Proxy(proxy_models())));
+        thread::spawn(move || bus.send(Msg::Proxy(proxy_models(&CancelToken::new()))));
+    }
+
+    /// Subtitle state for the selected provider: the proxy's own state when Hermes is selected.
+    fn status_link(&self) -> Link {
+        if self.selection.provider != Provider::HermesProxy {
+            return self.link;
+        }
+        match (self.proxy_checked, self.proxy.is_some()) {
+            (false, _) => Link::Checking,
+            (true, true) => Link::Online,
+            (true, false) => Link::Offline,
+        }
     }
 
     fn on_msg(&mut self, msg: Msg) {
@@ -256,7 +273,10 @@ impl Assistant {
                 self.models = fallback_models();
                 self.notice = human_error(&error, Provider::Ark.title());
             }
-            Msg::Proxy(models) => self.proxy = models,
+            Msg::Proxy(models) => {
+                self.proxy = models;
+                self.proxy_checked = true;
+            }
             Msg::Notice(text) => self.notice = text,
             Msg::Delta(text) => self.history.append_pending(&text),
             Msg::TurnDone(result, label) => self.finish_turn(result, label),
@@ -810,8 +830,8 @@ impl Assistant {
         let no_rows = rows.is_empty();
         doc.visible("list", !no_rows)?;
         doc.visible("empty", no_rows)?;
-        doc.text("subtitle", chat_header::subtitle(self.link, self.working).to_owned())?;
-        doc.visible("retry", self.link == Link::Offline)?;
+        doc.text("subtitle", chat_header::subtitle(self.status_link(), self.working).to_owned())?;
+        doc.visible("retry", self.status_link() == Link::Offline)?;
         let ark = self.selection.provider == Provider::Ark;
         doc.visible("powered-ark", ark)?;
         doc.visible("powered-hermes", !ark)?;
@@ -875,11 +895,32 @@ fn accent(theme: &SettingsSnapshot) -> u32 {
     }
 }
 
-/// One streamed reply. A selected Hermes proxy is probed first; when it is gone the turn falls back
-/// to ARK AI with a notice. Each text piece and the final result go back to the window.
+/// Runs the proxy probe on its own thread, so a stopped turn does not wait for it. Returns `None`
+/// when the probe fails or the turn is cancelled first.
+fn probe_proxy_off_thread(cancel: &CancelToken) -> Option<Vec<String>> {
+    let (tx, rx) = mpsc::channel();
+    let probe_cancel = cancel.clone();
+    thread::spawn(move || {
+        let _ = tx.send(proxy_models(&probe_cancel));
+    });
+    loop {
+        if cancel.is_cancelled() {
+            return None;
+        }
+        match rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(found) => return found,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+}
+
+/// One streamed reply. A selected Hermes proxy is probed first (300 ms limit, cancellable); when it
+/// is gone the turn falls back to ARK AI with a notice. Each text piece and the final result go back
+/// to the window.
 fn turn_job(bus: &Bus, selected: &Selection, ark_key: &str, turns: &[Turn], cancel: &CancelToken) {
     let proxy_up = if selected.provider == Provider::HermesProxy {
-        let found = proxy_models();
+        let found = probe_proxy_off_thread(cancel);
         let up = found.is_some();
         bus.send(Msg::Proxy(found));
         up

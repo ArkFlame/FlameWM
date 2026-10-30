@@ -31,8 +31,8 @@ pub struct Endpoint {
     /// Includes the `/v1` prefix. Paths such as `/models` are appended to it.
     pub base_url: String,
     pub bearer: String,
-    /// Whole-request limit in seconds. Set only for quick probes, never for streamed chat.
-    pub max_time: Option<u32>,
+    /// Whole-request limit. Set only for quick probes, never for streamed chat.
+    pub max_time: Option<Duration>,
 }
 
 /// One earlier message in the chat window. `role` is `user` or `assistant`.
@@ -66,9 +66,9 @@ impl OpenAiClient {
     }
 
     /// `GET` of a full URL that must answer with a JSON object. HTML or plain text is an error.
-    pub fn get_json(&self, url: &str) -> Result<Value, AssistantError> {
+    pub fn get_json(&self, url: &str, cancel: &CancelToken) -> Result<Value, AssistantError> {
         let mut body = None;
-        self.exchange(url, None, &CancelToken::new(), &mut |event| {
+        self.exchange(url, None, cancel, &mut |event| {
             if let Event::Json(bytes) = event {
                 body = Some(bytes);
             }
@@ -79,8 +79,8 @@ impl OpenAiClient {
     }
 
     /// `GET /models`: the model ids in the order the server lists them.
-    pub fn list_models(&self) -> Result<Vec<String>, AssistantError> {
-        let value = self.get_json(&self.url("/models"))?;
+    pub fn list_models(&self, cancel: &CancelToken) -> Result<Vec<String>, AssistantError> {
+        let value = self.get_json(&self.url("/models"), cancel)?;
         self.parse_models(&value)
     }
 
@@ -149,9 +149,11 @@ impl OpenAiClient {
         if cancel.is_cancelled() {
             return Err(AssistantError::Cancelled);
         }
-        let max_time = self.endpoint.max_time.map(|secs| secs.to_string());
+        let connect = self.endpoint.max_time.map_or(15.0, |limit| limit.as_secs_f64().min(15.0));
+        let connect = format!("{connect:.3}");
+        let max_time = self.endpoint.max_time.map(|limit| format!("{:.3}", limit.as_secs_f64()));
         let mut args = vec!["--silent", "--show-error", "--include", "--no-buffer"];
-        args.extend(["--connect-timeout", "15", "--speed-time", "60", "--speed-limit", "1"]);
+        args.extend(["--connect-timeout", connect.as_str(), "--speed-time", "60", "--speed-limit", "1"]);
         if let Some(secs) = max_time.as_deref() {
             args.extend(["--max-time", secs]);
         }
@@ -485,7 +487,7 @@ mod tests {
             "application/json",
             r#"{"object":"list","data":[{"id":"lite"},{"id":"flash"},{"id":"pro"}]}"#,
         )]);
-        let ids = client(&url).list_models().unwrap();
+        let ids = client(&url).list_models(&CancelToken::new()).unwrap();
         assert_eq!(ids, vec!["lite", "flash", "pro"]);
         let seen = server.join().unwrap();
         assert!(seen[0].starts_with("GET /v1/models "));
@@ -495,7 +497,7 @@ mod tests {
     #[test]
     fn html_body_is_never_read_as_json() {
         let (url, server) = serve(vec![reply("200 OK", "text/html", "<!DOCTYPE HTML><html></html>")]);
-        let error = client(&url).get_json(&format!("{url}/v1/models")).unwrap_err();
+        let error = client(&url).get_json(&format!("{url}/v1/models"), &CancelToken::new()).unwrap_err();
         assert!(matches!(error, AssistantError::Protocol(_)), "{error:?}");
         server.join().unwrap();
     }
@@ -503,7 +505,7 @@ mod tests {
     #[test]
     fn unauthorized_is_a_clean_message() {
         let (url, server) = serve(vec![reply("401 Unauthorized", "application/json", r#"{"error":{"message":"bad key"}}"#)]);
-        let error = client(&url).list_models().unwrap_err();
+        let error = client(&url).list_models(&CancelToken::new()).unwrap_err();
         assert!(matches!(error, AssistantError::Http { status: 401, .. }), "{error:?}");
         assert_eq!(human_error(&error, "ARK AI"), "API key rejected. Check the key in Settings > Assistant.");
         server.join().unwrap();
@@ -513,7 +515,7 @@ mod tests {
     fn html_501_never_reaches_the_user() {
         let html = "<!DOCTYPE HTML><html><body>Not Implemented</body></html>";
         let (url, server) = serve(vec![reply("501 Not Implemented", "text/html", html)]);
-        let error = client(&url).list_models().unwrap_err();
+        let error = client(&url).list_models(&CancelToken::new()).unwrap_err();
         let text = human_error(&error, "ARK AI");
         assert_eq!(text, "ARK AI had a server error. Try again.");
         assert!(!text.contains('<'));
@@ -523,14 +525,14 @@ mod tests {
     #[test]
     fn rate_limit_is_explained() {
         let (url, server) = serve(vec![reply("429 Too Many Requests", "application/json", "{}")]);
-        let error = client(&url).list_models().unwrap_err();
+        let error = client(&url).list_models(&CancelToken::new()).unwrap_err();
         assert!(human_error(&error, "ARK AI").contains("rate limited"));
         server.join().unwrap();
     }
 
     #[test]
     fn offline_is_reported_as_unreachable() {
-        let error = client("http://127.0.0.1:1").list_models().unwrap_err();
+        let error = client("http://127.0.0.1:1").list_models(&CancelToken::new()).unwrap_err();
         assert!(matches!(error, AssistantError::Unreachable(_)), "{error:?}");
         assert_eq!(
             human_error(&error, "ARK AI"),
