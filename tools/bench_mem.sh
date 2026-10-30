@@ -12,11 +12,12 @@ set -euo pipefail
 
 label=${1:-idle}
 display=${BENCH_DISPLAY:?set BENCH_DISPLAY, for example BENCH_DISPLAY=:166}
-names="flamewm-session flamewm flamewm-desktop flamewm-shell flamewm-wm Xephyr"
+names="flamewm-session flamewm flamewm-desktop flamewm-shell flamewm-wm flamewm-audio-helper flamewm-terminal flamewm-settings flamewm-explorer Xephyr"
 
+# pgrep -x matches the kernel comm name, which is cut to 15 characters.
 pids=""
 for name in $names; do
-  for pid in $(pgrep -x "$name" || true); do
+  for pid in $(pgrep -x "${name:0:15}" || true); do
     env_match=$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -cx "DISPLAY=$display" || true)
     cmd_match=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -c -- "$display" || true)
     if [[ $env_match -gt 0 || $cmd_match -gt 0 ]]; then
