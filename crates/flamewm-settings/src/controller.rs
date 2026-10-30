@@ -2027,6 +2027,113 @@ mod tests {
         );
     }
 
+    fn hermes_session(
+        initial: &str,
+        applies: usize,
+    ) -> (
+        SettingsApplication<RecordingTransport>,
+        Rc<RefCell<Vec<ControlRequest>>>,
+    ) {
+        let (requests, mut transport) = recording_transport();
+        let mut snapshot = SettingsSnapshot::new(7);
+        snapshot.values.insert(
+            "assistant.hermesUrl".to_owned(),
+            SettingValue::Text(initial.to_owned()),
+        );
+        for _ in 0..=applies {
+            transport
+                .responses
+                .push_back(Ok(ControlResponse::Settings(snapshot.clone())));
+        }
+        (settings_application(transport), requests)
+    }
+
+    #[test]
+    fn hermes_url_invalid_draft_is_shown_inline_and_not_saved() {
+        let (mut application, requests) = hermes_session("http://127.0.0.1:8642", 3);
+        let mut document = ProbeDocument::default();
+        application
+            .handle_action(&release("settings.assistant.url.focus"), &mut document)
+            .expect("focus");
+        assert_eq!(
+            document.texts.get("assistant-hermes-url").map(String::as_str),
+            Some("http://127.0.0.1:8642|")
+        );
+        for _ in 0..40 {
+            application
+                .handle_action(&typed("\u{8}"), &mut document)
+                .expect("backspace");
+        }
+        for text in ["127.0.0.1:9", "\n"] {
+            application
+                .handle_action(&typed(text), &mut document)
+                .expect("typed");
+        }
+        assert_eq!(
+            last_apply(&requests, "assistant.hermesUrl"),
+            None,
+            "invalid URL writes nothing"
+        );
+        assert!(
+            document
+                .texts
+                .get("assistant-hermes-url-error")
+                .is_some_and(|text| text.contains("http or https")),
+            "invalid URL shows the inline message"
+        );
+    }
+
+    #[test]
+    fn hermes_url_valid_draft_saves_and_escape_discards_and_reset_clears() {
+        let (mut application, requests) = hermes_session("http://127.0.0.1:8642", 4);
+        let mut document = ProbeDocument::default();
+        application
+            .handle_action(&release("settings.assistant.url.focus"), &mut document)
+            .expect("focus");
+        for _ in 0..40 {
+            application
+                .handle_action(&typed("\u{8}"), &mut document)
+                .expect("backspace");
+        }
+        for text in "http://localhost:8645 ".chars() {
+            application
+                .handle_action(&typed(&text.to_string()), &mut document)
+                .expect("typed");
+        }
+        application
+            .handle_action(&typed("\n"), &mut document)
+            .expect("enter");
+        assert_eq!(
+            last_apply(&requests, "assistant.hermesUrl").as_deref(),
+            Some("http://localhost:8645"),
+            "valid URL is trimmed and saved on Enter"
+        );
+
+        application
+            .handle_action(&release("settings.assistant.url.focus"), &mut document)
+            .expect("refocus");
+        application
+            .handle_action(&typed("x"), &mut document)
+            .expect("typed");
+        application
+            .handle_action(&typed("\u{1b}"), &mut document)
+            .expect("escape");
+        assert_eq!(
+            document.texts.get("assistant-hermes-url").map(String::as_str),
+            Some("http://127.0.0.1:8642"),
+            "Escape discards the draft and shows the saved value"
+        );
+
+        application
+            .handle_action(&release("settings.assistant.url.reset"), &mut document)
+            .expect("reset");
+        assert_eq!(
+            last_apply(&requests, "assistant.hermesUrl").as_deref(),
+            Some(""),
+            "reset clears the URL to auto-detect"
+        );
+    }
+
     #[test]
     fn picker_palette_cells_write_their_exact_hex_values() {
         let (mut application, requests) = color_session("#191B1D", 2);

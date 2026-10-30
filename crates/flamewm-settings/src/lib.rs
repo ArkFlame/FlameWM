@@ -591,6 +591,12 @@ enum SettingsAction {
     ColorPickerPick(String),
     /// Validates the hex buffer and applies it; an invalid buffer writes nothing.
     ColorPickerApply,
+    /// Opens the Hermes URL draft (seeded from the saved value) so typed keys edit it.
+    HermesUrlFocus,
+    /// Clears `assistant.hermesUrl` so the assistant auto-detects the server.
+    HermesUrlReset,
+    /// Spawns `flamewm-assistant`, which toggles its own window.
+    AssistantOpen,
     /// Sets a `#RRGGBB` setting to one fixed preset value in one transaction.
     ColorSwatch {
         key: &'static str,
@@ -664,7 +670,16 @@ pub struct SettingsApplication<T: ControlTransport> {
     /// Sidebar search text and whether the search field takes typed text.
     nav_query: String,
     nav_search_focused: bool,
+    /// Edit buffer for `assistant.hermesUrl`; `Some` while the field takes typed text.
+    hermes_url_draft: Option<HermesUrlDraft>,
     file_manager_label: String,
+}
+
+/// Typed Hermes URL text not yet saved, with the inline message for the last Enter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HermesUrlDraft {
+    buffer: String,
+    error: Option<String>,
 }
 
 impl<T: ControlTransport> SettingsApplication<T> {
@@ -690,6 +705,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             scale_slider_focused: false,
             nav_query: String::new(),
             nav_search_focused: false,
+            hermes_url_draft: None,
             file_manager_label: "FlameWM Explorer".into(),
         }
     }
@@ -793,6 +809,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         if event.action == KEYBOARD_INPUT_ACTION && self.nav_search_focused {
             self.nav_search_text(event.text.as_deref().unwrap_or_default());
+            return self.settle(document);
+        }
+        if event.action == KEYBOARD_INPUT_ACTION && self.hermes_url_draft.is_some() {
+            self.hermes_url_text(event.text.as_deref().unwrap_or_default());
             return self.settle(document);
         }
         if event.action == KEYBOARD_INPUT_ACTION && self.color_picker.is_some() {
@@ -1148,11 +1168,38 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 picker.focused = false;
             }
         }
+        // Any other control leaves the Hermes URL field without saving its draft.
+        if !matches!(
+            action,
+            SettingsAction::HermesUrlFocus
+                | SettingsAction::HermesUrlReset
+                | SettingsAction::NativeKeyEvent
+        ) {
+            self.hermes_url_draft = None;
+        }
         match action {
             SettingsAction::FileManagerCycle => {
                 self.file_manager_label = file_manager::toggle()?;
             }
             SettingsAction::NativeKeyEvent => {}
+            SettingsAction::HermesUrlFocus => {
+                if self.hermes_url_draft.is_none() {
+                    let buffer = self.text_setting("assistant.hermesUrl").unwrap_or_default();
+                    self.hermes_url_draft = Some(HermesUrlDraft {
+                        buffer,
+                        error: None,
+                    });
+                }
+            }
+            SettingsAction::HermesUrlReset => {
+                self.hermes_url_draft = None;
+                self.apply_text("assistant.hermesUrl", String::new())?;
+            }
+            SettingsAction::AssistantOpen => {
+                std::process::Command::new("flamewm-assistant")
+                    .spawn()
+                    .map_err(|error| format!("Could not open the assistant: {error}"))?;
+            }
             SettingsAction::ColorPickerOpen(key) => {
                 self.color_picker = Some(ColorPicker {
                     key,
@@ -1560,6 +1607,85 @@ impl<T: ControlTransport> SettingsApplication<T> {
         self.color_picker
             .as_ref()
             .ok_or_else(|| "colour picker is not open".to_owned())
+    }
+
+    /// Edits the Hermes URL draft from typed text: printable characters append, Backspace
+    /// deletes, Escape discards the draft, Enter saves a valid value (an invalid one stays
+    /// in the field with its inline message and writes nothing).
+    fn hermes_url_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            match ch {
+                '\u{1b}' => {
+                    self.hermes_url_draft = None;
+                    return;
+                }
+                '\n' | '\r' => {
+                    if let Err(error) = self.apply_hermes_url_draft() {
+                        self.error = Some(error);
+                    }
+                    if self.hermes_url_draft.is_none() {
+                        return;
+                    }
+                }
+                '\u{8}' => {
+                    if let Some(draft) = self.hermes_url_draft.as_mut() {
+                        draft.buffer.pop();
+                        draft.error = None;
+                    }
+                }
+                ch if !ch.is_control() => {
+                    if let Some(draft) = self.hermes_url_draft.as_mut() {
+                        if draft.buffer.chars().count() < flamewm_api::settings::HERMES_URL_MAX_CHARS
+                        {
+                            draft.buffer.push(ch);
+                            draft.error = None;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Saves the trimmed draft when it is a valid `assistant.hermesUrl`; otherwise shows the
+    /// message inline and writes nothing.
+    fn apply_hermes_url_draft(&mut self) -> Result<(), String> {
+        let Some(draft) = self.hermes_url_draft.as_mut() else {
+            return Ok(());
+        };
+        let value = draft.buffer.trim().to_owned();
+        match flamewm_api::settings::hermes_url_error(&value) {
+            Some(message) => draft.error = Some(message.to_owned()),
+            None => {
+                self.hermes_url_draft = None;
+                self.apply_text("assistant.hermesUrl", value)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Projects the Hermes URL field: the draft with a caret while editing, else the saved value
+    /// (empty reads as auto-detect), plus the inline message.
+    fn sync_hermes_url(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let (text, error) = match &self.hermes_url_draft {
+            Some(draft) => (format!("{}|", draft.buffer), draft.error.clone()),
+            None => {
+                let saved = self.text_setting("assistant.hermesUrl").unwrap_or_default();
+                let shown = if saved.is_empty() {
+                    "Auto-detect".to_owned()
+                } else {
+                    saved
+                };
+                (shown, None)
+            }
+        };
+        document.text("assistant-hermes-url", text)?;
+        optional_text(
+            document,
+            "assistant-hermes-url-error",
+            error.unwrap_or_else(|| "\u{200b}".to_owned()),
+        );
+        Ok(())
     }
 
     /// Applies typed keys to the picker: Escape closes, Enter applies, Backspace
@@ -2198,11 +2324,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         self.sync_segment_rows(document)?;
         self.sync_taskbar_outputs(document);
         self.sync_hotkeys(document);
-        optional_text(
-            document,
-            "assistant-hermes-url",
-            self.text_setting("assistant.hermesUrl").unwrap_or_default(),
-        );
+        self.sync_hermes_url(document)?;
         optional_text(
             document,
             ABOUT_VERSION_NODE,
@@ -3938,6 +4060,9 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             key: "weatherUnits",
             value: "fahrenheit",
         }),
+        "settings.assistant.url.focus" => Ok(SettingsAction::HermesUrlFocus),
+        "settings.assistant.url.reset" => Ok(SettingsAction::HermesUrlReset),
+        "settings.assistant.open" => Ok(SettingsAction::AssistantOpen),
         "settings.weather.location.clear" => Ok(SettingsAction::TextSelect {
             key: "weatherLocation",
             value: "",

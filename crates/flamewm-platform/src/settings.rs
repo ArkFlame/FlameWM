@@ -660,11 +660,8 @@ impl ProductSettings {
         validate_lock_image_path(&self.lock_background_image, "lockBackgroundImage")?;
         validate_lock_image_path(&self.avatar_image, "avatarImage")?;
         validate_terminal_program(&self.default_terminal)?;
-        if !(self.assistant_hermes_url.starts_with("http://")
-            || self.assistant_hermes_url.starts_with("https://"))
-            || self.assistant_hermes_url.contains(char::is_whitespace)
-        {
-            return invalid("assistant.hermesUrl must be an http or https URL without spaces");
+        if let Some(message) = flamewm_api::settings::hermes_url_error(&self.assistant_hermes_url) {
+            return invalid(message);
         }
         if !matches!(self.weather_units.as_str(), "celsius" | "fahrenheit") {
             return invalid("weatherUnits must be celsius or fahrenheit");
@@ -1596,6 +1593,19 @@ mod tests {
         );
         let text = assert_round_trip(&parsed);
         assert!(text.contains("avatarImage=/home/u/"));
+    }
+
+    #[test]
+    fn hermes_url_accepts_empty_auto_detect_and_rejects_invalid_values() {
+        let mut settings = ProductSettings::default();
+        for value in ["", "http://127.0.0.1:8645", "https://hermes.local"] {
+            value.clone_into(&mut settings.assistant_hermes_url);
+            settings.validate().expect("valid hermes URL");
+        }
+        for value in ["127.0.0.1:8642", "ftp://host", "http://host /x"] {
+            value.clone_into(&mut settings.assistant_hermes_url);
+            assert!(settings.validate().is_err(), "{value:?} must be rejected");
+        }
     }
 
     #[test]

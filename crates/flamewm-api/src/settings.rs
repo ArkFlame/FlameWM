@@ -83,3 +83,43 @@ impl SettingsTransaction {
         self.changes.is_empty() && self.reset_section.is_none()
     }
 }
+
+/// Longest `assistant.hermesUrl` the Settings field accepts, in characters.
+pub const HERMES_URL_MAX_CHARS: usize = 2048;
+
+/// Validates `assistant.hermesUrl`. Empty is valid and means auto-detect; otherwise the value must be
+/// an http or https URL without whitespace. Returns the inline message, or `None` when valid.
+#[must_use]
+pub fn hermes_url_error(value: &str) -> Option<&'static str> {
+    if value.is_empty() {
+        return None;
+    }
+    let scheme_ok = value.starts_with("http://") || value.starts_with("https://");
+    if scheme_ok && !value.contains(char::is_whitespace) && value.chars().count() <= HERMES_URL_MAX_CHARS {
+        None
+    } else {
+        Some("Use an http or https URL without spaces, or leave empty to auto-detect")
+    }
+}
+
+#[cfg(test)]
+mod hermes_url_tests {
+    use super::hermes_url_error;
+
+    #[test]
+    fn empty_and_http_urls_are_valid() {
+        assert_eq!(hermes_url_error(""), None);
+        assert_eq!(hermes_url_error("http://127.0.0.1:8642"), None);
+        assert_eq!(hermes_url_error("https://hermes.local/api"), None);
+    }
+
+    #[test]
+    fn other_schemes_spaces_and_overlong_values_are_invalid() {
+        assert!(hermes_url_error("127.0.0.1:8642").is_some());
+        assert!(hermes_url_error("ftp://host").is_some());
+        assert!(hermes_url_error("http://host /x").is_some());
+        assert!(hermes_url_error("http://host\t").is_some());
+        let long = format!("http://{}", "a".repeat(super::HERMES_URL_MAX_CHARS));
+        assert!(hermes_url_error(&long).is_some());
+    }
+}
