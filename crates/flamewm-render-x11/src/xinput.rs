@@ -4,7 +4,9 @@
 //! read from the union storage through `generic_cookie`.
 
 use std::os::raw::{c_char, c_int, c_uint, c_ulong, c_void};
+use std::sync::OnceLock;
 
+use crate::ffi::dynamic_library::DynamicLibrary;
 use crate::xlib::{Bool, Display, Status, Time, Window, XEvent};
 
 pub const GENERIC_EVENT: c_int = 35;
@@ -85,13 +87,68 @@ unsafe extern "C" {
     ) -> Bool;
 }
 
-#[link(name = "Xi")]
-unsafe extern "C" {
-    pub fn XIQueryVersion(display: *mut Display, major: *mut c_int, minor: *mut c_int) -> Status;
-    pub fn XISelectEvents(
-        display: *mut Display,
-        window: Window,
-        masks: *mut XIEventMask,
-        num_masks: c_int,
-    ) -> Status;
+type XIQueryVersionFn = unsafe extern "C" fn(*mut Display, *mut c_int, *mut c_int) -> Status;
+type XISelectEventsFn = unsafe extern "C" fn(*mut Display, Window, *mut XIEventMask, c_int) -> Status;
+
+struct XiFns {
+    query_version: XIQueryVersionFn,
+    select_events: XISelectEventsFn,
+}
+
+/// libXi is resolved with dlopen on first use instead of being linked, so the
+/// binaries do not require it at startup. When it is missing, `None` makes
+/// callers skip raw-press dismissal, which the popup path already tolerates.
+fn xi_fns() -> Option<&'static XiFns> {
+    static FNS: OnceLock<Option<XiFns>> = OnceLock::new();
+    FNS.get_or_init(|| {
+        let lib = match DynamicLibrary::open(&["libXi.so.6", "libXi.so"]) {
+            Ok(lib) => lib,
+            Err(error) => {
+                eprintln!("FLAMEWM_XI unavailable: {error}; raw press dismissal disabled");
+                return None;
+            }
+        };
+        // SAFETY: the symbol types match the XInput2 prototypes in the X11 headers.
+        let fns = unsafe {
+            XiFns {
+                query_version: lib.symbol(b"XIQueryVersion\0").ok()?,
+                select_events: lib.symbol(b"XISelectEvents\0").ok()?,
+            }
+        };
+        // The library stays mapped for the process lifetime; the handle is never closed.
+        std::mem::forget(lib);
+        Some(fns)
+    })
+    .as_ref()
+}
+
+/// Calls `XIQueryVersion`; `None` when libXi is unavailable.
+///
+/// # Safety
+///
+/// `display` must be a live connection.
+pub(crate) unsafe fn xi_query_version(
+    display: *mut Display,
+    major: *mut c_int,
+    minor: *mut c_int,
+) -> Option<Status> {
+    // SAFETY: forwarded to the caller's live-connection contract.
+    xi_fns().map(|fns| unsafe { (fns.query_version)(display, major, minor) })
+}
+
+/// Calls `XISelectEvents` and ignores its status, as before; a no-op when libXi is unavailable.
+///
+/// # Safety
+///
+/// `display` must be live and `masks` must point at `num_masks` valid masks.
+pub(crate) unsafe fn xi_select_events(
+    display: *mut Display,
+    window: Window,
+    masks: *mut XIEventMask,
+    num_masks: c_int,
+) {
+    if let Some(fns) = xi_fns() {
+        // SAFETY: forwarded to the caller's live-connection and mask contracts.
+        unsafe { (fns.select_events)(display, window, masks, num_masks) };
+    }
 }

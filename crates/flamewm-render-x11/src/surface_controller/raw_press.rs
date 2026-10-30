@@ -105,7 +105,7 @@ pub(super) unsafe fn write_raw_press_selection(display: *mut Display, root: Wind
     };
     // SAFETY: live connection; the mask outlives the request.
     unsafe {
-        XISelectEvents(display, root, &mut event_mask, 1);
+        xi_select_events(display, root, &mut event_mask, 1);
         XFlush(display);
     }
 }
@@ -144,7 +144,7 @@ pub(crate) unsafe fn xi_raw_press_opcode(display: *mut Display) -> Option<std::o
         }
         let mut major: std::os::raw::c_int = 2;
         let mut minor: std::os::raw::c_int = 0;
-        let status = XIQueryVersion(display, &mut major, &mut minor);
+        let status = xi_query_version(display, &mut major, &mut minor)?;
         (status == 0 && (major, minor) >= (2, 0)).then_some(opcode)
     }
 }

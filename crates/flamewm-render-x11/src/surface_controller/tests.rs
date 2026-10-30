@@ -99,7 +99,7 @@ mod controller_tests {
             "press replay reintroduced"
         );
         assert!(
-            production.contains("XISelectEvents("),
+            production.contains("xi_select_events("),
             "raw press selection missing"
         );
     }
