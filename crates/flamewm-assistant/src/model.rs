@@ -150,6 +150,11 @@ impl History {
         self.trim();
     }
 
+    /// Forgets every loaded message and the viewport, as after a clear.
+    pub fn clear(&mut self) {
+        *self = Self { follow: true, ..Self::default() };
+    }
+
     /// Replaces the streaming text. `None` ends the turn.
     pub fn set_pending(&mut self, text: Option<String>) {
         self.pending = text;

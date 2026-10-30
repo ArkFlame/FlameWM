@@ -20,7 +20,17 @@
     </div>
   </div>
   <div id="chat" class="screen chat">
-    <div id="header" class="header"><span class="title">Hermes</span><span id="subtitle" class="status">&#8203;</span></div>
+    <div id="header" class="header">
+      <div class="header-text"><span class="title">Hermes</span><span id="subtitle" class="status">&#8203;</span></div>
+      <button id="clear" class="header-btn" data-action="assistant.clear">Clear</button>
+    </div>
+    <div id="clear-confirm" class="clear-confirm">
+      <span class="body-text">Clear this chat? Messages and the Hermes session are deleted.</span>
+      <div class="row">
+        <button class="pill-btn quiet" data-action="assistant.clear-cancel">Cancel</button>
+        <button class="pill-btn" data-action="assistant.clear-confirm">Clear chat</button>
+      </div>
+    </div>
     <div id="empty" class="empty"><span class="greeting">What do you need help with?</span></div>
     <div id="list" class="list">
       <div id="u-0" class="bubble-row user-row"><span id="ut-0" class="bubble user-bubble">&#8203;</span></div>

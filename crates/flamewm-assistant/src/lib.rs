@@ -152,6 +152,8 @@ struct Assistant {
     voice_turn: bool,
     speaking: bool,
     speech_stop: Option<Stopper>,
+    /// The header's clear-chat confirmation row is showing.
+    clear_confirm: bool,
 }
 
 impl model::Pager for ChatStore {
@@ -234,6 +236,7 @@ impl Assistant {
             voice_turn: false,
             speaking: false,
             speech_stop: None,
+            clear_confirm: false,
         })
     }
 
@@ -406,6 +409,23 @@ impl Assistant {
         let bus = self.bus.clone();
         let cancel = self.cancel.clone();
         thread::spawn(move || turn_job(&bus, &config, session.as_deref(), &text, &cancel));
+    }
+
+    /// Deletes the saved chat and Hermes session after the user confirmed it.
+    fn clear_chat(&mut self) {
+        self.clear_confirm = false;
+        if self.working {
+            self.notice = "Stop the reply before clearing the chat.".into();
+            return;
+        }
+        match self.store.clear() {
+            Ok(()) => {
+                self.history.clear();
+                self.notice.clear();
+                self.speech_stop = None;
+            }
+            Err(error) => self.notice = format!("Could not clear the chat: {error}"),
+        }
     }
 
     fn cancel(&mut self) {
@@ -711,6 +731,9 @@ impl Assistant {
             "assistant.install-confirm" => self.install(),
             "assistant.install-cancel" => self.confirm = false,
             "assistant.send" => self.submit(),
+            "assistant.clear" => self.clear_confirm = true,
+            "assistant.clear-cancel" => self.clear_confirm = false,
+            "assistant.clear-confirm" => self.clear_chat(),
             "assistant.stop" => self.cancel(),
             "assistant.tts" => {
                 if self.speech_out {
@@ -749,6 +772,7 @@ impl Assistant {
                 self.input.pop();
             }
             KeyCmd::Submit => self.submit(),
+            KeyCmd::Cancel if self.clear_confirm => self.clear_confirm = false,
             KeyCmd::Cancel => self.cancel(),
             KeyCmd::Ignore => {}
         }
@@ -808,6 +832,8 @@ impl Assistant {
         doc.visible("empty", no_rows)?;
         doc.text("subtitle", chat_header::subtitle(&self.state, self.working).to_owned())?;
         let mic = self.speech_in && empty && !self.working;
+        doc.visible("clear-confirm", self.clear_confirm)?;
+        doc.visible("clear", !self.clear_confirm)?;
         doc.visible("working", self.working)?;
         doc.visible("speaking", self.speaking)?;
         doc.visible("placeholder", empty)?;
@@ -822,6 +848,12 @@ impl Assistant {
         doc.background("tts", tts)?;
         doc.text("notice", or_blank(self.notice.clone()))
     }
+}
+
+/// Offset that centres a window of `size` on the root span `root` (`axis` 0 = x, 1 = y).
+fn centred(root: (u32, u32), size: u32, axis: usize) -> i32 {
+    let span = if axis == 0 { root.0 } else { root.1 };
+    (i64::from(span).saturating_sub(i64::from(size)) / 2).clamp(0, i64::from(i32::MAX)) as i32
 }
 
 fn or_blank(text: String) -> String {
@@ -944,6 +976,7 @@ fn show(paths: Paths) -> Result<(), String> {
     let mut document = decode_document(UI)?.with_window_backdrop(backdrop);
     let store = ChatStore::open(&paths.state_dir).map_err(|error| error.to_string())?;
 
+    let root_size = flamewm_ui_x11::root_geometry().unwrap_or((1280, 800));
     let (mut wake_reader, wake_writer) = nonblocking_pair()?;
     let (tx, rx) = mpsc::channel::<Msg>();
     let bus = Bus { tx, wake: Arc::new(wake_writer) };
@@ -960,8 +993,8 @@ fn show(paths: Paths) -> Result<(), String> {
         UiWindowConfig {
             width: WIDTH,
             height: HEIGHT,
-            x: 140,
-            y: 80,
+            x: centred(root_size, WIDTH, 0),
+            y: centred(root_size, HEIGHT, 1),
             title: "FlameWM Assistant".into(),
             identity: Some(X11WindowIdentity {
                 instance: "flamewm-assistant".into(),

@@ -34,8 +34,11 @@ button { background:transparent; color:var(--text); cursor:default; border-width
 .round.accent { background-color:var(--accent); }
 .square { width:12px; height:12px; border-radius:2px; background-color:var(--text); }
 .ico { width:18px; height:18px; flex-grow:0; }
-.header { width:100%; display:flex; flex-direction:column; align-items:center; gap:2px; padding:12px 0 4px 0; }
+.header { width:100%; display:flex; flex-direction:row; align-items:center; justify-content:space-between; padding:12px 4px 6px 4px; }
+.header-text { display:flex; flex-direction:column; gap:2px; }
 .header .title { font-size:15px; }
 .header .status { font-size:12px; }
+.header-btn { height:28px; padding:0 12px; border-radius:14px; background-color:var(--soft); color:var(--accent); font-size:13px; display:flex; align-items:center; justify-content:center; }
+.clear-confirm { width:100%; display:flex; flex-direction:column; align-items:center; gap:10px; padding:10px 12px; margin-bottom:6px; border-radius:12px; background-color:var(--soft); }
 .empty { width:100%; flex-grow:1; min-height:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
 .greeting { font-size:20px; font-weight:600; color:var(--text); }
