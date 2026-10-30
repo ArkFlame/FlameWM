@@ -3,6 +3,7 @@
 //!
 //! No UI dependencies, no async runtime, no TLS. Remote endpoints are refused.
 
+mod ark;
 mod connect;
 mod download;
 mod http;
@@ -32,6 +33,10 @@ pub use download::{
 pub use process::{
     default_config_path, expand, start_recording, ProcessRunner, Recording, SpeechConfig,
     SystemRunner,
+};
+pub use ark::{
+    human_error, key_or_default, masked_key, parse_models, validate_key, ArkClient, ArkConfig, Turn,
+    ARK_BASE_URL, DEFAULT_API_KEY, DEFAULT_MODEL, FALLBACK_MODELS, HISTORY_TURNS, SYSTEM_PROMPT,
 };
 pub use connect::{enable_api_server, explain, gateway_running, run_streaming, Enabled};
 pub use runs::{is_terminal, RunStatus};
