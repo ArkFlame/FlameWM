@@ -154,62 +154,57 @@ running. Speech input and output are off until enabled in Settings.
 
 ## Assistant speech (optional)
 
-Speech is off by default and no model is downloaded until you opt in. The pinned manifests are in
-`crates/flamewm-assistant-core/src/speech.rs` (`default_manifests`). Each model is a directory of
-files pinned to one Hugging Face commit. Every file is checked by size and SHA-256 before use, and a
-file that fails is deleted. Verified files are kept, so an interrupted download resumes.
+Speech is off by default. Nothing is downloaded or installed until you turn speech on and press the
+mic (or a reply is read aloud) for the first time. That press runs **Set up voice**, which does the
+whole setup in one step. The assistant window shows progress (`Setting up voice 40%...`) and the
+reason for any failure:
+
+1. Creates a private virtual environment at `$XDG_DATA_HOME/flamewm/assistant/voice/venv` (default
+   `~/.local/share/flamewm/assistant/voice/venv`). It needs `python3` 3.10 or newer with `venv`
+   support. No root and no system-wide packages.
+2. Installs the CPU build of PyTorch from `download.pytorch.org`, then `ptts` (text to speech) and
+   `fermion-research` (speech to text) from PyPI.
+3. Downloads the pinned text-to-speech model into `voice/models/tts-phonon-local` through the model
+   store. Each file is checked by size and SHA-256 before use.
+4. Downloads the speech-to-text model Phonon-2 into `voice/stt-cache`. `fermion-research` fetches it and
+   checks it against its own pinned SHA-256.
+5. Writes `voice/bin/speak` and `voice/bin/transcribe`. They are used when `synthesize_command` or
+   `transcribe_command` is not set in `assistant-speech.conf`. No manual configuration is needed.
+
+Disk use is about 1.8 GB: venv 1.4 GB, speech-to-text cache 0.33 GB, text-to-speech model 0.06 GB.
+Deleting the `voice` directory removes the whole feature.
+
+Optional system package: `python3-venv` (Debian or Ubuntu: `sudo apt install python3-venv`). Setup stops
+with this hint when it is missing. See `docs/DEPENDENCIES.md`.
 
 | Role | Model | Pinned files (commit) | Total size | License | Gated |
 |---|---|---|---|---|---|
-| Speech-to-text | `FermionResearch/Phonon-2` | `phonon-2.bps.tar.zst` (`3e6ab3a8`) | 163,515,201 B | CC-BY-4.0 weights; Apache-2.0 code | no |
+| Speech-to-text | `FermionResearch/Phonon-2` | fetched and verified by `fermion-research` | about 164 MB | CC-BY-4.0 weights; Apache-2.0 code | no |
 | Text-to-speech | `gradium/phonon-31m-en` | `model.q8.gguf`, `config.json`, `tokenizer.json`, `default-voice.safetensors` (`92741c5b`) | 65,051,089 B | Apache-2.0 | no |
 
-SHA-256 (LFS oid from the HF tree API, or the content hash of a local download for the non-LFS files):
+SHA-256 of the pinned text-to-speech files (the content hash of a local download for the non-LFS files):
 
-- `phonon-2.bps.tar.zst` `98125795b6dda72f5c6eee9ba33d19815df65dcb18b50a357bf9f73c9935309e`
 - `model.q8.gguf` `a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae`
 - `config.json` `b5d0f88353638370d94035b7d73d7d6577c0554d78f8d7ecfd40490aae39ae85` (4,634 B)
 - `tokenizer.json` `691a00068fa7b989f2f3e5ae5daa2d1a5bb319f2d5360deafcfb19a8bb6e7936` (277,967 B)
 - `default-voice.safetensors` `dc537478eaadc1a5257fcda2e3501ab81e14c111a5d95a5838f350db2afd0f1a` (256,136 B)
 
-Install the runtimes (commands from upstream PyPI and model-card docs; not run in this repository):
+Tested here, on Linux x86-64 CPU (Intel i5-11400H): the live setup ran end to end. The text-to-speech output
+was a 24 kHz mono WAV, and speech-to-text transcribed it back to the same sentence.
 
-- **Speech-to-text (Phonon-2), Linux x86-64 or Arm CPU**: Python 3.10+.
-  ```
-  python3 -m pip install --no-deps torch --index-url https://download.pytorch.org/whl/cpu
-  python3 -m pip install fermion-research
-  phonon transcribe recording.wav
-  ```
-  Docker alternative (documented tag `phonon-cpu:2.0.9` on PyPI; the model card cites 2.0.7):
-  `docker run --rm -v "$PWD":/audio -v phonon-cache:/home/phonon/.cache ghcr.io/fermionresearch/phonon-cpu:2.0.9 transcribe phonon-2 /audio/recording.wav`.
-  Apple silicon: `pip install "fermion-research[mlx]"` (MLX; not tested here).
-- **Text-to-speech (Phonon 31m), Linux x86-64**: Python 3.9+.
-  ```
-  python3 -m pip install ptts
-  python3 -m ptts --lang en --model <dir> "Hello." -o speech.wav
-  ```
-  `<dir>` is a local checkpoint directory holding the four pinned TTS files. `ptts --lang en --model <dir> ...`
-  is the same command as `python3 -m ptts`. The x86-64 wheels need AVX2, FMA and F16C; older CPUs need
-  a source build with Rust. CPU only.
-- **Unpacking the Phonon-2 archive**: needs GNU tar with zstd support and the `zstd` program:
-  `tar --zstd -xf phonon-2.bps.tar.zst -C <dir>`. The core helper `extract_zstd_tar` runs the same
-  command; the app does not call it yet.
+Limits:
 
-Gaps and limits:
-
-- `transcribe_command` and `synthesize_command` stay unset because no documented invocation of either
-  runtime matches the `{model}`, stdin and stdout contract. The `fermion` CLI takes a model name and a
-  file path and caches its own copy of Phonon-2. The `ptts` CLI takes the text as an argument and
-  writes `-o`; it does not read stdin or write WAV to stdout. Until you set these keys yourself in
-  the speech config file, to commands you have verified on your machine, the core exposes the hints
-  `TRANSCRIBE_SETUP_HINT` and `SYNTHESIZE_SETUP_HINT` for the UI to show. The default `record_command`
-  and `play_command` remain `arecord` and `aplay`.
-- The pinned Phonon-2 archive is not read by the documented runtime path. Its consumer format is not
-  verified here.
-- Optional system tools: `curl` (downloads), and `tar` with zstd plus `zstd` (archive unpacking).
-  No package declares them.
-- `gradium/phonon-40m-*` (French, German, Spanish, Portuguese and multilingual) are CC-BY-NC-4.0
-  and gated. They are not pinned and are not for commercial use.
+- Only Linux x86-64 CPU is tested. Arm Linux has a runtime library but is untested. Apple silicon uses MLX
+  and is not wired up. There is no GPU path.
+- Speech-to-text was tested on a short generated clip, not on long recordings.
+- The voice directory path must not contain spaces, because command templates split on whitespace. Setup
+  refuses such a path.
+- Setup needs network access to `pypi.org`, `files.pythonhosted.org`, `download.pytorch.org` and
+  `huggingface.co`. A failed step names the step and the fix; rerunning setup resumes.
+- `record_command` and `play_command` stay `arecord` and `aplay`.
+- `gradium/phonon-40m-*` (French, German, Spanish, Portuguese and multilingual) are CC-BY-NC-4.0 and gated.
+  They are not pinned and are not for commercial use.
+- Optional system tools: `curl` (model downloads from the store). No package declares it.
 
 ## Install the `.deb` on another computer (SDDM)
 

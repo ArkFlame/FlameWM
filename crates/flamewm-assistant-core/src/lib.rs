@@ -14,6 +14,7 @@ mod sha256;
 mod speech;
 mod sse;
 mod store;
+mod voice_setup;
 
 pub use hermes::{
     candidate_urls, discover, read_env, HermesClient, HermesConfig, HermesEnv, ServerHealth,
@@ -32,14 +33,15 @@ pub use process::{
     default_config_path, expand, start_recording, ProcessRunner, Recording, SpeechConfig,
     SystemRunner,
 };
-pub use connect::{enable_api_server, explain, gateway_running, run_streaming, Enabled};
+pub use connect::{enable_api_server, explain, gateway_running, run_streaming, Enabled, RESTART_NEEDED};
 pub use runs::{is_terminal, RunStatus};
 pub use sha256::Sha256;
 pub use speech::{
-    default_manifests, encode_wav, CommandSpeech, CommandTranscriber, ModelFile, ModelManifest,
+    encode_wav, tts_manifest, CommandSpeech, CommandTranscriber, ModelFile, ModelManifest,
     ModelStore, Speech, Stopper, Transcriber, UnconfiguredModelStore, UnconfiguredSpeech,
-    UnconfiguredTranscriber, SYNTHESIZE_SETUP_HINT, TRANSCRIBE_SETUP_HINT, UNPINNED,
+    UnconfiguredTranscriber, UNPINNED,
 };
+pub use voice_setup::{apply_defaults, default_voice_dir, ready_model, setup_default};
 pub use store::{ChatStore, Message, MsgState, Role, SessionState};
 
 use std::fmt;

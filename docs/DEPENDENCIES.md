@@ -75,6 +75,7 @@ Table of record for what FlameWM needs at runtime and how each need is packaged.
 | ark | ark | Suggests | Archive extraction from Explorer | Extraction disabled |
 | zip | zip | Suggests | Archive creation (flamewm-desktop-core conversion) | Zip creation disabled |
 | curl | curl | Suggests | Weather data fetch (flamewm-shell weather_provider) | Weather widget has no data |
+| python3-venv | python | Suggests | Assistant voice setup: private venv for the speech runtimes (`python3 -m venv`) | Voice setup stops with the install hint; the rest of the assistant works |
 | udisks2 | udisks2 | Suggests | udisksctl mount of removable drives (Explorer) | Mount disabled |
 | policykit-1-gnome | polkit-gnome | Suggests | Polkit authentication agent fallback | Privileged actions have no prompt agent |
 | polkit-kde-agent-1 | polkit-kde-agent | Suggests | Preferred polkit authentication agent | Privileged actions have no prompt agent |

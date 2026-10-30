@@ -10,6 +10,7 @@ mod connect_ui;
 mod instance;
 mod model;
 pub mod osd;
+mod voice_setup_ui;
 pub mod osd_host;
 
 use osd::{Osd, OsdEvent, OsdInput, OsdState};
@@ -32,9 +33,9 @@ use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_assistant_core::{
     default_config_path, AssistantError, AssistantState, CancelToken, ChatStore, Detected, HermesClient, HermesConfig,
     LifeEvent, Message, MsgState, Paths, Recording, Role, SessionState, Speech, SpeechConfig,
-    Stopper, TurnEvent, TurnOutcome, TurnRequest, Transcriber, candidate_urls, default_manifests,
+    Stopper, TurnEvent, TurnOutcome, TurnRequest, Transcriber, candidate_urls,
     detect, discover, install_plan, read_env, transition,
-    CommandSpeech, CommandTranscriber, CurlFetcher, DiskModelStore, ModelManifest, ModelStore,
+    CommandSpeech, CommandTranscriber, apply_defaults, default_voice_dir, ready_model,
     SystemRunner, DEFAULT_BASE_URL,
 };
 use flamewm_control_core::{ControlRequest, ControlResponse};
@@ -72,36 +73,16 @@ enum Msg {
     Tick(u64),
     /// One line of installer output.
     Progress(String),
-    /// Model download progress: bytes done and total (0 when unknown).
-    Download(u64, u64),
-    /// A model download finished for the given kind.
-    Fetched(SpeechKind, Result<PathBuf, AssistantError>),
+    /// Voice setup progress: percent and the step it is on.
+    VoiceProgress(u8, String),
+    /// The voice setup finished, with the TTS model directory or the reason it failed.
+    VoiceSetup(Result<PathBuf, AssistantError>),
     /// A transcript, or the reason none was produced.
     Heard(Result<String, AssistantError>),
     /// Speech finished, was stopped, or failed.
     Spoke(Result<(), AssistantError>),
     /// The user clicked the speaking OSD.
     OsdClick,
-}
-
-/// The two on-demand models. Each maps to one manifest in `default_manifests`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SpeechKind {
-    Stt,
-    Tts,
-}
-
-impl SpeechKind {
-    fn manifest(self) -> ModelManifest {
-        let name = match self {
-            Self::Stt => "stt-phonon-2",
-            Self::Tts => "tts-phonon-local",
-        };
-        default_manifests()
-            .into_iter()
-            .find(|m| m.name == name)
-            .expect("manifest for every speech kind")
-    }
 }
 
 /// Sends a message to the window and pokes its wake pipe.
@@ -146,8 +127,8 @@ struct Assistant {
     speech_cfg: Result<SpeechConfig, String>,
     /// Open microphone capture while the user is recording.
     recording: Option<Recording>,
-    /// Model currently being downloaded.
-    downloading: Option<SpeechKind>,
+    /// True while the voice setup runs.
+    downloading: bool,
     /// Text waiting for the TTS model to finish downloading.
     pending_speech: Option<String>,
     /// Voice OSD state, and the child process that draws it.
@@ -235,7 +216,7 @@ impl Assistant {
             tts_on: false,
             speech_cfg,
             recording: None,
-            downloading: None,
+            downloading: false,
             pending_speech: None,
             osd: Osd::new(),
             osd_process: OsdProcess::default(),
@@ -311,14 +292,8 @@ impl Assistant {
             Msg::Tick(secs) => connect_ui::working_tick(self, secs),
             Msg::Progress(line) => self.notice = line.chars().take(160).collect(),
             Msg::TurnDone(result) => self.finish_turn(result),
-            Msg::Download(done, total) => {
-                if total > 0 {
-                    self.notice = format!("Downloading models {}%", done.saturating_mul(100) / total);
-                } else {
-                    self.notice = "Downloading models...".into();
-                }
-            }
-            Msg::Fetched(kind, result) => self.fetched(kind, result),
+            Msg::VoiceProgress(percent, label) => self.notice = voice_setup_ui::progress_notice(percent, &label),
+            Msg::VoiceSetup(result) => self.fetched(result),
             Msg::Heard(result) => self.heard(result),
             Msg::OsdClick => {
                 if self.osd.input(OsdInput::Click) == Some(OsdEvent::StopSpeaking) {
@@ -472,15 +447,15 @@ impl Assistant {
             }
             return;
         }
-        if self.downloading.is_some() {
+        if self.downloading {
             return;
         }
         let cfg = match self.speech_config() {
             Some(cfg) => cfg,
             None => return,
         };
-        if self.installed_model(SpeechKind::Stt).is_none() {
-            self.fetch_model(SpeechKind::Stt);
+        if self.installed_model().is_none() {
+            self.setup_voice();
             return;
         }
         let argv = match flamewm_assistant_core::expand(&cfg.record, &[]) {
@@ -506,8 +481,8 @@ impl Assistant {
             self.notice = "Speech-to-text is not configured: set transcribe_command.".into();
             return;
         };
-        let Some(model) = self.installed_model(SpeechKind::Stt) else {
-            self.notice = "The speech model is not installed.".into();
+        let Some(model) = self.installed_model() else {
+            self.notice = "Voice is not set up. Press the mic to set it up.".into();
             return;
         };
         self.notice = "Transcribing...".into();
@@ -539,9 +514,9 @@ impl Assistant {
             self.notice = "Text-to-speech is not configured: set synthesize_command.".into();
             return;
         };
-        let Some(model) = self.installed_model(SpeechKind::Tts) else {
+        let Some(model) = self.installed_model() else {
             self.pending_speech = Some(text);
-            self.fetch_model(SpeechKind::Tts);
+            self.setup_voice();
             return;
         };
         self.stop_speech();
@@ -579,14 +554,11 @@ impl Assistant {
         self.osd_process.sync(self.osd.state(), move || bus.send(Msg::OsdClick));
     }
 
-    fn fetched(&mut self, kind: SpeechKind, result: Result<PathBuf, AssistantError>) {
-        self.downloading = None;
+    fn fetched(&mut self, result: Result<PathBuf, AssistantError>) {
+        self.downloading = false;
         match result {
             Ok(_) => {
-                self.notice = match kind {
-                    SpeechKind::Stt => "Speech model ready. Press the mic to speak.".into(),
-                    SpeechKind::Tts => "Voice model ready.".into(),
-                };
+                self.notice = "Voice ready. Press the mic to speak.".into();
                 if let Some(text) = self.pending_speech.take() {
                     self.speak(text);
                 }
@@ -598,31 +570,36 @@ impl Assistant {
         }
     }
 
-    fn fetch_model(&mut self, kind: SpeechKind) {
-        let Some(dir) = flamewm_assistant_core::default_models_dir() else {
-            self.notice = "No data directory is available for speech models.".into();
+    /// One click sets up the runtimes and models. Progress and the result arrive as messages.
+    fn setup_voice(&mut self) {
+        if self.downloading {
             return;
-        };
-        self.downloading = Some(kind);
-        self.notice = "Downloading models...".into();
-        let bus = self.bus.clone();
-        thread::spawn(move || {
-            let mut store = DiskModelStore::new(dir, CurlFetcher::default());
-            let manifest = kind.manifest();
-            let result = store.fetch(&manifest, &mut |done, total| bus.send(Msg::Download(done, total)));
-            bus.send(Msg::Fetched(kind, result));
-        });
+        }
+        self.downloading = true;
+        self.notice = "Setting up voice...".into();
+        let progress_bus = self.bus.clone();
+        let done_bus = self.bus.clone();
+        voice_setup_ui::spawn(
+            move |percent, label| progress_bus.send(Msg::VoiceProgress(percent, label)),
+            move |result| done_bus.send(Msg::VoiceSetup(result)),
+        );
     }
 
-    fn installed_model(&self, kind: SpeechKind) -> Option<PathBuf> {
-        let dir = flamewm_assistant_core::default_models_dir()?;
-        DiskModelStore::new(dir, CurlFetcher::default()).installed(&kind.manifest().name)
+    /// The TTS model directory once voice setup has finished.
+    fn installed_model(&self) -> Option<PathBuf> {
+        ready_model(&default_voice_dir()?)
     }
 
     /// The parsed speech config, or a notice naming the problem.
     fn speech_config(&mut self) -> Option<SpeechConfig> {
         match &self.speech_cfg {
-            Ok(cfg) => Some(cfg.clone()),
+            Ok(cfg) => {
+                let mut cfg = cfg.clone();
+                if let Some(dir) = default_voice_dir() {
+                    apply_defaults(&mut cfg, &dir);
+                }
+                Some(cfg)
+            }
             Err(error) => {
                 self.notice = format!("Speech config is invalid: {error}");
                 None
