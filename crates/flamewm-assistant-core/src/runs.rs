@@ -17,8 +17,9 @@ pub enum RunEvent {
     /// `preview` is Hermes' one-line summary of the call (command, path, query), when sent.
     ToolStarted { tool: String, preview: Option<String> },
     ToolCompleted { tool: String, error: bool },
-    /// A tool call needs a human decision. Carries the choices the server accepts.
-    Approval { choices: Vec<String>, request_id: Option<String> },
+    /// A tool call needs a human decision. Carries the choices the server accepts, the request id
+    /// to echo back, and the command (already redacted by the server).
+    Approval { choices: Vec<String>, request_id: Option<String>, command: Option<String> },
     Other,
 }
 
@@ -57,6 +58,7 @@ pub fn decode_event(data: &str) -> Result<RunEvent, AssistantError> {
                 .map(|items| items.iter().filter_map(Value::as_str).map(str::to_owned).collect())
                 .unwrap_or_default(),
             request_id: text("request_id"),
+            command: text("command"),
         },
         _ => RunEvent::Other,
     })
@@ -104,8 +106,12 @@ mod tests {
                 RunEvent::ToolCompleted { tool: "terminal".into(), error: true },
             ),
             (
-                r#"{"event":"approval.request","choices":["once","deny"],"request_id":"p1"}"#,
-                RunEvent::Approval { choices: vec!["once".into(), "deny".into()], request_id: Some("p1".into()) },
+                r#"{"event":"approval.request","choices":["once","deny"],"request_id":"p1","command":"rm -rf x"}"#,
+                RunEvent::Approval {
+                    choices: vec!["once".into(), "deny".into()],
+                    request_id: Some("p1".into()),
+                    command: Some("rm -rf x".into()),
+                },
             ),
             (r#"{"event":"run.stopping"}"#, RunEvent::Other),
         ];

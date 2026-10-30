@@ -131,6 +131,9 @@ pub enum TurnEvent {
     Delta(String),
     /// Progress text for the UI, such as the tool in use.
     Activity(String),
+    /// A command needs approval. Answer with `HermesClient::respond_approval` using `run_id` and
+    /// `request_id`. Hermes keeps the run waiting until it is answered or its own timeout passes.
+    Approval { run_id: String, request_id: Option<String>, command: String, choices: Vec<String> },
 }
 
 /// How a turn ended. Transport and HTTP failures and failed runs are `Err` instead.
@@ -345,9 +348,14 @@ impl HermesClient {
         self.post_control(run_id, "stop", "{}")
     }
 
-    /// `POST /v1/runs/{id}/approval` with `choice` (`once`, `session`, `always` or `deny`).
-    pub fn respond_approval(&self, run_id: &str, choice: &str) -> Result<(), AssistantError> {
-        self.post_control(run_id, "approval", &json!({ "choice": choice }).to_string())
+    /// `POST /v1/runs/{id}/approval` with `choice` (`once`, `session`, `always` or `deny`) and the
+    /// `request_id` from the `approval.request` event, when there is one.
+    pub fn respond_approval(&self, run_id: &str, choice: &str, request_id: Option<&str>) -> Result<(), AssistantError> {
+        let mut body = json!({ "choice": choice });
+        if let Some(id) = request_id {
+            body["request_id"] = json!(id);
+        }
+        self.post_control(run_id, "approval", &body.to_string())
     }
 
     fn post_control(&self, run_id: &str, action: &str, body: &str) -> Result<(), AssistantError> {
@@ -469,12 +477,14 @@ impl HermesClient {
             for data in frames.drain(..) {
                 let event = decode_event(&data)?;
                 match event {
-                    RunEvent::Approval { .. } => {
-                        // No approval UI yet: deny, so the run cannot run a gated tool unseen.
-                        let _ = self.respond_approval(&run_id, "deny");
-                        (stream.sink)(TurnEvent::Activity(
-                            "Hermes asked to run a command that needs approval. It was denied.".into(),
-                        ));
+                    RunEvent::Approval { choices, request_id, command } => {
+                        // The UI answers with respond_approval. The run waits for that answer.
+                        (stream.sink)(TurnEvent::Approval {
+                            run_id: run_id.clone(),
+                            request_id,
+                            command: command.unwrap_or_default(),
+                            choices,
+                        });
                     }
                     other => {
                         if let Some(done) = stream.apply(other) {
@@ -709,7 +719,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::test_support::{ok_response, serve, test_dir};
+    use crate::test_support::{ok_response, read_request, serve, test_dir};
 
     fn client(url: &str, key: Option<&str>) -> HermesClient {
         HermesClient::new(&HermesConfig {
@@ -855,20 +865,124 @@ mod tests {
     }
 
     #[test]
-    fn approval_is_denied_and_reported() {
+    fn approval_is_reported_and_left_for_the_ui_to_answer() {
         let mut stream = sse_head();
         stream.extend(sse(&[
-            r#"{"event":"approval.request","choices":["once","deny"],"request_id":"p1"}"#,
-            r#"{"event":"run.completed","output":"Not run."}"#,
+            r#"{"event":"approval.request","choices":["once","deny"],"request_id":"p1","command":"rm -rf x"}"#,
+            r#"{"event":"run.completed","output":"Done."}"#,
         ]));
-        let (url, server) = serve(vec![healthy(), accepted("run_3"), vec![stream], ok_response("", "{}")]);
+        let (url, server) = serve(vec![healthy(), accepted("run_3"), vec![stream]]);
         let (events, mut sink) = collect();
         let outcome = client(&url, None).run_turn(&TurnRequest::new("rm", None), &CancelToken::new(), &mut sink).unwrap();
-        assert_eq!(outcome, TurnOutcome::Completed { text: "Not run.".into(), session: outcome_session(&outcome) });
+        assert_eq!(outcome, TurnOutcome::Completed { text: "Done.".into(), session: outcome_session(&outcome) });
+        // The worker sends no approval itself: three requests only (health, run, events).
+        assert_eq!(server.join().unwrap().len(), 3);
+        let approval = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|e| match e {
+                TurnEvent::Approval { run_id, request_id, command, choices } => {
+                    Some((run_id.clone(), request_id.clone(), command.clone(), choices.clone()))
+                }
+                _ => None,
+            })
+            .expect("approval event");
+        assert_eq!(
+            approval,
+            ("run_3".into(), Some("p1".into()), "rm -rf x".into(), vec!["once".into(), "deny".into()])
+        );
+    }
+
+    /// The run waits on its event stream until a second connection answers the approval. The
+    /// answer comes from the sink, the way the window answers it.
+    #[test]
+    fn approval_round_trip_answers_the_waiting_run() {
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let answered = Arc::new(AtomicBool::new(false));
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let (answered_srv, seen_srv) = (Arc::clone(&answered), Arc::clone(&seen));
+        let server = std::thread::spawn(move || {
+            let mut handles = Vec::new();
+            for _ in 0..4 {
+                let (mut conn, _) = listener.accept().unwrap();
+                let (answered, seen) = (Arc::clone(&answered_srv), Arc::clone(&seen_srv));
+                handles.push(std::thread::spawn(move || {
+                    use std::io::Write;
+                    let head = read_request(&mut conn);
+                    let first = head.lines().next().unwrap_or("").to_owned();
+                    seen.lock().unwrap().push(head);
+                    let write = |conn: &mut std::net::TcpStream, pieces: Vec<Vec<u8>>| {
+                        for piece in pieces {
+                            conn.write_all(&piece).unwrap();
+                        }
+                        conn.flush().unwrap();
+                    };
+                    if first.starts_with("GET /health") {
+                        write(&mut conn, healthy());
+                    } else if first.starts_with("POST /v1/runs ") {
+                        write(&mut conn, accepted("run_9"));
+                    } else if first.starts_with("GET /v1/runs/run_9/events") {
+                        let mut first_piece = sse_head();
+                        first_piece.extend(sse(&[
+                            r#"{"event":"approval.request","choices":["once","deny"],"request_id":"p9","command":"ls"}"#,
+                        ]));
+                        conn.write_all(&first_piece).unwrap();
+                        conn.flush().unwrap();
+                        while !answered.load(Ordering::SeqCst) {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        conn.write_all(&sse(&[r#"{"event":"run.completed","output":"Listed."}"#])).unwrap();
+                        conn.flush().unwrap();
+                    } else if first.starts_with("POST /v1/runs/run_9/approval") {
+                        write(&mut conn, ok_response("", r#"{"resolved":1}"#));
+                        answered.store(true, Ordering::SeqCst);
+                    }
+                }));
+            }
+            for handle in handles {
+                handle.join().unwrap();
+            }
+        });
+        let (events, mut sink) = collect();
+        let answer_client = client(&url, None);
+        let outcome = client(&url, None)
+            .run_turn(&TurnRequest::new("ls", None), &CancelToken::new(), &mut |event: TurnEvent| {
+                if let TurnEvent::Approval { run_id, request_id, .. } = &event {
+                    answer_client.respond_approval(run_id, "once", request_id.as_deref()).unwrap();
+                }
+                sink(event);
+            })
+            .unwrap();
+        assert_eq!(outcome, TurnOutcome::Completed { text: "Listed.".into(), session: outcome_session(&outcome) });
+        server.join().unwrap();
+        let seen = seen.lock().unwrap();
+        let answer = seen.iter().find(|h| h.starts_with("POST /v1/runs/run_9/approval")).expect("approval POST");
+        assert!(answer.contains(r#""choice":"once""#));
+        assert!(answer.contains(r#""request_id":"p9""#));
+        assert!(events.lock().unwrap().iter().any(|e| matches!(e, TurnEvent::Approval { command, .. } if command == "ls")));
+    }
+
+    #[test]
+    fn respond_approval_posts_choice_and_request_id() {
+        let (url, server) = serve(vec![ok_response("", r#"{"resolved":1}"#)]);
+        client(&url, Some("k1")).respond_approval("run_3", "once", Some("p1")).unwrap();
         let seen = server.join().unwrap();
-        assert!(seen[3].starts_with("POST /v1/runs/run_3/approval "));
-        assert!(seen[3].contains(r#""choice":"deny""#));
-        assert!(events.lock().unwrap().iter().any(|e| matches!(e, TurnEvent::Activity(t) if t.contains("denied"))));
+        assert!(seen[0].starts_with("POST /v1/runs/run_3/approval "));
+        assert!(seen[0].contains(r#""choice":"once""#));
+        assert!(seen[0].contains(r#""request_id":"p1""#));
+    }
+
+    #[test]
+    fn respond_approval_without_request_id_sends_only_the_choice() {
+        let (url, server) = serve(vec![ok_response("", r#"{"resolved":1}"#)]);
+        client(&url, None).respond_approval("run_4", "deny", None).unwrap();
+        let seen = server.join().unwrap();
+        assert!(seen[0].contains(r#""choice":"deny""#));
+        assert!(!seen[0].contains("request_id"));
     }
 
     fn outcome_session(outcome: &TurnOutcome) -> Option<String> {

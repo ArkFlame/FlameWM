@@ -48,10 +48,12 @@ use flamewm_ui_x11::{
     run_with_controller_events_role_and_two_readable_fds,
 };
 
-use model::{ConnectStep, History, KeyCmd, Row, Screen, SLOTS};
+use model::{ConnectAction, History, KeyCmd, Row, Screen, SLOTS};
 
 /// Rows in the model picker; longer lists page with prev and next.
 const MODEL_ROWS: usize = 8;
+/// A pending command approval is denied when the user has not answered within this time.
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
 /// Earlier messages sent with each proxy-mode turn.
 const RECENT_TURNS: usize = 12;
 
@@ -94,6 +96,8 @@ enum Msg {
     /// Model ids from `GET /v1/models`, or the reason they could not be listed.
     Models(Result<Vec<String>, String>),
     Turn(TurnEvent),
+    /// The approval waited too long: deny it if it is still the pending one.
+    ApprovalExpired { run_id: String, request_id: Option<String> },
     TurnDone(Result<TurnOutcome, AssistantError>),
     /// Whole seconds since the running turn started.
     Tick(u64),
@@ -127,6 +131,14 @@ impl Bus {
     }
 }
 
+/// A command the run is waiting on. Ids come from the `approval.request` event.
+#[derive(Clone, Debug)]
+struct PendingApproval {
+    run_id: String,
+    request_id: Option<String>,
+    command: String,
+}
+
 struct Assistant {
     paths: Paths,
     bus: Bus,
@@ -142,6 +154,8 @@ struct Assistant {
     confirm: bool,
     /// The connect screen asks to restart a running gateway (one confirm, then the restart runs).
     restart_confirm: bool,
+    /// A command waiting for the user's Approve once or Deny answer.
+    approval: Option<PendingApproval>,
 /// The connect screen asks once before Flamy enables the Hermes API server in `~/.hermes/.env`.
 enable_confirm: bool,
 /// The connected Hermes is the Nous proxy: chat only, no Hermes tools or skills.
@@ -250,6 +264,7 @@ impl Assistant {
             installing: false,
             confirm: false,
             restart_confirm: false,
+            approval: None,
             enable_confirm: false,
             model_only: false,
             models: Vec::new(),
@@ -368,6 +383,15 @@ impl Assistant {
             }
             Msg::Turn(TurnEvent::Delta(text)) => self.history.append_pending(&text),
             Msg::Turn(event @ TurnEvent::Activity(_)) => connect_ui::on_turn_activity(self, event),
+            Msg::Turn(TurnEvent::Approval { run_id, request_id, command, choices }) => {
+                self.on_approval(run_id, request_id, command, choices)
+            }
+            Msg::ApprovalExpired { run_id, request_id } => {
+                if self.approval.as_ref().is_some_and(|p| p.run_id == run_id && p.request_id == request_id) {
+                    self.notice = "No answer in time, so the command was denied.".into();
+                    self.decide("deny");
+                }
+            }
             Msg::Tick(secs) => connect_ui::working_tick(self, secs),
             Msg::Progress(line) => self.install_line = line,
             Msg::TurnDone(result) => self.finish_turn(result),
@@ -404,9 +428,11 @@ impl Assistant {
         if self.probing || self.installing {
             return;
         }
-        match model::connect_step(&self.state) {
-            ConnectStep::Confirm => self.confirm = true,
-            ConnectStep::Start => self.start(),
+        let needs_enable = self.binary.is_some() && connect_ui::api_server_needs_enable(&self.paths);
+        match model::connect_action(self.binary.is_some(), needs_enable) {
+            ConnectAction::Install => self.confirm = true,
+            ConnectAction::EnableConfirm => self.enable_confirm = true,
+            ConnectAction::Launch => self.start(),
         }
     }
 
@@ -833,6 +859,7 @@ impl Assistant {
 
     fn finish_turn(&mut self, result: Result<TurnOutcome, AssistantError>) {
         self.working = false;
+        self.approval = None;
         let partial = self.history.take_pending().unwrap_or_default();
         match result {
             Ok(TurnOutcome::Completed { text, session }) => {
@@ -916,6 +943,8 @@ impl Assistant {
 "assistant.enable-cancel" => self.enable_confirm = false,
             "assistant.send" => self.submit(),
             "assistant.model-toggle" => self.toggle_model_menu(),
+            "assistant.approve-once" => self.decide("once"),
+            "assistant.approve-deny" => self.decide("deny"),
             "assistant.model-prev" => self.model_page = self.model_page.saturating_sub(1),
             "assistant.model-next" => {
                 let last = self.model_matches().len().saturating_sub(1) / MODEL_ROWS;
@@ -1000,6 +1029,38 @@ impl Assistant {
         }
     }
 
+    /// Shows the approval row and starts its timeout. The run waits in Hermes until answered.
+    fn on_approval(&mut self, run_id: String, request_id: Option<String>, command: String, choices: Vec<String>) {
+        // Only "once" and "deny" are offered from the window; other choices are left to Hermes' timeout.
+        if !choices.iter().any(|c| c == "once") && !choices.iter().any(|c| c == "deny") {
+            return;
+        }
+        let bus = self.bus.clone();
+        let (expire_run, expire_request) = (run_id.clone(), request_id.clone());
+        thread::spawn(move || {
+            thread::sleep(APPROVAL_TIMEOUT);
+            bus.send(Msg::ApprovalExpired { run_id: expire_run, request_id: expire_request });
+        });
+        self.approval = Some(PendingApproval { run_id, request_id, command });
+    }
+
+    /// Sends the user's choice for the pending approval on a worker thread. A 409 from Hermes means the
+    /// run already moved on, so it is not reported.
+    fn decide(&mut self, choice: &str) {
+        let AssistantState::Ready { url, .. } = &self.state else { return };
+        let url = url.clone();
+        let Some(pending) = self.approval.take() else { return };
+        let paths = self.paths.clone();
+        let choice = choice.to_owned();
+        thread::spawn(move || {
+            let env = read_env(&paths.hermes_home);
+            let config = HermesConfig { base_url: url, api_key: env.api_key, ..HermesConfig::default() };
+            if let Ok(client) = HermesClient::new(&config) {
+                let _ = client.respond_approval(&pending.run_id, &choice, pending.request_id.as_deref());
+            }
+        });
+    }
+
     fn paint(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let surface = surface_fill(&self.theme);
         doc.background("assistant", rgba(surface.rgb, surface.alpha))?;
@@ -1016,6 +1077,15 @@ impl Assistant {
             doc.text("enable-text", connect_ui::ENABLE_CONFIRM.to_owned())?;
         }
         doc.visible("chat", screen == Screen::Chat)?;
+        doc.visible("approval-row", self.approval.is_some())?;
+        if let Some(pending) = &self.approval {
+            let text = if pending.command.trim().is_empty() {
+                "Hermes wants to run a tool. Allow it?".to_owned()
+            } else {
+                format!("Allow Hermes to run: {}", pending.command)
+            };
+            doc.text("approval-text", or_blank(fit_chars(&text, 200)))?;
+        }
         match screen {
             Screen::Loading => {
                 let text = if self.installing { "Installing Hermes..." } else { "Loading..." };

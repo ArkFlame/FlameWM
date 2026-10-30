@@ -165,7 +165,7 @@ pub(crate) mod test_support {
         (url, handle)
     }
 
-    fn read_request(conn: &mut TcpStream) -> String {
+    pub fn read_request(conn: &mut TcpStream) -> String {
         let mut buf = Vec::new();
         let mut tmp = [0u8; 1024];
         loop {

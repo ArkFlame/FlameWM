@@ -253,6 +253,35 @@ impl Assistant {
 mod tests {
     use super::*;
 
+    fn home_with_env(name: &str, env: Option<&str>) -> Paths {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target-bin/assistant-window-tests")
+            .join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("test dir");
+        if let Some(text) = env {
+            std::fs::write(dir.join(".env"), text).expect("env");
+        }
+        Paths { hermes_home: dir.clone(), binary_candidates: vec![], state_dir: dir.join("state") }
+    }
+
+    #[test]
+    fn api_server_needs_enable_only_when_off_or_keyless() {
+        let key = "API_SERVER_KEY=0123456789abcdef0123";
+        assert!(api_server_needs_enable(&home_with_env("need-missing", None)));
+        assert!(api_server_needs_enable(&home_with_env("need-off", Some(&format!("{key}\n")))));
+        assert!(api_server_needs_enable(&home_with_env("need-keyless", Some("API_SERVER_ENABLED=true\n"))));
+        assert!(api_server_needs_enable(&home_with_env("need-empty-key", Some("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=\n"))));
+        let ready = format!("API_SERVER_ENABLED=true\n{key}\n");
+        assert!(!api_server_needs_enable(&home_with_env("need-ready", Some(&ready))));
+    }
+
+    #[test]
+    fn enable_confirm_text_names_the_backup_and_restart() {
+        assert!(ENABLE_CONFIRM.contains("backup"));
+        assert!(ENABLE_CONFIRM.contains("restarts"));
+    }
+
     #[test]
     fn elapsed_text_formats_seconds_and_minutes() {
         assert_eq!(elapsed_text(0), "0s");

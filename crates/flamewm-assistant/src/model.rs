@@ -264,21 +264,23 @@ pub enum Screen {
     Chat,
 }
 
-/// What the connect button does for the current lifecycle state.
+/// What the connect button does. Install is reachable only when no Hermes binary exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConnectStep {
+pub enum ConnectAction {
     /// Hermes is not installed: ask for explicit consent before running the installer.
-    Confirm,
-    /// Hermes is installed: start the gateway and wait for it.
-    Start,
+    Install,
+    /// Hermes is installed but its API server is off or keyless: confirm before editing `.env`.
+    EnableConfirm,
+    /// Hermes is installed and configured: start the gateway and wait for it.
+    Launch,
 }
 
-pub fn connect_step(state: &AssistantState) -> ConnectStep {
-    match state {
-        AssistantState::NotInstalled | AssistantState::Error { version: None, .. } => {
-            ConnectStep::Confirm
-        }
-        _ => ConnectStep::Start,
+/// Pure connect decision. An installed binary never leads to the installer.
+pub fn connect_action(binary_present: bool, needs_enable: bool) -> ConnectAction {
+    match (binary_present, needs_enable) {
+        (false, _) => ConnectAction::Install,
+        (true, true) => ConnectAction::EnableConfirm,
+        (true, false) => ConnectAction::Launch,
     }
 }
 
@@ -461,13 +463,11 @@ mod tests {
     }
 
     #[test]
-    fn connect_asks_for_consent_only_when_not_installed() {
-        let err_none = AssistantState::Error { message: "x".into(), version: None };
-        let err_some = AssistantState::Error { message: "x".into(), version: Some("1".into()) };
-        assert_eq!(connect_step(&AssistantState::NotInstalled), ConnectStep::Confirm);
-        assert_eq!(connect_step(&err_none), ConnectStep::Confirm);
-        assert_eq!(connect_step(&err_some), ConnectStep::Start);
-        assert_eq!(connect_step(&AssistantState::Stopped { version: "1".into() }), ConnectStep::Start);
+    fn connect_installs_only_when_no_binary_exists() {
+        assert_eq!(connect_action(false, false), ConnectAction::Install);
+        assert_eq!(connect_action(false, true), ConnectAction::Install);
+        assert_eq!(connect_action(true, true), ConnectAction::EnableConfirm);
+        assert_eq!(connect_action(true, false), ConnectAction::Launch);
     }
 
     #[test]
