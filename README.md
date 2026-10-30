@@ -264,13 +264,13 @@ tar -xzf .target/dist/flamewm-<version>-linux-x86_64.tar.gz --strip-components=1
 
 ## Benchmark
 
-Measured 2026-10-29 (noisy shared machine; see the method notes in the performance doc).
+Measured 2026-10-30 UTC on a nested Xephyr display (noisy shared machine; see the method notes in the performance doc). Binaries are from `target-rel/release`, built between 2026-10-29 18:12 and 21:38 local time; not all match HEAD `c58954af`. Details are in the performance doc.
 
-| Idle session (WM, desktop, shell) | Result |
-| --- | --- |
-| Idle RSS, total | 45.6 MiB (earlier measurement: 53.6 MB) |
-| Idle PSS, total | 23.1 MiB |
-| Goal | 10 MB idle PSS, **not achieved** |
+| Idle session, Flame-owned processes (no apps open) | RSS MiB | PSS MiB |
+| --- | --- | --- |
+| Session mode (`flamewm-session` supervisor, WM, audio helper, desktop, shell) | 57.4 | 23.8 |
+| Direct mode (WM, desktop, shell) | 58.9 | 26.9 |
+| Goal | | 10 MB idle PSS, **not achieved** |
 
 Run the pixel benchmark with `cargo run --release -p flamewm-render-x11 --example pixel_bench`.
 Print the per-process RSS and PSS table with `BENCH_DISPLAY=:166 tools/bench_mem.sh idle`
@@ -296,7 +296,6 @@ Crate roles are taken from the workspace `Cargo.toml` manifests. Layering rules 
 | `crates/flamewm-reactor` | Native event sources |
 | `crates/flamewm-x11-canary` | X11 acceptance scenario binary |
 
-The `.vendor/` directory holds historical reference corpora only. No active crate may include, link, or load `.vendor/**`.
 
 ## Licensing
 

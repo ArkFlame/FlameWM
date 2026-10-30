@@ -27,8 +27,8 @@ The compiler crate uses package-specific `opt-level=2`; parser speed is not stea
 
 ## Acceptance targets
 
-- combined Flame-owned graphical process PSS <= 40 MiB target (met by the 2026-10-29 idle figures below);
-- goal: combined idle PSS <= 10 MB. **Not achieved.** Current idle PSS is 23.1 MiB.
+- combined Flame-owned graphical process PSS <= 40 MiB target (met by the 2026-10-30 idle figures below: 23.8 MiB session mode, 26.9 MiB direct mode);
+- goal: combined idle PSS <= 10 MB. **Not achieved.** Current idle PSS is 23.8 MiB (session mode).
 - near-zero idle CPU outside real events/timers;
 - no visible drag backlog in Xephyr;
 - no stale motion rendered after release;
@@ -65,20 +65,60 @@ matches `BENCH_DISPLAY` and prints RSS and PSS per process from
 `/proc/<pid>/smaps_rollup`. PSS divides shared pages between the processes that map
 them, so the PSS total is the footprint to compare. RSS double-counts shared pages.
 
+Limitation: the script looks processes up with `pgrep -x`, which matches only the first 15 characters of
+the command name. It therefore misses `flamewm-terminal`, `flamewm-settings`, `flamewm-explorer` and
+`flamewm-audio-helper`, and its list does not include them. Add those rows by reading `/proc/<pid>/smaps_rollup` directly.
+
 ### Memory, idle (RSS / PSS, MiB)
 
-Values recorded in the 2026-10-29 session measurement. They were not re-run in this pass.
+Measured 2026-10-30 UTC (about 01:28 to 01:34) on a private nested display `:195`
+(Xephyr 1280x800, `FLAMEWM_CONFIG_DIR` and `XDG_*` pointed at a scratch directory,
+private D-Bus session, `LIBGL_ALWAYS_SOFTWARE=1`). Samples were taken with
+`/proc/<pid>/smaps_rollup` after 15 to 40 s of idle. Xephyr itself is excluded from the totals.
+
+Session mode, `flamewm-session` as supervisor, no apps open (01:33 sample):
 
 | Process | RSS | PSS |
 | --- | --- | --- |
-| `flamewm` (WM) | 10.7 | 5.5 |
-| `flamewm-desktop` | 19.1 | 10.4 |
-| `flamewm-shell` | 15.8 | 7.1 |
-| **Total** | **45.6** | **23.1** |
+| `flamewm-session` | 4.2 | 1.2 |
+| `flamewm` (WM) | 7.9 | 3.1 |
+| `flamewm-audio-helper` | 6.2 | 1.5 |
+| `flamewm-desktop` | 23.5 | 12.7 |
+| `flamewm-shell` | 15.6 | 5.3 |
+| **Total** | **57.4** | **23.8** |
 
-Earlier measurement: 53.6 MB RSS total. The per-process rows above are the 2026-10-29
-figures; the earlier per-process split is not recorded here. The sum of the PSS
-rows is 23.0 because of rounding.
+Direct mode, WM + desktop + shell started by hand, no apps open (01:30 sample, after
+terminal, settings and explorer had been opened and closed):
+
+| Process | RSS | PSS |
+| --- | --- | --- |
+| `flamewm` (WM) | 16.7 | 6.2 |
+| `flamewm-desktop` | 23.8 | 13.0 |
+| `flamewm-shell` | 18.4 | 7.8 |
+| **Total** | **58.9** | **26.9** |
+
+Direct-mode total was 21.5 MiB PSS at a 01:28 sample taken before any app was opened. The
+WM and shell rows grew after the apps were opened and closed, so the idle figure
+depends on prior activity. Treat 21.5 to 26.9 MiB as the observed direct-mode range.
+
+Single app open on top of direct mode, own process row (sampled 15 to 20 s after launch):
+
+| App | RSS | PSS |
+| --- | --- | --- |
+| `flamewm-terminal` | 21.3 | 10.3 |
+| `flamewm-settings` | 24.5 | 15.0 |
+| `flamewm-explorer` | 18.1 | 8.9 |
+
+Binary provenance for these numbers. Each binary is from `target-rel/release`, and none was rebuilt for this run.
+The build was skipped because another cargo build held `/tmp/flamewm-cargo.lock`.
+
+- `flamewm-terminal` (21:38) and `flamewm-desktop` (21:35), `flamewm-shell` (21:34): built after `d84ee75f` (21:25, terminal UI node pool tiers).
+- `flamewm` (18:23), `flamewm-session` (18:20) and `flamewm-audio-helper` (18:12): built before `d84ee75f`. The WM and session were not changed by that commit, but these binaries are older than HEAD.
+- `flamewm-settings` (15:53) and `flamewm-explorer` (15:48): built before the HEAD settings commit `c58954af` (22:13). The settings figure is from an older binary.
+- Several binaries may include uncommitted working-tree changes; this was not verified.
+
+Earlier 2026-10-29 figures (WM 5.5, desktop 10.4, shell 7.1, total PSS 23.1 MiB) were
+from different binaries and are superseded by the rows above. The pre-tier terminal figure is not recorded.
 
 ### Pixel operations (`pixel_bench`, min of 15 runs, ms)
 
