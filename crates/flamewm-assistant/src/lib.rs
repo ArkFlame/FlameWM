@@ -5,6 +5,7 @@
 //! streaming a turn) runs on short-lived threads that report back over a channel plus a wake pipe
 //! that the window's event loop reads.
 
+mod chat_header;
 mod instance;
 mod model;
 pub mod osd;
@@ -802,6 +803,10 @@ impl Assistant {
             }
         }
         let empty = self.input.is_empty();
+        let no_rows = rows.is_empty();
+        doc.visible("list", !no_rows)?;
+        doc.visible("empty", no_rows)?;
+        doc.text("subtitle", chat_header::subtitle(&self.state, self.working).to_owned())?;
         let mic = self.speech_in && empty && !self.working;
         doc.visible("working", self.working)?;
         doc.visible("speaking", self.speaking)?;
