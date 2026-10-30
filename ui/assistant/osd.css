@@ -5,6 +5,6 @@ body { width:100%; height:100%; margin:0; overflow:hidden; font-size:14px; color
 .node { position:absolute; }
 .character { width:56px; height:56px; border-radius:28px; background-color:var(--accent); }
 .eye { width:7px; height:7px; border-radius:4px; background-color:#ffffff; }
-.bubble { display:flex; flex-direction:column; gap:2px; padding:8px 12px; border-radius:14px; background-color:rgba(28,28,30,0.88); }
+.bubble { width:190px; display:flex; flex-direction:column; align-items:center; gap:2px; padding:8px 12px; border-radius:14px; background-color:rgba(28,28,30,0.88); }
 .text { font-size:14px; font-weight:600; color:var(--text); white-space:nowrap; }
 .hint { font-size:11px; color:var(--muted); white-space:nowrap; }

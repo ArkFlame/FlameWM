@@ -20,7 +20,7 @@ pub const BREATH_AMPLITUDE: u32 = 4;
 
 /// OSD surface size in px. Placement on screen is the host's job.
 pub const WIDTH: u32 = 260;
-pub const HEIGHT: u32 = 120;
+pub const HEIGHT: u32 = 140;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OsdState {
@@ -123,13 +123,12 @@ impl Osd {
         let diameter = breath_diameter(self.frame);
         let (cx, cy, bubble) = match self.state {
             OsdState::Hidden | OsdState::Listening => {
-                ((WIDTH / 2) as i32, 44, (16, 84))
+                ((WIDTH / 2) as i32, 40, (35, 80))
             }
             OsdState::Working | OsdState::Speaking => (28, 28, (56, 18)),
         };
         let eye = eye_size(diameter);
         let eye_dx = (diameter / 5) as i32;
-        let eye_dy = (diameter / 10) as i32;
         let (text, hint) = match self.state {
             OsdState::Hidden => ("", ""),
             OsdState::Listening => ("I'm listening...", "Esc cancels"),
@@ -140,8 +139,8 @@ impl Osd {
             visible: self.wants_timer(),
             character: Rect { left: cx - diameter as i32 / 2, top: cy - diameter as i32 / 2, size: diameter },
             eyes: [
-                Rect { left: cx - eye_dx - eye as i32 / 2, top: cy - eye_dy - eye as i32 / 2, size: eye },
-                Rect { left: cx + eye_dx - eye as i32 / 2, top: cy - eye_dy - eye as i32 / 2, size: eye },
+                Rect { left: cx - eye_dx - eye as i32 / 2, top: cy - eye as i32 / 2, size: eye },
+                Rect { left: cx + eye_dx - eye as i32 / 2, top: cy - eye as i32 / 2, size: eye },
             ],
             bubble_left: bubble.0,
             bubble_top: bubble.1,

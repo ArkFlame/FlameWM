@@ -8,6 +8,10 @@
 mod instance;
 mod model;
 pub mod osd;
+pub mod osd_host;
+
+use osd::{Osd, OsdEvent, OsdInput, OsdState};
+use osd_host::OsdProcess;
 
 use std::cell::RefCell;
 use std::env;
@@ -72,6 +76,8 @@ enum Msg {
     Heard(Result<String, AssistantError>),
     /// Speech finished, was stopped, or failed.
     Spoke(Result<(), AssistantError>),
+    /// The user clicked the speaking OSD.
+    OsdClick,
 }
 
 /// The two on-demand models. Each maps to one manifest in `default_manifests`.
@@ -138,6 +144,11 @@ struct Assistant {
     downloading: Option<SpeechKind>,
     /// Text waiting for the TTS model to finish downloading.
     pending_speech: Option<String>,
+    /// Voice OSD state, and the child process that draws it.
+    osd: Osd,
+    osd_process: OsdProcess,
+    /// A voice transcript is waiting to be sent; the next submitted turn is a voice turn.
+    voice_turn: bool,
     speaking: bool,
     speech_stop: Option<Stopper>,
 }
@@ -217,6 +228,9 @@ impl Assistant {
             recording: None,
             downloading: None,
             pending_speech: None,
+            osd: Osd::new(),
+            osd_process: OsdProcess::default(),
+            voice_turn: false,
             speaking: false,
             speech_stop: None,
         })
@@ -293,8 +307,14 @@ impl Assistant {
             }
             Msg::Fetched(kind, result) => self.fetched(kind, result),
             Msg::Heard(result) => self.heard(result),
+            Msg::OsdClick => {
+                if self.osd.input(OsdInput::Click) == Some(OsdEvent::StopSpeaking) {
+                    self.stop_speech();
+                }
+            }
             Msg::Spoke(result) => {
                 self.speaking = false;
+                self.set_osd(OsdState::Hidden);
                 self.speech_stop = None;
                 if let Err(error) = result {
                     if error != AssistantError::Cancelled {
@@ -377,6 +397,9 @@ impl Assistant {
         self.notice.clear();
         self.working = true;
         self.cancel = CancelToken::new();
+        if std::mem::take(&mut self.voice_turn) {
+            self.set_osd(OsdState::Working);
+        }
         self.history.set_pending(Some(String::new()));
         let config = hermes_config(&self.paths, &self.base_url());
         let bus = self.bus.clone();
@@ -388,6 +411,9 @@ impl Assistant {
         if self.speaking || self.pending_speech.is_some() {
             self.stop_speech();
             return;
+        }
+        if self.osd.input(OsdInput::Escape) == Some(OsdEvent::CancelListening) {
+            self.sync_osd();
         }
         if let Some(recording) = self.recording.take() {
             let _ = recording.finish();
@@ -407,6 +433,7 @@ impl Assistant {
         }
         if let Some(recording) = self.recording.take() {
             let samples = recording.finish();
+            self.set_osd(OsdState::Hidden);
             if samples.is_empty() {
                 self.notice = "No audio was captured.".into();
             } else {
@@ -436,6 +463,7 @@ impl Assistant {
             Ok(recording) => {
                 self.recording = Some(recording);
                 self.notice = "Listening... press the mic again to stop.".into();
+                self.set_osd(OsdState::Listening);
             }
             Err(error) => self.notice = error.to_string(),
         }
@@ -452,6 +480,7 @@ impl Assistant {
             return;
         };
         self.notice = "Transcribing...".into();
+        self.set_osd(OsdState::Working);
         let bus = self.bus.clone();
         thread::spawn(move || {
             let mut stt = CommandTranscriber::new(Box::new(SystemRunner), &template, model, CancelToken::new());
@@ -460,11 +489,13 @@ impl Assistant {
     }
 
     fn heard(&mut self, result: Result<String, AssistantError>) {
+        self.set_osd(OsdState::Hidden);
         match result {
             Ok(text) if text.trim().is_empty() => self.notice = "No speech was recognized.".into(),
             Ok(text) => {
                 model::insert_text(&mut self.input, text.trim());
                 self.notice.clear();
+                self.voice_turn = true;
             }
             Err(error) => self.notice = error.to_string(),
         }
@@ -491,6 +522,7 @@ impl Assistant {
             self.paths.state_dir.join("speech"),
         );
         self.speaking = true;
+        self.set_osd(OsdState::Speaking);
         self.speech_stop = Some(speech.stopper());
         let bus = self.bus.clone();
         thread::spawn(move || bus.send(Msg::Spoke(speech.speak(&text))));
@@ -502,6 +534,18 @@ impl Assistant {
         }
         self.speaking = false;
         self.pending_speech = None;
+        self.set_osd(OsdState::Hidden);
+    }
+
+    /// Moves the OSD state machine and syncs its child process.
+    fn set_osd(&mut self, state: OsdState) {
+        self.osd.show(state);
+        self.sync_osd();
+    }
+
+    fn sync_osd(&mut self) {
+        let bus = self.bus.clone();
+        self.osd_process.sync(self.osd.state(), move || bus.send(Msg::OsdClick));
     }
 
     fn fetched(&mut self, kind: SpeechKind, result: Result<PathBuf, AssistantError>) {
@@ -629,6 +673,9 @@ impl Assistant {
                 }
                 self.notice = error.to_string();
             }
+        }
+        if !self.speaking {
+            self.set_osd(OsdState::Hidden);
         }
     }
 

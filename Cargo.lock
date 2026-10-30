@@ -569,6 +569,7 @@ dependencies = [
  "flamewm-control-core",
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",
+ "flamewm-reactor",
  "flamewm-render-compiler",
  "flamewm-render-core",
  "flamewm-ui-core",
