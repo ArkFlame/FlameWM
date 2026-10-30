@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "FlameWM assistant core: loopback Hermes HTTP client, lifecycle state machine, chat history store and speech traits"
+description = "FlameWM assistant core: ARK AI chat client, chat history store, speech and model downloads"
 
 [dependencies]
 serde_json = { workspace = true }

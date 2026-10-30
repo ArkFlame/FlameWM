@@ -1,17 +1,15 @@
-//! Native `FlameWM` assistant: one chat window over the local Hermes API server.
+//! Native `FlameWM` assistant: one chat window over ARK AI.
 //!
-//! The window owns presentation, paging and worker threads. Lifecycle, HTTP/SSE and the durable
-//! history come from `flamewm-assistant-core`. Blocking work (probing, installing, starting,
-//! streaming a turn) runs on short-lived threads that report back over a channel plus a wake pipe
-//! that the window's event loop reads.
+//! The window owns presentation, paging, voice and worker threads. Chat requests go through the
+//! ARK AI client in `flamewm-assistant-core`. Blocking work runs on short-lived threads that report
+//! back over a channel plus a wake pipe that the window's event loop reads.
 
 mod chat_header;
-mod connect_ui;
 mod instance;
 mod model;
 pub mod osd;
-mod voice_setup_ui;
 pub mod osd_host;
+mod voice_setup_ui;
 
 use osd::{Osd, OsdEvent, OsdInput, OsdState};
 use osd_host::OsdProcess;
@@ -23,7 +21,6 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -31,56 +28,28 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_assistant_core::{
-    default_config_path, AssistantError, AssistantState, CancelToken, ChatStore, Detected, HermesClient, HermesConfig,
-    LifeEvent, Message, MsgState, Paths, Recording, Role, SessionState, Speech, SpeechConfig,
-    Stopper, TurnEvent, TurnOutcome, TurnRequest, Transcriber, candidate_urls,
-    detect, discover, install_plan, read_env, transition,
-    CommandSpeech, CommandTranscriber, apply_defaults, default_voice_dir, ready_model,
-    SystemRunner, DEFAULT_BASE_URL,
+    apply_defaults, default_config_path, default_voice_dir, expand, human_error, key_or_default, ready_model,
+    start_recording, ArkClient, ArkConfig, AssistantError, CancelToken, ChatStore, CommandSpeech, CommandTranscriber,
+    Message, MsgState, Recording, Role, SessionState, Speech, SpeechConfig, Stopper, SystemRunner, Transcriber, Turn,
+    DEFAULT_MODEL, FALLBACK_MODELS, HISTORY_TURNS,
 };
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
 use flamewm_dbus_reactor::BusKind;
 use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::{
-    UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess, UiKeyEvent,
-    UiKeyPhase, UiWakeDrain, UiWindowConfig, UiWindowRole, X11WindowIdentity, decode_document,
+    UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess, UiKeyEvent, UiKeyPhase,
+    UiWakeDrain, UiWindowConfig, UiWindowRole, X11WindowIdentity, decode_document,
     run_with_controller_events_role_and_two_readable_fds,
 };
 
-use model::{ConnectAction, History, KeyCmd, Row, Screen, SLOTS};
+use model::{History, KeyCmd, Row, SLOTS};
 
 /// Rows in the model picker; longer lists page with prev and next.
 const MODEL_ROWS: usize = 8;
-/// A pending command approval is denied when the user has not answered within this time.
-const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
-/// Earlier messages sent with each proxy-mode turn.
-const RECENT_TURNS: usize = 12;
-
-/// Cuts `text` to `max` characters, ending in "..." when it was longer.
-fn fit_chars(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_owned();
-    }
-    format!("{}...", text.chars().take(max.saturating_sub(3)).collect::<String>())
-}
-
-/// Short header label for a model id: the part after the last `/`, cut to 18 characters.
-fn model_label(model: Option<&str>) -> String {
-    let Some(id) = model else { return "Model".into() };
-    let name = id.rsplit('/').next().unwrap_or(id);
-    if name.chars().count() > 18 {
-        format!("{}...", name.chars().take(15).collect::<String>())
-    } else {
-        name.to_owned()
-    }
-}
-
 const UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-assistant.rwr"));
 const WIDTH: u32 = 460;
 const HEIGHT: u32 = 680;
-/// How long a freshly started gateway may take to report healthy.
-const CONNECT_DEADLINE: Duration = Duration::from_secs(60);
 /// Wheel notches move the viewport by this many messages.
 const WHEEL_STEP: isize = 3;
 /// Settings `accent` default; keep equal to `DEFAULT_ACCENT` in `flamewm-platform/src/settings.rs`.
@@ -89,20 +58,12 @@ const KEY_TINT: u32 = 0x00ff_ffff;
 
 /// Messages from worker threads to the window.
 enum Msg {
-    /// Detection result and the URL of a healthy server, when one answered.
-    Probed(Option<Detected>, Option<(String, bool)>),
-    Installed(Result<Detected, String>),
-    Started(Result<connect_ui::StartJob, String>),
-    /// Model ids from `GET /v1/models`, or the reason they could not be listed.
-    Models(Result<Vec<String>, String>),
-    Turn(TurnEvent),
-    /// The approval waited too long: deny it if it is still the pending one.
-    ApprovalExpired { run_id: String, request_id: Option<String> },
-    TurnDone(Result<TurnOutcome, AssistantError>),
-    /// Whole seconds since the running turn started.
-    Tick(u64),
-    /// One line of installer output.
-    Progress(String),
+    /// Model ids from `GET /models`, or the reason ARK AI could not be reached.
+    Checked(Result<Vec<String>, AssistantError>),
+    /// One streamed text piece of the running reply.
+    Delta(String),
+    /// The reply finished with its full text, or ended with the reason it did not.
+    TurnDone(Result<String, AssistantError>),
     /// Voice setup progress: percent and the step it is on.
     VoiceProgress(u8, String),
     /// The voice setup finished, with the TTS model directory or the reason it failed.
@@ -131,38 +92,27 @@ impl Bus {
     }
 }
 
-/// A command the run is waiting on. Ids come from the `approval.request` event.
-#[derive(Clone, Debug)]
-struct PendingApproval {
-    run_id: String,
-    request_id: Option<String>,
-    command: String,
+/// Whether ARK AI answered the last check or a turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Link {
+    Checking,
+    Online,
+    Offline,
 }
 
 struct Assistant {
-    paths: Paths,
+    /// `$XDG_STATE_HOME/flamewm/assistant`: chat history, saved settings and the speech scratch dir.
+    state_dir: PathBuf,
     bus: Bus,
     theme: SettingsSnapshot,
-    /// Hermes URL from settings. The ready URL, once connected, is in `state`.
-    url: String,
+    /// Key sent as the bearer token: the saved `assistant.apiKey`, or the public default.
+    api_key: String,
     speech_in: bool,
     speech_out: bool,
-    state: AssistantState,
-    binary: Option<PathBuf>,
-    probing: bool,
-    installing: bool,
-    confirm: bool,
-    /// The connect screen asks to restart a running gateway (one confirm, then the restart runs).
-    restart_confirm: bool,
-    /// A command waiting for the user's Approve once or Deny answer.
-    approval: Option<PendingApproval>,
-/// The connect screen asks once before Flamy enables the Hermes API server in `~/.hermes/.env`.
-enable_confirm: bool,
-/// The connected Hermes is the Nous proxy: chat only, no Hermes tools or skills.
-model_only: bool,
-    /// Model ids the server advertises. The picker shows only when there is a choice.
+    link: Link,
+    /// Model ids for the picker: the server's list, or the built-in fallback when it failed.
     models: Vec<String>,
-    /// Model chosen in the picker; `None` lets the server pick.
+    /// Model chosen in the picker; `None` means the default model.
     model: Option<String>,
     model_menu: bool,
     model_page: usize,
@@ -174,10 +124,6 @@ model_only: bool,
     working: bool,
     cancel: CancelToken,
     notice: String,
-    /// Newest sanitized installer output line, shown under "Installing Hermes...".
-    install_line: String,
-    /// The last prompt sent, restored into the input by Retry.
-    last_prompt: String,
     tts_on: bool,
     /// Parsed `assistant-speech.conf`, or the reason it could not be read.
     speech_cfg: Result<SpeechConfig, String>,
@@ -210,11 +156,6 @@ fn now_ms() -> u64 {
         .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
 }
 
-fn turn_id() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    format!("{:x}-{:x}", now_ms(), COUNTER.fetch_add(1, Ordering::Relaxed))
-}
-
 fn rgba(rgb: u32, alpha: u8) -> UiColor {
     UiColor {
         r: ((rgb >> 16) & 0xff) as u8,
@@ -224,24 +165,13 @@ fn rgba(rgb: u32, alpha: u8) -> UiColor {
     }
 }
 
-fn version_of(state: &AssistantState) -> String {
-    match state {
-        AssistantState::Stopped { version }
-        | AssistantState::Starting { version, .. }
-        | AssistantState::Ready { version, .. } => version.clone(),
-        AssistantState::Error { version, .. } => version.clone().unwrap_or_default(),
-        AssistantState::NotInstalled => String::new(),
-    }
+fn fallback_models() -> Vec<String> {
+    FALLBACK_MODELS.iter().map(|id| (*id).to_owned()).collect()
 }
 
 impl Assistant {
-    fn new(
-        paths: Paths,
-        bus: Bus,
-        theme: SettingsSnapshot,
-        mut store: ChatStore,
-    ) -> Result<Self, String> {
-        let url = hermes_url(&theme);
+    fn new(state_dir: PathBuf, bus: Bus, theme: SettingsSnapshot, mut store: ChatStore) -> Result<Self, String> {
+        let api_key = api_key_setting(&theme);
         let speech_in = flag(&theme, "assistant.speechToText");
         let speech_out = flag(&theme, "assistant.textToSpeech");
         let total = store.len() as u64;
@@ -252,22 +182,14 @@ impl Assistant {
             None => Ok(SpeechConfig::default()),
         };
         Ok(Self {
-            paths,
+            state_dir,
             bus,
             theme,
-            url,
+            api_key,
             speech_in,
             speech_out,
-            state: AssistantState::NotInstalled,
-            binary: None,
-            probing: true,
-            installing: false,
-            confirm: false,
-            restart_confirm: false,
-            approval: None,
-            enable_confirm: false,
-            model_only: false,
-            models: Vec::new(),
+            link: Link::Checking,
+            models: fallback_models(),
             model: saved_model,
             model_menu: false,
             model_page: 0,
@@ -278,8 +200,6 @@ impl Assistant {
             working: false,
             cancel: CancelToken::new(),
             notice: String::new(),
-            install_line: String::new(),
-            last_prompt: String::new(),
             tts_on: false,
             speech_cfg,
             recording: None,
@@ -294,106 +214,34 @@ impl Assistant {
         })
     }
 
-    fn screen(&self) -> Screen {
-        model::screen(&self.state, self.probing, self.installing, self.confirm)
+    fn ark_config(&self) -> ArkConfig {
+        ArkConfig { api_key: self.api_key.clone(), ..ArkConfig::default() }
     }
 
-    /// Asks the worker for the current installation and server state.
-    fn probe(&self) {
-        let paths = self.paths.clone();
-        let url = self.url.clone();
+    /// Lists the models on a worker thread. The result tells the window whether ARK AI answered.
+    fn check(&mut self) {
+        self.link = Link::Checking;
+        let config = self.ark_config();
         let bus = self.bus.clone();
         thread::spawn(move || {
-            let detected = detect(&paths.binary_candidates);
-            // A running Hermes API (agent or proxy) counts as connected even when the local
-            // binary is not found: turns only need the HTTP address.
-            let ready = {
-                let env = read_env(&paths.hermes_home);
-                let candidates = candidate_urls(Some(&url), &env);
-                discover(&candidates, env.api_key.as_deref()).map(|(found, health)| (found, health.model_only()))
-            };
-            bus.send(Msg::Probed(detected, ready));
+            let result = ArkClient::new(config).and_then(|client| client.list_models());
+            bus.send(Msg::Checked(result));
         });
     }
 
     fn on_msg(&mut self, msg: Msg) {
         match msg {
-            Msg::Probed(detected, ready) => {
-                self.probing = false;
-                match detected {
-                    None => match ready {
-                        Some((url, model_only)) => {
-                            self.model_only = model_only;
-                            self.state = transition(&self.state, LifeEvent::Healthy { version: String::new(), url });
-                            self.load_models();
-                        }
-                        None => self.state = transition(&self.state, LifeEvent::Detected(None)),
-                    },
-                    Some(found) => {
-                        self.binary = Some(found.binary);
-                        let version = found.version;
-                        self.state = transition(&self.state, LifeEvent::Detected(Some(version.clone())));
-                        if let Some((url, model_only)) = ready {
-                            self.model_only = model_only;
-                            self.state = transition(&self.state, LifeEvent::Healthy { version, url });
-                            self.load_models();
-                        }
-                    }
-                }
-            }
-            Msg::Installed(Ok(found)) => {
-                self.installing = false;
-                self.install_line.clear();
-                self.binary = Some(found.binary);
-                self.state = transition(&self.state, LifeEvent::Detected(Some(found.version)));
-                self.start();
-            }
-            Msg::Installed(Err(message)) => {
-                self.installing = false;
-                self.install_line.clear();
-                self.state = transition(&self.state, LifeEvent::Failed(message));
-            }
-            Msg::Started(Ok(connect_ui::StartJob::Ready(url, model_only))) => {
-                self.model_only = model_only;
-                let version = version_of(&self.state);
-                self.state = transition(&self.state, LifeEvent::Healthy { version, url });
-                self.load_models();
-            }
-            Msg::Models(Ok(list)) => {
+            Msg::Checked(Ok(list)) => {
+                self.link = Link::Online;
                 self.models = list;
-                if self.models.len() < 2 {
-                    self.model_menu = false;
-                }
+                self.notice.clear();
             }
-            Msg::Models(Err(_)) => {
-                self.models.clear();
-                self.model_menu = false;
+            Msg::Checked(Err(error)) => {
+                self.link = Link::Offline;
+                self.models = fallback_models();
+                self.notice = human_error(&error);
             }
-            Msg::Started(Ok(connect_ui::StartJob::RestartNeeded)) => {
-                self.restart_confirm = true;
-                self.state = transition(&self.state, LifeEvent::Failed(connect_ui::RESTART_NEEDED.into()));
-            }
-            Msg::Started(Err(message)) => {
-                self.state = transition(&self.state, LifeEvent::Failed(message));
-            }
-            Msg::Turn(TurnEvent::Started { session }) => {
-                if session.is_some() {
-                    self.remember_session(session);
-                }
-            }
-            Msg::Turn(TurnEvent::Delta(text)) => self.history.append_pending(&text),
-            Msg::Turn(event @ TurnEvent::Activity(_)) => connect_ui::on_turn_activity(self, event),
-            Msg::Turn(TurnEvent::Approval { run_id, request_id, command, choices }) => {
-                self.on_approval(run_id, request_id, command, choices)
-            }
-            Msg::ApprovalExpired { run_id, request_id } => {
-                if self.approval.as_ref().is_some_and(|p| p.run_id == run_id && p.request_id == request_id) {
-                    self.notice = "No answer in time, so the command was denied.".into();
-                    self.decide("deny");
-                }
-            }
-            Msg::Tick(secs) => connect_ui::working_tick(self, secs),
-            Msg::Progress(line) => self.install_line = line,
+            Msg::Delta(text) => self.history.append_pending(&text),
             Msg::TurnDone(result) => self.finish_turn(result),
             Msg::VoiceProgress(percent, label) => self.notice = voice_setup_ui::progress_notice(percent, &label),
             Msg::VoiceSetup(result) => self.fetched(result),
@@ -416,96 +264,6 @@ impl Assistant {
         }
     }
 
-    /// The server URL in use: the ready URL when connected, else the configured one.
-    fn base_url(&self) -> String {
-        match &self.state {
-            AssistantState::Ready { url, .. } => url.clone(),
-            _ => self.url.clone(),
-        }
-    }
-
-    fn connect(&mut self) {
-        if self.probing || self.installing {
-            return;
-        }
-        let needs_enable = self.binary.is_some() && connect_ui::api_server_needs_enable(&self.paths);
-        match model::connect_action(self.binary.is_some(), needs_enable) {
-            ConnectAction::Install => self.confirm = true,
-            ConnectAction::EnableConfirm => self.enable_confirm = true,
-            ConnectAction::Launch => self.start(),
-        }
-    }
-
-    /// Starts the gateway (or finds it already running) on a worker thread.
-    fn start(&mut self) {
-        self.notice.clear();
-        self.restart_confirm = false;
-        if self.binary.is_some() && connect_ui::api_server_needs_enable(&self.paths) {
-            self.enable_confirm = true;
-            return;
-        }
-        self.launch(false);
-    }
-
-    /// The user confirmed enabling the API server: enable it and restart a running gateway in one step.
-    fn enable_and_start(&mut self) {
-        self.enable_confirm = false;
-        self.launch(true);
-    }
-
-    fn launch(&mut self, allow_restart: bool) {
-        self.state = transition(&self.state, LifeEvent::StartRequested);
-        if !matches!(self.state, AssistantState::Starting { .. }) {
-            return;
-        }
-        let Some(binary) = self.binary.clone() else {
-            self.state = transition(&self.state, LifeEvent::Failed("Hermes is not installed".into()));
-            return;
-        };
-        let paths = self.paths.clone();
-        let url = self.url.clone();
-        let bus = self.bus.clone();
-        thread::spawn(move || {
-            let result = connect_ui::start_job(&paths, &binary, &url, allow_restart);
-            bus.send(Msg::Started(result));
-        });
-    }
-
-    /// Restarts the running gateway after the user confirmed it, on a worker thread.
-    fn restart(&mut self) {
-        self.restart_confirm = false;
-        self.notice.clear();
-        self.state = transition(&self.state, LifeEvent::StartRequested);
-        if !matches!(self.state, AssistantState::Starting { .. }) {
-            return;
-        }
-        let Some(binary) = self.binary.clone() else {
-            self.state = transition(&self.state, LifeEvent::Failed("Hermes is not installed".into()));
-            return;
-        };
-        let paths = self.paths.clone();
-        let url = self.url.clone();
-        let bus = self.bus.clone();
-        thread::spawn(move || {
-            let result = connect_ui::restart_job(&paths, &binary, &url).map(|(url, model_only)| connect_ui::StartJob::Ready(url, model_only));
-            bus.send(Msg::Started(result));
-        });
-    }
-
-    /// Runs the user-confirmed installer on a worker thread. Output goes to the assistant log.
-    fn install(&mut self) {
-        self.confirm = false;
-        self.installing = true;
-        self.install_line.clear();
-        self.notice.clear();
-        let paths = self.paths.clone();
-        let bus = self.bus.clone();
-        thread::spawn(move || {
-            let result = connect_ui::install_job(&paths, &bus);
-            bus.send(Msg::Installed(result));
-        });
-    }
-
     fn submit(&mut self) {
         if self.working {
             return;
@@ -514,45 +272,71 @@ impl Assistant {
         if text.is_empty() {
             return;
         }
-        if !matches!(self.state, AssistantState::Ready { .. }) {
-            self.notice = "Hermes is not connected.".into();
+        if !self.save(Role::User, &text, MsgState::Complete) {
             return;
         }
-        let turn = turn_id();
-        let session = self.store.session().hermes_session.clone();
-        let history = self.recent_history();
-        if !self.save(Role::User, &text, Some(&turn), MsgState::Complete) {
-            return;
-        }
+        // The new message is already in the window's history, so it is the last turn sent.
+        let turns = self.recent_turns();
         self.input.clear();
         self.notice.clear();
         self.working = true;
-        self.last_prompt = text.clone();
         self.cancel = CancelToken::new();
         if std::mem::take(&mut self.voice_turn) {
             self.set_osd(OsdState::Working);
         }
         self.history.set_pending(Some(String::new()));
-        let config = hermes_config(&self.paths, &self.base_url());
+        let config = self.ark_config();
+        let model = self.model.clone().unwrap_or_else(|| DEFAULT_MODEL.to_owned());
         let bus = self.bus.clone();
         let cancel = self.cancel.clone();
-        let model = self.model.clone();
-        thread::spawn(move || turn_job(&bus, &config, session.as_deref(), model.as_deref(), history, &text, &cancel));
+        thread::spawn(move || turn_job(&bus, config, &model, &turns, &cancel));
     }
 
-    /// The last messages on screen as (`user` | `assistant`, text), oldest first. Used by the
-    /// proxy mode, which has no server session to carry the conversation.
-    fn recent_history(&self) -> Vec<(String, String)> {
+    /// The last messages on screen as chat turns, oldest first. The server keeps no session, so
+    /// every request carries this window of the conversation.
+    fn recent_turns(&self) -> Vec<Turn> {
         let rows = self.history.rows();
-        let start = rows.len().saturating_sub(RECENT_TURNS);
+        let start = rows.len().saturating_sub(HISTORY_TURNS);
         rows[start..]
             .iter()
             .filter_map(|row| match row.role {
-                Role::User => Some(("user".to_owned(), row.text.clone())),
-                Role::Assistant => Some(("assistant".to_owned(), row.text.clone())),
+                Role::User => Some(Turn { role: "user", content: row.text.clone() }),
+                Role::Assistant => Some(Turn { role: "assistant", content: row.text.clone() }),
                 Role::SystemNote => None,
             })
             .collect()
+    }
+
+    fn finish_turn(&mut self, result: Result<String, AssistantError>) {
+        self.working = false;
+        let partial = self.history.take_pending().unwrap_or_default();
+        match result {
+            Ok(text) => {
+                self.link = Link::Online;
+                self.save(Role::Assistant, &text, MsgState::Complete);
+                if self.tts_on {
+                    self.speak(text);
+                }
+            }
+            Err(AssistantError::Cancelled) => {
+                if !partial.is_empty() {
+                    self.save(Role::Assistant, &partial, MsgState::Cancelled);
+                }
+                self.notice = "Stopped.".into();
+            }
+            Err(error) => {
+                if !partial.is_empty() {
+                    self.save(Role::Assistant, &partial, MsgState::Partial);
+                }
+                if matches!(error, AssistantError::Unreachable(_) | AssistantError::Timeout) {
+                    self.link = Link::Offline;
+                }
+                self.notice = human_error(&error);
+            }
+        }
+        if !self.speaking {
+            self.set_osd(OsdState::Hidden);
+        }
     }
 
     /// Models shown in the picker: the ids matching the typed filter, as indices into `models`.
@@ -571,18 +355,6 @@ impl Assistant {
         self.model_page = 0;
     }
 
-    /// Lists the server's models on a worker thread. Failure only hides the picker.
-    fn load_models(&self) {
-        let config = hermes_config(&self.paths, &self.base_url());
-        let bus = self.bus.clone();
-        thread::spawn(move || {
-            let result = HermesClient::new(&config)
-                .and_then(|client| client.models())
-                .map_err(|error| error.to_string());
-            bus.send(Msg::Models(result));
-        });
-    }
-
     fn toggle_model_menu(&mut self) {
         self.model_menu = !self.model_menu;
         self.model_query.clear();
@@ -598,24 +370,24 @@ impl Assistant {
     fn select_model(&mut self, slot: usize) {
         let matches = self.model_matches();
         let Some(&index) = matches.get(self.model_page * MODEL_ROWS + slot) else { return };
-        let id = self.models[index].clone();
-        self.model = Some(id);
+        self.model = Some(self.models[index].clone());
         self.model_menu = false;
-        let current = self.store.session().clone();
-        let state = SessionState { model: self.model.clone(), ..current };
+        let state = SessionState { model: self.model.clone() };
         if let Err(error) = self.store.set_session(state) {
             self.notice = format!("Could not save the model: {error}");
         }
     }
 
-    /// Deletes the saved chat and Hermes session after the user confirmed it.
+    /// Deletes the saved chat after the user confirmed it. The model choice is kept.
     fn clear_chat(&mut self) {
         self.clear_confirm = false;
         if self.working {
             self.notice = "Stop the reply before clearing the chat.".into();
             return;
         }
-        match self.store.clear() {
+        let model = self.model.clone();
+        let cleared = self.store.clear().and_then(|()| self.store.set_session(SessionState { model }));
+        match cleared {
             Ok(()) => {
                 self.history.clear();
                 self.notice.clear();
@@ -662,22 +434,19 @@ impl Assistant {
         if self.downloading {
             return;
         }
-        let cfg = match self.speech_config() {
-            Some(cfg) => cfg,
-            None => return,
-        };
+        let Some(cfg) = self.speech_config() else { return };
         if self.installed_model().is_none() {
             self.setup_voice();
             return;
         }
-        let argv = match flamewm_assistant_core::expand(&cfg.record, &[]) {
+        let argv = match expand(&cfg.record, &[]) {
             Ok(argv) => argv,
             Err(error) => {
                 self.notice = error.to_string();
                 return;
             }
         };
-        match flamewm_assistant_core::start_recording(&argv) {
+        match start_recording(&argv) {
             Ok(recording) => {
                 self.recording = Some(recording);
                 self.notice = "Listening... press the mic again to stop.".into();
@@ -737,7 +506,7 @@ impl Assistant {
             &synth,
             &cfg.play,
             model,
-            self.paths.state_dir.join("speech"),
+            self.state_dir.join("speech"),
         );
         self.speaking = true;
         self.set_osd(OsdState::Speaking);
@@ -820,17 +589,16 @@ impl Assistant {
     }
 
     /// Persists a message and adds it to the viewport. Returns false when the store refused it.
-    fn save(&mut self, role: Role, text: &str, turn: Option<&str>, state: MsgState) -> bool {
-        let session = self.store.session().hermes_session.clone();
-        match self.store.append(role, text, session.as_deref(), turn, state) {
+    fn save(&mut self, role: Role, text: &str, state: MsgState) -> bool {
+        match self.store.append(role, text, None, None, state) {
             Ok(seq) => {
                 self.history.push(Message {
                     seq,
                     ts_ms: now_ms(),
                     role,
                     text: text.to_owned(),
-                    session,
-                    turn: turn.map(str::to_owned),
+                    session: None,
+                    turn: None,
                     state,
                 });
                 true
@@ -842,73 +610,8 @@ impl Assistant {
         }
     }
 
-    fn remember_session(&mut self, session: Option<String>) {
-        let current = self.store.session().clone();
-        if session.is_none() || current.hermes_session == session {
-            return;
-        }
-        let state = SessionState {
-            hermes_session: session,
-            hermes_url: Some(self.base_url()),
-            model: current.model.clone(),
-        };
-        if let Err(error) = self.store.set_session(state) {
-            self.notice = format!("Could not save the session: {error}");
-        }
-    }
-
-    fn finish_turn(&mut self, result: Result<TurnOutcome, AssistantError>) {
-        self.working = false;
-        self.approval = None;
-        let partial = self.history.take_pending().unwrap_or_default();
-        match result {
-            Ok(TurnOutcome::Completed { text, session }) => {
-                self.remember_session(session);
-                self.save(Role::Assistant, &text, None, MsgState::Complete);
-                if self.tts_on {
-                    self.speak(text);
-                }
-            }
-            Ok(TurnOutcome::Cancelled { partial: streamed }) => {
-                let text = if streamed.is_empty() { partial } else { streamed };
-                if !text.is_empty() {
-                    self.save(Role::Assistant, &text, None, MsgState::Cancelled);
-                }
-                self.notice = "Stopped.".into();
-            }
-            Ok(TurnOutcome::Interrupted { partial: streamed, message }) => {
-                let text = if streamed.is_empty() { partial } else { streamed };
-                connect_ui::interrupted(self, &text, &message);
-            }
-            Err(error) if error.is_session_gone() => {
-                let cleared = SessionState { hermes_session: None, hermes_url: None, model: self.model.clone() };
-                if let Err(store) = self.store.set_session(cleared) {
-                    self.notice = store.to_string();
-                }
-                self.save(
-                    Role::SystemNote,
-                    "The Hermes session expired. The next message starts a new one.",
-                    None,
-                    MsgState::Complete,
-                );
-            }
-            Err(error) => {
-                if !partial.is_empty() {
-                    self.save(Role::Assistant, &partial, None, MsgState::Partial);
-                }
-                if matches!(error, AssistantError::Unreachable(_) | AssistantError::Timeout) {
-                    self.state = transition(&self.state, LifeEvent::GatewayLost);
-                }
-                connect_ui::failed(self, &error);
-            }
-        }
-        if !self.speaking {
-            self.set_osd(OsdState::Hidden);
-        }
-    }
-
     fn wheel(&mut self, dy: f32) {
-        if self.screen() != Screen::Chat || dy == 0.0 {
+        if dy == 0.0 {
             return;
         }
         let delta = if dy < 0.0 { -WHEEL_STEP } else { WHEEL_STEP };
@@ -934,17 +637,9 @@ impl Assistant {
             return;
         }
         match event.action.as_str() {
-            "assistant.connect" => self.connect(),
-            "assistant.install-confirm" => self.install(),
-            "assistant.install-cancel" => self.confirm = false,
-            "assistant.restart-confirm" => self.restart(),
-            "assistant.restart-cancel" => self.restart_confirm = false,
-"assistant.enable-confirm" => self.enable_and_start(),
-"assistant.enable-cancel" => self.enable_confirm = false,
+            "assistant.retry" => self.check(),
             "assistant.send" => self.submit(),
             "assistant.model-toggle" => self.toggle_model_menu(),
-            "assistant.approve-once" => self.decide("once"),
-            "assistant.approve-deny" => self.decide("deny"),
             "assistant.model-prev" => self.model_page = self.model_page.saturating_sub(1),
             "assistant.model-next" => {
                 let last = self.model_matches().len().saturating_sub(1) / MODEL_ROWS;
@@ -983,12 +678,6 @@ impl Assistant {
         let shift = has("shift");
         let ctrl_or_alt = has("ctrl") || has("control") || has("alt");
         let command = model::key_command(&key.key, key.text.as_deref(), shift, ctrl_or_alt);
-        if self.screen() != Screen::Chat {
-            if command == KeyCmd::Cancel {
-                self.confirm = false;
-            }
-            return;
-        }
         if self.model_menu {
             // The picker owns the keyboard: typing filters it, Escape clears or closes it.
             match command {
@@ -1017,92 +706,17 @@ impl Assistant {
         }
     }
 
-    fn status_text(&self) -> String {
-        if !self.notice.is_empty() {
-            return self.notice.clone();
-        }
-        match &self.state {
-            AssistantState::NotInstalled => "Hermes is not installed.".into(),
-            AssistantState::Stopped { .. } => "Hermes is installed but not running.".into(),
-            AssistantState::Error { message, .. } => message.clone(),
-            AssistantState::Starting { .. } | AssistantState::Ready { .. } => String::new(),
-        }
-    }
-
-    /// Shows the approval row and starts its timeout. The run waits in Hermes until answered.
-    fn on_approval(&mut self, run_id: String, request_id: Option<String>, command: String, choices: Vec<String>) {
-        // Only "once" and "deny" are offered from the window; other choices are left to Hermes' timeout.
-        if !choices.iter().any(|c| c == "once") && !choices.iter().any(|c| c == "deny") {
-            return;
-        }
-        let bus = self.bus.clone();
-        let (expire_run, expire_request) = (run_id.clone(), request_id.clone());
-        thread::spawn(move || {
-            thread::sleep(APPROVAL_TIMEOUT);
-            bus.send(Msg::ApprovalExpired { run_id: expire_run, request_id: expire_request });
-        });
-        self.approval = Some(PendingApproval { run_id, request_id, command });
-    }
-
-    /// Sends the user's choice for the pending approval on a worker thread. A 409 from Hermes means the
-    /// run already moved on, so it is not reported.
-    fn decide(&mut self, choice: &str) {
-        let AssistantState::Ready { url, .. } = &self.state else { return };
-        let url = url.clone();
-        let Some(pending) = self.approval.take() else { return };
-        let paths = self.paths.clone();
-        let choice = choice.to_owned();
-        thread::spawn(move || {
-            let env = read_env(&paths.hermes_home);
-            let config = HermesConfig { base_url: url, api_key: env.api_key, ..HermesConfig::default() };
-            if let Ok(client) = HermesClient::new(&config) {
-                let _ = client.respond_approval(&pending.run_id, &choice, pending.request_id.as_deref());
-            }
-        });
-    }
-
     fn paint(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let surface = surface_fill(&self.theme);
         doc.background("assistant", rgba(surface.rgb, surface.alpha))?;
         flamewm_ui_x11::surface_style::project_surface_border(doc, "assistant", &self.theme)?;
         doc.color_variable("--accent", rgba(accent(&self.theme), 255))?;
-        let screen = self.screen();
-        doc.visible("loading", screen == Screen::Loading)?;
-        doc.visible("connect", screen == Screen::Connect)?;
-        doc.visible("confirm", screen == Screen::Confirm)?;
-        doc.visible("restart-confirm", self.restart_confirm)?;
-        doc.visible("enable-confirm", self.enable_confirm)?;
-        doc.visible("connect-btn", !self.restart_confirm && !self.enable_confirm)?;
-        if self.enable_confirm {
-            doc.text("enable-text", connect_ui::ENABLE_CONFIRM.to_owned())?;
-        }
-        doc.visible("chat", screen == Screen::Chat)?;
-        doc.visible("approval-row", self.approval.is_some())?;
-        if let Some(pending) = &self.approval {
-            let text = if pending.command.trim().is_empty() {
-                "Hermes wants to run a tool. Allow it?".to_owned()
-            } else {
-                format!("Allow Hermes to run: {}", pending.command)
-            };
-            doc.text("approval-text", or_blank(fit_chars(&text, 200)))?;
-        }
-        match screen {
-            Screen::Loading => {
-                let text = if self.installing { "Installing Hermes..." } else { "Loading..." };
-                doc.text("loading-text", text.to_owned())?;
-                doc.text("loading-detail", or_blank(fit_chars(&self.install_line, 64)))
-            }
-            Screen::Connect => doc.text("connect-status", or_blank(self.status_text())),
-            Screen::Confirm => doc.text("install-cmd", install_plan().shell_command),
-            Screen::Chat => self.paint_chat(doc),
-        }
+        self.paint_chat(doc)
     }
 
     fn paint_models(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let choice = self.models.len() >= 2;
-        doc.visible("model", choice)?;
         doc.text("model", model_label(self.model.as_deref()))?;
-        let open = choice && self.model_menu;
+        let open = self.model_menu;
         doc.visible("model-menu", open)?;
         let matches = self.model_matches();
         let empty = open && matches.is_empty();
@@ -1116,7 +730,7 @@ impl Assistant {
             let id = matches.get(index).map(|&i| &self.models[i]);
             doc.visible(&format!("mrow-{slot}"), open && id.is_some())?;
             if let Some(id) = id {
-                let current = self.model.as_deref() == Some(id.as_str());
+                let current = self.model.as_deref().unwrap_or(DEFAULT_MODEL) == id.as_str();
                 doc.text(&format!("mtext-{slot}"), id.clone())?;
                 doc.visible(&format!("mcheck-{slot}"), current)?;
             }
@@ -1143,7 +757,8 @@ impl Assistant {
         let no_rows = rows.is_empty();
         doc.visible("list", !no_rows)?;
         doc.visible("empty", no_rows)?;
-        doc.text("subtitle", chat_header::subtitle(&self.state, self.working, self.model_only).to_owned())?;
+        doc.text("subtitle", chat_header::subtitle(self.link, self.working).to_owned())?;
+        doc.visible("retry", self.link == Link::Offline)?;
         let mic = self.speech_in && empty && !self.working;
         self.paint_models(doc)?;
         doc.visible("clear-confirm", self.clear_confirm)?;
@@ -1178,10 +793,23 @@ fn flag(theme: &SettingsSnapshot, key: &str) -> bool {
     matches!(theme.values.get(key), Some(SettingValue::Boolean(true)))
 }
 
-fn hermes_url(theme: &SettingsSnapshot) -> String {
-    match theme.values.get("assistant.hermesUrl") {
-        Some(SettingValue::Text(url)) if !url.trim().is_empty() => url.trim().to_owned(),
-        _ => DEFAULT_BASE_URL.to_owned(),
+/// The `assistant.apiKey` setting, or the public default when it is missing or blank. A stored
+/// value that is not a valid key is kept, so the request reports why it fails.
+fn api_key_setting(theme: &SettingsSnapshot) -> String {
+    match theme.values.get("assistant.apiKey") {
+        Some(SettingValue::Text(key)) => key_or_default(Some(key)),
+        _ => key_or_default(None),
+    }
+}
+
+/// Short header label for a model id: the part after the last `/`, cut to 18 characters.
+fn model_label(model: Option<&str>) -> String {
+    let Some(id) = model else { return DEFAULT_MODEL.into() };
+    let name = id.rsplit('/').next().unwrap_or(id);
+    if name.chars().count() > 18 {
+        format!("{}...", name.chars().take(15).collect::<String>())
+    } else {
+        name.to_owned()
     }
 }
 
@@ -1192,31 +820,10 @@ fn accent(theme: &SettingsSnapshot) -> u32 {
     }
 }
 
-fn hermes_config(paths: &Paths, url: &str) -> HermesConfig {
-    HermesConfig {
-        base_url: url.to_owned(),
-        api_key: read_env(&paths.hermes_home).api_key,
-        ..HermesConfig::default()
-    }
-}
-
-/// One streamed turn. Every event and the final outcome go back to the window.
-fn turn_job(
-    bus: &Bus,
-    config: &HermesConfig,
-    session: Option<&str>,
-    model: Option<&str>,
-    history: Vec<(String, String)>,
-    text: &str,
-    cancel: &CancelToken,
-) {
-    let _ticker = connect_ui::Ticker::start(bus.clone());
-    let result = HermesClient::new(config).and_then(|client| {
-        let mut request = TurnRequest::new(text, session);
-        request.model = model;
-        request.history = history;
-        client.run_turn(&request, cancel, &mut |event| bus.send(Msg::Turn(event)))
-    });
+/// One streamed reply. Each text piece and the final result go back to the window.
+fn turn_job(bus: &Bus, config: ArkConfig, model: &str, turns: &[Turn], cancel: &CancelToken) {
+    let result = ArkClient::new(config)
+        .and_then(|client| client.chat(model, turns, cancel, &mut |delta| bus.send(Msg::Delta(delta.to_owned()))));
     bus.send(Msg::TurnDone(result));
 }
 
@@ -1242,33 +849,43 @@ fn nonblocking_pair() -> Result<(UnixStream, UnixStream), String> {
     Ok((reader, writer))
 }
 
+/// `$XDG_STATE_HOME/flamewm/assistant`, falling back to `~/.local/state`.
+fn state_dir() -> Option<PathBuf> {
+    let home = env::home_dir()?;
+    let base = env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".local/state"));
+    Some(base.join("flamewm").join("assistant"))
+}
+
 /// Starts the window. Returns `Ok` without a window when this launch toggled an open one off.
 pub fn run() -> Result<(), String> {
-    let paths = Paths::for_user().ok_or("no home directory for the assistant")?;
+    let state_dir = state_dir().ok_or("no home directory for the assistant")?;
     let runtime_dir = env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
-    let pid_file = instance::pid_path(runtime_dir.as_deref(), Some(&paths.state_dir))
+    let pid_file = instance::pid_path(runtime_dir.as_deref(), Some(&state_dir))
         .ok_or("no runtime or state folder for the assistant pid file")?;
     if instance::claim(&pid_file, Path::new("/proc")) == instance::Claim::Toggled {
         return Ok(());
     }
-    let result = show(paths);
+    let result = show(state_dir);
     instance::release(&pid_file);
     result
 }
 
-fn show(paths: Paths) -> Result<(), String> {
+fn show(state_dir: PathBuf) -> Result<(), String> {
     let theme = initial_settings();
     let backdrop = window_backdrop(&theme);
     let mut document = decode_document(UI)?.with_window_backdrop(backdrop);
-    let store = ChatStore::open(&paths.state_dir).map_err(|error| error.to_string())?;
+    let store = ChatStore::open(&state_dir).map_err(|error| error.to_string())?;
 
     let root_size = flamewm_ui_x11::root_geometry().unwrap_or((1280, 800));
     let (mut wake_reader, wake_writer) = nonblocking_pair()?;
     let (tx, rx) = mpsc::channel::<Msg>();
     let bus = Bus { tx, wake: Arc::new(wake_writer) };
-    let app = Assistant::new(paths, bus, theme, store)?;
+    let mut app = Assistant::new(state_dir, bus, theme, store)?;
     app.paint(&mut document)?;
-    app.probe();
+    app.check();
 
     let fd = wake_reader.as_raw_fd();
     let app = Rc::new(RefCell::new(app));
@@ -1375,13 +992,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_drive_url_and_speech_flags_with_safe_defaults() {
+    fn api_key_comes_from_settings_or_the_public_default() {
         let mut theme = SettingsSnapshot::new(1);
-        assert_eq!(hermes_url(&theme), DEFAULT_BASE_URL);
+        assert_eq!(api_key_setting(&theme), DEFAULT_API_KEY_FOR_TESTS);
+        theme.values.insert("assistant.apiKey".into(), SettingValue::Text("   ".into()));
+        assert_eq!(api_key_setting(&theme), DEFAULT_API_KEY_FOR_TESTS);
+        theme.values.insert("assistant.apiKey".into(), SettingValue::Text("ark_mine".into()));
+        assert_eq!(api_key_setting(&theme), "ark_mine");
+        // A retired Hermes URL setting is never read as a key.
+        let mut legacy = SettingsSnapshot::new(1);
+        legacy.values.insert("assistant.hermesUrl".into(), SettingValue::Text("http://127.0.0.1:8642".into()));
+        assert_eq!(api_key_setting(&legacy), DEFAULT_API_KEY_FOR_TESTS);
+    }
+
+    const DEFAULT_API_KEY_FOR_TESTS: &str = flamewm_assistant_core::DEFAULT_API_KEY;
+
+    #[test]
+    fn speech_flags_default_off() {
+        let mut theme = SettingsSnapshot::new(1);
         assert!(!flag(&theme, "assistant.speechToText"));
-        theme.values.insert("assistant.hermesUrl".into(), SettingValue::Text(" http://127.0.0.1:8642 ".into()));
         theme.values.insert("assistant.speechToText".into(), SettingValue::Boolean(true));
-        assert_eq!(hermes_url(&theme), "http://127.0.0.1:8642");
         assert!(flag(&theme, "assistant.speechToText"));
         assert!(!flag(&theme, "assistant.textToSpeech"));
     }
@@ -1401,21 +1031,14 @@ mod tests {
     }
 
     #[test]
-    fn version_is_kept_across_starting_and_errors() {
-        assert_eq!(version_of(&AssistantState::Starting { version: "1".into(), attempts: 0 }), "1");
-        assert_eq!(version_of(&AssistantState::Error { message: "e".into(), version: None }), "");
-        assert_eq!(version_of(&AssistantState::NotInstalled), "");
+    fn model_label_and_fit_are_short_and_stable() {
+        assert_eq!(model_label(None), DEFAULT_MODEL);
+        assert_eq!(model_label(Some("pro")), "pro");
+        assert_eq!(model_label(Some("org/long-model-name-here-x")), "long-model-name...");
     }
 
     #[test]
-    fn model_label_and_fit_are_short_and_stable() {
-        assert_eq!(model_label(None), "Model");
-        assert_eq!(model_label(Some("openai/gpt-x")), "gpt-x");
-        assert_eq!(model_label(Some("amazon/titan-embed-text-v2-long-name")), "titan-embed-tex...");
-        assert_eq!(fit_chars("short", 64), "short");
-        let long = "x".repeat(100);
-        let fitted = fit_chars(&long, 64);
-        assert_eq!(fitted.chars().count(), 64);
-        assert!(fitted.ends_with("..."));
+    fn fallback_list_is_lite_flash_pro() {
+        assert_eq!(fallback_models(), vec!["lite", "flash", "pro"]);
     }
 }

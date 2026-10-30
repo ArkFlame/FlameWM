@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "FlameWM native assistant: a glass chat window over the local Hermes API server"
+description = "FlameWM native assistant: a glass chat window over ARK AI"
 
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }

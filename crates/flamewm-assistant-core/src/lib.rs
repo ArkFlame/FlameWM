@@ -1,31 +1,17 @@
-//! FlameWM assistant core: a loopback Hermes HTTP client, the lifecycle state
-//! machine, the durable chat history store and speech/model traits.
+//! FlameWM assistant core: the ARK AI chat client, the durable chat history store,
+//! and speech/model traits. Model and voice downloads use the same curl-based fetcher.
 //!
-//! No UI dependencies, no async runtime, no TLS. Remote endpoints are refused.
+//! No UI dependencies and no async runtime. HTTPS is delegated to `curl`.
 
 mod ark;
-mod connect;
 mod download;
-mod http;
-mod hermes;
-mod lifecycle;
 mod process;
-mod runs;
 mod sha256;
 mod speech;
 mod sse;
 mod store;
 mod voice_setup;
 
-pub use hermes::{
-    candidate_urls, discover, read_env, HermesClient, HermesConfig, HermesEnv, ServerHealth,
-    TurnEvent, TurnOutcome, TurnRequest, DEFAULT_BASE_URL, PROBE_PORTS, SESSION_HEADER,
-    SHORT_ANSWER_SYSTEM,
-};
-pub use lifecycle::{
-    detect, install_plan, parse_version, restart_gateway, start_gateway, transition, wait_until_ready,
-    AssistantState, Detected, InstallPlan, LifeEvent, Paths, INSTALL_SCRIPT_URL,
-};
 pub use download::{
     check_pinned, default_models_dir, extract_zstd_tar, verify, verify_file, CurlFetcher,
     DiskModelStore, Fetcher,
@@ -38,8 +24,6 @@ pub use ark::{
     human_error, key_or_default, masked_key, parse_models, validate_key, ArkClient, ArkConfig, Turn,
     ARK_BASE_URL, DEFAULT_API_KEY, DEFAULT_MODEL, FALLBACK_MODELS, HISTORY_TURNS, SYSTEM_PROMPT,
 };
-pub use connect::{enable_api_server, explain, gateway_running, run_streaming, Enabled};
-pub use runs::{is_terminal, RunStatus};
 pub use sha256::Sha256;
 pub use speech::{
     encode_wav, tts_manifest, CommandSpeech, CommandTranscriber, ModelFile, ModelManifest,
@@ -70,26 +54,16 @@ pub enum AssistantError {
     Cancelled,
     /// Local filesystem failure.
     Io(String),
-    /// A Hermes run ended with `failed`; the text is the server's message.
+    /// ARK AI ended the reply with an error; the text is the server's one-line message.
     RunFailed(String),
     /// Chat history or session state is unreadable or inconsistent.
     Store(String),
     /// A speech or model capability has no implementation configured.
     NotConfigured(String),
-    /// The address answered, but not as a Hermes API server (HTML page, or no `platform=hermes-agent`).
-    /// `status` is the HTTP status when the reply had one.
-    NotHermes { status: Option<u16> },
     /// A model has no pinned SHA-256, so it cannot be verified and is not downloaded.
     ChecksumUnavailable(String),
     /// A downloaded or installed model does not match its manifest.
     ChecksumMismatch(String),
-}
-
-impl AssistantError {
-    /// True when the server no longer knows the requested session (HTTP 404 or 410).
-    pub fn is_session_gone(&self) -> bool {
-        matches!(self, Self::Http { status: 404 | 410, .. })
-    }
 }
 
 impl fmt::Display for AssistantError {
@@ -99,8 +73,6 @@ impl fmt::Display for AssistantError {
             Self::Unreachable(m) => write!(f, "unreachable: {m}"),
             Self::Timeout => f.write_str("timed out waiting for data"),
             Self::Http { status, message } => write!(f, "HTTP {status}: {message}"),
-            Self::NotHermes { status: Some(s) } => write!(f, "not a Hermes API server (HTTP {s})"),
-            Self::NotHermes { status: None } => f.write_str("not a Hermes API server"),
             Self::Protocol(m) => write!(f, "protocol error: {m}"),
             Self::Cancelled => f.write_str("cancelled"),
             Self::Io(m) => write!(f, "I/O error: {m}"),
@@ -192,15 +164,6 @@ pub(crate) mod test_support {
             }
         }
         String::from_utf8_lossy(&buf).into_owned()
-    }
-
-    /// Writes a 200 response with the given body in one piece.
-    pub fn ok_response(extra_headers: &str, body: &str) -> Vec<Vec<u8>> {
-        vec![format!(
-            "HTTP/1.1 200 OK\r\n{extra_headers}Content-Length: {}\r\n\r\n{body}",
-            body.len()
-        )
-        .into_bytes()]
     }
 
     /// Per-test scratch directory under the repository `target-bin` (git-ignored).

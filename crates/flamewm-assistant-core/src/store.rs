@@ -5,7 +5,8 @@
 //! - `history.jsonl`: one JSON object per line. Its line number is the message `seq`.
 //! - `history.idx`: 28-byte little-endian records `{offset u64, len u32, seq u64, ts_ms u64}`.
 //!   Rebuilt from the JSONL on open whenever it disagrees.
-//! - `state.json`: `{hermes_session, hermes_url, model}`, replaced via temp file and rename.
+//! - `state.json`: `{model}`, replaced via temp file and rename. Unknown keys (such as the
+//!   retired `hermes_session`/`hermes_url`) are ignored on read.
 //!
 //! Crash behaviour: a line is written and fsynced before its index record. On open, a
 //! trailing line without `\n` or an unparseable line is truncated away, and the index is
@@ -94,11 +95,9 @@ pub struct Message {
     pub state: MsgState,
 }
 
-/// Hermes session bookkeeping persisted across restarts.
+/// Assistant settings persisted across restarts.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionState {
-    pub hermes_session: Option<String>,
-    pub hermes_url: Option<String>,
     /// Model id chosen in the picker; `None` means the server default.
     pub model: Option<String>,
 }
@@ -248,7 +247,7 @@ impl ChatStore {
         &self.session
     }
 
-    /// Deletes every message and the Hermes session. Durable on return.
+    /// Deletes every message and the saved model choice. Durable on return.
     pub fn clear(&mut self) -> Result<(), AssistantError> {
         self.log.set_len(0)?;
         self.log.sync_all()?;
@@ -264,7 +263,7 @@ impl ChatStore {
 
     /// Replaces the session state atomically.
     pub fn set_session(&mut self, state: SessionState) -> Result<(), AssistantError> {
-        let value = json!({"hermes_session": state.hermes_session, "hermes_url": state.hermes_url, "model": state.model});
+        let value = json!({"model": state.model});
         write_atomic(&self.dir.join(STATE_FILE), value.to_string().as_bytes())?;
         self.session = state;
         Ok(())
@@ -372,7 +371,7 @@ fn read_session(dir: &Path) -> SessionState {
         return SessionState::default();
     };
     let field = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
-    SessionState { hermes_session: field("hermes_session"), hermes_url: field("hermes_url"), model: field("model") }
+    SessionState { model: field("model") }
 }
 
 /// Writes through a temp file, fsyncs it, renames over `path`, then fsyncs the directory.
@@ -491,17 +490,15 @@ mod tests {
             let mut store = ChatStore::open(&dir).unwrap();
             assert_eq!(store.session(), &SessionState::default());
             store
-                .set_session(SessionState {
-                    hermes_session: Some("sess-42".into()),
-                    hermes_url: Some("http://127.0.0.1:8642".into()),
-                    model: None,
-                })
+                .set_session(SessionState { model: Some("flash".into()) })
                 .unwrap();
         }
         let store = ChatStore::open(&dir).unwrap();
-        assert_eq!(store.session().hermes_session.as_deref(), Some("sess-42"));
-        assert_eq!(store.session().hermes_url.as_deref(), Some("http://127.0.0.1:8642"));
+        assert_eq!(store.session().model.as_deref(), Some("flash"));
         assert!(!dir.join("state.tmp").exists());
+        // A legacy state file with retired Hermes keys still loads its model.
+        std::fs::write(dir.join("state.json"), br#"{"hermes_session":"s","hermes_url":"http://x","model":"pro"}"#).unwrap();
+        assert_eq!(ChatStore::open(&dir).unwrap().session().model.as_deref(), Some("pro"));
     }
 
     #[test]
@@ -510,15 +507,15 @@ mod tests {
         {
             let mut store = ChatStore::open(&dir).unwrap();
             store.append(Role::User, "gone", Some("s"), None, MsgState::Complete).unwrap();
-            store.set_session(SessionState { hermes_session: Some("s".into()), hermes_url: None, model: None }).unwrap();
+            store.set_session(SessionState { model: Some("lite".into()) }).unwrap();
             store.clear().unwrap();
             assert!(store.is_empty());
-            assert_eq!(store.session().hermes_session, None);
+            assert_eq!(store.session().model, None);
             let seq = store.append(Role::User, "fresh", None, None, MsgState::Complete).unwrap();
             assert_eq!(seq, 0);
         }
         let mut store = ChatStore::open(&dir).unwrap();
         assert_eq!(texts(&store.tail(10).unwrap()), vec!["fresh"]);
-        assert_eq!(store.session().hermes_session, None);
+        assert_eq!(store.session().model, None);
     }
 }

@@ -1,10 +1,10 @@
-//! Pure view-model for the assistant window: bounded, lazily paged history, the screen choice
-//! for the lifecycle state, and the key rules for the composer. No UI or I/O types live here, so
+//! Pure view-model for the assistant window: bounded, lazily paged history
+//! for the chat list and the key rules for the composer. No UI or I/O types live here, so
 //! every rule is unit-tested without an X11 session.
 
 use std::collections::VecDeque;
 
-use flamewm_assistant_core::{AssistantState, Message, Role};
+use flamewm_assistant_core::{Message, Role};
 
 /// Bubble slots that exist in the document. Node count stays bounded by this.
 pub const SLOTS: usize = 12;
@@ -255,48 +255,6 @@ impl History {
     }
 }
 
-/// Which full-window screen to show.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Screen {
-    Connect,
-    Confirm,
-    Loading,
-    Chat,
-}
-
-/// What the connect button does. Install is reachable only when no Hermes binary exists.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConnectAction {
-    /// Hermes is not installed: ask for explicit consent before running the installer.
-    Install,
-    /// Hermes is installed but its API server is off or keyless: confirm before editing `.env`.
-    EnableConfirm,
-    /// Hermes is installed and configured: start the gateway and wait for it.
-    Launch,
-}
-
-/// Pure connect decision. An installed binary never leads to the installer.
-pub fn connect_action(binary_present: bool, needs_enable: bool) -> ConnectAction {
-    match (binary_present, needs_enable) {
-        (false, _) => ConnectAction::Install,
-        (true, true) => ConnectAction::EnableConfirm,
-        (true, false) => ConnectAction::Launch,
-    }
-}
-
-/// Screen for the lifecycle state plus the UI flags for probing, install confirmation and install.
-pub fn screen(state: &AssistantState, probing: bool, installing: bool, confirm: bool) -> Screen {
-    if probing || installing {
-        return Screen::Loading;
-    }
-    match state {
-        AssistantState::Ready { .. } => Screen::Chat,
-        AssistantState::Starting { .. } => Screen::Loading,
-        _ if confirm => Screen::Confirm,
-        _ => Screen::Connect,
-    }
-}
-
 /// Composer input, decoded from a key press.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyCmd {
@@ -447,27 +405,6 @@ mod tests {
         history.set_pending(None);
         assert!(history.pending.is_none());
         assert_eq!(history.rows().last().unwrap().text, "m29");
-    }
-
-    #[test]
-    fn screen_follows_lifecycle_and_ui_flags() {
-        let ready = AssistantState::Ready { version: "0.22.5".into(), url: "http://127.0.0.1:8642".into() };
-        let starting = AssistantState::Starting { version: "0.22.5".into(), attempts: 1 };
-        let stopped = AssistantState::Stopped { version: "0.22.5".into() };
-        assert_eq!(screen(&ready, false, false, false), Screen::Chat);
-        assert_eq!(screen(&starting, false, false, false), Screen::Loading);
-        assert_eq!(screen(&stopped, false, false, false), Screen::Connect);
-        assert_eq!(screen(&AssistantState::NotInstalled, false, false, true), Screen::Confirm);
-        assert_eq!(screen(&AssistantState::NotInstalled, true, false, false), Screen::Loading);
-        assert_eq!(screen(&AssistantState::NotInstalled, false, true, true), Screen::Loading);
-    }
-
-    #[test]
-    fn connect_installs_only_when_no_binary_exists() {
-        assert_eq!(connect_action(false, false), ConnectAction::Install);
-        assert_eq!(connect_action(false, true), ConnectAction::Install);
-        assert_eq!(connect_action(true, true), ConnectAction::EnableConfirm);
-        assert_eq!(connect_action(true, false), ConnectAction::Launch);
     }
 
     #[test]
