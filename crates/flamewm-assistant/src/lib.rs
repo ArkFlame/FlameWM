@@ -6,6 +6,7 @@
 //! that the window's event loop reads.
 
 mod chat_header;
+mod connect_ui;
 mod instance;
 mod model;
 pub mod osd;
@@ -16,12 +17,10 @@ use osd_host::OsdProcess;
 
 use std::cell::RefCell;
 use std::env;
-use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -34,7 +33,7 @@ use flamewm_assistant_core::{
     default_config_path, AssistantError, AssistantState, CancelToken, ChatStore, Detected, HermesClient, HermesConfig,
     LifeEvent, Message, MsgState, Paths, Recording, Role, SessionState, Speech, SpeechConfig,
     Stopper, TurnEvent, TurnOutcome, TurnRequest, Transcriber, candidate_urls, default_manifests,
-    detect, discover, install_plan, read_env, start_gateway, transition, wait_until_ready,
+    detect, discover, install_plan, read_env, transition,
     CommandSpeech, CommandTranscriber, CurlFetcher, DiskModelStore, ModelManifest, ModelStore,
     SystemRunner, DEFAULT_BASE_URL,
 };
@@ -69,6 +68,10 @@ enum Msg {
     Started(Result<String, String>),
     Turn(TurnEvent),
     TurnDone(Result<TurnOutcome, AssistantError>),
+    /// Whole seconds since the running turn started.
+    Tick(u64),
+    /// One line of installer output.
+    Progress(String),
     /// Model download progress: bytes done and total (0 when unknown).
     Download(u64, u64),
     /// A model download finished for the given kind.
@@ -136,6 +139,8 @@ struct Assistant {
     working: bool,
     cancel: CancelToken,
     notice: String,
+    /// The last prompt sent, restored into the input by Retry.
+    last_prompt: String,
     tts_on: bool,
     /// Parsed `assistant-speech.conf`, or the reason it could not be read.
     speech_cfg: Result<SpeechConfig, String>,
@@ -226,6 +231,7 @@ impl Assistant {
             working: false,
             cancel: CancelToken::new(),
             notice: String::new(),
+            last_prompt: String::new(),
             tts_on: false,
             speech_cfg,
             recording: None,
@@ -301,6 +307,9 @@ impl Assistant {
                 }
             }
             Msg::Turn(TurnEvent::Delta(text)) => self.history.append_pending(&text),
+            Msg::Turn(event @ TurnEvent::Activity(_)) => connect_ui::on_turn_activity(self, event),
+            Msg::Tick(secs) => connect_ui::working_tick(self, secs),
+            Msg::Progress(line) => self.notice = line.chars().take(160).collect(),
             Msg::TurnDone(result) => self.finish_turn(result),
             Msg::Download(done, total) => {
                 if total > 0 {
@@ -362,7 +371,7 @@ impl Assistant {
         let url = self.url.clone();
         let bus = self.bus.clone();
         thread::spawn(move || {
-            let result = start_job(&paths, &binary, &url);
+            let result = connect_ui::start_job(&paths, &binary, &url);
             bus.send(Msg::Started(result));
         });
     }
@@ -375,7 +384,7 @@ impl Assistant {
         let paths = self.paths.clone();
         let bus = self.bus.clone();
         thread::spawn(move || {
-            let result = install_job(&paths);
+            let result = connect_ui::install_job(&paths, &bus);
             bus.send(Msg::Installed(result));
         });
     }
@@ -400,6 +409,7 @@ impl Assistant {
         self.input.clear();
         self.notice.clear();
         self.working = true;
+        self.last_prompt = text.clone();
         self.cancel = CancelToken::new();
         if std::mem::take(&mut self.voice_turn) {
             self.set_osd(OsdState::Working);
@@ -672,6 +682,10 @@ impl Assistant {
                 }
                 self.notice = "Stopped.".into();
             }
+            Ok(TurnOutcome::Interrupted { partial: streamed, message }) => {
+                let text = if streamed.is_empty() { partial } else { streamed };
+                connect_ui::interrupted(self, &text, &message);
+            }
             Err(error) if error.is_session_gone() => {
                 let cleared = SessionState { hermes_session: None, hermes_url: None };
                 if let Err(store) = self.store.set_session(cleared) {
@@ -688,11 +702,10 @@ impl Assistant {
                 if !partial.is_empty() {
                     self.save(Role::Assistant, &partial, None, MsgState::Partial);
                 }
-                self.save(Role::SystemNote, &error.to_string(), None, MsgState::Error);
                 if matches!(error, AssistantError::Unreachable(_) | AssistantError::Timeout) {
                     self.state = transition(&self.state, LifeEvent::GatewayLost);
                 }
-                self.notice = error.to_string();
+                connect_ui::failed(self, &error);
             }
         }
         if !self.speaking {
@@ -886,47 +899,9 @@ fn hermes_config(paths: &Paths, url: &str) -> HermesConfig {
     }
 }
 
-/// Starts the gateway unless it already answers, then waits until it reports healthy.
-fn start_job(paths: &Paths, binary: &Path, url: &str) -> Result<String, String> {
-    let env = read_env(&paths.hermes_home);
-    let candidates = candidate_urls(Some(url), &env);
-    let key = env.api_key.as_deref();
-    if let Some((found, _)) = discover(&candidates, key) {
-        return Ok(found);
-    }
-    start_gateway(binary, paths, &env).map_err(|error| error.to_string())?;
-    wait_until_ready(&candidates, key, CONNECT_DEADLINE, &CancelToken::new())
-        .map(|(found, _)| found)
-        .map_err(|error| error.to_string())
-}
-
-/// Runs the install script from `install_plan` in a shell with no terminal. Output goes to the log.
-fn install_job(paths: &Paths) -> Result<Detected, String> {
-    let plan = install_plan();
-    fs::create_dir_all(&paths.state_dir).map_err(|error| error.to_string())?;
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths.log_path())
-        .map_err(|error| error.to_string())?;
-    let stderr = log.try_clone().map_err(|error| error.to_string())?;
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(&plan.shell_command)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr))
-        .status()
-        .map_err(|error| format!("cannot run the installer: {error}"))?;
-    if !status.success() {
-        return Err(format!("the installer exited with {status}"));
-    }
-    detect(&paths.binary_candidates)
-        .ok_or_else(|| "Hermes is still not found after the installer ran".to_owned())
-}
-
 /// One streamed turn. Every event and the final outcome go back to the window.
 fn turn_job(bus: &Bus, config: &HermesConfig, session: Option<&str>, text: &str, cancel: &CancelToken) {
+    let _ticker = connect_ui::Ticker::start(bus.clone());
     let result = HermesClient::new(config).and_then(|client| {
         let request = TurnRequest::new(text, session);
         client.run_turn(&request, cancel, &mut |event| bus.send(Msg::Turn(event)))
