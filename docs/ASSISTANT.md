@@ -1,52 +1,44 @@
-# Assistant: Hermes backends
+# Assistant: providers
 
-Evidence from read-only source inspection and probes on 2026-10-30. Hermes v0.22.5.
+The assistant window chats with two OpenAI-compatible providers. Both use one client,
+`crates/flamewm-assistant-core/src/openai.rs`, which runs HTTP through `curl` and reads SSE.
 
-## Two backends behind one URL
+## Providers
 
-| Mode | Source | `GET /health` | Turns | Tools/skills |
-|---|---|---|---|---|
-| Agent API server | `~/.hermes/hermes-agent/gateway/platforms/api_server.py` | `{"status":"ok","platform":"hermes-agent",...}` | `POST /v1/runs` (events via `/v1/runs/{id}/events`) | Yes |
-| Nous proxy | `~/.hermes/hermes-agent/hermes_cli/proxy/server.py` | `{"status":"ok","upstream":"Nous Portal","authenticated":true}` (no `platform`) | `POST /v1/chat/completions`, streamed | No (model only) |
+| Provider | Endpoint | Key | Detection |
+|---|---|---|---|
+| ARK AI (default) | `https://ai.arkflame.com/v1` | `assistant.apiKey` in Settings, or the public default key | Always listed. Models from `GET /models`, fallback `lite`, `flash`, `pro` |
+| Hermes | `http://127.0.0.1:8645/v1` | Dummy bearer, the proxy ignores it | Probed when the window opens and when the model menu opens |
 
-- Agent mode is enabled with `API_SERVER_ENABLED=true`, `API_SERVER_KEY` (16+ chars), `API_SERVER_PORT` (default 8642) in `~/.hermes/.env`.
-- The proxy allows only `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/models`. Other paths return JSON `404 path_not_allowed`.
-- The proxy ignores the client bearer and attaches real credentials. Default port 8645, started by `hermes proxy start`.
+- The Hermes probe is `GET /health`, then `GET /v1/models`, each limited to 2 s. It counts as a
+  model proxy only when `status` is `ok`, `platform` is absent, `upstream` is set, and
+  `authenticated` is not `false`. HTML, a non-JSON model list or an empty list means not running.
+- The Hermes group appears in the model menu only while the probe succeeds.
+- Test hooks: `FLAMEWM_ASSISTANT_ARK_BASE` and `FLAMEWM_ASSISTANT_PROXY_URL`. Each accepts only
+  `http://127.0.0.1` or `http://localhost`. Other hosts are ignored.
+- Only `https`, or `http` on 127.0.0.1 or localhost, is accepted, so a key never travels in cleartext.
+- The bearer goes to curl on stdin (`-K -`) and never appears in argv or logs.
 
-## Probes against the user's real proxy (port 8645)
+## Model menu and selection
 
-- `GET /health`: 200, `authenticated: true`.
-- `GET /v1/models` with `Bearer x`: 200, 382 ids, including `:free` ids such as `poolside/laguna-s-2.1:free`.
-- `GET /v1/runs`, `GET /v1/capabilities`: 404 `path_not_allowed`.
-- `POST /v1/chat/completions` (`max_tokens` 4), non-stream and `stream:true`: 200. The stream ends with `data: [DONE]`.
+- One menu lists ARK AI models, then Hermes models under its own header. The check mark marks the
+  current provider and model. Search matches ids in every group and hides groups with no match.
+- Paging runs over the flattened rows. Header rows count toward the page size.
+- The choice is saved in `state.json` as `{"provider":"ark"|"hermes","model":...}`. A file without
+  `provider` is a legacy ARK state and maps to ARK `flash`.
 
-## Model semantics
+## Turns and fallback
 
-- `/v1/models` `data[].id` lists selectable models. The chosen id is sent as `model` in the chat or run payload.
-- Hermes' own default is `model.default` in `~/.hermes/config.yaml`. The app never writes it.
+- Each turn goes to the selected provider. A Hermes turn probes the proxy first. When the proxy is
+  gone, the turn uses ARK `flash` and the notice says so.
+- Footer: "Powered by ARK AI" with ARK selected, "Via Hermes proxy · model only" with Hermes.
+- Errors are short and user-facing. Raw HTML or JSON bodies are never shown.
 
-## Not verified
+## Verification
 
-- The real agent API server (8642) was not run or probed.
-- No `/v1/runs` turn was run against the real Hermes.
-- The `hermes proxy` start and stop lifecycle was not exercised.
-
-## Connect flow (agent first)
-
-- Discovery probes 8642 then 8645 and prefers the agent API server over the proxy.
-- Hermes installed and API server off or keyless: one confirm, "Enable the Hermes API server?". It backs up `~/.hermes/.env`, sets `API_SERVER_ENABLED=true` and a generated key, and restarts a running gateway in the same step.
-- Installed means the binary file exists. A failed `--version` probe never means "not installed". Candidates: `~/.local/bin/hermes`, `~/.hermes/hermes-agent/.hermes/bin/hermes`, `hermes` on PATH.
-- Proxy mode is labelled "Model only, no tools".
-
-## Agent run events (`POST /v1/runs`, `GET /v1/runs/{id}/events`)
-
-Source: `gateway/platforms/api_server_runs.py`. Event names: `run.started`, `message.delta` (`delta`), `tool.started` (`tool`, `preview`), `tool.completed` (`tool`, `error`), `approval.request` (`choices`, `request_id`), `run.completed`, `run.failed` (`error`), `run.cancelled`, `run.interrupted`. Approval resolves with `POST /v1/runs/{id}/approval` and `choice` once, session, always or deny. The window shows "Approve once" and "Deny" for each approval. The worker never auto-denies. A 120 s timeout in the window sends deny. Tested with a concurrent fake server (`approval_round_trip_answers_the_waiting_run`). Not tested against a real gated tool call.
-
-## Live evidence (scratch home, real `hermes gateway run`)
-
-- `HERMES_HOME` set to a scratch dir, `API_SERVER_PORT=18642`, no provider credentials.
-- `GET /health`: 200 `{"status":"ok","platform":"hermes-agent","version":"0.22.5"}`.
-- `POST /v1/runs` (fresh `session_id`, `"Say ok."`): 202 `started`. Events: `run.failed` with "not connected to any AI provider". The run is not a success.
-- `cargo test -p flamewm-assistant-core live_agent_run -- --ignored`, with the scratch URL and key: exit 0, the error reaches the client.
-- Xephyr (scratch display, scratch HOME, scratch gateway): the window showed "Connected" and the prompt returned the `run.failed` reason once in the chat, with "Press Enter to retry." in the notice.
-- Not verified: a successful agent turn (needs a provider), real tool events, a real approval, the enable-confirm screen on a live machine (the probe finds the user's proxy on 8645, so it cannot show here), and the real `~/.hermes` gateway.
+- Unit tests use fake ARK-like and proxy-like servers (`test_support::serve`). They cover the
+  shared SSE path, bearer headers, probe rules, grouped menu rows and fallback.
+- Live: one streamed `Hello` to `https://ai.arkflame.com/v1/chat/completions` with model `flash`
+  returned HTTP 200, `text/event-stream`, 12 `data:` frames.
+- Not verified here: the real Hermes proxy was not used by tests or screenshots. Screenshots on a
+  scratch display are not yet taken.
