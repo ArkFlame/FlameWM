@@ -14,8 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use flamewm_session_core::SessionPaths;
 use flamewm_session_core::diagnostics::{
-    DirState, Finding, LOG_ROTATE_BYTES, Severity, X_EXTENSIONS, component_finding, dir_finding,
-    display_finding, extension_finding, fallback_log_path, log_line, rotated_log_path,
+    DirState, Finding, LOG_ROTATE_BYTES, Severity, X_EXTENSIONS, component_finding, config_dir_for,
+    dir_finding, display_finding, extension_finding, fallback_log_path, log_line, rotated_log_path,
     runtime_dir_finding, session_log_path, tool_finding,
 };
 use rustix::fs::{Access, access};
@@ -207,7 +207,10 @@ pub fn preflight(paths: &SessionPaths, home: &Path) -> Vec<Finding> {
         .map_or(DirState::Missing, |value| dir_state(Path::new(value)));
     findings.push(runtime_dir_finding(runtime.as_deref(), runtime_state));
 
-    let config = paths.config_dir();
+    let config = config_dir_for(
+        env::var_os("FLAMEWM_CONFIG_DIR").as_deref(),
+        paths.config_dir(),
+    );
     findings.push(dir_finding(
         "config",
         &config,

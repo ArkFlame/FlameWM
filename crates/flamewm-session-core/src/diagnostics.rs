@@ -261,6 +261,15 @@ pub fn runtime_dir_finding(value: Option<&OsStr>, state: DirState) -> Finding {
     }
 }
 
+/// The config directory preflight reports: an inherited non-empty `FLAMEWM_CONFIG_DIR` wins over
+/// the session default, as it does in the environment handed to the window manager.
+#[must_use]
+pub fn config_dir_for(config_override: Option<&OsStr>, default: PathBuf) -> PathBuf {
+    config_override
+        .filter(|value| !value.is_empty())
+        .map_or(default, PathBuf::from)
+}
+
 /// The persistent session log: `$XDG_STATE_HOME/flamewm/session.log`, then
 /// `$HOME/.local/state/flamewm/session.log`, then `fallback`.
 #[must_use]
@@ -500,6 +509,20 @@ mod tests {
             runtime_dir_finding(Some(OsStr::new("/run/user/1000")), DirState::Writable).severity,
             Severity::Ok
         );
+    }
+
+    #[test]
+    fn config_dir_honors_inherited_override_only_when_non_empty() {
+        let default = PathBuf::from("/home/u/.config/flamewm");
+        assert_eq!(
+            config_dir_for(Some(OsStr::new("/scratch/cfg")), default.clone()),
+            PathBuf::from("/scratch/cfg")
+        );
+        assert_eq!(
+            config_dir_for(Some(OsStr::new("")), default.clone()),
+            default
+        );
+        assert_eq!(config_dir_for(None, default.clone()), default);
     }
 
     #[test]
