@@ -84,42 +84,47 @@ impl SettingsTransaction {
     }
 }
 
-/// Longest `assistant.hermesUrl` the Settings field accepts, in characters.
-pub const HERMES_URL_MAX_CHARS: usize = 2048;
+/// Longest `assistant.apiKey` the Settings field accepts, in characters.
+pub const ASSISTANT_API_KEY_MAX_CHARS: usize = 200;
 
-/// Validates `assistant.hermesUrl`. Empty is valid and means auto-detect; otherwise the value must be
-/// an http or https URL without whitespace. Returns the inline message, or `None` when valid.
+/// Validates `assistant.apiKey`. Empty is valid and means the built-in default key; otherwise the
+/// value must start with `ark_`, contain no whitespace or control characters, and be at most
+/// `ASSISTANT_API_KEY_MAX_CHARS` long. Returns the inline message, or `None` when valid.
 #[must_use]
-pub fn hermes_url_error(value: &str) -> Option<&'static str> {
+pub fn assistant_api_key_error(value: &str) -> Option<&'static str> {
     if value.is_empty() {
         return None;
     }
-    let scheme_ok = value.starts_with("http://") || value.starts_with("https://");
-    if scheme_ok && !value.contains(char::is_whitespace) && value.chars().count() <= HERMES_URL_MAX_CHARS {
+    let shape_ok = value.starts_with("ark_")
+        && !value.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+        && value.chars().count() <= ASSISTANT_API_KEY_MAX_CHARS;
+    if shape_ok {
         None
     } else {
-        Some("Use an http or https URL without spaces, or leave empty to auto-detect")
+        Some("Use an ARK AI key: starts with ark_, no spaces, up to 200 characters")
     }
 }
 
 #[cfg(test)]
-mod hermes_url_tests {
-    use super::hermes_url_error;
+mod assistant_api_key_tests {
+    use super::{assistant_api_key_error, ASSISTANT_API_KEY_MAX_CHARS};
 
     #[test]
-    fn empty_and_http_urls_are_valid() {
-        assert_eq!(hermes_url_error(""), None);
-        assert_eq!(hermes_url_error("http://127.0.0.1:8642"), None);
-        assert_eq!(hermes_url_error("https://hermes.local/api"), None);
+    fn empty_and_ark_keys_are_valid() {
+        assert_eq!(assistant_api_key_error(""), None);
+        assert_eq!(assistant_api_key_error("ark_23bRexample"), None);
+        let longest = format!("ark_{}", "a".repeat(ASSISTANT_API_KEY_MAX_CHARS - 4));
+        assert_eq!(assistant_api_key_error(&longest), None);
     }
 
     #[test]
-    fn other_schemes_spaces_and_overlong_values_are_invalid() {
-        assert!(hermes_url_error("127.0.0.1:8642").is_some());
-        assert!(hermes_url_error("ftp://host").is_some());
-        assert!(hermes_url_error("http://host /x").is_some());
-        assert!(hermes_url_error("http://host\t").is_some());
-        let long = format!("http://{}", "a".repeat(super::HERMES_URL_MAX_CHARS));
-        assert!(hermes_url_error(&long).is_some());
+    fn wrong_prefix_spaces_controls_and_overlong_values_are_invalid() {
+        assert!(assistant_api_key_error("sk_23bRexample").is_some());
+        assert!(assistant_api_key_error("ARK_23bR").is_some());
+        assert!(assistant_api_key_error("ark_23 bR").is_some());
+        assert!(assistant_api_key_error("ark_23bR\t").is_some());
+        assert!(assistant_api_key_error("ark_23bR\u{7}").is_some());
+        let long = format!("ark_{}", "a".repeat(ASSISTANT_API_KEY_MAX_CHARS - 3));
+        assert!(assistant_api_key_error(&long).is_some());
     }
 }

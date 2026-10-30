@@ -314,8 +314,8 @@ pub struct ProductSettings {
     pub assistant_speech_to_text: bool,
     /// `assistant.textToSpeech`: reserved for the speech output follow-up; off by default.
     pub assistant_text_to_speech: bool,
-    /// `assistant.hermesUrl`: base URL of the local Hermes API server.
-    pub assistant_hermes_url: String,
+    /// `assistant.apiKey`: ARK AI key; empty uses the built-in default key.
+    pub assistant_api_key: String,
     pub lock_clock_format: LockClockFormat,
     pub lock_show_date: bool,
     pub lock_show_username: bool,
@@ -442,7 +442,7 @@ impl Default for ProductSettings {
             assistant_enabled: false,
             assistant_speech_to_text: false,
             assistant_text_to_speech: false,
-            assistant_hermes_url: "http://127.0.0.1:8642".to_owned(),
+            assistant_api_key: String::new(),
             lock_clock_format: LockClockFormat::TwentyFour,
             lock_show_date: true,
             lock_show_username: true,
@@ -660,7 +660,7 @@ impl ProductSettings {
         validate_lock_image_path(&self.lock_background_image, "lockBackgroundImage")?;
         validate_lock_image_path(&self.avatar_image, "avatarImage")?;
         validate_terminal_program(&self.default_terminal)?;
-        if let Some(message) = flamewm_api::settings::hermes_url_error(&self.assistant_hermes_url) {
+        if let Some(message) = flamewm_api::settings::assistant_api_key_error(&self.assistant_api_key) {
             return invalid(message);
         }
         if !matches!(self.weather_units.as_str(), "celsius" | "fahrenheit") {
@@ -774,6 +774,8 @@ impl ConfigStore {
                 "titlebarColor" => {}
                 // Removed contrast-zone option: tolerated and dropped; contrast zones are always glass.
                 "glassifyContrastZones" => {}
+                // Removed Hermes URL key: tolerated and dropped, never stored or written.
+                "assistant.hermesUrl" => {}
                 // Legacy taskbar surface keys: read only, promoted to surface* below.
                 "taskbarColor" => snapshot.taskbar_color = Slot::from_text(value, key)?,
                 "taskbarOpacity" => snapshot.taskbar_opacity = Slot::from_text(value, key)?,
@@ -1148,7 +1150,7 @@ stable_settings! {
     (false, assistant, "assistant.enabled", assistant_enabled),
     (false, assistant, "assistant.speechToText", assistant_speech_to_text),
     (false, assistant, "assistant.textToSpeech", assistant_text_to_speech),
-    (false, assistant, "assistant.hermesUrl", assistant_hermes_url),
+    (false, assistant, "assistant.apiKey", assistant_api_key),
     (true, desktop, "DesktopSelectionFillOpacity", desktop_selection_fill_opacity),
     (true, desktop, "DesktopEntryScalePercent", desktop_entry_scale_percent),
     (true, windows, "WindowSnapPreviewFillOpacity", window_snap_preview_fill_opacity),
@@ -1596,16 +1598,35 @@ mod tests {
     }
 
     #[test]
-    fn hermes_url_accepts_empty_auto_detect_and_rejects_invalid_values() {
+    fn assistant_api_key_accepts_default_and_ark_keys_and_rejects_invalid_values() {
         let mut settings = ProductSettings::default();
-        for value in ["", "http://127.0.0.1:8645", "https://hermes.local"] {
-            value.clone_into(&mut settings.assistant_hermes_url);
-            settings.validate().expect("valid hermes URL");
+        assert!(settings.assistant_api_key.is_empty(), "default key is the built-in key");
+        for value in ["", "ark_23bRexample"] {
+            value.clone_into(&mut settings.assistant_api_key);
+            settings.validate().expect("valid assistant API key");
         }
-        for value in ["127.0.0.1:8642", "ftp://host", "http://host /x"] {
-            value.clone_into(&mut settings.assistant_hermes_url);
+        for value in ["sk-live-key", "ark_23 bR", "ark_23bR\t"] {
+            value.clone_into(&mut settings.assistant_api_key);
             assert!(settings.validate().is_err(), "{value:?} must be rejected");
         }
+    }
+
+    #[test]
+    fn legacy_hermes_url_key_is_ignored_and_never_written() {
+        let parsed = load("assistant.hermesUrl=http://127.0.0.1:8642\nassistant.enabled=1\n")
+            .expect("legacy key tolerated");
+        assert!(!parsed.unknown_keys.contains_key("assistant.hermesUrl"));
+        assert!(parsed.assistant_api_key.is_empty());
+        let text = assert_round_trip(&parsed);
+        assert!(!text.contains("hermesUrl"));
+    }
+
+    #[test]
+    fn assistant_api_key_round_trips_when_set() {
+        let parsed = load("assistant.apiKey=ark_23bRexample\n").expect("api key parses");
+        assert_eq!(parsed.assistant_api_key, "ark_23bRexample");
+        let text = assert_round_trip(&parsed);
+        assert!(text.contains("assistant.apiKey=ark_23bRexample"));
     }
 
     #[test]
