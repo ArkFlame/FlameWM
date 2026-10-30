@@ -171,6 +171,7 @@ mod tests {
         "displays",
         "fonts",
         "hotkeys",
+        "assistant",
         "about",
     ];
 

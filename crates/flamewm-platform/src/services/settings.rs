@@ -7,8 +7,8 @@ use flamewm_api::settings::{SettingValue, SettingsSnapshot, SettingsTransaction}
 use flamewm_api::shortcuts::KeyBinding;
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
+use crate::services::shortcuts::effective_registry;
 use crate::settings::{ConfigStore, ProductSettings, STABLE_SETTINGS, stable_setting};
-use crate::shortcuts::ShortcutRegistry;
 
 #[derive(Debug, Clone)]
 pub struct SettingsService {
@@ -237,22 +237,20 @@ fn reset_section(settings: &mut ProductSettings, section: &str) -> FlameResult<(
 }
 
 fn shortcut_bindings(settings: &ProductSettings) -> FlameResult<BTreeMap<String, KeyBinding>> {
-    let mut registry = ShortcutRegistry::default();
-    for (action, value) in &settings.hotkeys {
-        registry.set(action, value)?;
-    }
-    Ok(registry.bindings().clone())
+    Ok(
+        effective_registry(&settings.hotkeys, settings.assistant_enabled)?
+            .bindings()
+            .clone(),
+    )
 }
 
 fn transaction_changes_shortcuts(transaction: &SettingsTransaction) -> bool {
-    transaction
-        .reset_section
-        .as_deref()
-        .is_some_and(|section| section.eq_ignore_ascii_case("hotkeys"))
-        || transaction
-            .changes
-            .iter()
-            .any(|change| change.key.starts_with("hotkey."))
+    transaction.reset_section.as_deref().is_some_and(|section| {
+        section.eq_ignore_ascii_case("hotkeys") || section.eq_ignore_ascii_case("assistant")
+    }) || transaction
+        .changes
+        .iter()
+        .any(|change| change.key.starts_with("hotkey.") || change.key == "assistant.enabled")
 }
 
 #[cfg(test)]

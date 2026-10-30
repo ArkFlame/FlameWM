@@ -72,6 +72,9 @@ const ACCENT_NODE_IDS: &[&str] = &[
     "taskbar-workspaces-on",
     "taskbar-activities-on",
     "taskbar-separate-on",
+    "assistant-enabled-on",
+    "assistant-speech-to-text-on",
+    "assistant-text-to-speech-on",
     "weather-enabled-on",
     "weather-auto-location-on",
     "time-auto-zone-on",
@@ -177,6 +180,24 @@ const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "taskbar-separate-on",
         "taskbar-separate-off",
         true,
+    ),
+    (
+        "assistant.enabled",
+        "assistant-enabled-on",
+        "assistant-enabled-off",
+        false,
+    ),
+    (
+        "assistant.speechToText",
+        "assistant-speech-to-text-on",
+        "assistant-speech-to-text-off",
+        false,
+    ),
+    (
+        "assistant.textToSpeech",
+        "assistant-text-to-speech-on",
+        "assistant-text-to-speech-off",
+        false,
     ),
 ];
 /// Inline status line for failed requests. Optional in the compiled markup.
@@ -1974,6 +1995,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("displays", SettingsPage::Displays),
             ("fonts", SettingsPage::Fonts),
             ("hotkeys", SettingsPage::Hotkeys),
+            ("assistant", SettingsPage::Assistant),
             ("about", SettingsPage::About),
         ] {
             document.visible(&format!("page-{name}"), self.client.ui().page == page)?;
@@ -2178,6 +2200,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
         self.sync_hotkeys(document);
         optional_text(
             document,
+            "assistant-hermes-url",
+            self.text_setting("assistant.hermesUrl").unwrap_or_default(),
+        );
+        optional_text(
+            document,
             ABOUT_VERSION_NODE,
             format!("Version {APP_VERSION}"),
         );
@@ -2194,7 +2221,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsPage::Displays => 8,
             SettingsPage::Fonts => 9,
             SettingsPage::Hotkeys => 10,
-            SettingsPage::About => 11,
+            SettingsPage::Assistant => 11,
+            SettingsPage::About => 12,
         }
     }
 
@@ -3250,7 +3278,7 @@ const NAV_ROW_PITCH_PX: f32 = 30.0;
 /// Search field block (30 px field plus 6 px bottom margin) between the brand and the rows.
 const NAV_SEARCH_BLOCK_PX: f32 = 36.0;
 /// Sidebar pages in row order, with the labels the search filters on.
-const NAV_PAGES: [(&str, &str); 12] = [
+const NAV_PAGES: [(&str, &str); 13] = [
     ("theme", "Theme"),
     ("start-menu", "Start Menu"),
     ("surfaces", "Surfaces"),
@@ -3262,6 +3290,7 @@ const NAV_PAGES: [(&str, &str); 12] = [
     ("displays", "Displays"),
     ("fonts", "Fonts"),
     ("hotkeys", "Hotkeys"),
+    ("assistant", "Assistant"),
     ("about", "About"),
 ];
 
@@ -3481,6 +3510,7 @@ fn page(value: &str) -> Option<SettingsPage> {
         "displays" => Some(SettingsPage::Displays),
         "fonts" => Some(SettingsPage::Fonts),
         "hotkeys" => Some(SettingsPage::Hotkeys),
+        "assistant" => Some(SettingsPage::Assistant),
         "about" => Some(SettingsPage::About),
         _ => None,
     }
@@ -3632,7 +3662,7 @@ fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-const TOGGLE_KEYS: [&str; 34] = [
+const TOGGLE_KEYS: [&str; 37] = [
     "reduceTransparency",
     "showContentWhileDragging",
     "windowShadows",
@@ -3667,6 +3697,9 @@ const TOGGLE_KEYS: [&str; 34] = [
     "titlebars",
     "taskbarActivities",
     "taskbarSeparate",
+    "assistant.enabled",
+    "assistant.speechToText",
+    "assistant.textToSpeech",
 ];
 
 /// Parses one `data-action` value. Unknown IDs are errors, never silent no-ops.
@@ -5101,7 +5134,7 @@ mod nav_indicator_layout_tests {
     #[test]
     fn indicator_top_matches_css_row_layout_for_every_page() {
         let rows = HTML.matches("data-action=\"settings.page.").count();
-        assert_eq!(rows, 12, "sidebar page rows in settings.html");
+        assert_eq!(rows, 13, "sidebar page rows in settings.html");
         assert_eq!(px_in_rule(".settings-brand {", "height"), NAV_BRAND_HEIGHT_PX);
         assert_eq!(px_in_rule(".nav-row {", "height"), NAV_ROW_PITCH_PX);
         for index in 0..rows {

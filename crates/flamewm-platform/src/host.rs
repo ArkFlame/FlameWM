@@ -532,7 +532,8 @@ impl<E: EnginePorts> PlatformHost<E> {
     /// Grabs the effective shortcut set (persisted hotkeys over defaults) after `start()` loaded
     /// settings. A persisted set that fails validation logs once and grabs the defaults instead.
     pub fn commit_startup_shortcuts(&mut self) -> FlameResult<()> {
-        let registry = match effective_registry(&self.settings.current().hotkeys) {
+        let current = self.settings.current();
+        let registry = match effective_registry(&current.hotkeys, current.assistant_enabled) {
             Ok(registry) => registry,
             Err(error) => {
                 eprintln!("flamewm: persisted hotkeys rejected, grabbing defaults: {error}");

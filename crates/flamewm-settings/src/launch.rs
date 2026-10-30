@@ -92,6 +92,7 @@ fn parse_page(value: &str) -> Option<(SettingsPage, AppearanceTab)> {
         "displays" => Some((SettingsPage::Displays, AppearanceTab::Theme)),
         "fonts" => Some((SettingsPage::Fonts, AppearanceTab::Theme)),
         "hotkeys" => Some((SettingsPage::Hotkeys, AppearanceTab::Theme)),
+        "assistant" => Some((SettingsPage::Assistant, AppearanceTab::Theme)),
         "about" => Some((SettingsPage::About, AppearanceTab::Theme)),
         _ => None,
     }
@@ -143,6 +144,7 @@ mod tests {
             ("displays", SettingsPage::Displays),
             ("fonts", SettingsPage::Fonts),
             ("hotkeys", SettingsPage::Hotkeys),
+            ("assistant", SettingsPage::Assistant),
         ] {
             assert_eq!(parse_args(["--page", value]).unwrap().page, page, "{value}");
         }

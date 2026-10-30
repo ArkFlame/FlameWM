@@ -4,15 +4,27 @@ use flamewm_api::ports::ShortcutPort;
 use flamewm_api::shortcuts::{KeyBinding, ShortcutSnapshot};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
-use crate::shortcuts::ShortcutRegistry;
+use crate::shortcuts::{ASSISTANT_CHORDS, ShortcutRegistry};
 
 /// Builds the shortcut set the WM must grab at startup: the default registry with every persisted
 /// hotkey (`ProductSettings.hotkeys`, action id -> raw binding text) overlaid. Empty or `Escape`
 /// means unassigned. The whole set is validated at once, so a conflict is an error, not a partial set.
-pub fn effective_registry(persisted: &BTreeMap<String, String>) -> FlameResult<ShortcutRegistry> {
+/// The assistant chords are grabbed only while `assistant_enabled`; disabled, they are unassigned even
+/// when a hotkey was persisted for them.
+pub fn effective_registry(
+    persisted: &BTreeMap<String, String>,
+    assistant_enabled: bool,
+) -> FlameResult<ShortcutRegistry> {
     let mut desired = ShortcutRegistry::default().bindings().clone();
     for (action, binding) in persisted {
         desired.insert(action.clone(), KeyBinding::assigned(binding.clone()));
+    }
+    for (action, chord) in ASSISTANT_CHORDS {
+        if !assistant_enabled {
+            desired.insert(action.to_owned(), KeyBinding::unassigned());
+        } else if !persisted.contains_key(action) {
+            desired.insert(action.to_owned(), KeyBinding::assigned(chord));
+        }
     }
     let mut registry = ShortcutRegistry::default();
     registry.replace_all(&desired)?;
@@ -267,7 +279,8 @@ mod effective_registry_tests {
     fn persisted_binding_overlays_only_its_own_action() {
         let persisted =
             BTreeMap::from([(ACTION_WINDOW_MAXIMIZE.to_owned(), "Ctrl+Super+M".to_owned())]);
-        let effective = effective_registry(&persisted).expect("single custom binding is valid");
+        let effective =
+            effective_registry(&persisted, false).expect("single custom binding is valid");
         let defaults = ShortcutRegistry::default();
 
         assert_eq!(
@@ -288,7 +301,7 @@ mod effective_registry_tests {
     #[test]
     fn empty_persisted_binding_unassigns_its_action() {
         let persisted = BTreeMap::from([(ACTION_TOGGLE_START_MENU.to_owned(), String::new())]);
-        let effective = effective_registry(&persisted).expect("empty means unassigned");
+        let effective = effective_registry(&persisted, false).expect("empty means unassigned");
         assert_eq!(
             effective.binding(ACTION_TOGGLE_START_MENU),
             Some(&KeyBinding::unassigned())
@@ -297,8 +310,67 @@ mod effective_registry_tests {
 
     #[test]
     fn empty_persisted_map_equals_defaults() {
-        let effective = effective_registry(&BTreeMap::new()).expect("defaults are valid");
+        let effective = effective_registry(&BTreeMap::new(), false).expect("defaults are valid");
         assert_eq!(effective, ShortcutRegistry::default());
+    }
+
+    #[test]
+    fn assistant_chords_are_unassigned_by_default_and_grabbed_only_when_enabled() {
+        use crate::shortcuts::{ACTION_OPEN_ASSISTANT_CTRL_ALT, ACTION_OPEN_ASSISTANT_SUPER};
+
+        assert_eq!(
+            ShortcutRegistry::default().binding(ACTION_OPEN_ASSISTANT_SUPER),
+            Some(&KeyBinding::unassigned())
+        );
+        let disabled = effective_registry(&BTreeMap::new(), false).expect("valid");
+        assert_eq!(
+            disabled.binding(ACTION_OPEN_ASSISTANT_SUPER),
+            Some(&KeyBinding::unassigned())
+        );
+
+        let enabled = effective_registry(&BTreeMap::new(), true).expect("chords do not conflict");
+        assert_eq!(
+            enabled.binding(ACTION_OPEN_ASSISTANT_SUPER),
+            Some(&KeyBinding::assigned("Super+C"))
+        );
+        assert_eq!(
+            enabled.binding(ACTION_OPEN_ASSISTANT_CTRL_ALT),
+            Some(&KeyBinding::assigned("Ctrl+Alt+C"))
+        );
+    }
+
+    #[test]
+    fn disabled_assistant_drops_persisted_chord_and_enabled_keeps_user_override() {
+        use crate::shortcuts::ACTION_OPEN_ASSISTANT_SUPER;
+
+        let persisted = BTreeMap::from([(
+            ACTION_OPEN_ASSISTANT_SUPER.to_owned(),
+            "Super+Shift+C".to_owned(),
+        )]);
+        let disabled = effective_registry(&persisted, false).expect("valid");
+        assert_eq!(
+            disabled.binding(ACTION_OPEN_ASSISTANT_SUPER),
+            Some(&KeyBinding::unassigned())
+        );
+        let enabled = effective_registry(&persisted, true).expect("valid");
+        assert_eq!(
+            enabled.binding(ACTION_OPEN_ASSISTANT_SUPER),
+            Some(&KeyBinding::assigned("Super+Shift+C"))
+        );
+    }
+
+    #[test]
+    fn assistant_chords_do_not_collide_with_existing_default_chords() {
+        use crate::shortcuts::ASSISTANT_CHORDS;
+
+        let defaults = ShortcutRegistry::default();
+        for (action, chord) in ASSISTANT_CHORDS {
+            assert_eq!(
+                defaults.conflict_for(action, &crate::shortcuts::normalize(chord)),
+                None,
+                "{chord}"
+            );
+        }
     }
 }
 

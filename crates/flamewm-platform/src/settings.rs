@@ -12,7 +12,7 @@ use crate::storage::write_atomic_text;
 
 /// Every action the shortcut registry can bind is persistable; this allowlist used to lag it,
 /// so a file overriding e.g. `OpenTerminalSuper` was rejected as a whole.
-const KNOWN_HOTKEYS: [&str; 58] = crate::shortcuts::ACTIONS;
+const KNOWN_HOTKEYS: [&str; 60] = crate::shortcuts::ACTIONS;
 
 /// Generates `as_str` (wire text) and `parse` (wire text to variant) from one variant table.
 macro_rules! wire_enum {
@@ -308,6 +308,14 @@ pub struct ProductSettings {
     pub avatar_image: String,
     /// Terminal for `FlameWM` launches: a bare command name or absolute path. Empty selects `FlameWM` Terminal.
     pub default_terminal: String,
+    /// `assistant.enabled`: allows the assistant and grabs its chords (Super+C, Ctrl+Alt+C).
+    pub assistant_enabled: bool,
+    /// `assistant.speechToText`: reserved for the speech input follow-up; off by default.
+    pub assistant_speech_to_text: bool,
+    /// `assistant.textToSpeech`: reserved for the speech output follow-up; off by default.
+    pub assistant_text_to_speech: bool,
+    /// `assistant.hermesUrl`: base URL of the local Hermes API server.
+    pub assistant_hermes_url: String,
     pub lock_clock_format: LockClockFormat,
     pub lock_show_date: bool,
     pub lock_show_username: bool,
@@ -431,6 +439,10 @@ impl Default for ProductSettings {
             lock_background_dim_percent: 25,
             avatar_image: String::new(),
             default_terminal: String::new(),
+            assistant_enabled: false,
+            assistant_speech_to_text: false,
+            assistant_text_to_speech: false,
+            assistant_hermes_url: "http://127.0.0.1:8642".to_owned(),
             lock_clock_format: LockClockFormat::TwentyFour,
             lock_show_date: true,
             lock_show_username: true,
@@ -648,6 +660,12 @@ impl ProductSettings {
         validate_lock_image_path(&self.lock_background_image, "lockBackgroundImage")?;
         validate_lock_image_path(&self.avatar_image, "avatarImage")?;
         validate_terminal_program(&self.default_terminal)?;
+        if !(self.assistant_hermes_url.starts_with("http://")
+            || self.assistant_hermes_url.starts_with("https://"))
+            || self.assistant_hermes_url.contains(char::is_whitespace)
+        {
+            return invalid("assistant.hermesUrl must be an http or https URL without spaces");
+        }
         if !matches!(self.weather_units.as_str(), "celsius" | "fahrenheit") {
             return invalid("weatherUnits must be celsius or fahrenheit");
         }
@@ -1130,6 +1148,10 @@ stable_settings! {
     (false, desktop, "wallpaperColor", wallpaper_color),
     (false, desktop, "shareWallpaper", share_wallpaper),
     (false, desktop, "defaultTerminal", default_terminal),
+    (false, assistant, "assistant.enabled", assistant_enabled),
+    (false, assistant, "assistant.speechToText", assistant_speech_to_text),
+    (false, assistant, "assistant.textToSpeech", assistant_text_to_speech),
+    (false, assistant, "assistant.hermesUrl", assistant_hermes_url),
     (true, desktop, "DesktopSelectionFillOpacity", desktop_selection_fill_opacity),
     (true, desktop, "DesktopEntryScalePercent", desktop_entry_scale_percent),
     (true, windows, "WindowSnapPreviewFillOpacity", window_snap_preview_fill_opacity),

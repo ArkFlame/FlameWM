@@ -159,6 +159,12 @@ impl<C: Connection> Wm<'_, C> {
                     eprintln!("flamewm: finder shortcut failed: {error}");
                 }
             }
+            // The assistant binary toggles its own window; a missing binary is logged here, once.
+            ACTION_OPEN_ASSISTANT_SUPER | ACTION_OPEN_ASSISTANT_CTRL_ALT => {
+                if let Err(error) = std::process::Command::new("flamewm-assistant").spawn() {
+                    eprintln!("flamewm: assistant shortcut failed: {error}");
+                }
+            }
             ACTION_OPEN_TERMINAL_SUPER | ACTION_OPEN_TERMINAL_CTRL_ALT => {
                 // The resolver owns the choice: `defaultTerminal` override, else FlameWM Terminal.
                 let program = flamewm_applications::terminal::terminal_program();
