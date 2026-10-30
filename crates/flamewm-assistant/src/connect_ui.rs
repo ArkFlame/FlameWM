@@ -75,11 +75,11 @@ pub(super) fn interrupted(app: &mut Assistant, partial: &str, message: &str) {
     app.retry_input();
 }
 
-/// A failed turn: one line in the chat and in the notice, and the prompt restored for Retry.
+/// A failed turn: the reason in the chat, a short retry hint in the notice, and the prompt restored.
 pub(super) fn failed(app: &mut Assistant, error: &AssistantError) {
     let line = explain(error, &app.base_url());
     app.save(Role::SystemNote, &line, None, MsgState::Error);
-    app.notice = format!("{line} Press Enter to retry.");
+    app.notice = "Press Enter to retry.".into();
     app.retry_input();
 }
 
