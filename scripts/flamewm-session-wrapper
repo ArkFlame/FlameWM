@@ -5,6 +5,22 @@ set -uo pipefail
 if [[ -z "${XDG_CURRENT_DESKTOP:-}" ]]; then export XDG_CURRENT_DESKTOP=FlameWM; fi
 export XDG_MENU_PREFIX=flamewm-
 SESSION="${FLAMEWM_SESSION_BINARY:-/usr/bin/flamewm-session}"
+# Graceful startup check: name unresolved libraries or a too-old C library instead of dying silently.
+if command -v ldd >/dev/null 2>&1 && [[ -x "$SESSION" ]]; then
+    missing="$(ldd "$SESSION" 2>&1 | grep -E 'not found|version .* not found' || true)"
+    if [[ -n "$missing" ]]; then
+        log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/flamewm"
+        mkdir -p "$log_dir" 2>/dev/null || :
+        msg="FlameWM cannot start: required libraries are missing or too old.
+$missing
+Fix: sudo apt install -f   (or reinstall the flamewm package)"
+        printf '%s\n' "$msg" >&2
+        printf '%s\n' "$msg" >>"$log_dir/startup-error.log" 2>/dev/null || :
+        if command -v notify-send >/dev/null 2>&1; then notify-send -u critical "FlameWM" "$msg" 2>/dev/null || :
+        elif command -v xmessage >/dev/null 2>&1; then xmessage -center "$msg" 2>/dev/null || :; fi
+        exit 78
+    fi
+fi
 # Preflight report only: no bridge, no components.
 if [[ "${1:-}" == "--check" ]]; then exec "$SESSION" --check; fi
 BRIDGE="${FLAMEWM_SERVICES_BINARY:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/flamewm-desktop-services}"

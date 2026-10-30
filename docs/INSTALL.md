@@ -267,3 +267,7 @@ If a previous failed installation left unrelated dependencies unpacked, use
 `sudo dpkg --configure -a` to finish their configuration before retrying.
 A successful build alone does not imply that `./scripts/package` completed;
 verify the output `.deb` architecture and `SHA256SUMS` above.
+
+## Portable .deb build
+
+Build the .deb on Debian 12 so it runs on Debian 12+, MX, Ubuntu 22.04+: `docker build -t flamewm-deb-builder:bookworm -f packaging/debian/builder.Dockerfile packaging/debian`, then run `./scripts/build-deb` inside it as your user (mount the repo and a `CARGO_TARGET_DIR`). Building on a newer distro raises the glibc requirement.
