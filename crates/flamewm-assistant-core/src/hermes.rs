@@ -80,6 +80,11 @@ pub struct ServerHealth {
 }
 
 impl ServerHealth {
+    /// True for the Nous proxy: chat works, but Hermes tools and skills are not available.
+    pub fn model_only(&self) -> bool {
+        self.backend() == Some(Backend::Proxy)
+    }
+
     /// The API this address serves, or `None` when it is not a Hermes API at all.
     pub fn backend(&self) -> Option<Backend> {
         if self.status != "ok" {
@@ -195,18 +200,25 @@ pub fn candidate_urls(configured: Option<&str>, env: &HermesEnv) -> Vec<String> 
 }
 
 /// Returns the first candidate that passes `verify`, with its health.
+///
+/// Prefers the agent API server (tools and skills) over a Nous proxy (model only), wherever it is.
 pub fn discover(candidates: &[String], api_key: Option<&str>) -> Option<(String, ServerHealth)> {
-    candidates.iter().find_map(|url| {
+    let mut proxy = None;
+    for url in candidates {
         let config = HermesConfig {
             base_url: url.clone(),
             api_key: api_key.map(str::to_owned),
             ..HermesConfig::default()
         };
-        let client = HermesClient::new(&config).ok()?;
-        let health = client.health().ok()?;
-        client.verify_health(&health).ok()?;
-        Some((url.clone(), health))
-    })
+        let Ok(client) = HermesClient::new(&config) else { continue };
+        let Ok(health) = client.health() else { continue };
+        match client.verify_health(&health) {
+            Ok(Backend::Agent) => return Some((url.clone(), health)),
+            Ok(Backend::Proxy) if proxy.is_none() => proxy = Some((url.clone(), health)),
+            _ => {}
+        }
+    }
+    proxy
 }
 
 /// Client for one Hermes API server.
@@ -563,8 +575,12 @@ impl Stream<'_> {
                 (self.sink)(TurnEvent::Delta(delta));
                 None
             }
-            RunEvent::ToolStarted { tool } => {
-                (self.sink)(TurnEvent::Activity(format!("Using {tool}...")));
+            RunEvent::ToolStarted { tool, preview } => {
+                let line = match preview {
+                    Some(preview) => format!("Using {tool}: {}", one_line(&preview, 80)),
+                    None => format!("Using {tool}..."),
+                };
+                (self.sink)(TurnEvent::Activity(line));
                 None
             }
             RunEvent::ToolCompleted { tool, error } => {
@@ -772,6 +788,31 @@ mod tests {
         assert!(seen[1].contains(r#""input":"hi""#));
         assert!(seen[1].contains(r#""instructions":"#));
         assert!(seen[2].starts_with("GET /v1/runs/run_1/events "));
+    }
+
+    #[test]
+    fn tool_events_show_a_compact_activity_line_with_preview() {
+        let mut stream = sse_head();
+        stream.extend(sse(&[
+            r#"{"event":"run.started","run_id":"run_1"}"#,
+            r#"{"event":"tool.started","run_id":"run_1","tool":"terminal","preview":"ls -la /tmp"}"#,
+            r#"{"event":"tool.completed","run_id":"run_1","tool":"terminal","error":false}"#,
+            r#"{"event":"run.completed","run_id":"run_1","output":"done"}"#,
+        ]));
+        let (url, server) = serve(vec![healthy(), accepted("run_1"), vec![stream]]);
+        let (events, mut sink) = collect();
+        client(&url, None).run_turn(&TurnRequest::new("hi", Some("s")), &CancelToken::new(), &mut sink).unwrap();
+        let activity: Vec<String> = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                TurnEvent::Activity(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(activity, vec!["Using terminal: ls -la /tmp".to_owned(), "terminal finished.".to_owned()]);
+        server.join().unwrap();
     }
 
     #[test]
@@ -1084,6 +1125,33 @@ mod tests {
         let (found, health) = discover(std::slice::from_ref(&url), Some("x")).unwrap();
         assert_eq!(found, url);
         assert_eq!(health.backend(), Some(Backend::Proxy));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn discover_prefers_the_agent_over_a_proxy_listed_first() {
+        let (proxy_url, proxy) = serve(vec![
+            ok_response("", PROXY_HEALTH),
+            ok_response("", r#"{"data":[{"id":"a/b:free"}]}"#),
+        ]);
+        let (agent_url, agent) = serve(vec![healthy()]);
+        let candidates = vec![proxy_url, agent_url.clone()];
+        let (found, health) = discover(&candidates, Some("x")).unwrap();
+        assert_eq!(found, agent_url);
+        assert!(!health.model_only());
+        proxy.join().unwrap();
+        agent.join().unwrap();
+    }
+
+    #[test]
+    fn discover_falls_back_to_the_proxy_and_marks_model_only() {
+        let (url, server) = serve(vec![
+            ok_response("", PROXY_HEALTH),
+            ok_response("", r#"{"data":[{"id":"a/b:free"}]}"#),
+        ]);
+        let (found, health) = discover(std::slice::from_ref(&url), Some("x")).unwrap();
+        assert_eq!(found, url);
+        assert!(health.model_only());
         server.join().unwrap();
     }
 

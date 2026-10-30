@@ -88,7 +88,7 @@ const KEY_TINT: u32 = 0x00ff_ffff;
 /// Messages from worker threads to the window.
 enum Msg {
     /// Detection result and the URL of a healthy server, when one answered.
-    Probed(Option<Detected>, Option<String>),
+    Probed(Option<Detected>, Option<(String, bool)>),
     Installed(Result<Detected, String>),
     Started(Result<connect_ui::StartJob, String>),
     /// Model ids from `GET /v1/models`, or the reason they could not be listed.
@@ -142,6 +142,10 @@ struct Assistant {
     confirm: bool,
     /// The connect screen asks to restart a running gateway (one confirm, then the restart runs).
     restart_confirm: bool,
+/// The connect screen asks once before Flamy enables the Hermes API server in `~/.hermes/.env`.
+enable_confirm: bool,
+/// The connected Hermes is the Nous proxy: chat only, no Hermes tools or skills.
+model_only: bool,
     /// Model ids the server advertises. The picker shows only when there is a choice.
     models: Vec<String>,
     /// Model chosen in the picker; `None` lets the server pick.
@@ -246,6 +250,8 @@ impl Assistant {
             installing: false,
             confirm: false,
             restart_confirm: false,
+            enable_confirm: false,
+            model_only: false,
             models: Vec::new(),
             model: saved_model,
             model_menu: false,
@@ -289,7 +295,7 @@ impl Assistant {
             let ready = {
                 let env = read_env(&paths.hermes_home);
                 let candidates = candidate_urls(Some(&url), &env);
-                discover(&candidates, env.api_key.as_deref()).map(|(found, _)| found)
+                discover(&candidates, env.api_key.as_deref()).map(|(found, health)| (found, health.model_only()))
             };
             bus.send(Msg::Probed(detected, ready));
         });
@@ -301,7 +307,8 @@ impl Assistant {
                 self.probing = false;
                 match detected {
                     None => match ready {
-                        Some(url) => {
+                        Some((url, model_only)) => {
+                            self.model_only = model_only;
                             self.state = transition(&self.state, LifeEvent::Healthy { version: String::new(), url });
                             self.load_models();
                         }
@@ -311,7 +318,8 @@ impl Assistant {
                         self.binary = Some(found.binary);
                         let version = found.version;
                         self.state = transition(&self.state, LifeEvent::Detected(Some(version.clone())));
-                        if let Some(url) = ready {
+                        if let Some((url, model_only)) = ready {
+                            self.model_only = model_only;
                             self.state = transition(&self.state, LifeEvent::Healthy { version, url });
                             self.load_models();
                         }
@@ -330,7 +338,8 @@ impl Assistant {
                 self.install_line.clear();
                 self.state = transition(&self.state, LifeEvent::Failed(message));
             }
-            Msg::Started(Ok(connect_ui::StartJob::Ready(url))) => {
+            Msg::Started(Ok(connect_ui::StartJob::Ready(url, model_only))) => {
+                self.model_only = model_only;
                 let version = version_of(&self.state);
                 self.state = transition(&self.state, LifeEvent::Healthy { version, url });
                 self.load_models();
@@ -405,6 +414,20 @@ impl Assistant {
     fn start(&mut self) {
         self.notice.clear();
         self.restart_confirm = false;
+        if self.binary.is_some() && connect_ui::api_server_needs_enable(&self.paths) {
+            self.enable_confirm = true;
+            return;
+        }
+        self.launch(false);
+    }
+
+    /// The user confirmed enabling the API server: enable it and restart a running gateway in one step.
+    fn enable_and_start(&mut self) {
+        self.enable_confirm = false;
+        self.launch(true);
+    }
+
+    fn launch(&mut self, allow_restart: bool) {
         self.state = transition(&self.state, LifeEvent::StartRequested);
         if !matches!(self.state, AssistantState::Starting { .. }) {
             return;
@@ -417,7 +440,7 @@ impl Assistant {
         let url = self.url.clone();
         let bus = self.bus.clone();
         thread::spawn(move || {
-            let result = connect_ui::start_job(&paths, &binary, &url);
+            let result = connect_ui::start_job(&paths, &binary, &url, allow_restart);
             bus.send(Msg::Started(result));
         });
     }
@@ -438,7 +461,7 @@ impl Assistant {
         let url = self.url.clone();
         let bus = self.bus.clone();
         thread::spawn(move || {
-            let result = connect_ui::restart_job(&paths, &binary, &url).map(connect_ui::StartJob::Ready);
+            let result = connect_ui::restart_job(&paths, &binary, &url).map(|(url, model_only)| connect_ui::StartJob::Ready(url, model_only));
             bus.send(Msg::Started(result));
         });
     }
@@ -889,6 +912,8 @@ impl Assistant {
             "assistant.install-cancel" => self.confirm = false,
             "assistant.restart-confirm" => self.restart(),
             "assistant.restart-cancel" => self.restart_confirm = false,
+"assistant.enable-confirm" => self.enable_and_start(),
+"assistant.enable-cancel" => self.enable_confirm = false,
             "assistant.send" => self.submit(),
             "assistant.model-toggle" => self.toggle_model_menu(),
             "assistant.model-prev" => self.model_page = self.model_page.saturating_sub(1),
@@ -985,7 +1010,11 @@ impl Assistant {
         doc.visible("connect", screen == Screen::Connect)?;
         doc.visible("confirm", screen == Screen::Confirm)?;
         doc.visible("restart-confirm", self.restart_confirm)?;
-        doc.visible("connect-btn", !self.restart_confirm)?;
+        doc.visible("enable-confirm", self.enable_confirm)?;
+        doc.visible("connect-btn", !self.restart_confirm && !self.enable_confirm)?;
+        if self.enable_confirm {
+            doc.text("enable-text", connect_ui::ENABLE_CONFIRM.to_owned())?;
+        }
         doc.visible("chat", screen == Screen::Chat)?;
         match screen {
             Screen::Loading => {
@@ -1044,7 +1073,7 @@ impl Assistant {
         let no_rows = rows.is_empty();
         doc.visible("list", !no_rows)?;
         doc.visible("empty", no_rows)?;
-        doc.text("subtitle", chat_header::subtitle(&self.state, self.working).to_owned())?;
+        doc.text("subtitle", chat_header::subtitle(&self.state, self.working, self.model_only).to_owned())?;
         let mic = self.speech_in && empty && !self.working;
         self.paint_models(doc)?;
         doc.visible("clear-confirm", self.clear_confirm)?;

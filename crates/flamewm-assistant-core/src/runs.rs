@@ -14,7 +14,8 @@ pub enum RunEvent {
     Failed(String),
     Cancelled,
     Interrupted(Option<String>),
-    ToolStarted { tool: String },
+    /// `preview` is Hermes' one-line summary of the call (command, path, query), when sent.
+    ToolStarted { tool: String, preview: Option<String> },
     ToolCompleted { tool: String, error: bool },
     /// A tool call needs a human decision. Carries the choices the server accepts.
     Approval { choices: Vec<String>, request_id: Option<String> },
@@ -41,7 +42,10 @@ pub fn decode_event(data: &str) -> Result<RunEvent, AssistantError> {
         "run.failed" => RunEvent::Failed(text("error").unwrap_or_else(|| "the run failed".into())),
         "run.cancelled" => RunEvent::Cancelled,
         "run.interrupted" => RunEvent::Interrupted(text("error")),
-        "tool.started" => RunEvent::ToolStarted { tool: text("tool").unwrap_or_else(|| "tool".into()) },
+        "tool.started" => RunEvent::ToolStarted {
+            tool: text("tool").unwrap_or_else(|| "tool".into()),
+            preview: text("preview").filter(|p| !p.trim().is_empty()),
+        },
         "tool.completed" => RunEvent::ToolCompleted {
             tool: text("tool").unwrap_or_else(|| "tool".into()),
             error: value.get("error").and_then(Value::as_bool).unwrap_or(false),
@@ -94,7 +98,7 @@ mod tests {
             (r#"{"event":"run.failed","error":"no login"}"#, RunEvent::Failed("no login".into())),
             (r#"{"event":"run.cancelled"}"#, RunEvent::Cancelled),
             (r#"{"event":"run.interrupted","error":"restart"}"#, RunEvent::Interrupted(Some("restart".into()))),
-            (r#"{"event":"tool.started","tool":"terminal"}"#, RunEvent::ToolStarted { tool: "terminal".into() }),
+            (r#"{"event":"tool.started","tool":"terminal","preview":"ls"}"#, RunEvent::ToolStarted { tool: "terminal".into(), preview: Some("ls".into()) }),
             (
                 r#"{"event":"tool.completed","tool":"terminal","error":true}"#,
                 RunEvent::ToolCompleted { tool: "terminal".into(), error: true },

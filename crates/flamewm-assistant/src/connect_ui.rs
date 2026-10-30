@@ -85,35 +85,56 @@ pub(super) fn failed(app: &mut Assistant, error: &AssistantError) {
 
 /// Starts the gateway unless it already answers. Enables the API server in `~/.hermes/.env`
 /// first when it is off (a minimal change with a backup), then waits until it reports healthy.
-pub(super) fn start_job(paths: &Paths, binary: &Path, url: &str) -> Result<StartJob, String> {
+///
+/// `allow_restart` is set only after the user confirmed enabling the API server, which covers a
+/// running gateway's restart in the same confirm. Otherwise a running gateway asks for its own restart.
+pub(super) fn start_job(paths: &Paths, binary: &Path, url: &str, allow_restart: bool) -> Result<StartJob, String> {
     let mut env = read_env(&paths.hermes_home);
-    if let Some((found, _)) = discover(&candidate_urls(Some(url), &env), env.api_key.as_deref()) {
-        return Ok(StartJob::Ready(found));
+    if let Some((found, health)) = discover(&candidate_urls(Some(url), &env), env.api_key.as_deref()) {
+        return Ok(StartJob::Ready(found, health.model_only()));
     }
     if !env.api_server_enabled || env.api_key.is_none() {
         enable_api_server(&paths.hermes_home.join(".env")).map_err(|error| explain(&error, url))?;
         env = read_env(&paths.hermes_home);
     }
     if gateway_running(&paths.hermes_home) {
-        // A second gateway would conflict with the running one: the user confirms a restart first.
-        return Ok(StartJob::RestartNeeded);
+        if !allow_restart {
+            // A second gateway would conflict with the running one: the user confirms a restart first.
+            return Ok(StartJob::RestartNeeded);
+        }
+        restart_gateway(binary).map_err(|error| explain(&error, url))?;
+        let candidates = candidate_urls(Some(url), &env);
+        return wait_until_ready(&candidates, env.api_key.as_deref(), CONNECT_DEADLINE, &CancelToken::new())
+            .map(|(found, health)| StartJob::Ready(found, health.model_only()))
+            .map_err(|error| explain(&error, url));
     }
     let candidates = candidate_urls(Some(url), &env);
     start_gateway(binary, paths, &env).map_err(|error| explain(&error, url))?;
     wait_until_ready(&candidates, env.api_key.as_deref(), CONNECT_DEADLINE, &CancelToken::new())
-        .map(|(found, _)| StartJob::Ready(found))
+        .map(|(found, health)| StartJob::Ready(found, health.model_only()))
         .map_err(|error| explain(&error, url))
 }
 
 /// Restarts the running gateway after the user confirmed it, then waits until it reports healthy.
-pub(super) fn restart_job(paths: &Paths, binary: &Path, url: &str) -> Result<String, String> {
+pub(super) fn restart_job(paths: &Paths, binary: &Path, url: &str) -> Result<(String, bool), String> {
     let env = read_env(&paths.hermes_home);
     let candidates = candidate_urls(Some(url), &env);
     restart_gateway(binary).map_err(|error| explain(&error, url))?;
     wait_until_ready(&candidates, env.api_key.as_deref(), CONNECT_DEADLINE, &CancelToken::new())
-        .map(|(found, _)| found)
+        .map(|(found, health)| (found, health.model_only()))
         .map_err(|error| explain(&error, url))
 }
+
+/// True when Hermes is installed but its API server is off or has no key: Connect asks once to
+/// enable it before any `.env` change. Never true for a missing install.
+pub(super) fn api_server_needs_enable(paths: &Paths) -> bool {
+    let env = read_env(&paths.hermes_home);
+    !(env.api_server_enabled && env.api_key.is_some())
+}
+
+/// Confirm text shown before the API server is enabled.
+pub(super) const ENABLE_CONFIRM: &str =
+    "Enable the Hermes API server? Flamy talks to Hermes through it. This edits ~/.hermes/.env (a backup is kept) and restarts a running gateway.";
 
 /// Shown on the connect screen when a Hermes gateway is already running: a second gateway would
 /// conflict, so the app asks once before running `hermes gateway restart`.
@@ -121,7 +142,8 @@ pub(super) const RESTART_NEEDED: &str = "Hermes needs a quick restart to let Fla
 
 /// Result of the start job: a healthy URL, or a running gateway that needs a confirmed restart.
 pub(super) enum StartJob {
-    Ready(String),
+    /// A healthy URL, and whether it is the model-only proxy.
+    Ready(String, bool),
     RestartNeeded,
 }
 
