@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn wait_until_ready_sees_health_and_times_out() {
-        let (url, server) = serve(vec![ok_response("", r#"{"status":"ok","authenticated":false}"#)]);
+        let (url, server) = serve(vec![ok_response("", r#"{"status":"ok","platform":"hermes-agent","authenticated":false}"#)]);
         let (found, health) =
             wait_until_ready(&[url.clone()], None, Duration::from_secs(5), &CancelToken::new()).unwrap();
         assert_eq!(found, url);

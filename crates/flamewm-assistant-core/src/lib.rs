@@ -3,11 +3,13 @@
 //!
 //! No UI dependencies, no async runtime, no TLS. Remote endpoints are refused.
 
+mod connect;
 mod download;
 mod http;
 mod hermes;
 mod lifecycle;
 mod process;
+mod runs;
 mod sha256;
 mod speech;
 mod sse;
@@ -30,6 +32,8 @@ pub use process::{
     default_config_path, expand, start_recording, ProcessRunner, Recording, SpeechConfig,
     SystemRunner,
 };
+pub use connect::{enable_api_server, explain, gateway_running, run_streaming, Enabled};
+pub use runs::{is_terminal, RunStatus};
 pub use sha256::Sha256;
 pub use speech::{
     default_manifests, encode_wav, CommandSpeech, CommandTranscriber, ModelFile, ModelManifest,
@@ -59,6 +63,8 @@ pub enum AssistantError {
     Cancelled,
     /// Local filesystem failure.
     Io(String),
+    /// A Hermes run ended with `failed`; the text is the server's message.
+    RunFailed(String),
     /// Chat history or session state is unreadable or inconsistent.
     Store(String),
     /// A speech or model capability has no implementation configured.
@@ -86,6 +92,7 @@ impl fmt::Display for AssistantError {
             Self::Protocol(m) => write!(f, "protocol error: {m}"),
             Self::Cancelled => f.write_str("cancelled"),
             Self::Io(m) => write!(f, "I/O error: {m}"),
+            Self::RunFailed(m) => f.write_str(m),
             Self::Store(m) => write!(f, "history store error: {m}"),
             Self::NotConfigured(m) => f.write_str(m),
             Self::ChecksumUnavailable(m) | Self::ChecksumMismatch(m) => f.write_str(m),

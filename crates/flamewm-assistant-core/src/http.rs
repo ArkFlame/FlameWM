@@ -101,15 +101,7 @@ pub struct Body {
 /// Response head plus its body.
 pub struct Response {
     pub status: u16,
-    headers: Vec<(String, String)>,
     pub body: Body,
-}
-
-impl Response {
-    /// Looks up a header by lower-case name.
-    pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
-    }
 }
 
 /// Sends `req` and reads the response head. The body is read lazily.
@@ -188,7 +180,7 @@ pub fn send(
     } else {
         Framing::UntilClose
     };
-    Ok(Response { status, headers, body })
+    Ok(Response { status, body })
 }
 
 impl Body {

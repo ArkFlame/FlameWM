@@ -1,8 +1,4 @@
-//! Server-sent events line framing and Chat Completions chunk decoding.
-
-use serde_json::Value;
-
-use crate::AssistantError;
+//! Server-sent events line framing.
 
 /// Incremental SSE parser. Feed bytes; complete event payloads are appended to `out`.
 #[derive(Debug, Default)]
@@ -63,35 +59,6 @@ impl SseParser {
     }
 }
 
-/// One decoded Chat Completions stream chunk.
-#[derive(Debug, PartialEq, Eq)]
-pub enum ChatChunk {
-    Delta(String),
-    Ignore,
-    Done,
-}
-
-/// Decodes one `data:` payload of `/v1/chat/completions` with `stream: true`.
-pub fn parse_chat_chunk(data: &str) -> Result<ChatChunk, AssistantError> {
-    let data = data.trim();
-    if data == "[DONE]" {
-        return Ok(ChatChunk::Done);
-    }
-    let value: Value = serde_json::from_str(data)
-        .map_err(|e| AssistantError::Protocol(format!("bad stream JSON: {e}")))?;
-    if let Some(error) = value.get("error") {
-        let message = error
-            .get("message")
-            .and_then(Value::as_str)
-            .map_or_else(|| error.to_string(), str::to_owned);
-        return Err(AssistantError::Protocol(format!("stream error: {message}")));
-    }
-    Ok(match value.pointer("/choices/0/delta/content").and_then(Value::as_str) {
-        Some(text) if !text.is_empty() => ChatChunk::Delta(text.to_owned()),
-        _ => ChatChunk::Ignore,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,15 +81,5 @@ mod tests {
         parser.feed(b"data: tail", &mut out);
         parser.finish(&mut out);
         assert_eq!(out, vec!["tail".to_owned()]);
-    }
-
-    #[test]
-    fn chunk_decoding() {
-        let delta = r#"{"choices":[{"delta":{"content":"Hi"}}]}"#;
-        assert_eq!(parse_chat_chunk(delta).unwrap(), ChatChunk::Delta("Hi".into()));
-        assert_eq!(parse_chat_chunk(r#"{"choices":[{"delta":{"role":"assistant"}}]}"#).unwrap(), ChatChunk::Ignore);
-        assert_eq!(parse_chat_chunk("[DONE]").unwrap(), ChatChunk::Done);
-        assert!(matches!(parse_chat_chunk(r#"{"error":{"message":"boom"}}"#), Err(AssistantError::Protocol(m)) if m.contains("boom")));
-        assert!(matches!(parse_chat_chunk("{not json"), Err(AssistantError::Protocol(_))));
     }
 }
