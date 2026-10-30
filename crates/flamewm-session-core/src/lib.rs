@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use flamewm_api::settings::AppearanceMode;
 
 pub mod appearance;
+pub mod diagnostics;
 pub mod display_order;
 pub use appearance::{
     AppearancePlan, AppearanceProbe, Toolkit, ToolkitStatus, gtk3_theme_name,

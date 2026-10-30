@@ -1,6 +1,8 @@
 #[rustfmt::skip]
 #[path = "../session_app_compat.rs"]
 mod session_app_compat;
+#[path = "../session_diagnostics.rs"]
+mod session_diagnostics;
 
 use std::collections::BTreeMap;
 use std::env;
@@ -17,6 +19,9 @@ use std::time::{Duration, Instant};
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
 use flamewm_dbus_reactor::BusKind;
+use flamewm_session_core::diagnostics::{
+    CHECK_EXIT_FATAL, Severity, check_exit_code, describe_exit, fallback_plan, format_report,
+};
 use flamewm_session_core::{
     ChildExit, ProcessPlan, ProcessSupervisorPolicy, SessionRole, SupervisorDecision,
     build_launch_plan, default_paths_from_home,
@@ -46,10 +51,58 @@ struct Running {
 }
 
 fn main() {
+    if env::args().nth(1).as_deref() == Some("--check") {
+        std::process::exit(run_check());
+    }
     if let Err(error) = execute() {
-        eprintln!("{SESSION_LOG_PREFIX}: {error}");
+        session_diagnostics::log(SESSION_LOG_PREFIX, &format!("session failed: {error}"));
+        session_diagnostics::show_failure_dialog(&format!(
+            "FlameWM could not start: {error}\n\nDetails: {}\nRun flamewm-session --check for a report.",
+            log_path_text()
+        ));
         std::process::exit(1);
     }
+}
+
+/// `flamewm-session --check`: prints the preflight report. Exit status: 0 OK, 1 cannot start,
+/// 2 starts with fallbacks.
+fn run_check() -> i32 {
+    match session_paths() {
+        Ok((paths, home)) => {
+            session_diagnostics::init_session_log(Some(&home));
+            let findings = session_diagnostics::preflight(&paths, &home);
+            print!("{}", format_report(&findings));
+            println!("session log: {}", log_path_text());
+            check_exit_code(&findings)
+        }
+        Err(error) => {
+            eprintln!("{SESSION_LOG_PREFIX}: {error}");
+            CHECK_EXIT_FATAL
+        }
+    }
+}
+
+fn log_path_text() -> String {
+    session_diagnostics::log_location().map_or_else(
+        || "(no writable session log)".to_owned(),
+        |(path, _)| path.display().to_string(),
+    )
+}
+
+/// Install directory layout and the user's home, shared by the launch and `--check` paths.
+fn session_paths() -> Result<(flamewm_session_core::SessionPaths, PathBuf), String> {
+    let executable =
+        env::current_exe().map_err(|error| format!("locate session executable: {error}"))?;
+    let bindir = executable
+        .parent()
+        .ok_or_else(|| "session executable has no parent directory".to_owned())?
+        .to_path_buf();
+    let home = env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from);
+    let mut paths = default_paths_from_home(&bindir, home.clone());
+    if let Some(config) = env::var_os("XDG_CONFIG_HOME") {
+        paths.config_home = PathBuf::from(config);
+    }
+    Ok((paths, home))
 }
 
 fn execute() -> Result<(), String> {
@@ -66,16 +119,27 @@ fn execute() -> Result<(), String> {
         return Err("session parent exited during supervisor setup".to_owned());
     }
 
-    let executable =
-        env::current_exe().map_err(|error| format!("locate session executable: {error}"))?;
-    let bindir = executable
-        .parent()
-        .ok_or_else(|| "session executable has no parent directory".to_owned())?
-        .to_path_buf();
-    let home = env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from);
-    let mut paths = default_paths_from_home(&bindir, home.clone());
-    if let Some(config) = env::var_os("XDG_CONFIG_HOME") {
-        paths.config_home = PathBuf::from(config);
+    let (paths, home) = session_paths()?;
+    session_diagnostics::init_session_log(Some(&home));
+    let findings = session_diagnostics::preflight(&paths, &home);
+    for finding in &findings {
+        session_diagnostics::log(
+            "preflight",
+            &format!(
+                "{} {}: {}",
+                finding.severity.label(),
+                finding.check,
+                finding.message
+            ),
+        );
+    }
+    let fatal = findings
+        .iter()
+        .filter(|finding| finding.severity == Severity::Fatal)
+        .map(|finding| format!("{}: {}", finding.check, finding.message))
+        .collect::<Vec<_>>();
+    if !fatal.is_empty() {
+        return Err(format!("preflight failed: {}", fatal.join("; ")));
     }
     let existing = env::vars().collect::<BTreeMap<_, _>>();
     let args = env::args().skip(1).collect::<Vec<_>>();
@@ -101,22 +165,18 @@ fn execute() -> Result<(), String> {
     sync_activation_environment(&plan.processes[0].environment);
     session_app_compat::finalize_pam_kwallet_login(&plan.processes[0].environment);
     restore_saved_display_order();
-    let role_plans = plan.processes;
-    let wm = role_plans[0].clone();
-    let desktop = role_plans[1].clone();
-    let shell = role_plans[2].clone();
+    let mut role_plans = plan.processes;
     let mut running: Vec<Running> = Vec::new();
 
     let result = (|| {
         check_stop(&stop_requested)?;
-        running.push(spawn(wm)?);
+        running.push(spawn(role_plans[0].clone())?);
         wait_ready(&mut running[0], parent, &stop_requested)?;
-        check_stop(&stop_requested)?;
-        running.push(spawn(desktop)?);
-        startup_grace(&mut running[1], parent, &stop_requested)?;
-        check_stop(&stop_requested)?;
-        running.push(spawn(shell)?);
-        startup_grace(&mut running[2], parent, &stop_requested)?;
+        for index in [1, 2] {
+            check_stop(&stop_requested)?;
+            let started = start_optional(&mut role_plans[index], parent, &stop_requested)?;
+            running.push(started);
+        }
         supervise(&mut running, parent, &role_plans, &stop_requested)
     })();
     let cleanup = stop_all(&mut running);
@@ -240,8 +300,53 @@ fn sync_activation_environment(environment: &BTreeMap<String, String>) {
     }
 }
 
+/// Starts a non-critical component (desktop or shell). When its binary is missing, cannot be
+/// spawned, or exits during startup, the plan is replaced by the fallback process so the WM and
+/// the other components keep running. Supervision errors and parent death still abort.
+fn start_optional(
+    plan: &mut ProcessPlan,
+    parent: Pid,
+    stop_requested: &AtomicBool,
+) -> Result<Running, String> {
+    let label = role_label(plan.role);
+    if session_diagnostics::is_runnable(&plan.program) {
+        match spawn(plan.clone()) {
+            Ok(mut running) => match startup_grace(&mut running, parent, stop_requested) {
+                Ok(()) => return Ok(running),
+                Err(error) if running.child.try_wait().ok().flatten().is_none() => {
+                    let _ = running.child.kill();
+                    let _ = running.child.wait();
+                    return Err(error);
+                }
+                Err(error) => session_diagnostics::log(label, &error),
+            },
+            Err(error) => session_diagnostics::log(label, &error),
+        }
+    } else {
+        session_diagnostics::log(
+            label,
+            &format!("{} is missing or not executable", plan.program.display()),
+        );
+    }
+    session_diagnostics::log(
+        label,
+        "starting the fallback instead; the session continues",
+    );
+    *plan = fallback_plan(plan, &log_path_text());
+    spawn(plan.clone())
+}
+
+fn role_label(role: SessionRole) -> &'static str {
+    match role {
+        SessionRole::WindowManager => "window manager",
+        SessionRole::Desktop => "desktop",
+        SessionRole::Shell => "shell",
+    }
+}
+
 fn spawn(plan: ProcessPlan) -> Result<Running, String> {
     let mut command = Command::new(&plan.program);
+    let (stdout, stderr) = session_diagnostics::child_stdio();
     command
         .args(&plan.arguments)
         .envs(&plan.environment)
@@ -249,7 +354,9 @@ fn spawn(plan: ProcessPlan) -> Result<Running, String> {
             "FLAMEWM_SESSION_SUPERVISOR_PID",
             std::process::id().to_string(),
         )
-        .env_remove("FLAMEWM_SESSION_LOGOUT_OWNER");
+        .env_remove("FLAMEWM_SESSION_LOGOUT_OWNER")
+        .stdout(stdout)
+        .stderr(stderr);
     if plan.role == SessionRole::WindowManager {
         command.env("FLAMEWM_SESSION_LOGOUT_OWNER", "1");
     }
@@ -504,12 +611,27 @@ fn supervise(
                 .map_err(|error| child_error(&children[index], "supervise", error))
         })?;
         if let Some(&(index, status)) = exits.first() {
+            let exit = status_to_exit(status);
+            session_diagnostics::log(
+                role_label(children[index].plan.role),
+                &format!(
+                    "{} {}",
+                    children[index].plan.program.display(),
+                    describe_exit(exit)
+                ),
+            );
             if clean_wm_exit(index, status) {
                 children[0].supervisor.request_stop();
                 return Ok(());
             }
-            let exit = status_to_exit(status);
             match children[index].supervisor.child_exited(exit) {
+                SupervisorDecision::GiveUp if index != 0 => {
+                    session_diagnostics::log(
+                        role_label(children[index].plan.role),
+                        "restart budget exhausted; starting the fallback instead",
+                    );
+                    children[index] = spawn(fallback_plan(&role_plans[index], &log_path_text()))?;
+                }
                 SupervisorDecision::RestartAfter(delay) => {
                     if index == 0 {
                         stop_dependents(children)?;

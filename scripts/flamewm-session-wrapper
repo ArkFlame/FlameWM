@@ -5,6 +5,8 @@ set -uo pipefail
 if [[ -z "${XDG_CURRENT_DESKTOP:-}" ]]; then export XDG_CURRENT_DESKTOP=FlameWM; fi
 export XDG_MENU_PREFIX=flamewm-
 SESSION="${FLAMEWM_SESSION_BINARY:-/usr/bin/flamewm-session}"
+# Preflight report only: no bridge, no components.
+if [[ "${1:-}" == "--check" ]]; then exec "$SESSION" --check; fi
 BRIDGE="${FLAMEWM_SERVICES_BINARY:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/flamewm-desktop-services}"
 bridge_pid=""
 session_pid=""
