@@ -352,7 +352,8 @@ fn isolated_leaf_parent(
     let mut child = node.first_child;
     while let Some(current) = child {
         let text = &document.document.nodes[current as usize];
-        if text.kind != NodeKind::Text || scrolls(&document.runtime_style_cow(current, interaction)) {
+        if text.kind != NodeKind::Text || scrolls(&document.runtime_style_cow(current, interaction))
+        {
             return None;
         }
         child = text.next_sibling;

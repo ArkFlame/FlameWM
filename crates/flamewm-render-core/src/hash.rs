@@ -78,8 +78,9 @@ mod tests {
 
     #[test]
     fn sequential_keys_spread_into_high_bits() {
-        let tags: std::collections::HashSet<u64> =
-            (0u32..256).map(|key| FxBuildHasher.hash_one(key) >> 57).collect();
+        let tags: std::collections::HashSet<u64> = (0u32..256)
+            .map(|key| FxBuildHasher.hash_one(key) >> 57)
+            .collect();
         assert!(tags.len() > 64, "only {} distinct control tags", tags.len());
     }
 }

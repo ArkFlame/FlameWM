@@ -321,16 +321,22 @@ pub(crate) fn build_scrolled_paint(
     layout: &mut LayoutResult,
     interaction: Interaction,
 ) -> Vec<PaintCommand> {
-    build_clipped(document, layout, interaction, &mut PaintScratch::default(), |layout, nodes, out| {
-        layout.z_order.clear();
-        layout.z_order.extend_from_slice(nodes);
-        out.extend(build_paint_commands_with_scroll(
-            document,
-            layout,
-            interaction,
-            &|i| document.scroll_offset(i),
-        ));
-    })
+    build_clipped(
+        document,
+        layout,
+        interaction,
+        &mut PaintScratch::default(),
+        |layout, nodes, out| {
+            layout.z_order.clear();
+            layout.z_order.extend_from_slice(nodes);
+            out.extend(build_paint_commands_with_scroll(
+                document,
+                layout,
+                interaction,
+                &|i| document.scroll_offset(i),
+            ));
+        },
+    )
 }
 
 /// Per-node paint memo kept across frames by the window. A node's emitted commands are a
@@ -426,10 +432,10 @@ fn paint_memo(
 ) {
     for &index in nodes {
         let slot = &mut cache.nodes[index as usize];
-        if let Some(entry) = slot
-            .as_ref()
-            .filter(|entry| entry.key.matches(document, layout, interaction, index) && NodeKey::style_matches(document, interaction, index, &entry.style))
-        {
+        if let Some(entry) = slot.as_ref().filter(|entry| {
+            entry.key.matches(document, layout, interaction, index)
+                && NodeKey::style_matches(document, interaction, index, &entry.style)
+        }) {
             out.extend_from_slice(&entry.commands);
             #[cfg(test)]
             {
@@ -451,7 +457,11 @@ fn paint_memo(
                 document.scroll_offset(i)
             });
             out.extend_from_slice(&commands);
-            *slot = Some(Box::new(NodeEntry { key, style, commands }));
+            *slot = Some(Box::new(NodeEntry {
+                key,
+                style,
+                commands,
+            }));
         } else {
             layout.z_order.clear();
             layout.z_order.push(index);
@@ -479,9 +489,15 @@ pub(crate) fn build_scrolled_paint_cached(
         cache.variables.clone_from(&document.variable_values);
     }
     let mut scratch = std::mem::take(&mut cache.scratch);
-    let out = build_clipped(document, layout, interaction, &mut scratch, |layout, nodes, out| {
-        paint_memo(document, cache, interaction, layout, nodes, out);
-    });
+    let out = build_clipped(
+        document,
+        layout,
+        interaction,
+        &mut scratch,
+        |layout, nodes, out| {
+            paint_memo(document, cache, interaction, layout, nodes, out);
+        },
+    );
     for (slot, &shown) in cache.nodes.iter_mut().zip(&scratch.visible) {
         if !shown {
             *slot = None;
@@ -520,7 +536,10 @@ mod tests {
                 while ancestor != index && ancestor != u32::MAX {
                     ancestor = tree.parent[ancestor as usize];
                 }
-                assert_eq!(ancestor, index, "node {inner} sits inside subtree of {index}");
+                assert_eq!(
+                    ancestor, index,
+                    "node {inner} sits inside subtree of {index}"
+                );
             }
         }
     }

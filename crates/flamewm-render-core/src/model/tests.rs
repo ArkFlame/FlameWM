@@ -945,14 +945,15 @@ mod z_index_tests {
     use super::*;
 
     fn chain_document() -> RuntimeDocument {
-        let link = |parent: Option<u32>, first_child: Option<u32>, next_sibling: Option<u32>, id: &str| {
-            CompiledNode {
-                parent,
-                first_child,
-                next_sibling,
-                ..fixture_node(NodeKind::Element, id, "", None)
-            }
-        };
+        let link =
+            |parent: Option<u32>, first_child: Option<u32>, next_sibling: Option<u32>, id: &str| {
+                CompiledNode {
+                    parent,
+                    first_child,
+                    next_sibling,
+                    ..fixture_node(NodeKind::Element, id, "", None)
+                }
+            };
         fixture_document(
             vec![
                 link(None, Some(1), None, "root"),
@@ -974,7 +975,9 @@ mod z_index_tests {
         document.set_z_index("b-grandchild", -2).unwrap();
         document.set_z_index("a-child", 3).unwrap();
         let bulk = document.effective_z_indices().expect("overrides present");
-        let walked: Vec<i32> = (0..6).map(|index| document.effective_z_index(index)).collect();
+        let walked: Vec<i32> = (0..6)
+            .map(|index| document.effective_z_index(index))
+            .collect();
         assert_eq!(bulk, walked);
         assert_eq!(bulk, vec![0, 0, 7, 3, 7, -2]);
     }
