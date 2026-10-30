@@ -22,7 +22,7 @@ command -v cargo >/dev/null 2>&1 || fail 'cargo not found'
 
 # The binaries scripts/package installs; built from the fast profile only. flamewm-apps carries
 # the WM, desktop, shell, settings, explorer and terminal (installed as hard links to it).
-BINARIES=(flamewm-apps flamewm-audio-helper flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile
+BINARIES=(flamewm-apps flamewm-assistant flamewm-audio-helper flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile
     flamewm-render-inspect flamewm-lock flamewm-wayland)
 bin_args=()
 for binary in "${BINARIES[@]}"; do bin_args+=(--bin "$binary"); done

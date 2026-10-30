@@ -15,11 +15,11 @@ button { background:transparent; color:var(--text); cursor:default; border-width
 .pill-btn.quiet { background-color:var(--key); color:var(--text); }
 
 .chat { padding:0 14px; }
-.list { width:100%; flex-grow:1; min-height:0; display:flex; flex-direction:column; justify-content:flex-end; gap:10px; padding-top:14px; overflow:hidden; }
+.list { width:100%; flex-grow:1; min-height:0; display:flex; flex-direction:column; justify-content:flex-end; gap:10px; padding-top:14px; padding-bottom:12px; overflow:hidden; }
 .bubble-row { width:100%; display:flex; flex-direction:row; }
 .user-row { justify-content:flex-end; }
 .asst-row { justify-content:flex-start; }
-.bubble { max-width:330px; padding:9px 13px; border-radius:16px; font-size:14px; overflow-wrap:break-word; }
+.bubble { max-width:330px; padding:9px 13px; border-radius:16px; font-size:14px; white-space:normal; }
 .user-bubble { background-color:var(--accent); color:#ffffff; }
 .asst-bubble { background-color:var(--soft); color:var(--text); }
 .working { padding:0 6px; font-size:13px; }

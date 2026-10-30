@@ -15,6 +15,7 @@ flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
+flamewm-render-core = { path = "../flamewm-render-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 rustix = { workspace = true, features = ["process"] }
 

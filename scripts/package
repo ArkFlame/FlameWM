@@ -74,7 +74,7 @@ if [[ -z "$STAGE_ONLY" ]]; then
     rm -rf "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$PKG_VERSION.tar.gz" "$DIST/SHA256SUMS" "$DIST/flamewm-$PKG_VERSION"
 fi
 
-for binary in flamewm-apps flamewm-audio-helper flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
+for binary in flamewm-apps flamewm-assistant flamewm-audio-helper flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
     [[ -x "$BUILD_DIR/$binary" ]] || fail "missing $PROFILE binary: $BUILD_DIR/$binary"
 done
 
@@ -89,6 +89,7 @@ for source in \
     "$ROOT/packaging/flamewm-terminal.desktop" \
     "$ROOT/packaging/flamewm-task-manager.desktop" \
     "$ROOT/packaging/flamewm-finder.desktop" \
+    "$ROOT/packaging/flamewm-assistant.desktop" \
     "$ROOT/packaging/icons/flamewm-finder.svg" \
     "$ROOT/packaging/flamewm-session.desktop" \
     "$ROOT/packaging/menus/flamewm-applications.menu" \
@@ -118,7 +119,7 @@ fi
 mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/flamewm" "$STAGE/etc/pam.d" \
     "$STAGE/usr/share/applications" "$STAGE/usr/share/xsessions" "$STAGE/usr/share/wayland-sessions" "$STAGE/usr/share/doc/flamewm"
 
-for binary in flamewm-apps flamewm-audio-helper flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
+for binary in flamewm-apps flamewm-assistant flamewm-audio-helper flamewm-session flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock flamewm-wayland; do
     install -m 0755 "$BUILD_DIR/$binary" "$STAGE/usr/bin/$binary"
 done
 # The WM, desktop, shell, settings, explorer and terminal are one multi-call executable
@@ -133,6 +134,7 @@ install -m 0644 "$ROOT/packaging/flamewm-explorer.desktop" "$STAGE/usr/share/app
 install -m 0644 "$ROOT/packaging/flamewm-terminal.desktop" "$STAGE/usr/share/applications/flamewm-terminal.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-task-manager.desktop" "$STAGE/usr/share/applications/flamewm-task-manager.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-finder.desktop" "$STAGE/usr/share/applications/flamewm-finder.desktop"
+install -m 0644 "$ROOT/packaging/flamewm-assistant.desktop" "$STAGE/usr/share/applications/flamewm-assistant.desktop"
 install -d -m 0755 "$STAGE/usr/share/icons/hicolor/scalable/apps"
 install -m 0644 "$ROOT/packaging/icons/flamewm-finder.svg" "$STAGE/usr/share/icons/hicolor/scalable/apps/flamewm-finder.svg"
 install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"

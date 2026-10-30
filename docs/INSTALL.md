@@ -145,6 +145,13 @@ optional subprocess. The Debian package suggests `imagemagick`; when it is
 absent, install it with `sudo apt install imagemagick`. Exact AVIF/HEIC format
 support depends on the installed ImageMagick delegates and security policy.
 
+## Optional: Hermes assistant
+
+`flamewm-assistant` (Super+C) is a chat window for a local Hermes agent. Hermes is optional and
+is not installed with FlameWM. To use it, install Hermes separately, set `API_SERVER_ENABLED=true`
+in `~/.hermes/.env`, and open the assistant; it offers Connect to hermes when the server is not
+running. Speech input and output are off until enabled in Settings.
+
 ## Install the `.deb` on another computer (SDDM)
 
 The build creates `.target/dist/flamewm_0.1.2_amd64.deb`. Copy it to the

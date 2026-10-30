@@ -18,12 +18,13 @@ const NEAR_TOP: usize = 3;
 pub const MAX_INPUT: usize = 4_000;
 /// Pixels the bubble list may use. The window is 680 px tall; the composer, notice and working
 /// row take the rest. Bubble heights are estimates, so the budget leaves room for error.
-const LIST_BUDGET: usize = 480;
-/// Characters per wrapped line in a bubble, conservative for the 14 px body font.
-const CHARS_PER_LINE: usize = 28;
-const LINE_PX: usize = 18;
-/// Bubble padding plus the row gap.
-const BUBBLE_PAD_PX: usize = 46;
+const LIST_BUDGET: usize = 400;
+/// Body font size and the text width inside a bubble (max-width 330 px less 13 px padding a side).
+/// Heights come from the renderer's own text layout, so the budget matches what is drawn.
+const BODY_PX: f32 = 14.0;
+const BUBBLE_TEXT_PX: f32 = 304.0;
+/// Bubble vertical padding plus the row gap.
+const BUBBLE_PAD_PX: usize = 26;
 /// Longest text drawn in one bubble. Longer replies are cut with an ellipsis so a single bubble
 /// always fits the budget. The full text stays in the store.
 const MAX_SHOWN_CHARS: usize = 600;
@@ -38,14 +39,16 @@ fn shown(text: &str) -> String {
     cut
 }
 
-/// Estimated bubble height in pixels for a message text.
+/// Bubble height in pixels for a message text, measured by the renderer's text layout.
 fn bubble_px(text: impl AsRef<str>) -> usize {
-    let lines: usize = text
-        .as_ref()
-        .split('\n')
-        .map(|line| line.chars().count().div_ceil(CHARS_PER_LINE).max(1))
-        .sum();
-    lines * LINE_PX + BUBBLE_PAD_PX
+    let layout = flamewm_render_core::layout_text(
+        text.as_ref(),
+        BODY_PX,
+        BUBBLE_TEXT_PX,
+        flamewm_render_core::TextWrap::Wrap,
+        false,
+    );
+    layout.height.ceil() as usize + BUBBLE_PAD_PX
 }
 
 /// How many messages, taken in order, fit `slots` and the budget after `base` pixels.
@@ -300,7 +303,9 @@ pub enum KeyCmd {
 
 /// Enter sends, Shift+Enter inserts a newline, Escape cancels a running turn.
 pub fn key_command(key: &str, text: Option<&str>, shift: bool, ctrl_or_alt: bool) -> KeyCmd {
-    match key {
+    // The X11 backend reports canonical keysym names ("Return", "Escape"); match them case-free.
+    let key = key.to_ascii_lowercase();
+    match key.as_str() {
         "return" | "enter" | "kp_enter" if shift => KeyCmd::Newline,
         "return" | "enter" | "kp_enter" => KeyCmd::Submit,
         "escape" | "esc" => KeyCmd::Cancel,
@@ -470,6 +475,14 @@ mod tests {
         assert_eq!(key_command("a", Some("a"), false, false), KeyCmd::Insert("a".into()));
         assert_eq!(key_command("a", Some("a"), false, true), KeyCmd::Ignore);
         assert_eq!(key_command("Shift_L", None, false, false), KeyCmd::Ignore);
+    }
+
+    #[test]
+    fn backend_key_names_are_matched_case_free() {
+        assert_eq!(key_command("Return", None, false, false), KeyCmd::Submit);
+        assert_eq!(key_command("Return", None, true, false), KeyCmd::Newline);
+        assert_eq!(key_command("Escape", None, false, false), KeyCmd::Cancel);
+        assert_eq!(key_command("BackSpace", None, false, false), KeyCmd::Backspace);
     }
 
     #[test]

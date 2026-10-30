@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=FlameWM Assistant
+GenericName=Hermes Chat
+Comment=Chat with the local Hermes agent
+Exec=flamewm-assistant
+TryExec=flamewm-assistant
+Terminal=false
+StartupNotify=true
+StartupWMClass=flamewm-assistant
+Categories=Utility;
+NoDisplay=true

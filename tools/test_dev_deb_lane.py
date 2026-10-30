@@ -14,12 +14,12 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-BINARIES = ("flamewm-apps", "flamewm-audio-helper", "flamewm-session", "flamewm-screenshot", "flamewm-render-x11",
+BINARIES = ("flamewm-apps", "flamewm-assistant", "flamewm-audio-helper", "flamewm-session", "flamewm-screenshot", "flamewm-render-x11",
             "flamewm-render-compile", "flamewm-render-inspect", "flamewm-lock", "flamewm-wayland")
 COPIED = ("Cargo.toml", "LICENSE", "README.md", "packaging/flamewm.desktop",
           "packaging/flamewm-session.desktop", "packaging/flamewm-wayland.desktop", "packaging/flamewm-screenshot.desktop",
           "packaging/flamewm-explorer.desktop", "packaging/flamewm-terminal.desktop", "packaging/flamewm-task-manager.desktop",
-          "packaging/flamewm-finder.desktop", "packaging/icons/flamewm-finder.svg", "packaging/pam.d/flamewm-lock", "packaging/menus/flamewm-applications.menu",
+          "packaging/flamewm-finder.desktop", "packaging/flamewm-assistant.desktop", "packaging/icons/flamewm-finder.svg", "packaging/pam.d/flamewm-lock", "packaging/menus/flamewm-applications.menu",
           "packaging/notifications/dunstrc", "packaging/install-manifest.txt",
           "packaging/debian/control.in", "packaging/debian/copyright",
           "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/package",

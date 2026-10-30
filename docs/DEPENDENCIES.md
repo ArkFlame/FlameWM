@@ -100,6 +100,10 @@ Table of record for what FlameWM needs at runtime and how each need is packaged.
   installs the bus; dependency relation not verified here).
 - **Desktop applications launched by the user** (dolphin, konsole, flamewm-finder): chosen
   by the user, not dependencies.
+- **Hermes agent (optional runtime)**: `flamewm-assistant` talks to a local Hermes API server
+  over loopback HTTP. Hermes is not packaged and not declared; the assistant shows a Connect
+  screen when it is missing and installs only after explicit confirmation. The FlameWM packages
+  work without it.
 
 ## Session registration
 

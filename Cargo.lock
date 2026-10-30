@@ -570,6 +570,7 @@ dependencies = [
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",
  "flamewm-render-compiler",
+ "flamewm-render-core",
  "flamewm-ui-core",
  "flamewm-ui-x11",
  "rustix 1.1.4",
