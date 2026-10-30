@@ -50,6 +50,28 @@ use flamewm_ui_x11::{
 
 use model::{ConnectStep, History, KeyCmd, Row, Screen, SLOTS};
 
+/// Rows in the model picker; longer lists page with prev and next.
+const MODEL_ROWS: usize = 8;
+
+/// Cuts `text` to `max` characters, ending in "..." when it was longer.
+fn fit_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    format!("{}...", text.chars().take(max.saturating_sub(3)).collect::<String>())
+}
+
+/// Short header label for a model id: the part after the last `/`, cut to 18 characters.
+fn model_label(model: Option<&str>) -> String {
+    let Some(id) = model else { return "Model".into() };
+    let name = id.rsplit('/').next().unwrap_or(id);
+    if name.chars().count() > 18 {
+        format!("{}...", name.chars().take(15).collect::<String>())
+    } else {
+        name.to_owned()
+    }
+}
+
 const UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-assistant.rwr"));
 const WIDTH: u32 = 460;
 const HEIGHT: u32 = 680;
@@ -67,6 +89,8 @@ enum Msg {
     Probed(Option<Detected>, Option<String>),
     Installed(Result<Detected, String>),
     Started(Result<connect_ui::StartJob, String>),
+    /// Model ids from `GET /v1/models`, or the reason they could not be listed.
+    Models(Result<Vec<String>, String>),
     Turn(TurnEvent),
     TurnDone(Result<TurnOutcome, AssistantError>),
     /// Whole seconds since the running turn started.
@@ -116,6 +140,12 @@ struct Assistant {
     confirm: bool,
     /// The connect screen asks to restart a running gateway (one confirm, then the restart runs).
     restart_confirm: bool,
+    /// Model ids the server advertises. The picker shows only when there is a choice.
+    models: Vec<String>,
+    /// Model chosen in the picker; `None` lets the server pick.
+    model: Option<String>,
+    model_menu: bool,
+    model_page: usize,
     store: ChatStore,
     history: History,
     input: String,
@@ -194,6 +224,7 @@ impl Assistant {
         let speech_out = flag(&theme, "assistant.textToSpeech");
         let total = store.len() as u64;
         let history = History::open(&mut store, total)?;
+        let saved_model = store.session().model.clone();
         let speech_cfg = match default_config_path() {
             Some(path) => SpeechConfig::load(&path).map_err(|error| error.to_string()),
             None => Ok(SpeechConfig::default()),
@@ -211,6 +242,10 @@ impl Assistant {
             installing: false,
             confirm: false,
             restart_confirm: false,
+            models: Vec::new(),
+            model: saved_model,
+            model_menu: false,
+            model_page: 0,
             store,
             history,
             input: String::new(),
@@ -267,6 +302,7 @@ impl Assistant {
                         self.state = transition(&self.state, LifeEvent::Detected(Some(version.clone())));
                         if let Some(url) = ready {
                             self.state = transition(&self.state, LifeEvent::Healthy { version, url });
+                            self.load_models();
                         }
                     }
                 }
@@ -286,6 +322,17 @@ impl Assistant {
             Msg::Started(Ok(connect_ui::StartJob::Ready(url))) => {
                 let version = version_of(&self.state);
                 self.state = transition(&self.state, LifeEvent::Healthy { version, url });
+                self.load_models();
+            }
+            Msg::Models(Ok(list)) => {
+                self.models = list;
+                if self.models.len() < 2 {
+                    self.model_menu = false;
+                }
+            }
+            Msg::Models(Err(_)) => {
+                self.models.clear();
+                self.model_menu = false;
             }
             Msg::Started(Ok(connect_ui::StartJob::RestartNeeded)) => {
                 self.restart_confirm = true;
@@ -428,7 +475,38 @@ impl Assistant {
         let config = hermes_config(&self.paths, &self.base_url());
         let bus = self.bus.clone();
         let cancel = self.cancel.clone();
-        thread::spawn(move || turn_job(&bus, &config, session.as_deref(), &text, &cancel));
+        let model = self.model.clone();
+        thread::spawn(move || turn_job(&bus, &config, session.as_deref(), model.as_deref(), &text, &cancel));
+    }
+
+    /// Lists the server's models on a worker thread. Failure only hides the picker.
+    fn load_models(&self) {
+        let config = hermes_config(&self.paths, &self.base_url());
+        let bus = self.bus.clone();
+        thread::spawn(move || {
+            let result = HermesClient::new(&config)
+                .and_then(|client| client.models())
+                .map_err(|error| error.to_string());
+            bus.send(Msg::Models(result));
+        });
+    }
+
+    fn toggle_model_menu(&mut self) {
+        self.model_menu = !self.model_menu;
+        let index = self.model.as_ref().and_then(|m| self.models.iter().position(|x| x == m));
+        self.model_page = index.map_or(0, |i| i / MODEL_ROWS);
+    }
+
+    /// Makes the model at `index` the one used from the next turn on, and saves it.
+    fn select_model(&mut self, index: usize) {
+        let Some(id) = self.models.get(index).cloned() else { return };
+        self.model = Some(id);
+        self.model_menu = false;
+        let current = self.store.session().clone();
+        let state = SessionState { model: self.model.clone(), ..current };
+        if let Err(error) = self.store.set_session(state) {
+            self.notice = format!("Could not save the model: {error}");
+        }
     }
 
     /// Deletes the saved chat and Hermes session after the user confirmed it.
@@ -670,7 +748,11 @@ impl Assistant {
         if session.is_none() || current.hermes_session == session {
             return;
         }
-        let state = SessionState { hermes_session: session, hermes_url: Some(self.base_url()) };
+        let state = SessionState {
+            hermes_session: session,
+            hermes_url: Some(self.base_url()),
+            model: current.model.clone(),
+        };
         if let Err(error) = self.store.set_session(state) {
             self.notice = format!("Could not save the session: {error}");
         }
@@ -699,7 +781,7 @@ impl Assistant {
                 connect_ui::interrupted(self, &text, &message);
             }
             Err(error) if error.is_session_gone() => {
-                let cleared = SessionState { hermes_session: None, hermes_url: None };
+                let cleared = SessionState { hermes_session: None, hermes_url: None, model: self.model.clone() };
                 if let Err(store) = self.store.set_session(cleared) {
                     self.notice = store.to_string();
                 }
@@ -758,6 +840,17 @@ impl Assistant {
             "assistant.restart-confirm" => self.restart(),
             "assistant.restart-cancel" => self.restart_confirm = false,
             "assistant.send" => self.submit(),
+            "assistant.model-toggle" => self.toggle_model_menu(),
+            "assistant.model-prev" => self.model_page = self.model_page.saturating_sub(1),
+            "assistant.model-next" => {
+                let last = self.models.len().saturating_sub(1) / MODEL_ROWS;
+                self.model_page = (self.model_page + 1).min(last);
+            }
+            action if action.starts_with("assistant.model.") => {
+                if let Ok(slot) = action["assistant.model.".len()..].parse::<usize>() {
+                    self.select_model(self.model_page * MODEL_ROWS + slot);
+                }
+            }
             "assistant.clear" => self.clear_confirm = true,
             "assistant.clear-cancel" => self.clear_confirm = false,
             "assistant.clear-confirm" => self.clear_chat(),
@@ -833,12 +926,33 @@ impl Assistant {
             Screen::Loading => {
                 let text = if self.installing { "Installing Hermes..." } else { "Loading..." };
                 doc.text("loading-text", text.to_owned())?;
-                doc.text("loading-detail", or_blank(self.install_line.clone()))
+                doc.text("loading-detail", or_blank(fit_chars(&self.install_line, 64)))
             }
             Screen::Connect => doc.text("connect-status", or_blank(self.status_text())),
             Screen::Confirm => doc.text("install-cmd", install_plan().shell_command),
             Screen::Chat => self.paint_chat(doc),
         }
+    }
+
+    fn paint_models(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let choice = self.models.len() >= 2;
+        doc.visible("model", choice)?;
+        doc.text("model", model_label(self.model.as_deref()))?;
+        let open = choice && self.model_menu;
+        doc.visible("model-menu", open)?;
+        let pages = self.models.len().div_ceil(MODEL_ROWS).max(1);
+        doc.text("model-page", format!("{} / {}", self.model_page + 1, pages))?;
+        for slot in 0..MODEL_ROWS {
+            let index = self.model_page * MODEL_ROWS + slot;
+            let id = self.models.get(index);
+            doc.visible(&format!("mrow-{slot}"), open && id.is_some())?;
+            if let Some(id) = id {
+                let current = self.model.as_deref() == Some(id.as_str());
+                doc.text(&format!("mtext-{slot}"), id.clone())?;
+                doc.visible(&format!("mcheck-{slot}"), current)?;
+            }
+        }
+        Ok(())
     }
 
     fn paint_chat(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -862,6 +976,7 @@ impl Assistant {
         doc.visible("empty", no_rows)?;
         doc.text("subtitle", chat_header::subtitle(&self.state, self.working).to_owned())?;
         let mic = self.speech_in && empty && !self.working;
+        self.paint_models(doc)?;
         doc.visible("clear-confirm", self.clear_confirm)?;
         doc.visible("clear", !self.clear_confirm)?;
         doc.visible("working", self.working)?;
@@ -917,10 +1032,18 @@ fn hermes_config(paths: &Paths, url: &str) -> HermesConfig {
 }
 
 /// One streamed turn. Every event and the final outcome go back to the window.
-fn turn_job(bus: &Bus, config: &HermesConfig, session: Option<&str>, text: &str, cancel: &CancelToken) {
+fn turn_job(
+    bus: &Bus,
+    config: &HermesConfig,
+    session: Option<&str>,
+    model: Option<&str>,
+    text: &str,
+    cancel: &CancelToken,
+) {
     let _ticker = connect_ui::Ticker::start(bus.clone());
     let result = HermesClient::new(config).and_then(|client| {
-        let request = TurnRequest::new(text, session);
+        let mut request = TurnRequest::new(text, session);
+        request.model = model;
         client.run_turn(&request, cancel, &mut |event| bus.send(Msg::Turn(event)))
     });
     bus.send(Msg::TurnDone(result));
@@ -1111,5 +1234,17 @@ mod tests {
         assert_eq!(version_of(&AssistantState::Starting { version: "1".into(), attempts: 0 }), "1");
         assert_eq!(version_of(&AssistantState::Error { message: "e".into(), version: None }), "");
         assert_eq!(version_of(&AssistantState::NotInstalled), "");
+    }
+
+    #[test]
+    fn model_label_and_fit_are_short_and_stable() {
+        assert_eq!(model_label(None), "Model");
+        assert_eq!(model_label(Some("openai/gpt-x")), "gpt-x");
+        assert_eq!(model_label(Some("amazon/titan-embed-text-v2-long-name")), "titan-embed-tex...");
+        assert_eq!(fit_chars("short", 64), "short");
+        let long = "x".repeat(100);
+        let fitted = fit_chars(&long, 64);
+        assert_eq!(fitted.chars().count(), 64);
+        assert!(fitted.ends_with("..."));
     }
 }

@@ -71,6 +71,9 @@ pub enum AssistantError {
     Store(String),
     /// A speech or model capability has no implementation configured.
     NotConfigured(String),
+    /// The address answered, but not as a Hermes API server (HTML page, or no `platform=hermes-agent`).
+    /// `status` is the HTTP status when the reply had one.
+    NotHermes { status: Option<u16> },
     /// A model has no pinned SHA-256, so it cannot be verified and is not downloaded.
     ChecksumUnavailable(String),
     /// A downloaded or installed model does not match its manifest.
@@ -91,6 +94,8 @@ impl fmt::Display for AssistantError {
             Self::Unreachable(m) => write!(f, "unreachable: {m}"),
             Self::Timeout => f.write_str("timed out waiting for data"),
             Self::Http { status, message } => write!(f, "HTTP {status}: {message}"),
+            Self::NotHermes { status: Some(s) } => write!(f, "not a Hermes API server (HTTP {s})"),
+            Self::NotHermes { status: None } => f.write_str("not a Hermes API server"),
             Self::Protocol(m) => write!(f, "protocol error: {m}"),
             Self::Cancelled => f.write_str("cancelled"),
             Self::Io(m) => write!(f, "I/O error: {m}"),

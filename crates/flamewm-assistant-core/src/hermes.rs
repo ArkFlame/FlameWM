@@ -81,11 +81,13 @@ pub struct TurnRequest<'a> {
     pub user_text: &'a str,
     pub session: Option<&'a str>,
     pub system: &'a str,
+    /// Model id from `GET /v1/models` chosen by the user; `None` uses the server default.
+    pub model: Option<&'a str>,
 }
 
 impl<'a> TurnRequest<'a> {
     pub fn new(user_text: &'a str, session: Option<&'a str>) -> Self {
-        Self { user_text, session, system: SHORT_ANSWER_SYSTEM }
+        Self { user_text, session, system: SHORT_ANSWER_SYSTEM, model: None }
     }
 }
 
@@ -225,6 +227,16 @@ impl HermesClient {
             .map_err(|e| AssistantError::Protocol(format!("bad JSON from {path}: {e}")))
     }
 
+    /// Fails with `NotHermes` unless the target's `/health` reports `platform=hermes-agent`.
+    /// Called before every turn and model listing, so a stub or static server never gets a request.
+    pub fn verify(&self) -> Result<(), AssistantError> {
+        if self.health()?.is_ok() {
+            Ok(())
+        } else {
+            Err(AssistantError::NotHermes { status: None })
+        }
+    }
+
     /// `GET /health`.
     pub fn health(&self) -> Result<ServerHealth, AssistantError> {
         let value = self.get_json("/health")?;
@@ -237,6 +249,7 @@ impl HermesClient {
 
     /// `GET /v1/models`: advertised model ids.
     pub fn models(&self) -> Result<Vec<String>, AssistantError> {
+        self.verify()?;
         let value = self.get_json("/v1/models")?;
         Ok(value
             .get("data")
@@ -325,13 +338,17 @@ impl HermesClient {
         if cancel.is_cancelled() {
             return Ok(TurnOutcome::Cancelled { partial: String::new() });
         }
+        self.verify()?;
         let session = req.session.map_or_else(new_session_id, str::to_owned);
-        let payload = json!({
+        let mut payload = json!({
             "input": req.user_text,
             "session_id": session,
             "instructions": req.system,
-        })
-        .to_string();
+        });
+        if let Some(model) = req.model {
+            payload["model"] = json!(model);
+        }
+        let payload = payload.to_string();
         let resp = http::send(
             &self.endpoint,
             Request { method: "POST", path: "/v1/runs", headers: self.auth_headers(), body: Some(&payload) },
@@ -522,12 +539,28 @@ fn new_session_id() -> String {
     format!("flamewm-{:x}-{:x}", nanos, std::process::id())
 }
 
+/// Maps an error reply to an error. A JSON `error.message` is used; an HTML page (what a static
+/// or non-Hermes server returns) becomes `NotHermes`; any other body is reduced to one short
+/// plain-text line, so raw markup never reaches the window.
 fn http_error(status: u16, body: &[u8]) -> AssistantError {
-    let message = serde_json::from_slice::<Value>(body)
+    if let Some(message) = serde_json::from_slice::<Value>(body)
         .ok()
         .and_then(|v| v.pointer("/error/message").and_then(Value::as_str).map(str::to_owned))
-        .unwrap_or_else(|| String::from_utf8_lossy(&body[..body.len().min(200)]).trim().to_owned());
-    AssistantError::Http { status, message }
+    {
+        return AssistantError::Http { status, message: one_line(&message, 200) };
+    }
+    let text = String::from_utf8_lossy(&body[..body.len().min(4096)]);
+    let trimmed = text.trim_start().to_ascii_lowercase();
+    if trimmed.starts_with('<') || trimmed.contains("<html") || trimmed.contains("<!doctype") {
+        return AssistantError::NotHermes { status: Some(status) };
+    }
+    AssistantError::Http { status, message: one_line(&text, 200) }
+}
+
+/// First non-empty line with control characters removed, cut to `max` characters.
+fn one_line(text: &str, max: usize) -> String {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    line.chars().filter(|c| !c.is_control()).take(max).collect()
 }
 
 #[cfg(test)]
@@ -551,6 +584,10 @@ mod tests {
         b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n".to_vec()
     }
 
+    fn healthy() -> Vec<Vec<u8>> {
+        ok_response("", r#"{"status":"ok","platform":"hermes-agent"}"#)
+    }
+
     fn accepted(run_id: &str) -> Vec<Vec<u8>> {
         ok_response("", &format!(r#"{{"run_id":"{run_id}","status":"started","replayed":false}}"#))
     }
@@ -567,8 +604,10 @@ mod tests {
 
     #[test]
     fn health_and_models_parse_with_bearer_auth() {
+        let health_body = r#"{"status":"ok","platform":"hermes-agent","authenticated":true}"#;
         let (url, server) = serve(vec![
-            ok_response("", r#"{"status":"ok","platform":"hermes-agent","authenticated":true}"#),
+            ok_response("", health_body),
+            ok_response("", health_body),
             ok_response("", r#"{"data":[{"id":"hermes-agent"},{"id":"other"}]}"#),
         ]);
         let c = client(&url, Some("k1"));
@@ -577,8 +616,9 @@ mod tests {
         assert_eq!(health.authenticated, Some(true));
         assert_eq!(c.models().unwrap(), vec!["hermes-agent".to_owned(), "other".to_owned()]);
         let seen = server.join().unwrap();
-        assert!(seen[0].starts_with("GET /health "));
-        assert!(seen[1].to_lowercase().contains("authorization: bearer k1"));
+        assert!(seen[1].starts_with("GET /health "));
+        assert!(seen[2].starts_with("GET /v1/models "));
+        assert!(seen[2].to_lowercase().contains("authorization: bearer k1"));
     }
 
     #[test]
@@ -590,7 +630,7 @@ mod tests {
             r#"{"event":"message.delta","run_id":"run_1","delta":"lo"}"#,
             r#"{"event":"run.completed","run_id":"run_1","output":"Hello."}"#,
         ]));
-        let (url, server) = serve(vec![accepted("run_1"), vec![stream]]);
+        let (url, server) = serve(vec![healthy(), accepted("run_1"), vec![stream]]);
         let (events, mut sink) = collect();
         let outcome = client(&url, None)
             .run_turn(&TurnRequest::new("hi", Some("sess-1")), &CancelToken::new(), &mut sink)
@@ -602,16 +642,16 @@ mod tests {
         assert_eq!(events[2], TurnEvent::Delta("lo".into()));
 
         let seen = server.join().unwrap();
-        assert!(seen[0].starts_with("POST /v1/runs "));
-        assert!(seen[0].contains(r#""session_id":"sess-1""#));
-        assert!(seen[0].contains(r#""input":"hi""#));
-        assert!(seen[0].contains(r#""instructions":"#));
-        assert!(seen[1].starts_with("GET /v1/runs/run_1/events "));
+        assert!(seen[1].starts_with("POST /v1/runs "));
+        assert!(seen[1].contains(r#""session_id":"sess-1""#));
+        assert!(seen[1].contains(r#""input":"hi""#));
+        assert!(seen[1].contains(r#""instructions":"#));
+        assert!(seen[2].starts_with("GET /v1/runs/run_1/events "));
     }
 
     #[test]
     fn new_session_is_generated_when_none_given() {
-        let (url, server) = serve(vec![accepted("run_2"), vec![{
+        let (url, server) = serve(vec![healthy(), accepted("run_2"), vec![{
             let mut s = sse_head();
             s.extend(sse(&[r#"{"event":"run.completed","output":"ok"}"#]));
             s
@@ -622,7 +662,7 @@ mod tests {
         let session = session.unwrap();
         assert!(session.starts_with("flamewm-"));
         assert_eq!(events.lock().unwrap()[0], TurnEvent::Started { session: Some(session) });
-        assert!(server.join().unwrap()[0].contains(r#""session_id":"flamewm-"#));
+        assert!(server.join().unwrap()[1].contains(r#""session_id":"flamewm-"#));
     }
 
     #[test]
@@ -632,13 +672,13 @@ mod tests {
             r#"{"event":"approval.request","choices":["once","deny"],"request_id":"p1"}"#,
             r#"{"event":"run.completed","output":"Not run."}"#,
         ]));
-        let (url, server) = serve(vec![accepted("run_3"), vec![stream], ok_response("", "{}")]);
+        let (url, server) = serve(vec![healthy(), accepted("run_3"), vec![stream], ok_response("", "{}")]);
         let (events, mut sink) = collect();
         let outcome = client(&url, None).run_turn(&TurnRequest::new("rm", None), &CancelToken::new(), &mut sink).unwrap();
         assert_eq!(outcome, TurnOutcome::Completed { text: "Not run.".into(), session: outcome_session(&outcome) });
         let seen = server.join().unwrap();
-        assert!(seen[2].starts_with("POST /v1/runs/run_3/approval "));
-        assert!(seen[2].contains(r#""choice":"deny""#));
+        assert!(seen[3].starts_with("POST /v1/runs/run_3/approval "));
+        assert!(seen[3].contains(r#""choice":"deny""#));
         assert!(events.lock().unwrap().iter().any(|e| matches!(e, TurnEvent::Activity(t) if t.contains("denied"))));
     }
 
@@ -653,7 +693,7 @@ mod tests {
     fn failed_run_is_an_error_with_the_server_message() {
         let mut stream = sse_head();
         stream.extend(sse(&[r#"{"event":"run.failed","error":"Hermes is not logged in."}"#]));
-        let (url, server) = serve(vec![accepted("run_4"), vec![stream]]);
+        let (url, server) = serve(vec![healthy(), accepted("run_4"), vec![stream]]);
         let err = client(&url, None).run_turn(&TurnRequest::new("hi", None), &CancelToken::new(), &mut |_| {}).unwrap_err();
         assert_eq!(err, AssistantError::RunFailed("Hermes is not logged in.".into()));
         server.join().unwrap();
@@ -664,12 +704,12 @@ mod tests {
         let mut partial = sse_head();
         partial.extend(sse(&[r#"{"event":"message.delta","delta":"Hel"}"#]));
         let status = ok_response("", r#"{"status":"completed","output":"Hello there.","session_id":"s-9"}"#);
-        let (url, server) = serve(vec![accepted("run_5"), vec![partial], status]);
+        let (url, server) = serve(vec![healthy(), accepted("run_5"), vec![partial], status]);
         let outcome = client(&url, None)
             .run_turn(&TurnRequest::new("hi", Some("s-9")), &CancelToken::new(), &mut |_| {})
             .unwrap();
         assert_eq!(outcome, TurnOutcome::Completed { text: "Hello there.".into(), session: Some("s-9".into()) });
-        assert!(server.join().unwrap()[2].starts_with("GET /v1/runs/run_5 "));
+        assert!(server.join().unwrap()[3].starts_with("GET /v1/runs/run_5 "));
     }
 
     #[test]
@@ -680,7 +720,7 @@ mod tests {
         for _ in 0..RECOVER_POLLS {
             status.push(ok_response("", r#"{"status":"running","output":""}"#));
         }
-        let mut responses = vec![accepted("run_6"), vec![partial]];
+        let mut responses = vec![healthy(), accepted("run_6"), vec![partial]];
         responses.extend(status);
         let (url, server) = serve(responses);
         let outcome = client(&url, None)
@@ -694,7 +734,7 @@ mod tests {
     fn cancel_mid_stream_returns_partial_and_stops_the_run() {
         let mut first = sse_head();
         first.extend(sse(&[r#"{"event":"message.delta","delta":"Hel"}"#]));
-        let (url, server) = serve(vec![accepted("run_7"), vec![first], ok_response("", "{}")]);
+        let (url, server) = serve(vec![healthy(), accepted("run_7"), vec![first], ok_response("", "{}")]);
         let cancel = CancelToken::new();
         let trigger = cancel.clone();
         let mut sink = move |e: TurnEvent| {
@@ -705,14 +745,14 @@ mod tests {
         let outcome = client(&url, None).run_turn(&TurnRequest::new("hi", None), &cancel, &mut sink).unwrap();
         assert_eq!(outcome, TurnOutcome::Cancelled { partial: "Hel".into() });
         let seen = server.join().unwrap();
-        assert!(seen[2].starts_with("POST /v1/runs/run_7/stop "), "{}", seen[2]);
+        assert!(seen[3].starts_with("POST /v1/runs/run_7/stop "), "{}", seen[3]);
     }
 
     #[test]
     fn create_run_404_reports_session_gone() {
         let body = r#"{"error":{"message":"session not found"}}"#;
         let response = format!("HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n{body}", body.len());
-        let (url, server) = serve(vec![vec![response.into_bytes()]]);
+        let (url, server) = serve(vec![healthy(), vec![response.into_bytes()]]);
         let err = client(&url, None)
             .run_turn(&TurnRequest::new("hi", Some("gone")), &CancelToken::new(), &mut |_| {})
             .unwrap_err();
@@ -725,7 +765,7 @@ mod tests {
     fn unauthorized_run_reports_401() {
         let body = r#"{"error":{"message":"Invalid API key"}}"#;
         let response = format!("HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\n\r\n{body}", body.len());
-        let (url, server) = serve(vec![vec![response.into_bytes()]]);
+        let (url, server) = serve(vec![healthy(), vec![response.into_bytes()]]);
         let err = client(&url, Some("bad"))
             .run_turn(&TurnRequest::new("hi", None), &CancelToken::new(), &mut |_| {})
             .unwrap_err();
@@ -813,5 +853,87 @@ mod tests {
     fn debug_redacts_key() {
         let config = HermesConfig { api_key: Some("supersecret".into()), ..HermesConfig::default() };
         assert!(!format!("{config:?}").contains("supersecret"));
+    }
+
+    fn status_response(status: &str, body: &str) -> Vec<Vec<u8>> {
+        vec![format!(
+            "HTTP/1.1 {status}\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()]
+    }
+
+    const NOT_IMPLEMENTED_HTML: &str =
+        "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\"><html><head><title>Error response</title></head><body>Error code: 501</body></html>";
+
+    #[test]
+    fn html_501_on_run_route_reports_not_hermes_without_raw_markup() {
+        let (url, server) = serve(vec![
+            healthy(),
+            status_response("501 Not Implemented", NOT_IMPLEMENTED_HTML),
+        ]);
+        let error = client(&url, None)
+            .run_turn(&TurnRequest::new("hi", None), &CancelToken::new(), &mut |_| {})
+            .unwrap_err();
+        assert_eq!(error, AssistantError::NotHermes { status: Some(501) });
+        let text = crate::connect::explain(&error, &url);
+        assert_eq!(
+            text,
+            "That address is not a Hermes API server (HTTP 501). Check Settings > Assistant > Hermes URL or press Connect."
+        );
+        assert!(!text.contains('<'));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn html_501_on_health_is_not_hermes() {
+        let (url, server) = serve(vec![status_response("501 Not Implemented", NOT_IMPLEMENTED_HTML)]);
+        let error = client(&url, None)
+            .run_turn(&TurnRequest::new("hi", None), &CancelToken::new(), &mut |_| {})
+            .unwrap_err();
+        assert_eq!(error, AssistantError::NotHermes { status: Some(501) });
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn health_without_hermes_platform_sends_no_run() {
+        let (url, server) = serve(vec![ok_response("", r#"{"status":"ok"}"#)]);
+        let error = client(&url, None)
+            .run_turn(&TurnRequest::new("hi", None), &CancelToken::new(), &mut |_| {})
+            .unwrap_err();
+        assert_eq!(error, AssistantError::NotHermes { status: None });
+        let seen = server.join().unwrap();
+        assert_eq!(seen.len(), 1, "only the health probe may be sent: {seen:?}");
+        assert!(seen[0].starts_with("GET /health "));
+    }
+
+    #[test]
+    fn plain_text_error_body_is_one_short_clean_line() {
+        let body = format!("first\u{1b}[31m line\n<b>second</b>{}", "x".repeat(400));
+        let error = http_error(500, body.as_bytes());
+        match error {
+            AssistantError::Http { status: 500, message } => {
+                assert_eq!(message, "first[31m line");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn json_error_message_is_kept() {
+        let error = http_error(400, br#"{"error":{"message":"bad model"}}"#);
+        assert_eq!(error, AssistantError::Http { status: 400, message: "bad model".into() });
+    }
+
+    #[test]
+    fn model_is_sent_in_run_payload_when_chosen() {
+        let mut stream = sse_head();
+        stream.extend(sse(&[r#"{"event":"run.completed","run_id":"run_9","output":"ok"}"#]));
+        let (url, server) = serve(vec![healthy(), accepted("run_9"), vec![stream]]);
+        let mut request = TurnRequest::new("hi", None);
+        request.model = Some("openai/gpt-x");
+        client(&url, None).run_turn(&request, &CancelToken::new(), &mut |_| {}).unwrap();
+        let seen = server.join().unwrap();
+        assert!(seen[1].contains(r#""model":"openai/gpt-x""#), "{}", seen[1]);
     }
 }

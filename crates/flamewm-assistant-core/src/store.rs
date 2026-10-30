@@ -5,7 +5,7 @@
 //! - `history.jsonl`: one JSON object per line. Its line number is the message `seq`.
 //! - `history.idx`: 28-byte little-endian records `{offset u64, len u32, seq u64, ts_ms u64}`.
 //!   Rebuilt from the JSONL on open whenever it disagrees.
-//! - `state.json`: `{hermes_session, hermes_url}`, replaced via temp file and rename.
+//! - `state.json`: `{hermes_session, hermes_url, model}`, replaced via temp file and rename.
 //!
 //! Crash behaviour: a line is written and fsynced before its index record. On open, a
 //! trailing line without `\n` or an unparseable line is truncated away, and the index is
@@ -99,6 +99,8 @@ pub struct Message {
 pub struct SessionState {
     pub hermes_session: Option<String>,
     pub hermes_url: Option<String>,
+    /// Model id chosen in the picker; `None` means the server default.
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -262,7 +264,7 @@ impl ChatStore {
 
     /// Replaces the session state atomically.
     pub fn set_session(&mut self, state: SessionState) -> Result<(), AssistantError> {
-        let value = json!({"hermes_session": state.hermes_session, "hermes_url": state.hermes_url});
+        let value = json!({"hermes_session": state.hermes_session, "hermes_url": state.hermes_url, "model": state.model});
         write_atomic(&self.dir.join(STATE_FILE), value.to_string().as_bytes())?;
         self.session = state;
         Ok(())
@@ -370,7 +372,7 @@ fn read_session(dir: &Path) -> SessionState {
         return SessionState::default();
     };
     let field = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
-    SessionState { hermes_session: field("hermes_session"), hermes_url: field("hermes_url") }
+    SessionState { hermes_session: field("hermes_session"), hermes_url: field("hermes_url"), model: field("model") }
 }
 
 /// Writes through a temp file, fsyncs it, renames over `path`, then fsyncs the directory.
@@ -492,6 +494,7 @@ mod tests {
                 .set_session(SessionState {
                     hermes_session: Some("sess-42".into()),
                     hermes_url: Some("http://127.0.0.1:8642".into()),
+                    model: None,
                 })
                 .unwrap();
         }
@@ -507,7 +510,7 @@ mod tests {
         {
             let mut store = ChatStore::open(&dir).unwrap();
             store.append(Role::User, "gone", Some("s"), None, MsgState::Complete).unwrap();
-            store.set_session(SessionState { hermes_session: Some("s".into()), hermes_url: None }).unwrap();
+            store.set_session(SessionState { hermes_session: Some("s".into()), hermes_url: None, model: None }).unwrap();
             store.clear().unwrap();
             assert!(store.is_empty());
             assert_eq!(store.session().hermes_session, None);

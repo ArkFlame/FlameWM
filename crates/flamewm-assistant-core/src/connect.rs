@@ -18,6 +18,12 @@ pub fn explain(error: &AssistantError, url: &str) -> String {
         AssistantError::Http { status: 401, .. } | AssistantError::Http { status: 403, .. } => {
             "Hermes rejected the API key. Check API_SERVER_KEY in ~/.hermes/.env.".into()
         }
+        AssistantError::NotHermes { status: Some(s) } => format!(
+            "That address is not a Hermes API server (HTTP {s}). Check Settings > Assistant > Hermes URL or press Connect."
+        ),
+        AssistantError::NotHermes { status: None } => {
+            "That address is not a Hermes API server. Check Settings > Assistant > Hermes URL or press Connect.".into()
+        }
         AssistantError::Http { status: 429, .. } => {
             "Hermes is busy with other runs. Wait a moment, then retry.".into()
         }
