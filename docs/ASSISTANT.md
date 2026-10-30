@@ -40,7 +40,7 @@ Evidence from read-only source inspection and probes on 2026-10-30. Hermes v0.22
 
 ## Agent run events (`POST /v1/runs`, `GET /v1/runs/{id}/events`)
 
-Source: `gateway/platforms/api_server_runs.py`. Event names: `run.started`, `message.delta` (`delta`), `tool.started` (`tool`, `preview`), `tool.completed` (`tool`, `error`), `approval.request` (`choices`, `request_id`), `run.completed`, `run.failed` (`error`), `run.cancelled`, `run.interrupted`. Approval resolves with `POST /v1/runs/{id}/approval` and `choice` once, session, always or deny. The app still auto-denies approvals and shows a notice. Approve and Deny buttons are not implemented.
+Source: `gateway/platforms/api_server_runs.py`. Event names: `run.started`, `message.delta` (`delta`), `tool.started` (`tool`, `preview`), `tool.completed` (`tool`, `error`), `approval.request` (`choices`, `request_id`), `run.completed`, `run.failed` (`error`), `run.cancelled`, `run.interrupted`. Approval resolves with `POST /v1/runs/{id}/approval` and `choice` once, session, always or deny. The window shows "Approve once" and "Deny" for each approval. The worker never auto-denies. A 120 s timeout in the window sends deny. Tested with a concurrent fake server (`approval_round_trip_answers_the_waiting_run`). Not tested against a real gated tool call.
 
 ## Live evidence (scratch home, real `hermes gateway run`)
 
@@ -48,4 +48,5 @@ Source: `gateway/platforms/api_server_runs.py`. Event names: `run.started`, `mes
 - `GET /health`: 200 `{"status":"ok","platform":"hermes-agent","version":"0.22.5"}`.
 - `POST /v1/runs` (fresh `session_id`, `"Say ok."`): 202 `started`. Events: `run.failed` with "not connected to any AI provider". The run is not a success.
 - `cargo test -p flamewm-assistant-core live_agent_run -- --ignored`, with the scratch URL and key: exit 0, the error reaches the client.
-- Not verified: a successful agent turn (needs a provider), tool events, approval, the app window against the scratch server, and the real `~/.hermes` gateway.
+- Xephyr (scratch display, scratch HOME, scratch gateway): the window showed "Connected" and the prompt returned the `run.failed` reason once in the chat, with "Press Enter to retry." in the notice.
+- Not verified: a successful agent turn (needs a provider), real tool events, a real approval, the enable-confirm screen on a live machine (the probe finds the user's proxy on 8645, so it cannot show here), and the real `~/.hermes` gateway.
