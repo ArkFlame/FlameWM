@@ -1,8 +1,9 @@
 use super::*;
+use crate::hash::{FastMap, FastSet};
 use crate::layout::LayoutResult;
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,16 +156,16 @@ pub struct RuntimeImageOverride {
 pub struct RuntimeDocument {
     pub document: CompiledDocument,
     pub variable_values: Vec<Color>,
-    pub text_overrides: HashMap<u32, String>,
-    pub(super) hidden_nodes: HashSet<u32>,
-    pub(super) image_revision: HashMap<u16, u64>,
-    pub(super) node_image_overrides: HashMap<u32, RuntimeImageOverride>,
-    pub(super) geometry_overrides: HashMap<u32, GeometryOverride>,
-    pub(super) style_overrides: HashMap<u32, RuntimeStyleOverride>,
-    pub(super) node_backdrops: HashMap<u32, u8>,
-    pub(super) node_surfaces: HashMap<u32, crate::surface_material::SurfaceMaterial>,
-    pub(super) z_index_overrides: HashMap<u32, i32>,
-    pub(super) scroll_offsets: HashMap<u32, ScrollState>,
+    pub text_overrides: FastMap<u32, String>,
+    pub(super) hidden_nodes: FastSet<u32>,
+    pub(super) image_revision: FastMap<u16, u64>,
+    pub(super) node_image_overrides: FastMap<u32, RuntimeImageOverride>,
+    pub(super) geometry_overrides: FastMap<u32, GeometryOverride>,
+    pub(super) style_overrides: FastMap<u32, RuntimeStyleOverride>,
+    pub(super) node_backdrops: FastMap<u32, u8>,
+    pub(super) node_surfaces: FastMap<u32, crate::surface_material::SurfaceMaterial>,
+    pub(super) z_index_overrides: FastMap<u32, i32>,
+    pub(super) scroll_offsets: FastMap<u32, ScrollState>,
     pub(super) pending_damage: SurfaceDamage,
     /// Node-tracked changes for `take_incremental_damage`; `full` latches untracked mutations.
     pub(super) dirty: DirtyTracker,
@@ -226,16 +227,16 @@ impl RuntimeDocument {
         Ok(Self {
             document,
             variable_values,
-            text_overrides: HashMap::new(),
-            hidden_nodes: HashSet::new(),
-            image_revision: HashMap::new(),
-            node_image_overrides: HashMap::new(),
-            geometry_overrides: HashMap::new(),
-            style_overrides: HashMap::new(),
-            node_backdrops: HashMap::new(),
-            node_surfaces: HashMap::new(),
-            z_index_overrides: HashMap::new(),
-            scroll_offsets: HashMap::new(),
+            text_overrides: FastMap::default(),
+            hidden_nodes: FastSet::default(),
+            image_revision: FastMap::default(),
+            node_image_overrides: FastMap::default(),
+            geometry_overrides: FastMap::default(),
+            style_overrides: FastMap::default(),
+            node_backdrops: FastMap::default(),
+            node_surfaces: FastMap::default(),
+            z_index_overrides: FastMap::default(),
+            scroll_offsets: FastMap::default(),
             pending_damage: SurfaceDamage::Full,
             dirty: DirtyTracker {
                 full: true,
@@ -516,6 +517,9 @@ impl RuntimeDocument {
     }
 
     pub fn is_effectively_visible(&self, mut index: u32) -> bool {
+        if self.hidden_nodes.is_empty() {
+            return true;
+        }
         loop {
             if !self.is_visible(index) {
                 return false;

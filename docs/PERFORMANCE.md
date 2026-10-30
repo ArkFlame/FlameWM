@@ -112,11 +112,43 @@ What these rows show:
   the baseline was measured at different load and the machine was busy here. This pass does
   not show an improvement over the baseline, and it does not show a regression.
 
-### Interaction and CPU
+### Interaction and CPU (2026-10-30)
 
-Not re-measured in this pass. Earlier interaction tables (drag and Start-popup CPU,
-session-to-panels latency) were removed from this document because they do not reflect the
-current build.
+Headless Xorg dummy session (1280x800, single output), release build of `main` at `b7e8c300`
+against this branch, both with symbols kept for profiling. Each workload runs 8 s, two rounds,
+minimum per row. Percent of one core, summed over every `flamewm*` process on the display, with
+Xorg separately.
+
+```sh
+python3 tools/flamewm_cpu_workloads.py .target/release \
+  idle,hover-desktop,hover-taskbar,start-toggle,term-idle,term-seq,term-type,term-move,term-hover,explorer-idle,explorer-hover,explorer-move 8
+```
+
+| Workload | FlameWM before | after | Xorg before | after |
+| --- | --- | --- | --- | --- |
+| idle desktop | 1.49 | 0.37 | 0.50 | 0.37 |
+| pointer sweep over desktop | 3.12 | 1.62 | 1.00 | 1.12 |
+| pointer sweep over taskbar | 2.62 | 1.75 | 1.62 | 1.50 |
+| Start menu toggle every 0.4 s | 5.11 | 3.74 | 1.12 | 1.25 |
+| terminal open, idle | 1.62 | 0.50 | 0.37 | 0.50 |
+| terminal `seq 1 300000` | 5.61 | 4.37 | 0.50 | 0.62 |
+| typing in terminal (30 ms/key) | 11.81 | 5.84 | 13.05 | 12.06 |
+| dragging terminal window | 9.58 | 7.96 | 6.83 | 6.71 |
+| pointer sweep over terminal | 4.36 | 2.87 | 1.12 | 1.25 |
+| explorer on `/usr/lib`, idle | 1.50 | 0.50 | 0.37 | 0.37 |
+| pointer sweep over explorer | 2.99 | 1.87 | 1.25 | 1.12 |
+| dragging explorer window | 9.33 | 7.59 | 7.47 | 7.34 |
+
+The terminal process alone went from 9.5 % to 4.1 % while typing; most of that cost was walking
+the 96x128 pooled run nodes (about 25 000, nearly all hidden) several times per keystroke. The
+idle desktop cost is the once-per-second clock repaint.
+
+Wheel scrolling in the explorer is not in the table: the glide animation renders anywhere from
+about 100 to 1 200 frames in the same window, so CPU percent tracks frame count, not cost.
+Measured per frame it went from about 2.3 ms to about 1.7 ms.
+
+Not changed here: every repaint is still a full-window repaint (`FLAMEWM_RENDER_REGION` stays
+opt-in), which is what keeps Xorg near 12 % while typing.
 
 ## Noise and method
 

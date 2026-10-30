@@ -133,7 +133,7 @@ fn resolve_node_damage(
         if moved && tracked.is_none() && !has_geometry_ancestor(document, node, dirty) {
             return SurfaceDamage::Full;
         }
-        let halo = paint_halo(&document.runtime_style(node, interaction));
+        let halo = paint_halo(&document.runtime_style_cow(node, interaction));
         for rect in [old_box.rect, new_box.rect] {
             region = union(region, pixel_rect(rect, halo, viewport));
         }

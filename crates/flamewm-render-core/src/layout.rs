@@ -137,6 +137,7 @@ impl LayoutEngine {
             document,
             interaction,
             boxes: &mut empty,
+            measures: Default::default(),
         };
         // Finite popup constraint only; never f32::MAX here.
         let (w, h) = probe.measure_node(node, max_w, max_h);
@@ -188,6 +189,7 @@ impl LayoutEngine {
             document,
             interaction,
             boxes: &mut boxes,
+            measures: Default::default(),
         };
         engine.layout_node(
             document.document.root,
@@ -201,7 +203,11 @@ impl LayoutEngine {
         // Content extent: intrinsic measure unconstrained on the scroll axis.
         let mut contents = vec![Rect::default(); document.document.nodes.len()];
         for (index, entry) in boxes.iter().enumerate() {
-            let style = document.runtime_style(index as u32, interaction);
+            if !document.is_visible(index as u32) {
+                contents[index] = entry.rect;
+                continue;
+            }
+            let style = document.runtime_style_cow(index as u32, interaction);
             let scrolls_x = matches!(
                 style.overflow_x,
                 Overflow::Auto | Overflow::Scroll | Overflow::Hidden
@@ -219,6 +225,7 @@ impl LayoutEngine {
                 document,
                 interaction,
                 boxes: &mut empty,
+                measures: Default::default(),
             };
             let avail_w = if scrolls_x {
                 f32::MAX / 1024.0
@@ -249,9 +256,11 @@ impl LayoutEngine {
             };
         }
         let mut z_order: Vec<u32> = (0..document.document.nodes.len() as u32).collect();
-        // Keys are unique (index tiebreak), so unstable sort yields the same
-        // order as the stable sort without its scratch allocation.
-        z_order.sort_unstable_by_key(|index| (document.effective_z_index(*index), *index as i64));
+        if let Some(z_indices) = document.effective_z_indices() {
+            // Keys are unique (index tiebreak), so unstable sort yields the same
+            // order as the stable sort without its scratch allocation.
+            z_order.sort_unstable_by_key(|&index| (z_indices[index as usize], index));
+        }
         LayoutResult {
             boxes,
             contents,
@@ -287,6 +296,7 @@ impl LayoutResult {
             document,
             interaction,
             boxes: &mut self.boxes,
+            measures: Default::default(),
         };
         for &(index, parent) in &plan {
             // A full compute never visits a hidden box or its text, so they keep the default box.
@@ -335,14 +345,15 @@ fn isolated_leaf_parent(
     let scrolls = |style: &Style| {
         style.overflow_x != Overflow::Visible || style.overflow_y != Overflow::Visible
     };
-    let style = document.runtime_style(index, interaction);
+    let style = document.runtime_style_cow(index, interaction);
     if style.position != Position::Absolute || scrolls(&style) {
         return None;
     }
     let mut child = node.first_child;
     while let Some(current) = child {
         let text = &document.document.nodes[current as usize];
-        if text.kind != NodeKind::Text || scrolls(&document.runtime_style(current, interaction)) {
+        if text.kind != NodeKind::Text || scrolls(&document.runtime_style_cow(current, interaction))
+        {
             return None;
         }
         child = text.next_sibling;
@@ -350,7 +361,7 @@ fn isolated_leaf_parent(
     let mut ancestor = Some(parent);
     while let Some(current) = ancestor {
         let node = &document.document.nodes[current as usize];
-        let style = document.runtime_style(current, interaction);
+        let style = document.runtime_style_cow(current, interaction);
         // Scrolling ancestors (Auto/Scroll) get their extents and offsets re-fitted after
         // compute; hidden ones do not move children and absolute children never size them.
         if moved.contains(&current)
@@ -366,15 +377,22 @@ fn isolated_leaf_parent(
     Some(parent)
 }
 
+/// Node and available-size bits -> measured size.
+type MeasureMemo = crate::hash::FastMap<(u32, u32, u32), (f32, f32)>;
+
 struct Engine<'a> {
     document: &'a RuntimeDocument,
     interaction: InteractionState,
     boxes: &'a mut [LayoutBox],
+    /// `measure_node` results for this pass, keyed by node and the exact available size bits.
+    /// Measuring reads only the document, so a node measured twice under one constraint (by its
+    /// parent's measure and again by its own layout) returns the stored size.
+    measures: std::cell::RefCell<MeasureMemo>,
 }
 
 impl<'a> Engine<'a> {
-    fn style(&self, index: u32) -> Style {
-        self.document.runtime_style(index, self.interaction)
+    fn style(&self, index: u32) -> std::borrow::Cow<'a, Style> {
+        self.document.runtime_style_cow(index, self.interaction)
     }
 
     /// Sibling-link walk in document order. Borrows the document (`'a`), not
@@ -391,6 +409,16 @@ impl<'a> Engine<'a> {
     }
 
     fn measure_node(&self, index: u32, avail_w: f32, avail_h: f32) -> (f32, f32) {
+        let key = (index, avail_w.to_bits(), avail_h.to_bits());
+        if let Some(&size) = self.measures.borrow().get(&key) {
+            return size;
+        }
+        let size = self.measure_node_uncached(index, avail_w, avail_h);
+        self.measures.borrow_mut().insert(key, size);
+        size
+    }
+
+    fn measure_node_uncached(&self, index: u32, avail_w: f32, avail_h: f32) -> (f32, f32) {
         let node = &self.document.document.nodes[index as usize];
         let style = self.style(index);
         if style.display == Display::None {
@@ -519,11 +547,14 @@ impl<'a> Engine<'a> {
             return (width, height);
         }
 
-        let measured = self.measure_node(index, avail_w, avail_h);
-        let mut width = forced_w
-            .or_else(|| style.width.resolve(avail_w))
-            .unwrap_or(measured.0.min(avail_w));
+        let explicit_width = forced_w.or_else(|| style.width.resolve(avail_w));
         let mut height = forced_h.or_else(|| style.height.resolve(avail_h));
+        let measured = if explicit_width.is_some() && height.is_some() {
+            (0.0, 0.0)
+        } else {
+            self.measure_node(index, avail_w, avail_h)
+        };
+        let mut width = explicit_width.unwrap_or(measured.0.min(avail_w));
         width = clamp_length(width, style.min_width, style.max_width, avail_w);
         let provisional_height = height.unwrap_or(measured.1.min(avail_h));
         let content_x = x + style.padding.left;
@@ -1260,6 +1291,7 @@ mod tests {
             document: &doc,
             interaction: InteractionState::default(),
             boxes: &mut [],
+            measures: Default::default(),
         };
         assert_eq!(engine.children(0).collect::<Vec<_>>(), vec![1, 2, 3, 4]);
         assert_eq!(engine.children(1).collect::<Vec<_>>(), vec![5, 6, 7]);

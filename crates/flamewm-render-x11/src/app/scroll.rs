@@ -15,7 +15,7 @@ pub(crate) fn is_scroll_container(
     interaction: Interaction,
 ) -> bool {
     matches!(
-        document.runtime_style(index, interaction).overflow_y,
+        document.runtime_style_cow(index, interaction).overflow_y,
         Overflow::Auto | Overflow::Scroll
     )
 }
@@ -27,7 +27,7 @@ pub(crate) fn clips_descendants(
     index: u32,
     interaction: Interaction,
 ) -> bool {
-    let style = document.runtime_style(index, interaction);
+    let style = document.runtime_style_cow(index, interaction);
     [style.overflow_x, style.overflow_y]
         .iter()
         .any(|mode| matches!(mode, Overflow::Hidden | Overflow::Auto | Overflow::Scroll))
@@ -51,7 +51,10 @@ pub(crate) fn fit_scroll_extents(
     // One work stack reused across scrollers; each walk drains it back to empty.
     let mut pending: Vec<u32> = Vec::new();
     for index in 0..document.document.nodes.len() as u32 {
-        let style = document.runtime_style(index, interaction);
+        if !document.is_visible(index) {
+            continue;
+        }
+        let style = document.runtime_style_cow(index, interaction);
         if !matches!(style.overflow_y, Overflow::Auto | Overflow::Scroll) {
             continue;
         }
@@ -116,29 +119,106 @@ struct ClipChain {
     depth: u32,
 }
 
-/// Clip chains as shared ids. `ids[node]` indexes `chains`, the chain of clipping ancestors
-/// that `node` inherits. A chain is created only where a clipping node's children begin, so
-/// unclipped subtrees share their parent's chain. Chains link to their parent by index, so a
-/// clipping node costs one link rather than a copy of its whole ancestor rectangle list.
+/// The document tree as flat arrays: nodes in pre-order with each subtree contiguous, so a walk
+/// that skips hidden subtrees is a linear scan instead of a sibling-pointer chase through every
+/// node. Compiled node links never change after load, so it is built once per document.
+#[derive(Default)]
+pub(crate) struct TreeIndex {
+    key: Option<(usize, u32, usize)>,
+    preorder: Vec<u32>,
+    /// Pre-order position one past the subtree that starts at the same position.
+    subtree_end: Vec<u32>,
+    /// Parent of each node, `u32::MAX` for the root (or a detached node).
+    parent: Vec<u32>,
+}
+
+impl TreeIndex {
+    fn sync(&mut self, document: &RuntimeDocument) {
+        let nodes = &document.document.nodes;
+        let key = (nodes.len(), document.document.root, nodes.as_ptr() as usize);
+        if self.key == Some(key) {
+            return;
+        }
+        self.key = Some(key);
+        self.preorder.clear();
+        self.parent.clear();
+        self.parent.resize(nodes.len(), u32::MAX);
+        let mut stack = vec![document.document.root];
+        while let Some(index) = stack.pop() {
+            self.preorder.push(index);
+            for child in children(document, index) {
+                self.parent[child as usize] = index;
+                stack.push(child);
+            }
+        }
+        let mut size = vec![1u32; nodes.len()];
+        for &index in self.preorder.iter().rev() {
+            let parent = self.parent[index as usize];
+            if parent != u32::MAX {
+                size[parent as usize] += size[index as usize];
+            }
+        }
+        self.subtree_end = self
+            .preorder
+            .iter()
+            .enumerate()
+            .map(|(position, &index)| position as u32 + size[index as usize])
+            .collect();
+    }
+}
+
+/// Per-frame scratch of `build_clipped`, kept by the window so its buffers are reused.
+#[derive(Default)]
+pub(crate) struct PaintScratch {
+    tree: TreeIndex,
+    /// `is_effectively_visible` per node after a build.
+    visible: Vec<bool>,
+    child_chain: Vec<u32>,
+}
+
+/// Visibility and clip chains in one pass over the visible tree. `ids[node]` indexes `chains`,
+/// the chain of clipping ancestors that `node` inherits. A chain is created only where a clipping
+/// node's children begin, so unclipped subtrees share their parent's chain. Chains link to their
+/// parent by index, so a clipping node costs one link rather than a copy of its whole ancestor
+/// rectangle list. A hidden subtree paints nothing and is dropped from the paint order, so it is
+/// skipped whole (most nodes of a pooled document are hidden).
 fn clip_chains(
     document: &RuntimeDocument,
     layout: &LayoutResult,
     interaction: Interaction,
+    scratch: &mut PaintScratch,
 ) -> (Vec<u32>, Vec<ClipChain>, bool) {
-    let mut ids = vec![0u32; document.document.nodes.len()];
+    let count = document.document.nodes.len();
+    scratch.tree.sync(document);
+    scratch.visible.clear();
+    scratch.visible.resize(count, false);
+    scratch.child_chain.clear();
+    scratch.child_chain.resize(count, 0);
+    let mut ids = vec![0u32; count];
     let mut chains = vec![ClipChain {
         parent: 0,
         rect: Rect::default(),
         depth: 0,
     }];
-    // A hidden subtree paints nothing, so its overflow never clips anything: it keeps its parent's
-    // chain and its styles are not resolved (most nodes of a pooled document are hidden).
-    let mut stack = vec![(document.document.root, false)];
     let mut any_clip = false;
-    while let Some((index, hidden_ancestor)) = stack.pop() {
-        let mut id = ids[index as usize];
-        let hidden = hidden_ancestor || !document.is_visible(index);
-        if !hidden && clips_descendants(document, index, interaction) {
+    let tree = &scratch.tree;
+    let mut position = 0;
+    while position < tree.preorder.len() {
+        let index = tree.preorder[position];
+        if !document.is_visible(index) {
+            position = tree.subtree_end[position] as usize;
+            continue;
+        }
+        position += 1;
+        scratch.visible[index as usize] = true;
+        let parent = tree.parent[index as usize];
+        let mut id = if parent == u32::MAX {
+            0
+        } else {
+            scratch.child_chain[parent as usize]
+        };
+        ids[index as usize] = id;
+        if clips_descendants(document, index, interaction) {
             let depth = chains[id as usize].depth + 1;
             chains.push(ClipChain {
                 parent: id,
@@ -148,25 +228,30 @@ fn clip_chains(
             id = (chains.len() - 1) as u32;
             any_clip = true;
         }
-        for child in children(document, index) {
-            ids[child as usize] = id;
-            stack.push((child, hidden));
-        }
+        scratch.child_chain[index as usize] = id;
     }
     (ids, chains, any_clip)
 }
 
-/// Walks the paint z-order in runs of equal clip chains (compared by content, so run
-/// boundaries match a per-node comparison). `paint_run` appends the commands of one contiguous
-/// run of z-order nodes; each run is wrapped in its PushClip/PopClip pairs.
+/// Walks the visible part of the paint z-order in runs of equal clip chains (compared by
+/// content, so run boundaries match a per-node comparison). `paint_run` appends the commands of
+/// one contiguous run of z-order nodes; each run is wrapped in its PushClip/PopClip pairs.
+/// `scratch.visible` is left holding `is_effectively_visible` per node.
 fn build_clipped(
     document: &RuntimeDocument,
     layout: &mut LayoutResult,
     interaction: Interaction,
+    scratch: &mut PaintScratch,
     mut paint_run: impl FnMut(&mut LayoutResult, &[u32], &mut Vec<PaintCommand>),
 ) -> Vec<PaintCommand> {
-    let (ids, chains, any_clip) = clip_chains(document, layout, interaction);
-    let order = std::mem::take(&mut layout.z_order);
+    let (ids, chains, any_clip) = clip_chains(document, layout, interaction, scratch);
+    let full_order = std::mem::take(&mut layout.z_order);
+    let visible = &scratch.visible;
+    let order: Vec<u32> = full_order
+        .iter()
+        .copied()
+        .filter(|&index| visible.get(index as usize).copied().unwrap_or(false))
+        .collect();
     let mut out = Vec::with_capacity(order.len());
     if !any_clip {
         paint_run(layout, &order, &mut out);
@@ -193,7 +278,7 @@ fn build_clipped(
             start = end;
         }
     }
-    layout.z_order = order;
+    layout.z_order = full_order;
     out
 }
 
@@ -236,16 +321,22 @@ pub(crate) fn build_scrolled_paint(
     layout: &mut LayoutResult,
     interaction: Interaction,
 ) -> Vec<PaintCommand> {
-    build_clipped(document, layout, interaction, |layout, nodes, out| {
-        layout.z_order.clear();
-        layout.z_order.extend_from_slice(nodes);
-        out.extend(build_paint_commands_with_scroll(
-            document,
-            layout,
-            interaction,
-            &|i| document.scroll_offset(i),
-        ));
-    })
+    build_clipped(
+        document,
+        layout,
+        interaction,
+        &mut PaintScratch::default(),
+        |layout, nodes, out| {
+            layout.z_order.clear();
+            layout.z_order.extend_from_slice(nodes);
+            out.extend(build_paint_commands_with_scroll(
+                document,
+                layout,
+                interaction,
+                &|i| document.scroll_offset(i),
+            ));
+        },
+    )
 }
 
 /// Per-node paint memo kept across frames by the window. A node's emitted commands are a
@@ -256,6 +347,7 @@ pub(crate) struct PaintNodeCache {
     variables: Vec<Color>,
     /// Boxed: most nodes of a large pooled document are hidden and keep only an empty slot.
     nodes: Vec<Option<Box<NodeEntry>>>,
+    scratch: PaintScratch,
     #[cfg(test)]
     hits: usize,
     #[cfg(test)]
@@ -264,6 +356,7 @@ pub(crate) struct PaintNodeCache {
 
 struct NodeEntry {
     key: NodeKey,
+    style: Style,
     commands: Vec<PaintCommand>,
 }
 
@@ -272,7 +365,6 @@ struct NodeEntry {
 /// nothing and are not memoised. Image nodes are never memoised because their emission reads asset
 /// pixels and revisions.
 struct NodeKey {
-    style: Style,
     rect: Rect,
     content: Rect,
     text: String,
@@ -292,11 +384,10 @@ impl NodeKey {
     fn capture(
         document: &RuntimeDocument,
         layout: &LayoutResult,
-        interaction: Interaction,
+        _interaction: Interaction,
         index: u32,
     ) -> Self {
         Self {
-            style: document.runtime_style(index, interaction),
             rect: node_rect(layout, index),
             content: layout.content_extent(index),
             text: document.text_for(index).to_owned(),
@@ -309,7 +400,7 @@ impl NodeKey {
         &self,
         document: &RuntimeDocument,
         layout: &LayoutResult,
-        interaction: Interaction,
+        _interaction: Interaction,
         index: u32,
     ) -> bool {
         self.blur == document.node_backdrop_blur(index)
@@ -317,7 +408,15 @@ impl NodeKey {
             && self.rect == node_rect(layout, index)
             && self.content == layout.content_extent(index)
             && self.text == document.text_for(index)
-            && self.style == document.runtime_style(index, interaction)
+    }
+
+    fn style_matches(
+        document: &RuntimeDocument,
+        interaction: Interaction,
+        index: u32,
+        cached_style: &Style,
+    ) -> bool {
+        *cached_style == *document.runtime_style_cow(index, interaction)
     }
 }
 
@@ -333,15 +432,10 @@ fn paint_memo(
 ) {
     for &index in nodes {
         let slot = &mut cache.nodes[index as usize];
-        if !document.is_effectively_visible(index) {
-            // Paint skips hidden nodes before resolving anything else: nothing to emit or keep.
-            *slot = None;
-            continue;
-        }
-        if let Some(entry) = slot
-            .as_ref()
-            .filter(|entry| entry.key.matches(document, layout, interaction, index))
-        {
+        if let Some(entry) = slot.as_ref().filter(|entry| {
+            entry.key.matches(document, layout, interaction, index)
+                && NodeKey::style_matches(document, interaction, index, &entry.style)
+        }) {
             out.extend_from_slice(&entry.commands);
             #[cfg(test)]
             {
@@ -353,22 +447,29 @@ fn paint_memo(
         {
             cache.misses += 1;
         }
-        let key = (document.document.nodes[index as usize].kind != NodeKind::Image)
-            .then(|| NodeKey::capture(document, layout, interaction, index));
-        layout.z_order.clear();
-        layout.z_order.push(index);
-        let commands = build_paint_commands_with_scroll(document, layout, interaction, &|i| {
-            document.scroll_offset(i)
-        });
-        match key {
-            Some(key) => {
-                out.extend_from_slice(&commands);
-                *slot = Some(Box::new(NodeEntry { key, commands }));
-            }
-            None => {
-                out.extend(commands);
-                *slot = None;
-            }
+        let is_image = document.document.nodes[index as usize].kind == NodeKind::Image;
+        if !is_image {
+            let key = NodeKey::capture(document, layout, interaction, index);
+            let style = document.runtime_style(index, interaction);
+            layout.z_order.clear();
+            layout.z_order.push(index);
+            let commands = build_paint_commands_with_scroll(document, layout, interaction, &|i| {
+                document.scroll_offset(i)
+            });
+            out.extend_from_slice(&commands);
+            *slot = Some(Box::new(NodeEntry {
+                key,
+                style,
+                commands,
+            }));
+        } else {
+            layout.z_order.clear();
+            layout.z_order.push(index);
+            let commands = build_paint_commands_with_scroll(document, layout, interaction, &|i| {
+                document.scroll_offset(i)
+            });
+            out.extend(commands);
+            *slot = None;
         }
     }
 }
@@ -387,9 +488,23 @@ pub(crate) fn build_scrolled_paint_cached(
         cache.nodes.resize_with(count, || None);
         cache.variables.clone_from(&document.variable_values);
     }
-    build_clipped(document, layout, interaction, |layout, nodes, out| {
-        paint_memo(document, cache, interaction, layout, nodes, out);
-    })
+    let mut scratch = std::mem::take(&mut cache.scratch);
+    let out = build_clipped(
+        document,
+        layout,
+        interaction,
+        &mut scratch,
+        |layout, nodes, out| {
+            paint_memo(document, cache, interaction, layout, nodes, out);
+        },
+    );
+    for (slot, &shown) in cache.nodes.iter_mut().zip(&scratch.visible) {
+        if !shown {
+            *slot = None;
+        }
+    }
+    cache.scratch = scratch;
+    out
 }
 
 #[cfg(test)]
@@ -404,6 +519,29 @@ mod tests {
     /// scroll extent from auto-height content, as the settings page does.
     fn fixture() -> RuntimeDocument {
         fixture_with_height(None)
+    }
+
+    #[test]
+    fn tree_index_keeps_every_subtree_contiguous() {
+        let document = fixture();
+        let mut tree = TreeIndex::default();
+        tree.sync(&document);
+        assert_eq!(tree.preorder.len(), document.document.nodes.len());
+        assert_eq!(tree.preorder[0], document.document.root);
+        for (position, &index) in tree.preorder.iter().enumerate() {
+            let end = tree.subtree_end[position] as usize;
+            assert!(end > position && end <= tree.preorder.len());
+            for &inner in &tree.preorder[position + 1..end] {
+                let mut ancestor = tree.parent[inner as usize];
+                while ancestor != index && ancestor != u32::MAX {
+                    ancestor = tree.parent[ancestor as usize];
+                }
+                assert_eq!(
+                    ancestor, index,
+                    "node {inner} sits inside subtree of {index}"
+                );
+            }
+        }
     }
 
     fn fixture_with_height(height: Option<f32>) -> RuntimeDocument {
