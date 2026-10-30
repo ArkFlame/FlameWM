@@ -18,7 +18,8 @@ use crate::{AssistantError, CancelToken};
 
 pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8642";
 /// Ports probed after the configured URL and the `.env` port: the documented default.
-pub const PROBE_PORTS: [u16; 1] = [8642];
+/// Agent API server first (`hermes gateway`, runs), then the Nous Portal proxy (`hermes proxy start`).
+pub const PROBE_PORTS: [u16; 2] = [8642, 8645];
 /// Header carrying the Hermes session id on the chat-completions route. Kept for
 /// compatibility; runs carry the session in the body as `session_id`.
 pub const SESSION_HEADER: &str = "X-Hermes-Session-Id";
@@ -59,35 +60,61 @@ impl fmt::Debug for HermesConfig {
     }
 }
 
+/// Which Hermes API a reachable address speaks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    /// The agent API server (`platform: hermes-agent`): runs, sessions, tools.
+    Agent,
+    /// The OpenAI-compatible upstream proxy (`hermes proxy start`): chat completions only, no tools.
+    Proxy,
+}
+
 /// Result of `GET /health`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerHealth {
     pub status: String,
     pub platform: Option<String>,
     pub authenticated: Option<bool>,
+    /// Set by the proxy's health body (`"upstream": "Nous Portal"`).
+    pub upstream: Option<String>,
 }
 
 impl ServerHealth {
+    /// The API this address serves, or `None` when it is not a Hermes API at all.
+    pub fn backend(&self) -> Option<Backend> {
+        if self.status != "ok" {
+            return None;
+        }
+        match (self.platform.as_deref(), self.upstream.as_deref()) {
+            (Some("hermes-agent"), _) => Some(Backend::Agent),
+            (None, Some(_)) => Some(Backend::Proxy),
+            _ => None,
+        }
+    }
+
     /// True only for a Hermes agent server that reports ok. Other services on the
     /// probed ports can answer `/health` too, and their run routes do not exist.
     pub fn is_ok(&self) -> bool {
-        self.status == "ok" && self.platform.as_deref() == Some("hermes-agent")
+        self.backend().is_some()
     }
 }
 
 /// One user turn. `system` is sent as the run's `instructions` on every turn.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct TurnRequest<'a> {
     pub user_text: &'a str,
     pub session: Option<&'a str>,
     pub system: &'a str,
     /// Model id from `GET /v1/models` chosen by the user; `None` uses the server default.
     pub model: Option<&'a str>,
+    /// Earlier turns as (`user` | `assistant`, text), oldest first. Only the proxy mode sends
+    /// them, because the proxy keeps no session.
+    pub history: Vec<(String, String)>,
 }
 
 impl<'a> TurnRequest<'a> {
     pub fn new(user_text: &'a str, session: Option<&'a str>) -> Self {
-        Self { user_text, session, system: SHORT_ANSWER_SYSTEM, model: None }
+        Self { user_text, session, system: SHORT_ANSWER_SYSTEM, model: None, history: Vec::new() }
     }
 }
 
@@ -167,7 +194,7 @@ pub fn candidate_urls(configured: Option<&str>, env: &HermesEnv) -> Vec<String> 
     out
 }
 
-/// Returns the first candidate whose `/health` reports ok, with its health.
+/// Returns the first candidate that passes `verify`, with its health.
 pub fn discover(candidates: &[String], api_key: Option<&str>) -> Option<(String, ServerHealth)> {
     candidates.iter().find_map(|url| {
         let config = HermesConfig {
@@ -175,8 +202,10 @@ pub fn discover(candidates: &[String], api_key: Option<&str>) -> Option<(String,
             api_key: api_key.map(str::to_owned),
             ..HermesConfig::default()
         };
-        let health = HermesClient::new(&config).ok()?.health().ok()?;
-        health.is_ok().then(|| (url.clone(), health))
+        let client = HermesClient::new(&config).ok()?;
+        let health = client.health().ok()?;
+        client.verify_health(&health).ok()?;
+        Some((url.clone(), health))
     })
 }
 
@@ -227,14 +256,26 @@ impl HermesClient {
             .map_err(|e| AssistantError::Protocol(format!("bad JSON from {path}: {e}")))
     }
 
-    /// Fails with `NotHermes` unless the target's `/health` reports `platform=hermes-agent`.
-    /// Called before every turn and model listing, so a stub or static server never gets a request.
-    pub fn verify(&self) -> Result<(), AssistantError> {
-        if self.health()?.is_ok() {
-            Ok(())
-        } else {
-            Err(AssistantError::NotHermes { status: None })
+    /// Checks the target is a Hermes API before any turn or listing, so a stub or static
+    /// server never gets a run. Agent: `/health` says `platform=hermes-agent`. Proxy: `/health`
+    /// has `upstream`, the account is logged in, and `/v1/models` answers with JSON `data[].id`.
+    pub fn verify(&self) -> Result<Backend, AssistantError> {
+        let health = self.health()?;
+        self.verify_health(&health)
+    }
+
+    fn verify_health(&self, health: &ServerHealth) -> Result<Backend, AssistantError> {
+        let backend = health.backend().ok_or(AssistantError::NotHermes { status: None })?;
+        if backend == Backend::Proxy {
+            if health.authenticated == Some(false) {
+                return Err(AssistantError::RunFailed("Hermes is not logged in to Nous Portal.".into()));
+            }
+            self.list_models().map_err(|error| match error {
+                AssistantError::Protocol(_) => AssistantError::NotHermes { status: None },
+                other => other,
+            })?;
         }
+        Ok(backend)
     }
 
     /// `GET /health`.
@@ -244,12 +285,17 @@ impl HermesClient {
             status: value.get("status").and_then(Value::as_str).unwrap_or_default().to_owned(),
             platform: value.get("platform").and_then(Value::as_str).map(str::to_owned),
             authenticated: value.get("authenticated").and_then(Value::as_bool),
+            upstream: value.get("upstream").and_then(Value::as_str).map(str::to_owned),
         })
     }
 
     /// `GET /v1/models`: advertised model ids.
     pub fn models(&self) -> Result<Vec<String>, AssistantError> {
         self.verify()?;
+        self.list_models()
+    }
+
+    fn list_models(&self) -> Result<Vec<String>, AssistantError> {
         let value = self.get_json("/v1/models")?;
         Ok(value
             .get("data")
@@ -338,7 +384,9 @@ impl HermesClient {
         if cancel.is_cancelled() {
             return Ok(TurnOutcome::Cancelled { partial: String::new() });
         }
-        self.verify()?;
+        if self.verify()? == Backend::Proxy {
+            return self.chat_turn(req, cancel, sink);
+        }
         let session = req.session.map_or_else(new_session_id, str::to_owned);
         let mut payload = json!({
             "input": req.user_text,
@@ -542,6 +590,83 @@ fn new_session_id() -> String {
 /// Maps an error reply to an error. A JSON `error.message` is used; an HTML page (what a static
 /// or non-Hermes server returns) becomes `NotHermes`; any other body is reduced to one short
 /// plain-text line, so raw markup never reaches the window.
+impl HermesClient {
+    /// One turn through `POST /v1/chat/completions` with `stream: true`. Proxy mode only.
+    fn chat_turn(
+        &self,
+        req: &TurnRequest<'_>,
+        cancel: &CancelToken,
+        sink: &mut dyn FnMut(TurnEvent),
+    ) -> Result<TurnOutcome, AssistantError> {
+        let model = match req.model {
+            Some(model) => model.to_owned(),
+            None => self
+                .list_models()?
+                .into_iter()
+                .next()
+                .ok_or_else(|| AssistantError::RunFailed("Hermes proxy lists no models.".into()))?,
+        };
+        let mut messages = vec![json!({"role": "system", "content": req.system})];
+        messages.extend(req.history.iter().map(|(role, text)| json!({"role": role, "content": text})));
+        messages.push(json!({"role": "user", "content": req.user_text}));
+        let payload = json!({"model": model, "messages": messages, "stream": true}).to_string();
+        sink(TurnEvent::Started { session: None });
+
+        let mut resp = http::send(
+            &self.endpoint,
+            Request {
+                method: "POST",
+                path: "/v1/chat/completions",
+                headers: self.auth_headers(),
+                body: Some(&payload),
+            },
+            cancel,
+            CONNECT_TIMEOUT,
+            STREAM_IDLE,
+        )?;
+        if resp.status != 200 {
+            let bytes = resp.body.read_limited(MAX_ERROR_BODY).unwrap_or_default();
+            return Err(http_error(resp.status, &bytes));
+        }
+        let mut parser = SseParser::default();
+        let mut frames = Vec::new();
+        let mut text = String::new();
+        loop {
+            match resp.body.next_data() {
+                Ok(Some(piece)) => parser.feed(&piece, &mut frames),
+                Ok(None) => break,
+                Err(AssistantError::Cancelled) => return Ok(TurnOutcome::Cancelled { partial: text }),
+                Err(error) => {
+                    return Ok(TurnOutcome::Interrupted {
+                        partial: text,
+                        message: format!("The connection to Hermes dropped: {error}."),
+                    })
+                }
+            }
+            for frame in frames.drain(..) {
+                if frame.trim() == "[DONE]" {
+                    return Ok(TurnOutcome::Completed { text, session: None });
+                }
+                let value: Value = serde_json::from_str(&frame)
+                    .map_err(|e| AssistantError::Protocol(format!("bad stream chunk: {e}")))?;
+                if let Some(message) = value.pointer("/error/message").and_then(Value::as_str) {
+                    return Err(AssistantError::RunFailed(one_line(message, 200)));
+                }
+                if let Some(delta) = value.pointer("/choices/0/delta/content").and_then(Value::as_str) {
+                    if !delta.is_empty() {
+                        text.push_str(delta);
+                        sink(TurnEvent::Delta(delta.to_owned()));
+                    }
+                }
+            }
+        }
+        Ok(TurnOutcome::Interrupted {
+            partial: text,
+            message: "The reply ended before Hermes finished it.".into(),
+        })
+    }
+}
+
 fn http_error(status: u16, body: &[u8]) -> AssistantError {
     if let Some(message) = serde_json::from_slice::<Value>(body)
         .ok()
@@ -803,6 +928,7 @@ mod tests {
             vec![
                 "http://127.0.0.1:8642".to_owned(),
                 "http://127.0.0.1:9001".to_owned(),
+                "http://127.0.0.1:8645".to_owned(),
             ]
         );
     }
@@ -935,5 +1061,101 @@ mod tests {
         client(&url, None).run_turn(&request, &CancelToken::new(), &mut |_| {}).unwrap();
         let seen = server.join().unwrap();
         assert!(seen[1].contains(r#""model":"openai/gpt-x""#), "{}", seen[1]);
+    }
+
+    const PROXY_HEALTH: &str = r#"{"status":"ok","upstream":"Nous Portal","authenticated":true}"#;
+
+    #[test]
+    fn proxy_health_and_models_verify_as_proxy_backend() {
+        let (url, server) = serve(vec![
+            ok_response("", PROXY_HEALTH),
+            ok_response("", r#"{"data":[{"id":"a/b:free"},{"id":"c/d"}]}"#),
+        ]);
+        assert_eq!(client(&url, Some("x")).verify().unwrap(), Backend::Proxy);
+        assert!(server.join().unwrap()[1].starts_with("GET /v1/models "));
+    }
+
+    #[test]
+    fn discover_accepts_a_running_proxy() {
+        let (url, server) = serve(vec![
+            ok_response("", PROXY_HEALTH),
+            ok_response("", r#"{"data":[{"id":"a/b:free"}]}"#),
+        ]);
+        let (found, health) = discover(std::slice::from_ref(&url), Some("x")).unwrap();
+        assert_eq!(found, url);
+        assert_eq!(health.backend(), Some(Backend::Proxy));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn logged_out_proxy_is_not_logged_in_and_not_connected() {
+        let (url, server) = serve(vec![ok_response("", r#"{"status":"ok","upstream":"Nous Portal","authenticated":false}"#)]);
+        let error = client(&url, None).verify().unwrap_err();
+        assert_eq!(crate::connect::explain(&error, &url).starts_with("Hermes is not logged in"), true);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn proxy_models_html_501_is_not_hermes() {
+        let (url, server) = serve(vec![
+            ok_response("", PROXY_HEALTH),
+            status_response("501 Not Implemented", NOT_IMPLEMENTED_HTML),
+        ]);
+        assert_eq!(client(&url, None).verify().unwrap_err(), AssistantError::NotHermes { status: Some(501) });
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn proxy_models_non_json_200_is_not_hermes() {
+        let (url, server) = serve(vec![ok_response("", PROXY_HEALTH), ok_response("", "<html>hi</html>")]);
+        assert_eq!(client(&url, None).verify().unwrap_err(), AssistantError::NotHermes { status: None });
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn proxy_turn_streams_chat_completion_with_history_and_model() {
+        let mut stream = sse_head();
+        stream.extend(sse(&[
+            r#"{"choices":[{"delta":{"content":"Hel"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"lo"}}]}"#,
+            "[DONE]",
+        ]));
+        let (url, server) = serve(vec![
+            ok_response("", PROXY_HEALTH),
+            ok_response("", r#"{"data":[{"id":"a/b:free"}]}"#),
+            vec![stream],
+        ]);
+        let (events, mut sink) = collect();
+        let mut request = TurnRequest::new("now?", None);
+        request.model = Some("a/b:free");
+        request.history = vec![("user".into(), "hi".into()), ("assistant".into(), "yo".into())];
+        let outcome = client(&url, Some("x")).run_turn(&request, &CancelToken::new(), &mut sink).unwrap();
+        assert_eq!(outcome, TurnOutcome::Completed { text: "Hello".into(), session: None });
+        let events = events.lock().unwrap();
+        assert_eq!(events.last(), Some(&TurnEvent::Delta("lo".into())));
+        let seen = server.join().unwrap();
+        assert!(seen[2].starts_with("POST /v1/chat/completions "), "{}", seen[2]);
+        assert!(seen[2].to_lowercase().contains("authorization: bearer x"));
+        assert!(seen[2].contains(r#""model":"a/b:free""#));
+        assert!(seen[2].contains(r#""stream":true"#));
+        assert!(seen[2].contains(r#"{"content":"yo","role":"assistant"}"#), "{}", seen[2]);
+        assert!(seen[2].contains(r#"{"content":"now?","role":"user"}"#));
+        assert!(!seen[2].contains("session_id"));
+    }
+
+    #[test]
+    fn proxy_stream_error_chunk_is_a_run_failure() {
+        let mut stream = sse_head();
+        stream.extend(sse(&[r#"{"error":{"message":"quota exceeded"}}"#]));
+        let (url, server) = serve(vec![
+            ok_response("", PROXY_HEALTH),
+            ok_response("", r#"{"data":[{"id":"a/b:free"}]}"#),
+            vec![stream],
+        ]);
+        let mut request = TurnRequest::new("hi", None);
+        request.model = Some("a/b:free");
+        let error = client(&url, None).run_turn(&request, &CancelToken::new(), &mut |_| {}).unwrap_err();
+        assert_eq!(error, AssistantError::RunFailed("quota exceeded".into()));
+        server.join().unwrap();
     }
 }

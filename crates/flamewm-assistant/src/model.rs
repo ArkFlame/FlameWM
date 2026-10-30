@@ -520,3 +520,44 @@ mod tests {
         assert!(history.rows().len() < SLOTS, "rows must stop at the height budget");
     }
 }
+
+/// Indices of `models` whose id contains `query`, ignoring case. An empty query keeps every id.
+pub fn filter_models(models: &[String], query: &str) -> Vec<usize> {
+    let needle = query.trim().to_lowercase();
+    models
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| needle.is_empty() || id.to_lowercase().contains(&needle))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+#[cfg(test)]
+mod model_filter_tests {
+    use super::filter_models;
+
+    fn ids() -> Vec<String> {
+        ["poolside/laguna:free", "openai/gpt-x", "Meta/Llama:FREE", "a/b-free-plus"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn empty_query_keeps_everything_in_order() {
+        assert_eq!(filter_models(&ids(), ""), vec![0, 1, 2, 3]);
+        assert_eq!(filter_models(&ids(), "   "), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn substring_match_is_case_insensitive() {
+        assert_eq!(filter_models(&ids(), "free"), vec![0, 2, 3]);
+        assert_eq!(filter_models(&ids(), "GPT"), vec![1]);
+        assert_eq!(filter_models(&ids(), "llama:f"), vec![2]);
+    }
+
+    #[test]
+    fn no_match_is_empty() {
+        assert!(filter_models(&ids(), "zzz").is_empty());
+    }
+}

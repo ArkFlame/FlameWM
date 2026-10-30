@@ -52,6 +52,8 @@ use model::{ConnectStep, History, KeyCmd, Row, Screen, SLOTS};
 
 /// Rows in the model picker; longer lists page with prev and next.
 const MODEL_ROWS: usize = 8;
+/// Earlier messages sent with each proxy-mode turn.
+const RECENT_TURNS: usize = 12;
 
 /// Cuts `text` to `max` characters, ending in "..." when it was longer.
 fn fit_chars(text: &str, max: usize) -> String {
@@ -146,6 +148,8 @@ struct Assistant {
     model: Option<String>,
     model_menu: bool,
     model_page: usize,
+    /// Typed filter for the model picker; the keyboard edits it while the menu is open.
+    model_query: String,
     store: ChatStore,
     history: History,
     input: String,
@@ -246,6 +250,7 @@ impl Assistant {
             model: saved_model,
             model_menu: false,
             model_page: 0,
+            model_query: String::new(),
             store,
             history,
             input: String::new(),
@@ -279,11 +284,13 @@ impl Assistant {
         let bus = self.bus.clone();
         thread::spawn(move || {
             let detected = detect(&paths.binary_candidates);
-            let ready = detected.as_ref().and_then(|_| {
+            // A running Hermes API (agent or proxy) counts as connected even when the local
+            // binary is not found: turns only need the HTTP address.
+            let ready = {
                 let env = read_env(&paths.hermes_home);
                 let candidates = candidate_urls(Some(&url), &env);
                 discover(&candidates, env.api_key.as_deref()).map(|(found, _)| found)
-            });
+            };
             bus.send(Msg::Probed(detected, ready));
         });
     }
@@ -293,9 +300,13 @@ impl Assistant {
             Msg::Probed(detected, ready) => {
                 self.probing = false;
                 match detected {
-                    None => {
-                        self.state = transition(&self.state, LifeEvent::Detected(None));
-                    }
+                    None => match ready {
+                        Some(url) => {
+                            self.state = transition(&self.state, LifeEvent::Healthy { version: String::new(), url });
+                            self.load_models();
+                        }
+                        None => self.state = transition(&self.state, LifeEvent::Detected(None)),
+                    },
                     Some(found) => {
                         self.binary = Some(found.binary);
                         let version = found.version;
@@ -460,6 +471,7 @@ impl Assistant {
         }
         let turn = turn_id();
         let session = self.store.session().hermes_session.clone();
+        let history = self.recent_history();
         if !self.save(Role::User, &text, Some(&turn), MsgState::Complete) {
             return;
         }
@@ -476,7 +488,38 @@ impl Assistant {
         let bus = self.bus.clone();
         let cancel = self.cancel.clone();
         let model = self.model.clone();
-        thread::spawn(move || turn_job(&bus, &config, session.as_deref(), model.as_deref(), &text, &cancel));
+        thread::spawn(move || turn_job(&bus, &config, session.as_deref(), model.as_deref(), history, &text, &cancel));
+    }
+
+    /// The last messages on screen as (`user` | `assistant`, text), oldest first. Used by the
+    /// proxy mode, which has no server session to carry the conversation.
+    fn recent_history(&self) -> Vec<(String, String)> {
+        let rows = self.history.rows();
+        let start = rows.len().saturating_sub(RECENT_TURNS);
+        rows[start..]
+            .iter()
+            .filter_map(|row| match row.role {
+                Role::User => Some(("user".to_owned(), row.text.clone())),
+                Role::Assistant => Some(("assistant".to_owned(), row.text.clone())),
+                Role::SystemNote => None,
+            })
+            .collect()
+    }
+
+    /// Models shown in the picker: the ids matching the typed filter, as indices into `models`.
+    fn model_matches(&self) -> Vec<usize> {
+        model::filter_models(&self.models, &self.model_query)
+    }
+
+    /// Adds `text` to the picker filter (or removes the last character) and starts at page 1.
+    fn edit_model_query(&mut self, text: Option<&str>) {
+        match text {
+            Some(text) => self.model_query.push_str(text),
+            None => {
+                self.model_query.pop();
+            }
+        }
+        self.model_page = 0;
     }
 
     /// Lists the server's models on a worker thread. Failure only hides the picker.
@@ -493,13 +536,20 @@ impl Assistant {
 
     fn toggle_model_menu(&mut self) {
         self.model_menu = !self.model_menu;
-        let index = self.model.as_ref().and_then(|m| self.models.iter().position(|x| x == m));
-        self.model_page = index.map_or(0, |i| i / MODEL_ROWS);
+        self.model_query.clear();
+        let matches = self.model_matches();
+        let position = self
+            .model
+            .as_ref()
+            .and_then(|m| matches.iter().position(|&i| self.models[i] == *m));
+        self.model_page = position.map_or(0, |p| p / MODEL_ROWS);
     }
 
-    /// Makes the model at `index` the one used from the next turn on, and saves it.
-    fn select_model(&mut self, index: usize) {
-        let Some(id) = self.models.get(index).cloned() else { return };
+    /// Makes the row `slot` of the current page the model used from the next turn on, and saves it.
+    fn select_model(&mut self, slot: usize) {
+        let matches = self.model_matches();
+        let Some(&index) = matches.get(self.model_page * MODEL_ROWS + slot) else { return };
+        let id = self.models[index].clone();
         self.model = Some(id);
         self.model_menu = false;
         let current = self.store.session().clone();
@@ -843,12 +893,12 @@ impl Assistant {
             "assistant.model-toggle" => self.toggle_model_menu(),
             "assistant.model-prev" => self.model_page = self.model_page.saturating_sub(1),
             "assistant.model-next" => {
-                let last = self.models.len().saturating_sub(1) / MODEL_ROWS;
+                let last = self.model_matches().len().saturating_sub(1) / MODEL_ROWS;
                 self.model_page = (self.model_page + 1).min(last);
             }
             action if action.starts_with("assistant.model.") => {
                 if let Ok(slot) = action["assistant.model.".len()..].parse::<usize>() {
-                    self.select_model(self.model_page * MODEL_ROWS + slot);
+                    self.select_model(slot);
                 }
             }
             "assistant.clear" => self.clear_confirm = true,
@@ -882,6 +932,21 @@ impl Assistant {
         if self.screen() != Screen::Chat {
             if command == KeyCmd::Cancel {
                 self.confirm = false;
+            }
+            return;
+        }
+        if self.model_menu {
+            // The picker owns the keyboard: typing filters it, Escape clears or closes it.
+            match command {
+                KeyCmd::Insert(text) => self.edit_model_query(Some(&text)),
+                KeyCmd::Backspace => self.edit_model_query(None),
+                KeyCmd::Cancel if !self.model_query.is_empty() => {
+                    self.model_query.clear();
+                    self.model_page = 0;
+                }
+                KeyCmd::Cancel => self.model_menu = false,
+                KeyCmd::Submit => self.select_model(0),
+                KeyCmd::Newline | KeyCmd::Ignore => {}
             }
             return;
         }
@@ -940,11 +1005,16 @@ impl Assistant {
         doc.text("model", model_label(self.model.as_deref()))?;
         let open = choice && self.model_menu;
         doc.visible("model-menu", open)?;
-        let pages = self.models.len().div_ceil(MODEL_ROWS).max(1);
+        let matches = self.model_matches();
+        let empty = open && matches.is_empty();
+        doc.visible("model-empty", empty)?;
+        doc.visible("model-hint", open && self.model_query.is_empty())?;
+        doc.text("model-query", self.model_query.clone())?;
+        let pages = matches.len().div_ceil(MODEL_ROWS).max(1);
         doc.text("model-page", format!("{} / {}", self.model_page + 1, pages))?;
         for slot in 0..MODEL_ROWS {
             let index = self.model_page * MODEL_ROWS + slot;
-            let id = self.models.get(index);
+            let id = matches.get(index).map(|&i| &self.models[i]);
             doc.visible(&format!("mrow-{slot}"), open && id.is_some())?;
             if let Some(id) = id {
                 let current = self.model.as_deref() == Some(id.as_str());
@@ -1037,6 +1107,7 @@ fn turn_job(
     config: &HermesConfig,
     session: Option<&str>,
     model: Option<&str>,
+    history: Vec<(String, String)>,
     text: &str,
     cancel: &CancelToken,
 ) {
@@ -1044,6 +1115,7 @@ fn turn_job(
     let result = HermesClient::new(config).and_then(|client| {
         let mut request = TurnRequest::new(text, session);
         request.model = model;
+        request.history = history;
         client.run_turn(&request, cancel, &mut |event| bus.send(Msg::Turn(event)))
     });
     bus.send(Msg::TurnDone(result));
