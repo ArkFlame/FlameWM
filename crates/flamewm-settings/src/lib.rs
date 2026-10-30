@@ -1409,6 +1409,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
             Some(Ok(registry)) => {
                 self.theme_scan = None;
                 self.themes = registry;
+                // The scan thread's decode temporaries stay resident in its malloc arena after it
+                // exits; the registry keeps only the small previews, so trim once here.
+                flamewm_ui_x11::release_free_heap();
                 if let Some((kind, page)) = self.theme_picker {
                     let pages =
                         page_count(self.themes.items(kind).len(), theme_picker::PICKER_SLOTS);
