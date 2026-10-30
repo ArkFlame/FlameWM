@@ -1,0 +1,29 @@
+[package]
+name = "flamewm-assistant"
+autobins = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FlameWM native assistant: a glass chat window over the local Hermes API server"
+
+[dependencies]
+flamewm-api = { path = "../flamewm-api" }
+flamewm-assistant-core = { path = "../flamewm-assistant-core" }
+flamewm-control-core = { path = "../flamewm-control-core" }
+flamewm-control-dbus = { path = "../flamewm-control-dbus" }
+flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
+flamewm-ui-core = { path = "../flamewm-ui-core" }
+flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
+rustix = { workspace = true, features = ["process"] }
+
+[build-dependencies]
+flamewm-render-compiler = { path = "../flamewm-render-compiler" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "flamewm-assistant"
+path = "src/main.rs"

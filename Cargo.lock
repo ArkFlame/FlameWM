@@ -561,6 +561,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-assistant"
+version = "0.1.3"
+dependencies = [
+ "flamewm-api",
+ "flamewm-assistant-core",
+ "flamewm-control-core",
+ "flamewm-control-dbus",
+ "flamewm-dbus-reactor",
+ "flamewm-render-compiler",
+ "flamewm-ui-core",
+ "flamewm-ui-x11",
+ "rustix 1.1.4",
+]
+
+[[package]]
 name = "flamewm-assistant-core"
 version = "0.1.3"
 dependencies = [

@@ -1,0 +1,36 @@
+:root { --accent:#539bff; --text:#f5f5f7; --muted:#a1a1a6; --key:#ffffff1f; --soft:#ffffff14; }
+* { box-sizing:border-box; }
+html { width:100%; height:100%; }
+body { display:flex; flex-direction:column; width:100%; height:100%; margin:0; overflow:hidden; font-size:14px; color:var(--text); }
+button { background:transparent; color:var(--text); cursor:default; border-width:0; padding:0; font-size:13px; }
+
+.screen { width:100%; flex-grow:1; min-height:0; display:flex; flex-direction:column; }
+.center { align-items:center; justify-content:center; }
+.stack { width:300px; display:flex; flex-direction:column; align-items:center; gap:14px; }
+.title { font-size:20px; font-weight:600; color:var(--text); }
+.status, .body-text, .muted { color:var(--muted); font-size:13px; overflow-wrap:break-word; }
+.code { width:100%; padding:10px 12px; border-radius:10px; background-color:var(--soft); color:var(--text); font-size:12px; overflow-wrap:break-word; }
+.row { display:flex; flex-direction:row; gap:10px; }
+.pill-btn { height:36px; padding:0 18px; border-radius:18px; background-color:var(--accent); color:#ffffff; font-size:14px; font-weight:600; display:flex; align-items:center; justify-content:center; }
+.pill-btn.quiet { background-color:var(--key); color:var(--text); }
+
+.chat { padding:0 14px; }
+.list { width:100%; flex-grow:1; min-height:0; display:flex; flex-direction:column; justify-content:flex-end; gap:10px; padding-top:14px; overflow:hidden; }
+.bubble-row { width:100%; display:flex; flex-direction:row; }
+.user-row { justify-content:flex-end; }
+.asst-row { justify-content:flex-start; }
+.bubble { max-width:330px; padding:9px 13px; border-radius:16px; font-size:14px; overflow-wrap:break-word; }
+.user-bubble { background-color:var(--accent); color:#ffffff; }
+.asst-bubble { background-color:var(--soft); color:var(--text); }
+.working { padding:0 6px; font-size:13px; }
+.notice { min-height:18px; color:var(--muted); font-size:12px; padding:0 8px; overflow-wrap:break-word; }
+.composer { width:100%; padding:4px 0 14px 0; }
+.pill { width:100%; min-height:48px; display:flex; flex-direction:row; align-items:center; gap:6px; padding:5px 6px 5px 6px; border-radius:24px; background-color:var(--key); }
+.input-area { flex-grow:1; width:0; min-width:0; min-height:34px; display:flex; flex-direction:row; align-items:center; padding:0 8px; overflow:hidden; }
+.input { font-size:14px; color:var(--text); overflow-wrap:break-word; }
+.placeholder { font-size:14px; color:var(--muted); }
+.caret { width:2px; height:18px; flex-grow:0; background-color:var(--accent); margin-left:1px; }
+.round { width:34px; height:34px; flex-grow:0; border-radius:17px; display:flex; flex-direction:row; align-items:center; justify-content:center; background-color:var(--soft); }
+.round.accent { background-color:var(--accent); }
+.square { width:12px; height:12px; border-radius:2px; background-color:var(--text); }
+.ico { width:18px; height:18px; flex-grow:0; }

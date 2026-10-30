@@ -1,0 +1,66 @@
+<!doctype html><html><head><meta charset="utf-8"><title>FlameWM Assistant</title><link rel="stylesheet" href="assistant.css"></head>
+<body id="assistant">
+  <div id="loading" class="screen center"><span id="loading-text" class="title">Loading...</span></div>
+  <div id="connect" class="screen center">
+    <div class="stack">
+      <span class="title">Hermes</span>
+      <span id="connect-status" class="status">&#8203;</span>
+      <button id="connect-btn" class="pill-btn" data-action="assistant.connect">Connect to hermes</button>
+    </div>
+  </div>
+  <div id="confirm" class="screen center">
+    <div class="stack">
+      <span class="title">Install Hermes?</span>
+      <span class="body-text">This runs the installer in the background. Its output goes to the assistant log.</span>
+      <span id="install-cmd" class="code">&#8203;</span>
+      <div class="row">
+        <button class="pill-btn quiet" data-action="assistant.install-cancel">Cancel</button>
+        <button class="pill-btn" data-action="assistant.install-confirm">Install and connect</button>
+      </div>
+    </div>
+  </div>
+  <div id="chat" class="screen chat">
+    <div id="list" class="list">
+      <div id="u-0" class="bubble-row user-row"><span id="ut-0" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-0" class="bubble-row asst-row"><span id="at-0" class="bubble asst-bubble">&#8203;</span></div>
+      <div id="u-1" class="bubble-row user-row"><span id="ut-1" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-1" class="bubble-row asst-row"><span id="at-1" class="bubble asst-bubble">&#8203;</span></div>
+      <div id="u-2" class="bubble-row user-row"><span id="ut-2" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-2" class="bubble-row asst-row"><span id="at-2" class="bubble asst-bubble">&#8203;</span></div>
+      <div id="u-3" class="bubble-row user-row"><span id="ut-3" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-3" class="bubble-row asst-row"><span id="at-3" class="bubble asst-bubble">&#8203;</span></div>
+      <div id="u-4" class="bubble-row user-row"><span id="ut-4" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-4" class="bubble-row asst-row"><span id="at-4" class="bubble asst-bubble">&#8203;</span></div>
+      <div id="u-5" class="bubble-row user-row"><span id="ut-5" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-5" class="bubble-row asst-row"><span id="at-5" class="bubble asst-bubble">&#8203;</span></div>
+      <div id="u-6" class="bubble-row user-row"><span id="ut-6" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-6" class="bubble-row asst-row"><span id="at-6" class="bubble asst-bubble">&#8203;</span></div>
+      <div id="u-7" class="bubble-row user-row"><span id="ut-7" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-7" class="bubble-row asst-row"><span id="at-7" class="bubble asst-bubble">&#8203;</span></div>
+      <div id="u-8" class="bubble-row user-row"><span id="ut-8" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-8" class="bubble-row asst-row"><span id="at-8" class="bubble asst-bubble">&#8203;</span></div>
+      <div id="u-9" class="bubble-row user-row"><span id="ut-9" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-9" class="bubble-row asst-row"><span id="at-9" class="bubble asst-bubble">&#8203;</span></div>
+      <div id="u-10" class="bubble-row user-row"><span id="ut-10" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-10" class="bubble-row asst-row"><span id="at-10" class="bubble asst-bubble">&#8203;</span></div>
+      <div id="u-11" class="bubble-row user-row"><span id="ut-11" class="bubble user-bubble">&#8203;</span></div>
+      <div id="a-11" class="bubble-row asst-row"><span id="at-11" class="bubble asst-bubble">&#8203;</span></div>
+    </div>
+    <div id="working" class="working"><span class="muted">Working...</span></div>
+    <div id="notice" class="notice">&#8203;</div>
+    <div class="composer">
+      <div class="pill">
+        <button id="record" class="round" data-action="assistant.record"><img class="ico" src="icons/record.svg" width="18" height="18"/></button>
+        <div class="input-area">
+          <span id="placeholder" class="placeholder">Ask Hermes</span>
+          <span id="input" class="input">&#8203;</span>
+          <span class="caret"></span>
+        </div>
+        <button id="tts" class="round" data-action="assistant.tts"><img class="ico" src="icons/speaker.svg" width="18" height="18"/></button>
+        <button id="mic" class="round" data-action="assistant.mic"><img class="ico" src="icons/mic.svg" width="18" height="18"/></button>
+        <button id="send" class="round accent" data-action="assistant.send"><img class="ico" src="icons/send.svg" width="18" height="18"/></button>
+        <button id="stop" class="round" data-action="assistant.stop"><span class="square"></span></button>
+      </div>
+    </div>
+  </div>
+</body></html>
