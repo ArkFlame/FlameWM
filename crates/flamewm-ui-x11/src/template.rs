@@ -28,6 +28,14 @@ pub struct UiDocumentView<'a> {
 }
 
 impl UiDocumentView<'_> {
+    /// Replaces the window's document with `next` (for example a larger pool). The caller must rewrite every
+    /// node it owns afterwards; the window keeps its size, input and drag state.
+    pub fn replace_document(&mut self, next: UiDocument) {
+        let mut next = next.document;
+        next.continue_counters_from(self.document);
+        *self.document = next;
+    }
+
     /// Starts a modal XDND drag of `paths` (absolute local files) from this window. The drag
     /// runs after the current event is handled and blocks the window until it ends.
     /// Requires a window opted in with `UiDocument::with_file_drop_target`.

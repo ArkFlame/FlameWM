@@ -56,6 +56,7 @@ fn test_app() -> App {
         next_id: 1,
         cols: 80,
         grid_rows: 23,
+        pool_tier: 0,
         cell_w: 8.0,
         cell_h: 16.0,
         config: TerminalConfig::default(),
@@ -941,4 +942,20 @@ fn a_translucent_terminal_paints_no_root_node_backdrop() {
         "no node backdrop writes: {:?}",
         doc.node_backdrops
     );
+}
+
+#[test]
+fn pool_tier_grows_at_once_and_shrinks_only_with_a_quarter_spare() {
+    // 80x23 fills tier 0 exactly, but a shrink needs a quarter spare, so the current tier 2 stays.
+    assert_eq!(pool_tier_for(80, 23, 2), 2);
+    // One column more than tier 0 holds: grow to tier 1 at once.
+    assert_eq!(pool_tier_for(81, 23, 0), 1);
+    // 80x23 from tier 1 still has no spare in tier 0, so tier 1 stays.
+    assert_eq!(pool_tier_for(80, 23, 1), 1);
+    // 60x17 fills tier 0 at exactly 75% (18 of 24 rows, 60 of 80 runs): shrink.
+    assert_eq!(pool_tier_for(60, 17, 1), 0);
+    // 80x22 needs 23 of 24 rows: no spare, stay in tier 1.
+    assert_eq!(pool_tier_for(80, 22, 1), 1);
+    // Beyond the largest tier the largest is used, merging extra runs as before.
+    assert_eq!(pool_tier_for(400, 200, 0), 2);
 }

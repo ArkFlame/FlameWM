@@ -258,6 +258,14 @@ impl RuntimeDocument {
         self.revision
     }
 
+    /// Starts this document's change counters past `previous`, so revision-keyed caches cannot
+    /// match a document that replaced `previous` in the same window.
+    pub fn continue_counters_from(&mut self, previous: &Self) {
+        self.revision = previous.revision + 1;
+        self.layout_revision = previous.layout_revision + 1;
+        self.geometry_revision = previous.geometry_revision + 1;
+    }
+
     /// Revision of the layout-relevant document state. Retained layout is valid while this is
     /// unchanged; paint-only mutations leave it alone.
     pub fn layout_revision(&self) -> u64 {

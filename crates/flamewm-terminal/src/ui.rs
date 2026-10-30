@@ -6,7 +6,7 @@ use std::sync::Arc;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
 use crate::app::App;
-use crate::pool::{POOL_ROWS, POOL_RUNS, run_id};
+use crate::pool::{Pool, run_id};
 use crate::view::{Row, Run};
 
 #[derive(Default)]
@@ -54,8 +54,9 @@ impl App {
         self.project_surface(doc)?;
         self.project_font(doc)?;
         let frame = self.frame();
+        let pool = self.pool();
         self.ui
-            .project_rows(doc, (self.cell_w, self.cell_h), &frame)
+            .project_rows(doc, pool, (self.cell_w, self.cell_h), &frame)
     }
 
     fn project_surface(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -84,8 +85,9 @@ impl App {
             return Ok(());
         }
         doc.font_family(font.1.clone())?;
-        for row in 0..POOL_ROWS {
-            for slot in 0..POOL_RUNS {
+        let pool = self.pool();
+        for row in 0..pool.rows {
+            for slot in 0..pool.runs {
                 doc.font_size(&run_id(row, slot), f32::from(self.config.font_size))?;
             }
         }
@@ -100,15 +102,16 @@ impl UiCache {
     pub fn project_rows(
         &mut self,
         doc: &mut impl UiDocumentAccess,
+        pool: Pool,
         cell: (f32, f32),
         frame: &[Row],
     ) -> Result<(), String> {
-        if self.rows.len() != POOL_ROWS {
-            self.rows = vec![None; POOL_ROWS];
+        if self.rows.len() != pool.rows {
+            self.rows = vec![None; pool.rows];
         }
         let empty = Row::from(Vec::new());
-        for row in 0..POOL_ROWS {
-            self.project_row(doc, cell, row, frame.get(row).unwrap_or(&empty))?;
+        for row in 0..pool.rows {
+            self.project_row(doc, pool, cell, row, frame.get(row).unwrap_or(&empty))?;
         }
         Ok(())
     }
@@ -118,6 +121,7 @@ impl UiCache {
     fn project_row(
         &mut self,
         doc: &mut impl UiDocumentAccess,
+        pool: Pool,
         cell: (f32, f32),
         row: usize,
         runs: &Row,
@@ -130,10 +134,10 @@ impl UiCache {
             self.rows[row] = Some(runs.clone());
             return Ok(());
         }
-        let fitted = fit(runs, POOL_RUNS);
+        let fitted = fit(runs, pool.runs);
         // `None` (never written) must write every slot, including the hidden ones.
-        let previous = previous.as_deref().map(|prev| fit(prev, POOL_RUNS));
-        for slot in 0..POOL_RUNS {
+        let previous = previous.as_deref().map(|prev| fit(prev, pool.runs));
+        for slot in 0..pool.runs {
             if previous
                 .as_ref()
                 .is_some_and(|prev| prev.get(slot) == fitted.get(slot))
@@ -205,7 +209,7 @@ mod tests {
     #[test]
     fn rows_within_the_pool_are_unchanged() {
         let runs = vec![run(0, "ab"), run(2, "cd")];
-        assert_eq!(&*fit(&runs, POOL_RUNS), runs.as_slice());
+        assert_eq!(&*fit(&runs, crate::pool::TIERS[2].runs), runs.as_slice());
     }
 
     #[test]
@@ -223,8 +227,8 @@ mod tests {
                 shape: None,
             })
             .collect();
-        assert!(POOL_RUNS >= 120);
-        let fitted = fit(&runs, POOL_RUNS);
+        assert!(crate::pool::TIERS[2].runs >= 120);
+        let fitted = fit(&runs, crate::pool::TIERS[2].runs);
         assert_eq!(&*fitted, runs.as_slice());
     }
 
@@ -370,13 +374,13 @@ mod bench {
         let mut ui = UiCache::default();
         parser.advance(b"hello world\r\nsecond line", &mut screen);
         let rows = cache.update(&mut screen, &palette, &options).to_vec();
-        ui.project_rows(&mut Recorder::default(), (8.0, 16.0), &rows)
+        ui.project_rows(&mut Recorder::default(), crate::pool::TIERS[2], (8.0, 16.0), &rows)
             .expect("project");
 
         parser.advance(b"\x1b[1;3HX", &mut screen);
         let rows = cache.update(&mut screen, &palette, &options).to_vec();
         let mut doc = Recorder::default();
-        ui.project_rows(&mut doc, (8.0, 16.0), &rows)
+        ui.project_rows(&mut doc, crate::pool::TIERS[2], (8.0, 16.0), &rows)
             .expect("project");
         assert_eq!(doc.texts, 1, "one edited run projects one text node");
     }
@@ -398,7 +402,7 @@ mod bench {
 
         parser.advance(&htop_tick(0), &mut screen);
         let mut prev = cache.update(&mut screen, &palette, &options).to_vec();
-        ui.project_rows(&mut Recorder::default(), (8.0, 16.0), &prev)
+        ui.project_rows(&mut Recorder::default(), crate::pool::TIERS[2], (8.0, 16.0), &prev)
             .expect("project");
 
         let (mut dirty, mut rebuilt, mut run_texts, mut texts, mut calls, mut frames) =
@@ -416,7 +420,7 @@ mod bench {
                 .map(|(row, _)| row.len())
                 .sum::<usize>();
             let mut doc = Recorder::default();
-            ui.project_rows(&mut doc, (8.0, 16.0), &rows)
+            ui.project_rows(&mut doc, crate::pool::TIERS[2], (8.0, 16.0), &rows)
                 .expect("project");
             texts += doc.texts;
             calls += doc.calls;

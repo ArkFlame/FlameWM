@@ -17,6 +17,8 @@ pub use pointer::mouse_report;
 pub use tabs::{Hit, Rename};
 
 use self::grid::GridRow;
+use crate::pool::Pool;
+use crate::pool::TIERS;
 use crate::pty::Launch;
 use crate::pty::PtySize;
 use crate::session::Session;
@@ -43,8 +45,28 @@ const CELL_WIDTH_RATIO: f32 = 0.6;
 
 const CELL_HEIGHT_RATIO: f32 = 1.25;
 
-/// Rows the UI pool can show: one tab bar plus grid rows.
-pub const MAX_GRID_ROWS: usize = crate::pool::POOL_ROWS - 1;
+/// Rows the largest UI pool can show: one tab bar plus grid rows.
+pub const MAX_GRID_ROWS: usize = TIERS[TIERS.len() - 1].rows - 1;
+
+/// The smallest pool tier that holds a `cols` x `rows` grid, given the tier the window uses now. A smaller tier
+/// replaces the current one only when the grid leaves a quarter spare, so a resize near a boundary does not flip
+/// the document back and forth. Grids beyond the largest tier use it (their extra runs merge, as before).
+fn pool_tier_for(cols: usize, rows: usize, current: usize) -> usize {
+    let need = rows + 1;
+    // `quarters` = 4 means exactly full; 3 means at most three quarters full.
+    let fits = |pool: Pool, quarters: usize| {
+        need * 4 <= pool.rows * quarters && cols * 4 <= pool.runs * quarters
+    };
+    let smallest = TIERS
+        .iter()
+        .position(|pool| fits(*pool, 4))
+        .unwrap_or(TIERS.len() - 1);
+    if smallest < current && !fits(TIERS[smallest], 3) {
+        current
+    } else {
+        smallest
+    }
+}
 
 /// One shell in a tab: its PTY and screen, plus the view state that belongs to it alone.
 pub struct Pane {
@@ -90,6 +112,8 @@ pub struct App {
     next_id: u64,
     pub cols: usize,
     pub grid_rows: usize,
+    /// Index into `TIERS` of the pool the window's document was built with.
+    pub pool_tier: usize,
     pub cell_w: f32,
     pub cell_h: f32,
     pub config: TerminalConfig,
@@ -144,6 +168,7 @@ impl App {
             next_id: 1,
             cols: 80,
             grid_rows: 24,
+            pool_tier: 0,
             cell_w: 1.0,
             cell_h: 1.0,
             config,
@@ -207,10 +232,15 @@ impl App {
         (cols, rows)
     }
 
+    pub fn pool(&self) -> Pool {
+        TIERS[self.pool_tier]
+    }
+
     pub fn set_window(&mut self, width: u32, height: u32) {
         self.window = (width, height);
         let (cols, rows) = self.grid_for(width, height);
         // A new grid size moves every cell, so a selection no longer describes what is drawn.
+        self.pool_tier = pool_tier_for(cols, rows, self.pool_tier);
         if cols != self.cols || rows != self.grid_rows {
             self.cols = cols;
             self.grid_rows = rows;

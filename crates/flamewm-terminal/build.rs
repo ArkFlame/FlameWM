@@ -26,28 +26,26 @@ fn main() {
     let staged = dest.join("terminal");
     fs::create_dir_all(&staged).expect("stage UI");
     fs::copy(&css, staged.join("terminal.css")).expect("stage CSS");
-    let mut runs = String::new();
-    for row in 0..POOL_ROWS {
-        for slot in 0..POOL_RUNS {
-            // One text child per run node: the runtime rewrites it with set_text, hidden slots keep this placeholder (whitespace-only text is dropped by the compiler).
-            runs.push_str(&format!(
-                "<span id=\"r{row}s{slot}\" class=\"run\">-</span>"
-            ));
+    let template = fs::read_to_string(&template).expect("read terminal.html");
+    for (tier, pool) in TIERS.iter().enumerate() {
+        let mut runs = String::new();
+        for row in 0..pool.rows {
+            for slot in 0..pool.runs {
+                // One text child per run node: the runtime rewrites it with set_text, hidden slots keep this placeholder (whitespace-only text is dropped by the compiler).
+                runs.push_str(&format!(
+                    "<span id=\"r{row}s{slot}\" class=\"run\">-</span>"
+                ));
+            }
         }
+        let html = template.replace("<!--RUNS-->", &runs);
+        let page = staged.join(format!("terminal-{tier}.html"));
+        fs::write(&page, html).expect("stage HTML");
+        let compiled = compile_file(&page, &[], CompileOptions::default())
+            .unwrap_or_else(|error| panic!("FlameWM Terminal UI compile: {error}"));
+        fs::write(
+            dest.join(format!("flamewm-terminal-{tier}.rwr")),
+            encode(&compiled.document).expect("encode UI"),
+        )
+        .expect("write compiled UI");
     }
-    let html = fs::read_to_string(&template)
-        .expect("read terminal.html")
-        .replace("<!--RUNS-->", &runs);
-    fs::write(staged.join("terminal.html"), html).expect("stage HTML");
-    let compiled = compile_file(
-        &staged.join("terminal.html"),
-        &[],
-        CompileOptions::default(),
-    )
-    .unwrap_or_else(|error| panic!("FlameWM Terminal UI compile: {error}"));
-    fs::write(
-        dest.join("flamewm-terminal.rwr"),
-        encode(&compiled.document).expect("encode UI"),
-    )
-    .expect("write compiled UI");
 }

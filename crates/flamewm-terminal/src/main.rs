@@ -25,7 +25,13 @@ use flamewm_terminal::store::{self, TerminalConfig, ThemeStore};
 use flamewm_terminal::theme;
 use flamewm_terminal::wake::{self, ALL_TABS_CLOSED};
 
-const UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-terminal.rwr"));
+/// Compiled UI per pool tier, smallest first (see `pool.rs`). A window keeps the tier its grid needs.
+const UI: [&[u8]; 3] = [
+    include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-terminal-0.rwr")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-terminal-1.rwr")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-terminal-2.rwr")),
+];
+const _: () = assert!(UI.len() == flamewm_terminal::pool::TIERS.len());
 const DEFAULT_WINDOW: (u32, u32) = (880, 540);
 
 pub fn main() {
@@ -149,7 +155,8 @@ fn run() -> Result<(), String> {
     let backdrop = snapshot
         .as_ref()
         .and_then(|s| theme::window_backdrop(s, &packaged_root(), app.config.background_opacity));
-    let mut doc = decode_document(UI)?;
+    let mut tier = app.pool_tier;
+    let mut doc = decode_document(UI[tier])?;
     if let Some(spec) = backdrop {
         doc = doc.with_window_backdrop(spec);
     }
@@ -220,6 +227,12 @@ fn run() -> Result<(), String> {
                 }
                 UiControllerEvent::Resized { width, height } => {
                     app.set_window(*width, *height);
+                    if app.pool_tier != tier {
+                        // A replacement document starts with no projection: every node is written again.
+                        tier = app.pool_tier;
+                        document.replace_document(decode_document(UI[tier])?);
+                        app.ui = Default::default();
+                    }
                     true
                 }
                 UiControllerEvent::Drag(_) => true,

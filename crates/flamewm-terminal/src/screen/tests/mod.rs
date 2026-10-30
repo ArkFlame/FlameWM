@@ -244,7 +244,7 @@ fn block_art_row_stays_within_the_run_pool() {
     let runs = &crate::view::grid_runs(&screen, &palette, &options)[0];
     assert_eq!(runs.len(), 40);
     assert!(
-        runs.len() <= crate::pool::POOL_RUNS,
+        runs.len() <= crate::pool::TIERS[2].runs,
         "a row past the pool would lose its block shapes"
     );
 }
