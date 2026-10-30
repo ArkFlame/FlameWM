@@ -68,6 +68,21 @@ impl SuperTap {
         self.commit()
     }
 
+    /// One raw key press. `start_binding` is true only for a press of the Start-bound Super key
+    /// with no other modifier held; every other press completes or cancels a pending tap.
+    pub(super) fn raw_press(
+        &mut self,
+        start_binding: bool,
+        keycode: u8,
+        time: u32,
+    ) -> SuperTapOutcome {
+        if start_binding {
+            self.press_super(keycode, time)
+        } else {
+            self.press_other()
+        }
+    }
+
     /// Completes a pending tap at the end of an event batch.
     pub(super) fn commit(&mut self) -> SuperTapOutcome {
         if self.candidate.take().is_some() {
@@ -87,4 +102,56 @@ impl SuperTap {
 pub(super) fn is_bare_state(state: u16) -> bool {
     use flamewm_x11_desktop::shortcuts::{MOD_LOCK, MOD_NUM_LOCK};
     state & !(MOD_LOCK | MOD_NUM_LOCK) == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SUPER: u8 = 133;
+    const KEY_A: u8 = 38;
+
+    #[test]
+    fn bare_super_tap_toggles_once_at_batch_end() {
+        let mut tap = SuperTap::default();
+        assert_eq!(tap.raw_press(true, SUPER, 10), SuperTapOutcome::Idle);
+        tap.release_super(SUPER, 20);
+        assert_eq!(tap.commit(), SuperTapOutcome::Toggle);
+        assert_eq!(tap.commit(), SuperTapOutcome::Idle);
+    }
+
+    #[test]
+    fn super_chord_with_another_key_is_not_a_tap() {
+        let mut tap = SuperTap::default();
+        tap.raw_press(true, SUPER, 10);
+        // Super+a: the key press marks the hold as chorded and the Super release is no tap.
+        assert_eq!(tap.raw_press(false, KEY_A, 11), SuperTapOutcome::Idle);
+        tap.release_super(SUPER, 12);
+        assert_eq!(tap.commit(), SuperTapOutcome::Idle);
+    }
+
+    #[test]
+    fn autorepeat_pair_sharing_release_timestamp_never_toggles() {
+        let mut tap = SuperTap::default();
+        tap.raw_press(true, SUPER, 10);
+        tap.release_super(SUPER, 20);
+        assert_eq!(tap.raw_press(true, SUPER, 20), SuperTapOutcome::Idle);
+        assert_eq!(tap.commit(), SuperTapOutcome::Idle);
+    }
+
+    #[test]
+    fn super_press_that_is_not_the_start_binding_never_toggles() {
+        let mut tap = SuperTap::default();
+        assert_eq!(tap.raw_press(false, SUPER, 10), SuperTapOutcome::Idle);
+        tap.release_super(SUPER, 20);
+        assert_eq!(tap.commit(), SuperTapOutcome::Idle);
+    }
+
+    #[test]
+    fn tap_followed_by_another_key_still_toggles() {
+        let mut tap = SuperTap::default();
+        tap.raw_press(true, SUPER, 10);
+        tap.release_super(SUPER, 20);
+        assert_eq!(tap.raw_press(false, KEY_A, 30), SuperTapOutcome::Toggle);
+    }
 }

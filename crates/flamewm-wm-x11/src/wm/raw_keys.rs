@@ -14,7 +14,7 @@ use std::io::IoSlice;
 use super::*;
 use flamewm_api::shortcuts::{
     ACTION_FULLSCREEN_ESCAPE, ACTION_SHOW_DESKTOP, ACTION_SHOW_DESKTOP_CTRL_ALT,
-    ACTION_WINDOW_SWITCH,
+    ACTION_TOGGLE_START_MENU, ACTION_WINDOW_SWITCH,
 };
 use flamewm_x11_desktop::shortcuts::MOD_ALT;
 
@@ -86,6 +86,11 @@ impl ModifierState {
     /// Seeds the held state from a pointer query (the server reports the live modifier mask).
     pub(crate) fn seed(&mut self, state: u16) {
         self.held = state & 0x00ff;
+    }
+
+    /// Modifier bits held before the next record is applied.
+    pub(crate) fn held(&self) -> u16 {
+        self.held
     }
 
     /// Applies one raw record and returns the modifier state after it.
@@ -219,7 +224,20 @@ impl<C: Connection> Wm<'_, C> {
         let Some(key) = parse_raw_key(bytes, raw.opcode) else {
             return Ok(());
         };
+        let before = raw.modifiers.held();
         let state = raw.modifiers.apply(key);
+        // The raw feed owns the bare Start-bound Super tap: no passive grab reports that key.
+        if key.press {
+            let start_binding = is_bare_state(before)
+                && crate::shortcut_action_for_key(key.keycode, before).as_deref()
+                    == Some(ACTION_TOGGLE_START_MENU);
+            let outcome = self.super_tap.raw_press(start_binding, key.keycode, key.time);
+            if outcome == SuperTapOutcome::Toggle {
+                self.changes.start_menu_toggle = true;
+            }
+        } else {
+            self.super_tap.release_super(key.keycode, key.time);
+        }
         let switching = self.switcher.is_open();
         if !key.press {
             // Alt released: the open switcher commits its selection.

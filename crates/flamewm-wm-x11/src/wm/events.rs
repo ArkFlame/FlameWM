@@ -115,13 +115,8 @@ impl<C: Connection> Wm<'_, C> {
             self.claim_escape_chord(event.time, event.detail);
             return self.dispatch_escape_chord(&action);
         }
-        // A bare Start-bound Super press only arms the tap; Start toggles on its
-        // completed release. Any other press completes or cancels a pending tap.
-        if matched.as_deref() == Some(ACTION_TOGGLE_START_MENU) && is_bare_state(state) {
-            let outcome = self.super_tap.press_super(event.detail, event.time);
-            self.apply_super_tap(outcome);
-            return Ok(());
-        }
+        // The bare Start-bound Super tap is driven by the raw feed, so no passive press reaches
+        // here as a tap. Any passive press completes or cancels a pending tap.
         let outcome = self.super_tap.press_other();
         self.apply_super_tap(outcome);
         let Some(action) = matched else {

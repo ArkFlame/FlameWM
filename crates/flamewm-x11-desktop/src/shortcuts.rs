@@ -240,6 +240,26 @@ pub struct Entry {
     pub action: String,
     pub grab: Grab,
     pub optional: bool,
+    /// False for a bare-modifier binding such as `Super`. Such a binding is tracked for lookup
+    /// only: a passive `XGrabKey` on it would swallow the key for every client, so the WM's raw
+    /// input feed reports it instead.
+    pub server_grab: bool,
+}
+
+/// Keysyms of the modifier keys a bare-modifier binding can name.
+const MODIFIER_KEYSYMS: [u32; 12] = [
+    0xffe1, 0xffe2, // Shift_L, Shift_R
+    0xffe3, 0xffe4, // Control_L, Control_R
+    0xffe7, 0xffe8, // Meta_L, Meta_R
+    0xffe9, 0xffea, // Alt_L, Alt_R
+    0xffeb, 0xffec, // Super_L, Super_R
+    0xffed, 0xffee, // Hyper_L, Hyper_R
+];
+
+/// True for a chord that is one modifier key with no other key and no modifier bits.
+#[must_use]
+pub fn is_modifier_only_chord(chord: KeyChord) -> bool {
+    chord.modifiers == 0 && MODIFIER_KEYSYMS.contains(&chord.keysym)
 }
 
 /// XF86 media keys are optional: another client or desktop may already own
@@ -291,6 +311,7 @@ pub fn resolve(
                     modifiers: chord.modifiers | variant,
                 },
                 optional: is_optional_keysym(chord.keysym),
+                server_grab: !is_modifier_only_chord(chord),
             });
         }
     }
@@ -353,13 +374,17 @@ impl ShortcutGrabs {
         let next = self.staged.take().ok_or_else(|| {
             FlameError::new(ErrorCode::InvalidArgument, "no shortcut set is staged")
         })?;
-        for entry in &self.active {
+        for entry in self.active.iter().filter(|entry| entry.server_grab) {
             backend.ungrab(entry.grab);
         }
         let mut granted: Vec<Entry> = Vec::new();
         let mut skipped: BTreeSet<String> = BTreeSet::new();
         for entry in next {
             if skipped.contains(&entry.action) {
+                continue;
+            }
+            if !entry.server_grab {
+                granted.push(entry);
                 continue;
             }
             match backend.grab(entry.grab) {
@@ -372,14 +397,14 @@ impl ShortcutGrabs {
                     // A binding is all-or-nothing across its NumLock/CapsLock variants.
                     let (dropped, kept): (Vec<_>, Vec<_>) =
                         granted.into_iter().partition(|g| g.action == entry.action);
-                    for dropped_entry in dropped {
+                    for dropped_entry in dropped.iter().filter(|g| g.server_grab) {
                         backend.ungrab(dropped_entry.grab);
                     }
                     granted = kept;
                     skipped.insert(entry.action);
                 }
                 Err(error) => {
-                    for granted_entry in granted {
+                    for granted_entry in granted.iter().filter(|g| g.server_grab) {
                         backend.ungrab(granted_entry.grab);
                     }
                     let restored = self.regrab_active(backend);
@@ -424,7 +449,7 @@ impl ShortcutGrabs {
 
     fn regrab_active(&self, backend: &mut dyn GrabBackend) -> FlameResult<()> {
         let mut failure: Option<FlameError> = None;
-        for entry in &self.active {
+        for entry in self.active.iter().filter(|entry| entry.server_grab) {
             if let Err(error) = backend.grab(entry.grab) {
                 failure.get_or_insert(error);
             }
@@ -598,6 +623,31 @@ mod tests {
             .prepare(&desired(pairs), &FakeLookup::standard())
             .unwrap();
         grabs.commit(backend).unwrap();
+    }
+
+    #[test]
+    fn bare_modifier_binding_is_tracked_but_never_server_grabbed() {
+        let mut grabs = ShortcutGrabs::new();
+        let mut backend = FakeBackend::default();
+        install(
+            &mut grabs,
+            &mut backend,
+            &[("Start", "Super"), ("Other", "Super+a")],
+        );
+        // Super_L (133) resolves for lookup but takes no XGrabKey; Super+a still does.
+        assert_eq!(grabs.action_for_key(133, 0), Some("Start"));
+        assert!(backend.held.iter().all(|grab| grab.keycode != 133));
+        assert!(backend.held.contains(&base_grab(38, MOD_SUPER)));
+        assert_eq!(backend.grab_calls, 4);
+    }
+
+    #[test]
+    fn modifier_only_chords_are_detected_and_chords_with_a_key_are_not() {
+        let bare = |binding: &str| parse_binding(binding).unwrap();
+        assert!(is_modifier_only_chord(bare("Super")));
+        assert!(is_modifier_only_chord(bare("Ctrl")));
+        assert!(!is_modifier_only_chord(bare("Super+a")));
+        assert!(!is_modifier_only_chord(bare("Ctrl+Alt+Left")));
     }
 
     #[test]
