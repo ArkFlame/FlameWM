@@ -815,6 +815,29 @@ mod tests {
         server.join().unwrap();
     }
 
+    /// Live check against a real Hermes API server. Run with `--ignored` and the variables set:
+    /// `FLAMEWM_HERMES_LIVE_URL` and `FLAMEWM_HERMES_LIVE_KEY`. Expects the run to reach the server
+    /// and end as a failed run (no provider credentials on a scratch home), which proves the wiring.
+    #[test]
+    #[ignore = "needs a live Hermes API server; see FLAMEWM_HERMES_LIVE_URL"]
+    fn live_agent_run_reaches_the_server() {
+        let url = std::env::var("FLAMEWM_HERMES_LIVE_URL").expect("FLAMEWM_HERMES_LIVE_URL");
+        let key = std::env::var("FLAMEWM_HERMES_LIVE_KEY").ok();
+        let c = HermesClient::new(&HermesConfig {
+            base_url: url,
+            api_key: key,
+            ..HermesConfig::default()
+        })
+        .unwrap();
+        assert_eq!(c.verify().unwrap(), Backend::Agent);
+        let (_events, mut sink) = collect();
+        let result = c.run_turn(&TurnRequest::new("Say ok.", None), &CancelToken::new(), &mut sink);
+        match result {
+            Ok(outcome) => println!("live outcome: {outcome:?}"),
+            Err(error) => println!("live error: {error}"),
+        }
+    }
+
     #[test]
     fn new_session_is_generated_when_none_given() {
         let (url, server) = serve(vec![healthy(), accepted("run_2"), vec![{

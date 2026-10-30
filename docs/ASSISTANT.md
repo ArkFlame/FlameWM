@@ -30,3 +30,22 @@ Evidence from read-only source inspection and probes on 2026-10-30. Hermes v0.22
 - The real agent API server (8642) was not run or probed.
 - No `/v1/runs` turn was run against the real Hermes.
 - The `hermes proxy` start and stop lifecycle was not exercised.
+
+## Connect flow (agent first)
+
+- Discovery probes 8642 then 8645 and prefers the agent API server over the proxy.
+- Hermes installed and API server off or keyless: one confirm, "Enable the Hermes API server?". It backs up `~/.hermes/.env`, sets `API_SERVER_ENABLED=true` and a generated key, and restarts a running gateway in the same step.
+- Installed means the binary file exists. A failed `--version` probe never means "not installed". Candidates: `~/.local/bin/hermes`, `~/.hermes/hermes-agent/.hermes/bin/hermes`, `hermes` on PATH.
+- Proxy mode is labelled "Model only, no tools".
+
+## Agent run events (`POST /v1/runs`, `GET /v1/runs/{id}/events`)
+
+Source: `gateway/platforms/api_server_runs.py`. Event names: `run.started`, `message.delta` (`delta`), `tool.started` (`tool`, `preview`), `tool.completed` (`tool`, `error`), `approval.request` (`choices`, `request_id`), `run.completed`, `run.failed` (`error`), `run.cancelled`, `run.interrupted`. Approval resolves with `POST /v1/runs/{id}/approval` and `choice` once, session, always or deny. The app still auto-denies approvals and shows a notice. Approve and Deny buttons are not implemented.
+
+## Live evidence (scratch home, real `hermes gateway run`)
+
+- `HERMES_HOME` set to a scratch dir, `API_SERVER_PORT=18642`, no provider credentials.
+- `GET /health`: 200 `{"status":"ok","platform":"hermes-agent","version":"0.22.5"}`.
+- `POST /v1/runs` (fresh `session_id`, `"Say ok."`): 202 `started`. Events: `run.failed` with "not connected to any AI provider". The run is not a success.
+- `cargo test -p flamewm-assistant-core live_agent_run -- --ignored`, with the scratch URL and key: exit 0, the error reaches the client.
+- Not verified: a successful agent turn (needs a provider), tool events, approval, the app window against the scratch server, and the real `~/.hermes` gateway.
