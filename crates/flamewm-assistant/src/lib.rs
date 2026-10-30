@@ -7,6 +7,7 @@
 
 mod instance;
 mod model;
+pub mod osd;
 
 use std::cell::RefCell;
 use std::env;

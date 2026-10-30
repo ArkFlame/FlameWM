@@ -23,6 +23,7 @@ DOCUMENTS = {
     "ui/settings.html": ("crates/flamewm-settings/src", ["ui/settings.css"]),
     "ui/desktop/index.html": ("crates/flamewm-desktop/src", ["ui/desktop/desktop.css"]),
     "ui/shell/index.html": (None, ["ui/shell/flamewm.css"]),
+    "ui/assistant/osd.html": ("crates/flamewm-assistant/src", ["ui/assistant/osd.css"]),
     "ui/index.html": (None, ["ui/flamewm.css"]),
 }
 
