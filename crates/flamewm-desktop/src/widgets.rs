@@ -101,6 +101,16 @@ struct RingKey {
     track: Rgb,
 }
 
+/// Inputs of the last history or network graph image written for a slot. An unchanged key
+/// skips the per-tick pixel rebuild and the image upload that would redraw the document.
+#[derive(Debug, Clone, PartialEq)]
+struct GraphKey {
+    prefix: &'static str,
+    width: u32,
+    height: u32,
+    series: Vec<(Vec<u8>, Rgb)>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct FaceKey {
     size: u32,
@@ -245,6 +255,7 @@ pub(crate) struct WidgetState {
     wake: WakeDeadline,
     due: Option<Instant>,
     rings: [Option<RingKey>; MAX_WIDGETS],
+    graphs: [Option<GraphKey>; MAX_WIDGETS],
     faces: [Option<FaceKey>; MAX_WIDGETS],
     username: String,
     hostname: String,
@@ -265,6 +276,7 @@ impl WidgetState {
             wake: WakeDeadline::default(),
             due: None,
             rings: [None; MAX_WIDGETS],
+            graphs: std::array::from_fn(|_| None),
             faces: [None; MAX_WIDGETS],
             username: std::env::var("USER")
                 .ok()
@@ -770,6 +782,7 @@ pub(crate) fn sync_widgets(
         let Some(widget) = state.widgets.store.widgets().get(slot).cloned() else {
             document.visible(&id, false)?;
             state.widgets.rings[slot] = None;
+            state.widgets.graphs[slot] = None;
             state.widgets.faces[slot] = None;
             continue;
         };
@@ -834,8 +847,22 @@ pub(crate) fn sync_widgets(
             WidgetKind::Media => sync_media(document, &id, &widget, &state.widgets.media, accent)?,
             WidgetKind::Weather => sync_weather(document, &id, &widget, &state.weather, accent)?,
             WidgetKind::Calendar => sync_calendar(document, &id, &widget, time, accent)?,
-            WidgetKind::History => sync_history(document, state, slot, &widget)?,
-            WidgetKind::Network => sync_network(document, state, slot, &widget)?,
+            WidgetKind::History => sync_history(
+                document,
+                &mut state.widgets.graphs[slot],
+                &state.widgets.samples,
+                accent,
+                slot,
+                &widget,
+            )?,
+            WidgetKind::Network => sync_network(
+                document,
+                &mut state.widgets.graphs[slot],
+                &state.widgets.samples,
+                accent,
+                slot,
+                &widget,
+            )?,
             WidgetKind::Custom => {
                 if let Some(buffer) = editing {
                     document.text(
@@ -1104,28 +1131,30 @@ pub(crate) fn history_pixels(width: u32, height: u32, series: &[(&VecDeque<u8>, 
 
 fn sync_history(
     document: &mut impl UiDocumentAccess,
-    state: &DesktopState,
+    graph: &mut Option<GraphKey>,
+    samples: &Samples,
+    accent: Rgb,
     slot: usize,
     widget: &Widget,
 ) -> Result<(), String> {
-    let samples = &state.widgets.samples;
     let mut series: Vec<(&VecDeque<u8>, Rgb)> = Vec::with_capacity(2);
     if widget.flag("showMemory") {
         series.push((&samples.memory_history, widget.color("memoryColor")));
     }
     if widget.flag("showCpu") {
-        series.push((&samples.cpu_history, widget.color_or_accent("cpuColor", projection_accent(state))));
+        series.push((&samples.cpu_history, widget.color_or_accent("cpuColor", accent)));
     }
-    sync_graph(document, slot, widget, "history", &series)
+    sync_graph(document, graph, slot, widget, "history", &series)
 }
 
 fn sync_network(
     document: &mut impl UiDocumentAccess,
-    state: &DesktopState,
+    graph: &mut Option<GraphKey>,
+    samples: &Samples,
+    accent: Rgb,
     slot: usize,
     widget: &Widget,
 ) -> Result<(), String> {
-    let samples = &state.widgets.samples;
     let rx = scale_rates(&samples.net_rx_history);
     let tx = scale_rates(&samples.net_tx_history);
     let mut series: Vec<(&VecDeque<u8>, Rgb)> = Vec::with_capacity(2);
@@ -1133,23 +1162,37 @@ fn sync_network(
         series.push((&tx, widget.color("txColor")));
     }
     if widget.flag("showRx") {
-        series.push((&rx, widget.color_or_accent("rxColor", projection_accent(state))));
+        series.push((&rx, widget.color_or_accent("rxColor", accent)));
     }
-    sync_graph(document, slot, widget, "network", &series)
+    sync_graph(document, graph, slot, widget, "network", &series)
 }
 
 /// Shared sparkline path: sizes `widget-N-<prefix>-image` to the card and draws `series`.
+/// The image is rebuilt only when its size, colours or samples differ from `graph`.
 fn sync_graph(
     document: &mut impl UiDocumentAccess,
+    graph: &mut Option<GraphKey>,
     slot: usize,
     widget: &Widget,
-    prefix: &str,
+    prefix: &'static str,
     series: &[(&VecDeque<u8>, Rgb)],
 ) -> Result<(), String> {
     let id = format!("widget-{}-{prefix}-image", slot + 1);
     let width = (widget.rect.width as f32 - WIDGET_PADDING * 2.0).max(2.0).floor() as u32;
     let height = (widget.rect.height as f32 - WIDGET_PADDING * 2.0).max(2.0).floor() as u32;
     document.size(&id, width as f32, height as f32)?;
+    let key = GraphKey {
+        prefix,
+        width,
+        height,
+        series: series
+            .iter()
+            .map(|(values, color)| (values.iter().copied().collect(), *color))
+            .collect(),
+    };
+    if graph.as_ref() == Some(&key) {
+        return Ok(());
+    }
     document.image_rgba8(
         &id,
         RuntimeImage {
@@ -1158,7 +1201,9 @@ fn sync_graph(
             height,
             pixels: history_pixels(width, height, series),
         },
-    )
+    )?;
+    *graph = Some(key);
+    Ok(())
 }
 
 const MONTH_NAMES: [&str; 12] = [
@@ -2284,6 +2329,33 @@ mod tests {
         assert!(dragged_layer(false).z_index() > UiLayer::Content.z_index());
         assert!(dragged_layer(false).z_index() < UiLayer::Overlay.z_index());
         assert_eq!(dragged_layer(true), UiLayer::Content);
+    }
+
+    #[test]
+    fn graph_image_is_rebuilt_only_when_its_inputs_change() {
+        use flamewm_ui_x11::test_support::RecordingUiDoc;
+        let mut widget = Widget::new(1, WidgetKind::History, Point::new(0, 0));
+        widget.rect = Rect::new(0, 0, 300, 160);
+        let accent = Rgb { red: 9, green: 9, blue: 9 };
+        let mut samples = Samples::default();
+        samples.cpu_history = VecDeque::from(vec![10, 20, 30]);
+        let mut graph = None;
+        let mut doc = RecordingUiDoc::default();
+        sync_history(&mut doc, &mut graph, &samples, accent, 0, &widget).expect("first");
+        assert!(doc.images.contains_key("widget-1-history-image"));
+        // Unchanged samples and size: no image is rebuilt or uploaded.
+        doc.images.clear();
+        sync_history(&mut doc, &mut graph, &samples, accent, 0, &widget).expect("same");
+        assert!(doc.images.is_empty());
+        // A new sample scrolls the graph, so the image is uploaded again.
+        samples.cpu_history.push_back(40);
+        sync_history(&mut doc, &mut graph, &samples, accent, 0, &widget).expect("changed");
+        assert!(doc.images.contains_key("widget-1-history-image"));
+        // Resizing the card changes the key as well.
+        doc.images.clear();
+        widget.rect = Rect::new(0, 0, 320, 160);
+        sync_history(&mut doc, &mut graph, &samples, accent, 0, &widget).expect("resized");
+        assert!(doc.images.contains_key("widget-1-history-image"));
     }
 
     #[test]
