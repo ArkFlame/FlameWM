@@ -377,6 +377,9 @@ fn isolated_leaf_parent(
     Some(parent)
 }
 
+/// Node and available-size bits -> measured size.
+type MeasureMemo = crate::hash::FastMap<(u32, u32, u32), (f32, f32)>;
+
 struct Engine<'a> {
     document: &'a RuntimeDocument,
     interaction: InteractionState,
@@ -384,7 +387,7 @@ struct Engine<'a> {
     /// `measure_node` results for this pass, keyed by node and the exact available size bits.
     /// Measuring reads only the document, so a node measured twice under one constraint (by its
     /// parent's measure and again by its own layout) returns the stored size.
-    measures: std::cell::RefCell<crate::hash::FastMap<(u32, u32, u32), (f32, f32)>>,
+    measures: std::cell::RefCell<MeasureMemo>,
 }
 
 impl<'a> Engine<'a> {
