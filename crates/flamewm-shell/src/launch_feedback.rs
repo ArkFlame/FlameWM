@@ -17,7 +17,11 @@ use flamewm_ui_x11::{
 };
 
 const ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-launch-feedback.rwr"));
-const POLL_ACTIVE: Duration = Duration::from_millis(50);
+/// Pointer query cadence while the pointer moved recently (the badge must follow it).
+const POLL_MOVING: Duration = Duration::from_millis(50);
+/// Pointer query cadence once the pointer has been still for [`MOTION_WINDOW`].
+const POLL_STILL: Duration = Duration::from_millis(250);
+const MOTION_WINDOW: Duration = Duration::from_secs(1);
 const BASE_ICON: i32 = 16;
 const BASE_OFFSET: i32 = 13;
 
@@ -33,7 +37,19 @@ pub struct LaunchFeedback {
     loader_root: PathBuf,
     icon_theme: String,
     last_poll: Option<Instant>,
+    last_pointer: Option<(i32, i32)>,
+    last_motion: Option<Instant>,
     indicator_frame: Option<usize>,
+}
+
+/// Pure cadence rule: fast while the pointer moved within [`MOTION_WINDOW`], slow once still.
+#[must_use]
+fn poll_interval(since_motion: Duration) -> Duration {
+    if since_motion < MOTION_WINDOW {
+        POLL_MOVING
+    } else {
+        POLL_STILL
+    }
 }
 
 impl LaunchFeedback {
@@ -50,6 +66,8 @@ impl LaunchFeedback {
             loader_root,
             icon_theme: String::new(),
             last_poll: None,
+            last_pointer: None,
+            last_motion: None,
             indicator_frame: None,
         })
     }
@@ -136,9 +154,13 @@ impl LaunchFeedback {
             // A SILENT launch still needs its expiry deadline, without pointer polling.
             return Ok(self.sequences.next_deadline());
         }
+        let since_motion = self
+            .last_motion
+            .map_or(Duration::ZERO, |at| now.saturating_duration_since(at));
+        let interval = poll_interval(since_motion);
         let should_poll = self
             .last_poll
-            .is_none_or(|last| now.saturating_duration_since(last) >= POLL_ACTIVE);
+            .is_none_or(|last| now.saturating_duration_since(last) >= interval);
         let icon_theme = settings
             .and_then(|s| s.values.get("iconTheme"))
             .and_then(|v| {
@@ -159,12 +181,17 @@ impl LaunchFeedback {
         }
         // Bounded active-only pointer query; XFixes cursor notifications do not report motion.
         if !should_poll && self.requested.is_some() && self.painted.is_some() {
-            return Ok(Some(now + POLL_ACTIVE));
+            return Ok(Some(now + interval));
         }
         let Some((px, py)) = self.observer.pointer_position() else {
             self.hide(runtime)?;
             return Ok(self.sequences.next_deadline());
         };
+        let moved = self.last_pointer != Some((px, py));
+        if moved || self.last_motion.is_none() {
+            self.last_motion = Some(now);
+        }
+        self.last_pointer = Some((px, py));
         let output = output_at(displays, px, py);
         let scale = output
             .map_or(100, |o| u32::from(o.shell_scale_percent))
@@ -315,12 +342,12 @@ impl LaunchFeedback {
             runtime.show(surface)?;
             self.visible = true;
         }
-        if should_poll || icon_ready || !was_visible {
+        if moved || icon_ready || !was_visible {
             runtime.redraw(surface)?;
         }
         if self.painted != self.requested || should_poll {
             self.last_poll = Some(now);
-            return Ok(Some(now + POLL_ACTIVE));
+            return Ok(Some(now + interval));
         }
         Ok(self.sequences.next_deadline())
     }
@@ -357,6 +384,8 @@ impl LaunchFeedback {
             self.requested = None;
             self.painted = None;
             self.last_poll = None;
+            self.last_pointer = None;
+            self.last_motion = None;
             // The existing icon resolver runs on a dedicated worker. Dropping
             // it when the last launch ends closes the queue and terminates
             // that thread instead of retaining a needless idle worker.
@@ -563,5 +592,13 @@ mod tests {
             (-1890, -70)
         );
         assert_eq!(badge_position(-5, 970, 24, 150, Some(output)), (-49, 926));
+    }
+
+    #[test]
+    fn pointer_cadence_is_fast_only_while_moving() {
+        assert_eq!(poll_interval(Duration::ZERO), POLL_MOVING);
+        assert_eq!(poll_interval(MOTION_WINDOW - Duration::from_millis(1)), POLL_MOVING);
+        assert_eq!(poll_interval(MOTION_WINDOW), POLL_STILL);
+        assert_eq!(poll_interval(Duration::from_secs(14)), POLL_STILL);
     }
 }

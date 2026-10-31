@@ -17,8 +17,9 @@ use crate::weather_provider::{CurlFetcher, OpenMeteo};
 
 /// Minimum spacing between periodic weather fetches (opening the popup always fetches).
 pub const WEATHER_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
-/// Loop cadence while a fetch is in flight; bounded by the curl timeout.
-pub const WEATHER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Loop cadence while a fetch is in flight; bounded by the curl timeout. A fetch takes seconds,
+/// so half a second keeps the wake rate low without a visible delay on the popup.
+pub const WEATHER_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 type WeatherResult = Result<flamewm_shell_core::weather::WeatherSnapshot, WeatherError>;
 

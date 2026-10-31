@@ -310,19 +310,12 @@ fn execute() -> Result<(), String> {
     };
     drop(total_guard);
     let clock_due = Arc::new(AtomicBool::new(false));
-    let plan = flamewm_shell_core::clock_timer_plan("%H:%M", SystemWallClock.now_epoch_ms());
-    let initial_due = Arc::clone(&clock_due);
+    // One self-realigning wall-clock timer: fires only at minute boundaries, so the
+    // displayed "%H:%M" changes on the tick it is due (no free-running second timer).
+    let minute_due = Arc::clone(&clock_due);
     reactor
-        .register_timer(
-            Duration::from_millis(plan.initial_delay_ms),
-            false,
-            move || initial_due.store(true, Ordering::Release),
-        )
-        .map_err(|error| format!("register clock alignment timer: {error}"))?;
-    let repeat_due = Arc::clone(&clock_due);
-    reactor
-        .register_timer(Duration::from_millis(plan.interval_ms), true, move || {
-            repeat_due.store(true, Ordering::Release);
+        .register_wall_clock(SystemWallClock, false, move || {
+            minute_due.store(true, Ordering::Release);
         })
         .map_err(|error| format!("register clock timer: {error}"))?;
     reactor
