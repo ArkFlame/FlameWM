@@ -1,0 +1,17 @@
+[package]
+name = "flamewm-archiver"
+autobins = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FlameWM archive core: list, extract, create and edit zip and tar archives with path-safety, progress and cancel"
+
+[dependencies]
+flate2 = "=1.1.10"
+tar = "=0.4.46"
+zip = { version = "=9.2.0", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true
