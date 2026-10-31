@@ -102,7 +102,7 @@ impl<E: EnginePorts> PlatformHost<E> {
         Ok(())
     }
 
-    /// The legacy single-output settings key is `default`. XWayland's RandR output is
+    /// The legacy single-output settings key is `default`. `XWayland`'s `RandR` output is
     /// named `wayland-0`; resolve this alias only when exactly one output is connected.
     /// Never guess an output on multi-monitor systems.
     fn persisted_output_id(&self, name: &str) -> OutputId {
