@@ -110,20 +110,8 @@ mod tests {
         "screensaver-display-off-value",
         "cursor-theme-value",
         "theme-install-status",
-        "theme-icon-page-label",
-        "theme-cursor-page-label",
-        "theme-icon-name-0",
-        "theme-icon-name-1",
-        "theme-icon-name-2",
-        "theme-icon-name-3",
-        "theme-icon-name-4",
-        "theme-icon-name-5",
-        "theme-cursor-name-0",
-        "theme-cursor-name-1",
-        "theme-cursor-name-2",
-        "theme-cursor-name-3",
-        "theme-cursor-name-4",
-        "theme-cursor-name-5",
+        "theme-icon-count",
+        "theme-cursor-count",
         "accent-opacity-value",
         "animation-speed-value",
         "lock-background-image-value",
@@ -487,19 +475,29 @@ mod tests {
     #[test]
     fn theme_picker_preview_and_row_targets_are_compiled() {
         let mut document = document().expect("settings artifact must decode");
-        for node in ["theme-icon", "theme-cursor"] {
-            for slot in 0..6 {
-                document
-                    .image_rgba8(
-                        &format!("{node}-preview-{slot}"),
-                        flamewm_ui_x11::RuntimeImage {
-                            source: "fixture".to_owned(),
-                            width: 1,
-                            height: 1,
-                            pixels: vec![0, 0, 0, 255],
-                        },
-                    )
-                    .unwrap_or_else(|error| panic!("compiled {node} preview {slot}: {error}"));
+        for (kind, node) in [
+            (crate::theme_picker::PickerKind::Icon, "theme-icon"),
+            (crate::theme_picker::PickerKind::Cursor, "theme-cursor"),
+        ] {
+            let images = match kind {
+                crate::theme_picker::PickerKind::Icon => crate::theme_picker::ICON_ROW_IMAGES,
+                crate::theme_picker::PickerKind::Cursor => 1,
+            };
+            for slot in 0..crate::theme_picker::THEME_ROW_SLOTS {
+                for index in 0..images {
+                    let id = crate::theme_picker::preview_node(kind, slot, index);
+                    document
+                        .image_rgba8(
+                            &id,
+                            flamewm_ui_x11::RuntimeImage {
+                                source: "fixture".to_owned(),
+                                width: 1,
+                                height: 1,
+                                pixels: vec![0, 0, 0, 255],
+                            },
+                        )
+                        .unwrap_or_else(|error| panic!("compiled {node} preview {id}: {error}"));
+                }
                 document
                     .visible(&format!("{node}-row-{slot}"), true)
                     .unwrap_or_else(|error| panic!("compiled {node} row {slot}: {error}"));

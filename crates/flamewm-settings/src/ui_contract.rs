@@ -13,6 +13,8 @@ use flamewm_api::shortcuts::ShortcutSnapshot;
 use flamewm_api::{ModeId, OutputId, Rect, Size};
 use flamewm_control_core::{ControlError, ControlRequest, ControlResponse};
 use flamewm_settings_core::{ControlTransport, DISPLAY_MODE_SLOTS};
+
+use crate::theme_picker::{ICON_ROW_IMAGES, PickerKind, THEME_ROW_SLOTS, preview_node};
 use flamewm_ui_core::style::UiLayer;
 use flamewm_ui_x11::{
     Overflow, RuntimeImage, UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess,
@@ -301,6 +303,20 @@ fn every_static_node_the_controller_writes_is_declared_in_markup() {
     for slot in 0..DISPLAY_MODE_SLOTS {
         let id = format!("display-mode-slot-{slot}");
         assert!(ids.contains(&id), "missing mode slot node {id}");
+    }
+    for kind in [PickerKind::Icon, PickerKind::Cursor] {
+        for slot in 0..THEME_ROW_SLOTS {
+            for node in [
+                format!("{}-row-{slot}", kind.node()),
+                format!("{}-name-{slot}", kind.node()),
+            ] {
+                assert!(ids.contains(&node), "missing theme row node {node}");
+            }
+            for index in 0..ICON_ROW_IMAGES {
+                let id = preview_node(kind, slot, index);
+                assert!(ids.contains(&id), "missing theme preview node {id}");
+            }
+        }
     }
 }
 

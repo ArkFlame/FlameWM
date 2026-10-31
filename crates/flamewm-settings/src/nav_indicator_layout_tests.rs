@@ -21,7 +21,7 @@ fn px_in_rule(selector: &str, property: &str) -> f32 {
 
 #[test]
 fn indicator_top_matches_css_row_layout_for_every_page() {
-    let rows = HTML.matches("data-action=\"settings.page.").count();
+    let rows = HTML.matches("data-action=\x22settings.page.").count();
     assert_eq!(rows, 13, "sidebar page rows in settings.html");
     assert_eq!(
         px_in_rule(".settings-brand {", "height"),

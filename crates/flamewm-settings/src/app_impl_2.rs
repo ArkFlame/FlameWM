@@ -33,11 +33,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 // The scan thread's decode temporaries stay resident in its malloc arena after it
                 // exits; the registry keeps only the small previews, so trim once here.
                 flamewm_ui_x11::release_free_heap();
-                if let Some((kind, page)) = self.theme_picker {
-                    let pages =
-                        page_count(self.themes.items(kind).len(), theme_picker::PICKER_SLOTS);
-                    self.theme_picker = Some((kind, page.min(pages.saturating_sub(1))));
-                }
                 changed = true;
             }
             Some(Err(TryRecvError::Disconnected)) => {
@@ -83,10 +78,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
         Ok(())
     }
 
-    /// Current page of the open picker; an action for a closed picker is rejected.
-    pub(crate) fn open_theme_page(&self, kind: theme_picker::PickerKind) -> Result<usize, String> {
+    /// A row action for a closed picker is rejected.
+    pub(crate) fn require_open_theme_picker(
+        &self,
+        kind: theme_picker::PickerKind,
+    ) -> Result<(), String> {
         match self.theme_picker {
-            Some((open, page)) if open == kind => Ok(page),
+            Some(open) if open == kind => Ok(()),
             _ => Err(format!("the {} theme picker is not open", kind.word())),
         }
     }
@@ -99,44 +97,46 @@ impl<T: ControlTransport> SettingsApplication<T> {
             theme_picker::PickerKind::Icon,
             theme_picker::PickerKind::Cursor,
         ] {
-            let open = self
-                .theme_picker
-                .filter(|(open, _)| *open == kind)
-                .map(|(_, page)| page);
+            let open = self.theme_picker == Some(kind);
             let node = kind.node();
-            document.visible(&format!("{node}-picker"), open.is_some())?;
+            document.visible(&format!("{node}-picker"), open)?;
             let items = self.themes.items(kind);
-            let page = open.unwrap_or(0);
-            project_pager(
-                document,
-                theme_pager(kind),
-                page,
-                page_count(items.len(), theme_picker::PICKER_SLOTS),
-                page_label(page, theme_picker::PICKER_SLOTS, items.len()),
-            )?;
-            for slot in 0..theme_picker::PICKER_SLOTS {
+            let shown = items.len().min(theme_picker::THEME_ROW_SLOTS);
+            let count = if shown < items.len() {
+                format!("first {shown} of {} themes", items.len())
+            } else {
+                format!("{} themes", items.len())
+            };
+            document.text(&format!("{node}-count"), count)?;
+            // Rows and their images are uploaded only while the picker is open; a
+            // closed picker keeps its previews in the registry, not in the document.
+            for slot in 0..theme_picker::THEME_ROW_SLOTS {
                 let row = format!("{node}-row-{slot}");
-                let preview = format!("{node}-preview-{slot}");
-                let Some(item) =
-                    open.and_then(|page| items.get(page * theme_picker::PICKER_SLOTS + slot))
-                else {
+                let Some(item) = open.then(|| items.get(slot)).flatten() else {
                     document.visible(&row, false)?;
                     continue;
                 };
                 document.visible(&row, true)?;
                 document.text(&format!("{node}-name-{slot}"), item.name.clone())?;
-                match &item.preview {
-                    Some(image) => {
-                        document.visible(&preview, true)?;
-                        document.image_rgba8_shared(
-                            &preview,
-                            image.source.clone(),
-                            image.width,
-                            image.height,
-                            Arc::clone(&image.pixels),
-                        )?;
+                let nodes = match kind {
+                    theme_picker::PickerKind::Icon => theme_picker::ICON_ROW_IMAGES,
+                    theme_picker::PickerKind::Cursor => 1,
+                };
+                for index in 0..nodes {
+                    let preview = theme_picker::preview_node(kind, slot, index);
+                    match item.previews.get(index) {
+                        Some(image) => {
+                            document.visible(&preview, true)?;
+                            document.image_rgba8_shared(
+                                &preview,
+                                image.source.clone(),
+                                image.width,
+                                image.height,
+                                Arc::clone(&image.pixels),
+                            )?;
+                        }
+                        None => document.visible(&preview, false)?,
                     }
-                    None => document.visible(&preview, false)?,
                 }
             }
         }

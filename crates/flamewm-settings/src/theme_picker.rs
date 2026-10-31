@@ -21,9 +21,18 @@ use flamewm_session_core::{CursorThemeFamily, cursor_theme_family};
 
 use crate::file_chooser::publish_background_completion;
 
-/// Theme rows per picker page.
-pub const PICKER_SLOTS: usize = 6;
-const ICON_PREVIEW_NAME: &str = "folder";
+/// Row nodes per picker. The markup is static, so the list shows at most this many
+/// themes; the count label says when some are not shown.
+pub const THEME_ROW_SLOTS: usize = 32;
+/// Example icons drawn for each icon-theme row, in order; a theme lacking one skips it.
+pub const ICON_PREVIEW_NAMES: [&str; 4] = [
+    "folder",
+    "utilities-terminal",
+    "web-browser",
+    "preferences-system",
+];
+/// Row image nodes per icon theme. Cursor rows carry one image.
+pub const ICON_ROW_IMAGES: usize = ICON_PREVIEW_NAMES.len();
 const ICON_PREVIEW_PX: u32 = 24;
 /// Agent 1's selected-value image node, to the left of icon-theme-value text.
 pub const SELECTED_ICON_PREVIEW_NODE: &str = "icon-theme-selected-preview";
@@ -102,7 +111,19 @@ pub struct ThemeItem {
     /// Stable theme directory name; this is what the setting stores.
     pub id: String,
     pub name: String,
-    pub preview: Option<PreviewImage>,
+    /// Row previews: the cursor's `left_ptr`, or the icon examples that resolved.
+    /// Empty when the theme has none, which hides the theme from the cursor picker.
+    pub previews: Vec<PreviewImage>,
+}
+
+/// Markup id of row `index` of a picker's row `slot`: `theme-icon-preview-3-1`
+/// for an icon example, `theme-cursor-preview-3` for a cursor.
+#[must_use]
+pub fn preview_node(kind: PickerKind, slot: usize, index: usize) -> String {
+    match kind {
+        PickerKind::Icon => format!("{}-preview-{slot}-{index}", kind.node()),
+        PickerKind::Cursor => format!("{}-preview-{slot}", kind.node()),
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -120,7 +141,7 @@ impl ThemeRegistry {
         }
     }
 
-    /// Borrow the already-rasterized thumbnail for the selected directory id.
+    /// Borrow the already-rasterized first preview for the selected directory id.
     /// An unset icon theme uses `FlameWM`'s `MacTahoe` default; absent or legacy
     /// themes return `None` so the UI can show its static fallback placeholder.
     /// Replacing this registry after an off-thread scan also replaces the cache;
@@ -135,7 +156,7 @@ impl ThemeRegistry {
         self.items(kind)
             .iter()
             .find(|item| item.id == id)
-            .and_then(|item| item.preview.as_ref())
+            .and_then(|item| item.previews.first())
     }
 
     /// Installed name for `value`, then the legacy icon label, else the value verbatim.
@@ -170,7 +191,7 @@ pub fn with_bundled_icon_themes(mut icon: Vec<ThemeItem>) -> Vec<ThemeItem> {
         None => ThemeItem {
             id: BUNDLED_ICON_THEMES[0].to_owned(),
             name: String::new(),
-            preview: None,
+            previews: Vec::new(),
         },
     };
     BUNDLED_ICON_THEMES[0].clone_into(&mut pinned.name);
@@ -193,7 +214,7 @@ pub fn with_installed_cursor_themes(cursor: Vec<ThemeItem>) -> Vec<ThemeItem> {
         .filter_map(|mut item| {
             // An unrenderable or absent left_ptr must not appear as a selectable
             // cursor with a misleading thumbnail.
-            item.preview.as_ref()?;
+            item.previews.first()?;
             if cursor_theme_family(&item.id) == Some(CursorThemeFamily::MacTahoe)
                 && item.id.eq_ignore_ascii_case("MacTahoe-dark-cursors")
             {
@@ -224,15 +245,17 @@ pub fn scan(data_dirs: &[PathBuf]) -> ThemeRegistry {
             ThemeKind::Icon => registry.icon.push(ThemeItem {
                 id: entry.id.clone(),
                 name: entry.name.clone(),
-                preview: icon_preview(&entry.id, data_dirs),
+                previews: icon_previews(&entry.id, data_dirs),
             }),
             ThemeKind::Cursor => {
                 registry.cursor.push(ThemeItem {
                     id: entry.id.clone(),
                     name: entry.name.clone(),
-                    preview: cursor::load_left_ptr_preview(&entry.root)
+                    previews: cursor::load_left_ptr_preview(&entry.root)
                         .ok()
-                        .map(cursor_image),
+                        .map(cursor_image)
+                        .into_iter()
+                        .collect(),
                 });
             }
         }
@@ -242,14 +265,21 @@ pub fn scan(data_dirs: &[PathBuf]) -> ThemeRegistry {
     registry
 }
 
-fn icon_preview(theme: &str, data_dirs: &[PathBuf]) -> Option<PreviewImage> {
+/// One small raster per example name that the theme resolves. The lookup index is
+/// built once per theme and each example is decoded once per scan, on the scan thread.
+fn icon_previews(theme: &str, data_dirs: &[PathBuf]) -> Vec<PreviewImage> {
     let index = IconLookupIndex::build(&[theme.to_owned()], data_dirs, 0);
-    let (candidates, _) = index.lookup(ICON_PREVIEW_NAME, ICON_PREVIEW_PX);
     let size = IconSize::new(ICON_PREVIEW_PX, ICON_PREVIEW_PX);
-    candidates
+    ICON_PREVIEW_NAMES
         .iter()
-        .find_map(|path| rasterize_path(path, size).ok())
-        .map(raster_image)
+        .filter_map(|name| {
+            let (candidates, _) = index.lookup(name, ICON_PREVIEW_PX);
+            candidates
+                .iter()
+                .find_map(|path| rasterize_path(path, size).ok())
+                .map(raster_image)
+        })
+        .collect()
 }
 
 fn raster_image(raster: Rgba8Raster) -> PreviewImage {
@@ -399,7 +429,7 @@ mod tests {
         ThemeItem {
             id: id.to_owned(),
             name: name.to_owned(),
-            preview: None,
+            previews: Vec::new(),
         }
     }
 
@@ -505,13 +535,13 @@ mod tests {
             registry
                 .icon
                 .iter()
-                .any(|item| item.id == "SystemPack" && item.preview.is_some())
+                .any(|item| item.id == "SystemPack" && !item.previews.is_empty())
         );
         assert!(
             registry
                 .cursor
                 .iter()
-                .any(|item| item.id == "SystemPack" && item.preview.is_some())
+                .any(|item| item.id == "SystemPack" && !item.previews.is_empty())
         );
         std::fs::remove_dir_all(data).unwrap();
     }
@@ -526,7 +556,7 @@ mod tests {
         };
         let mut registry = ThemeRegistry {
             icon: vec![ThemeItem {
-                preview: Some(image.clone()),
+                previews: vec![image.clone()],
                 ..item("MacTahoe", "MacTahoe")
             }],
             cursor: vec![],
@@ -536,7 +566,7 @@ mod tests {
             .expect("cached");
         assert!(std::ptr::eq(
             preview,
-            registry.icon[0].preview.as_ref().unwrap()
+            registry.icon[0].previews.first().unwrap()
         ));
         assert_eq!(
             registry.selected_preview(PickerKind::Icon, ""),
@@ -558,12 +588,12 @@ mod tests {
     #[test]
     fn cursor_picker_includes_all_installed_themes_with_previews() {
         let with_preview = |id: &str, name: &str| ThemeItem {
-            preview: Some(PreviewImage {
+            previews: vec![PreviewImage {
                 source: "left_ptr".to_owned(),
                 width: 1,
                 height: 1,
                 pixels: Arc::new(vec![255, 255, 255, 255]),
-            }),
+            }],
             ..item(id, name)
         };
         let picked = with_installed_cursor_themes(vec![
@@ -589,7 +619,15 @@ mod tests {
         );
         assert_eq!(picked[0].name, "MacTahoe");
         assert_eq!(picked[2].name, "Oxygen Black");
-        assert_eq!(PICKER_SLOTS, 6);
+        assert_eq!(THEME_ROW_SLOTS, 32);
+        assert_eq!(
+            preview_node(PickerKind::Icon, 3, 1),
+            "theme-icon-preview-3-1"
+        );
+        assert_eq!(
+            preview_node(PickerKind::Cursor, 3, 0),
+            "theme-cursor-preview-3"
+        );
         assert_eq!(SELECTED_ICON_PREVIEW_NODE, "icon-theme-selected-preview");
     }
 

@@ -53,29 +53,6 @@ pub(crate) const MODE_PAGER: PagerNodes = PagerNodes {
     label: "display-mode-page-label",
 };
 
-pub(crate) const ICON_THEME_PAGER: PagerNodes = PagerNodes {
-    prev: "theme-icon-prev",
-    prev_off: "theme-icon-prev-off",
-    next: "theme-icon-next",
-    next_off: "theme-icon-next-off",
-    label: "theme-icon-page-label",
-};
-
-pub(crate) const CURSOR_THEME_PAGER: PagerNodes = PagerNodes {
-    prev: "theme-cursor-prev",
-    prev_off: "theme-cursor-prev-off",
-    next: "theme-cursor-next",
-    next_off: "theme-cursor-next-off",
-    label: "theme-cursor-page-label",
-};
-
-pub(crate) fn theme_pager(kind: theme_picker::PickerKind) -> &'static PagerNodes {
-    match kind {
-        theme_picker::PickerKind::Icon => &ICON_THEME_PAGER,
-        theme_picker::PickerKind::Cursor => &CURSOR_THEME_PAGER,
-    }
-}
-
 pub(crate) fn page_count(len: usize, page_size: usize) -> usize {
     len.div_ceil(page_size)
 }

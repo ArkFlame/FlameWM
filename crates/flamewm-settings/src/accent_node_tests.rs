@@ -170,11 +170,11 @@ fn red_swatch_still_paints_red_accent_nodes() {
 #[test]
 fn accent_registry_covers_every_toggle_on_twin_in_markup() {
     let html = include_str!("../../../ui/settings.html");
-    let marker = "toggle toggle-on\" id=\"";
+    let marker = "toggle toggle-on\x22 id=\x22";
     let ids: Vec<&str> = html
         .split(marker)
         .skip(1)
-        .map(|after| &after[..after.find('"').expect("closed toggle id")])
+        .map(|after| &after[..after.find('\x22').expect("closed toggle id")])
         .collect();
     assert!(!ids.is_empty(), "no toggle-on ids found in settings.html");
     let missing: Vec<&str> = ids

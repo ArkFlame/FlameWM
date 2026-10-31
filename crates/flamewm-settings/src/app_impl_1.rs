@@ -557,21 +557,16 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 self.apply_text("customStartIcon", String::new())?;
                 remove_managed_media(&previous)?;
             }
-            SettingsAction::ThemePickerOpen(kind) => self.theme_picker = Some((kind, 0)),
+            SettingsAction::ThemePickerOpen(kind) => self.theme_picker = Some(kind),
             SettingsAction::ThemePickerClose => self.theme_picker = None,
-            SettingsAction::ThemePickerPage(kind, step) => {
-                let page = self.open_theme_page(kind)?;
-                let pages = page_count(self.themes.items(kind).len(), theme_picker::PICKER_SLOTS);
-                self.theme_picker = Some((kind, step_page(page, step, pages)));
-            }
             SettingsAction::ThemePickerSelect(kind, slot) => {
-                let index = self.open_theme_page(kind)? * theme_picker::PICKER_SLOTS + slot;
+                self.require_open_theme_picker(kind)?;
                 let id = self
                     .themes
                     .items(kind)
-                    .get(index)
+                    .get(slot)
                     .map(|item| item.id.clone())
-                    .ok_or_else(|| format!("no theme at index {index}; rescan the themes"))?;
+                    .ok_or_else(|| format!("no theme at row {slot}; rescan the themes"))?;
                 self.apply_text(kind.setting_key(), id)?;
                 self.theme_picker = None;
             }
