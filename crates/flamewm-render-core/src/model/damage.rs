@@ -118,7 +118,6 @@ fn resolve_node_damage(
     .any(|&len| len != count)
         || old.z_order != new.z_order
         || !document.node_backdrops.is_empty()
-        || !document.node_surfaces.is_empty()
     {
         return SurfaceDamage::Full;
     }

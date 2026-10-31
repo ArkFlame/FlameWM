@@ -62,7 +62,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
         for (key, id) in [
             ("surfaceBlurPercent", "surface-blur-value"),
             ("surfaceSaturationPercent", "surface-saturation-value"),
-            ("surfaceShadowPercent", "surface-shadow-value"),
             ("accentOpacity", "accent-opacity-value"),
         ] {
             if let Ok(value) = self.percent_setting(key) {

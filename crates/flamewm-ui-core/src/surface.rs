@@ -143,7 +143,6 @@ mod surface_stroke_contract_tests {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GlassMaterial {
     pub saturation_percent: u32,
-    pub shadow_percent: u32,
 }
 
 /// Reads the glass material keys; missing or non-percent values use the Dark preset.
@@ -156,25 +155,6 @@ pub fn glass_material(snapshot: &SettingsSnapshot) -> GlassMaterial {
     let dark = crate::glass::DARK;
     GlassMaterial {
         saturation_percent: read("surfaceSaturationPercent", dark.saturation_percent).min(200),
-        shadow_percent: read("surfaceShadowPercent", dark.shadow_percent).min(100),
-    }
-}
-
-/// Liquid Glass shadow reach and peak for one painter.
-/// The caller converts this to the render-core `SurfaceMaterial`; ui-core has no renderer dependency.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SurfaceMaterialValues {
-    pub shadow_spread: u8,
-    pub shadow_peak: u8,
-}
-
-/// Glass surfaces never cast a shadow: the shadow is always off (`shadow_spread == 0`,
-/// `shadow_peak == 0`), whatever `surfaceShadowPercent` holds. Only window frames shadow.
-#[must_use]
-pub fn surface_material_values(_snapshot: &SettingsSnapshot) -> SurfaceMaterialValues {
-    SurfaceMaterialValues {
-        shadow_spread: 0,
-        shadow_peak: 0,
     }
 }
 
@@ -191,35 +171,6 @@ pub fn saturate_rgb(rgb: u32, percent: u32) -> u32 {
         out |= clamped << (16 - 8 * index as u32);
     }
     out
-}
-
-/// Soft drop-shadow alpha `distance` pixels outside a shape. Peak `peak` at the edge, falling
-/// quadratically to 0 at `spread` pixels. Pure math; no per-frame pass is implied by it.
-#[must_use]
-pub fn shadow_alpha(distance: u32, spread: u32, peak: u8) -> u8 {
-    if spread == 0 || distance >= spread {
-        return 0;
-    }
-    let remaining = u64::from(spread - distance);
-    let spread = u64::from(spread);
-    ((u64::from(peak) * remaining * remaining + spread * spread / 2) / (spread * spread)) as u8
-}
-
-#[cfg(test)]
-mod surface_material_value_tests {
-    use super::*;
-
-    #[test]
-    fn glass_surfaces_never_cast_a_shadow() {
-        let dark = surface_material_values(&SettingsSnapshot::new(1));
-        assert_eq!((dark.shadow_spread, dark.shadow_peak), (0, 0));
-        let mut snapshot = SettingsSnapshot::new(1);
-        snapshot
-            .values
-            .insert("surfaceShadowPercent".into(), SettingValue::Percent(100));
-        let off = surface_material_values(&snapshot);
-        assert_eq!((off.shadow_spread, off.shadow_peak), (0, 0));
-    }
 }
 
 #[cfg(test)]
@@ -240,27 +191,14 @@ mod glass_material_tests {
     }
 
     #[test]
-    fn shadow_peaks_at_edge_and_is_zero_beyond_spread() {
-        assert_eq!(shadow_alpha(0, 20, 100), 100);
-        assert_eq!(shadow_alpha(20, 20, 100), 0);
-        assert_eq!(shadow_alpha(5, 0, 100), 0);
-        assert!(shadow_alpha(10, 20, 100) < shadow_alpha(5, 20, 100));
-        assert_eq!(shadow_alpha(0, 20, 0), 0);
-    }
-
-    #[test]
     fn material_defaults_to_dark_and_reads_keys() {
         let mut snapshot = SettingsSnapshot::new(1);
         assert_eq!(glass_material(&snapshot).saturation_percent, 170);
         snapshot
             .values
             .insert("surfaceSaturationPercent".into(), SettingValue::Percent(100));
-        snapshot
-            .values
-            .insert("surfaceShadowPercent".into(), SettingValue::Percent(250));
         let material = glass_material(&snapshot);
         assert_eq!(material.saturation_percent, 100);
-        assert_eq!(material.shadow_percent, 100);
     }
 }
 

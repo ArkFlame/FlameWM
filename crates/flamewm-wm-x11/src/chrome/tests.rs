@@ -109,8 +109,6 @@ fn settings_map_to_skin_tokens_and_bad_values_fall_back() {
     put(&mut snapshot, "surfaceColor", text("#202326"));
     put(&mut snapshot, "surfaceOpacity", SettingValue::Percent(50));
     put(&mut snapshot, "titlebarButtonStyle", text("square"));
-    put(&mut snapshot, "titlebarCloseHoverColor", text("#00ff00"));
-    put(&mut snapshot, "titlebarMinimizeColor", text("#zz"));
     let tokens = chrome_tokens_from_settings(&snapshot);
     assert_eq!(tokens.style, DecorationStyle::Squared);
     assert_eq!(tokens.titlebar_bg, Rgb(0x0020_2326));
@@ -121,7 +119,7 @@ fn settings_map_to_skin_tokens_and_bad_values_fall_back() {
             .iter()
             .all(|button| button.shape == ButtonShape::Square)
     );
-    assert_eq!(tokens.buttons[2].hover, Some(Rgb(0x0000_ff00)));
+    assert!(tokens.buttons.iter().all(|button| button.hover.is_none()));
     assert_eq!(tokens.buttons[0].glyph, None);
     put(&mut snapshot, "titlebarButtonStyle", text("bogus"));
     let tokens = chrome_tokens_from_settings(&snapshot);

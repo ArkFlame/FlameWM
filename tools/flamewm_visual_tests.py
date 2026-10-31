@@ -8,7 +8,7 @@ checks root screenshots for the bugs that used to be found by hand:
   desktop      every output shows the wallpaper (no black output) and a panel
   start-popup  the Start popup maps quickly, is not black, and the desktop
                returns to its pixels after it closes
-  frame        an X client gets a frame and a drop shadow below it
+  frame        an X client gets a frame
   drag         drag feedback (outline ring or moved frame) shows up quickly
                and the vacated area has no black marks
   minimize     the minimize animation ends with no overlay left mapped and the
@@ -343,18 +343,12 @@ def check_start_popup(session, results, baseline):
                   f"changed={changed:.3f} black={black:.3f}")
 
 
-def check_frame_and_shadow(session, results, baseline, client):
+def check_frame(session, results, baseline, client):
     frame = session.frame_of(client)
     rect = session.geometry(frame)
     client_rect = session.geometry(session.x.create_resource_object("window", client))
     results.check("frame.decorated", rect[3] > client_rect[3] + 10,
                   f"frame={rect} client={client_rect}")
-    shot = session.capture("frame")
-    x, y, width, height = rect
-    band = (x + width // 4, y + height + 2, width // 2, 6)
-    _, before, _ = baseline.region_stats(band, step=1)
-    _, after, _ = shot.region_stats(band, step=1)
-    results.check("frame.shadow", after < before - 3, f"luma below frame {before:.1f} -> {after:.1f}")
     return rect
 
 
@@ -428,7 +422,7 @@ def run_layout(layout, args, results):
         check_desktop(session, results, baseline)
         check_start_popup(session, results, baseline)
         process, client = session.open_client("flamewm-visual-client")
-        rect = check_frame_and_shadow(session, results, baseline, client)
+        rect = check_frame(session, results, baseline, client)
         moved = check_drag(session, results, baseline, client, rect)
         check_minimize(session, results, baseline, client, moved)
         process.terminate()

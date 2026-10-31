@@ -8,9 +8,8 @@
 //!
 //! Source of truth: the regular glass and clear glass tokens of the Tahoe design-lab mockup
 //! (`styles.css`). Percent fields convert CSS values: blur px / 40 * 100, alpha * 100.
-//! Dark: regular glass `rgba(234,244,255,.12)`, 28px blur, saturate 170%, rim `.17`,
-//! shadow peak `.37`. Light: clear glass `rgba(255,255,255,.045)`, 13px blur, saturate 155%,
-//! rim `.23`, shadow peak `.12`.
+//! Dark: regular glass `rgba(234,244,255,.12)`, 28px blur, saturate 170%, rim `.17`.
+//! Light: clear glass `rgba(255,255,255,.045)`, 13px blur, saturate 155%, rim `.23`.
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
@@ -38,8 +37,6 @@ pub struct GlassPreset {
     pub rim_percent: u8,
     /// `surfaceSaturationPercent`: backdrop saturation, 100 is identity.
     pub saturation_percent: u8,
-    /// `surfaceShadowPercent`: peak alpha of the drop shadow.
-    pub shadow_percent: u8,
     /// `glassOpacityPercent` (4..=42): `GlassRegular` tint alpha. Same value as `tint_percent`,
     /// because the surface tint and the glass regular tint come from one CSS token.
     pub glass_opacity_percent: u8,
@@ -59,7 +56,6 @@ pub const DARK: GlassPreset = GlassPreset {
     rim_rgb: 0x00ff_ffff,
     rim_percent: RIM_PERCENT,
     saturation_percent: 170,
-    shadow_percent: 0,
     glass_opacity_percent: 12,
     glass_blur_px: 28,
 };
@@ -71,7 +67,6 @@ pub const LIGHT: GlassPreset = GlassPreset {
     rim_rgb: 0x00ff_ffff,
     rim_percent: RIM_PERCENT,
     saturation_percent: 155,
-    shadow_percent: 0,
     glass_opacity_percent: 5,
     glass_blur_px: 13,
 };
@@ -79,7 +74,7 @@ pub const LIGHT: GlassPreset = GlassPreset {
 impl GlassPreset {
     /// Settings keys and values this preset writes, in one fixed order.
     #[must_use]
-    pub fn settings_values(self) -> [(&'static str, SettingValue); 9] {
+    pub fn settings_values(self) -> [(&'static str, SettingValue); 8] {
         [
             (
                 "surfaceColor",
@@ -101,10 +96,6 @@ impl GlassPreset {
             (
                 "surfaceSaturationPercent",
                 SettingValue::Percent(self.saturation_percent),
-            ),
-            (
-                "surfaceShadowPercent",
-                SettingValue::Percent(self.shadow_percent),
             ),
             (
                 "glassOpacityPercent",
@@ -162,7 +153,6 @@ mod tests {
                 "surfaceBorderColor",
                 "surfaceBorderOpacity",
                 "surfaceSaturationPercent",
-                "surfaceShadowPercent",
                 "glassOpacityPercent",
                 "glassBlurPx",
             ]

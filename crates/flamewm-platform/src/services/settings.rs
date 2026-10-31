@@ -375,8 +375,8 @@ mod tests {
                     value: Some(SettingValue::Percent(40)),
                 },
                 flamewm_api::settings::SettingsChange {
-                    key: "titlebarCloseColor".to_owned(),
-                    value: Some(SettingValue::Text("#FF0000".to_owned())),
+                    key: "titlebarButtonStyle".to_owned(),
+                    value: Some(SettingValue::Text("square".to_owned())),
                 },
             ],
             reset_section: None,
@@ -391,7 +391,7 @@ mod tests {
         );
         let persisted = std::fs::read_to_string(&path).expect("persisted");
         assert!(persisted.contains("accentOpacity=40\n"));
-        assert!(persisted.contains("titlebarCloseColor=#FF0000\n"));
+        assert!(persisted.contains("titlebarButtonStyle=square\n"));
 
         let reset = SettingsTransaction {
             expected_revision: 2,
@@ -401,7 +401,7 @@ mod tests {
         service
             .apply(&mut shortcut_port, &reset)
             .expect("windows reset applies");
-        assert!(service.current().titlebar_close_color.is_empty());
+        assert_eq!(service.current().titlebar_button_style, "circle");
         assert_eq!(service.current().accent_opacity, 40);
         std::fs::remove_file(path).expect("remove test settings");
     }

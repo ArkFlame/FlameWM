@@ -27,7 +27,6 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "sticky-toggle-on",
     "downloads-organize-on",
     "focus-mouse-on",
-    "shadows-on",
     "titlebars-on",
     "snap-preview-on",
     "show-content-on",
@@ -51,7 +50,6 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "time-auto-zone-on",
     "font-toggle-on",
     "wallpaper-share-on",
-    "cursor-shadow-on",
 ];
 /// Boolean ON/OFF twins: (setting key, ON id, OFF id, default when the key is absent).
 pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
@@ -60,12 +58,6 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "wallpaper-share-on",
         "wallpaper-share-off",
         false,
-    ),
-    (
-        "cursorShadow",
-        "cursor-shadow-on",
-        "cursor-shadow-off",
-        true,
     ),
     (
         "accentCustom",

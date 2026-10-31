@@ -111,10 +111,6 @@ pub fn project(
             // Start shares the surfaceColor/surfaceOpacity pair with the taskbar and popups.
             document.background(root, surface_background(snapshot))?;
             document.corner_radius(root, popup_corner_radius(snapshot))?;
-            document.surface_material(
-                root,
-                Some(flamewm_ui_core::surface::surface_material_values(snapshot)),
-            )?;
             // Opaque interior token: the menu root already carries the surface alpha, so the
             // search field must not apply surfaceOpacity a second time.
             document.background(
@@ -324,7 +320,6 @@ pub fn taskbar_items(snapshot: Option<&SettingsSnapshot>) -> TaskbarItems {
         activities: bool_setting(snapshot, "taskbarActivities", defaults.activities),
         separate: bool_setting(snapshot, "taskbarSeparate", defaults.separate),
         blur_percent: blur_px_to_percent(dock_material(snapshot).blur_px),
-        material: Some(flamewm_ui_core::surface::surface_material_values(snapshot)),
     }
 }
 
@@ -712,13 +707,6 @@ mod tests {
         snapshot
             .values
             .insert("surfaceOpacity".to_owned(), SettingValue::Percent(10));
-        snapshot.values.insert(
-            "startMenuColor".to_owned(),
-            SettingValue::Text("#102030".to_owned()),
-        );
-        snapshot
-            .values
-            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(90));
         let mut doc = RecordingUiDoc::default();
         project_menu_background(&mut doc, &snapshot, "audio-popup").expect("popup");
         assert_eq!(
@@ -914,17 +902,7 @@ mod tests {
             .values
             .insert("surfaceBlurPercent".to_owned(), SettingValue::Percent(30));
         assert_eq!(start_backdrop_percents(&snapshot), (50, 30));
-        snapshot
-            .values
-            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(0));
-        snapshot
-            .values
-            .insert("startMenuBlurPercent".to_owned(), SettingValue::Percent(0));
-        assert_eq!(
-            start_backdrop_percents(&snapshot),
-            (50, 30),
-            "legacy startMenu* keys are inert"
-        );
+        assert_eq!(start_backdrop_percents(&snapshot), (50, 30));
     }
 
     fn snapshot_with(key: &str, value: &str) -> SettingsSnapshot {

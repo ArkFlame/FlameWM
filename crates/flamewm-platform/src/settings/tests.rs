@@ -87,6 +87,16 @@ fn parser_preserves_unknown_compatible_keys() {
 }
 
 #[test]
+fn removed_startmenu_and_titlebar_colour_keys_load_as_unknown_and_survive_a_round_trip() {
+    let text = "revision=2\nstartMenuColor=#112233\nstartMenuOpacity=80\nstartMenuBlurPercent=0\n\
+        titlebarCloseColor=#FF0000\ntitlebarCloseHoverColor=#FFFFFF\ntitlebarMinimizeColor=#zz\n";
+    let parsed = load(text).expect("removed keys still load");
+    assert_eq!(parsed.unknown_keys.get("startMenuColor"), Some(&"#112233".to_owned()));
+    assert_eq!(parsed.unknown_keys.get("titlebarCloseHoverColor"), Some(&"#FFFFFF".to_owned()));
+    assert!(assert_round_trip(&parsed).contains("titlebarCloseColor=#FF0000"));
+}
+
+#[test]
 fn removed_surface_rim_and_highlight_keys_load_as_unknown_and_survive_a_round_trip() {
     let text = "revision=2\nsurfaceRimFadePercent=25\nsurfaceHighlightPercent=10\n";
     let parsed = load(text).expect("legacy surface keys still load");
@@ -134,14 +144,10 @@ fn five_percent_scales_persist_without_quantization() {
 }
 
 #[test]
-fn cursor_shadow_defaults_to_true_and_round_trips() {
-    let defaults = ProductSettings::default();
-    assert!(defaults.cursor_shadow);
-    let mut disabled = defaults;
-    disabled.cursor_shadow = false;
-    let saved = ConfigStore::serialize(&disabled);
-    assert!(saved.contains("cursorShadow=false\n"));
-    assert!(!load(&saved).expect("reload cursorShadow").cursor_shadow);
+fn removed_cursor_shadow_key_is_kept_as_unknown() {
+    let loaded = load("revision=4\ncursorShadow=false\n").expect("legacy cursorShadow");
+    assert_eq!(loaded.unknown_keys.get("cursorShadow").map(String::as_str), Some("false"));
+    assert!(ConfigStore::serialize(&loaded).contains("cursorShadow=false\n"));
 }
 
 #[test]
@@ -435,19 +441,14 @@ fn taskbar_style_and_backdrop_defaults_write_nothing() {
     assert_eq!(defaults.taskbar_floating_margin, 4);
     assert_eq!(defaults.taskbar_floating_radius, 12);
     assert_eq!(defaults.taskbar_blur_percent, 80);
-    assert_eq!(defaults.start_menu_blur_percent, 80);
     assert_eq!(defaults.surface_blur_percent, 70);
     let taskbar = defaults.taskbar_backdrop();
     assert_eq!(taskbar.opacity_percent, 65);
     assert_eq!(taskbar.blur_percent, 70);
     assert!((taskbar.radius_px - 28.0).abs() < 1e-4);
-    let start = defaults.start_menu_backdrop();
-    assert_eq!(start.opacity_percent, 65);
-    assert!((start.radius_px - 32.0).abs() < 1e-4);
     let text = ConfigStore::serialize(&defaults);
     assert!(!text.contains("taskbarStyle"));
     assert!(!text.contains("taskbarBlurPercent"));
-    assert!(!text.contains("startMenuBlurPercent"));
     assert!(!text.contains("taskbarFloating"));
 }
 
@@ -455,15 +456,13 @@ fn taskbar_style_and_backdrop_defaults_write_nothing() {
 fn taskbar_style_and_blur_round_trip_and_opaque_has_no_radius() {
     let parsed = load(
         "revision=2\ntaskbarStyle=classic\ntaskbarFloatingMargin=32\n\
-             taskbarFloatingRadius=0\nsurfaceBlurPercent=100\nsurfaceOpacity=100\n\
-             startMenuBlurPercent=0\nstartMenuOpacity=50\n",
+             taskbarFloatingRadius=0\nsurfaceBlurPercent=100\nsurfaceOpacity=100\n",
     )
     .expect("valid taskbar settings");
     assert_eq!(parsed.taskbar_style, TaskbarStyle::Classic);
     assert_eq!(parsed.taskbar_floating_margin, 32);
     assert_eq!(parsed.taskbar_floating_radius, 0);
     assert!((parsed.taskbar_backdrop().radius_px - 0.0).abs() < 1e-6);
-    assert!((parsed.start_menu_backdrop().radius_px - 0.0).abs() < 1e-6);
     let text = assert_round_trip(&parsed);
     assert!(text.contains("taskbarStyle=classic\n"));
     assert!(text.contains("surfaceBlurPercent=100\n"));
@@ -479,7 +478,6 @@ fn invalid_taskbar_style_and_blur_values_are_rejected() {
         "taskbarFloatingRadius=25",
         "taskbarBlurPercent=101",
         "taskbarBlurPercent=80.5",
-        "startMenuBlurPercent=101",
     ]);
 }
 
@@ -590,19 +588,15 @@ fn older_settings_without_new_fields_keep_defaults() {
     let settings = load("revision=4\naccent=#112233\n").expect("legacy settings");
     assert_eq!(settings.revision, 4);
     assert_eq!(settings.accent, "#112233");
-    assert!(settings.cursor_shadow);
 }
 
 #[test]
 fn new_appearance_keys_default_and_stay_unwritten_when_unchanged() {
     let defaults = ProductSettings::default();
-    assert_eq!(defaults.start_menu_color, "#333333");
-    assert_eq!(defaults.start_menu_opacity, 65);
     assert_eq!(defaults.taskbar_opacity, 50);
     assert_eq!(defaults.accent_opacity, 100);
     assert_eq!(defaults.decoration, "rounded");
     assert_eq!(defaults.titlebar_button_style, "circle");
-    assert!(defaults.titlebar_close_color.is_empty());
     assert!(defaults.cursor_theme.is_empty());
     assert_eq!(defaults.animation_speed, 100);
     assert_eq!(defaults.start_animation, AnimationStyle::None);
@@ -653,18 +647,15 @@ fn legacy_titlebar_color_is_tolerated_ignored_and_never_written() {
 
 #[test]
 fn new_appearance_keys_round_trip_when_set() {
-    let text = "revision=2\nstartMenuColor=#112233\nstartMenuOpacity=80\naccentOpacity=40\n\
+    let text = "revision=2\naccentOpacity=40\n\
         decoration=ios\n\
-        titlebarCloseHoverColor=#FFFFFF\ncursorTheme=Adwaita\nanimationsEnabled=false\n\
+        cursorTheme=Adwaita\nanimationsEnabled=false\n\
         titlebarButtonStyle=square\n\
         animationSpeed=150\nstartAnimationEnabled=0\nfutureFeature=kept\n";
     let parsed = load(text).expect("valid new keys");
-    assert_eq!(parsed.start_menu_color, "#112233");
-    assert_eq!(parsed.start_menu_opacity, 80);
     assert_eq!(parsed.accent_opacity, 40);
     assert_eq!(parsed.decoration, "rounded");
     assert_eq!(parsed.titlebar_button_style, "square");
-    assert_eq!(parsed.titlebar_close_hover_color, "#FFFFFF");
     assert_eq!(parsed.cursor_theme, "Adwaita");
     assert!(!parsed.animations_enabled);
     assert_eq!(parsed.animation_speed, 150);
@@ -822,9 +813,6 @@ fn legacy_titlebar_button_styles_map_to_one_shape_and_are_never_written() {
 #[test]
 fn invalid_new_appearance_values_are_rejected() {
     assert_rejected(&[
-        "startMenuColor=red",
-        "titlebarCloseColor=#GGGGGG",
-        "startMenuOpacity=101",
         "accentOpacity=101",
         "decoration=neon",
         "titlebarMinimizeStyle=round",

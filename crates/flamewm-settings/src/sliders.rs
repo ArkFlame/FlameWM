@@ -103,9 +103,8 @@ pub(crate) fn animation_speed_from_slider(text: &str) -> Result<i64, String> {
 }
 
 /// Surface glass steppers: action prefix and the percent key each one moves.
-pub(crate) const GLASS_STEP_KEYS: [(&str, &str); 2] = [
+pub(crate) const GLASS_STEP_KEYS: [(&str, &str); 1] = [
     ("settings.surface-saturation.", "surfaceSaturationPercent"),
-    ("settings.surface-shadow.", "surfaceShadowPercent"),
 ];
 
 pub(crate) fn step(value: &str) -> Option<i8> {

@@ -1,6 +1,5 @@
 use super::*;
 use crate::entry::settings_values::{accent_color, percent_alpha, setting_percent};
-use flamewm_api::root_rubber::RootRubber;
 
 /// One model item's rubber target, frozen at gesture start. `slot` is the visual node id
 /// (`desktop-item-{index}`), formatted once here instead of on every toggle.
@@ -165,30 +164,7 @@ pub(super) fn set_selection_overlay(
         None => document.visible("desktop-selection", false)?,
     }
     state.selection_overlay = overlay;
-    publish_root_rubber(state, overlay)
-}
-
-/// Mirrors the live rubber onto the root window so the WM can recompose the frame shadows it
-/// crosses (the rubber itself sits below them). A desktop without a root writer publishes nothing.
-fn publish_root_rubber(state: &mut DesktopState, overlay: Option<Rect>) -> Result<(), String> {
-    let (fill_alpha, accent) = selection_style(&state.settings);
-    let Some(publisher) = state.rubber_publisher.as_mut() else {
-        return Ok(());
-    };
-    let rubber = overlay.map(|rect| root_rubber_payload(rect, fill_alpha, accent).to_cardinals());
-    publisher.set(rubber.as_ref().map(<[u32; 6]>::as_slice))
-}
-
-/// The root-space description of the overlay the desktop is painting at `rect`.
-pub(super) fn root_rubber_payload(rect: Rect, fill_alpha: u8, accent: UiColor) -> RootRubber {
-    RootRubber {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width.max(0) as u32,
-        height: rect.height.max(0) as u32,
-        fill: [accent.r, accent.g, accent.b, fill_alpha],
-        border: [accent.r, accent.g, accent.b, 0xdd],
-    }
+    Ok(())
 }
 
 pub(super) fn normalized_selection_rect(start: Point, end: Point, bounds: Rect) -> Rect {
@@ -272,21 +248,6 @@ mod rubber_tests {
             diff_rubber_hits(&items, &mut selection, rubber, |_, _| Ok(())).expect("motion");
         }
         assert_eq!(PROJECTED_CELLS_CALLS.with(std::cell::Cell::get), before);
-    }
-
-    #[test]
-    fn root_rubber_payload_mirrors_overlay_rect_and_accent() {
-        let accent = UiColor {
-            r: 0x10,
-            g: 0x20,
-            b: 0x30,
-            a: 0xff,
-        };
-        let payload = root_rubber_payload(Rect::new(-5, 7, 90, 40), 0x33, accent);
-        assert_eq!((payload.x, payload.y), (-5, 7));
-        assert_eq!((payload.width, payload.height), (90, 40));
-        assert_eq!(payload.fill, [0x10, 0x20, 0x30, 0x33]);
-        assert_eq!(payload.border, [0x10, 0x20, 0x30, 0xdd]);
     }
 
     #[test]

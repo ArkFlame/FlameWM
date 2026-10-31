@@ -358,8 +358,6 @@ struct DesktopState {
     rubber_items: Vec<RubberItem>,
     /// Overlay rect currently shown; `None` while hidden (initially hidden by the first-paint guard).
     selection_overlay: Option<Rect>,
-    /// Mirrors the live rubber to the root window; `None` when that connection was unavailable.
-    rubber_publisher: Option<flamewm_ui_x11::RootCardinalPublisher>,
     item_drag: Option<ItemDrag>,
     launchers: BTreeMap<PathBuf, LauncherMeta>,
     menu: Option<MenuState>,
@@ -546,12 +544,6 @@ pub fn main() -> Result<(), String> {
             selection_output: None,
             rubber_items: Vec::new(),
             selection_overlay: None,
-            // Root writer for the live rubber (see rubber::publish_root_rubber); None when no X
-            // connection could be made, in which case the rubber is simply not mirrored.
-            rubber_publisher: flamewm_ui_x11::RootCardinalPublisher::connect(
-                flamewm_api::root_rubber::ROOT_RUBBER_PROPERTY,
-            )
-            .ok(),
             item_drag: None,
             launchers: BTreeMap::new(),
             menu: None,
@@ -598,13 +590,6 @@ pub fn main() -> Result<(), String> {
         )?;
     }
     flamewm_ui_x11::apply_render_acceleration(&state_cell.borrow().settings);
-    for error in flamewm_ui_x11::apply_cursor_shadow(setting_bool(
-        &state_cell.borrow().settings,
-        "cursorShadow",
-        true,
-    )) {
-        eprintln!("desktop: cursor shadow: {error}");
-    }
     projection::assign_document_layers(&mut document)?;
     widgets::assign_layers(&mut document)?;
     projection::initialize_transient_visibility(&mut document)?;
@@ -1224,11 +1209,6 @@ fn refresh_settings_projection(
     }
     sync_cursor_theme(state);
     flamewm_ui_x11::apply_render_acceleration(&state.settings);
-    for error in
-        flamewm_ui_x11::apply_cursor_shadow(setting_bool(&state.settings, "cursorShadow", true))
-    {
-        eprintln!("desktop: cursor shadow toggle: {error}");
-    }
     if entry_scale_changed {
         sync_document(document, state)?;
     }

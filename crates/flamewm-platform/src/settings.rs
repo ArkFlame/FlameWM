@@ -197,8 +197,6 @@ pub struct ProductSettings {
     pub window_margin: u16,
     /// `false` (XP style): move/resize shows an outline and applies the geometry on release.
     pub show_content_while_dragging: bool,
-    /// `windowShadows`: Win7-style frame shadows behind floating windows.
-    pub window_shadows: bool,
     /// `titlebars`: draw the Flame titlebar; when off, windows keep only resize edges.
     pub titlebars: bool,
     pub focus_follows_mouse: bool,
@@ -245,8 +243,6 @@ pub struct ProductSettings {
     pub surface_border_opacity: u8,
     /// `surfaceSaturationPercent` (0..=200): backdrop saturation, 100 is identity.
     pub surface_saturation_percent: u8,
-    /// `surfaceShadowPercent` (0..=100): peak alpha of the soft drop shadow.
-    pub surface_shadow_percent: u8,
     /// `reduceTransparency`: all materials opaque with no blur. Default off.
     pub reduce_transparency: bool,
     /// `glassOpacityPercent` (4..=42): `GlassRegular` tint alpha.
@@ -262,20 +258,13 @@ pub struct ProductSettings {
     pub custom_start_icon: String,
     pub sticky_notes_enabled: bool,
     pub organize_downloads: bool,
-    pub start_menu_color: String,
-    pub start_menu_opacity: u8,
-    pub start_menu_blur_percent: u8,
     pub accent_opacity: u8,
     pub decoration: String,
     pub render_acceleration: String,
     pub titlebar_button_style: String,
-    pub titlebar_minimize_color: String,
-    pub titlebar_close_color: String,
-    pub titlebar_close_hover_color: String,
     pub cursor_theme: String,
     /// Cursor pixel size; one of 24, 32, 48, 64.
     pub cursor_size: u16,
-    pub cursor_shadow: bool,
     pub animations_enabled: bool,
     pub animation_speed: u16,
     pub start_animation: AnimationStyle,
@@ -343,7 +332,6 @@ impl Default for ProductSettings {
             snap_preview_enabled: true,
             window_margin: 2,
             show_content_while_dragging: false,
-            window_shadows: true,
             titlebars: true,
             focus_follows_mouse: false,
             font_family: "IBM Plex Sans".to_owned(),
@@ -380,7 +368,6 @@ impl Default for ProductSettings {
             surface_border_color: "#FFFFFF".to_owned(),
             surface_border_opacity: 25,
             surface_saturation_percent: 165,
-            surface_shadow_percent: 0,
             reduce_transparency: false,
             glass_opacity_percent: 12,
             glass_blur_px: 28,
@@ -390,19 +377,12 @@ impl Default for ProductSettings {
             custom_start_icon: String::new(),
             sticky_notes_enabled: true,
             organize_downloads: false,
-            start_menu_color: "#333333".to_owned(),
-            start_menu_opacity: 65,
-            start_menu_blur_percent: 80,
             accent_opacity: 100,
             decoration: "rounded".to_owned(),
             render_acceleration: "cpu".to_owned(),
             titlebar_button_style: "circle".to_owned(),
-            titlebar_minimize_color: String::new(),
-            titlebar_close_color: String::new(),
-            titlebar_close_hover_color: String::new(),
             cursor_theme: String::new(),
             cursor_size: 24,
-            cursor_shadow: true,
             animations_enabled: true,
             animation_speed: 100,
             start_animation: AnimationStyle::None,
@@ -479,12 +459,6 @@ impl ProductSettings {
         backdrop(self.surface_opacity, self.surface_blur_percent)
     }
 
-    /// Start menu backdrop. See [`Backdrop`] for the blur-to-radius mapping.
-    #[must_use]
-    pub fn start_menu_backdrop(&self) -> Backdrop {
-        backdrop(self.start_menu_opacity, self.start_menu_blur_percent)
-    }
-
     /// Typed screensaver policy. Ribbon width converts tenths of a pixel to `f32` pixels.
     #[must_use]
     pub fn screensaver(&self) -> ScreensaverSettings {
@@ -507,9 +481,6 @@ impl ProductSettings {
         }
         if self.surface_saturation_percent > 200 {
             return invalid("surfaceSaturationPercent must be 0..200");
-        }
-        if self.surface_shadow_percent > 100 {
-            return invalid("surfaceShadowPercent must be 0..100");
         }
         if !(4..=42).contains(&self.glass_opacity_percent) {
             return invalid("glassOpacityPercent must be 4..42");
@@ -571,22 +542,8 @@ impl ProductSettings {
         if self.surface_blur_percent > 100 {
             return invalid("surfaceBlurPercent must be 0..100");
         }
-        if self.start_menu_blur_percent > 100 {
-            return invalid("startMenuBlurPercent must be 0..100");
-        }
         if !matches!(self.cursor_size, 24 | 32 | 48 | 64) {
             return invalid("cursorSize must be 24, 32, 48 or 64");
-        }
-        validate_color(&self.start_menu_color, false, "startMenuColor")?;
-        for (value, name) in [
-            (&self.titlebar_minimize_color, "titlebarMinimizeColor"),
-            (&self.titlebar_close_color, "titlebarCloseColor"),
-            (&self.titlebar_close_hover_color, "titlebarCloseHoverColor"),
-        ] {
-            validate_color(value, true, name)?;
-        }
-        if self.start_menu_opacity > 100 {
-            return invalid("startMenuOpacity must be 0..100");
         }
         if self.accent_opacity > 100 {
             return invalid("accentOpacity must be 0..100");
@@ -1124,7 +1081,6 @@ stable_settings! {
     (false, taskbar, "surfaceBorderColor", surface_border_color),
     (false, taskbar, "surfaceBorderOpacity", surface_border_opacity),
     (false, taskbar, "surfaceSaturationPercent", surface_saturation_percent),
-    (false, taskbar, "surfaceShadowPercent", surface_shadow_percent),
     (false, glass, "reduceTransparency", reduce_transparency),
     (false, glass, "glassOpacityPercent", glass_opacity_percent),
     (false, glass, "glassBlurPx", glass_blur_px),
@@ -1135,9 +1091,6 @@ stable_settings! {
     (true, desktop, "stickyNotesEnabled", sticky_notes_enabled),
     (true, desktop, "organizeDownloads", organize_downloads),
     (false, appearance, "iconTheme", icon_theme),
-    (false, taskbar, "startMenuColor", start_menu_color),
-    (false, taskbar, "startMenuOpacity", start_menu_opacity),
-    (false, taskbar, "startMenuBlurPercent", start_menu_blur_percent),
     (false, taskbar, "taskbarClockFormat", taskbar_clock_format),
     (false, taskbar, "taskbarShowSeconds", taskbar_show_seconds),
     (false, taskbar, "taskbarShowDate", taskbar_show_date),
@@ -1160,18 +1113,13 @@ stable_settings! {
     (false, windows, "snapPreviewEnabled", snap_preview_enabled),
     (false, windows, "windowMargin", window_margin),
     (false, windows, "showContentWhileDragging", show_content_while_dragging),
-    (true, windows, "windowShadows", window_shadows),
     (false, windows, "titlebars", titlebars),
     (false, windows, "focusFollowsMouse", focus_follows_mouse),
     (false, appearance, "cursorSize", cursor_size),
-    (false, appearance, "cursorShadow", cursor_shadow),
     (false, appearance, "accentOpacity", accent_opacity),
     (false, appearance, "decoration", decoration),
     (false, appearance, "renderAcceleration", render_acceleration),
     (false, windows, "titlebarButtonStyle", titlebar_button_style),
-    (false, windows, "titlebarMinimizeColor", titlebar_minimize_color),
-    (false, windows, "titlebarCloseColor", titlebar_close_color),
-    (false, windows, "titlebarCloseHoverColor", titlebar_close_hover_color),
     (false, appearance, "cursorTheme", cursor_theme),
     (false, windows, "animationsEnabled", animations_enabled),
     (false, windows, "animationSpeed", animation_speed),

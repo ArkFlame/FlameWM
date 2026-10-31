@@ -33,23 +33,6 @@ class Pass50Integration(unittest.TestCase):
         self.assertIn('scale_percent % 5 == 0', grid)
         self.assertIn('for scale in (100..=200).step_by(5)', grid)
 
-    def test_global_cursor_shadow_has_live_independent_process_observers(self):
-        exports = ('crates/flamewm-ui-x11/src/lib.rs', 'crates/flamewm-wm-x11/src/lib.rs', 'crates/flamewm-wm/src/lib.rs')
-        for path in exports:
-            self.assertIn('apply_cursor_shadow', source(path), path)
-        for path in ('crates/flamewm-shell/src/cursor_theme.rs', 'crates/flamewm-settings/src/lib.rs',
-                     'crates/flamewm-wm/src/main.rs', 'crates/flamewm-desktop/src/main.rs'):
-            self.assertIn('apply_cursor_shadow(', source(path), path)
-        wm = source('crates/flamewm-wm/src/main.rs')
-        self.assertGreaterEqual(wm.count('sync_cursor_shadow(snapshot);'), 2)
-        self.assertIn('sync_cursor_shadow(snapshot);', wm.split('let observer: SettingsObserver', 1)[1].split('let input = xsettings_input_from_snapshot', 1)[0])
-
-    def test_native_shadow_cursor_checks_allocations_before_write(self):
-        cursor = source('crates/flamewm-render-x11/src/native/cursor.rs')
-        self.assertIn('(*new_set).images.is_null()', cursor)
-        self.assertIn('(*created).pixels.is_null()', cursor)
-        self.assertLess(cursor.index('(*created).pixels.is_null()'), cursor.index('ptr::copy_nonoverlapping(shadow.as_ptr()'))
-
     def test_default_icon_preview_uses_catalog_resolution(self):
         picker = source('crates/flamewm-settings/src/theme_picker.rs')
         settings = source('crates/flamewm-settings/src/lib.rs')

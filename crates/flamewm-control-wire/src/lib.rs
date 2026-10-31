@@ -2341,15 +2341,12 @@ fn setting_value_for_key(key: &str, value: &WireValue) -> Result<SettingValue, C
     match key {
         "DesktopSelectionFillOpacity"
         | "WindowSnapPreviewFillOpacity"
-        | "startMenuOpacity"
         | "surfaceOpacity"
         | "surfaceBlurPercent"
         | "surfaceSaturationPercent"
-        | "surfaceShadowPercent"
         | "glassOpacityPercent"
         | "glassBlurPx"
         | "taskbarOpacityPercent"
-        | "startMenuBlurPercent"
         | "accentOpacity" => {
             let percent = required_u32(value, key)?;
             Ok(SettingValue::Percent(
@@ -3664,11 +3661,7 @@ mod hotkey_capture_lease_wire_tests {
 
     #[test]
     fn blur_percent_keys_decode_as_percent_like_the_opacities() {
-        for key in [
-            "startMenuBlurPercent",
-            "surfaceOpacity",
-            "surfaceBlurPercent",
-        ] {
+        for key in ["surfaceOpacity", "surfaceBlurPercent"] {
             assert_eq!(
                 super::setting_value_for_key(key, &WireValue::U32(80)).expect("percent"),
                 SettingValue::Percent(80),

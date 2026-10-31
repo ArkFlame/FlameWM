@@ -62,10 +62,6 @@ pub struct Atoms {
     pub net_wm_action_change_desktop: Atom,
     pub net_wm_moveresize: Atom,
     pub wm_change_state: Atom,
-    /// Live desktop rubber band on the root (`flamewm_api::root_rubber`).
-    pub root_rubber: Atom,
-    /// Presented desktop frame on the root (`flamewm_render_x11::backdrop::DESKTOP_FRAME_PROPERTY`).
-    pub desktop_frame: Atom,
     /// Frames the WM redirects (`flamewm_render_x11::backdrop::REDIRECTED_FRAMES_PROPERTY`).
     pub redirected_frames: Atom,
     /// Wallpaper layout (`flamewm_render_x11::backdrop::WALLPAPER_OUTPUTS_PROPERTY`).

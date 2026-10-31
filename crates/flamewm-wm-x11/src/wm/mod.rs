@@ -449,13 +449,9 @@ pub(crate) struct Wm<'a, C: Connection> {
     decoration_tokens: flamewm_skin::recipes::decoration::ChromeTokens,
     /// `titlebars` value the frames were last reflowed for; a change resizes every Server frame.
     titlebars_applied: bool,
-    /// Shadow strips per floating frame (`wm/shadow.rs`).
-    frame_shadows: HashMap<Window, shadow::FrameShadow>,
     /// Clients whose bottom corners were clipped to a rounded frame; used to
     /// restore the unshaped client when the decoration turns square.
     rounded_clients: HashSet<Window>,
-    /// Root generation and staleness stamps that decide when a strip re-shades.
-    shadow_scene: shadow::ShadowScene,
     changes: WmChangeSet,
     /// Bare-Super tap state; see `SuperTap`. Start toggles only through it.
     super_tap: SuperTap,
@@ -492,7 +488,6 @@ mod publish;
 mod raw_keys;
 mod rects;
 mod release;
-mod shadow;
 mod show_desktop;
 mod super_tap;
 mod switcher;

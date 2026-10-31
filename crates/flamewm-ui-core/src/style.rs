@@ -114,7 +114,6 @@ impl UiLayer {
 pub struct Material {
     pub fill: Color,
     pub border: Color,
-    pub shadow: Color,
     pub radius: u16,
     pub border_width: u16,
 }
@@ -124,7 +123,6 @@ impl Default for Material {
         Self {
             fill: Color::SURFACE,
             border: Color::BORDER,
-            shadow: Color(0),
             radius: 0,
             border_width: 0,
         }

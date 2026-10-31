@@ -110,7 +110,7 @@ pub const X_EXTENSIONS: &[ExtensionRequirement] = &[
     ExtensionRequirement {
         name: "COMPOSITE",
         missing: Severity::Degraded,
-        impact: "frames are not redirected; transitions and shadows may be missing",
+        impact: "frames are not redirected; transitions may be missing",
     },
     ExtensionRequirement {
         name: "DAMAGE",

@@ -66,15 +66,6 @@ impl SurfaceCursor {
 }
 
 impl CursorThemeOwner for SurfaceCursor {
-    fn set_cursor_shadow(&mut self, enabled: bool) -> Result<(), String> {
-        unsafe { self.session.set_shadow(enabled) }?;
-        if self.define(self.kind) {
-            Ok(())
-        } else {
-            Err("cursor shadow redefine failed".into())
-        }
-    }
-
     fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String> {
         reload_then_redefine(&mut self.session, self.window, self.kind, theme)
     }

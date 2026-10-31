@@ -54,17 +54,6 @@ impl<C: Connection> Wm<'_, C> {
             Event::KeyRelease(event) => self.handle_key_release(event)?,
             Event::FocusOut(_) => self.super_tap.focus_lost(),
             Event::MotionNotify(event) => self.handle_motion(event)?,
-            Event::PropertyNotify(event)
-                if event.atom == self.atoms.root_rubber && event.window == self.screen().root =>
-            {
-                self.on_root_rubber_changed()?;
-            }
-            Event::PropertyNotify(event)
-                if event.atom == self.atoms.desktop_frame && event.window == self.screen().root =>
-            {
-                self.shadow_scene.desktop_read = false;
-                self.shadow_scene.content_changed = true;
-            }
             Event::PropertyNotify(event) => self.handle_property(event.window, event.atom)?,
             Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => {
                 self.display_topology_dirty.mark();

@@ -962,11 +962,12 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
         "square" => ButtonShape::Square,
         _ => ButtonShape::Circle,
     };
-    let button = |name: &str| ButtonTokens {
+    // Per-state colour overrides were removed; the skin supplies glyph, hover and pressed colours.
+    let button = |_name: &str| ButtonTokens {
         shape,
-        glyph: parse_settings_color(text(&format!("titlebar{name}Color"))),
-        hover: parse_settings_color(text(&format!("titlebar{name}HoverColor"))),
-        pressed: parse_settings_color(text(&format!("titlebar{name}PressedColor"))),
+        glyph: None,
+        hover: None,
+        pressed: None,
     };
     let stroke = flamewm_ui_core::surface::surface_stroke(snapshot);
     ChromeTokens {
@@ -980,10 +981,6 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
             wallpaper_source_from_settings(snapshot),
         ),
         buttons: [button("Minimize"), button("Maximize"), button("Close")],
-        window_shadows: !matches!(
-            snapshot.values.get("windowShadows"),
-            Some(SettingValue::Boolean(false))
-        ),
     }
 }
 

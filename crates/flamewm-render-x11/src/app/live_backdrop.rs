@@ -117,7 +117,7 @@ pub(crate) struct LiveScene {
     /// Root rects of the frames composed by the last refresh, to filter root events.
     behind: Vec<Behind>,
     /// Redirected frames listed at the last refresh. Root events of other windows (the move
-    /// outline, shadows, popups) never change the backdrop and are ignored.
+    /// outline, popups) never change the backdrop and are ignored.
     frames: Vec<Window>,
     /// Root rect the last refresh was composed for.
     rect: (i32, i32, u32, u32),

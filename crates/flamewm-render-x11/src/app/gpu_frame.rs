@@ -9,9 +9,7 @@
 //! a `BackdropBlur` op that blurs the pixels already painted under it on the GPU, in command order;
 //! the surface snapshot starts the frame as a `BlendImage`. The two painters never mix.
 
-use flamewm_render_core::{
-    Color, PaintCommand, PixelOp, Rect, RoundedRect, shadow_rings,
-};
+use flamewm_render_core::{Color, PaintCommand, PixelOp, Rect, RoundedRect};
 
 use super::clip::{Visible, stack_bounds, visible_under};
 use super::primitives::scale_rect;
@@ -161,31 +159,6 @@ pub(crate) fn frame_ops<'a>(
             } => {
                 if let Some(op) = stroke_op(rect, radius, width, color, scale, &stack)? {
                     ops.push(op);
-                }
-            }
-            // Same 1px rings the XRender painter strokes, so the two painters cover the same pixels.
-            PaintCommand::SurfaceShadow {
-                rect,
-                radius,
-                spread,
-                offset_y,
-                peak,
-            } => {
-                for (ring, ring_radius, alpha) in
-                    shadow_rings(rect, radius, u32::from(spread), peak, offset_y)
-                {
-                    if alpha == 0 {
-                        continue;
-                    }
-                    let black = Color {
-                        r: 0,
-                        g: 0,
-                        b: 0,
-                        a: alpha,
-                    };
-                    if let Some(op) = stroke_op(ring, ring_radius, 1.0, black, scale, &stack)? {
-                        ops.push(op);
-                    }
                 }
             }
             // The XRender painter draws nothing for a track, so the GPU frame skips it too.
@@ -482,29 +455,6 @@ mod tests {
             frame_ops(&[], 1.0, &[mask_source()], SCENE, None).is_err(),
             "an unused source means the frame and the sources disagree"
         );
-    }
-
-    #[test]
-    fn surface_shadow_lowers_to_pixel_ops() {
-        let surface = Rect {
-            x: 10.0,
-            y: 10.0,
-            width: 100.0,
-            height: 40.0,
-        };
-        let shadow = PaintCommand::SurfaceShadow {
-            rect: surface,
-            radius: 8.0,
-            spread: 4,
-            offset_y: 0.0,
-            peak: 90,
-        };
-        let ops = frame_ops(std::slice::from_ref(&shadow), 1.0, &[], SCENE, None).expect("shadow lowers");
-        assert_eq!(ops.len(), 4, "one 1px ring per shadow pixel of spread");
-        assert!(ops.iter().all(|op| matches!(
-            op,
-            PixelOp::FillRoundedRect { hole: Some(_), .. }
-        )));
     }
 
     const SCENE: (u32, u32) = (1000, 1000);

@@ -1432,43 +1432,6 @@ impl X11App {
                     self.paint_node_backdrop(*node, device, radius, *blur_percent, *opacity)?
                 };
             }
-            PaintCommand::SurfaceShadow {
-                rect,
-                radius,
-                spread,
-                offset_y,
-                peak,
-            } => {
-                // The shadow is an XRender ring stack; the GC path cannot blend it.
-                if self.xrender.is_none() {
-                    return Ok(());
-                }
-                for (ring, ring_radius, alpha) in flamewm_render_core::shadow_rings(
-                    *rect,
-                    *radius,
-                    u32::from(*spread),
-                    *peak,
-                    *offset_y,
-                ) {
-                    if alpha == 0 {
-                        continue;
-                    }
-                    let color = Color {
-                        r: 0,
-                        g: 0,
-                        b: 0,
-                        a: alpha,
-                    };
-                    let stroke = PaintCommand::StrokeRect {
-                        rect: ring,
-                        color,
-                        width: 1.0,
-                        radius: ring_radius,
-                    };
-                    // SAFETY: same initialized backbuffer/display contract as `paint`.
-                    unsafe { self.paint(&stroke, document, scale)? };
-                }
-            }
             PaintCommand::FillRect {
                 rect,
                 color,

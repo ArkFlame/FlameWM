@@ -1,3 +1,8 @@
+## 2026-10-31 — Shadows removed
+
+- Window shadows are gone: the frame shadow and the Liquid Glass surface drop shadow no longer paint or cost CPU. The `windowShadows` and `surfaceShadowPercent` settings are removed from Settings and the control wire. Existing config files still load; these keys are ignored and kept in the file.
+- Cursor shadow and text shadows are unchanged.
+
 ## 2026-10-29 — Widget grid
 
 - The widget grid covers the whole primary work area: columns and rows are computed from the usable area, and cells stretch so the grid fills it edge to edge inside a 16px margin (8px gutters). Cells are close to square (target about 104px at 100%). The grid recomputes on resolution, scale, taskbar size or position, and output changes; widgets reflow proportionally.

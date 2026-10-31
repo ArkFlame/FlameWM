@@ -12,7 +12,7 @@ use flamewm_session_core::{
     resolve_startup_appearance,
 };
 use flamewm_wm::{
-    SettingsObserver, SettingsWake, WmConfig, apply_cursor_shadow, apply_cursor_theme,
+    SettingsObserver, SettingsWake, WmConfig, apply_cursor_theme,
     persisted_appearance, persisted_cursor_theme, run_with_settings_observer,
 };
 use flamewm_xsettings::{
@@ -324,23 +324,10 @@ fn font_size_points(snapshot: &SettingsSnapshot) -> Option<u32> {
     }
 }
 
-/// Each `FlameWM` process owns its Xcursor registry. Apply the shadow toggle even
-/// when all XSETTINGS fields are unchanged, including the no-manager path.
-fn sync_cursor_shadow(snapshot: &SettingsSnapshot) {
-    let enabled = !matches!(
-        snapshot.values.get("cursorShadow"),
-        Some(SettingValue::Boolean(false))
-    );
-    for error in apply_cursor_shadow(enabled) {
-        eprintln!("flamewm: cursor shadow reload failed: {error}");
-    }
-}
-
 /// Settings observer used when no XSETTINGS manager is claimed: still applies
 /// the Flame `cursorTheme` to live cursor owners at every settings sync point.
 fn cursor_only_observer() -> SettingsObserver {
     Box::new(|snapshot: &SettingsSnapshot| {
-        sync_cursor_shadow(snapshot);
         let theme = xsettings_input_from_snapshot(snapshot).cursor_theme;
         for error in apply_cursor_theme(&theme) {
             eprintln!("flamewm: cursor theme reload failed: {error}");
@@ -368,7 +355,6 @@ fn xsettings_owner(
     // republish both succeeded, so a failed step is retried on the next snapshot.
     let mut published: Option<XSettingsInput> = None;
     let observer: SettingsObserver = Box::new(move |snapshot: &SettingsSnapshot| {
-        sync_cursor_shadow(snapshot);
         let mut pinned_snapshot = snapshot.clone();
         if let Some(mode) = sync.pinned {
             pinned_snapshot.values.insert(

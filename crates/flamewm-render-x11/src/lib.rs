@@ -50,7 +50,7 @@ mod surface_controller;
 use app::X11App;
 pub use config::*;
 pub use external_decoration::{
-    ExternalDecorationRenderer, apply_cursor_shadow, apply_cursor_theme,
+    ExternalDecorationRenderer, apply_cursor_theme,
 };
 pub use external_drawable::{
     ExternalDrawableSession, ExternalDrawableTarget, NativeDrawableRenderer,

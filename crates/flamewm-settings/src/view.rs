@@ -96,7 +96,6 @@ mod tests {
         "desktop-entry-size-value",
         "surface-blur-value",
         "surface-saturation-value",
-        "surface-shadow-value",
         "surface-opacity-value",
         "start-icon-value",
         "file-manager-value",

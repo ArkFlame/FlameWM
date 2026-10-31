@@ -41,19 +41,8 @@ struct XcursorImages {
     name: *mut c_char,
 }
 type LoadImagesFn = unsafe extern "C" fn(*const c_char, *const c_char, c_int) -> *mut XcursorImages;
-type CreateImagesFn = unsafe extern "C" fn(c_int) -> *mut XcursorImages;
-type CreateImageFn = unsafe extern "C" fn(u32, u32) -> *mut XcursorImage;
 type DestroyImagesFn = unsafe extern "C" fn(*mut XcursorImages);
 type ImageLoadCursorFn = unsafe extern "C" fn(*mut Display, *const XcursorImage) -> Cursor;
-#[derive(Clone, Copy)]
-struct ShadowApi {
-    load_images: LoadImagesFn,
-    create_images: CreateImagesFn,
-    create_image: CreateImageFn,
-    destroy_images: DestroyImagesFn,
-    load_image: ImageLoadCursorFn,
-}
-
 #[derive(Clone, Copy)]
 struct StaticCursorApi {
     load_images: LoadImagesFn,
@@ -94,147 +83,6 @@ fn load_static_cursor(
     cursor
 }
 
-/// Bounded 1..4px soft shadow below the Xcursor silhouette, preserving hotspot.
-/// XcursorPixel is ARGB; input pixels are never altered or recolored.
-fn shadow_frame(
-    src: &[u32],
-    width: u32,
-    height: u32,
-    xhot: u32,
-    yhot: u32,
-) -> Option<(Vec<u32>, u32, u32, u32, u32)> {
-    if width == 0
-        || height == 0
-        || width > 256
-        || height > 256
-        || src.len() != width as usize * height as usize
-        || xhot >= width
-        || yhot >= height
-    {
-        return None;
-    }
-    let radius = (width.max(height) / 16).clamp(1, 4);
-    let pad = radius * 3 + 2;
-    let (w, h) = (width + 2 * pad, height + 2 * pad);
-    let mut shadow = vec![0_u8; w as usize * h as usize * 4];
-    for row in 0..height as usize {
-        for col in 0..width as usize {
-            let alpha = (src[row * width as usize + col] >> 24) as u8;
-            let pos = (((row as u32 + pad + 1) * w + col as u32 + pad + 1) * 4) as usize;
-            shadow[pos + 3] = ((u16::from(alpha) * 100 + 127) / 255) as u8;
-        }
-    }
-    flamewm_image_core::blur::gaussian_blur_rgba(&mut shadow, w, h, radius as f32).ok()?;
-    let mut result = vec![0_u32; w as usize * h as usize];
-    for (dst, rgba) in result.iter_mut().zip(shadow.chunks_exact(4)) {
-        *dst = u32::from(rgba[3]) << 24; // black premultiplied shadow
-    }
-    for row in 0..height as usize {
-        for col in 0..width as usize {
-            let pos = (row as u32 + pad) as usize * w as usize + col + pad as usize;
-            let original = src[row * width as usize + col];
-            let a = original >> 24;
-            let bg_a = result[pos] >> 24;
-            let out_a = a + ((bg_a * (255 - a) + 127) / 255);
-            // Xcursor colors are premultiplied. Mask RGB by source alpha so
-            // hidden garbage RGB never becomes a dark rectangular fringe.
-            let rgb = original & 0x00ff_ffff;
-            let r = ((rgb >> 16) & 0xff).min(a);
-            let g = ((rgb >> 8) & 0xff).min(a);
-            let b = (rgb & 0xff).min(a);
-            result[pos] = (out_a << 24) | (r << 16) | (g << 8) | b;
-        }
-    }
-    Some((result, w, h, xhot + pad, yhot + pad))
-}
-
-fn load_shadow_cursor(
-    display: *mut Display,
-    api: ShadowApi,
-    theme: &str,
-    name: &str,
-    size: i32,
-) -> Cursor {
-    let (Ok(cname), Ok(ctheme)) = (CString::new(name), CString::new(theme)) else {
-        return 0;
-    };
-    let original = unsafe { (api.load_images)(cname.as_ptr(), ctheme.as_ptr(), size) };
-    if original.is_null() {
-        return 0;
-    }
-    let result = (|| {
-        let original_set = unsafe { &*original };
-        if original_set.nimage <= 0 || original_set.nimage > 32 || original_set.images.is_null() {
-            return 0;
-        }
-        let new_set = unsafe { (api.create_images)(original_set.nimage) };
-        if new_set.is_null() {
-            return 0;
-        }
-        if unsafe { (*new_set).images.is_null() } {
-            unsafe { (api.destroy_images)(new_set) };
-            return 0;
-        }
-        let mut valid = true;
-        for index in 0..original_set.nimage as usize {
-            let src = unsafe { *original_set.images.add(index) };
-            if src.is_null() {
-                valid = false;
-                break;
-            }
-            let src = unsafe { &*src };
-            if src.pixels.is_null()
-                || src.width == 0
-                || src.height == 0
-                || src.width > 256
-                || src.height > 256
-            {
-                valid = false;
-                break;
-            }
-            let pixels = unsafe {
-                std::slice::from_raw_parts(src.pixels, src.width as usize * src.height as usize)
-            };
-            let Some((shadow, width, height, xhot, yhot)) =
-                shadow_frame(pixels, src.width, src.height, src.xhot, src.yhot)
-            else {
-                valid = false;
-                break;
-            };
-            let created = unsafe { (api.create_image)(width, height) };
-            if created.is_null() {
-                valid = false;
-                break;
-            }
-            if unsafe { (*created).pixels.is_null() } {
-                // The container is responsible for releasing the image even when
-                // allocation of its pixel storage failed.
-                unsafe { *(*new_set).images.add(index) = created };
-                valid = false;
-                break;
-            }
-            unsafe {
-                (*created).size = src.size;
-                (*created).xhot = xhot;
-                (*created).yhot = yhot;
-                (*created).delay = src.delay;
-                ptr::copy_nonoverlapping(shadow.as_ptr(), (*created).pixels, shadow.len());
-                *(*new_set).images.add(index) = created;
-            }
-        }
-        let cursor = if valid {
-            unsafe { first_image(&*new_set) }
-                .map_or(0, |image| unsafe { (api.load_image)(display, image) })
-        } else {
-            0
-        };
-        unsafe { (api.destroy_images)(new_set) };
-        cursor
-    })();
-    unsafe { (api.destroy_images)(original) };
-    result
-}
-
 static LOG_ONCE: Once = Once::new();
 
 fn log_backend(backend: &str) {
@@ -247,10 +95,8 @@ pub struct XcursorBackend {
     display: *mut Display,
     load: Option<LibraryLoadCursorFn>,
     set_theme: Option<LibrarySetThemeFn>,
-    shadow_api: Option<ShadowApi>,
     static_api: Option<StaticCursorApi>,
     size: i32,
-    shadow_enabled: bool,
     theme: Option<String>,
     _library: Option<DynamicLibrary>,
     cache: std::collections::HashMap<CursorKind, Cursor>,
@@ -264,9 +110,6 @@ pub(crate) trait CursorLoader {
     fn set_theme(&mut self, theme: &str);
     /// Create a new owned cursor for `name`; `0` when the theme lacks it.
     fn load(&mut self, name: &str) -> Cursor;
-    fn load_shadow(&mut self, name: &str) -> Cursor {
-        self.load(name)
-    }
     /// Release one owned cursor object.
     fn free(&mut self, cursor: Cursor);
 }
@@ -275,7 +118,6 @@ struct XlibCursorLoader {
     display: *mut Display,
     load: LibraryLoadCursorFn,
     set_theme: Option<LibrarySetThemeFn>,
-    shadow_api: Option<ShadowApi>,
     static_api: Option<StaticCursorApi>,
     theme: String,
     size: i32,
@@ -296,12 +138,6 @@ impl CursorLoader for XlibCursorLoader {
             },
             |api| load_static_cursor(self.display, api, &self.theme, name, self.size),
         )
-    }
-
-    fn load_shadow(&mut self, name: &str) -> Cursor {
-        self.shadow_api.map_or(0, |api| {
-            load_shadow_cursor(self.display, api, &self.theme, name, self.size)
-        })
     }
 
     fn free(&mut self, cursor: Cursor) {
@@ -332,20 +168,13 @@ pub(crate) fn reload_cache<L: CursorLoader>(
     cache: &mut std::collections::HashMap<CursorKind, Cursor>,
     previous_theme: Option<&str>,
     theme: &str,
-    shadow: bool,
 ) -> Result<(), String> {
     loader.set_theme(theme);
     let mut fresh = std::collections::HashMap::with_capacity(ALL_CURSOR_KINDS.len());
     for kind in ALL_CURSOR_KINDS {
         let cursor = cursor_names(kind)
             .iter()
-            .map(|name| {
-                if shadow {
-                    loader.load_shadow(name)
-                } else {
-                    loader.load(name)
-                }
-            })
+            .map(|name| loader.load(name))
             .find(|cursor| *cursor != 0);
         match cursor {
             Some(cursor) => {
@@ -409,15 +238,6 @@ impl XcursorBackend {
         let set_theme = loaded.as_ref().and_then(|lib| {
             unsafe { lib.symbol::<LibrarySetThemeFn>(XCURSOR_SET_THEME_SYMBOL) }.ok()
         });
-        let shadow_api = loaded.as_ref().and_then(|lib| {
-            Some(ShadowApi {
-                load_images: unsafe { lib.symbol(b"XcursorLibraryLoadImages\0").ok()? },
-                create_images: unsafe { lib.symbol(b"XcursorImagesCreate\0").ok()? },
-                create_image: unsafe { lib.symbol(b"XcursorImageCreate\0").ok()? },
-                destroy_images: unsafe { lib.symbol(b"XcursorImagesDestroy\0").ok()? },
-                load_image: unsafe { lib.symbol(b"XcursorImageLoadCursor\0").ok()? },
-            })
-        });
         let static_api = loaded.as_ref().and_then(|lib| {
             Some(StaticCursorApi {
                 load_images: unsafe { lib.symbol(b"XcursorLibraryLoadImages\0").ok()? },
@@ -429,13 +249,11 @@ impl XcursorBackend {
             display,
             load,
             set_theme,
-            shadow_api,
             static_api,
             size: size
                 .filter(|size| *size > 0)
                 .or_else(|| std::env::var("XCURSOR_SIZE").ok()?.parse().ok())
                 .unwrap_or(24),
-            shadow_enabled: false,
             theme: theme.filter(|name| !name.is_empty()).map(str::to_owned),
             _library: loaded,
             cache: std::collections::HashMap::new(),
@@ -459,17 +277,7 @@ impl XcursorBackend {
         if let Some(load) = self.load {
             for name in cursor_names(kind) {
                 let cname = CString::new(*name).ok()?;
-                let cursor = if self.shadow_enabled {
-                    self.shadow_api.map_or(0, |api| {
-                        load_shadow_cursor(
-                            self.display,
-                            api,
-                            self.theme.as_deref().unwrap_or("default"),
-                            name,
-                            self.size,
-                        )
-                    })
-                } else if let Some(api) = self.static_api {
+                let cursor = if let Some(api) = self.static_api {
                     load_static_cursor(
                         self.display,
                         api,
@@ -518,7 +326,6 @@ impl XcursorBackend {
             display: self.display,
             load,
             set_theme: self.set_theme,
-            shadow_api: self.shadow_api,
             static_api: self.static_api,
             theme: theme.to_owned(),
             size: self.size,
@@ -528,34 +335,8 @@ impl XcursorBackend {
             &mut self.cache,
             self.theme.as_deref(),
             theme,
-            self.shadow_enabled,
         )?;
         self.theme = Some(theme.to_owned());
-        Ok(())
-    }
-
-    /// Rebuild semantic cursor handles atomically for the shadow toggle.
-    /// This affects Flame-defined cursors only. Client-owned X11 cursors are not overridden.
-    pub unsafe fn set_shadow(&mut self, enabled: bool) -> Result<(), String> {
-        if self.shadow_enabled == enabled {
-            return Ok(());
-        }
-        let load = self.load.ok_or("Xcursor library unavailable")?;
-        if enabled && self.shadow_api.is_none() {
-            return Err("Xcursor images API unavailable".to_string());
-        }
-        let theme = self.theme.clone().unwrap_or_else(|| "default".to_owned());
-        let mut loader = XlibCursorLoader {
-            display: self.display,
-            load,
-            set_theme: self.set_theme,
-            shadow_api: self.shadow_api,
-            theme: theme.clone(),
-            size: self.size,
-            static_api: self.static_api,
-        };
-        reload_cache(&mut loader, &mut self.cache, Some(&theme), &theme, enabled)?;
-        self.shadow_enabled = enabled;
         Ok(())
     }
 
@@ -665,10 +446,6 @@ impl NativeCursorSession {
         unsafe { self.backend.reload_theme(theme) }
     }
 
-    pub unsafe fn set_shadow(&mut self, enabled: bool) -> Result<(), String> {
-        unsafe { self.backend.set_shadow(enabled) }
-    }
-
     pub(crate) unsafe fn into_deferred_libraries(self) -> Vec<DynamicLibrary> {
         unsafe { self.backend.into_deferred_libraries() }
     }
@@ -765,39 +542,9 @@ mod tests {
 
     fn seeded_cache(loader: &mut FakeLoader, theme: &str) -> HashMap<CursorKind, Cursor> {
         let mut cache = HashMap::new();
-        reload_cache(loader, &mut cache, None, theme, false).expect("initial theme");
+        reload_cache(loader, &mut cache, None, theme).expect("initial theme");
         loader.frees.clear();
         cache
-    }
-
-    #[test]
-    fn invisible_cursor_rgb_does_not_bleed_into_shadow() {
-        let mut pixels = vec![0x00ff_ff00u32; 24 * 24];
-        pixels[3 * 24 + 3] = 0xffff_ffff;
-        let (out, width, _, xhot, yhot) = shadow_frame(&pixels, 24, 24, 3, 3).unwrap();
-        let center = yhot as usize * width as usize + xhot as usize;
-        assert_eq!(out[center], 0xffff_ffff);
-        assert_eq!(out[center - 1] & 0x00ff_ffff, 0);
-    }
-
-    #[test]
-    fn shadow_keeps_hotspot_and_creates_real_alpha_halo() {
-        for size in [24, 32, 48, 64] {
-            let mut pixels = vec![0u32; size * size];
-            pixels[3 * size + 3] = 0xffff_ffff;
-            let (out, width, _, hot_x, hot_y) =
-                shadow_frame(&pixels, size as u32, size as u32, 3, 3).unwrap();
-            let pad = hot_x - 3;
-            assert_eq!(hot_y, 3 + pad);
-            assert_eq!(
-                out[(3 + pad) as usize * width as usize + (3 + pad) as usize],
-                0xffff_ffff
-            );
-            assert!(
-                out.iter()
-                    .any(|pixel| (pixel >> 24) > 0 && (*pixel & 0x00ff_ffff) == 0)
-            );
-        }
     }
 
     #[test]
@@ -805,7 +552,7 @@ mod tests {
         let mut loader = FakeLoader::default();
         let mut cache = seeded_cache(&mut loader, "old");
         let old: Vec<Cursor> = cache.values().copied().collect();
-        reload_cache(&mut loader, &mut cache, Some("old"), "new", false).expect("switch");
+        reload_cache(&mut loader, &mut cache, Some("old"), "new").expect("switch");
         let mut frees = loader.frees.clone();
         frees.sort_unstable();
         let mut expected = old.clone();
@@ -826,7 +573,7 @@ mod tests {
             "sb_h_double_arrow".into(),
             "col-resize".into(),
         ];
-        let error = reload_cache(&mut loader, &mut cache, Some("old"), "partial", false)
+        let error = reload_cache(&mut loader, &mut cache, Some("old"), "partial")
             .expect_err("partial theme must be rejected");
         assert!(error.contains("ResizeHorizontal"), "{error}");
         assert_eq!(cache, before, "previous cursor set untouched");
@@ -844,7 +591,7 @@ mod tests {
         let mut loader = FakeLoader::default();
         let mut cache = seeded_cache(&mut loader, "old");
         let before = cache.clone();
-        reload_cache(&mut loader, &mut cache, Some("old"), "broken", false)
+        reload_cache(&mut loader, &mut cache, Some("old"), "broken")
             .expect_err("unloadable theme");
         assert_eq!(cache, before);
         assert!(

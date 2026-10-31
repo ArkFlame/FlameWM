@@ -34,13 +34,6 @@ impl CursorThemeSync {
     /// Reloads the live cursor owners when the resolved `cursorTheme` changed. A failed reload
     /// keeps the previous theme (rollback) and is retried at the next settings snapshot.
     pub fn sync_snapshot(&mut self, snapshot: &SettingsSnapshot) {
-        let shadow_enabled = !matches!(
-            snapshot.values.get("cursorShadow"),
-            Some(SettingValue::Boolean(false))
-        );
-        for error in flamewm_ui_x11::apply_cursor_shadow(shadow_enabled) {
-            eprintln!("flamewm-shell: cursor shadow reload failed: {error}");
-        }
         let Some(SettingValue::Text(requested)) = snapshot.values.get("cursorTheme") else {
             return;
         };

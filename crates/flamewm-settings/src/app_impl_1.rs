@@ -369,13 +369,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
     /// Reloads this window's cursor owners when the resolved `cursorTheme` changed. A failed
     /// reload keeps the previous theme (rollback) and is retried at the next settings snapshot.
     pub(crate) fn sync_cursor_theme(&mut self) {
-        let shadow_enabled = !matches!(
-            self.setting_value("cursorShadow"),
-            Some(SettingValue::Boolean(false))
-        );
-        for error in flamewm_ui_x11::apply_cursor_shadow(shadow_enabled) {
-            eprintln!("settings: cursor shadow reload failed: {error}");
-        }
         let Ok(requested) = self.text_setting("cursorTheme") else {
             return;
         };

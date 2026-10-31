@@ -15,7 +15,6 @@ pub mod ids;
 pub mod input;
 pub mod panels;
 pub mod ports;
-pub mod root_rubber;
 pub mod session;
 pub mod settings;
 pub mod shell_bootstrap;

@@ -190,7 +190,7 @@ impl<C: Connection> Wm<'_, C> {
         )?;
         // The child client is not clipped by the frame's bounding shape alone;
         // set the clip region to the same rounded spans so client pixels cannot
-        // fill the transparent corner notches (and hide the shadow there).
+        // fill the transparent corner notches.
         self.conn.shape_rectangles(
             ShapeOp::SET,
             ShapeSk::CLIP,
@@ -202,7 +202,7 @@ impl<C: Connection> Wm<'_, C> {
         )?;
         // The client is a child window with its own square pixels. Intersect
         // its shape with the frame's bottom-corner arcs so the rounded corner
-        // and the shadow in the notch are actually visible. The client shape is
+        // is actually visible. The client shape is
         // reset to the full client rect first, so a grown frame is not left with
         // the smaller shape from the previous mask; any app-set client shape is
         // replaced by this reset.

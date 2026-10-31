@@ -811,7 +811,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 "show-content-on",
                 "show-content-off",
             ),
-            ("windowShadows", "shadows-on", "shadows-off"),
             ("focusFollowsMouse", "focus-mouse-on", "focus-mouse-off"),
         ] {
             let enabled = self.setting_value(key).and_then(|value| match value {

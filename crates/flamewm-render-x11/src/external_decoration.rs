@@ -445,23 +445,9 @@ impl ExternalDecorationRenderer {
 /// A renderer whose Xcursor theme can be swapped in place by the registry.
 pub trait CursorThemeOwner {
     fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String>;
-    fn set_cursor_shadow(&mut self, _enabled: bool) -> Result<(), String> {
-        Ok(())
-    }
 }
 
 impl CursorThemeOwner for ExternalDecorationRenderer {
-    fn set_cursor_shadow(&mut self, enabled: bool) -> Result<(), String> {
-        let cursor = self
-            .cursor
-            .as_mut()
-            .ok_or("external decoration has no cursor backend")?;
-        unsafe { cursor.set_shadow(enabled) }?;
-        redefine_cursors(&self.defined_cursors, |xid, kind| {
-            unsafe { cursor.define(xid as super::xlib::Window, kind) }.is_some()
-        })
-    }
-
     /// Replaces the cursor set, then re-defines the cursor on every window this
     /// renderer already set, so live frames show the new theme. If the theme
     /// reload fails, the old theme stays and the windows keep their cursors. If
@@ -507,9 +493,6 @@ struct CursorThemeRegistry {
     /// Theme the registered owners currently hold. `None` until the first owner
     /// registers, so an unset session theme still reloads on the first change.
     applied: Option<String>,
-    shadow_applied: bool,
-    /// Last shadow value attempted and not yet applied (suppresses per-publish retries).
-    shadow_attempted: Option<bool>,
 }
 
 impl CursorThemeRegistry {
@@ -519,37 +502,7 @@ impl CursorThemeRegistry {
         if self.applied.is_none() {
             self.applied = in_use;
         }
-        if self.shadow_applied {
-            if let Err(error) = owner.borrow_mut().set_cursor_shadow(true) {
-                eprintln!("FLAMEWM_CURSOR_SHADOW_RELOAD {error}");
-            }
-        }
         self.owners.push(Rc::downgrade(owner));
-    }
-
-    /// A failing request is attempted once per value: settings publish on every
-    /// WM event, and retrying a full Xcursor reload each time stalls the pointer.
-    /// A new value, or a successful theme change, re-arms the attempt.
-    fn apply_shadow(&mut self, enabled: bool) -> Vec<String> {
-        if self.shadow_applied == enabled {
-            self.shadow_attempted = None;
-            return Vec::new();
-        }
-        if self.shadow_attempted == Some(enabled) {
-            return Vec::new();
-        }
-        self.shadow_attempted = Some(enabled);
-        self.owners.retain(|owner| owner.strong_count() > 0);
-        let mut errors = Vec::new();
-        for owner in self.owners.iter().filter_map(Weak::upgrade) {
-            if let Err(error) = owner.borrow_mut().set_cursor_shadow(enabled) {
-                errors.push(error);
-            }
-        }
-        if errors.is_empty() {
-            self.shadow_applied = enabled;
-        }
-        errors
     }
 
     /// Reloads every live owner when `resolved` differs from the last applied
@@ -569,7 +522,6 @@ impl CursorThemeRegistry {
         }
         if errors.is_empty() {
             self.applied = Some(resolved.to_owned());
-            self.shadow_attempted = None;
         }
         errors
     }
@@ -586,12 +538,6 @@ pub fn apply_cursor_theme(resolved: &str) -> Vec<String> {
     CURSOR_THEME_REGISTRY.with(|registry| registry.borrow_mut().apply(resolved))
 }
 
-/// Apply the persisted cursorShadow toggle to Flame-owned native cursor handles.
-/// Per-client Xcursor cursors remain client-controlled by the X11 protocol.
-pub fn apply_cursor_shadow(enabled: bool) -> Vec<String> {
-    CURSOR_THEME_REGISTRY.with(|registry| registry.borrow_mut().apply_shadow(enabled))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,8 +546,6 @@ mod tests {
     struct FakeOwner {
         reloads: Vec<String>,
         fail: bool,
-        shadow_calls: usize,
-        fail_shadow: bool,
     }
 
     impl CursorThemeOwner for FakeOwner {
@@ -613,33 +557,6 @@ mod tests {
                 Ok(())
             }
         }
-        fn set_cursor_shadow(&mut self, _enabled: bool) -> Result<(), String> {
-            self.shadow_calls += 1;
-            if self.fail_shadow {
-                Err("shadow reload failed".to_owned())
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    #[test]
-    fn failed_shadow_request_is_not_retried_on_every_publish() {
-        let mut registry = CursorThemeRegistry::default();
-        let owner = fake(false);
-        owner.borrow_mut().fail_shadow = true;
-        registry.register(&as_owner(&owner), None);
-
-        assert_eq!(registry.apply_shadow(true).len(), 1);
-        for _ in 0..3 {
-            assert!(registry.apply_shadow(true).is_empty());
-        }
-        assert_eq!(owner.borrow().shadow_calls, 1);
-
-        owner.borrow_mut().fail_shadow = false;
-        assert!(registry.apply_shadow(false).is_empty());
-        assert!(registry.apply_shadow(true).is_empty());
-        assert_eq!(owner.borrow().shadow_calls, 2);
     }
 
     fn fake(fail: bool) -> Rc<RefCell<FakeOwner>> {

@@ -77,8 +77,7 @@ pub fn build_coverage_scaled(
             // by nothing here: text does not grow the shape mask.
             PaintCommand::Text { .. }
             | PaintCommand::TextShadow { .. }
-            | PaintCommand::NodeBackdrop { .. }
-            | PaintCommand::SurfaceShadow { .. } => {}
+            | PaintCommand::NodeBackdrop { .. } => {}
             PaintCommand::PushClip { rect } => clips.push(scale_rect(*rect)),
             PaintCommand::PopClip => {
                 clips.pop();

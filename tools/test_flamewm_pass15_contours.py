@@ -31,14 +31,6 @@ class SourceContracts(unittest.TestCase):
             self.assertIn(f'document.border("{node}"',panel)
         self.assertIn('.capsule, .task-slots, .tray-group',style)
         self.assertIn('border:1px solid',style)
-    def test_shadow_radius_flows_through_mask_shading_and_rubber(self):
-        pure=read('crates/flamewm-wm-x11/src/frame/shadow.rs')
-        wm=read('crates/flamewm-wm-x11/src/wm/shadow.rs')
-        self.assertIn('rounded_shadow_mask_rectangles(',pure)
-        self.assertIn('shade_visible_shadow_rounded(',pure)
-        self.assertIn('held.radius',wm)
-        self.assertIn('ShadowBands::capture_rounded(',wm)
-        self.assertIn('visible_motion_damage_regions_rounded(',wm)
     def test_clipped_ring_keeps_arc(self):
         painter=read('crates/flamewm-render-x11/src/xrender_aa.rs')
         caller=read('crates/flamewm-render-x11/src/app/render.rs')

@@ -58,8 +58,6 @@ pub struct ChromeTokens {
     /// Bumped when the backdrop source (wallpaper) changes so frames repaint.
     pub backdrop_revision: u32,
     pub buttons: [ButtonTokens; 3],
-    /// `windowShadows`: Win7-style frame shadows (default on).
-    pub window_shadows: bool,
 }
 
 impl Default for ChromeTokens {
@@ -73,7 +71,6 @@ impl Default for ChromeTokens {
             surface_border_alpha: 20,
             backdrop_revision: 0,
             buttons: [ButtonTokens::default(); 3],
-            window_shadows: true,
         }
     }
 }

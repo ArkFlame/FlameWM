@@ -22,7 +22,7 @@ One readback returns the frame. Blur uses the same sigma mapping as `blur_rgba` 
   XRender AA path. Corner pixels match `xrender_aa` within 8/255 per channel (mean under 0.03).
 - `paint_full` tries the GPU frame first. It runs only when `renderAcceleration=gpu`, the scene
   has an XRender backbuffer, no backdrop or clip is active, and every command is a rounded fill,
-  a stroke or a scrollbar track on whole device pixels. Any other command (text, images, shadows,
+  a stroke or a scrollbar track on whole device pixels. Any other command (text, images, text shadows,
   node backdrops, clips, scrollbar thumbs, fractional geometry) keeps the XRender path wholesale.
 - The GPU result is premultiplied and uploaded once to the backbuffer. A GPU failure returns to
   the XRender path before anything is presented, so a frame never mixes the two painters.

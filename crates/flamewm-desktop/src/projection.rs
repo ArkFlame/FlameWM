@@ -7,7 +7,6 @@ use flamewm_integrations_linux::icons::{
     IconKey, IconRequest, IconResolver, IconSize, Rgba8Raster,
 };
 use flamewm_ui_core::context_menu::{menu_surface, surface_fill};
-use flamewm_ui_core::surface::surface_material_values;
 use flamewm_ui_core::style::UiLayer;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
@@ -167,8 +166,7 @@ pub fn project_menu_surface(
         },
     )?;
     // Translucent menus blur the wallpaper beneath them; 0 clears the backdrop.
-    document.node_backdrop(id, Some(surface_blur_percent(snapshot)))?;
-    document.surface_material(id, Some(surface_material_values(snapshot)))
+    document.node_backdrop(id, Some(surface_blur_percent(snapshot)))
 }
 
 /// Global `surfaceBlurPercent` (0..=100) that menus and inheriting widgets blur beneath them.
@@ -176,10 +174,9 @@ pub(crate) fn surface_blur_percent(snapshot: &SettingsSnapshot) -> u8 {
     flamewm_ui_core::surface::surface_blur_percent(snapshot)
 }
 
-/// Clears a desktop menu root's node backdrop and glass material (menu hidden).
+/// Clears a desktop menu root's node backdrop (menu hidden).
 pub fn clear_menu_backdrop(document: &mut impl UiDocumentAccess, id: &str) -> Result<(), String> {
-    document.node_backdrop(id, None)?;
-    document.surface_material(id, None)
+    document.node_backdrop(id, None)
 }
 
 /// Semantic layer assignment, run once at document init. Static ids plus the

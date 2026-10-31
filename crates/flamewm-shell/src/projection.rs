@@ -209,7 +209,6 @@ pub(crate) fn project_element_backgrounds(
         TRANSPARENT_FILL
     };
     let blur = items.separate.then_some(items.blur_percent);
-    let material = |shown: bool| (items.separate && shown).then_some(items.material).flatten();
     let stroke = taskbar_border();
     let contour = |shown: bool| {
         if items.separate && shown {
@@ -223,7 +222,6 @@ pub(crate) fn project_element_backgrounds(
     document.border("start-capsule", contour(true))?;
     document.corner_radius("start-capsule", ELEMENT_RADIUS)?;
     document.node_backdrop("start-capsule", blur)?;
-    document.surface_material("start-capsule", material(true))?;
     // A capsule with no icons inside is not painted at all.
     let capsule = |shown: bool| if shown { fill } else { TRANSPARENT_FILL };
     let capsule_blur = |shown: bool| (items.separate && shown).then_some(items.blur_percent);
@@ -231,19 +229,16 @@ pub(crate) fn project_element_backgrounds(
     document.border("tray-group", contour(tray_visible))?;
     document.corner_radius("tray-group", ELEMENT_RADIUS)?;
     document.node_backdrop("tray-group", capsule_blur(tray_visible))?;
-    document.surface_material("tray-group", material(tray_visible))?;
     document.background("clock-capsule", capsule(clock_visible))?;
     document.border("clock-capsule", contour(clock_visible))?;
     document.corner_radius("clock-capsule", ELEMENT_RADIUS)?;
     document.node_backdrop("clock-capsule", capsule_blur(clock_visible))?;
-    document.surface_material("clock-capsule", material(clock_visible))?;
     // The pager is a single capsule, just like Start, tasks, tray and clock.
     // Its existing individual workspace cells still own their active/hover fills.
     document.background("workspace-pager", capsule(items.workspaces))?;
     document.border("workspace-pager", contour(items.workspaces))?;
     document.corner_radius("workspace-pager", ELEMENT_RADIUS)?;
     document.node_backdrop("workspace-pager", capsule_blur(items.workspaces))?;
-    document.surface_material("workspace-pager", material(items.workspaces))?;
     let slots = if items.separate && rendered_slots > 0 {
         taskbar_surface()
     } else {
@@ -256,7 +251,6 @@ pub(crate) fn project_element_backgrounds(
         "task-slots",
         (items.separate && rendered_slots > 0).then_some(items.blur_percent),
     )?;
-    document.surface_material("task-slots", material(rendered_slots > 0))?;
     Ok(())
 }
 
@@ -540,8 +534,6 @@ pub struct TaskbarItems {
     pub separate: bool,
     /// `surfaceBlurPercent`: blur applied behind each separate-mode capsule.
     pub blur_percent: u8,
-    /// Liquid Glass shadow/rim/gloss for separate-mode capsules; `None` paints none.
-    pub material: Option<flamewm_ui_core::surface::SurfaceMaterialValues>,
 }
 
 impl Default for TaskbarItems {
@@ -558,7 +550,6 @@ impl Default for TaskbarItems {
             activities: true,
             separate: true,
             blur_percent: 80,
-            material: None,
         }
     }
 }
