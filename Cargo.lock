@@ -700,7 +700,6 @@ dependencies = [
  "flamewm-image-core",
  "flamewm-integrations-linux",
  "flamewm-profiler",
- "flamewm-reactor",
  "flamewm-remote-fs",
  "flamewm-render-compiler",
  "flamewm-settings-core",
