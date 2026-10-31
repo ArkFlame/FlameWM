@@ -116,12 +116,13 @@ fn write_rewrite(
         }
         match entry.kind {
             Kind::Dir => {
-                writer.add_dir(&rel)?;
+                writer.add_dir(&rel, entry.mode.unwrap_or(0o755))?;
                 summary.dirs += 1;
                 rep.finish_entry();
             }
             Kind::File => {
-                writer.add_file(&rel, data, entry.size, rep)?;
+                let mode = entry.mode.unwrap_or(0o644);
+                writer.add_file(&rel, data, entry.size, mode, rep)?;
                 summary.files += 1;
                 summary.bytes += entry.size;
                 rep.finish_entry();

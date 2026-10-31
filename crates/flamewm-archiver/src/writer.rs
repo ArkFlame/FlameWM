@@ -32,13 +32,14 @@ impl Writer {
         })
     }
 
-    pub fn add_dir(&mut self, name: &Path) -> Result<()> {
+    pub fn add_dir(&mut self, name: &Path, mode: u32) -> Result<()> {
         match self {
             Self::Zip(zip) => {
-                zip.add_directory(zip_name(name)?, SimpleFileOptions::default())?;
+                let options = SimpleFileOptions::default().unix_permissions(mode & 0o777);
+                zip.add_directory(zip_name(name)?, options)?;
             }
-            Self::Tar(tar) => tar_dir(tar, name)?,
-            Self::TarGz(tar) => tar_dir(tar, name)?,
+            Self::Tar(tar) => tar_dir(tar, name, mode)?,
+            Self::TarGz(tar) => tar_dir(tar, name, mode)?,
         }
         Ok(())
     }
@@ -48,17 +49,19 @@ impl Writer {
         name: &Path,
         data: &mut dyn Read,
         size: u64,
+        mode: u32,
         rep: &mut Reporter<'_>,
     ) -> Result<()> {
         match self {
             Self::Zip(zip) => {
-                let options =
-                    SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+                let options = SimpleFileOptions::default()
+                    .compression_method(CompressionMethod::Deflated)
+                    .unix_permissions(mode & 0o777);
                 zip.start_file(zip_name(name)?, options)?;
                 copy_tracked(data, zip, rep)?;
             }
-            Self::Tar(tar) => tar_file(tar, name, data, size, rep)?,
-            Self::TarGz(tar) => tar_file(tar, name, data, size, rep)?,
+            Self::Tar(tar) => tar_file(tar, name, data, size, mode, rep)?,
+            Self::TarGz(tar) => tar_file(tar, name, data, size, mode, rep)?,
         }
         Ok(())
     }
@@ -98,8 +101,8 @@ fn tar_header(kind: tar::EntryType, size: u64, mode: u32) -> tar::Header {
     header
 }
 
-fn tar_dir<W: Write>(tar: &mut tar::Builder<W>, name: &Path) -> Result<()> {
-    let mut header = tar_header(tar::EntryType::Directory, 0, 0o755);
+fn tar_dir<W: Write>(tar: &mut tar::Builder<W>, name: &Path, mode: u32) -> Result<()> {
+    let mut header = tar_header(tar::EntryType::Directory, 0, mode & 0o777);
     tar.append_data(&mut header, name, io::empty())?;
     Ok(())
 }
@@ -109,9 +112,10 @@ fn tar_file<W: Write>(
     name: &Path,
     data: &mut dyn Read,
     size: u64,
+    mode: u32,
     rep: &mut Reporter<'_>,
 ) -> Result<()> {
-    let mut header = tar_header(tar::EntryType::Regular, size, 0o644);
+    let mut header = tar_header(tar::EntryType::Regular, size, mode & 0o777);
     let tracked = Tracked::new(data, rep);
     tar.append_data(&mut header, name, tracked)
         .map_err(|err| rep.fail(err))?;

@@ -35,6 +35,33 @@ fn create_then_list_and_extract_round_trip_for_each_format() {
 }
 
 #[test]
+fn unix_mode_survives_round_trip_for_zip_and_tar_gz() {
+    use std::os::unix::fs::PermissionsExt;
+    for name in ["mode.zip", "mode.tar.gz"] {
+        let dir = Scratch::new(&format!("mode-{name}"));
+        make_tree(dir.path());
+        let script = dir.path().join("tree/run.sh");
+        std::fs::write(&script, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let archive = dir.path().join(name);
+        create(
+            &archive,
+            &[dir.path().join("tree")],
+            &CancelToken::new(),
+            &mut |_| {},
+        )
+        .unwrap();
+        let out = dir.path().join("out");
+        extract(&archive, &out, &[], &CancelToken::new(), &mut |_| {}).unwrap();
+        let mode = std::fs::metadata(out.join("tree/run.sh"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755, "{name}");
+    }
+}
+
+#[test]
 fn cancel_mid_create_removes_partial_output() {
     let dir = Scratch::new("cancel-create");
     make_tree(dir.path());
