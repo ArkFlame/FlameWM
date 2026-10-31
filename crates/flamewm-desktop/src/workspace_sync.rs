@@ -100,7 +100,7 @@ mod tests {
         // only projects sticky/menu state; the filesystem dirty flag is never touched.
         // FAILURE MUTATION: reintroduce the shared dirty store or either filesystem action in
         // refresh_workspace_projection; this test must fail on that mutation.
-        let source = include_str!("main.rs");
+        let source = include_str!("refresh.rs");
         let projection = source_between(
             source,
             "fn refresh_workspace_projection",

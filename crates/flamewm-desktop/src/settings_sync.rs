@@ -20,7 +20,7 @@ pub(super) fn signal_callback_source() -> &'static str {
 
 fn settings_projection_source() -> &'static str {
     source_between(
-        include_str!("main.rs"),
+        include_str!("refresh.rs"),
         "fn refresh_settings_projection",
         "fn refresh_if_changed",
     )
@@ -85,7 +85,7 @@ fn t10_settings_projection_applies_sticky_selection_and_wallpaper_together() {
     // FAILURE MUTATION: omit any one visual owner or route through filesystem refresh;
     // this regression must turn red.
     assert!(
-        include_str!("main.rs").contains("fn refresh_settings_projection"),
+        include_str!("refresh.rs").contains("fn refresh_settings_projection"),
         "settings changes need a dedicated desktop projection seam"
     );
     let projection = settings_projection_source();
