@@ -580,6 +580,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-archiver-app"
+version = "0.1.3"
+dependencies = [
+ "flamewm-archiver",
+]
+
+[[package]]
 name = "flamewm-assistant"
 version = "0.1.3"
 dependencies = [
