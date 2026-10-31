@@ -1,6 +1,7 @@
 //! Archive creation from files and directory trees.
 
 use std::fs::{self, File};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::error::{ArchiveError, Result};
@@ -15,6 +16,7 @@ pub struct Source {
     pub name: PathBuf,
     pub is_dir: bool,
     pub size: u64,
+    pub mode: u32,
 }
 
 /// Creates `out` from `inputs`. The format comes from the `out` file name.
@@ -61,12 +63,14 @@ pub fn collect(inputs: &[PathBuf]) -> Result<(Vec<Source>, usize)> {
     while let Some((disk, name)) = stack.pop() {
         let meta = fs::symlink_metadata(&disk)?;
         let file_type = meta.file_type();
+        let mode = meta.permissions().mode();
         if file_type.is_dir() {
             sources.push(Source {
                 disk: disk.clone(),
                 name: name.clone(),
                 is_dir: true,
                 size: 0,
+                mode,
             });
             let mut children = fs::read_dir(&disk)?.collect::<std::io::Result<Vec<_>>>()?;
             children.sort_by_key(fs::DirEntry::file_name);
@@ -79,6 +83,7 @@ pub fn collect(inputs: &[PathBuf]) -> Result<(Vec<Source>, usize)> {
                 name,
                 is_dir: false,
                 size: meta.len(),
+                mode,
             });
         } else {
             skipped += 1;
@@ -109,11 +114,11 @@ pub(crate) fn write_sources_into(
     for source in sources {
         rep.check()?;
         if source.is_dir {
-            writer.add_dir(&source.name)?;
+            writer.add_dir(&source.name, source.mode)?;
             summary.dirs += 1;
         } else {
             let mut file = File::open(&source.disk)?;
-            writer.add_file(&source.name, &mut file, source.size, rep)?;
+            writer.add_file(&source.name, &mut file, source.size, source.mode, rep)?;
             summary.files += 1;
             summary.bytes += source.size;
         }

@@ -2,6 +2,7 @@
 
 use std::fs::{self, File};
 use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
@@ -72,7 +73,7 @@ fn extract_one(
             summary.dirs += 1;
         }
         Kind::File => {
-            summary.bytes += write_file(dest, rel, data, rep)?;
+            summary.bytes += write_file(dest, rel, data, entry.mode, rep)?;
             summary.files += 1;
         }
         Kind::Symlink | Kind::Other => summary.skipped += 1,
@@ -80,7 +81,13 @@ fn extract_one(
     Ok(())
 }
 
-fn write_file(dest: &Path, rel: &Path, data: &mut dyn Read, rep: &mut Reporter<'_>) -> Result<u64> {
+fn write_file(
+    dest: &Path,
+    rel: &Path,
+    data: &mut dyn Read,
+    mode: Option<u32>,
+    rep: &mut Reporter<'_>,
+) -> Result<u64> {
     safe_path::reject_symlinks(dest, rel)?;
     let target = dest.join(rel);
     if let Some(parent) = target.parent() {
@@ -88,7 +95,13 @@ fn write_file(dest: &Path, rel: &Path, data: &mut dyn Read, rep: &mut Reporter<'
     }
     let mut out = File::create(&target)?;
     match copy_tracked(data, &mut out, rep) {
-        Ok(n) => Ok(n),
+        Ok(n) => {
+            // Permission bits only: setuid/setgid/sticky are never restored from an archive.
+            if let Some(bits) = mode {
+                fs::set_permissions(&target, fs::Permissions::from_mode(bits & 0o777))?;
+            }
+            Ok(n)
+        }
         Err(err) => {
             // Never leave a truncated file behind after a failure or cancel.
             drop(out);

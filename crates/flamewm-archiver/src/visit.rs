@@ -27,6 +27,8 @@ pub struct Entry {
     pub path: PathBuf,
     pub size: u64,
     pub kind: Kind,
+    /// Unix permission bits when the archive records them.
+    pub mode: Option<u32>,
 }
 
 /// Streams each entry of `archive` through `f` together with its data reader.
@@ -80,6 +82,7 @@ where
             path: PathBuf::from(file.name()?.as_ref()),
             size: file.size(),
             kind,
+            mode: file.unix_mode(),
         };
         f(entry, &mut file)?;
     }
@@ -104,6 +107,7 @@ where
             path: item.path()?.into_owned(),
             size: item.size(),
             kind,
+            mode: item.header().mode().ok(),
         };
         f(entry, &mut item)?;
     }
