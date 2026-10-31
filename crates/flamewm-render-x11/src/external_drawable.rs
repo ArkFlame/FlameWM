@@ -658,11 +658,6 @@ pub struct NativeDrawableRenderer<'a> {
 }
 
 impl<'a> NativeDrawableRenderer<'a> {
-    #[allow(dead_code)]
-    pub(crate) fn new(app: &'a mut super::app::X11App) -> Self {
-        Self { app }
-    }
-
     /// Draw text at device-pixel (x, baseline y) via Xft when available.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_text(

@@ -135,7 +135,7 @@ impl NativeSurfaceTarget {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn is_live(&self) -> bool {
         self.pixmap != 0 && self.gc != 0 && self.colormap != 0
     }

@@ -121,7 +121,7 @@ fn percent_decode(input: &[u8]) -> Option<Vec<u8>> {
 /// Largest accepted drop payload (uri-list, ark service or path), in bytes.
 pub const MAX_DROP_PAYLOAD_BYTES: usize = 256 * 1024;
 /// Target-side wait for one `XConvertSelection` reply (500 ms stall guard).
-#[allow(dead_code)] // XDS/timeout wiring pending
+#[cfg(test)]
 pub const SELECTION_TIMEOUT_MS: u64 = 500;
 /// Ark's private drag-out MIME types (`application/x-kde-ark-dndextract-{service,path}`).
 pub const ARK_SERVICE_TYPE: &str = "application/x-kde-ark-dndextract-service";
@@ -206,15 +206,15 @@ pub fn payload_within_limit(len: usize) -> bool {
     len <= MAX_DROP_PAYLOAD_BYTES
 }
 
+#[cfg(test)]
 /// Monotonic deadline on an injected millisecond clock, so timeouts are testable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // timeout wiring pending
 pub struct Deadline {
     started_ms: u64,
     limit_ms: u64,
 }
 
-#[allow(dead_code)] // timeout wiring pending
+#[cfg(test)]
 impl Deadline {
     pub fn new(now_ms: u64, limit_ms: u64) -> Self {
         Self {
@@ -228,16 +228,16 @@ impl Deadline {
     }
 }
 
+#[cfg(test)]
 /// Outcome of an XDS (XdndDirectSave0) reply: the source's first byte is `S`, `E` or `F`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // XDS wiring pending
 pub enum DirectSaveOutcome {
     Saved,
     Error,
     Failed,
 }
 
-#[allow(dead_code)] // XDS wiring pending
+#[cfg(test)]
 pub fn parse_direct_save_reply(bytes: &[u8]) -> DirectSaveOutcome {
     match bytes.first() {
         Some(b'S') => DirectSaveOutcome::Saved,
@@ -246,8 +246,8 @@ pub fn parse_direct_save_reply(bytes: &[u8]) -> DirectSaveOutcome {
     }
 }
 
+#[cfg(test)]
 /// Reply already received, or a timeout failure once `deadline` has passed.
-#[allow(dead_code)] // XDS wiring pending
 pub fn direct_save_poll(
     reply: Option<&[u8]>,
     deadline: &Deadline,
@@ -260,8 +260,8 @@ pub fn direct_save_poll(
     }
 }
 
+#[cfg(test)]
 /// Destination `file://` URI for an XDS save into `dir` (absolute) named `name`.
-#[allow(dead_code)] // XDS wiring pending
 pub fn direct_save_uri(dir: &std::path::Path, name: &str) -> Option<String> {
     if !dir.is_absolute() || !safe_file_name(name) {
         return None;
@@ -341,8 +341,8 @@ pub struct DropTarget {
 }
 
 impl DropTarget {
+    #[cfg(test)]
     /// `XdndEnter` with a `text/uri-list`/`text/plain` format (or none). Replies nothing.
-    #[allow(dead_code)] // paths-only API kept for callers/tests
     pub fn enter(&mut self, enter: &Enter, format: Option<u64>) {
         self.enter_offer(enter, format.map(Offer::Paths));
     }
@@ -430,7 +430,7 @@ impl DropTarget {
     }
 
     /// Converted `text/uri-list` (or `text/plain`) paths for a pending drop.
-    #[allow(dead_code)] // paths-only API kept for callers/tests
+    #[cfg(test)]
     pub fn selection(&mut self, data: Option<Vec<PathBuf>>) -> (Vec<DropEvent>, Vec<Reply>) {
         if !matches!(
             self.session.as_ref().map(|s| &s.stage),

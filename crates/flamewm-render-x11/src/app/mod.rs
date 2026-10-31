@@ -39,7 +39,6 @@ mod backbuffer_pool;
 mod color;
 mod cursor;
 mod cursor_theme;
-#[cfg_attr(not(test), allow(dead_code))]
 mod damage_plan;
 mod events;
 mod geometry;
@@ -215,7 +214,6 @@ pub(crate) struct X11App {
     pub(crate) ring_mask: Option<(u32, u32)>,
     /// Per-pixel alpha silhouette for an XShape-backed overlay without an ARGB compositor.
     pub(crate) shape_override: Option<Vec<(u32, u32, u32)>>,
-    #[allow(dead_code)]
     pub(crate) visual: *mut Visual,
     /// The server's visual set is immutable for this Display; avoid XMatchVisualInfo for each
     /// image upload/text shadow in a busy desktop surface.
