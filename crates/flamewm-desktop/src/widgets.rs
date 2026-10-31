@@ -6,6 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use chrono::{Datelike, Local, Timelike};
 use flamewm_api::system::{MediaSnapshot, PlaybackState, ServiceAvailability, SystemAction};
 use flamewm_api::settings::SettingsSnapshot;
+use flamewm_api::weather::WeatherFeedSnapshot;
 use flamewm_api::{Point, Rect};
 use flamewm_desktop_core::sticky::Rgb;
 use flamewm_desktop_core::widget_text::{
@@ -23,7 +24,6 @@ use flamewm_integrations_linux::MprisProvider;
 use flamewm_reactor::{WakeDeadline, wall_clock_delay_ms};
 use flamewm_ui_core::Color;
 use flamewm_ui_core::style::UiLayer;
-use flamewm_ui_core::surface::surface_material_values;
 use flamewm_ui_x11::{
     PointerButton, RuntimeImage, UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess,
 };
@@ -123,6 +123,35 @@ struct FaceKey {
 
 /// Samples kept for the CPU and RAM graph; one per refresh tick.
 const HISTORY_LEN: usize = 60;
+
+/// Sampling cadence for CPU, memory, uptime and network widgets.
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Every input `sync_widgets` reads. An equal key means the document already shows this state,
+/// so the sync skips all document writes.
+#[derive(Debug, Clone, PartialEq)]
+struct SyncKey {
+    widgets: Vec<Widget>,
+    settings: SettingsSnapshot,
+    weather: WeatherFeedSnapshot,
+    media: MediaSnapshot,
+    editing: Option<(u32, String)>,
+    placeholders: Placeholders,
+    time: Option<WallTime>,
+    samples: SampleKey,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct SampleKey {
+    cpu_percent: Option<u8>,
+    cpu_count: usize,
+    memory: Option<MemoryUsage>,
+    uptime_seconds: Option<u64>,
+    cpu_history: VecDeque<u8>,
+    memory_history: VecDeque<u8>,
+    net_rx_history: VecDeque<u64>,
+    net_tx_history: VecDeque<u64>,
+}
 
 #[derive(Debug, Default)]
 struct Samples {
@@ -256,6 +285,10 @@ pub(crate) struct WidgetState {
     media_dirty: bool,
     wake: WakeDeadline,
     due: Option<Instant>,
+    /// Next sampler refresh; `None` when no widget reads CPU, memory, uptime or network.
+    sample_due: Option<Instant>,
+    /// Inputs of the last document sync; an equal key skips the sync.
+    sync_key: Option<SyncKey>,
     /// Latest drag pointer position, applied once per event flush.
     pending_pointer: Option<(f32, f32)>,
     rings: [Option<RingKey>; MAX_WIDGETS],
@@ -279,6 +312,8 @@ impl WidgetState {
             media_dirty: false,
             wake: WakeDeadline::default(),
             due: None,
+            sample_due: None,
+            sync_key: None,
             pending_pointer: None,
             rings: [None; MAX_WIDGETS],
             graphs: std::array::from_fn(|_| None),
@@ -306,7 +341,7 @@ impl WidgetState {
     fn tick_rate(&self) -> Option<TickRate> {
         let widgets = self.store.widgets();
         if widgets.iter().any(|widget| {
-            widget.kind.ticks_every_second()
+            widget.kind == WidgetKind::Custom
                 || (widget.kind == WidgetKind::Clock
                     && (widget.flag("showSeconds") || is_analog(widget)))
         }) {
@@ -322,6 +357,18 @@ impl WidgetState {
     }
 
     fn arm(&mut self, now: Instant) {
+        let sampling = self.store.widgets().iter().any(|widget| {
+            matches!(
+                widget.kind,
+                WidgetKind::Cpu
+                    | WidgetKind::Memory
+                    | WidgetKind::Ring
+                    | WidgetKind::History
+                    | WidgetKind::Network
+                    | WidgetKind::Custom
+            )
+        });
+        self.sample_due = sampling.then(|| self.sample_due.unwrap_or(now));
         self.due = self.tick_rate().map(|rate| {
             let epoch_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -330,7 +377,7 @@ impl WidgetState {
                 wall_clock_delay_ms(epoch_ms, rate == TickRate::Second).max(1),
             )
         });
-        self.wake.set(self.due);
+        self.wake.set([self.due, self.sample_due].into_iter().flatten().min());
     }
 
     fn sample(&mut self) {
@@ -348,6 +395,21 @@ impl WidgetState {
                 matches!(widget.kind, WidgetKind::Memory | WidgetKind::History | WidgetKind::Ring)
             });
         self.samples.refresh(cpu, memory, network, custom);
+        self.sample_due = Some(Instant::now() + SAMPLE_INTERVAL);
+    }
+
+    fn sample_key(&self) -> SampleKey {
+        let samples = &self.samples;
+        SampleKey {
+            cpu_percent: samples.cpu_percent,
+            cpu_count: samples.cpu_count,
+            memory: samples.memory,
+            uptime_seconds: samples.uptime_seconds,
+            cpu_history: samples.cpu_history.clone(),
+            memory_history: samples.memory_history.clone(),
+            net_rx_history: samples.net_rx_history.clone(),
+            net_tx_history: samples.net_tx_history.clone(),
+        }
     }
 
     pub(crate) fn persist(&self) {
@@ -781,6 +843,35 @@ pub(crate) fn sync_widgets(
 ) -> Result<(), String> {
     let time = local_wall_time();
     let placeholders = widget_placeholders(state, time);
+    let widgets = state.widgets.store.widgets();
+    // Wall time only reaches the document through time-showing widgets; without one, a
+    // second-by-second clock must not force a sync.
+    let needs_time = widgets.iter().any(|widget| {
+        matches!(widget.kind, WidgetKind::Clock | WidgetKind::Calendar | WidgetKind::Custom)
+    });
+    let mut key_placeholders = placeholders.clone();
+    if !needs_time {
+        key_placeholders.time.clear();
+        key_placeholders.date.clear();
+        key_placeholders.weekday.clear();
+    }
+    let key = SyncKey {
+        widgets: widgets.to_vec(),
+        settings: state.settings.clone(),
+        weather: state.weather.clone(),
+        media: state.widgets.media.clone(),
+        editing: state
+            .widgets
+            .editing
+            .as_ref()
+            .map(|edit| (edit.widget, edit.buffer.clone())),
+        placeholders: key_placeholders,
+        time: needs_time.then_some(time),
+        samples: state.widgets.sample_key(),
+    };
+    if state.widgets.sync_key.as_ref() == Some(&key) {
+        return Ok(());
+    }
     for slot in 0..MAX_WIDGETS {
         let id = format!("widget-{}", slot + 1);
         let Some(widget) = state.widgets.store.widgets().get(slot).cloned() else {
@@ -796,7 +887,6 @@ pub(crate) fn sync_widgets(
         document.background(&id, surface.fill)?;
         document.corner_radius(&id, surface.radius)?;
         document.node_backdrop(&id, surface.blur)?;
-        document.surface_material(&id, Some(surface_material_values(&state.settings)))?;
         for edge in WIDGET_EDGES {
             document.visible(&format!("{id}-edge-{edge}"), !widget.locked)?;
         }
@@ -880,6 +970,7 @@ pub(crate) fn sync_widgets(
         }
         document.visible(&id, true)?;
     }
+    state.widgets.sync_key = Some(key);
     Ok(())
 }
 
@@ -1472,15 +1563,18 @@ pub(crate) fn poll(
     state: &mut DesktopState,
 ) -> Result<(), String> {
     let now = Instant::now();
-    let due = state.widgets.due.is_some_and(|due| now >= due);
-    if due {
-        state.widgets.sample();
-        state.widgets.arm(now);
-    }
-    if !due && !std::mem::take(&mut state.widgets.media_dirty) {
+    let sampling = state.widgets.sample_due.is_some_and(|due| now >= due);
+    let ticking = state.widgets.due.is_some_and(|due| now >= due);
+    let media = std::mem::take(&mut state.widgets.media_dirty);
+    if !sampling && !ticking && !media {
         return Ok(());
     }
-    state.widgets.media_dirty = false;
+    if sampling {
+        state.widgets.sample();
+    }
+    if sampling || ticking {
+        state.widgets.arm(now);
+    }
     sync_widgets(document, state)
 }
 
@@ -2127,6 +2221,19 @@ pub(crate) fn refresh_media(state: &mut DesktopState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sampler_widgets_arm_the_sample_timer_without_a_clock_tick() {
+        let mut store = WidgetStore::default();
+        store
+            .add(WidgetKind::Cpu, Rect { x: 0, y: 0, width: 1920, height: 1080 })
+            .expect("cpu widget fits");
+        let mut state = WidgetState::new(store, PathBuf::new());
+        let now = Instant::now();
+        state.arm(now);
+        assert_eq!(state.due, None, "a CPU widget must not force a per-second tick");
+        assert_eq!(state.sample_due, Some(now), "a CPU widget samples on the sample timer");
+    }
 
     fn alpha_at(pixels: &[u8], size: u32, x: u32, y: u32) -> u8 {
         pixels[((y * size + x) * 4 + 3) as usize]
