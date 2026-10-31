@@ -142,6 +142,17 @@ pub struct XExposeEvent {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct XVisibilityEvent {
+    pub type_: c_int,
+    pub serial: c_ulong,
+    pub send_event: Bool,
+    pub display: *mut Display,
+    pub window: Window,
+    pub state: c_int,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct XConfigureEvent {
     pub type_: c_int,
     pub serial: c_ulong,
@@ -278,6 +289,7 @@ pub union XEvent {
     pub type_: c_int,
     pub xany: XAnyEvent,
     pub xexpose: XExposeEvent,
+    pub xvisibility: XVisibilityEvent,
     pub xconfigure: XConfigureEvent,
     pub xmotion: XMotionEvent,
     pub xkey: XKeyEvent,
@@ -421,6 +433,7 @@ pub const POINTER_MOTION_MASK: c_long = 1 << 6;
 pub const LEAVE_WINDOW_MASK: c_long = 1 << 5;
 pub const EXPOSURE_MASK: c_long = 1 << 15;
 pub const STRUCTURE_NOTIFY_MASK: c_long = 1 << 17;
+pub const VISIBILITY_CHANGE_MASK: c_long = 1 << 16;
 
 pub const KEY_PRESS: c_int = 2;
 pub const KEY_RELEASE: c_int = 3;
@@ -430,6 +443,8 @@ pub const MOTION_NOTIFY: c_int = 6;
 pub const LEAVE_NOTIFY: c_int = 8;
 pub const EXPOSE: c_int = 12;
 pub const MAP_NOTIFY: c_int = 19;
+pub const VISIBILITY_NOTIFY: c_int = 15;
+pub const VISIBILITY_FULLY_OBSCURED: c_int = 2;
 pub const MAPPING_NOTIFY: c_int = 34;
 pub const MAPPING_POINTER: c_int = 2;
 pub const CONFIGURE_NOTIFY: c_int = 22;

@@ -962,6 +962,7 @@ pub fn run() -> Result<(), String> {
                     app.paint(doc)
                 }
                 UiControllerEvent::Drag(_) => Ok(()),
+                UiControllerEvent::Visibility { .. } => Ok(()),
             }
         },
         move |doc| {

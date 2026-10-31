@@ -159,6 +159,10 @@ pub enum UiControllerEvent {
         width: u32,
         height: u32,
     },
+    /// The window became fully obscured (`true`) or was uncovered (`false`). Desktop role only.
+    Visibility {
+        obscured: bool,
+    },
 }
 
 const TYPED_KEY_ACTION: &str = "__flamewm.ui.key";
@@ -208,6 +212,11 @@ fn controller_event(event: &flamewm_render_core::ActionEvent) -> UiControllerEve
         return UiControllerEvent::Resized {
             width: event.x.round().max(1.0) as u32,
             height: event.y.round().max(1.0) as u32,
+        };
+    }
+    if event.action == flamewm_render_x11::WINDOW_VISIBILITY_ACTION {
+        return UiControllerEvent::Visibility {
+            obscured: event.x > 0.5,
         };
     }
     if event.action == TYPED_KEY_ACTION {

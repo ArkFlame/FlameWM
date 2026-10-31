@@ -900,6 +900,9 @@ pub fn main() -> Result<(), String> {
                     UiControllerEvent::Key(key) => handle_desktop_key(key, document, &mut state),
                     UiControllerEvent::Resized { .. } => Ok(()),
                     UiControllerEvent::Drag(_) => Ok(()),
+                    UiControllerEvent::Visibility { obscured } => {
+                        widgets::set_obscured(document, &mut state, *obscured)
+                    }
                 };
                 event_watch.set(menus_open(&state.menu_rects));
                 // A failed handler must not tear down the loop: the desktop would stop answering clicks.

@@ -236,6 +236,7 @@ fn run() -> Result<(), String> {
                     true
                 }
                 UiControllerEvent::Drag(_) => true,
+                UiControllerEvent::Visibility { .. } => false,
             };
             if changed {
                 app.project(document)

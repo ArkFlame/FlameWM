@@ -437,6 +437,13 @@ impl X11App {
                         unsafe { self.repaint_full(document)? };
                     }
                 }
+                VISIBILITY_NOTIFY => {
+                    // Only the desktop selects VisibilityChangeMask. Dispatched with the other
+                    // window-level hand-offs below, so the host sees the latest verdict per turn.
+                    // SAFETY: type_ selects the XVisibilityEvent variant of the union.
+                    let state = unsafe { event.xvisibility.state };
+                    self.pending_visibility = Some(state == VISIBILITY_FULLY_OBSCURED);
+                }
                 MAP_NOTIFY => {
                     // Native presenter: MapNotify advances Painted -> Mapped.
                     // Stray MapNotify in any other state is ignored, never an error.
@@ -972,6 +979,20 @@ impl X11App {
                 // the next event.
                 // SAFETY: the display and retained scene belong to this app's event loop.
                 unsafe { self.repaint_full(document)? };
+            }
+            if let Some(obscured) = self.pending_visibility.take() {
+                let visibility = ActionEvent {
+                    action: WINDOW_VISIBILITY_ACTION.to_string(),
+                    phase: flamewm_render_core::ActionPhase::Release,
+                    button: 0,
+                    modifiers: 0,
+                    x: if obscured { 1.0 } else { 0.0 },
+                    y: 0.0,
+                    inside: true,
+                    time_ms: 0,
+                    text: None,
+                };
+                on_action(&visibility, document)?;
             }
             if self.single_event {
                 return Ok(());
