@@ -222,9 +222,13 @@ impl<C: Connection> Wm<'_, C> {
             width: cw.min(u32::from(u16::MAX)) as u16,
             height: ch.min(u32::from(u16::MAX)) as u16,
         }];
-        if radius > 0 && cw > 0 && ch > 0 {
-            let mask =
-                crate::frame::geometry_shape::client_bottom_rounded_rectangles(cw, ch, radius);
+        // The outline ring is painted on the frame one pixel inside the edge, so the client
+        // leaves that pixel to the ring. Square windows with a ring are shaped too.
+        let ring = u32::from(self.decoration_tokens.surface_border_alpha > 0);
+        if (radius > 0 || ring > 0) && cw > 0 && ch > 0 {
+            let mask = crate::frame::geometry_shape::client_bottom_rounded_rectangles(
+                cw, ch, radius, ring,
+            );
             self.conn.shape_rectangles(
                 ShapeOp::SET,
                 ShapeSk::BOUNDING,

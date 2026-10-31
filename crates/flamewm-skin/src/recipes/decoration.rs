@@ -68,7 +68,7 @@ impl Default for ChromeTokens {
             titlebar_alpha: DEFAULT_SURFACE_ALPHA,
             titlebar_blur_percent: DEFAULT_SURFACE_BLUR_PERCENT,
             surface_border_rgb: Rgb(0x00ff_ffff),
-            surface_border_alpha: 20,
+            surface_border_alpha: 128,
             backdrop_revision: 0,
             buttons: [ButtonTokens::default(); 3],
         }

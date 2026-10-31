@@ -241,6 +241,10 @@ pub struct ProductSettings {
     pub surface_blur_percent: u8,
     pub surface_border_color: String,
     pub surface_border_opacity: u8,
+    /// `windowOutlineColor`: window frame outline colour, separate from the taskbar surface contour.
+    pub window_outline_color: String,
+    /// `windowOutlineOpacity` percent (0..=100); the default is half opacity.
+    pub window_outline_opacity: u8,
     /// `surfaceSaturationPercent` (0..=200): backdrop saturation, 100 is identity.
     pub surface_saturation_percent: u8,
     /// `reduceTransparency`: all materials opaque with no blur. Default off.
@@ -367,6 +371,8 @@ impl Default for ProductSettings {
             surface_blur_percent: 70,
             surface_border_color: "#FFFFFF".to_owned(),
             surface_border_opacity: 25,
+            window_outline_color: "#FFFFFF".to_owned(),
+            window_outline_opacity: 50,
             surface_saturation_percent: 165,
             reduce_transparency: false,
             glass_opacity_percent: 12,
@@ -476,6 +482,10 @@ impl ProductSettings {
         validate_color(&self.taskbar_color, false, "taskbarColor")?;
         validate_color(&self.surface_color, false, "surfaceColor")?;
         validate_color(&self.surface_border_color, false, "surfaceBorderColor")?;
+        validate_color(&self.window_outline_color, false, "windowOutlineColor")?;
+        if self.window_outline_opacity > 100 {
+            return invalid("windowOutlineOpacity must be 0..100");
+        }
         if self.surface_border_opacity > 100 {
             return invalid("surfaceBorderOpacity must be 0..100");
         }
@@ -1082,6 +1092,8 @@ stable_settings! {
     (false, taskbar, "surfaceBlurPercent", surface_blur_percent),
     (false, taskbar, "surfaceBorderColor", surface_border_color),
     (false, taskbar, "surfaceBorderOpacity", surface_border_opacity),
+    (false, taskbar, "windowOutlineColor", window_outline_color),
+    (false, taskbar, "windowOutlineOpacity", window_outline_opacity),
     (false, taskbar, "surfaceSaturationPercent", surface_saturation_percent),
     (false, glass, "reduceTransparency", reduce_transparency),
     (false, glass, "glassOpacityPercent", glass_opacity_percent),

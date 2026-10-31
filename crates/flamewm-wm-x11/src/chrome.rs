@@ -968,7 +968,7 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
         hover: None,
         pressed: None,
     };
-    let stroke = flamewm_ui_core::surface::surface_stroke(snapshot);
+    let stroke = flamewm_ui_core::surface::window_outline_stroke(snapshot);
     ChromeTokens {
         style,
         surface_border_rgb: Rgb(stroke.rgb),

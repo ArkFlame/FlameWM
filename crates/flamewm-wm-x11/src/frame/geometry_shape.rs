@@ -109,29 +109,39 @@ pub fn bounding_rectangles_with_titlebar(
         .collect()
 }
 
-/// Bounding rectangles for a client whose bottom corners follow the rounded
-/// frame. The titlebar sits above the client, so its top corners stay square;
-/// only the last `radius` rows are inset. A zero radius is one full rectangle.
+/// Client shape inside the frame's 1px outline ring. The client is inset by `ring` pixels on
+/// both sides and at the bottom; the ring itself is painted on the frame there (see
+/// `content_contour_blits`). Bottom corners follow the rounded frame, while the titlebar above
+/// keeps its square top corners. `radius = 0` and `ring = 0` is one full rectangle.
 #[must_use]
-pub fn client_bottom_rounded_rectangles(width: u32, height: u32, radius: u32) -> Vec<Rectangle> {
-    if width == 0 || height == 0 {
+pub fn client_bottom_rounded_rectangles(
+    width: u32,
+    height: u32,
+    radius: u32,
+    ring: u32,
+) -> Vec<Rectangle> {
+    let rows = height.saturating_sub(ring);
+    let inner_w = width.saturating_sub(ring.saturating_mul(2));
+    if inner_w == 0 || rows == 0 {
         return Vec::new();
     }
     let radius = radius.min(width / 2).min(height);
     if radius == 0 {
         return vec![Rectangle {
-            x: 0,
+            x: i16::try_from(ring).unwrap_or(i16::MAX),
             y: 0,
-            width: width.min(u32::from(u16::MAX)) as u16,
-            height: height.min(u32::from(u16::MAX)) as u16,
+            width: inner_w.min(u32::from(u16::MAX)) as u16,
+            height: rows.min(u32::from(u16::MAX)) as u16,
         }];
     }
-    (0..height)
+    (0..rows)
         .map(|row| {
             let inset = if row >= height - radius {
-                corner_edge_inset(external_rounded_row_inset(width, height, radius, row))
+                ring.max(corner_edge_inset(external_rounded_row_inset(
+                    width, height, radius, row,
+                )))
             } else {
-                0
+                ring
             };
             let start = inset.min(width);
             let end = width.saturating_sub(inset).max(start);
@@ -159,9 +169,9 @@ mod tests {
     }
 
     #[test]
-    fn client_area_fills_the_frame_below_the_titlebar() {
-        // Regression: a `width - 2` / `height - titlebar - 1` client shape left the frame's
-        // dark background visible on the right two columns and bottom row.
+    fn client_sits_one_pixel_inside_the_outline_ring() {
+        // The ring occupies the frame's outermost pixel on both sides and at the bottom; the
+        // client must not cover it, or the outline disappears behind the window contents.
         let outer = Rect {
             x: 0,
             y: 0,
@@ -170,23 +180,25 @@ mod tests {
         };
         assert_eq!(client_area_size(outer, 31), (484, 316));
         let (cw, ch) = client_area_size(outer, 31);
-        let full = client_bottom_rounded_rectangles(cw, ch, 0);
-        assert_eq!((full[0].x, full[0].width), (0, 484));
-        assert_eq!(full[0].height, 316);
+        let full = client_bottom_rounded_rectangles(cw, ch, 0, 1);
+        assert_eq!(full.len(), 1);
+        assert_eq!((full[0].x, full[0].width), (1, 482));
+        assert_eq!(full[0].height, 315);
+        assert!(client_bottom_rounded_rectangles(cw, ch, 0, 0)[0].width == 484);
     }
 
     #[test]
     fn client_bottom_corners_round_while_the_top_stays_square() {
-        let rects = client_bottom_rounded_rectangles(200, 120, 12);
-        assert_eq!(rects.len(), 120);
-        assert_eq!(rects[0].x, 0);
-        assert_eq!(rects[0].width, 200);
+        let rects = client_bottom_rounded_rectangles(200, 120, 12, 1);
+        assert_eq!(rects.len(), 119);
+        assert_eq!(rects[0].x, 1);
+        assert_eq!(rects[0].width, 198);
         let last = rects.last().expect("rows");
-        assert!(last.x > 0, "bottom-left corner is not cut: {last:?}");
-        assert!(last.width < 200, "bottom-right corner is not cut");
-        let squared = client_bottom_rounded_rectangles(200, 120, 0);
+        assert!(last.x > 1, "bottom-left corner is not cut: {last:?}");
+        assert!(last.width < 198, "bottom-right corner is not cut");
+        let squared = client_bottom_rounded_rectangles(200, 120, 0, 1);
         assert_eq!(squared.len(), 1);
-        assert_eq!((squared[0].x, squared[0].width), (0, 200));
+        assert_eq!((squared[0].x, squared[0].width), (1, 198));
     }
 
     #[test]

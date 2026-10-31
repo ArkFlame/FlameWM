@@ -106,6 +106,50 @@ pub fn surface_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
     }
 }
 
+/// Default `windowOutlineOpacity` percent: the window frame outline is white at half opacity.
+pub const DEFAULT_WINDOW_OUTLINE_PERCENT: u8 = 50;
+
+/// Window frame outline (`windowOutlineColor`, `windowOutlineOpacity`). Separate from the
+/// taskbar/surface contour so frame and panel outlines can differ; both defaults come from
+/// the settings table, not from a custom colour.
+#[must_use]
+pub fn window_outline_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
+    let rgb = match snapshot.values.get("windowOutlineColor") {
+        Some(SettingValue::Text(value)) => parse_rgb(value),
+        _ => None,
+    }
+    .unwrap_or(0x00ff_ffff);
+    let opacity = match snapshot.values.get("windowOutlineOpacity") {
+        Some(SettingValue::Percent(value)) => (*value).min(100),
+        _ => DEFAULT_WINDOW_OUTLINE_PERCENT,
+    };
+    SurfaceFill {
+        rgb,
+        alpha: ((u16::from(opacity) * 255) / 100) as u8,
+    }
+}
+
+#[cfg(test)]
+mod window_outline_stroke_tests {
+    use super::*;
+
+    #[test]
+    fn window_outline_defaults_to_white_at_half_opacity() {
+        let stroke = window_outline_stroke(&SettingsSnapshot::new(1));
+        assert_eq!(stroke.rgb, 0x00ff_ffff);
+        assert_eq!(stroke.alpha, 127);
+    }
+
+    #[test]
+    fn window_outline_ignores_the_taskbar_surface_border_keys() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("surfaceBorderOpacity".into(), SettingValue::Percent(0));
+        assert_eq!(window_outline_stroke(&snapshot).alpha, 127);
+    }
+}
+
 #[cfg(test)]
 mod surface_stroke_contract_tests {
     use super::*;
