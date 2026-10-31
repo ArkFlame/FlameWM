@@ -3,6 +3,9 @@
 //! contour and alpha-blending rules. The renderer-specific `UiColor` mapping
 //! lives in flamewm-ui-x11::surface_style.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
 /// Shared Surfaces fill for desktop menus: `surfaceColor` RGB with the `surfaceOpacity` alpha.
@@ -304,6 +307,46 @@ mod surface_blend_tests {
 /// pure geometry is reusable without coupling the skin to an X11 backend.
 #[must_use]
 pub fn inner_contour_coverage(w: u32, h: u32, radius: u32, x: u32, y: u32) -> u8 {
+    if w == 0 || h == 0 || x >= w || y >= h {
+        return 0;
+    }
+    let r = radius.min(w.min(h) / 2);
+    let side = r + 2;
+    // Corner coverage is mirror-symmetric and depends only on the distance to the nearest
+    // two edges, so corner pixels read a per-radius table. Edges and tiny surfaces sample directly.
+    if w >= 2 * side + 2 && h >= 2 * side + 2 {
+        let fx = x.min(w - 1 - x);
+        let fy = y.min(h - 1 - y);
+        if fx < side && fy < side {
+            return corner_tile(r)[(fy * side + fx) as usize];
+        }
+    }
+    inner_contour_direct(w, h, radius, x, y)
+}
+
+/// `(r+2)^2` top-left corner coverage for radius `r`, sampled on a reference surface large
+/// enough that no far edge reaches it. Built once per radius; later calls only index it.
+fn corner_tile(r: u32) -> Arc<[u8]> {
+    static TILES: OnceLock<Mutex<HashMap<u32, Arc<[u8]>>>> = OnceLock::new();
+    let cache = TILES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(tile) = cache.get(&r) {
+        return Arc::clone(tile);
+    }
+    let side = r + 2;
+    let reference = 2 * side + 2;
+    let mut values = Vec::with_capacity((side * side) as usize);
+    for fy in 0..side {
+        for fx in 0..side {
+            values.push(inner_contour_direct(reference, reference, r, fx, fy));
+        }
+    }
+    let tile: Arc<[u8]> = values.into();
+    cache.insert(r, Arc::clone(&tile));
+    tile
+}
+
+fn inner_contour_direct(w: u32, h: u32, radius: u32, x: u32, y: u32) -> u8 {
     fn inside(x: f32, y: f32, w: f32, h: f32, r: f32) -> bool {
         if x < 0.0 || y < 0.0 || x >= w || y >= h {
             return false;
@@ -371,6 +414,33 @@ mod rounded_contour_tests {
         assert!(alpha(100, 60, 12, 99, 49) > 0);
         assert_eq!(alpha(100, 60, 0, 30, 30), 0);
         assert_eq!(alpha(100, 60, 0, 0, 0), 255);
+    }
+
+    #[test]
+    fn cached_corner_table_matches_direct_sampling() {
+        for (w, h, radius) in [(100, 60, 12), (40, 40, 24), (17, 9, 4), (64, 64, 0), (120, 80, 24)] {
+            let r = radius.min(w.min(h) / 2);
+            for y in 0..h {
+                for x in 0..w {
+                    assert_eq!(
+                        alpha(w, h, radius, x, y),
+                        super::inner_contour_direct(w, h, r, x, y),
+                        "{w}x{h} r{radius} at {x},{y}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn contour_is_mirror_symmetric_on_both_axes() {
+        let (w, h, r) = (90, 50, 16);
+        for y in 0..h {
+            for x in 0..w {
+                assert_eq!(alpha(w, h, r, x, y), alpha(w, h, r, w - 1 - x, y));
+                assert_eq!(alpha(w, h, r, x, y), alpha(w, h, r, x, h - 1 - y));
+            }
+        }
     }
 }
 
