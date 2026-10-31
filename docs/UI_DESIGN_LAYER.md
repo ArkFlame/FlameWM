@@ -71,8 +71,14 @@ ui/<app>/<app>.html      <link> base first, then shared components, then app she
    `--text`, `--muted`, `--soft`, ... differ per app (`--muted` drifts), so moving them changes output. Resolve the
    drift per app before merging, because last-wins changes the colour silently.
 3. Add `ui/base/components.css`: button reset, scrollbar, list row, card. Migrate `assistant` first, then `osd`.
-4. Dedupe `ui/flamewm.css` against `ui/shell/flamewm.css`. Decide first whether the showcase copy is still
-   needed. `docs/ARCHITECTURE.md` section 5 says it is a derived showcase.
+4. Blocked: keep `ui/index.html` and `ui/flamewm.css`. Decision: the showcase is referenced outside docs, so
+   it is not deleted. Referrers (`git grep`, at origin/main):
+   - `scripts/check:20` compiles `ui/index.html`.
+   - `tools/ui_contract_guard.py:27,151` and `tools/accent_default_guard.py:27` list `ui/flamewm.css`.
+   - `tools/test_ui_contract_guard.py:27-28` writes both files as fixtures.
+   Dedupe is not byte-equivalent. Linking `ui/shell/flamewm.css` adds 130 shell-only blocks. A residual
+   `ui/flamewm.css` (132 shared blocks removed) gives 19 variables vs 18, +20 bytes, and about 2.2 MB of
+   differing bytes, because the cascade order changes. Revisit only after the referrers are migrated.
 5. Migrate `task-manager`, `finder`, `explorer`, `terminal`, `imageviewer`, `lock`, `settings`, `desktop`.
 6. Teach `tools/ui_contract_guard.py` and `tools/accent_default_guard.py` about `ui/base/*.css`.
 7. Only if measured: length/radius `var()` in `flamewm-render-compiler`, with its own tests.
