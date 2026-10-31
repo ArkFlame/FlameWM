@@ -71,7 +71,6 @@ impl App {
         // The window's root node carries the surface fill (the explorer does the same with its root). The grid node is
         // transparent, so the translucent fill shows through it.
         doc.background("terminal", color)?;
-        doc.border("terminal", self.surface_stroke)?;
         self.ui.surface_stroke = Some(self.surface_stroke);
         // No node backdrop: a root blur made every paint read back and re-blur the whole window. The window backdrop
         // already supplies the blurred desktop, and the translucent fill composites over it.

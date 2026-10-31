@@ -239,7 +239,6 @@ impl ExplorerTheme {
         }
         // The root fill carries the live surfaceOpacity alpha, applied once; children draw no second surface.
         doc.background("explorer", self.root())?;
-        doc.border("explorer", self.stroke)?;
         for popup in ["context-popup", "progress-popup", "dialog", "openwith-dialog"] {
             doc.border(popup, self.stroke)?;
         }
