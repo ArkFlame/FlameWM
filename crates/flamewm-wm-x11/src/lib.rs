@@ -16,7 +16,7 @@ mod size_hints;
 pub(crate) mod snap_preview;
 mod wm;
 
-pub use flamewm_render_x11::apply_cursor_theme;
+pub use flamewm_render_x11::{apply_cursor_appearance, apply_cursor_theme};
 pub use runtime::{
     SettingsObserver, SettingsWake, persisted_appearance, persisted_cursor_theme, run,
     run_with_settings_observer,

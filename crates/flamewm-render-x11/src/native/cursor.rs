@@ -309,18 +309,25 @@ impl XcursorBackend {
         }
     }
 
-    /// Replace the Xcursor theme in place. On error the previous theme and
-    /// cursor set stay active. Callers must re-define cursors on their windows
-    /// after success (cached cursor IDs are replaced).
+    /// Replace the Xcursor theme and, when given, the nominal cursor size in
+    /// place. `size` of `None` keeps the current size. On error the previous
+    /// theme, size and cursor set stay active. Callers must re-define cursors on
+    /// their windows after success (cached cursor IDs are replaced).
     ///
     /// # Safety
     /// `display` is the live display from `with_theme`.
-    pub unsafe fn reload_theme(&mut self, theme: &str) -> Result<(), String> {
+    pub unsafe fn reload_theme(&mut self, theme: &str, size: Option<u32>) -> Result<(), String> {
         let Some(load) = self.load.filter(|_| self.xcursor) else {
             return Err("Xcursor library unavailable".to_owned());
         };
         if theme.is_empty() {
             return Err("empty cursor theme".to_owned());
+        }
+        let previous_size = self.size;
+        if let Some(size) = size.and_then(|size| i32::try_from(size).ok()) {
+            if size > 0 {
+                self.size = size;
+            }
         }
         let mut loader = XlibCursorLoader {
             display: self.display,
@@ -330,7 +337,11 @@ impl XcursorBackend {
             theme: theme.to_owned(),
             size: self.size,
         };
-        reload_cache(&mut loader, &mut self.cache, self.theme.as_deref(), theme)?;
+        if let Err(error) = reload_cache(&mut loader, &mut self.cache, self.theme.as_deref(), theme)
+        {
+            self.size = previous_size;
+            return Err(error);
+        }
         self.theme = Some(theme.to_owned());
         Ok(())
     }
@@ -437,8 +448,8 @@ impl NativeCursorSession {
 
     /// # Safety
     /// The session's display must be live.
-    pub unsafe fn reload_theme(&mut self, theme: &str) -> Result<(), String> {
-        unsafe { self.backend.reload_theme(theme) }
+    pub unsafe fn reload_theme(&mut self, theme: &str, size: Option<u32>) -> Result<(), String> {
+        unsafe { self.backend.reload_theme(theme, size) }
     }
 
     pub(crate) unsafe fn into_deferred_libraries(self) -> Vec<DynamicLibrary> {

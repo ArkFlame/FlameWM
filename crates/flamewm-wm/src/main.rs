@@ -12,7 +12,7 @@ use flamewm_session_core::{
     resolve_startup_appearance,
 };
 use flamewm_wm::{
-    SettingsObserver, SettingsWake, WmConfig, apply_cursor_theme, persisted_appearance,
+    SettingsObserver, SettingsWake, WmConfig, apply_cursor_appearance, persisted_appearance,
     persisted_cursor_theme, run_with_settings_observer,
 };
 use flamewm_xsettings::{
@@ -328,11 +328,29 @@ fn font_size_points(snapshot: &SettingsSnapshot) -> Option<u32> {
 /// the Flame `cursorTheme` to live cursor owners at every settings sync point.
 fn cursor_only_observer() -> SettingsObserver {
     Box::new(|snapshot: &SettingsSnapshot| {
-        let theme = xsettings_input_from_snapshot(snapshot).cursor_theme;
-        for error in apply_cursor_theme(&theme) {
-            eprintln!("flamewm: cursor theme reload failed: {error}");
-        }
+        let input = xsettings_input_from_snapshot(snapshot);
+        apply_live_cursor(&input);
     })
+}
+
+/// Applies the live cursor theme and size to this process's cursor owners, then
+/// exports the same pair so applications launched later inherit it. Returns the
+/// per-owner failures.
+fn apply_live_cursor(input: &XSettingsInput) -> Vec<String> {
+    let errors = apply_cursor_appearance(&input.cursor_theme, Some(input.cursor_size));
+    flamewm_session_core::apply_current_process_env(&cursor_environment(input));
+    for error in &errors {
+        eprintln!("flamewm: cursor theme reload failed: {error}");
+    }
+    errors
+}
+
+/// `XCURSOR_THEME` and `XCURSOR_SIZE` for the WM's children, from the published input.
+fn cursor_environment(input: &XSettingsInput) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("XCURSOR_THEME".to_owned(), input.cursor_theme.clone()),
+        ("XCURSOR_SIZE".to_owned(), input.cursor_size.to_string()),
+    ])
 }
 
 /// Live `XSettings` path. Each settings sync point maps the snapshot and
@@ -368,10 +386,7 @@ fn xsettings_owner(
             // events are still consumed so a lost selection is noticed at this sync point.
             observer_manager.borrow_mut().drain_events().map(|_| ())
         } else {
-            let cursor_errors = apply_cursor_theme(&input.cursor_theme);
-            for error in &cursor_errors {
-                eprintln!("flamewm: cursor theme reload failed: {error}");
-            }
+            let cursor_errors = apply_live_cursor(&input);
             if let Some(plan) = sync.change(input.appearance, input.gtk3_theme.is_some()) {
                 flamewm_session_core::apply_current_process_env(&plan.environment);
             }
@@ -422,6 +437,22 @@ mod tests {
 
     fn text(value: &str) -> SettingValue {
         SettingValue::Text(value.to_owned())
+    }
+
+    #[test]
+    fn cursor_environment_exports_the_published_theme_and_size() {
+        let input = XSettingsInput {
+            cursor_theme: "Breeze".to_owned(),
+            cursor_size: 48,
+            ..XSettingsInput::default()
+        };
+        assert_eq!(
+            cursor_environment(&input),
+            BTreeMap::from([
+                ("XCURSOR_SIZE".to_owned(), "48".to_owned()),
+                ("XCURSOR_THEME".to_owned(), "Breeze".to_owned()),
+            ])
+        );
     }
 
     #[test]

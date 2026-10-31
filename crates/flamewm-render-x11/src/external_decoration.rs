@@ -114,7 +114,13 @@ impl ExternalDecorationRenderer {
                 return Err(format!("ExternalDecorationRenderer session: {error}"));
             }
         };
-        let backend = unsafe { XcursorBackend::with_theme(display, None, None) };
+        // Open with the session theme and size so the root and frame cursors match the
+        // theme apps inherit; a `None` theme would load the generic "default" set.
+        let theme = env::var("XCURSOR_THEME").ok();
+        let size = env::var("XCURSOR_SIZE")
+            .ok()
+            .and_then(|value| value.parse::<std::os::raw::c_int>().ok());
+        let backend = unsafe { XcursorBackend::with_theme(display, theme.as_deref(), size) };
         let picture_transform =
             XRenderTransformApi::load().is_ok_and(|api| api.capabilities().picture_transform);
         Ok(Self {
@@ -444,7 +450,8 @@ impl ExternalDecorationRenderer {
 
 /// A renderer whose Xcursor theme can be swapped in place by the registry.
 pub trait CursorThemeOwner {
-    fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String>;
+    /// Reloads `theme` at nominal `size` (`None` keeps the owner's current size).
+    fn reload_cursor_theme(&mut self, theme: &str, size: Option<u32>) -> Result<(), String>;
 }
 
 impl CursorThemeOwner for ExternalDecorationRenderer {
@@ -454,12 +461,12 @@ impl CursorThemeOwner for ExternalDecorationRenderer {
     /// the reload succeeds but a re-define fails, the new theme is already loaded
     /// and this returns `Err`; the caller's `applied` theme is not advanced, so
     /// the same theme is retried on the next settings publish.
-    fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String> {
+    fn reload_cursor_theme(&mut self, theme: &str, size: Option<u32>) -> Result<(), String> {
         let cursor = self
             .cursor
             .as_mut()
             .ok_or_else(|| "external decoration has no cursor backend".to_string())?;
-        unsafe { cursor.reload_theme(theme) }?;
+        unsafe { cursor.reload_theme(theme, size) }?;
         redefine_cursors(&self.defined_cursors, |xid, kind| {
             unsafe { cursor.define(xid as super::xlib::Window, kind) }.is_some()
         })
@@ -493,6 +500,8 @@ struct CursorThemeRegistry {
     /// Theme the registered owners currently hold. `None` until the first owner
     /// registers, so an unset session theme still reloads on the first change.
     applied: Option<String>,
+    /// Nominal size last applied with an explicit size; `None` until one is applied.
+    applied_size: Option<u32>,
 }
 
 impl CursorThemeRegistry {
@@ -508,20 +517,24 @@ impl CursorThemeRegistry {
     /// Reloads every live owner when `resolved` differs from the last applied
     /// theme. Returns per-owner failures. `applied` advances only when every
     /// owner succeeds, so a failed theme is retried on the next settings publish.
-    fn apply(&mut self, resolved: &str) -> Vec<String> {
-        if self.applied.as_deref() == Some(resolved) {
+    fn apply(&mut self, resolved: &str, size: Option<u32>) -> Vec<String> {
+        let size_changed = size.is_some_and(|size| self.applied_size != Some(size));
+        if self.applied.as_deref() == Some(resolved) && !size_changed {
             return Vec::new();
         }
         self.owners.retain(|owner| owner.strong_count() > 0);
         let mut errors = Vec::new();
         for owner in self.owners.iter().filter_map(Weak::upgrade) {
-            let result = owner.borrow_mut().reload_cursor_theme(resolved);
+            let result = owner.borrow_mut().reload_cursor_theme(resolved, size);
             if let Err(error) = result {
                 errors.push(error);
             }
         }
         if errors.is_empty() {
             self.applied = Some(resolved.to_owned());
+            if size.is_some() {
+                self.applied_size = size;
+            }
         }
         errors
     }
@@ -532,10 +545,18 @@ thread_local! {
         RefCell::new(CursorThemeRegistry::default());
 }
 
-/// Applies a session-resolved cursor theme to every registered owner. Returns
-/// one message per failed owner; empty when nothing changed or all succeeded.
+/// Applies a session-resolved cursor theme to every registered owner, keeping each
+/// owner's current cursor size. Returns one message per failed owner; empty when
+/// nothing changed or all succeeded.
 pub fn apply_cursor_theme(resolved: &str) -> Vec<String> {
-    CURSOR_THEME_REGISTRY.with(|registry| registry.borrow_mut().apply(resolved))
+    apply_cursor_appearance(resolved, None)
+}
+
+/// Applies a resolved cursor theme and nominal pixel size to every registered owner.
+/// A `size` of `None` keeps each owner's size. Reloads only when the theme or the
+/// requested size differs from the last applied pair.
+pub fn apply_cursor_appearance(resolved: &str, size: Option<u32>) -> Vec<String> {
+    CURSOR_THEME_REGISTRY.with(|registry| registry.borrow_mut().apply(resolved, size))
 }
 
 #[cfg(test)]
@@ -545,12 +566,14 @@ mod tests {
     #[derive(Default)]
     struct FakeOwner {
         reloads: Vec<String>,
+        sizes: Vec<Option<u32>>,
         fail: bool,
     }
 
     impl CursorThemeOwner for FakeOwner {
-        fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String> {
+        fn reload_cursor_theme(&mut self, theme: &str, size: Option<u32>) -> Result<(), String> {
             self.reloads.push(theme.to_owned());
+            self.sizes.push(size);
             if self.fail {
                 Err(format!("reload {theme} failed"))
             } else {
@@ -577,17 +600,47 @@ mod tests {
         registry.register(&as_owner(&first), None);
         registry.register(&as_owner(&second), None);
 
-        assert!(registry.apply("Breeze").is_empty());
+        assert!(registry.apply("Breeze", None).is_empty());
         assert_eq!(first.borrow().reloads, ["Breeze"]);
         assert_eq!(second.borrow().reloads, ["Breeze"]);
 
-        assert!(registry.apply("Breeze").is_empty());
+        assert!(registry.apply("Breeze", None).is_empty());
         assert_eq!(first.borrow().reloads.len(), 1);
         assert_eq!(second.borrow().reloads.len(), 1);
 
-        assert!(registry.apply("Adwaita").is_empty());
+        assert!(registry.apply("Adwaita", None).is_empty());
         assert_eq!(first.borrow().reloads, ["Breeze", "Adwaita"]);
         assert_eq!(second.borrow().reloads, ["Breeze", "Adwaita"]);
+    }
+
+    #[test]
+    fn size_change_alone_reloads_owners_at_the_new_size() {
+        let mut registry = CursorThemeRegistry::default();
+        let owner = fake(false);
+        registry.register(&as_owner(&owner), Some("Breeze".to_owned()));
+
+        assert!(registry.apply("Breeze", Some(24)).is_empty());
+        assert_eq!(owner.borrow().reloads, ["Breeze"]);
+        assert_eq!(owner.borrow().sizes, [Some(24)]);
+
+        // Same theme and size: no work. A theme-only apply keeps the size and is a no-op.
+        assert!(registry.apply("Breeze", Some(24)).is_empty());
+        assert!(registry.apply("Breeze", None).is_empty());
+        assert_eq!(owner.borrow().reloads.len(), 1);
+
+        assert!(registry.apply("Breeze", Some(48)).is_empty());
+        assert_eq!(owner.borrow().reloads, ["Breeze", "Breeze"]);
+        assert_eq!(owner.borrow().sizes, [Some(24), Some(48)]);
+    }
+
+    #[test]
+    fn theme_only_apply_passes_no_size_to_owners() {
+        let mut registry = CursorThemeRegistry::default();
+        let owner = fake(false);
+        registry.register(&as_owner(&owner), None);
+
+        assert!(registry.apply("Breeze", None).is_empty());
+        assert_eq!(owner.borrow().sizes, [None]);
     }
 
     #[test]
@@ -596,7 +649,7 @@ mod tests {
         let owner = fake(false);
         registry.register(&as_owner(&owner), Some("McMojave-cursors".to_owned()));
 
-        assert!(registry.apply("McMojave-cursors").is_empty());
+        assert!(registry.apply("McMojave-cursors", None).is_empty());
         assert!(owner.borrow().reloads.is_empty());
     }
 
@@ -607,11 +660,11 @@ mod tests {
         registry.register(&as_owner(&broken), None);
         registry.register(&as_owner(&healthy), None);
 
-        let errors = registry.apply("Missing-theme");
+        let errors = registry.apply("Missing-theme", None);
         assert_eq!(errors, ["reload Missing-theme failed"]);
         assert_eq!(healthy.borrow().reloads, ["Missing-theme"]);
         // A failed theme is retried on the next publish of the same theme.
-        let retry = registry.apply("Missing-theme");
+        let retry = registry.apply("Missing-theme", None);
         assert_eq!(retry, ["reload Missing-theme failed"]);
         assert_eq!(broken.borrow().reloads, ["Missing-theme", "Missing-theme"]);
     }
@@ -621,12 +674,12 @@ mod tests {
         let mut registry = CursorThemeRegistry::default();
         let flaky = fake(true);
         registry.register(&as_owner(&flaky), None);
-        assert_eq!(registry.apply("Breeze").len(), 1);
+        assert_eq!(registry.apply("Breeze", None).len(), 1);
 
         flaky.borrow_mut().fail = false;
-        assert!(registry.apply("Breeze").is_empty());
+        assert!(registry.apply("Breeze", None).is_empty());
         assert_eq!(flaky.borrow().reloads, ["Breeze", "Breeze"]);
-        assert!(registry.apply("Breeze").is_empty());
+        assert!(registry.apply("Breeze", None).is_empty());
         assert_eq!(flaky.borrow().reloads.len(), 2);
     }
 
@@ -666,7 +719,7 @@ mod tests {
         registry.register(&as_owner(&kept), None);
         drop(gone);
 
-        assert!(registry.apply("Breeze").is_empty());
+        assert!(registry.apply("Breeze", None).is_empty());
         assert_eq!(kept.borrow().reloads, ["Breeze"]);
         assert_eq!(registry.owners.len(), 1);
     }
@@ -691,7 +744,7 @@ mod tests {
     #[test]
     fn unavailable_renderer_reports_no_cursor_backend() {
         let mut renderer = ExternalDecorationRenderer::unavailable("no DISPLAY in test");
-        let error = renderer.reload_cursor_theme("Breeze").unwrap_err();
+        let error = renderer.reload_cursor_theme("Breeze", None).unwrap_err();
         assert!(error.contains("no cursor backend"));
     }
 

@@ -13,13 +13,13 @@ use crate::xlib::Window;
 
 /// Cursor operations needed for a live theme swap.
 trait ThemeSession {
-    fn reload(&mut self, theme: &str) -> Result<(), String>;
+    fn reload(&mut self, theme: &str, size: Option<u32>) -> Result<(), String>;
     fn define(&mut self, window: Window, kind: CursorKind) -> bool;
 }
 
 impl ThemeSession for NativeCursorSession {
-    fn reload(&mut self, theme: &str) -> Result<(), String> {
-        unsafe { self.reload_theme(theme) }
+    fn reload(&mut self, theme: &str, size: Option<u32>) -> Result<(), String> {
+        unsafe { self.reload_theme(theme, size) }
     }
 
     fn define(&mut self, window: Window, kind: CursorKind) -> bool {
@@ -34,8 +34,9 @@ fn reload_then_redefine<S: ThemeSession>(
     window: Window,
     kind: CursorKind,
     theme: &str,
+    size: Option<u32>,
 ) -> Result<(), String> {
-    session.reload(theme)?;
+    session.reload(theme, size)?;
     if session.define(window, kind) {
         Ok(())
     } else {
@@ -66,8 +67,8 @@ impl SurfaceCursor {
 }
 
 impl CursorThemeOwner for SurfaceCursor {
-    fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String> {
-        reload_then_redefine(&mut self.session, self.window, self.kind, theme)
+    fn reload_cursor_theme(&mut self, theme: &str, size: Option<u32>) -> Result<(), String> {
+        reload_then_redefine(&mut self.session, self.window, self.kind, theme, size)
     }
 }
 
@@ -90,13 +91,15 @@ mod tests {
     #[derive(Default)]
     struct FakeSession {
         reloads: Vec<String>,
+        sizes: Vec<Option<u32>>,
         defines: Vec<(Window, CursorKind)>,
         fail_reload: bool,
         fail_define: bool,
     }
 
     impl ThemeSession for FakeSession {
-        fn reload(&mut self, theme: &str) -> Result<(), String> {
+        fn reload(&mut self, theme: &str, size: Option<u32>) -> Result<(), String> {
+            self.sizes.push(size);
             self.reloads.push(theme.to_owned());
             if self.fail_reload {
                 Err(format!("reload {theme} failed"))
@@ -114,10 +117,20 @@ mod tests {
     #[test]
     fn reload_applies_theme_and_redefines_current_kind() {
         let mut session = FakeSession::default();
-        let result = reload_then_redefine(&mut session, 0x10, CursorKind::Move, "Breeze");
+        let result = reload_then_redefine(&mut session, 0x10, CursorKind::Move, "Breeze", None);
         assert!(result.is_ok());
         assert_eq!(session.reloads, ["Breeze"]);
         assert_eq!(session.defines, [(0x10, CursorKind::Move)]);
+    }
+
+    #[test]
+    fn reload_forwards_requested_size_and_redefines_at_new_size() {
+        let mut session = FakeSession::default();
+        let result =
+            reload_then_redefine(&mut session, 0x10, CursorKind::Default, "Breeze", Some(48));
+        assert!(result.is_ok());
+        assert_eq!(session.sizes, [Some(48)]);
+        assert_eq!(session.defines, [(0x10, CursorKind::Default)]);
     }
 
     #[test]
@@ -126,7 +139,7 @@ mod tests {
             fail_reload: true,
             ..FakeSession::default()
         };
-        let result = reload_then_redefine(&mut session, 0x10, CursorKind::Pointer, "Missing");
+        let result = reload_then_redefine(&mut session, 0x10, CursorKind::Pointer, "Missing", None);
         assert_eq!(result, Err("reload Missing failed".to_owned()));
         assert!(session.defines.is_empty());
     }
@@ -138,7 +151,7 @@ mod tests {
             ..FakeSession::default()
         };
         let error =
-            reload_then_redefine(&mut session, 0x10, CursorKind::Text, "Breeze").unwrap_err();
+            reload_then_redefine(&mut session, 0x10, CursorKind::Text, "Breeze", None).unwrap_err();
         assert!(error.contains("0x10"));
     }
 }
