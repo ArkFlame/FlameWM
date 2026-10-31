@@ -55,6 +55,7 @@ pub(super) fn drop_missing_selected(selection: &mut SelectionModel, items: &[Rub
 
 pub(super) fn end_rubber_gesture(state: &mut DesktopState) {
     state.selection_start = None;
+    state.rubber_pending = None;
     state.selection_output = None;
     state.selection.clear_rubber();
     state.rubber_items.clear();

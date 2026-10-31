@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=FlameWM Image Viewer
+GenericName=Image Viewer
+Comment=View images fit to the window, zoom and browse the folder
+Exec=flamewm-imageviewer %f
+TryExec=flamewm-imageviewer
+Icon=flamewm-imageviewer
+Terminal=false
+StartupNotify=true
+StartupWMClass=flamewm-imageviewer
+Categories=Graphics;Viewer;
+MimeType=image/png;image/jpeg;image/gif;image/webp;image/svg+xml;image/x-portable-pixmap;
+Keywords=image;picture;photo;viewer;gallery;

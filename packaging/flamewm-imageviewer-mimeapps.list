@@ -1,0 +1,7 @@
+[Default Applications]
+image/png=flamewm-imageviewer.desktop;
+image/jpeg=flamewm-imageviewer.desktop;
+image/gif=flamewm-imageviewer.desktop;
+image/webp=flamewm-imageviewer.desktop;
+image/svg+xml=flamewm-imageviewer.desktop;
+image/x-portable-pixmap=flamewm-imageviewer.desktop;

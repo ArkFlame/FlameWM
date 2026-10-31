@@ -824,8 +824,8 @@ impl X11App {
                 // The XRender blit's own conversion: decoded pixels become premultiplied ARGB32
                 // words, so the GPU composites the same colours. Tint is the same default too.
                 let words = match treatment {
-                    ImageTreatment::Original => crate::native::image::scale_and_premultiply(
-                        pixels, src_w, src_h, width, height,
+                    ImageTreatment::Original => super::original_argb32(
+                        pixels, src_w, src_h, width, height, *tint,
                     ),
                     ImageTreatment::SymbolicForeground => super::symbolic_foreground_argb32(
                         pixels,
@@ -1163,39 +1163,30 @@ impl X11App {
     /// with the next present serial. The window origin is only queried when the pixmap or size
     /// changed.
     unsafe fn publish_desktop_frame(&mut self) {
-        let frame = (self.backbuffer, self.width, self.height);
+        // The root origin is queried on every publish: the desktop can move (XMoveResizeWindow)
+        // without its backbuffer or size changing, and readers would then sample the wrong rect.
         let root = unsafe { XRootWindow(self.display, self.screen) };
-        let (origin, serial) = match self.published_desktop_frame {
-            Some(published) if published.frame == frame => {
-                (published.origin, published.serial.wrapping_add(1))
-            }
-            previous => {
-                let (mut x, mut y, mut child) = (0, 0, 0);
-                unsafe {
-                    crate::xlib_ext::XTranslateCoordinates(
-                        self.display,
-                        self.window,
-                        root,
-                        0,
-                        0,
-                        &mut x,
-                        &mut y,
-                        &mut child,
-                    )
-                };
-                (
-                    (x, y),
-                    previous.map_or(0, |published| published.serial.wrapping_add(1)),
-                )
-            }
+        let (mut x, mut y, mut child) = (0, 0, 0);
+        unsafe {
+            crate::xlib_ext::XTranslateCoordinates(
+                self.display,
+                self.window,
+                root,
+                0,
+                0,
+                &mut x,
+                &mut y,
+                &mut child,
+            )
         };
+        let serial = self.published_desktop_frame.map_or(0, |last| last.wrapping_add(1));
         let atom = unsafe { self.desktop_frame_atom() };
         let data: [std::os::raw::c_long; 6] = [
-            frame.0 as std::os::raw::c_long,
-            std::os::raw::c_long::from(origin.0 as u32),
-            std::os::raw::c_long::from(origin.1 as u32),
-            std::os::raw::c_long::from(frame.1),
-            std::os::raw::c_long::from(frame.2),
+            self.backbuffer as std::os::raw::c_long,
+            std::os::raw::c_long::from(x as u32),
+            std::os::raw::c_long::from(y as u32),
+            std::os::raw::c_long::from(self.width),
+            std::os::raw::c_long::from(self.height),
             std::os::raw::c_long::from(serial),
         ];
         // SAFETY: six 32-bit property units, matching format 32 (c_long items).
@@ -1211,11 +1202,7 @@ impl X11App {
                 6,
             );
         }
-        self.published_desktop_frame = Some(super::PublishedDesktopFrame {
-            frame,
-            origin,
-            serial,
-        });
+        self.published_desktop_frame = Some(serial);
     }
 
     /// Deletes the published desktop frame: its pixmap is about to be freed.
@@ -1523,8 +1510,16 @@ impl X11App {
                     return unsafe { self.paint(&stroke, document, scale) };
                 };
                 let device = scale_rect(*rect, scale);
+                // The ring strokes the rounded rect; snap the band clip to the same pixels so a
+                // fractional right/bottom edge cannot drop the last column.
+                let snapped = Rect {
+                    x: device.x.round(),
+                    y: device.y.round(),
+                    width: device.width.round(),
+                    height: device.height.round(),
+                };
                 let radius = *radius * scale;
-                let clip = match visible_under(device, &self.clip_stack) {
+                let clip = match visible_under(snapped, &self.clip_stack) {
                     Visible::Hidden => return Ok(()),
                     Visible::Whole => None,
                     Visible::Part(part) => Some(part),
@@ -1534,8 +1529,13 @@ impl X11App {
                 let rows = device.height.round().max(1.0) as u32;
                 let bands = rows.min(RIM_BANDS);
                 for band in 0..bands {
-                    let y0 = device.height * band as f32 / bands as f32;
-                    let y1 = device.height * (band + 1) as f32 / bands as f32;
+                    // Whole-pixel band edges: the clipped ring keeps only whole rows inside its
+                    // clip, so a fractional edge would drop the row between two bands.
+                    let y0 = (rows * band / bands) as f32;
+                    let y1 = (rows * (band + 1) / bands) as f32;
+                    if y1 <= y0 {
+                        continue;
+                    }
                     let mid = ((y0 + y1) * 0.5).round() as u32;
                     let alpha = flamewm_render_core::rim_alpha_at(
                         color.a,
@@ -1544,9 +1544,9 @@ impl X11App {
                         rows,
                     );
                     let band_rect = Rect {
-                        x: device.x,
-                        y: device.y + y0,
-                        width: device.width,
+                        x: snapped.x,
+                        y: snapped.y + y0,
+                        width: snapped.width,
                         height: y1 - y0,
                     };
                     let Some(band_clip) = intersect_rect(band_rect, clip.unwrap_or(band_rect))

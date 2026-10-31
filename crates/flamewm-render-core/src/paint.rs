@@ -175,15 +175,9 @@ pub fn build_paint_commands_with_scroll(
                 });
             }
             let border = apply_opacity(document.resolve_color(style.border_color), style.opacity);
-            if let (Some(material), true) = (material, style.border_width > 0.0 && border.a != 0) {
-                commands.push(PaintCommand::SurfaceRim {
-                    rect,
-                    radius: style.border_radius.max(0.0),
-                    color: border,
-                    fade_percent: material.rim_fade_percent,
-                    gloss: material.gloss_alpha,
-                });
-            } else if style.border_width > 0.0 && border.a != 0 {
+            // Every outline is the same uniform AA ring (the audio mixer's look); the gradient
+            // rim and gloss line are not drawn.
+            if style.border_width > 0.0 && border.a != 0 {
                 commands.push(PaintCommand::StrokeRect {
                     rect,
                     color: border,
@@ -201,7 +195,12 @@ pub fn build_paint_commands_with_scroll(
                 let revision = document.image_revision_for_node(node_index);
                 if document.image_for_node(node_index).is_some() {
                     let (treatment, tint) = match style.image_treatment {
-                        ImageTreatment::Original => (ImageTreatment::Original, None),
+                        // Original pixels keep their colours; only the group/node alpha rides along.
+                        ImageTreatment::Original => (
+                            ImageTreatment::Original,
+                            (style.opacity < 1.0)
+                                .then(|| apply_opacity(Color::rgb(255, 255, 255), style.opacity)),
+                        ),
                         ImageTreatment::SymbolicForeground => {
                             let tint =
                                 apply_opacity(document.resolve_color(style.color), style.opacity);

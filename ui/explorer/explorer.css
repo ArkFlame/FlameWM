@@ -3,7 +3,10 @@
 :root { --rim:#ffffff3f; --accent:#00000000; --accent-soft:#00000030; --card:#00000000; --line:#00000000; --hover:#00000000; --menu:#00000000; --sidebar:#00000000; --text:#f1f2f3; --muted:#f1f2f3; }
 * { box-sizing:border-box; }
 html { width:100%; height:100%; }
-body { border:1px solid var(--rim); width:100%; height:100%; margin:0; color:var(--text); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
+/* The WM masks the bottom corners of a CSD client with a 24px radius (client_bottom_rounded_rectangles).
+   The rim radius matches it; the body starts 24px above the client so the top arcs fall outside the
+   window and only the titlebar edge (WM-drawn) shows at the top. */
+body { position:absolute; top:-24px; left:0px; right:0px; bottom:0px; border:1px solid var(--rim); border-radius:24px; padding-top:24px; margin:0; color:var(--text); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
 button { background:transparent; color:var(--text); cursor:default; font-size:13px; border-width:0px; padding:0px; display:flex; align-items:center; justify-content:center; }
 button:hover { background:var(--hover); }
 button:active { background:var(--hover); }
@@ -87,7 +90,7 @@ button:active { background:var(--hover); }
 .dialog-button:hover { background:var(--hover); }
 
 .list-surface { position:absolute; }
-.selection-rectangle { position:absolute; background:var(--accent-soft); border:1px solid var(--accent); border-radius:3px; }
+.selection-rectangle { position:absolute; background:transparent; border:1px solid var(--accent); border-radius:3px; }
 
 /* Header dividers: 1px light overlay between cells, with a wider invisible grip centred on each line. */
 .col-sep { position:absolute; top:5px; width:1px; height:19px; background:#ffffff26; }

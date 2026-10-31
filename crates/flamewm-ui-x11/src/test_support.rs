@@ -40,6 +40,7 @@ pub struct RecordingUiDoc {
     pub variables: HashMap<String, UiColor>,
     pub images: HashMap<String, (u32, u32)>,
     pub radii: HashMap<String, f32>,
+    pub opacities: HashMap<String, f32>,
     /// Ids whose background was cleared, in call order. Also removes the entry from `backgrounds`.
     pub cleared: Vec<String>,
 }
@@ -109,6 +110,10 @@ impl UiDocumentAccess for RecordingUiDoc {
         Ok(())
     }
     fn font_weight(&mut self, _id: &str, _weight: u16) -> Result<(), String> {
+        Ok(())
+    }
+    fn opacity(&mut self, id: &str, opacity: f32) -> Result<(), String> {
+        self.opacities.insert(id.to_owned(), opacity);
         Ok(())
     }
     fn font_family(&mut self, _family: String) -> Result<(), String> {

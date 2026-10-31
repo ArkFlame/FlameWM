@@ -621,6 +621,26 @@ fn should_focus_on_press(active: Option<Window>, client: Window) -> bool {
     active != Some(client)
 }
 
+/// Client-area press focus action. `Reassert` re-sends X input focus to an already-active
+/// client: the cached `active` can diverge from the server's focus (popups, client-initiated
+/// focus, unmap reverts), and FocusIn/FocusOut are not tracked, so a press must not trust it.
+#[derive(Debug, PartialEq, Eq)]
+enum PressFocus {
+    Focus,
+    Reassert,
+    Skip,
+}
+
+fn press_focus_action(active: Option<Window>, client: Window, button: u8) -> PressFocus {
+    if !matches!(button, 1..=3) {
+        PressFocus::Skip
+    } else if should_focus_on_press(active, client) {
+        PressFocus::Focus
+    } else {
+        PressFocus::Reassert
+    }
+}
+
 /// Whether frames may be redirected automatically: the Composite extension exists and no
 /// compositing manager owns `_NET_WM_CM_S<screen>` (one would composite the frames itself).
 fn automatic_frame_redirect_available<C: Connection>(conn: &C, screen_num: usize) -> bool {

@@ -556,7 +556,7 @@ impl X11App {
                         );
                         if fire_node(on_action, document, &mut buffers, drag_index, &mut event)? {
                             self.mark_input_repaint();
-                            if self.single_event {
+                            if self.single_event && !self.input_backlog() {
                                 unsafe { self.redraw_if_dirty(document)? };
                                 return Ok(());
                             }
@@ -772,7 +772,8 @@ impl X11App {
                         );
                         fire_static(on_action, document, &mut buffers, "scroll", &mut event)?;
                         self.mark_input_repaint();
-                        if self.single_event {
+                        // A wheel burst shares one paint: defer while more input is queued.
+                        if self.single_event && !self.input_backlog() {
                             unsafe { self.redraw_if_dirty(document)? };
                             return Ok(());
                         }
@@ -1048,6 +1049,12 @@ impl X11App {
                 return Ok(());
             }
         }
+    }
+
+    /// True while more X input is already queued, so a paint can wait for the burst to drain.
+    fn input_backlog(&self) -> bool {
+        // SAFETY: the display is live; the probe does not consume events.
+        unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) > 0 }
     }
 
     pub(crate) fn hit_test(&self, document: &RuntimeDocument, x: f32, y: f32) -> Option<u32> {

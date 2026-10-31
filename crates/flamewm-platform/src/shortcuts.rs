@@ -481,6 +481,13 @@ fn checked_binding(action: &str, raw: &str) -> FlameResult<Option<String>> {
     Ok(Some(normalized))
 }
 
+/// True for a key name that is one printable character (`d`, `5`, `/`).
+#[must_use]
+pub fn is_typing_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    matches!(chars.next(), Some(only) if only.is_ascii_graphic()) && chars.next().is_none()
+}
+
 /// True for a binding whose key is one printable character bound without Ctrl, Alt or Super.
 /// Such a binding grabs an ordinary typing key: `d` would toggle its action on every keystroke.
 /// Shift does not count (Shift+d is how you type `D`), and bare modifier keys ("Super") are
@@ -491,10 +498,7 @@ pub fn is_bare_typing_key(normalized: &str) -> bool {
     let Some((key, prefix)) = tokens.split_last() else {
         return false;
     };
-    let mut chars = key.chars();
-    let single =
-        matches!(chars.next(), Some(only) if only.is_ascii_graphic()) && chars.next().is_none();
-    single
+    is_typing_key(key)
         && !prefix.iter().any(|token| {
             matches!(
                 token.to_ascii_lowercase().as_str(),

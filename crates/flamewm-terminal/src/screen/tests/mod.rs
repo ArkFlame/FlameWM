@@ -191,6 +191,28 @@ fn resize_moves_rows_into_scrollback_and_keeps_cursor_visible() {
 }
 
 #[test]
+fn packed_history_keeps_colours_and_wide_cells_through_scroll_and_resize() {
+    let mut screen = Screen::new(6, 1, 100);
+    feed(
+        &mut screen,
+        b"\x1b[31mred   \x1b[0m\r\n\x1b[44m\xE4\xB8\x96x\x1b[0m\r\nlast",
+    );
+    assert_eq!(screen.scrollback_len(), 2);
+    let red = screen.line_abs(0).expect("history row");
+    assert_eq!(text(&screen, 0), "last");
+    assert!(red[0].fg == Color::Indexed(1) && red[0].ch == 'r');
+    let wide = screen.line_abs(1).expect("history row");
+    assert_eq!(wide[0].ch, '世');
+    assert!(wide[0].attrs & attr::WIDE != 0 && wide[1].attrs & attr::SPACER != 0);
+    assert!(
+        wide[0].bg == Color::Indexed(4) && wide[2].ch == 'x' && wide[2].bg == Color::Indexed(4)
+    );
+    let snapshot = wide.clone().into_owned();
+    screen.resize(6, 2);
+    assert_eq!(&screen.line(0)[..snapshot.len()], snapshot.as_slice());
+}
+
+#[test]
 fn scrollback_is_capped() {
     let mut screen = Screen::new(2, 1, 3);
     feed(&mut screen, b"a\r\nb\r\nc\r\nd\r\ne");

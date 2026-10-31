@@ -75,7 +75,7 @@ impl Default for ChromeTokens {
             titlebar_blur_percent: DEFAULT_SURFACE_BLUR_PERCENT,
             surface_border_rgb: Rgb(0x00ff_ffff),
             surface_border_alpha: 20,
-            rim_fade_percent: 6,
+            rim_fade_percent: 65,
             highlight_percent: 18,
             backdrop_revision: 0,
             buttons: [ButtonTokens::default(); 3],

@@ -134,6 +134,10 @@ pub trait UiDocumentAccess {
     fn foreground_clear(&mut self, id: &str) -> Result<(), String>;
     fn font_size(&mut self, id: &str, size_px: f32) -> Result<(), String>;
     fn font_weight(&mut self, id: &str, weight: u16) -> Result<(), String>;
+    /// Fades `id` and its descendants to `opacity` (0..=1). Documents without support ignore it.
+    fn opacity(&mut self, _id: &str, _opacity: f32) -> Result<(), String> {
+        Ok(())
+    }
     /// Sets global UI typography after authored and per-node style declarations.
     fn ui_font_defaults(&mut self, _size_offset: f32, _bold: bool) -> Result<(), String> {
         Ok(())
@@ -418,6 +422,10 @@ macro_rules! document_access_methods {
 
         fn font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
             self.document.set_font_weight(id, weight)
+        }
+
+        fn opacity(&mut self, id: &str, opacity: f32) -> Result<(), String> {
+            self.document.set_group_opacity(id, opacity)
         }
 
         fn ui_font_defaults(&mut self, size_offset: f32, bold: bool) -> Result<(), String> {

@@ -54,7 +54,7 @@ pub struct GlassPreset {
 
 /// Shared rim fade for every glass surface: the bottom rim is this percent of the top rim, so the
 /// highlight sits on the upper edge and the sides and bottom stay subtle (Tahoe control-centre look).
-pub const RIM_FADE_PERCENT: u8 = 25;
+pub const RIM_FADE_PERCENT: u8 = 65;
 
 /// Shared rim alpha (`surfaceBorderOpacity` default, and `--rim` in every glass sheet as `#ffffff3f`).
 /// The Settings help text and platform default read this same value.

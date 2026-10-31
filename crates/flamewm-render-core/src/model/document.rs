@@ -162,6 +162,8 @@ pub struct RuntimeDocument {
     pub(super) node_image_overrides: FastMap<u32, RuntimeImageOverride>,
     pub(super) geometry_overrides: FastMap<u32, GeometryOverride>,
     pub(super) style_overrides: FastMap<u32, RuntimeStyleOverride>,
+    /// Subtree alpha per node (see `set_group_opacity`); absent means 1.0.
+    pub(super) group_opacity: FastMap<u32, f32>,
     pub(super) node_backdrops: FastMap<u32, u8>,
     pub(super) node_surfaces: FastMap<u32, crate::surface_material::SurfaceMaterial>,
     pub(super) z_index_overrides: FastMap<u32, i32>,
@@ -233,6 +235,7 @@ impl RuntimeDocument {
             node_image_overrides: FastMap::default(),
             geometry_overrides: FastMap::default(),
             style_overrides: FastMap::default(),
+            group_opacity: FastMap::default(),
             node_backdrops: FastMap::default(),
             node_surfaces: FastMap::default(),
             z_index_overrides: FastMap::default(),

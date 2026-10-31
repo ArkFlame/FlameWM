@@ -466,6 +466,24 @@ mod image_replace_tests {
     }
 
     #[test]
+    fn group_opacity_reaches_original_image_paint() {
+        let mut doc = image_doc();
+        doc.set_group_opacity("icon", 0.5).expect("group opacity");
+        let layout =
+            crate::layout::LayoutEngine::compute(&doc, 50.0, 50.0, InteractionState::default());
+        let commands = crate::paint::build_paint_commands(&doc, &layout, InteractionState::default());
+        let tint = commands
+            .iter()
+            .find_map(|c| match c {
+                crate::paint::PaintCommand::Image { tint, .. } => Some(*tint),
+                _ => None,
+            })
+            .expect("expected image command");
+        // Original pixels carry no tint, so the group alpha must arrive as the tint alpha.
+        assert_eq!(tint.map(|c| c.a), Some(128));
+    }
+
+    #[test]
     fn second_replace_bumps_again() {
         let mut doc = image_doc();
         doc.replace_image_for_node("icon", "a".to_string(), 1, 1, vec![1, 2, 3, 255])

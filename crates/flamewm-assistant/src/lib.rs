@@ -62,12 +62,12 @@ const KEY_TINT: u32 = 0x00ff_ffff;
 
 /// Messages from worker threads to the window.
 enum Msg {
-    /// Model ids from `GET /models`, or the reason ARK AI could not be reached.
-    Checked(Result<Vec<String>, AssistantError>),
     /// Model ids of the running Hermes proxy, or `None` when it is not running.
     Proxy(Option<Vec<String>>),
     /// A line for the notice, such as a fallback from the proxy to ARK AI.
     Notice(String),
+    /// One step of the working animation.
+    Tick,
     /// One streamed text piece of the running reply.
     Delta(String),
     /// The reply finished with its full text, or ended with the reason it did not.
@@ -101,14 +101,6 @@ impl Bus {
     }
 }
 
-/// Whether ARK AI answered the last check or a turn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Link {
-    Checking,
-    Online,
-    Offline,
-}
-
 struct Assistant {
     /// `$XDG_STATE_HOME/flamewm/assistant`: chat history, saved settings and the speech scratch dir.
     state_dir: PathBuf,
@@ -118,13 +110,10 @@ struct Assistant {
     api_key: String,
     speech_in: bool,
     speech_out: bool,
-    link: Link,
-    /// ARK AI model ids: the server's list, or the built-in fallback when it failed.
+    /// ARK AI model ids: the built-in list. Fetched never at open; the server list is not requested.
     models: Vec<String>,
-    /// Model ids of the running Hermes proxy; `None` when it is not running.
+    /// Model ids of the running Hermes proxy, learned from a turn; `None` until one reports them.
     proxy: Option<Vec<String>>,
-    /// True once a proxy probe has answered, so the subtitle can tell "checking" from "offline".
-    proxy_checked: bool,
     /// Provider and model the next turn uses.
     selection: Selection,
     model_menu: bool,
@@ -135,6 +124,10 @@ struct Assistant {
     history: History,
     input: String,
     working: bool,
+    /// Working-animation step; counts up while a turn runs.
+    phase: u32,
+    /// Cleared when the turn ends so its ticker thread exits.
+    ticking: Arc<std::sync::atomic::AtomicBool>,
     cancel: CancelToken,
     notice: String,
     tts_on: bool,
@@ -204,10 +197,8 @@ impl Assistant {
             api_key,
             speech_in,
             speech_out,
-            link: Link::Checking,
             models: fallback_models(),
             proxy: None,
-            proxy_checked: false,
             selection,
             model_menu: false,
             model_page: 0,
@@ -216,6 +207,8 @@ impl Assistant {
             history,
             input: String::new(),
             working: false,
+            phase: 0,
+            ticking: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cancel: CancelToken::new(),
             notice: String::new(),
             tts_on: false,
@@ -232,55 +225,10 @@ impl Assistant {
         })
     }
 
-    /// Lists ARK AI models and probes the Hermes proxy, each on a worker thread. The ARK result
-    /// tells the window whether ARK AI answered.
-    fn check(&mut self) {
-        self.link = Link::Checking;
-        let key = self.api_key.clone();
-        let bus = self.bus.clone();
-        thread::spawn(move || {
-            let result = OpenAiClient::new(endpoint(Provider::Ark, &key))
-                .and_then(|client| client.list_models(&CancelToken::new()));
-            bus.send(Msg::Checked(result));
-        });
-        self.probe_proxy();
-    }
-
-    /// Looks for the Hermes proxy on a worker thread. Runs at open and when the model menu opens.
-    fn probe_proxy(&mut self) {
-        self.proxy_checked = false;
-        let bus = self.bus.clone();
-        thread::spawn(move || bus.send(Msg::Proxy(proxy_models(&CancelToken::new()))));
-    }
-
-    /// Subtitle state for the selected provider: the proxy's own state when Hermes is selected.
-    fn status_link(&self) -> Link {
-        if self.selection.provider != Provider::HermesProxy {
-            return self.link;
-        }
-        match (self.proxy_checked, self.proxy.is_some()) {
-            (false, _) => Link::Checking,
-            (true, true) => Link::Online,
-            (true, false) => Link::Offline,
-        }
-    }
-
     fn on_msg(&mut self, msg: Msg) {
         match msg {
-            Msg::Checked(Ok(list)) => {
-                self.link = Link::Online;
-                self.models = list;
-                self.notice.clear();
-            }
-            Msg::Checked(Err(error)) => {
-                self.link = Link::Offline;
-                self.models = fallback_models();
-                self.notice = human_error(&error, Provider::Ark.title());
-            }
-            Msg::Proxy(models) => {
-                self.proxy = models;
-                self.proxy_checked = true;
-            }
+            Msg::Tick => self.phase = self.phase.wrapping_add(1),
+            Msg::Proxy(models) => self.proxy = models,
             Msg::Notice(text) => self.notice = text,
             Msg::Delta(text) => self.history.append_pending(&text),
             Msg::TurnDone(result, label) => self.finish_turn(result, label),
@@ -321,7 +269,9 @@ impl Assistant {
         self.input.clear();
         self.notice.clear();
         self.working = true;
+        self.phase = 0;
         self.cancel = CancelToken::new();
+        self.start_ticker();
         if std::mem::take(&mut self.voice_turn) {
             self.set_osd(OsdState::Working);
         }
@@ -348,12 +298,27 @@ impl Assistant {
             .collect()
     }
 
+    /// Sends a `Tick` every 400 ms until the turn ends, so the working text animates.
+    fn start_ticker(&self) {
+        use std::sync::atomic::Ordering;
+        self.ticking.store(true, Ordering::Relaxed);
+        let (bus, ticking) = (self.bus.clone(), self.ticking.clone());
+        thread::spawn(move || {
+            while ticking.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(400));
+                if ticking.load(Ordering::Relaxed) {
+                    bus.send(Msg::Tick);
+                }
+            }
+        });
+    }
+
     fn finish_turn(&mut self, result: Result<String, AssistantError>, label: &str) {
         self.working = false;
+        self.ticking.store(false, std::sync::atomic::Ordering::Relaxed);
         let partial = self.history.take_pending().unwrap_or_default();
         match result {
             Ok(text) => {
-                self.link = Link::Online;
                 self.save(Role::Assistant, &text, MsgState::Complete);
                 if self.tts_on {
                     self.speak(text);
@@ -368,9 +333,6 @@ impl Assistant {
             Err(error) => {
                 if !partial.is_empty() {
                     self.save(Role::Assistant, &partial, MsgState::Partial);
-                }
-                if matches!(error, AssistantError::Unreachable(_) | AssistantError::Timeout) {
-                    self.link = Link::Offline;
                 }
                 self.notice = human_error(&error, label);
             }
@@ -404,9 +366,6 @@ impl Assistant {
     fn toggle_model_menu(&mut self) {
         self.model_menu = !self.model_menu;
         self.model_query.clear();
-        if self.model_menu {
-            self.probe_proxy();
-        }
         let current = self.selection.clone();
         let position = self.menu_rows().iter().position(|row| {
             matches!(row, MenuRow::Model { provider, id } if *provider == current.provider && *id == current.model)
@@ -700,7 +659,6 @@ impl Assistant {
             return;
         }
         match event.action.as_str() {
-            "assistant.retry" => self.check(),
             "assistant.powered" => {
                 let _ = std::process::Command::new("xdg-open").arg("https://ai.arkflame.com").spawn();
             }
@@ -842,8 +800,9 @@ impl Assistant {
         doc.visible("list", !no_rows && !self.model_menu)?;
         doc.visible("menu-fill", self.model_menu)?;
         doc.visible("empty", no_rows)?;
-        doc.text("subtitle", chat_header::subtitle(self.status_link(), self.working).to_owned())?;
-        doc.visible("retry", self.status_link() == Link::Offline)?;
+        let working = self.working.then_some(self.phase);
+        doc.text("subtitle", chat_header::subtitle(working))?;
+        doc.text("working-text", chat_header::working_text(self.phase))?;
         let ark = self.selection.provider == Provider::Ark;
         doc.visible("powered-ark", ark)?;
         doc.visible("powered-hermes", !ark)?;
@@ -857,7 +816,7 @@ impl Assistant {
         doc.visible("input", !empty)?;
         doc.visible("caret-empty", empty)?;
         doc.visible("caret", !empty)?;
-        doc.text("input", model::keep_trailing_space(&self.input))?;
+        doc.text("input", model::keep_spaces(&self.input))?;
         doc.visible("record", self.speech_in && !self.working)?;
         doc.visible("mic", mic)?;
         doc.visible("send", !self.working && !mic)?;
@@ -1051,7 +1010,6 @@ fn show(state_dir: PathBuf, anchor: Option<popover::Anchor>) -> Result<(), Strin
     let bus = Bus { tx, wake: Arc::new(wake_writer) };
     let mut app = Assistant::new(state_dir, bus, theme, store)?;
     app.paint(&mut document)?;
-    app.check();
 
     let fd = wake_reader.as_raw_fd();
     let app = Rc::new(RefCell::new(app));

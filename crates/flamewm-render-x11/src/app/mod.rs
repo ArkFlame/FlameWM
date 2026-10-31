@@ -154,6 +154,27 @@ pub(crate) fn symbolic_foreground_argb32(
     out
 }
 
+/// Original-treatment ARGB32 words. A tint carries the group/node alpha (see `paint.rs`), applied
+/// to the premultiplied channels so faded images match faded backgrounds and text.
+pub(crate) fn original_argb32(
+    pixels: &[u8],
+    src_w: u32,
+    src_h: u32,
+    width: u32,
+    height: u32,
+    alpha: Option<Color>,
+) -> Vec<u32> {
+    let mut words = crate::native::image::scale_and_premultiply(pixels, src_w, src_h, width, height);
+    if let Some(alpha) = alpha.filter(|color| color.a < 255) {
+        let scale = |channel: u32| (channel * u32::from(alpha.a) + 127) / 255;
+        for word in &mut words {
+            let [a, r, g, b] = [*word >> 24, (*word >> 16) & 0xff, (*word >> 8) & 0xff, *word & 0xff];
+            *word = (scale(a) << 24) | (scale(r) << 16) | (scale(g) << 8) | scale(b);
+        }
+    }
+    words
+}
+
 pub(crate) struct X11App {
     pub(crate) display: *mut Display,
     pub(crate) screen: i32,
@@ -240,8 +261,8 @@ pub(crate) struct X11App {
     pub(crate) background_bound: Pixmap,
     /// Window size of the last frame presented from the bound backbuffer.
     pub(crate) presented_size: Option<(u32, u32)>,
-    /// Desktop surfaces only: the frame last published on the root.
-    pub(crate) published_desktop_frame: Option<PublishedDesktopFrame>,
+    /// Desktop surfaces only: the present serial last published on the root.
+    pub(crate) published_desktop_frame: Option<u32>,
     /// Interned [`crate::backdrop::DESKTOP_FRAME_PROPERTY`]; 0 until first use.
     pub(crate) desktop_frame_atom: Atom,
     /// Stale backbuffer kept alive across resize until the replacement is
@@ -1056,15 +1077,6 @@ fn set_window_role(display: *mut Display, window: Window, role: X11WindowRole) {
     }
 }
 
-/// A desktop frame published on the root: `(backbuffer, width, height)`, the window's root origin
-/// and the present serial.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct PublishedDesktopFrame {
-    pub(crate) frame: (Pixmap, u32, u32),
-    pub(crate) origin: (i32, i32),
-    pub(crate) serial: u32,
-}
-
 impl Drop for X11App {
     fn drop(&mut self) {
         if x_io_broken() {
@@ -1121,5 +1133,21 @@ impl Drop for X11App {
                 XDestroyWindow(self.display, self.window);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod original_alpha_tests {
+    use super::*;
+
+    #[test]
+    fn original_words_scale_premultiplied_channels_by_tint_alpha() {
+        let opaque_white = [255u8, 255, 255, 255];
+        let half = Color { r: 255, g: 255, b: 255, a: 128 };
+        assert_eq!(original_argb32(&opaque_white, 1, 1, 1, 1, None), vec![0xffff_ffff]);
+        assert_eq!(original_argb32(&opaque_white, 1, 1, 1, 1, Some(half)), vec![0x8080_8080]);
+        // Fully opaque tint is a no-op.
+        let full = Color { r: 0, g: 0, b: 0, a: 255 };
+        assert_eq!(original_argb32(&opaque_white, 1, 1, 1, 1, Some(full)), vec![0xffff_ffff]);
     }
 }

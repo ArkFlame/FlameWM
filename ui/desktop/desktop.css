@@ -8,7 +8,7 @@ body { position:relative; background:#000000; color:#f1f2f3; font-size:13px; }
 .desktop-glyph { position:absolute; left:18px; top:5px; width:44px; height:44px; display:block; }
 .desktop-label { position:absolute; left:2px; top:52px; width:76px; height:30px; display:flex; flex-direction:column; align-items:center; justify-content:center; overflow:hidden; }
 .desktop-label-line { width:76px; height:15px; display:flex; align-items:center; justify-content:center; overflow:hidden; text-shadow:0px 1px 2px #000000b8; }
-.selection { position:absolute; display:block; background:var(--selection-fill); border:1px solid var(--accent-strong); }
+.selection { position:absolute; display:block; border:1px solid var(--accent-strong); }
 .sticky { position:absolute; left:220px; top:180px; width:190px; height:190px; padding:12px; display:flex; flex-direction:column; gap:12px; background:#ffe56b; color:#171717; border:1px solid var(--rim); border-radius:5px; cursor:default; }
 .desktop-drag-ghost { position:absolute; width:82px; height:82px; display:flex; flex-direction:column; align-items:center; padding:0px; border:1px solid transparent; border-radius:4px; color:white; background:transparent; opacity:0.50; box-sizing:border-box; cursor:default; }
 #desktop-drag-ghost-label-1, #desktop-drag-ghost-label-2 { color:#ffffff80; }
@@ -120,7 +120,7 @@ body { position:relative; background:#000000; color:#f1f2f3; font-size:13px; }
 .widget-custom { display:flex; flex-direction:column; justify-content:center; gap:3px; flex-grow:1; overflow:hidden; }
 .widget-span { white-space:nowrap; padding-left:0px; padding-right:0px; border-radius:4px; }
 .widget-editor { position:absolute; left:12px; right:12px; top:12px; bottom:12px; white-space:normal; overflow-wrap:anywhere; overflow:hidden; font-size:14px; background:#0b0c10cc; color:#f4f6fb; border:1px solid var(--accent); border-radius:8px; padding:8px; cursor:text; }
-.widget-ghost { position:absolute; left:0px; top:0px; width:0px; height:0px; box-sizing:border-box; border:2px solid var(--accent-strong); background:var(--accent-soft); border-radius:18px; }
+.widget-ghost { position:absolute; left:0px; top:0px; width:0px; height:0px; box-sizing:border-box; border:2px solid var(--accent-strong); background:transparent; border-radius:18px; }
 .widget-slot-cell { position:absolute; left:0px; top:0px; width:0px; height:0px; box-sizing:border-box; border:1px solid var(--glass-slot-outline); background:transparent; border-radius:18px; }
 /* Resize bands: 6px along each border, 12px squares at the corners (corners drawn last).
    Absolute children of .widget are placed inside its padding (11px 15px), so the offsets

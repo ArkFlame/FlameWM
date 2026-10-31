@@ -494,18 +494,12 @@ pub struct Chord {
     pub key: String,
 }
 
-/// True for a chord key that is one printable character (`d`, `5`, `/`). Binding such a key
-/// without a command modifier would fire while the user types.
-fn is_printable_key(key: &str) -> bool {
-    let mut chars = key.chars();
-    matches!(chars.next(), Some(only) if only.is_ascii_graphic()) && chars.next().is_none()
-}
-
 /// Whether a chord on `key` may fire with `mods`. A single printable character always needs
 /// Ctrl, Alt or Super (Shift alone is not enough: `Shift+d` is how you type `D`), and an empty
 /// key never matches anything.
 fn chord_can_fire(mods: Mods, key: &str) -> bool {
-    !key.is_empty() && (!is_printable_key(key) || mods.ctrl || mods.alt || mods.logo)
+    // Binding a printable key without a command modifier would fire while the user types.
+    !key.is_empty() && (!flamewm_platform::shortcuts::is_typing_key(key) || mods.ctrl || mods.alt || mods.logo)
 }
 
 /// Parses a normalized binding from `flamewm_platform::shortcuts`.

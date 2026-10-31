@@ -351,6 +351,8 @@ struct DesktopState {
     widgets: widgets::WidgetState,
     selection: SelectionModel,
     selection_start: Option<Point>,
+    /// Latest rubber pointer position; applied once per flush so motion never redraws per event.
+    rubber_pending: Option<Point>,
     selection_output: Option<OutputId>,
     /// Item rects frozen at rubber-gesture start; empty outside a gesture.
     rubber_items: Vec<RubberItem>,
@@ -540,6 +542,7 @@ pub fn main() -> Result<(), String> {
             widgets: widgets::WidgetState::new(widget_store, widget_path),
             selection: SelectionModel::default(),
             selection_start: None,
+            rubber_pending: None,
             selection_output: None,
             rubber_items: Vec::new(),
             selection_overlay: None,
@@ -959,6 +962,12 @@ pub fn main() -> Result<(), String> {
                 }
                 let state_cell = &flush_cell;
                 let mut state = state_cell.borrow_mut();
+                if let Err(error) = apply_pending_rubber(document, &mut state) {
+                    eprintln!("desktop: rubber update failed (continuing): {error}");
+                }
+                if let Err(error) = widgets::apply_pending_drag(document, &mut state) {
+                    eprintln!("desktop: widget drag update failed (continuing): {error}");
+                }
                 reactor_watch.set(menus_open(&state.menu_rects));
                 // Live toggle: the setting snapshot is the authority; watch add/remove follows it.
                 let organize_wanted = setting_bool(&state.settings, "organizeDownloads", false);
@@ -1901,27 +1910,13 @@ fn handle_surface(
             sync_selection_visuals(document, state)?;
         }
         UiActionPhase::Motion => {
-            if let Some(start) = state.selection_start {
+            if state.selection_start.is_some() {
                 let bounds = rubber_bounds(state);
-                let point = pointer_point(action, bounds);
-                let rect = normalized_selection_rect(start, point, bounds);
-                // Same rubber rect means same hit set and overlay: nothing to do.
-                if state.selection.rubber() == Some(rect) {
-                    return Ok(());
-                }
-                state.selection.set_rubber(rect);
-                apply_rubber_hits(document, state, rect)?;
-                let visible = rubber_visible(
-                    point.x as f32 - start.x as f32,
-                    point.y as f32 - start.y as f32,
-                );
-                if visible {
-                    selection_visible_counter().increment();
-                }
-                set_selection_overlay(document, state, visible.then_some(rect))?;
+                state.rubber_pending = Some(pointer_point(action, bounds));
             }
         }
         UiActionPhase::Release => {
+            state.rubber_pending = None;
             if let Some(start) = state.selection_start {
                 let bounds = rubber_bounds(state);
                 let point = pointer_point(action, bounds);
@@ -3049,6 +3044,34 @@ fn show_conversion_preview(
 /// Raw X button translated once at the event boundary (ui-x11 helper).
 fn pointer_button(action: &UiActionEvent) -> PointerButton {
     pointer_button_from_raw(action.button)
+}
+
+/// Applies the coalesced rubber position once per flush: hit diff, overlay and root publish.
+fn apply_pending_rubber(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    let Some(point) = state.rubber_pending.take() else {
+        return Ok(());
+    };
+    let Some(start) = state.selection_start else {
+        return Ok(());
+    };
+    let rect = normalized_selection_rect(start, point, rubber_bounds(state));
+    // Same rubber rect means same hit set and overlay: nothing to do.
+    if state.selection.rubber() == Some(rect) {
+        return Ok(());
+    }
+    state.selection.set_rubber(rect);
+    apply_rubber_hits(document, state, rect)?;
+    let visible = rubber_visible(
+        point.x as f32 - start.x as f32,
+        point.y as f32 - start.y as f32,
+    );
+    if visible {
+        selection_visible_counter().increment();
+    }
+    set_selection_overlay(document, state, visible.then_some(rect))
 }
 
 fn pointer_point(action: &UiActionEvent, bounds: Rect) -> Point {

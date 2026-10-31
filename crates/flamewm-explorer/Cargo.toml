@@ -21,6 +21,7 @@ flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
 flamewm-profiler = { path = "../flamewm-profiler" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
+flamewm-settings-core = { path = "../flamewm-settings-core" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-remote-fs = { path = "../flamewm-remote-fs" }
 chrono.workspace = true

@@ -487,6 +487,36 @@ impl RuntimeDocument {
         changed
     }
 
+    /// Multiplies the paint alpha of `id` and all its descendants by `opacity` (clamped to 0..=1).
+    /// Layout and hit testing are unchanged.
+    pub fn set_group_opacity(&mut self, id: &str, opacity: f32) -> Result<(), String> {
+        let index = self.require_node(id)?;
+        let value = opacity.clamp(0.0, 1.0);
+        let changed = if value >= 1.0 {
+            self.group_opacity.remove(&index).is_some()
+        } else {
+            self.group_opacity.insert(index, value) != Some(value)
+        };
+        if changed {
+            self.touch();
+        }
+        Ok(())
+    }
+
+    /// Product of the group opacities of `index` and its ancestors. Cheap when none are set.
+    fn group_opacity_factor(&self, index: u32) -> f32 {
+        if self.group_opacity.is_empty() {
+            return 1.0;
+        }
+        let mut factor = 1.0;
+        let mut node = Some(index);
+        while let Some(current) = node {
+            factor *= self.group_opacity.get(&current).copied().unwrap_or(1.0);
+            node = self.document.nodes[current as usize].parent;
+        }
+        factor
+    }
+
     pub fn set_font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
         let weight = weight.clamp(100, 900);
         let index = self.require_node(id)?;
@@ -612,7 +642,8 @@ impl RuntimeDocument {
         let is_visible = self.is_visible(index);
         let needs_font_adjust =
             self.ui_font_size_offset != 0.0 || (self.ui_font_bold && base_style.font_weight < 600);
-        if !has_geometry && !has_style && is_visible && !needs_font_adjust {
+        let group = self.group_opacity_factor(index);
+        if !has_geometry && !has_style && is_visible && !needs_font_adjust && group == 1.0 {
             return std::borrow::Cow::Borrowed(base_style);
         }
         let mut style = base_style.clone();
@@ -649,6 +680,7 @@ impl RuntimeDocument {
         if self.ui_font_bold && style.font_weight < 600 {
             style.font_weight = 600;
         }
+        style.opacity *= group;
         std::borrow::Cow::Owned(style)
     }
 

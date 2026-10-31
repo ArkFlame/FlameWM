@@ -11,6 +11,20 @@ impl<C: Connection> Wm<'_, C> {
         self.focus_with_stacking(client, false)
     }
 
+    /// Re-sends X input focus to the already-active client without restacking or
+    /// protocol traffic. A no-op for clients that are hidden on the current workspace.
+    pub(super) fn reassert_input_focus(&mut self, client: Window) -> Result<(), ReplyError> {
+        let Some(state) = self.clients.get(&client) else {
+            return Ok(());
+        };
+        if !state.visible_on(self.current_workspace) {
+            return Ok(());
+        }
+        self.conn
+            .set_input_focus(FOCUS_REVERT_TO, client, CURRENT_TIME)?;
+        Ok(())
+    }
+
     pub(super) fn focus_with_stacking(
         &mut self,
         client: Window,

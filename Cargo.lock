@@ -703,6 +703,7 @@ dependencies = [
  "flamewm-reactor",
  "flamewm-remote-fs",
  "flamewm-render-compiler",
+ "flamewm-settings-core",
  "flamewm-ui-core",
  "flamewm-ui-x11",
  "inotify",
@@ -732,6 +733,20 @@ dependencies = [
  "image-webp",
  "resvg",
  "zune-jpeg",
+]
+
+[[package]]
+name = "flamewm-imageviewer"
+version = "0.1.3"
+dependencies = [
+ "flamewm-api",
+ "flamewm-control-core",
+ "flamewm-control-dbus",
+ "flamewm-dbus-reactor",
+ "flamewm-image-core",
+ "flamewm-render-compiler",
+ "flamewm-ui-core",
+ "flamewm-ui-x11",
 ]
 
 [[package]]

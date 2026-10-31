@@ -1,5 +1,6 @@
 //! Terminal state: primary and alternate grids, cursor and pen, scroll region, modes, tab stops, scrollback and
 //! the replies the host owes the child (DSR, DA). Input arrives through the `Perform` trait from `parser`.
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 
@@ -7,6 +8,7 @@ use crate::parser::Perform;
 
 mod cell;
 mod charset;
+mod history;
 mod modes;
 mod sgr;
 
@@ -14,6 +16,7 @@ pub use self::cell::{Cell, Color, Line, Pen, attr};
 use self::cell::{blank_line, compact_history};
 pub use self::charset::char_width;
 use self::charset::dec_graphics;
+use self::history::History;
 pub use self::modes::{CursorShape, MouseMode};
 use self::sgr::extended_color;
 
@@ -42,7 +45,7 @@ pub struct Screen {
     primary: Vec<Line>,
     alt: Vec<Line>,
     alt_active: bool,
-    pub scrollback: VecDeque<Line>,
+    scrollback: VecDeque<History>,
     scrollback_limit: usize,
     row: usize,
     col: usize,
@@ -224,12 +227,12 @@ impl Screen {
     }
 
     #[must_use]
-    pub fn line_abs(&self, index: usize) -> Option<&Line> {
+    pub fn line_abs(&self, index: usize) -> Option<Cow<'_, Line>> {
         let history = self.scrollback_len();
         if index < history {
-            self.scrollback.get(index)
+            self.scrollback.get(index).map(History::cells)
         } else {
-            self.grid().get(index - history)
+            self.grid().get(index - history).map(Cow::Borrowed)
         }
     }
 
@@ -258,7 +261,8 @@ impl Screen {
                 let shift = excess.min(self.row);
                 for _ in 0..shift {
                     let line = self.primary.remove(0);
-                    self.scrollback.push_back(compact_history(line));
+                    self.scrollback
+                        .push_back(History::pack(compact_history(line)));
                     self.primary.push(blank_line(cols, Color::Default));
                     self.row = self.row.saturating_sub(1);
                 }
@@ -270,7 +274,8 @@ impl Screen {
                         && self.scrollback.back().is_some()
                         && self.primary.len() < rows
                     {
-                        if let Some(mut line) = self.scrollback.pop_back() {
+                        if let Some(history) = self.scrollback.pop_back() {
+                            let mut line = history.cells().into_owned();
                             line.resize(cols, Cell::blank(Color::Default));
                             self.primary.insert(0, line);
                             self.row += 1;
@@ -317,7 +322,8 @@ impl Screen {
         for _ in 0..count.min(bottom - top + 1) {
             let line = self.grid_mut().remove(top);
             if capture {
-                self.scrollback.push_back(compact_history(line));
+                self.scrollback
+                    .push_back(History::pack(compact_history(line)));
                 if self.scrollback.len() > self.scrollback_limit {
                     self.scrollback.pop_front();
                 }

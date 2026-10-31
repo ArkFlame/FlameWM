@@ -28,6 +28,8 @@ pub const MAX_SOURCE_BYTES: u64 = 25 * 1024 * 1024;
 pub const MAX_SOURCE_PIXELS: u64 = 25_000_000;
 /// Decoded thumbnails kept in memory (about 330 KB at 18 px).
 pub const CACHE_CAPACITY: usize = 256;
+/// Pixel bytes kept across all cached thumbnails (LRU evicts past this, so large edges can never grow the cache).
+pub const CACHE_BYTES: usize = 256 * 1024;
 /// Alpha at or above this value counts as a visible pixel; anything less is an invisible thumbnail.
 pub const MIN_VISIBLE_ALPHA: u8 = 8;
 
@@ -304,12 +306,20 @@ struct Slot {
     used: u64,
 }
 
+impl Slot {
+    fn size(&self) -> usize {
+        self.pixels.as_ref().map_or(0, |pixels| pixels.len())
+    }
+}
+
 /// Bounded LRU of decoded thumbnails plus the set of keys whose decode is queued.
 /// A lookup only bumps a tick (O(1)); the oldest tick is scanned for only when an insert overflows.
 #[derive(Default)]
 pub struct Thumbnails {
     entries: HashMap<ThumbKey, Slot>,
     pending: HashSet<ThumbKey>,
+    /// Sum of cached pixel bytes; kept in step with `entries`.
+    bytes: usize,
     next_id: u64,
     clock: u64,
 }
@@ -343,15 +353,20 @@ impl Thumbnails {
             pixels: pixels.map(Arc::new),
             used: self.clock,
         };
-        self.entries.insert(key, slot);
-        while self.entries.len() > CACHE_CAPACITY {
+        self.bytes += slot.size();
+        if let Some(old) = self.entries.insert(key, slot) {
+            self.bytes -= old.size();
+        }
+        while self.entries.len() > 1 && (self.entries.len() > CACHE_CAPACITY || self.bytes > CACHE_BYTES) {
             let oldest = self
                 .entries
                 .iter()
                 .min_by_key(|(_, slot)| slot.used)
                 .map(|(key, _)| key.clone());
             let Some(oldest) = oldest else { break };
-            self.entries.remove(&oldest);
+            if let Some(removed) = self.entries.remove(&oldest) {
+                self.bytes -= removed.size();
+            }
         }
     }
 }

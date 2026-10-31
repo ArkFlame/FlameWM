@@ -11,6 +11,7 @@
 .target/release/flamewm-screenshot       usr/bin/flamewm-screenshot
 .target/release/flamewm-explorer         usr/bin/flamewm-explorer
 .target/release/flamewm-finder           usr/bin/flamewm-finder
+.target/release/flamewm-imageviewer      usr/bin/flamewm-imageviewer
 .target/release/flamewm-render-x11       usr/bin/flamewm-render-x11
 .target/release/flamewm-render-compile   usr/bin/flamewm-render-compile
 .target/release/flamewm-render-inspect   usr/bin/flamewm-render-inspect
@@ -33,8 +34,11 @@ packaging/flamewm-explorer.desktop        usr/share/applications/flamewm-explore
 packaging/flamewm-terminal.desktop        usr/share/applications/flamewm-terminal.desktop
 packaging/flamewm-task-manager.desktop    usr/share/applications/flamewm-task-manager.desktop
 packaging/flamewm-finder.desktop          usr/share/applications/flamewm-finder.desktop
+packaging/flamewm-imageviewer.desktop    usr/share/applications/flamewm-imageviewer.desktop
+packaging/flamewm-imageviewer-mimeapps.list usr/share/applications/mimeapps.list
 packaging/flamewm-assistant.desktop        usr/share/applications/flamewm-assistant.desktop
 packaging/icons/flamewm-finder.svg        usr/share/icons/hicolor/scalable/apps/flamewm-finder.svg
+packaging/icons/flamewm-imageviewer.svg   usr/share/icons/hicolor/scalable/apps/flamewm-imageviewer.svg
 packaging/flamewm-session.desktop        usr/share/xsessions/flamewm.desktop
 packaging/flamewm-wayland.desktop        usr/share/wayland-sessions/flamewm-wayland.desktop
 packaging/menus/flamewm-applications.menu  etc/xdg/menus/flamewm-applications.menu

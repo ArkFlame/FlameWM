@@ -1,0 +1,28 @@
+[package]
+name = "flamewm-imageviewer"
+autobins = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FlameWM native image viewer: fit, zoom, pan and browse images in one glass window"
+
+[dependencies]
+flamewm-api = { path = "../flamewm-api" }
+flamewm-control-core = { path = "../flamewm-control-core" }
+flamewm-control-dbus = { path = "../flamewm-control-dbus" }
+flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
+flamewm-image-core = { path = "../flamewm-image-core" }
+flamewm-ui-core = { path = "../flamewm-ui-core" }
+flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
+
+[build-dependencies]
+flamewm-render-compiler = { path = "../flamewm-render-compiler" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "flamewm-imageviewer"
+path = "src/main.rs"

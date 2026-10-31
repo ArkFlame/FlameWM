@@ -41,6 +41,8 @@ const CONFIG_WIDTH: i32 = 420;
 const CONFIG_HEADER_HEIGHT: i32 = 62;
 const CONFIG_ROW_HEIGHT: i32 = 32;
 const DRAG_THRESHOLD_PX: f32 = 4.0;
+/// Opacity of the dragged card while a move or resize is live.
+const DRAG_OPACITY: f32 = 0.5;
 const WIDGET_PADDING: f32 = 16.0;
 const CARD_RING_SIZE: u32 = 60;
 
@@ -254,6 +256,8 @@ pub(crate) struct WidgetState {
     media_dirty: bool,
     wake: WakeDeadline,
     due: Option<Instant>,
+    /// Latest drag pointer position, applied once per event flush.
+    pending_pointer: Option<(f32, f32)>,
     rings: [Option<RingKey>; MAX_WIDGETS],
     graphs: [Option<GraphKey>; MAX_WIDGETS],
     faces: [Option<FaceKey>; MAX_WIDGETS],
@@ -275,6 +279,7 @@ impl WidgetState {
             media_dirty: false,
             wake: WakeDeadline::default(),
             due: None,
+            pending_pointer: None,
             rings: [None; MAX_WIDGETS],
             graphs: std::array::from_fn(|_| None),
             faces: [None; MAX_WIDGETS],
@@ -566,8 +571,7 @@ fn sync_ghost(
             let tint = if valid { accent } else { danger_rgb() };
             document.position("widget-ghost", rect.x as f32, rect.y as f32)?;
             document.size("widget-ghost", rect.width as f32, rect.height as f32)?;
-            document.background("widget-ghost", color(tint, 0x38))?;
-            document.border("widget-ghost", color(tint, 0xdd))?;
+            document.border("widget-ghost", color(tint, 0xff))?;
             document.visible("widget-ghost", true)
         }
         None => document.visible("widget-ghost", false),
@@ -1762,6 +1766,7 @@ pub(crate) fn handle_action(
     };
     match action.phase {
         UiActionPhase::Press => {
+            state.widgets.pending_pointer = None;
             if state.menu.is_some() {
                 state.menu = None;
                 hide_menus(document, &mut state.menu_rects)?;
@@ -1787,84 +1792,115 @@ pub(crate) fn handle_action(
                 moved: false,
             });
         }
-        UiActionPhase::Motion | UiActionPhase::Release => {
-            let release = action.phase == UiActionPhase::Release;
-            let Some(mut gesture) = state
-                .widgets
-                .gesture
-                .filter(|gesture| gesture.widget == widget.id && gesture.mode == mode)
-            else {
-                return Ok(());
-            };
-            let dx = action.x - gesture.start_x;
-            let dy = action.y - gesture.start_y;
-            gesture.moved |= dx * dx + dy * dy >= DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX;
-            state.widgets.gesture = (!release).then_some(gesture);
-            if !gesture.moved {
-                return Ok(());
+        UiActionPhase::Motion => {
+            // Coalesced: only the latest pointer position is applied, once per flush.
+            if state.widgets.gesture.is_some_and(|g| g.widget == widget.id && g.mode == mode) {
+                state.widgets.pending_pointer = Some((action.x, action.y));
             }
-            let bounds = widget_bounds(state);
-            let rect = match gesture.mode {
-                GestureMode::Move => {
-                    move_widget_rect(gesture.original, dx as i32, dy as i32, bounds)
-                }
-                GestureMode::Resize(edges) => {
-                    edge_drag_rect(gesture.original, edges, dx as i32, dy as i32, bounds)
-                }
-            };
-            // Live drag follows the pointer freely; release snaps to the grid.
-            state.widgets.store.set_rect(widget.id, rect);
-            if release {
-                let metrics = widget_metrics(state);
-                match gesture.mode {
-                    GestureMode::Move => {
-                        state.widgets.store.drop_on_grid(widget.id, rect.origin(), metrics);
-                    }
-                    GestureMode::Resize(edges) => {
-                        if let Some(current) =
-                            state.widgets.store.get(widget.id).and_then(|w| w.grid.map(|g| (w.kind, g)))
-                        {
-                            let (kind, current) = current;
-                            let want = widget_grid::edge_resize(kind, current, edges, rect, metrics);
-                            state.widgets.store.place_nearest(widget.id, want, metrics);
-                        }
-                    }
-                }
-                state.widgets.persist();
-            }
-            state.widgets.store.anchor_to(widget.id, bounds);
-            // Slot outlines exist only while a drag or resize is live.
-            if release {
-                if state.widgets.slot_overlay {
-                    hide_slot_overlay(document)?;
-                    state.widgets.slot_overlay = false;
-                }
-            } else if !state.widgets.slot_overlay {
-                show_slot_overlay(document, widget_metrics(state))?;
-                state.widgets.slot_overlay = true;
-            }
-            // Ghost: the cell this gesture would land on, hidden once released.
-            let metrics = widget_metrics(state);
-            let ghost = if release {
-                None
-            } else {
-                gesture_ghost(state, widget.id, gesture.mode, rect, metrics)
-            };
-            let accent = projection_accent(state);
-            sync_ghost(document, metrics, accent, ghost)?;
-            // Lift the dragged card above sibling slots while the gesture is live.
-            if let Some(slot) = state
-                .widgets
-                .store
-                .widgets()
-                .iter()
-                .position(|w| w.id == widget.id)
+        }
+        UiActionPhase::Release => {
+            state.widgets.pending_pointer = None;
+            if let Some(gesture) =
+                state.widgets.gesture.filter(|g| g.widget == widget.id && g.mode == mode)
             {
-                document.layer(&format!("widget-{}", slot + 1), dragged_layer(release))?;
+                drag_to(document, state, gesture, (action.x, action.y), true)?;
             }
-            sync_widgets(document, state)?;
         }
         UiActionPhase::Hover => {}
+    }
+    Ok(())
+}
+
+/// Applies the latest coalesced drag motion. Called once per event flush from `main.rs`.
+pub(crate) fn apply_pending_drag(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    let Some(pointer) = state.widgets.pending_pointer.take() else {
+        return Ok(());
+    };
+    let Some(gesture) = state.widgets.gesture else {
+        return Ok(());
+    };
+    drag_to(document, state, gesture, pointer, false)
+}
+
+/// Moves a live gesture to `pointer`. A motion previews only: ghost outline, slot outlines
+/// and the fade/lift of the dragged card. Release commits the snapped rect and clears it.
+fn drag_to(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+    mut gesture: Gesture,
+    pointer: (f32, f32),
+    release: bool,
+) -> Result<(), String> {
+    let id = gesture.widget;
+    let dx = pointer.0 - gesture.start_x;
+    let dy = pointer.1 - gesture.start_y;
+    let was_moved = gesture.moved;
+    gesture.moved |= dx * dx + dy * dy >= DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX;
+    state.widgets.gesture = (!release).then_some(gesture);
+    if !gesture.moved {
+        return Ok(());
+    }
+    let bounds = widget_bounds(state);
+    let rect = match gesture.mode {
+        GestureMode::Move => move_widget_rect(gesture.original, dx as i32, dy as i32, bounds),
+        GestureMode::Resize(edges) => {
+            edge_drag_rect(gesture.original, edges, dx as i32, dy as i32, bounds)
+        }
+    };
+    // The widget stays put during the drag; only the preview zone moves. Release snaps the
+    // widget to the grid.
+    if release {
+        state.widgets.store.set_rect(id, rect);
+        let metrics = widget_metrics(state);
+        match gesture.mode {
+            GestureMode::Move => {
+                state.widgets.store.drop_on_grid(id, rect.origin(), metrics);
+            }
+            GestureMode::Resize(edges) => {
+                if let Some((kind, current)) =
+                    state.widgets.store.get(id).and_then(|w| w.grid.map(|g| (w.kind, g)))
+                {
+                    let want = widget_grid::edge_resize(kind, current, edges, rect, metrics);
+                    state.widgets.store.place_nearest(id, want, metrics);
+                }
+            }
+        }
+        state.widgets.persist();
+    }
+    state.widgets.store.anchor_to(id, bounds);
+    // Slot outlines exist only while a drag or resize is live.
+    if release {
+        if state.widgets.slot_overlay {
+            hide_slot_overlay(document)?;
+            state.widgets.slot_overlay = false;
+        }
+    } else if !state.widgets.slot_overlay {
+        show_slot_overlay(document, widget_metrics(state))?;
+        state.widgets.slot_overlay = true;
+    }
+    // Ghost: the cell this gesture would land on, hidden once released.
+    let metrics = widget_metrics(state);
+    let ghost = if release {
+        None
+    } else {
+        gesture_ghost(state, id, gesture.mode, rect, metrics)
+    };
+    let accent = projection_accent(state);
+    sync_ghost(document, metrics, accent, ghost)?;
+    // The dragged card fades and lifts once per gesture and restores on release.
+    if let Some(slot) = state.widgets.store.widgets().iter().position(|w| w.id == id)
+        && (!was_moved || release)
+    {
+        let node = format!("widget-{}", slot + 1);
+        document.opacity(&node, if release { 1.0 } else { DRAG_OPACITY })?;
+        document.layer(&node, dragged_layer(release))?;
+    }
+    // Slot content is unchanged until release, so motion does not rebuild it.
+    if release {
+        sync_widgets(document, state)?;
     }
     Ok(())
 }
@@ -2356,6 +2392,19 @@ mod tests {
         widget.rect = Rect::new(0, 0, 320, 160);
         sync_history(&mut doc, &mut graph, &samples, accent, 0, &widget).expect("resized");
         assert!(doc.images.contains_key("widget-1-history-image"));
+    }
+
+    #[test]
+    fn drop_target_ghost_is_an_outline_without_fill() {
+        use flamewm_ui_x11::test_support::RecordingUiDoc;
+        let metrics = GridMetrics::for_work_area(Rect::new(0, 0, 1920, 1080), 100);
+        let accent = Rgb { red: 9, green: 9, blue: 9 };
+        let mut doc = RecordingUiDoc::default();
+        let cell = Placement::left(1, 1, Span::SINGLE);
+        sync_ghost(&mut doc, metrics, accent, Some((cell, true))).expect("ghost");
+        assert!(doc.borders.contains_key("widget-ghost"));
+        assert!(!doc.backgrounds.contains_key("widget-ghost"));
+        assert_eq!(doc.visible.get("widget-ghost"), Some(&true));
     }
 
     #[test]

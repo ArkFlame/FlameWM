@@ -164,11 +164,12 @@ impl<C: Connection> Wm<'_, C> {
         if Self::is_meta_move_press(event.detail, u16::from(event.state)) {
             if let Some(resources) = self.registry.lookup_by_client(client) {
                 self.super_tap.press_other();
-                self.focus(client)?;
                 // The sync passive grab froze this physical click. Consume it
-                // rather than replaying it into Dolphin, then use the exact
-                // same move controller and pointer capture as title dragging.
+                // before any fallible focus request: an early `?` must never
+                // leave the pointer frozen. Then use the exact same move
+                // controller and pointer capture as title dragging.
                 self.conn.allow_events(Allow::ASYNC_POINTER, event.time)?;
+                self.focus(client)?;
                 let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
                 self.reduce_and_execute(
                     client,
@@ -183,10 +184,10 @@ impl<C: Connection> Wm<'_, C> {
         if let Some(session) = self.sessions.get_mut(&client) {
             session.last_title_click = None;
         }
-        let focus = if matches!(event.detail, 1..=3) && should_focus_on_press(self.active, client) {
-            self.focus(client)
-        } else {
-            Ok(())
+        let focus = match press_focus_action(self.active, client, event.detail) {
+            PressFocus::Focus => self.focus(client),
+            PressFocus::Reassert => self.reassert_input_focus(client),
+            PressFocus::Skip => Ok(()),
         };
         self.conn.allow_events(Allow::REPLAY_POINTER, event.time)?;
         focus

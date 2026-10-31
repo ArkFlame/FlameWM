@@ -15,8 +15,6 @@ pub const PAGE: usize = 40;
 pub const MAX_LOADED: usize = 96;
 /// Fetch older messages when the viewport is this close to the top.
 const NEAR_TOP: usize = 3;
-/// Input length limit in characters.
-pub const MAX_INPUT: usize = 4_000;
 /// Pixels the bubble list may use. The window is 780 px tall; the composer, notice and working
 /// row take the rest. Bubble heights are estimates, so the budget leaves room for error.
 const LIST_BUDGET: usize = 500;
@@ -39,21 +37,8 @@ const BODY_PX: f32 = 14.0;
 const BUBBLE_TEXT_PX: f32 = 304.0;
 /// Bubble vertical padding plus the row gap.
 const BUBBLE_PAD_PX: usize = 26;
-/// Longest text drawn in one bubble. Longer replies are cut with an ellipsis so a single bubble
-/// always fits the budget. The full text stays in the store.
-const MAX_SHOWN_CHARS: usize = 600;
-
-/// Text drawn in a bubble.
-fn shown(text: &str) -> String {
-    if text.chars().count() <= MAX_SHOWN_CHARS {
-        return text.to_owned();
-    }
-    let mut cut: String = text.chars().take(MAX_SHOWN_CHARS).collect();
-    cut.push_str(" \u{2026}");
-    cut
-}
-
-/// Bubble height in pixels for a message text, measured by the renderer's text layout.
+/// Bubble height in pixels for a message text, measured by the renderer's text layout. The whole
+/// text is measured: a long reply is taller than the budget and is clipped by the list, not cut.
 fn bubble_px(text: impl AsRef<str>) -> usize {
     let layout = flamewm_render_core::layout_text(
         text.as_ref(),
@@ -67,15 +52,13 @@ fn bubble_px(text: impl AsRef<str>) -> usize {
 
 /// True when the text needs more than one line in a bubble.
 pub fn wraps(text: &str) -> bool {
-    bubble_px(shown(text)) > bubble_px("x")
+    bubble_px(text) > bubble_px("x")
 }
 
-/// Input text with a trailing space made non-breaking, so the caret moves after it.
-pub fn keep_trailing_space(text: &str) -> String {
-    match text.strip_suffix(' ') {
-        Some(head) => format!("{head}\u{a0}"),
-        None => text.to_owned(),
-    }
+/// Input text as drawn: every space is non-breaking, so the layout's whitespace collapsing cannot
+/// drop leading, trailing or repeated spaces and the caret always sits after what was typed.
+pub fn keep_spaces(text: &str) -> String {
+    text.replace(' ', "\u{a0}")
 }
 
 /// How many messages, taken in order, fit `slots` and the budget after `base` pixels.
@@ -95,7 +78,7 @@ fn fitting<'a>(
         let len = msg.text.len();
         let cached = cache.borrow().get(&msg.seq).filter(|(l, _)| *l == len).map(|(_, h)| *h);
         let height = cached.unwrap_or_else(|| {
-            let h = bubble_px(shown(&msg.text));
+            let h = bubble_px(&msg.text);
             let mut cache = cache.borrow_mut();
             if cache.len() > 4 * MAX_LOADED {
                 cache.clear();
@@ -103,7 +86,8 @@ fn fitting<'a>(
             cache.insert(msg.seq, (len, h));
             h
         });
-        if total + height > list_budget() {
+        // The first message always gets a row, so a single reply taller than the budget still shows.
+        if count > 0 && total + height > list_budget() {
             break;
         }
         total += height;
@@ -178,7 +162,7 @@ impl History {
     }
 
     fn pending_height(&self) -> usize {
-        self.pending.as_deref().filter(|text| !text.is_empty()).map_or(0, |text| bubble_px(shown(text)))
+        self.pending.as_deref().filter(|text| !text.is_empty()).map_or(0, bubble_px)
     }
 
     /// Records a message that was just appended to the store with seq `msg.seq`.
@@ -292,10 +276,10 @@ impl History {
             .iter()
             .skip(self.top)
             .take(count)
-            .map(|msg| Row { role: msg.role, text: shown(&msg.text) })
+            .map(|msg| Row { role: msg.role, text: msg.text.clone() })
             .collect();
         if let Some(text) = self.pending.as_deref().filter(|text| !text.is_empty()) {
-            rows.push(Row { role: Role::Assistant, text: shown(text) });
+            rows.push(Row { role: Role::Assistant, text: text.to_owned() });
         }
         rows
     }
@@ -331,10 +315,9 @@ pub fn key_command(key: &str, text: Option<&str>, shift: bool, ctrl_or_alt: bool
     }
 }
 
-/// Applies an insert, keeping the input within `MAX_INPUT` characters.
+/// Applies an insert. The input has no length limit.
 pub fn insert_text(input: &mut String, text: &str) {
-    let room = MAX_INPUT.saturating_sub(input.chars().count());
-    input.extend(text.chars().take(room));
+    input.push_str(text);
 }
 
 #[cfg(test)]
@@ -474,24 +457,24 @@ mod tests {
     }
 
     #[test]
-    fn input_is_capped() {
-        let mut input = "x".repeat(MAX_INPUT - 2);
+    fn input_has_no_length_limit() {
+        let mut input = "x".repeat(100_000);
         insert_text(&mut input, "abcdef");
-        assert_eq!(input.chars().count(), MAX_INPUT);
+        assert_eq!(input.chars().count(), 100_006);
+        assert!(input.ends_with("abcdef"));
     }
 
     #[test]
-    fn long_replies_are_cut_and_the_newest_always_fits_the_budget() {
+    fn long_replies_are_kept_whole_and_the_newest_is_always_a_row() {
         let long = "word ".repeat(2_000);
         let mut store = Fake::new(3);
         let mut history = History::open(&mut store, 3).unwrap();
         history.push(Message { seq: 3, text: long.clone(), ..msg(3) });
         history.set_pending(Some(long.clone()));
         let rows = history.rows();
-        let heights: usize = rows.iter().map(|row| bubble_px(&row.text)).sum();
-        assert!(heights <= LIST_BUDGET, "list needs {heights} px");
-        assert!(rows.iter().all(|row| row.text.chars().count() <= MAX_SHOWN_CHARS + 2));
+        assert!(rows.iter().any(|row| row.text == long), "reply text must not be cut");
         assert_eq!(rows.last().unwrap().role, Role::Assistant);
+        assert!(!rows.is_empty() && rows.len() <= SLOTS);
     }
 
     #[test]

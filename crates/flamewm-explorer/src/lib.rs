@@ -117,6 +117,8 @@ impl Tab {
     pub fn set_entries(&mut self, items: Vec<Entry>) { self.entries=items; self.revision+=1; }
     pub fn extend_entries(&mut self, items: Vec<Entry>) { self.entries.extend(items); self.revision+=1; }
     pub fn clear_entries(&mut self) { self.entries.clear(); self.revision+=1; }
+    /// Frees the listing of a hidden tab (capacity included). Path, selection and scroll are kept.
+    pub fn release_entries(&mut self) { self.entries=Vec::new(); self.revision+=1; }
     pub fn path(&self) -> &Path { &self.history[self.cursor] }
     pub fn visit(&mut self, path: PathBuf) {
         self.history.truncate(self.cursor + 1);
@@ -239,7 +241,14 @@ impl Explorer {
     #[must_use] pub fn new(path: PathBuf) -> Self { Self { tabs: vec![Tab::new(path)], active:0, generation:1, hidden:false, sort:SortBy::Name, status:"Loading…".into(), clipboard:None } }
     #[must_use] pub fn tab(&self) -> &Tab { &self.tabs[self.active] }
     pub fn tab_mut(&mut self) -> &mut Tab { &mut self.tabs[self.active] }
-    pub fn switch_tab(&mut self, index:usize) -> bool { if index>=self.tabs.len() { false } else {self.active=index;true} }
+    /// Activates `index`. The tab left behind drops its listing (the caller rescans the new active tab);
+    /// its path, scroll, selection and search state stay.
+    pub fn switch_tab(&mut self, index:usize) -> bool {
+        if index>=self.tabs.len() { return false; }
+        if index!=self.active { self.tabs[self.active].release_entries(); }
+        self.active=index;
+        true
+    }
     pub fn close_tab(&mut self) { if self.tabs.len()>1 {self.tabs.remove(self.active);self.active=self.active.min(self.tabs.len()-1);} }
     pub fn new_tab(&mut self) { let path=self.tab().path().to_path_buf(); self.tabs.push(Tab::new(path)); self.active=self.tabs.len()-1; self.generation+=1; }
     pub fn next_generation(&mut self) -> u64 { self.generation+=1; self.tab_mut().loading=true; self.generation }

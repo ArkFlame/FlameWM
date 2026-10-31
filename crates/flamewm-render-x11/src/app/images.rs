@@ -394,8 +394,8 @@ impl X11App {
                     }
                 };
                 let argb = match treatment {
-                    ImageTreatment::Original => crate::native::image::scale_and_premultiply(
-                        pixels, src_width, src_height, width, height,
+                    ImageTreatment::Original => super::original_argb32(
+                        pixels, src_width, src_height, width, height, tint,
                     ),
                     ImageTreatment::SymbolicForeground => super::symbolic_foreground_argb32(
                         pixels, src_width, src_height, width, height, fg,
