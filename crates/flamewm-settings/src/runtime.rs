@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn navigation_projection_moves_the_compiled_selection_marker() {
-        let application = include_str!("lib.rs");
+        let application = crate::APP_SOURCE;
         assert!(
             application.contains("nav-selection"),
             "settings synchronization must own the compiled navigation marker"

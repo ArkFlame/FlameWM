@@ -71,7 +71,7 @@ mod tests {
 
     const HTML: &str = include_str!("../../../ui/settings.html");
     const CSS: &str = include_str!("../../../ui/settings.css");
-    const DISPATCH: &str = include_str!("lib.rs");
+    const DISPATCH: &str = crate::APP_SOURCE;
 
     const PROJECTED_TEXT_IDS: &[&str] = &[
         "display-mode-slot-0",
