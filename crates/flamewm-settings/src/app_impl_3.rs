@@ -39,7 +39,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         document.position("display-scale-thumb", thumb, 8.5)
     }
 
-    pub(crate) fn sync_appearance(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_appearance(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         let gpu_selected = self
             .text_setting("renderAcceleration")
             .is_ok_and(|value| value == "gpu");
@@ -77,15 +80,26 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 / (ANIMATION_SPEED_MAX - ANIMATION_SPEED_MIN) as f64;
             let fill = ratio * ANIMATION_SPEED_TRACK_TRAVEL;
             let fill_width = (fill + ANIMATION_SPEED_THUMB / 2.0).min(ANIMATION_SPEED_TRACK_WIDTH);
-            document.size("animation-speed-fill", fill_width as f32, GLASS_SLIDER_TRACK_HEIGHT as f32)?;
-            document.position("animation-speed-thumb", fill as f32, GLASS_SLIDER_THUMB_TOP as f32)?;
+            document.size(
+                "animation-speed-fill",
+                fill_width as f32,
+                GLASS_SLIDER_TRACK_HEIGHT as f32,
+            )?;
+            document.position(
+                "animation-speed-thumb",
+                fill as f32,
+                GLASS_SLIDER_THUMB_TOP as f32,
+            )?;
         }
         Ok(())
     }
 
     /// Projects the glass sliders, the taskbar material segments and the twins that show
     /// the unavailable state (inherit mode hides the opacity slider, blur-only and inherit hide the tint).
-    pub(crate) fn sync_glass_rows(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_glass_rows(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         let accent = self.accent()?;
         for slider in &GLASS_SLIDERS {
             let Some(value) = self.number_setting(slider.key) else {
@@ -156,7 +170,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Highlights the preset that matches each surface setting, and shows each
     /// setting's current colour on its wheel circle.
-    pub(crate) fn sync_color_rows(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_color_rows(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         for (target, key) in COLOR_TARGETS {
             let Ok(value) = self.text_setting(key) else {
                 continue;
@@ -182,7 +199,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Projects the shared picker panel: open state, the hex buffer with its focus
     /// caret, the preview, the inline error and the palette cells.
-    pub(crate) fn sync_color_picker(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_color_picker(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         for hue in 0..PICKER_HUES {
             for shade in 0..PICKER_SHADES {
                 let id = format!("color-picker-grid-{hue}-{shade}");
@@ -222,7 +242,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     /// Highlights, in each animation style row, the segment whose value matches the stored style.
-    pub(crate) fn sync_animation_styles(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_animation_styles(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         let accent = self.accent()?;
         for (key, values) in ANIMATION_STYLE_ROWS {
             let Ok(current) = self.text_setting(key) else {
@@ -237,7 +260,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     /// Projects the lock-screen background path (or `None`) and highlights the clock and timeout segments.
-    pub(crate) fn sync_lock_screen(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_lock_screen(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         if let Ok(mode) = self.text_setting("lockBackgroundMode") {
             let label = match mode.as_str() {
                 "solid" => "Solid colour".to_owned(),
@@ -267,7 +293,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Highlights the segment rows (taskbar layout, clock, cursor size, screensaver mode) and shows
     /// the floating-only taskbar steppers only while `taskbarStyle` is `floating`.
-    pub(crate) fn sync_segment_rows(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_segment_rows(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         let accent = self.accent()?;
         let style = self.text_setting("taskbarStyle").ok();
         highlight_options(
@@ -397,7 +426,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Projects the selected output's mode slots, overflow count and the
     /// Keep/Revert confirmation row from the authoritative display snapshot.
-    pub(crate) fn sync_display_modes(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_display_modes(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         let slots = self.client.display_mode_page(self.pages.mode_page);
         let current = self.selected_display().map(|output| output.current_mode);
         for slot in 0..DISPLAY_MODE_SLOTS {
@@ -454,7 +486,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         )
     }
 
-    pub(crate) fn sync_time_zone(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_time_zone(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         let automatic_zone = self.bool_setting("autoTimeZoneEnabled");
         let cached = self.text_setting("autoTimeZone").unwrap_or_default();
         let zone = time_zone_label(automatic_zone, &cached);
@@ -472,7 +507,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Writes the authoritative value text into every value pill and select
     /// label. Missing snapshot values leave the authored placeholder untouched.
-    pub(crate) fn sync_value_text(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_value_text(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         let percent = |key: &str| match self.setting_value(key) {
             Some(SettingValue::Percent(value)) => Some(*value),
             _ => None,

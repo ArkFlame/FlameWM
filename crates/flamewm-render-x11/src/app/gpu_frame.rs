@@ -399,7 +399,8 @@ mod tests {
             width: 2.0,
             radius: 8.0,
         };
-        let ops = frame_ops(&[fill(10.0, 50.0, 6.0), stroke], 1.0, &[], SCENE, None).expect("supported frame");
+        let ops = frame_ops(&[fill(10.0, 50.0, 6.0), stroke], 1.0, &[], SCENE, None)
+            .expect("supported frame");
         assert_eq!(ops.len(), 2);
         let PixelOp::FillRoundedRect { hole, .. } = ops[1] else {
             panic!("stroke lowers to a fill with a hole");
@@ -432,7 +433,8 @@ mod tests {
                 rgba: vec![0; 8],
             },
         ];
-        let ops = frame_ops(&[text(), image], 1.0, &sources, SCENE, None).expect("real frame shape");
+        let ops =
+            frame_ops(&[text(), image], 1.0, &sources, SCENE, None).expect("real frame shape");
         assert!(matches!(ops[0], PixelOp::BlendMask { x: 3, width: 2, .. }));
         assert!(matches!(ops[1], PixelOp::BlendImage { x: 1, width: 2, .. }));
     }
@@ -487,8 +489,14 @@ mod tests {
                 radius,
             }] if *radius == 12.0
         ));
-        let ops = frame_ops(&[node(10.0, 10.0, 10.0, 4.0, 50, 128)], 1.5, &[], SCENE, None)
-            .expect("scaled node backdrop lowers");
+        let ops = frame_ops(
+            &[node(10.0, 10.0, 10.0, 4.0, 50, 128)],
+            1.5,
+            &[],
+            SCENE,
+            None,
+        )
+        .expect("scaled node backdrop lowers");
         assert!(matches!(
             ops.as_slice(),
             [PixelOp::BackdropBlur {
@@ -524,13 +532,20 @@ mod tests {
         let no_opacity = [node(0.0, 0.0, 10.0, 4.0, 50, 0)];
         let off_scene = [node(2000.0, 0.0, 10.0, 4.0, 50, 128)];
         for commands in [&no_blur[..], &no_opacity[..], &off_scene[..]] {
-            assert!(frame_ops(commands, 1.0, &[], SCENE, None).expect("lowers").is_empty());
+            assert!(
+                frame_ops(commands, 1.0, &[], SCENE, None)
+                    .expect("lowers")
+                    .is_empty()
+            );
         }
     }
 
     #[test]
     fn node_backdrop_ignores_the_clip_stack_as_the_xrender_blit_does() {
-        let cut = [clip(0.0, 0.0, 50.0, 50.0), node(0.0, 0.0, 10.0, 4.0, 50, 128)];
+        let cut = [
+            clip(0.0, 0.0, 50.0, 50.0),
+            node(0.0, 0.0, 10.0, 4.0, 50, 128),
+        ];
         let ops = frame_ops(&cut, 1.0, &[], SCENE, None).expect("lowers under a clip");
         assert!(matches!(ops.as_slice(), [PixelOp::BackdropBlur { .. }]));
     }
@@ -565,7 +580,12 @@ mod tests {
 
         // Entirely outside the clip: nothing is drawn, the frame still lowers.
         let hidden = [clip(0.0, 0.0, 5.0, 5.0), fill(10.0, 50.0, 6.0)];
-        assert_eq!(frame_ops(&hidden, 1.0, &[], SCENE, None).expect("hidden fill").len(), 0);
+        assert_eq!(
+            frame_ops(&hidden, 1.0, &[], SCENE, None)
+                .expect("hidden fill")
+                .len(),
+            0
+        );
     }
 
     #[test]
@@ -586,8 +606,14 @@ mod tests {
             width: 2.0,
             radius: 8.0,
         };
-        let ops = frame_ops(&[clip(0.5, 0.0, 20.0, 20.5), stroke.clone()], 1.0, &[], SCENE, None)
-            .expect("cut stroke lowers");
+        let ops = frame_ops(
+            &[clip(0.5, 0.0, 20.0, 20.5), stroke.clone()],
+            1.0,
+            &[],
+            SCENE,
+            None,
+        )
+        .expect("cut stroke lowers");
         // Columns from ceil(0.5) = 1 to floor(20.5) = 20, rows from 0 to floor(20.5) = 20.
         assert!(matches!(
             ops.as_slice(),

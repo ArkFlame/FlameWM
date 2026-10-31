@@ -162,7 +162,10 @@ pub const BUNDLED_ICON_THEMES: [&str; 1] = ["MacTahoe"];
 /// Pin the bundled default first, then keep every discoverable installed theme.
 #[must_use]
 pub fn with_bundled_icon_themes(mut icon: Vec<ThemeItem>) -> Vec<ThemeItem> {
-    let mut pinned = match icon.iter().position(|item| item.id == BUNDLED_ICON_THEMES[0]) {
+    let mut pinned = match icon
+        .iter()
+        .position(|item| item.id == BUNDLED_ICON_THEMES[0])
+    {
         Some(index) => icon.swap_remove(index),
         None => ThemeItem {
             id: BUNDLED_ICON_THEMES[0].to_owned(),

@@ -164,4 +164,3 @@ pub fn normal_window_config(width: u32, height: u32) -> UiWindowConfig {
         }),
     }
 }
-

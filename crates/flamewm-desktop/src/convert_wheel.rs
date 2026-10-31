@@ -44,7 +44,17 @@ fn sector_within(x: f32, y: f32, margin: f32) -> Option<usize> {
     let r = CORNER_RADIUS + margin;
     let center_angle = sector as f32 * SECTOR_STEP;
     let cut = corner_cut(x, y, center_angle, distance, edge, outer, half_arc, r, true)
-        || corner_cut(x, y, center_angle, distance, edge, inner, half_arc, r, false);
+        || corner_cut(
+            x,
+            y,
+            center_angle,
+            distance,
+            edge,
+            inner,
+            half_arc,
+            r,
+            false,
+        );
     (!cut).then_some(sector)
 }
 
@@ -214,7 +224,13 @@ pub enum WheelAction {
 }
 
 impl WheelAction {
-    pub const ALL: [Self; 5] = [Self::Open, Self::Reveal, Self::Rename, Self::Shortcut, Self::Trash];
+    pub const ALL: [Self; 5] = [
+        Self::Open,
+        Self::Reveal,
+        Self::Rename,
+        Self::Shortcut,
+        Self::Trash,
+    ];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -233,10 +249,22 @@ mod mode_tests {
     use super::*;
     #[test]
     fn modifiers_select_modes_with_shift_first() {
-        assert_eq!(WheelMode::from_modifiers(true, false, false), Some(WheelMode::Convert));
-        assert_eq!(WheelMode::from_modifiers(false, true, false), Some(WheelMode::Tools));
-        assert_eq!(WheelMode::from_modifiers(false, false, true), Some(WheelMode::Actions));
-        assert_eq!(WheelMode::from_modifiers(true, true, true), Some(WheelMode::Convert));
+        assert_eq!(
+            WheelMode::from_modifiers(true, false, false),
+            Some(WheelMode::Convert)
+        );
+        assert_eq!(
+            WheelMode::from_modifiers(false, true, false),
+            Some(WheelMode::Tools)
+        );
+        assert_eq!(
+            WheelMode::from_modifiers(false, false, true),
+            Some(WheelMode::Actions)
+        );
+        assert_eq!(
+            WheelMode::from_modifiers(true, true, true),
+            Some(WheelMode::Convert)
+        );
         assert_eq!(WheelMode::from_modifiers(false, false, false), None);
     }
     #[test]

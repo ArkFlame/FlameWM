@@ -481,7 +481,10 @@ pub fn main() -> Result<(), String> {
     Ok(())
 }
 
-fn register_media_widget(reactor: &mut Reactor, state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>) {
+fn register_media_widget(
+    reactor: &mut Reactor,
+    state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>,
+) {
     match flamewm_integrations_linux::MprisProvider::connect() {
         Ok(mut provider) => match provider.start() {
             Ok(()) => {
@@ -511,7 +514,11 @@ fn register_media_widget(reactor: &mut Reactor, state_cell: &std::rc::Rc<std::ce
     }
 }
 
-fn register_workspace_signals(reactor: &mut Reactor, state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>, panels_dirty: &std::rc::Rc<std::cell::Cell<bool>>) {
+fn register_workspace_signals(
+    reactor: &mut Reactor,
+    state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>,
+    panels_dirty: &std::rc::Rc<std::cell::Cell<bool>>,
+) {
     // Panel strut changes arrive as control signals. The signal handler only
     // sets this flag; the reactor tick re-resolves the work area once per burst.
     // Best-effort workspace signal subscription: startup query already ran.
@@ -589,7 +596,9 @@ fn register_workspace_signals(reactor: &mut Reactor, state_cell: &std::rc::Rc<st
                             } => {
                                 panels_flag.set(true);
                             }
-                            flamewm_control_wire::ControlSignal::WeatherFeedChanged { snapshot } => {
+                            flamewm_control_wire::ControlSignal::WeatherFeedChanged {
+                                snapshot,
+                            } => {
                                 let mut state = state_cell.borrow_mut();
                                 state.weather = snapshot;
                                 state.weather_visual_dirty = true;
@@ -612,7 +621,11 @@ fn register_workspace_signals(reactor: &mut Reactor, state_cell: &std::rc::Rc<st
     }
 }
 
-fn register_inotify(reactor: &mut Reactor, inotify: inotify::Inotify, dirty: Arc<AtomicBool>) -> Result<(), String> {
+fn register_inotify(
+    reactor: &mut Reactor,
+    inotify: inotify::Inotify,
+    dirty: Arc<AtomicBool>,
+) -> Result<(), String> {
     reactor
         .register_fd_with_source_action(inotify, calloop::Interest::READ, move |_, source, _| {
             let mut buffer = [0u8; 4096];
@@ -641,7 +654,10 @@ fn register_inotify(reactor: &mut Reactor, inotify: inotify::Inotify, dirty: Arc
     Ok(())
 }
 
-fn register_downloads(reactor: &mut Reactor, state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>) -> Result<(), String> {
+fn register_downloads(
+    reactor: &mut Reactor,
+    state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>,
+) -> Result<(), String> {
     // Downloads organizer: the same reactor owns its watch fd; the wake slot is shared with
     // sticky persistence, so the organizer only ever publishes its own settle deadline.
     let downloads_source = {
@@ -661,7 +677,11 @@ fn register_downloads(reactor: &mut Reactor, state_cell: &std::rc::Rc<std::cell:
     Ok(())
 }
 
-fn register_icon_and_wallpaper_wakes(reactor: &mut Reactor, state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>, icons_pending: &Arc<AtomicBool>) {
+fn register_icon_and_wallpaper_wakes(
+    reactor: &mut Reactor,
+    state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>,
+    icons_pending: &Arc<AtomicBool>,
+) {
     // IconService wake FD: worker completions only set the pending flag;
     // the next event/flush tick drains and repaints affected tiles.
     if let Some(icon_fd) = state_cell.borrow().icons.wake_fd() {
@@ -687,7 +707,9 @@ fn register_icon_and_wallpaper_wakes(reactor: &mut Reactor, state_cell: &std::rc
     warn_degraded("wallpaper completion", registration);
 }
 
-fn initial_document(state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>) -> Result<flamewm_ui_x11::UiDocument, String> {
+fn initial_document(
+    state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>,
+) -> Result<flamewm_ui_x11::UiDocument, String> {
     let mut document = decode_document(include_bytes!(concat!(
         env!("OUT_DIR"),
         "/flamewm-desktop.rwr"

@@ -12,8 +12,8 @@ use flamewm_session_core::{
     resolve_startup_appearance,
 };
 use flamewm_wm::{
-    SettingsObserver, SettingsWake, WmConfig, apply_cursor_theme,
-    persisted_appearance, persisted_cursor_theme, run_with_settings_observer,
+    SettingsObserver, SettingsWake, WmConfig, apply_cursor_theme, persisted_appearance,
+    persisted_cursor_theme, run_with_settings_observer,
 };
 use flamewm_xsettings::{
     X11XSettingsManager, XSettingsInput, claim_x11_manager, published_settings,

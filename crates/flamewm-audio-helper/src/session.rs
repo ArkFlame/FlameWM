@@ -5,8 +5,8 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use flamewm_api::system::{AudioMuteAction, AudioSnapshot, AudioVolumeAction, ServiceAvailability};
 use flamewm_api::FlameResult;
+use flamewm_api::system::{AudioMuteAction, AudioSnapshot, AudioVolumeAction, ServiceAvailability};
 use flamewm_integrations_linux::audio_protocol::{AudioRequest, parse_request};
 
 /// How long the first request of a helper process waits for PulseAudio to become ready.
@@ -104,7 +104,9 @@ mod tests {
             if !self.ready.load(Ordering::SeqCst) {
                 return Err(FlameError::unavailable("not ready"));
             }
-            self.applied.borrow_mut().push(format!("volume {}", action.percent));
+            self.applied
+                .borrow_mut()
+                .push(format!("volume {}", action.percent));
             Ok(())
         }
 
@@ -112,7 +114,9 @@ mod tests {
             if !self.ready.load(Ordering::SeqCst) {
                 return Err(FlameError::unavailable("not ready"));
             }
-            self.applied.borrow_mut().push(format!("mute {}", action.muted));
+            self.applied
+                .borrow_mut()
+                .push(format!("mute {}", action.muted));
             Ok(())
         }
     }
@@ -136,7 +140,13 @@ mod tests {
             thread::sleep(Duration::from_millis(100));
             ready.store(true, Ordering::SeqCst);
         });
-        serve(&backend, &requests, &|_| {}, Duration::from_secs(1), Duration::from_secs(5));
+        serve(
+            &backend,
+            &requests,
+            &|_| {},
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        );
         flip.join().expect("flip thread");
         assert_eq!(*backend.applied.borrow(), vec!["volume 50".to_owned()]);
     }
@@ -146,8 +156,17 @@ mod tests {
         let backend = FakeBackend::default();
         let requests = feed(&[VOLUME_LINE, VOLUME_LINE]);
         let started = Instant::now();
-        serve(&backend, &requests, &|_| {}, Duration::from_secs(1), Duration::from_millis(50));
-        assert!(started.elapsed() < Duration::from_secs(2), "later requests must not wait again");
+        serve(
+            &backend,
+            &requests,
+            &|_| {},
+            Duration::from_secs(1),
+            Duration::from_millis(50),
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "later requests must not wait again"
+        );
         assert!(backend.applied.borrow().is_empty());
     }
 
@@ -177,7 +196,13 @@ mod tests {
         let backend = FakeBackend::default();
         let (_keep_open, requests) = mpsc::channel::<String>();
         let started = Instant::now();
-        serve(&backend, &requests, &|_| {}, Duration::from_millis(50), Duration::ZERO);
+        serve(
+            &backend,
+            &requests,
+            &|_| {},
+            Duration::from_millis(50),
+            Duration::ZERO,
+        );
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
@@ -186,7 +211,13 @@ mod tests {
         let backend = FakeBackend::default();
         backend.ready.store(true, Ordering::SeqCst);
         let requests = feed(&[VOLUME_LINE, "mute sink:1 1 1 1"]);
-        serve(&backend, &requests, &|_| {}, Duration::from_secs(1), READY_WAIT);
+        serve(
+            &backend,
+            &requests,
+            &|_| {},
+            Duration::from_secs(1),
+            READY_WAIT,
+        );
         assert_eq!(
             *backend.applied.borrow(),
             vec!["volume 50".to_owned(), "mute true".to_owned()]

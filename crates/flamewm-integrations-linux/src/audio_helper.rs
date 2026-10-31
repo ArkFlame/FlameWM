@@ -51,7 +51,11 @@ impl AudioHelper {
     where
         F: FnMut(AudioSnapshot) + Send + 'static,
     {
-        Ok(Self::new(helper_program(), Vec::new(), Box::new(on_snapshot)))
+        Ok(Self::new(
+            helper_program(),
+            Vec::new(),
+            Box::new(on_snapshot),
+        ))
     }
 
     fn new(program: PathBuf, args: Vec<String>, on_snapshot: SnapshotCallback) -> Self {
@@ -141,7 +145,10 @@ impl AudioHelper {
 
     #[cfg(test)]
     fn child_pid(&self) -> Option<u32> {
-        lock(&self.process).session.as_ref().map(|session| session.child.id())
+        lock(&self.process)
+            .session
+            .as_ref()
+            .map(|session| session.child.id())
     }
 }
 
@@ -177,7 +184,10 @@ fn read_events(
     // stdout closed: the helper exited (idle timeout or crash). Reap it now instead of at the
     // next request. A newer session has a different id and is left alone.
     let mut process = lock(process);
-    if process.session.as_ref().is_some_and(|session| session.id == id)
+    if process
+        .session
+        .as_ref()
+        .is_some_and(|session| session.id == id)
         && let Some(session) = process.session.take()
     {
         retire(session.child);
@@ -230,7 +240,8 @@ mod tests {
 
     /// Fake helper: answers the first request with one snapshot block, then exits like an idle
     /// helper would. Runs over real stdin/stdout pipes; never touches PulseAudio.
-    const ONE_SHOT_HELPER: &str = "read _line; printf 'snapshot available 1 1 50 0 x\\nend\\n'; exit 0";
+    const ONE_SHOT_HELPER: &str =
+        "read _line; printf 'snapshot available 1 1 50 0 x\\nend\\n'; exit 0";
 
     fn recorder() -> (Arc<Mutex<Vec<AudioSnapshot>>>, AudioHelper) {
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -258,7 +269,10 @@ mod tests {
     fn wait_for(mut condition: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !condition() {
-            assert!(Instant::now() < deadline, "timed out waiting for helper event");
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for helper event"
+            );
             thread::sleep(Duration::from_millis(5));
         }
     }
@@ -270,7 +284,10 @@ mod tests {
         let pid = helper.child_pid().expect("running child");
         wait_for(|| helper.child_pid().is_none());
         assert_eq!(lock(&seen).len(), 1);
-        assert!(!Path::new(&format!("/proc/{pid}")).exists(), "exited helper left a zombie");
+        assert!(
+            !Path::new(&format!("/proc/{pid}")).exists(),
+            "exited helper left a zombie"
+        );
     }
 
     #[test]
@@ -279,7 +296,9 @@ mod tests {
         helper.request_snapshot().expect("first spawn");
         let first = helper.child_pid().expect("running child");
         wait_for(|| helper.child_pid().is_none());
-        helper.set_volume(volume_action()).expect("respawn for volume");
+        helper
+            .set_volume(volume_action())
+            .expect("respawn for volume");
         let second = helper.child_pid().expect("respawned child");
         assert_ne!(first, second);
         wait_for(|| lock(&seen).len() == 2);
@@ -297,7 +316,11 @@ mod tests {
         let pid = child.id();
         let mut process = Process {
             next_id: 1,
-            session: Some(Session { id: 1, child, stdin }),
+            session: Some(Session {
+                id: 1,
+                child,
+                stdin,
+            }),
         };
         let deadline = Instant::now() + Duration::from_secs(5);
         let status = loop {

@@ -253,7 +253,11 @@ mod tests {
         let key = flamewm_platform::system::AUDIO_RAISE_MAXIMUM_KEY;
         let raise = |value| {
             AUDIO_RAISE_MAXIMUM.store(
-                boolean_setting(&snapshot(&[(key, SettingValue::Boolean(value))]), key, false),
+                boolean_setting(
+                    &snapshot(&[(key, SettingValue::Boolean(value))]),
+                    key,
+                    false,
+                ),
                 Ordering::Relaxed,
             );
             volume_cap_percent()

@@ -465,16 +465,16 @@ fn logo_lines(config: &Config, cols: usize, rows: usize) -> Vec<String> {
 fn kitty_graphics_supported(env: impl Fn(&str) -> Option<String>) -> bool {
     env("KITTY_WINDOW_ID").is_some()
         || env("TERM").is_some_and(|term| term == "xterm-kitty")
-        || env("TERM_PROGRAM").is_some_and(|program| matches!(program.as_str(), "ghostty" | "WezTerm"))
+        || env("TERM_PROGRAM")
+            .is_some_and(|program| matches!(program.as_str(), "ghostty" | "WezTerm"))
 }
 fn base64(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let n = chunk
-            .iter()
-            .enumerate()
-            .fold(0_u32, |acc, (i, byte)| acc | (u32::from(*byte) << (16 - 8 * i)));
+        let n = chunk.iter().enumerate().fold(0_u32, |acc, (i, byte)| {
+            acc | (u32::from(*byte) << (16 - 8 * i))
+        });
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize]));
@@ -507,11 +507,7 @@ fn kitty_image(width: u32, height: u32, rgba: &[u8]) -> String {
     out
 }
 /// The logo as an inline kitty image, or None when the terminal is not a supporting one or rasterizing fails.
-fn logo_image(
-    config: &Config,
-    tty: bool,
-    env: impl Fn(&str) -> Option<String>,
-) -> Option<String> {
+fn logo_image(config: &Config, tty: bool, env: impl Fn(&str) -> Option<String>) -> Option<String> {
     if config.logo != "auto" || !tty || !kitty_graphics_supported(env) {
         return None;
     }
@@ -640,8 +636,14 @@ mod tests {
         };
         assert!(kitty_graphics_supported(env(&[("KITTY_WINDOW_ID", "3")])));
         assert!(kitty_graphics_supported(env(&[("TERM", "xterm-kitty")])));
-        assert!(kitty_graphics_supported(env(&[("TERM_PROGRAM", "ghostty")])));
-        assert!(!kitty_graphics_supported(env(&[("TERM_PROGRAM", "FlameWM"), ("TERM", "xterm-256color")])));
+        assert!(kitty_graphics_supported(env(&[(
+            "TERM_PROGRAM",
+            "ghostty"
+        )])));
+        assert!(!kitty_graphics_supported(env(&[
+            ("TERM_PROGRAM", "FlameWM"),
+            ("TERM", "xterm-256color")
+        ])));
         assert!(!kitty_graphics_supported(env(&[])));
     }
     #[test]

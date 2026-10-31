@@ -211,7 +211,10 @@ impl X11App {
     ///
     /// Must run on the app's display thread after `clear_scene`.
     pub(crate) unsafe fn paint_surface_backdrop(&mut self) -> Result<(), String> {
-        let Some(backdrop) = self.surface_backdrop.as_ref().or(self.window_backdrop_pixmap.as_ref())
+        let Some(backdrop) = self
+            .surface_backdrop
+            .as_ref()
+            .or(self.window_backdrop_pixmap.as_ref())
         else {
             trace_paint(|| "no-backdrop".to_string());
             return Ok(());
@@ -331,7 +334,10 @@ impl NodeBackdropCache {
 
 /// The device rect a node backdrop is painted under: its scaled rect, rounded to whole pixels, at
 /// least one pixel wide and high. Shared by the XRender and GPU painters.
-pub(crate) fn node_device_rect(rect: flamewm_render_core::Rect, scale: f32) -> (i32, i32, u32, u32) {
+pub(crate) fn node_device_rect(
+    rect: flamewm_render_core::Rect,
+    scale: f32,
+) -> (i32, i32, u32, u32) {
     let rect = super::primitives::scale_rect(rect, scale);
     (
         rect.x.round() as i32,
@@ -548,7 +554,10 @@ mod tests {
         assert!(node_backdrop_words(rgba.clone(), rect, rect, 0, 50, 0).is_none());
         for opacity in [13, 41, 255] {
             let words = node_backdrop_words(rgba.clone(), rect, rect, 0, 50, opacity).unwrap();
-            assert!(words.iter().all(|word| word >> 24 == 255), "opacity {opacity}");
+            assert!(
+                words.iter().all(|word| word >> 24 == 255),
+                "opacity {opacity}"
+            );
             assert_eq!(words[0], 0xff_40_80_c0, "opacity {opacity}");
         }
     }

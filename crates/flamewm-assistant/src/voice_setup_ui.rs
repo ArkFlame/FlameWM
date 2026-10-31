@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::thread;
 
-use flamewm_assistant_core::{setup_default, AssistantError};
+use flamewm_assistant_core::{AssistantError, setup_default};
 
 /// Runs the setup on a worker thread. `on_progress` and `on_done` run on that thread.
 pub fn spawn(
@@ -25,6 +25,9 @@ pub fn progress_notice(percent: u8, label: &str) -> String {
 mod tests {
     #[test]
     fn progress_notice_shows_percent_and_step() {
-        assert_eq!(super::progress_notice(40, "Installing the speech runtimes"), "Setting up voice 40%... Installing the speech runtimes");
+        assert_eq!(
+            super::progress_notice(40, "Installing the speech runtimes"),
+            "Setting up voice 40%... Installing the speech runtimes"
+        );
     }
 }

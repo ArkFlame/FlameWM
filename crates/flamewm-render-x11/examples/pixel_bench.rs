@@ -24,7 +24,9 @@ fn measure(name: &str, op: impl FnMut(&mut [u8])) {
 
 /// Like [`measure`] on a `width` x `height` frame, for ops whose frame is not the bench frame.
 fn measure_in(name: &str, width: u32, height: u32, mut op: impl FnMut(&mut [u8])) {
-    let mut pixels: Vec<u8> = (0..width * height * 4).map(|index| (index % 251) as u8).collect();
+    let mut pixels: Vec<u8> = (0..width * height * 4)
+        .map(|index| (index % 251) as u8)
+        .collect();
     op(&mut pixels);
     let mut samples: Vec<Duration> = (0..ITERATIONS)
         .map(|_| {
@@ -125,15 +127,30 @@ fn run(mode: RenderAcceleration) {
         stroke_rounded_rect(pixels, WIDTH, HEIGHT, panel, 2, [220, 220, 230, 255]).expect("stroke");
     });
     // Selection rubber band: a 320x210 translucent fill with a 1 px accent stroke.
-    let selection = RoundedRect { x: 200, y: 120, width: 320, height: 210, radius: 0 };
+    let selection = RoundedRect {
+        x: 200,
+        y: 120,
+        width: 320,
+        height: 210,
+        radius: 0,
+    };
     measure("selection fill+stroke 320x210", |pixels| {
-        fill_rounded_rect(pixels, WIDTH, HEIGHT, selection, None, [60, 120, 220, 60]).expect("fill");
-        stroke_rounded_rect(pixels, WIDTH, HEIGHT, selection, 1, [60, 120, 220, 255]).expect("stroke");
+        fill_rounded_rect(pixels, WIDTH, HEIGHT, selection, None, [60, 120, 220, 60])
+            .expect("fill");
+        stroke_rounded_rect(pixels, WIDTH, HEIGHT, selection, 1, [60, 120, 220, 255])
+            .expect("stroke");
     });
     // Window move outline: a 2 px rounded stroke around a 800x500 window rect.
-    let outline = RoundedRect { x: 150, y: 60, width: 800, height: 500, radius: 12 };
+    let outline = RoundedRect {
+        x: 150,
+        y: 60,
+        width: 800,
+        height: 500,
+        radius: 12,
+    };
     measure("move outline 800x500 r12 t2", |pixels| {
-        stroke_rounded_rect(pixels, WIDTH, HEIGHT, outline, 2, [255, 255, 255, 200]).expect("stroke");
+        stroke_rounded_rect(pixels, WIDTH, HEIGHT, outline, 2, [255, 255, 255, 200])
+            .expect("stroke");
     });
     // Alpha blend span: a 1000x700 full-coverage mask, source-over through composite_cpu.
     let mask = vec![200_u8; 1000 * 700];
@@ -142,7 +159,14 @@ fn run(mode: RenderAcceleration) {
             pixels,
             1000,
             700,
-            PixelOp::BlendMask { x: 0, y: 0, width: 1000, height: 700, mask: &mask, color: [30, 40, 50, 160] },
+            PixelOp::BlendMask {
+                x: 0,
+                y: 0,
+                width: 1000,
+                height: 700,
+                mask: &mask,
+                color: [30, 40, 50, 160],
+            },
         )
         .expect("blend");
     });

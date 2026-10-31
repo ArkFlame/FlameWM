@@ -88,7 +88,8 @@ unsafe extern "C" {
 }
 
 type XIQueryVersionFn = unsafe extern "C" fn(*mut Display, *mut c_int, *mut c_int) -> Status;
-type XISelectEventsFn = unsafe extern "C" fn(*mut Display, Window, *mut XIEventMask, c_int) -> Status;
+type XISelectEventsFn =
+    unsafe extern "C" fn(*mut Display, Window, *mut XIEventMask, c_int) -> Status;
 
 struct XiFns {
     query_version: XIQueryVersionFn,

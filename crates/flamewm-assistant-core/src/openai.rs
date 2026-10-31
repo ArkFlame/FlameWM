@@ -10,13 +10,14 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::sse::SseParser;
 use crate::{AssistantError, CancelToken};
 
 /// Keeps replies short. Sent before every chat.
-pub const SYSTEM_PROMPT: &str = "Answer briefly: one to three short sentences unless the user asks for detail.";
+pub const SYSTEM_PROMPT: &str =
+    "Answer briefly: one to three short sentences unless the user asks for detail.";
 /// Most recent chat turns sent with each request.
 pub const HISTORY_TURNS: usize = 12;
 
@@ -96,17 +97,22 @@ impl OpenAiClient {
     ) -> Result<String, AssistantError> {
         let body = request_body(model, history);
         let mut text = String::new();
-        self.exchange(&self.url("/chat/completions"), Some(&body), cancel, &mut |event| {
-            let piece = match event {
-                Event::Data(data) => stream_delta(&data)?,
-                Event::Json(bytes) => Some(json_reply(&bytes)?),
-            };
-            if let Some(piece) = piece {
-                text.push_str(&piece);
-                on_delta(&piece);
-            }
-            Ok(false)
-        })?;
+        self.exchange(
+            &self.url("/chat/completions"),
+            Some(&body),
+            cancel,
+            &mut |event| {
+                let piece = match event {
+                    Event::Data(data) => stream_delta(&data)?,
+                    Event::Json(bytes) => Some(json_reply(&bytes)?),
+                };
+                if let Some(piece) = piece {
+                    text.push_str(&piece);
+                    on_delta(&piece);
+                }
+                Ok(false)
+            },
+        )?;
         if text.is_empty() {
             return Err(self.protocol("sent no text"));
         }
@@ -149,15 +155,35 @@ impl OpenAiClient {
         if cancel.is_cancelled() {
             return Err(AssistantError::Cancelled);
         }
-        let connect = self.endpoint.max_time.map_or(15.0, |limit| limit.as_secs_f64().min(15.0));
+        let connect = self
+            .endpoint
+            .max_time
+            .map_or(15.0, |limit| limit.as_secs_f64().min(15.0));
         let connect = format!("{connect:.3}");
-        let max_time = self.endpoint.max_time.map(|limit| format!("{:.3}", limit.as_secs_f64()));
+        let max_time = self
+            .endpoint
+            .max_time
+            .map(|limit| format!("{:.3}", limit.as_secs_f64()));
         let mut args = vec!["--silent", "--show-error", "--include", "--no-buffer"];
-        args.extend(["--connect-timeout", connect.as_str(), "--speed-time", "60", "--speed-limit", "1"]);
+        args.extend([
+            "--connect-timeout",
+            connect.as_str(),
+            "--speed-time",
+            "60",
+            "--speed-limit",
+            "1",
+        ]);
         if let Some(secs) = max_time.as_deref() {
             args.extend(["--max-time", secs]);
         }
-        args.extend(["--proto", self.proto, "--proto-redir", self.proto, "-K", "-"]);
+        args.extend([
+            "--proto",
+            self.proto,
+            "--proto-redir",
+            self.proto,
+            "-K",
+            "-",
+        ]);
         let mut child = Command::new("curl")
             .args(&args)
             .stdin(Stdio::piped())
@@ -275,12 +301,19 @@ fn scheme_proto(url: &str) -> Result<&'static str, AssistantError> {
             return Ok("=http");
         }
     }
-    Err(AssistantError::Config("The endpoint must use https, or http on 127.0.0.1.".into()))
+    Err(AssistantError::Config(
+        "The endpoint must use https, or http on 127.0.0.1.".into(),
+    ))
 }
 
 /// Starts a reader thread for curl's stdout. The thread ends when stdout closes.
-fn read_stdout(child: &mut Child) -> Result<(mpsc::Receiver<Vec<u8>>, thread::JoinHandle<()>), AssistantError> {
-    let mut stdout = child.stdout.take().ok_or_else(|| AssistantError::Io("curl has no stdout".into()))?;
+fn read_stdout(
+    child: &mut Child,
+) -> Result<(mpsc::Receiver<Vec<u8>>, thread::JoinHandle<()>), AssistantError> {
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AssistantError::Io("curl has no stdout".into()))?;
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     let reader = thread::spawn(move || {
         let mut buf = [0u8; 8192];
@@ -325,7 +358,13 @@ fn split_head(buf: &mut Vec<u8>) -> Option<Head> {
         let end = buf.windows(4).position(|w| w == b"\r\n\r\n")?;
         let block: Vec<u8> = buf.drain(..end + 4).collect();
         let text = String::from_utf8_lossy(&block).to_ascii_lowercase();
-        let status: u16 = text.lines().next()?.split_whitespace().nth(1)?.parse().ok()?;
+        let status: u16 = text
+            .lines()
+            .next()?
+            .split_whitespace()
+            .nth(1)?
+            .parse()
+            .ok()?;
         if (100..200).contains(&status) {
             continue;
         }
@@ -364,13 +403,17 @@ fn quote(value: &str) -> String {
 fn request_body(model: &str, history: &[Turn]) -> String {
     let recent = &history[history.len().saturating_sub(HISTORY_TURNS)..];
     let mut messages = vec![json!({"role": "system", "content": SYSTEM_PROMPT})];
-    messages.extend(recent.iter().map(|t| json!({"role": t.role, "content": t.content})));
+    messages.extend(
+        recent
+            .iter()
+            .map(|t| json!({"role": t.role, "content": t.content})),
+    );
     json!({"model": model, "messages": messages, "stream": true}).to_string()
 }
 
 fn stream_delta(data: &str) -> Result<Option<String>, AssistantError> {
-    let value: Value =
-        serde_json::from_str(data).map_err(|_| AssistantError::Protocol("stream chunk is not JSON".into()))?;
+    let value: Value = serde_json::from_str(data)
+        .map_err(|_| AssistantError::Protocol("stream chunk is not JSON".into()))?;
     if let Some(message) = error_message(&value) {
         return Err(AssistantError::RunFailed(message));
     }
@@ -382,8 +425,8 @@ fn stream_delta(data: &str) -> Result<Option<String>, AssistantError> {
 }
 
 fn json_reply(bytes: &[u8]) -> Result<String, AssistantError> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| AssistantError::Protocol("reply is not JSON".into()))?;
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| AssistantError::Protocol("reply is not JSON".into()))?;
     if let Some(message) = error_message(&value) {
         return Err(AssistantError::RunFailed(message));
     }
@@ -397,7 +440,10 @@ fn json_reply(bytes: &[u8]) -> Result<String, AssistantError> {
 /// A short, one-line message from a JSON error object, if the body has one.
 fn error_message(value: &Value) -> Option<String> {
     let error = value.get("error")?;
-    let raw = error.get("message").and_then(Value::as_str).or_else(|| error.as_str())?;
+    let raw = error
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| error.as_str())?;
     let line = raw.lines().next().unwrap_or("").trim();
     Some(line.chars().take(MAX_MESSAGE_CHARS).collect())
 }
@@ -412,9 +458,9 @@ fn http_error(status: u16, body: &[u8]) -> AssistantError {
 
 fn spawn_error(error: std::io::Error) -> AssistantError {
     match error.kind() {
-        std::io::ErrorKind::NotFound => {
-            AssistantError::NotConfigured("curl is required to reach the assistant. Install curl and retry.".into())
-        }
+        std::io::ErrorKind::NotFound => AssistantError::NotConfigured(
+            "curl is required to reach the assistant. Install curl and retry.".into(),
+        ),
         _ => AssistantError::Io(format!("curl: {error}")),
     }
 }
@@ -430,14 +476,22 @@ fn curl_error(label: &str, exit: Option<i32>) -> AssistantError {
 /// The message shown to the user. Never raw HTML or JSON bodies, and never the key.
 pub fn human_error(error: &AssistantError, label: &str) -> String {
     match error {
-        AssistantError::Http { status: 401 | 403, .. } => {
-            "API key rejected. Check the key in Settings > Assistant.".into()
+        AssistantError::Http {
+            status: 401 | 403, ..
+        } => "API key rejected. Check the key in Settings > Assistant.".into(),
+        AssistantError::Http { status: 429, .. } => {
+            format!("{label} is busy (rate limited). Try again shortly.")
         }
-        AssistantError::Http { status: 429, .. } => format!("{label} is busy (rate limited). Try again shortly."),
-        AssistantError::Http { status: 500..=599, .. } => format!("{label} had a server error. Try again."),
+        AssistantError::Http {
+            status: 500..=599, ..
+        } => format!("{label} had a server error. Try again."),
         AssistantError::Http { message, .. } if !message.is_empty() => message.clone(),
-        AssistantError::Http { status, .. } => format!("{label} rejected the request (HTTP {status})."),
-        AssistantError::Unreachable(_) => format!("Can't reach {label}. Check your connection and try again."),
+        AssistantError::Http { status, .. } => {
+            format!("{label} rejected the request (HTTP {status}).")
+        }
+        AssistantError::Unreachable(_) => {
+            format!("Can't reach {label}. Check your connection and try again.")
+        }
         AssistantError::Timeout => format!("{label} stopped responding. Try again."),
         AssistantError::Protocol(_) => format!("{label} sent a reply this app cannot read."),
         AssistantError::RunFailed(message) => format!("{label} could not finish: {message}"),
@@ -473,7 +527,11 @@ mod tests {
 
     #[test]
     fn curl_config_keeps_token_and_body_inside_quotes() {
-        let config = curl_config("https://x/v1/chat", "ark_a\"b", Some("{\"q\":\"a\\\"b\"}\n"));
+        let config = curl_config(
+            "https://x/v1/chat",
+            "ark_a\"b",
+            Some("{\"q\":\"a\\\"b\"}\n"),
+        );
         assert!(config.contains("header = \"Authorization: Bearer ark_a\\\"b\"\n"));
         assert!(config.contains("data-raw = \"{\\\"q\\\":\\\"a\\\\\\\"b\\\"}\\n\"\n"));
         assert_eq!(config.lines().count(), 5);
@@ -491,23 +549,43 @@ mod tests {
         assert_eq!(ids, vec!["lite", "flash", "pro"]);
         let seen = server.join().unwrap();
         assert!(seen[0].starts_with("GET /v1/models "));
-        assert!(seen[0].to_lowercase().contains("authorization: bearer ark_test"));
+        assert!(
+            seen[0]
+                .to_lowercase()
+                .contains("authorization: bearer ark_test")
+        );
     }
 
     #[test]
     fn html_body_is_never_read_as_json() {
-        let (url, server) = serve(vec![reply("200 OK", "text/html", "<!DOCTYPE HTML><html></html>")]);
-        let error = client(&url).get_json(&format!("{url}/v1/models"), &CancelToken::new()).unwrap_err();
+        let (url, server) = serve(vec![reply(
+            "200 OK",
+            "text/html",
+            "<!DOCTYPE HTML><html></html>",
+        )]);
+        let error = client(&url)
+            .get_json(&format!("{url}/v1/models"), &CancelToken::new())
+            .unwrap_err();
         assert!(matches!(error, AssistantError::Protocol(_)), "{error:?}");
         server.join().unwrap();
     }
 
     #[test]
     fn unauthorized_is_a_clean_message() {
-        let (url, server) = serve(vec![reply("401 Unauthorized", "application/json", r#"{"error":{"message":"bad key"}}"#)]);
+        let (url, server) = serve(vec![reply(
+            "401 Unauthorized",
+            "application/json",
+            r#"{"error":{"message":"bad key"}}"#,
+        )]);
         let error = client(&url).list_models(&CancelToken::new()).unwrap_err();
-        assert!(matches!(error, AssistantError::Http { status: 401, .. }), "{error:?}");
-        assert_eq!(human_error(&error, "ARK AI"), "API key rejected. Check the key in Settings > Assistant.");
+        assert!(
+            matches!(error, AssistantError::Http { status: 401, .. }),
+            "{error:?}"
+        );
+        assert_eq!(
+            human_error(&error, "ARK AI"),
+            "API key rejected. Check the key in Settings > Assistant."
+        );
         server.join().unwrap();
     }
 
@@ -524,7 +602,11 @@ mod tests {
 
     #[test]
     fn rate_limit_is_explained() {
-        let (url, server) = serve(vec![reply("429 Too Many Requests", "application/json", "{}")]);
+        let (url, server) = serve(vec![reply(
+            "429 Too Many Requests",
+            "application/json",
+            "{}",
+        )]);
         let error = client(&url).list_models(&CancelToken::new()).unwrap_err();
         assert!(human_error(&error, "ARK AI").contains("rate limited"));
         server.join().unwrap();
@@ -532,7 +614,9 @@ mod tests {
 
     #[test]
     fn offline_is_reported_as_unreachable() {
-        let error = client("http://127.0.0.1:1").list_models(&CancelToken::new()).unwrap_err();
+        let error = client("http://127.0.0.1:1")
+            .list_models(&CancelToken::new())
+            .unwrap_err();
         assert!(matches!(error, AssistantError::Unreachable(_)), "{error:?}");
         assert_eq!(
             human_error(&error, "ARK AI"),
@@ -548,12 +632,20 @@ mod tests {
             "[DONE]",
         ])]);
         let history = vec![
-            Turn { role: "user", content: "hi \"there\" \\ ok".into() },
-            Turn { role: "assistant", content: "hey".into() },
+            Turn {
+                role: "user",
+                content: "hi \"there\" \\ ok".into(),
+            },
+            Turn {
+                role: "assistant",
+                content: "hey".into(),
+            },
         ];
         let mut deltas = Vec::new();
         let text = client(&url)
-            .chat("flash", &history, &CancelToken::new(), &mut |d| deltas.push(d.to_owned()))
+            .chat("flash", &history, &CancelToken::new(), &mut |d| {
+                deltas.push(d.to_owned())
+            })
             .unwrap();
         assert_eq!(text, "Hello");
         assert_eq!(deltas, vec!["Hel", "lo"]);
@@ -563,13 +655,20 @@ mod tests {
         assert!(seen[0].contains(r#""model":"flash""#));
         assert!(seen[0].contains(SYSTEM_PROMPT));
         assert!(seen[0].contains(r#"hi \"there\" \\ ok"#));
-        assert!(seen[0].to_lowercase().contains("authorization: bearer ark_test"));
+        assert!(
+            seen[0]
+                .to_lowercase()
+                .contains("authorization: bearer ark_test")
+        );
     }
 
     #[test]
     fn history_is_bounded_to_recent_turns() {
         let history: Vec<Turn> = (0..20)
-            .map(|i| Turn { role: "user", content: format!("turn-{i}") })
+            .map(|i| Turn {
+                role: "user",
+                content: format!("turn-{i}"),
+            })
             .collect();
         let body = request_body("lite", &history);
         assert!(body.contains("turn-19\""));
@@ -586,7 +685,9 @@ mod tests {
         )]);
         let mut deltas = Vec::new();
         let text = client(&url)
-            .chat("lite", &[], &CancelToken::new(), &mut |d| deltas.push(d.to_owned()))
+            .chat("lite", &[], &CancelToken::new(), &mut |d| {
+                deltas.push(d.to_owned())
+            })
             .unwrap();
         assert_eq!(text, "All set.");
         assert_eq!(deltas, vec!["All set."]);
@@ -596,17 +697,26 @@ mod tests {
     #[test]
     fn stream_without_done_keeps_all_text() {
         let (url, server) = serve(vec![sse(&[r#"{"choices":[{"delta":{"content":"ok"}}]}"#])]);
-        let text = client(&url).chat("flash", &[], &CancelToken::new(), &mut |_| {}).unwrap();
+        let text = client(&url)
+            .chat("flash", &[], &CancelToken::new(), &mut |_| {})
+            .unwrap();
         assert_eq!(text, "ok");
         server.join().unwrap();
     }
 
     #[test]
     fn stream_error_event_is_a_short_run_failure() {
-        let (url, server) = serve(vec![sse(&[r#"{"error":{"message":"quota exceeded\nlong detail"}}"#])]);
-        let error = client(&url).chat("flash", &[], &CancelToken::new(), &mut |_| {}).unwrap_err();
+        let (url, server) = serve(vec![sse(&[
+            r#"{"error":{"message":"quota exceeded\nlong detail"}}"#,
+        ])]);
+        let error = client(&url)
+            .chat("flash", &[], &CancelToken::new(), &mut |_| {})
+            .unwrap_err();
         assert_eq!(error, AssistantError::RunFailed("quota exceeded".into()));
-        assert_eq!(human_error(&error, "ARK AI"), "ARK AI could not finish: quota exceeded");
+        assert_eq!(
+            human_error(&error, "ARK AI"),
+            "ARK AI could not finish: quota exceeded"
+        );
         server.join().unwrap();
     }
 
@@ -614,7 +724,9 @@ mod tests {
     fn cancel_before_send_opens_no_connection() {
         let cancel = CancelToken::new();
         cancel.cancel();
-        let error = client("http://127.0.0.1:1").chat("flash", &[], &cancel, &mut |_| {}).unwrap_err();
+        let error = client("http://127.0.0.1:1")
+            .chat("flash", &[], &cancel, &mut |_| {})
+            .unwrap_err();
         assert_eq!(error, AssistantError::Cancelled);
     }
 

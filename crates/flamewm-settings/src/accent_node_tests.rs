@@ -34,12 +34,7 @@ impl UiDocumentAccess for ColorDocument {
         crate::ui_contract::require_markup_id(_id)
     }
 
-    fn toggle(
-        &mut self,
-        _track_id: &str,
-        _knob_id: &str,
-        _checked: bool,
-    ) -> Result<(), String> {
+    fn toggle(&mut self, _track_id: &str, _knob_id: &str, _checked: bool) -> Result<(), String> {
         crate::ui_contract::require_markup_id(_track_id)?;
         crate::ui_contract::require_markup_id(_knob_id)
     }
@@ -99,11 +94,7 @@ impl UiDocumentAccess for ColorDocument {
         crate::ui_contract::require_markup_id(_id)
     }
 
-    fn layer(
-        &mut self,
-        _id: &str,
-        _layer: flamewm_ui_core::style::UiLayer,
-    ) -> Result<(), String> {
+    fn layer(&mut self, _id: &str, _layer: flamewm_ui_core::style::UiLayer) -> Result<(), String> {
         crate::ui_contract::require_markup_id(_id)
     }
 }

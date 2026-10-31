@@ -62,9 +62,21 @@ impl Palette {
             _ => ACCENT_RGB,
         };
         if luminance(surface_fill(theme).rgb) > 150 {
-            Self { text: 0x001d_1d1f, muted: 0x0051_5154, subtle: 0x006e_6e73, accent, wash: 0 }
+            Self {
+                text: 0x001d_1d1f,
+                muted: 0x0051_5154,
+                subtle: 0x006e_6e73,
+                accent,
+                wash: 0,
+            }
         } else {
-            Self { text: TEXT_RGB, muted: MUTED_RGB, subtle: SUBTLE_RGB, accent, wash: 0x00ff_ffff }
+            Self {
+                text: TEXT_RGB,
+                muted: MUTED_RGB,
+                subtle: SUBTLE_RGB,
+                accent,
+                wash: 0x00ff_ffff,
+            }
         }
     }
 }
@@ -92,7 +104,9 @@ fn siblings(path: &Path) -> Vec<PathBuf> {
         .flatten()
         .flatten()
         .map(|entry| entry.path())
-        .filter(|candidate| candidate.is_file() && ImageSourceFormat::from_extension(candidate).is_some())
+        .filter(|candidate| {
+            candidate.is_file() && ImageSourceFormat::from_extension(candidate).is_some()
+        })
         .collect();
     images.sort_by_cached_key(|candidate| {
         candidate
@@ -156,7 +170,11 @@ impl App {
             if !app.images.iter().any(|image| image == path) {
                 app.images.insert(0, path.to_path_buf());
             }
-            app.index = app.images.iter().position(|image| image == path).unwrap_or(0);
+            app.index = app
+                .images
+                .iter()
+                .position(|image| image == path)
+                .unwrap_or(0);
             app.load();
         }
         app
@@ -179,7 +197,10 @@ impl App {
         self.drag = None;
         self.message = "Loading…".into();
         let path = self.images[self.index].clone();
-        self.send(Job::Load { generation: self.generation, path });
+        self.send(Job::Load {
+            generation: self.generation,
+            path,
+        });
         let len = self.images.len();
         if len > 1 {
             for forward in [false, true] {
@@ -224,11 +245,21 @@ impl App {
             w: placement.size.0,
             h: placement.size.1,
         };
-        self.send(Job::View { seq: self.seq, path, display, rect });
+        self.send(Job::View {
+            seq: self.seq,
+            path,
+            display,
+            rect,
+        });
         Ok(())
     }
 
-    fn zoom_to(&mut self, zoom: f64, point: (f64, f64), doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+    fn zoom_to(
+        &mut self,
+        zoom: f64,
+        point: (f64, f64),
+        doc: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         let zoom = view::clamp_zoom(zoom);
         if self.size.is_none() || (zoom - self.zoom).abs() < f64::EPSILON {
             return Ok(());
@@ -246,7 +277,12 @@ impl App {
         self.request_view(doc)
     }
 
-    fn resize(&mut self, width: u32, height: u32, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+    fn resize(
+        &mut self,
+        width: u32,
+        height: u32,
+        doc: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         self.stage = (width.max(1), height.max(1));
         self.refit();
         self.request_view(doc)?;
@@ -261,12 +297,17 @@ impl App {
                 self.refit();
                 self.request_view(doc)?;
             }
-            Reply::Failed { generation, message } if generation == self.generation => {
+            Reply::Failed {
+                generation,
+                message,
+            } if generation == self.generation => {
                 self.size = None;
                 self.framed = false;
                 self.message = message;
             }
-            Reply::ViewFailed { seq, message } if self.shown.is_some_and(|(shown, _, _)| shown == seq) => {
+            Reply::ViewFailed { seq, message }
+                if self.shown.is_some_and(|(shown, _, _)| shown == seq) =>
+            {
                 self.message = message;
             }
             Reply::Frame { seq, size, pixels } => {
@@ -294,7 +335,11 @@ impl App {
         self.paint(doc)
     }
 
-    fn action(&mut self, event: &UiActionEvent, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+    fn action(
+        &mut self,
+        event: &UiActionEvent,
+        doc: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         match (event.action.as_str(), event.phase) {
             ("iv.pan", UiActionPhase::Press) => self.drag = Some((event.x, event.y)),
             ("iv.pan", UiActionPhase::Motion) => {
@@ -349,7 +394,11 @@ impl App {
         self.paint(doc)
     }
 
-    fn set_theme(&mut self, theme: SettingsSnapshot, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+    fn set_theme(
+        &mut self,
+        theme: SettingsSnapshot,
+        doc: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         self.palette = Palette::for_theme(&theme);
         self.theme = theme;
         self.paint(doc)
@@ -386,7 +435,10 @@ impl App {
             .images
             .get(self.index)
             .and_then(|path| path.file_name())
-            .map_or_else(|| "FlameWM Image Viewer".to_owned(), |name| name.to_string_lossy().into_owned());
+            .map_or_else(
+                || "FlameWM Image Viewer".to_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            );
         doc.text("name", name)?;
         doc.text("meta", self.meta_text())?;
         doc.text("empty-text", self.message.clone())?;
@@ -464,8 +516,12 @@ pub fn run() -> Result<(), String> {
     let (job_tx, job_rx) = mpsc::channel::<Job>();
     let (reply_tx, reply_rx) = mpsc::channel::<Reply>();
     let (mut reader, mut writer) = UnixStream::pair().map_err(|error| error.to_string())?;
-    reader.set_nonblocking(true).map_err(|error| error.to_string())?;
-    writer.set_nonblocking(true).map_err(|error| error.to_string())?;
+    reader
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
+    writer
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
     std::thread::Builder::new()
         .name("flamewm-imageviewer-decode".into())
         .spawn(move || decode::run(&job_rx, &reply_tx, &mut writer))

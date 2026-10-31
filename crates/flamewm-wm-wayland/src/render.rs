@@ -152,14 +152,8 @@ impl Decorations {
         if stale {
             // The blurred desktop is cropped at the titlebar origin, so a moved titlebar is rebuilt.
             let backdrop = self.crop(origin, rect.w as usize, TITLEBAR_HEIGHT as usize);
-            let pixels = chrome_pixels_over(
-                rect.w,
-                active,
-                maximized,
-                hover,
-                title,
-                backdrop.as_deref(),
-            );
+            let pixels =
+                chrome_pixels_over(rect.w, active, maximized, hover, title, backdrop.as_deref());
             let buffer = MemoryRenderBuffer::from_slice(
                 &pixels,
                 Fourcc::Argb8888,
@@ -312,7 +306,11 @@ fn glyph(c: char) -> [u8; 7] {
 fn titlebar_corner_radius(maximized: bool, width: i32, height: i32) -> i32 {
     use flamewm_skin::recipes::decoration::{DecorationStyle, corner_radius};
     let logical = u32::from(corner_radius(!maximized, DecorationStyle::Rounded));
-    let logical_h = u32::from(flamewm_skin::recipes::window_chrome::WINDOW_CHROME.metrics.titlebar);
+    let logical_h = u32::from(
+        flamewm_skin::recipes::window_chrome::WINDOW_CHROME
+            .metrics
+            .titlebar,
+    );
     let scaled = (logical * height.max(0) as u32 + logical_h / 2) / logical_h.max(1);
     (scaled as i32).min(width.max(0) / 2)
 }
@@ -903,9 +901,21 @@ mod decoration_tests {
 
     #[test]
     fn titlebar_corner_radius_is_system_radius_clamped_and_square_when_maximized() {
-        assert_eq!(titlebar_corner_radius(false, 200, 31), 24, "system Rounded radius");
-        assert_eq!(titlebar_corner_radius(true, 200, 31), 0, "maximized is square");
-        assert_eq!(titlebar_corner_radius(false, 10, 31), 5, "clamped to half width");
+        assert_eq!(
+            titlebar_corner_radius(false, 200, 31),
+            24,
+            "system Rounded radius"
+        );
+        assert_eq!(
+            titlebar_corner_radius(true, 200, 31),
+            0,
+            "maximized is square"
+        );
+        assert_eq!(
+            titlebar_corner_radius(false, 10, 31),
+            5,
+            "clamped to half width"
+        );
         assert_eq!(titlebar_corner_radius(false, 200, 0), 0, "zero height");
     }
 
@@ -914,12 +924,18 @@ mod decoration_tests {
         let pixels = chrome_pixels(200, true, false, None, "Terminal");
         let alpha = |x: usize, y: usize| pixels[(y * 200 + x) * 4 + 3];
         assert_eq!(alpha(0, 0), 0, "outer corner pixel is outside the arc");
-        let partial = (0..24).any(|y| (0..24).any(|x| {
-            let a = alpha(x, y);
-            a > 0 && a < SURFACE_ALPHA
-        }));
+        let partial = (0..24).any(|y| {
+            (0..24).any(|x| {
+                let a = alpha(x, y);
+                a > 0 && a < SURFACE_ALPHA
+            })
+        });
         assert!(partial, "the 24px arc has partially covered pixels");
-        assert_eq!(alpha(24, 1), SURFACE_ALPHA, "straight top edge past the radius is full");
+        assert_eq!(
+            alpha(24, 1),
+            SURFACE_ALPHA,
+            "straight top edge past the radius is full"
+        );
     }
 
     #[test]

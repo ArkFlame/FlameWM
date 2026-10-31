@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::process::{expand, ProcessRunner};
+use crate::process::{ProcessRunner, expand};
 use crate::{AssistantError, CancelToken};
 
 /// Manifest placeholder for values not verified offline. Never downloaded.
@@ -92,9 +92,21 @@ pub fn tts_manifest() -> ModelManifest {
     ModelManifest {
         name: "tts-phonon-local".into(),
         files: vec![
-            file("model.q8.gguf", "a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae", 64_512_352),
-            file("config.json", "b5d0f88353638370d94035b7d73d7d6577c0554d78f8d7ecfd40490aae39ae85", 4_634),
-            file("tokenizer.json", "691a00068fa7b989f2f3e5ae5daa2d1a5bb319f2d5360deafcfb19a8bb6e7936", 277_967),
+            file(
+                "model.q8.gguf",
+                "a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae",
+                64_512_352,
+            ),
+            file(
+                "config.json",
+                "b5d0f88353638370d94035b7d73d7d6577c0554d78f8d7ecfd40490aae39ae85",
+                4_634,
+            ),
+            file(
+                "tokenizer.json",
+                "691a00068fa7b989f2f3e5ae5daa2d1a5bb319f2d5360deafcfb19a8bb6e7936",
+                277_967,
+            ),
             file(
                 "default-voice.safetensors",
                 "dc537478eaadc1a5257fcda2e3501ab81e14c111a5d95a5838f350db2afd0f1a",
@@ -149,8 +161,18 @@ pub struct CommandTranscriber {
 }
 
 impl CommandTranscriber {
-    pub fn new(runner: Box<dyn ProcessRunner>, template: &str, model: PathBuf, cancel: CancelToken) -> Self {
-        Self { runner, template: template.to_owned(), model, cancel }
+    pub fn new(
+        runner: Box<dyn ProcessRunner>,
+        template: &str,
+        model: PathBuf,
+        cancel: CancelToken,
+    ) -> Self {
+        Self {
+            runner,
+            template: template.to_owned(),
+            model,
+            cancel,
+        }
     }
 }
 
@@ -223,14 +245,21 @@ impl Speech for CommandSpeech {
 }
 
 impl CommandSpeech {
-    fn speak_with(&mut self, synth: &[String], text: &str, token: &CancelToken) -> Result<(), AssistantError> {
+    fn speak_with(
+        &mut self,
+        synth: &[String],
+        text: &str,
+        token: &CancelToken,
+    ) -> Result<(), AssistantError> {
         let wav = self.runner.run(synth, text.as_bytes(), token)?;
         if token.is_cancelled() {
             return Err(AssistantError::Cancelled);
         }
         fs::create_dir_all(&self.scratch)?;
         self.counter += 1;
-        let file = self.scratch.join(format!("tts-{}-{}.wav", std::process::id(), self.counter));
+        let file = self
+            .scratch
+            .join(format!("tts-{}-{}.wav", std::process::id(), self.counter));
         fs::write(&file, &wav)?;
         let played = play_file(self.runner.as_mut(), &self.play, &file, token);
         let _ = fs::remove_file(&file);
@@ -306,19 +335,42 @@ mod tests {
     }
 
     impl ProcessRunner for FakeRunner {
-        fn run(&mut self, argv: &[String], stdin: &[u8], cancel: &CancelToken) -> Result<Vec<u8>, AssistantError> {
+        fn run(
+            &mut self,
+            argv: &[String],
+            stdin: &[u8],
+            cancel: &CancelToken,
+        ) -> Result<Vec<u8>, AssistantError> {
             if cancel.is_cancelled() {
                 return Err(AssistantError::Cancelled);
             }
-            self.calls.lock().unwrap().push((argv.to_vec(), stdin.to_vec()));
-            Ok(if self.replies.is_empty() { Vec::new() } else { self.replies.remove(0) })
+            self.calls
+                .lock()
+                .unwrap()
+                .push((argv.to_vec(), stdin.to_vec()));
+            Ok(if self.replies.is_empty() {
+                Vec::new()
+            } else {
+                self.replies.remove(0)
+            })
         }
     }
 
     #[allow(clippy::type_complexity)]
-    fn fake(replies: Vec<Vec<u8>>) -> (Box<dyn ProcessRunner>, Arc<StdMutex<Vec<(Vec<String>, Vec<u8>)>>>) {
+    fn fake(
+        replies: Vec<Vec<u8>>,
+    ) -> (
+        Box<dyn ProcessRunner>,
+        Arc<StdMutex<Vec<(Vec<String>, Vec<u8>)>>>,
+    ) {
         let calls = Arc::new(StdMutex::new(Vec::new()));
-        (Box::new(FakeRunner { calls: calls.clone(), replies }), calls)
+        (
+            Box::new(FakeRunner {
+                calls: calls.clone(),
+                replies,
+            }),
+            calls,
+        )
     }
 
     #[test]
@@ -327,7 +379,10 @@ mod tests {
             UnconfiguredTranscriber.transcribe(&[0; 4]),
             Err(AssistantError::NotConfigured(_))
         ));
-        assert!(matches!(UnconfiguredSpeech.speak("hi"), Err(AssistantError::NotConfigured(_))));
+        assert!(matches!(
+            UnconfiguredSpeech.speak("hi"),
+            Err(AssistantError::NotConfigured(_))
+        ));
         let manifest = ModelManifest::single("stt", "m.bin", "https://example.invalid/m", "", 0);
         let mut progress = |_: u64, _: u64| {};
         assert!(matches!(
@@ -341,15 +396,30 @@ mod tests {
     fn tts_manifest_is_pinned_to_one_commit_and_passes_check_pinned() {
         let tts = tts_manifest();
         let paths: Vec<&str> = tts.files.iter().map(|f| f.path.as_str()).collect();
-        assert_eq!(paths, ["model.q8.gguf", "config.json", "tokenizer.json", "default-voice.safetensors"]);
+        assert_eq!(
+            paths,
+            [
+                "model.q8.gguf",
+                "config.json",
+                "tokenizer.json",
+                "default-voice.safetensors"
+            ]
+        );
         assert!(crate::download::check_pinned(&tts).is_ok());
         for file in &tts.files {
-            assert!(file.url.starts_with("https://huggingface.co/"), "{}", file.url);
+            assert!(
+                file.url.starts_with("https://huggingface.co/"),
+                "{}",
+                file.url
+            );
             assert!(!file.url.contains("/resolve/main/"), "{}", file.url);
             assert_ne!(file.sha256, UNPINNED);
             assert!(file.size_bytes > 0);
         }
-        assert!(tts.files.iter().all(|f| f.url.contains("/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/")));
+        assert!(tts.files.iter().all(|f| {
+            f.url
+                .contains("/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/")
+        }));
     }
 
     #[test]
@@ -364,13 +434,21 @@ mod tests {
         assert_eq!(wav.len(), 44 + 6);
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]), 6);
-        assert_eq!(u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]), 16_000);
+        assert_eq!(
+            u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]),
+            16_000
+        );
     }
 
     #[test]
     fn transcriber_sends_wav_and_trims_transcript() {
         let (runner, calls) = fake(vec![b"  hello there \n".to_vec()]);
-        let mut stt = CommandTranscriber::new(runner, "stt --model {model}", "/m/stt".into(), CancelToken::new());
+        let mut stt = CommandTranscriber::new(
+            runner,
+            "stt --model {model}",
+            "/m/stt".into(),
+            CancelToken::new(),
+        );
         assert_eq!(stt.transcribe(&[5, 6]).unwrap(), "hello there");
         let calls = calls.lock().unwrap();
         assert_eq!(calls[0].0, ["stt", "--model", "/m/stt"]);
@@ -402,8 +480,17 @@ mod tests {
     #[test]
     fn unconfigured_synthesis_command_is_not_configured() {
         let (runner, calls) = fake(vec![]);
-        let mut tts = CommandSpeech::new(runner, "   ", "play {file}", "/m".into(), test_dir("speech-empty"));
-        assert!(matches!(tts.speak("x"), Err(AssistantError::NotConfigured(_))));
+        let mut tts = CommandSpeech::new(
+            runner,
+            "   ",
+            "play {file}",
+            "/m".into(),
+            test_dir("speech-empty"),
+        );
+        assert!(matches!(
+            tts.speak("x"),
+            Err(AssistantError::NotConfigured(_))
+        ));
         assert!(calls.lock().unwrap().is_empty());
     }
 
@@ -411,9 +498,18 @@ mod tests {
     fn stopper_cancels_the_running_speech_step() {
         struct StopOnSynth(Stopper);
         impl ProcessRunner for StopOnSynth {
-            fn run(&mut self, _: &[String], _: &[u8], cancel: &CancelToken) -> Result<Vec<u8>, AssistantError> {
+            fn run(
+                &mut self,
+                _: &[String],
+                _: &[u8],
+                cancel: &CancelToken,
+            ) -> Result<Vec<u8>, AssistantError> {
                 self.0.stop();
-                if cancel.is_cancelled() { Err(AssistantError::Cancelled) } else { Ok(Vec::new()) }
+                if cancel.is_cancelled() {
+                    Err(AssistantError::Cancelled)
+                } else {
+                    Ok(Vec::new())
+                }
             }
         }
         let dir = test_dir("speech-stop");

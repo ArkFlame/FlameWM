@@ -17,8 +17,8 @@
 //! Optional stream fields are `-` for `None` and `=<text>` for `Some`.
 
 use flamewm_api::system::{
-    AudioEndpointKind, AudioEndpointSnapshot, AudioMuteAction, AudioSnapshot,
-    AudioStreamSnapshot, AudioTarget, AudioVolumeAction, ServiceAvailability,
+    AudioEndpointKind, AudioEndpointSnapshot, AudioMuteAction, AudioSnapshot, AudioStreamSnapshot,
+    AudioTarget, AudioVolumeAction, ServiceAvailability,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
@@ -135,7 +135,15 @@ impl SnapshotDecoder {
     pub fn push_line(&mut self, line: &str) -> FlameResult<Option<AudioSnapshot>> {
         let fields: Vec<&str> = line.split(' ').collect();
         match fields.as_slice() {
-            ["snapshot", availability, generation, server_generation, volume, muted, sink_name] => {
+            [
+                "snapshot",
+                availability,
+                generation,
+                server_generation,
+                volume,
+                muted,
+                sink_name,
+            ] => {
                 if self.pending.is_some() {
                     return Err(protocol_error("snapshot started before end"));
                 }
@@ -151,7 +159,16 @@ impl SnapshotDecoder {
                 });
                 Ok(None)
             }
-            ["endpoint", kind, id, volume, muted, is_default, name, description] => {
+            [
+                "endpoint",
+                kind,
+                id,
+                volume,
+                muted,
+                is_default,
+                name,
+                description,
+            ] => {
                 let snapshot = self.open()?;
                 snapshot.endpoints.push(AudioEndpointSnapshot {
                     id: parse_number(id, "endpoint id")?,
@@ -258,7 +275,9 @@ fn decode_optional(field: &str) -> FlameResult<Option<String>> {
         return Ok(None);
     }
     let Some(rest) = field.strip_prefix('=') else {
-        return Err(protocol_error("optional audio field lacks a presence marker"));
+        return Err(protocol_error(
+            "optional audio field lacks a presence marker",
+        ));
     };
     unescape(rest).map(Some)
 }
@@ -363,20 +382,18 @@ mod tests {
                 muted: true,
                 is_default: true,
             }],
-            streams: vec![
-                AudioStreamSnapshot {
-                    id: 9,
-                    endpoint_id: 4,
-                    name: "music".to_owned(),
-                    volume_percent: 80,
-                    muted: false,
-                    app_name: Some(String::new()),
-                    app_id: None,
-                    icon_name: Some("a b".to_owned()),
-                    process_binary: None,
-                    media_name: Some("x\ny".to_owned()),
-                },
-            ],
+            streams: vec![AudioStreamSnapshot {
+                id: 9,
+                endpoint_id: 4,
+                name: "music".to_owned(),
+                volume_percent: 80,
+                muted: false,
+                app_name: Some(String::new()),
+                app_id: None,
+                icon_name: Some("a b".to_owned()),
+                process_binary: None,
+                media_name: Some("x\ny".to_owned()),
+            }],
         }
     }
 
@@ -451,13 +468,25 @@ mod tests {
         assert!(decoder.push_line("endpoint sink 1 1 0 0 a b").is_err());
         assert!(decoder.push_line("garbage").is_err());
         let mut decoder = SnapshotDecoder::default();
-        assert!(decoder.push_line("snapshot unknown 0 0 0 0 ").expect("header").is_none());
+        assert!(
+            decoder
+                .push_line("snapshot unknown 0 0 0 0 ")
+                .expect("header")
+                .is_none()
+        );
         assert!(decoder.push_line("snapshot unknown 0 0 0 0 ").is_err());
     }
 
     #[test]
     fn escape_round_trips_separators_and_rejects_bad_escapes() {
-        for text in ["", "a b", "tab\there", "back\\slash", "line\nbreak\r", "=lead"] {
+        for text in [
+            "",
+            "a b",
+            "tab\there",
+            "back\\slash",
+            "line\nbreak\r",
+            "=lead",
+        ] {
             let escaped = escape(text);
             assert!(!escaped.contains(' ') && !escaped.contains('\t') && !escaped.contains('\n'));
             assert_eq!(unescape(&escaped).expect("unescape"), text);

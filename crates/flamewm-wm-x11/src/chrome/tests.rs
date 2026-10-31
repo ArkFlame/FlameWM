@@ -231,14 +231,8 @@ fn windows11_square_hover_coverage_at_100_135_200_percent() {
                 } else {
                     0
                 };
-                let plates = control_backplates_for(
-                    600,
-                    height,
-                    outer_radius,
-                    Some(control),
-                    None,
-                    &tokens,
-                );
+                let plates =
+                    control_backplates_for(600, height, outer_radius, Some(control), None, &tokens);
                 assert_eq!(plates.len(), 1);
                 let plate = &plates[0];
                 assert_eq!(plate.control, control);
@@ -352,13 +346,11 @@ fn hot_button_settings_update_color_and_reuse_geometry_cache() {
     assert_eq!(b[0].rgb, [0x22, 0x44, 0x66]);
     assert!(Arc::ptr_eq(&a[0].coverage, &b[0].coverage));
     tokens.buttons[0].pressed = Some(Rgb(0x0010_2030));
-    let pressed =
-        control_backplates_for(400, 31, 12, None, Some(FrameControl::Minimize), &tokens);
+    let pressed = control_backplates_for(400, 31, 12, None, Some(FrameControl::Minimize), &tokens);
     assert_eq!(pressed[0].rgb, [0x10, 0x20, 0x30]);
     tokens.buttons[0].shape = ButtonShape::Circle;
     assert!(
-        control_backplates_for(400, 31, 12, Some(FrameControl::Minimize), None, &tokens)
-            .is_empty()
+        control_backplates_for(400, 31, 12, Some(FrameControl::Minimize), None, &tokens).is_empty()
     );
 }
 
@@ -408,9 +400,8 @@ fn explicit_skin_default_tokens_reproduce_default_glyph_pixels() {
         ControlLook::default(),
     )
     .expect("close hover raster");
-    let explicit =
-        control_glyph_raster(ControlRole::Close, edge, ControlMaterial::Hover, explicit)
-            .expect("explicit close hover raster");
+    let explicit = control_glyph_raster(ControlRole::Close, edge, ControlMaterial::Hover, explicit)
+        .expect("explicit close hover raster");
     assert_eq!(default.pixels, explicit.pixels);
 }
 
@@ -558,9 +549,8 @@ fn control_glyphs_render_from_breeze_assets() {
         ControlRole::Restore,
         ControlRole::Close,
     ] {
-        let image =
-            control_glyph_raster(role, 16, ControlMaterial::Rest, ControlLook::default())
-                .expect("breeze control svg");
+        let image = control_glyph_raster(role, 16, ControlMaterial::Rest, ControlLook::default())
+            .expect("breeze control svg");
         assert_eq!((image.width, image.height), (16, 16));
         assert!(image.pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
     }

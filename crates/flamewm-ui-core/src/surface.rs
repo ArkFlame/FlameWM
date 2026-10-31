@@ -194,9 +194,10 @@ mod glass_material_tests {
     fn material_defaults_to_dark_and_reads_keys() {
         let mut snapshot = SettingsSnapshot::new(1);
         assert_eq!(glass_material(&snapshot).saturation_percent, 170);
-        snapshot
-            .values
-            .insert("surfaceSaturationPercent".into(), SettingValue::Percent(100));
+        snapshot.values.insert(
+            "surfaceSaturationPercent".into(),
+            SettingValue::Percent(100),
+        );
         let material = glass_material(&snapshot);
         assert_eq!(material.saturation_percent, 100);
     }
@@ -267,7 +268,9 @@ pub fn inner_contour_coverage(w: u32, h: u32, radius: u32, x: u32, y: u32) -> u8
 fn corner_tile(r: u32) -> Arc<[u8]> {
     static TILES: OnceLock<Mutex<HashMap<u32, Arc<[u8]>>>> = OnceLock::new();
     let cache = TILES.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut cache = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(tile) = cache.get(&r) {
         return Arc::clone(tile);
     }
@@ -356,7 +359,13 @@ mod rounded_contour_tests {
 
     #[test]
     fn cached_corner_table_matches_direct_sampling() {
-        for (w, h, radius) in [(100, 60, 12), (40, 40, 24), (17, 9, 4), (64, 64, 0), (120, 80, 24)] {
+        for (w, h, radius) in [
+            (100, 60, 12),
+            (40, 40, 24),
+            (17, 9, 4),
+            (64, 64, 0),
+            (120, 80, 24),
+        ] {
             let r = radius.min(w.min(h) / 2);
             for y in 0..h {
                 for x in 0..w {
@@ -414,9 +423,15 @@ mod glass_settings_contract_tests {
             "taskbarMaterialMode",
             SettingValue::Text("inherit".into()),
         )]));
-        assert_eq!((inherit.rgb, inherit.alpha), (crate::glass::DARK.tint_rgb, 31));
+        assert_eq!(
+            (inherit.rgb, inherit.alpha),
+            (crate::glass::DARK.tint_rgb, 31)
+        );
         let custom = dock_fill(&with(&[
-            ("taskbarMaterialMode", SettingValue::Text("custom-tint".into())),
+            (
+                "taskbarMaterialMode",
+                SettingValue::Text("custom-tint".into()),
+            ),
             ("taskbarCustomTint", SettingValue::Text("#5879ee".into())),
             ("taskbarOpacityPercent", SettingValue::Percent(50)),
         ]));
@@ -433,7 +448,11 @@ mod glass_settings_contract_tests {
             ]);
             let dock = dock_fill(&snapshot);
             let surface = surface_fill(&snapshot);
-            assert_eq!((dock.rgb, dock.alpha), (surface.rgb, surface.alpha), "reduce={reduce}");
+            assert_eq!(
+                (dock.rgb, dock.alpha),
+                (surface.rgb, surface.alpha),
+                "reduce={reduce}"
+            );
         }
     }
 
@@ -447,7 +466,10 @@ mod glass_settings_contract_tests {
         assert_eq!((dock.rgb, dock.alpha), (0x0017_2135, 255));
         let custom_dock = dock_fill(&with(&[
             ("reduceTransparency", SettingValue::Boolean(true)),
-            ("taskbarMaterialMode", SettingValue::Text("custom-tint".into())),
+            (
+                "taskbarMaterialMode",
+                SettingValue::Text("custom-tint".into()),
+            ),
             ("taskbarCustomTint", SettingValue::Text("#5879ee".into())),
         ]));
         assert_eq!((custom_dock.rgb, custom_dock.alpha), (0x0058_79ee, 255));
@@ -462,11 +484,17 @@ mod glass_settings_contract_tests {
     #[test]
     fn legacy_surface_keys_seed_glass_only_when_glass_key_absent() {
         let legacy = with(&[("surfaceBlurPercent", SettingValue::Percent(50))]);
-        assert_eq!(crate::glass::appearance_from_settings(&legacy).glass_blur_px, 20);
+        assert_eq!(
+            crate::glass::appearance_from_settings(&legacy).glass_blur_px,
+            20
+        );
         let both = with(&[
             ("surfaceBlurPercent", SettingValue::Percent(50)),
             ("glassBlurPx", SettingValue::Percent(10)),
         ]);
-        assert_eq!(crate::glass::appearance_from_settings(&both).glass_blur_px, 10);
+        assert_eq!(
+            crate::glass::appearance_from_settings(&both).glass_blur_px,
+            10
+        );
     }
 }

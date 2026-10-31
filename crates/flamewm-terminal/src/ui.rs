@@ -373,8 +373,13 @@ mod bench {
         let mut ui = UiCache::default();
         parser.advance(b"hello world\r\nsecond line", &mut screen);
         let rows = cache.update(&mut screen, &palette, &options).to_vec();
-        ui.project_rows(&mut Recorder::default(), crate::pool::TIERS[2], (8.0, 16.0), &rows)
-            .expect("project");
+        ui.project_rows(
+            &mut Recorder::default(),
+            crate::pool::TIERS[2],
+            (8.0, 16.0),
+            &rows,
+        )
+        .expect("project");
 
         parser.advance(b"\x1b[1;3HX", &mut screen);
         let rows = cache.update(&mut screen, &palette, &options).to_vec();
@@ -401,8 +406,13 @@ mod bench {
 
         parser.advance(&htop_tick(0), &mut screen);
         let mut prev = cache.update(&mut screen, &palette, &options).to_vec();
-        ui.project_rows(&mut Recorder::default(), crate::pool::TIERS[2], (8.0, 16.0), &prev)
-            .expect("project");
+        ui.project_rows(
+            &mut Recorder::default(),
+            crate::pool::TIERS[2],
+            (8.0, 16.0),
+            &prev,
+        )
+        .expect("project");
 
         let (mut dirty, mut rebuilt, mut run_texts, mut texts, mut calls, mut frames) =
             (0, 0, 0, 0, 0, 0);

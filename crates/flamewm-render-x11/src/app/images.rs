@@ -394,9 +394,9 @@ impl X11App {
                     }
                 };
                 let argb = match treatment {
-                    ImageTreatment::Original => super::original_argb32(
-                        pixels, src_width, src_height, width, height, tint,
-                    ),
+                    ImageTreatment::Original => {
+                        super::original_argb32(pixels, src_width, src_height, width, height, tint)
+                    }
                     ImageTreatment::SymbolicForeground => super::symbolic_foreground_argb32(
                         pixels, src_width, src_height, width, height, fg,
                     ),

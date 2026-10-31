@@ -96,9 +96,7 @@ fn application_appearance_buttons_write_exact_values_and_highlight_the_snapshot(
 #[test]
 fn application_appearance_highlights_nothing_without_an_authoritative_value() {
     let transport = RecordingTransport {
-        responses: VecDeque::from([Ok(ControlResponse::Settings(appearance_snapshot(
-            1, None,
-        )))]),
+        responses: VecDeque::from([Ok(ControlResponse::Settings(appearance_snapshot(1, None)))]),
         ..RecordingTransport::default()
     };
     let application = settings_application(transport);

@@ -18,7 +18,10 @@ fn main() {
     let css = src.join("terminal.css");
     println!("cargo:rerun-if-changed={}", template.display());
     println!("cargo:rerun-if-changed={}", css.display());
-    println!("cargo:rerun-if-changed={}", root.join("ui/base/base.css").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        root.join("ui/base/base.css").display()
+    );
     println!(
         "cargo:rerun-if-changed={}",
         base.join("src/pool.rs").display()

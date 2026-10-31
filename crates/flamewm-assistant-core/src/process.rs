@@ -13,7 +13,12 @@ use crate::{AssistantError, CancelToken};
 /// Runs an argv with bytes on stdin and returns stdout. Implementations must return
 /// `AssistantError::Cancelled` promptly once `cancel` is set, and must not run a shell.
 pub trait ProcessRunner: Send {
-    fn run(&mut self, argv: &[String], stdin: &[u8], cancel: &CancelToken) -> Result<Vec<u8>, AssistantError>;
+    fn run(
+        &mut self,
+        argv: &[String],
+        stdin: &[u8],
+        cancel: &CancelToken,
+    ) -> Result<Vec<u8>, AssistantError>;
 }
 
 /// Substitutes `{name}` placeholders token by token. Errors on an empty template or an
@@ -30,10 +35,14 @@ pub fn expand(template: &str, vars: &[(&str, &str)]) -> Result<Vec<String>, Assi
         })
         .collect();
     if argv.is_empty() {
-        return Err(AssistantError::NotConfigured("external command template is empty".into()));
+        return Err(AssistantError::NotConfigured(
+            "external command template is empty".into(),
+        ));
     }
     if let Some(token) = argv.iter().find(|t| t.contains('{') && t.contains('}')) {
-        return Err(AssistantError::Config(format!("unknown placeholder in command: {token}")));
+        return Err(AssistantError::Config(format!(
+            "unknown placeholder in command: {token}"
+        )));
     }
     Ok(argv)
 }
@@ -43,8 +52,15 @@ pub fn expand(template: &str, vars: &[(&str, &str)]) -> Result<Vec<String>, Assi
 pub struct SystemRunner;
 
 impl ProcessRunner for SystemRunner {
-    fn run(&mut self, argv: &[String], stdin: &[u8], cancel: &CancelToken) -> Result<Vec<u8>, AssistantError> {
-        let program = argv.first().ok_or_else(|| AssistantError::NotConfigured("empty command".into()))?;
+    fn run(
+        &mut self,
+        argv: &[String],
+        stdin: &[u8],
+        cancel: &CancelToken,
+    ) -> Result<Vec<u8>, AssistantError> {
+        let program = argv
+            .first()
+            .ok_or_else(|| AssistantError::NotConfigured("empty command".into()))?;
         if cancel.is_cancelled() {
             return Err(AssistantError::Cancelled);
         }
@@ -62,12 +78,20 @@ impl ProcessRunner for SystemRunner {
         let stderr = thread::spawn(move || read_all(err.take()));
         let status = wait_or_cancel(&mut child, cancel)?;
         let bytes = stdout.join().unwrap_or_default();
-        let message = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).trim().to_owned();
+        let message = String::from_utf8_lossy(&stderr.join().unwrap_or_default())
+            .trim()
+            .to_owned();
         if status.success() {
             Ok(bytes)
         } else {
-            let detail = if message.is_empty() { String::new() } else { format!(": {message}") };
-            Err(AssistantError::Io(format!("{program} exited with {status}{detail}")))
+            let detail = if message.is_empty() {
+                String::new()
+            } else {
+                format!(": {message}")
+            };
+            Err(AssistantError::Io(format!(
+                "{program} exited with {status}{detail}"
+            )))
         }
     }
 }
@@ -81,9 +105,9 @@ fn spawn(argv: &[String]) -> Result<Child, AssistantError> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => {
-                AssistantError::NotConfigured(format!("{program} was not found; it is an optional external command"))
-            }
+            std::io::ErrorKind::NotFound => AssistantError::NotConfigured(format!(
+                "{program} was not found; it is an optional external command"
+            )),
             _ => AssistantError::Io(format!("{program}: {error}")),
         })
 }
@@ -96,7 +120,10 @@ fn read_all(pipe: Option<impl Read>) -> Vec<u8> {
     buf
 }
 
-fn wait_or_cancel(child: &mut Child, cancel: &CancelToken) -> Result<std::process::ExitStatus, AssistantError> {
+fn wait_or_cancel(
+    child: &mut Child,
+    cancel: &CancelToken,
+) -> Result<std::process::ExitStatus, AssistantError> {
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(status);
@@ -131,7 +158,10 @@ impl Recording {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let bytes = self.reader.join().unwrap_or_default();
-        bytes.chunks_exact(2).map(|pair| i16::from_le_bytes([pair[0], pair[1]])).collect()
+        bytes
+            .chunks_exact(2)
+            .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+            .collect()
     }
 }
 
@@ -209,20 +239,37 @@ mod tests {
 
     #[test]
     fn expands_placeholders_and_rejects_unknown_ones() {
-        let argv = expand("tool --model {model} --out {file}", &[("model", "/m"), ("file", "/f.wav")]).unwrap();
+        let argv = expand(
+            "tool --model {model} --out {file}",
+            &[("model", "/m"), ("file", "/f.wav")],
+        )
+        .unwrap();
         assert_eq!(argv, ["tool", "--model", "/m", "--out", "/f.wav"]);
-        assert!(matches!(expand("tool {modle}", &[("model", "/m")]), Err(AssistantError::Config(_))));
-        assert!(matches!(expand("   ", &[]), Err(AssistantError::NotConfigured(_))));
+        assert!(matches!(
+            expand("tool {modle}", &[("model", "/m")]),
+            Err(AssistantError::Config(_))
+        ));
+        assert!(matches!(
+            expand("   ", &[]),
+            Err(AssistantError::NotConfigured(_))
+        ));
     }
 
     #[test]
     fn config_defaults_and_rejects_unknown_keys() {
-        let config = SpeechConfig::parse("# c\ntranscribe_command = stt --model {model}\n").unwrap();
+        let config =
+            SpeechConfig::parse("# c\ntranscribe_command = stt --model {model}\n").unwrap();
         assert_eq!(config.transcribe.as_deref(), Some("stt --model {model}"));
         assert_eq!(config.synthesize, None);
         assert_eq!(config.record, SpeechConfig::default().record);
-        assert!(matches!(SpeechConfig::parse("speak = x"), Err(AssistantError::Config(_))));
-        assert!(matches!(SpeechConfig::parse("no equals"), Err(AssistantError::Config(_))));
+        assert!(matches!(
+            SpeechConfig::parse("speak = x"),
+            Err(AssistantError::Config(_))
+        ));
+        assert!(matches!(
+            SpeechConfig::parse("no equals"),
+            Err(AssistantError::Config(_))
+        ));
     }
 
     #[test]
@@ -251,7 +298,11 @@ mod tests {
     #[test]
     fn recording_returns_samples_written_before_finish() {
         // printf emits two little-endian samples (1 and -2), then the process idles until killed.
-        let argv = vec!["sh".to_owned(), "-c".to_owned(), r"printf '\001\000\376\377'; sleep 30".to_owned()];
+        let argv = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            r"printf '\001\000\376\377'; sleep 30".to_owned(),
+        ];
         let recording = start_recording(&argv).unwrap();
         thread::sleep(Duration::from_millis(200));
         assert_eq!(recording.finish(), vec![1, -2]);

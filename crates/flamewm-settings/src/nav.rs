@@ -34,5 +34,3 @@ pub(crate) fn nav_matches(label: &str, query: &str) -> bool {
 pub(crate) fn nav_top(index: usize) -> f32 {
     NAV_BRAND_HEIGHT_PX + NAV_SEARCH_BLOCK_PX + index as f32 * NAV_ROW_PITCH_PX
 }
-
-

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use flamewm_assistant_core::{default_voice_dir, setup_default, AssistantError, SETUP_BUSY};
+use flamewm_assistant_core::{AssistantError, SETUP_BUSY, default_voice_dir, setup_default};
 
 const ATTEMPTS: u32 = 3;
 const RETRY_DELAY: Duration = Duration::from_secs(60);
@@ -45,8 +45,15 @@ pub fn run_with(
             Err(error) => {
                 last = error.to_string();
                 let retry = number < ATTEMPTS && !matches!(error, AssistantError::Config(_));
-                let next = if retry { format!(", retrying in {}s", retry_delay.as_secs()) } else { String::new() };
-                write_status(dir, &format!("failed (attempt {number} of {ATTEMPTS}): {last}{next}"));
+                let next = if retry {
+                    format!(", retrying in {}s", retry_delay.as_secs())
+                } else {
+                    String::new()
+                };
+                write_status(
+                    dir,
+                    &format!("failed (attempt {number} of {ATTEMPTS}): {last}{next}"),
+                );
                 if !retry {
                     break;
                 }
@@ -68,7 +75,8 @@ mod tests {
     use std::cell::Cell;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("flamewm-voice-bg-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("flamewm-voice-bg-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
     }
@@ -118,7 +126,10 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(calls.get(), ATTEMPTS);
         let text = status(&dir);
-        assert!(text.starts_with("failed (attempt 3 of 3): unreachable: pypi.org"), "{text}");
+        assert!(
+            text.starts_with("failed (attempt 3 of 3): unreachable: pypi.org"),
+            "{text}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -138,7 +149,9 @@ mod tests {
     #[test]
     fn busy_setup_in_another_process_is_left_to_it() {
         let dir = scratch("busy");
-        let result = run_with(&dir, Duration::ZERO, |_| Err(AssistantError::Io(SETUP_BUSY.into())));
+        let result = run_with(&dir, Duration::ZERO, |_| {
+            Err(AssistantError::Io(SETUP_BUSY.into()))
+        });
         assert_eq!(result, Ok(()));
         assert!(status(&dir).is_empty());
         let _ = fs::remove_dir_all(&dir);

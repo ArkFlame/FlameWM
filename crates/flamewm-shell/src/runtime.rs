@@ -240,14 +240,14 @@ impl Default for ShellRuntime {
     }
 }
 
-mod state;
 mod actions;
-mod tasks;
 mod context_menus;
 mod dispatch;
+mod lifecycle;
 mod panels;
 mod start_status;
-mod lifecycle;
+mod state;
+mod tasks;
 
 /// Resolve root pointer coordinates to a connected output. Half-open bounds
 /// handle adjacent monitors without assigning their shared edge twice.

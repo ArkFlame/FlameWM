@@ -246,7 +246,13 @@ fn corner_coverage(x: u32, y: u32, width: u32, radius: u32) -> Option<u8> {
 /// Blends the binary XShape edge of the top corners: each partly covered pixel is mixed with the
 /// desktop word behind it, so the arc reads as anti-aliased instead of stair-stepped. Fully
 /// covered pixels and the straight edges are untouched.
-fn antialias_top_corners(pixels: &mut [u8], backdrop: &[u32], width: u32, height: u32, radius: u32) {
+fn antialias_top_corners(
+    pixels: &mut [u8],
+    backdrop: &[u32],
+    width: u32,
+    height: u32,
+    radius: u32,
+) {
     let radius = radius.min(width / 2);
     for y in 0..height.min(radius) {
         for x in (0..radius).chain(width - radius..width) {
@@ -443,9 +449,27 @@ mod tests {
             blur_percent: 80,
         };
         state.canvas = Some((key, Some(canvas)));
-        let px = titlebar_in(&mut state, (10, 4), (64, 32), (20, 6), (0, 0, 0), 127, 80, 0);
+        let px = titlebar_in(
+            &mut state,
+            (10, 4),
+            (64, 32),
+            (20, 6),
+            (0, 0, 0),
+            127,
+            80,
+            0,
+        );
         assert_eq!(px, expected);
-        let moved = titlebar_in(&mut state, (30, 9), (64, 32), (20, 6), (0, 0, 0), 127, 80, 0);
+        let moved = titlebar_in(
+            &mut state,
+            (30, 9),
+            (64, 32),
+            (20, 6),
+            (0, 0, 0),
+            127,
+            80,
+            0,
+        );
         assert_ne!(
             moved, px,
             "a move recrops the same canvas at the new origin"
@@ -492,9 +516,18 @@ mod tests {
         let (w, r) = (200, 24);
         assert_eq!(corner_coverage(24, 0, w, r), None, "straight top edge");
         assert_eq!(corner_coverage(0, 0, w, r), Some(0), "outer corner pixel");
-        assert_eq!(corner_coverage(w - 1, 0, w, r), Some(0), "mirrored right corner");
-        let row: Vec<u8> = (0..r).map(|x| corner_coverage(x, 12, w, r).unwrap_or(255)).collect();
-        assert!(row.windows(2).all(|p| p[0] <= p[1]), "coverage rises inward: {row:?}");
+        assert_eq!(
+            corner_coverage(w - 1, 0, w, r),
+            Some(0),
+            "mirrored right corner"
+        );
+        let row: Vec<u8> = (0..r)
+            .map(|x| corner_coverage(x, 12, w, r).unwrap_or(255))
+            .collect();
+        assert!(
+            row.windows(2).all(|p| p[0] <= p[1]),
+            "coverage rises inward: {row:?}"
+        );
     }
 
     #[test]

@@ -330,12 +330,7 @@ impl XcursorBackend {
             theme: theme.to_owned(),
             size: self.size,
         };
-        reload_cache(
-            &mut loader,
-            &mut self.cache,
-            self.theme.as_deref(),
-            theme,
-        )?;
+        reload_cache(&mut loader, &mut self.cache, self.theme.as_deref(), theme)?;
         self.theme = Some(theme.to_owned());
         Ok(())
     }
@@ -591,8 +586,7 @@ mod tests {
         let mut loader = FakeLoader::default();
         let mut cache = seeded_cache(&mut loader, "old");
         let before = cache.clone();
-        reload_cache(&mut loader, &mut cache, Some("old"), "broken")
-            .expect_err("unloadable theme");
+        reload_cache(&mut loader, &mut cache, Some("old"), "broken").expect_err("unloadable theme");
         assert_eq!(cache, before);
         assert!(
             loader.frees.is_empty(),

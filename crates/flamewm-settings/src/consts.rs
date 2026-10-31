@@ -187,4 +187,3 @@ pub(crate) fn monotonic_now_ms() -> u64 {
         .as_millis()
         .min(u128::from(u64::MAX)) as u64
 }
-

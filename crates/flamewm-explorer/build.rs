@@ -14,7 +14,10 @@ fn main() {
     let css = src.join("explorer.css");
     println!("cargo:rerun-if-changed={}", html.display());
     println!("cargo:rerun-if-changed={}", css.display());
-    println!("cargo:rerun-if-changed={}", root.join("ui/base/base.css").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        root.join("ui/base/base.css").display()
+    );
     let icons = src.join("icons");
     println!("cargo:rerun-if-changed={}", icons.display());
     let dest = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));

@@ -30,7 +30,10 @@ pub fn scaled_corner_radius(floating: bool, style: DecorationStyle, titlebar_h: 
 /// rest of the height. The border never inflates the client (see `FrameExtents::delta`).
 #[must_use]
 pub fn client_area_size(outer: Rect, titlebar_h: u16) -> (u32, u32) {
-    (outer.width, outer.height.saturating_sub(u32::from(titlebar_h)))
+    (
+        outer.width,
+        outer.height.saturating_sub(u32::from(titlebar_h)),
+    )
 }
 
 /// Corner rows lose one more pixel. The 1-bit XShape edge then sits inside the 1px AA outline
@@ -159,7 +162,12 @@ mod tests {
     fn client_area_fills_the_frame_below_the_titlebar() {
         // Regression: a `width - 2` / `height - titlebar - 1` client shape left the frame's
         // dark background visible on the right two columns and bottom row.
-        let outer = Rect { x: 0, y: 0, width: 484, height: 347 };
+        let outer = Rect {
+            x: 0,
+            y: 0,
+            width: 484,
+            height: 347,
+        };
         assert_eq!(client_area_size(outer, 31), (484, 316));
         let (cw, ch) = client_area_size(outer, 31);
         let full = client_bottom_rounded_rectangles(cw, ch, 0);
@@ -270,7 +278,11 @@ mod tests {
         assert_eq!(corner_edge_inset(5), 6);
         let spans = rounded_mask_spans(100, 60, 12);
         let (_, start_mid, end_mid) = spans[30];
-        assert_eq!((start_mid, end_mid), (0, 100), "straight edge must keep full width");
+        assert_eq!(
+            (start_mid, end_mid),
+            (0, 100),
+            "straight edge must keep full width"
+        );
         let (_, start_top, _) = spans[0];
         assert!(start_top > external_rounded_row_inset(100, 60, 12, 0));
     }

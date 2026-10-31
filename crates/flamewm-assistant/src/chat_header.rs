@@ -2,8 +2,18 @@
 
 /// Words the working status rotates through.
 const VERBS: [&str; 12] = [
-    "Thinking", "Scrambling", "Pondering", "Brewing", "Conjuring", "Mulling", "Noodling",
-    "Untangling", "Cooking", "Wrangling", "Daydreaming", "Crunching",
+    "Thinking",
+    "Scrambling",
+    "Pondering",
+    "Brewing",
+    "Conjuring",
+    "Mulling",
+    "Noodling",
+    "Untangling",
+    "Cooking",
+    "Wrangling",
+    "Daydreaming",
+    "Crunching",
 ];
 /// Animation steps per word: two full dot cycles.
 const STEPS_PER_VERB: u32 = 8;
@@ -39,8 +49,20 @@ mod tests {
     #[test]
     fn working_text_cycles_dots_then_rotates_words() {
         let dots: Vec<String> = (0..5).map(working_text).collect();
-        assert_eq!(dots, ["Thinking", "Thinking.", "Thinking..", "Thinking...", "Thinking"]);
+        assert_eq!(
+            dots,
+            [
+                "Thinking",
+                "Thinking.",
+                "Thinking..",
+                "Thinking...",
+                "Thinking"
+            ]
+        );
         assert_eq!(working_text(STEPS_PER_VERB), "Scrambling");
-        assert_eq!(working_text(STEPS_PER_VERB * VERBS.len() as u32), "Thinking");
+        assert_eq!(
+            working_text(STEPS_PER_VERB * VERBS.len() as u32),
+            "Thinking"
+        );
     }
 }

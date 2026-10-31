@@ -36,40 +36,40 @@ pub(crate) const APP_SOURCE: &str = concat!(
     include_str!("app_impl_3.rs"),
 );
 
-mod consts;
-mod pager;
-mod hotkeys;
 mod actions;
-mod input;
-mod sliders;
-mod tables;
-mod nav;
-mod nodes;
-mod location;
-mod labels;
 mod app_impl_1;
 mod app_impl_2;
 mod app_impl_3;
+mod consts;
+mod hotkeys;
+mod input;
+mod labels;
+mod location;
+mod nav;
+mod nodes;
+mod pager;
+mod sliders;
+mod tables;
 
-use consts::*;
-use pager::*;
-use hotkeys::*;
 use actions::*;
-use input::*;
-use sliders::*;
-use tables::*;
-use nav::*;
-use nodes::*;
-use location::*;
-use labels::*;
 use app_impl_1::*;
 use app_impl_2::*;
 use app_impl_3::*;
+use consts::*;
+use hotkeys::*;
+use input::*;
+use labels::*;
+use location::*;
+use nav::*;
+use nodes::*;
+use pager::*;
+use sliders::*;
+use tables::*;
 
-pub use pager::normal_window_config;
-pub use labels::panel_edge_label;
 pub use labels::display_mode_label;
 pub use labels::font_size_label;
+pub use labels::panel_edge_label;
+pub use pager::normal_window_config;
 
 use flamewm_api::panels::PanelEdge;
 use flamewm_api::session::SessionAction;
@@ -82,8 +82,6 @@ use flamewm_ui_core::glass;
 use flamewm_ui_x11::{
     UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess, UiKeyEvent, UiKeyPhase, UiWindowConfig,
 };
-
-
 
 pub struct SettingsApplication<T: ControlTransport> {
     client: SettingsClient<T>,
@@ -128,23 +126,22 @@ struct ApiKeyDraft {
     error: Option<String>,
 }
 
-
-#[cfg(test)]
-mod card_fill_tests;
-#[cfg(test)]
-mod time_zone_label_tests;
-#[cfg(test)]
-mod cursor_reload_tests;
-#[cfg(test)]
-mod test_transport;
-#[cfg(test)]
-mod value_text_tests;
-#[cfg(test)]
-mod display_pager_fixture_tests;
 #[cfg(test)]
 mod accent_node_tests;
 #[cfg(test)]
+mod card_fill_tests;
+#[cfg(test)]
+mod cursor_reload_tests;
+#[cfg(test)]
+mod display_pager_fixture_tests;
+#[cfg(test)]
 mod nav_indicator_layout_tests;
+#[cfg(test)]
+mod test_transport;
+#[cfg(test)]
+mod time_zone_label_tests;
+#[cfg(test)]
+mod value_text_tests;
 
 extern crate self as flamewm_settings;
 
@@ -153,4 +150,3 @@ extern crate self as flamewm_settings;
 #[doc(hidden)]
 #[path = "main.rs"]
 pub mod entry;
-

@@ -17,9 +17,7 @@ pub fn document() -> Result<UiDocument, String> {
 
 /// The settings document with the window-level wallpaper backdrop under its translucent body glass.
 /// Opacity is the resolved GlassRegular alpha, so Reduce transparency installs no backdrop.
-pub fn document_with_backdrop(
-    snapshot: Option<&SettingsSnapshot>,
-) -> Result<UiDocument, String> {
+pub fn document_with_backdrop(snapshot: Option<&SettingsSnapshot>) -> Result<UiDocument, String> {
     Ok(decode_document(COMPILED_UI)?.with_window_backdrop(window_backdrop(snapshot)))
 }
 
@@ -220,7 +218,9 @@ mod tests {
 
     #[test]
     fn display_outputs_are_compact_numbered_entries_without_duplicate_previews() {
-        assert!(CSS.contains(".display-output-selector { width:100%; display:flex; flex-direction:column;"));
+        assert!(CSS.contains(
+            ".display-output-selector { width:100%; display:flex; flex-direction:column;"
+        ));
         assert!(!HTML.contains("display-topology-map"));
         assert!(!HTML.contains("monitor-screen"));
         assert!(!CSS.contains(".display-layout"));
@@ -307,13 +307,31 @@ mod tests {
     fn glass_rows_bind_their_controls_on_the_surfaces_page() {
         let surfaces = page_between(HTML, "page-surfaces", "page-animations");
         for (id, action) in [
-            ("reduce-transparency-on", "settings.toggle.reduceTransparency"),
-            ("reduce-transparency-off", "settings.toggle.reduceTransparency"),
-            ("taskbar-material-blur-only", "settings.taskbar.material.blur-only"),
-            ("taskbar-material-inherit", "settings.taskbar.material.inherit"),
-            ("taskbar-material-custom-tint", "settings.taskbar.material.custom-tint"),
+            (
+                "reduce-transparency-on",
+                "settings.toggle.reduceTransparency",
+            ),
+            (
+                "reduce-transparency-off",
+                "settings.toggle.reduceTransparency",
+            ),
+            (
+                "taskbar-material-blur-only",
+                "settings.taskbar.material.blur-only",
+            ),
+            (
+                "taskbar-material-inherit",
+                "settings.taskbar.material.inherit",
+            ),
+            (
+                "taskbar-material-custom-tint",
+                "settings.taskbar.material.custom-tint",
+            ),
             ("glass-reset", "settings.glass.reset"),
-            ("color-taskbarTint-wheel", "settings.picker.open.taskbarTint"),
+            (
+                "color-taskbarTint-wheel",
+                "settings.picker.open.taskbarTint",
+            ),
         ] {
             assert!(
                 surfaces.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
@@ -361,7 +379,9 @@ mod tests {
             .split_once("id=\"glass-dark\"")
             .map(|(_, rest)| rest)
             .expect("glass preset row");
-        let glass = rest.split_once("Window frame").map_or(rest, |(glass, _)| glass);
+        let glass = rest
+            .split_once("Window frame")
+            .map_or(rest, |(glass, _)| glass);
         assert!(!glass.contains("shadow"), "glass rows must not use shadows");
     }
 

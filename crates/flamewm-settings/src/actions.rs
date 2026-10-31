@@ -377,10 +377,7 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
         return Ok(SettingsAction::PercentStep("surfaceBlurPercent", direction));
     }
     for (slug, key) in GLASS_STEP_KEYS {
-        if let Some(direction) = action
-            .strip_prefix(slug)
-            .and_then(step)
-        {
+        if let Some(direction) = action.strip_prefix(slug).and_then(step) {
             return Ok(SettingsAction::PercentStep(key, direction));
         }
     }

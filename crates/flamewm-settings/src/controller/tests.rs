@@ -3,9 +3,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 
 use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputSnapshot};
-use flamewm_api::settings::{
-    SettingValue, SettingsChange, SettingsSnapshot, SettingsTransaction,
-};
+use flamewm_api::settings::{SettingValue, SettingsChange, SettingsSnapshot, SettingsTransaction};
 use flamewm_api::shortcuts::ShortcutSnapshot;
 use flamewm_api::{ModeId, OutputId, Rect, Size};
 use flamewm_control_core::{ControlRequest, ControlResponse};
@@ -14,23 +12,23 @@ use flamewm_ui_x11::{RuntimeImage, UiActionEvent, UiActionPhase, UiColor, UiDocu
 
 use crate::SettingsApplication;
 
-mod markup_errors;
-mod taskbar_about;
-mod hotkeys;
-mod appearance;
-mod animation_lock;
-mod taskbar_screensaver;
-mod stepper_controls;
-mod segments_backgrounds;
-mod weather;
-mod toggles_and_seams;
 mod accent_color;
+mod animation_lock;
 mod api_key;
+mod appearance;
 mod color_picker;
-mod hotkey_seams;
 mod display_modes;
 mod display_paging;
+mod hotkey_seams;
+mod hotkeys;
+mod markup_errors;
 mod page_guards;
+mod segments_backgrounds;
+mod stepper_controls;
+mod taskbar_about;
+mod taskbar_screensaver;
+mod toggles_and_seams;
+mod weather;
 
 #[derive(Default)]
 struct RecordingTransport {
@@ -107,9 +105,7 @@ fn loaded_application<R, E: std::fmt::Debug>(
 }
 
 /// Controller over `transport`, with the queued settings snapshot already loaded.
-fn settings_application(
-    transport: RecordingTransport,
-) -> SettingsApplication<RecordingTransport> {
+fn settings_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
     loaded_application(
         transport,
         flamewm_settings_core::SettingsClient::refresh_settings,
@@ -117,9 +113,7 @@ fn settings_application(
 }
 
 /// Controller over `transport`, with the queued display snapshot already loaded.
-fn displays_application(
-    transport: RecordingTransport,
-) -> SettingsApplication<RecordingTransport> {
+fn displays_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
     loaded_application(
         transport,
         flamewm_settings_core::SettingsClient::refresh_displays,
@@ -127,9 +121,7 @@ fn displays_application(
 }
 
 /// Controller over `transport`, with the queued shortcut snapshot already loaded.
-fn shortcuts_application(
-    transport: RecordingTransport,
-) -> SettingsApplication<RecordingTransport> {
+fn shortcuts_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
     loaded_application(
         transport,
         flamewm_settings_core::SettingsClient::refresh_shortcuts,
@@ -177,12 +169,7 @@ impl UiDocumentAccess for ProbeDocument {
         Ok(())
     }
 
-    fn toggle(
-        &mut self,
-        _track_id: &str,
-        _knob_id: &str,
-        _checked: bool,
-    ) -> Result<(), String> {
+    fn toggle(&mut self, _track_id: &str, _knob_id: &str, _checked: bool) -> Result<(), String> {
         crate::ui_contract::require_markup_id(_track_id)?;
         crate::ui_contract::require_markup_id(_knob_id)
     }
@@ -240,11 +227,7 @@ impl UiDocumentAccess for ProbeDocument {
         crate::ui_contract::require_markup_id(_id)
     }
 
-    fn layer(
-        &mut self,
-        _id: &str,
-        _layer: flamewm_ui_core::style::UiLayer,
-    ) -> Result<(), String> {
+    fn layer(&mut self, _id: &str, _layer: flamewm_ui_core::style::UiLayer) -> Result<(), String> {
         crate::ui_contract::require_markup_id(_id)
     }
 }

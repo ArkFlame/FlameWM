@@ -41,13 +41,19 @@ pub struct CurlFetcher {
 
 impl Default for CurlFetcher {
     fn default() -> Self {
-        Self { program: "curl".into(), proto: "=https".into() }
+        Self {
+            program: "curl".into(),
+            proto: "=https".into(),
+        }
     }
 }
 
 impl CurlFetcher {
     pub fn with_program_and_proto(program: &str, proto: &str) -> Self {
-        Self { program: program.into(), proto: proto.into() }
+        Self {
+            program: program.into(),
+            proto: proto.into(),
+        }
     }
 }
 
@@ -124,7 +130,11 @@ pub struct DiskModelStore<F: Fetcher> {
 
 impl<F: Fetcher> DiskModelStore<F> {
     pub fn new(dir: PathBuf, fetcher: F) -> Self {
-        Self { dir, fetcher, cancel: CancelToken::new() }
+        Self {
+            dir,
+            fetcher,
+            cancel: CancelToken::new(),
+        }
     }
 
     /// Ties downloads to a token so the UI can abort them. Partial files are kept for resume.
@@ -158,7 +168,9 @@ impl<F: Fetcher> DiskModelStore<F> {
             fs::remove_file(&part)?;
         }
         let mut relay = |done: u64, _: u64| progress(base + done, total);
-        let fetched = self.fetcher.fetch(&file.url, &part, file.size_bytes, &mut relay, &self.cancel);
+        let fetched =
+            self.fetcher
+                .fetch(&file.url, &part, file.size_bytes, &mut relay, &self.cancel);
         if let Err(error) = fetched {
             // A complete-looking partial is still verified below; anything else stays for resume.
             if file_len(&part) < file.size_bytes {
@@ -178,12 +190,21 @@ impl<F: Fetcher> DiskModelStore<F> {
 /// Rejects manifests that cannot be fetched safely. Runs before any file or network work.
 pub fn check_pinned(manifest: &ModelManifest) -> Result<(), AssistantError> {
     let name_ok = !manifest.name.is_empty()
-        && manifest.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        && manifest
+            .name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if !name_ok {
-        return Err(AssistantError::Config(format!("invalid model name: {:?}", manifest.name)));
+        return Err(AssistantError::Config(format!(
+            "invalid model name: {:?}",
+            manifest.name
+        )));
     }
     if manifest.files.is_empty() {
-        return Err(AssistantError::Config(format!("model {} lists no files", manifest.name)));
+        return Err(AssistantError::Config(format!(
+            "model {} lists no files",
+            manifest.name
+        )));
     }
     let mut seen = HashSet::new();
     for file in &manifest.files {
@@ -194,7 +215,10 @@ pub fn check_pinned(manifest: &ModelManifest) -> Result<(), AssistantError> {
             )));
         }
         if !seen.insert(file.path.as_str()) {
-            return Err(AssistantError::Config(format!("model {} lists {} twice", manifest.name, file.path)));
+            return Err(AssistantError::Config(format!(
+                "model {} lists {} twice",
+                manifest.name, file.path
+            )));
         }
         if file.url.trim().is_empty() || file.url == UNPINNED {
             return Err(AssistantError::NotConfigured(format!(
@@ -229,7 +253,9 @@ fn is_safe_relative(path: &str) -> bool {
     !path.is_empty()
         && !path.contains('\\')
         && !path.contains('\0')
-        && Path::new(path).components().all(|c| matches!(c, Component::Normal(_)))
+        && Path::new(path)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
 }
 
 fn sha256_of(path: &Path) -> Result<String, AssistantError> {
@@ -313,16 +339,25 @@ impl<F: Fetcher> ModelStore for DiskModelStore<F> {
         let model_dir = self.model_dir(name);
         let marker = fs::read_to_string(model_dir.join(COMPLETE_MARKER)).ok()?;
         let complete = marker.lines().all(|line| {
-            let Some((size, path)) = line.split_once('\t') else { return false };
-            let Ok(size) = size.parse::<u64>() else { return false };
-            fs::metadata(model_dir.join(path)).is_ok_and(|meta| meta.is_file() && meta.len() == size)
+            let Some((size, path)) = line.split_once('\t') else {
+                return false;
+            };
+            let Ok(size) = size.parse::<u64>() else {
+                return false;
+            };
+            fs::metadata(model_dir.join(path))
+                .is_ok_and(|meta| meta.is_file() && meta.len() == size)
         });
         (complete && !marker.is_empty()).then_some(model_dir)
     }
 }
 
 fn write_marker(model_dir: &Path, manifest: &ModelManifest) -> Result<(), AssistantError> {
-    let body: String = manifest.files.iter().map(|f| format!("{}\t{}\n", f.size_bytes, f.path)).collect();
+    let body: String = manifest
+        .files
+        .iter()
+        .map(|f| format!("{}\t{}\n", f.size_bytes, f.path))
+        .collect();
     let tmp = model_dir.join(format!("{COMPLETE_MARKER}.part"));
     fs::write(&tmp, body)?;
     File::open(&tmp)?.sync_all()?;
@@ -337,7 +372,11 @@ pub fn extract_zstd_tar(archive: &Path, dest: &Path) -> Result<(), AssistantErro
 }
 
 /// [`extract_zstd_tar`] with the tar program given explicitly, for tests and alternate installs.
-pub fn extract_zstd_tar_with(program: &str, archive: &Path, dest: &Path) -> Result<(), AssistantError> {
+pub fn extract_zstd_tar_with(
+    program: &str,
+    archive: &Path,
+    dest: &Path,
+) -> Result<(), AssistantError> {
     fs::create_dir_all(dest)?;
     let output = Command::new(program)
         .args(["--zstd", "--no-same-owner", "-xf"])
@@ -384,7 +423,9 @@ mod tests {
 
     /// Deterministic bytes that exercise several SHA-256 blocks. `seed` varies the content.
     fn body_seeded(len: usize, seed: usize) -> Vec<u8> {
-        (0..len).map(|i| (i.wrapping_mul(31).wrapping_add(i >> 7).wrapping_add(seed) % 253) as u8).collect()
+        (0..len)
+            .map(|i| (i.wrapping_mul(31).wrapping_add(i >> 7).wrapping_add(seed) % 253) as u8)
+            .collect()
     }
 
     fn body(len: usize) -> Vec<u8> {
@@ -398,12 +439,20 @@ mod tests {
     }
 
     fn file(path: &str, url: &str, data: &[u8]) -> ModelFile {
-        ModelFile { path: path.into(), url: url.into(), sha256: sha_of(data), size_bytes: data.len() as u64 }
+        ModelFile {
+            path: path.into(),
+            url: url.into(),
+            sha256: sha_of(data),
+            size_bytes: data.len() as u64,
+        }
     }
 
     /// Loopback HTTP server. Serves `files` by request path, honours one `Range: bytes=N-` per
     /// connection, answers 404 for unknown paths, and returns the base URL plus the request heads.
-    fn serve_files(files: Vec<(String, Vec<u8>)>, connections: usize) -> (String, JoinHandle<Vec<String>>) {
+    fn serve_files(
+        files: Vec<(String, Vec<u8>)>,
+        connections: usize,
+    ) -> (String, JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let base = format!("http://{}", listener.local_addr().expect("addr"));
         let handle = thread::spawn(move || {
@@ -422,19 +471,38 @@ mod tests {
                 let head = String::from_utf8_lossy(&buf).into_owned();
                 let request_path = head.split_whitespace().nth(1).unwrap_or("/").to_owned();
                 let Some((_, data)) = files.iter().find(|(path, _)| *path == request_path) else {
-                    let _ = conn.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    let _ = conn.write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
                     seen.push(head);
                     continue;
                 };
                 let start = head
                     .lines()
-                    .find_map(|l| l.to_ascii_lowercase().strip_prefix("range: bytes=").map(str::to_owned))
-                    .and_then(|r| r.trim_end_matches('-').split('-').next().and_then(|n| n.parse::<usize>().ok()))
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("range: bytes=")
+                            .map(str::to_owned)
+                    })
+                    .and_then(|r| {
+                        r.trim_end_matches('-')
+                            .split('-')
+                            .next()
+                            .and_then(|n| n.parse::<usize>().ok())
+                    })
                     .unwrap_or(0);
                 let slice = &data[start.min(data.len())..];
-                let status = if start > 0 { "206 Partial Content" } else { "200 OK" };
+                let status = if start > 0 {
+                    "206 Partial Content"
+                } else {
+                    "200 OK"
+                };
                 let range = if start > 0 {
-                    format!("Content-Range: bytes {start}-{}/{}\r\n", data.len() - 1, data.len())
+                    format!(
+                        "Content-Range: bytes {start}-{}/{}\r\n",
+                        data.len() - 1,
+                        data.len()
+                    )
                 } else {
                     String::new()
                 };
@@ -459,7 +527,14 @@ mod tests {
 
     struct PanickingFetcher;
     impl Fetcher for PanickingFetcher {
-        fn fetch(&mut self, _: &str, _: &Path, _: u64, _: &mut dyn FnMut(u64, u64), _: &CancelToken) -> Result<(), AssistantError> {
+        fn fetch(
+            &mut self,
+            _: &str,
+            _: &Path,
+            _: u64,
+            _: &mut dyn FnMut(u64, u64),
+            _: &CancelToken,
+        ) -> Result<(), AssistantError> {
             panic!("network must not be touched");
         }
     }
@@ -480,7 +555,11 @@ mod tests {
             _: &CancelToken,
         ) -> Result<(), AssistantError> {
             self.requested.push(url.to_owned());
-            let data = if self.tamper.as_deref() == Some(url) { b"tampered".to_vec() } else { self.files[url].clone() };
+            let data = if self.tamper.as_deref() == Some(url) {
+                b"tampered".to_vec()
+            } else {
+                self.files[url].clone()
+            };
             fs::write(dest, &data)?;
             progress(data.len() as u64, data.len() as u64);
             Ok(())
@@ -492,10 +571,21 @@ mod tests {
         let data = body(300_000);
         let (url, server) = serve_body(data.clone(), 1);
         let dir = test_dir("download-basic");
-        let m = ModelManifest::single("stt-test", "model.bin", &url, &sha_of(&data), data.len() as u64);
-        let mut store = DiskModelStore::new(dir.clone(), CurlFetcher::with_program_and_proto("curl", "=http"));
+        let m = ModelManifest::single(
+            "stt-test",
+            "model.bin",
+            &url,
+            &sha_of(&data),
+            data.len() as u64,
+        );
+        let mut store = DiskModelStore::new(
+            dir.clone(),
+            CurlFetcher::with_program_and_proto("curl", "=http"),
+        );
         let mut last = (0, 0);
-        let path = store.fetch(&m, &mut |done, total| last = (done, total)).expect("fetch");
+        let path = store
+            .fetch(&m, &mut |done, total| last = (done, total))
+            .expect("fetch");
         server.join().expect("server");
         assert_eq!(path, dir.join("stt-test"));
         assert_eq!(fs::read(path.join("model.bin")).expect("read"), data);
@@ -506,8 +596,15 @@ mod tests {
 
     #[test]
     fn multi_file_download_fetches_each_file_and_aggregates_progress() {
-        let files = [("/model.bin", body(300_000)), ("/config.json", body_seeded(4_634, 7)), ("/sub/tok.json", body_seeded(9_000, 9))];
-        let served: Vec<(String, Vec<u8>)> = files.iter().map(|(p, d)| ((*p).to_owned(), d.clone())).collect();
+        let files = [
+            ("/model.bin", body(300_000)),
+            ("/config.json", body_seeded(4_634, 7)),
+            ("/sub/tok.json", body_seeded(9_000, 9)),
+        ];
+        let served: Vec<(String, Vec<u8>)> = files
+            .iter()
+            .map(|(p, d)| ((*p).to_owned(), d.clone()))
+            .collect();
         let (base, server) = serve_files(served, files.len());
         let dir = test_dir("download-multi");
         let manifest = ModelManifest {
@@ -518,17 +615,32 @@ mod tests {
                 .collect(),
         };
         let total = manifest.total_bytes();
-        let mut store = DiskModelStore::new(dir.clone(), CurlFetcher::with_program_and_proto("curl", "=http"));
+        let mut store = DiskModelStore::new(
+            dir.clone(),
+            CurlFetcher::with_program_and_proto("curl", "=http"),
+        );
         let mut reports = Vec::new();
-        let model_dir = store.fetch(&manifest, &mut |done, t| reports.push((done, t))).expect("fetch");
+        let model_dir = store
+            .fetch(&manifest, &mut |done, t| reports.push((done, t)))
+            .expect("fetch");
         let heads = server.join().expect("server");
         assert_eq!(heads.len(), 3);
         assert_eq!(model_dir, dir.join("tts-multi"));
         for (path, data) in &files {
-            assert_eq!(fs::read(model_dir.join(path.trim_start_matches('/'))).expect("read"), *data);
-            assert!(!model_dir.join(format!("{}.part", path.trim_start_matches('/'))).exists());
+            assert_eq!(
+                fs::read(model_dir.join(path.trim_start_matches('/'))).expect("read"),
+                *data
+            );
+            assert!(
+                !model_dir
+                    .join(format!("{}.part", path.trim_start_matches('/')))
+                    .exists()
+            );
         }
-        assert!(reports.windows(2).all(|w| w[0].0 <= w[1].0), "progress is monotonic: {reports:?}");
+        assert!(
+            reports.windows(2).all(|w| w[0].0 <= w[1].0),
+            "progress is monotonic: {reports:?}"
+        );
         assert!(reports.iter().all(|&(done, t)| t == total && done <= total));
         assert_eq!(reports.last(), Some(&(total, total)));
         assert_eq!(store.installed("tts-multi"), Some(model_dir.clone()));
@@ -555,17 +667,31 @@ mod tests {
                 file("tok.json", &format!("{base}/tok.json"), &second),
             ],
         };
-        let mut store = DiskModelStore::new(dir.clone(), CurlFetcher::with_program_and_proto("curl", "=http"));
+        let mut store = DiskModelStore::new(
+            dir.clone(),
+            CurlFetcher::with_program_and_proto("curl", "=http"),
+        );
         let mut first_report = None;
-        store.fetch(&manifest, &mut |done, _| {
-            first_report.get_or_insert(done);
-        })
-        .expect("resume fetch");
+        store
+            .fetch(&manifest, &mut |done, _| {
+                first_report.get_or_insert(done);
+            })
+            .expect("resume fetch");
         let heads = server.join().expect("server");
         assert_eq!(heads.len(), 1);
-        assert!(heads[0].to_ascii_lowercase().contains("range: bytes=80000-"), "{}", heads[0]);
+        assert!(
+            heads[0]
+                .to_ascii_lowercase()
+                .contains("range: bytes=80000-"),
+            "{}",
+            heads[0]
+        );
         assert_eq!(fs::read(model_dir.join("tok.json")).expect("read"), second);
-        assert_eq!(first_report, Some(first.len() as u64), "verified file is counted before the download starts");
+        assert_eq!(
+            first_report,
+            Some(first.len() as u64),
+            "verified file is counted before the download starts"
+        );
         assert_eq!(store.installed("tts-resume"), Some(model_dir));
     }
 
@@ -592,11 +718,16 @@ mod tests {
         let dir = test_dir("download-mismatch-multi");
         let mut store = DiskModelStore::new(dir.clone(), MapFetcherRef(&mut fetcher));
         let result = store.fetch(&manifest, &mut |_, _| {});
-        assert!(matches!(result, Err(AssistantError::ChecksumMismatch(message)) if message.contains("b.bin")));
+        assert!(
+            matches!(result, Err(AssistantError::ChecksumMismatch(message)) if message.contains("b.bin"))
+        );
         let model_dir = dir.join("tts-bad");
         assert!(!model_dir.join("b.bin.part").exists());
         assert!(!model_dir.join("b.bin").exists());
-        assert_eq!(fs::read(model_dir.join("a.bin")).expect("verified file kept"), good_a);
+        assert_eq!(
+            fs::read(model_dir.join("a.bin")).expect("verified file kept"),
+            good_a
+        );
         assert_eq!(store.installed("tts-bad"), None);
         drop(store);
         assert_eq!(fetcher.requested.len(), 2);
@@ -605,7 +736,14 @@ mod tests {
     /// Lets a test keep the fake's request log after the store has consumed it.
     struct MapFetcherRef<'a>(&'a mut MapFetcher);
     impl Fetcher for MapFetcherRef<'_> {
-        fn fetch(&mut self, url: &str, dest: &Path, expected: u64, progress: &mut dyn FnMut(u64, u64), cancel: &CancelToken) -> Result<(), AssistantError> {
+        fn fetch(
+            &mut self,
+            url: &str,
+            dest: &Path,
+            expected: u64,
+            progress: &mut dyn FnMut(u64, u64),
+            cancel: &CancelToken,
+        ) -> Result<(), AssistantError> {
             self.0.fetch(url, dest, expected, progress, cancel)
         }
     }
@@ -613,7 +751,14 @@ mod tests {
     #[test]
     fn unsafe_file_paths_are_refused_before_any_network_access() {
         let dir = test_dir("download-unsafe-path");
-        for path in ["../evil.bin", "/abs.bin", "a/../../b.bin", "./c.bin", "d\\e.bin", ""] {
+        for path in [
+            "../evil.bin",
+            "/abs.bin",
+            "a/../../b.bin",
+            "./c.bin",
+            "d\\e.bin",
+            "",
+        ] {
             let manifest = ModelManifest {
                 name: "tts-unsafe".into(),
                 files: vec![ModelFile {
@@ -624,7 +769,13 @@ mod tests {
                 }],
             };
             let mut store = DiskModelStore::new(dir.clone(), PanickingFetcher);
-            assert!(matches!(store.fetch(&manifest, &mut |_, _| {}), Err(AssistantError::Config(_))), "{path:?}");
+            assert!(
+                matches!(
+                    store.fetch(&manifest, &mut |_, _| {}),
+                    Err(AssistantError::Config(_))
+                ),
+                "{path:?}"
+            );
         }
         assert!(!dir.join("tts-unsafe").exists());
     }
@@ -634,9 +785,21 @@ mod tests {
         let dir = test_dir("download-unpinned");
         let mut store = DiskModelStore::new(dir.clone(), PanickingFetcher);
         let no_url = ModelManifest::single("tts", "m.bin", UNPINNED, UNPINNED, 10);
-        assert!(matches!(store.fetch(&no_url, &mut |_, _| {}), Err(AssistantError::NotConfigured(_))));
-        let no_sum = ModelManifest::single("tts", "m.bin", "https://example.invalid/m.bin", UNPINNED, 10);
-        assert!(matches!(store.fetch(&no_sum, &mut |_, _| {}), Err(AssistantError::ChecksumUnavailable(_))));
+        assert!(matches!(
+            store.fetch(&no_url, &mut |_, _| {}),
+            Err(AssistantError::NotConfigured(_))
+        ));
+        let no_sum = ModelManifest::single(
+            "tts",
+            "m.bin",
+            "https://example.invalid/m.bin",
+            UNPINNED,
+            10,
+        );
+        assert!(matches!(
+            store.fetch(&no_sum, &mut |_, _| {}),
+            Err(AssistantError::ChecksumUnavailable(_))
+        ));
         assert!(!dir.exists() || fs::read_dir(&dir).expect("dir").next().is_none());
     }
 
@@ -644,16 +807,32 @@ mod tests {
     fn checksum_mismatch_removes_partial_and_installs_nothing() {
         struct WrongBytes;
         impl Fetcher for WrongBytes {
-            fn fetch(&mut self, _: &str, dest: &Path, _: u64, _: &mut dyn FnMut(u64, u64), _: &CancelToken) -> Result<(), AssistantError> {
+            fn fetch(
+                &mut self,
+                _: &str,
+                dest: &Path,
+                _: u64,
+                _: &mut dyn FnMut(u64, u64),
+                _: &CancelToken,
+            ) -> Result<(), AssistantError> {
                 fs::write(dest, b"tampered")?;
                 Ok(())
             }
         }
         let dir = test_dir("download-mismatch");
         let good = body(64);
-        let m = ModelManifest::single("tts-bad", "model.bin", "https://example.invalid/m.bin", &sha_of(&good), 64);
+        let m = ModelManifest::single(
+            "tts-bad",
+            "model.bin",
+            "https://example.invalid/m.bin",
+            &sha_of(&good),
+            64,
+        );
         let mut store = DiskModelStore::new(dir.clone(), WrongBytes);
-        assert!(matches!(store.fetch(&m, &mut |_, _| {}), Err(AssistantError::ChecksumMismatch(_))));
+        assert!(matches!(
+            store.fetch(&m, &mut |_, _| {}),
+            Err(AssistantError::ChecksumMismatch(_))
+        ));
         assert!(!dir.join("tts-bad/model.bin.part").exists());
         assert_eq!(store.installed("tts-bad"), None);
     }
@@ -662,7 +841,14 @@ mod tests {
     fn cancelled_download_keeps_partial_for_resume() {
         struct Stall;
         impl Fetcher for Stall {
-            fn fetch(&mut self, _: &str, dest: &Path, _: u64, _: &mut dyn FnMut(u64, u64), cancel: &CancelToken) -> Result<(), AssistantError> {
+            fn fetch(
+                &mut self,
+                _: &str,
+                dest: &Path,
+                _: u64,
+                _: &mut dyn FnMut(u64, u64),
+                cancel: &CancelToken,
+            ) -> Result<(), AssistantError> {
                 fs::write(dest, b"abc")?;
                 cancel.cancel();
                 Err(AssistantError::Cancelled)
@@ -670,10 +856,22 @@ mod tests {
         }
         let dir = test_dir("download-cancel");
         let data = body(10);
-        let m = ModelManifest::single("stt-cancel", "model.bin", "https://example.invalid/m.bin", &sha_of(&data), 10);
+        let m = ModelManifest::single(
+            "stt-cancel",
+            "model.bin",
+            "https://example.invalid/m.bin",
+            &sha_of(&data),
+            10,
+        );
         let mut store = DiskModelStore::new(dir.clone(), Stall);
-        assert_eq!(store.fetch(&m, &mut |_, _| {}), Err(AssistantError::Cancelled));
-        assert_eq!(fs::read(dir.join("stt-cancel/model.bin.part")).expect("partial kept"), b"abc");
+        assert_eq!(
+            store.fetch(&m, &mut |_, _| {}),
+            Err(AssistantError::Cancelled)
+        );
+        assert_eq!(
+            fs::read(dir.join("stt-cancel/model.bin.part")).expect("partial kept"),
+            b"abc"
+        );
     }
 
     #[test]
@@ -683,7 +881,10 @@ mod tests {
         let (url, _server) = serve_body(data.clone(), 0);
         let m = ModelManifest::single("stt-plain", "model.bin", &url, &sha_of(&data), 8);
         let mut store = DiskModelStore::new(dir.clone(), CurlFetcher::default());
-        assert!(matches!(store.fetch(&m, &mut |_, _| {}), Err(AssistantError::Io(_))));
+        assert!(matches!(
+            store.fetch(&m, &mut |_, _| {}),
+            Err(AssistantError::Io(_))
+        ));
         assert_eq!(store.installed("stt-plain"), None);
     }
 
@@ -693,7 +894,10 @@ mod tests {
         let data = body(8);
         let (url, _server) = serve_body(data.clone(), 0);
         let m = ModelManifest::single("stt-nocurl", "model.bin", &url, &sha_of(&data), 8);
-        let mut store = DiskModelStore::new(dir, CurlFetcher::with_program_and_proto("flamewm-no-such-curl", "=http"));
+        let mut store = DiskModelStore::new(
+            dir,
+            CurlFetcher::with_program_and_proto("flamewm-no-such-curl", "=http"),
+        );
         match store.fetch(&m, &mut |_, _| {}) {
             Err(AssistantError::NotConfigured(message)) => assert!(message.contains("curl")),
             other => panic!("unexpected: {other:?}"),
@@ -730,12 +934,18 @@ mod tests {
             return;
         };
         if !created.status.success() {
-            eprintln!("skipping: tar --zstd unsupported: {}", String::from_utf8_lossy(&created.stderr));
+            eprintln!(
+                "skipping: tar --zstd unsupported: {}",
+                String::from_utf8_lossy(&created.stderr)
+            );
             return;
         }
         let out = dir.join("out");
         extract_zstd_tar(&archive, &out).expect("extract");
-        assert_eq!(fs::read(out.join("inner/model.fermion")).expect("read"), body(4_000));
+        assert_eq!(
+            fs::read(out.join("inner/model.fermion")).expect("read"),
+            body(4_000)
+        );
     }
 
     #[test]
@@ -746,7 +956,9 @@ mod tests {
         file.write_all(b"definitely not zstd").expect("write");
         drop(file);
         match extract_zstd_tar(&archive, &dir.join("out")) {
-            Err(AssistantError::Io(message)) => assert!(message.contains("--zstd failed"), "{message}"),
+            Err(AssistantError::Io(message)) => {
+                assert!(message.contains("--zstd failed"), "{message}")
+            }
             Err(AssistantError::NotConfigured(_)) => eprintln!("skipping: tar not installed"),
             other => panic!("unexpected: {other:?}"),
         }

@@ -1920,11 +1920,8 @@ mod tests {
 
     #[test]
     fn startup_preference_precedes_breeze_in_theme_chain() {
-        let resolver = IconResolver::from_environment_with_theme(
-            std::env::temp_dir(),
-            0,
-            Some("MacTahoe"),
-        );
+        let resolver =
+            IconResolver::from_environment_with_theme(std::env::temp_dir(), 0, Some("MacTahoe"));
         let names = &resolver.shared_index().theme_names;
         let preferred = names.iter().position(|name| name == "MacTahoe");
         let breeze = names.iter().position(|name| name == "Breeze");

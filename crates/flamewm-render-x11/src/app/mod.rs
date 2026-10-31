@@ -164,11 +164,17 @@ pub(crate) fn original_argb32(
     height: u32,
     alpha: Option<Color>,
 ) -> Vec<u32> {
-    let mut words = crate::native::image::scale_and_premultiply(pixels, src_w, src_h, width, height);
+    let mut words =
+        crate::native::image::scale_and_premultiply(pixels, src_w, src_h, width, height);
     if let Some(alpha) = alpha.filter(|color| color.a < 255) {
         let scale = |channel: u32| (channel * u32::from(alpha.a) + 127) / 255;
         for word in &mut words {
-            let [a, r, g, b] = [*word >> 24, (*word >> 16) & 0xff, (*word >> 8) & 0xff, *word & 0xff];
+            let [a, r, g, b] = [
+                *word >> 24,
+                (*word >> 16) & 0xff,
+                (*word >> 8) & 0xff,
+                *word & 0xff,
+            ];
             *word = (scale(a) << 24) | (scale(r) << 16) | (scale(g) << 8) | scale(b);
         }
     }
@@ -1151,11 +1157,30 @@ mod original_alpha_tests {
     #[test]
     fn original_words_scale_premultiplied_channels_by_tint_alpha() {
         let opaque_white = [255u8, 255, 255, 255];
-        let half = Color { r: 255, g: 255, b: 255, a: 128 };
-        assert_eq!(original_argb32(&opaque_white, 1, 1, 1, 1, None), vec![0xffff_ffff]);
-        assert_eq!(original_argb32(&opaque_white, 1, 1, 1, 1, Some(half)), vec![0x8080_8080]);
+        let half = Color {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 128,
+        };
+        assert_eq!(
+            original_argb32(&opaque_white, 1, 1, 1, 1, None),
+            vec![0xffff_ffff]
+        );
+        assert_eq!(
+            original_argb32(&opaque_white, 1, 1, 1, 1, Some(half)),
+            vec![0x8080_8080]
+        );
         // Fully opaque tint is a no-op.
-        let full = Color { r: 0, g: 0, b: 0, a: 255 };
-        assert_eq!(original_argb32(&opaque_white, 1, 1, 1, 1, Some(full)), vec![0xffff_ffff]);
+        let full = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        };
+        assert_eq!(
+            original_argb32(&opaque_white, 1, 1, 1, 1, Some(full)),
+            vec![0xffff_ffff]
+        );
     }
 }

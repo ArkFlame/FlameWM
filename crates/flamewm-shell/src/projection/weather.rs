@@ -10,7 +10,7 @@ use flamewm_shell_core::weather::{
     TemperatureUnit, WeatherCondition, WeatherSettings, WeatherState,
 };
 pub use flamewm_shell_core::weather_view::{
-    WEATHER_DAY_ROWS, condition_label, place_name, popup_view, tray_view,
+    condition_label, place_name, popup_view, tray_view, WEATHER_DAY_ROWS,
 };
 
 /// Every condition, one icon node each (`tray-weather-<suffix>`, `weather-icon-<suffix>`).
@@ -162,10 +162,10 @@ pub fn project_weather_popup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flamewm_shell_core::weather_view::weekday_label;
     use flamewm_shell_core::weather::{
         DayForecast, WeatherError, WeatherLocation, WeatherSnapshot,
     };
+    use flamewm_shell_core::weather_view::weekday_label;
 
     fn berlin() -> WeatherLocation {
         WeatherLocation::new("Berlin", 52.52, 13.41, Some("Germany")).unwrap()

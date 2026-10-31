@@ -83,7 +83,8 @@ pub(crate) const ANIMATION_SPEED_STEP: f64 = 5.0;
 /// Must match the `.slider-track` width in ui/settings.css.
 pub(crate) const ANIMATION_SPEED_TRACK_WIDTH: f64 = 180.0;
 pub(crate) const ANIMATION_SPEED_THUMB: f64 = 15.0;
-pub(crate) const ANIMATION_SPEED_TRACK_TRAVEL: f64 = ANIMATION_SPEED_TRACK_WIDTH - ANIMATION_SPEED_THUMB;
+pub(crate) const ANIMATION_SPEED_TRACK_TRAVEL: f64 =
+    ANIMATION_SPEED_TRACK_WIDTH - ANIMATION_SPEED_THUMB;
 
 /// Maps a native slider value (track percent 0..=100) to `animationSpeed`
 /// hundredths in 25..=200, snapped to 5.
@@ -103,9 +104,8 @@ pub(crate) fn animation_speed_from_slider(text: &str) -> Result<i64, String> {
 }
 
 /// Surface glass steppers: action prefix and the percent key each one moves.
-pub(crate) const GLASS_STEP_KEYS: [(&str, &str); 1] = [
-    ("settings.surface-saturation.", "surfaceSaturationPercent"),
-];
+pub(crate) const GLASS_STEP_KEYS: [(&str, &str); 1] =
+    [("settings.surface-saturation.", "surfaceSaturationPercent")];
 
 pub(crate) fn step(value: &str) -> Option<i8> {
     match value {
@@ -114,4 +114,3 @@ pub(crate) fn step(value: &str) -> Option<i8> {
         _ => None,
     }
 }
-

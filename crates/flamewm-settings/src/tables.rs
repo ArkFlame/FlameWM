@@ -317,4 +317,3 @@ pub(crate) fn shortcut_label(owner: &str) -> String {
         .find(|row| row.action == owner)
         .map_or_else(|| owner.to_owned(), |row| row.label.to_owned())
 }
-

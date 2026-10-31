@@ -4,18 +4,18 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{Datelike, Local, Timelike};
-use flamewm_api::system::{MediaSnapshot, PlaybackState, ServiceAvailability, SystemAction};
 use flamewm_api::settings::SettingsSnapshot;
+use flamewm_api::system::{MediaSnapshot, PlaybackState, ServiceAvailability, SystemAction};
 use flamewm_api::weather::WeatherFeedSnapshot;
 use flamewm_api::{Point, Rect};
 use flamewm_desktop_core::sticky::Rgb;
+use flamewm_desktop_core::widget_grid::{self, Edges, GridMetrics, Placement, Span};
 use flamewm_desktop_core::widget_text::{
     CpuTimes, MAX_LINE_SPANS, MAX_TEMPLATE_CHARS, MAX_TEMPLATE_LINES, MemoryUsage, Placeholders,
     SpanStyle, WallTime, count_cpus, cpu_percent, display_text, estimate_text_width,
     expand_placeholders, fit_lines, format_date, format_gib, format_time, format_uptime,
     parse_cpu_times, parse_markup, parse_meminfo,
 };
-use flamewm_desktop_core::widget_grid::{self, Edges, GridMetrics, Placement, Span};
 use flamewm_desktop_core::widgets::{
     MAX_WIDGETS, OptionControl, TextAlign, Widget, WidgetKind, WidgetStore, move_widget_rect,
     palette_color,
@@ -380,7 +380,8 @@ impl WidgetState {
                 wall_clock_delay_ms(epoch_ms, rate == TickRate::Second).max(1),
             )
         });
-        self.wake.set([self.due, self.sample_due].into_iter().flatten().min());
+        self.wake
+            .set([self.due, self.sample_due].into_iter().flatten().min());
     }
 
     fn sample(&mut self) {
@@ -388,14 +389,22 @@ impl WidgetState {
         let custom = widgets
             .iter()
             .any(|widget| widget.kind == WidgetKind::Custom);
-        let network = widgets.iter().any(|widget| widget.kind == WidgetKind::Network);
+        let network = widgets
+            .iter()
+            .any(|widget| widget.kind == WidgetKind::Network);
         let cpu = custom
             || widgets.iter().any(|widget| {
-                matches!(widget.kind, WidgetKind::Cpu | WidgetKind::History | WidgetKind::Ring)
+                matches!(
+                    widget.kind,
+                    WidgetKind::Cpu | WidgetKind::History | WidgetKind::Ring
+                )
             });
         let memory = custom
             || widgets.iter().any(|widget| {
-                matches!(widget.kind, WidgetKind::Memory | WidgetKind::History | WidgetKind::Ring)
+                matches!(
+                    widget.kind,
+                    WidgetKind::Memory | WidgetKind::History | WidgetKind::Ring
+                )
             });
         self.samples.refresh(cpu, memory, network, custom);
         self.sample_due = Some(Instant::now() + SAMPLE_INTERVAL);
@@ -854,7 +863,10 @@ pub(crate) fn sync_widgets(
     // Wall time only reaches the document through time-showing widgets; without one, a
     // second-by-second clock must not force a sync.
     let needs_time = widgets.iter().any(|widget| {
-        matches!(widget.kind, WidgetKind::Clock | WidgetKind::Calendar | WidgetKind::Custom)
+        matches!(
+            widget.kind,
+            WidgetKind::Clock | WidgetKind::Calendar | WidgetKind::Custom
+        )
     });
     let mut key_placeholders = placeholders.clone();
     if !needs_time {
@@ -910,19 +922,10 @@ pub(crate) fn sync_widgets(
                 WidgetKind::Cpu | WidgetKind::Memory | WidgetKind::Ring
             ),
         )?;
-        document.visible(
-            &format!("{id}-history"),
-            widget.kind == WidgetKind::History,
-        )?;
-        document.visible(
-            &format!("{id}-network"),
-            widget.kind == WidgetKind::Network,
-        )?;
+        document.visible(&format!("{id}-history"), widget.kind == WidgetKind::History)?;
+        document.visible(&format!("{id}-network"), widget.kind == WidgetKind::Network)?;
         document.visible(&format!("{id}-media"), widget.kind == WidgetKind::Media)?;
-        document.visible(
-            &format!("{id}-weather"),
-            widget.kind == WidgetKind::Weather,
-        )?;
+        document.visible(&format!("{id}-weather"), widget.kind == WidgetKind::Weather)?;
         document.visible(
             &format!("{id}-calendar"),
             widget.kind == WidgetKind::Calendar,
@@ -1244,7 +1247,10 @@ fn sync_history(
         series.push((&samples.memory_history, widget.color("memoryColor")));
     }
     if widget.flag("showCpu") {
-        series.push((&samples.cpu_history, widget.color_or_accent("cpuColor", accent)));
+        series.push((
+            &samples.cpu_history,
+            widget.color_or_accent("cpuColor", accent),
+        ));
     }
     sync_graph(document, graph, slot, widget, "history", &series)
 }
@@ -1280,8 +1286,12 @@ fn sync_graph(
     series: &[(&VecDeque<u8>, Rgb)],
 ) -> Result<(), String> {
     let id = format!("widget-{}-{prefix}-image", slot + 1);
-    let width = (widget.rect.width as f32 - WIDGET_PADDING * 2.0).max(2.0).floor() as u32;
-    let height = (widget.rect.height as f32 - WIDGET_PADDING * 2.0).max(2.0).floor() as u32;
+    let width = (widget.rect.width as f32 - WIDGET_PADDING * 2.0)
+        .max(2.0)
+        .floor() as u32;
+    let height = (widget.rect.height as f32 - WIDGET_PADDING * 2.0)
+        .max(2.0)
+        .floor() as u32;
     document.size(&id, width as f32, height as f32)?;
     let key = GraphKey {
         prefix,
@@ -1346,7 +1356,10 @@ fn sync_weather(
         ellipsize(&view.location, 15.0, true, city_width),
     )?;
     document.text(&format!("{id}-weather-temp"), view.temperature.clone())?;
-    document.text(&format!("{id}-weather-condition"), view.condition_text.clone())?;
+    document.text(
+        &format!("{id}-weather-condition"),
+        view.condition_text.clone(),
+    )?;
     document.text(&format!("{id}-weather-range"), view.range.clone())?;
     document.foreground(&format!("{id}-weather-city"), text)?;
     document.foreground(&format!("{id}-weather-temp"), text)?;
@@ -1517,7 +1530,9 @@ fn sync_custom(
         })
         .fold(0.0_f32, f32::max);
     let size = if widest > inner_width {
-        (configured * inner_width / widest).floor().clamp(9.0, configured)
+        (configured * inner_width / widest)
+            .floor()
+            .clamp(9.0, configured)
     } else {
         configured
     };
@@ -1794,7 +1809,10 @@ pub(crate) fn place_config(
         let value = widget.value(spec.key);
         document.text(&format!("{row_id}-label"), spec.label.to_owned())?;
         document.text(&format!("{row_id}-value"), spec.label_for(value))?;
-        let is_color = matches!(spec.control, OptionControl::Color | OptionControl::AccentColor);
+        let is_color = matches!(
+            spec.control,
+            OptionControl::Color | OptionControl::AccentColor
+        );
         document.visible(&format!("{row_id}-swatch"), is_color)?;
         if is_color {
             let swatch = if value == flamewm_desktop_core::widgets::ACCENT_COLOR {
@@ -1907,7 +1925,10 @@ pub(crate) fn handle_action(
     if pointer_button(action) != PointerButton::Primary {
         return Ok(());
     }
-    let mode = match name.rsplit_once(".resize-").and_then(|(_, edge)| Edges::from_name(edge)) {
+    let mode = match name
+        .rsplit_once(".resize-")
+        .and_then(|(_, edge)| Edges::from_name(edge))
+    {
         Some(edges) => GestureMode::Resize(edges),
         None => GestureMode::Move,
     };
@@ -1941,14 +1962,20 @@ pub(crate) fn handle_action(
         }
         UiActionPhase::Motion => {
             // Coalesced: only the latest pointer position is applied, once per flush.
-            if state.widgets.gesture.is_some_and(|g| g.widget == widget.id && g.mode == mode) {
+            if state
+                .widgets
+                .gesture
+                .is_some_and(|g| g.widget == widget.id && g.mode == mode)
+            {
                 state.widgets.pending_pointer = Some((action.x, action.y));
             }
         }
         UiActionPhase::Release => {
             state.widgets.pending_pointer = None;
-            if let Some(gesture) =
-                state.widgets.gesture.filter(|g| g.widget == widget.id && g.mode == mode)
+            if let Some(gesture) = state
+                .widgets
+                .gesture
+                .filter(|g| g.widget == widget.id && g.mode == mode)
             {
                 drag_to(document, state, gesture, (action.x, action.y), true)?;
             }
@@ -2007,8 +2034,11 @@ fn drag_to(
                 state.widgets.store.drop_on_grid(id, rect.origin(), metrics);
             }
             GestureMode::Resize(edges) => {
-                if let Some((kind, current)) =
-                    state.widgets.store.get(id).and_then(|w| w.grid.map(|g| (w.kind, g)))
+                if let Some((kind, current)) = state
+                    .widgets
+                    .store
+                    .get(id)
+                    .and_then(|w| w.grid.map(|g| (w.kind, g)))
                 {
                     let want = widget_grid::edge_resize(kind, current, edges, rect, metrics);
                     state.widgets.store.place_nearest(id, want, metrics);
@@ -2038,7 +2068,12 @@ fn drag_to(
     let accent = projection_accent(state);
     sync_ghost(document, metrics, accent, ghost)?;
     // The dragged card fades and lifts once per gesture and restores on release.
-    if let Some(slot) = state.widgets.store.widgets().iter().position(|w| w.id == id)
+    if let Some(slot) = state
+        .widgets
+        .store
+        .widgets()
+        .iter()
+        .position(|w| w.id == id)
         && (!was_moved || release)
     {
         let node = format!("widget-{}", slot + 1);
@@ -2121,13 +2156,14 @@ fn handle_gallery(
     let Some(kind) = rest.strip_prefix("add.").and_then(WidgetKind::from_id) else {
         return Ok(());
     };
-    let (bounds, scale) = state.menu.as_ref().map_or(
-        (state.grid.work_area, state.grid.scale_percent),
-        |menu| {
-            let grid = crate::entry::grid_for_output(state, &menu.output);
-            (grid.work_area, grid.scale_percent)
-        },
-    );
+    let (bounds, scale) =
+        state
+            .menu
+            .as_ref()
+            .map_or((state.grid.work_area, state.grid.scale_percent), |menu| {
+                let grid = crate::entry::grid_for_output(state, &menu.output);
+                (grid.work_area, grid.scale_percent)
+            });
     let metrics = GridMetrics::for_work_area(bounds, i32::from(scale));
     if state.widgets.store.add_on_grid(kind, metrics).is_none() {
         return Ok(());
@@ -2163,12 +2199,13 @@ fn handle_config(
     let Some(id) = selected_widget(state) else {
         return Ok(());
     };
-    let Some(spec) = state
-        .widgets
-        .store
-        .get(id)
-        .and_then(|widget| widget.kind.visible_options(widget.stored_values()).get(row).copied())
-    else {
+    let Some(spec) = state.widgets.store.get(id).and_then(|widget| {
+        widget
+            .kind
+            .visible_options(widget.stored_values())
+            .get(row)
+            .copied()
+    }) else {
         return Ok(());
     };
     let Some(widget) = state.widgets.store.get_mut(id) else {
@@ -2279,13 +2316,28 @@ mod tests {
     fn sampler_widgets_arm_the_sample_timer_without_a_clock_tick() {
         let mut store = WidgetStore::default();
         store
-            .add(WidgetKind::Cpu, Rect { x: 0, y: 0, width: 1920, height: 1080 })
+            .add(
+                WidgetKind::Cpu,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 1920,
+                    height: 1080,
+                },
+            )
             .expect("cpu widget fits");
         let mut state = WidgetState::new(store, PathBuf::new());
         let now = Instant::now();
         state.arm(now);
-        assert_eq!(state.due, None, "a CPU widget must not force a per-second tick");
-        assert_eq!(state.sample_due, Some(now), "a CPU widget samples on the sample timer");
+        assert_eq!(
+            state.due, None,
+            "a CPU widget must not force a per-second tick"
+        );
+        assert_eq!(
+            state.sample_due,
+            Some(now),
+            "a CPU widget samples on the sample timer"
+        );
     }
 
     fn alpha_at(pixels: &[u8], size: u32, x: u32, y: u32) -> u8 {
@@ -2389,7 +2441,11 @@ mod tests {
         let reach = (size as f32 * 0.3) as u32;
         let index = ((center * size + center + reach) * 4) as usize;
         assert_eq!(pixels[index + 3], 255);
-        assert!(pixels[index] < 60 && pixels[index + 1] > 150, "{:?}", &pixels[index..index + 4]);
+        assert!(
+            pixels[index] < 60 && pixels[index + 1] > 150,
+            "{:?}",
+            &pixels[index..index + 4]
+        );
         // Nothing is drawn beyond the dial edge.
         assert_eq!(pixels[3], 0);
     }
@@ -2407,7 +2463,11 @@ mod tests {
         let index = ((center * size + center + reach) * 4) as usize;
         // The hand is under 1px wide, so the sampled row only partly covers it.
         assert!(pixels[index + 3] > 100);
-        assert!(pixels[index] > 200 && pixels[index + 1] < 60, "{:?}", &pixels[index..index + 4]);
+        assert!(
+            pixels[index] > 200 && pixels[index + 1] < 60,
+            "{:?}",
+            &pixels[index..index + 4]
+        );
     }
 
     #[test]
@@ -2447,13 +2507,22 @@ mod tests {
         let bounds = Rect::new(0, 0, 1000, 800);
         let original = Rect::new(100, 100, 200, 100);
         let right = Edges::from_name("e").expect("edge");
-        assert_eq!(edge_drag_rect(original, right, 50, 999, bounds), Rect::new(100, 100, 250, 100));
+        assert_eq!(
+            edge_drag_rect(original, right, 50, 999, bounds),
+            Rect::new(100, 100, 250, 100)
+        );
         let left = Edges::from_name("w").expect("edge");
-        assert_eq!(edge_drag_rect(original, left, 50, 0, bounds), Rect::new(150, 100, 150, 100));
+        assert_eq!(
+            edge_drag_rect(original, left, 50, 0, bounds),
+            Rect::new(150, 100, 150, 100)
+        );
         // Dragging a left edge past the right edge keeps one pixel instead of inverting.
         assert_eq!(edge_drag_rect(original, left, 900, 0, bounds).width, 1);
         let corner = Edges::from_name("nw").expect("edge");
-        assert_eq!(edge_drag_rect(original, corner, -20, -30, bounds), Rect::new(80, 70, 220, 130));
+        assert_eq!(
+            edge_drag_rect(original, corner, -20, -30, bounds),
+            Rect::new(80, 70, 220, 130)
+        );
     }
 
     fn settings_with(values: &[(&str, flamewm_api::settings::SettingValue)]) -> SettingsSnapshot {
@@ -2471,7 +2540,12 @@ mod tests {
         // Dark glass tint at the regular glass alpha, blurred at the 28 px default (70%).
         assert_eq!(
             surface.fill,
-            UiColor { r: 234, g: 244, b: 255, a: 31 }
+            UiColor {
+                r: 234,
+                g: 244,
+                b: 255,
+                a: 31
+            }
         );
         assert_eq!(surface.blur, Some(70));
         assert_eq!(surface.radius, 18.0);
@@ -2532,7 +2606,11 @@ mod tests {
         use flamewm_ui_x11::test_support::RecordingUiDoc;
         let mut widget = Widget::new(1, WidgetKind::History, Point::new(0, 0));
         widget.rect = Rect::new(0, 0, 300, 160);
-        let accent = Rgb { red: 9, green: 9, blue: 9 };
+        let accent = Rgb {
+            red: 9,
+            green: 9,
+            blue: 9,
+        };
         let mut samples = Samples::default();
         samples.cpu_history = VecDeque::from(vec![10, 20, 30]);
         let mut graph = None;
@@ -2558,7 +2636,11 @@ mod tests {
     fn drop_target_ghost_is_an_outline_without_fill() {
         use flamewm_ui_x11::test_support::RecordingUiDoc;
         let metrics = GridMetrics::for_work_area(Rect::new(0, 0, 1920, 1080), 100);
-        let accent = Rgb { red: 9, green: 9, blue: 9 };
+        let accent = Rgb {
+            red: 9,
+            green: 9,
+            blue: 9,
+        };
         let mut doc = RecordingUiDoc::default();
         let cell = Placement::left(1, 1, Span::SINGLE);
         sync_ghost(&mut doc, metrics, accent, Some((cell, true))).expect("ghost");
@@ -2572,7 +2654,11 @@ mod tests {
         let mut cpu = VecDeque::new();
         cpu.push_back(100u8);
         cpu.push_back(0u8);
-        let sky = Rgb { red: 1, green: 2, blue: 3 };
+        let sky = Rgb {
+            red: 1,
+            green: 2,
+            blue: 3,
+        };
         let pixels = history_pixels(8, 5, &[(&cpu, sky)]);
         assert_eq!(pixels.len(), 8 * 5 * 4);
         // History is right-aligned: the newest samples sit in the right column,
@@ -2610,8 +2696,14 @@ mod visibility_gate_tests {
 
     #[test]
     fn gate_suspends_only_on_obscure_and_resumes_only_on_uncover() {
-        assert_eq!(visibility_effect(false, true), Some(VisibilityEffect::Suspend));
-        assert_eq!(visibility_effect(true, false), Some(VisibilityEffect::Resume));
+        assert_eq!(
+            visibility_effect(false, true),
+            Some(VisibilityEffect::Suspend)
+        );
+        assert_eq!(
+            visibility_effect(true, false),
+            Some(VisibilityEffect::Resume)
+        );
         assert_eq!(visibility_effect(false, false), None);
         assert_eq!(visibility_effect(true, true), None);
     }

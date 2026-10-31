@@ -7,41 +7,41 @@ mod ark;
 mod download;
 mod hermes;
 mod openai;
-mod provider;
 mod process;
+mod provider;
 mod sha256;
 mod speech;
 mod sse;
 mod store;
 mod voice_setup;
 
-pub use download::{
-    check_pinned, default_models_dir, extract_zstd_tar, verify, verify_file, CurlFetcher,
-    DiskModelStore, Fetcher,
-};
-pub use process::{
-    default_config_path, expand, start_recording, ProcessRunner, Recording, SpeechConfig,
-    SystemRunner,
-};
 pub use ark::{
-    key_or_default, masked_key, validate_key, ARK_BASE_URL, DEFAULT_API_KEY, DEFAULT_MODEL,
-    FALLBACK_MODELS,
+    ARK_BASE_URL, DEFAULT_API_KEY, DEFAULT_MODEL, FALLBACK_MODELS, key_or_default, masked_key,
+    validate_key,
+};
+pub use download::{
+    CurlFetcher, DiskModelStore, Fetcher, check_pinned, default_models_dir, extract_zstd_tar,
+    verify, verify_file,
 };
 pub use hermes::PROXY_BASE_URL;
-pub use openai::{human_error, Endpoint, OpenAiClient, Turn, HISTORY_TURNS, SYSTEM_PROMPT};
-pub use provider::{endpoint, proxy_models, resolve, Provider, Selection};
+pub use openai::{Endpoint, HISTORY_TURNS, OpenAiClient, SYSTEM_PROMPT, Turn, human_error};
+pub use process::{
+    ProcessRunner, Recording, SpeechConfig, SystemRunner, default_config_path, expand,
+    start_recording,
+};
+pub use provider::{Provider, Selection, endpoint, proxy_models, resolve};
 pub use sha256::Sha256;
 pub use speech::{
-    encode_wav, tts_manifest, CommandSpeech, CommandTranscriber, ModelFile, ModelManifest,
-    ModelStore, Speech, Stopper, Transcriber, UnconfiguredModelStore, UnconfiguredSpeech,
-    UnconfiguredTranscriber, UNPINNED,
+    CommandSpeech, CommandTranscriber, ModelFile, ModelManifest, ModelStore, Speech, Stopper,
+    Transcriber, UNPINNED, UnconfiguredModelStore, UnconfiguredSpeech, UnconfiguredTranscriber,
+    encode_wav, tts_manifest,
 };
-pub use voice_setup::{apply_defaults, default_voice_dir, ready_model, setup_default, SETUP_BUSY};
-pub use store::{now_ms, ChatStore, Message, MsgState, Role, SessionState};
+pub use store::{ChatStore, Message, MsgState, Role, SessionState, now_ms};
+pub use voice_setup::{SETUP_BUSY, apply_defaults, default_voice_dir, ready_model, setup_default};
 
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Every failure the assistant core reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,7 +136,10 @@ pub(crate) mod test_support {
         serve_held(responses, Duration::ZERO)
     }
 
-    fn serve_held(responses: Vec<Vec<Vec<u8>>>, hold: Duration) -> (String, JoinHandle<Vec<String>>) {
+    fn serve_held(
+        responses: Vec<Vec<Vec<u8>>>,
+        hold: Duration,
+    ) -> (String, JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let url = format!("http://{}", listener.local_addr().expect("addr"));
         let handle = thread::spawn(move || {
@@ -168,7 +171,8 @@ pub(crate) mod test_support {
 
     /// An SSE stream: a head, then one piece per event.
     pub fn sse(events: &[&str]) -> Vec<Vec<u8>> {
-        let mut pieces = vec![b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n".to_vec()];
+        let mut pieces =
+            vec![b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n".to_vec()];
         pieces.extend(events.iter().map(|e| format!("data: {e}\n\n").into_bytes()));
         pieces
     }

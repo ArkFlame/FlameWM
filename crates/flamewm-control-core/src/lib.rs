@@ -439,9 +439,10 @@ impl Dispatcher {
             ControlRequest::GetWeatherFeed => {
                 ControlResponse::WeatherFeed(host.weather_feed_snapshot())
             }
-            ControlRequest::PublishWeatherFeed { payload } => {
-                ControlResponse::Changed(host.publish_weather_feed(payload).map_err(ControlError::from)?)
-            }
+            ControlRequest::PublishWeatherFeed { payload } => ControlResponse::Changed(
+                host.publish_weather_feed(payload)
+                    .map_err(ControlError::from)?,
+            ),
         };
         Ok(response)
     }

@@ -127,7 +127,11 @@ mod tests {
             let factor = scale_for_height(height);
             let edge = start_edge(factor);
             // The capsule is node_height square; its 1 px border sits outside the button.
-            assert_eq!(edge + 2.0 * NODE_BORDER, node_height(factor), "height {height}");
+            assert_eq!(
+                edge + 2.0 * NODE_BORDER,
+                node_height(factor),
+                "height {height}"
+            );
             assert!((edge - (f32::from(height) - 4.0 * NODE_BORDER)).abs() < 1e-3);
         }
     }
@@ -169,5 +173,6 @@ mod tests {
 #[cfg(test)]
 pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

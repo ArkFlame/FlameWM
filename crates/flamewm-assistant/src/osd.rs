@@ -61,7 +61,10 @@ impl Default for Osd {
 impl Osd {
     #[must_use]
     pub const fn new() -> Self {
-        Self { state: OsdState::Hidden, frame: 0 }
+        Self {
+            state: OsdState::Hidden,
+            frame: 0,
+        }
     }
 
     #[must_use]
@@ -122,9 +125,7 @@ impl Osd {
     pub fn view(&self) -> OsdFrame {
         let diameter = breath_diameter(self.frame);
         let (cx, cy, bubble) = match self.state {
-            OsdState::Hidden | OsdState::Listening => {
-                ((WIDTH / 2) as i32, 40, (35, 80))
-            }
+            OsdState::Hidden | OsdState::Listening => ((WIDTH / 2) as i32, 40, (35, 80)),
             OsdState::Working | OsdState::Speaking => (28, 28, (56, 18)),
         };
         let eye = eye_size(diameter);
@@ -137,10 +138,22 @@ impl Osd {
         };
         OsdFrame {
             visible: self.wants_timer(),
-            character: Rect { left: cx - diameter as i32 / 2, top: cy - diameter as i32 / 2, size: diameter },
+            character: Rect {
+                left: cx - diameter as i32 / 2,
+                top: cy - diameter as i32 / 2,
+                size: diameter,
+            },
             eyes: [
-                Rect { left: cx - eye_dx - eye as i32 / 2, top: cy - eye as i32 / 2, size: eye },
-                Rect { left: cx + eye_dx - eye as i32 / 2, top: cy - eye as i32 / 2, size: eye },
+                Rect {
+                    left: cx - eye_dx - eye as i32 / 2,
+                    top: cy - eye as i32 / 2,
+                    size: eye,
+                },
+                Rect {
+                    left: cx + eye_dx - eye as i32 / 2,
+                    top: cy - eye as i32 / 2,
+                    size: eye,
+                },
             ],
             bubble_left: bubble.0,
             bubble_top: bubble.1,
@@ -174,7 +187,11 @@ pub struct OsdFrame {
 pub fn breath_diameter(frame: u32) -> u32 {
     let half = BREATH_FRAMES / 2;
     let phase = frame % BREATH_FRAMES;
-    let t = if phase <= half { phase } else { BREATH_FRAMES - phase };
+    let t = if phase <= half {
+        phase
+    } else {
+        BREATH_FRAMES - phase
+    };
     BASE_DIAMETER + BREATH_AMPLITUDE * t / half
 }
 
@@ -193,7 +210,14 @@ pub fn paint(frame: &OsdFrame, doc: &mut impl UiDocumentAccess) -> Result<(), St
     }
     doc.position("bubble", frame.bubble_left as f32, frame.bubble_top as f32)?;
     doc.text("osd-text", frame.text.to_owned())?;
-    doc.text("osd-hint", if frame.hint.is_empty() { "\u{200b}".to_owned() } else { frame.hint.to_owned() })
+    doc.text(
+        "osd-hint",
+        if frame.hint.is_empty() {
+            "\u{200b}".to_owned()
+        } else {
+            frame.hint.to_owned()
+        },
+    )
 }
 
 #[cfg(test)]
@@ -251,7 +275,10 @@ mod tests {
     #[test]
     fn breath_is_a_bounded_triangle_wave() {
         assert_eq!(breath_diameter(0), BASE_DIAMETER);
-        assert_eq!(breath_diameter(BREATH_FRAMES / 2), BASE_DIAMETER + BREATH_AMPLITUDE);
+        assert_eq!(
+            breath_diameter(BREATH_FRAMES / 2),
+            BASE_DIAMETER + BREATH_AMPLITUDE
+        );
         assert_eq!(breath_diameter(BREATH_FRAMES), BASE_DIAMETER);
         let half = BREATH_FRAMES / 2;
         let rising: Vec<u32> = (0..=half).map(breath_diameter).collect();
@@ -277,7 +304,10 @@ mod tests {
         let mut osd = Osd::new();
         osd.show(OsdState::Listening);
         let listening = osd.view();
-        assert_eq!(listening.character.left + listening.character.size as i32 / 2, (WIDTH / 2) as i32);
+        assert_eq!(
+            listening.character.left + listening.character.size as i32 / 2,
+            (WIDTH / 2) as i32
+        );
         assert_eq!(listening.text, "I'm listening...");
         osd.show(OsdState::Working);
         let working = osd.view();

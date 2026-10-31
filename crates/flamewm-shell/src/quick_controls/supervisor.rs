@@ -408,7 +408,8 @@ mod tests {
     fn fake_child_nonzero_exit_is_nonfatal() {
         // `false` exits 1 immediately: poll reaps it and restarts.
         let mut sup = QuickControlSupervisor::with_max_restarts("false".to_owned(), 5);
-        sup.start_after_panel().expect("arm"); sup.ensure_child().expect("spawn false");
+        sup.start_after_panel().expect("arm");
+        sup.ensure_child().expect("spawn false");
         // Wait briefly for the trivial child to exit.
         for _ in 0..50 {
             if sup.poll().is_ok() && sup.restart_count() > 0 {
@@ -423,7 +424,8 @@ mod tests {
     #[test]
     fn restart_budget_is_bounded() {
         let mut sup = QuickControlSupervisor::with_max_restarts("false".to_owned(), 1);
-        sup.start_after_panel().expect("arm"); sup.ensure_child().expect("spawn");
+        sup.start_after_panel().expect("arm");
+        sup.ensure_child().expect("spawn");
         let mut exhausted = false;
         for _ in 0..400 {
             match sup.poll() {

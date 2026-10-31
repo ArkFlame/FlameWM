@@ -533,8 +533,7 @@ impl Drm {
                 .elements(&mut self.renderer, &state.cursor_status, state.pointer);
         // Same blurred desktop capture as the winit path, so DRM menus and titlebars match.
         let output_size = Size::<i32, Physical>::from((state.output_size.w, state.output_size.h));
-        if let Err(error) =
-            render::refresh_desktop_backdrop(state, &mut self.renderer, output_size)
+        if let Err(error) = render::refresh_desktop_backdrop(state, &mut self.renderer, output_size)
         {
             eprintln!("flamewm-wayland: desktop backdrop failed: {error}");
         }

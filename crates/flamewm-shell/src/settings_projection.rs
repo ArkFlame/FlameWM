@@ -1293,10 +1293,7 @@ mod tests {
         let set = snapshot_with("iconTheme", "ThemeX");
         assert_eq!(icon_theme_name(Some(&set)), "ThemeX");
         assert_eq!(icon_theme_name(None), "MacTahoe");
-        assert_eq!(
-            icon_theme_name(Some(&SettingsSnapshot::new(1))),
-            "MacTahoe"
-        );
+        assert_eq!(icon_theme_name(Some(&SettingsSnapshot::new(1))), "MacTahoe");
     }
 }
 

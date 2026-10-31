@@ -454,7 +454,10 @@ mod media_key_tests {
             .expect("dispatch");
         assert!(matches!(
             seen.borrow().as_slice(),
-            [SystemAction::SetVolume(AudioVolumeAction { percent: 100, .. })]
+            [SystemAction::SetVolume(AudioVolumeAction {
+                percent: 100,
+                ..
+            })]
         ));
     }
 
@@ -466,7 +469,10 @@ mod media_key_tests {
             .expect("dispatch");
         assert!(matches!(
             seen.borrow().as_slice(),
-            [SystemAction::SetVolume(AudioVolumeAction { percent: 150, .. })]
+            [SystemAction::SetVolume(AudioVolumeAction {
+                percent: 150,
+                ..
+            })]
         ));
     }
 

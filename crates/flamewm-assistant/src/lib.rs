@@ -7,9 +7,9 @@
 mod chat_header;
 mod instance;
 mod model;
-mod popover;
 pub mod osd;
 pub mod osd_host;
+mod popover;
 pub mod voice_background;
 /// Argument that runs the background voice setup instead of the window (see `voice_background`).
 pub const VOICE_SETUP_ARG: &str = "--voice-setup";
@@ -25,17 +25,18 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Arc;
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_assistant_core::{
-    apply_defaults, default_config_path, default_voice_dir, endpoint, expand, human_error, key_or_default, proxy_models,
-    now_ms, ready_model, resolve, start_recording, AssistantError, CancelToken, ChatStore, CommandSpeech, CommandTranscriber,
-    Message, MsgState, OpenAiClient, Provider, Recording, Role, Selection, SessionState, Speech, SpeechConfig, Stopper,
-    SystemRunner, Transcriber, Turn, FALLBACK_MODELS, HISTORY_TURNS,
+    AssistantError, CancelToken, ChatStore, CommandSpeech, CommandTranscriber, FALLBACK_MODELS,
+    HISTORY_TURNS, Message, MsgState, OpenAiClient, Provider, Recording, Role, Selection,
+    SessionState, Speech, SpeechConfig, Stopper, SystemRunner, Transcriber, Turn, apply_defaults,
+    default_config_path, default_voice_dir, endpoint, expand, human_error, key_or_default, now_ms,
+    proxy_models, ready_model, resolve, start_recording,
 };
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
@@ -152,7 +153,8 @@ struct Assistant {
 
 impl model::Pager for ChatStore {
     fn page(&mut self, before: Option<u64>, limit: usize) -> Result<Vec<Message>, String> {
-        self.load_page(before, limit).map_err(|error| error.to_string())
+        self.load_page(before, limit)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -170,7 +172,12 @@ fn fallback_models() -> Vec<String> {
 }
 
 impl Assistant {
-    fn new(state_dir: PathBuf, bus: Bus, theme: SettingsSnapshot, mut store: ChatStore) -> Result<Self, String> {
+    fn new(
+        state_dir: PathBuf,
+        bus: Bus,
+        theme: SettingsSnapshot,
+        mut store: ChatStore,
+    ) -> Result<Self, String> {
         let api_key = api_key_setting(&theme);
         let speech_in = flag(&theme, "assistant.speechToText");
         let speech_out = flag(&theme, "assistant.textToSpeech");
@@ -226,7 +233,9 @@ impl Assistant {
             Msg::Notice(text) => self.notice = text,
             Msg::Delta(text) => self.history.append_pending(&text),
             Msg::TurnDone(result, label) => self.finish_turn(result, label),
-            Msg::VoiceProgress(percent, label) => self.notice = voice_setup_ui::progress_notice(percent, &label),
+            Msg::VoiceProgress(percent, label) => {
+                self.notice = voice_setup_ui::progress_notice(percent, &label)
+            }
             Msg::VoiceSetup(result) => self.fetched(result),
             Msg::Heard(result) => self.heard(result),
             Msg::OsdClick => {
@@ -285,8 +294,14 @@ impl Assistant {
         rows[start..]
             .iter()
             .filter_map(|row| match row.role {
-                Role::User => Some(Turn { role: "user", content: row.text.clone() }),
-                Role::Assistant => Some(Turn { role: "assistant", content: row.text.clone() }),
+                Role::User => Some(Turn {
+                    role: "user",
+                    content: row.text.clone(),
+                }),
+                Role::Assistant => Some(Turn {
+                    role: "assistant",
+                    content: row.text.clone(),
+                }),
                 Role::SystemNote => None,
             })
             .collect()
@@ -309,7 +324,8 @@ impl Assistant {
 
     fn finish_turn(&mut self, result: Result<String, AssistantError>, label: &str) {
         self.working = false;
-        self.ticking.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.ticking
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         let partial = self.history.take_pending().unwrap_or_default();
         match result {
             Ok(text) => {
@@ -371,8 +387,14 @@ impl Assistant {
     /// saves it. Header rows do nothing.
     fn select_row(&mut self, slot: usize) {
         let rows = self.menu_rows();
-        let Some(MenuRow::Model { provider, id }) = rows.get(self.model_page * MODEL_ROWS + slot) else { return };
-        self.selection = Selection { provider: *provider, model: id.clone() };
+        let Some(MenuRow::Model { provider, id }) = rows.get(self.model_page * MODEL_ROWS + slot)
+        else {
+            return;
+        };
+        self.selection = Selection {
+            provider: *provider,
+            model: id.clone(),
+        };
         self.model_menu = false;
         let state = self.session_state();
         if let Err(error) = self.store.set_session(state) {
@@ -402,7 +424,10 @@ impl Assistant {
             return;
         }
         let state = self.session_state();
-        let cleared = self.store.clear().and_then(|()| self.store.set_session(state));
+        let cleared = self
+            .store
+            .clear()
+            .and_then(|()| self.store.set_session(state));
         match cleared {
             Ok(()) => {
                 self.history.clear();
@@ -450,7 +475,9 @@ impl Assistant {
         if self.downloading {
             return;
         }
-        let Some(cfg) = self.speech_config() else { return };
+        let Some(cfg) = self.speech_config() else {
+            return;
+        };
         if self.installed_model().is_none() {
             self.setup_voice();
             return;
@@ -473,7 +500,9 @@ impl Assistant {
     }
 
     fn transcribe(&mut self, samples: Vec<i16>) {
-        let Some(cfg) = self.speech_config() else { return };
+        let Some(cfg) = self.speech_config() else {
+            return;
+        };
         let Some(template) = cfg.transcribe.clone() else {
             self.notice = "Speech-to-text is not configured: set transcribe_command.".into();
             return;
@@ -486,7 +515,12 @@ impl Assistant {
         self.set_osd(OsdState::Working);
         let bus = self.bus.clone();
         thread::spawn(move || {
-            let mut stt = CommandTranscriber::new(Box::new(SystemRunner), &template, model, CancelToken::new());
+            let mut stt = CommandTranscriber::new(
+                Box::new(SystemRunner),
+                &template,
+                model,
+                CancelToken::new(),
+            );
             bus.send(Msg::Heard(stt.transcribe(&samples)));
         });
     }
@@ -506,7 +540,9 @@ impl Assistant {
 
     /// Speaks a reply. Downloads the TTS model first when it is missing.
     fn speak(&mut self, text: String) {
-        let Some(cfg) = self.speech_config() else { return };
+        let Some(cfg) = self.speech_config() else {
+            return;
+        };
         let Some(synth) = cfg.synthesize.clone() else {
             self.notice = "Text-to-speech is not configured: set synthesize_command.".into();
             return;
@@ -548,7 +584,8 @@ impl Assistant {
 
     fn sync_osd(&mut self) {
         let bus = self.bus.clone();
-        self.osd_process.sync(self.osd.state(), move || bus.send(Msg::OsdClick));
+        self.osd_process
+            .sync(self.osd.state(), move || bus.send(Msg::OsdClick));
     }
 
     fn fetched(&mut self, result: Result<PathBuf, AssistantError>) {
@@ -654,7 +691,9 @@ impl Assistant {
         }
         match event.action.as_str() {
             "assistant.powered" => {
-                let _ = std::process::Command::new("xdg-open").arg("https://ai.arkflame.com").spawn();
+                let _ = std::process::Command::new("xdg-open")
+                    .arg("https://ai.arkflame.com")
+                    .spawn();
             }
             "assistant.send" => self.submit(),
             "assistant.model-toggle" => self.toggle_model_menu(),
@@ -679,7 +718,8 @@ impl Assistant {
                         self.stop_speech();
                     }
                 } else {
-                    self.notice = "Text-to-speech is off. Enable it in Settings > Assistant.".into();
+                    self.notice =
+                        "Text-to-speech is off. Enable it in Settings > Assistant.".into();
                 }
             }
             "assistant.speak-stop" => self.stop_speech(),
@@ -816,7 +856,11 @@ impl Assistant {
         doc.visible("send", !self.working && !mic)?;
         doc.visible("stop", self.working)?;
         doc.visible("tts", self.speech_out)?;
-        let tts = if self.tts_on { rgba(accent(&self.theme), 255) } else { rgba(KEY_TINT, 36) };
+        let tts = if self.tts_on {
+            rgba(accent(&self.theme), 255)
+        } else {
+            rgba(KEY_TINT, 36)
+        };
         doc.background("tts", tts)?;
         doc.text("notice", or_blank(self.notice.clone()))
     }
@@ -829,7 +873,11 @@ fn centred(root: (u32, u32), size: u32, axis: usize) -> i32 {
 }
 
 fn or_blank(text: String) -> String {
-    if text.is_empty() { "\u{200b}".to_owned() } else { text }
+    if text.is_empty() {
+        "\u{200b}".to_owned()
+    } else {
+        text
+    }
 }
 
 fn flag(theme: &SettingsSnapshot, key: &str) -> bool {
@@ -851,7 +899,9 @@ fn pretty_model(id: &str) -> String {
         .filter(|word| !word.is_empty())
         .map(|word| {
             let mut chars = word.chars();
-            chars.next().map_or_else(String::new, |first| first.to_uppercase().chain(chars).collect())
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect()
+            })
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -870,9 +920,8 @@ fn model_label(id: &str) -> String {
 fn accent(theme: &SettingsSnapshot) -> u32 {
     match theme.values.get("accent") {
         Some(SettingValue::Rgb(rgb)) => rgb & 0x00ff_ffff,
-        Some(SettingValue::Text(hex)) => {
-            u32::from_str_radix(hex.trim_start_matches('#'), 16).map_or(ACCENT_RGB, |rgb| rgb & 0x00ff_ffff)
-        }
+        Some(SettingValue::Text(hex)) => u32::from_str_radix(hex.trim_start_matches('#'), 16)
+            .map_or(ACCENT_RGB, |rgb| rgb & 0x00ff_ffff),
         _ => ACCENT_RGB,
     }
 }
@@ -916,7 +965,9 @@ fn turn_job(bus: &Bus, selected: &Selection, ark_key: &str, turns: &[Turn], canc
     let ep = endpoint(used.provider, ark_key);
     let label = ep.label;
     let result = OpenAiClient::new(ep).and_then(|client| {
-        client.chat(&used.model, turns, cancel, &mut |delta| bus.send(Msg::Delta(delta.to_owned())))
+        client.chat(&used.model, turns, cancel, &mut |delta| {
+            bus.send(Msg::Delta(delta.to_owned()))
+        })
     });
     bus.send(Msg::TurnDone(result, label));
 }
@@ -938,8 +989,12 @@ fn drain(reader: &mut UnixStream) -> UiWakeDrain {
 
 fn nonblocking_pair() -> Result<(UnixStream, UnixStream), String> {
     let (reader, writer) = UnixStream::pair().map_err(|error| error.to_string())?;
-    reader.set_nonblocking(true).map_err(|error| error.to_string())?;
-    writer.set_nonblocking(true).map_err(|error| error.to_string())?;
+    reader
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
+    writer
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
     Ok((reader, writer))
 }
 
@@ -997,11 +1052,16 @@ fn show(state_dir: PathBuf, anchor: Option<popover::Anchor>) -> Result<(), Strin
     let store = ChatStore::open(&state_dir).map_err(|error| error.to_string())?;
 
     let root_size = flamewm_ui_x11::root_geometry().unwrap_or((1280, 800));
-    let window_height = anchor.map_or(HEIGHT, |anchor| HEIGHT.min(popover::max_height(root_size, anchor) as u32));
+    let window_height = anchor.map_or(HEIGHT, |anchor| {
+        HEIGHT.min(popover::max_height(root_size, anchor) as u32)
+    });
     model::set_window_height(window_height as usize);
     let (mut wake_reader, wake_writer) = nonblocking_pair()?;
     let (tx, rx) = mpsc::channel::<Msg>();
-    let bus = Bus { tx, wake: Arc::new(wake_writer) };
+    let bus = Bus {
+        tx,
+        wake: Arc::new(wake_writer),
+    };
     let app = Assistant::new(state_dir, bus, theme, store)?;
     app.paint(&mut document)?;
 
@@ -1058,27 +1118,23 @@ fn show(state_dir: PathBuf, anchor: Option<popover::Anchor>) -> Result<(), Strin
         move || drain(&mut wake_reader),
         None,
         press_watch,
-        move |press: &RawPress, _doc: &mut flamewm_ui_x11::UiDocumentView<'_>| {
-            match popover_rects {
-                Some(rects) if popover::is_outside(press, &rects) => {
-                    Err(popover::DISMISSED.to_owned())
-                }
-                _ => Ok(()),
-            }
+        move |press: &RawPress, _doc: &mut flamewm_ui_x11::UiDocumentView<'_>| match popover_rects {
+            Some(rects) if popover::is_outside(press, &rects) => Err(popover::DISMISSED.to_owned()),
+            _ => Ok(()),
         },
         move |event, doc| {
             let mut app = event_app.borrow_mut();
             match event {
                 UiControllerEvent::Key(key)
-                    if popover_open
-                        && key.phase == UiKeyPhase::Press
-                        && key.key == "Escape" =>
+                    if popover_open && key.phase == UiKeyPhase::Press && key.key == "Escape" =>
                 {
                     return Err(popover::DISMISSED.to_owned());
                 }
                 UiControllerEvent::Action(action) => app.action(action),
                 UiControllerEvent::Key(key) => app.key(key),
-                UiControllerEvent::Drag(_) | UiControllerEvent::Resized { .. } | UiControllerEvent::Visibility { .. } => {}
+                UiControllerEvent::Drag(_)
+                | UiControllerEvent::Resized { .. }
+                | UiControllerEvent::Visibility { .. } => {}
             }
             app.paint(doc)
         },
@@ -1160,13 +1216,21 @@ mod tests {
     fn api_key_comes_from_settings_or_the_public_default() {
         let mut theme = SettingsSnapshot::new(1);
         assert_eq!(api_key_setting(&theme), DEFAULT_API_KEY_FOR_TESTS);
-        theme.values.insert("assistant.apiKey".into(), SettingValue::Text("   ".into()));
+        theme
+            .values
+            .insert("assistant.apiKey".into(), SettingValue::Text("   ".into()));
         assert_eq!(api_key_setting(&theme), DEFAULT_API_KEY_FOR_TESTS);
-        theme.values.insert("assistant.apiKey".into(), SettingValue::Text("ark_mine".into()));
+        theme.values.insert(
+            "assistant.apiKey".into(),
+            SettingValue::Text("ark_mine".into()),
+        );
         assert_eq!(api_key_setting(&theme), "ark_mine");
         // A retired Hermes URL setting is never read as a key.
         let mut legacy = SettingsSnapshot::new(1);
-        legacy.values.insert("assistant.hermesUrl".into(), SettingValue::Text("http://127.0.0.1:8642".into()));
+        legacy.values.insert(
+            "assistant.hermesUrl".into(),
+            SettingValue::Text("http://127.0.0.1:8642".into()),
+        );
         assert_eq!(api_key_setting(&legacy), DEFAULT_API_KEY_FOR_TESTS);
     }
 
@@ -1176,7 +1240,9 @@ mod tests {
     fn speech_flags_default_off() {
         let mut theme = SettingsSnapshot::new(1);
         assert!(!flag(&theme, "assistant.speechToText"));
-        theme.values.insert("assistant.speechToText".into(), SettingValue::Boolean(true));
+        theme
+            .values
+            .insert("assistant.speechToText".into(), SettingValue::Boolean(true));
         assert!(flag(&theme, "assistant.speechToText"));
         assert!(!flag(&theme, "assistant.textToSpeech"));
     }
@@ -1185,7 +1251,9 @@ mod tests {
     fn accent_follows_the_settings_key() {
         let mut theme = SettingsSnapshot::new(1);
         assert_eq!(accent(&theme), ACCENT_RGB);
-        theme.values.insert("accent".into(), SettingValue::Rgb(0x00ef_4048));
+        theme
+            .values
+            .insert("accent".into(), SettingValue::Rgb(0x00ef_4048));
         assert_eq!(accent(&theme), 0x00ef_4048);
     }
 
@@ -1198,7 +1266,10 @@ mod tests {
     #[test]
     fn accent_reads_the_settings_hex_text() {
         let mut theme = SettingsSnapshot::new(1);
-        theme.values.insert("accent".to_owned(), SettingValue::Text("#EF4048".to_owned()));
+        theme.values.insert(
+            "accent".to_owned(),
+            SettingValue::Text("#EF4048".to_owned()),
+        );
         assert_eq!(accent(&theme), 0x00ef_4048);
     }
 
@@ -1211,7 +1282,10 @@ mod tests {
     #[test]
     fn model_label_and_fit_are_short_and_stable() {
         assert_eq!(model_label("pro"), "pro");
-        assert_eq!(model_label("org/long-model-name-here-x"), "long-model-name...");
+        assert_eq!(
+            model_label("org/long-model-name-here-x"),
+            "long-model-name..."
+        );
     }
 
     #[test]

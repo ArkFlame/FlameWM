@@ -140,7 +140,10 @@ fn fill_clipped_cpu<B: PixelBackend + ?Sized>(
     if w == 0 || h == 0 {
         return Ok(());
     }
-    if x < 0 || y < 0 || i64::from(x) + i64::from(w) > i64::from(width) || i64::from(y) + i64::from(h) > i64::from(height)
+    if x < 0
+        || y < 0
+        || i64::from(x) + i64::from(w) > i64::from(width)
+        || i64::from(y) + i64::from(h) > i64::from(height)
     {
         return Err("fill clip leaves the frame".to_owned());
     }
@@ -206,7 +209,10 @@ pub fn backdrop_blur_cpu<B: PixelBackend + ?Sized>(
     if w == 0 || h == 0 || radius <= 0.0 {
         return Ok(());
     }
-    if x < 0 || y < 0 || i64::from(x) + i64::from(w) > i64::from(width) || i64::from(y) + i64::from(h) > i64::from(height)
+    if x < 0
+        || y < 0
+        || i64::from(x) + i64::from(w) > i64::from(width)
+        || i64::from(y) + i64::from(h) > i64::from(height)
     {
         return Err("backdrop clip leaves the frame".to_owned());
     }
@@ -345,9 +351,9 @@ fn blend_mask_span(dst: &mut [u8], mask: &[u8], color: [u8; 4]) {
             _ => {
                 let inverse = 255 - a;
                 for channel in 0..3 {
-                    pixel[channel] = div255(
-                        u32::from(color[channel]) * a + u32::from(pixel[channel]) * inverse,
-                    ) as u8;
+                    pixel[channel] =
+                        div255(u32::from(color[channel]) * a + u32::from(pixel[channel]) * inverse)
+                            as u8;
                 }
                 pixel[3] = (a + div255(u32::from(pixel[3]) * inverse)) as u8;
             }
@@ -432,7 +438,16 @@ pub trait PixelBackend {
                     node,
                     corner,
                     radius,
-                } => backdrop_blur_cpu(self, &mut scratch, width, height, clip, node, corner, radius)?,
+                } => backdrop_blur_cpu(
+                    self,
+                    &mut scratch,
+                    width,
+                    height,
+                    clip,
+                    node,
+                    corner,
+                    radius,
+                )?,
                 blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
                     composite_cpu(&mut scratch, width, height, blend)?;
                 }
@@ -449,19 +464,46 @@ mod tests {
 
     #[test]
     fn setting_values_parse_case_insensitively_and_default_to_cpu() {
-        assert_eq!(RenderAcceleration::from_setting("GPU"), RenderAcceleration::Gpu);
-        assert_eq!(RenderAcceleration::from_setting(" gpu "), RenderAcceleration::Gpu);
-        assert_eq!(RenderAcceleration::from_setting("cpu"), RenderAcceleration::Cpu);
-        assert_eq!(RenderAcceleration::from_setting("vulkan"), RenderAcceleration::Cpu);
+        assert_eq!(
+            RenderAcceleration::from_setting("GPU"),
+            RenderAcceleration::Gpu
+        );
+        assert_eq!(
+            RenderAcceleration::from_setting(" gpu "),
+            RenderAcceleration::Gpu
+        );
+        assert_eq!(
+            RenderAcceleration::from_setting("cpu"),
+            RenderAcceleration::Cpu
+        );
+        assert_eq!(
+            RenderAcceleration::from_setting("vulkan"),
+            RenderAcceleration::Cpu
+        );
         assert_eq!(RenderAcceleration::Gpu.as_setting(), "gpu");
     }
 
     #[test]
     fn radius_is_clamped_and_stroke_inset_shrinks_the_corner() {
-        let rect = RoundedRect { x: 2, y: 3, width: 10, height: 6, radius: 9 };
+        let rect = RoundedRect {
+            x: 2,
+            y: 3,
+            width: 10,
+            height: 6,
+            radius: 9,
+        };
         assert_eq!(rect.normalized().radius, 3);
         let inner = rect.normalized().inset(1);
-        assert_eq!(inner, RoundedRect { x: 3, y: 4, width: 8, height: 4, radius: 2 });
+        assert_eq!(
+            inner,
+            RoundedRect {
+                x: 3,
+                y: 4,
+                width: 8,
+                height: 4,
+                radius: 2
+            }
+        );
     }
 
     /// CPU-only backend: the default `paint_batch` runs its blend ops through `composite_cpu`.
@@ -498,17 +540,30 @@ mod tests {
             mask: &[255, 128],
             color: [200, 0, 0, 255],
         };
-        Cpu.paint_batch(&mut frame, 3, 1, &[op]).expect("mask blends");
+        Cpu.paint_batch(&mut frame, 3, 1, &[op])
+            .expect("mask blends");
         assert_eq!(&frame[0..4], &[150, 50, 50, 255]);
         assert_eq!(&frame[4..], &[100, 100, 100, 255, 100, 100, 100, 255]);
     }
 
     /// The float rule the integer spans replaced, per pixel.
-    fn float_composite(pixels: &mut [u8], width: u32, op: PixelOp<'_>, x: i32, y: i32, rect_w: u32, rect_h: u32) {
+    fn float_composite(
+        pixels: &mut [u8],
+        width: u32,
+        op: PixelOp<'_>,
+        x: i32,
+        y: i32,
+        rect_w: u32,
+        rect_h: u32,
+    ) {
         for row in 0..rect_h {
             for col in 0..rect_w {
                 let (fx, fy) = (x + col as i32, y + row as i32);
-                if fx < 0 || fy < 0 || fx >= width as i32 || fy >= (pixels.len() / 4 / width as usize) as i32 {
+                if fx < 0
+                    || fy < 0
+                    || fx >= width as i32
+                    || fy >= (pixels.len() / 4 / width as usize) as i32
+                {
                     continue;
                 }
                 let s = (row * rect_w + col) as usize;
@@ -518,7 +573,8 @@ mod tests {
                     PixelOp::BlendMask { mask, color, .. } => {
                         let a = f32::from(color[3]) * f32::from(mask[s]) / 65_025.0;
                         for c in 0..3 {
-                            dst[c] = (f32::from(color[c]) * a + f32::from(dst[c]) * (1.0 - a)).round() as u8;
+                            dst[c] = (f32::from(color[c]) * a + f32::from(dst[c]) * (1.0 - a))
+                                .round() as u8;
                         }
                         dst[3] = (a * 255.0 + f32::from(dst[3]) * (1.0 - a)).round() as u8;
                     }
@@ -526,7 +582,8 @@ mod tests {
                         let src = &rgba[s * 4..s * 4 + 4];
                         let a = f32::from(src[3]) / 255.0;
                         for c in 0..3 {
-                            dst[c] = (f32::from(src[c]) + f32::from(dst[c]) * (1.0 - a)).round() as u8;
+                            dst[c] =
+                                (f32::from(src[c]) + f32::from(dst[c]) * (1.0 - a)).round() as u8;
                         }
                         dst[3] = (f32::from(src[3]) + f32::from(dst[3]) * (1.0 - a)).round() as u8;
                     }
@@ -539,24 +596,44 @@ mod tests {
     #[test]
     fn integer_blend_spans_stay_within_one_level_of_the_float_rule() {
         let (width, height) = (23_u32, 17_u32);
-        let base: Vec<u8> = (0..width * height * 4).map(|i| (i * 37 % 256) as u8).collect();
+        let base: Vec<u8> = (0..width * height * 4)
+            .map(|i| (i * 37 % 256) as u8)
+            .collect();
         let mask: Vec<u8> = (0..12 * 9).map(|i| (i * 29 % 256) as u8).collect();
-        let rgba: Vec<u8> = (0..12 * 9).flat_map(|i| {
-            let a = (i * 53 % 256) as u8;
-            [a / 2, (a / 3) , (a / 5), a]
-        }).collect();
+        let rgba: Vec<u8> = (0..12 * 9)
+            .flat_map(|i| {
+                let a = (i * 53 % 256) as u8;
+                [a / 2, (a / 3), (a / 5), a]
+            })
+            .collect();
         for (x, y) in [(-4, -3), (0, 0), (15, 10), (20, 14), (-20, 5)] {
             for color in [[200, 10, 90, 255], [30, 200, 60, 128], [0, 0, 0, 1]] {
-                let op = PixelOp::BlendMask { x, y, width: 12, height: 9, mask: &mask, color };
+                let op = PixelOp::BlendMask {
+                    x,
+                    y,
+                    width: 12,
+                    height: 9,
+                    mask: &mask,
+                    color,
+                };
                 let mut got = base.clone();
                 composite_cpu(&mut got, width, height, op).expect("mask");
                 let mut want = base.clone();
                 float_composite(&mut want, width, op, x, y, 12, 9);
                 for (g, w) in got.iter().zip(&want) {
-                    assert!(g.abs_diff(*w) <= 1, "mask at {x},{y} colour {color:?}: {g} vs {w}");
+                    assert!(
+                        g.abs_diff(*w) <= 1,
+                        "mask at {x},{y} colour {color:?}: {g} vs {w}"
+                    );
                 }
             }
-            let op = PixelOp::BlendImage { x, y, width: 12, height: 9, rgba: &rgba };
+            let op = PixelOp::BlendImage {
+                x,
+                y,
+                width: 12,
+                height: 9,
+                rgba: &rgba,
+            };
             let mut got = base.clone();
             composite_cpu(&mut got, width, height, op).expect("image");
             let mut want = base.clone();
@@ -577,7 +654,8 @@ mod tests {
             height: 1,
             rgba: &[128, 0, 0, 128],
         };
-        Cpu.paint_batch(&mut frame, 2, 1, &[op]).expect("image blends");
+        Cpu.paint_batch(&mut frame, 2, 1, &[op])
+            .expect("image blends");
         assert_eq!(&frame[0..4], &[128, 0, 0, 255]);
         assert_eq!(&frame[4..], &[0, 0, 0, 255]);
     }
@@ -587,7 +665,13 @@ mod tests {
         let mut frame = [9_u8; 8];
         let ops = [
             PixelOp::FillRoundedRect {
-                outer: RoundedRect { x: 0, y: 0, width: 2, height: 1, radius: 0 },
+                outer: RoundedRect {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 1,
+                    radius: 0,
+                },
                 hole: None,
                 color: [1, 2, 3, 255],
             },
@@ -601,6 +685,9 @@ mod tests {
             },
         ];
         assert!(Cpu.paint_batch(&mut frame, 2, 1, &ops).is_err());
-        assert_eq!(frame, [9_u8; 8], "an error must not commit the earlier fill");
+        assert_eq!(
+            frame, [9_u8; 8],
+            "an error must not commit the earlier fill"
+        );
     }
 }

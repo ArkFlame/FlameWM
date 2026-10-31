@@ -2,8 +2,7 @@ use flamewm_session_core::cursor_theme_reload;
 
 #[test]
 fn cursor_reload_only_when_resolved_theme_changes() {
-    let root =
-        std::env::temp_dir().join(format!("flamewm-settings-cursor-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("flamewm-settings-cursor-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("Custom").join("cursors")).expect("theme");
     let search = root.display().to_string();

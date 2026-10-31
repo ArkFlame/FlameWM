@@ -1041,7 +1041,9 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
             match event {
                 UiControllerEvent::Action(action) => app.action(action, doc),
                 UiControllerEvent::Key(key) => app.key(key, doc),
-                UiControllerEvent::Resized { .. } | UiControllerEvent::Drag(_) | UiControllerEvent::Visibility { .. } => Ok(()),
+                UiControllerEvent::Resized { .. }
+                | UiControllerEvent::Drag(_)
+                | UiControllerEvent::Visibility { .. } => Ok(()),
             }
         },
         move |doc| {
@@ -1071,7 +1073,10 @@ mod tests {
     fn palette_accent_follows_the_settings_accent_key() {
         let mut theme = SettingsSnapshot::new(1);
         assert_eq!(Palette::for_theme(&theme).accent, ACCENT_RGB);
-        theme.values.insert("accent".to_owned(), SettingValue::Text("#EF4048".to_owned()));
+        theme.values.insert(
+            "accent".to_owned(),
+            SettingValue::Text("#EF4048".to_owned()),
+        );
         assert_eq!(Palette::for_theme(&theme).accent, 0x00ef_4048);
     }
 

@@ -168,7 +168,9 @@ fn handle_call<E: EnginePorts>(
     signals.extend(shortcut_change_signal(&shortcut_request, || {
         host.shortcut_snapshot().revision
     }));
-    if let (ControlRequest::PublishWeatherFeed { .. }, true) = (&shortcut_request, published_changed) {
+    if let (ControlRequest::PublishWeatherFeed { .. }, true) =
+        (&shortcut_request, published_changed)
+    {
         signals.push(ControlSignal::WeatherFeedChanged {
             snapshot: host.weather_feed_snapshot(),
         });

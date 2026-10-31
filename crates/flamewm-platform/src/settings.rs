@@ -573,7 +573,9 @@ impl ProductSettings {
         validate_lock_image_path(&self.lock_background_image, "lockBackgroundImage")?;
         validate_lock_image_path(&self.avatar_image, "avatarImage")?;
         validate_terminal_program(&self.default_terminal)?;
-        if let Some(message) = flamewm_api::settings::assistant_api_key_error(&self.assistant_api_key) {
+        if let Some(message) =
+            flamewm_api::settings::assistant_api_key_error(&self.assistant_api_key)
+        {
             return invalid(message);
         }
         if !matches!(self.weather_units.as_str(), "celsius" | "fahrenheit") {

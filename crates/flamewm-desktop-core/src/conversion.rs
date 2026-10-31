@@ -378,7 +378,16 @@ fn media_codec_args(format: &str) -> &'static [&'static str] {
         "aiff" => &["-vn", "-c:a", "pcm_s16be"],
         "wma" => &["-vn", "-c:a", "wmav2"],
         "mp4" | "mov" | "mkv" => &["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"],
-        "webm" => &["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "34", "-c:a", "libopus"],
+        "webm" => &[
+            "-c:v",
+            "libvpx-vp9",
+            "-b:v",
+            "0",
+            "-crf",
+            "34",
+            "-c:a",
+            "libopus",
+        ],
         "avi" => &["-c:v", "mpeg4", "-q:v", "4", "-c:a", "libmp3lame"],
         "wmv" => &["-c:v", "wmv2", "-c:a", "wmav2"],
         "gif" => &["-an", "-vf", "fps=12,scale=480:-2:flags=lanczos"],
@@ -751,18 +760,8 @@ impl Tool {
             Self::AudioFirst30 => &["-t", "30"],
             Self::AudioMono => &["-ac", "1"],
             Self::VideoCompress => &[
-                "-c:v",
-                "libx264",
-                "-crf",
-                "28",
-                "-preset",
-                "veryfast",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
+                "-c:v", "libx264", "-crf", "28", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "128k",
             ],
             Self::VideoMute => &["-an", "-c:v", "copy"],
             Self::VideoFirst10 => &["-t", "10"],
@@ -831,7 +830,12 @@ pub fn offered_tools(path: &Path) -> Vec<Tool> {
 }
 
 /// Output name for a tool: `stem<suffix>.ext`, then numbered on collision.
-fn tool_destination(source: &Path, suffix: &str, extension: &str, attempt: u32) -> Result<PathBuf, String> {
+fn tool_destination(
+    source: &Path,
+    suffix: &str,
+    extension: &str,
+    attempt: u32,
+) -> Result<PathBuf, String> {
     let parent = source.parent().ok_or("source has no parent directory")?;
     let stem = source
         .file_stem()
@@ -894,7 +898,11 @@ fn extract_archive(source: &Path, directory: &Path) -> Result<PathBuf, String> {
     let mut command = Command::new(program);
     command.stdin(std::process::Stdio::null());
     if provider == "unzip" {
-        command.args(["-q", "-n"]).arg(source).arg("-d").arg(&destination);
+        command
+            .args(["-q", "-n"])
+            .arg(source)
+            .arg("-d")
+            .arg(&destination);
     } else {
         command
             .args(["-xzf"])
@@ -903,14 +911,13 @@ fn extract_archive(source: &Path, directory: &Path) -> Result<PathBuf, String> {
             .arg("-C")
             .arg(&destination);
     }
-    let outcome = wait_for_converter_with_timeout(command, MEDIA_TIMEOUT)
-        .and_then(|status| {
-            if status.success() {
-                Ok(())
-            } else {
-                Err(format!("{provider} extract failed: {status}"))
-            }
-        });
+    let outcome = wait_for_converter_with_timeout(command, MEDIA_TIMEOUT).and_then(|status| {
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("{provider} extract failed: {status}"))
+        }
+    });
     match outcome {
         Ok(()) => Ok(destination),
         Err(error) => {
@@ -953,7 +960,8 @@ pub fn run_tool(source: &Path, tool: Tool) -> Result<PathBuf, String> {
         };
         match tool.provider() {
             "sha256sum" => {
-                let output = fs::File::create(&temp).map_err(|err| format!("tool output: {err}"))?;
+                let output =
+                    fs::File::create(&temp).map_err(|err| format!("tool output: {err}"))?;
                 let name = source.file_name().ok_or("source has no file name")?;
                 let status = wait_for_converter_with_timeout(
                     {
@@ -994,7 +1002,8 @@ pub fn run_tool(source: &Path, tool: Tool) -> Result<PathBuf, String> {
                 }
             }
             "ffmpeg" => {
-                let mut command = Command::new(available_program("ffmpeg").ok_or("missing ffmpeg")?);
+                let mut command =
+                    Command::new(available_program("ffmpeg").ok_or("missing ffmpeg")?);
                 command
                     .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"])
                     .arg(source)
@@ -1054,7 +1063,7 @@ pub fn run_tool(source: &Path, tool: Tool) -> Result<PathBuf, String> {
 mod tests {
     use super::*;
     /// Tests that take conversion slots share one global budget; serialise them.
-        pub(super) static SLOT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(super) static SLOT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
     #[test]
     fn same_format_is_not_offered_and_source_detection_is_case_insensitive() {
         let formats = offered_formats(Path::new("A.PNG"));
@@ -1152,8 +1161,8 @@ mod document_format_contracts {
 
 #[cfg(test)]
 mod media_format_contracts {
-    use super::*;
     use super::tests::SLOT_TESTS;
+    use super::*;
     #[test]
     fn audio_and_video_targets_exclude_the_source_and_fit_eight_slots() {
         for source in AUDIO_SOURCES.iter().chain(VIDEO_SOURCES.iter()) {
@@ -1224,7 +1233,9 @@ mod media_format_contracts {
         ] {
             assert!(!tool.label().is_empty());
         }
-        assert!(offered_tools(Path::new("folder")).is_empty() || available_program("zip").is_some());
+        assert!(
+            offered_tools(Path::new("folder")).is_empty() || available_program("zip").is_some()
+        );
         assert!(!offered_tools(Path::new("notes.txt")).contains(&Tool::AudioMono));
     }
     #[test]
@@ -1271,7 +1282,10 @@ mod media_format_contracts {
         let zipped = run_tool(&text, Tool::Zip).expect("zip tool");
         let folder = run_tool(&zipped, Tool::Extract).expect("extract tool");
         assert_eq!(folder, dir.join("notes (extracted)"));
-        assert_eq!(fs::read_to_string(folder.join("notes.txt")).expect("extracted"), "hello");
+        assert_eq!(
+            fs::read_to_string(folder.join("notes.txt")).expect("extracted"),
+            "hello"
+        );
         assert!(zipped.is_file(), "archive must survive");
         let again = run_tool(&zipped, Tool::Extract).expect("second extract");
         assert_eq!(again, dir.join("notes (extracted) 2"));
@@ -1291,7 +1305,10 @@ mod media_format_contracts {
         let result = wait_for_converter_with_timeout(sleeper, Duration::from_secs(30));
         canceller.join().expect("canceller thread");
         assert_eq!(result.unwrap_err(), "conversion cancelled");
-        assert!(started.elapsed() < Duration::from_secs(4), "cancel must not wait for the child");
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "cancel must not wait for the child"
+        );
         let quick = Command::new("true");
         let later = wait_for_converter_with_timeout(quick, Duration::from_secs(5));
         assert!(later.expect("job after cancel runs").success());
@@ -1333,7 +1350,11 @@ mod media_format_contracts {
         fs::write(&text, "hello").expect("write text");
         let archive = run_tool(&text, Tool::TarGz).expect("tar tool");
         assert_eq!(archive, dir.join("notes (archive).tar.gz"));
-        let listing = Command::new("tar").arg("-tzf").arg(&archive).output().expect("tar lists");
+        let listing = Command::new("tar")
+            .arg("-tzf")
+            .arg(&archive)
+            .output()
+            .expect("tar lists");
         assert!(listing.status.success());
         assert!(String::from_utf8_lossy(&listing.stdout).contains("notes.txt"));
         assert!(text.is_file(), "original must survive");

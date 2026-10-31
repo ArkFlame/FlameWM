@@ -9,7 +9,11 @@ pub const ZOOM_STEP: f64 = 1.25;
 /// Displayed size of a `w`x`h` image at `zoom`. Rounded, never zero.
 #[must_use]
 pub fn display_size(w: u32, h: u32, zoom: f64) -> (u32, u32) {
-    let scale = |v: u32| (f64::from(v) * zoom).round().clamp(1.0, f64::from(u32::MAX)) as u32;
+    let scale = |v: u32| {
+        (f64::from(v) * zoom)
+            .round()
+            .clamp(1.0, f64::from(u32::MAX)) as u32
+    };
     (scale(w), scale(h))
 }
 
@@ -51,7 +55,11 @@ struct Axis {
 fn axis(stage: u32, displayed: u32, offset: i64) -> Axis {
     let (s, d) = (i64::from(stage.max(1)), i64::from(displayed.max(1)));
     // Smaller than the stage: centred. Larger: the offset may only range over [s - d, 0].
-    let offset = if d <= s { (s - d) / 2 } else { offset.clamp(s - d, 0) };
+    let offset = if d <= s {
+        (s - d) / 2
+    } else {
+        offset.clamp(s - d, 0)
+    };
     let src = (-offset).max(0);
     let at = offset.max(0);
     Axis {

@@ -471,7 +471,8 @@ mod image_replace_tests {
         doc.set_group_opacity("icon", 0.5).expect("group opacity");
         let layout =
             crate::layout::LayoutEngine::compute(&doc, 50.0, 50.0, InteractionState::default());
-        let commands = crate::paint::build_paint_commands(&doc, &layout, InteractionState::default());
+        let commands =
+            crate::paint::build_paint_commands(&doc, &layout, InteractionState::default());
         let tint = commands
             .iter()
             .find_map(|c| match c {

@@ -11,8 +11,7 @@ use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 use crate::start::{StartCategory, PRESENTATION_CATEGORIES};
 use crate::taskbar::workspaces::{
     cell_left, pager_cell, pager_columns, pager_width, project as project_workspaces,
-    WorkspaceView, PAGER_CELLS, PAGER_CELL_GAP, PAGER_CELL_HEIGHT, PAGER_CELL_WIDTH,
-    PAGER_COLUMNS,
+    WorkspaceView, PAGER_CELLS, PAGER_CELL_GAP, PAGER_CELL_HEIGHT, PAGER_CELL_WIDTH, PAGER_COLUMNS,
 };
 use crate::taskbar_scale::{self, scaled};
 use crate::ShellSnapshot;
@@ -481,11 +480,7 @@ fn project_taskbar_metrics(document: &mut impl UiDocumentAccess) -> Result<(), S
     document.font_size("clock-date", scaled(CLOCK_DATE_FONT))?;
     document.font_size("tray-weather-temp", scaled(TRAY_WEATHER_FONT))?;
     for slot in 1..=TASK_SLOT_COUNT {
-        document.size(
-            &format!("task-slot-{slot}"),
-            scaled(TASK_SLOT_WIDTH),
-            inner,
-        )?;
+        document.size(&format!("task-slot-{slot}"), scaled(TASK_SLOT_WIDTH), inner)?;
         document.size(&format!("task-slot-{slot}-icon"), icon, icon)?;
     }
     let glyph = scaled(TRAY_ICON_LOGICAL_PX);
@@ -1303,7 +1298,10 @@ mod panel_template_tests {
                 close(start_button_w, inner) && close(start_button_h, inner),
                 "h={logical}: start button is not the inner square"
             );
-            assert!(close(start_button_y, 2.0), "h={logical}: start button off-centre");
+            assert!(
+                close(start_button_y, 2.0),
+                "h={logical}: start button off-centre"
+            );
             let (_, _, _, slot_h) = rect("task-slot-1");
             let (_, clock_y, _, clock_h) = rect("clock-button");
             assert!(

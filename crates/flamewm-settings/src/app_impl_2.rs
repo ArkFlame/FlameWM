@@ -91,7 +91,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
     }
 
-    pub(crate) fn sync_theme_pickers(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_theme_pickers(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         for kind in [
             theme_picker::PickerKind::Icon,
             theme_picker::PickerKind::Cursor,
@@ -488,7 +491,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
     }
 
-    pub(crate) fn step_percent(&mut self, key: &str, direction: i8, maximum: u8) -> Result<(), String> {
+    pub(crate) fn step_percent(
+        &mut self,
+        key: &str,
+        direction: i8,
+        maximum: u8,
+    ) -> Result<(), String> {
         let current = self.percent_setting(key)?;
         let next = i16::from(current) + i16::from(direction) * 5;
         let next = next.clamp(0, i16::from(maximum)) as u8;
@@ -805,7 +813,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ),
             ("taskbarShowDate", "taskbar-date-on", "taskbar-date-off"),
             ("snapPreviewEnabled", "snap-preview-on", "snap-preview-off"),
-            ("reduceTransparency", "reduce-transparency-on", "reduce-transparency-off"),
+            (
+                "reduceTransparency",
+                "reduce-transparency-on",
+                "reduce-transparency-off",
+            ),
             (
                 "showContentWhileDragging",
                 "show-content-on",

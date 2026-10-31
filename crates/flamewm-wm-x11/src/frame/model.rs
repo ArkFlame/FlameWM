@@ -369,12 +369,21 @@ mod rounded_frame_tests {
         let snapped = PlacementMode::Snapped(SnapTarget::Left);
         for mode in [PlacementMode::Floating, snapped] {
             assert!(mode.rounded_frame(), "{mode:?}");
-            assert_eq!(corner_radius(mode.rounded_frame(), DecorationStyle::Rounded), 24);
-            assert_eq!(corner_radius(mode.rounded_frame(), DecorationStyle::Squared), 0);
+            assert_eq!(
+                corner_radius(mode.rounded_frame(), DecorationStyle::Rounded),
+                24
+            );
+            assert_eq!(
+                corner_radius(mode.rounded_frame(), DecorationStyle::Squared),
+                0
+            );
         }
         for mode in [PlacementMode::Maximized, PlacementMode::Fullscreen] {
             assert!(!mode.rounded_frame(), "{mode:?}");
-            assert_eq!(corner_radius(mode.rounded_frame(), DecorationStyle::Rounded), 0);
+            assert_eq!(
+                corner_radius(mode.rounded_frame(), DecorationStyle::Rounded),
+                0
+            );
         }
     }
 }

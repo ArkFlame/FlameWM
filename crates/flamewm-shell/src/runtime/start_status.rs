@@ -28,7 +28,10 @@ impl ShellSurfaces {
     /// Single measured unified Start show via the shared popup
     /// transaction (`runtime::start_surface`). Never mapped at 0,0:
     /// missing layout/anchor refuses via `PopupError`.
-    pub(super) fn open_start_group_measured(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+    pub(super) fn open_start_group_measured(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+    ) -> Result<(), String> {
         let output = self.selected().placement.output.id.clone();
         self.open_start_group_on(runtime, &output)
     }
@@ -117,7 +120,10 @@ impl ShellSurfaces {
     /// Transactional resize of the already-open unified Start surface
     /// via the shared `start_surface::refit` (anchor -> measure -> fit);
     /// prepared before re-map without dropping the group grab.
-    pub(super) fn resize_start_group_measured(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+    pub(super) fn resize_start_group_measured(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+    ) -> Result<(), String> {
         let output = self.selected().placement.output.id.clone();
         self.resize_start_group_for_output(runtime, &output)
     }

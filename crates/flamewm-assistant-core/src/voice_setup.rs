@@ -8,12 +8,12 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use rustix::fs::{flock, FlockOperation};
+use rustix::fs::{FlockOperation, flock};
 
 use crate::download::{CurlFetcher, DiskModelStore};
 use crate::process::SystemRunner;
-use crate::speech::{tts_manifest, ModelStore};
-use crate::{default_models_dir, AssistantError, CancelToken, ProcessRunner, SpeechConfig};
+use crate::speech::{ModelStore, tts_manifest};
+use crate::{AssistantError, CancelToken, ProcessRunner, SpeechConfig, default_models_dir};
 
 const TORCH_INDEX: &str = "https://download.pytorch.org/whl/cpu";
 const TTS_MODEL: &str = "tts-phonon-local";
@@ -21,7 +21,8 @@ const READY: &str = "ready";
 const LOCK: &str = "setup.lock";
 /// Message of the `Io` error when another process (Settings or a window) holds the setup lock.
 pub const SETUP_BUSY: &str = "voice setup is already running in another process";
-const VENV_HINT: &str = "Install python3-venv (Debian or Ubuntu: sudo apt install python3-venv) and retry.";
+const VENV_HINT: &str =
+    "Install python3-venv (Debian or Ubuntu: sudo apt install python3-venv) and retry.";
 const NET_HINT: &str = "Check the network to pypi.org, files.pythonhosted.org, download.pytorch.org and huggingface.co, then retry.";
 
 const SPEAK: &str = r#"#!/bin/sh
@@ -46,15 +47,19 @@ FERMION_CACHE_DIR="$here/../stt-cache" "$here/../venv/bin/phonon-2" transcribe "
 
 /// `assistant/voice` beside the models directory. `None` without a usable home or data directory.
 pub fn default_voice_dir() -> Option<PathBuf> {
-    default_models_dir()?.parent().map(|assistant| assistant.join("voice"))
+    default_models_dir()?
+        .parent()
+        .map(|assistant| assistant.join("voice"))
 }
 
 /// Runs the whole setup with the real runners. `progress` receives `(percent, label)`.
 pub fn setup_default(progress: &mut dyn FnMut(u8, &str)) -> Result<PathBuf, AssistantError> {
-    let dir = default_voice_dir()
-        .ok_or_else(|| AssistantError::Config("no data directory is available for voice files".into()))?;
+    let dir = default_voice_dir().ok_or_else(|| {
+        AssistantError::Config("no data directory is available for voice files".into())
+    })?;
     let cancel = CancelToken::new();
-    let mut store = DiskModelStore::new(dir.join("models"), CurlFetcher::default()).with_cancel(cancel.clone());
+    let mut store =
+        DiskModelStore::new(dir.join("models"), CurlFetcher::default()).with_cancel(cancel.clone());
     setup(&dir, &mut SystemRunner, &mut store, &cancel, progress)
 }
 
@@ -70,7 +75,9 @@ pub fn setup(
 ) -> Result<PathBuf, AssistantError> {
     let text = path_arg(dir);
     if text.chars().any(char::is_whitespace) {
-        return Err(AssistantError::Config(format!("the voice directory path must not contain spaces: {text}")));
+        return Err(AssistantError::Config(format!(
+            "the voice directory path must not contain spaces: {text}"
+        )));
     }
     fs::create_dir_all(dir)?;
     let _lock = SetupLock::acquire(dir)?;
@@ -87,14 +94,39 @@ pub fn setup(
         // A venv without pip is left over from a failed run; rebuild it.
         let _ = fs::remove_dir_all(&venv);
         let venv_arg = path_arg(&venv);
-        let made = exec(runner, cancel, &["python3", "-m", "venv", venv_arg.as_str()]);
+        let made = exec(
+            runner,
+            cancel,
+            &["python3", "-m", "venv", venv_arg.as_str()],
+        );
         step("creating the voice environment", VENV_HINT, made)?;
     }
     progress(20, "Installing PyTorch (CPU)");
-    let torch = exec(runner, cancel, &[pip.as_str(), "install", "--quiet", "--index-url", TORCH_INDEX, "torch"]);
+    let torch = exec(
+        runner,
+        cancel,
+        &[
+            pip.as_str(),
+            "install",
+            "--quiet",
+            "--index-url",
+            TORCH_INDEX,
+            "torch",
+        ],
+    );
     step("installing PyTorch", NET_HINT, torch)?;
     progress(40, "Installing the speech runtimes");
-    let runtimes = exec(runner, cancel, &[pip.as_str(), "install", "--quiet", "ptts", "fermion-research"]);
+    let runtimes = exec(
+        runner,
+        cancel,
+        &[
+            pip.as_str(),
+            "install",
+            "--quiet",
+            "ptts",
+            "fermion-research",
+        ],
+    );
     step("installing the speech runtimes", NET_HINT, runtimes)?;
 
     let manifest = tts_manifest();
@@ -108,7 +140,18 @@ pub fn setup(
     progress(85, "Preparing the speech recognition model");
     let cache = format!("FERMION_CACHE_DIR={}", path_arg(&dir.join("stt-cache")));
     let phonon = path_arg(&venv.join("bin/phonon-2"));
-    let stt = exec(runner, cancel, &["env", cache.as_str(), phonon.as_str(), "transcribe", "--download-only", "phonon-2"]);
+    let stt = exec(
+        runner,
+        cancel,
+        &[
+            "env",
+            cache.as_str(),
+            phonon.as_str(),
+            "transcribe",
+            "--download-only",
+            "phonon-2",
+        ],
+    );
     step("preparing the speech recognition model", NET_HINT, stt)?;
 
     progress(95, "Writing the voice commands");
@@ -123,7 +166,9 @@ pub fn setup(
 
 /// The TTS model directory once setup has finished, or `None`.
 pub fn ready_model(dir: &Path) -> Option<PathBuf> {
-    let ready = dir.join(READY).is_file() && dir.join("bin/speak").is_file() && dir.join("bin/transcribe").is_file();
+    let ready = dir.join(READY).is_file()
+        && dir.join("bin/speak").is_file()
+        && dir.join("bin/transcribe").is_file();
     ready.then(|| dir.join("models").join(TTS_MODEL))
 }
 
@@ -142,7 +187,11 @@ pub fn apply_defaults(cfg: &mut SpeechConfig, dir: &Path) {
     }
 }
 
-fn exec(runner: &mut dyn ProcessRunner, cancel: &CancelToken, argv: &[&str]) -> Result<(), AssistantError> {
+fn exec(
+    runner: &mut dyn ProcessRunner,
+    cancel: &CancelToken,
+    argv: &[&str],
+) -> Result<(), AssistantError> {
     let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
     runner.run(&argv, &[], cancel).map(drop)
 }
@@ -151,7 +200,9 @@ fn exec(runner: &mut dyn ProcessRunner, cancel: &CancelToken, argv: &[&str]) -> 
 fn step(what: &str, hint: &str, result: Result<(), AssistantError>) -> Result<(), AssistantError> {
     match result {
         Err(AssistantError::Cancelled) => Err(AssistantError::Cancelled),
-        Err(error) => Err(AssistantError::Io(format!("{what} failed: {error}. {hint}"))),
+        Err(error) => Err(AssistantError::Io(format!(
+            "{what} failed: {error}. {hint}"
+        ))),
         Ok(()) => Ok(()),
     }
 }
@@ -162,7 +213,11 @@ struct SetupLock(File);
 
 impl SetupLock {
     fn acquire(dir: &Path) -> Result<Self, AssistantError> {
-        let file = fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join(LOCK))?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(dir.join(LOCK))?;
         flock(&file, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
             if error.kind() == io::ErrorKind::WouldBlock {
                 AssistantError::Io(SETUP_BUSY.into())
@@ -196,11 +251,18 @@ mod tests {
     }
 
     impl ProcessRunner for FakeRunner {
-        fn run(&mut self, argv: &[String], _stdin: &[u8], _cancel: &CancelToken) -> Result<Vec<u8>, AssistantError> {
+        fn run(
+            &mut self,
+            argv: &[String],
+            _stdin: &[u8],
+            _cancel: &CancelToken,
+        ) -> Result<Vec<u8>, AssistantError> {
             let line = argv.join(" ");
             self.calls.push(line.clone());
             match self.fail_on {
-                Some(needle) if line.contains(needle) => Err(AssistantError::Io(format!("{needle} exited 1"))),
+                Some(needle) if line.contains(needle) => {
+                    Err(AssistantError::Io(format!("{needle} exited 1")))
+                }
                 _ => Ok(Vec::new()),
             }
         }
@@ -243,13 +305,25 @@ mod tests {
         let mut runner = FakeRunner::default();
         let mut store = FakeStore::default();
         let mut progress = Vec::new();
-        let model = setup(&dir, &mut runner, &mut store, &CancelToken::new(), &mut |p, _| progress.push(p))
-            .expect("setup");
+        let model = setup(
+            &dir,
+            &mut runner,
+            &mut store,
+            &CancelToken::new(),
+            &mut |p, _| progress.push(p),
+        )
+        .expect("setup");
 
         assert_eq!(model, dir.join("models/tts-phonon-local"));
         assert_eq!(runner.calls.len(), 4, "{:?}", runner.calls);
-        assert!(runner.calls[0].starts_with("python3 -m venv "), "{}", runner.calls[0]);
-        assert!(runner.calls[1].ends_with("--index-url https://download.pytorch.org/whl/cpu torch"));
+        assert!(
+            runner.calls[0].starts_with("python3 -m venv "),
+            "{}",
+            runner.calls[0]
+        );
+        assert!(
+            runner.calls[1].ends_with("--index-url https://download.pytorch.org/whl/cpu torch")
+        );
         assert!(runner.calls[2].ends_with("install --quiet ptts fermion-research"));
         assert!(runner.calls[3].starts_with("env FERMION_CACHE_DIR="));
         assert!(runner.calls[3].ends_with("phonon-2 transcribe --download-only phonon-2"));
@@ -263,14 +337,31 @@ mod tests {
     #[test]
     fn failed_runtime_install_names_the_step_and_stays_not_ready() {
         let dir = scratch("fail");
-        let mut runner = FakeRunner { fail_on: Some("ptts"), ..FakeRunner::default() };
+        let mut runner = FakeRunner {
+            fail_on: Some("ptts"),
+            ..FakeRunner::default()
+        };
         let mut store = FakeStore::default();
-        let error = setup(&dir, &mut runner, &mut store, &CancelToken::new(), &mut |_, _| {})
-            .expect_err("pip failure");
+        let error = setup(
+            &dir,
+            &mut runner,
+            &mut store,
+            &CancelToken::new(),
+            &mut |_, _| {},
+        )
+        .expect_err("pip failure");
 
-        let AssistantError::Io(message) = error else { panic!("expected Io, got {error:?}") };
-        assert!(message.starts_with("installing the speech runtimes failed:"), "{message}");
-        assert!(message.contains("ptts exited 1. Check the network"), "{message}");
+        let AssistantError::Io(message) = error else {
+            panic!("expected Io, got {error:?}")
+        };
+        assert!(
+            message.starts_with("installing the speech runtimes failed:"),
+            "{message}"
+        );
+        assert!(
+            message.contains("ptts exited 1. Check the network"),
+            "{message}"
+        );
         assert!(message.contains("pypi.org"), "{message}");
         assert_eq!(store.fetches, 0, "no model download after a failed install");
         assert!(ready_model(&dir).is_none());
@@ -281,17 +372,33 @@ mod tests {
     fn model_failure_is_reported_and_not_ready() {
         let dir = scratch("model");
         let mut runner = FakeRunner::default();
-        let mut store = FakeStore { fail: true, ..FakeStore::default() };
-        let error = setup(&dir, &mut runner, &mut store, &CancelToken::new(), &mut |_, _| {})
-            .expect_err("download failure");
-        assert!(matches!(&error, AssistantError::Io(m) if m.starts_with("downloading the voice model failed")), "{error:?}");
+        let mut store = FakeStore {
+            fail: true,
+            ..FakeStore::default()
+        };
+        let error = setup(
+            &dir,
+            &mut runner,
+            &mut store,
+            &CancelToken::new(),
+            &mut |_, _| {},
+        )
+        .expect_err("download failure");
+        assert!(
+            matches!(&error, AssistantError::Io(m) if m.starts_with("downloading the voice model failed")),
+            "{error:?}"
+        );
         assert!(ready_model(&dir).is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn cancellation_is_not_rewritten_as_a_step_failure() {
-        let result = step("installing PyTorch", NET_HINT, Err(AssistantError::Cancelled));
+        let result = step(
+            "installing PyTorch",
+            NET_HINT,
+            Err(AssistantError::Cancelled),
+        );
         assert_eq!(result, Err(AssistantError::Cancelled));
     }
 
@@ -300,7 +407,14 @@ mod tests {
         let dir = scratch("with space").join("a b");
         let mut runner = FakeRunner::default();
         let mut store = FakeStore::default();
-        let error = setup(&dir, &mut runner, &mut store, &CancelToken::new(), &mut |_, _| {}).expect_err("spaces");
+        let error = setup(
+            &dir,
+            &mut runner,
+            &mut store,
+            &CancelToken::new(),
+            &mut |_, _| {},
+        )
+        .expect_err("spaces");
         assert!(matches!(error, AssistantError::Config(_)));
         assert!(runner.calls.is_empty());
     }
@@ -308,15 +422,30 @@ mod tests {
     #[test]
     fn apply_defaults_fills_only_unset_commands_after_setup() {
         let dir = scratch("defaults");
-        setup(&dir, &mut FakeRunner::default(), &mut FakeStore::default(), &CancelToken::new(), &mut |_, _| {})
-            .expect("setup");
+        setup(
+            &dir,
+            &mut FakeRunner::default(),
+            &mut FakeStore::default(),
+            &CancelToken::new(),
+            &mut |_, _| {},
+        )
+        .expect("setup");
 
         let mut cfg = SpeechConfig::default();
         apply_defaults(&mut cfg, &dir);
-        assert_eq!(cfg.transcribe.as_deref(), Some(path_arg(&dir.join("bin/transcribe")).as_str()));
-        assert_eq!(cfg.synthesize.as_deref(), Some(format!("{} {{model}}", path_arg(&dir.join("bin/speak"))).as_str()));
+        assert_eq!(
+            cfg.transcribe.as_deref(),
+            Some(path_arg(&dir.join("bin/transcribe")).as_str())
+        );
+        assert_eq!(
+            cfg.synthesize.as_deref(),
+            Some(format!("{} {{model}}", path_arg(&dir.join("bin/speak"))).as_str())
+        );
 
-        let mut custom = SpeechConfig { transcribe: Some("my-stt".into()), ..SpeechConfig::default() };
+        let mut custom = SpeechConfig {
+            transcribe: Some("my-stt".into()),
+            ..SpeechConfig::default()
+        };
         apply_defaults(&mut custom, &dir);
         assert_eq!(custom.transcribe.as_deref(), Some("my-stt"));
         let _ = fs::remove_dir_all(&dir);
@@ -333,13 +462,28 @@ mod tests {
     #[test]
     fn wrappers_call_the_venv_runtimes_with_the_stdin_stdout_contract() {
         let dir = scratch("wrappers");
-        setup(&dir, &mut FakeRunner::default(), &mut FakeStore::default(), &CancelToken::new(), &mut |_, _| {})
-            .expect("setup");
+        setup(
+            &dir,
+            &mut FakeRunner::default(),
+            &mut FakeStore::default(),
+            &CancelToken::new(),
+            &mut |_, _| {},
+        )
+        .expect("setup");
         let speak = fs::read_to_string(dir.join("bin/speak")).expect("speak");
         let transcribe = fs::read_to_string(dir.join("bin/transcribe")).expect("transcribe");
-        assert!(speak.contains("venv/bin/ptts") && speak.contains("-o \"$work/out.wav\"") && speak.contains("cat \"$work/out.wav\""));
-        assert!(transcribe.contains("venv/bin/phonon-2") && transcribe.contains("FERMION_CACHE_DIR="));
-        let mode = fs::metadata(dir.join("bin/speak")).expect("meta").permissions().mode();
+        assert!(
+            speak.contains("venv/bin/ptts")
+                && speak.contains("-o \"$work/out.wav\"")
+                && speak.contains("cat \"$work/out.wav\"")
+        );
+        assert!(
+            transcribe.contains("venv/bin/phonon-2") && transcribe.contains("FERMION_CACHE_DIR=")
+        );
+        let mode = fs::metadata(dir.join("bin/speak"))
+            .expect("meta")
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o111, 0o111);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -351,9 +495,19 @@ mod tests {
         let held = SetupLock::acquire(&dir).expect("first lock");
         let mut runner = FakeRunner::default();
         let mut store = FakeStore::default();
-        let error = setup(&dir, &mut runner, &mut store, &CancelToken::new(), &mut |_, _| {}).expect_err("busy");
+        let error = setup(
+            &dir,
+            &mut runner,
+            &mut store,
+            &CancelToken::new(),
+            &mut |_, _| {},
+        )
+        .expect_err("busy");
         assert_eq!(error, AssistantError::Io(SETUP_BUSY.into()));
-        assert!(runner.calls.is_empty() && store.fetches == 0, "no work while busy");
+        assert!(
+            runner.calls.is_empty() && store.fetches == 0,
+            "no work while busy"
+        );
         drop(held);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -361,11 +515,24 @@ mod tests {
     #[test]
     fn a_finished_setup_is_not_repeated() {
         let dir = scratch("idempotent");
-        setup(&dir, &mut FakeRunner::default(), &mut FakeStore::default(), &CancelToken::new(), &mut |_, _| {})
-            .expect("first setup");
+        setup(
+            &dir,
+            &mut FakeRunner::default(),
+            &mut FakeStore::default(),
+            &CancelToken::new(),
+            &mut |_, _| {},
+        )
+        .expect("first setup");
         let mut runner = FakeRunner::default();
         let mut store = FakeStore::default();
-        let model = setup(&dir, &mut runner, &mut store, &CancelToken::new(), &mut |_, _| {}).expect("second setup");
+        let model = setup(
+            &dir,
+            &mut runner,
+            &mut store,
+            &CancelToken::new(),
+            &mut |_, _| {},
+        )
+        .expect("second setup");
         assert_eq!(model, dir.join("models/tts-phonon-local"));
         assert!(runner.calls.is_empty(), "{:?}", runner.calls);
         assert_eq!(store.fetches, 0);
@@ -377,21 +544,43 @@ mod tests {
     #[test]
     #[ignore = "live: installs runtimes and downloads models; set FLAMEWM_VOICE_LIVE_DIR"]
     fn live_setup_round_trips_a_phrase_through_the_wrappers() {
-        let Some(dir) = std::env::var_os("FLAMEWM_VOICE_LIVE_DIR").map(PathBuf::from) else { return };
+        let Some(dir) = std::env::var_os("FLAMEWM_VOICE_LIVE_DIR").map(PathBuf::from) else {
+            return;
+        };
         let cancel = CancelToken::new();
         let mut store = DiskModelStore::new(dir.join("models"), CurlFetcher::default());
-        let model = setup(&dir, &mut SystemRunner, &mut store, &cancel, &mut |p, label| eprintln!("{p}% {label}"))
-            .expect("setup");
+        let model = setup(
+            &dir,
+            &mut SystemRunner,
+            &mut store,
+            &cancel,
+            &mut |p, label| eprintln!("{p}% {label}"),
+        )
+        .expect("setup");
 
         let mut cfg = SpeechConfig::default();
         apply_defaults(&mut cfg, &dir);
         let model_arg = model.to_string_lossy().into_owned();
         let mut runner = SystemRunner;
-        let synth = crate::expand(cfg.synthesize.as_deref().expect("synth"), &[("model", &model_arg)]).expect("expand");
-        let wav = runner.run(&synth, b"Voice setup works on this machine.", &cancel).expect("synthesize");
-        assert!(wav.starts_with(b"RIFF") && wav.len() > 1000, "not a WAV: {} bytes", wav.len());
+        let synth = crate::expand(
+            cfg.synthesize.as_deref().expect("synth"),
+            &[("model", &model_arg)],
+        )
+        .expect("expand");
+        let wav = runner
+            .run(&synth, b"Voice setup works on this machine.", &cancel)
+            .expect("synthesize");
+        assert!(
+            wav.starts_with(b"RIFF") && wav.len() > 1000,
+            "not a WAV: {} bytes",
+            wav.len()
+        );
 
-        let stt = crate::expand(cfg.transcribe.as_deref().expect("stt"), &[("model", &model_arg)]).expect("expand");
+        let stt = crate::expand(
+            cfg.transcribe.as_deref().expect("stt"),
+            &[("model", &model_arg)],
+        )
+        .expect("expand");
         let text = runner.run(&stt, &wav, &cancel).expect("transcribe");
         let text = String::from_utf8_lossy(&text).to_lowercase();
         assert!(text.contains("voice setup works"), "transcript: {text}");

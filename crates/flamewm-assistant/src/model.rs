@@ -20,7 +20,8 @@ const NEAR_TOP: usize = 3;
 const LIST_BUDGET: usize = 500;
 /// Height of the window around the list: header, composer, notice and paddings.
 pub const CHROME_PX: usize = 280;
-static LIST_BUDGET_PX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(LIST_BUDGET);
+static LIST_BUDGET_PX: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(LIST_BUDGET);
 
 /// Sets the list budget for a window of `height` pixels (a popover can be shorter than `HEIGHT`).
 pub fn set_window_height(height: usize) {
@@ -76,7 +77,11 @@ fn fitting<'a>(
         }
         // Layout is the costly part and runs on every paint, so heights are cached per message.
         let len = msg.text.len();
-        let cached = cache.borrow().get(&msg.seq).filter(|(l, _)| *l == len).map(|(_, h)| *h);
+        let cached = cache
+            .borrow()
+            .get(&msg.seq)
+            .filter(|(l, _)| *l == len)
+            .map(|(_, h)| *h);
         let height = cached.unwrap_or_else(|| {
             let h = bubble_px(&msg.text);
             let mut cache = cache.borrow_mut();
@@ -162,7 +167,10 @@ impl History {
     }
 
     fn pending_height(&self) -> usize {
-        self.pending.as_deref().filter(|text| !text.is_empty()).map_or(0, bubble_px)
+        self.pending
+            .as_deref()
+            .filter(|text| !text.is_empty())
+            .map_or(0, bubble_px)
     }
 
     /// Records a message that was just appended to the store with seq `msg.seq`.
@@ -182,7 +190,10 @@ impl History {
 
     /// Forgets every loaded message and the viewport, as after a clear.
     pub fn clear(&mut self) {
-        *self = Self { follow: true, ..Self::default() };
+        *self = Self {
+            follow: true,
+            ..Self::default()
+        };
     }
 
     /// Replaces the streaming text. `None` ends the turn.
@@ -215,7 +226,10 @@ impl History {
         if delta < 0 && self.top <= NEAR_TOP && self.lo > 0 {
             self.load_older(pager)?;
         }
-        if delta > 0 && self.hi < self.total && self.top + self.capacity() + NEAR_TOP >= self.msgs.len() {
+        if delta > 0
+            && self.hi < self.total
+            && self.top + self.capacity() + NEAR_TOP >= self.msgs.len()
+        {
             self.load_newer(pager)?;
         }
         let max = self.max_top() as isize;
@@ -270,16 +284,27 @@ impl History {
 
     /// Bubbles for the viewport, oldest first, at most `SLOTS` in total.
     pub fn rows(&self) -> Vec<Row> {
-        let count = fitting(self.msgs.iter().skip(self.top), self.pending_height(), self.capacity(), &self.heights);
+        let count = fitting(
+            self.msgs.iter().skip(self.top),
+            self.pending_height(),
+            self.capacity(),
+            &self.heights,
+        );
         let mut rows: Vec<Row> = self
             .msgs
             .iter()
             .skip(self.top)
             .take(count)
-            .map(|msg| Row { role: msg.role, text: msg.text.clone() })
+            .map(|msg| Row {
+                role: msg.role,
+                text: msg.text.clone(),
+            })
             .collect();
         if let Some(text) = self.pending.as_deref().filter(|text| !text.is_empty()) {
-            rows.push(Row { role: Role::Assistant, text: text.to_owned() });
+            rows.push(Row {
+                role: Role::Assistant,
+                text: text.to_owned(),
+            });
         }
         rows
     }
@@ -341,7 +366,11 @@ mod tests {
         Message {
             seq,
             ts_ms: 0,
-            role: if seq % 2 == 0 { Role::User } else { Role::Assistant },
+            role: if seq % 2 == 0 {
+                Role::User
+            } else {
+                Role::Assistant
+            },
             text: format!("m{seq}"),
             session: None,
             turn: None,
@@ -381,7 +410,11 @@ mod tests {
                 break;
             }
             history.scroll(&mut store, -1).unwrap();
-            assert!(history.msgs.len() <= MAX_LOADED, "loaded {}", history.msgs.len());
+            assert!(
+                history.msgs.len() <= MAX_LOADED,
+                "loaded {}",
+                history.msgs.len()
+            );
             assert!(history.rows().len() <= SLOTS);
         }
         // Reached the oldest message: the viewport now starts at seq 0.
@@ -442,8 +475,14 @@ mod tests {
         assert_eq!(key_command("kp_enter", None, false, false), KeyCmd::Submit);
         assert_eq!(key_command("return", None, true, false), KeyCmd::Newline);
         assert_eq!(key_command("escape", None, false, false), KeyCmd::Cancel);
-        assert_eq!(key_command("backspace", None, false, false), KeyCmd::Backspace);
-        assert_eq!(key_command("a", Some("a"), false, false), KeyCmd::Insert("a".into()));
+        assert_eq!(
+            key_command("backspace", None, false, false),
+            KeyCmd::Backspace
+        );
+        assert_eq!(
+            key_command("a", Some("a"), false, false),
+            KeyCmd::Insert("a".into())
+        );
         assert_eq!(key_command("a", Some("a"), false, true), KeyCmd::Ignore);
         assert_eq!(key_command("Shift_L", None, false, false), KeyCmd::Ignore);
     }
@@ -453,7 +492,10 @@ mod tests {
         assert_eq!(key_command("Return", None, false, false), KeyCmd::Submit);
         assert_eq!(key_command("Return", None, true, false), KeyCmd::Newline);
         assert_eq!(key_command("Escape", None, false, false), KeyCmd::Cancel);
-        assert_eq!(key_command("BackSpace", None, false, false), KeyCmd::Backspace);
+        assert_eq!(
+            key_command("BackSpace", None, false, false),
+            KeyCmd::Backspace
+        );
     }
 
     #[test]
@@ -469,10 +511,17 @@ mod tests {
         let long = "word ".repeat(2_000);
         let mut store = Fake::new(3);
         let mut history = History::open(&mut store, 3).unwrap();
-        history.push(Message { seq: 3, text: long.clone(), ..msg(3) });
+        history.push(Message {
+            seq: 3,
+            text: long.clone(),
+            ..msg(3)
+        });
         history.set_pending(Some(long.clone()));
         let rows = history.rows();
-        assert!(rows.iter().any(|row| row.text == long), "reply text must not be cut");
+        assert!(
+            rows.iter().any(|row| row.text == long),
+            "reply text must not be cut"
+        );
         assert_eq!(rows.last().unwrap().role, Role::Assistant);
         assert!(!rows.is_empty() && rows.len() <= SLOTS);
     }
@@ -483,7 +532,10 @@ mod tests {
         let history = History::open(&mut store, 40).unwrap();
         let heights: usize = history.rows().iter().map(|row| bubble_px(&row.text)).sum();
         assert!(heights <= LIST_BUDGET);
-        assert!(history.rows().len() < SLOTS, "rows must stop at the height budget");
+        assert!(
+            history.rows().len() < SLOTS,
+            "rows must stop at the height budget"
+        );
     }
 }
 
@@ -515,18 +567,24 @@ pub fn menu_rows(groups: &[(Provider, &[String])], query: &str) -> Vec<MenuRow> 
             continue;
         }
         rows.push(MenuRow::Header(*provider));
-        rows.extend(matches.into_iter().map(|index| MenuRow::Model { provider: *provider, id: ids[index].clone() }));
+        rows.extend(matches.into_iter().map(|index| MenuRow::Model {
+            provider: *provider,
+            id: ids[index].clone(),
+        }));
     }
     rows
 }
 
 #[cfg(test)]
 mod menu_rows_tests {
-    use super::{menu_rows, MenuRow};
+    use super::{MenuRow, menu_rows};
     use flamewm_assistant_core::Provider;
 
     fn ark() -> Vec<String> {
-        ["lite", "flash", "pro"].iter().map(|s| s.to_string()).collect()
+        ["lite", "flash", "pro"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     fn proxy() -> Vec<String> {
@@ -536,11 +594,20 @@ mod menu_rows_tests {
     #[test]
     fn each_provider_group_starts_with_its_header() {
         let (ark, proxy) = (ark(), proxy());
-        let rows = menu_rows(&[(Provider::Ark, &ark), (Provider::HermesProxy, &proxy)], "");
+        let rows = menu_rows(
+            &[(Provider::Ark, &ark), (Provider::HermesProxy, &proxy)],
+            "",
+        );
         assert_eq!(rows.len(), 1 + 3 + 1 + 2);
         assert_eq!(rows[0], MenuRow::Header(Provider::Ark));
         assert_eq!(rows[4], MenuRow::Header(Provider::HermesProxy));
-        assert_eq!(rows[5], MenuRow::Model { provider: Provider::HermesProxy, id: "a/b:free".into() });
+        assert_eq!(
+            rows[5],
+            MenuRow::Model {
+                provider: Provider::HermesProxy,
+                id: "a/b:free".into()
+            }
+        );
     }
 
     #[test]
@@ -548,18 +615,30 @@ mod menu_rows_tests {
         let ark = ark();
         let rows = menu_rows(&[(Provider::Ark, &ark)], "");
         assert_eq!(rows.len(), 4);
-        assert!(rows.iter().all(|row| !matches!(row, MenuRow::Model { provider: Provider::HermesProxy, .. })));
+        assert!(rows.iter().all(|row| !matches!(
+            row,
+            MenuRow::Model {
+                provider: Provider::HermesProxy,
+                ..
+            }
+        )));
     }
 
     #[test]
     fn search_spans_groups_and_hides_groups_without_matches() {
         let (ark, proxy) = (ark(), proxy());
-        let rows = menu_rows(&[(Provider::Ark, &ark), (Provider::HermesProxy, &proxy)], "free");
+        let rows = menu_rows(
+            &[(Provider::Ark, &ark), (Provider::HermesProxy, &proxy)],
+            "free",
+        );
         assert_eq!(
             rows,
             vec![
                 MenuRow::Header(Provider::HermesProxy),
-                MenuRow::Model { provider: Provider::HermesProxy, id: "a/b:free".into() },
+                MenuRow::Model {
+                    provider: Provider::HermesProxy,
+                    id: "a/b:free".into()
+                },
             ]
         );
     }
@@ -567,7 +646,13 @@ mod menu_rows_tests {
     #[test]
     fn no_match_anywhere_is_empty() {
         let (ark, proxy) = (ark(), proxy());
-        assert!(menu_rows(&[(Provider::Ark, &ark), (Provider::HermesProxy, &proxy)], "zzz").is_empty());
+        assert!(
+            menu_rows(
+                &[(Provider::Ark, &ark), (Provider::HermesProxy, &proxy)],
+                "zzz"
+            )
+            .is_empty()
+        );
     }
 }
 
@@ -576,10 +661,15 @@ mod model_filter_tests {
     use super::filter_models;
 
     fn ids() -> Vec<String> {
-        ["poolside/laguna:free", "openai/gpt-x", "Meta/Llama:FREE", "a/b-free-plus"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
+        [
+            "poolside/laguna:free",
+            "openai/gpt-x",
+            "Meta/Llama:FREE",
+            "a/b-free-plus",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
     }
 
     #[test]

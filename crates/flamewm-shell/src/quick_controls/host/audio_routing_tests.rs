@@ -53,10 +53,13 @@ fn weather_pick_is_accepted_by_real_settings_store_and_enables_feed() {
     let mut snapshot = quick(AudioTab::Devices, false);
     snapshot.settings = service.snapshot();
     snapshot.weather.settings.enabled = true;
-    snapshot.weather_search.results = vec![
-        flamewm_shell_core::weather::WeatherLocation::new("Berlin", 52.52, 13.405, Some("Germany"))
-            .unwrap(),
-    ];
+    snapshot.weather_search.results = vec![flamewm_shell_core::weather::WeatherLocation::new(
+        "Berlin",
+        52.52,
+        13.405,
+        Some("Germany"),
+    )
+    .unwrap()];
     let pick = weather_pick_for(&snapshot, 0).expect("pick");
     let ControlRequest::ApplySettings(transaction) = &pick.request else {
         panic!("pick must be a settings transaction");

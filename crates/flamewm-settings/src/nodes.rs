@@ -103,7 +103,10 @@ impl<D: UiDocumentAccess + ?Sized> UiDocumentAccess for NodeFailures<'_, D> {
 }
 
 /// Paints every accent-coloured node (selected-sidebar line and ON toggles) with the live accent.
-pub(crate) fn sync_accent_nodes(document: &mut impl UiDocumentAccess, accent: &str) -> Result<(), String> {
+pub(crate) fn sync_accent_nodes(
+    document: &mut impl UiDocumentAccess,
+    accent: &str,
+) -> Result<(), String> {
     let color = solid_color(accent)?;
     for id in ACCENT_NODE_IDS {
         document.background(id, color)?;
@@ -139,7 +142,10 @@ pub(crate) fn project_glass_roles(
     )?;
     // Group fill: a black overlay at 20% alpha on the shared body glass. Reduce Transparency
     // makes the body opaque, so the same 20% darkening is applied to its solid colour instead.
-    document.color_variable("--card", card_fill(appearance.reduce_transparency, body.tint_rgb))
+    document.color_variable(
+        "--card",
+        card_fill(appearance.reduce_transparency, body.tint_rgb),
+    )
 }
 
 /// The group-zone fill: a 20% black overlay on glass, or a solid 20%-darker shade of the

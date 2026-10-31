@@ -19,7 +19,7 @@ use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::AssistantError;
 
@@ -148,8 +148,14 @@ impl ChatStore {
             write_atomic(&idx_path, &expected)?;
         }
 
-        let log = OpenOptions::new().create(true).append(true).open(&log_path)?;
-        let index = OpenOptions::new().create(true).append(true).open(&idx_path)?;
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)?;
+        let index = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&idx_path)?;
         let reader = File::open(&log_path)?;
         Ok(Self {
             dir: dir.to_path_buf(),
@@ -209,7 +215,11 @@ impl ChatStore {
         line.push(b'\n');
         let len = u32::try_from(line.len())
             .map_err(|_| AssistantError::Store("message exceeds 4 GiB".into()))?;
-        let entry = Entry { offset: self.log_len, len, ts_ms };
+        let entry = Entry {
+            offset: self.log_len,
+            len,
+            ts_ms,
+        };
 
         self.log.write_all(&line)?;
         self.log.sync_data()?;
@@ -232,7 +242,11 @@ impl ChatStore {
     }
 
     /// Up to `limit` messages strictly older than `before` (all messages when `None`), oldest first.
-    pub fn load_page(&mut self, before: Option<u64>, limit: usize) -> Result<Vec<Message>, AssistantError> {
+    pub fn load_page(
+        &mut self,
+        before: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<Message>, AssistantError> {
         let total = self.entries.len() as u64;
         let end = before.map_or(total, |b| b.min(total));
         let start = end.saturating_sub(limit as u64);
@@ -288,7 +302,11 @@ impl ChatStore {
         self.cache.insert(message.seq, message);
         while self.cache.len() > self.cache_cap {
             let anchor = self.anchor;
-            let victim = self.cache.keys().copied().max_by_key(|k| k.abs_diff(anchor));
+            let victim = self
+                .cache
+                .keys()
+                .copied()
+                .max_by_key(|k| k.abs_diff(anchor));
             if let Some(victim) = victim {
                 self.cache.remove(&victim);
             } else {
@@ -317,7 +335,11 @@ fn scan(path: &Path) -> Result<Vec<Entry>, AssistantError> {
         }
         let seq = entries.len() as u64;
         match parse_line(&line[..n - 1], seq) {
-            Ok(message) => entries.push(Entry { offset, len: n as u32, ts_ms: message.ts_ms }),
+            Ok(message) => entries.push(Entry {
+                offset,
+                len: n as u32,
+                ts_ms: message.ts_ms,
+            }),
             Err(_) => break,
         }
         offset += n as u64;
@@ -340,11 +362,17 @@ fn parse_line(bytes: &[u8], expected_seq: u64) -> Result<Message, AssistantError
     Ok(Message {
         seq,
         ts_ms: value.get("ts_ms").and_then(Value::as_u64).ok_or_else(bad)?,
-        role: text_of("role").as_deref().and_then(Role::parse).ok_or_else(bad)?,
+        role: text_of("role")
+            .as_deref()
+            .and_then(Role::parse)
+            .ok_or_else(bad)?,
         text: text_of("text").ok_or_else(bad)?,
         session: text_of("session"),
         turn: text_of("turn"),
-        state: text_of("state").as_deref().and_then(MsgState::parse).ok_or_else(bad)?,
+        state: text_of("state")
+            .as_deref()
+            .and_then(MsgState::parse)
+            .ok_or_else(bad)?,
     })
 }
 
@@ -373,7 +401,10 @@ fn read_session(dir: &Path) -> SessionState {
         return SessionState::default();
     };
     let field = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
-    SessionState { provider: field("provider"), model: field("model") }
+    SessionState {
+        provider: field("provider"),
+        model: field("model"),
+    }
 }
 
 /// Writes through a temp file, fsyncs it, renames over `path`, then fsyncs the directory.
@@ -413,11 +444,25 @@ mod tests {
             let mut store = ChatStore::open(&dir).unwrap();
             for i in 0..5 {
                 let seq = store
-                    .append(Role::User, &format!("m{i}"), Some("s1"), Some("t"), MsgState::Complete)
+                    .append(
+                        Role::User,
+                        &format!("m{i}"),
+                        Some("s1"),
+                        Some("t"),
+                        MsgState::Complete,
+                    )
                     .unwrap();
                 assert_eq!(seq, i);
             }
-            store.append(Role::Assistant, "héllo\nworld", None, None, MsgState::Partial).unwrap();
+            store
+                .append(
+                    Role::Assistant,
+                    "héllo\nworld",
+                    None,
+                    None,
+                    MsgState::Partial,
+                )
+                .unwrap();
         }
         let mut store = ChatStore::open(&dir).unwrap();
         assert_eq!(store.len(), 6);
@@ -436,7 +481,9 @@ mod tests {
         let dir = test_dir("store-torn");
         {
             let mut store = ChatStore::open(&dir).unwrap();
-            store.append(Role::User, "kept", None, None, MsgState::Complete).unwrap();
+            store
+                .append(Role::User, "kept", None, None, MsgState::Complete)
+                .unwrap();
         }
         let log = dir.join(HISTORY_FILE);
         let mut bytes = fs::read(&log).unwrap();
@@ -445,7 +492,9 @@ mod tests {
 
         let mut store = ChatStore::open(&dir).unwrap();
         assert_eq!(store.len(), 1);
-        let seq = store.append(Role::Assistant, "next", None, None, MsgState::Complete).unwrap();
+        let seq = store
+            .append(Role::Assistant, "next", None, None, MsgState::Complete)
+            .unwrap();
         assert_eq!(seq, 1);
         drop(store);
         let mut store = ChatStore::open(&dir).unwrap();
@@ -457,13 +506,20 @@ mod tests {
         let dir = test_dir("store-index");
         {
             let mut store = ChatStore::open(&dir).unwrap();
-            store.append(Role::User, "a", None, None, MsgState::Complete).unwrap();
-            store.append(Role::User, "b", None, None, MsgState::Complete).unwrap();
+            store
+                .append(Role::User, "a", None, None, MsgState::Complete)
+                .unwrap();
+            store
+                .append(Role::User, "b", None, None, MsgState::Complete)
+                .unwrap();
         }
         fs::remove_file(dir.join(INDEX_FILE)).unwrap();
         let mut store = ChatStore::open(&dir).unwrap();
         assert_eq!(texts(&store.tail(10).unwrap()), vec!["a", "b"]);
-        assert_eq!(fs::metadata(dir.join(INDEX_FILE)).unwrap().len(), 2 * INDEX_RECORD as u64);
+        assert_eq!(
+            fs::metadata(dir.join(INDEX_FILE)).unwrap().len(),
+            2 * INDEX_RECORD as u64
+        );
         drop(store);
 
         fs::write(dir.join(INDEX_FILE), b"garbage").unwrap();
@@ -476,7 +532,9 @@ mod tests {
         let dir = test_dir("store-window");
         let mut store = ChatStore::open_with_cache(&dir, 3).unwrap();
         for i in 0..10 {
-            store.append(Role::User, &format!("n{i}"), None, None, MsgState::Complete).unwrap();
+            store
+                .append(Role::User, &format!("n{i}"), None, None, MsgState::Complete)
+                .unwrap();
         }
         assert!(store.cached() <= 3);
         let first = store.load_page(Some(4), 4).unwrap();
@@ -492,7 +550,10 @@ mod tests {
             let mut store = ChatStore::open(&dir).unwrap();
             assert_eq!(store.session(), &SessionState::default());
             store
-                .set_session(SessionState { provider: Some("ark".into()), model: Some("flash".into()) })
+                .set_session(SessionState {
+                    provider: Some("ark".into()),
+                    model: Some("flash".into()),
+                })
                 .unwrap();
         }
         let store = ChatStore::open(&dir).unwrap();
@@ -500,7 +561,11 @@ mod tests {
         assert_eq!(store.session().provider.as_deref(), Some("ark"));
         assert!(!dir.join("state.tmp").exists());
         // A legacy state file with retired Hermes keys still loads its model.
-        std::fs::write(dir.join("state.json"), br#"{"hermes_session":"s","hermes_url":"http://x","model":"pro"}"#).unwrap();
+        std::fs::write(
+            dir.join("state.json"),
+            br#"{"hermes_session":"s","hermes_url":"http://x","model":"pro"}"#,
+        )
+        .unwrap();
         let legacy = ChatStore::open(&dir).unwrap();
         assert_eq!(legacy.session().model.as_deref(), Some("pro"));
         assert_eq!(legacy.session().provider, None);
@@ -511,14 +576,21 @@ mod tests {
         let dir = test_dir("store-clear");
         {
             let mut store = ChatStore::open(&dir).unwrap();
-            store.append(Role::User, "gone", Some("s"), None, MsgState::Complete).unwrap();
             store
-                .set_session(SessionState { provider: Some("hermes".into()), model: Some("lite".into()) })
+                .append(Role::User, "gone", Some("s"), None, MsgState::Complete)
+                .unwrap();
+            store
+                .set_session(SessionState {
+                    provider: Some("hermes".into()),
+                    model: Some("lite".into()),
+                })
                 .unwrap();
             store.clear().unwrap();
             assert!(store.is_empty());
             assert_eq!(store.session().model, None);
-            let seq = store.append(Role::User, "fresh", None, None, MsgState::Complete).unwrap();
+            let seq = store
+                .append(Role::User, "fresh", None, None, MsgState::Complete)
+                .unwrap();
             assert_eq!(seq, 0);
         }
         let mut store = ChatStore::open(&dir).unwrap();

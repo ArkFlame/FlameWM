@@ -18,13 +18,20 @@ pub fn base_url() -> String {
     std::env::var(BASE_URL_ENV)
         .ok()
         .map(|value| value.trim().to_owned())
-        .filter(|value| value.starts_with("http://127.0.0.1") || value.starts_with("http://localhost"))
+        .filter(|value| {
+            value.starts_with("http://127.0.0.1") || value.starts_with("http://localhost")
+        })
         .unwrap_or_else(|| ARK_BASE_URL.to_owned())
 }
 
 /// Endpoint for ARK AI with the given key.
 pub fn endpoint(api_key: &str) -> Endpoint {
-    Endpoint { label: LABEL, base_url: base_url(), bearer: api_key.to_owned(), max_time: None }
+    Endpoint {
+        label: LABEL,
+        base_url: base_url(),
+        bearer: api_key.to_owned(),
+        max_time: None,
+    }
 }
 
 /// Checks a key before it is stored or sent: non-empty, no spaces, `ark_` prefix.
@@ -68,7 +75,10 @@ mod tests {
         assert_eq!(key_or_default(None), DEFAULT_API_KEY);
         assert_eq!(key_or_default(Some("  ")), DEFAULT_API_KEY);
         assert_eq!(key_or_default(Some("ark_mine")), "ark_mine");
-        assert_eq!(masked_key(DEFAULT_API_KEY), format!("ark_23bR{}", "\u{2022}".repeat(12)));
+        assert_eq!(
+            masked_key(DEFAULT_API_KEY),
+            format!("ark_23bR{}", "\u{2022}".repeat(12))
+        );
     }
 
     #[test]

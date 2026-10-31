@@ -91,8 +91,14 @@ fn removed_startmenu_and_titlebar_colour_keys_load_as_unknown_and_survive_a_roun
     let text = "revision=2\nstartMenuColor=#112233\nstartMenuOpacity=80\nstartMenuBlurPercent=0\n\
         titlebarCloseColor=#FF0000\ntitlebarCloseHoverColor=#FFFFFF\ntitlebarMinimizeColor=#zz\n";
     let parsed = load(text).expect("removed keys still load");
-    assert_eq!(parsed.unknown_keys.get("startMenuColor"), Some(&"#112233".to_owned()));
-    assert_eq!(parsed.unknown_keys.get("titlebarCloseHoverColor"), Some(&"#FFFFFF".to_owned()));
+    assert_eq!(
+        parsed.unknown_keys.get("startMenuColor"),
+        Some(&"#112233".to_owned())
+    );
+    assert_eq!(
+        parsed.unknown_keys.get("titlebarCloseHoverColor"),
+        Some(&"#FFFFFF".to_owned())
+    );
     assert!(assert_round_trip(&parsed).contains("titlebarCloseColor=#FF0000"));
 }
 
@@ -100,8 +106,14 @@ fn removed_startmenu_and_titlebar_colour_keys_load_as_unknown_and_survive_a_roun
 fn removed_surface_rim_and_highlight_keys_load_as_unknown_and_survive_a_round_trip() {
     let text = "revision=2\nsurfaceRimFadePercent=25\nsurfaceHighlightPercent=10\n";
     let parsed = load(text).expect("legacy surface keys still load");
-    assert_eq!(parsed.unknown_keys.get("surfaceRimFadePercent"), Some(&"25".to_owned()));
-    assert_eq!(parsed.unknown_keys.get("surfaceHighlightPercent"), Some(&"10".to_owned()));
+    assert_eq!(
+        parsed.unknown_keys.get("surfaceRimFadePercent"),
+        Some(&"25".to_owned())
+    );
+    assert_eq!(
+        parsed.unknown_keys.get("surfaceHighlightPercent"),
+        Some(&"10".to_owned())
+    );
     assert!(assert_round_trip(&parsed).contains("surfaceRimFadePercent=25"));
 }
 
@@ -146,7 +158,10 @@ fn five_percent_scales_persist_without_quantization() {
 #[test]
 fn removed_cursor_shadow_key_is_kept_as_unknown() {
     let loaded = load("revision=4\ncursorShadow=false\n").expect("legacy cursorShadow");
-    assert_eq!(loaded.unknown_keys.get("cursorShadow").map(String::as_str), Some("false"));
+    assert_eq!(
+        loaded.unknown_keys.get("cursorShadow").map(String::as_str),
+        Some("false")
+    );
     assert!(ConfigStore::serialize(&loaded).contains("cursorShadow=false\n"));
 }
 
@@ -168,8 +183,7 @@ fn default_terminal_defaults_empty_and_round_trips() {
     let parsed = load("revision=2\ndefaultTerminal=kitty\n").expect("bare command");
     assert_eq!(parsed.default_terminal, "kitty");
     assert!(ConfigStore::serialize(&parsed).contains("defaultTerminal=kitty"));
-    let absolute =
-        load("revision=2\ndefaultTerminal=/usr/bin/alacritty\n").expect("absolute path");
+    let absolute = load("revision=2\ndefaultTerminal=/usr/bin/alacritty\n").expect("absolute path");
     assert_eq!(absolute.default_terminal, "/usr/bin/alacritty");
 }
 
@@ -203,7 +217,10 @@ fn avatar_image_defaults_empty_and_round_trips() {
 #[test]
 fn assistant_api_key_accepts_default_and_ark_keys_and_rejects_invalid_values() {
     let mut settings = ProductSettings::default();
-    assert!(settings.assistant_api_key.is_empty(), "default key is the built-in key");
+    assert!(
+        settings.assistant_api_key.is_empty(),
+        "default key is the built-in key"
+    );
     for value in ["", "ark_23bRexample"] {
         value.clone_into(&mut settings.assistant_api_key);
         settings.validate().expect("valid assistant API key");
@@ -254,8 +271,7 @@ fn invalid_avatar_image_paths_are_rejected() {
 
 #[test]
 fn background_modes_migrate_from_legacy_values_when_keys_are_absent() {
-    let legacy_wallpaper =
-        load("revision=2\nwallpaper=/home/u/a.png\n").expect("legacy wallpaper");
+    let legacy_wallpaper = load("revision=2\nwallpaper=/home/u/a.png\n").expect("legacy wallpaper");
     assert_eq!(legacy_wallpaper.wallpaper_mode, BackgroundMode::Custom);
     let empty_wallpaper = load("revision=2\n").expect("empty wallpaper");
     assert_eq!(empty_wallpaper.wallpaper_mode, BackgroundMode::Default);
@@ -348,9 +364,8 @@ fn lock_background_blur_and_dim_legacy_file_loads_defaults() {
 
 #[test]
 fn lock_background_blur_and_dim_round_trip_bounds() {
-    let parsed =
-        load("revision=2\nlockBackgroundBlurPercent=100\nlockBackgroundDimPercent=80\n")
-            .expect("bounds are valid");
+    let parsed = load("revision=2\nlockBackgroundBlurPercent=100\nlockBackgroundDimPercent=80\n")
+        .expect("bounds are valid");
     assert_eq!(parsed.lock_background_blur_percent, 100);
     assert_eq!(parsed.lock_background_dim_percent, 80);
     let text = assert_round_trip(&parsed);
@@ -503,8 +518,8 @@ fn screensaver_defaults_match_contract_and_write_nothing() {
 
 #[test]
 fn legacy_file_without_screensaver_keys_loads_defaults() {
-    let parsed = load("revision=1\nlockTimeoutMinutes=5\nlockOnSuspend=false\n")
-        .expect("legacy lock file");
+    let parsed =
+        load("revision=1\nlockTimeoutMinutes=5\nlockOnSuspend=false\n").expect("legacy lock file");
     assert_eq!(
         parsed.screensaver(),
         ProductSettings::default().screensaver()
@@ -779,16 +794,17 @@ fn floating_margin_defaults_to_four_and_stored_value_is_kept() {
 
 #[test]
 fn legacy_titlebar_button_styles_map_to_one_shape_and_are_never_written() {
-    let parse = |body: &str| {
-        load(&format!("revision=2\n{body}\n")).expect("legacy titlebar styles parse")
-    };
+    let parse =
+        |body: &str| load(&format!("revision=2\n{body}\n")).expect("legacy titlebar styles parse");
     let all_square = "titlebarMinimizeStyle=square\ntitlebarMaximizeStyle=square\n\
         titlebarCloseStyle=square";
     let parsed = parse(all_square);
     assert_eq!(parsed.titlebar_button_style, "square");
     assert_eq!(
-        parse("titlebarMinimizeStyle=default\ntitlebarMaximizeStyle=flat\ntitlebarCloseStyle=circle")
-            .titlebar_button_style,
+        parse(
+            "titlebarMinimizeStyle=default\ntitlebarMaximizeStyle=flat\ntitlebarCloseStyle=circle"
+        )
+        .titlebar_button_style,
         "circle"
     );
     assert_eq!(
@@ -1224,9 +1240,8 @@ fn taskbar_widget_keys_reject_invalid_and_keep_unknown_keys() {
             .code,
         ErrorCode::InvalidArgument
     );
-    let parsed =
-        load("revision=2\naccent=#EF4048\ntaskbarShowBattery=false\nfutureFeature=kept\n")
-            .expect("mixed file");
+    let parsed = load("revision=2\naccent=#EF4048\ntaskbarShowBattery=false\nfutureFeature=kept\n")
+        .expect("mixed file");
     assert_eq!(parsed.accent, "#EF4048");
     assert!(!parsed.taskbar_show_battery);
     assert!(parsed.taskbar_show_clock);

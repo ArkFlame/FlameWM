@@ -1145,7 +1145,9 @@ mod tests {
             requests: requests.clone(),
         };
         let mut client = SettingsClient::new(transport);
-        client.refresh_settings().expect("initial settings snapshot");
+        client
+            .refresh_settings()
+            .expect("initial settings snapshot");
         client
             .apply_settings(vec![
                 SettingsChange {

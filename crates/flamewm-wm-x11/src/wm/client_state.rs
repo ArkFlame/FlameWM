@@ -211,7 +211,8 @@ impl<C: Connection> Wm<'_, C> {
         };
         // The client spans the whole frame width below the titlebar (the border never inflates
         // the client area). A shape any narrower leaves the frame's background visible at the edge.
-        let (cw, ch) = crate::frame::geometry_shape::client_area_size(outer, self.titlebar_height());
+        let (cw, ch) =
+            crate::frame::geometry_shape::client_area_size(outer, self.titlebar_height());
         // Reset to the full client rect first: intersecting with the previous mask can only
         // shrink, so a grown frame would keep the old, smaller client shape. Also used to
         // restore an unshaped client below.

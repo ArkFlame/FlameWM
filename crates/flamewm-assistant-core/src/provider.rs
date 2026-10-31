@@ -1,7 +1,7 @@
 //! Chat providers and the selection that is persisted between runs.
 
-use crate::openai::Endpoint;
 use crate::CancelToken;
+use crate::openai::Endpoint;
 use crate::{ark, hermes};
 
 /// Where a chat turn goes. Both share one OpenAI-compatible implementation.
@@ -45,13 +45,21 @@ pub struct Selection {
 
 impl Selection {
     pub fn ark_default() -> Self {
-        Self { provider: Provider::Ark, model: ark::DEFAULT_MODEL.to_owned() }
+        Self {
+            provider: Provider::Ark,
+            model: ark::DEFAULT_MODEL.to_owned(),
+        }
     }
 
     /// Reads the stored selection. A missing provider is a legacy ARK-only state.
     pub fn from_state(provider: Option<&str>, model: Option<&str>) -> Self {
-        let provider = provider.and_then(Provider::from_id).unwrap_or(Provider::Ark);
-        let model = model.filter(|m| !m.is_empty()).unwrap_or(ark::DEFAULT_MODEL).to_owned();
+        let provider = provider
+            .and_then(Provider::from_id)
+            .unwrap_or(Provider::Ark);
+        let model = model
+            .filter(|m| !m.is_empty())
+            .unwrap_or(ark::DEFAULT_MODEL)
+            .to_owned();
         Self { provider, model }
     }
 }
@@ -96,17 +104,26 @@ mod tests {
         assert_eq!(Selection::from_state(None, None), Selection::ark_default());
         assert_eq!(
             Selection::from_state(None, Some("pro")),
-            Selection { provider: Provider::Ark, model: "pro".into() }
+            Selection {
+                provider: Provider::Ark,
+                model: "pro".into()
+            }
         );
         assert_eq!(
             Selection::from_state(Some("hermes"), Some("c/d")),
-            Selection { provider: Provider::HermesProxy, model: "c/d".into() }
+            Selection {
+                provider: Provider::HermesProxy,
+                model: "c/d".into()
+            }
         );
     }
 
     #[test]
     fn hermes_turn_falls_back_to_ark_with_notice_when_proxy_is_gone() {
-        let hermes = Selection { provider: Provider::HermesProxy, model: "c/d".into() };
+        let hermes = Selection {
+            provider: Provider::HermesProxy,
+            model: "c/d".into(),
+        };
         let (used, notice) = resolve(&hermes, false);
         assert_eq!(used, Selection::ark_default());
         assert!(notice.unwrap().contains("not running"));
@@ -114,7 +131,10 @@ mod tests {
 
     #[test]
     fn running_proxy_and_ark_turns_are_unchanged() {
-        let hermes = Selection { provider: Provider::HermesProxy, model: "c/d".into() };
+        let hermes = Selection {
+            provider: Provider::HermesProxy,
+            model: "c/d".into(),
+        };
         assert_eq!(resolve(&hermes, true), (hermes.clone(), None));
         let ark = Selection::ark_default();
         assert_eq!(resolve(&ark, false), (ark.clone(), None));

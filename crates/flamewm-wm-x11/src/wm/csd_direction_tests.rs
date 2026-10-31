@@ -34,10 +34,22 @@ fn client_press_reasserts_focus_on_active_client_and_skips_wheel() {
     // so a server-side focus divergence stayed until the window was moved (title press focuses).
     let client: Window = 0x0040_0002;
     assert_eq!(press_focus_action(None, client, 1), PressFocus::Focus);
-    assert_eq!(press_focus_action(Some(0x0040_0001), client, 1), PressFocus::Focus);
-    assert_eq!(press_focus_action(Some(client), client, 1), PressFocus::Reassert);
-    assert_eq!(press_focus_action(Some(client), client, 3), PressFocus::Reassert);
+    assert_eq!(
+        press_focus_action(Some(0x0040_0001), client, 1),
+        PressFocus::Focus
+    );
+    assert_eq!(
+        press_focus_action(Some(client), client, 1),
+        PressFocus::Reassert
+    );
+    assert_eq!(
+        press_focus_action(Some(client), client, 3),
+        PressFocus::Reassert
+    );
     // Wheel buttons (4/5) are never focus requests.
-    assert_eq!(press_focus_action(Some(client), client, 4), PressFocus::Skip);
+    assert_eq!(
+        press_focus_action(Some(client), client, 4),
+        PressFocus::Skip
+    );
     assert_eq!(press_focus_action(None, client, 5), PressFocus::Skip);
 }

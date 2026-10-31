@@ -71,7 +71,10 @@ fn t11_settings_projection_resyncs_inheriting_widget_surfaces() {
     let widgets = projection
         .find("widgets::sync_widgets(document, state)?;")
         .expect("widget surface resync in settings projection");
-    assert!(widgets > menus, "widget resync must follow the menu surface projection");
+    assert!(
+        widgets > menus,
+        "widget resync must follow the menu surface projection"
+    );
 }
 
 #[test]

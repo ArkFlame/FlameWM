@@ -456,7 +456,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Output row `slot` in visual left-to-right order; page/slot and the
     /// selection/drag input path MUST use this same mapping.
-    pub(crate) fn output_page_slot(&self, slot: usize) -> Option<&flamewm_api::display::OutputSnapshot> {
+    pub(crate) fn output_page_slot(
+        &self,
+        slot: usize,
+    ) -> Option<&flamewm_api::display::OutputSnapshot> {
         self.client
             .displays()?
             .outputs
@@ -642,7 +645,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             SettingsAction::ColorSwatch { key, value } => self.apply_text(key, value.to_owned())?,
             SettingsAction::PercentStep(key, direction) => {
-                let maximum = if key == "surfaceSaturationPercent" { 200 } else { 100 };
+                let maximum = if key == "surfaceSaturationPercent" {
+                    200
+                } else {
+                    100
+                };
                 self.step_percent(key, direction, maximum)?;
             }
             SettingsAction::GlassPreset(preset) => {

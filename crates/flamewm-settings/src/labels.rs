@@ -63,7 +63,6 @@ pub(crate) fn file_name_label(path: &str) -> String {
         .to_owned()
 }
 
-
 /// Shows the first 8 characters of a saved key followed by dots; an unset key reads as the built-in key.
 pub(crate) fn masked_api_key(key: &str) -> String {
     if key.is_empty() {

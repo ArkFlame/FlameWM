@@ -544,18 +544,16 @@ impl X11App {
                 self.upload_opaque_fallback(self.backbuffer, &rgba, width, height, width, height)
             })
         };
-        uploaded
-            .ok()
-            .map(|()| {
-                static LOGGED: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
-                if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    eprintln!(
-                        "FLAMEWM_RENDER_GPU_FRAME whole-frame gpu paint active ({width}x{height})"
-                    );
-                }
-                count
-            })
+        uploaded.ok().map(|()| {
+            static LOGGED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                eprintln!(
+                    "FLAMEWM_RENDER_GPU_FRAME whole-frame gpu paint active ({width}x{height})"
+                );
+            }
+            count
+        })
     }
 
     /// The RGBA8 pixels of one whole frame on the GPU, or `None` when a command keeps the XRender
@@ -581,13 +579,7 @@ impl X11App {
             }
         };
         let (width, height) = (self.width, self.height);
-        let ops = match gpu_frame::frame_ops(
-            commands,
-            scale,
-            &sources,
-            (width, height),
-            backdrop,
-        ) {
+        let ops = match gpu_frame::frame_ops(commands, scale, &sources, (width, height), backdrop) {
             Ok(ops) => ops,
             Err(reason) => {
                 gpu_frame::count_fallback(reason);
@@ -802,9 +794,9 @@ impl X11App {
                 // The XRender blit's own conversion: decoded pixels become premultiplied ARGB32
                 // words, so the GPU composites the same colours. Tint is the same default too.
                 let words = match treatment {
-                    ImageTreatment::Original => super::original_argb32(
-                        pixels, src_w, src_h, width, height, *tint,
-                    ),
+                    ImageTreatment::Original => {
+                        super::original_argb32(pixels, src_w, src_h, width, height, *tint)
+                    }
                     ImageTreatment::SymbolicForeground => super::symbolic_foreground_argb32(
                         pixels,
                         src_w,
@@ -1157,7 +1149,9 @@ impl X11App {
                 &mut child,
             )
         };
-        let serial = self.published_desktop_frame.map_or(0, |last| last.wrapping_add(1));
+        let serial = self
+            .published_desktop_frame
+            .map_or(0, |last| last.wrapping_add(1));
         let atom = unsafe { self.desktop_frame_atom() };
         let data: [std::os::raw::c_long; 6] = [
             self.backbuffer as std::os::raw::c_long,
@@ -1479,8 +1473,9 @@ impl X11App {
                         // SAFETY: same initialized backbuffer/display contract as `paint`.
                         unsafe { xrender.set_destination_clip(to_clip(part))? };
                         // SAFETY: same contract; the clip is restored below on every path.
-                        let filled =
-                            unsafe { crate::xrender_aa::fill_rounded_rect(xrender, rect, radius, *color) };
+                        let filled = unsafe {
+                            crate::xrender_aa::fill_rounded_rect(xrender, rect, radius, *color)
+                        };
                         let reset = unsafe { xrender.set_destination_clip(to_clip(restore_rect)) };
                         filled?;
                         reset?;
@@ -2127,7 +2122,11 @@ mod scene_clear_tests {
 
     #[test]
     fn depth24_scene_clear_is_never_opaque_black() {
-        assert_ne!(scene_clear_pixel(24), 0, "corner pixels must not be 0x000000 on depth 24");
+        assert_ne!(
+            scene_clear_pixel(24),
+            0,
+            "corner pixels must not be 0x000000 on depth 24"
+        );
         assert_eq!(scene_clear_pixel(32), TRANSPARENT_CLEAR_PIXEL);
     }
 }
@@ -2165,6 +2164,9 @@ mod partial_fill_clip_tests {
     #[test]
     fn partial_fill_outside_region_paint_is_dropped() {
         let region = r(0.0, 80.0, 50.0, 20.0);
-        assert_eq!(partial_fill_clip(r(60.0, 85.0, 20.0, 5.0), Some(region)), None);
+        assert_eq!(
+            partial_fill_clip(r(60.0, 85.0, 20.0, 5.0), Some(region)),
+            None
+        );
     }
 }

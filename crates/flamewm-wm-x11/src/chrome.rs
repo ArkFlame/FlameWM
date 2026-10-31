@@ -87,7 +87,6 @@ impl ControlPolicy {
 mod icon;
 pub use icon::*;
 
-
 /// Material variant for one cached control glyph: resting or hover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ControlMaterial {

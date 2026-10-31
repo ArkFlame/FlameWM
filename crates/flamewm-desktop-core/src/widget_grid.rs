@@ -80,7 +80,13 @@ pub const fn allowed_spans(kind: WidgetKind) -> &'static [Span] {
         | WidgetKind::History
         | WidgetKind::Network
         | WidgetKind::Ring => &[Span::SINGLE, Span::WIDE, Span::LARGE],
-        WidgetKind::Custom => &[Span::SINGLE, Span::WIDE, Span::LARGE, Span::WIDE3, Span::WIDE4],
+        WidgetKind::Custom => &[
+            Span::SINGLE,
+            Span::WIDE,
+            Span::LARGE,
+            Span::WIDE3,
+            Span::WIDE4,
+        ],
         WidgetKind::Media => &[Span::WIDE, Span::LARGE],
         WidgetKind::Weather | WidgetKind::Calendar => &[Span::WIDE, Span::LARGE],
     }
@@ -120,7 +126,12 @@ impl Edges {
             "sw" => (true, false, false, true),
             _ => return None,
         };
-        Some(Self { left, right, top, bottom })
+        Some(Self {
+            left,
+            right,
+            top,
+            bottom,
+        })
     }
 }
 
@@ -138,7 +149,8 @@ pub fn edge_resize(
     let current = metrics.from_right(current);
     // Left/top boundaries sit at `origin + k * pitch`; right/bottom boundaries at
     // `origin + k * pitch - gutter`, so the gutter is added before rounding.
-    let left_index = |px: i32, origin: i32, pitch: i32| (px - origin + pitch / 2).div_euclid(pitch.max(1));
+    let left_index =
+        |px: i32, origin: i32, pitch: i32| (px - origin + pitch / 2).div_euclid(pitch.max(1));
     let right_index = |px: i32, origin: i32, pitch: i32| {
         (px - origin + metrics.gutter + pitch / 2).div_euclid(pitch.max(1))
     };
@@ -150,7 +162,10 @@ pub fn edge_resize(
         let left = left_index(rect.x, x0, metrics.pitch_x);
         (left, right_fixed - left)
     } else if edges.right && !edges.left {
-        (current.col, right_index(rect.right(), x0, metrics.pitch_x) - current.col)
+        (
+            current.col,
+            right_index(rect.right(), x0, metrics.pitch_x) - current.col,
+        )
     } else {
         (current.col, current.span.w)
     };
@@ -158,13 +173,30 @@ pub fn edge_resize(
         let top = left_index(rect.y, y0, metrics.pitch_y);
         (top, bottom_fixed - top)
     } else if edges.bottom && !edges.top {
-        (current.row, right_index(rect.bottom(), y0, metrics.pitch_y) - current.row)
+        (
+            current.row,
+            right_index(rect.bottom(), y0, metrics.pitch_y) - current.row,
+        )
     } else {
         (current.row, current.span.h)
     };
-    let span = fit_span(kind, Span { w: width.max(1), h: height.max(1) });
-    let col = if edges.left && !edges.right { right_fixed - span.w } else { col };
-    let row = if edges.top && !edges.bottom { bottom_fixed - span.h } else { row };
+    let span = fit_span(
+        kind,
+        Span {
+            w: width.max(1),
+            h: height.max(1),
+        },
+    );
+    let col = if edges.left && !edges.right {
+        right_fixed - span.w
+    } else {
+        col
+    };
+    let row = if edges.top && !edges.bottom {
+        bottom_fixed - span.h
+    } else {
+        row
+    };
     Placement::left(
         col.clamp(0, (metrics.cols - span.w).max(0)),
         row.clamp(0, (metrics.rows - span.h).max(0)),
@@ -187,7 +219,12 @@ pub struct Placement {
 impl Placement {
     #[must_use]
     pub const fn left(col: i32, row: i32, span: Span) -> Self {
-        Self { col, row, span, right: false }
+        Self {
+            col,
+            row,
+            span,
+            right: false,
+        }
     }
 
     /// Whether the cells stay inside the grid.
@@ -297,7 +334,14 @@ impl GridMetrics {
     /// Pixel rectangle of a placement. Outer edges sit exactly on the margins.
     #[must_use]
     pub fn rect_of(self, placement: Placement) -> Rect {
-        let x0 = lane(self.work.x, self.work.width, self.margin, self.gutter, self.cols, placement.col);
+        let x0 = lane(
+            self.work.x,
+            self.work.width,
+            self.margin,
+            self.gutter,
+            self.cols,
+            placement.col,
+        );
         let x1 = lane(
             self.work.x,
             self.work.width,
@@ -306,7 +350,14 @@ impl GridMetrics {
             self.cols,
             placement.col + placement.span.w,
         ) - self.gutter;
-        let y0 = lane(self.work.y, self.work.height, self.margin, self.gutter, self.rows, placement.row);
+        let y0 = lane(
+            self.work.y,
+            self.work.height,
+            self.margin,
+            self.gutter,
+            self.rows,
+            placement.row,
+        );
         let y1 = lane(
             self.work.y,
             self.work.height,
@@ -355,7 +406,10 @@ impl GridMetrics {
     /// Fits the grid and overlaps none of `occupied`.
     #[must_use]
     pub fn is_free(self, placement: Placement, occupied: &[Placement]) -> bool {
-        placement.fits(self) && occupied.iter().all(|other| !self.collides(placement, *other))
+        placement.fits(self)
+            && occupied
+                .iter()
+                .all(|other| !self.collides(placement, *other))
     }
 
     /// Converts a legacy right-anchored cell to a left column in this grid.
@@ -382,7 +436,11 @@ impl GridMetrics {
     #[must_use]
     pub fn nearest_free(self, want: Placement, occupied: &[Placement]) -> Option<Placement> {
         self.candidates(want.span)
-            .filter(|candidate| occupied.iter().all(|other| !self.collides(*candidate, *other)))
+            .filter(|candidate| {
+                occupied
+                    .iter()
+                    .all(|other| !self.collides(*candidate, *other))
+            })
             .min_by_key(|candidate| {
                 (
                     (candidate.col - want.col).abs() + (candidate.row - want.row).abs(),
@@ -394,9 +452,18 @@ impl GridMetrics {
 
     /// Free cell whose centre is nearest to `point`; ties row-major.
     #[must_use]
-    pub fn nearest_free_to(self, span: Span, point: Point, occupied: &[Placement]) -> Option<Placement> {
+    pub fn nearest_free_to(
+        self,
+        span: Span,
+        point: Point,
+        occupied: &[Placement],
+    ) -> Option<Placement> {
         self.candidates(span)
-            .filter(|candidate| occupied.iter().all(|other| !self.collides(*candidate, *other)))
+            .filter(|candidate| {
+                occupied
+                    .iter()
+                    .all(|other| !self.collides(*candidate, *other))
+            })
             .min_by_key(|candidate| {
                 let rect = self.rect_of(*candidate);
                 let dx = i64::from(rect.x + rect.width / 2 - point.x);
@@ -497,7 +564,11 @@ mod tests {
     /// Asserts the cells and gutters fill the work area exactly inside the margins.
     fn assert_fills(metrics: GridMetrics) {
         let first = metrics.rect_of(Placement::left(0, 0, Span::SINGLE));
-        let last = metrics.rect_of(Placement::left(metrics.cols - 1, metrics.rows - 1, Span::SINGLE));
+        let last = metrics.rect_of(Placement::left(
+            metrics.cols - 1,
+            metrics.rows - 1,
+            Span::SINGLE,
+        ));
         let work = metrics.work;
         assert_eq!(first.x, work.x + metrics.margin, "left edge");
         assert_eq!(first.y, work.y + metrics.margin, "top edge");
@@ -561,7 +632,14 @@ mod tests {
 
     #[test]
     fn fill_holds_across_sizes_scales_and_taskbar_heights() {
-        for &(w, h) in &[(1280, 720), (1366, 768), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160)] {
+        for &(w, h) in &[
+            (1280, 720),
+            (1366, 768),
+            (1600, 900),
+            (1920, 1080),
+            (2560, 1440),
+            (3840, 2160),
+        ] {
             for &strut in &[0, 36, 48, 72] {
                 for &scale in &[100, 125, 150, 200] {
                     assert_fills(GridMetrics::for_work_area(work(w, h - strut), scale));
@@ -573,7 +651,11 @@ mod tests {
     #[test]
     fn centre_cells_are_reachable_and_inside() {
         let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let mid = metrics.rect_of(Placement::left(metrics.cols / 2, metrics.rows / 2, Span::SINGLE));
+        let mid = metrics.rect_of(Placement::left(
+            metrics.cols / 2,
+            metrics.rows / 2,
+            Span::SINGLE,
+        ));
         assert!(mid.x > 800 && mid.x < 1100, "centre column at {}", mid.x);
     }
 
@@ -581,9 +663,14 @@ mod tests {
     fn snap_and_nearest_free_to_centre_work() {
         let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
         let target = metrics.rect_of(Placement::left(8, 4, Span::SINGLE));
-        assert_eq!(metrics.snap(target.origin(), Span::SINGLE), Placement::left(8, 4, Span::SINGLE));
+        assert_eq!(
+            metrics.snap(target.origin(), Span::SINGLE),
+            Placement::left(8, 4, Span::SINGLE)
+        );
         let occupied = [Placement::left(8, 4, Span::SINGLE)];
-        let free = metrics.nearest_free_to(Span::SINGLE, metrics.center(), &occupied).unwrap();
+        let free = metrics
+            .nearest_free_to(Span::SINGLE, metrics.center(), &occupied)
+            .unwrap();
         assert_ne!(free, occupied[0]);
         assert!(metrics.is_free(free, &occupied));
     }
@@ -592,7 +679,9 @@ mod tests {
     fn collisions_are_resolved_by_nearest_free_cell() {
         let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
         let occupied = [Placement::left(3, 3, Span::SINGLE)];
-        let slot = metrics.nearest_free(Placement::left(3, 3, Span::SINGLE), &occupied).unwrap();
+        let slot = metrics
+            .nearest_free(Placement::left(3, 3, Span::SINGLE), &occupied)
+            .unwrap();
         assert_eq!((slot.col - 3).abs() + (slot.row - 3).abs(), 1);
     }
 
@@ -604,13 +693,20 @@ mod tests {
         let slots = small.reflow(&items, Some((big.cols, big.rows)));
         let slot = slots[0].unwrap();
         assert!(slot.fits(small));
-        assert_eq!(slot.col, small.cols - 1 - 1, "right side stays on the right");
+        assert_eq!(
+            slot.col,
+            small.cols - 1 - 1,
+            "right side stays on the right"
+        );
     }
 
     #[test]
     fn reflow_without_previous_size_keeps_cells_that_still_fit() {
         let metrics = GridMetrics::for_work_area(work(1366, 732), 100);
-        let items = [Placement::left(1, 1, Span::LARGE), Placement::left(11, 5, Span::SINGLE)];
+        let items = [
+            Placement::left(1, 1, Span::LARGE),
+            Placement::left(11, 5, Span::SINGLE),
+        ];
         let slots = metrics.reflow(&items, None);
         assert_eq!(slots[0], Some(Placement::left(1, 1, Span::LARGE)));
         assert_eq!(slots[1], Some(Placement::left(11, 5, Span::SINGLE)));
@@ -619,7 +715,10 @@ mod tests {
     #[test]
     fn reflow_moves_overlapping_items_to_free_cells() {
         let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let items = [Placement::left(0, 0, Span::LARGE), Placement::left(1, 1, Span::SINGLE)];
+        let items = [
+            Placement::left(0, 0, Span::LARGE),
+            Placement::left(1, 1, Span::SINGLE),
+        ];
         let slots = metrics.reflow(&items, None);
         let a = slots[0].unwrap();
         let b = slots[1].unwrap();
@@ -629,11 +728,19 @@ mod tests {
     #[test]
     fn right_anchored_legacy_cells_map_to_right_columns() {
         let metrics = GridMetrics::for_work_area(work(1920, 1044), 100);
-        let legacy = Placement { col: 0, row: 0, span: Span::WIDE, right: true };
+        let legacy = Placement {
+            col: 0,
+            row: 0,
+            span: Span::WIDE,
+            right: true,
+        };
         let left = metrics.from_right(legacy);
         assert_eq!(left.col, metrics.cols - 2);
         assert!(!left.right);
-        assert_eq!(metrics.rect_of(left).right(), metrics.work.right() - metrics.margin);
+        assert_eq!(
+            metrics.rect_of(left).right(),
+            metrics.work.right() - metrics.margin
+        );
     }
 
     #[test]
@@ -655,7 +762,10 @@ mod tests {
     #[test]
     fn every_default_span_is_an_allowed_span() {
         for kind in WidgetKind::ALL {
-            assert!(allowed_spans(kind).contains(&default_span(kind)), "{kind:?}");
+            assert!(
+                allowed_spans(kind).contains(&default_span(kind)),
+                "{kind:?}"
+            );
         }
     }
 
@@ -665,7 +775,10 @@ mod tests {
         assert_eq!(Span::from_label("4x2"), Some(Span::WIDE4));
         assert!(allowed_spans(WidgetKind::Custom).contains(&Span::WIDE4));
         assert!(allowed_spans(WidgetKind::Custom).contains(&Span::WIDE3));
-        assert_eq!(fit_span(WidgetKind::Custom, Span { w: 4, h: 2 }), Span::WIDE4);
+        assert_eq!(
+            fit_span(WidgetKind::Custom, Span { w: 4, h: 2 }),
+            Span::WIDE4
+        );
         assert_eq!(fit_span(WidgetKind::Clock, Span::WIDE4), Span::LARGE);
         assert!(!allowed_spans(WidgetKind::Clock).contains(&Span::WIDE3));
     }
@@ -707,9 +820,33 @@ mod edge_tests {
 
     #[test]
     fn names_map_to_edges_and_corners() {
-        assert_eq!(edges("n"), Edges { left: false, right: false, top: true, bottom: false });
-        assert_eq!(edges("se"), Edges { left: false, right: true, top: false, bottom: true });
-        assert_eq!(edges("sw"), Edges { left: true, right: false, top: false, bottom: true });
+        assert_eq!(
+            edges("n"),
+            Edges {
+                left: false,
+                right: false,
+                top: true,
+                bottom: false
+            }
+        );
+        assert_eq!(
+            edges("se"),
+            Edges {
+                left: false,
+                right: true,
+                top: false,
+                bottom: true
+            }
+        );
+        assert_eq!(
+            edges("sw"),
+            Edges {
+                left: true,
+                right: false,
+                top: false,
+                bottom: true
+            }
+        );
         assert!(Edges::from_name("x").is_none());
     }
 
@@ -718,7 +855,10 @@ mod edge_tests {
         let m = metrics();
         let current = Placement::left(0, 0, Span::SINGLE);
         let rect = m.rect_of(Placement::left(0, 0, Span::WIDE));
-        assert_eq!(edge_resize(WidgetKind::Clock, current, edges("e"), rect, m), Placement::left(0, 0, Span::WIDE));
+        assert_eq!(
+            edge_resize(WidgetKind::Clock, current, edges("e"), rect, m),
+            Placement::left(0, 0, Span::WIDE)
+        );
     }
 
     #[test]
@@ -726,7 +866,10 @@ mod edge_tests {
         let m = metrics();
         // Custom 3x2 at cols 3..5; drag left edge to col 1 gives 5 cols -> WIDE4 anchored at col 2.
         let current = Placement::left(3, 0, Span::WIDE3);
-        let rect = m.rect_of(Placement { span: Span { w: 5, h: 2 }, ..Placement::left(1, 0, Span::SINGLE) });
+        let rect = m.rect_of(Placement {
+            span: Span { w: 5, h: 2 },
+            ..Placement::left(1, 0, Span::SINGLE)
+        });
         let got = edge_resize(WidgetKind::Custom, current, edges("w"), rect, m);
         assert_eq!(got, Placement::left(2, 0, Span::WIDE4));
         assert_eq!(got.col + got.span.w, 6, "right edge stays fixed");
@@ -736,10 +879,16 @@ mod edge_tests {
     fn top_edge_drag_moves_row_and_keeps_bottom_edge() {
         let m = metrics();
         let current = Placement::left(0, 4, Span::LARGE);
-        let rect = m.rect_of(Placement { span: Span { w: 1, h: 3 }, ..Placement::left(0, 3, Span::SINGLE) });
+        let rect = m.rect_of(Placement {
+            span: Span { w: 1, h: 3 },
+            ..Placement::left(0, 3, Span::SINGLE)
+        });
         let got = edge_resize(WidgetKind::Custom, current, edges("n"), rect, m);
         assert_eq!(got.row + got.span.h, 6, "bottom edge stays fixed");
-        assert_eq!(got.span.h, 2, "3 rows requested, nearest allowed height is 2");
+        assert_eq!(
+            got.span.h, 2,
+            "3 rows requested, nearest allowed height is 2"
+        );
     }
 
     #[test]
@@ -748,7 +897,10 @@ mod edge_tests {
         let last = m.cols - 1;
         let current = Placement::left(last, 0, Span::SINGLE);
         // Dragged two columns past the last one: wants WIDE at `last`, which must clamp to `last - 1`.
-        let rect = m.rect_of(Placement { span: Span { w: 2, h: 1 }, ..current });
+        let rect = m.rect_of(Placement {
+            span: Span { w: 2, h: 1 },
+            ..current
+        });
         let got = edge_resize(WidgetKind::Clock, current, edges("e"), rect, m);
         assert!(got.fits(m), "placement stays inside the grid: {got:?}");
         assert_eq!(got.span, Span::WIDE, "Clock is limited to 2x1 here");
@@ -759,7 +911,13 @@ mod edge_tests {
     fn far_corner_drag_clamps_clock_to_large() {
         let m = metrics();
         let current = Placement::left(0, 0, Span::SINGLE);
-        let rect = m.rect_of(Placement { span: Span { w: m.cols, h: m.rows }, ..current });
+        let rect = m.rect_of(Placement {
+            span: Span {
+                w: m.cols,
+                h: m.rows,
+            },
+            ..current
+        });
         let got = edge_resize(WidgetKind::Clock, current, edges("se"), rect, m);
         assert_eq!(got, Placement::left(0, 0, Span::LARGE));
     }

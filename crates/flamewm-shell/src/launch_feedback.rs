@@ -597,7 +597,10 @@ mod tests {
     #[test]
     fn pointer_cadence_is_fast_only_while_moving() {
         assert_eq!(poll_interval(Duration::ZERO), POLL_MOVING);
-        assert_eq!(poll_interval(MOTION_WINDOW - Duration::from_millis(1)), POLL_MOVING);
+        assert_eq!(
+            poll_interval(MOTION_WINDOW - Duration::from_millis(1)),
+            POLL_MOVING
+        );
         assert_eq!(poll_interval(MOTION_WINDOW), POLL_STILL);
         assert_eq!(poll_interval(Duration::from_secs(14)), POLL_STILL);
     }

@@ -96,7 +96,9 @@ pub fn assistant_api_key_error(value: &str) -> Option<&'static str> {
         return None;
     }
     let shape_ok = value.starts_with("ark_")
-        && !value.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+        && !value
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch.is_control())
         && value.chars().count() <= ASSISTANT_API_KEY_MAX_CHARS;
     if shape_ok {
         None
@@ -107,7 +109,7 @@ pub fn assistant_api_key_error(value: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod assistant_api_key_tests {
-    use super::{assistant_api_key_error, ASSISTANT_API_KEY_MAX_CHARS};
+    use super::{ASSISTANT_API_KEY_MAX_CHARS, assistant_api_key_error};
 
     #[test]
     fn empty_and_ark_keys_are_valid() {

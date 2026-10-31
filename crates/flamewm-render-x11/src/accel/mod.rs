@@ -67,7 +67,8 @@ impl PixelBackend for CpuPixels {
             let row_base = y as usize * width as usize * 4;
             for (from, to) in [(start, hole_start.min(end)), (hole_end.max(start), end)] {
                 if from < to {
-                    let span = &mut pixels[row_base + from as usize * 4..row_base + to as usize * 4];
+                    let span =
+                        &mut pixels[row_base + from as usize * 4..row_base + to as usize * 4];
                     blend_span(span, color, alpha);
                 }
             }
@@ -93,10 +94,15 @@ fn blend_span(span: &mut [u8], color: [u8; 4], alpha: f32) {
 /// insets as the outer fill, or `None` when `y` is outside `rect`. An empty range is `Some` with
 /// `start == end`.
 fn hole_row_span(rect: RoundedRect, y: i32) -> Option<(i32, i32)> {
-    let row = u32::try_from(y - rect.y).ok().filter(|row| *row < rect.height)?;
+    let row = u32::try_from(y - rect.y)
+        .ok()
+        .filter(|row| *row < rect.height)?;
     let inset = row_inset(rect.width, rect.height, rect.radius, row) as i32;
     let start = rect.x.saturating_add(inset);
-    let end = rect.x.saturating_add(rect.width as i32).saturating_sub(inset);
+    let end = rect
+        .x
+        .saturating_add(rect.width as i32)
+        .saturating_sub(inset);
     Some((start, end.max(start)))
 }
 
@@ -349,7 +355,8 @@ mod tests {
         let alpha = f32::from(color[3]) / 255.0;
         for y in 0..height as i32 {
             for x in 0..width as i32 {
-                let (Ok(row), Ok(col)) = (u32::try_from(y - outer.y), u32::try_from(x - outer.x)) else {
+                let (Ok(row), Ok(col)) = (u32::try_from(y - outer.y), u32::try_from(x - outer.x))
+                else {
                     continue;
                 };
                 if row >= outer.height || col >= outer.width {
@@ -371,8 +378,9 @@ mod tests {
                         + f32::from(pixels[index + c]) * (1.0 - alpha))
                         .round() as u8;
                 }
-                pixels[index + 3] =
-                    (f32::from(color[3]) + f32::from(pixels[index + 3]) * (1.0 - alpha)).round() as u8;
+                pixels[index + 3] = (f32::from(color[3])
+                    + f32::from(pixels[index + 3]) * (1.0 - alpha))
+                    .round() as u8;
             }
         }
     }
@@ -380,12 +388,68 @@ mod tests {
     #[test]
     fn row_span_fill_matches_the_per_pixel_rule_with_holes_and_edges() {
         let (width, height) = (64_u32, 48_u32);
-        let frame: Vec<u8> = (0..width * height * 4).map(|i| (i * 7 % 251) as u8).collect();
+        let frame: Vec<u8> = (0..width * height * 4)
+            .map(|i| (i * 7 % 251) as u8)
+            .collect();
         let cases = [
-            (RoundedRect { x: 5, y: 4, width: 40, height: 30, radius: 9 }, Some(RoundedRect { x: 7, y: 6, width: 36, height: 26, radius: 7 })),
-            (RoundedRect { x: -10, y: -6, width: 50, height: 40, radius: 12 }, Some(RoundedRect { x: -8, y: -4, width: 46, height: 36, radius: 10 })),
-            (RoundedRect { x: 30, y: 20, width: 60, height: 40, radius: 0 }, None),
-            (RoundedRect { x: 10, y: 10, width: 20, height: 20, radius: 3 }, Some(RoundedRect { x: 12, y: 12, width: 2, height: 2, radius: 1 })),
+            (
+                RoundedRect {
+                    x: 5,
+                    y: 4,
+                    width: 40,
+                    height: 30,
+                    radius: 9,
+                },
+                Some(RoundedRect {
+                    x: 7,
+                    y: 6,
+                    width: 36,
+                    height: 26,
+                    radius: 7,
+                }),
+            ),
+            (
+                RoundedRect {
+                    x: -10,
+                    y: -6,
+                    width: 50,
+                    height: 40,
+                    radius: 12,
+                },
+                Some(RoundedRect {
+                    x: -8,
+                    y: -4,
+                    width: 46,
+                    height: 36,
+                    radius: 10,
+                }),
+            ),
+            (
+                RoundedRect {
+                    x: 30,
+                    y: 20,
+                    width: 60,
+                    height: 40,
+                    radius: 0,
+                },
+                None,
+            ),
+            (
+                RoundedRect {
+                    x: 10,
+                    y: 10,
+                    width: 20,
+                    height: 20,
+                    radius: 3,
+                },
+                Some(RoundedRect {
+                    x: 12,
+                    y: 12,
+                    width: 2,
+                    height: 2,
+                    radius: 1,
+                }),
+            ),
         ];
         for (outer, hole) in cases {
             let mut expected = frame.clone();
@@ -815,7 +879,11 @@ mod tests {
         let mut batch = vec![0_u8; cpu.len()];
         PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &ops).expect("gpu");
         let max = cpu.iter().zip(&batch).map(|(a, b)| a.abs_diff(*b)).max();
-        eprintln!("FULLFRAME cpu[0..4]={:?} gpu[0..4]={:?} max={max:?}", &cpu[..4], &batch[..4]);
+        eprintln!(
+            "FULLFRAME cpu[0..4]={:?} gpu[0..4]={:?} max={max:?}",
+            &cpu[..4],
+            &batch[..4]
+        );
         assert!(max.unwrap_or(0) <= 1);
     }
 
@@ -826,17 +894,34 @@ mod tests {
         };
         let (width, height) = (64_u32, 64_u32);
         let ops = [PixelOp::FillRoundedRect {
-            outer: RoundedRect { x: 8, y: 8, width: 40, height: 40, radius: 6 },
+            outer: RoundedRect {
+                x: 8,
+                y: 8,
+                width: 40,
+                height: 40,
+                radius: 6,
+            },
             hole: None,
             color: [200, 100, 50, 128],
         }];
         let mut cpu = vec![0_u8; (width * height * 4) as usize];
-        CpuPixels::default().paint_batch(&mut cpu, width, height, &ops).expect("cpu");
+        CpuPixels::default()
+            .paint_batch(&mut cpu, width, height, &ops)
+            .expect("cpu");
         let mut batch = vec![0_u8; cpu.len()];
         PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &ops).expect("gpu");
         let i = (30 * width + 30) as usize * 4;
-        eprintln!("TRANSLUCENT cpu={:?} gpu={:?}", &cpu[i..i + 4], &batch[i..i + 4]);
-        let max = cpu.iter().zip(&batch).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        eprintln!(
+            "TRANSLUCENT cpu={:?} gpu={:?}",
+            &cpu[i..i + 4],
+            &batch[i..i + 4]
+        );
+        let max = cpu
+            .iter()
+            .zip(&batch)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
         let centre = (cpu[i..i + 4] == batch[i..i + 4]) as u8;
         assert!(centre == 1 && max <= 80, "max {max}");
     }
@@ -1078,7 +1163,12 @@ mod tests {
             .map(|(index, word)| {
                 let px = cx + (index as u32 % cw) as i32;
                 let py = BACKDROP_CLIP.1 + (index as u32 / cw) as i32;
-                if flamewm_render_core::pixels::inside_node_shape(px, py, BACKDROP_NODE, BACKDROP_CORNER) {
+                if flamewm_render_core::pixels::inside_node_shape(
+                    px,
+                    py,
+                    BACKDROP_NODE,
+                    BACKDROP_CORNER,
+                ) {
                     0xff00_0000 | (word & 0x00ff_ffff)
                 } else {
                     0
@@ -1121,14 +1211,23 @@ mod tests {
                 let (px, py) = (cx + col as i32, cy + row as i32);
                 let at = ((py as u32 * width + px as u32) * 4) as usize;
                 let word = words[(row * cw + col) as usize];
-                if flamewm_render_core::pixels::inside_node_shape(px, py, BACKDROP_NODE, BACKDROP_CORNER) {
+                if flamewm_render_core::pixels::inside_node_shape(
+                    px,
+                    py,
+                    BACKDROP_NODE,
+                    BACKDROP_CORNER,
+                ) {
                     let got = [actual[at], actual[at + 1], actual[at + 2]];
                     let want = [(word >> 16) as u8, (word >> 8) as u8, word as u8];
                     assert_eq!(got, want, "inside pixel ({px},{py})");
                     assert_eq!(actual[at + 3], 255, "opaque inside ({px},{py})");
                 } else {
                     assert_eq!(word, 0, "outside words are zero ({px},{py})");
-                    assert_eq!(&actual[at..at + 4], &source[at..at + 4], "outside untouched");
+                    assert_eq!(
+                        &actual[at..at + 4],
+                        &source[at..at + 4],
+                        "outside untouched"
+                    );
                 }
             }
         }
@@ -1151,7 +1250,8 @@ mod tests {
             radius: crate::backdrop::blur_radius_px(0, 50),
         }];
         let mut actual = source.clone();
-        PixelBackend::paint_batch(&mut gpu, &mut actual, width, height, &ops).expect("gpu backdrop");
+        PixelBackend::paint_batch(&mut gpu, &mut actual, width, height, &ops)
+            .expect("gpu backdrop");
         let (cx, cy, cw, ch) = BACKDROP_CLIP;
         let mut worst = 0_u8;
         for row in 0..ch {
@@ -1159,19 +1259,31 @@ mod tests {
                 let (px, py) = (cx + col as i32, cy + row as i32);
                 let at = ((py as u32 * width + px as u32) * 4) as usize;
                 let word = words[(row * cw + col) as usize];
-                if flamewm_render_core::pixels::inside_node_shape(px, py, BACKDROP_NODE, BACKDROP_CORNER) {
+                if flamewm_render_core::pixels::inside_node_shape(
+                    px,
+                    py,
+                    BACKDROP_NODE,
+                    BACKDROP_CORNER,
+                ) {
                     let want = [(word >> 16) as u8, (word >> 8) as u8, word as u8];
                     for channel in 0..3 {
                         worst = worst.max(actual[at + channel].abs_diff(want[channel]));
                     }
                     assert_eq!(actual[at + 3], 255, "opaque inside ({px},{py})");
                 } else {
-                    assert_eq!(&actual[at..at + 4], &source[at..at + 4], "outside untouched");
+                    assert_eq!(
+                        &actual[at..at + 4],
+                        &source[at..at + 4],
+                        "outside untouched"
+                    );
                 }
             }
         }
         eprintln!("gpu backdrop vs cpu node words: worst channel diff {worst}");
-        assert!(worst <= GPU_BACKDROP_TOLERANCE, "worst channel diff {worst}");
+        assert!(
+            worst <= GPU_BACKDROP_TOLERANCE,
+            "worst channel diff {worst}"
+        );
     }
 
     const CLIPPED_OUTER: RoundedRect = RoundedRect {
@@ -1219,7 +1331,11 @@ mod tests {
             for px in 0..width as i32 {
                 let at = ((py as u32 * width + px as u32) * 4) as usize;
                 let inside = px >= cx && px < cx + cw as i32 && py >= cy && py < cy + ch as i32;
-                let want = if inside { &full[at..at + 4] } else { &source[at..at + 4] };
+                let want = if inside {
+                    &full[at..at + 4]
+                } else {
+                    &source[at..at + 4]
+                };
                 assert_eq!(&clipped[at..at + 4], want, "pixel ({px},{py})");
             }
         }
@@ -1240,9 +1356,16 @@ mod tests {
             clip: CLIPPED_CLIP,
         }];
         // The production reference is the XRender painter; the CPU backend differs from it here.
-        let reference = xrender_reference(CLIPPED_OUTER, Some(CLIPPED_OUTER.inset(3)), [200, 60, 30, 160], &source, width);
+        let reference = xrender_reference(
+            CLIPPED_OUTER,
+            Some(CLIPPED_OUTER.inset(3)),
+            [200, 60, 30, 160],
+            &source,
+            width,
+        );
         let mut batch = source.clone();
-        PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &ops).expect("gpu clipped fill");
+        PixelBackend::paint_batch(&mut gpu, &mut batch, width, height, &ops)
+            .expect("gpu clipped fill");
         let (cx, cy, cw, ch) = CLIPPED_CLIP;
         let mut worst = 0_u8;
         for py in 0..height as i32 {
@@ -1254,7 +1377,11 @@ mod tests {
                         worst = worst.max(batch[at + channel].abs_diff(reference[at + channel]));
                     }
                 } else {
-                    assert_eq!(&batch[at..at + 4], &source[at..at + 4], "outside ({px},{py})");
+                    assert_eq!(
+                        &batch[at..at + 4],
+                        &source[at..at + 4],
+                        "outside ({px},{py})"
+                    );
                 }
             }
         }

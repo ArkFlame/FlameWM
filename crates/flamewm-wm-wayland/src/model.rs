@@ -499,7 +499,8 @@ pub struct Chord {
 /// key never matches anything.
 fn chord_can_fire(mods: Mods, key: &str) -> bool {
     // Binding a printable key without a command modifier would fire while the user types.
-    !key.is_empty() && (!flamewm_platform::shortcuts::is_typing_key(key) || mods.ctrl || mods.alt || mods.logo)
+    !key.is_empty()
+        && (!flamewm_platform::shortcuts::is_typing_key(key) || mods.ctrl || mods.alt || mods.logo)
 }
 
 /// Parses a normalized binding from `flamewm_platform::shortcuts`.

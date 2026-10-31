@@ -231,7 +231,9 @@ impl<C: Connection> Wm<'_, C> {
             let start_binding = is_bare_state(before)
                 && crate::shortcut_action_for_key(key.keycode, before).as_deref()
                     == Some(ACTION_TOGGLE_START_MENU);
-            let outcome = self.super_tap.raw_press(start_binding, key.keycode, key.time);
+            let outcome = self
+                .super_tap
+                .raw_press(start_binding, key.keycode, key.time);
             if outcome == SuperTapOutcome::Toggle {
                 self.changes.start_menu_toggle = true;
             }

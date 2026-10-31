@@ -34,7 +34,11 @@ pub fn parse_args(args: &[String]) -> Option<Anchor> {
 pub fn max_height(root: (u32, u32), anchor: Anchor) -> i32 {
     let [_, ay, _, ah] = anchor;
     let root_h = root.1 as i32;
-    let room = if ay + ah / 2 > root_h / 2 { ay - GAP } else { root_h - (ay + ah) - GAP };
+    let room = if ay + ah / 2 > root_h / 2 {
+        ay - GAP
+    } else {
+        root_h - (ay + ah) - GAP
+    };
     room.max(240)
 }
 
@@ -48,7 +52,11 @@ pub fn origin(root: (u32, u32), size: (i32, i32), anchor: Anchor) -> (i32, i32) 
     let x = (ax + aw / 2 - w / 2).clamp(0, (root_w - w).max(0));
     let below_bottom = ay + ah + GAP;
     let above_top = ay - GAP - h;
-    let y = if ay + ah / 2 > root_h / 2 { above_top } else { below_bottom };
+    let y = if ay + ah / 2 > root_h / 2 {
+        above_top
+    } else {
+        below_bottom
+    };
     (x, y.clamp(0, (root_h - h).max(0)))
 }
 
@@ -67,13 +75,21 @@ mod tests {
     use super::*;
 
     fn press(x: f32, y: f32) -> RawPress {
-        RawPress { x, y, button: 1, time_ms: 0 }
+        RawPress {
+            x,
+            y,
+            button: 1,
+            time_ms: 0,
+        }
     }
 
     #[test]
     fn parse_requires_four_positive_numbers() {
         let args = |values: &[&str]| values.iter().map(|v| (*v).to_owned()).collect::<Vec<_>>();
-        assert_eq!(parse_args(&args(&["10", "20", "30", "40"])), Some([10, 20, 30, 40]));
+        assert_eq!(
+            parse_args(&args(&["10", "20", "30", "40"])),
+            Some([10, 20, 30, 40])
+        );
         assert_eq!(parse_args(&args(&["10", "20", "30"])), None);
         assert_eq!(parse_args(&args(&["10", "20", "0", "40"])), None);
         assert_eq!(parse_args(&args(&["x", "20", "30", "40"])), None);
@@ -92,7 +108,10 @@ mod tests {
 
     #[test]
     fn top_bar_popover_sits_below_the_button() {
-        assert_eq!(origin((1280, 800), (460, 600), [600, 0, 30, 40]).1, 40 + GAP);
+        assert_eq!(
+            origin((1280, 800), (460, 600), [600, 0, 30, 40]).1,
+            40 + GAP
+        );
     }
 
     #[test]

@@ -14,8 +14,14 @@ pub struct Pool {
 /// Smallest tier first. A window uses the smallest tier that fits its grid (see `app::pool_tier_for`).
 pub const TIERS: [Pool; 3] = [
     Pool { rows: 24, runs: 80 },
-    Pool { rows: 48, runs: 128 },
-    Pool { rows: 96, runs: 192 },
+    Pool {
+        rows: 48,
+        runs: 128,
+    },
+    Pool {
+        rows: 96,
+        runs: 192,
+    },
 ];
 
 /// Node id of run `slot` on row `row`. Generated ids are `r{row}s{slot}` and must match `build.rs` output.

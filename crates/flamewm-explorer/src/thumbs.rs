@@ -357,7 +357,9 @@ impl Thumbnails {
         if let Some(old) = self.entries.insert(key, slot) {
             self.bytes -= old.size();
         }
-        while self.entries.len() > 1 && (self.entries.len() > CACHE_CAPACITY || self.bytes > CACHE_BYTES) {
+        while self.entries.len() > 1
+            && (self.entries.len() > CACHE_CAPACITY || self.bytes > CACHE_BYTES)
+        {
             let oldest = self
                 .entries
                 .iter()

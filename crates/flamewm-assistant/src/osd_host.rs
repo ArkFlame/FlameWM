@@ -98,7 +98,9 @@ impl OsdProcess {
             self.child = Some(child);
         }
         let failed = match self.stdin.as_mut() {
-            Some(stdin) => writeln!(stdin, "{}", state_word(state)).and_then(|()| stdin.flush()).is_err(),
+            Some(stdin) => writeln!(stdin, "{}", state_word(state))
+                .and_then(|()| stdin.flush())
+                .is_err(),
             None => false,
         };
         if failed {
@@ -117,7 +119,8 @@ struct Host {
 
 /// Child side: runs one overlay surface until it receives `hide` or stdin closes.
 pub fn run_host() -> Result<(), String> {
-    let mut runtime = SurfaceRuntime::new().map_err(|error| format!("create UI runtime: {error:?}"))?;
+    let mut runtime =
+        SurfaceRuntime::new().map_err(|error| format!("create UI runtime: {error:?}"))?;
     let document = decode_document(OSD_UI)?;
     let surface = runtime
         .create_surface(
@@ -157,7 +160,12 @@ pub fn run_host() -> Result<(), String> {
         })
         .map_err(|error| error.to_string())?;
 
-    let host = Rc::new(RefCell::new(Host { osd: Osd::new(), surface, rx, done: false }));
+    let host = Rc::new(RefCell::new(Host {
+        osd: Osd::new(),
+        surface,
+        rx,
+        done: false,
+    }));
     let tick_host = Rc::clone(&host);
     let stop_host = Rc::clone(&host);
     run_surface_runtime_until(
@@ -170,20 +178,28 @@ pub fn run_host() -> Result<(), String> {
             }
             Ok(())
         },
-        move |runtime: &mut SurfaceRuntime| tick(runtime, &mut tick_host.borrow_mut(), &pending_frames),
+        move |runtime: &mut SurfaceRuntime| {
+            tick(runtime, &mut tick_host.borrow_mut(), &pending_frames)
+        },
         move |_runtime: &SurfaceRuntime| !stop_host.borrow().done,
     )
     .map_err(|error| format!("run OSD: {error:?}"))
 }
 
-fn tick(runtime: &mut SurfaceRuntime, host: &mut Host, pending_frames: &Cell<u32>) -> Result<(), UiBackendError> {
+fn tick(
+    runtime: &mut SurfaceRuntime,
+    host: &mut Host,
+    pending_frames: &Cell<u32>,
+) -> Result<(), UiBackendError> {
     for line in host.rx.try_iter().collect::<Vec<_>>() {
         if line == state_word(OsdState::Hidden) {
             host.osd.hide();
             host.done = true;
             return runtime.hide(host.surface);
         }
-        let Some(state) = parse_state(&line) else { continue };
+        let Some(state) = parse_state(&line) else {
+            continue;
+        };
         host.osd.show(state);
         place(runtime, host.surface, state)?;
         runtime.show(host.surface)?;
@@ -201,7 +217,11 @@ fn tick(runtime: &mut SurfaceRuntime, host: &mut Host, pending_frames: &Cell<u32
 }
 
 /// Listening is centred on the work area; the other states dock at the top centre.
-fn place(runtime: &mut SurfaceRuntime, surface: SurfaceHandle, state: OsdState) -> Result<(), UiBackendError> {
+fn place(
+    runtime: &mut SurfaceRuntime,
+    surface: SurfaceHandle,
+    state: OsdState,
+) -> Result<(), UiBackendError> {
     let (root_w, root_h) = runtime.root_geometry();
     let x = (root_w as i32 - osd::WIDTH as i32) / 2;
     let y = match state {

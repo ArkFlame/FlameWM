@@ -107,7 +107,10 @@ impl X11App {
         {
             return;
         }
-        let snapshot_size = self.window_backdrop_pixmap.as_ref().map(|b| (b.width, b.height));
+        let snapshot_size = self
+            .window_backdrop_pixmap
+            .as_ref()
+            .map(|b| (b.width, b.height));
         let queued = unsafe { XEventsQueued(self.display, crate::xlib::QUEUED_AFTER_READING) } > 0;
         if !recapture_due(snapshot_size, (self.width, self.height), queued) {
             return;

@@ -35,14 +35,32 @@ pub enum Job {
     /// Decode `path` into the cache when there is room, without displacing the active image.
     Prefetch { path: PathBuf },
     /// Produce the `rect` of the image shown at `display` size.
-    View { seq: u64, path: PathBuf, display: (u32, u32), rect: Rect },
+    View {
+        seq: u64,
+        path: PathBuf,
+        display: (u32, u32),
+        rect: Rect,
+    },
 }
 
 pub enum Reply {
-    Loaded { generation: u64, size: (u32, u32) },
-    Failed { generation: u64, message: String },
-    ViewFailed { seq: u64, message: String },
-    Frame { seq: u64, size: (u32, u32), pixels: Vec<u8> },
+    Loaded {
+        generation: u64,
+        size: (u32, u32),
+    },
+    Failed {
+        generation: u64,
+        message: String,
+    },
+    ViewFailed {
+        seq: u64,
+        message: String,
+    },
+    Frame {
+        seq: u64,
+        size: (u32, u32),
+        pixels: Vec<u8>,
+    },
 }
 
 /// Reads and decodes one image file. Format comes from the magic bytes, then the extension.
@@ -52,7 +70,10 @@ pub fn decode_file(path: &Path) -> Result<RgbaImage, String> {
         return Err("not a regular file".into());
     }
     if meta.len() > MAX_SOURCE_BYTES {
-        return Err(format!("file is larger than {} MiB", MAX_SOURCE_BYTES >> 20));
+        return Err(format!(
+            "file is larger than {} MiB",
+            MAX_SOURCE_BYTES >> 20
+        ));
     }
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
     let format = ImageSourceFormat::from_magic(&bytes)
@@ -181,10 +202,19 @@ pub fn run(jobs: &Receiver<Job>, replies: &Sender<Reply>, wake: &mut UnixStream)
                     generation,
                     size: (image.width, image.height),
                 },
-                Err(message) => Reply::Failed { generation, message },
+                Err(message) => Reply::Failed {
+                    generation,
+                    message,
+                },
             };
             send(replies, wake, reply);
-        } else if let Some(Job::View { seq, path, display, rect }) = view.take() {
+        } else if let Some(Job::View {
+            seq,
+            path,
+            display,
+            rect,
+        }) = view.take()
+        {
             let reply = match worker.view(&path, display, rect) {
                 Ok(pixels) => Reply::Frame {
                     seq,
@@ -243,15 +273,48 @@ mod tests {
     fn crop_at_identity_copies_pixels_and_rect_offsets_select_them() {
         let pixels: Vec<u8> = (0..4 * 2 * 2).map(|v| v as u8).collect();
         let image = RgbaImage::from_rgba8(2, 2, pixels.clone()).unwrap();
-        assert_eq!(crop(&image, (2, 2), Rect { x: 0, y: 0, w: 2, h: 2 }), pixels);
+        assert_eq!(
+            crop(
+                &image,
+                (2, 2),
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 2,
+                    h: 2
+                }
+            ),
+            pixels
+        );
         // The bottom-right pixel is the last four bytes.
-        assert_eq!(crop(&image, (2, 2), Rect { x: 1, y: 1, w: 1, h: 1 }), pixels[12..16]);
+        assert_eq!(
+            crop(
+                &image,
+                (2, 2),
+                Rect {
+                    x: 1,
+                    y: 1,
+                    w: 1,
+                    h: 1
+                }
+            ),
+            pixels[12..16]
+        );
     }
 
     #[test]
     fn crop_upscales_nearest_when_zoomed_in() {
         let image = RgbaImage::from_rgba8(1, 1, vec![9, 8, 7, 255]).unwrap();
-        let out = crop(&image, (3, 3), Rect { x: 0, y: 0, w: 3, h: 3 });
+        let out = crop(
+            &image,
+            (3, 3),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 3,
+                h: 3,
+            },
+        );
         assert_eq!(out.len(), 3 * 3 * 4);
         assert!(out.chunks_exact(4).all(|px| px == [9, 8, 7, 255]));
     }
@@ -261,7 +324,16 @@ mod tests {
         let mut worker = Worker::default();
         let path = fixture("baseline-16x16.jpg");
         let out = worker
-            .view(&path, (8, 8), Rect { x: 0, y: 0, w: 8, h: 4 })
+            .view(
+                &path,
+                (8, 8),
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 8,
+                    h: 4,
+                },
+            )
             .expect("view renders");
         assert_eq!(out.len(), 8 * 4 * 4);
         assert!(worker.reduced.is_some());
@@ -276,7 +348,11 @@ mod tests {
         let paths: Vec<PathBuf> = (0..4)
             .map(|i| {
                 let path = dir.join(format!("cache-{i}.ppm"));
-                fs::write(&path, [b"P6\n1 1\n255\n".as_slice(), &[i as u8, 0, 0]].concat()).unwrap();
+                fs::write(
+                    &path,
+                    [b"P6\n1 1\n255\n".as_slice(), &[i as u8, 0, 0]].concat(),
+                )
+                .unwrap();
                 path
             })
             .collect();

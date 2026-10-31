@@ -238,7 +238,11 @@ impl WidgetKind {
                 OptionSpec::color(
                     "ringColor",
                     "Ring color",
-                    if self == Self::Cpu { ACCENT_COLOR } else { ORANGE },
+                    if self == Self::Cpu {
+                        ACCENT_COLOR
+                    } else {
+                        ORANGE
+                    },
                 ),
                 OptionSpec::color("trackColor", "Track color", SLATE),
                 OptionSpec::color("textColor", "Text color", WHITE),
@@ -282,7 +286,10 @@ impl WidgetKind {
         // Accent override: the accent row exists only with `customAccent` on, and until then
         // the card follows the live Settings accent.
         if let Some(at) = options.iter().position(|spec| spec.key == "accentColor") {
-            options.insert(at, OptionSpec::toggle("customAccent", "Custom accent", false));
+            options.insert(
+                at,
+                OptionSpec::toggle("customAccent", "Custom accent", false),
+            );
         }
         // Surface override: colour and opacity rows exist only with `customSurface` on;
         // off, the card inherits the global surface.
@@ -733,7 +740,10 @@ impl WidgetStore {
     /// Grid placements of every grid-placed widget.
     #[must_use]
     pub fn placements(&self) -> Vec<Placement> {
-        self.widgets.iter().filter_map(|widget| widget.grid).collect()
+        self.widgets
+            .iter()
+            .filter_map(|widget| widget.grid)
+            .collect()
     }
 
     /// Moves a grid widget to `placement` if its kind allows that size, it fits, and it
@@ -746,7 +756,10 @@ impl WidgetStore {
         if widget.locked
             || !widget_grid::allowed_spans(widget.kind).contains(&placement.span)
             || !placement.fits(metrics)
-            || self.placements_except(id).iter().any(|other| metrics.collides(placement, *other))
+            || self
+                .placements_except(id)
+                .iter()
+                .any(|other| metrics.collides(placement, *other))
         {
             return false;
         }
@@ -811,7 +824,11 @@ impl WidgetStore {
     /// same-size widget there is swapped with the dragged one, otherwise the dragged
     /// widget takes the nearest free cell (push).
     pub fn drop_on_grid(&mut self, id: u32, origin: Point, metrics: GridMetrics) -> bool {
-        let Some(span) = self.get(id).and_then(|widget| widget.grid).map(|cell| cell.span) else {
+        let Some(span) = self
+            .get(id)
+            .and_then(|widget| widget.grid)
+            .map(|cell| cell.span)
+        else {
             return false;
         };
         let want = metrics.snap(origin, span);
@@ -844,7 +861,12 @@ impl WidgetStore {
 
     /// Cell an edge drag to `want` would take: `want` when free, else the nearest free cell.
     #[must_use]
-    pub fn preview_placement(&self, id: u32, want: Placement, metrics: GridMetrics) -> Option<Placement> {
+    pub fn preview_placement(
+        &self,
+        id: u32,
+        want: Placement,
+        metrics: GridMetrics,
+    ) -> Option<Placement> {
         let want = metrics.from_right(want);
         metrics.nearest_free(want, &self.placements_except(id))
     }
@@ -862,7 +884,10 @@ impl WidgetStore {
     pub fn preview_resize(&self, id: u32, span: Span, metrics: GridMetrics) -> Option<Placement> {
         let widget = self.get(id)?;
         let current = widget.grid?;
-        let want = Placement { span: widget_grid::fit_span(widget.kind, span), ..current };
+        let want = Placement {
+            span: widget_grid::fit_span(widget.kind, span),
+            ..current
+        };
         metrics.nearest_free(want, &self.placements_except(id))
     }
 
@@ -883,7 +908,10 @@ impl WidgetStore {
         let Some(current) = widget.grid else {
             return false;
         };
-        let want = Placement { span: widget_grid::fit_span(widget.kind, span), ..current };
+        let want = Placement {
+            span: widget_grid::fit_span(widget.kind, span),
+            ..current
+        };
         if self.place_on_grid(id, want, metrics) {
             return true;
         }
@@ -969,9 +997,9 @@ impl WidgetStore {
             widget.rect = match widget.grid {
                 Some(placement) => metrics.rect_of(placement),
                 None => {
-                    let x = widget
-                        .anchor
-                        .map_or(widget.rect.x, |anchor| anchor.x_in(widget.rect.width, bounds));
+                    let x = widget.anchor.map_or(widget.rect.x, |anchor| {
+                        anchor.x_in(widget.rect.width, bounds)
+                    });
                     Rect::new(x, widget.rect.y, widget.rect.width, widget.rect.height)
                         .clamp_inside(bounds)
                 }
@@ -1351,9 +1379,17 @@ mod tests {
         loaded.clamp_all(Rect::new(0, 0, 1350, 641));
         let widget = loaded.get(3).expect("widget");
         assert_eq!(widget.rect.right(), 1350 - 16);
-        assert!(!widget.stored_values().contains_key("backdropBlur"), "retired key is dropped");
+        assert!(
+            !widget.stored_values().contains_key("backdropBlur"),
+            "retired key is dropped"
+        );
         assert_eq!(
-            serialize(&loaded).lines().nth(2).expect("record").split('\t').nth(8),
+            serialize(&loaded)
+                .lines()
+                .nth(2)
+                .expect("record")
+                .split('\t')
+                .nth(8),
             Some("r16")
         );
     }
@@ -1421,10 +1457,20 @@ mod surface_inheritance_tests {
 
     #[test]
     fn accent_defaults_follow_the_live_accent_and_explicit_palette_picks_do_not() {
-        let accent = Rgb { red: 0xef, green: 0x40, blue: 0x48 };
+        let accent = Rgb {
+            red: 0xef,
+            green: 0x40,
+            blue: 0x48,
+        };
         assert_eq!(card(WidgetKind::Clock).value("accentColor"), ACCENT_COLOR);
-        assert_eq!(card(WidgetKind::Clock).color_or_accent("accentColor", accent), accent);
-        assert_eq!(card(WidgetKind::Cpu).color_or_accent("ringColor", accent), accent);
+        assert_eq!(
+            card(WidgetKind::Clock).color_or_accent("accentColor", accent),
+            accent
+        );
+        assert_eq!(
+            card(WidgetKind::Cpu).color_or_accent("ringColor", accent),
+            accent
+        );
         assert_eq!(
             card(WidgetKind::Memory).color_or_accent("ringColor", accent),
             palette_color(ORANGE)
@@ -1434,7 +1480,10 @@ mod surface_inheritance_tests {
         assert!(picked.set_value("accentColor", SKY));
         assert_eq!(picked.color_or_accent("accentColor", accent), accent);
         assert!(picked.set_value("customAccent", 1));
-        assert_eq!(picked.color_or_accent("accentColor", accent), palette_color(SKY));
+        assert_eq!(
+            picked.color_or_accent("accentColor", accent),
+            palette_color(SKY)
+        );
         let mut stepping = card(WidgetKind::Clock);
         assert!(stepping.set_value("accentColor", 0));
         assert!(stepping.step_value("accentColor", -1));
@@ -1464,7 +1513,10 @@ mod surface_inheritance_tests {
     fn custom_surface_background_override_does_not_inherit() {
         let mut widget = card(WidgetKind::Custom);
         assert!(widget.set_value("background", 5));
-        assert!(widget.inherits_surface(), "colour is ignored while customSurface is off");
+        assert!(
+            widget.inherits_surface(),
+            "colour is ignored while customSurface is off"
+        );
         assert!(widget.set_value("customSurface", 1));
         assert!(!widget.inherits_surface());
         assert_eq!(widget.value("background"), 5);
@@ -1482,16 +1534,31 @@ mod surface_inheritance_tests {
     fn retired_settings_migrate_to_toggles() {
         // Old inheritSurface=0 means a custom surface; old explicit accent means a custom accent.
         let mut widget = card(WidgetKind::Clock);
-        apply_option_pairs(&mut widget, &[("inheritSurface", 0), ("accentColor", SKY), ("radius", 30), ("backdropBlur", 40), ("dateSize", 20)]);
+        apply_option_pairs(
+            &mut widget,
+            &[
+                ("inheritSurface", 0),
+                ("accentColor", SKY),
+                ("radius", 30),
+                ("backdropBlur", 40),
+                ("dateSize", 20),
+            ],
+        );
         assert!(!widget.inherits_surface());
         assert_eq!(widget.value("customAccent"), 1);
         assert_eq!(widget.value("accentColor"), SKY);
         for key in ["inheritSurface", "radius", "backdropBlur", "dateSize"] {
-            assert!(!widget.stored_values().contains_key(key), "{key} must be dropped");
+            assert!(
+                !widget.stored_values().contains_key(key),
+                "{key} must be dropped"
+            );
         }
         // Defaults stay default: an inheriting card with no explicit accent gets no toggles.
         let mut plain = card(WidgetKind::Clock);
-        apply_option_pairs(&mut plain, &[("inheritSurface", 1), ("accentColor", ACCENT_COLOR)]);
+        apply_option_pairs(
+            &mut plain,
+            &[("inheritSurface", 1), ("accentColor", ACCENT_COLOR)],
+        );
         assert!(plain.inherits_surface());
         assert_eq!(plain.value("customAccent"), 0);
     }
@@ -1499,7 +1566,11 @@ mod surface_inheritance_tests {
     #[test]
     fn history_kind_exposes_line_toggles_and_fits_one_cell() {
         assert_eq!(WidgetKind::from_id("history"), Some(WidgetKind::History));
-        let keys: Vec<_> = WidgetKind::History.options().iter().map(|spec| spec.key).collect();
+        let keys: Vec<_> = WidgetKind::History
+            .options()
+            .iter()
+            .map(|spec| spec.key)
+            .collect();
         assert!(keys.contains(&"showCpu") && keys.contains(&"showMemory"));
         let widget = Widget::new(1, WidgetKind::History, Point::new(0, 0));
         assert!(widget.inherits_surface());

@@ -313,9 +313,11 @@ pub fn resolve(
             MaterialRole::GlassClear | MaterialRole::MenuBar => {
                 (NEUTRAL_RGB, CLEAR_ALPHA_PERMILLE, CLEAR_BLUR_PX)
             }
-            MaterialRole::WindowChrome => {
-                (WINDOW_CHROME_RGB, WINDOW_CHROME_ALPHA_PERMILLE, WINDOW_CHROME_BLUR_PX)
-            }
+            MaterialRole::WindowChrome => (
+                WINDOW_CHROME_RGB,
+                WINDOW_CHROME_ALPHA_PERMILLE,
+                WINDOW_CHROME_BLUR_PX,
+            ),
             MaterialRole::Dock => match appearance.taskbar_mode {
                 TaskbarMode::Inherit => {
                     let (rgb, alpha, blur) = regular(appearance);
@@ -365,8 +367,8 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
         Some(SettingValue::Text(value)) if value == "blur-only" => TaskbarMode::BlurOnly,
         _ => defaults.taskbar_mode,
     };
-    let legacy_blur_px = percent("surfaceBlurPercent")
-        .map(|value| (u16::from(value.min(100)) * 40 / 100) as u8);
+    let legacy_blur_px =
+        percent("surfaceBlurPercent").map(|value| (u16::from(value.min(100)) * 40 / 100) as u8);
     let glass_blur_px = match (percent_u8_key(snapshot, "glassBlurPx"), legacy_blur_px) {
         (Some(px), _) => px,
         (None, Some(px)) => px,
@@ -433,7 +435,9 @@ mod resolver_tests {
         TaskbarMode::Inherit,
         TaskbarMode::CustomTint,
     ];
-    const CAPS: RendererCaps = RendererCaps { backdrop_blur: true };
+    const CAPS: RendererCaps = RendererCaps {
+        backdrop_blur: true,
+    };
 
     fn with(reduce: bool, mode: TaskbarMode) -> Appearance {
         Appearance {
@@ -449,44 +453,105 @@ mod resolver_tests {
         assert!(!a.reduce_transparency);
         assert_eq!((a.glass_opacity_percent, a.glass_blur_px), (12, 28));
         assert_eq!(a.taskbar_mode, TaskbarMode::Inherit);
-        assert_eq!((a.taskbar_opacity_percent, a.taskbar_custom_tint), (8, 0x5879ee));
+        assert_eq!(
+            (a.taskbar_opacity_percent, a.taskbar_custom_tint),
+            (8, 0x5879ee)
+        );
     }
 
     #[test]
     fn missing_or_invalid_taskbar_mode_inherits_surface_glass() {
         let empty = SettingsSnapshot::new(0);
-        assert_eq!(appearance_from_settings(&empty).taskbar_mode, TaskbarMode::Inherit);
+        assert_eq!(
+            appearance_from_settings(&empty).taskbar_mode,
+            TaskbarMode::Inherit
+        );
     }
 
     #[test]
     fn standard_content_is_solid() {
-        let m = resolve(MaterialRole::StandardContent, with(false, TaskbarMode::BlurOnly), 100, CAPS);
-        assert_eq!(m, ResolvedMaterial { tint_rgb: STANDARD_RGB, alpha_permille: 1000, blur_px: 0 });
+        let m = resolve(
+            MaterialRole::StandardContent,
+            with(false, TaskbarMode::BlurOnly),
+            100,
+            CAPS,
+        );
+        assert_eq!(
+            m,
+            ResolvedMaterial {
+                tint_rgb: STANDARD_RGB,
+                alpha_permille: 1000,
+                blur_px: 0
+            }
+        );
     }
 
     #[test]
     fn contrast_zone_is_always_glassified() {
-        let m = resolve(MaterialRole::ContrastZone, with(false, TaskbarMode::BlurOnly), 100, CAPS);
-        assert_eq!((m.tint_rgb, m.alpha_permille, m.blur_px), (CONTRAST_GLASS_RGB, 280, 26));
+        let m = resolve(
+            MaterialRole::ContrastZone,
+            with(false, TaskbarMode::BlurOnly),
+            100,
+            CAPS,
+        );
+        assert_eq!(
+            (m.tint_rgb, m.alpha_permille, m.blur_px),
+            (CONTRAST_GLASS_RGB, 280, 26)
+        );
     }
 
     #[test]
     fn dock_blur_only_uses_its_own_material() {
-        let m = resolve(MaterialRole::Dock, with(false, TaskbarMode::BlurOnly), 100, CAPS);
-        assert_eq!((m.tint_rgb, m.alpha_permille, m.blur_px), (NEUTRAL_RGB, 80, 34));
+        let m = resolve(
+            MaterialRole::Dock,
+            with(false, TaskbarMode::BlurOnly),
+            100,
+            CAPS,
+        );
+        assert_eq!(
+            (m.tint_rgb, m.alpha_permille, m.blur_px),
+            (NEUTRAL_RGB, 80, 34)
+        );
     }
 
     #[test]
     fn taskbar_modes_are_independent_of_content_glass() {
-        let base = Appearance { glass_opacity_percent: 30, glass_blur_px: 4, ..Appearance::default() };
+        let base = Appearance {
+            glass_opacity_percent: 30,
+            glass_blur_px: 4,
+            ..Appearance::default()
+        };
         let regular_ = resolve(MaterialRole::GlassRegular, base, 100, CAPS);
-        let inherit = resolve(MaterialRole::Dock, Appearance { taskbar_mode: TaskbarMode::Inherit, ..base }, 100, CAPS);
+        let inherit = resolve(
+            MaterialRole::Dock,
+            Appearance {
+                taskbar_mode: TaskbarMode::Inherit,
+                ..base
+            },
+            100,
+            CAPS,
+        );
         assert_eq!(inherit, regular_);
-        let blur = resolve(MaterialRole::Dock, Appearance { taskbar_mode: TaskbarMode::BlurOnly, ..base }, 100, CAPS);
-        assert_eq!((blur.tint_rgb, blur.alpha_permille, blur.blur_px), (NEUTRAL_RGB, 80, 16));
+        let blur = resolve(
+            MaterialRole::Dock,
+            Appearance {
+                taskbar_mode: TaskbarMode::BlurOnly,
+                ..base
+            },
+            100,
+            CAPS,
+        );
+        assert_eq!(
+            (blur.tint_rgb, blur.alpha_permille, blur.blur_px),
+            (NEUTRAL_RGB, 80, 16)
+        );
         let custom = resolve(
             MaterialRole::Dock,
-            Appearance { taskbar_mode: TaskbarMode::CustomTint, taskbar_opacity_percent: 50, ..base },
+            Appearance {
+                taskbar_mode: TaskbarMode::CustomTint,
+                taskbar_opacity_percent: 50,
+                ..base
+            },
             100,
             CAPS,
         );
@@ -508,14 +573,24 @@ mod resolver_tests {
     fn reduce_transparency_keeps_custom_tint_only_for_dock() {
         let a = with(true, TaskbarMode::CustomTint);
         assert_eq!(resolve(MaterialRole::Dock, a, 100, CAPS).tint_rgb, 0x5879ee);
-        assert_eq!(resolve(MaterialRole::GlassRegular, a, 100, CAPS).tint_rgb, STANDARD_RGB);
+        assert_eq!(
+            resolve(MaterialRole::GlassRegular, a, 100, CAPS).tint_rgb,
+            STANDARD_RGB
+        );
     }
 
     #[test]
     fn blur_scales_with_output_scale_and_drops_without_caps() {
         let m = resolve(MaterialRole::GlassRegular, Appearance::default(), 150, CAPS);
         assert_eq!(m.blur_px, 42);
-        let no = resolve(MaterialRole::GlassRegular, Appearance::default(), 150, RendererCaps { backdrop_blur: false });
+        let no = resolve(
+            MaterialRole::GlassRegular,
+            Appearance::default(),
+            150,
+            RendererCaps {
+                backdrop_blur: false,
+            },
+        );
         assert_eq!((no.blur_px, no.alpha_permille), (0, 120));
     }
 
