@@ -428,6 +428,8 @@ impl ExplorerApp {
                 let lock=import_for_setting(MediaKind::LockWallpaper,&path)?;
                 let bus=flamewm_control_dbus::ControlClient::connect(flamewm_dbus_reactor::BusKind::Session).map_err(|e|e.to_string())?;
                 let mut c=SettingsClient::new(Bus(bus));
+                // A fresh client has no revision; load the live snapshot or the write is refused as stale.
+                c.refresh_settings().map_err(|e|format!("{e:?}"))?;
                 c.set_wallpaper(desktop).map_err(|e|format!("{e:?}"))?;
                 for (k,v) in [("wallpaperMode","custom".to_owned()),("lockBackgroundImage",lock),("lockBackgroundMode","custom".to_owned())] {
                     c.apply_setting(k,flamewm_api::settings::SettingValue::Text(v)).map_err(|e|format!("{e:?}"))?;
