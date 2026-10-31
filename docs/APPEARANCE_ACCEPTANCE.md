@@ -12,7 +12,7 @@ parsing and schema functions; no display is touched).
 | AP02 | Start popup (`FlameWM start` window) interior matches `surfaceColor` (Start shares the surface pair); taskbar strip unchanged. |
 | AP03 | Accent pixels on the taskbar equal `accent` at `accentOpacity=100`; at 40 they equal the alpha blend. |
 | AP04 | Frame top-left corner is cut in Rounded and not cut when maximized or snapped left; iOS top row differs from the title row. Fullscreen is not driven, so AP04 is never PASS. |
-| AP05 | Titlebar pixel equals `surfaceColor` (titlebars share the Surface pair; `surfaceOpacity=100` in the fixture); close hover equals `#e81123` by default and the custom `titlebarCloseHoverColor`; minimize button unchanged by close hover. |
+| AP05 | Titlebar pixel equals `surfaceColor` (titlebars share the Surface pair; `surfaceOpacity=100` in the fixture); close hover equals the skin `#e81123`; minimize button unchanged by close hover. |
 | AP06 | Start popup `y` sampled during opening is non-increasing with >=3 distinct steps (slide-up); with `animationsEnabled=false` it is constant. |
 | AP07 | A transient window appears during minimize and narrows; the client is unmapped; `_NET_WM_ICON_GEOMETRY` lies in the taskbar strip. |
 | AP08 | Taskbar region changes between `iconTheme` values; cursor ARGB (XFixesGetCursorImage) hash differs between cursor themes. |

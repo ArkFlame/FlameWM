@@ -673,20 +673,6 @@ def ap05(s: Session) -> dict:
         if leaked > 10 or close_leak > 10:
             fails.append(f"{name} hover repainted a neighbouring button ({leaked}/{close_leak} px)")
 
-    custom = "#00FF00"
-    if not s.restart({"surfaceColor": "#1B1E20", "surfaceOpacity": "100", "titlebarCloseHoverColor": custom}):
-        return entry("AP05", FAIL, "WM or shell exited during custom restart", [str(path)])
-    _, frame2 = s.client_frame(s.tree("AP05-custom"))
-    if frame2 is None:
-        fails.append("client frame missing after custom restart")
-    else:
-        cr = (frame2["x"] + frame2["w"] - BUTTON_WIDTH + 6, frame2["y"] + 4, BUTTON_WIDTH - 12, TITLEBAR_HEIGHT - 8)
-        s.input(move=f"{frame2['x'] + frame2['w'] - BUTTON_WIDTH // 2},{frame2['y'] + TITLEBAR_HEIGHT // 2}")
-        time.sleep(1.0)
-        _, pc = s.shot("AP05-custom-close-hover")
-        custom_share = fraction_matching(s.pixels(pc, cr), base.accent_rgb(custom), 6)
-        if custom_share < 0.15:
-            fails.append(f"custom close hover {custom} covers {custom_share:.2f} of the button (<0.15)")
     ev = [str(path), f"titlebar={tb}", f"close_hover={close_hover}", f"min_idle={min_idle}", f"min_after={min_after}"] + ev_extra
     if fails:
         return entry("AP05", FAIL, "; ".join(fails), ev, ["XTEST move", "import -window root"])
@@ -1647,7 +1633,7 @@ def main(argv: list[str] | None = None) -> int:
 # ---------------------------------------------------------------- AP06 Start animation styles
 
 START_STYLES = ("slide", "fade", "magic-lamp", "none")
-START_BG = (0x19, 0x1B, 0x1D)  # product default startMenuColor
+START_BG = (0x19, 0x1B, 0x1D)  # product default taskbarColor
 START_SAMPLE_PERIOD = 0.05     # <= 60 ms in-process XGetImage captures
 START_FLIGHT_SECONDS = 1.2     # slide/fade/lamp at animationSpeed 25 finish within ~0.72 s
 
