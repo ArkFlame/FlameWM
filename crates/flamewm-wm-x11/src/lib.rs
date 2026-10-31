@@ -124,14 +124,15 @@ impl X11Desktop {
             "WM_DELETE_WINDOW",
             "_NET_SUPPORTING_WM_CHECK",
         ];
+        // Send every InternAtom before reading any reply: one round trip, not one per name.
+        let cookies = names
+            .iter()
+            .map(|name| conn.intern_atom(false, name.as_bytes()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(io_error)?;
         let mut atoms = BTreeMap::new();
-        for name in names {
-            let atom = conn
-                .intern_atom(false, name.as_bytes())
-                .map_err(io_error)?
-                .reply()
-                .map_err(io_error)?
-                .atom;
+        for (name, cookie) in names.into_iter().zip(cookies) {
+            let atom = cookie.reply().map_err(io_error)?.atom;
             atoms.insert(name.to_owned(), atom);
         }
         Ok(Self {
