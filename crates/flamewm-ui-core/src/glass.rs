@@ -110,11 +110,12 @@ impl GlassPreset {
 mod tests {
     use super::*;
 
+    const _: () = assert!(LIGHT.tint_percent < DARK.tint_percent);
+
     #[test]
     fn dark_is_the_tahoe_default_and_light_is_clear() {
         assert_eq!(DARK.tint_rgb, 0x00ea_f4ff);
         assert_eq!(DARK.blur_percent, 70);
-        assert!(LIGHT.tint_percent < DARK.tint_percent);
         assert_eq!(LIGHT.rim_percent, DARK.rim_percent);
         assert_eq!(DARK.rim_percent, RIM_PERCENT);
     }
@@ -209,7 +210,7 @@ impl Default for Appearance {
             glass_blur_px: 28,
             taskbar_mode: TaskbarMode::Inherit,
             taskbar_opacity_percent: 8,
-            taskbar_custom_tint: 0x5879ee,
+            taskbar_custom_tint: 0x0058_79ee,
         }
     }
 }
@@ -278,7 +279,7 @@ pub fn taskbar_blur_px(glass_blur_px: u8) -> u16 {
 }
 
 /// Pure role resolver. Precedence: reduce transparency, then Dock, then the role default.
-/// ContrastZone is always glassified; it is not a setting. Blur is scaled by output scale and dropped without backdrop support.
+/// `ContrastZone` is always glassified; it is not a setting. Blur is scaled by output scale and dropped without backdrop support.
 #[must_use]
 pub fn resolve(
     role: MaterialRole,
@@ -455,7 +456,7 @@ mod resolver_tests {
         assert_eq!(a.taskbar_mode, TaskbarMode::Inherit);
         assert_eq!(
             (a.taskbar_opacity_percent, a.taskbar_custom_tint),
-            (8, 0x5879ee)
+            (8, 0x0058_79ee)
         );
     }
 
@@ -555,7 +556,7 @@ mod resolver_tests {
             100,
             CAPS,
         );
-        assert_eq!((custom.tint_rgb, custom.alpha_permille), (0x5879ee, 500));
+        assert_eq!((custom.tint_rgb, custom.alpha_permille), (0x0058_79ee, 500));
     }
 
     #[test]
@@ -572,7 +573,10 @@ mod resolver_tests {
     #[test]
     fn reduce_transparency_keeps_custom_tint_only_for_dock() {
         let a = with(true, TaskbarMode::CustomTint);
-        assert_eq!(resolve(MaterialRole::Dock, a, 100, CAPS).tint_rgb, 0x5879ee);
+        assert_eq!(
+            resolve(MaterialRole::Dock, a, 100, CAPS).tint_rgb,
+            0x0058_79ee
+        );
         assert_eq!(
             resolve(MaterialRole::GlassRegular, a, 100, CAPS).tint_rgb,
             STANDARD_RGB

@@ -62,6 +62,7 @@ impl OpenAiClient {
     }
 
     /// Full URL for a path under the base, such as `/models`.
+    #[must_use]
     pub fn url(&self, path: &str) -> String {
         format!("{}{path}", self.endpoint.base_url.trim_end_matches('/'))
     }
@@ -474,6 +475,7 @@ fn curl_error(label: &str, exit: Option<i32>) -> AssistantError {
 }
 
 /// The message shown to the user. Never raw HTML or JSON bodies, and never the key.
+#[must_use]
 pub fn human_error(error: &AssistantError, label: &str) -> String {
     match error {
         AssistantError::Http {
@@ -644,7 +646,7 @@ mod tests {
         let mut deltas = Vec::new();
         let text = client(&url)
             .chat("flash", &history, &CancelToken::new(), &mut |d| {
-                deltas.push(d.to_owned())
+                deltas.push(d.to_owned());
             })
             .unwrap();
         assert_eq!(text, "Hello");
@@ -686,7 +688,7 @@ mod tests {
         let mut deltas = Vec::new();
         let text = client(&url)
             .chat("lite", &[], &CancelToken::new(), &mut |d| {
-                deltas.push(d.to_owned())
+                deltas.push(d.to_owned());
             })
             .unwrap();
         assert_eq!(text, "All set.");

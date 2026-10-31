@@ -1,4 +1,4 @@
-//! Request loop of the audio helper, generic over the PulseAudio backend so tests can drive it
+//! Request loop of the audio helper, generic over the `PulseAudio` backend so tests can drive it
 //! with a fake backend and in-memory channels.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -9,11 +9,11 @@ use flamewm_api::FlameResult;
 use flamewm_api::system::{AudioMuteAction, AudioSnapshot, AudioVolumeAction, ServiceAvailability};
 use flamewm_integrations_linux::audio_protocol::{AudioRequest, parse_request};
 
-/// How long the first request of a helper process waits for PulseAudio to become ready.
+/// How long the first request of a helper process waits for `PulseAudio` to become ready.
 pub const READY_WAIT: Duration = Duration::from_secs(2);
 const READY_POLL: Duration = Duration::from_millis(10);
 
-/// The PulseAudio operations the request loop needs.
+/// The `PulseAudio` operations the request loop needs.
 pub trait Backend {
     fn snapshot(&self) -> AudioSnapshot;
     fn set_volume(&self, action: AudioVolumeAction) -> FlameResult<()>;

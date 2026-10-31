@@ -55,7 +55,7 @@ impl ControllerGeometryCache {
     }
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn work_root(&self) -> RootRect {
         to_root_rect(self.work_area())
     }

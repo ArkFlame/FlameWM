@@ -478,7 +478,7 @@ fn read_theme_index(roots: &[PathBuf], theme: &str) -> Option<IconThemeIndex> {
     })
 }
 
-fn directory_distance(index: &IconLookupIndex, file: &IndexedIconFile, physical: u32) -> u64 {
+fn directory_distance(index: &IconLookupIndex, file: IndexedIconFile, physical: u32) -> u64 {
     let meta = index.files().meta(file);
     let dirs = index
         .ordered_themes
@@ -772,16 +772,16 @@ impl IconFileIndex {
         self.entries.get(start..end)
     }
 
-    fn meta(&self, file: &IndexedIconFile) -> IconDirMeta {
+    fn meta(&self, file: IndexedIconFile) -> IconDirMeta {
         self.dir_meta[file.dir as usize]
     }
 
-    fn ext(&self, file: &IndexedIconFile) -> &str {
+    fn ext(&self, file: IndexedIconFile) -> &str {
         &self.exts[file.ext as usize]
     }
 
     /// Rebuilds the on-disk path of `file` whose base name is `base`.
-    fn path(&self, base: &str, file: &IndexedIconFile) -> PathBuf {
+    fn path(&self, base: &str, file: IndexedIconFile) -> PathBuf {
         let dir = &self.dirs[file.dir as usize];
         if file.raw_name {
             return dir.clone();
@@ -1308,11 +1308,11 @@ impl IconLookupIndex {
         let want = explicit.as_deref();
         let mut theme_best: HashMap<u32, (&IndexedIconFile, u64, u32)> = HashMap::new();
         for file in entries {
-            if !want.is_none_or(|want| self.files().ext(file).eq_ignore_ascii_case(want)) {
+            if !want.is_none_or(|want| self.files().ext(*file).eq_ignore_ascii_case(want)) {
                 continue;
             }
-            let distance = directory_distance(self, file, physical.max(1));
-            let meta = self.files().meta(file);
+            let distance = directory_distance(self, *file, physical.max(1));
+            let meta = self.files().meta(*file);
             let better = match theme_best.get(&meta.theme_rank) {
                 None => true,
                 Some((cur, cur_d, cur_dir)) => {
@@ -1333,14 +1333,14 @@ impl IconLookupIndex {
         // (distance 0) matches anywhere in the chain win in chain order,
         // remaining per-theme bests follow in theme-rank order.
         let mut ordered = Vec::new();
-        for (_, file, distance) in &best {
-            if *distance == 0 {
-                ordered.push(self.files().path(&base, file));
+        for &(_, file, distance) in &best {
+            if distance == 0 {
+                ordered.push(self.files().path(&base, *file));
             }
         }
-        for (_, file, distance) in &best {
-            if *distance != 0 {
-                ordered.push(self.files().path(&base, file));
+        for &(_, file, distance) in &best {
+            if distance != 0 {
+                ordered.push(self.files().path(&base, *file));
             }
         }
         let mut out = ordered;

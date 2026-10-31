@@ -46,6 +46,7 @@ FERMION_CACHE_DIR="$here/../stt-cache" "$here/../venv/bin/phonon-2" transcribe "
 "#;
 
 /// `assistant/voice` beside the models directory. `None` without a usable home or data directory.
+#[must_use]
 pub fn default_voice_dir() -> Option<PathBuf> {
     default_models_dir()?
         .parent()
@@ -165,6 +166,7 @@ pub fn setup(
 }
 
 /// The TTS model directory once setup has finished, or `None`.
+#[must_use]
 pub fn ready_model(dir: &Path) -> Option<PathBuf> {
     let ready = dir.join(READY).is_file()
         && dir.join("bin/speak").is_file()
@@ -209,7 +211,10 @@ fn step(what: &str, hint: &str, result: Result<(), AssistantError>) -> Result<()
 
 /// Exclusive, non-blocking `flock` on `voice/setup.lock`. The kernel releases it when the file closes,
 /// so a crashed setup never leaves the lock held.
-struct SetupLock(File);
+struct SetupLock {
+    /// Held only so the lock lasts until this guard drops.
+    _file: File,
+}
 
 impl SetupLock {
     fn acquire(dir: &Path) -> Result<Self, AssistantError> {
@@ -225,7 +230,7 @@ impl SetupLock {
                 AssistantError::Io(format!("cannot lock the voice setup: {error}"))
             }
         })?;
-        Ok(Self(file))
+        Ok(Self { _file: file })
     }
 }
 

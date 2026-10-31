@@ -149,10 +149,10 @@ use x11rb::protocol::xproto::{
     Allow, Atom, AtomEnum, Button, ButtonIndex, ButtonPressEvent, ButtonReleaseEvent,
     CONFIGURE_NOTIFY_EVENT, ChangeWindowAttributesAux, ClientMessageEvent, ClipOrdering,
     ConfigWindow, ConfigureNotifyEvent, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt,
-    CreateGCAux, CreateWindowAux, EnterNotifyEvent, EventMask, GetGeometryReply, GrabMode,
-    GrabStatus, ImageFormat, ImageOrder, InputFocus, KeyButMask, KeyPressEvent, KeyReleaseEvent,
-    LeaveNotifyEvent, MapRequestEvent, MapState, ModMask, MotionNotifyEvent, Pixmap, PropMode,
-    Screen, SetMode, StackMode, Window, WindowClass,
+    CreateWindowAux, EnterNotifyEvent, EventMask, GetGeometryReply, GrabMode, GrabStatus,
+    InputFocus, KeyButMask, KeyPressEvent, KeyReleaseEvent, LeaveNotifyEvent, MapRequestEvent,
+    MapState, ModMask, MotionNotifyEvent, PropMode, Screen, SetMode, StackMode, Window,
+    WindowClass,
 };
 use x11rb::protocol::{ErrorKind, Event};
 use x11rb::rust_connection::RustConnection;
@@ -545,7 +545,7 @@ const WM_SOURCE: &str = concat!(
     include_str!("mod.rs"),
 );
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub fn take_changes(&mut self) -> WmChangeSet {
         self.changes.take()
     }

@@ -994,15 +994,14 @@ impl WidgetStore {
             }
         }
         for widget in &mut self.widgets {
-            widget.rect = match widget.grid {
-                Some(placement) => metrics.rect_of(placement),
-                None => {
-                    let x = widget.anchor.map_or(widget.rect.x, |anchor| {
-                        anchor.x_in(widget.rect.width, bounds)
-                    });
-                    Rect::new(x, widget.rect.y, widget.rect.width, widget.rect.height)
-                        .clamp_inside(bounds)
-                }
+            widget.rect = if let Some(placement) = widget.grid {
+                metrics.rect_of(placement)
+            } else {
+                let x = widget.anchor.map_or(widget.rect.x, |anchor| {
+                    anchor.x_in(widget.rect.width, bounds)
+                });
+                Rect::new(x, widget.rect.y, widget.rect.width, widget.rect.height)
+                    .clamp_inside(bounds)
             };
             widget.anchor = Some(EdgeAnchor::of(widget.rect, bounds));
         }

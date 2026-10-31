@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[must_use]
 pub fn panel_edge_label(edge: PanelEdge) -> &'static str {
     match edge {
         PanelEdge::Bottom => "Bottom",

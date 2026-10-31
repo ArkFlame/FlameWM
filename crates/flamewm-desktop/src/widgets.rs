@@ -1596,7 +1596,7 @@ fn visibility_effect(was_obscured: bool, obscured: bool) -> Option<VisibilityEff
     }
 }
 
-/// Applies a VisibilityNotify verdict. While obscured, no sampling and no document sync run and
+/// Applies a `VisibilityNotify` verdict. While obscured, no sampling and no document sync run and
 /// the wake deadline is dropped, so the reactor does not spin on a past deadline. On uncover the
 /// cached sync key is discarded: writes made while covered bypass the key, so the resume sync
 /// must compare the document again. It then samples and syncs immediately.
@@ -2611,8 +2611,10 @@ mod tests {
             green: 9,
             blue: 9,
         };
-        let mut samples = Samples::default();
-        samples.cpu_history = VecDeque::from(vec![10, 20, 30]);
+        let mut samples = Samples {
+            cpu_history: VecDeque::from(vec![10, 20, 30]),
+            ..Samples::default()
+        };
         let mut graph = None;
         let mut doc = RecordingUiDoc::default();
         sync_history(&mut doc, &mut graph, &samples, accent, 0, &widget).expect("first");

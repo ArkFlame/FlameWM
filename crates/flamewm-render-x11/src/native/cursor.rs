@@ -4,7 +4,6 @@
 
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int};
-use std::ptr;
 use std::sync::Once;
 
 use flamewm_render_core::CursorKind;

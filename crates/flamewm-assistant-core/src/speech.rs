@@ -45,6 +45,7 @@ pub struct ModelManifest {
 
 impl ModelManifest {
     /// Single-file manifest; `file` is the relative path inside the model directory.
+    #[must_use]
     pub fn single(name: &str, file: &str, url: &str, sha256: &str, size_bytes: u64) -> Self {
         Self {
             name: name.into(),
@@ -58,6 +59,7 @@ impl ModelManifest {
     }
 
     /// Sum of the pinned file sizes; the denominator of aggregated download progress.
+    #[must_use]
     pub fn total_bytes(&self) -> u64 {
         self.files.iter().map(|file| file.size_bytes).sum()
     }
@@ -82,6 +84,7 @@ const TTS_COMMIT: &str = "92741c5b07d085ff840e26fea8ce43110b87852f";
 /// The URL is a Hugging Face `resolve/<commit>` path, never `main`. The directory holds
 /// `model.q8.gguf`, `config.json`, `tokenizer.json` and `default-voice.safetensors`.
 /// Speech-to-text has no manifest: its runtime fetches and verifies its own pinned model.
+#[must_use]
 pub fn tts_manifest() -> ModelManifest {
     let file = |path: &str, sha256: &str, size_bytes: u64| ModelFile {
         path: path.into(),
@@ -130,6 +133,7 @@ impl Stopper {
 }
 
 /// Encodes 16 kHz mono 16-bit PCM as a canonical 44-byte-header WAV file.
+#[must_use]
 pub fn encode_wav(pcm: &[i16]) -> Vec<u8> {
     let data_len = (pcm.len() * 2) as u32;
     let mut out = Vec::with_capacity(44 + data_len as usize);
@@ -161,6 +165,7 @@ pub struct CommandTranscriber {
 }
 
 impl CommandTranscriber {
+    #[must_use]
     pub fn new(
         runner: Box<dyn ProcessRunner>,
         template: &str,
@@ -200,6 +205,7 @@ pub struct CommandSpeech {
 
 impl CommandSpeech {
     /// `scratch` receives the temporary WAV file and is created on demand.
+    #[must_use]
     pub fn new(
         runner: Box<dyn ProcessRunner>,
         synthesize: &str,
@@ -219,6 +225,7 @@ impl CommandSpeech {
     }
 
     /// Handle for stopping speech from another thread.
+    #[must_use]
     pub fn stopper(&self) -> Stopper {
         self.current.clone()
     }
@@ -328,9 +335,12 @@ mod tests {
     use crate::test_support::test_dir;
     use std::sync::Mutex as StdMutex;
 
+    /// Recorded `(argv, stdin)` pairs.
+    type Calls = Arc<StdMutex<Vec<(Vec<String>, Vec<u8>)>>>;
+
     /// Records every call and answers from a queue of canned stdout values.
     struct FakeRunner {
-        calls: Arc<StdMutex<Vec<(Vec<String>, Vec<u8>)>>>,
+        calls: Calls,
         replies: Vec<Vec<u8>>,
     }
 

@@ -59,7 +59,7 @@ pub struct Decorations {
     parts: HashMap<WindowId, ChromeBuffer>,
     /// Blurred desktop layer (straight RGBA, output-sized) that translucent titlebars blend over.
     desktop: Option<DesktopBackdrop>,
-    /// Blurred desktop under override-redirect XWayland surfaces, keyed by their rect. Cleared
+    /// Blurred desktop under override-redirect `XWayland` surfaces, keyed by their rect. Cleared
     /// with the desktop capture it was cropped from.
     surfaces: HashMap<(i32, i32, i32, i32), MemoryRenderBuffer>,
 }
@@ -130,8 +130,7 @@ impl Decorations {
         renderer: &mut GlowRenderer,
         window: WindowId,
         rect: Rect,
-        active: bool,
-        maximized: bool,
+        (active, maximized): (bool, bool),
         hover: Option<Button>,
         title: &str,
     ) -> Option<Elem> {
@@ -616,8 +615,7 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                 renderer,
                 id,
                 titlebar,
-                focused,
-                managed.mode == Mode::Maximized,
+                (focused, managed.mode == Mode::Maximized),
                 hovered,
                 title,
             ) {
@@ -1124,7 +1122,8 @@ mod renderer_class_tests {
 fn breeze_glyph(role: chrome::WindowControlRole, edge: u32, dark: bool) -> Option<Vec<u8>> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<HashMap<(u8, u32, bool), Option<Vec<u8>>>>> = OnceLock::new();
+    type Cache = Mutex<HashMap<(u8, u32, bool), Option<Vec<u8>>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
     let key = (role as u8, edge, dark);
     let mut cache = CACHE.get_or_init(Default::default).lock().ok()?;
     cache

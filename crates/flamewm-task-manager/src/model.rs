@@ -230,17 +230,19 @@ impl Sampler {
             uptime: fs::read_to_string("/proc/uptime")
                 .ok()
                 .and_then(|v| v.split_whitespace().next()?.parse::<f64>().ok())
-                .map(|secs| {
-                    let secs = secs as u64;
-                    format!(
-                        "{}d {:02}:{:02}:{:02}",
-                        secs / 86400,
-                        secs / 3600 % 24,
-                        secs / 60 % 60,
-                        secs % 60
-                    )
-                })
-                .unwrap_or_else(|| "Unavailable".into()),
+                .map_or_else(
+                    || "Unavailable".into(),
+                    |secs| {
+                        let secs = secs as u64;
+                        format!(
+                            "{}d {:02}:{:02}:{:02}",
+                            secs / 86400,
+                            secs / 3600 % 24,
+                            secs / 60 % 60,
+                            secs % 60
+                        )
+                    },
+                ),
             cpu_total: self
                 .prev_global
                 .map_or(0.0, |previous| percent(now, previous)),
@@ -383,7 +385,7 @@ mod tests {
         assert_eq!(p.name, "some ) process");
         assert_eq!(
             (p.start, p.priority, p.nice, p.threads, p.virt_kib),
-            (999999, 25, 5, 2, 1024)
+            (999_999, 25, 5, 2, 1024)
         );
     }
     #[test]

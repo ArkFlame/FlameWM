@@ -18,19 +18,8 @@ use crate::native::coverage::{build_coverage, build_coverage_scaled};
 use crate::xshape::ClipRect;
 use flamewm_image_core::blur::BlurScratch;
 
-/// Overlap of two rectangles, `None` when they do not share an area.
-fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
-    let x0 = a.x.max(b.x);
-    let y0 = a.y.max(b.y);
-    let x1 = (a.x + a.width).min(b.x + b.width);
-    let y1 = (a.y + a.height).min(b.y + b.height);
-    (x1 > x0 && y1 > y0).then_some(Rect {
-        x: x0,
-        y: y0,
-        width: x1 - x0,
-        height: y1 - y0,
-    })
-}
+/// Backdrop size and optional RGBA bytes handed to the GPU frame.
+type GpuBackdrop<'a> = (u32, u32, &'a [u8]);
 
 /// Per-thread shadow work buffers. The display thread is the only shadow painter,
 /// so every text shadow reuses the blur scratch and staging buffers instead of
@@ -535,8 +524,7 @@ impl X11App {
                     visual,
                     self.depth as u32,
                     &words,
-                    width,
-                    height,
+                    (width, height),
                     "GPU frame upload",
                 )
             }
@@ -600,7 +588,7 @@ impl X11App {
 
     /// The retained backdrop the GPU frame starts from: the surface snapshot with its byte copy.
     /// A window backdrop has no byte copy, so it keeps the XRender path with a named reason.
-    fn gpu_backdrop(&self) -> Result<Option<(u32, u32, &[u8])>, &'static str> {
+    fn gpu_backdrop(&self) -> Result<Option<GpuBackdrop<'_>>, &'static str> {
         match (&self.surface_backdrop, &self.window_backdrop_pixmap) {
             (Some(backdrop), _) => match backdrop.rgba.as_deref() {
                 Some(rgba) => Ok(Some((backdrop.width, backdrop.height, rgba))),

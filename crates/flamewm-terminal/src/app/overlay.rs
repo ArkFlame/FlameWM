@@ -122,6 +122,8 @@ impl App {
             .iter()
             .enumerate()
             .map(|(index, text)| {
+                // Art rows are switched off (`BANNER_ART_ROWS == 0`); keep the toggle.
+                #[allow(clippy::absurd_extreme_comparisons)]
                 let art = index < BANNER_ART_ROWS;
                 let colour = if art {
                     self.palette.cursor

@@ -1,4 +1,4 @@
-//! FlameWM assistant core: the ARK AI and Hermes proxy chat providers, the durable chat
+//! `FlameWM` assistant core: the ARK AI and Hermes proxy chat providers, the durable chat
 //! history store, and speech/model traits. Model and voice downloads use the same curl-based fetcher.
 //!
 //! No UI dependencies and no async runtime. HTTPS is delegated to `curl`.
@@ -103,6 +103,7 @@ impl From<std::io::Error> for AssistantError {
 pub struct CancelToken(Arc<AtomicBool>);
 
 impl CancelToken {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -111,6 +112,7 @@ impl CancelToken {
         self.0.store(true, Ordering::SeqCst);
     }
 
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }

@@ -16,6 +16,7 @@ impl Provider {
     pub const ALL: [Provider; 2] = [Provider::Ark, Provider::HermesProxy];
 
     /// Stored in `state.json`.
+    #[must_use]
     pub fn id(self) -> &'static str {
         match self {
             Provider::Ark => "ark",
@@ -23,11 +24,13 @@ impl Provider {
         }
     }
 
+    #[must_use]
     pub fn from_id(id: &str) -> Option<Provider> {
         Provider::ALL.into_iter().find(|p| p.id() == id)
     }
 
     /// Menu header and footer name.
+    #[must_use]
     pub fn title(self) -> &'static str {
         match self {
             Provider::Ark => ark::LABEL,
@@ -44,6 +47,7 @@ pub struct Selection {
 }
 
 impl Selection {
+    #[must_use]
     pub fn ark_default() -> Self {
         Self {
             provider: Provider::Ark,
@@ -66,6 +70,7 @@ impl Selection {
 
 /// The selection a turn really uses. A Hermes choice falls back to ARK flash when the proxy is
 /// gone, and the returned notice tells the user why.
+#[must_use]
 pub fn resolve(selected: &Selection, proxy_up: bool) -> (Selection, Option<String>) {
     if selected.provider == Provider::HermesProxy && !proxy_up {
         let notice = "Hermes proxy is not running. Answered with ARK AI.".to_owned();
@@ -75,6 +80,7 @@ pub fn resolve(selected: &Selection, proxy_up: bool) -> (Selection, Option<Strin
 }
 
 /// Endpoint for a provider. `ark_key` is used only for ARK.
+#[must_use]
 pub fn endpoint(provider: Provider, ark_key: &str) -> Endpoint {
     match provider {
         Provider::Ark => ark::endpoint(ark_key),
@@ -83,6 +89,7 @@ pub fn endpoint(provider: Provider, ark_key: &str) -> Endpoint {
 }
 
 /// Model ids of the running Hermes proxy, or `None` when it is not running.
+#[must_use]
 pub fn proxy_models(cancel: &CancelToken) -> Option<Vec<String>> {
     hermes::probe(&hermes::base_url(), cancel)
 }

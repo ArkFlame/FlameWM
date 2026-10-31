@@ -1,7 +1,5 @@
 //! Split from `lib.rs` (`sliders`); see crate docs.
 
-use super::*;
-
 pub(crate) const ANIMATION_SPEED_SLIDER: &str = "slider.animation-speed";
 
 /// One glass slider: its drag action, the integer-valued percent or px key it writes, its

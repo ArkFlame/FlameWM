@@ -3,10 +3,10 @@
 /// Binary-unit size such as `512 B`, `1.5 KB`, `230 MB`.
 #[must_use]
 pub fn bytes(value: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     if value == 0 {
         return "0 B".to_owned();
     }
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut scaled = value as f64;
     let mut unit = 0;
     while scaled >= 1024.0 && unit < UNITS.len() - 1 {

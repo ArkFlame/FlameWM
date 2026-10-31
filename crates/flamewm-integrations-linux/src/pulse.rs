@@ -868,7 +868,7 @@ mod tests {
         );
     }
 
-    /// Needs a running PulseAudio-compatible server (PulseAudio or `pipewire-pulse`):
+    /// Needs a running PulseAudio-compatible server (`PulseAudio` or `pipewire-pulse`):
     /// `cargo test -p flamewm-integrations-linux --features pulse-audio -- --ignored live_server`.
     #[test]
     #[ignore = "needs a live PulseAudio-compatible server"]

@@ -1,4 +1,4 @@
-//! Audio helper: owns the PulseAudio connection for the window manager.
+//! Audio helper: owns the `PulseAudio` connection for the window manager.
 //!
 //! Reads requests on stdin and writes snapshot blocks on stdout. It exits when stdin closes or
 //! when no request arrives for `IDLE_EXIT`; the window manager respawns it on the next request.

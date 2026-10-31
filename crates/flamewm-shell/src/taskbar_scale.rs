@@ -81,6 +81,15 @@ pub fn scaled(px: f32) -> f32 {
     scale_px(px, factor())
 }
 
+/// Serialises tests that write or read the process-wide factor. Each such test resets it to the
+/// reference scale under this lock, so results do not depend on test order.
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,13 +175,4 @@ mod tests {
         let width = task_slots_width(3, SLOT, factor);
         assert!((width - (3.0 * scale_px(SLOT, factor) + 2.0 * NODE_BORDER)).abs() < 1e-4);
     }
-}
-
-/// Serialises tests that write or read the process-wide factor. Each such test resets it to the
-/// reference scale under this lock, so results do not depend on test order.
-#[cfg(test)]
-pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

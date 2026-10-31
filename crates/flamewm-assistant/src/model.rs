@@ -583,12 +583,15 @@ mod menu_rows_tests {
     fn ark() -> Vec<String> {
         ["lite", "flash", "pro"]
             .iter()
-            .map(|s| s.to_string())
+            .map(|s| (*s).to_string())
             .collect()
     }
 
     fn proxy() -> Vec<String> {
-        ["a/b:free", "c/d"].iter().map(|s| s.to_string()).collect()
+        ["a/b:free", "c/d"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect()
     }
 
     #[test]
@@ -668,7 +671,7 @@ mod model_filter_tests {
             "a/b-free-plus",
         ]
         .iter()
-        .map(|s| s.to_string())
+        .map(|s| (*s).to_string())
         .collect()
     }
 

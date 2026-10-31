@@ -1,4 +1,4 @@
-//! FlameWM Image Viewer: one glass window showing one image fitted to the window, with zoom, pan and
+//! `FlameWM` Image Viewer: one glass window showing one image fitted to the window, with zoom, pan and
 //! browsing through the images of its folder. Decoding runs on the `decode` worker; this module owns
 //! the window state and places the frames the worker returns. Idle means no timers and no polling:
 //! the reactor sleeps until a UI event, a worker reply or a settings change arrives.
@@ -117,6 +117,9 @@ fn siblings(path: &Path) -> Vec<PathBuf> {
     images
 }
 
+/// Sequence, placed origin and stage size of one shown frame.
+type ShownFrame = (u64, (u32, u32), (u32, u32));
+
 /// The window state. Pixels never live here except inside the document after a frame arrives.
 struct App {
     theme: SettingsSnapshot,
@@ -139,7 +142,7 @@ struct App {
     stage: (u32, u32),
     seq: u64,
     /// Sequence and stage geometry of the last viewport request. Only that frame is placed.
-    shown: Option<(u64, (u32, u32), (u32, u32))>,
+    shown: Option<ShownFrame>,
     drag: Option<(f32, f32)>,
     message: String,
 }

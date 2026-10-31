@@ -253,7 +253,7 @@ fn decode_dib(payload: &[u8]) -> Result<RgbaImage, String> {
         for row in 0..height_usize {
             let source_row = (height_usize - 1 - row) * mask_row_bytes;
             for column in 0..width_usize {
-                let transparent = mask[source_row + column / 8] >> (7 - column % 8) & 1 == 1;
+                let transparent = (mask[source_row + column / 8] >> (7 - column % 8)) & 1 == 1;
                 pixels[(row * width_usize + column) * 4 + 3] = if transparent { 0 } else { 255 };
             }
         }
@@ -276,7 +276,7 @@ fn bit_index(body: &[u8], row_start: usize, column: usize, depth: u16) -> Option
         }
         1 => {
             let byte = *body.get(row_start + column / 8)?;
-            Some(byte >> (7 - column % 8) & 1)
+            Some((byte >> (7 - column % 8)) & 1)
         }
         _ => None,
     }

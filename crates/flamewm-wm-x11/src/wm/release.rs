@@ -8,14 +8,6 @@ pub(super) enum ReleaseAction {
     Snap(crate::frame::model::SnapTarget),
 }
 
-pub(super) fn drag_activated(session: &InteractionSession) -> bool {
-    match session {
-        InteractionSession::Move(move_session) => move_session.anchor.is_activated(),
-        InteractionSession::Resize(_) => true,
-        _ => false,
-    }
-}
-
 pub(super) fn activated_move(session: Option<MoveSession>) -> Option<MoveSession> {
     match session {
         Some(session) if session.anchor.is_activated() => Some(session),

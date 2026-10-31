@@ -310,8 +310,8 @@ impl FillMask {
 /// Fills the glyph-edge mask with `fill` (opaque) and composites the
 /// straight-alpha glyph over it. Pixels outside the mask are untouched.
 fn paint_fill_behind(raster: &mut flamewm_image_core::RgbaImage, fill: [u8; 4], mask: FillMask) {
-    let size = raster.width as f32;
     const SAMPLES: u32 = 4;
+    let size = raster.width as f32;
     for y in 0..raster.height {
         for x in 0..raster.width {
             let coverage = (0..SAMPLES)
@@ -905,10 +905,12 @@ mod glass_contour_tests {
     use super::*;
     #[test]
     fn frame_border_uses_configured_shared_surface_contour() {
-        let mut t = ChromeTokens::default();
-        t.titlebar_bg = Rgb(0);
-        t.surface_border_rgb = Rgb(0x00ff_ffff);
-        t.surface_border_alpha = 0;
+        let mut t = ChromeTokens {
+            titlebar_bg: Rgb(0),
+            surface_border_rgb: Rgb(0x00ff_ffff),
+            surface_border_alpha: 0,
+            ..ChromeTokens::default()
+        };
         assert_eq!(frame_border_pixel(&t), 0);
         t.surface_border_alpha = 255;
         assert_eq!(frame_border_pixel(&t), 0x00ff_ffff);

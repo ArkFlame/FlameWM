@@ -211,12 +211,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             return Ok(());
         };
         let value = draft.buffer.trim().to_owned();
-        match flamewm_api::settings::assistant_api_key_error(&value) {
-            Some(message) => draft.error = Some(message.to_owned()),
-            None => {
-                self.api_key_draft = None;
-                self.apply_text("assistant.apiKey", value)?;
-            }
+        if let Some(message) = flamewm_api::settings::assistant_api_key_error(&value) {
+            draft.error = Some(message.to_owned());
+        } else {
+            self.api_key_draft = None;
+            self.apply_text("assistant.apiKey", value)?;
         }
         Ok(())
     }
@@ -224,12 +223,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
     /// Projects the API key field: the draft with a caret while editing, else the saved key masked
     /// to its first 8 characters (the built-in label when unset), plus the inline message.
     pub(crate) fn sync_api_key(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let (text, error) = match &self.api_key_draft {
-            Some(draft) => (format!("{}|", draft.buffer), draft.error.clone()),
-            None => {
-                let saved = self.text_setting("assistant.apiKey").unwrap_or_default();
-                (masked_api_key(&saved), None)
-            }
+        let (text, error) = if let Some(draft) = &self.api_key_draft {
+            (format!("{}|", draft.buffer), draft.error.clone())
+        } else {
+            let saved = self.text_setting("assistant.apiKey").unwrap_or_default();
+            (masked_api_key(&saved), None)
         };
         document.text("assistant-api-key", text)?;
         optional_text(

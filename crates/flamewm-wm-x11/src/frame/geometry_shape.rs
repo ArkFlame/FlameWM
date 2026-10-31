@@ -36,7 +36,7 @@ pub fn client_area_size(outer: Rect, titlebar_h: u16) -> (u32, u32) {
     )
 }
 
-/// Corner rows lose one more pixel. The 1-bit XShape edge then sits inside the 1px AA outline
+/// Corner rows lose one more pixel. The 1-bit `XShape` edge then sits inside the 1px AA outline
 /// ring that chrome paints on the frame, so the ring, not the stair-stepped mask edge, is what
 /// the eye sees. Straight rows (inset 0) keep their full width.
 #[must_use]

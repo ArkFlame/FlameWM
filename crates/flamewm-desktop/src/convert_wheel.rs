@@ -36,7 +36,7 @@ fn sector_within(x: f32, y: f32, margin: f32) -> Option<usize> {
     let center = sector as f32 * SECTOR_STEP;
     let distance = (angle - center + PI).rem_euclid(TAU) - PI;
     // Angular margin = arc length / mid-ring radius.
-    let half_arc = HALF_ARC + margin / ((INNER_RADIUS + OUTER_RADIUS) / 2.0);
+    let half_arc = HALF_ARC + margin / f32::midpoint(INNER_RADIUS, OUTER_RADIUS);
     if distance.abs() > half_arc {
         return None;
     }

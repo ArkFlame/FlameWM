@@ -169,7 +169,7 @@ pub fn control_button_geometries(titlebar: SceneRect) -> [ControlGeometry; 3] {
 
 /// Available title text width after respecting the left icon and right control strip.
 /// Both native backends must shorten the title *before* computing its centered origin;
-/// center_title_x alone cannot prevent overlap when the title exceeds this space.
+/// `center_title_x` alone cannot prevent overlap when the title exceeds this space.
 #[must_use]
 pub fn title_available_width(left_occupied: i32, right_occupied: i32, padding: i32) -> i32 {
     right_occupied

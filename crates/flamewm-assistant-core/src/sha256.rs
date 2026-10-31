@@ -99,6 +99,7 @@ impl Default for Sha256 {
 }
 
 impl Sha256 {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -126,6 +127,7 @@ impl Sha256 {
     }
 
     /// Finishes the hash and returns the digest as 64 lowercase hex characters.
+    #[must_use]
     pub fn hex(mut self) -> String {
         let bits = self.length.wrapping_mul(8);
         self.update(&[0x80]);

@@ -14,7 +14,7 @@ use flamewm_api::ports::FdEvents;
 use flamewm_control_dbus::{ControlClient, ControlSignalClient};
 use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::{BusKind, BusWatch};
-use flamewm_reactor::{Reactor, SystemWallClock, WallClockSource};
+use flamewm_reactor::{Reactor, SystemWallClock};
 use flamewm_shell::async_projection;
 use flamewm_shell::projection;
 use flamewm_shell::start;
@@ -614,6 +614,7 @@ fn installed_data_root(executable: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_reactor::WallClockSource;
 
     #[test]
     fn wall_clock_is_utc_epoch_millis() {

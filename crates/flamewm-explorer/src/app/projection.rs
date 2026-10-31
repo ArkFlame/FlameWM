@@ -199,7 +199,7 @@ impl ExplorerApp {
                 "compress"=>self.ark && self.context_on_entry && selected_path.is_some(),
                 "copy"|"cut"|"trash"|"duplicate"=>self.context_on_entry && selected_path.is_some(),
                 "open"|"openwith"|"rename"|"properties"=>self.context_on_entry && !many && selected_path.is_some(),
-                "setwallpaper"=>self.context_on_entry && !many && selected_path.as_deref().is_some_and(|p|!remote::is_remote(p) && p.is_file() && thumbs::thumb_format(p).is_some_and(|f|f.is_image())),
+                "setwallpaper"=>self.context_on_entry && !many && selected_path.as_deref().is_some_and(|p|!remote::is_remote(p) && p.is_file() && thumbs::thumb_format(p).is_some_and(crate::thumbs::ThumbFormat::is_image)),
                 "opencontaining"=>searching && self.context_on_entry && !many && selected_path.is_some(),
                 "restore"=>in_trash && self.context_on_entry && selected_path.is_some(),
                 "hidden"|"showtype"|"connect"=>self.menu_overflow,

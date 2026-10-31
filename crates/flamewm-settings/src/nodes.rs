@@ -115,7 +115,7 @@ pub(crate) fn sync_accent_nodes(
     document.color_variable("--accent-soft", UiColor { a: 0x38, ..color })
 }
 
-/// Window body glass (GlassRegular, the menu surface material), backdrop blur beneath it, and the
+/// Window body glass (`GlassRegular`, the menu surface material), backdrop blur beneath it, and the
 /// grouped-card overlay. The sidebar and content areas stay transparent and show this body.
 /// Every value comes from `glass::resolve`, so Reduce transparency makes the body opaque with no blur.
 pub(crate) fn project_glass_roles(

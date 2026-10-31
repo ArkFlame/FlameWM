@@ -210,7 +210,8 @@ pub fn saturate_rgb(rgb: u32, percent: u32) -> u32 {
     let luma = (channels[0] * 77 + channels[1] * 150 + channels[2] * 29) / 256;
     let mut out = 0_u32;
     for (index, channel) in channels.iter().enumerate() {
-        let value = luma as i64 + (*channel as i64 - luma as i64) * i64::from(percent) / 100;
+        let value =
+            i64::from(luma) + (i64::from(*channel) - i64::from(luma)) * i64::from(percent) / 100;
         let clamped = value.clamp(0, 255) as u32;
         out |= clamped << (16 - 8 * index as u32);
     }

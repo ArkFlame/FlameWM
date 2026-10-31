@@ -57,6 +57,7 @@ pub fn key_or_default(stored: Option<&str>) -> String {
 }
 
 /// Settings display: the first eight characters and dots. Never the whole key.
+#[must_use]
 pub fn masked_key(key: &str) -> String {
     let shown: String = key.chars().take(8).collect();
     format!("{shown}{}", "\u{2022}".repeat(12))

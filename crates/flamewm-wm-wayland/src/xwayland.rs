@@ -48,7 +48,7 @@ pub struct Props {
     net_wm_state: Atom,
     fullscreen: Atom,
     net_wm_name: Atom,
-    /// Unmapped InputOnly window retaining the _NET_WM_CM_S0 selection for XWayland.
+    /// Unmapped `InputOnly` window retaining the _`NET_WM_CM_S0` selection for `XWayland`.
     _compositor_owner: Option<X11Window>,
 }
 
@@ -73,8 +73,8 @@ impl Props {
         Ok(props)
     }
 
-    /// Smithay really composites the XWayland client buffers, including their alpha. Advertise
-    /// that fact to X11 clients on this *private XWayland display* before launching Shell.
+    /// Smithay really composites the `XWayland` client buffers, including their alpha. Advertise
+    /// that fact to X11 clients on this *private `XWayland` display* before launching Shell.
     /// Do not displace a pre-existing CM owner, and keep the owner window alive for our lifetime.
     fn claim_compositor(&mut self) -> Result<bool, Box<dyn Error>> {
         let selection = self
@@ -124,7 +124,7 @@ impl Props {
     }
 
     /// One-time title read when mapping the window. X11 title strings are not in Wayland
-    /// buffer pixels; the compositor needs the WM_NAME to paint its native titlebar.
+    /// buffer pixels; the compositor needs the `WM_NAME` to paint its native titlebar.
     pub fn title(&self, window: X11Window) -> Option<String> {
         for property in [self.net_wm_name, AtomEnum::WM_NAME.into()] {
             let Ok(cookie) = self
@@ -246,10 +246,10 @@ impl State {
             Ok(mut props) => {
                 match props.claim_compositor() {
                     Ok(true) => {
-                        eprintln!("flamewm-wayland: XWayland ARGB compositor selection active")
+                        eprintln!("flamewm-wayland: XWayland ARGB compositor selection active");
                     }
                     Ok(false) => {
-                        eprintln!("flamewm-wayland: XWayland compositor selection already owned")
+                        eprintln!("flamewm-wayland: XWayland compositor selection already owned");
                     }
                     Err(error) => eprintln!(
                         "flamewm-wayland: XWayland compositor selection unavailable: {error}"

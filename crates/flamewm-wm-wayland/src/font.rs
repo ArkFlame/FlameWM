@@ -33,7 +33,14 @@ struct TitleFont {
     cache: HashMap<(char, u32), std::sync::Arc<Glyph>>,
 }
 
-static FONT: Mutex<Option<Option<TitleFont>>> = Mutex::new(None);
+/// Lazily loaded title font: not yet searched, searched and absent, or loaded.
+enum FontSlot {
+    Unloaded,
+    Missing,
+    Loaded(TitleFont),
+}
+
+static FONT: Mutex<FontSlot> = Mutex::new(FontSlot::Unloaded);
 
 fn search_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
@@ -93,7 +100,15 @@ pub fn with_glyphs<R>(
     f: impl FnOnce(&mut dyn FnMut(char) -> std::sync::Arc<Glyph>) -> R,
 ) -> Option<R> {
     let mut guard = FONT.lock().ok()?;
-    let font = guard.get_or_insert_with(load).as_mut()?;
+    if matches!(*guard, FontSlot::Unloaded) {
+        *guard = match load() {
+            Some(font) => FontSlot::Loaded(font),
+            None => FontSlot::Missing,
+        };
+    }
+    let FontSlot::Loaded(font) = &mut *guard else {
+        return None;
+    };
     let key_px = (px * 4.0).round() as u32;
     let mut lookup = |c: char| {
         if let Some(hit) = font.cache.get(&(c, key_px)) {

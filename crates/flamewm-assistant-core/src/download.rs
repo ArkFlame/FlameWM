@@ -49,6 +49,7 @@ impl Default for CurlFetcher {
 }
 
 impl CurlFetcher {
+    #[must_use]
     pub fn with_program_and_proto(program: &str, proto: &str) -> Self {
         Self {
             program: program.into(),
@@ -138,6 +139,7 @@ impl<F: Fetcher> DiskModelStore<F> {
     }
 
     /// Ties downloads to a token so the UI can abort them. Partial files are kept for resume.
+    #[must_use]
     pub fn with_cancel(mut self, cancel: CancelToken) -> Self {
         self.cancel = cancel;
         self
@@ -957,7 +959,7 @@ mod tests {
         drop(file);
         match extract_zstd_tar(&archive, &dir.join("out")) {
             Err(AssistantError::Io(message)) => {
-                assert!(message.contains("--zstd failed"), "{message}")
+                assert!(message.contains("--zstd failed"), "{message}");
             }
             Err(AssistantError::NotConfigured(_)) => eprintln!("skipping: tar not installed"),
             other => panic!("unexpected: {other:?}"),

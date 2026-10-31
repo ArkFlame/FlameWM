@@ -1224,7 +1224,7 @@ mod tests {
     }
 
     /// Polls `apply_icon_theme` until the requested chain is installed.
-    /// THEME_GENERATION is process-global and each service numbers its own generations, so
+    /// `THEME_GENERATION` is process-global and each service numbers its own generations, so
     /// parallel theme tests race on it. Tests that read or bump it take this lock.
     static THEME_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -1243,7 +1243,7 @@ mod tests {
     fn apply_icon_theme_installs_requested_chain_and_bumps_generation() {
         let _theme_guard = THEME_STATE_LOCK
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut icons = ParallelIconService::spawn(
             std::env::temp_dir().join("flamewm-projection-apply-theme-no-such-root"),
         );
@@ -1260,7 +1260,7 @@ mod tests {
     fn apply_icon_theme_stays_satisfied_after_watch_refresh() {
         let _theme_guard = THEME_STATE_LOCK
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // A watch refresh rebuilds from the installed chain, so the pending icon theme request
         // must still read as satisfied; otherwise icon_theme_pending would stay true and retry
         // request_theme_change on every tick.
@@ -1278,7 +1278,7 @@ mod tests {
     fn refresh_theme_unchanged_index_returns_false_and_keeps_mirror() {
         let _theme_guard = THEME_STATE_LOCK
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut icons = ParallelIconService::spawn(
             std::env::temp_dir().join("flamewm-projection-refresh-theme-no-such-root"),
         );

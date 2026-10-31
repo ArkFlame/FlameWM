@@ -1,5 +1,5 @@
 //! One-shot, native system summary. No polling, subprocesses, or shell interpolation.
-//! The same code serves the `flamefetch` command and FlameWM Terminal's initial shell.
+//! The same code serves the `flamefetch` command and `FlameWM` Terminal's initial shell.
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::os::fd::AsFd;
@@ -57,9 +57,7 @@ fn config_path() -> PathBuf {
     }
 }
 fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
+    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 fn dequote(text: &str) -> &str {
     text.trim()
@@ -119,17 +117,17 @@ impl Config {
             match key {
                 "startup" => {
                     if let Ok(v) = value.parse::<bool>() {
-                        config.startup = v
+                        config.startup = v;
                     }
                 }
                 "palette" => {
                     if let Ok(v) = value.parse::<bool>() {
-                        config.palette = v
+                        config.palette = v;
                     }
                 }
                 "logo" => config.logo = dequote(value).chars().take(512).collect(),
-                "logo_color" => config.logo_color = dequote(value).to_owned(),
-                "key_color" => config.key_color = dequote(value).to_owned(),
+                "logo_color" => dequote(value).clone_into(&mut config.logo_color),
+                "key_color" => dequote(value).clone_into(&mut config.key_color),
                 "layout" => {
                     config.layout = match dequote(value) {
                         "full" => Layout::Full,
@@ -139,7 +137,7 @@ impl Config {
                 }
                 "modules" => {
                     if value.contains(']') {
-                        config.modules = parse_modules(value)
+                        config.modules = parse_modules(value);
                     } else {
                         in_modules = true;
                         collecting_modules.push_str(value);
@@ -184,7 +182,7 @@ pub fn exec_shell(shell: &str, args: &[String]) -> ! {
     std::process::exit(127)
 }
 
-/// Invoked by a standalone `flamefetch` binary or the installed FlameWM multi-call link.
+/// Invoked by a standalone `flamefetch` binary or the installed `FlameWM` multi-call link.
 pub fn cli_main(args: impl IntoIterator<Item = String>) -> Result<(), String> {
     let mut config_file = config_path();
     let mut arguments = args.into_iter().peekable();
@@ -209,9 +207,9 @@ pub fn cli_main(args: impl IntoIterator<Item = String>) -> Result<(), String> {
                     .next()
                     .ok_or_else(|| format!("{arg} requires a value"))?;
                 if arg == "--config" {
-                    config_file = PathBuf::from(value)
+                    config_file = PathBuf::from(value);
                 } else {
-                    overrides.push((arg.trim_start_matches("--").into(), value))
+                    overrides.push((arg.trim_start_matches("--").into(), value));
                 }
             }
             _ => return Err(format!("unknown option {arg}; use --help")),
@@ -461,7 +459,7 @@ fn logo_lines(config: &Config, cols: usize, rows: usize) -> Vec<String> {
         full
     }
 }
-/// Terminals that implement the kitty graphics protocol. FlameWM Terminal is not listed: it ignores APC strings.
+/// Terminals that implement the kitty graphics protocol. `FlameWM` Terminal is not listed: it ignores APC strings.
 fn kitty_graphics_supported(env: impl Fn(&str) -> Option<String>) -> bool {
     env("KITTY_WINDOW_ID").is_some()
         || env("TERM").is_some_and(|term| term == "xterm-kitty")
@@ -559,7 +557,7 @@ fn render(writer: &mut impl Write, config: &Config, colored: bool, tty: bool) ->
         }
     } else if side_by_side {
         for row in 0..logo.len().max(info.len()) {
-            let left = logo.get(row).map(String::as_str).unwrap_or("");
+            let left = logo.get(row).map_or("", String::as_str);
             write!(
                 writer,
                 "{logo_ansi}{left}{reset}{:width$}",
@@ -609,9 +607,11 @@ mod tests {
     }
     #[test]
     fn no_logo_preserves_data() {
-        let mut c = Config::default();
-        c.logo = "none".into();
-        c.palette = false;
+        let c = Config {
+            logo: "none".into(),
+            palette: false,
+            ..Config::default()
+        };
         let mut output = Vec::new();
         render(&mut output, &c, false, false).unwrap();
         let out = String::from_utf8(output).unwrap();
@@ -663,8 +663,10 @@ mod tests {
         assert!(image.starts_with("\x1b_Ga=T,f=32,s=256,v=256,c=24,r=12,q=2,m=1;"));
         assert!(logo_image(&c, false, kitty).is_none());
         assert!(logo_image(&c, true, |_| None).is_none());
-        let mut builtin = Config::default();
-        builtin.logo = "builtin".into();
+        let builtin = Config {
+            logo: "builtin".into(),
+            ..Config::default()
+        };
         assert!(logo_image(&builtin, true, kitty).is_none());
     }
     #[test]

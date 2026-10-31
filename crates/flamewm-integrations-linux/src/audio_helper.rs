@@ -239,7 +239,7 @@ mod tests {
     use flamewm_api::system::{AudioEndpointKind, AudioTarget};
 
     /// Fake helper: answers the first request with one snapshot block, then exits like an idle
-    /// helper would. Runs over real stdin/stdout pipes; never touches PulseAudio.
+    /// helper would. Runs over real stdin/stdout pipes; never touches `PulseAudio`.
     const ONE_SHOT_HELPER: &str =
         "read _line; printf 'snapshot available 1 1 50 0 x\\nend\\n'; exit 0";
 

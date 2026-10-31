@@ -19,7 +19,7 @@ pub(super) fn retain_deferred_icon_job(
     deferred.insert(client, (token, job));
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     /// Submits a HIGH catalog-icon job; parks it on queue pressure. True when the service has stopped.
     pub(super) fn submit_catalog_icon(
         &mut self,

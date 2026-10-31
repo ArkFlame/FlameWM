@@ -497,7 +497,7 @@ fn register_media_widget(
                 } else {
                     calloop::Interest::READ
                 };
-                let media_cell = std::rc::Rc::clone(&state_cell);
+                let media_cell = std::rc::Rc::clone(state_cell);
                 let registration =
                     reactor.register_raw_fd_with_action(watch.fd, interest, move |_, _| {
                         widgets::refresh_media(&mut media_cell.borrow_mut());
@@ -540,8 +540,8 @@ fn register_workspace_signals(
                 (false, true) => calloop::Interest::WRITE,
                 _ => calloop::Interest::READ,
             };
-            let workspace_cell = std::rc::Rc::clone(&state_cell);
-            let panels_signal_flag = std::rc::Rc::clone(&panels_dirty);
+            let workspace_cell = std::rc::Rc::clone(state_cell);
+            let panels_signal_flag = std::rc::Rc::clone(panels_dirty);
             let registration = reactor.register_raw_fd_with_action(watch_fd, interest, {
                 move |_, _| {
                     let state_cell = &workspace_cell;
@@ -685,8 +685,8 @@ fn register_icon_and_wallpaper_wakes(
     // IconService wake FD: worker completions only set the pending flag;
     // the next event/flush tick drains and repaints affected tiles.
     if let Some(icon_fd) = state_cell.borrow().icons.wake_fd() {
-        let icon_cell = std::rc::Rc::clone(&state_cell);
-        let icon_pending = Arc::clone(&icons_pending);
+        let icon_cell = std::rc::Rc::clone(state_cell);
+        let icon_pending = Arc::clone(icons_pending);
         let registration =
             reactor.register_raw_fd_with_action(icon_fd, calloop::Interest::READ, move |_, _| {
                 icon_cell.borrow_mut().icons.wake_drain();
@@ -696,7 +696,7 @@ fn register_icon_and_wallpaper_wakes(
         warn_degraded("icon completion", registration);
     }
     let wallpaper_fd = state_cell.borrow().wallpaper_loader.wake_fd();
-    let wallpaper_cell = std::rc::Rc::clone(&state_cell);
+    let wallpaper_cell = std::rc::Rc::clone(state_cell);
     let registration =
         reactor.register_raw_fd_with_action(wallpaper_fd, calloop::Interest::READ, move |_, _| {
             let mut state = wallpaper_cell.borrow_mut();

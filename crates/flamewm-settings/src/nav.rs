@@ -1,7 +1,5 @@
 //! Split from `lib.rs` (`nav`); see crate docs.
 
-use super::*;
-
 /// Brand block height above the first sidebar row; must match `.settings-brand` in ui/settings.css.
 pub(crate) const NAV_BRAND_HEIGHT_PX: f32 = 72.0;
 /// Sidebar row pitch (no gap between rows); must match `.nav-row` height in ui/settings.css.

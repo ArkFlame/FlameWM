@@ -20,7 +20,6 @@ use flamewm_session_core::diagnostics::{
 };
 use rustix::fs::{Access, access};
 use rustix::process::getuid;
-use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt as _;
 
 struct SessionLog {

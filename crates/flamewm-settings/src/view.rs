@@ -16,7 +16,7 @@ pub fn document() -> Result<UiDocument, String> {
 }
 
 /// The settings document with the window-level wallpaper backdrop under its translucent body glass.
-/// Opacity is the resolved GlassRegular alpha, so Reduce transparency installs no backdrop.
+/// Opacity is the resolved `GlassRegular` alpha, so Reduce transparency installs no backdrop.
 pub fn document_with_backdrop(snapshot: Option<&SettingsSnapshot>) -> Result<UiDocument, String> {
     Ok(decode_document(COMPILED_UI)?.with_window_backdrop(window_backdrop(snapshot)))
 }

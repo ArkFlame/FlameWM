@@ -154,6 +154,7 @@ pub fn start_recording(argv: &[String]) -> Result<Recording, AssistantError> {
 
 impl Recording {
     /// Stops capture and returns the samples recorded so far.
+    #[must_use]
     pub fn finish(mut self) -> Vec<i16> {
         let _ = self.child.kill();
         let _ = self.child.wait();

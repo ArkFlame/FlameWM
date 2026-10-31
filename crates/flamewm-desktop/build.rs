@@ -316,8 +316,7 @@ fn widget_slots() -> String {
             .map(|index| {
                 format!("<div id=\"widget-slot-{index}\" class=\"widget-slot-cell\" hidden></div>")
             })
-            .collect::<Vec<_>>()
-            .join("")
+            .collect::<String>()
         // Drag ghost: the target cell outline shown while a widget is moved or resized.
         + "\n  <div id=\"widget-ghost\" class=\"widget-ghost\" hidden></div>"
 }

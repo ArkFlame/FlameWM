@@ -61,7 +61,7 @@ impl History {
             Self::Packed { text, runs } => {
                 let mut chars = text.chars();
                 let mut line = Vec::with_capacity(runs.iter().map(|run| run.len as usize).sum());
-                for run in runs.iter() {
+                for run in runs {
                     for _ in 0..run.len {
                         line.push(Cell {
                             ch: chars.next().unwrap_or(' '),

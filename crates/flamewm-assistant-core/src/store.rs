@@ -171,19 +171,23 @@ impl ChatStore {
         })
     }
 
+    #[must_use]
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
     /// Number of messages currently held in memory.
+    #[must_use]
     pub fn cached(&self) -> usize {
         self.cache.len()
     }
@@ -259,6 +263,7 @@ impl ChatStore {
         self.load_page(None, limit)
     }
 
+    #[must_use]
     pub fn session(&self) -> &SessionState {
         &self.session
     }
@@ -422,6 +427,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), AssistantError> {
     Ok(())
 }
 
+#[must_use]
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

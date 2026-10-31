@@ -116,7 +116,7 @@ pub(crate) unsafe fn upload_argb32_image(
     height: u32,
     what: &str,
 ) -> Result<(), String> {
-    unsafe { upload_words_image(display, pixmap, visual, 32, argb, width, height, what) }
+    unsafe { upload_words_image(display, pixmap, visual, 32, argb, (width, height), what) }
 }
 
 /// Uploads 32-bit `0xAARRGGBB` words as an image of `depth` (the alpha byte is ignored at depth 24).
@@ -127,10 +127,10 @@ pub(crate) unsafe fn upload_words_image(
     visual: *mut Visual,
     depth: u32,
     argb: &[u32],
-    width: u32,
-    height: u32,
+    size: (u32, u32),
     what: &str,
 ) -> Result<(), String> {
+    let (width, height) = size;
     if visual.is_null() {
         return Err(format!("{what}: ARGB32 visual is NULL"));
     }

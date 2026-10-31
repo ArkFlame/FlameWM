@@ -1,7 +1,7 @@
 //! Per-window decoration, extents, and move/resize state reads.
 use super::*;
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn extents(&self) -> FrameExtents {
         FrameExtents::new(i32::from(self.titlebar_height()), 1)
     }

@@ -490,7 +490,6 @@ impl ShellSurfaces {
     // shortcut: an external move of a panel surface is not observed here; only
     // RandR (display generation) and our own re-sync invalidate the cache.
     // revisit when ConfigureNotify for panel surfaces is routed into the shell.
-
     #[must_use]
     pub fn panel_native_geometry_drifted(&self, runtime: &SurfaceRuntime, key: (u64, u64)) -> bool {
         native_geometry_drifted(

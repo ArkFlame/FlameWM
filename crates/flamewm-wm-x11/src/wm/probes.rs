@@ -1,7 +1,7 @@
 //! Event-dispatch and motion-entry probes (diagnostics only).
 use super::*;
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn probe_event_dispatch(&mut self, event: &Event, received: usize) {
         let Some(pointer) = pointer_ingress(event) else {
             return;

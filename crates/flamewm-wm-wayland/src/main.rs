@@ -776,7 +776,7 @@ fn init_winit(
 }
 
 /// Match the Xephyr development viewport unless the caller supplies a size. Using the
-/// host root size (or maximizing the nested winit window) used to hide FlameWM's bottom
+/// host root size (or maximizing the nested winit window) used to hide `FlameWM`'s bottom
 /// panel behind the host desktop panel/titlebar, especially at fractional host scaling.
 /// Both native and X11 development harnesses must start with the same *content* size.
 const NESTED_DEFAULT_WIDTH: u32 = 1350;

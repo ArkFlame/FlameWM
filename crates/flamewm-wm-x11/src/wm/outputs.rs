@@ -75,7 +75,7 @@ pub(super) fn select_output_for_rect(outputs: &[OutputWorkArea], rect: Rect) -> 
         .or_else(|| outputs.iter().position(|output| output.primary))
 }
 
-impl<'a, C: Connection> Wm<'a, C> {
+impl<C: Connection> Wm<'_, C> {
     pub(super) fn screen(&self) -> &Screen {
         &self.conn.setup().roots[self.screen_num]
     }

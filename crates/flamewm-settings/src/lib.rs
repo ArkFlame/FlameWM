@@ -1,4 +1,4 @@
-//! FlameWM Settings application library: markup binding and control transport.
+//! `FlameWM` Settings application library: markup binding and control transport.
 //! Split: `consts`, `pager`, `hotkeys`, `actions`, `input`, `sliders`, `tables`,
 //! `nav`, `nodes`, `location`, `labels`, and `app_impl_*` (the `SettingsApplication` impl).
 
@@ -52,9 +52,6 @@ mod sliders;
 mod tables;
 
 use actions::*;
-use app_impl_1::*;
-use app_impl_2::*;
-use app_impl_3::*;
 use consts::*;
 use hotkeys::*;
 use input::*;

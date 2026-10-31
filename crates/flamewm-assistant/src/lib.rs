@@ -234,7 +234,7 @@ impl Assistant {
             Msg::Delta(text) => self.history.append_pending(&text),
             Msg::TurnDone(result, label) => self.finish_turn(result, label),
             Msg::VoiceProgress(percent, label) => {
-                self.notice = voice_setup_ui::progress_notice(percent, &label)
+                self.notice = voice_setup_ui::progress_notice(percent, &label);
             }
             Msg::VoiceSetup(result) => self.fetched(result),
             Msg::Heard(result) => self.heard(result),
@@ -966,7 +966,7 @@ fn turn_job(bus: &Bus, selected: &Selection, ark_key: &str, turns: &[Turn], canc
     let label = ep.label;
     let result = OpenAiClient::new(ep).and_then(|client| {
         client.chat(&used.model, turns, cancel, &mut |delta| {
-            bus.send(Msg::Delta(delta.to_owned()))
+            bus.send(Msg::Delta(delta.to_owned()));
         })
     });
     bus.send(Msg::TurnDone(result, label));

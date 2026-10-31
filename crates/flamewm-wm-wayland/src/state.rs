@@ -347,7 +347,7 @@ pub struct State {
     pub xwm: Option<X11Wm>,
     /// Managed X11 windows, keyed by the model identifier.
     pub x11: Vec<(WindowId, X11Surface)>,
-    /// Titles cached on map; never roundtrip to XWayland in the renderer hot path.
+    /// Titles cached on map; never roundtrip to `XWayland` in the renderer hot path.
     pub titles: HashMap<WindowId, String>,
     /// Override-redirect windows, docks and the desktop; the last entry is the topmost.
     pub unmanaged: Vec<Unmanaged>,
@@ -494,10 +494,7 @@ impl State {
     }
 
     pub fn window_title(&self, id: WindowId) -> &str {
-        self.titles
-            .get(&id)
-            .map(String::as_str)
-            .unwrap_or("FlameWM")
+        self.titles.get(&id).map_or("FlameWM", String::as_str)
     }
 
     pub fn alloc_id(&mut self) -> WindowId {
@@ -807,7 +804,7 @@ pub fn next_serial() -> Serial {
     SERIAL_COUNTER.next_serial()
 }
 
-/// Child handles must not be abandoned when the nested compositor window closes: XWayland
+/// Child handles must not be abandoned when the nested compositor window closes: `XWayland`
 /// clients can otherwise survive and keep old DISPLAY/socket resources alive across tests.
 impl Drop for State {
     fn drop(&mut self) {

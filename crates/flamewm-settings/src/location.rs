@@ -1,7 +1,5 @@
 //! Split from `lib.rs` (`location`); see crate docs.
 
-use super::*;
-
 pub(crate) const WEATHER_UNSET_HINT: &str = "Not set - click the weather icon in the taskbar";
 
 /// `(country, city)` from the shell's stored `lat\tlon\tcountry\tname` location.

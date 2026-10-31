@@ -252,8 +252,7 @@ fn titlebar_fill_pixels(
     super::titlebar_backdrop::titlebar_pixels(
         origin,
         root,
-        scene.frame_w,
-        height,
+        (scene.frame_w, height),
         scene.bg,
         scene.bg_alpha,
         scene.tokens.titlebar_blur_percent,
@@ -314,7 +313,7 @@ fn composite_surface_contour(
             let blended = flamewm_ui_core::surface::blend_surface_over_rgb(
                 base,
                 flamewm_ui_core::surface::SurfaceFill {
-                    alpha: alpha as u8,
+                    alpha,
                     rgb: stroke.rgb,
                 },
             );

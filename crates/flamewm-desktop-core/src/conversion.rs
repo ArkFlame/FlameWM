@@ -332,7 +332,7 @@ const AUDIO_SOURCES: [&str; 7] = ["mp3", "m4a", "wav", "flac", "ogg", "opus", "a
 const AUDIO_TARGETS: [&str; 8] = ["mp3", "m4a", "wav", "flac", "ogg", "opus", "aiff", "wma"];
 const VIDEO_SOURCES: [&str; 6] = ["mp4", "mov", "mkv", "webm", "avi", "wmv"];
 const VIDEO_TARGETS: [&str; 8] = ["mp4", "mov", "mkv", "webm", "avi", "wmv", "gif", "mp3"];
-/// Subtitle cues convert between SRT and WebVTT; both are plain text.
+/// Subtitle cues convert between SRT and `WebVTT`; both are plain text.
 const SUBTITLE_FORMATS: [&str; 2] = ["srt", "vtt"];
 
 fn media_source(path: &Path) -> bool {
@@ -1117,7 +1117,9 @@ mod tests {
     }
     #[test]
     fn concurrent_conversion_budget_is_released_even_on_early_failure() {
-        let _serial = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = SLOT_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let first = ConversionSlot::acquire().expect("first slot");
         let second = ConversionSlot::acquire().expect("second slot");
         assert!(
@@ -1192,7 +1194,9 @@ mod media_format_contracts {
     }
     #[test]
     fn ffmpeg_converts_audio_beside_the_source_without_overwriting() {
-        let _serial = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = SLOT_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if available_program("ffmpeg").is_none() {
             return;
         }
@@ -1240,7 +1244,9 @@ mod media_format_contracts {
     }
     #[test]
     fn tools_run_beside_the_source_and_keep_the_original() {
-        let _serial = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = SLOT_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("flamewm-tools-{}", std::process::id()));
         fs::create_dir_all(&dir).expect("test directory");
         let text = dir.join("notes.txt");
@@ -1271,7 +1277,9 @@ mod media_format_contracts {
     }
     #[test]
     fn zip_extract_writes_a_fresh_folder_and_keeps_the_archive() {
-        let _serial = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = SLOT_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if available_program("unzip").is_none() || available_program("zip").is_none() {
             return;
         }
@@ -1294,7 +1302,9 @@ mod media_format_contracts {
 
     #[test]
     fn cancel_stops_a_running_child_and_leaves_later_jobs_alone() {
-        let _serial = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = SLOT_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut sleeper = Command::new("sleep");
         sleeper.arg("5");
         let canceller = thread::spawn(|| {
@@ -1316,7 +1326,9 @@ mod media_format_contracts {
 
     #[test]
     fn ffmpeg_converts_srt_to_vtt_beside_the_source() {
-        let _serial = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = SLOT_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if available_program("ffmpeg").is_none() {
             return;
         }
@@ -1340,7 +1352,9 @@ mod media_format_contracts {
 
     #[test]
     fn tar_gz_archive_tool_writes_beside_the_source() {
-        let _serial = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = SLOT_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if available_program("tar").is_none() {
             return;
         }

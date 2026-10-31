@@ -194,21 +194,20 @@ pub fn flat_pixels(width: u32, height: u32, rgb: (u8, u8, u8), alpha: u8) -> Vec
 pub fn titlebar_pixels(
     origin: (i32, i32),
     root: (u32, u32),
-    width: u32,
-    height: u32,
+    size: (u32, u32),
     rgb: (u8, u8, u8),
     alpha: u8,
     blur_percent: u8,
     corner_radius: u32,
 ) -> Vec<u8> {
     let Ok(mut guard) = STATE.lock() else {
-        return flat_pixels(width, height, rgb, alpha);
+        return flat_pixels(size.0, size.1, rgb, alpha);
     };
     titlebar_in(
         guard.get_or_insert_with(State::default),
         origin,
         root,
-        (width, height),
+        size,
         rgb,
         alpha,
         blur_percent,
@@ -243,7 +242,7 @@ fn corner_coverage(x: u32, y: u32, width: u32, radius: u32) -> Option<u8> {
     Some((hits * 255 / 16) as u8)
 }
 
-/// Blends the binary XShape edge of the top corners: each partly covered pixel is mixed with the
+/// Blends the binary `XShape` edge of the top corners: each partly covered pixel is mixed with the
 /// desktop word behind it, so the arc reads as anti-aliased instead of stair-stepped. Fully
 /// covered pixels and the straight edges are untouched.
 fn antialias_top_corners(
