@@ -37,7 +37,7 @@ pub use speech::{
     UnconfiguredTranscriber, UNPINNED,
 };
 pub use voice_setup::{apply_defaults, default_voice_dir, ready_model, setup_default, SETUP_BUSY};
-pub use store::{ChatStore, Message, MsgState, Role, SessionState};
+pub use store::{now_ms, ChatStore, Message, MsgState, Role, SessionState};
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};

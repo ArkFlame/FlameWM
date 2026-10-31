@@ -28,12 +28,12 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_assistant_core::{
     apply_defaults, default_config_path, default_voice_dir, endpoint, expand, human_error, key_or_default, proxy_models,
-    ready_model, resolve, start_recording, AssistantError, CancelToken, ChatStore, CommandSpeech, CommandTranscriber,
+    now_ms, ready_model, resolve, start_recording, AssistantError, CancelToken, ChatStore, CommandSpeech, CommandTranscriber,
     Message, MsgState, OpenAiClient, Provider, Recording, Role, Selection, SessionState, Speech, SpeechConfig, Stopper,
     SystemRunner, Transcriber, Turn, FALLBACK_MODELS, HISTORY_TURNS,
 };
@@ -154,12 +154,6 @@ impl model::Pager for ChatStore {
     fn page(&mut self, before: Option<u64>, limit: usize) -> Result<Vec<Message>, String> {
         self.load_page(before, limit).map_err(|error| error.to_string())
     }
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
 }
 
 fn rgba(rgb: u32, alpha: u8) -> UiColor {
@@ -1008,7 +1002,7 @@ fn show(state_dir: PathBuf, anchor: Option<popover::Anchor>) -> Result<(), Strin
     let (mut wake_reader, wake_writer) = nonblocking_pair()?;
     let (tx, rx) = mpsc::channel::<Msg>();
     let bus = Bus { tx, wake: Arc::new(wake_writer) };
-    let mut app = Assistant::new(state_dir, bus, theme, store)?;
+    let app = Assistant::new(state_dir, bus, theme, store)?;
     app.paint(&mut document)?;
 
     let fd = wake_reader.as_raw_fd();
