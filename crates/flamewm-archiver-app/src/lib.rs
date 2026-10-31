@@ -1,4 +1,6 @@
-//! `FlameWM` archive manager: argument handling and entry presentation.
+//! `FlameWM` archive manager: argument handling, entry presentation and the window.
+
+pub mod window;
 
 use std::path::{Path, PathBuf};
 
@@ -9,6 +11,8 @@ use flamewm_archiver::{Entry, Kind, list};
 pub enum Command {
     /// Open an archive and show its entries.
     Open(PathBuf),
+    /// Create `out` from `inputs` (`--create OUT PATH...`).
+    Create { out: PathBuf, inputs: Vec<PathBuf> },
     /// No usable arguments.
     Usage,
 }
@@ -16,8 +20,13 @@ pub enum Command {
 /// Parses argv (without the program name).
 #[must_use]
 pub fn parse_args(args: &[String]) -> Command {
-    match args.first() {
-        Some(path) if !path.is_empty() => Command::Open(PathBuf::from(path)),
+    match args {
+        [flag, out, inputs @ ..] if flag == "--create" && !inputs.is_empty() => Command::Create {
+            out: PathBuf::from(out),
+            inputs: inputs.iter().map(PathBuf::from).collect(),
+        },
+        [flag, ..] if flag == "--create" => Command::Usage,
+        [path, ..] if !path.is_empty() => Command::Open(PathBuf::from(path)),
         _ => Command::Usage,
     }
 }
@@ -50,6 +59,22 @@ mod tests {
         assert_eq!(
             parse_args(&["a.zip".into()]),
             Command::Open(PathBuf::from("a.zip"))
+        );
+    }
+
+    #[test]
+    fn parses_create_with_inputs() {
+        let args = ["--create".into(), "out.tar.gz".into(), "src".into()];
+        assert_eq!(
+            parse_args(&args),
+            Command::Create {
+                out: PathBuf::from("out.tar.gz"),
+                inputs: vec![PathBuf::from("src")],
+            }
+        );
+        assert_eq!(
+            parse_args(&["--create".into(), "out.zip".into()]),
+            Command::Usage
         );
     }
 
