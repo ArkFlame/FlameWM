@@ -947,6 +947,40 @@ mod tests {
     }
 
     #[test]
+    fn linked_shared_stylesheet_matches_inline_sheet() {
+        let dir = temp_fixture_dir("shared-link");
+        let base_css = "* { box-sizing:border-box; } html { width:100%; height:100%; }";
+        let app_css = "#probe { background:#102030; width:37px; }";
+        fs::create_dir_all(dir.join("base")).unwrap();
+        fs::create_dir_all(dir.join("app")).unwrap();
+        fs::write(dir.join("base/base.css"), base_css).unwrap();
+        fs::write(dir.join("app/app.css"), app_css).unwrap();
+        fs::write(
+            dir.join("app/linked.html"),
+            r#"<!doctype html><html><head><link rel="stylesheet" href="../base/base.css"><link rel="stylesheet" href="app.css"></head><body><div id="probe">x</div></body></html>"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("app/inline.html"),
+            format!(
+                r#"<!doctype html><html><head><style>{base_css}{app_css}</style></head><body><div id="probe">x</div></body></html>"#
+            ),
+        )
+        .unwrap();
+        let linked = compile_file(&dir.join("app/linked.html"), &[], CompileOptions::default());
+        let inline = compile_file(&dir.join("app/inline.html"), &[], CompileOptions::default());
+        let _ = fs::remove_dir_all(&dir);
+        let mut linked = linked.unwrap().document;
+        let inline = inline.unwrap().document;
+        // The fingerprint hashes the source text, which differs by construction; compare the compiled tree.
+        linked.source_fingerprint = inline.source_fingerprint;
+        assert_eq!(
+            flamewm_render_core::encode(&linked).unwrap(),
+            flamewm_render_core::encode(&inline).unwrap()
+        );
+    }
+
+    #[test]
     fn compiles_color_variable() {
         assert_eq!(interactive_fixture().document.variables.len(), 1);
     }
