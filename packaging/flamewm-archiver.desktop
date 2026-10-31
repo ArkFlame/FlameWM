@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=FlameWM Archiver
+GenericName=Archive Manager
+Comment=Browse, extract and create zip and tar archives
+Exec=flamewm-archiver %f
+TryExec=flamewm-archiver
+Icon=flamewm-archiver
+Terminal=false
+StartupNotify=true
+StartupWMClass=flamewm-archiver
+Categories=Utility;Archiving;Compression;
+MimeType=application/zip;application/x-tar;application/x-compressed-tar;
+Keywords=archive;zip;tar;extract;compress;unzip;
