@@ -1,0 +1,19 @@
+[package]
+name = "flamewm-archiver-app"
+autobins = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FlameWM archive manager: browse, extract and create zip and tar archives in one glass window"
+
+[dependencies]
+flamewm-archiver = { path = "../flamewm-archiver" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "flamewm-archiver"
+path = "src/main.rs"
