@@ -9,7 +9,13 @@ repository.workspace = true
 description = "FlameWM archive manager: browse, extract and create zip and tar archives in one glass window"
 
 [dependencies]
+flamewm-api = { path = "../flamewm-api" }
 flamewm-archiver = { path = "../flamewm-archiver" }
+flamewm-ui-core = { path = "../flamewm-ui-core" }
+flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
+
+[build-dependencies]
+flamewm-render-compiler = { path = "../flamewm-render-compiler" }
 
 [lints]
 workspace = true
