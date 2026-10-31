@@ -33,6 +33,14 @@ pub fn client_area_size(outer: Rect, titlebar_h: u16) -> (u32, u32) {
     (outer.width, outer.height.saturating_sub(u32::from(titlebar_h)))
 }
 
+/// Corner rows lose one more pixel. The 1-bit XShape edge then sits inside the 1px AA outline
+/// ring that chrome paints on the frame, so the ring, not the stair-stepped mask edge, is what
+/// the eye sees. Straight rows (inset 0) keep their full width.
+#[must_use]
+pub fn corner_edge_inset(inset: u32) -> u32 {
+    if inset > 0 { inset + 1 } else { 0 }
+}
+
 /// Canonical row spans (y, `x_start`, `x_end_exclusive`) for a rounded rect:
 /// float rounded mask, single full-width rows when rectangular.
 #[must_use]
@@ -46,7 +54,7 @@ pub fn rounded_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u32, u32
     }
     let mut spans = Vec::with_capacity(height as usize);
     for row in 0..height {
-        let inset = external_rounded_row_inset(width, height, radius, row);
+        let inset = corner_edge_inset(external_rounded_row_inset(width, height, radius, row));
         let start = inset.min(width);
         let end = width.saturating_sub(inset).max(start);
         spans.push((row, start, end));
@@ -118,7 +126,7 @@ pub fn client_bottom_rounded_rectangles(width: u32, height: u32, radius: u32) ->
     (0..height)
         .map(|row| {
             let inset = if row >= height - radius {
-                external_rounded_row_inset(width, height, radius, row)
+                corner_edge_inset(external_rounded_row_inset(width, height, radius, row))
             } else {
                 0
             };
@@ -256,18 +264,30 @@ mod tests {
     }
 
     #[test]
+    fn corner_rows_inset_one_extra_pixel_and_straight_rows_do_not() {
+        assert_eq!(corner_edge_inset(0), 0);
+        assert_eq!(corner_edge_inset(1), 2);
+        assert_eq!(corner_edge_inset(5), 6);
+        let spans = rounded_mask_spans(100, 60, 12);
+        let (_, start_mid, end_mid) = spans[30];
+        assert_eq!((start_mid, end_mid), (0, 100), "straight edge must keep full width");
+        let (_, start_top, _) = spans[0];
+        assert!(start_top > external_rounded_row_inset(100, 60, 12, 0));
+    }
+
+    #[test]
     fn t26_shape_spans_match_canonical_mask() {
         assert_eq!(
             rounded_mask_spans(8, 8, 4),
             vec![
-                (0, 2, 6),
+                (0, 3, 5),
                 (1, 0, 8),
                 (2, 0, 8),
                 (3, 0, 8),
                 (4, 0, 8),
                 (5, 0, 8),
                 (6, 0, 8),
-                (7, 2, 6),
+                (7, 3, 5),
             ]
         );
         assert_eq!(rounded_mask_spans(4, 2, 0), vec![(0, 0, 4), (1, 0, 4)]);
