@@ -267,28 +267,7 @@ pub fn main() -> Result<(), String> {
         state
     }));
 
-    let mut document = decode_document(include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/flamewm-desktop.rwr"
-    )))?;
-    ui_contract::require_desktop_nodes(|id| document.has_node(id))?;
-    {
-        let state = state_cell.borrow();
-        projection::project_global_font_defaults(&mut document, &state.settings)?;
-        projection::project_background(
-            &mut document,
-            &state.wallpaper_loader.state().presentation,
-        )?;
-    }
-    flamewm_ui_x11::apply_render_acceleration(&state_cell.borrow().settings);
-    projection::assign_document_layers(&mut document)?;
-    widgets::assign_layers(&mut document)?;
-    projection::initialize_transient_visibility(&mut document)?;
-    {
-        let _span = sync_point().start();
-        sync_document(&mut document, &mut state_cell.borrow_mut())?;
-    }
-    update_gauges(&state_cell.borrow());
+    let document = initial_document(&state_cell)?;
     let mut reactor = Reactor::new().map_err(|error| format!("create reactor: {error}"))?;
     if flamewm_profiler::enabled() {
         reactor
@@ -327,132 +306,9 @@ pub fn main() -> Result<(), String> {
             state.widgets.store.layout_grid(metrics);
         }
     }
-    match flamewm_integrations_linux::MprisProvider::connect() {
-        Ok(mut provider) => match provider.start() {
-            Ok(()) => {
-                let watch = provider.watch();
-                let interest = if watch
-                    .events
-                    .contains(flamewm_api::ports::FdEvents::WRITABLE)
-                {
-                    calloop::Interest::BOTH
-                } else {
-                    calloop::Interest::READ
-                };
-                let media_cell = std::rc::Rc::clone(&state_cell);
-                let registration =
-                    reactor.register_raw_fd_with_action(watch.fd, interest, move |_, _| {
-                        widgets::refresh_media(&mut media_cell.borrow_mut());
-                        FdAction::Continue
-                    });
-                warn_degraded("media widget", registration);
-                let mut state = state_cell.borrow_mut();
-                state.widgets.mpris = Some(provider);
-                widgets::refresh_media(&mut state);
-            }
-            Err(error) => eprintln!("desktop: media widget unavailable: {}", error.message),
-        },
-        Err(error) => eprintln!("desktop: media widget unavailable: {}", error.message),
-    }
-    // Panel strut changes arrive as control signals. The signal handler only
-    // sets this flag; the reactor tick re-resolves the work area once per burst.
+    register_media_widget(&mut reactor, &state_cell);
     let panels_dirty = std::rc::Rc::new(std::cell::Cell::new(false));
-    // Best-effort workspace signal subscription: startup query already ran.
-    // WorkspacesSnapshotChanged is the live workspace authority; the legacy
-    // revision-only signal is intentionally not a fetch trigger.
-    match ControlSignalClient::connect(BusKind::Session) {
-        Ok(client) => {
-            let client: &'static ControlSignalClient = Box::leak(Box::new(client));
-            let watch = client.watch();
-            let watch_fd = watch.fd;
-            let watch_readable = watch
-                .events
-                .contains(flamewm_api::ports::FdEvents::READABLE);
-            let watch_writable = watch
-                .events
-                .contains(flamewm_api::ports::FdEvents::WRITABLE);
-            let interest = match (watch_readable, watch_writable) {
-                (true, true) => calloop::Interest::BOTH,
-                (false, true) => calloop::Interest::WRITE,
-                _ => calloop::Interest::READ,
-            };
-            let workspace_cell = std::rc::Rc::clone(&state_cell);
-            let panels_signal_flag = std::rc::Rc::clone(&panels_dirty);
-            let registration = reactor.register_raw_fd_with_action(watch_fd, interest, {
-                move |_, _| {
-                    let state_cell = &workspace_cell;
-                    let panels_flag = &panels_signal_flag;
-                    let _ = client.on_ready(|signal| {
-                        match signal {
-                            flamewm_control_wire::ControlSignal::SettingsSnapshotChanged {
-                                snapshot,
-                            } => {
-                                let mut state = state_cell.borrow_mut();
-                                let monitors = monitor_rects(&state.output_geometries);
-                                if let Err(error) = request_wallpaper(
-                                    &mut state.wallpaper_loader,
-                                    &snapshot,
-                                    &monitors,
-                                ) {
-                                    eprintln!(
-                                        "desktop: wallpaper settings request failed: {error:?}"
-                                    );
-                                }
-                                state.settings = snapshot;
-                                state.settings_visual_dirty = true;
-                            }
-                            flamewm_control_wire::ControlSignal::WorkspacesSnapshotChanged {
-                                snapshot,
-                            } => {
-                                let _signal = workspace_signal_point().start();
-                                workspace_snapshot_received_counter().increment();
-                                let mut state = state_cell.borrow_mut();
-                                // Authoritative apply consumes snapshot.active_index directly.
-                                let active_changed = {
-                                    let _apply = workspace_apply_point().start();
-                                    state.workspace.apply_snapshot(snapshot)
-                                };
-                                if active_changed {
-                                    workspace_change_counter().increment();
-                                    state.workspace_visual_dirty = true;
-                                }
-                            }
-                            signal if workspace_sync::is_legacy_workspace_signal(&signal) => {
-                                workspace_legacy_ignored_counter().increment();
-                            }
-                            flamewm_control_wire::ControlSignal::PanelsSnapshotChanged {
-                                ..
-                            }
-                            | flamewm_control_wire::ControlSignal::PanelsChanged { .. }
-                            | flamewm_control_wire::ControlSignal::DisplaysSnapshotChanged {
-                                ..
-                            }
-                            | flamewm_control_wire::ControlSignal::DisplayTransactionChanged {
-                                ..
-                            } => {
-                                panels_flag.set(true);
-                            }
-                            flamewm_control_wire::ControlSignal::WeatherFeedChanged { snapshot } => {
-                                let mut state = state_cell.borrow_mut();
-                                state.weather = snapshot;
-                                state.weather_visual_dirty = true;
-                            }
-                            _ => {}
-                        }
-                        // The next UI turn projects sync_sticky and sync_menu only;
-                        // workspace signals never enter filesystem refresh.
-                    });
-                    FdAction::Continue
-                }
-            });
-            warn_degraded("workspaces signal", registration);
-            // ControlSignalClient is Box::leaked above; it lives for the process
-            // lifetime and owns the pump fd.
-        }
-        Err(error) => {
-            eprintln!("desktop: degraded workspaces signal subscription: {error:?}");
-        }
-    }
+    register_workspace_signals(&mut reactor, &state_cell, &panels_dirty);
     let workspace_mutations = match MutationDispatcher::start(BusKind::Session, 16) {
         Ok(dispatcher) => Some(dispatcher),
         Err(error) => {
@@ -479,70 +335,9 @@ pub fn main() -> Result<(), String> {
         );
         warn_degraded("workspace mutation", registration);
     }
-    reactor
-        .register_fd_with_source_action(inotify, calloop::Interest::READ, move |_, source, _| {
-            let mut buffer = [0u8; 4096];
-            let mut changed = false;
-            inotify_wakeup_counter().increment();
-            loop {
-                match source.read_events(&mut buffer) {
-                    Ok(events) => {
-                        if events.count() == 0 {
-                            break;
-                        }
-                        changed = true;
-                    }
-                    Err(error) if error.kind() == ErrorKind::WouldBlock => break,
-                    Err(_) => break,
-                }
-            }
-            if changed {
-                dirty.store(true, Ordering::Release);
-            }
-            // Rearm until fd close/IGNORE/Q_OVERFLOW self-delete; level
-            // trigger keeps one rescan per burst via reduce below.
-            FdAction::Continue
-        })
-        .map_err(|error| format!("register inotify: {error}"))?;
-    // Downloads organizer: the same reactor owns its watch fd; the wake slot is shared with
-    // sticky persistence, so the organizer only ever publishes its own settle deadline.
-    let downloads_source = {
-        let mut state = state_cell.borrow_mut();
-        state.downloads.attach_wake(reactor.wake_deadline());
-        state.downloads.take_source()
-    };
-    if let Some(source) = downloads_source {
-        let downloads_queue = state_cell.borrow().downloads.queue();
-        reactor
-            .register_fd_with_source_action(source, calloop::Interest::READ, move |_, source, _| {
-                downloads::read_events(source, &downloads_queue);
-                FdAction::Continue
-            })
-            .map_err(|error| format!("register downloads organizer: {error}"))?;
-    }
-    // IconService wake FD: worker completions only set the pending flag;
-    // the next event/flush tick drains and repaints affected tiles.
-    if let Some(icon_fd) = state_cell.borrow().icons.wake_fd() {
-        let icon_cell = std::rc::Rc::clone(&state_cell);
-        let icon_pending = Arc::clone(&icons_pending);
-        let registration =
-            reactor.register_raw_fd_with_action(icon_fd, calloop::Interest::READ, move |_, _| {
-                icon_cell.borrow_mut().icons.wake_drain();
-                icon_pending.store(true, Ordering::Release);
-                FdAction::Continue
-            });
-        warn_degraded("icon completion", registration);
-    }
-    let wallpaper_fd = state_cell.borrow().wallpaper_loader.wake_fd();
-    let wallpaper_cell = std::rc::Rc::clone(&state_cell);
-    let registration =
-        reactor.register_raw_fd_with_action(wallpaper_fd, calloop::Interest::READ, move |_, _| {
-            let mut state = wallpaper_cell.borrow_mut();
-            state.wallpaper_loader.wake_drain();
-            state.settings_visual_dirty = true;
-            FdAction::Continue
-        });
-    warn_degraded("wallpaper completion", registration);
+    register_inotify(&mut reactor, inotify, dirty)?;
+    register_downloads(&mut reactor, &state_cell)?;
+    register_icon_and_wallpaper_wakes(&mut reactor, &state_cell, &icons_pending);
     let geometry_slot = WindowGeometrySlot::default();
     // Armed while a menu or the delete confirm is open: root presses reach the close path.
     let press_watch = RawPressWatch::default();
@@ -684,6 +479,238 @@ pub fn main() -> Result<(), String> {
     )?;
     sticky::flush_now(&state_cell.borrow());
     Ok(())
+}
+
+fn register_media_widget(reactor: &mut Reactor, state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>) {
+    match flamewm_integrations_linux::MprisProvider::connect() {
+        Ok(mut provider) => match provider.start() {
+            Ok(()) => {
+                let watch = provider.watch();
+                let interest = if watch
+                    .events
+                    .contains(flamewm_api::ports::FdEvents::WRITABLE)
+                {
+                    calloop::Interest::BOTH
+                } else {
+                    calloop::Interest::READ
+                };
+                let media_cell = std::rc::Rc::clone(&state_cell);
+                let registration =
+                    reactor.register_raw_fd_with_action(watch.fd, interest, move |_, _| {
+                        widgets::refresh_media(&mut media_cell.borrow_mut());
+                        FdAction::Continue
+                    });
+                warn_degraded("media widget", registration);
+                let mut state = state_cell.borrow_mut();
+                state.widgets.mpris = Some(provider);
+                widgets::refresh_media(&mut state);
+            }
+            Err(error) => eprintln!("desktop: media widget unavailable: {}", error.message),
+        },
+        Err(error) => eprintln!("desktop: media widget unavailable: {}", error.message),
+    }
+}
+
+fn register_workspace_signals(reactor: &mut Reactor, state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>, panels_dirty: &std::rc::Rc<std::cell::Cell<bool>>) {
+    // Panel strut changes arrive as control signals. The signal handler only
+    // sets this flag; the reactor tick re-resolves the work area once per burst.
+    // Best-effort workspace signal subscription: startup query already ran.
+    // WorkspacesSnapshotChanged is the live workspace authority; the legacy
+    // revision-only signal is intentionally not a fetch trigger.
+    match ControlSignalClient::connect(BusKind::Session) {
+        Ok(client) => {
+            let client: &'static ControlSignalClient = Box::leak(Box::new(client));
+            let watch = client.watch();
+            let watch_fd = watch.fd;
+            let watch_readable = watch
+                .events
+                .contains(flamewm_api::ports::FdEvents::READABLE);
+            let watch_writable = watch
+                .events
+                .contains(flamewm_api::ports::FdEvents::WRITABLE);
+            let interest = match (watch_readable, watch_writable) {
+                (true, true) => calloop::Interest::BOTH,
+                (false, true) => calloop::Interest::WRITE,
+                _ => calloop::Interest::READ,
+            };
+            let workspace_cell = std::rc::Rc::clone(&state_cell);
+            let panels_signal_flag = std::rc::Rc::clone(&panels_dirty);
+            let registration = reactor.register_raw_fd_with_action(watch_fd, interest, {
+                move |_, _| {
+                    let state_cell = &workspace_cell;
+                    let panels_flag = &panels_signal_flag;
+                    let _ = client.on_ready(|signal| {
+                        match signal {
+                            flamewm_control_wire::ControlSignal::SettingsSnapshotChanged {
+                                snapshot,
+                            } => {
+                                let mut state = state_cell.borrow_mut();
+                                let monitors = monitor_rects(&state.output_geometries);
+                                if let Err(error) = request_wallpaper(
+                                    &mut state.wallpaper_loader,
+                                    &snapshot,
+                                    &monitors,
+                                ) {
+                                    eprintln!(
+                                        "desktop: wallpaper settings request failed: {error:?}"
+                                    );
+                                }
+                                state.settings = snapshot;
+                                state.settings_visual_dirty = true;
+                            }
+                            flamewm_control_wire::ControlSignal::WorkspacesSnapshotChanged {
+                                snapshot,
+                            } => {
+                                let _signal = workspace_signal_point().start();
+                                workspace_snapshot_received_counter().increment();
+                                let mut state = state_cell.borrow_mut();
+                                // Authoritative apply consumes snapshot.active_index directly.
+                                let active_changed = {
+                                    let _apply = workspace_apply_point().start();
+                                    state.workspace.apply_snapshot(snapshot)
+                                };
+                                if active_changed {
+                                    workspace_change_counter().increment();
+                                    state.workspace_visual_dirty = true;
+                                }
+                            }
+                            signal if workspace_sync::is_legacy_workspace_signal(&signal) => {
+                                workspace_legacy_ignored_counter().increment();
+                            }
+                            flamewm_control_wire::ControlSignal::PanelsSnapshotChanged {
+                                ..
+                            }
+                            | flamewm_control_wire::ControlSignal::PanelsChanged { .. }
+                            | flamewm_control_wire::ControlSignal::DisplaysSnapshotChanged {
+                                ..
+                            }
+                            | flamewm_control_wire::ControlSignal::DisplayTransactionChanged {
+                                ..
+                            } => {
+                                panels_flag.set(true);
+                            }
+                            flamewm_control_wire::ControlSignal::WeatherFeedChanged { snapshot } => {
+                                let mut state = state_cell.borrow_mut();
+                                state.weather = snapshot;
+                                state.weather_visual_dirty = true;
+                            }
+                            _ => {}
+                        }
+                        // The next UI turn projects sync_sticky and sync_menu only;
+                        // workspace signals never enter filesystem refresh.
+                    });
+                    FdAction::Continue
+                }
+            });
+            warn_degraded("workspaces signal", registration);
+            // ControlSignalClient is Box::leaked above; it lives for the process
+            // lifetime and owns the pump fd.
+        }
+        Err(error) => {
+            eprintln!("desktop: degraded workspaces signal subscription: {error:?}");
+        }
+    }
+}
+
+fn register_inotify(reactor: &mut Reactor, inotify: inotify::Inotify, dirty: Arc<AtomicBool>) -> Result<(), String> {
+    reactor
+        .register_fd_with_source_action(inotify, calloop::Interest::READ, move |_, source, _| {
+            let mut buffer = [0u8; 4096];
+            let mut changed = false;
+            inotify_wakeup_counter().increment();
+            loop {
+                match source.read_events(&mut buffer) {
+                    Ok(events) => {
+                        if events.count() == 0 {
+                            break;
+                        }
+                        changed = true;
+                    }
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                    Err(_) => break,
+                }
+            }
+            if changed {
+                dirty.store(true, Ordering::Release);
+            }
+            // Rearm until fd close/IGNORE/Q_OVERFLOW self-delete; level
+            // trigger keeps one rescan per burst via reduce below.
+            FdAction::Continue
+        })
+        .map_err(|error| format!("register inotify: {error}"))?;
+    Ok(())
+}
+
+fn register_downloads(reactor: &mut Reactor, state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>) -> Result<(), String> {
+    // Downloads organizer: the same reactor owns its watch fd; the wake slot is shared with
+    // sticky persistence, so the organizer only ever publishes its own settle deadline.
+    let downloads_source = {
+        let mut state = state_cell.borrow_mut();
+        state.downloads.attach_wake(reactor.wake_deadline());
+        state.downloads.take_source()
+    };
+    if let Some(source) = downloads_source {
+        let downloads_queue = state_cell.borrow().downloads.queue();
+        reactor
+            .register_fd_with_source_action(source, calloop::Interest::READ, move |_, source, _| {
+                downloads::read_events(source, &downloads_queue);
+                FdAction::Continue
+            })
+            .map_err(|error| format!("register downloads organizer: {error}"))?;
+    }
+    Ok(())
+}
+
+fn register_icon_and_wallpaper_wakes(reactor: &mut Reactor, state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>, icons_pending: &Arc<AtomicBool>) {
+    // IconService wake FD: worker completions only set the pending flag;
+    // the next event/flush tick drains and repaints affected tiles.
+    if let Some(icon_fd) = state_cell.borrow().icons.wake_fd() {
+        let icon_cell = std::rc::Rc::clone(&state_cell);
+        let icon_pending = Arc::clone(&icons_pending);
+        let registration =
+            reactor.register_raw_fd_with_action(icon_fd, calloop::Interest::READ, move |_, _| {
+                icon_cell.borrow_mut().icons.wake_drain();
+                icon_pending.store(true, Ordering::Release);
+                FdAction::Continue
+            });
+        warn_degraded("icon completion", registration);
+    }
+    let wallpaper_fd = state_cell.borrow().wallpaper_loader.wake_fd();
+    let wallpaper_cell = std::rc::Rc::clone(&state_cell);
+    let registration =
+        reactor.register_raw_fd_with_action(wallpaper_fd, calloop::Interest::READ, move |_, _| {
+            let mut state = wallpaper_cell.borrow_mut();
+            state.wallpaper_loader.wake_drain();
+            state.settings_visual_dirty = true;
+            FdAction::Continue
+        });
+    warn_degraded("wallpaper completion", registration);
+}
+
+fn initial_document(state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>) -> Result<flamewm_ui_x11::UiDocument, String> {
+    let mut document = decode_document(include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/flamewm-desktop.rwr"
+    )))?;
+    ui_contract::require_desktop_nodes(|id| document.has_node(id))?;
+    {
+        let state = state_cell.borrow();
+        projection::project_global_font_defaults(&mut document, &state.settings)?;
+        projection::project_background(
+            &mut document,
+            &state.wallpaper_loader.state().presentation,
+        )?;
+    }
+    flamewm_ui_x11::apply_render_acceleration(&state_cell.borrow().settings);
+    projection::assign_document_layers(&mut document)?;
+    widgets::assign_layers(&mut document)?;
+    projection::initialize_transient_visibility(&mut document)?;
+    {
+        let _span = sync_point().start();
+        sync_document(&mut document, &mut state_cell.borrow_mut())?;
+    }
+    update_gauges(&state_cell.borrow());
+    Ok(document)
 }
 
 #[cfg(test)]
