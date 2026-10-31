@@ -538,6 +538,7 @@ pub fn run() -> Result<(), String> {
                 UiControllerEvent::Key(key) => app.key(key, doc),
                 UiControllerEvent::Resized { width, height } => app.resize(*width, *height, doc),
                 UiControllerEvent::Drag(_) => Ok(()),
+                UiControllerEvent::Visibility { .. } => Ok(()),
             }
         },
         move |doc| {

@@ -1078,7 +1078,7 @@ fn show(state_dir: PathBuf, anchor: Option<popover::Anchor>) -> Result<(), Strin
                 }
                 UiControllerEvent::Action(action) => app.action(action),
                 UiControllerEvent::Key(key) => app.key(key),
-                UiControllerEvent::Drag(_) | UiControllerEvent::Resized { .. } => {}
+                UiControllerEvent::Drag(_) | UiControllerEvent::Resized { .. } | UiControllerEvent::Visibility { .. } => {}
             }
             app.paint(doc)
         },

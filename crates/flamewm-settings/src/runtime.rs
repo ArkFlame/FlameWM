@@ -87,6 +87,7 @@ pub fn run(options: SettingsLaunchOptions) -> Result<(), String> {
                 UiControllerEvent::Key(key) => application.handle_key_event(key, document),
                 UiControllerEvent::Resized { .. } => Ok(()),
                 UiControllerEvent::Drag(_) => Ok(()),
+                UiControllerEvent::Visibility { .. } => Ok(()),
             };
             if let Err(message) = result {
                 application.report_error(document, message);

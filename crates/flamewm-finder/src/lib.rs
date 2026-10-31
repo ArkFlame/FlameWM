@@ -1041,7 +1041,7 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
             match event {
                 UiControllerEvent::Action(action) => app.action(action, doc),
                 UiControllerEvent::Key(key) => app.key(key, doc),
-                UiControllerEvent::Resized { .. } | UiControllerEvent::Drag(_) => Ok(()),
+                UiControllerEvent::Resized { .. } | UiControllerEvent::Drag(_) | UiControllerEvent::Visibility { .. } => Ok(()),
             }
         },
         move |doc| {

@@ -2391,6 +2391,7 @@ fn run()->Result<(),String>{
                 UiControllerEvent::Action(_)=>"explorer.event.action",
                 UiControllerEvent::Key(_)=>"explorer.event.key",
                 UiControllerEvent::Drag(_)=>"explorer.event.other",
+                UiControllerEvent::Visibility{..}=>"explorer.event.other",
             });
             match event {
                 UiControllerEvent::Action(action)=>{
@@ -2421,6 +2422,7 @@ fn run()->Result<(),String>{
                 UiControllerEvent::Drag(UiDragEvent::Drop{paths,x,y,..})=>app.external_drop(paths.clone(),*x,*y),
                 // Enter/over/leave do not change the list layout.
                 UiControllerEvent::Drag(_)=>{},
+                UiControllerEvent::Visibility{..}=>{},
             }
             // A row dragged out of the window starts the XDND drag here, once the event is handled.
             if let Some(paths)=app.file_drag_out.take() {
