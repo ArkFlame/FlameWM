@@ -18,6 +18,7 @@ fn main() {
     let css = src.join("terminal.css");
     println!("cargo:rerun-if-changed={}", template.display());
     println!("cargo:rerun-if-changed={}", css.display());
+    println!("cargo:rerun-if-changed={}", root.join("ui/base/base.css").display());
     println!(
         "cargo:rerun-if-changed={}",
         base.join("src/pool.rs").display()
@@ -26,6 +27,8 @@ fn main() {
     let staged = dest.join("terminal");
     fs::create_dir_all(&staged).expect("stage UI");
     fs::copy(&css, staged.join("terminal.css")).expect("stage CSS");
+    fs::create_dir_all(dest.join("base")).expect("stage base dir");
+    fs::copy(root.join("ui/base/base.css"), dest.join("base/base.css")).expect("stage base CSS");
     let template = fs::read_to_string(&template).expect("read terminal.html");
     for (tier, pool) in TIERS.iter().enumerate() {
         let mut runs = String::new();

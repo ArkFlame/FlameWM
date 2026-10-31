@@ -10,6 +10,7 @@ fn main() {
     for file in ["imageviewer.html", "imageviewer.css", "blank.ppm"] {
         println!("cargo:rerun-if-changed={}", src.join(file).display());
     }
+    println!("cargo:rerun-if-changed={}", base.join("../../ui/base/base.css").display());
     let result = compile_file(&src.join("imageviewer.html"), &[], CompileOptions::default())
         .unwrap_or_else(|error| panic!("FlameWM Image Viewer UI: {error}"));
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));

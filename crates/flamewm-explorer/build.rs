@@ -14,6 +14,7 @@ fn main() {
     let css = src.join("explorer.css");
     println!("cargo:rerun-if-changed={}", html.display());
     println!("cargo:rerun-if-changed={}", css.display());
+    println!("cargo:rerun-if-changed={}", root.join("ui/base/base.css").display());
     let icons = src.join("icons");
     println!("cargo:rerun-if-changed={}", icons.display());
     let dest = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
@@ -21,6 +22,8 @@ fn main() {
     fs::create_dir_all(&staged).expect("stage UI");
     fs::copy(&html, staged.join("explorer.html")).expect("stage HTML");
     fs::copy(&css, staged.join("explorer.css")).expect("stage CSS");
+    fs::create_dir_all(dest.join("base")).expect("stage base dir");
+    fs::copy(root.join("ui/base/base.css"), dest.join("base/base.css")).expect("stage base CSS");
     // Images resolve relative to the staged HTML, so the bundled SVG icons ship beside it.
     let staged_icons = staged.join("icons");
     fs::create_dir_all(&staged_icons).expect("stage icons");

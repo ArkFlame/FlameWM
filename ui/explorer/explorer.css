@@ -1,8 +1,6 @@
 /* Colour variables are placeholders only: theme.rs overwrites every one from the live FlameWM settings snapshot before the
    first paint. The root fills once with the surface; panels draw nothing or a white wash, so no grey literal is painted. */
-:root { --rim:#ffffff3f; --accent:#00000000; --accent-soft:#00000030; --card:#00000000; --line:#00000000; --hover:#00000000; --menu:#00000000; --sidebar:#00000000; --text:#f1f2f3; --muted:#f1f2f3; }
-* { box-sizing:border-box; }
-html { width:100%; height:100%; }
+:root { --accent:#00000000; --accent-soft:#00000030; --card:#00000000; --line:#00000000; --hover:#00000000; --menu:#00000000; --sidebar:#00000000; --text:#f1f2f3; --muted:#f1f2f3; }
 /* Square root: the WM frame/XShape owns all rounding and the outline. The body starts 24px above the client
    so the titlebar band stays WM-drawn and the content area fills the frame exactly. */
 body { position:absolute; top:-24px; left:0px; right:0px; bottom:0px; padding-top:24px; margin:0; color:var(--text); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }

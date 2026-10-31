@@ -1,6 +1,6 @@
 # UI Design Layer
 
-Status: step 1 in progress. Scope: `ui/**/*.css|html`, compiled by `flamewm-render-compiler`.
+Status: steps 1 and 2 partly done. Scope: `ui/**/*.css|html`, compiled by `flamewm-render-compiler`.
 
 ## Goals
 
@@ -65,8 +65,11 @@ ui/<app>/<app>.html      <link> base first, then shared components, then app she
    and after this change match byte-for-byte, except the 8-byte `source_fingerprint` at offset 8. That
    field is an FNV hash of the HTML and CSS source text, so it changes by construction.
    Not verified: Xephyr screenshot; guard scripts.
-2. Move the shared colour tokens (`--accent`, `--text`, `--muted`, `--soft`, ...) into `base.css`. Resolve the
-   `--muted` drift per app before merging, because last-wins changes the colour silently.
+2. Partly done. `--rim` (identical in every sheet that defines it) and the reset now live in `base.css`. Settings,
+   finder, explorer, terminal and imageviewer link it first. Verified: their compiled `.rwr` match HEAD byte-for-byte
+   apart from the fingerprint (assistant gains one unused variable entry, +13 bytes). Not moved yet: `--accent`,
+   `--text`, `--muted`, `--soft`, ... differ per app (`--muted` drifts), so moving them changes output. Resolve the
+   drift per app before merging, because last-wins changes the colour silently.
 3. Add `ui/base/components.css`: button reset, scrollbar, list row, card. Migrate `assistant` first, then `osd`.
 4. Dedupe `ui/flamewm.css` against `ui/shell/flamewm.css`. Decide first whether the showcase copy is still
    needed. `docs/ARCHITECTURE.md` section 5 says it is a derived showcase.

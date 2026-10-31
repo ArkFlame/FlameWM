@@ -154,6 +154,14 @@ RIM_SHEETS = [
     "ui/task-manager/task-manager.css",
     "ui/lock/lock.css",
 ]
+# Sheets that take --rim from the shared base sheet (linked before the app sheet), so they omit their own declaration.
+RIM_BASE_SHEET = "ui/base/base.css"
+RIM_FROM_BASE = {
+    "ui/finder/finder.css",
+    "ui/settings.css",
+    "ui/explorer/explorer.css",
+    "ui/terminal/terminal.css",
+}
 # Literal colour inside a border declaration. `transparent` and zero alpha are allowed.
 RIM_LITERAL_RE = re.compile(
     r"(?<![\w-])border[a-z-]*\s*:[^;}{]*?(#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\))"
@@ -181,10 +189,16 @@ def check_rim_tokens(root, errors):
                 continue
             errors.append(f"{rel}: hardcoded border colour '{colour}' (use var(--rim))")
         decl = RIM_DECL_RE.search(text)
-        if not decl:
-            errors.append(f"{rel}: missing shared --rim token")
-        else:
+        if decl:
             values[rel] = decl.group(1).strip()
+        elif rel not in RIM_FROM_BASE:
+            errors.append(f"{rel}: missing shared --rim token")
+    base_decl = RIM_DECL_RE.search((root / RIM_BASE_SHEET).read_text())
+    if not base_decl:
+        errors.append(f"{RIM_BASE_SHEET}: missing shared --rim token")
+    else:
+        for rel in RIM_FROM_BASE:
+            values[rel] = base_decl.group(1).strip()
     if len(set(values.values())) > 1:
         errors.append(f"--rim differs across sheets: {values}")
 

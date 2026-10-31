@@ -10,6 +10,7 @@ fn main() {
     for file in ["finder.html", "finder.css", "icons"] {
         println!("cargo:rerun-if-changed={}", src.join(file).display());
     }
+    println!("cargo:rerun-if-changed={}", base.join("../../ui/base/base.css").display());
     let result = compile_file(&src.join("finder.html"), &[], CompileOptions::default())
         .unwrap_or_else(|error| panic!("FlameWM Finder UI: {error}"));
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));

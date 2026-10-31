@@ -1,6 +1,4 @@
-:root { --rim:#ffffff3f; --bg:#1e1e1e; --fg:#d4d4d4; --accent:#ef4048; --line:#00000000; --muted:#8a8a8a; }
-* { box-sizing:border-box; }
-html { width:100%; height:100%; }
+:root { --bg:#1e1e1e; --fg:#d4d4d4; --accent:#ef4048; --line:#00000000; --muted:#8a8a8a; }
 body { width:100%; height:100%; margin:0; background:var(--bg); color:var(--fg); overflow:hidden; font-size:13px; }
 .screen { position:absolute; left:0px; top:0px; width:100%; height:100%; background:transparent; overflow:hidden; cursor:text; }
 .run { position:absolute; display:block; height:16px; white-space:nowrap; font-size:13px; }

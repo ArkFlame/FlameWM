@@ -1,6 +1,4 @@
-:root { --rim:#ffffff3f; --accent:#539bff; --accent-soft:#539bff38; --card:#00000033; --line:#ffffff1a; --line-soft:#ffffff14; --control:#ffffff14; --control-edge:#00000000; --track:#ffffff47; --text:#f7f9ff; --muted:#aeb9cc;--text-secondary:#f7f9ffd9; --quiet:#8492aa; }
-* { box-sizing:border-box; }
-html { width:100%; height:100%; }
+:root { --accent:#539bff; --accent-soft:#539bff38; --card:#00000033; --line:#ffffff1a; --line-soft:#ffffff14; --control:#ffffff14; --control-edge:#00000000; --track:#ffffff47; --text:#f7f9ff; --muted:#aeb9cc;--text-secondary:#f7f9ffd9; --quiet:#8492aa; }
 body { width:100%; height:100%; margin:0; display:flex; overflow:hidden; color:var(--text); font-size:13px; }
 button { padding:0; border-width:0; border-color:transparent; background:transparent; color:var(--text); font-size:13px; cursor:default; }
 .settings-nav { width:187px; height:100%; flex-grow:0; display:flex; flex-direction:column; position:relative; padding:0; }

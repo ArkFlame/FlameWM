@@ -22,6 +22,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", ui.display());
     println!("cargo:rerun-if-changed={}", css.display());
+    println!("cargo:rerun-if-changed={}", root.join("ui/base/base.css").display());
     rerun_tree(&breeze);
     rerun_tree(&branding);
     for name in [
@@ -39,6 +40,8 @@ fn main() {
     fs::create_dir_all(&staged_assets).expect("create staged settings assets");
     fs::copy(&ui, staged_ui.join("settings.html")).expect("stage settings UI");
     fs::copy(&css, staged_ui.join("settings.css")).expect("stage settings CSS");
+    fs::create_dir_all(staged_ui.join("base")).expect("stage base dir");
+    fs::copy(root.join("ui/base/base.css"), staged_ui.join("base/base.css")).expect("stage base CSS");
     stage_tree(&breeze, &staged_assets.join("breeze"));
     stage_tree(&branding, &staged_assets.join("branding"));
     let staged_web = staged_assets.join("web");
