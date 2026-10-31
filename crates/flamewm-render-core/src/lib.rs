@@ -14,9 +14,7 @@ pub use layout::{
 };
 pub use model::*;
 pub use pixels::{PixelBackend, PixelOp, RenderAcceleration, RoundedRect, composite_cpu};
-pub use surface_material::{
-    SurfaceMaterial, gloss_line, rim_alpha_at, shadow_ring_alpha, shadow_rings,
-};
+pub use surface_material::{SurfaceMaterial, shadow_ring_alpha, shadow_rings};
 pub use paint::{
     PaintCommand, build_paint_commands, build_paint_commands_with_scroll, emit_scroll_chrome,
     scroll_clip, scrollbar_visible,

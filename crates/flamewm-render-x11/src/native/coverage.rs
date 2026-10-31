@@ -61,12 +61,6 @@ pub fn build_coverage_scaled(
                 color,
                 radius: r,
                 ..
-            }
-            | PaintCommand::SurfaceRim {
-                rect,
-                color,
-                radius: r,
-                ..
             } => {
                 if color.a == 0 {
                     continue;

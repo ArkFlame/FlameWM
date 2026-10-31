@@ -1226,10 +1226,6 @@ impl GpuBlur {
                         }
                     }
                 }
-                // No GPU pass for the rim gradient yet: the batch falls back to the CPU batch.
-                PixelOp::RimGradient { .. } => {
-                    return Err("RimGradient has no GPU pass".to_owned());
-                }
                 PixelOp::BlendMask {
                     x,
                     y,

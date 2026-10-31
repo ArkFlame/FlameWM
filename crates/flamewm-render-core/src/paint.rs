@@ -35,16 +35,6 @@ pub enum PaintCommand {
         offset_y: f32,
         peak: u8,
     },
-    /// 1px rim with a top-to-bottom alpha gradient (`color.a` at the top edge fading to
-    /// `fade_percent` of it at the bottom) plus a 1px white gloss of alpha `gloss` just inside
-    /// the top edge.
-    SurfaceRim {
-        rect: Rect,
-        radius: f32,
-        color: Color,
-        fade_percent: u8,
-        gloss: u8,
-    },
     Image {
         rect: Rect,
         asset: u16,
@@ -175,8 +165,7 @@ pub fn build_paint_commands_with_scroll(
                 });
             }
             let border = apply_opacity(document.resolve_color(style.border_color), style.opacity);
-            // Every outline is the same uniform AA ring (the audio mixer's look); the gradient
-            // rim and gloss line are not drawn.
+            // Every outline is the same uniform AA ring.
             if style.border_width > 0.0 && border.a != 0 {
                 commands.push(PaintCommand::StrokeRect {
                     rect,

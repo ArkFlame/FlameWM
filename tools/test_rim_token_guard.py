@@ -15,7 +15,7 @@ import ui_contract_guard as guard  # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 
 
-def build_tree(root, sheet_text=None, platform_fade=25, glass_fade=25, percent=25):
+def build_tree(root, sheet_text=None, percent=25):
     for rel in guard.RIM_SHEETS:
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -24,10 +24,10 @@ def build_tree(root, sheet_text=None, platform_fade=25, glass_fade=25, percent=2
         (root / guard.RIM_SHEETS[0]).write_text(sheet_text)
     platform = root / "crates/flamewm-platform/src/settings.rs"
     platform.parent.mkdir(parents=True, exist_ok=True)
-    platform.write_text(f"surface_rim_fade_percent: {platform_fade},\nsurface_border_opacity: {percent},\n")
+    platform.write_text(f"surface_border_opacity: {percent},\n")
     glass = root / "crates/flamewm-ui-core/src/glass.rs"
     glass.parent.mkdir(parents=True, exist_ok=True)
-    glass.write_text(f"pub const RIM_FADE_PERCENT: u8 = {glass_fade};\npub const RIM_PERCENT: u8 = {percent};\n")
+    glass.write_text(f"pub const RIM_PERCENT: u8 = {percent};\n")
     return root
 
 
@@ -54,10 +54,6 @@ class RimTokenGuardTests(unittest.TestCase):
         errors = self.run_guard(sheet_text=":root { --rim:#ffffff3f; }\n.x { border:1px solid #00000000; }\n")
         self.assertEqual(errors, [])
 
-    def test_platform_fade_must_match_owner(self):
-        errors = self.run_guard(platform_fade=6, glass_fade=25)
-        self.assertTrue(any("surface_rim_fade_percent default 6" in e for e in errors), errors)
-
     def test_rim_colour_must_match_percent_owner(self):
         with tempfile.TemporaryDirectory() as tmp:
             build_tree(Path(tmp))
@@ -70,7 +66,7 @@ class RimTokenGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             build_tree(Path(tmp))
             (Path(tmp) / "crates/flamewm-platform/src/settings.rs").write_text(
-                "surface_rim_fade_percent: 25,\nsurface_border_opacity: 8,\n")
+                "surface_border_opacity: 8,\n")
             errors = []
             guard.check_rim_tokens(Path(tmp), errors)
             self.assertTrue(any("surface_border_opacity default" in e for e in errors), errors)

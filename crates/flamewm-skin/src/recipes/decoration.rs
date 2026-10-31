@@ -55,10 +55,6 @@ pub struct ChromeTokens {
     /// Shared one-pixel inner glass contour (RRGGBB + straight alpha).
     pub surface_border_rgb: Rgb,
     pub surface_border_alpha: u8,
-    /// `surfaceRimFadePercent`: bottom rim alpha as a percent of the top rim.
-    pub rim_fade_percent: u32,
-    /// `surfaceHighlightPercent`: alpha of the 1px inset top gloss.
-    pub highlight_percent: u32,
     /// Bumped when the backdrop source (wallpaper) changes so frames repaint.
     pub backdrop_revision: u32,
     pub buttons: [ButtonTokens; 3],
@@ -75,8 +71,6 @@ impl Default for ChromeTokens {
             titlebar_blur_percent: DEFAULT_SURFACE_BLUR_PERCENT,
             surface_border_rgb: Rgb(0x00ff_ffff),
             surface_border_alpha: 20,
-            rim_fade_percent: 65,
-            highlight_percent: 18,
             backdrop_revision: 0,
             buttons: [ButtonTokens::default(); 3],
             window_shadows: true,

@@ -356,7 +356,7 @@ impl RuntimeDocument {
         Ok(())
     }
 
-    /// Liquid Glass material for a node (drop shadow outside its rect, gradient rim). `None` clears it.
+    /// Liquid Glass material for a node (drop shadow outside its rect). `None` clears it.
     pub fn set_surface_material(
         &mut self,
         id: &str,

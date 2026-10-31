@@ -8,9 +8,9 @@
 //!
 //! Source of truth: the regular glass and clear glass tokens of the Tahoe design-lab mockup
 //! (`styles.css`). Percent fields convert CSS values: blur px / 40 * 100, alpha * 100.
-//! Dark: regular glass `rgba(234,244,255,.12)`, 28px blur, saturate 170%, rim `.17`, gloss `.14`,
+//! Dark: regular glass `rgba(234,244,255,.12)`, 28px blur, saturate 170%, rim `.17`,
 //! shadow peak `.37`. Light: clear glass `rgba(255,255,255,.045)`, 13px blur, saturate 155%,
-//! rim `.23`, gloss `.20`, shadow peak `.12`.
+//! rim `.23`, shadow peak `.12`.
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
@@ -38,12 +38,8 @@ pub struct GlassPreset {
     pub rim_percent: u8,
     /// `surfaceSaturationPercent`: backdrop saturation, 100 is identity.
     pub saturation_percent: u8,
-    /// `surfaceRimFadePercent`: bottom rim alpha as a percent of the top rim.
-    pub rim_fade_percent: u8,
     /// `surfaceShadowPercent`: peak alpha of the drop shadow.
     pub shadow_percent: u8,
-    /// `surfaceHighlightPercent`: alpha of the 1px inset top gloss.
-    pub highlight_percent: u8,
     /// `glassOpacityPercent` (4..=42): `GlassRegular` tint alpha. Same value as `tint_percent`,
     /// because the surface tint and the glass regular tint come from one CSS token.
     pub glass_opacity_percent: u8,
@@ -51,10 +47,6 @@ pub struct GlassPreset {
     /// as `blur_percent / 100 * BLUR_MAX_PX`, rounded: Dark 70% -> 28px, Light 33% -> 13px.
     pub glass_blur_px: u8,
 }
-
-/// Shared rim fade for every glass surface: the bottom rim is this percent of the top rim, so the
-/// highlight sits on the upper edge and the sides and bottom stay subtle (Tahoe control-centre look).
-pub const RIM_FADE_PERCENT: u8 = 65;
 
 /// Shared rim alpha (`surfaceBorderOpacity` default, and `--rim` in every glass sheet as `#ffffff3f`).
 /// The Settings help text and platform default read this same value.
@@ -67,9 +59,7 @@ pub const DARK: GlassPreset = GlassPreset {
     rim_rgb: 0x00ff_ffff,
     rim_percent: RIM_PERCENT,
     saturation_percent: 170,
-    rim_fade_percent: RIM_FADE_PERCENT,
     shadow_percent: 0,
-    highlight_percent: 14,
     glass_opacity_percent: 12,
     glass_blur_px: 28,
 };
@@ -81,9 +71,7 @@ pub const LIGHT: GlassPreset = GlassPreset {
     rim_rgb: 0x00ff_ffff,
     rim_percent: RIM_PERCENT,
     saturation_percent: 155,
-    rim_fade_percent: RIM_FADE_PERCENT,
     shadow_percent: 0,
-    highlight_percent: 20,
     glass_opacity_percent: 5,
     glass_blur_px: 13,
 };
@@ -91,7 +79,7 @@ pub const LIGHT: GlassPreset = GlassPreset {
 impl GlassPreset {
     /// Settings keys and values this preset writes, in one fixed order.
     #[must_use]
-    pub fn settings_values(self) -> [(&'static str, SettingValue); 11] {
+    pub fn settings_values(self) -> [(&'static str, SettingValue); 9] {
         [
             (
                 "surfaceColor",
@@ -115,16 +103,8 @@ impl GlassPreset {
                 SettingValue::Percent(self.saturation_percent),
             ),
             (
-                "surfaceRimFadePercent",
-                SettingValue::Percent(self.rim_fade_percent),
-            ),
-            (
                 "surfaceShadowPercent",
                 SettingValue::Percent(self.shadow_percent),
-            ),
-            (
-                "surfaceHighlightPercent",
-                SettingValue::Percent(self.highlight_percent),
             ),
             (
                 "glassOpacityPercent",
@@ -146,13 +126,6 @@ mod tests {
         assert!(LIGHT.tint_percent < DARK.tint_percent);
         assert_eq!(LIGHT.rim_percent, DARK.rim_percent);
         assert_eq!(DARK.rim_percent, RIM_PERCENT);
-    }
-
-    #[test]
-    fn both_presets_share_a_top_weighted_rim_fade() {
-        assert_eq!(DARK.rim_fade_percent, RIM_FADE_PERCENT);
-        assert_eq!(LIGHT.rim_fade_percent, RIM_FADE_PERCENT);
-        assert!(RIM_FADE_PERCENT < 100);
     }
 
     #[test]
@@ -189,9 +162,7 @@ mod tests {
                 "surfaceBorderColor",
                 "surfaceBorderOpacity",
                 "surfaceSaturationPercent",
-                "surfaceRimFadePercent",
                 "surfaceShadowPercent",
-                "surfaceHighlightPercent",
                 "glassOpacityPercent",
                 "glassBlurPx",
             ]

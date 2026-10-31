@@ -245,12 +245,8 @@ pub struct ProductSettings {
     pub surface_border_opacity: u8,
     /// `surfaceSaturationPercent` (0..=200): backdrop saturation, 100 is identity.
     pub surface_saturation_percent: u8,
-    /// `surfaceRimFadePercent` (0..=100): bottom rim alpha as a percent of the top rim.
-    pub surface_rim_fade_percent: u8,
     /// `surfaceShadowPercent` (0..=100): peak alpha of the soft drop shadow.
     pub surface_shadow_percent: u8,
-    /// `surfaceHighlightPercent` (0..=100): alpha of the 1px inset top gloss.
-    pub surface_highlight_percent: u8,
     /// `reduceTransparency`: all materials opaque with no blur. Default off.
     pub reduce_transparency: bool,
     /// `glassOpacityPercent` (4..=42): `GlassRegular` tint alpha.
@@ -384,9 +380,7 @@ impl Default for ProductSettings {
             surface_border_color: "#FFFFFF".to_owned(),
             surface_border_opacity: 25,
             surface_saturation_percent: 165,
-            surface_rim_fade_percent: 65,
             surface_shadow_percent: 0,
-            surface_highlight_percent: 18,
             reduce_transparency: false,
             glass_opacity_percent: 12,
             glass_blur_px: 28,
@@ -514,14 +508,8 @@ impl ProductSettings {
         if self.surface_saturation_percent > 200 {
             return invalid("surfaceSaturationPercent must be 0..200");
         }
-        if self.surface_rim_fade_percent > 100 {
-            return invalid("surfaceRimFadePercent must be 0..100");
-        }
         if self.surface_shadow_percent > 100 {
             return invalid("surfaceShadowPercent must be 0..100");
-        }
-        if self.surface_highlight_percent > 100 {
-            return invalid("surfaceHighlightPercent must be 0..100");
         }
         if !(4..=42).contains(&self.glass_opacity_percent) {
             return invalid("glassOpacityPercent must be 4..42");
@@ -1136,9 +1124,7 @@ stable_settings! {
     (false, taskbar, "surfaceBorderColor", surface_border_color),
     (false, taskbar, "surfaceBorderOpacity", surface_border_opacity),
     (false, taskbar, "surfaceSaturationPercent", surface_saturation_percent),
-    (false, taskbar, "surfaceRimFadePercent", surface_rim_fade_percent),
     (false, taskbar, "surfaceShadowPercent", surface_shadow_percent),
-    (false, taskbar, "surfaceHighlightPercent", surface_highlight_percent),
     (false, glass, "reduceTransparency", reduce_transparency),
     (false, glass, "glassOpacityPercent", glass_opacity_percent),
     (false, glass, "glassBlurPx", glass_blur_px),

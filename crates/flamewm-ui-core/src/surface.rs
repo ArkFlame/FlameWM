@@ -12,8 +12,6 @@ pub struct SurfaceFill {
     pub alpha: u8,
 }
 
-const DEFAULT_SURFACE_COLOR: u32 = crate::glass::DARK.tint_rgb;
-const DEFAULT_SURFACE_OPACITY: u8 = crate::glass::DARK.tint_percent;
 const DEFAULT_SURFACE_RIM_PERCENT: u8 = crate::glass::DARK.rim_percent;
 
 /// Maps `surfaceColor` / `surfaceOpacity` to a fill. Same mapping as the shell
@@ -142,9 +140,7 @@ mod surface_stroke_contract_tests {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GlassMaterial {
     pub saturation_percent: u32,
-    pub rim_fade_percent: u32,
     pub shadow_percent: u32,
-    pub highlight_percent: u32,
 }
 
 /// Reads the glass material keys; missing or non-percent values use the Dark preset.
@@ -157,49 +153,26 @@ pub fn glass_material(snapshot: &SettingsSnapshot) -> GlassMaterial {
     let dark = crate::glass::DARK;
     GlassMaterial {
         saturation_percent: read("surfaceSaturationPercent", dark.saturation_percent).min(200),
-        rim_fade_percent: read("surfaceRimFadePercent", dark.rim_fade_percent).min(100),
         shadow_percent: read("surfaceShadowPercent", dark.shadow_percent).min(100),
-        highlight_percent: read("surfaceHighlightPercent", dark.highlight_percent).min(100),
     }
 }
 
-/// Liquid Glass surface values for one painter: shadow reach and peak, rim fade, top gloss alpha.
+/// Liquid Glass shadow reach and peak for one painter.
 /// The caller converts this to the render-core `SurfaceMaterial`; ui-core has no renderer dependency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SurfaceMaterialValues {
     pub shadow_spread: u8,
     pub shadow_peak: u8,
-    pub rim_fade_percent: u8,
-    pub gloss_alpha: u8,
 }
 
-/// Maps `surfaceRimFadePercent` and `surfaceHighlightPercent` to rim fade and gloss alpha.
 /// Glass surfaces never cast a shadow: the shadow is always off (`shadow_spread == 0`,
 /// `shadow_peak == 0`), whatever `surfaceShadowPercent` holds. Only window frames shadow.
 #[must_use]
-pub fn surface_material_values(snapshot: &SettingsSnapshot) -> SurfaceMaterialValues {
-    let material = glass_material(snapshot);
-    let scale = |percent: u32| (percent * 255 / 100) as u8;
+pub fn surface_material_values(_snapshot: &SettingsSnapshot) -> SurfaceMaterialValues {
     SurfaceMaterialValues {
         shadow_spread: 0,
         shadow_peak: 0,
-        rim_fade_percent: material.rim_fade_percent.min(100) as u8,
-        gloss_alpha: scale(material.highlight_percent),
     }
-}
-
-/// Rim alpha at row `y` of `span` rows: `top_alpha` at the top edge, easing linearly down to
-/// `top_alpha * fade_percent / 100` at the bottom edge. Integer math, rounds to nearest.
-#[must_use]
-pub fn rim_alpha_at(top_alpha: u8, fade_percent: u32, y: u32, span: u32) -> u8 {
-    if span <= 1 {
-        return top_alpha;
-    }
-    let t = u64::from(y.min(span - 1)) * 1000 / u64::from(span - 1);
-    let fade = u64::from(fade_percent.min(100)) * 10;
-    // Weight in tenths of a percent: 1000 at the top, `fade` at the bottom.
-    let weight = 1000 - (1000 - fade) * t / 1000;
-    ((u64::from(top_alpha) * weight + 500) / 1000) as u8
 }
 
 /// Scales each channel's distance from its Rec.601 luma by `percent / 100`, clamped to 0..=255.
@@ -241,33 +214,14 @@ mod surface_material_value_tests {
         snapshot
             .values
             .insert("surfaceShadowPercent".into(), SettingValue::Percent(100));
-        snapshot
-            .values
-            .insert("surfaceHighlightPercent".into(), SettingValue::Percent(100));
-        snapshot
-            .values
-            .insert("surfaceRimFadePercent".into(), SettingValue::Percent(100));
         let off = surface_material_values(&snapshot);
         assert_eq!((off.shadow_spread, off.shadow_peak), (0, 0));
-        assert_eq!(off.gloss_alpha, 255);
-        assert_eq!(off.rim_fade_percent, 100);
     }
 }
 
 #[cfg(test)]
 mod glass_material_tests {
     use super::*;
-
-    #[test]
-    fn rim_fades_from_top_alpha_to_fade_fraction_at_bottom() {
-        assert_eq!(rim_alpha_at(200, 6, 0, 100), 200);
-        assert_eq!(rim_alpha_at(200, 6, 99, 100), 12);
-        let mid = rim_alpha_at(200, 6, 50, 101);
-        assert!(mid > 12 && mid < 200);
-        assert_eq!(rim_alpha_at(200, 100, 99, 100), 200);
-        assert_eq!(rim_alpha_at(200, 0, 99, 100), 0);
-        assert_eq!(rim_alpha_at(77, 50, 0, 1), 77);
-    }
 
     #[test]
     fn saturation_is_identity_at_100_and_clamps() {

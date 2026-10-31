@@ -87,6 +87,15 @@ fn parser_preserves_unknown_compatible_keys() {
 }
 
 #[test]
+fn removed_surface_rim_and_highlight_keys_load_as_unknown_and_survive_a_round_trip() {
+    let text = "revision=2\nsurfaceRimFadePercent=25\nsurfaceHighlightPercent=10\n";
+    let parsed = load(text).expect("legacy surface keys still load");
+    assert_eq!(parsed.unknown_keys.get("surfaceRimFadePercent"), Some(&"25".to_owned()));
+    assert_eq!(parsed.unknown_keys.get("surfaceHighlightPercent"), Some(&"10".to_owned()));
+    assert!(assert_round_trip(&parsed).contains("surfaceRimFadePercent=25"));
+}
+
+#[test]
 fn stale_revision_cannot_replace_effective_state() {
     let mut store = ConfigStore::default();
     let candidate = ProductSettings {

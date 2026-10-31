@@ -10,7 +10,7 @@
 //! the surface snapshot starts the frame as a `BlendImage`. The two painters never mix.
 
 use flamewm_render_core::{
-    Color, PaintCommand, PixelOp, Rect, RoundedRect, gloss_line, shadow_rings,
+    Color, PaintCommand, PixelOp, Rect, RoundedRect, shadow_rings,
 };
 
 use super::clip::{Visible, stack_bounds, visible_under};
@@ -188,55 +188,6 @@ pub(crate) fn frame_ops<'a>(
                     }
                 }
             }
-            PaintCommand::SurfaceRim {
-                rect,
-                radius,
-                gloss,
-                ..
-            } => {
-                let device = scale_rect(rect, scale);
-                match visible_under(device, &stack) {
-                    Visible::Hidden => continue,
-                    Visible::Whole => {}
-                    // The XRender rim clips per band; a clipped rim has no exact pixel op yet.
-                    Visible::Part(_) => return Err("StrokeClipped"),
-                }
-                // The rim's mask comes from the CPU batch, in source order, and is composited as
-                // the CPU batch composites it: the rim colour at full alpha through that mask.
-                match sources.next().ok_or(SOURCE_MISMATCH)? {
-                    FrameSource::Mask {
-                        x,
-                        y,
-                        width,
-                        height,
-                        alpha,
-                        color,
-                    } => ops.push(PixelOp::BlendMask {
-                        x: *x,
-                        y: *y,
-                        width: *width,
-                        height: *height,
-                        mask: alpha.as_slice(),
-                        color: *color,
-                    }),
-                    FrameSource::Image { .. } => return Err(SOURCE_MISMATCH),
-                }
-                if gloss > 0 {
-                    if let Some(line) = gloss_line(rect, radius) {
-                        let white = Color {
-                            r: 255,
-                            g: 255,
-                            b: 255,
-                            a: gloss,
-                        };
-                        ops.push(PixelOp::FillRoundedRect {
-                            outer: device_rect(scale_rect(line, scale), 0.0).ok_or(FRACTIONAL)?,
-                            hole: None,
-                            color: rgba(white),
-                        });
-                    }
-                }
-            }
             // The XRender painter draws nothing for a track, so the GPU frame skips it too.
             PaintCommand::ScrollbarTrack { .. } => {}
             // The same overlay thumb the XRender painter draws: slim, 2px in, translucent white.
@@ -332,35 +283,6 @@ pub(crate) fn frame_ops<'a>(
 const FRACTIONAL: &str = "FractionalGeometry";
 const SOURCE_MISMATCH: &str = "SourceMismatch";
 const BACKDROP_SIZE: &str = "BackdropSize";
-
-/// The rim gradient source for a `SurfaceRim` visible under `stack`: its CPU coverage mask at the
-/// device rect, composited in the rim colour. `None` when the rim is hidden or has no mask, and the
-/// frame then takes the XRender path through [`frame_ops`]' source check.
-pub(crate) fn rim_mask_source(
-    rect: Rect,
-    radius: f32,
-    color: Color,
-    fade_percent: u8,
-    scale: f32,
-    stack: &[Rect],
-) -> Option<FrameSource> {
-    let device = scale_rect(rect, scale);
-    if !matches!(visible_under(device, stack), Visible::Whole) {
-        return None;
-    }
-    let outer = device_rect(device, radius * scale)?;
-    let (x, y, alpha) =
-        crate::accel::cpu_rim_gradient_mask(outer, rgba(color), fade_percent).ok()?;
-    let rgb = rgba(color);
-    Some(FrameSource::Mask {
-        x,
-        y,
-        width: outer.width,
-        height: outer.height,
-        alpha,
-        color: [rgb[0], rgb[1], rgb[2], 255],
-    })
-}
 
 /// The rect and radius a fill paints under `stack`, as the XRender painter cuts them: `None` when
 /// hidden, unchanged when whole, and the visible rectangle with a square corner when cut.
@@ -563,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_shadow_and_rim_lower_to_pixel_ops() {
+    fn surface_shadow_lowers_to_pixel_ops() {
         let surface = Rect {
             x: 10.0,
             y: 10.0,
@@ -583,47 +505,6 @@ mod tests {
             op,
             PixelOp::FillRoundedRect { hole: Some(_), .. }
         )));
-        let rim = PaintCommand::SurfaceRim {
-            rect: surface,
-            radius: 8.0,
-            color: Color {
-                r: 255,
-                g: 255,
-                b: 255,
-                a: 40,
-            },
-            fade_percent: 6,
-            gloss: 30,
-        };
-        let rim_color = Color {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 40,
-        };
-        let sources = [rim_mask_source(surface, 8.0, rim_color, 6, 1.0, &[]).expect("rim mask")];
-        let ops = frame_ops(std::slice::from_ref(&rim), 1.0, &sources, SCENE, None).expect("rim lowers");
-        assert_eq!(ops.len(), 2);
-        assert!(matches!(
-            ops[0],
-            PixelOp::BlendMask {
-                color: [255, 255, 255, 255],
-                ..
-            }
-        ));
-        assert!(matches!(ops[1], PixelOp::FillRoundedRect { hole: None, .. }));
-        let clip = PaintCommand::PushClip {
-            rect: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 50.0,
-                height: 200.0,
-            },
-        };
-        assert_eq!(
-            frame_ops(&[clip, rim], 1.0, &[], SCENE, None).err(),
-            Some("StrokeClipped")
-        );
     }
 
     const SCENE: (u32, u32) = (1000, 1000);

@@ -398,10 +398,6 @@ fn taskbar_and_screensaver_actions_parse_to_their_exact_typed_targets() {
         Ok(SettingsAction::PercentStep("surfaceSaturationPercent", -1))
     );
     assert_action!(
-        "settings.surface-highlight.up",
-        Ok(SettingsAction::PercentStep("surfaceHighlightPercent", 1))
-    );
-    assert_action!(
         "settings.glass.dark",
         Ok(SettingsAction::GlassPreset(glass::DARK))
     );

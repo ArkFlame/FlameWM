@@ -159,15 +159,13 @@ RIM_LITERAL_RE = re.compile(
     r"(?<![\w-])border[a-z-]*\s*:[^;}{]*?(#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\))"
 )
 RIM_DECL_RE = re.compile(r"--rim\s*:\s*([^;}]+)")
-PLATFORM_FADE_RE = re.compile(r"surface_rim_fade_percent:\s*(\d+)")
-GLASS_FADE_RE = re.compile(r"pub const RIM_FADE_PERCENT:\s*u8\s*=\s*(\d+)")
 RIM_PERCENT_RE = re.compile(r"pub const RIM_PERCENT:\s*u8\s*=\s*(\d+)")
 PLATFORM_OPACITY_RE = re.compile(r"surface_border_opacity:\s*(\d+)")
 
 
 def check_rim_tokens(root, errors):
     """Shared rim contract: one `--rim` value across every glass sheet, no literal border colours
-    in those sheets, and the platform default rim fade equal to the ui-core owner value."""
+    in those sheets, and the platform border opacity equal to the ui-core owner value."""
     if not (root / "crates/flamewm-ui-core/src/glass.rs").exists():
         return  # partial fixture tree: no rim owner to compare against
     values = {}
@@ -202,18 +200,6 @@ def check_rim_tokens(root, errors):
         opacity = PLATFORM_OPACITY_RE.search((root / "crates/flamewm-platform/src/settings.rs").read_text())
         if not opacity or opacity.group(1) != percent.group(1):
             errors.append("platform surface_border_opacity default != RIM_PERCENT")
-
-    platform = root / "crates/flamewm-platform/src/settings.rs"
-    glass = root / "crates/flamewm-ui-core/src/glass.rs"
-    platform_match = PLATFORM_FADE_RE.search(platform.read_text())
-    glass_match = GLASS_FADE_RE.search(glass.read_text())
-    if not platform_match or not glass_match:
-        errors.append("rim fade owner or platform default not found")
-    elif platform_match.group(1) != glass_match.group(1):
-        errors.append(
-            f"surface_rim_fade_percent default {platform_match.group(1)} != "
-            f"RIM_FADE_PERCENT {glass_match.group(1)}"
-        )
 
 
 def main(root=None):

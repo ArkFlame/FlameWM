@@ -969,13 +969,10 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
         pressed: parse_settings_color(text(&format!("titlebar{name}PressedColor"))),
     };
     let stroke = flamewm_ui_core::surface::surface_stroke(snapshot);
-    let material = flamewm_ui_core::surface::glass_material(snapshot);
     ChromeTokens {
         style,
         surface_border_rgb: Rgb(stroke.rgb),
         surface_border_alpha: stroke.alpha,
-        rim_fade_percent: material.rim_fade_percent,
-        highlight_percent: material.highlight_percent,
         titlebar_bg,
         titlebar_alpha,
         titlebar_blur_percent,

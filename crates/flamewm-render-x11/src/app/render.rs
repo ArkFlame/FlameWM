@@ -18,9 +18,6 @@ use crate::native::coverage::{build_coverage, build_coverage_scaled};
 use crate::xshape::ClipRect;
 use flamewm_image_core::blur::BlurScratch;
 
-/// Row bands used to ease a Liquid Glass rim top to bottom on the XRender path.
-const RIM_BANDS: u32 = 12;
-
 /// Overlap of two rectangles, `None` when they do not share an area.
 fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
     let x0 = a.x.max(b.x);
@@ -641,25 +638,6 @@ impl X11App {
                 | PaintCommand::TextShadow { .. }
                 | PaintCommand::Image { .. } => {
                     sources.push(self.gpu_source(command, document, scale, &stack)?);
-                }
-                PaintCommand::SurfaceRim {
-                    rect,
-                    radius,
-                    color,
-                    fade_percent,
-                    ..
-                } => {
-                    // A hidden or clipped rim has no source; the frame builder skips or names it.
-                    if let Some(source) = gpu_frame::rim_mask_source(
-                        *rect,
-                        *radius,
-                        *color,
-                        *fade_percent,
-                        scale,
-                        &stack,
-                    ) {
-                        sources.push(source);
-                    }
                 }
                 _ => {}
             }
@@ -1489,107 +1467,6 @@ impl X11App {
                     };
                     // SAFETY: same initialized backbuffer/display contract as `paint`.
                     unsafe { self.paint(&stroke, document, scale)? };
-                }
-            }
-            PaintCommand::SurfaceRim {
-                rect,
-                radius,
-                color,
-                fade_percent,
-                gloss,
-            } => {
-                let Some(xrender) = self.xrender.as_mut() else {
-                    // Without XRender the rim degrades to the flat 1px contour.
-                    let stroke = PaintCommand::StrokeRect {
-                        rect: *rect,
-                        color: *color,
-                        width: 1.0,
-                        radius: *radius,
-                    };
-                    // SAFETY: same initialized display contract as `paint`.
-                    return unsafe { self.paint(&stroke, document, scale) };
-                };
-                let device = scale_rect(*rect, scale);
-                // The ring strokes the rounded rect; snap the band clip to the same pixels so a
-                // fractional right/bottom edge cannot drop the last column.
-                let snapped = Rect {
-                    x: device.x.round(),
-                    y: device.y.round(),
-                    width: device.width.round(),
-                    height: device.height.round(),
-                };
-                let radius = *radius * scale;
-                let clip = match visible_under(snapped, &self.clip_stack) {
-                    Visible::Hidden => return Ok(()),
-                    Visible::Whole => None,
-                    Visible::Part(part) => Some(part),
-                };
-                // One clipped 1px ring per row band; each band carries the gradient alpha of its
-                // middle row, so the rim eases top to bottom in steps of at most `RIM_BANDS`.
-                let rows = device.height.round().max(1.0) as u32;
-                let bands = rows.min(RIM_BANDS);
-                for band in 0..bands {
-                    // Whole-pixel band edges: the clipped ring keeps only whole rows inside its
-                    // clip, so a fractional edge would drop the row between two bands.
-                    let y0 = (rows * band / bands) as f32;
-                    let y1 = (rows * (band + 1) / bands) as f32;
-                    if y1 <= y0 {
-                        continue;
-                    }
-                    let mid = ((y0 + y1) * 0.5).round() as u32;
-                    let alpha = flamewm_render_core::rim_alpha_at(
-                        color.a,
-                        u32::from(*fade_percent),
-                        mid,
-                        rows,
-                    );
-                    let band_rect = Rect {
-                        x: snapped.x,
-                        y: snapped.y + y0,
-                        width: snapped.width,
-                        height: y1 - y0,
-                    };
-                    let Some(band_clip) = intersect_rect(band_rect, clip.unwrap_or(band_rect))
-                    else {
-                        continue;
-                    };
-                    if alpha == 0 {
-                        continue;
-                    }
-                    let tint = Color { a: alpha, ..*color };
-                    // SAFETY: same initialized backbuffer/display contract as `paint`.
-                    unsafe {
-                        crate::xrender_aa::stroke_rounded_rect_clipped(
-                            xrender,
-                            device,
-                            radius,
-                            scale,
-                            tint,
-                            Some(band_clip),
-                        )?
-                    };
-                }
-                if *gloss > 0 {
-                    let line = flamewm_render_core::gloss_line(*rect, radius / scale)
-                        .map(|line| scale_rect(line, scale));
-                    if let Some(line) = line {
-                        let line = match clip {
-                            Some(part) => intersect_rect(line, part),
-                            None => Some(line),
-                        };
-                        if let Some(line) = line {
-                            let white = Color {
-                                r: 255,
-                                g: 255,
-                                b: 255,
-                                a: *gloss,
-                            };
-                            // SAFETY: same initialized backbuffer/display contract as `paint`.
-                            unsafe {
-                                crate::xrender_aa::fill_rounded_rect(xrender, line, 0.0, white)?
-                            };
-                        }
-                    }
                 }
             }
             PaintCommand::FillRect {
