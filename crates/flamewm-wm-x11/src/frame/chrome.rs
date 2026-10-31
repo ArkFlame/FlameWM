@@ -263,6 +263,15 @@ fn titlebar_fill_pixels(
 
 /// Render the 1px contour inside the titlebar's native pixels. Its colour is the
 /// same Surfaces token as panel/popups; no X11 round trip or overlay window.
+/// Opacity of the outline ring at one pixel. Partial coverage blends the outline colour in, and
+/// full coverage is always the outline colour, so the outer silhouette edge never shows the
+/// content colour behind it.
+#[must_use]
+pub fn ring_alpha(stroke_alpha: u8, coverage: u8) -> u8 {
+    let linear = (u16::from(stroke_alpha) * u16::from(coverage) + 127) / 255;
+    linear.max(u16::from(coverage)) as u8
+}
+
 fn composite_surface_contour(
     pixels: &mut [u8],
     width: u32,
@@ -301,7 +310,7 @@ fn composite_surface_contour(
             if coverage == 0 {
                 continue;
             }
-            let alpha = (u16::from(stroke.alpha) * u16::from(coverage) + 127) / 255;
+            let alpha = ring_alpha(stroke.alpha, coverage);
             let at = (y as usize * width as usize + x as usize) * 4;
             let base = u32::from_be_bytes([0, pixels[at], pixels[at + 1], pixels[at + 2]]);
             let blended = flamewm_ui_core::surface::blend_surface_over_rgb(
@@ -354,7 +363,7 @@ fn bottom_contour_strip(
             if coverage == 0 {
                 continue;
             }
-            let alpha = (u16::from(tokens.surface_border_alpha) * u16::from(coverage) + 127) / 255;
+            let alpha = ring_alpha(tokens.surface_border_alpha, coverage);
             if alpha == 0 {
                 continue;
             }
@@ -794,5 +803,23 @@ mod tests {
         assert!(result.is_err());
         // Style params reached the draw-target contract before display touch.
         assert_eq!(renderer.last_title_style(), Some((12.0, 600)));
+    }
+}
+
+#[cfg(test)]
+mod ring_alpha_tests {
+    use super::ring_alpha;
+
+    #[test]
+    fn full_coverage_edge_is_always_outline_colour() {
+        assert_eq!(ring_alpha(40, 255), 255);
+        assert_eq!(ring_alpha(0, 255), 255);
+    }
+
+    #[test]
+    fn partial_coverage_never_drops_below_coverage() {
+        assert_eq!(ring_alpha(40, 0), 0);
+        assert!(ring_alpha(40, 100) >= 100);
+        assert_eq!(ring_alpha(255, 128), 128);
     }
 }
