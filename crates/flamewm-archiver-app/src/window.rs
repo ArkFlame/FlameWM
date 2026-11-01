@@ -16,7 +16,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 
 use flamewm_api::settings::SettingsSnapshot;
-use flamewm_archiver::{CancelToken, Entry, Kind, Progress, Summary, list};
+use flamewm_archiver::{CancelToken, Entry, Format, Kind, Progress, Summary, list};
 use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::{
     UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess, UiKeyEvent,
@@ -475,14 +475,13 @@ fn human_size(bytes: u64) -> String {
 }
 
 /// `dir/name.tar.gz` extracts to `dir/name`, or `dir/name-2` and so on when that exists.
+/// The suffix list comes from the archive core so a new format never lands here twice.
 fn free_destination(archive: &Path) -> PathBuf {
     let name = archive.file_name().map_or_else(
         || String::from("archive"),
         |name| name.to_string_lossy().into_owned(),
     );
-    let stem = [".tar.gz", ".tgz", ".tar", ".zip"]
-        .into_iter()
-        .find_map(|ext| name.strip_suffix(ext))
+    let stem = Format::strip_suffix(&name)
         .filter(|stem| !stem.is_empty())
         .unwrap_or(name.as_str());
     let parent = archive.parent().unwrap_or(Path::new("."));
@@ -518,6 +517,29 @@ mod tests {
             free_destination(Path::new("/nonexistent-dir-xyz/docs.zip")),
             PathBuf::from("/nonexistent-dir-xyz/docs")
         );
+    }
+
+    /// Every format the core accepts must lose its whole suffix, or `a.tar.xz` would extract into a
+    /// directory named `a.tar`.
+    #[test]
+    fn destination_strips_every_supported_suffix() {
+        for name in [
+            "photos.tar",
+            "photos.tar.gz",
+            "photos.tgz",
+            "photos.tar.xz",
+            "photos.txz",
+            "photos.tar.bz2",
+            "photos.tbz2",
+            "photos.tbz",
+            "photos.zip",
+        ] {
+            assert_eq!(
+                free_destination(&Path::new("/nonexistent-dir-xyz").join(name)),
+                PathBuf::from("/nonexistent-dir-xyz/photos"),
+                "{name}"
+            );
+        }
     }
 
     #[test]

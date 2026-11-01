@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use super::{Scratch, make_tar_gz, make_zip};
+use super::{Scratch, make_tar, make_tar_gz, make_zip};
 use crate::{ArchiveError, CancelToken, Kind, Progress, extract, list};
 
 #[test]
@@ -32,6 +32,34 @@ fn lists_tar_gz_entries() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[1].size, 8);
     assert_eq!(entries[1].kind, Kind::File);
+}
+
+/// Every compressed tar must list through the same tar path, so a decoder mix-up shows up here.
+#[test]
+fn lists_entries_of_every_tar_variant() {
+    for name in [
+        "l.tar",
+        "l.tar.gz",
+        "l.tgz",
+        "l.tar.xz",
+        "l.txz",
+        "l.tar.bz2",
+        "l.tbz2",
+        "l.tbz",
+    ] {
+        let dir = Scratch::new(&format!("list-{name}"));
+        let archive = dir.path().join(name);
+        make_tar(
+            &archive,
+            &[("d", b'5', b""), ("d/x.bin", b'0', b"12345678")],
+        );
+        let entries = list(&archive).expect("list");
+        assert_eq!(entries.len(), 2, "{name}");
+        assert_eq!(entries[0].kind, Kind::Dir, "{name}");
+        assert_eq!(entries[1].kind, Kind::File, "{name}");
+        assert_eq!(entries[1].size, 8, "{name}");
+        assert_eq!(entries[1].path, PathBuf::from("d/x.bin"), "{name}");
+    }
 }
 
 #[test]

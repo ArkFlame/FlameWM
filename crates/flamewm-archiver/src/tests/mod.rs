@@ -2,6 +2,7 @@
 //! `TMPDIR` on the SDD disk because `/tmp` is nearly full.
 
 mod create_edit;
+mod interop;
 mod listing_extract;
 mod safety;
 
@@ -49,12 +50,13 @@ pub fn make_zip(path: &Path, entries: &[(&str, Option<&[u8]>)]) {
     zip.finish().expect("finish");
 }
 
-/// Writes a tar.gz from raw header fields, so hostile names can be stored verbatim.
-/// `kind` is `b'0'` (regular), `b'5'` (directory) or `b'2'` (symlink to `data` as UTF-8).
-pub fn make_tar_gz(path: &Path, entries: &[(&str, u8, &[u8])]) {
+/// Writes a tar (raw or compressed) from raw header fields, so hostile names can be stored
+/// verbatim. `kind` is `b'0'` (regular), `b'5'` (directory) or `b'2'` (symlink to `data` as UTF-8).
+/// The compression follows the `archive` extension, so a `.tar.xz` fixture really is xz.
+pub fn make_tar(path: &Path, entries: &[(&str, u8, &[u8])]) {
     let file = File::create(path).expect("tar file");
-    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
-    let mut tar = tar::Builder::new(encoder);
+    let format = crate::Format::detect(path).expect("fixture format");
+    let mut tar = tar::Builder::new(crate::writer::Sink::create(format, file).expect("sink"));
     for (name, kind, data) in entries {
         if *kind == b'2' {
             // `append_link` writes name, target and checksum consistently.
@@ -82,7 +84,13 @@ pub fn make_tar_gz(path: &Path, entries: &[(&str, u8, &[u8])]) {
         header.set_cksum();
         tar.append(&header, *data).expect("append");
     }
-    tar.into_inner().expect("tar").finish().expect("gz");
+    tar.into_inner().expect("tar").finish().expect("sink");
+}
+
+/// Writes a tar.gz fixture. Kept for the existing safety fixtures.
+pub fn make_tar_gz(path: &Path, entries: &[(&str, u8, &[u8])]) {
+    debug_assert!(path.to_string_lossy().ends_with(".tar.gz"));
+    make_tar(path, entries);
 }
 
 /// Builds a file tree under `root` for create tests.

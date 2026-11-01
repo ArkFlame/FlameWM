@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use super::{Scratch, make_tar_gz, make_zip};
+use super::{Scratch, make_tar, make_zip};
 use crate::{ArchiveError, CancelToken, Progress, extract, sanitize};
 
 #[test]
@@ -51,29 +51,33 @@ fn zip_slip_is_rejected_before_any_write() {
 #[test]
 fn tar_parent_and_absolute_names_are_rejected() {
     let dir = Scratch::new("tar-traversal");
-    let archive = dir.path().join("evil.tar.gz");
-    make_tar_gz(&archive, &[("../up.txt", b'0', b"x")]);
-    let err = extract(
-        &archive,
-        &dir.path().join("out"),
-        &[],
-        &CancelToken::new(),
-        &mut |_| {},
-    )
-    .unwrap_err();
-    assert!(matches!(err, ArchiveError::UnsafePath(_)));
+    for name in ["evil.tar.gz", "evil.tar.xz", "evil.tar.bz2"] {
+        let archive = dir.path().join(name);
+        make_tar(&archive, &[("../up.txt", b'0', b"x")]);
+        let err = extract(
+            &archive,
+            &dir.path().join(format!("out-{name}")),
+            &[],
+            &CancelToken::new(),
+            &mut |_| {},
+        )
+        .unwrap_err();
+        assert!(matches!(err, ArchiveError::UnsafePath(_)), "{name}: {err}");
+    }
 
-    let archive = dir.path().join("abs.tar.gz");
-    make_tar_gz(&archive, &[("/tmp/flamewm-abs-probe", b'0', b"x")]);
-    let err = extract(
-        &archive,
-        &dir.path().join("out2"),
-        &[],
-        &CancelToken::new(),
-        &mut |_| {},
-    )
-    .unwrap_err();
-    assert!(matches!(err, ArchiveError::UnsafePath(_)));
+    for name in ["abs.tar.gz", "abs.tar.xz", "abs.tar.bz2"] {
+        let archive = dir.path().join(name);
+        make_tar(&archive, &[("/tmp/flamewm-abs-probe", b'0', b"x")]);
+        let err = extract(
+            &archive,
+            &dir.path().join(format!("out2-{name}")),
+            &[],
+            &CancelToken::new(),
+            &mut |_| {},
+        )
+        .unwrap_err();
+        assert!(matches!(err, ArchiveError::UnsafePath(_)), "{name}: {err}");
+    }
     assert!(!PathBuf::from("/tmp/flamewm-abs-probe").exists());
 }
 
@@ -82,28 +86,32 @@ fn symlink_entry_is_skipped_and_never_created() {
     let dir = Scratch::new("symlink-entry");
     let outside = dir.path().join("outside");
     fs::create_dir_all(&outside).unwrap();
-    let archive = dir.path().join("link.tar.gz");
     let target = outside.to_string_lossy().into_owned();
-    make_tar_gz(
-        &archive,
-        &[
-            ("esc", b'2', target.as_bytes()),
-            ("esc/pwned.txt", b'0', b"pwned"),
-        ],
-    );
-    let out = dir.path().join("out");
-    let summary = extract(&archive, &out, &[], &CancelToken::new(), &mut |_| {}).expect("extract");
-    assert_eq!(summary.skipped, 1);
-    assert!(
-        !fs::symlink_metadata(out.join("esc"))
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    assert!(
-        !outside.join("pwned.txt").exists(),
-        "write escaped through symlink"
-    );
+    for name in ["link.tar.gz", "link.tar.xz", "link.tar.bz2"] {
+        let archive = dir.path().join(name);
+        make_tar(
+            &archive,
+            &[
+                ("esc", b'2', target.as_bytes()),
+                ("esc/pwned.txt", b'0', b"pwned"),
+            ],
+        );
+        let out = dir.path().join(format!("out-{name}"));
+        let summary =
+            extract(&archive, &out, &[], &CancelToken::new(), &mut |_| {}).expect("extract");
+        assert_eq!(summary.skipped, 1, "{name}");
+        assert!(
+            !fs::symlink_metadata(out.join("esc"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "{name}"
+        );
+        assert!(
+            !outside.join("pwned.txt").exists(),
+            "{name}: write escaped through symlink"
+        );
+    }
 }
 
 #[test]
