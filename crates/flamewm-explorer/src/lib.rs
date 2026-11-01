@@ -30,6 +30,7 @@ pub mod view;
 
 #[rustfmt::skip]
 pub mod jobs;
+pub mod progress;
 /// Row widgets in the template. The list viewport decides how many of them are shown.
 pub const ROW_SLOTS: usize = 24;
 
@@ -441,8 +442,9 @@ fn network_place(name:String,path:PathBuf)->Place {
 }
 
 /// Crash-safe copy owned by `jobs`; never overwrites an existing entry.
-pub fn copy_entry(from: &Path, to: &Path, report: &mut impl FnMut(u64)) -> io::Result<()> {
-    jobs::copy_publish(from, to, false, &jobs::CancellationToken::new(), report)
+pub fn copy_entry(from: &Path, to: &Path, cancel: &jobs::CancellationToken,
+    sink: &mut impl jobs::TransferSink) -> io::Result<()> {
+    jobs::copy_publish(from, to, false, cancel, sink)
 }
 #[must_use] pub fn destination_for(from: &Path, directory: &Path) -> PathBuf {
     let name = from.file_name().unwrap_or_default().to_string_lossy();
@@ -532,8 +534,9 @@ pub fn validate_transfer_destination(source:&Path, directory:&Path) -> io::Resul
     Ok(())
 }
 
-pub fn transfer_batch(sources:&[PathBuf], directory:&Path, move_it:bool, report:&mut impl FnMut(u64)) -> BatchReport {
-    jobs::transfer_batch_with(sources, directory, move_it, jobs::Conflict::KeepBoth, &jobs::CancellationToken::new(), report)
+pub fn transfer_batch(sources:&[PathBuf], directory:&Path, move_it:bool,
+    cancel:&jobs::CancellationToken, sink:&mut impl jobs::TransferSink) -> BatchReport {
+    jobs::transfer_batch_with(sources, directory, move_it, jobs::Conflict::KeepBoth, cancel, sink)
 }
 
 /// A drop follows the file-manager convention: move within one filesystem,
@@ -551,13 +554,14 @@ pub fn transfer_batch(sources:&[PathBuf], directory:&Path, move_it:bool, report:
 }
 
 pub fn transfer_drop_batch(sources:&[PathBuf], directory:&Path, force_copy:bool,
-    report:&mut impl FnMut(u64)) -> BatchReport {
-    jobs::transfer_drop_batch_with(sources, directory, force_copy, &jobs::CancellationToken::new(), report)
+    cancel:&jobs::CancellationToken, sink:&mut impl jobs::TransferSink) -> BatchReport {
+    jobs::transfer_drop_batch_with(sources, directory, force_copy, cancel, sink)
 }
 
 /// Move owned by `jobs`: no-replace rename, verified cross-device copy fallback.
-pub fn move_entry(from: &Path, to: &Path, report: &mut impl FnMut(u64)) -> io::Result<()> {
-    jobs::move_publish(from, to, false, &jobs::CancellationToken::new(), report)
+pub fn move_entry(from: &Path, to: &Path, cancel: &jobs::CancellationToken,
+    sink: &mut impl jobs::TransferSink) -> io::Result<()> {
+    jobs::move_publish(from, to, false, cancel, sink)
 }
 #[must_use] pub fn display_location(path:&Path, home:&Path)->String {
     if let Some(url)=remote::url_of(path) {return remote::display_text(&url);}

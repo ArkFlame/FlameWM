@@ -194,8 +194,20 @@ impl ExplorerApp {
                 if self.context.is_some() && self.menu_overflow {self.context=None;self.menu_overflow=false;}
                 else {self.context_on_entry=false;self.menu_overflow=true;self.context_scroll=0;self.context=Some((self.window.0-8.0,53.0));}
             },
-            "explorer.cancel"=>if self.busy {self.cancel.cancel();self.model.status="Cancelling…".into();},
+            "explorer.cancel"=>self.cancel_job(),
             _=>{}
+        }
+    }
+
+    /// The one cancel intent: the Cancel button, Escape, and closing the window all
+    /// go through here. The UI only flips the token; the worker stops at its next
+    /// chunk check and removes its staging output.
+    pub(crate) fn cancel_job(&mut self) {
+        if !self.busy {return;}
+        self.cancel.cancel();
+        self.model.status="Cancelling…".into();
+        if let Some(snapshot)=self.progress.as_mut() {
+            snapshot.state=JobState::Cancelling;
         }
     }
 
@@ -275,7 +287,7 @@ impl ExplorerApp {
             "delete"=>self.action_menu("trash"),
             "return"|"enter" if alt=>if let Some(path)=self.selected(){self.open_properties(path)},
             "backspace"=>{if self.model.tab_mut().up(){self.scan();}},
-            "escape"=>{if self.busy {self.cancel.cancel();self.model.status="Cancelling…".into();return;}if self.search_rows.is_some() {self.clear_search();self.model.status="Search cleared".into();return;}self.context=None;self.rubber=None;self.row_drag=None;self.drop_folder=None;self.last_click=None;self.model.tab_mut().clear_selection();},
+            "escape"=>{if self.busy {self.cancel_job();return;}if self.search_rows.is_some() {self.clear_search();self.model.status="Search cleared".into();return;}self.context=None;self.rubber=None;self.row_drag=None;self.drop_folder=None;self.last_click=None;self.model.tab_mut().clear_selection();},
             "return"|"enter"=>if let Some(path)=self.selected(){self.open(&path)},
             "left" if alt=>{if self.model.tab_mut().back(){self.scan();}},
             "right" if alt=>{if self.model.tab_mut().forward(){self.scan();}},
@@ -412,8 +424,16 @@ impl ExplorerApp {
                 self.reload_places();
                 self.refresh_devices();
             },
-            WorkerResult::Progress(bytes)=>{self.progress=Some(bytes);},
-            WorkerResult::Total(bytes)=>{self.progress_total=bytes;},
+            // The worker owns the counters; the UI stores the latest snapshot and
+            // repaints. A cancel intent already shown locally wins over a stale
+            // running snapshot that was queued before the token was observed.
+            WorkerResult::Progress(snapshot)=>{
+                let mut snapshot=*snapshot;
+                if self.cancel.is_cancelled() && !snapshot.is_finished() {
+                    snapshot.state=JobState::Cancelling;
+                }
+                self.progress=Some(snapshot);
+            },
             WorkerResult::BatchCompleted{report,action,cut_sources}=>{
                 self.busy=false;
                 self.cancel=CancellationToken::new();

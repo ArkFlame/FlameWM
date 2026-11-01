@@ -12,6 +12,35 @@ pub(crate) fn thumb_worker(rx:Receiver<ThumbKey>, result:Sender<WorkerResult>, m
 pub(crate) fn send_wake(wake:&mut UnixStream, result:&Sender<WorkerResult>, message:WorkerResult) {
     if result.send(message).is_ok() {let _=wake.write_all(&[1]);}
 }
+
+/// Where the reporter's accepted snapshots go: the UI result channel plus the wake byte.
+pub(crate) fn snapshot_sink(result:&Sender<WorkerResult>, wake:&UnixStream)->impl FnMut(Snapshot)+Send+'static {
+    let (result,wake)=(result.clone(),wake.try_clone().ok());
+    move |snapshot:Snapshot|{
+        if result.send(WorkerResult::Progress(Box::new(snapshot))).is_ok() {
+            if let Some(mut wake)=wake.as_ref() {let _=wake.write_all(&[1]);}
+        }
+    }
+}
+
+/// Counts the batch, then runs `body` with the terminal snapshot published from
+/// the outcome. Counting and every byte/entry/item update happen on this worker
+/// thread; the UI only ever sees snapshots.
+pub(crate) fn run_transfer(
+    reporter:&mut progress::Reporter, cancel:&CancellationToken,
+    body:impl FnOnce(&mut progress::Reporter)->BatchReport,
+)->BatchReport {
+    reporter.announce(JobState::Counting);
+    let report=if cancel.is_cancelled() {
+        BatchReport{cancelled:true,..BatchReport::default()}
+    } else {
+        reporter.announce(JobState::Running);
+        body(reporter)
+    };
+    reporter.finish(if report.cancelled {JobState::Cancelled}
+        else if report.failed>0 {JobState::PartiallyFailed} else {JobState::Completed});
+    report
+}
 pub(crate) fn scan_worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStream) {
     while let Ok(mut job)=rx.recv() {
         // Obsolete queued navigation requests must never block the latest scan.
@@ -54,18 +83,12 @@ pub(crate) fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wa
         match job {
             WorkerJob::Scan{..}=>{},
             WorkerJob::Transfer{sources,directory,move_it,conflict,cancel}=>{
-                let total=jobs::count_sources(&sources,&cancel).bytes;
-                send_wake(&mut wake,&result,WorkerResult::Total(total));
-                let mut accumulated=0_u64;
-                let mut last_progress=Instant::now();
-                let mut progress=|size:u64|{
-                    accumulated=accumulated.saturating_add(size);
-                    if last_progress.elapsed()>=Duration::from_millis(100) {
-                        send_wake(&mut wake,&result,WorkerResult::Progress(accumulated));
-                        last_progress=Instant::now();
-                    }
-                };
-                let mut report=jobs::transfer_batch_with(&sources,&directory,move_it,conflict,&cancel,&mut progress);
+                let mut reporter=progress::Reporter::connected(JobId::next(),cancel.clone(),snapshot_sink(&result,&wake));
+                let totals=jobs::count_sources(&sources,&cancel);
+                reporter.set_totals(totals.bytes,totals.items);
+                let mut report=run_transfer(&mut reporter,&cancel,|reporter|{
+                    jobs::transfer_batch_with(&sources,&directory,move_it,conflict,&cancel,reporter)
+                });
                 jobs::record(report.undo.drain(..));
                 send_wake(&mut wake,&result,WorkerResult::BatchCompleted {
                     report,action:if move_it {"Moved"}else{"Copied"},
@@ -73,17 +96,12 @@ pub(crate) fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wa
                 });
             }
             WorkerJob::Drop{sources,directory,force_copy,cancel}=>{
-                send_wake(&mut wake,&result,WorkerResult::Total(jobs::count_sources(&sources,&cancel).bytes));
-                let mut accumulated=0_u64;
-                let mut last_progress=Instant::now();
-                let mut progress=|size:u64|{
-                    accumulated=accumulated.saturating_add(size);
-                    if last_progress.elapsed()>=Duration::from_millis(100) {
-                        send_wake(&mut wake,&result,WorkerResult::Progress(accumulated));
-                        last_progress=Instant::now();
-                    }
-                };
-                let mut report=jobs::transfer_drop_batch_with(&sources,&directory,force_copy,&cancel,&mut progress);
+                let mut reporter=progress::Reporter::connected(JobId::next(),cancel.clone(),snapshot_sink(&result,&wake));
+                let totals=jobs::count_sources(&sources,&cancel);
+                reporter.set_totals(totals.bytes,totals.items);
+                let mut report=run_transfer(&mut reporter,&cancel,|reporter|{
+                    jobs::transfer_drop_batch_with(&sources,&directory,force_copy,&cancel,reporter)
+                });
                 jobs::record(report.undo.drain(..));
                 send_wake(&mut wake,&result,WorkerResult::BatchCompleted {
                     report,action:"Transferred",cut_sources:None,

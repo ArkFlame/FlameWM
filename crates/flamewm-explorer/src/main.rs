@@ -25,7 +25,8 @@ use flamewm_explorer::{archive,properties,refresh::DirWatch,search::{SearchEvent
 use std::sync::atomic::{AtomicBool,Ordering};
 use std::sync::Arc;
 use flamewm_integrations_linux::device_watch::DeviceWatch;
-use flamewm_explorer::jobs::{self,CancellationToken,Conflict,Undo};
+use flamewm_explorer::jobs::{self,CancellationToken,Conflict,JobId,JobState,TransferSink,Undo};
+use flamewm_explorer::progress::{self,Snapshot};
 use flamewm_explorer::remote::{self,CopyEvent};
 use flamewm_remote_fs::{Cancel as RemoteCancel,Config as RemoteConfig,Error as RemoteError,HostKeyPrompt,ListEvent,RemoteFs,TransferEvent,Url as RemoteUrl};
 use theme::ExplorerTheme;
@@ -55,6 +56,8 @@ const SCROLLBAR_THUMB_INSET:f32=2.0;
 const ROW_HEIGHT:f32=35.0;
 /// Status strip (30px) plus the hairline above it; the file rows fill the space above.
 const STATUS_STRIP_HEIGHT:f32=31.0;
+/// Painted width of `#progress-fill`; the popup track is 274px wide with 6px of inset.
+const PROGRESS_TRACK_WIDTH:f32=274.0;
 /// Rows moved by one wheel notch.
 const WHEEL_ROWS:isize=3;
 const SIDEBAR_WIDTH:f32=201.0;
@@ -156,8 +159,8 @@ fn chooser_worker(rx: Receiver<ChooserJob>, result: Sender<WorkerResult>, mut wa
 }
 enum WorkerResult {
     Scanned {generation:u64,path:PathBuf,entries:std::io::Result<Vec<Entry>>},
-    Progress(u64),
-    Total(u64),
+    /// One throttled job snapshot from the worker that owns the transfer.
+    Progress(Box<progress::Snapshot>),
     /// Recursive size of a folder shown in Properties; `path` identifies the dialog it belongs to.
     SizeReady {path:PathBuf,bytes:std::io::Result<u64>},
     /// One frame of the list scroll glide.
@@ -213,13 +216,12 @@ fn remote_job(fs:&RemoteFs,op:RemoteOp,wake:&mut UnixStream,result:&Sender<Worke
             send_wake(wake,result,WorkerResult::BatchCompleted{report,action:"Deleted",cut_sources:None});
         },
         RemoteOp::Copy{sources,directory,cancel}=>{
-            let mut last_progress=Instant::now();
-            let report=remote::copy_items(fs,&sources,&directory,&cancel,&mut |event|match event {
-                CopyEvent::Total(bytes)=>send_wake(wake,result,WorkerResult::Total(bytes)),
-                CopyEvent::Progress(bytes)=>if last_progress.elapsed()>=Duration::from_millis(100) {
-                    send_wake(wake,result,WorkerResult::Progress(bytes));
-                    last_progress=Instant::now();
-                },
+            let mut reporter=progress::Reporter::connected(JobId::next(),cancel.clone(),snapshot_sink(result,wake));
+            let report=run_transfer(&mut reporter,&cancel,|reporter|{
+                remote::copy_items(fs,&sources,&directory,&cancel,&mut |event|match event {
+                    CopyEvent::Total(bytes)=>reporter.set_totals(bytes,sources.len() as u64),
+                    CopyEvent::Progress(bytes)=>TransferSink::bytes(reporter,bytes),
+                })
             });
             send_wake(wake,result,WorkerResult::BatchCompleted{report,action:"Copied",cut_sources:None});
         },
@@ -255,7 +257,10 @@ struct ExplorerApp {
     thumbs:RefCell<Thumbnails>, thumb_tx:Option<Sender<ThumbKey>>, thumb_bound:RefCell<[Option<u64>;ROW_SLOTS]>,
     chooser_loading:bool, chooser_request:u64, places:Vec<Place>,
     context:Option<(f32,f32)>, edit:Option<EditMode>, field:flamewm_explorer::TextField, rename_target:Option<PathBuf>, theme:ExplorerTheme, window:(f32,f32),
-    last_click:Option<(PathBuf,Instant)>, progress:Option<u64>,
+    last_click:Option<(PathBuf,Instant)>, progress:Option<progress::Snapshot>,
+    /// Set when the user closed the window: the running job is cancelled, and the
+    /// process exits once its staging output is gone.
+    closing:bool,
     context_on_entry:bool, rubber:Option<((f32,f32),(f32,f32))>, activity:Option<String>, busy:bool,
     row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, file_drag_out:Option<Vec<PathBuf>>,
     /// Ark drag-out extractions in flight; polled from the event loop.
@@ -272,7 +277,7 @@ struct ExplorerApp {
     column_sort:ColumnSort, typed:String, typed_at:Option<Instant>,
     dialog:Option<Dialog>, ark:bool, search:Option<SearchWorker>, search_id:u64, search_text:String,
     search_rows:Option<Vec<Entry>>, watch:Option<DirWatch>, watched:Option<PathBuf>, device_watch:Option<DeviceWatch>,
-    context_place:Option<usize>, progress_total:u64, trash_base:PathBuf,
+    context_place:Option<usize>, trash_base:PathBuf,
     /// Removable filesystems that are present but unmounted; merged into the sidebar's Devices group.
     unmounted:Vec<bookmarks::BlockDevice>,
     /// Wake channel for background threads (watcher, search, size). Set once in `run`.
@@ -459,10 +464,26 @@ fn run()->Result<(),String>{
             while let Ok(message)=results.try_recv(){app.wake(message);changed=true;}
             for rx in std::mem::take(&mut app.ark_extracts) {
                 match rx.try_recv() {
-                    Ok(Ok(report)) => { app.model.status=format!("Extracted {} item(s) from Ark",report.created.len()); app.scan(); }
-                    Ok(Err(error)) => { app.model.status=format!("Ark extraction failed: {error:?}"); }
+                    Ok(Ok(report)) => {
+                        app.busy=false;
+                        app.model.status=format!("Extracted {} item(s) from Ark",report.created.len());
+                        app.scan();
+                    }
+                    Ok(Err(flamewm_explorer::dndext::ExtractError::Cancelled)) => {
+                        app.busy=false;
+                        app.cancel=CancellationToken::new();
+                        app.model.status="Extraction cancelled; no partial files were left".into();
+                    }
+                    Ok(Err(error)) => {
+                        app.busy=false;
+                        app.cancel=CancellationToken::new();
+                        app.model.status=format!("Ark extraction failed: {error:?}");
+                    }
                     Err(std::sync::mpsc::TryRecvError::Empty) => app.ark_extracts.push(rx),
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => { app.model.status="Ark extraction ended unexpectedly".into(); }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        app.busy=false;
+                        app.model.status="Ark extraction ended unexpectedly".into();
+                    }
                 }
             }
             app.sync_scroll();
@@ -472,7 +493,11 @@ fn run()->Result<(),String>{
             if app.glide.is_animating(Instant::now()) {return app.project_rows(document,false);}
             Ok(())
         },
-    )
+    )?;
+    // Closing the window cancels a running transfer and waits for its staging
+    // output to be gone before the process exits, so no partial file survives.
+    Rc::clone(&app).borrow_mut().close();
+    Ok(())
 }
 
 
