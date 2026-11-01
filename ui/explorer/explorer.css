@@ -72,11 +72,16 @@ button:active { background:var(--hover); }
 .menu-ico { width:16px; height:16px; flex-grow:0; }
 .menu-row:hover { background:var(--hover); }
 
-.progress-popup { position:absolute; bottom:42px; right:18px; width:290px; height:140px; padding:13px; border:1px solid var(--line); border-radius:9px; background:var(--menu); display:flex; flex-direction:column; gap:11px; }
+.progress-popup { position:absolute; bottom:42px; right:18px; width:300px; height:132px; padding:13px; border:1px solid var(--rim); border-radius:11px; background:var(--menu); display:flex; flex-direction:column; gap:9px; }
+.progress-head { display:flex; flex-direction:row; align-items:center; justify-content:space-between; width:274px; }
 .progress-title { color:var(--text); font-size:14px; }
-.progress-track { width:262px; height:7px; background:var(--card); border-radius:4px; }
-.progress-fill { width:0px; height:7px; background:var(--accent); border-radius:4px; }
-.progress-cancel { width:80px; height:28px; border-radius:6px; }
+.progress-percent { color:var(--accent); font-size:14px; }
+.progress-current { color:var(--muted); font-size:12px; width:274px; white-space:nowrap; overflow:hidden; }
+.progress-track { width:274px; height:8px; background:var(--card); border-radius:4px; }
+.progress-fill { width:0px; height:8px; background:var(--accent); border-radius:4px; }
+.progress-foot { display:flex; flex-direction:row; align-items:center; justify-content:space-between; width:274px; }
+.progress-bytes { color:var(--muted); font-size:12px; white-space:nowrap; overflow:hidden; width:170px; }
+.progress-cancel { width:80px; height:28px; border-radius:6px; flex-grow:0; }
 
 /* Shared modal for Properties, conflicts and confirmations. */
 .dialog { position:absolute; left:300px; top:150px; width:460px; padding:16px; display:flex; flex-direction:column; gap:8px; background:var(--menu); border:1px solid var(--line); border-radius:10px; }
