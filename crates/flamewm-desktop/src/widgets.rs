@@ -124,8 +124,9 @@ struct FaceKey {
 /// Samples kept for the CPU and RAM graph; one per refresh tick.
 const HISTORY_LEN: usize = 60;
 
-/// Sampling cadence for CPU, memory, uptime and network widgets.
-const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
+/// Sampling cadence for CPU, memory, uptime and network widgets. The CPU and memory graphs
+/// shift one point per sample, so this cadence is also the desktop's idle repaint rate.
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(4);
 
 /// Every input `sync_widgets` reads. An equal key means the document already shows this state,
 /// so the sync skips all document writes.
@@ -145,12 +146,14 @@ struct SyncKey {
 struct SampleKey {
     cpu_percent: Option<u8>,
     cpu_count: usize,
-    memory: Option<MemoryUsage>,
+    /// Drawn memory text: percent, used GiB and total GiB, as shown on the widget.
+    memory: Option<(Option<u8>, String, String)>,
     uptime_seconds: Option<u64>,
     cpu_history: VecDeque<u8>,
     memory_history: VecDeque<u8>,
-    net_rx_history: VecDeque<u64>,
-    net_tx_history: VecDeque<u64>,
+    /// Network graph points as drawn (`scale_rates`), so idle traffic compares equal.
+    net_rx_history: VecDeque<u8>,
+    net_tx_history: VecDeque<u8>,
 }
 
 #[derive(Debug, Default)]
@@ -415,12 +418,18 @@ impl WidgetState {
         SampleKey {
             cpu_percent: samples.cpu_percent,
             cpu_count: samples.cpu_count,
-            memory: samples.memory,
+            memory: samples.memory.map(|memory| {
+                (
+                    memory.percent(),
+                    format_gib(memory.used_kib()),
+                    format_gib(memory.total_kib),
+                )
+            }),
             uptime_seconds: samples.uptime_seconds,
             cpu_history: samples.cpu_history.clone(),
             memory_history: samples.memory_history.clone(),
-            net_rx_history: samples.net_rx_history.clone(),
-            net_tx_history: samples.net_tx_history.clone(),
+            net_rx_history: scale_rates(&samples.net_rx_history),
+            net_tx_history: scale_rates(&samples.net_tx_history),
         }
     }
 
@@ -2338,6 +2347,47 @@ mod tests {
             Some(now),
             "a CPU widget samples on the sample timer"
         );
+    }
+
+    /// Idle samplers re-read raw counters every tick, but only the drawn values reach the
+    /// document. Equal drawn values must compare equal so an idle desktop stops repainting.
+    #[test]
+    fn sample_key_compares_drawn_values_not_raw_counters() {
+        let mut state = WidgetState::new(WidgetStore::default(), PathBuf::new());
+        state.samples.memory = Some(MemoryUsage {
+            total_kib: 8 * 1_048_576,
+            available_kib: 4 * 1_048_576,
+        });
+        state.samples.net_rx_history = VecDeque::from([100u64, 200]);
+        state.samples.net_tx_history = VecDeque::from([50u64, 25]);
+        let idle = state.sample_key();
+
+        // Same percent, same formatted GiB text; raw KiB differs. Rates differ in absolute
+        // bytes but scale to the same graph points.
+        state.samples.memory = Some(MemoryUsage {
+            total_kib: 8 * 1_048_576 + 1,
+            available_kib: 4 * 1_048_576 + 1,
+        });
+        state.samples.net_rx_history = VecDeque::from([200u64, 400]);
+        state.samples.net_tx_history = VecDeque::from([100u64, 50]);
+        assert_eq!(
+            idle,
+            state.sample_key(),
+            "samples that draw the same pixels must not force a repaint"
+        );
+
+        state.samples.memory = Some(MemoryUsage {
+            total_kib: 8 * 1_048_576,
+            available_kib: 2 * 1_048_576,
+        });
+        assert_ne!(idle, state.sample_key(), "changed memory text repaints");
+
+        state.samples.memory = Some(MemoryUsage {
+            total_kib: 8 * 1_048_576,
+            available_kib: 4 * 1_048_576,
+        });
+        state.samples.net_rx_history = VecDeque::from([200u64, 100]);
+        assert_ne!(idle, state.sample_key(), "changed graph shape repaints");
     }
 
     fn alpha_at(pixels: &[u8], size: u32, x: u32, y: u32) -> u8 {
