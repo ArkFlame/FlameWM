@@ -83,6 +83,35 @@ pub struct WaylandDesktop {
     mirror: Rc<RefCell<Mirror>>,
     commands: Rc<RefCell<Vec<Command>>>,
     catalog: Option<Arc<flamewm_applications::ApplicationCatalog>>,
+    /// Per-output shell scale saved by Settings, keyed by this compositor's output id.
+    ///
+    /// The compositor has no runtime scale hook yet, so this is what `display_snapshot` reports
+    /// rather than a hardcoded 100: a scale picked in Settings survives a restart instead of being
+    /// erased on the next start.
+    shell_scales: BTreeMap<String, u16>,
+}
+
+/// The per-output shell scales saved in the `FlameWM` settings file.
+///
+/// Entries that are not a supported scale are dropped rather than reported, so a corrupt or
+/// hand-edited value cannot present a scale the rest of the product would reject.
+fn saved_shell_scales() -> BTreeMap<String, u16> {
+    std::fs::read_to_string(settings_path())
+        .ok()
+        .map(|text| shell_scales_from(&text))
+        .unwrap_or_default()
+}
+
+/// Parses settings text into per-output scales.
+///
+/// `parse_snapshot` validates every `scale.*` entry against the same 100..=200 in 5% steps rule
+/// Settings enforces, and rejects the whole file when one is out of range. A rejected file
+/// therefore yields no scales at all, which is why this needs no filter of its own.
+fn shell_scales_from(text: &str) -> BTreeMap<String, u16> {
+    flamewm_platform::settings::ConfigStore::default()
+        .parse_snapshot(text)
+        .map(|settings| settings.per_output_scale)
+        .unwrap_or_default()
 }
 
 impl WaylandDesktop {
@@ -217,7 +246,7 @@ impl DisplayPort for WaylandDesktop {
                     refresh_millihz: 60_000,
                     preferred: true,
                 }],
-                shell_scale_percent: 100,
+                shell_scale_percent: self.shell_scales.get(OUTPUT_NAME).copied().unwrap_or(100),
             }],
             pending: None,
         })
@@ -526,6 +555,7 @@ impl Service {
             mirror: Rc::clone(&mirror),
             commands: Rc::clone(&commands),
             catalog: catalog.clone(),
+            shell_scales: saved_shell_scales(),
         };
         let mut host = PlatformHost::new(engine, settings_path());
         if let Some(catalog) = catalog {
@@ -842,4 +872,33 @@ fn apply_command(state: &mut State, command: Command) {
         }
     }
     state.request_redraw();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_scales_from;
+
+    /// A saved scale is reported for the output it names.
+    #[test]
+    fn saved_scales_are_reported_per_output() {
+        let scales = shell_scales_from("scale.wayland-0=125\nscale.hdmi-a-1=150\n");
+        assert_eq!(scales.get("wayland-0"), Some(&125));
+        assert_eq!(scales.get("hdmi-a-1"), Some(&150));
+    }
+
+    /// An out-of-range scale invalidates the file, so the compositor falls back to the default
+    /// scale instead of reporting a value the rest of the product would reject.
+    #[test]
+    fn an_invalid_scale_is_not_reported() {
+        assert!(shell_scales_from("scale.wayland-0=111\n").is_empty());
+        assert!(shell_scales_from("scale.wayland-0=50\n").is_empty());
+        assert!(shell_scales_from("scale.wayland-0=500\n").is_empty());
+    }
+
+    /// Unreadable settings must degrade to the default scale rather than failing the snapshot.
+    #[test]
+    fn unparsable_settings_yield_no_saved_scales() {
+        assert!(shell_scales_from("").is_empty());
+        assert!(shell_scales_from("not = [valid").is_empty());
+    }
 }
