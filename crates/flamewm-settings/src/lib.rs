@@ -92,8 +92,8 @@ pub struct SettingsApplication<T: ControlTransport> {
     error: Option<String>,
     pages: DisplayPages,
     themes: theme_picker::ThemeRegistry,
-    /// The open theme picker and its current page.
-    theme_picker: Option<(theme_picker::PickerKind, usize)>,
+    /// The open theme picker, if any.
+    theme_picker: Option<theme_picker::PickerKind>,
     color_picker: Option<ColorPicker>,
     theme_scan: Option<Receiver<theme_picker::ThemeRegistry>>,
     theme_install: Option<Receiver<theme_picker::InstallOutcome>>,

@@ -7,7 +7,9 @@
 //! Xft has no XRender clip, so region text is cropped by hand, and a stale region leaves partial
 //! windows and leftover overlays. Turning it on by default regressed terminal updates.
 
-use flamewm_render_core::{PaintCommand, Rect, SurfaceDamage};
+#[cfg(test)]
+use flamewm_render_core::SurfaceDamage;
+use flamewm_render_core::{PaintCommand, Rect};
 
 /// Device-pixel rectangle, always inside the window bounds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +42,7 @@ pub(crate) enum RedrawPlan {
     Skip,
 }
 
+#[cfg(test)]
 /// Everything besides the damage that must be unchanged for a region repaint to be
 /// equivalent to a full one.
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +59,7 @@ pub(crate) struct PlanInput {
     pub(crate) backbuffer_valid: bool,
 }
 
+#[cfg(test)]
 /// Chooses the repaint for one redraw. Anything not provably local is `Full`.
 pub(crate) fn plan_redraw(input: PlanInput) -> RedrawPlan {
     let SurfaceDamage::Region(rect) = input.damage else {

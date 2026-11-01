@@ -57,3 +57,5 @@ For the independent FlameWM WM, historical IceWM/FlameWM implementations are edg
 ## Red gate law
 
 If `./scripts/check` fails, stop feature mutation and fix the first proven compiler/test failure, then rerun the same gate. Static audits are not substitutes for Cargo. If the target compiler was not executed, report the artifact as compiler-unverified rather than claiming runtime PASS.
+
+- Build target dirs: one per worktree, never a shared `CARGO_TARGET_DIR`. See `docs/BUILD_TARGETS.md`.

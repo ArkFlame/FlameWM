@@ -1,6 +1,5 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
-#![allow(dead_code)]
 
 use std::os::raw::{c_char, c_int, c_long, c_short, c_uint, c_ulong, c_ushort, c_void};
 
@@ -49,9 +48,7 @@ pub const TRUE_COLOR_CLASS: c_int = 4;
 pub const INPUT_OUTPUT_CLASS: c_uint = 1;
 pub const ALLOC_NONE: c_int = 0;
 pub const TRANSPARENT_CLEAR_PIXEL: c_ulong = 0;
-pub const CW_BACK_PIXMAP: c_ulong = 1 << 0;
 pub const CW_BACK_PIXEL: c_ulong = 1 << 1;
-pub const CW_BORDER_PIXMAP: c_ulong = 1 << 2;
 pub const CW_BORDER_PIXEL: c_ulong = 1 << 3;
 pub const CW_COLORMAP: c_ulong = 1 << 13;
 
@@ -470,6 +467,7 @@ pub const CONTROL_MASK: c_uint = 1 << 2;
 pub const MOD1_MASK: c_uint = 1 << 3;
 pub const MOD4_MASK: c_uint = 1 << 6;
 /// Level3 (AltGr / ISO_Level3_Shift) modifier in the default xkb keymap.
+#[cfg(test)]
 pub const MOD5_MASK: c_uint = 1 << 7;
 
 pub const XK_BACK_SPACE: c_ulong = 0xff08;
@@ -510,8 +508,6 @@ unsafe extern "C" {
     pub fn XDefaultDepth(display: *mut Display, screen_number: c_int) -> c_int;
     pub fn XDefaultVisual(display: *mut Display, screen_number: c_int) -> *mut Visual;
     pub fn XRootWindow(display: *mut Display, screen_number: c_int) -> Window;
-    pub fn XBlackPixel(display: *mut Display, screen_number: c_int) -> c_ulong;
-    pub fn XWhitePixel(display: *mut Display, screen_number: c_int) -> c_ulong;
     pub fn XDefaultColormap(display: *mut Display, screen_number: c_int) -> Colormap;
     pub fn XMatchVisualInfo(
         display: *mut Display,
@@ -545,6 +541,7 @@ unsafe extern "C" {
         alloc: c_int,
     ) -> Colormap;
     pub fn XFreeColormap(display: *mut Display, colormap: Colormap) -> c_int;
+    #[cfg(test)]
     pub fn XCreateSimpleWindow(
         display: *mut Display,
         parent: Window,
@@ -715,10 +712,8 @@ unsafe extern "C" {
         height: c_uint,
     ) -> c_int;
     pub fn XPutPixel(image: *mut XImage, x: c_int, y: c_int, pixel: c_ulong) -> c_int;
-    pub fn XLoadFont(display: *mut Display, name: *const c_char) -> Font;
     pub fn XLoadQueryFont(display: *mut Display, name: *const c_char) -> *mut XFontStructHead;
     pub fn XFreeFont(display: *mut Display, font_struct: *mut XFontStructHead) -> c_int;
-    pub fn XUnloadFont(display: *mut Display, font: Font) -> c_int;
     pub fn XSetFont(display: *mut Display, gc: GC, font: Font) -> c_int;
     pub fn XAllocColor(
         display: *mut Display,
@@ -734,6 +729,7 @@ unsafe extern "C" {
         status_in_out: *mut c_void,
     ) -> c_int;
     pub fn XRefreshKeyboardMapping(event_map: *mut XMappingEvent) -> c_int;
+    #[cfg(test)]
     pub fn XKeysymToKeycode(display: *mut Display, keysym: c_ulong) -> u8;
     pub fn XNextEvent(display: *mut Display, event_return: *mut XEvent) -> c_int;
     pub fn XConnectionNumber(display: *mut Display) -> c_int;
@@ -780,11 +776,6 @@ unsafe extern "C" {
         rectangles: *const XRectangle,
         n: c_int,
         ordering: c_int,
-    ) -> c_int;
-    pub fn XTextWidth(
-        font_struct: *mut XFontStructHead,
-        string: *const c_char,
-        count: c_int,
     ) -> c_int;
     pub fn XGetImage(
         display: *mut Display,

@@ -45,23 +45,6 @@ impl X11App {
         Ok(xcolor.pixel as u64)
     }
 }
-#[allow(dead_code)]
-pub(crate) fn root_background(
-    document: &RuntimeDocument,
-    interaction: InteractionState,
-) -> Option<Color> {
-    let index = document.document.root;
-    let _ = document.document.nodes.get(index as usize)?;
-    let style = document.runtime_style(index, interaction);
-    let color = document.resolve_color(style.background);
-    if color.a == 0 { None } else { Some(color) }
-}
-
-#[allow(dead_code)]
-pub(crate) fn blend_over_black(color: Color) -> Color {
-    flatten_opaque_fallback(color)
-}
-
 pub(crate) fn rgb_to_pixel(
     r: u8,
     g: u8,

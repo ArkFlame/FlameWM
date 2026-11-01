@@ -53,11 +53,10 @@ pub(crate) enum SettingsAction {
     StartIconChoose,
     /// Clears the Start icon and removes its managed copy.
     StartIconClear,
-    /// Opens the icon or cursor theme picker on its first page.
+    /// Opens the icon or cursor theme picker.
     ThemePickerOpen(theme_picker::PickerKind),
     ThemePickerClose,
-    ThemePickerPage(theme_picker::PickerKind, PageStep),
-    /// Row `slot` on the open picker's current page.
+    /// Row `slot` of the open picker.
     ThemePickerSelect(theme_picker::PickerKind, usize),
     /// Opens the portal chooser for one archive, or one folder when `folder` is set.
     ThemeInstallChoose {
@@ -221,14 +220,38 @@ pub(crate) fn about_uri(action: &str) -> Option<&'static str> {
     }
 }
 
-/// Parses the rest after `settings.theme.`: `close`, `install`, or `<icon|cursor>.<op>`
-/// where `<op>` is `open`, `prev`, `next` or `select.<slot>`.
+/// Row action prefixes, one per picker; a row's action is `<prefix><slot>`.
+const THEME_ROW_ACTIONS: [(&str, theme_picker::PickerKind); 2] = [
+    (
+        "settings.theme.icon.select.",
+        theme_picker::PickerKind::Icon,
+    ),
+    (
+        "settings.theme.cursor.select.",
+        theme_picker::PickerKind::Cursor,
+    ),
+];
+
+/// Parses the rest after `settings.theme.`: `close`, `install`, `<icon|cursor>.open`,
+/// or a row `<icon|cursor>.select.<slot>`.
 pub(crate) fn parse_theme_action(rest: &str) -> Result<SettingsAction, String> {
     match rest {
         "close" => return Ok(SettingsAction::ThemePickerClose),
         "install" => return Ok(SettingsAction::ThemeInstallChoose { folder: false }),
         "install-folder" => return Ok(SettingsAction::ThemeInstallChoose { folder: true }),
         _ => {}
+    }
+    let action = format!("settings.theme.{rest}");
+    if let Some((prefix, kind)) = THEME_ROW_ACTIONS
+        .iter()
+        .find(|(prefix, _)| action.starts_with(prefix))
+    {
+        let slot = action[prefix.len()..]
+            .parse::<usize>()
+            .ok()
+            .filter(|slot| *slot < theme_picker::THEME_ROW_SLOTS)
+            .ok_or_else(|| format!("unknown theme row '{action}'"))?;
+        return Ok(SettingsAction::ThemePickerSelect(*kind, slot));
     }
     let (target, operation) = rest
         .split_once('.')
@@ -237,16 +260,7 @@ pub(crate) fn parse_theme_action(rest: &str) -> Result<SettingsAction, String> {
         .ok_or_else(|| format!("unknown theme target '{target}'"))?;
     match operation {
         "open" => Ok(SettingsAction::ThemePickerOpen(kind)),
-        "prev" => Ok(SettingsAction::ThemePickerPage(kind, PageStep::Prev)),
-        "next" => Ok(SettingsAction::ThemePickerPage(kind, PageStep::Next)),
-        _ => {
-            let slot = operation
-                .strip_prefix("select.")
-                .and_then(|slot| slot.parse::<usize>().ok())
-                .filter(|slot| *slot < theme_picker::PICKER_SLOTS)
-                .ok_or_else(|| format!("unknown theme operation '{operation}'"))?;
-            Ok(SettingsAction::ThemePickerSelect(kind, slot))
-        }
+        _ => Err(format!("unknown theme operation '{operation}'")),
     }
 }
 

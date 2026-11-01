@@ -50,13 +50,6 @@ fn theme_picker_actions_parse_to_typed_targets() {
         Ok(SettingsAction::ThemePickerOpen(PickerKind::Icon))
     );
     assert_action!(
-        "settings.theme.cursor.next",
-        Ok(SettingsAction::ThemePickerPage(
-            PickerKind::Cursor,
-            PageStep::Next
-        ))
-    );
-    assert_action!(
         "settings.theme.icon.select.5",
         Ok(SettingsAction::ThemePickerSelect(PickerKind::Icon, 5))
     );
@@ -77,7 +70,7 @@ fn theme_picker_actions_parse_to_typed_targets() {
 #[test]
 fn theme_picker_actions_reject_out_of_range_and_retired_cycle() {
     for action in [
-        "settings.theme.icon.select.6",
+        "settings.theme.icon.select.32",
         "settings.theme.icon.select.x",
         "settings.theme.font.open",
         "settings.theme.icon.sideways",
@@ -97,7 +90,7 @@ fn selecting_a_theme_writes_its_stable_id_and_closes_the_picker() {
     let item = |n: usize| ThemeItem {
         id: format!("theme-{n}"),
         name: format!("Theme {n}"),
-        preview: None,
+        previews: Vec::new(),
     };
     let transport = ScriptedTransport {
         responses: (0..8)
@@ -121,11 +114,6 @@ fn selecting_a_theme_writes_its_stable_id_and_closes_the_picker() {
 
     app.execute(SettingsAction::ThemePickerOpen(PickerKind::Icon))
         .expect("open");
-    app.execute(SettingsAction::ThemePickerPage(
-        PickerKind::Icon,
-        PageStep::Next,
-    ))
-    .expect("page");
     app.execute(SettingsAction::ThemePickerSelect(PickerKind::Icon, 1))
         .expect("select");
 
@@ -138,7 +126,7 @@ fn selecting_a_theme_writes_its_stable_id_and_closes_the_picker() {
         transaction.changes,
         vec![SettingsChange {
             key: "iconTheme".to_owned(),
-            value: Some(SettingValue::Text("theme-7".to_owned())),
+            value: Some(SettingValue::Text("theme-1".to_owned())),
         }]
     );
     assert!(app.theme_picker.is_none(), "selection closes the picker");
