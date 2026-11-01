@@ -1,13 +1,16 @@
-//! Single streaming walk over zip, tar and tar.gz archives.
+//! Single streaming walk over zip and every tar variant.
 //!
 //! Every operation (list, extract, rewrite) goes through `visit`, so format handling lives here
 //! only. The data reader passed to the callback is streamed; nothing is buffered per archive.
+//! Compressed tars share one tar path: only the decoder placed under `tar::Archive` differs.
 
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::path::{Path, PathBuf};
 
+use bzip2::read::BzDecoder;
 use flate2::read::GzDecoder;
+use xz2::read::XzDecoder;
 
 use crate::error::Result;
 use crate::format::Format;
@@ -42,6 +45,8 @@ where
         Format::Zip => visit_zip(file, &mut f),
         Format::Tar => visit_tar(file, &mut f),
         Format::TarGz => visit_tar(GzDecoder::new(file), &mut f),
+        Format::TarXz => visit_tar(XzDecoder::new(file), &mut f),
+        Format::TarBz2 => visit_tar(BzDecoder::new(file), &mut f),
     }
 }
 

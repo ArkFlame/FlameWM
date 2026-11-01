@@ -1,7 +1,9 @@
 //! `FlameWM` archive core: list, extract, create, add and remove zip and tar archives.
 //!
-//! Path safety, cancellation and progress live here, so the UI layer only forwards requests.
-//! Long operations run on the caller's thread and accept a `CancelToken` and a progress sink.
+//! Tar is supported raw and compressed with gzip, xz and bzip2; the compressed variants share one
+//! streaming tar path and differ only by the decoder/encoder placed under `tar::Builder`. Path
+//! safety, cancellation and progress live here, so the UI layer only forwards requests. Long
+//! operations run on the caller's thread and accept a `CancelToken` and a progress sink.
 
 mod create;
 mod edit;
