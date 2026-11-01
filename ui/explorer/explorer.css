@@ -1,9 +1,10 @@
 /* Colour variables are placeholders only: theme.rs overwrites every one from the live FlameWM settings snapshot before the
    first paint. The root fills once with the surface; panels draw nothing or a white wash, so no grey literal is painted. */
 :root { --accent:#00000000; --accent-soft:#00000030; --card:#00000000; --line:#00000000; --hover:#00000000; --menu:#00000000; --sidebar:#00000000; --text:#f1f2f3; --muted:#f1f2f3; }
-/* Square root: the WM frame/XShape owns all rounding and the outline. The body starts 24px above the client
-   so the titlebar band stays WM-drawn and the content area fills the frame exactly. */
-body { position:absolute; top:-24px; left:0px; right:0px; bottom:0px; padding-top:24px; margin:0; color:var(--text); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
+/* Square root: the WM frame/XShape owns all rounding, the outline and the titlebar, which are drawn outside the
+   client rect. The body starts at the client origin: main.rs sizes the flow children to the client height, so an
+   extra top offset would push the status strip below the window. */
+body { position:absolute; top:0px; left:0px; right:0px; bottom:0px; margin:0; color:var(--text); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
 button { background:transparent; color:var(--text); cursor:default; font-size:13px; border-width:0px; padding:0px; display:flex; align-items:center; justify-content:center; }
 button:hover { background:var(--hover); }
 button:active { background:var(--hover); }
@@ -60,9 +61,14 @@ button:active { background:var(--hover); }
 /* Status strip: item count, activity message, free space and a usage bar in the accent colour. */
 .status { width:100%; height:31px; flex-grow:0; display:flex; flex-direction:row; align-items:center; gap:12px; padding:0 14px; color:var(--text); font-size:12px; }
 .status-count { white-space:nowrap; overflow:hidden; flex-grow:0; }
-.status-message { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; color:var(--muted); }
+/* The engine has no flex-shrink, so the activity message takes the slack from a zero base
+   (the pattern `.address` uses) instead of reserving its measured width and pushing the
+   job progress past the window edge. */
+.status-message { flex-grow:1; width:0; min-width:0; white-space:nowrap; overflow:hidden; color:var(--muted); }
 .status-free { white-space:nowrap; overflow:hidden; flex-grow:0; color:var(--text); }
-.job-progress { white-space:nowrap; overflow:hidden; }
+/* Percent and current entry for a running transfer: fixed budget so the label can never
+   claim the strip, and no shrink (the engine has none), so it always keeps its text width. */
+.job-progress { flex-grow:0; max-width:280px; white-space:nowrap; overflow:hidden; color:var(--text); }
 .usage-track { width:114px; height:4px; flex-grow:0; background:var(--card); border-radius:2px; }
 .usage-fill { width:0px; height:4px; background:var(--accent); border-radius:2px; }
 
