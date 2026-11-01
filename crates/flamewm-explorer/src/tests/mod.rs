@@ -170,7 +170,7 @@
         fs::create_dir_all(&base).unwrap();
         fs::write(base.join("source"), b"source").unwrap();
         fs::write(base.join("existing"), b"existing").unwrap();
-        assert!(move_entry(&base.join("source"), &base.join("existing"), &mut |_| {}).is_err());
+        assert!(move_entry(&base.join("source"), &base.join("existing"), &crate::jobs::CancellationToken::new(), &mut |_| {}).is_err());
         assert_eq!(fs::read(base.join("source")).unwrap(), b"source");
         assert_eq!(fs::read(base.join("existing")).unwrap(), b"existing");
         fs::remove_dir_all(base).unwrap();
@@ -240,10 +240,10 @@
         let source_dir=base.join("source");let dest_dir=base.join("dest");
         fs::create_dir_all(&source_dir).unwrap();fs::create_dir_all(&dest_dir).unwrap();
         let original=source_dir.join("text.txt");fs::write(&original,b"preserve").unwrap();
-        let copied=transfer_drop_batch(std::slice::from_ref(&original),&dest_dir,true,&mut |_| {});
+        let copied=transfer_drop_batch(std::slice::from_ref(&original),&dest_dir,true,&crate::jobs::CancellationToken::new(),&mut |_| {});
         assert_eq!((copied.completed,copied.failed),(1,0));
         assert!(original.exists());assert_eq!(fs::read(dest_dir.join("text.txt")).unwrap(),b"preserve");
-        let moved=transfer_drop_batch(std::slice::from_ref(&original),&dest_dir,false,&mut |_| {});
+        let moved=transfer_drop_batch(std::slice::from_ref(&original),&dest_dir,false,&crate::jobs::CancellationToken::new(),&mut |_| {});
         assert_eq!((moved.completed,moved.failed),(1,0));
         assert!(!original.exists());assert_eq!(fs::read(dest_dir.join("text.txt (2)")).unwrap(),b"preserve");
         fs::remove_dir_all(base).unwrap();
@@ -256,7 +256,7 @@
         fs::create_dir_all(source.join("child")).unwrap();
         fs::write(source.join("item"), b"original").unwrap();
         symlink(source.join("child"),base.join("alias")).unwrap();
-        let outcome=transfer_batch(&[source.clone()],&base.join("alias"),true,&mut |_| {});
+        let outcome=transfer_batch(&[source.clone()],&base.join("alias"),true,&crate::jobs::CancellationToken::new(),&mut |_| {});
         assert_eq!((outcome.completed,outcome.failed),(0,1));
         assert!(source.join("item").exists());
         assert!(fs::read_dir(source.join("child")).unwrap().next().is_none());
