@@ -483,7 +483,10 @@ fn run() -> Result<i32, Box<dyn Error>> {
         graphics.name()
     );
     report_render_acceleration();
-    cursor::export_session_theme(cursor::saved_theme().as_deref());
+    {
+        let (theme, size) = cursor::saved_appearance();
+        cursor::export_session_theme(theme.as_deref(), size);
+    }
     let explicit = std::env::var("FLAMEWM_WAYLAND_BACKEND").ok();
     let backend = select_backend(explicit.as_deref());
     if let Some(requested) = explicit

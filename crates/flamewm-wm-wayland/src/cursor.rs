@@ -233,18 +233,29 @@ fn fallback_arrow() -> Named {
     }
 }
 
-/// The `cursorTheme` saved in the `FlameWM` settings file, as the X11 session reads it at login.
-pub fn saved_theme() -> Option<String> {
-    let text = std::fs::read_to_string(crate::control::settings_path()).ok()?;
-    flamewm_platform::settings::ConfigStore::default()
-        .parse_snapshot(&text)
+/// The `cursorTheme` and `cursorSize` saved in the `FlameWM` settings file, as the X11 session reads
+/// them at login. `None` for the theme leaves `XCURSOR_THEME` alone; the size always resolves to a
+/// supported value, so a saved profile and the X11 session agree on both.
+pub fn saved_appearance() -> (Option<String>, u32) {
+    let parsed = std::fs::read_to_string(crate::control::settings_path())
         .ok()
-        .map(|settings| settings.cursor_theme)
+        .and_then(|text| {
+            flamewm_platform::settings::ConfigStore::default()
+                .parse_snapshot(&text)
+                .ok()
+        });
+    let theme = parsed
+        .as_ref()
+        .map(|settings| settings.cursor_theme.clone());
+    let size = parsed
+        .as_ref()
+        .map_or(DEFAULT_SIZE, |settings| u32::from(settings.cursor_size));
+    (theme, size)
 }
 
 /// Resolves the session cursor theme exactly as the X11 session does and exports it, so `XWayland`,
 /// the X11 clients and this compositor share it. Must run before any thread or child starts.
-pub fn export_session_theme(saved_theme: Option<&str>) {
+pub fn export_session_theme(saved_theme: Option<&str>, saved_size: u32) {
     let existing: BTreeMap<String, String> = std::env::vars().collect();
     let home = existing
         .get("HOME")
@@ -255,7 +266,24 @@ pub fn export_session_theme(saved_theme: Option<&str>) {
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("/usr/bin"));
     let paths = flamewm_session_core::default_paths_from_home(bindir, home);
-    let mut environment = flamewm_session_core::cursor_environment(&paths, &existing, None);
+    let environment = cursor_env(&paths, &existing, saved_theme, saved_size);
+    eprintln!(
+        "flamewm-wayland: cursor theme={} size={}",
+        environment.get("XCURSOR_THEME").map_or("", String::as_str),
+        environment.get("XCURSOR_SIZE").map_or("", String::as_str)
+    );
+    flamewm_session_core::apply_current_process_env(&environment);
+}
+
+/// The cursor environment this session exports, computed without touching the process env so it can
+/// be asserted directly.
+fn cursor_env(
+    paths: &flamewm_session_core::SessionPaths,
+    existing: &BTreeMap<String, String>,
+    saved_theme: Option<&str>,
+    saved_size: u32,
+) -> BTreeMap<String, String> {
+    let mut environment = flamewm_session_core::cursor_environment(paths, existing, None);
     if let Some(saved) = saved_theme.filter(|saved| !saved.trim().is_empty()) {
         let search_path = environment.get("XCURSOR_PATH").cloned().unwrap_or_default();
         environment.insert(
@@ -263,12 +291,10 @@ pub fn export_session_theme(saved_theme: Option<&str>) {
             flamewm_session_core::resolve_cursor_theme(saved, &search_path),
         );
     }
-    eprintln!(
-        "flamewm-wayland: cursor theme={} size={}",
-        environment.get("XCURSOR_THEME").map_or("", String::as_str),
-        environment.get("XCURSOR_SIZE").map_or("", String::as_str)
-    );
-    flamewm_session_core::apply_current_process_env(&environment);
+    // `XCURSOR_SIZE` is the one value the theme resolver, XWayland, every X11 client and this
+    // compositor's own `Cursors` all read, so the saved `cursorSize` has to land here.
+    environment.insert("XCURSOR_SIZE".to_owned(), saved_size.to_string());
+    environment
 }
 
 #[cfg(test)]
@@ -288,6 +314,30 @@ mod tests {
             &pixels[..4],
             &[0x00, 0x00, 0x00, 0xff],
             "hotspot pixel is the outline"
+        );
+    }
+
+    #[test]
+    fn saved_size_reaches_the_exported_environment() {
+        // The compositor's own `Cursors` and every X11 client read `XCURSOR_SIZE`, so the saved
+        // `cursorSize` must land there rather than only in the settings file.
+        let paths = flamewm_session_core::default_paths_from_home(
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/home/u"),
+        );
+        for size in [24u32, 32, 48, 64] {
+            let environment = cursor_env(&paths, &BTreeMap::new(), Some("Adwaita"), size);
+            assert_eq!(
+                environment.get("XCURSOR_SIZE").map(String::as_str),
+                Some(size.to_string().as_str()),
+                "saved size {size} must reach XCURSOR_SIZE"
+            );
+        }
+        // No saved theme and the default size still produce a usable cursor environment.
+        let environment = cursor_env(&paths, &BTreeMap::new(), None, DEFAULT_SIZE);
+        assert_eq!(
+            environment.get("XCURSOR_SIZE").map(String::as_str),
+            Some("24")
         );
     }
 
