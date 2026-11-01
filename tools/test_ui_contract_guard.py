@@ -28,6 +28,9 @@ class UiContractGuardTests(unittest.TestCase):
         self.write("ui/flamewm.css", "")
         self.write("ui/shell/index.html", "<div></div>\n")
         self.write("ui/shell/flamewm.css", "")
+        self.write("ui/assistant/osd.html", "<div></div>\n")
+        self.write("ui/assistant/osd.css", "")
+        self.write("crates/flamewm-assistant/src/lib.rs", "")
         self.write("crates/flamewm-desktop/build.rs", "")
         self.write("crates/flamewm-desktop/src/lib.rs", "")
 
