@@ -4,8 +4,11 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+use bzip2::Compression as BzLevel;
+use bzip2::write::BzEncoder;
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use xz2::write::XzEncoder;
 use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
 
@@ -15,8 +18,8 @@ use crate::progress::{Reporter, Tracked, copy_tracked};
 
 pub enum Writer {
     Zip(zip::ZipWriter<File>),
-    Tar(tar::Builder<File>),
-    TarGz(tar::Builder<GzEncoder<File>>),
+    /// Every tar variant shares this one builder; only `Sink` differs by compression.
+    Tar(tar::Builder<Sink>),
 }
 
 impl Writer {
@@ -24,11 +27,7 @@ impl Writer {
         let file = File::create(path)?;
         Ok(match format {
             Format::Zip => Self::Zip(zip::ZipWriter::new(file)),
-            Format::Tar => Self::Tar(tar::Builder::new(file)),
-            Format::TarGz => Self::TarGz(tar::Builder::new(GzEncoder::new(
-                file,
-                Compression::default(),
-            ))),
+            other => Self::Tar(tar::Builder::new(Sink::create(other, file)?)),
         })
     }
 
@@ -39,7 +38,6 @@ impl Writer {
                 zip.add_directory(zip_name(name)?, options)?;
             }
             Self::Tar(tar) => tar_dir(tar, name, mode)?,
-            Self::TarGz(tar) => tar_dir(tar, name, mode)?,
         }
         Ok(())
     }
@@ -61,7 +59,6 @@ impl Writer {
                 copy_tracked(data, zip, rep)?;
             }
             Self::Tar(tar) => tar_file(tar, name, data, size, mode, rep)?,
-            Self::TarGz(tar) => tar_file(tar, name, data, size, mode, rep)?,
         }
         Ok(())
     }
@@ -73,14 +70,86 @@ impl Writer {
             }
             Self::Tar(mut tar) => {
                 tar.finish()?;
-                tar.into_inner()?;
-            }
-            Self::TarGz(mut tar) => {
-                tar.finish()?;
                 tar.into_inner()?.finish()?;
             }
         }
         Ok(())
+    }
+}
+
+/// The byte stream under a tar builder: raw or one of the supported compressors.
+///
+/// Compressors are finished explicitly so the stream trailer (xz index, bzip2 end marker) is
+/// always written; a dropped encoder would leave a file that system `tar` cannot read.
+pub enum Sink {
+    Raw(File),
+    Gz(GzEncoder<File>),
+    Xz(XzEncoder<File>),
+    Bz2(BzEncoder<File>),
+}
+
+impl Sink {
+    /// Builds the tar byte sink for `format`. Only `Zip` fails here; zip has its own writer.
+    pub fn create(format: Format, file: File) -> Result<Self> {
+        Ok(match format {
+            Format::Tar => Self::Raw(file),
+            Format::TarGz => Self::Gz(GzEncoder::new(file, Compression::default())),
+            Format::TarXz => Self::Xz(XzEncoder::new(file, 6)),
+            Format::TarBz2 => Self::Bz2(BzEncoder::new(file, BzLevel::default())),
+            Format::Zip => {
+                return Err(ArchiveError::Unsupported(format!(
+                    "{} is not a tar format",
+                    format_name(format)
+                )));
+            }
+        })
+    }
+
+    /// Flushes the compressor trailer. `Raw` just flushes.
+    pub fn finish(self) -> Result<()> {
+        match self {
+            Self::Raw(mut file) => file.flush()?,
+            Self::Gz(encoder) => {
+                encoder.finish()?;
+            }
+            Self::Xz(encoder) => {
+                encoder.finish()?;
+            }
+            Self::Bz2(encoder) => {
+                encoder.finish()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Raw(w) => w.write(buf),
+            Self::Gz(w) => w.write(buf),
+            Self::Xz(w) => w.write(buf),
+            Self::Bz2(w) => w.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Raw(w) => w.flush(),
+            Self::Gz(w) => w.flush(),
+            Self::Xz(w) => w.flush(),
+            Self::Bz2(w) => w.flush(),
+        }
+    }
+}
+
+fn format_name(format: Format) -> &'static str {
+    match format {
+        Format::Zip => "zip",
+        Format::Tar => "tar",
+        Format::TarGz => "tar.gz",
+        Format::TarXz => "tar.xz",
+        Format::TarBz2 => "tar.bz2",
     }
 }
 
@@ -101,14 +170,14 @@ fn tar_header(kind: tar::EntryType, size: u64, mode: u32) -> tar::Header {
     header
 }
 
-fn tar_dir<W: Write>(tar: &mut tar::Builder<W>, name: &Path, mode: u32) -> Result<()> {
+fn tar_dir(tar: &mut tar::Builder<Sink>, name: &Path, mode: u32) -> Result<()> {
     let mut header = tar_header(tar::EntryType::Directory, 0, mode & 0o777);
     tar.append_data(&mut header, name, io::empty())?;
     Ok(())
 }
 
-fn tar_file<W: Write>(
-    tar: &mut tar::Builder<W>,
+fn tar_file(
+    tar: &mut tar::Builder<Sink>,
     name: &Path,
     data: &mut dyn Read,
     size: u64,
