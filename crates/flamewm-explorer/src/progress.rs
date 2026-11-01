@@ -1,18 +1,24 @@
 //! Shared job progress snapshots for any long file operation (copy, move,
-//! archive extract/create). Workers own a `Reporter` and feed it byte and item
-//! counts; consumers receive `Snapshot`s throttled to at most one per
-//! `MIN_INTERVAL` unless a state change is forced with `Reporter::finish`.
-//! Cancellation uses the job's `CancellationToken` (see `jobs`).
+//! archive extract). Workers own a `Reporter` and feed it byte and item counts
+//! through a [`jobs::TransferSink`]; consumers receive `Snapshot`s throttled to
+//! at most one per `MIN_INTERVAL`, with terminal states always delivered.
+//! Cancellation uses the job's `CancellationToken` (see `jobs`): the worker
+//! polls it per chunk, so the UI only ever forwards the intent.
 use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::jobs::{CancellationToken, JobId, JobState};
+use crate::jobs::{CancellationToken, JobId, JobState, TransferSink};
 
 /// Minimum spacing between non-forced snapshots (10 per second).
 pub const MIN_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Point-in-time view of one job. Byte totals drive the percent when known.
+/// One entry a job is working on, kept short for the progress window.
+const MAX_LABEL_CHARS: usize = 64;
+
+/// Point-in-time view of one job. Byte totals drive the percent when known;
+/// jobs that cannot know their size ahead (archive extraction) fall back to
+/// item counts and then to an indeterminate 0.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub job: JobId,
@@ -25,7 +31,7 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// 0..=100. Completed jobs always report 100.
+    /// 0..=100. A completed job always reports 100.
     #[must_use]
     pub fn percent(&self) -> u8 {
         if self.state == JobState::Completed {
@@ -42,14 +48,92 @@ impl Snapshot {
             (done.min(total) * 100 / total) as u8
         }
     }
+
+    /// True when the denominator is known, so the bar can show a real share.
+    #[must_use]
+    pub fn is_determinate(&self) -> bool {
+        self.bytes_total > 0 || self.items_total > 0 || self.state == JobState::Completed
+    }
+
+    /// One line for the status strip and the progress window: percent, then the
+    /// current entry, or the state while there is no entry yet.
+    #[must_use]
+    pub fn label(&self) -> String {
+        let percent = self.percent();
+        let job = match self.state {
+            JobState::Queued => "Waiting",
+            JobState::Counting => "Counting",
+            JobState::Running => "Working",
+            JobState::Cancelling => "Cancelling",
+            JobState::Completed => "Done",
+            JobState::Cancelled => "Cancelled",
+            JobState::PartiallyFailed => "Partially done",
+            JobState::Failed => "Failed",
+        };
+        match &self.current {
+            Some(name) if self.state == JobState::Running || self.state == JobState::Cancelling => {
+                format!("{percent}% · {name}")
+            }
+            _ => format!("{percent}% · {job}"),
+        }
+    }
+
+    /// Byte counters as "1.2 MiB of 8.0 MiB" when the total is known.
+    #[must_use]
+    pub fn bytes_text(&self) -> String {
+        if self.bytes_total > 0 {
+            format!(
+                "{} of {}",
+                crate::view::human_size(self.bytes_done),
+                crate::view::human_size(self.bytes_total)
+            )
+        } else if self.bytes_done > 0 {
+            format!("{} transferred", crate::view::human_size(self.bytes_done))
+        } else {
+            String::new()
+        }
+    }
+
+    /// Cancelling flag shared with the worker thread.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        matches!(
+            self.state,
+            JobState::Completed
+                | JobState::PartiallyFailed
+                | JobState::Cancelled
+                | JobState::Failed
+        )
+    }
 }
 
-/// Worker-side accumulator. Counters only grow; `emit` is the throttle gate.
-#[derive(Debug)]
+/// Short display name for a path (never the full path: it can be long).
+fn name_of(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy();
+    let mut text: String = name.chars().take(MAX_LABEL_CHARS).collect();
+    if name.chars().count() > MAX_LABEL_CHARS {
+        text.push('…');
+    }
+    Some(text)
+}
+
+/// Worker-side accumulator. Counters only grow; `emit` is the throttle gate and
+/// `out` is where accepted snapshots go (the worker's wake channel).
 pub struct Reporter {
     cancel: CancellationToken,
     snapshot: Snapshot,
     last_sent: Option<Instant>,
+    out: Option<Box<dyn FnMut(Snapshot) + Send>>,
+}
+
+impl std::fmt::Debug for Reporter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The sink is a boxed closure: report whether one is attached, not its value.
+        f.debug_struct("Reporter")
+            .field("snapshot", &self.snapshot)
+            .field("connected", &self.out.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Reporter {
@@ -68,6 +152,22 @@ impl Reporter {
             cancel,
             snapshot,
             last_sent: None,
+            out: None,
+        }
+    }
+
+    /// A reporter that forwards every accepted snapshot to `out`, throttled to
+    /// `MIN_INTERVAL`. This is the only place the throttle is applied, so the
+    /// worker never has to track time itself.
+    #[must_use]
+    pub fn connected(
+        job: JobId,
+        cancel: CancellationToken,
+        out: impl FnMut(Snapshot) + Send + 'static,
+    ) -> Self {
+        Reporter {
+            out: Some(Box::new(out)),
+            ..Reporter::new(job, cancel)
         }
     }
 
@@ -81,13 +181,28 @@ impl Reporter {
         self.snapshot.state = state;
     }
 
+    #[must_use]
+    pub fn state(&self) -> JobState {
+        self.snapshot.state
+    }
+
+    /// Announces a state change immediately, bypassing the throttle.
+    pub fn announce(&mut self, state: JobState) -> Snapshot {
+        self.set_state(state);
+        let snapshot = self.force();
+        if let Some(out) = self.out.as_mut() {
+            out(snapshot.clone());
+        }
+        snapshot
+    }
+
     pub fn set_totals(&mut self, bytes: u64, items: u64) {
         self.snapshot.bytes_total = bytes;
         self.snapshot.items_total = items;
     }
 
     pub fn set_current(&mut self, path: &Path) {
-        self.snapshot.current = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        self.snapshot.current = name_of(path);
     }
 
     pub fn add_bytes(&mut self, bytes: u64) {
@@ -111,15 +226,50 @@ impl Reporter {
         Some(self.snapshot.clone())
     }
 
-    /// Records a terminal state and always returns a snapshot. A completed job
-    /// reports full byte and item counts.
+    /// Throttled publish of the current counters to the connected sink.
+    fn publish(&mut self, now: Instant) {
+        if let Some(snapshot) = self.emit(now) {
+            if let Some(out) = self.out.as_mut() {
+                out(snapshot);
+            }
+        }
+    }
+
+    /// Snapshot regardless of the throttle: used when the state changes.
+    pub fn force(&mut self) -> Snapshot {
+        self.last_sent = Some(Instant::now());
+        self.snapshot.clone()
+    }
+
+    /// Records a terminal state and always returns (and publishes) a snapshot. A
+    /// completed job reports full byte and item counts.
     pub fn finish(&mut self, state: JobState) -> Snapshot {
         self.snapshot.state = state;
         if state == JobState::Completed {
             self.snapshot.bytes_done = self.snapshot.bytes_total;
             self.snapshot.items_done = self.snapshot.items_total;
         }
-        self.snapshot.clone()
+        let snapshot = self.force();
+        if let Some(out) = self.out.as_mut() {
+            out(snapshot.clone());
+        }
+        snapshot
+    }
+}
+
+/// The reporter is the worker's sink: bytes, current entry and finished items.
+impl TransferSink for Reporter {
+    fn bytes(&mut self, bytes: u64) {
+        self.add_bytes(bytes);
+        self.publish(Instant::now());
+    }
+    fn entry(&mut self, source: &Path) {
+        self.set_current(source);
+        self.publish(Instant::now());
+    }
+    fn item_done(&mut self) {
+        self.finish_item();
+        self.publish(Instant::now());
     }
 }
 
@@ -189,12 +339,77 @@ mod tests {
     }
 
     #[test]
-    fn emit_is_throttled_to_the_minimum_interval() {
+    fn percent_prefers_bytes_then_items_and_completed_is_full() {
+        let mut reporter = Reporter::new(JobId(1), CancellationToken::new());
+        assert_eq!(reporter.force().percent(), 0, "no denominator yet");
+        reporter.set_totals(1000, 4);
+        reporter.add_bytes(250);
+        assert_eq!(reporter.force().percent(), 25);
+        assert!(reporter.force().is_determinate());
+        // Bytes win while known, even when items are ahead.
+        reporter.set_state(JobState::Running);
+        reporter.finish_item();
+        reporter.finish_item();
+        assert_eq!(reporter.force().percent(), 25);
+        // Without a byte total the item counts drive the percent.
+        reporter.set_totals(0, 4);
+        assert_eq!(reporter.force().percent(), 50);
+        let done = reporter.finish(JobState::Completed);
+        assert_eq!(done.percent(), 100);
+        assert!(done.is_finished());
+    }
+
+    #[test]
+    fn label_names_the_current_entry_and_falls_back_to_the_state() {
+        let mut reporter = Reporter::new(JobId(3), CancellationToken::new());
+        reporter.set_totals(2048, 1);
+        reporter.set_state(JobState::Running);
+        reporter.add_bytes(819);
+        assert_eq!(reporter.force().label(), "39% · Working");
+        reporter.set_current(Path::new("/tmp/some folder/report.pdf"));
+        assert_eq!(reporter.force().label(), "39% · report.pdf");
+        let done = reporter.finish(JobState::Completed);
+        assert_eq!(done.label(), "100% · Done");
+        assert_eq!(done.bytes_text(), "2.0 KiB of 2.0 KiB");
+    }
+
+    #[test]
+    fn emit_is_throttled_to_the_minimum_interval_and_force_bypasses_it() {
         let mut reporter = Reporter::new(JobId(1), CancellationToken::new());
         let t0 = Instant::now();
         assert!(reporter.emit(t0).is_some());
         assert!(reporter.emit(t0 + Duration::from_millis(50)).is_none());
         assert!(reporter.emit(t0 + MIN_INTERVAL).is_some());
+        let forced = reporter.force();
+        assert_eq!(forced.state, JobState::Queued);
+    }
+
+    #[test]
+    fn reporter_counts_what_the_copy_sink_reports() {
+        let dir = Scratch::new("sink");
+        let src = dir.0.join("data");
+        fs::write(&src, vec![3u8; 1024 * 1024]).unwrap();
+        let dest = dir.0.join("copy");
+        fs::create_dir(&dest).unwrap();
+        let mut reporter = Reporter::new(JobId(4), CancellationToken::new());
+        reporter.set_totals(1024 * 1024, 1);
+        reporter.set_state(JobState::Running);
+        // The batch path reports the entry name and the finished item through the sink.
+        let report = crate::jobs::transfer_batch_with(
+            std::slice::from_ref(&src),
+            &dest,
+            false,
+            crate::jobs::Conflict::KeepBoth,
+            &reporter.cancel_handle(),
+            &mut reporter,
+        );
+        assert_eq!((report.completed, report.failed), (1, 0), "{report:?}");
+        let done = reporter.finish(JobState::Completed);
+        assert_eq!(done.percent(), 100);
+        assert_eq!(done.current.as_deref(), Some("data"));
+        assert_eq!(done.items_done, 1);
+        assert_eq!(done.bytes_done, 1024 * 1024);
+        assert_eq!(fs::read(dest.join("data")).unwrap().len(), 1024 * 1024);
     }
 
     #[test]
@@ -297,6 +512,30 @@ mod tests {
         assert!(!dest.exists());
         assert_eq!(staging_left(&dir.0), 0);
         assert_eq!(fs::metadata(&src).unwrap().len(), 3 * 256 * 1024);
+    }
+
+    #[test]
+    fn cancel_latency_is_bounded_by_one_chunk() {
+        // A 64 MB source with an immediate cancel: the worker must stop after the
+        // chunk in flight, so residual work is bounded by CHUNK, not by the file.
+        let dir = Scratch::new("latency");
+        let src = dir.0.join("huge");
+        fs::write(&src, vec![9u8; 64 * 1024 * 1024]).unwrap();
+        let dest = dir.0.join("copy");
+        let cancel = CancellationToken::new();
+        let started = Instant::now();
+        let mut chunks = 0_u64;
+        let error = copy_publish(&src, &dest, false, &cancel, &mut |_| {
+            chunks += 1;
+            cancel.cancel();
+        })
+        .expect_err("cancelled copy must fail");
+        let elapsed = started.elapsed();
+        assert_eq!(classify(&error), FailureKind::Cancelled);
+        assert_eq!(chunks, 1, "no work after the cancel was observed");
+        assert!(elapsed < Duration::from_secs(2), "cancel took {elapsed:?}");
+        assert!(!dest.exists());
+        assert_eq!(staging_left(&dir.0), 0);
     }
 
     #[test]

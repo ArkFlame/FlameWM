@@ -31,7 +31,7 @@ impl JobId {
 pub enum FileOp { Copy, Move, Trash, Rename, Duplicate, NewFolder }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum JobState { Queued, Counting, Running, Cancelling, Completed, PartiallyFailed, Failed }
+pub enum JobState { Queued, Counting, Running, Cancelling, Completed, PartiallyFailed, Cancelled, Failed }
 
 /// Shared cancellation flag; cloning shares the same flag.
 #[derive(Clone, Debug, Default)]
@@ -44,6 +44,19 @@ impl CancellationToken {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Totals { pub items: u64, pub bytes: u64, pub errors: u64 }
+
+/// Where a running job reports its progress. Bytes drive the percent; the
+/// current entry and finished items give the progress window its label.
+/// Every `FnMut(u64)` is a `TransferSink` through the blanket impl, so simple
+/// callers keep passing a byte-count closure.
+pub trait TransferSink {
+    fn bytes(&mut self, bytes: u64);
+    fn entry(&mut self, path: &Path) { let _ = path; }
+    fn item_done(&mut self) {}
+}
+impl<F: FnMut(u64)> TransferSink for F {
+    fn bytes(&mut self, bytes: u64) { self(bytes); }
+}
 
 /// Determinate progress fields for one job.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -158,6 +171,61 @@ pub fn redo_with(entry: &Undo, trash: &mut dyn FnMut(&Path) -> io::Result<Undo>)
 
 fn cancelled() -> io::Error { io::Error::new(io::ErrorKind::Interrupted, "cancelled") }
 
+/// Staging entries this process is writing right now. A copy removes its entry
+/// on every outcome; the registry lets a shutting-down UI make sure nothing is
+/// left behind before the process exits.
+fn staging_registry() -> &'static Mutex<Vec<PathBuf>> {
+    static REGISTRY: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Tracks `staging` as in-progress output.
+pub fn register_staging(staging: &Path) {
+    if let Ok(mut entries) = staging_registry().lock() {
+        entries.push(staging.to_path_buf());
+    }
+}
+
+/// Stops tracking `staging` (it was published or already removed).
+pub fn forget_staging(staging: &Path) {
+    if let Ok(mut entries) = staging_registry().lock() {
+        entries.retain(|entry| entry != staging);
+    }
+}
+
+/// Staging entries still tracked, i.e. copies that have not finished yet.
+#[must_use]
+pub fn staging_count() -> usize {
+    staging_registry().lock().map_or(0, |entries| entries.len())
+}
+
+/// Removes every tracked staging entry. Returns how many existed, so the caller
+/// can report whether an interrupted transfer left anything behind.
+#[must_use] pub fn cleanup_staging() -> usize {
+    let entries = staging_registry()
+        .lock()
+        .map(|mut entries| std::mem::take(&mut *entries))
+        .unwrap_or_default();
+    for entry in &entries {
+        let _ = remove_entry(entry);
+    }
+    entries.len()
+}
+
+/// Waits until no staging entry is tracked or `timeout` elapses. Used when the
+/// window closes: the worker observes the cancel and cleans up, and only then
+/// does the process exit.
+#[must_use] pub fn await_staging_idle(timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while staging_count() > 0 {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    true
+}
+
 fn rename_into(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
     let flags = if replace { RenameFlags::empty() } else { RenameFlags::NOREPLACE };
     renameat_with(CWD, from, CWD, to, flags).map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))
@@ -178,7 +246,7 @@ fn remove_entry(path: &Path) -> io::Result<()> {
 
 /// Copies into a fresh staging entry. Symlinks are recreated, never followed.
 /// Permissions are preserved; hardlinks become independent copies.
-fn copy_tree(from: &Path, to: &Path, cancel: &CancellationToken, report: &mut impl FnMut(u64)) -> io::Result<()> {
+fn copy_tree(from: &Path, to: &Path, cancel: &CancellationToken, sink: &mut impl TransferSink) -> io::Result<()> {
     if cancel.is_cancelled() { return Err(cancelled()); }
     let meta = fs::symlink_metadata(from)?;
     if meta.file_type().is_symlink() {
@@ -188,7 +256,7 @@ fn copy_tree(from: &Path, to: &Path, cancel: &CancellationToken, report: &mut im
         fs::create_dir(to)?;
         for child in fs::read_dir(from)? {
             let child = child?;
-            copy_tree(&child.path(), &to.join(child.file_name()), cancel, report)?;
+            copy_tree(&child.path(), &to.join(child.file_name()), cancel, sink)?;
         }
         return fs::set_permissions(to, meta.permissions());
     }
@@ -203,7 +271,7 @@ fn copy_tree(from: &Path, to: &Path, cancel: &CancellationToken, report: &mut im
         let len = input.read(&mut buffer)?;
         if len == 0 { break; }
         output.write_all(&buffer[..len])?;
-        report(len as u64);
+        sink.bytes(len as u64);
     }
     output.sync_all()?;
     drop(output);
@@ -223,7 +291,7 @@ fn publish(staging: &Path, to: &Path, replace: bool) -> io::Result<()> {
 /// Copy `from` to `to` through a unique same-directory staging entry.
 /// Staging is removed on every failure or cancellation.
 pub fn copy_publish(from: &Path, to: &Path, replace: bool, cancel: &CancellationToken,
-    report: &mut impl FnMut(u64)) -> io::Result<()> {
+    sink: &mut impl TransferSink) -> io::Result<()> {
     if fs::symlink_metadata(from).is_ok_and(|m| m.is_dir()) {
         if to.starts_with(from) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "cannot copy a directory into itself"));
@@ -237,7 +305,9 @@ pub fn copy_publish(from: &Path, to: &Path, replace: bool, cancel: &Cancellation
         }
     }
     let staging = staging_path(to);
-    let result = copy_tree(from, &staging, cancel, report).and_then(|()| publish(&staging, to, replace));
+    register_staging(&staging);
+    let result = copy_tree(from, &staging, cancel, sink).and_then(|()| publish(&staging, to, replace));
+    forget_staging(&staging);
     if result.is_err() {
         let _ = remove_entry(&staging);
     }
@@ -247,11 +317,11 @@ pub fn copy_publish(from: &Path, to: &Path, replace: bool, cancel: &Cancellation
 /// Same-filesystem rename is atomic. Cross-device moves copy, verify the copy
 /// against the source manifest, and only then delete the source.
 pub fn move_publish(from: &Path, to: &Path, replace: bool, cancel: &CancellationToken,
-    report: &mut impl FnMut(u64)) -> io::Result<()> {
+    sink: &mut impl TransferSink) -> io::Result<()> {
     match rename_into(from, to, replace) {
         Ok(()) => Ok(()),
         Err(error) if error.raw_os_error() == Some(Errno::XDEV.raw_os_error()) => {
-            cross_device_move(from, to, replace, cancel, report)
+            cross_device_move(from, to, replace, cancel, sink)
         }
         Err(error) => Err(error),
     }
@@ -260,8 +330,8 @@ pub fn move_publish(from: &Path, to: &Path, replace: bool, cancel: &Cancellation
 /// Cross-device move: copy, verify counts, and only then remove the source.
 /// Any failure or cancellation before the removal leaves the source intact.
 pub(crate) fn cross_device_move(from: &Path, to: &Path, replace: bool, cancel: &CancellationToken,
-    report: &mut impl FnMut(u64)) -> io::Result<()> {
-    copy_publish(from, to, replace, cancel, report)?;
+    sink: &mut impl TransferSink) -> io::Result<()> {
+    copy_publish(from, to, replace, cancel, sink)?;
     let want = count_tree(from, &CancellationToken::default())?;
     let got = count_tree(to, &CancellationToken::default())?;
     if want.errors != 0 || got.errors != 0 || want != got {
@@ -327,7 +397,7 @@ fn count_meta(path: &Path, meta: &fs::Metadata, depth: usize, cancel: &Cancellat
 enum Step { Done(Option<Undo>), Skipped }
 
 fn transfer_one(source: &Path, directory: &Path, move_it: bool, conflict: Conflict,
-    cancel: &CancellationToken, report: &mut impl FnMut(u64)) -> io::Result<Step> {
+    cancel: &CancellationToken, sink: &mut impl TransferSink) -> io::Result<Step> {
     if move_it && source.parent() == Some(directory) {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "source already in destination folder"));
     }
@@ -350,11 +420,12 @@ fn transfer_one(source: &Path, directory: &Path, move_it: bool, conflict: Confli
     if dest == source {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "cannot overwrite source"));
     }
+    sink.entry(source);
     if move_it {
-        move_publish(source, &dest, replace, cancel, report)?;
+        move_publish(source, &dest, replace, cancel, sink)?;
         Ok(Step::Done(Some(Undo::Moved { from: source.to_path_buf(), to: dest })))
     } else {
-        copy_publish(source, &dest, replace, cancel, report)?;
+        copy_publish(source, &dest, replace, cancel, sink)?;
         Ok(Step::Done(Some(Undo::Copied { from: source.to_path_buf(), to: dest })))
     }
 }
@@ -362,14 +433,15 @@ fn transfer_one(source: &Path, directory: &Path, move_it: bool, conflict: Confli
 /// Transfers every source, continuing past per-item errors. A cancelled batch
 /// stops before the next item and leaves no staging entries behind.
 pub fn transfer_batch_with(sources: &[PathBuf], directory: &Path, move_it: bool, conflict: Conflict,
-    cancel: &CancellationToken, report: &mut impl FnMut(u64)) -> BatchReport {
+    cancel: &CancellationToken, sink: &mut impl TransferSink) -> BatchReport {
     let mut outcome = BatchReport::default();
     for source in sources {
         if cancel.is_cancelled() { outcome.cancelled = true; break; }
-        match transfer_one(source, directory, move_it, conflict, cancel, report) {
+        match transfer_one(source, directory, move_it, conflict, cancel, sink) {
             Ok(Step::Done(undo)) => {
                 outcome.completed += 1;
                 outcome.undo.extend(undo);
+                sink.item_done();
             }
             Ok(Step::Skipped) => outcome.skipped += 1,
             Err(error) => {
@@ -383,7 +455,7 @@ pub fn transfer_batch_with(sources: &[PathBuf], directory: &Path, move_it: bool,
 
 /// Drop policy: move within one filesystem, copy across devices, Ctrl forces copy.
 pub fn transfer_drop_batch_with(sources: &[PathBuf], directory: &Path, force_copy: bool,
-    cancel: &CancellationToken, report: &mut impl FnMut(u64)) -> BatchReport {
+    cancel: &CancellationToken, sink: &mut impl TransferSink) -> BatchReport {
     use std::os::unix::fs::MetadataExt;
     let destination_device = fs::metadata(directory).ok().map(|m| m.dev());
     let mut result = BatchReport::default();
@@ -393,7 +465,7 @@ pub fn transfer_drop_batch_with(sources: &[PathBuf], directory: &Path, force_cop
         let should_move = source_device.zip(destination_device)
             .is_some_and(|(src, dst)| crate::drop_moves(force_copy, src, dst));
         result.append(transfer_batch_with(std::slice::from_ref(source), directory, should_move,
-            Conflict::KeepBoth, cancel, report));
+            Conflict::KeepBoth, cancel, sink));
     }
     result
 }
