@@ -575,10 +575,16 @@ else
 fi
 
 start_ms="$(now_ms)"
+# This wrapper supervises the compositor, so it is the session's logout owner. The compositor
+# only accepts SessionAction::Logout when it was started as that owner's child
+# (crates/flamewm-wm-wayland/src/control.rs:managed_logout), which otherwise reads as
+# "logout unavailable" and hides the entry from the session menu.
+# Both are scoped to the compositor command: they describe this one child, not the session.
+compositor_env=(FLAMEWM_SESSION_LOGOUT_OWNER=1 "FLAMEWM_SESSION_SUPERVISOR_PID=$$")
 if (( ${#compositor_args[@]} > 0 )); then
-    "$SESSION" "${compositor_args[@]}" & session_pid=$!
+    env "${compositor_env[@]}" "$SESSION" "${compositor_args[@]}" & session_pid=$!
 else
-    "$SESSION" & session_pid=$!
+    env "${compositor_env[@]}" "$SESSION" & session_pid=$!
 fi
 log "flamewm-wayland started pid=$session_pid backend=$backend ms=$(now_ms)"
 

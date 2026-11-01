@@ -283,10 +283,17 @@ impl State {
                 return Some(hit);
             }
         }
-        if let Some(Hit::Client(id)) = self.model.hit(location.x, location.y) {
-            let rect = self.model.get(id)?.rect;
-            let surface = self.window_wl_surface(id)?;
-            return Some((surface, Point::from((f64::from(rect.x), f64::from(rect.y)))));
+        match pointer_route(self.model.hit(location.x, location.y)) {
+            PointerRoute::Client(id) => {
+                let rect = self.model.get(id)?.rect;
+                let surface = self.window_wl_surface(id)?;
+                return Some((surface, Point::from((f64::from(rect.x), f64::from(rect.y)))));
+            }
+            // The compositor's own decoration owns these pixels: no client surface is under the
+            // pointer. Continuing to the below-unmanaged stack would hand the drag motion to the
+            // desktop, whose rubber band would then run alongside the window move.
+            PointerRoute::Compositor => return None,
+            PointerRoute::Unmanaged => {}
         }
         self.unmanaged
             .iter()
@@ -360,10 +367,12 @@ impl State {
                 Some(Hit::Button(id, action)) => {
                     self.set_focus(Some(id));
                     self.run_titlebar_button(id, action);
+                    consumed = true;
                 }
                 Some(Hit::Titlebar(id)) => {
                     self.set_focus(Some(id));
                     if let Some(start) = self.model.get(id).map(|w| w.rect) {
+                        consumed = true;
                         self.grab = Some(Grab::Move {
                             id,
                             pointer: pointer_pos,
@@ -374,6 +383,7 @@ impl State {
                 Some(Hit::Resize(id)) => {
                     self.set_focus(Some(id));
                     if let Some(rect) = self.model.get(id).map(|w| w.rect) {
+                        consumed = true;
                         self.grab = Some(Grab::Resize {
                             id,
                             pointer: pointer_pos,
@@ -433,6 +443,31 @@ impl State {
     }
 }
 
+/// Which part of the scene owns the pixels under the pointer.
+///
+/// A managed window splits three ways: its client area belongs to the client surface, its
+/// decoration belongs to the compositor, and neither may leak to the unmanaged stack below
+/// (menus, docks and finally the desktop). The X11 engine gets this split structurally — the
+/// frame's own input children cover the decoration band and a pointer grab holds the drag, so the
+/// desktop never sees it. Here the split has to be decided explicitly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PointerRoute {
+    /// A managed window's client area: forward to that window's surface.
+    Client(crate::model::WindowId),
+    /// The compositor's own decoration: no client surface receives the pointer.
+    Compositor,
+    /// Nothing managed here; fall through to docks, menus and the desktop.
+    Unmanaged,
+}
+
+fn pointer_route(hit: Option<Hit>) -> PointerRoute {
+    match hit {
+        Some(Hit::Client(id)) => PointerRoute::Client(id),
+        Some(Hit::Titlebar(_) | Hit::Resize(_) | Hit::Button(_, _)) => PointerRoute::Compositor,
+        None => PointerRoute::Unmanaged,
+    }
+}
+
 /// Pointer focus on an unmanaged X11 window, when the pointer is inside its geometry.
 fn unmanaged_focus(
     entry: &crate::xwayland::Unmanaged,
@@ -452,7 +487,33 @@ fn unmanaged_focus(
 
 #[cfg(test)]
 mod tests {
-    use super::name_candidates;
+    use super::{Button, Hit, PointerRoute, name_candidates, pointer_route};
+
+    /// A titlebar press must belong to the compositor, never to the desktop beneath it: the press
+    /// starts the window move, so routing it onward would also start the desktop's rubber band.
+    #[test]
+    fn decoration_pixels_never_route_to_the_desktop() {
+        let id = 7u64;
+        assert_eq!(
+            pointer_route(Some(Hit::Titlebar(id))),
+            PointerRoute::Compositor
+        );
+        assert_eq!(
+            pointer_route(Some(Hit::Resize(id))),
+            PointerRoute::Compositor
+        );
+        assert_eq!(
+            pointer_route(Some(Hit::Button(id, Button::Close))),
+            PointerRoute::Compositor
+        );
+        // The client area still reaches its own surface.
+        assert_eq!(
+            pointer_route(Some(Hit::Client(id))),
+            PointerRoute::Client(id)
+        );
+        // Empty desktop space is the only case that falls through to the unmanaged stack.
+        assert_eq!(pointer_route(None), PointerRoute::Unmanaged);
+    }
 
     #[test]
     fn chord_lookup_tries_the_unshifted_symbol_then_the_level_symbol() {
