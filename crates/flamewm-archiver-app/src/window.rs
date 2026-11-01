@@ -10,6 +10,8 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 
@@ -70,6 +72,8 @@ struct App {
     tx: Sender<Reply>,
     rx: Receiver<Reply>,
     wake: UnixStream,
+    /// Held by the running job so at most one wake byte is outstanding.
+    wake_pending: Arc<AtomicBool>,
 }
 
 /// Opens the window and runs until it is closed or Escape is pressed.
@@ -95,6 +99,7 @@ pub fn run(start: Start) -> Result<(), String> {
         tx,
         rx,
         wake: writer,
+        wake_pending: Arc::new(AtomicBool::new(false)),
     };
     match start {
         Start::Browse(path) => app.open(&path),
@@ -186,23 +191,41 @@ impl App {
         let tx = self.tx.clone();
         let cancel = CancelToken::new();
         let worker_cancel = cancel.clone();
+        // One wake byte may be in flight at a time. Without the flag a fast job fills the socket
+        // buffer, the write fails silently, and the final reply is never drained.
+        let pending = Arc::new(AtomicBool::new(false));
+        self.wake_pending = Arc::clone(&pending);
         let worker = std::thread::Builder::new()
             .name("flamewm-archiver-job".into())
             .spawn(move || {
+                let mut signal = {
+                    let mut wake = wake;
+                    let pending = Arc::clone(&pending);
+                    move || {
+                        if !pending.swap(true, Ordering::Relaxed) {
+                            let _ = wake.write(&[1]);
+                        }
+                    }
+                };
                 let result = {
                     let mut sink = |progress: Progress| {
-                        let _ = tx.send(Reply::Progress(progress));
-                        let _ = (&wake).write(&[1]);
+                        if tx.send(Reply::Progress(progress)).is_ok() {
+                            signal();
+                        }
                     };
                     work(&worker_cancel, &mut sink)
                 };
                 let stopped = worker_cancel.is_cancelled();
-                let _ = tx.send(Reply::Done {
-                    what,
-                    result: result.map_err(|error| error.to_string()),
-                    stopped,
-                });
-                let _ = (&wake).write(&[1]);
+                if tx
+                    .send(Reply::Done {
+                        what,
+                        result: result.map_err(|error| error.to_string()),
+                        stopped,
+                    })
+                    .is_ok()
+                {
+                    signal();
+                }
             })
             .map_err(|error| error.to_string())?;
         self.job = Some(Running { cancel, worker });
@@ -306,7 +329,9 @@ impl App {
         }
     }
 
-    fn reply(&mut self, reply: Reply, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+    /// Folds one worker reply into the state. Painting is the caller's job, so a wake that
+    /// drains thousands of progress messages still paints once.
+    fn reply(&mut self, reply: Reply) {
         match reply {
             Reply::Progress(progress) => self.progress = Some(progress),
             Reply::Done {
@@ -326,12 +351,21 @@ impl App {
                 };
             }
         }
-        self.paint(doc)
     }
 
+    /// Applies every queued reply, then paints once. `on_wake` runs on each wake byte, so a job
+    /// that reports per chunk would otherwise repaint for every chunk it produced and never
+    /// present a frame until it finished.
     fn drain(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+        // Re-arm the worker's wake: the byte that started this drain has been consumed.
+        self.wake_pending.store(false, Ordering::Relaxed);
+        let mut changed = false;
         while let Ok(reply) = self.rx.try_recv() {
-            self.reply(reply, doc)?;
+            self.reply(reply);
+            changed = true;
+        }
+        if changed {
+            self.paint(doc)?;
         }
         Ok(())
     }
