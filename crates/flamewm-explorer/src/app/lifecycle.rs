@@ -4,9 +4,9 @@ impl ExplorerApp {
     pub(crate) fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map_or_else(||home.join(".local/share"), PathBuf::from).join("Trash");
-        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,field:flamewm_explorer::TextField::default(),rename_target:None,theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
+        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,field:flamewm_explorer::TextField::default(),rename_target:None,theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,closing:false,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
             ark_extracts:Vec::new(),cancel:CancellationToken::new(),menu_overflow:false,context_scroll:0,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
-            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,device_watch:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
+            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,device_watch:None,context_place:None,trash_base,unmounted:Vec::new(),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
         app.reload_places();
         app
     }
@@ -32,6 +32,22 @@ impl ExplorerApp {
     /// Lists unmounted devices on a worker. Remounting remembered drives is the session's job, not the explorer's.
     pub(crate) fn refresh_devices(&self) {
         self.spawn_background(move||WorkerResult::Devices(bookmarks::unmounted_devices()));
+    }
+
+    /// Window close: cancel whatever is running and make sure no staging output
+    /// survives the process. The worker owns the filesystem work and observes the
+    /// cancel per chunk, so waiting on the staging registry is the proof that the
+    /// cancelled transfer left nothing behind.
+    pub(crate) fn close(&mut self) {
+        self.closing=true;
+        if self.busy {
+            self.cancel.cancel();
+            self.model.status="Cancelling…".into();
+            let idle=jobs::await_staging_idle(Duration::from_secs(5));
+            if !idle {eprintln!("flamewm-explorer: transfer did not stop within 5s; removing staging output");}
+        }
+        let swept=jobs::cleanup_staging();
+        if swept>0 {eprintln!("flamewm-explorer: removed {swept} partial transfer entr(y/ies)");}
     }
 
     /// Starts the live device signal: udev block events and mount-table changes reload the sidebar.

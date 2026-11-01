@@ -158,19 +158,16 @@ impl ExplorerApp {
         doc.text("status-free",space.map_or(String::new(),|(free,_)|format!("{} left",view::human_size(free))))?;
         let used=space.map_or(0.0,|(free,total)|if total>0 {1.0-free as f32/total as f32} else {0.0});
         doc.size("usage-fill",USAGE_TRACK_WIDTH*used.clamp(0.0,1.0),4.0)?;
-        // Determinate when the worker counted the batch; otherwise the fill stays empty.
-        let total=self.progress_total;
-        let done=self.progress.unwrap_or(0);
-        let fraction=if total>0 {(done as f32/total as f32).min(1.0)} else {0.0};
-        let progress_text=match self.progress {
-            Some(_) if total>0 =>format!("{} of {}",view::human_size(done.min(total)),view::human_size(total)),
-            Some(_) =>format!("{} transferred",view::human_size(done)),
-            None=>String::new(),
-        };
-        doc.text("job-progress",progress_text.clone())?;
-        doc.visible("progress-popup",self.progress.is_some())?;
-        doc.text("progress-popup-copy",progress_text)?;
-        doc.size("progress-fill",262.0*fraction,7.0)?;
+        // The progress window and the activity entry render one shared snapshot, so
+        // the strip always agrees with the window. Nothing here touches the filesystem.
+        let snapshot=self.progress.as_ref();
+        doc.text("job-progress",snapshot.map_or(String::new(),progress::Snapshot::label))?;
+        doc.visible("progress-popup",snapshot.is_some())?;
+        let fraction=snapshot.map_or(0.0,|s|f32::from(s.percent())/100.0);
+        doc.text("progress-percent",snapshot.map_or(String::new(),|s|format!("{}%",s.percent())))?;
+        doc.text("progress-current",snapshot.and_then(|s|s.current.clone()).unwrap_or_else(||"Starting…".into()))?;
+        doc.text("progress-bytes",snapshot.map_or(String::new(),progress::Snapshot::bytes_text))?;
+        doc.size("progress-fill",PROGRESS_TRACK_WIDTH*fraction,8.0)?;
         doc.visible("context-popup",self.context.is_some() && !self.chooser_loading && self.chooser.is_none())?;
         self.project_chooser(doc)?;
         self.project_dialog(doc)?;

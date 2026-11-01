@@ -40,7 +40,10 @@ impl ExplorerApp {
             return;
         }
         let destination=self.model.tab().path().to_path_buf();
-        self.ark_extracts.push(flamewm_explorer::dndext::spawn_ark_extract(service,path,destination));
+        // The extraction worker owns the child process and the staging directory;
+        // the shared token lets Cancel and window close stop it and discard output.
+        self.ark_extracts.push(flamewm_explorer::dndext::spawn_ark_extract(service,path,destination,self.cancel.clone()));
+        self.busy=true;
         self.model.status="Extracting from Ark…".into();
     }
 
@@ -127,7 +130,7 @@ impl ExplorerApp {
     }
 
     pub(crate) fn send_transfer(&mut self,sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,conflict:Conflict) {
-        self.progress=Some(0);
+        self.progress=None;
         self.activity=None;
         self.model.status=format!("{} {} item(s)…",if move_it{"Moving"}else{"Copying"},sources.len());
         if self.tx.send(WorkerJob::Transfer{sources,directory,move_it,conflict,cancel:self.cancel.clone()}).is_err() {
@@ -155,7 +158,7 @@ impl ExplorerApp {
         let count=sources.len();
         let op=RemoteOp::Copy{sources,directory,cancel:self.cancel.clone()};
         if self.send_remote(op,&format!("Copying {count} item(s)…")) {
-            self.progress=Some(0);
+            self.progress=None;
             self.activity=None;
         }
     }
@@ -293,7 +296,7 @@ impl ExplorerApp {
                 if self.refuse_if_busy() {return;}
                 let text=if force_copy {"Copying dropped items…"} else {"Transferring dropped items…"};
                 if self.tx.send(WorkerJob::Drop{sources,directory,force_copy,cancel:self.cancel.clone()}).is_ok() {
-                    self.busy=true;self.progress=Some(0);self.activity=None;self.model.status=text.into();
+                    self.busy=true;self.progress=None;self.activity=None;self.model.status=text.into();
                 } else {self.model.status="Transfer worker unavailable".into();}
             },
             Pending::RemoteCopy{sources,directory}=>self.start_remote_copy(sources,directory),
