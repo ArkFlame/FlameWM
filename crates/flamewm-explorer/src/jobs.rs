@@ -14,7 +14,7 @@ use rustix::io::Errno;
 
 use crate::{destination_for, duplicate_destination, validate_transfer_destination, BatchReport};
 
-const CHUNK: usize = 65_536;
+const CHUNK: usize = 256 * 1024;
 /// Guards against huge or deeply nested trees while counting on the worker.
 pub const MAX_COUNT_ITEMS: u64 = 1_000_000;
 pub const MAX_COUNT_DEPTH: usize = 128;
@@ -251,18 +251,25 @@ pub fn move_publish(from: &Path, to: &Path, replace: bool, cancel: &Cancellation
     match rename_into(from, to, replace) {
         Ok(()) => Ok(()),
         Err(error) if error.raw_os_error() == Some(Errno::XDEV.raw_os_error()) => {
-            copy_publish(from, to, replace, cancel, report)?;
-            let want = count_tree(from, &CancellationToken::default())?;
-            let got = count_tree(to, &CancellationToken::default())?;
-            if want.errors != 0 || got.errors != 0 || want != got {
-                let _ = remove_entry(to);
-                return Err(io::Error::other("copy verification failed; source kept"));
-            }
-            remove_entry(from).map_err(|e| io::Error::other(
-                format!("copy verified but source removal failed: {e}")))
+            cross_device_move(from, to, replace, cancel, report)
         }
         Err(error) => Err(error),
     }
+}
+
+/// Cross-device move: copy, verify counts, and only then remove the source.
+/// Any failure or cancellation before the removal leaves the source intact.
+pub(crate) fn cross_device_move(from: &Path, to: &Path, replace: bool, cancel: &CancellationToken,
+    report: &mut impl FnMut(u64)) -> io::Result<()> {
+    copy_publish(from, to, replace, cancel, report)?;
+    let want = count_tree(from, &CancellationToken::default())?;
+    let got = count_tree(to, &CancellationToken::default())?;
+    if want.errors != 0 || got.errors != 0 || want != got {
+        let _ = remove_entry(to);
+        return Err(io::Error::other("copy verification failed; source kept"));
+    }
+    remove_entry(from).map_err(|e| io::Error::other(
+        format!("copy verified but source removal failed: {e}")))
 }
 
 /// Counts items and bytes without following symlinks. Unreadable entries are

@@ -194,12 +194,12 @@
         fs::create_dir_all(&source).unwrap();fs::create_dir_all(&dest).unwrap();
         fs::write(source.join("a"),"alpha").unwrap();fs::write(source.join("b"),"beta").unwrap();
         fs::write(dest.join("a"),"existing").unwrap();
-        let report=transfer_batch(&[source.join("a"),source.join("b")],&dest,false,&mut |_|{});
+        let report=transfer_batch(&[source.join("a"),source.join("b")],&dest,false,&crate::jobs::CancellationToken::new(),&mut |_|{});
         assert_eq!((report.completed,report.failed),(2,0));
         assert_eq!(fs::read(dest.join("a")).unwrap(),b"existing");
         assert_eq!(fs::read(dest.join("a (2)")).unwrap(),b"alpha");
         assert_eq!(fs::read(dest.join("b")).unwrap(),b"beta");
-        let failing=transfer_batch(&[source.join("missing"),source.join("a")],&dest,true,&mut |_|{});
+        let failing=transfer_batch(&[source.join("missing"),source.join("a")],&dest,true,&crate::jobs::CancellationToken::new(),&mut |_|{});
         assert_eq!((failing.completed,failing.failed),(1,1));
         assert!(failing.first_error.unwrap().contains("missing"));
         assert_eq!(failing.failed_sources,vec![source.join("missing")]);
@@ -266,9 +266,9 @@
     #[test] fn safe_copy_prevents_overwriting_and_recursing_into_itself() {
         let base=std::env::temp_dir().join(format!("flamewm-explorer-test-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir_all(base.join("a")).unwrap();fs::write(base.join("a/item"),"content").unwrap();
-        assert!(copy_entry(&base.join("a"),&base.join("a/inside"),&mut |_| {}).is_err());
-        copy_entry(&base.join("a/item"),&base.join("copy"),&mut |_|{}).unwrap();
-        assert!(copy_entry(&base.join("a/item"),&base.join("copy"),&mut |_|{}).is_err());
+        assert!(copy_entry(&base.join("a"),&base.join("a/inside"),&crate::jobs::CancellationToken::new(),&mut |_| {}).is_err());
+        copy_entry(&base.join("a/item"),&base.join("copy"),&crate::jobs::CancellationToken::new(),&mut |_|{}).unwrap();
+        assert!(copy_entry(&base.join("a/item"),&base.join("copy"),&crate::jobs::CancellationToken::new(),&mut |_|{}).is_err());
         assert_eq!(fs::read(base.join("copy")).unwrap(),b"content");
         fs::remove_dir_all(base).unwrap();
     }

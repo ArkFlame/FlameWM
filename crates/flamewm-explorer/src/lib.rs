@@ -30,6 +30,7 @@ pub mod view;
 
 #[rustfmt::skip]
 pub mod jobs;
+pub mod progress;
 /// Row widgets in the template. The list viewport decides how many of them are shown.
 pub const ROW_SLOTS: usize = 24;
 
@@ -441,8 +442,9 @@ fn network_place(name:String,path:PathBuf)->Place {
 }
 
 /// Crash-safe copy owned by `jobs`; never overwrites an existing entry.
-pub fn copy_entry(from: &Path, to: &Path, report: &mut impl FnMut(u64)) -> io::Result<()> {
-    jobs::copy_publish(from, to, false, &jobs::CancellationToken::new(), report)
+pub fn copy_entry(from: &Path, to: &Path, cancel: &jobs::CancellationToken,
+    report: &mut impl FnMut(u64)) -> io::Result<()> {
+    jobs::copy_publish(from, to, false, cancel, report)
 }
 #[must_use] pub fn destination_for(from: &Path, directory: &Path) -> PathBuf {
     let name = from.file_name().unwrap_or_default().to_string_lossy();
