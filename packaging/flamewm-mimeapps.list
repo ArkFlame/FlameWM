@@ -8,3 +8,6 @@ image/x-portable-pixmap=flamewm-imageviewer.desktop;
 application/zip=flamewm-archiver.desktop;
 application/x-tar=flamewm-archiver.desktop;
 application/x-compressed-tar=flamewm-archiver.desktop;
+application/x-xz-compressed-tar=flamewm-archiver.desktop;
+application/x-bzip2-compressed-tar=flamewm-archiver.desktop;
+application/x-bzip1-compressed-tar=flamewm-archiver.desktop;

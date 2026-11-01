@@ -10,5 +10,5 @@ Terminal=false
 StartupNotify=true
 StartupWMClass=flamewm-archiver
 Categories=Utility;Archiving;Compression;
-MimeType=application/zip;application/x-tar;application/x-compressed-tar;
+MimeType=application/zip;application/x-tar;application/x-compressed-tar;application/x-xz-compressed-tar;application/x-bzip2-compressed-tar;application/x-bzip1-compressed-tar;
 Keywords=archive;zip;tar;extract;compress;unzip;
