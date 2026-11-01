@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 
 use flamewm_ui_x11::{safe_file_name, valid_bus_name, valid_object_path};
 
+use crate::jobs::{CancellationToken, TransferSink};
+
 pub const ARK_INTERFACE: &str = "org.kde.ark.DndExtract";
 pub const ARK_METHOD: &str = "extractSelectedFilesTo";
 /// Hard limit for one extraction call.
@@ -32,6 +34,8 @@ pub enum ExtractError {
     Timeout,
     /// The call returned an error. `message` is trimmed and bounded.
     Failed(String),
+    /// The user cancelled: staged output was discarded, the destination is untouched.
+    Cancelled,
 }
 
 /// Successful extraction: entries that did not exist before the call.
@@ -88,11 +92,14 @@ pub fn gdbus_args(service: &str, path: &str, dest: &Path) -> Result<Vec<String>,
     ])
 }
 
-/// Runs `program args`, kills it after `timeout`, and returns `(success, stderr-or-stdout)`.
+/// Runs `program args`, kills it after `timeout` or when `cancel` is set, and
+/// returns `(success, stderr-or-stdout)`. A cancelled child is reaped before
+/// returning, so no process outlives the job.
 pub fn run_with_timeout(
     program: &str,
     args: &[String],
     timeout: Duration,
+    cancel: &CancellationToken,
 ) -> Result<(bool, String), ExtractError> {
     let mut child = Command::new(program)
         .args(args)
@@ -119,6 +126,11 @@ pub fn run_with_timeout(
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(ExtractError::Timeout);
+            }
+            Ok(None) if cancel.is_cancelled() => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ExtractError::Cancelled);
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(error) => {
@@ -153,12 +165,22 @@ fn nonce() -> u128 {
         .unwrap_or(0)
 }
 
-/// Moves each top-level entry of `stage` into `dest` under a free name. Never overwrites.
-fn commit(stage: &Path, dest: &Path) -> Result<ExtractReport, ExtractError> {
+/// Moves each top-level entry of `stage` into `dest` under a free name. Never
+/// overwrites. Reports one finished item per entry and stops on cancel, leaving
+/// the committed entries in place (they are complete files) and the rest staged.
+fn commit(
+    stage: &Path,
+    dest: &Path,
+    cancel: &CancellationToken,
+    sink: &mut impl TransferSink,
+) -> Result<ExtractReport, ExtractError> {
     let entries = std::fs::read_dir(stage)
         .map_err(|error| ExtractError::Failed(format!("reading staging: {error}")))?;
     let mut created = Vec::new();
     for entry in entries.flatten() {
+        if cancel.is_cancelled() {
+            return Err(ExtractError::Cancelled);
+        }
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
@@ -169,6 +191,7 @@ fn commit(stage: &Path, dest: &Path) -> Result<ExtractReport, ExtractError> {
         std::fs::rename(entry.path(), dest.join(&final_name))
             .map_err(|error| ExtractError::Failed(format!("moving {name}: {error}")))?;
         created.push(final_name);
+        sink.item_done();
     }
     created.sort();
     Ok(ExtractReport { created })
@@ -179,22 +202,32 @@ fn commit(stage: &Path, dest: &Path) -> Result<ExtractReport, ExtractError> {
 /// partial output behind; entries already in `dest` are never touched.
 pub fn stage_and_commit(
     dest: &Path,
+    cancel: &CancellationToken,
+    sink: &mut impl TransferSink,
     extract: impl FnOnce(&Path) -> Result<(), ExtractError>,
 ) -> Result<ExtractReport, ExtractError> {
     let stage = dest.join(format!(".flamewm-ark-{}-{}", std::process::id(), nonce()));
     std::fs::create_dir(&stage)
         .map_err(|error| ExtractError::Spawn(format!("staging directory: {error}")))?;
-    let result = extract(&stage).and_then(|()| commit(&stage, dest));
+    let result = extract(&stage).and_then(|()| commit(&stage, dest, cancel, sink));
+    // Cancelled, failed or timed out: the staging directory is always removed, so
+    // the destination only ever holds complete, committed entries.
     let _ = std::fs::remove_dir_all(&stage);
     result
 }
 
 /// Synchronous extraction body: validated request, staged through `gdbus`.
-fn extract_blocking(service: &str, path: &str, dest: &Path) -> Result<ExtractReport, ExtractError> {
+fn extract_blocking(
+    service: &str,
+    path: &str,
+    dest: &Path,
+    cancel: &CancellationToken,
+    sink: &mut impl TransferSink,
+) -> Result<ExtractReport, ExtractError> {
     validate_request(service, path, dest)?;
-    stage_and_commit(dest, |stage| {
+    stage_and_commit(dest, cancel, sink, |stage| {
         let args = gdbus_args(service, path, stage)?;
-        let (ok, message) = run_with_timeout("gdbus", &args, EXTRACT_TIMEOUT)?;
+        let (ok, message) = run_with_timeout("gdbus", &args, EXTRACT_TIMEOUT, cancel)?;
         if ok {
             Ok(())
         } else {
@@ -211,6 +244,7 @@ pub fn spawn_ark_extract(
     service: String,
     path: String,
     dest: PathBuf,
+    cancel: CancellationToken,
 ) -> Receiver<Result<ExtractReport, ExtractError>> {
     let (tx, rx) = mpsc::channel();
     if let Err(error) = validate_request(&service, &path, &dest) {
@@ -220,7 +254,10 @@ pub fn spawn_ark_extract(
     let spawned = thread::Builder::new()
         .name("flamewm-ark-extract".into())
         .spawn(move || {
-            let _ = tx.send(extract_blocking(&service, &path, &dest));
+            // No byte totals are knowable for an external extraction, so the
+            // reporter stays item-driven: the commit phase reports each entry.
+            let mut sink = |_bytes: u64| {};
+            let _ = tx.send(extract_blocking(&service, &path, &dest, &cancel, &mut sink));
         });
     if let Err(error) = spawned {
         let (tx, rx) = mpsc::channel();
@@ -233,6 +270,19 @@ pub fn spawn_ark_extract(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sink that cancels the job as soon as the first entry is committed.
+    struct CancelAfterFirst {
+        cancel: CancellationToken,
+        items: u32,
+    }
+    impl TransferSink for CancelAfterFirst {
+        fn bytes(&mut self, _bytes: u64) {}
+        fn item_done(&mut self) {
+            self.items += 1;
+            self.cancel.cancel();
+        }
+    }
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("flamewm-dndext-{tag}-{}", std::process::id()));
@@ -279,9 +329,31 @@ mod tests {
     #[test]
     fn hanging_child_is_killed_at_the_timeout() {
         let started = Instant::now();
-        let result = run_with_timeout("sleep", &["5".into()], Duration::from_millis(200));
+        let result = run_with_timeout(
+            "sleep",
+            &["5".into()],
+            Duration::from_millis(200),
+            &CancellationToken::new(),
+        );
         assert_eq!(result, Err(ExtractError::Timeout));
         assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    #[test]
+    fn cancel_kills_the_child_and_reports_cancelled() {
+        let cancel = CancellationToken::new();
+        let trigger = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(80));
+            trigger.cancel();
+        });
+        let started = Instant::now();
+        let result = run_with_timeout("sleep", &["5".into()], Duration::from_secs(30), &cancel);
+        assert_eq!(result, Err(ExtractError::Cancelled));
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "cancel must not wait for the timeout"
+        );
     }
 
     #[test]
@@ -290,19 +362,26 @@ mod tests {
             "sh",
             &["-c".into(), "echo hi".into()],
             Duration::from_secs(2),
+            &CancellationToken::new(),
         );
         assert_eq!(ok, Ok((true, "hi".into())));
         let failed = run_with_timeout(
             "sh",
             &["-c".into(), "echo nope >&2; exit 3".into()],
             Duration::from_secs(2),
+            &CancellationToken::new(),
         );
         assert_eq!(failed, Ok((false, "nope".into())));
     }
 
     #[test]
     fn missing_program_is_a_spawn_error() {
-        let result = run_with_timeout("/nonexistent/flamewm-gdbus", &[], Duration::from_secs(1));
+        let result = run_with_timeout(
+            "/nonexistent/flamewm-gdbus",
+            &[],
+            Duration::from_secs(1),
+            &CancellationToken::new(),
+        );
         assert!(matches!(result, Err(ExtractError::Spawn(_))));
     }
 
@@ -310,7 +389,7 @@ mod tests {
     fn commit_moves_into_destination_without_overwriting() {
         let dir = temp_dir("commit");
         std::fs::write(dir.join("new.txt"), b"keep").expect("seed");
-        let report = stage_and_commit(&dir, |stage| {
+        let report = stage_and_commit(&dir, &CancellationToken::new(), &mut |_| {}, |stage| {
             std::fs::write(stage.join("new.txt"), b"extracted")
                 .map_err(|e| ExtractError::Failed(e.to_string()))?;
             std::fs::create_dir(stage.join("folder"))
@@ -344,7 +423,7 @@ mod tests {
     fn failed_extraction_removes_partial_output_and_keeps_destination() {
         let dir = temp_dir("partial");
         std::fs::write(dir.join("keep.txt"), b"x").expect("seed");
-        let result = stage_and_commit(&dir, |stage| {
+        let result = stage_and_commit(&dir, &CancellationToken::new(), &mut |_| {}, |stage| {
             std::fs::write(stage.join("partial.bin"), b"half")
                 .map_err(|e| ExtractError::Failed(e.to_string()))?;
             Err(ExtractError::Failed("boom".into()))
@@ -356,6 +435,42 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["keep.txt".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cancelled_commit_discards_staged_output() {
+        let dir = temp_dir("cancel");
+        std::fs::write(dir.join("keep.txt"), b"x").expect("seed");
+        let cancel = CancellationToken::new();
+        let mut sink = CancelAfterFirst {
+            cancel: cancel.clone(),
+            items: 0,
+        };
+        let result = stage_and_commit(&dir, &cancel, &mut sink, |stage| {
+            for name in ["a.bin", "b.bin"] {
+                std::fs::write(stage.join(name), b"partial")
+                    .map_err(|e| ExtractError::Failed(e.to_string()))?;
+            }
+            Ok(())
+        });
+        assert_eq!(result, Err(ExtractError::Cancelled));
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .expect("list")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        // Exactly one staged entry was committed before the cancel; nothing stays
+        // staged (readdir order is not defined, so either entry may have won).
+        assert_eq!(names.len(), 2, "{names:?}");
+        let committed: Vec<&String> = names.iter().filter(|name| *name != "keep.txt").collect();
+        assert_eq!(committed.len(), 1, "{names:?}");
+        assert!(
+            ["a.bin", "b.bin"].contains(&committed[0].as_str()),
+            "{names:?}"
+        );
+        assert_eq!(std::fs::read(dir.join(committed[0])).unwrap(), b"partial");
+        assert_eq!(sink.items, 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -376,6 +491,7 @@ mod tests {
             "bad".into(),
             "/x".into(),
             PathBuf::from("/nonexistent-dest"),
+            CancellationToken::new(),
         );
         assert!(matches!(rx.recv(), Ok(Err(ExtractError::Rejected(_)))));
     }
