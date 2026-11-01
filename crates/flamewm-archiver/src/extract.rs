@@ -22,13 +22,25 @@ pub fn extract(
     cancel: &CancelToken,
     sink: &mut dyn FnMut(Progress),
 ) -> Result<Summary> {
+    // Selected roots are compared against sanitised entry names, so they are sanitised the same
+    // way: `./docs` and `docs` both match an entry stored as `./docs/a.txt`. A non-empty selection
+    // that sanitises away entirely selects nothing, never everything.
+    let roots = selection
+        .iter()
+        .map(|root| safe_path::sanitize(root))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let nothing_selected = roots.is_empty() && !selection.is_empty();
+
     let mut entries_total = 0usize;
     let mut bytes_total = 0u64;
     for entry in list(archive)? {
         let Some(rel) = safe_path::sanitize(&entry.path)? else {
             continue;
         };
-        if is_selected(&rel, selection) {
+        if is_selected(&rel, &roots, nothing_selected) {
             entries_total += 1;
             if entry.kind == Kind::File {
                 bytes_total += entry.size;
@@ -36,26 +48,43 @@ pub fn extract(
         }
     }
 
-    fs::create_dir_all(dest)?;
+    // Only a destination this call creates is removed again when the job does not finish, so a
+    // cancel never deletes a directory the user already had.
+    let created = !dest.exists();
+    if !nothing_selected {
+        fs::create_dir_all(dest)?;
+    }
     let mut rep = Reporter::new(bytes_total, entries_total, cancel, sink);
     let mut summary = Summary::default();
-    visit(archive, |entry: Entry, data: &mut dyn Read| {
+    let outcome = visit(archive, |entry: Entry, data: &mut dyn Read| {
         rep.check()?;
         let Some(rel) = safe_path::sanitize(&entry.path)? else {
             return Ok(());
         };
-        if !is_selected(&rel, selection) {
+        if !is_selected(&rel, &roots, nothing_selected) {
             return Ok(());
         }
         extract_one(dest, &rel, &entry, data, &mut rep, &mut summary)?;
         rep.finish_entry();
         Ok(())
-    })?;
-    Ok(summary)
+    });
+    match outcome {
+        Ok(()) => Ok(summary),
+        Err(err) => {
+            if created {
+                let _ = fs::remove_dir_all(dest);
+            }
+            Err(err)
+        }
+    }
 }
 
-fn is_selected(rel: &Path, selection: &[PathBuf]) -> bool {
-    selection.is_empty() || under_any(rel, selection)
+fn is_selected(rel: &Path, roots: &[PathBuf], nothing_selected: bool) -> bool {
+    if nothing_selected {
+        false
+    } else {
+        roots.is_empty() || under_any(rel, roots)
+    }
 }
 
 fn extract_one(
