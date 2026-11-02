@@ -324,6 +324,8 @@ pub struct State {
     pub move_outline: Option<(WindowId, i32, i32)>,
     /// Title release that moved nothing, awaiting a possible double click (see `TitleClick`).
     pub last_title_click: Option<crate::input::TitleClick>,
+    /// `focusFollowsMouse`, read once at startup: pointer entry focuses the window under it.
+    pub focus_follows_mouse: bool,
     /// Bare Super press that has not been combined with another key yet.
     pub super_tap: bool,
     /// Keycodes whose press was consumed as a shortcut; their release is consumed too.
@@ -428,6 +430,7 @@ impl State {
             grab: None,
             move_outline: None,
             last_title_click: None,
+            focus_follows_mouse: crate::input::saved_focus_follows_mouse(),
             super_tap: false,
             swallowed_keys: Vec::new(),
             backend: None,
@@ -615,6 +618,25 @@ impl State {
     pub fn refocus(&mut self) {
         let next = self.model.visible_top_first().first().copied();
         self.set_focus(next);
+    }
+
+    /// `focusFollowsMouse`: focuses the window under the pointer without raising it.
+    ///
+    /// Entry must not restack, or sweeping the pointer across a stack would shuffle it. X11's
+    /// `focus_hover` calls `focus_with_stacking(client, false)` for exactly this reason, and this
+    /// is the same move: keyboard focus only.
+    pub fn focus_hover(&mut self, id: WindowId) {
+        if self.focused == Some(id) {
+            return;
+        }
+        self.focused = Some(id);
+        let keyboard = self.seat.get_keyboard();
+        let surface = self.window_wl_surface(id);
+        if let Some(keyboard) = keyboard {
+            let serial = SERIAL_COUNTER.next_serial();
+            keyboard.set_focus(self, surface, serial);
+        }
+        self.request_redraw();
     }
 
     /// Asks for a complete repaint of the tty backend: sets the coalescing dirty flag and pings the

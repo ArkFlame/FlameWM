@@ -326,6 +326,15 @@ impl State {
             }
         }
         let focus = self.pointer_focus(location);
+        // `focusFollowsMouse` is off by default: without it, entry only updates hover and the
+        // click path still owns focus. A drag never steals focus from the window it is carrying.
+        if self.focus_follows_mouse && self.grab.is_none() {
+            if let Some(Hit::Client(id) | Hit::Titlebar(id)) =
+                self.model.hit(location.x, location.y)
+            {
+                self.focus_hover(id);
+            }
+        }
         if let Some(pointer) = self.seat.get_pointer() {
             let serial = next_serial();
             pointer.motion(
@@ -669,6 +678,22 @@ fn saved_keyboard_layout() -> String {
         )
 }
 
+/// `focusFollowsMouse` saved in the settings file.
+///
+/// Mouse-driven focus is opt-in, so a missing or unreadable file keeps the X11 default (off).
+pub fn saved_focus_follows_mouse() -> bool {
+    std::fs::read_to_string(crate::control::settings_path())
+        .ok()
+        .is_some_and(|text| focus_follows_mouse_from(&text))
+}
+
+/// Parses `focusFollowsMouse` out of settings text; an unreadable file means the default, off.
+fn focus_follows_mouse_from(text: &str) -> bool {
+    flamewm_platform::settings::ConfigStore::default()
+        .parse_snapshot(text)
+        .is_ok_and(|settings| settings.focus_follows_mouse)
+}
+
 /// The keymap the seat installs at startup, read from the saved settings file.
 pub fn saved_xkb_config() -> XkbConfig<'static> {
     xkb_config(&saved_keyboard_layout())
@@ -677,8 +702,8 @@ pub fn saved_xkb_config() -> XkbConfig<'static> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Button, Hit, PointerRoute, TitleClick, completes_double_click, name_candidates,
-        pointer_route, xkb_config,
+        Button, Hit, PointerRoute, TitleClick, completes_double_click, focus_follows_mouse_from,
+        name_candidates, pointer_route, xkb_config,
     };
 
     /// The saved layout reaches the keymap, and a value outside the supported set falls back
@@ -760,5 +785,14 @@ mod tests {
             !completes_double_click(None, 4, 1_200, 100.0, 50.0),
             "there must be a first click"
         );
+    }
+    /// Mouse-driven focus is opt-in: only an explicit `focusFollowsMouse=true` turns it on, and an
+    /// unreadable file leaves it off rather than guessing.
+    #[test]
+    fn focus_follows_mouse_is_opt_in() {
+        assert!(focus_follows_mouse_from("focusFollowsMouse=true\n"));
+        assert!(!focus_follows_mouse_from("focusFollowsMouse=false\n"));
+        assert!(!focus_follows_mouse_from(""));
+        assert!(!focus_follows_mouse_from("not = [valid"));
     }
 }
