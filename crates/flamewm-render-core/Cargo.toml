@@ -11,3 +11,4 @@ path = "src/lib.rs"
 
 [dependencies]
 flamewm-image-core = { path = "../flamewm-image-core" }
+fontdue = "=0.9.5"

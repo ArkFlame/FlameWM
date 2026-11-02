@@ -98,3 +98,42 @@ fn a_frame_is_the_size_a_shm_buffer_needs() {
     let frame = paint(&[], width, height);
     assert_eq!(frame.len(), (width * height * 4) as usize);
 }
+
+#[test]
+fn a_software_glyph_run_paints_real_text() {
+    // The last input a Wayland presenter needs is a text mask without Xft. Rasterize one from an
+    // installed font and run it through the same lowering and blending as any other primitive.
+    let Some(mask) = flamewm_render_core::glyphs::text_mask("Hi", 32.0, 4.0, 40.0) else {
+        // No usable font installed: nothing to assert, and the presenter reports its own fallback.
+        return;
+    };
+    assert!(mask.width > 0 && mask.height > 0, "glyph run has a bitmap");
+
+    let commands = [PaintCommand::Text {
+        x: 4.0,
+        y: 40.0,
+        color: color(255, 255, 255, 255),
+        size: 32.0,
+        weight: 400,
+        text: "Hi".into(),
+    }];
+    let sources = [FrameSource::Mask {
+        x: mask.x,
+        y: mask.y,
+        width: mask.width,
+        height: mask.height,
+        alpha: &mask.coverage,
+        color: [255, 255, 255, 255],
+    }];
+    let (width, height) = (96u32, 64u32);
+    let ops = lower_commands(&commands, 1.0, &sources, (width, height), None).expect("lower");
+    let mut frame = vec![0u8; (width * height * 4) as usize];
+    SoftPixels::new()
+        .paint(&mut frame, width, height, &ops)
+        .expect("paint");
+
+    assert!(
+        frame.chunks_exact(4).any(|pixel| pixel[3] > 0),
+        "the glyph run must ink at least one pixel"
+    );
+}

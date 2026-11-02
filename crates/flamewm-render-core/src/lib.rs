@@ -1,5 +1,6 @@
 pub mod backdrop;
 pub mod codec;
+pub mod glyphs;
 pub mod hash;
 pub mod layout;
 pub mod lower;
