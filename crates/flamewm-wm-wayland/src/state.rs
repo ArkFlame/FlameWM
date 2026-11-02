@@ -322,6 +322,8 @@ pub struct State {
     pub grab: Option<Grab>,
     /// Outline-move preview `(window, dx, dy)`: contents stay put until release, like X11.
     pub move_outline: Option<(WindowId, i32, i32)>,
+    /// Title release that moved nothing, awaiting a possible double click (see `TitleClick`).
+    pub last_title_click: Option<crate::input::TitleClick>,
     /// Bare Super press that has not been combined with another key yet.
     pub super_tap: bool,
     /// Keycodes whose press was consumed as a shortcut; their release is consumed too.
@@ -425,6 +427,7 @@ impl State {
             decorations: RefCell::default(),
             grab: None,
             move_outline: None,
+            last_title_click: None,
             super_tap: false,
             swallowed_keys: Vec::new(),
             backend: None,

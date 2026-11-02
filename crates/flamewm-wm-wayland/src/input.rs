@@ -412,11 +412,36 @@ impl State {
         let mut consumed = ends_grab;
 
         if !pressed {
-            if let (Some(Grab::Move { id, start, .. }), Some((_, dx, dy))) =
-                (self.grab, self.move_outline.take())
-            {
-                self.model.move_to(id, start.x + dx, start.y + dy);
-                self.apply_geometry(id);
+            if let Some(Grab::Move { id, pointer, start }) = self.grab {
+                let time_ms = event.time_msec();
+                let (px, py) = pointer;
+                // Motion inside the slop is still a click: X11 uses the same slop, and treating a
+                // 1px twitch as a drag would silently disable double-click-to-maximize.
+                let drag = self.move_outline.take().map(|(_, dx, dy)| (dx, dy));
+                let moved = drag.is_some_and(|(dx, dy)| {
+                    let (dx, dy) = (f64::from(dx), f64::from(dy));
+                    dx * dx + dy * dy > DOUBLE_CLICK_SLOP_PX * DOUBLE_CLICK_SLOP_PX
+                });
+                if moved {
+                    if let Some((dx, dy)) = drag {
+                        self.model.move_to(id, start.x + dx, start.y + dy);
+                        self.apply_geometry(id);
+                    }
+                    // A real drag never counts as either half of a double click.
+                    self.last_title_click = None;
+                } else if completes_double_click(self.last_title_click, id, time_ms, px, py) {
+                    self.last_title_click = None;
+                    self.toggle_maximize(id);
+                } else {
+                    self.last_title_click = Some(TitleClick {
+                        id,
+                        time_ms,
+                        pointer: (px, py),
+                    });
+                }
+            } else if self.grab.is_some() {
+                // Resize grabs are not title clicks.
+                self.last_title_click = None;
             }
             self.grab = None;
         }
@@ -555,6 +580,41 @@ fn pointer_route(hit: Option<Hit>) -> PointerRoute {
     }
 }
 
+/// A title-bar release that activated no move, awaiting a possible second click.
+///
+/// Mirrors the X11 engine: only a release that never became a drag counts, and a second one from
+/// the same window within [`DOUBLE_CLICK_TIMEOUT_MS`] at the same spot toggles maximize.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TitleClick {
+    pub id: WindowId,
+    pub time_ms: u32,
+    pub pointer: (f64, f64),
+}
+
+/// Double-click window and movement slop, matching the X11 engine so both sessions feel alike.
+const DOUBLE_CLICK_TIMEOUT_MS: u32 = 500;
+const DOUBLE_CLICK_SLOP_PX: f64 = 4.0;
+
+/// Classifies a title-bar release: `true` when it completes a double click.
+///
+/// A press that turned into a drag never records a click, so "press, drag, press" is not a double
+/// click even at the same pixel. Elapsed time and distance are compared the way X11 compares them.
+fn completes_double_click(
+    previous: Option<TitleClick>,
+    id: WindowId,
+    time_ms: u32,
+    x: f64,
+    y: f64,
+) -> bool {
+    previous.is_some_and(|prev| {
+        let dx = x - prev.pointer.0;
+        let dy = y - prev.pointer.1;
+        prev.id == id
+            && time_ms.wrapping_sub(prev.time_ms) <= DOUBLE_CLICK_TIMEOUT_MS
+            && dx * dx + dy * dy <= DOUBLE_CLICK_SLOP_PX * DOUBLE_CLICK_SLOP_PX
+    })
+}
+
 /// Pointer focus on an unmanaged X11 window, when the pointer is inside its geometry.
 fn unmanaged_focus(
     entry: &crate::xwayland::Unmanaged,
@@ -616,7 +676,10 @@ pub fn saved_xkb_config() -> XkbConfig<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Button, Hit, PointerRoute, name_candidates, pointer_route, xkb_config};
+    use super::{
+        Button, Hit, PointerRoute, TitleClick, completes_double_click, name_candidates,
+        pointer_route, xkb_config,
+    };
 
     /// The saved layout reaches the keymap, and a value outside the supported set falls back
     /// instead of producing a keymap that would leave the session without a keyboard.
@@ -670,5 +733,32 @@ mod tests {
         );
         // A dead key with no symbol never produces an empty lookup key.
         assert_eq!(name_candidates("", "d").collect::<Vec<_>>(), vec!["d"]);
+    }
+    /// A second click on the same title within the window is a double click; a slow one, a distant
+    /// one, or one on another window is two separate clicks.
+    #[test]
+    fn double_click_needs_the_same_window_spot_and_time() {
+        let first = TitleClick {
+            id: 4,
+            time_ms: 1_000,
+            pointer: (100.0, 50.0),
+        };
+        assert!(completes_double_click(Some(first), 4, 1_200, 101.0, 51.0));
+        assert!(
+            !completes_double_click(Some(first), 4, 1_600, 100.0, 50.0),
+            "beyond the 500ms window"
+        );
+        assert!(
+            !completes_double_click(Some(first), 4, 1_200, 140.0, 50.0),
+            "beyond the movement slop"
+        );
+        assert!(
+            !completes_double_click(Some(first), 9, 1_200, 100.0, 50.0),
+            "a different window"
+        );
+        assert!(
+            !completes_double_click(None, 4, 1_200, 100.0, 50.0),
+            "there must be a first click"
+        );
     }
 }
