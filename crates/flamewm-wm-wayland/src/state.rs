@@ -601,7 +601,13 @@ impl State {
     }
 
     /// Single focus authority: raises the window, activates it and moves keyboard focus.
+    ///
+    /// While a session lock is active no other client may take focus: the lock surface is the
+    /// only thing allowed to receive input, or the lock could be bypassed by keystrokes.
     pub fn set_focus(&mut self, id: Option<WindowId>) {
+        if self.pin_focus_to_lock() {
+            return;
+        }
         let previous = self.focused;
         self.focused = id;
         if let Some(id) = id {
@@ -627,6 +633,22 @@ impl State {
         self.request_redraw();
     }
 
+    /// Keeps the keyboard on the lock surface while locked.
+    ///
+    /// Returns `true` when a lock is active, meaning the caller must not move focus. A lock
+    /// surface can appear or be replaced at any time, so the focus is re-asserted rather than
+    /// assumed still correct.
+    #[must_use]
+    pub fn pin_focus_to_lock(&mut self) -> bool {
+        let Some(surface) = self.lock_surface().map(|lock| lock.wl_surface().clone()) else {
+            return false;
+        };
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.set_focus(self, Some(surface), SERIAL_COUNTER.next_serial());
+        }
+        true
+    }
+
     /// Focuses the topmost visible window, or clears focus when the workspace is empty.
     pub fn refocus(&mut self) {
         let next = self.model.visible_top_first().first().copied();
@@ -639,6 +661,9 @@ impl State {
     /// `focus_hover` calls `focus_with_stacking(client, false)` for exactly this reason, and this
     /// is the same move: keyboard focus only.
     pub fn focus_hover(&mut self, id: WindowId) {
+        if self.pin_focus_to_lock() {
+            return;
+        }
         if self.focused == Some(id) {
             return;
         }

@@ -83,6 +83,15 @@ impl SessionLockHandler for State {
         let size = self.lock_size();
         surface.with_pending_state(|state| state.size = Some(size));
         surface.send_configure();
+        // The lock client's keyboard must be focused or the password it draws can never be
+        // entered: on Wayland a client only receives keys while a surface has focus.
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.set_focus(
+                self,
+                Some(surface.wl_surface().clone()),
+                crate::state::next_serial(),
+            );
+        }
         self.locked_outputs.push(LockedOutput {
             _output: output,
             surface,

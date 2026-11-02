@@ -24,7 +24,7 @@ default = ["x11"]
 # X11 presentation (the `flamewm-lock` binary). A Wayland adapter enables the shared
 # core instead, which must build with this off.
 x11 = ["dep:flamewm-ui-x11"]
-wayland = ["dep:wayland-client", "dep:wayland-protocols"]
+wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:xkbcommon"]
 
 [dependencies.flamewm-ui-x11]
 path = "../flamewm-ui-x11"
@@ -34,6 +34,11 @@ optional = true
 # `x11`: they are what replaces it.
 [dependencies.wayland-client]
 version = "0.31"
+optional = true
+
+# Key decoding for the Wayland presenter: a client compiles the keymap the seat sends.
+[dependencies.xkbcommon]
+version = "0.8"
 optional = true
 
 [dependencies.wayland-protocols]

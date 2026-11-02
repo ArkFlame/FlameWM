@@ -848,6 +848,7 @@ dependencies = [
  "rustix 1.1.4",
  "wayland-client",
  "wayland-protocols",
+ "xkbcommon",
 ]
 
 [[package]]

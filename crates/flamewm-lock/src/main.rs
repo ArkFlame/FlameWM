@@ -107,31 +107,21 @@ fn present_x11(settings: &flamewm_lock::settings::LockSettings, username: &str) 
 fn present_wayland(settings: &flamewm_lock::settings::LockSettings, username: &str) -> ExitCode {
     use flamewm_lock::document;
     use flamewm_lock::present::paint_document;
-    use flamewm_lock::secret::PasswordBuffer;
-    use flamewm_lock::state::Status;
-    use flamewm_lock::view::LockView;
     use flamewm_lock::wayland;
     use flamewm_ui_document::UiDocumentView;
 
     let owned_settings = settings.clone();
     let owned_username = username.to_string();
-    match wayland::run(settings, username, move |width, height| {
+    match wayland::run(settings, username, move |view, width, height| {
         let settings = &owned_settings;
-        let username = &owned_username;
-        let view = LockView::project(
-            &settings,
-            None,
-            &username,
-            &PasswordBuffer::default(),
-            Status::Idle,
-        );
+        let _ = &owned_username;
         let template = document::template()?;
         let mut runtime = template.into_runtime_document();
-        let background = document::background_image(&settings, width, height);
+        let background = document::background_image(settings, width, height);
         {
             let mut access = UiDocumentView::from_runtime(&mut runtime, None);
-            document::apply_document(&mut access, &settings, width, height, background)?;
-            document::apply_view(&mut access, &view)?;
+            document::apply_document(&mut access, settings, width, height, background)?;
+            document::apply_view(&mut access, view)?;
         }
         paint_document(&runtime, width, height, 1.0)
     }) {

@@ -5,6 +5,8 @@ pub mod backoff;
 pub mod clock;
 pub mod document;
 pub mod instance;
+#[cfg(feature = "wayland")]
+pub mod keys;
 pub mod layout;
 pub mod native_time;
 pub mod pam;
@@ -17,6 +19,8 @@ pub mod ribbons;
 #[cfg(feature = "x11")]
 pub mod run;
 pub mod screensaver;
+#[cfg(feature = "wayland")]
+pub mod seat;
 pub mod secret;
 pub mod session;
 pub mod settings;
