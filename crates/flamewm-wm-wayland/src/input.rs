@@ -705,6 +705,40 @@ fn focus_follows_mouse_from(text: &str) -> bool {
         .is_ok_and(|settings| settings.focus_follows_mouse)
 }
 
+/// `titlebars` and `windowMargin` saved in the settings file, for the model built at startup.
+///
+/// A missing or unreadable file keeps the product defaults, so an unset settings file lays windows
+/// out exactly as an unconfigured model does.
+pub fn saved_model_settings() -> (bool, i32) {
+    model_settings_at(&crate::control::settings_path())
+}
+
+/// Reads `titlebars` and `windowMargin` from `path`. Split from `settings_path` so the file is
+/// really read in tests.
+pub fn model_settings_at(path: &std::path::Path) -> (bool, i32) {
+    std::fs::read_to_string(path)
+        .ok()
+        .map_or_else(default_model_settings, |text| model_settings_from(&text))
+}
+
+/// Parses `titlebars` and `windowMargin` out of settings text.
+fn model_settings_from(text: &str) -> (bool, i32) {
+    flamewm_platform::settings::ConfigStore::default()
+        .parse_snapshot(text)
+        .map_or_else(
+            |_| default_model_settings(),
+            |settings| (settings.titlebars, i32::from(settings.window_margin)),
+        )
+}
+
+/// The product defaults, used when the file is absent or rejected.
+fn default_model_settings() -> (bool, i32) {
+    use flamewm_platform::settings::ProductSettings;
+
+    let defaults = ProductSettings::default();
+    (defaults.titlebars, i32::from(defaults.window_margin))
+}
+
 /// The keymap the seat installs at startup, read from the saved settings file.
 pub fn saved_xkb_config() -> XkbConfig<'static> {
     xkb_config(&saved_keyboard_layout())

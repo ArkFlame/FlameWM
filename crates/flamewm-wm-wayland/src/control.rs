@@ -145,6 +145,31 @@ fn saved_shell_scales() -> BTreeMap<String, u16> {
     shell_scales_at(&settings_path())
 }
 
+/// `titlebars` and `windowMargin` from a committed settings snapshot.
+///
+/// Read the way X11 `live_settings` reads them: a missing or ill-typed value keeps the product
+/// default, and a margin outside the supported range falls back rather than being clamped silently.
+fn chrome_settings(snapshot: &flamewm_api::settings::SettingsSnapshot) -> (bool, i32) {
+    use flamewm_api::settings::SettingValue;
+    use flamewm_platform::settings::ProductSettings;
+
+    /// Upper bound `ProductSettings::validate` enforces for `windowMargin`.
+    const MAX_WINDOW_MARGIN: i64 = 32;
+
+    let defaults = ProductSettings::default();
+    let titlebars = match snapshot.values.get("titlebars") {
+        Some(SettingValue::Boolean(value)) => *value,
+        _ => defaults.titlebars,
+    };
+    let window_margin = match snapshot.values.get("windowMargin") {
+        Some(SettingValue::Integer(value)) if (0..=MAX_WINDOW_MARGIN).contains(value) => {
+            i32::try_from(*value).unwrap_or(i32::from(defaults.window_margin))
+        }
+        _ => i32::from(defaults.window_margin),
+    };
+    (titlebars, window_margin)
+}
+
 /// Reads per-output scales from `path`. Split from `settings_path` so tests read a real file.
 fn shell_scales_at(path: &std::path::Path) -> BTreeMap<String, u16> {
     std::fs::read_to_string(path)
@@ -725,9 +750,29 @@ impl Service {
         for command in queued {
             apply_command(state, command);
         }
+        // Settings transactions land in the host above, so the model's copies are refreshed here:
+        // this is the Wayland equivalent of the X11 settings sync point. It costs one map lookup on
+        // an unchanged snapshot.
+        self.sync_chrome_settings(state);
         self.sync(state);
         self.publish_changes();
         busy
+    }
+
+    /// Pushes `titlebars` and `windowMargin` from the committed settings into the model.
+    ///
+    /// The values are read the way X11 `live_settings` reads them: a missing or ill-typed value
+    /// keeps the product default, so a hand-edited file cannot put the model in an odd state.
+    fn sync_chrome_settings(&self, state: &mut State) {
+        let (titlebars, window_margin) = {
+            let host = self.host.borrow();
+            chrome_settings(&host.settings_snapshot())
+        };
+        if state.model.titlebars() == titlebars && state.model.window_margin() == window_margin {
+            return;
+        }
+        state.model.configure(titlebars, window_margin);
+        state.request_redraw();
     }
 
     /// Called after every loop dispatch: emits `WindowsSnapshotChanged` when the windows moved.
@@ -995,7 +1040,8 @@ fn apply_command(state: &mut State, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, Mirror, WaylandDesktop, managed_logout, shell_scales_at, shell_scales_from,
+        Command, Mirror, WaylandDesktop, chrome_settings, managed_logout, shell_scales_at,
+        shell_scales_from,
     };
     use flamewm_api::shortcuts::KeyBinding;
     use std::cell::RefCell;
@@ -1189,5 +1235,55 @@ mod tests {
         }
         drop(commands);
         std::fs::remove_dir_all(&dir).ok();
+    }
+    /// `titlebars` and `windowMargin` are read out of the committed snapshot the way X11 reads its
+    /// live copies: a missing value keeps the product default, and an out-of-range margin falls back
+    /// instead of being applied.
+    #[test]
+    fn chrome_settings_follow_the_committed_snapshot() {
+        use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+        use flamewm_platform::settings::ProductSettings;
+
+        let defaults = ProductSettings::default();
+        let mut snapshot = SettingsSnapshot {
+            revision: 1,
+            values: BTreeMap::new(),
+        };
+        assert_eq!(
+            chrome_settings(&snapshot),
+            (defaults.titlebars, i32::from(defaults.window_margin)),
+            "an empty snapshot yields the product defaults"
+        );
+
+        snapshot
+            .values
+            .insert("titlebars".to_owned(), SettingValue::Boolean(false));
+        snapshot
+            .values
+            .insert("windowMargin".to_owned(), SettingValue::Integer(8));
+        assert_eq!(chrome_settings(&snapshot), (false, 8));
+
+        // `validate` rejects a margin above 32, so a value that slipped through falls back.
+        snapshot
+            .values
+            .insert("windowMargin".to_owned(), SettingValue::Integer(33));
+        assert_eq!(
+            chrome_settings(&snapshot).1,
+            i32::from(defaults.window_margin),
+            "an out-of-range margin falls back to the default"
+        );
+        snapshot
+            .values
+            .insert("windowMargin".to_owned(), SettingValue::Integer(-1));
+        assert_eq!(
+            chrome_settings(&snapshot).1,
+            i32::from(defaults.window_margin)
+        );
+
+        // An ill-typed value must not be trusted either.
+        snapshot
+            .values
+            .insert("titlebars".to_owned(), SettingValue::Text("yes".to_owned()));
+        assert_eq!(chrome_settings(&snapshot).0, defaults.titlebars);
     }
 }
