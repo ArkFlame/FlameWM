@@ -8,3 +8,6 @@ description = "Dependency-free precompiled system-UI runtime core for FlameWM Re
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+flamewm-image-core = { path = "../flamewm-image-core" }

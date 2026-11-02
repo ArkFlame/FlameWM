@@ -877,6 +877,9 @@ dependencies = [
 [[package]]
 name = "flamewm-render-core"
 version = "0.1.3"
+dependencies = [
+ "flamewm-image-core",
+]
 
 [[package]]
 name = "flamewm-render-x11"

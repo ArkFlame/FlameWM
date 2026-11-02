@@ -2,9 +2,11 @@ pub mod backdrop;
 pub mod codec;
 pub mod hash;
 pub mod layout;
+pub mod lower;
 pub mod model;
 pub mod paint;
 pub mod pixels;
+pub mod soft;
 pub mod text_layout;
 
 pub use codec::{decode, decode_static, encode};
@@ -18,6 +20,7 @@ pub use paint::{
     scroll_clip, scrollbar_visible,
 };
 pub use pixels::{PixelBackend, PixelOp, RenderAcceleration, RoundedRect, composite_cpu};
+pub use soft::SoftPixels;
 pub use text_layout::{TextLayout, TextLine, layout_text};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

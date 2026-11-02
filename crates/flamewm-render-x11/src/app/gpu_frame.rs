@@ -9,48 +9,44 @@
 //! a `BackdropBlur` op that blurs the pixels already painted under it on the GPU, in command order;
 //! the surface snapshot starts the frame as a `BlendImage`. The two painters never mix.
 
-use flamewm_render_core::{Color, PaintCommand, PixelOp, Rect, RoundedRect};
+use flamewm_render_core::{PaintCommand, PixelOp, Rect};
 
-use super::clip::{Visible, stack_bounds, visible_under};
-use super::primitives::scale_rect;
-use super::surface_backdrop::{node_backdrop_clip, node_device_rect};
+use super::clip::stack_bounds;
 
-/// The pixel op for a 1px-or-wider ring of `rect`, or `None` when a clip hides it. A ring cut by a
-/// clip has no exact pixel-op form yet, so it returns `Err`.
-fn stroke_op(
-    rect: Rect,
-    radius: f32,
-    width: f32,
-    color: Color,
-    scale: f32,
-    stack: &[Rect],
-) -> Result<Option<PixelOp<'static>>, &'static str> {
-    let device = scale_rect(rect, scale);
-    let visible = match visible_under(device, stack) {
-        Visible::Hidden => return Ok(None),
-        Visible::Whole => None,
-        Visible::Part(part) => Some(part),
-    };
-    let outer = device_rect(device, radius * scale).ok_or(FRACTIONAL)?;
-    let thickness = whole(width * scale).ok_or(FRACTIONAL)?;
-    let (outer, hole, color) = (outer, Some(outer.inset(thickness)), rgba(color));
-    let Some(part) = visible else {
-        return Ok(Some(PixelOp::FillRoundedRect { outer, hole, color }));
-    };
-    // XRender clips the AA ring to the pixels whose rows and columns lie inside `part`: from the
-    // first whole pixel at or after its left/top edge up to the last one before its right/bottom.
-    let (left, top) = (part.x.ceil() as i32, part.y.ceil() as i32);
-    let right = (part.x + part.width).floor() as i32;
-    let bottom = (part.y + part.height).floor() as i32;
-    if right <= left || bottom <= top {
-        return Ok(None);
+impl FrameSource {
+    /// Borrowed view for the shared lowering, which does not copy frame pixels.
+    fn borrow(&self) -> flamewm_render_core::lower::FrameSource<'_> {
+        match self {
+            Self::Mask {
+                x,
+                y,
+                width,
+                height,
+                alpha,
+                color,
+            } => flamewm_render_core::lower::FrameSource::Mask {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+                alpha,
+                color: *color,
+            },
+            Self::Image {
+                x,
+                y,
+                width,
+                height,
+                rgba,
+            } => flamewm_render_core::lower::FrameSource::Image {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+                rgba,
+            },
+        }
     }
-    Ok(Some(PixelOp::FillRoundedRectClipped {
-        outer,
-        hole,
-        color,
-        clip: (left, top, (right - left) as u32, (bottom - top) as u32),
-    }))
 }
 
 /// Pixels for one text, text shadow or image command, gathered before the frame is lowered. The
@@ -114,158 +110,10 @@ pub(crate) fn frame_ops<'a>(
     scene: (u32, u32),
     backdrop: Option<(u32, u32, &'a [u8])>,
 ) -> Result<Vec<PixelOp<'a>>, &'static str> {
-    let mut ops = Vec::with_capacity(commands.len() + 1);
-    if let Some((width, height, rgba)) = backdrop {
-        if (width, height) != scene {
-            return Err(BACKDROP_SIZE);
-        }
-        ops.push(PixelOp::BlendImage {
-            x: 0,
-            y: 0,
-            width,
-            height,
-            rgba,
-        });
-    }
-    let mut stack: Vec<Rect> = Vec::new();
-    let mut sources = sources.iter();
-    for command in commands {
-        match *command {
-            PaintCommand::PushClip { rect } => stack.push(scale_rect(rect, scale)),
-            PaintCommand::PopClip => {
-                stack.pop();
-            }
-            PaintCommand::FillRect {
-                rect,
-                color,
-                radius,
-            } => {
-                let Some((rect, radius)) =
-                    visible_fill(scale_rect(rect, scale), radius * scale, &stack)
-                else {
-                    continue;
-                };
-                ops.push(PixelOp::FillRoundedRect {
-                    outer: device_rect(rect, radius).ok_or(FRACTIONAL)?,
-                    hole: None,
-                    color: rgba(color),
-                });
-            }
-            PaintCommand::StrokeRect {
-                rect,
-                color,
-                width,
-                radius,
-            } => {
-                if let Some(op) = stroke_op(rect, radius, width, color, scale, &stack)? {
-                    ops.push(op);
-                }
-            }
-            // The XRender painter draws nothing for a track, so the GPU frame skips it too.
-            PaintCommand::ScrollbarTrack { .. } => {}
-            // The same overlay thumb the XRender painter draws: slim, 2px in, translucent white.
-            PaintCommand::ScrollbarThumb { rect, horizontal } => {
-                let mut thumb = rect;
-                if horizontal {
-                    thumb.y += thumb.height - 8.0;
-                    thumb.height = 6.0;
-                } else {
-                    thumb.x += thumb.width - 8.0;
-                    thumb.width = 6.0;
-                }
-                let Some((rect, radius)) =
-                    visible_fill(scale_rect(thumb, scale), 3.0 * scale, &stack)
-                else {
-                    continue;
-                };
-                ops.push(PixelOp::FillRoundedRect {
-                    outer: device_rect(rect, radius).ok_or(FRACTIONAL)?,
-                    hole: None,
-                    color: [255, 255, 255, 0x48],
-                });
-            }
-            PaintCommand::Text { .. } | PaintCommand::TextShadow { .. } => {
-                match sources.next().ok_or(SOURCE_MISMATCH)? {
-                    FrameSource::Mask {
-                        x,
-                        y,
-                        width,
-                        height,
-                        alpha,
-                        color,
-                    } => ops.push(PixelOp::BlendMask {
-                        x: *x,
-                        y: *y,
-                        width: *width,
-                        height: *height,
-                        mask: alpha.as_slice(),
-                        color: *color,
-                    }),
-                    FrameSource::Image { .. } => return Err(SOURCE_MISMATCH),
-                }
-            }
-            PaintCommand::Image { .. } => match sources.next().ok_or(SOURCE_MISMATCH)? {
-                FrameSource::Image {
-                    x,
-                    y,
-                    width,
-                    height,
-                    rgba,
-                } => ops.push(PixelOp::BlendImage {
-                    x: *x,
-                    y: *y,
-                    width: *width,
-                    height: *height,
-                    rgba: rgba.as_slice(),
-                }),
-                FrameSource::Mask { .. } => return Err(SOURCE_MISMATCH),
-            },
-            PaintCommand::NodeBackdrop {
-                rect,
-                radius,
-                blur_percent,
-                opacity,
-                ..
-            } => {
-                // The XRender painter paints nothing for these, so the GPU frame paints nothing.
-                if blur_percent == 0 || opacity == 0 {
-                    continue;
-                }
-                // The XRender blit ignores the clip stack (`set_destination_clip` is the only
-                // picture clip, and region paints reset it), so the node backdrop ignores it too.
-                let device = node_device_rect(rect, scale);
-                let Some(clip) = node_backdrop_clip(device, scene) else {
-                    continue;
-                };
-                ops.push(PixelOp::BackdropBlur {
-                    clip,
-                    node: device,
-                    corner: (radius * scale).round().max(0.0) as u32,
-                    radius: crate::backdrop::blur_radius_px(0, blur_percent),
-                });
-            }
-        }
-    }
-    // A leftover source means a command was skipped: refuse rather than paint a different frame.
-    if sources.next().is_some() {
-        return Err(SOURCE_MISMATCH);
-    }
-    Ok(ops)
-}
-
-const FRACTIONAL: &str = "FractionalGeometry";
-const SOURCE_MISMATCH: &str = "SourceMismatch";
-const BACKDROP_SIZE: &str = "BackdropSize";
-
-/// The rect and radius a fill paints under `stack`, as the XRender painter cuts them: `None` when
-/// hidden, unchanged when whole, and the visible rectangle with a square corner when cut.
-#[must_use]
-pub(crate) fn visible_fill(rect: Rect, radius: f32, stack: &[Rect]) -> Option<(Rect, f32)> {
-    match visible_under(rect, stack) {
-        Visible::Hidden => None,
-        Visible::Whole => Some((rect, radius)),
-        Visible::Part(part) => Some((part, 0.0)),
-    }
+    let borrowed: Vec<flamewm_render_core::lower::FrameSource<'a>> =
+        sources.iter().map(FrameSource::borrow).collect();
+    flamewm_render_core::lower::lower_commands(commands, scale, &borrowed, scene, backdrop)
+        .map_err(|error| error.as_str())
 }
 
 /// The integer rect the Xft draw clips glyphs to under `stack`, as the XRender text path rounds it.
@@ -299,31 +147,10 @@ pub(crate) fn shadow_clip(stack: &[Rect]) -> (i32, i32, i32, i32) {
     (min_x, min_y, max_x, max_y)
 }
 
-/// `Color` as the straight RGBA the pixel ops take.
-fn rgba(color: Color) -> [u8; 4] {
-    [color.r, color.g, color.b, color.a]
-}
-
-/// The device-pixel rounded rectangle for `rect`, or `None` when it is fractional or empty.
-fn device_rect(rect: Rect, radius: f32) -> Option<RoundedRect> {
-    let outer = RoundedRect {
-        x: whole(rect.x)? as i32,
-        y: whole(rect.y)? as i32,
-        width: whole(rect.width)?,
-        height: whole(rect.height)?,
-        radius: whole(radius)?,
-    };
-    (outer.width > 0 && outer.height > 0).then(|| outer.normalized())
-}
-
-/// `value` as a whole non-negative number, or `None` when it has a fraction.
-fn whole(value: f32) -> Option<u32> {
-    (value >= 0.0 && value.fract() == 0.0 && value <= u32::MAX as f32).then_some(value as u32)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_render_core::Color;
 
     fn fill(x: f32, width: f32, radius: f32) -> PaintCommand {
         PaintCommand::FillRect {
