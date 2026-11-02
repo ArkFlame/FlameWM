@@ -72,6 +72,46 @@ pub enum Command {
     MoveToWorkspace(WindowId, usize),
     /// Starts a program through `State::spawn`, so `XWayland` clients get the compositor's `DISPLAY`.
     Spawn(Vec<String>),
+    /// Ends the compositor from inside its event loop. The session wrapper supervises it, so its
+    /// exit is what returns the VT to the greeter.
+    Logout,
+}
+
+/// Whether this compositor may end the session itself.
+///
+/// Logout is only honest when the process chain is the one the session wrapper owns: the wrapper
+/// started the compositor with `FLAMEWM_SESSION_LOGOUT_OWNER=1` and told it the wrapper's pid, and
+/// the wrapper is still this process's parent. Anything else — a bare start, a reparented process,
+/// an inherited variable — means there is no session to return, so the menu entry stays hidden
+/// instead of offering an action that would do nothing.
+fn logout_supported() -> bool {
+    managed_logout(
+        std::env::var_os("FLAMEWM_SESSION_LOGOUT_OWNER").as_deref(),
+        std::env::var_os("FLAMEWM_SESSION_SUPERVISOR_PID").as_deref(),
+        rustix::process::getppid(),
+    )
+}
+
+/// The wrapper claims ownership and names its own pid; that pid must be our parent.
+fn managed_logout(
+    owner: Option<&std::ffi::OsStr>,
+    supervisor: Option<&std::ffi::OsStr>,
+    parent: Option<rustix::process::Pid>,
+) -> bool {
+    owner == Some(std::ffi::OsStr::new("1"))
+        && supervisor
+            .and_then(std::ffi::OsStr::to_str)
+            .and_then(|pid| pid.parse::<i32>().ok())
+            .and_then(rustix::process::Pid::from_raw)
+            .is_some_and(|pid| Some(pid) == parent)
+}
+
+/// `systemctl`, when installed: suspend, reboot and shutdown go through logind rather than
+/// reinventing session policy here.
+fn power_program() -> Option<&'static str> {
+    ["/usr/bin/systemctl", "/bin/systemctl"]
+        .into_iter()
+        .find(|program| std::path::Path::new(program).is_file())
 }
 
 fn unsupported(message: &'static str) -> FlameError {
@@ -372,19 +412,53 @@ impl ApplicationPort for WaylandDesktop {
 
 impl SessionPort for WaylandDesktop {
     fn session_capabilities(&self) -> SessionCapabilities {
+        let power = power_program().is_some();
         SessionCapabilities {
-            lock: std::path::Path::new("/usr/bin/loginctl").exists(),
-            logout: false,
-            suspend: false,
-            reboot: false,
-            shutdown: false,
+            // The bundled lock screen is an X11 grab, which cannot secure native Wayland clients.
+            // Not advertised until a compositor-owned session lock exists.
+            lock: false,
+            logout: logout_supported(),
+            suspend: power,
+            reboot: power,
+            shutdown: power,
         }
     }
 
-    fn perform_session_action(&mut self, _action: SessionAction) -> FlameResult<()> {
-        Err(unsupported(
-            "session actions are not wired on the Wayland compositor yet",
-        ))
+    fn perform_session_action(&mut self, action: SessionAction) -> FlameResult<()> {
+        match action {
+            SessionAction::Logout if logout_supported() => self.queue(Command::Logout),
+            SessionAction::Logout => Err(FlameError::new(
+                ErrorCode::Unavailable,
+                "logout requires a managed FlameWM session",
+            )),
+            SessionAction::Suspend | SessionAction::Reboot | SessionAction::Shutdown => {
+                let program = power_program().ok_or_else(|| {
+                    FlameError::new(ErrorCode::Unavailable, "systemctl is not installed")
+                })?;
+                let verb = match action {
+                    SessionAction::Suspend => "suspend",
+                    SessionAction::Reboot => "reboot",
+                    _ => "poweroff",
+                };
+                // Never block the single-threaded compositor while logind authorizes the action:
+                // a successful spawn reports dispatch, not completion of the power transition.
+                std::process::Command::new(program)
+                    .arg(verb)
+                    .spawn()
+                    .map(|_| ())
+                    .map_err(|error| {
+                        FlameError::new(
+                            ErrorCode::IoFailure,
+                            format!("session action launch failed: {error}"),
+                        )
+                    })
+            }
+            SessionAction::Lock
+            | SessionAction::LockPreview
+            | SessionAction::ScreensaverPreview => Err(unsupported(
+                "the Wayland compositor has no session lock or screensaver yet",
+            )),
+        }
     }
 }
 
@@ -870,13 +944,15 @@ fn apply_command(state: &mut State, command: Command) {
             state.apply_geometry(id);
             state.refocus();
         }
+        // Stops the loop; the session wrapper reaps the compositor and tears the session down.
+        Command::Logout => state.loop_signal.stop(),
     }
     state.request_redraw();
 }
 
 #[cfg(test)]
 mod tests {
-    use super::shell_scales_from;
+    use super::{managed_logout, shell_scales_from};
 
     /// A saved scale is reported for the output it names.
     #[test]
@@ -900,5 +976,36 @@ mod tests {
     fn unparsable_settings_yield_no_saved_scales() {
         assert!(shell_scales_from("").is_empty());
         assert!(shell_scales_from("not = [valid").is_empty());
+    }
+    /// Logout is offered only when the wrapper owns this process and is still its parent.
+    #[test]
+    fn logout_requires_the_wrapper_as_exact_parent() {
+        use std::ffi::OsStr;
+        let parent = rustix::process::Pid::from_raw(1234);
+        assert!(managed_logout(
+            Some(OsStr::new("1")),
+            Some(OsStr::new("1234")),
+            parent
+        ));
+        assert!(
+            !managed_logout(Some(OsStr::new("1")), Some(OsStr::new("1235")), parent),
+            "a different supervisor pid is not our parent"
+        );
+        assert!(
+            !managed_logout(None, Some(OsStr::new("1234")), parent),
+            "the wrapper must claim ownership"
+        );
+        assert!(
+            !managed_logout(Some(OsStr::new("0")), Some(OsStr::new("1234")), parent),
+            "any owner value other than 1 is not ownership"
+        );
+        assert!(
+            !managed_logout(Some(OsStr::new("1")), Some(OsStr::new("bad")), parent),
+            "an unparsable pid never matches"
+        );
+        assert!(
+            !managed_logout(Some(OsStr::new("1")), Some(OsStr::new("1234")), None),
+            "no parent means no owned session"
+        );
     }
 }
