@@ -666,6 +666,12 @@ impl Service {
         }
         host.start()
             .map_err(|error| format!("platform host start failed: {error}"))?;
+        // Without this the compositor keeps its compiled-in defaults, so a hotkey rebind saved in
+        // Settings would be lost on the next start. X11 commits the same set from its runtime.
+        match host.commit_startup_shortcuts() {
+            Ok(()) => {}
+            Err(error) => eprintln!("flamewm-wayland: startup shortcuts were not applied: {error}"),
+        }
         Ok(Self {
             server,
             host: RefCell::new(host),
@@ -994,6 +1000,7 @@ mod tests {
     use flamewm_api::shortcuts::KeyBinding;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
+    use std::rc::Rc;
 
     /// A saved scale is reported for the output it names.
     #[test]
@@ -1128,5 +1135,59 @@ mod tests {
             desktop.staged_shortcuts.borrow().is_none(),
             "commit must drain the staged set"
         );
+    }
+    /// A hotkey saved in the settings file must reach the compositor at startup. This drives the
+    /// same `effective_registry` + `commit_startup` path the compositor runs, against a real file,
+    /// so a rebind survives a restart instead of falling back to compiled-in defaults.
+    #[test]
+    fn saved_hotkeys_reach_the_compositor_at_startup() {
+        use flamewm_platform::services::shortcuts::{ShortcutService, effective_registry};
+        use flamewm_platform::settings::ConfigStore;
+
+        let dir =
+            std::env::temp_dir().join(format!("flamewm-wayland-hotkeys-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.toml");
+        std::fs::write(&path, "hotkey.WorkspaceLeft=Ctrl+Super+h\n").unwrap();
+
+        let settings = ConfigStore::default()
+            .parse_snapshot(&std::fs::read_to_string(&path).unwrap())
+            .unwrap();
+        let registry = effective_registry(&settings.hotkeys, settings.assistant_enabled).unwrap();
+        assert_eq!(
+            registry.bindings().get("WorkspaceLeft").cloned(),
+            Some(KeyBinding::assigned("Ctrl+Super+h")),
+            "the saved rebound chord must win over the default"
+        );
+
+        let mut desktop = WaylandDesktop {
+            mirror: Rc::new(RefCell::new(Mirror::default())),
+            commands: Rc::new(RefCell::new(Vec::new())),
+            catalog: None,
+            staged_shortcuts: RefCell::new(None),
+            shell_scales: BTreeMap::new(),
+        };
+        ShortcutService::default()
+            .commit_startup(&mut desktop, registry.clone())
+            .unwrap();
+
+        let commands = desktop.commands.borrow();
+        match commands.as_slice() {
+            [Command::SetShortcuts(bindings)] => {
+                assert_eq!(
+                    bindings.get("WorkspaceLeft"),
+                    Some(&KeyBinding::assigned("Ctrl+Super+h")),
+                    "the compositor must receive the rebind, not the default"
+                );
+                assert_eq!(
+                    bindings.len(),
+                    registry.bindings().len(),
+                    "the whole effective set is delivered, not just the rebound action"
+                );
+            }
+            other => panic!("expected one SetShortcuts command, got {other:?}"),
+        }
+        drop(commands);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
