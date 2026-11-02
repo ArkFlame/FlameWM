@@ -22,6 +22,16 @@ pub const MIN_CLIENT_H: i32 = 80;
 const DEFAULT_W: i32 = 640;
 const DEFAULT_H: i32 = 420;
 
+/// `titlebars` default, matching `flamewm_platform::settings::ProductSettings::default()`.
+pub const DEFAULT_TITLEBARS: bool = true;
+/// Margin a model built by [`WindowModel::new`] starts with: none, so an unconfigured model lays
+/// windows out exactly as it did before `windowMargin` was honoured (the regression baseline).
+///
+/// The saved product default is `ProductSettings::default().window_margin` (2 px); the caller
+/// delivers it through [`WindowModel::configure`], which is what makes a maximized frame sit in the
+/// work area inset by the margin like X11's `apply_window_margin`.
+pub const DEFAULT_WINDOW_MARGIN: i32 = 0;
+
 pub type WindowId = u64;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -87,6 +97,8 @@ pub struct Managed {
     pub workspace: usize,
     pub minimized: bool,
     pub mode: Mode,
+    /// `titlebars` as last applied by [`WindowModel::configure`]; false removes the band.
+    pub titlebars: bool,
     /// Client rectangle to return to when leaving maximized or fullscreen.
     pub restore: Rect,
     /// Preserve maximize state across fullscreen, so exiting a game restores the prior layout.
@@ -96,17 +108,18 @@ pub struct Managed {
 }
 
 impl Managed {
-    /// Frame rectangle as drawn: fullscreen windows have no server-side titlebar.
+    /// Frame rectangle as drawn: no band when the window is fullscreen or titlebars are off.
     pub fn frame(&self) -> Rect {
-        if self.mode == Mode::Fullscreen {
-            self.rect
-        } else {
+        if self.decorated() {
             self.rect.frame()
+        } else {
+            self.rect
         }
     }
 
-    pub fn decorated(&self) -> bool {
-        self.mode != Mode::Fullscreen
+    /// Server-side titlebar band present: `titlebars` is on and the window is not fullscreen.
+    pub const fn decorated(&self) -> bool {
+        self.titlebars && !matches!(self.mode, Mode::Fullscreen)
     }
 }
 
@@ -117,6 +130,13 @@ pub struct WindowModel {
     current: usize,
     count: usize,
     show_desktop_hidden: Vec<WindowId>,
+    /// `titlebars` (`DEFAULT_TITLEBARS` until [`WindowModel::configure`] says otherwise).
+    titlebars: bool,
+    /// `windowMargin` (`DEFAULT_WINDOW_MARGIN` until [`WindowModel::configure`] says otherwise).
+    window_margin: i32,
+    /// Work area of the last maximize or refit, so a settings change can reflow without the caller
+    /// repeating it. `None` until the shell first reports one.
+    work_area: Option<Rect>,
 }
 
 impl Default for WindowModel {
@@ -132,7 +152,46 @@ impl WindowModel {
             current: 0,
             count: workspace_count.clamp(1, MAX_WORKSPACES),
             show_desktop_hidden: Vec::new(),
+            titlebars: DEFAULT_TITLEBARS,
+            window_margin: DEFAULT_WINDOW_MARGIN,
+            work_area: None,
         }
+    }
+
+    /// Applies the `titlebars` and `windowMargin` settings, the two the compositor reads instead
+    /// of guessing. Call it once with the saved product values:
+    /// `model.configure(settings.titlebars, i32::from(settings.window_margin))`.
+    ///
+    /// A negative margin means "no margin", exactly as
+    /// [`flamewm_window_core::apply_window_margin`] treats it. Every window picks the titlebar mode
+    /// up immediately because [`Managed::frame`] and [`WindowModel::hit`] derive the band from it.
+    ///
+    /// Floating windows keep their client rect; only the band above them appears or disappears,
+    /// which is X11 `reflow_titlebars`. A maximized window is reflowed at once into the last known
+    /// work area, so a setting change does not wait for the next maximize keypress the way X11's
+    /// `reconcile_work_area` would.
+    pub fn configure(&mut self, titlebars: bool, margin: i32) {
+        self.titlebars = titlebars;
+        self.window_margin = margin.max(0);
+        let work = self.work_area;
+        for window in &mut self.windows {
+            window.titlebars = titlebars;
+            if window.mode == Mode::Maximized {
+                if let Some(work) = work {
+                    window.rect = maximized_client(work, titlebars, self.window_margin);
+                }
+            }
+        }
+    }
+
+    /// Whether server-side titlebars are currently drawn.
+    pub const fn titlebars(&self) -> bool {
+        self.titlebars
+    }
+
+    /// The margin currently inset from a maximized work area.
+    pub const fn window_margin(&self) -> i32 {
+        self.window_margin
     }
 
     pub fn current_workspace(&self) -> usize {
@@ -167,6 +226,9 @@ impl WindowModel {
     }
 
     /// Default placement: cascade per workspace so new windows do not stack exactly.
+    ///
+    /// The cascade step is a frame origin; the client rect sits below it by the titlebar band, so
+    /// the band is only reserved when the model draws one.
     pub fn cascade_rect(&self, workspace: usize) -> Rect {
         let n = self
             .windows
@@ -174,7 +236,8 @@ impl WindowModel {
             .filter(|w| w.workspace == workspace)
             .count() as i32;
         let step = 30 * (n % 10);
-        Rect::new(60 + step, 60 + step + TITLEBAR_HEIGHT, DEFAULT_W, DEFAULT_H)
+        let band = if self.titlebars { TITLEBAR_HEIGHT } else { 0 };
+        Rect::new(60 + step, 60 + step + band, DEFAULT_W, DEFAULT_H)
     }
 
     pub fn add(&mut self, id: WindowId, rect: Rect, workspace: usize) {
@@ -185,6 +248,7 @@ impl WindowModel {
             workspace,
             minimized: false,
             mode: Mode::Normal,
+            titlebars: self.titlebars,
             restore: rect,
             fullscreen_restore_mode: Mode::Normal,
             fullscreen_restore_rect: rect,
@@ -415,8 +479,10 @@ impl WindowModel {
         }
     }
 
-    /// Toggle maximize into `work` (the usable area, titlebar included in the frame).
+    /// Toggle maximize into `work` (the usable area; the frame fills it, inset by `windowMargin`).
     pub fn toggle_maximize(&mut self, id: WindowId, work: Rect) {
+        let margin = self.window_margin;
+        self.work_area = Some(work);
         let Some(window) = self.get_mut(id) else {
             return;
         };
@@ -428,12 +494,7 @@ impl WindowModel {
             Mode::Normal => {
                 window.restore = window.rect;
                 window.mode = Mode::Maximized;
-                window.rect = Rect::new(
-                    work.x,
-                    work.y + TITLEBAR_HEIGHT,
-                    work.w,
-                    work.h - TITLEBAR_HEIGHT,
-                );
+                window.rect = maximized_client(work, window.titlebars, margin);
             }
             Mode::Fullscreen => {}
         }
@@ -443,14 +504,17 @@ impl WindowModel {
     /// The fullscreen saved maximized rect must track the new work area too, otherwise leaving
     /// fullscreen after a host mode change returns to a clipped, old-size maximized window.
     pub fn refit_output(&mut self, id: WindowId, output: Rect, work: Rect) {
+        let margin = self.window_margin;
+        self.work_area = Some(work);
         let Some(window) = self.get_mut(id) else {
             return;
         };
+        let maximized = maximized_client(work, window.titlebars, margin);
         let maximized = Rect::new(
-            work.x,
-            work.y + TITLEBAR_HEIGHT,
-            work.w.max(1),
-            (work.h - TITLEBAR_HEIGHT).max(1),
+            maximized.x,
+            maximized.y,
+            maximized.w.max(1),
+            maximized.h.max(1),
         );
         match window.mode {
             Mode::Fullscreen => {
@@ -491,6 +555,22 @@ impl WindowModel {
 /// Rectangle centre, the anchor the X11 directional search compares window positions by.
 fn centre(rect: Rect) -> (i32, i32) {
     (rect.x + rect.w / 2, rect.y + rect.h / 2)
+}
+
+/// Client rect of a window maximized into `work`: the frame fills the margined work area, and the
+/// titlebar band (when the window has one) comes out of the client rect.
+///
+/// The margin comes from the shared [`flamewm_window_core::apply_window_margin`], the same call
+/// X11 makes, so both sessions inset an outer edge by the full margin and a shared edge by half.
+fn maximized_client(work: Rect, titlebars: bool, margin: i32) -> Rect {
+    let frame = flamewm_window_core::apply_window_margin(api_rect(work), api_rect(work), margin);
+    let band = if titlebars { TITLEBAR_HEIGHT } else { 0 };
+    Rect::new(frame.x, frame.y + band, frame.width, frame.height - band)
+}
+
+/// Bridges the model rectangle to the shared geometry type the window-core policy speaks.
+const fn api_rect(rect: Rect) -> flamewm_api::Rect {
+    flamewm_api::Rect::new(rect.x, rect.y, rect.w, rect.h)
 }
 
 /// Titlebar button rectangle, right-aligned inside the frame: close, maximize, minimize.
@@ -921,6 +1001,254 @@ mod tests {
         model.toggle_maximize(1, WORK);
         assert_eq!(model.get(1).unwrap().rect, before);
         assert_eq!(model.get(1).unwrap().mode, Mode::Normal);
+    }
+
+    /// A model that is never configured keeps the defaults, which are also the regression baseline:
+    /// titlebars on and no margin, i.e. exactly the geometry and hit testing this model had before
+    /// the two settings were read.
+    #[test]
+    fn defaults_are_titlebars_on_and_no_margin() {
+        for model in [WindowModel::new(2), WindowModel::default()] {
+            assert!(model.titlebars);
+            assert_eq!(model.titlebars, DEFAULT_TITLEBARS);
+            assert_eq!(model.window_margin, 0);
+            assert_eq!(model.window_margin, DEFAULT_WINDOW_MARGIN);
+            assert_eq!(model.work_area, None);
+        }
+    }
+
+    /// `titlebars=false` is X11 `reflow_titlebars(false)`: the frame's top edge moves down by the
+    /// band, so the client keeps its on-screen position and the frame equals the client rect. The
+    /// band above the client is then outside the frame and hits nothing at all.
+    #[test]
+    fn titlebars_off_drops_the_band_from_geometry_and_hit_testing() {
+        let mut model = WindowModel::new(1);
+        model.add(1, Rect::new(100, 100, 300, 300), 0);
+        // Baseline, titlebars on: the band is part of the frame and grabs the click.
+        assert!(model.get(1).unwrap().decorated());
+        assert_eq!(
+            model.get(1).unwrap().frame(),
+            Rect::new(100, 100 - TITLEBAR_HEIGHT, 300, 300 + TITLEBAR_HEIGHT)
+        );
+        assert_eq!(model.hit(110.0, 100.0 - 10.0), Some(Hit::Titlebar(1)));
+
+        model.configure(false, 0);
+        let window = model.get(1).unwrap().clone();
+        assert!(!window.decorated());
+        assert_eq!(
+            window.rect,
+            Rect::new(100, 100, 300, 300),
+            "client stays put"
+        );
+        assert_eq!(
+            window.frame(),
+            window.rect,
+            "frame no longer includes a band"
+        );
+        assert_eq!(
+            model.hit(110.0, 100.0 - 10.0),
+            None,
+            "band is not hit-testable"
+        );
+        // Inside the client the hit is a plain client hit: no titlebar and no buttons.
+        assert_eq!(model.hit(200.0, 200.0), Some(Hit::Client(1)));
+        assert_eq!(model.hit(350.0, 120.0), Some(Hit::Client(1)));
+        // The resize grip still belongs to the client rect.
+        assert_eq!(model.hit(102.0, 200.0), Some(Hit::Resize(1)));
+    }
+
+    /// Turning titlebars back on restores the band above the unchanged client rect, which is the
+    /// same reflow X11 applies when the setting flips, so the hit test classifies it again.
+    #[test]
+    fn titlebars_on_again_restores_the_band_above_the_same_client() {
+        let mut model = WindowModel::new(1);
+        model.add(1, Rect::new(100, 100, 300, 300), 0);
+        model.configure(false, 0);
+        model.configure(true, 0);
+        let window = model.get(1).unwrap().clone();
+        assert!(window.decorated());
+        assert_eq!(window.rect, Rect::new(100, 100, 300, 300));
+        assert_eq!(
+            window.frame(),
+            Rect::new(100, 100 - TITLEBAR_HEIGHT, 300, 300 + TITLEBAR_HEIGHT)
+        );
+        assert_eq!(model.hit(110.0, 100.0 - 10.0), Some(Hit::Titlebar(1)));
+        let close = button_rect(window.frame(), Button::Close);
+        assert_eq!(
+            model.hit(f64::from(close.x + 2), f64::from(close.y + 2)),
+            Some(Hit::Button(1, Button::Close))
+        );
+    }
+
+    /// Windows added after the settings were applied inherit them; a negative margin is "no margin",
+    /// as `apply_window_margin` itself treats it.
+    #[test]
+    fn configure_reaches_new_windows_and_clamps_a_negative_margin() {
+        let mut model = WindowModel::new(1);
+        model.configure(false, -5);
+        assert_eq!(model.window_margin, 0, "a negative margin means none");
+        model.add(2, Rect::new(0, 0, 200, 200), 0);
+        assert!(!model.get(2).unwrap().decorated());
+        assert_eq!(model.get(2).unwrap().frame(), Rect::new(0, 0, 200, 200));
+    }
+
+    /// `windowMargin` parity with X11: a maximized frame is the work area inset by
+    /// `flamewm_window_core::apply_window_margin`, and the titlebar band comes out of the client.
+    #[test]
+    fn maximize_insets_the_work_area_by_the_window_margin() {
+        let mut model = model_with(&[1]);
+        model.configure(true, 2);
+        model.toggle_maximize(1, WORK);
+        let window = model.get(1).unwrap().clone();
+        let frame = Rect::new(2, 2, 996, 696);
+        assert_eq!(window.frame(), frame);
+        assert_eq!(
+            window.rect,
+            Rect::new(
+                frame.x,
+                frame.y + TITLEBAR_HEIGHT,
+                frame.w,
+                frame.h - TITLEBAR_HEIGHT
+            )
+        );
+        // Same rectangle the shared policy produces for a tile that fills the work area.
+        assert_eq!(
+            flamewm_window_core::apply_window_margin(
+                flamewm_api::Rect::new(0, 0, 1000, 700),
+                flamewm_api::Rect::new(0, 0, 1000, 700),
+                2
+            ),
+            flamewm_api::Rect::new(frame.x, frame.y, frame.w, frame.h)
+        );
+        // Leaving maximized restores the floating rect untouched by the margin.
+        model.toggle_maximize(1, WORK);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Normal);
+    }
+
+    /// Margin 0 is today's geometry byte for byte: the frame fills the work area exactly.
+    #[test]
+    fn zero_margin_maximize_is_unchanged_from_today() {
+        let mut model = model_with(&[1]);
+        model.configure(true, 0);
+        model.toggle_maximize(1, WORK);
+        let frame = model.get(1).unwrap().frame();
+        assert_eq!(frame, WORK);
+        assert_eq!(
+            model.get(1).unwrap().rect,
+            Rect::new(0, TITLEBAR_HEIGHT, WORK.w, WORK.h - TITLEBAR_HEIGHT)
+        );
+        model.configure(true, 0);
+        assert_eq!(
+            model.get(1).unwrap().frame(),
+            frame,
+            "re-applying is a no-op"
+        );
+    }
+
+    /// Without titlebars the maximized client fills the margined work area, as X11 does when
+    /// `titlebar_height()` is 0 and the frame equals the client.
+    #[test]
+    fn maximize_without_titlebars_fills_the_margined_work_area() {
+        let mut model = model_with(&[1]);
+        model.configure(false, 2);
+        model.toggle_maximize(1, WORK);
+        let window = model.get(1).unwrap().clone();
+        assert!(!window.decorated());
+        assert_eq!(window.rect, Rect::new(2, 2, 996, 696));
+        assert_eq!(window.frame(), window.rect);
+    }
+
+    /// `Super+V` goes through the same maximize path, so it picks the margin up too.
+    #[test]
+    fn toggle_float_fills_the_margined_work_area() {
+        let mut model = model_with(&[1]);
+        model.configure(true, 2);
+        model.toggle_float(1, WORK, WORK);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Maximized);
+        assert_eq!(model.get(1).unwrap().frame(), Rect::new(2, 2, 996, 696));
+    }
+
+    /// An output size change re-applies the margin through `refit_output`, for the live maximized
+    /// window and for the maximized rect a fullscreen window restores to.
+    #[test]
+    fn refit_output_reapplies_the_margin_after_an_output_change() {
+        let mut model = model_with(&[1]);
+        model.configure(true, 2);
+        model.toggle_maximize(1, WORK);
+
+        let resized = Rect::new(0, 0, 1280, 720);
+        let usable = Rect::new(0, 0, 1280, 688);
+        model.refit_output(1, resized, usable);
+        assert_eq!(model.get(1).unwrap().frame(), Rect::new(2, 2, 1276, 684));
+
+        // Fullscreen over the maximized layout: the saved maximize rect tracks the new margin too.
+        model.set_fullscreen(1, resized, true);
+        let bigger = Rect::new(0, 0, 1600, 900);
+        let bigger_work = Rect::new(0, 0, 1600, 868);
+        model.refit_output(1, bigger, bigger_work);
+        assert_eq!(
+            model.get(1).unwrap().rect,
+            bigger,
+            "fullscreen keeps the output rect"
+        );
+        model.set_fullscreen(1, bigger, false);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Maximized);
+        assert_eq!(model.get(1).unwrap().frame(), Rect::new(2, 2, 1596, 864));
+    }
+
+    /// A live settings change reflows a maximized frame at once, the way X11 `reflow_titlebars`
+    /// plus `reconcile_work_area` do, without waiting for the next maximize keypress.
+    #[test]
+    fn configure_reflows_a_maximized_frame_immediately() {
+        let mut model = model_with(&[1]);
+        model.configure(true, 2);
+        model.toggle_maximize(1, WORK);
+        assert_eq!(model.get(1).unwrap().frame(), Rect::new(2, 2, 996, 696));
+
+        // Margin change: same work area, new inset, no second maximize call.
+        model.configure(true, 8);
+        assert_eq!(model.get(1).unwrap().frame(), Rect::new(8, 8, 984, 684));
+
+        // Titlebars off: the frame still fills the margined work area, no band to subtract.
+        model.configure(false, 8);
+        let window = model.get(1).unwrap().clone();
+        assert!(!window.decorated());
+        assert_eq!(window.frame(), Rect::new(8, 8, 984, 684));
+        assert_eq!(window.rect, window.frame());
+
+        // Back to the defaults: the unconfigured geometry this model always produced.
+        model.configure(true, 0);
+        assert_eq!(model.get(1).unwrap().frame(), WORK);
+    }
+
+    /// `configure` never touches a floating window and never overwrites its restore rect.
+    #[test]
+    fn configure_leaves_floating_and_restore_geometry_alone() {
+        let mut model = model_with(&[1]);
+        let floating = model.get(1).unwrap().rect;
+        model.configure(false, 4);
+        assert_eq!(model.get(1).unwrap().rect, floating);
+
+        model.configure(true, 0);
+        model.toggle_maximize(1, WORK);
+        model.configure(true, 6);
+        model.toggle_maximize(1, WORK);
+        assert_eq!(model.get(1).unwrap().rect, floating);
+    }
+
+    /// A new window cascades below the band only when the model draws one.
+    #[test]
+    fn cascade_reserves_the_band_only_with_titlebars() {
+        let mut model = WindowModel::new(1);
+        let with_band = model.cascade_rect(0);
+        assert_eq!(with_band.y, 60 + TITLEBAR_HEIGHT);
+        model.configure(false, 0);
+        let without_band = model.cascade_rect(0);
+        assert_eq!(without_band.y, 60);
+        assert_eq!(
+            without_band,
+            Rect::new(with_band.x, 60, with_band.w, with_band.h)
+        );
     }
 
     #[test]

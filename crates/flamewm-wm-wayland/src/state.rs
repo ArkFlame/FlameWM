@@ -402,6 +402,11 @@ impl State {
 
         let shortcuts = Shortcuts::from_bindings(ShortcutRegistry::default().bindings());
         let damage = OutputDamageTracker::from_output(&output);
+        // `titlebars` and `windowMargin` are saved settings; without this the model draws a
+        // titlebar and ignores the margin no matter what Settings holds.
+        let (titlebars, window_margin) = crate::input::saved_model_settings();
+        let mut model = WindowModel::new(4);
+        model.configure(titlebars, window_margin);
 
         Ok(Self {
             display,
@@ -418,7 +423,7 @@ impl State {
             output,
             output_size: Size::from((1280, 800)),
             damage,
-            model: WindowModel::new(4),
+            model,
             toplevels: Vec::new(),
             next_id: 1,
             focused: None,
