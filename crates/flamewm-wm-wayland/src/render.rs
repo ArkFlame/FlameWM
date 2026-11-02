@@ -740,11 +740,20 @@ fn render_into(
 ) -> Result<(), Box<dyn Error>> {
     let size = backend.window_size();
     refresh_desktop_backdrop(state, backend.renderer(), size)?;
-    let mut elements =
-        state
-            .cursors
-            .elements(backend.renderer(), &state.cursor_status, state.pointer);
-    elements.extend(build_elements(state, backend.renderer()));
+    // While locked, the lock client owns the screen: painting the desktop behind it would put
+    // other clients' content back on the output the lock exists to cover.
+    // A locker that crashed mid-lock must not keep the screen covered forever.
+    crate::session_lock::prune_dead_locks(state);
+    let elements = if let Some(surface) = state.lock_surface() {
+        surface_elements(backend.renderer(), surface.wl_surface(), 0, 0)
+    } else {
+        let mut elements =
+            state
+                .cursors
+                .elements(backend.renderer(), &state.cursor_status, state.pointer);
+        elements.extend(build_elements(state, backend.renderer()));
+        elements
+    };
     if let Some(path) = state.dump.take() {
         // Readback goes through an offscreen texture: copying from the window surface target
         // left the GL context lost for the next swap (EGL_BAD_ALLOC), so the window path stays

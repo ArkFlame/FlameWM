@@ -296,6 +296,10 @@ pub struct State {
     pub loop_signal: LoopSignal,
     pub socket_name: String,
     pub compositor: CompositorState,
+    /// `ext-session-lock-v1` global state; `Some` after `init_session_lock`.
+    pub session_lock: Option<smithay::wayland::session_lock::SessionLockManagerState>,
+    /// The surfaces a locking client drew, one per output, while the session is locked.
+    pub locked_outputs: Vec<crate::session_lock::LockedOutput>,
     pub xdg_shell: XdgShellState,
     pub layer_shell: WlrLayerShellState,
     pub shm: ShmState,
@@ -375,6 +379,8 @@ impl State {
         loop_handle: LoopHandle<'static, State>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let compositor = CompositorState::new::<State>(&display);
+        let session_lock = None;
+        let locked_outputs = Vec::new();
         let xdg_shell = XdgShellState::new::<State>(&display);
         let _xdg_decoration = XdgDecorationState::new::<State>(&display);
         let layer_shell = WlrLayerShellState::new::<State>(&display);
@@ -409,6 +415,8 @@ impl State {
         model.configure(titlebars, window_margin);
 
         Ok(Self {
+            session_lock,
+            locked_outputs,
             display,
             loop_signal,
             socket_name,

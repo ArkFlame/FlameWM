@@ -72,11 +72,13 @@ mod handlers;
 mod input;
 // Compiled without the `drm` feature too: the D-Bus surface and the `Session` impl are the only
 // feature-gated parts, which keeps the pause/resume state machine testable on any host.
+mod lock_global;
 #[cfg_attr(not(feature = "drm"), allow(dead_code))]
 mod logind;
 mod model;
 mod probe;
 mod render;
+mod session_lock;
 #[cfg_attr(not(feature = "drm"), allow(dead_code))]
 // The native backend's first-frame gate; pure, so it is compiled (and tested) without a GPU.
 mod startup;
@@ -524,6 +526,9 @@ fn run() -> Result<i32, Box<dyn Error>> {
         socket_name.clone(),
         handle.clone(),
     )?;
+    // Advertise ext-session-lock-v1 before clients connect: the lock UI is an ordinary client,
+    // so this global is the only way it can paint while the session is locked.
+    state.init_session_lock();
     // Control service: a failed bus connection leaves the compositor usable without the shell API.
     if let Err(error) = control::install(&mut state) {
         eprintln!("flamewm-wayland: control service unavailable: {error}");

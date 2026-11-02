@@ -9,6 +9,10 @@ authors.workspace = true
 description = "FlameWM Wayland compositor (smithay): nested winit backend with XWayland; drm tty backend behind the drm feature"
 publish = false
 
+[lib]
+name = "flamewm_wm_wayland"
+path = "src/lib.rs"
+
 [[bin]]
 name = "flamewm-wayland"
 path = "src/main.rs"

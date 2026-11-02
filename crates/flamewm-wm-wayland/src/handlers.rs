@@ -6,6 +6,7 @@ use smithay::delegate_data_device;
 use smithay::delegate_layer_shell;
 use smithay::delegate_output;
 use smithay::delegate_seat;
+use smithay::delegate_session_lock;
 use smithay::delegate_shm;
 use smithay::delegate_viewporter;
 use smithay::delegate_xdg_decoration;
@@ -416,6 +417,7 @@ delegate_data_device!(State);
 impl OutputHandler for State {}
 
 delegate_output!(State);
+delegate_session_lock!(State);
 
 delegate_viewporter!(State);
 
