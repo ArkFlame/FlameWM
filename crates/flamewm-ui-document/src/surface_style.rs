@@ -3,7 +3,7 @@
 use flamewm_api::settings::SettingsSnapshot;
 use flamewm_ui_core::surface::{SurfaceFill, surface_fill, surface_stroke};
 
-use crate::{UiColor, UiDocumentAccess};
+use crate::template::{UiColor, UiDocumentAccess};
 
 impl From<SurfaceFill> for UiColor {
     fn from(value: SurfaceFill) -> Self {
@@ -16,13 +16,13 @@ impl From<SurfaceFill> for UiColor {
     }
 }
 
-/// The same RGBA surface fill for every X11 UI root.
+/// The same RGBA surface fill for every UI root, on any backend.
 #[must_use]
 pub fn surface_background(snapshot: &SettingsSnapshot) -> UiColor {
     surface_fill(snapshot).into()
 }
 
-/// The same 1px contour for every X11 UI root, independent of its fill.
+/// The same 1px contour for every UI root, independent of its fill.
 #[must_use]
 pub fn surface_border(snapshot: &SettingsSnapshot) -> UiColor {
     surface_stroke(snapshot).into()

@@ -999,30 +999,8 @@ fn store_canvas(file: &std::path::Path, root: (u32, u32), small: &[u8]) {
     }
 }
 
-/// Window-level pseudo-transparency for a Normal window (for example the explorer): the
-/// wallpaper under the whole window, blurred per `blur_percent`, is laid under the window's
-/// translucent fills. Wallpaper pixels come from the shared wallpaper owner, never a root read.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WindowBackdrop {
-    /// `wallpaper` setting. Empty selects the packaged default wallpaper.
-    pub wallpaper: String,
-    /// `wallpaperFit` setting text, parsed by `flamewm_image_core::wallpaper::parse`.
-    pub fit: String,
-    /// Packaged asset root that the default wallpaper resolves against.
-    pub packaged_root: std::path::PathBuf,
-    /// Surface opacity percent. 100 is opaque and installs no backdrop.
-    pub opacity_percent: u8,
-    /// Blur percent applied to the snapshot (`blur_radius_px` policy).
-    pub blur_percent: u8,
-}
-
-impl WindowBackdrop {
-    /// Whether translucent fills need a backdrop at all.
-    #[must_use]
-    pub fn is_translucent(&self) -> bool {
-        self.opacity_percent < 100
-    }
-}
+/// Re-exported from the dependency-free core so every backend names the same type.
+pub use flamewm_render_core::backdrop::WindowBackdrop;
 
 /// Wallpaper file for a `wallpaper` setting value (empty means the packaged default).
 #[must_use]

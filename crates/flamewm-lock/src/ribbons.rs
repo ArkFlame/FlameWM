@@ -6,7 +6,7 @@
 use std::time::Instant;
 
 use flamewm_ribbons::{Config, Quality, Rasterizer, Rect, Ribbons};
-use flamewm_ui_x11::RuntimeImage;
+use flamewm_ui_document::RuntimeImage;
 
 use crate::settings::SaverConfig;
 

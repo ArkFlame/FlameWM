@@ -139,7 +139,7 @@ impl SurfaceRuntime {
         config: SurfaceConfig,
     ) -> Result<SurfaceHandle, UiBackendError> {
         self.controller
-            .create_surface(template.document, config.into())
+            .create_surface(template.into_runtime_document(), config.into())
             .map(SurfaceHandle)
             .map_err(UiBackendError::Renderer)
     }
@@ -469,11 +469,7 @@ impl SurfaceRuntime {
         apply: impl FnOnce(&mut UiDocumentView<'_>) -> Result<R, String>,
     ) -> Result<R, UiBackendError> {
         let document = self.document_mut(surface)?;
-        apply(&mut UiDocumentView {
-            document,
-            file_drag: None,
-        })
-        .map_err(UiBackendError::Document)
+        apply(&mut UiDocumentView::from_runtime(document, None)).map_err(UiBackendError::Document)
     }
 
     pub(crate) fn document_mut(

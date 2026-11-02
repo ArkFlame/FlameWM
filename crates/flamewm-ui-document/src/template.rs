@@ -5,14 +5,14 @@ use flamewm_render_core::RuntimeDocument;
 use flamewm_ui_core::style::UiLayer;
 
 pub struct UiDocument {
-    pub(crate) document: RuntimeDocument,
+    document: RuntimeDocument,
     /// Last whole-document layout, reused by `layout_box_by_id` while the
     /// document revision and viewport are unchanged.
     layout_memo: RefCell<Option<LayoutMemo>>,
     /// Whole-window pseudo-transparency, consumed when the window is created.
-    pub(crate) window_backdrop: Option<flamewm_render_x11::backdrop::WindowBackdrop>,
+    window_backdrop: Option<flamewm_render_core::backdrop::WindowBackdrop>,
     /// Opt-in XDND (drop target + drag source) for the window created from this document.
-    pub(crate) file_drop_target: bool,
+    file_drop_target: bool,
 }
 
 struct LayoutMemo {
@@ -24,16 +24,62 @@ struct LayoutMemo {
 pub struct UiDocumentView<'a> {
     pub(crate) document: &'a mut RuntimeDocument,
     /// Outgoing-drag request slot; `None` for windows without XDND.
-    pub(crate) file_drag: Option<flamewm_render_x11::FileDragSlot>,
+    pub(crate) file_drag: Option<flamewm_render_core::backdrop::FileDragSlot>,
+}
+
+impl UiDocument {
+    /// The compiled document a renderer paints. Consumed once when the window is created.
+    #[must_use]
+    pub fn into_parts(
+        self,
+    ) -> (
+        RuntimeDocument,
+        Option<flamewm_render_core::backdrop::WindowBackdrop>,
+        bool,
+    ) {
+        (self.document, self.window_backdrop, self.file_drop_target)
+    }
+}
+
+impl<'a> UiDocumentView<'a> {
+    /// Builds a view over `document` for a backend that owns the drag slot.
+    #[must_use]
+    pub fn from_runtime(
+        document: &'a mut RuntimeDocument,
+        file_drag: Option<flamewm_render_core::backdrop::FileDragSlot>,
+    ) -> Self {
+        Self {
+            document,
+            file_drag,
+        }
+    }
 }
 
 impl UiDocumentView<'_> {
+    /// Root node of the document this view wraps.
+    #[must_use]
+    pub fn root_node(&self) -> u32 {
+        self.document.document.root
+    }
+
+    /// Read-only document, for measuring. Mutating callers use `runtime_document`.
+    #[must_use]
+    pub fn runtime_document_ref(&self) -> &RuntimeDocument {
+        self.document
+    }
+
     /// Replaces the window's document with `next` (for example a larger pool). The caller must rewrite every
     /// node it owns afterwards; the window keeps its size, input and drag state.
     pub fn replace_document(&mut self, next: UiDocument) {
         let mut next = next.document;
         next.continue_counters_from(self.document);
         *self.document = next;
+    }
+
+    /// The document a backend paints for this event.
+    #[must_use]
+    pub fn runtime_document(&mut self) -> &mut RuntimeDocument {
+        self.document
     }
 
     /// Starts a modal XDND drag of `paths` (absolute local files) from this window. The drag
@@ -173,7 +219,7 @@ impl UiDocument {
     #[must_use]
     pub fn with_window_backdrop(
         mut self,
-        backdrop: flamewm_render_x11::backdrop::WindowBackdrop,
+        backdrop: flamewm_render_core::backdrop::WindowBackdrop,
     ) -> Self {
         self.window_backdrop = backdrop.is_translucent().then_some(backdrop);
         self
@@ -545,7 +591,7 @@ pub fn decode_document(bytes: &'static [u8]) -> Result<UiDocument, String> {
 
 /// A renderer document kept behind the UI/X11 boundary.
 pub struct UiTemplate {
-    pub(crate) document: RuntimeDocument,
+    document: RuntimeDocument,
 }
 
 impl UiTemplate {
@@ -553,6 +599,12 @@ impl UiTemplate {
         Self {
             document: document.document,
         }
+    }
+
+    /// The compiled document a backend hands to its surface runtime.
+    #[must_use]
+    pub fn into_runtime_document(self) -> RuntimeDocument {
+        self.document
     }
 }
 
@@ -564,7 +616,22 @@ mod tests {
         Length, NodeKind, Style,
     };
 
-    use crate::test_support::compiled_node as node;
+    /// Fixture node with empty action/text and no style; callers override fields with `..`.
+    fn node(id: &str, kind: NodeKind) -> CompiledNode {
+        CompiledNode {
+            kind,
+            parent: None,
+            first_child: None,
+            next_sibling: None,
+            id: id.to_string().into(),
+            action: std::borrow::Cow::Borrowed(""),
+            text: std::borrow::Cow::Borrowed(""),
+            image: None,
+            style: Style::default().into(),
+            hover_style: None,
+            active_style: None,
+        }
+    }
 
     fn make_doc(
         assets: Vec<ImageAsset>,
@@ -650,7 +717,7 @@ mod tests {
 
     #[test]
     fn window_backdrop_is_kept_only_for_translucent_specs() {
-        use flamewm_render_x11::backdrop::WindowBackdrop;
+        use flamewm_render_core::backdrop::WindowBackdrop;
         let spec = |opacity_percent| WindowBackdrop {
             wallpaper: String::new(),
             fit: "fill".to_string(),

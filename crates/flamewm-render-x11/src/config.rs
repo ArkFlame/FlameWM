@@ -33,7 +33,8 @@ pub const FILE_DRAG_EXTRACT_ACTION: &str = "__flamewm.window.drag.extract";
 
 /// Outgoing file-drag request: written by the UI, taken by the X11 event loop after the event
 /// that requested it. `Some(paths)` starts a modal XDND drag with absolute `paths`.
-pub type FileDragSlot = std::rc::Rc<std::cell::RefCell<Option<Vec<std::path::PathBuf>>>>;
+/// Re-exported from the dependency-free core so a document is not tied to this backend.
+pub use flamewm_render_core::backdrop::FileDragSlot;
 
 /// ICCCM WM_CLASS pair (instance, class) plus EWMH UTF-8 name is taken from the title.
 #[derive(Clone, Debug, PartialEq, Eq)]

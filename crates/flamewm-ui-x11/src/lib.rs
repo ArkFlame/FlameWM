@@ -8,8 +8,7 @@ pub use startup_protocol::{StartupX11Event, StartupX11Observer};
 mod popup;
 mod reconcile;
 mod surface_runtime;
-pub mod surface_style;
-mod template;
+pub use flamewm_ui_document::surface_style;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
@@ -21,6 +20,10 @@ pub use flamewm_render_x11::{
     X11WindowIdentity, apply_cursor_appearance, apply_cursor_theme, release_free_heap,
     return_large_frees_to_system, safe_file_name, valid_bus_name, valid_object_path,
 };
+pub use flamewm_ui_document::{
+    RuntimeImage, UiColor, UiDocument, UiDocumentAccess, UiDocumentView, UiTemplate,
+    decode_document,
+};
 pub use input::{
     SurfaceEvent, UiInputEvent, WHEEL_SCROLL_STEP, pointer_button_from_raw, wheel_scroll_delta,
 };
@@ -29,10 +32,6 @@ pub use reconcile::{reconcile, update};
 pub use surface_runtime::{
     SlideConfig, SlideEdge, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole,
     SurfaceRuntime, UiBackendError,
-};
-pub use template::{
-    RuntimeImage, UiColor, UiDocument, UiDocumentAccess, UiDocumentView, UiTemplate,
-    decode_document,
 };
 
 use std::os::fd::RawFd;
@@ -331,17 +330,15 @@ where
     P: for<'a> FnMut(&RawPress, &mut UiDocumentView<'a>) -> Result<(), String>,
     R: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
 {
-    let backdrop = document.window_backdrop;
-    let file_drag = document
-        .file_drop_target
-        .then(flamewm_render_x11::FileDragSlot::default);
+    let (runtime, backdrop, drop_target) = document.into_parts();
+    let file_drag = drop_target.then(flamewm_render_x11::FileDragSlot::default);
     let mut x11 = x11_config(config, role);
     x11.backdrop = backdrop;
     x11.file_drag.clone_from(&file_drag);
     let press_drag = file_drag.clone();
     let reactor_drag = file_drag.clone();
     flamewm_render_x11::run_with_controller_events_with_reactor_geometry(
-        document.document,
+        runtime,
         x11,
         reactor,
         geometry,
@@ -351,26 +348,20 @@ where
             let event = controller_event(action);
             on_event(
                 &event,
-                &mut UiDocumentView {
-                    document,
-                    file_drag: file_drag.clone(),
-                },
+                &mut UiDocumentView::from_runtime(document, file_drag.clone()),
             )
         },
         move |press, document| {
             on_press(
                 press,
-                &mut UiDocumentView {
-                    document,
-                    file_drag: press_drag.clone(),
-                },
+                &mut UiDocumentView::from_runtime(document, press_drag.clone()),
             )
         },
         move |document| {
-            on_reactor(&mut UiDocumentView {
+            on_reactor(&mut UiDocumentView::from_runtime(
                 document,
-                file_drag: reactor_drag.clone(),
-            })
+                reactor_drag.clone(),
+            ))
         },
     )
 }

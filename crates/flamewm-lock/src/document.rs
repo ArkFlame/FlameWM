@@ -6,7 +6,7 @@ use std::path::Path;
 use flamewm_api::Rect;
 use flamewm_image_core::scale::{ScaleFilter, scale_rgba};
 use flamewm_image_core::{ImageSourceFormat, RgbaImage, SvgColorScheme, decode_bytes, svg};
-use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess, UiTemplate, decode_document};
+use flamewm_ui_document::{RuntimeImage, UiColor, UiDocumentAccess, UiTemplate, decode_document};
 
 use crate::background;
 use crate::layout::{self, LockLayout, Placed, RefRect};
@@ -665,7 +665,8 @@ mod tests {
     use std::collections::HashMap;
 
     use flamewm_ui_core::style::UiLayer;
-    use flamewm_ui_x11::{Overflow, UiDocument};
+    use flamewm_ui_document::Overflow;
+    use flamewm_ui_document::UiDocument;
 
     use super::*;
     use crate::clock::ClockFormat;

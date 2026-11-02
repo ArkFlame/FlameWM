@@ -1,3 +1,4 @@
+pub mod backdrop;
 pub mod codec;
 pub mod hash;
 pub mod layout;

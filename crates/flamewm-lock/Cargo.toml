@@ -15,6 +15,7 @@ flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-ribbons = { path = "../flamewm-ribbons" }
+flamewm-ui-document = { path = "../flamewm-ui-document" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 rustix = { workspace = true }
 

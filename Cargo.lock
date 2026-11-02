@@ -836,6 +836,7 @@ dependencies = [
  "flamewm-render-compiler",
  "flamewm-ribbons",
  "flamewm-ui-core",
+ "flamewm-ui-document",
  "flamewm-ui-x11",
  "rustix 1.1.4",
 ]
@@ -1020,6 +1021,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-ui-document"
+version = "0.1.3"
+dependencies = [
+ "flamewm-api",
+ "flamewm-render-core",
+ "flamewm-skin",
+ "flamewm-ui-core",
+]
+
+[[package]]
 name = "flamewm-ui-x11"
 version = "0.1.3"
 dependencies = [
@@ -1031,6 +1042,7 @@ dependencies = [
  "flamewm-skin",
  "flamewm-ui",
  "flamewm-ui-core",
+ "flamewm-ui-document",
  "x11rb 0.14.0",
 ]
 
