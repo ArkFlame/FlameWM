@@ -14,6 +14,7 @@ flamewm-control-dbus = { path = "../flamewm-control-dbus" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-reactor = { path = "../flamewm-reactor" }
+flamewm-render-core = { path = "../flamewm-render-core" }
 flamewm-ribbons = { path = "../flamewm-ribbons" }
 flamewm-ui-document = { path = "../flamewm-ui-document" }
 rustix = { workspace = true }
@@ -23,14 +24,25 @@ default = ["x11"]
 # X11 presentation (the `flamewm-lock` binary). A Wayland adapter enables the shared
 # core instead, which must build with this off.
 x11 = ["dep:flamewm-ui-x11"]
+wayland = ["dep:wayland-client", "dep:wayland-protocols"]
 
 [dependencies.flamewm-ui-x11]
 path = "../flamewm-ui-x11"
 optional = true
 
+# The Wayland presenter is a plain client of ext-session-lock-v1, so these are not gated by
+# `x11`: they are what replaces it.
+[dependencies.wayland-client]
+version = "0.31"
+optional = true
+
+[dependencies.wayland-protocols]
+version = "0.32"
+features = ["client", "staging"]
+optional = true
+
 [dev-dependencies]
 flamewm-ui-core = { path = "../flamewm-ui-core" }
-flamewm-render-core = { path = "../flamewm-render-core" }
 
 [build-dependencies]
 flamewm-render-compiler = { path = "../flamewm-render-compiler" }
@@ -38,7 +50,8 @@ flamewm-render-compiler = { path = "../flamewm-render-compiler" }
 [[bin]]
 name = "flamewm-lock"
 path = "src/main.rs"
-required-features = ["x11"]
+# Either backend can serve the session: X11 paints with XRender, Wayland takes the lock protocol.
+required-features = []
 
 [lints.rust]
 unsafe_code = "allow"

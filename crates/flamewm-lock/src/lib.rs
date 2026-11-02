@@ -9,6 +9,7 @@ pub mod layout;
 pub mod native_time;
 pub mod pam;
 pub mod power;
+pub mod present;
 #[cfg(feature = "x11")]
 pub mod preview;
 #[cfg(feature = "x11")]
@@ -22,5 +23,7 @@ pub mod settings;
 pub mod signals;
 pub mod state;
 pub mod view;
+#[cfg(feature = "wayland")]
+pub mod wayland;
 #[cfg(feature = "x11")]
 pub mod x11;

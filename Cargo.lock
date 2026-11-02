@@ -846,6 +846,8 @@ dependencies = [
  "flamewm-ui-document",
  "flamewm-ui-x11",
  "rustix 1.1.4",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]
