@@ -74,6 +74,8 @@ pub enum Command {
     Spawn(Vec<String>),
     /// Places a window at an absolute rect, from a shell geometry request.
     SetGeometry(WindowId, crate::model::Rect),
+    /// Rebuilds the live shortcut table from the shell's committed bindings.
+    SetShortcuts(BTreeMap<String, KeyBinding>),
     /// Ends the compositor from inside its event loop. The session wrapper supervises it, so its
     /// exit is what returns the VT to the greeter.
     Logout,
@@ -125,6 +127,8 @@ pub struct WaylandDesktop {
     mirror: Rc<RefCell<Mirror>>,
     commands: Rc<RefCell<Vec<Command>>>,
     catalog: Option<Arc<flamewm_applications::ApplicationCatalog>>,
+    /// Bindings prepared but not yet committed: the shell stages one edit set, then commits it.
+    staged_shortcuts: RefCell<Option<BTreeMap<String, KeyBinding>>>,
     /// Per-output shell scale saved by Settings, keyed by this compositor's output id.
     ///
     /// The compositor has no runtime scale hook yet, so this is what `display_snapshot` reports
@@ -326,19 +330,29 @@ impl DisplayPort for WaylandDesktop {
 }
 
 impl ShortcutPort for WaylandDesktop {
-    fn prepare_shortcuts(&mut self, _desired: &BTreeMap<String, KeyBinding>) -> FlameResult<()> {
-        Err(unsupported(
-            "compositor bindings are compiled in; shell bindings are not applied",
-        ))
+    fn prepare_shortcuts(&mut self, desired: &BTreeMap<String, KeyBinding>) -> FlameResult<()> {
+        // Stage only: a prepare that is never committed must leave the live table alone.
+        *self.staged_shortcuts.borrow_mut() = Some(desired.clone());
+        Ok(())
     }
 
     fn commit_shortcuts(&mut self) -> FlameResult<()> {
-        Err(unsupported(
-            "compositor bindings are compiled in; shell bindings are not applied",
-        ))
+        // The live table is rebuilt from the staged bindings on the next loop turn, because the
+        // engine holds `State` and this port does not. Applying takes effect immediately after
+        // that turn; nothing is silently dropped.
+        let staged = self.staged_shortcuts.borrow_mut().take();
+        match staged {
+            Some(bindings) => self.queue(Command::SetShortcuts(bindings)),
+            None => Err(FlameError::new(
+                ErrorCode::EngineRejected,
+                "commit_shortcuts without a prepared set",
+            )),
+        }
     }
 
-    fn rollback_shortcuts(&mut self) {}
+    fn rollback_shortcuts(&mut self) {
+        *self.staged_shortcuts.borrow_mut() = None;
+    }
 }
 
 impl WorkAreaPort for WaylandDesktop {
@@ -643,6 +657,7 @@ impl Service {
             mirror: Rc::clone(&mirror),
             commands: Rc::clone(&commands),
             catalog: catalog.clone(),
+            staged_shortcuts: RefCell::new(None),
             shell_scales: saved_shell_scales(),
         };
         let mut host = PlatformHost::new(engine, settings_path());
@@ -962,6 +977,9 @@ fn apply_command(state: &mut State, command: Command) {
             state.model.set_rect(id, rect);
             state.apply_geometry(id);
         }
+        Command::SetShortcuts(bindings) => {
+            state.shortcuts = crate::model::Shortcuts::from_bindings(&bindings);
+        }
         // Stops the loop; the session wrapper reaps the compositor and tears the session down.
         Command::Logout => state.loop_signal.stop(),
     }
@@ -970,7 +988,12 @@ fn apply_command(state: &mut State, command: Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::{managed_logout, shell_scales_at, shell_scales_from};
+    use super::{
+        Command, Mirror, WaylandDesktop, managed_logout, shell_scales_at, shell_scales_from,
+    };
+    use flamewm_api::shortcuts::KeyBinding;
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
 
     /// A saved scale is reported for the output it names.
     #[test]
@@ -1052,5 +1075,58 @@ mod tests {
         }
         // A negative origin is legal: windows may sit off the top-left corner, as in X11.
         assert!(flamewm_api::Rect::new(-4, 9, 640, 480).is_valid());
+    }
+    /// The staged/commit split must be safe on the real port: an uncommitted prepare changes
+    /// nothing, a rollback drops the staged set, and committing with nothing prepared is refused
+    /// instead of silently doing nothing.
+    #[test]
+    fn shortcut_staging_requires_a_commit() {
+        use std::rc::Rc;
+
+        use flamewm_api::ports::ShortcutPort;
+
+        fn port() -> WaylandDesktop {
+            WaylandDesktop {
+                mirror: Rc::new(RefCell::new(Mirror::default())),
+                commands: Rc::new(RefCell::new(Vec::new())),
+                catalog: None,
+                staged_shortcuts: RefCell::new(None),
+                shell_scales: BTreeMap::new(),
+            }
+        }
+
+        let mut desktop = port();
+        let mut desired = BTreeMap::new();
+        desired.insert("window.close".to_owned(), KeyBinding::assigned("super+q"));
+
+        assert!(
+            desktop.commit_shortcuts().is_err(),
+            "committing with nothing prepared must be refused"
+        );
+
+        desktop.prepare_shortcuts(&desired).unwrap();
+        assert!(
+            desktop.commands.borrow().is_empty(),
+            "prepare alone must not touch the live table"
+        );
+
+        desktop.rollback_shortcuts();
+        assert!(
+            desktop.commit_shortcuts().is_err(),
+            "a rolled-back set must not be committable"
+        );
+
+        desktop.prepare_shortcuts(&desired).unwrap();
+        desktop.commit_shortcuts().unwrap();
+        let commands = desktop.commands.borrow();
+        assert_eq!(
+            commands.as_slice(),
+            [Command::SetShortcuts(desired)],
+            "commit must queue exactly the prepared bindings"
+        );
+        assert!(
+            desktop.staged_shortcuts.borrow().is_none(),
+            "commit must drain the staged set"
+        );
     }
 }
