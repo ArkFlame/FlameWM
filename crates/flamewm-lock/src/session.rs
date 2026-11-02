@@ -65,6 +65,12 @@ fn output_rects_from_snapshot(snapshot: Option<&DisplaySnapshot>, root: Rect) ->
     if rects.is_empty() { vec![root] } else { rects }
 }
 
+/// Per-output lock rectangles for a display snapshot.
+///
+/// `run.rs` is the only caller today, and it is gated behind the `x11` feature, but this is
+/// geometry a presenter of any backend needs: a Wayland lock surface is created per output
+/// too. Keeping it available without the feature is what lets a non-X11 presenter reuse it.
+#[allow(dead_code)]
 pub(crate) fn lock_output_rects_from_snapshot(snapshot: &DisplaySnapshot, root: Rect) -> Vec<Rect> {
     output_rects_from_snapshot(Some(snapshot), root)
 }

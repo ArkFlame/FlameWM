@@ -8,7 +8,7 @@ fn core_modules() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut modules: Vec<PathBuf> = fs::read_dir(&root)
         .expect("lock src directory")
-        .filter_map(|entry| entry.ok())
+        .filter_map(std::result::Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
         .collect();
