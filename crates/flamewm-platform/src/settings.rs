@@ -269,6 +269,9 @@ pub struct ProductSettings {
     pub cursor_theme: String,
     /// Cursor pixel size; one of 24, 32, 48, 64.
     pub cursor_size: u16,
+    /// `keyboardLayout`: xkb layout name the Wayland seat compiles its keymap from; one of
+    /// [`flamewm_api::settings::KEYBOARD_LAYOUTS`]. The X11 session's own X server layout wins there.
+    pub keyboard_layout: String,
     pub animations_enabled: bool,
     pub animation_speed: u16,
     pub start_animation: AnimationStyle,
@@ -389,6 +392,7 @@ impl Default for ProductSettings {
             titlebar_button_style: "circle".to_owned(),
             cursor_theme: String::new(),
             cursor_size: 24,
+            keyboard_layout: flamewm_api::settings::DEFAULT_KEYBOARD_LAYOUT.to_owned(),
             animations_enabled: true,
             animation_speed: 100,
             start_animation: AnimationStyle::None,
@@ -554,6 +558,9 @@ impl ProductSettings {
         }
         if !matches!(self.cursor_size, 24 | 32 | 48 | 64) {
             return invalid("cursorSize must be 24, 32, 48 or 64");
+        }
+        if !flamewm_api::settings::KEYBOARD_LAYOUTS.contains(&self.keyboard_layout.as_str()) {
+            return invalid("keyboardLayout must be a supported xkb layout");
         }
         if self.accent_opacity > 100 {
             return invalid("accentOpacity must be 0..100");
@@ -1130,6 +1137,7 @@ stable_settings! {
     (false, windows, "titlebars", titlebars),
     (false, windows, "focusFollowsMouse", focus_follows_mouse),
     (false, appearance, "cursorSize", cursor_size),
+    (false, appearance, "keyboardLayout", keyboard_layout),
     (false, appearance, "accentOpacity", accent_opacity),
     (false, appearance, "decoration", decoration),
     (false, appearance, "renderAcceleration", render_acceleration),

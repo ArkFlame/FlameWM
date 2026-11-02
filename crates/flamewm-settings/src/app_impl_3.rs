@@ -337,6 +337,15 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 accent,
             )?;
         }
+        let layout = self.text_setting("keyboardLayout").ok();
+        for value in flamewm_api::settings::KEYBOARD_LAYOUT_CHOICES {
+            highlight_segment(
+                document,
+                &format!("keyboard-layout-{value}"),
+                layout.as_deref() == Some(value),
+                accent,
+            )?;
+        }
         let mode = self.text_setting("screensaverMode").ok();
         highlight_options(
             document,

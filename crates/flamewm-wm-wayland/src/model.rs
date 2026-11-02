@@ -244,6 +244,112 @@ impl WindowModel {
         Some(target)
     }
 
+    /// `Super+K`: the step before [`Self::cycle_focus`] in stack order — the focused window is the
+    /// topmost one (focus raises), so the previous window is the bottom of the stack. With a single
+    /// visible window that window is returned unchanged, as X11 `cycle_window(-1)` does.
+    pub fn cycle_focus_prev(&mut self) -> Option<WindowId> {
+        let target = *self.visible_top_first().last()?;
+        self.raise(target);
+        Some(target)
+    }
+
+    /// Nearest visible window to `from` on the `direction` side, scored like the X11
+    /// `directional_target` search: the distance along the axis costs four times the drift across
+    /// it, and windows that do not lie on that side are skipped.
+    pub fn focus_direction(&self, from: WindowId, direction: GridDirection) -> Option<WindowId> {
+        let origin = self.get(from)?.frame();
+        let (origin_x, origin_y) = centre(origin);
+        let mut best: Option<(i64, WindowId)> = None;
+        for window in &self.windows {
+            if window.id == from || window.workspace != self.current || window.minimized {
+                continue;
+            }
+            let (x, y) = centre(window.frame());
+            let (dx, dy) = (
+                i64::from(x) - i64::from(origin_x),
+                i64::from(y) - i64::from(origin_y),
+            );
+            let (along, across) = match direction {
+                GridDirection::Left => (-dx, dy.abs()),
+                GridDirection::Right => (dx, dy.abs()),
+                GridDirection::Up => (-dy, dx.abs()),
+                GridDirection::Down => (dy, dx.abs()),
+            };
+            if along <= 0 {
+                continue;
+            }
+            let score = along * 4 + across;
+            if best.is_none_or(|(best_score, _)| score < best_score) {
+                best = Some((score, window.id));
+            }
+        }
+        best.map(|(_, id)| id)
+    }
+
+    /// `Super+equal` / `Super+minus`: the keyboard resize step of X11 `resize_active`, which only
+    /// moves a floating window and floors it at 160x96.
+    pub fn resize_step(&mut self, id: WindowId, grow: bool) {
+        const STEP_W: i32 = 40;
+        const STEP_H: i32 = 30;
+        const FLOOR_W: i32 = 160;
+        const FLOOR_H: i32 = 96;
+        let Some(window) = self
+            .get_mut(id)
+            .filter(|window| window.mode == Mode::Normal)
+        else {
+            return;
+        };
+        window.rect.w = if grow {
+            window.rect.w.saturating_add(STEP_W)
+        } else {
+            window.rect.w.saturating_sub(STEP_W).max(FLOOR_W)
+        };
+        window.rect.h = if grow {
+            window.rect.h.saturating_add(STEP_H)
+        } else {
+            window.rect.h.saturating_sub(STEP_H).max(FLOOR_H)
+        };
+    }
+
+    /// `Super+Shift+arrows`: the keyboard nudge of X11 `move_active`, 40 px per press, which only
+    /// moves a floating window.
+    pub fn nudge(&mut self, id: WindowId, direction: GridDirection) {
+        const STEP: i32 = 40;
+        let (dx, dy) = match direction {
+            GridDirection::Left => (-STEP, 0),
+            GridDirection::Right => (STEP, 0),
+            GridDirection::Up => (0, -STEP),
+            GridDirection::Down => (0, STEP),
+        };
+        let Some(window) = self
+            .get_mut(id)
+            .filter(|window| window.mode == Mode::Normal)
+        else {
+            return;
+        };
+        window.rect.x = window.rect.x.saturating_add(dx);
+        window.rect.y = window.rect.y.saturating_add(dy);
+    }
+
+    /// `Super+V`: a floating window fills the work area, anything else returns to the remembered
+    /// floating rect. There is no tiling engine to toggle against, so this is X11 `toggle_float`;
+    /// leaving fullscreen also drops the maximize the window was fullscreened over.
+    pub fn toggle_float(&mut self, id: WindowId, work: Rect, output: Rect) {
+        match self.get(id).map(|window| window.mode) {
+            Some(Mode::Fullscreen) => {
+                self.set_fullscreen(id, output, false);
+                if self
+                    .get(id)
+                    .is_some_and(|window| window.mode == Mode::Maximized)
+                {
+                    self.toggle_maximize(id, work);
+                }
+            }
+            Some(Mode::Normal | Mode::Maximized) => self.toggle_maximize(id, work),
+            None => {}
+        }
+    }
+
     /// Workspace neighbour in the shared two-row grid; `None` is a deliberate no-op.
     pub fn workspace_step(&self, direction: GridDirection) -> Option<usize> {
         grid_neighbor(self.current, self.count, direction)
@@ -380,6 +486,11 @@ impl WindowModel {
             _ => {}
         }
     }
+}
+
+/// Rectangle centre, the anchor the X11 directional search compares window positions by.
+fn centre(rect: Rect) -> (i32, i32) {
+    (rect.x + rect.w / 2, rect.y + rect.h / 2)
 }
 
 /// Titlebar button rectangle, right-aligned inside the frame: close, maximize, minimize.
@@ -592,6 +703,114 @@ mod tests {
         assert_eq!(model.visible_top_first()[0], 2);
         assert_eq!(model.cycle_focus(), Some(3));
         assert_eq!(WindowModel::new(1).cycle_focus(), None);
+    }
+
+    /// `Super+K` steps backwards: from the topmost window it wraps to the bottom of the stack,
+    /// which is where X11 `cycle_window(-1)` lands. Minimized windows and other workspaces are
+    /// never candidates, and a lone window stays focused.
+    #[test]
+    fn cycle_focus_prev_wraps_to_the_bottom_of_the_stack() {
+        let mut model = model_with(&[1, 2, 3]);
+        assert_eq!(model.cycle_focus_prev(), Some(1));
+        assert_eq!(model.visible_top_first(), vec![1, 3, 2]);
+        assert_eq!(model.cycle_focus_prev(), Some(2));
+        assert_eq!(model.visible_top_first(), vec![2, 1, 3]);
+
+        // One window is its own predecessor, as X11's modular step returns it unchanged.
+        assert_eq!(model_with(&[7]).cycle_focus_prev(), Some(7));
+        assert_eq!(WindowModel::new(1).cycle_focus_prev(), None);
+
+        // Skipped candidates: a minimized window and a window on another workspace.
+        let mut model = model_with(&[1, 2]);
+        model.add(9, Rect::new(0, 0, 200, 200), 1);
+        model.minimize(2);
+        assert_eq!(model.cycle_focus_prev(), Some(1));
+    }
+
+    /// The directional search scores distance along the axis four times the drift across it, so the
+    /// nearest window on that side wins even when a farther one is better aligned. Anything not on
+    /// the requested side is never a target.
+    #[test]
+    fn focus_direction_picks_the_nearest_window_on_that_side() {
+        let mut model = WindowModel::new(2);
+        model.add(1, Rect::new(100, 100, 200, 200), 0);
+        model.add(2, Rect::new(500, 100, 200, 200), 0);
+        model.add(3, Rect::new(100, 500, 200, 200), 0);
+        assert_eq!(model.focus_direction(1, D::Right), Some(2));
+        assert_eq!(model.focus_direction(1, D::Down), Some(3));
+        assert_eq!(model.focus_direction(1, D::Left), None);
+        assert_eq!(model.focus_direction(1, D::Up), None);
+        // Both windows sit to the left of 2 at the same distance along the axis; the one that also
+        // lines up horizontally wins on the across term.
+        assert_eq!(model.focus_direction(2, D::Left), Some(1));
+
+        // A minimized window is not a candidate, and neither is one on another workspace.
+        model.minimize(2);
+        assert_eq!(model.focus_direction(1, D::Right), None);
+        model.restore(2);
+        assert_eq!(model.focus_direction(1, D::Right), Some(2));
+        model.move_to_workspace(2, 1);
+        assert_eq!(model.focus_direction(1, D::Right), None);
+    }
+
+    /// `Super+equal` / `Super+minus` follow X11 `resize_active`: 40x30 per press, floored at
+    /// 160x96, and only for a floating window.
+    #[test]
+    fn resize_step_grows_shrinks_and_floors_a_floating_window() {
+        let mut model = WindowModel::new(1);
+        model.add(1, Rect::new(10, 10, 200, 200), 0);
+        model.resize_step(1, true);
+        assert_eq!(model.get(1).unwrap().rect, Rect::new(10, 10, 240, 230));
+        model.resize_step(1, false);
+        assert_eq!(model.get(1).unwrap().rect, Rect::new(10, 10, 200, 200));
+        for _ in 0..20 {
+            model.resize_step(1, false);
+        }
+        assert_eq!(model.get(1).unwrap().rect, Rect::new(10, 10, 160, 96));
+
+        // A maximized window is not floating: the step leaves its geometry alone.
+        model.set_rect(1, Rect::new(10, 10, 500, 400));
+        model.toggle_maximize(1, WORK);
+        let maximized = model.get(1).unwrap().rect;
+        model.resize_step(1, false);
+        assert_eq!(model.get(1).unwrap().rect, maximized);
+    }
+
+    /// `Super+Shift+arrows` nudge a floating window 40 px and a maximized one never moves.
+    #[test]
+    fn nudge_moves_only_a_floating_window() {
+        let mut model = WindowModel::new(1);
+        model.add(1, Rect::new(100, 100, 200, 200), 0);
+        model.nudge(1, D::Left);
+        model.nudge(1, D::Down);
+        assert_eq!(model.get(1).unwrap().rect, Rect::new(60, 140, 200, 200));
+
+        model.toggle_maximize(1, WORK);
+        let maximized = model.get(1).unwrap().rect;
+        model.nudge(1, D::Right);
+        assert_eq!(model.get(1).unwrap().rect, maximized);
+    }
+
+    /// `Super+V` is X11 `toggle_float`: a floating window fills the work area, and pressing again
+    /// returns it to its floating rect. From fullscreen the first press lands on the floating rect,
+    /// dropping the maximize underneath.
+    #[test]
+    fn toggle_float_fills_the_work_area_and_returns_to_floating() {
+        let mut model = model_with(&[1]);
+        let floating = model.get(1).unwrap().rect;
+        model.toggle_float(1, WORK, WORK);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Maximized);
+        assert_eq!(model.get(1).unwrap().frame(), WORK);
+        model.toggle_float(1, WORK, WORK);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Normal);
+        assert_eq!(model.get(1).unwrap().rect, floating);
+
+        // Fullscreen over a maximized layout: leaving it returns to floating, not to maximized.
+        model.toggle_maximize(1, WORK);
+        model.set_fullscreen(1, WORK, true);
+        model.toggle_float(1, WORK, WORK);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Normal);
+        assert_eq!(model.get(1).unwrap().rect, floating);
     }
 
     #[test]

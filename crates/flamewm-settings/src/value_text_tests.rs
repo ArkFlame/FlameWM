@@ -593,3 +593,20 @@ fn accent_color_rejects_malformed_values_without_panicking() {
     assert!(accent_color("#+F4048").is_err());
     assert!(accent_color("#EF+048").is_err());
 }
+
+#[test]
+fn keyboard_layout_segments_target_the_setting_and_reject_unknown_layouts() {
+    for layout in ["us", "gb", "de", "fr", "es", "it", "pt", "br"] {
+        let parsed = parse_action(&format!("settings.keyboard.layout.{layout}"));
+        assert!(parsed.is_ok(), "{layout} must parse: {:?}", parsed.err());
+        match parsed.unwrap() {
+            SettingsAction::TextSelect { key, value } => {
+                assert_eq!(key, "keyboardLayout");
+                assert_eq!(value, layout);
+            }
+            _ => panic!("{layout} must select keyboardLayout"),
+        }
+    }
+    // A layout outside the supported set is an error, never a silent no-op.
+    assert!(parse_action("settings.keyboard.layout.not-a-layout").is_err());
+}

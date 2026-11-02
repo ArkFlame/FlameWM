@@ -336,6 +336,19 @@ pub(crate) fn start_voice_setup() -> Result<(), String> {
 
 /// Parses one `data-action` value. Unknown IDs are errors, never silent no-ops.
 pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
+    if let Some(layout) = action.strip_prefix("settings.keyboard.layout.") {
+        // Only a layout the platform would accept becomes a transaction: the segment list and
+        // `KEYBOARD_LAYOUTS` are the same set, and a mismatch is an error, never a silent no-op.
+        return flamewm_api::settings::KEYBOARD_LAYOUTS
+            .iter()
+            .copied()
+            .find(|allowed| *allowed == layout)
+            .map(|allowed| SettingsAction::TextSelect {
+                key: "keyboardLayout",
+                value: allowed,
+            })
+            .ok_or_else(|| format!("unknown keyboard layout '{layout}'"));
+    }
     if action == "settings.default-file-manager.cycle" {
         return Ok(SettingsAction::FileManagerCycle);
     }

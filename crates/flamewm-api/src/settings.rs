@@ -84,6 +84,28 @@ impl SettingsTransaction {
     }
 }
 
+/// Keyboard layouts `keyboardLayout` accepts: xkb layout names as `xkbcommon` spells them, one
+/// Settings segment each. The list is the single source for the platform validation and the
+/// compositor's keymap, so a saved value is always one the seat can compile.
+///
+/// A fixed list rather than free text: a layout name that xkb does not ship would make the seat
+/// compile an empty keymap and leave the session without a keyboard.
+pub const KEYBOARD_LAYOUTS: &[&str] = &[
+    "us", "gb", "de", "fr", "es", "it", "pt", "br", "nl", "be", "ch", "at", "se", "no", "dk", "fi",
+    "pl", "cz", "hu", "ro", "ru", "ua", "tr", "gr", "ca", "jp", "kr",
+];
+
+/// The layouts Settings offers as one-click segments.
+///
+/// A strict subset of [`KEYBOARD_LAYOUTS`]: the accepted set stays open so a saved profile from a
+/// fuller keyboard picker still validates, while the panel shows the common ones instead of 27
+/// buttons.
+pub const KEYBOARD_LAYOUT_CHOICES: &[&str] = &["us", "gb", "de", "fr", "es", "it", "pt", "br"];
+
+/// Layout used when `keyboardLayout` is unset, and the fallback for a value outside
+/// [`KEYBOARD_LAYOUTS`].
+pub const DEFAULT_KEYBOARD_LAYOUT: &str = KEYBOARD_LAYOUTS[0];
+
 /// Longest `assistant.apiKey` the Settings field accepts, in characters.
 pub const ASSISTANT_API_KEY_MAX_CHARS: usize = 200;
 

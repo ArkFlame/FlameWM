@@ -97,6 +97,14 @@ mod tests {
         "surface-opacity-value",
         "start-icon-value",
         "file-manager-value",
+        "keyboard-layout-us",
+        "keyboard-layout-gb",
+        "keyboard-layout-de",
+        "keyboard-layout-fr",
+        "keyboard-layout-es",
+        "keyboard-layout-it",
+        "keyboard-layout-pt",
+        "keyboard-layout-br",
         "window-margin-value",
         "taskbar-floating-margin-value",
         "taskbar-floating-radius-value",
@@ -761,5 +769,23 @@ mod tests {
         );
         assert_eq!(css_value(scroll, "overflow-y"), Some("auto"));
         assert!(HTML.contains("id=\"page-displays\" class=\"settings-page page-scroll\""));
+    }
+    #[test]
+    fn every_keyboard_layout_segment_is_offered_and_dispatchable() {
+        // The HTML segment list and the platform allow-list must agree: a segment with no allowed
+        // layout is dead, and an allowed layout with no segment is unreachable from Settings.
+        // The dispatch is a prefix match, so the branch is asserted once rather than per layout.
+        assert!(
+            DISPATCH.contains("settings.keyboard.layout."),
+            "keyboard layout actions must have a dispatch branch in lib.rs"
+        );
+        for layout in flamewm_api::settings::KEYBOARD_LAYOUT_CHOICES {
+            let id = format!("keyboard-layout-{layout}");
+            let action = format!("settings.keyboard.layout.{layout}");
+            assert!(
+                HTML.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
+                "control {id} must retain its production action {action}"
+            );
+        }
     }
 }

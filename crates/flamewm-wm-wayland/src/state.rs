@@ -393,7 +393,7 @@ impl State {
         let _global = output.create_global::<State>(&display);
 
         let mut seat = seat_state.new_wl_seat(&display, "seat0");
-        seat.add_keyboard(Default::default(), 200, 25)?;
+        seat.add_keyboard(crate::input::saved_xkb_config(), 200, 25)?;
         seat.add_pointer();
 
         let shortcuts = Shortcuts::from_bindings(ShortcutRegistry::default().bindings());

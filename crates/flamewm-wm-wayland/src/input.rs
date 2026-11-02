@@ -6,17 +6,21 @@ use smithay::backend::input::{
 };
 use smithay::desktop::{WindowSurfaceType, layer_map_for_output};
 use smithay::input::keyboard::xkb;
-use smithay::input::keyboard::{FilterResult, ModifiersState};
+use smithay::input::keyboard::{FilterResult, ModifiersState, XkbConfig};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 use smithay::wayland::shell::wlr_layer::Layer;
 
+use flamewm_api::settings::{DEFAULT_KEYBOARD_LAYOUT, KEYBOARD_LAYOUTS};
 use flamewm_api::shortcuts::{
     ACTION_FULLSCREEN_ESCAPE, ACTION_LAUNCHER, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION,
     ACTION_SCREENSHOT_WINDOW, ACTION_SESSION_LOCK, ACTION_SHOW_DESKTOP,
     ACTION_SHOW_DESKTOP_CTRL_ALT, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE,
-    ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_SWITCH, workspace_direction,
+    ACTION_WINDOW_CYCLE_NEXT, ACTION_WINDOW_CYCLE_PREV, ACTION_WINDOW_FLOAT,
+    ACTION_WINDOW_FULLSCREEN, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
+    ACTION_WINDOW_RESIZE_GROW, ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH, focus_direction,
+    move_direction, workspace_activate_index, workspace_direction, workspace_move_index,
 };
 use flamewm_platform::shortcuts::{
     ACTION_OPEN_ASSISTANT_CTRL_ALT, ACTION_OPEN_ASSISTANT_SUPER, ACTION_OPEN_FILES_CTRL_ALT,
@@ -24,7 +28,7 @@ use flamewm_platform::shortcuts::{
     ACTION_OPEN_TERMINAL_CTRL_ALT, ACTION_OPEN_TERMINAL_SUPER,
 };
 
-use crate::model::{Button, Hit, Mods, ResizeEdge, WindowId};
+use crate::model::{Button, Hit, Mode, Mods, ResizeEdge, WindowId};
 use crate::state::{Grab, State, next_serial};
 
 const BTN_LEFT: u32 = 0x110;
@@ -147,6 +151,41 @@ impl State {
             }
             return;
         }
+        // Hyprland-style binds whose target is encoded in the action id: absolute workspace
+        // activation/move and directional focus/move. An out-of-range index or a missing
+        // neighbour is a no-op, exactly as in the X11 engine.
+        if let Some(index) = workspace_activate_index(action) {
+            if self.model.switch_workspace(index) {
+                self.refocus();
+            }
+            return;
+        }
+        if let Some(index) = workspace_move_index(action) {
+            // Out of range is a no-op, as in the X11 engine: nothing moves and focus stays put.
+            if index < self.model.workspace_count() {
+                if let Some(id) = self.focused {
+                    self.model.move_to_workspace(id, index);
+                    self.apply_geometry(id);
+                    self.refocus();
+                }
+            }
+            return;
+        }
+        if let Some(direction) = focus_direction(action) {
+            if let Some(id) = self.focused {
+                if let Some(target) = self.model.focus_direction(id, direction) {
+                    self.set_focus(Some(target));
+                }
+            }
+            return;
+        }
+        if let Some(direction) = move_direction(action) {
+            if let Some(id) = self.focused {
+                self.model.nudge(id, direction);
+                self.apply_geometry(id);
+            }
+            return;
+        }
         match action {
             ACTION_WINDOW_CLOSE => {
                 if let Some(id) = self.focused {
@@ -162,6 +201,41 @@ impl State {
             ACTION_WINDOW_MAXIMIZE => {
                 if let Some(id) = self.focused {
                     self.toggle_maximize(id);
+                }
+            }
+            ACTION_WINDOW_FULLSCREEN => {
+                if let Some(id) = self.focused {
+                    let on = self
+                        .model
+                        .get(id)
+                        .is_some_and(|window| window.mode != Mode::Fullscreen);
+                    let output = self.output_rect();
+                    self.model.set_fullscreen(id, output, on);
+                    self.apply_geometry(id);
+                }
+            }
+            // Floating fills the work area and back, the X11 `toggle_float`; leaving fullscreen
+            // lands on the floating rect instead of the layout it was fullscreened over.
+            ACTION_WINDOW_FLOAT => {
+                if let Some(id) = self.focused {
+                    let work = self.work_area();
+                    let output = self.output_rect();
+                    self.model.toggle_float(id, work, output);
+                    self.apply_geometry(id);
+                }
+            }
+            ACTION_WINDOW_CYCLE_NEXT => self.cycle_focus(true),
+            ACTION_WINDOW_CYCLE_PREV => self.cycle_focus(false),
+            ACTION_WINDOW_RESIZE_GROW => {
+                if let Some(id) = self.focused {
+                    self.model.resize_step(id, true);
+                    self.apply_geometry(id);
+                }
+            }
+            ACTION_WINDOW_RESIZE_SHRINK => {
+                if let Some(id) = self.focused {
+                    self.model.resize_step(id, false);
+                    self.apply_geometry(id);
                 }
             }
             ACTION_WINDOW_SWITCH => match self.control.clone() {
@@ -213,6 +287,19 @@ impl State {
         let work = self.work_area();
         self.model.toggle_maximize(id, work);
         self.apply_geometry(id);
+    }
+
+    /// `Super+J` / `Super+K`: focus the next/previous visible window in stack order, the X11
+    /// `cycle_window` step.
+    fn cycle_focus(&mut self, forward: bool) {
+        let target = if forward {
+            self.model.cycle_focus()
+        } else {
+            self.model.cycle_focus_prev()
+        };
+        if let Some(id) = target {
+            self.set_focus(Some(id));
+        }
     }
 
     pub(crate) fn on_motion(&mut self, location: Point<f64, Logical>, time: u32) {
@@ -485,9 +572,63 @@ fn unmanaged_focus(
     entry.surface.wl_surface().map(|surface| (surface, origin))
 }
 
+/// Keymap for the seat's one keyboard, from the saved `keyboardLayout`.
+///
+/// The layout is resolved by the caller and checked against [`KEYBOARD_LAYOUTS`], so this stays
+/// pure: a value outside the list falls back to [`DEFAULT_KEYBOARD_LAYOUT`] instead of leaving the
+/// field empty, which would make `xkbcommon` read `XKB_DEFAULT_LAYOUT` from the environment and
+/// ignore the setting. Everything else keeps smithay's defaults (system rules/model/variant).
+fn xkb_config(layout: &str) -> XkbConfig<'static> {
+    // Resolve to the `'static` entry from the list rather than the caller's borrow, so the config
+    // can outlive the settings string it was parsed from.
+    let resolved = KEYBOARD_LAYOUTS
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == layout)
+        .unwrap_or(DEFAULT_KEYBOARD_LAYOUT);
+    XkbConfig {
+        layout: resolved,
+        ..XkbConfig::default()
+    }
+}
+
+/// The `keyboardLayout` saved in the `FlameWM` settings file, for the seat created at startup.
+/// A missing or unreadable file leaves the default layout, exactly as an unset settings file does
+/// elsewhere in the compositor.
+fn saved_keyboard_layout() -> String {
+    std::fs::read_to_string(crate::control::settings_path())
+        .ok()
+        .and_then(|text| {
+            flamewm_platform::settings::ConfigStore::default()
+                .parse_snapshot(&text)
+                .ok()
+        })
+        .map_or_else(
+            || DEFAULT_KEYBOARD_LAYOUT.to_owned(),
+            |settings| settings.keyboard_layout,
+        )
+}
+
+/// The keymap the seat installs at startup, read from the saved settings file.
+pub fn saved_xkb_config() -> XkbConfig<'static> {
+    xkb_config(&saved_keyboard_layout())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Button, Hit, PointerRoute, name_candidates, pointer_route};
+    use super::{Button, Hit, PointerRoute, name_candidates, pointer_route, xkb_config};
+
+    /// The saved layout reaches the keymap, and a value outside the supported set falls back
+    /// instead of producing a keymap that would leave the session without a keyboard.
+    #[test]
+    fn keyboard_layout_reaches_the_xkb_config() {
+        assert_eq!(xkb_config("de").layout, "de");
+        assert_eq!(xkb_config("us").layout, "us");
+        assert_eq!(
+            xkb_config("not-a-layout").layout,
+            flamewm_api::settings::DEFAULT_KEYBOARD_LAYOUT
+        );
+    }
 
     /// A titlebar press must belong to the compositor, never to the desktop beneath it: the press
     /// starts the window move, so routing it onward would also start the desktop's rubber band.

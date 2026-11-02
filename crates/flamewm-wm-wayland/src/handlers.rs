@@ -40,8 +40,38 @@ use smithay::wayland::shell::xdg::{
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use std::os::fd::OwnedFd;
 
-use crate::model::Mode;
+use crate::model::{Mode, ResizeEdge};
 use crate::state::{Grab, State};
+
+/// Maps the xdg-shell edge onto the compositor's edge flags.
+///
+/// `ResizeEdge::None` means the client named no edge, which is not a resize, so no grab starts.
+/// Each named edge covers the two flags that move it; corners set one of each axis.
+fn model_edges(
+    edges: smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
+) -> Option<ResizeEdge> {
+    use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge as E;
+    let (left, right, top, bottom) = match edges {
+        E::None => return None,
+        E::Top => (false, false, true, false),
+        E::Bottom => (false, false, false, true),
+        E::Left => (true, false, false, false),
+        E::Right => (false, true, false, false),
+        E::TopLeft => (true, false, true, false),
+        E::TopRight => (false, true, true, false),
+        E::BottomLeft => (true, false, false, true),
+        E::BottomRight => (false, true, false, true),
+        // The protocol enum is non-exhaustive: an edge this build does not know cannot be
+        // resized meaningfully, so it behaves like `None` rather than guessing a direction.
+        _ => return None,
+    };
+    Some(ResizeEdge {
+        left,
+        right,
+        top,
+        bottom,
+    })
+}
 
 impl CompositorHandler for State {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -134,12 +164,30 @@ impl XdgShellHandler for State {
 
     fn resize_request(
         &mut self,
-        _surface: ToplevelSurface,
+        surface: ToplevelSurface,
         _seat: WlSeat,
         _serial: Serial,
-        _edges: smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
+        edges: smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
     ) {
-        // Client-driven resize is not wired yet; the compositor's bottom-right grip is the path.
+        // A client that draws its own decorations asks to be resized from an edge. Drive the same
+        // `Grab::Resize` the compositor's grip uses, so the client sees ordinary configure changes
+        // and the drag is owned by one code path rather than a second implementation.
+        let Some(id) = self.window_for_surface(surface.wl_surface()) else {
+            return;
+        };
+        let Some(edge) = model_edges(edges) else {
+            // `None`: no edge bits. Nothing to resize from.
+            return;
+        };
+        if let Some(managed) = self.model.get(id).cloned() {
+            self.set_focus(Some(id));
+            self.grab = Some(Grab::Resize {
+                id,
+                pointer: (self.pointer.x, self.pointer.y),
+                start: managed.rect,
+                edge,
+            });
+        }
     }
 
     fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
@@ -370,3 +418,30 @@ impl OutputHandler for State {}
 delegate_output!(State);
 
 delegate_viewporter!(State);
+
+#[cfg(test)]
+mod tests {
+    use super::model_edges;
+    use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge as E;
+
+    /// Every edge the protocol can name reaches the matching model flag, including corners.
+    #[test]
+    fn protocol_edges_map_to_model_edges() {
+        let left = model_edges(E::Left).expect("left resizes");
+        assert!(left.left && !left.right && !left.top && !left.bottom);
+
+        let bottom_right = model_edges(E::BottomRight).expect("corner resizes");
+        assert!(bottom_right.right && bottom_right.bottom);
+        assert!(!bottom_right.left && !bottom_right.top);
+
+        let top_left = model_edges(E::TopLeft).expect("corner resizes");
+        assert!(top_left.left && top_left.top);
+        assert!(!top_left.right && !top_left.bottom);
+    }
+
+    /// A request naming no edge is not a resize, so no grab is started.
+    #[test]
+    fn a_none_edge_is_not_a_resize() {
+        assert!(model_edges(E::None).is_none());
+    }
+}
