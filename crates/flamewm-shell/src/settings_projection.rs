@@ -145,7 +145,7 @@ pub fn project(
 }
 
 /// `ui/shell/flamewm.css` accent-derived tokens with the alpha each keeps in its `:root` default.
-const ACCENT_TOKEN_ALPHAS: [(&str, u8); 9] = [
+const ACCENT_TOKEN_ALPHAS: [(&str, u8); 8] = [
     ("--accent", 0xff),
     ("--accent-soft", ACCENT_SOFT_ALPHA),
     ("--accent-strong", 0xdd),
@@ -153,7 +153,6 @@ const ACCENT_TOKEN_ALPHAS: [(&str, u8); 9] = [
     ("--desktop-hover-border", 0x4d),
     ("--desktop-selected", 0x47),
     ("--desktop-selected-border", 0xa6),
-    ("--selection-fill", 0x33),
     ("--snap-fill", 0x33),
 ];
 
@@ -957,7 +956,7 @@ mod tests {
 
     #[test]
     fn accent_change_reprojects_every_accent_derived_token() {
-        const TOKEN_ALPHAS: [(&str, u8); 9] = [
+        const TOKEN_ALPHAS: [(&str, u8); 8] = [
             ("--accent", 0xff),
             ("--accent-soft", 0x38),
             ("--accent-strong", 0xdd),
@@ -965,7 +964,6 @@ mod tests {
             ("--desktop-hover-border", 0x4d),
             ("--desktop-selected", 0x47),
             ("--desktop-selected-border", 0xa6),
-            ("--selection-fill", 0x33),
             ("--snap-fill", 0x33),
         ];
         for (hex, rgb) in [

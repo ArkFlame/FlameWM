@@ -409,13 +409,36 @@ mod tests {
         for token in [
             "var(--desktop-hover)",
             "var(--desktop-hover-border)",
-            "var(--selection-fill)",
             "var(--accent-strong)",
             "var(--accent-soft)",
             "var(--accent)",
         ] {
             assert!(css.contains(token), "desktop.css/menu.css lack {token}");
         }
+    }
+
+    /// The rubber-band rectangle is drawn with a border only.
+    ///
+    /// A filled rectangle means compositing the whole band on every pointer motion, and the band
+    /// can cover the entire desktop. The fill was removed on purpose; this guards it from
+    /// creeping back through a token or a rule.
+    #[test]
+    fn selection_rectangle_has_no_fill() {
+        let css = include_str!("../../../ui/desktop/desktop.css");
+        assert!(
+            !css.contains("--selection-fill"),
+            "the desktop stylesheet must not carry a selection fill token"
+        );
+        let rule_start = css.find(".selection {").expect("missing .selection rule");
+        let body = &css[rule_start..rule_start + css[rule_start..].find('}').expect("unclosed")];
+        assert!(
+            !body.contains("background"),
+            "the rubber-band rectangle must not paint a background: {body}"
+        );
+        assert!(
+            body.contains("border:1px solid var(--accent-strong)"),
+            "the rectangle still draws its border: {body}"
+        );
     }
 
     #[test]
