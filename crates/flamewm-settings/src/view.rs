@@ -133,6 +133,7 @@ mod tests {
         "taskbar-edge-value",
         "font-family-value",
         "font-size-value",
+        "pointer-acceleration-value",
         "settings-error",
         "about-version",
         "taskbar-output-title",
@@ -787,5 +788,78 @@ mod tests {
                 "control {id} must retain its production action {action}"
             );
         }
+    }
+
+    /// Every pointer-speed segment the panel offers must have a parsed action, and its value must
+    /// be one the platform schema accepts: a segment outside `-100..=100` is dead on arrival.
+    #[test]
+    fn pointer_speed_segments_exist_and_parse_to_their_percent() {
+        let theme = page_between(HTML, "page-theme", "page-start-menu");
+        // One prefix branch serves every segment, so it is asserted once rather than per value.
+        assert!(
+            DISPATCH.contains("settings.pointer.speed."),
+            "pointer speed actions must have a dispatch branch in lib.rs"
+        );
+        for value in flamewm_api::settings::POINTER_SPEED_CHOICES {
+            let id = flamewm_api::settings::pointer_speed_node(value);
+            let action = format!("settings.pointer.speed.{value}");
+            assert!(
+                theme.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
+                "pointer speed segment {id} must sit in the mouse/cursor card"
+            );
+            match crate::parse_action(&action) {
+                Ok(crate::SettingsAction::IntegerSelect { key, value: parsed }) => {
+                    assert_eq!(key, "pointerSpeed");
+                    assert_eq!(parsed, value);
+                }
+                Ok(_) => panic!("{action} must select pointerSpeed, not another action"),
+                Err(error) => panic!("{action} must parse: {error}"),
+            }
+        }
+        // No stray segment outside the offered set, so the panel cannot emit an unfiltered value.
+        assert_eq!(
+            HTML.matches("data-action=\"settings.pointer.speed.")
+                .count(),
+            flamewm_api::settings::POINTER_SPEED_CHOICES.len()
+        );
+        for rejected in ["pointer-speed-minus-101", "pointer-speed-101"] {
+            assert!(
+                !HTML.contains(&format!("id=\"{rejected}\"")),
+                "{rejected} is outside the accepted range and must not be offered"
+            );
+        }
+    }
+
+    /// The raw-input switch is one toggle row bound to `pointerRawInput`; its projected label is a
+    /// text target so the running window can name the profile actually in use.
+    #[test]
+    fn pointer_acceleration_row_is_a_toggle_with_a_projected_label() {
+        assert!(
+            HTML.contains(
+                "id=\"pointer-acceleration-value\" data-action=\"settings.toggle.pointerRawInput\""
+            ),
+            "the pointer acceleration row must toggle pointerRawInput"
+        );
+        assert!(
+            PROJECTED_TEXT_IDS.contains(&"pointer-acceleration-value"),
+            "the acceleration row label must be a projected text target"
+        );
+        assert!(
+            matches!(
+                crate::parse_action("settings.toggle.pointerRawInput"),
+                Ok(crate::SettingsAction::Toggle("pointerRawInput"))
+            ),
+            "the toggle must flip pointerRawInput"
+        );
+        // It is not a raw-device mode: the note must not claim acceleration is off.
+        assert!(
+            HTML.contains("Flat uses libinput's flat profile"),
+            "the row must document what Flat means"
+        );
+        assert!(
+            HTML.contains("does not switch acceleration off")
+                && HTML.contains("does not read the device raw"),
+            "the row must not overclaim a true raw device mode"
+        );
     }
 }

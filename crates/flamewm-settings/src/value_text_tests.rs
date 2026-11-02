@@ -475,6 +475,54 @@ fn taskbar_and_screensaver_actions_parse_to_their_exact_typed_targets() {
     assert!(parse_action("settings.toggle.screensaverSpanMonitors").is_err());
 }
 
+/// `pointerSpeed` segments write the percent value itself, and only inside the platform's range:
+/// a segment that parsed outside `-100..=100` would be accepted by the panel and then rejected by
+/// `ProductSettings::validate`, which is a dead control.
+#[test]
+fn pointer_speed_actions_accept_the_whole_range_and_nothing_outside_it() {
+    for speed in -100..=100 {
+        // Destructured and compared rather than matched as a binding: a pattern here would name
+        // the field instead of checking it, so the test would pass for any parsed value.
+        match parse_action(&format!("settings.pointer.speed.{speed}")) {
+            Ok(SettingsAction::IntegerSelect { key, value }) => {
+                assert_eq!(
+                    key, "pointerSpeed",
+                    "speed {speed} must target pointerSpeed"
+                );
+                assert_eq!(value, speed, "speed {speed} must round-trip its own value");
+            }
+            Ok(_) | Err(_) => panic!("settings.pointer.speed.{speed} must parse to pointerSpeed"),
+        }
+    }
+    for rejected in ["settings.pointer.speed.-101", "settings.pointer.speed.101"] {
+        assert!(
+            parse_action(rejected).is_err(),
+            "{rejected} is outside the accepted range"
+        );
+    }
+    for rejected in [
+        "settings.pointer.speed.",
+        "settings.pointer.speed.fast",
+        "settings.pointer.speed.1.5",
+        "settings.pointer.raw",
+    ] {
+        assert!(
+            parse_action(rejected).is_err(),
+            "{rejected} must be rejected"
+        );
+    }
+}
+
+/// `pointerRawInput` is a plain toggle: the same key as the schema field, nothing else.
+#[test]
+fn pointer_raw_input_is_a_toggle_on_its_stable_key() {
+    assert_action!(
+        "settings.toggle.pointerRawInput",
+        Ok(SettingsAction::Toggle("pointerRawInput"))
+    );
+    assert!(parse_action("settings.toggle.pointerSpeed").is_err());
+}
+
 #[test]
 fn appearance_actions_reject_unknown_targets_channels_and_steps() {
     for action in [

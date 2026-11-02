@@ -337,6 +337,15 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 accent,
             )?;
         }
+        let speed = self.integer_setting("pointerSpeed").ok();
+        for value in flamewm_api::settings::POINTER_SPEED_CHOICES {
+            highlight_segment(
+                document,
+                &flamewm_api::settings::pointer_speed_node(value),
+                speed == Some(value),
+                accent,
+            )?;
+        }
         let layout = self.text_setting("keyboardLayout").ok();
         for value in flamewm_api::settings::KEYBOARD_LAYOUT_CHOICES {
             highlight_segment(
@@ -603,6 +612,15 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(value) = integer("fontSizeOffset") {
             document.text("font-size-value", font_size_label(value))?;
         }
+        document.text(
+            "pointer-acceleration-value",
+            if self.bool_setting("pointerRawInput") {
+                "Flat"
+            } else {
+                "Adaptive"
+            }
+            .to_owned(),
+        )?;
         let selected_edge = self
             .selected_display()
             .and_then(|output| {

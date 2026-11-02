@@ -279,7 +279,7 @@ pub(crate) fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-pub(crate) const TOGGLE_KEYS: [&str; 36] = [
+pub(crate) const TOGGLE_KEYS: [&str; 37] = [
     "reduceTransparency",
     "showContentWhileDragging",
     "stickyNotesEnabled",
@@ -307,6 +307,7 @@ pub(crate) const TOGGLE_KEYS: [&str; 36] = [
     "autoTimeZoneEnabled",
     "snapPreviewEnabled",
     "focusFollowsMouse",
+    "pointerRawInput",
     "shareWallpaper",
     "accentCustom",
     "titlebars",
@@ -538,6 +539,23 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
     }
     if let Some(size) = action.strip_prefix("settings.cursor.size.") {
         return integer_choice_action("cursorSize", &CURSOR_SIZE_CHOICES, size, "cursor size");
+    }
+    if let Some(speed) = action.strip_prefix("settings.pointer.speed.") {
+        // The accepted range is the platform schema's, so the panel can never emit a value that
+        // `pointerSpeed` validation would later reject.
+        return speed
+            .parse::<i64>()
+            .ok()
+            .filter(|value| {
+                (i64::from(flamewm_api::settings::POINTER_SPEED_MIN)
+                    ..=i64::from(flamewm_api::settings::POINTER_SPEED_MAX))
+                    .contains(value)
+            })
+            .map(|value| SettingsAction::IntegerSelect {
+                key: "pointerSpeed",
+                value,
+            })
+            .ok_or_else(|| format!("unknown pointer speed '{speed}'"));
     }
     if let Some(minutes) = action.strip_prefix("settings.lock.timeout.") {
         return integer_choice_action(

@@ -269,6 +269,12 @@ pub struct ProductSettings {
     pub cursor_theme: String,
     /// Cursor pixel size; one of 24, 32, 48, 64.
     pub cursor_size: u16,
+    /// `pointerSpeed`: libinput acceleration speed in percent of its normalized [-1, 1] range.
+    /// `0` is the device default, negative is slower and positive faster.
+    pub pointer_speed: i8,
+    /// `pointerRawInput`: use libinput's flat ("none") acceleration profile instead of the adaptive
+    /// one. This changes the pointer curve only; it does not bypass libinput acceleration.
+    pub pointer_raw_input: bool,
     /// `keyboardLayout`: xkb layout name the Wayland seat compiles its keymap from; one of
     /// [`flamewm_api::settings::KEYBOARD_LAYOUTS`]. The X11 session's own X server layout wins there.
     pub keyboard_layout: String,
@@ -392,6 +398,8 @@ impl Default for ProductSettings {
             titlebar_button_style: "circle".to_owned(),
             cursor_theme: String::new(),
             cursor_size: 24,
+            pointer_speed: 0,
+            pointer_raw_input: false,
             keyboard_layout: flamewm_api::settings::DEFAULT_KEYBOARD_LAYOUT.to_owned(),
             animations_enabled: true,
             animation_speed: 100,
@@ -558,6 +566,11 @@ impl ProductSettings {
         }
         if !matches!(self.cursor_size, 24 | 32 | 48 | 64) {
             return invalid("cursorSize must be 24, 32, 48 or 64");
+        }
+        if !(flamewm_api::settings::POINTER_SPEED_MIN..=flamewm_api::settings::POINTER_SPEED_MAX)
+            .contains(&self.pointer_speed)
+        {
+            return invalid("pointerSpeed must be -100..100");
         }
         if !flamewm_api::settings::KEYBOARD_LAYOUTS.contains(&self.keyboard_layout.as_str()) {
             return invalid("keyboardLayout must be a supported xkb layout");
@@ -1137,6 +1150,8 @@ stable_settings! {
     (false, windows, "titlebars", titlebars),
     (false, windows, "focusFollowsMouse", focus_follows_mouse),
     (false, appearance, "cursorSize", cursor_size),
+    (false, appearance, "pointerSpeed", pointer_speed),
+    (false, appearance, "pointerRawInput", pointer_raw_input),
     (false, appearance, "keyboardLayout", keyboard_layout),
     (false, appearance, "accentOpacity", accent_opacity),
     (false, appearance, "decoration", decoration),
@@ -1334,3 +1349,71 @@ mod glass_settings_tests;
 
 #[cfg(test)]
 mod accent_custom_tests;
+
+/// Pointer controls: the schema bounds for `pointerSpeed` and the `pointerRawInput` default.
+#[cfg(test)]
+mod pointer_tests {
+    use super::{ConfigStore, ProductSettings};
+    use flamewm_api::ErrorCode;
+
+    fn load(text: &str) -> ProductSettings {
+        ConfigStore::default()
+            .parse_snapshot(text)
+            .expect("valid pointer settings")
+    }
+
+    fn rejected(line: &str) -> bool {
+        ConfigStore::default()
+            .parse_snapshot(&format!("revision=2\n{line}\n"))
+            .is_err_and(|error| error.code == ErrorCode::InvalidArgument)
+    }
+
+    #[test]
+    fn defaults_are_zero_speed_and_adaptive() {
+        let defaults = ProductSettings::default();
+        assert_eq!(defaults.pointer_speed, 0);
+        assert!(!defaults.pointer_raw_input);
+        // Both are optional keys: the default file keeps its existing byte-for-byte shape.
+        let text = ConfigStore::serialize(&defaults);
+        assert!(!text.contains("pointerSpeed"), "{text}");
+        assert!(!text.contains("pointerRawInput"), "{text}");
+    }
+
+    #[test]
+    fn the_documented_range_is_accepted_and_out_of_range_percents_are_rejected() {
+        for speed in -100..=100 {
+            let parsed = load(&format!("revision=2\npointerSpeed={speed}\n"));
+            assert_eq!(parsed.pointer_speed, speed, "pointerSpeed={speed}");
+        }
+        assert!(rejected("pointerSpeed=-101"), "-101 is below the range");
+        assert!(rejected("pointerSpeed=101"), "101 is above the range");
+        assert!(rejected("pointerSpeed=-1000"));
+        assert!(rejected("pointerSpeed=1000"));
+        // The bounds themselves are inclusive.
+        assert_eq!(load("revision=2\npointerSpeed=-100\n").pointer_speed, -100);
+        assert_eq!(load("revision=2\npointerSpeed=100\n").pointer_speed, 100);
+    }
+
+    #[test]
+    fn raw_input_defaults_off_and_both_spellings_parse() {
+        assert!(!load("revision=2\n").pointer_raw_input);
+        assert!(load("revision=2\npointerRawInput=true\n").pointer_raw_input);
+        assert!(!load("revision=2\npointerRawInput=false\n").pointer_raw_input);
+    }
+
+    #[test]
+    fn both_keys_round_trip_and_write_only_when_set() {
+        let parsed = load("revision=2\npointerSpeed=-50\npointerRawInput=true\n");
+        let text = ConfigStore::serialize(&parsed);
+        assert!(text.contains("pointerSpeed=-50\n"), "{text}");
+        assert!(text.contains("pointerRawInput=true\n"), "{text}");
+        assert_eq!(load(&text), parsed);
+    }
+
+    #[test]
+    fn fractional_and_non_numeric_values_are_rejected() {
+        assert!(rejected("pointerSpeed=0.5"));
+        assert!(rejected("pointerSpeed=fast"));
+        assert!(rejected("pointerRawInput=maybe"));
+    }
+}

@@ -106,6 +106,33 @@ pub const KEYBOARD_LAYOUT_CHOICES: &[&str] = &["us", "gb", "de", "fr", "es", "it
 /// [`KEYBOARD_LAYOUTS`].
 pub const DEFAULT_KEYBOARD_LAYOUT: &str = KEYBOARD_LAYOUTS[0];
 
+/// Inclusive bounds of `pointerSpeed`, in percent of libinput's normalized acceleration range.
+///
+/// The compositor maps the value to libinput with `speed = percent / 100.0`, so [`POINTER_SPEED_MIN`]
+/// is libinput's slowest setting, 0 is the device default and [`POINTER_SPEED_MAX`] its fastest.
+pub const POINTER_SPEED_MIN: i8 = -100;
+
+/// Inclusive upper bound of `pointerSpeed`; see [`POINTER_SPEED_MIN`].
+pub const POINTER_SPEED_MAX: i8 = 100;
+
+/// The `pointerSpeed` values Settings offers as one-click segments.
+///
+/// A subset of the accepted range, like [`KEYBOARD_LAYOUT_CHOICES`]: five steps are coarse but they
+/// are exactly the granularity a user can tell apart, and libinput itself snaps a requested speed to
+/// the closest step it implements. Any value inside [`POINTER_SPEED_MIN`]`..=`[`POINTER_SPEED_MAX`]
+/// still validates, so a hand-edited profile is never rejected for being finer than the panel.
+pub const POINTER_SPEED_CHOICES: [i64; 5] = [-100, -50, 0, 50, 100];
+
+/// Node id of one `pointerSpeed` segment, the single source for the markup and its projection.
+#[must_use]
+pub fn pointer_speed_node(value: i64) -> String {
+    if value < 0 {
+        format!("pointer-speed-minus-{}", value.unsigned_abs())
+    } else {
+        format!("pointer-speed-{value}")
+    }
+}
+
 /// Longest `assistant.apiKey` the Settings field accepts, in characters.
 pub const ASSISTANT_API_KEY_MAX_CHARS: usize = 200;
 
