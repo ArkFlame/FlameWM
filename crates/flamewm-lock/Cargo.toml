@@ -16,8 +16,17 @@ flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-ribbons = { path = "../flamewm-ribbons" }
 flamewm-ui-document = { path = "../flamewm-ui-document" }
-flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 rustix = { workspace = true }
+
+[features]
+default = ["x11"]
+# X11 presentation (the `flamewm-lock` binary). A Wayland adapter enables the shared
+# core instead, which must build with this off.
+x11 = ["dep:flamewm-ui-x11"]
+
+[dependencies.flamewm-ui-x11]
+path = "../flamewm-ui-x11"
+optional = true
 
 [dev-dependencies]
 flamewm-ui-core = { path = "../flamewm-ui-core" }
@@ -28,6 +37,7 @@ flamewm-render-compiler = { path = "../flamewm-render-compiler" }
 [[bin]]
 name = "flamewm-lock"
 path = "src/main.rs"
+required-features = ["x11"]
 
 [lints.rust]
 unsafe_code = "allow"

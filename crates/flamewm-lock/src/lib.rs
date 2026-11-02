@@ -9,8 +9,11 @@ pub mod layout;
 pub mod native_time;
 pub mod pam;
 pub mod power;
+#[cfg(feature = "x11")]
 pub mod preview;
+#[cfg(feature = "x11")]
 pub mod ribbons;
+#[cfg(feature = "x11")]
 pub mod run;
 pub mod screensaver;
 pub mod secret;
@@ -19,4 +22,5 @@ pub mod settings;
 pub mod signals;
 pub mod state;
 pub mod view;
+#[cfg(feature = "x11")]
 pub mod x11;
