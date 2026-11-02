@@ -212,6 +212,28 @@ impl WindowModel {
         }
     }
 
+    /// Applies a workspace topology change from a validated [`flamewm_api::workspace::WorkspacePlan`].
+    ///
+    /// `old_to_new` is the plan's own mapping and is what carries windows across an insertion or a
+    /// removal, so a window on a removed workspace lands where the plan says instead of being
+    /// orphaned on an index that no longer exists. Returns whether the visible workspace moved, so
+    /// the caller can refocus.
+    pub fn apply_workspace_plan(&mut self, plan: &flamewm_api::workspace::WorkspacePlan) -> bool {
+        self.count = plan.new_count.clamp(1, MAX_WORKSPACES);
+        for window in &mut self.windows {
+            if let Some(target) = plan.old_to_new.get(window.workspace).copied() {
+                window.workspace = target.min(self.count - 1);
+            } else {
+                // A window on a removed workspace migrates to the plan's new active one, which is
+                // where the X11 side parks it too.
+                window.workspace = plan.new_active.min(self.count - 1);
+            }
+        }
+        let previous = self.current;
+        self.current = plan.new_active.min(self.count - 1);
+        self.current != previous
+    }
+
     /// Every managed window, bottom to top.
     pub fn managed(&self) -> &[Managed] {
         &self.windows
@@ -1441,5 +1463,88 @@ mod tests {
         assert_eq!(shortcuts.action_for(logo, "space"), Some(ACTION_LAUNCHER));
         assert_eq!(shortcuts.action_for(alt, "Tab"), Some(ACTION_WINDOW_SWITCH));
         assert_eq!(shortcuts.action_for(Mods::default(), "Tab"), None);
+    }
+    /// A removal must carry windows off the removed workspace. The plan's own mapping is what does
+    /// it, so a window that sat on the removed index follows the mapping instead of ending up on a
+    /// workspace that no longer exists.
+    #[test]
+    fn a_workspace_removal_carries_windows_through_the_plan_mapping() {
+        use flamewm_api::workspace::{WorkspacePlan, WorkspacePlanKind};
+
+        let mut model = WindowModel::new(3);
+        model.add(1, Rect::new(0, 0, 100, 100), 0);
+        model.add(2, Rect::new(0, 0, 100, 100), 2);
+        model.switch_workspace(2);
+
+        // Removing workspace 1 (index 1): old 0 stays, old 2 moves down to 1.
+        let plan = WorkspacePlan {
+            kind: WorkspacePlanKind::Remove,
+            expected_revision: 1,
+            new_revision: 2,
+            old_count: 3,
+            new_count: 2,
+            requested_index: 1,
+            old_to_new: vec![0, 1, 1],
+            new_active: 1,
+            new_last: None,
+            new_names: vec!["1".to_owned(), "2".to_owned()],
+        };
+        plan.validate().unwrap();
+        let moved = model.apply_workspace_plan(&plan);
+
+        assert_eq!(model.workspace_count(), 2);
+        assert!(moved, "the visible workspace changed from 2 to 1");
+        assert_eq!(model.current_workspace(), 1);
+        assert_eq!(
+            model.get(1).unwrap().workspace,
+            0,
+            "a window on a surviving workspace keeps its place"
+        );
+        assert_eq!(
+            model.get(2).unwrap().workspace,
+            1,
+            "a window above the removed index follows the mapping down"
+        );
+        // Nothing may point outside the new topology.
+        for window in model.managed() {
+            assert!(
+                window.workspace < model.workspace_count(),
+                "window {} landed outside the topology",
+                window.id
+            );
+        }
+    }
+
+    /// Inserting a workspace shifts later windows up and leaves the visible one where the plan says.
+    #[test]
+    fn a_workspace_insert_shifts_later_windows() {
+        use flamewm_api::workspace::{WorkspacePlan, WorkspacePlanKind};
+
+        let mut model = WindowModel::new(2);
+        model.add(1, Rect::new(0, 0, 100, 100), 0);
+        model.add(2, Rect::new(0, 0, 100, 100), 1);
+
+        let plan = WorkspacePlan {
+            kind: WorkspacePlanKind::Insert,
+            expected_revision: 1,
+            new_revision: 2,
+            old_count: 2,
+            new_count: 3,
+            requested_index: 1,
+            old_to_new: vec![0, 2],
+            new_active: 1,
+            new_last: None,
+            new_names: vec!["1".to_owned(), "2".to_owned(), "3".to_owned()],
+        };
+        plan.validate().unwrap();
+        model.apply_workspace_plan(&plan);
+
+        assert_eq!(model.workspace_count(), 3);
+        assert_eq!(model.get(1).unwrap().workspace, 0);
+        assert_eq!(
+            model.get(2).unwrap().workspace,
+            2,
+            "a window after the inserted slot shifts up"
+        );
     }
 }

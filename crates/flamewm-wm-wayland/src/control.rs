@@ -29,7 +29,7 @@ use flamewm_api::ports::{
 use flamewm_api::session::{SessionAction, SessionCapabilities};
 use flamewm_api::shortcuts::KeyBinding;
 use flamewm_api::window::{WindowSnapshot, WindowState};
-use flamewm_api::workspace::{WorkspacePlan, WorkspaceSnapshot};
+use flamewm_api::workspace::{WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot};
 use flamewm_api::{
     DesktopAppId, ErrorCode, FlameError, FlameResult, ModeId, OutputId, Rect, Size, TransactionId,
     WindowRef, WorkspaceRef,
@@ -81,6 +81,8 @@ pub enum Command {
         id: WindowId,
         target: usize,
     },
+    /// Applies a validated workspace insert/remove topology change.
+    ApplyWorkspacePlan(flamewm_api::workspace::WorkspacePlan),
     /// Ends the compositor from inside its event loop. The session wrapper supervises it, so its
     /// exit is what returns the VT to the greeter.
     Logout,
@@ -311,10 +313,12 @@ impl WorkspacePort for WaylandDesktop {
         })
     }
 
-    fn apply_workspace_plan(&mut self, _plan: &WorkspacePlan) -> FlameResult<()> {
-        Err(unsupported(
-            "compositor cannot add or remove workspaces yet",
-        ))
+    fn apply_workspace_plan(&mut self, plan: &WorkspacePlan) -> FlameResult<()> {
+        plan.validate()?;
+        if matches!(plan.kind, WorkspacePlanKind::Activate) {
+            return self.activate_workspace(plan.new_active, plan.expected_revision);
+        }
+        self.queue(Command::ApplyWorkspacePlan(plan.clone()))
     }
 }
 
@@ -1040,6 +1044,12 @@ fn apply_command(state: &mut State, command: Command) {
         }
         Command::SetShortcuts(bindings) => {
             state.shortcuts = crate::model::Shortcuts::from_bindings(&bindings);
+        }
+        Command::ApplyWorkspacePlan(plan) => {
+            if state.model.apply_workspace_plan(&plan) {
+                state.refocus();
+            }
+            state.request_redraw();
         }
         Command::SwitchWithWindow { id, target } => {
             // Both halves move in one turn with nothing rendered between them, so the window and
