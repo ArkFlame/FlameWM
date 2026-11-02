@@ -30,6 +30,7 @@ optional = true
 
 [dev-dependencies]
 flamewm-ui-core = { path = "../flamewm-ui-core" }
+flamewm-render-core = { path = "../flamewm-render-core" }
 
 [build-dependencies]
 flamewm-render-compiler = { path = "../flamewm-render-compiler" }

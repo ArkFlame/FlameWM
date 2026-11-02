@@ -372,6 +372,128 @@ pub fn lower_commands<'a>(
     Ok(ops)
 }
 
+/// Snaps every rect, radius and stroke width in `commands` to whole device pixels.
+///
+/// The X11 painter resolves fractional geometry directly; a software presenter rasterizes whole
+/// pixels, so it snaps first instead of refusing the frame. Sizes keep at least one pixel so a
+/// hairline stays visible.
+#[must_use]
+pub fn snap_commands(commands: &[PaintCommand], scale: f32) -> Vec<PaintCommand> {
+    fn snap(value: f32, scale: f32) -> f32 {
+        (value * scale).round() / scale
+    }
+    fn snap_rect(rect: Rect, scale: f32) -> Rect {
+        let x = snap(rect.x, scale);
+        let y = snap(rect.y, scale);
+        // Snap the far edge, not the width, so neighbours meet instead of drifting apart.
+        let right = snap(rect.x + rect.width, scale);
+        let bottom = snap(rect.y + rect.height, scale);
+        Rect {
+            x,
+            y,
+            width: (right - x).max(1.0 / scale),
+            height: (bottom - y).max(1.0 / scale),
+        }
+    }
+    commands
+        .iter()
+        .map(|command| match *command {
+            PaintCommand::FillRect {
+                rect,
+                color,
+                radius,
+            } => PaintCommand::FillRect {
+                rect: snap_rect(rect, scale),
+                color,
+                radius: snap(radius, scale),
+            },
+            PaintCommand::StrokeRect {
+                rect,
+                color,
+                width,
+                radius,
+            } => PaintCommand::StrokeRect {
+                rect: snap_rect(rect, scale),
+                color,
+                width: snap(width, scale).max(1.0 / scale),
+                radius: snap(radius, scale),
+            },
+            PaintCommand::ScrollbarThumb { rect, horizontal } => PaintCommand::ScrollbarThumb {
+                rect: snap_rect(rect, scale),
+                horizontal,
+            },
+            PaintCommand::ScrollbarTrack { rect, horizontal } => PaintCommand::ScrollbarTrack {
+                rect: snap_rect(rect, scale),
+                horizontal,
+            },
+            PaintCommand::NodeBackdrop {
+                rect,
+                radius,
+                blur_percent,
+                opacity,
+                node,
+            } => PaintCommand::NodeBackdrop {
+                rect: snap_rect(rect, scale),
+                radius: snap(radius, scale),
+                blur_percent,
+                opacity,
+                node,
+            },
+            PaintCommand::Text {
+                x,
+                y,
+                color,
+                size,
+                weight,
+                ref text,
+            } => PaintCommand::Text {
+                x: snap(x, scale),
+                y: snap(y, scale),
+                color,
+                size,
+                weight,
+                text: text.clone(),
+            },
+            PaintCommand::TextShadow {
+                x,
+                y,
+                color,
+                size,
+                weight,
+                blur_radius,
+                ref text,
+            } => PaintCommand::TextShadow {
+                x: snap(x, scale),
+                y: snap(y, scale),
+                color,
+                size,
+                weight,
+                blur_radius,
+                text: text.clone(),
+            },
+            PaintCommand::Image {
+                rect,
+                asset,
+                node,
+                revision,
+                treatment,
+                tint,
+            } => PaintCommand::Image {
+                rect: snap_rect(rect, scale),
+                asset,
+                node,
+                revision,
+                treatment,
+                tint,
+            },
+            PaintCommand::PushClip { rect } => PaintCommand::PushClip {
+                rect: snap_rect(rect, scale),
+            },
+            PaintCommand::PopClip => PaintCommand::PopClip,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,6 +649,45 @@ mod tests {
             lower_commands(&commands, 1.0, &[], (1, 1), Some((1, 1, &backdrop))).expect("lower");
         assert!(matches!(ops[0], PixelOp::BlendImage { .. }));
         assert_eq!(ops.len(), 2);
+    }
+
+    #[test]
+    fn snapping_makes_a_fractional_frame_lower() {
+        // A real UI document produces fractional rects; the X11 painter resolves them, and a
+        // software presenter snaps instead of refusing the frame.
+        let commands = [PaintCommand::FillRect {
+            rect: rect(494.83594, 463.9087, 251.98288, 31.04137),
+            color: color(1, 1, 1, 255),
+            radius: 999.0,
+        }];
+        assert_eq!(
+            lower_commands(&commands, 1.0, &[], (1280, 800), None).unwrap_err(),
+            LowerError::Fractional,
+            "the raw frame is fractional"
+        );
+        let snapped = snap_commands(&commands, 1.0);
+        let ops =
+            lower_commands(&snapped, 1.0, &[], (1280, 800), None).expect("a snapped frame lowers");
+        match ops[0] {
+            PixelOp::FillRoundedRect { outer, .. } => {
+                assert_eq!((outer.x, outer.y), (495, 464));
+                assert_eq!((outer.width, outer.height), (252, 31));
+            }
+            _ => panic!("expected a fill"),
+        }
+    }
+
+    #[test]
+    fn snapping_keeps_a_hairline_visible() {
+        let commands = [PaintCommand::StrokeRect {
+            rect: rect(10.0, 10.0, 40.0, 20.0),
+            color: color(1, 1, 1, 255),
+            width: 0.3,
+            radius: 0.0,
+        }];
+        let snapped = snap_commands(&commands, 1.0);
+        let ops = lower_commands(&snapped, 1.0, &[], (100, 100), None).expect("lowers");
+        assert_eq!(ops.len(), 1, "a hairline must still paint");
     }
 
     #[test]

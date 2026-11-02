@@ -840,6 +840,7 @@ dependencies = [
  "flamewm-image-core",
  "flamewm-reactor",
  "flamewm-render-compiler",
+ "flamewm-render-core",
  "flamewm-ribbons",
  "flamewm-ui-core",
  "flamewm-ui-document",
