@@ -665,7 +665,12 @@ fn xkb_config(layout: &str) -> XkbConfig<'static> {
 /// A missing or unreadable file leaves the default layout, exactly as an unset settings file does
 /// elsewhere in the compositor.
 fn saved_keyboard_layout() -> String {
-    std::fs::read_to_string(crate::control::settings_path())
+    keyboard_layout_at(&crate::control::settings_path())
+}
+
+/// Reads `keyboardLayout` from `path`, falling back to the default layout.
+pub fn keyboard_layout_at(path: &std::path::Path) -> String {
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|text| {
             flamewm_platform::settings::ConfigStore::default()
@@ -682,7 +687,13 @@ fn saved_keyboard_layout() -> String {
 ///
 /// Mouse-driven focus is opt-in, so a missing or unreadable file keeps the X11 default (off).
 pub fn saved_focus_follows_mouse() -> bool {
-    std::fs::read_to_string(crate::control::settings_path())
+    focus_follows_mouse_at(&crate::control::settings_path())
+}
+
+/// Reads `focusFollowsMouse` from `path`. Split from `settings_path` so the file is really read in
+/// tests; the path itself comes from the environment, which is resolved in one place.
+pub fn focus_follows_mouse_at(path: &std::path::Path) -> bool {
+    std::fs::read_to_string(path)
         .ok()
         .is_some_and(|text| focus_follows_mouse_from(&text))
 }
@@ -702,8 +713,8 @@ pub fn saved_xkb_config() -> XkbConfig<'static> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Button, Hit, PointerRoute, TitleClick, completes_double_click, focus_follows_mouse_from,
-        name_candidates, pointer_route, xkb_config,
+        Button, Hit, PointerRoute, TitleClick, completes_double_click, focus_follows_mouse_at,
+        focus_follows_mouse_from, keyboard_layout_at, name_candidates, pointer_route, xkb_config,
     };
 
     /// The saved layout reaches the keymap, and a value outside the supported set falls back
@@ -794,5 +805,27 @@ mod tests {
         assert!(!focus_follows_mouse_from("focusFollowsMouse=false\n"));
         assert!(!focus_follows_mouse_from(""));
         assert!(!focus_follows_mouse_from("not = [valid"));
+    }
+    /// The readers must reach a real file, not only a string: a settings file on disk is what the
+    /// compositor actually sees at startup.
+    #[test]
+    fn settings_readers_work_against_a_real_file() {
+        let dir =
+            std::env::temp_dir().join(format!("flamewm-wayland-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.toml");
+        std::fs::write(&path, "focusFollowsMouse=true\nkeyboardLayout=fr\n").unwrap();
+        assert!(focus_follows_mouse_at(&path));
+        assert_eq!(keyboard_layout_at(&path), "fr");
+
+        // A missing file falls back instead of panicking: default layout, focus off.
+        let missing = dir.join("absent.toml");
+        assert!(!focus_follows_mouse_at(&missing));
+        assert_eq!(
+            keyboard_layout_at(&missing),
+            flamewm_api::settings::DEFAULT_KEYBOARD_LAYOUT
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

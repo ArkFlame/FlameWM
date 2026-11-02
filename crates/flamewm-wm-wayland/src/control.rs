@@ -136,7 +136,12 @@ pub struct WaylandDesktop {
 /// Entries that are not a supported scale are dropped rather than reported, so a corrupt or
 /// hand-edited value cannot present a scale the rest of the product would reject.
 fn saved_shell_scales() -> BTreeMap<String, u16> {
-    std::fs::read_to_string(settings_path())
+    shell_scales_at(&settings_path())
+}
+
+/// Reads per-output scales from `path`. Split from `settings_path` so tests read a real file.
+fn shell_scales_at(path: &std::path::Path) -> BTreeMap<String, u16> {
+    std::fs::read_to_string(path)
         .ok()
         .map(|text| shell_scales_from(&text))
         .unwrap_or_default()
@@ -952,7 +957,7 @@ fn apply_command(state: &mut State, command: Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::{managed_logout, shell_scales_from};
+    use super::{managed_logout, shell_scales_at, shell_scales_from};
 
     /// A saved scale is reported for the output it names.
     #[test]
@@ -1007,5 +1012,17 @@ mod tests {
             !managed_logout(Some(OsStr::new("1")), Some(OsStr::new("1234")), None),
             "no parent means no owned session"
         );
+    }
+    /// The scale reader must reach a real file too, and a missing one must not fail the snapshot.
+    #[test]
+    fn saved_scales_come_from_the_settings_file_on_disk() {
+        let dir =
+            std::env::temp_dir().join(format!("flamewm-wayland-scale-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.toml");
+        std::fs::write(&path, "scale.wayland-0=150\n").unwrap();
+        assert_eq!(shell_scales_at(&path).get("wayland-0"), Some(&150));
+        assert!(shell_scales_at(&dir.join("absent.toml")).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
