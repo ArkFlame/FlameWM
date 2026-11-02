@@ -72,6 +72,8 @@ pub enum Command {
     MoveToWorkspace(WindowId, usize),
     /// Starts a program through `State::spawn`, so `XWayland` clients get the compositor's `DISPLAY`.
     Spawn(Vec<String>),
+    /// Places a window at an absolute rect, from a shell geometry request.
+    SetGeometry(WindowId, crate::model::Rect),
     /// Ends the compositor from inside its event loop. The session wrapper supervises it, so its
     /// exit is what returns the VT to the greeter.
     Logout,
@@ -214,9 +216,16 @@ impl WindowPort for WaylandDesktop {
         self.queue(Command::Close(window.id))
     }
 
-    fn set_outer_geometry(&mut self, _window: WindowRef, _geometry: Rect) -> FlameResult<()> {
-        Err(unsupported(
-            "compositor does not accept client geometry requests from the shell yet",
+    fn set_outer_geometry(&mut self, window: WindowRef, geometry: Rect) -> FlameResult<()> {
+        // Mirror X11: reject an invalid rect before touching the model, with the same message.
+        // `is_valid` already requires a positive width and height.
+        if !geometry.is_valid() {
+            return Err(FlameError::invalid("window geometry is invalid"));
+        }
+        self.window(window)?;
+        self.queue(Command::SetGeometry(
+            window.id,
+            crate::model::Rect::new(geometry.x, geometry.y, geometry.width, geometry.height),
         ))
     }
 
@@ -949,6 +958,10 @@ fn apply_command(state: &mut State, command: Command) {
             state.apply_geometry(id);
             state.refocus();
         }
+        Command::SetGeometry(id, rect) => {
+            state.model.set_rect(id, rect);
+            state.apply_geometry(id);
+        }
         // Stops the loop; the session wrapper reaps the compositor and tears the session down.
         Command::Logout => state.loop_signal.stop(),
     }
@@ -1024,5 +1037,20 @@ mod tests {
         assert_eq!(shell_scales_at(&path).get("wayland-0"), Some(&150));
         assert!(shell_scales_at(&dir.join("absent.toml")).is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+    /// A shell geometry request must reject the same rects X11 rejects, before it reaches the
+    /// model, so a bad request cannot leave a window collapsed to zero size.
+    #[test]
+    fn geometry_requests_reject_invalid_rects() {
+        for width in [0, -1] {
+            let rect = flamewm_api::Rect::new(0, 0, width, 100);
+            assert!(!rect.is_valid(), "width {width} must be invalid");
+        }
+        for height in [0, -5] {
+            let rect = flamewm_api::Rect::new(0, 0, 100, height);
+            assert!(!rect.is_valid(), "height {height} must be invalid");
+        }
+        // A negative origin is legal: windows may sit off the top-left corner, as in X11.
+        assert!(flamewm_api::Rect::new(-4, 9, 640, 480).is_valid());
     }
 }
