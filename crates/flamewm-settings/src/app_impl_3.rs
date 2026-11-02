@@ -174,6 +174,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
         &self,
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
+        let outlines = self.bool_setting("outlines");
+        document.visible("outline-color-row", outlines)?;
+        document.visible("outline-opacity-row", outlines)?;
         for (target, key) in COLOR_TARGETS {
             let Ok(value) = self.text_setting(key) else {
                 continue;

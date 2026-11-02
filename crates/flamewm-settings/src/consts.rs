@@ -28,6 +28,7 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "downloads-organize-on",
     "focus-mouse-on",
     "titlebars-on",
+    "outlines-on",
     "snap-preview-on",
     "show-content-on",
     "taskbar-seconds-on",
@@ -132,6 +133,7 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         false,
     ),
     ("titlebars", "titlebars-on", "titlebars-off", true),
+    ("outlines", "outlines-on", "outlines-off", true),
     (
         "taskbarActivities",
         "taskbar-activities-on",

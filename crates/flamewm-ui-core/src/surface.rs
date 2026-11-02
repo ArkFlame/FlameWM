@@ -114,6 +114,14 @@ pub const DEFAULT_WINDOW_OUTLINE_PERCENT: u8 = 50;
 /// the settings table, not from a custom colour.
 #[must_use]
 pub fn window_outline_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
+    // `outlines` off means "drawn on nothing": the fill is fully transparent and no
+    // contour is emitted, rather than hiding the setting and drawing it anyway.
+    if matches!(
+        snapshot.values.get("outlines"),
+        Some(SettingValue::Boolean(false))
+    ) {
+        return SurfaceFill { rgb: 0, alpha: 0 };
+    }
     let rgb = match snapshot.values.get("windowOutlineColor") {
         Some(SettingValue::Text(value)) => parse_rgb(value),
         _ => None,
@@ -138,6 +146,17 @@ mod window_outline_stroke_tests {
         let stroke = window_outline_stroke(&SettingsSnapshot::new(1));
         assert_eq!(stroke.rgb, 0x00ff_ffff);
         assert_eq!(stroke.alpha, 127);
+    }
+
+    #[test]
+    fn outlines_off_makes_the_frame_outline_invisible() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        assert_eq!(window_outline_stroke(&snapshot).alpha, 127);
+        snapshot
+            .values
+            .insert("outlines".into(), SettingValue::Boolean(false));
+        let stroke = window_outline_stroke(&snapshot);
+        assert_eq!(stroke.alpha, 0, "disabled outlines must draw nothing");
     }
 
     #[test]

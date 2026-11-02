@@ -245,6 +245,8 @@ pub struct ProductSettings {
     pub window_outline_color: String,
     /// `windowOutlineOpacity` percent (0..=100); the default is half opacity.
     pub window_outline_opacity: u8,
+    /// `outlines`: when false, no surface contour is drawn and the outline settings are hidden.
+    pub outlines: bool,
     /// `surfaceSaturationPercent` (0..=200): backdrop saturation, 100 is identity.
     pub surface_saturation_percent: u8,
     /// `reduceTransparency`: all materials opaque with no blur. Default off.
@@ -382,6 +384,7 @@ impl Default for ProductSettings {
             surface_border_opacity: 25,
             window_outline_color: "#FFFFFF".to_owned(),
             window_outline_opacity: 50,
+            outlines: true,
             surface_saturation_percent: 165,
             reduce_transparency: false,
             glass_opacity_percent: 12,
@@ -1112,6 +1115,7 @@ stable_settings! {
     (false, taskbar, "surfaceBlurPercent", surface_blur_percent),
     (false, taskbar, "surfaceBorderColor", surface_border_color),
     (false, taskbar, "surfaceBorderOpacity", surface_border_opacity),
+    (false, taskbar, "outlines", outlines),
     (false, taskbar, "windowOutlineColor", window_outline_color),
     (false, taskbar, "windowOutlineOpacity", window_outline_opacity),
     (false, taskbar, "surfaceSaturationPercent", surface_saturation_percent),

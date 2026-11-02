@@ -362,6 +362,26 @@ fn sync_writes_content_without_unknown_ids_on_every_fixture() {
 }
 
 #[test]
+fn outlines_toggle_hides_the_outline_rows_when_it_is_off() {
+    for (outlines, expected) in [(true, true), (false, false)] {
+        let mut snapshot = settings_fixture("#3DAEE9", "dark");
+        snapshot
+            .values
+            .insert("outlines".to_owned(), SettingValue::Boolean(outlines));
+        let app = application(snapshot, display_fixtures().remove(0));
+        let mut document = StrictDocument::new();
+        app.sync(&mut document).expect("sync on strict markup");
+        for row in ["outline-color-row", "outline-opacity-row"] {
+            assert_eq!(
+                document.visible.get(row).copied(),
+                Some(expected),
+                "with outlines={outlines}, {row} visibility"
+            );
+        }
+    }
+}
+
+#[test]
 fn one_failing_optional_node_does_not_block_other_writes() {
     let mut document = StrictDocument::new();
     document.ids.remove("nav-selection-accent");
