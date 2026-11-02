@@ -76,6 +76,11 @@ pub enum Command {
     SetGeometry(WindowId, crate::model::Rect),
     /// Rebuilds the live shortcut table from the shell's committed bindings.
     SetShortcuts(BTreeMap<String, KeyBinding>),
+    /// Carries a window to `target` and activates that workspace in one step.
+    SwitchWithWindow {
+        id: WindowId,
+        target: usize,
+    },
     /// Ends the compositor from inside its event loop. The session wrapper supervises it, so its
     /// exit is what returns the VT to the greeter.
     Logout,
@@ -292,13 +297,18 @@ impl WorkspacePort for WaylandDesktop {
 
     fn switch_workspace_with_window(
         &mut self,
-        _window: WindowRef,
-        _target: usize,
-        _expected_revision: u64,
+        window: WindowRef,
+        target: usize,
+        expected_revision: u64,
     ) -> FlameResult<()> {
-        Err(unsupported(
-            "compositor does not move a window and switch workspace together yet",
-        ))
+        // One command, so the window and the active workspace never disagree: both mutations
+        // happen in the same turn and nothing is rendered between them.
+        self.window(window)?;
+        let _ = expected_revision;
+        self.queue(Command::SwitchWithWindow {
+            id: window.id,
+            target,
+        })
     }
 
     fn apply_workspace_plan(&mut self, _plan: &WorkspacePlan) -> FlameResult<()> {
@@ -1031,6 +1041,14 @@ fn apply_command(state: &mut State, command: Command) {
         Command::SetShortcuts(bindings) => {
             state.shortcuts = crate::model::Shortcuts::from_bindings(&bindings);
         }
+        Command::SwitchWithWindow { id, target } => {
+            // Both halves move in one turn with nothing rendered between them, so the window and
+            // the visible workspace never disagree.
+            state.model.move_to_workspace(id, target);
+            state.model.switch_workspace(target);
+            state.apply_geometry(id);
+            state.refocus();
+        }
         // Stops the loop; the session wrapper reaps the compositor and tears the session down.
         Command::Logout => state.loop_signal.stop(),
     }
@@ -1044,6 +1062,8 @@ mod tests {
         shell_scales_from,
     };
     use flamewm_api::shortcuts::KeyBinding;
+    use flamewm_api::window::WindowSnapshot;
+    use flamewm_api::{DesktopAppId, OutputId, WindowRef};
     use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::rc::Rc;
@@ -1285,5 +1305,55 @@ mod tests {
             .values
             .insert("titlebars".to_owned(), SettingValue::Text("yes".to_owned()));
         assert_eq!(chrome_settings(&snapshot).0, defaults.titlebars);
+    }
+    /// Carrying a window to another workspace must move it *and* reveal that workspace, with no
+    /// intermediate state: the point of the combined call is that the two halves cannot disagree.
+    #[test]
+    fn carrying_a_window_switches_to_the_target_workspace() {
+        fn port() -> WaylandDesktop {
+            WaylandDesktop {
+                mirror: Rc::new(RefCell::new(Mirror::default())),
+                commands: Rc::new(RefCell::new(Vec::new())),
+                catalog: None,
+                staged_shortcuts: RefCell::new(None),
+                shell_scales: BTreeMap::new(),
+            }
+        }
+
+        use flamewm_api::ports::WorkspacePort;
+
+        let mut desktop = port();
+        // The window must be managed, so put a snapshot in the mirror the port reads.
+        desktop.mirror.borrow_mut().windows.push(WindowSnapshot {
+            reference: WindowRef {
+                id: 1,
+                generation: 1,
+            },
+            title: String::new(),
+            app_id: DesktopAppId::new("test"),
+            outer_geometry: flamewm_api::Rect::default(),
+            restore_geometry: flamewm_api::Rect::default(),
+            state: flamewm_api::window::WindowState::Normal,
+            sticky: false,
+            focused: false,
+            workspace: flamewm_api::WorkspaceRef::default(),
+            output: OutputId::new("wayland-0"),
+            state_generation: 1,
+        });
+        desktop
+            .switch_workspace_with_window(
+                WindowRef {
+                    id: 1,
+                    generation: 1,
+                },
+                2,
+                0,
+            )
+            .unwrap();
+        assert_eq!(
+            desktop.commands.borrow().as_slice(),
+            [Command::SwitchWithWindow { id: 1, target: 2 }],
+            "one command carries both halves"
+        );
     }
 }
