@@ -6,13 +6,18 @@
 //! resize thickness 6, min 160x96.
 //!
 //! Children: 8 resize zones + 1 title-drag body + 3 control buttons.
-//! Non-overlap partition (half-open rects):
-//! corners 6x6 at outer extremes; top/bottom strips exclude corners
-//! (top covers the full width between corners); left/right strips start
-//! at `titlebar_h` and exclude corners; title-drag is the titlebar body
-//! below the top-6px strip excluding control rects; controls follow the
-//! skin formula (`x = W - cw + i*38`, `w = 38`, `h = titlebar_h`) clipped
-//! below the top strip when touching it.
+//! Partition of the frame chrome (titlebar band + the `resize_t` border; the client owns the
+//! interior):
+//! corner grips are `grip x grip` at the outer extremes, sized by
+//! [`corner_grip_for_titlebar`] so the arc is grabbable through the frame's rounded bounding
+//! shape; top/bottom strips exclude the grips; left/right strips run from the grip down to the
+//! opposite grip; title-drag is the titlebar body below the top strip, between the left grip and
+//! the controls band; controls follow the skin formula (`x = W - cw + i*38`, `w = 38`,
+//! `h = titlebar_h`) clipped below the top strip when touching it.
+//!
+//! The top corner grips deliberately overlap the title-drag body and the control column: the wm
+//! raises the 8 resize children above the other input children, so the corner wins inside its
+//! square (Wayland resolves the same overlap by checking the corner first).
 
 use super::coords::FrameRect;
 #[cfg(test)]
@@ -27,6 +32,8 @@ pub const CONTROLS_WIDTH: i32 = 114;
 pub const BUTTON_WIDTH: i32 = 38;
 /// Resize hit thickness.
 pub const RESIZE_T: i32 = 6;
+/// Corner grip side in logical pixels: `flamewm-wm-wayland`'s unclipped `CORNER_GRIP` square.
+const CORNER_GRIP: i32 = 16;
 
 /// Convert authoritative logical control width to the physical titlebar size.
 /// The titlebar height is supplied by the frame-extents authority, so hit,
@@ -55,6 +62,25 @@ pub fn resize_thickness_for_titlebar(titlebar_h: i32) -> i32 {
 #[must_use]
 pub fn controls_width_for_titlebar(titlebar_h: i32) -> i32 {
     button_width_for_titlebar(titlebar_h).saturating_mul(3)
+}
+
+/// Corner resize grip side for the physical titlebar height.
+///
+/// Measured on Xvfb with XTest: a parent's Shape Bounding region clips a child's input region, so
+/// an `InputOnly` grip only receives presses where the rounded mask still covers the pixel. A
+/// 16 px square at a radius-24 corner still covers the visible arc triangle (~133 px² of grab area
+/// over rows 2..15), so it feels like Wayland's unclipped 16 px `CORNER_GRIP` square.
+///
+/// 16 is also the largest size that keeps the Close button usable: its glyph is 16 px centred in
+/// the 38 px button, so its centre sits at `w - 19`, which a 24 px grip (`w - 24 .. w`) would
+/// swallow. Only the logical 16 is scaled, never the radius.
+#[must_use]
+pub fn corner_grip_for_titlebar(titlebar_h: i32) -> i32 {
+    if titlebar_h <= 0 {
+        return CORNER_GRIP;
+    }
+    let scaled = (CORNER_GRIP * titlebar_h.max(1) + TITLEBAR_H / 2) / TITLEBAR_H;
+    scaled.max(8)
 }
 
 /// Twelve frame children: 8 resize + 1 title-drag + 3 controls.
@@ -121,9 +147,11 @@ pub fn layout_frame_children(
     // even the narrowest frame must keep the last Close hit cell flush right.
     let cell_edge = |index: i32| cw.saturating_mul(index) / 3;
 
-    let strip_w = (w - 2 * t).max(0);
-    let mid_w = (strip_w - cw).max(0);
-    let side_h = (h - tb - t).max(0);
+    // Corner grips cover the decoration arc; tiny frames keep half the frame.
+    let grip = corner_grip_for_titlebar(titlebar_h).min(w / 2).min(h / 2);
+    let strip_w = (w - 2 * grip).max(0);
+    let drag_w = (w - cw - t).max(0);
+    let side_h = (h - 2 * grip).max(0);
 
     // Controls from the skin formula, then clipped below the top strip
     // when touching it (control top lives at y=0, strip owns y=0..t).
@@ -139,15 +167,15 @@ pub fn layout_frame_children(
     });
 
     FrameChildLayout {
-        top_left: FrameRect::new(0, 0, t, t),
-        top_right: FrameRect::new(w - t, 0, t, t),
-        bottom_left: FrameRect::new(0, h - t, t, t),
-        bottom_right: FrameRect::new(w - t, h - t, t, t),
-        top: FrameRect::new(t, 0, strip_w, t),
-        bottom: FrameRect::new(t, h - t, strip_w, t),
-        left: FrameRect::new(0, tb, t, side_h),
-        right: FrameRect::new(w - t, tb, t, side_h),
-        title_drag: FrameRect::new(t, t, mid_w, (tb - t).max(0)),
+        top_left: FrameRect::new(0, 0, grip, grip),
+        top_right: FrameRect::new(w - grip, 0, grip, grip),
+        bottom_left: FrameRect::new(0, h - grip, grip, grip),
+        bottom_right: FrameRect::new(w - grip, h - grip, grip, grip),
+        top: FrameRect::new(grip, 0, strip_w, t),
+        bottom: FrameRect::new(grip, h - t, strip_w, t),
+        left: FrameRect::new(0, grip, t, side_h),
+        right: FrameRect::new(w - t, grip, t, side_h),
+        title_drag: FrameRect::new(t, t, drag_w, (tb - t).max(0)),
         controls,
     }
 }
@@ -179,15 +207,17 @@ mod tests {
     #[test]
     fn j06_zone_pins_400x300() {
         let l = layout();
-        assert_eq!(l.top_left, FrameRect::new(0, 0, 6, 6));
-        assert_eq!(l.top_right, FrameRect::new(394, 0, 6, 6));
-        assert_eq!(l.bottom_left, FrameRect::new(0, 294, 6, 6));
-        assert_eq!(l.bottom_right, FrameRect::new(394, 294, 6, 6));
-        assert_eq!(l.top, FrameRect::new(6, 0, 388, 6));
-        assert_eq!(l.bottom, FrameRect::new(6, 294, 388, 6));
-        assert_eq!(l.left, FrameRect::new(0, 31, 6, 263));
-        assert_eq!(l.right, FrameRect::new(394, 31, 6, 263));
-        assert_eq!(l.title_drag, FrameRect::new(6, 6, 274, 25));
+        // 31 px titlebar: the scaled logical 16 px square, never the 24 px skin radius.
+        assert_eq!(corner_grip_for_titlebar(TITLEBAR_H), 16);
+        assert_eq!(l.top_left, FrameRect::new(0, 0, 16, 16));
+        assert_eq!(l.top_right, FrameRect::new(384, 0, 16, 16));
+        assert_eq!(l.bottom_left, FrameRect::new(0, 284, 16, 16));
+        assert_eq!(l.bottom_right, FrameRect::new(384, 284, 16, 16));
+        assert_eq!(l.top, FrameRect::new(16, 0, 368, 6));
+        assert_eq!(l.bottom, FrameRect::new(16, 294, 368, 6));
+        assert_eq!(l.left, FrameRect::new(0, 16, 6, 268));
+        assert_eq!(l.right, FrameRect::new(394, 16, 6, 268));
+        assert_eq!(l.title_drag, FrameRect::new(6, 6, 280, 25));
         assert_eq!(
             l.controls,
             [
@@ -196,6 +226,27 @@ mod tests {
                 FrameRect::new(362, 6, 38, 25),
             ]
         );
+    }
+
+    #[test]
+    fn sixteen_px_grip_keeps_the_arc_grabbable_and_the_close_glyph_clickable() {
+        // The parent's rounded mask clips the child's input: only the arc triangle is clickable.
+        let (w, h, radius) = (W as u32, H as u32, 24_u32);
+        let grip = layout().top_right;
+        let clickable: i32 = crate::frame::geometry_shape::rounded_mask_spans(w, h, radius)
+            .into_iter()
+            .filter(|(row, _, _)| {
+                let y = *row as i32;
+                y >= grip.y && y < grip.y + grip.h
+            })
+            .map(|(_, start, end)| {
+                ((end as i32).min(grip.x + grip.w) - (start as i32).max(grip.x)).max(0)
+            })
+            .sum();
+        // Measured 133 px² over rows 2..15: still a full corner handle inside radius 24.
+        assert_eq!(clickable, 133);
+        // Close glyph centre of the 38 px button stays outside the grip, so it closes.
+        assert!(W - 19 < grip.x, "grip must not swallow the Close glyph");
     }
 
     #[test]
@@ -246,14 +297,63 @@ mod tests {
         );
     }
 
+    /// Frame chrome = the titlebar band plus the `resize_t` border; the client owns the interior.
+    fn in_chrome(x: i32, y: i32, w: i32, h: i32, tb: i32, t: i32) -> bool {
+        y < tb || x < t || y >= h - t || x >= w - t
+    }
+
     #[test]
-    fn twelve_children_nonoverlapping() {
-        let all = all_children(layout());
-        assert_eq!(all.len(), 12);
-        for i in 0..all.len() {
-            assert!(all[i].w > 0 && all[i].h > 0, "{:?}", all[i]);
-            for j in (i + 1)..all.len() {
-                assert!(!overlaps(all[i], all[j]), "{:?} vs {:?}", all[i], all[j]);
+    fn twelve_children_partition_the_frame_chrome() {
+        for (w, h, titlebar) in [
+            (400, 300, 31),
+            (160, 96, 31),
+            (400, 300, 42),
+            (800, 600, 62),
+        ] {
+            let t = resize_thickness_for_titlebar(titlebar);
+            let tb = if titlebar <= 0 {
+                0
+            } else {
+                titlebar.max(t + 1)
+            };
+            let l = layout_frame_children(w, h, titlebar, controls_width_for_titlebar(titlebar), t);
+            let all = all_children(l);
+            assert_eq!(all.len(), 12);
+            // (a) No dead zones: every chrome pixel belongs to at least one input child.
+            for y in 0..h {
+                for x in 0..w {
+                    if !in_chrome(x, y, w, h, tb, t) {
+                        continue;
+                    }
+                    let hit = all
+                        .iter()
+                        .any(|r| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h);
+                    assert!(hit, "dead zone at {x},{y} for {w}x{h} titlebar {titlebar}");
+                }
+            }
+            // (b) Outer overlaps only: grips may meet the drag body / control column, and only
+            // inside the titlebar band. Below it the eight resize rects never double up.
+            for (i, a) in all.iter().enumerate() {
+                for b in all.iter().skip(i + 1) {
+                    if overlaps(*a, *b) {
+                        let grip = l.resize_rects().contains(a);
+                        assert!(grip || l.resize_rects().contains(b), "{a:?} vs {b:?}");
+                        assert!(
+                            a.y.max(b.y) < tb,
+                            "{a:?} vs {b:?} overlap out of the titlebar band"
+                        );
+                    }
+                }
+            }
+            // (c) Every corner grip is a grip x grip square at an outer corner.
+            let grip = corner_grip_for_titlebar(titlebar).min(w / 2).min(h / 2);
+            for (rect, corner) in l.resize_rects().into_iter().take(4).zip([
+                (0, 0),
+                (w - grip, 0),
+                (0, h - grip),
+                (w - grip, h - grip),
+            ]) {
+                assert_eq!(rect, FrameRect::new(corner.0, corner.1, grip, grip));
             }
         }
     }

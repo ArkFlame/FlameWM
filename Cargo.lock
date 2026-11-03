@@ -1100,6 +1100,7 @@ dependencies = [
  "flamewm-render-core",
  "flamewm-session-core",
  "flamewm-skin",
+ "flamewm-ui-core",
  "flamewm-window-core",
  "fontdue",
  "log",

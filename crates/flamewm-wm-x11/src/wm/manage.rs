@@ -363,6 +363,15 @@ impl<C: Connection> Wm<'_, C> {
                     &CreateWindowAux::new().event_mask(EventMask::from(INPUT_CHILD_EVENT_MASK)),
                 )?;
             }
+            // Later siblings stack above earlier ones, which would hand the shared top-right
+            // square (grip over Close) to the control. Raise the 8 resize children so the corner
+            // grips own their arc-sized square, exactly like Wayland's corner-first hit order.
+            for placement in &placements[..8] {
+                self.conn.configure_window(
+                    placement.xid,
+                    &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+                )?;
+            }
             Ok(())
         })();
         let ungrab = self.conn.ungrab_server();

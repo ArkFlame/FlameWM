@@ -813,12 +813,20 @@ impl Service {
     /// The values are read the way X11 `live_settings` reads them: a missing or ill-typed value
     /// keeps the product default, so a hand-edited file cannot put the model in an odd state.
     fn sync_chrome_settings(&self, state: &mut State) {
-        let (titlebars, window_margin) = {
-            let host = self.host.borrow();
-            chrome_settings(&host.settings_snapshot())
-        };
+        let snapshot = self.host.borrow().settings_snapshot();
+        let (titlebars, window_margin) = chrome_settings(&snapshot);
         if state.model.titlebars() != titlebars || state.model.window_margin() != window_margin {
             state.model.configure(titlebars, window_margin);
+            state.request_redraw();
+        }
+        // The window outline comes from the same shared owner X11 reads, so both backends show one
+        // `windowOutlineColor` / `windowOutlineOpacity` / `outlines` ring style.
+        let stroke = flamewm_ui_core::surface::window_outline_stroke(&snapshot);
+        let outline_changed = state
+            .decorations
+            .borrow_mut()
+            .set_outline(stroke.rgb, stroke.alpha);
+        if outline_changed {
             state.request_redraw();
         }
         // The workspace topology is a product decision persisted beside the settings file, and X11

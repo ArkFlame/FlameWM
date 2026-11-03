@@ -34,12 +34,13 @@ fn effect_order_manage_chrome_paint_retarget_first_flush_last() {
         super::super::chrome::ChromeEffect::DrawTitle { .. } => 2,
         super::super::chrome::ChromeEffect::BlitIcon => 3,
         super::super::chrome::ChromeEffect::BlitControls { .. } => 4,
-        super::super::chrome::ChromeEffect::ApplyShape { .. } => 5,
-        super::super::chrome::ChromeEffect::Flush => 6,
+        super::super::chrome::ChromeEffect::PaintOutline { .. } => 5,
+        super::super::chrome::ChromeEffect::ApplyShape { .. } => 6,
+        super::super::chrome::ChromeEffect::Flush => 7,
     };
     let order: Vec<i32> = fx.iter().map(kind).collect();
     assert_eq!(*order.first().expect("nonempty"), 0);
-    assert_eq!(*order.last().expect("nonempty"), 6);
+    assert_eq!(*order.last().expect("nonempty"), 7);
     let mut sorted = order.clone();
     sorted.sort_unstable();
     assert_eq!(

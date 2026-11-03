@@ -19,12 +19,12 @@ class Pass17Contracts(unittest.TestCase):
         self.assertIn('.tray-group, .workspace-pager {',css)
         self.assertIn('.workspace-button {',css)
         self.assertIn('border-radius:1px;',css)
-    def test_lower_contour_reuses_shared_owner(self):
+    def test_window_outline_reuses_shared_owner(self):
         painter=read('crates/flamewm-wm-x11/src/frame/chrome.rs')
-        self.assertIn('fn bottom_contour_strip(',painter)
-        self.assertIn('flamewm_ui_core::surface::inner_contour_coverage(',painter)
+        self.assertIn('fn outline_blits(',painter)
+        self.assertIn('flamewm_render_core::outline::outline_strips(',painter)
         self.assertIn('renderer.blit_rgba(',painter)
-        self.assertIn('bottom_result?;',painter)
+        self.assertIn('outline_result?;',painter)
     def test_terminal_pool_preserves_opencode_colored_rows(self):
         pool=read('crates/flamewm-terminal/src/pool.rs')
         build=read('crates/flamewm-terminal/build.rs')

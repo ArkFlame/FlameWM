@@ -28,7 +28,9 @@ use flamewm_platform::shortcuts::{
     ACTION_OPEN_TERMINAL_CTRL_ALT, ACTION_OPEN_TERMINAL_SUPER,
 };
 
-use crate::model::{Button, Hit, Mode, Mods, Rect, ResizeEdge, TITLEBAR_HEIGHT, WindowId};
+use crate::model::{
+    Button, Hit, Mode, Mods, Rect, ResizeEdge, TITLEBAR_HEIGHT, WindowId, resize_edge_at,
+};
 use crate::state::{Grab, State, next_serial};
 use flamewm_window_core::{SnapTarget, keep_visible, snap_target_in_output};
 
@@ -593,13 +595,18 @@ impl State {
                 }
                 Some(Hit::Resize(id)) => {
                     self.set_focus(Some(id));
-                    if let Some(rect) = self.model.get(id).map(|w| w.rect) {
+                    if let Some(window) = self.model.get(id) {
+                        let rect = window.rect;
                         consumed = true;
                         self.grab = Some(Grab::Resize {
                             id,
                             pointer: pointer_pos,
+                            // The client rect is the origin even for a top corner grabbed in the
+                            // titlebar band: `resized` applies the pointer delta to the dragged
+                            // edge, so the frame keeps its grab offset and its top tracks the
+                            // pointer because the titlebar shift is constant.
                             start: rect,
-                            edge: ResizeEdge::at(rect, location.x, location.y),
+                            edge: resize_edge_at(window.frame(), rect, location.x, location.y),
                         });
                     }
                 }

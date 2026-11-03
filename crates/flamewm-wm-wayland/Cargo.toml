@@ -30,6 +30,9 @@ flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-session-core = { path = "../flamewm-session-core" }
 flamewm-skin = { path = "../flamewm-skin" }
 flamewm-image-core = { path = "../flamewm-image-core" }
+# The window outline policy (`windowOutlineColor`, `windowOutlineOpacity`, `outlines`) is owned by
+# the shared surface contract, so this backend reads the same stroke the X11 frame bakes.
+flamewm-ui-core = { path = "../flamewm-ui-core" }
 # Shared pure geometry policy: the maximize margin comes from the same `apply_window_margin` the
 # X11 session calls, so both sessions inset a maximized frame identically.
 flamewm-window-core = { path = "../flamewm-window-core" }

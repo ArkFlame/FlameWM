@@ -5,6 +5,7 @@ pub mod hash;
 pub mod layout;
 pub mod lower;
 pub mod model;
+pub mod outline;
 pub mod paint;
 pub mod pixels;
 pub mod soft;

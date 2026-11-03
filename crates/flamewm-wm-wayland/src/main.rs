@@ -61,6 +61,7 @@
 //! compositor (`stage=xwayland status=fail`), no X11 client is served and the X11 shell/desktop
 //! autostart is skipped instead of aborting the session.
 
+mod clip;
 mod control;
 mod cursor;
 #[cfg(feature = "drm")]

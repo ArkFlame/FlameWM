@@ -14,8 +14,8 @@ use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
 };
-use smithay::backend::renderer::element::{Element, Kind};
-use smithay::backend::renderer::gles::GlesTexture;
+use smithay::backend::renderer::element::{Element, Id, Kind};
+use smithay::backend::renderer::gles::{GlesTexProgram, GlesTexture};
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
@@ -26,15 +26,19 @@ use smithay::render_elements;
 use smithay::utils::{Buffer, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use crate::model::{Button, Hit, Mode, Rect, TITLEBAR_HEIGHT, WindowId};
+use crate::clip::RoundedSurfaceElement;
+use crate::model::{Button, Hit, Managed, Mode, Rect, TITLEBAR_HEIGHT, WindowId};
 use crate::state::State;
 use flamewm_image_core::{Rect as ImageRect, RgbaImage, frosted_backdrop};
+use flamewm_render_core::outline;
+use flamewm_skin::recipes::decoration::DecorationStyle;
 use flamewm_skin::recipes::window_chrome::{self as chrome, WindowControlRole};
 
 render_elements! {
     pub Elem<=GlowRenderer>;
     Solid=SolidColorRenderElement,
     Surface=WaylandSurfaceRenderElement<GlowRenderer>,
+    Rounded=RoundedSurfaceElement,
     Memory=MemoryRenderBufferRenderElement<GlowRenderer>,
 }
 
@@ -62,12 +66,75 @@ pub struct Decorations {
     /// Blurred desktop under override-redirect `XWayland` surfaces, keyed by their rect. Cleared
     /// with the desktop capture it was cropped from.
     surfaces: HashMap<(i32, i32, i32, i32), MemoryRenderBuffer>,
+    /// Rounded-client clip program, compiled on first use. `Some(Err(()))` records the already
+    /// logged failure so a broken shader is not recompiled for every frame or window.
+    clip: Option<Result<GlesTexProgram, ()>>,
+    /// Resolved `windowOutlineColor` / `windowOutlineOpacity` / `outlines`, pushed from the shared
+    /// settings owner. `None` until the first settings sync draws nothing.
+    outline: Option<OutlinePaint>,
+    /// Ring strips per managed window from the shared rasteriser, rebuilt only on input change.
+    rings: HashMap<WindowId, OutlineRing>,
+}
+
+/// Resolved window outline colour and opacity.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct OutlinePaint {
+    rgb: u32,
+    alpha: u8,
+}
+
+/// One uploaded ring strip: offset from the frame origin, size in pixels, and its buffer.
+struct OutlineStrip {
+    offset: (i32, i32),
+    size: (i32, i32),
+    buffer: MemoryRenderBuffer,
+}
+
+/// One window's cached outline: the inputs it was built from and the strips to draw.
+struct OutlineRing {
+    origin: (i32, i32),
+    width: u32,
+    height: u32,
+    radius: u32,
+    paint: OutlinePaint,
+    /// How many times the strips below were rasterised (a cache hit keeps the count).
+    builds: u32,
+    strips: Vec<OutlineStrip>,
+}
+
+impl OutlineRing {
+    /// Whether the cached strips still describe this window at these inputs.
+    fn matches(
+        &self,
+        origin: (i32, i32),
+        size: (u32, u32),
+        radius: u32,
+        paint: OutlinePaint,
+    ) -> bool {
+        self.origin == origin
+            && (self.width, self.height) == size
+            && self.radius == radius
+            && self.paint == paint
+    }
 }
 
 /// Opaque ARGB8888 bytes (little-endian B, G, R, A) from straight RGBA pixels.
 fn opaque_argb_bytes(rgba: &[u8]) -> Vec<u8> {
     rgba.chunks_exact(4)
         .flat_map(|px| [px[2], px[1], px[0], 255])
+        .collect()
+}
+
+/// Premultiplied ARGB8888 bytes (little-endian B, G, R, A) from straight RGBA pixels. The memory
+/// element's texture is premultiplied, so a straight-alpha outline would show a bright fringe on
+/// its antialiased arc.
+fn premultiplied_argb_bytes(rgba: &[u8]) -> Vec<u8> {
+    rgba.chunks_exact(4)
+        .flat_map(|px| {
+            let alpha = u32::from(px[3]);
+            let scale = |channel: u8| ((u32::from(channel) * alpha + 127) / 255) as u8;
+            [scale(px[2]), scale(px[1]), scale(px[0]), px[3]]
+        })
         .collect()
 }
 
@@ -225,6 +292,116 @@ impl Decorations {
 
     fn retain(&mut self, live: impl Fn(WindowId) -> bool) {
         self.parts.retain(|window, _| live(*window));
+        self.rings.retain(|window, _| live(*window));
+    }
+
+    /// Records the resolved outline settings. Returns whether the value changed, so the caller
+    /// only requests a redraw for a real settings change.
+    pub fn set_outline(&mut self, rgb: u32, alpha: u8) -> bool {
+        let paint = OutlinePaint { rgb, alpha };
+        if self.outline == Some(paint) {
+            return false;
+        }
+        self.outline = Some(paint);
+        // Every cached strip carries the colour and alpha, so all of them are stale now.
+        self.rings.clear();
+        true
+    }
+
+    /// Ring strips for `window`, rebuilt only when the frame, the radius or the outline settings
+    /// changed. `None` when outlines are off (`outlines=false` or zero opacity).
+    fn ring_strips(&mut self, window: WindowId, frame: Rect, radius: u8) -> Option<&OutlineRing> {
+        let paint = self.outline?;
+        // GL texture bound, the same one the titlebar buffer is limited to.
+        if paint.alpha == 0 || frame.w <= 0 || frame.h <= 0 || frame.w > 32_767 || frame.h > 32_767
+        {
+            return None;
+        }
+        let origin = (frame.x, frame.y);
+        let size = (frame.w as u32, frame.h as u32);
+        let radius = u32::from(radius);
+        let stale = self
+            .rings
+            .get(&window)
+            .is_none_or(|ring| !ring.matches(origin, size, radius, paint));
+        if stale {
+            let builds = self.rings.get(&window).map_or(0, |ring| ring.builds) + 1;
+            let strips = outline::outline_strips(size.0, size.1, radius, paint.rgb, paint.alpha)
+                .into_iter()
+                .map(|(x, y, w, h, rgba)| OutlineStrip {
+                    offset: (x as i32, y as i32),
+                    size: (w as i32, h as i32),
+                    buffer: MemoryRenderBuffer::from_slice(
+                        &premultiplied_argb_bytes(&rgba),
+                        Fourcc::Argb8888,
+                        (w as i32, h as i32),
+                        1,
+                        Transform::Normal,
+                        None,
+                    ),
+                })
+                .collect();
+            self.rings.insert(
+                window,
+                OutlineRing {
+                    origin,
+                    width: size.0,
+                    height: size.1,
+                    radius,
+                    paint,
+                    builds,
+                    strips,
+                },
+            );
+        }
+        self.rings.get(&window)
+    }
+
+    /// The 1px window outline as overlay elements positioned at `frame`: the shared rasteriser's
+    /// perimeter strips, rounded to the same physical radius as the client clip. Empty when the
+    /// outline is off, so a disabled `outlines` setting costs no elements at all.
+    fn outline_elements(
+        &mut self,
+        renderer: &mut GlowRenderer,
+        window: WindowId,
+        frame: Rect,
+        radius: u8,
+    ) -> Vec<Elem> {
+        let Some(ring) = self.ring_strips(window, frame, radius) else {
+            return Vec::new();
+        };
+        ring.strips
+            .iter()
+            .filter_map(|strip| {
+                MemoryRenderBufferRenderElement::from_buffer(
+                    renderer,
+                    Point::from((
+                        f64::from(frame.x.saturating_add(strip.offset.0)),
+                        f64::from(frame.y.saturating_add(strip.offset.1)),
+                    )),
+                    &strip.buffer,
+                    None,
+                    None,
+                    Some(Size::from(strip.size)),
+                    Kind::Unspecified,
+                )
+                .ok()
+                .map(Elem::Memory)
+            })
+            .collect()
+    }
+
+    /// The rounded-client clip program, compiled on first use.
+    ///
+    /// Fails open: a shader that does not compile logs once and every window keeps its square
+    /// silhouette, which is exactly the pre-clip behaviour, instead of failing the frame.
+    fn clip_program(&mut self, renderer: &mut GlowRenderer) -> Option<GlesTexProgram> {
+        let cached = self.clip.get_or_insert_with(|| {
+            crate::clip::compile(renderer).map_err(|error| {
+                eprintln!("flamewm-wayland: rounded client clip disabled: {error}");
+            })
+        });
+        cached.clone().ok()
     }
 }
 
@@ -303,15 +480,77 @@ fn glyph(c: char) -> [u8; 7] {
 /// Rounded radius for floating (non-maximized) windows, scaled from the logical titlebar to
 /// the physical titlebar height. Maximized windows stay square. Clamped to half the width.
 fn titlebar_corner_radius(maximized: bool, width: i32, height: i32) -> i32 {
-    use flamewm_skin::recipes::decoration::{DecorationStyle, corner_radius};
-    let logical = u32::from(corner_radius(!maximized, DecorationStyle::Rounded));
+    scaled_corner_radius(!maximized, DecorationStyle::Rounded, height).min(width.max(0) / 2)
+}
+
+/// Skin radius in physical pixels: the logical radius scaled from the logical titlebar metric to
+/// a physical titlebar `physical_height` pixels tall, the same rounding as the X11 frame shape.
+/// Zero for a squared decoration style and for windows outside the rounded-eligible set.
+fn scaled_corner_radius(floating: bool, style: DecorationStyle, physical_height: i32) -> i32 {
+    let logical = u32::from(flamewm_skin::recipes::decoration::corner_radius(
+        floating, style,
+    ));
     let logical_h = u32::from(
         flamewm_skin::recipes::window_chrome::WINDOW_CHROME
             .metrics
             .titlebar,
     );
-    let scaled = (logical * height.max(0) as u32 + logical_h / 2) / logical_h.max(1);
-    (scaled as i32).min(width.max(0) / 2)
+    let scaled = (logical * physical_height.max(0) as u32 + logical_h / 2) / logical_h.max(1);
+    i32::try_from(scaled).unwrap_or(i32::MAX)
+}
+
+/// Per-corner radius of a managed window's client silhouette, in physical pixels, ordered
+/// top left, top right, bottom right, bottom left — the clip shader's `corner_radius` order.
+///
+/// This is the X11 client shape expressed as a radius instead of an `XShape` mask: the titlebar
+/// band above the client is straight, so a decorated window only rounds its bottom corners, while
+/// a window without the band rounds all four. Maximized and fullscreen clients stay square
+/// (`maximized_and_fullscreen_radius_zero`).
+fn client_corner_radii(managed: &Managed, titlebars: bool) -> [u8; 4] {
+    client_corner_radii_for(
+        managed.mode,
+        titlebars,
+        managed.rect.w,
+        managed.rect.h,
+        DecorationStyle::Rounded,
+    )
+}
+
+/// [`client_corner_radii`] with the window dimensions and skin style passed in, so the policy is
+/// testable without a `Managed` and so a squared decoration style is provably square.
+fn client_corner_radii_for(
+    mode: Mode,
+    titlebars: bool,
+    width: i32,
+    height: i32,
+    style: DecorationStyle,
+) -> [u8; 4] {
+    // Snapped windows are floated by the skin policy, exactly as on X11.
+    let floating = matches!(mode, Mode::Normal | Mode::Snapped(_));
+    let band = titlebars && !matches!(mode, Mode::Fullscreen);
+    let radius = scaled_corner_radius(floating, style, TITLEBAR_HEIGHT).max(0);
+    // Each arc needs its own diameter of room: half the short side keeps four corners distinct,
+    // while a banded client has only the bottom pair to fit.
+    let room = if band {
+        width.min(height)
+    } else {
+        width.min(height) / 2
+    };
+    let radius = u8::try_from(radius.min(room).min(i32::from(u8::MAX))).unwrap_or(u8::MAX);
+    if band {
+        [0, 0, radius, radius]
+    } else {
+        [radius; 4]
+    }
+}
+
+/// Physical radius of the window outline ring: the same skin radius the client clip arcs use at
+/// this compositor's physical titlebar height, so the ring arc and the clipped client corner are
+/// concentric. Square for maximized and fullscreen windows and for a squared decoration style.
+fn outline_radius(managed: &Managed) -> u8 {
+    let floating = matches!(managed.mode, Mode::Normal | Mode::Snapped(_));
+    let radius = scaled_corner_radius(floating, DecorationStyle::Rounded, TITLEBAR_HEIGHT).max(0);
+    u8::try_from(radius.min(i32::from(u8::MAX))).unwrap_or(u8::MAX)
 }
 
 #[cfg(test)]
@@ -586,12 +825,36 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                 let Some(surface) = state.window_wl_surface(id) else {
                     continue;
                 };
-                out.extend(surface_elements(
+                // Front-to-back list: the outline comes first in this window's group, so the ring
+                // sits above the client and the titlebar and above every window behind it.
+                out.extend(decorations.outline_elements(
                     renderer,
-                    &surface,
-                    managed.rect.x,
-                    managed.rect.y,
+                    id,
+                    managed.frame(),
+                    outline_radius(&managed),
                 ));
+                let radii = client_corner_radii(&managed, managed.titlebars);
+                let program = if radii.iter().any(|radius| *radius > 0) {
+                    decorations.clip_program(renderer)
+                } else {
+                    None
+                };
+                // Only the toplevel's own surface carries the window silhouette: a subsurface is
+                // clipped by its parent's rounded edge, not by arcs around its own smaller rect.
+                let root = Id::from_wayland_resource(&surface);
+                out.extend(
+                    surface_elements(renderer, &surface, managed.rect.x, managed.rect.y)
+                        .into_iter()
+                        .map(|element| match (element, &program) {
+                            (Elem::Surface(inner), Some(program))
+                                if inner.id() == &root
+                                    && RoundedSurfaceElement::clippable(&inner) =>
+                            {
+                                Elem::Rounded(RoundedSurfaceElement::new(inner, program, radii))
+                            }
+                            (element, _) => element,
+                        }),
+                );
                 if managed.decorated() {
                     let frame = managed.frame();
                     let focused = state.focused == Some(id);
@@ -949,6 +1212,103 @@ mod decoration_tests {
         );
     }
 
+    /// The client silhouette is the X11 shape's radius policy, not the titlebar's width clamp:
+    /// a decorated window only owns the straight band above its client.
+    #[test]
+    fn client_corner_radii_follow_the_x11_shape_policy() {
+        let deco =
+            |mode: Mode| client_corner_radii_for(mode, true, 300, 200, DecorationStyle::Rounded);
+        assert_eq!(
+            deco(Mode::Normal),
+            [0, 0, 24, 24],
+            "band is straight on top"
+        );
+        assert_eq!(
+            client_corner_radii_for(Mode::Normal, false, 300, 200, DecorationStyle::Rounded),
+            [24; 4],
+            "without the band the client carries both arcs"
+        );
+        assert_eq!(
+            deco(Mode::Snapped(flamewm_window_core::SnapTarget::LeftHalf)),
+            [0, 0, 24, 24],
+            "snapped windows are rounded like floating ones"
+        );
+        for mode in [Mode::Maximized, Mode::Fullscreen] {
+            assert_eq!(deco(mode), [0; 4], "{mode:?} stays square");
+            assert_eq!(
+                client_corner_radii_for(mode, false, 300, 200, DecorationStyle::Rounded),
+                [0; 4],
+                "{mode:?} is square without a band too"
+            );
+        }
+    }
+
+    /// A window narrower than the arc diameter must hand the shader clamped radii: half the short
+    /// side when the client carries four arcs, the full short side when only the bottom pair does.
+    #[test]
+    fn client_corner_radii_clamp_to_the_short_side() {
+        assert_eq!(
+            client_corner_radii_for(Mode::Normal, false, 40, 400, DecorationStyle::Rounded),
+            [20; 4],
+            "four arcs need half the short side each"
+        );
+        assert_eq!(
+            client_corner_radii_for(Mode::Normal, true, 40, 400, DecorationStyle::Rounded),
+            [0, 0, 24, 24],
+            "a banded client fits the bottom pair in the full short side"
+        );
+        assert_eq!(
+            client_corner_radii_for(Mode::Normal, false, 10, 10, DecorationStyle::Rounded),
+            [5; 4]
+        );
+    }
+
+    /// The radius comes from the skin, so a squared decoration style is square everywhere and no
+    /// hard-coded 24 can survive a style change.
+    #[test]
+    fn client_corner_radii_come_from_the_skin_style() {
+        assert_eq!(
+            client_corner_radii_for(Mode::Normal, false, 300, 200, DecorationStyle::Squared),
+            [0; 4]
+        );
+        assert_eq!(
+            client_corner_radii_for(Mode::Normal, true, 300, 200, DecorationStyle::Squared),
+            [0; 4]
+        );
+        assert_eq!(
+            client_corner_radii_for(Mode::Normal, false, 300, 200, DecorationStyle::Rounded),
+            [u8::try_from(flamewm_skin::recipes::decoration::ROUNDED_RADIUS).unwrap(); 4]
+        );
+        // The same skin radius the titlebar arc uses, at this compositor's physical bar height.
+        assert_eq!(
+            client_corner_radii_for(Mode::Normal, true, 300, 200, DecorationStyle::Rounded)[2],
+            u8::try_from(titlebar_corner_radius(false, 300, TITLEBAR_HEIGHT)).unwrap()
+        );
+    }
+
+    /// The wrapper reads the band and the mode from the window itself, so the caller cannot
+    /// disagree with the frame it is clipping.
+    #[test]
+    fn client_corner_radii_read_the_windows_band_and_mode() {
+        use crate::model::WindowModel;
+
+        let work = Rect::new(0, 0, 300, 200);
+        let mut model = WindowModel::new(1);
+        model.add(1, Rect::new(10, 40, 300, 200), 0);
+        let radii = |model: &WindowModel| {
+            let window = model.get(1).expect("window");
+            client_corner_radii(window, window.titlebars)
+        };
+        assert_eq!(radii(&model), [0, 0, 24, 24], "decorated: bottom corners");
+        model.configure(false, 0);
+        assert_eq!(radii(&model), [24; 4], "no band: all four corners");
+        model.configure(true, 0);
+        model.maximize_to(1, work, Rect::new(10, 40, 300, 200));
+        assert_eq!(radii(&model), [0; 4], "maximized is square");
+        model.set_fullscreen(1, work, true);
+        assert_eq!(radii(&model), [0; 4], "fullscreen is square");
+    }
+
     #[test]
     fn maximized_titlebar_corner_is_not_cut() {
         let pixels = chrome_pixels(200, true, true, None, "Terminal");
@@ -1094,6 +1454,171 @@ mod decoration_tests {
     }
 }
 
+#[cfg(test)]
+mod outline_tests {
+    use super::*;
+    use crate::model::WindowModel;
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+
+    fn decorated() -> Decorations {
+        let mut decorations = Decorations::default();
+        assert!(decorations.set_outline(0x00ff_ffff, 127));
+        decorations
+    }
+
+    /// The settings come from the shared surface owner the X11 frame already reads, so the
+    /// Wayland ring cannot drift from it: the committed defaults are white at half opacity.
+    #[test]
+    fn outline_defaults_to_white_at_half_opacity() {
+        let stroke = flamewm_ui_core::surface::window_outline_stroke(&SettingsSnapshot::new(1));
+        assert_eq!((stroke.rgb, stroke.alpha), (0x00ff_ffff, 127));
+        let mut decorations = Decorations::default();
+        assert!(
+            decorations
+                .ring_strips(1, Rect::new(0, 0, 300, 200), 24)
+                .is_none(),
+            "nothing is drawn before the first settings sync"
+        );
+        assert!(decorations.set_outline(stroke.rgb, stroke.alpha));
+        let ring = decorations
+            .ring_strips(1, Rect::new(0, 0, 300, 200), 24)
+            .expect("ring");
+        assert_eq!((ring.paint.rgb, ring.paint.alpha), (0x00ff_ffff, 127));
+        assert!(
+            !decorations.set_outline(stroke.rgb, stroke.alpha),
+            "an unchanged snapshot must not request a redraw"
+        );
+    }
+
+    #[test]
+    fn outlines_off_or_zero_opacity_draw_nothing() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("outlines".into(), SettingValue::Boolean(false));
+        let stroke = flamewm_ui_core::surface::window_outline_stroke(&snapshot);
+        assert_eq!(stroke.alpha, 0, "outlines off means no ring");
+        let mut decorations = Decorations::default();
+        assert!(decorations.set_outline(stroke.rgb, stroke.alpha));
+        assert!(
+            decorations
+                .ring_strips(1, Rect::new(0, 0, 300, 200), 24)
+                .is_none()
+        );
+        // A zero `windowOutlineOpacity` is the same: no strips, so no elements.
+        decorations.set_outline(0x00ff_ffff, 0);
+        assert!(
+            decorations
+                .ring_strips(1, Rect::new(0, 0, 300, 200), 24)
+                .is_none()
+        );
+    }
+
+    /// The ring is cached per window: an unchanged frame reuses the strips, while a move, a
+    /// resize, a new radius and new outline settings each rebuild them.
+    #[test]
+    fn outline_cache_rebuilds_only_when_an_input_changes() {
+        let mut decorations = decorated();
+        let frame = Rect::new(10, 20, 300, 200);
+        let ring = decorations.ring_strips(1, frame, 24).expect("ring");
+        assert_eq!(
+            (
+                ring.origin,
+                ring.width,
+                ring.height,
+                ring.radius,
+                ring.builds
+            ),
+            ((10, 20), 300, 200, 24, 1)
+        );
+        let strips = ring.strips.len();
+        let ring = decorations.ring_strips(1, frame, 24).expect("ring");
+        assert_eq!(ring.builds, 1, "unchanged inputs reuse the cache");
+        assert_eq!(ring.strips.len(), strips);
+
+        let moved = Rect::new(11, 20, 300, 200);
+        let ring = decorations.ring_strips(1, moved, 24).expect("ring");
+        assert_eq!((ring.origin, ring.builds), ((11, 20), 2), "a move rebuilds");
+
+        let resized = Rect::new(11, 20, 301, 200);
+        let ring = decorations.ring_strips(1, resized, 24).expect("ring");
+        assert_eq!((ring.width, ring.builds), (301, 3), "a resize rebuilds");
+
+        let ring = decorations.ring_strips(1, resized, 12).expect("ring");
+        assert_eq!((ring.radius, ring.builds), (12, 4), "a new radius rebuilds");
+
+        assert!(decorations.set_outline(0x0011_2233, 127));
+        let ring = decorations.ring_strips(1, resized, 12).expect("ring");
+        assert_eq!(
+            (ring.paint.rgb, ring.builds),
+            (0x0011_2233, 1),
+            "new settings drop the cached strips"
+        );
+    }
+
+    /// Strip origins plus buffer sizes are the frame rect: every corner and edge is uploaded and
+    /// the interior is not, so a caller can place the strips from the frame origin alone.
+    #[test]
+    fn ring_strips_tile_the_frame_rect() {
+        let mut decorations = decorated();
+        let frame = Rect::new(40, 60, 320, 240);
+        let (w, h) = (frame.w as u32, frame.h as u32);
+        let ring = decorations.ring_strips(1, frame, 24).expect("ring");
+        let mut covered = vec![false; (w * h) as usize];
+        for strip in &ring.strips {
+            let (x, y, sw, sh) = (strip.offset.0, strip.offset.1, strip.size.0, strip.size.1);
+            assert!(sw > 0 && sh > 0);
+            assert!(
+                x >= 0 && y >= 0 && x as u32 + sw as u32 <= w && y as u32 + sh as u32 <= h,
+                "strip at {x},{y} {sw}x{sh} leaves the frame"
+            );
+            for row in 0..sh as u32 {
+                for column in 0..sw as u32 {
+                    covered[((y as u32 + row) * w + x as u32 + column) as usize] = true;
+                }
+            }
+        }
+        let covered = |x: u32, y: u32| covered[(y * w + x) as usize];
+        assert!(
+            covered(0, 0) && covered(w - 1, 0) && covered(0, h - 1) && covered(w - 1, h - 1),
+            "all four corners are uploaded"
+        );
+        assert!(
+            covered(w / 2, 0)
+                && covered(w / 2, h - 1)
+                && covered(0, h / 2)
+                && covered(w - 1, h / 2),
+            "both edges are uploaded"
+        );
+        assert!(
+            !covered(w / 2, h / 2),
+            "the interior stays out of the upload"
+        );
+    }
+
+    /// The ring radius is the client clip radius, so the arc and the clipped corner are
+    /// concentric; maximized, fullscreen and squared windows get a square ring.
+    #[test]
+    fn ring_radius_matches_the_client_clip_radius() {
+        let work = Rect::new(0, 0, 300, 200);
+        let mut model = WindowModel::new(1);
+        model.add(1, Rect::new(10, 40, 300, 200), 0);
+        let ring = |model: &WindowModel| outline_radius(model.get(1).expect("window"));
+        let clip = |model: &WindowModel| {
+            let window = model.get(1).expect("window");
+            client_corner_radii(window, window.titlebars)
+        };
+        assert_eq!(ring(&model), clip(&model)[2], "bottom arc is concentric");
+        model.configure(false, 0);
+        assert_eq!(ring(&model), clip(&model)[0], "no band: same radius");
+        model.configure(true, 0);
+        model.maximize_to(1, work, Rect::new(10, 40, 300, 200));
+        assert_eq!(ring(&model), 0, "maximized is square");
+        model.set_fullscreen(1, work, true);
+        assert_eq!(ring(&model), 0, "fullscreen is square");
+    }
+}
+
 /// True for Mesa's CPU rasterizers: GLES works but nothing is hardware accelerated.
 pub fn is_software_renderer(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
@@ -1180,6 +1705,25 @@ mod surface_backdrop_tests {
         assert_eq!(
             opaque_argb_bytes(&[0x11, 0x22, 0x33, 0x00]),
             vec![0x33, 0x22, 0x11, 0xff]
+        );
+    }
+
+    /// The outline strip upload is premultiplied, so its antialiased arc blends without a fringe:
+    /// a straight-alpha white at half coverage would otherwise read as full white.
+    #[test]
+    fn premultiplied_argb_bytes_scale_channels_by_alpha() {
+        assert_eq!(
+            premultiplied_argb_bytes(&[255, 255, 255, 128]),
+            vec![128, 128, 128, 128]
+        );
+        assert_eq!(
+            premultiplied_argb_bytes(&[0x11, 0x22, 0x33, 0]),
+            vec![0, 0, 0, 0],
+            "a zero-coverage pixel stays fully transparent"
+        );
+        assert_eq!(
+            premultiplied_argb_bytes(&[0x11, 0x22, 0x33, 255]),
+            vec![0x33, 0x22, 0x11, 255]
         );
     }
 

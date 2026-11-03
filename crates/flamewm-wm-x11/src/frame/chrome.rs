@@ -5,10 +5,12 @@
 //! `flamewm-render-x11`'s [`ExternalDecorationRenderer`]; this module only
 //! plans skin-exact values (J06 freeze) and describes effects.
 
+use flamewm_render_core::outline::OutlineStrip;
 use flamewm_skin::palette::{Rgb, TEXT};
 use flamewm_skin::recipes::decoration::ChromeTokens;
 use flamewm_skin::recipes::window_chrome::WINDOW_CHROME;
 use flamewm_skin::typography::{FontWeight, Typography};
+use flamewm_ui_core::surface::{SurfaceFill, blend_surface_over_rgb};
 
 use super::model::FrameControl;
 
@@ -197,6 +199,10 @@ pub enum ChromeEffect {
         hover: Option<FrameControl>,
         pressed: Option<FrameControl>,
     },
+    PaintOutline {
+        alpha: u8,
+        radius: u32,
+    },
     ApplyShape {
         radius: u32,
     },
@@ -235,6 +241,12 @@ pub fn effects_for(frame_xid: u64, scene: &ChromeScene) -> Vec<ChromeEffect> {
         hover: scene.hover,
         pressed: scene.pressed,
     });
+    if outline_on(scene) {
+        effects.push(ChromeEffect::PaintOutline {
+            alpha: scene.tokens.surface_border_alpha,
+            radius: u32::from(scene.radius),
+        });
+    }
     effects.push(ChromeEffect::ApplyShape {
         radius: u32::from(scene.radius),
     });
@@ -260,140 +272,86 @@ fn titlebar_fill_pixels(
     )
 }
 
-/// Render the 1px contour inside the titlebar's native pixels. Its colour is the
-/// same Surfaces token as panel/popups; no X11 round trip or overlay window.
-/// Opacity of the outline ring at one pixel: the configured outline opacity scaled by the 1px
-/// coverage. Full coverage is exactly the configured opacity, never a solid colour.
+/// One outline blit over the frame: `(x, y, width, height, rgba)`, the shared strip contract.
+pub type OutlineBlit = OutlineStrip;
+
+/// The outline ring exists for this scene: enabled token, real 2x2+ frame.
+fn outline_on(scene: &ChromeScene) -> bool {
+    scene.tokens.surface_border_alpha > 0 && scene.frame_w >= 2 && scene.frame_h >= 2
+}
+
+/// One smoothed antialiased 1px ring around the whole frame (titlebar + client).
+///
+/// The pixels are the shared [`flamewm_render_core::outline`] strips, unchanged: the same bytes
+/// Wayland paints, so X11 never re-derives the arc or its coverage. Only the composite base
+/// differs per backend. The ring colour is `surface_border_rgb` at `surface_border_alpha`, and
+/// each pixel's alpha stays `ring_alpha(alpha, coverage)` as produced by the shared raster.
+///
+/// Base rule, documented because it changes the bytes:
+/// * titlebar rows already hold the surface material, so their strips are blitted as-is and the
+///   ring composites onto that material exactly like the Wayland overlay does.
+/// * rows below the titlebar band sit on the client, so each strip builds its own material base
+///   with [`super::titlebar_backdrop::titlebar_pixels`] (square corners: it is a material fill,
+///   not a shape mask) and pre-blends the ring colour into it, keeping the ring alpha. Blitting
+///   that over the client fades the arc out of the window material instead of out of the frame's
+///   `background_pixel`, which would leave a dark fringe around every arc.
 #[must_use]
-pub fn ring_alpha(stroke_alpha: u8, coverage: u8) -> u8 {
-    ((u16::from(stroke_alpha) * u16::from(coverage) + 127) / 255) as u8
-}
-
-fn composite_surface_contour(
-    pixels: &mut [u8],
-    width: u32,
-    titlebar_height: u32,
-    frame_height: u32,
-    radius: u16,
-    tokens: &ChromeTokens,
-) {
-    if width < 2 || titlebar_height == 0 || frame_height < 2 || tokens.surface_border_alpha == 0 {
-        return;
-    }
-    let Some(total) = (width as usize)
-        .checked_mul(titlebar_height as usize)
-        .and_then(|n| n.checked_mul(4))
-    else {
-        return;
-    };
-    if pixels.len() < total {
-        return;
-    }
-    let stroke = flamewm_ui_core::surface::SurfaceFill {
-        rgb: tokens.surface_border_rgb.0,
-        alpha: tokens.surface_border_alpha,
-    };
-    let r = u32::from(radius).min(width / 2).min(frame_height / 2);
-    // Top perimeter and both side arcs. There is no horizontal border at the bottom of
-    // the titlebar: that is the interior of the complete client frame.
-    for y in 0..titlebar_height {
-        let reach = if y <= r { r.saturating_add(2) } else { 1 };
-        for x in 0..width {
-            if y > 0 && x >= reach && x < width.saturating_sub(reach) {
-                continue;
-            }
-            let coverage =
-                flamewm_ui_core::surface::inner_contour_coverage(width, frame_height, r, x, y);
-            if coverage == 0 {
-                continue;
-            }
-            let alpha = ring_alpha(stroke.alpha, coverage);
-            let at = (y as usize * width as usize + x as usize) * 4;
-            let base = u32::from_be_bytes([0, pixels[at], pixels[at + 1], pixels[at + 2]]);
-            let blended = flamewm_ui_core::surface::blend_surface_over_rgb(
-                base,
-                flamewm_ui_core::surface::SurfaceFill {
-                    alpha,
-                    rgb: stroke.rgb,
-                },
-            );
-            pixels[at] = (blended >> 16) as u8;
-            pixels[at + 1] = (blended >> 8) as u8;
-            pixels[at + 2] = blended as u8;
-        }
-    }
-}
-
-/// One ring blit over the frame: `(x, y, width, height, rgba)`.
-type ContourBlit = (u32, u32, u32, u32, Vec<u8>);
-
-/// Ring pixels for one rectangle of frame rows. Colour is the outline blended over the surface
-/// colour (what the titlebar ring composites to), and alpha is the 1px coverage, so the content
-/// ring meets the titlebar ring without a seam or a double line.
-fn ring_region(
-    width: u32,
-    frame_height: u32,
-    radius: u32,
-    rect: (u32, u32, u32, u32),
-    rgb: u32,
-) -> Vec<u8> {
-    let (x0, y0, w, h) = rect;
-    let mut pixels = vec![0_u8; w as usize * h as usize * 4];
-    for local_y in 0..h {
-        for local_x in 0..w {
-            let coverage = flamewm_ui_core::surface::inner_contour_coverage(
-                width,
-                frame_height,
-                radius,
-                x0 + local_x,
-                y0 + local_y,
-            );
-            if coverage == 0 {
-                continue;
-            }
-            let at = (local_y as usize * w as usize + local_x as usize) * 4;
-            pixels[at] = (rgb >> 16) as u8;
-            pixels[at + 1] = (rgb >> 8) as u8;
-            pixels[at + 2] = rgb as u8;
-            pixels[at + 3] = coverage;
-        }
-    }
-    pixels
-}
-
-/// The outline over the content rows: both sides and the bottom edge of the frame, below the
-/// titlebar. The client is inset by the same 1px (see `client_rounded_rectangles`), so
-/// this ring is what the eye sees there, continuous with the titlebar ring above it. Only the
-/// edge bands are uploaded (`radius + 2` columns and rows); the interior stays transparent.
-fn content_contour_blits(
-    width: u32,
-    frame_height: u32,
-    titlebar_height: u32,
-    radius: u16,
-    tokens: &ChromeTokens,
-) -> Vec<ContourBlit> {
-    if width < 2 || frame_height <= titlebar_height || tokens.surface_border_alpha == 0 {
+pub fn outline_blits(
+    scene: &ChromeScene,
+    origin: (i32, i32),
+    root: (u32, u32),
+) -> Vec<OutlineBlit> {
+    if !outline_on(scene) {
         return Vec::new();
     }
-    let radius = u32::from(radius).min(width / 2).min(frame_height / 2);
-    let band = radius.saturating_add(2).min(width / 2);
-    let bottom_rows = radius.saturating_add(2).min(frame_height);
-    let rgb = crate::chrome::frame_border_pixel(tokens);
-    let content_h = frame_height - titlebar_height;
-    let bottom_y = (frame_height - bottom_rows).max(titlebar_height);
-    let regions = [
-        (0, titlebar_height, band, content_h),
-        (width - band, titlebar_height, band, content_h),
-        (band, bottom_y, width - 2 * band, frame_height - bottom_y),
-    ];
-    regions
-        .into_iter()
-        .filter(|&(_, _, w, h)| w > 0 && h > 0)
-        .map(|(x, y, w, h)| {
-            let pixels = ring_region(width, frame_height, radius, (x, y, w, h), rgb);
-            (x, y, w, h, pixels)
-        })
-        .collect()
+    let titlebar_h = u32::from(scene.titlebar_height);
+    let fill = SurfaceFill {
+        rgb: scene.tokens.surface_border_rgb.0,
+        alpha: scene.tokens.surface_border_alpha,
+    };
+    flamewm_render_core::outline::outline_strips(
+        scene.frame_w,
+        scene.frame_h,
+        u32::from(scene.radius),
+        fill.rgb,
+        fill.alpha,
+    )
+    .into_iter()
+    .map(|(x, y, w, h, mut rgba)| {
+        if y + h > titlebar_h {
+            let base = super::titlebar_backdrop::titlebar_pixels(
+                (origin.0 + x as i32, origin.1 + y as i32),
+                root,
+                (w, h),
+                scene.bg,
+                scene.bg_alpha,
+                scene.tokens.titlebar_blur_percent,
+                0,
+            );
+            let content_rows = titlebar_h.saturating_sub(y) as usize * w as usize;
+            for (pixel, material) in rgba
+                .chunks_exact_mut(4)
+                .zip(base.chunks_exact(4))
+                .skip(content_rows)
+            {
+                if pixel[3] == 0 {
+                    continue;
+                }
+                let blended = blend_surface_over_rgb(
+                    u32::from_be_bytes([0, material[0], material[1], material[2]]),
+                    SurfaceFill {
+                        rgb: fill.rgb,
+                        alpha: pixel[3],
+                    },
+                );
+                pixel[0] = (blended >> 16) as u8;
+                pixel[1] = (blended >> 8) as u8;
+                pixel[2] = blended as u8;
+            }
+        }
+        (x, y, w, h, rgba)
+    })
+    .collect()
 }
 
 /// Execute a scene against the renderer. Passes 12.0/600 to `draw_title`;
@@ -410,7 +368,7 @@ pub fn render(
 ) -> Result<(), String> {
     use flamewm_render_core::{Color, Rect};
     // Order is the live paint contract: retarget, fill, icon blit, title
-    // draw, control blits, shape, flush.
+    // draw, control blits, outline ring, shape, flush.
     // Each fallible paint step's result is deferred (not `?`-early-returned)
     // so the title style params still reach the draw-target contract
     // (`draw_title` records them before touching the display) even on
@@ -441,14 +399,6 @@ pub fn render(
             scene.frame_w,
             scene.titlebar_height,
             &plates,
-        );
-        composite_surface_contour(
-            &mut pixels,
-            scene.frame_w,
-            titlebar_h as u32,
-            scene.frame_h,
-            scene.radius,
-            &scene.tokens,
         );
         drop(pixels_guard);
         let _blit_guard = flamewm_profiler::start("wm.chrome.render.fill.blit");
@@ -527,29 +477,25 @@ pub fn render(
             },
         )
     });
-    // Sides and bottom of the content rows share the titlebar contour colour and coverage.
-    // Only the edge bands are uploaded; XRender blends transparent pixels away.
-    let bottom_result = content_contour_blits(
-        scene.frame_w,
-        scene.frame_h,
-        u32::from(scene.titlebar_height),
-        scene.radius,
-        &scene.tokens,
-    )
-    .into_iter()
-    .try_for_each(|(x, y, w, h, pixels)| {
-        renderer.blit_rgba(
-            &pixels,
-            w,
-            h,
-            Rect {
-                x: x as f32,
-                y: y as f32,
-                width: w as f32,
-                height: h as f32,
-            },
-        )
-    });
+    // One outline owner: the shared ring strips, painted last over the finished frame pixels
+    // (titlebar fill, icon, title, controls) and before the shape mask clips the corners.
+    let _outline_guard = flamewm_profiler::start("wm.chrome.render.outline");
+    let outline_result =
+        outline_blits(scene, origin, root)
+            .into_iter()
+            .try_for_each(|(x, y, w, h, pixels)| {
+                renderer.blit_rgba(
+                    &pixels,
+                    w,
+                    h,
+                    Rect {
+                        x: x as f32,
+                        y: y as f32,
+                        width: w as f32,
+                        height: h as f32,
+                    },
+                )
+            });
     let shape_guard = flamewm_profiler::start("wm.chrome.render.shape");
     let shape_result = renderer.apply_shape(u32::from(scene.radius));
     drop(shape_guard);
@@ -560,7 +506,7 @@ pub fn render(
     icon_result?;
     draw_result?;
     controls_result?;
-    bottom_result?;
+    outline_result?;
     shape_result?;
     Ok(())
 }
@@ -570,56 +516,238 @@ mod tests {
     use super::*;
     use flamewm_skin::palette::PANEL;
 
-    #[test]
-    fn content_contour_outlines_both_sides_and_the_bottom_corners() {
-        let tokens = ChromeTokens::default();
-        let (w, h, titlebar, radius) = (120_u32, 100_u32, 31_u32, 12_u16);
+    /// Straight-alpha ring painted onto a zeroed frame buffer: the raw blit bytes.
+    fn ringed(scene: &ChromeScene, origin: (i32, i32), root: (u32, u32)) -> (Vec<u8>, u32) {
+        let (w, h) = (scene.frame_w, scene.frame_h);
         let mut frame = vec![0_u8; w as usize * h as usize * 4];
-        for (x, y, bw, bh, px) in content_contour_blits(w, h, titlebar, radius, &tokens) {
-            for ly in 0..bh {
-                for lx in 0..bw {
-                    let src = (ly as usize * bw as usize + lx as usize) * 4;
-                    let dst = ((y + ly) as usize * w as usize + (x + lx) as usize) * 4;
-                    frame[dst..dst + 4].copy_from_slice(&px[src..src + 4]);
-                }
+        for (x, y, bw, bh, pixels) in outline_blits(scene, origin, root) {
+            for row in 0..bh as usize {
+                let src = row * bw as usize * 4;
+                let dst = ((y as usize + row) * w as usize + x as usize) * 4;
+                let len = bw as usize * 4;
+                frame[dst..dst + len].copy_from_slice(&pixels[src..src + len]);
             }
         }
-        let alpha = |x: usize, y: usize| frame[(y * w as usize + x) * 4 + 3];
-        assert_eq!(alpha(0, 99), 0, "bottom-left outer corner stays clipped");
-        assert_eq!(alpha(119, 99), 0, "bottom-right outer corner stays clipped");
-        assert!(alpha(11, 99) > 0, "bottom-left arc joins the bottom edge");
-        assert!(alpha(108, 99) > 0, "bottom-right arc joins the bottom edge");
-        assert!(alpha(60, 99) > 0, "bottom edge is continuous");
-        assert!(
-            alpha(0, 40) > 0,
-            "left side is outlined through the content"
-        );
-        assert!(
-            alpha(119, 40) > 0,
-            "right side is outlined through the content"
-        );
-        assert_eq!(
-            alpha(0, 20),
-            0,
-            "titlebar rows are not painted by the content ring"
-        );
-        assert_eq!(alpha(60, 50), 0, "inner content area stays transparent");
-        let mut disabled = tokens;
-        disabled.surface_border_alpha = 0;
-        assert!(content_contour_blits(w, h, titlebar, radius, &disabled).is_empty());
+        (frame, w)
+    }
+
+    fn pixel_at(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
+        let at = (y as usize * width as usize + x as usize) * 4;
+        [pixels[at], pixels[at + 1], pixels[at + 2], pixels[at + 3]]
+    }
+
+    /// Full-opacity white ring: any pre-blend is visible as a non-white channel.
+    fn white_outline() -> ChromeTokens {
+        ChromeTokens {
+            surface_border_rgb: Rgb(0x00ff_ffff),
+            surface_border_alpha: 255,
+            ..ChromeTokens::default()
+        }
     }
 
     #[test]
-    fn titlebar_contour_follows_the_rounded_corner_instead_of_ending_at_radius() {
-        let width = 100_u32;
-        let mut pixels = vec![0_u8; width as usize * 31 * 4];
-        let tokens = ChromeTokens::default();
-        composite_surface_contour(&mut pixels, width, 31, 150, 12, &tokens);
-        let red = |x: usize, y: usize| pixels[(y * width as usize + x) * 4];
-        assert_eq!(red(0, 0), 0, "the clipped outer corner stays empty");
-        assert!(red(11, 0) > 0, "the top arc must join the straight border");
-        assert!(red(0, 20) > 0, "the side contour must remain visible");
-        assert_eq!(red(30, 15), 0, "the centre stays free of border paint");
+    fn outline_ring_covers_the_whole_frame_with_shared_coverage() {
+        use flamewm_render_core::outline::{ring_alpha, ring_coverage};
+        let scene = plan_scene(
+            120,
+            100,
+            "app",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &ChromeTokens::default(),
+        );
+        let (frame, w) = ringed(&scene, (0, 0), (800, 600));
+        let (h, radius) = (scene.frame_h, u32::from(scene.radius));
+        let opacity = scene.tokens.surface_border_alpha;
+        // Every pixel is exactly the shared raster: 0 outside the ring, else the shared alpha.
+        for y in 0..h {
+            for x in 0..w {
+                let expected = ring_alpha(opacity, ring_coverage(w, h, radius, x, y));
+                assert_eq!(pixel_at(&frame, w, x, y)[3], expected, "{x},{y}");
+            }
+        }
+        // One continuous ring around titlebar AND client: all four sides.
+        for (x, y) in [(w / 2, 0), (w / 2, h - 1), (0, h / 2), (w - 1, h / 2)] {
+            assert!(pixel_at(&frame, w, x, y)[3] > 0, "no ring at {x},{y}");
+        }
+        // The arcs stay antialiased instead of a stair-stepped mask edge.
+        let full = ring_alpha(opacity, 255);
+        let partial = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let alpha = pixel_at(&frame, w, x, y)[3];
+                alpha > 0 && alpha < full
+            })
+            .count();
+        assert!(partial > 3, "arcs must be antialiased, got {partial}");
+        // Interior and the space outside the ideal arc stay untouched.
+        assert_eq!(pixel_at(&frame, w, 60, 50), [0, 0, 0, 0]);
+        assert_eq!(pixel_at(&frame, w, 0, 0), [0, 0, 0, 0]);
+        assert_eq!(pixel_at(&frame, w, 0, h - 1), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn outline_pre_blends_client_rows_into_the_surface_material() {
+        let scene = plan_scene(
+            120,
+            100,
+            "app",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &white_outline(),
+        );
+        let (frame, w) = ringed(&scene, (0, 0), (800, 600));
+        let titlebar_h = u32::from(scene.titlebar_height);
+        // Straight edges and full coverage keep the configured ring colour exactly.
+        assert_eq!(pixel_at(&frame, w, 60, 0), [0xff, 0xff, 0xff, 255]);
+        assert_eq!(pixel_at(&frame, w, 0, 50), [0xff, 0xff, 0xff, 255]);
+        // Titlebar rows carry the material in their own fill: the ring stays raw there.
+        let (tx, ty) = (0..titlebar_h.min(24))
+            .flat_map(|x| (0..24).map(move |y| (x, y)))
+            .find(|&(x, y)| {
+                let alpha = pixel_at(&frame, w, x, y)[3];
+                alpha > 0 && alpha < 255
+            })
+            .expect("an antialiased titlebar-row pixel");
+        assert_eq!(&pixel_at(&frame, w, tx, ty)[..3], &[0xff, 0xff, 0xff]);
+        // Client rows fade out of the window material, never out of the frame background.
+        let (cx, cy) = (0..w)
+            .flat_map(|x| (titlebar_h..scene.frame_h).map(move |y| (x, y)))
+            .find(|&(x, y)| {
+                let alpha = pixel_at(&frame, w, x, y)[3];
+                alpha > 0 && alpha < 255
+            })
+            .expect("an antialiased client-row pixel");
+        let pixel = pixel_at(&frame, w, cx, cy);
+        let material = super::super::titlebar_backdrop::titlebar_pixels(
+            (cx as i32, cy as i32),
+            (800, 600),
+            (1, 1),
+            scene.bg,
+            scene.bg_alpha,
+            scene.tokens.titlebar_blur_percent,
+            0,
+        );
+        assert_ne!(
+            &pixel[..3],
+            &[0xff, 0xff, 0xff],
+            "partial pixel is not solid"
+        );
+        for (channel, base) in pixel[..3].iter().zip(&material) {
+            assert!(
+                *channel > *base,
+                "faded toward the material, not the background"
+            );
+        }
+    }
+
+    #[test]
+    fn outline_emits_nothing_when_disabled_or_degenerate() {
+        let mut tokens = ChromeTokens::default();
+        tokens.surface_border_alpha = 0;
+        let scene = plan_scene(
+            120, 100, "app", true, None, None, false, false, true, &tokens,
+        );
+        assert!(outline_blits(&scene, (0, 0), (800, 600)).is_empty());
+        assert!(
+            !effects_for(1, &scene)
+                .iter()
+                .any(|effect| matches!(effect, ChromeEffect::PaintOutline { .. }))
+        );
+        let tiny = plan_scene(
+            1,
+            100,
+            "app",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &ChromeTokens::default(),
+        );
+        assert!(outline_blits(&tiny, (0, 0), (800, 600)).is_empty());
+    }
+
+    #[test]
+    fn outline_paints_after_controls_and_before_the_shape_mask() {
+        let scene = plan_scene(
+            120,
+            100,
+            "a",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &ChromeTokens::default(),
+        );
+        let effects = effects_for(1, &scene);
+        let outline = effects.iter().position(|effect| {
+            matches!(
+                effect,
+                ChromeEffect::PaintOutline { alpha, radius }
+                    if *alpha == scene.tokens.surface_border_alpha
+                        && *radius == u32::from(scene.radius)
+            )
+        });
+        let controls = effects
+            .iter()
+            .position(|effect| matches!(effect, ChromeEffect::BlitControls { .. }));
+        let shape = effects
+            .iter()
+            .position(|effect| matches!(effect, ChromeEffect::ApplyShape { .. }));
+        let (Some(controls), Some(outline), Some(shape)) = (controls, outline, shape) else {
+            panic!("missing paint effect: {effects:?}");
+        };
+        assert!(
+            controls < outline,
+            "ring paints over the final control pixels"
+        );
+        assert!(
+            outline < shape,
+            "ring paints before the shape clips the arcs"
+        );
+    }
+
+    #[test]
+    fn titlebar_fill_no_longer_bakes_a_contour() {
+        let mut tokens = ChromeTokens::default();
+        tokens.surface_border_alpha = 255;
+        let scene = plan_scene(
+            120, 100, "app", true, None, None, false, false, true, &tokens,
+        );
+        let fill = titlebar_fill_pixels(&scene, 31, (0, 0), (800, 600));
+        // The material, not the outline colour: the ring is a separate blit now.
+        let material = super::super::titlebar_backdrop::titlebar_pixels(
+            (0, 0),
+            (800, 600),
+            (120, 31),
+            scene.bg,
+            scene.bg_alpha,
+            scene.tokens.titlebar_blur_percent,
+            0,
+        );
+        for (x, y) in [(60, 0), (60, 30)] {
+            assert_eq!(pixel_at(&fill, 120, x, y), pixel_at(&material, 120, x, y));
+        }
+        for (x, y) in [(0, 20), (60, 0), (119, 20), (60, 30)] {
+            let pixel = pixel_at(&fill, 120, x, y);
+            assert_eq!(pixel[3], 255, "material stays opaque at {x},{y}");
+            assert!(
+                pixel[0] != 0xff || pixel[1] != 0xff || pixel[2] != 0xff,
+                "outline baked into the fill at {x},{y}"
+            );
+        }
     }
 
     #[test]
@@ -836,24 +964,5 @@ mod tests {
         assert!(result.is_err());
         // Style params reached the draw-target contract before display touch.
         assert_eq!(renderer.last_title_style(), Some((12.0, 600)));
-    }
-}
-
-#[cfg(test)]
-mod ring_alpha_tests {
-    use super::ring_alpha;
-
-    #[test]
-    fn full_coverage_is_the_configured_outline_opacity() {
-        assert_eq!(ring_alpha(127, 255), 127);
-        assert_eq!(ring_alpha(0, 255), 0);
-    }
-
-    #[test]
-    fn partial_coverage_scales_the_outline_opacity() {
-        assert_eq!(ring_alpha(40, 0), 0);
-        assert_eq!(ring_alpha(40, 100), 16);
-        assert_eq!(ring_alpha(255, 128), 128);
-        assert!(ring_alpha(127, 128) < 128);
     }
 }

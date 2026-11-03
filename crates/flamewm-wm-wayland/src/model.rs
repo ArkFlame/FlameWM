@@ -18,6 +18,11 @@ pub const BUTTON_SIZE: i32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME
     .button_width as i32;
 pub const BUTTON_GAP: i32 = 0;
 pub const RESIZE_GRIP: i32 = 12;
+/// Logical square at each decorated-frame corner that starts a two-axis resize. It covers the
+/// titlebar band, where [`RESIZE_GRIP`] cannot reach. X11 mirrors this number for its own corner
+/// handles, so both sessions agree on where a corner begins; the close button is wider and taller
+/// than the square, so its centre stays a button press.
+pub const CORNER_GRIP: i32 = 16;
 pub const MIN_CLIENT_W: i32 = 120;
 pub const MIN_CLIENT_H: i32 = 80;
 const DEFAULT_W: i32 = 640;
@@ -367,11 +372,16 @@ impl WindowModel {
             if window.workspace != self.current || window.minimized {
                 continue;
             }
-            if !window.frame().contains(px, py) {
+            let frame = window.frame();
+            if !frame.contains(px, py) {
                 continue;
             }
+            // A frame corner resizes: it wins over the titlebar drag and, in the square it shares
+            // with the close button, over the button.
+            if corner_at(frame, px, py).is_some() {
+                return Some(Hit::Resize(window.id));
+            }
             if window.decorated() && !window.rect.contains(px, py) {
-                let frame = window.frame();
                 return Some(match button_at(frame, px, py) {
                     Some(button) => Hit::Button(window.id, button),
                     None => Hit::Titlebar(window.id),
@@ -809,7 +819,7 @@ fn button_at(frame: Rect, px: f64, py: f64) -> Option<Button> {
         .find(|button| button_rect(frame, *button).contains(px, py))
 }
 
-/// Client rect inside a grip band along any edge (corners included) starts a resize.
+/// Client rect inside a grip band along any edge (client corners included) starts a resize.
 fn in_resize_grip(rect: Rect, px: f64, py: f64) -> bool {
     if !rect.contains(px, py) {
         return false;
@@ -819,6 +829,34 @@ fn in_resize_grip(rect: Rect, px: f64, py: f64) -> bool {
         || px >= f64::from(rect.x + rect.w) - grip
         || py < f64::from(rect.y) + grip
         || py >= f64::from(rect.y + rect.h) - grip
+}
+
+/// Two-axis resize edges when `(px, py)` is in the [`CORNER_GRIP`] square at a `frame` corner.
+///
+/// The square belongs to the frame, not the client: a decorated window's top corners are in the
+/// titlebar band, outside the client rect [`in_resize_grip`] inspects. The close button starts at
+/// the same frame corner, so only the square it shares with that handle resizes.
+pub fn corner_at(frame: Rect, px: f64, py: f64) -> Option<ResizeEdge> {
+    if !frame.contains(px, py) {
+        return None;
+    }
+    let grip = f64::from(CORNER_GRIP);
+    let left = px < f64::from(frame.x) + grip;
+    let right = px >= f64::from(frame.x + frame.w) - grip;
+    let top = py < f64::from(frame.y) + grip;
+    let bottom = py >= f64::from(frame.y + frame.h) - grip;
+    ((left || right) && (top || bottom)).then_some(ResizeEdge {
+        left,
+        right,
+        top,
+        bottom,
+    })
+}
+
+/// Resize edges for a press on `frame`, whose client rect is `rect`: a frame corner square wins
+/// over the client grip band, so a corner drag from the titlebar resizes both axes.
+pub fn resize_edge_at(frame: Rect, rect: Rect, px: f64, py: f64) -> ResizeEdge {
+    corner_at(frame, px, py).unwrap_or_else(|| ResizeEdge::at(rect, px, py))
 }
 
 /// Edges a resize grab moves: `left`/`top` move the origin, `right`/`bottom` move the far side.
@@ -1176,10 +1214,14 @@ mod tests {
         assert_eq!(model.hit(200.0, 200.0), Some(Hit::Client(2)));
         // Titlebar of window 1 above its client rect, away from buttons.
         assert_eq!(model.hit(110.0, 100.0 - 10.0), Some(Hit::Titlebar(1)));
-        // Close button sits at the right edge of the frame.
+        // Close button sits at the right edge of the frame; its corner-grip overlap is tested
+        // separately, so sample the centre.
         let frame = model.get(1).unwrap().frame();
         let close = button_rect(frame, Button::Close);
-        let (close_x, close_y) = (f64::from(close.x + 2), f64::from(close.y + 2));
+        let (close_x, close_y) = (
+            f64::from(close.x + close.w / 2),
+            f64::from(close.y + close.h / 2),
+        );
         assert_eq!(
             model.hit(close_x, close_y),
             Some(Hit::Button(1, Button::Close))
@@ -1192,6 +1234,126 @@ mod tests {
         model.add(7, Rect::new(0, 28, 200, 200), 0);
         assert_eq!(model.hit(195.0, 225.0), Some(Hit::Resize(7)));
         assert_eq!(model.hit(50.0, 50.0), Some(Hit::Client(7)));
+    }
+
+    /// A press on any frame corner starts a resize, including the two top corners in the titlebar
+    /// band where the client grip band cannot reach. With `titlebars=false` the frame is the client
+    /// rect, so the same squares sit exactly on the client corners.
+    #[test]
+    fn frame_corners_resize_with_and_without_titlebars() {
+        let mut model = WindowModel::new(1);
+        model.add(1, Rect::new(100, 100, 300, 300), 0);
+        let frame = model.get(1).unwrap().frame();
+        let left = f64::from(frame.x + 2);
+        let right = f64::from(frame.x + frame.w - 2);
+        let top = f64::from(frame.y + 2);
+        let bottom = f64::from(frame.y + frame.h - 2);
+        for (px, py) in [(left, top), (right, top), (left, bottom), (right, bottom)] {
+            assert_eq!(model.hit(px, py), Some(Hit::Resize(1)), "frame corner");
+        }
+
+        model.configure(false, 0);
+        assert_eq!(model.get(1).unwrap().frame(), Rect::new(100, 100, 300, 300));
+        for (px, py) in [
+            (102.0, 102.0),
+            (398.0, 102.0),
+            (102.0, 398.0),
+            (398.0, 398.0),
+        ] {
+            assert_eq!(model.hit(px, py), Some(Hit::Resize(1)), "client corner");
+        }
+    }
+
+    /// The resolver reports both axes inside a frame corner square and keeps the single-edge band
+    /// result for presses between the corners.
+    #[test]
+    fn resize_edges_pick_frame_corners_before_the_client_band() {
+        let rect = Rect::new(100, 100, 300, 200);
+        let frame = rect.frame();
+        let top = f64::from(frame.y + 2);
+        let bottom = f64::from(frame.y + frame.h - 2);
+        let corners = [
+            ((102.0, top), (true, false, true, false)),
+            ((398.0, top), (false, true, true, false)),
+            ((102.0, bottom), (true, false, false, true)),
+            ((398.0, bottom), (false, true, false, true)),
+        ];
+        for ((px, py), (left, right, top_edge, bottom_edge)) in corners {
+            assert_eq!(
+                resize_edge_at(frame, rect, px, py),
+                ResizeEdge {
+                    left,
+                    right,
+                    top: top_edge,
+                    bottom: bottom_edge,
+                },
+                "corner at {px}, {py}"
+            );
+        }
+        // Middle of the top frame edge and the left client band stay single-edge.
+        assert_eq!(
+            resize_edge_at(frame, rect, 250.0, top),
+            ResizeEdge {
+                left: false,
+                right: false,
+                top: true,
+                bottom: false,
+            }
+        );
+        assert_eq!(
+            resize_edge_at(frame, rect, 101.0, 150.0),
+            ResizeEdge {
+                left: true,
+                right: false,
+                top: false,
+                bottom: false,
+            }
+        );
+    }
+
+    /// A top corner grabbed in the titlebar band resizes from the client rect: the pointer delta
+    /// moves the client top, so the frame top moves with it and the bottom stays fixed.
+    #[test]
+    fn top_corner_resize_moves_the_frame_top_from_the_client_rect() {
+        let rect = Rect::new(100, 100, 300, 200);
+        let frame = rect.frame();
+        let edge = resize_edge_at(frame, rect, 102.0, f64::from(frame.y + 2));
+        assert!(edge.left && edge.top && !edge.right && !edge.bottom);
+        let resized = edge.resized(rect, -10, 10);
+        assert_eq!(resized, Rect::new(90, 110, 310, 190));
+        assert_eq!(resized.frame().y, frame.y + 10, "frame top tracks the drag");
+    }
+
+    /// The top-right handle and the close button share one 16 px square; the handle wins only
+    /// there, so the button centre still closes and the rest of the titlebar still drags.
+    #[test]
+    fn corner_grip_shares_only_its_square_with_the_close_button() {
+        let mut model = WindowModel::new(1);
+        model.add(1, Rect::new(100, 100, 300, 300), 0);
+        let frame = model.get(1).unwrap().frame();
+        let close = button_rect(frame, Button::Close);
+        let centre = (
+            f64::from(close.x + close.w / 2),
+            f64::from(close.y + close.h / 2),
+        );
+        assert_eq!(
+            model.hit(centre.0, centre.1),
+            Some(Hit::Button(1, Button::Close))
+        );
+        assert_eq!(
+            model.hit(f64::from(frame.x + frame.w - 2), f64::from(frame.y + 2)),
+            Some(Hit::Resize(1)),
+            "the shared square belongs to the handle"
+        );
+        // One full grip below the frame top, at its middle, is a titlebar drag.
+        assert_eq!(
+            model.hit(
+                f64::from(frame.x + frame.w / 2),
+                f64::from(frame.y + CORNER_GRIP)
+            ),
+            Some(Hit::Titlebar(1))
+        );
+        assert_eq!(model.hit(200.0, 200.0), Some(Hit::Client(1)));
     }
 
     #[test]
@@ -1293,7 +1455,10 @@ mod tests {
         assert_eq!(model.hit(110.0, 100.0 - 10.0), Some(Hit::Titlebar(1)));
         let close = button_rect(window.frame(), Button::Close);
         assert_eq!(
-            model.hit(f64::from(close.x + 2), f64::from(close.y + 2)),
+            model.hit(
+                f64::from(close.x + close.w / 2),
+                f64::from(close.y + close.h / 2)
+            ),
             Some(Hit::Button(1, Button::Close))
         );
     }
