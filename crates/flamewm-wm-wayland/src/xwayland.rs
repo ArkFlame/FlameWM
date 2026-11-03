@@ -7,14 +7,18 @@
 //! strut from the work area. smithay 0.7 does not expose `_NET_WM_WINDOW_TYPE` or
 //! `_NET_WM_STRUT*`, so they are read through a second X connection to the `XWayland` display.
 
+use std::collections::HashSet;
 use std::error::Error;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 
 use smithay::delegate_xwayland_shell;
-use smithay::reexports::calloop::LoopHandle;
+use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::{Interest, LoopHandle, Mode as CalloopMode, PostAction};
 use smithay::reexports::x11rb::connection::Connection;
+use smithay::reexports::x11rb::protocol::Event as X11Event;
 use smithay::reexports::x11rb::protocol::xproto::{
-    Atom, AtomEnum, ConnectionExt, CreateWindowAux, Window as X11Window, WindowClass,
+    Atom, AtomEnum, ChangeWindowAttributesAux, ConnectionExt, CreateWindowAux, EventMask,
+    Window as X11Window, WindowClass,
 };
 use smithay::reexports::x11rb::rust_connection::RustConnection;
 use smithay::utils::{Logical, Point, Rectangle, Size};
@@ -50,6 +54,8 @@ pub struct Props {
     net_wm_name: Atom,
     /// Unmapped `InputOnly` window retaining the _`NET_WM_CM_S0` selection for `XWayland`.
     _compositor_owner: Option<X11Window>,
+    /// Mapped Dock XIDs selected for property notifications on this connection.
+    watched_docks: HashSet<X11Window>,
 }
 
 impl Props {
@@ -68,9 +74,61 @@ impl Props {
             fullscreen: atom("_NET_WM_STATE_FULLSCREEN")?,
             net_wm_name: atom("_NET_WM_NAME")?,
             _compositor_owner: None,
+            watched_docks: HashSet::new(),
             conn,
         };
         Ok(props)
+    }
+
+    /// Duplicate the properties connection fd for calloop readiness; the X11 connection remains
+    /// the sole owner of event decoding and protocol requests.
+    fn strut_event_source(&self) -> Result<Generic<OwnedFd>, std::io::Error> {
+        let fd = self.conn.stream().as_fd().try_clone_to_owned()?;
+        Ok(Generic::new(fd, Interest::READ, CalloopMode::Level))
+    }
+
+    /// Select notifications before the initial property read so an intervening update is either
+    /// reflected by that read or remains queued for the event source.
+    fn watch_dock(&mut self, window: X11Window) -> Result<(), Box<dyn Error>> {
+        self.conn
+            .change_window_attributes(
+                window,
+                &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+            )?
+            .check()?;
+        self.conn.flush()?;
+        self.watched_docks.insert(window);
+        Ok(())
+    }
+
+    /// Stop selecting a Dock after unmap/destroy. A destroyed XID may already be invalid, so
+    /// selection cleanup is best-effort; queued notifications are fenced by `watched_docks`.
+    fn unwatch_dock(&mut self, window: X11Window) {
+        if !self.watched_docks.remove(&window) {
+            return;
+        }
+        if let Ok(cookie) = self.conn.change_window_attributes(
+            window,
+            &ChangeWindowAttributesAux::new().event_mask(EventMask::NO_EVENT),
+        ) {
+            let _ = cookie.check();
+        }
+        let _ = self.conn.flush();
+    }
+
+    /// Drain queued X11 events and return only currently watched Dock XIDs whose strut atoms
+    /// changed. Property values are fetched by the compositor callback, never on pointer motion.
+    fn drain_strut_events(&mut self) -> Result<HashSet<X11Window>, Box<dyn Error>> {
+        let mut affected = HashSet::new();
+        while let Some(event) = self.conn.poll_for_event()? {
+            if let X11Event::PropertyNotify(event) = event
+                && self.watched_docks.contains(&event.window)
+                && is_strut_property(event.atom, self.strut, self.strut_partial)
+            {
+                affected.insert(event.window);
+            }
+        }
+        Ok(affected)
     }
 
     /// Smithay really composites the `XWayland` client buffers, including their alpha. Advertise
@@ -185,9 +243,25 @@ impl Props {
 /// X11 window the compositor draws without managing.
 pub struct Unmanaged {
     pub surface: X11Surface,
+    /// Window role; only Dock properties reserve space, refreshed on property events and boundaries.
+    pub kind: Kind,
     /// Drawn beneath managed windows (desktop background) instead of above them.
     pub below: bool,
     pub strut: Option<[i32; 4]>,
+}
+
+/// Replaces one cached Dock reservation and reports whether layout inputs changed.
+fn replace_strut(cached: &mut Option<[i32; 4]>, current: Option<[i32; 4]>) -> bool {
+    if *cached == current {
+        return false;
+    }
+    *cached = current;
+    true
+}
+
+/// Whether a property event can affect a Dock's reserved work area.
+fn is_strut_property(atom: Atom, strut: Atom, strut_partial: Atom) -> bool {
+    atom == strut || atom == strut_partial
 }
 
 /// Spawns `XWayland` and returns the source to insert into the loop. `Ready` starts the WM.
@@ -264,6 +338,33 @@ impl State {
                 None
             }
         };
+        if let Some(props) = self.props.as_ref() {
+            match props.strut_event_source() {
+                Ok(source) => {
+                    if let Err(error) = self.loop_handle.insert_source(source, |_, _, state| {
+                        let affected = match state.props.as_mut().map(Props::drain_strut_events) {
+                            Some(Ok(affected)) => affected,
+                            Some(Err(error)) => {
+                                eprintln!(
+                                    "flamewm-wayland: X11 Dock property watcher stopped: {error}"
+                                );
+                                return Ok(PostAction::Remove);
+                            }
+                            None => return Ok(PostAction::Remove),
+                        };
+                        state.refresh_dock_strut_ids(affected);
+                        Ok(PostAction::Continue)
+                    }) {
+                        eprintln!(
+                            "flamewm-wayland: X11 Dock property watcher unavailable: {error}"
+                        );
+                    }
+                }
+                Err(error) => {
+                    eprintln!("flamewm-wayland: X11 Dock property watcher unavailable: {error}")
+                }
+            }
+        }
         self.xwm = Some(wm);
         self.display_number = Some(display);
         eprintln!("flamewm-wayland: XWayland ready on DISPLAY=:{display}");
@@ -304,40 +405,144 @@ impl State {
         self.set_focus(Some(id));
     }
 
-    fn map_unmanaged(&mut self, window: X11Surface, below: bool) {
-        let strut = self
-            .props
-            .as_ref()
-            .and_then(|props| props.strut(window.window_id()));
+    fn map_unmanaged(&mut self, window: X11Surface, kind: Kind) {
         let wid = window.window_id();
+        if kind == Kind::Dock
+            && let Some(props) = self.props.as_mut()
+            && let Err(error) = props.watch_dock(wid)
+        {
+            eprintln!("flamewm-wayland: cannot watch Dock properties for 0x{wid:x}: {error}");
+        }
+        let strut = (kind == Kind::Dock)
+            .then(|| self.props.as_ref().and_then(|props| props.strut(wid)))
+            .flatten();
         self.unmanaged
             .retain(|entry| entry.surface.window_id() != wid);
         self.unmanaged.push(Unmanaged {
             surface: window,
-            below,
+            kind,
+            below: kind == Kind::Desktop,
             strut,
         });
-        // XWayland routes pointer buttons by X stacking, not by the compositor's pointer focus. A
-        // desktop mapped after a dock sits above it in X and takes the dock's clicks, so docks are
-        // re-raised here to keep X stacking in step with the compositor's model.
-        if let Some(xwm) = self.xwm.as_mut() {
-            for entry in self.unmanaged.iter().filter(|entry| !entry.below) {
-                let _ = xwm.raise_window(&entry.surface);
+        self.reflow_if_work_area_changed();
+        // XWayland routes buttons by X stacking rather than Wayland's pointer focus. Reapply the
+        // compositor's complete relative X11 order after each map, including desktop surfaces.
+        self.sync_xwayland_stacking();
+        self.request_redraw();
+    }
+
+    /// Refresh current Dock reservations at a layout boundary, then reflow every placed window.
+    /// The cached value stays untouched during pointer motion, so property reads are never on the
+    /// drag hot path.
+    pub(crate) fn refresh_dock_struts(&mut self) {
+        let docks: Vec<_> = self
+            .unmanaged
+            .iter()
+            .filter(|entry| entry.kind == Kind::Dock)
+            .map(|entry| entry.surface.window_id())
+            .collect();
+        self.refresh_dock_strut_ids(docks);
+    }
+
+    fn refresh_dock_strut(&mut self, window: &X11Surface) {
+        let xid = window.window_id();
+        if self
+            .unmanaged
+            .iter()
+            .any(|entry| entry.kind == Kind::Dock && entry.surface.window_id() == xid)
+        {
+            self.refresh_dock_strut_ids([xid]);
+        }
+    }
+
+    fn refresh_dock_strut_ids(&mut self, docks: impl IntoIterator<Item = X11Window>) {
+        let Some(props) = self.props.as_ref() else {
+            return;
+        };
+        let updates: Vec<_> = docks
+            .into_iter()
+            .map(|xid| (xid, props.strut(xid)))
+            .collect();
+        let mut changed = false;
+        for (xid, strut) in updates {
+            if let Some(entry) = self
+                .unmanaged
+                .iter_mut()
+                .find(|entry| entry.kind == Kind::Dock && entry.surface.window_id() == xid)
+            {
+                changed |= replace_strut(&mut entry.strut, strut);
             }
         }
-        self.request_redraw();
+        if changed {
+            self.reflow_if_work_area_changed();
+            self.request_redraw();
+        }
+    }
+
+    /// Keep XWayland's stack in the same relative order as the compositor scene: desktop, managed
+    /// windows bottom-to-top, then override-redirect docks/menus bottom-to-top. Smithay synchronizes
+    /// its internal stack in `raise_window`; failures are reported with the affected XID so input
+    /// routing cannot silently drift from the scene order.
+    pub(crate) fn sync_xwayland_stacking(&mut self) {
+        let Some(xwm) = self.xwm.as_mut() else {
+            return;
+        };
+        let visible_top_first = self.model.visible_top_first();
+        let order = x11_stacking_order(
+            self.x11
+                .iter()
+                .filter(|(id, _)| !visible_top_first.contains(id))
+                .map(|(_, window)| window.window_id()),
+            self.unmanaged
+                .iter()
+                .filter(|entry| entry.below)
+                .map(|entry| entry.surface.window_id()),
+            visible_top_first.iter().rev().copied().filter_map(|id| {
+                self.x11
+                    .iter()
+                    .find(|(window_id, _)| *window_id == id)
+                    .map(|(_, window)| window.window_id())
+            }),
+            self.unmanaged
+                .iter()
+                .filter(|entry| !entry.below)
+                .map(|entry| entry.surface.window_id()),
+        );
+        for xid in order {
+            let surface = self
+                .unmanaged
+                .iter()
+                .map(|entry| &entry.surface)
+                .chain(self.x11.iter().map(|(_, window)| window))
+                .find(|surface| surface.window_id() == xid);
+            let Some(surface) = surface else {
+                continue;
+            };
+            if let Err(error) = xwm.raise_window(surface) {
+                eprintln!("flamewm-wayland: failed to restack XWayland window 0x{xid:x}: {error}");
+            }
+        }
     }
 
     /// Removes an X11 window from every list it may sit in and refocuses if it was focused.
     fn forget_x11(&mut self, window: &X11Surface) {
         let wid = window.window_id();
+        let was_dock = self
+            .unmanaged
+            .iter()
+            .any(|entry| entry.kind == Kind::Dock && entry.surface.window_id() == wid);
+        if was_dock && let Some(props) = self.props.as_mut() {
+            props.unwatch_dock(wid);
+        }
         self.unmanaged
             .retain(|entry| entry.surface.window_id() != wid);
+        self.reflow_if_work_area_changed();
         let Some(index) = self
             .x11
             .iter()
             .position(|(_, managed)| managed.window_id() == wid)
         else {
+            self.sync_xwayland_stacking();
             self.request_redraw();
             return;
         };
@@ -353,6 +558,7 @@ impl State {
             self.focused = None;
             self.refocus();
         }
+        self.sync_xwayland_stacking();
         self.request_redraw();
     }
 
@@ -364,6 +570,23 @@ impl State {
             let _ = window.close();
         }
     }
+}
+
+/// X11 bottom-to-top stacking order matching the scene's front-to-back order. Managed windows
+/// not currently rendered stay below the desktop/unmanaged lower stack, so hidden workspaces do
+/// not remain accidental X input targets.
+fn x11_stacking_order(
+    managed_hidden: impl IntoIterator<Item = X11Window>,
+    unmanaged_below: impl IntoIterator<Item = X11Window>,
+    managed_visible_bottom_to_top: impl IntoIterator<Item = X11Window>,
+    unmanaged_above: impl IntoIterator<Item = X11Window>,
+) -> Vec<X11Window> {
+    managed_hidden
+        .into_iter()
+        .chain(unmanaged_below)
+        .chain(managed_visible_bottom_to_top)
+        .chain(unmanaged_above)
+        .collect()
 }
 
 impl XWaylandShellHandler for State {
@@ -378,13 +601,16 @@ impl XWaylandShellHandler for State {
         window: X11Surface,
     ) {
         // The wl_surface can arrive after the map request; re-apply focus so keyboard input lands.
-        if let Some(id) = self.x11_id(&window) {
-            if self.focused == Some(id) {
-                self.set_focus(Some(id));
-            }
+        let focused_managed = self
+            .x11_id(&window)
+            .is_some_and(|id| self.focused == Some(id));
+        if focused_managed {
+            self.set_focus(self.focused);
         }
-        // Pointer focus is only resolved on motion, and an unmanaged window (taskbar, dock) has no
-        // wl_surface until this callback, so a pointer resting over it never got focus until moved.
+        // Association may complete after mapping and changes which X surfaces are available for
+        // input and restacking, even when this is not the keyboard-focused window.
+        self.sync_xwayland_stacking();
+        // Resolve pointer focus even if the pointer is still over a surface just associated.
         self.on_motion(self.pointer, 0);
     }
 }
@@ -404,16 +630,16 @@ impl XwmHandler for State {
 
     fn map_window_request(&mut self, _xwm: XwmId, window: X11Surface) {
         let _ = window.set_mapped(true);
-        match self.kind_of(&window) {
-            Kind::Dock => self.map_unmanaged(window, false),
-            Kind::Desktop => self.map_unmanaged(window, true),
+        let kind = self.kind_of(&window);
+        match kind {
+            Kind::Dock | Kind::Desktop => self.map_unmanaged(window, kind),
             Kind::Other => self.manage_x11(window),
         }
     }
 
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, window: X11Surface) {
-        let below = self.kind_of(&window) == Kind::Desktop;
-        self.map_unmanaged(window, below);
+        let kind = self.kind_of(&window);
+        self.map_unmanaged(window, kind);
     }
 
     fn unmapped_window(&mut self, _xwm: XwmId, window: X11Surface) {
@@ -457,23 +683,27 @@ impl XwmHandler for State {
     fn configure_notify(
         &mut self,
         _xwm: XwmId,
-        _window: X11Surface,
+        window: X11Surface,
         _geometry: Rectangle<i32, Logical>,
         _above: Option<X11Window>,
     ) {
-        // smithay tracks geometry on the surface; rendering reads it on each frame.
+        // smithay tracks geometry on the surface; rendering reads it on each frame. Dock struts
+        // are private X properties, so their owner boundary refreshes the cached work area here.
+        self.refresh_dock_strut(&window);
     }
 
     fn move_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32) {
         let Some(id) = self.x11_id(&window) else {
             return;
         };
+        self.refresh_dock_struts();
         if let Some(managed) = self.model.get(id).cloned() {
-            self.grab = Some(Grab::Move {
+            self.grab = Some(Grab::move_window(
                 id,
-                pointer: (self.pointer.x, self.pointer.y),
-                start: managed.rect,
-            });
+                (self.pointer.x, self.pointer.y),
+                &managed,
+                false,
+            ));
         }
     }
 
@@ -547,6 +777,9 @@ impl XwmHandler for State {
 
     fn disconnected(&mut self, _xwm: XwmId) {
         self.xwm = None;
+        // The duplicated calloop fd observes peer closure and removes its source; dropping Props
+        // here also prevents a late queued property event from mutating state after XWayland ends.
+        self.props = None;
     }
 }
 
@@ -567,5 +800,121 @@ fn xwm_edge(edge: ResizeEdge) -> Edge {
         right,
         top,
         bottom,
+    }
+}
+
+#[cfg(test)]
+mod stacking_tests {
+    use super::{is_strut_property, replace_strut, x11_stacking_order};
+    use crate::model::{Mode, Rect, WindowModel};
+    use crate::state::refit_model_placements;
+    use flamewm_window_core::SnapTarget;
+
+    #[test]
+    fn adding_and_removing_dock_strut_reflows_snapped_geometry() {
+        let output = Rect::new(0, 0, 1350, 641);
+        let floating = Rect::new(80, 80, 600, 400);
+        let mut model = WindowModel::new(1);
+        model.configure(false, 0);
+        model.add(1, floating, 0);
+        model.snap_to(1, SnapTarget::BottomRightQuarter, output, floating);
+        assert_eq!(
+            model.get(1).unwrap().rect.y + model.get(1).unwrap().rect.h,
+            641
+        );
+
+        let mut cached = None;
+        assert!(replace_strut(&mut cached, Some([0, 0, 0, 48])));
+        let work = crate::state::reserve_struts(output, cached.into_iter());
+        assert_eq!(
+            refit_model_placements(&mut model, output, output, work),
+            [1]
+        );
+        let snapped_area = work;
+        let unchanged = model.get(1).unwrap().clone();
+        assert!(refit_model_placements(&mut model, output, snapped_area, snapped_area).is_empty());
+        assert_eq!(model.get(1), Some(&unchanged));
+        let snapped = model.get(1).unwrap();
+        assert_eq!(snapped.mode, Mode::Snapped(SnapTarget::BottomRightQuarter));
+        assert_eq!(snapped.rect.y + snapped.rect.h, 593);
+        assert_eq!(snapped.restore, floating);
+
+        assert!(replace_strut(&mut cached, None));
+        let work = crate::state::reserve_struts(output, cached.into_iter());
+        assert_eq!(work, output);
+        assert_eq!(
+            refit_model_placements(&mut model, output, snapped_area, work),
+            [1]
+        );
+        let snapped = model.get(1).unwrap();
+        assert_eq!(snapped.mode, Mode::Snapped(SnapTarget::BottomRightQuarter));
+        assert_eq!(snapped.rect.y + snapped.rect.h, output.y + output.h);
+        assert_eq!(snapped.restore, floating);
+    }
+
+    #[test]
+    fn layer_bottom_zone_change_refits_placed_geometry() {
+        let output = Rect::new(0, 0, 1350, 641);
+        let start = Rect::new(80, 80, 600, 400);
+        let layer_work = Rect::new(0, 0, output.w, output.h - 48);
+        let mut model = WindowModel::new(1);
+        model.configure(false, 0);
+        model.add(1, start, 0);
+        model.snap_to(1, SnapTarget::BottomRightQuarter, output, start);
+
+        assert_eq!(
+            refit_model_placements(&mut model, output, output, layer_work),
+            [1]
+        );
+        let placed = model.get(1).unwrap();
+        assert_eq!(placed.mode, Mode::Snapped(SnapTarget::BottomRightQuarter));
+        assert_eq!(placed.rect.y + placed.rect.h, layer_work.y + layer_work.h);
+        assert_eq!(placed.restore, start);
+    }
+
+    #[test]
+    fn only_strut_property_atoms_trigger_dock_refresh() {
+        let strut = 10;
+        let strut_partial = 11;
+        assert!(is_strut_property(strut, strut, strut_partial));
+        assert!(is_strut_property(strut_partial, strut, strut_partial));
+        assert!(!is_strut_property(12, strut, strut_partial));
+    }
+
+    #[test]
+    fn cached_dock_strut_replacement_reports_only_real_changes() {
+        let initial = Some([0, 0, 0, 48]);
+        let mut cached = initial;
+        assert!(!replace_strut(&mut cached, initial));
+        assert_eq!(cached, initial);
+
+        let updated = Some([0, 0, 0, 52]);
+        assert!(replace_strut(&mut cached, updated));
+        assert_eq!(cached, updated);
+        assert!(replace_strut(&mut cached, None));
+        assert_eq!(cached, None);
+    }
+
+    #[test]
+    fn docks_are_restacked_above_desktops_and_managed_x11_windows() {
+        let order = x11_stacking_order([5], [10], [20, 21], [30]);
+        assert_eq!(order, [5, 10, 20, 21, 30]);
+        assert_eq!(
+            order.last(),
+            Some(&30),
+            "the foreground panel must be the top X11 input target"
+        );
+    }
+
+    #[test]
+    fn clearing_visible_stack_and_unmapping_windows_rebuilds_remaining_order() {
+        // A cleared/empty visible model stack leaves managed windows hidden below the desktop;
+        // it must not leave a formerly visible X11 window above the desktop.
+        assert_eq!(x11_stacking_order([5, 6], [10], [], [30]), [5, 6, 10, 30]);
+
+        // An unmapped managed or unmanaged surface is absent on the next complete restack.
+        let after_unmap = x11_stacking_order([5], [10], [20], []);
+        assert_eq!(after_unmap, [5, 10, 20]);
+        assert!(!after_unmap.contains(&30));
     }
 }

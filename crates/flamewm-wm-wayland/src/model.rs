@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use flamewm_api::shortcuts::KeyBinding;
 use flamewm_api::workspace::{GridDirection, MAX_WORKSPACES, grid_neighbor};
+use flamewm_window_core::{SnapTarget, apply_window_margin, snap_geometry};
 
 pub const TITLEBAR_HEIGHT: i32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME
     .metrics
@@ -85,6 +86,7 @@ pub enum Hit {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Normal,
+    Snapped(SnapTarget),
     Maximized,
     Fullscreen,
 }
@@ -99,9 +101,12 @@ pub struct Managed {
     pub mode: Mode,
     /// `titlebars` as last applied by [`WindowModel::configure`]; false removes the band.
     pub titlebars: bool,
-    /// Client rectangle to return to when leaving maximized or fullscreen.
+    /// Floating client rectangle retained across snapped/maximized/fullscreen placements.
     pub restore: Rect,
-    /// Preserve maximize state across fullscreen, so exiting a game restores the prior layout.
+    /// Placement under maximize; keeping mode and rect separate preserves snapped resume state.
+    pub maximize_restore_mode: Mode,
+    pub maximize_restore_rect: Rect,
+    /// Preserve the placement under fullscreen, so exiting restores the prior layout.
     pub fullscreen_restore_mode: Mode,
     /// Geometry before fullscreen, independently of normal/maximized restore geometry.
     pub fullscreen_restore_rect: Rect,
@@ -176,9 +181,44 @@ impl WindowModel {
         let work = self.work_area;
         for window in &mut self.windows {
             window.titlebars = titlebars;
-            if window.mode == Mode::Maximized {
-                if let Some(work) = work {
-                    window.rect = maximized_client(work, titlebars, self.window_margin);
+            if let Some(work) = work {
+                match window.mode {
+                    Mode::Maximized => {
+                        window.rect = maximized_client(work, titlebars, self.window_margin);
+                    }
+                    Mode::Snapped(target) => {
+                        window.rect = snapped_client(
+                            target,
+                            work,
+                            window.restore,
+                            titlebars,
+                            self.window_margin,
+                        );
+                    }
+                    Mode::Normal | Mode::Fullscreen => {}
+                }
+                if window.mode == Mode::Maximized
+                    || (window.mode == Mode::Fullscreen
+                        && window.fullscreen_restore_mode == Mode::Maximized)
+                {
+                    window.maximize_restore_rect = layout_rect(
+                        window.maximize_restore_mode,
+                        window.maximize_restore_rect,
+                        window.restore,
+                        work,
+                        titlebars,
+                        self.window_margin,
+                    );
+                }
+                if window.mode == Mode::Fullscreen {
+                    window.fullscreen_restore_rect = layout_rect(
+                        window.fullscreen_restore_mode,
+                        window.fullscreen_restore_rect,
+                        window.restore,
+                        work,
+                        titlebars,
+                        self.window_margin,
+                    );
                 }
             }
         }
@@ -272,6 +312,8 @@ impl WindowModel {
             mode: Mode::Normal,
             titlebars: self.titlebars,
             restore: rect,
+            maximize_restore_mode: Mode::Normal,
+            maximize_restore_rect: rect,
             fullscreen_restore_mode: Mode::Normal,
             fullscreen_restore_rect: rect,
         });
@@ -431,7 +473,9 @@ impl WindowModel {
                     self.toggle_maximize(id, work);
                 }
             }
-            Some(Mode::Normal | Mode::Maximized) => self.toggle_maximize(id, work),
+            Some(Mode::Normal | Mode::Snapped(_) | Mode::Maximized) => {
+                self.toggle_maximize(id, work)
+            }
             None => {}
         }
     }
@@ -479,18 +523,79 @@ impl WindowModel {
         }
     }
 
-    pub fn move_to(&mut self, id: WindowId, x: i32, y: i32) {
-        if let Some(window) = self.get_mut(id) {
-            window.rect.x = x;
-            window.rect.y = y;
-        }
-    }
-
     /// Sets the client rect (origin and size) of a managed window.
     pub fn set_rect(&mut self, id: WindowId, rect: Rect) {
         if let Some(window) = self.get_mut(id) {
+            if matches!(window.mode, Mode::Snapped(_)) {
+                window.mode = Mode::Normal;
+                window.maximize_restore_mode = Mode::Normal;
+                window.maximize_restore_rect = rect;
+            }
             window.rect = rect;
+            if window.mode == Mode::Normal {
+                window.restore = rect;
+            }
         }
+    }
+
+    /// Geometry for a snap preview. This uses the same frame-to-client conversion as commit.
+    pub fn snap_client_geometry(
+        &self,
+        id: WindowId,
+        target: SnapTarget,
+        work: Rect,
+    ) -> Option<Rect> {
+        let window = self.get(id)?;
+        Some(if target == SnapTarget::Maximize {
+            maximized_client(work, window.titlebars, self.window_margin)
+        } else {
+            snapped_client(
+                target,
+                work,
+                window.restore,
+                window.titlebars,
+                self.window_margin,
+            )
+        })
+    }
+
+    /// Commits an activated move, restoring floating geometry when it left a layout.
+    pub fn commit_move(&mut self, id: WindowId, rect: Rect) {
+        if let Some(window) = self.get_mut(id) {
+            window.mode = Mode::Normal;
+            window.rect = rect;
+            window.restore = rect;
+            window.maximize_restore_mode = Mode::Normal;
+            window.maximize_restore_rect = rect;
+        }
+    }
+
+    /// Commits one snapped layout while retaining its floating restore geometry.
+    pub fn snap_to(&mut self, id: WindowId, target: SnapTarget, work: Rect, restore: Rect) {
+        let titlebars = self.titlebars;
+        let margin = self.window_margin;
+        self.work_area = Some(work);
+        let Some(window) = self.get_mut(id) else {
+            return;
+        };
+        window.restore = restore;
+        window.mode = Mode::Snapped(target);
+        window.rect = snapped_client(target, work, restore, titlebars, margin);
+    }
+
+    /// Commits the top-center snap target as maximize, preserving its floating restore.
+    pub fn maximize_to(&mut self, id: WindowId, work: Rect, restore: Rect) {
+        let titlebars = self.titlebars;
+        let margin = self.window_margin;
+        self.work_area = Some(work);
+        let Some(window) = self.get_mut(id) else {
+            return;
+        };
+        window.restore = restore;
+        window.maximize_restore_mode = Mode::Normal;
+        window.maximize_restore_rect = restore;
+        window.mode = Mode::Maximized;
+        window.rect = maximized_client(work, titlebars, margin);
     }
 
     #[cfg(test)]
@@ -503,6 +608,7 @@ impl WindowModel {
 
     /// Toggle maximize into `work` (the usable area; the frame fills it, inset by `windowMargin`).
     pub fn toggle_maximize(&mut self, id: WindowId, work: Rect) {
+        let titlebars = self.titlebars;
         let margin = self.window_margin;
         self.work_area = Some(work);
         let Some(window) = self.get_mut(id) else {
@@ -510,42 +616,70 @@ impl WindowModel {
         };
         match window.mode {
             Mode::Maximized => {
-                window.mode = Mode::Normal;
-                window.rect = window.restore;
+                window.mode = window.maximize_restore_mode;
+                window.rect = if window.mode == Mode::Normal {
+                    window.restore
+                } else {
+                    window.maximize_restore_rect
+                };
             }
-            Mode::Normal => {
-                window.restore = window.rect;
+            Mode::Normal | Mode::Snapped(_) => {
+                window.maximize_restore_mode = window.mode;
+                window.maximize_restore_rect = window.rect;
+                if window.mode == Mode::Normal {
+                    window.restore = window.rect;
+                }
                 window.mode = Mode::Maximized;
-                window.rect = maximized_client(work, window.titlebars, margin);
+                window.rect = maximized_client(work, titlebars, margin);
             }
             Mode::Fullscreen => {}
         }
     }
 
-    /// Refit output-sized windows without overwriting a floating window's restore geometry.
-    /// The fullscreen saved maximized rect must track the new work area too, otherwise leaving
-    /// fullscreen after a host mode change returns to a clipped, old-size maximized window.
+    /// Refit output-sized placements without overwriting a floating window's restore geometry.
     pub fn refit_output(&mut self, id: WindowId, output: Rect, work: Rect) {
+        let titlebars = self.titlebars;
         let margin = self.window_margin;
         self.work_area = Some(work);
         let Some(window) = self.get_mut(id) else {
             return;
         };
-        let maximized = maximized_client(work, window.titlebars, margin);
-        let maximized = Rect::new(
-            maximized.x,
-            maximized.y,
-            maximized.w.max(1),
-            maximized.h.max(1),
-        );
         match window.mode {
             Mode::Fullscreen => {
                 window.rect = output;
                 if window.fullscreen_restore_mode == Mode::Maximized {
-                    window.fullscreen_restore_rect = maximized;
+                    window.maximize_restore_rect = layout_rect(
+                        window.maximize_restore_mode,
+                        window.maximize_restore_rect,
+                        window.restore,
+                        work,
+                        titlebars,
+                        margin,
+                    );
                 }
+                window.fullscreen_restore_rect = layout_rect(
+                    window.fullscreen_restore_mode,
+                    window.fullscreen_restore_rect,
+                    window.restore,
+                    work,
+                    titlebars,
+                    margin,
+                );
             }
-            Mode::Maximized => window.rect = maximized,
+            Mode::Maximized => {
+                window.rect = maximized_client(work, titlebars, margin);
+                window.maximize_restore_rect = layout_rect(
+                    window.maximize_restore_mode,
+                    window.maximize_restore_rect,
+                    window.restore,
+                    work,
+                    titlebars,
+                    margin,
+                );
+            }
+            Mode::Snapped(target) => {
+                window.rect = snapped_client(target, work, window.restore, titlebars, margin);
+            }
             Mode::Normal => {}
         }
     }
@@ -558,11 +692,15 @@ impl WindowModel {
         match (window.mode, on) {
             (Mode::Fullscreen, false) => {
                 window.mode = window.fullscreen_restore_mode;
-                window.rect = window.fullscreen_restore_rect;
+                window.rect = if window.mode == Mode::Normal {
+                    window.restore
+                } else {
+                    window.fullscreen_restore_rect
+                };
             }
-            (Mode::Normal | Mode::Maximized, true) => {
+            (Mode::Normal | Mode::Snapped(_) | Mode::Maximized, true) => {
                 window.fullscreen_restore_mode = window.mode;
-                // `restore` is separately owned by maximize/unmaximize; do not overwrite it.
+                // Floating restore remains independent of the placement under fullscreen.
                 window.fullscreen_restore_rect = window.rect;
                 window.mode = Mode::Fullscreen;
                 window.rect = output;
@@ -579,15 +717,53 @@ fn centre(rect: Rect) -> (i32, i32) {
     (rect.x + rect.w / 2, rect.y + rect.h / 2)
 }
 
-/// Client rect of a window maximized into `work`: the frame fills the margined work area, and the
-/// titlebar band (when the window has one) comes out of the client rect.
-///
-/// The margin comes from the shared [`flamewm_window_core::apply_window_margin`], the same call
-/// X11 makes, so both sessions inset an outer edge by the full margin and a shared edge by half.
-fn maximized_client(work: Rect, titlebars: bool, margin: i32) -> Rect {
-    let frame = flamewm_window_core::apply_window_margin(api_rect(work), api_rect(work), margin);
+/// Converts one shared frame rectangle to the model's client rectangle exactly once.
+fn client_from_frame(frame: flamewm_api::Rect, titlebars: bool) -> Rect {
     let band = if titlebars { TITLEBAR_HEIGHT } else { 0 };
     Rect::new(frame.x, frame.y + band, frame.width, frame.height - band)
+}
+
+/// Client rect of a window maximized into `work`: the frame fills the shared-margin work area.
+fn maximized_client(work: Rect, titlebars: bool, margin: i32) -> Rect {
+    let work = api_rect(work);
+    let tile = snap_geometry(
+        SnapTarget::Maximize,
+        work,
+        flamewm_api::Size::new(work.width, work.height),
+    );
+    client_from_frame(apply_window_margin(tile, work, margin), titlebars)
+}
+
+/// Client rect for a snapped placement. Preview and commit both call this one conversion path.
+fn snapped_client(
+    target: SnapTarget,
+    work: Rect,
+    floating_restore: Rect,
+    titlebars: bool,
+    margin: i32,
+) -> Rect {
+    let work = api_rect(work);
+    let tile = snap_geometry(
+        target,
+        work,
+        flamewm_api::Size::new(floating_restore.w, floating_restore.h),
+    );
+    client_from_frame(apply_window_margin(tile, work, margin), titlebars)
+}
+
+fn layout_rect(
+    mode: Mode,
+    saved_rect: Rect,
+    floating_restore: Rect,
+    work: Rect,
+    titlebars: bool,
+    margin: i32,
+) -> Rect {
+    match mode {
+        Mode::Normal | Mode::Fullscreen => saved_rect,
+        Mode::Snapped(target) => snapped_client(target, work, floating_restore, titlebars, margin),
+        Mode::Maximized => maximized_client(work, titlebars, margin),
+    }
 }
 
 /// Bridges the model rectangle to the shared geometry type the window-core policy speaks.
@@ -1344,6 +1520,186 @@ mod tests {
         assert!(!model.get(1).unwrap().decorated());
         model.set_fullscreen(1, WORK, false);
         assert_eq!(model.get(1).unwrap().rect, before);
+    }
+
+    #[test]
+    fn snapped_modes_commit_every_shared_edge_and_corner_target() {
+        let placements = [
+            (SnapTarget::LeftHalf, Rect::new(0, 0, 500, 700)),
+            (SnapTarget::RightHalf, Rect::new(500, 0, 500, 700)),
+            (SnapTarget::TopHalf, Rect::new(0, 0, 1000, 350)),
+            (SnapTarget::BottomHalf, Rect::new(0, 350, 1000, 350)),
+            (SnapTarget::TopLeftQuarter, Rect::new(0, 0, 500, 350)),
+            (SnapTarget::TopRightQuarter, Rect::new(500, 0, 500, 350)),
+            (SnapTarget::BottomLeftQuarter, Rect::new(0, 350, 500, 350)),
+            (
+                SnapTarget::BottomRightQuarter,
+                Rect::new(500, 350, 500, 350),
+            ),
+        ];
+        let floating = Rect::new(120, 130, 640, 420);
+        for (target, expected_frame) in placements {
+            let mut model = WindowModel::new(1);
+            model.configure(true, 0);
+            model.add(1, floating, 0);
+            model.snap_to(1, target, WORK, floating);
+            let window = model.get(1).unwrap();
+            assert_eq!(window.mode, Mode::Snapped(target));
+            assert_eq!(window.frame(), expected_frame, "{target:?}");
+            assert_eq!(
+                window.restore, floating,
+                "{target:?} keeps floating restore"
+            );
+        }
+
+        let mut model = WindowModel::new(1);
+        model.configure(true, 0);
+        model.add(1, floating, 0);
+        model.maximize_to(1, WORK, floating);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Maximized);
+        assert_eq!(model.get(1).unwrap().frame(), WORK);
+        assert_eq!(model.get(1).unwrap().restore, floating);
+    }
+
+    #[test]
+    fn snap_preview_and_commit_share_margin_and_titlebar_conversion() {
+        let work = Rect::new(0, 0, 1000, 700);
+        let floating = Rect::new(120, 130, 640, 420);
+        let mut model = WindowModel::new(1);
+        model.configure(true, 2);
+        model.add(1, floating, 0);
+        let preview = model
+            .snap_client_geometry(1, SnapTarget::LeftHalf, work)
+            .unwrap();
+        model.snap_to(1, SnapTarget::LeftHalf, work, floating);
+        let window = model.get(1).unwrap();
+        assert_eq!(window.rect, preview);
+        assert_eq!(window.frame(), Rect::new(2, 2, 497, 696));
+        assert_eq!(window.rect.y, 2 + TITLEBAR_HEIGHT);
+        assert_eq!(window.rect.h, 696 - TITLEBAR_HEIGHT);
+        assert_eq!(window.restore, floating);
+
+        model.configure(false, 2);
+        model.snap_to(1, SnapTarget::BottomRightQuarter, work, floating);
+        assert_eq!(model.get(1).unwrap().frame(), Rect::new(501, 351, 497, 347));
+        assert_eq!(model.get(1).unwrap().rect, model.get(1).unwrap().frame());
+
+        let mut model = WindowModel::new(1);
+        model.configure(true, 2);
+        model.add(1, floating, 0);
+        let preview = model
+            .snap_client_geometry(1, SnapTarget::Maximize, work)
+            .unwrap();
+        model.maximize_to(1, work, floating);
+        assert_eq!(model.get(1).unwrap().rect, preview);
+        assert_eq!(model.get(1).unwrap().frame(), Rect::new(2, 2, 996, 696));
+    }
+
+    #[test]
+    fn resizing_a_snapped_window_leaves_layout_without_snapping_on_release() {
+        let floating = Rect::new(120, 130, 640, 420);
+        let resized = Rect::new(118, 158, 644, 390);
+        let mut model = WindowModel::new(1);
+        model.add(1, floating, 0);
+        model.snap_to(1, SnapTarget::LeftHalf, WORK, floating);
+        model.set_rect(1, resized);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Normal);
+        assert_eq!(model.get(1).unwrap().rect, resized);
+        assert_eq!(model.get(1).unwrap().restore, resized);
+    }
+
+    #[test]
+    fn moving_out_of_snapped_or_maximized_restores_floating_size() {
+        let floating = Rect::new(120, 130, 640, 420);
+        let moved = Rect::new(260, 90, 640, 420);
+        for from_maximized in [false, true] {
+            let mut model = WindowModel::new(1);
+            model.add(1, floating, 0);
+            if from_maximized {
+                model.maximize_to(1, WORK, floating);
+            } else {
+                model.snap_to(1, SnapTarget::BottomRightQuarter, WORK, floating);
+            }
+            model.commit_move(1, moved);
+            let window = model.get(1).unwrap();
+            assert_eq!(window.mode, Mode::Normal);
+            assert_eq!(window.rect, moved);
+            assert_eq!(window.restore, moved);
+        }
+    }
+
+    #[test]
+    fn activated_fullscreen_move_commits_free_and_snapped_placements() {
+        let floating = Rect::new(120, 130, 640, 420);
+        let moved = Rect::new(260, 90, 640, 420);
+        let mut model = WindowModel::new(1);
+        model.add(1, floating, 0);
+        model.set_fullscreen(1, WORK, true);
+        model.commit_move(1, moved);
+        let window = model.get(1).unwrap();
+        assert_eq!(window.mode, Mode::Normal);
+        assert_eq!(window.rect, moved);
+        assert_eq!(window.restore, moved);
+
+        // A later fullscreen cycle restores the committed floating geometry, not the old rect.
+        model.set_fullscreen(1, WORK, true);
+        model.set_fullscreen(1, WORK, false);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Normal);
+        assert_eq!(model.get(1).unwrap().rect, moved);
+
+        model.set_fullscreen(1, WORK, true);
+        model.snap_to(1, SnapTarget::LeftHalf, WORK, moved);
+        let window = model.get(1).unwrap();
+        assert_eq!(window.mode, Mode::Snapped(SnapTarget::LeftHalf));
+        assert_eq!(window.frame(), Rect::new(0, 0, 500, 700));
+        assert_eq!(window.restore, moved);
+
+        model.set_fullscreen(1, WORK, true);
+        model.maximize_to(1, WORK, moved);
+        let window = model.get(1).unwrap();
+        assert_eq!(window.mode, Mode::Maximized);
+        assert_eq!(window.frame(), WORK);
+        assert_eq!(window.restore, moved);
+    }
+
+    #[test]
+    fn snapped_maximized_fullscreen_and_refit_keep_the_floating_restore() {
+        let floating = Rect::new(120, 130, 640, 420);
+        let mut model = WindowModel::new(1);
+        model.configure(true, 2);
+        model.add(1, floating, 0);
+        model.snap_to(1, SnapTarget::LeftHalf, WORK, floating);
+        let snapped = model.get(1).unwrap().frame();
+        model.toggle_maximize(1, WORK);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Maximized);
+        model.set_fullscreen(1, WORK, true);
+
+        let output = Rect::new(0, 0, 1280, 800);
+        let work = Rect::new(0, 0, 1280, 760);
+        model.refit_output(1, output, work);
+        assert_eq!(model.get(1).unwrap().rect, output);
+        model.set_fullscreen(1, output, false);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Maximized);
+        assert_eq!(model.get(1).unwrap().frame(), Rect::new(2, 2, 1276, 756));
+
+        model.toggle_maximize(1, work);
+        assert_eq!(
+            model.get(1).unwrap().mode,
+            Mode::Snapped(SnapTarget::LeftHalf)
+        );
+        assert_eq!(model.get(1).unwrap().frame(), Rect::new(2, 2, 637, 756));
+        assert_ne!(
+            model.get(1).unwrap().frame(),
+            snapped,
+            "snap refits to new work area"
+        );
+        assert_eq!(model.get(1).unwrap().restore, floating);
+
+        let moved = Rect::new(240, 90, floating.w, floating.h);
+        model.commit_move(1, moved);
+        assert_eq!(model.get(1).unwrap().mode, Mode::Normal);
+        assert_eq!(model.get(1).unwrap().rect, moved);
+        assert_eq!(model.get(1).unwrap().restore, moved);
     }
 
     #[test]

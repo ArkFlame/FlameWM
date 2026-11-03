@@ -28,6 +28,41 @@ pub fn snap_target(pointer: Point, work_area: Rect) -> SnapTarget {
     snap_target_in_output(pointer, work_area, work_area)
 }
 
+/// Minimum visible extent on one axis: a quarter of the window, rounded up.
+fn min_visible(extent: i32) -> i32 {
+    extent.max(0).saturating_add(3) / 4
+}
+
+/// Start of a span of `len` so that at least a quarter stays inside `[lo, hi)`.
+fn keep_span(start: i32, len: i32, lo: i32, hi: i32) -> i32 {
+    let min_start = lo.saturating_sub(len.saturating_sub(min_visible(len)));
+    let max_start = hi.saturating_sub(min_visible(len)).max(min_start);
+    start.clamp(min_start, max_start)
+}
+
+/// Keep a rectangle within `bounds` with at least a quarter of each axis visible.
+///
+/// The bounds are the physical output rectangle, not a dock-reduced work area.
+#[must_use]
+pub fn keep_visible(rect: Rect, bounds: Rect) -> Rect {
+    Rect::new(
+        keep_span(
+            rect.x,
+            rect.width,
+            bounds.x,
+            bounds.x.saturating_add(bounds.width),
+        ),
+        keep_span(
+            rect.y,
+            rect.height,
+            bounds.y,
+            bounds.y.saturating_add(bounds.height),
+        ),
+        rect.width,
+        rect.height,
+    )
+}
+
 /// Snap detection for a pointer on an output whose work area may be reserved by docks.
 /// Left/top zones are measured from the work area; right/bottom zones extend to the
 /// output edge so a pointer over a bottom/right dock band still reaches the physical corner.
@@ -126,6 +161,36 @@ mod tests {
 
     fn area() -> Rect {
         Rect::new(0, 0, 1920, 1080)
+    }
+
+    #[test]
+    fn keep_visible_retains_a_ceil_quarter_on_each_axis() {
+        let rect = Rect::new(1169, -10_000, 880, 300);
+        let output = Rect::new(0, 0, 1350, 900);
+        assert_eq!(keep_visible(rect, output), Rect::new(1130, -225, 880, 300));
+        assert_eq!(
+            keep_visible(Rect::new(1169, 0, 881, 300), output),
+            Rect::new(1129, 0, 881, 300),
+            "a quarter of an odd extent rounds up",
+        );
+    }
+
+    #[test]
+    fn keep_visible_handles_negative_origins_and_saturated_bounds() {
+        assert_eq!(
+            keep_visible(
+                Rect::new(-10_000, -10_000, 400, 300),
+                Rect::new(-1920, 50, 1920, 1080),
+            ),
+            Rect::new(-2220, -175, 400, 300)
+        );
+        assert_eq!(
+            keep_visible(
+                Rect::new(i32::MAX, 0, 40, 40),
+                Rect::new(i32::MAX - 10, 0, 100, 100),
+            ),
+            Rect::new(i32::MAX - 10, 0, 40, 40)
+        );
     }
 
     #[test]

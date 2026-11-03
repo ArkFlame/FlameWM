@@ -515,145 +515,135 @@ fn surface_elements(
     .collect()
 }
 
-/// Front-to-back element list: smithay draws the first element on top.
-/// Order: overlay and top layers, then windows topmost first (each window: popups, surface,
-/// decorations), then bottom and background layers.
+/// Front-to-back element list: Smithay draws the first element on top. Input consumes the same
+/// `scene::front_to_back` traversal, so every surface that can visually cover another is tested
+/// before the covered owner receives pointer input.
 pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
-    let map = layer_map_for_output(&state.output);
-    let layers: Vec<_> = map.layers().cloned().collect();
-    drop(map);
+    use crate::scene::SceneItem;
+
     let mut out: Vec<Elem> = Vec::new();
     let mut decorations = state.decorations.borrow_mut();
     decorations.retain(|window| state.model.get(window).is_some());
-    for group in [Layer::Overlay, Layer::Top] {
-        for layer in layers.iter().rev().filter(|l| l.layer() == group) {
-            out.extend(layer_elements(state, renderer, layer));
-        }
+    if let Some((_, frame)) = state.move_outline {
+        let (x, y, w, h) = (frame.x, frame.y, frame.w, frame.h);
+        let edge = |x, y, w, h| {
+            Elem::Solid(SolidColorRenderElement::new(
+                smithay::backend::renderer::element::Id::new(),
+                Rectangle::new((x, y).into(), (w, h).into()),
+                smithay::backend::renderer::utils::CommitCounter::default(),
+                [0.95, 0.95, 0.96, 0.9],
+                Kind::Unspecified,
+            ))
+        };
+        let t = 2;
+        out.extend([
+            edge(x, y, w, t),
+            edge(x, y + h - t, w, t),
+            edge(x, y, t, h),
+            edge(x + w - t, y, t, h),
+        ]);
     }
-
-    // Override-redirect menus and docks sit above managed windows.
-    for entry in state.unmanaged.iter().rev().filter(|entry| !entry.below) {
-        if let Some(surface) = entry.surface.wl_surface() {
-            let geometry = entry.surface.geometry();
-            out.extend(surface_elements(
-                renderer,
-                &surface,
-                geometry.loc.x,
-                geometry.loc.y,
-            ));
-            // Translucent X11 menus and tooltips blur the desktop beneath them, as titlebars do.
-            // Docks (struts) are excluded: they are not glass and the taskbar is opaque.
-            if entry.strut.is_none() {
-                let rect = Rect::new(
-                    geometry.loc.x,
-                    geometry.loc.y,
-                    geometry.size.w,
-                    geometry.size.h,
-                );
-                if let Some(backdrop) = decorations.surface_backdrop(renderer, rect) {
-                    out.push(backdrop);
+    let hovered_button = state.model.hit(state.pointer.x, state.pointer.y);
+    for item in crate::scene::front_to_back(state) {
+        match item {
+            SceneItem::Layer { surface, .. } => {
+                out.extend(layer_elements(state, renderer, &surface));
+            }
+            SceneItem::Unmanaged(index) => {
+                let Some(entry) = state.unmanaged.get(index) else {
+                    continue;
+                };
+                if let Some(surface) = entry.surface.wl_surface() {
+                    let geometry = entry.surface.geometry();
+                    out.extend(surface_elements(
+                        renderer,
+                        &surface,
+                        geometry.loc.x,
+                        geometry.loc.y,
+                    ));
+                    // Translucent X11 menus and tooltips blur the desktop beneath them. Docks
+                    // (struts) are excluded: they are not glass and the taskbar is opaque.
+                    if !entry.below && entry.strut.is_none() {
+                        let rect = Rect::new(
+                            geometry.loc.x,
+                            geometry.loc.y,
+                            geometry.size.w,
+                            geometry.size.h,
+                        );
+                        if let Some(backdrop) = decorations.surface_backdrop(renderer, rect) {
+                            out.push(backdrop);
+                        }
+                    }
+                }
+            }
+            SceneItem::Popup { surface, origin } => {
+                out.extend(surface_elements(renderer, &surface, origin.x, origin.y))
+            }
+            SceneItem::Managed(id) => {
+                let Some(managed) = state.model.get(id).cloned() else {
+                    continue;
+                };
+                let Some(surface) = state.window_wl_surface(id) else {
+                    continue;
+                };
+                out.extend(surface_elements(
+                    renderer,
+                    &surface,
+                    managed.rect.x,
+                    managed.rect.y,
+                ));
+                if managed.decorated() {
+                    let frame = managed.frame();
+                    let focused = state.focused == Some(id);
+                    let titlebar = Rect::new(frame.x, frame.y, frame.w, TITLEBAR_HEIGHT);
+                    let hovered = match hovered_button {
+                        Some(Hit::Button(hit, button)) if hit == id => Some(button),
+                        _ => None,
+                    };
+                    let title = state.window_title(id);
+                    if let Some(element) = decorations.element(
+                        renderer,
+                        id,
+                        titlebar,
+                        (focused, managed.mode == Mode::Maximized),
+                        hovered,
+                        title,
+                    ) {
+                        out.push(element);
+                    }
                 }
             }
         }
     }
-
-    if let Some((id, dx, dy)) = state.move_outline {
-        if let Some(managed) = state.model.get(id) {
-            let f = managed.frame();
-            let (x, y) = (f.x + dx, f.y + dy);
-            let (w, h) = (f.w, f.h);
-            let edge = |x, y, w, h| {
-                Elem::Solid(SolidColorRenderElement::new(
-                    smithay::backend::renderer::element::Id::new(),
-                    Rectangle::new((x, y).into(), (w, h).into()),
-                    smithay::backend::renderer::utils::CommitCounter::default(),
-                    [0.95, 0.95, 0.96, 0.9],
-                    Kind::Unspecified,
-                ))
-            };
-            let t = 2;
-            out.insert(0, edge(x, y, w, t));
-            out.insert(0, edge(x, y + h - t, w, t));
-            out.insert(0, edge(x, y, t, h));
-            out.insert(0, edge(x + w - t, y, t, h));
-        }
-    }
-    let hovered_button = state.model.hit(state.pointer.x, state.pointer.y);
-    for id in state.model.visible_top_first() {
-        let Some(managed) = state.model.get(id).cloned() else {
-            continue;
-        };
-        let Some(surface) = state.window_wl_surface(id) else {
-            continue;
-        };
-
-        for (popup, offset) in PopupManager::popups_for_surface(&surface) {
-            out.extend(surface_elements(
-                renderer,
-                popup.wl_surface(),
-                managed.rect.x + offset.x,
-                managed.rect.y + offset.y,
-            ));
-        }
-        out.extend(surface_elements(
-            renderer,
-            &surface,
-            managed.rect.x,
-            managed.rect.y,
-        ));
-
-        if managed.decorated() {
-            let frame = managed.frame();
-            let focused = state.focused == Some(id);
-            let titlebar = Rect::new(frame.x, frame.y, frame.w, TITLEBAR_HEIGHT);
-            let hovered = match hovered_button {
-                Some(Hit::Button(hit, button)) if hit == id => Some(button),
-                _ => None,
-            };
-            let title = state.window_title(id);
-            if let Some(element) = decorations.element(
-                renderer,
-                id,
-                titlebar,
-                (focused, managed.mode == Mode::Maximized),
-                hovered,
-                title,
-            ) {
-                out.push(element);
-            }
-        }
-    }
-
-    out.extend(desktop_elements(state, renderer));
     out
 }
 
-/// The desktop layer: bottom and background layer surfaces, then the X11 desktop background
-/// (`below` unmanaged windows). Everything the blurred desktop capture is made from.
+/// The desktop capture uses the exact lower scene suffix, including the relative order of
+/// bottom/background layer surfaces and X11 desktop surfaces.
 fn desktop_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
-    let map = layer_map_for_output(&state.output);
-    let layers: Vec<_> = map.layers().cloned().collect();
-    drop(map);
-    let mut out: Vec<Elem> = Vec::new();
-    for layer in layers
-        .iter()
-        .rev()
-        .filter(|l| matches!(l.layer(), Layer::Bottom | Layer::Background))
-    {
-        out.extend(layer_elements(state, renderer, layer));
-    }
-    for entry in state.unmanaged.iter().rev().filter(|entry| entry.below) {
-        if let Some(surface) = entry.surface.wl_surface() {
-            let geometry = entry.surface.geometry();
-            out.extend(surface_elements(
-                renderer,
-                &surface,
-                geometry.loc.x,
-                geometry.loc.y,
-            ));
-        }
-    }
-    out
+    use crate::scene::SceneItem;
+
+    crate::scene::front_to_back(state)
+        .into_iter()
+        .filter_map(|item| match item {
+            SceneItem::Layer { surface, .. }
+                if matches!(surface.layer(), Layer::Bottom | Layer::Background) =>
+            {
+                Some(layer_elements(state, renderer, &surface))
+            }
+            SceneItem::Unmanaged(index)
+                if state.unmanaged.get(index).is_some_and(|entry| entry.below) =>
+            {
+                let entry = &state.unmanaged[index];
+                entry.surface.wl_surface().map(|surface| {
+                    let geometry = entry.surface.geometry();
+                    surface_elements(renderer, &surface, geometry.loc.x, geometry.loc.y)
+                })
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect()
 }
 
 /// Captures and blurs the desktop layer when the cached capture is missing, the output changed

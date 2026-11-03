@@ -78,6 +78,7 @@ mod logind;
 mod model;
 mod probe;
 mod render;
+mod scene;
 mod session_lock;
 #[cfg_attr(not(feature = "drm"), allow(dead_code))]
 // The native backend's first-frame gate; pure, so it is compiled (and tested) without a GPU.

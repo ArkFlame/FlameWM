@@ -101,22 +101,14 @@ fn min_visible(extent: i32) -> i32 {
     extent.max(0).saturating_add(3) / 4
 }
 
-/// Start of a span of `len` so that at least a quarter of it stays inside `[lo, hi)`.
-fn keep_span(start: i32, len: i32, lo: i32, hi: i32) -> i32 {
-    let min_start = lo.saturating_sub(len.saturating_sub(min_visible(len)));
-    let max_start = hi.saturating_sub(min_visible(len)).max(min_start);
-    start.clamp(min_start, max_start)
-}
-
 /// Keeps `rect` in `bounds` with at least a quarter of each axis visible; up to 3/4 may overflow.
 #[must_use]
 pub fn keep_visible(rect: RootRect, bounds: RootRect) -> RootRect {
-    RootRect::new(
-        keep_span(rect.x, rect.w, bounds.x, bounds.x.saturating_add(bounds.w)),
-        keep_span(rect.y, rect.h, bounds.y, bounds.y.saturating_add(bounds.h)),
-        rect.w,
-        rect.h,
-    )
+    let rect = flamewm_window_core::keep_visible(
+        flamewm_api::Rect::new(rect.x, rect.y, rect.w, rect.h),
+        flamewm_api::Rect::new(bounds.x, bounds.y, bounds.w, bounds.h),
+    );
+    RootRect::new(rect.x, rect.y, rect.width, rect.height)
 }
 
 /// Bounding box of the outputs, or `fallback` when there are none.

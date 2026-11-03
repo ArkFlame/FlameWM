@@ -36,7 +36,7 @@ use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xwayland_shell::XWaylandShellState;
 use smithay::xwayland::{X11Surface, X11Wm};
 
-use crate::model::{Mode, Rect, ResizeEdge, Shortcuts, WindowId, WindowModel};
+use crate::model::{Managed, Mode, Rect, ResizeEdge, Shortcuts, WindowId, WindowModel};
 use crate::xwayland::{Props, Unmanaged};
 
 /// Per-client data required by `CompositorState`.
@@ -54,6 +54,12 @@ pub enum Grab {
         id: WindowId,
         pointer: (f64, f64),
         start: Rect,
+        start_mode: Mode,
+        restore: Rect,
+        anchor_num: i32,
+        anchor_den: i32,
+        anchor_y: i32,
+        titlebar: bool,
     },
     Resize {
         id: WindowId,
@@ -61,6 +67,30 @@ pub enum Grab {
         start: Rect,
         edge: ResizeEdge,
     },
+}
+
+impl Grab {
+    pub fn move_window(
+        id: WindowId,
+        pointer: (f64, f64),
+        managed: &Managed,
+        titlebar: bool,
+    ) -> Self {
+        let frame = managed.frame();
+        let anchor_num = (pointer.0.round() as i32 - frame.x).clamp(0, frame.w);
+        let anchor_y = (pointer.1.round() as i32 - frame.y).clamp(0, crate::model::TITLEBAR_HEIGHT);
+        Self::Move {
+            id,
+            pointer,
+            start: managed.rect,
+            start_mode: managed.mode,
+            restore: managed.restore,
+            anchor_num,
+            anchor_den: frame.w.max(1),
+            anchor_y,
+            titlebar,
+        }
+    }
 }
 
 /// What the tty backend should do with one output on the next loop turn.
@@ -309,6 +339,8 @@ pub struct State {
     pub seat: Seat<State>,
     pub output: Output,
     pub output_size: Size<i32, Logical>,
+    /// Last work area used to place snapped/maximized/fullscreen windows.
+    cached_work_area: Rect,
     pub damage: OutputDamageTracker,
     pub model: WindowModel,
     /// Smithay toplevels keyed by the model identifier.
@@ -324,8 +356,9 @@ pub struct State {
     /// Server-side titlebar fills, stable across frames (see `render::Decorations`).
     pub decorations: RefCell<crate::render::Decorations>,
     pub grab: Option<Grab>,
-    /// Outline-move preview `(window, dx, dy)`: contents stay put until release, like X11.
-    pub move_outline: Option<(WindowId, i32, i32)>,
+    /// Outline-move preview frame; contents stay put until release, like X11.
+    /// Snap previews use the final committed dimensions here too.
+    pub move_outline: Option<(WindowId, Rect)>,
     /// Title release that moved nothing, awaiting a possible double click (see `TitleClick`).
     pub last_title_click: Option<crate::input::TitleClick>,
     /// `focusFollowsMouse`, read once at startup: pointer entry focuses the window under it.
@@ -430,6 +463,7 @@ impl State {
             seat,
             output,
             output_size: Size::from((1280, 800)),
+            cached_work_area: Rect::new(0, 0, 1280, 800),
             damage,
             model,
             toplevels: Vec::new(),
@@ -494,21 +528,9 @@ impl State {
             .change_current_state(Some(mode), None, None, None);
         self.output.set_preferred(mode);
         self.output_size = Size::from((width, height));
-        let output = self.output_rect();
-        let work = self.work_area();
-        // Include fullscreen and maximized windows on inactive workspaces. Refit the fullscreen
-        // restore rect too, so exiting a game does not bring back an old-size maximized window.
-        let fitted: Vec<WindowId> = self
-            .model
-            .managed()
-            .iter()
-            .filter(|window| window.mode != Mode::Normal)
-            .map(|window| window.id)
-            .collect();
-        for id in fitted {
-            self.model.refit_output(id, output, work);
-            self.apply_geometry(id);
-        }
+        // Includes fullscreen and maximized windows on inactive workspaces, and keeps the
+        // fullscreen restore rect in step with the output and current layer/dock reservations.
+        self.reflow_if_work_area_changed();
         self.request_redraw();
     }
 
@@ -569,6 +591,20 @@ impl State {
         )
     }
 
+    /// Refit output-sized placements once, and only once, for each effective work-area change.
+    pub(crate) fn reflow_if_work_area_changed(&mut self) {
+        let work = self.work_area();
+        let previous = std::mem::replace(&mut self.cached_work_area, work);
+        let output = self.output_rect();
+        let fitted = refit_model_placements(&mut self.model, output, previous, work);
+        for id in fitted {
+            self.apply_geometry(id);
+        }
+        if previous != work {
+            self.request_redraw();
+        }
+    }
+
     /// Pushes the model rectangle, state flags and server-side decoration mode to the client.
     pub fn apply_geometry(&mut self, id: WindowId) {
         let Some(managed) = self.model.get(id).cloned() else {
@@ -609,10 +645,12 @@ impl State {
             return;
         }
         let previous = self.focused;
+        let stack_before = self.model.visible_top_first();
         self.focused = id;
         if let Some(id) = id {
             self.model.raise(id);
         }
+        let stack_changed = stack_before != self.model.visible_top_first();
         if let Some(prev) = previous.filter(|prev| Some(*prev) != id) {
             self.apply_geometry(prev);
         }
@@ -621,10 +659,8 @@ impl State {
         }
         let keyboard = self.seat.get_keyboard();
         let surface = id.and_then(|id| self.window_wl_surface(id));
-        if let (Some(id), Some(xwm)) = (id, self.xwm.as_mut()) {
-            if let Some((_, window)) = self.x11.iter().find(|(wid, _)| *wid == id) {
-                let _ = xwm.raise_window(window);
-            }
+        if focus_needs_restack(previous, id, stack_changed) {
+            self.sync_xwayland_stacking();
         }
         if let Some(keyboard) = keyboard {
             let serial = SERIAL_COUNTER.next_serial();
@@ -850,6 +886,36 @@ pub fn reserve_struts(area: Rect, struts: impl Iterator<Item = [i32; 4]>) -> Rec
     Rect::new(x0, y0, x1 - x0, y1 - y0)
 }
 
+/// Refit every output-sized placement only when the effective work area changes.
+pub(crate) fn refit_model_placements(
+    model: &mut WindowModel,
+    output: Rect,
+    previous_work: Rect,
+    work: Rect,
+) -> Vec<WindowId> {
+    if previous_work == work {
+        return Vec::new();
+    }
+    let fitted: Vec<_> = model
+        .managed()
+        .iter()
+        .filter(|window| window.mode != Mode::Normal)
+        .map(|window| window.id)
+        .collect();
+    for id in &fitted {
+        model.refit_output(*id, output, work);
+    }
+    fitted
+}
+
+fn focus_needs_restack(
+    previous: Option<WindowId>,
+    next: Option<WindowId>,
+    visible_stack_changed: bool,
+) -> bool {
+    previous != next || visible_stack_changed
+}
+
 fn set_state(
     states: &mut smithay::wayland::shell::xdg::ToplevelStateSet,
     state: xdg_toplevel::State,
@@ -884,9 +950,17 @@ impl Drop for State {
 mod tests {
     use super::{
         FrameDecision, GpuProbe, OutputFrames, Rect, SYNC_WAIT_BUDGET_MS, SYNC_WAIT_LIMIT_MS,
-        SyncWait, arm_retry, pick_gpu, plan_frame, reserve_struts, retry_owed, scan_failed,
-        sync_wait_decision,
+        SyncWait, arm_retry, focus_needs_restack, pick_gpu, plan_frame, reserve_struts, retry_owed,
+        scan_failed, sync_wait_decision,
     };
+
+    /// Clearing keyboard focus is a restack transition even when the model order is unchanged.
+    #[test]
+    fn clearing_focus_requests_xwayland_restack() {
+        assert!(focus_needs_restack(Some(7), None, false));
+        assert!(focus_needs_restack(None, None, true));
+        assert!(!focus_needs_restack(None, None, false));
+    }
 
     /// One connector that cannot be set up is skipped; only zero outputs is fatal.
     #[test]

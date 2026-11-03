@@ -32,6 +32,31 @@ validation".
 - `drm.rs`: the tty backend (feature `drm`).
 - `probe.rs`: `--probe`.
 
+### Interactive edge/corner snapping (nested runtime verified; DRM hardware unverified)
+
+The Wayland model records snapped targets separately from floating, maximized and fullscreen placement.
+Any activated Move (titlebar, client/XDG request, or modifier move) snaps to left/right halves, any
+corner, or maximizes at top-center; bottom-center remains a free move. Detection and geometry use the
+shared `flamewm-window-core` policy, including 16px edges, 32px corners, physical output edges,
+Dock/strut-reserved work areas, and window margins. Preview and commit share frame/client conversion.
+The saved floating geometry and titlebar anchor survive snap, maximize/fullscreen transitions, and
+output/work-area refits. Moving out of a layout restores the floating size and keeps at least one
+quarter visible, using the same shared clamp as X11. Dock struts are watched for property changes and
+refreshed at map/configure/unmap and layout-input boundaries; existing snapped/maximized windows are
+refit when the work area changes.
+
+Focused unit tests cover every snap target, odd geometry, margin/titlebar conversion, restore behavior,
+activation/anchor, physical output edges, Dock work-area refresh, and paths that must not snap. A
+nested Xephyr runtime check on 2026-11-03 verified panel clicks are delivered to the Dock above Desktop,
+then used XTest drags on FlameWM Terminal to commit: top-left `672x262+2+33`, right half
+`672x558+676+33`, bottom-right `672x262+676+329` (above the 48px Dock reservation), top-center
+maximize `1346x558+2+33`, and un-snap to a floating `880x540` window clamped at `x=1130` on the
+1350px output. A titlebar double-click restored the floating placement. Changing only
+`_NET_WM_STRUT_PARTIAL` from a 48px to 60px bottom reservation reflowed an already snapped window
+from `672x262+676+329` to `672x256+676+323` without pointer input. The native DRM session and real
+hardware were not exercised.
+
+
 Also: session wrapper `scripts/flamewm-wayland-session`, session entry
 `packaging/flamewm-wayland.desktop`, X11 entry renamed to `FlameWM (X11)`.
 

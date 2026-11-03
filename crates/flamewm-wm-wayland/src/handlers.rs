@@ -104,6 +104,7 @@ impl CompositorHandler for State {
         };
         if let Some(layer) = layer {
             layer_map_for_output(&self.output).arrange();
+            self.reflow_if_work_area_changed();
             if !State::layer_initial_configure_sent(surface) {
                 layer.layer_surface().send_configure();
             }
@@ -154,12 +155,14 @@ impl XdgShellHandler for State {
         let Some(id) = self.window_for_surface(surface.wl_surface()) else {
             return;
         };
+        self.refresh_dock_struts();
         if let Some(managed) = self.model.get(id).cloned() {
-            self.grab = Some(Grab::Move {
+            self.grab = Some(Grab::move_window(
                 id,
-                pointer: (self.pointer.x, self.pointer.y),
-                start: managed.rect,
-            });
+                (self.pointer.x, self.pointer.y),
+                &managed,
+                false,
+            ));
         }
     }
 
@@ -267,6 +270,7 @@ impl State {
     }
 
     pub fn set_maximized_id(&mut self, id: crate::model::WindowId, on: bool) {
+        self.refresh_dock_struts();
         let Some(current) = self.model.get(id).map(|w| w.mode) else {
             return;
         };
@@ -323,6 +327,8 @@ impl WlrLayerShellHandler for State {
         let mut map = layer_map_for_output(&self.output);
         let _ = map.map_layer(&desktop);
         map.arrange();
+        drop(map);
+        self.reflow_if_work_area_changed();
     }
 
     fn ack_configure(&mut self, _surface: WlSurface, _configure: LayerSurfaceConfigure) {}
@@ -338,6 +344,7 @@ impl WlrLayerShellHandler for State {
         }
         map.arrange();
         drop(map);
+        self.reflow_if_work_area_changed();
         self.request_redraw();
     }
 }

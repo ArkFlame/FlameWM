@@ -645,7 +645,7 @@ fn build_mirror(state: &State) -> Mirror {
                 (true, _) => WindowState::Minimized,
                 (false, WindowMode::Maximized) => WindowState::Maximized,
                 (false, WindowMode::Fullscreen) => WindowState::Fullscreen,
-                (false, WindowMode::Normal) => WindowState::Normal,
+                (false, WindowMode::Normal | WindowMode::Snapped(_)) => WindowState::Normal,
             };
             WindowSnapshot {
                 reference: WindowRef {
@@ -1017,6 +1017,7 @@ fn apply_command(state: &mut State, command: Command) {
             state.set_focus(Some(id));
         }
         Command::Maximize(id) => {
+            state.refresh_dock_struts();
             let work = state.work_area();
             state.model.toggle_maximize(id, work);
             state.apply_geometry(id);
