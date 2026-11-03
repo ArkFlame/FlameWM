@@ -1,5 +1,12 @@
+<a href="https://www.star-history.com/?repos=arkflame%2Fflamewm&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=arkflame/flamewm&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=arkflame/flamewm&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=arkflame/flamewm&type=date&legend=top-left" />
+ </picture>
+</a>
 <img width="1080" height="1440" alt="image" src="https://github.com/user-attachments/assets/44501e7d-7012-47ee-9830-50ccb9caa126" />
-<img width="1351" height="638" alt="image" src="https://github.com/user-attachments/assets/3d26a31c-0727-418d-af8a-82382998b37b" />
+<img width="1344" height="637" alt="image" src="https://github.com/user-attachments/assets/409081ba-ebc5-4069-bf97-5eade755c685" />
 
 # FlameWM
 
