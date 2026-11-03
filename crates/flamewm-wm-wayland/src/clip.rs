@@ -63,11 +63,30 @@ uniform vec2 geo_size;
 uniform vec4 corner_radius;
 uniform float y_flip;
 
-// One corner's coverage: 1 inside the arc, 0 outside it, one pixel of ramp in between.
-float corner_coverage(vec2 geo_px, vec2 center, float radius) {
-    if (radius <= 0.0)
+// One corner's coverage, chosen by the quadrant the fragment is in: 1 everywhere except outside
+// that corner's arc, where it ramps to 0 over one pixel. Only the fragment's own corner may clip
+// it, so a non-zero radius on one corner never erases the rest of the window.
+float corner_coverage(vec2 p, vec2 size, vec4 radius) {
+    vec2 center;
+    float r;
+    if (p.x < radius.x && p.y < radius.x) {
+        r = radius.x;
+        center = vec2(r, r);
+    } else if (size.x - radius.y < p.x && p.y < radius.y) {
+        r = radius.y;
+        center = vec2(size.x - r, r);
+    } else if (size.x - radius.z < p.x && size.y - radius.z < p.y) {
+        r = radius.z;
+        center = vec2(size.x - r, size.y - r);
+    } else if (p.x < radius.w && size.y - radius.w < p.y) {
+        r = radius.w;
+        center = vec2(r, size.y - r);
+    } else {
         return 1.0;
-    return 1.0 - smoothstep(radius - 0.5, radius + 0.5, distance(geo_px, center));
+    }
+    if (r <= 0.0)
+        return 1.0;
+    return 1.0 - smoothstep(r - 0.5, r + 0.5, distance(p, center));
 }
 
 void main() {
@@ -82,11 +101,7 @@ void main() {
     vec2 uv = vec2(v_coords.x, mix(v_coords.y, 1.0 - v_coords.y, y_flip));
     vec2 geo_px = (uv * buf_size - src_origin) * (geo_size / src_size);
 
-    float coverage =
-        corner_coverage(geo_px, vec2(corner_radius.x, corner_radius.x), corner_radius.x) *
-        corner_coverage(geo_px, vec2(geo_size.x - corner_radius.y, corner_radius.y), corner_radius.y) *
-        corner_coverage(geo_px, vec2(geo_size.x - corner_radius.z, geo_size.y - corner_radius.z), corner_radius.z) *
-        corner_coverage(geo_px, vec2(corner_radius.w, geo_size.y - corner_radius.w), corner_radius.w);
+    float coverage = corner_coverage(geo_px, geo_size, corner_radius);
 
     color *= alpha * coverage;
 
@@ -467,6 +482,28 @@ mod tests {
         assert!(SHADER.contains("#if defined(NO_ALPHA)"));
         assert!(SHADER.contains("#if defined(EXTERNAL)"));
         assert!(SHADER.contains("uniform float tint;"));
+    }
+
+    #[test]
+    fn corner_coverage_clips_only_the_fragments_own_corner() {
+        // Regression: multiplying four per-corner coverages erased every fragment outside all four
+        // arcs, so a single rounded corner blanked the whole surface (caught only on a live
+        // compositor). The corner is selected by quadrant and returns 1.0 everywhere else, so
+        // exactly one coverage term reaches the fragment.
+        assert_eq!(
+            SHADER.matches("corner_coverage(").count(),
+            2,
+            "one definition, one call"
+        );
+        assert!(SHADER.contains("float corner_coverage(vec2 p, vec2 size, vec4 radius)"));
+        assert!(
+            SHADER.contains("float coverage = corner_coverage(geo_px, geo_size, corner_radius);")
+        );
+        assert!(SHADER.contains("} else {\n        return 1.0;\n    }"));
+        assert!(
+            !SHADER.contains("corner_coverage(geo_px, vec2("),
+            "no per-corner product"
+        );
     }
 
     #[test]
