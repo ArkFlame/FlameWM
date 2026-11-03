@@ -18,8 +18,20 @@ def contract_errors(root: Path) -> list[str]:
     if not desktop.is_file():
         return [f"desktop entrypoint missing: {desktop}"]
     consumer = desktop.read_text(encoding="utf-8")
-    if "flamewm_desktop_core::conversion" not in consumer or "EntryMenuAction::Convert" not in consumer:
-        return ["desktop main.rs is missing Convert consumer integration"]
+    consumer_module = desktop.parent / "menu_actions.rs"
+    if "flamewm_desktop_core::conversion" not in consumer or not re.search(
+        r"(?m)^\s*mod\s+menu_actions\s*;", consumer
+    ):
+        return ["desktop main.rs is missing Convert consumer module wiring"]
+    if not consumer_module.is_file():
+        return ["desktop menu_actions.rs is missing Convert consumer integration"]
+    menu_actions = consumer_module.read_text(encoding="utf-8")
+    if (
+        '"entry.convert"' not in menu_actions
+        or not re.search(r"\boffered_formats\s*\(", menu_actions)
+        or not re.search(r"\bconvert_file\s*\(", menu_actions)
+    ):
+        return ["desktop menu_actions.rs is missing Convert consumer integration"]
     sources = {}
     errors = []
     for name in ("lib.rs", "file_actions.rs", "conversion.rs"):

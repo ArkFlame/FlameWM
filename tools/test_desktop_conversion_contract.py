@@ -10,14 +10,23 @@ from verify_desktop_conversion_contract import contract_errors
 
 class DesktopConversionContractTests(unittest.TestCase):
     def make_fixture(self, *, include_module=True, include_variant=True,
-                     include_signature=True, include_provider=True):
+                     include_signature=True, include_provider=True, include_consumer=True,
+                     include_menu_module=True, include_consumer_file=True):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
         consumer = root / "crates/flamewm-desktop/src/main.rs"
         consumer.parent.mkdir(parents=True)
-        consumer.write_text("use flamewm_desktop_core::conversion::offered_formats;\n"
-                            "let x = EntryMenuAction::Convert;\n", encoding="utf-8")
+        consumer.write_text(
+            "use flamewm_desktop_core::conversion::offered_formats;\n"
+            + ("mod menu_actions;\n" if include_menu_module else ""),
+            encoding="utf-8",
+        )
+        menu_actions = consumer.parent / "menu_actions.rs"
+        if include_consumer_file:
+            menu_actions.write_text(
+                ('"entry.convert" => { offered_formats(path); convert_file(path, format); }\n'
+                 if include_consumer else ""), encoding="utf-8")
         core = root / "crates/flamewm-desktop-core/src"
         core.mkdir(parents=True)
         (core / "lib.rs").write_text("pub mod file_actions;\n" +
@@ -56,8 +65,20 @@ class DesktopConversionContractTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertTrue(contract_errors(self.make_fixture(**{key: False})))
 
-    def test_complete_fixture_is_valid(self):
+    def test_split_consumer_fixture_is_valid(self):
         self.assertEqual(contract_errors(self.make_fixture()), [])
+
+    def test_missing_split_consumer_is_detected(self):
+        errors = contract_errors(self.make_fixture(include_consumer=False))
+        self.assertTrue(any("menu_actions.rs" in msg for msg in errors))
+
+    def test_missing_split_consumer_module_is_detected(self):
+        errors = contract_errors(self.make_fixture(include_menu_module=False))
+        self.assertTrue(any("main.rs" in msg for msg in errors))
+
+    def test_missing_split_consumer_file_is_detected(self):
+        errors = contract_errors(self.make_fixture(include_consumer_file=False))
+        self.assertTrue(any("menu_actions.rs" in msg for msg in errors))
 
 
 if __name__ == "__main__":
