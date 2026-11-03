@@ -63,6 +63,15 @@ impl<'a, C: Connection> Wm<'a, C> {
                 flamewm_render_core::CursorKind::Default,
             );
         }
+        // A compositing manager with a 32-bit visual lets the outline live in its own ARGB window
+        // over the client's pixels; every other session paints the ring into the frame instead.
+        // Opt-in only: an ARGB child of a redirected frame is blended correctly only by a real
+        // compositing manager, and a server that ignores its alpha paints the window's transparent
+        // interior as opaque black over the client, so the default stays on the frame-band ring.
+        let outline_overlay_available = outline_overlay_opt_in()
+            && renderer
+                .as_ref()
+                .is_some_and(|renderer| renderer.borrow().outline_overlay_available());
         let animator = Animator::new(
             renderer.as_ref().is_some_and(|r| {
                 r.borrow().is_available() && r.borrow().supports_picture_transform()
@@ -92,6 +101,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             renderer,
             animator,
             overlays: HashMap::new(),
+            outline_overlays: HashMap::new(),
+            outline_overlay_available,
             linger: animation::Linger::default(),
             damage_watch: HashMap::new(),
             minimized_captures: CaptureCache::default(),
@@ -132,4 +143,13 @@ impl<'a, C: Connection> Wm<'a, C> {
             chrome_paint_at: None,
         })
     }
+}
+
+/// `FLAMEWM_X11_OUTLINE_OVERLAY=1` opts into hosting the window ring in a compositing manager's
+/// ARGB layer. Off by default, see the note at the probe in `construct`.
+fn outline_overlay_opt_in() -> bool {
+    matches!(
+        std::env::var("FLAMEWM_X11_OUTLINE_OVERLAY").as_deref(),
+        Ok("1" | "true" | "yes")
+    )
 }

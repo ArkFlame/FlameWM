@@ -409,6 +409,11 @@ pub(crate) struct Wm<'a, C: Connection> {
     /// Timing owner for minimize/restore/maximize flights.
     animator: Animator,
     overlays: HashMap<Window, TransitionOverlay>,
+    /// One ARGB ring window per client when a compositing manager can blend it: the outline is
+    /// then drawn over the client's own pixels instead of into the frame's outermost band.
+    outline_overlays: HashMap<Window, flamewm_render_x11::OutlineOverlay>,
+    /// Compositing-manager + 32-bit-visual probe, read once from the renderer's display.
+    outline_overlay_available: bool,
     /// Finished overlays kept above a remapped window until the client has had time to paint.
     linger: animation::Linger<WarpOverlay>,
     /// Damage objects on clients whose overlay lingers; the first damage releases the overlay.

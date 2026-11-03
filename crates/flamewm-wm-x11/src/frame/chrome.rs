@@ -365,6 +365,7 @@ pub fn render(
     scene: &ChromeScene,
     origin: (i32, i32),
     root: (u32, u32),
+    paint_ring: bool,
 ) -> Result<(), String> {
     use flamewm_render_core::{Color, Rect};
     // Order is the live paint contract: retarget, fill, icon blit, title
@@ -480,22 +481,27 @@ pub fn render(
     // One outline owner: the shared ring strips, painted last over the finished frame pixels
     // (titlebar fill, icon, title, controls) and before the shape mask clips the corners.
     let _outline_guard = flamewm_profiler::start("wm.chrome.render.outline");
-    let outline_result =
+    // A compositing manager hosts the ring as an ARGB overlay over the client's own pixels, so
+    // the frame band must stay clear of it: one ring owner per frame.
+    let outline_result = if paint_ring {
         outline_blits(scene, origin, root)
-            .into_iter()
-            .try_for_each(|(x, y, w, h, pixels)| {
-                renderer.blit_rgba(
-                    &pixels,
-                    w,
-                    h,
-                    Rect {
-                        x: x as f32,
-                        y: y as f32,
-                        width: w as f32,
-                        height: h as f32,
-                    },
-                )
-            });
+    } else {
+        Vec::new()
+    }
+    .into_iter()
+    .try_for_each(|(x, y, w, h, pixels)| {
+        renderer.blit_rgba(
+            &pixels,
+            w,
+            h,
+            Rect {
+                x: x as f32,
+                y: y as f32,
+                width: w as f32,
+                height: h as f32,
+            },
+        )
+    });
     let shape_guard = flamewm_profiler::start("wm.chrome.render.shape");
     let shape_result = renderer.apply_shape(u32::from(scene.radius));
     drop(shape_guard);
@@ -960,7 +966,7 @@ mod tests {
             true,
             &flamewm_skin::recipes::decoration::ChromeTokens::default(),
         );
-        let result = render(&mut renderer, 42, &scene, (0, 0), (800, 600));
+        let result = render(&mut renderer, 42, &scene, (0, 0), (800, 600), true);
         assert!(result.is_err());
         // Style params reached the draw-target contract before display touch.
         assert_eq!(renderer.last_title_style(), Some((12.0, 600)));

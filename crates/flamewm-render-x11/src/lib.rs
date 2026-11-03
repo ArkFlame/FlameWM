@@ -21,12 +21,14 @@ pub use accel::{
     render_acceleration_status, set_render_acceleration, stroke_rounded_rect,
 };
 pub use lamp::PanelEdge;
+pub use outline_overlay::OutlineOverlay;
 pub use overlay::{TransitionDirection, TransitionStyle, WarpOverlay, fade_alpha};
 pub use warp::WarpRect;
 pub use xcomposite::CapturedImage;
 pub use xlib::{release_free_heap, return_large_frees_to_system};
 
 pub mod backdrop;
+pub mod outline_overlay;
 
 use std::collections::HashMap;
 use std::mem::MaybeUninit;

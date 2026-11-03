@@ -510,3 +510,10 @@ capability = "j12-g03-no-display-none-transient"
 reason = "`.sticky-title { display:none; }` hides the sticky note's title bar, and this stylesheet also carries the desktop `.context-menu` rules, so the per-file 'hidden transient selector' pair fires on two unrelated rules."
 canonical_target = "ui/desktop/desktop.css"
 remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-render-x11/src/outline_overlay.rs"
+capability = "j11-g01-move-resize-commits-geometry"
+reason = "The window-outline ring is an override-redirect ARGB child that must track its frame's rect and is not a presenter surface, so it repositions itself instead of going through the J11 move_resize owner that keeps presenter geometry and its commit in step."
+canonical_target = "crates/flamewm-render-x11/src/surface_controller.rs"
+remove_by = "0.2.0"

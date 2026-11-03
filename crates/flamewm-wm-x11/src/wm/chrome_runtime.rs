@@ -103,9 +103,10 @@ impl ChromeRuntime {
         frame_xid: u64,
         origin: (i32, i32),
         root: (u32, u32),
+        paint_ring: bool,
     ) -> Result<(), String> {
         match self.scene.as_ref() {
-            Some(scene) => render(renderer, frame_xid, scene, origin, root),
+            Some(scene) => render(renderer, frame_xid, scene, origin, root, paint_ring),
             None => Ok(()),
         }
     }

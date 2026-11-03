@@ -173,6 +173,35 @@ impl ExternalDecorationRenderer {
         Ok(())
     }
 
+    /// True when a compositing manager plus a 32-bit visual can blend an ARGB outline overlay, so
+    /// the window ring can be drawn over the client's own final pixels instead of the frame band.
+    pub fn outline_overlay_available(&self) -> bool {
+        crate::outline_overlay::available(self.display)
+    }
+
+    /// Creates the ARGB ring window for `parent` at `origin`/`size`; the caller keeps it for the
+    /// frame's lifetime and drops it to remove the ring.
+    pub fn open_outline_overlay(
+        &self,
+        parent: u64,
+        origin: (i32, i32),
+        size: (u32, u32),
+        radius: u32,
+    ) -> Result<crate::outline_overlay::OutlineOverlay, String> {
+        let display = self.overlay_display()?;
+        // SAFETY: the renderer owns a live display for as long as the overlay can exist; the
+        // overlay is declared before the renderer in the WM so it drops first.
+        unsafe {
+            crate::outline_overlay::OutlineOverlay::create(
+                display,
+                parent as crate::xlib::Window,
+                origin,
+                size,
+                radius,
+            )
+        }
+    }
+
     fn overlay_display(&self) -> Result<*mut Display, String> {
         (!self.display.is_null())
             .then_some(self.display)

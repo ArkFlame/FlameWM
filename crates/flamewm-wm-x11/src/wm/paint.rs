@@ -108,6 +108,8 @@ impl<C: Connection> Wm<'_, C> {
                 &ChangeWindowAttributesAux::new()
                     .border_pixel(crate::chrome::frame_border_pixel(&tokens)),
             )?;
+            // The ring host decides the client mask: settle it before reshaping.
+            self.refresh_outline_overlay(client);
             self.clear_frame_shape(frame, outer, floating)?;
             self.paint_chrome(client)?;
         }
@@ -163,6 +165,9 @@ impl<C: Connection> Wm<'_, C> {
     }
 
     pub(super) fn paint_chrome(&mut self, client: Window) -> Result<(), ReplyError> {
+        // The ARGB ring (when a compositor can blend it) owns the outline for this frame; the
+        // frame band ring is suppressed below so the two never stack.
+        self.paint_outline_overlay(client);
         if self
             .clients
             .get(&client)
@@ -216,11 +221,17 @@ impl<C: Connection> Wm<'_, C> {
         );
         let runtime = self.chrome_runtimes.entry(client).or_default();
         runtime.scene_for(&identity, chrome_state, icon);
+        // A compositing-manager overlay owns the ring; the frame band stays clear of it.
+        let paint_ring = !self.outline_overlays.contains_key(&client);
         if let Some(renderer) = self.renderer.as_ref() {
             let mut renderer = renderer.borrow_mut();
-            if let Err(error) =
-                runtime.paint_cached(&mut renderer, u64::from(frame), (outer.x, outer.y), root)
-            {
+            if let Err(error) = runtime.paint_cached(
+                &mut renderer,
+                u64::from(frame),
+                (outer.x, outer.y),
+                root,
+                paint_ring,
+            ) {
                 // A failed chrome paint leaves the frame's dark background visible
                 // during resize/maximize. Surface the error instead of silently
                 // continuing as though the titlebar was painted successfully.
@@ -230,6 +241,94 @@ impl<C: Connection> Wm<'_, C> {
             }
         }
         Ok(())
+    }
+
+    /// Ring parameters for a client's frame: `(physical radius, rgb, alpha)`, or `None` when the
+    /// client has no server frame.
+    fn outline_spec(&self, client: Window) -> Option<(u32, u32, u8)> {
+        let state = self.clients.get(&client)?;
+        if state.decoration != Decoration::Server {
+            return None;
+        }
+        let radius = u32::from(crate::frame::geometry_shape::scaled_corner_radius(
+            state.has_rounded_frame(),
+            self.decoration_tokens.style,
+            self.titlebar_height(),
+        ));
+        Some((
+            radius,
+            self.decoration_tokens.surface_border_rgb.0,
+            self.decoration_tokens.surface_border_alpha,
+        ))
+    }
+
+    /// Creates the ARGB ring window for `client` when the session can blend one, and drops it when
+    /// the outline is off. Only a compositing manager with a 32-bit visual gets an overlay; every
+    /// other session keeps the ring painted into the frame's own pixels.
+    pub(super) fn refresh_outline_overlay(&mut self, client: Window) {
+        let wanted = self.outline_overlay_available
+            && self
+                .outline_spec(client)
+                .is_some_and(|(_, _, alpha)| outline_overlay_wanted(alpha));
+        if !wanted {
+            self.outline_overlays.remove(&client);
+            return;
+        }
+        if self.outline_overlays.contains_key(&client) {
+            return;
+        }
+        let Some(state) = self.clients.get(&client) else {
+            return;
+        };
+        let (frame, outer) = (state.frame, state.outer);
+        let Some(renderer) = self.renderer.as_ref() else {
+            return;
+        };
+        let opened = renderer.borrow().open_outline_overlay(
+            u64::from(frame),
+            (0, 0),
+            (outer.width.max(1), outer.height.max(1)),
+            0,
+        );
+        match opened {
+            Ok(overlay) => {
+                self.outline_overlays.insert(client, overlay);
+            }
+            Err(error) => {
+                // Fail open: no overlay, the frame band ring stays the owner.
+                eprintln!("FLAMEWM_OUTLINE_OVERLAY_FAILED client={client} reason={error}");
+            }
+        }
+    }
+
+    /// Paints the ring over the client's final pixels. Errors drop the overlay so the next paint
+    /// falls back to the frame band instead of leaving a stale or misplaced ring on screen.
+    fn paint_outline_overlay(&mut self, client: Window) {
+        // Default path (no compositor or opt-in off): the chrome paints the ring instead, so this
+        // costs one bool check per paint.
+        if !self.outline_overlay_available {
+            return;
+        }
+        self.refresh_outline_overlay(client);
+        let Some((radius, rgb, alpha)) = self.outline_spec(client) else {
+            return;
+        };
+        let Some(state) = self.clients.get(&client) else {
+            return;
+        };
+        let (width, height) = (state.outer.width.max(1), state.outer.height.max(1));
+        let strips =
+            flamewm_render_core::outline::outline_strips(width, height, radius, rgb, alpha);
+        let Some(overlay) = self.outline_overlays.get_mut(&client) else {
+            return;
+        };
+        let painted = overlay
+            .configure((0, 0), (width, height), radius)
+            .and_then(|()| overlay.present(&strips));
+        if let Err(error) = painted {
+            eprintln!("FLAMEWM_OUTLINE_OVERLAY_PAINT_FAILED client={client} reason={error}");
+            self.outline_overlays.remove(&client);
+        }
     }
 
     pub(super) fn pressed_control(&self, client: Window) -> Option<FrameControl> {
@@ -351,5 +450,25 @@ mod chrome_pacing_tests {
             chrome_wait_cap(Some(t0), t0 + Duration::from_millis(40), None),
             Some(Duration::ZERO)
         );
+    }
+}
+
+/// Whether the outline should live in its own ARGB window: only a session that can blend it (the
+/// probe already passed) and only while the ring is actually visible.
+pub(super) fn outline_overlay_wanted(alpha: u8) -> bool {
+    alpha > 0
+}
+
+#[cfg(test)]
+mod outline_overlay_tests {
+    use super::outline_overlay_wanted;
+
+    /// The ring host is a per-session probe plus the live token: no compositor means the frame
+    /// band keeps the ring, and `outlines=false` (alpha 0) means no ring at all.
+    #[test]
+    fn the_overlay_hosts_the_ring_only_when_it_is_visible() {
+        assert!(outline_overlay_wanted(127));
+        assert!(outline_overlay_wanted(255));
+        assert!(!outline_overlay_wanted(0));
     }
 }

@@ -502,6 +502,7 @@ impl<C: Connection> Wm<'_, C> {
             self.overlays.remove(&window);
         }
         self.linger.remove(window);
+        self.outline_overlays.remove(&window);
         self.release_damage_watch(window);
         self.minimized_captures.remove(window);
         self.open_gate.clear(window);

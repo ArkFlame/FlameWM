@@ -222,9 +222,11 @@ impl<C: Connection> Wm<'_, C> {
             width: cw.min(u32::from(u16::MAX)) as u16,
             height: ch.min(u32::from(u16::MAX)) as u16,
         }];
-        // The outline ring is painted on the frame one pixel inside the edge, so the client
-        // leaves that pixel to the ring. Square windows with a ring are shaped too.
-        let ring = u32::from(self.decoration_tokens.surface_border_alpha > 0);
+        // The outline ring needs the frame's outermost pixel only when it is painted into the
+        // frame. A compositing-manager overlay draws over the client's own pixels, so the client
+        // then keeps its full rect and the ring lands on top of it.
+        let overlay_ring = self.outline_overlays.contains_key(&client);
+        let ring = u32::from(self.decoration_tokens.surface_border_alpha > 0 && !overlay_ring);
         if (radius > 0 || ring > 0) && cw > 0 && ch > 0 {
             // Sampled from the frame's own mask so the bottom arcs coincide instead of drifting
             // one row above them. `titlebar_h == 0` also rounds the client's top corners.
