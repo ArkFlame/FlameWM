@@ -1598,6 +1598,8 @@ pub(crate) mod tests {
     #[test]
     fn status_tray_matches_sync_full_and_async_system_projection() {
         use flamewm_api::system::{PlaybackState, ServiceAvailability};
+        let _scale = crate::taskbar_scale::test_lock();
+        crate::taskbar_scale::set_factor(1.0);
         let _guard = icon_test_lock().lock();
         let mut snapshot = ShellSnapshot::default();
         snapshot.system.media.availability = ServiceAvailability::Available;
@@ -1711,6 +1713,8 @@ pub(crate) mod tests {
     #[test]
     fn panels_scope_projects_geometry_only() {
         use crate::runtime::ChangedDomains;
+        let _scale = crate::taskbar_scale::test_lock();
+        crate::taskbar_scale::set_factor(1.0);
         let _guard = icon_test_lock().lock();
         let snapshot = ShellSnapshot::default();
         let changed = ChangedDomains {
@@ -1792,6 +1796,8 @@ pub(crate) mod tests {
     // cluster and workspace pager follow their own settings.
     #[test]
     fn taskbar_item_settings_hide_cluster_items_clock_and_pager() {
+        let _scale = crate::taskbar_scale::test_lock();
+        crate::taskbar_scale::set_factor(1.0);
         let _guard = icon_test_lock().lock();
         let snapshot = ShellSnapshot::default();
         let hidden = TaskbarItems {
@@ -2035,6 +2041,8 @@ pub(crate) mod tests {
 
     #[test]
     fn async_panel_projects_labels_without_sync_resolve() {
+        let _scale = crate::taskbar_scale::test_lock();
+        crate::taskbar_scale::set_factor(1.0);
         let _guard = icon_test_lock().lock();
         let snapshot = ShellSnapshot::default();
         let mut doc = FakeDoc::default();
