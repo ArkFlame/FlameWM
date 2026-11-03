@@ -1,4 +1,5 @@
 use super::*;
+use x11rb::protocol::xproto::ImageFormat;
 
 /// Titlebar repaint cadence during an interactive move (about 60 Hz). The frame still follows
 /// every motion; only the chrome repaint is paced.
@@ -219,10 +220,16 @@ impl<C: Connection> Wm<'_, C> {
             u32::from(screen.width_in_pixels),
             u32::from(screen.height_in_pixels),
         );
+        // A compositing-manager overlay owns the ring; the frame band stays clear of it. The
+        // client's own edge pixels are read before the chrome cache is borrowed.
+        let paint_ring = !self.outline_overlays.contains_key(&client);
+        let client_edges = if paint_ring {
+            self.client_edge_pixels(client)
+        } else {
+            None
+        };
         let runtime = self.chrome_runtimes.entry(client).or_default();
         runtime.scene_for(&identity, chrome_state, icon);
-        // A compositing-manager overlay owns the ring; the frame band stays clear of it.
-        let paint_ring = !self.outline_overlays.contains_key(&client);
         if let Some(renderer) = self.renderer.as_ref() {
             let mut renderer = renderer.borrow_mut();
             if let Err(error) = runtime.paint_cached(
@@ -231,6 +238,7 @@ impl<C: Connection> Wm<'_, C> {
                 (outer.x, outer.y),
                 root,
                 paint_ring,
+                client_edges.as_ref(),
             ) {
                 // A failed chrome paint leaves the frame's dark background visible
                 // during resize/maximize. Surface the error instead of silently
@@ -241,6 +249,61 @@ impl<C: Connection> Wm<'_, C> {
             }
         }
         Ok(())
+    }
+
+    /// The client's own edge pixels, read back so the outline ring composites over the colour the
+    /// window actually drew. The band itself is masked out of the client (`ring` inset), so its
+    /// pixels are never painted: the sample is the client's outermost *visible* pixel, one inside
+    /// the band, which is the colour the eye reads at that edge. `None` when the client cannot be
+    /// read (unmapped, obscured, or a driver that refuses GetImage); the ring then falls back to
+    /// the frame's material.
+    fn client_edge_pixels(&self, client: Window) -> Option<crate::frame::chrome::ClientEdges> {
+        let state = self.clients.get(&client)?;
+        let (width, height) =
+            crate::frame::geometry_shape::client_area_size(state.outer, self.titlebar_height());
+        if width == 0 || height == 0 {
+            return None;
+        }
+        // One pixel inside the ring band, i.e. the client's outermost painted column/row.
+        let column = |x: u16| -> Option<Vec<u8>> {
+            let reply = self
+                .conn
+                .get_image(
+                    ImageFormat::Z_PIXMAP,
+                    client,
+                    i16::try_from(x).ok()?,
+                    0,
+                    1,
+                    u16::try_from(height).ok()?,
+                    !0,
+                )
+                .ok()?
+                .reply()
+                .ok()?;
+            Some(bgrx_to_rgb(&reply.data))
+        };
+        let row = |y: u16| -> Option<Vec<u8>> {
+            let reply = self
+                .conn
+                .get_image(
+                    ImageFormat::Z_PIXMAP,
+                    client,
+                    0,
+                    i16::try_from(y).ok()?,
+                    u16::try_from(width).ok()?,
+                    1,
+                    !0,
+                )
+                .ok()?
+                .reply()
+                .ok()?;
+            Some(bgrx_to_rgb(&reply.data))
+        };
+        Some(crate::frame::chrome::ClientEdges {
+            left: column(1)?,
+            right: column(u16::try_from(width.saturating_sub(2)).ok()?)?,
+            bottom: row(u16::try_from(height.saturating_sub(2)).ok()?)?,
+        })
     }
 
     /// Ring parameters for a client's frame: `(physical radius, rgb, alpha)`, or `None` when the
@@ -451,6 +514,14 @@ mod chrome_pacing_tests {
             Some(Duration::ZERO)
         );
     }
+}
+
+/// Server ZPixmap bytes (BGRX on a little-endian server) to straight RGB triples kept in RGBA
+/// stride so the frame-band ring can index a pixel uniformly.
+fn bgrx_to_rgb(data: &[u8]) -> Vec<u8> {
+    data.chunks_exact(4)
+        .flat_map(|px| [px[2], px[1], px[0], 255])
+        .collect()
 }
 
 /// Whether the outline should live in its own ARGB window: only a session that can blend it (the

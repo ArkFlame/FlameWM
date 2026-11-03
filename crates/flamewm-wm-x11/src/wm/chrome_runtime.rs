@@ -104,9 +104,18 @@ impl ChromeRuntime {
         origin: (i32, i32),
         root: (u32, u32),
         paint_ring: bool,
+        client_edges: Option<&crate::frame::chrome::ClientEdges>,
     ) -> Result<(), String> {
         match self.scene.as_ref() {
-            Some(scene) => render(renderer, frame_xid, scene, origin, root, paint_ring),
+            Some(scene) => render(
+                renderer,
+                frame_xid,
+                scene,
+                origin,
+                root,
+                paint_ring,
+                client_edges,
+            ),
             None => Ok(()),
         }
     }

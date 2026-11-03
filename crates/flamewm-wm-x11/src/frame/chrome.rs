@@ -275,6 +275,31 @@ fn titlebar_fill_pixels(
 /// One outline blit over the frame: `(x, y, width, height, rgba)`, the shared strip contract.
 pub type OutlineBlit = OutlineStrip;
 
+/// The client's own outermost pixels, one column/row thick, straight RGBA. Read back from the
+/// client window so the ring composites over what the window actually drew instead of over the
+/// frame's material when no compositing manager can blend an overlay.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClientEdges {
+    /// `1 x client_h` column of the client's left edge.
+    pub left: Vec<u8>,
+    /// `1 x client_h` column of the client's right edge.
+    pub right: Vec<u8>,
+    /// `client_w x 1` row of the client's bottom edge.
+    pub bottom: Vec<u8>,
+}
+
+impl ClientEdges {
+    fn column(pixels: &[u8], row: usize) -> Option<[u8; 3]> {
+        let at = row.checked_mul(4)?;
+        let px = pixels.get(at..at + 4)?;
+        Some([px[0], px[1], px[2]])
+    }
+
+    fn pixel(pixels: &[u8], col: usize) -> Option<[u8; 3]> {
+        Self::column(pixels, col)
+    }
+}
+
 /// The outline ring exists for this scene: enabled token, real 2x2+ frame.
 fn outline_on(scene: &ChromeScene) -> bool {
     scene.tokens.surface_border_alpha > 0 && scene.frame_w >= 2 && scene.frame_h >= 2
@@ -300,6 +325,7 @@ pub fn outline_blits(
     scene: &ChromeScene,
     origin: (i32, i32),
     root: (u32, u32),
+    client_edges: Option<&ClientEdges>,
 ) -> Vec<OutlineBlit> {
     if !outline_on(scene) {
         return Vec::new();
@@ -329,16 +355,38 @@ pub fn outline_blits(
                 0,
             );
             let content_rows = titlebar_h.saturating_sub(y) as usize * w as usize;
-            for (pixel, material) in rgba
+            for (index, (pixel, material)) in rgba
                 .chunks_exact_mut(4)
                 .zip(base.chunks_exact(4))
+                .enumerate()
                 .skip(content_rows)
             {
                 if pixel[3] == 0 {
                     continue;
                 }
+                // Prefer the client's own edge pixel: the ring then blends over the window's final
+                // pixels, exactly like the Wayland overlay does, without a compositing manager.
+                // Strip-local indices are mapped back into frame coordinates first.
+                let local_x = x + (index % w as usize) as u32;
+                let local_y = y + index as u32 / w;
+                let client_px = client_edges.and_then(|edges| {
+                    let row = local_y.saturating_sub(titlebar_h) as usize;
+                    if local_x == 0 {
+                        ClientEdges::column(&edges.left, row)
+                    } else if local_x + 1 == scene.frame_w {
+                        ClientEdges::column(&edges.right, row)
+                    } else if local_y + 1 == scene.frame_h {
+                        ClientEdges::pixel(&edges.bottom, local_x as usize)
+                    } else {
+                        None
+                    }
+                });
+                let base_rgb = match client_px {
+                    Some([r, g, b]) => u32::from_be_bytes([0, r, g, b]),
+                    None => u32::from_be_bytes([0, material[0], material[1], material[2]]),
+                };
                 let blended = blend_surface_over_rgb(
-                    u32::from_be_bytes([0, material[0], material[1], material[2]]),
+                    base_rgb,
                     SurfaceFill {
                         rgb: fill.rgb,
                         alpha: pixel[3],
@@ -347,6 +395,11 @@ pub fn outline_blits(
                 pixel[0] = (blended >> 16) as u8;
                 pixel[1] = (blended >> 8) as u8;
                 pixel[2] = blended as u8;
+                // The base is already in these channels, so the result is opaque: keeping the
+                // coverage as alpha would blend the ring over the frame's background a second
+                // time and darken it. Arc pixels stay antialiased because the blend itself is
+                // coverage-weighted.
+                pixel[3] = 255;
             }
         }
         (x, y, w, h, rgba)
@@ -366,6 +419,7 @@ pub fn render(
     origin: (i32, i32),
     root: (u32, u32),
     paint_ring: bool,
+    client_edges: Option<&ClientEdges>,
 ) -> Result<(), String> {
     use flamewm_render_core::{Color, Rect};
     // Order is the live paint contract: retarget, fill, icon blit, title
@@ -484,7 +538,7 @@ pub fn render(
     // A compositing manager hosts the ring as an ARGB overlay over the client's own pixels, so
     // the frame band must stay clear of it: one ring owner per frame.
     let outline_result = if paint_ring {
-        outline_blits(scene, origin, root)
+        outline_blits(scene, origin, root, client_edges)
     } else {
         Vec::new()
     }
@@ -524,9 +578,18 @@ mod tests {
 
     /// Straight-alpha ring painted onto a zeroed frame buffer: the raw blit bytes.
     fn ringed(scene: &ChromeScene, origin: (i32, i32), root: (u32, u32)) -> (Vec<u8>, u32) {
+        ringed_with(scene, origin, root, None)
+    }
+
+    fn ringed_with(
+        scene: &ChromeScene,
+        origin: (i32, i32),
+        root: (u32, u32),
+        edges: Option<&ClientEdges>,
+    ) -> (Vec<u8>, u32) {
         let (w, h) = (scene.frame_w, scene.frame_h);
         let mut frame = vec![0_u8; w as usize * h as usize * 4];
-        for (x, y, bw, bh, pixels) in outline_blits(scene, origin, root) {
+        for (x, y, bw, bh, pixels) in outline_blits(scene, origin, root, edges) {
             for row in 0..bh as usize {
                 let src = row * bw as usize * 4;
                 let dst = ((y as usize + row) * w as usize + x as usize) * 4;
@@ -551,6 +614,62 @@ mod tests {
         }
     }
 
+    /// With the client's own edge pixels available the ring composites over them, so the band
+    /// pixel is the outline over the window's final pixels (what the user sees in the window)
+    /// instead of over the frame's material. Missing sides fall back per side.
+    #[test]
+    fn outline_ring_blends_over_the_clients_own_edge_pixels() {
+        let scene = plan_scene(
+            120,
+            100,
+            "app",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &ChromeTokens::default(),
+        );
+        let (titlebar, frame_h) = (
+            u32::from(scene.titlebar_height) as usize,
+            scene.frame_h as usize,
+        );
+        let client_h = frame_h - titlebar;
+        // Client edges are solid green; the frame material is the default surface colour.
+        let green = [0u8, 255, 0, 255].repeat(client_h);
+        let bottom = [0u8, 255, 0, 255].repeat(scene.frame_w as usize);
+        let edges = ClientEdges {
+            left: green.clone(),
+            right: green,
+            bottom,
+        };
+        let (frame, w) = ringed_with(&scene, (0, 0), (800, 600), Some(&edges));
+        let opacity = scene.tokens.surface_border_alpha;
+        let mid = (frame_h / 2) as u32;
+        let alpha = pixel_at(&frame, w, 0, mid)[3];
+        assert!(alpha > 0, "the left band carries the ring");
+        // 50% white over full green: red and blue rise from 0 to ~127, green stays at 255.
+        let px = pixel_at(&frame, w, 0, mid);
+        let half = u32::from(opacity);
+        let expect_red = ((255 * half + 127) / 255) as u8;
+        assert_eq!(
+            px[0], expect_red,
+            "red channel = outline over the client pixel"
+        );
+        assert_eq!(
+            px[2], expect_red,
+            "blue channel = outline over the client pixel"
+        );
+        assert_eq!(px[1], 255, "green channel keeps the client's own value");
+        // The bottom edge blends over the client too.
+        let px = pixel_at(&frame, w, w / 2, (frame_h - 1) as u32);
+        assert_eq!(px[0], expect_red);
+        // The titlebar rows keep the material base: no client edge there.
+        let px = pixel_at(&frame, w, 0, 1);
+        assert_ne!(px[1], 255, "titlebar rows are not client pixels");
+    }
+
     #[test]
     fn outline_ring_covers_the_whole_frame_with_shared_coverage() {
         use flamewm_render_core::outline::{ring_alpha, ring_coverage};
@@ -569,11 +688,19 @@ mod tests {
         let (frame, w) = ringed(&scene, (0, 0), (800, 600));
         let (h, radius) = (scene.frame_h, u32::from(scene.radius));
         let opacity = scene.tokens.surface_border_alpha;
-        // Every pixel is exactly the shared raster: 0 outside the ring, else the shared alpha.
+        // Titlebar rows carry the shared alpha (the bar holds the material); client rows bake
+        // their base, so they are either absent (coverage 0) or opaque.
+        let titlebar = u32::from(scene.titlebar_height);
         for y in 0..h {
             for x in 0..w {
-                let expected = ring_alpha(opacity, ring_coverage(w, h, radius, x, y));
-                assert_eq!(pixel_at(&frame, w, x, y)[3], expected, "{x},{y}");
+                let coverage = ring_coverage(w, h, radius, x, y);
+                let alpha = pixel_at(&frame, w, x, y)[3];
+                if y < titlebar {
+                    assert_eq!(alpha, ring_alpha(opacity, coverage), "{x},{y}");
+                } else {
+                    let expected = if coverage == 0 { 0 } else { 255 };
+                    assert_eq!(alpha, expected, "{x},{y}");
+                }
             }
         }
         // One continuous ring around titlebar AND client: all four sides.
@@ -582,14 +709,26 @@ mod tests {
         }
         // The arcs stay antialiased instead of a stair-stepped mask edge.
         let full = ring_alpha(opacity, 255);
-        let partial = (0..h)
+        let partial = (0..u32::from(scene.titlebar_height))
             .flat_map(|y| (0..w).map(move |x| (x, y)))
             .filter(|&(x, y)| {
                 let alpha = pixel_at(&frame, w, x, y)[3];
                 alpha > 0 && alpha < full
             })
             .count();
-        assert!(partial > 3, "arcs must be antialiased, got {partial}");
+        assert!(
+            partial > 3,
+            "titlebar arcs must be antialiased, got {partial}"
+        );
+        // Client-row arcs blend through the base channels instead (opaque, not solid white).
+        let blended = (u32::from(scene.titlebar_height)..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let pixel = pixel_at(&frame, w, x, y);
+                pixel[3] == 255 && pixel[..3] != [0xff, 0xff, 0xff]
+            })
+            .count();
+        assert!(blended > 3, "client arcs must blend, got {blended}");
         // Interior and the space outside the ideal arc stay untouched.
         assert_eq!(pixel_at(&frame, w, 60, 50), [0, 0, 0, 0]);
         assert_eq!(pixel_at(&frame, w, 0, 0), [0, 0, 0, 0]);
@@ -624,12 +763,13 @@ mod tests {
             })
             .expect("an antialiased titlebar-row pixel");
         assert_eq!(&pixel_at(&frame, w, tx, ty)[..3], &[0xff, 0xff, 0xff]);
-        // Client rows fade out of the window material, never out of the frame background.
+        // Client rows carry their base in the channels, so they are opaque and blend out of the
+        // window material toward the ring colour instead of fading over the frame background.
         let (cx, cy) = (0..w)
             .flat_map(|x| (titlebar_h..scene.frame_h).map(move |y| (x, y)))
             .find(|&(x, y)| {
-                let alpha = pixel_at(&frame, w, x, y)[3];
-                alpha > 0 && alpha < 255
+                let pixel = pixel_at(&frame, w, x, y);
+                pixel[3] == 255 && pixel[..3] != [0xff, 0xff, 0xff]
             })
             .expect("an antialiased client-row pixel");
         let pixel = pixel_at(&frame, w, cx, cy);
@@ -642,15 +782,11 @@ mod tests {
             scene.tokens.titlebar_blur_percent,
             0,
         );
-        assert_ne!(
-            &pixel[..3],
-            &[0xff, 0xff, 0xff],
-            "partial pixel is not solid"
-        );
+        assert_eq!(pixel[3], 255, "client-row pixels are opaque");
         for (channel, base) in pixel[..3].iter().zip(&material) {
             assert!(
                 *channel > *base,
-                "faded toward the material, not the background"
+                "faded toward the ring, out of the window material"
             );
         }
     }
@@ -662,7 +798,7 @@ mod tests {
         let scene = plan_scene(
             120, 100, "app", true, None, None, false, false, true, &tokens,
         );
-        assert!(outline_blits(&scene, (0, 0), (800, 600)).is_empty());
+        assert!(outline_blits(&scene, (0, 0), (800, 600), None).is_empty());
         assert!(
             !effects_for(1, &scene)
                 .iter()
@@ -680,7 +816,7 @@ mod tests {
             true,
             &ChromeTokens::default(),
         );
-        assert!(outline_blits(&tiny, (0, 0), (800, 600)).is_empty());
+        assert!(outline_blits(&tiny, (0, 0), (800, 600), None).is_empty());
     }
 
     #[test]
@@ -966,7 +1102,7 @@ mod tests {
             true,
             &flamewm_skin::recipes::decoration::ChromeTokens::default(),
         );
-        let result = render(&mut renderer, 42, &scene, (0, 0), (800, 600), true);
+        let result = render(&mut renderer, 42, &scene, (0, 0), (800, 600), true, None);
         assert!(result.is_err());
         // Style params reached the draw-target contract before display touch.
         assert_eq!(renderer.last_title_style(), Some((12.0, 600)));
