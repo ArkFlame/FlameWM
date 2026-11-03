@@ -229,7 +229,8 @@ mod tests {
             fill,
             SurfaceFill {
                 rgb: 0x00ea_f4ff,
-                alpha: 31
+                alpha: 31,
+                width: 1,
             }
         );
     }
@@ -244,7 +245,8 @@ mod tests {
             surface_fill(&snapshot),
             SurfaceFill {
                 rgb: 0x001e_2123,
-                alpha: 107
+                alpha: 107,
+                width: 1,
             }
         );
         snapshot
@@ -259,7 +261,8 @@ mod tests {
             surface_fill(&snapshot),
             SurfaceFill {
                 rgb: 0x0017_2135,
-                alpha: 255
+                alpha: 255,
+                width: 1,
             }
         );
     }
@@ -431,7 +434,8 @@ mod shared_row_tests {
             rounded.fill,
             SurfaceFill {
                 rgb: 0x00ea_f4ff,
-                alpha: 31
+                alpha: 31,
+                width: 1,
             }
         );
         let mut squared = SettingsSnapshot::new(1);

@@ -404,6 +404,15 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
             direction,
         ));
     }
+    if let Some(direction) = action
+        .strip_prefix("settings.window-outline-opacity.")
+        .and_then(step)
+    {
+        return Ok(SettingsAction::PercentStep(
+            "windowOutlineOpacity",
+            direction,
+        ));
+    }
     if let Some(direction) = action.strip_prefix("settings.surface-blur.").and_then(step) {
         return Ok(SettingsAction::PercentStep("surfaceBlurPercent", direction));
     }

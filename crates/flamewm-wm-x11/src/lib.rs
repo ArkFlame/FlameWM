@@ -12,6 +12,7 @@ mod frame;
 mod geometry;
 mod idle;
 mod live_settings;
+mod outline_tune;
 mod runtime;
 mod size_hints;
 pub(crate) mod snap_preview;

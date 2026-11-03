@@ -3,12 +3,13 @@
 use super::*;
 
 /// Color rows in the Appearance page: action target and the `#RRGGBB` setting.
-pub(crate) const COLOR_TARGETS: [(&str, &str); 5] = [
+pub(crate) const COLOR_TARGETS: [(&str, &str); 6] = [
     ("border", "surfaceBorderColor"),
     ("surface", "surfaceColor"),
     ("accent", "accent"),
     ("lockbackground", "lockBackgroundColor"),
     ("taskbarTint", "taskbarCustomTint"),
+    ("windowOutline", "windowOutlineColor"),
 ];
 
 /// Minutes offered by the lock-screen idle timeout segments; 0 means never.
@@ -42,13 +43,20 @@ pub(crate) struct IntegerStepper {
     pub(crate) maximum: i64,
 }
 
-pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 12] = [
+pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 13] = [
     IntegerStepper {
         slug: "window-margin",
         key: "windowMargin",
         step: 1,
         minimum: 0,
         maximum: 32,
+    },
+    IntegerStepper {
+        slug: "window-outline-width",
+        key: "windowOutlineWidth",
+        step: 1,
+        minimum: 1,
+        maximum: 4,
     },
     IntegerStepper {
         slug: "taskbar-floating-margin",

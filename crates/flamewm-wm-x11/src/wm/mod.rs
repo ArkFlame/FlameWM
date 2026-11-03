@@ -340,11 +340,23 @@ fn any_conn_err(error: x11rb::errors::ConnectionError) -> AnyError {
 }
 
 /// `_NET_FRAME_EXTENTS` for a server-decorated frame in `mode`: the effective
-/// border (configured only while floating) on left/right/bottom, and
-/// titlebar plus border on top.
-fn frame_extents_for_mode(mode: PlacementMode, configured_border: u16, titlebar: u16) -> [u32; 4] {
+/// border (configured only while floating) plus the outline band on left,
+/// right and bottom, and titlebar plus border on top. The band is part of the
+/// frame, so the application still receives exactly the size it requested.
+fn frame_extents_for_mode(
+    mode: PlacementMode,
+    configured_border: u16,
+    titlebar: u16,
+    band: u16,
+) -> [u32; 4] {
     let border = u32::from(frame_border_for_mode(mode, configured_border));
-    [border, border, u32::from(titlebar) + border, border]
+    let band = u32::from(band);
+    [
+        border + band,
+        border + band,
+        u32::from(titlebar) + border,
+        border + band,
+    ]
 }
 
 /// True unless `client` already has exactly `extents` published (first publish always true).

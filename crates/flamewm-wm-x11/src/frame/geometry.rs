@@ -21,34 +21,50 @@ pub enum GeometryReason {
 /// Frame chrome extents in pixels.
 ///
 /// Old-good model (see `manage`/`configure_frame` in the pre-refactor wm):
-/// the X frame interior width equals the client width, the interior height
-/// equals titlebar + client height, the reparented client sits at local
-/// (0, titlebar), and the X border is an outer frame property only — it is
-/// never added to the local offset or size.
+/// the X frame interior width equals the client width plus the outline band,
+/// the interior height equals titlebar + band + client height, the reparented
+/// client sits at local `(inset, titlebar)`, and the X border is an outer frame
+/// property only — it is never added to the local offset or size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FrameExtents {
     pub titlebar_h: i32,
     pub border: i32,
+    /// Outline band painted into the frame's own outermost pixels. The client is placed this
+    /// far inside the frame on the left, right and bottom edges, so its window cannot cover the
+    /// ring no matter which shape the application installs afterwards. Zero when no ring is drawn
+    /// or when a compositing-manager overlay composites the ring over the client's own pixels.
+    pub inset: i32,
 }
 
 impl FrameExtents {
     #[must_use]
     pub const fn new(titlebar_h: i32, border: i32) -> Self {
-        Self { titlebar_h, border }
+        Self {
+            titlebar_h,
+            border,
+            inset: 0,
+        }
+    }
+
+    /// Same extents with an outline band of `inset` px reserved around the client.
+    #[must_use]
+    pub const fn with_inset(self, inset: i32) -> Self {
+        Self { inset, ..self }
     }
 
     /// Extra frame pixels over the client size: `(dw, dh)`.
     ///
-    /// Border never inflates the client area: only the titlebar counts.
+    /// The border never inflates the client area; the titlebar and the outline band do, so the
+    /// application still gets exactly the size it asked for.
     #[must_use]
     pub const fn delta(self) -> (i32, i32) {
-        (0, self.titlebar_h)
+        (self.inset * 2, self.titlebar_h + self.inset)
     }
 
-    /// Client origin inside the frame: reparented at (0, titlebar).
+    /// Client origin inside the frame: reparented at `(inset, titlebar)`.
     #[must_use]
     pub const fn client_offset(self) -> (i32, i32) {
-        (0, self.titlebar_h)
+        (self.inset, self.titlebar_h)
     }
 }
 
@@ -389,13 +405,18 @@ pub fn client_rect_to_frame(
     )
 }
 
-/// Outer frame rect -> client-local rect: origin (0, titlebar), size
-/// (frame.w, frame.h - titlebar).
+/// Outer frame rect -> client-local rect: origin `(inset, titlebar)`, size
+/// `(frame.w - 2 * inset, frame.h - titlebar - inset)`.
 #[must_use]
 pub fn frame_to_client_local(frame: RootRect, extents: FrameExtents) -> ClientLocalRect {
-    let (_, dh) = extents.delta();
+    let (dw, dh) = extents.delta();
     let (ox, oy) = extents.client_offset();
-    ClientLocalRect::new(ox, oy, frame.w, frame.h.saturating_sub(dh).max(1))
+    ClientLocalRect::new(
+        ox,
+        oy,
+        frame.w.saturating_sub(dw).max(1),
+        frame.h.saturating_sub(dh).max(1),
+    )
 }
 
 /// Outer frame rect -> synthetic client-root rect (frame offset + local size).
@@ -510,9 +531,10 @@ pub fn plan_initial_map_near_pointer(
     const OFFSET: i32 = 24;
     let target_frame_x = pointer.x.saturating_add(OFFSET);
     let target_frame_y = pointer.y.saturating_add(OFFSET);
+    let (ox, oy) = req.frame_extents.client_offset();
     let origin = RootPoint::new(
-        target_frame_x,
-        target_frame_y.saturating_add(req.frame_extents.titlebar_h),
+        target_frame_x.saturating_add(ox),
+        target_frame_y.saturating_add(oy),
     );
     let localized = GeometryRequest {
         work_area: selected_work_area,

@@ -1,23 +1,25 @@
 //! Backend-neutral window outline rasteriser (`windowOutlineColor`, `windowOutlineOpacity`,
-//! `outlines`).
+//! `windowOutlineWidth`, `outlines`).
 //!
 //! One shared contract: the X11 frame painter and the Wayland overlay element paint these exact
-//! bytes, so the two backends cannot drift. The ring is 1px wide, antialiased by 4x4
+//! bytes, so the two backends cannot drift. The band is `thickness` px wide, antialiased by 4x4
 //! supersampling, and follows the rounded rectangle of `width` x `height` with corner `radius`.
-//! It occupies the outermost pixel row and column of that silhouette (inset 0): the inner edge of
-//! the ring is the silhouette edge of the pixels it covers, so nothing is drawn outside the frame.
+//! It occupies the outermost `thickness` pixels of that silhouette (inset 0): the outer edge of the
+//! band is the exact silhouette edge, so nothing is drawn outside the frame. `thickness == 0`
+//! draws nothing.
 //!
 //! Every buffer here is straight-alpha RGBA, the shared image contract. A consumer that needs
 //! premultiplied bytes (the Wayland memory element) converts once, in its own buffer, and never
 //! re-rasterises the arc.
 //!
-//! `radius <= 1` is a plain 1px rectangular border; a larger radius is clamped to
-//! `min(width, height) / 2` so a tiny frame still yields a valid silhouette.
+//! `radius <= 1` is a plain rectangular border; a larger radius is clamped to
+//! `min(width, height) / 2`, and so is `thickness`, so a tiny frame still yields a valid
+//! silhouette.
 
-/// Supersampling samples per axis: 16 samples per pixel keeps a 24px arc smooth.
+/// Supersampling samples per axis: 16 samples per pixel keeps a 12px arc smooth.
 const SAMPLES: u32 = 4;
 
-/// Opacity of one ring pixel: the configured outline opacity scaled by the 1px coverage.
+/// Opacity of one ring pixel: the configured outline opacity scaled by the pixel coverage.
 ///
 /// Shared rounding, so the X11 frame compositor and the Wayland overlay produce identical alpha.
 #[must_use]
@@ -41,28 +43,36 @@ fn inside_rounded(px: f32, py: f32, w: f32, h: f32, radius: f32) -> bool {
     dx * dx + dy * dy <= radius * radius
 }
 
-/// Coverage (`0..=255`) of the 1px antialiased ring on the rounded-rect silhouette, at pixel
-/// `(x, y)`. Exterior and interior are 0; a fully covered straight edge pixel is 255.
+/// Coverage (`0..=255`) of the antialiased `thickness`-px band on the rounded-rect silhouette, at
+/// pixel `(x, y)`. Exterior and interior are 0; a fully covered band pixel is 255.
 #[must_use]
-pub fn ring_coverage(width: u32, height: u32, radius: u32, x: u32, y: u32) -> u8 {
+pub fn ring_coverage(width: u32, height: u32, radius: u32, thickness: u32, x: u32, y: u32) -> u8 {
     if width == 0 || height == 0 || x >= width || y >= height {
         return 0;
     }
-    let radius = radius.min(width.min(height) / 2);
+    let half = width.min(height) / 2;
+    let thickness = thickness.min(half);
+    if thickness == 0 {
+        return 0;
+    }
+    let radius = radius.min(half);
     if radius <= 1 {
-        // A plain 1px rectangular border: every outermost pixel, nothing else.
-        let border = x == 0 || y == 0 || x + 1 == width || y + 1 == height;
+        // A plain rectangular border `thickness` px wide: every outermost pixel, nothing else.
+        let border =
+            x < thickness || y < thickness || x + thickness >= width || y + thickness >= height;
         return if border { 255 } else { 0 };
     }
     let (w, h) = (width as f32, height as f32);
-    let (outer, inner) = (radius as f32, (radius - 1) as f32);
+    let (outer, inner) = (radius as f32, radius.saturating_sub(thickness) as f32);
+    let band = thickness as f32;
     let mut hits = 0;
     for sy in 0..SAMPLES {
         for sx in 0..SAMPLES {
             let px = x as f32 + (sx as f32 + 0.5) / SAMPLES as f32;
             let py = y as f32 + (sy as f32 + 0.5) / SAMPLES as f32;
+            // The band is the exact silhouette minus the same silhouette inset by `thickness`.
             if inside_rounded(px, py, w, h, outer)
-                && !inside_rounded(px - 1.0, py - 1.0, w - 2.0, h - 2.0, inner)
+                && !inside_rounded(px - band, py - band, w - 2.0 * band, h - 2.0 * band, inner)
             {
                 hits += 1;
             }
@@ -73,14 +83,21 @@ pub fn ring_coverage(width: u32, height: u32, radius: u32, x: u32, y: u32) -> u8
 
 /// `width * height * 4` straight-alpha RGBA of the ring, zero where the coverage is 0.
 #[must_use]
-pub fn outline_rgba(width: u32, height: u32, radius: u32, rgb: u32, alpha: u8) -> Vec<u8> {
+pub fn outline_rgba(
+    width: u32,
+    height: u32,
+    radius: u32,
+    thickness: u32,
+    rgb: u32,
+    alpha: u8,
+) -> Vec<u8> {
     let mut out = vec![0_u8; width as usize * height as usize * 4];
-    if alpha == 0 {
+    if alpha == 0 || thickness == 0 {
         return out;
     }
     for y in 0..height {
         for x in 0..width {
-            let coverage = ring_coverage(width, height, radius, x, y);
+            let coverage = ring_coverage(width, height, radius, thickness, x, y);
             if coverage == 0 {
                 continue;
             }
@@ -104,15 +121,22 @@ pub fn outline_strips(
     width: u32,
     height: u32,
     radius: u32,
+    thickness: u32,
     rgb: u32,
     alpha: u8,
 ) -> Vec<OutlineStrip> {
-    if alpha == 0 || width == 0 || height == 0 {
+    if alpha == 0 || thickness == 0 || width == 0 || height == 0 {
         return Vec::new();
     }
-    let radius = radius.min(width.min(height) / 2);
-    // Rows and columns the ring can reach: the corner arcs span `radius` pixels plus the 1px band.
-    let band = if radius <= 1 { 1 } else { radius + 1 };
+    let half = width.min(height) / 2;
+    let thickness = thickness.min(half);
+    let radius = radius.min(half);
+    // Rows and columns the band can reach: the corner arcs span `radius` pixels plus the band.
+    let band = if radius <= 1 {
+        thickness
+    } else {
+        radius + thickness
+    };
     let top_h = band.min(height);
     let bottom_h = band.min(height - top_h);
     let mid_y = top_h;
@@ -127,7 +151,7 @@ pub fn outline_strips(
         (width - right_w, mid_y, right_w, mid_h),
     ] {
         if w > 0 && h > 0 {
-            let rgba = strip_rgba(width, height, radius, rgb, alpha, (x, y, w, h));
+            let rgba = strip_rgba(width, height, radius, thickness, rgb, alpha, (x, y, w, h));
             strips.push((x, y, w, h, rgba));
         }
     }
@@ -139,6 +163,7 @@ fn strip_rgba(
     width: u32,
     height: u32,
     radius: u32,
+    thickness: u32,
     rgb: u32,
     alpha: u8,
     (x0, y0, w, h): (u32, u32, u32, u32),
@@ -146,7 +171,7 @@ fn strip_rgba(
     let mut out = vec![0_u8; w as usize * h as usize * 4];
     for y in 0..h {
         for x in 0..w {
-            let coverage = ring_coverage(width, height, radius, x0 + x, y0 + y);
+            let coverage = ring_coverage(width, height, radius, thickness, x0 + x, y0 + y);
             if coverage == 0 {
                 continue;
             }
@@ -166,9 +191,16 @@ fn strip_rgba(
 mod tests {
     use super::*;
 
-    fn reconstruct(width: u32, height: u32, radius: u32, rgb: u32, alpha: u8) -> Vec<u8> {
+    fn reconstruct(
+        width: u32,
+        height: u32,
+        radius: u32,
+        thickness: u32,
+        rgb: u32,
+        alpha: u8,
+    ) -> Vec<u8> {
         let mut full = vec![0_u8; width as usize * height as usize * 4];
-        for (x, y, w, h, rgba) in outline_strips(width, height, radius, rgb, alpha) {
+        for (x, y, w, h, rgba) in outline_strips(width, height, radius, thickness, rgb, alpha) {
             for row in 0..h {
                 let src = (row as usize * w as usize) * 4;
                 let dst = ((y + row) as usize * width as usize + x as usize) * 4;
@@ -181,27 +213,29 @@ mod tests {
     #[test]
     fn strips_reconstruct_the_full_image() {
         for (w, h, r) in [
-            (120, 80, 24),
-            (200, 200, 12),
+            (120, 80, 12),
+            (200, 200, 6),
             (64, 40, 0),
             (40, 64, 1),
             (30, 30, 99),
         ] {
-            for alpha in [127_u8, 255] {
-                let full = outline_rgba(w, h, r, 0x00ab_cdef, alpha);
-                assert_eq!(
-                    reconstruct(w, h, r, 0x00ab_cdef, alpha),
-                    full,
-                    "{w}x{h} r{r}"
-                );
+            for thickness in [1_u32, 2, 4] {
+                for alpha in [127_u8, 255] {
+                    let full = outline_rgba(w, h, r, thickness, 0x00ab_cdef, alpha);
+                    assert_eq!(
+                        reconstruct(w, h, r, thickness, 0x00ab_cdef, alpha),
+                        full,
+                        "{w}x{h} r{r} t{thickness}"
+                    );
+                }
             }
         }
     }
 
     #[test]
     fn strips_are_perimeter_only() {
-        let (w, h, r) = (1920_u32, 1080_u32, 24_u32);
-        let pixels: u64 = outline_strips(w, h, r, 0x00ff_ffff, 127)
+        let (w, h, r) = (1920_u32, 1080_u32, 12_u32);
+        let pixels: u64 = outline_strips(w, h, r, 1, 0x00ff_ffff, 127)
             .iter()
             .map(|(_, _, sw, sh, _)| u64::from(*sw) * u64::from(*sh))
             .sum();
@@ -211,20 +245,57 @@ mod tests {
         );
     }
 
+    /// `thickness` is the band width: 1 covers one outer pixel row/column, 2 covers two.
     #[test]
-    fn ring_is_mirror_symmetric_on_both_axes() {
-        let (w, h, r) = (90_u32, 50_u32, 16_u32);
+    fn thickness_two_draws_a_two_pixel_band() {
+        let (w, h, r) = (120_u32, 80_u32, 12_u32);
+        let alpha_at = |thickness: u32, x: u32, y: u32| {
+            let full = outline_rgba(w, h, r, thickness, 0x00ff_ffff, 255);
+            full[(y as usize * w as usize + x as usize) * 4 + 3]
+        };
+        // Left edge, away from the corner arcs.
+        assert_eq!((alpha_at(1, 0, 40), alpha_at(1, 1, 40)), (255, 0));
+        assert_eq!((alpha_at(2, 0, 40), alpha_at(2, 1, 40)), (255, 255));
+        assert_eq!(alpha_at(2, 2, 40), 0, "the band is exactly two pixels wide");
+        // Bottom edge.
+        assert_eq!((alpha_at(1, 60, h - 1), alpha_at(1, 60, h - 2)), (255, 0));
+        assert_eq!((alpha_at(2, 60, h - 1), alpha_at(2, 60, h - 2)), (255, 255));
+        assert_eq!(alpha_at(2, 60, h - 3), 0);
+        // Top edge and the band on the straight middle rows.
+        assert_eq!((alpha_at(2, 60, 0), alpha_at(2, 60, 1)), (255, 255));
+        assert_eq!(alpha_at(2, 60, 2), 0);
+    }
+
+    #[test]
+    fn zero_thickness_draws_nothing() {
+        let (w, h, r) = (120_u32, 80_u32, 12_u32);
+        assert!(
+            outline_rgba(w, h, r, 0, 0x00ff_ffff, 255)
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        assert!(outline_strips(w, h, r, 0, 0x00ff_ffff, 255).is_empty());
         for y in 0..h {
             for x in 0..w {
-                let coverage = ring_coverage(w, h, r, x, y);
+                assert_eq!(ring_coverage(w, h, r, 0, x, y), 0, "{x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn ring_is_mirror_symmetric_on_both_axes() {
+        let (w, h, r, t) = (90_u32, 50_u32, 16_u32, 2_u32);
+        for y in 0..h {
+            for x in 0..w {
+                let coverage = ring_coverage(w, h, r, t, x, y);
                 assert_eq!(
                     coverage,
-                    ring_coverage(w, h, r, w - 1 - x, y),
+                    ring_coverage(w, h, r, t, w - 1 - x, y),
                     "x {x} y {y}"
                 );
                 assert_eq!(
                     coverage,
-                    ring_coverage(w, h, r, x, h - 1 - y),
+                    ring_coverage(w, h, r, t, x, h - 1 - y),
                     "x {x} y {y}"
                 );
             }
@@ -233,8 +304,8 @@ mod tests {
 
     #[test]
     fn straight_edges_are_exactly_the_alpha() {
-        let (w, h, r, alpha) = (120_u32, 80_u32, 24_u32, 127_u8);
-        let full = outline_rgba(w, h, r, 0x0011_2233, alpha);
+        let (w, h, r, alpha) = (120_u32, 80_u32, 12_u32, 127_u8);
+        let full = outline_rgba(w, h, r, 1, 0x0011_2233, alpha);
         let pixel = |x: u32, y: u32| {
             let at = (y as usize * w as usize + x as usize) * 4;
             &full[at..at + 4]
@@ -250,29 +321,39 @@ mod tests {
     fn radius_zero_and_one_are_rectangular_borders() {
         let (w, h) = (40_u32, 24_u32);
         assert_eq!(
-            outline_rgba(w, h, 0, 0x00ff_ffff, 255),
-            outline_rgba(w, h, 1, 0x00ff_ffff, 255)
+            outline_rgba(w, h, 0, 1, 0x00ff_ffff, 255),
+            outline_rgba(w, h, 1, 1, 0x00ff_ffff, 255)
         );
         for y in 0..h {
             for x in 0..w {
                 let border = x == 0 || y == 0 || x + 1 == w || y + 1 == h;
                 let expected = if border { 255 } else { 0 };
                 assert_eq!(
-                    ring_coverage(w, h, 0, x, y),
+                    ring_coverage(w, h, 0, 1, x, y),
                     expected,
                     "radius 0 at {x},{y}"
                 );
             }
         }
+        // A thicker rectangular border keeps its full width at every edge.
+        for (x, y) in [(0, 12), (1, 12), (39, 12), (38, 12), (12, 0), (12, 1)] {
+            assert_eq!(ring_coverage(w, h, 1, 2, x, y), 255, "{x},{y}");
+        }
+        assert_eq!(ring_coverage(w, h, 1, 2, 2, 12), 0);
+        assert_eq!(ring_coverage(w, h, 1, 2, 12, 2), 0);
     }
 
     #[test]
     fn corner_arc_has_an_outside_pixel_and_a_partial_pixel() {
-        let (w, h, r) = (120_u32, 80_u32, 24_u32);
-        assert_eq!(ring_coverage(w, h, r, 0, 0), 0, "corner is outside the arc");
+        let (w, h, r) = (120_u32, 80_u32, 12_u32);
+        assert_eq!(
+            ring_coverage(w, h, r, 1, 0, 0),
+            0,
+            "corner is outside the arc"
+        );
         let partial: Vec<u8> = (0..r)
             .flat_map(|y| (0..r).map(move |x| (x, y)))
-            .map(|(x, y)| ring_coverage(w, h, r, x, y))
+            .map(|(x, y)| ring_coverage(w, h, r, 1, x, y))
             .filter(|coverage| *coverage > 0 && *coverage < 255)
             .collect();
         assert!(
@@ -284,33 +365,36 @@ mod tests {
 
     #[test]
     fn alpha_zero_renders_nothing() {
-        let (w, h, r) = (120_u32, 80_u32, 24_u32);
+        let (w, h, r) = (120_u32, 80_u32, 12_u32);
         assert!(
-            outline_rgba(w, h, r, 0x00ff_ffff, 0)
+            outline_rgba(w, h, r, 1, 0x00ff_ffff, 0)
                 .iter()
                 .all(|byte| *byte == 0)
         );
-        assert!(outline_strips(w, h, r, 0x00ff_ffff, 0).is_empty());
+        assert!(outline_strips(w, h, r, 1, 0x00ff_ffff, 0).is_empty());
     }
 
     #[test]
-    fn radius_is_clamped_on_tiny_rects() {
+    fn radius_and_thickness_are_clamped_on_tiny_rects() {
         for (w, h) in [(1_u32, 1_u32), (2, 7), (3, 3), (9, 4)] {
             for radius in [0_u32, 1, 2, 50, u32::MAX] {
-                let clamped = radius.min(w.min(h) / 2);
-                for y in 0..h {
-                    for x in 0..w {
-                        assert_eq!(
-                            ring_coverage(w, h, radius, x, y),
-                            ring_coverage(w, h, clamped, x, y),
-                            "{w}x{h} r{radius} at {x},{y}"
-                        );
+                for thickness in [0_u32, 1, 2, 50, u32::MAX] {
+                    let clamped = radius.min(w.min(h) / 2);
+                    let band = thickness.min(w.min(h) / 2);
+                    for y in 0..h {
+                        for x in 0..w {
+                            assert_eq!(
+                                ring_coverage(w, h, radius, thickness, x, y),
+                                ring_coverage(w, h, clamped, band, x, y),
+                                "{w}x{h} r{radius} t{thickness} at {x},{y}"
+                            );
+                        }
                     }
+                    assert_eq!(
+                        outline_rgba(w, h, radius, thickness, 0x00ff_ffff, 255).len(),
+                        (w * h * 4) as usize
+                    );
                 }
-                assert_eq!(
-                    outline_rgba(w, h, radius, 0x00ff_ffff, 255).len(),
-                    (w * h * 4) as usize
-                );
             }
         }
     }
@@ -324,7 +408,7 @@ mod tests {
             (80, 3, 2),
             (3, 80, 2),
         ] {
-            for (x, y, sw, sh, rgba) in outline_strips(w, h, r, 0x00ff_ffff, 255) {
+            for (x, y, sw, sh, rgba) in outline_strips(w, h, r, 2, 0x00ff_ffff, 255) {
                 assert!(sw > 0 && sh > 0);
                 assert!(
                     x + sw <= w && y + sh <= h,
@@ -333,8 +417,8 @@ mod tests {
                 assert_eq!(rgba.len(), (sw * sh * 4) as usize);
             }
             assert_eq!(
-                reconstruct(w, h, r, 0x00ff_ffff, 255),
-                outline_rgba(w, h, r, 0x00ff_ffff, 255)
+                reconstruct(w, h, r, 2, 0x00ff_ffff, 255),
+                outline_rgba(w, h, r, 2, 0x00ff_ffff, 255)
             );
         }
     }

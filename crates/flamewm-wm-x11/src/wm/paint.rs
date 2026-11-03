@@ -1,4 +1,5 @@
 use super::*;
+use flamewm_skin::recipes::decoration::ChromeTokens;
 use x11rb::protocol::xproto::ImageFormat;
 
 /// Titlebar repaint cadence during an interactive move (about 60 Hz). The frame still follows
@@ -97,11 +98,7 @@ impl<C: Connection> Wm<'_, C> {
         }
         let clients: Vec<Window> = self.clients.keys().copied().collect();
         for client in clients {
-            let Some((frame, outer, floating)) = self
-                .clients
-                .get(&client)
-                .map(|state| (state.frame, state.outer, state.has_rounded_frame()))
-            else {
+            let Some(frame) = self.clients.get(&client).map(|state| state.frame) else {
                 continue;
             };
             self.conn.change_window_attributes(
@@ -109,9 +106,10 @@ impl<C: Connection> Wm<'_, C> {
                 &ChangeWindowAttributesAux::new()
                     .border_pixel(crate::chrome::frame_border_pixel(&tokens)),
             )?;
-            // The ring host decides the client mask: settle it before reshaping.
+            // The ring host decides the client mask and the client inset: settle it before
+            // re-placing the client, because a changed outline width moves the client window edge.
             self.refresh_outline_overlay(client);
-            self.clear_frame_shape(frame, outer, floating)?;
+            self.apply_frame_geometry(client)?;
             self.paint_chrome(client)?;
         }
         if let Some(renderer) = self.renderer.as_ref() {
@@ -197,7 +195,7 @@ impl<C: Connection> Wm<'_, C> {
                         maximized: state.is_maximized(),
                         fullscreen: state.is_fullscreen(),
                         floating: state.has_rounded_frame(),
-                        tokens: self.decoration_tokens,
+                        tokens: self.outline_tokens(),
                     },
                     chrome_runtime::ChromeIdentity {
                         title: state.title.clone(),
@@ -251,16 +249,48 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
+    /// INTERNAL: dev-only live outline tuning; remove or keep behind the env gate.
+    ///
+    /// Re-applies a changed `FLAMEWM_OUTLINE_TUNE` file to every managed frame: the scene cache is
+    /// dropped (the radius is not a settings token), the shape is forced (a radius change must
+    /// re-shape the frame and the client, not just repaint) and the chrome is repainted. Costs one
+    /// env lookup per tick and nothing else when the variable is unset.
+    pub(super) fn poll_outline_tune(&mut self) -> Result<(), ReplyError> {
+        if crate::outline_tune::poll().is_none() {
+            return Ok(());
+        }
+        let clients: Vec<Window> = self.clients.keys().copied().collect();
+        for client in clients {
+            if let Some(state) = self.clients.get_mut(&client) {
+                state.shaped = None;
+            } else {
+                continue;
+            }
+            self.chrome_runtimes.entry(client).or_default().invalidate();
+            self.refresh_outline_overlay(client);
+            // A tuned width moves the client window edge as well as the ring band.
+            self.apply_frame_geometry(client)?;
+            self.paint_chrome(client)?;
+        }
+        if let Some(renderer) = self.renderer.as_ref() {
+            renderer.borrow().flush();
+        }
+        Ok(())
+    }
+
     /// The client's own edge pixels, read back so the outline ring composites over the colour the
-    /// window actually drew. The band itself is masked out of the client (`ring` inset), so its
-    /// pixels are never painted: the sample is the client's outermost *visible* pixel, one inside
-    /// the band, which is the colour the eye reads at that edge. `None` when the client cannot be
-    /// read (unmapped, obscured, or a driver that refuses GetImage); the ring then falls back to
-    /// the frame's material.
+    /// window actually drew. The client window is placed inside the ring band, so its outermost
+    /// painted column/row is its own first/last pixel. `None` when the client cannot be read
+    /// (unmapped, obscured, or a driver that refuses GetImage); the ring then falls back to the
+    /// frame's material.
     fn client_edge_pixels(&self, client: Window) -> Option<crate::frame::chrome::ClientEdges> {
         let state = self.clients.get(&client)?;
-        let (width, height) =
-            crate::frame::geometry_shape::client_area_size(state.outer, self.titlebar_height());
+        let band = u16::try_from(self.extents_for(client).inset).unwrap_or(0);
+        let (width, height) = crate::frame::geometry_shape::client_area_size(
+            state.outer,
+            self.titlebar_height(),
+            band,
+        );
         if width == 0 || height == 0 {
             return None;
         }
@@ -300,28 +330,42 @@ impl<C: Connection> Wm<'_, C> {
             Some(bgrx_to_rgb(&reply.data))
         };
         Some(crate::frame::chrome::ClientEdges {
-            left: column(1)?,
-            right: column(u16::try_from(width.saturating_sub(2)).ok()?)?,
-            bottom: row(u16::try_from(height.saturating_sub(2)).ok()?)?,
+            left: column(0)?,
+            right: column(u16::try_from(width.saturating_sub(1)).ok()?)?,
+            bottom: row(u16::try_from(height.saturating_sub(1)).ok()?)?,
         })
     }
 
-    /// Ring parameters for a client's frame: `(physical radius, rgb, alpha)`, or `None` when the
-    /// client has no server frame.
-    fn outline_spec(&self, client: Window) -> Option<(u32, u32, u8)> {
+    /// Chrome tokens for the outline: the settings-derived tokens with the INTERNAL live tune
+    /// applied. One owner, so the frame band, the shape and the overlay see the same numbers.
+    ///
+    /// INTERNAL: dev-only live outline tuning; remove or keep behind the env gate.
+    pub(super) fn outline_tokens(&self) -> ChromeTokens {
+        let tune = crate::outline_tune::current();
+        let mut tokens = self.decoration_tokens;
+        tokens.surface_border_alpha = tune.alpha.unwrap_or(tokens.surface_border_alpha);
+        tokens.surface_border_width = tune.width.unwrap_or(tokens.surface_border_width);
+        tokens
+    }
+
+    /// Ring parameters for a client's frame: `(physical radius, rgb, alpha, width)`, or `None`
+    /// when the client has no server frame. The radius already carries the live tune.
+    fn outline_spec(&self, client: Window) -> Option<(u32, u32, u8, u32)> {
         let state = self.clients.get(&client)?;
         if state.decoration != Decoration::Server {
             return None;
         }
+        let tokens = self.outline_tokens();
         let radius = u32::from(crate::frame::geometry_shape::scaled_corner_radius(
             state.has_rounded_frame(),
-            self.decoration_tokens.style,
+            tokens.style,
             self.titlebar_height(),
         ));
         Some((
             radius,
-            self.decoration_tokens.surface_border_rgb.0,
-            self.decoration_tokens.surface_border_alpha,
+            tokens.surface_border_rgb.0,
+            tokens.surface_border_alpha,
+            tokens.surface_border_width,
         ))
     }
 
@@ -332,7 +376,7 @@ impl<C: Connection> Wm<'_, C> {
         let wanted = self.outline_overlay_available
             && self
                 .outline_spec(client)
-                .is_some_and(|(_, _, alpha)| outline_overlay_wanted(alpha));
+                .is_some_and(|(_, _, alpha, _)| outline_overlay_wanted(alpha));
         if !wanted {
             self.outline_overlays.remove(&client);
             return;
@@ -373,15 +417,16 @@ impl<C: Connection> Wm<'_, C> {
             return;
         }
         self.refresh_outline_overlay(client);
-        let Some((radius, rgb, alpha)) = self.outline_spec(client) else {
+        let Some((radius, rgb, alpha, thickness)) = self.outline_spec(client) else {
             return;
         };
         let Some(state) = self.clients.get(&client) else {
             return;
         };
         let (width, height) = (state.outer.width.max(1), state.outer.height.max(1));
-        let strips =
-            flamewm_render_core::outline::outline_strips(width, height, radius, rgb, alpha);
+        let strips = flamewm_render_core::outline::outline_strips(
+            width, height, radius, thickness, rgb, alpha,
+        );
         let Some(overlay) = self.outline_overlays.get_mut(&client) else {
             return;
         };

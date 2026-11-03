@@ -378,6 +378,14 @@ fn taskbar_and_screensaver_actions_parse_to_their_exact_typed_targets() {
         Ok(SettingsAction::PercentStep("surfaceBorderOpacity", -1))
     );
     assert_action!(
+        "settings.window-outline-opacity.up",
+        Ok(SettingsAction::PercentStep("windowOutlineOpacity", 1))
+    );
+    assert_action!(
+        "settings.window-outline-opacity.down",
+        Ok(SettingsAction::PercentStep("windowOutlineOpacity", -1))
+    );
+    assert_action!(
         "settings.surface-blur.up",
         Ok(SettingsAction::PercentStep("surfaceBlurPercent", 1))
     );
@@ -408,6 +416,15 @@ fn taskbar_and_screensaver_actions_parse_to_their_exact_typed_targets() {
             delta: -1,
             minimum: 0,
             maximum: 32
+        })
+    );
+    assert_action!(
+        "settings.window-outline-width.up",
+        Ok(SettingsAction::IntegerStep {
+            key: "windowOutlineWidth",
+            delta: 1,
+            minimum: 1,
+            maximum: 4
         })
     );
     assert_action!(

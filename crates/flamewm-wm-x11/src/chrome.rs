@@ -896,6 +896,7 @@ pub fn frame_border_pixel(tokens: &ChromeTokens) -> u32 {
         flamewm_ui_core::surface::SurfaceFill {
             rgb: tokens.surface_border_rgb.0,
             alpha: tokens.surface_border_alpha,
+            width: 1,
         },
     )
 }
@@ -929,14 +930,13 @@ pub fn live_chrome_tokens() -> ChromeTokens {
         .unwrap_or_default()
 }
 
-/// Titlebar fill from the shared Surfaces settings: `surfaceColor` RGB and
-/// `surfaceOpacity` percent as 0..=255 alpha (`percent * 255 / 100`, same mapping as
-/// the desktop menu Surfaces fill). Malformed colour falls back to the skin default;
-/// `surfaceBlurPercent` is the third element (applied by `frame::titlebar_backdrop`).
+/// Titlebar fill from the shared Surfaces settings: the blurred backdrop with no colour overlay.
+/// `surfaceColor` belongs to taskbar, menus and popups. `surfaceBlurPercent` is the third element
+/// (applied by `frame::titlebar_backdrop`).
 fn surface_tokens(snapshot: &SettingsSnapshot) -> (Rgb, u8, u8) {
     // Titlebars take the shared glass material: glassOpacityPercent alpha, the regular glass blur,
     // and an opaque solid under reduceTransparency (blur 0).
-    let fill = flamewm_ui_core::surface::surface_fill(snapshot);
+    let fill = flamewm_ui_core::surface::titlebar_fill(snapshot);
     (
         Rgb(fill.rgb),
         fill.alpha,
@@ -975,6 +975,7 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
         style,
         surface_border_rgb: Rgb(stroke.rgb),
         surface_border_alpha: stroke.alpha,
+        surface_border_width: stroke.width,
         titlebar_bg,
         titlebar_alpha,
         titlebar_blur_percent,

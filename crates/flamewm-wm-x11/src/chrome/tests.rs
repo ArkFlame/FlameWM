@@ -111,8 +111,12 @@ fn settings_map_to_skin_tokens_and_bad_values_fall_back() {
     put(&mut snapshot, "titlebarButtonStyle", text("square"));
     let tokens = chrome_tokens_from_settings(&snapshot);
     assert_eq!(tokens.style, DecorationStyle::Squared);
-    assert_eq!(tokens.titlebar_bg, Rgb(0x0020_2326));
-    assert_eq!(tokens.titlebar_alpha, 128);
+    assert_eq!(
+        (tokens.titlebar_bg, tokens.titlebar_alpha),
+        (Rgb(0), 0),
+        "surfaceColor and surfaceOpacity never tint the titlebar"
+    );
+    assert_eq!(tokens.surface_border_width, 1, "default outline width");
     assert!(
         tokens
             .buttons
@@ -132,22 +136,32 @@ fn settings_map_to_skin_tokens_and_bad_values_fall_back() {
 }
 
 #[test]
-fn surface_opacity_maps_to_titlebar_alpha() {
+fn surface_opacity_never_reaches_the_titlebar() {
     let mut snapshot = SettingsSnapshot::new(1);
-    let mut alpha = |percent: u8| {
+    put(
+        &mut snapshot,
+        "surfaceColor",
+        SettingValue::Text("#333333".to_owned()),
+    );
+    for percent in [0, 50, 100] {
         put(
             &mut snapshot,
             "surfaceOpacity",
             SettingValue::Percent(percent),
         );
-        chrome_tokens_from_settings(&snapshot).titlebar_alpha
-    };
-    assert_eq!(alpha(0), 0);
-    assert_eq!(alpha(50), 128);
-    assert_eq!(alpha(100), 255);
-    snapshot.values.remove("surfaceOpacity");
-    // Absent glass key: the regular glass default (12%) is 31.
-    assert_eq!(chrome_tokens_from_settings(&snapshot).titlebar_alpha, 31);
+        assert_eq!(
+            chrome_tokens_from_settings(&snapshot).titlebar_alpha,
+            0,
+            "surfaceOpacity={percent} is the taskbar/menu tint, not the titlebar"
+        );
+    }
+}
+
+/// No user `surfaceColor`: the titlebar material has no tint over the blurred backdrop.
+#[test]
+fn an_unset_surface_color_leaves_the_titlebar_untinted() {
+    let tokens = chrome_tokens_from_settings(&SettingsSnapshot::new(1));
+    assert_eq!((tokens.titlebar_bg, tokens.titlebar_alpha), (Rgb(0), 0));
 }
 
 #[test]
@@ -155,15 +169,20 @@ fn titlebar_color_setting_is_ignored() {
     let mut snapshot = SettingsSnapshot::new(1);
     put(
         &mut snapshot,
+        "surfaceColor",
+        SettingValue::Text("#333333".to_owned()),
+    );
+    put(
+        &mut snapshot,
         "titlebarColor",
         SettingValue::Text("#202326".to_owned()),
     );
     let tokens = chrome_tokens_from_settings(&snapshot);
     assert_eq!(
-        tokens.titlebar_bg,
-        Rgb(flamewm_ui_core::glass::DARK.tint_rgb)
+        (tokens.titlebar_bg, tokens.titlebar_alpha),
+        (Rgb(0), 0),
+        "neither titlebarColor nor surfaceColor paints the titlebar"
     );
-    assert_eq!(tokens.titlebar_alpha, 31);
 }
 
 #[test]
@@ -435,7 +454,7 @@ fn policy_uses_skin_controls_and_rectangular_maximized() {
         ControlPolicy::for_state(false, false).roles[1],
         ControlRole::Maximize
     );
-    assert_eq!(corner_radius(true, DecorationStyle::Rounded), 24);
+    assert_eq!(corner_radius(true, DecorationStyle::Rounded), 12);
     assert_eq!(corner_radius(false, DecorationStyle::Rounded), 0);
 }
 

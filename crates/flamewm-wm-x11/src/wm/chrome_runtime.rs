@@ -58,6 +58,12 @@ impl ChromeRuntime {
         Self::default()
     }
 
+    /// Forces the next `scene_for` to rebuild the scene. Used when an input the state comparison
+    /// does not carry changed (INTERNAL live outline tuning radius).
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
     /// Rebuild (when dirty) and return the cached scene for these inputs.
     /// `icon` is the already-cached raster; no lookup or decode happens here.
     pub fn scene_for(
@@ -165,7 +171,7 @@ mod tests {
         let next = runtime.scene_for(&identity(), scaled, None);
         assert_ne!(first, *next);
         assert_eq!(next.titlebar_height, 62);
-        assert_eq!(next.radius, 48);
+        assert_eq!(next.radius, 24);
         assert!(next.title_size_px > first.title_size_px);
     }
 

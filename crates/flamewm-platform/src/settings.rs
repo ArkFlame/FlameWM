@@ -256,6 +256,8 @@ pub struct ProductSettings {
     pub window_outline_color: String,
     /// `windowOutlineOpacity` percent (0..=100); the default is half opacity.
     pub window_outline_opacity: u8,
+    /// `windowOutlineWidth` in px (1..=4); the default is the working one-pixel band.
+    pub window_outline_width: u16,
     /// `outlines`: when false, no surface contour is drawn and the outline settings are hidden.
     pub outlines: bool,
     /// `surfaceSaturationPercent` (0..=200): backdrop saturation, 100 is identity.
@@ -400,6 +402,7 @@ impl Default for ProductSettings {
             surface_border_opacity: 25,
             window_outline_color: "#FFFFFF".to_owned(),
             window_outline_opacity: 50,
+            window_outline_width: 1,
             outlines: true,
             surface_saturation_percent: 165,
             reduce_transparency: false,
@@ -516,6 +519,9 @@ impl ProductSettings {
         validate_color(&self.window_outline_color, false, "windowOutlineColor")?;
         if self.window_outline_opacity > 100 {
             return invalid("windowOutlineOpacity must be 0..100");
+        }
+        if !(1..=4).contains(&self.window_outline_width) {
+            return invalid("windowOutlineWidth must be 1..4");
         }
         if self.surface_border_opacity > 100 {
             return invalid("surfaceBorderOpacity must be 0..100");
@@ -1150,6 +1156,7 @@ stable_settings! {
     (false, taskbar, "outlines", outlines),
     (false, taskbar, "windowOutlineColor", window_outline_color),
     (false, taskbar, "windowOutlineOpacity", window_outline_opacity),
+    (false, taskbar, "windowOutlineWidth", window_outline_width),
     (false, taskbar, "surfaceSaturationPercent", surface_saturation_percent),
     (false, glass, "reduceTransparency", reduce_transparency),
     (false, glass, "glassOpacityPercent", glass_opacity_percent),

@@ -69,18 +69,19 @@ pub struct Decorations {
     /// Rounded-client clip program, compiled on first use. `Some(Err(()))` records the already
     /// logged failure so a broken shader is not recompiled for every frame or window.
     clip: Option<Result<GlesTexProgram, ()>>,
-    /// Resolved `windowOutlineColor` / `windowOutlineOpacity` / `outlines`, pushed from the shared
-    /// settings owner. `None` until the first settings sync draws nothing.
+    /// Resolved `windowOutlineColor` / `windowOutlineOpacity` / `windowOutlineWidth` / `outlines`,
+    /// pushed from the shared settings owner. `None` until the first settings sync draws nothing.
     outline: Option<OutlinePaint>,
     /// Ring strips per managed window from the shared rasteriser, rebuilt only on input change.
     rings: HashMap<WindowId, OutlineRing>,
 }
 
-/// Resolved window outline colour and opacity.
+/// Resolved window outline colour, opacity and band width.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct OutlinePaint {
     rgb: u32,
     alpha: u8,
+    width: u32,
 }
 
 /// One uploaded ring strip: offset from the frame origin, size in pixels, and its buffer.
@@ -297,8 +298,8 @@ impl Decorations {
 
     /// Records the resolved outline settings. Returns whether the value changed, so the caller
     /// only requests a redraw for a real settings change.
-    pub fn set_outline(&mut self, rgb: u32, alpha: u8) -> bool {
-        let paint = OutlinePaint { rgb, alpha };
+    pub fn set_outline(&mut self, rgb: u32, alpha: u8, width: u32) -> bool {
+        let paint = OutlinePaint { rgb, alpha, width };
         if self.outline == Some(paint) {
             return false;
         }
@@ -313,7 +314,12 @@ impl Decorations {
     fn ring_strips(&mut self, window: WindowId, frame: Rect, radius: u8) -> Option<&OutlineRing> {
         let paint = self.outline?;
         // GL texture bound, the same one the titlebar buffer is limited to.
-        if paint.alpha == 0 || frame.w <= 0 || frame.h <= 0 || frame.w > 32_767 || frame.h > 32_767
+        if paint.alpha == 0
+            || paint.width == 0
+            || frame.w <= 0
+            || frame.h <= 0
+            || frame.w > 32_767
+            || frame.h > 32_767
         {
             return None;
         }
@@ -326,21 +332,28 @@ impl Decorations {
             .is_none_or(|ring| !ring.matches(origin, size, radius, paint));
         if stale {
             let builds = self.rings.get(&window).map_or(0, |ring| ring.builds) + 1;
-            let strips = outline::outline_strips(size.0, size.1, radius, paint.rgb, paint.alpha)
-                .into_iter()
-                .map(|(x, y, w, h, rgba)| OutlineStrip {
-                    offset: (x as i32, y as i32),
-                    size: (w as i32, h as i32),
-                    buffer: MemoryRenderBuffer::from_slice(
-                        &premultiplied_argb_bytes(&rgba),
-                        Fourcc::Argb8888,
-                        (w as i32, h as i32),
-                        1,
-                        Transform::Normal,
-                        None,
-                    ),
-                })
-                .collect();
+            let strips = outline::outline_strips(
+                size.0,
+                size.1,
+                radius,
+                paint.width,
+                paint.rgb,
+                paint.alpha,
+            )
+            .into_iter()
+            .map(|(x, y, w, h, rgba)| OutlineStrip {
+                offset: (x as i32, y as i32),
+                size: (w as i32, h as i32),
+                buffer: MemoryRenderBuffer::from_slice(
+                    &premultiplied_argb_bytes(&rgba),
+                    Fourcc::Argb8888,
+                    (w as i32, h as i32),
+                    1,
+                    Transform::Normal,
+                    None,
+                ),
+            })
+            .collect();
             self.rings.insert(
                 window,
                 OutlineRing {
@@ -1177,7 +1190,7 @@ mod decoration_tests {
     fn titlebar_corner_radius_is_system_radius_clamped_and_square_when_maximized() {
         assert_eq!(
             titlebar_corner_radius(false, 200, 31),
-            24,
+            12,
             "system Rounded radius"
         );
         assert_eq!(
@@ -1198,13 +1211,13 @@ mod decoration_tests {
         let pixels = chrome_pixels(200, true, false, None, "Terminal");
         let alpha = |x: usize, y: usize| pixels[(y * 200 + x) * 4 + 3];
         assert_eq!(alpha(0, 0), 0, "outer corner pixel is outside the arc");
-        let partial = (0..24).any(|y| {
-            (0..24).any(|x| {
+        let partial = (0..12).any(|y| {
+            (0..12).any(|x| {
                 let a = alpha(x, y);
                 a > 0 && a < SURFACE_ALPHA
             })
         });
-        assert!(partial, "the 24px arc has partially covered pixels");
+        assert!(partial, "the 12px arc has partially covered pixels");
         assert_eq!(
             alpha(24, 1),
             SURFACE_ALPHA,
@@ -1220,17 +1233,17 @@ mod decoration_tests {
             |mode: Mode| client_corner_radii_for(mode, true, 300, 200, DecorationStyle::Rounded);
         assert_eq!(
             deco(Mode::Normal),
-            [0, 0, 24, 24],
+            [0, 0, 12, 12],
             "band is straight on top"
         );
         assert_eq!(
             client_corner_radii_for(Mode::Normal, false, 300, 200, DecorationStyle::Rounded),
-            [24; 4],
+            [12; 4],
             "without the band the client carries both arcs"
         );
         assert_eq!(
             deco(Mode::Snapped(flamewm_window_core::SnapTarget::LeftHalf)),
-            [0, 0, 24, 24],
+            [0, 0, 12, 12],
             "snapped windows are rounded like floating ones"
         );
         for mode in [Mode::Maximized, Mode::Fullscreen] {
@@ -1249,12 +1262,17 @@ mod decoration_tests {
     fn client_corner_radii_clamp_to_the_short_side() {
         assert_eq!(
             client_corner_radii_for(Mode::Normal, false, 40, 400, DecorationStyle::Rounded),
-            [20; 4],
+            [12; 4],
+            "a 40px side still fits the skin radius"
+        );
+        assert_eq!(
+            client_corner_radii_for(Mode::Normal, false, 16, 400, DecorationStyle::Rounded),
+            [8; 4],
             "four arcs need half the short side each"
         );
         assert_eq!(
-            client_corner_radii_for(Mode::Normal, true, 40, 400, DecorationStyle::Rounded),
-            [0, 0, 24, 24],
+            client_corner_radii_for(Mode::Normal, true, 16, 400, DecorationStyle::Rounded),
+            [0, 0, 12, 12],
             "a banded client fits the bottom pair in the full short side"
         );
         assert_eq!(
@@ -1299,9 +1317,9 @@ mod decoration_tests {
             let window = model.get(1).expect("window");
             client_corner_radii(window, window.titlebars)
         };
-        assert_eq!(radii(&model), [0, 0, 24, 24], "decorated: bottom corners");
+        assert_eq!(radii(&model), [0, 0, 12, 12], "decorated: bottom corners");
         model.configure(false, 0);
-        assert_eq!(radii(&model), [24; 4], "no band: all four corners");
+        assert_eq!(radii(&model), [12; 4], "no band: all four corners");
         model.configure(true, 0);
         model.maximize_to(1, work, Rect::new(10, 40, 300, 200));
         assert_eq!(radii(&model), [0; 4], "maximized is square");
@@ -1462,7 +1480,7 @@ mod outline_tests {
 
     fn decorated() -> Decorations {
         let mut decorations = Decorations::default();
-        assert!(decorations.set_outline(0x00ff_ffff, 127));
+        assert!(decorations.set_outline(0x00ff_ffff, 127, 1));
         decorations
     }
 
@@ -1479,13 +1497,16 @@ mod outline_tests {
                 .is_none(),
             "nothing is drawn before the first settings sync"
         );
-        assert!(decorations.set_outline(stroke.rgb, stroke.alpha));
+        assert!(decorations.set_outline(stroke.rgb, stroke.alpha, stroke.width));
         let ring = decorations
             .ring_strips(1, Rect::new(0, 0, 300, 200), 24)
             .expect("ring");
-        assert_eq!((ring.paint.rgb, ring.paint.alpha), (0x00ff_ffff, 127));
+        assert_eq!(
+            (ring.paint.rgb, ring.paint.alpha, ring.paint.width),
+            (0x00ff_ffff, 127, 1)
+        );
         assert!(
-            !decorations.set_outline(stroke.rgb, stroke.alpha),
+            !decorations.set_outline(stroke.rgb, stroke.alpha, stroke.width),
             "an unchanged snapshot must not request a redraw"
         );
     }
@@ -1499,14 +1520,14 @@ mod outline_tests {
         let stroke = flamewm_ui_core::surface::window_outline_stroke(&snapshot);
         assert_eq!(stroke.alpha, 0, "outlines off means no ring");
         let mut decorations = Decorations::default();
-        assert!(decorations.set_outline(stroke.rgb, stroke.alpha));
+        assert!(decorations.set_outline(stroke.rgb, stroke.alpha, stroke.width));
         assert!(
             decorations
                 .ring_strips(1, Rect::new(0, 0, 300, 200), 24)
                 .is_none()
         );
         // A zero `windowOutlineOpacity` is the same: no strips, so no elements.
-        decorations.set_outline(0x00ff_ffff, 0);
+        decorations.set_outline(0x00ff_ffff, 0, 1);
         assert!(
             decorations
                 .ring_strips(1, Rect::new(0, 0, 300, 200), 24)
@@ -1547,11 +1568,11 @@ mod outline_tests {
         let ring = decorations.ring_strips(1, resized, 12).expect("ring");
         assert_eq!((ring.radius, ring.builds), (12, 4), "a new radius rebuilds");
 
-        assert!(decorations.set_outline(0x0011_2233, 127));
+        assert!(decorations.set_outline(0x0011_2233, 127, 2));
         let ring = decorations.ring_strips(1, resized, 12).expect("ring");
         assert_eq!(
-            (ring.paint.rgb, ring.builds),
-            (0x0011_2233, 1),
+            (ring.paint.rgb, ring.paint.width, ring.builds),
+            (0x0011_2233, 2, 1),
             "new settings drop the cached strips"
         );
     }

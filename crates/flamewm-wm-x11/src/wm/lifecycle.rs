@@ -65,17 +65,17 @@ pub struct ChildPlacement {
     pub h: u32,
 }
 
-/// Client interior contract: local origin `(0, titlebar)`, size `(frame.w,
-/// frame.h - titlebar)`. Derived from [`frame_to_client_local`] only.
+/// Client interior contract: local origin `(inset, titlebar)`, size `(frame.w - 2 *
+/// inset, frame.h - titlebar - inset)`. Derived from [`frame_to_client_local`] only.
 #[must_use]
 pub fn client_interior(frame: RootRect, extents: FrameExtents) -> ClientLocalRect {
     frame_to_client_local(frame, extents)
 }
 
-/// Reparent offset of the client inside the frame: `(0, titlebar)`.
+/// Reparent offset of the client inside the frame: `(inset, titlebar)`.
 #[must_use]
 pub const fn reparent_offset(extents: FrameExtents) -> (i32, i32) {
-    (0, extents.titlebar_h)
+    (extents.inset, extents.titlebar_h)
 }
 
 /// Client configure payload `(x, y, w, h)` for the reparented client window.

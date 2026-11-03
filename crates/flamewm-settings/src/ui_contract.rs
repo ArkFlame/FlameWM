@@ -371,7 +371,13 @@ fn outlines_toggle_hides_the_outline_rows_when_it_is_off() {
         let app = application(snapshot, display_fixtures().remove(0));
         let mut document = StrictDocument::new();
         app.sync(&mut document).expect("sync on strict markup");
-        for row in ["outline-color-row", "outline-opacity-row"] {
+        for row in [
+            "outline-color-row",
+            "outline-opacity-row",
+            "window-outline-width-row",
+            "window-outline-color-row",
+            "window-outline-opacity-row",
+        ] {
             assert_eq!(
                 document.visible.get(row).copied(),
                 Some(expected),

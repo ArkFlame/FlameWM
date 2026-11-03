@@ -93,6 +93,8 @@ where
         let changes = wm.take_changes();
         wm.pump_transitions(std::time::Instant::now())?;
         wm.flush_deferred_chrome(std::time::Instant::now())?;
+        // INTERNAL: dev-only live outline tuning; remove or keep behind the env gate.
+        wm.poll_outline_tune()?;
         let wait = hook(&mut wm, &conn, screen_num, changes)?;
         drain_pumped_events(&mut wm, &mut pump, conn.as_ref())?;
         wm.commit_super_tap();

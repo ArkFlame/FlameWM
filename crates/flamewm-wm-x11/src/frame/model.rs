@@ -371,7 +371,7 @@ mod rounded_frame_tests {
             assert!(mode.rounded_frame(), "{mode:?}");
             assert_eq!(
                 corner_radius(mode.rounded_frame(), DecorationStyle::Rounded),
-                24
+                flamewm_skin::recipes::decoration::ROUNDED_RADIUS
             );
             assert_eq!(
                 corner_radius(mode.rounded_frame(), DecorationStyle::Squared),

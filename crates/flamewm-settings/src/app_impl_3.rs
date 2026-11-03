@@ -175,8 +175,15 @@ impl<T: ControlTransport> SettingsApplication<T> {
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
         let outlines = self.bool_setting("outlines");
-        document.visible("outline-color-row", outlines)?;
-        document.visible("outline-opacity-row", outlines)?;
+        for row in [
+            "outline-color-row",
+            "outline-opacity-row",
+            "window-outline-width-row",
+            "window-outline-color-row",
+            "window-outline-opacity-row",
+        ] {
+            document.visible(row, outlines)?;
+        }
         for (target, key) in COLOR_TARGETS {
             let Ok(value) = self.text_setting(key) else {
                 continue;
@@ -587,6 +594,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         if let Some(value) = percent("surfaceBorderOpacity") {
             document.text("surface-border-opacity-value", format!("{value}%"))?;
+        }
+        if let Some(value) = percent("windowOutlineOpacity") {
+            document.text("window-outline-opacity-value", format!("{value}%"))?;
         }
         if let Some(value) = text("customStartIcon") {
             document.text("start-icon-value", start_icon_label(&value))?;

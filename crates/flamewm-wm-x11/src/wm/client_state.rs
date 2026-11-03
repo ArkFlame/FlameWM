@@ -78,9 +78,12 @@ impl<C: Connection> Wm<'_, C> {
             .get(&client)
             .map_or(PlacementMode::Floating, |state| state.placement.mode);
         let extents = match self.clients.get(&client).map(|state| state.decoration) {
-            None | Some(Decoration::Server) => {
-                frame_extents_for_mode(mode, self.config.frame_border, self.titlebar_height())
-            }
+            None | Some(Decoration::Server) => frame_extents_for_mode(
+                mode,
+                self.config.frame_border,
+                self.titlebar_height(),
+                self.outline_band(),
+            ),
             Some(Decoration::ClientSide | Decoration::None) => [0; 4],
         };
         if !frame_extents_needs_publish(&self.frame_extents_published, client, extents) {
@@ -109,7 +112,7 @@ impl<C: Connection> Wm<'_, C> {
             state.outer.y,
             state.outer.width.max(1) as i32,
             state.outer.height.max(1) as i32,
-            self.extents(),
+            self.extents_for(client),
         );
         self.send_notify_event(
             client,
@@ -153,6 +156,13 @@ impl<C: Connection> Wm<'_, C> {
         floating: bool,
     ) -> Result<(), ReplyError> {
         use x11rb::protocol::shape::{SK as ShapeSk, SO as ShapeOp};
+        // One silhouette: whenever an outline is drawn the frame's bounding/clip regions and the
+        // client mask use the exact arc the ring rasterises on, so the server cannot clip the
+        // ring's outermost corner pixels. Only a frame with no outline keeps the +1 fallback mask.
+        // `outline_tokens` also carries the INTERNAL live tune, so a tuned width/alpha is part of
+        // the cache key and re-shapes on change.
+        let tokens = self.outline_tokens();
+        let outline = tokens.surface_border_alpha > 0 && tokens.surface_border_width > 0;
         // Every shape writer (ApplyShape, manage, decoration change) comes through
         // here, so this one check covers all emitters. Only the state of the
         // ManagedClient owning `frame` is consulted and updated.
@@ -161,29 +171,39 @@ impl<C: Connection> Wm<'_, C> {
             width: outer.width,
             height: outer.height,
             floating,
-            tokens: self.decoration_tokens,
+            tokens,
         };
         let owner = self.clients.values().find(|c| c.frame == frame);
         if owner.is_some_and(|c| c.shaped == Some(key)) {
             return Ok(());
         }
         let owner_client = owner.map(|c| c.client);
-        // The ring host decides the frame mask: an ARGB overlay child is clipped by the frame's
-        // bounding/clip regions, so the frame and the client must share the exact arc the ring
-        // covers. The fallback keeps the +1 mask that hides its stair-stepped edge.
-        let overlay_ring =
-            owner_client.is_some_and(|client| self.outline_overlays.contains_key(&client));
+        let server_decoration = owner.is_some_and(|c| c.decoration == Decoration::Server);
+        // One band owner: the extents carry the outline band the client window is placed inside,
+        // so the frame band path needs no extra reserve in the mask. A compositing-manager overlay
+        // draws over the client's own pixels instead (client keeps its full rect), and a
+        // client-side frame *is* the client rect, so only the latter still reserves the band
+        // inside its own mask.
+        let band = owner_client.map_or(0, |client| {
+            u16::try_from(self.extents_for(client).inset).unwrap_or(0)
+        });
+        let overlay_ring = server_decoration && self.outline_overlay_available && outline;
+        let ring = if band > 0 || overlay_ring || !outline {
+            0
+        } else {
+            tokens.surface_border_width
+        };
         let radius = u32::from(crate::frame::geometry_shape::scaled_corner_radius(
             floating,
-            self.decoration_tokens.style,
+            tokens.style,
             self.titlebar_height(),
         ));
         let rects = crate::frame::geometry_shape::bounding_rectangles_with_titlebar(
             outer,
             floating,
-            self.decoration_tokens.style,
+            tokens.style,
             self.titlebar_height(),
-            overlay_ring,
+            outline,
         );
         self.conn.shape_rectangles(
             ShapeOp::SET,
@@ -215,10 +235,12 @@ impl<C: Connection> Wm<'_, C> {
         let Some(client) = owner_client else {
             return Ok(());
         };
-        // The client spans the whole frame width below the titlebar (the border never inflates
-        // the client area). A shape any narrower leaves the frame's background visible at the edge.
+        // The client window is placed `band` px inside the frame (left, right and bottom), so the
+        // ring band is geometrically outside it and no client shape can cover it. `ring` is the
+        // band still inside the client rect (client-side frame only); both are 0 when a
+        // compositing-manager overlay composites the ring over the client's own pixels.
         let titlebar_h = self.titlebar_height();
-        let (cw, ch) = crate::frame::geometry_shape::client_area_size(outer, titlebar_h);
+        let (cw, ch) = crate::frame::geometry_shape::client_area_size(outer, titlebar_h, band);
         // Reset to the full client rect first: intersecting with the previous mask can only
         // shrink, so a grown frame would keep the old, smaller client shape. Also used to
         // restore an unshaped client below.
@@ -228,11 +250,6 @@ impl<C: Connection> Wm<'_, C> {
             width: cw.min(u32::from(u16::MAX)) as u16,
             height: ch.min(u32::from(u16::MAX)) as u16,
         }];
-        // The outline ring needs the frame's outermost pixel only when it is painted into the
-        // frame. A compositing-manager overlay draws over the client's own pixels, so the client
-        // then keeps its full rect and its corner rows use the exact arc (no extra inset); the
-        // blended ring lands on the client's pixels instead of the frame's dark background.
-        let ring = u32::from(self.decoration_tokens.surface_border_alpha > 0 && !overlay_ring);
         if (radius > 0 || ring > 0) && cw > 0 && ch > 0 {
             // Sampled from the frame's own mask so the bottom arcs coincide instead of drifting
             // one row above them. `titlebar_h == 0` also rounds the client's top corners.
@@ -241,8 +258,9 @@ impl<C: Connection> Wm<'_, C> {
                 outer.height,
                 titlebar_h,
                 radius,
+                u32::from(band),
                 ring,
-                overlay_ring,
+                outline,
             );
             self.conn.shape_rectangles(
                 ShapeOp::SET,

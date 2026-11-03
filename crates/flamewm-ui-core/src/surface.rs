@@ -9,10 +9,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
 /// Shared Surfaces fill for desktop menus: `surfaceColor` RGB with the `surfaceOpacity` alpha.
+///
+/// `width` is the band thickness of a contour (`windowOutlineWidth`); fills that have no stroke
+/// carry `1`, the shared hairline width, and ignore it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SurfaceFill {
     pub rgb: u32,
     pub alpha: u8,
+    pub width: u32,
 }
 
 const DEFAULT_SURFACE_RIM_PERCENT: u8 = crate::glass::DARK.rim_percent;
@@ -44,6 +48,25 @@ pub fn surface_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
     SurfaceFill {
         rgb,
         alpha: ((u32::from(material.alpha_permille) * 255 + 500) / 1000) as u8,
+        width: 1,
+    }
+}
+
+/// Titlebar material fill: the blurred backdrop with no colour overlay.
+///
+/// `surfaceColor` is the taskbar/menu/popup tint (the settings row says so), so the titlebar never
+/// reads it, and no glass preset tint applies either: the fill is `rgb 0, alpha 0` over the blurred
+/// desktop layer. `reduceTransparency` stays the opaque surface solid. Popups and menus keep using
+/// [`surface_fill`].
+#[must_use]
+pub fn titlebar_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
+    if crate::glass::appearance_from_settings(snapshot).reduce_transparency {
+        return surface_fill(snapshot);
+    }
+    SurfaceFill {
+        rgb: 0,
+        alpha: 0,
+        width: 1,
     }
 }
 
@@ -69,6 +92,7 @@ pub fn dock_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
     SurfaceFill {
         rgb: material.tint_rgb,
         alpha: ((u32::from(material.alpha_permille) * 255 + 500) / 1000) as u8,
+        width: 1,
     }
 }
 
@@ -103,15 +127,21 @@ pub fn surface_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
     SurfaceFill {
         rgb,
         alpha: ((u16::from(opacity) * 255) / 100) as u8,
+        width: 1,
     }
 }
 
 /// Default `windowOutlineOpacity` percent: the window frame outline is white at half opacity.
 pub const DEFAULT_WINDOW_OUTLINE_PERCENT: u8 = 50;
 
-/// Window frame outline (`windowOutlineColor`, `windowOutlineOpacity`). Separate from the
-/// taskbar/surface contour so frame and panel outlines can differ; both defaults come from
-/// the settings table, not from a custom colour.
+/// Default `windowOutlineWidth` in px: the working one-pixel band.
+pub const DEFAULT_WINDOW_OUTLINE_WIDTH: u32 = 1;
+/// `windowOutlineWidth` bounds: the outline band is 1..=4 px wide.
+pub const MAX_WINDOW_OUTLINE_WIDTH: u32 = 4;
+
+/// Window frame outline (`windowOutlineColor`, `windowOutlineOpacity`, `windowOutlineWidth`).
+/// Separate from the taskbar/surface contour so frame and panel outlines can differ; both defaults
+/// come from the settings table, not from a custom colour.
 #[must_use]
 pub fn window_outline_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
     // `outlines` off means "drawn on nothing": the fill is fully transparent and no
@@ -120,7 +150,11 @@ pub fn window_outline_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
         snapshot.values.get("outlines"),
         Some(SettingValue::Boolean(false))
     ) {
-        return SurfaceFill { rgb: 0, alpha: 0 };
+        return SurfaceFill {
+            rgb: 0,
+            alpha: 0,
+            width: DEFAULT_WINDOW_OUTLINE_WIDTH,
+        };
     }
     let rgb = match snapshot.values.get("windowOutlineColor") {
         Some(SettingValue::Text(value)) => parse_rgb(value),
@@ -131,9 +165,16 @@ pub fn window_outline_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
         Some(SettingValue::Percent(value)) => (*value).min(100),
         _ => DEFAULT_WINDOW_OUTLINE_PERCENT,
     };
+    let width = match snapshot.values.get("windowOutlineWidth") {
+        Some(SettingValue::Integer(value)) => u32::try_from(*value).unwrap_or(1),
+        Some(SettingValue::Percent(value)) => u32::from(*value),
+        _ => DEFAULT_WINDOW_OUTLINE_WIDTH,
+    }
+    .clamp(1, MAX_WINDOW_OUTLINE_WIDTH);
     SurfaceFill {
         rgb,
         alpha: ((u16::from(opacity) * 255) / 100) as u8,
+        width,
     }
 }
 
@@ -142,10 +183,24 @@ mod window_outline_stroke_tests {
     use super::*;
 
     #[test]
-    fn window_outline_defaults_to_white_at_half_opacity() {
+    fn window_outline_defaults_to_white_at_half_opacity_and_one_pixel() {
         let stroke = window_outline_stroke(&SettingsSnapshot::new(1));
         assert_eq!(stroke.rgb, 0x00ff_ffff);
         assert_eq!(stroke.alpha, 127);
+        assert_eq!(stroke.width, 1);
+    }
+
+    #[test]
+    fn window_outline_width_is_read_and_clamped_to_one_through_four() {
+        let width = |value: SettingValue| {
+            let mut snapshot = SettingsSnapshot::new(1);
+            snapshot.values.insert("windowOutlineWidth".into(), value);
+            window_outline_stroke(&snapshot).width
+        };
+        assert_eq!(width(SettingValue::Integer(3)), 3);
+        assert_eq!(width(SettingValue::Integer(0)), 1, "below the minimum");
+        assert_eq!(width(SettingValue::Integer(9)), 4, "above the maximum");
+        assert_eq!(width(SettingValue::Text("bogus".into())), 1);
     }
 
     #[test]
@@ -166,6 +221,59 @@ mod window_outline_stroke_tests {
             .values
             .insert("surfaceBorderOpacity".into(), SettingValue::Percent(0));
         assert_eq!(window_outline_stroke(&snapshot).alpha, 127);
+    }
+}
+
+#[cfg(test)]
+mod titlebar_fill_tests {
+    use super::*;
+
+    /// Default material: the blurred backdrop with no tint, not the Dark preset's `#eaf4ff` @12%.
+    #[test]
+    fn an_unset_surface_color_leaves_the_titlebar_untinted() {
+        let fill = titlebar_fill(&SettingsSnapshot::new(1));
+        assert_eq!(
+            (fill.rgb, fill.alpha),
+            (0, 0),
+            "no tint over the blurred backdrop"
+        );
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("surfaceOpacity".into(), SettingValue::Percent(65));
+        snapshot
+            .values
+            .insert("glassOpacityPercent".into(), SettingValue::Percent(42));
+        assert_eq!(
+            titlebar_fill(&snapshot).alpha,
+            0,
+            "surfaceOpacity and the glass preset tint must not reach the titlebar"
+        );
+    }
+
+    #[test]
+    fn an_explicit_surface_color_does_not_tint_the_titlebar() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("surfaceColor".into(), SettingValue::Text("#202326".into()));
+        let fill = titlebar_fill(&snapshot);
+        assert_eq!(
+            (fill.rgb, fill.alpha),
+            (0, 0),
+            "surfaceColor belongs to taskbar, menus and popups"
+        );
+        assert!(surface_fill(&snapshot).alpha > 0, "menus keep the tint");
+    }
+
+    #[test]
+    fn reduce_transparency_keeps_the_opaque_titlebar_solid() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(true));
+        let fill = titlebar_fill(&snapshot);
+        assert_eq!((fill.rgb, fill.alpha), (0x0017_2135, 255));
     }
 }
 
@@ -193,7 +301,8 @@ mod surface_stroke_contract_tests {
             surface_stroke(&s),
             SurfaceFill {
                 rgb: 0x0011_2233,
-                alpha: 0
+                alpha: 0,
+                width: 1,
             }
         );
         s.values
@@ -296,7 +405,14 @@ mod surface_blend_tests {
                             << shift)
                     });
                     assert_eq!(
-                        blend_surface_over_rgb(bg, SurfaceFill { rgb: fg, alpha }),
+                        blend_surface_over_rgb(
+                            bg,
+                            SurfaceFill {
+                                rgb: fg,
+                                alpha,
+                                width: 1
+                            }
+                        ),
                         expected
                     );
                 }

@@ -822,10 +822,11 @@ impl Service {
         // The window outline comes from the same shared owner X11 reads, so both backends show one
         // `windowOutlineColor` / `windowOutlineOpacity` / `outlines` ring style.
         let stroke = flamewm_ui_core::surface::window_outline_stroke(&snapshot);
-        let outline_changed = state
-            .decorations
-            .borrow_mut()
-            .set_outline(stroke.rgb, stroke.alpha);
+        let outline_changed =
+            state
+                .decorations
+                .borrow_mut()
+                .set_outline(stroke.rgb, stroke.alpha, stroke.width);
         if outline_changed {
             state.request_redraw();
         }

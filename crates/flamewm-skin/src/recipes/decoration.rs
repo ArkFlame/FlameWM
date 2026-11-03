@@ -6,7 +6,7 @@
 use crate::palette::Rgb;
 
 /// Corner radius of the `Rounded` style for floating windows.
-pub const ROUNDED_RADIUS: u16 = 24;
+pub const ROUNDED_RADIUS: u16 = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DecorationStyle {
@@ -43,8 +43,8 @@ pub const DEFAULT_SURFACE_ALPHA: u8 = 165;
 pub const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
 
 /// Typed chrome style tokens. Index order: minimize, maximize, close.
-/// `titlebar_bg` is the straight RGB of `surfaceColor`; `titlebar_alpha` is the
-/// `surfaceOpacity` percent mapped to 0..=255 (`percent * 255 / 100`).
+/// `titlebar_bg` is the straight RGB of the titlebar material (`0` = no colour overlay over the
+/// blurred backdrop); `titlebar_alpha` is its straight alpha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChromeTokens {
     pub style: DecorationStyle,
@@ -52,9 +52,11 @@ pub struct ChromeTokens {
     pub titlebar_alpha: u8,
     /// `surfaceBlurPercent` (0..=100): blur of what is behind the titlebar.
     pub titlebar_blur_percent: u8,
-    /// Shared one-pixel inner glass contour (RRGGBB + straight alpha).
+    /// Shared window outline band (RRGGBB + straight alpha + `windowOutlineWidth` px).
     pub surface_border_rgb: Rgb,
     pub surface_border_alpha: u8,
+    /// Outline band thickness in px (`windowOutlineWidth`, 1..=4). `0` draws nothing.
+    pub surface_border_width: u32,
     /// Bumped when the backdrop source (wallpaper) changes so frames repaint.
     pub backdrop_revision: u32,
     pub buttons: [ButtonTokens; 3],
@@ -69,6 +71,7 @@ impl Default for ChromeTokens {
             titlebar_blur_percent: DEFAULT_SURFACE_BLUR_PERCENT,
             surface_border_rgb: Rgb(0x00ff_ffff),
             surface_border_alpha: 128,
+            surface_border_width: 1,
             backdrop_revision: 0,
             buttons: [ButtonTokens::default(); 3],
         }
@@ -100,8 +103,8 @@ mod tests {
     }
 
     #[test]
-    fn rounded_is_twenty_four_for_floating_only() {
-        assert_eq!(corner_radius(true, DecorationStyle::Rounded), 24);
+    fn rounded_is_twelve_for_floating_only() {
+        assert_eq!(corner_radius(true, DecorationStyle::Rounded), 12);
         assert_eq!(
             corner_radius(true, DecorationStyle::Rounded),
             ROUNDED_RADIUS
@@ -118,6 +121,7 @@ mod tests {
         let tokens = ChromeTokens::default();
         assert_eq!(tokens.titlebar_bg, DEFAULT_SURFACE_RGB);
         assert_eq!(tokens.titlebar_alpha, DEFAULT_SURFACE_ALPHA);
+        assert_eq!(tokens.surface_border_width, 1);
         assert_eq!(tokens.style, DecorationStyle::Rounded);
         assert_eq!(tokens.buttons, [ButtonTokens::default(); 3]);
     }

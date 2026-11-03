@@ -118,8 +118,9 @@ pub fn observe_frame(expected: RootRect, observed: RootRect) -> Observation {
 #[must_use]
 pub fn expected_client_geometry(frame: RootRect, extents: FrameExtents) -> (i32, i32, i32, i32) {
     let (ox, oy) = extents.client_offset();
-    let expected_w = frame.w.max(1);
-    let expected_h = frame.h.saturating_sub(extents.delta().1).max(1);
+    let (dw, dh) = extents.delta();
+    let expected_w = frame.w.saturating_sub(dw).max(1);
+    let expected_h = frame.h.saturating_sub(dh).max(1);
     (ox, oy, expected_w, expected_h)
 }
 

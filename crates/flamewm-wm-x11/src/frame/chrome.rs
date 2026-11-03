@@ -300,12 +300,15 @@ impl ClientEdges {
     }
 }
 
-/// The outline ring exists for this scene: enabled token, real 2x2+ frame.
+/// The outline ring exists for this scene: enabled token with a real band, real 2x2+ frame.
 fn outline_on(scene: &ChromeScene) -> bool {
-    scene.tokens.surface_border_alpha > 0 && scene.frame_w >= 2 && scene.frame_h >= 2
+    scene.tokens.surface_border_alpha > 0
+        && scene.tokens.surface_border_width > 0
+        && scene.frame_w >= 2
+        && scene.frame_h >= 2
 }
 
-/// One smoothed antialiased 1px ring around the whole frame (titlebar + client).
+/// One smoothed antialiased ring (`windowOutlineWidth` px) around the whole frame.
 ///
 /// The pixels are the shared [`flamewm_render_core::outline`] strips, unchanged: the same bytes
 /// Wayland paints, so X11 never re-derives the arc or its coverage. Only the composite base
@@ -334,11 +337,13 @@ pub fn outline_blits(
     let fill = SurfaceFill {
         rgb: scene.tokens.surface_border_rgb.0,
         alpha: scene.tokens.surface_border_alpha,
+        width: scene.tokens.surface_border_width,
     };
     flamewm_render_core::outline::outline_strips(
         scene.frame_w,
         scene.frame_h,
         u32::from(scene.radius),
+        fill.width,
         fill.rgb,
         fill.alpha,
     )
@@ -390,6 +395,7 @@ pub fn outline_blits(
                     SurfaceFill {
                         rgb: fill.rgb,
                         alpha: pixel[3],
+                        width: 1,
                     },
                 );
                 pixel[0] = (blended >> 16) as u8;
@@ -687,13 +693,14 @@ mod tests {
         );
         let (frame, w) = ringed(&scene, (0, 0), (800, 600));
         let (h, radius) = (scene.frame_h, u32::from(scene.radius));
+        let thickness = scene.tokens.surface_border_width;
         let opacity = scene.tokens.surface_border_alpha;
         // Titlebar rows carry the shared alpha (the bar holds the material); client rows bake
         // their base, so they are either absent (coverage 0) or opaque.
         let titlebar = u32::from(scene.titlebar_height);
         for y in 0..h {
             for x in 0..w {
-                let coverage = ring_coverage(w, h, radius, x, y);
+                let coverage = ring_coverage(w, h, radius, thickness, x, y);
                 let alpha = pixel_at(&frame, w, x, y)[3];
                 if y < titlebar {
                     assert_eq!(alpha, ring_alpha(opacity, coverage), "{x},{y}");
@@ -925,7 +932,7 @@ mod tests {
         assert_eq!(scene.icon_edge, 13);
         assert_eq!(scene.icon_edge, WINDOW_CHROME.metrics.icon);
         assert_eq!(scene.baseline, 20.0);
-        assert_eq!(scene.radius, 24);
+        assert_eq!(scene.radius, 12);
     }
 
     #[test]
@@ -1017,7 +1024,7 @@ mod tests {
             true,
             &flamewm_skin::recipes::decoration::ChromeTokens::default(),
         );
-        assert_eq!(floating.radius, 24);
+        assert_eq!(floating.radius, 12);
     }
 
     #[test]

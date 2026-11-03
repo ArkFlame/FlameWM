@@ -4,6 +4,20 @@ use super::*;
 impl<C: Connection> Wm<'_, C> {
     pub(super) fn extents(&self) -> FrameExtents {
         FrameExtents::new(i32::from(self.titlebar_height()), 1)
+            .with_inset(i32::from(self.outline_band()))
+    }
+
+    /// Outline band the frame paints into its own outermost pixels (`windowOutlineWidth`). The
+    /// client window is placed this far inside the frame on the left, right and bottom edges, so
+    /// the ring is geometrically outside the client and an application cannot cover it with its
+    /// own shape. Zero when no ring is drawn, or when a compositing manager hosts the ring as an
+    /// ARGB overlay over the client's own pixels.
+    pub(super) fn outline_band(&self) -> u16 {
+        let tokens = self.outline_tokens();
+        if self.outline_overlay_available || tokens.surface_border_alpha == 0 {
+            return 0;
+        }
+        u16::try_from(tokens.surface_border_width).unwrap_or(u16::MAX)
     }
 
     /// Effective Server titlebar band. The `titlebars` setting is the only authority;

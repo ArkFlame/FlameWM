@@ -14,7 +14,7 @@
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
 /// Tahoe corner radii (px at 1x). Consumers pick the one matching their surface.
-pub const WINDOW_RADIUS: u16 = 24;
+/// The window frame radius has a single owner: `flamewm_skin::recipes::decoration::ROUNDED_RADIUS`.
 pub const POPOVER_RADIUS: u16 = 12;
 pub const MENU_RADIUS: u16 = 12;
 pub const BUTTON_RADIUS: u16 = 9;

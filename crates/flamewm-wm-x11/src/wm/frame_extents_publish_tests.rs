@@ -72,29 +72,44 @@ fn frame_extents_follow_effective_border_per_mode() {
     let floating = [1, 1, 32, 1];
     let snapped = [0, 0, 31, 0];
     assert_eq!(
-        frame_extents_for_mode(PlacementMode::Floating, border, titlebar),
+        frame_extents_for_mode(PlacementMode::Floating, border, titlebar, 0),
         floating
     );
     assert_eq!(
         frame_extents_for_mode(
             PlacementMode::Snapped(crate::frame::model::SnapTarget::Left),
             border,
-            titlebar
+            titlebar,
+            0
         ),
         snapped
     );
     assert_eq!(
-        frame_extents_for_mode(PlacementMode::Maximized, border, titlebar),
+        frame_extents_for_mode(PlacementMode::Maximized, border, titlebar, 0),
         snapped
     );
     assert_eq!(
-        frame_extents_for_mode(PlacementMode::Fullscreen, border, titlebar),
+        frame_extents_for_mode(PlacementMode::Fullscreen, border, titlebar, 0),
         snapped
     );
     // Unsnap returns to the floating border and titlebar extents.
     assert_eq!(
-        frame_extents_for_mode(PlacementMode::Floating, border, titlebar),
+        frame_extents_for_mode(PlacementMode::Floating, border, titlebar, 0),
         floating
+    );
+    // The outline band is part of every mode's left/right/bottom extents.
+    assert_eq!(
+        frame_extents_for_mode(PlacementMode::Floating, border, titlebar, 2),
+        [3, 3, 32, 3]
+    );
+    assert_eq!(
+        frame_extents_for_mode(
+            PlacementMode::Snapped(crate::frame::model::SnapTarget::Left),
+            border,
+            titlebar,
+            2
+        ),
+        [2, 2, 31, 2]
     );
 }
 
@@ -120,7 +135,8 @@ fn client_interior_matches_effective_border_per_mode() {
     ];
     for mode in modes {
         let border = frame_border_for_mode(mode, configured);
-        let [left, right, top, bottom] = frame_extents_for_mode(mode, configured, titlebar);
+        // No outline band: the client keeps the full frame width below the titlebar.
+        let [left, right, top, bottom] = frame_extents_for_mode(mode, configured, titlebar, 0);
         assert_eq!(left, u32::from(border), "{mode:?} left extent");
         assert_eq!(right, u32::from(border), "{mode:?} right extent");
         assert_eq!(bottom, u32::from(border), "{mode:?} bottom extent");
@@ -145,6 +161,65 @@ fn client_interior_matches_effective_border_per_mode() {
     // Client-drawn side insets must never appear for borderless modes.
     let snapped = FrameExtents::new(i32::from(titlebar), 0);
     assert_eq!(lifecycle::client_configure(outer, snapped).2, 800);
+}
+
+/// Regression: the frame-band path places the client `t` px inside the frame on the left, right
+/// and bottom edges, so the painted ring cannot be covered by the client (or by a shape the
+/// application installs). The compositing-manager overlay path keeps the full client rect.
+#[test]
+fn outline_band_insets_the_client_rect_and_the_overlay_does_not() {
+    let outer = crate::frame::coords::RootRect {
+        x: 10,
+        y: 20,
+        w: 800,
+        h: 600,
+    };
+    let titlebar: u16 = 31;
+    let border: u16 = 1;
+    let t: u16 = 2;
+    // Frame-band path: origin (t, titlebar), size reduced by (2t, t).
+    let band = FrameExtents::new(i32::from(titlebar), i32::from(border)).with_inset(i32::from(t));
+    assert_eq!(band.client_offset(), (i32::from(t), i32::from(titlebar)));
+    assert_eq!(
+        band.delta(),
+        (2 * i32::from(t), i32::from(titlebar) + i32::from(t))
+    );
+    let (x, y, w, h) = lifecycle::client_configure(outer, band);
+    assert_eq!((x, y), (i32::from(t), i32::from(titlebar)));
+    assert_eq!(w, outer.w as u32 - 2 * u32::from(t));
+    assert_eq!(h, (outer.h - i32::from(titlebar) - i32::from(t)) as u32);
+    // The published EWMH extents carry the band, so the application still gets the size it asked
+    // for: the frame grows by exactly what the client lost.
+    let [left, right, top, bottom] =
+        frame_extents_for_mode(PlacementMode::Floating, border, titlebar, t);
+    assert_eq!(
+        (left, right, bottom),
+        (
+            u32::from(border) + u32::from(t),
+            u32::from(border) + u32::from(t),
+            u32::from(border) + u32::from(t)
+        )
+    );
+    assert_eq!(top, u32::from(titlebar) + u32::from(border));
+    let client_origin =
+        crate::frame::coords::RootPoint::new(outer.x + i32::from(t), outer.y + i32::from(titlebar));
+    assert_eq!(
+        crate::frame::geometry::client_rect_to_frame(client_origin, (w, h), band),
+        outer,
+        "the client rect and the frame rect round-trip through the band"
+    );
+    // Overlay path: the ring is composited over the client, so the client keeps the full rect.
+    let overlay = FrameExtents::new(i32::from(titlebar), i32::from(border));
+    let (x, y, w, h) = lifecycle::client_configure(outer, overlay);
+    assert_eq!((x, y), (0, i32::from(titlebar)));
+    assert_eq!(
+        (w, h),
+        (outer.w as u32, (outer.h - i32::from(titlebar)) as u32)
+    );
+    assert_eq!(
+        frame_extents_for_mode(PlacementMode::Floating, border, titlebar, 0),
+        [1, 1, u32::from(titlebar) + 1, 1]
+    );
 }
 
 /// The `ConfigureFrameRoot` arm commits the border/geometry, then publishes
