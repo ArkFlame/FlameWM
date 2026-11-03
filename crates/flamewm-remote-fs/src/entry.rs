@@ -37,6 +37,11 @@ fn next_field(s: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_mode(s: &str) -> Option<(Kind, u32)> {
+    // GNU ls appends an ACL (`+`), SELinux (`.`) or other xattr (`@`, `*`) marker after the nine
+    // permission bits, so a directory under an extended ACL reads `drwx------+`. The marker is not
+    // part of the mode: dropping it keeps listing and stat working on ACL-protected trees, where a
+    // strict 10-character check rejects every entry.
+    let s = s.trim_end_matches(['+', '.', '@', '*']);
     let b = s.as_bytes();
     if b.len() != 10 {
         return None;
@@ -190,6 +195,22 @@ mod tests {
     fn special_bits_and_padding() {
         let e = parse_ls_numeric("-rwsr-xr-t   1     0     0          0 1700000000 bin").unwrap();
         assert_eq!(e.mode, 0o4000 | 0o1000 | 0o755);
+    }
+
+    /// A tree protected by an ACL or SELinux label must still list: `ls` appends the marker after
+    /// the nine permission bits, and a strict 10-character mode check would reject every entry.
+    #[test]
+    fn acl_and_xattr_markers_after_the_mode_are_not_part_of_it() {
+        for marker in ['+', '.', '@', '*'] {
+            let line = format!("drwx------{marker} 2 1000 1000 4096 1700000001 restricted");
+            let entry = parse_ls_numeric(&line)
+                .unwrap_or_else(|| panic!("mode marker {marker:?} must parse"));
+            assert_eq!(entry.kind, Kind::Dir);
+            assert_eq!(entry.mode, 0o700);
+            assert_eq!(entry.name, "restricted");
+        }
+        // A mode that is genuinely malformed still has to be rejected.
+        assert!(parse_ls_numeric("drwx 2 1000 1000 4096 1700000001 broken").is_none());
     }
 
     #[test]

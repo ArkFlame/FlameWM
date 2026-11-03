@@ -239,6 +239,17 @@ pub struct ProductSettings {
     pub surface_color: String,
     pub surface_opacity: u8,
     pub surface_blur_percent: u8,
+    /// `blueLightFilter` percent (0..=100): warmth of the blue-light filter. `0` is neutral and the
+    /// filter is off; the shared maths lives in `flamewm_api::blue_light`.
+    pub blue_light_filter: u8,
+    /// `nightShift`: enables the blue-light filter, all day or on the schedule below.
+    pub night_shift: bool,
+    /// `nightShiftSchedule`: when true the filter follows `nightShiftStart`..`nightShiftEnd`.
+    pub night_shift_schedule: bool,
+    /// `nightShiftStart`/`nightShiftEnd`: minutes after local midnight (0..=1439). A start greater
+    /// than the end wraps over midnight, so 21:00..07:00 is a valid night window.
+    pub night_shift_start: u16,
+    pub night_shift_end: u16,
     pub surface_border_color: String,
     pub surface_border_opacity: u8,
     /// `windowOutlineColor`: window frame outline colour, separate from the taskbar surface contour.
@@ -380,6 +391,11 @@ impl Default for ProductSettings {
             surface_color: "#333333".to_owned(),
             surface_opacity: 65,
             surface_blur_percent: 70,
+            blue_light_filter: flamewm_api::blue_light::DEFAULT_INTENSITY,
+            night_shift: false,
+            night_shift_schedule: false,
+            night_shift_start: 21 * 60,
+            night_shift_end: 7 * 60,
             surface_border_color: "#FFFFFF".to_owned(),
             surface_border_opacity: 25,
             window_outline_color: "#FFFFFF".to_owned(),
@@ -566,6 +582,17 @@ impl ProductSettings {
         }
         if self.surface_blur_percent > 100 {
             return invalid("surfaceBlurPercent must be 0..100");
+        }
+        if self.blue_light_filter > 100 {
+            return invalid("blueLightFilter must be 0..100");
+        }
+        let minutes_per_day =
+            u16::try_from(flamewm_api::blue_light::MINUTES_PER_DAY).unwrap_or(u16::MAX);
+        if self.night_shift_start >= minutes_per_day {
+            return invalid("nightShiftStart must be 0..1439");
+        }
+        if self.night_shift_end >= minutes_per_day {
+            return invalid("nightShiftEnd must be 0..1439");
         }
         if !matches!(self.cursor_size, 24 | 32 | 48 | 64) {
             return invalid("cursorSize must be 24, 32, 48 or 64");
@@ -1112,6 +1139,11 @@ stable_settings! {
     (false, taskbar, "taskbarFloatingRadius", taskbar_floating_radius),
     (false, taskbar, "surfaceColor", surface_color),
     (false, taskbar, "surfaceOpacity", surface_opacity),
+    (false, taskbar, "blueLightFilter", blue_light_filter),
+    (false, taskbar, "nightShift", night_shift),
+    (false, taskbar, "nightShiftSchedule", night_shift_schedule),
+    (false, taskbar, "nightShiftStart", night_shift_start),
+    (false, taskbar, "nightShiftEnd", night_shift_end),
     (false, taskbar, "surfaceBlurPercent", surface_blur_percent),
     (false, taskbar, "surfaceBorderColor", surface_border_color),
     (false, taskbar, "surfaceBorderOpacity", surface_border_opacity),

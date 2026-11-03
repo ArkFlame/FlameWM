@@ -16,6 +16,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Static guards run first: stdlib-only Python, no native deps or toolchain
+      # needed, so an architecture-boundary breach fails before the expensive
+      # Cargo jobs even start.
+      - name: Architecture boundary guard
+        run: |
+          python3 -I tools/architecture_guard.py
+          python3 -I -m unittest discover -s tools -p 'test_architecture_guard.py' -q
       - name: Install native build dependencies
         run: |
           sudo apt-get update

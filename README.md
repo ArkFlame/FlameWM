@@ -155,14 +155,40 @@ Tagged versions attach the Arch package and the `.deb` to the [GitHub releases](
 
 Measured 2026-10-30 on a nested Xephyr display on a shared machine. Treat these as noisy samples. The binaries were built 2026-10-29 and do not all match commit `c58954af`.
 
-| Idle session, Flame-owned processes, no apps open | RSS MiB | PSS MiB |
+| Idle session, FlameWM-owned processes, no apps open | RSS MiB | PSS MiB |
 | --- | --- | --- |
 | Session mode (supervisor, WM, audio helper, desktop, shell) | 57.4 | 23.8 |
 | Direct mode (WM, desktop, shell) | 58.9 | 26.9 |
 
+Scope of both rows, so they cannot be misread:
+
+- nested Xephyr display at 1280x800, not an installed session;
+- FlameWM processes only, **Xephyr excluded**, so server-side pixmaps are not in
+  the numbers;
+- no applications open;
+- `flamewm-desktop-services`, the Python session companion, was not running and
+  is not in either total;
+- single idle snapshot each, PSS and RSS as labelled.
+
+These are component figures, not a whole-session figure and not a comparison
+against another desktop. No XFCE or IceWM session is measured here, so nothing
+below supports a "fastest" or "lightest" claim.
+
+For a whole-session figure with the X server, the Python services, a declared
+resolution and a declared set of open applications, use session mode, which
+also prints a `measured=`/`excluded=` manifest and skips a missing baseline
+explicitly:
+
+```bash
+BENCH_DISPLAY=:166 tools/bench_mem.sh idle                  # per-process listing (above)
+BENCH_DISPLAY=:0 tools/bench_mem.sh --session \
+  --resolution 1920x1080 --apps 3 --launch                  # whole session at 1080p
+tools/bench_mem.sh --session --baseline xfce --baseline-display :167
+tools/bench_mem.sh --explain                                # include/exclude manifest
+```
+
 ```bash
 cargo run --release -p flamewm-render-x11 --example pixel_bench
-BENCH_DISPLAY=:166 tools/bench_mem.sh idle     # on a running Xephyr session
 ```
 
 Method and full tables: [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md#benchmark).

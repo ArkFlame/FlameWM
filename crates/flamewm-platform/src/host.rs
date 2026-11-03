@@ -261,6 +261,15 @@ impl<E: EnginePorts> PlatformHost<E> {
         self.workspaces.snapshot(&self.engine)
     }
 
+    /// The persisted workspace count, when the session has one.
+    ///
+    /// A compositor that owns its own topology (Wayland) needs the count before it can build a
+    /// snapshot, so this reads the store rather than requiring a working [`WorkspacePort`].
+    #[must_use]
+    pub fn workspace_count(&self) -> Option<usize> {
+        self.workspaces.load_count()
+    }
+
     pub fn activate_workspace(&mut self, index: usize, expected_revision: u64) -> FlameResult<()> {
         self.workspaces
             .activate(&mut self.engine, index, expected_revision)

@@ -19,6 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 calloop = { workspace = true }
+chrono.workspace = true
 flamewm-api = { path = "../flamewm-api" }
 flamewm-applications = { path = "../flamewm-applications" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }

@@ -109,46 +109,60 @@ pub fn bounding_rectangles_with_titlebar(
         .collect()
 }
 
-/// Client shape inside the frame's 1px outline ring. The client is inset by `ring` pixels on
-/// both sides and at the bottom; the ring itself is painted on the frame there (see
-/// `content_contour_blits`). Bottom corners follow the rounded frame, while the titlebar above
-/// keeps its square top corners. `radius = 0` and `ring = 0` is one full rectangle.
+/// Client shape inside the frame's 1px outline ring, sampled from the frame's own mask.
+///
+/// The client is the square child that actually shows pixels at the bottom edge, so its mask has to
+/// follow the same arc rows the frame uses; deriving the arc from the client's own height samples
+/// the curve one row too high and leaves the bottom-left/bottom-right corner visibly square (or a
+/// pixel wide) next to the antialiased top corners. Rows are taken from
+/// [`rounded_mask_spans`] for the *frame* and mapped into client coordinates by subtracting the
+/// titlebar band, so nothing can drift between the two masks.
+///
+/// `titlebar_h == 0` means the client covers the whole frame, so it also carries the top arc. The
+/// outline ring is kept on straight rows; on corner rows the frame inset already dominates. On a
+/// square frame the result is one full rectangle inset by `ring`, or the full client rect when
+/// `ring == 0`.
 #[must_use]
-pub fn client_bottom_rounded_rectangles(
-    width: u32,
-    height: u32,
+pub fn client_rounded_rectangles(
+    frame_width: u32,
+    frame_height: u32,
+    titlebar_h: u16,
     radius: u32,
     ring: u32,
 ) -> Vec<Rectangle> {
-    let rows = height.saturating_sub(ring);
-    let inner_w = width.saturating_sub(ring.saturating_mul(2));
+    let titlebar = u32::from(titlebar_h).min(frame_height);
+    let rows = frame_height.saturating_sub(titlebar);
+    let inner_w = frame_width.saturating_sub(ring.saturating_mul(2));
     if inner_w == 0 || rows == 0 {
         return Vec::new();
     }
-    let radius = radius.min(width / 2).min(height);
+    let radius = radius.min(frame_width / 2).min(frame_height);
     if radius == 0 {
+        let first = titlebar;
+        let last = frame_height.saturating_sub(ring);
+        if last <= first {
+            return Vec::new();
+        }
         return vec![Rectangle {
             x: i16::try_from(ring).unwrap_or(i16::MAX),
             y: 0,
             width: inner_w.min(u32::from(u16::MAX)) as u16,
-            height: rows.min(u32::from(u16::MAX)) as u16,
+            height: (last - first).min(u32::from(u16::MAX)) as u16,
         }];
     }
-    (0..rows)
-        .map(|row| {
-            let inset = if row >= height - radius {
-                ring.max(corner_edge_inset(external_rounded_row_inset(
-                    width, height, radius, row,
-                )))
-            } else {
-                ring
-            };
-            let start = inset.min(width);
-            let end = width.saturating_sub(inset).max(start);
+    // The ring occupies the frame's outermost pixel on the sides and at the bottom, and it is
+    // painted by the frame, so the client never covers it.
+    let last = frame_height.saturating_sub(ring).max(titlebar);
+    rounded_mask_spans(frame_width, frame_height, radius)
+        .into_iter()
+        .filter(|(row, _, _)| *row >= titlebar && *row < last)
+        .map(|(row, start, end)| {
+            let inset = start.max(ring);
+            let end = end.saturating_sub(ring).max(inset);
             Rectangle {
-                x: i16::try_from(start.min(u32::from(u16::MAX))).unwrap_or(i16::MAX),
-                y: i16::try_from(row.min(u32::from(u16::MAX))).unwrap_or(i16::MAX),
-                width: end.saturating_sub(start).min(u32::from(u16::MAX)) as u16,
+                x: i16::try_from(inset.min(u32::from(u16::MAX))).unwrap_or(i16::MAX),
+                y: i16::try_from((row - titlebar).min(u32::from(u16::MAX))).unwrap_or(i16::MAX),
+                width: end.saturating_sub(inset).min(u32::from(u16::MAX)) as u16,
                 height: 1,
             }
         })
@@ -179,24 +193,69 @@ mod tests {
             height: 347,
         };
         assert_eq!(client_area_size(outer, 31), (484, 316));
-        let (cw, ch) = client_area_size(outer, 31);
-        let full = client_bottom_rounded_rectangles(cw, ch, 0, 1);
+        let full = client_rounded_rectangles(outer.width, outer.height, 31, 0, 1);
         assert_eq!(full.len(), 1);
         assert_eq!((full[0].x, full[0].width), (1, 482));
         assert_eq!(full[0].height, 315);
-        assert!(client_bottom_rounded_rectangles(cw, ch, 0, 0)[0].width == 484);
+        assert_eq!(
+            client_rounded_rectangles(outer.width, outer.height, 31, 0, 0)[0].width,
+            484
+        );
     }
 
+    /// The client mask must be the frame mask shifted by the titlebar band: any drift here is
+    /// exactly what makes the bottom corners look square while the top corners are rounded.
     #[test]
-    fn client_bottom_corners_round_while_the_top_stays_square() {
-        let rects = client_bottom_rounded_rectangles(200, 120, 12, 1);
-        assert_eq!(rects.len(), 119);
-        assert_eq!(rects[0].x, 1);
-        assert_eq!(rects[0].width, 198);
-        let last = rects.last().expect("rows");
+    fn client_mask_rows_match_the_frame_mask_rows() {
+        let (frame_w, frame_h, titlebar, radius, ring) = (200_u32, 151_u32, 31_u16, 12_u32, 1_u32);
+        let frame = rounded_mask_spans(frame_w, frame_h, radius);
+        let client = client_rounded_rectangles(frame_w, frame_h, titlebar, radius, ring);
+        assert_eq!(
+            client.len(),
+            usize::try_from(frame_h - u32::from(titlebar) - ring).unwrap()
+        );
+        for (index, rect) in client.iter().enumerate() {
+            let (_, frame_start, frame_end) =
+                frame[usize::try_from(u32::from(titlebar)).unwrap() + index];
+            assert_eq!(
+                i32::from(rect.y),
+                index as i32,
+                "client rows stay contiguous"
+            );
+            assert_eq!(
+                i32::from(rect.x),
+                i32::try_from(frame_start.max(ring)).unwrap(),
+                "row {index}: left inset must follow the frame arc"
+            );
+            assert_eq!(
+                i32::from(rect.x) + i32::from(rect.width),
+                i32::try_from(frame_end.saturating_sub(ring)).unwrap(),
+                "row {index}: right inset must follow the frame arc"
+            );
+        }
+        let last = client.last().expect("client rows");
         assert!(last.x > 1, "bottom-left corner is not cut: {last:?}");
         assert!(last.width < 198, "bottom-right corner is not cut");
-        let squared = client_bottom_rounded_rectangles(200, 120, 0, 1);
+    }
+
+    /// Without a titlebar band the client covers the frame, so it carries both arcs.
+    #[test]
+    fn titlebarless_client_rounds_all_four_corners() {
+        let rects = client_rounded_rectangles(200, 120, 0, 12, 1);
+        assert_eq!(rects.len(), 119);
+        for rect in [rects[0], *rects.last().expect("rows")] {
+            assert!(
+                rect.x > 1 && rect.width < 198,
+                "both top and bottom corners must be cut: {rect:?}"
+            );
+        }
+        let middle = rects[60];
+        assert_eq!(
+            (middle.x, middle.width),
+            (1, 198),
+            "the straight middle rows keep only the ring inset"
+        );
+        let squared = client_rounded_rectangles(200, 120, 0, 0, 1);
         assert_eq!(squared.len(), 1);
         assert_eq!((squared[0].x, squared[0].width), (1, 198));
     }

@@ -211,8 +211,8 @@ impl<C: Connection> Wm<'_, C> {
         };
         // The client spans the whole frame width below the titlebar (the border never inflates
         // the client area). A shape any narrower leaves the frame's background visible at the edge.
-        let (cw, ch) =
-            crate::frame::geometry_shape::client_area_size(outer, self.titlebar_height());
+        let titlebar_h = self.titlebar_height();
+        let (cw, ch) = crate::frame::geometry_shape::client_area_size(outer, titlebar_h);
         // Reset to the full client rect first: intersecting with the previous mask can only
         // shrink, so a grown frame would keep the old, smaller client shape. Also used to
         // restore an unshaped client below.
@@ -226,8 +226,14 @@ impl<C: Connection> Wm<'_, C> {
         // leaves that pixel to the ring. Square windows with a ring are shaped too.
         let ring = u32::from(self.decoration_tokens.surface_border_alpha > 0);
         if (radius > 0 || ring > 0) && cw > 0 && ch > 0 {
-            let mask = crate::frame::geometry_shape::client_bottom_rounded_rectangles(
-                cw, ch, radius, ring,
+            // Sampled from the frame's own mask so the bottom arcs coincide instead of drifting
+            // one row above them. `titlebar_h == 0` also rounds the client's top corners.
+            let mask = crate::frame::geometry_shape::client_rounded_rectangles(
+                outer.width,
+                outer.height,
+                titlebar_h,
+                radius,
+                ring,
             );
             self.conn.shape_rectangles(
                 ShapeOp::SET,

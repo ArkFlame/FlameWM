@@ -362,7 +362,7 @@ fn ring_region(
 }
 
 /// The outline over the content rows: both sides and the bottom edge of the frame, below the
-/// titlebar. The client is inset by the same 1px (see `client_bottom_rounded_rectangles`), so
+/// titlebar. The client is inset by the same 1px (see `client_rounded_rectangles`), so
 /// this ring is what the eye sees there, continuous with the titlebar ring above it. Only the
 /// edge bands are uploaded (`radius + 2` columns and rows); the interior stays transparent.
 fn content_contour_blits(

@@ -234,7 +234,10 @@ impl ExternalDrawableTarget {
                 None
             }
         };
-        let requested = std::env::var("FLAMEWM_X11_RENDER_PROVIDER").ok();
+        let requested = flamewm_api::graphics::provider_request(
+            flamewm_api::graphics::X11_PROVIDER_VARIABLE,
+            flamewm_api::graphics::LEGACY_PROVIDER_VARIABLE,
+        );
         let mut xrender = match unsafe { XRenderBackend::new(display, drawable, visual) } {
             Ok(backend) => Some(backend),
             Err(error) => {

@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use flamewm_api::applications::ApplicationLaunchOptions;
 use flamewm_api::background::BackgroundState;
+use flamewm_api::blue_light::resolve_at;
 use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputSnapshot};
 use flamewm_api::input::PointerPosition;
 use flamewm_api::ports::{
@@ -57,6 +58,8 @@ pub struct Mirror {
     pub work_area: Rect,
     pub workspace_count: usize,
     pub active_workspace: usize,
+    /// Revision of the workspace topology/active pair, advanced by the control service.
+    pub workspace_revision: u64,
     pub pointer: (i32, i32),
 }
 
@@ -278,7 +281,7 @@ impl WorkspacePort for WaylandDesktop {
     fn workspace_snapshot(&self) -> FlameResult<WorkspaceSnapshot> {
         let mirror = self.mirror.borrow();
         Ok(WorkspaceSnapshot {
-            revision: 1,
+            revision: mirror.workspace_revision,
             count: mirror.workspace_count,
             active_index: mirror.active_workspace,
             last_index: None,
@@ -574,6 +577,11 @@ pub struct Service {
     mirror: Rc<RefCell<Mirror>>,
     commands: Rc<RefCell<Vec<Command>>>,
     published: RefCell<Vec<WindowSnapshot>>,
+    /// Last workspace snapshot whose change was announced, so a busy loop cannot spam signals.
+    published_workspaces: RefCell<Option<WorkspaceSnapshot>>,
+    /// Monotonic workspace revision. X11 advances one per switch; the shell's pager expects the
+    /// same discipline, because the activation it sends is revision-fenced.
+    workspace_revision: std::cell::Cell<u64>,
     /// Last override-redirect popup given keyboard focus, so focus is taken once per popup.
     popup_focus: RefCell<Option<u32>>,
     switcher: RefCell<Option<Switcher>>,
@@ -622,6 +630,13 @@ fn toplevel_metadata(state: &State, id: WindowId) -> (String, String) {
         .unwrap_or_default()
 }
 
+/// Minutes after local midnight for the Night Shift schedule.
+fn now_minutes() -> u32 {
+    use chrono::{Local, Timelike};
+    let now = Local::now();
+    now.hour() * 60 + now.minute()
+}
+
 fn to_api_rect(rect: crate::model::Rect) -> Rect {
     Rect {
         x: rect.x,
@@ -632,7 +647,11 @@ fn to_api_rect(rect: crate::model::Rect) -> Rect {
 }
 
 /// Reads the compositor state into the engine's mirror.
-fn build_mirror(state: &State) -> Mirror {
+///
+/// `workspace_revision` is passed in (not derived) so the engine can advance it when the topology
+/// or the visible workspace moves; deriving it here would make the value depend on the observation
+/// point instead of the change.
+fn build_mirror(state: &State, workspace_revision: u64) -> Mirror {
     let focused = state.focused;
     let windows = state
         .model
@@ -675,6 +694,7 @@ fn build_mirror(state: &State) -> Mirror {
         work_area: to_api_rect(state.work_area()),
         workspace_count: state.model.workspace_count(),
         active_workspace: state.model.current_workspace(),
+        workspace_revision,
         pointer,
     }
 }
@@ -683,7 +703,7 @@ impl Service {
     /// Connects to the session bus, owns `com.arkflame.FlameWM1` and starts the platform host.
     pub fn connect(state: &State) -> Result<Self, Box<dyn Error>> {
         let server = ControlServer::connect_session().map_err(|error| format!("{error}"))?;
-        let mirror = Rc::new(RefCell::new(build_mirror(state)));
+        let mirror = Rc::new(RefCell::new(build_mirror(state, 1)));
         let commands = Rc::new(RefCell::new(Vec::new()));
         let catalog = match flamewm_applications::ApplicationCatalog::discover() {
             Ok(catalog) => Some(Arc::new(catalog)),
@@ -717,6 +737,8 @@ impl Service {
             mirror,
             commands,
             published: RefCell::new(Vec::new()),
+            published_workspaces: RefCell::new(None),
+            workspace_revision: std::cell::Cell::new(1),
             popup_focus: RefCell::new(None),
             switcher: RefCell::new(None),
             started: Instant::now(),
@@ -728,8 +750,21 @@ impl Service {
     }
 
     /// Refreshes the mirror from `state` and reports whether it changed.
+    ///
+    /// The workspace revision advances here, in the same place the visible workspace and the
+    /// topology are observed: a switch, a count change, or a plan that moves windows between
+    /// workspaces is an announcement the pager must receive, so the revision is part of the mirror
+    /// comparison instead of a value a reader derives on demand.
     fn sync(&self, state: &State) -> bool {
-        let next = build_mirror(state);
+        let previous = self.mirror.borrow().clone();
+        let next = build_mirror(state, self.workspace_revision.get());
+        let workspace_moved = previous.workspace_count != next.workspace_count
+            || previous.active_workspace != next.active_workspace;
+        if workspace_moved {
+            self.workspace_revision
+                .set(self.workspace_revision.get() + 1);
+        }
+        let next = build_mirror(state, self.workspace_revision.get());
         let changed = *self.mirror.borrow() != next;
         if changed {
             *self.mirror.borrow_mut() = next;
@@ -782,11 +817,33 @@ impl Service {
             let host = self.host.borrow();
             chrome_settings(&host.settings_snapshot())
         };
-        if state.model.titlebars() == titlebars && state.model.window_margin() == window_margin {
-            return;
+        if state.model.titlebars() != titlebars || state.model.window_margin() != window_margin {
+            state.model.configure(titlebars, window_margin);
+            state.request_redraw();
         }
-        state.model.configure(titlebars, window_margin);
-        state.request_redraw();
+        // The workspace topology is a product decision persisted beside the settings file, and X11
+        // already honours it. Adopting it here is what makes the pager's cells match the session
+        // instead of a compiled-in default.
+        if let Some(count) = self.host.borrow().workspace_count() {
+            let moved = state.model.set_count(count);
+            state.request_redraw();
+            if moved {
+                state.refocus();
+            }
+        }
+        // Blue light filter: the compositor has no DRM gamma ramp through Smithay, so it paints the
+        // shared amber veil instead. One comparison per turn keeps this off the paint path.
+        let blue_light = resolve_at(
+            flamewm_api::blue_light::BlueLightConfig::from_snapshot(
+                &self.host.borrow().settings_snapshot(),
+            ),
+            now_minutes(),
+        )
+        .intensity;
+        if state.blue_light_intensity != blue_light {
+            state.blue_light_intensity = blue_light;
+            state.request_redraw();
+        }
     }
 
     /// Called after every loop dispatch: emits `WindowsSnapshotChanged` when the windows moved.
@@ -912,21 +969,60 @@ impl Service {
 
     fn publish_changes(&self) {
         let windows = self.mirror.borrow().windows.clone();
-        if *self.published.borrow() == windows {
+        if *self.published.borrow() != windows {
+            let revision = windows
+                .iter()
+                .map(|window| window.state_generation)
+                .max()
+                .unwrap_or(0);
+            (*self.published.borrow_mut()).clone_from(&windows);
+            if let Err(error) = self
+                .server
+                .emit_signal(&ControlSignal::WindowsSnapshotChanged { revision, windows })
+            {
+                eprintln!("flamewm-wayland: windows signal failed: {error}");
+            }
+            self.publish_panels();
+        }
+        self.publish_workspaces();
+    }
+
+    /// Announces the workspace topology/active pair the way the X11 runtime does.
+    ///
+    /// Without this the pager keeps the snapshot it read at bootstrap: clicking a workspace queues a
+    /// switch, the compositor switches, and no client is ever told, so the click looks like a no-op.
+    /// `last_index` is `None` because the compositor has no "previous workspace" source of its own.
+    fn publish_workspaces(&self) {
+        let (revision, count, active_index) = {
+            let mirror = self.mirror.borrow();
+            (
+                mirror.workspace_revision,
+                mirror.workspace_count,
+                mirror.active_workspace,
+            )
+        };
+        let snapshot = WorkspaceSnapshot {
+            revision,
+            count,
+            active_index,
+            last_index: None,
+            names: (1..=count).map(|index| index.to_string()).collect(),
+        };
+        if self.published_workspaces.borrow().as_ref() == Some(&snapshot) {
             return;
         }
-        let revision = windows
-            .iter()
-            .map(|window| window.state_generation)
-            .max()
-            .unwrap_or(0);
-        (*self.published.borrow_mut()).clone_from(&windows);
-        if let Err(error) = self
-            .server
-            .emit_signal(&ControlSignal::WindowsSnapshotChanged { revision, windows })
-        {
-            eprintln!("flamewm-wayland: windows signal failed: {error}");
+        *self.published_workspaces.borrow_mut() = Some(snapshot.clone());
+        for signal in [
+            ControlSignal::WorkspacesSnapshotChanged {
+                snapshot: snapshot.clone(),
+            },
+            ControlSignal::WorkspacesChanged { revision },
+        ] {
+            if let Err(error) = self.server.emit_signal(&signal) {
+                eprintln!("flamewm-wayland: workspace signal failed: {error}");
+            }
         }
+        // The task strip shows the active workspace's windows, so it moves with the pager.
         self.publish_panels();
     }
 

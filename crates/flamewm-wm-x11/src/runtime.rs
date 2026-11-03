@@ -322,6 +322,13 @@ fn run_session(
             idle_lock_for_hook
                 .borrow_mut()
                 .turn(&reactor_for_hook, conn.as_ref(), root);
+            // Blue light filter: a no-op unless the committed intensity differs from the last
+            // upload, so this costs one thread-local read per turn.
+            if let Err(error) =
+                crate::blue_light::apply(conn.as_ref(), root, crate::blue_light::config())
+            {
+                eprintln!("flamewm: blue light filter update failed: {error}");
+            }
             refresh_control(
                 &reactor_for_hook,
                 &mut control_registration,
@@ -475,6 +482,8 @@ fn run_session(
             // geometry: skip the snapshot refresh but still consume the topology flag.
             let desktop_held = wm.observe_desktop_mode();
             if wm.take_display_topology_dirty() && !desktop_held {
+                // A new crtc set must receive the filter again: the cached crtc ids are gone.
+                crate::blue_light::invalidate();
                 match host.display_snapshot() {
                     Ok(displays) => {
                         if let Err(error) = host.resync_panels_for_displays(&displays) {
@@ -517,7 +526,16 @@ fn run_session(
             }
             flush_wm_changes(host, control_for_hook.as_ref(), changes)?;
             let areas = host.output_work_areas();
-            let wait = crate::wm::next_wait_timeout(now_ms, host.display_transaction_deadline_ms());
+            let mut wait =
+                crate::wm::next_wait_timeout(now_ms, host.display_transaction_deadline_ms());
+            // A scheduled blue-light filter flips on the clock, not on an event: arm the boundary as
+            // a wake and keep whichever deadline is nearer.
+            if let Some(delay) = crate::blue_light::next_refresh_delay(
+                crate::blue_light::config(),
+                crate::blue_light::now_minutes(),
+            ) {
+                wait = Some(wait.map_or(delay, |current| current.min(delay)));
+            }
             drop(host_guard);
             wm.set_output_work_areas(areas)?;
             // Wake the reactor at the pending display revert deadline; None when nothing is pending.
@@ -573,6 +591,10 @@ fn publish_settings_snapshot(observer: &SharedSettingsObserver, snapshot: &Setti
     crate::live_settings::sync(snapshot);
     sync_window_decoration(snapshot);
     sync_idle_lock_timeout(snapshot);
+    // The filter itself is applied on the WM loop turn; this only records the committed values.
+    crate::blue_light::set_config(flamewm_api::blue_light::BlueLightConfig::from_snapshot(
+        snapshot,
+    ));
     if let Some(observer) = observer.borrow_mut().as_mut() {
         observer(snapshot);
     }

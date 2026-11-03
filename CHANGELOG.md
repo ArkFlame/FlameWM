@@ -1,3 +1,21 @@
+## 2026-11-03 — Honest whole-session memory benchmark
+
+- `tools/bench_mem.sh --session` measures a complete session: every FlameWM process, the Python `flamewm-desktop-services` companion, and the X server that owns the display, with PSS and RSS per process plus core/application/FlameWM/server/session totals. It declares a resolution (default 1920x1080) and an application count (default 3, optionally launched), and prints a `measured=`/`excluded=` manifest naming every process it left out and why.
+- `flamewm-desktop-services` can no longer be silently missing: the output prints `desktop_services=present pid=N` or `ABSENT`, and marks the total `PARTIAL` when it is absent.
+- An XFCE or IceWM baseline is measured the same way when its binaries exist and a baseline display is supplied; otherwise the script prints `SKIPPED` with the missing dependency and never fabricates a comparison.
+- The per-process listing keeps its output, but no longer loses long process names: names are resolved through `/proc/<pid>/exe`, so `flamewm-settings`, `flamewm-explorer`, `flamewm-xsettings`, `flamewm-desktop-services` and the other names longer than 15 characters are found. `pgrep -x` alone returned zero matches for those and for the bridge.
+- `docs/PERFORMANCE.md` and `README.md` now state the scope of each memory figure (nested Xephyr, 1280x800, no apps, X server excluded, PSS versus RSS) and record that no XFCE/IceWM comparison has been measured, so no superlative claim is supported.
+
+## 2026-11-03 — Wayland workspaces, rounded corners, Night Shift, guard
+
+- Wayland workspace clicks work. The compositor now publishes `WorkspacesSnapshotChanged`/`WorkspacesChanged` like the X11 runtime, so the pager and task strip learn the active workspace; the persisted `workspaces.count` is adopted instead of a compiled-in 4, and the snapshot revision advances on every switch.
+- Window corner rounding reaches all four corners on X11. The client mask is sampled from the frame's own span rows (it used to derive its arc from the client height, one row above the frame's), and a titlebar-less frame rounds the client's top corners too.
+- The render backend variables are honest: `FLAMEWM_RENDER_PROVIDER` is now a real alias for `FLAMEWM_X11_RENDER_PROVIDER`/`FLAMEWM_WAYLAND_RENDER_PROVIDER` instead of appearing only inside log lines, and a rejected request names the variable that was read. One parse decides both the ARGB visual and the provider.
+- Selection-drag latency: the desktop surface uses the incremental region painter by default, so dragging the marquee across empty desktop repaints the moved rectangle instead of the whole wallpaper. Other windows keep the opt-in (`FLAMEWM_RENDER_REGION`), so the terminal regression that made it opt-in stays protected.
+- New Night Shift / blue-light filter on the Displays page: a warmth slider, a Night Shift switch, and an optional schedule with start and end times (windows may wrap past midnight). X11 uploads a real RandR gamma ramp per CRTC; the Wayland compositor paints an amber veil instead, because Smithay exposes no DRM gamma, and says so.
+- `flamewm-remote-fs` finally lists and stats trees under an extended ACL: `ls` appends `+`/`.`/`@`/`*` after the mode bits, which the strict ten-character parser rejected, so every entry in such a directory failed.
+- `tools/architecture_guard.py` is now enforced: `scripts/check` and CI run it, coverage is derived from every manifest under `crates/` (52 crates, not 26), and a `remove_by` that is malformed or already expired is a hard error. The 72 current breaches are ratified as exact-path ratchets with deadlines at 0.2.0/0.3.0.
+
 ## 2026-10-31 — Shadows removed
 
 - Window shadows are gone: the frame shadow and the Liquid Glass surface drop shadow no longer paint or cost CPU. The `windowShadows` and `surfaceShadowPercent` settings are removed from Settings and the control wire. Existing config files still load; these keys are ignored and kept in the file.

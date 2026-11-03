@@ -2,6 +2,7 @@
 
 mod animation;
 mod atoms;
+mod blue_light;
 mod chrome;
 mod classifier;
 mod client;

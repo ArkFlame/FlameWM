@@ -5,6 +5,7 @@
 
 pub mod applications;
 pub mod background;
+pub mod blue_light;
 pub mod capabilities;
 pub mod display;
 pub mod error;

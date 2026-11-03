@@ -33,11 +33,23 @@ The compiler crate uses package-specific `opt-level=2`; parser speed is not stea
 - no stale motion rendered after release;
 - Start/taskbar/window manipulation must not block on disk/network/system commands.
 
+What that target does *not* cover: it sums FlameWM processes only. It excludes
+the X server, so it does not include server-owned pixmaps, and the 2026-10-30
+figures behind it come from a nested Xephyr session at 1280x800 with no
+applications open. It is a component budget, not a whole-session figure and not
+a comparison against another desktop.
+
 ## Benchmark
 
 Measured 2026-10-29 on Intel TGL UHD (Mesa), Linux 7.0. Figures are not a
 release claim. The machine was shared with other builds, so treat every number
 as a noisy sample (see [Noise and method](#noise-and-method)).
+
+No complete installed session has been measured on this machine. The sections
+below are labelled with the scope each number was taken from, and no number in
+this document supports a claim that FlameWM is the fastest or the lightest
+desktop. The only desktop comparison this document records is the unmeasured
+baseline requirement in [Whole-session measurement](#whole-session-measurement).
 
 ### How to run
 
@@ -64,18 +76,70 @@ matches `BENCH_DISPLAY` and prints RSS and PSS per process from
 `/proc/<pid>/smaps_rollup`. PSS divides shared pages between the processes that map
 them, so the PSS total is the footprint to compare. RSS double-counts shared pages.
 
-Limitation: the script looks processes up with `pgrep -x`, which matches only the first 15 characters of
-the command name. It therefore misses `flamewm-terminal`, `flamewm-settings`, `flamewm-explorer` and
-`flamewm-audio-helper`, and its list does not include them. Add those rows by reading `/proc/<pid>/smaps_rollup` directly.
+That call is the legacy listing mode and covers only what follows:
 
-### Memory, idle (RSS / PSS, MiB)
+| Legacy listing mode | covered |
+| --- | --- |
+| FlameWM processes matched on the display | yes |
+| `flamewm-desktop-services` (Python) | named in the process list; a `desktop_services=present/ABSENT` line is printed |
+| X server owning the display | only if its own environment or command line names the display |
+| resolution | not measured |
+| open applications | not measured |
+| baseline desktop | not measured |
+
+Limitation: the listings in this section predate that fix. The script used to look
+processes up with `pgrep -x`, which matches only the first 15 characters of the command name and returns zero
+matches for a longer pattern. It therefore missed `flamewm-terminal`, `flamewm-settings`, `flamewm-explorer` and
+`flamewm-audio-helper`, and its list did not include them. Names are now resolved through `/proc/<pid>/exe`,
+so long names and the Python bridge are found; add any remaining row by reading `/proc/<pid>/smaps_rollup` directly.
+
+### Whole-session measurement
+
+`tools/bench_mem.sh --session` measures the complete session. It is a separate
+mode, so the legacy listing above keeps its output.
+
+```sh
+# installed session on its own display, 1080p, three apps open
+BENCH_DISPLAY=:0 tools/bench_mem.sh --session --resolution 1920x1080 --apps 3 --launch
+
+# same measurement against an already running XFCE/IceWM session
+tools/bench_mem.sh --session --display :0 --baseline xfce --baseline-display :167 --launch
+
+tools/bench_mem.sh --explain   # exact include/exclude manifest, no measurement
+```
+
+Scope of a session-mode number, and this is the scope to quote:
+
+| Session mode | covered |
+| --- | --- |
+| `flamewm`, `-desktop`, `-shell`, `-settings`, `-xsettings`, `-desktop-services`, `-session`, `-wayland`, `-audio-helper`, `-terminal`, `-explorer`, `-lock`, `-screenshot`, `-task-manager`, `-finder` | yes, per PID, PSS and RSS |
+| `flamewm-desktop-services` (Python session companion) | yes; if absent the output says `desktop_services=ABSENT` and marks the total `PARTIAL` |
+| X server serving the display (`Xorg`, `Xephyr` or `Xwayland`) | yes, inside the session total; identified by holding the listening socket from `/proc/net/unix` |
+| resolution | declared on the command line (default 1920x1080); not read back from the server |
+| open applications | declared with `--apps`, optionally started with `--launch` |
+| baseline desktop | XFCE or IceWM when installed and a `--baseline-display` is supplied, otherwise `SKIPPED` |
+| PSS and RSS | both, per process, plus core / applications / FlameWM / server / session totals |
+| foreign applications | excluded |
+| kernel framebuffer/KMS driver memory outside any process | excluded |
+| pages already swapped out | excluded |
+
+Output is a per-process table, a totals table, a `desktop_services=` line, a
+`total_scope=COMPLETE|PARTIAL` line, and a `measured=`/`excluded=` manifest that
+names every process not included and why.
+
+### Memory, idle, nested Xephyr (RSS / PSS, MiB)
+
+Scope of every table in this subsection: **nested Xephyr display, 1280x800, no
+applications open, FlameWM processes only.** The X server (Xephyr) is
+excluded from these totals, and the Python session companion is measured only
+where a row names it. These are component figures, not whole-session figures.
 
 Measured 2026-10-30 UTC (about 01:28 to 01:34) on a private nested display `:195`
 (Xephyr 1280x800, `FLAMEWM_CONFIG_DIR` and `XDG_*` pointed at a scratch directory,
 private D-Bus session, `LIBGL_ALWAYS_SOFTWARE=1`). Samples were taken with
 `/proc/<pid>/smaps_rollup` after 15 to 40 s of idle. Xephyr itself is excluded from the totals.
 
-Session mode, `flamewm-session` as supervisor, no apps open (01:33 sample):
+Session mode, `flamewm-session` as supervisor, no apps open (01:33 sample). Scope: nested Xephyr 1280x800, FlameWM processes only, Xephyr excluded, `flamewm-desktop-services` not running and therefore not in the total:
 
 | Process | RSS | PSS |
 | --- | --- | --- |
@@ -87,7 +151,7 @@ Session mode, `flamewm-session` as supervisor, no apps open (01:33 sample):
 | **Total** | **57.4** | **23.8** |
 
 Direct mode, WM + desktop + shell started by hand, no apps open (01:30 sample, after
-terminal, settings and explorer had been opened and closed):
+terminal, settings and explorer had been opened and closed). Same scope as above:
 
 | Process | RSS | PSS |
 | --- | --- | --- |
@@ -100,7 +164,8 @@ Direct-mode total was 21.5 MiB PSS at a 01:28 sample taken before any app was op
 WM and shell rows grew after the apps were opened and closed, so the idle figure
 depends on prior activity. Treat 21.5 to 26.9 MiB as the observed direct-mode range.
 
-Single app open on top of direct mode, own process row (sampled 15 to 20 s after launch):
+Single app open on top of direct mode, own process row (sampled 15 to 20 s after launch).
+Scope: nested Xephyr 1280x800; each row is one application process only, not a session total:
 
 | App | RSS | PSS |
 | --- | --- | --- |
@@ -118,6 +183,30 @@ The build was skipped because another cargo build held `/tmp/flamewm-cargo.lock`
 
 Earlier 2026-10-29 figures (WM 5.5, desktop 10.4, shell 7.1, total PSS 23.1 MiB) were
 from different binaries and are superseded by the rows above. The pre-tier terminal figure is not recorded.
+
+### What these figures do not establish
+
+Every number above comes from a nested Xephyr session at 1280x800 with no
+applications open, summed over FlameWM processes only. Consequently:
+
+- The X server is not in the total. Under Xephyr the server is a window inside
+  another desktop's server, so its footprint is not a whole-screen cost; on an
+  installed session the real `Xorg` (or `Xwayland`) owns the pixmaps and is
+  measured by session mode, not by these tables.
+- `flamewm-desktop-services`, the Python session companion, is in none of the
+  dated tables. It only appears where a row names it, and it is absent from
+  both totals above. Session mode reports it and states its absence explicitly.
+- No table here is at 1920x1080, and none is with applications open for long
+  enough to be a workload figure.
+- No XFCE or IceWM session has been measured on this machine. There is
+  therefore no desktop-to-desktop comparison in this document, and nothing
+  here supports a superlative claim about memory or speed.
+- Wallpaper, font configuration and prior activity move the idle figure (the
+  21.5 to 26.9 MiB direct-mode range above). One sample is not a distribution.
+
+To produce a figure that can be compared, use the session mode described above, which
+declares resolution and application count, includes the X server, and prints a
+`measured=`/`excluded=` manifest.
 
 ### Pixel operations (`pixel_bench`, min of 15 runs, ms)
 

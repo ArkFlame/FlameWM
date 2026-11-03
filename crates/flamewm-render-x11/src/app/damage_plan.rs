@@ -391,6 +391,23 @@ fn plan_debug_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("FLAMEWM_DEBUG_PLAN").is_some())
 }
 
+/// Whether one surface may use the incremental region path.
+///
+/// `FLAMEWM_RENDER_REGION` still wins in both directions. Unset, the path stays off for ordinary
+/// windows — an incremental frame regressed terminal updates, which is what the opt-in protects —
+/// and is on for the desktop, whose entire content is a full-screen wallpaper image: there a
+/// selection marquee moving across empty desktop repainted every wallpaper pixel per input burst.
+/// The desktop scene is otherwise static and its rect-only diffs are exactly what the planner
+/// supports; every unsupported command or gate still falls back to `Full` inside
+/// [`plan_region_paint`], so this changes the cost, not the pixels.
+pub(crate) fn region_paint_enabled(desktop_role: bool, override_value: Option<&str>) -> bool {
+    match override_value {
+        Some("0") => false,
+        Some(_) => true,
+        None => desktop_role,
+    }
+}
+
 /// Smallest region that covers every command whose old or new form differs. Equal command
 /// lists give `None`. Pixels outside the region see the same sequence of covering commands
 /// in both lists, so they are unchanged.
@@ -884,5 +901,18 @@ mod tests {
                 height: 10
             })
         );
+    }
+
+    /// The desktop opts into region paint because its full-screen wallpaper is what made a moving
+    /// selection marquee repaint every pixel; other surfaces keep the opt-in that protects them.
+    #[test]
+    fn region_paint_defaults_follow_the_desktop_role_and_the_env_override() {
+        assert!(region_paint_enabled(true, None), "desktop repaints locally");
+        assert!(
+            !region_paint_enabled(false, None),
+            "other windows stay on Full"
+        );
+        assert!(region_paint_enabled(false, Some("1")));
+        assert!(!region_paint_enabled(true, Some("0")), "the override wins");
     }
 }

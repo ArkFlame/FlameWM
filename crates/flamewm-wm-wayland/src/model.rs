@@ -274,6 +274,26 @@ impl WindowModel {
         self.current != previous
     }
 
+    /// Applies a live workspace count from `workspaces.count` without a topology plan.
+    ///
+    /// Clamps exactly like [`Self::apply_workspace_plan`]: the new count stays inside
+    /// `1..=MAX_WORKSPACES`, windows on a workspace that disappears land on the new last one, and the
+    /// visible workspace follows the same clamp so it can never point outside the topology.
+    /// Returns whether the visible workspace moved, so the caller can refocus.
+    pub fn set_count(&mut self, requested: usize) -> bool {
+        let count = requested.clamp(1, MAX_WORKSPACES);
+        if count == self.count {
+            return false;
+        }
+        self.count = count;
+        for window in &mut self.windows {
+            window.workspace = window.workspace.min(count - 1);
+        }
+        let previous = self.current;
+        self.current = self.current.min(count - 1);
+        self.current != previous
+    }
+
     /// Every managed window, bottom to top.
     pub fn managed(&self) -> &[Managed] {
         &self.windows
@@ -1901,6 +1921,37 @@ mod tests {
             model.get(2).unwrap().workspace,
             2,
             "a window after the inserted slot shifts up"
+        );
+    }
+
+    /// The persisted `workspaces.count` is adopted as-is when it fits the product maximum.
+    #[test]
+    fn a_live_count_is_adopted_and_windows_stay_inside_it() {
+        let mut model = WindowModel::new(4);
+        model.add(1, Rect::new(0, 0, 100, 100), 3);
+        model.switch_workspace(3);
+
+        assert!(model.set_count(2), "the visible workspace moved down");
+        assert_eq!(model.workspace_count(), 2);
+        assert_eq!(model.current_workspace(), 1);
+        assert_eq!(
+            model.get(1).unwrap().workspace,
+            1,
+            "a window on a removed workspace lands on the new last one"
+        );
+        assert!(!model.set_count(2), "the same count is a no-op");
+    }
+
+    /// A persisted count outside the product range is clamped, never trusted verbatim.
+    #[test]
+    fn a_live_count_is_clamped_to_the_product_range() {
+        let mut model = WindowModel::new(4);
+        model.set_count(0);
+        assert_eq!(model.workspace_count(), 1);
+        model.set_count(usize::MAX);
+        assert_eq!(
+            model.workspace_count(),
+            flamewm_api::workspace::MAX_WORKSPACES
         );
     }
 }

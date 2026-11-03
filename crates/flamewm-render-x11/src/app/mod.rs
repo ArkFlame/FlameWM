@@ -5,7 +5,9 @@ use std::mem::MaybeUninit;
 use std::ptr;
 use std::rc::Rc;
 
-use flamewm_api::graphics::{DisplayProtocol, GraphicsProvider, choose_provider};
+use flamewm_api::graphics::{
+    DisplayProtocol, GraphicsProvider, choose_provider, provider_request, provider_request_variable,
+};
 use flamewm_render_core::{
     ActionEvent, ActionPhase, Color, CursorKind, InteractionState, LayoutEngine, LayoutResult,
     PaintCommand, PointerButton, Rect, RuntimeDocument, SurfaceDamage,
@@ -354,8 +356,12 @@ impl X11App {
         });
         // Core X11 cannot blend an ARGB dock surface: choose an opaque visual up front
         // rather than producing a transparent/black panel after disabling XRender.
-        let core_requested =
-            std::env::var("FLAMEWM_X11_RENDER_PROVIDER").is_ok_and(|value| value.trim() == "core");
+        // One read decides both the visual and the provider, so the two rules cannot disagree.
+        let provider_request = provider_request(
+            flamewm_api::graphics::X11_PROVIDER_VARIABLE,
+            flamewm_api::graphics::LEGACY_PROVIDER_VARIABLE,
+        );
+        let core_requested = provider_request.as_deref() == Some("core");
         let (visual, depth, mut alpha_mode) =
             if config.role == X11WindowRole::Dock && compositor && !core_requested {
                 supported_argb.map_or_else(
@@ -535,7 +541,6 @@ impl X11App {
         if let Some(font) = fonts.values().next().copied() {
             unsafe { XSetFont(display, gc, (*font).fid) };
         }
-        let provider_request = std::env::var("FLAMEWM_X11_RENDER_PROVIDER").ok();
         let mut xrender = match unsafe { XRenderBackend::new(display, backbuffer, visual) } {
             Ok(backend) => Some(backend),
             Err(error) => {
@@ -552,7 +557,12 @@ impl X11App {
             Err(error) => {
                 // A user-requested unavailable provider is an observable configuration failure,
                 // never a claim that GPU drawing was enabled.
-                eprintln!("FLAMEWM_RENDER_PROVIDER_ERROR {error}; using core fallback");
+                let variable = provider_request_variable(
+                    flamewm_api::graphics::X11_PROVIDER_VARIABLE,
+                    flamewm_api::graphics::LEGACY_PROVIDER_VARIABLE,
+                )
+                .unwrap_or("FLAMEWM_RENDER_PROVIDER");
+                eprintln!("FLAMEWM_RENDER_PROVIDER_ERROR {variable}: {error}; using core fallback");
                 GraphicsProvider::XCore
             }
         };
@@ -704,9 +714,15 @@ impl X11App {
             shape_applied: std::cell::Cell::new(None),
             static_shape_applied: std::cell::Cell::new(None),
             pending_damage: SurfaceDamage::Full,
-            // Opt-in: the incremental path needs the Xft/clip work before it is safe for real
-            // content (see the field docs). FLAMEWM_RENDER_REGION=1 enables it for evaluation.
-            region_paint: std::env::var_os("FLAMEWM_RENDER_REGION").is_some_and(|v| v == "1"),
+            // Region paint: opt-in through `FLAMEWM_RENDER_REGION` (see `region_paint_enabled`),
+            // and on by default only for the desktop surface, where a moving marquee otherwise
+            // repaints the whole wallpaper. Any unsupported command falls back to a full frame.
+            region_paint: damage_plan::region_paint_enabled(
+                config.role == X11WindowRole::Desktop,
+                std::env::var_os("FLAMEWM_RENDER_REGION")
+                    .and_then(|value| value.to_str().map(str::to_owned))
+                    .as_deref(),
+            ),
             region_force_full: false,
             region_base_valid: false,
             skip_eligible: false,

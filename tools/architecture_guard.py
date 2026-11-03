@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Enforce the active product-layer architecture boundary."""
 
+from functools import lru_cache
 from pathlib import Path
 import re
 import sys
@@ -43,8 +44,14 @@ def _strip_rust_comments(text: str) -> str:
     * LIFETIMES (`'a`, `'static`, `'static mut`) never open a string;
     * raw strings `r"..."`, `r#"..."#`, `br#"..."#` are preserved verbatim.
 
-    Stdlib only.
+    Stdlib only. Pure, and the guards re-read the same 12k sources, so the result
+    is memoized; the cache keys on the source text itself.
     """
+    return _strip_rust_comments_cached(text)
+
+
+@lru_cache(maxsize=None)
+def _strip_rust_comments_cached(text: str) -> str:
     out: list[str] = []
     i = 0
     n = len(text)
@@ -114,34 +121,10 @@ def _strip_rust_comments(text: str) -> str:
 
 
 
-PRODUCT_CRATES = {
-    "flamewm-api",
-    "flamewm-applications",
-    "flamewm-control-core",
-    "flamewm-control-dbus",
-    "flamewm-control-wire",
-    "flamewm-dbus-reactor",
-    "flamewm-desktop-core",
-    "flamewm-shell",
-    "flamewm-shell-core",
-    "flamewm-desktop",
-    "flamewm-settings",
-    "flamewm-settings-core",
-    "flamewm-platform",
-    "flamewm-wm",
-    "flamewm-reactor",
-    "flamewm-skin",
-    "flamewm-ui",
-    "flamewm-ui-core",
-    "flamewm-window-core",
-    "flamewm-session-core",
-    "flamewm-integrations-core",
-    "flamewm-render-compiler",
-    "flamewm-render-core",
-    "flamewm-render-x11",
-    "flamewm-ui-x11",
-    "flamewm-wm-x11",
-}
+# Every crate under `crates/` is a product crate unless it is listed here as a
+# native/render owner. This is derived from the manifests rather than kept as a
+# hand list: a new crate cannot escape the boundary guard by being forgotten.
+CRATES_DIR = "crates"
 # These crates are the canonical native/render owners. Their low-level APIs are
 # intentionally allowed to mention the capabilities guarded elsewhere.
 OWNER_CRATES = {
@@ -150,6 +133,12 @@ OWNER_CRATES = {
     "flamewm-render-x11",
     "flamewm-ui-x11",
     "flamewm-wm-x11",
+    # The Wayland compositor owns the Wayland-side native/render boundary the
+    # way render-x11/wm-x11 own the X11 one: it drives EGL + GlowRenderer and
+    # DRM/KMS directly (`src/drm/mod.rs`), presents GBM buffers (`src/render.rs`)
+    # and talks X11 only through smithay's XWayland re-export. Denying it that
+    # boundary would force the contract into the wrong crate, not remove it.
+    "flamewm-wm-wayland",
 }
 FORBIDDEN_DEPENDENCIES = {"flamewm-render-core", "flamewm-render-x11"}
 FORBIDDEN_RENDERER_SOURCE = re.compile(
@@ -194,7 +183,7 @@ def source_loc(paths):
     return sum(
         1
         for path in paths
-        for line in _j11_strip_cfgs(path.read_text(encoding="utf-8")).splitlines()
+        for line in _j11_strip_cfgs(read_source(path)).splitlines()
         if line.strip() and not line.lstrip().startswith("//")
     )
 
@@ -204,12 +193,17 @@ def relative_path(root, path):
 
 
 def product_manifests(root):
+    """Every crate manifest that is not a native/render owner.
+
+    Coverage is discovered, not declared: adding a crate under `crates/` puts it
+    inside the guard on the next run.
+    """
     manifests = {}
-    for manifest in sorted((root / "crates").glob("*/Cargo.toml")):
+    for manifest in sorted((root / CRATES_DIR).glob("*/Cargo.toml")):
         with manifest.open("rb") as stream:
             data = tomllib.load(stream)
         name = data.get("package", {}).get("name")
-        if name in PRODUCT_CRATES and name not in OWNER_CRATES:
+        if name and name not in OWNER_CRATES:
             manifests[name] = manifest
     return manifests
 
@@ -246,7 +240,7 @@ def violations(root):
         if build_script.is_file():
             source_paths.append(build_script)
         for source in source_paths:
-            text = source.read_text(encoding="utf-8")
+            text = read_source(source)
             source_path = relative_path(root, source)
             if FORBIDDEN_X11_SOURCE.search(text):
                 found.add((source_path, "x11rb-symbol"))
@@ -269,8 +263,8 @@ def violations(root):
 
     # Suppressions are checked across owners too: native declarations may use
     # naming/dead-code allowances, but never blanket warning suppression.
-    for source in sorted((root / "crates").rglob("*.rs")):
-        text = source.read_text(encoding="utf-8")
+    for source in _crate_sources(root):
+        text = read_source(source)
         if BROAD_SUPPRESSION.search(text):
             found.add((relative_path(root, source), "broad-warning-suppression"))
     found |= j7_violations(root)
@@ -300,15 +294,46 @@ def _j7_is_test(path):
     return "/tests/" in path.as_posix() or path.name.endswith("_test.rs")
 
 
+@lru_cache(maxsize=None)
+def read_source(path):
+    """File text, read once per run.
+
+    Many guards re-read the same file dozens of times. The key includes mtime
+    and size, so a file rewritten during the run is still read fresh; a file that
+    vanished is simply read again so the caller sees the same error it would
+    without the cache.
+    """
+    try:
+        info = path.stat()
+    except OSError:
+        return path.read_text(encoding="utf-8")
+    return _read_source_keyed(path, info.st_mtime_ns, info.st_size)
+
+
+@lru_cache(maxsize=None)
+def _read_source_keyed(path, _mtime_ns, _size):
+    return path.read_text(encoding="utf-8")
+
+
+@lru_cache(maxsize=None)
+def _crate_sources(root):
+    """Every `.rs` file under `crates/`, sorted. Cached: 15k calls per run."""
+    return tuple(sorted((root / CRATES_DIR).rglob("*.rs")))
+
+
+@lru_cache(maxsize=None)
+def _crate_production_sources(root):
+    """`crates/` sources that are not tests, sorted. Cached like `_crate_sources`."""
+    return tuple(p for p in _crate_sources(root) if not _j7_is_test(p))
+
+
 def _j7_production_sources(root):
-    for path in sorted((root / "crates").rglob("*.rs")):
-        if not _j7_is_test(path):
-            yield path
+    return _crate_production_sources(root)
 
 
 def _struct_count(root, name):
     return sum(
-        len(re.findall(rf"struct {name}", _strip_rust_comments(p.read_text(encoding="utf-8"))))
+        len(re.findall(rf"struct {name}", _strip_rust_comments(read_source(p))))
         for p in _j7_production_sources(root)
     )
 
@@ -317,7 +342,7 @@ def _production_text_outside(root, owners):
     for path in _j7_production_sources(root):
         rel = relative_path(root, path)
         if rel not in owners:
-            yield rel, _strip_rust_comments(path.read_text(encoding="utf-8"))
+            yield rel, _strip_rust_comments(read_source(path))
 
 
 def _j7_declared(text):
@@ -337,7 +362,7 @@ def j7_violations(root):
     # J7-G1: only the render/native owner may blend over black or keep the
     # documented opaque fallback.
     for path in _j7_production_sources(root):
-        text = _j7_declared(path.read_text(encoding="utf-8"))
+        text = _j7_declared(read_source(path))
         if not owned(path) and re.search(r"\bblend_over_black\b|fallback-black|fallback_black|FallbackBlack", text):
             found.add((rel(path), "j7-g1-no-blend-over-black"))
     # J7-G2: only the Xlib FFI declaration owner may declare
@@ -345,32 +370,32 @@ def j7_violations(root):
     for path in _j7_production_sources(root):
         if rel(path) == J7_FFI_DECLARATION:
             continue
-        if "XCreateSimpleWindow" in _j7_declared(path.read_text(encoding="utf-8")):
+        if "XCreateSimpleWindow" in _j7_declared(read_source(path)):
             found.add((rel(path), "j7-g2-no-xcreate-simple-window"))
     # J7-G3: no active icon consumer references known keyed PPM assets.
     # Compiled shell templates are owned by the G01 template guard; the guard
     # tables themselves are not icon consumers. Test-only files are excluded.
     for path in _j7_production_sources(root):
-        text = _j7_declared(path.read_text(encoding="utf-8"))
+        text = _j7_declared(read_source(path))
         for match in re.findall(r"[A-Za-z0-9_./-]+\.ppm", text):
             if match.rsplit("/", 1)[-1] in J7_KNOWN_KEYED_PPMS:
                 found.add((rel(path), "j7-g3-no-keyed-ppm-asset"))
                 break
     # J7-G4: generic IconResolver fallback must not be .ppm (checked at owner).
     owner = _owner_path(root, J7_FALLBACK_OWNER)
-    for line in owner.read_text(encoding="utf-8").splitlines():
+    for line in read_source(owner).splitlines():
         if line.strip().startswith("const GENERIC_FALLBACK") and ".ppm" in line:
             found.add((J7_FALLBACK_OWNER, "j7-g4-no-ppm-fallback"))
     # J7-G5: no production magenta-key/FF00FF color-key path.
     for path in _j7_production_sources(root):
         if owned(path):
             continue
-        text = _j7_declared(path.read_text(encoding="utf-8")).lower()
+        text = _j7_declared(read_source(path)).lower()
         if J7_MAGENTA_KEY.search(text) and "no magenta" not in text and "no color-key" not in text:
             found.add((rel(path), "j7-g5-no-magenta-colorkey"))
     # J7-G6: SymbolicForeground must not be inferred from filename.
     for path in _j7_production_sources(root):
-        text = _j7_declared(path.read_text(encoding="utf-8"))
+        text = _j7_declared(read_source(path))
         if "SymbolicForeground" in text and re.search(
             r"(?i)(filename|extension|ends_with|\.svg|\.ppm|\.png).{0,80}SymbolicForeground"
             r"|SymbolicForeground.{0,80}(filename|extension|\.svg|\.ppm|\.png)",
@@ -378,14 +403,14 @@ def j7_violations(root):
         ):
             found.add((rel(path), "j7-g6-no-filename-treatment"))
     # J7-G7: real app icon path defaults to Original (checked at skin owner).
-    text = _owner_path(root, J7_TREATMENT_OWNER).read_text(encoding="utf-8")
+    text = read_source(_owner_path(root, J7_TREATMENT_OWNER))
     if "IconTreatment::Original" not in text or not re.search(
         r"Start\s*\|.*Browser|Browser.*Start", text
     ):
         found.add((J7_TREATMENT_OWNER, "j7-g7-original-app-icons"))
     # J7-G8: shell symbolic icons consume semantic foreground, not Breeze RGB.
     paint = _owner_path(root, J7_PAINT_OWNER)
-    paint_text = paint.read_text(encoding="utf-8")
+    paint_text = read_source(paint)
     if "SymbolicForeground" in paint_text and "resolve_color(style.color)" not in paint_text:
         found.add((J7_PAINT_OWNER, "j7-g8-semantic-foreground"))
     surface = _owner_path(root, J7_SURFACE_OWNER)
@@ -440,7 +465,7 @@ def _owner_text(root, rel):
     """Owner file text. Only OPTIONAL_OWNER_FILES entries may be absent (read as "")."""
     if rel in OPTIONAL_OWNER_FILES and not (root / rel).is_file():
         return ""
-    return _owner_path(root, rel).read_text(encoding="utf-8")
+    return read_source(_owner_path(root, rel))
 
 
 def _owner_dir(root, rel):
@@ -459,7 +484,7 @@ def print_j6_warnings(root):
 def j6_violations(root):
     found = set()
     skin = _owner_path(root, J6_SKIN_OWNER)
-    text = skin.read_text(encoding="utf-8")
+    text = read_source(skin)
     if re.search(
         r"Self::Start[^\n]*SymbolicForeground|Start[^\n]{0,80}=>\s*IconTreatment::SymbolicForeground",
         text,
@@ -468,7 +493,7 @@ def j6_violations(root):
     if "Self::Start" in text and "IconTreatment::Original" not in text:
         found.add((J6_SKIN_OWNER, "j6-g1-start-full-color"))
     chrome = _owner_path(root, J6_CHROME_FILE)
-    text = _strip_rust_comments(chrome.read_text(encoding="utf-8"))
+    text = _strip_rust_comments(read_source(chrome))
     if "struct X11ChromePainter" in text:
         found.add((J6_CHROME_FILE, "j6-g2-no-local-chrome-painter"))
     if re.search(r"fn draw_title_run", text) and "poly_fill_rectangle" in text:
@@ -478,19 +503,19 @@ def j6_violations(root):
     ):
         found.add((J6_CHROME_FILE, "j6-g4-no-procedural-glyphs"))
     icons = _owner_path(root, J6_ICONS_FILE)
-    text = _strip_rust_comments(icons.read_text(encoding="utf-8"))
+    text = _strip_rust_comments(read_source(icons))
     pack = text.find("packaged_candidates(name)")
     theme = text.find("theme_candidates(name")
     if pack != -1 and theme != -1 and pack < theme:
         J6_PENDING.append(f"WARN TODO(J12-PENDING) j6-g5-system-before-packaged: {J6_ICONS_FILE}")
     for rel in J6_MODEL_FILES:
-        model_text = _strip_rust_comments(_owner_path(root, rel).read_text(encoding="utf-8"))
+        model_text = _strip_rust_comments(read_source(_owner_path(root, rel)))
         if re.search(r"z_index_overrides|set_z_index|effective_z_index", model_text):
             J6_PENDING.append(f"WARN TODO(J12-PENDING) j6-g6-no-new-zindex-store: {rel}")
     shell = _owner_path(root, J6_SHELL_MAIN)
     if re.search(
         r"root_pointer\(\s*0(\.0)?\s*,\s*0(\.0)?\s*\)",
-        _strip_rust_comments(shell.read_text(encoding="utf-8")),
+        _strip_rust_comments(read_source(shell)),
     ):
         found.add((J6_SHELL_MAIN, "j6-g7-no-root-pointer-zero"))
     return found
@@ -516,7 +541,7 @@ def _j11_wm_text(root):
     parts = []
     for path in sorted(wm_dir.rglob("*.rs")):
         if not _j7_is_test(path):
-            parts.append(_strip_rust_comments(path.read_text(encoding="utf-8")))
+            parts.append(_strip_rust_comments(read_source(path)))
     return "\n".join(parts)
 
 
@@ -531,6 +556,11 @@ def _j11_fn_body(code, fn_name):
 
 def _j11_strip_cfgs(text):
     """Drop `#[cfg(test)]` items (test fns and test modules) from code context."""
+    return _j11_strip_cfgs_cached(text)
+
+
+@lru_cache(maxsize=None)
+def _j11_strip_cfgs_cached(text):
     lines = text.splitlines(keepends=True)
     out = []
     i = 0
@@ -568,7 +598,7 @@ def j11_violations(root):
     for path in _j7_production_sources(root):
         if relative_path(root, path) in (J11_MOVE_RESIZE_OWNER, J11_XLIB_DECL):
             continue
-        if "XMoveResizeWindow" in _strip_rust_comments(path.read_text(encoding="utf-8")):
+        if "XMoveResizeWindow" in _strip_rust_comments(read_source(path)):
             found.add((relative_path(root, path), "j11-g01-move-resize-commits-geometry"))
     # J11-G02: no split start_submenu runtime surface.
     for target in ("crates/flamewm-shell/src/runtime.rs", "crates/flamewm-shell/src/main.rs"):
@@ -576,7 +606,7 @@ def j11_violations(root):
             found.add((target, "j11-g02-no-submenu-surface"))
     # J11-G03: no procedural solid-red fallback in production code.
     for path in _j7_production_sources(root):
-        text = _j11_strip_cfgs(_strip_rust_comments(path.read_text(encoding="utf-8")))
+        text = _j11_strip_cfgs(_strip_rust_comments(read_source(path)))
         if re.search(r"255\s*,\s*0\s*,\s*0\s*,\s*255", text):
             found.add((relative_path(root, path), "j11-g03-no-solid-red-fallback"))
     # J11-G04: desktop cold miss keeps the synchronous fallback arm.
@@ -625,11 +655,11 @@ def j11_violations(root):
             found.add((J11_FRAME_PATH_OWNER, "j11-g06-renderer-frame-path"))
     # J11-G07: retention cleanup defaults opt-out-on (checked in tools).
     ret = _owner_path(root, "tools/performance_retention.py")
-    if 'os.environ.get("FLAMEWM_PERFORMANCE_CLEANUP", "1")' not in ret.read_text(encoding="utf-8"):
+    if 'os.environ.get("FLAMEWM_PERFORMANCE_CLEANUP", "1")' not in read_source(ret):
         found.add(("tools/performance_retention.py", "j11-g07-cleanup-default-on"))
     # J11-G08: no unprefixed env literals.
     for path in _j7_production_sources(root):
-        text = _strip_rust_comments(path.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(read_source(path))
         for lit in re.findall(r'env::(?:var|var_os)\(\s*"([^"]+)"', text):
             if not J11_ENV_OK.match(lit):
                 found.add((relative_path(root, path), "j11-g08-prefixed-env"))
@@ -656,7 +686,7 @@ def j11_violations(root):
     for path in _j7_production_sources(root):
         if path.name == "memory.rs":
             continue
-        text = _strip_rust_comments(path.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(read_source(path))
         if "MemoryGauge::new" in text and ".set(" not in text:
             found.add((relative_path(root, path), "j11-g10-live-gauges"))
     return found
@@ -688,11 +718,11 @@ def j12_violations(root):
 
     # J12-G01: invalid clamp(12.0,track) in live code.
     for path in _j7_production_sources(root):
-        if re.search(r"\bclamp\s*\(\s*12\.0", _strip_rust_comments(path.read_text(encoding="utf-8"))):
+        if re.search(r"\bclamp\s*\(\s*12\.0", _strip_rust_comments(read_source(path))):
             found.add((relative_path(root, path), "j12-g01-no-invalid-clamp"))
     # J12-G02: replace_image must not mutate document.assets.
     for path in _j7_production_sources(root):
-        body = _strip_rust_comments(path.read_text(encoding="utf-8"))
+        body = _strip_rust_comments(read_source(path))
         if re.search(r"fn replace_image", body) and re.search(
             r"\.assets\s*(\[[^\]]*\]\s*=|\.push\s*\(|\.insert\s*\(|\.clear\s*\()", body
         ):
@@ -701,7 +731,7 @@ def j12_violations(root):
     for tpl in sorted((root / "ui").rglob("*")):
         if not tpl.is_file() or tpl.suffix.lower() not in {".html", ".css"}:
             continue
-        text = re.sub(r"/\*.*?\*/", "", tpl.read_text(encoding="utf-8"), flags=re.S)
+        text = re.sub(r"/\*.*?\*/", "", read_source(tpl), flags=re.S)
         text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
         if re.search(r"display\s*:\s*none", text, re.I) and re.search(
             r"transient|popup-menu|context-menu|tooltip|dropdown", text, re.I
@@ -736,7 +766,7 @@ def j12_violations(root):
         found.add((J12_START_MENU, "j12-g09-unknown-not-visible"))
     # J12-G10: no image_text8/fixed-font normal decoration path.
     for deco in _j12_title_scan_paths(root):
-        text = _strip_rust_comments(deco.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(read_source(deco))
         if re.search(
             r"image_text8|XDrawString|fixed_font|fixed-font|9x15|TITLE_CHAR_ADVANCE", text
         ):
@@ -754,12 +784,12 @@ def j12_violations(root):
     for path in sorted(desk.rglob("*.rs")):
         if _j7_is_test(path):
             continue
-        if re.search(r"(?i)\bcpu\b", _strip_rust_comments(path.read_text(encoding="utf-8"))):
+        if re.search(r"(?i)\bcpu\b", _strip_rust_comments(read_source(path))):
             found.add((relative_path(root, path), "j12-g12-wallpaper-not-cpu"))
             break
     # J12-G13: .performance stays ignored.
     gitignore = root / ".gitignore"
-    if not gitignore.is_file() or ".performance" not in gitignore.read_text(encoding="utf-8"):
+    if not gitignore.is_file() or ".performance" not in read_source(gitignore):
         found.add((".gitignore", "j12-g13-performance-ignored"))
     # J12-G14: Breeze cursor authority intact. Session-core owns the bundled
     # theme + XCURSOR env; frame engine owns cursor-region binding via
@@ -799,12 +829,12 @@ def j10_violations(root):
                 yield path
 
     # J10-G01: Xephyr private D-Bus default present.
-    xept = _owner_path(root, "scripts/xephyr").read_text(encoding="utf-8")
+    xept = read_source(_owner_path(root, "scripts/xephyr"))
     if "FLAMEWM_XEPHYR_PRIVATE_DBUS:-1" not in xept or "dbus-run-session" not in xept:
         found.add(("scripts/xephyr", "j10-g01-private-dbus-default"))
     # J10-G02: shared host-session fallback forbidden in perf gate.
     for perf in ("tools/profile_summary.py", "tools/performance_bundle.py", "tools/performance_retention.py"):
-        text = _owner_path(root, perf).read_text(encoding="utf-8")
+        text = read_source(_owner_path(root, perf))
         if re.search(r"DBUS_SESSION_BUS_ADDRESS|host\.session|host_session", text):
             found.add((perf, "j10-g02-no-host-session-in-perf"))
     # J10-G03 (WARN-only): parent ShellSurfaces still owns helper surfaces pre-J07.
@@ -813,7 +843,7 @@ def j10_violations(root):
         J6_PENDING.append("WARN TODO(J07-PENDING) j10-g03-parent-native-surfaces: crates/flamewm-shell/src/runtime.rs")
     # J10-G04: helper cannot own NetworkManager/Pulse provider directly.
     for path in prod_sources("crates/flamewm-shell/src/quick_controls"):
-        text = _strip_rust_comments(path.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(read_source(path))
         if re.search(r"NetworkManagerProvider|PulseProvider|PulseAudioProvider|pulse::|network_manager::", text):
             found.add((relative_path(root, path), "j10-g04-helper-no-provider"))
     # J10-G05 (WARN-only): fitted_start_placement migration not in runtime yet.
@@ -822,12 +852,12 @@ def j10_violations(root):
     # J10-G06: no start_submenu native surface.
     for target in ("crates/flamewm-shell/src/runtime.rs", "crates/flamewm-shell/src/main.rs",
                    "crates/flamewm-shell/build.rs"):
-        text = _live(root, target) if target.endswith(".rs") else _owner_path(root, target).read_text(encoding="utf-8")
+        text = _live(root, target) if target.endswith(".rs") else read_source(_owner_path(root, target))
         if re.search(r"flamewm-start-submenu|start_submenu.*Surface|Surface.*start_submenu|create_surface\([^)]*submenu", text):
             found.add((target, "j10-g06-no-submenu-surface"))
     # J10-G07: no blocking Child::wait (allow wait_timeout/try_wait/kill+wait).
     for path in prod_sources("crates/flamewm-shell/src"):
-        text = _strip_rust_comments(path.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(read_source(path))
         if re.search(r"\.wait_timeout\s*\(", text):
             continue
         for m in re.finditer(r"\.wait\s*\(\s*\)", text):
@@ -844,7 +874,7 @@ def j10_violations(root):
         return re.sub(r'"(?:[^"\\]|\\.)*"', '""', text)
 
     for path in prod_sources("crates/flamewm-shell/src/quick_controls"):
-        text = unquoted(_strip_rust_comments(path.read_text(encoding="utf-8")))
+        text = unquoted(_strip_rust_comments(read_source(path)))
         if re.search(r'sh\s+-c|Command::new\(\s*"sh"|/bin/sh|\beval\s*\(|\bsystem\s*\(|`[^`]*`|\$\(', text):
             found.add((relative_path(root, path), "j10-g08-no-shell-interpolation"))
     proto = _live(root, "crates/flamewm-shell/src/quick_controls/protocol.rs")
@@ -852,7 +882,7 @@ def j10_violations(root):
         found.add(("crates/flamewm-shell/src/quick_controls/protocol.rs", "j10-g08-no-shell-interpolation"))
     # J10-G09: no dynamic profiler labels on hot paths.
     for path in _j7_production_sources(root):
-        if J10_PROF_CALL.search(_strip_rust_comments(path.read_text(encoding="utf-8"))):
+        if J10_PROF_CALL.search(_strip_rust_comments(read_source(path))):
             found.add((relative_path(root, path), "j10-g09-static-profiler-labels"))
     return found
 
@@ -894,7 +924,7 @@ def j18_violations(root):
         rel = relative_path(root, path)
         if rel in J18_GEOMETRY_OWNER_FILES:
             continue
-        text = _strip_rust_comments(path.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(read_source(path))
         if re.search(r"\.outer\s*=", text) or re.search(r"\.restore\s*=", text):
             found.add((rel, "j18-g01-frame-geometry-owner"))
     # J18-G02: exactly one live window-geometry/decoration owner pair.
@@ -940,7 +970,9 @@ def j12h_violations(root):
     audio = _live(root, "crates/flamewm-shell/src/taskbar/status/audio.rs")
     network = _live(root, "crates/flamewm-shell/src/taskbar/status/network.rs")
     file_actions = _live(root, "crates/flamewm-desktop-core/src/file_actions.rs")
-    persist = _owner_path(root, "crates/flamewm-desktop-core/src/sticky_persistence.rs").read_text(encoding="utf-8")
+    persist = read_source(
+        _owner_path(root, "crates/flamewm-desktop-core/src/sticky_persistence.rs")
+    )
     ext = _live(root, "crates/flamewm-render-x11/src/external_drawable.rs")
     chrome = _live(root, "crates/flamewm-wm-x11/src/chrome.rs")
     paint_decor = _live(root, "crates/flamewm-wm-x11/src/decoration/paint.rs")
@@ -982,7 +1014,7 @@ def j12h_violations(root):
     # J12H-G08: context border 0.
     # Menu rows/buttons are owned by the shared sheet (ui/shared/menu.css),
     # which the desktop build links with desktop.css; the zero border lives there.
-    menu_css = (root / "ui/shared/menu.css").read_text(encoding="utf-8")
+    menu_css = read_source(root / "ui/shared/menu.css")
     if "border-width:0" not in menu_css.replace(" ", ""):
         found.add(("ui/shared/menu.css", "j12h-g08-context-border-zero"))
     # J12H-G09: NOREPLACE rename.
@@ -1008,7 +1040,7 @@ def j12h_violations(root):
         found.add(("crates/flamewm-wm-x11/src/chrome.rs", "j12h-g12-skin-metrics"))
     # J12H-G13: no legacy title path; measured intent success (missing-tolerant).
     for deco in _j12_title_scan_paths(root):
-        text = _strip_rust_comments(deco.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(read_source(deco))
         if "image_text8" in text or "XDrawString" in text:
             found.add((relative_path(root, deco), "j12h-g13-no-legacy-title"))
     if (root / "crates/flamewm-wm-x11/src/decoration/paint.rs").is_file() and "title_drawn = true" not in paint_decor:
@@ -1025,10 +1057,41 @@ def j12h_violations(root):
     return found
 
 
+SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+# A release candidate workspace version still orders against a release deadline.
+SEMVER_WITH_PRERELEASE = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-Za-z.+-]+)?$"
+)
+
+
+def workspace_version(root):
+    """Workspace version from `Cargo.toml`, the same value `scripts/version` prints."""
+    with (root / "Cargo.toml").open("rb") as stream:
+        data = tomllib.load(stream)
+    try:
+        return data["workspace"]["package"]["version"]
+    except (KeyError, TypeError):
+        raise SystemExit(
+            "ERROR architecture guard: Cargo.toml has no [workspace.package] version"
+        ) from None
+
+
+def parse_version(text, pattern=SEMVER):
+    """`MAJOR.MINOR.PATCH` as a comparable tuple, or None when malformed."""
+    match = pattern.match(text)
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
 def load_exceptions(root):
     path = root / "docs/ARCHITECTURE_EXCEPTIONS.toml"
     with path.open("rb") as stream:
         data = tomllib.load(stream)
+    current = workspace_version(root)
+    current_tuple = parse_version(current, SEMVER_WITH_PRERELEASE)
+    if current_tuple is None:
+        raise SystemExit(
+            f"ERROR architecture guard: unparseable workspace version {current!r}"
+        )
     exceptions = set()
     errors = []
     for index, entry in enumerate(data.get("exception", []), 1):
@@ -1038,6 +1101,20 @@ def load_exceptions(root):
             errors.append(f"exception {index}: missing required fields: {', '.join(missing)}")
             continue
         exception_path = entry["path"]
+        remove_by = parse_version(entry["remove_by"])
+        if remove_by is None:
+            errors.append(
+                f"exception {index} {exception_path} [{entry['capability']}]: remove_by must be "
+                f"MAJOR.MINOR.PATCH, got {entry['remove_by']!r}"
+            )
+            continue
+        if remove_by <= current_tuple:
+            errors.append(
+                f"exception {index} {exception_path} [{entry['capability']}]: remove_by "
+                f"{entry['remove_by']} has expired, workspace version is {current}; "
+                f"remove the violation or raise the deadline"
+            )
+            continue
         if Path(exception_path).is_absolute() or any(token in exception_path for token in ("*", "?", "[", "]")):
             errors.append(f"exception {index}: path must be exact and relative: {exception_path}")
             continue

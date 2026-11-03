@@ -1,26 +1,284 @@
 # Exact path-level exceptions only. Wildcards, globs, and directory-wide
 # exemptions are invalid. Each entry is a ratchet for one current violation.
+#
+# `remove_by` is validated by tools/architecture_guard.py: it must parse as
+# MAJOR.MINOR.PATCH and be strictly greater than the workspace version in
+# Cargo.toml (the value scripts/version prints). A malformed or expired deadline
+# is an error, and so is an exception whose violation no longer exists: the
+# guard fails on every stale entry so this file can only shrink.
+
+[[exception]]
+path = "crates/flamewm-api/src/graphics.rs"
+capability = "renderer-symbol"
+reason = "The provider-negotiation enum spells its X11 backend labels `XRender`/`XCore` and repeats them in error strings, so the renderer regex matches a name, not a renderer API or a native handle."
+canonical_target = "crates/flamewm-api/src/graphics.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-applications/Cargo.toml"
+capability = "x11rb-dependency"
+reason = "The launch-feedback owner opens its own X connection to emit freedesktop startup-notification client messages for applications it spawned, instead of routing them through the WM protocol owner."
+canonical_target = "crates/flamewm-wm-x11/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-applications/src/launch_feedback.rs"
+capability = "x11rb-symbol"
+reason = "Startup-notification sequences are driven over a dedicated x11rb connection (`x11rb::connect`, ClientMessage sends) owned by this module rather than by the single WM protocol owner."
+canonical_target = "crates/flamewm-wm-x11/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-applications/src/lib.rs"
+capability = "j11-g08-prefixed-env"
+reason = "Desktop-entry decoding reads `LC_MESSAGES` and `LANG` to pick a localized Name/Comment, which are standard POSIX locale variables rather than FlameWM settings."
+canonical_target = "crates/flamewm-applications/src/lib.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-assistant/Cargo.toml"
+capability = "renderer-dependency"
+reason = "The assistant lays out its transcript with `flamewm_render_core::layout_text` so wrapped history matches renderer metrics, which is a direct renderer-core dependency."
+canonical_target = "crates/flamewm-render-core/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-assistant/src/model.rs"
+capability = "renderer-symbol"
+reason = "`model.rs` calls `flamewm_render_core::layout_text` with `TextWrap::Wrap` to measure transcript rows before the shell renders them."
+canonical_target = "crates/flamewm-render-core/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-clipboard/Cargo.toml"
+capability = "x11rb-dependency"
+reason = "`flamewm-clipboard` is the CLIPBOARD selection owner and speaks ICCCM directly over x11rb rather than through the WM protocol owner."
+canonical_target = "crates/flamewm-clipboard/src/owner.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-clipboard/src/lib.rs"
+capability = "x11rb-symbol"
+reason = "`set_files`/`get_files` talk ICCCM selection traffic (`x11rb::connect`, Atom/Property requests) on the clipboard owner's own connection."
+canonical_target = "crates/flamewm-clipboard/src/owner.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-clipboard/src/owner.rs"
+capability = "x11rb-symbol"
+reason = "The owner thread holds CLIPBOARD and answers `SelectionRequest` events on its own x11rb connection until a `SelectionClear` arrives."
+canonical_target = "crates/flamewm-clipboard/src/owner.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-desktop-core/Cargo.toml"
+capability = "core-source-loc>2400"
+reason = "The core holds file actions, file-manager policy, sticky persistence and drag state at 4925 production lines, so the 2400-line core budget only fits after the file-operations owner is split out."
+canonical_target = "crates/flamewm-desktop-core/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-desktop/Cargo.toml"
+capability = "facade-source-loc>5000"
+reason = "8882 production lines: the desktop facade still owns widgets, projection, Convert and rename UI in one crate."
+canonical_target = "crates/flamewm-desktop/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-desktop/src/widgets.rs"
+capability = "j11-g08-prefixed-env"
+reason = "The task-manager widget shows the login name taken from `USER`."
+canonical_target = "crates/flamewm-desktop/src/widgets.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-desktop/src/widgets.rs"
+capability = "j12-g12-wallpaper-not-cpu"
+reason = "The rule matches `cpu` to keep CPU cost out of the wallpaper projection, but this module is the widget sampler that reads `/proc/stat` for `WidgetKind::Cpu`; no wallpaper code is involved."
+canonical_target = "crates/flamewm-desktop/src/widgets.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-explorer/Cargo.toml"
+capability = "facade-source-loc>5000"
+reason = "8193 production lines of file-browser views, selection and transfer policy in one facade."
+canonical_target = "crates/flamewm-explorer/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-integrations-linux/Cargo.toml"
+capability = "facade-source-loc>5000"
+reason = "12139 production lines: the Linux integration facade still holds tray, icon, audio, network and calendar adapters together."
+canonical_target = "crates/flamewm-integrations-linux/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-lock/Cargo.toml"
+capability = "facade-source-loc>5000"
+reason = "5004 production lines, 4 over the facade budget: the lock screen keeps PAM, the Xlib grab and its renderer preview in one binary."
+canonical_target = "crates/flamewm-lock/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-lock/Cargo.toml"
+capability = "renderer-dependency"
+reason = "The lock screen renders its own document through renderer-core (glyphs, lower, soft pixels) so the locked frame never depends on a live shell process."
+canonical_target = "crates/flamewm-render-core/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-lock/src/main.rs"
+capability = "j11-g08-prefixed-env"
+reason = "`main` picks the Wayland or X11 grab path from `WAYLAND_DISPLAY`."
+canonical_target = "crates/flamewm-lock/src/main.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-lock/src/native_time.rs"
+capability = "raw-ffi-boundary"
+reason = "`localtime_r` from libc is declared directly because the lock screen formats the clock without trusting another process while locked."
+canonical_target = "crates/flamewm-lock/src/x11.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-lock/src/pam.rs"
+capability = "raw-ffi-boundary"
+reason = "PAM (`pam_start`/`pam_authenticate`/`pam_end`) is declared as raw `extern \"C\"` because no safe PAM binding is a workspace dependency."
+canonical_target = "crates/flamewm-lock/src/x11.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-lock/src/present.rs"
+capability = "renderer-symbol"
+reason = "The preview turns the lock document into pixels with renderer-core commands over `RuntimeDocument`, then `XRender`/`Xft`."
+canonical_target = "crates/flamewm-render-core/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-lock/src/signals.rs"
+capability = "raw-ffi-boundary"
+reason = "`signal(2)` is declared directly so the lock screen can ignore SIGHUP/SIGINT/SIGTERM and route SIGTERM to its preview flag."
+canonical_target = "crates/flamewm-lock/src/x11.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-lock/src/x11.rs"
+capability = "raw-ffi-boundary"
+reason = "The root keyboard grab goes through Xlib loaded with `dlopen`/`dlsym` in the locker's own FFI block, so the grab survives even if the WM is compromised."
+canonical_target = "crates/flamewm-lock/src/x11.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-lock/src/x11.rs"
+capability = "renderer-symbol"
+reason = "The same module declares `XOpenDisplay`, which the renderer regex matches even though this is the grab connection, not a renderer."
+canonical_target = "crates/flamewm-lock/src/x11.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-platform/Cargo.toml"
+capability = "facade-source-loc>5000"
+reason = "6406 production lines of cross-session policy (shortcut registry, workspace facade, terminal and open-files actions) in one facade crate."
+canonical_target = "crates/flamewm-platform/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-remote-fs/src/client.rs"
+capability = "j11-g08-prefixed-env"
+reason = "The remote filesystem client names its per-user fallback runtime directory from USER, the standard login name; the guard only admits FLAMEWM_, XDG_ and similar prefixes."
+canonical_target = "crates/flamewm-remote-fs/src/client.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-screenshot/Cargo.toml"
+capability = "x11rb-dependency"
+reason = "The screenshot binary is an X client (RandR/XFixes capture plus an override-redirect selection window) built directly on x11rb."
+canonical_target = "crates/flamewm-screenshot/src/ui.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-screenshot/src/capture.rs"
+capability = "x11rb-symbol"
+reason = "Root capture issues `x11rb` RandR/XFixes requests and reads server-supplied visual masks instead of assuming BGRA."
+canonical_target = "crates/flamewm-screenshot/src/ui.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-screenshot/src/clipboard.rs"
+capability = "x11rb-symbol"
+reason = "The tool's image/png CLIPBOARD owner answers ICCCM requests on its own x11rb connection."
+canonical_target = "crates/flamewm-screenshot/src/ui.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-screenshot/src/main.rs"
+capability = "j11-g08-prefixed-env"
+reason = "The capture path reads `DISPLAY` to name the display it connects to; that is the X connection name, not a FlameWM setting."
+canonical_target = "crates/flamewm-screenshot/src/main.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-screenshot/src/main.rs"
+capability = "x11rb-symbol"
+reason = "`main` opens the display with `x11rb::connect` and hands the connection to the capture and editor modules."
+canonical_target = "crates/flamewm-screenshot/src/ui.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-screenshot/src/ui.rs"
+capability = "x11rb-symbol"
+reason = "The on-demand selection/editor window is a raw x11rb window with pointer grabs and a frozen backing pixmap."
+canonical_target = "crates/flamewm-screenshot/src/ui.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-session-core/src/diagnostics.rs"
+capability = "renderer-symbol"
+reason = "The preflight text says 'XRender-based text and image drawing falls back to core X'; the regex matches that diagnostic string, not renderer use."
+canonical_target = "crates/flamewm-session-core/src/diagnostics.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-settings/Cargo.toml"
+capability = "facade-source-loc>5000"
+reason = "9123 production lines: settings keeps its panels, control clients and persistence in one facade."
+canonical_target = "crates/flamewm-settings/src"
+remove_by = "0.3.0"
 
 [[exception]]
 path = "crates/flamewm-shell/Cargo.toml"
 capability = "facade-source-loc>5000"
-reason = "0.0.8 convergence keeps shell Start/status/calendar/anchored-popover owners in one facade; split deferred to avoid half-migration."
+reason = "17958 production lines: Start, status, calendar, anchored popovers and quick controls are still one facade, and the split is deferred because those owners share one shell runtime transaction and land as a dedicated migration tranche rather than a half-move."
 canonical_target = "crates/flamewm-shell/src"
-remove_by = "0.0.9"
+remove_by = "0.3.0"
 
 [[exception]]
-path = "crates/flamewm-wm/Cargo.toml"
-capability = "x11rb-dependency"
-reason = "Explicit native EWMH readiness validation is needed before dependent session processes start."
-canonical_target = "crates/flamewm-wm-x11"
-remove_by = "0.0.10"
+path = "crates/flamewm-shell/src/runtime.rs"
+capability = "j12h-g06-anchored-popover"
+reason = "`open_status_anchored_id` moved to `runtime/start_status.rs` when the shell runtime was split, but j12h-g06 still reads `runtime.rs`, which now only declares the module."
+canonical_target = "crates/flamewm-shell/src/runtime/start_status.rs"
+remove_by = "0.2.0"
 
 [[exception]]
-path = "crates/flamewm-wm/src/bin/flamewm-session.rs"
-capability = "x11rb-symbol"
-reason = "Explicit native EWMH readiness validation is needed before dependent session processes start."
-canonical_target = "crates/flamewm-wm-x11"
-remove_by = "0.0.10"
+path = "crates/flamewm-skin/src/palette.rs"
+capability = "j12h-g14-panel-1b1e20"
+reason = "`PANEL` is `Rgb(0x001b_1e20)`: the canonical #1b1e20 value is present but zero-padded and underscore-grouped, which the guard's literal `0x1b1e20` match does not accept."
+canonical_target = "crates/flamewm-skin/src/palette.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-terminal/Cargo.toml"
+capability = "facade-source-loc>5000"
+reason = "8232 production lines: the terminal keeps VT parsing, pty, flamefetch and settings surfaces in one facade."
+canonical_target = "crates/flamewm-terminal/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-terminal/src/fetch.rs"
+capability = "j11-g08-prefixed-env"
+reason = "`flamefetch` reproduces the user's shell environment and reads `SHELL`, `USER`, `COLUMNS`, `DISPLAY` and `NO_COLOR` to do it."
+canonical_target = "crates/flamewm-terminal/src/fetch.rs"
+remove_by = "0.2.0"
 
 [[exception]]
 path = "crates/flamewm-terminal/src/pty.rs"
@@ -30,8 +288,225 @@ canonical_target = "crates/flamewm-terminal/src/pty.rs"
 remove_by = "0.2.0"
 
 [[exception]]
-path = "crates/flamewm-remote-fs/src/client.rs"
+path = "crates/flamewm-ui-document/Cargo.toml"
+capability = "renderer-dependency"
+reason = "`flamewm-ui-document` exists to hold a renderer `RuntimeDocument` plus window/backdrop state for the UI crates, so it depends on renderer-core on purpose."
+canonical_target = "crates/flamewm-render-core/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-ui-document/src/lib.rs"
+capability = "renderer-symbol"
+reason = "`lib.rs` re-exports `flamewm_render_core::Overflow` as part of that wrapper's public surface."
+canonical_target = "crates/flamewm-render-core/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-ui-document/src/template.rs"
+capability = "renderer-symbol"
+reason = "The template wrapper stores `RuntimeDocument`, layout results and backdrop slots so UI callers never build a document themselves."
+canonical_target = "crates/flamewm-render-core/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-wm/Cargo.toml"
+capability = "x11rb-dependency"
+reason = "Explicit native EWMH readiness validation is needed before dependent session processes start."
+canonical_target = "crates/flamewm-wm-x11/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-wm/src/bin/flamewm-session.rs"
+capability = "x11rb-symbol"
+reason = "Explicit native EWMH readiness validation is needed before dependent session processes start."
+canonical_target = "crates/flamewm-wm-x11/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-wm/src/session_app_compat.rs"
 capability = "j11-g08-prefixed-env"
-reason = "The remote filesystem client names its per-user fallback runtime directory from USER, the standard login name; the guard only admits FLAMEWM_, XDG_ and similar prefixes."
-canonical_target = "crates/flamewm-remote-fs/src/client.rs"
+reason = "KWallet autologin sockets are named by `PAM_KWALLET5_LOGIN`/`PAM_KWALLET_LOGIN`, variables PAM exports into the session."
+canonical_target = "crates/flamewm-wm/src/session_app_compat.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-wm/src/session_diagnostics.rs"
+capability = "j11-g08-prefixed-env"
+reason = "`DISPLAY` is read to report which display a failed session tried; that is the X connection name, not a FlameWM setting."
+canonical_target = "crates/flamewm-wm/src/session_diagnostics.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-wm/src/session_diagnostics.rs"
+capability = "x11rb-symbol"
+reason = "The diagnostics probe calls `x11rb::connect` to test whether the display answers at all."
+canonical_target = "crates/flamewm-wm-x11/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/Cargo.toml"
+capability = "facade-source-loc>5000"
+reason = "9588 production lines, but the budget targets product facades: this crate is the XTEST scenario harness, whose scenarios are independent integration probes."
+canonical_target = "crates/flamewm-x11-canary/src"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/Cargo.toml"
+capability = "x11rb-dependency"
+reason = "The canary is an independent X client that drives real XTEST input and observes server state, so it cannot borrow the WM owner's connection."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/main.rs"
+capability = "x11rb-symbol"
+reason = "The canary entry point opens its own x11rb connection and hands it to the scenario harness."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/scenarios/clipboard.rs"
+capability = "x11rb-symbol"
+reason = "The cross-client clipboard scenario runs an owner and a requestor as two independent x11rb connections."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/scenarios/explicit_layout.rs"
+capability = "x11rb-symbol"
+reason = "The explicit-layout probe drags a real client with XTEST input over the canary's own x11rb connection."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/scenarios/explicit_shell.rs"
+capability = "x11rb-symbol"
+reason = "The shell popup scenarios send XTEST pointer and keyboard events over the canary's own connection."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/scenarios/interaction_regressions.rs"
+capability = "x11rb-symbol"
+reason = "The X01-X09 regressions drive the canonical XTEST helpers, which need the canary's own x11rb connection."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+capability = "x11rb-symbol"
+reason = "`mod.rs` holds the shared x11rb connection accessors and XTEST wrappers every scenario uses."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/scenarios/popup_lifecycle.rs"
+capability = "x11rb-symbol"
+reason = "T03 reads popup `Viewable` state and geometry through the canary's own x11rb connection."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/scenarios/reactor_presentation.rs"
+capability = "unsafe-fn-safety-contract"
+reason = "This scenario is a source-boundary canary: it `include_str!`s render-x11 sources and searches for the literal 'pub(crate) unsafe fn event_loop_with_reactor', so the safety-contract regex matches a quoted string, not a declaration."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/reactor_presentation.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/scenarios/snap_border.rs"
+capability = "x11rb-symbol"
+reason = "S1-S4 read `_NET_FRAME_EXTENTS` and push pointer input over the canary's own x11rb connection."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/scenarios/t15_t18.rs"
+capability = "x11rb-symbol"
+reason = "T15-T18 only claim state observable at the X11 boundary, which they read through the canary's own connection."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/scenarios/window_interaction.rs"
+capability = "x11rb-symbol"
+reason = "T06/T07 perform a real pointer drag and 8-way resize with XTEST on the canary's own connection."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/scenarios/workspaces.rs"
+capability = "x11rb-symbol"
+reason = "T11/T12/T21/T22 churn and inspect workspaces through the canary's own x11rb connection."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-desktop/Cargo.toml"
+capability = "x11rb-dependency"
+reason = "`flamewm-x11-desktop` is the live X11 implementation of the api port traits (EWMH/RandR), so it speaks x11rb directly."
+canonical_target = "crates/flamewm-x11-desktop/src/shared.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-desktop/src/lib.rs"
+capability = "x11rb-symbol"
+reason = "`lib.rs` wires the port implementations onto the shared x11rb connection and its RandR/xproto imports."
+canonical_target = "crates/flamewm-x11-desktop/src/shared.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-desktop/src/shared.rs"
+capability = "x11rb-symbol"
+reason = "`shared.rs` owns the one long-lived x11rb connection plus the xproto/RandR requests the ports reuse."
+canonical_target = "crates/flamewm-x11-desktop/src/shared.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-desktop/src/shortcuts.rs"
+capability = "x11rb-symbol"
+reason = "The shortcut grab/ungrab adapter issues `GrabKey`/`UngrabKey` xproto requests on the shared connection."
+canonical_target = "crates/flamewm-x11-desktop/src/shared.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-xsettings/Cargo.toml"
+capability = "x11rb-dependency"
+reason = "The xsettings manager owns the `_XSETTINGS_S0` selection on the root window and speaks x11rb directly."
+canonical_target = "crates/flamewm-xsettings/src/x11.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-xsettings/src/blob.rs"
+capability = "renderer-symbol"
+reason = "`blob.rs` matches `Xft/` only inside XSettings property keys such as `Xft/DPI`, which are data names, not renderer calls."
+canonical_target = "crates/flamewm-xsettings/src/blob.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-xsettings/src/lib.rs"
+capability = "renderer-symbol"
+reason = "`lib.rs` builds the XSettings key map containing `Xft/Antialias`, `Xft/Hinting`, `Xft/DPI` and friends; the regex matches those key strings."
+canonical_target = "crates/flamewm-xsettings/src/lib.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-xsettings/src/manager.rs"
+capability = "renderer-symbol"
+reason = "`manager.rs` builds XSettings maps with `Xft/Antialias` keys, including in its publication tests, so only key strings match."
+canonical_target = "crates/flamewm-xsettings/src/manager.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-xsettings/src/x11.rs"
+capability = "x11rb-symbol"
+reason = "The X11 adapter keeps one long-lived x11rb connection for the selection owner for the manager's whole lifetime."
+canonical_target = "crates/flamewm-xsettings/src/x11.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "ui/desktop/desktop.css"
+capability = "j12-g03-no-display-none-transient"
+reason = "`.sticky-title { display:none; }` hides the sticky note's title bar, and this stylesheet also carries the desktop `.context-menu` rules, so the per-file 'hidden transient selector' pair fires on two unrelated rules."
+canonical_target = "ui/desktop/desktop.css"
 remove_by = "0.2.0"

@@ -42,7 +42,7 @@ pub(crate) struct IntegerStepper {
     pub(crate) maximum: i64,
 }
 
-pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 9] = [
+pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 12] = [
     IntegerStepper {
         slug: "window-margin",
         key: "windowMargin",
@@ -105,6 +105,28 @@ pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 9] = [
         step: 5,
         minimum: 0,
         maximum: 80,
+    },
+    IntegerStepper {
+        slug: "blue-light",
+        key: "blueLightFilter",
+        step: 5,
+        minimum: 0,
+        maximum: 100,
+    },
+    // The schedule times move in ten-minute steps, the granularity a desktop night shift needs.
+    IntegerStepper {
+        slug: "night-shift-start",
+        key: "nightShiftStart",
+        step: 10,
+        minimum: 0,
+        maximum: 1_439,
+    },
+    IntegerStepper {
+        slug: "night-shift-end",
+        key: "nightShiftEnd",
+        step: 10,
+        minimum: 0,
+        maximum: 1_439,
     },
 ];
 

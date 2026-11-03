@@ -51,6 +51,8 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "time-auto-zone-on",
     "font-toggle-on",
     "wallpaper-share-on",
+    "night-shift-on",
+    "night-shift-schedule-on",
 ];
 /// Boolean ON/OFF twins: (setting key, ON id, OFF id, default when the key is absent).
 pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
@@ -168,6 +170,13 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "assistant.textToSpeech",
         "assistant-text-to-speech-on",
         "assistant-text-to-speech-off",
+        false,
+    ),
+    ("nightShift", "night-shift-on", "night-shift-off", false),
+    (
+        "nightShiftSchedule",
+        "night-shift-schedule-on",
+        "night-shift-schedule-off",
         false,
     ),
 ];

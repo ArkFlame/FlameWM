@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 calloop.workspace = true
 flamewm-api = { path = "../flamewm-api" }
+chrono.workspace = true
 flamewm-applications = { path = "../flamewm-applications" }
 flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }

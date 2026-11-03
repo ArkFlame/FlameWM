@@ -5,6 +5,8 @@ cd "$ROOT"
 python3 -I tools/verify_desktop_conversion_contract.py
 python3 tools/verify_rwr_promotion.py
 python3 -I tools/ui_contract_guard.py
+python3 -I tools/architecture_guard.py
+python3 -I -m unittest discover -s tools -p 'test_architecture_guard.py' -q
 python3 -I -m unittest discover -s tools -p 'test_ui_contract_guard.py' -q
 python3 -I -m unittest discover -s tools -p 'test_desktop_convert_css_contract.py' -q
 python3 -I -m unittest discover -s tools -p 'test_package_source_archive.py' -q

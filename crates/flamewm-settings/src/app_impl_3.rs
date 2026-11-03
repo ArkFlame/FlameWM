@@ -597,12 +597,25 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     format!("{:.1} px", value as f64 / 10.0)
                 } else if row.key == "windowMargin" {
                     format!("{value} px")
+                } else if matches!(row.key, "nightShiftStart" | "nightShiftEnd") {
+                    // Both are minutes after midnight, shown as the clock time the schedule uses.
+                    flamewm_api::blue_light::format_minutes(u32::try_from(value).unwrap_or(0))
+                } else if row.key == "blueLightFilter" {
+                    format!("{value}%")
                 } else {
                     value.to_string()
                 };
                 document.text(&format!("{}-value", row.slug), label)?;
             }
         }
+        // Night Shift owns three dependent rows: the schedule switch needs Night Shift, and the
+        // two times need the schedule. Nothing else on the page moves.
+        let night_shift = self.bool_setting("nightShift");
+        let scheduled = self.bool_setting("nightShiftSchedule");
+        document.visible("blue-light-row", night_shift)?;
+        document.visible("night-shift-schedule-row", night_shift)?;
+        document.visible("night-shift-start-row", night_shift && scheduled)?;
+        document.visible("night-shift-end-row", night_shift && scheduled)?;
         if let Some(value) = text("wallpaperFit") {
             document.text("wallpaper-fit-value", wallpaper_fit_label(&value))?;
         }

@@ -615,6 +615,20 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
             }
         }
     }
+    if state.blue_light_intensity > 0 {
+        // The amber veil covers the whole output and sits last, so it warms every layer the
+        // compositor draws, including docks and XWayland clients. This is the Wayland stand-in for
+        // the X11 gamma ramp: Smithay exposes no DRM gamma, and an overlay is the only honest
+        // cross-backend option (see `flamewm_api::blue_light::overlay_rgba`).
+        let size = state.output_rect();
+        out.push(Elem::Solid(SolidColorRenderElement::new(
+            smithay::backend::renderer::element::Id::new(),
+            Rectangle::new((0, 0).into(), (size.w, size.h).into()),
+            smithay::backend::renderer::utils::CommitCounter::default(),
+            flamewm_api::blue_light::overlay_rgba(state.blue_light_intensity),
+            Kind::Unspecified,
+        )));
+    }
     out
 }
 

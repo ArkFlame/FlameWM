@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "crates/flamewm-ui-x11/Cargo.toml"
 LOCK = ROOT / "Cargo.lock"
-SOURCE = ROOT / "crates/flamewm-ui-x11/src/surface_style.rs"
+SOURCE = ROOT / "crates/flamewm-ui-document/src/surface_style.rs"
 
 
 class X11SurfaceDependencyContract(unittest.TestCase):

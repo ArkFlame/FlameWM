@@ -343,6 +343,9 @@ pub struct State {
     cached_work_area: Rect,
     pub damage: OutputDamageTracker,
     pub model: WindowModel,
+    /// Resolved blue-light intensity (0..=100). The compositor has no output gamma ramp through
+    /// Smithay, so it paints the shared amber veil at this strength; see `flamewm_api::blue_light`.
+    pub blue_light_intensity: u8,
     /// Smithay toplevels keyed by the model identifier.
     pub toplevels: Vec<(WindowId, ToplevelSurface)>,
     pub next_id: WindowId,
@@ -466,6 +469,7 @@ impl State {
             cached_work_area: Rect::new(0, 0, 1280, 800),
             damage,
             model,
+            blue_light_intensity: 0,
             toplevels: Vec::new(),
             next_id: 1,
             focused: None,

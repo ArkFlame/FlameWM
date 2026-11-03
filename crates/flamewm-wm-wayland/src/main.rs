@@ -479,7 +479,10 @@ fn abort_startup(reason: &str) {
 fn run() -> Result<i32, Box<dyn Error>> {
     // Before any thread or child exists: XWayland, the session clients and the compositor's own
     // pointer read the theme from this process's environment.
-    let graphics_request = std::env::var("FLAMEWM_WAYLAND_RENDER_PROVIDER").ok();
+    let graphics_request = flamewm_api::graphics::provider_request(
+        flamewm_api::graphics::WAYLAND_PROVIDER_VARIABLE,
+        flamewm_api::graphics::LEGACY_PROVIDER_VARIABLE,
+    );
     let graphics = choose_provider(DisplayProtocol::Wayland, graphics_request.as_deref(), false)?;
     eprintln!(
         "FLAMEWM_RENDER_PROVIDER {} (real GL driver reported as FLAMEWM_GL_RENDERER)",
