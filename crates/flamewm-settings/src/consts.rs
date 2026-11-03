@@ -146,7 +146,7 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "taskbarSeparate",
         "taskbar-separate-on",
         "taskbar-separate-off",
-        true,
+        false,
     ),
     (
         "assistant.enabled",

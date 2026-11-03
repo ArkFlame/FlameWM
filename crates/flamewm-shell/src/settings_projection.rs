@@ -83,7 +83,12 @@ pub fn project(
             ));
             // Separate mode paints the wallpaper (the captured backdrop) across the bar and one
             // capsule per element; the root must not tint the gaps between them.
-            let separate = bool_setting(snapshot, "taskbarSeparate", true);
+            let separate = bool_setting(snapshot, "taskbarSeparate", false);
+            // Classic unless `taskbarStyle` is exactly `floating`, the strings the platform reads.
+            let classic = !matches!(
+                snapshot.values.get("taskbarStyle"),
+                Some(SettingValue::Text(style)) if style == "floating"
+            );
             document.background(
                 "taskbar",
                 if separate {
@@ -93,10 +98,21 @@ pub fn project(
                 },
             )?;
             // A transparent fill alone does not suppress the separately projected 1px
-            // contour. Only the per-node capsules have outlines in separated mode.
-            if separate {
+            // contour. Only the per-node capsules have outlines in separated mode, and the
+            // classic bar replaces the bar contour with the one full-width top edge below.
+            if separate || classic {
                 document.border("taskbar", UiColor { a: 0, ..fill })?;
             }
+            // Classic draws a single 1 px top outline across the panel viewport, so the bar
+            // reaches the screen end instead of closing off its own inset border box.
+            document.background(
+                "taskbar-outline",
+                if classic {
+                    flamewm_ui_x11::surface_style::surface_border(snapshot)
+                } else {
+                    UiColor { a: 0, ..fill }
+                },
+            )?;
             crate::projection::set_task_accent(accent);
             // A settings change must also re-apply (or clear) the per-element capsules, so
             // disabling `taskbarSeparate` cannot leave the last projected fills behind.
@@ -747,43 +763,14 @@ mod tests {
             "taskbarMaterialMode".to_owned(),
             SettingValue::Text("blur-only".to_owned()),
         );
-        let mut doc = RecordingUiDoc::default();
-        project(&mut doc, &snapshot, SurfaceKind::Panel).expect("panel");
-        // `taskbarSeparate` defaults on: the root paints no tint so the wallpaper shows between
-        // the per-element capsules.
-        assert_eq!(
-            doc.borders["taskbar"].a, 0,
-            "separated bar root has no contour"
-        );
-        assert_eq!(
-            doc.borders["workspace-pager"].a,
-            // Shared rim alpha: RIM_PERCENT of 255, the same derivation as surface_stroke.
-            u8::try_from(u16::from(flamewm_ui_core::glass::RIM_PERCENT) * 255 / 100)
-                .expect("rim alpha fits u8"),
-            "pager matches other capsules"
-        );
         // Taskbar capsules use the Dock material (Blur Only: neutral white at 8%, alpha 20), not the
         // legacy surfaceColor/surfaceOpacity pair, which still drives popups and menus.
-        assert_eq!(
-            doc.backgrounds["workspace-pager"].a, 20,
-            "pager uses the Dock material fill"
-        );
+        let mut doc = RecordingUiDoc::default();
+        project(&mut doc, &snapshot, SurfaceKind::Panel).expect("panel");
+        // `taskbarSeparate` now defaults off: the unified root paints the Dock tint and the
+        // element capsules keep no contour of their own.
         assert_eq!(
             doc.backgrounds["taskbar"],
-            UiColor {
-                r: 0xff,
-                g: 0xff,
-                b: 0xff,
-                a: 0
-            }
-        );
-        snapshot
-            .values
-            .insert("taskbarSeparate".to_owned(), SettingValue::Boolean(false));
-        let mut unified = RecordingUiDoc::default();
-        project(&mut unified, &snapshot, SurfaceKind::Panel).expect("unified panel");
-        assert_eq!(
-            unified.backgrounds["taskbar"],
             UiColor {
                 r: 0xff,
                 g: 0xff,
@@ -791,16 +778,105 @@ mod tests {
                 a: 20
             }
         );
-        assert!(
-            unified.borders["taskbar"].a > 0,
-            "unified bar owns its border"
+        assert_eq!(
+            doc.borders["taskbar"].a, 0,
+            "classic unified bar keeps no contour of its own"
         );
         assert_eq!(
-            unified.borders["workspace-pager"].a, 0,
+            doc.borders["workspace-pager"].a, 0,
             "unified bar clears pager contour"
+        );
+        assert_eq!(
+            doc.backgrounds["workspace-pager"].a, 0,
+            "unified bar clears pager fill"
+        );
+        // An explicit `taskbarSeparate` still switches to one capsule per element: the root
+        // stops painting the tint so the wallpaper shows between the capsules.
+        snapshot
+            .values
+            .insert("taskbarSeparate".to_owned(), SettingValue::Boolean(true));
+        let mut separate = RecordingUiDoc::default();
+        project(&mut separate, &snapshot, SurfaceKind::Panel).expect("separate panel");
+        assert_eq!(
+            separate.backgrounds["taskbar"],
+            UiColor {
+                r: 0xff,
+                g: 0xff,
+                b: 0xff,
+                a: 0
+            },
+            "separated bar root paints no tint"
+        );
+        assert_eq!(
+            separate.borders["workspace-pager"].a,
+            // Shared rim alpha: RIM_PERCENT of 255, the same derivation as surface_stroke.
+            u8::try_from(u16::from(flamewm_ui_core::glass::RIM_PERCENT) * 255 / 100)
+                .expect("rim alpha fits u8"),
+            "pager matches other capsules"
+        );
+        assert_eq!(
+            separate.backgrounds["workspace-pager"].a, 20,
+            "pager uses the Dock material fill"
         );
         // Dock material is independent of surfaceOpacity/surfaceBlurPercent (Blur Only: 8%, 34px).
         assert_eq!(taskbar_backdrop_percents(&snapshot), (8, 85));
+    }
+
+    // REGRESSION: a classic bar must reach the screen end with one top outline, not close off
+    // its own border box. The bar root keeps no contour and the viewport-wide outline carries
+    // the shared surface border.
+    // MUTATION: draw the classic contour on the root again, or leave the outline transparent.
+    #[test]
+    fn classic_taskbar_draws_one_full_width_top_outline() {
+        let _accent = lock_task_accent();
+        let snapshot = SettingsSnapshot::new(1);
+        assert_eq!(
+            text_setting(&snapshot, "taskbarStyle", "classic"),
+            "classic",
+            "a fresh snapshot is the classic layout"
+        );
+        let mut doc = RecordingUiDoc::default();
+        project(&mut doc, &snapshot, SurfaceKind::Panel).expect("classic panel");
+        assert_eq!(
+            doc.borders["taskbar"].a, 0,
+            "classic bar root owns no contour"
+        );
+        let contour = flamewm_ui_x11::surface_style::surface_border(&snapshot);
+        assert!(contour.a > 0, "the default surface border is visible");
+        assert_eq!(doc.backgrounds["taskbar-outline"], contour);
+    }
+
+    // REGRESSION: the floating layout keeps the bar's own contour (unified) or the per-capsule
+    // contours (separate) and must never add the classic top outline.
+    #[test]
+    fn floating_taskbar_keeps_the_bar_contour_and_clears_the_outline() {
+        let _accent = lock_task_accent();
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "taskbarStyle".to_owned(),
+            SettingValue::Text("floating".to_owned()),
+        );
+        let contour = flamewm_ui_x11::surface_style::surface_border(&snapshot);
+        let mut unified = RecordingUiDoc::default();
+        project(&mut unified, &snapshot, SurfaceKind::Panel).expect("floating panel");
+        assert_eq!(
+            unified.borders["taskbar"], contour,
+            "floating unified bar keeps the shared contour"
+        );
+        assert_eq!(
+            unified.backgrounds["taskbar-outline"].a, 0,
+            "floating bar draws no top outline"
+        );
+        snapshot
+            .values
+            .insert("taskbarSeparate".to_owned(), SettingValue::Boolean(true));
+        let mut separate = RecordingUiDoc::default();
+        project(&mut separate, &snapshot, SurfaceKind::Panel).expect("floating separate panel");
+        assert_eq!(
+            separate.borders["taskbar"].a, 0,
+            "floating separate bar root keeps no contour"
+        );
+        assert_eq!(separate.backgrounds["taskbar-outline"].a, 0);
     }
 
     #[test]

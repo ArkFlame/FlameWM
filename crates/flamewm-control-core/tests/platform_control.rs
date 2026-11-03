@@ -326,7 +326,8 @@ fn platform_start_projects_panel_without_mutating_native_reservations() {
     let snapshot = host.panels_snapshot();
     assert_eq!(snapshot.panels.len(), 1);
     assert_eq!(snapshot.panels[0].output, OutputId::new("eDP-1"));
-    assert_eq!(snapshot.panels[0].geometry, Rect::new(4, 1032, 1912, 44));
+    // The default taskbar is classic: flush with the output, no floating gap.
+    assert_eq!(snapshot.panels[0].geometry, Rect::new(0, 1036, 1920, 44));
     assert!(host.engine().reservations.is_empty());
 }
 
@@ -349,10 +350,10 @@ fn shell_bootstrap_reconciles_display_and_panels_before_reply() {
     );
     assert_eq!(snapshot.panels.panels.len(), 1);
     let panel = &snapshot.panels.panels[0];
-    // The default taskbar is floating: preserve its 4px gap on each side,
-    // including negative-origin outputs after RandR changes.
+    // The default taskbar is classic: it spans the full output, including
+    // negative-origin outputs after RandR changes.
     assert_eq!(panel.output, OutputId::new("eDP-1"));
-    assert_eq!(panel.geometry, Rect::new(-1346, 593, 1342, 44));
+    assert_eq!(panel.geometry, Rect::new(-1350, 597, 1350, 44));
 }
 
 #[test]

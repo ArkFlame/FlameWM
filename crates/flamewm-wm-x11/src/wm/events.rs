@@ -364,16 +364,24 @@ impl<C: Connection> Wm<'_, C> {
     /// itself mapped (frame, client, children: `map_window` generates no
     /// `MapRequest`). A client `MapNotify` means the client is visible now; if it
     /// is still unframed (e.g. WM missed the `MapRequest` because it was not
-    /// yet selecting `SubstructureRedirect`), manage it now. Frame/child
-    /// `MapNotify` events are ignored.
+    /// yet selecting `SubstructureRedirect`), manage it now.
+    ///
+    /// A managed frame/client `MapNotify` re-presents the ARGB outline ring: the first chrome paint
+    /// runs before the frame is mapped, and mapping a window clears it to its background, so the
+    /// ring must be written once the frame is actually viewable.
     pub(super) fn handle_map_notify(&mut self, window: Window) -> Result<(), ReplyOrIdError> {
         if self.registry.capture() == Some(window) {
             return Ok(());
         }
-        if window == self.screen().root || self.clients.contains_key(&window) {
+        if let Some(client) = self.client_for(window) {
+            // Only the client or its frame owns the ring; input children share the mapping but
+            // need no repaint.
+            if window == client || self.frame_to_client.get(&window).copied() == Some(client) {
+                self.paint_outline_overlay(client);
+            }
             return Ok(());
         }
-        if self.client_for(window).is_some() {
+        if window == self.screen().root || self.clients.contains_key(&window) {
             return Ok(());
         }
         if self

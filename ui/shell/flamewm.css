@@ -96,6 +96,9 @@ input { cursor:text; }
 .start-app { width:248px; height:36px; padding:0px 9px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:9px; cursor:default; }
 .start-app:hover { background:var(--accent-soft); }.start-status { min-height:18px; padding:4px 8px; display:flex; align-items:center; color:#ff9c9f; font-size:11px; }
 .taskbar { border:1px solid var(--rim); box-sizing:border-box; position:absolute; left:0px; top:0px; width:100%; height:44px; display:flex; align-items:center; padding:1px 2px; background:var(--panel); }
+/* Classic layout draws one 1 px top edge across the whole panel, not a contour around the
+   bar's inset border box; the projection owns its colour (transparent while floating). */
+.taskbar-outline { position:absolute; left:0px; top:0px; width:100%; height:1px; background:transparent; }
 /* Keep border geometry present even when color is projected at runtime. The one shared
    surface setting owns opacity and color for the root and every separate-mode capsule. */
 .capsule, .task-slots, .tray-group, .workspace-pager { box-sizing:border-box; border:1px solid var(--rim); }
@@ -113,7 +116,7 @@ input { cursor:text; }
 .task-slot { width:42px; height:100%; position:relative; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--text); cursor:default; }.task-slot-label { position:absolute; left:0px; top:0px; width:0px; height:0px; overflow:hidden; }
 .task-slot .underline { background:transparent; }
 .task-slot.running .underline { background:#87919b; }
-.task-slot.focused .underline { left:7px; width:28px; height:3px; background:var(--accent); }
+.task-slot.focused .underline { height:3px; background:var(--accent); }
 .underline { position:absolute; left:7px; bottom:0px; width:28px; height:2px; }
 .task-progress { position:absolute; left:7px; bottom:4px; height:2px; width:0px; background:var(--accent); }
 .browser-line { background:#87919b; }.settings-line { background:#87919b; }.terminal-line { background:#87919b; }

@@ -45,6 +45,13 @@ const TASKBAR_DEFAULT_HEIGHT: f32 = 44.0;
 const TASK_ICON_LOGICAL_PX: f32 = 25.0;
 /// `.task-slot` width in CSS px (`ui/shell/flamewm.css`).
 const TASK_SLOT_WIDTH: f32 = 42.0;
+/// `.underline` track width and heights in CSS px; the projection re-applies them scaled and
+/// centered on the slot so the line cannot drift from the icon at another `taskbarHeight`.
+const TASK_LINE_WIDTH: f32 = 28.0;
+const TASK_LINE_HEIGHT: f32 = 2.0;
+const TASK_LINE_FOCUSED_HEIGHT: f32 = 3.0;
+/// `.task-progress` bottom offset from the slot's content-box bottom, in CSS px.
+const TASK_PROGRESS_BOTTOM: f32 = 4.0;
 /// `.tray-button` width in CSS px.
 const TRAY_BUTTON_WIDTH: f32 = 30.0;
 /// `.tray-button img` edge in CSS px.
@@ -543,7 +550,7 @@ impl Default for TaskbarItems {
             clock: true,
             workspaces: true,
             activities: true,
-            separate: true,
+            separate: false,
             blur_percent: 80,
         }
     }
@@ -672,6 +679,11 @@ pub fn project_panel(
             states.get(index).map(|state| &state.id),
             view.task_progress,
         )?;
+        project_task_line(
+            document,
+            &line_id,
+            states.get(index).is_some_and(|state| state.focused),
+        )?;
         if let Some(state) = states.get(index) {
             let label = snapshot
                 .applications
@@ -765,8 +777,32 @@ pub(crate) fn project_tray_button(
     )
 }
 
+/// Places the task status line from the same scaled slot metric that sizes the slot and the
+/// icon: it is centered on `TASK_SLOT_WIDTH` and sits on the slot's content-box bottom. The
+/// stylesheet keeps its authored 42 px offsets; this projection is the effective geometry for
+/// every bar height, so both renderers draw the same line.
+pub(crate) fn project_task_line(
+    document: &mut impl UiDocumentAccess,
+    id: &str,
+    focused: bool,
+) -> Result<(), String> {
+    let width = scaled(TASK_LINE_WIDTH);
+    let height = scaled(if focused {
+        TASK_LINE_FOCUSED_HEIGHT
+    } else {
+        TASK_LINE_HEIGHT
+    });
+    document.position(
+        id,
+        (scaled(TASK_SLOT_WIDTH) - width) / 2.0,
+        taskbar_scale::inner_node_height(taskbar_scale::factor()) - height,
+    )?;
+    document.size(id, width, height)
+}
+
 /// Projects a determinate progress fill for one task slot, clearing stale fills when
-/// identity disappears or the provider no longer reports progress.
+/// identity disappears or the provider no longer reports progress. The centered track and
+/// its height scale with the bar; only the fill width follows the reported percent.
 pub(crate) fn project_task_progress(
     document: &mut impl UiDocumentAccess,
     index: usize,
@@ -777,11 +813,21 @@ pub(crate) fn project_task_progress(
     let percent = task_id
         .and_then(|id| progress.iter().find(|entry| &entry.task_id == id))
         .map(|entry| entry.progress.percent());
+    let height = scaled(TASK_LINE_HEIGHT);
     document.visible(&fill_id, percent.is_some())?;
+    document.position(
+        &fill_id,
+        (scaled(TASK_SLOT_WIDTH) - scaled(TASK_LINE_WIDTH)) / 2.0,
+        taskbar_scale::inner_node_height(taskbar_scale::factor())
+            - scaled(TASK_PROGRESS_BOTTOM)
+            - height,
+    )?;
     document.size(
         &fill_id,
-        percent.map_or(0.0, |percent| 28.0 * f32::from(percent) / 100.0),
-        2.0,
+        percent.map_or(0.0, |percent| {
+            scaled(TASK_LINE_WIDTH) * f32::from(percent) / 100.0
+        }),
+        height,
     )?;
     Ok(())
 }
@@ -1309,6 +1355,85 @@ mod panel_template_tests {
                 "h={logical}: slot {slot_h} / clock {clock_h}@{clock_y} must fill the inner box"
             );
         }
+    }
+
+    // REGRESSION: the bar must paint edge to edge at every output scale and
+    // `taskbarHeight`; a device-pixel width or a narrower bar leaves the classic
+    // right edge open. The panel lays out in CSS px at `device_w / scale`, so the
+    // bar sized with `taskbar_css_width` is exactly one viewport wide.
+    // MUTATION: size the bar from unscaled device px, or skip the `taskbar` size.
+    #[test]
+    fn taskbar_bar_spans_the_whole_viewport_at_every_scale_and_height() {
+        let device_width = 1280_i32;
+        for percent in [100_u16, 125, 150] {
+            for logical in [34_u16, 44, 52, 72] {
+                let mut doc = decode_panel();
+                let width = taskbar_css_width(device_width, percent);
+                let height = taskbar_css_height(logical);
+                doc.size("taskbar", width, height).expect("taskbar sizes");
+                let (x, y, w, h) = doc
+                    .layout_box_by_id("taskbar", (width, height))
+                    .unwrap_or_else(|| panic!("{percent}% h={logical}: bar has no layout box"));
+                let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+                assert!(
+                    close(x, 0.0) && close(y, 0.0) && close(w, width) && close(h, height),
+                    "{percent}% h={logical}: bar ({x}, {y}, {w}, {h}) must fill ({width}, {height})"
+                );
+            }
+        }
+    }
+
+    // REGRESSION: the classic top edge is one 1 px line across the whole panel viewport, not
+    // a contour around the bar's inset border box (whose side/bottom edges left the right end
+    // of the bar looking cut off). The outline starts at the viewport origin.
+    // MUTATION: move the outline inside `#taskbar`, or give it a border/inset.
+    #[test]
+    fn classic_outline_spans_the_whole_viewport_top_edge() {
+        let viewport = (1280.0_f32, 52.0_f32);
+        let doc = decode_panel();
+        let (x, y, w, h) = doc
+            .layout_box_by_id("taskbar-outline", viewport)
+            .expect("panel artifact carries the classic top outline");
+        assert_eq!((x, y, w, h), (0.0, 0.0, 1280.0, 1.0));
+    }
+
+    // REGRESSION: the running/focused line must stay centered under its icon at
+    // every `taskbarHeight` and output scale. The stylesheet offsets are authored
+    // for the 44 px bar, so only the scaled projection keeps both renderers equal.
+    // MUTATION: keep the authored 7 px/28 px offsets, or skip `project_task_line`.
+    #[test]
+    fn task_line_is_centered_under_its_icon_at_every_scale_and_height() {
+        let _scale = taskbar_scale::test_lock();
+        let device_width = 1280_i32;
+        for percent in [100_u16, 125, 150] {
+            for logical in [34_u16, 44, 52, 72] {
+                let mut doc = decode_panel();
+                taskbar_scale::set_factor(taskbar_scale::scale_for_height(logical));
+                let width = taskbar_css_width(device_width, percent);
+                let height = taskbar_css_height(logical);
+                doc.size("taskbar", width, height).expect("taskbar sizes");
+                project_taskbar_metrics(&mut doc).expect("metrics project");
+                project_task_slots_extent(&mut doc, 1).expect("slots extent");
+                doc.visible("task-slot-1", true).expect("slot visible");
+                project_task_line(&mut doc, "task-slot-1-line", false).expect("line projects");
+                let rect = |id: &str| {
+                    doc.layout_box_by_id(id, (width, height))
+                        .unwrap_or_else(|| panic!("{percent}% h={logical}: '{id}' has no box"))
+                };
+                let (icon_x, _, icon_w, _) = rect("task-slot-1-icon");
+                let (line_x, _, line_w, _) = rect("task-slot-1-line");
+                let (icon_center, line_center) = (icon_x + icon_w / 2.0, line_x + line_w / 2.0);
+                assert!(
+                    (icon_center - line_center).abs() < 0.01,
+                    "{percent}% h={logical}: line centre {line_center} != icon centre {icon_center}"
+                );
+                assert!(
+                    (line_w - scaled(TASK_LINE_WIDTH)).abs() < 1e-3,
+                    "{percent}% h={logical}: line width {line_w} != scaled {TASK_LINE_WIDTH}"
+                );
+            }
+        }
+        taskbar_scale::set_factor(1.0);
     }
 
     fn power_snapshot(

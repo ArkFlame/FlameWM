@@ -1367,7 +1367,7 @@ fn sync_dock_geometry(
         w,
         h,
     );
-    apply_dock_mask(instance, w, h, dock_mask_plan(0, instance.dock_radius));
+    apply_dock_mask(instance, w, h, dock_resize_mask_plan(instance.dock_radius));
 }
 
 /// True while the X connection fd still exists. After an X IO error the

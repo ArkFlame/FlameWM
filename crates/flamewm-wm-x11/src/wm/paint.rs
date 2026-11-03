@@ -366,9 +366,9 @@ impl<C: Connection> Wm<'_, C> {
 
     /// Paints the ring over the client's final pixels. Errors drop the overlay so the next paint
     /// falls back to the frame band instead of leaving a stale or misplaced ring on screen.
-    fn paint_outline_overlay(&mut self, client: Window) {
-        // Default path (no compositor or opt-in off): the chrome paints the ring instead, so this
-        // costs one bool check per paint.
+    pub(super) fn paint_outline_overlay(&mut self, client: Window) {
+        // No compositor: the chrome paints the frame-band ring instead, so this costs one bool
+        // check per paint.
         if !self.outline_overlay_available {
             return;
         }

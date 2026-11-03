@@ -745,8 +745,9 @@ pub fn project_panel_for_changed(
 }
 /// `WindowsChanged` -> task slots only. Resolves task visual states (cheap
 /// in-memory join, no fetch) and projects labels/icon/visibility/background
-/// for the 8 task slots. Pager, tray, and geometry nodes are untouched, so
-/// a focus-only window update never reprojects the full panel.
+/// and the status-line geometry for the 8 task slots. Pager, tray, and
+/// geometry nodes are untouched, so a focus-only window update never
+/// reprojects the full panel.
 pub fn project_task_slots_async(
     document: &mut impl UiDocumentAccess,
     view: PanelView<'_>,
@@ -805,10 +806,12 @@ pub fn project_task_slots_async(
                 TASK_LINE_IDLE
             };
             document.background(&line_id, line)?;
+            crate::projection::project_task_line(document, &line_id, state.focused)?;
         } else {
             document.text(&label_id, String::new())?;
             document.visible(&line_id, false)?;
             document.background_clear(&slot_id)?;
+            crate::projection::project_task_line(document, &line_id, false)?;
         }
         document.visible(
             &slot_id,
@@ -2210,6 +2213,8 @@ pub(crate) mod tests {
 
     #[test]
     fn task_progress_is_slot_identity_bound_scaled_and_cleared() {
+        let _scale = crate::taskbar_scale::test_lock();
+        crate::taskbar_scale::set_factor(1.0);
         let id = flamewm_api::TaskEntryId::new("win:7:1");
         let entry = flamewm_api::panels::TaskProgressEntry {
             task_id: id.clone(),

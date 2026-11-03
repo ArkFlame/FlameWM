@@ -168,6 +168,11 @@ impl<C: Connection> Wm<'_, C> {
             return Ok(());
         }
         let owner_client = owner.map(|c| c.client);
+        // The ring host decides the frame mask: an ARGB overlay child is clipped by the frame's
+        // bounding/clip regions, so the frame and the client must share the exact arc the ring
+        // covers. The fallback keeps the +1 mask that hides its stair-stepped edge.
+        let overlay_ring =
+            owner_client.is_some_and(|client| self.outline_overlays.contains_key(&client));
         let radius = u32::from(crate::frame::geometry_shape::scaled_corner_radius(
             floating,
             self.decoration_tokens.style,
@@ -178,6 +183,7 @@ impl<C: Connection> Wm<'_, C> {
             floating,
             self.decoration_tokens.style,
             self.titlebar_height(),
+            overlay_ring,
         );
         self.conn.shape_rectangles(
             ShapeOp::SET,
@@ -224,8 +230,8 @@ impl<C: Connection> Wm<'_, C> {
         }];
         // The outline ring needs the frame's outermost pixel only when it is painted into the
         // frame. A compositing-manager overlay draws over the client's own pixels, so the client
-        // then keeps its full rect and the ring lands on top of it.
-        let overlay_ring = self.outline_overlays.contains_key(&client);
+        // then keeps its full rect and its corner rows use the exact arc (no extra inset); the
+        // blended ring lands on the client's pixels instead of the frame's dark background.
         let ring = u32::from(self.decoration_tokens.surface_border_alpha > 0 && !overlay_ring);
         if (radius > 0 || ring > 0) && cw > 0 && ch > 0 {
             // Sampled from the frame's own mask so the bottom arcs coincide instead of drifting
@@ -236,6 +242,7 @@ impl<C: Connection> Wm<'_, C> {
                 titlebar_h,
                 radius,
                 ring,
+                overlay_ring,
             );
             self.conn.shape_rectangles(
                 ShapeOp::SET,

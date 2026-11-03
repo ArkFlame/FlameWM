@@ -45,8 +45,21 @@ pub(crate) fn dock_mask_plan(prev_radius: u32, radius: u32) -> DockMask {
     }
 }
 
+/// Mask decision for a dock whose window rect changed. A previous shape was applied against the
+/// old size, so it must be refreshed even when the radius did not change: `Reset` publishes the
+/// full rectangle for a classic dock (dropping a stale floating mask that would clip a bar grown
+/// to the screen edge), and `Round` re-rounds a floating one at the new size.
+pub(crate) fn dock_resize_mask_plan(radius: u32) -> DockMask {
+    if radius > 0 {
+        DockMask::Round(radius)
+    } else {
+        DockMask::Reset
+    }
+}
+
 /// Applies the dock corner mask for `instance` at window size `w` x `h`. `Keep` with a zero
-/// radius is a no-op, so classic docks never touch the XShape state.
+/// radius is a no-op; a classic dock only touches XShape when a resize has to drop a stale mask
+/// (`Reset`), which publishes the full rectangle at the new size.
 pub(super) fn apply_dock_mask(instance: &SurfaceInstance, w: u32, h: u32, mask: DockMask) {
     let radius = match mask {
         DockMask::Keep if instance.dock_radius == 0 => return,

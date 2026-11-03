@@ -26,6 +26,14 @@ mod dock_frame_plan_tests {
         assert_eq!(dock_mask_plan(12, 12), DockMask::Round(12));
         assert_eq!(dock_mask_plan(12, 6), DockMask::Round(6));
     }
+
+    /// A grown classic dock must republish the full rectangle: the floating mask it carried before
+    /// the style switch was sized to the smaller window and would clip the bar's right end.
+    #[test]
+    fn resized_classic_dock_republishes_the_full_rectangle() {
+        assert_eq!(dock_resize_mask_plan(0), DockMask::Reset);
+        assert_eq!(dock_resize_mask_plan(12), DockMask::Round(12));
+    }
 }
 
 #[cfg(test)]

@@ -1230,7 +1230,8 @@ mod tests {
         let panels = host.panels_snapshot();
         let panel = &panels.panels[0];
         assert_eq!(panel.edge, PanelEdge::Top);
-        assert_eq!(panel.geometry.y, 4);
+        // Classic (the product default) sits flush on the top edge, so no floating margin.
+        assert_eq!(panel.geometry.y, 0);
         let _ = std::fs::remove_file(&path);
     }
 

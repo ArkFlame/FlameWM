@@ -452,7 +452,11 @@ fn lock_timeout_zero_means_never_and_is_accepted() {
 #[test]
 fn taskbar_style_and_backdrop_defaults_write_nothing() {
     let defaults = ProductSettings::default();
-    assert_eq!(defaults.taskbar_style, TaskbarStyle::Floating);
+    assert_eq!(defaults.taskbar_style, TaskbarStyle::Classic);
+    assert!(
+        !defaults.taskbar_separate,
+        "a unified taskbar is the default"
+    );
     assert_eq!(defaults.taskbar_floating_margin, 4);
     assert_eq!(defaults.taskbar_floating_radius, 12);
     assert_eq!(defaults.taskbar_blur_percent, 80);
@@ -463,24 +467,34 @@ fn taskbar_style_and_backdrop_defaults_write_nothing() {
     assert!((taskbar.radius_px - 28.0).abs() < 1e-4);
     let text = ConfigStore::serialize(&defaults);
     assert!(!text.contains("taskbarStyle"));
+    assert!(!text.contains("taskbarSeparate"));
     assert!(!text.contains("taskbarBlurPercent"));
     assert!(!text.contains("taskbarFloating"));
 }
 
 #[test]
 fn taskbar_style_and_blur_round_trip_and_opaque_has_no_radius() {
+    // Classic is the product default, so only a non-default style is serialized.
     let parsed = load(
-        "revision=2\ntaskbarStyle=classic\ntaskbarFloatingMargin=32\n\
+        "revision=2\ntaskbarStyle=floating\ntaskbarFloatingMargin=32\n\
              taskbarFloatingRadius=0\nsurfaceBlurPercent=100\nsurfaceOpacity=100\n",
     )
     .expect("valid taskbar settings");
-    assert_eq!(parsed.taskbar_style, TaskbarStyle::Classic);
+    assert_eq!(parsed.taskbar_style, TaskbarStyle::Floating);
     assert_eq!(parsed.taskbar_floating_margin, 32);
     assert_eq!(parsed.taskbar_floating_radius, 0);
     assert!((parsed.taskbar_backdrop().radius_px - 0.0).abs() < 1e-6);
     let text = assert_round_trip(&parsed);
-    assert!(text.contains("taskbarStyle=classic\n"));
+    assert!(text.contains("taskbarStyle=floating\n"));
     assert!(text.contains("surfaceBlurPercent=100\n"));
+    // The default classic style is implicit and must not be written back.
+    let classic = load("revision=2\ntaskbarStyle=classic\n").expect("classic taskbar");
+    assert_eq!(classic.taskbar_style, TaskbarStyle::Classic);
+    let classic_text = ConfigStore::serialize(&classic);
+    assert!(
+        !classic_text.contains("taskbarStyle"),
+        "classic stays implicit: {classic_text}"
+    );
 }
 
 #[test]

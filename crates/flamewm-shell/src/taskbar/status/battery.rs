@@ -51,15 +51,16 @@ impl BatteryGlyph {
 }
 
 /// Tray visibility: the `taskbarShowBattery` setting, service available, and a
-/// battery present. With `only_when_relevant` the Unknown state is also hidden
-/// (`UPower` unknown). Without it a present battery shows in every state.
+/// battery present. With `only_when_relevant` the Unknown and Full states are also
+/// hidden (`UPower` unknown, or a battery that is already charged). Without it a
+/// present battery shows in every state.
 /// Charging shows the charging glyph; the rest show the normal glyph.
 #[must_use]
 pub fn tray_visible(power: &PowerSnapshot, enabled: bool, only_when_relevant: bool) -> bool {
     enabled
         && power.available == ServiceAvailability::Available
         && power.present
-        && !(only_when_relevant && power.state == PowerState::Unknown)
+        && !(only_when_relevant && matches!(power.state, PowerState::Unknown | PowerState::Full))
 }
 
 /// Battery energy flow for the menu label. Battery power only, never system
@@ -158,13 +159,18 @@ mod tests {
     }
 
     #[test]
-    fn only_when_relevant_hides_unknown_state() {
+    fn only_when_relevant_hides_unknown_and_full_states() {
         assert!(tray_visible(
             &power(PowerState::Discharging, 40),
             true,
             true
         ));
+        assert!(tray_visible(&power(PowerState::Charging, 40), true, true));
         assert!(!tray_visible(&power(PowerState::Unknown, 40), true, true));
+        // Fully charged is not actionable information: hide it while relevant-only.
+        assert!(!tray_visible(&power(PowerState::Full, 100), true, true));
+        // Without the setting the same state stays visible.
+        assert!(tray_visible(&power(PowerState::Full, 100), true, false));
     }
 
     #[test]

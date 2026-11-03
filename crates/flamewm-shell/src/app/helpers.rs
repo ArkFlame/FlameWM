@@ -55,7 +55,7 @@ pub(super) fn taskbar_frame(settings: &SettingsSnapshot) -> TaskbarFrame {
     };
     TaskbarFrame {
         floating,
-        margin: logical("taskbarFloatingMargin", 8),
+        margin: logical("taskbarFloatingMargin", 4),
         radius: logical("taskbarFloatingRadius", 12),
     }
 }
