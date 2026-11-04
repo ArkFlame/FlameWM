@@ -2,6 +2,13 @@
 
 use crate::{Color, Palette};
 
+/// Preview outlines use the live accent as a fully opaque two-pixel stroke. Selection bands,
+/// sticky move outlines and WM move/snap rings share this material; geometry stays semantic:
+/// Explorer keeps its 3px corner, sticky previews match the note's 5px corner, and desktop/WM
+/// selection and window rings remain square. Preview fill is independent and unchanged.
+pub const PREVIEW_OUTLINE_WIDTH_PX: u16 = 2;
+pub const PREVIEW_OUTLINE_ALPHA: u8 = 255;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisualRole {
     Surface,
@@ -285,6 +292,12 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_outline_material_is_one_opaque_two_pixel_contract() {
+        assert_eq!(PREVIEW_OUTLINE_WIDTH_PX, 2);
+        assert_eq!(PREVIEW_OUTLINE_ALPHA, 255);
+    }
 
     #[test]
     fn ui_layer_ordering_matches_stacking_contract() {

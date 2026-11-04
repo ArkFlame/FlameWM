@@ -26,7 +26,7 @@ pub const DEFAULT_PREVIEW_OPACITY_PERCENT: u8 = 20;
 pub(crate) fn set_live_opacity(_opacity_percent: u8) {}
 
 /// Ring width in device pixels.
-const RING_BORDER_PX: u16 = 2;
+const RING_BORDER_PX: u16 = flamewm_ui_core::style::PREVIEW_OUTLINE_WIDTH_PX;
 
 /// `WM_NAME` of the ring window; the X11 canary finds the preview by it.
 const WINDOW_NAME: &[u8] = b"FlameWM snap preview";
@@ -325,6 +325,19 @@ mod tests {
         crate::live_settings::sync(&snapshot);
         assert_eq!(accent_pixel(), 0x0012_3456);
         crate::live_settings::sync(&flamewm_api::settings::SettingsSnapshot::new(1));
+    }
+
+    #[test]
+    fn window_move_and_snap_rings_use_the_shared_preview_outline_width() {
+        assert_eq!(
+            RING_BORDER_PX,
+            flamewm_ui_core::style::PREVIEW_OUTLINE_WIDTH_PX
+        );
+        assert_eq!(
+            flamewm_ui_core::style::PREVIEW_OUTLINE_ALPHA,
+            u8::MAX,
+            "the native ring background is the same fully opaque accent"
+        );
     }
 
     #[test]

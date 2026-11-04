@@ -191,6 +191,7 @@ pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<()
     document.layer("desktop-selection", UiLayer::Selection)?;
     document.layer("desktop-drag-ghost", UiLayer::Floating)?;
     document.layer("desktop-convert-preview", UiLayer::Floating)?;
+    document.layer("sticky-move-preview", UiLayer::Floating)?;
     for slot in 0..STICKY_SLOT_COUNT {
         document.layer(&format!("sticky-{}", slot + 1), UiLayer::Floating)?;
     }
@@ -206,8 +207,9 @@ pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<()
 
 const SLOT_COUNT: usize = 128;
 
-pub const TRANSIENT_HIDDEN_IDS: [&str; 10] = [
+pub const TRANSIENT_HIDDEN_IDS: [&str; 11] = [
     "desktop-convert-preview",
+    "sticky-move-preview",
     "desktop-drag-ghost",
     "desktop-selection",
     "sticky-1",
@@ -944,6 +946,7 @@ mod tests {
         let watermark = layer_of(&probe, "desktop-watermark");
         let item = layer_of(&probe, "desktop-item-0");
         let selection = layer_of(&probe, "desktop-selection");
+        let sticky_preview = layer_of(&probe, "sticky-move-preview");
         let sticky = layer_of(&probe, "sticky-1");
         let menu = layer_of(&probe, "desktop-menu");
         let entry_menu = layer_of(&probe, "desktop-entry-menu");
@@ -961,6 +964,7 @@ mod tests {
         assert!(selection < menu);
         assert!(menu < modal);
         assert_eq!(sticky, UiLayer::Floating.z_index());
+        assert_eq!(sticky_preview, sticky);
         assert_eq!(entry_menu, menu);
         assert_eq!(sticky_menu, menu);
         // Menu hit-test wins: popover layer above content/selection.

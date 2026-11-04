@@ -5,7 +5,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
-use flamewm_platform::chrome::parse_hex_rgb;
 
 const DEFAULT_SNAP_PREVIEW_ENABLED: bool = true;
 const DEFAULT_FOCUS_FOLLOWS_MOUSE: bool = false;
@@ -15,8 +14,6 @@ const DEFAULT_SHOW_CONTENT_WHILE_DRAGGING: bool = false;
 const DEFAULT_TITLEBARS: bool = true;
 /// `taskbarActivities`: the shell shows running windows, so they may be minimized.
 const DEFAULT_TASKBAR_ACTIVITIES: bool = true;
-/// Neutral grey until a settings snapshot supplies `accent`.
-const DEFAULT_ACCENT_RGB: (u8, u8, u8) = (0x7f, 0x87, 0x8e);
 const DEFAULT_WINDOW_MARGIN: u32 = 2;
 const MAX_WINDOW_MARGIN: u32 = 32;
 
@@ -32,7 +29,7 @@ static SHARE_WALLPAPER: AtomicBool = AtomicBool::new(false);
 static SATURATION_PERCENT: AtomicU32 =
     AtomicU32::new(flamewm_ui_core::glass::DARK.saturation_percent as u32);
 /// Live `accent` packed as `0x00RRGGBB`.
-static ACCENT_RGB: AtomicU32 = AtomicU32::new(pack_rgb(DEFAULT_ACCENT_RGB));
+static ACCENT_RGB: AtomicU32 = AtomicU32::new(flamewm_api::settings::DEFAULT_ACCENT_RGB);
 static WINDOW_MARGIN: AtomicU32 = AtomicU32::new(DEFAULT_WINDOW_MARGIN);
 /// Shared `audioRaiseMaximum`: false until a snapshot says otherwise, matching the shell default.
 static AUDIO_RAISE_MAXIMUM: AtomicBool = AtomicBool::new(false);
@@ -81,13 +78,8 @@ fn terminal_from_snapshot(snapshot: &SettingsSnapshot) -> String {
 /// Pure mapping from a settings snapshot to the `accent` colour. Accepts `#RRGGBB` and bare
 /// `RRGGBB`, the same forms the shell accepts; invalid or missing values keep the neutral default.
 fn accent_from_snapshot(snapshot: &SettingsSnapshot) -> (u8, u8, u8) {
-    match snapshot.values.get("accent") {
-        Some(SettingValue::Text(value)) => {
-            parse_hex_rgb(&format!("#{}", value.trim_start_matches('#')))
-                .unwrap_or(DEFAULT_ACCENT_RGB)
-        }
-        _ => DEFAULT_ACCENT_RGB,
-    }
+    let rgb = flamewm_api::settings::accent_rgb(snapshot);
+    ((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
 
 fn window_margin_from_snapshot(snapshot: &SettingsSnapshot) -> u32 {
@@ -285,10 +277,10 @@ mod tests {
     }
 
     #[test]
-    fn missing_accent_keeps_neutral_default() {
+    fn missing_accent_uses_the_shared_product_default() {
         assert_eq!(
             accent_from_snapshot(&SettingsSnapshot::new(1)),
-            (0x7f, 0x87, 0x8e)
+            (0x53, 0x9b, 0xff)
         );
     }
 
@@ -311,13 +303,13 @@ mod tests {
     }
 
     #[test]
-    fn invalid_accent_falls_back_to_neutral_default() {
+    fn invalid_accent_falls_back_to_the_shared_product_default() {
         assert_eq!(
             accent_from_snapshot(&snapshot(&[(
                 "accent",
                 SettingValue::Text("#GG0000".into())
             )])),
-            (0x7f, 0x87, 0x8e)
+            (0x53, 0x9b, 0xff)
         );
     }
 

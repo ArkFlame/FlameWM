@@ -44,8 +44,6 @@ pub(crate) fn percent_alpha(percent: u8) -> u8 {
     ((u16::from(percent) * 255) / 100) as u8
 }
 
-/// Neutral grey until the settings snapshot supplies `accent` (mirrors the shell default).
-const NEUTRAL_ACCENT: u32 = 0x007f_878e;
 /// Accent-derived tokens of `ui/shell/flamewm.css`, with the alpha each keeps in its `:root`.
 pub(crate) const ACCENT_TOKEN_ALPHAS: [(&str, u8); 8] = [
     ("--accent", 0xff),
@@ -59,20 +57,12 @@ pub(crate) const ACCENT_TOKEN_ALPHAS: [(&str, u8); 8] = [
 ];
 
 pub(crate) fn accent_color(snapshot: &SettingsSnapshot) -> UiColor {
-    let hex = match snapshot.values.get("accent") {
-        Some(SettingValue::Text(value)) => value.strip_prefix('#').unwrap_or(value),
-        _ => "",
-    };
-    let rgb = if hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        u32::from_str_radix(hex, 16).unwrap_or(NEUTRAL_ACCENT)
-    } else {
-        NEUTRAL_ACCENT
-    };
+    let rgb = flamewm_api::settings::accent_rgb(snapshot);
     UiColor {
         r: (rgb >> 16) as u8,
         g: (rgb >> 8) as u8,
         b: rgb as u8,
-        a: 255,
+        a: flamewm_ui_core::style::PREVIEW_OUTLINE_ALPHA,
     }
 }
 
@@ -102,5 +92,6 @@ pub(crate) fn project_accent_tokens(
     for (name, color) in accent_token_values(snapshot) {
         document.color_variable(name, color)?;
     }
+    document.color_variable("--preview-outline", accent_color(snapshot))?;
     Ok(())
 }

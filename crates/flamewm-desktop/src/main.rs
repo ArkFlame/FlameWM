@@ -179,8 +179,7 @@ pub fn main() -> Result<(), String> {
     let sticky = sticky_persistence::load(&sticky_path).map_err(|error| format!("{error:?}"))?;
     let widget_path =
         flamewm_desktop_core::widgets::state_path().map_err(|error| format!("{error:?}"))?;
-    // A missing widget state file means a fresh profile: it gets the default grid layout.
-    let widget_fresh = !widget_path.exists();
+    // A fresh profile starts with an empty desktop: widgets are opt-in through Add Widgets.
     let widget_store = flamewm_desktop_core::widgets::load(&widget_path).unwrap_or_else(|error| {
         eprintln!("desktop: widget state unreadable, starting empty: {error:?}");
         flamewm_desktop_core::widgets::WidgetStore::default()
@@ -296,15 +295,7 @@ pub fn main() -> Result<(), String> {
         let mut state = state_cell.borrow_mut();
         state.widgets.attach_wake(wake);
         let metrics = widgets::widget_metrics(&state);
-        if widget_fresh && state.widgets.store.widgets().is_empty() {
-            state.widgets.store =
-                flamewm_desktop_core::widgets::WidgetStore::with_default_layout(metrics);
-            // The wake was armed against the empty store; re-derive the tick deadline.
-            state.widgets.rearm_after_store_replace();
-            state.widgets.persist();
-        } else {
-            state.widgets.store.layout_grid(metrics);
-        }
+        state.widgets.store.layout_grid(metrics);
     }
     register_media_widget(&mut reactor, &state_cell);
     let panels_dirty = std::rc::Rc::new(std::cell::Cell::new(false));

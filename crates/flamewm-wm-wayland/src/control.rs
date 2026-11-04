@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use flamewm_api::applications::ApplicationLaunchOptions;
@@ -29,6 +29,7 @@ use flamewm_api::ports::{
 };
 use flamewm_api::session::{SessionAction, SessionCapabilities};
 use flamewm_api::shortcuts::KeyBinding;
+use flamewm_api::system::{SystemAction, SystemSnapshot};
 use flamewm_api::window::{WindowSnapshot, WindowState};
 use flamewm_api::workspace::{WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot};
 use flamewm_api::{
@@ -37,8 +38,12 @@ use flamewm_api::{
 };
 use flamewm_control_dbus::{ControlServer, ControlSignal};
 use flamewm_control_wire::SwitcherEntry;
+use flamewm_integrations_linux::audio_helper::AudioHelper;
+use flamewm_integrations_linux::backlight::BacklightProvider;
 use flamewm_platform::host::PlatformHost;
+use flamewm_platform::system::{MediaAudioKey, MediaBrightnessKey};
 use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::ping::Ping;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, Mode, PostAction};
 use smithay::wayland::compositor;
@@ -130,6 +135,33 @@ fn power_program() -> Option<&'static str> {
 
 fn unsupported(message: &'static str) -> FlameError {
     FlameError::new(ErrorCode::Unsupported, message)
+}
+
+/// Live media-key volume cap: the shared `audioRaiseMaximum` toggle, off unless explicitly set.
+fn volume_cap(snapshot: &flamewm_api::settings::SettingsSnapshot) -> u8 {
+    use flamewm_api::settings::SettingValue;
+    let raise = matches!(
+        snapshot
+            .values
+            .get(flamewm_platform::system::AUDIO_RAISE_MAXIMUM_KEY),
+        Some(SettingValue::Boolean(true))
+    );
+    flamewm_platform::system::volume_cap_percent(raise)
+}
+
+/// Returns the system snapshot to announce when it differs from the last one published.
+///
+/// The compositor reads every system domain through one snapshot, so this comparison keeps a
+/// quiet turn silent while still announcing a changed backlight or audio endpoint.
+fn system_change(
+    published: &mut Option<SystemSnapshot>,
+    snapshot: SystemSnapshot,
+) -> Option<SystemSnapshot> {
+    if published.as_ref() == Some(&snapshot) {
+        return None;
+    }
+    *published = Some(snapshot.clone());
+    Some(snapshot)
 }
 
 /// The desktop engine behind `PlatformHost`. It holds only shared handles, never `State`.
@@ -579,6 +611,14 @@ pub struct Service {
     published: RefCell<Vec<WindowSnapshot>>,
     /// Last workspace snapshot whose change was announced, so a busy loop cannot spam signals.
     published_workspaces: RefCell<Option<WorkspaceSnapshot>>,
+    /// Last system snapshot announced, so a quiet turn cannot spam the OSD signal.
+    published_system: RefCell<Option<SystemSnapshot>>,
+    /// Audio snapshots queued by the helper's reader thread; drained by its calloop wake source.
+    audio_updates: Arc<Mutex<Vec<flamewm_api::system::AudioSnapshot>>>,
+    /// Keeps the audio helper's wake eventfd open for the lifetime of the service.
+    _audio_ping: Option<Ping>,
+    /// Panel backlight owner shared with the system action handler.
+    backlight: Rc<RefCell<BacklightProvider>>,
     /// Monotonic workspace revision. X11 advances one per switch; the shell's pager expects the
     /// same discipline, because the activation it sends is revision-fenced.
     workspace_revision: std::cell::Cell<u64>,
@@ -719,10 +759,73 @@ impl Service {
             staged_shortcuts: RefCell::new(None),
             shell_scales: saved_shell_scales(),
         };
+        // Read the panel backlight before the host starts so the shell bootstrap already carries
+        // the current level: its first OSD observation is a baseline, not a card.
+        let backlight = Rc::new(RefCell::new(BacklightProvider::connect()));
+        let audio_updates = Arc::new(Mutex::new(Vec::new()));
+        let audio_link = match smithay::reexports::calloop::ping::make_ping() {
+            Ok((ping, source)) => {
+                let queue = Arc::clone(&audio_updates);
+                let wake = ping.clone();
+                match AudioHelper::connect(move |snapshot| {
+                    if let Ok(mut pending) = queue.lock() {
+                        pending.push(snapshot);
+                    }
+                    // Wake the compositor's loop; no polling thread and no busy turn.
+                    wake.ping();
+                }) {
+                    Ok(helper) => Some((Rc::new(helper), ping, source)),
+                    Err(error) => {
+                        eprintln!("flamewm-wayland: audio helper unavailable: {error}");
+                        None
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("flamewm-wayland: audio wake source unavailable: {error:?}");
+                None
+            }
+        };
         let mut host = PlatformHost::new(engine, settings_path());
         if let Some(catalog) = catalog {
             let _ = host.replace_applications(catalog.all());
         }
+        host.system_mut()
+            .update_brightness(backlight.borrow_mut().snapshot());
+        if let Some((helper, _, _)) = &audio_link {
+            // Best effort: one eager request so the first volume key steps from a real snapshot.
+            if let Err(error) = helper.request_snapshot() {
+                eprintln!("flamewm-wayland: audio snapshot request failed: {error}");
+            }
+        }
+        let backlight_for_actions = Rc::clone(&backlight);
+        let audio_for_actions = audio_link.as_ref().map(|(helper, _, _)| Rc::clone(helper));
+        host.set_system_action_handler(Box::new(move |action, _snapshot| match action {
+            SystemAction::SetBrightness(action) => backlight_for_actions
+                .borrow_mut()
+                .set_percent(action.percent, action.generation),
+            SystemAction::SetVolume(action) => audio_for_actions.as_ref().map_or_else(
+                || {
+                    Err(FlameError::new(
+                        ErrorCode::Unavailable,
+                        "audio helper is unavailable",
+                    ))
+                },
+                |pulse| pulse.set_volume(action),
+            ),
+            SystemAction::SetMute(action) => audio_for_actions.as_ref().map_or_else(
+                || {
+                    Err(FlameError::new(
+                        ErrorCode::Unavailable,
+                        "audio helper is unavailable",
+                    ))
+                },
+                |pulse| pulse.set_mute(action),
+            ),
+            _ => Err(unsupported(
+                "the Wayland compositor does not integrate network or media providers yet",
+            )),
+        }));
         host.start()
             .map_err(|error| format!("platform host start failed: {error}"))?;
         // Without this the compositor keeps its compiled-in defaults, so a hotkey rebind saved in
@@ -731,6 +834,19 @@ impl Service {
             Ok(()) => {}
             Err(error) => eprintln!("flamewm-wayland: startup shortcuts were not applied: {error}"),
         }
+        // The helper's snapshots wake the loop through this source. Losing it only delays audio
+        // updates to the next bus turn; startup never depends on the helper being installed.
+        let audio_ping = audio_link.as_ref().map(|(_, ping, _)| ping.clone());
+        if let Some((_, _, source)) = audio_link {
+            let inserted = state.loop_handle.insert_source(source, |(), _, state| {
+                if let Some(service) = state.control.clone() {
+                    service.drain_audio();
+                }
+            });
+            if let Err(error) = inserted {
+                eprintln!("flamewm-wayland: audio wake source was not installed: {error}");
+            }
+        }
         Ok(Self {
             server,
             host: RefCell::new(host),
@@ -738,6 +854,10 @@ impl Service {
             commands,
             published: RefCell::new(Vec::new()),
             published_workspaces: RefCell::new(None),
+            published_system: RefCell::new(None),
+            audio_updates,
+            _audio_ping: audio_ping,
+            backlight,
             workspace_revision: std::cell::Cell::new(1),
             popup_focus: RefCell::new(None),
             switcher: RefCell::new(None),
@@ -747,6 +867,94 @@ impl Service {
 
     fn now_ms(&self) -> u64 {
         u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    /// One panel-brightness media key: align the host fence with the device, step the backlight,
+    /// then publish the observed level so the shell OSD shows the new card in the same turn.
+    pub fn media_brightness_key(&self, up: bool) {
+        let observed = self.backlight.borrow_mut().snapshot();
+        self.host
+            .borrow_mut()
+            .system_mut()
+            .update_brightness(observed);
+        let key = if up {
+            MediaBrightnessKey::Up
+        } else {
+            MediaBrightnessKey::Down
+        };
+        let applied = self.host.borrow_mut().media_brightness_key(key);
+        if let Err(error) = applied {
+            eprintln!("flamewm-wayland: brightness key {key:?} was not applied: {error:?}");
+            // The pre-key refresh may still have observed a real level change.
+            self.publish_system();
+            return;
+        }
+        // Re-read instead of assuming the write landed: a device that clamps or refuses the step
+        // is still reported honestly, and the OSD only moves when the level really changed.
+        let observed = self.backlight.borrow_mut().snapshot();
+        self.host
+            .borrow_mut()
+            .system_mut()
+            .update_brightness(observed);
+        self.publish_system();
+    }
+
+    /// One volume media key, capped by the shared "raise maximum volume" setting.
+    pub fn media_audio_key(&self, key: MediaAudioKey) {
+        let cap = volume_cap(&self.host.borrow().settings_snapshot());
+        if let Err(error) = self.host.borrow_mut().media_audio_key(key, cap) {
+            eprintln!("flamewm-wayland: audio key {key:?} was not applied: {error:?}");
+        }
+    }
+
+    /// Applies audio snapshots queued by the helper's reader thread and announces a real change.
+    fn drain_audio(&self) {
+        let updates = {
+            let mut pending = self
+                .audio_updates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut *pending)
+        };
+        if updates.is_empty() {
+            return;
+        }
+        let changed = {
+            let mut host = self.host.borrow_mut();
+            let mut changed = false;
+            for update in updates {
+                changed |= host.system_mut().update_audio(update);
+            }
+            changed
+        };
+        if changed {
+            self.publish_system();
+        }
+    }
+
+    /// Emits `SystemSnapshotChanged` when the host's system state moved since the last signal.
+    ///
+    /// The host borrow is released before the signal is emitted, so a D-Bus callback cannot see a
+    /// half-updated host through a re-entrant read.
+    fn publish_system(&self) {
+        let snapshot = self.host.borrow().system_snapshot();
+        let Some(snapshot) = system_change(&mut self.published_system.borrow_mut(), snapshot)
+        else {
+            return;
+        };
+        if let Err(error) = self
+            .server
+            .emit_signal(&ControlSignal::SystemSnapshotChanged {
+                snapshot: snapshot.clone(),
+            })
+        {
+            eprintln!("flamewm-wayland: system signal failed: {error}");
+        }
+        if let Err(error) = self.server.emit_signal(&ControlSignal::SystemChanged {
+            revision: snapshot.revision,
+        }) {
+            eprintln!("flamewm-wayland: system revision signal failed: {error}");
+        }
     }
 
     /// Refreshes the mirror from `state` and reports whether it changed.
@@ -803,8 +1011,12 @@ impl Service {
         // this is the Wayland equivalent of the X11 settings sync point. It costs one map lookup on
         // an unchanged snapshot.
         self.sync_chrome_settings(state);
+        // Helper snapshots normally arrive through their own wake source; draining here too means a
+        // missed or unavailable wake source only delays audio by one bus turn.
+        self.drain_audio();
         self.sync(state);
         self.publish_changes();
+        self.publish_system();
         busy
     }
 
@@ -1175,14 +1387,63 @@ fn apply_command(state: &mut State, command: Command) {
 mod tests {
     use super::{
         Command, Mirror, WaylandDesktop, chrome_settings, managed_logout, shell_scales_at,
-        shell_scales_from,
+        shell_scales_from, system_change, volume_cap,
     };
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
     use flamewm_api::shortcuts::KeyBinding;
+    use flamewm_api::system::{BrightnessSnapshot, ServiceAvailability, SystemSnapshot};
     use flamewm_api::window::WindowSnapshot;
     use flamewm_api::{DesktopAppId, OutputId, WindowRef};
     use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::rc::Rc;
+
+    /// The shell's OSD treats its first observation as a baseline, so the media-key path must only
+    /// announce a system snapshot that actually differs from the one already published.
+    #[test]
+    fn brightness_updates_are_announced_only_when_the_level_moves() {
+        let level = |percent: u8| SystemSnapshot {
+            brightness: BrightnessSnapshot {
+                availability: ServiceAvailability::Available,
+                generation: 1,
+                percent,
+            },
+            ..SystemSnapshot::default()
+        };
+        let mut published = None;
+        assert_eq!(
+            system_change(&mut published, level(40)),
+            Some(level(40)),
+            "the first observed level is announced once"
+        );
+        assert_eq!(
+            system_change(&mut published, level(40)),
+            None,
+            "an unchanged level is not announced again"
+        );
+        assert_eq!(
+            system_change(&mut published, level(45)),
+            Some(level(45)),
+            "a brightness key step is announced"
+        );
+    }
+
+    /// The media-key volume cap follows the same `audioRaiseMaximum` key the mixer reads.
+    #[test]
+    fn raise_maximum_sets_the_media_volume_cap() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        assert_eq!(volume_cap(&snapshot), 100, "missing key keeps the base cap");
+        snapshot.values.insert(
+            flamewm_platform::system::AUDIO_RAISE_MAXIMUM_KEY.to_owned(),
+            SettingValue::Boolean(true),
+        );
+        assert_eq!(volume_cap(&snapshot), 150);
+        snapshot.values.insert(
+            flamewm_platform::system::AUDIO_RAISE_MAXIMUM_KEY.to_owned(),
+            SettingValue::Boolean(false),
+        );
+        assert_eq!(volume_cap(&snapshot), 100);
+    }
 
     /// A saved scale is reported for the output it names.
     #[test]

@@ -1095,6 +1095,7 @@ dependencies = [
  "flamewm-control-dbus",
  "flamewm-control-wire",
  "flamewm-image-core",
+ "flamewm-integrations-linux",
  "flamewm-platform",
  "flamewm-reactor",
  "flamewm-render-core",

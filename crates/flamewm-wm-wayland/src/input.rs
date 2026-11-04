@@ -23,10 +23,12 @@ use flamewm_api::shortcuts::{
     move_direction, workspace_activate_index, workspace_direction, workspace_move_index,
 };
 use flamewm_platform::shortcuts::{
-    ACTION_OPEN_ASSISTANT_CTRL_ALT, ACTION_OPEN_ASSISTANT_SUPER, ACTION_OPEN_FILES_CTRL_ALT,
-    ACTION_OPEN_FILES_SUPER, ACTION_OPEN_FINDER, ACTION_OPEN_FINDER_CTRL_ALT,
-    ACTION_OPEN_TERMINAL_CTRL_ALT, ACTION_OPEN_TERMINAL_SUPER,
+    ACTION_BRIGHTNESS_DOWN, ACTION_BRIGHTNESS_UP, ACTION_OPEN_ASSISTANT_CTRL_ALT,
+    ACTION_OPEN_ASSISTANT_SUPER, ACTION_OPEN_FILES_CTRL_ALT, ACTION_OPEN_FILES_SUPER,
+    ACTION_OPEN_FINDER, ACTION_OPEN_FINDER_CTRL_ALT, ACTION_OPEN_TERMINAL_CTRL_ALT,
+    ACTION_OPEN_TERMINAL_SUPER, ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP,
 };
+use flamewm_platform::system::MediaAudioKey;
 
 use crate::model::{
     Button, Hit, Mode, Mods, Rect, ResizeEdge, TITLEBAR_HEIGHT, WindowId, resize_edge_at,
@@ -36,6 +38,26 @@ use flamewm_window_core::{SnapTarget, keep_visible, snap_target_in_output};
 
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
+
+/// One media-key action the compositor routes through the platform system service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaKey {
+    Brightness(bool),
+    Audio(MediaAudioKey),
+}
+
+/// Maps a shortcut action id to its media key, so the registry binding and the dispatch table
+/// cannot drift apart. Every other action yields `None`.
+fn media_key(action: &str) -> Option<MediaKey> {
+    match action {
+        ACTION_BRIGHTNESS_UP => Some(MediaKey::Brightness(true)),
+        ACTION_BRIGHTNESS_DOWN => Some(MediaKey::Brightness(false)),
+        ACTION_VOLUME_UP => Some(MediaKey::Audio(MediaAudioKey::VolumeUp)),
+        ACTION_VOLUME_DOWN => Some(MediaKey::Audio(MediaAudioKey::VolumeDown)),
+        ACTION_VOLUME_MUTE => Some(MediaKey::Audio(MediaAudioKey::VolumeMute)),
+        _ => None,
+    }
+}
 
 fn mods_of(state: &ModifiersState) -> Mods {
     Mods {
@@ -146,6 +168,12 @@ impl State {
 
     /// Runs one shortcut action. Actions are the shared `flamewm-api` names.
     pub fn dispatch_action(&mut self, action: &str) {
+        // Media keys are bound by the default registry, so they must reach the shared system
+        // service instead of falling through to the unhandled log.
+        if let Some(key) = media_key(action) {
+            self.dispatch_media_key(key);
+            return;
+        }
         if let Some(direction) = workspace_direction(action) {
             if let Some(target) = self.model.workspace_step(direction) {
                 if self.model.switch_workspace(target) {
@@ -284,6 +312,22 @@ impl State {
             ACTION_TOGGLE_START_MENU => self.emit_control_signal("StartMenuToggleRequested"),
             ACTION_SESSION_LOCK => eprintln!("flamewm-wayland: session lock is a later phase"),
             other => eprintln!("flamewm-wayland: unhandled shortcut action {other}"),
+        }
+    }
+
+    /// Routes a media key to the control service. The service owns the backlight and the audio
+    /// helper; without it the key is a no-op and the missing installation is logged once.
+    fn dispatch_media_key(&self, key: MediaKey) {
+        let Some(service) = self.control.clone() else {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!("flamewm-wayland: media keys need the control service; ignoring them");
+            });
+            return;
+        };
+        match key {
+            MediaKey::Brightness(up) => service.media_brightness_key(up),
+            MediaKey::Audio(key) => service.media_audio_key(key),
         }
     }
 
@@ -992,15 +1036,51 @@ pub fn saved_xkb_config() -> XkbConfig<'static> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Button, Hit, PointerRoute, TitleClick, clamp_move_candidate, commit_move_snap,
+        Button, Hit, MediaKey, PointerRoute, TitleClick, clamp_move_candidate, commit_move_snap,
         completes_double_click, first_hit, focus_follows_mouse_at, focus_follows_mouse_from,
-        keyboard_layout_at, move_activated, move_candidate, name_candidates, pointer_route,
-        snap_target_for_move, xkb_config,
+        keyboard_layout_at, media_key, move_activated, move_candidate, name_candidates,
+        pointer_route, snap_target_for_move, xkb_config,
     };
     use crate::model::{Mode, Rect, TITLEBAR_HEIGHT, WindowModel};
     use crate::state::Grab;
+    use flamewm_platform::shortcuts::{
+        ACTION_BRIGHTNESS_DOWN, ACTION_BRIGHTNESS_UP, ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE,
+        ACTION_VOLUME_UP,
+    };
+    use flamewm_platform::system::MediaAudioKey;
     use flamewm_window_core::SnapTarget;
     use smithay::utils::{Logical, Point};
+
+    /// The default registry binds these media actions, so dispatch must recognize the exact ids
+    /// instead of swallowing them in the unhandled-shortcut arm.
+    #[test]
+    fn media_shortcut_actions_route_to_the_system_service() {
+        assert_eq!(
+            media_key(ACTION_BRIGHTNESS_UP),
+            Some(MediaKey::Brightness(true))
+        );
+        assert_eq!(
+            media_key(ACTION_BRIGHTNESS_DOWN),
+            Some(MediaKey::Brightness(false))
+        );
+        assert_eq!(
+            media_key(ACTION_VOLUME_UP),
+            Some(MediaKey::Audio(MediaAudioKey::VolumeUp))
+        );
+        assert_eq!(
+            media_key(ACTION_VOLUME_DOWN),
+            Some(MediaKey::Audio(MediaAudioKey::VolumeDown))
+        );
+        assert_eq!(
+            media_key(ACTION_VOLUME_MUTE),
+            Some(MediaKey::Audio(MediaAudioKey::VolumeMute))
+        );
+        assert_eq!(
+            media_key("WindowClose"),
+            None,
+            "other actions keep their path"
+        );
+    }
 
     #[test]
     fn move_activation_matches_x11_per_axis_inclusive_threshold() {

@@ -6,6 +6,9 @@ pub(crate) fn handle_event(
     state: &mut DesktopState,
     mutation_dispatcher: Option<&Arc<MutationDispatcher>>,
 ) -> Result<(), String> {
+    if sticky::owns_active_move_event(action, &state.sticky) {
+        return sticky::handle_action(action, document, state);
+    }
     // The full annular sector is clickable, not just the format's text box.
     // An empty part of the wheel receives the root action; its polar hit test
     // shares geometry with the painted hover sector. Child buttons use the
@@ -214,7 +217,7 @@ pub(crate) fn cancel_transient(
     state.menu = None;
     state.pending_delete = None;
     state.rename = None;
-    sticky::cancel_edit_and_gesture(state);
+    sticky::cancel_edit_and_gesture(&mut state.sticky);
     widgets::cancel_transient(state);
     hide_drag_ghost(document, state)?;
     set_selection_overlay(document, state, None)?;

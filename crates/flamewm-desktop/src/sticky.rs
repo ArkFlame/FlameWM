@@ -114,6 +114,14 @@ impl StickyState {
             .min(PERSIST_RETRY_CAP);
         self.arm_persist_after(now, delay);
     }
+
+    fn commit_rect(&mut self, note_id: &str, rect: Rect, now: Instant) -> bool {
+        if !self.store.set_rect(note_id, rect) {
+            return false;
+        }
+        self.arm_persist(now);
+        true
+    }
 }
 
 #[derive(Clone)]
@@ -131,6 +139,8 @@ struct StickyGesture {
     original: Rect,
     /// Set once the pointer has moved past `STICKY_DRAG_THRESHOLD_PX`.
     moved: bool,
+    /// Move target shown as an outline; the note store remains at `original` until release.
+    preview: Option<Rect>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,49 +218,28 @@ pub(crate) fn sync_sticky(
     let visible = visible_sticky_notes(state);
     let show_any =
         state.sticky.notes_enabled && state.sticky.store.enabled() && !visible.is_empty();
+    let preview = state
+        .sticky
+        .gesture
+        .as_ref()
+        .filter(|gesture| {
+            gesture.mode == StickyGestureMode::Move
+                && gesture.moved
+                && visible.iter().any(|note| note.id == gesture.note_id)
+        })
+        .and_then(|gesture| gesture.preview)
+        .filter(|_| show_any);
     for slot in 0..STICKY_SLOTS {
         let number = slot + 1;
         let id = format!("sticky-{number}");
         if let Some(note) = visible.get(slot) {
-            document.visible(&id, show_any)?;
-            document.position(&id, note.rect.x as f32, note.rect.y as f32)?;
-            document.size(&id, note.rect.width as f32, note.rect.height as f32)?;
-            document.background(
-                &id,
-                UiColor {
-                    r: note.background.red,
-                    g: note.background.green,
-                    b: note.background.blue,
-                    a: 255,
-                },
-            )?;
-            let text_id = format!("sticky-{number}-text");
             let editing = state
                 .sticky
                 .edit
                 .as_ref()
                 .filter(|edit| edit.note_id == note.id)
-                .map(|edit| edit.buffer.clone());
-            let text = match editing {
-                Some(buffer) => projection::caret_text(&buffer, true),
-                None => note.text.clone(),
-            };
-            document.text(&text_id, text)?;
-            document.font_size(&text_id, f32::from(note.text_size))?;
-            document.font_weight(&text_id, if note.bold { 700 } else { 400 })?;
-            document.foreground(
-                &text_id,
-                UiColor {
-                    r: note.foreground.red,
-                    g: note.foreground.green,
-                    b: note.foreground.blue,
-                    a: 255,
-                },
-            )?;
-            document.visible(&format!("sticky-{number}-drag"), show_any)?;
-            for corner in ["nw", "ne", "sw", "se"] {
-                document.visible(&format!("sticky-{number}-resize-{corner}"), show_any)?;
-            }
+                .map(|edit| edit.buffer.as_str());
+            sync_sticky_slot(document, number, note, editing, show_any)?;
         } else {
             document.visible(&id, false)?;
             document.text(&format!("sticky-{number}-text"), String::new())?;
@@ -260,7 +249,63 @@ pub(crate) fn sync_sticky(
             }
         }
     }
+    sync_sticky_move_preview(document, preview)
+}
+
+fn sync_sticky_slot(
+    document: &mut impl UiDocumentAccess,
+    number: usize,
+    note: &StickyNote,
+    editing: Option<&str>,
+    visible: bool,
+) -> Result<(), String> {
+    let id = format!("sticky-{number}");
+    document.visible(&id, visible)?;
+    document.position(&id, note.rect.x as f32, note.rect.y as f32)?;
+    document.size(&id, note.rect.width as f32, note.rect.height as f32)?;
+    document.background(
+        &id,
+        UiColor {
+            r: note.background.red,
+            g: note.background.green,
+            b: note.background.blue,
+            a: 255,
+        },
+    )?;
+    let text_id = format!("sticky-{number}-text");
+    let text = match editing {
+        Some(buffer) => projection::caret_text(buffer, true),
+        None => note.text.clone(),
+    };
+    document.text(&text_id, text)?;
+    document.font_size(&text_id, f32::from(note.text_size))?;
+    document.font_weight(&text_id, if note.bold { 700 } else { 400 })?;
+    document.foreground(
+        &text_id,
+        UiColor {
+            r: note.foreground.red,
+            g: note.foreground.green,
+            b: note.foreground.blue,
+            a: 255,
+        },
+    )?;
+    document.visible(&format!("sticky-{number}-drag"), visible)?;
+    for corner in ["nw", "ne", "sw", "se"] {
+        document.visible(&format!("sticky-{number}-resize-{corner}"), visible)?;
+    }
     Ok(())
+}
+
+fn sync_sticky_move_preview(
+    document: &mut impl UiDocumentAccess,
+    preview: Option<Rect>,
+) -> Result<(), String> {
+    let Some(rect) = preview else {
+        return document.visible("sticky-move-preview", false);
+    };
+    document.visible("sticky-move-preview", true)?;
+    document.position("sticky-move-preview", rect.x as f32, rect.y as f32)?;
+    document.size("sticky-move-preview", rect.width as f32, rect.height as f32)
 }
 
 pub(crate) fn is_editing(state: &DesktopState) -> bool {
@@ -268,15 +313,19 @@ pub(crate) fn is_editing(state: &DesktopState) -> bool {
 }
 
 pub(crate) fn commit_edit(state: &mut DesktopState) {
-    if state.sticky.edit.take().is_some() {
-        schedule_persist(state);
+    commit_sticky_edit(&mut state.sticky);
+}
+
+fn commit_sticky_edit(sticky: &mut StickyState) {
+    if sticky.edit.take().is_some() {
+        sticky.arm_persist(Instant::now());
     }
 }
 
 /// Transient-cancel path: commits any active edit and drops an in-flight gesture.
-pub(crate) fn cancel_edit_and_gesture(state: &mut DesktopState) {
-    commit_edit(state);
-    state.sticky.gesture = None;
+pub(crate) fn cancel_edit_and_gesture(sticky: &mut StickyState) {
+    commit_sticky_edit(sticky);
+    sticky.gesture = None;
 }
 
 /// Creates a note at `anchor` on the active workspace, respecting the slot cap.
@@ -382,6 +431,11 @@ pub(crate) fn handle_action(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
+    // A root-level outline can become the hit target once it leaves the note. Keep the active move
+    // bound to its press-time note instead of letting hit testing retarget the gesture.
+    if owns_active_move_event(action, &state.sticky) {
+        return handle_move_action(action, document, state);
+    }
     // Sticky Secondary opens the sticky context menu for the exact note under
     // the pointer. It routes BEFORE the generic primary dispatch below;
     // otherwise the generic branch shadows it and it is unreachable.
@@ -393,6 +447,60 @@ pub(crate) fn handle_action(
         return Ok(());
     }
     handle_slot(action, document, state)
+}
+
+pub(crate) fn owns_active_move_event(action: &UiActionEvent, sticky: &StickyState) -> bool {
+    sticky
+        .gesture
+        .as_ref()
+        .is_some_and(|gesture| gesture.mode == StickyGestureMode::Move)
+        && (action.phase == UiActionPhase::Motion
+            || (action.phase == UiActionPhase::Release
+                && pointer_button(action) == PointerButton::Primary))
+}
+
+fn handle_move_action(
+    action: &UiActionEvent,
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    let (preview, committed) = apply_move_event(&mut state.sticky, action, state.grid.work_area);
+    if action.phase == UiActionPhase::Release {
+        if committed {
+            sticky_move_counter().increment();
+            flush_now(state);
+        }
+        return sync_sticky(document, state);
+    }
+    if preview.is_some() {
+        sticky_move_counter().increment();
+        return sync_sticky(document, state);
+    }
+    Ok(())
+}
+
+fn apply_move_event(
+    sticky: &mut StickyState,
+    action: &UiActionEvent,
+    work_area: Rect,
+) -> (Option<Rect>, bool) {
+    let preview = sticky
+        .gesture
+        .as_mut()
+        .filter(|gesture| gesture.mode == StickyGestureMode::Move)
+        .and_then(|gesture| update_move_preview(gesture, action.x, action.y, work_area));
+    if action.phase != UiActionPhase::Release {
+        return (preview, false);
+    }
+    let committed = sticky
+        .gesture
+        .take()
+        .and_then(|gesture| {
+            committed_move(&gesture)
+                .map(|rect| sticky.commit_rect(&gesture.note_id, rect, Instant::now()))
+        })
+        .unwrap_or(false);
+    (preview, committed)
 }
 
 fn slot_note(state: &DesktopState, action: &UiActionEvent) -> Option<StickyNote> {
@@ -453,36 +561,13 @@ fn handle_slot(
                     start_y: action.y,
                     original: note.rect,
                     moved: false,
+                    preview: None,
                 });
                 sticky_edit_counter().increment();
                 return sync_sticky(document, state);
             }
             UiActionPhase::Motion | UiActionPhase::Release => {
-                let release = action.phase == UiActionPhase::Release;
-                let Some(gesture) = state.sticky.gesture.as_mut() else {
-                    return Ok(());
-                };
-                if gesture.note_id != note_id || gesture.mode != StickyGestureMode::Move {
-                    return Ok(());
-                }
-                let dx = action.x - gesture.start_x;
-                let dy = action.y - gesture.start_y;
-                gesture.moved |= sticky_drag_exceeded(dx, dy);
-                let moved = gesture.moved;
-                let original = gesture.original;
-                if release {
-                    state.sticky.gesture = None;
-                }
-                if !moved {
-                    return Ok(());
-                }
-                let rect = move_rect(original, dx as i32, dy as i32, state.grid.work_area);
-                state.sticky.store.set_rect(&note_id, rect);
-                sticky_move_counter().increment();
-                if release {
-                    flush_now(state);
-                }
-                return sync_sticky(document, state);
+                return Ok(());
             }
             UiActionPhase::Hover => {}
         }
@@ -510,6 +595,7 @@ fn handle_slot(
                     start_y: action.y,
                     original: note.rect,
                     moved: false,
+                    preview: None,
                 });
             }
             UiActionPhase::Motion | UiActionPhase::Release => {
@@ -530,6 +616,7 @@ fn handle_slot(
                     sticky_resize_counter().increment();
                     if action.phase == UiActionPhase::Release {
                         state.sticky.gesture = None;
+                        state.sticky.arm_persist(Instant::now());
                         flush_now(state);
                     }
                     sync_sticky(document, state)?;
@@ -552,6 +639,32 @@ fn slot_number(action: &str) -> Option<usize> {
 /// Pointer travel (logical px) before a note press becomes a move.
 const STICKY_DRAG_THRESHOLD_PX: f32 = 5.0;
 
+fn update_move_preview(
+    gesture: &mut StickyGesture,
+    x: f32,
+    y: f32,
+    work_area: Rect,
+) -> Option<Rect> {
+    if gesture.mode != StickyGestureMode::Move {
+        return None;
+    }
+    let dx = x - gesture.start_x;
+    let dy = y - gesture.start_y;
+    gesture.moved |= sticky_drag_exceeded(dx, dy);
+    if !gesture.moved {
+        return None;
+    }
+    let rect = move_rect(gesture.original, dx as i32, dy as i32, work_area);
+    gesture.preview = Some(rect);
+    Some(rect)
+}
+
+fn committed_move(gesture: &StickyGesture) -> Option<Rect> {
+    (gesture.mode == StickyGestureMode::Move && gesture.moved)
+        .then_some(gesture.preview)
+        .flatten()
+}
+
 fn is_note_body_action(action: &str) -> bool {
     action.ends_with(".move") || action.ends_with(".drag") || action.ends_with(".text")
 }
@@ -565,10 +678,14 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
-    use flamewm_desktop_core::sticky::StickyNoteStore;
+    use flamewm_api::{OutputId, Rect};
+    use flamewm_desktop_core::sticky::{StickyNote, StickyNoteStore};
+    use flamewm_ui_x11::{UiActionEvent, UiActionPhase, test_support::RecordingUiDoc};
 
     use super::{
-        PERSIST_DEBOUNCE, PERSIST_RETRY_CAP, StickyState, is_note_body_action, sticky_drag_exceeded,
+        PERSIST_DEBOUNCE, PERSIST_RETRY_CAP, StickyEdit, StickyGesture, StickyGestureMode,
+        StickyState, apply_move_event, cancel_edit_and_gesture, is_note_body_action,
+        owns_active_move_event, sticky_drag_exceeded, sync_sticky_move_preview, sync_sticky_slot,
     };
 
     fn state() -> StickyState {
@@ -667,6 +784,22 @@ mod tests {
     }
 
     #[test]
+    fn committed_move_updates_rect_and_arms_persistence() {
+        let mut state = state();
+        let note = StickyNote::new("note-1", OutputId::new("default"), 0, 10, 20);
+        assert!(state.store.create(note.clone()));
+        let rect = Rect::new(42, 60, note.rect.width, note.rect.height);
+        let now = Instant::now();
+
+        assert!(state.commit_rect(&note.id, rect, now));
+
+        assert_eq!(state.store.get(&note.id).unwrap().rect, rect);
+        assert!(state.persist_pending);
+        assert_eq!(state.persist_due, Some(now + PERSIST_DEBOUNCE));
+        assert_eq!(state.wake.get(), Some(now + PERSIST_DEBOUNCE));
+    }
+
+    #[test]
     fn click_below_threshold_stays_a_click() {
         assert!(!sticky_drag_exceeded(0.0, 0.0));
         assert!(!sticky_drag_exceeded(3.0, 3.0));
@@ -678,6 +811,147 @@ mod tests {
         assert!(sticky_drag_exceeded(0.0, 5.0));
         assert!(sticky_drag_exceeded(-5.0, 0.0));
         assert!(sticky_drag_exceeded(3.0, 4.0));
+    }
+
+    #[test]
+    fn move_preview_keeps_live_note_at_origin_until_release_commit() {
+        let mut note = StickyNote::new("note-1", OutputId::new("default"), 0, 10, 20);
+        note.text = "keep this here while dragging".to_owned();
+        let original = note.rect;
+        let work_area = Rect::new(0, 0, 800, 600);
+        let mut sticky = state();
+        assert!(sticky.store.create(note.clone()));
+        sticky.gesture = Some(StickyGesture {
+            note_id: note.id.clone(),
+            mode: StickyGestureMode::Move,
+            start_x: 10.0,
+            start_y: 20.0,
+            original,
+            moved: false,
+            preview: None,
+        });
+        let mut motion = UiActionEvent {
+            action: "sticky.1.move".to_owned(),
+            phase: UiActionPhase::Motion,
+            inside: true,
+            button: 1,
+            modifiers: 0,
+            x: 13.0,
+            y: 23.0,
+            text: None,
+        };
+
+        assert_eq!(
+            apply_move_event(&mut sticky, &motion, work_area),
+            (None, false)
+        );
+        assert_eq!(sticky.store.get(&note.id).unwrap().rect, original);
+        assert!(!sticky.persist_pending);
+
+        motion.x = 42.0;
+        motion.y = 60.0;
+        let (preview, committed) = apply_move_event(&mut sticky, &motion, work_area);
+        let preview = preview.expect("threshold-crossing motion starts outline preview");
+        assert!(!committed);
+        assert_eq!(preview, Rect::new(42, 60, original.width, original.height));
+        assert_eq!(sticky.store.get(&note.id).unwrap().rect, original);
+
+        let mut document = RecordingUiDoc::default();
+        let live_note = sticky.store.get(&note.id).unwrap();
+        sync_sticky_slot(&mut document, 1, live_note, None, true).expect("project original note");
+        sync_sticky_move_preview(&mut document, Some(preview)).expect("project move outline");
+        assert_eq!(document.positions["sticky-1"], (10.0, 20.0));
+        assert_eq!(document.sizes["sticky-1"], (190.0, 190.0));
+        assert_eq!(
+            document.texts["sticky-1-text"],
+            "keep this here while dragging"
+        );
+        assert_eq!(document.positions["sticky-move-preview"], (42.0, 60.0));
+        assert_eq!(document.sizes["sticky-move-preview"], (190.0, 190.0));
+        assert_eq!(document.visible["sticky-move-preview"], true);
+
+        motion.phase = UiActionPhase::Release;
+        motion.x = 52.0;
+        motion.y = 70.0;
+        let final_rect = Rect::new(52, 70, original.width, original.height);
+        let (release_preview, committed) = apply_move_event(&mut sticky, &motion, work_area);
+        assert_eq!(release_preview, Some(final_rect));
+        assert!(committed, "release commits the preview target");
+        assert_eq!(sticky.store.get(&note.id).unwrap().rect, final_rect);
+        assert!(sticky.persist_pending, "move release schedules persistence");
+        assert_eq!(sticky.persist_due, sticky.wake.get());
+        let committed_note = sticky.store.get(&note.id).expect("note remains stored");
+        sync_sticky_slot(&mut document, 1, committed_note, None, true)
+            .expect("project committed note");
+        sync_sticky_move_preview(&mut document, None).expect("hide outline on release");
+        assert_eq!(document.positions["sticky-1"], (52.0, 70.0));
+        assert_eq!(
+            document.texts["sticky-1-text"],
+            "keep this here while dragging"
+        );
+        assert_eq!(document.visible["sticky-move-preview"], false);
+    }
+
+    #[test]
+    fn cancelling_move_discards_preview_and_keeps_the_note_at_its_origin() {
+        let mut note = StickyNote::new("note-1", OutputId::new("default"), 0, 10, 20);
+        note.text = "keep this note".to_owned();
+        let original = note.rect;
+        let preview = Rect::new(42, 60, original.width, original.height);
+        let mut sticky = state();
+        assert!(sticky.store.create(note.clone()));
+        sticky.edit = Some(StickyEdit {
+            note_id: note.id.clone(),
+            buffer: "edited text".to_owned(),
+        });
+        sticky.gesture = Some(StickyGesture {
+            note_id: note.id.clone(),
+            mode: StickyGestureMode::Move,
+            start_x: 10.0,
+            start_y: 20.0,
+            original,
+            moved: true,
+            preview: Some(preview),
+        });
+
+        cancel_edit_and_gesture(&mut sticky);
+
+        assert!(sticky.gesture.is_none());
+        assert!(sticky.edit.is_none());
+        assert_eq!(sticky.store.get(&note.id).unwrap().rect, original);
+        assert_eq!(sticky.store.get(&note.id).unwrap().text, "keep this note");
+        assert!(sticky.persist_pending, "cancelling commits the active edit");
+        let mut document = RecordingUiDoc::default();
+        sync_sticky_move_preview(&mut document, None).expect("hide cancelled outline");
+        assert_eq!(document.visible["sticky-move-preview"], false);
+    }
+
+    #[test]
+    fn active_move_remains_routed_when_hit_testing_leaves_the_note() {
+        let mut state = state();
+        state.gesture = Some(StickyGesture {
+            note_id: "note-1".to_owned(),
+            mode: StickyGestureMode::Move,
+            start_x: 10.0,
+            start_y: 20.0,
+            original: Rect::new(10, 20, 190, 190),
+            moved: true,
+            preview: Some(Rect::new(42, 60, 190, 190)),
+        });
+        let motion = UiActionEvent {
+            action: "desktop.surface".to_owned(),
+            phase: UiActionPhase::Motion,
+            inside: true,
+            button: 1,
+            modifiers: 0,
+            x: 42.0,
+            y: 60.0,
+            text: None,
+        };
+        assert!(owns_active_move_event(&motion, &state));
+        let mut press = motion.clone();
+        press.phase = UiActionPhase::Press;
+        assert!(!owns_active_move_event(&press, &state));
     }
 
     #[test]

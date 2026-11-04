@@ -38,6 +38,8 @@ pub struct RecordingUiDoc {
     pub borders: HashMap<String, UiColor>,
     pub foregrounds: HashMap<String, UiColor>,
     pub variables: HashMap<String, UiColor>,
+    pub positions: HashMap<String, (f32, f32)>,
+    pub sizes: HashMap<String, (f32, f32)>,
     pub images: HashMap<String, (u32, u32)>,
     pub radii: HashMap<String, f32>,
     pub opacities: HashMap<String, f32>,
@@ -72,10 +74,12 @@ impl UiDocumentAccess for RecordingUiDoc {
         self.toggles.insert(track_id.to_owned(), checked);
         Ok(())
     }
-    fn position(&mut self, _id: &str, _left: f32, _top: f32) -> Result<(), String> {
+    fn position(&mut self, id: &str, left: f32, top: f32) -> Result<(), String> {
+        self.positions.insert(id.to_owned(), (left, top));
         Ok(())
     }
-    fn size(&mut self, _id: &str, _width: f32, _height: f32) -> Result<(), String> {
+    fn size(&mut self, id: &str, width: f32, height: f32) -> Result<(), String> {
+        self.sizes.insert(id.to_owned(), (width, height));
         Ok(())
     }
     fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {

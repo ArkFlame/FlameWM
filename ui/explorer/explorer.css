@@ -1,6 +1,6 @@
 /* Colour variables are placeholders only: theme.rs overwrites every one from the live FlameWM settings snapshot before the
    first paint. The root fills once with the surface; panels draw nothing or a white wash, so no grey literal is painted. */
-:root { --accent:#00000000; --accent-soft:#00000030; --card:#00000000; --line:#00000000; --hover:#00000000; --menu:#00000000; --sidebar:#00000000; --text:#f1f2f3; --muted:#f1f2f3; }
+:root { --accent:#00000000; --accent-soft:#00000030; --preview-outline:#539bff; --card:#00000000; --line:#00000000; --hover:#00000000; --menu:#00000000; --sidebar:#00000000; --text:#f1f2f3; --muted:#f1f2f3; }
 /* Square root: the WM frame/XShape owns all rounding, the outline and the titlebar, which are drawn outside the
    client rect. The body starts at the client origin: main.rs sizes the flow children to the client height, so an
    extra top offset would push the status strip below the window. */
@@ -98,7 +98,7 @@ button:active { background:var(--hover); }
 .dialog-button:hover { background:var(--hover); }
 
 .list-surface { position:absolute; }
-.selection-rectangle { position:absolute; background:transparent; border:1px solid var(--accent); border-radius:3px; }
+.selection-rectangle { position:absolute; background:transparent; border:2px solid var(--preview-outline); border-radius:3px; }
 
 /* Header dividers: 1px light overlay between cells, with a wider invisible grip centred on each line. */
 .col-sep { position:absolute; top:5px; width:1px; height:19px; background:#ffffff26; }

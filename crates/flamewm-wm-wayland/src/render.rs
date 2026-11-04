@@ -1075,11 +1075,11 @@ fn render_into(
             state.loop_signal.stop();
         }
     }
-    // winit's buffer_age() calls eglQuerySurface(EGL_BUFFER_AGE_EXT). On nested
-    // software EGL (XWayland glamor unavailable) some drivers repeatedly emit
-    // EGL_BAD_SURFACE for this query. Age zero is always correct: a complete
-    // repaint avoids depending on preserved swapchain contents.
-    let age = 0;
+    // Partial repaint: when the driver reports a valid swapchain age, the damage tracker only
+    // touches the rectangles that changed (the pointer is the common case), instead of clearing
+    // and redrawing the full output on every motion event. Some nested software-EGL drivers return
+    // no age; zero remains the safe full-repaint fallback.
+    let age = backend.buffer_age().unwrap_or(0);
     let damage = {
         let (renderer, mut framebuffer) = backend.bind()?;
         let result =

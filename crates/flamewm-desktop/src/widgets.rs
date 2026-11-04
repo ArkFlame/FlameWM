@@ -339,11 +339,6 @@ impl WidgetState {
         self.arm(Instant::now());
     }
 
-    /// Re-derives the tick deadline after the store was replaced wholesale.
-    pub(crate) fn rearm_after_store_replace(&mut self) {
-        self.arm(Instant::now());
-    }
-
     fn tick_rate(&self) -> Option<TickRate> {
         let widgets = self.store.widgets();
         if widgets.iter().any(|widget| {

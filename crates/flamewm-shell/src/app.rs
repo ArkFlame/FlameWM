@@ -66,6 +66,8 @@ pub(crate) struct ShellLoop {
     pub(crate) dispatcher: Option<std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>,
     pub(crate) start_category: StartCategory,
     pub(crate) start_query: String,
+    pub(crate) start_selected: usize,
+    pub(crate) desktop_hidden: Vec<flamewm_api::WindowRef>,
     pub(crate) launcher: flamewm_shell::launcher::LauncherState,
     pub(crate) task_drag: Option<flamewm_shell::taskbar::tasks::drag::TaskDrag>,
     pub(crate) task_press_target: Option<(usize, flamewm_shell::runtime::TaskSlotTarget)>,
@@ -150,6 +152,8 @@ impl ShellLoop {
             dispatcher,
             start_category: StartCategory::All,
             start_query: String::new(),
+            start_selected: 0,
+            desktop_hidden: Vec::new(),
             launcher: Default::default(),
             task_drag: None,
             task_press_target: None,
@@ -585,6 +589,7 @@ impl ShellLoop {
                         }
                         if self.open_start_surface(runtime, &target_output, started)? {
                             self.start_open = true;
+                            self.start_selected = 0;
                             self.popup_session.commit(&transition);
                         }
                     }
@@ -609,6 +614,7 @@ impl ShellLoop {
                     };
                     self.start_category = category;
                     self.start_open = true;
+                    self.start_selected = 0;
                     // F10: read current context generation; refuse when
                     // edge/geometry is inconsistent.
                     self.note_popup_generation("start");
@@ -1142,7 +1148,38 @@ impl ShellLoop {
             )
         })?;
         self.project_start_error_line(runtime);
-        Ok(())
+        self.project_start_selection(runtime)
+    }
+
+    /// Moves the keyboard selection through the visible Start rows (clamped, no wrap).
+    pub(crate) fn move_start_selection(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        delta: isize,
+    ) -> Result<(), UiBackendError> {
+        let count = self.start_visible_count();
+        self.start_selected =
+            async_projection::step_start_selection(self.start_selected, delta, count);
+        self.project_start_selection(runtime)
+    }
+
+    fn start_visible_count(&self) -> usize {
+        projection::start_visible_results(&self.start_model, self.start_category, &self.start_query)
+            .len()
+            .min(async_projection::START_APP_SLOT_COUNT)
+    }
+
+    fn project_start_selection(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+    ) -> Result<(), UiBackendError> {
+        let selected = self
+            .start_selected
+            .min(self.start_visible_count().saturating_sub(1));
+        self.start_selected = selected;
+        runtime.with_document(self.surfaces.start, |document| {
+            async_projection::project_start_highlight(document, selected)
+        })
     }
 
     /// Publishes each pager cell's window-relative rect on the panel X

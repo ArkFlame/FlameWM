@@ -10,8 +10,6 @@ use flamewm_ui_x11::surface_style::surface_border;
 use flamewm_ui_x11::backdrop::WindowBackdrop;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
-/// `FlameWM` default accent, the same value as flamewm-settings `DEFAULT_ACCENT`. Used only when no settings snapshot supplies `accent`.
-pub const DEFAULT_ACCENT: u32 = 0x0053_9BFF;
 /// Shared defaults (flamewm-ui-core `DEFAULT_SURFACE_OPACITY`, shell/desktop `surfaceBlurPercent`).
 const DEFAULT_SURFACE_OPACITY: u8 = 50;
 const DEFAULT_BLUR_PERCENT: u8 = 80;
@@ -102,16 +100,10 @@ const fn white(alpha: u8) -> UiColor {
         a: alpha,
     }
 }
-fn hex(value: &str) -> Option<u32> {
-    let val = value.strip_prefix('#').unwrap_or(value);
-    (val.len() == 6 && val.bytes().all(|b| b.is_ascii_hexdigit()))
-        .then(|| u32::from_str_radix(val, 16).ok())
-        .flatten()
-}
 impl ExplorerTheme {
     pub fn from_snapshot(snapshot: &SettingsSnapshot) -> Self {
         let mut theme = Self {
-            accent: rgb(DEFAULT_ACCENT),
+            accent: rgb(flamewm_api::settings::accent_rgb(snapshot)),
             surface: rgb(0),
             surface_alpha: 0,
             stroke: white(63),
@@ -119,17 +111,6 @@ impl ExplorerTheme {
             font_size_offset: 0,
             font_bold: false,
         };
-        if let Some(SettingValue::Text(name)) = snapshot.values.get("accent") {
-            theme.accent = rgb(match name.as_str() {
-                "red" => 0x00EF_4048,
-                "blue" => 0x003d_aee9,
-                "purple" => 0x009b_59b6,
-                "teal" => 0x001a_bc9c,
-                "green" => 0x0027_ae60,
-                "amber" => 0x00f3_9c12,
-                _ => hex(name).unwrap_or(DEFAULT_ACCENT),
-            });
-        }
         if let Some(SettingValue::Text(name)) = snapshot.values.get("fontFamily") {
             let name = name.trim();
             theme.font_family = (!name.is_empty()).then(|| name.to_owned());
@@ -237,6 +218,13 @@ impl ExplorerTheme {
         ] {
             doc.color_variable(name, color)?;
         }
+        doc.color_variable(
+            "--preview-outline",
+            UiColor {
+                a: flamewm_ui_core::style::PREVIEW_OUTLINE_ALPHA,
+                ..self.accent
+            },
+        )?;
         // The root fill carries the live surfaceOpacity alpha, applied once; children draw no second surface.
         doc.background("explorer", self.root())?;
         for popup in ["context-popup", "progress-popup", "dialog", "openwith-dialog"] {
@@ -252,6 +240,7 @@ impl ExplorerTheme {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_ui_x11::test_support::RecordingUiDoc;
     #[test]
     fn muted_text_is_opaque_and_dimmer_than_full_white() {
         let muted = ExplorerTheme::default().muted();
@@ -297,6 +286,30 @@ mod tests {
             (bad.accent.r, bad.accent.g, bad.accent.b),
             (0x53, 0x9B, 0xFF)
         );
+    }
+
+    #[test]
+    fn preview_outline_projects_the_live_accent_as_an_opaque_two_pixel_stroke() {
+        let mut settings = SettingsSnapshot::new(1);
+        settings
+            .values
+            .insert("accent".into(), SettingValue::Text("#123456".into()));
+        let theme = ExplorerTheme::from_snapshot(&settings);
+        let mut document = RecordingUiDoc::default();
+        theme.project(&mut document).expect("project explorer theme");
+        assert_eq!(
+            document.variables["--preview-outline"],
+            UiColor {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+                a: flamewm_ui_core::style::PREVIEW_OUTLINE_ALPHA,
+            }
+        );
+        assert_eq!(flamewm_ui_core::style::PREVIEW_OUTLINE_WIDTH_PX, 2);
+        assert!(include_str!("../../../ui/explorer/explorer.css").contains(
+            ".selection-rectangle { position:absolute; background:transparent; border:2px solid var(--preview-outline); border-radius:3px; }"
+        ));
     }
 
     #[test]

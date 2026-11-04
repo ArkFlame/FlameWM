@@ -33,6 +33,9 @@ flamewm-render-compiler = { path = "../flamewm-render-compiler" }
 [lints]
 workspace = true
 
+[dev-dependencies]
+flamewm-ui-x11 = { path = "../flamewm-ui-x11", features = ["test-support"] }
+
 [[bin]]
 name = "flamewm-explorer"
 path = "src/bin/flamewm-explorer.rs"

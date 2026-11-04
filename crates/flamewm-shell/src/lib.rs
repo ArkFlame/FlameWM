@@ -33,6 +33,8 @@ pub mod taskbar {
     pub mod context_menu;
     #[path = "intent.rs"]
     pub mod intent;
+    #[path = "show_desktop.rs"]
+    pub mod show_desktop;
     #[path = "status/mod.rs"]
     pub mod status;
     #[path = "tasks/mod.rs"]

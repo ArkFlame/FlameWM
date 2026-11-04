@@ -3,7 +3,7 @@ use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::PanelEdge;
 use flamewm_image_core::scale::ScaleFilter;
 use flamewm_image_core::{decode_bytes_at, ImageSourceFormat};
-use flamewm_platform::chrome::{parse_hex_rgb, ACCENT_SOFT_ALPHA};
+use flamewm_platform::chrome::ACCENT_SOFT_ALPHA;
 use flamewm_platform::settings::ClockFormat;
 use flamewm_ui_core::context_menu::shape_radius;
 use flamewm_ui_x11::surface_style::{
@@ -20,8 +20,6 @@ const START_ICON_SIZE: u32 = 25;
 /// Largest custom Start icon file read, so a bad path cannot stall the panel.
 const MAX_START_ICON_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Neutral grey until a settings snapshot supplies `accent`.
-const DEFAULT_ACCENT: u32 = 0x007f_878e;
 const DEFAULT_ANIMATION_SPEED: i64 = 100;
 const DEFAULT_START_ANIMATION: &str = "none";
 const DEFAULT_SURFACE_OPACITY: u8 = 50;
@@ -180,6 +178,14 @@ fn project_accent_tokens(
     for (name, alpha) in ACCENT_TOKEN_ALPHAS {
         document.color_variable(name, accent_tint(snapshot, alpha))?;
     }
+    // Only surfaces that draw a preview/selection outline compile this variable in.
+    let _ = document.color_variable(
+        "--preview-outline",
+        UiColor {
+            a: flamewm_ui_core::style::PREVIEW_OUTLINE_ALPHA,
+            ..accent_color(snapshot)
+        },
+    );
     Ok(())
 }
 
@@ -339,7 +345,7 @@ pub fn taskbar_items(snapshot: Option<&SettingsSnapshot>) -> TaskbarItems {
 }
 
 fn accent_color(snapshot: &SettingsSnapshot) -> UiColor {
-    let accent = color_setting(snapshot, "accent", DEFAULT_ACCENT);
+    let accent = rgb(flamewm_api::settings::accent_rgb(snapshot), 255);
     let opacity = percent_setting(snapshot, "accentOpacity", DEFAULT_ACCENT_OPACITY);
     UiColor {
         a: opacity_alpha(opacity),
@@ -441,22 +447,6 @@ fn percent_setting(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
     match snapshot.values.get(key) {
         Some(SettingValue::Percent(value)) => *value,
         _ => default,
-    }
-}
-
-fn color_setting(snapshot: &SettingsSnapshot, key: &str, default: u32) -> UiColor {
-    let Some(SettingValue::Text(value)) = snapshot.values.get(key) else {
-        return rgb(default, 255);
-    };
-    // Stored values carry `#`; the bare six-digit form is accepted too.
-    let parsed = if value.starts_with('#') {
-        parse_hex_rgb(value)
-    } else {
-        parse_hex_rgb(&format!("#{value}"))
-    };
-    match parsed {
-        Some((r, g, b)) => UiColor { r, g, b, a: 255 },
-        None => rgb(default, 255),
     }
 }
 
@@ -618,13 +608,13 @@ mod tests {
     }
 
     #[test]
-    fn default_projection_keeps_accent_tokens_at_stylesheet_values() {
+    fn default_projection_uses_the_shared_product_accent() {
         let mut doc = RecordingUiDoc::default();
         project(&mut doc, &SettingsSnapshot::new(1), SurfaceKind::Start).expect("start projection");
         let accent = UiColor {
-            r: 0x7f,
-            g: 0x87,
-            b: 0x8e,
+            r: 0x53,
+            g: 0x9b,
+            b: 0xff,
             a: 255,
         };
         assert_eq!(doc.variables["--accent"], accent);
@@ -1066,7 +1056,25 @@ mod tests {
                     "{name} under {hex}"
                 );
             }
+            assert_eq!(doc.variables["--preview-outline"], base);
         }
+    }
+
+    #[test]
+    fn preview_outline_stays_opaque_when_accent_opacity_changes() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("accent".into(), SettingValue::Text("#123456".into()));
+        snapshot
+            .values
+            .insert("accentOpacity".into(), SettingValue::Percent(5));
+        let mut doc = RecordingUiDoc::default();
+        project_accent_tokens(&mut doc, &snapshot).expect("project accent tokens");
+        assert_eq!(doc.variables["--preview-outline"], rgb(0x0012_3456, 255));
+        let css = include_str!("../../../ui/shell/flamewm.css");
+        assert!(css.contains(".desktop-selection { position:absolute; left:0px; top:0px; width:0px; height:0px; border:2px solid var(--preview-outline); }"));
+        assert!(css.contains(".snap-preview { position:absolute; left:0px; top:0px; width:0px; height:0px; background:var(--snap-fill); border:2px solid var(--preview-outline); }"));
     }
 
     fn css_rules(css: &str) -> Vec<(&str, &str)> {
@@ -1207,7 +1215,7 @@ mod tests {
         let transparent = accent_color(&snapshot);
         assert_eq!(
             (transparent.r, transparent.g, transparent.b, transparent.a),
-            (0x7f, 0x87, 0x8e, 0)
+            (0x53, 0x9b, 0xff, 0)
         );
 
         snapshot
@@ -1215,28 +1223,6 @@ mod tests {
             .insert("accentOpacity".to_owned(), SettingValue::Percent(100));
         assert_eq!(accent_color(&snapshot).a, 255);
         assert_eq!(accent_color(&SettingsSnapshot::new(1)).a, 255);
-    }
-
-    #[test]
-    fn color_setting_parses_hex_and_falls_back_to_default() {
-        let red = color_setting(&snapshot_with("surfaceColor", "#FF0000"), "surfaceColor", 0);
-        assert_eq!((red.r, red.g, red.b, red.a), (255, 0, 0, 255));
-        let green = color_setting(&snapshot_with("accent", "00ff00"), "accent", 0);
-        assert_eq!((green.r, green.g, green.b), (0, 255, 0));
-        let signed = color_setting(
-            &snapshot_with("accent", "#+12345"),
-            "accent",
-            DEFAULT_ACCENT,
-        );
-        assert_eq!(signed, rgb(DEFAULT_ACCENT, 255));
-        let bad = color_setting(
-            &snapshot_with("accent", "#GG0000"),
-            "accent",
-            DEFAULT_ACCENT,
-        );
-        assert_eq!(bad, rgb(DEFAULT_ACCENT, 255));
-        let missing = color_setting(&SettingsSnapshot::new(1), "surfaceColor", 0x0033_3333);
-        assert_eq!(missing.r, 0x33);
     }
 
     fn slide_snapshot(pairs: &[(&str, SettingValue)]) -> SettingsSnapshot {

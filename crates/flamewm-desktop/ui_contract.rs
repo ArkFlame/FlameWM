@@ -7,6 +7,7 @@ pub const REQUIRED_DESKTOP_IDS: &[&str] = &[
     "desktop-wallpaper-selection",
     "desktop-watermark",
     "desktop-selection",
+    "sticky-move-preview",
     "desktop-drag-ghost",
     "desktop-convert-preview",
     "desktop-convert-preview-icon",

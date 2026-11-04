@@ -64,6 +64,66 @@ impl SettingsSnapshot {
     }
 }
 
+/// Product default accent shared by every settings consumer.
+pub const DEFAULT_ACCENT: &str = "#539BFF";
+pub const DEFAULT_ACCENT_RGB: u32 = 0x0053_9bff;
+
+/// Resolve the shared `accent` setting to opaque `0x00RRGGBB`.
+///
+/// Settings normally stores a six-digit hex colour. The named values are retained for snapshots
+/// written by older versions; all presentation and WM consumers use this resolver so fallback,
+/// aliases and accepted hex forms cannot drift.
+#[must_use]
+pub fn accent_rgb(snapshot: &SettingsSnapshot) -> u32 {
+    let Some(SettingValue::Text(value)) = snapshot.values.get("accent") else {
+        return DEFAULT_ACCENT_RGB;
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "red" => return 0x00ef_4048,
+        "blue" => return 0x003d_aee9,
+        "purple" => return 0x009b_59b6,
+        "teal" => return 0x001a_bc9c,
+        "green" => return 0x0027_ae60,
+        "amber" => return 0x00f3_9c12,
+        _ => {}
+    }
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        u32::from_str_radix(hex, 16).unwrap_or(DEFAULT_ACCENT_RGB)
+    } else {
+        DEFAULT_ACCENT_RGB
+    }
+}
+
+#[cfg(test)]
+mod accent_tests {
+    use super::{DEFAULT_ACCENT_RGB, SettingValue, SettingsSnapshot, accent_rgb};
+
+    fn snapshot(value: &str) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("accent".into(), SettingValue::Text(value.into()));
+        snapshot
+    }
+
+    #[test]
+    fn accent_uses_one_default_and_accepts_hash_bare_hex_and_case() {
+        assert_eq!(accent_rgb(&SettingsSnapshot::new(0)), DEFAULT_ACCENT_RGB);
+        assert_eq!(accent_rgb(&snapshot("#12aBcD")), 0x0012_abcd);
+        assert_eq!(accent_rgb(&snapshot("123456")), 0x0012_3456);
+        assert_eq!(accent_rgb(&snapshot(" #EF4048 ")), 0x00ef_4048);
+    }
+
+    #[test]
+    fn accent_keeps_legacy_names_and_invalid_values_fall_back() {
+        assert_eq!(accent_rgb(&snapshot("red")), 0x00ef_4048);
+        assert_eq!(accent_rgb(&snapshot("blue")), 0x003d_aee9);
+        assert_eq!(accent_rgb(&snapshot("nonsense")), DEFAULT_ACCENT_RGB);
+        assert_eq!(accent_rgb(&snapshot("#GG0000")), DEFAULT_ACCENT_RGB);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsChange {
     pub key: String,

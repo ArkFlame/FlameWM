@@ -979,6 +979,31 @@ pub fn project_start_unified(
     Ok(())
 }
 
+/// Next keyboard selection among `count` visible Start rows; clamps at both ends.
+#[must_use]
+pub fn step_start_selection(selected: usize, delta: isize, count: usize) -> usize {
+    selected
+        .saturating_add_signed(delta)
+        .min(count.saturating_sub(1))
+}
+
+/// Paints the keyboard-selected Start row; every other row is cleared.
+pub fn project_start_highlight(
+    document: &mut impl UiDocumentAccess,
+    selected: usize,
+) -> Result<(), String> {
+    let accent = crate::projection::task_accent();
+    for index in 0..START_APP_SLOT_COUNT {
+        let color = if index == selected {
+            UiColor { a: 0x38, ..accent }
+        } else {
+            UiColor { a: 0, ..accent }
+        };
+        document.background(&format!("start-app-slot-{}", index + 1), color)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[macro_export]
 macro_rules! noop_document_overflow {
@@ -2237,5 +2262,18 @@ pub(crate) mod tests {
         assert_eq!(doc.visible.get("task-slot-1-progress"), Some(&false));
         assert_eq!(doc.sizes.get("task-slot-1-progress"), Some(&(0.0, 2.0)));
         assert_eq!(doc.visible.get("task-slot-2-progress"), None);
+    }
+}
+
+#[cfg(test)]
+mod start_selection_tests {
+    use super::step_start_selection;
+
+    #[test]
+    fn selection_clamps_to_visible_rows() {
+        assert_eq!(step_start_selection(0, 1, 3), 1);
+        assert_eq!(step_start_selection(2, 1, 3), 2);
+        assert_eq!(step_start_selection(0, -1, 3), 0);
+        assert_eq!(step_start_selection(0, 1, 0), 0);
     }
 }

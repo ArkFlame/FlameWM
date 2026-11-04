@@ -171,7 +171,7 @@ impl AnimationStyle {
 }
 
 /// System accent used everywhere while `accentCustom` is off.
-pub const DEFAULT_ACCENT: &str = "#539BFF";
+pub const DEFAULT_ACCENT: &str = flamewm_api::settings::DEFAULT_ACCENT;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductSettings {

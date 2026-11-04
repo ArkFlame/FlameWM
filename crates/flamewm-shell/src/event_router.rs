@@ -500,6 +500,7 @@ impl ShellLoop {
                 return Ok(());
             }
             self.start_open = true;
+            self.start_selected = 0;
             let started = Instant::now();
             let _total = shell_stage!("shell.start.open.total");
             self.project_start(runtime)?;
@@ -535,6 +536,22 @@ impl ShellLoop {
                 return Ok(());
             }
         }
+        if action == "__flamewm.ui.key"
+            && event.action.phase == ActionPhase::Press
+            && self.start_open
+        {
+            let payload = event.action.text.as_deref().unwrap_or_default();
+            if let Some((modifiers, key)) = flamewm_shell::launcher::parse_typed_key(payload) {
+                if key == "Return" || key == "KP_Enter" {
+                    self.launch_start_slot(runtime, self.start_selected)?;
+                    return Ok(());
+                }
+                if let Some(delta) = flamewm_shell::launcher::navigation_delta(modifiers, key) {
+                    self.move_start_selection(runtime, delta)?;
+                    return Ok(());
+                }
+            }
+        }
         if let Some(slot) = slot_of(action, "launcher.app.") {
             if event.action.inside {
                 match event.action.phase {
@@ -555,6 +572,7 @@ impl ShellLoop {
             match input {
                 "\u{8}" => {
                     self.start_query.pop();
+                    self.start_selected = 0;
                     self.project_start(runtime)?;
                 }
                 "\u{1b}" => {
@@ -562,15 +580,31 @@ impl ShellLoop {
                         self.close_transients(runtime)?;
                     } else {
                         self.start_query.clear();
+                        self.start_selected = 0;
                         self.project_start(runtime)?;
                     }
                 }
-                "\n" => self.launch_start_slot(runtime, 0)?,
+                "\n" => self.launch_start_slot(runtime, self.start_selected)?,
                 value if !value.is_empty() => {
                     self.start_query.push_str(value);
+                    self.start_selected = 0;
                     self.project_start(runtime)?;
                 }
                 _ => {}
+            }
+            return Ok(());
+        }
+
+        if action == "desktop.show" {
+            if event.action.phase == ActionPhase::Release && event.action.inside {
+                let (requests, saved) = flamewm_shell::taskbar::show_desktop::plan(
+                    &self.shell.snapshot().windows,
+                    &self.desktop_hidden,
+                );
+                self.desktop_hidden = saved;
+                for request in requests {
+                    self.submit(request);
+                }
             }
             return Ok(());
         }
