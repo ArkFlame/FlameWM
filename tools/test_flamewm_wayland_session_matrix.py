@@ -60,9 +60,19 @@ REQUIRED = {
     "log-mode-rotation": {"first-exit", "log-0600", "second-exit", "log-0600-after-rotation",
                           "rotated-0600", "rotated-previous-run", "one-rotation-only"},
     "socket-xwayland-activation": {"exit", "socket-stage", "xwayland-stage", "ready-stage",
-                                   "activation-wayland-display", "activation-xwayland-display",
-                                   "activation-var-list", "dbus-address-not-logged",
-                                   "xwayland-not-spawned-by-wrapper", "dbus-run-session-not-used"},
+                                    "activation-wayland-display", "activation-xwayland-display",
+                                    "activation-var-list", "dbus-address-not-logged",
+                                    "xwayland-not-spawned-by-wrapper", "dbus-run-session-not-used",
+                                    "normal-activation-snapshot", "normal-activation-dbus-restore",
+                                    "normal-activation-systemd-restore",
+                                    "normal-activation-restore-full-session",
+                                    "normal-activation-restore-version", "normal-activation-restore-uid",
+                                    "normal-activation-restore-after-sync"},
+    "kde-identity-sanitized": {"exit", "kde-identity-sanitized", "activation-kde-identity-empty",
+                                "kde-identity-snapshot", "kde-identity-dbus-restore",
+                                "kde-identity-systemd-restore",
+                                "kde-identity-restore-full-session", "kde-identity-restore-version",
+                                "kde-identity-restore-uid", "kde-identity-restore-after-sync"},
     "invalid-backend": {"exit", "invalid-backend-line", "nothing-executed"},
     # the packaging Exec line starts this wrapper and still yields a native (drm) login
     "desktop-exec-contract": {"desktop-exec-present", "desktop-exec-captured",
@@ -74,10 +84,18 @@ REQUIRED = {
                        "no-timeout"},
     # queued but never presented (the reported black panel): timeout, TERM, and the exact reason
     "queued-not-presented": {"exit", "compositor-queued", "gate-failed", "black-panel-detail",
-                             "report-reason", "got-term", "never-ready", "no-zombie-compositor"},
+                               "report-reason", "got-term", "never-ready", "no-zombie-compositor",
+                               "failed-startup-snapshot", "failed-startup-dbus-restore",
+                               "failed-startup-systemd-restore",
+                               "failed-startup-restore-full-session", "failed-startup-restore-version",
+                               "failed-startup-restore-uid", "failed-startup-restore-after-sync",
+                               "restore-failure-preserves-exit"},
     # nothing was ever queued: the same timeout names a different failure
     "no-frame-queued": {"exit", "gate-failed", "no-frame-queued-detail", "report-reason",
                         "got-term", "no-zombie-compositor"},
+    # failed activation restoration turns an otherwise-successful session into a failure
+    "activation-restore-failure": {"exit", "dbus-restore-failed", "systemd-restore-failed",
+                                   "failure-report", "exit-stage"},
 }
 
 # Matrix row -> the wrapper exit code it stands for. Asserted both by the harness and, below,

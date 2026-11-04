@@ -2,7 +2,7 @@
 # Test matrix for scripts/flamewm-wayland-session.
 #
 # Drives the real wrapper against a stub compositor (FLAMEWM_WAYLAND_BINARY), a stub services bridge,
-# a stub dbus-run-session / dbus-update-activation-environment and a stub Xwayland. Nothing here
+# stub D-Bus/systemd environment tools and a stub Xwayland. Nothing here
 # touches a seat, a compositor, Xwayland, cargo or the network: every case runs in its own temporary
 # HOME and XDG_RUNTIME_DIR and asserts on the wrapper exit code, the stub's argv/environment record
 # and the session log.
@@ -16,7 +16,8 @@
 #   capability-gate-missing, capability-unsupported, probe-advisory, runtime-missing,
 #   runtime-insecure, missing-binary-127, not-executable-126, sigterm-forward,
 #   sigterm-escalate, log-mode-rotation, socket-xwayland-activation, invalid-backend,
-#   desktop-exec-contract, presented-gate, queued-not-presented, no-frame-queued.
+#   kde-identity-sanitized, desktop-exec-contract, presented-gate, queued-not-presented,
+#   no-frame-queued, activation-restore-failure.
 set -uo pipefail
 
 SELF_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -60,8 +61,9 @@ STUB_COMPOSITOR='#!/bin/sh
 # Stub flamewm-wayland: records argv/environment, then behaves per STUB_* variables.
 set -u
 record="${STUB_RECORD:?STUB_RECORD unset}"
-printf "invoke args=[%s] backend=%s display=%s wayland_display=%s\n" \
-    "$*" "${FLAMEWM_WAYLAND_BACKEND:-<unset>}" "${DISPLAY:-<unset>}" "${WAYLAND_DISPLAY:-<unset>}" >> "$record"
+printf "invoke args=[%s] backend=%s display=%s wayland_display=%s kde_full_session=%s kde_session_version=%s kde_session_uid=%s\n" \
+    "$*" "${FLAMEWM_WAYLAND_BACKEND:-<unset>}" "${DISPLAY:-<unset>}" "${WAYLAND_DISPLAY:-<unset>}" \
+    "${KDE_FULL_SESSION:-<unset>}" "${KDE_SESSION_VERSION:-<unset>}" "${KDE_SESSION_UID:-<unset>}" >> "$record"
 for arg in "$@"; do
     case "$arg" in
         --capabilities)
@@ -142,8 +144,32 @@ STUB_DBUS_UPDATE='#!/bin/sh
 {
     printf "dbus-update args=[%s]\n" "$*"
     printf "dbus-update wayland_display=%s display=%s\n" "${WAYLAND_DISPLAY:-<unset>}" "${DISPLAY:-<unset>}"
+    printf "dbus-update kde_full_session=%s kde_session_version=%s kde_session_uid=%s\n" \
+        "${KDE_FULL_SESSION:-<unset>}" "${KDE_SESSION_VERSION:-<unset>}" "${KDE_SESSION_UID:-<unset>}"
 } >> "${STUB_RECORD:-/dev/null}"
-exit "${STUB_DBUS_UPDATE_RC:-0}"
+if [ "${1:-}" = "--systemd" ]; then
+    exit "${STUB_DBUS_UPDATE_RC:-0}"
+fi
+exit "${STUB_DBUS_RESTORE_RC:-0}"
+'
+
+STUB_SYSTEMCTL='#!/bin/sh
+printf "systemctl args=[%s]\n" "$*" >> "${STUB_RECORD:-/dev/null}"
+if [ "$1" = "--user" ] && [ "$2" = "show-environment" ]; then
+    printf "XDG_SESSION_TYPE=x11\nXDG_CURRENT_DESKTOP=KDE\nXDG_MENU_PREFIX=plasma-\n"
+    printf "KDE_FULL_SESSION=true\nKDE_SESSION_VERSION=5\nKDE_SESSION_UID=1000\n"
+    printf "WAYLAND_DISPLAY=wayland-prior\nDISPLAY=:8\n"
+    exit 0
+fi
+exit 2
+'
+
+STUB_BUSCTL='#!/bin/sh
+printf "busctl args=[%s]\n" "$*" >> "${STUB_RECORD:-/dev/null}"
+case " $* " in
+    *" UnsetAndSetEnvironment "*) exit "${STUB_BUSCTL_RESTORE_RC:-${STUB_BUSCTL_RC:-0}}" ;;
+    *) exit "${STUB_BUSCTL_RC:-0}" ;;
+esac
 '
 
 STUB_XWAYLAND='#!/bin/sh
@@ -172,6 +198,8 @@ start_case() { # name
     install_stub "$BIN/flamewm-desktop-services" "$STUB_BRIDGE"
     install_stub "$BIN/dbus-run-session" "$STUB_DBUS_RUN_SESSION"
     install_stub "$BIN/dbus-update-activation-environment" "$STUB_DBUS_UPDATE"
+    install_stub "$BIN/systemctl" "$STUB_SYSTEMCTL"
+    install_stub "$BIN/busctl" "$STUB_BUSCTL"
     install_stub "$BIN/Xwayland" "$STUB_XWAYLAND"
     LOG="$HOME_DIR/.cache/flamewm/wayland-session.log"
     # Fully controlled environment: no inherited DISPLAY/WAYLAND_DISPLAY/backend/D-Bus leaks in.
@@ -219,6 +247,26 @@ run_wrapper_signalled() { # signal, [wrapper args...] -> $RUN_RC (runs in backgr
 }
 
 record_line() { grep -m 1 -F -- "$1" "$RECORD" 2>/dev/null; }
+
+check_activation_restore() { # prefix
+    local prefix="$1" update_line dbus_restore_line systemd_restore_line
+    check_file_has "${prefix}-snapshot" "$RECORD" "systemctl args=[--user show-environment]"
+    check_file_has "${prefix}-dbus-restore" "$RECORD" \
+        "dbus-update args=[XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=KDE XDG_MENU_PREFIX=plasma- KDE_FULL_SESSION=true KDE_SESSION_VERSION=5 KDE_SESSION_UID=1000"
+    check_file_has "${prefix}-systemd-restore" "$RECORD" "UnsetAndSetEnvironment"
+    check_file_has "${prefix}-restore-full-session" "$RECORD" "KDE_FULL_SESSION=true"
+    check_file_has "${prefix}-restore-version" "$RECORD" "KDE_SESSION_VERSION=5"
+    check_file_has "${prefix}-restore-uid" "$RECORD" "KDE_SESSION_UID=1000"
+    update_line="$(grep -nF "dbus-update args=" "$RECORD" | head -n 1 | cut -d: -f1)"
+    dbus_restore_line="$(grep -nF "dbus-update args=[XDG_SESSION_TYPE=" "$RECORD" | tail -n 1 | cut -d: -f1)"
+    systemd_restore_line="$(grep -nF "UnsetAndSetEnvironment" "$RECORD" | tail -n 1 | cut -d: -f1)"
+    if [[ -n "$update_line" && -n "$dbus_restore_line" && -n "$systemd_restore_line" ]] \
+        && (( update_line < dbus_restore_line && dbus_restore_line < systemd_restore_line )); then
+        ok "${prefix}-restore-after-sync"
+    else
+        bad "${prefix}-restore-after-sync" "D-Bus/systemd restoration did not follow activation sync"
+    fi
+}
 
 no_leftover_process() { # name pattern
     ps -eo pid=,args= > "$CASE/ps.txt" 2>/dev/null || : > "$CASE/ps.txt"
@@ -395,19 +443,32 @@ check_file_has "xwayland-stage" "$LOG" "stage=xwayland status=ok"
 check_file_has "ready-stage" "$LOG" "stage=ready status=ok"
 check_file_has "activation-wayland-display" "$RECORD" "dbus-update wayland_display=wayland-flame"
 check_file_has "activation-xwayland-display" "$RECORD" "display=:97"
-check_file_has "activation-var-list" "$RECORD" "args=[--systemd XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX WAYLAND_DISPLAY DISPLAY]"
+check_file_has "activation-var-list" "$RECORD" "args=[--systemd XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX KDE_FULL_SESSION= KDE_SESSION_VERSION= KDE_SESSION_UID= WAYLAND_DISPLAY DISPLAY]"
 check_file_lacks "dbus-address-not-logged" "$LOG" "fixture-bus-do-not-log"
 check_file_lacks "xwayland-not-spawned-by-wrapper" "$RECORD" "Xwayland invoked"
 check_file_has "dbus-run-session-not-used" "$LOG" "dbus_session_bus=present"
+check_activation_restore "normal-activation"
 
-# --- 16. An unsupported --backend value is rejected before anything runs (exit 2).
+# --- 16. KDE identity inherited from the display manager is removed from the compositor and the
+#        systemd/D-Bus activation state is restored on normal exit.
+start_case kde-identity-sanitized
+add_env KDE_FULL_SESSION "true"
+add_env KDE_SESSION_VERSION "5"
+add_env KDE_SESSION_UID "1000"
+run_wrapper
+check_eq "exit" 0 "$RUN_RC"
+check_file_has "kde-identity-sanitized" "$RECORD" "kde_full_session=<unset> kde_session_version=<unset> kde_session_uid=<unset>"
+check_file_has "activation-kde-identity-empty" "$RECORD" "dbus-update kde_full_session=<unset> kde_session_version=<unset> kde_session_uid=<unset>"
+check_activation_restore "kde-identity"
+
+# --- 17. An unsupported --backend value is rejected before anything runs (exit 2).
 start_case invalid-backend
 run_wrapper --backend=surfaceless
 check_eq "exit" 2 "$RUN_RC"
 if grep -Fq "detail=invalid_backend,source=flag" "$OUT"; then ok "invalid-backend-line"; else bad "invalid-backend-line" "missing structured line in $OUT"; fi
 if grep -Fq "invoke" "$RECORD"; then bad "nothing-executed" "the compositor was executed"; else ok "nothing-executed"; fi
 
-# --- 17. The packaging `Exec` line must start this wrapper and every argument it passes must be
+# --- 18. The packaging `Exec` line must start this wrapper and every argument it passes must be
 #        accepted as-is and still yield a deterministic native (drm) login.
 start_case desktop-exec-contract
 DESKTOP_FILE="$ROOT/packaging/flamewm-wayland.desktop"
@@ -427,7 +488,7 @@ check_file_has "desktop-exec-backend-drm" "$RECORD" "backend=drm"
 check_file_has "desktop-exec-gate-ran" "$LOG" "stage=capabilities status=ok"
 check_file_lacks "desktop-exec-flag-not-forwarded" "$RECORD" "--backend"
 
-# --- 18. Readiness is a *presented* frame: `stage=presented status=ok code=8` is the gate, and a
+# --- 19. Readiness is a *presented* frame: `stage=presented status=ok code=8` is the gate, and a
 #        session that reaches it is accepted (`firstframe`/`ready` are only timing diagnostics).
 start_case presented-gate
 add_env STUB_RUN "presented"
@@ -439,11 +500,12 @@ check_file_has "gate-accepted" "$LOG" "stage=presented status=ok code=0 detail=p
 check_file_has "presented-timing" "$LOG" "timing: compositor presented its first frame at"
 check_file_lacks "no-timeout" "$LOG" "no_first_frame_timeout"
 
-# --- 19. The reported black-panel case: the flip is queued (`stage=firstframe code=7`) and never
+# --- 20. The reported black-panel case: the flip is queued (`stage=firstframe code=7`) and never
 #        presented. That must never satisfy readiness: the wrapper stops the compositor (TERM, then
 #        KILL) and its report says reason=no_first_frame_timeout detail=queued_but_not_presented.
 start_case queued-not-presented
 add_env STUB_RUN "queued"
+add_env STUB_DBUS_RESTORE_RC "7"
 add_env FLAMEWM_WAYLAND_READY_TIMEOUT_MS "1500"
 run_wrapper
 check_eq "exit" 143 "$RUN_RC"
@@ -454,8 +516,10 @@ check_file_has "report-reason" "$LOG" "reason=no_first_frame_timeout detail=queu
 check_file_has "got-term" "$RECORD" "got TERM"
 check_file_lacks "never-ready" "$LOG" "stage=presented status=ok code=0"
 no_leftover_process "no-zombie-compositor" "$BIN/flamewm-wayland"
+check_activation_restore "failed-startup"
+check_file_has "restore-failure-preserves-exit" "$LOG" "D-Bus activation environment restore failed"
 
-# --- 20. Nothing was ever queued either: the same timeout, but the report must not claim a flip was
+# --- 21. Nothing was ever queued either: the same timeout, but the report must not claim a flip was
 #        in flight (detail=no_frame_queued), which is a different failure from the black panel.
 start_case no-frame-queued
 add_env STUB_RUN "term"
@@ -467,6 +531,17 @@ check_file_has "no-frame-queued-detail" "$LOG" "detail=no_frame_queued"
 check_file_has "report-reason" "$LOG" "reason=no_first_frame_timeout detail=no_frame_queued"
 check_file_has "got-term" "$RECORD" "got TERM"
 no_leftover_process "no-zombie-compositor" "$BIN/flamewm-wayland"
+
+# --- 22. Restoration failures fail a successful session and are visible in its final status.
+start_case activation-restore-failure
+add_env STUB_DBUS_RESTORE_RC "7"
+add_env STUB_BUSCTL_RESTORE_RC "8"
+run_wrapper
+check_eq "exit" 1 "$RUN_RC"
+check_file_has "dbus-restore-failed" "$LOG" "D-Bus activation environment restore failed"
+check_file_has "systemd-restore-failed" "$LOG" "systemd activation environment restore failed"
+check_file_has "failure-report" "$LOG" "reason=activation_environment_restore_failed"
+check_file_has "exit-stage" "$LOG" "stage=exit status=fail code=1"
 
 printf '\nSUMMARY cases=%d passed=%d failed=%d\n' "$CASES" "$PASSES" "$FAILS"
 if (( FAILS > 0 )); then

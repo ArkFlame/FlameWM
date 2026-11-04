@@ -405,11 +405,11 @@ impl Default for ProductSettings {
             night_shift_schedule: false,
             night_shift_start: 21 * 60,
             night_shift_end: 7 * 60,
-            surface_outline_color: "#FFFFFF".to_owned(),
+            surface_outline_color: "#999999".to_owned(),
             surface_outline_opacity: 50,
             surface_outline_width: 1,
             custom_window_outline: false,
-            window_outline_color: "#FFFFFF".to_owned(),
+            window_outline_color: "#999999".to_owned(),
             window_outline_opacity: 50,
             window_outline_width: 1,
             outlines: true,
@@ -1410,6 +1410,24 @@ mod glass_settings_tests;
 
 #[cfg(test)]
 mod accent_custom_tests;
+
+#[cfg(test)]
+mod outline_default_tests {
+    use super::ProductSettings;
+
+    #[test]
+    fn outline_colors_default_to_neutral_gray_without_changing_outline_policy() {
+        let defaults = ProductSettings::default();
+        assert_eq!(defaults.surface_outline_color, "#999999");
+        assert_eq!(defaults.window_outline_color, "#999999");
+        assert_eq!(defaults.surface_outline_opacity, 50);
+        assert_eq!(defaults.surface_outline_width, 1);
+        assert!(!defaults.custom_window_outline);
+        assert_eq!(defaults.window_outline_opacity, 50);
+        assert_eq!(defaults.window_outline_width, 1);
+        assert!(defaults.outlines);
+    }
+}
 
 /// Pointer controls: the schema bounds for `pointerSpeed` and the `pointerRawInput` default.
 #[cfg(test)]

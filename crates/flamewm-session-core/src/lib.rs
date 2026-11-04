@@ -363,14 +363,8 @@ fn flame_environment(
     environment.insert("XDG_SESSION_DESKTOP".to_owned(), "flamewm".to_owned());
     // KService reads ${XDG_MENU_PREFIX}applications.menu when building KSycoca.
     environment.insert("XDG_MENU_PREFIX".to_owned(), "flamewm-".to_owned());
-    // A daemon's existence never proves which wallet encrypted a pre-existing
-    // browser profile. Service files are resolved to their Exec target: on
-    // Plasma 6 the kwalletd5 service is an alias to kwalletd6 and must not make
-    // generation selection ambiguous.
-    let (installed5, installed6) = installed_kwallet_generations();
-    if let Some(version) = resolve_kwallet_version(existing_env, installed5, installed6) {
-        environment.insert("KDE_SESSION_VERSION".to_owned(), version.to_owned());
-    }
+    // KDE wallet-generation metadata is introduced only around the explicit
+    // Brave overlay/PAM handoff, not exported to generic clients.
     environment
 }
 
@@ -647,10 +641,12 @@ mod tests {
     }
 
     #[test]
-    fn session_keeps_flamewm_identity_without_inventing_kde_wallet_version() {
+    fn generic_session_environment_does_not_inherit_kde_session_identity() {
         let paths = default_paths_from_home("/usr/bin", "/home/test");
         let env = BTreeMap::from([
+            ("KDE_FULL_SESSION".to_owned(), "true".to_owned()),
             ("KDE_SESSION_VERSION".to_owned(), "7".to_owned()),
+            ("KDE_SESSION_UID".to_owned(), "1000".to_owned()),
             ("XDG_CURRENT_DESKTOP".to_owned(), "KDE".to_owned()),
         ]);
         let plan = build_launch_plan(&paths, &[], &env);
@@ -659,10 +655,9 @@ mod tests {
             session.get("XDG_CURRENT_DESKTOP").map(String::as_str),
             Some("FlameWM")
         );
-        assert_ne!(
-            session.get("KDE_SESSION_VERSION").map(String::as_str),
-            Some("7")
-        );
+        for key in ["KDE_FULL_SESSION", "KDE_SESSION_VERSION", "KDE_SESSION_UID"] {
+            assert!(!session.contains_key(key), "generic session contains {key}");
+        }
     }
 
     #[test]

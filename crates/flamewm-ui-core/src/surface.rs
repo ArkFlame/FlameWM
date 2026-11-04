@@ -52,22 +52,13 @@ pub fn surface_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
     }
 }
 
-/// Titlebar material fill: the blurred backdrop with no colour overlay.
+/// Titlebar material fill from the shared Surfaces policy.
 ///
-/// `surfaceColor` is the taskbar/menu/popup tint (the settings row says so), so the titlebar never
-/// reads it, and no glass preset tint applies either: the fill is `rgb 0, alpha 0` over the blurred
-/// desktop layer. `reduceTransparency` stays the opaque surface solid. Popups and menus keep using
-/// [`surface_fill`].
+/// Titlebars use the configured `surfaceColor` with the same effective opacity and
+/// `reduceTransparency` behavior as other shared surfaces.
 #[must_use]
 pub fn titlebar_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
-    if crate::glass::appearance_from_settings(snapshot).reduce_transparency {
-        return surface_fill(snapshot);
-    }
-    SurfaceFill {
-        rgb: 0,
-        alpha: 0,
-        width: 1,
-    }
+    surface_fill(snapshot)
 }
 
 /// Taskbar/Dock fill from the resolved Dock material: Blur Only neutral, Inherit glass, or Custom
@@ -128,7 +119,7 @@ fn outline_fill(snapshot: &SettingsSnapshot, prefix: &str) -> SurfaceFill {
         Some(SettingValue::Text(value)) => parse_rgb(value),
         _ => None,
     }
-    .unwrap_or(0x00ff_ffff);
+    .unwrap_or(0x0099_9999);
     let opacity = match snapshot.values.get(&format!("{prefix}Opacity")) {
         Some(SettingValue::Percent(value)) => (*value).min(100),
         _ => DEFAULT_SURFACE_RIM_PERCENT,
@@ -141,7 +132,7 @@ fn outline_fill(snapshot: &SettingsSnapshot, prefix: &str) -> SurfaceFill {
 }
 
 /// Shared surface outline (`surfaceOutlineColor`, `surfaceOutlineOpacity`, `surfaceOutlineWidth`):
-/// white, 50 %, 1 px by default. All native surface renderers consume this contract.
+/// neutral gray (#999999), 50 %, 1 px by default. All native surface renderers consume this contract.
 #[must_use]
 pub fn surface_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
     outline_fill(snapshot, "surfaceOutline")
@@ -178,9 +169,22 @@ mod window_outline_stroke_tests {
     use super::*;
 
     #[test]
-    fn window_outline_defaults_to_white_at_half_opacity_and_one_pixel() {
+    fn window_outline_defaults_to_neutral_gray_at_half_opacity_and_one_pixel() {
         let stroke = window_outline_stroke(&SettingsSnapshot::new(1));
-        assert_eq!(stroke.rgb, 0x00ff_ffff);
+        assert_eq!(stroke.rgb, 0x0099_9999);
+        assert_eq!(stroke.alpha, 127);
+        assert_eq!(stroke.width, 1);
+    }
+
+    #[test]
+    fn missing_custom_window_outline_color_defaults_to_neutral_gray() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("customWindowOutline".into(), SettingValue::Boolean(true));
+
+        let stroke = window_outline_stroke(&snapshot);
+        assert_eq!(stroke.rgb, 0x0099_9999);
         assert_eq!(stroke.alpha, 127);
         assert_eq!(stroke.width, 1);
     }
@@ -238,15 +242,11 @@ mod window_outline_stroke_tests {
 mod titlebar_fill_tests {
     use super::*;
 
-    /// Default material: the blurred backdrop with no tint, not the Dark preset's `#eaf4ff` @12%.
     #[test]
-    fn an_unset_surface_color_leaves_the_titlebar_untinted() {
-        let fill = titlebar_fill(&SettingsSnapshot::new(1));
-        assert_eq!(
-            (fill.rgb, fill.alpha),
-            (0, 0),
-            "no tint over the blurred backdrop"
-        );
+    fn titlebar_uses_the_shared_surface_fill_policy() {
+        let snapshot = SettingsSnapshot::new(1);
+        assert_eq!(titlebar_fill(&snapshot), surface_fill(&snapshot));
+
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot
             .values
@@ -254,26 +254,21 @@ mod titlebar_fill_tests {
         snapshot
             .values
             .insert("glassOpacityPercent".into(), SettingValue::Percent(42));
-        assert_eq!(
-            titlebar_fill(&snapshot).alpha,
-            0,
-            "surfaceOpacity and the glass preset tint must not reach the titlebar"
-        );
+        assert_eq!(titlebar_fill(&snapshot), surface_fill(&snapshot));
     }
 
     #[test]
-    fn an_explicit_surface_color_does_not_tint_the_titlebar() {
+    fn configured_surface_color_is_exact_at_full_opacity() {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot
             .values
             .insert("surfaceColor".into(), SettingValue::Text("#202326".into()));
+        snapshot
+            .values
+            .insert("glassOpacityPercent".into(), SettingValue::Percent(100));
         let fill = titlebar_fill(&snapshot);
-        assert_eq!(
-            (fill.rgb, fill.alpha),
-            (0, 0),
-            "surfaceColor belongs to taskbar, menus and popups"
-        );
-        assert!(surface_fill(&snapshot).alpha > 0, "menus keep the tint");
+        assert_eq!((fill.rgb, fill.alpha), (0x0020_2326, 255));
+        assert_eq!(fill, surface_fill(&snapshot));
     }
 
     #[test]
@@ -291,10 +286,11 @@ mod titlebar_fill_tests {
 mod surface_stroke_contract_tests {
     use super::*;
     #[test]
-    fn shared_contour_is_the_dark_glass_hairline_by_default() {
+    fn shared_contour_defaults_to_neutral_gray_at_half_opacity() {
         let stroke = surface_stroke(&SettingsSnapshot::new(1));
-        assert_eq!(stroke.rgb, 0x00ff_ffff);
+        assert_eq!(stroke.rgb, 0x0099_9999);
         assert_eq!(stroke.alpha, 127);
+        assert_eq!(stroke.width, 1);
     }
     #[test]
     fn border_is_independent_from_surface_opacity_and_accepts_zero() {

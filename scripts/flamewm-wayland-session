@@ -295,6 +295,7 @@ fi
 # Session identity is stated here instead of inherited: a display manager hands the greeter's own
 # values to the login session, and a stale `XDG_SESSION_TYPE=x11` or another desktop's name would
 # make clients pick the wrong toolkit path or the wrong integration.
+unset KDE_FULL_SESSION KDE_SESSION_VERSION KDE_SESSION_UID
 export XDG_SESSION_TYPE=wayland
 desktop_note=""
 if [[ "${XDG_CURRENT_DESKTOP:-}" != "FlameWM" ]]; then
@@ -637,17 +638,106 @@ else
 fi
 
 # D-Bus activation environment, synced AFTER the Wayland socket and the XWayland DISPLAY exist so an
-# activated client never inherits a greeter's DISPLAY. WAYLAND_DISPLAY stays available for native
-# Wayland clients; X11-only FlameWM clients use the XWayland DISPLAY.
-activation_vars=(XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX)
+# activated client never inherits a greeter's DISPLAY. Snapshot the systemd user-manager values first;
+# it can outlive this login, so restore only the keys this wrapper changes when it exits.
+activation_vars=(XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX
+    KDE_FULL_SESSION= KDE_SESSION_VERSION= KDE_SESSION_UID=)
+activation_keys=(XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX
+    KDE_FULL_SESSION KDE_SESSION_VERSION KDE_SESSION_UID)
 [[ -n "${WAYLAND_DISPLAY:-}" ]] && activation_vars+=(WAYLAND_DISPLAY)
 [[ -n "${DISPLAY:-}" ]] && activation_vars+=(DISPLAY)
+[[ -n "${WAYLAND_DISPLAY:-}" ]] && activation_keys+=(WAYLAND_DISPLAY)
+[[ -n "${DISPLAY:-}" ]] && activation_keys+=(DISPLAY)
+
+ACTIVATION_SNAPSHOT_READY=0
+ACTIVATION_SNAPSHOT_KEYS=()
+ACTIVATION_SNAPSHOT_SET=()
+ACTIVATION_SNAPSHOT_SET_COUNT=0
+activation_snapshot() {
+    local environment entry key
+    local -A manager_environment=()
+    command -v systemctl >/dev/null 2>&1 || return 1
+    command -v busctl >/dev/null 2>&1 || return 1
+    environment="$(systemctl --user show-environment 2>/dev/null)" || return 1
+    while IFS= read -r entry; do
+        [[ "$entry" == *=* ]] || continue
+        manager_environment["${entry%%=*}"]="${entry#*=}"
+    done <<< "$environment"
+    for key in "$@"; do
+        ACTIVATION_SNAPSHOT_KEYS+=("$key")
+        if [[ ${manager_environment[$key]+present} ]]; then
+            ACTIVATION_SNAPSHOT_SET+=("$key=${manager_environment[$key]}")
+            ACTIVATION_SNAPSHOT_SET_COUNT=$(( ACTIVATION_SNAPSHOT_SET_COUNT + 1 ))
+        fi
+    done
+    ACTIVATION_SNAPSHOT_READY=1
+}
+
+restore_activation_environment() {
+    local key assignment value
+    local dbus_restore_ok=1 systemd_restore_ok=1
+    local -a dbus_restore_vars=() systemd_restore_args=()
+    if (( ACTIVATION_SNAPSHOT_READY )); then
+        ACTIVATION_SNAPSHOT_READY=0
+        # dbus-daemon cannot unset activation variables; restore known values
+        # first and set previously absent keys empty, then restore systemd exactly.
+        for key in "${ACTIVATION_SNAPSHOT_KEYS[@]}"; do
+            value=""
+            if (( ACTIVATION_SNAPSHOT_SET_COUNT > 0 )); then
+                for assignment in "${ACTIVATION_SNAPSHOT_SET[@]}"; do
+                    if [[ "${assignment%%=*}" == "$key" ]]; then
+                        value="${assignment#*=}"
+                        break
+                    fi
+                done
+            fi
+            dbus_restore_vars+=("$key=$value")
+        done
+        if ! run_bounded 5 dbus-update-activation-environment "${dbus_restore_vars[@]}" \
+            >/dev/null 2>&1; then
+            dbus_restore_ok=0
+            log "D-Bus activation environment restore failed"
+        fi
+        systemd_restore_args=(--user call org.freedesktop.systemd1 /org/freedesktop/systemd1
+            org.freedesktop.systemd1.Manager UnsetAndSetEnvironment as
+            "${#ACTIVATION_SNAPSHOT_KEYS[@]}")
+        systemd_restore_args+=("${ACTIVATION_SNAPSHOT_KEYS[@]}" as "$ACTIVATION_SNAPSHOT_SET_COUNT")
+        if (( ACTIVATION_SNAPSHOT_SET_COUNT > 0 )); then
+            systemd_restore_args+=("${ACTIVATION_SNAPSHOT_SET[@]}")
+        fi
+        if ! run_bounded 5 busctl "${systemd_restore_args[@]}" >/dev/null 2>&1; then
+            systemd_restore_ok=0
+            log "systemd activation environment restore failed"
+        fi
+        if (( dbus_restore_ok && systemd_restore_ok )); then
+            log "systemd activation environment restored"
+        else
+            return 1
+        fi
+    fi
+    return 0
+}
+
+restore_activation_environment_on_exit() {
+    local exit_status=$?
+    trap - EXIT
+    if ! restore_activation_environment && (( exit_status == 0 )); then
+        exit_status=1
+    fi
+    exit "$exit_status"
+}
+
 if ! command -v dbus-update-activation-environment >/dev/null 2>&1; then
     stage ready skip 0 "dbus_update_activation_environment_missing"
-elif dbus-update-activation-environment --systemd "${activation_vars[@]}" >/dev/null 2>&1; then
-    stage ready ok 0 "activation_environment=synced,vars=${activation_vars[*]// /+},wayland_display=${WAYLAND_DISPLAY:-none},display=${DISPLAY:-none}"
+elif activation_snapshot "${activation_keys[@]}"; then
+    trap restore_activation_environment_on_exit EXIT
+    if dbus-update-activation-environment --systemd "${activation_vars[@]}" >/dev/null 2>&1; then
+        stage ready ok 0 "activation_environment=synced,vars=${activation_vars[*]// /+},wayland_display=${WAYLAND_DISPLAY:-none},display=${DISPLAY:-none}"
+    else
+        stage ready fail 0 "activation_environment=failed,continuing"
+    fi
 else
-    stage ready fail 0 "activation_environment=failed,continuing"
+    stage ready skip 0 "activation_environment=snapshot_unavailable,continuing"
 fi
 
 # Presentation gate. The compositor must report `stage=presented status=ok code=8`: a flip it queued
@@ -797,6 +887,17 @@ if (( result != 0 )) && [[ -z "$pending_signal" ]] && (( ! failure_reported )); 
         report_failure died_before_ready "$result" "$exit_signal" "${gate_detail:-}"
     else
         report_failure compositor_exit "$result" "$exit_signal"
+    fi
+fi
+
+# Restore explicitly before recording the final status so a failed restore cannot
+# leave an otherwise-successful session reported as successful.
+if (( ACTIVATION_SNAPSHOT_READY )); then
+    trap - EXIT
+    if ! restore_activation_environment && (( result == 0 )); then
+        result=1
+        log "FAILED: activation environment restore failed; changing successful session exit to 1"
+        report_failure activation_environment_restore_failed "$result"
     fi
 fi
 

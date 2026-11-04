@@ -10,7 +10,7 @@ use std::io::{ErrorKind, Read};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -24,7 +24,8 @@ use flamewm_session_core::diagnostics::{
 };
 use flamewm_session_core::{
     ChildExit, ProcessPlan, ProcessSupervisorPolicy, SessionRole, SupervisorDecision,
-    build_launch_plan, default_paths_from_home,
+    build_launch_plan, default_paths_from_home, installed_kwallet_generations,
+    resolve_kwallet_version,
 };
 use rustix::process::{Pid, Signal, getppid, kill_process, set_parent_process_death_signal};
 use signal_hook::consts::signal::{SIGCHLD, SIGHUP, SIGINT, SIGTERM};
@@ -38,6 +39,8 @@ const SHUTDOWN_SIGNAL: &str = "session shutdown signal received";
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const TICK: Duration = Duration::from_millis(100);
 const STARTUP_GRACE: Duration = Duration::from_millis(500);
+const KDE_SESSION_IDENTITY: [&str; 3] =
+    ["KDE_FULL_SESSION", "KDE_SESSION_VERSION", "KDE_SESSION_UID"];
 /// Upper bound on the supervisor's idle block. SIGCHLD normally wakes it; this bounds a missed
 /// wakeup (signal-hook drops a wakeup byte if the pipe is full) to one cheap 1 s re-scan.
 /// `SIG_IGN` note: signal-hook installs its own SIGCHLD handler, so children never inherit `SIG_IGN`
@@ -144,6 +147,7 @@ fn execute() -> Result<(), String> {
     let existing = env::vars().collect::<BTreeMap<_, _>>();
     let args = env::args().skip(1).collect::<Vec<_>>();
     let mut plan = build_launch_plan(&paths, &args, &existing);
+    add_app_compatibility_environment(&mut plan.processes, &existing);
     // Generate only FlameWM-owned XDG overlays; never mutate existing Brave
     // profiles, wallet contents, Plasma configuration, or desktop identities.
     if let Err(error) = session_app_compat::configure(&home, &mut plan.processes) {
@@ -159,11 +163,15 @@ fn execute() -> Result<(), String> {
         );
     }
     // D-Bus/systemd user activation runs outside the process supervisor.
-    // Without updating its environment, a portal or KWallet service activated
-    // after login can inherit stale Plasma credentials, DISPLAY and desktop id.
+    // Without updating it, a portal or KWallet service activated after login
+    // can inherit stale KDE identity, DISPLAY and desktop id.
     // This never starts an additional session bus or modifies saved wallets.
-    sync_activation_environment(&plan.processes[0].environment);
-    session_app_compat::finalize_pam_kwallet_login(&plan.processes[0].environment);
+    let activation_environment = plan.processes[0].environment.clone();
+    let activation_restore = sync_activation_environment(&activation_environment);
+    session_app_compat::finalize_pam_kwallet_login(&activation_environment);
+    for process in &mut plan.processes {
+        clear_kde_session_identity(&mut process.environment);
+    }
     restore_saved_display_order();
     let mut role_plans = plan.processes;
     let mut running: Vec<Running> = Vec::new();
@@ -180,12 +188,31 @@ fn execute() -> Result<(), String> {
         supervise(&mut running, parent, &role_plans, &stop_requested)
     })();
     let cleanup = stop_all(&mut running);
-    match (result, cleanup) {
+    let activation_restore_result =
+        activation_restore.map_or(Ok(()), |mut snapshot| snapshot.restore());
+    let session_result = match (result, cleanup) {
         (Err(error), Ok(())) if error == SHUTDOWN_SIGNAL => Ok(()),
         (Err(error), Err(cleanup)) => Err(format!("{error}; cleanup failed: {cleanup}")),
         (Err(error), Ok(())) => Err(error),
         (Ok(()), Err(cleanup)) => Err(format!("cleanup failed: {cleanup}")),
         (Ok(()), Ok(())) => Ok(()),
+    };
+    combine_activation_restore_result(session_result, activation_restore_result)
+}
+
+fn add_app_compatibility_environment(
+    processes: &mut [ProcessPlan],
+    existing_env: &BTreeMap<String, String>,
+) {
+    let (installed5, installed6) = installed_kwallet_generations();
+    if let Some(version) = resolve_kwallet_version(existing_env, installed5, installed6) {
+        // The explicit Brave compatibility overlay and PAM handoff need the
+        // selected generation; generic session children do not impersonate KDE.
+        for process in processes {
+            process
+                .environment
+                .insert("KDE_SESSION_VERSION".to_owned(), version.to_owned());
+        }
     }
 }
 
@@ -257,17 +284,18 @@ fn activation_assignments(
         "XDG_CONFIG_DIRS",
         "XDG_MENU_PREFIX",
         "QT_QPA_PLATFORMTHEME",
+        "KDE_FULL_SESSION",
         "KDE_SESSION_VERSION",
+        "KDE_SESSION_UID",
     ];
     KEYS.iter()
         .filter_map(|key| {
-            // Unlike other keys, a missing KDE version must CLEAR stale activation
-            // state from a prior Plasma login, not resurrect an inherited value.
-            if *key == "KDE_SESSION_VERSION" {
-                return Some(format!(
-                    "KDE_SESSION_VERSION={}",
-                    environment.get(*key).map_or("", String::as_str)
-                ));
+            // The selected wallet generation is for explicit Brave/PAM compatibility only.
+            if matches!(
+                *key,
+                "KDE_FULL_SESSION" | "KDE_SESSION_VERSION" | "KDE_SESSION_UID"
+            ) {
+                return Some(format!("{key}="));
             }
             environment
                 .get(*key)
@@ -278,12 +306,217 @@ fn activation_assignments(
         .collect()
 }
 
-fn sync_activation_environment(environment: &BTreeMap<String, String>) {
+fn clear_kde_session_identity(environment: &mut BTreeMap<String, String>) {
+    for key in KDE_SESSION_IDENTITY {
+        environment.remove(key);
+    }
+}
+
+fn apply_session_environment(command: &mut Command, environment: &BTreeMap<String, String>) {
+    command.envs(environment);
+    for key in KDE_SESSION_IDENTITY {
+        command.env_remove(key);
+    }
+}
+
+#[derive(Debug)]
+struct ActivationEnvironmentSnapshot {
+    keys: Vec<String>,
+    previous: Vec<String>,
+    restored: bool,
+}
+
+impl ActivationEnvironmentSnapshot {
+    fn from_show_environment(keys: Vec<String>, output: &str) -> Self {
+        let mut values = BTreeMap::new();
+        for line in output.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                if keys.iter().any(|requested| requested.as_str() == key) {
+                    values.insert(key.to_owned(), value.to_owned());
+                }
+            }
+        }
+        let previous = keys
+            .iter()
+            .filter_map(|key| values.get(key).map(|value| format!("{key}={value}")))
+            .collect();
+        Self {
+            keys,
+            previous,
+            restored: false,
+        }
+    }
+
+    fn capture(keys: Vec<String>) -> Result<Self, String> {
+        if !Command::new("busctl")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            return Err("busctl unavailable".to_owned());
+        }
+        let output = Command::new("systemctl")
+            .args(["--user", "show-environment"])
+            .output()
+            .map_err(|_| "systemctl user environment unavailable".to_owned())?;
+        if !output.status.success() {
+            return Err(format!(
+                "systemctl show-environment exited with {}",
+                output.status
+            ));
+        }
+        Ok(Self::from_show_environment(
+            keys,
+            &String::from_utf8_lossy(&output.stdout),
+        ))
+    }
+
+    fn busctl_arguments(&self) -> Vec<String> {
+        let mut arguments = vec![
+            "--user".to_owned(),
+            "call".to_owned(),
+            "org.freedesktop.systemd1".to_owned(),
+            "/org/freedesktop/systemd1".to_owned(),
+            "org.freedesktop.systemd1.Manager".to_owned(),
+            "UnsetAndSetEnvironment".to_owned(),
+            "as".to_owned(),
+            self.keys.len().to_string(),
+        ];
+        arguments.extend(self.keys.iter().cloned());
+        arguments.push("as".to_owned());
+        arguments.push(self.previous.len().to_string());
+        arguments.extend(self.previous.iter().cloned());
+        arguments
+    }
+
+    fn dbus_restore_assignments(&self) -> Vec<String> {
+        self.keys
+            .iter()
+            .map(|key| {
+                let value = self
+                    .previous
+                    .iter()
+                    .find_map(|assignment| {
+                        let (name, value) = assignment.split_once('=')?;
+                        (name == key.as_str()).then_some(value)
+                    })
+                    .unwrap_or("");
+                format!("{key}={value}")
+            })
+            .collect()
+    }
+
+    fn restore(&mut self) -> Result<(), String> {
+        self.restore_with(run_bounded_activation_command)
+    }
+
+    fn restore_with(
+        &mut self,
+        mut run: impl FnMut(&str, &[String]) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if self.restored {
+            return Ok(());
+        }
+        self.restored = true;
+        // dbus-daemon has no unset API, so restore known values and clear
+        // previously absent keys with empty values before atomically restoring
+        // systemd's exact set/unset state.
+        let dbus_assignments = self.dbus_restore_assignments();
+        let dbus_result = run("dbus-update-activation-environment", &dbus_assignments);
+        let systemd_arguments = self.busctl_arguments();
+        let systemd_result = run("busctl", &systemd_arguments);
+        match (dbus_result, systemd_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(dbus), Ok(())) => Err(format!("D-Bus restore failed: {dbus}")),
+            (Ok(()), Err(systemd)) => Err(format!("systemd restore failed: {systemd}")),
+            (Err(dbus), Err(systemd)) => Err(format!(
+                "D-Bus restore failed: {dbus}; systemd restore failed: {systemd}"
+            )),
+        }
+    }
+}
+
+fn run_bounded_activation_command(program: &str, arguments: &[String]) -> Result<(), String> {
+    let mut child = Command::new(program)
+        .args(arguments)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| format!("{program} could not start"))?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => return Err(format!("exited with {status}")),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("child status unavailable".to_owned());
+            }
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("timed out after 5s".to_owned());
+            }
+        }
+    }
+}
+
+impl Drop for ActivationEnvironmentSnapshot {
+    fn drop(&mut self) {
+        if let Err(error) = self.restore() {
+            eprintln!("{SESSION_LOG_PREFIX}: activation environment restore failed: {error}");
+        }
+    }
+}
+
+fn combine_activation_restore_result(
+    session_result: Result<(), String>,
+    restore_result: Result<(), String>,
+) -> Result<(), String> {
+    match (session_result, restore_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(session), Ok(())) => Err(session),
+        (Ok(()), Err(restore)) => Err(format!("activation environment restore failed: {restore}")),
+        (Err(session), Err(restore)) => Err(format!(
+            "{session}; activation environment restore failed: {restore}"
+        )),
+    }
+}
+
+fn activation_assignment_keys(assignments: &[String]) -> Vec<String> {
+    let mut keys = Vec::new();
+    for assignment in assignments {
+        if let Some((key, _)) = assignment.split_once('=') {
+            if !keys
+                .iter()
+                .any(|existing: &String| existing.as_str() == key)
+            {
+                keys.push(key.to_owned());
+            }
+        }
+    }
+    keys
+}
+
+fn sync_activation_environment(
+    environment: &BTreeMap<String, String>,
+) -> Option<ActivationEnvironmentSnapshot> {
+    let inherited = env::vars().collect::<BTreeMap<_, _>>();
+    let assignments = activation_assignments(environment, &inherited);
+    let keys = activation_assignment_keys(&assignments);
+    let snapshot = match ActivationEnvironmentSnapshot::capture(keys) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!(
+                "{SESSION_LOG_PREFIX}: activation environment not synchronized: unable to snapshot user manager ({error})"
+            );
+            return None;
+        }
+    };
     let mut command = Command::new("dbus-update-activation-environment");
-    command.arg("--systemd").args(activation_assignments(
-        environment,
-        &env::vars().collect::<BTreeMap<_, _>>(),
-    ));
+    command.arg("--systemd").args(assignments);
     match command.status() {
         Ok(status) if status.success() => (),
         Ok(status) => {
@@ -298,6 +531,7 @@ fn sync_activation_environment(environment: &BTreeMap<String, String>) {
         }
         Err(error) => eprintln!("{SESSION_LOG_PREFIX}: activation environment: {error}"),
     }
+    Some(snapshot)
 }
 
 /// Starts a non-critical component (desktop or shell). When its binary is missing, cannot be
@@ -349,7 +583,6 @@ fn spawn(plan: ProcessPlan) -> Result<Running, String> {
     let (stdout, stderr) = session_diagnostics::child_stdio();
     command
         .args(&plan.arguments)
-        .envs(&plan.environment)
         .env(
             "FLAMEWM_SESSION_SUPERVISOR_PID",
             std::process::id().to_string(),
@@ -357,6 +590,7 @@ fn spawn(plan: ProcessPlan) -> Result<Running, String> {
         .env_remove("FLAMEWM_SESSION_LOGOUT_OWNER")
         .stdout(stdout)
         .stderr(stderr);
+    apply_session_environment(&mut command, &plan.environment);
     if plan.role == SessionRole::WindowManager {
         command.env("FLAMEWM_SESSION_LOGOUT_OWNER", "1");
     }
@@ -820,8 +1054,10 @@ fn child_error(child: &Running, action: &str, error: std::io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProcessPlan, Running, WAKEUP, activation_assignments, allocator_tuning_defaults,
-        clean_wm_exit, scan_exits, stop_all, supporting_wm_check_is_valid,
+        ActivationEnvironmentSnapshot, ProcessPlan, Running, WAKEUP, activation_assignment_keys,
+        activation_assignments, add_app_compatibility_environment, allocator_tuning_defaults,
+        apply_session_environment, clean_wm_exit, clear_kde_session_identity,
+        combine_activation_restore_result, scan_exits, stop_all, supporting_wm_check_is_valid,
     };
     use flamewm_session_core::{ProcessSupervisorPolicy, SessionRole, SupervisorPolicy};
     use std::collections::BTreeMap;
@@ -907,14 +1143,17 @@ mod tests {
     }
 
     #[test]
-    fn activation_clears_stale_kde_backend_without_exporting_pam_credentials() {
+    fn activation_clears_kde_identity_and_keeps_only_the_selected_wallet_compatibility_version() {
         let live = BTreeMap::from([
             ("DISPLAY".to_owned(), ":0".to_owned()),
             ("XDG_CURRENT_DESKTOP".to_owned(), "FlameWM".to_owned()),
+            ("KDE_SESSION_VERSION".to_owned(), "6".to_owned()),
         ]);
         let inherited = BTreeMap::from([
             ("XDG_CURRENT_DESKTOP".to_owned(), "KDE".to_owned()),
+            ("KDE_FULL_SESSION".to_owned(), "true".to_owned()),
             ("KDE_SESSION_VERSION".to_owned(), "5".to_owned()),
+            ("KDE_SESSION_UID".to_owned(), "1000".to_owned()),
             (
                 "PAM_KWALLET5_LOGIN".to_owned(),
                 "/private/socket".to_owned(),
@@ -922,11 +1161,176 @@ mod tests {
         ]);
         let args = activation_assignments(&live, &inherited);
         assert!(args.contains(&"XDG_CURRENT_DESKTOP=FlameWM".to_owned()));
+        assert!(args.contains(&"KDE_FULL_SESSION=".to_owned()));
         assert!(args.contains(&"KDE_SESSION_VERSION=".to_owned()));
+        assert!(!args.contains(&"KDE_SESSION_VERSION=6".to_owned()));
+        assert!(args.contains(&"KDE_SESSION_UID=".to_owned()));
         assert!(!args.iter().any(|arg| arg.contains("PAM_KWALLET5_LOGIN")));
-        let kde6 = BTreeMap::from([("KDE_SESSION_VERSION".to_owned(), "6".to_owned())]);
-        let selected = activation_assignments(&kde6, &inherited);
-        assert!(selected.contains(&"KDE_SESSION_VERSION=6".to_owned()));
+        let generic = BTreeMap::from([("XDG_CURRENT_DESKTOP".to_owned(), "FlameWM".to_owned())]);
+        let selected = activation_assignments(&generic, &inherited);
+        assert!(selected.contains(&"KDE_SESSION_VERSION=".to_owned()));
+    }
+
+    #[test]
+    fn session_child_environment_removes_inherited_kde_markers_but_keeps_explicit_app_env() {
+        let inherited = BTreeMap::from([
+            ("KDE_FULL_SESSION".to_owned(), "true".to_owned()),
+            ("KDE_SESSION_VERSION".to_owned(), "5".to_owned()),
+            ("KDE_SESSION_UID".to_owned(), "1000".to_owned()),
+        ]);
+        let planned = BTreeMap::from([
+            ("KDE_SESSION_VERSION".to_owned(), "6".to_owned()),
+            ("FLAMEWM_TEST_ENV".to_owned(), "session".to_owned()),
+        ]);
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "printf '%s|%s|%s|%s' \"${KDE_FULL_SESSION:-<unset>}\" \"${KDE_SESSION_VERSION:-<unset>}\" \"${KDE_SESSION_UID:-<unset>}\" \"$FLAMEWM_TEST_ENV\"",
+        ]);
+        command.envs(&inherited);
+        apply_session_environment(&mut command, &planned);
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "<unset>|<unset>|<unset>|session"
+        );
+
+        let mut compatibility = planned;
+        clear_kde_session_identity(&mut compatibility);
+        assert!(!compatibility.contains_key("KDE_FULL_SESSION"));
+        assert!(!compatibility.contains_key("KDE_SESSION_VERSION"));
+        assert!(!compatibility.contains_key("KDE_SESSION_UID"));
+        assert_eq!(
+            compatibility.get("FLAMEWM_TEST_ENV").map(String::as_str),
+            Some("session")
+        );
+    }
+
+    #[test]
+    fn explicit_brave_wallet_selection_survives_until_compatibility_setup() {
+        let existing = BTreeMap::from([(
+            "FLAMEWM_BRAVE_PASSWORD_STORE".to_owned(),
+            "kwallet5".to_owned(),
+        )]);
+        let mut processes = [ProcessPlan {
+            role: SessionRole::WindowManager,
+            program: "/bin/true".into(),
+            arguments: Vec::new(),
+            environment: BTreeMap::new(),
+            required: true,
+        }];
+
+        add_app_compatibility_environment(&mut processes, &existing);
+        assert_eq!(
+            processes[0]
+                .environment
+                .get("KDE_SESSION_VERSION")
+                .map(String::as_str),
+            Some("5")
+        );
+        clear_kde_session_identity(&mut processes[0].environment);
+        assert!(!processes[0].environment.contains_key("KDE_SESSION_VERSION"));
+    }
+
+    #[test]
+    fn activation_snapshot_restores_only_touched_systemd_keys() {
+        let keys = vec![
+            "DISPLAY".to_owned(),
+            "KDE_FULL_SESSION".to_owned(),
+            "KDE_SESSION_VERSION".to_owned(),
+            "KDE_SESSION_UID".to_owned(),
+        ];
+        let mut snapshot = ActivationEnvironmentSnapshot::from_show_environment(
+            keys.clone(),
+            "DISPLAY=:8\nKDE_FULL_SESSION=true\nKDE_SESSION_VERSION=5\nUNRELATED=value\n",
+        );
+        snapshot.restored = true;
+        assert_eq!(snapshot.keys, keys);
+        assert_eq!(
+            snapshot.previous,
+            vec![
+                "DISPLAY=:8".to_owned(),
+                "KDE_FULL_SESSION=true".to_owned(),
+                "KDE_SESSION_VERSION=5".to_owned()
+            ]
+        );
+        assert_eq!(
+            snapshot.dbus_restore_assignments(),
+            vec![
+                "DISPLAY=:8".to_owned(),
+                "KDE_FULL_SESSION=true".to_owned(),
+                "KDE_SESSION_VERSION=5".to_owned(),
+                "KDE_SESSION_UID=".to_owned()
+            ]
+        );
+        let args = snapshot.busctl_arguments();
+        assert_eq!(args[5], "UnsetAndSetEnvironment");
+        assert_eq!(args[6], "as");
+        assert_eq!(args[7], "4");
+        assert_eq!(args[12], "as");
+        assert_eq!(args[13], "3");
+        assert!(args.contains(&"KDE_SESSION_VERSION=5".to_owned()));
+        assert!(!args.contains(&"UNRELATED=value".to_owned()));
+    }
+
+    #[test]
+    fn activation_snapshot_returns_mocked_restore_failure_and_attempts_both_backends() {
+        let mut snapshot = ActivationEnvironmentSnapshot::from_show_environment(
+            vec!["DISPLAY".to_owned()],
+            "DISPLAY=:8\n",
+        );
+        let mut restored_programs = Vec::new();
+
+        let result = snapshot.restore_with(|program, _arguments| {
+            restored_programs.push(program.to_owned());
+            if program == "dbus-update-activation-environment" {
+                Err("fixture failure".to_owned())
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(
+            result,
+            Err("D-Bus restore failed: fixture failure".to_owned())
+        );
+        assert_eq!(
+            restored_programs,
+            vec![
+                "dbus-update-activation-environment".to_owned(),
+                "busctl".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn activation_restore_failure_fails_success_and_preserves_session_failure() {
+        let restore_failure = Err("D-Bus restore failed".to_owned());
+        assert_eq!(
+            combine_activation_restore_result(Ok(()), restore_failure.clone()),
+            Err("activation environment restore failed: D-Bus restore failed".to_owned())
+        );
+        assert_eq!(
+            combine_activation_restore_result(Err("session failed".to_owned()), restore_failure),
+            Err(
+                "session failed; activation environment restore failed: D-Bus restore failed"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn activation_snapshot_keys_come_only_from_published_assignments() {
+        let assignments = vec![
+            "DISPLAY=:0".to_owned(),
+            "KDE_SESSION_VERSION=".to_owned(),
+            "DISPLAY=:1".to_owned(),
+        ];
+        assert_eq!(
+            activation_assignment_keys(&assignments),
+            vec!["DISPLAY".to_owned(), "KDE_SESSION_VERSION".to_owned()]
+        );
     }
 
     #[test]

@@ -113,8 +113,8 @@ fn settings_map_to_skin_tokens_and_bad_values_fall_back() {
     assert_eq!(tokens.style, DecorationStyle::Squared);
     assert_eq!(
         (tokens.titlebar_bg, tokens.titlebar_alpha),
-        (Rgb(0), 0),
-        "surfaceColor and surfaceOpacity never tint the titlebar"
+        (Rgb(0x0020_2326), 128),
+        "titlebar uses the configured surface color and shared opacity"
     );
     assert_eq!(tokens.surface_outline_width, 1, "default outline width");
     assert!(
@@ -136,7 +136,7 @@ fn settings_map_to_skin_tokens_and_bad_values_fall_back() {
 }
 
 #[test]
-fn surface_opacity_never_reaches_the_titlebar() {
+fn surface_opacity_uses_the_shared_titlebar_fill_policy() {
     let mut snapshot = SettingsSnapshot::new(1);
     put(
         &mut snapshot,
@@ -149,23 +149,29 @@ fn surface_opacity_never_reaches_the_titlebar() {
             "surfaceOpacity",
             SettingValue::Percent(percent),
         );
+        let fill = flamewm_ui_core::surface::surface_fill(&snapshot);
+        let tokens = chrome_tokens_from_settings(&snapshot);
         assert_eq!(
-            chrome_tokens_from_settings(&snapshot).titlebar_alpha,
-            0,
-            "surfaceOpacity={percent} is the taskbar/menu tint, not the titlebar"
+            (tokens.titlebar_bg, tokens.titlebar_alpha),
+            (Rgb(fill.rgb), fill.alpha),
+            "surfaceOpacity={percent} follows the shared surface policy"
         );
     }
 }
 
-/// No user `surfaceColor`: the titlebar material has no tint over the blurred backdrop.
 #[test]
-fn an_unset_surface_color_leaves_the_titlebar_untinted() {
-    let tokens = chrome_tokens_from_settings(&SettingsSnapshot::new(1));
-    assert_eq!((tokens.titlebar_bg, tokens.titlebar_alpha), (Rgb(0), 0));
+fn an_unset_surface_color_uses_the_shared_surface_fallback() {
+    let snapshot = SettingsSnapshot::new(1);
+    let fill = flamewm_ui_core::surface::surface_fill(&snapshot);
+    let tokens = chrome_tokens_from_settings(&snapshot);
+    assert_eq!(
+        (tokens.titlebar_bg, tokens.titlebar_alpha),
+        (Rgb(fill.rgb), fill.alpha)
+    );
 }
 
 #[test]
-fn titlebar_color_setting_is_ignored() {
+fn full_opacity_surface_color_wins_over_titlebar_color_setting() {
     let mut snapshot = SettingsSnapshot::new(1);
     put(
         &mut snapshot,
@@ -177,11 +183,16 @@ fn titlebar_color_setting_is_ignored() {
         "titlebarColor",
         SettingValue::Text("#202326".to_owned()),
     );
+    put(
+        &mut snapshot,
+        "glassOpacityPercent",
+        SettingValue::Percent(100),
+    );
     let tokens = chrome_tokens_from_settings(&snapshot);
     assert_eq!(
         (tokens.titlebar_bg, tokens.titlebar_alpha),
-        (Rgb(0), 0),
-        "neither titlebarColor nor surfaceColor paints the titlebar"
+        (Rgb(0x0033_3333), 255),
+        "titlebarColor is ignored while surfaceColor is used at full opacity"
     );
 }
 
