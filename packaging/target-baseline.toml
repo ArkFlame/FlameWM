@@ -1,0 +1,7 @@
+# Oldest supported runtime for the Debian package lane.
+# Debian 12 "bookworm" ships glibc 2.36; antiX 23 is bookworm-based.
+[debian]
+release = "12"
+codename = "bookworm"
+image = "debian:12"
+glibc = "2.36"

@@ -1,3 +1,11 @@
+## 2026-11-03 — Debian 12 / antiX runtime baseline
+
+- The released `flamewm_0.1.4_amd64.deb` could not install on Debian 12 "bookworm" or antiX 23: its payload binaries required `GLIBC_2.43` (and `flamewm-session`/`flamewm-screenshot` `GLIBC_2.39`) because they were compiled on a newer host, while the control file advertised `libc6 (>= 2.36)`.
+- `packaging/target-baseline.toml` is now the single place that names the oldest supported runtime (Debian 12 "bookworm", glibc 2.36, image `debian:12`). The packaging scripts and the CI deb lane read it; no glibc or image version is repeated elsewhere.
+- New fail-closed gate `tools/flamewm_glibc_baseline.py` reads each ELF's required symbol versions (`readelf --version-info`, `objdump -T` fallback), compares them as integer tuples (so `GLIBC_2.2.5` correctly ranks below `2.36`) and exits 1 naming every offender. `scripts/package` runs it on every `.deb` it builds, so a newer-glibc payload can no longer be published quietly.
+- `scripts/build-deb` detects the host glibc and re-executes itself inside the pinned baseline container (docker, then podman) when the host is newer; `--native` is the documented escape hatch and fails the gate. `scripts/dev-deb` keeps the local fast lane usable and prints a NOT FOR PRODUCTION notice.
+- The Debian `libc6` dependency is rendered from the baseline file (`libc6 (>= @GLIBC@)` in `control.in`), and the CI deb lane runs `./scripts/build-deb` instead of a native Ubuntu build. Version 0.1.5.
+
 ## 2026-11-03 — Honest whole-session memory benchmark
 
 - `tools/bench_mem.sh --session` measures a complete session: every FlameWM process, the Python `flamewm-desktop-services` companion, and the X server that owns the display, with PSS and RSS per process plus core/application/FlameWM/server/session totals. It declares a resolution (default 1920x1080) and an application count (default 3, optionally launched), and prints a `measured=`/`excluded=` manifest naming every process it left out and why.

@@ -195,10 +195,20 @@ fi
 
 if command -v dpkg-deb >/dev/null 2>&1; then
     mkdir -p "$STAGE/DEBIAN"
-    sed -e "s/@VERSION@/$PKG_VERSION/g" -e "s/@ARCH@/$BUILD_ARCH/g" \
+    # The glibc dependency is rendered from packaging/target-baseline.toml, the
+    # one owner of the runtime baseline; control.in only carries the placeholder.
+    GLIBC_BASELINE="$(python3 -I -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["debian"]["glibc"])' \
+        "$ROOT/packaging/target-baseline.toml")" \
+        || fail 'python3/tomllib cannot read [debian].glibc from packaging/target-baseline.toml'
+    [[ "$GLIBC_BASELINE" =~ ^[0-9]+(\.[0-9]+)+$ ]] || fail "invalid glibc baseline: $GLIBC_BASELINE"
+    sed -e "s/@VERSION@/$PKG_VERSION/g" -e "s/@ARCH@/$BUILD_ARCH/g" -e "s/@GLIBC@/$GLIBC_BASELINE/g" \
         "$ROOT/packaging/debian/control.in" > "$STAGE/DEBIAN/control"
     grep -Fqx "Architecture: $BUILD_ARCH" "$STAGE/DEBIAN/control" \
         || fail 'invalid Debian binary control architecture'
+    ! grep -Fq '@GLIBC@' "$STAGE/DEBIAN/control" \
+        || fail 'unrendered @GLIBC@ placeholder in the Debian control file'
+    grep -Fq "libc6 (>= $GLIBC_BASELINE)" "$STAGE/DEBIAN/control" \
+        || fail "Debian control file does not require libc6 (>= $GLIBC_BASELINE)"
     if [[ "$PROFILE" == fast ]]; then
         sed -i '0,/^Description: /s//Description: [DEVELOPMENT FAST BUILD - NOT FOR PRODUCTION] /' "$STAGE/DEBIAN/control"
         grep -Fq '[DEVELOPMENT FAST BUILD - NOT FOR PRODUCTION]' "$STAGE/DEBIAN/control" \
@@ -213,6 +223,14 @@ if command -v dpkg-deb >/dev/null 2>&1; then
     dpkg-deb "${deb_compress[@]}" --build --root-owner-group "$STAGE" "$DEB" >/dev/null
     [[ "$(dpkg-deb --field "$DEB" Architecture)" == "$BUILD_ARCH" ]] \
         || fail "generated .deb architecture mismatch: expected $BUILD_ARCH"
+    # Fail-closed runtime gate for every .deb-producing path. The only bypass is
+    # the development lane's explicit, labelled FLAMEWM_GLIBC_ALLOW_NEWER=1.
+    if [[ "${FLAMEWM_GLIBC_ALLOW_NEWER:-0}" == 1 ]]; then
+        printf 'NOTICE: FLAMEWM_GLIBC_ALLOW_NEWER=1: glibc baseline gate skipped for %s\n' "$DEB" >&2
+    else
+        python3 -I "$ROOT/tools/flamewm_glibc_baseline.py" --deb "$DEB" \
+            || fail "payload requires a newer glibc than the $GLIBC_BASELINE baseline; build the release package with ./scripts/build-deb"
+    fi
 fi
 rm -rf "$STAGE/DEBIAN"
 

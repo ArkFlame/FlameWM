@@ -132,6 +132,36 @@ A full Rust toolchain and all FlameWM runtime assets are needed. The smaller
 source handoff archives intentionally omit bulky assets; overlay them onto the
 original checkout without deleting its `assets/` tree.
 
+### glibc runtime baseline
+
+`packaging/target-baseline.toml` is the only place that names the oldest
+supported runtime: the release, codename, container image and glibc version all
+live in its `[debian]` table. Nothing else repeats them — not the Debian control
+template, not the packaging scripts, not CI. To move the supported floor, edit
+that file alone.
+
+`./scripts/build-deb` reads the file and, when the host glibc is newer than the
+baseline, re-executes itself inside the pinned container image (docker, then
+podman). CI runs the same command, so a package built on a newer distribution
+cannot silently require its glibc. `FLAMEWM_DEB_IN_CONTAINER=1` marks the inner
+run, which builds natively; `--native` forces a host build, and that host's
+glibc gate then fails.
+
+Every `.deb`-producing path gates its payload in `scripts/package`:
+
+```bash
+python3 -I tools/flamewm_glibc_baseline.py --deb .target/dist/flamewm_<version>_amd64.deb
+```
+
+A pass prints `OK glibc-baseline: baseline=2.36 max=2.36 elfs=21`. The gate
+streams the payload out with `dpkg-deb --fsys-tarfile`, reads each ELF's required
+symbol versions with `readelf --version-info` (falling back to `objdump -T`) and
+exits 1 for every file whose `GLIBC_<n>.<n>` requirement exceeds the baseline.
+Missing binutils, an unreadable package or an empty payload also exit 1, so a
+green gate never means "not checked". Only the development lane
+(`scripts/dev-deb`, whose output is labelled NOT FOR PRODUCTION) sets
+`FLAMEWM_GLIBC_ALLOW_NEWER=1` to skip the gate.
+
 ## Wayland session packaging
 
 `scripts/build-deb` builds with `--features flamewm-wm-wayland/drm` and

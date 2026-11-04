@@ -18,6 +18,11 @@ mkdir -p "$CARGO_TARGET_DIR" || fail "cannot create CARGO_TARGET_DIR: $CARGO_TAR
 [[ -w "$CARGO_TARGET_DIR" ]] || fail "CARGO_TARGET_DIR is not writable: $CARGO_TARGET_DIR"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
 export FLAMEWM_PACKAGE_PROFILE=fast
+# The dev artifact is labelled NOT FOR PRODUCTION, so a host glibc newer than the
+# release baseline is acceptable here. The release lane (./scripts/build-deb) has
+# no such bypass: scripts/package gates every other .deb against the baseline.
+export FLAMEWM_GLIBC_ALLOW_NEWER=1
+printf 'NOTICE: development .deb: glibc baseline gate disabled (NOT FOR PRODUCTION)\n'
 command -v cargo >/dev/null 2>&1 || fail 'cargo not found'
 
 # The binaries scripts/package installs; built from the fast profile only. flamewm-apps carries

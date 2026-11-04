@@ -1,12 +1,40 @@
 #!/usr/bin/env bash
 # One-command, fail-closed FlameWM Debian build for the checked-out source tree.
-# Never allow an old .deb to be mistaken for the result of a failed build.
+# The .deb is built inside the pinned baseline container from
+# packaging/target-baseline.toml, so it always links against the oldest
+# supported glibc. Never allow an old .deb to be mistaken for a failed build.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 cd "$ROOT"
 
 fail() { printf 'FLAMEWM-DEB-ERROR: %s\n' "$1" >&2; exit 1; }
+
+usage() {
+    cat <<'EOF'
+usage: scripts/build-deb [--native]
+
+Builds .target/dist/flamewm_<version>_amd64.deb plus the source and Linux
+archives. The glibc runtime baseline is read from packaging/target-baseline.toml:
+when this host's glibc is newer than the baseline, the script re-executes itself
+inside the pinned baseline container (docker, then podman), so the normal
+invocation needs no flags.
+
+  --native   build on this host even if its glibc is newer than the baseline.
+             The package's glibc gate then fails, so a native build from a
+             newer distribution can never be released.
+  -h, --help print this help.
+EOF
+}
+
+native=0
+while (( $# )); do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --native) native=1; shift ;;
+        *) fail "unknown argument: $1 (usage: scripts/build-deb [--native])" ;;
+    esac
+done
 
 # An explicit CARGO_TARGET_DIR is the user's cache root: create it, and fail
 # clearly if it cannot be used. Never silently fall back to $ROOT/.target, which
@@ -16,6 +44,51 @@ if [[ "$TARGET_DIR" != /* ]]; then
     TARGET_DIR="$ROOT/$TARGET_DIR"
 fi
 export CARGO_TARGET_DIR="$TARGET_DIR"
+
+# Runtime baseline: this one file owns the target release, codename, image and
+# glibc version. Nothing else in the tree states them.
+BASELINE_FILE="$ROOT/packaging/target-baseline.toml"
+[[ -f "$BASELINE_FILE" ]] || fail "missing runtime baseline: $BASELINE_FILE"
+command -v python3 >/dev/null 2>&1 || fail "python3 not found (required to read $BASELINE_FILE)"
+mapfile -t baseline < <(python3 -I -c '
+import sys, tomllib
+debian = tomllib.load(open(sys.argv[1], "rb"))["debian"]
+print(debian["glibc"], debian["image"], debian["codename"])' "$BASELINE_FILE")
+read -r BASELINE_GLIBC BASELINE_IMAGE BASELINE_CODENAME <<<"${baseline[0]:-}"
+[[ -n "$BASELINE_GLIBC" && -n "$BASELINE_IMAGE" && -n "$BASELINE_CODENAME" ]] \
+    || fail "incomplete [debian] section in $BASELINE_FILE"
+
+# A host newer than the baseline links against its own glibc, so the build moves
+# into the pinned container. FLAMEWM_DEB_IN_CONTAINER marks the inner run, whose
+# host *is* the baseline and therefore builds natively.
+if (( native == 0 )) && [[ "${FLAMEWM_DEB_IN_CONTAINER:-}" != 1 ]]; then
+    host_glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+    host_glibc="${host_glibc##* }"
+    [[ "$host_glibc" =~ ^[0-9]+(\.[0-9]+)+$ ]] \
+        || fail 'cannot determine this host glibc (getconf GNU_LIBC_VERSION); rerun with --native to build anyway'
+    if [[ "$host_glibc" != "$BASELINE_GLIBC" ]] \
+        && [[ "$(printf '%s\n%s\n' "$host_glibc" "$BASELINE_GLIBC" | sort -V | tail -n1)" == "$host_glibc" ]]; then
+        engine="$(command -v docker || true)"
+        [[ -n "$engine" ]] || engine="$(command -v podman || true)"
+        [[ -n "$engine" ]] \
+            || fail "host glibc $host_glibc is newer than the $BASELINE_GLIBC baseline and neither docker nor podman is available; install one or build on $BASELINE_IMAGE"
+        image_tag="flamewm-deb-baseline:$BASELINE_CODENAME"
+        printf 'FLAMEWM-DEB: host glibc %s is newer than the %s baseline; building inside %s\n' \
+            "$host_glibc" "$BASELINE_GLIBC" "$BASELINE_IMAGE"
+        mkdir -p "$TARGET_DIR" \
+            || fail "cannot create CARGO_TARGET_DIR=$TARGET_DIR (fix the path or its permissions; no fallback is used)"
+        "$engine" build --build-arg "DEBIAN_IMAGE=$BASELINE_IMAGE" \
+            -f "$ROOT/packaging/debian/builder.Dockerfile" -t "$image_tag" "$ROOT/packaging/debian" \
+            || fail "cannot build the $image_tag image"
+        exec "$engine" run --rm -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -e "CARGO_TARGET_DIR=$TARGET_DIR" \
+            -e FLAMEWM_DEB_IN_CONTAINER=1 \
+            -v "$ROOT:$ROOT" -v "$TARGET_DIR:$TARGET_DIR" -w "$ROOT" \
+            "$image_tag" ./scripts/build-deb "$@"
+    fi
+fi
+
 VERSION="$(./scripts/version)"
 DIST="$ROOT/.target/dist"
 DEB="$DIST/flamewm_${VERSION}_amd64.deb"
@@ -86,6 +159,8 @@ wayland_capabilities="$("$wayland_bin" --capabilities 2>/dev/null || true)"
 grep -Fxq 'drm_compiled=true' <<<"$wayland_capabilities" \
     || fail "release flamewm-wayland does not report drm_compiled=true from --capabilities; refusing to package a Wayland login entry (rebuild with --features flamewm-wm-wayland/drm)"
 printf 'FLAMEWM-DEB: producing source, Linux, and Debian artifacts\n'
+# scripts/package renders the libc6 dependency from the same baseline file and
+# gates the built payload, so every .deb-producing path inherits this check.
 ./scripts/package
 
 [[ -s "$DEB" ]] || fail "package did not create $DEB"

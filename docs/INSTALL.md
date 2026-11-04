@@ -270,4 +270,8 @@ verify the output `.deb` architecture and `SHA256SUMS` above.
 
 ## Portable .deb build
 
-Build the .deb on Debian 12 so it runs on Debian 12+, MX, Ubuntu 22.04+: `docker build -t flamewm-deb-builder:bookworm -f packaging/debian/builder.Dockerfile packaging/debian`, then run `./scripts/build-deb` inside it as your user (mount the repo and a `CARGO_TARGET_DIR`). Building on a newer distro raises the glibc requirement.
+Run `./scripts/build-deb`. It builds inside the pinned baseline container named
+by `packaging/target-baseline.toml`, so the result runs on Debian 12+, MX,
+antiX 23 and Ubuntu 22.04+ without any manual `docker build` step. A native
+build on a newer distribution needs `--native` and fails the glibc gate, because
+that host's glibc would be recorded in the binaries.
