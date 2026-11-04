@@ -1,7 +1,7 @@
 use flamewm_api::system::{
     AudioEndpointKind, AudioMuteAction, AudioSnapshot, AudioTarget, AudioVolumeAction,
-    MediaSnapshot, NetworkSnapshot, PowerSnapshot, ServiceAvailability, SystemAction,
-    SystemSnapshot,
+    BrightnessAction, BrightnessSnapshot, MediaSnapshot, NetworkSnapshot, PowerSnapshot,
+    ServiceAvailability, SystemAction, SystemSnapshot,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
@@ -9,6 +9,10 @@ pub type SystemActionHandler = Box<dyn FnMut(SystemAction, SystemSnapshot) -> Fl
 
 /// Volume change per media-key press, in percent.
 pub const MEDIA_VOLUME_STEP: u8 = 5;
+/// Backlight change per brightness-key press, in percent.
+pub const MEDIA_BRIGHTNESS_STEP: u8 = 5;
+/// Highest backlight percent a brightness action may carry.
+pub const MAX_BRIGHTNESS_PERCENT: u8 = 100;
 /// Highest volume the system action path accepts.
 pub const MAX_VOLUME_PERCENT: u8 = 150;
 /// Volume cap without "raise maximum volume" (over-amplification).
@@ -43,6 +47,26 @@ pub fn stepped_volume(current: u8, up: bool, cap: u8) -> u8 {
         current.saturating_add(MEDIA_VOLUME_STEP).min(cap)
     } else {
         current.saturating_sub(MEDIA_VOLUME_STEP).min(cap)
+    }
+}
+
+/// Media keys that adjust the panel backlight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaBrightnessKey {
+    Up,
+    Down,
+}
+
+/// Returns `current` moved one brightness-key step up or down, clamped to `0..=100`.
+#[must_use]
+pub fn stepped_brightness(current: u8, up: bool) -> u8 {
+    let current = current.min(MAX_BRIGHTNESS_PERCENT);
+    if up {
+        current
+            .saturating_add(MEDIA_BRIGHTNESS_STEP)
+            .min(MAX_BRIGHTNESS_PERCENT)
+    } else {
+        current.saturating_sub(MEDIA_BRIGHTNESS_STEP)
     }
 }
 
@@ -111,6 +135,13 @@ impl SystemService {
         self.apply(|s| &mut s.power, update)
     }
 
+    pub fn update_brightness(&mut self, update: BrightnessSnapshot) -> bool {
+        if update.generation < self.snapshot.brightness.generation {
+            return false;
+        }
+        self.apply(|s| &mut s.brightness, update)
+    }
+
     pub fn update_audio(&mut self, update: AudioSnapshot) -> bool {
         if update.generation < self.snapshot.audio.generation
             || update.server_generation < self.snapshot.audio.server_generation
@@ -163,6 +194,17 @@ impl SystemService {
             }
             SystemAction::SetMute(action) => {
                 self.validate_audio_generation(action.generation, action.server_generation)?;
+            }
+            SystemAction::SetBrightness(action) => {
+                if action.percent > MAX_BRIGHTNESS_PERCENT {
+                    return Err(FlameError::new(
+                        ErrorCode::InvalidArgument,
+                        "backlight percent must be in 0..=100",
+                    ));
+                }
+                if action.generation != self.snapshot.brightness.generation {
+                    return Err(FlameError::stale("stale backlight generation"));
+                }
             }
             SystemAction::ConnectWifi { generation, .. }
             | SystemAction::SubmitNetworkSecret { generation, .. }
@@ -224,6 +266,22 @@ impl SystemService {
                 server_generation,
             }),
         };
+        self.perform_action(action, revision)
+    }
+
+    /// Applies a brightness key to the panel backlight through `perform_action`, the same
+    /// typed path the settings UI uses. The write is fenced by the current backlight
+    /// generation. With no backlight device this is a no-op.
+    pub fn media_brightness_key(&mut self, key: MediaBrightnessKey) -> FlameResult<()> {
+        let revision = self.snapshot.revision;
+        let brightness = self.snapshot.brightness;
+        if brightness.availability != ServiceAvailability::Available {
+            return Ok(());
+        }
+        let action = SystemAction::SetBrightness(BrightnessAction {
+            percent: stepped_brightness(brightness.percent, key == MediaBrightnessKey::Up),
+            generation: brightness.generation,
+        });
         self.perform_action(action, revision)
     }
 
@@ -361,6 +419,109 @@ mod tests {
             .expect_err("stale action must fail");
         assert_eq!(error.code, ErrorCode::StaleRevision);
     }
+
+    #[test]
+    fn brightness_step_moves_five_percent_and_clamps_to_0_through_100() {
+        assert_eq!(stepped_brightness(0, false), 0);
+        assert_eq!(stepped_brightness(3, false), 0);
+        assert_eq!(stepped_brightness(40, true), 45);
+        assert_eq!(stepped_brightness(40, false), 35);
+        assert_eq!(stepped_brightness(98, true), 100);
+        assert_eq!(stepped_brightness(100, true), 100);
+        assert_eq!(stepped_brightness(250, true), 100);
+        assert_eq!(stepped_brightness(250, false), 95);
+    }
+
+    fn service_with_brightness(
+        percent: u8,
+        availability: ServiceAvailability,
+        generation: u64,
+    ) -> (
+        SystemService,
+        std::rc::Rc<std::cell::RefCell<Vec<SystemAction>>>,
+    ) {
+        let mut service = SystemService::default();
+        assert!(service.update_brightness(BrightnessSnapshot {
+            availability,
+            generation,
+            percent,
+        }));
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = std::rc::Rc::clone(&seen);
+        service.set_action_handler(Box::new(move |action, _| {
+            sink.borrow_mut().push(action);
+            Ok(())
+        }));
+        (service, seen)
+    }
+
+    #[test]
+    fn brightness_key_dispatches_the_stepped_percent_with_the_current_generation() {
+        let (mut service, seen) = service_with_brightness(40, ServiceAvailability::Available, 6);
+        service
+            .media_brightness_key(MediaBrightnessKey::Up)
+            .expect("dispatch");
+        assert_eq!(
+            seen.borrow().as_slice(),
+            [SystemAction::SetBrightness(BrightnessAction {
+                percent: 45,
+                generation: 6,
+            })]
+        );
+    }
+
+    #[test]
+    fn brightness_key_without_a_device_is_a_noop() {
+        let (mut service, seen) = service_with_brightness(40, ServiceAvailability::Unavailable, 0);
+        service
+            .media_brightness_key(MediaBrightnessKey::Down)
+            .expect("no-op");
+        assert!(seen.borrow().is_empty());
+    }
+
+    #[test]
+    fn brightness_generation_fence_rejects_a_stale_action() {
+        let (mut service, _seen) = service_with_brightness(40, ServiceAvailability::Available, 6);
+        let stale = SystemAction::SetBrightness(BrightnessAction {
+            percent: 45,
+            generation: 5,
+        });
+        let error = service
+            .perform_action(stale, service.snapshot().revision)
+            .expect_err("stale generation must fail");
+        assert_eq!(error.code, ErrorCode::StaleRevision);
+    }
+
+    #[test]
+    fn brightness_action_rejects_percent_above_100() {
+        let (mut service, _seen) = service_with_brightness(40, ServiceAvailability::Available, 6);
+        let error = service
+            .perform_action(
+                SystemAction::SetBrightness(BrightnessAction {
+                    percent: 101,
+                    generation: 6,
+                }),
+                service.snapshot().revision,
+            )
+            .expect_err("out-of-range percent must fail");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn brightness_update_is_ignored_from_an_older_generation() {
+        let mut service = SystemService::default();
+        assert!(service.update_brightness(BrightnessSnapshot {
+            availability: ServiceAvailability::Available,
+            generation: 3,
+            percent: 70,
+        }));
+        assert!(!service.update_brightness(BrightnessSnapshot {
+            availability: ServiceAvailability::Available,
+            generation: 2,
+            percent: 10,
+        }));
+        assert_eq!(service.snapshot().brightness.percent, 70);
+    }
 }
 
 /// Volume and mute writes carry their own `PulseAudio` generation fences, so the
@@ -372,6 +533,7 @@ fn bypasses_revision_fence(action: &SystemAction) -> bool {
         action,
         SystemAction::SetVolume(_)
             | SystemAction::SetMute(_)
+            | SystemAction::SetBrightness(_)
             | SystemAction::BatteryMenuOpened
             | SystemAction::BatteryMenuClosed
     )

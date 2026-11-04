@@ -242,6 +242,18 @@ pub fn system_dict(snapshot: &SystemSnapshot) -> WireDict {
         out.insert("powerRateMilliwatts".to_owned(), WireValue::U32(milliwatts));
     }
     out.insert(
+        "brightnessAvailability".to_owned(),
+        WireValue::String(availability_name(snapshot.brightness.availability).to_owned()),
+    );
+    out.insert(
+        "brightnessGeneration".to_owned(),
+        WireValue::U64(snapshot.brightness.generation),
+    );
+    out.insert(
+        "brightnessPercent".to_owned(),
+        WireValue::U32(u32::from(snapshot.brightness.percent)),
+    );
+    out.insert(
         "audioAvailability".to_owned(),
         WireValue::String(availability_name(snapshot.audio.availability).to_owned()),
     );

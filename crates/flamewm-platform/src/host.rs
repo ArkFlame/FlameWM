@@ -673,6 +673,14 @@ impl<E: EnginePorts> PlatformHost<E> {
         self.system.media_audio_key(key, cap)
     }
 
+    /// Dispatches a brightness key to the panel backlight through the system action path.
+    pub fn media_brightness_key(
+        &mut self,
+        key: crate::system::MediaBrightnessKey,
+    ) -> FlameResult<()> {
+        self.system.media_brightness_key(key)
+    }
+
     pub fn system_action(
         &mut self,
         action: SystemAction,

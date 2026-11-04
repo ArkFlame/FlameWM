@@ -149,6 +149,21 @@ pub(crate) fn system_action_request(
                 required_u64(&call.args[6], "expectedRevision")?,
             )
         }
+        "SetBrightness" => {
+            expect_arity(call, 3)?;
+            let percent = u8::try_from(required_u32(&call.args[0], "percent")?)
+                .map_err(|_| invalid("percent exceeds u8"))?;
+            if percent > 100 {
+                return Err(invalid("percent must be in 0..=100"));
+            }
+            (
+                SystemAction::SetBrightness(BrightnessAction {
+                    percent,
+                    generation: required_u64(&call.args[1], "generation")?,
+                }),
+                required_u64(&call.args[2], "expectedRevision")?,
+            )
+        }
         _ => {
             return Err(ControlError {
                 name: flamewm_control_core::error_name(ErrorCode::NotFound),
@@ -252,6 +267,13 @@ pub(crate) fn system_action_call(action: &SystemAction, expected_revision: u64) 
                 action.generation,
                 action.server_generation,
             ),
+        ),
+        SystemAction::SetBrightness(action) => (
+            "SetBrightness",
+            vec![
+                WireValue::U32(u32::from(action.percent)),
+                WireValue::U64(action.generation),
+            ],
         ),
     };
     args.push(WireValue::U64(expected_revision));

@@ -96,6 +96,19 @@ pub(crate) fn access_point_snapshot(
     })
 }
 
+/// Absent brightness keys (older peers) decode to the default snapshot.
+pub(crate) fn brightness_snapshot(dict: &WireDict) -> Result<BrightnessSnapshot, ControlError> {
+    if dict.get("brightnessAvailability").is_none() {
+        return Ok(BrightnessSnapshot::default());
+    }
+    let percent = dict_u32(dict, "brightnessPercent")?;
+    Ok(BrightnessSnapshot {
+        availability: parse_availability(dict_string(dict, "brightnessAvailability")?)?,
+        generation: dict_u64(dict, "brightnessGeneration")?,
+        percent: u8::try_from(percent).map_err(|_| invalid("brightness percent exceeds u8"))?,
+    })
+}
+
 /// Absent power keys (older peers) decode to the default snapshot.
 pub(crate) fn power_snapshot(dict: &WireDict) -> Result<PowerSnapshot, ControlError> {
     if dict.get("powerAvailability").is_none() {
@@ -173,6 +186,7 @@ pub(crate) fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, Control
             can_previous: dict_bool(dict, "mediaCanPrevious")?,
         },
         power: power_snapshot(dict)?,
+        brightness: brightness_snapshot(dict)?,
         audio: AudioSnapshot {
             availability: parse_availability(dict_string(dict, "audioAvailability")?)?,
             generation: dict_u64(dict, "audioGeneration")?,

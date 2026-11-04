@@ -76,6 +76,7 @@ impl Default for ShellSnapshot {
                 media: Default::default(),
                 audio: Default::default(),
                 power: Default::default(),
+                brightness: Default::default(),
             },
         }
     }

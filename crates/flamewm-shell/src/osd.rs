@@ -1,7 +1,7 @@
-//! Volume OSD: one retained overlay surface driven by the audio snapshot.
+//! Volume and brightness OSD: one retained overlay surface driven by the system snapshot.
 //!
-//! The surface is created lazily on the first visible change, never shown for
-//! the baseline snapshot, and hidden at the single deadline. No timer is owned
+//! The surface is created lazily on the first visible change, never shown for a
+//! kind's baseline snapshot, and hidden at the single deadline. No timer is owned
 //! here; the shell loop must wake at [`OsdController::deadline`].
 
 use std::time::{Duration, Instant};
@@ -25,11 +25,32 @@ pub const TRACK_H: i32 = 5;
 pub const HOLD: Duration = Duration::from_millis(1200);
 pub const FADE: Duration = Duration::from_millis(180);
 
-/// One audio level as the shell observes it in the snapshot, clamped to the live cap.
+/// Which system value the card shows. Each kind keeps its own baseline, so a
+/// volume change never re-shows a stale brightness level and vice versa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsdKind {
+    Volume,
+    Brightness,
+}
+
+impl OsdKind {
+    fn slot(self) -> usize {
+        match self {
+            Self::Volume => 0,
+            Self::Brightness => 1,
+        }
+    }
+}
+
+/// One level as the shell observes it in the snapshot, clamped to the live cap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Level {
+    pub kind: OsdKind,
+    /// Percent as shown and scaled: volume against `max`, brightness against 100.
     pub volume: u8,
     pub muted: bool,
+    /// Full-track percent: the live volume cap, or 100 for brightness.
+    pub max: u8,
 }
 
 impl Level {
@@ -37,18 +58,31 @@ impl Level {
     #[must_use]
     pub fn new(volume: u8, muted: bool, max: u8) -> Self {
         Self {
+            kind: OsdKind::Volume,
             volume: volume.min(max),
             muted,
+            max,
         }
     }
 
-    /// Filled track width in logical px, full at the cap. Muted shows an empty track.
+    /// Panel backlight percentage (`0..=100`); never muted.
     #[must_use]
-    pub fn fill_width(self, max: u8) -> i32 {
-        if self.muted || max == 0 {
+    pub fn brightness(percent: u8) -> Self {
+        Self {
+            kind: OsdKind::Brightness,
+            volume: percent.min(100),
+            muted: false,
+            max: 100,
+        }
+    }
+
+    /// Filled track width in logical px, full at `max`. Muted shows an empty track.
+    #[must_use]
+    pub fn fill_width(self) -> i32 {
+        if self.muted || self.max == 0 {
             return 0;
         }
-        i32::from(self.volume) * TRACK_W / i32::from(max)
+        i32::from(self.volume) * TRACK_W / i32::from(self.max)
     }
 
     #[must_use]
@@ -118,7 +152,8 @@ enum Stage {
 /// Coalescing state: one deadline shared by every change.
 #[derive(Debug)]
 pub struct OsdState {
-    last: Option<Level>,
+    /// Last observed level per `OsdKind` slot; the first observation of each kind is a baseline.
+    last: [Option<Level>; 2],
     stage: Stage,
     deadline: Option<Instant>,
 }
@@ -127,17 +162,17 @@ impl OsdState {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            last: None,
+            last: [None, None],
             stage: Stage::Hold,
             deadline: None,
         }
     }
 
-    /// Records one observed level. The first observation is the baseline and
-    /// never shows. Returns `true` when the card must be painted and shown.
-    /// Each change replaces the single deadline with a fresh hold.
+    /// Records one observed level for its kind. The first observation of a kind is
+    /// the baseline and never shows. Returns `true` when the card must be painted
+    /// and shown. Each change replaces the single deadline with a fresh hold.
     pub fn observe(&mut self, level: Level, now: Instant) -> bool {
-        let Some(previous) = self.last.replace(level) else {
+        let Some(previous) = self.last[level.kind.slot()].replace(level) else {
             return false;
         };
         if previous == level {
@@ -198,38 +233,41 @@ impl OsdController {
         self.state.deadline()
     }
 
-    /// Feeds one snapshot level, hides at the deadline, then re-arms the timer.
-    /// `None` means no default endpoint is known. `max` is the live volume cap the
-    /// fill and label scale to. `settings` styles the card
-    /// (accent, surface fill, backdrop) on every show; `None` keeps the stylesheet defaults.
+    /// Feeds one snapshot level per kind, hides at the deadline, then re-arms the timer.
+    /// `None` means the kind has no state to show (no default endpoint, no backlight).
+    /// `settings` styles the card (accent, surface fill, backdrop) on every show; `None`
+    /// keeps the stylesheet defaults. When both kinds changed in one tick the card is
+    /// painted once, brightness last.
     pub fn update(
         &mut self,
         runtime: &mut SurfaceRuntime,
-        level: Option<Level>,
-        max: u8,
+        volume: Option<Level>,
+        brightness: Option<Level>,
         target: impl FnOnce() -> (Rect, f32),
         settings: Option<&SettingsSnapshot>,
         now: Instant,
     ) -> Result<(), UiBackendError> {
-        let result = self.observe(runtime, level, max, target, settings, now);
+        let result = self.observe(runtime, volume, brightness, target, settings, now);
         result.and_then(|()| self.expire(runtime, now))
     }
 
     fn observe(
         &mut self,
         runtime: &mut SurfaceRuntime,
-        level: Option<Level>,
-        max: u8,
+        volume: Option<Level>,
+        brightness: Option<Level>,
         target: impl FnOnce() -> (Rect, f32),
         settings: Option<&SettingsSnapshot>,
         now: Instant,
     ) -> Result<(), UiBackendError> {
-        let Some(level) = level else {
+        let volume_changed = volume.is_some_and(|level| self.state.observe(level, now));
+        let brightness_changed = brightness.is_some_and(|level| self.state.observe(level, now));
+        let Some(level) = brightness
+            .filter(|_| brightness_changed)
+            .or_else(|| volume.filter(|_| volume_changed))
+        else {
             return Ok(());
         };
-        if !self.state.observe(level, now) {
-            return Ok(());
-        }
         // The output lookup runs only when the card shows, so idle ticks allocate nothing.
         let (work, scale) = target();
         let surface = if let Some(surface) = self.surface {
@@ -248,7 +286,7 @@ impl OsdController {
             let (opacity, blur) = settings_projection::start_backdrop_percents(settings);
             runtime.set_popup_backdrop(surface, Some((opacity, blur)))?;
         }
-        runtime.with_document(surface, |document| paint(document, level, max))?;
+        runtime.with_document(surface, |document| paint(document, level))?;
         runtime.move_resize(
             surface,
             card.x,
@@ -276,7 +314,7 @@ fn create(runtime: &mut SurfaceRuntime) -> Result<SurfaceHandle, UiBackendError>
         SurfaceConfig {
             width: OSD_WIDTH as u32,
             height: OSD_HEIGHT as u32,
-            title: "FlameWM volume".to_owned(),
+            title: "FlameWM OSD".to_owned(),
             role: SurfaceRole::Overlay,
             input: SurfaceInputMode::PassThrough,
             initially_visible: false,
@@ -286,11 +324,21 @@ fn create(runtime: &mut SurfaceRuntime) -> Result<SurfaceHandle, UiBackendError>
     )
 }
 
-fn paint(document: &mut impl UiDocumentAccess, level: Level, max: u8) -> Result<(), String> {
-    let muted = level.muted;
-    document.visible("osd-icon-high", !muted)?;
+/// Visible state of the three OSD icons: exactly one of the volume pair, or the
+/// brightness glyph.
+fn icons(kind: OsdKind, muted: bool) -> (bool, bool, bool) {
+    match kind {
+        OsdKind::Volume => (!muted, muted, false),
+        OsdKind::Brightness => (false, false, true),
+    }
+}
+
+fn paint(document: &mut impl UiDocumentAccess, level: Level) -> Result<(), String> {
+    let (high, muted, brightness) = icons(level.kind, level.muted);
+    document.visible("osd-icon-high", high)?;
     document.visible("osd-icon-muted", muted)?;
-    document.size("osd-fill", level.fill_width(max) as f32, TRACK_H as f32)?;
+    document.visible("osd-icon-brightness", brightness)?;
+    document.size("osd-fill", level.fill_width() as f32, TRACK_H as f32)?;
     document.text("osd-text", level.label())
 }
 
@@ -383,7 +431,7 @@ mod tests {
 
     #[test]
     fn fill_width_at_zero_quarter_half_full_and_max() {
-        let fill = |volume| Level::new(volume, false, 150).fill_width(150);
+        let fill = |volume| Level::new(volume, false, 150).fill_width();
         assert_eq!(fill(0), 0);
         assert_eq!(fill(25), 21);
         assert_eq!(fill(50), 43);
@@ -393,7 +441,7 @@ mod tests {
 
     #[test]
     fn volume_above_max_clamps_to_150() {
-        assert_eq!(Level::new(200, false, 150).fill_width(150), TRACK_W);
+        assert_eq!(Level::new(200, false, 150).fill_width(), TRACK_W);
         assert_eq!(Level::new(200, false, 150).label(), "150%");
     }
 
@@ -401,15 +449,26 @@ mod tests {
     fn without_raise_maximum_the_card_caps_at_100_percent() {
         let level = Level::new(120, false, 100);
         assert_eq!(level.label(), "100%");
-        assert_eq!(level.fill_width(100), TRACK_W);
-        assert_eq!(Level::new(60, false, 100).fill_width(100), 77);
+        assert_eq!(level.fill_width(), TRACK_W);
+        assert_eq!(Level::new(60, false, 100).fill_width(), 77);
         assert_eq!(Level::new(60, false, 100).label(), "60%");
     }
 
     #[test]
     fn raise_maximum_shows_up_to_150_percent() {
         assert_eq!(Level::new(120, false, 150).label(), "120%");
-        assert_eq!(Level::new(120, false, 150).fill_width(150), 103);
+        assert_eq!(Level::new(120, false, 150).fill_width(), 103);
+    }
+
+    #[test]
+    fn brightness_level_scales_against_100_and_is_never_muted() {
+        let level = Level::brightness(140);
+        assert_eq!(level.kind, OsdKind::Brightness);
+        assert_eq!(level.label(), "100%");
+        assert_eq!(level.fill_width(), TRACK_W);
+        assert_eq!(Level::brightness(50).fill_width(), 64);
+        assert_eq!(Level::brightness(0).fill_width(), 0);
+        assert_eq!(Level::brightness(70).label(), "70%");
     }
 
     #[test]
@@ -424,7 +483,7 @@ mod tests {
     #[test]
     fn mute_shows_empty_track_and_muted_label() {
         let level = Level::new(80, true, 150);
-        assert_eq!(level.fill_width(150), 0);
+        assert_eq!(level.fill_width(), 0);
         assert_eq!(level.label(), "Muted");
     }
 
@@ -443,6 +502,54 @@ mod tests {
         let mut state = OsdState::new();
         assert!(!state.observe(Level::new(40, false, 150), Instant::now()));
         assert_eq!(state.deadline(), None);
+    }
+
+    #[test]
+    fn first_observation_of_each_kind_is_its_own_baseline() {
+        let mut state = OsdState::new();
+        let t0 = Instant::now();
+        assert!(!state.observe(Level::new(40, false, 150), t0));
+        assert!(!state.observe(Level::brightness(70), t0));
+        assert_eq!(state.deadline(), None);
+        assert!(state.observe(Level::brightness(75), t0));
+    }
+
+    #[test]
+    fn switching_kind_shows_the_new_card_and_repeating_it_does_not() {
+        let mut state = OsdState::new();
+        let t0 = Instant::now();
+        // Both kinds take their baseline first; only later changes paint.
+        state.observe(Level::new(40, false, 150), t0);
+        state.observe(Level::brightness(65), t0);
+        assert!(state.observe(Level::new(45, false, 150), t0));
+        assert!(state.observe(Level::brightness(70), t0 + Duration::from_millis(100)));
+        assert_eq!(
+            state.deadline(),
+            Some(t0 + Duration::from_millis(100) + HOLD)
+        );
+        assert!(!state.observe(Level::brightness(70), t0 + Duration::from_millis(400)));
+        assert_eq!(
+            state.deadline(),
+            Some(t0 + Duration::from_millis(100) + HOLD)
+        );
+        assert!(state.observe(Level::new(50, false, 150), t0 + Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn exactly_one_icon_is_visible_per_kind() {
+        assert_eq!(icons(OsdKind::Volume, false), (true, false, false));
+        assert_eq!(icons(OsdKind::Volume, true), (false, true, false));
+        assert_eq!(icons(OsdKind::Brightness, false), (false, false, true));
+    }
+
+    /// The card resolves its brightness glyph at build time, so a renamed asset
+    /// fails the shell build rather than the first key press.
+    #[test]
+    fn osd_document_declares_the_brightness_icon() {
+        let source = include_str!("../../../ui/shell/osd.html");
+        assert!(source.contains(r#"id="osd-icon-brightness""#));
+        assert!(source.contains("assets/breeze/video-display-brightness.svg"));
+        assert!(source.contains(r#"<title>FlameWM OSD</title>"#));
     }
 
     #[test]

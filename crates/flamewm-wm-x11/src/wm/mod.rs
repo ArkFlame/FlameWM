@@ -130,12 +130,12 @@ use flamewm_api::shortcuts::{
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{
-    ACTION_OPEN_ASSISTANT_CTRL_ALT, ACTION_OPEN_ASSISTANT_SUPER, ACTION_OPEN_FILES_CTRL_ALT,
-    ACTION_OPEN_FILES_SUPER, ACTION_OPEN_FINDER, ACTION_OPEN_FINDER_CTRL_ALT,
-    ACTION_OPEN_TERMINAL_CTRL_ALT, ACTION_OPEN_TERMINAL_SUPER, ACTION_VOLUME_DOWN,
-    ACTION_VOLUME_MUTE, ACTION_VOLUME_UP,
+    ACTION_BRIGHTNESS_DOWN, ACTION_BRIGHTNESS_UP, ACTION_OPEN_ASSISTANT_CTRL_ALT,
+    ACTION_OPEN_ASSISTANT_SUPER, ACTION_OPEN_FILES_CTRL_ALT, ACTION_OPEN_FILES_SUPER,
+    ACTION_OPEN_FINDER, ACTION_OPEN_FINDER_CTRL_ALT, ACTION_OPEN_TERMINAL_CTRL_ALT,
+    ACTION_OPEN_TERMINAL_SUPER, ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP,
 };
-use flamewm_platform::system::MediaAudioKey;
+use flamewm_platform::system::{MediaAudioKey, MediaBrightnessKey};
 use flamewm_window_core::{
     SnapTarget, snap_geometry as core_snap_geometry,
     snap_target_in_output as core_snap_target_in_output,
@@ -244,6 +244,8 @@ pub struct WmChangeSet {
     pub launcher_toggle: bool,
     /// One-shot media-key request; the flush dispatches it through the platform host.
     pub media_audio_key: Option<MediaAudioKey>,
+    /// One-shot brightness-key request; the flush dispatches it through the platform host.
+    pub media_brightness_key: Option<MediaBrightnessKey>,
 }
 
 impl WmChangeSet {
@@ -262,6 +264,7 @@ impl WmChangeSet {
             || self.start_menu_toggle
             || self.launcher_toggle
             || self.media_audio_key.is_some()
+            || self.media_brightness_key.is_some()
     }
 }
 

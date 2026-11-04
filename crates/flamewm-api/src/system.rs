@@ -169,6 +169,20 @@ pub struct PowerSnapshot {
     pub power_rate_mw: Option<u32>,
 }
 
+/// Backlight state of the panel device. `percent` is `0..=100`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BrightnessSnapshot {
+    pub availability: ServiceAvailability,
+    pub generation: u64,
+    pub percent: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrightnessAction {
+    pub percent: u8,
+    pub generation: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioSnapshot {
     pub availability: ServiceAvailability,
@@ -248,6 +262,7 @@ pub struct SystemSnapshot {
     pub media: MediaSnapshot,
     pub audio: AudioSnapshot,
     pub power: PowerSnapshot,
+    pub brightness: BrightnessSnapshot,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -288,6 +303,7 @@ pub enum SystemAction {
     },
     SetVolume(AudioVolumeAction),
     SetMute(AudioMuteAction),
+    SetBrightness(BrightnessAction),
     BatteryMenuOpened,
     BatteryMenuClosed,
 }
@@ -345,6 +361,7 @@ impl core::fmt::Debug for SystemAction {
                 .finish(),
             Self::SetVolume(action) => f.debug_tuple("SetVolume").field(action).finish(),
             Self::SetMute(action) => f.debug_tuple("SetMute").field(action).finish(),
+            Self::SetBrightness(action) => f.debug_tuple("SetBrightness").field(action).finish(),
             Self::BatteryMenuOpened => f.write_str("BatteryMenuOpened"),
             Self::BatteryMenuClosed => f.write_str("BatteryMenuClosed"),
         }

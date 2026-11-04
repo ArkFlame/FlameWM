@@ -189,6 +189,12 @@ impl<C: Connection> Wm<'_, C> {
             ACTION_VOLUME_UP => self.changes.media_audio_key = Some(MediaAudioKey::VolumeUp),
             ACTION_VOLUME_DOWN => self.changes.media_audio_key = Some(MediaAudioKey::VolumeDown),
             ACTION_VOLUME_MUTE => self.changes.media_audio_key = Some(MediaAudioKey::VolumeMute),
+            ACTION_BRIGHTNESS_UP => {
+                self.changes.media_brightness_key = Some(MediaBrightnessKey::Up);
+            }
+            ACTION_BRIGHTNESS_DOWN => {
+                self.changes.media_brightness_key = Some(MediaBrightnessKey::Down);
+            }
             ACTION_WINDOW_FULLSCREEN => self.on_active(Self::toggle_fullscreen)?,
             ACTION_WINDOW_FLOAT => self.on_active(Self::toggle_float)?,
             ACTION_WINDOW_CYCLE_NEXT => self.cycle_window(1)?,

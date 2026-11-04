@@ -16,9 +16,9 @@ use flamewm_api::shell_bootstrap::ShellBootstrapSnapshot;
 use flamewm_api::shortcuts::{KeyBinding, ShortcutSnapshot};
 use flamewm_api::system::{
     AudioEndpointKind, AudioEndpointSnapshot, AudioMuteAction, AudioSnapshot, AudioStreamSnapshot,
-    AudioTarget, AudioVolumeAction, MediaSnapshot, NetworkAccessPointSnapshot, NetworkKind,
-    NetworkSecretRequestSnapshot, NetworkSnapshot, PlaybackState, PowerSnapshot, PowerState,
-    ServiceAvailability, SystemAction, SystemSnapshot,
+    AudioTarget, AudioVolumeAction, BrightnessAction, BrightnessSnapshot, MediaSnapshot,
+    NetworkAccessPointSnapshot, NetworkKind, NetworkSecretRequestSnapshot, NetworkSnapshot,
+    PlaybackState, PowerSnapshot, PowerState, ServiceAvailability, SystemAction, SystemSnapshot,
 };
 use flamewm_api::window::{WindowSnapshot, WindowState};
 use flamewm_api::workspace::WorkspaceSnapshot;

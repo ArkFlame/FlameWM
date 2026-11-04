@@ -8,6 +8,7 @@ extern crate pulse as libpulse_binding;
 
 pub mod audio_helper;
 pub mod audio_protocol;
+pub mod backlight;
 pub mod device_watch;
 pub mod icon_service;
 pub mod icon_theme;
@@ -31,6 +32,7 @@ pub use icon_service::{
 pub use icon_theme::IconLookupIndex;
 pub use icons::{IconKey, IconMetricsSnapshot, IconResolver};
 
+pub use backlight::BacklightProvider;
 pub use mpris::{MprisProvider, MprisProviderState};
 pub use network_manager::{
     NetworkManagerProperties, NetworkManagerProvider, NetworkManagerProviderState,
@@ -40,7 +42,10 @@ pub use portal_file_chooser::PortalFileChooser;
 pub use power::PowerProvider;
 
 use flamewm_api::FlameResult;
-use flamewm_api::system::{MediaSnapshot, NetworkSnapshot, PowerSnapshot, SystemAction};
+use flamewm_api::system::{
+    BrightnessAction, BrightnessSnapshot, MediaSnapshot, NetworkSnapshot, PowerSnapshot,
+    SystemAction,
+};
 use flamewm_dbus_reactor::BusWatch;
 use removable_mounts::RemovableMountWorker;
 
@@ -57,6 +62,7 @@ pub struct LinuxIntegrationRuntime {
     network_manager: NetworkManagerSlot,
     mpris: MprisProvider,
     power: PowerProvider,
+    brightness: BacklightProvider,
     removable_mounts: Option<RemovableMountWorker>,
     started: bool,
 }
@@ -68,6 +74,7 @@ impl LinuxIntegrationRuntime {
             network_manager: NetworkManagerSlot::connect()?,
             mpris: MprisProvider::connect()?,
             power: PowerProvider::connect()?,
+            brightness: BacklightProvider::connect(),
             removable_mounts: None,
             started: false,
         })
@@ -81,6 +88,7 @@ impl LinuxIntegrationRuntime {
         self.network_manager.start()?;
         self.mpris.start()?;
         self.power.start();
+        self.brightness.start();
         self.removable_mounts = Some(RemovableMountWorker::start());
         self.started = true;
         Ok(())
@@ -89,6 +97,7 @@ impl LinuxIntegrationRuntime {
     /// Stop publication and invalidate provider-local generations.
     pub fn stop(&mut self) {
         self.removable_mounts = None;
+        self.brightness.stop();
         self.power.stop();
         self.mpris.stop();
         self.network_manager.stop();
@@ -150,6 +159,18 @@ impl LinuxIntegrationRuntime {
         self.power.snapshot()
     }
 
+    /// Reads the panel backlight on demand; the generation only moves when the observed
+    /// percent changes, so a stale-key fence is stable between turns.
+    pub fn brightness_snapshot(&mut self) -> BrightnessSnapshot {
+        self.brightness.snapshot()
+    }
+
+    /// Routes one brightness action to the panel device.
+    pub fn set_brightness(&mut self, action: BrightnessAction) -> FlameResult<()> {
+        self.brightness
+            .set_percent(action.percent, action.generation)
+    }
+
     /// One CPU sample while the battery menu is open. Returns true when the published value changed.
     pub fn sample_power_cpu(&mut self) -> bool {
         self.power.sample_cpu()
@@ -183,6 +204,7 @@ impl LinuxIntegrationRuntime {
                 self.power.set_battery_menu_open(false);
                 Ok(())
             }
+            SystemAction::SetBrightness(action) => self.set_brightness(action),
             SystemAction::SetVolume(_) | SystemAction::SetMute(_) => {
                 Err(flamewm_api::FlameError::new(
                     flamewm_api::ErrorCode::Unsupported,

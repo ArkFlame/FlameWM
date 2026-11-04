@@ -12,7 +12,7 @@ use crate::storage::write_atomic_text;
 
 /// Every action the shortcut registry can bind is persistable; this allowlist used to lag it,
 /// so a file overriding e.g. `OpenTerminalSuper` was rejected as a whole.
-const KNOWN_HOTKEYS: [&str; 60] = crate::shortcuts::ACTIONS;
+const KNOWN_HOTKEYS: [&str; crate::shortcuts::ACTIONS.len()] = crate::shortcuts::ACTIONS;
 
 /// Generates `as_str` (wire text) and `parse` (wire text to variant) from one variant table.
 macro_rules! wire_enum {

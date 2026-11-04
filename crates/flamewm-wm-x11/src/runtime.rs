@@ -377,6 +377,7 @@ fn run_session(
                         | SystemAction::PlayPause { .. }
                         | SystemAction::Next { .. }
                         | SystemAction::Previous { .. }
+                        | SystemAction::SetBrightness(_)
                         | SystemAction::BatteryMenuOpened
                         | SystemAction::BatteryMenuClosed => integrations
                             .borrow_mut()
@@ -427,6 +428,10 @@ fn run_session(
                 }
                 let power = integrations.power_snapshot();
                 if host.system_mut().update_power(power) {
+                    emit_system_signals(host, control_for_hook.as_ref())?;
+                }
+                let brightness = integrations.brightness_snapshot();
+                if host.system_mut().update_brightness(brightness) {
                     emit_system_signals(host, control_for_hook.as_ref())?;
                 }
                 if reconciled {
@@ -524,7 +529,12 @@ fn run_session(
             if let Some(signal) = wm.take_switcher_signal() {
                 control_for_hook.emit_signal(&signal)?;
             }
-            flush_wm_changes(host, control_for_hook.as_ref(), changes)?;
+            flush_wm_changes(
+                host,
+                control_for_hook.as_ref(),
+                &integrations_for_hook,
+                changes,
+            )?;
             let areas = host.output_work_areas();
             let mut wait =
                 crate::wm::next_wait_timeout(now_ms, host.display_transaction_deadline_ms());
@@ -629,6 +639,7 @@ fn sync_snap_preview_opacity(snapshot: &SettingsSnapshot) {
 fn flush_wm_changes<E>(
     host: &mut PlatformHost<E>,
     control: &ControlServer,
+    integrations: &RefCell<LinuxIntegrationRuntime>,
     mut changes: WmChangeSet,
 ) -> Result<(), AnyError>
 where
@@ -639,6 +650,7 @@ where
     let start_menu_toggle = std::mem::take(&mut changes.start_menu_toggle);
     let launcher_toggle = std::mem::take(&mut changes.launcher_toggle);
     let media_audio_key = changes.media_audio_key.take();
+    let media_brightness_key = changes.media_brightness_key.take();
     for signal in collect_wm_signals(host, changes).map_err(any_from_flame)? {
         control.emit_signal(&signal).map_err(any_from_flame)?;
     }
@@ -656,6 +668,18 @@ where
         // A rejected write (stale generation, no sink, Pulse down) must not stop the WM.
         if let Err(error) = host.media_audio_key(key, crate::live_settings::volume_cap_percent()) {
             eprintln!("flamewm: media key {key:?} was not applied: {error:?}");
+        }
+    }
+    if let Some(key) = media_brightness_key {
+        match host.media_brightness_key(key) {
+            // Publish the observed backlight in the same turn so the brightness OSD shows now.
+            Ok(()) => {
+                let brightness = integrations.borrow_mut().brightness_snapshot();
+                if host.system_mut().update_brightness(brightness) {
+                    emit_system_signals(host, control)?;
+                }
+            }
+            Err(error) => eprintln!("flamewm: brightness key {key:?} was not applied: {error:?}"),
         }
     }
     Ok(())
@@ -1253,6 +1277,7 @@ mod tests {
             start_menu_toggle: false,
             launcher_toggle: false,
             media_audio_key: None,
+            media_brightness_key: None,
         }
     }
 

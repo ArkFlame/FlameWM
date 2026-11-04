@@ -33,8 +33,10 @@ pub const ASSISTANT_CHORDS: [(&str, &str); 2] = [
 pub const ACTION_VOLUME_UP: &str = "VolumeUp";
 pub const ACTION_VOLUME_DOWN: &str = "VolumeDown";
 pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
+pub const ACTION_BRIGHTNESS_UP: &str = "BrightnessUp";
+pub const ACTION_BRIGHTNESS_DOWN: &str = "BrightnessDown";
 
-pub const ACTIONS: [&str; 60] = [
+pub const ACTIONS: [&str; 62] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_LAUNCHER,
     ACTION_WORKSPACE_LEFT,
@@ -87,6 +89,8 @@ pub const ACTIONS: [&str; 60] = [
     ACTION_VOLUME_UP,
     ACTION_VOLUME_DOWN,
     ACTION_VOLUME_MUTE,
+    ACTION_BRIGHTNESS_UP,
+    ACTION_BRIGHTNESS_DOWN,
     ACTION_OPEN_FILES_SUPER,
     ACTION_OPEN_FILES_CTRL_ALT,
     ACTION_OPEN_TERMINAL_SUPER,
@@ -341,6 +345,14 @@ impl Default for ShortcutRegistry {
                 ACTION_VOLUME_MUTE.to_owned(),
                 KeyBinding::assigned("XF86AudioMute"),
             ),
+            (
+                ACTION_BRIGHTNESS_UP.to_owned(),
+                KeyBinding::assigned("XF86MonBrightnessUp"),
+            ),
+            (
+                ACTION_BRIGHTNESS_DOWN.to_owned(),
+                KeyBinding::assigned("XF86MonBrightnessDown"),
+            ),
         ]);
         Self {
             bindings: defaults.clone(),
@@ -538,7 +550,7 @@ mod tests {
 
     #[test]
     fn launcher_is_a_registered_action_with_super_space_default() {
-        assert_eq!(ACTIONS.len(), 60);
+        assert_eq!(ACTIONS.len(), 62);
         assert!(ACTIONS.contains(&ACTION_LAUNCHER));
         let defaults = ShortcutRegistry::default();
         assert_eq!(
@@ -662,6 +674,16 @@ mod tests {
             registry.binding(ACTION_VOLUME_MUTE),
             Some(&KeyBinding::assigned("XF86AudioMute"))
         );
+        assert_eq!(
+            registry.binding(ACTION_BRIGHTNESS_UP),
+            Some(&KeyBinding::assigned("XF86MonBrightnessUp"))
+        );
+        assert_eq!(
+            registry.binding(ACTION_BRIGHTNESS_DOWN),
+            Some(&KeyBinding::assigned("XF86MonBrightnessDown"))
+        );
+        assert!(ACTIONS.contains(&ACTION_BRIGHTNESS_UP));
+        assert!(ACTIONS.contains(&ACTION_BRIGHTNESS_DOWN));
         assert_eq!(
             registry.binding(ACTION_SESSION_LOCK),
             Some(&KeyBinding::assigned("Super+L"))

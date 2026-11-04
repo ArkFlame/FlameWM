@@ -1,8 +1,8 @@
 use super::*;
 use flamewm_api::settings::SettingValue;
 use flamewm_api::system::{
-    AudioSnapshot, MediaSnapshot, NetworkAccessPointSnapshot, NetworkKind, NetworkSnapshot,
-    PlaybackState, ServiceAvailability,
+    AudioSnapshot, BrightnessAction, BrightnessSnapshot, MediaSnapshot, NetworkAccessPointSnapshot,
+    NetworkKind, NetworkSnapshot, PlaybackState, ServiceAvailability,
 };
 
 fn assert_request_round_trip(request: &ControlRequest) -> WireCall {
@@ -470,7 +470,25 @@ fn system_fixture() -> SystemSnapshot {
             cpu_percent: Some(13),
             power_rate_mw: Some(12340),
         },
+        brightness: BrightnessSnapshot {
+            availability: ServiceAvailability::Available,
+            generation: 4,
+            percent: 70,
+        },
     }
+}
+
+#[test]
+fn brightness_snapshot_round_trips_and_old_peers_decode_to_default() {
+    let source = system_fixture();
+    let dict = system_dict(&source);
+    assert_eq!(system_snapshot(&dict).expect("decode"), source);
+
+    let mut legacy = system_dict(&source);
+    legacy.retain(|key, _| !key.starts_with("brightness"));
+    let decoded = system_snapshot(&legacy).expect("older peer must decode");
+    assert_eq!(decoded.brightness, BrightnessSnapshot::default());
+    assert_eq!(decoded.power, source.power);
 }
 
 #[test]
@@ -655,6 +673,29 @@ fn audio_target_actions_round_trip_with_identity_and_generations() {
         };
         assert_request_round_trip(&request);
     }
+}
+
+#[test]
+fn brightness_action_round_trips_and_rejects_a_percent_above_100() {
+    let request = ControlRequest::SystemAction {
+        action: SystemAction::SetBrightness(BrightnessAction {
+            percent: 65,
+            generation: 4,
+        }),
+        expected_revision: 9,
+    };
+    let call = assert_request_round_trip(&request);
+    assert_eq!(call.member, "SetBrightness");
+
+    let out_of_range = WireCall::new(
+        IFACE_SYSTEM,
+        "SetBrightness",
+        vec![WireValue::U32(101), WireValue::U64(4), WireValue::U64(9)],
+    );
+    assert_eq!(
+        decode_call(&out_of_range).expect_err("out of range").code,
+        ErrorCode::InvalidArgument
+    );
 }
 
 #[test]
