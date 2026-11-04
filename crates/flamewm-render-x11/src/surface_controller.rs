@@ -432,6 +432,13 @@ impl SurfaceController {
                 instance.app.window,
             )
         };
+        // A shown popup may have been covered by a managed frame since it was mapped: the WM
+        // raises frames on focus/manage and does not track override-redirect menus. Raise it
+        // before any early return so every show call restores the popup-above-frame invariant.
+        // The first-show path raises again after the map, where the taskbars must stay above it.
+        if shown && surface_role_needs_popup_raise(role) {
+            raise_above_taskbars(display, window, &taskbars);
+        }
         if !shown {
             // Before any paint or map: the root under the unmapped popup is still clean.
             if let Err(error) = self.install_popup_backdrop(id) {

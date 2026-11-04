@@ -55,6 +55,12 @@ impl<C: Connection> Wm<'_, C> {
             Event::FocusOut(_) => self.super_tap.focus_lost(),
             Event::MotionNotify(event) => self.handle_motion(event)?,
             Event::PropertyNotify(event) => self.handle_property(event.window, event.atom)?,
+            // The WM owns the client's corner mask; a client that shapes itself must not keep it.
+            Event::ShapeNotify(event)
+                if event.shape_kind == x11rb::protocol::shape::SK::BOUNDING =>
+            {
+                self.handle_client_shape(event.affected_window)?;
+            }
             Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => {
                 self.display_topology_dirty.mark();
             }

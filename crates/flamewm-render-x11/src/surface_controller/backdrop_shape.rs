@@ -44,6 +44,38 @@ pub(super) fn round_backdrop_words(words: &mut [u32], width: u32, height: u32, r
     }
 }
 
+/// Whether `rect` lies fully inside the root. A read outside the root would make `XGetImage`
+/// fail; the caller then keeps the desktop-layer fallback.
+pub(super) fn rect_inside_root(rect: (i32, i32, u32, u32), root: (u32, u32)) -> bool {
+    let (x, y, width, height) = rect;
+    width > 0
+        && height > 0
+        && x >= 0
+        && y >= 0
+        && i64::from(x) + i64::from(width) <= i64::from(root.0)
+        && i64::from(y) + i64::from(height) <= i64::from(root.1)
+}
+
+/// Choose the popup backdrop source: the captured screen under the popup wins; only a failed or
+/// empty capture falls back to the desktop layer. Pure so the selection is testable without X.
+pub(super) fn popup_backdrop_words(
+    capture: Option<crate::backdrop::BackdropCapture>,
+    fallback: impl FnOnce() -> Option<Vec<u32>>,
+    opacity: u8,
+    blur: u8,
+) -> Option<Vec<u32>> {
+    match capture {
+        Some(capture) => Some(crate::backdrop::blurred_argb_words(
+            capture.width,
+            capture.height,
+            capture.pixels,
+            opacity,
+            blur,
+        )),
+        None => fallback(),
+    }
+}
+
 impl SurfaceController {
     /// Sets (or clears with `None`) the `(opacity, blur)` percents of the backdrop installed for
     /// the popup's next first show. Opaque popups (`opacity >= 100`) install none.
@@ -90,9 +122,42 @@ impl SurfaceController {
         Some(desktop.crop(root, &outputs, rect, opacity, blur))
     }
 
-    /// Installs the desktop layer under an unmapped popup's translucent fills, rounded to its
-    /// shape. The root is never read: what is behind a popup is the desktop layer, like every
-    /// other translucent surface. Without a desktop source the popup stays solid colour.
+    /// One root readback of the popup rect, only on first show. `capture_drawable_rect` allocates
+    /// exactly `width * height * 4` RGBA bytes; `blurred_argb_words` consumes that buffer (and any
+    /// downscaled copy) and returns the ARGB words uploaded by `set_surface_backdrop`. The words
+    /// are dropped after the upload, so neither buffer outlives this call.
+    fn capture_popup_rect(
+        &self,
+        rect: (i32, i32, u32, u32),
+    ) -> Option<crate::backdrop::BackdropCapture> {
+        if !rect_inside_root(rect, self.root_geometry()) {
+            return None;
+        }
+        // The controller owns a live display and the rect is fully inside the root.
+        crate::backdrop::capture_drawable_rect(self.display, self.root_window(), rect).ok()
+    }
+
+    /// Real screen under the popup, blurred like the desktop layer. A failed capture falls back
+    /// to the cached desktop layer unchanged.
+    fn popup_backdrop_for(
+        &mut self,
+        rect: (i32, i32, u32, u32),
+        opacity: u8,
+        blur: u8,
+    ) -> Option<Vec<u32>> {
+        let capture = self.capture_popup_rect(rect);
+        popup_backdrop_words(
+            capture,
+            || self.desktop_backdrop(rect, opacity, blur),
+            opacity,
+            blur,
+        )
+    }
+
+    /// Installs the real screen under an unmapped popup's translucent fills, rounded to its shape.
+    /// The popup is still unmapped here, so one root readback of exactly the popup rect is what
+    /// lies behind it. Capture failure (or a rect outside the root) keeps the desktop-layer
+    /// fallback.
     pub(super) fn install_popup_backdrop(&mut self, id: SurfaceId) -> Result<(), String> {
         let Some((opacity, blur)) = self.instance_mut(id)?.popup_backdrop else {
             return Ok(());
@@ -100,7 +165,7 @@ impl SurfaceController {
         let rect = self.surface_device_rect(id)?;
         let (width, height) = (rect.width as u32, rect.height as u32);
         let words = if opacity < 100 && width > 0 && height > 0 {
-            self.desktop_backdrop((rect.x as i32, rect.y as i32, width, height), opacity, blur)
+            self.popup_backdrop_for((rect.x as i32, rect.y as i32, width, height), opacity, blur)
         } else {
             None
         };

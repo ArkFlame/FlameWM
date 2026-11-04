@@ -250,6 +250,7 @@ impl<C: Connection> Wm<'_, C> {
             width: cw.min(u32::from(u16::MAX)) as u16,
             height: ch.min(u32::from(u16::MAX)) as u16,
         }];
+        let mut applied = None;
         if (radius > 0 || ring > 0) && cw > 0 && ch > 0 {
             // Sampled from the frame's own mask so the bottom arcs coincide instead of drifting
             // one row above them. `titlebar_h == 0` also rounds the client's top corners.
@@ -281,6 +282,7 @@ impl<C: Connection> Wm<'_, C> {
                 &mask,
             )?;
             self.rounded_clients.insert(client);
+            applied = self.client_bounding_region(client);
         } else if self.rounded_clients.remove(&client) {
             // Restore the unshaped client when the decoration turns square.
             self.conn.shape_rectangles(
@@ -292,11 +294,59 @@ impl<C: Connection> Wm<'_, C> {
                 0,
                 &full,
             )?;
+            applied = self.client_bounding_region(client);
         }
         if let Some(state) = self.clients.values_mut().find(|c| c.frame == frame) {
+            // Record the region the server actually stored: a `ShapeNotify` carrying it came from
+            // this write, so `handle_client_shape` ignores it instead of re-applying in a loop.
+            if applied.is_some() {
+                state.client_shape = applied;
+            }
             state.shaped = Some(key);
         }
         Ok(())
+    }
+
+    /// A managed client replaced its own `XShape` bounding region after the WM installed the corner
+    /// mask. The mask is the WM's: a shape-backed client (one that shapes its own top-level window
+    /// on its first draw) would otherwise silently cover the frame's bottom arc, and the
+    /// `ManagedClient::shaped` cache would keep every later apply from restoring it. A region that
+    /// is not the one the WM wrote is therefore re-asserted.
+    pub(super) fn handle_client_shape(&mut self, window: Window) -> Result<(), ReplyError> {
+        let Some(state) = self.clients.get(&window) else {
+            // Frame windows and unmanaged clients are not observed.
+            return Ok(());
+        };
+        let (frame, outer, rounded) = (state.frame, state.outer, state.has_rounded_frame());
+        let Some(live) = self.client_bounding_region(window) else {
+            return Ok(());
+        };
+        if !crate::frame::geometry_shape::client_shape_needs_reassert(
+            state.client_shape.as_deref(),
+            &live,
+        ) {
+            return Ok(());
+        }
+        if let Some(state) = self.clients.get_mut(&window) {
+            state.shaped = None;
+        }
+        self.clear_frame_shape(frame, outer, rounded)
+    }
+
+    /// The client's live bounding region as the server normalised it. `None` when the window is
+    /// gone or the request fails, so a destroyed client never fails an event dispatch.
+    fn client_bounding_region(
+        &self,
+        window: Window,
+    ) -> Option<Vec<x11rb::protocol::xproto::Rectangle>> {
+        use x11rb::protocol::shape::SK as ShapeSk;
+        let reply = self
+            .conn
+            .shape_get_rectangles(window, ShapeSk::BOUNDING)
+            .ok()?
+            .reply()
+            .ok()?;
+        Some(reply.rectangles)
     }
 
     /// Native EWMH icon only. A missing/invalid native property leaves an

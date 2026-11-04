@@ -78,8 +78,9 @@ impl Default for ChromeTokens {
     }
 }
 
-/// Corner radius for a frame: 0 unless the window is rounded-eligible
-/// (`Floating` or snapped; the caller passes that flag).
+/// Corner radius for a frame: 0 unless the window is floating. The caller owns the placement
+/// policy and passes it as `floating`; every layout state (snapped, maximized, fullscreen) is
+/// square, and `Squared` is square in every state.
 #[must_use]
 pub const fn corner_radius(floating: bool, style: DecorationStyle) -> u16 {
     if !floating {

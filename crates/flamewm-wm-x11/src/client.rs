@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use x11rb::protocol::xproto::Window;
+use x11rb::protocol::xproto::{Rectangle, Window};
 
 use crate::chrome::IconImage;
 use crate::classifier::WindowKind;
@@ -58,6 +58,10 @@ pub struct ManagedClient {
     /// Inputs of the last frame shape applied; `None` until first shaped.
     /// Skips the shape requests while the inputs are unchanged.
     pub shaped: Option<ShapeKey>,
+    /// Bounding region the WM last installed on the *client* window, as the server normalised it.
+    /// The client owns its own `XShape` too, so this is what tells a `ShapeNotify` caused by the
+    /// WM's write apart from one where the client replaced the corner mask.
+    pub client_shape: Option<Vec<Rectangle>>,
     /// Input-child placements last configured; `None` until first laid out.
     pub input_layout: Option<[crate::wm::lifecycle::ChildPlacement; 12]>,
 }
@@ -106,7 +110,8 @@ impl ManagedClient {
         self.placement.mode == PlacementMode::Floating
     }
 
-    /// Rounded frame mask, glass corner radius: floating and snapped windows.
+    /// Corner radius eligibility: only a floating window keeps the rounded frame mask and glass.
+    /// Layout states are square (see [`PlacementMode::rounded_frame`]).
     #[must_use]
     pub fn has_rounded_frame(&self) -> bool {
         self.placement.mode.rounded_frame()
@@ -189,6 +194,7 @@ mod tests {
             hover_control: None,
             decoration: Decoration::Server,
             shaped: None,
+            client_shape: None,
             input_layout: None,
         };
         assert!(!client.is_maximized());

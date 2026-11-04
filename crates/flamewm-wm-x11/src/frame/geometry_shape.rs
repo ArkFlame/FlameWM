@@ -7,7 +7,7 @@
 //! over safe `x11rb` rectangles; the live mask apply lives in `render-x11`'s
 //! `XShape` bridge.
 
-use flamewm_render_x11::external_rounded_row_inset;
+use flamewm_render_x11::{external_rounded_row_inset, external_rounded_row_inset_bottom};
 use flamewm_skin::recipes::decoration::{DecorationStyle, corner_radius};
 
 use x11rb::protocol::xproto::Rectangle;
@@ -95,6 +95,33 @@ fn rounded_mask_spans_with_inset(
     spans
 }
 
+/// Bottom-only row spans: the top edge is square (the titlebar band is above it), the bottom
+/// corners follow the same shared formula. `inset_policy` keeps the frame-band fallback's extra
+/// corner pixel when no outline is drawn.
+fn bottom_rounded_mask_spans(
+    width: u32,
+    height: u32,
+    radius: u32,
+    inset_policy: impl Fn(u32) -> u32,
+) -> Vec<(u32, u32, u32)> {
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+    if radius <= 1 {
+        return (0..height).map(|row| (row, 0, width)).collect();
+    }
+    (0..height)
+        .map(|row| {
+            let inset = inset_policy(external_rounded_row_inset_bottom(
+                width, height, radius, row,
+            ));
+            let start = inset.min(width);
+            let end = width.saturating_sub(inset).max(start);
+            (row, start, end)
+        })
+        .collect()
+}
+
 /// Bounding rectangles for a frame outer: a single rect unless `floating`
 /// (skin radius), otherwise the canonical rounded row spans.
 #[must_use]
@@ -149,28 +176,44 @@ pub fn bounding_rectangles_with_titlebar(
         .collect()
 }
 
-/// Client shape inside the frame's outline band, sampled from the frame's own mask.
+/// Whether a client's live bounding region means the WM has to re-assert its corner mask.
 ///
-/// The client is the square child that actually shows pixels at the bottom edge, so its mask has to
-/// follow the same arc rows the frame uses; deriving the arc from the client's own height samples
-/// the curve one row too high and leaves the bottom-left/bottom-right corner visibly square (or a
-/// pixel wide) next to the antialiased top corners. Rows are taken from the frame's spans for the
-/// *frame* and mapped into client coordinates by subtracting the titlebar band, so nothing can
-/// drift between the two masks.
+/// The WM records the region the server stored after its own write (`applied`), so a `ShapeNotify`
+/// that still shows that region was caused by the WM itself and re-applying would loop. `None`
+/// (the WM never shaped this client) never matches a live region, so the mask is installed.
+#[must_use]
+pub fn client_shape_needs_reassert(applied: Option<&[Rectangle]>, live: &[Rectangle]) -> bool {
+    applied.is_none_or(|applied| !same_region(applied, live))
+}
+
+/// Rectangle-list equality: `x11rb::protocol::xproto::Rectangle` carries no `PartialEq`.
+fn same_region(a: &[Rectangle], b: &[Rectangle]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(a, b)| (a.x, a.y, a.width, a.height) == (b.x, b.y, b.width, b.height))
+}
+
+/// Client shape inside the frame's outline band.
 ///
-/// `inset` is the outline band the client window is placed inside (frame-band path): the band lies
-/// outside the client window, so the window itself keeps the ring uncovered whatever shape the
-/// application installs later. `ring` is the band that is still *inside* the client window (a
-/// client-side frame whose frame rect equals the client rect), and is 0 for every server frame.
+/// The client window is placed at `(inset, titlebar)` with size `(frame_w - 2*inset,
+/// frame_h - titlebar - inset)`. In the frame-band path (`inset > 0`) the visible client region is
+/// the frame's rounded region eroded by that band, so the mask is expressed directly in
+/// client-local coordinates: a rect `(0, 0, client_w, client_h)` whose top corners are square
+/// (the titlebar band is above it) and whose bottom corners use `radius - inset - ring`. Mapping
+/// the frame's arc rows into client coordinates instead keeps the frame's arc start on corner
+/// rows; the client's corner then sits on the ring and covers it at the bottom arc.
 ///
-/// `titlebar_h == 0` means the client covers the whole frame height, so it also carries the top
-/// arc. On a square frame the result is one full rectangle inset by `ring`, or the full client
-/// rect when `ring == 0`.
+/// `inset == 0` is the compositing-overlay path (the client keeps its full frame rect and the ring
+/// is raised above it) and the client-side-frame path (`ring` is the band reserved inside the
+/// client's own rect). That path still samples the frame's own mask rows and stays byte-identical:
+/// the overlay and client-side shapes were already correct.
 ///
-/// `exact_arc` picks the frame's span owner: `false` uses [`rounded_mask_spans`] (the frame-band
-/// fallback keeps its extra corner pixel while no outline is drawn), `true` uses
-/// [`rounded_mask_spans_exact`] (an outline is drawn, so the client starts on the exact arc the
-/// ring covers).
+/// `exact_arc` picks the frame's span owner for the `inset == 0` path: `false` uses
+/// [`rounded_mask_spans`] (the frame-band fallback keeps its extra corner pixel while no outline
+/// is drawn), `true` uses [`rounded_mask_spans_exact`] (an outline is drawn, so the client starts
+/// on the exact arc the ring covers). The frame-band path applies the same policy to its
+/// bottom-only arc.
 #[must_use]
 pub fn client_rounded_rectangles(
     frame_width: u32,
@@ -201,6 +244,35 @@ pub fn client_rounded_rectangles(
                 .min(u32::from(u16::MAX)) as u16,
             height: rows.min(u32::from(u16::MAX)) as u16,
         }];
+    }
+    if inset > 0 {
+        // Frame-band path: erode the frame's rounded region by the band (and by `ring` when a
+        // client-side frame still reserves one) and shape the client in its own coordinates.
+        let eroded_radius = radius.saturating_sub(inset).saturating_sub(ring);
+        let width = client_w.saturating_sub(ring.saturating_mul(2));
+        let spans = if titlebar > 0 {
+            bottom_rounded_mask_spans(width, rows, eroded_radius, |corner| {
+                if exact_arc {
+                    corner
+                } else {
+                    corner_edge_inset(corner)
+                }
+            })
+        } else if exact_arc {
+            rounded_mask_spans_exact(width, rows, eroded_radius)
+        } else {
+            rounded_mask_spans(width, rows, eroded_radius)
+        };
+        return spans
+            .into_iter()
+            .map(|(row, start, end)| Rectangle {
+                x: i16::try_from(start.saturating_add(ring).min(u32::from(u16::MAX)))
+                    .unwrap_or(i16::MAX),
+                y: i16::try_from(row.min(u32::from(u16::MAX))).unwrap_or(i16::MAX),
+                width: end.saturating_sub(start).min(u32::from(u16::MAX)) as u16,
+                height: 1,
+            })
+            .collect();
     }
     let spans = if exact_arc {
         rounded_mask_spans_exact(frame_width, frame_height, radius)
@@ -319,41 +391,84 @@ mod tests {
         assert_eq!((middle.x, middle.width), (0, cw as u16));
     }
 
-    /// The client mask must be the frame mask shifted by the titlebar band: any drift here is
-    /// exactly what makes the bottom corners look square while the top corners are rounded. The
-    /// client window sits `t` px inside the frame, so its local rows are the frame rows minus the
-    /// titlebar band, and its local columns are the frame arc minus the band on both sides.
+    /// Frame-band path: the client mask is the frame region eroded by the band, expressed in
+    /// client-local coordinates. Its top corners are square (the titlebar band is above it) and
+    /// its bottom arc uses `radius - t`, so it cannot sit on the frame's arc rows and cover the
+    /// ring.
     #[test]
-    fn client_mask_rows_match_the_frame_mask_rows() {
+    fn frame_band_client_mask_is_the_eroded_frame_rect() {
         let (frame_w, frame_h, titlebar, radius, t) = (200_u32, 151_u32, 31_u16, 12_u32, 1_u32);
-        let frame = rounded_mask_spans_exact(frame_w, frame_h, radius);
+        let client_w = frame_w - 2 * t;
+        let client_h = frame_h - u32::from(titlebar) - t;
+        let eroded_radius = radius - t;
         let client = client_rounded_rectangles(frame_w, frame_h, titlebar, radius, t, 0, true);
         assert_eq!(
             client.len(),
-            usize::try_from(frame_h - u32::from(titlebar) - t).unwrap()
+            usize::try_from(client_h).unwrap(),
+            "one rect per client row"
         );
-        for (index, rect) in client.iter().enumerate() {
-            let (_, frame_start, frame_end) =
-                frame[usize::try_from(u32::from(titlebar)).unwrap() + index];
-            assert_eq!(
-                i32::from(rect.y),
-                index as i32,
-                "client rows stay contiguous"
-            );
-            assert_eq!(
-                i32::from(rect.x),
-                i32::try_from(frame_start).unwrap(),
-                "row {index}: the client starts on the frame arc, one band inside the frame edge"
-            );
-            assert_eq!(
-                i32::from(rect.x) + i32::from(rect.width),
-                i32::try_from(frame_end.saturating_sub(t * 2)).unwrap(),
-                "row {index}: the right edge stops one band inside the frame arc"
-            );
+        // The client's top edge is under the titlebar, so its top rows are full width.
+        assert_eq!(
+            (client[0].x, client[0].width),
+            (0, client_w as u16),
+            "top edge is square"
+        );
+        // The bottom arc is the frame arc shifted inward by the band.
+        let last = client[usize::try_from(client_h).unwrap() - 1];
+        let inset =
+            external_rounded_row_inset_bottom(client_w, client_h, eroded_radius, client_h - 1);
+        assert_eq!(i32::from(last.x), i32::try_from(inset).unwrap());
+        assert_eq!(
+            i32::from(last.x) + i32::from(last.width),
+            i32::try_from(client_w - inset).unwrap()
+        );
+        assert!(inset > 0, "the bottom corner must be cut: {last:?}");
+        let middle = client[usize::try_from(client_h / 2).unwrap()];
+        assert_eq!(
+            (middle.x, middle.width),
+            (0, client_w as u16),
+            "straight rows cover the whole client window"
+        );
+    }
+
+    /// Regression: the ring is painted on the frame's outermost antialiased arc. The client mask
+    /// must leave every bottom-arc ring pixel outside the client window; the old frame-row mapping
+    /// put the client's corner on the arc and hid the ring at both bottom corners.
+    #[test]
+    fn frame_band_client_mask_never_covers_the_bottom_arc_ring() {
+        for (frame_w, frame_h, titlebar, radius, t) in [
+            (200_u32, 151_u32, 31_u16, 12_u32, 1_u32),
+            (1217, 525, 42, 16, 1),
+            (320, 240, 31, 12, 2),
+        ] {
+            let client_w = frame_w - 2 * t;
+            let client_h = frame_h - u32::from(titlebar) - t;
+            let client = client_rounded_rectangles(frame_w, frame_h, titlebar, radius, t, 0, true);
+            for y in frame_h.saturating_sub(radius)..frame_h {
+                for x in 0..frame_w {
+                    if flamewm_render_core::outline::ring_coverage(
+                        frame_w, frame_h, radius, t, x, y,
+                    ) == 0
+                    {
+                        continue;
+                    }
+                    let local_x = x as i32 - t as i32;
+                    let local_y = y as i32 - i32::from(titlebar);
+                    if local_x < 0
+                        || local_y < 0
+                        || local_x >= client_w as i32
+                        || local_y >= client_h as i32
+                    {
+                        continue;
+                    }
+                    assert!(
+                        !covers(&client, local_x, local_y),
+                        "ring pixel ({x},{y}) is covered by the client mask \
+                         (frame {frame_w}x{frame_h}, titlebar {titlebar}, radius {radius}, band {t})"
+                    );
+                }
+            }
         }
-        let last = client.last().expect("client rows");
-        assert!(last.x > 1, "bottom-left corner is not cut: {last:?}");
-        assert!(last.width < 198, "bottom-right corner is not cut");
     }
 
     /// Without a titlebar band the client covers the frame, so it carries both arcs.
@@ -376,6 +491,118 @@ mod tests {
         let squared = client_rounded_rectangles(200, 120, 0, 0, 1, 0, false);
         assert_eq!(squared.len(), 1);
         assert_eq!((squared[0].x, squared[0].width), (0, 198));
+    }
+
+    /// Regression: the mask the manage sequence installs on the client window is the rounded arc,
+    /// never the single full rect the live run showed (`(0,0,1215,493)` for the explorer frame
+    /// 1217x525, 31px titlebar, radius 12, 1px outline band).
+    #[test]
+    fn manage_time_client_mask_is_not_a_single_full_rect() {
+        let outer = Rect {
+            x: 0,
+            y: 0,
+            width: 1217,
+            height: 525,
+        };
+        let (titlebar, band) = (31u16, 1u32);
+        let radius = u32::from(scaled_corner_radius(
+            true,
+            DecorationStyle::Rounded,
+            titlebar,
+        ));
+        assert_eq!(radius, 12, "floating Rounded keeps the skin radius");
+        let mask =
+            client_rounded_rectangles(outer.width, outer.height, titlebar, radius, band, 0, true);
+        let (cw, ch) = client_area_size(outer, titlebar, band as u16);
+        assert_eq!((cw, ch), (1215, 493));
+        assert!(mask.len() > 1, "one rect per client row: {mask:?}");
+        assert!(
+            !(mask.len() == 1
+                && mask[0].x == 0
+                && u32::from(mask[0].width) == cw
+                && u32::from(mask[0].height) == ch),
+            "the client must not keep the full rect"
+        );
+        let last = mask.last().expect("client rows");
+        assert!(
+            last.x > 0 && i32::from(last.x) + i32::from(last.width) < cw as i32,
+            "the bottom row must be cut on both sides: {last:?}"
+        );
+    }
+
+    /// Regression: a client that shapes its own window replaces the WM mask, and the applied-key
+    /// cache kept every later apply from restoring it. Only a region that differs from the one the
+    /// WM wrote needs a re-assert, so the WM's own writes cannot re-enter the apply.
+    #[test]
+    fn client_shape_reassert_only_when_the_client_replaced_the_mask() {
+        let mask = client_rounded_rectangles(1217, 525, 31, 12, 1, 0, true);
+        let full = vec![Rectangle {
+            x: 0,
+            y: 0,
+            width: 1215,
+            height: 493,
+        }];
+        // The live failure: the client installed its own full rect over the mask.
+        assert!(client_shape_needs_reassert(Some(&mask), &full));
+        // A client the WM never shaped is still masked when it first shapes itself.
+        assert!(client_shape_needs_reassert(None, &full));
+        // The region the WM itself wrote comes back as a notification: no re-apply, no loop.
+        assert!(!client_shape_needs_reassert(Some(&full), &full));
+        assert!(!client_shape_needs_reassert(Some(&mask), &mask));
+    }
+
+    /// A window in a layout state keeps the outline but draws it as a plain rectangular border:
+    /// the radius is 0, the frame region is the full rect, the client keeps its full rect and the
+    /// ring covers every outermost pixel on all four edges.
+    #[test]
+    fn layout_states_keep_square_corners_and_a_rectangular_ring() {
+        let outer = Rect {
+            x: 0,
+            y: 0,
+            width: 1217,
+            height: 525,
+        };
+        let (titlebar, band) = (31u16, 1u32);
+        let radius = u32::from(scaled_corner_radius(
+            false,
+            DecorationStyle::Rounded,
+            titlebar,
+        ));
+        assert_eq!(radius, 0, "a layout state is square");
+        let frame = bounding_rectangles_with_titlebar(
+            outer,
+            false,
+            DecorationStyle::Rounded,
+            titlebar,
+            true,
+        );
+        assert_eq!(frame.len(), 1, "frame region is one rect: {frame:?}");
+        assert_eq!(
+            (frame[0].x, frame[0].y, frame[0].width, frame[0].height),
+            (0, 0, 1217, 525)
+        );
+        let client =
+            client_rounded_rectangles(outer.width, outer.height, titlebar, radius, band, 0, true);
+        assert_eq!(client.len(), 1, "square client keeps its full rect");
+        assert_eq!(
+            (client[0].x, client[0].width, client[0].height),
+            (0, 1215, 493)
+        );
+        for (x, y) in [(600, 0), (600, 524), (0, 300), (1216, 300)] {
+            assert_eq!(
+                flamewm_render_core::outline::ring_coverage(outer.width, outer.height, 0, 1, x, y),
+                255,
+                "edge pixel ({x},{y}) is part of the rectangular border"
+            );
+        }
+        assert_eq!(
+            flamewm_render_core::outline::ring_coverage(outer.width, outer.height, 0, 1, 600, 300),
+            0,
+            "the interior stays empty"
+        );
+        let strips =
+            flamewm_render_core::outline::outline_strips(1217, 525, 0, 1, 0x00ff_ffff, 255);
+        assert_eq!(strips.len(), 4, "top, bottom, left and right bands");
     }
 
     /// The exact spans are the float mask alone: no `corner_edge_inset` extra pixel anywhere.

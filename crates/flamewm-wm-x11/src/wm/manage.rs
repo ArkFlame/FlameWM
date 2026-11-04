@@ -326,6 +326,10 @@ impl<C: Connection> Wm<'_, C> {
                 &ChangeWindowAttributesAux::new()
                     .event_mask(EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY),
             )?;
+            // Observe the client's own shape writes: the WM installs the corner mask on the
+            // client window (see `clear_frame_shape`), and a client that shapes itself must not
+            // silently replace it.
+            self.conn.shape_select_input(window, true)?;
             // Click-to-focus: a sync passive grab sees presses inside the client area;
             // handle_client_press focuses and then replays the press to the client.
             self.conn.grab_button(
@@ -407,6 +411,7 @@ impl<C: Connection> Wm<'_, C> {
             hover_control: None,
             decoration,
             shaped: None,
+            client_shape: None,
             input_layout: None,
         };
         self.frame_to_client.insert(frame, window);

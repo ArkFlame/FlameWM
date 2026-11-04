@@ -1020,6 +1020,37 @@ mod slide_motion_tests {
 }
 
 #[cfg(test)]
+mod popup_backdrop_selection_tests {
+    use super::backdrop_shape::{popup_backdrop_words, rect_inside_root};
+    use crate::backdrop::BackdropCapture;
+
+    #[test]
+    fn popup_backdrop_prefers_the_captured_screen() {
+        let capture = BackdropCapture {
+            width: 1,
+            height: 1,
+            pixels: vec![0x11, 0x22, 0x33, 0xff],
+        };
+        let words = popup_backdrop_words(Some(capture), || Some(vec![0xffaa_bbcc]), 100, 0);
+        assert_eq!(words, Some(vec![0xff11_2233]));
+    }
+
+    #[test]
+    fn popup_backdrop_falls_back_to_the_desktop_layer_on_capture_failure() {
+        let words = popup_backdrop_words(None, || Some(vec![0xffaa_bbcc]), 100, 0);
+        assert_eq!(words, Some(vec![0xffaa_bbcc]));
+    }
+
+    #[test]
+    fn popup_capture_rejects_a_rect_outside_the_root() {
+        assert!(rect_inside_root((0, 0, 10, 10), (10, 10)));
+        assert!(!rect_inside_root((-1, 0, 10, 10), (10, 10)));
+        assert!(!rect_inside_root((5, 0, 10, 10), (10, 10)));
+        assert!(!rect_inside_root((0, 0, 0, 10), (10, 10)));
+    }
+}
+
+#[cfg(test)]
 mod slide_exit_shape_regression {
     #[test]
     fn clipped_and_full_shapes_share_mask_owner() {

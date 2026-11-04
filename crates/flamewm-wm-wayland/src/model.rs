@@ -96,6 +96,17 @@ pub enum Mode {
     Fullscreen,
 }
 
+impl Mode {
+    /// Whether the window takes the configured corner radius: only a floating (`Normal`) window
+    /// does. Every layout state (snapped, maximized, fullscreen) is square. Single owner of that
+    /// policy for the compositor: the titlebar arc, the client clip radii and the outline ring all
+    /// derive their radius from it.
+    #[must_use]
+    pub const fn rounded_frame(self) -> bool {
+        matches!(self, Self::Normal)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Managed {
     pub id: WindowId,

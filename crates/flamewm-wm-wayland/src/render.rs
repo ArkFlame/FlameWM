@@ -153,6 +153,8 @@ struct ChromeBuffer {
     width: i32,
     active: bool,
     maximized: bool,
+    /// Corner-radius eligibility of the window's placement mode (see `Mode::rounded_frame`).
+    rounded: bool,
     hover: Option<Button>,
     title: String,
     buffer: MemoryRenderBuffer,
@@ -198,7 +200,7 @@ impl Decorations {
         renderer: &mut GlowRenderer,
         window: WindowId,
         rect: Rect,
-        (active, maximized): (bool, bool),
+        (active, maximized, rounded): (bool, bool, bool),
         hover: Option<Button>,
         title: &str,
     ) -> Option<Elem> {
@@ -213,14 +215,22 @@ impl Decorations {
                 || part.width != rect.w
                 || part.active != active
                 || part.maximized != maximized
+                || part.rounded != rounded
                 || part.hover != hover
                 || part.title != title
         });
         if stale {
             // The blurred desktop is cropped at the titlebar origin, so a moved titlebar is rebuilt.
             let backdrop = self.crop(origin, rect.w as usize, TITLEBAR_HEIGHT as usize);
-            let pixels =
-                chrome_pixels_over(rect.w, active, maximized, hover, title, backdrop.as_deref());
+            let pixels = chrome_pixels_over(
+                rect.w,
+                active,
+                maximized,
+                rounded,
+                hover,
+                title,
+                backdrop.as_deref(),
+            );
             let buffer = MemoryRenderBuffer::from_slice(
                 &pixels,
                 Fourcc::Argb8888,
@@ -236,6 +246,7 @@ impl Decorations {
                     width: rect.w,
                     active,
                     maximized,
+                    rounded,
                     hover,
                     title: title.to_owned(),
                     buffer,
@@ -489,11 +500,12 @@ fn glyph(c: char) -> [u8; 7] {
     }
 }
 
-/// Top-corner radius of a Wayland titlebar. The skin decoration owner supplies the system
-/// Rounded radius for floating (non-maximized) windows, scaled from the logical titlebar to
-/// the physical titlebar height. Maximized windows stay square. Clamped to half the width.
-fn titlebar_corner_radius(maximized: bool, width: i32, height: i32) -> i32 {
-    scaled_corner_radius(!maximized, DecorationStyle::Rounded, height).min(width.max(0) / 2)
+/// Top-corner radius of a Wayland titlebar. The skin decoration owner supplies the system Rounded
+/// radius for a window the placement policy rounds (see `Mode::rounded_frame`), scaled from the
+/// logical titlebar to the physical titlebar height. Layout states stay square. Clamped to half
+/// the width.
+fn titlebar_corner_radius(rounded: bool, width: i32, height: i32) -> i32 {
+    scaled_corner_radius(rounded, DecorationStyle::Rounded, height).min(width.max(0) / 2)
 }
 
 /// Skin radius in physical pixels: the logical radius scaled from the logical titlebar metric to
@@ -538,8 +550,8 @@ fn client_corner_radii_for(
     height: i32,
     style: DecorationStyle,
 ) -> [u8; 4] {
-    // Snapped windows are floated by the skin policy, exactly as on X11.
-    let floating = matches!(mode, Mode::Normal | Mode::Snapped(_));
+    // Only a floating window is rounded; every layout state is square, exactly as on X11.
+    let floating = mode.rounded_frame();
     let band = titlebars && !matches!(mode, Mode::Fullscreen);
     let radius = scaled_corner_radius(floating, style, TITLEBAR_HEIGHT).max(0);
     // Each arc needs its own diameter of room: half the short side keeps four corners distinct,
@@ -559,10 +571,15 @@ fn client_corner_radii_for(
 
 /// Physical radius of the window outline ring: the same skin radius the client clip arcs use at
 /// this compositor's physical titlebar height, so the ring arc and the clipped client corner are
-/// concentric. Square for maximized and fullscreen windows and for a squared decoration style.
+/// concentric. Square for every layout state and for a squared decoration style; a radius of 0
+/// makes the ring raster a plain rectangular border on all four edges.
 fn outline_radius(managed: &Managed) -> u8 {
-    let floating = matches!(managed.mode, Mode::Normal | Mode::Snapped(_));
-    let radius = scaled_corner_radius(floating, DecorationStyle::Rounded, TITLEBAR_HEIGHT).max(0);
+    let radius = scaled_corner_radius(
+        managed.mode.rounded_frame(),
+        DecorationStyle::Rounded,
+        TITLEBAR_HEIGHT,
+    )
+    .max(0);
     u8::try_from(radius.min(i32::from(u8::MAX))).unwrap_or(u8::MAX)
 }
 
@@ -570,20 +587,30 @@ fn outline_radius(managed: &Managed) -> u8 {
 fn chrome_pixels(
     width: i32,
     active: bool,
-    maximized: bool,
+    mode: Mode,
     hover: Option<Button>,
     title: &str,
 ) -> Vec<u8> {
-    chrome_pixels_over(width, active, maximized, hover, title, None)
+    chrome_pixels_over(
+        width,
+        active,
+        mode == Mode::Maximized,
+        mode.rounded_frame(),
+        hover,
+        title,
+        None,
+    )
 }
 
 /// Titlebar pixels. With `backdrop` (straight RGBA, one opaque pixel per titlebar pixel, the
 /// blurred desktop beneath) the translucent fill composes over it, so the bar is opaque inside
-/// its rounded shape and matches the X11 baked titlebar.
+/// its rounded shape and matches the X11 baked titlebar. `maximized` picks the control glyph,
+/// `rounded` the corner arc: both come from the window's placement mode, never from each other.
 fn chrome_pixels_over(
     width: i32,
     active: bool,
     maximized: bool,
+    rounded: bool,
     hover: Option<Button>,
     title: &str,
     backdrop: Option<&[u8]>,
@@ -593,7 +620,7 @@ fn chrome_pixels_over(
     let mut out = vec![0u8; w * h * 4];
     // Rounded top corners use alpha, not an opaque bounding rectangle. The actual pixels
     // underneath remain visible via Smithay's compositor.
-    let radius = titlebar_corner_radius(maximized, w as i32, h as i32);
+    let radius = titlebar_corner_radius(rounded, w as i32, h as i32);
     for y in 0..h as i32 {
         for x in 0..w as i32 {
             let corner = if y < radius && x < radius {
@@ -881,7 +908,11 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                         renderer,
                         id,
                         titlebar,
-                        (focused, managed.mode == Mode::Maximized),
+                        (
+                            focused,
+                            managed.mode == Mode::Maximized,
+                            managed.mode.rounded_frame(),
+                        ),
                         hovered,
                         title,
                     ) {
@@ -1180,35 +1211,35 @@ mod decoration_tests {
     #[test]
     fn chrome_uses_skin_height_and_rounded_alpha() {
         assert_eq!(TITLEBAR_HEIGHT, 31);
-        let pixels = chrome_pixels(200, true, false, None, "FlameWM Terminal");
+        let pixels = chrome_pixels(200, true, Mode::Normal, None, "FlameWM Terminal");
         assert_eq!(pixels.len(), 200 * 31 * 4);
         assert_eq!(pixels[3], 0, "outer corner must be transparent");
         assert!(pixels[(15 * 200 + 10) * 4 + 3] > 0);
     }
 
     #[test]
-    fn titlebar_corner_radius_is_system_radius_clamped_and_square_when_maximized() {
-        assert_eq!(
-            titlebar_corner_radius(false, 200, 31),
-            12,
-            "system Rounded radius"
-        );
+    fn titlebar_corner_radius_is_system_radius_clamped_and_square_in_layout_states() {
         assert_eq!(
             titlebar_corner_radius(true, 200, 31),
-            0,
-            "maximized is square"
+            12,
+            "system Rounded radius for a floating window"
         );
         assert_eq!(
-            titlebar_corner_radius(false, 10, 31),
+            titlebar_corner_radius(false, 200, 31),
+            0,
+            "every layout state is square"
+        );
+        assert_eq!(
+            titlebar_corner_radius(true, 10, 31),
             5,
             "clamped to half width"
         );
-        assert_eq!(titlebar_corner_radius(false, 200, 0), 0, "zero height");
+        assert_eq!(titlebar_corner_radius(true, 200, 0), 0, "zero height");
     }
 
     #[test]
     fn titlebar_top_corners_are_antialiased_at_system_radius() {
-        let pixels = chrome_pixels(200, true, false, None, "Terminal");
+        let pixels = chrome_pixels(200, true, Mode::Normal, None, "Terminal");
         let alpha = |x: usize, y: usize| pixels[(y * 200 + x) * 4 + 3];
         assert_eq!(alpha(0, 0), 0, "outer corner pixel is outside the arc");
         let partial = (0..12).any(|y| {
@@ -1225,8 +1256,8 @@ mod decoration_tests {
         );
     }
 
-    /// The client silhouette is the X11 shape's radius policy, not the titlebar's width clamp:
-    /// a decorated window only owns the straight band above its client.
+    /// The client silhouette is the X11 shape's radius policy: a decorated window only owns the
+    /// straight band above its client, and only a floating window is rounded at all.
     #[test]
     fn client_corner_radii_follow_the_x11_shape_policy() {
         let deco =
@@ -1243,8 +1274,8 @@ mod decoration_tests {
         );
         assert_eq!(
             deco(Mode::Snapped(flamewm_window_core::SnapTarget::LeftHalf)),
-            [0, 0, 12, 12],
-            "snapped windows are rounded like floating ones"
+            [0; 4],
+            "a layout state is square like maximized and fullscreen"
         );
         for mode in [Mode::Maximized, Mode::Fullscreen] {
             assert_eq!(deco(mode), [0; 4], "{mode:?} stays square");
@@ -1300,8 +1331,32 @@ mod decoration_tests {
         // The same skin radius the titlebar arc uses, at this compositor's physical bar height.
         assert_eq!(
             client_corner_radii_for(Mode::Normal, true, 300, 200, DecorationStyle::Rounded)[2],
-            u8::try_from(titlebar_corner_radius(false, 300, TITLEBAR_HEIGHT)).unwrap()
+            u8::try_from(titlebar_corner_radius(true, 300, TITLEBAR_HEIGHT)).unwrap()
         );
+    }
+
+    /// The outline ring follows the same placement policy: a layout state's ring is a plain
+    /// rectangular border (radius 0), a floating window's ring follows the skin arc.
+    #[test]
+    fn outline_radius_is_square_for_every_layout_state() {
+        use crate::model::WindowModel;
+
+        let work = Rect::new(0, 0, 300, 200);
+        let mut model = WindowModel::new(1);
+        model.add(1, Rect::new(10, 40, 300, 200), 0);
+        let ring = |model: &WindowModel| outline_radius(model.get(1).expect("window"));
+        assert_eq!(ring(&model), 12, "floating keeps the skin arc");
+        model.snap_to(
+            1,
+            flamewm_window_core::SnapTarget::LeftHalf,
+            work,
+            Rect::new(10, 40, 300, 200),
+        );
+        assert_eq!(ring(&model), 0, "snapped draws a rectangular ring");
+        model.maximize_to(1, work, Rect::new(10, 40, 300, 200));
+        assert_eq!(ring(&model), 0, "maximized draws a rectangular ring");
+        model.set_fullscreen(1, work, true);
+        assert_eq!(ring(&model), 0, "fullscreen draws a rectangular ring");
     }
 
     /// The wrapper reads the band and the mode from the window itself, so the caller cannot
@@ -1329,14 +1384,14 @@ mod decoration_tests {
 
     #[test]
     fn maximized_titlebar_corner_is_not_cut() {
-        let pixels = chrome_pixels(200, true, true, None, "Terminal");
+        let pixels = chrome_pixels(200, true, Mode::Maximized, None, "Terminal");
         assert!(pixels[3] > 0, "square corner stays opaque");
     }
 
     #[test]
     fn close_hover_is_local_to_control_and_keeps_alpha_corners() {
-        let idle = chrome_pixels(400, true, false, None, "Terminal");
-        let hover = chrome_pixels(400, true, false, Some(Button::Close), "Terminal");
+        let idle = chrome_pixels(400, true, Mode::Normal, None, "Terminal");
+        let hover = chrome_pixels(400, true, Mode::Normal, Some(Button::Close), "Terminal");
         let index = |x: usize, y: usize| (y * 400 + x) * 4;
         assert_ne!(
             &idle[index(385, 15)..index(385, 15) + 4],
@@ -1366,8 +1421,8 @@ mod decoration_tests {
 
     #[test]
     fn maximize_glyph_tracks_real_window_state() {
-        let normal = chrome_pixels(400, true, false, None, "Terminal");
-        let maximized = chrome_pixels(400, true, true, None, "Terminal");
+        let normal = chrome_pixels(400, true, Mode::Normal, None, "Terminal");
+        let maximized = chrome_pixels(400, true, Mode::Maximized, None, "Terminal");
         assert_ne!(normal, maximized);
         assert_eq!(normal.len(), maximized.len());
     }
@@ -1376,7 +1431,14 @@ mod decoration_tests {
     fn narrow_frame_never_writes_outside_buffer() {
         for width in [1, 12, 38, 77, 114] {
             assert_eq!(
-                chrome_pixels(width, true, false, Some(Button::Close), "Long window title").len(),
+                chrome_pixels(
+                    width,
+                    true,
+                    Mode::Normal,
+                    Some(Button::Close),
+                    "Long window title"
+                )
+                .len(),
                 width as usize * TITLEBAR_HEIGHT as usize * 4,
             );
         }
@@ -1385,11 +1447,11 @@ mod decoration_tests {
     #[test]
     fn proportional_title_renders_unicode_inside_the_title_region_only() {
         let width = 320;
-        let blank = chrome_pixels(width, true, false, None, "");
+        let blank = chrome_pixels(width, true, Mode::Normal, None, "");
         let titled = chrome_pixels(
             width,
             true,
-            false,
+            Mode::Normal,
             None,
             "Terminal \u{2014} \u{dc}n\u{ef}code",
         );
@@ -1452,18 +1514,24 @@ mod decoration_tests {
 
     #[test]
     fn chrome_stable_and_buttons_are_glyphs_not_coloured_squares() {
-        let first = chrome_pixels(400, true, false, None, "FlameWM Terminal");
+        let first = chrome_pixels(400, true, Mode::Normal, None, "FlameWM Terminal");
         assert_eq!(
             first,
-            chrome_pixels(400, true, false, None, "FlameWM Terminal")
+            chrome_pixels(400, true, Mode::Normal, None, "FlameWM Terminal")
         );
         assert_ne!(
             first,
-            chrome_pixels(400, false, false, None, "FlameWM Terminal")
+            chrome_pixels(400, false, Mode::Normal, None, "FlameWM Terminal")
         );
         assert_ne!(
             first,
-            chrome_pixels(400, true, false, Some(Button::Close), "FlameWM Terminal")
+            chrome_pixels(
+                400,
+                true,
+                Mode::Normal,
+                Some(Button::Close),
+                "FlameWM Terminal"
+            )
         );
         // Transparent body alpha is the same under every control at rest.
         let left = (15 * 400 + 200) * 4 + 3;

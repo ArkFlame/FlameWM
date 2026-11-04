@@ -886,6 +886,12 @@ pub fn external_rounded_row_inset(width: u32, height: u32, radius: u32, row: u32
     crate::native::rounded::row_inset(width, height, radius, row)
 }
 
+/// Bottom-only twin of [`external_rounded_row_inset`]: rows above the bottom corner band stay
+/// full width. Used by the frame-band client mask, whose top edge sits under the titlebar.
+pub fn external_rounded_row_inset_bottom(width: u32, height: u32, radius: u32, row: u32) -> u32 {
+    crate::native::rounded::bottom_row_inset(width, height, radius, row)
+}
+
 /// Xft font-pattern probe used by tests: preferred family first, then
 /// portable fallbacks. Must stay in sync with `XftBackend::font_for`.
 pub fn external_font_pattern_order(preferred: &str) -> Vec<String> {

@@ -192,11 +192,14 @@ pub enum PlacementMode {
 }
 
 impl PlacementMode {
-    /// Frame takes the configured corner radius and mask: floating and snapped
-    /// (layout) windows. Maximized and fullscreen stay rectangular.
+    /// Whether the frame takes the configured corner radius: only a floating window does. Every
+    /// layout state (snapped left/right/quarter, maximized, fullscreen) fills a slot or the
+    /// output, so its corners are square. Single owner of that policy for X11: the frame mask, the
+    /// client mask, the ring raster, the ARGB overlay, the chrome and the transitions all derive
+    /// their radius from it.
     #[must_use]
     pub const fn rounded_frame(self) -> bool {
-        matches!(self, Self::Floating | Self::Snapped(_))
+        matches!(self, Self::Floating)
     }
 }
 
@@ -364,18 +367,29 @@ mod rounded_frame_tests {
     use super::*;
     use flamewm_skin::recipes::decoration::{DecorationStyle, corner_radius};
 
+    /// Every layout state is square; only a floating window takes the configured radius.
     #[test]
-    fn layout_windows_follow_the_configured_radius_and_max_fullscreen_stay_square() {
-        let snapped = PlacementMode::Snapped(SnapTarget::Left);
-        for mode in [PlacementMode::Floating, snapped] {
-            assert!(mode.rounded_frame(), "{mode:?}");
+    fn only_floating_follows_the_configured_radius() {
+        let floating = PlacementMode::Floating;
+        assert!(floating.rounded_frame(), "{floating:?}");
+        assert_eq!(
+            corner_radius(floating.rounded_frame(), DecorationStyle::Rounded),
+            flamewm_skin::recipes::decoration::ROUNDED_RADIUS
+        );
+        for target in [
+            SnapTarget::Left,
+            SnapTarget::Right,
+            SnapTarget::TopLeft,
+            SnapTarget::TopRight,
+            SnapTarget::BottomLeft,
+            SnapTarget::BottomRight,
+        ] {
+            let mode = PlacementMode::Snapped(target);
+            assert!(!mode.rounded_frame(), "{mode:?} is a layout state");
             assert_eq!(
                 corner_radius(mode.rounded_frame(), DecorationStyle::Rounded),
-                flamewm_skin::recipes::decoration::ROUNDED_RADIUS
-            );
-            assert_eq!(
-                corner_radius(mode.rounded_frame(), DecorationStyle::Squared),
-                0
+                0,
+                "{mode:?}"
             );
         }
         for mode in [PlacementMode::Maximized, PlacementMode::Fullscreen] {
@@ -383,6 +397,19 @@ mod rounded_frame_tests {
             assert_eq!(
                 corner_radius(mode.rounded_frame(), DecorationStyle::Rounded),
                 0
+            );
+        }
+        // Squared is square in every state.
+        for mode in [
+            PlacementMode::Floating,
+            PlacementMode::Snapped(SnapTarget::Left),
+            PlacementMode::Maximized,
+            PlacementMode::Fullscreen,
+        ] {
+            assert_eq!(
+                corner_radius(mode.rounded_frame(), DecorationStyle::Squared),
+                0,
+                "{mode:?}"
             );
         }
     }
