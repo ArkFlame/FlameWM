@@ -290,7 +290,7 @@ fn color_session(
     let mut snapshot = SettingsSnapshot::new(7);
     for key in [
         "surfaceColor",
-        "surfaceBorderColor",
+        "surfaceOutlineColor",
         "lockBackgroundColor",
         "accent",
     ] {

@@ -31,9 +31,9 @@ pub struct GlassPreset {
     pub tint_percent: u8,
     /// `surfaceBlurPercent`.
     pub blur_percent: u8,
-    /// `surfaceBorderColor` rim RGB.
+    /// `surfaceOutlineColor` rim RGB.
     pub rim_rgb: u32,
-    /// `surfaceBorderOpacity` rim alpha percent.
+    /// `surfaceOutlineOpacity` rim alpha percent.
     pub rim_percent: u8,
     /// `surfaceSaturationPercent`: backdrop saturation, 100 is identity.
     pub saturation_percent: u8,
@@ -45,9 +45,9 @@ pub struct GlassPreset {
     pub glass_blur_px: u8,
 }
 
-/// Shared rim alpha (`surfaceBorderOpacity` default, and `--rim` in every glass sheet as `#ffffff3f`).
+/// Shared rim alpha (`surfaceOutlineOpacity` default, and `--rim` in every glass sheet as `#ffffff7f`).
 /// The Settings help text and platform default read this same value.
-pub const RIM_PERCENT: u8 = 25;
+pub const RIM_PERCENT: u8 = 50;
 
 pub const DARK: GlassPreset = GlassPreset {
     tint_rgb: 0x00ea_f4ff,
@@ -86,11 +86,11 @@ impl GlassPreset {
                 SettingValue::Percent(self.blur_percent),
             ),
             (
-                "surfaceBorderColor",
+                "surfaceOutlineColor",
                 SettingValue::Text(format!("#{:06x}", self.rim_rgb)),
             ),
             (
-                "surfaceBorderOpacity",
+                "surfaceOutlineOpacity",
                 SettingValue::Percent(self.rim_percent),
             ),
             (
@@ -151,8 +151,8 @@ mod tests {
                 "surfaceColor",
                 "surfaceOpacity",
                 "surfaceBlurPercent",
-                "surfaceBorderColor",
-                "surfaceBorderOpacity",
+                "surfaceOutlineColor",
+                "surfaceOutlineOpacity",
                 "surfaceSaturationPercent",
                 "glassOpacityPercent",
                 "glassBlurPx",

@@ -7,7 +7,7 @@ use flamewm_platform::chrome::ACCENT_SOFT_ALPHA;
 use flamewm_platform::settings::ClockFormat;
 use flamewm_ui_core::context_menu::shape_radius;
 use flamewm_ui_x11::surface_style::{
-    project_surface_border, surface_background as shared_surface_background,
+    project_surface_outline, surface_background as shared_surface_background,
 };
 use flamewm_ui_x11::{RuntimeImage, SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
 
@@ -62,7 +62,7 @@ pub fn project(
         bool_setting(snapshot, "fontBold", false),
     )?;
     project_accent_tokens(document, snapshot)?;
-    project_surface_border(document, root, snapshot)?;
+    project_surface_outline(document, root, snapshot)?;
 
     match surface {
         SurfaceKind::Panel => {
@@ -76,7 +76,7 @@ pub fn project(
                 a: dock.alpha,
             };
             crate::projection::set_taskbar_surface(fill);
-            crate::projection::set_taskbar_border(flamewm_ui_x11::surface_style::surface_border(
+            crate::projection::set_taskbar_border(flamewm_ui_x11::surface_style::surface_outline(
                 snapshot,
             ));
             // Separate mode paints the wallpaper (the captured backdrop) across the bar and one
@@ -106,7 +106,7 @@ pub fn project(
             document.background(
                 "taskbar-outline",
                 if classic {
-                    flamewm_ui_x11::surface_style::surface_border(snapshot)
+                    flamewm_ui_x11::surface_style::surface_outline(snapshot)
                 } else {
                     UiColor { a: 0, ..fill }
                 },
@@ -197,7 +197,7 @@ pub fn project_menu_background(
     root: &str,
 ) -> Result<(), String> {
     document.background(root, surface_background(snapshot))?;
-    project_surface_border(document, root, snapshot)?;
+    project_surface_outline(document, root, snapshot)?;
     document.corner_radius(root, popup_corner_radius(snapshot))?;
     // Popups own their accent too: the `--accent` token drives the battery bar, and the
     // Wi-Fi/audio track override reads the global task accent, which must match this snapshot.
@@ -483,12 +483,13 @@ mod tests {
     fn all_shell_surfaces_share_live_contour_settings() {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot.values.insert(
-            "surfaceBorderColor".to_owned(),
+            "surfaceOutlineColor".to_owned(),
             SettingValue::Text("#306090".to_owned()),
         );
-        snapshot
-            .values
-            .insert("surfaceBorderOpacity".to_owned(), SettingValue::Percent(40));
+        snapshot.values.insert(
+            "surfaceOutlineOpacity".to_owned(),
+            SettingValue::Percent(40),
+        );
         let contour = UiColor {
             r: 0x30,
             g: 0x60,
@@ -524,7 +525,7 @@ mod tests {
         }
         snapshot
             .values
-            .insert("surfaceBorderOpacity".to_owned(), SettingValue::Percent(0));
+            .insert("surfaceOutlineOpacity".to_owned(), SettingValue::Percent(0));
         project(&mut doc, &snapshot, SurfaceKind::Start).expect("contour disabled");
         assert_eq!(doc.borders["start-menu"].a, 0);
     }
@@ -819,7 +820,7 @@ mod tests {
 
     // REGRESSION: a classic bar must reach the screen end with one top outline, not close off
     // its own border box. The bar root keeps no contour and the viewport-wide outline carries
-    // the shared surface border.
+    // the shared surface outline.
     // MUTATION: draw the classic contour on the root again, or leave the outline transparent.
     #[test]
     fn classic_taskbar_draws_one_full_width_top_outline() {
@@ -836,8 +837,8 @@ mod tests {
             doc.borders["taskbar"].a, 0,
             "classic bar root owns no contour"
         );
-        let contour = flamewm_ui_x11::surface_style::surface_border(&snapshot);
-        assert!(contour.a > 0, "the default surface border is visible");
+        let contour = flamewm_ui_x11::surface_style::surface_outline(&snapshot);
+        assert!(contour.a > 0, "the default surface outline is visible");
         assert_eq!(doc.backgrounds["taskbar-outline"], contour);
     }
 
@@ -851,7 +852,7 @@ mod tests {
             "taskbarStyle".to_owned(),
             SettingValue::Text("floating".to_owned()),
         );
-        let contour = flamewm_ui_x11::surface_style::surface_border(&snapshot);
+        let contour = flamewm_ui_x11::surface_style::surface_outline(&snapshot);
         let mut unified = RecordingUiDoc::default();
         project(&mut unified, &snapshot, SurfaceKind::Panel).expect("floating panel");
         assert_eq!(

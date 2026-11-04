@@ -107,8 +107,8 @@ pub const WINDOW_CHROME: WindowChromeRecipe = WindowChromeRecipe {
         WindowControlRole::Close,
     ],
     titlebar_background: PANEL,
-    // Shared rim `#ffffff3f` (CSS `--rim`, 25%) composited over PANEL, so Wayland matches the X11 rim.
-    border: Rgb(0x0053_5657),
+    // Shared rim `#ffffff7f` (CSS `--rim`, 50%) composited over PANEL, so Wayland matches the X11 rim.
+    border: Rgb(0x008c_8d8e),
     close_hover: Rgb(0x00e8_1123),
 };
 

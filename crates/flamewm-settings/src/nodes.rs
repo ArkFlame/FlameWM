@@ -26,6 +26,8 @@ pub(crate) fn remove_managed_media(path: &str) -> Result<(), String> {
 /// Authoritative accent value behind each palette swatch in the Appearance page.
 pub(crate) fn accent_for_swatch(name: &str) -> Option<&'static str> {
     match name {
+        "black" => Some("#191B1D"),
+        "white" => Some("#FFFFFF"),
         "red" => Some("#EF4048"),
         "blue" => Some("#3DAEE9"),
         "purple" => Some("#9B59B6"),

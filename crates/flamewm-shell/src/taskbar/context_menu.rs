@@ -330,7 +330,7 @@ mod taskbar_menu_tests {
             .expect("shared menu frame rule");
         assert!(frame.contains("border:1px solid var(--rim)"), "{frame}");
         assert!(
-            SHARED_MENU_CSS.contains("--rim:#ffffff3f"),
+            SHARED_MENU_CSS.contains("--rim:#ffffff7f"),
             "shared menu sheet must declare the literal --rim token"
         );
         assert!(

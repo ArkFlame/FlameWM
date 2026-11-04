@@ -894,8 +894,8 @@ pub fn frame_border_pixel(tokens: &ChromeTokens) -> u32 {
     flamewm_ui_core::surface::blend_surface_over_rgb(
         tokens.titlebar_bg.0,
         flamewm_ui_core::surface::SurfaceFill {
-            rgb: tokens.surface_border_rgb.0,
-            alpha: tokens.surface_border_alpha,
+            rgb: tokens.surface_outline_rgb.0,
+            alpha: tokens.surface_outline_alpha,
             width: 1,
         },
     )
@@ -908,14 +908,14 @@ mod glass_contour_tests {
     fn frame_border_uses_configured_shared_surface_contour() {
         let mut t = ChromeTokens {
             titlebar_bg: Rgb(0),
-            surface_border_rgb: Rgb(0x00ff_ffff),
-            surface_border_alpha: 0,
+            surface_outline_rgb: Rgb(0x00ff_ffff),
+            surface_outline_alpha: 0,
             ..ChromeTokens::default()
         };
         assert_eq!(frame_border_pixel(&t), 0);
-        t.surface_border_alpha = 255;
+        t.surface_outline_alpha = 255;
         assert_eq!(frame_border_pixel(&t), 0x00ff_ffff);
-        t.surface_border_alpha = 63;
+        t.surface_outline_alpha = 63;
         assert_eq!(frame_border_pixel(&t), 0x003f_3f3f);
     }
 }
@@ -973,9 +973,9 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
     let stroke = flamewm_ui_core::surface::window_outline_stroke(snapshot);
     ChromeTokens {
         style,
-        surface_border_rgb: Rgb(stroke.rgb),
-        surface_border_alpha: stroke.alpha,
-        surface_border_width: stroke.width,
+        surface_outline_rgb: Rgb(stroke.rgb),
+        surface_outline_alpha: stroke.alpha,
+        surface_outline_width: stroke.width,
         titlebar_bg,
         titlebar_alpha,
         titlebar_blur_percent,

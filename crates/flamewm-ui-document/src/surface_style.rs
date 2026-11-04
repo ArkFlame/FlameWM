@@ -24,18 +24,18 @@ pub fn surface_background(snapshot: &SettingsSnapshot) -> UiColor {
 
 /// The same 1px contour for every UI root, independent of its fill.
 #[must_use]
-pub fn surface_border(snapshot: &SettingsSnapshot) -> UiColor {
+pub fn surface_outline(snapshot: &SettingsSnapshot) -> UiColor {
     surface_stroke(snapshot).into()
 }
 
 /// All UI roots use this projection; their layouts and background treatments
 /// remain owned by the individual components.
-pub fn project_surface_border(
+pub fn project_surface_outline(
     document: &mut impl UiDocumentAccess,
     root: &str,
     snapshot: &SettingsSnapshot,
 ) -> Result<(), String> {
-    document.border(root, surface_border(snapshot))
+    document.border(root, surface_outline(snapshot))
 }
 
 #[cfg(test)]
@@ -56,12 +56,12 @@ mod tests {
             }
         );
         assert_eq!(
-            surface_border(&snapshot),
+            surface_outline(&snapshot),
             UiColor {
                 r: 255,
                 g: 255,
                 b: 255,
-                a: 63
+                a: 127
             }
         );
     }
@@ -76,12 +76,12 @@ mod tests {
             .values
             .insert("surfaceOpacity".into(), SettingValue::Percent(0));
         snapshot.values.insert(
-            "surfaceBorderColor".into(),
+            "surfaceOutlineColor".into(),
             SettingValue::Text("#FEDCBA".into()),
         );
         snapshot
             .values
-            .insert("surfaceBorderOpacity".into(), SettingValue::Percent(100));
+            .insert("surfaceOutlineOpacity".into(), SettingValue::Percent(100));
         assert_eq!(
             surface_background(&snapshot),
             UiColor {
@@ -92,7 +92,7 @@ mod tests {
             }
         );
         assert_eq!(
-            surface_border(&snapshot),
+            surface_outline(&snapshot),
             UiColor {
                 r: 0xfe,
                 g: 0xdc,

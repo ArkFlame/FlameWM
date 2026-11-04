@@ -41,6 +41,7 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "taskbar-clock-on",
     "taskbar-workspaces-on",
     "taskbar-desktop-button-on",
+    "custom-window-outline-on",
     "taskbar-activities-on",
     "taskbar-separate-on",
     "assistant-enabled-on",
@@ -143,6 +144,12 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
     ),
     ("titlebars", "titlebars-on", "titlebars-off", true),
     ("outlines", "outlines-on", "outlines-off", true),
+    (
+        "customWindowOutline",
+        "custom-window-outline-on",
+        "custom-window-outline-off",
+        false,
+    ),
     (
         "taskbarActivities",
         "taskbar-activities-on",

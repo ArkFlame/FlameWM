@@ -370,12 +370,12 @@ fn lock_background_steppers_parse_to_their_exact_typed_targets() {
 #[test]
 fn taskbar_and_screensaver_actions_parse_to_their_exact_typed_targets() {
     assert_action!(
-        "settings.surface-border-opacity.up",
-        Ok(SettingsAction::PercentStep("surfaceBorderOpacity", 1))
+        "settings.surface-outline-opacity.up",
+        Ok(SettingsAction::PercentStep("surfaceOutlineOpacity", 1))
     );
     assert_action!(
-        "settings.surface-border-opacity.down",
-        Ok(SettingsAction::PercentStep("surfaceBorderOpacity", -1))
+        "settings.surface-outline-opacity.down",
+        Ok(SettingsAction::PercentStep("surfaceOutlineOpacity", -1))
     );
     assert_action!(
         "settings.window-outline-opacity.up",

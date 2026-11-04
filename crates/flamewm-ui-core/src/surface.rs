@@ -111,37 +111,44 @@ pub fn surface_blur_percent(snapshot: &SettingsSnapshot) -> u8 {
     crate::glass::blur_percent_from_px(material.blur_px)
 }
 
-/// One pixel *inner* surface contour; independent of surface fill opacity.
-/// All native surface renderers consume this contract instead of defining their own grey borders.
-#[must_use]
-pub fn surface_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
-    let rgb = match snapshot.values.get("surfaceBorderColor") {
+/// Thickness bounds shared by `surfaceOutlineWidth` and `windowOutlineWidth`: 1..=4 px.
+pub const MAX_OUTLINE_WIDTH: u32 = 4;
+
+fn outline_width(snapshot: &SettingsSnapshot, key: &str) -> u32 {
+    match snapshot.values.get(key) {
+        Some(SettingValue::Integer(value)) => u32::try_from(*value).unwrap_or(1),
+        Some(SettingValue::Percent(value)) => u32::from(*value),
+        _ => 1,
+    }
+    .clamp(1, MAX_OUTLINE_WIDTH)
+}
+
+fn outline_fill(snapshot: &SettingsSnapshot, prefix: &str) -> SurfaceFill {
+    let rgb = match snapshot.values.get(&format!("{prefix}Color")) {
         Some(SettingValue::Text(value)) => parse_rgb(value),
         _ => None,
     }
     .unwrap_or(0x00ff_ffff);
-    let opacity = match snapshot.values.get("surfaceBorderOpacity") {
+    let opacity = match snapshot.values.get(&format!("{prefix}Opacity")) {
         Some(SettingValue::Percent(value)) => (*value).min(100),
         _ => DEFAULT_SURFACE_RIM_PERCENT,
     };
     SurfaceFill {
         rgb,
         alpha: ((u16::from(opacity) * 255) / 100) as u8,
-        width: 1,
+        width: outline_width(snapshot, &format!("{prefix}Width")),
     }
 }
 
-/// Default `windowOutlineOpacity` percent: the window frame outline is white at half opacity.
-pub const DEFAULT_WINDOW_OUTLINE_PERCENT: u8 = 50;
+/// Shared surface outline (`surfaceOutlineColor`, `surfaceOutlineOpacity`, `surfaceOutlineWidth`):
+/// white, 50 %, 1 px by default. All native surface renderers consume this contract.
+#[must_use]
+pub fn surface_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
+    outline_fill(snapshot, "surfaceOutline")
+}
 
-/// Default `windowOutlineWidth` in px: the working one-pixel band.
-pub const DEFAULT_WINDOW_OUTLINE_WIDTH: u32 = 1;
-/// `windowOutlineWidth` bounds: the outline band is 1..=4 px wide.
-pub const MAX_WINDOW_OUTLINE_WIDTH: u32 = 4;
-
-/// Window frame outline (`windowOutlineColor`, `windowOutlineOpacity`, `windowOutlineWidth`).
-/// Separate from the taskbar/surface contour so frame and panel outlines can differ; both defaults
-/// come from the settings table, not from a custom colour.
+/// Window frame outline. It inherits the surface outline unless `customWindowOutline` is on, in
+/// which case `windowOutlineColor`/`Opacity`/`Width` apply.
 #[must_use]
 pub fn window_outline_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
     // `outlines` off means "drawn on nothing": the fill is fully transparent and no
@@ -153,28 +160,16 @@ pub fn window_outline_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
         return SurfaceFill {
             rgb: 0,
             alpha: 0,
-            width: DEFAULT_WINDOW_OUTLINE_WIDTH,
+            width: 1,
         };
     }
-    let rgb = match snapshot.values.get("windowOutlineColor") {
-        Some(SettingValue::Text(value)) => parse_rgb(value),
-        _ => None,
-    }
-    .unwrap_or(0x00ff_ffff);
-    let opacity = match snapshot.values.get("windowOutlineOpacity") {
-        Some(SettingValue::Percent(value)) => (*value).min(100),
-        _ => DEFAULT_WINDOW_OUTLINE_PERCENT,
-    };
-    let width = match snapshot.values.get("windowOutlineWidth") {
-        Some(SettingValue::Integer(value)) => u32::try_from(*value).unwrap_or(1),
-        Some(SettingValue::Percent(value)) => u32::from(*value),
-        _ => DEFAULT_WINDOW_OUTLINE_WIDTH,
-    }
-    .clamp(1, MAX_WINDOW_OUTLINE_WIDTH);
-    SurfaceFill {
-        rgb,
-        alpha: ((u16::from(opacity) * 255) / 100) as u8,
-        width,
+    if matches!(
+        snapshot.values.get("customWindowOutline"),
+        Some(SettingValue::Boolean(true))
+    ) {
+        outline_fill(snapshot, "windowOutline")
+    } else {
+        surface_stroke(snapshot)
     }
 }
 
@@ -194,6 +189,9 @@ mod window_outline_stroke_tests {
     fn window_outline_width_is_read_and_clamped_to_one_through_four() {
         let width = |value: SettingValue| {
             let mut snapshot = SettingsSnapshot::new(1);
+            snapshot
+                .values
+                .insert("customWindowOutline".into(), SettingValue::Boolean(true));
             snapshot.values.insert("windowOutlineWidth".into(), value);
             window_outline_stroke(&snapshot).width
         };
@@ -215,12 +213,24 @@ mod window_outline_stroke_tests {
     }
 
     #[test]
-    fn window_outline_ignores_the_taskbar_surface_border_keys() {
+    fn window_outline_inherits_the_surface_outline_until_custom_is_on() {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot
             .values
-            .insert("surfaceBorderOpacity".into(), SettingValue::Percent(0));
-        assert_eq!(window_outline_stroke(&snapshot).alpha, 127);
+            .insert("surfaceOutlineOpacity".into(), SettingValue::Percent(80));
+        snapshot
+            .values
+            .insert("surfaceOutlineWidth".into(), SettingValue::Integer(2));
+        snapshot
+            .values
+            .insert("windowOutlineOpacity".into(), SettingValue::Percent(10));
+        let inherited = window_outline_stroke(&snapshot);
+        assert_eq!((inherited.alpha, inherited.width), (204, 2));
+        snapshot
+            .values
+            .insert("customWindowOutline".into(), SettingValue::Boolean(true));
+        let custom = window_outline_stroke(&snapshot);
+        assert_eq!((custom.alpha, custom.width), (25, 1));
     }
 }
 
@@ -284,7 +294,7 @@ mod surface_stroke_contract_tests {
     fn shared_contour_is_the_dark_glass_hairline_by_default() {
         let stroke = surface_stroke(&SettingsSnapshot::new(1));
         assert_eq!(stroke.rgb, 0x00ff_ffff);
-        assert_eq!(stroke.alpha, 63);
+        assert_eq!(stroke.alpha, 127);
     }
     #[test]
     fn border_is_independent_from_surface_opacity_and_accepts_zero() {
@@ -292,11 +302,11 @@ mod surface_stroke_contract_tests {
         s.values
             .insert("surfaceOpacity".into(), SettingValue::Percent(100));
         s.values.insert(
-            "surfaceBorderColor".into(),
+            "surfaceOutlineColor".into(),
             SettingValue::Text("#112233".into()),
         );
         s.values
-            .insert("surfaceBorderOpacity".into(), SettingValue::Percent(0));
+            .insert("surfaceOutlineOpacity".into(), SettingValue::Percent(0));
         assert_eq!(
             surface_stroke(&s),
             SurfaceFill {
@@ -306,7 +316,7 @@ mod surface_stroke_contract_tests {
             }
         );
         s.values
-            .insert("surfaceBorderOpacity".into(), SettingValue::Percent(100));
+            .insert("surfaceOutlineOpacity".into(), SettingValue::Percent(100));
         assert_eq!(surface_stroke(&s).alpha, 255);
     }
 }

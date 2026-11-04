@@ -219,7 +219,7 @@ impl App {
             theme::resolve_palette(&self.config.theme, &self.themes, self.snapshot.as_ref());
         self.surface_alpha = theme::surface_alpha(self.config.background_opacity);
         if let Some(snapshot) = self.snapshot.as_ref() {
-            self.surface_stroke = flamewm_ui_x11::surface_style::surface_border(snapshot);
+            self.surface_stroke = flamewm_ui_x11::surface_style::surface_outline(snapshot);
         }
     }
 

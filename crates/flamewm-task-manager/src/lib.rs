@@ -207,12 +207,12 @@ impl Application {
     fn paint_theme(&self, doc: &mut impl UiDocumentAccess, accent: u32) -> Result<(), String> {
         let surface = surface_fill(&self.theme);
         doc.background("task-manager", rgba(surface.rgb, surface.alpha))?;
-        flamewm_ui_x11::surface_style::project_surface_border(doc, "task-manager", &self.theme)?;
+        flamewm_ui_x11::surface_style::project_surface_outline(doc, "task-manager", &self.theme)?;
         doc.color_variable("--accent", rgba(accent, 255))?;
         doc.color_variable("--accent-soft", rgba(accent, 42))?;
         doc.color_variable(
             "--border",
-            flamewm_ui_x11::surface_style::surface_border(&self.theme),
+            flamewm_ui_x11::surface_style::surface_outline(&self.theme),
         )?;
         let menu = menu_surface(&self.theme);
         for id in ["context", "confirm"] {

@@ -14,10 +14,10 @@ impl<C: Connection> Wm<'_, C> {
     /// ARGB overlay over the client's own pixels.
     pub(super) fn outline_band(&self) -> u16 {
         let tokens = self.outline_tokens();
-        if self.outline_overlay_available || tokens.surface_border_alpha == 0 {
+        if self.outline_overlay_available || tokens.surface_outline_alpha == 0 {
             return 0;
         }
-        u16::try_from(tokens.surface_border_width).unwrap_or(u16::MAX)
+        u16::try_from(tokens.surface_outline_width).unwrap_or(u16::MAX)
     }
 
     /// Effective Server titlebar band. The `titlebars` setting is the only authority;

@@ -116,7 +116,7 @@ fn settings_map_to_skin_tokens_and_bad_values_fall_back() {
         (Rgb(0), 0),
         "surfaceColor and surfaceOpacity never tint the titlebar"
     );
-    assert_eq!(tokens.surface_border_width, 1, "default outline width");
+    assert_eq!(tokens.surface_outline_width, 1, "default outline width");
     assert!(
         tokens
             .buttons

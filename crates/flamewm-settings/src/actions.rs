@@ -279,7 +279,7 @@ pub(crate) fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-pub(crate) const TOGGLE_KEYS: [&str; 41] = [
+pub(crate) const TOGGLE_KEYS: [&str; 42] = [
     "reduceTransparency",
     "showContentWhileDragging",
     "stickyNotesEnabled",
@@ -303,6 +303,7 @@ pub(crate) const TOGGLE_KEYS: [&str; 41] = [
     "taskbarShowClock",
     "taskbarShowWorkspaces",
     "taskbarShowDesktopButton",
+    "customWindowOutline",
     "weatherEnabled",
     "autoLocationEnabled",
     "autoTimeZoneEnabled",
@@ -397,11 +398,11 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
         return parse_color_picker(rest);
     }
     if let Some(direction) = action
-        .strip_prefix("settings.surface-border-opacity.")
+        .strip_prefix("settings.surface-outline-opacity.")
         .and_then(step)
     {
         return Ok(SettingsAction::PercentStep(
-            "surfaceBorderOpacity",
+            "surfaceOutlineOpacity",
             direction,
         ));
     }

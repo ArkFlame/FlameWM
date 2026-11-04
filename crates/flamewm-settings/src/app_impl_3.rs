@@ -178,11 +178,20 @@ impl<T: ControlTransport> SettingsApplication<T> {
         for row in [
             "outline-color-row",
             "outline-opacity-row",
+            "surface-outline-width-row",
+            "custom-window-outline-row",
+        ] {
+            document.visible(row, outlines)?;
+        }
+        // Per-window rows only exist while the custom window outline is on.
+        let custom = outlines && self.bool_setting("customWindowOutline");
+        for row in [
+            "window-outline-hairline",
             "window-outline-width-row",
             "window-outline-color-row",
             "window-outline-opacity-row",
         ] {
-            document.visible(row, outlines)?;
+            document.visible(row, custom)?;
         }
         for (target, key) in COLOR_TARGETS {
             let Ok(value) = self.text_setting(key) else {
@@ -592,8 +601,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(value) = percent("surfaceOpacity") {
             document.text("surface-opacity-value", format!("{value}%"))?;
         }
-        if let Some(value) = percent("surfaceBorderOpacity") {
-            document.text("surface-border-opacity-value", format!("{value}%"))?;
+        if let Some(value) = percent("surfaceOutlineOpacity") {
+            document.text("surface-outline-opacity-value", format!("{value}%"))?;
         }
         if let Some(value) = percent("windowOutlineOpacity") {
             document.text("window-outline-opacity-value", format!("{value}%"))?;

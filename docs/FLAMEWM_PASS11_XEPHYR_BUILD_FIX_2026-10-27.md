@@ -5,8 +5,8 @@
 The archive includes the actual definitions that the user's E0432/E0433/E0609/E0560 errors said were missing:
 
 - `crates/flamewm-ui-core/src/lib.rs` exports `pub mod surface;` and the `surface.rs` module implements `surface_fill`, `surface_stroke`, `SurfaceFill`, and `blend_surface_over_rgb`.
-- `crates/flamewm-ui-x11/src/lib.rs` exports `pub mod surface_style;`; `surface_style.rs` implements `surface_border`.
-- `crates/flamewm-skin/src/recipes/decoration.rs` defines the `ChromeTokens` `surface_border_rgb` and `surface_border_alpha` fields and initializes both in `Default`.
+- `crates/flamewm-ui-x11/src/lib.rs` exports `pub mod surface_style;`; `surface_style.rs` implements `surface_outline`.
+- `crates/flamewm-skin/src/recipes/decoration.rs` defines the `ChromeTokens` `surface_outline_rgb` and `surface_outline_alpha` fields and initializes both in `Default`.
 - `scripts/xephyr` previously invalidated only desktop conversion crates. Restored archive timestamps can predate cached `.rlib` artifacts, causing incompatible compile-time definitions to be reused. This is a plausible explanation for the reported diagnostics, not a direct observation of the user's Cargo target directory.
 - `ui/task-manager/task-manager.css` used unsupported property names (`border-top`, `border-bottom`, `border-left`, `text-align`) and unsupported CSS margin value `auto`. The strict `flamewm-render-compiler` rejects those forms, which directly caused the observed Task Manager build-script panic.
 

@@ -243,7 +243,7 @@ pub fn effects_for(frame_xid: u64, scene: &ChromeScene) -> Vec<ChromeEffect> {
     });
     if outline_on(scene) {
         effects.push(ChromeEffect::PaintOutline {
-            alpha: scene.tokens.surface_border_alpha,
+            alpha: scene.tokens.surface_outline_alpha,
             radius: u32::from(scene.radius),
         });
     }
@@ -302,8 +302,8 @@ impl ClientEdges {
 
 /// The outline ring exists for this scene: enabled token with a real band, real 2x2+ frame.
 fn outline_on(scene: &ChromeScene) -> bool {
-    scene.tokens.surface_border_alpha > 0
-        && scene.tokens.surface_border_width > 0
+    scene.tokens.surface_outline_alpha > 0
+        && scene.tokens.surface_outline_width > 0
         && scene.frame_w >= 2
         && scene.frame_h >= 2
 }
@@ -312,7 +312,7 @@ fn outline_on(scene: &ChromeScene) -> bool {
 ///
 /// The pixels are the shared [`flamewm_render_core::outline`] strips, unchanged: the same bytes
 /// Wayland paints, so X11 never re-derives the arc or its coverage. Only the composite base
-/// differs per backend. The ring colour is `surface_border_rgb` at `surface_border_alpha`, and
+/// differs per backend. The ring colour is `surface_outline_rgb` at `surface_outline_alpha`, and
 /// each pixel's alpha stays `ring_alpha(alpha, coverage)` as produced by the shared raster.
 ///
 /// Base rule, documented because it changes the bytes:
@@ -335,9 +335,9 @@ pub fn outline_blits(
     }
     let titlebar_h = u32::from(scene.titlebar_height);
     let fill = SurfaceFill {
-        rgb: scene.tokens.surface_border_rgb.0,
-        alpha: scene.tokens.surface_border_alpha,
-        width: scene.tokens.surface_border_width,
+        rgb: scene.tokens.surface_outline_rgb.0,
+        alpha: scene.tokens.surface_outline_alpha,
+        width: scene.tokens.surface_outline_width,
     };
     flamewm_render_core::outline::outline_strips(
         scene.frame_w,
@@ -614,8 +614,8 @@ mod tests {
     /// Full-opacity white ring: any pre-blend is visible as a non-white channel.
     fn white_outline() -> ChromeTokens {
         ChromeTokens {
-            surface_border_rgb: Rgb(0x00ff_ffff),
-            surface_border_alpha: 255,
+            surface_outline_rgb: Rgb(0x00ff_ffff),
+            surface_outline_alpha: 255,
             ..ChromeTokens::default()
         }
     }
@@ -651,7 +651,7 @@ mod tests {
             bottom,
         };
         let (frame, w) = ringed_with(&scene, (0, 0), (800, 600), Some(&edges));
-        let opacity = scene.tokens.surface_border_alpha;
+        let opacity = scene.tokens.surface_outline_alpha;
         let mid = (frame_h / 2) as u32;
         let alpha = pixel_at(&frame, w, 0, mid)[3];
         assert!(alpha > 0, "the left band carries the ring");
@@ -693,8 +693,8 @@ mod tests {
         );
         let (frame, w) = ringed(&scene, (0, 0), (800, 600));
         let (h, radius) = (scene.frame_h, u32::from(scene.radius));
-        let thickness = scene.tokens.surface_border_width;
-        let opacity = scene.tokens.surface_border_alpha;
+        let thickness = scene.tokens.surface_outline_width;
+        let opacity = scene.tokens.surface_outline_alpha;
         // Titlebar rows carry the shared alpha (the bar holds the material); client rows bake
         // their base, so they are either absent (coverage 0) or opaque.
         let titlebar = u32::from(scene.titlebar_height);
@@ -801,7 +801,7 @@ mod tests {
     #[test]
     fn outline_emits_nothing_when_disabled_or_degenerate() {
         let mut tokens = ChromeTokens::default();
-        tokens.surface_border_alpha = 0;
+        tokens.surface_outline_alpha = 0;
         let scene = plan_scene(
             120, 100, "app", true, None, None, false, false, true, &tokens,
         );
@@ -845,7 +845,7 @@ mod tests {
             matches!(
                 effect,
                 ChromeEffect::PaintOutline { alpha, radius }
-                    if *alpha == scene.tokens.surface_border_alpha
+                    if *alpha == scene.tokens.surface_outline_alpha
                         && *radius == u32::from(scene.radius)
             )
         });
@@ -871,7 +871,7 @@ mod tests {
     #[test]
     fn titlebar_fill_no_longer_bakes_a_contour() {
         let mut tokens = ChromeTokens::default();
-        tokens.surface_border_alpha = 255;
+        tokens.surface_outline_alpha = 255;
         let scene = plan_scene(
             120, 100, "app", true, None, None, false, false, true, &tokens,
         );

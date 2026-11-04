@@ -436,7 +436,7 @@ mod tests {
             "the rubber-band rectangle must not paint a background: {body}"
         );
         assert!(
-            body.contains("border:1px solid var(--accent-strong)"),
+            body.contains("border:2px solid var(--preview-outline)"),
             "the rectangle still draws its border: {body}"
         );
     }

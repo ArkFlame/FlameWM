@@ -549,7 +549,7 @@ impl Finder {
     fn paint_theme(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let surface = surface_fill(&self.theme);
         doc.background("finder", rgba(surface.rgb, surface.alpha))?;
-        flamewm_ui_x11::surface_style::project_surface_border(doc, "finder", &self.theme)?;
+        flamewm_ui_x11::surface_style::project_surface_outline(doc, "finder", &self.theme)?;
         doc.color_variable("--accent", rgba(self.palette.accent, 255))?;
         doc.color_variable("--text", rgba(self.palette.text, 255))?;
         doc.color_variable("--muted", rgba(self.palette.muted, 255))?;

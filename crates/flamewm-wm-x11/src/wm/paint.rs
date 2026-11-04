@@ -343,8 +343,8 @@ impl<C: Connection> Wm<'_, C> {
     pub(super) fn outline_tokens(&self) -> ChromeTokens {
         let tune = crate::outline_tune::current();
         let mut tokens = self.decoration_tokens;
-        tokens.surface_border_alpha = tune.alpha.unwrap_or(tokens.surface_border_alpha);
-        tokens.surface_border_width = tune.width.unwrap_or(tokens.surface_border_width);
+        tokens.surface_outline_alpha = tune.alpha.unwrap_or(tokens.surface_outline_alpha);
+        tokens.surface_outline_width = tune.width.unwrap_or(tokens.surface_outline_width);
         tokens
     }
 
@@ -363,9 +363,9 @@ impl<C: Connection> Wm<'_, C> {
         ));
         Some((
             radius,
-            tokens.surface_border_rgb.0,
-            tokens.surface_border_alpha,
-            tokens.surface_border_width,
+            tokens.surface_outline_rgb.0,
+            tokens.surface_outline_alpha,
+            tokens.surface_outline_width,
         ))
     }
 

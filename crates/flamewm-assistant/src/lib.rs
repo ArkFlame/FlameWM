@@ -771,7 +771,7 @@ impl Assistant {
     fn paint(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let surface = surface_fill(&self.theme);
         doc.background("assistant", rgba(surface.rgb, surface.alpha))?;
-        flamewm_ui_x11::surface_style::project_surface_border(doc, "assistant", &self.theme)?;
+        flamewm_ui_x11::surface_style::project_surface_outline(doc, "assistant", &self.theme)?;
         doc.color_variable("--accent", rgba(accent(&self.theme), 255))?;
         self.paint_chat(doc)
     }

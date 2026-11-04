@@ -53,10 +53,10 @@ pub struct ChromeTokens {
     /// `surfaceBlurPercent` (0..=100): blur of what is behind the titlebar.
     pub titlebar_blur_percent: u8,
     /// Shared window outline band (RRGGBB + straight alpha + `windowOutlineWidth` px).
-    pub surface_border_rgb: Rgb,
-    pub surface_border_alpha: u8,
+    pub surface_outline_rgb: Rgb,
+    pub surface_outline_alpha: u8,
     /// Outline band thickness in px (`windowOutlineWidth`, 1..=4). `0` draws nothing.
-    pub surface_border_width: u32,
+    pub surface_outline_width: u32,
     /// Bumped when the backdrop source (wallpaper) changes so frames repaint.
     pub backdrop_revision: u32,
     pub buttons: [ButtonTokens; 3],
@@ -69,9 +69,9 @@ impl Default for ChromeTokens {
             titlebar_bg: DEFAULT_SURFACE_RGB,
             titlebar_alpha: DEFAULT_SURFACE_ALPHA,
             titlebar_blur_percent: DEFAULT_SURFACE_BLUR_PERCENT,
-            surface_border_rgb: Rgb(0x00ff_ffff),
-            surface_border_alpha: 128,
-            surface_border_width: 1,
+            surface_outline_rgb: Rgb(0x00ff_ffff),
+            surface_outline_alpha: 128,
+            surface_outline_width: 1,
             backdrop_revision: 0,
             buttons: [ButtonTokens::default(); 3],
         }
@@ -122,7 +122,7 @@ mod tests {
         let tokens = ChromeTokens::default();
         assert_eq!(tokens.titlebar_bg, DEFAULT_SURFACE_RGB);
         assert_eq!(tokens.titlebar_alpha, DEFAULT_SURFACE_ALPHA);
-        assert_eq!(tokens.surface_border_width, 1);
+        assert_eq!(tokens.surface_outline_width, 1);
         assert_eq!(tokens.style, DecorationStyle::Rounded);
         assert_eq!(tokens.buttons, [ButtonTokens::default(); 3]);
     }

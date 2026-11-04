@@ -6,12 +6,12 @@
 
 1. Canonical color policy was stored in `flamewm-ui-core::context_menu` even though Shell, Explorer, Settings, Terminal and the native WM consume it. Four consumers separately unpacked the same `SurfaceFill.rgb` and `.alpha` into an X11 renderer color; frame border and software titlebar painted the same alpha blend through separate code. Move settings interpretation and pixel blending to `flamewm-ui-core::surface`; provide one X11 adapter in `flamewm-ui-x11::surface_style`, retaining old module re-exports.
 2. `flamewm-render-x11::xshape::apply_clipped_mask` did `clip_spans()` (heap `Vec`) followed by `spans_to_rects()` (another heap `Vec`). Stream the clipped spans directly to one rectangle builder. Leave raw shape handling and merge geometry unchanged, and retain an owned test-only helper for regression comparisons.
-3. Do not add polling, new native windows, a theme manager, or another state authority. Shared surface configuration keys remain `surfaceColor`, `surfaceOpacity`, `surfaceBorderColor` and `surfaceBorderOpacity` (white/25% default contour); dev-only Explorer opacity overrides and per-app fill behavior remain intact.
+3. Do not add polling, new native windows, a theme manager, or another state authority. Shared surface configuration keys remain `surfaceColor`, `surfaceOpacity`, `surfaceOutlineColor` and `surfaceOutlineOpacity` (white/25% default contour); dev-only Explorer opacity overrides and per-app fill behavior remain intact.
 
 ## Implemented owners and consumers
 
 - `crates/flamewm-ui-core/src/surface.rs`: single `SurfaceFill`, `surface_fill`, `surface_stroke`, `blend_surface_over_rgb` owner. `context_menu` re-exports the prior public paths.
-- `crates/flamewm-ui-x11/src/surface_style.rs`: `From<SurfaceFill> for UiColor`, `surface_background`, `surface_border`, `project_surface_border`.
+- `crates/flamewm-ui-x11/src/surface_style.rs`: `From<SurfaceFill> for UiColor`, `surface_background`, `surface_outline`, `project_surface_outline`.
 - `crates/flamewm-shell/src/settings_projection.rs`: same native color adapter for shell panel and popups, with panel-specific transparent background mode preserved.
 - `crates/flamewm-explorer/src/theme.rs`: common stroke conversion; Explorer's fill and backdrop still use the existing live/override opacity behavior.
 - `crates/flamewm-terminal/src/app.rs`: common stroke conversion; terminal theme and cache semantics unchanged.

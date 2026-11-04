@@ -162,7 +162,7 @@ impl<C: Connection> Wm<'_, C> {
         // `outline_tokens` also carries the INTERNAL live tune, so a tuned width/alpha is part of
         // the cache key and re-shapes on change.
         let tokens = self.outline_tokens();
-        let outline = tokens.surface_border_alpha > 0 && tokens.surface_border_width > 0;
+        let outline = tokens.surface_outline_alpha > 0 && tokens.surface_outline_width > 0;
         // Every shape writer (ApplyShape, manage, decoration change) comes through
         // here, so this one check covers all emitters. Only the state of the
         // ManagedClient owning `frame` is consulted and updated.
@@ -191,7 +191,7 @@ impl<C: Connection> Wm<'_, C> {
         let ring = if band > 0 || overlay_ring || !outline {
             0
         } else {
-            tokens.surface_border_width
+            tokens.surface_outline_width
         };
         let radius = u32::from(crate::frame::geometry_shape::scaled_corner_radius(
             floating,

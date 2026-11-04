@@ -50,7 +50,7 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .accent-swatch { width:28px; height:28px; border:2px solid var(--rim); border-radius:14px; display:flex; align-items:center; justify-content:center; }
 .swatch-dot { width:9px; height:9px; border-radius:5px; background:#f7f9ff; }
 .accent-swatch:hover { border-color:white; }
-.swatch-red { background:#ef4048; }.swatch-blue { background:#3daee9; }.swatch-purple { background:#9b59b6; }.swatch-teal { background:#1abc9c; }
+.swatch-black { background:#191b1d; }.swatch-white { background:#ffffff; }.swatch-red { background:#ef4048; }.swatch-blue { background:#3daee9; }.swatch-purple { background:#9b59b6; }.swatch-teal { background:#1abc9c; }
 .toggle-slots { width:36px; height:22px; position:relative; flex-grow:0; }
 .toggle { width:36px; height:22px; padding:2px; position:absolute; left:0; top:0; display:flex; align-items:center; border-radius:11px; }
 .toggle-on { justify-content:flex-end; background:var(--accent); }.toggle-off { justify-content:flex-start; background:var(--track); }

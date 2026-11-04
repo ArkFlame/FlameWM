@@ -18,11 +18,11 @@ Date: 2026-10-27. Baseline: Performance Pass 7 archive. Source-only implementati
 
 ## Implementation
 
-- Product settings: `surfaceBorderColor`, `surfaceBorderOpacity` live in the stable settings map; defaults `#FFFFFF` / 25, validation, persistence and live snapshots included.
+- Product settings: `surfaceOutlineColor`, `surfaceOutlineOpacity` live in the stable settings map; defaults `#FFFFFF` / 25, validation, persistence and live snapshots included.
 - Settings → Surfaces: six colour presets, custom picker, opacity stepper; live projection of root border.
 - Native shell: shared `surface_stroke` projection for taskbar, Start, task/menu, launcher, switcher, media/OSD, and quick-control popup roots (including calendar, weather, Wi-Fi and audio).
 - Explorer, Terminal and Settings: root CSS retains a non-zero 1px border; live `UiDocumentAccess::border` applies the shared setting. Explorer transient dialogs inherit the same contour.
-- Native X11 frame: the formerly hardcoded dark frame border pixel follows `ChromeTokens.surface_border_*`; existing frames update on settings changes, and the titlebar buffer receives the one-pixel inner contour.
+- Native X11 frame: the formerly hardcoded dark frame border pixel follows `ChromeTokens.surface_outline_*`; existing frames update on settings changes, and the titlebar buffer receives the one-pixel inner contour.
 - Performance: replace Explorer `Vec<&Entry>` per projection with a bounded `[Option<&Entry>; ROW_SLOTS]` scratch array; unchanged visible-row selection and fallback behavior.
 - Tests: Rust unit tests cover default/custom/disabled contour, per-shell-surface projection and frame-border flattening, plus Settings action mapping; the shared recording document now captures border writes.
 

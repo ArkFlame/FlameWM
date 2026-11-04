@@ -6,7 +6,7 @@ use std::path::Path;
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_ui_core::surface::surface_fill;
-use flamewm_ui_x11::surface_style::surface_border;
+use flamewm_ui_x11::surface_style::surface_outline;
 use flamewm_ui_x11::backdrop::WindowBackdrop;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
@@ -133,7 +133,7 @@ impl ExplorerTheme {
             Some(percent) => ((u16::from(percent) * 255) / 100) as u8,
             None => fill.alpha,
         };
-        theme.stroke = surface_border(snapshot);
+        theme.stroke = surface_outline(snapshot);
         theme
     }
     /// Root fill: the surface once, translucent when the window backdrop shows the wallpaper through it.

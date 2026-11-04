@@ -4,7 +4,7 @@ use super::*;
 
 /// Color rows in the Appearance page: action target and the `#RRGGBB` setting.
 pub(crate) const COLOR_TARGETS: [(&str, &str); 6] = [
-    ("border", "surfaceBorderColor"),
+    ("border", "surfaceOutlineColor"),
     ("surface", "surfaceColor"),
     ("accent", "accent"),
     ("lockbackground", "lockBackgroundColor"),
@@ -43,13 +43,20 @@ pub(crate) struct IntegerStepper {
     pub(crate) maximum: i64,
 }
 
-pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 13] = [
+pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 14] = [
     IntegerStepper {
         slug: "window-margin",
         key: "windowMargin",
         step: 1,
         minimum: 0,
         maximum: 32,
+    },
+    IntegerStepper {
+        slug: "surface-outline-width",
+        key: "surfaceOutlineWidth",
+        step: 1,
+        minimum: 1,
+        maximum: 4,
     },
     IntegerStepper {
         slug: "window-outline-width",
@@ -140,7 +147,7 @@ pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 13] = [
 
 /// Preset circles offered beside each surface color row; `preset.<index>` selects one.
 pub(crate) const SURFACE_PRESETS: [&str; 6] = [
-    "#191B1D", "#336699", "#3DAEE9", "#1ABC9C", "#EF4048", "#9B59B6",
+    "#191B1D", "#FFFFFF", "#3DAEE9", "#1ABC9C", "#EF4048", "#9B59B6",
 ];
 
 /// Colour picker palette: hue columns by shade rows, then one row of greys.

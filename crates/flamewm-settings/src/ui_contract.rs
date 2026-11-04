@@ -362,26 +362,38 @@ fn sync_writes_content_without_unknown_ids_on_every_fixture() {
 }
 
 #[test]
-fn outlines_toggle_hides_the_outline_rows_when_it_is_off() {
-    for (outlines, expected) in [(true, true), (false, false)] {
+fn outline_rows_follow_the_outlines_and_custom_window_toggles() {
+    let shared = [
+        "outline-color-row",
+        "outline-opacity-row",
+        "surface-outline-width-row",
+        "custom-window-outline-row",
+    ];
+    let window = [
+        "window-outline-width-row",
+        "window-outline-color-row",
+        "window-outline-opacity-row",
+    ];
+    for (outlines, custom) in [(true, false), (true, true), (false, true), (false, false)] {
         let mut snapshot = settings_fixture("#3DAEE9", "dark");
         snapshot
             .values
             .insert("outlines".to_owned(), SettingValue::Boolean(outlines));
+        snapshot.values.insert(
+            "customWindowOutline".to_owned(),
+            SettingValue::Boolean(custom),
+        );
         let app = application(snapshot, display_fixtures().remove(0));
         let mut document = StrictDocument::new();
         app.sync(&mut document).expect("sync on strict markup");
-        for row in [
-            "outline-color-row",
-            "outline-opacity-row",
-            "window-outline-width-row",
-            "window-outline-color-row",
-            "window-outline-opacity-row",
-        ] {
+        for row in shared {
+            assert_eq!(document.visible.get(row).copied(), Some(outlines), "{row}");
+        }
+        for row in window {
             assert_eq!(
                 document.visible.get(row).copied(),
-                Some(expected),
-                "with outlines={outlines}, {row} visibility"
+                Some(outlines && custom),
+                "outlines={outlines} custom={custom}: {row}"
             );
         }
     }

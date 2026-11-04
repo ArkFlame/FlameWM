@@ -634,7 +634,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     pub(crate) fn sync_nodes(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         if let Some(snapshot) = self.client.settings() {
-            flamewm_ui_x11::surface_style::project_surface_border(
+            flamewm_ui_x11::surface_style::project_surface_outline(
                 document,
                 "settings-root",
                 snapshot,
@@ -656,7 +656,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(SettingValue::Text(accent)) = self.setting_value("accent") {
             document.background("nav-selection", solid_color(accent)?)?;
             sync_accent_nodes(document, accent)?;
-            for name in ["red", "blue", "purple", "teal"] {
+            for name in ["black", "white", "red", "blue", "purple", "teal"] {
                 let palette = accent_for_swatch(name);
                 document.visible(
                     &format!("accent-selected-{name}"),

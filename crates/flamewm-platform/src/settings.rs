@@ -251,8 +251,13 @@ pub struct ProductSettings {
     /// than the end wraps over midnight, so 21:00..07:00 is a valid night window.
     pub night_shift_start: u16,
     pub night_shift_end: u16,
-    pub surface_border_color: String,
-    pub surface_border_opacity: u8,
+    pub surface_outline_color: String,
+    pub surface_outline_opacity: u8,
+    /// `surfaceOutlineWidth` in px (1..=4); default 1.
+    pub surface_outline_width: u16,
+    /// `customWindowOutline`: off (default) = window frames inherit the surface outline; on = the
+    /// `windowOutline*` settings below apply.
+    pub custom_window_outline: bool,
     /// `windowOutlineColor`: window frame outline colour, separate from the taskbar surface contour.
     pub window_outline_color: String,
     /// `windowOutlineOpacity` percent (0..=100); the default is half opacity.
@@ -400,8 +405,10 @@ impl Default for ProductSettings {
             night_shift_schedule: false,
             night_shift_start: 21 * 60,
             night_shift_end: 7 * 60,
-            surface_border_color: "#FFFFFF".to_owned(),
-            surface_border_opacity: 25,
+            surface_outline_color: "#FFFFFF".to_owned(),
+            surface_outline_opacity: 50,
+            surface_outline_width: 1,
+            custom_window_outline: false,
             window_outline_color: "#FFFFFF".to_owned(),
             window_outline_opacity: 50,
             window_outline_width: 1,
@@ -517,7 +524,7 @@ impl ProductSettings {
     pub fn validate(&self) -> FlameResult<()> {
         validate_color(&self.taskbar_color, false, "taskbarColor")?;
         validate_color(&self.surface_color, false, "surfaceColor")?;
-        validate_color(&self.surface_border_color, false, "surfaceBorderColor")?;
+        validate_color(&self.surface_outline_color, false, "surfaceOutlineColor")?;
         validate_color(&self.window_outline_color, false, "windowOutlineColor")?;
         if self.window_outline_opacity > 100 {
             return invalid("windowOutlineOpacity must be 0..100");
@@ -525,8 +532,11 @@ impl ProductSettings {
         if !(1..=4).contains(&self.window_outline_width) {
             return invalid("windowOutlineWidth must be 1..4");
         }
-        if self.surface_border_opacity > 100 {
-            return invalid("surfaceBorderOpacity must be 0..100");
+        if !(1..=4).contains(&self.surface_outline_width) {
+            return invalid("surfaceOutlineWidth must be 1..4");
+        }
+        if self.surface_outline_opacity > 100 {
+            return invalid("surfaceOutlineOpacity must be 0..100");
         }
         if self.surface_saturation_percent > 200 {
             return invalid("surfaceSaturationPercent must be 0..200");
@@ -757,6 +767,9 @@ impl ConfigStore {
                 "titlebarColor" => {}
                 // Removed contrast-zone option: tolerated and dropped; contrast zones are always glass.
                 "glassifyContrastZones" => {}
+                // Renamed to surfaceOutline*: the old border values are dropped so the new white,
+                // 50 %, 1 px default applies.
+                "surfaceBorderColor" | "surfaceBorderOpacity" => {}
                 // Removed Hermes URL key: tolerated and dropped, never stored or written.
                 "assistant.hermesUrl" => {}
                 // Legacy taskbar surface keys: read only, promoted to surface* below.
@@ -1153,8 +1166,10 @@ stable_settings! {
     (false, taskbar, "nightShiftStart", night_shift_start),
     (false, taskbar, "nightShiftEnd", night_shift_end),
     (false, taskbar, "surfaceBlurPercent", surface_blur_percent),
-    (false, taskbar, "surfaceBorderColor", surface_border_color),
-    (false, taskbar, "surfaceBorderOpacity", surface_border_opacity),
+    (false, taskbar, "surfaceOutlineColor", surface_outline_color),
+    (false, taskbar, "surfaceOutlineOpacity", surface_outline_opacity),
+    (false, taskbar, "surfaceOutlineWidth", surface_outline_width),
+    (false, taskbar, "customWindowOutline", custom_window_outline),
     (false, taskbar, "outlines", outlines),
     (false, taskbar, "windowOutlineColor", window_outline_color),
     (false, taskbar, "windowOutlineOpacity", window_outline_opacity),
