@@ -530,6 +530,8 @@ pub struct TaskbarItems {
     pub battery_only_when_relevant: bool,
     pub clock: bool,
     pub workspaces: bool,
+    /// `taskbarShowDesktopButton`: the show-desktop strip at the bar end.
+    pub desktop_button: bool,
     /// `taskbarActivities`: the running-window area renders at all.
     pub activities: bool,
     /// `taskbarSeparate`: one rounded background per element instead of a unified bar.
@@ -549,6 +551,7 @@ impl Default for TaskbarItems {
             battery_only_when_relevant: false,
             clock: true,
             workspaces: true,
+            desktop_button: true,
             activities: true,
             separate: false,
             blur_percent: 80,
@@ -875,6 +878,7 @@ pub(crate) fn project_status_tray(
     project_tray_button(document, "tray-network", network)?;
     project_battery_tray(document, &system.power, items)?;
     document.visible("clock-button", items.clock)?;
+    document.visible("show-desktop", items.desktop_button)?;
     Ok(())
 }
 

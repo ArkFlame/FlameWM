@@ -220,6 +220,7 @@ pub struct ProductSettings {
     /// Whole date/time cluster; `taskbar_show_date` and `taskbar_show_seconds` apply inside it.
     pub taskbar_show_clock: bool,
     pub taskbar_show_workspaces: bool,
+    pub taskbar_show_desktop_button: bool,
     pub taskbar_battery_only_when_relevant: bool,
     /// `taskbarActivities`: show the running-window area; off also forbids minimizing.
     pub taskbar_activities: bool,
@@ -381,6 +382,7 @@ impl Default for ProductSettings {
             taskbar_show_battery: true,
             taskbar_show_clock: true,
             taskbar_show_workspaces: true,
+            taskbar_show_desktop_button: true,
             taskbar_battery_only_when_relevant: false,
             taskbar_activities: true,
             taskbar_separate: false,
@@ -1177,6 +1179,7 @@ stable_settings! {
     (false, taskbar, "taskbarShowBattery", taskbar_show_battery),
     (false, taskbar, "taskbarShowClock", taskbar_show_clock),
     (false, taskbar, "taskbarShowWorkspaces", taskbar_show_workspaces),
+    (false, taskbar, "taskbarShowDesktopButton", taskbar_show_desktop_button),
     (false, taskbar, "taskbarBatteryOnlyWhenRelevant", taskbar_battery_only_when_relevant),
     (false, taskbar, "taskbarActivities", taskbar_activities),
     (false, taskbar, "taskbarSeparate", taskbar_separate),

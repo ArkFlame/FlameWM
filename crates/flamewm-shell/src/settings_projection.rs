@@ -338,6 +338,11 @@ pub fn taskbar_items(snapshot: Option<&SettingsSnapshot>) -> TaskbarItems {
         ),
         clock: bool_setting(snapshot, "taskbarShowClock", defaults.clock),
         workspaces: bool_setting(snapshot, "taskbarShowWorkspaces", defaults.workspaces),
+        desktop_button: bool_setting(
+            snapshot,
+            "taskbarShowDesktopButton",
+            defaults.desktop_button,
+        ),
         activities: bool_setting(snapshot, "taskbarActivities", defaults.activities),
         separate: bool_setting(snapshot, "taskbarSeparate", defaults.separate),
         blur_percent: blur_px_to_percent(dock_material(snapshot).blur_px),

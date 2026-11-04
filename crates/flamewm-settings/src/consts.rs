@@ -40,6 +40,7 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "taskbar-battery-relevant-on",
     "taskbar-clock-on",
     "taskbar-workspaces-on",
+    "taskbar-desktop-button-on",
     "taskbar-activities-on",
     "taskbar-separate-on",
     "assistant-enabled-on",
@@ -114,6 +115,12 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "taskbarShowWorkspaces",
         "taskbar-workspaces-on",
         "taskbar-workspaces-off",
+        true,
+    ),
+    (
+        "taskbarShowDesktopButton",
+        "taskbar-desktop-button-on",
+        "taskbar-desktop-button-off",
         true,
     ),
     (
