@@ -127,7 +127,10 @@ use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::calloop::ping::make_ping;
+use flamewm_reactor::BorrowedRawFd;
+use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::{Interest, PostAction};
 use smithay::reexports::drm::Device as _;
 use smithay::reexports::drm::control::{
     Device as ControlDevice, Mode as DrmMode, ModeTypeFlags, ResourceHandles, connector, crtc,
@@ -149,8 +152,8 @@ use crate::render::{self, Elem};
 use crate::stage_line;
 use crate::startup::{FIRST_FRAME_DEADLINE, FirstFrameGate, NO_FAILURE};
 use crate::state::{
-    FrameDecision, GpuProbe, OutputFrames, SYNC_WAIT_BUDGET, State, SyncWait, pick_gpu, retry_owed,
-    scan_failed, sync_wait_decision,
+    FrameDecision, GpuProbe, OutputFrames, SYNC_WAIT_BUDGET, SceneBuild, State, SyncWait, pick_gpu,
+    retry_owed, scan_failed, scene_build, sync_wait_decision,
 };
 
 type Compositor =
@@ -161,8 +164,6 @@ const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
 const FRAME_RETRY: Duration = Duration::from_millis(16);
 /// How often one error may be retried before the output is left alone.
 const MAX_RETRIES: u32 = 3;
-/// logind signals are read by polling the system bus: there is no blocking bus source.
-const SESSION_POLL: Duration = Duration::from_millis(20);
 
 /// One scanned-out connector. `global` is `None` for the output that is `State::output`.
 struct OutputSurface {
@@ -173,6 +174,13 @@ struct OutputSurface {
     compositor: Compositor,
     /// Frame scheduling state: in flight, stale, retry owed.
     frames: OutputFrames,
+}
+
+/// The scene element list of the last full paint. Its first `cursor_len` entries are the cursor.
+#[derive(Default)]
+struct SceneCache {
+    elements: Vec<Elem>,
+    cursor_len: usize,
 }
 
 pub struct Drm {
@@ -200,6 +208,9 @@ pub struct Drm {
     gate: Option<&'static str>,
     retry_scheduled: bool,
     retry_attempts: u32,
+    /// Last full scene (cursor first), reused by cursor-only paints. `None` until the first paint and
+    /// after a session pause, when its textures can no longer be trusted.
+    scene: Option<SceneCache>,
     /// The queue/present boundary of this session: what reached KMS and what came back from it. It is
     /// also what the bounded startup deadline asks, and the only source of its counters.
     first_frame: FirstFrameGate,
@@ -350,6 +361,7 @@ fn init_backend(
         gate: None,
         retry_scheduled: false,
         retry_attempts: 0,
+        scene: None,
         first_frame: FirstFrameGate::new(),
         first_frame_deadline: None,
         timing: *timing,
@@ -389,20 +401,33 @@ fn init_backend(
         on_drm_event(state, &drm_events, event);
     })?;
 
-    // logind signals (VT pause and resume) are read by polling the bus; the events are queued by
-    // the session and dispatched here, outside the session borrow.
+    // logind signals (VT pause and resume) arrive on the system bus. The bus fd wakes the loop only
+    // when logind has data, so an idle session costs no wakeups. The events are queued by the
+    // session and dispatched here, outside the session borrow.
+    let session_fd = drm
+        .borrow()
+        .session
+        .bus_fd()
+        .ok_or("logind bus has no descriptor")?;
     let session_drm = Rc::clone(&drm);
-    handle.insert_source(Timer::from_duration(SESSION_POLL), move |_, (), state| {
-        let events = {
-            let d = session_drm.borrow();
-            d.session.pump();
-            d.session.take_events()
-        };
-        for event in events {
-            on_logind_event(state, &session_drm, event);
-        }
-        TimeoutAction::ToDuration(SESSION_POLL)
-    })?;
+    handle.insert_source(
+        Generic::new(
+            BorrowedRawFd(session_fd),
+            Interest::READ,
+            smithay::reexports::calloop::Mode::Level,
+        ),
+        move |_, _, state| {
+            let events = {
+                let d = session_drm.borrow();
+                d.session.pump();
+                d.session.take_events()
+            };
+            for event in events {
+                on_logind_event(state, &session_drm, event);
+            }
+            Ok(PostAction::Continue)
+        },
+    )?;
 
     let udev_drm = Rc::clone(&drm);
     handle.insert_source(udev_backend, move |event, (), state| {
@@ -421,11 +446,22 @@ fn init_backend(
     })?;
 
     // The wake pipe: `State::request_full_redraw` pings it from anywhere (input, protocol
-    // handlers, timers) so a request never waits for an unrelated event to be painted.
+    // handlers, timers). The paint is deferred to an idle callback, which calloop runs only after
+    // every source ready in this dispatch has been handled, so pointer and key events that arrived
+    // together are applied before the frame that shows them.
     let (ping, ping_source) = make_ping()?;
     let waker_drm = Rc::clone(&drm);
-    handle.insert_source(ping_source, move |(), (), state| {
-        render_all(state, &waker_drm);
+    let idle = handle.clone();
+    let paint_queued = Rc::new(std::cell::Cell::new(false));
+    handle.insert_source(ping_source, move |(), (), _state| {
+        if !paint_queued.replace(true) {
+            let queued = Rc::clone(&paint_queued);
+            let drm_idle = Rc::clone(&waker_drm);
+            idle.insert_idle(move |state| {
+                queued.set(false);
+                render_all(state, &drm_idle);
+            });
+        }
     })?;
     state.set_drm_waker(ping);
 
@@ -472,6 +508,7 @@ impl Drm {
     fn quiesce(&mut self) {
         self.retry_scheduled = false;
         self.retry_attempts = 0;
+        self.scene = None;
         for out in &mut self.surfaces {
             out.frames.park();
         }
@@ -526,18 +563,45 @@ impl Drm {
             return;
         }
 
-        // Cursor first: it is the topmost element and the one the cursor plane can take.
-        let mut elements: Vec<Elem> =
+        // Cursor first: it is the topmost element and the one the cursor plane can take. It is rebuilt
+        // on every paint, since its position is the common reason to paint at all.
+        let cursor =
             state
                 .cursors
                 .elements(&mut self.renderer, &state.cursor_status, state.pointer);
-        // Same blurred desktop capture as the winit path, so DRM menus and titlebars match.
-        let output_size = Size::<i32, Physical>::from((state.output_size.w, state.output_size.h));
-        if let Err(error) = render::refresh_desktop_backdrop(state, &mut self.renderer, output_size)
-        {
-            eprintln!("flamewm-wayland: desktop backdrop failed: {error}");
-        }
-        elements.extend(render::build_elements(state, &mut self.renderer));
+        let scene_dirty = state.take_scene_dirty();
+        let cached = self.scene.take();
+        let scene = match (scene_build(cached.is_some(), scene_dirty), cached) {
+            (SceneBuild::CursorOnly, Some(mut scene)) => {
+                // Pointer motion: the window, decoration and backdrop elements are still valid, so
+                // only the cursor slice of the cached list is swapped.
+                let count = cursor.len();
+                scene
+                    .elements
+                    .splice(0..scene.cursor_len, cursor)
+                    .for_each(drop);
+                scene.cursor_len = count;
+                scene
+            }
+            _ => {
+                // Same blurred desktop capture as the winit path, so DRM menus and titlebars match.
+                let output_size =
+                    Size::<i32, Physical>::from((state.output_size.w, state.output_size.h));
+                if let Err(error) =
+                    render::refresh_desktop_backdrop(state, &mut self.renderer, output_size)
+                {
+                    eprintln!("flamewm-wayland: desktop backdrop failed: {error}");
+                }
+                let cursor_len = cursor.len();
+                let mut elements = cursor;
+                elements.extend(render::build_elements(state, &mut self.renderer));
+                SceneCache {
+                    elements,
+                    cursor_len,
+                }
+            }
+        };
+        let elements = &scene.elements;
 
         // `FLAMEWM_WAYLAND_DUMP`: one readback of the primary output. Taking the path makes a set
         // request be consumed exactly once, and `state.dumped` stops main.rs's re-arming timer.
@@ -546,7 +610,7 @@ impl Drm {
             match render::dump_offscreen(
                 &mut self.renderer,
                 &self.surfaces[0].output,
-                &elements,
+                elements,
                 size,
                 &path,
             ) {
@@ -560,7 +624,7 @@ impl Drm {
             }
         }
 
-        if self.draw_pass(&elements, has_callback) {
+        if self.draw_pass(elements, has_callback) {
             // The kernel rejected an atomic state. That is a leftover from whoever owned the CRTCs
             // before us rather than an unusable output, so the device state is reset and the pass
             // is repeated once, exactly like anvil's `render_surface`. It cannot loop: the second
@@ -577,7 +641,7 @@ impl Drm {
                             );
                         }
                     }
-                    self.draw_pass(&elements, has_callback);
+                    self.draw_pass(elements, has_callback);
                 }
                 Err(error) => eprintln!("flamewm-wayland: device reset failed: {error}"),
             }
@@ -612,6 +676,7 @@ impl Drm {
         } else if !retry {
             self.retry_attempts = 0;
         }
+        self.scene = Some(scene);
         send_frame_callbacks(state);
     }
 

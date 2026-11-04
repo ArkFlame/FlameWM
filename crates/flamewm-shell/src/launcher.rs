@@ -8,6 +8,7 @@ use std::ops::Range;
 
 use flamewm_api::applications::DesktopApplication;
 use flamewm_api::DesktopAppId;
+use flamewm_shell_core::selection::ListSelection;
 use flamewm_shell_core::StartModel;
 use flamewm_ui_x11::UiDocumentAccess;
 
@@ -29,7 +30,7 @@ const KEY_PAYLOAD_SEPARATOR: char = '\u{1f}';
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct LauncherState {
     query: String,
-    selected: usize,
+    selection: ListSelection,
     first: usize,
     /// Cached result count for the current query; navigation reads this, never re-filters.
     count: usize,
@@ -40,7 +41,7 @@ impl LauncherState {
     /// Opening clears the query and selection; launch history survives across opens.
     pub fn open(&mut self, model: &StartModel) {
         self.query.clear();
-        self.selected = 0;
+        self.selection.reset();
         self.first = 0;
         self.refresh(model);
     }
@@ -56,8 +57,14 @@ impl LauncherState {
     }
 
     #[must_use]
-    pub const fn selected(&self) -> usize {
-        self.selected
+    /// Highlighted result index; Enter with no highlight launches the first result.
+    pub fn selected(&self) -> usize {
+        self.selection.highlighted().unwrap_or(0)
+    }
+
+    /// Pointer left the list: drop the highlight.
+    pub fn leave(&mut self) -> bool {
+        self.selection.reset()
     }
 
     /// Window of result indices currently shown.
@@ -90,11 +97,8 @@ impl LauncherState {
         if self.count == 0 {
             return;
         }
-        let target = self
-            .selected
-            .saturating_add_signed(delta)
-            .min(self.count - 1);
-        self.selected = target;
+        self.selection.step(delta, self.count);
+        let target = self.selected();
         if target < self.first {
             self.first = target;
         } else if target >= self.first + LAUNCHER_ROWS {
@@ -107,11 +111,7 @@ impl LauncherState {
     /// The window never scrolls: a hovered row is already visible.
     pub fn select_slot(&mut self, slot: usize) -> bool {
         let index = self.first + slot;
-        if slot >= LAUNCHER_ROWS || index >= self.count || index == self.selected {
-            return false;
-        }
-        self.selected = index;
-        true
+        slot < LAUNCHER_ROWS && self.selection.hover(index, self.count)
     }
 
     /// Application at result index `index`, in the same order the rows are shown.
@@ -145,7 +145,7 @@ impl LauncherState {
     }
 
     fn requery(&mut self, model: &StartModel) {
-        self.selected = 0;
+        self.selection.reset();
         self.first = 0;
         self.refresh(model);
     }
@@ -159,12 +159,14 @@ impl LauncherState {
     /// Row offset of the single selection highlight inside the visible window.
     #[must_use]
     pub fn highlight_y(&self) -> f32 {
-        ((self.selected - self.first.min(self.selected)) as i32 * LAUNCHER_ROW_HEIGHT) as f32
+        let selected = self.selected();
+        ((selected - self.first.min(selected)) as i32 * LAUNCHER_ROW_HEIGHT) as f32
     }
 
     /// Moves only the selection highlight node. Hover uses this, not `project`, so the
     /// row labels and icons are not rewritten on every selection change.
     pub fn project_highlight(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        document.visible("launcher-highlight", self.selection.highlighted().is_some())?;
         document.position("launcher-highlight", 0.0, self.highlight_y())
     }
 
@@ -352,11 +354,27 @@ mod tests {
             count: 20,
             ..LauncherState::default()
         };
+        // First arrow from no selection lands on row 0; the next step scrolls by one row.
+        state.move_by(1);
         state.move_by(LAUNCHER_ROWS as isize);
         assert_eq!(state.window(), 1..LAUNCHER_ROWS + 1);
         assert!(state.select_slot(0));
         assert_eq!(state.selected(), 1, "slot 0 is the first visible row");
         assert_eq!(state.highlight_y(), 0.0);
+    }
+
+    #[test]
+    fn pointer_leave_clears_hover_and_next_arrow_starts_at_top() {
+        let mut state = LauncherState {
+            count: 20,
+            ..LauncherState::default()
+        };
+        state.select_slot(3);
+        assert!(state.leave(), "leave drops the hover highlight");
+        assert!(!state.leave(), "second leave is a no-op");
+        assert_eq!(state.selection.highlighted(), None);
+        state.move_by(5);
+        assert_eq!(state.selected(), 0, "first arrow after leave picks row 0");
     }
 
     #[test]

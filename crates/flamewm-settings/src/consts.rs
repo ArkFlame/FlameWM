@@ -52,6 +52,7 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "weather-auto-location-on",
     "time-auto-zone-on",
     "font-toggle-on",
+    "font-shadow-toggle-on",
     "wallpaper-share-on",
     "night-shift-on",
     "night-shift-schedule-on",

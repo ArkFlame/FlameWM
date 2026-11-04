@@ -500,7 +500,7 @@ impl ShellLoop {
                 return Ok(());
             }
             self.start_open = true;
-            self.start_selected = 0;
+            self.start_selection.reset();
             let started = Instant::now();
             let _total = shell_stage!("shell.start.open.total");
             self.project_start(runtime)?;
@@ -543,7 +543,10 @@ impl ShellLoop {
             let payload = event.action.text.as_deref().unwrap_or_default();
             if let Some((modifiers, key)) = flamewm_shell::launcher::parse_typed_key(payload) {
                 if key == "Return" || key == "KP_Enter" {
-                    self.launch_start_slot(runtime, self.start_selected)?;
+                    self.launch_start_slot(
+                        runtime,
+                        self.start_selection.highlighted().unwrap_or(0),
+                    )?;
                     return Ok(());
                 }
                 if let Some(delta) = flamewm_shell::launcher::navigation_delta(modifiers, key) {
@@ -559,6 +562,8 @@ impl ShellLoop {
                     ActionPhase::Hover => self.route_launcher_hover(runtime, slot)?,
                     _ => {}
                 }
+            } else if event.action.phase == ActionPhase::Hover {
+                self.route_launcher_leave(runtime)?;
             }
             return Ok(());
         }
@@ -572,7 +577,7 @@ impl ShellLoop {
             match input {
                 "\u{8}" => {
                     self.start_query.pop();
-                    self.start_selected = 0;
+                    self.start_selection.reset();
                     self.project_start(runtime)?;
                 }
                 "\u{1b}" => {
@@ -580,14 +585,15 @@ impl ShellLoop {
                         self.close_transients(runtime)?;
                     } else {
                         self.start_query.clear();
-                        self.start_selected = 0;
+                        self.start_selection.reset();
                         self.project_start(runtime)?;
                     }
                 }
-                "\n" => self.launch_start_slot(runtime, self.start_selected)?,
+                "\n" => self
+                    .launch_start_slot(runtime, self.start_selection.highlighted().unwrap_or(0))?,
                 value if !value.is_empty() => {
                     self.start_query.push_str(value);
-                    self.start_selected = 0;
+                    self.start_selection.reset();
                     self.project_start(runtime)?;
                 }
                 _ => {}
@@ -610,8 +616,14 @@ impl ShellLoop {
         }
 
         if let Some(slot) = slot_of(action, "start.app.") {
-            if event.action.phase == ActionPhase::Release && event.action.inside {
-                self.launch_start_slot(runtime, slot)?;
+            if event.action.inside {
+                match event.action.phase {
+                    ActionPhase::Release => self.launch_start_slot(runtime, slot)?,
+                    ActionPhase::Hover => self.hover_start_slot(runtime, slot)?,
+                    _ => {}
+                }
+            } else if event.action.phase == ActionPhase::Hover {
+                self.reset_start_selection(runtime)?;
             }
             return Ok(());
         }
@@ -651,6 +663,8 @@ impl ShellLoop {
             && event.action.inside
             && action.starts_with("start.category.");
         if category_hover {
+            // Moving from the app list onto the category rail leaves the list.
+            self.reset_start_selection(runtime)?;
             // Same-view hovers are free; only a real target change updates
             // state and reprojects ONE unified document.
             let Some(target) = flamewm_shell::start::category_for_action(action) else {

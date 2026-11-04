@@ -390,6 +390,7 @@ pub fn apply_typography<V: UiDocumentAccess>(
     settings: &LockSettings,
 ) -> Result<(), String> {
     view.font_family(settings.font_family.clone())?;
+    view.ui_text_shadow(settings.text_shadow)?;
     view.ui_font_defaults(f32::from(settings.font_size_offset), settings.font_bold)
 }
 
@@ -1183,6 +1184,7 @@ mod tests {
     fn lock_document_applies_global_typography_defaults() {
         let settings = LockSettings {
             font_bold: true,
+            text_shadow: true,
             font_size_offset: 3,
             ..LockSettings::default()
         };

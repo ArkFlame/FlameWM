@@ -18,7 +18,7 @@ use smithay::reexports::x11rb::connection::Connection;
 use smithay::reexports::x11rb::protocol::Event as X11Event;
 use smithay::reexports::x11rb::protocol::xproto::{
     Atom, AtomEnum, ChangeWindowAttributesAux, ConnectionExt, CreateWindowAux, EventMask,
-    Window as X11Window, WindowClass,
+    InputFocus, Window as X11Window, WindowClass,
 };
 use smithay::reexports::x11rb::rust_connection::RustConnection;
 use smithay::utils::{Logical, Point, Rectangle, Size};
@@ -78,6 +78,19 @@ impl Props {
             conn,
         };
         Ok(props)
+    }
+
+    /// X-side keyboard focus: XWayland does not derive it from Wayland keyboard focus while we are
+    /// the WM, so without this X clients receive no key events. Reuses the long-lived connection.
+    pub fn set_input_focus(&self, window: X11Window) {
+        let focus = self.conn.set_input_focus(
+            InputFocus::POINTER_ROOT,
+            window,
+            smithay::reexports::x11rb::CURRENT_TIME,
+        );
+        if focus.is_ok() {
+            let _ = self.conn.flush();
+        }
     }
 
     /// Duplicate the properties connection fd for calloop readiness; the X11 connection remains
@@ -306,6 +319,18 @@ impl State {
             .iter()
             .find(|(_, managed)| managed.window_id() == window.window_id())
             .map(|(id, _)| *id)
+    }
+
+    /// Gives X input focus to a managed X11 client.
+    ///
+    /// Keyboard focus on the `wl_surface` alone does not reach the X client: `XWayland` leaves X
+    /// input focus where it is when a WM owns the window, so keys go to `PointerRoot`. The WM must
+    /// SetInputFocus itself, which any client connection may do. A second connection keeps this
+    /// independent of the XWM connection smithay owns.
+    pub fn set_x11_input_focus(&self, window: &X11Surface) {
+        if let Some(props) = self.props.as_ref() {
+            props.set_input_focus(window.window_id());
+        }
     }
 
     fn kind_of(&self, window: &X11Surface) -> Kind {

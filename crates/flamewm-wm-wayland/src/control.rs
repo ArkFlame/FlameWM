@@ -15,7 +15,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use flamewm_api::applications::ApplicationLaunchOptions;
 use flamewm_api::background::BackgroundState;
@@ -43,8 +43,8 @@ use flamewm_integrations_linux::backlight::BacklightProvider;
 use flamewm_platform::host::PlatformHost;
 use flamewm_platform::system::{MediaAudioKey, MediaBrightnessKey};
 use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::calloop::ping::Ping;
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, Mode, PostAction};
 use smithay::wayland::compositor;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
@@ -626,6 +626,11 @@ pub struct Service {
     popup_focus: RefCell<Option<u32>>,
     switcher: RefCell<Option<Switcher>>,
     started: Instant,
+    /// Set whenever the mirror changed, cleared by the publish in `after_dispatch`. A change seen by
+    /// `turn` (which builds the mirror too) must still be announced, so the flag outlives `turn`.
+    publish_pending: std::cell::Cell<bool>,
+    /// Write-readiness source, present only while libdbus has outbound bytes it could not flush.
+    write_watch: std::cell::Cell<Option<RegistrationToken>>,
 }
 
 pub(crate) fn settings_path() -> PathBuf {
@@ -862,6 +867,8 @@ impl Service {
             popup_focus: RefCell::new(None),
             switcher: RefCell::new(None),
             started: Instant::now(),
+            publish_pending: std::cell::Cell::new(false),
+            write_watch: std::cell::Cell::new(None),
         })
     }
 
@@ -976,6 +983,7 @@ impl Service {
         let changed = *self.mirror.borrow() != next;
         if changed {
             *self.mirror.borrow_mut() = next;
+            self.publish_pending.set(true);
         }
         changed
     }
@@ -1069,11 +1077,50 @@ impl Service {
 
     /// Called after every loop dispatch: emits `WindowsSnapshotChanged` when the windows moved.
     pub fn after_dispatch(&self, state: &mut State) {
-        if self.sync(state) {
+        // Pointer motion repaints without touching the mirror: rebuilding it on every loop turn
+        // was per-motion work on the input path. Every path that changes the mirror also requests a
+        // redraw (`State::request_full_redraw` sets `mirror_dirty`), so this gate cannot miss a change.
+        if state.take_mirror_dirty() {
+            self.sync(state);
+        }
+        if self.publish_pending.replace(false) {
             self.publish_changes();
         }
         self.focus_new_popup(state);
         self.finish_switcher_if_released(state);
+        self.sync_write_watch(state);
+    }
+
+    /// Arms write-readiness on the bus only while libdbus holds bytes it could not send, so an idle
+    /// bus costs no wakeups. Called after every dispatch; a fired source removes itself and the next
+    /// call re-arms it if the outbound queue is still not empty.
+    fn sync_write_watch(&self, state: &State) {
+        let wants = self.server.watch().events.contains(FdEvents::WRITABLE);
+        match (wants, self.write_watch.get()) {
+            (true, None) => {
+                let fd = self.server.watch().fd;
+                let source = Generic::new(
+                    flamewm_reactor::BorrowedRawFd(fd),
+                    Interest::WRITE,
+                    Mode::Level,
+                );
+                match state.loop_handle.insert_source(source, |_, _, state| {
+                    if let Some(service) = state.control.clone() {
+                        service.write_watch.set(None);
+                        service.turn(state);
+                    }
+                    Ok(PostAction::Remove)
+                }) {
+                    Ok(token) => self.write_watch.set(Some(token)),
+                    Err(error) => eprintln!("flamewm-wayland: bus write watch failed: {error}"),
+                }
+            }
+            (false, Some(token)) => {
+                state.loop_handle.remove(token);
+                self.write_watch.set(None);
+            }
+            _ => {}
+        }
     }
 
     /// Alt+Tab: the first press opens the switcher on the visible windows with the second one
@@ -1272,14 +1319,9 @@ impl Service {
     }
 }
 
-/// Fallback bus turn timer: the bus fd wakes a turn as soon as a message arrives, so the timer only
-/// covers a send libdbus could not flush at once. It runs every `BUS_TURN_MIN_MS` while busy and
-/// backs off to `BUS_TURN_MAX_MS` while idle, so an idle compositor wakes once a second at most.
-const BUS_TURN_MIN_MS: u64 = 10;
-const BUS_TURN_MAX_MS: u64 = 1000;
-
-/// Installs the service: connects, turns it on every bus fd wake plus the fallback timer, and
-/// stores the service on `State`.
+/// Installs the service: connects and turns it on every bus read wake. Outbound bytes that libdbus
+/// could not flush are driven by a write-readiness source armed in `after_dispatch`, so an idle
+/// compositor has no bus timer at all.
 pub fn install(state: &mut State) -> Result<(), Box<dyn Error>> {
     let service = Rc::new(Service::connect(state)?);
     let bus = flamewm_reactor::BorrowedRawFd(service.server.watch().fd);
@@ -1291,22 +1333,6 @@ pub fn install(state: &mut State) -> Result<(), Box<dyn Error>> {
                 service.turn(state);
             }
             Ok(PostAction::Continue)
-        },
-    )?;
-    let mut interval = BUS_TURN_MIN_MS;
-    state.loop_handle.insert_source(
-        Timer::from_duration(Duration::from_millis(interval)),
-        move |_, (), state| {
-            let busy = state
-                .control
-                .clone()
-                .is_some_and(|service| service.turn(state));
-            interval = if busy {
-                BUS_TURN_MIN_MS
-            } else {
-                (interval * 2).min(BUS_TURN_MAX_MS)
-            };
-            TimeoutAction::ToDuration(Duration::from_millis(interval))
         },
     )?;
     Ok(())

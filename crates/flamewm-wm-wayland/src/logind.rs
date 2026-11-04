@@ -50,7 +50,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::error::Error as StdError;
 use std::fmt;
 use std::fs::File;
-use std::os::fd::OwnedFd;
+use std::os::fd::{OwnedFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::rc::Rc;
@@ -193,6 +193,10 @@ pub(crate) trait Bus {
     /// Starts `PauseDevice`, `ResumeDevice` and `Activate` delivery into `queue`.
     fn subscribe(&self, session_path: &str, queue: EventQueue) -> Result<(), LogindError>;
     fn pump(&self);
+    /// Readable whenever bus data waits; `None` when the bus has no descriptor (tests).
+    fn watch_fd(&self) -> Option<RawFd> {
+        None
+    }
 }
 
 struct Inner {
@@ -555,6 +559,11 @@ impl LogindSession {
     pub fn pump(&self) {
         let bus = Rc::clone(&self.inner.borrow().bus);
         bus.pump();
+    }
+
+    /// The bus descriptor, so the caller can sleep until logind has something to say.
+    pub fn bus_fd(&self) -> Option<RawFd> {
+        self.inner.borrow().bus.watch_fd()
     }
 
     /// Drains the pause, resume and activation events seen since the last call, in delivery order.
@@ -936,9 +945,21 @@ mod system {
         }
 
         fn pump(&self) {
-            if let Err(error) = self.conn.process(Duration::ZERO) {
-                eprintln!("flamewm-wayland: logind bus error: {error}");
+            // Drain everything libdbus already buffered: the fd only reports data the kernel holds.
+            loop {
+                match self.conn.process(Duration::ZERO) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        eprintln!("flamewm-wayland: logind bus error: {error}");
+                        break;
+                    }
+                }
             }
+        }
+
+        fn watch_fd(&self) -> Option<std::os::fd::RawFd> {
+            Some(self.conn.channel().watch().fd)
         }
     }
 }

@@ -18,6 +18,7 @@ pub struct LockSettings {
     pub accent: String,
     pub font_family: String,
     pub font_bold: bool,
+    pub text_shadow: bool,
     pub font_size_offset: i8,
     /// Whether the lock background is cropped from one shared image across outputs.
     pub share_wallpaper: bool,
@@ -86,6 +87,7 @@ impl Default for LockSettings {
             accent: DEFAULT_ACCENT.to_string(),
             font_family: DEFAULT_FONT_FAMILY.to_string(),
             font_bold: false,
+            text_shadow: true,
             font_size_offset: 0,
             share_wallpaper: false,
             saver: SaverConfig::default(),
@@ -139,6 +141,9 @@ impl LockSettings {
             font_bold: lookup("fontBold")
                 .and_then(parse_bool)
                 .unwrap_or(defaults.font_bold),
+            text_shadow: lookup("textShadow")
+                .and_then(parse_bool)
+                .unwrap_or(defaults.text_shadow),
             font_size_offset: lookup("fontSizeOffset")
                 .and_then(|value| value.trim().parse::<i8>().ok())
                 .filter(|value| (-2..=4).contains(value))

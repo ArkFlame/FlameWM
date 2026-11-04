@@ -979,22 +979,15 @@ pub fn project_start_unified(
     Ok(())
 }
 
-/// Next keyboard selection among `count` visible Start rows; clamps at both ends.
-#[must_use]
-pub fn step_start_selection(selected: usize, delta: isize, count: usize) -> usize {
-    selected
-        .saturating_add_signed(delta)
-        .min(count.saturating_sub(1))
-}
-
-/// Paints the keyboard-selected Start row; every other row is cleared.
+/// Paints the highlighted Start row (keyboard or hover); every other row is cleared.
+/// `None` means no selection, so all rows are cleared.
 pub fn project_start_highlight(
     document: &mut impl UiDocumentAccess,
-    selected: usize,
+    highlighted: Option<usize>,
 ) -> Result<(), String> {
     let accent = crate::projection::task_accent();
     for index in 0..START_APP_SLOT_COUNT {
-        let color = if index == selected {
+        let color = if Some(index) == highlighted {
             UiColor { a: 0x38, ..accent }
         } else {
             UiColor { a: 0, ..accent }
@@ -2267,13 +2260,18 @@ pub(crate) mod tests {
 
 #[cfg(test)]
 mod start_selection_tests {
-    use super::step_start_selection;
+    use flamewm_shell_core::selection::ListSelection;
 
     #[test]
     fn selection_clamps_to_visible_rows() {
-        assert_eq!(step_start_selection(0, 1, 3), 1);
-        assert_eq!(step_start_selection(2, 1, 3), 2);
-        assert_eq!(step_start_selection(0, -1, 3), 0);
-        assert_eq!(step_start_selection(0, 1, 0), 0);
+        let mut state = ListSelection::default();
+        state.step(1, 3);
+        assert_eq!(state.highlighted(), Some(0));
+        state.step(1, 3);
+        state.step(1, 3);
+        state.step(1, 3);
+        assert_eq!(state.highlighted(), Some(2));
+        state.step(-1, 0);
+        assert_eq!(state.highlighted(), None, "empty list clears the highlight");
     }
 }

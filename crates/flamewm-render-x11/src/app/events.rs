@@ -613,9 +613,24 @@ impl X11App {
                     }
                 }
                 LEAVE_NOTIFY => {
-                    let had_hover = self.interaction.hover.take().is_some();
+                    // SAFETY: The discriminator identifies XCrossingEvent in this match arm.
+                    let crossing = unsafe { event.xcrossing };
+                    let left = self.interaction.hover.take();
                     self.set_cursor(CursorKind::Default);
-                    if had_hover {
+                    if let Some(index) = left {
+                        // Leave is a hover with `inside == false` on the node that was hovered,
+                        // so owners can reset their per-list highlight without a new action kind.
+                        let mut event = action_event(
+                            document.ui_scale(),
+                            ActionPhase::Hover,
+                            0,
+                            (crossing.x, crossing.y),
+                            false,
+                            crossing.time as u64,
+                            None,
+                            crossing.state,
+                        );
+                        fire_node(on_action, document, &mut buffers, index, &mut event)?;
                         self.mark_input_repaint();
                     }
                 }

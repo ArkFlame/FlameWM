@@ -166,6 +166,29 @@ pub struct XConfigureEvent {
     pub override_redirect: Bool,
 }
 
+/// `XCrossingEvent` (EnterNotify/LeaveNotify) layout from `<X11/Xlib.h>`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct XCrossingEvent {
+    pub type_: c_int,
+    pub serial: c_ulong,
+    pub send_event: Bool,
+    pub display: *mut Display,
+    pub window: Window,
+    pub root: Window,
+    pub subwindow: Window,
+    pub time: Time,
+    pub x: c_int,
+    pub y: c_int,
+    pub x_root: c_int,
+    pub y_root: c_int,
+    pub mode: c_int,
+    pub detail: c_int,
+    pub same_screen: Bool,
+    pub focus: Bool,
+    pub state: c_uint,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct XMotionEvent {
@@ -289,6 +312,7 @@ pub union XEvent {
     pub xvisibility: XVisibilityEvent,
     pub xconfigure: XConfigureEvent,
     pub xmotion: XMotionEvent,
+    pub xcrossing: XCrossingEvent,
     pub xkey: XKeyEvent,
     pub xbutton: XButtonEvent,
     pub xclient: XClientMessageEvent,

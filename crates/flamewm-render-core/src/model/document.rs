@@ -188,6 +188,8 @@ pub struct RuntimeDocument {
     pub(super) ui_font_family: String,
     pub(super) ui_font_size_offset: f32,
     pub(super) ui_font_bold: bool,
+    /// Global text-shadow gate; off suppresses every text shadow at paint time.
+    pub(super) ui_text_shadow: bool,
     pub(super) ui_scale: f32,
 }
 
@@ -252,6 +254,7 @@ impl RuntimeDocument {
             ui_font_family: "IBM Plex Sans".to_string(),
             ui_font_size_offset: 0.0,
             ui_font_bold: false,
+            ui_text_shadow: true,
             ui_scale: 1.0,
         })
     }

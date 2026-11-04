@@ -66,7 +66,7 @@ pub(crate) struct ShellLoop {
     pub(crate) dispatcher: Option<std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>,
     pub(crate) start_category: StartCategory,
     pub(crate) start_query: String,
-    pub(crate) start_selected: usize,
+    pub(crate) start_selection: flamewm_shell_core::selection::ListSelection,
     pub(crate) desktop_hidden: Vec<flamewm_api::WindowRef>,
     pub(crate) launcher: flamewm_shell::launcher::LauncherState,
     pub(crate) task_drag: Option<flamewm_shell::taskbar::tasks::drag::TaskDrag>,
@@ -152,7 +152,7 @@ impl ShellLoop {
             dispatcher,
             start_category: StartCategory::All,
             start_query: String::new(),
-            start_selected: 0,
+            start_selection: flamewm_shell_core::selection::ListSelection::default(),
             desktop_hidden: Vec::new(),
             launcher: Default::default(),
             task_drag: None,
@@ -589,7 +589,7 @@ impl ShellLoop {
                         }
                         if self.open_start_surface(runtime, &target_output, started)? {
                             self.start_open = true;
-                            self.start_selected = 0;
+                            self.start_selection.reset();
                             self.popup_session.commit(&transition);
                         }
                     }
@@ -614,7 +614,7 @@ impl ShellLoop {
                     };
                     self.start_category = category;
                     self.start_open = true;
-                    self.start_selected = 0;
+                    self.start_selection.reset();
                     // F10: read current context generation; refuse when
                     // edge/geometry is inconsistent.
                     self.note_popup_generation("start");
@@ -1158,9 +1158,35 @@ impl ShellLoop {
         delta: isize,
     ) -> Result<(), UiBackendError> {
         let count = self.start_visible_count();
-        self.start_selected =
-            async_projection::step_start_selection(self.start_selected, delta, count);
-        self.project_start_selection(runtime)
+        if self.start_selection.step(delta, count) {
+            self.project_start_selection(runtime)?;
+        }
+        Ok(())
+    }
+
+    /// Pointer over Start app row `slot` (0-based): hover replaces the keyboard highlight.
+    /// Repaints only when the highlighted row actually changed.
+    pub(crate) fn hover_start_slot(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        slot: usize,
+    ) -> Result<(), UiBackendError> {
+        let count = self.start_visible_count();
+        if self.start_selection.hover(slot, count) {
+            self.project_start_selection(runtime)?;
+        }
+        Ok(())
+    }
+
+    /// Clears the Start selection (pointer left the list or the list content changed).
+    pub(crate) fn reset_start_selection(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+    ) -> Result<(), UiBackendError> {
+        if self.start_selection.reset() {
+            self.project_start_selection(runtime)?;
+        }
+        Ok(())
     }
 
     fn start_visible_count(&self) -> usize {
@@ -1173,12 +1199,12 @@ impl ShellLoop {
         &mut self,
         runtime: &mut SurfaceRuntime,
     ) -> Result<(), UiBackendError> {
-        let selected = self
-            .start_selected
-            .min(self.start_visible_count().saturating_sub(1));
-        self.start_selected = selected;
+        let highlighted = self
+            .start_selection
+            .highlighted()
+            .filter(|index| *index < self.start_visible_count());
         runtime.with_document(self.surfaces.start, |document| {
-            async_projection::project_start_highlight(document, selected)
+            async_projection::project_start_highlight(document, highlighted)
         })
     }
 

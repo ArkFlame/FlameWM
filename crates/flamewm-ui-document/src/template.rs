@@ -179,6 +179,10 @@ pub trait UiDocumentAccess {
     fn ui_font_defaults(&mut self, _size_offset: f32, _bold: bool) -> Result<(), String> {
         Ok(())
     }
+    /// Global on/off for the shared text shadow. Documents without support ignore it.
+    fn ui_text_shadow(&mut self, _enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
     fn font_family(&mut self, _family: String) -> Result<(), String> {
         Err("font family projection is unsupported by this document access".to_string())
     }
@@ -338,6 +342,11 @@ impl UiDocument {
         self.document.set_ui_font_defaults(size_offset, bold)
     }
 
+    pub fn ui_text_shadow(&mut self, enabled: bool) -> Result<(), String> {
+        self.document.set_ui_text_shadow(enabled);
+        Ok(())
+    }
+
     pub fn font_family(&mut self, family: String) -> Result<(), String> {
         self.document.set_ui_font_family(family)
     }
@@ -450,6 +459,11 @@ macro_rules! document_access_methods {
 
         fn ui_font_defaults(&mut self, size_offset: f32, bold: bool) -> Result<(), String> {
             self.document.set_ui_font_defaults(size_offset, bold)
+        }
+
+        fn ui_text_shadow(&mut self, enabled: bool) -> Result<(), String> {
+            self.document.set_ui_text_shadow(enabled);
+            Ok(())
         }
 
         fn font_family(&mut self, family: String) -> Result<(), String> {

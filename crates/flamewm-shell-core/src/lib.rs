@@ -5,6 +5,7 @@ pub mod menu_policy;
 pub mod popup;
 pub mod popup_session;
 pub mod quickswitch;
+pub mod selection;
 pub mod start_menu;
 pub mod status;
 pub mod weather;

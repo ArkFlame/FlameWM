@@ -779,6 +779,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 "sticky-toggle-off",
             ),
             ("fontBold", "font-toggle-on", "font-toggle-off"),
+            ("textShadow", "font-shadow-toggle-on", "font-shadow-toggle-off"),
             ("animationsEnabled", "anim-global-on", "anim-global-off"),
             ("startAnimationEnabled", "anim-start-on", "anim-start-off"),
             (
@@ -845,6 +846,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
             self.integer_setting("fontSizeOffset").unwrap_or(0) as f32,
             self.bool_setting("fontBold"),
         )?;
+        document.ui_text_shadow(!matches!(
+            self.setting_value("textShadow"),
+            Some(SettingValue::Boolean(false))
+        ))?;
         self.sync_value_text(document)?;
         self.sync_weather(document)?;
         self.sync_time_zone(document)?;

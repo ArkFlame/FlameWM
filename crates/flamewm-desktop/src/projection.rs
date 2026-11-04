@@ -90,7 +90,15 @@ pub fn project_global_font_defaults(
     snapshot: &SettingsSnapshot,
 ) -> Result<(), String> {
     let (size_offset, bold) = global_font_defaults(snapshot);
-    document.ui_font_defaults(size_offset, bold)
+    document.ui_font_defaults(size_offset, bold)?;
+    document.ui_text_shadow(text_shadow_enabled(snapshot))
+}
+
+fn text_shadow_enabled(snapshot: &SettingsSnapshot) -> bool {
+    !matches!(
+        snapshot.values.get("textShadow"),
+        Some(SettingValue::Boolean(false))
+    )
 }
 
 fn global_font_defaults(snapshot: &SettingsSnapshot) -> (f32, bool) {
@@ -1306,6 +1314,20 @@ mod tests {
         let mut pixels = vec![17, 29, 47, 255, 101, 67, 23, 128, 1, 2, 3, 0];
         fade_ghost_pixels(&mut pixels);
         assert_eq!(pixels, vec![17, 29, 47, 128, 101, 67, 23, 64, 1, 2, 3, 0]);
+    }
+
+    #[test]
+    fn text_shadow_setting_defaults_on_and_only_false_turns_it_off() {
+        let mut settings = SettingsSnapshot::new(1);
+        assert!(text_shadow_enabled(&settings));
+        settings
+            .values
+            .insert("textShadow".into(), SettingValue::Boolean(false));
+        assert!(!text_shadow_enabled(&settings));
+        settings
+            .values
+            .insert("textShadow".into(), SettingValue::Text("false".into()));
+        assert!(text_shadow_enabled(&settings));
     }
 
     #[test]

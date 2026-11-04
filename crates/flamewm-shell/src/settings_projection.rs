@@ -61,6 +61,7 @@ pub fn project(
         integer_setting(snapshot, "fontSizeOffset", 0) as f32,
         bool_setting(snapshot, "fontBold", false),
     )?;
+    document.ui_text_shadow(bool_setting(snapshot, "textShadow", true))?;
     project_accent_tokens(document, snapshot)?;
     project_surface_outline(document, root, snapshot)?;
 

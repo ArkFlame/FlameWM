@@ -206,7 +206,8 @@ pub fn build_paint_commands_with_scroll(
                             let y = rect.y + laid.line_height * line_index as f32 + style.font_size;
                             // One allocation per laid-out line; every emitted command shares it by refcount.
                             let text: Arc<str> = Arc::from(line.text);
-                            if let Some(shadow) = style.text_shadow {
+                            let shadow = style.text_shadow.filter(|_| document.ui_text_shadow());
+                            if let Some(shadow) = shadow {
                                 let shade = apply_opacity(
                                     document.resolve_color(shadow.color),
                                     style.opacity,
@@ -563,6 +564,44 @@ mod node_backdrop_tests {
                 offset_y: 10.0,
             }
         })
+    }
+
+    #[test]
+    fn global_text_shadow_gate_suppresses_shadow_commands_and_restores_them() {
+        let shadow = TextShadow {
+            offset_x: 1.0,
+            offset_y: 1.0,
+            blur_radius: 0.0,
+            color: ColorValue::Literal(Color::rgb(0, 0, 0)),
+        };
+        let mut text = node("label", 0.0, Some(0), None, None);
+        std::sync::Arc::make_mut(&mut text.style).text_shadow = Some(shadow);
+        text.kind = NodeKind::Text;
+        text.text = std::borrow::Cow::Borrowed("hi");
+        let mut document = RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![node("root", 0.0, None, Some(1), None), text],
+        })
+        .expect("fixture validates");
+        let shadow_count = |document: &RuntimeDocument| {
+            let layout = LayoutEngine::compute(document, 800.0, 600.0, InteractionState::default());
+            build_paint_commands(document, &layout, InteractionState::default())
+                .iter()
+                .filter(|command| matches!(command, PaintCommand::Text { x, .. } if *x > 0.5))
+                .count()
+        };
+        assert!(document.ui_text_shadow());
+        assert_eq!(shadow_count(&document), 1);
+
+        document.set_ui_text_shadow(false);
+        assert!(!document.ui_text_shadow());
+        assert_eq!(shadow_count(&document), 0);
+
+        document.set_ui_text_shadow(true);
+        assert_eq!(shadow_count(&document), 1);
     }
 
     #[test]

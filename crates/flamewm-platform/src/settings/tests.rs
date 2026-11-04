@@ -886,6 +886,19 @@ fn base_flags_write_digits_and_optional_flags_write_words() {
 }
 
 #[test]
+fn text_shadow_defaults_on_and_round_trips_as_a_base_flag() {
+    assert!(ProductSettings::default().text_shadow);
+    let settings = ProductSettings {
+        text_shadow: false,
+        ..ProductSettings::default()
+    };
+    let text = ConfigStore::serialize(&settings);
+    assert!(text.contains("textShadow=0\n"));
+    assert_eq!(load(&text).expect("round trip"), settings);
+    assert!(load("revision=4\n").expect("legacy file").text_shadow);
+}
+
+#[test]
 fn legacy_slide_up_migrates_to_slide_and_is_written_canonically() {
     let parsed = load("revision=2\nstartAnimation=slide-up\n").expect("legacy alias");
     assert_eq!(parsed.start_animation, AnimationStyle::Slide);

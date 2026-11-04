@@ -412,7 +412,9 @@ impl X11App {
                 new: &fresh,
                 scale,
                 viewport: (self.width, self.height),
-                enabled: self.region_paint,
+                // Interaction-only frames (hover/press, no document change) repaint just the
+                // changed rows; document-driven frames keep the opt-in policy.
+                enabled: self.region_paint || interaction_only,
                 viewport_unchanged: previous_key.is_some_and(|key| {
                     key.viewport == (self.width, self.height) && key.scale_bits == scale.to_bits()
                 }),

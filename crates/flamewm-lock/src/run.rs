@@ -1271,6 +1271,7 @@ mod tests {
         let defaults = LockSettings::default();
         let bold = LockSettings {
             font_bold: true,
+            text_shadow: true,
             ..defaults.clone()
         };
         assert!(typography_changed(&defaults, &bold));

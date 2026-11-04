@@ -96,7 +96,10 @@ fn compile_parsed(
         nodes: Vec::new(),
     };
 
-    let inherited = Style::default();
+    let inherited = Style {
+        text_shadow: root_text_shadow(&rules, &variable_map)?,
+        ..Style::default()
+    };
     let root = context.compile_subtree(html.root, None, &inherited)?;
     for asset in &context.assets {
         fingerprint_input.push(0xff);
@@ -119,6 +122,48 @@ fn compile_parsed(
     })
 }
 
+/// Shared text shadow token: every text run inherits it from the document root.
+/// Override with `:root { --text-shadow: <shadow> }`; opt out per element with `text-shadow: none`.
+const TEXT_SHADOW_TOKEN: &str = "--text-shadow";
+const DEFAULT_TEXT_SHADOW: &str = "0px 1px 2px #00000059";
+
+fn root_text_shadow(rules: &[Rule], variables: &HashMap<String, u16>) -> Result<Option<TextShadow>, String> {
+    let mut token = DEFAULT_TEXT_SHADOW;
+    for rule in rules.iter().filter(|rule| rule.selector.state == PseudoState::Root) {
+        for declaration in rule.declarations.iter().filter(|d| d.name == TEXT_SHADOW_TOKEN) {
+            token = declaration.value.as_str();
+        }
+    }
+    parse_text_shadow(token, variables)
+}
+
+fn parse_text_shadow(value: &str, variables: &HashMap<String, u16>) -> Result<Option<TextShadow>, String> {
+    if value == "none" {
+        return Ok(None);
+    }
+    let parts: Vec<&str> = value.split_ascii_whitespace().collect();
+    if !(3..=4).contains(&parts.len()) {
+        return Err(format!(
+            "text-shadow '{value}' expects '<x px> <y px> [<blur px>] <color>'"
+        ));
+    }
+    let blur_radius = if parts.len() == 4 {
+        let blur = parse_signed_px(parts[2])?;
+        if !(0.0..=4.0).contains(&blur) {
+            return Err(format!("text-shadow blur '{blur}' is outside 0..4px"));
+        }
+        blur
+    } else {
+        0.0
+    };
+    Ok(Some(TextShadow {
+        offset_x: parse_signed_px(parts[0])?,
+        offset_y: parse_signed_px(parts[1])?,
+        blur_radius,
+        color: parse_color_value(parts[parts.len() - 1], variables)?,
+    }))
+}
+
 fn collect_variables(rules: &[Rule]) -> Result<(Vec<ColorVariable>, HashMap<String, u16>), String> {
     let mut values: BTreeMap<String, Color> = BTreeMap::new();
     for rule in rules {
@@ -126,6 +171,9 @@ fn collect_variables(rules: &[Rule]) -> Result<(Vec<ColorVariable>, HashMap<Stri
             continue;
         }
         for declaration in &rule.declarations {
+            if declaration.name == TEXT_SHADOW_TOKEN {
+                continue;
+            }
             if !declaration.name.starts_with("--") {
                 return Err(format!("FlameWM Render 0.0.9 reserves :root for typed custom color properties; unsupported declaration '{}: {}'", declaration.name, declaration.value));
             }
@@ -435,33 +483,7 @@ impl<'a> Compiler<'a> {
             "border" => apply_border(style, value, self.variable_map)?,
             "font-size" => style.font_size = parse_px(value)?.max(1.0),
             "font-weight" => style.font_weight = parse_font_weight(value)?,
-            "text-shadow" => {
-                if value == "none" {
-                    style.text_shadow = None;
-                } else {
-                    let parts: Vec<&str> = value.split_ascii_whitespace().collect();
-                    if !(3..=4).contains(&parts.len()) {
-                        return Err(format!(
-                            "text-shadow '{value}' expects '<x px> <y px> [<blur px>] <color>'"
-                        ));
-                    }
-                    let blur_radius = if parts.len() == 4 {
-                        let blur = parse_signed_px(parts[2])?;
-                        if !(0.0..=4.0).contains(&blur) {
-                            return Err(format!("text-shadow blur '{blur}' is outside 0..4px"));
-                        }
-                        blur
-                    } else {
-                        0.0
-                    };
-                    style.text_shadow = Some(TextShadow {
-                        offset_x: parse_signed_px(parts[0])?,
-                        offset_y: parse_signed_px(parts[1])?,
-                        blur_radius,
-                        color: parse_color_value(parts[parts.len() - 1], self.variable_map)?,
-                    });
-                }
-            }
+            "text-shadow" => style.text_shadow = parse_text_shadow(value, self.variable_map)?,
             "opacity" => style.opacity = parse_number(value)?.clamp(0.0, 1.0),
             "cursor" => {
                 style.cursor = match value {
@@ -1023,7 +1045,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_label_text_shadow_is_inherited_but_menus_remain_clean() {
+    fn shared_text_shadow_token_is_inherited_and_opt_out_clears_it() {
         let css = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../ui/desktop/desktop.css"
@@ -1043,7 +1065,7 @@ mod tests {
         let shadow = label
             .style
             .text_shadow
-            .expect("desktop labels have a shadow");
+            .expect("desktop labels inherit the shared shadow token");
         assert_eq!(
             (shadow.offset_x, shadow.offset_y, shadow.blur_radius),
             (0.0, 1.0, 2.0)
@@ -1054,13 +1076,25 @@ mod tests {
             Some(shadow),
             "text inherits its label's shadow"
         );
-        assert_eq!(style_of(&result, "menu").text_shadow, None);
+        assert_eq!(style_of(&result, "menu").text_shadow, Some(shadow));
         let binary =
             flamewm_render_core::encode(&result.document).expect("encode shadowed document");
         assert_eq!(
             flamewm_render_core::decode(&binary).expect("decode shadowed document"),
             result.document
         );
+    }
+
+    #[test]
+    fn root_text_shadow_token_overrides_default_and_none_opts_out() {
+        let result = compile_str(
+            r#"<body><div id="plain">x</div><div id="off">y</div></body>"#,
+            ":root { --text-shadow: 1px 2px #000000ff; } #off { text-shadow: none; }",
+            CompileOptions::default(),
+        ).expect("token must compile");
+        let plain = style_of(&result, "plain").text_shadow.expect("token applies");
+        assert_eq!((plain.offset_x, plain.offset_y, plain.blur_radius), (1.0, 2.0, 0.0));
+        assert_eq!(style_of(&result, "off").text_shadow, None);
     }
 
     #[test]

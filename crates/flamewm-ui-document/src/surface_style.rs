@@ -58,9 +58,9 @@ mod tests {
         assert_eq!(
             surface_outline(&snapshot),
             UiColor {
-                r: 255,
-                g: 255,
-                b: 255,
+                r: 153,
+                g: 153,
+                b: 153,
                 a: 127
             }
         );

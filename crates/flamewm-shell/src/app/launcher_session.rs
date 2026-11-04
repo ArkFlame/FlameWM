@@ -123,6 +123,20 @@ impl ShellLoop {
         })
     }
 
+    /// Pointer left the launcher rows: drop the highlight (no-op when nothing is highlighted).
+    pub(crate) fn route_launcher_leave(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+    ) -> Result<(), UiBackendError> {
+        if !self.surfaces.is_launcher_open() || !self.launcher.leave() {
+            return Ok(());
+        }
+        let launcher = &self.launcher;
+        runtime.with_document(self.surfaces.launcher, |document| {
+            launcher.project_highlight(document)
+        })
+    }
+
     /// Launches the result at `index` (absolute index in the result list) and closes.
     pub(super) fn launch_launcher_slot(
         &mut self,

@@ -126,6 +126,26 @@ pub fn plan_frame(queued: bool, dirty: bool, has_callback: bool, paused: bool) -
     }
 }
 
+/// How a paint obtains its scene elements (everything except the cursor).
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SceneBuild {
+    /// Rebuild the window, decoration and desktop elements and recapture the backdrop.
+    Full,
+    /// Keep the cached elements; only the cursor elements change.
+    CursorOnly,
+}
+
+/// Cursor-only paints need a cached scene and no scene change since it was built.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
+pub fn scene_build(cached: bool, scene_dirty: bool) -> SceneBuild {
+    if cached && !scene_dirty {
+        SceneBuild::CursorOnly
+    } else {
+        SceneBuild::Full
+    }
+}
+
 /// Whether a paint pass should arm the bounded retry timer.
 ///
 /// Only a real sync or buffer error does. An empty frame or a clean output must never arm a timer:
@@ -377,6 +397,12 @@ pub struct State {
     /// Coalescing repaint request for the tty backend: set by anything that changes what is on
     /// screen, consumed by exactly one paint. Single-threaded, so a `Cell` is enough.
     redraw_dirty: Cell<bool>,
+    /// Set by anything that can change the scene below the cursor (windows, pixels, decorations,
+    /// backdrop). A paint that finds it clear reuses the last scene and only swaps the cursor.
+    scene_dirty: Cell<bool>,
+    /// Set by any change that can alter the shell's mirror (windows, focus, settings): the control
+    /// service rebuilds and publishes the mirror only then, so pointer motion never pays for it.
+    mirror_dirty: Cell<bool>,
     /// Why a running session has to end as a startup failure, set by the tty backend's first-frame
     /// deadline (`startup::FirstFrameGate`) and read by `main` after the loop, so the process exits
     /// non-zero.
@@ -490,6 +516,8 @@ impl State {
             exit_after_dump: false,
             // The first frame is always painted.
             redraw_dirty: Cell::new(true),
+            scene_dirty: Cell::new(true),
+            mirror_dirty: Cell::new(true),
             startup_failure: Cell::new(None),
             drm_waker: None,
             loop_handle,
@@ -670,6 +698,9 @@ impl State {
             let serial = SERIAL_COUNTER.next_serial();
             keyboard.set_focus(self, surface, serial);
         }
+        if let Some(window) = id.and_then(|id| self.x11_window(id)).cloned() {
+            self.set_x11_input_focus(&window);
+        }
         self.request_redraw();
     }
 
@@ -714,6 +745,9 @@ impl State {
             let serial = SERIAL_COUNTER.next_serial();
             keyboard.set_focus(self, surface, serial);
         }
+        if let Some(window) = self.x11_window(id).cloned() {
+            self.set_x11_input_focus(&window);
+        }
         self.request_redraw();
     }
 
@@ -721,7 +755,24 @@ impl State {
     /// wake pipe, so the frame happens on the next loop turn instead of waiting for an unrelated
     /// event. Any number of calls before one paint cost a single frame.
     pub fn request_full_redraw(&self) {
+        self.mirror_dirty.set(true);
+        self.request_paint();
+    }
+
+    /// Repaint only: the frame has to show new pixels (pointer motion moves the cursor), but nothing
+    /// the shell mirror reports has changed.
+    pub fn request_paint(&self) {
+        self.scene_dirty.set(true);
+        self.request_cursor_paint();
+    }
+
+    /// Repaint for pointer motion only: the scene is unchanged, so the paint may reuse it and move the
+    /// cursor element. The caller guarantees nothing else it draws changed (hover included).
+    pub fn request_cursor_paint(&self) {
         self.redraw_dirty.set(true);
+        if let Some(backend) = self.backend.as_ref() {
+            backend.window().request_redraw();
+        }
         if let Some(waker) = self.drm_waker.as_ref() {
             // The ping coalesces in the kernel and a closed source only reports an error, which is
             // nothing the compositor can act on.
@@ -746,6 +797,17 @@ impl State {
     #[cfg_attr(not(feature = "drm"), allow(dead_code))]
     pub fn take_redraw(&self) -> bool {
         self.redraw_dirty.replace(false)
+    }
+
+    /// Consumes the scene-change flag: true when the next paint must rebuild every element.
+    #[cfg_attr(not(feature = "drm"), allow(dead_code))]
+    pub fn take_scene_dirty(&self) -> bool {
+        self.scene_dirty.replace(false)
+    }
+
+    /// Consumes the mirror-change flag set by `request_full_redraw`.
+    pub fn take_mirror_dirty(&self) -> bool {
+        self.mirror_dirty.replace(false)
     }
 
     /// Records that the loop has to end as a startup failure (the tty backend's first-frame
@@ -773,9 +835,6 @@ impl State {
 
     pub fn request_redraw(&self) {
         self.request_full_redraw();
-        if let Some(backend) = self.backend.as_ref() {
-            backend.window().request_redraw();
-        }
     }
 
     /// Starts a program. Once `XWayland` runs, children get `DISPLAY` and no `WAYLAND_DISPLAY`,
@@ -954,9 +1013,19 @@ impl Drop for State {
 mod tests {
     use super::{
         FrameDecision, GpuProbe, OutputFrames, Rect, SYNC_WAIT_BUDGET_MS, SYNC_WAIT_LIMIT_MS,
-        SyncWait, arm_retry, focus_needs_restack, pick_gpu, plan_frame, reserve_struts, retry_owed,
-        scan_failed, sync_wait_decision,
+        SceneBuild, SyncWait, arm_retry, focus_needs_restack, pick_gpu, plan_frame, reserve_struts,
+        retry_owed, scan_failed, scene_build, sync_wait_decision,
     };
+
+    /// Pointer motion over an unchanged scene reuses the cached elements; any scene change, or no
+    /// cache yet, rebuilds them.
+    #[test]
+    fn cursor_only_paint_reuses_scene_only_when_clean_and_cached() {
+        assert_eq!(scene_build(true, false), SceneBuild::CursorOnly);
+        assert_eq!(scene_build(true, true), SceneBuild::Full);
+        assert_eq!(scene_build(false, false), SceneBuild::Full);
+        assert_eq!(scene_build(false, true), SceneBuild::Full);
+    }
 
     /// Clearing keyboard focus is a restack transition even when the model order is unchanged.
     #[test]

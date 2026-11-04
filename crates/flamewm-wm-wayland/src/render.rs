@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -63,6 +63,8 @@ pub struct Decorations {
     parts: HashMap<WindowId, ChromeBuffer>,
     /// Blurred desktop layer (straight RGBA, output-sized) that translucent titlebars blend over.
     desktop: Option<DesktopBackdrop>,
+    /// True while a one-shot wake timer is armed to recapture the desktop after the throttle window.
+    desktop_wake_armed: bool,
     /// Blurred desktop under override-redirect `XWayland` surfaces, keyed by their rect. Cleared
     /// with the desktop capture it was cropped from.
     surfaces: HashMap<(i32, i32, i32, i32), MemoryRenderBuffer>,
@@ -139,6 +141,11 @@ fn premultiplied_argb_bytes(rgba: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+/// Minimum spacing between desktop recaptures. A capture is a full-output readback plus CPU blur,
+/// and a rubber-band drag commits the desktop surface on every motion; the trailing wake
+/// ([`schedule_desktop_wake`]) recaptures the final state once the burst settles.
+const DESKTOP_RECAPTURE_INTERVAL: Duration = Duration::from_millis(100);
+
 struct DesktopBackdrop {
     width: usize,
     height: usize,
@@ -146,6 +153,7 @@ struct DesktopBackdrop {
     /// new commit on its surface, so it changes this and triggers a recapture.
     commits: Vec<CommitCounter>,
     pixels: Vec<u8>,
+    captured_at: Instant,
 }
 
 struct ChromeBuffer {
@@ -177,7 +185,20 @@ impl Decorations {
             height: size.1,
             commits,
             pixels,
+            captured_at: Instant::now(),
         });
+    }
+
+    /// Time left before the cached capture may be replaced, or `None` when a recapture may run
+    /// now (no capture, output resized, or the capture is at least [`DESKTOP_RECAPTURE_INTERVAL`] old).
+    fn recapture_wait(&self, size: (usize, usize), now: Instant) -> Option<Duration> {
+        let desktop = self.desktop.as_ref()?;
+        if (desktop.width, desktop.height) != size {
+            return None;
+        }
+        DESKTOP_RECAPTURE_INTERVAL
+            .checked_sub(now.duration_since(desktop.captured_at))
+            .filter(|wait| !wait.is_zero())
     }
 
     /// Blurred desktop under a `w` x `h` titlebar at `origin`, clamped to the output edges.
@@ -193,6 +214,13 @@ impl Decorations {
             }
         }
         Some(out)
+    }
+
+    /// Frees the output-sized capture and everything baked from it, for an idle desktop.
+    fn drop_desktop(&mut self) {
+        self.parts.clear();
+        self.surfaces.clear();
+        self.desktop = None;
     }
 
     fn element(
@@ -967,6 +995,29 @@ fn desktop_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
         .collect()
 }
 
+/// Arms one calloop timer that requests a redraw when the recapture throttle reopens. Idempotent
+/// while armed, so a burst of throttled frames costs one timer.
+fn schedule_desktop_wake(state: &State, wait: Duration) {
+    {
+        let mut decorations = state.decorations.borrow_mut();
+        if decorations.desktop_wake_armed {
+            return;
+        }
+        decorations.desktop_wake_armed = true;
+    }
+    let armed = state.loop_handle.insert_source(
+        smithay::reexports::calloop::timer::Timer::from_duration(wait),
+        |_, (), state| {
+            state.decorations.borrow_mut().desktop_wake_armed = false;
+            state.request_redraw();
+            smithay::reexports::calloop::timer::TimeoutAction::Drop
+        },
+    );
+    if armed.is_err() {
+        state.decorations.borrow_mut().desktop_wake_armed = false;
+    }
+}
+
 /// Captures and blurs the desktop layer when the cached capture is missing, the output changed
 /// size, or any desktop-layer element committed (a wallpaper repaint, a surface added or removed).
 /// Steady-state frames read nothing back; they only compare commit counters. Called by both the
@@ -976,10 +1027,25 @@ pub(crate) fn refresh_desktop_backdrop(
     renderer: &mut GlowRenderer,
     size: Size<i32, Physical>,
 ) -> Result<(), Box<dyn Error>> {
+    // The blur only shows under window chrome and override-redirect surfaces. On an idle desktop
+    // nothing reads it, so drop the output-sized capture instead of keeping it resident.
+    if state.toplevels.is_empty() && state.x11.is_empty() && state.unmanaged.is_empty() {
+        state.decorations.borrow_mut().drop_desktop();
+        return Ok(());
+    }
     let dims = (size.w.max(1) as usize, size.h.max(1) as usize);
     let elements = desktop_elements(state, renderer);
     let commits: Vec<CommitCounter> = elements.iter().map(Element::current_commit).collect();
     if state.decorations.borrow().desktop_current(dims, &commits) {
+        return Ok(());
+    }
+    // Throttled: keep the stale capture and wake once the window reopens, so the final state lands.
+    let wait = state
+        .decorations
+        .borrow()
+        .recapture_wait(dims, Instant::now());
+    if let Some(wait) = wait {
+        schedule_desktop_wake(state, wait);
         return Ok(());
     }
     let buffer_size: Size<i32, Buffer> = Size::from((size.w, size.h));
@@ -1079,7 +1145,19 @@ fn render_into(
     // touches the rectangles that changed (the pointer is the common case), instead of clearing
     // and redrawing the full output on every motion event. Some nested software-EGL drivers return
     // no age; zero remains the safe full-repaint fallback.
-    let age = backend.buffer_age().unwrap_or(0);
+    // Measured: the nested winit EGL surface answers EGL_BAD_SURFACE to every BUFFER_AGE query
+    // (smithay logs one ERROR per frame, gdb: render_into -> WinitGraphicsBackend::buffer_age).
+    // The refusal is a driver property, so latch it and repaint in full instead of re-asking.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static BUFFER_AGE_REFUSED: AtomicBool = AtomicBool::new(false);
+    let age = if BUFFER_AGE_REFUSED.load(Ordering::Relaxed) {
+        0
+    } else {
+        backend.buffer_age().unwrap_or_else(|| {
+            BUFFER_AGE_REFUSED.store(true, Ordering::Relaxed);
+            0
+        })
+    };
     let damage = {
         let (renderer, mut framebuffer) = backend.bind()?;
         let result =
@@ -1420,6 +1498,36 @@ mod decoration_tests {
     }
 
     #[test]
+    fn idle_desktop_drops_the_output_sized_capture() {
+        let commit = |n: usize| CommitCounter::from(n);
+        let mut cache = Decorations::default();
+        cache.set_desktop((4, 3), vec![commit(1)], vec![0; 4 * 3 * 4]);
+        cache.drop_desktop();
+        assert!(cache.desktop.is_none(), "idle capture must not stay resident");
+        assert!(!cache.desktop_current((4, 3), &[commit(1)]), "next use recaptures");
+    }
+
+    #[test]
+    fn desktop_recapture_is_throttled_for_one_interval_then_allowed() {
+        let mut cache = Decorations::default();
+        let now = Instant::now();
+        assert_eq!(cache.recapture_wait((4, 3), now), None, "no capture yet");
+        cache.set_desktop((4, 3), Vec::new(), vec![0; 4 * 3 * 4]);
+        let captured = cache.desktop.as_ref().expect("capture").captured_at;
+        let early = captured + Duration::from_millis(40);
+        assert_eq!(
+            cache.recapture_wait((4, 3), early),
+            Some(DESKTOP_RECAPTURE_INTERVAL - Duration::from_millis(40))
+        );
+        assert_eq!(
+            cache.recapture_wait((4, 3), captured + DESKTOP_RECAPTURE_INTERVAL),
+            None
+        );
+        // A resized output is never throttled: the old capture cannot be shown at the new size.
+        assert_eq!(cache.recapture_wait((5, 3), early), None);
+    }
+
+    #[test]
     fn maximize_glyph_tracks_real_window_state() {
         let normal = chrome_pixels(400, true, Mode::Normal, None, "Terminal");
         let maximized = chrome_pixels(400, true, Mode::Maximized, None, "Terminal");
@@ -1553,11 +1661,11 @@ mod outline_tests {
     }
 
     /// The settings come from the shared surface owner the X11 frame already reads, so the
-    /// Wayland ring cannot drift from it: the committed defaults are white at half opacity.
+    /// Wayland ring cannot drift from it: the committed defaults are neutral gray (#999999) at half opacity.
     #[test]
-    fn outline_defaults_to_white_at_half_opacity() {
+    fn outline_defaults_to_gray_at_half_opacity() {
         let stroke = flamewm_ui_core::surface::window_outline_stroke(&SettingsSnapshot::new(1));
-        assert_eq!((stroke.rgb, stroke.alpha), (0x00ff_ffff, 127));
+        assert_eq!((stroke.rgb, stroke.alpha), (0x0099_9999, 127));
         let mut decorations = Decorations::default();
         assert!(
             decorations
@@ -1571,7 +1679,7 @@ mod outline_tests {
             .expect("ring");
         assert_eq!(
             (ring.paint.rgb, ring.paint.alpha, ring.paint.width),
-            (0x00ff_ffff, 127, 1)
+            (0x0099_9999, 127, 1)
         );
         assert!(
             !decorations.set_outline(stroke.rgb, stroke.alpha, stroke.width),

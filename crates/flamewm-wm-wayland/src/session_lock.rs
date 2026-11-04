@@ -75,6 +75,9 @@ impl SessionLockHandler for State {
 
     fn unlock(&mut self) {
         self.clear_lock_surfaces();
+        // The keyboard still points at the destroyed lock surface; hand focus back or no client
+        // receives keys until something else moves focus.
+        self.refocus();
         // A lock may have replaced the pointer; show the themed one again afterwards.
         self.cursor_status = CursorImageStatus::default_named();
     }
@@ -104,7 +107,12 @@ impl SessionLockHandler for State {
 pub fn prune_dead_locks(state: &mut State) -> bool {
     let before = state.locked_outputs.len();
     state.locked_outputs.retain(|locked| locked.surface.alive());
-    before != state.locked_outputs.len()
+    let pruned = before != state.locked_outputs.len();
+    if pruned && state.lock_surface().is_none() {
+        // Focus was on the dead locker's surface; move it back to a real window.
+        state.refocus();
+    }
+    pruned
 }
 
 #[cfg(test)]

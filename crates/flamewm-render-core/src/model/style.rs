@@ -535,6 +535,18 @@ impl RuntimeDocument {
         Ok(())
     }
 
+    /// Global on/off for the shared text shadow token; off paints every text run without it.
+    pub fn set_ui_text_shadow(&mut self, enabled: bool) {
+        if self.ui_text_shadow != enabled {
+            self.ui_text_shadow = enabled;
+            self.touch_paint();
+        }
+    }
+
+    pub fn ui_text_shadow(&self) -> bool {
+        self.ui_text_shadow
+    }
+
     pub fn set_ui_scale(&mut self, scale: f32) -> Result<(), String> {
         if !scale.is_finite() || scale <= 0.0 {
             return Err("UI scale must be finite and positive".to_string());

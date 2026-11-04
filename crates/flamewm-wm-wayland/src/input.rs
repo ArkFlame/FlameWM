@@ -84,17 +84,29 @@ fn name_candidates<'a>(raw: &'a str, modified: &'a str) -> impl Iterator<Item = 
 
 impl State {
     pub fn process_input<I: InputBackend>(&mut self, event: InputEvent<I>) {
+        // Plain motion (no grab, no focus-follows-mouse) only moves the cursor: it needs a paint but
+        // not a shell-mirror rebuild, so it takes the cheaper request.
+        let mut plain_motion = false;
         match event {
             InputEvent::Keyboard { event } => self.on_key::<I>(&event),
             InputEvent::PointerMotionAbsolute { event } => {
                 let location = event.position_transformed(self.output_size);
+                let hover_before = self.model.hit(self.pointer.x, self.pointer.y);
                 self.on_motion(location, event.time_msec());
+                // A hit change can move a titlebar button's hover, which the scene draws.
+                plain_motion = self.grab.is_none()
+                    && !self.focus_follows_mouse
+                    && self.model.hit(self.pointer.x, self.pointer.y) == hover_before;
             }
             InputEvent::PointerButton { event } => self.on_button::<I>(&event),
             InputEvent::PointerAxis { event } => self.on_axis::<I>(&event),
             _ => {}
         }
-        self.request_redraw();
+        if plain_motion {
+            self.request_cursor_paint();
+        } else {
+            self.request_redraw();
+        }
     }
 
     fn on_key<I: InputBackend>(&mut self, event: &impl KeyboardKeyEvent<I>) {
