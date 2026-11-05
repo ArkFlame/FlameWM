@@ -968,7 +968,10 @@ def j12h_violations(root):
 
     paint_core = _live(root, "crates/flamewm-render-core/src/paint.rs")
     start_menu = _live(root, "crates/flamewm-shell-core/src/start_menu.rs")
-    proj = _live(root, "crates/flamewm-shell/src/projection.rs")
+    proj = _live(root, "crates/flamewm-shell/src/projection.rs") + "\n".join(
+        _strip_rust_comments(read_source(path))
+        for path in sorted((root / "crates/flamewm-shell/src/projection").rglob("*.rs"))
+    )
     app = _strip_rust_comments(_app_split_text(root))
     runtime = _live(root, "crates/flamewm-shell/src/runtime.rs")
     popup_controller = _live(root, "crates/flamewm-shell/src/popup_controller.rs")
