@@ -263,3 +263,57 @@ Scope: `ui/task-manager/task-manager.css`, `ui/explorer/explorer.css`, `ui/deskt
 - Explorer `--hover` placeholder in `:root` is now unused; left in place to keep the diff to the paths the task names.
 - Task-manager and explorer data colours (`#3ddbd9`, `#e0699b`, `#4fd18b`, `#f4a259`, `#ff858d`, `#7f8389`) are fixed series colours. They are tokens now, not appearance-driven.
 - Not visually verified. No Xvfb screenshot was captured in this pass, so no light or Dark hover screenshot exists. The contrast claims rest on the palette tests above, not rendered output.
+
+## Pass 9: Xvfb screenshot pass (first rendered evidence)
+
+Base: `origin/main` `c3814f8d`. Method: private `Xvfb :91`, `scripts/xephyr` nested session on `:90` (own release build, `FLAMEWM_CONFIG_DIR` under the shots folder, `FLAMEWM_XEPHYR_BUILD=0`), captures with `import -window root`, input injected with a small XTest helper. Light and Dark were set through the Settings app and `settings.toml` `appearance=`. Screenshots are not committed (1350x641 PNG, about 650 KB each); they stay under `/run/media/linsaftw/SDD/shots/pass9/`.
+
+Attention: an app launched outside the nested session uses the host D-Bus and shows `com.arkflame.FlameWM1.Error.Unavailable` in Settings. Launch apps with the nested session's `DBUS_SESSION_BUS_ADDRESS` (`xephyr` runs under `dbus-run-session`). That error is a harness artefact, not a UI defect.
+
+### Screenshot verdicts
+
+| File (`shots/pass9/`) | State | Verdict |
+| --- | --- | --- |
+| s02-settings-bus.png | Settings, Theme, default view, accent row, Application appearance Dark selected, Custom cursor off, body collapsed | PASS layout. Blue (`#3DAEE9`) accent dot shows only on the blue swatch. Open: white nav label "Theme" on accent is about 2.5:1 (see open items). |
+| s03 / s04 | Custom cursor switch on, scrolled body (cursor theme, size, pointer speed) | PASS. Track turns accent, knob moves right, body shows. |
+| s05-settings-light.png | Application appearance Light selected | PASS for the segment. Settings window itself stays dark glass; this is by design for the app glass. |
+| s06 / z-s06-taskbar.png | Light appearance, taskbar | FAIL. Taskbar bar stays dark while the clock, workspace digits and tray text go dark (`13:55` nearly invisible). Hover (s07) confirms it. |
+| s21-settings-dark.png | Settings, Dark | PASS. Taskbar clock readable. |
+| s22-settings-dark-switch-body.png | Dark, scrolled | Captured, not reviewed. UNVERIFIED. |
+| s08-taskmgr-light.png | Task Manager, Light | WARN. Rows readable; Command column and Sleeping/user labels faint. |
+| s23-taskmgr-dark.png | Task Manager, Dark | FAIL. Summary line ("562 processes ..."), "12 threads" and per-core percentages are dark grey on light glass. |
+| s09-explorer-light.png | Explorer, Light | WARN. "Date modified" and "Size" headers and dates low contrast. |
+| s24-explorer-dark.png | Explorer, Dark | WARN. Date column, "Places" label and Search placeholder low contrast (known Pass 8 gap: explorer text is surface-driven). |
+| s20-terminal-light.png / s25-terminal-dark.png | Terminal, Light and Dark | PASS. The terminal keeps its own dark palette; text is readable in both captures. |
+| s10 / s11 | Maximize hover, then pressed (task-manager titlebar) | PASS. Hover: white disc with black icon. Pressed: grey disc, black icon. |
+| minimize hover (`z-titlebar-states2.png`, row 1) | Minimize hover | PASS. White disc, black chevron. |
+| `z-s12d.png` | Close hover | PASS. Red (`#e81123`) disc with white X. |
+| s14 to s18 (archiver) | Archiver focus after Tab (1 to 3 presses, on a clicked surface) | FAIL before fix; no ring visible after fix either. See Fixed and Not verified. |
+
+### Fixed
+
+- `ui/archiver/archiver.css`: archiver buttons (`<span class="btn">`) and list rows (`<div class="row">`) carry `data-action`, so the ui-document focus traversal reaches them (`crates/flamewm-ui-document/src/focus.rs`). `base.css` only styles focus for listed selectors (`button`, `.segment`, ...), so they never got a ring. Added `.btn:focus-visible, .row:focus-visible { border-width:1px; border-color:var(--focus-ring); }`. `border-style` is rejected by the render compiler (`unsupported CSS property 'border-style'`), so it is not used.
+- `tools/ui_contract_guard.py`: `find_focus_gaps` lists focusable non-button elements whose classes have no `:focus-visible` rule (base sheet included). `FOCUS_DOCUMENTS` makes archiver an error. Other documents report aggregated warnings (28 today), because pointer-first surfaces carry `data-action` too (desktop stickies, shell windows, sliders).
+- Tests: `tools/test_ui_contract_guard.py::FocusVisibleCoverageTests` (span needs a rule, buttons and plain spans ignored, one rule on any class covers the element, archiver document has no gaps).
+
+### Verification
+
+- `python3 -I tools/ui_contract_guard.py` exit 0 (0 errors, 28 warnings).
+- `python3 -I -m unittest discover -s tools -p 'test_ui_contract_guard.py' -q` exit 0 (12 tests).
+- `python3 -I tools/architecture_guard.py` exit 0 (77 ratified violations, unchanged).
+- `python3 -I -m unittest discover -s tools -p 'test_architecture_guard.py' -q` exit 0.
+- `cargo build --release -p flamewm-archiver` exit 0 (recompiles the archiver UI through `build.rs`).
+- `flamewm-render-compile` on `ui/archiver/archiver.html` exit 0 after the `border-style` removal.
+
+### Not verified
+
+- Focus ring on screen. Tab injection with XTest reaches the active archiver (`_NET_ACTIVE_WINDOW` is the archiver), but no ring is visible in any capture, including Settings (s19). Either XTest Tab is not routed to the focus traversal, or focus rings do not paint in this build. Not resolved in this pass.
+
+### Open (with reason)
+
+- Light taskbar (FAIL, s06). Suspected cause, not proven: the Taskbar fill comes from `dock_fill` and in the default `taskbarMaterialMode=inherit` it is `surface_fill`, which uses the user `surfaceColor` (shipped default `#202326`, `crates/flamewm-ui-core/src/surface.rs:273`). `--text` follows the appearance, so Light gives dark ink on a dark bar. Fix needs a decision: make the unset surface colour appearance-aware, or derive ink from the bar fill. Left open; it is a settings-semantics change.
+- Task Manager Dark low-contrast summary and percent text (s23). Root cause not traced. Next step: `crates/flamewm-task-manager` `paint_theme` text write for the summary and bar labels.
+- Accent-filled selected text (nav "Theme", selected segments, cursor size chips) is white on `#3DAEE9` (about 2.5:1 against the 4.5:1 AA target). Needs an on-accent ink token. Not done.
+- Explorer muted text (Pass 8 gap, confirmed in s09 and s24).
+- 28 focusable non-button classes without a focus ring (guard warnings). Desktop stickies and shell windows are Tab-reachable without a visible ring. Needs a pass per document.
+- Not checked: Dark Task Manager/Explorer hover and pressed states, Light Settings, two-monitor layouts, Wayland.
