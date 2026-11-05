@@ -799,7 +799,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ),
             ("lockShowDate", "lock-date-on", "lock-date-off"),
             ("lockShowUsername", "lock-username-on", "lock-username-off"),
-            ("lockOnSuspend", "lock-suspend-on", "lock-suspend-off"),
             (
                 "organizeDownloads",
                 "downloads-organize-on",

@@ -183,7 +183,7 @@ fn lock_action_ids_parse_to_typed_writes_and_reject_off_list_values() {
         ("settings.start-icon.clear", true),
         ("settings.toggle.lockShowDate", true),
         ("settings.toggle.lockShowUsername", true),
-        ("settings.toggle.lockOnSuspend", true),
+        ("settings.toggle.lockOnSuspend", false),
         ("settings.color.lockbackground.preset.0", true),
         ("settings.color.lockbackground.swatch.0", false),
     ] {

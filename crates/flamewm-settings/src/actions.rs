@@ -279,7 +279,7 @@ pub(crate) fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-pub(crate) const TOGGLE_KEYS: [&str; 43] = [
+pub(crate) const TOGGLE_KEYS: [&str; 42] = [
     "reduceTransparency",
     "showContentWhileDragging",
     "stickyNotesEnabled",
@@ -293,7 +293,6 @@ pub(crate) const TOGGLE_KEYS: [&str; 43] = [
     "maximizeAnimationEnabled",
     "lockShowDate",
     "lockShowUsername",
-    "lockOnSuspend",
     "taskbarShowSeconds",
     "taskbarShowDate",
     "taskbarShowWeather",

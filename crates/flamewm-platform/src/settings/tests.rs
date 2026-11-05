@@ -399,7 +399,6 @@ fn lock_screen_defaults_match_the_contract_and_write_nothing() {
     assert!(defaults.lock_show_date);
     assert!(defaults.lock_show_username);
     assert_eq!(defaults.lock_timeout_minutes, 0);
-    assert!(defaults.lock_on_suspend);
     let text = ConfigStore::serialize(&defaults);
     assert!(!text.contains("lock"));
 }
@@ -409,7 +408,7 @@ fn lock_screen_round_trips_non_default_values() {
     let parsed = load(
         "revision=2\nlockBackgroundColor=#102030\nlockBackgroundImage=/usr/share/bg.png\n\
              lockClockFormat=12h\nlockShowDate=false\nlockShowUsername=0\n\
-             lockTimeoutMinutes=240\nlockOnSuspend=false\n",
+             lockTimeoutMinutes=240\n",
     )
     .expect("valid lock settings");
     assert_eq!(parsed.lock_background_color, "#102030");
@@ -418,7 +417,6 @@ fn lock_screen_round_trips_non_default_values() {
     assert!(!parsed.lock_show_date);
     assert!(!parsed.lock_show_username);
     assert_eq!(parsed.lock_timeout_minutes, 240);
-    assert!(!parsed.lock_on_suspend);
     let text = assert_round_trip(&parsed);
     assert!(text.contains("lockClockFormat=12h\n"));
     assert!(text.contains("lockShowDate=false\n"));

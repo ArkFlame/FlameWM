@@ -23,7 +23,6 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "anim-maximize-on",
     "lock-date-on",
     "lock-username-on",
-    "lock-suspend-on",
     "sticky-toggle-on",
     "downloads-organize-on",
     "focus-mouse-on",
