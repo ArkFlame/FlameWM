@@ -1,3 +1,11 @@
+## 2026-11-05 — Version 0.1.7: volume ack, finder/imageviewer, test repairs
+
+- Audio: one volume-cap owner; audio helper bounds writes and PulseAudio acknowledges success; desktop dedupes output-layout refresh.
+- Light theme: Wayland ink, nav hover/pressed fills, `--text-secondary`/`--rim` projected per appearance.
+- Finder: placeholder tick moved onto the reactor deadline (idle wakes 0.40 to 0.20/s). Imageviewer: prefetch on its own thread, open latency during prefetch 1.1 s to 0.5 s.
+- Tests: wm-x11, shell, desktop and tools expectations follow the theme-follow surface default and shared accent constant.
+- Known: Task Manager muted columns low-contrast in Light over dark wallpaper; Wayland titlebar has no appearance input.
+
 ## 2026-11-05 — Version 0.1.6: deferral, wake and light-theme pass
 
 - Settings progressive disclosure: 13 "Custom ..." switches hide grouped options; off uses defaults; accent default #3DAEE9.
