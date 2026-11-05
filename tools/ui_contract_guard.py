@@ -168,7 +168,7 @@ RIM_LITERAL_RE = re.compile(
 )
 RIM_DECL_RE = re.compile(r"--rim\s*:\s*([^;}]+)")
 RIM_PERCENT_RE = re.compile(r"pub const RIM_PERCENT:\s*u8\s*=\s*(\d+)")
-PLATFORM_OPACITY_RE = re.compile(r"surface_border_opacity:\s*(\d+)")
+PLATFORM_OPACITY_RE = re.compile(r"surface_outline_opacity:\s*(\d+)")
 
 
 def check_rim_tokens(root, errors):
@@ -213,7 +213,7 @@ def check_rim_tokens(root, errors):
                 errors.append(f"{rel}: --rim {value} != RIM_PERCENT colour {expected}")
         opacity = PLATFORM_OPACITY_RE.search((root / "crates/flamewm-platform/src/settings.rs").read_text())
         if not opacity or opacity.group(1) != percent.group(1):
-            errors.append("platform surface_border_opacity default != RIM_PERCENT")
+            errors.append("platform surface_outline_opacity default != RIM_PERCENT")
 
 
 def main(root=None):

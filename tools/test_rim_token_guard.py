@@ -20,11 +20,14 @@ def build_tree(root, sheet_text=None, percent=25):
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(":root { --rim:#ffffff3f; }\n.x { border:1px solid var(--rim); }\n")
+    base = root / guard.RIM_BASE_SHEET
+    base.parent.mkdir(parents=True, exist_ok=True)
+    base.write_text(":root { --rim:#ffffff3f; }\n")
     if sheet_text is not None:
         (root / guard.RIM_SHEETS[0]).write_text(sheet_text)
     platform = root / "crates/flamewm-platform/src/settings.rs"
     platform.parent.mkdir(parents=True, exist_ok=True)
-    platform.write_text(f"surface_border_opacity: {percent},\n")
+    platform.write_text(f"surface_outline_opacity: {percent},\n")
     glass = root / "crates/flamewm-ui-core/src/glass.rs"
     glass.parent.mkdir(parents=True, exist_ok=True)
     glass.write_text(f"pub const RIM_PERCENT: u8 = {percent};\n")
@@ -66,10 +69,10 @@ class RimTokenGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             build_tree(Path(tmp))
             (Path(tmp) / "crates/flamewm-platform/src/settings.rs").write_text(
-                "surface_border_opacity: 8,\n")
+                "surface_outline_opacity: 8,\n")
             errors = []
             guard.check_rim_tokens(Path(tmp), errors)
-            self.assertTrue(any("surface_border_opacity default" in e for e in errors), errors)
+            self.assertTrue(any("surface_outline_opacity default" in e for e in errors), errors)
 
     def test_real_tree_passes(self):
         errors = []
