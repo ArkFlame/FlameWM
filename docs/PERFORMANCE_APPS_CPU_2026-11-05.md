@@ -40,3 +40,17 @@ representative of the change, not an exact replay of `list_directory`.
   Candidate for a persistent timer; not changed here.
 - Task-manager sampler wakes every 100 ms (10 x 100 ms per 1 s sample) and rebuilds process rows each second.
   Candidate for measurement, not changed here.
+
+## Follow-up pass
+
+1. Explorer scroll glide (`app/scroll.rs`): `schedule_scroll_tick` spawned a thread per 16 ms frame. Now one
+   ticker thread per app (`spawn_frame_ticker`, started on first glide) waits on a channel and sleeps the frame
+   period before each tick. Tests: `one_tick_per_request_after_the_period_on_a_single_thread`,
+   `dropping_the_sender_stops_the_thread`. Not a `flamewm-reactor` source (the reactor is the WM's native loop).
+2. Task-manager sampler (`lib.rs`): polled the action queue every 100 ms (10 wakes/s). Now sleeps on the action
+   channel with `recv_timeout` until the 1 s sample is due: about 1 wake/s when idle, and queued actions run at once.
+   Not done: slowing sampling when hidden or minimized, because no visibility signal reaches the sampler.
+   Known cost: window close joins the sampler, so close can wait up to 1 s.
+3. Settings slider drag (`app_impl_1.rs` `handle_glass_slider_drag`): each Motion makes a synchronous WM IPC
+   transaction (`apply_setting`) and then a full `settle` -> `sync`. Static finding only; no live numbers yet,
+   so no change made.

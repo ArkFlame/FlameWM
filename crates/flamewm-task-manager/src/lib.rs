@@ -886,17 +886,30 @@ pub fn run() -> Result<(), String> {
                     Err(_) => break,
                 }
             }
-            for _ in 0..10 {
+            // Sleep on the action channel until the next sample is due: no 100 ms polling timer.
+            // A queued process operation wakes the worker at once; the sample cadence stays 1 s.
+            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+            loop {
                 if !active.load(Ordering::Relaxed) {
                     break;
                 }
-                // Process operations may block, but only on this sampler worker.
-                // The caller-selected PID/start-time pair is checked by the operation.
-                while let Ok(command) = action_rx.try_recv() {
-                    let _ = result_tx.try_send(command.execute());
-                    let _ = writer.write(&[1]);
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                match action_rx.recv_timeout(remaining) {
+                    // Process operations may block, but only on this sampler worker.
+                    // The caller-selected PID/start-time pair is checked by the operation.
+                    Ok(command) => {
+                        let _ = result_tx.try_send(command.execute());
+                        let _ = writer.write(&[1]);
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => break,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        std::thread::sleep(remaining);
+                        break;
+                    }
+                }
             }
         }
     });

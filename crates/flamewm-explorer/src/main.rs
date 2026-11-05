@@ -266,6 +266,8 @@ struct ExplorerApp {
     /// Ark drag-out extractions in flight; polled from the event loop.
     ark_extracts: Vec<std::sync::mpsc::Receiver<Result<flamewm_explorer::dndext::ExtractReport, flamewm_explorer::dndext::ExtractError>>>, cancel:CancellationToken,
     menu_overflow:bool, context_scroll:usize, glide:RowGlide, scroll_origin:usize, scroll_ticking:bool,
+    /// One long-lived ticker thread for the row glide; requests wake it, it never spawns per frame.
+    scroll_timer:Option<Sender<()>>,
     /// The window origin or its end-of-glide position changed since the last full projection.
     list_dirty:bool,
     /// Resize coalescing (one relayout per interval) and whether its trailing-edge timer is already queued.
