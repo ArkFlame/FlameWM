@@ -47,7 +47,7 @@ class Pass34ReleaseMemoryTests(unittest.TestCase):
             fixed = subprocess.run(command, capture_output=True, text=True)
             self.assertEqual(fixed.returncode, 0, fixed.stderr)
             with tarfile.open(output, "r:gz") as tar:
-                self.assertEqual(tar.getmember("flamewm/scripts/apply-pass30-cargo-layout").mode & 0o111, 0o111)
+                self.assertEqual(tar.getmember("scripts/apply-pass30-cargo-layout").mode & 0o111, 0o111)
 
     def test_launch_feedback_reuses_key_instead_of_cloning_sequence_per_poll(self):
         source = (ROOT / "crates/flamewm-shell/src/launch_feedback.rs").read_text()
