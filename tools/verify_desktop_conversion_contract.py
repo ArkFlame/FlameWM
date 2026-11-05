@@ -15,11 +15,12 @@ from pathlib import Path
 def contract_errors(root: Path) -> list[str]:
     desktop = root / "crates/flamewm-desktop/src/main.rs"
     core = root / "crates/flamewm-desktop-core/src"
+    conversion_core = root / "crates/flamewm-conversion-core/src"
     if not desktop.is_file():
         return [f"desktop entrypoint missing: {desktop}"]
     consumer = desktop.read_text(encoding="utf-8")
     consumer_module = desktop.parent / "menu_actions.rs"
-    if "flamewm_desktop_core::conversion" not in consumer or not re.search(
+    if "flamewm_conversion_core::conversion" not in consumer or not re.search(
         r"(?m)^\s*mod\s+menu_actions\s*;", consumer
     ):
         return ["desktop main.rs is missing Convert consumer module wiring"]
@@ -34,15 +35,15 @@ def contract_errors(root: Path) -> list[str]:
         return ["desktop menu_actions.rs is missing Convert consumer integration"]
     sources = {}
     errors = []
-    for name in ("lib.rs", "file_actions.rs", "conversion.rs"):
-        path = core / name
+    for name, base in (("conversion_lib.rs", conversion_core), ("file_actions.rs", core), ("conversion.rs", conversion_core)):
+        path = base / ("lib.rs" if name == "conversion_lib.rs" else name)
         if path.is_file():
             sources[name] = path.read_text(encoding="utf-8")
         else:
             errors.append(f"missing {path.relative_to(root)}")
             sources[name] = ""
-    if not re.search(r"(?m)^\s*pub\s+mod\s+conversion\s*;", sources["lib.rs"]):
-        errors.append("flamewm-desktop-core/src/lib.rs does not export `pub mod conversion;`")
+    if not re.search(r"(?m)^\s*pub\s+mod\s+conversion\s*;", sources["conversion_lib.rs"]):
+        errors.append("flamewm-conversion-core/src/lib.rs does not export `pub mod conversion;`")
     actions = sources["file_actions.rs"]
     if not re.search(r"(?s)enum\s+EntryMenuAction\s*\{[^}]*\bConvert\s*,", actions):
         errors.append("file_actions.rs EntryMenuAction lacks Convert variant")
@@ -71,10 +72,11 @@ def main() -> int:
     errors = contract_errors(root)
     if not errors:
         core = root / "crates/flamewm-desktop-core/src"
+        conversion_core = root / "crates/flamewm-conversion-core/src"
         print(f"OK FlameWM desktop Convert SOURCE contract (Cargo cache not yet checked): {root}")
-        for name in ("lib.rs", "file_actions.rs", "conversion.rs"):
-            data = (core / name).read_bytes()
-            print(f"  {name}: sha256={hashlib.sha256(data).hexdigest()[:16]}")
+        for path in (conversion_core / "lib.rs", core / "file_actions.rs", conversion_core / "conversion.rs"):
+            data = path.read_bytes()
+            print(f"  {path.name}: sha256={hashlib.sha256(data).hexdigest()[:16]}")
         return 0
     print(f"FLAMEWM-DESKTOP-CONVERSION-CONTRACT: INCOMPLETE SOURCE MERGE in {root}", file=sys.stderr)
     for problem in errors:

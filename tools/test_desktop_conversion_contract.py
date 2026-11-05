@@ -18,7 +18,7 @@ class DesktopConversionContractTests(unittest.TestCase):
         consumer = root / "crates/flamewm-desktop/src/main.rs"
         consumer.parent.mkdir(parents=True)
         consumer.write_text(
-            "use flamewm_desktop_core::conversion::offered_formats;\n"
+            "use flamewm_conversion_core::conversion::offered_formats;\n"
             + ("mod menu_actions;\n" if include_menu_module else ""),
             encoding="utf-8",
         )
@@ -29,8 +29,11 @@ class DesktopConversionContractTests(unittest.TestCase):
                  if include_consumer else ""), encoding="utf-8")
         core = root / "crates/flamewm-desktop-core/src"
         core.mkdir(parents=True)
-        (core / "lib.rs").write_text("pub mod file_actions;\n" +
-              ("pub mod conversion;\n" if include_module else ""), encoding="utf-8")
+        (core / "lib.rs").write_text("pub mod file_actions;\n", encoding="utf-8")
+        conversion_core = root / "crates/flamewm-conversion-core/src"
+        conversion_core.mkdir(parents=True)
+        (conversion_core / "lib.rs").write_text(
+            "pub mod conversion;\n" if include_module else "", encoding="utf-8")
         (core / "file_actions.rs").write_text(
             "pub enum EntryMenuAction { Rename, CreateShortcut, " +
             ("Convert, " if include_variant else "") + "Delete }\n" +
@@ -41,7 +44,7 @@ class DesktopConversionContractTests(unittest.TestCase):
              else "pub fn entry_context_menu(is_trash: bool) {}\n"),
             encoding="utf-8")
         if include_provider:
-            (core / "conversion.rs").write_text(
+            (conversion_core / "conversion.rs").write_text(
                 "pub const FORMAT_CHOICES: [&str; 0] = [];\n"
                 "pub fn offered_formats() {}\n"
                 "pub fn convert_image() {}\n"

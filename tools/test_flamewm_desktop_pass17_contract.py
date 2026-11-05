@@ -73,7 +73,7 @@ class DesktopPass17Contract(unittest.TestCase):
         self.assertIn('assert_dynamic_text_target(output, &id)', build)
 
     def test_document_converter_routes_are_conditional(self):
-        conversion = src("crates/flamewm-desktop-core/src/conversion.rs")
+        conversion = src("crates/flamewm-conversion-core/src/conversion.rs")
         self.assertIn('available_program("pandoc")', conversion)
         self.assertIn('available_program("pdftotext")', conversion)
         self.assertIn('"pdf" if has_pdftotext => vec!["txt"]', conversion)
