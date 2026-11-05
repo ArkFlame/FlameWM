@@ -798,7 +798,7 @@ impl ConfigStore {
         let mut has_wallpaper_mode = false;
         let mut has_lock_background_mode = false;
         let mut has_button_style = false;
-        let mut has_accent_custom = false;
+        let mut seen_keys = std::collections::BTreeSet::new();
         // Legacy per-button styles: read only, each reduced to "is square".
         let mut legacy_square_flags = Vec::new();
         for raw in text.lines() {
@@ -822,7 +822,7 @@ impl ConfigStore {
             has_wallpaper_mode |= key == "wallpaperMode";
             has_lock_background_mode |= key == "lockBackgroundMode";
             has_button_style |= key == "titlebarButtonStyle";
-            has_accent_custom |= key == "accentCustom";
+            seen_keys.insert(key);
             if let Some(row) = stable_setting(key) {
                 (row.parse)(&mut snapshot, value, key)?;
                 continue;
@@ -890,9 +890,25 @@ impl ConfigStore {
             if all_square { "square" } else { "circle" }
                 .clone_into(&mut snapshot.titlebar_button_style);
         }
-        // Files without the toggle migrate: an explicit non-default accent means custom.
-        if !has_accent_custom {
-            snapshot.accent_custom = snapshot.accent != DEFAULT_ACCENT;
+        // Files without a group switch migrate: a group holding any non-default member is switched on.
+        // Clean groups stay off. A file that names its switch keeps the stated value.
+        for group in flamewm_api::settings_groups::SWITCH_GROUPS {
+            if seen_keys.contains(group.switch) {
+                continue;
+            }
+            let defaults = ProductSettings::default();
+            let custom = group.members.iter().any(|(member, _)| {
+                stable_setting(member)
+                    .is_some_and(|row| (row.get)(&snapshot) != (row.get)(&defaults))
+            });
+            if let Some(row) = stable_setting(group.switch) {
+                (row.set)(
+                    &mut snapshot,
+                    &defaults,
+                    Some(&SettingValue::Boolean(custom)),
+                    group.switch,
+                )?;
+            }
         }
         if snapshot.decoration == "ios" {
             "rounded".clone_into(&mut snapshot.decoration);
@@ -1436,6 +1452,8 @@ mod glass_settings_tests;
 mod accent_custom_tests;
 #[cfg(test)]
 mod switch_group_tests;
+#[cfg(test)]
+mod switch_migration_tests;
 
 #[cfg(test)]
 mod outline_default_tests {
