@@ -6,7 +6,7 @@
 //! Focusable nodes are element nodes with a non-empty `data-action`: buttons,
 //! inputs and list rows all carry one. Traversal is document order with wrap-around.
 
-use flamewm_render_core::{CompiledDocument, CompiledNode, InteractionState, NodeKind};
+use crate::{CompiledDocument, CompiledNode, InteractionState, NodeKind};
 
 /// Whether `node` takes keyboard focus.
 #[must_use]
@@ -93,7 +93,7 @@ impl FocusOwner {
                 self.focus = next;
                 if changed { FocusKey::Moved } else { FocusKey::Ignored }
             }
-            "Return" | "Enter" | "KP_Enter" | "space" | " " => match self.focus {
+            "Return" | "Enter" | "KP_Enter" | "space" | "Space" | " " => match self.focus {
                 Some(index) => FocusKey::Activate(index),
                 None => FocusKey::Ignored,
             },
@@ -117,7 +117,7 @@ mod tests {
     use std::borrow::Cow;
     use std::sync::Arc;
 
-    use flamewm_render_core::{CompiledDocument, CompiledNode, InteractionState, NodeKind, Style};
+    use crate::{CompiledDocument, CompiledNode, InteractionState, NodeKind, Style};
 
     use super::{action_for, next_focusable, FocusKey, FocusOwner};
 
@@ -187,6 +187,8 @@ mod tests {
         assert_eq!(owner.handle_key(&doc, "Tab", false), FocusKey::Moved);
         assert_eq!(owner.focus(), Some(1));
         assert_eq!(owner.handle_key(&doc, "space", false), FocusKey::Activate(1));
+        // X11 canonical name for the Space keysym (events.rs canonical_key_name).
+        assert_eq!(owner.handle_key(&doc, "Space", false), FocusKey::Activate(1));
         assert_eq!(owner.handle_key(&doc, "Tab", true), FocusKey::Moved);
         assert_eq!(owner.focus(), Some(4));
         assert_eq!(action_for(&doc, 4), Some("close"));
