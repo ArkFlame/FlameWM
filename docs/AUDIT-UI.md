@@ -210,3 +210,30 @@ No screenshot was taken in this pass. Every result below is from `cargo test` an
 - Other audited sheets not touched in this pass: `ui/task-manager/task-manager.css`, `ui/explorer/explorer.css` (`button:active`, `.tool:hover`, `.scroll-thumb:hover #ffffff70`), `ui/settings.css` (`#ffffff12/1f/26` hover and pressed rules), `ui/desktop/desktop.css` (`#ffffff40/1a/0d` widget hovers), `ui/shared/menu.css`, `ui/finder`, `ui/terminal`, `ui/archiver`. Their white-alpha hovers are still invisible on light. Not audited for pressed inversion.
 - Titlebar hover/pressed inversion in `flamewm-wm-wayland` and `flamewm-wm-x11`: not touched.
 - Render: the shell demo panels (`.browser-*`, `.code-*`, `.terminal-body`) keep their fixed Dark tones by design.
+
+## Pass 7: fixed chrome tones get a Light counterpart
+
+Scope: `ui/shell/flamewm.css` `:root`, `flamewm_skin::shell_tones`, shell palette projection. Base: `origin/main` after `bc97c6a2`.
+No screenshot was taken in this pass. Results come from `cargo test`, `cargo check` and the guards only.
+
+### Fixed
+
+- `flamewm_skin::shell_tones::FIXED_TONES` is the one table: every `--c-<hex>` tone of the shell sheet plus `--strong`, each with `dark` and `light` values and a `ToneRole`.
+- Dark column equals the shipped `:root` declarations. Rendering in Dark is unchanged.
+- `settings_projection::project_palette_tokens` writes `tone.for_appearance(appearance)` for every entry. The only branch is the appearance read from `glass::appearance_from_settings`.
+- `--strong` (Dark `#ffffff`, Light `#181b1e`) replaces `--c-ffffff` for the active workspace label and the accent swatch hover border. Both sat on tinted or light chrome, where white disappears in Light.
+- Roles: `Surface` (chrome background under body text), `Hover`, `Ink` (text), `Dim` (out-of-month calendar days), `Mark` (lines, progress fill), `Track` (control track fill), `Keep` (accent swatches, white, black; same in both themes).
+
+### Tests
+
+- `shell_tones` in `flamewm-skin`: CSS `:root` declares every table name with the Dark hex; every `var(--c-…)` is in the table; `--c-` names spell their Dark value; every tone resolves in both appearances.
+- Contrast, computed from `Palette::for_appearance` in both themes: body text (`text` and `muted`) at 4.5:1 on Surface and Hover tones; Ink at 4.5:1 on panel, surface and sidebar; Mark at 3:1; Track at 1.5:1; Dim at 2.5:1; Hover at 1.15:1 off the panel and sidebar.
+- Hover tones stay distinct from the bar in both themes.
+
+### Limits
+
+- Dark `--c-62686d` (out-of-month calendar days) is 2.8:1 on the surface. It is kept as shipped. It sits in the Dim role (2.5:1), not Ink.
+- Dark tracks `--c-42474b`, `--c-44494e`, `--c-555a5f` are 1.8 to 2.4:1 against the panel. They are fills, not icons or borders, so the Track role applies.
+- `--c-ffffff` stays Keep. It is the desktop-icon label on the wallpaper, and the toggle knob on the accent or track. Its light value is the same as Dark.
+- Light Surface values are a luminance ramp, not hand-tuned per surface. Look at a screenshot before accepting them.
+- Not touched: `ui/settings*`, `ui/task-manager`, `ui/explorer`, `ui/desktop` CSS (other owners), titlebar hover in the WM crates.

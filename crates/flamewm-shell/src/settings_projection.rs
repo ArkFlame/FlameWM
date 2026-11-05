@@ -4,6 +4,8 @@ use flamewm_api::PanelEdge;
 use flamewm_image_core::scale::ScaleFilter;
 use flamewm_image_core::{decode_bytes_at, ImageSourceFormat};
 use flamewm_platform::chrome::ACCENT_SOFT_ALPHA;
+use flamewm_skin::palette::Appearance;
+use flamewm_skin::shell_tones::FIXED_TONES;
 use flamewm_platform::settings::ClockFormat;
 use flamewm_ui_core::context_menu::shape_radius;
 use flamewm_ui_x11::surface_style::{
@@ -172,9 +174,9 @@ pub fn project(
     Ok(())
 }
 
-/// Neutral tokens (`--panel`, `--surface`, `--sidebar`, `--text`, `--muted`) follow the
-/// appearance palette. The shell CSS `:root` keeps the shipped Dark values, so Dark writes are
-/// no-ops; tokens a surface does not compile are skipped.
+/// Neutral tokens (`--panel`, `--surface`, `--sidebar`, `--text`, `--muted`), the overlays and every
+/// fixed `--c-<hex>` chrome tone follow the appearance. Dark writes equal the shipped `:root`
+/// values. Tokens a surface does not compile are skipped.
 fn project_palette_tokens(
     document: &mut impl UiDocumentAccess,
     snapshot: &SettingsSnapshot,
@@ -196,6 +198,15 @@ fn project_palette_tokens(
         ("--pressed-fill", overlays.pressed),
     ] {
         let _ = document.color_variable(name, rgb(overlay.color.0, overlay.alpha));
+    }
+    let appearance = if flamewm_ui_core::glass::appearance_from_settings(snapshot).light {
+        Appearance::Light
+    } else {
+        Appearance::Dark
+    };
+    for tone in FIXED_TONES {
+        let color = tone.for_appearance(appearance);
+        let _ = document.color_variable(tone.name, rgb(color.color.0, color.alpha));
     }
     Ok(())
 }
