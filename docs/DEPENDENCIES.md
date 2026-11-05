@@ -52,6 +52,8 @@ Table of record for what FlameWM needs at runtime and how each need is packaged.
 | libgles2 | libglvnd | Depends | Wayland GLES renderer (probe requires it on both backends); flamewm-apps GPU blur (dlopen, CPU fallback) | Wayland session fails its probe; X11 uses CPU blur |
 | python3 | python | Depends | packaging/libexec flamewm-desktop-services (autostart, polkit, notifications bridge) | Session starts without the services bridge (degraded) |
 | xwayland | xorg-xwayland | Depends | flamewm-wayland spawns Xwayland for X11 clients (probe requires it) | Wayland session fails its probe; X11 session unaffected |
+| xdg-utils | xdg-utils | Depends | xdg-open and xdg-mime (Explorer `mime.rs` shells out to xdg-mime; portal file and URL opening) | Explorer MIME lookup and file/URL opening fail |
+| shared-mime-info | shared-mime-info | Depends | MIME type database read by xdg-mime (Explorer `mime.rs`) | MIME types unknown; default-app lookup fails |
 | libxcursor1 | libxcursor | Recommends | Cursor theme loading (dlopen, `.ok()` in native/cursor.rs) | Cursor theme loading disabled |
 | libxext6 | libxext | Recommends | XShape window masks (dlopen; rectangle fallback) | Rectangle masks instead of shaped windows |
 | libxrender1 | libxrender | Recommends | Render extension (dlopen; core fallback) | Core rendering path |
@@ -60,7 +62,6 @@ Table of record for what FlameWM needs at runtime and how each need is packaged.
 | libx11-xcb1 | libx11 | Recommends | Nested X11 host backend (flamewm-wayland dlopen) | Nested X11 backend unavailable |
 | libwayland-client0 | wayland | Recommends | Nested Wayland host backend (flamewm-wayland dlopen) | Nested Wayland backend unavailable |
 | libwayland-egl1 | wayland | Recommends | Nested Wayland host backend EGL window | Nested Wayland backend unavailable |
-| xdg-utils | xdg-utils | Recommends | xdg-open and xdg-mime (Explorer, portal file and URL opening) | Files and links are not opened by default apps |
 | libnotify-bin | libnotify | Recommends | notify-send (Explorer notifications) | Notifications silently skipped |
 | dunst | dunst | Recommends | Notification daemon; bundled packaging/notifications/dunstrc | No notification popups (another daemon can be used) |
 | fontconfig | - | Recommends | fc-list font enumeration (covered on Arch by libfontconfig1 to fontconfig) | Font enumeration unavailable |

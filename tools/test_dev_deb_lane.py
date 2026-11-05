@@ -14,17 +14,20 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-BINARIES = ("flamewm-apps", "flamewm-assistant", "flamewm-audio-helper", "flamewm-session", "flamewm-screenshot", "flamewm-render-x11",
+BINARIES = ("flamewm-apps", "flamewm-assistant", "flamewm-imageviewer", "flamewm-archiver", "flamewm-audio-helper", "flamewm-session", "flamewm-screenshot", "flamewm-render-x11",
             "flamewm-render-compile", "flamewm-render-inspect", "flamewm-lock", "flamewm-wayland")
 COPIED = ("Cargo.toml", "LICENSE", "README.md", "packaging/flamewm.desktop",
           "packaging/flamewm-session.desktop", "packaging/flamewm-wayland.desktop", "packaging/flamewm-screenshot.desktop",
           "packaging/flamewm-explorer.desktop", "packaging/flamewm-terminal.desktop", "packaging/flamewm-task-manager.desktop",
-          "packaging/flamewm-finder.desktop", "packaging/flamewm-assistant.desktop", "packaging/icons/flamewm-finder.svg", "packaging/pam.d/flamewm-lock", "packaging/menus/flamewm-applications.menu",
+          "packaging/flamewm-finder.desktop", "packaging/flamewm-assistant.desktop", "packaging/flamewm-imageviewer.desktop",
+          "packaging/flamewm-archiver.desktop", "packaging/flamewm-mimeapps.list", "packaging/icons/flamewm-finder.svg",
+          "packaging/icons/flamewm-imageviewer.svg", "packaging/icons/flamewm-archiver.svg", "packaging/target-baseline.toml",
+          "packaging/pam.d/flamewm-lock", "packaging/menus/flamewm-applications.menu",
           "packaging/notifications/dunstrc", "packaging/install-manifest.txt",
           "packaging/debian/control.in", "packaging/debian/copyright",
           "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/package",
           "scripts/dist-checksums", "scripts/package-source-archive", "scripts/flamewm-session-wrapper", "scripts/flamewm-wayland-session", "scripts/dev-deb",
-          "tools/flamewm_desktop_services.py")
+          "tools/flamewm_desktop_services.py", "tools/flamewm_glibc_baseline.py")
 FAKE_CARGO = """#!/bin/sh
 printf 'CARGO_TARGET_DIR=%s ARGS=%s\\n' "$CARGO_TARGET_DIR" "$*" >> "$FLAMEWM_FAKE_EVENTS"
 [ "$FLAMEWM_FAKE_CARGO_EXIT" = 0 ] || exit "$FLAMEWM_FAKE_CARGO_EXIT"
@@ -108,10 +111,11 @@ class DevDebLaneTests(unittest.TestCase):
         for binary in BINARIES:
             (fast / binary).write_text("#!/bin/sh\necho FAST\n", encoding="utf-8")
             (fast / binary).chmod(0o755)
-        result = self.run_script("package", FLAMEWM_PACKAGE_PROFILE="fast",
+        # Fixture binaries are shell stubs (no ELF for the glibc gate); scripts/dev-deb sets the same labelled bypass.
+        result = self.run_script("package", FLAMEWM_PACKAGE_PROFILE="fast", FLAMEWM_GLIBC_ALLOW_NEWER="1",
                                  CARGO_TARGET_DIR=str(self.targets / "fastdeb"))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        deb = self.root / f".target/dev-dist/flamewm_{VERSION}~dev_amd64.deb"
+        deb =self.root / f".target/dev-dist/flamewm_{VERSION}~dev_amd64.deb"
         self.assertTrue(deb.is_file())
         self.assertFalse((self.root / f".target/dist/flamewm_{VERSION}_amd64.deb").exists())
         self.assertEqual(self.production_marker.read_text(encoding="utf-8"), "keep\n")

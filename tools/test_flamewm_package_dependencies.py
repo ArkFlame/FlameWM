@@ -33,8 +33,11 @@ def control_fields():
 
 
 def docs_rows():
+    """Rows of the '## Table' section only; other tables in the doc have other shapes."""
+    text = DOC.read_text()
+    section = text.split("\n## Table\n", 1)[1].split("\n## ", 1)[0]
     rows = []
-    for line in DOC.read_text().splitlines():
+    for line in section.splitlines():
         if not line.startswith("| ") or line.startswith("| Debian") or line.startswith("| ---"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]

@@ -24,7 +24,9 @@ depends=(
   'pam'
   'pambase'
   'python'
+  'shared-mime-info'
   'systemd-libs'
+  'xdg-utils'
   'xorg-xwayland'
 )
 makedepends=('cargo' 'git' 'pkgconf')
@@ -38,7 +40,6 @@ optdepends=(
   'libxdamage: live backdrop damage tracking'
   'wayland: nested Wayland host backend'
   'systemd: systemd-logind seat access for the Wayland DRM session'
-  'xdg-utils: open files and links with their default applications'
   'libnotify: Explorer notifications'
   'dunst: notification daemon for the session'
   'xdg-desktop-portal: desktop portals (OpenURI, FileChooser)'
