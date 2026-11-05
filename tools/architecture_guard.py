@@ -294,8 +294,7 @@ def _j7_is_test(path):
     return "/tests/" in path.as_posix() or path.name == "tests.rs" or path.name.endswith("_test.rs")
 
 
-@lru_cache(maxsize=None)
-def read_source(path):
+def read_source(path):  # no path-only cache: staleness is keyed by stat in _read_source_keyed
     """File text, read once per run.
 
     Many guards re-read the same file dozens of times. The key includes mtime
