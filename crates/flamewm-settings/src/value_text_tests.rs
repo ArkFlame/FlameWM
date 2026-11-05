@@ -286,6 +286,12 @@ fn red_swatch_selects_red_not_the_default_blue() {
 }
 
 #[test]
+fn default_accent_is_the_picker_blue_swatch() {
+    // Regression: DEFAULT_ACCENT (stored default) and the picker's blue swatch must agree.
+    assert_eq!(accent_for_swatch("blue"), Some(DEFAULT_ACCENT));
+}
+
+#[test]
 fn accent_reset_and_start_icon_actions_parse_to_their_typed_targets() {
     assert!(parse_action("settings.accent.reset").is_err());
     assert_action!(

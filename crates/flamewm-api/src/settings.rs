@@ -64,9 +64,10 @@ impl SettingsSnapshot {
     }
 }
 
-/// Product default accent shared by every settings consumer.
-pub const DEFAULT_ACCENT: &str = "#539BFF";
-pub const DEFAULT_ACCENT_RGB: u32 = 0x0053_9bff;
+/// Product default accent shared by every settings consumer. Must equal the picker's blue swatch
+/// (`accent_for_swatch("blue")` in flamewm-settings); a test there enforces it.
+pub const DEFAULT_ACCENT: &str = "#3DAEE9";
+pub const DEFAULT_ACCENT_RGB: u32 = 0x003d_aee9;
 
 /// Resolve the shared `accent` setting to opaque `0x00RRGGBB`.
 ///
