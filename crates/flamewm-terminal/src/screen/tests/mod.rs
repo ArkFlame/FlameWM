@@ -155,7 +155,6 @@ fn modes_and_title_are_tracked() {
     assert!(!screen.cursor_visible);
     assert_eq!(screen.title.as_deref(), Some("vim"));
     assert_eq!(screen.cursor_shape, CursorShape::Bar);
-    assert!(!screen.cursor_blink);
 }
 
 #[test]
@@ -210,6 +209,16 @@ fn packed_history_keeps_colours_and_wide_cells_through_scroll_and_resize() {
     let snapshot = wide.clone().into_owned();
     screen.resize(6, 2);
     assert_eq!(&screen.line(0)[..snapshot.len()], snapshot.as_slice());
+}
+
+#[test]
+fn linefeed_scroll_moves_rows_and_blanks_the_new_bottom_with_pen_background() {
+    let mut screen = Screen::new(3, 2, 10);
+    feed(&mut screen, b"ab\r\ncd\x1b[44m\r\n");
+    assert_eq!(screen.scrollback_len(), 1);
+    assert_eq!(text(&screen, 0), "cd");
+    assert_eq!(text(&screen, 1), "");
+    assert!(screen.line(1).iter().all(|cell| cell.bg == Color::Indexed(4)));
 }
 
 #[test]

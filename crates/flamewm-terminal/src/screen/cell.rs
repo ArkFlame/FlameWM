@@ -43,17 +43,13 @@ impl Cell {
 
 pub type Line = Vec<Cell>;
 
-/// Drops trailing default blanks (and their capacity, keeping one cell so `line[0]` stays valid) from a line entering scrollback; readers
-/// iterate to `line.len()` and the resize path pads history lines back to the column count.
-pub(super) fn compact_history(mut line: Line) -> Line {
+/// Length of a line entering scrollback once trailing default blanks are dropped (keeps one cell so `line[0]` stays valid). Readers
+/// iterate to the stored length and the resize path pads history lines back to the column count.
+pub(super) fn history_len(line: &[Cell]) -> usize {
     let blank = Cell::blank(Color::Default);
-    line.truncate(
-        line.iter()
-            .rposition(|cell| *cell != blank)
-            .map_or(1, |last| last + 1),
-    );
-    line.shrink_to_fit();
-    line
+    line.iter()
+        .rposition(|cell| *cell != blank)
+        .map_or(1, |last| last + 1)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

@@ -25,12 +25,12 @@ pub(super) enum History {
 }
 
 impl History {
-    /// Packs `line` (already compacted, see `compact_history`) into the smaller of the two forms.
-    pub(super) fn pack(line: Line) -> Self {
+    /// Packs `line` (already trimmed, see `history_len`) into the smaller of the two forms. Borrowed so the live row's buffer is reused.
+    pub(super) fn pack(line: &[Cell]) -> Self {
         let mut text = String::with_capacity(line.len());
         // Sized for the worst case (every cell its own run) so the scroll path does not regrow it per line.
         let mut runs: Vec<StyleRun> = Vec::with_capacity(line.len());
-        for cell in &line {
+        for cell in line {
             text.push(cell.ch);
             match runs.last_mut() {
                 Some(run) if run.fg == cell.fg && run.bg == cell.bg && run.attrs == cell.attrs => {
@@ -51,7 +51,7 @@ impl History {
                 runs: runs.into_boxed_slice(),
             }
         } else {
-            Self::Plain(line)
+            Self::Plain(line.to_vec())
         }
     }
 
@@ -98,7 +98,7 @@ mod tests {
             .chars()
             .map(|c| cell(c, Color::Default, 0))
             .collect();
-        let history = History::pack(line.clone());
+        let history = History::pack(&line);
         assert!(matches!(history, History::Packed { .. }));
         assert_eq!(*history.cells(), line);
     }
@@ -108,7 +108,7 @@ mod tests {
         let mut line: Line = (0..60).map(|_| cell('a', Color::Default, 0)).collect();
         line[10] = cell('世', Color::Rgb(1, 2, 3), attr::WIDE);
         line[11] = cell(' ', Color::Rgb(1, 2, 3), attr::SPACER);
-        let history = History::pack(line.clone());
+        let history = History::pack(&line);
         assert!(matches!(history, History::Packed { .. }));
         assert_eq!(*history.cells(), line);
     }
@@ -118,7 +118,7 @@ mod tests {
         let line: Line = (0..40)
             .map(|i| cell('x', Color::Indexed((i % 2) as u8), 0))
             .collect();
-        let history = History::pack(line.clone());
+        let history = History::pack(&line);
         assert!(matches!(history, History::Plain(_)));
         assert_eq!(*history.cells(), line);
     }

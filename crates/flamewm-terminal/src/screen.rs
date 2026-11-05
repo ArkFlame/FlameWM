@@ -13,7 +13,7 @@ mod modes;
 mod sgr;
 
 pub use self::cell::{Cell, Color, Line, Pen, attr};
-use self::cell::{blank_line, compact_history};
+use self::cell::{blank_line, history_len};
 pub use self::charset::char_width;
 use self::charset::dec_graphics;
 use self::history::History;
@@ -67,7 +67,6 @@ pub struct Screen {
     pub mouse_sgr: bool,
     tabs: Vec<bool>,
     pub cursor_shape: CursorShape,
-    pub cursor_blink: bool,
     g0_graphics: bool,
     g1_graphics: bool,
     use_g1: bool,
@@ -119,7 +118,6 @@ impl Screen {
             mouse_sgr: false,
             tabs: default_tabs(cols),
             cursor_shape: CursorShape::Block,
-            cursor_blink: true,
             g0_graphics: false,
             g1_graphics: false,
             use_g1: false,
@@ -262,7 +260,7 @@ impl Screen {
                 for _ in 0..shift {
                     let line = self.primary.remove(0);
                     self.scrollback
-                        .push_back(History::pack(compact_history(line)));
+                        .push_back(History::pack(&line[..history_len(&line)]));
                     self.primary.push(blank_line(cols, Color::Default));
                     self.row = self.row.saturating_sub(1);
                 }
@@ -314,21 +312,27 @@ impl Screen {
     }
 
     fn scroll_up(&mut self, count: usize) {
-        let top = self.scroll_top;
-        let bottom = self.scroll_bottom;
+        let (top, bottom) = (self.scroll_top, self.scroll_bottom);
         let capture = self.full_region() && !self.alt_active;
         let blank = self.blank();
-        let cols = self.cols;
+        // Rotate the region and blank the row that wrapped to the bottom in place: no per-line row allocation.
+        self.dirty_all = true;
+        let grid = if self.alt_active {
+            &mut self.alt
+        } else {
+            &mut self.primary
+        };
         for _ in 0..count.min(bottom - top + 1) {
-            let line = self.grid_mut().remove(top);
-            if capture {
-                self.scrollback
-                    .push_back(History::pack(compact_history(line)));
+            grid[top..=bottom].rotate_left(1);
+            let row = &mut grid[bottom];
+            let packed = capture.then(|| History::pack(&row[..history_len(row)]));
+            row.fill(blank);
+            if let Some(history) = packed {
+                self.scrollback.push_back(history);
                 if self.scrollback.len() > self.scrollback_limit {
                     self.scrollback.pop_front();
                 }
             }
-            self.grid_mut().insert(bottom, vec![blank; cols]);
         }
     }
 
@@ -503,7 +507,6 @@ impl Screen {
                 self.set_cursor(0, 0);
             }
             7 => self.autowrap = on,
-            12 => self.cursor_blink = on,
             25 => self.cursor_visible = on,
             1000 => self.mouse = if on { MouseMode::Press } else { MouseMode::Off },
             1002 => self.mouse = if on { MouseMode::Drag } else { MouseMode::Off },
@@ -805,17 +808,13 @@ impl Perform for Screen {
             (None, [], b'h' | b'l') => self.set_modes(false, params, action == b'h'),
             (Some(b'?'), [], b'h' | b'l') => self.set_modes(true, params, action == b'h'),
             (None, [b' '], b'q') => {
-                let (shape, blink) = match p(0) {
-                    0 | 1 => (CursorShape::Block, true),
-                    2 => (CursorShape::Block, false),
-                    3 => (CursorShape::Underline, true),
-                    4 => (CursorShape::Underline, false),
-                    5 => (CursorShape::Bar, true),
-                    6 => (CursorShape::Bar, false),
+                // Blink is not stored: the renderer draws the cursor from config, not from the program.
+                self.cursor_shape = match p(0) {
+                    0..=2 => CursorShape::Block,
+                    3 | 4 => CursorShape::Underline,
+                    5 | 6 => CursorShape::Bar,
                     _ => return,
                 };
-                self.cursor_shape = shape;
-                self.cursor_blink = blink;
             }
             _ => {}
         }
