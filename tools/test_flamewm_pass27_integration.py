@@ -23,7 +23,7 @@ class Pass27Contracts(unittest.TestCase):
         self.assertIn('finalize_pam_kwallet_login', runner)
     def test_monitor_layout_refresh_covers_secondary_panels(self):
         app = source('crates/flamewm-shell/src/app.rs')
-        runtime = source('crates/flamewm-shell/src/runtime.rs')
+        runtime = ''.join(source(p) for p in ('crates/flamewm-shell/src/runtime.rs', 'crates/flamewm-shell/src/runtime/panels.rs', 'crates/flamewm-shell/src/runtime/tests.rs'))
         self.assertIn('self.surfaces.panel_topology_drifted(snapshot)', app)
         self.assertIn('panel_context_is_current(&record.placement, snapshot)', runtime)
         self.assertIn('secondary_monitor_swap_with_unchanged_generation_is_detected', runtime)
@@ -54,7 +54,7 @@ class Pass27Contracts(unittest.TestCase):
         self.assertIn('rollback_if_safe', adapter)
         self.assertIn('snapshot.pending.is_some()', adapter)
         self.assertIn('selected monitor is not an active RandR output', adapter)
-        self.assertIn('Command::new("xrandr").args(&args)', adapter)
+        self.assertRegex(adapter, r'Command::new\("xrandr"\)\s*\.args\(&?args\)')
     def test_session_boot_restores_validated_order_and_no_stale_kde_session_name(self):
         runner = source('crates/flamewm-wm/src/bin/flamewm-session.rs')
         order = source('crates/flamewm-session-core/src/display_order.rs')
@@ -69,7 +69,7 @@ class Pass27Contracts(unittest.TestCase):
         self.assertIn('"$ROOT/packaging/xdg-desktop-portal/flamewm-portals.conf"; do', package)
     def test_display_cards_control_native_layout(self):
         ui = source('ui/settings.html')
-        settings = source('crates/flamewm-settings/src/lib.rs')
+        settings = ''.join(source(p) for p in ('crates/flamewm-settings/src/lib.rs', 'crates/flamewm-settings/src/app_impl_1.rs', 'crates/flamewm-settings/src/app_impl_2.rs'))
         self.assertIn('settings.display.arrange.left', ui)
         self.assertIn('settings.display.arrange.right', ui)
         self.assertIn('monitor_drag: Option<(usize, f32, u64, OutputId)>', settings)
