@@ -392,7 +392,8 @@ fn route_focus(
     let shift = key.modifiers.iter().any(|modifier| modifier == "Shift");
     let mut owner = FocusOwner::default();
     owner.set(&document.document, document.focus());
-    match owner.handle_key(&document.document, &key.key, shift) {
+    let visible = |index: u32| document.is_effectively_visible(index);
+    match owner.handle_key_where(&document.document, &key.key, shift, visible) {
         FocusKey::Moved => {
             document.set_focus(owner.focus());
             None

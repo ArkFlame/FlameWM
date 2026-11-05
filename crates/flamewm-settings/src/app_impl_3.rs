@@ -145,12 +145,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let custom = mode.as_deref() == Some("custom-tint");
         document.visible("taskbar-tint-row", custom)?;
         document.visible("taskbar-tint-live", custom)?;
-        // Custom accent off hides the swatches and picker; the system accent applies.
-        let custom_accent = matches!(
-            self.setting_value("accentCustom"),
-            Some(SettingValue::Boolean(true))
-        );
-        document.visible("accent-custom-row", custom_accent)?;
         Ok(())
     }
 
@@ -183,15 +177,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
         ] {
             document.visible(row, outlines)?;
         }
-        // Per-window rows only exist while the custom window outline is on.
-        let custom = outlines && self.bool_setting("customWindowOutline");
-        for row in [
-            "window-outline-hairline",
-            "window-outline-width-row",
-            "window-outline-color-row",
-            "window-outline-opacity-row",
-        ] {
-            document.visible(row, custom)?;
+        // Each progressive-disclosure body shows only while its switch is on (members keep their
+        // stored values while hidden). The window outline body also needs the outline master on.
+        for (group, _, body) in SWITCH_BODIES {
+            let parent = *group != "outline" || outlines;
+            document.visible(body, parent && self.group_custom(group))?;
         }
         for (target, key) in COLOR_TARGETS {
             let Ok(value) = self.text_setting(key) else {

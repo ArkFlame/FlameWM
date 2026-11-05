@@ -1,6 +1,6 @@
 # Settings progressive disclosure
 
-Status: inventory and classification done. Implementation status is in the last table.
+Status: implemented (data layer, markup, projection, focus). Implementation status is in the last table.
 
 ## Rule
 
@@ -98,5 +98,13 @@ code, are in `crates/flamewm-api/src/settings_groups.rs` (`SWITCH_GROUPS`).
 | Central effective-value resolver per group | done: `flamewm_api::settings_groups` (`group_of`, `is_group_custom`, `effective_value`) and `ProductSettings::effective()` |
 | Migration for the 11 proposed groups | done: `parse_snapshot` switches a group on when a member is non-default and the switch key is absent |
 | Contract test: every multi-control group has a switch | done: `switch_contract_tests.rs`, `switch_group_tests.rs` |
-| Switch rows + collapsible groups in UI | NOT done (UI worker) |
-| Settings search finds hidden keys and turns switch on | NOT done (UI worker) |
+| `keyboardLayout` is a single setting, not a cursor member | done (`settings_groups.rs`, load test) |
+| Switch rows + collapsible bodies in UI | done: `ui/settings.html` `Custom <name>` rows (`data-switch`) and `<slug>-body` wrappers; `SWITCH_BODIES` in `crates/flamewm-settings/src/consts.rs`; body hidden with `document.visible(body, is_group_custom)` (`sync_color_rows`) |
+| Accent renders directly, no switch | done: choosing an accent writes `accent` and `accentCustom=true` in one transaction (`apply_text`) |
+| Member controls inside their body | done: every member row carries `data-setting="<key>"`; contract test `every_group_member_control_lives_inside_its_body_and_singles_stay_outside` |
+| Toggling keeps member values | done: toggle sends only the switch key (`toggling_a_switch_sends_only_the_switch_and_keeps_member_values`) |
+| Focus skips hidden controls | done: `FocusOwner::handle_key_where` / `next_focusable_where` with `RuntimeDocument::is_effectively_visible` in `flamewm-ui-x11` route_focus |
+| Settings search finds hidden keys | not applicable: the sidebar search only filters pages (`nav.rs`); no setting-level search exists |
+
+Settings with more than three rows that stay direct by the inventory (Date and time, Blue light
+filter, Assistant, Hotkeys, Displays, Output selector) keep no switch.

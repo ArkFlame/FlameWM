@@ -18,11 +18,22 @@ pub fn is_focusable(node: &CompiledNode) -> bool {
 /// With no current focus, Tab picks the first node and Shift+Tab the last.
 #[must_use]
 pub fn next_focusable(document: &CompiledDocument, current: Option<u32>, reverse: bool) -> Option<u32> {
+    next_focusable_where(document, current, reverse, |_| true)
+}
+
+/// [`next_focusable`] that also skips nodes `visible` rejects (hidden or collapsed controls).
+#[must_use]
+pub fn next_focusable_where(
+    document: &CompiledDocument,
+    current: Option<u32>,
+    reverse: bool,
+    visible: impl Fn(u32) -> bool,
+) -> Option<u32> {
     let count = document.nodes.len();
     if count == 0 {
         return None;
     }
-    let focusable = |index: usize| is_focusable(&document.nodes[index]);
+    let focusable = |index: usize| is_focusable(&document.nodes[index]) && visible(index as u32);
     match current.map(|index| index as usize).filter(|index| *index < count) {
         None => {
             if reverse {
@@ -86,9 +97,20 @@ impl FocusOwner {
 
     /// Route one key press. `key` uses the X11 keysym names the UI event layer delivers.
     pub fn handle_key(&mut self, document: &CompiledDocument, key: &str, shift: bool) -> FocusKey {
+        self.handle_key_where(document, key, shift, |_| true)
+    }
+
+    /// [`Self::handle_key`] with a visibility filter: Tab never lands on a node `visible` rejects.
+    pub fn handle_key_where(
+        &mut self,
+        document: &CompiledDocument,
+        key: &str,
+        shift: bool,
+        visible: impl Fn(u32) -> bool,
+    ) -> FocusKey {
         match key {
             "Tab" | "ISO_Left_Tab" => {
-                let next = next_focusable(document, self.focus, shift);
+                let next = next_focusable_where(document, self.focus, shift, visible);
                 let changed = next != self.focus;
                 self.focus = next;
                 if changed { FocusKey::Moved } else { FocusKey::Ignored }
@@ -119,7 +141,7 @@ mod tests {
 
     use crate::{CompiledDocument, CompiledNode, InteractionState, NodeKind, Style};
 
-    use super::{action_for, next_focusable, FocusKey, FocusOwner};
+    use super::{action_for, next_focusable, next_focusable_where, FocusKey, FocusOwner};
 
     fn node(kind: NodeKind, action: &'static str) -> CompiledNode {
         CompiledNode {
@@ -170,6 +192,19 @@ mod tests {
         assert_eq!(next_focusable(&doc, None, true), Some(4));
         assert_eq!(next_focusable(&doc, Some(4), true), Some(3));
         assert_eq!(next_focusable(&doc, Some(1), true), Some(4));
+    }
+
+    #[test]
+    fn tab_skips_hidden_controls() {
+        let doc = document();
+        let hidden_three = |index: u32| index != 3;
+        assert_eq!(next_focusable_where(&doc, Some(1), false, hidden_three), Some(4));
+        assert_eq!(next_focusable_where(&doc, Some(4), true, hidden_three), Some(1));
+        let mut owner = FocusOwner::default();
+        assert_eq!(owner.handle_key_where(&doc, "Tab", false, hidden_three), FocusKey::Moved);
+        assert_eq!(owner.focus(), Some(1));
+        assert_eq!(owner.handle_key_where(&doc, "Tab", false, hidden_three), FocusKey::Moved);
+        assert_eq!(owner.focus(), Some(4), "the hidden node at 3 is skipped");
     }
 
     #[test]

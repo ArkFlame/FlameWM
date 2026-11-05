@@ -20,7 +20,8 @@ use flamewm_ui_x11::{
     Overflow, RuntimeImage, UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess,
 };
 
-use crate::{ACCENT_NODE_IDS, OUTPUT_PAGE_SLOTS, SETTING_TWINS, SettingsApplication};
+use crate::{ACCENT_NODE_IDS, OUTPUT_PAGE_SLOTS, SETTING_TWINS, SWITCH_BODIES, SettingsAction, SettingsApplication};
+use flamewm_api::settings_groups::SWITCH_GROUPS;
 
 const MARKUP: &str = include_str!("../../../ui/settings.html");
 
@@ -228,6 +229,18 @@ fn application(
     settings: SettingsSnapshot,
     displays: DisplaySnapshot,
 ) -> SettingsApplication<ScriptedTransport> {
+    application_recording(settings, displays).0
+}
+
+/// Like [`application`], also returning the requests the controller sends.
+fn application_recording(
+    settings: SettingsSnapshot,
+    displays: DisplaySnapshot,
+) -> (
+    SettingsApplication<ScriptedTransport>,
+    Rc<RefCell<Vec<ControlRequest>>>,
+) {
+    let requests = Rc::new(RefCell::new(Vec::new()));
     let transport = ScriptedTransport {
         responses: VecDeque::from([
             ControlResponse::Settings(settings),
@@ -243,14 +256,14 @@ fn application(
                 pinned_apps: Vec::new(),
             }),
         ]),
-        requests: Rc::new(RefCell::new(Vec::new())),
+        requests: Rc::clone(&requests),
     };
     let mut application = SettingsApplication::new(transport);
     application
         .client_mut()
         .refresh_all()
         .expect("fixture refresh");
-    application
+    (application, requests)
 }
 
 fn release(action: &str) -> UiActionEvent {
@@ -369,11 +382,7 @@ fn outline_rows_follow_the_outlines_and_custom_window_toggles() {
         "surface-outline-width-row",
         "custom-window-outline-row",
     ];
-    let window = [
-        "window-outline-width-row",
-        "window-outline-color-row",
-        "window-outline-opacity-row",
-    ];
+    let window_body = "custom-window-outline-body";
     for (outlines, custom) in [(true, false), (true, true), (false, true), (false, false)] {
         let mut snapshot = settings_fixture("#3DAEE9", "dark");
         snapshot
@@ -389,14 +398,129 @@ fn outline_rows_follow_the_outlines_and_custom_window_toggles() {
         for row in shared {
             assert_eq!(document.visible.get(row).copied(), Some(outlines), "{row}");
         }
-        for row in window {
+        assert_eq!(
+            document.visible.get(window_body).copied(),
+            Some(outlines && custom),
+            "outlines={outlines} custom={custom}: window outline body"
+        );
+    }
+}
+
+/// Byte offset just past the `</div>` that closes the `<div` starting at `start`.
+fn div_end(markup: &str, start: usize) -> usize {
+    let mut depth = 0_i32;
+    let mut index = start;
+    while let Some(offset) = markup[index..].find('<') {
+        let at = index + offset;
+        if markup[at..].starts_with("<div") && !markup[at + 4..].starts_with(|c: char| c.is_alphanumeric()) {
+            depth += 1;
+        } else if markup[at..].starts_with("</div>") {
+            depth -= 1;
+            if depth == 0 {
+                return at + "</div>".len();
+            }
+        }
+        index = at + 1;
+    }
+    panic!("unclosed div at byte {start}");
+}
+
+/// Byte span of the element whose opening tag carries `needle` (an `id="..."` attribute).
+fn element_span(markup: &str, needle: &str) -> std::ops::Range<usize> {
+    let at = markup.find(needle).unwrap_or_else(|| panic!("markup lacks {needle}"));
+    let start = markup[..at].rfind("<div").expect("element opens with a div");
+    start..div_end(markup, start)
+}
+
+/// Byte offsets of every row that declares `data-setting` with `key` among its keys.
+fn setting_rows(markup: &str, key: &str) -> Vec<usize> {
+    markup
+        .match_indices("data-setting=\"")
+        .filter(|(at, _)| {
+            let rest = &markup[at + "data-setting=\"".len()..];
+            let keys = rest.split('"').next().unwrap_or_default();
+            keys.split_whitespace().any(|candidate| candidate == key)
+        })
+        .map(|(at, _)| markup[..at].rfind("<div").expect("row opens with a div"))
+        .collect()
+}
+
+#[test]
+fn every_group_member_control_lives_inside_its_body_and_singles_stay_outside() {
+    let mut bodies = Vec::new();
+    for (group, switch, body) in SWITCH_BODIES {
+        let span = element_span(MARKUP, &format!("id=\"{body}\""));
+        bodies.push(span.clone());
+        let members = SWITCH_GROUPS
+            .iter()
+            .find(|candidate| candidate.name == *group)
+            .unwrap_or_else(|| panic!("{group} is not a switch group"));
+        assert_eq!(members.switch, *switch, "{group} switch");
+        for (member, _) in members.members {
+            if *member == "accent" {
+                continue;
+            }
+            let rows = setting_rows(MARKUP, member);
+            assert!(!rows.is_empty(), "{member} has no data-setting control in the markup");
+            for row in rows {
+                assert!(
+                    span.start < row && row < span.end,
+                    "{member} control at byte {row} is outside its {body}"
+                );
+            }
+        }
+    }
+    for row in setting_rows(MARKUP, "accent").into_iter().chain(setting_rows(MARKUP, "keyboardLayout")) {
+        assert!(
+            bodies.iter().all(|span| row < span.start || row >= span.end),
+            "single setting at byte {row} must not sit under a switch body"
+        );
+    }
+}
+
+#[test]
+fn progressive_bodies_follow_their_switch_on_every_fixture() {
+    for (group, switch, body) in SWITCH_BODIES {
+        for on in [false, true] {
+            let mut snapshot = settings_fixture("#3DAEE9", "dark");
+            snapshot
+                .values
+                .insert("outlines".to_owned(), SettingValue::Boolean(true));
+            snapshot
+                .values
+                .insert((*switch).to_owned(), SettingValue::Boolean(on));
+            let app = application(snapshot, display_fixtures().remove(0));
+            let mut document = StrictDocument::new();
+            app.sync(&mut document).expect("sync on strict markup");
             assert_eq!(
-                document.visible.get(row).copied(),
-                Some(outlines && custom),
-                "outlines={outlines} custom={custom}: {row}"
+                document.visible.get(*body).copied(),
+                Some(on),
+                "{group}: body {body} with {switch}={on}"
             );
         }
     }
+}
+
+#[test]
+fn toggling_a_switch_sends_only_the_switch_and_keeps_member_values() {
+    let mut snapshot = settings_fixture("#3DAEE9", "dark");
+    snapshot
+        .values
+        .insert("surfaceCustom".to_owned(), SettingValue::Boolean(false));
+    snapshot
+        .values
+        .insert("surfaceOpacity".to_owned(), SettingValue::Percent(10));
+    let (mut app, requests) = application_recording(snapshot, display_fixtures().remove(0));
+    // The scripted transport answers the write with a wrong-shape reply; only the request matters.
+    let _ = app.execute(SettingsAction::Toggle("surfaceCustom"));
+    let sent: Vec<String> = requests.borrow().iter().map(|request| format!("{request:?}")).collect();
+    let writes: Vec<&String> = sent.iter().filter(|text| text.contains("surfaceCustom")).collect();
+    assert_eq!(writes.len(), 1, "one switch write: {sent:?}");
+    assert!(writes[0].contains("true"), "switch turns on: {}", writes[0]);
+    assert!(
+        sent.iter().all(|text| !text.contains("surfaceOpacity")),
+        "member values are not rewritten: {sent:?}"
+    );
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! Split from `lib.rs` (`app_impl_2`); see crate docs.
 
 use super::*;
+use flamewm_api::settings::SettingsChange;
 
 impl<T: ControlTransport> SettingsApplication<T> {
     pub(crate) fn start_file_chooser(&mut self, target: ChooserTarget) -> Result<(), String> {
@@ -154,9 +155,33 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     pub(crate) fn apply_text(&mut self, key: &str, value: String) -> Result<(), String> {
+        // Accent has no switch: choosing one turns its progressive-disclosure switch on in the same
+        // transaction, so the chosen colour applies (switch off resolves accent to the default).
+        if key == "accent" && !self.bool_setting("accentCustom") {
+            return self
+                .client
+                .apply_settings(vec![
+                    SettingsChange {
+                        key: key.to_owned(),
+                        value: Some(SettingValue::Text(value)),
+                    },
+                    SettingsChange {
+                        key: "accentCustom".to_owned(),
+                        value: Some(SettingValue::Boolean(true)),
+                    },
+                ])
+                .map_err(control_error);
+        }
         self.client
             .apply_setting(key, SettingValue::Text(value))
             .map_err(control_error)
+    }
+
+    /// True when a progressive-disclosure group's switch is on (`settings_groups::is_group_custom`).
+    pub(crate) fn group_custom(&self, group: &str) -> bool {
+        self.client
+            .settings()
+            .is_some_and(|snapshot| flamewm_api::settings_groups::is_group_custom(snapshot, group))
     }
 
     pub(crate) fn open_color_picker(&self) -> Result<&ColorPicker, String> {

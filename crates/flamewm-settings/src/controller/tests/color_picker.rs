@@ -167,20 +167,32 @@ fn accent_swatches_dispatch_only_release_inside_events_and_apply_selected_value(
         Some(ControlRequest::ApplySettings(transaction))
             if transaction.expected_revision == 1
                 && transaction.reset_section.is_none()
-                && transaction.changes == vec![SettingsChange {
-                    key: "accent".to_owned(),
-                    value: Some(SettingValue::Text("#3DAEE9".to_owned())),
-                }]
+                && transaction.changes == vec![
+                    SettingsChange {
+                        key: "accent".to_owned(),
+                        value: Some(SettingValue::Text("#3DAEE9".to_owned())),
+                    },
+                    SettingsChange {
+                        key: "accentCustom".to_owned(),
+                        value: Some(SettingValue::Boolean(true)),
+                    },
+                ]
     ));
     assert!(matches!(
         requests.get(2),
         Some(ControlRequest::ApplySettings(transaction))
             if transaction.expected_revision == 2
                 && transaction.reset_section.is_none()
-                && transaction.changes == vec![SettingsChange {
-                    key: "accent".to_owned(),
-                    value: Some(SettingValue::Text("#1ABC9C".to_owned())),
-                }]
+                && transaction.changes == vec![
+                    SettingsChange {
+                        key: "accent".to_owned(),
+                        value: Some(SettingValue::Text("#1ABC9C".to_owned())),
+                    },
+                    SettingsChange {
+                        key: "accentCustom".to_owned(),
+                        value: Some(SettingValue::Boolean(true)),
+                    },
+                ]
     ));
     assert_eq!(
         application

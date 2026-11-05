@@ -14,7 +14,6 @@ pub(crate) const DEFAULT_ACCENT: &str = flamewm_api::settings::DEFAULT_ACCENT;
 /// Every `toggle-on` id in ui/settings.html must be listed here (checked by a test).
 pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "nav-selection-accent",
-    "accent-custom-on",
     "reduce-transparency-on",
     "anim-global-on",
     "anim-start-on",
@@ -41,6 +40,17 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "taskbar-workspaces-on",
     "taskbar-desktop-button-on",
     "custom-window-outline-on",
+    "surface-custom-on",
+    "glass-custom-on",
+    "cursor-custom-on",
+    "minimize-maximize-custom-on",
+    "lock-background-custom-on",
+    "lock-clock-custom-on",
+    "screensaver-custom-on",
+    "windows-custom-on",
+    "panel-custom-on",
+    "items-custom-on",
+    "fonts-custom-on",
     "taskbar-activities-on",
     "taskbar-separate-on",
     "assistant-enabled-on",
@@ -65,9 +75,69 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         false,
     ),
     (
-        "accentCustom",
-        "accent-custom-on",
-        "accent-custom-off",
+        "surfaceCustom",
+        "surface-custom-on",
+        "surface-custom-off",
+        false,
+    ),
+    (
+        "glassCustom",
+        "glass-custom-on",
+        "glass-custom-off",
+        false,
+    ),
+    (
+        "cursorCustom",
+        "cursor-custom-on",
+        "cursor-custom-off",
+        false,
+    ),
+    (
+        "minimizeMaximizeCustom",
+        "minimize-maximize-custom-on",
+        "minimize-maximize-custom-off",
+        false,
+    ),
+    (
+        "lockBackgroundCustom",
+        "lock-background-custom-on",
+        "lock-background-custom-off",
+        false,
+    ),
+    (
+        "lockClockCustom",
+        "lock-clock-custom-on",
+        "lock-clock-custom-off",
+        false,
+    ),
+    (
+        "screensaverCustom",
+        "screensaver-custom-on",
+        "screensaver-custom-off",
+        false,
+    ),
+    (
+        "windowsCustom",
+        "windows-custom-on",
+        "windows-custom-off",
+        false,
+    ),
+    (
+        "panelCustom",
+        "panel-custom-on",
+        "panel-custom-off",
+        false,
+    ),
+    (
+        "itemsCustom",
+        "items-custom-on",
+        "items-custom-off",
+        false,
+    ),
+    (
+        "fontsCustom",
+        "fonts-custom-on",
+        "fonts-custom-off",
         false,
     ),
     (
@@ -194,6 +264,23 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         false,
     ),
 ];
+/// Progressive-disclosure switch groups with a UI body: (group, switch key, body node id). The body
+/// holds every member control and is hidden while its switch is off (`docs/SETTINGS_PROGRESSIVE_DISCLOSURE.md`).
+pub(crate) const SWITCH_BODIES: &[(&str, &str, &str)] = &[
+    ("cursor", "cursorCustom", "cursor-custom-body"),
+    ("surface", "surfaceCustom", "surface-custom-body"),
+    ("glass", "glassCustom", "glass-custom-body"),
+    ("outline", "customWindowOutline", "custom-window-outline-body"),
+    ("minimizeMaximize", "minimizeMaximizeCustom", "minimize-maximize-custom-body"),
+    ("lockBackground", "lockBackgroundCustom", "lock-background-custom-body"),
+    ("lockClock", "lockClockCustom", "lock-clock-custom-body"),
+    ("screensaver", "screensaverCustom", "screensaver-custom-body"),
+    ("windows", "windowsCustom", "windows-custom-body"),
+    ("panel", "panelCustom", "panel-custom-body"),
+    ("items", "itemsCustom", "items-custom-body"),
+    ("fonts", "fontsCustom", "fonts-custom-body"),
+];
+
 /// Inline status line for failed requests. Optional in the compiled markup.
 pub(crate) const ERROR_NODE: &str = "settings-error";
 /// Version line on the About page. Optional in the compiled markup.
