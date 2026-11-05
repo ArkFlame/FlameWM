@@ -11,7 +11,7 @@ root = Path.cwd()
 package = root / 'crates/flamewm-wm'
 manifest = tomllib.loads((package / 'Cargo.toml').read_text())
 targets = {b['name']: b['path'] for b in manifest.get('bin', [])}
-expected = {'flamewm': 'src/main.rs', 'flamewm-session': 'src/bin/flamewm-session.rs'}
+expected = {'flamewm': 'src/bin/flamewm.rs', 'flamewm-session': 'src/bin/flamewm-session.rs'}
 if manifest['package'].get('autobins') is not False or targets != expected:
     raise SystemExit('FAIL: FlameWM Cargo targets are not the Pass 30 manifest; refusing cleanup')
 runner = (package / 'src/bin/flamewm-session.rs').read_text()
