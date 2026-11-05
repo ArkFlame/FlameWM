@@ -30,7 +30,7 @@ mod backdrop;
 mod titlebar;
 pub(crate) use titlebar::put;
 
-pub use backdrop::*;
+pub(crate) use backdrop::*;
 pub use titlebar::*;
 
 use crate::clip::RoundedSurfaceElement;

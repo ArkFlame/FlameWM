@@ -14,7 +14,6 @@ use flamewm_shell_core::StartModel;
 use flamewm_ui_x11::UiDocumentAccess;
 
 use crate::icon_loader::{IconLoader, IconTarget};
-use crate::start::StartCategory;
 
 /// Visible result rows. The list scrolls once the selection leaves this window.
 pub const LAUNCHER_ROWS: usize = 8;

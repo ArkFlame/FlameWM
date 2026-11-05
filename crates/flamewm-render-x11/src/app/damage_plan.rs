@@ -950,7 +950,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn region_paint_defaults_follow_the_desktop_role_and_the_env_override() {
         assert!(region_paint_enabled(true, None), "desktop repaints locally");
         assert!(
