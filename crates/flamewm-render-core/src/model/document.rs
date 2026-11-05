@@ -162,6 +162,9 @@ pub struct RuntimeDocument {
     pub(super) hidden_nodes: FastSet<u32>,
     /// Keyboard focus node; the render path mirrors it into `InteractionState::focus`.
     pub(super) focus: Option<u32>,
+    /// Window backdrop change requested by the UI after window creation: `Some(None)` removes it,
+    /// `Some(Some(spec))` installs or replaces it. The X11 loop takes it after the same reactor turn.
+    pub(super) pending_window_backdrop: Option<Option<crate::backdrop::WindowBackdrop>>,
     pub(super) image_revision: FastMap<u16, u64>,
     pub(super) node_image_overrides: FastMap<u32, RuntimeImageOverride>,
     pub(super) geometry_overrides: FastMap<u32, GeometryOverride>,
@@ -237,6 +240,7 @@ impl RuntimeDocument {
             text_overrides: FastMap::default(),
             hidden_nodes: FastSet::default(),
             focus: None,
+            pending_window_backdrop: None,
             image_revision: FastMap::default(),
             node_image_overrides: FastMap::default(),
             geometry_overrides: FastMap::default(),
@@ -272,6 +276,17 @@ impl RuntimeDocument {
     /// Stores the keyboard focus node. Callers validate focusability; the render path only mirrors it.
     pub fn set_focus(&mut self, focus: Option<u32>) {
         self.focus = focus;
+    }
+
+    /// Requests a window backdrop change (`None` removes it). The render path compares it with the
+    /// installed spec, so a request for the same spec repaints nothing.
+    pub fn request_window_backdrop(&mut self, spec: Option<crate::backdrop::WindowBackdrop>) {
+        self.pending_window_backdrop = Some(spec);
+    }
+
+    /// Takes the pending backdrop request, if any. `Some(None)` means remove the backdrop.
+    pub fn take_window_backdrop(&mut self) -> Option<Option<crate::backdrop::WindowBackdrop>> {
+        self.pending_window_backdrop.take()
     }
 
     pub fn revision(&self) -> u64 {

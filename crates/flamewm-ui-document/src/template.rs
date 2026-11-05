@@ -50,6 +50,15 @@ impl UiDocument {
 }
 
 impl<'a> UiDocumentView<'a> {
+    /// Requests a window backdrop change after the window exists (`None` removes it). The X11 loop
+    /// applies it in the same reactor turn, and an unchanged spec repaints nothing.
+    pub fn request_window_backdrop(
+        &mut self,
+        backdrop: Option<flamewm_render_core::backdrop::WindowBackdrop>,
+    ) {
+        self.document.request_window_backdrop(backdrop);
+    }
+
     /// Builds a view over `document` for a backend that owns the drag slot.
     #[must_use]
     pub fn from_runtime(

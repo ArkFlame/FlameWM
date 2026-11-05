@@ -89,11 +89,30 @@ Fix (`crates/flamewm-terminal/src/main.rs`, `crates/flamewm-terminal/src/setting
   through `apply_settings`, which repaints only when the snapshot values differ (a new revision alone does not).
 - Live `SettingsSnapshotChanged` signals use the same `apply_settings` path.
 
-Limit (not changed here): the window backdrop is installed once at window creation from the snapshot available then
-(`ui-document` `with_window_backdrop` -> `ui-x11` `run_with_controller_events_role_and_two_readable_fds` ->
-`render-x11` `WindowBackdropState::spec`). A backdrop that changes after the window exists is not re-installed; the
-cache makes the next launch use the new value. Installing a backdrop on a live window needs a `render-x11` hook, which
-is outside this change's owner list (report to the render-x11 owner).
+Window backdrop after creation: the backdrop is still installed at window creation from the snapshot available then
+(`ui-document` `with_window_backdrop` -> `ui-x11` -> `render-x11` `WindowBackdropState::spec`). A later snapshot
+with a different backdrop is now applied to the live window:
+
+- `flamewm-terminal` `main.rs` wake handler: when `apply_settings` reports a value change (the live answer or a live
+  `SettingsSnapshotChanged`), it calls `UiDocumentView::request_window_backdrop(backdrop_for(...))`. The spec is the
+  same `theme::window_backdrop` used at creation (`None` when opaque or no snapshot).
+- `flamewm-render-core` `RuntimeDocument::request_window_backdrop` stores one pending request;
+  `take_window_backdrop` returns it once.
+- `flamewm-render-x11` `event_loop_with_reactor` takes the request right after the same reactor callback
+  (`apply_window_backdrop_request`, before the paint gate). No extra wake is added. `backdrop_replacement` compares
+  with the installed spec (opaque requests dropped): an equal spec returns `None` and changes nothing. A changed spec
+  clears the snapshot, canvas and live scene, then `mark_full` repaints once; the next paint recaptures before the
+  scene is cleared.
+- Idle cost: one `Option` take per reactor turn in the render loop. No timer, no poll.
+
+Tests: `flamewm-render-x11` `request_tests` (equal spec, opaque, changed/removed/first spec),
+`flamewm-render-core` `layout_tests::a_window_backdrop_request_is_taken_once_by_the_render_loop`,
+`flamewm-render-x11` `reactor_presentation_regressions::t21_...` (request applied before the paint gate),
+`flamewm-terminal` `settings_apply_tests::an_equal_snapshot_requests_an_equal_backdrop_and_a_blur_change_a_new_one`.
+
+Not covered by runtime evidence: a live settings change against a running control service (the Xvfb harness has none),
+so the repaint-once behaviour is proven by the unit and ordering tests only. Live `background_opacity` changes are not
+read (the config is loaded once at start, as before).
 
 Measured (fast profile, `scripts/perf/startup.sh --runs 5 --warmups 1 terminal`, no control service in the harness,
 so the cache is empty and the defaults path is measured; host load 18 to 25):

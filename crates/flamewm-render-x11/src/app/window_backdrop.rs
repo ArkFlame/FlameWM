@@ -15,6 +15,7 @@ use super::live_backdrop::{LIVE_INTERVAL, LiveScene};
 use crate::backdrop::{BlurredCanvas, WindowBackdrop, recapture_due};
 use crate::xlib::*;
 use crate::xlib_ext::XTranslateCoordinates;
+use flamewm_render_core::RuntimeDocument;
 
 /// An output rect in root coordinates (`x, y, width, height`).
 type OutputRect = (i32, i32, u32, u32);
@@ -69,6 +70,17 @@ pub(crate) struct MirrorFill {
     pub(crate) pixmap: Pixmap,
 }
 
+/// What a requested backdrop change does to the installed one. `None` means the installed backdrop
+/// already matches (or stays absent); `Some(next)` replaces it with `next`. Opaque requests are
+/// dropped, as `UiDocument::with_window_backdrop` does at creation.
+pub(crate) fn backdrop_replacement(
+    installed: Option<&WindowBackdrop>,
+    requested: Option<WindowBackdrop>,
+) -> Option<Option<WindowBackdrop>> {
+    let requested = requested.filter(WindowBackdrop::is_translucent);
+    (installed != requested.as_ref()).then_some(requested)
+}
+
 impl WindowBackdropState {
     pub(crate) fn new(spec: WindowBackdrop) -> Self {
         Self {
@@ -85,6 +97,32 @@ impl WindowBackdropState {
 }
 
 impl X11App {
+    /// Applies a backdrop the UI requested after window creation (see `RuntimeDocument::request_window_backdrop`).
+    /// A different spec drops the snapshot, canvas and live scene, then repaints once; the next paint
+    /// recaptures before the scene is cleared. An equal spec changes nothing and repaints nothing.
+    pub(crate) fn apply_window_backdrop_request(&mut self, document: &mut RuntimeDocument) {
+        let Some(requested) = document.take_window_backdrop() else {
+            return;
+        };
+        let installed = self.window_backdrop.as_ref().map(|state| &state.spec);
+        let Some(next) = backdrop_replacement(installed, requested) else {
+            return;
+        };
+        self.clear_window_backdrop();
+        match (self.window_backdrop.as_mut(), next) {
+            (Some(state), Some(spec)) => {
+                state.spec = spec;
+                state.canvas = None;
+                state.stale = true;
+            }
+            (None, Some(spec)) => {
+                self.window_backdrop = Some(WindowBackdropState::new(spec));
+            }
+            (_, None) => self.window_backdrop = None,
+        }
+        self.mark_full();
+    }
+
     /// The window moved or resized: the snapshot is recropped on the next paint.
     pub(crate) fn mark_window_backdrop_stale(&mut self) {
         if let Some(state) = self.window_backdrop.as_mut() {
@@ -400,5 +438,50 @@ mod tests {
     fn crop_replicates_the_root_edge_off_root() {
         let crop = grey_canvas().crop((-1, 1), (3, 2));
         assert_eq!(crop, [4, 4, 5, 8, 8, 9].map(grey).to_vec());
+    }
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+
+    fn spec(opacity_percent: u8, blur_percent: u8) -> WindowBackdrop {
+        WindowBackdrop {
+            wallpaper: "/w.png".into(),
+            fit: "fill".into(),
+            packaged_root: std::path::PathBuf::from("/share"),
+            opacity_percent,
+            blur_percent,
+        }
+    }
+
+    #[test]
+    fn an_equal_spec_is_not_a_replacement() {
+        let installed = spec(80, 40);
+        assert_eq!(
+            backdrop_replacement(Some(&installed), Some(spec(80, 40))),
+            None
+        );
+    }
+
+    #[test]
+    fn an_opaque_request_with_no_backdrop_is_not_a_replacement() {
+        assert_eq!(backdrop_replacement(None, None), None);
+        assert_eq!(backdrop_replacement(None, Some(spec(100, 40))), None);
+    }
+
+    #[test]
+    fn a_changed_spec_replaces_once_and_removal_is_explicit() {
+        let installed = spec(80, 40);
+        let changed = spec(80, 60);
+        assert_eq!(
+            backdrop_replacement(Some(&installed), Some(changed.clone())),
+            Some(Some(changed.clone()))
+        );
+        assert_eq!(backdrop_replacement(Some(&installed), None), Some(None));
+        assert_eq!(
+            backdrop_replacement(None, Some(installed.clone())),
+            Some(Some(installed))
+        );
     }
 }

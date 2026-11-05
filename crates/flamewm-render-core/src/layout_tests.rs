@@ -472,3 +472,12 @@ fn hidden_scroller_does_not_contribute_scroll_extent() {
     let hidden = LayoutEngine::compute(&document, 200.0, 200.0, InteractionState::default());
     assert!(hidden.content_extent(1).height < 300.0);
 }
+
+#[test]
+fn a_window_backdrop_request_is_taken_once_by_the_render_loop() {
+    let mut document = rows_document(&[("row".to_string(), Style::default())]);
+    assert_eq!(document.take_window_backdrop(), None);
+    document.request_window_backdrop(None);
+    assert_eq!(document.take_window_backdrop(), Some(None));
+    assert_eq!(document.take_window_backdrop(), None);
+}

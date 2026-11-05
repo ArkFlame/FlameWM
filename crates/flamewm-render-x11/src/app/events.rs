@@ -1060,6 +1060,8 @@ impl X11App {
                 self.mark_full();
             }
             on_reactor(document)?;
+            // A backdrop requested in this reactor turn is installed before the paint gate below.
+            self.apply_window_backdrop_request(document);
             // Pending geometry request (if any) is applied before the damage
             // gate so the resized window repaints in this same wake.
             let requested = geometry.take();

@@ -160,9 +160,8 @@ fn run() -> Result<(), String> {
         launch
     };
     app.open_tab(launch)?;
-    let backdrop = snapshot
-        .as_ref()
-        .and_then(|s| theme::window_backdrop(s, &packaged_root(), app.config.background_opacity));
+    let root = packaged_root();
+    let backdrop = backdrop_for(snapshot.as_ref(), &root, app.config.background_opacity);
     let mut tier = app.pool_tier;
     let mut doc = decode_document(UI[tier])?;
     if let Some(spec) = backdrop {
@@ -261,6 +260,15 @@ fn run() -> Result<(), String> {
             if let Some(snapshot) = wake_snapshot.borrow_mut().take() {
                 settings_changed |= apply_settings(&mut app, snapshot);
             }
+            if settings_changed {
+                // The window backdrop is fixed at creation; a changed snapshot re-requests it. An equal
+                // spec is a no-op in the window loop, so this repaints only when the backdrop changes.
+                document.request_window_backdrop(backdrop_for(
+                    app.snapshot.as_ref(),
+                    &root,
+                    app.config.background_opacity,
+                ));
+            }
             let _wake = flamewm_profiler::start("terminal.wake");
             wake::drain_and_commit(&mut app, &events, settings_changed, |app| {
                 let _project = flamewm_profiler::start("terminal.project");
@@ -296,6 +304,15 @@ fn spawn_settings_fetch(
     });
 }
 
+/// The window backdrop for a settings snapshot: `None` when there is no snapshot or the window is opaque.
+fn backdrop_for(
+    snapshot: Option<&SettingsSnapshot>,
+    packaged_root: &Path,
+    opacity: u8,
+) -> Option<flamewm_ui_x11::backdrop::WindowBackdrop> {
+    snapshot.and_then(|s| theme::window_backdrop(s, packaged_root, opacity))
+}
+
 /// Whether `next` changes any value the view reads. A snapshot with the same values (a new revision only) is not a
 /// change, so an unchanged live answer does not repaint the terminal.
 fn settings_differ(current: Option<&SettingsSnapshot>, next: &SettingsSnapshot) -> bool {
@@ -325,6 +342,30 @@ mod settings_apply_tests {
         let mut next = current.clone();
         next.revision = 2;
         assert!(!settings_differ(Some(&current), &next));
+    }
+
+    #[test]
+    fn an_equal_snapshot_requests_an_equal_backdrop_and_a_blur_change_a_new_one() {
+        let root = Path::new("/share");
+        let mut current = SettingsSnapshot::new(1);
+        current
+            .values
+            .insert("wallpaper".into(), SettingValue::Text("/w.png".into()));
+        current
+            .values
+            .insert("surfaceBlurPercent".into(), SettingValue::Percent(40));
+        let mut same = current.clone();
+        same.revision = 2;
+        let mut blurrier = current.clone();
+        blurrier
+            .values
+            .insert("surfaceBlurPercent".into(), SettingValue::Percent(60));
+        let before = backdrop_for(Some(&current), root, 80);
+        assert!(before.is_some());
+        assert_eq!(before, backdrop_for(Some(&same), root, 80));
+        assert_ne!(before, backdrop_for(Some(&blurrier), root, 80));
+        assert_eq!(backdrop_for(Some(&current), root, 100), None);
+        assert_eq!(backdrop_for(None, root, 80), None);
     }
 
     #[test]

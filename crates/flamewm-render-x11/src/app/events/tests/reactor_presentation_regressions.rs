@@ -114,3 +114,21 @@ fn reactor_never_blocks_with_latched_damage_but_still_honours_the_backdrop_deadl
         Some(Duration::ZERO)
     );
 }
+
+#[test]
+fn t21_requested_window_backdrop_is_applied_in_the_reactor_turn_before_the_paint_gate() {
+    let source = reactor_loop_source();
+    let callback = source
+        .find("on_reactor(document)?")
+        .expect("reactor callback is the document mutation boundary");
+    let apply = source[callback..]
+        .find("apply_window_backdrop_request(document)")
+        .expect("a backdrop requested by the reactor callback is applied in the same turn");
+    let gate = source[callback..]
+        .find("redraw_if_dirty(document)?")
+        .expect("reactor-only mutation must reach the retained redraw gate");
+    assert!(
+        apply < gate,
+        "a requested backdrop must be installed before the paint gate, so it repaints once with no extra wake"
+    );
+}
