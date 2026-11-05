@@ -20,7 +20,7 @@ Counts are the rows in each group, including a switch row where one exists.
 | theme | Accent | 2 | switch group (existing) | `accentCustom` (exists) |
 | theme | Applications | 2 | direct | - |
 | theme | Icons | 1 | single | - |
-| theme | Cursor | 5 | switch group | proposed `cursorCustom` |
+| theme | Cursor | 4 (+ `keyboardLayout` single) | switch group | proposed `cursorCustom` |
 | theme | Advanced | 1 | single | - |
 | start-menu | Start icon | 1 | single | - |
 | surfaces | Surface | 6 | switch group | proposed `surfaceCustom` |
@@ -63,7 +63,9 @@ code, are in `crates/flamewm-api/src/settings_groups.rs` (`SWITCH_GROUPS`).
 | outline | `customWindowOutline` | windowOutlineColor, windowOutlineOpacity, windowOutlineWidth |
 | surface | `surfaceCustom` | outlines, surfaceColor, surfaceOpacity, surfaceOutlineColor, surfaceOutlineOpacity, surfaceOutlineWidth |
 | glass | `glassCustom` | reduceTransparency, glassOpacityPercent, glassBlurPx |
-| cursor | `cursorCustom` | cursorTheme, keyboardLayout, cursorSize, pointerSpeed, pointerRawInput |
+| cursor | `cursorCustom` | cursorTheme, cursorSize, pointerSpeed, pointerRawInput |
+
+`keyboardLayout` is a single independent setting (no switch, never reset by any switch).
 | minimizeMaximize | `minimizeMaximizeCustom` | minimizeAnimation(+Enabled), maximizeAnimation(+Enabled) |
 | lockBackground | `lockBackgroundCustom` | lockBackgroundMode, lockBackgroundColor, lockBackgroundImage, lockBackgroundBlurPercent, lockBackgroundDimPercent |
 | lockClock | `lockClockCustom` | lockClockFormat, lockShowDate, lockShowUsername, avatarImage |

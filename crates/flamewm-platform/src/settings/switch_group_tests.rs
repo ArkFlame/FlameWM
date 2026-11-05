@@ -74,3 +74,13 @@ fn effective_is_idempotent_and_leaves_stored_values_alone() {
     );
     assert!(once.lock_show_date);
 }
+
+#[test]
+fn keyboard_layout_survives_a_cursor_switch_off() {
+    let off = parse("revision=1\ncursorCustom=0\nkeyboardLayout=fr\n");
+    assert_eq!(off.keyboard_layout, "fr");
+    assert_eq!(off.effective().keyboard_layout, "fr", "switch must not reset it");
+    let on = parse("revision=1\ncursorCustom=1\ncursorSize=48\nkeyboardLayout=fr\n");
+    assert_eq!(on.effective().keyboard_layout, "fr");
+    assert_eq!(on.effective().cursor_size, 48);
+}

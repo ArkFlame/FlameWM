@@ -4,7 +4,7 @@
 //! of each member's default. Switch off: every member resolves to its default while its stored
 //! value is kept. Switch on: the stored value applies.
 
-use crate::settings::{DEFAULT_ACCENT, DEFAULT_KEYBOARD_LAYOUT, SettingValue, SettingsSnapshot};
+use crate::settings::{DEFAULT_ACCENT, SettingValue, SettingsSnapshot};
 
 /// Default of one member key, in the same wire shape `to_api_snapshot` emits for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +81,6 @@ pub static SWITCH_GROUPS: &[SwitchGroup] = &[
         switch: "cursorCustom",
         members: &[
             ("cursorTheme", T("")),
-            ("keyboardLayout", T(DEFAULT_KEYBOARD_LAYOUT)),
             ("cursorSize", I(24)),
             ("pointerSpeed", I(0)),
             ("pointerRawInput", B(false)),
@@ -241,6 +240,23 @@ mod tests {
                 assert!(seen.insert(member), "{member} is in two groups");
             }
         }
+    }
+
+    #[test]
+    fn keyboard_layout_is_an_independent_setting_never_reset_by_a_switch() {
+        assert!(group_of("keyboardLayout").is_none());
+        assert!(member_default("keyboardLayout").is_none());
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("cursorCustom".into(), SettingValue::Boolean(false));
+        snapshot
+            .values
+            .insert("keyboardLayout".into(), SettingValue::Text("fr".into()));
+        assert_eq!(
+            effective_value(&snapshot, "keyboardLayout"),
+            Some(SettingValue::Text("fr".into()))
+        );
     }
 
     #[test]
