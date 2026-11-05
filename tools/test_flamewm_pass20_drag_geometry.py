@@ -31,7 +31,7 @@ class DragGeometryContract(unittest.TestCase):
 
     def test_drag_remains_captured_and_projected_at_pointer_motion(self):
         self.assertIn('self.interaction.active', EVENTS.read_text())
-        source = DESKTOP.read_text()
+        source = (DESKTOP.parent / 'events.rs').read_text()  # desktop action dispatch moved to events.rs
         self.assertIn('UiActionPhase::Motion => {', source)
         self.assertIn('show_drag_ghost(document, state, action.x, action.y)?;', source)
         drag = DESKTOP_DRAG.read_text()
