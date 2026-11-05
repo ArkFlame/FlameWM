@@ -332,11 +332,11 @@ mod tests {
         let before = unscoped_measure_count();
         let fake = |text: &str, size: f32, _: u16| text.len() as f32 * size;
         with_measure(&fake, || {
-            layout_text("scoped text", 13.0, 1000.0, TextWrap::NoWrap, false);
+            let _ = layout_text("scoped text", 13.0, 1000.0, TextWrap::NoWrap, false);
         });
         assert_eq!(unscoped_measure_count(), before, "scoped layout must not count as unscoped");
         if glyphs::advance_width("x", 13.0).is_some() {
-            layout_text("unscoped text", 13.0, 1000.0, TextWrap::NoWrap, false);
+            let _ = layout_text("unscoped text", 13.0, 1000.0, TextWrap::NoWrap, false);
             assert!(unscoped_measure_count() > before, "unscoped layout must be counted");
         }
     }
