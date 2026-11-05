@@ -40,7 +40,15 @@ pub fn surface_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
         material.tint_rgb
     } else {
         match snapshot.values.get("surfaceColor") {
-            Some(SettingValue::Text(value)) => parse_rgb(value),
+            // Light keeps the Dark preset tint only as the untouched default: it is swapped for the
+            // light token. Any other saved colour is an explicit user choice and wins.
+            Some(SettingValue::Text(value)) => parse_rgb(value).map(|rgb| {
+                if appearance.light && rgb == crate::glass::DARK.tint_rgb {
+                    material.tint_rgb
+                } else {
+                    rgb
+                }
+            }),
             _ => None,
         }
         .unwrap_or(material.tint_rgb)
@@ -682,5 +690,29 @@ mod glass_settings_contract_tests {
             crate::glass::appearance_from_settings(&both).glass_blur_px,
             10
         );
+    }
+}
+
+#[cfg(test)]
+mod light_surface_tests {
+    use super::*;
+    use flamewm_api::settings::SettingValue;
+
+    fn with(appearance: &str, color: &str) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("appearance".into(), SettingValue::Text(appearance.into()));
+        snapshot
+            .values
+            .insert("surfaceColor".into(), SettingValue::Text(color.into()));
+        snapshot
+    }
+
+    #[test]
+    fn light_replaces_only_the_default_dark_surface_colour() {
+        assert_eq!(surface_fill(&with("light", "#eaf4ff")).rgb, 0x00f4_f5f7);
+        assert_eq!(surface_fill(&with("light", "#123456")).rgb, 0x0012_3456);
+        assert_eq!(surface_fill(&with("dark", "#eaf4ff")).rgb, 0x00ea_f4ff);
     }
 }

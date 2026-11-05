@@ -310,6 +310,14 @@ mod css_contract_tests {
         panic!("rule `{selector}` not found");
     }
 
+    /// Declared value of `property` in `selector`, or `None` when the sheet omits it.
+    fn declared<'a>(css: &'a str, selector: &str, property: &str) -> Option<&'a str> {
+        rule(css, selector).split(';').find_map(|declaration| {
+            let (name, value) = declaration.split_once(':')?;
+            (name.trim() == property).then(|| value.trim())
+        })
+    }
+
     fn decl<'a>(css: &'a str, selector: &str, property: &str) -> &'a str {
         rule(css, selector)
             .split(';')
@@ -405,9 +413,11 @@ mod css_contract_tests {
 
     #[test]
     fn accent_soft_hover_token_is_identical_across_sheets() {
+        // `--accent-soft` is a render-compiler built-in (collect_variables seeds it from
+        // DEFAULT_ACCENT_RGB), so sheets either both omit it or both declare the same value.
         assert_eq!(
-            decl(SHELL_CSS, ":root", ROW_HOVER_TOKEN),
-            decl(DESKTOP_CSS, ":root", ROW_HOVER_TOKEN)
+            declared(SHELL_CSS, ":root", ROW_HOVER_TOKEN),
+            declared(DESKTOP_CSS, ":root", ROW_HOVER_TOKEN)
         );
     }
 }

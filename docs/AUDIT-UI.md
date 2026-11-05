@@ -88,3 +88,20 @@ Listed in the final report with exact commands and exits.
 
 Not done: routing these literals through `Palette` tokens, rendered-bitmap light contrast checks,
 and the default-theme golden for each app crate.
+
+## Pass 3: css contract test, surface override, desktop selection
+
+- `context_menu::css_contract_tests::accent_soft_hover_token_is_identical_across_sheets` was failing
+  since commit f914d07a. That commit moved `--accent-soft` (and the other accent tints) out of
+  `ui/shell/flamewm.css` and `ui/desktop/desktop.css` into the render-compiler built-ins, so `decl`
+  panicked on both sheets. The test now compares `declared` Options: both sheets omit the token, or
+  both declare the same value. Render output is unchanged.
+- Light `surfaceColor`: `surface_fill` replaces only the untouched Dark default tint `#eaf4ff` with
+  the light glass tint when `appearance=light`. Any other saved colour is an explicit user choice and
+  wins. Limitation: a user who saved `#eaf4ff` explicitly gets the light tint too.
+- `flamewm-desktop-core::presentation::selection_material_for(light, ..)`: Light uses
+  `LIGHT_SURFACE` as the fill base and `LIGHT_MUTED` as the border base. `selection_material` keeps
+  the Dark bases, so default output is unchanged (test `dark_selection_wrapper_matches_default_material`).
+- Explorer `surface: rgb(0)` is only the initial sentinel. `surface_fill` always overwrites it, so
+  Explorer inherits the light surface and no change was made.
+- Settings `tables.rs` swatches are user-selectable presets, not themed surfaces. Left unchanged.

@@ -275,6 +275,9 @@ pub fn parts_menu_rect(work_area: Rect, anchor: Point, parts: &[MenuPart]) -> Re
 pub const SELECTION_ACCENT_RGB: u32 = 0x00ff_5533;
 pub const SELECTION_FILL_BASE_RGB: u32 = 0x0011_1111;
 pub const SELECTION_BORDER_BASE_RGB: u32 = 0x00e6_e6e6;
+/// Light base colours: `flamewm_skin::palette::{LIGHT_SURFACE, LIGHT_MUTED}`.
+const LIGHT_SURFACE_RGB: u32 = 0x00f4_f5f7;
+const LIGHT_MUTED_RGB: u32 = 0x0043_4a52;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DesktopSelectionMaterial {
@@ -287,17 +290,24 @@ pub fn selection_material(
     fill_opacity_percent: u8,
     border_opacity_percent: u8,
 ) -> DesktopSelectionMaterial {
+    selection_material_for(false, fill_opacity_percent, border_opacity_percent)
+}
+
+/// Selection blend over the Dark or Light base. `light` mirrors `Palette::LIGHT` surface/muted tokens.
+#[must_use]
+pub fn selection_material_for(
+    light: bool,
+    fill_opacity_percent: u8,
+    border_opacity_percent: u8,
+) -> DesktopSelectionMaterial {
+    let (fill_base, border_base) = if light {
+        (LIGHT_SURFACE_RGB, LIGHT_MUTED_RGB)
+    } else {
+        (SELECTION_FILL_BASE_RGB, SELECTION_BORDER_BASE_RGB)
+    };
     DesktopSelectionMaterial {
-        fill_rgb: blend_rgb(
-            SELECTION_ACCENT_RGB,
-            SELECTION_FILL_BASE_RGB,
-            fill_opacity_percent,
-        ),
-        border_rgb: blend_rgb(
-            SELECTION_ACCENT_RGB,
-            SELECTION_BORDER_BASE_RGB,
-            border_opacity_percent,
-        ),
+        fill_rgb: blend_rgb(SELECTION_ACCENT_RGB, fill_base, fill_opacity_percent),
+        border_rgb: blend_rgb(SELECTION_ACCENT_RGB, border_base, border_opacity_percent),
     }
 }
 
@@ -544,6 +554,30 @@ mod tests {
         assert_eq!(
             BlankDesktopAction::DesktopAndWallpaper.label(),
             flamewm_ui_core::context_menu::SETTINGS_ROW_LABEL
+        );
+    }
+}
+
+#[cfg(test)]
+mod light_selection_tests {
+    use super::*;
+
+    #[test]
+    fn dark_selection_wrapper_matches_default_material() {
+        assert_eq!(
+            selection_material_for(false, 20, 60),
+            selection_material(20, 60)
+        );
+    }
+
+    #[test]
+    fn light_selection_blends_over_light_base() {
+        let light = selection_material_for(true, 0, 0);
+        assert_eq!(light.fill_rgb, 0x00f4_f5f7);
+        assert_eq!(light.border_rgb, 0x0043_4a52);
+        assert_ne!(
+            selection_material_for(true, 20, 60),
+            selection_material(20, 60)
         );
     }
 }
