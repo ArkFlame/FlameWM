@@ -225,11 +225,11 @@ pub fn backdrop_blur_cpu<B: PixelBackend + ?Sized>(
     }
     backend.blur_rgba(&mut region, w, h, radius)?;
     for row in 0..h as i32 {
-        for col in 0..w as i32 {
-            let (px, py) = (x + col, y + row);
-            if !inside_node_shape(px, py, node, corner) {
-                continue;
-            }
+        let Some((first, last)) = node_row_span(x, y + row, w, node, corner) else {
+            continue;
+        };
+        for col in first..last {
+            let (px, py) = (x + col as i32, y + row);
             let source = (row as usize * w as usize + col as usize) * 4;
             let dest = py as usize * stride + px as usize * 4;
             pixels[dest..dest + 3].copy_from_slice(&region[source..source + 3]);
@@ -237,6 +237,28 @@ pub fn backdrop_blur_cpu<B: PixelBackend + ?Sized>(
         }
     }
     Ok(())
+}
+
+/// Clip-local column range `[first, last)` of row `py` (`clip_w` wide, starting at `clip_x`) that
+/// `inside_node_shape` accepts, or `None` when the row misses the node. The inside set of one row
+/// of a rounded rect is an interval, so only the two ends are tested per pixel; the interior is
+/// taken as inside. The golden test checks this against the per-pixel test.
+fn node_row_span(
+    clip_x: i32,
+    py: i32,
+    clip_w: u32,
+    node: (i32, i32, u32, u32),
+    radius: u32,
+) -> Option<(u32, u32)> {
+    let (_, node_y, _, node_h) = node;
+    if py < node_y || py > node_y + node_h as i32 {
+        return None;
+    }
+    let first = (0..clip_w).find(|&col| inside_node_shape(clip_x + col as i32, py, node, radius))?;
+    let last = (first..clip_w)
+        .rev()
+        .find(|&col| inside_node_shape(clip_x + col as i32, py, node, radius))?;
+    Some((first, last + 1))
 }
 
 impl PixelOp<'_> {
@@ -689,5 +711,240 @@ mod tests {
             frame, [9_u8; 8],
             "an error must not commit the earlier fill"
         );
+    }
+}
+
+/// Timed kernel harness: `cargo test -p flamewm-render-core --profile fast kernel_bench -- --ignored --nocapture`.
+#[cfg(test)]
+mod kernel_bench {
+    use super::*;
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    fn report(name: &str, pixels: usize, iters: usize, mut f: impl FnMut()) {
+        for _ in 0..3 {
+            f();
+        }
+        let start = Instant::now();
+        for _ in 0..iters {
+            f();
+        }
+        let ns = start.elapsed().as_nanos() as f64;
+        println!(
+            "KBENCH {name}: {:.3} ns/px",
+            ns / (iters as f64 * pixels as f64)
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn kernel_bench() {
+        let (w, h) = (480_u32, 270_u32);
+        let n = (w * h) as usize;
+        let mut seed = 0x9e37_79b9_u32;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let mask: Vec<u8> = (0..n)
+            .map(|_| match rnd() % 4 {
+                0 => 0,
+                1 => 255,
+                _ => (rnd() % 256) as u8,
+            })
+            .collect();
+        let rgba: Vec<u8> = (0..n)
+            .flat_map(|_| {
+                let a = match rnd() % 4 {
+                    0 => 0,
+                    1 => 255,
+                    _ => (rnd() % 256) as u8,
+                };
+                [a / 2, a / 3, a / 5, a]
+            })
+            .collect();
+        let mut frame = vec![0x40_u8; n * 4];
+        let color = [200, 10, 90, 180];
+        report("blend_mask_span", n, 200, || {
+            blend_mask_span(black_box(&mut frame), black_box(&mask), color);
+        });
+        report("blend_image_span", n, 200, || {
+            blend_image_span(black_box(&mut frame), black_box(&rgba));
+        });
+        report("composite_cpu_mask_full_frame", n, 100, || {
+            composite_cpu(
+                black_box(&mut frame),
+                w,
+                h,
+                PixelOp::BlendMask {
+                    x: 0,
+                    y: 0,
+                    width: w,
+                    height: h,
+                    mask: &mask,
+                    color,
+                },
+            )
+            .expect("mask");
+        });
+        let mut blur_buf = frame.clone();
+        let mut scratch = flamewm_image_core::blur::BlurScratch::new();
+        report("gaussian_blur_r8", n, 20, || {
+            flamewm_image_core::blur::gaussian_blur_rgba_with(
+                &mut scratch,
+                black_box(&mut blur_buf),
+                w,
+                h,
+                8.0,
+            )
+            .expect("blur");
+        });
+        report("gaussian_blur_r24_downscaled", n, 20, || {
+            flamewm_image_core::blur::gaussian_blur_rgba_with(
+                &mut scratch,
+                black_box(&mut blur_buf),
+                w,
+                h,
+                24.0,
+            )
+            .expect("blur");
+        });
+        let mut back = crate::soft::SoftPixels::new();
+        report("backdrop_blur_cpu_node_full", n, 20, || {
+            backdrop_blur_cpu(
+                &mut back,
+                black_box(&mut frame),
+                w,
+                h,
+                (0, 0, w, h),
+                (0, 0, w, h),
+                12,
+                16.0,
+            )
+            .expect("backdrop");
+        });
+        let mut fill_frame = vec![0_u8; 1920 * 1080 * 4];
+        report("fill_rounded_rect_cpu_1920x1080", 1920 * 1080, 3, || {
+            crate::soft::fill_rounded_rect_cpu(
+                black_box(&mut fill_frame),
+                1920,
+                1080,
+                RoundedRect { x: 0, y: 0, width: 1920, height: 1080, radius: 12 },
+                None,
+                color,
+            )
+            .expect("fill");
+        });
+    }
+}
+
+#[cfg(test)]
+mod node_row_span_golden {
+    use super::*;
+
+    /// Old per-pixel loop, kept as the reference the row-span path must match.
+    fn reference_spans(clip: (i32, i32, u32, u32), node: (i32, i32, u32, u32), corner: u32) -> Vec<(i32, i32)> {
+        let (x, y, w, h) = clip;
+        let mut out = Vec::new();
+        for row in 0..h as i32 {
+            for col in 0..w as i32 {
+                if inside_node_shape(x + col, y + row, node, corner) {
+                    out.push((x + col, y + row));
+                }
+            }
+        }
+        out
+    }
+
+    fn fast_spans(clip: (i32, i32, u32, u32), node: (i32, i32, u32, u32), corner: u32) -> Vec<(i32, i32)> {
+        let (x, y, w, h) = clip;
+        let mut out = Vec::new();
+        for row in 0..h as i32 {
+            if let Some((first, last)) = node_row_span(x, y + row, w, node, corner) {
+                for col in first..last {
+                    out.push((x + col as i32, y + row));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn row_span_matches_per_pixel_shape_on_random_nodes() {
+        let mut seed = 0x1234_5678_u32;
+        let mut rnd = move |m: u32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed % m
+        };
+        for _ in 0..4000 {
+            let node = (
+                rnd(200) as i32 - 60,
+                rnd(200) as i32 - 60,
+                1 + rnd(180),
+                1 + rnd(180),
+            );
+            let corner = rnd(120);
+            let clip = (rnd(120) as i32 - 20, rnd(120) as i32 - 20, 1 + rnd(150), 1 + rnd(150));
+            assert_eq!(
+                fast_spans(clip, node, corner),
+                reference_spans(clip, node, corner),
+                "node {node:?} corner {corner} clip {clip:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod node_row_span_ab {
+    use super::*;
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    /// Same-process A/B of the backdrop write loop: per-pixel shape test (old) vs row span (new).
+    #[test]
+    #[ignore]
+    fn backdrop_write_loop_ab() {
+        let (w, h) = (480_u32, 270_u32);
+        let node = (0, 0, w, h);
+        let corner = 12;
+        let region = vec![7_u8; (w * h * 4) as usize];
+        let stride = w as usize * 4;
+        let mut frame = vec![0_u8; stride * h as usize];
+        for round in 0..2 {
+            for variant in ["per_pixel", "row_span"] {
+                let start = Instant::now();
+                for _ in 0..50 {
+                    for row in 0..h as i32 {
+                        if variant == "per_pixel" {
+                            for col in 0..w as i32 {
+                                if !inside_node_shape(col, row, node, corner) {
+                                    continue;
+                                }
+                                let s = (row as usize * w as usize + col as usize) * 4;
+                                let d = row as usize * stride + col as usize * 4;
+                                frame[d..d + 3].copy_from_slice(&region[s..s + 3]);
+                                frame[d + 3] = 255;
+                            }
+                        } else if let Some((f, l)) = node_row_span(0, row, w, node, corner) {
+                            for col in f..l {
+                                let s = (row as usize * w as usize + col as usize) * 4;
+                                let d = row as usize * stride + col as usize * 4;
+                                frame[d..d + 3].copy_from_slice(&region[s..s + 3]);
+                                frame[d + 3] = 255;
+                            }
+                        }
+                    }
+                }
+                black_box(&frame);
+                println!(
+                    "KAB round {round} {variant}: {:.3} ns/px",
+                    start.elapsed().as_nanos() as f64 / (50.0 * (w * h) as f64)
+                );
+            }
+        }
     }
 }
