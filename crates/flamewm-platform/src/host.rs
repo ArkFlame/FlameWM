@@ -326,6 +326,11 @@ impl<E: EnginePorts> PlatformHost<E> {
         self.settings.snapshot()
     }
 
+    /// Writes debounced settings state to disk before returning.
+    pub fn flush_settings(&self) -> FlameResult<()> {
+        self.settings.flush()
+    }
+
     pub fn apply_settings(
         &mut self,
         transaction: &SettingsTransaction,

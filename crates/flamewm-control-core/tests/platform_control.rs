@@ -416,10 +416,18 @@ fn settings_control_transaction_persists_only_after_native_shortcut_commit() {
     let dispatcher = Dispatcher::new();
     let transaction = SettingsTransaction {
         expected_revision: 1,
-        changes: vec![SettingsChange {
-            key: "fontBold".to_owned(),
-            value: Some(SettingValue::Boolean(true)),
-        }],
+        // `fontBold` is a member of the `fonts` switch group; it reads as its default unless
+        // `fontsCustom` is on in the same committed transaction.
+        changes: vec![
+            SettingsChange {
+                key: "fontsCustom".to_owned(),
+                value: Some(SettingValue::Boolean(true)),
+            },
+            SettingsChange {
+                key: "fontBold".to_owned(),
+                value: Some(SettingValue::Boolean(true)),
+            },
+        ],
         reset_section: None,
     };
     let response = dispatcher
@@ -434,6 +442,8 @@ fn settings_control_transaction_persists_only_after_native_shortcut_commit() {
         snapshot.values.get("fontBold"),
         Some(&SettingValue::Boolean(true))
     );
+    // Non-shortcut changes are debounced by design; the flush barrier is the durable point.
+    host.flush_settings().expect("flush debounced settings");
     assert!(path.exists());
     let text = std::fs::read_to_string(&path).expect("settings file");
     assert!(text.contains("fontBold=1"));
