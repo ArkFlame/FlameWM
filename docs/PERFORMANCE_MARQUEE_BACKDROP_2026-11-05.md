@@ -97,3 +97,17 @@ Not run: `fm.sh idle`/`hover`, DRM path, repeated fm.sh pairs for CPU% (CPU% is 
 
 - Single full-output readback: reverted, +2.8% total, copy +14% (table above). Strip loop kept.
 - Paint coalescing, retained backbuffer, incremental blur: listed as negative by the coordinator brief. No measurement, commit, or verdict for these was found in this repo (`docs/`, `.agents/`) on 2026-11-05. Record the measured numbers here before citing them.
+
+## Deferred recapture on a worker thread, and stale-frame presentation (2026-11-05, rejected)
+
+Source: `render/backdrop.rs` (`DESKTOP_RECAPTURE_INTERVAL` 100 ms, `refresh_desktop_backdrop`).
+
+- Ceiling: the throttle allows at most 10 recaptures/s. At the 9.36 ms median total (table above), the
+  capture costs at most about 94 ms/s, roughly 9% of one core. Marquee compositor CPU was 89 to 142%.
+- Moving copy, downscale and blur to a worker thread does not reduce CPU. It moves the same work. A
+  >=3% CPU win cannot come from deferral alone, so the bar is not met by that change.
+- Presenting the previous blurred backdrop for one frame would cut recaptures. That changes visible
+  pixels during a fast marquee and is not identical at rest only if timing changes, so it is a quality
+  trade. Not implemented, not measured.
+- Verdict: rejected. Reconsider only with a measured CPU drop from a reduced capture rate that the
+  product owner accepts.
