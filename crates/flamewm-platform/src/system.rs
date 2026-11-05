@@ -275,12 +275,16 @@ impl SystemService {
 
     /// Applies a brightness key to the panel backlight through `perform_action`, the same
     /// typed path the settings UI uses. The write is fenced by the current backlight
-    /// generation. With no backlight device this is a no-op.
+    /// generation. With no backlight device the key cannot be applied: that is an error, so the
+    /// caller logs it instead of the key failing silently.
     pub fn media_brightness_key(&mut self, key: MediaBrightnessKey) -> FlameResult<()> {
         let revision = self.snapshot.revision;
         let brightness = self.snapshot.brightness;
         if brightness.availability != ServiceAvailability::Available {
-            return Ok(());
+            return Err(FlameError::new(
+                ErrorCode::Unavailable,
+                "no backlight device",
+            ));
         }
         let action = SystemAction::SetBrightness(BrightnessAction {
             percent: stepped_brightness(brightness.percent, key == MediaBrightnessKey::Up),
@@ -475,11 +479,12 @@ mod tests {
     }
 
     #[test]
-    fn brightness_key_without_a_device_is_a_noop() {
+    fn brightness_key_without_a_device_is_unavailable_and_dispatches_nothing() {
         let (mut service, seen) = service_with_brightness(40, ServiceAvailability::Unavailable, 0);
-        service
+        let error = service
             .media_brightness_key(MediaBrightnessKey::Down)
-            .expect("no-op");
+            .expect_err("no backlight");
+        assert_eq!(error.code, ErrorCode::Unavailable);
         assert!(seen.borrow().is_empty());
     }
 
@@ -693,6 +698,18 @@ mod media_key_tests {
                 ..
             })]
         ));
+    }
+
+    #[test]
+    fn backend_rejection_reaches_the_caller_as_an_error() {
+        let (mut service, _seen) = service_with(vec![sink(2, true, 40, false)]);
+        service.set_action_handler(Box::new(|_, _| {
+            Err(FlameError::new(ErrorCode::IoFailure, "helper rejected write"))
+        }));
+        let up = service.media_audio_key(MediaAudioKey::VolumeUp, MAX_VOLUME_PERCENT);
+        let mute = service.media_audio_key(MediaAudioKey::VolumeMute, MAX_VOLUME_PERCENT);
+        assert_eq!(up.expect_err("up").code, ErrorCode::IoFailure);
+        assert_eq!(mute.expect_err("mute").code, ErrorCode::IoFailure);
     }
 
     #[test]

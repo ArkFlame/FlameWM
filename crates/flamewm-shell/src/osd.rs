@@ -505,6 +505,18 @@ mod tests {
     }
 
     #[test]
+    fn rejected_key_leaves_the_snapshot_level_and_never_shows() {
+        // A media key only reaches the OSD through the snapshot. A key whose write the backend
+        // rejects leaves the sink level unchanged, so the observed level repeats and no card shows.
+        let mut state = OsdState::new();
+        let t0 = Instant::now();
+        assert!(!state.observe(Level::new(40, false, 150), t0));
+        assert!(!state.observe(Level::new(40, false, 150), t0));
+        assert_eq!(state.deadline(), None);
+        assert!(state.observe(Level::new(45, false, 150), t0));
+    }
+
+    #[test]
     fn first_observation_of_each_kind_is_its_own_baseline() {
         let mut state = OsdState::new();
         let t0 = Instant::now();
