@@ -134,7 +134,10 @@ mod tests {
     #[test]
     fn default_palette_is_the_shipped_dark_palette() {
         assert_eq!(Palette::default(), Palette::RWR_0_0_9);
-        assert_eq!(Palette::for_appearance(Appearance::Dark), Palette::RWR_0_0_9);
+        assert_eq!(
+            Palette::for_appearance(Appearance::Dark),
+            Palette::RWR_0_0_9
+        );
         assert_eq!(Palette::RWR_0_0_9.text, Rgb(0x00f1_f2f3));
         assert_eq!(Palette::RWR_0_0_9.surface, Rgb(0x0020_2326));
     }
