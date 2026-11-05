@@ -444,7 +444,7 @@ impl App {
             );
         doc.text("name", name)?;
         doc.text("meta", self.meta_text())?;
-        doc.text("empty-text", self.message.clone())?;
+        doc.text_ref("empty-text", &self.message)?;
         doc.visible("empty", !self.framed)?;
         doc.visible(PHOTO, self.framed)
     }

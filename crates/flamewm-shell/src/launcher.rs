@@ -210,12 +210,12 @@ impl LauncherState {
         let apps = self.order(model);
         let applications = model.applications();
         let window = self.window();
-        document.text(
+        document.text_ref(
             "launcher-query-label",
             if self.query.is_empty() {
-                "Search...".to_owned()
+                "Search..."
             } else {
-                self.query.clone()
+                self.query.as_str()
             },
         )?;
         document.visible("launcher-empty", apps.is_empty())?;
@@ -231,7 +231,7 @@ impl LauncherState {
                 .filter(|_| window.start + slot < window.end)
                 .map(|&index| &applications[index])
             {
-                document.text(&label_id, application.name.clone())?;
+                document.text_ref(&label_id, &application.name)?;
                 document.visible(&row_id, true)?;
                 document.visible(&icon_id, true)?;
                 crate::async_projection::schedule_visible(

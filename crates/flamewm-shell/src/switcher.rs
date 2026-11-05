@@ -233,7 +233,7 @@ fn paint(document: &mut impl UiDocumentAccess, frame: &SwitcherFrame) -> Result<
             .filter(|_| window.start + slot < window.end)
         {
             Some(entry) => {
-                document.text(&label_id, row_label(entry).to_owned())?;
+                document.text_ref(&label_id, row_label(entry))?;
                 document.visible(&row_id, true)?;
             }
             None => document.visible(&row_id, false)?,

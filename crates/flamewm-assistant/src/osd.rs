@@ -209,13 +209,13 @@ pub fn paint(frame: &OsdFrame, doc: &mut impl UiDocumentAccess) -> Result<(), St
         doc.position(id, eye.left as f32, eye.top as f32)?;
     }
     doc.position("bubble", frame.bubble_left as f32, frame.bubble_top as f32)?;
-    doc.text("osd-text", frame.text.to_owned())?;
-    doc.text(
+    doc.text_ref("osd-text", frame.text)?;
+    doc.text_ref(
         "osd-hint",
         if frame.hint.is_empty() {
-            "\u{200b}".to_owned()
+            "\u{200b}"
         } else {
-            frame.hint.to_owned()
+            frame.hint
         },
     )
 }

@@ -88,7 +88,7 @@ pub fn project_calendar(
         CalendarView::Months => {
             for month in 1..=12u8 {
                 let id = format!("calendar-pick-month-{month}");
-                document.text(&id, month_name(month).to_owned())?;
+                document.text_ref(&id, month_name(month))?;
                 document.foreground(&id, CURRENT_FG)?;
                 paint_today(document, &id, state.year == today.0 && month == today.1)?;
             }

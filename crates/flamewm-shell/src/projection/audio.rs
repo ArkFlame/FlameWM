@@ -38,7 +38,7 @@ pub fn project_audio_full(
     let rows =
         crate::taskbar::status::audio::visible_rows(&snapshot.system.audio, tab, scroll_offset);
     document.visible("audio-empty", rows.is_empty())?;
-    document.text(
+    document.text_ref(
         "audio-empty",
         if rows.is_empty() {
             if devices {
@@ -46,9 +46,8 @@ pub fn project_audio_full(
             } else {
                 "No active applications"
             }
-            .to_owned()
         } else {
-            String::new()
+            ""
         },
     )?;
     for slot in 0..crate::taskbar::status::audio::AUDIO_POPUP_ROWS {
@@ -61,7 +60,7 @@ pub fn project_audio_full(
         let shown = spec.snap(f32::from(row.volume_percent));
         let is_stream = row.kind == crate::taskbar::status::audio::AudioRowKind::Stream;
         let is_input = row.id.starts_with("endpoint:source:");
-        document.text(&format!("audio-slot-{n}-label"), row.label.clone())?;
+        document.text_ref(&format!("audio-slot-{n}-label"), &row.label)?;
         document.text(
             &format!("audio-slot-{n}-value"),
             format!("{}%", row.volume_percent),

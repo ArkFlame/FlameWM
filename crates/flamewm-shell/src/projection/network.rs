@@ -38,11 +38,9 @@ pub fn project_network_full(
     // The connected row is filtered by the same search query as Available rows.
     let connected = crate::taskbar::status::network::connected_row(&snapshot.system)
         .filter(|row| query.matches(&row.label));
-    document.text(
+    document.text_ref(
         "network-connected",
-        connected
-            .as_ref()
-            .map_or_else(String::new, |row| row.label.clone()),
+        connected.as_ref().map_or("", |row| row.label.as_str()),
     )?;
     document.text(
         "network-connected-status",
@@ -57,12 +55,12 @@ pub fn project_network_full(
         // The label stays static; the query lives inside the input box so the
         // layout never shifts while typing.
         let filter_empty = query.filter.trim().is_empty();
-        document.text(
+        document.text_ref(
             "network-filter-value",
             if filter_empty {
-                String::new()
+                ""
             } else {
-                query.filter.clone()
+                query.filter.as_str()
             },
         )?;
         document.visible("network-filter-placeholder", filter_empty)?;

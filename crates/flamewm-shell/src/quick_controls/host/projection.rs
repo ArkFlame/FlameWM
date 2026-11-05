@@ -58,12 +58,12 @@ pub(crate) fn project_snapshot(
                         document,
                         &"*".repeat(snapshot.network_secret_masked_len),
                     )?;
-                    document.text(
+                    document.text_ref(
                         "network-secret-error",
                         if snapshot.network_secret_error {
-                            "Could not connect. Check the password and try again.".to_owned()
+                            "Could not connect. Check the password and try again."
                         } else {
-                            String::new()
+                            ""
                         },
                     )
                 }

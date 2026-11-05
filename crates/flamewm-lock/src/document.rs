@@ -355,7 +355,7 @@ pub fn apply_document<V: UiDocumentAccess>(
         place(view, &icon_id, icon)?;
         let label_id = format!("lock-power-label-{index}");
         place(view, &label_id, layout.power_labels[index])?;
-        view.text(&label_id, button.label().to_string())?;
+        view.text_ref(&label_id, button.label())?;
     }
 
     // Containers carry no text; the labelled children take the label font.

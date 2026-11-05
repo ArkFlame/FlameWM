@@ -412,7 +412,7 @@ pub(crate) fn project_pager(
             scaled(PAGER_CELL_HEIGHT),
         )?;
         document.font_size(&cell_id, scaled(PAGER_CELL_FONT))?;
-        document.text(&cell_id, workspace.label.clone())?;
+        document.text_ref(&cell_id, &workspace.label)?;
         let fill = if workspace.active {
             pager_active_fill()
         } else {
@@ -698,7 +698,7 @@ pub fn project_panel(
             let px = task_icon_device_px(view.output);
             let icon = resolve_icon(icon_resolver, &state.icon_name, IconSize::new(px, px))?;
             document.image_rgb8(&icon_id, icon)?;
-            document.text(&label_id, label.to_owned())?;
+            document.text_ref(&label_id, label)?;
             document.visible(&line_id, state.running)?;
             document.background_clear(&slot_id)?;
             if state.focused {
@@ -1015,7 +1015,7 @@ pub fn project_start_error(
 ) -> Result<(), String> {
     match message {
         Some(message) => {
-            document.text(START_STATUS_NODE, message.to_owned())?;
+            document.text_ref(START_STATUS_NODE, message)?;
             document.visible(START_STATUS_NODE, true)
         }
         None => document.visible(START_STATUS_NODE, false),

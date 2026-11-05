@@ -794,7 +794,7 @@ impl Assistant {
             };
             doc.visible(&format!("mhead-{slot}"), open && header.is_some())?;
             if let Some(provider) = header {
-                doc.text(&format!("mhead-text-{slot}"), provider.title().to_owned())?;
+                doc.text_ref(&format!("mhead-text-{slot}"), provider.title())?;
             }
             let model_row = match row {
                 Some(MenuRow::Model { provider, id }) => Some((*provider, id)),
@@ -822,11 +822,11 @@ impl Assistant {
             doc.visible(&format!("uw-{slot}"), wide)?;
             doc.visible(&format!("a-{slot}"), other.is_some())?;
             if let Some(row) = user {
-                doc.text(&format!("ut-{slot}"), row.text.clone())?;
-                doc.text(&format!("utw-{slot}"), row.text.clone())?;
+                doc.text_ref(&format!("ut-{slot}"), &row.text)?;
+                doc.text_ref(&format!("utw-{slot}"), &row.text)?;
             }
             if let Some(row) = other {
-                doc.text(&format!("at-{slot}"), row.text.clone())?;
+                doc.text_ref(&format!("at-{slot}"), &row.text)?;
             }
         }
         let empty = self.input.is_empty();

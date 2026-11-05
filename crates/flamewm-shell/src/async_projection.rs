@@ -787,7 +787,7 @@ pub fn project_task_slots_async(
                 .map(|application| application.name.as_str())
                 .filter(|name| !name.is_empty())
                 .unwrap_or(state.app_id.as_str());
-            document.text(&label_id, label.to_owned())?;
+            document.text_ref(&label_id, label)?;
             let px = crate::projection::task_icon_device_px(view.output);
             schedule_visible(
                 document,
@@ -946,7 +946,7 @@ pub fn project_start_unified(
         icon_id.clear();
         write!(icon_id, "start-app-slot-{slot}-icon").expect("write to String is infallible");
         if let Some(application) = window.get(index) {
-            document.text(&label_id, application.name.clone())?;
+            document.text_ref(&label_id, &application.name)?;
             document.visible(&button_id, true)?;
             document.visible(&icon_id, true)?;
             schedule_visible(

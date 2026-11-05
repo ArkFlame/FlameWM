@@ -685,7 +685,7 @@ impl Finder {
         doc.visible(&tile, true)?;
         doc.background(&tile, rgba(0x00ff_ffff, if selected { 36 } else { 0 }))?;
         self.paint_icon(doc, &format!("tile-{slot}-ico"), Kind::of(entry))?;
-        doc.text(&format!("tile-name-{slot}"), entry.name().to_owned())?;
+        doc.text_ref(&format!("tile-name-{slot}"), entry.name())?;
         doc.text(&format!("tile-meta-{slot}"), meta_line(entry, now))
     }
 
@@ -714,7 +714,7 @@ impl Finder {
             match pieces.get(segment) {
                 Some((text, hit)) => {
                     doc.visible(&id, true)?;
-                    doc.text(&id, text.clone())?;
+                    doc.text_ref(&id, text)?;
                     let color = if *hit {
                         self.palette.accent
                     } else {
@@ -761,7 +761,7 @@ impl Finder {
         let Some(entry) = self.selected_entry() else {
             return Ok(());
         };
-        doc.text("preview-name", entry.name().to_owned())?;
+        doc.text_ref("preview-name", entry.name())?;
         doc.text("preview-meta", meta_line(entry, now_secs()))?;
         let lines = match &self.preview {
             Some(Preview::Text(lines)) => lines.as_slice(),
@@ -769,8 +769,7 @@ impl Finder {
         };
         doc.visible("preview-empty", lines.is_empty())?;
         for slot in 0..PREVIEW_SLOTS {
-            let line = lines.get(slot).cloned().unwrap_or_default();
-            doc.text(&format!("preview-line-{slot}"), line)?;
+            doc.text_ref(&format!("preview-line-{slot}"), lines.get(slot).map_or("", String::as_str))?;
         }
         Ok(())
     }
@@ -819,7 +818,7 @@ impl Finder {
             };
             doc.visible(&row, true)?;
             let first = &self.index.entries[group[0]];
-            doc.text(&format!("dup-name-{slot}"), first.name().to_owned())?;
+            doc.text_ref(&format!("dup-name-{slot}"), first.name())?;
             doc.text(
                 &format!("dup-meta-{slot}"),
                 format!("{} copies · {}", group.len(), format::bytes(first.size)),

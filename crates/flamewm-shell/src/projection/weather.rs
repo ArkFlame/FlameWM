@@ -108,23 +108,23 @@ pub fn project_weather_popup(
     let picker = picker_open(search);
     document.text("weather-location", view.location)?;
     document.text("weather-temp", view.temperature)?;
-    document.text(
+    document.text_ref(
         "weather-condition",
-        condition_label(view.condition).to_owned(),
+        condition_label(view.condition),
     )?;
     document.text("weather-state", view.status)?;
     set_icons(document, "weather-icon-", Some(view.condition), true)?;
     for row in 1..=WEATHER_DAY_ROWS {
         let day = view.days.get(row - 1);
         let shown = day.is_some() && !picker;
-        document.text(
+        document.text_ref(
             &format!("weather-day-{row}-name"),
-            day.map_or_else(String::new, |d| d.weekday.to_owned()),
+            day.map_or("", |d| d.weekday),
         )?;
         document.visible(&format!("weather-day-{row}-name"), shown)?;
-        document.text(
+        document.text_ref(
             &format!("weather-day-{row}-range"),
-            day.map_or_else(String::new, |d| d.range.clone()),
+            day.map_or("", |d| d.range.as_str()),
         )?;
         document.visible(&format!("weather-day-{row}-range"), shown)?;
         set_icons(
@@ -153,9 +153,9 @@ pub fn project_weather_popup(
     };
     document.text("weather-search-status", status.to_owned())?;
     document.visible("weather-search-status", !status.is_empty())?;
-    document.text(
+    document.text_ref(
         "weather-attribution",
-        crate::weather_provider::OPEN_METEO_ATTRIBUTION.to_owned(),
+        crate::weather_provider::OPEN_METEO_ATTRIBUTION,
     )
 }
 
