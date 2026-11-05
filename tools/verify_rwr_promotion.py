@@ -26,9 +26,9 @@ def sha256_file(path: Path) -> str:
 # re-accepted here. Non-pinned owners keep full token-identity checks.
 ACCEPTED_OWNERS: dict[str, dict[str, str]] = {
     "crates/flamewm-render-core/src/lib.rs": {
-        "sha256": "8af861a9971a7be225749a7f8a0899bf61360ff7f483ecab69aee66c32b9ea1a",
-        "delta": "adds PixelBackend, PixelOp, RoundedRect and RenderAcceleration (shared CPU/GPU renderer domain) and the surface_material module and re-exports on top of text_layout exports, plus the hash module (fast integer-keyed maps)",
-        "reason": "re-accepted after reviewing merged PR #15 (2026-10-30)",
+        "sha256": "c2b9c66541a4be9796fdb2c97570fe40c87ccbf88aedc5c35ddab97df4ca23ab",
+        "delta": "adds PixelBackend, PixelOp, RoundedRect and RenderAcceleration (shared CPU/GPU renderer domain), the hash module (fast integer-keyed maps), and backdrop/glyphs/lower/outline/soft modules (backend-neutral rasterizer); surface_material module removed as dead code",
+        "reason": "re-accepted 2026-11-05 after reviewing diff 678ec1e3..HEAD: 727dae43 (dead SurfaceRim removal), 4ec49af3 (backend-neutral rasterizer), ef81ce72 (text without Xft), 0ecc86ec (Wayland corners); surface_material removal is intended dead-code cleanup; previously re-accepted after merged PR #15 (2026-10-30)",
     },
     "crates/flamewm-render-core/src/codec.rs": {
         "sha256": "4a197baf032b3de42c1a935dc3b2f5d82a5db6af3ff59433c9ffd23e3af1628f",
@@ -36,19 +36,19 @@ ACCEPTED_OWNERS: dict[str, dict[str, str]] = {
         "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
     },
     "crates/flamewm-render-compiler/src/compile.rs": {
-        "sha256": "0fcab5b20b7df30f6d9a4ba95e6f01240b4414c765a67e3d42a6f686c9f4977a",
-        "delta": "shares identical node styles on lowering; rustfmt after upstream merge",
-        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+        "sha256": "5ebf2fc51df996dc688539f4116064762e807d8fd23df2d851003c94175b3e3a",
+        "delta": "shares identical node styles on lowering; rustfmt after upstream merge; shared text-shadow root token (default inherited by all text, opt-out via text-shadow: none); built-in accent token defaults seeded from flamewm_api::settings::DEFAULT_ACCENT_RGB (new flamewm-api path dependency)",
+        "reason": "re-accepted 2026-11-05 after reviewing diff 4a60472d..HEAD: ba51c1af (text shadow default token, Settings > Font toggle), f914d07a (built-in accent tokens; guard owner moved to flamewm-api); architecture_guard passes (render-compiler is not a forbidden dependency); previously re-accepted 2026-10-28",
     },
     "crates/flamewm-render-x11/src/xlib.rs": {
-        "sha256": "46b00226cc1d82999e295863d7a024b53f89944670dcc1b8732ac659f06565cb",
-        "delta": "adds CW_BORDER_PIXEL and further Xlib FFI constants (ARGB border pixel fix); return_large_frees_to_system also sets a single malloc arena",
-        "reason": "re-accepted after reviewed post-baseline changes (2026-10-29)",
+        "sha256": "5f111d308cf57bf2c9b38df8bfcea94e60f694706e57e21d6bba8a2858ceccad",
+        "delta": "adds CW_BORDER_PIXEL, XVisibilityEvent/XCrossingEvent and visibility/crossing constants; removes unused FFI decls (XBlackPixel, XWhitePixel, XLoadFont, XUnloadFont, XTextWidth) and blanket allow(dead_code), gating test-only items with cfg(test); return_large_frees_to_system also sets a single malloc arena",
+        "reason": "re-accepted 2026-11-05 after reviewing diff 09b1f337..HEAD: f5eeb330 (dead-code removal, test-only gating), d03292b3 (VisibilityNotify events for obscured desktop), ba51c1af (XCrossingEvent, X11 client typing, idle wakeups); previously re-accepted 2026-10-29. Build not run in this review (see report)",
     },
     "crates/flamewm-render-x11/src/xft.rs": {
-        "sha256": "dc1fcf075108436305c73c80e16ded1fae0a27ab45d85d1e95eab16b0de5f171",
-        "delta": "text_alpha_mask plus clip, scroll and backdrop support added since 0.0.9",
-        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+        "sha256": "b4ef7d0b7716d6d54ac9978aa5d7fe385dbd76d62fbcbd219cddfab138a49d4c",
+        "delta": "text_alpha_mask plus clip, scroll and backdrop support added since 0.0.9; scoped_text_measure (Xft-backed layout measurement) and an ignored per-call bench test",
+        "reason": "re-accepted 2026-11-05 after reviewing diff 270405f9..HEAD: 9667a7aa (layout and paint measure text with surface Xft extents; additive only). Known defect: the new fn sits between the xft_measure_estimate doc comment and its fn, so that doc comment now documents scoped_text_measure; not fixed here (outside tools/docs scope); previously re-accepted 2026-10-28",
     },
     "crates/flamewm-render-x11/src/xrender.rs": {
         "sha256": "7399150d9a44138f6ae0d88d659cf3583f0a5085b17665c95c9cd5972518cebb",
