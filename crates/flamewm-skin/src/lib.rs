@@ -4,6 +4,7 @@ pub mod icons;
 pub mod metrics;
 pub mod palette;
 pub mod recipes;
+pub mod shell_tones;
 pub mod typography;
 
 pub use icons::{IconRole, IconSource};
