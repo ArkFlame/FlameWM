@@ -41,16 +41,17 @@ class ConvertWheelSourceTests(unittest.TestCase):
         events = source("crates/flamewm-render-x11/src/app/events.rs")
         after = events[events.index("// Hover is a *pointer-position* event") :]
         self.assertIn("ActionPhase::Hover", after)
-        self.assertIn("if changed { self.mark_full(); }", after)
+        self.assertIn("if changed {", after)
+        self.assertIn("self.mark_input_repaint();", after)  # input repaint is damage-bounded; not a full latch
         self.assertIn("fire_node(on_action, document, &mut buffers, index, &mut event)?", after)
 
     def test_wheel_hit_test_shared_for_hover_and_click(self):
-        main = source("crates/flamewm-desktop/src/main.rs")
+        main = source("crates/flamewm-desktop/src/events.rs")
         # The wheel's own keyboard block sits inside this handler; the boundary is the top-level keyboard block.
         handling = main[main.index("fn handle_event(") : main.index('\n    if action.action == "keyboard.input"', main.index("fn handle_event("))]
         self.assertGreaterEqual(handling.count("wheel_hit_at(state, action.x, action.y)"), 2)
         self.assertIn("update_wheel_hover(document, state, sector)", handling)
-        self.assertIn("handle_menu_action(&format!(\"convert.slot.{index}\")", handling)
+        self.assertIn('&format!("convert.slot.{index}")', handling)  # rustfmt wraps the call
 
 
 class MenuIconsSourceTests(unittest.TestCase):
