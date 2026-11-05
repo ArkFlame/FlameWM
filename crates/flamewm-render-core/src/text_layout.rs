@@ -65,10 +65,22 @@ pub fn with_measure<R>(measure: MeasureFn<'_>, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Layout width of `text` at `font_size`, measured by the installed hook when one is set, else by
-/// the render-core fontdue model, else by the per-char estimate.
+/// Process-wide layout measure, used on any thread without a scoped [`with_measure`].
+static DEFAULT_MEASURE: std::sync::OnceLock<&'static (dyn Fn(&str, f32, u16) -> f32 + Sync)> =
+    std::sync::OnceLock::new();
+
+/// Installs the process-wide layout measure. The first install wins; `false` means one was already set.
+pub fn set_default_measure(measure: &'static (dyn Fn(&str, f32, u16) -> f32 + Sync)) -> bool {
+    DEFAULT_MEASURE.set(measure).is_ok()
+}
+
+/// Layout width of `text` at `font_size`, measured by the scoped hook, else the process-wide
+/// default, else by the render-core fontdue model, else by the per-char estimate.
 fn text_width(text: &str, font_size: f32, weight: u16) -> f32 {
-    if let Some(measure) = MEASURE_HOOK.with(std::cell::Cell::get) {
+    let hook = MEASURE_HOOK
+        .with(std::cell::Cell::get)
+        .or_else(|| DEFAULT_MEASURE.get().map(|measure| *measure as MeasureFn<'static>));
+    if let Some(measure) = hook {
         return measure(text, font_size, weight);
     }
     UNSCOPED_MEASURES.with(|count| count.set(count.get() + 1));

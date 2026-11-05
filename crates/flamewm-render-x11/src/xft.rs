@@ -12,7 +12,8 @@ use flamewm_render_core::Color;
 use crate::ffi::dynamic_library::DynamicLibrary;
 use crate::text_mask_cache::{TextMaskCache, TextMaskKey, TextMaskRef};
 use crate::xlib::{
-    Colormap, Display, Drawable, Visual, XCreateGC, XCreatePixmap, XDestroyImage, XFillRectangle,
+    Colormap, Display, Drawable, Visual, XCloseDisplay, XCreateGC, XCreatePixmap, XDefaultColormap,
+    XDefaultScreen, XDefaultVisual, XDestroyImage, XFillRectangle, XOpenDisplay,
     XFreeGC, XGetImage, XImageHead, XRectangle, XRootWindow, XSetForeground, ZPIXMAP,
 };
 
@@ -922,6 +923,82 @@ pub(crate) fn scoped_text_measure<R>(xft: Option<&mut XftBackend>, f: impl FnOnc
     }
 }
 
+thread_local! {
+    /// Per-thread Xft measurer for the process-wide default; opened on first measure, closed on
+    /// thread exit. `None` when the display or Xft cannot open (the estimate is used then).
+    static DEFAULT_XFT: std::cell::OnceCell<Option<DefaultXft>> = const { std::cell::OnceCell::new() };
+}
+
+/// Root-window measurer owned by one thread. Its display is never shared across threads.
+struct DefaultXft {
+    backend: std::cell::RefCell<Option<XftBackend>>,
+    display: *mut Display,
+}
+
+impl DefaultXft {
+    fn measure(&self, size: f32, weight: u16, text: &str) -> f32 {
+        match self.backend.borrow_mut().as_mut() {
+            // SAFETY: `backend` was built on `display`, which stays open until `Drop`.
+            Some(backend) => unsafe { backend.measure_text(size, weight, text).0 },
+            None => xft_measure_estimate(text, size).0,
+        }
+    }
+}
+
+impl Drop for DefaultXft {
+    fn drop(&mut self) {
+        if let Some(mut backend) = self.backend.get_mut().take() {
+            // SAFETY: the display is still open; this frees the backend's Xft handles first.
+            unsafe { backend.release_resources() };
+            // shortcut: libXft/libXrender register Xlib close hooks that run inside XCloseDisplay,
+            // so the backend's dlopen handles are leaked (once per thread exit); revisit when the
+            // Xft symbols are linked directly or the hooks are unregistered before unload.
+            std::mem::forget(backend);
+        }
+        // SAFETY: `display` was opened by `open_default_xft` on this thread and is closed once.
+        unsafe { XCloseDisplay(self.display) };
+    }
+}
+
+fn open_default_xft() -> Option<DefaultXft> {
+    // SAFETY: a NULL name opens `$DISPLAY`; each handle is checked before use and the root
+    // window, visual and colormap belong to that display for its lifetime.
+    unsafe {
+        let display = XOpenDisplay(ptr::null());
+        if display.is_null() {
+            return None;
+        }
+        let screen = XDefaultScreen(display);
+        let root = XRootWindow(display, screen);
+        let visual = XDefaultVisual(display, screen);
+        let colormap = XDefaultColormap(display, screen);
+        match XftBackend::new(display, screen, root, visual, colormap) {
+            Ok(backend) => Some(DefaultXft {
+                backend: std::cell::RefCell::new(Some(backend)),
+                display,
+            }),
+            Err(_) => {
+                XCloseDisplay(display);
+                None
+            }
+        }
+    }
+}
+
+fn default_text_measure(text: &str, size: f32, weight: u16) -> f32 {
+    DEFAULT_XFT.with(|cell| match cell.get_or_init(open_default_xft) {
+        Some(xft) => xft.measure(size, weight, text),
+        None => xft_measure_estimate(text, size).0,
+    })
+}
+
+/// Installs Xft as the process-wide layout measure, so layout outside a scoped measure matches
+/// the X11 paint. Each thread opens its own display lazily. First install wins.
+pub fn install_default_layout_measure() -> bool {
+    static MEASURE: fn(&str, f32, u16) -> f32 = default_text_measure;
+    flamewm_render_core::text_layout::set_default_measure(&MEASURE)
+}
+
 /// Pure estimate backing [`XftBackend::measure_text`]: 0.58em per char,
 /// 1.30em line height. Shared so the fallback path is unit-testable.
 pub(crate) fn xft_measure_estimate(text: &str, size: f32) -> (f32, f32) {
@@ -1196,6 +1273,41 @@ mod tests {
             let libraries = xft.into_deferred_libraries();
             XCloseDisplay(display);
             drop(libraries);
+        }
+    }
+}
+
+#[cfg(test)]
+mod default_measure_tests {
+    use super::*;
+
+    /// Layout width from the process-wide default must equal the scoped Xft measure (the paint
+    /// measure) for caret-length prefixes 1..=60. Skipped without `$DISPLAY`.
+    #[test]
+    fn default_measure_matches_scoped_xft_for_caret_prefixes() {
+        if std::env::var_os("DISPLAY").is_none() {
+            return;
+        }
+        let (Some(default), Some(scoped_owner)) = (open_default_xft(), open_default_xft()) else {
+            panic!("Xft must open on $DISPLAY");
+        };
+        let mut scoped_slot = scoped_owner.backend.borrow_mut();
+        let backend = scoped_slot.as_mut().expect("backend");
+        for chars in 1..=60 {
+            let text = "M".repeat(chars);
+            let scoped = scoped_text_measure(Some(&mut *backend), || {
+                flamewm_render_core::text_layout::layout_text(
+                    &text,
+                    13.0,
+                    1.0e6,
+                    flamewm_render_core::TextWrap::NoWrap,
+                    false,
+                )
+                .lines[0]
+                    .width
+            });
+            let painted = default.measure(13.0, 400, &text);
+            assert!((scoped - painted).abs() < 0.01, "{chars} chars: {scoped} vs {painted}");
         }
     }
 }

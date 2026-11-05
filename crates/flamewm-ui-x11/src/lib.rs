@@ -16,6 +16,7 @@ pub mod test_support;
 pub use event_source::{
     pump_events, run_surface_runtime_until, run_surface_runtime_with_reactor_access,
 };
+pub use flamewm_render_x11::install_default_layout_measure;
 pub use flamewm_render_x11::{
     DockEdge, GeometryTrace, RawPress, RawPressWatch, WindowGeometry, WindowGeometrySlot,
     X11WindowIdentity, apply_cursor_appearance, apply_cursor_theme, release_free_heap,

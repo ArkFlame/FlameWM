@@ -247,6 +247,7 @@ fn execute() -> Result<(), String> {
     // The startup client owns only the bootstrap roundtrip. Steady-state
     // mutations use the dispatcher worker and snapshots arrive by signal.
     drop(client);
+    flamewm_ui_x11::install_default_layout_measure();
     let mut runtime = {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.runtime_create");
         let _s = scope.start();

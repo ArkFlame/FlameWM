@@ -7,6 +7,7 @@ mod text_mask_cache;
 mod warp;
 mod xcomposite;
 mod xft;
+pub use xft::install_default_layout_measure;
 mod xinput;
 mod xlib;
 mod xlib_ext;

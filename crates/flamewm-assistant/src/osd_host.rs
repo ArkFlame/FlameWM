@@ -119,6 +119,7 @@ struct Host {
 
 /// Child side: runs one overlay surface until it receives `hide` or stdin closes.
 pub fn run_host() -> Result<(), String> {
+    flamewm_ui_x11::install_default_layout_measure();
     let mut runtime =
         SurfaceRuntime::new().map_err(|error| format!("create UI runtime: {error:?}"))?;
     let document = decode_document(OSD_UI)?;

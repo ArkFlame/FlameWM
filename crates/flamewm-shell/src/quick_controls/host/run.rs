@@ -18,6 +18,7 @@ pub fn run_quick_control_host(packaged_root: std::path::PathBuf) -> Result<(), H
     let mut snapshot = QuickControlSnapshot::load(&client)?;
     snapshot.refresh_settings(&client);
     drop(client);
+    flamewm_ui_x11::install_default_layout_measure();
     let mut runtime = SurfaceRuntime::new()
         .map_err(|error| HostError::Ui(format!("create UI runtime: {error:?}")))?;
     let surfaces = HelperSurfaces::new();
