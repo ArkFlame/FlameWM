@@ -4,6 +4,7 @@
 //! Placement and surface ownership live in `runtime::launcher_surface`. Results
 //! come from the indexed Start model, so filtering is the same search Start uses.
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 use flamewm_api::applications::DesktopApplication;
@@ -13,7 +14,6 @@ use flamewm_shell_core::StartModel;
 use flamewm_ui_x11::UiDocumentAccess;
 
 use crate::icon_loader::{IconLoader, IconTarget};
-use crate::projection::start_visible_results;
 use crate::start::StartCategory;
 
 /// Visible result rows. The list scrolls once the selection leaves this window.
@@ -35,6 +35,16 @@ pub struct LauncherState {
     /// Cached result count for the current query; navigation reads this, never re-filters.
     count: usize,
     recent: Vec<DesktopAppId>,
+    /// Result order filtered once per query change; keyed by the model generation.
+    order: Option<OrderCache>,
+}
+
+/// Application indices in result order for one query, valid for one model generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OrderCache {
+    generation: u64,
+    query: String,
+    indices: Vec<usize>,
 }
 
 impl LauncherState {
@@ -121,9 +131,10 @@ impl LauncherState {
         model: &'a StartModel,
         index: usize,
     ) -> Option<&'a DesktopApplication> {
-        results(model, &self.query, &self.recent)
+        let applications = model.applications();
+        self.order(model)
             .get(index)
-            .copied()
+            .map(|&application| &applications[application])
     }
 
     /// Application for a visible row slot (0-based within the window).
@@ -142,6 +153,20 @@ impl LauncherState {
         self.recent.retain(|recent| recent != id);
         self.recent.insert(0, id.clone());
         self.recent.truncate(RECENT_LIMIT);
+        self.order = None;
+    }
+
+    /// Result order for the current query. Uses the cache filled by `refresh` while the
+    /// query and model generation still match; otherwise filters again without caching.
+    fn order<'c>(&'c self, model: &StartModel) -> Cow<'c, [usize]> {
+        match &self.order {
+            Some(cache)
+                if cache.generation == model.generation() && cache.query == self.query =>
+            {
+                Cow::Borrowed(cache.indices.as_slice())
+            }
+            _ => Cow::Owned(ordered_indices(model, &self.query, &self.recent)),
+        }
     }
 
     fn requery(&mut self, model: &StartModel) {
@@ -151,7 +176,13 @@ impl LauncherState {
     }
 
     fn refresh(&mut self, model: &StartModel) {
-        self.count = results(model, &self.query, &self.recent).len();
+        let indices = ordered_indices(model, &self.query, &self.recent);
+        self.count = indices.len();
+        self.order = Some(OrderCache {
+            generation: model.generation(),
+            query: self.query.clone(),
+            indices,
+        });
         // A text change invalidates every icon binding made for the old result list.
         crate::async_projection::bump_start_view_epoch();
     }
@@ -177,7 +208,8 @@ impl LauncherState {
         model: &StartModel,
         mut loader: Option<&mut IconLoader>,
     ) -> Result<(), String> {
-        let apps = results(model, &self.query, &self.recent);
+        let apps = self.order(model);
+        let applications = model.applications();
         let window = self.window();
         document.text(
             "launcher-query-label",
@@ -198,6 +230,7 @@ impl LauncherState {
             if let Some(application) = apps
                 .get(window.start + slot)
                 .filter(|_| window.start + slot < window.end)
+                .map(|&index| &applications[index])
             {
                 document.text(&label_id, application.name.clone())?;
                 document.visible(&row_id, true)?;
@@ -221,28 +254,26 @@ impl LauncherState {
     }
 }
 
-/// Result list for a query. An empty query lists recent launches first, then every app.
-#[must_use]
-pub fn results<'a>(
-    model: &'a StartModel,
-    query: &str,
-    recent: &[DesktopAppId],
-) -> Vec<&'a DesktopApplication> {
+/// Result indices (into `model.applications()`) for a query. An empty query lists recent
+/// launches first, then every app in alpha order.
+fn ordered_indices(model: &StartModel, query: &str, recent: &[DesktopAppId]) -> Vec<usize> {
     if !query.trim().is_empty() {
-        return start_visible_results(model, StartCategory::All, query);
+        return model.filter_indices(flamewm_shell_core::start_menu::StartCategory::All, query);
     }
-    let all = start_visible_results(model, StartCategory::All, "");
-    let mut ordered: Vec<&DesktopApplication> = recent
+    let applications = model.applications();
+    let all = model.sorted_order();
+    let mut ordered: Vec<usize> = recent
         .iter()
         .filter_map(|id| {
             all.iter()
                 .copied()
-                .find(|application| &application.id == id)
+                .find(|&index| &applications[index].id == id)
         })
         .collect();
     ordered.extend(
-        all.into_iter()
-            .filter(|application| !recent.contains(&application.id)),
+        all.iter()
+            .copied()
+            .filter(|&index| !recent.contains(&applications[index].id)),
     );
     ordered
 }
@@ -383,6 +414,72 @@ mod tests {
         state.move_by(3);
         assert_eq!(state.selected(), 0);
         assert_eq!(state.window(), 0..0);
+    }
+
+    fn app(id: &str, name: &str) -> DesktopApplication {
+        DesktopApplication {
+            id: DesktopAppId::new(id),
+            name: name.to_owned(),
+            generic_name: String::new(),
+            comment: String::new(),
+            startup_wm_class: String::new(),
+            argv: Vec::new(),
+            keywords: Vec::new(),
+            icon_name: String::new(),
+            categories: Vec::new(),
+        }
+    }
+
+    fn model() -> StartModel {
+        StartModel::new(vec![
+            app("beta.desktop", "Beta"),
+            app("alpha.desktop", "Alpha"),
+            app("gamma.desktop", "Gamma Editor"),
+        ])
+    }
+
+    #[test]
+    fn cached_order_follows_each_query_and_matches_uncached_filter() {
+        let model = model();
+        let mut state = LauncherState::default();
+        state.open(&model);
+        assert_eq!(state.count(), 3);
+        assert_eq!(state.app_at(&model, 0).unwrap().name, "Alpha", "alpha order");
+
+        assert!(state.type_text(&model, "ed"));
+        assert_eq!(state.count(), 1);
+        assert_eq!(state.app_at(&model, 0).unwrap().name, "Gamma Editor");
+        assert_eq!(
+            &*state.order(&model),
+            ordered_indices(&model, "ed", &[]).as_slice(),
+            "cache equals an uncached filter"
+        );
+        assert!(state.app_at(&model, 1).is_none());
+    }
+
+    #[test]
+    fn replaced_application_set_bypasses_stale_cache() {
+        let mut model = model();
+        let mut state = LauncherState::default();
+        state.open(&model);
+        let before = model.generation();
+        model.replace_applications(vec![app("zeta.desktop", "Zeta")]);
+        assert_ne!(model.generation(), before, "replacement bumps the generation");
+        assert_eq!(
+            state.app_at(&model, 0).unwrap().name,
+            "Zeta",
+            "stale indices are not used after the model changed"
+        );
+    }
+
+    #[test]
+    fn launch_reorders_the_cached_empty_query_list() {
+        let model = model();
+        let mut state = LauncherState::default();
+        state.open(&model);
+        state.note_launch(&DesktopAppId::new("gamma.desktop"));
+        assert_eq!(state.app_at(&model, 0).unwrap().name, "Gamma Editor");
+        assert_eq!(state.app_at(&model, 1).unwrap().name, "Alpha");
     }
 
     #[test]

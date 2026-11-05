@@ -176,6 +176,8 @@ pub struct StartModel {
     /// Indices into `applications`, sorted by (name, id) with stable ties.
     sorted: Vec<usize>,
     query: String,
+    /// Bumped on every application-set replacement so callers can key caches on it.
+    generation: u64,
 }
 
 impl StartModel {
@@ -186,6 +188,7 @@ impl StartModel {
             entries: Vec::new(),
             sorted: Vec::new(),
             query: String::new(),
+            generation: 0,
         };
         model.rebuild();
         model
@@ -280,6 +283,31 @@ impl StartModel {
     fn rebuild(&mut self) {
         self.entries = self.applications.iter().map(StartEntry::build).collect();
         self.sorted = sorted_indices(&self.entries);
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Changes whenever the application set is replaced; equal values mean equal indices.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// All application indices in (name, id) order, as `results_view` lists them.
+    #[must_use]
+    pub fn sorted_order(&self) -> &[usize] {
+        &self.sorted
+    }
+
+    /// Indices into `applications()` for a category plus ad-hoc query, in alpha order.
+    #[must_use]
+    pub fn filter_indices(&self, category: StartCategory, query: &str) -> Vec<usize> {
+        let needle = query.trim().to_lowercase();
+        self.sorted
+            .iter()
+            .copied()
+            .filter(|&index| category.accepts(self.entries[index].category))
+            .filter(|&index| self.entries[index].matches(&needle))
+            .collect()
     }
 
     /// Slice path used by the free-function shims. Normalizes each entry once
