@@ -256,7 +256,7 @@ struct ExplorerApp {
     model:Explorer, tx:Sender<WorkerJob>, scan_tx:Sender<WorkerJob>,
     chooser_tx:Sender<ChooserJob>, chooser:Option<OpenWithChooser>,
     // Row thumbnails: the cache and the image id each row slot currently shows. `project` takes `&self`, hence the cells.
-    thumbs:RefCell<Thumbnails>, thumb_tx:Option<Sender<ThumbKey>>, thumb_bound:RefCell<[Option<u64>;ROW_SLOTS]>,
+    thumbs:RefCell<Thumbnails>, thumb_queue:Option<Arc<thumbs::ThumbQueue>>, thumb_bound:RefCell<[Option<u64>;ROW_SLOTS]>,
     chooser_loading:bool, chooser_request:u64, places:Vec<Place>,
     context:Option<(f32,f32)>, edit:Option<EditMode>, field:flamewm_explorer::TextField, rename_target:Option<PathBuf>, theme:ExplorerTheme, window:(f32,f32),
     last_click:Option<(PathBuf,Instant)>, progress:Option<progress::Snapshot>,
@@ -353,9 +353,10 @@ fn run()->Result<(),String>{
         .map_err(|e|e.to_string())?;
     let scan_results=result_tx.clone();
     std::thread::Builder::new().name("flamewm-explorer-scan".into()).spawn(move||scan_worker(scans,scan_results,scan_wake)).map_err(|e|e.to_string())?;
-    let (thumb_tx,thumb_jobs)=mpsc::channel::<ThumbKey>();
+    let thumb_queue=Arc::new(thumbs::ThumbQueue::default());
     let thumb_results=result_tx.clone();
     let thumb_wake=writer.try_clone().map_err(|e|e.to_string())?;
+    let thumb_jobs=Arc::clone(&thumb_queue);
     std::thread::Builder::new().name("flamewm-explorer-thumbs".into()).spawn(move||thumb_worker(thumb_jobs,thumb_results,thumb_wake)).map_err(|e|e.to_string())?;
     // Background threads (search, watcher, recursive size) wake the UI through the same socket.
     let app_events=(result_tx.clone(),writer.try_clone().map_err(|e|e.to_string())?);
@@ -369,7 +370,7 @@ fn run()->Result<(),String>{
         let mut app=app.borrow_mut();
         app.window=(window_w as f32,window_h as f32);
         app.events=Some(app_events);
-        app.thumb_tx=Some(thumb_tx);
+        app.thumb_queue=Some(thumb_queue);
         app.search=Some(search);
         let settings=initial_settings();
         app.theme=settings.as_ref().map_or_else(ExplorerTheme::default,ExplorerTheme::from_snapshot);

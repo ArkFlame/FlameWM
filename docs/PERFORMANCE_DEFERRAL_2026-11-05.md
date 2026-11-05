@@ -110,3 +110,63 @@ so no UI responsiveness claim is made beyond the per-listing numbers above.
 
 - Live-app frame timing under Xvfb for explorer scroll and navigation (needs a separate runtime pass).
 - Thumbnail priority, cancellation, and per-frame coalescing (see above).
+
+## Explorer: thumbnail scheduling (2026-11-05, second pass)
+
+Scope: `flamewm-explorer` row thumbnails only (`thumbs.rs` queue, `workers.rs` `thumb_worker`,
+`app/projection.rs` `project_rows` / `row_thumbnail`). Imageviewer, archiver-app, finder and
+the live-app frame timing were not changed or measured in this pass (see "Not done").
+
+### Root causes
+
+1. The UI sent every cache miss into one FIFO `mpsc` channel and never removed anything. A fast scroll
+   queued every row passed, so rows on screen waited behind decodes of rows already scrolled away.
+2. The request policy asked for all window slots, including the two slots drawn off-view.
+
+### Change
+
+- `thumbs.rs` `ThumbQueue`: `Mutex<VecDeque<ThumbKey>>` + `Condvar`. Worker `pop` blocks, oldest first.
+  `retain` drops queued jobs.
+- `thumbs.rs` `Thumbnails::start_pass(&queue)`: called at the start of each full projection. Drops every
+  queued (not yet decoding) job and clears its `pending` mark, so the pass re-requests what is on screen.
+  An in-flight decode is not cancelled (it finishes and is cached).
+- `projection.rs`: `project_rows(full=true)` calls `start_pass`. `row_thumbnail(entry, in_view)` queues a
+  decode only for rows in view. Glide frames (`full=false`) never request, as before.
+- Tried and reverted: coalescing completion wakes with an armed flag. Bench showed wakes equal decodes
+  (each decode finished after the UI had drained), so no measured win; removed per the keep rule.
+
+### Measurements
+
+`scripts/perf/explorer_thumbs.sh` (same process, release, 300 PNG 640x480 fixture, window 30, 3 iterations,
+median). `old` reproduces the pre-change policy (FIFO, all window slots, no pass cancel). `new` is this change.
+Host load1 was 18.5 (run 1) and 23.2 (run 2): compare rows within one run only.
+
+| Scenario | Metric | old | new | Result |
+|---|---|---|---|---|
+| scroll: 120 passes, window moves 2 rows/pass | settle ms (last window cached) | 1952.2 (run 1), 3000.2 (run 2) | 383.0 (run 1), 384.2 (run 2) | about 5x to 8x sooner |
+| scroll | decodes performed | 268 (run 1), 268 (run 2) | 72 (run 1), 70 (run 2) | about 74% fewer decodes |
+| steady: one pass, window cached | settle ms | 377.7 (run 1), 391.5 (run 2) | 404.7 (run 1), 471.9 (run 2) | UNRESOLVED: new is 7% and 21% slower; same decode count (30) |
+
+Steady-view code path is the same work in both modes (one start_pass on an empty queue, same 30 decodes).
+The slowdown is not explained by the code and is not confirmed beyond two noisy runs; treat as an open
+regression risk to re-measure on a quiet host. Max per-frame stall on the UI thread was not measured
+(decode already ran off-thread before this change).
+
+### Verification
+
+- `cargo test -p flamewm-explorer` exit=0 (213 passed, 0 failed). Includes 4 new tests in
+  `src/thumbs/tests/queue.rs`: FIFO order; pass start drops stale jobs and frees their keys for re-request;
+  an in-flight decode is not re-requested or dropped; `retain` keeps order.
+- `cargo check --workspace --all-targets` exit=0. Only warning: pre-existing unused import in
+  `crates/flamewm-shell/src/settings_projection.rs:3`.
+- `python3 -I tools/architecture_guard.py` exit=0 (77 ratified violations, unchanged).
+- Logs: `/run/media/linsaftw/SDD/swarm-logs/deferral-test2.log`, `deferral-bench2.log`,
+  `deferral-check-ws.log`, `deferral-guard.log`.
+
+### Not done (honest status)
+
+- Imageviewer (decode off UI thread, placeholder, idle prefetch): not audited or changed. No measurement.
+- Archiver listing/extraction and progress throttling: not audited or changed. No measurement.
+- Finder ~1 wake/s: `scripts/perf/app_wakes.sh` was not run in this pass. No measurement.
+- Live-app frame timing (Xvfb scroll/navigate): not run.
+- Steady-view slowdown above: unresolved.

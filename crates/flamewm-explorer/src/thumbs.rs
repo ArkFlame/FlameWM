@@ -5,10 +5,10 @@
 //! A row slot shows either a thumbnail or the embedded type icon (`row-*.svg`), never nothing:
 //! every miss, failure, oversized source, corrupt file or fully transparent result is cached as a
 //! failure so the UI keeps the type icon in the slot.
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::SystemTime;
 
 use flamewm_image_core::scale::{ScaleFilter, scale_rgba};
@@ -312,6 +312,46 @@ impl Slot {
     }
 }
 
+/// UI-to-decoder handoff. The UI pushes misses in row order during a full projection; the decoder
+/// pops the front. `retain` lets the UI drop jobs that no longer match the view before they decode.
+#[derive(Default)]
+pub struct ThumbQueue {
+    jobs: Mutex<VecDeque<ThumbKey>>,
+    ready: Condvar,
+}
+
+impl ThumbQueue {
+    pub fn push(&self, key: ThumbKey) {
+        self.jobs.lock().unwrap_or_else(|e| e.into_inner()).push_back(key);
+        self.ready.notify_one();
+    }
+
+    /// Blocks until a job is queued, then takes the oldest one.
+    pub fn pop(&self) -> ThumbKey {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some(key) = jobs.pop_front() {
+                return key;
+            }
+            jobs = self.ready.wait(jobs).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// Keeps the queued jobs `keep` accepts and returns the rest, in queue order.
+    pub fn retain(&self, mut keep: impl FnMut(&ThumbKey) -> bool) -> Vec<ThumbKey> {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        let mut dropped = Vec::new();
+        jobs.retain(|key| {
+            let kept = keep(key);
+            if !kept {
+                dropped.push(key.clone());
+            }
+            kept
+        });
+        dropped
+    }
+}
+
 /// Bounded LRU of decoded thumbnails plus the set of keys whose decode is queued.
 /// A lookup only bumps a tick (O(1)); the oldest tick is scanned for only when an insert overflows.
 #[derive(Default)]
@@ -341,6 +381,18 @@ impl Thumbnails {
     /// Marks `key` as queued. Returns `true` only for the first request, so each file decodes once.
     pub fn begin(&mut self, key: &ThumbKey) -> bool {
         self.pending.insert(key.clone())
+    }
+
+    /// Starts a full projection pass. Jobs still waiting in `queue` came from earlier passes; the pass
+    /// re-requests every row it shows, so the old jobs are dropped (scrolled-away rows never decode)
+    /// and their keys leave `pending`, which lets a visible row request them again.
+    /// Returns the number of dropped jobs.
+    pub fn start_pass(&mut self, queue: &ThumbQueue) -> usize {
+        let dropped = queue.retain(|_| false);
+        for key in &dropped {
+            self.pending.remove(key);
+        }
+        dropped.len()
     }
 
     /// Stores a finished decode (`None` caches the failure) and evicts the least recently used entries.

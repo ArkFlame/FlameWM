@@ -2,9 +2,10 @@
 //! Pure move out of main.rs; each loop talks to the UI through the shared wake socket.
 use super::*;
 
-/// Decodes queued image keys one at a time; the UI reads results from the cache, never waits on this thread.
-pub(crate) fn thumb_worker(rx:Receiver<ThumbKey>, result:Sender<WorkerResult>, mut wake:UnixStream) {
-    for key in rx {
+/// Decodes queued image keys one at a time, oldest first; the UI reads results from the cache, never waits on this thread.
+pub(crate) fn thumb_worker(queue:Arc<thumbs::ThumbQueue>, result:Sender<WorkerResult>, mut wake:UnixStream) {
+    loop {
+        let key=queue.pop();
         let pixels=thumbs::render_thumbnail(&key);
         send_wake(&mut wake,&result,WorkerResult::Thumbnail{key,pixels});
     }

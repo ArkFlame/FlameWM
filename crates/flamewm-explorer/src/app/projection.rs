@@ -235,6 +235,10 @@ impl ExplorerApp {
         let top=list_top(self.model.tabs.len()>1);
         let bottom=self.window.1-STATUS_STRIP_HEIGHT;
         let glide=self.glide.offset(Instant::now());
+        // A full pass replaces the thumbnail requests: stale jobs leave the queue before any visible row asks again.
+        if full {
+            if let Some(queue)=self.thumb_queue.as_ref() {self.thumbs.borrow_mut().start_pass(queue);}
+        }
         // One snapshot of the source for all slots, same sequence as `entry_at`; slot k maps to position k-1+origin.
         let first=origin.saturating_sub(1);
         let mut window: [Option<&Entry>; ROW_SLOTS] = [None; ROW_SLOTS];
@@ -279,7 +283,7 @@ impl ExplorerApp {
                     doc.text(&format!("name-{slot}"),self.field.display())?;
                     doc.background(&format!("name-{slot}"),if self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
                 } else {doc.background(&format!("name-{slot}"),self.theme.clear())?;}
-                self.project_row_icon(doc,slot,entry)?;
+                self.project_row_icon(doc,slot,entry,in_view)?;
                 doc.background(&row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) || tab.selected_paths.contains(&entry.path) {
                     self.theme.selected()
                 }
@@ -289,9 +293,9 @@ impl ExplorerApp {
         Ok(())
     }
 
-    pub(crate) fn project_row_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, entry:&Entry)->Result<(),String> {
+    pub(crate) fn project_row_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, entry:&Entry, in_view:bool)->Result<(),String> {
         let icon=view::file_icon(entry);
-        let thumbnail=self.row_thumbnail(entry);
+        let thumbnail=self.row_thumbnail(entry,in_view);
         match row_icon_choice(entry,thumbnail.as_ref()) {
             RowIcon::Thumbnail(id)=>{
                 let Some((_,pixels))=thumbnail else {return self.show_type_icon(doc,slot,icon)};
@@ -333,7 +337,8 @@ impl ExplorerApp {
     }
 
     /// Cached thumbnail for an image row. A cache miss queues one decode and shows the type icon meanwhile.
-    pub(crate) fn row_thumbnail(&self, entry:&Entry)->Option<(u64,Arc<Vec<u8>>)> {
+    /// Only rows in view queue a decode: a row scrolled off-screen in the same pass is not decoded.
+    pub(crate) fn row_thumbnail(&self, entry:&Entry, in_view:bool)->Option<(u64,Arc<Vec<u8>>)> {
         if remote::is_remote(&entry.path) {return None;}
         let key=ThumbKey::of(entry)?;
         let mut cache=self.thumbs.borrow_mut();
@@ -341,8 +346,8 @@ impl ExplorerApp {
             Lookup::Ready(id,pixels)=>Some((id,pixels)),
             Lookup::Failed=>None,
             Lookup::Missing=>{
-                if cache.begin(&key) {
-                    if let Some(tx)=&self.thumb_tx {let _=tx.send(key);}
+                if in_view && cache.begin(&key) {
+                    if let Some(queue)=&self.thumb_queue {queue.push(key);}
                 }
                 None
             }
