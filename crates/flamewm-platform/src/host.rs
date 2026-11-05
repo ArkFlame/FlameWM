@@ -23,7 +23,7 @@ use crate::services::background::BackgroundService;
 use crate::services::display::DisplayService;
 use crate::services::panels::PanelService;
 use crate::services::session::SessionService;
-use crate::services::settings::SettingsService;
+use crate::services::settings::{SettingEffects, SettingsService};
 use crate::services::shortcuts::{ShortcutService, effective_registry};
 use crate::services::weather::WeatherFeedService;
 use crate::services::windows::WindowService;
@@ -332,26 +332,33 @@ impl<E: EnginePorts> PlatformHost<E> {
     ) -> FlameResult<SettingsSnapshot> {
         // Validate scale values before any side effect so an invalid scale rejects the whole transaction.
         validate_requested_scales(transaction)?;
+        let effects = SettingEffects::for_transaction(transaction);
         let scales_before = self.settings.current().per_output_scale.clone();
         let snapshot = self.settings.apply(&mut self.engine, transaction)?;
         // Settings are now committed; push the resulting per-output scales into the display snapshot.
         let scales_after = self.settings.current().per_output_scale.clone();
-        self.sync_runtime_shell_scales(&scales_before, &scales_after);
-        // Panel thickness is derived from the display scale at sync time, so re-run the same
-        // reconcile used at startup (sync_outputs, then taskbar height) once scales have moved.
-        if let Some(displays) = self.displays.cached().cloned() {
-            self.panels.sync_outputs(&displays);
+        if effects.shell_scales {
+            self.sync_runtime_shell_scales(&scales_before, &scales_after);
+            // Panel thickness is derived from the display scale at sync time, so re-run the
+            // startup reconcile for outputs once scales have moved.
+            if let Some(displays) = self.displays.cached().cloned() {
+                self.panels.sync_outputs(&displays);
+            }
         }
-        if let Some(flamewm_api::settings::SettingValue::Integer(logical_size)) =
-            snapshot.values.get("taskbarHeight")
-        {
-            let logical_size = (*logical_size).try_into().map_err(|_| {
-                FlameError::new(ErrorCode::InvalidArgument, "taskbarHeight is out of range")
-            })?;
-            self.panels.reconcile_taskbar_height(logical_size);
+        if effects.taskbar_height {
+            if let Some(flamewm_api::settings::SettingValue::Integer(logical_size)) =
+                snapshot.values.get("taskbarHeight")
+            {
+                let logical_size = (*logical_size).try_into().map_err(|_| {
+                    FlameError::new(ErrorCode::InvalidArgument, "taskbarHeight is out of range")
+                })?;
+                self.panels.reconcile_taskbar_height(logical_size);
+            }
         }
-        self.panels
-            .reconcile_taskbar_frame(TaskbarFrame::from_settings(self.settings.current()));
+        if effects.taskbar_frame {
+            self.panels
+                .reconcile_taskbar_frame(TaskbarFrame::from_settings(self.settings.current()));
+        }
         Ok(snapshot)
     }
 

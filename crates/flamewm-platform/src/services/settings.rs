@@ -7,22 +7,31 @@ use flamewm_api::settings::{SettingValue, SettingsSnapshot, SettingsTransaction}
 use flamewm_api::shortcuts::KeyBinding;
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
+use crate::services::settings_persist::SettingsWriter;
 use crate::services::shortcuts::effective_registry;
 use crate::settings::{ConfigStore, ProductSettings, STABLE_SETTINGS, stable_setting};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SettingsService {
     store: ConfigStore,
     path: PathBuf,
+    writer: SettingsWriter,
 }
 
 impl SettingsService {
     #[must_use]
     pub fn new(path: PathBuf) -> Self {
+        let writer = SettingsWriter::spawn(path.clone());
         Self {
             store: ConfigStore::default(),
             path,
+            writer,
         }
+    }
+
+    /// Writes any debounced live state to disk before returning.
+    pub fn flush(&self) -> FlameResult<()> {
+        self.writer.flush()
     }
 
     #[must_use]
@@ -83,7 +92,15 @@ impl SettingsService {
                 return Err(error);
             }
         }
-        if let Err(error) = ConfigStore::persist(&self.path, &candidate) {
+        // Shortcut changes must be durable before they are committed, so they persist synchronously.
+        // Every other change is live now and debounced to disk; a background write failure is
+        // reported by the next `flush`.
+        let persisted = if changes_shortcuts {
+            self.persist_now(&candidate)
+        } else {
+            self.schedule_persist(&candidate)
+        };
+        if let Err(error) = persisted {
             if changes_shortcuts {
                 shortcut_port.rollback_shortcuts();
             }
@@ -91,6 +108,27 @@ impl SettingsService {
         }
         self.store.apply_snapshot(candidate)?;
         Ok(self.snapshot())
+    }
+
+    fn persist_now(&self, candidate: &ProductSettings) -> FlameResult<()> {
+        self.check_path()?;
+        self.writer.write_now(ConfigStore::serialize(candidate))
+    }
+
+    fn schedule_persist(&self, candidate: &ProductSettings) -> FlameResult<()> {
+        self.check_path()?;
+        self.writer.schedule(ConfigStore::serialize(candidate));
+        Ok(())
+    }
+
+    fn check_path(&self) -> FlameResult<()> {
+        if self.path.as_os_str().is_empty() {
+            return Err(FlameError::new(
+                ErrorCode::InvalidArgument,
+                "settings persistence path is empty",
+            ));
+        }
+        Ok(())
     }
 
     /// Persists one hotkey entry through the same candidate, persist, and commit steps as `apply`.
@@ -104,7 +142,7 @@ impl SettingsService {
             return Ok(());
         }
         candidate.revision = self.store.current().revision.saturating_add(1);
-        ConfigStore::persist(&self.path, &candidate)?;
+        self.persist_now(&candidate)?;
         self.store.apply_snapshot(candidate)
     }
 
@@ -122,7 +160,7 @@ impl SettingsService {
         }
         // Scale is Displays-domain state: the settings revision stays put so
         // Settings clients holding it are not made stale by an unannounced bump.
-        ConfigStore::persist(&self.path, &candidate)?;
+        self.persist_now(&candidate)?;
         self.store.adopt_scales(&candidate);
         Ok(())
     }
@@ -135,7 +173,7 @@ impl SettingsService {
         }
         let mut candidate = self.store.current().clone();
         candidate.panel_edges.insert(output.to_owned(), edge);
-        ConfigStore::persist(&self.path, &candidate)?;
+        self.persist_now(&candidate)?;
         self.store.adopt_panel_edges(&candidate);
         Ok(())
     }
@@ -253,6 +291,77 @@ fn transaction_changes_shortcuts(transaction: &SettingsTransaction) -> bool {
         .any(|change| change.key.starts_with("hotkey.") || change.key == "assistant.enabled")
 }
 
+/// WM-host effects a committed transaction requires beyond the settings store itself.
+///
+/// This is the single key-to-effect owner used by `Host::apply_settings`. Keys that the host never
+/// projects into panel or shell state map to no effect; unknown keys and section resets map to
+/// every effect so that a new key can never silently skip a reconcile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettingEffects {
+    /// Per-output shell scales changed; display snapshot and panel geometry must follow.
+    pub shell_scales: bool,
+    /// `taskbarHeight` changed; panel logical size must follow.
+    pub taskbar_height: bool,
+    /// Taskbar frame (floating style, margin, radius) changed.
+    pub taskbar_frame: bool,
+}
+
+impl SettingEffects {
+    pub const ALL: Self = Self {
+        shell_scales: true,
+        taskbar_height: true,
+        taskbar_frame: true,
+    };
+    pub const NONE: Self = Self {
+        shell_scales: false,
+        taskbar_height: false,
+        taskbar_frame: false,
+    };
+
+    #[must_use]
+    pub fn for_transaction(transaction: &SettingsTransaction) -> Self {
+        if transaction.reset_section.is_some() {
+            return Self::ALL;
+        }
+        transaction
+            .changes
+            .iter()
+            .fold(Self::NONE, |acc, change| acc.union(Self::for_key(&change.key)))
+    }
+
+    #[must_use]
+    pub fn for_key(key: &str) -> Self {
+        match key {
+            "taskbarHeight" => Self {
+                taskbar_height: true,
+                ..Self::NONE
+            },
+            "taskbarStyle" | "taskbarFloatingMargin" | "taskbarFloatingRadius" => Self {
+                taskbar_frame: true,
+                ..Self::NONE
+            },
+            _ if key.starts_with("scale.") => Self {
+                shell_scales: true,
+                ..Self::NONE
+            },
+            // Shortcut and panel-edge keys are owned by their own paths (`apply` shortcut port,
+            // `set_panel_edge`), not by the settings-apply reconcile.
+            _ if key.starts_with("hotkey.") || key.starts_with("panel.edge.") => Self::NONE,
+            _ if stable_setting(key).is_some() => Self::NONE,
+            _ => Self::ALL,
+        }
+    }
+
+    #[must_use]
+    fn union(self, other: Self) -> Self {
+        Self {
+            shell_scales: self.shell_scales || other.shell_scales,
+            taskbar_height: self.taskbar_height || other.taskbar_height,
+            taskbar_frame: self.taskbar_frame || other.taskbar_frame,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +438,7 @@ mod tests {
                 snapshot.values.get("wallpaper"),
                 Some(&SettingValue::Text(wallpaper.to_owned()))
             );
+            service.flush().expect("flush debounced wallpaper write");
             let persisted = std::fs::read_to_string(&path).expect("wallpaper settings persisted");
             assert!(persisted.contains("revision=2\n"));
             assert!(persisted.contains(&format!("wallpaper={wallpaper}\n")));
@@ -389,6 +499,7 @@ mod tests {
             snapshot.values.get("accentOpacity"),
             Some(&SettingValue::Percent(40))
         );
+        service.flush().expect("flush debounced write");
         let persisted = std::fs::read_to_string(&path).expect("persisted");
         assert!(persisted.contains("accentOpacity=40\n"));
         assert!(persisted.contains("titlebarButtonStyle=square\n"));
@@ -403,6 +514,7 @@ mod tests {
             .expect("windows reset applies");
         assert_eq!(service.current().titlebar_button_style, "circle");
         assert_eq!(service.current().accent_opacity, 40);
+        service.flush().expect("flush reset write");
         std::fs::remove_file(path).expect("remove test settings");
     }
 
@@ -435,5 +547,156 @@ mod tests {
         assert_eq!(service.current().revision, 1);
         assert!(service.current().wallpaper.is_empty());
         assert!(!path.exists());
+    }
+}
+
+#[cfg(test)]
+mod debounce_and_effect_tests {
+    use flamewm_api::settings::SettingsChange;
+
+    use super::*;
+
+    struct AcceptingShortcutPort;
+
+    impl ShortcutPort for AcceptingShortcutPort {
+        fn prepare_shortcuts(
+            &mut self,
+            _bindings: &BTreeMap<String, KeyBinding>,
+        ) -> FlameResult<()> {
+            Ok(())
+        }
+
+        fn commit_shortcuts(&mut self) -> FlameResult<()> {
+            Ok(())
+        }
+
+        fn rollback_shortcuts(&mut self) {}
+    }
+
+    fn settings_path(stem: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{stem}-{}.conf", std::process::id()))
+    }
+
+    fn slider(service: &SettingsService, key: &str, value: u8) -> SettingsTransaction {
+        SettingsTransaction {
+            expected_revision: service.snapshot().revision,
+            changes: vec![SettingsChange {
+                key: key.to_owned(),
+                value: Some(SettingValue::Percent(value)),
+            }],
+            reset_section: None,
+        }
+    }
+
+    #[test]
+    fn effects_map_each_key_to_its_host_reconcile() {
+        assert_eq!(
+            SettingEffects::for_key("taskbarHeight"),
+            SettingEffects {
+                taskbar_height: true,
+                ..SettingEffects::NONE
+            }
+        );
+        for key in ["taskbarStyle", "taskbarFloatingMargin", "taskbarFloatingRadius"] {
+            assert_eq!(
+                SettingEffects::for_key(key),
+                SettingEffects {
+                    taskbar_frame: true,
+                    ..SettingEffects::NONE
+                },
+                "{key}"
+            );
+        }
+        assert_eq!(
+            SettingEffects::for_key("scale.HDMI-1"),
+            SettingEffects {
+                shell_scales: true,
+                ..SettingEffects::NONE
+            }
+        );
+        for key in ["glassOpacityPercent", "taskbarOpacityPercent", "animationSpeed", "hotkey.window.close"] {
+            assert_eq!(SettingEffects::for_key(key), SettingEffects::NONE, "{key}");
+        }
+        assert_eq!(SettingEffects::for_key("invented.key"), SettingEffects::ALL);
+    }
+
+    #[test]
+    fn glass_slider_transaction_skips_every_host_reconcile() {
+        let transaction = SettingsTransaction {
+            expected_revision: 1,
+            changes: vec![SettingsChange {
+                key: "glassOpacityPercent".to_owned(),
+                value: Some(SettingValue::Percent(50)),
+            }],
+            reset_section: None,
+        };
+        assert_eq!(SettingEffects::for_transaction(&transaction), SettingEffects::NONE);
+    }
+
+    #[test]
+    fn mixed_transaction_unions_effects_and_reset_requires_all() {
+        let mixed = SettingsTransaction {
+            expected_revision: 1,
+            changes: vec![
+                SettingsChange {
+                    key: "glassOpacityPercent".to_owned(),
+                    value: Some(SettingValue::Percent(50)),
+                },
+                SettingsChange {
+                    key: "taskbarHeight".to_owned(),
+                    value: Some(SettingValue::Integer(40)),
+                },
+            ],
+            reset_section: None,
+        };
+        let effects = SettingEffects::for_transaction(&mixed);
+        assert!(effects.taskbar_height && !effects.taskbar_frame && !effects.shell_scales);
+        let reset = SettingsTransaction {
+            expected_revision: 1,
+            changes: Vec::new(),
+            reset_section: Some("glass".to_owned()),
+        };
+        assert_eq!(SettingEffects::for_transaction(&reset), SettingEffects::ALL);
+    }
+
+    #[test]
+    fn drag_apply_is_live_immediately_and_disk_is_written_only_on_flush() {
+        let path = settings_path("flamewm-settings-debounce-live");
+        let _ = std::fs::remove_file(&path);
+        let mut service = SettingsService::new(path.clone());
+        let mut port = AcceptingShortcutPort;
+        for value in [5_u8, 10, 15, 20, 25] {
+            let transaction = slider(&service, "glassOpacityPercent", value);
+            service.apply(&mut port, &transaction).expect("live apply");
+        }
+        assert_eq!(service.current().glass_opacity_percent, 25);
+        assert_eq!(service.current().revision, 6);
+        assert!(!path.exists(), "debounced drag must not write per motion");
+
+        service.flush().expect("flush");
+        let persisted = std::fs::read_to_string(&path).expect("flushed file");
+        assert!(persisted.contains("revision=6\n"));
+        assert!(persisted.contains("glassOpacityPercent=25\n"));
+        std::fs::remove_file(path).expect("remove test settings");
+    }
+
+    #[test]
+    fn shortcut_change_persists_synchronously_before_commit() {
+        let path = settings_path("flamewm-settings-debounce-sync");
+        let _ = std::fs::remove_file(&path);
+        let mut service = SettingsService::new(path.clone());
+        let mut port = AcceptingShortcutPort;
+        let transaction = SettingsTransaction {
+            expected_revision: service.snapshot().revision,
+            changes: vec![SettingsChange {
+                key: format!("hotkey.{}", flamewm_api::shortcuts::ACTION_WINDOW_CLOSE),
+                value: Some(SettingValue::Text("Ctrl+Alt+Q".to_owned())),
+            }],
+            reset_section: None,
+        };
+        service.apply(&mut port, &transaction).expect("shortcut apply");
+        let persisted = std::fs::read_to_string(&path).expect("shortcut persisted without flush");
+        assert!(persisted.contains("revision=2\n"));
+        std::fs::remove_file(path).expect("remove test settings");
     }
 }

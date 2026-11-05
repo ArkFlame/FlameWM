@@ -4,6 +4,7 @@ pub mod display;
 pub mod panels;
 pub mod session;
 pub mod settings;
+pub mod settings_persist;
 pub mod shortcuts;
 pub mod weather;
 pub mod windows;
