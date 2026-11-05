@@ -388,3 +388,45 @@ Base: `origin/main` `c5288eec`. Worktree `/run/media/linsaftw/SDD/wt-ui-pass10`,
 
 - Light taskbar text ink is still the Light palette. The default Light surface is at glass alpha (12%), so over a dark wallpaper the bar can remain dark. Check with a Light capture before closing defect 1.
 - The 28 focus-ring warnings from Pass 9 remain.
+## Pass 11 addendum: keyboard focus yields to typing; Enter and Space activate in Settings
+
+Base: `origin/main` `19f9af3a` (Settings opted into focus). Commits: `fd0cae7f` (ui-x11 and ui-document fixes, Settings gate). Binaries: `shots/focusaudit/settings-base` (`19f9af3a`) and `settings-new` (`fd0cae7f`). Method: private `Xvfb :93` (own PID), `flamewm-settings` under `dbus-run-session`, XTest input by `shots/pass9/tool/xin`, captures with `import -window root`. Screenshots: `/run/media/linsaftw/SDD/shots/focusaudit/`.
+
+### Regressions found by reading the key path
+
+- `route_focus` consumed Tab, Enter and Space while Settings held typed keys. Sidebar search, colour picker, API key and the armed hotkey recorder all receive Space, Tab and Enter, so Tab moved focus away from the field and Space activated the focused control instead of typing.
+- Activation sent only a press. Settings acts on release, archiver on press. So Enter and Space on a focused Settings control did nothing in base (`b01-return.png` shows no change after Enter).
+- Typed text follows the key press in the same X11 handler (`flamewm-render-x11/src/app/events.rs`, `keyboard.input` after `TYPED_KEY_ACTION`). A focus activation that focused a field would then receive its own key's text: Enter's `\r` ended the search focus right away.
+
+### Fixed
+
+- `flamewm-ui-document`: `UiDocument::with_keyboard_capture(gate)`. While the gate answers `true`, focus passes every key unchanged.
+- `flamewm-ui-x11`: `KeyboardRouter` routes controller events. It consumes the text that follows an activating press, and sends activation as press then release.
+- `flamewm-settings`: `SettingsApplication::keyboard_captured()` (search field, colour picker, API key draft, armed recorder), wired through `runtime.rs`. A busy application answers "captured".
+- Tests: `flamewm-ui-x11` `activation_delivers_press_then_release_to_the_focused_control`, `text_typed_by_the_activating_press_never_reaches_the_focused_field`, `captured_window_keeps_tab_space_and_enter_for_its_own_owner`, `uncaptured_window_routes_tab_and_escape_as_before`. `flamewm-settings` `controller/tests/keyboard_capture.rs`.
+
+### Screenshot verdicts
+
+| File (`shots/focusaudit/`) | State | Verdict |
+| --- | --- | --- |
+| `s01-tab1.png` | `settings-new`, after Tab | PASS. Ring on `Search`. |
+| `b01-return.png` / `t01-return.png` | Enter on `Search` (base / new) | Base: FAIL, Enter does nothing. New: Enter now focuses the field, then its own text used to unfocus it (fixed; verified in `n01`). |
+| `n01-enter-typed.png` | new: Tab, Enter, `d`, `i` | PASS. Field shows `di|`. |
+| `n02-tab-captured.png` | new: Tab while the field has focus | PASS. Tab does not move focus; `di` stays. |
+| `n03-space-s.png` | new: Space, `s` | PASS. Field shows `di s|`. Space types a space. |
+| `n04-escape.png` | new: Escape | PASS. Query cleared, placeholder back, field left. |
+| `c01-click-typed.png` | base binary, mouse click, `d`, `i` | PASS. Typing works without keyboard focus. |
+
+### Verification
+
+- `cargo test -p flamewm-ui-document -p flamewm-ui-x11` exit 0 (27 and 22 tests).
+- `cargo test -p flamewm-settings` exit 0 (189 tests, before the router change; settings code unchanged since).
+- `cargo check --workspace --all-targets` exit 0 (before the router change; see the final report for the rerun).
+- `python3 -I tools/architecture_guard.py` exit 0. `python3 -I tools/ui_contract_guard.py` exit 0.
+
+### Not done
+
+- Explorer and Task Manager not opted in. Both use modal keys (rename, search text) that the capture gate does not cover yet. Opting in needs a per-window gate first.
+- Hotkey recorder: the capture gate is unit-tested only. Runtime is unverified because the Settings control bus (`com.arkflame.FlameWM1`) is unavailable in the private session, so no hotkey can be armed.
+- Switch activation (Space or Enter toggles a switch) is unverified at runtime for the same reason. The activation path is the same one the search button used in the screenshots.
+- Light appearance focus colour, Wayland, and the full nested session (`scripts/xephyr`) not run.
