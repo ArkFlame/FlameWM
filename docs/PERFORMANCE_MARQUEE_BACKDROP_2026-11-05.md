@@ -92,3 +92,8 @@ Single readback: reverted. Copy time rose because one 3.3 MB PBO readback was sl
 
 Verification: `cargo test -p flamewm-wm-wayland` exit 0 (204 passed, 0 failed). `cargo check --workspace --all-targets` exit 0, 0 warnings.
 Not run: `fm.sh idle`/`hover`, DRM path, repeated fm.sh pairs for CPU% (CPU% is too noisy at this effect size).
+
+## Negative results index (2026-11-05)
+
+- Single full-output readback: reverted, +2.8% total, copy +14% (table above). Strip loop kept.
+- Paint coalescing, retained backbuffer, incremental blur: listed as negative by the coordinator brief. No measurement, commit, or verdict for these was found in this repo (`docs/`, `.agents/`) on 2026-11-05. Record the measured numbers here before citing them.
