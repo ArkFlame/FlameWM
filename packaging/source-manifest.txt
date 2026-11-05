@@ -30,6 +30,7 @@ ui/
 @exec scripts/check-cargo
 @exec scripts/dev-lane
 @exec scripts/dev-deb
+@exec scripts/dev-check.sh
 @exec scripts/settings-installed-acceptance
 @exec scripts/appearance-acceptance
 @exec scripts/lamp-acceptance

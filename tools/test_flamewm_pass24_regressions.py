@@ -28,7 +28,9 @@ class Pass24Contracts(unittest.TestCase):
         self.assertIn('fn ghost_alpha_fades_actual_pixels_without_colorkey()', src)
         css = self.read('ui/desktop/desktop.css')
         self.assertIn('desktop-drag-ghost-label-1', css)
-        self.assertIn('color:#ffffff80', css)
+        # Pass 7 tokenized the label colour; the token must still resolve to the 50% white ghost ink.
+        self.assertIn('color:var(--c-ffffff80)', css)
+        self.assertIn('--c-ffffff80:#ffffff80', css)
 
     def test_file_opening_uses_shared_mime_provider(self):
         apps = self.read('crates/flamewm-applications/src/lib.rs')
