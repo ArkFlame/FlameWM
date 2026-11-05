@@ -454,8 +454,28 @@ mod tests {
 
     /// A freed pixmap's cached source picture must not survive into a later blit,
     /// because its XID can be reused. Needs `FLAMEWM_TEST_DISPLAY` (skipped otherwise).
+    ///
+    /// Earlier Xft tests in this process close their displays, and a later `XOpenDisplay` can
+    /// return the same `Display*`; XRender then reports no visual format for it. The check runs
+    /// in a fresh test process so it depends only on its own display.
     #[test]
     fn freed_pixmap_drops_cached_source_picture() {
+        const ISOLATED_ENV: &str = "FLAMEWM_XRENDER_ISOLATED_CHILD";
+        if std::env::var_os("FLAMEWM_TEST_DISPLAY").is_some()
+            && std::env::var_os(ISOLATED_ENV).is_none()
+        {
+            let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "xrender::tests::freed_pixmap_drops_cached_source_picture",
+                    "--test-threads=1",
+                ])
+                .env(ISOLATED_ENV, "1")
+                .status()
+                .expect("spawn isolated XRender test process");
+            assert!(status.success(), "isolated XRender test failed: {status}");
+            return;
+        }
         use crate::native::xresource::free_pixmap_raw;
         use crate::xlib::{
             XCloseDisplay, XCreatePixmap, XDefaultScreen, XDefaultVisual, XOpenDisplay, XRootWindow,
