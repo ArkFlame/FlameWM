@@ -89,6 +89,26 @@ fn create_app_shortcut(app_id: &flamewm_api::DesktopAppId) -> Result<PathBuf, St
     Ok(destination)
 }
 
+/// Runs [`create_app_shortcut`] on a short-lived worker. The worker logs its own failure exactly as
+/// the inline path did; the returned handle carries the result for callers that join it, and
+/// dropping it detaches the worker. Only a failure to start the thread is returned here.
+fn spawn_app_shortcut(
+    app_id: flamewm_api::DesktopAppId,
+) -> std::io::Result<std::thread::JoinHandle<Result<PathBuf, String>>> {
+    std::thread::Builder::new()
+        .name("flamewm-desktop-shortcut".to_owned())
+        .spawn(move || {
+            let result = create_app_shortcut(&app_id);
+            if let Err(error) = &result {
+                eprintln!(
+                    "flamewm-shell: create desktop shortcut for {}: {error}",
+                    app_id.as_str()
+                );
+            }
+            result
+        })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InteractionOrigin {
     Ignore,
@@ -822,7 +842,8 @@ impl ShellLoop {
                         .contains(point)
                     });
                     if outside_start && self.is_desktop_drop_target(point) {
-                        if let Err(error) = create_app_shortcut(&drag.app_id) {
+                        // Off the event loop: catalog discovery and the copy touch the filesystem.
+                        if let Err(error) = spawn_app_shortcut(drag.app_id.clone()) {
                             eprintln!(
                                 "flamewm-shell: create desktop shortcut for {}: {error}",
                                 drag.app_id.as_str()
@@ -982,6 +1003,15 @@ impl ShellLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_shortcut_worker_propagates_the_failure_and_completes() {
+        // An id absent from every catalog must surface as the worker's Err, not vanish or hang.
+        let missing = flamewm_api::DesktopAppId::new("flamewm-test-absent-app.desktop");
+        let handle = spawn_app_shortcut(missing).expect("worker thread starts");
+        let result = handle.join().expect("worker must not panic");
+        assert!(result.is_err(), "absent app must fail, got {result:?}");
+    }
 
     #[test]
     fn monitor_scoped_interaction_origin_requires_a_registered_surface() {
