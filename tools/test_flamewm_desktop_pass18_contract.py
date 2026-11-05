@@ -8,16 +8,16 @@ def source(p): return (ROOT / p).read_text(encoding='utf-8')
 
 class DesktopPass18(unittest.TestCase):
     def test_delete_uses_typed_key_and_preserves_editing(self):
-        s=source('crates/flamewm-desktop/src/main.rs')
+        s=source('crates/flamewm-desktop/src/main.rs')+source('crates/flamewm-desktop/src/input.rs')
         self.assertIn('UiControllerEvent::Key(key) => handle_desktop_key(key, document, &mut state)', s)
-        self.assertIn('key.phase != UiKeyPhase::Press || key.key != "Delete"', s)
-        self.assertIn('state.rename.is_some() || sticky::is_editing(state)', s)
+        self.assertRegex(s, r'key\.phase != UiKeyPhase::Press\s*\|\|\s*key\.key != "Delete"')
+        self.assertRegex(s, r'state\.rename\.is_some\(\)\s*\|\|\s*sticky::is_editing\(state\)')
         self.assertIn('state.pending_delete = Some(paths)', s)
         self.assertIn('show_confirm(document, state)', s)
     def test_drag_hides_source_then_restores_all_selections(self):
-        s=source('crates/flamewm-desktop/src/main.rs')
+        s=source('crates/flamewm-desktop/src/main.rs')+source('crates/flamewm-desktop/src/state.rs')
         self.assertIn('source_ids: Vec<String>', s)
-        self.assertIn('drag.originals.iter().map(|item| item.id.clone()).collect()',s)
+        self.assertIn('drag.originals.iter().map(|item| item.id.clone()).collect()', source('crates/flamewm-desktop/src/events.rs'))
         # Drag ghost painting lives in drag.rs (split out of main.rs).
         self.assertIn('document.position("desktop-drag-ghost", gx, gy)', source('crates/flamewm-desktop/src/drag.rs'))
         drag = source('crates/flamewm-desktop/src/drag.rs')
@@ -25,10 +25,10 @@ class DesktopPass18(unittest.TestCase):
         self.assertIn('set_source_tiles_visible(document, state.model.items(), &ghost.source_ids, false)', drag)
         self.assertIn('set_source_tiles_visible(document, state.model.items(), &ghost.source_ids, true)', drag)
         self.assertIn('document.visible(&format!("desktop-item-{index}"), visible)', drag)
-        self.assertIn('UiActionPhase::Motion | UiActionPhase::Release',s)
+        self.assertIn('UiActionPhase::Motion | UiActionPhase::Release', source('crates/flamewm-desktop/src/events.rs'))
     def test_native_radial_is_painted_only_on_hover(self):
         h=source('ui/desktop/index.html'); c=source('ui/desktop/desktop.css')
-        s=source('crates/flamewm-desktop/src/main.rs'); core=source('crates/flamewm-desktop/src/convert_wheel.rs')
+        s=source('crates/flamewm-desktop/src/main.rs')+source('crates/flamewm-desktop/src/menus.rs')+source('crates/flamewm-desktop/src/input.rs'); core=source('crates/flamewm-desktop/src/convert_wheel.rs')
         self.assertIn('id="convert-wheel-highlight"',h)
         self.assertIn('data-action="desktop.convert.surface"',h)
         self.assertNotIn('desktop-convert-wheel-art',h)
