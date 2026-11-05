@@ -15,6 +15,8 @@ class ProductionContracts(unittest.TestCase):
         self.assertIn('fallback_control_glyph(role, edge, scheme.text)',block)
     def test_wm_titlebar_and_task_icons_reuse_one_asset_root(self):
         s=src('crates/flamewm-wm-x11/src/wm/mod.rs')
+        # Shared asset root now resolved through wm::workspace_state (frame re-export removed).
+        s=src('crates/flamewm-wm-x11/src/wm/workspace_state.rs')
         self.assertIn('crate::frame::titlebar_backdrop::packaged_root()',s)
     def test_weather_broadcast_all_monitor_panels(self):
         s=src('crates/flamewm-shell/src/app.rs'); block=s.split('fn tick_weather(',1)[1].split('fn push_weather_feed(',1)[0]
@@ -29,12 +31,13 @@ class ProductionContracts(unittest.TestCase):
     def test_desktop_name_from_metadata_even_without_exec(self):
         s=src('crates/flamewm-applications/src/lib.rs')
         self.assertIn('pub fn desktop_file_display_name(',s)
-        d=src('crates/flamewm-desktop/src/main.rs')
+        d=src('crates/flamewm-desktop/src/refresh.rs')+src('crates/flamewm-desktop/src/slots.rs')
         self.assertIn('desktop_item_label(state, item)',d)
         self.assertIn('desktop_file_display_name(&item.path)',d)
     def test_all_four_native_shortcut_bindings(self):
         s=src('crates/flamewm-platform/src/shortcuts.rs')
-        for binding in ['Super+E','Ctrl+Alt+E','Super+T','Ctrl+Alt+T']:
+        # Terminal Super binding is Super+Return (Super+T was retired); Ctrl+Alt+T unchanged.
+        for binding in ['Super+E','Ctrl+Alt+E','Super+Return','Ctrl+Alt+T']:
             self.assertIn(f'KeyBinding::assigned("{binding}")',s)
         events=src('crates/flamewm-wm-x11/src/wm/events.rs')
         for action in ['ACTION_OPEN_FILES_SUPER','ACTION_OPEN_FILES_CTRL_ALT','ACTION_OPEN_TERMINAL_SUPER','ACTION_OPEN_TERMINAL_CTRL_ALT']:
