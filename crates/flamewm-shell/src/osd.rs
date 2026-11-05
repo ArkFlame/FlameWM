@@ -6,11 +6,11 @@
 
 use std::time::{Duration, Instant};
 
-use flamewm_api::settings::SettingsSnapshot;
 use flamewm_api::Rect;
+use flamewm_api::settings::SettingsSnapshot;
 use flamewm_ui_x11::{
-    decode_document, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime,
-    UiBackendError, UiDocumentAccess, UiTemplate,
+    SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError,
+    UiDocumentAccess, UiTemplate, decode_document,
 };
 
 use crate::settings_projection::{self, SurfaceKind};
@@ -54,12 +54,14 @@ pub struct Level {
 }
 
 impl Level {
-    /// `max` is the live volume cap (`AudioSettings::max_percent`): 150 with raise maximum, else 100.
+    /// `volume` is the sink's real level, never clamped: the card must show what the sink holds.
+    /// `max` is the live volume cap (`AudioSettings::max_percent`): 150 with raise maximum, else
+    /// 100. It only sets the full-track scale, so lowering the cap moves no observed level.
     #[must_use]
     pub fn new(volume: u8, muted: bool, max: u8) -> Self {
         Self {
             kind: OsdKind::Volume,
-            volume: volume.min(max),
+            volume,
             muted,
             max,
         }
@@ -82,7 +84,7 @@ impl Level {
         if self.muted || self.max == 0 {
             return 0;
         }
-        i32::from(self.volume) * TRACK_W / i32::from(self.max)
+        (i32::from(self.volume) * TRACK_W / i32::from(self.max)).min(TRACK_W)
     }
 
     #[must_use]
@@ -175,7 +177,12 @@ impl OsdState {
         let Some(previous) = self.last[level.kind.slot()].replace(level) else {
             return false;
         };
-        if previous == level {
+        // Only the sink reading moves the card. `max` is display scale, so a cap change is not a
+        // change in what the sink holds.
+        if previous.kind == level.kind
+            && previous.volume == level.volume
+            && previous.muted == level.muted
+        {
             return false;
         }
         self.stage = Stage::Hold;
@@ -440,15 +447,15 @@ mod tests {
     }
 
     #[test]
-    fn volume_above_max_clamps_to_150() {
+    fn volume_above_max_fills_the_track_and_shows_the_real_level() {
         assert_eq!(Level::new(200, false, 150).fill_width(), TRACK_W);
-        assert_eq!(Level::new(200, false, 150).label(), "150%");
+        assert_eq!(Level::new(200, false, 150).label(), "200%");
     }
 
     #[test]
-    fn without_raise_maximum_the_card_caps_at_100_percent() {
+    fn without_raise_maximum_the_card_shows_the_real_level_over_a_full_track() {
         let level = Level::new(120, false, 100);
-        assert_eq!(level.label(), "100%");
+        assert_eq!(level.label(), "120%");
         assert_eq!(level.fill_width(), TRACK_W);
         assert_eq!(Level::new(60, false, 100).fill_width(), 77);
         assert_eq!(Level::new(60, false, 100).label(), "60%");
@@ -472,12 +479,14 @@ mod tests {
     }
 
     #[test]
-    fn lowering_the_cap_moves_an_over_cap_volume_and_shows_the_card() {
+    fn lowering_the_cap_alone_never_shows_a_card() {
+        // Regression: the cap used to clamp the observed level, so a cap change with an unchanged
+        // sink showed a card at the clamped value. The sink did not move, so no card may show.
         let mut state = OsdState::new();
         let t0 = Instant::now();
         state.observe(Level::new(120, false, 150), t0);
-        assert!(state.observe(Level::new(120, false, 100), t0));
-        assert_eq!(state.deadline(), Some(t0 + HOLD));
+        assert!(!state.observe(Level::new(120, false, 100), t0));
+        assert_eq!(state.deadline(), None);
     }
 
     #[test]

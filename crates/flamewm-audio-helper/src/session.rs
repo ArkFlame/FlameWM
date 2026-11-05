@@ -60,16 +60,24 @@ pub fn serve(
             Ok(AudioRequest::Volume(action)) => {
                 if let Err(error) = backend.set_volume(action) {
                     eprintln!("flamewm-audio-helper: volume rejected: {error}");
+                    reconcile(backend, publish);
                 }
             }
             Ok(AudioRequest::Mute(action)) => {
                 if let Err(error) = backend.set_mute(action) {
                     eprintln!("flamewm-audio-helper: mute rejected: {error}");
+                    reconcile(backend, publish);
                 }
             }
             Err(error) => eprintln!("flamewm-audio-helper: {error}"),
         }
     }
+}
+
+/// A rejected write left the sink as it was. Publish the true snapshot so the WM and the OSD
+/// observe the real level instead of the level the rejected key was meant to produce.
+fn reconcile(backend: &impl Backend, publish: &dyn Fn(&AudioSnapshot)) {
+    publish(&backend.snapshot());
 }
 
 #[cfg(test)]
@@ -204,6 +212,40 @@ mod tests {
             Duration::ZERO,
         );
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn rejected_write_publishes_the_true_snapshot() {
+        // Not ready and no ready wait: the write is rejected, and the helper must publish the
+        // snapshot it actually holds so no key is reported as applied.
+        let backend = FakeBackend::default();
+        let requests = feed(&[VOLUME_LINE]);
+        let published = RefCell::new(Vec::new());
+        serve(
+            &backend,
+            &requests,
+            &|snapshot| published.borrow_mut().push(snapshot.availability),
+            Duration::from_secs(1),
+            Duration::ZERO,
+        );
+        assert!(backend.applied.borrow().is_empty());
+        assert_eq!(*published.borrow(), vec![ServiceAvailability::Unavailable]);
+    }
+
+    #[test]
+    fn accepted_write_publishes_no_snapshot() {
+        let backend = FakeBackend::default();
+        backend.ready.store(true, Ordering::SeqCst);
+        let requests = feed(&[VOLUME_LINE]);
+        let published = RefCell::new(0_u32);
+        serve(
+            &backend,
+            &requests,
+            &|_| *published.borrow_mut() += 1,
+            Duration::from_secs(1),
+            READY_WAIT,
+        );
+        assert_eq!(*published.borrow(), 0);
     }
 
     #[test]
