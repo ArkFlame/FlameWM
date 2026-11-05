@@ -1103,7 +1103,7 @@ mod tests {
 
     #[test]
     fn monitor_scoped_start_transfer_and_unknown_surface_are_not_fail_open() {
-        let app = include_str!("app.rs");
+        let app = include_str!("app/control.rs");
         let controls = app
             .split("ShellControl::ToggleStart {")
             .nth(1)

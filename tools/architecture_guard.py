@@ -439,6 +439,14 @@ J6_PENDING: list[str] = []
 # TODO(J12-PENDING): promote J6-G5/G6 to violation entries once migrations land.
 
 
+def _app_split_text(root):
+    """Owner text of the shell `app` module: app.rs plus its app/*.rs submodules, sorted."""
+    base = root / "crates/flamewm-shell/src"
+    paths = [_owner_path(root, "crates/flamewm-shell/src/app.rs")]
+    paths += sorted((base / "app").glob("*.rs"))
+    return "\n".join(read_source(path) for path in paths)
+
+
 def _live(root, rel):
     """Comment-stripped owner text; optional owners read as ""."""
     return _strip_rust_comments(_owner_text(root, rel))
@@ -961,7 +969,7 @@ def j12h_violations(root):
     paint_core = _live(root, "crates/flamewm-render-core/src/paint.rs")
     start_menu = _live(root, "crates/flamewm-shell-core/src/start_menu.rs")
     proj = _live(root, "crates/flamewm-shell/src/projection.rs")
-    app = _live(root, "crates/flamewm-shell/src/app.rs")
+    app = _strip_rust_comments(_app_split_text(root))
     runtime = _live(root, "crates/flamewm-shell/src/runtime.rs")
     popup_controller = _live(root, "crates/flamewm-shell/src/popup_controller.rs")
     status_surface = _live(root, "crates/flamewm-shell/src/runtime/status_surface.rs")
@@ -1027,7 +1035,7 @@ def j12h_violations(root):
     # app.rs and reconciles the runtime's signal-driven dirty state.
     raw_main = _owner_text(root, "crates/flamewm-shell/src/main.rs")
     raw_rt = _owner_text(root, "crates/flamewm-shell/src/runtime.rs")
-    raw_app = _owner_text(root, "crates/flamewm-shell/src/app.rs")
+    raw_app = _app_split_text(root)
     if ("refresh_dynamic" not in app or "register_timer" in main and "workspace" in main.lower().split("register_timer")[0][-200:]
             or ("never polls" not in raw_main.lower() and "no polling" not in raw_rt.lower()
                 and "never polls" not in raw_app.lower() and "no polling" not in raw_app.lower())):
