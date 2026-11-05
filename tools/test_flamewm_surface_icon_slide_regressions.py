@@ -14,14 +14,14 @@ def src(path):
 
 class PerOutputOpacity(unittest.TestCase):
     def test_surface_backdrop_belongs_to_each_panel(self):
-        rs = src('crates/flamewm-shell/src/runtime.rs')
+        # Panel records and backdrop application moved into runtime/panels.rs.
+        rs = src('crates/flamewm-shell/src/runtime.rs') + src('crates/flamewm-shell/src/runtime/panels.rs')
         record = rs.split('pub struct PanelSurfaceRecord {', 1)[1].split('}', 1)[0]
-        self.assertIn('snapshot: Option<RgbaImage>', record)
-        self.assertIn('capture: Option<PanelCapture>', record)
+        self.assertIn('backdrop: Option<PanelBackdrop>', record)
         self.assertNotIn('panel_snapshot: Option<RgbaImage>', rs.split('pub struct ShellSurfaces {', 1)[1].split('}', 1)[0])
         self.assertIn('for record in &mut self.panels', rs)
         self.assertIn('for record in &self.panels', rs)
-        self.assertIn('runtime.set_surface_backdrop(panel,', rs)
+        self.assertIn('.set_surface_backdrop(panel,', rs)
 
     def test_settings_projected_and_redrawn_for_every_output(self):
         app = src('crates/flamewm-shell/src/app.rs')
@@ -29,7 +29,7 @@ class PerOutputOpacity(unittest.TestCase):
         self.assertIn('for panel in self.surfaces.panel_handles()', project)
         self.assertIn('runtime.with_document(panel', project)
         self.assertIn('runtime.redraw(panel)', project)
-        self.assertIn('self.surfaces.refresh_panel_backdrops(', app)
+        self.assertIn('self.apply_taskbar_backdrop(runtime)', app)
 
     def test_new_panel_gets_settings_projection(self):
         app = src('crates/flamewm-shell/src/app.rs')
