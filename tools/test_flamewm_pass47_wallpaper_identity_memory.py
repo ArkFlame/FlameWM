@@ -38,7 +38,7 @@ class WallpaperIdentityFastPath(unittest.TestCase):
     def test_multi_monitor_independent_composition_is_retained(self):
         text = self.source
         self.assertIn('for monitor in monitors {', text)
-        self.assertIn('let image = wallpaper_fit::compose(natural, rect.width as u32, rect.height as u32, fit)?;', text)
+        self.assertIn('flamewm_image_core::wallpaper::compose_region_into(\n            natural,\n            rect.width as u32,\n            rect.height as u32,\n            fit,\n            (0, 0, rect.width as u32, rect.height as u32),\n            &mut canvas,\n            (rect.x as u32, rect.y as u32),\n        )?;', text)
         self.assertIn('fn independent_outputs_fit_the_wallpaper_separately_from_shared_canvas()', text)
         self.assertIn('fn one_full_output_matches_shared_composition_for_all_fits()', text)
         self.assertIn('fn matching_root_wallpaper_reuses_decoded_buffer_without_copy()', text)

@@ -22,7 +22,7 @@ class Pass27Contracts(unittest.TestCase):
         self.assertIn('Exec=env XDG_CURRENT_DESKTOP=KDE', compat)
         self.assertIn('finalize_pam_kwallet_login', runner)
     def test_monitor_layout_refresh_covers_secondary_panels(self):
-        app = source('crates/flamewm-shell/src/app.rs')
+        app = source('crates/flamewm-shell/src/app.rs') + source('crates/flamewm-shell/src/app/panels.rs')
         runtime = ''.join(source(p) for p in ('crates/flamewm-shell/src/runtime.rs', 'crates/flamewm-shell/src/runtime/panels.rs', 'crates/flamewm-shell/src/runtime/tests.rs'))
         self.assertIn('self.surfaces.panel_topology_drifted(snapshot)', app)
         self.assertIn('panel_context_is_current(&record.placement, snapshot)', runtime)

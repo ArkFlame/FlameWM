@@ -3,6 +3,7 @@
 Compilation, XPutImage correctness, and measured memory use require native tests.
 """
 import os
+import re
 from pathlib import Path
 import unittest
 
@@ -21,6 +22,7 @@ class TransitionUploadContracts(unittest.TestCase):
         self.assertIn('malloc(strip_bytes)', scope)
         self.assertNotIn('malloc(len)', scope)
         self.assertIn('capture.argb[start..start + bytes].as_ptr()', scope)
+        scope = re.sub(r'\s+', ' ', scope)
         self.assertIn('y as c_int, capture.width, rows', scope)
         self.assertIn('XDestroyImage(image)', scope)
 
@@ -29,7 +31,9 @@ class TransitionUploadContracts(unittest.TestCase):
         self.assertIn('check_capture_size(capture.width, capture.height)', scope)
         self.assertIn('capture.argb.len() != len', scope)
         self.assertIn('XFreeGC(display, gc)', scope)
-        self.assertIn('XFreePixmap(display, pixmap)', scope)
+        # Pixmap frees go through the single checked owner in native/xresource.rs.
+        self.assertIn('free_pixmap_raw(display, pixmap)', scope)
+        self.assertIn('XFreePixmap(display, pixmap)', (ROOT / 'crates/flamewm-render-x11/src/native/xresource.rs').read_text())
         self.assertIn('free(data as *mut c_void)', scope)
         self.assertIn('upload_staging_strips_cover_capture_without_truncating_last_row', self.source)
 

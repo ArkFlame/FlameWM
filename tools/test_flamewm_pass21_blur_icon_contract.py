@@ -23,7 +23,7 @@ class BlurIconPass21Contracts(unittest.TestCase):
         self.assertIn("fn release_if_over_budget_keeps_useful_small_scratch()", blur)
 
     def test_shell_cache_retains_original_entry_count_and_32mib_payload(self):
-        source_text = source("crates/flamewm-shell/src/async_projection.rs")
+        source_text = source("crates/flamewm-shell/src/async_projection/icon_cache.rs")
         self.assertIn("const ICON_CACHE_ENTRY_BUDGET: usize = 2048;", source_text)
         self.assertIn("const ICON_CACHE_BYTE_BUDGET: usize = 32 * 1024 * 1024;", source_text)
         self.assertIn("fn icon_cache_shares_name_storage_between_icon_sizes()", source_text)

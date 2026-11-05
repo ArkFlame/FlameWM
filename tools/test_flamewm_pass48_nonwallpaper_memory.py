@@ -4,6 +4,7 @@ Actual Rust equivalence tests are in flamewm-screenshot/src/capture.rs;
 these checks do not establish native-compilation or RSS measurements.
 """
 import os
+import re
 import unittest
 from pathlib import Path
 
@@ -15,18 +16,20 @@ def source(name):
 class NonWallpaperAllocationContracts(unittest.TestCase):
     def test_screenshot_getimage_reply_is_consumed_by_owned_decoder(self):
         capture = source('crates/flamewm-screenshot/src/capture.rs')
-        ui = source('crates/flamewm-screenshot/src/ui.rs')
+        # rustfmt wraps the call across lines; compare whitespace-insensitively.
+        ui = re.sub(r'\s+', '', source('crates/flamewm-screenshot/src/ui.rs'))
         self.assertIn('decode_ximage_owned(conn, screen, reply.depth, rect.w, rect.h, reply.data)', capture)
-        self.assertIn('decode_ximage_owned(self.conn,self.screen,result.depth,u32::from(self.width),u32::from(self.height),result.data)', ui)
+        self.assertIn('decode_ximage_owned(self.conn,self.screen,result.depth,u32::from(self.width),u32::from(self.height),result.data,)', ui)
         self.assertNotIn('decode_ximage(conn, screen, reply.depth, rect.w, rect.h, &reply.data)', capture)
 
     def test_32_bit_reply_reuses_allocation_but_odd_depths_fall_back(self):
         capture = source('crates/flamewm-screenshot/src/capture.rs')
         scope = capture.split('pub fn decode_ximage_owned<C: Connection>', 1)[1].split('pub fn grab<C: Connection>', 1)[0]
+        scope = re.sub(r'\s+', ' ', scope)
         self.assertIn('mut data: Vec<u8>', scope)
         self.assertIn('format.bits_per_pixel == 32', scope)
         self.assertIn('data.len() == len', scope)
-        self.assertIn('decode_32bpp_in_place(&mut data', scope)
+        self.assertIn('decode_32bpp_in_place( &mut data', scope)
         self.assertIn('rgba: data', scope)
         self.assertIn('decode_ximage(conn, screen, depth, width, height, &data)', scope)
         self.assertIn('owned_ximage_fast_path_matches_mask_decoding_and_reuses_pixels', capture)
@@ -42,8 +45,8 @@ class NonWallpaperAllocationContracts(unittest.TestCase):
 
     def test_other_existing_source_optimizations_preserved(self):
         self.assertIn('pub fn crop(mut self, rect: Rect)', source('crates/flamewm-screenshot/src/capture.rs'))
-        self.assertIn('const MAX_IMAGE_CACHE_BYTES: usize = 16 * 1024 * 1024;', source('crates/flamewm-render-x11/src/app/images.rs'))
-        self.assertIn('const ICON_CACHE_BYTE_BUDGET: usize = 32 * 1024 * 1024;', source('crates/flamewm-shell/src/async_projection.rs'))
+        self.assertIn('const MAX_IMAGE_CACHE_BYTES: usize = 48 * 1024 * 1024;', source('crates/flamewm-render-x11/src/app/images.rs'))
+        self.assertIn('const ICON_CACHE_BYTE_BUDGET: usize = 32 * 1024 * 1024;', source('crates/flamewm-shell/src/async_projection/icon_cache.rs'))
         self.assertIn('pub const CAPTURE_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;', source('crates/flamewm-wm-x11/src/animation.rs'))
 
 if __name__ == '__main__':

@@ -7,9 +7,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class Pass25DesktopCoreRecoveryTests(unittest.TestCase):
     def test_actual_source_provides_symbols_reported_missing_by_cargo(self):
-        lib = (ROOT / 'crates/flamewm-desktop-core/src/lib.rs').read_text()
+        # Conversion was split out of desktop-core into flamewm-conversion-core.
+        lib = (ROOT / 'crates/flamewm-conversion-core/src/lib.rs').read_text()
         actions = (ROOT / 'crates/flamewm-desktop-core/src/file_actions.rs').read_text()
-        conversion = (ROOT / 'crates/flamewm-desktop-core/src/conversion.rs').read_text()
+        conversion = (ROOT / 'crates/flamewm-conversion-core/src/conversion.rs').read_text()
         self.assertRegex(lib, r'(?m)^pub mod conversion;')
         self.assertRegex(actions, r'(?s)enum EntryMenuAction\s*\{[^}]*\bConvert,')
         self.assertRegex(actions, r'fn entry_context_menu\(is_trash: bool, convertible: bool\)')

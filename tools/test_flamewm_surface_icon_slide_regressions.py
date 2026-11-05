@@ -24,15 +24,16 @@ class PerOutputOpacity(unittest.TestCase):
         self.assertIn('.set_surface_backdrop(panel,', rs)
 
     def test_settings_projected_and_redrawn_for_every_output(self):
-        app = src('crates/flamewm-shell/src/app.rs')
-        project = app.split('fn project_settings(', 1)[1].split('fn quick_kind_shown(', 1)[0]
+        app = src('crates/flamewm-shell/src/app.rs') + src('crates/flamewm-shell/src/app/panels.rs')
+        settings = src('crates/flamewm-shell/src/app/settings.rs')
+        project = settings.split('fn project_settings(', 1)[1].split('\n    }\n', 1)[0]
         self.assertIn('for panel in self.surfaces.panel_handles()', project)
         self.assertIn('runtime.with_document(panel', project)
         self.assertIn('runtime.redraw(panel)', project)
         self.assertIn('self.apply_taskbar_backdrop(runtime)', app)
 
     def test_new_panel_gets_settings_projection(self):
-        app = src('crates/flamewm-shell/src/app.rs')
+        app = src('crates/flamewm-shell/src/app/panels.rs')
         resync = app.split('pub(crate) fn resync_panel_geometry(',1)[1].split('fn ',1)[0]
         self.assertIn('self.settings_projection_pending = true;', resync)
 

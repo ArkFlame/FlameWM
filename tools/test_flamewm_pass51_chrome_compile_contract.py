@@ -5,15 +5,19 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CHROME = ROOT / 'crates/flamewm-wm-x11/src/chrome.rs'
+CHROME_TESTS = ROOT / 'crates/flamewm-wm-x11/src/chrome/tests.rs'
 LAYOUT = ROOT / 'crates/flamewm-wm-x11/src/frame/layout.rs'
 
 
 class ChromeScaleFixture(unittest.TestCase):
     def test_titlebar_scale_fixture_uses_in_scope_resize_function(self):
-        source = CHROME.read_text()
+        # The fixture moved from chrome.rs into chrome/tests.rs (top-level #[test] fns).
+        source = CHROME_TESTS.read_text()
         begin = source.index('fn windows11_square_hover_coverage_at_100_135_200_percent()')
-        end = source.index('\n    #[test]', begin)
-        test = source[begin:end]
+        end = source.find('\n#[test]', begin)
+        end = len(source) if end < 0 else end
+        # rustfmt wraps the call; compare on whitespace-collapsed text.
+        test = re.sub(r'\s+', ' ', source[begin:end])
         self.assertRegex(test, r'use crate::frame::layout::\{[^}]*resize_thickness_for_titlebar[^}]*\}')
         self.assertIn('controls_width_for_titlebar(full), resize_thickness_for_titlebar(full)', test)
         self.assertNotRegex(test, r'\bRESIZE_T\b')

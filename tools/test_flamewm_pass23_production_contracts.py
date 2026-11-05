@@ -19,7 +19,7 @@ class ProductionContracts(unittest.TestCase):
         s=src('crates/flamewm-wm-x11/src/wm/workspace_state.rs')
         self.assertIn('crate::frame::titlebar_backdrop::packaged_root()',s)
     def test_weather_broadcast_all_monitor_panels(self):
-        s=src('crates/flamewm-shell/src/app.rs'); block=s.split('fn tick_weather(',1)[1].split('fn push_weather_feed(',1)[0]
+        s=src('crates/flamewm-shell/src/app/weather.rs'); block=s.split('fn tick_weather(',1)[1].split('fn push_weather_feed(',1)[0]
         self.assertIn('self.surfaces.panel_handles()',block)
         self.assertNotIn('runtime.with_document(self.surfaces.panel(),',block)
         self.assertIn('runtime.redraw(panel)',block)
