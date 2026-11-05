@@ -54,3 +54,26 @@ representative of the change, not an exact replay of `list_directory`.
 3. Settings slider drag (`app_impl_1.rs` `handle_glass_slider_drag`): each Motion makes a synchronous WM IPC
    transaction (`apply_setting`) and then a full `settle` -> `sync`. Static finding only; no live numbers yet,
    so no change made.
+
+## Settings slider drag and tab switch (measured)
+
+Harness: `scripts/perf/settings_session.sh <bin-dir> <out> --slider 590,765,296 --tabs "125,214;131,274;138,304;125,214;131,274;138,304" --pre "138,304" --steps 150 --idle-secs 5`.
+It boots the fast-profile WM with flamewm-settings autostarted and runs `settings_scenarios.py` (XTEST drag of the
+Animations page speed slider, then six tab clicks). Counts are /proc deltas; `syscw` (write syscalls) is the proxy
+for IPC plus paint writes. Two runs per side, host load about 10-19.
+
+| Phase | Before (cpu%, wakes/s, syscw) | After gate (cpu%, wakes/s, syscw) |
+| --- | --- | --- |
+| idle (5 s) | 0.0 / 0-4.5 / 0-7 | 0.6 and 0.0 / 2-55 / 7-46 |
+| slider drag, 150 motions | 284-289 / 20.8k-22.1k / 10.3k-11.6k; settings 57-61% cpu, 4.4k-5.0k syscw | 291-293 / 21.7k / 11.5k-11.9k; settings 61-65%, 4.9k-5.2k syscw |
+| tab switch, 6 clicks | 24-31 / 2.7k-2.8k / 3.9k-4.2k | 24-34 / 2.7k-3.1k / 3.9k-5.0k |
+
+Finding: the per-Motion work is not the drag gate's target. The gate (one apply per 16 ms) was tried and reverted
+because it changed nothing: XTEST motions arrive more than 16 ms apart, so almost every Motion still applied.
+Remaining cost sits in the per-motion pipeline (settings paint writes, WM and Xwayland redraw) and is not yet
+attributed. Next step if pursued: count ApplySettings calls per motion with a trace, and check whether the WM
+redraws the whole window on each settings change.
+
+Visibility-aware sampler: blocked. Only the desktop role selects `VisibilityChangeMask`
+(`crates/flamewm-render-x11/src/app/events.rs:441`); no focus events reach controllers. Enabling it for the task
+manager touches render-x11, which another worker owns, so it was not changed.
