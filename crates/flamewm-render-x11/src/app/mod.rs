@@ -449,19 +449,7 @@ impl X11App {
             }
             return Err("XCreateWindow failed for native surface".to_string());
         }
-        let event_mask = EXPOSURE_MASK
-            | STRUCTURE_NOTIFY_MASK
-            | POINTER_MOTION_MASK
-            | LEAVE_WINDOW_MASK
-            | BUTTON_PRESS_MASK
-            | BUTTON_RELEASE_MASK
-            | KEY_PRESS_MASK
-            | KEY_RELEASE_MASK
-            | if config.role == X11WindowRole::Desktop {
-                VISIBILITY_CHANGE_MASK
-            } else {
-                0
-            };
+        let event_mask = window_event_mask();
         unsafe {
             XSelectInput(display, window, event_mask);
         }
@@ -1164,6 +1152,34 @@ impl Drop for X11App {
             if self.window != 0 {
                 XDestroyWindow(self.display, self.window);
             }
+        }
+    }
+}
+
+/// Every native window selects visibility changes, so non-desktop apps can pause idle work while obscured.
+/// Only the events are new; the other masks are unchanged.
+fn window_event_mask() -> std::ffi::c_long {
+    EXPOSURE_MASK
+        | STRUCTURE_NOTIFY_MASK
+        | POINTER_MOTION_MASK
+        | LEAVE_WINDOW_MASK
+        | BUTTON_PRESS_MASK
+        | BUTTON_RELEASE_MASK
+        | KEY_PRESS_MASK
+        | KEY_RELEASE_MASK
+        | VISIBILITY_CHANGE_MASK
+}
+
+#[cfg(test)]
+mod window_event_mask_tests {
+    use super::*;
+
+    #[test]
+    fn every_window_selects_visibility_changes_and_keeps_the_input_masks() {
+        let mask = window_event_mask();
+        assert_ne!(mask & VISIBILITY_CHANGE_MASK, 0);
+        for required in [EXPOSURE_MASK, STRUCTURE_NOTIFY_MASK, BUTTON_PRESS_MASK, KEY_PRESS_MASK] {
+            assert_eq!(mask & required, required);
         }
     }
 }

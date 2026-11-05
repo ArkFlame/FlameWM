@@ -438,7 +438,7 @@ impl X11App {
                     }
                 }
                 VISIBILITY_NOTIFY => {
-                    // Only the desktop selects VisibilityChangeMask. Dispatched with the other
+                    // Every window selects VisibilityChangeMask (window_event_mask). Dispatched with the other
                     // window-level hand-offs below, so the host sees the latest verdict per turn.
                     // SAFETY: type_ selects the XVisibilityEvent variant of the union.
                     let state = unsafe { event.xvisibility.state };

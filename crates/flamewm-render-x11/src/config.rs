@@ -19,7 +19,7 @@ pub struct X11Config {
 /// Reserved action name for a settled window size. The event carries the size in `x` (width)
 /// and `y` (height), logical px. Delivered once per settled size, never per intermediate step.
 pub const WINDOW_RESIZE_ACTION: &str = "__flamewm.window.resize";
-/// Desktop-role window visibility change. `x` is 1.0 when fully obscured, else 0.0.
+/// Window visibility change (every role). `x` is 1.0 when fully obscured, else 0.0.
 pub const WINDOW_VISIBILITY_ACTION: &str = "__flamewm.window.visibility";
 
 /// Reserved action names for XDND drop-target events. `x`/`y` carry the window-relative

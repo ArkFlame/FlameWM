@@ -159,7 +159,7 @@ pub enum UiControllerEvent {
         width: u32,
         height: u32,
     },
-    /// The window became fully obscured (`true`) or was uncovered (`false`). Desktop role only.
+    /// The window became fully obscured (`true`) or was uncovered (`false`). Every role.
     Visibility {
         obscured: bool,
     },

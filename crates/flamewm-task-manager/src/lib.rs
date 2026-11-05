@@ -2,6 +2,7 @@
 //! /proc sampling happens on one on-demand worker; the X11 reactor sleeps between wakeups.
 mod graph;
 mod model;
+mod sample_gate;
 
 use std::cell::RefCell;
 use std::io::{Read, Write};
@@ -880,10 +881,16 @@ pub fn run() -> Result<(), String> {
     let (sender, receiver) = mpsc::sync_channel::<model::Snapshot>(1);
     let running = Arc::new(AtomicBool::new(true));
     let active = Arc::clone(&running);
+    let gate = Arc::new(sample_gate::SampleGate::default());
+    let worker_gate = Arc::clone(&gate);
     // One sampler exists only while this window is open; never a permanent desktop daemon.
     let worker = std::thread::spawn(move || {
         let mut sampler = model::Sampler::default();
         while active.load(Ordering::Relaxed) {
+            // Obscured: sleep with no timer until uncovered. Visible: the loop below is unchanged.
+            if !worker_gate.wait_visible(|| active.load(Ordering::Relaxed)) {
+                break;
+            }
             let snapshot = sampler.collect();
             if sender.try_send(snapshot).is_ok() {
                 match writer.write(&[1]) {
@@ -922,6 +929,7 @@ pub fn run() -> Result<(), String> {
     let queue = Rc::new(RefCell::new(receiver));
     let window = Rc::new(RefCell::new(app));
     let event_window = Rc::clone(&window);
+    let visibility_gate = Arc::clone(&gate);
     let wake_window = Rc::clone(&window);
     let wake_queue = Rc::clone(&queue);
     let incoming = Rc::new(RefCell::new(None::<SettingsSnapshot>));
@@ -987,7 +995,10 @@ pub fn run() -> Result<(), String> {
                     app.paint(doc)
                 }
                 UiControllerEvent::Drag(_) => Ok(()),
-                UiControllerEvent::Visibility { .. } => Ok(()),
+                UiControllerEvent::Visibility { obscured } => {
+                    visibility_gate.set_visible(!*obscured);
+                    Ok(())
+                }
             }
         },
         move |doc| {
@@ -1013,6 +1024,7 @@ pub fn run() -> Result<(), String> {
         },
     );
     running.store(false, Ordering::Relaxed);
+    gate.wake();
     let _ = worker.join();
     outcome
 }
