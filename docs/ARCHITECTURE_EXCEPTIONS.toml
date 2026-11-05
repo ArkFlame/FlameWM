@@ -365,9 +365,44 @@ canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
 remove_by = "0.3.0"
 
 [[exception]]
-path = "crates/flamewm-x11-canary/src/main.rs"
+path = "crates/flamewm-x11-canary/src/canary.rs"
 capability = "x11rb-symbol"
-reason = "The canary entry point opens its own x11rb connection and hands it to the scenario harness."
+reason = "The canary command split owns the independent x11rb connection that drives XTEST input and observes server state, as the entry point did before the split."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/commands/interaction_perf.rs"
+capability = "x11rb-symbol"
+reason = "The canary command split owns the independent x11rb connection that drives XTEST input and observes server state, as the entry point did before the split."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/commands/j13.rs"
+capability = "x11rb-symbol"
+reason = "The canary command split owns the independent x11rb connection that drives XTEST input and observes server state, as the entry point did before the split."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/commands/probe.rs"
+capability = "x11rb-symbol"
+reason = "The canary command split owns the independent x11rb connection that drives XTEST input and observes server state, as the entry point did before the split."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/commands/profile.rs"
+capability = "x11rb-symbol"
+reason = "The canary command split owns the independent x11rb connection that drives XTEST input and observes server state, as the entry point did before the split."
+canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
+remove_by = "0.3.0"
+
+[[exception]]
+path = "crates/flamewm-x11-canary/src/commands/sr.rs"
+capability = "x11rb-symbol"
+reason = "The canary command split owns the independent x11rb connection that drives XTEST input and observes server state, as the entry point did before the split."
 canonical_target = "crates/flamewm-x11-canary/src/scenarios/mod.rs"
 remove_by = "0.3.0"
 
