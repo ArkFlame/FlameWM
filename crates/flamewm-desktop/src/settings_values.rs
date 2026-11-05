@@ -93,7 +93,8 @@ pub(crate) fn project_accent_tokens(
         document.color_variable(name, color)?;
     }
     document.color_variable("--preview-outline", accent_color(snapshot))?;
-    Ok(())
+    // Text and overlay tokens follow the appearance; desktop.css and menu.css :root keep Dark values.
+    flamewm_ui_document::appearance_tokens::project_appearance_tokens(document, snapshot)
 }
 
 /// Progressive-disclosure switch keys (test-only contract list). A toggle of any of these changes which member values the

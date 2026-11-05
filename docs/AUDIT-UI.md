@@ -237,3 +237,29 @@ No screenshot was taken in this pass. Results come from `cargo test`, `cargo che
 - `--c-ffffff` stays Keep. It is the desktop-icon label on the wallpaper, and the toggle knob on the accent or track. Its light value is the same as Dark.
 - Light Surface values are a luminance ramp, not hand-tuned per surface. Look at a screenshot before accepting them.
 - Not touched: `ui/settings*`, `ui/task-manager`, `ui/explorer`, `ui/desktop` CSS (other owners), titlebar hover in the WM crates.
+## Pass 8: task-manager, explorer, desktop and shared menu tokens
+
+Scope: `ui/task-manager/task-manager.css`, `ui/explorer/explorer.css`, `ui/desktop/desktop.css`, `ui/shared/menu.css`. Base: `origin/main` after `bc97c6a2`. Shell and settings sheets are out of scope.
+
+### Fixed
+
+- Shared helper `flamewm_ui_document::appearance_tokens` (`overlay_token_values`, `text_token_values`, `project_overlay_tokens`, `project_text_tokens`, `project_appearance_tokens`) owns the per-appearance writes of `--rim`, `--hover-fill`, `--pressed-fill`, `--text`, `--muted`. It reads `glass::overlays_from_settings` and `glass::palette_from_settings`, the same selectors as the shell.
+- Callers: task-manager `paint_theme` (text and overlays, replacing its two inline text writes), desktop `project_accent_tokens` (text and overlays), explorer `ExplorerTheme::project` (overlays only; its text stays surface-driven), shell `project_palette_tokens` (overlays, now via the helper).
+- `flamewm_skin::palette::check_overlay_contrast(appearance)` and the `HOVER_MIN_CONTRAST` (1.25) and `PRESSED_VS_HOVER_MIN_CONTRAST` (1.15) constants are public. The skin overlay tests call it, and so do the ui-document tests.
+- Literals outside `:root` are now `var(--token)` in all four sheets. Each literal is declared once in `:root` as `--c-<hex>:#<hex>` (the shell pattern). New `--c-` tokens per sheet: task-manager 6, desktop 20, explorer 0, menu 0. Explorer and menu literals were all mapped to the overlay or text tokens above.
+- Hover inversion: explorer `--hover` (white 25%, invisible on light glass) is removed. Hover rules in explorer, task-manager (`button.head:hover`) and the desktop `.menu-row` read `--hover-fill`, which is black on light. Explorer `button:active` and the explorer scroll thumb now use `--pressed-fill`, `--hover-fill` and `--rim`.
+- Pressed state: `:active` rules added in task-manager (`button.head`, `.dialog-button`), explorer (`button`), and shared menu (`.menu-row`). Each reads `--pressed-fill`, which differs from `--hover-fill` in both appearances (Dark 0x26 vs 0x40 white; Light 0x40 vs 0x26 black).
+- Desktop body text and the shared menu text (`.context-menu`, `.menu-row`) now read `--text`, so light appearance gets dark text. The menu separator reads `--pressed-fill`. The desktop rename field keeps fixed `--c-f1f2f3` text on its fixed dark box, so it stays legible in light.
+- Tests:
+  - `flamewm_ui_core::css_contract` (new): `raw_colour_literals` ignores `:root` and comments. Four tests assert zero raw colour literals in the four sheets. Two more check that each sheet declares every appearance token it reads and that `:active` rules read `--pressed-fill`. `context_menu` shell test now uses the same helper.
+  - `flamewm_skin::palette::overlay_tests::hover_and_pressed_overlays_meet_contrast_on_each_appearance` and `light_overlays_are_dark_so_they_show_on_light_glass`.
+  - `flamewm_ui_document::appearance_tokens::tests` (dark shipped alphas, light black alphas, light text, contrast).
+- Stale test expectations fixed: explorer `theme::accent_defaults_to_flamewm_default_and_follows_snapshot` and desktop `accent_token_tests` hard-coded `(0x53, 0x9B, 0xFF)` while `DEFAULT_ACCENT_RGB` is `0x3daee9`. They now derive from the constant. Three tests were failing on `origin/main` before this pass.
+
+### Left open (with reason)
+
+- Desktop widget glass (`.widget*`, `.desktop-item`, `.desktop-rename*`, `.sticky`) keeps fixed literal tokens (`--c-ffffff1f`, `--c-1e2030b3`, ...). Widgets are dark glass over wallpaper by design and do not follow `appearance`, so their white hover fills are visible as designed. Changing them to appearance tokens would be a visual redesign, not a token change.
+- Explorer `--text:#f1f2f3` and `--muted` (surface-mixed) are still not appearance-driven. Explorer's surface colour is a user setting, not the appearance palette, so light text on a light surface is a known gap. Left as-is in this pass.
+- Explorer `--hover` placeholder in `:root` is now unused; left in place to keep the diff to the paths the task names.
+- Task-manager and explorer data colours (`#3ddbd9`, `#e0699b`, `#4fd18b`, `#f4a259`, `#ff858d`, `#7f8389`) are fixed series colours. They are tokens now, not appearance-driven.
+- Not visually verified. No Xvfb screenshot was captured in this pass, so no light or Dark hover screenshot exists. The contrast claims rest on the palette tests above, not rendered output.

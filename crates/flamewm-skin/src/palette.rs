@@ -113,14 +113,32 @@ pub struct Overlays {
 
 impl Overlays {
     pub const DARK: Self = Self {
-        rim: AlphaColor { color: Rgb(0x00ff_ffff), alpha: 0x7f },
-        hover: AlphaColor { color: Rgb(0x00ff_ffff), alpha: 0x40 },
-        pressed: AlphaColor { color: Rgb(0x00ff_ffff), alpha: 0x26 },
+        rim: AlphaColor {
+            color: Rgb(0x00ff_ffff),
+            alpha: 0x7f,
+        },
+        hover: AlphaColor {
+            color: Rgb(0x00ff_ffff),
+            alpha: 0x40,
+        },
+        pressed: AlphaColor {
+            color: Rgb(0x00ff_ffff),
+            alpha: 0x26,
+        },
     };
     pub const LIGHT: Self = Self {
-        rim: AlphaColor { color: Rgb(0), alpha: 0x33 },
-        hover: AlphaColor { color: Rgb(0), alpha: 0x26 },
-        pressed: AlphaColor { color: Rgb(0), alpha: 0x40 },
+        rim: AlphaColor {
+            color: Rgb(0),
+            alpha: 0x33,
+        },
+        hover: AlphaColor {
+            color: Rgb(0),
+            alpha: 0x26,
+        },
+        pressed: AlphaColor {
+            color: Rgb(0),
+            alpha: 0x40,
+        },
     };
 
     #[must_use]
@@ -142,6 +160,33 @@ pub fn composite(over: AlphaColor, base: Rgb) -> Rgb {
         ((f * a + b * (255 - a) + 127) / 255) << shift
     };
     Rgb(mix(16) | mix(8) | mix(0))
+}
+
+/// Minimum contrast of a hover fill against the surface it sits on (non-text state fill).
+pub const HOVER_MIN_CONTRAST: f64 = 1.25;
+/// Minimum contrast between the hover and pressed fills, so pressed reads as a distinct state.
+pub const PRESSED_VS_HOVER_MIN_CONTRAST: f64 = 1.15;
+
+/// Checks the hover and pressed overlays of `appearance` over the panel surface. Every surface
+/// contract test calls this one owner, so the thresholds cannot drift between sheets.
+pub fn check_overlay_contrast(appearance: Appearance) -> Result<(), String> {
+    let base = Palette::for_appearance(appearance).panel;
+    let overlays = Overlays::for_appearance(appearance);
+    let hover = composite(overlays.hover, base);
+    let pressed = composite(overlays.pressed, base);
+    let hover_ratio = contrast_ratio(hover, base);
+    if hover_ratio < HOVER_MIN_CONTRAST {
+        return Err(format!(
+            "{appearance:?} hover {hover_ratio:.2} < {HOVER_MIN_CONTRAST}"
+        ));
+    }
+    let pressed_ratio = contrast_ratio(hover, pressed);
+    if pressed_ratio < PRESSED_VS_HOVER_MIN_CONTRAST {
+        return Err(format!(
+            "{appearance:?} pressed/hover {pressed_ratio:.2} < {PRESSED_VS_HOVER_MIN_CONTRAST}"
+        ));
+    }
+    Ok(())
 }
 
 /// WCAG 2.x relative luminance of an opaque colour.
@@ -220,31 +265,17 @@ mod tests {
 mod overlay_tests {
     use super::*;
 
-    /// Minimum contrast of a hover fill against the bar it sits on (non-text state fill).
-    const HOVER_MIN: f64 = 1.25;
-    /// Minimum contrast between the hover and pressed fills, so pressed reads as a distinct state.
-    const PRESSED_VS_HOVER_MIN: f64 = 1.15;
-
     #[test]
-    fn hover_fill_is_visible_on_each_appearance() {
+    fn hover_and_pressed_overlays_meet_contrast_on_each_appearance() {
         for appearance in [Appearance::Dark, Appearance::Light] {
-            let base = Palette::for_appearance(appearance).panel;
-            let hover = composite(Overlays::for_appearance(appearance).hover, base);
-            let ratio = contrast_ratio(hover, base);
-            assert!(ratio >= HOVER_MIN, "{appearance:?} hover {ratio:.2} < {HOVER_MIN}");
+            assert_eq!(check_overlay_contrast(appearance), Ok(()));
         }
     }
 
     #[test]
-    fn pressed_fill_differs_from_hover_on_each_appearance() {
-        for appearance in [Appearance::Dark, Appearance::Light] {
-            let base = Palette::for_appearance(appearance).panel;
-            let overlays = Overlays::for_appearance(appearance);
-            let hover = composite(overlays.hover, base);
-            let pressed = composite(overlays.pressed, base);
-            let ratio = contrast_ratio(hover, pressed);
-            assert!(ratio >= PRESSED_VS_HOVER_MIN, "{appearance:?} pressed/hover {ratio:.2}");
-        }
+    fn light_overlays_are_dark_so_they_show_on_light_glass() {
+        assert_eq!(Overlays::LIGHT.hover.color, Rgb(0));
+        assert_eq!(Overlays::LIGHT.pressed.color, Rgb(0));
     }
 
     #[test]
@@ -256,10 +287,15 @@ mod overlay_tests {
 
     #[test]
     fn composite_at_full_and_zero_alpha() {
-        let white = AlphaColor { color: Rgb(0x00ff_ffff), alpha: 0xff };
+        let white = AlphaColor {
+            color: Rgb(0x00ff_ffff),
+            alpha: 0xff,
+        };
         assert_eq!(composite(white, Rgb(0)), Rgb(0x00ff_ffff));
-        let clear = AlphaColor { color: Rgb(0x00ff_ffff), alpha: 0 };
+        let clear = AlphaColor {
+            color: Rgb(0x00ff_ffff),
+            alpha: 0,
+        };
         assert_eq!(composite(clear, Rgb(0x0012_3456)), Rgb(0x0012_3456));
     }
 }
-

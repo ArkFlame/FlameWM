@@ -5,9 +5,10 @@
 use std::path::Path;
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_skin::palette::Overlays;
 use flamewm_ui_core::surface::surface_fill;
-use flamewm_ui_x11::surface_style::surface_outline;
 use flamewm_ui_x11::backdrop::WindowBackdrop;
+use flamewm_ui_x11::surface_style::surface_outline;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
 /// Shared defaults (flamewm-ui-core `DEFAULT_SURFACE_OPACITY`, shell/desktop `surfaceBlurPercent`).
@@ -17,8 +18,6 @@ const DEFAULT_BLUR_PERCENT: u8 = 80;
 const WASH_ALPHA: u8 = 26;
 /// Accent opacity for selection and highlight fills (50%).
 const SELECTION_ALPHA: u8 = 0x80;
-/// Stronger wash for hover and pressed states (25%).
-const HOVER_ALPHA: u8 = 64;
 /// Menus and dialogs read as the surface, a little more opaque than the root for legibility.
 const MENU_MIN_ALPHA: u8 = 230;
 /// Secondary text: white at roughly 65%, so it stays legible over any surface colour.
@@ -35,6 +34,7 @@ pub struct ExplorerTheme {
     font_family: Option<String>,
     font_size_offset: i32,
     font_bold: bool,
+    overlays: Overlays,
 }
 impl Default for ExplorerTheme {
     fn default() -> Self {
@@ -110,6 +110,7 @@ impl ExplorerTheme {
             font_family: None,
             font_size_offset: 0,
             font_bold: false,
+            overlays: Overlays::DARK,
         };
         if let Some(SettingValue::Text(name)) = snapshot.values.get("fontFamily") {
             let name = name.trim();
@@ -134,6 +135,7 @@ impl ExplorerTheme {
             None => fill.alpha,
         };
         theme.stroke = surface_outline(snapshot);
+        theme.overlays = flamewm_ui_core::glass::overlays_from_settings(snapshot);
         theme
     }
     /// Root fill: the surface once, translucent when the window backdrop shows the wallpaper through it.
@@ -153,9 +155,6 @@ impl ExplorerTheme {
     }
     pub fn row_alternate(&self) -> UiColor {
         white(WASH_ALPHA)
-    }
-    pub fn hover(&self) -> UiColor {
-        white(HOVER_ALPHA)
     }
     /// Menus and dialogs: the surface colour, opaque enough to read over busy wallpaper.
     pub fn menu(&self) -> UiColor {
@@ -211,7 +210,6 @@ impl ExplorerTheme {
             ("--sidebar", self.clear()),
             ("--card", self.card()),
             ("--line", self.card()),
-            ("--hover", self.hover()),
             ("--menu", self.menu()),
             ("--muted", self.muted()),
             ("--text", white(245)),
@@ -225,9 +223,16 @@ impl ExplorerTheme {
                 ..self.accent
             },
         )?;
+        // --rim, --hover-fill and --pressed-fill invert with the appearance; white overlays vanish on light glass.
+        flamewm_ui_document::appearance_tokens::project_overlay_tokens(doc, self.overlays)?;
         // The root fill carries the live surfaceOpacity alpha, applied once; children draw no second surface.
         doc.background("explorer", self.root())?;
-        for popup in ["context-popup", "progress-popup", "dialog", "openwith-dialog"] {
+        for popup in [
+            "context-popup",
+            "progress-popup",
+            "dialog",
+            "openwith-dialog",
+        ] {
             doc.border(popup, self.stroke)?;
         }
         doc.ui_font_defaults(self.font_size_offset as f32, self.font_bold)?;
@@ -257,13 +262,19 @@ mod tests {
         assert_eq!(mapped.surface.r, (surface_fill(&settings).rgb >> 16) as u8);
     }
 
+    /// FlameWM's product default accent, as the (r, g, b) triple the theme reports.
+    fn default_accent() -> (u8, u8, u8) {
+        let rgb = flamewm_api::settings::DEFAULT_ACCENT_RGB;
+        ((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
+    }
+
     #[test]
     fn accent_defaults_to_flamewm_default_and_follows_snapshot() {
         // No snapshot (or no accent key) keeps FlameWM's real default accent, never a private literal.
         let defaults = ExplorerTheme::from_snapshot(&SettingsSnapshot::new(1));
         assert_eq!(
             (defaults.accent.r, defaults.accent.g, defaults.accent.b),
-            (0x53, 0x9B, 0xFF)
+            default_accent()
         );
         let mut settings = SettingsSnapshot::new(2);
         settings
@@ -282,10 +293,7 @@ mod tests {
             .values
             .insert("accent".into(), SettingValue::Text("nonsense".into()));
         let bad = ExplorerTheme::from_snapshot(&settings);
-        assert_eq!(
-            (bad.accent.r, bad.accent.g, bad.accent.b),
-            (0x53, 0x9B, 0xFF)
-        );
+        assert_eq!((bad.accent.r, bad.accent.g, bad.accent.b), default_accent());
     }
 
     #[test]
@@ -296,7 +304,9 @@ mod tests {
             .insert("accent".into(), SettingValue::Text("#123456".into()));
         let theme = ExplorerTheme::from_snapshot(&settings);
         let mut document = RecordingUiDoc::default();
-        theme.project(&mut document).expect("project explorer theme");
+        theme
+            .project(&mut document)
+            .expect("project explorer theme");
         assert_eq!(
             document.variables["--preview-outline"],
             UiColor {
@@ -388,7 +398,6 @@ mod tests {
                 a: 26
             }
         );
-        assert_eq!(theme.hover().a, 64);
         assert!(theme.menu().a >= 230);
         assert_eq!(
             (theme.menu().r, theme.menu().g, theme.menu().b),

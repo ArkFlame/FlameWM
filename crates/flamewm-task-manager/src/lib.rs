@@ -169,7 +169,11 @@ impl Application {
             .collect();
         // Name keys are lowercased once per process per sort, not twice per comparison.
         let lower_names: Vec<String> = if self.sort == Sort::Name {
-            self.snapshot.processes.iter().map(|p| p.name.to_lowercase()).collect()
+            self.snapshot
+                .processes
+                .iter()
+                .map(|p| p.name.to_lowercase())
+                .collect()
         } else {
             Vec::new()
         };
@@ -216,11 +220,8 @@ impl Application {
         flamewm_ui_x11::surface_style::project_surface_outline(doc, "task-manager", &self.theme)?;
         doc.color_variable("--accent", rgba(accent, 255))?;
         doc.color_variable("--accent-soft", rgba(accent, 42))?;
-        // Text follows the appearance palette so light surfaces stay legible; the root defaults
-        // in task-manager.css are the Dark palette values.
-        let palette = flamewm_ui_core::glass::palette_from_settings(&self.theme);
-        doc.color_variable("--text", rgba(palette.text.0, 255))?;
-        doc.color_variable("--muted", rgba(palette.muted.0, 255))?;
+        // Text and overlay tokens follow the appearance; the root defaults in task-manager.css are Dark.
+        flamewm_ui_document::appearance_tokens::project_appearance_tokens(doc, &self.theme)?;
         doc.color_variable(
             "--border",
             flamewm_ui_x11::surface_style::surface_outline(&self.theme),
@@ -1029,10 +1030,19 @@ mod tests {
         };
         let (actions, _rx) = std::sync::mpsc::sync_channel(1);
         let mut app = Application::new(SettingsSnapshot::new(0), actions);
-        app.snapshot.processes = vec![proc(3, "bash"), proc(1, "Zed"), proc(2, "apple"), proc(4, "Apple")];
+        app.snapshot.processes = vec![
+            proc(3, "bash"),
+            proc(1, "Zed"),
+            proc(2, "apple"),
+            proc(4, "Apple"),
+        ];
         app.sort = Sort::Name;
         app.descending = false;
-        let names: Vec<u32> = app.sorted().into_iter().map(|i| app.snapshot.processes[i].pid).collect();
+        let names: Vec<u32> = app
+            .sorted()
+            .into_iter()
+            .map(|i| app.snapshot.processes[i].pid)
+            .collect();
         assert_eq!(names, vec![2, 4, 3, 1]);
     }
     #[test]

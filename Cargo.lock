@@ -728,6 +728,7 @@ dependencies = [
  "flamewm-render-compiler",
  "flamewm-session-core",
  "flamewm-ui-core",
+ "flamewm-ui-document",
  "flamewm-ui-x11",
  "flamewm-weather",
  "flamewm-widgets-core",
@@ -769,7 +770,9 @@ dependencies = [
  "flamewm-remote-fs",
  "flamewm-render-compiler",
  "flamewm-settings-core",
+ "flamewm-skin",
  "flamewm-ui-core",
+ "flamewm-ui-document",
  "flamewm-ui-x11",
  "inotify",
  "rustix 1.1.4",
@@ -984,6 +987,7 @@ dependencies = [
  "flamewm-shell-core",
  "flamewm-skin",
  "flamewm-ui-core",
+ "flamewm-ui-document",
  "flamewm-ui-x11",
  "flamewm-weather",
  "rustix 1.1.4",
@@ -1012,6 +1016,7 @@ dependencies = [
  "flamewm-dbus-reactor",
  "flamewm-render-compiler",
  "flamewm-ui-core",
+ "flamewm-ui-document",
  "flamewm-ui-x11",
 ]
 

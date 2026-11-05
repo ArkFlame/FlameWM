@@ -1,8 +1,8 @@
 use chrono::Local;
-use flamewm_api::settings::{SettingValue, SettingsSnapshot, DEFAULT_ACCENT_RGB};
 use flamewm_api::PanelEdge;
+use flamewm_api::settings::{DEFAULT_ACCENT_RGB, SettingValue, SettingsSnapshot};
 use flamewm_image_core::scale::ScaleFilter;
-use flamewm_image_core::{decode_bytes_at, ImageSourceFormat};
+use flamewm_image_core::{ImageSourceFormat, decode_bytes_at};
 use flamewm_platform::chrome::ACCENT_SOFT_ALPHA;
 use flamewm_skin::palette::Appearance;
 use flamewm_skin::shell_tones::FIXED_TONES;
@@ -13,7 +13,7 @@ use flamewm_ui_x11::surface_style::{
 };
 use flamewm_ui_x11::{RuntimeImage, SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
 
-use crate::projection::{project_clock_at, ClockDisplay, TaskbarItems};
+use crate::projection::{ClockDisplay, TaskbarItems, project_clock_at};
 
 /// Panel image node that carries the custom Start icon (`ui/shell/panel.html`).
 const START_ICON_ID: &str = "task-start-icon";
@@ -191,14 +191,10 @@ fn project_palette_tokens(
     ] {
         let _ = document.color_variable(name, rgb(color.0, 255));
     }
-    let overlays = flamewm_ui_core::glass::overlays_from_settings(snapshot);
-    for (name, overlay) in [
-        ("--rim", overlays.rim),
-        ("--hover-fill", overlays.hover),
-        ("--pressed-fill", overlays.pressed),
-    ] {
-        let _ = document.color_variable(name, rgb(overlay.color.0, overlay.alpha));
-    }
+    let _ = flamewm_ui_document::appearance_tokens::project_overlay_tokens(
+        document,
+        flamewm_ui_core::glass::overlays_from_settings(snapshot),
+    );
     let appearance = if flamewm_ui_core::glass::appearance_from_settings(snapshot).light {
         Appearance::Light
     } else {

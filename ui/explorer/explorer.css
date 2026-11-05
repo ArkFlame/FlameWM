@@ -1,22 +1,22 @@
 /* Colour variables are placeholders only: theme.rs overwrites every one from the live FlameWM settings snapshot before the
    first paint. The root fills once with the surface; panels draw nothing or a white wash, so no grey literal is painted. */
-:root { --accent:#00000000; --accent-soft:#00000030; --card:#00000000; --line:#00000000; --hover:#00000000; --menu:#00000000; --sidebar:#00000000; --text:#f1f2f3; --muted:#f1f2f3; }
+:root { --accent:#00000000; --accent-soft:#00000030; --card:#00000000; --line:#00000000; --hover:#00000000; --menu:#00000000; --sidebar:#00000000; --text:#f1f2f3; --muted:#f1f2f3; --hover-fill:#00000000; --pressed-fill:#00000000; --rim:#00000000; }
 /* Square root: the WM frame/XShape owns all rounding, the outline and the titlebar, which are drawn outside the
    client rect. The body starts at the client origin: main.rs sizes the flow children to the client height, so an
    extra top offset would push the status strip below the window. */
 body { position:absolute; top:0px; left:0px; right:0px; bottom:0px; margin:0; color:var(--text); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
 button { background:transparent; color:var(--text); cursor:default; font-size:13px; border-width:0px; padding:0px; display:flex; align-items:center; justify-content:center; }
-button:hover { background:var(--hover); }
-button:active { background:var(--hover); }
+button:hover { background:var(--hover-fill); }
+button:active { background:var(--pressed-fill); }
 
 /* Flow chrome: fixed heights so the list geometry in main.rs matches exactly. */
 .toolbar { width:100%; height:45px; flex-grow:0; padding:0 10px; display:flex; flex-direction:row; align-items:center; gap:6px; }
 .tool { height:30px; min-width:30px; padding:0 7px; border-radius:6px; }
-.tool:hover { background:var(--hover); }
+.tool:hover { background:var(--hover-fill); }
 .tool-ico { width:16px; height:16px; flex-grow:0; }
 .tool-sep { width:1px; height:20px; flex-grow:0; background:var(--line); margin:0 4px; }
 .field { height:30px; padding:0 9px; gap:8px; border-radius:6px; background:var(--card); border:1px solid var(--line); justify-content:flex-start; display:flex; flex-direction:row; align-items:center; overflow:hidden; }
-.field:hover { border-color:var(--accent); background:var(--hover); }
+.field:hover { border-color:var(--accent); background:var(--hover-fill); }
 .address { flex-grow:1; width:0; min-width:0px; }
 /* The layout engine has no flex-shrink, so the toolbar fields have fixed widths; main.rs hides them when the window is too narrow. */
 .search { width:150px; min-width:0px; flex-grow:0; color:var(--muted); }
@@ -75,7 +75,7 @@ button:active { background:var(--hover); }
 .menu-row { justify-content:flex-start; width:198px; height:31px; padding-left:11px; gap:9px; border-radius:3px; }
 /* Menu icons sit left of the label; the set is drawn in a fixed stroke colour (see icons/). */
 .menu-ico { width:16px; height:16px; flex-grow:0; }
-.menu-row:hover { background:var(--hover); }
+.menu-row:hover { background:var(--hover-fill); }
 
 .progress-popup { position:absolute; bottom:42px; right:18px; width:300px; height:132px; padding:13px; border:1px solid var(--rim); border-radius:11px; background:var(--menu); display:flex; flex-direction:column; gap:9px; }
 .progress-head { display:flex; flex-direction:row; align-items:center; justify-content:space-between; width:274px; }
@@ -94,18 +94,18 @@ button:active { background:var(--hover); }
 .dialog-line { font-size:12px; color:var(--muted); }
 .dialog-actions { display:flex; flex-direction:row; justify-content:flex-end; gap:6px; padding-top:8px; }
 .dialog-button { height:31px; padding:0 12px; border-radius:6px; }
-.dialog-button:hover { background:var(--hover); }
+.dialog-button:hover { background:var(--hover-fill); }
 
 .list-surface { position:absolute; }
 .selection-rectangle { position:absolute; background:transparent; border:2px solid var(--preview-outline); border-radius:3px; }
 
 /* Header dividers: 1px light overlay between cells, with a wider invisible grip centred on each line. */
-.col-sep { position:absolute; top:5px; width:1px; height:19px; background:#ffffff26; }
+.col-sep { position:absolute; top:5px; width:1px; height:19px; background:var(--pressed-fill); }
 .col-grip { position:absolute; top:0px; width:8px; height:29px; }
 /* Minimal scrollbar on the list's right edge: drawn only while entries overflow (see scroll.rs). */
 .scroll-track { position:absolute; width:10px; background:transparent; }
-.scroll-thumb { position:absolute; width:6px; border-radius:3px; background:#ffffff48; }
-.scroll-thumb:hover { background:#ffffff70; }
+.scroll-thumb { position:absolute; width:6px; border-radius:3px; background:var(--hover-fill); }
+.scroll-thumb:hover { background:var(--rim); }
 
 /* Native modal chooser: no new configuration or external GTK dialog. */
 .openwith-dialog { position:absolute; left:320px; top:108px; width:440px; height:466px; background:var(--menu); border:1px solid var(--line); border-radius:10px; display:flex; flex-direction:column; overflow:hidden; }

@@ -20,6 +20,8 @@ flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
 flamewm-profiler = { path = "../flamewm-profiler" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
+flamewm-ui-document = { path = "../flamewm-ui-document" }
+flamewm-skin = { path = "../flamewm-skin" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 flamewm-settings-core = { path = "../flamewm-settings-core" }
 flamewm-remote-fs = { path = "../flamewm-remote-fs" }
