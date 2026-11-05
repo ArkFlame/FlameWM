@@ -1,5 +1,5 @@
 use chrono::Local;
-use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_api::settings::{SettingValue, SettingsSnapshot, DEFAULT_ACCENT_RGB};
 use flamewm_api::PanelEdge;
 use flamewm_image_core::scale::ScaleFilter;
 use flamewm_image_core::{decode_bytes_at, ImageSourceFormat};
@@ -661,9 +661,9 @@ mod tests {
         let mut doc = RecordingUiDoc::default();
         project(&mut doc, &SettingsSnapshot::new(1), SurfaceKind::Start).expect("start projection");
         let accent = UiColor {
-            r: 0x53,
-            g: 0x9b,
-            b: 0xff,
+            r: (DEFAULT_ACCENT_RGB >> 16) as u8,
+            g: (DEFAULT_ACCENT_RGB >> 8) as u8,
+            b: DEFAULT_ACCENT_RGB as u8,
             a: 255,
         };
         assert_eq!(doc.variables["--accent"], accent);
@@ -1290,7 +1290,12 @@ mod tests {
         let transparent = accent_color(&snapshot);
         assert_eq!(
             (transparent.r, transparent.g, transparent.b, transparent.a),
-            (0x53, 0x9b, 0xff, 0)
+            (
+                (DEFAULT_ACCENT_RGB >> 16) as u8,
+                (DEFAULT_ACCENT_RGB >> 8) as u8,
+                DEFAULT_ACCENT_RGB as u8,
+                0
+            )
         );
 
         snapshot
