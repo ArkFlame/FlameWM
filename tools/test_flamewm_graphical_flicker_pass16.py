@@ -29,7 +29,7 @@ class GraphicalFlickerSourceContracts(unittest.TestCase):
             end=overlay.find('\n    fn ',start+4)
             if end == -1: end=len(overlay)
             self.assertIn('apply_content_mask',overlay[start:end],method)
-        self.assertIn('shape.apply_clipped_mask(self.window, &[], (0,0,0,0))',overlay)
+        self.assertIn('shape.apply_clipped_mask(self.window, &[], (0, 0, 0, 0))',overlay)  # rustfmt spacing
 
     def test_shape_required_and_open_fade_has_same_rounded_radius(self):
         overlay=src('crates/flamewm-render-x11/src/overlay.rs')
@@ -53,12 +53,14 @@ class GraphicalFlickerSourceContracts(unittest.TestCase):
         self.assertNotIn('id="maximize-style-magic-lamp"',html)
 
     def test_frame_geometry_commits_before_paint_in_resize(self):
-        controller=src('crates/flamewm-wm-x11/src/frame/controller.rs')
+        # Controller was split into a module tree; owners span it (tests excluded).
+        tree=ROOT/'crates/flamewm-wm-x11/src/frame/controller'
+        controller=src('crates/flamewm-wm-x11/src/frame/controller.rs')+''.join(p.read_text() for p in sorted(tree.rglob('*.rs')) if not p.name.startswith('tests'))
         block=controller.split('fn full_configure(',1)[1].split('fn move_effects',1)[0]
         self.assertLess(block.index('configure_effects(frame, extents)'),block.index('FrameEffect::PaintChrome'))
         block=controller.split('fn resize_step(',1)[1].split('pub fn reduce(',1)[0]
         self.assertIn('FrameEffect::PaintChrome, FrameEffect::ApplyShape',block)
-        self.assertIn('fn resize_motion_paints_after_native_resize_not_at_the_old_size',controller)
+        self.assertIn('fn resize_motion_paints_after_native_resize_not_at_the_old_size',''.join(p.read_text() for p in tree.rglob('*.rs')))
 
     def test_window_capture_gates_unpainted_client_interior(self):
         animation=src('crates/flamewm-wm-x11/src/animation.rs')
