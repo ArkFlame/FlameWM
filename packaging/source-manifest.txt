@@ -94,6 +94,18 @@ ui/
 @exec scripts/apply-pass30-cargo-layout
 
 @exec scripts/flamewm-nested-smoke
+@exec scripts/dev/check.sh
+@exec scripts/dev/env.sh
+@exec scripts/dev/slowest-tests.sh
+@exec scripts/dev/test-fast.sh
+@exec scripts/perf/app_wakes.sh
+@exec scripts/perf/blocking_audit.sh
+@exec scripts/perf/explorer_dir.sh
+@exec scripts/perf/explorer_thumbs.sh
+@exec scripts/perf/fm.sh
+@exec scripts/perf/settings_scenarios.py
+@exec scripts/perf/settings_session.sh
+@exec scripts/perf/startup.sh
 @exec tools/cpak_package.py
 @exec tools/test_bench_flamewm_memory_owners.py
 @exec tools/bench-flamewm-memory-owners.py
