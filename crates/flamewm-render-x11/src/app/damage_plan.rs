@@ -408,6 +408,16 @@ pub(crate) fn region_paint_enabled(desktop_role: bool, override_value: Option<&s
     }
 }
 
+/// Whether translucent fills and images may take the region path. A window backdrop snapshot that
+/// is absent or unchanged, and no surface backdrop, means nothing outside the window is sampled.
+pub(crate) fn region_translucent(
+    window_backdrop_present: bool,
+    window_backdrop_unchanged: bool,
+    surface_backdrop_present: bool,
+) -> bool {
+    (!window_backdrop_present || window_backdrop_unchanged) && !surface_backdrop_present
+}
+
 /// Smallest region that covers every command whose old or new form differs. Equal command
 /// lists give `None`. Pixels outside the region see the same sequence of covering commands
 /// in both lists, so they are unchanged.
@@ -931,6 +941,15 @@ mod tests {
 
     /// The desktop opts into region paint because its full-screen wallpaper is what made a moving
     /// selection marquee repaint every pixel; other surfaces keep the opt-in that protects them.
+    #[test]
+    fn translucent_gate_admits_desktop_without_window_backdrop() {
+        assert!(region_translucent(false, false, false), "no backdrop: desktop marquee");
+        assert!(region_translucent(true, true, false), "unchanged backdrop");
+        assert!(!region_translucent(true, false, false), "changed backdrop samples outside");
+        assert!(!region_translucent(false, false, true), "surface backdrop");
+    }
+
+    #[test]
     #[test]
     fn region_paint_defaults_follow_the_desktop_role_and_the_env_override() {
         assert!(region_paint_enabled(true, None), "desktop repaints locally");

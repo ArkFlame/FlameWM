@@ -8,7 +8,9 @@ fn partial_fill_clip(part: Rect, region: Option<Rect>) -> Option<Rect> {
         Some(region) => intersect(part, region),
     }
 }
-use super::damage_plan::{PixelRegion, RedrawPlan, RegionInput, command_bounds, plan_region_paint};
+use super::damage_plan::{
+    PixelRegion, RedrawPlan, RegionInput, command_bounds, plan_region_paint, region_translucent,
+};
 use flamewm_render_core::ImageTreatment;
 
 use super::gpu_frame::{self, FrameSource};
@@ -424,7 +426,13 @@ impl X11App {
                 backdrops: self.surface_backdrop.is_some()
                     || (self.window_backdrop_pixmap.is_some() && !backdrop_unchanged)
                     || !self.clip_stack.is_empty(),
-                translucent: backdrop_unchanged && self.surface_backdrop.is_none(),
+                // No window backdrop snapshot means nothing outside the window is sampled, so a
+                // translucent fill or image blends only over what the region repaint redraws.
+                translucent: region_translucent(
+                    self.window_backdrop_pixmap.is_some(),
+                    backdrop_unchanged,
+                    self.surface_backdrop.is_some(),
+                ),
                 interaction_only,
                 full_latched: force_full,
                 base_valid,
