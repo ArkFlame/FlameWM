@@ -33,7 +33,58 @@ Checks (worktree `/run/media/linsaftw/SDD/wt-desktopdefer`, `CARGO_TARGET_DIR=/r
 | `cargo check --workspace --all-targets` | 0 |
 | `python3 -I tools/architecture_guard.py` | 0 |
 
-Slider A/B: see the measurement section below (pending).
+### Measurement: glass-opacity slider drag, base vs new
+
+Setup: release builds of `flamewm-wm-wayland`, `flamewm-desktop`, `flamewm-shell`, `flamewm-settings`;
+base = `6d0caa60`, new = `30081712`. Nested session via `scripts/perf/settings_session.sh` (scratch copy with
+a descendant-aware process filter), Surfaces page, "Custom liquid glass" on, drag on the Glass opacity track
+(`--slider 588,768,588`), 60 motions per run. Three alternating base/new pairs. Desktop CPU was sampled from
+`/proc/<pid>/stat` (utime+stime, 100 Hz) over the 28 s window. Raw logs: `/run/media/linsaftw/SDD/scratch-desktopdefer/ab4/`.
+
+| metric (per run) | base run 1/2/3 | new run 1/2/3 | median base -> new |
+|---|---|---|---|
+| flamewm-desktop CPU | 0.54% / 0.57% / 0.57% | 0.04% / n.a. (pid restart) / 0.04% | 0.57% -> 0.04% (-93%) |
+| flamewm-desktop ctx switches/s | 0.6 / 0.6 / 0.6 | 0.3 / n.a. / 0.1 | 0.6 -> 0.3 |
+| whole session CPU (scenario total) | 100.8 / 101.5 / 100.6 | 101.4 / 107.0 / 102.2 | 100.8 -> 102.2 (+1.4%, noise) |
+
+Reading: the desktop process win is real and clears the 3% same-process bar. Whole-session CPU is dominated by
+`flamewm-wayland` (about 93 to 99% CPU during the drag), which the desktop does not own; no session-level
+change is measurable there.
+
+Evidence gaps:
+- The earlier baseline of desktop 73.6% CPU / 649 wakes/s (`scratch-settings-cpu/base`) did not reproduce on
+  current main: the base desktop used about 0.6% in this run. Cause not established (different build/harness state).
+- `settings_scenarios.py` `snap()` reported `flamewm-desktop` as all zero although the process ran in the nested
+  process group (confirmed with `ps`). Harness row unreliable for the desktop; numbers above come from `/proc` sampling.
+- Animation-speed slider (`--slider 588,768,296`, Animations page) also gives desktop about 0.6% in base: not a
+  meaningful desktop A/B. Not used.
+
+### Task 2: deferral candidates in the desktop process
+
+| candidate | finding | action |
+|---|---|---|
+| wallpaper decode/scale | Already on the `wallpaper_loader` worker thread (`wallpaper_loader.rs` `thread::Builder`), previous wallpaper shown until ready. | none needed |
+| icon / thumbnail loads | Already on the icon worker (`icons_pending` flag, `refresh_icon_theme` polls on UI tick). | none needed |
+| sticky persist | Already debounced (`PERSIST_DEBOUNCE`, `arm_persist_after`, `take_due`, retry with capped backoff) and wake-deadline driven. | none needed |
+| file-watcher bursts | inotify drains then sets one `dirty` flag per burst (`register_inotify`), with settle timing. Already coalesced. | none needed |
+| initial scan after first paint | Startup runs `rescan_with_grids` twice when `desktop-layout.state` exists. Collapsing to one scan changes placement: the first scan writes positions for unstored entries that the second scan keeps (`model.rs` rescan write-back). Semantics change, not kept. | evaluated, not changed |
+| settings wallpaper request | Gated by Task 1 (`wallpaper_settings_changed`). | done, `30081712` |
+
+Startup: `scripts/perf/startup.sh` does not list the desktop (apps: explorer, terminal, imageviewer, archiver,
+settings, task-manager, finder). Desktop time-to-first-paint was not measured. Not claimed as a win.
+
+## Checks (commit `30081712`, worktree `/run/media/linsaftw/SDD/wt-desktopdefer`)
+
+| command | exit |
+|---|---|
+| `cargo test -p flamewm-desktop --lib settings_change` | 0 (6 passed) |
+| `cargo test -p flamewm-desktop` | 0 (174 passed) |
+| `cargo check --workspace --all-targets` | 0 |
+| `python3 -I tools/architecture_guard.py` | 0 (77 ratified violations, existing) |
+| `cargo build --release -p flamewm-wm-wayland -p flamewm-desktop -p flamewm-shell -p flamewm-settings` (new and base) | 0 and 0 |
+
+Risks: the glass-drag win is measured on one page with 60 motions; wallpaper and icon paths were not run as
+runtime tests. Harness snap() defect above is unfixed.
 
 ## Explorer: directory listing (2026-11-05)
 
