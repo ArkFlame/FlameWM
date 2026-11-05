@@ -37,7 +37,7 @@ class Pass24Contracts(unittest.TestCase):
         # File opening shares the canonical startup-notified, child-reaping launcher.
         self.assertIn('spawn_with_startup(&mut command, &name, &icon, &wm_class, true)', apps)
         self.assertIn('spawn_reaped_with_id(command, if sent { id.clone() } else { None })', apps)
-        self.assertIn('open_target(path.as_os_str())', self.read('crates/flamewm-desktop/src/main.rs'))
+        self.assertIn('open_target(path.as_os_str())', self.read('crates/flamewm-desktop/src/events.rs'))
         self.assertIn('open_target(std::ffi::OsStr::new(uri))', self.read('crates/flamewm-x11-desktop/src/lib.rs'))
 
     def test_no_automatic_password_migration_or_wallet_wipe(self):
