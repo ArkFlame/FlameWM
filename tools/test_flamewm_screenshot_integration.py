@@ -25,7 +25,8 @@ class ScreenshotMergeChecks(unittest.TestCase):
         entries = tomllib.loads(read("Cargo.lock"))["package"]
         screenshot = [p for p in entries if p["name"] == "flamewm-screenshot"]
         self.assertEqual(len(screenshot), 1)
-        self.assertIn("x11rb", screenshot[0]["dependencies"])
+        # Cargo.lock qualifies a dependency with its version when several exist ("x11rb 0.14.0").
+        self.assertTrue(any(dep.split(" ")[0] == "x11rb" for dep in screenshot[0]["dependencies"]))
         self.assertIn("png", screenshot[0]["dependencies"])
 
     def test_concrete_x11_clipboard_request_limit_trait_is_imported(self):
@@ -58,7 +59,8 @@ class ScreenshotMergeChecks(unittest.TestCase):
         self.assertIn('Command::new("flamewm-screenshot")', wm)
 
     def test_settings_rows_and_registry_are_bound(self):
-        rust = read("crates/flamewm-settings/src/lib.rs")
+        # Hotkey rows moved from lib.rs into settings hotkeys.rs.
+        rust = read("crates/flamewm-settings/src/hotkeys.rs")
         html = read("ui/settings.html")
         for slot in ("shot-full", "shot-region", "shot-window"):
             with self.subTest(slot=slot):
@@ -73,9 +75,12 @@ class ScreenshotMergeChecks(unittest.TestCase):
         # existence check and the install loop. Every loop must carry the binaries.
         loops = re.findall(r"^\s*for binary in ([^;]*);\s*do\b", package, re.MULTILINE)
         self.assertGreaterEqual(len(loops), 2, "expected the release existence and install binary loops")
+        # flamewm-settings ships as a hard link to the flamewm-apps multi-call binary, not its own loop entry.
+        multicall = re.findall(r"^for application in ([^;]*);", package, re.MULTILINE)[0].split()
+        self.assertIn("flamewm-settings", multicall)
         for index, binaries in enumerate(loops):
             available = binaries.split()
-            for binary in ("flamewm-settings", "flamewm-screenshot", "flamewm-render-x11"):
+            for binary in ("flamewm-screenshot", "flamewm-render-x11"):
                 with self.subTest(loop=index, binary=binary):
                     self.assertIn(binary, available)
         for expected in (
@@ -96,7 +101,7 @@ class ScreenshotMergeChecks(unittest.TestCase):
 
     def test_pass41_compile_hotfix_remains_present(self):
         sticky = read("crates/flamewm-desktop/src/sticky.rs")
-        main = read("crates/flamewm-desktop/src/main.rs")
+        main = read("crates/flamewm-desktop/src/events.rs")
         self.assertIn("pointer_on_output", sticky)
         self.assertIn("grid_for_output(state, &output)", main)
         self.assertIn("let origin = grid_for_output(state, &output).cell_to_pixel(cell);", main)
