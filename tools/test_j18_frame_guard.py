@@ -5,8 +5,10 @@ Run: python3 tools/test_j18_frame_guard.py
 """
 from __future__ import annotations
 
+import re
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,11 +16,23 @@ sys.path.insert(0, str(ROOT / "tools"))
 import architecture_guard as g
 
 
-def make_root(files: dict[str, str]) -> Path:
+def guard_owner_paths() -> list[str]:
+    """Every file path literal the architecture guard may read as an owner."""
+    text = (ROOT / "tools/architecture_guard.py").read_text()
+    paths = re.findall(r'"((?:crates|tools|scripts)/[^"]+\.(?:rs|py|toml|sh))"', text)
+    return sorted(set(paths))
+
+
+def make_root(files: dict[str, str], live_owners: bool = False) -> Path:
     tmp = Path(tempfile.mkdtemp(prefix="j18-"))
-    # Owner files required by J11/J18 must exist; default them to empty.
+    # Owner files required by the guards must exist. Defaults are empty, or the live
+    # text when live_owners is set (J11 reads many unrelated owners as no-hit inputs).
     for rel in (*g.J18_GEOMETRY_OWNER_FILES, g.J11_FRAME_PATH_OWNER):
         files.setdefault(rel, "")
+    if live_owners:
+        for rel in guard_owner_paths():
+            live = ROOT / rel
+            files.setdefault(rel, live.read_text() if live.is_file() else "")
     for rel, text in files.items():
         p = tmp / rel
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -92,7 +106,7 @@ def check_architecture_guard_j11() -> None:
         '    "label"\n'
         "}\n"
     )
-    root = make_root({owner: owner_source, offender: comment_only})
+    root = make_root({owner: owner_source, offender: comment_only}, live_owners=True)
     found = g.j11_violations(root)
     assert not any(path == offender and cap == "j11-g01-move-resize-commits-geometry"
                    for path, cap in found), f"comment-only lifetime source must be accepted: {found}"
@@ -108,6 +122,26 @@ def check_architecture_guard_j11() -> None:
     assert not any(cap == "j11-g01-move-resize-commits-geometry" for _, cap in found), (
         f"canonical owner with commit_geometry and native move must be accepted: {found}"
     )
+
+
+class FrameGuardFixtures(unittest.TestCase):
+    def test_second_geometry_owner_rejected(self):
+        check_negative_second_geometry_owner()
+
+    def test_second_pointer_hit_owner_rejected(self):
+        check_negative_second_hit_owner()
+
+    def test_old_paint_and_raw_title_rejected(self):
+        check_negative_old_paint_and_raw_title()
+
+    def test_outer_geometry_write_rejected(self):
+        check_negative_outer_write()
+
+    def test_j11_move_resize_owner_cases(self):
+        check_architecture_guard_j11()
+
+    def test_live_tree_has_no_j18_violations(self):
+        self.assertFalse(g.j18_violations(ROOT))
 
 
 def main() -> int:
