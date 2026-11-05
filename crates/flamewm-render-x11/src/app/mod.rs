@@ -269,6 +269,9 @@ pub(crate) struct X11App {
     pub(crate) presented_size: Option<(u32, u32)>,
     /// Desktop surfaces only: the present serial last published on the root.
     pub(crate) published_desktop_frame: Option<u32>,
+    /// Root-relative origin of the window, reused across desktop publishes. Cleared by every
+    /// ConfigureNotify (a move always sends one); `None` means query on the next publish.
+    pub(crate) root_origin: Option<(i32, i32)>,
     /// Interned [`crate::backdrop::DESKTOP_FRAME_PROPERTY`]; 0 until first use.
     pub(crate) desktop_frame_atom: Atom,
     /// Stale backbuffer kept alive across resize until the replacement is
@@ -732,6 +735,7 @@ impl X11App {
             background_bound: 0,
             presented_size: None,
             published_desktop_frame: None,
+            root_origin: None,
             desktop_frame_atom: 0,
             retired_backbuffer: None,
             surface_backdrop: None,

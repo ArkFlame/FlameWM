@@ -450,6 +450,8 @@ impl X11App {
                     let _ = self.note_mapped();
                 }
                 CONFIGURE_NOTIFY => {
+                    // Any configure may be a move: the cached root origin is stale until re-queried.
+                    self.root_origin = None;
                     // Reconcile-only: adopt the WM-driven size into retained
                     // state (recreate backbuffer, mark Full, shape follows).
                     // No XMoveResizeWindow echo: the native move is owned by

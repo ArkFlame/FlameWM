@@ -1077,7 +1077,7 @@ impl X11App {
         Ok(true)
     }
 
-    /// Transparent ARGB scene clear: 0x00000000, never root_background/BLACK.
+/// Transparent ARGB scene clear: 0x00000000, never root_background/BLACK.
     pub(crate) fn clear_scene(&mut self) -> Result<(), String> {
         // Depth-32 ARGB scene: pixel 0 == 0x00000000 transparent clear.
         // Depth-24 has no alpha: 0x00000000 would be opaque black under the panel corners.
@@ -1137,18 +1137,29 @@ impl X11App {
         // The root origin is queried on every publish: the desktop can move (XMoveResizeWindow)
         // without its backbuffer or size changing, and readers would then sample the wrong rect.
         let root = unsafe { XRootWindow(self.display, self.screen) };
-        let (mut x, mut y, mut child) = (0, 0, 0);
-        unsafe {
-            crate::xlib_ext::XTranslateCoordinates(
-                self.display,
-                self.window,
-                root,
-                0,
-                0,
-                &mut x,
-                &mut y,
-                &mut child,
-            )
+        // A synchronous round trip per desktop frame. Skip it while the cached origin is current:
+        // every move arrives as a ConfigureNotify (which clears the cache), and queued events are
+        // drained first so a pending move is never missed.
+        let pending = unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } > 0;
+        let (x, y) = match root_origin_reuse(self.root_origin, pending) {
+            Some(origin) => origin,
+            None => {
+                let (mut x, mut y, mut child) = (0, 0, 0);
+                unsafe {
+                    crate::xlib_ext::XTranslateCoordinates(
+                        self.display,
+                        self.window,
+                        root,
+                        0,
+                        0,
+                        &mut x,
+                        &mut y,
+                        &mut child,
+                    )
+                };
+                self.root_origin = Some((x, y));
+                (x, y)
+            }
         };
         let serial = self
             .published_desktop_frame
@@ -2169,5 +2180,25 @@ mod partial_fill_clip_tests {
             partial_fill_clip(r(60.0, 85.0, 20.0, 5.0), Some(region)),
             None
         );
+    }
+}
+
+/// Cached root origin to reuse for a publish, or `None` when a fresh query is required.
+pub(crate) fn root_origin_reuse(cached: Option<(i32, i32)>, events_pending: bool) -> Option<(i32, i32)> {
+    if events_pending {
+        return None;
+    }
+    cached
+}
+
+#[cfg(test)]
+mod root_origin_tests {
+    use super::root_origin_reuse;
+
+    #[test]
+    fn cached_origin_is_reused_only_when_no_events_are_pending() {
+        assert_eq!(root_origin_reuse(Some((3, 4)), false), Some((3, 4)));
+        assert_eq!(root_origin_reuse(Some((3, 4)), true), None, "pending events force a query");
+        assert_eq!(root_origin_reuse(None, false), None, "no cache forces a query");
     }
 }
