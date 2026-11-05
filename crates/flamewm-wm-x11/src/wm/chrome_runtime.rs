@@ -70,7 +70,7 @@ impl ChromeRuntime {
         &mut self,
         identity: &ChromeIdentity,
         state: ChromeState,
-        icon: Option<IconImage>,
+        icon: Option<&IconImage>,
     ) -> &ChromeScene {
         let identity_changed = self.identity.as_ref() != Some(identity);
         let state_dirty = state_changed(self.state, state);
@@ -92,7 +92,7 @@ impl ChromeRuntime {
                 state.floating,
                 &state.tokens,
             );
-            self.scene = Some(with_icon(planned, icon));
+            self.scene = Some(with_icon(planned, icon.cloned()));
             self.identity = Some(identity.clone());
             self.state = Some(state);
             self.icon_present = self.scene.as_ref().is_some_and(|s| s.icon_present);
@@ -178,12 +178,12 @@ mod tests {
     #[test]
     fn catalog_icon_is_used_for_titlebar_slot_and_retained_across_rebuild() {
         let mut runtime = ChromeRuntime::new();
-        let scene = runtime.scene_for(&identity(), state(), Some(catalog_icon()));
+        let scene = runtime.scene_for(&identity(), state(), Some(&catalog_icon()));
         assert!(scene.icon_present, "catalog raster must reach the scene");
         assert_eq!(scene.icon.as_ref(), Some(&catalog_icon()));
 
         // Unchanged inputs reuse the cached scene and keep the raster.
-        let scene = runtime.scene_for(&identity(), state(), Some(catalog_icon()));
+        let scene = runtime.scene_for(&identity(), state(), Some(&catalog_icon()));
         assert!(scene.icon_present, "cached rebuild must keep the raster");
         assert_eq!(scene.icon.as_ref(), Some(&catalog_icon()));
 
@@ -191,7 +191,7 @@ mod tests {
         // still be carried from the cached raster the caller passes in.
         let mut hovered = state();
         hovered.hover = Some(FrameControl::Close);
-        let scene = runtime.scene_for(&identity(), hovered, Some(catalog_icon()));
+        let scene = runtime.scene_for(&identity(), hovered, Some(&catalog_icon()));
         assert!(scene.icon_present, "state rebuild must keep the raster");
         assert_eq!(scene.icon.as_ref(), Some(&catalog_icon()));
     }
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn missing_icon_clears_slot_only_when_caller_passes_none() {
         let mut runtime = ChromeRuntime::new();
-        runtime.scene_for(&identity(), state(), Some(catalog_icon()));
+        runtime.scene_for(&identity(), state(), Some(&catalog_icon()));
         let scene = runtime.scene_for(&identity(), state(), None);
         assert!(!scene.icon_present);
         assert!(scene.icon.is_none());

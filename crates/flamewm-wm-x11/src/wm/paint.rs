@@ -202,7 +202,7 @@ impl<C: Connection> Wm<'_, C> {
                         wm_instance: state.wm_instance.clone(),
                         wm_class: state.wm_class.clone(),
                     },
-                    state.icon.clone(),
+                    state.icon.as_ref(),
                     state.frame,
                     state.outer,
                 )
