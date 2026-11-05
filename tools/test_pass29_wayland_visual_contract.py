@@ -9,6 +9,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 def source(path):
     return (ROOT / path).read_text()
 
+def wayland_render_source():
+    """wm-wayland render owner, split from render.rs into render/*.rs."""
+    base = ROOT / 'crates/flamewm-wm-wayland/src/render'
+    return '\n'.join(p.read_text() for p in sorted(base.glob('*.rs')))
+
 class WaylandVisualContract(unittest.TestCase):
     def test_nested_matches_xephyr_viewport_and_has_override(self):
         w = source('crates/flamewm-wm-wayland/src/main.rs')
@@ -23,7 +28,7 @@ class WaylandVisualContract(unittest.TestCase):
 
     def test_titlebar_uses_skin_and_not_solid_rgb_squares(self):
         model = source('crates/flamewm-wm-wayland/src/model.rs')
-        render = source('crates/flamewm-wm-wayland/src/render.rs')
+        render = wayland_render_source()
         self.assertIn(re.sub(r'\s+', '', 'flamewm_skin::recipes::window_chrome::WINDOW_CHROME.metrics.titlebar'), re.sub(r'\s+', '', model))
         self.assertIn(re.sub(r'\s+', '', 'MemoryRenderBuffer::from_slice'), re.sub(r'\s+', '', render))
         self.assertIn(re.sub(r'\s+', '', 'Fourcc::Argb8888'), re.sub(r'\s+', '', render))
@@ -39,10 +44,15 @@ class WaylandVisualContract(unittest.TestCase):
         self.assertIn('_compositor_owner: Some(owner)', x.replace('self._compositor_owner = Some(owner)', '_compositor_owner: Some(owner)'))
         self.assertIn(re.sub(r'\s+', '', 'props.claim_compositor()'), re.sub(r'\s+', '', x))
 
-    def test_buffer_age_egl_query_removed_in_nested_path(self):
-        render = source('crates/flamewm-wm-wayland/src/render.rs')
-        self.assertNotIn('backend.buffer_age()', '\n'.join(line for line in render.splitlines() if not line.lstrip().startswith('//')))
-        self.assertIn(re.sub(r'\s+', '', 'let age = 0;'), re.sub(r'\s+', '', render))
+    def test_buffer_age_egl_query_is_latched_not_per_frame(self):
+        # Nested winit EGL refuses BUFFER_AGE every frame; the refusal is latched and
+        # the frame falls back to a full repaint (age 0) instead of re-querying.
+        render = wayland_render_source()
+        code = '\n'.join(line for line in render.splitlines() if not line.lstrip().startswith('//'))
+        self.assertEqual(code.count('backend.buffer_age()'), 1)
+        self.assertIn(re.sub(r'\s+', '', 'static BUFFER_AGE_REFUSED: AtomicBool'), re.sub(r'\s+', '', render))
+        self.assertIn(re.sub(r'\s+', '', 'BUFFER_AGE_REFUSED.store(true'), re.sub(r'\s+', '', render))
+        self.assertIn(re.sub(r'\s+', '', 'if BUFFER_AGE_REFUSED.load'), re.sub(r'\s+', '', render))
 
     def test_single_output_alias_never_guesses_on_multiple_outputs(self):
         host = source('crates/flamewm-platform/src/host.rs')
