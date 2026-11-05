@@ -547,11 +547,11 @@ impl SurfaceRuntime {
         surface: SurfaceHandle,
         node: u32,
     ) -> Result<flamewm_render_core::Rect, UiBackendError> {
-        let document = self.document_mut(surface)?;
-        default_layout(document)
-            .boxes
-            .get(node as usize)
-            .map(|entry| entry.rect)
+        self.controller
+            .with_document_text_measure(surface.0, |document| {
+                default_layout(document).boxes.get(node as usize).map(|entry| entry.rect)
+            })
+            .map_err(UiBackendError::Document)?
             .ok_or_else(|| UiBackendError::Document(format!("node {node} has no layout box")))
     }
 
@@ -720,8 +720,12 @@ impl SurfaceRuntime {
         &mut self,
         surface: SurfaceHandle,
     ) -> Result<(f32, f32), UiBackendError> {
-        let document = self.document_mut(surface)?;
-        let extent = default_layout(document).content_extent(document.document.root);
+        let extent = self
+            .controller
+            .with_document_text_measure(surface.0, |document| {
+                default_layout(document).content_extent(document.document.root)
+            })
+            .map_err(UiBackendError::Document)?;
         Ok((extent.width.max(0.0), extent.height.max(0.0)))
     }
 }

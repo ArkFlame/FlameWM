@@ -37,7 +37,11 @@ pub fn char_width(font_size: f32) -> f32 {
 /// Advance measure `(text, size_px, weight) -> px` supplied by the paint backend.
 pub type MeasureFn<'a> = &'a dyn Fn(&str, f32, u16) -> f32;
 
+/// CSS `font-weight: normal`, the weight a node without an explicit weight uses.
+pub const REGULAR_WEIGHT: u16 = 400;
+
 thread_local! {
+    static UNSCOPED_MEASURES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static MEASURE_HOOK: std::cell::Cell<Option<MeasureFn<'static>>> =
         const { std::cell::Cell::new(None) };
 }
@@ -63,13 +67,22 @@ pub fn with_measure<R>(measure: MeasureFn<'_>, f: impl FnOnce() -> R) -> R {
 
 /// Layout width of `text` at `font_size`, measured by the installed hook when one is set, else by
 /// the render-core fontdue model, else by the per-char estimate.
-fn text_width(text: &str, font_size: f32) -> f32 {
-    // Layout does not know the node's weight yet; 400 is the regular weight the paint defaults to.
+fn text_width(text: &str, font_size: f32, weight: u16) -> f32 {
     if let Some(measure) = MEASURE_HOOK.with(std::cell::Cell::get) {
-        return measure(text, font_size, 400);
+        return measure(text, font_size, weight);
     }
+    UNSCOPED_MEASURES.with(|count| count.set(count.get() + 1));
     glyphs::advance_width(text, font_size)
         .unwrap_or_else(|| text.chars().count() as f32 * char_width(font_size))
+}
+
+/// Number of layout measures taken without a scoped backend measure on this thread.
+///
+/// A backend that must match its paint (X11 Xft) scopes every layout with [`with_measure`]; a
+/// rising count there means a layout entry point skipped its scope.
+#[must_use]
+pub fn unscoped_measure_count() -> u64 {
+    UNSCOPED_MEASURES.with(std::cell::Cell::get)
 }
 
 /// Lay out text to an available width.
@@ -83,6 +96,19 @@ fn text_width(text: &str, font_size: f32) -> f32 {
 pub fn layout_text(
     text: &str,
     font_size: f32,
+    avail_width: f32,
+    wrap: TextWrap,
+    break_anywhere: bool,
+) -> TextLayout {
+    layout_text_weighted(text, font_size, REGULAR_WEIGHT, avail_width, wrap, break_anywhere)
+}
+
+/// [`layout_text`] for a node's font weight, so the installed measure sees the weight paint uses.
+#[must_use]
+pub fn layout_text_weighted(
+    text: &str,
+    font_size: f32,
+    weight: u16,
     avail_width: f32,
     wrap: TextWrap,
     break_anywhere: bool,
@@ -102,14 +128,14 @@ pub fn layout_text(
         if collapsed.is_empty() {
             lines.push(TextLine::default());
         } else if wrap == TextWrap::NoWrap && avail_ok {
-            push_measured(&mut lines, collapsed, size);
+            push_measured(&mut lines, collapsed, size, weight);
         } else if break_anywhere {
-            push_chunks(&mut lines, &collapsed, size, avail_width);
+            push_chunks(&mut lines, &collapsed, size, avail_width, weight);
         } else {
             // Greedy word fill; overlong or degenerate-avail tokens char-split.
             let mut current = String::new();
             let mut current_w = 0.0f32;
-            let space_w = text_width(" ", size);
+            let space_w = text_width(" ", size, weight);
             let flush = |current: &mut String, current_w: &mut f32, lines: &mut Vec<TextLine>| {
                 if !current.is_empty() {
                     lines.push(TextLine {
@@ -120,10 +146,10 @@ pub fn layout_text(
                 *current_w = 0.0;
             };
             for word in collapsed.split(' ') {
-                let word_w = text_width(word, size);
+                let word_w = text_width(word, size, weight);
                 if !avail_ok || word_w > avail_width {
                     flush(&mut current, &mut current_w, &mut lines);
-                    push_chunks(&mut lines, word, size, avail_width);
+                    push_chunks(&mut lines, word, size, avail_width, weight);
                     continue;
                 }
                 let candidate = if current.is_empty() {
@@ -160,16 +186,22 @@ pub fn layout_text(
     }
 }
 
-fn push_measured(lines: &mut Vec<TextLine>, text: String, font_size: f32) {
+fn push_measured(lines: &mut Vec<TextLine>, text: String, font_size: f32, weight: u16) {
     lines.push(TextLine {
-        width: text_width(&text, font_size),
+        width: text_width(&text, font_size, weight),
         text,
     });
 }
 
-fn push_chunks(lines: &mut Vec<TextLine>, text: &str, font_size: f32, avail_width: f32) {
+fn push_chunks(
+    lines: &mut Vec<TextLine>,
+    text: &str,
+    font_size: f32,
+    avail_width: f32,
+    weight: u16,
+) {
     for chunk in char_chunks(text, font_size, avail_width) {
-        push_measured(lines, chunk, font_size);
+        push_measured(lines, chunk, font_size, weight);
     }
 }
 
@@ -279,6 +311,34 @@ mod tests {
     fn nowrap_keeps_single_line_per_paragraph() {
         let layout = layout_text("a b c\nd e", 10.0, 1.0, TextWrap::NoWrap, false);
         assert_eq!(texts(&layout), vec!["a b c", "d e"]);
+    }
+
+    #[test]
+    fn bold_layout_passes_its_weight_to_the_measure() {
+        let seen = std::cell::RefCell::new(Vec::new());
+        let fake = |_: &str, size: f32, weight: u16| {
+            seen.borrow_mut().push(weight);
+            size
+        };
+        let bold = with_measure(&fake, || {
+            layout_text_weighted("Save", 13.0, 700, 1000.0, TextWrap::NoWrap, false).lines[0].width
+        });
+        assert!((bold - 13.0).abs() < 1e-4);
+        assert!(seen.borrow().iter().all(|&weight| weight == 700), "{:?}", seen.borrow());
+    }
+
+    #[test]
+    fn scoped_layout_leaves_the_unscoped_counter_unchanged() {
+        let before = unscoped_measure_count();
+        let fake = |text: &str, size: f32, _: u16| text.len() as f32 * size;
+        with_measure(&fake, || {
+            layout_text("scoped text", 13.0, 1000.0, TextWrap::NoWrap, false);
+        });
+        assert_eq!(unscoped_measure_count(), before, "scoped layout must not count as unscoped");
+        if glyphs::advance_width("x", 13.0).is_some() {
+            layout_text("unscoped text", 13.0, 1000.0, TextWrap::NoWrap, false);
+            assert!(unscoped_measure_count() > before, "unscoped layout must be counted");
+        }
     }
 
     #[test]

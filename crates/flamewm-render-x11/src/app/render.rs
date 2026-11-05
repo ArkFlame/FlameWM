@@ -362,18 +362,20 @@ impl X11App {
                     && key.viewport == layout_key.viewport
                     && key.scale_bits == layout_key.scale_bits
             });
+            // Layout widths are measured by this surface's Xft backend (same measure as paint).
+            self.ensure_xft();
+            let interaction = self.interaction;
             let patched = same_base
-                && self
-                    .layout
-                    .as_mut()
-                    .is_some_and(|layout| document.patch_layout(layout, self.interaction));
+                && super::xft::scoped_text_measure(self.xft.as_mut(), || {
+                    self.layout
+                        .as_mut()
+                        .is_some_and(|layout| document.patch_layout(layout, interaction))
+                });
             if !patched {
-                let layout = LayoutEngine::compute(
-                    document,
-                    self.width as f32 / scale,
-                    self.height as f32 / scale,
-                    self.interaction,
-                );
+                let (width, height) = (self.width as f32 / scale, self.height as f32 / scale);
+                let layout = super::xft::scoped_text_measure(self.xft.as_mut(), || {
+                    LayoutEngine::compute(document, width, height, interaction)
+                });
                 self.layout = Some(layout);
                 if let Some(layout) = self.layout.as_mut() {
                     super::scroll::fit_scroll_extents(layout, document, self.interaction);

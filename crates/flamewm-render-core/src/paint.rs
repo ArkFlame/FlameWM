@@ -192,9 +192,10 @@ pub fn build_paint_commands_with_scroll(
                 if color.a != 0 {
                     let text = document.text_for(index as u32);
                     if !text.is_empty() {
-                        let laid = crate::text_layout::layout_text(
+                        let laid = crate::text_layout::layout_text_weighted(
                             text,
                             style.font_size,
+                            style.font_weight,
                             rect.width.max(0.0),
                             style.text_wrap,
                             style.break_anywhere,

@@ -426,9 +426,10 @@ impl<'a> Engine<'a> {
         }
         if node.kind == NodeKind::Text {
             let text = self.document.text_for(index);
-            let laid = crate::text_layout::layout_text(
+            let laid = crate::text_layout::layout_text_weighted(
                 text,
                 style.font_size,
+                style.font_weight,
                 avail_w,
                 style.text_wrap,
                 style.break_anywhere,
