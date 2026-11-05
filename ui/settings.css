@@ -72,7 +72,6 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .display-output small { color:var(--muted); font-size:10px; white-space:nowrap; overflow:hidden; }
 .display-output em { flex-grow:0; width:3px; height:26px; display:block; background:var(--accent); }
 .display-output .display-state-unselected { background:var(--control-edge); }
-.display-card .setting-block { min-height:37px; }
 .scale-setting { flex-grow:1; display:flex; align-items:center; justify-content:flex-end; gap:12px; }
 #display-scale-track { cursor:ew-resize; height:32px; }
 #display-scale-track .slider-rail { top:13px; }

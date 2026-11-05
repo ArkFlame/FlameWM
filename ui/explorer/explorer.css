@@ -33,7 +33,6 @@ button:active { background:var(--hover); }
 .place { justify-content:flex-start; flex-grow:1; min-width:0; height:30px; padding:0 8px; gap:10px; display:flex; flex-direction:row; align-items:center; overflow:hidden; white-space:nowrap; border-radius:6px; }
 .place-ico { width:16px; height:16px; flex-grow:0; }
 .place-label { flex-grow:1; min-width:0; overflow:hidden; white-space:nowrap; }
-.place-dot { width:6px; height:6px; flex-grow:0; border-radius:3px; background:var(--accent); margin:0 4px 0 2px; }
 .place-act { width:26px; height:26px; flex-grow:0; border-radius:5px; }
 .act-ico { width:14px; height:14px; flex-grow:0; }
 .sort-ico { width:10px; height:10px; flex-grow:0; margin-left:4px; }

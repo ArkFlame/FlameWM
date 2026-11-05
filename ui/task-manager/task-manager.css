@@ -70,7 +70,6 @@ button.head:hover { background:var(--card); }
 .status { color:var(--accent); flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; font-size:11px; }
 .hint { color:var(--muted); font-size:10px; white-space:nowrap; }
 
-.dangerous { color:#ff858d; }
 .confirm { left:380px; top:300px; width:340px; padding:12px; gap:10px; }
 .confirm-note { color:var(--muted); padding-left:8px; }
 .confirm-actions { width:100%; height:32px; display:flex; flex-direction:row; justify-content:flex-end; gap:8px; }

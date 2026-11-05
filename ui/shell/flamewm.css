@@ -61,7 +61,6 @@ input { cursor:text; }
 .toggle-on div, .toggle-off div { width:18px; height:18px; background:white; border-radius:9px; }
 .toggle-off { width:40px; height:22px; padding:2px; background:#555a5f; border-radius:11px; display:flex; align-items:center; }.display-layout { width:100%; height:146px; padding:12px; display:flex; align-items:flex-end; gap:12px; background:#181a1c; border:1px solid var(--rim); border-radius:6px; }
 .display-monitor { flex-grow:1; height:118px; padding:9px; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:4px; background:#232629; border:2px solid var(--rim); border-radius:6px; }
-.selected-monitor { border-color:var(--accent); }
 .monitor-screen { width:150px; height:72px; position:relative; background:#050607; border:1px solid var(--rim); border-radius:3px; }
 .wide-screen { width:165px; }
 .monitor-window { position:absolute; left:28px; top:12px; width:72px; height:36px; background:#2a2d31; border:1px solid var(--rim); }
@@ -161,7 +160,7 @@ input { cursor:text; }
 .wifi-row { width:100%; min-height:42px; padding:4px 7px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:3px; cursor:default; }
 .wifi-row:hover { background:var(--accent-soft); }.wifi-status { color:#9fa6ac; font-size:10px; margin-top:2px; }
 .network-slots { width:100%; display:flex; flex-direction:column; gap:2px; }
-.audio-row, .network-actions, .popup-tabs { width:100%; display:flex; align-items:center; gap:6px; }
+.audio-row { width:100%; display:flex; align-items:center; gap:6px; }
 .audio-list { width:100%; max-height:220px; display:flex; flex-direction:column; gap:2px; overflow-x:hidden; overflow-y:auto; }
 .network-slots { width:100%; max-height:180px; display:flex; flex-direction:column; gap:2px; overflow-x:hidden; overflow-y:auto; }
 .network-connected { width:100%; display:flex; flex-direction:column; gap:2px; }
