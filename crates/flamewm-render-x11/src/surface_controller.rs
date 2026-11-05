@@ -1011,37 +1011,6 @@ impl SurfaceController {
             .map_err(|error| error.to_string())
     }
 
-    pub fn run_with_reactor<F, R>(
-        &mut self,
-        reactor: &mut Reactor,
-        mut on_action: F,
-        mut on_tick: R,
-    ) -> Result<(), String>
-    where
-        F: FnMut(&SurfaceControllerEvent, &mut RuntimeDocument) -> Result<(), String>,
-        R: FnMut(&mut Self) -> Result<(), String>,
-    {
-        let token = self.register_x_wakeup(reactor)?;
-        loop {
-            reactor
-                .dispatch(self.motion_frame_timeout())
-                .map_err(|error| error.to_string())?;
-            let drained = self.pump_events(&mut on_action)?;
-            self.advance_motion(Instant::now());
-            if self.surfaces.is_empty() {
-                break;
-            }
-            // Timer sources registered by the caller also wake dispatch, so
-            // tick callbacks always run; redraws follow drained X events.
-            on_tick(self)?;
-            if drained > 0 {
-                self.redraw_dirty()?;
-            }
-        }
-        reactor.remove(token).map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
     /// Dispatch one reactor cycle and return typed events after document callbacks finish.
     ///
     /// The UI bridge uses this boundary to apply surface operations without exposing the

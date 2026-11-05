@@ -25,19 +25,6 @@ pub fn root_geometry() -> Result<(u32, u32), String> {
     }
 }
 
-pub fn run_with_controller_events<F>(
-    document: RuntimeDocument,
-    config: X11Config,
-    mut on_event: F,
-) -> Result<(), String>
-where
-    F: FnMut(&ControllerEvent, &mut RuntimeDocument) -> Result<(), String>,
-{
-    run_with_controller(document, config, move |event, document| {
-        on_event(&ControllerEvent::Action(event.clone()), document)
-    })
-}
-
 /// Requested outer geometry (root-relative position and client size) for the
 /// single app window. Applied by the X11 event loop on its next reactor wake.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,29 +53,6 @@ pub struct RawPress {
 /// Host request for the root press observer, written by the host's callbacks
 /// and read by the X11 event loop on each turn. `true` arms the observer.
 pub type RawPressWatch = std::rc::Rc<std::cell::Cell<bool>>;
-
-pub fn run_with_controller_events_with_reactor<F, R>(
-    document: RuntimeDocument,
-    config: X11Config,
-    reactor: &mut Reactor,
-    on_event: F,
-    on_reactor: R,
-) -> Result<(), String>
-where
-    F: FnMut(&ControllerEvent, &mut RuntimeDocument) -> Result<(), String>,
-    R: FnMut(&mut RuntimeDocument) -> Result<(), String>,
-{
-    run_with_controller_events_with_reactor_geometry(
-        document,
-        config,
-        reactor,
-        WindowGeometrySlot::default(),
-        RawPressWatch::default(),
-        on_event,
-        |_, _| Ok(()),
-        on_reactor,
-    )
-}
 
 #[allow(clippy::too_many_arguments)]
 pub fn run_with_controller_events_with_reactor_geometry<F, P, R>(
