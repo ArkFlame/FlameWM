@@ -23,6 +23,22 @@ fn wait_ready(adapter: &PulseAdapter) -> Option<AudioSnapshot> {
     None
 }
 
+/// Polls the snapshot until `done` holds or the deadline passes; returns the last snapshot seen.
+/// Waits on the observed state instead of a fixed sleep, so a fast server does not pay the sleep.
+fn wait_until(
+    adapter: &PulseAdapter,
+    done: impl Fn(&AudioSnapshot) -> bool,
+) -> AudioSnapshot {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let snap = adapter.snapshot();
+        if done(&snap) || Instant::now() >= deadline {
+            return snap;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn restore(adapter: &PulseAdapter, target: AudioTarget, volume: u8, muted: bool) {
     let snap = adapter.snapshot();
     let _ = adapter.set_volume(AudioVolumeAction {
@@ -31,15 +47,14 @@ fn restore(adapter: &PulseAdapter, target: AudioTarget, volume: u8, muted: bool)
         generation: snap.generation,
         server_generation: snap.server_generation,
     });
-    std::thread::sleep(Duration::from_millis(200));
-    let snap = adapter.snapshot();
+    let snap = wait_until(adapter, |s| s.volume_percent == volume);
     let _ = adapter.set_mute(AudioMuteAction {
         target,
         muted,
         generation: snap.generation,
         server_generation: snap.server_generation,
     });
-    std::thread::sleep(Duration::from_millis(200));
+    wait_until(adapter, |s| s.muted == muted);
 }
 
 #[test]
@@ -135,8 +150,9 @@ fn pulse_provider_stress() {
 
     // Finally path: always restore original volume+mute, even on failure.
     restore(&adapter, last_target, orig_volume, orig_muted);
-    std::thread::sleep(Duration::from_millis(400));
-    let after = adapter.snapshot();
+    let after = wait_until(&adapter, |s| {
+        s.volume_percent == orig_volume && s.muted == orig_muted
+    });
     let restored_ok = after.volume_percent == orig_volume && after.muted == orig_muted;
 
     println!("PULSE_STRESS completed_ops={completed}/{TOTAL_OPS}");
