@@ -211,6 +211,7 @@ mod tests {
             }),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         };
         RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,

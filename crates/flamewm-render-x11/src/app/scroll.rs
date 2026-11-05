@@ -572,6 +572,7 @@ mod tests {
             style: style.into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         };
         RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,
@@ -691,6 +692,7 @@ mod tests {
             style: root.into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         }];
         let count = rows * slots;
         for pool in 0..count {
@@ -723,6 +725,7 @@ mod tests {
                 style: style.into(),
                 hover_style: Some(hover.into()),
                 active_style: None,
+                focus_style: None,
             });
         }
         let mut doc = RuntimeDocument::new(CompiledDocument {

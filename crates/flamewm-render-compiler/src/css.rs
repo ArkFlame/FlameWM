@@ -5,6 +5,8 @@ pub enum PseudoState {
     Base,
     Hover,
     Active,
+    /// `:focus-visible` (and `:focus`): keyboard focus only.
+    Focus,
     Root,
 }
 
@@ -322,6 +324,7 @@ fn parse_compound(input: &str) -> Result<ParsedCompound, String> {
                 state = match value {
                     "hover" => PseudoState::Hover,
                     "active" => PseudoState::Active,
+                    "focus" | "focus-visible" => PseudoState::Focus,
                     "root" => PseudoState::Root,
                     _ => return Err(format!("unsupported pseudo-class ':{value}'")),
                 };

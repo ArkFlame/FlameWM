@@ -913,6 +913,7 @@ mod tests {
             style: Style::default().into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         }
     }
 
@@ -949,6 +950,7 @@ mod tests {
                     style: root_style.into(),
                     hover_style: None,
                     active_style: None,
+                    focus_style: None,
                 },
                 CompiledNode {
                     kind: NodeKind::Element,
@@ -962,6 +964,7 @@ mod tests {
                     style: left.into(),
                     hover_style: None,
                     active_style: None,
+                    focus_style: None,
                 },
                 CompiledNode {
                     kind: NodeKind::Element,
@@ -975,6 +978,7 @@ mod tests {
                     style: right.into(),
                     hover_style: None,
                     active_style: None,
+                    focus_style: None,
                 },
                 text_node(1, None, "left"),
             ],
@@ -1049,6 +1053,7 @@ mod tests {
                 style: root_style.into(),
                 hover_style: None,
                 active_style: None,
+                focus_style: None,
             }],
         })
         .unwrap()
@@ -1084,6 +1089,7 @@ mod tests {
                     style: root_style.into(),
                     hover_style: None,
                     active_style: None,
+                    focus_style: None,
                 },
                 CompiledNode {
                     kind: NodeKind::Element,
@@ -1097,6 +1103,7 @@ mod tests {
                     style: child_style.into(),
                     hover_style: None,
                     active_style: None,
+                    focus_style: None,
                 },
             ],
         })
@@ -1132,6 +1139,7 @@ mod tests {
                     style: wrapper_style.into(),
                     hover_style: None,
                     active_style: None,
+                    focus_style: None,
                 },
                 CompiledNode {
                     kind: NodeKind::Element,
@@ -1145,6 +1153,7 @@ mod tests {
                     style: popup_style.into(),
                     hover_style: None,
                     active_style: None,
+                    focus_style: None,
                 },
             ],
         })
@@ -1203,6 +1212,7 @@ mod tests {
             style: style.into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         };
         let px = |w: f32, h: f32| Style {
             width: Length::Px(w),

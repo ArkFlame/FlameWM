@@ -28,6 +28,8 @@ pub struct CompiledNode {
     /// Shared and optional: most nodes have no interaction styles.
     pub hover_style: Option<Arc<Style>>,
     pub active_style: Option<Arc<Style>>,
+    /// Applied while keyboard focus sits on this node (`:focus-visible`).
+    pub focus_style: Option<Arc<Style>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

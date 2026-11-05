@@ -2070,6 +2070,7 @@ mod layout_reuse_tests {
                 style: Style::default().into(),
                 hover_style: None,
                 active_style: None,
+                focus_style: None,
             }],
         })
         .expect("fixture document validates")

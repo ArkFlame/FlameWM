@@ -26,6 +26,7 @@ pub(crate) fn compiled_node(id: &str, kind: NodeKind) -> CompiledNode {
         style: Style::default().into(),
         hover_style: None,
         active_style: None,
+        focus_style: None,
     }
 }
 

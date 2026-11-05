@@ -166,7 +166,7 @@ impl RuntimeDocument {
 
     /// Whether a pure geometry override on `index` leaves its parent's layout untouched.
     /// Only absolutely positioned non-root nodes qualify; hover/active styles must not
-    /// change position either.
+    /// change position either. Focus styles follow the same rule.
     pub(super) fn geometry_is_isolated(&self, index: u32) -> bool {
         let node = &self.document.nodes[index as usize];
         node.parent.is_some()
@@ -177,6 +177,10 @@ impl RuntimeDocument {
                 .is_none_or(|style| style.position == Position::Absolute)
             && node
                 .active_style
+                .as_ref()
+                .is_none_or(|style| style.position == Position::Absolute)
+            && node
+                .focus_style
                 .as_ref()
                 .is_none_or(|style| style.position == Position::Absolute)
     }

@@ -93,6 +93,10 @@ fn encode_version(document: &CompiledDocument, version: u16) -> Result<Vec<u8>, 
         writer.style(&node.style, version);
         writer.opt_style(node.hover_style.as_deref(), version);
         writer.opt_style(node.active_style.as_deref(), version);
+        // v9-only field: pre-v9 layouts have no focus-style flag.
+        if version > FORMAT_VERSION_FOCUS_LEGACY {
+            writer.opt_style(node.focus_style.as_deref(), version);
+        }
     }
 
     Ok(writer.bytes)
@@ -120,6 +124,7 @@ fn decode_with(bytes: &[u8], borrow: Option<&'static [u8]>) -> Result<CompiledDo
     // rejected explicitly; no silent reinterpretation of pixel bytes.
     let bytes_per_pixel: u32 = match version {
         FORMAT_VERSION
+        | FORMAT_VERSION_FOCUS_LEGACY
         | FORMAT_VERSION_BLUR_LEGACY
         | FORMAT_VERSION_SHADOW_LEGACY
         | FORMAT_VERSION_TEXT_WRAP_LEGACY
@@ -208,6 +213,11 @@ fn decode_with(bytes: &[u8], borrow: Option<&'static [u8]>) -> Result<CompiledDo
         let style = reader.shared_style(version, &mut styles)?;
         let hover_style = reader.opt_shared_style(version, &mut styles)?;
         let active_style = reader.opt_shared_style(version, &mut styles)?;
+        let focus_style = if version > FORMAT_VERSION_FOCUS_LEGACY {
+            reader.opt_shared_style(version, &mut styles)?
+        } else {
+            None
+        };
         nodes.push(CompiledNode {
             kind,
             parent,
@@ -220,6 +230,7 @@ fn decode_with(bytes: &[u8], borrow: Option<&'static [u8]>) -> Result<CompiledDo
             style,
             hover_style,
             active_style,
+            focus_style,
         });
     }
 
@@ -643,6 +654,7 @@ mod tests {
                 style: Style::default().into(),
                 hover_style: None,
                 active_style: None,
+                focus_style: None,
             }],
         };
         let bytes = encode(&document).unwrap();
@@ -674,6 +686,7 @@ mod tests {
                 style: Style::default().into(),
                 hover_style: None,
                 active_style: None,
+                focus_style: None,
             }],
         };
         let bytes: &'static [u8] = Box::leak(encode(&document).unwrap().into_boxed_slice());
@@ -743,10 +756,10 @@ mod tests {
     fn unknown_version_is_rejected_explicitly() {
         let document = roundtrip_node(ImageTreatment::Original);
         let mut bytes = encode(&document).unwrap();
-        bytes[4..6].copy_from_slice(&9u16.to_le_bytes());
-        let error = decode(&bytes).expect_err("version 9 must fail");
+        bytes[4..6].copy_from_slice(&10u16.to_le_bytes());
+        let error = decode(&bytes).expect_err("version 10 must fail");
         assert!(
-            error.contains("unsupported FlameWM Render format version 9"),
+            error.contains("unsupported FlameWM Render format version 10"),
             "unexpected: {error}"
         );
     }
@@ -773,6 +786,7 @@ mod tests {
                 style: style.into(),
                 hover_style: None,
                 active_style: None,
+                focus_style: None,
             }],
         }
     }
@@ -828,7 +842,7 @@ mod tests {
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_RGBA8_LEGACY.to_le_bytes());
         // v6 adds one shadow-presence byte in addition to the v5
         // treatment+wrap+break fields. Strip four bytes for v3.
-        assert_eq!(FORMAT_VERSION, 8);
+        assert_eq!(FORMAT_VERSION, 9);
         let tail = bytes.len() - 6;
         bytes.drain(tail..tail + 4);
         let decoded = decode(&bytes).unwrap();
@@ -846,7 +860,7 @@ mod tests {
     fn v4_style_decodes_with_wrap_defaults() {
         let document = roundtrip_node(ImageTreatment::SymbolicForeground);
         let mut bytes = encode_pre_v8(&document);
-        assert_eq!(FORMAT_VERSION, 8);
+        assert_eq!(FORMAT_VERSION, 9);
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_TREATMENT_LEGACY.to_le_bytes());
         // Strip v5 wrap+break and v6 shadow flag after treatment.
         let tail = bytes.len() - 5;
@@ -917,7 +931,7 @@ mod tests {
     fn v2_style_decodes_with_original_treatment_and_overflow_defaults() {
         let document = roundtrip_node(ImageTreatment::Original);
         let mut bytes = encode_pre_v8(&document);
-        assert_eq!(FORMAT_VERSION, 8);
+        assert_eq!(FORMAT_VERSION, 9);
         // Convert to v2: strip treatment, wrap, break, shadow, and two
         // overflow bytes from the single-node style.
         let style_tail = bytes.len() - 8;
@@ -945,13 +959,27 @@ mod tests {
     fn v7_style_decodes_without_hide_scrollbars() {
         let mut document = roundtrip_node(ImageTreatment::Original);
         std::sync::Arc::make_mut(&mut document.nodes[0].style).hide_scrollbars = true;
-        let mut bytes = encode(&document).unwrap();
-        bytes[4..6].copy_from_slice(&FORMAT_VERSION_BLUR_LEGACY.to_le_bytes());
-        // The v7 layout has no hide-scrollbars byte, and it sits immediately
-        // before the text-shadow flag on this one-node default-style fixture.
-        let at = bytes.len() - 4;
-        bytes.remove(at);
+        // encode_version at v7 writes the v7 layout, which has no hide-scrollbars byte.
+        let bytes = encode_pre_v8(&document);
         let decoded = decode(&bytes).unwrap();
         assert!(!decoded.nodes[0].style.hide_scrollbars);
+    }
+
+    #[test]
+    fn v9_roundtrip_preserves_focus_style() {
+        let mut document = roundtrip_node(ImageTreatment::Original);
+        document.nodes[0].focus_style = Some(std::sync::Arc::new(Style::default()));
+        let decoded = decode(&encode(&document).unwrap()).unwrap();
+        assert!(decoded.nodes[0].focus_style.is_some());
+        assert_eq!(decoded, document);
+    }
+
+    #[test]
+    fn v8_document_decodes_without_focus_style() {
+        let document = roundtrip_node(ImageTreatment::Original);
+        let bytes = encode_version(&document, FORMAT_VERSION_FOCUS_LEGACY).unwrap();
+        let decoded = decode(&bytes).unwrap();
+        assert!(decoded.nodes[0].focus_style.is_none());
+        assert_eq!(decoded, document);
     }
 }

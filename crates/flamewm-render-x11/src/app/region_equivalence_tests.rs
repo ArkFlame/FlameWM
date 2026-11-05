@@ -32,6 +32,7 @@ fn fixture() -> RuntimeDocument {
             style: style.into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         }
     };
     let child = |left: f32, top: f32, border: f32| Style {
@@ -231,6 +232,7 @@ fn text_fixture() -> RuntimeDocument {
         style: style.into(),
         hover_style: None,
         active_style: None,
+        focus_style: None,
     };
     let text = CompiledNode {
         kind: NodeKind::Text,
@@ -246,6 +248,7 @@ fn text_fixture() -> RuntimeDocument {
         style: Style::default().into(),
         hover_style: None,
         active_style: None,
+        focus_style: None,
     };
     let absolute = |left: f32, top: f32, width: f32, height: f32| Style {
         position: Position::Absolute,
@@ -551,6 +554,7 @@ fn image_fixture() -> RuntimeDocument {
             style: style.into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         }
     };
     let absolute = |left: f32, top: f32, width: f32, height: f32| Style {
@@ -753,6 +757,7 @@ fn bench_fixture() -> RuntimeDocument {
         .into(),
         hover_style: None,
         active_style: None,
+        focus_style: None,
     }];
     let mut parents = vec![None];
     let push = |nodes: &mut Vec<CompiledNode>,
@@ -777,6 +782,7 @@ fn bench_fixture() -> RuntimeDocument {
             style: style.into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         };
     let absolute = |left: f32, top: f32, width: f32, height: f32| Style {
         position: Position::Absolute,

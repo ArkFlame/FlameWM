@@ -89,6 +89,7 @@ fn document() -> RuntimeDocument {
             style: Style::default().into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         }],
     })
     .expect("single-node fixture validates")

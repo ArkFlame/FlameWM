@@ -68,6 +68,7 @@ fn node(kind: NodeKind, id: &str, text: &str, parent: Option<u32>, first_child: 
         style: Arc::new(Style::default()),
         hover_style: None,
         active_style: None,
+        focus_style: None,
     }
 }
 

@@ -377,6 +377,7 @@ mod shape_tests {
             style: style.into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         };
         RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,
@@ -438,6 +439,7 @@ mod node_backdrop_tests {
             style: style.into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         }
     }
 

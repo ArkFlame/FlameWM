@@ -13,6 +13,7 @@ fn fixture_node(kind: NodeKind, id: &str, text: &str, image: Option<u16>) -> Com
         style: Style::default().into(),
         hover_style: None,
         active_style: None,
+        focus_style: None,
     }
 }
 

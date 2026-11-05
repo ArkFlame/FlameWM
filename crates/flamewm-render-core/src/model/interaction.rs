@@ -139,6 +139,8 @@ impl RuntimeDocument {
 pub struct InteractionState {
     pub hover: Option<u32>,
     pub active: Option<u32>,
+    /// Keyboard focus owner; applies `focus_style` when set.
+    pub focus: Option<u32>,
 }
 
 impl InteractionState {
@@ -146,6 +148,11 @@ impl InteractionState {
         node.active_style
             .as_deref()
             .filter(|_| self.active == Some(index))
+            .or_else(|| {
+                node.focus_style
+                    .as_deref()
+                    .filter(|_| self.focus == Some(index))
+            })
             .or_else(|| {
                 node.hover_style
                     .as_deref()

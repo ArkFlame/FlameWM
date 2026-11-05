@@ -167,7 +167,7 @@ fn parse_text_shadow(value: &str, variables: &HashMap<String, u16>) -> Result<Op
 /// Built-in accent tokens, seeded before any sheet `:root` so a sheet can override them by name.
 /// The accent tints are derived once here instead of repeated as literals in every sheet. Live
 /// Settings overwrite `--accent` at runtime; the tints keep their default alpha steps.
-fn builtin_color_tokens() -> [(&'static str, Color); 9] {
+fn builtin_color_tokens() -> [(&'static str, Color); 10] {
     let accent = flamewm_api::settings::DEFAULT_ACCENT_RGB;
     let tint = |alpha: u8| Color {
         r: (accent >> 16) as u8,
@@ -185,6 +185,7 @@ fn builtin_color_tokens() -> [(&'static str, Color); 9] {
         ("--desktop-hover-border", tint(0x4d)),
         ("--desktop-selected", tint(0x47)),
         ("--desktop-selected-border", tint(0xa6)),
+        ("--focus-ring", tint(0xff)),
     ]
 }
 
@@ -268,6 +269,7 @@ impl<'a> Compiler<'a> {
                 style: style.into(),
                 hover_style: None,
                 active_style: None,
+                focus_style: None,
             });
             return Ok(node_index);
         }
@@ -275,8 +277,10 @@ impl<'a> Compiler<'a> {
         let base = self.compute_style(source_index, inherited, PseudoState::Base)?;
         let hover = self.compute_style(source_index, inherited, PseudoState::Hover)?;
         let active = self.compute_style(source_index, inherited, PseudoState::Active)?;
+        let focus = self.compute_style(source_index, inherited, PseudoState::Focus)?;
         let hover_style = (hover != base).then_some(hover);
         let active_style = (active != base).then_some(active);
+        let focus_style = (focus != base).then_some(focus);
         let id = source.attrs.get("id").cloned().unwrap_or_default();
         let action = source.attrs.get("data-action").cloned().unwrap_or_default();
         let (kind, image) = if source.tag == "img" {
@@ -301,6 +305,7 @@ impl<'a> Compiler<'a> {
             style: base.clone().into(),
             hover_style: hover_style.map(Into::into),
             active_style: active_style.map(Into::into),
+            focus_style: focus_style.map(Into::into),
         });
 
         let mut first_child = None;
@@ -1441,5 +1446,35 @@ mod tests {
         let visible: usize = asset.pixels.chunks_exact(4).filter(|p| p[3] > 8).count();
         assert!(visible > 100, "expected readable icon, visible={visible}");
         assert!(count_near(&asset.pixels, [0x19, 0x7c, 0xf1], 64) > 20);
+    }
+
+    #[test]
+    fn focus_visible_and_focus_compile_to_focus_style() {
+        let html = r#"<body><button id="a">A</button><button id="b">B</button><button id="c">C</button></body>"#;
+        let css = "#a:focus-visible { border-color: #ff0000; } #b:focus { border-color: #00ff00; }";
+        let output = compile_str(html, css, CompileOptions::default()).unwrap();
+        let focus_of = |id: &str| {
+            output
+                .document
+                .nodes
+                .iter()
+                .find(|node| node.id == id)
+                .unwrap()
+                .focus_style
+                .is_some()
+        };
+        assert!(focus_of("a"));
+        assert!(focus_of("b"));
+        assert!(!focus_of("c"));
+    }
+
+    #[test]
+    fn focus_ring_token_is_builtin_accent_derived() {
+        let output = compile_body("<body><button id='a'>A</button></body>");
+        assert!(output
+            .document
+            .variables
+            .iter()
+            .any(|variable| variable.name == "--focus-ring"));
     }
 }

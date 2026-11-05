@@ -15,6 +15,7 @@ fn rows_document(rows: &[(String, Style)]) -> RuntimeDocument {
         style: Style::default().into(),
         hover_style: None,
         active_style: None,
+        focus_style: None,
     }];
     for (i, (text, style)) in rows.iter().enumerate() {
         let row = 1 + 2 * i as u32;
@@ -31,6 +32,7 @@ fn rows_document(rows: &[(String, Style)]) -> RuntimeDocument {
             style: style.clone().into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         });
         nodes.push(CompiledNode {
             kind: NodeKind::Text,
@@ -44,6 +46,7 @@ fn rows_document(rows: &[(String, Style)]) -> RuntimeDocument {
             style: Style::default().into(),
             hover_style: None,
             active_style: None,
+            focus_style: None,
         });
     }
     RuntimeDocument::new(CompiledDocument {
@@ -76,6 +79,7 @@ fn geometry_node(
         style: style.into(),
         hover_style: None,
         active_style: None,
+        focus_style: None,
     }
 }
 

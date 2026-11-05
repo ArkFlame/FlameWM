@@ -23,7 +23,8 @@ pub const FORMAT_MAGIC: [u8; 4] = *b"RWRB";
 /// identical RGBA8 without that byte. Version 2 documents carry opaque
 /// RGB8 assets; the codec upconverts them to RGBA8 with alpha=255 so PPM
 /// build inputs keep working.
-pub const FORMAT_VERSION: u16 = 8;
+pub const FORMAT_VERSION: u16 = 9;
+pub const FORMAT_VERSION_FOCUS_LEGACY: u16 = 8;
 pub const FORMAT_VERSION_BLUR_LEGACY: u16 = 7;
 pub const FORMAT_VERSION_SHADOW_LEGACY: u16 = 6;
 pub const FORMAT_VERSION_TEXT_WRAP_LEGACY: u16 = 5;

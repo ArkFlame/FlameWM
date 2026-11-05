@@ -34,6 +34,7 @@ fn node(
         style: style.into(),
         hover_style: None,
         active_style: None,
+        focus_style: None,
     }
 }
 
