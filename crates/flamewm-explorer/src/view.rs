@@ -94,7 +94,14 @@ pub fn typeahead_match(names: &[&str], prefix: &str, from: usize) -> Option<usiz
     }
     (0..len)
         .map(|step| (from + step) % len)
-        .find(|&i| names[i].to_lowercase().starts_with(&prefix))
+        .find(|&i| starts_with_lowercase(names[i], &prefix))
+}
+
+/// `name.to_lowercase().starts_with(prefix)` without allocating a lowercase copy of every name.
+/// `prefix` must already be lowercase. Typeahead runs this over the whole listing on each keystroke.
+fn starts_with_lowercase(name: &str, prefix: &str) -> bool {
+    let mut lowered = name.chars().flat_map(char::to_lowercase);
+    prefix.chars().all(|expected| lowered.next() == Some(expected))
 }
 
 /// Byte count as a short label with binary units (B, KiB, MiB, ...).
@@ -346,6 +353,24 @@ mod tests {
         assert_eq!(typeahead_match(&names, "a", 1), Some(0));
         assert_eq!(typeahead_match(&names, "z", 0), None);
         assert_eq!(typeahead_match(&names, "", 0), None);
+    }
+
+    #[test]
+    fn starts_with_lowercase_matches_allocating_form() {
+        for (name, prefix) in [
+            ("Apple", "ap"),
+            ("Apple", "apple!"),
+            ("ÉCOLE", "éc"),
+            ("straße", "straß"),
+            ("x", ""),
+            ("", "a"),
+        ] {
+            assert_eq!(
+                starts_with_lowercase(name, prefix),
+                name.to_lowercase().starts_with(prefix),
+                "{name:?} vs {prefix:?}"
+            );
+        }
     }
 
     #[test]

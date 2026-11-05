@@ -167,14 +167,20 @@ impl Application {
             })
             .map(|(index, _)| index)
             .collect();
-        hits.sort_unstable_by(|&a, &b| {
-            let a = &self.snapshot.processes[a];
-            let b = &self.snapshot.processes[b];
+        // Name keys are lowercased once per process per sort, not twice per comparison.
+        let lower_names: Vec<String> = if self.sort == Sort::Name {
+            self.snapshot.processes.iter().map(|p| p.name.to_lowercase()).collect()
+        } else {
+            Vec::new()
+        };
+        hits.sort_unstable_by(|&ai, &bi| {
+            let a = &self.snapshot.processes[ai];
+            let b = &self.snapshot.processes[bi];
             let order = match self.sort {
                 Sort::Cpu => a.cpu.total_cmp(&b.cpu),
                 Sort::Memory => a.rss_kib.cmp(&b.rss_kib),
                 Sort::Pid => a.pid.cmp(&b.pid),
-                Sort::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                Sort::Name => lower_names[ai].cmp(&lower_names[bi]),
             };
             let order = if self.descending {
                 order.reverse()
@@ -995,6 +1001,22 @@ pub fn run() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn name_sort_is_case_insensitive_with_pid_tiebreak() {
+        let proc = |pid: u32, name: &str| {
+            let mut p = model::Process::default();
+            p.pid = pid;
+            p.name = name.into();
+            p
+        };
+        let (actions, _rx) = std::sync::mpsc::sync_channel(1);
+        let mut app = Application::new(SettingsSnapshot::new(0), actions);
+        app.snapshot.processes = vec![proc(3, "bash"), proc(1, "Zed"), proc(2, "apple"), proc(4, "Apple")];
+        app.sort = Sort::Name;
+        app.descending = false;
+        let names: Vec<u32> = app.sorted().into_iter().map(|i| app.snapshot.processes[i].pid).collect();
+        assert_eq!(names, vec![2, 4, 3, 1]);
+    }
     #[test]
     fn memory_progress_is_bounded_in_all_cases() {
         assert_eq!(fraction_width(200, 100, 240), 240.0);

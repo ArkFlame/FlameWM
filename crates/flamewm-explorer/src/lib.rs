@@ -83,7 +83,8 @@ pub fn list_directory(dir: &Path, show_hidden: bool, sort: SortBy) -> io::Result
     }
     entries.sort_by(|a,b| {
         b.directory.cmp(&a.directory).then_with(|| match sort {
-            SortBy::Name => a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()),
+            // `lower_name` is computed once per entry; lowercasing inside the comparator allocated per compare.
+            SortBy::Name => a.lower_name.cmp(&b.lower_name),
             SortBy::Size => a.size.cmp(&b.size),
             SortBy::Modified => b.modified.cmp(&a.modified),
         }).then_with(|| a.name.cmp(&b.name))
