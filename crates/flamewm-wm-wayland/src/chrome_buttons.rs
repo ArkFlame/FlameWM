@@ -8,7 +8,7 @@ use flamewm_skin::recipes::window_chrome::WindowControlRole;
 use flamewm_skin::recipes::window_control::{ControlKind, ControlState, control_colors};
 
 use crate::model::Button;
-use crate::render::{packaged_root, put};
+use crate::render::{packaged_root, put, titlebar_ink};
 
 /// Pointer feedback for the titlebar controls: the button under the pointer, and the one held down.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -44,11 +44,7 @@ pub(crate) fn paint_control(
         feedback.hover == Some(button),
         feedback.pressed == Some(button),
     );
-    let colors = control_colors(
-        control_kind(button),
-        state,
-        flamewm_skin::palette::Palette::RWR_0_0_9,
-    );
+    let colors = control_colors(control_kind(button), state, titlebar_ink());
     let half = edge as i32 / 2;
     if let Some(fill) = colors.background {
         let radius = edge as f32 / 2.0;

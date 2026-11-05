@@ -756,6 +756,7 @@ pub(super) fn chrome_pixels_over(
     let right_occupied = width.saturating_sub(slot);
     let available = chrome::title_available_width(0, right_occupied, chrome::TITLE_PAD);
     let alpha = if active { 230 } else { 166 };
+    let ink_rgb = titlebar_ink().text.0;
     let px = (TITLEBAR_HEIGHT as f32 * 0.42).max(8.0);
     let drawn = crate::font::with_glyphs(px, |glyph_of| {
         let visible = chrome::elide_title(title, available, |c| glyph_of(c).advance);
@@ -776,7 +777,7 @@ pub(super) fn chrome_pixels_over(
                 // Never paint into the controls strip, whatever the glyph overhang.
                 if gx < right_occupied {
                     let a = (u32::from(*coverage) * u32::from(alpha) / 255) as u8;
-                    put(&mut out, w, h, gx, gy, GLYPH, a);
+                    put(&mut out, w, h, gx, gy, ink_rgb, a);
                 }
             }
             pen += glyph.advance;
@@ -799,7 +800,7 @@ pub(super) fn chrome_pixels_over(
                             h,
                             start_x + i as i32 * 6 + x,
                             baseline + y as i32,
-                            GLYPH,
+                            ink_rgb,
                             alpha,
                         );
                     }

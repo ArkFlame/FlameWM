@@ -136,6 +136,33 @@ mod tests {
         }
     }
 
+    /// Surfaces that receive `project_appearance_tokens` must declare every token it writes: an
+    /// undeclared name rejects the whole projection, so the sheet keeps Dark text on Light glass.
+    #[test]
+    fn projecting_sheets_declare_every_text_and_overlay_token() {
+        const SETTINGS_CSS: &str = include_str!("../../../ui/settings.css");
+        const PROJECTED: [&str; 6] = [
+            "--text",
+            "--text-secondary",
+            "--muted",
+            "--rim",
+            "--hover-fill",
+            "--pressed-fill",
+        ];
+        for (name, css) in [
+            ("task-manager", TASK_MANAGER_CSS),
+            ("desktop", DESKTOP_CSS),
+            ("settings", SETTINGS_CSS),
+        ] {
+            let root = css.lines().find(|line| line.starts_with(":root")).unwrap_or("");
+            let missing: Vec<&str> = PROJECTED
+                .into_iter()
+                .filter(|token| !root.contains(&format!("{token}:")))
+                .collect();
+            assert_eq!(missing, Vec::<&str>::new(), "{name}");
+        }
+    }
+
     #[test]
     fn hover_and_pressed_rules_read_overlay_tokens() {
         // Hover and pressed fills must come from the appearance overlays, never a white literal.

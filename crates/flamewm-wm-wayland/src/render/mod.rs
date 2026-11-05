@@ -56,7 +56,13 @@ const SURFACE: u32 = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB.0;
 const SURFACE_ALPHA: u8 = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_ALPHA;
 /// Blur radius at 100% surface blur. Same value as the X11 `MAX_BLUR_RADIUS_PX` (render-x11).
 const MAX_BLUR_RADIUS_PX: f32 = 24.0;
-const GLYPH: u32 = flamewm_skin::palette::TEXT.0;
+/// Title and control ink for the titlebar material this backend paints (`SURFACE`), picked by
+/// contrast like the X11 frame (`ChromeTokens::ink`). The material is the shipped Dark glass, so
+/// this is the Dark palette until a Light titlebar material reaches the Wayland chrome.
+pub(crate) fn titlebar_ink() -> flamewm_skin::palette::Palette {
+    flamewm_skin::palette::ink_palette_on(flamewm_skin::palette::Rgb(SURFACE))
+}
+
 const BORDER: u32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME.border.0;
 
 /// Keep one premultiplied ARGB bitmap per managed window. No raster work or allocations on
@@ -438,6 +444,17 @@ fn write_ppm(
 #[cfg(test)]
 mod decoration_tests {
     use super::*;
+
+    #[test]
+    fn titlebar_ink_is_the_contrast_pick_for_the_painted_material() {
+        // The bar paints `SURFACE` (shipped Dark glass), so its title and control ink is the Dark
+        // palette, chosen by the same shared owner as the X11 frame.
+        assert_eq!(
+            titlebar_ink(),
+            flamewm_skin::palette::ink_palette_on(flamewm_skin::palette::Rgb(SURFACE))
+        );
+        assert_eq!(titlebar_ink(), flamewm_skin::palette::Palette::RWR_0_0_9);
+    }
 
     #[test]
     fn chrome_uses_skin_height_and_rounded_alpha() {

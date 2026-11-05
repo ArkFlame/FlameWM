@@ -901,6 +901,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         // the same owner the desktop, Explorer and Task Manager use.
         if let Some(snapshot) = self.client.settings() {
             flamewm_ui_x11::project_appearance_tokens(document, snapshot)?;
+            flamewm_ui_x11::project_nav_row_tokens(document, snapshot)?;
         }
         self.sync_option_setting(
             document,

@@ -458,8 +458,23 @@ Dark values are unchanged in the default case: `ChromeTokens::ink()` on the ship
 - `cargo test -p flamewm-wm-x11`: 494 pass, 3 fail. The same 3 tests fail on clean `origin/main` (`chrome::tests::full_opacity_surface_color_wins_over_titlebar_color_setting`, `live_settings::tests::{missing,invalid}_accent_*`). They are not caused by Pass 12.
 - New regression tests: `palette::ink_follows_the_surface_it_sits_on`, `window_control::light_ink_inverts_min_and_max_against_dark_text`, `appearance_tokens::light_text_secondary_follows_the_light_ink`.
 
-### Not done
+### Pass 12 follow-up (coder-ui12)
 
-- Wayland titlebar (`flamewm-wm-wayland/src/render/titlebar.rs`, `GLYPH` `TEXT` and `chrome_buttons.rs`) still paints Dark ink. It does not receive the titlebar material, so the same `ChromeTokens::ink()` needs threading there. Light titlebars under Wayland stay unfixed.
-- `settings.css` `.nav-row:hover` and `:active` keep hard-coded white overlays (`#ffffff12`, `#ffffff1f`). On Light glass they are invisible. The `--hover-fill` token exists now and can replace them, but that changes Dark.
+Fixed:
+
+| Defect | Owner | Fix |
+| --- | --- | --- |
+| Wayland title and control ink was fixed `RWR_0_0_9` / `TEXT`. | `flamewm-wm-wayland/src/render/mod.rs` `titlebar_ink()` | Ink is `ink_palette_on(SURFACE)`, the same contrast owner as `ChromeTokens::ink`, for the material the bar paints. `chrome_buttons.rs` and `titlebar.rs` use it. Hover and pressed fills unchanged. |
+| Settings nav hover and press were hard white (`#ffffff12`, `#ffffff1f`), invisible on Light. | `flamewm-ui-document/src/appearance_tokens.rs` `nav_row_token_values`, `project_nav_row_tokens`; `flamewm-settings` sync | `--nav-hover` and `--nav-pressed` are projected per appearance. Dark keeps `#ffffff12` / `#ffffff1f`; Light is black `0x14` / `0x26`. `settings.css` `.nav-row` reads them. |
+| Task Manager and Desktop rejected the appearance projection: their `:root` lacked `--text-secondary` (and Settings lacked `--rim`). Task Manager printed `no color variable named '--text-secondary'` and kept Dark text on Light. | `ui/task-manager/task-manager.css`, `ui/desktop/desktop.css`, `ui/settings.css` `:root` | Dark values declared (`--text-secondary:#f1f2f3d9`, `--rim:#ffffff7f`). Regression: `css_contract::tests::projecting_sheets_declare_every_text_and_overlay_token`. |
+
+Dark: the Wayland ink is the Dark palette because the bar paints the shipped `#333333` glass. Nav fills keep their Dark alphas. The Desktop and Task Manager `:root` values equal the projected Dark values.
+
+Task Manager Light (`scripts/ui/light_shots.sh light`, debug binaries, `/run/media/linsaftw/SDD/shots/coder-ui12/tm-only/`): the title and name text are legible. PID, User, Status and Threads (`--muted` = `#434a52`) are faint: the rows sit on blurred dark wallpaper (sampled `#5b6182` to `#716c87`), so contrast is about 1.6:1 for muted and 2.9:1 for names. Cause: Light glass over a dark wallpaper, not the ink owner. Not changed here: a glass or wallpaper decision affects every Light surface.
+
+Not done:
+
+- Light Wayland titlebar: the Wayland chrome has no appearance input and always paints `#333333` glass, so no Light titlebar reaches `titlebar_ink()` yet. Thread the appearance material into `render/mod.rs` `SURFACE` to finish.
+- Settings nav hover on Light: token and CSS are in place, but no screenshot of the hovered state was taken.
+- Task Manager Light muted contrast over dark wallpaper (above).
 - Dark Explorer dot-file names (`.agents`) use `.name-dim` = `--muted` by design (dot-file dimming), not a focus defect.

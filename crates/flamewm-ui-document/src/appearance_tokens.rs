@@ -71,6 +71,35 @@ pub fn project_overlay_tokens(
     Ok(())
 }
 
+/// Settings nav-row fills (`--nav-hover`, `--nav-pressed`). Dark keeps the shipped 7% and 12%
+/// white; Light uses black at the same weight, because white vanishes on light glass.
+#[must_use]
+pub fn nav_row_token_values(light: bool) -> [(&'static str, UiColor); 2] {
+    if light {
+        [
+            ("--nav-hover", color(Rgb(0), 0x14)),
+            ("--nav-pressed", color(Rgb(0), 0x26)),
+        ]
+    } else {
+        [
+            ("--nav-hover", color(Rgb(0x00ff_ffff), 0x12)),
+            ("--nav-pressed", color(Rgb(0x00ff_ffff), 0x1f)),
+        ]
+    }
+}
+
+/// Writes the settings nav-row fills for the snapshot's appearance. Only documents that declare
+/// `--nav-hover` and `--nav-pressed` call this.
+pub fn project_nav_row_tokens(
+    document: &mut impl UiDocumentAccess,
+    snapshot: &SettingsSnapshot,
+) -> Result<(), String> {
+    for (name, value) in nav_row_token_values(glass::appearance_from_settings(snapshot).light) {
+        document.color_variable(name, value)?;
+    }
+    Ok(())
+}
+
 /// Writes the text tokens. Surfaces whose text is not appearance-driven skip this.
 pub fn project_text_tokens(
     document: &mut impl UiDocumentAccess,
@@ -94,6 +123,16 @@ pub fn project_appearance_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nav_row_fills_keep_the_dark_alphas_and_go_black_on_light() {
+        let dark = nav_row_token_values(false);
+        assert_eq!(dark[0].1, color(Rgb(0x00ff_ffff), 0x12));
+        assert_eq!(dark[1].1, color(Rgb(0x00ff_ffff), 0x1f));
+        let light = nav_row_token_values(true);
+        assert_eq!(light[0].1, color(Rgb(0), 0x14));
+        assert_eq!(light[1].1, color(Rgb(0), 0x26));
+    }
     use flamewm_skin::palette::{Appearance, check_overlay_contrast};
 
     fn value(values: &[(&str, UiColor)], name: &str) -> UiColor {
