@@ -26,6 +26,7 @@ class BuildGateTests(unittest.TestCase):
                 'const ID: &str = "entry.convert";\nfn go() { offered_formats(); convert_file(); }\n',
             'crates/flamewm-desktop-core/Cargo.toml': '[package]\nname = "flamewm-desktop-core"\n',
             'crates/flamewm-desktop-core/src/lib.rs': 'pub mod file_actions;\n',
+            'crates/flamewm-conversion-core/Cargo.toml': '[package]\nname = "flamewm-conversion-core"\n',
             'crates/flamewm-conversion-core/src/lib.rs': 'pub mod conversion;\n',
             'crates/flamewm-desktop-core/src/file_actions.rs':
                 'pub enum EntryMenuAction { Convert, }\n'
@@ -57,14 +58,18 @@ class BuildGateTests(unittest.TestCase):
         return {
             'workspace_root': str(root),
             'target_directory': str(root / '.target'),
-            'workspace_members': ['p-core', 'p-desktop'],
+            'workspace_members': ['p-core', 'p-conv', 'p-desktop'],
             'packages': [
                 {'name': 'flamewm-desktop-core', 'id': 'p-core',
                  'manifest_path': str(root/'crates/flamewm-desktop-core/Cargo.toml'),
                  'targets': [{'kind': ['lib'], 'src_path': str(root/'crates/flamewm-desktop-core/src/lib.rs')}]},
+                {'name': 'flamewm-conversion-core', 'id': 'p-conv',
+                 'manifest_path': str(root/'crates/flamewm-conversion-core/Cargo.toml'),
+                 'targets': [{'kind': ['lib'], 'src_path': str(root/'crates/flamewm-conversion-core/src/lib.rs')}]},
                 {'name': 'flamewm-desktop', 'id': 'p-desktop',
                  'manifest_path': str(root/'crates/flamewm-desktop/Cargo.toml'),
-                 'dependencies': [{'name': 'flamewm-desktop-core', 'path': str(root/'crates/flamewm-desktop-core')}],
+                 'dependencies': [{'name': 'flamewm-desktop-core', 'path': str(root/'crates/flamewm-desktop-core')},
+                                  {'name': 'flamewm-conversion-core', 'path': str(root/'crates/flamewm-conversion-core')}],
                  'targets': []},
             ],
         }
@@ -79,7 +84,7 @@ class BuildGateTests(unittest.TestCase):
         self.assertTrue(run(self.root, executor=self.execute))
         self.assertEqual(self.commands[1], ['cargo','clean','-p','flamewm-desktop-core','--release'])
         self.assertFalse(run(self.root, executor=self.execute))
-        self.assertEqual(len(self.commands), 3)
+        self.assertEqual(len(self.commands), 4)  # metadata + two core cleans, then noop
         stamp = self.root/'.target/flamewm/desktop-core-release-cache-invalidated.sha256'
         self.assertEqual(stamp.read_text().strip(), content_digest(self.root))
 
@@ -97,7 +102,7 @@ class BuildGateTests(unittest.TestCase):
             f.write('// user source edit\n')
         self.assertTrue(run(self.root, executor=self.execute))
         self.assertTrue(run(self.root, force=True, executor=self.execute))
-        self.assertEqual(sum('clean' in command for command in self.commands),3)
+        self.assertEqual(sum('clean' in command for command in self.commands),5)
 
     def test_dev_and_release_have_independent_stamps(self):
         self.assertTrue(run(self.root, profile='dev', executor=self.execute))
@@ -107,7 +112,8 @@ class BuildGateTests(unittest.TestCase):
         self.assertEqual(self.commands[1], ['cargo','clean','-p','flamewm-desktop-core'])
 
     def test_wrong_cargo_source_is_rejected_without_clean(self):
-        self.meta['packages'][1]['dependencies'][0]['path'] = '/tmp/not-this-core'
+        desktop = next(p for p in self.meta['packages'] if p['name'] == 'flamewm-desktop')
+        desktop['dependencies'][0]['path'] = '/tmp/not-this-core'
         with self.assertRaisesRegex(BuildGateError, 'not the local path crate'):
             run(self.root, executor=self.execute)
         self.assertFalse(any('clean' in command for command in self.commands))
@@ -133,11 +139,12 @@ class BuildGateTests(unittest.TestCase):
     def test_ui_fingerprint_cleans_desktop_package_on_first_run(self):
         self.assertTrue(run(self.root, include_ui=True, executor=self.execute))
         self.assertEqual(self.commands[1], ['cargo', 'clean', '-p', 'flamewm-desktop-core', '--release'])
-        self.assertEqual(self.commands[2], ['cargo', 'clean', '-p', 'flamewm-desktop', '--release'])
+        self.assertEqual(self.commands[2], ['cargo', 'clean', '-p', 'flamewm-conversion-core', '--release'])
+        self.assertEqual(self.commands[3], ['cargo', 'clean', '-p', 'flamewm-desktop', '--release'])
         stamp = self.root / '.target/flamewm/desktop-rwr-release-cache-invalidated.sha256'
         self.assertEqual(stamp.read_text().strip(), desktop_ui_digest(self.root))
         self.assertFalse(run(self.root, include_ui=True, executor=self.execute))
-        self.assertEqual(len(self.commands), 4)  # two metadata probes, two scoped cleans
+        self.assertEqual(len(self.commands), 5)  # metadata, two core cleans, ui clean; rerun is metadata only
 
     def test_old_mtime_html_content_change_still_invalidates_compiled_rwr(self):
         html = self.root / 'ui/desktop/index.html'
@@ -189,7 +196,7 @@ class BuildGateTests(unittest.TestCase):
         module.write_text('pub fn after() {}\n')
         os.utime(module, (0, 0))
         self.assertTrue(run(self.root, executor=self.execute))
-        self.assertEqual(sum('clean' in command for command in self.commands), 2)
+        self.assertEqual(sum('clean' in command for command in self.commands), 3)
 
     def test_stamp_is_scoped_to_resolved_target_dir(self):
         self.assertTrue(run(self.root, executor=self.execute))
@@ -198,7 +205,7 @@ class BuildGateTests(unittest.TestCase):
         self.meta['target_directory'] = str(self.root / 'alternate-target')
         self.assertTrue(run(self.root, executor=self.execute))
         self.assertTrue((self.root / 'alternate-target/flamewm/desktop-core-release-cache-invalidated.sha256').is_file())
-        self.assertEqual(sum('clean' in command for command in self.commands), 2)
+        self.assertEqual(sum('clean' in command for command in self.commands), 4)
 
     def test_metadata_without_target_directory_is_rejected_without_clean(self):
         del self.meta['target_directory']

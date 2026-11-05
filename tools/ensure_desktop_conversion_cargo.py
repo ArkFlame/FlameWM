@@ -24,7 +24,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from verify_desktop_conversion_contract import contract_errors
 
-CORE = "flamewm-desktop-core"
+# Core library packages whose sources, Cargo resolution and cache stamps are gated.
+# A future split is one line here: append the new package name.
+CORE_PACKAGES = ("flamewm-desktop-core", "flamewm-conversion-core")
 DESKTOP = "flamewm-desktop"
 # Source files which define the RWR embedded by flamewm-desktop/build.rs.
 # An extracted archive can preserve OLD mtimes while carrying NEW content,
@@ -41,23 +43,18 @@ DESKTOP_UI_INPUTS = (
     "crates/flamewm-render-compiler/src/css.rs",
 )
 
-INPUTS = (
-    "crates/flamewm-desktop-core/Cargo.toml",
-    "crates/flamewm-desktop-core/src/lib.rs",
-    "crates/flamewm-desktop/Cargo.toml",
-)
-# Every core source file is an input, so a new or unlisted module with an
-# old mtime and new bytes still invalidates the core without a forced clean.
-CORE_SOURCE_DIR = "crates/flamewm-desktop-core/src"
 
 
 class BuildGateError(RuntimeError):
     """A source, Cargo resolution or targeted invalidation boundary failed."""
 
 
-def core_inputs(root: Path) -> tuple[str, ...]:
-    sources = (p.relative_to(root).as_posix() for p in (root / CORE_SOURCE_DIR).rglob("*.rs") if p.is_file())
-    return tuple(sorted(set(INPUTS) | set(sources)))
+def core_inputs(root: Path, package: str) -> tuple[str, ...]:
+    # Every source file of a core package is an input, so a new or unlisted module with an
+    # old mtime and new bytes still invalidates that package without a forced clean.
+    base = f"crates/{package}"
+    sources = (p.relative_to(root).as_posix() for p in (root / base / "src").rglob("*.rs") if p.is_file())
+    return tuple(sorted({f"{base}/Cargo.toml", f"{base}/src/lib.rs", *sources}))
 
 
 def digest_files(root: Path, files: tuple[str, ...]) -> str:
@@ -74,8 +71,8 @@ def digest_files(root: Path, files: tuple[str, ...]) -> str:
     return result.hexdigest()
 
 
-def content_digest(root: Path) -> str:
-    return digest_files(root, core_inputs(root))
+def content_digest(root: Path, package: str = CORE_PACKAGES[0]) -> str:
+    return digest_files(root, core_inputs(root, package))
 
 
 def desktop_ui_digest(root: Path) -> str:
@@ -86,29 +83,31 @@ def validate_metadata(root: Path, data: dict) -> Path:
     """Validate Cargo's own resolution and return the resolved target directory."""
     try:
         actual_root = Path(data["workspace_root"]).resolve()
-        packages = {p["name"]: p for p in data["packages"] if p["name"] in (DESKTOP, CORE)}
-        core = packages[CORE]
+        packages = {p["name"]: p for p in data["packages"] if p["name"] in (DESKTOP, *CORE_PACKAGES)}
         desktop = packages[DESKTOP]
         members = set(data["workspace_members"])
         target_dir = Path(data["target_directory"]).resolve()
+        cores = {name: packages[name] for name in CORE_PACKAGES}
     except (KeyError, TypeError, ValueError) as error:
         raise BuildGateError(f"Cargo metadata missing workspace/core/desktop/target: {error}") from error
     if actual_root != root:
         raise BuildGateError(f"Cargo workspace root mismatch: expected {root}, got {actual_root}")
-    for name, info in ((CORE, core), (DESKTOP, desktop)):
+    for name, info in ((*cores.items(), (DESKTOP, desktop))):
         actual_manifest = Path(info["manifest_path"]).resolve()
         expected = (root / "crates" / name / "Cargo.toml").resolve()
         if actual_manifest != expected:
             raise BuildGateError(f"Cargo resolves {name} to {actual_manifest}, expected {expected}")
         if info.get("id") not in members:
             raise BuildGateError(f"Cargo workspace does not include local {name} package")
-    source = (root / "crates/flamewm-desktop-core/src/lib.rs").resolve()
-    lib_targets = [t for t in core.get("targets", ()) if "lib" in t.get("kind", ())]
-    if len(lib_targets) != 1 or Path(lib_targets[0]["src_path"]).resolve() != source:
-        raise BuildGateError(f"Cargo core library target does not point to {source}")
-    deps = [d for d in desktop.get("dependencies", ()) if d.get("name") == CORE]
-    if len(deps) != 1 or not deps[0].get("path") or Path(deps[0]["path"]).resolve() != source.parent.parent:
-        raise BuildGateError(f"Cargo desktop's {CORE} dependency is not the local path crate")
+    for name, core in cores.items():
+        source = (root / "crates" / name / "src/lib.rs").resolve()
+        lib_targets = [t for t in core.get("targets", ()) if "lib" in t.get("kind", ())]
+        if len(lib_targets) != 1 or Path(lib_targets[0]["src_path"]).resolve() != source:
+            raise BuildGateError(f"Cargo core library target does not point to {source}")
+        crate_dir = (root / "crates" / name).resolve()
+        deps = [d for d in desktop.get("dependencies", ()) if d.get("name") == name]
+        if len(deps) != 1 or not deps[0].get("path") or Path(deps[0]["path"]).resolve() != crate_dir:
+            raise BuildGateError(f"Cargo desktop's {name} dependency is not the local path crate")
     return target_dir
 
 
@@ -173,13 +172,15 @@ def run(root: Path, *, profile: str = "release", force: bool = False,
     state_dir = target_dir / "flamewm"
 
     # Validate ALL digests before cleaning anything: absent build inputs fail closed.
-    core_digest = content_digest(root)
+    core_digests = {name: content_digest(root, name) for name in CORE_PACKAGES}
     ui_digest = desktop_ui_digest(root) if include_ui else None
-    changed = invalidate_if_changed(
-        state_dir, root=root, package=CORE, profile=profile, digest=core_digest,
-        marker=f"desktop-core-{profile}-cache-invalidated.sha256",
-        force=force, cargo=cargo, executor=executor,
-    )
+    changed = False
+    for name in CORE_PACKAGES:
+        changed |= invalidate_if_changed(
+            state_dir, root=root, package=name, profile=profile, digest=core_digests[name],
+            marker=f"{name.removeprefix('flamewm-')}-{profile}-cache-invalidated.sha256",
+            force=force, cargo=cargo, executor=executor,
+        )
     if ui_digest is not None:
         changed |= invalidate_if_changed(
             state_dir, root=root, package=DESKTOP, profile=profile, digest=ui_digest,
