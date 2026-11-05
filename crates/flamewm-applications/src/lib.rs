@@ -206,8 +206,11 @@ impl ApplicationCatalog {
                 if !seen.insert(id.clone()) {
                     continue;
                 }
-                if let Some(entry) = parse_desktop_entry(&path, id, handlers)? {
-                    entries.push(entry);
+                // One unreadable or malformed launcher must not abort discovery.
+                match parse_desktop_entry(&path, id, handlers) {
+                    Ok(Some(entry)) => entries.push(entry),
+                    Ok(None) => {}
+                    Err(error) => eprintln!("skip desktop entry {}: {error}", path.display()),
                 }
             }
         }
@@ -981,10 +984,19 @@ fn collect_desktop_files(dir: &Path, files: &mut Vec<PathBuf>) -> FlameResult<()
             format!("read applications directory: {error}"),
         )
     })? {
-        let path = item
-            .map_err(|error| FlameError::new(ErrorCode::IoFailure, error.to_string()))?
-            .path();
-        if path.is_dir() {
+        let item = match item {
+            Ok(item) => item,
+            Err(error) => {
+                eprintln!("skip applications entry in {}: {error}", dir.display());
+                continue;
+            }
+        };
+        let path = item.path();
+        let is_dir = match item.file_type() {
+            Ok(kind) if !kind.is_symlink() => kind.is_dir(),
+            _ => path.is_dir(),
+        };
+        if is_dir {
             collect_desktop_files(&path, files)?;
         } else if path.extension().and_then(|v| v.to_str()) == Some("desktop") {
             files.push(path);
@@ -1171,6 +1183,24 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    #[test]
+    fn mime_handler_catalog_includes_nodisplay_and_ignores_one_bad_launcher() {
+        let root = fixture();
+        let dir = root.join("handlers");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("nodisplay.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Viewer\nNoDisplay=true\nExec=viewer %F\n",
+        )
+        .unwrap();
+        // Invalid UTF-8 makes read_to_string fail; discovery must skip it, not abort.
+        fs::write(dir.join("broken.desktop"), [0xff_u8, 0xfe, 0x00]).unwrap();
+        let handlers = ApplicationCatalog::from_dirs_with_visibility(std::slice::from_ref(&dir), true).unwrap();
+        assert!(handlers.entries().iter().any(|e| e.application.name == "Viewer"));
+        let start_menu = ApplicationCatalog::from_dirs(std::slice::from_ref(&dir)).unwrap();
+        assert!(start_menu.entries().iter().all(|e| e.application.name != "Viewer"));
     }
 
     #[test]
