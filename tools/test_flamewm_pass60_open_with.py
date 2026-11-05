@@ -3,7 +3,17 @@ from html.parser import HTMLParser
 from pathlib import Path
 import unittest
 ROOT = Path(__file__).resolve().parents[1]
-MAIN = (ROOT / 'crates/flamewm-explorer/src/main.rs').read_text()
+
+_EXPL_BASE = ROOT / 'crates/flamewm-explorer/src'
+
+
+def _explorer_crate():
+    """Explorer was split into submodules; owners span the crate (tests excluded)."""
+    return '\n'.join(p.read_text() for p in sorted(_EXPL_BASE.rglob('*.rs'))
+                     if 'tests' not in p.relative_to(_EXPL_BASE).parts)
+
+
+MAIN = _explorer_crate()
 MIME = (ROOT / 'crates/flamewm-explorer/src/mime.rs').read_text()
 HTML = (ROOT / 'ui/explorer/explorer.html').read_text()
 MANIFEST = (ROOT / 'crates/flamewm-explorer/Cargo.toml').read_text()
@@ -33,7 +43,9 @@ class OpenWith(unittest.TestCase):
                      'WorkerResult::DefaultSaved', 'fn dismiss_chooser(&mut self)'):
             self.assertIn(text,MAIN)
         self.assertIn('fn project_chooser(&self',MAIN)
-        self.assertNotIn('Command::new("xdg-mime")',MAIN)
+        # xdg-mime is the MIME-association backend in mime.rs; the chooser UI path must not shell out to it.
+        ui_path=''.join(p.read_text() for p in (ROOT/'crates/flamewm-explorer/src/app').rglob('*.rs'))+(ROOT/'crates/flamewm-explorer/src/main.rs').read_text()
+        self.assertNotIn('Command::new("xdg-mime")',ui_path)
 
     def test_all_popup_controls_are_unique_and_wired(self):
         nodes=Ids();nodes.feed(HTML)
