@@ -77,8 +77,10 @@ class MimeAndNotifications(unittest.TestCase):
         manifest = (ROOT / 'packaging/install-manifest.txt').read_text()
         self.assertIn('packaging/notifications/dunstrc', manifest)
         control = (ROOT / 'packaging/debian/control.in').read_text()
-        self.assertIn('libpam-runtime, python3', control)
-        self.assertNotIn('dunst', control)
+        depends = next(line for line in control.splitlines() if line.startswith('Depends:'))
+        self.assertIn('libpam-runtime', depends)
+        self.assertIn('python3', depends)
+        self.assertNotIn('dunst', depends)  # dunst stays a Recommends, never a hard Depends
 
     def test_autostart_preserves_existing_xdg_dirs_and_adds_prefix(self):
         with tempfile.TemporaryDirectory() as folder:
