@@ -1181,6 +1181,7 @@ pub fn render_frame(state: &mut State) {
         return;
     };
     state.note_winit_frame();
+    state.flush_pending_configure();
     if let Err(error) = render_into(state, &mut backend) {
         eprintln!("flamewm-wayland: frame failed: {error}");
     }

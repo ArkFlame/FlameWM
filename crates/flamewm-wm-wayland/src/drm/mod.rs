@@ -545,6 +545,7 @@ impl Drm {
         // buffer, which calls `State::request_redraw` (see `handlers::commit`). The dirty flag is
         // therefore this compositor's "a client frame callback is outstanding" signal, read before
         // the request is consumed.
+        state.flush_pending_configure();
         let has_callback = state.redraw_pending();
         // Coalesced: every request since the last paint becomes one frame.
         let dirty = state.take_redraw();

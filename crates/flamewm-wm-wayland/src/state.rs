@@ -382,6 +382,8 @@ pub struct State {
     /// Server-side titlebar fills, stable across frames (see `render::Decorations`).
     pub decorations: RefCell<crate::render::Decorations>,
     pub grab: Option<Grab>,
+    /// Window whose resize configure a grab deferred; sent once at the next paint.
+    pub pending_configure: Option<WindowId>,
     /// Outline-move preview frame; contents stay put until release, like X11.
     /// Snap previews use the final committed dimensions here too.
     pub move_outline: Option<(WindowId, Rect)>,
@@ -511,6 +513,7 @@ impl State {
             cursors: crate::cursor::Cursors::from_env(),
             decorations: RefCell::default(),
             grab: None,
+            pending_configure: None,
             move_outline: None,
             last_title_click: None,
             focus_follows_mouse: crate::input::saved_focus_follows_mouse(),
@@ -642,6 +645,14 @@ impl State {
         }
         if previous != work {
             self.request_redraw();
+        }
+    }
+
+    /// Sends the configure a resize grab deferred. Called once per paint, so a burst of pointer
+    /// motion between frames costs one configure.
+    pub fn flush_pending_configure(&mut self) {
+        if let Some(id) = self.pending_configure.take() {
+            self.apply_geometry(id);
         }
     }
 

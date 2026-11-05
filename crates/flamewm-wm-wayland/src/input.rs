@@ -412,12 +412,12 @@ impl State {
                     let dx = (location.x - pointer.0).round() as i32;
                     let dy = (location.y - pointer.1).round() as i32;
                     let rect = edge.resized(start, dx, dy);
-                    // Sub-step pointer motion leaves the rectangle unchanged: skip the client configure
-                    // (an X11 configure also re-sends activated/maximized/fullscreen).
+                    // Sub-step pointer motion leaves the rectangle unchanged: no configure. A real change
+                    // is deferred to the next paint, which flushes it once (see `flush_pending_configure`).
                     let unchanged = self.model.get(id).is_some_and(|m| m.rect == rect);
                     self.model.set_rect(id, rect);
                     if !unchanged {
-                        self.apply_geometry(id);
+                        self.pending_configure = Some(id);
                     }
                 }
             }
