@@ -6,7 +6,7 @@ use std::sync::Arc;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
 use crate::app::App;
-use crate::pool::{Pool, run_id};
+use crate::pool::{Pool, run_id, run_id_into};
 use crate::view::{Row, Run};
 
 #[derive(Default)]
@@ -136,6 +136,8 @@ impl UiCache {
         let fitted = fit(runs, pool.runs);
         // `None` (never written) must write every slot, including the hidden ones.
         let previous = previous.as_deref().map(|prev| fit(prev, pool.runs));
+        // One id buffer per row: a row formats an id per slot, not an allocation per slot.
+        let mut id = String::new();
         for slot in 0..pool.runs {
             if previous
                 .as_ref()
@@ -143,9 +145,10 @@ impl UiCache {
             {
                 continue;
             }
+            run_id_into(&mut id, row, slot);
             match fitted.get(slot) {
-                Some(run) => Self::write_run(doc, cell, row, slot, run)?,
-                None => doc.visible(&run_id(row, slot), false)?,
+                Some(run) => Self::write_run(doc, cell, &id, run, row)?,
+                None => doc.visible(&id, false)?,
             }
         }
         self.rows[row] = Some(runs.clone());
@@ -155,13 +158,12 @@ impl UiCache {
     fn write_run(
         doc: &mut impl UiDocumentAccess,
         cell: (f32, f32),
-        row: usize,
-        slot: usize,
+        id: &str,
         run: &Run,
+        row: usize,
     ) -> Result<(), String> {
-        let id = run_id(row, slot);
         // nowrap collapses ASCII spaces, so cells are written as no-break spaces to keep their width.
-        doc.text(&id, run.text.replace(' ', "\u{a0}"))?;
+        doc.text(id, run.text.replace(' ', "\u{a0}"))?;
         let (cell_w, cell_h) = cell;
         let (x, y, w, h) = match run.shape {
             Some(arm) => (
@@ -387,6 +389,144 @@ mod bench {
         ui.project_rows(&mut doc, crate::pool::TIERS[2], (8.0, 16.0), &rows)
             .expect("project");
         assert_eq!(doc.texts, 1, "one edited run projects one text node");
+    }
+
+    /// Stage timing breakdown of the terminal pipeline, best of 5 per stage. Not a pass/fail check:
+    /// `cargo test -p flamewm-terminal --profile fast pipeline_breakdown -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "benchmark: run with --ignored --nocapture"]
+    fn pipeline_breakdown() {
+        use crate::parser::Perform;
+        use std::time::Instant;
+
+        struct Null;
+        impl Perform for Null {
+            fn print(&mut self, c: char) {
+                std::hint::black_box(c);
+            }
+            fn execute(&mut self, byte: u8) {
+                std::hint::black_box(byte);
+            }
+            fn csi(&mut self, p: Option<u8>, params: &[Vec<u16>], i: &[u8], a: u8) {
+                std::hint::black_box((p, params, i, a));
+            }
+            fn esc(&mut self, i: &[u8], f: u8) {
+                std::hint::black_box((i, f));
+            }
+            fn osc(&mut self, s: &[Vec<u8>]) {
+                std::hint::black_box(s);
+            }
+        }
+        fn best(mut run: impl FnMut() -> f64) -> f64 {
+            (0..5).map(|_| run()).fold(f64::MAX, f64::min)
+        }
+        fn secs(f: impl FnOnce()) -> f64 {
+            let started = Instant::now();
+            f();
+            started.elapsed().as_secs_f64()
+        }
+
+        let plain: Vec<u8> = (0..60_000)
+            .flat_map(|n| format!("row {n:6} the quick brown fox jumps over the lazy dog\r\n").into_bytes())
+            .collect();
+        let sgr: Vec<u8> = (0..60_000)
+            .flat_map(|n| format!("\x1b[1;3{}m{n:6}\x1b[0m \x1b[38;5;{}mjumps over\x1b[0m the lazy dog\r\n", n % 7, n % 256).into_bytes())
+            .collect();
+        let linefeeds = vec![b'\n'; 60_000];
+        let palette = builtin_themes()[0].palette.clone();
+        let options = |cursor| GridOptions {
+            view_offset: 0,
+            selection: None,
+            cursor,
+            cursor_shape: CursorShape::Block,
+        };
+        let mut rows_out: Vec<(&str, f64, usize, &str)> = Vec::new();
+
+        // parse: VT state machine only, into a no-op performer.
+        let parse_plain = best(|| secs(|| Parser::new().advance(&plain, &mut Null)));
+        let parse_sgr = best(|| secs(|| Parser::new().advance(&sgr, &mut Null)));
+        // parse + screen apply (cell writes, SGR, wrap); apply = total - parse.
+        let total_plain = best(|| {
+            secs(|| {
+                let mut screen = Screen::new(120, 40, 10_000);
+                Parser::new().advance(&plain, &mut screen);
+                std::hint::black_box(&screen);
+            })
+        });
+        let total_sgr = best(|| {
+            secs(|| {
+                let mut screen = Screen::new(120, 40, 10_000);
+                Parser::new().advance(&sgr, &mut screen);
+                std::hint::black_box(&screen);
+            })
+        });
+        // scroll: a full screen fed bare linefeeds, one scroll_up (row removal, blank row, history pack) each.
+        let scroll = best(|| {
+            secs(|| {
+                let mut screen = Screen::new(120, 40, 10_000);
+                Parser::new().advance(b"\x1b[40;1H", &mut screen);
+                Parser::new().advance(&linefeeds, &mut screen);
+                std::hint::black_box(&screen);
+            })
+        });
+
+        let mut mixed = Screen::new(120, 40, 10_000);
+        Parser::new().advance(&sgr, &mut mixed);
+
+        // shaping: a cold RunCache rebuilds every row (glyph_rects, run merge) of a mixed-text screen.
+        let shape_full = best(|| {
+            secs(|| {
+                let mut cache = RunCache::default();
+                std::hint::black_box(cache.update(&mut mixed, &palette, &options(false)));
+            })
+        });
+        // dirty tracking: warm cache, one typed char per update (dirty row + key compare), 2000 updates.
+        let mut warm = RunCache::default();
+        warm.update(&mut mixed, &palette, &options(false));
+        let typing = best(|| {
+            secs(|| {
+                for _ in 0..2000 {
+                    Parser::new().advance(b"x\x08", &mut mixed);
+                    std::hint::black_box(warm.update(&mut mixed, &palette, &options(false)));
+                }
+            }) / 2000.0
+        });
+        // cursor blink: warm cache, cursor drawn on/off alternately (rebuilds the cursor row only), 2000 updates.
+        let blink = best(|| {
+            secs(|| {
+                for i in 0..2000 {
+                    std::hint::black_box(warm.update(&mut mixed, &palette, &options(i % 2 == 0)));
+                }
+            }) / 2000.0
+        });
+        // paint: retained-UI projection of a full screen of runs (cold UiCache, every row written).
+        let rows = {
+            let mut cache = RunCache::default();
+            cache.update(&mut mixed, &palette, &options(false)).to_vec()
+        };
+        let paint_full = best(|| {
+            secs(|| {
+                let mut ui = UiCache::default();
+                ui.project_rows(&mut Recorder::default(), crate::pool::TIERS[1], (8.0, 16.0), &rows)
+                    .expect("project");
+            })
+        });
+
+        let per = |total: f64, n: f64| total * 1e9 / n;
+        let bytes_plain = plain.len() as f64;
+        let bytes_sgr = sgr.len() as f64;
+        rows_out.push(("parse (plain)", per(parse_plain, bytes_plain), plain.len(), "ns/byte"));
+        rows_out.push(("parse (sgr)", per(parse_sgr, bytes_sgr), sgr.len(), "ns/byte"));
+        rows_out.push(("apply = total-parse (plain)", per(total_plain - parse_plain, bytes_plain), plain.len(), "ns/byte"));
+        rows_out.push(("apply = total-parse (sgr)", per(total_sgr - parse_sgr, bytes_sgr), sgr.len(), "ns/byte"));
+        rows_out.push(("scroll (linefeed, full screen)", per(scroll, 60_000.0), 60_000, "ns/linefeed"));
+        rows_out.push(("shape: cold RunCache, 40 rows", per(shape_full, 40.0), 40, "ns/row"));
+        rows_out.push(("dirty: typed char + update", typing * 1e9, 2000, "ns/update"));
+        rows_out.push(("cursor blink repaint update", blink * 1e9, 2000, "ns/update"));
+        rows_out.push(("paint: UI projection, 40 rows", per(paint_full, 40.0), 40, "ns/row"));
+        for (name, value, n, unit) in &rows_out {
+            eprintln!("pipeline {name}: {value:.0} {unit} (n={n}, best of 5)");
+        }
     }
 
     #[test]

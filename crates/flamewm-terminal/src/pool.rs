@@ -27,5 +27,14 @@ pub const TIERS: [Pool; 3] = [
 /// Node id of run `slot` on row `row`. Generated ids are `r{row}s{slot}` and must match `build.rs` output.
 #[must_use]
 pub fn run_id(row: usize, slot: usize) -> String {
-    format!("r{row}s{slot}")
+    let mut id = String::new();
+    run_id_into(&mut id, row, slot);
+    id
+}
+
+/// Writes the node id of run `slot` on row `row` into `buf`, reusing its allocation for every slot of a row.
+pub fn run_id_into(buf: &mut String, row: usize, slot: usize) {
+    use std::fmt::Write;
+    buf.clear();
+    let _ = write!(buf, "r{row}s{slot}");
 }
