@@ -86,6 +86,9 @@ pub fn titlebar_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
     surface_fill(snapshot)
 }
 
+/// Light taskbar alpha floor (0.8 of 255). See `dock_fill`.
+const LIGHT_TASKBAR_MIN_ALPHA: u8 = 204;
+
 /// Taskbar/Dock fill from the resolved Dock material: Blur Only neutral, Inherit glass, or Custom
 /// Tint. Reduce transparency yields the opaque Dock solid.
 #[must_use]
@@ -95,7 +98,14 @@ pub fn dock_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
     if crate::glass::appearance_from_settings(snapshot).taskbar_mode
         == crate::glass::TaskbarMode::Inherit
     {
-        return surface_fill(snapshot);
+        let mut fill = surface_fill(snapshot);
+        let appearance = crate::glass::appearance_from_settings(snapshot);
+        // Light ink is dark: a translucent light bar over a dark wallpaper reads as dark glass
+        // with dark text (Pass 12). Only the taskbar takes the floor; popups keep the glass alpha.
+        if appearance.light && !appearance.reduce_transparency {
+            fill.alpha = fill.alpha.max(LIGHT_TASKBAR_MIN_ALPHA);
+        }
+        return fill;
     }
     let material = crate::glass::resolve(
         crate::glass::MaterialRole::Dock,
@@ -750,6 +760,21 @@ mod surface_theme_default_tests {
             snapshot.values.insert((*key).into(), value.clone());
         }
         snapshot
+    }
+
+    #[test]
+    fn light_taskbar_inherit_has_legible_alpha_floor() {
+        let light = dock_fill(&snapshot_with(&[
+            ("appearance", SettingValue::Text("light".into())),
+            ("taskbarMaterialMode", SettingValue::Text("inherit".into())),
+        ]));
+        assert_eq!(light.alpha, LIGHT_TASKBAR_MIN_ALPHA);
+        assert_eq!(light.rgb, Palette::LIGHT.surface.0);
+        let dark = dock_fill(&snapshot_with(&[
+            ("appearance", SettingValue::Text("dark".into())),
+            ("taskbarMaterialMode", SettingValue::Text("inherit".into())),
+        ]));
+        assert!(dark.alpha < LIGHT_TASKBAR_MIN_ALPHA);
     }
 
     #[test]
