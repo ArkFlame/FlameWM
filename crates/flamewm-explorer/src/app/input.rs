@@ -347,10 +347,16 @@ impl ExplorerApp {
             WorkerResult::DefaultSaved(outcome)=>{
                 if let Err(error)=outcome {self.model.status=format!("MIME default was not saved: {error}");}
             },
+            WorkerResult::ScanBatch{generation,path,first,entries}=>{
+                // Rows of a load in progress; the final `Scanned` replaces them with the complete sorted listing.
+                self.model.append_scan(generation,&path,first,entries);
+            },
             WorkerResult::Scanned{generation,path,entries}=>{
                 let vanished=entries.is_err() && !path.exists();
                 if self.model.apply_listing(generation,&path,entries) {
-                    view::sort_entries(&mut self.model.tab_mut().entries,self.column_sort);
+                    // The worker sorted by name; re-sort on this thread only when another column is active.
+                    let tab=self.model.tab_mut();
+                    if !view::is_sorted_by(&tab.entries,self.column_sort) {view::sort_entries(&mut tab.entries,self.column_sort);}
                 }
                 // A removed device or folder falls back to Home with a visible notice.
                 if vanished && path==*self.model.tab().path() {

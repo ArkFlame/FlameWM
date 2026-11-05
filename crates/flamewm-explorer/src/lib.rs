@@ -68,8 +68,31 @@ impl Entry {
     }
 }
 
-pub fn list_directory(dir: &Path, show_hidden: bool, sort: SortBy) -> io::Result<Vec<Entry>> {
-    let mut entries = Vec::new();
+/// Rows in the first streamed batch: small, so the first rows paint before the directory is fully read.
+pub const FIRST_BATCH: usize = 256;
+/// Rows in every later streamed batch.
+pub const LATER_BATCH: usize = 2048;
+
+/// The one ordering used by every listing: folders first, then `sort`, then name as the tie-break.
+pub fn sort_listing(entries: &mut [Entry], sort: SortBy) {
+    entries.sort_by(|a,b| listing_order(a, b, sort));
+}
+
+fn listing_order(a: &Entry, b: &Entry, sort: SortBy) -> std::cmp::Ordering {
+    b.directory.cmp(&a.directory).then_with(|| match sort {
+        // `lower_name` is computed once per entry; lowercasing inside the comparator allocated per compare.
+        SortBy::Name => a.lower_name.cmp(&b.lower_name),
+        SortBy::Size => a.size.cmp(&b.size),
+        SortBy::Modified => b.modified.cmp(&a.modified),
+    }).then_with(|| a.name.cmp(&b.name))
+}
+
+/// Streams a directory in readdir order as batches of at most `FIRST_BATCH`, then `LATER_BATCH` rows.
+/// `emit` returns false to stop early (a newer request superseded this one); the call then returns `Ok(false)`.
+/// Concatenating the batches and sorting with `sort_listing` gives exactly `list_directory`'s result.
+pub fn list_directory_streamed(dir: &Path, show_hidden: bool, mut emit: impl FnMut(Vec<Entry>) -> bool) -> io::Result<bool> {
+    let mut batch = Vec::with_capacity(FIRST_BATCH);
+    let mut total = 0usize;
     for item in fs::read_dir(dir)? {
         let item = item?;
         let name = item.file_name().to_string_lossy().into_owned();
@@ -78,17 +101,22 @@ pub fn list_directory(dir: &Path, show_hidden: bool, sort: SortBy) -> io::Result
         let meta = fs::symlink_metadata(&path)?;
         let symlink = meta.file_type().is_symlink();
         let directory = meta.is_dir() || (symlink && path.is_dir());
-        entries.push(Entry::new(path, name, directory, symlink, meta.len(), meta.modified().ok()));
-        if entries.len() >= MAX_LISTED_ENTRIES { break; }
+        batch.push(Entry::new(path, name, directory, symlink, meta.len(), meta.modified().ok()));
+        total += 1;
+        let limit = if total <= FIRST_BATCH { FIRST_BATCH } else { LATER_BATCH };
+        if batch.len() >= limit {
+            if !emit(std::mem::replace(&mut batch, Vec::with_capacity(LATER_BATCH))) { return Ok(false); }
+        }
+        if total >= MAX_LISTED_ENTRIES { break; }
     }
-    entries.sort_by(|a,b| {
-        b.directory.cmp(&a.directory).then_with(|| match sort {
-            // `lower_name` is computed once per entry; lowercasing inside the comparator allocated per compare.
-            SortBy::Name => a.lower_name.cmp(&b.lower_name),
-            SortBy::Size => a.size.cmp(&b.size),
-            SortBy::Modified => b.modified.cmp(&a.modified),
-        }).then_with(|| a.name.cmp(&b.name))
-    });
+    if !batch.is_empty() && !emit(batch) { return Ok(false); }
+    Ok(true)
+}
+
+pub fn list_directory(dir: &Path, show_hidden: bool, sort: SortBy) -> io::Result<Vec<Entry>> {
+    let mut entries = Vec::new();
+    list_directory_streamed(dir, show_hidden, |batch| { entries.extend(batch); true })?;
+    sort_listing(&mut entries, sort);
     Ok(entries)
 }
 
@@ -258,6 +286,15 @@ impl Explorer {
     pub fn append_listing(&mut self, generation:u64, dir:&Path, items:Vec<Entry>) -> bool {
         if generation!=self.generation || self.tab().path()!=dir { return false; }
         self.tab_mut().extend_entries(items);
+        true
+    }
+    /// Adds one sorted batch of a local listing that is still loading. Refresh batches (the tab is no
+    /// longer loading) and stale generations are ignored; `first` restarts the rows of a fresh load.
+    pub fn append_scan(&mut self, generation:u64, dir:&Path, first:bool, items:Vec<Entry>) -> bool {
+        if generation!=self.generation || self.tab().path()!=dir || !self.tab().loading { return false; }
+        let tab=self.tab_mut();
+        if first { tab.clear_entries(); }
+        tab.extend_entries(items);
         true
     }
     /// Ends a streamed remote listing; false when the listing is stale.
@@ -705,6 +742,10 @@ mod text_field_tests;
 #[cfg(test)]
 #[path = "tests/filter_cache_tests.rs"]
 mod filter_cache_tests;
+
+#[cfg(test)]
+#[path = "tests/listing_stream_tests.rs"]
+mod listing_stream_tests;
 
 extern crate self as flamewm_explorer;
 

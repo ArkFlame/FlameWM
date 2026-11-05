@@ -66,22 +66,31 @@ pub fn type_label(entry: &Entry) -> String {
 
 /// Folders always group first; the chosen column orders the rest; name breaks ties.
 pub fn sort_entries(entries: &mut [Entry], sort: ColumnSort) {
-    entries.sort_by(|a, b| {
-        b.directory.cmp(&a.directory).then_with(|| {
-            let order = match sort.column {
-                Column::Name => a.lower_name.cmp(&b.lower_name),
-                Column::Size => a.size.cmp(&b.size),
-                Column::Modified => a.modified.cmp(&b.modified),
-                Column::Type => type_label(a).cmp(&type_label(b)),
-            };
-            if sort.descending {
-                order.reverse()
-            } else {
-                order
-            }
-            .then_with(|| a.name.cmp(&b.name))
-        })
-    });
+    entries.sort_by(|a, b| column_order(a, b, sort));
+}
+
+/// True when `sort_entries` would not move any row. The UI thread uses it to skip a full re-sort
+/// of a listing the worker already sorted in the same order (the common case: Name ascending).
+#[must_use]
+pub fn is_sorted_by(entries: &[Entry], sort: ColumnSort) -> bool {
+    entries.windows(2).all(|pair| column_order(&pair[0], &pair[1], sort) != std::cmp::Ordering::Greater)
+}
+
+fn column_order(a: &Entry, b: &Entry, sort: ColumnSort) -> std::cmp::Ordering {
+    b.directory.cmp(&a.directory).then_with(|| {
+        let order = match sort.column {
+            Column::Name => a.lower_name.cmp(&b.lower_name),
+            Column::Size => a.size.cmp(&b.size),
+            Column::Modified => a.modified.cmp(&b.modified),
+            Column::Type => type_label(a).cmp(&type_label(b)),
+        };
+        if sort.descending {
+            order.reverse()
+        } else {
+            order
+        }
+        .then_with(|| a.name.cmp(&b.name))
+    })
 }
 
 /// Index of the first name, starting at `from` and wrapping, whose lowercase form starts with `prefix`.

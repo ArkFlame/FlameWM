@@ -41,12 +41,35 @@ pub(crate) fn run_transfer(
         else if report.failed>0 {JobState::PartiallyFailed} else {JobState::Completed});
     report
 }
+/// Streams each listing as sorted batches (first rows paint early), then sends the complete sorted listing.
+/// A newer queued scan abandons the current one between batches: its rows are never sent as final.
 pub(crate) fn scan_worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStream) {
-    while let Ok(mut job)=rx.recv() {
+    let mut next:Option<WorkerJob>=None;
+    loop {
+        let mut job=match next.take() {
+            Some(job)=>job,
+            None=>match rx.recv() {Ok(job)=>job,Err(_)=>return},
+        };
         // Obsolete queued navigation requests must never block the latest scan.
         while let Ok(newer)=rx.try_recv() { job=newer; }
-        if let WorkerJob::Scan{generation,path,hidden,sort}=job {
-            send_wake(&mut wake,&result,WorkerResult::Scanned{generation,entries:list_directory(&path,hidden,sort),path});
+        let WorkerJob::Scan{generation,path,hidden,sort}=job else {continue};
+        let mut all=Vec::new();
+        let mut first=true;
+        let streamed=list_directory_streamed(&path,hidden,|mut batch|{
+            if let Ok(newer)=rx.try_recv() { next=Some(newer); return false; }
+            sort_listing(&mut batch,sort);
+            all.extend(batch.iter().cloned());
+            send_wake(&mut wake,&result,WorkerResult::ScanBatch{generation,path:path.clone(),first,entries:batch});
+            first=false;
+            true
+        });
+        match streamed {
+            Ok(false)=>continue,
+            Ok(true)=>{
+                sort_listing(&mut all,sort);
+                send_wake(&mut wake,&result,WorkerResult::Scanned{generation,entries:Ok(all),path});
+            },
+            Err(error)=>send_wake(&mut wake,&result,WorkerResult::Scanned{generation,entries:Err(error),path}),
         }
     }
 }

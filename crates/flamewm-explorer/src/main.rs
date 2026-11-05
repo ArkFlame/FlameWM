@@ -16,7 +16,7 @@ use std::time::{Duration,Instant};
 
 use flamewm_clipboard::{Clipboard,FileOp};
 use flamewm_explorer::clipboard::{resolve_paste,settle_cut};
-use flamewm_explorer::{prefs,AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,SortBy,sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places};
+use flamewm_explorer::{prefs,AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,SortBy,sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory_streamed,sort_listing,parse_address,places};
 use flamewm_explorer::view::{self,Column,ColumnSort};
 use flamewm_explorer::thumbs::{self,Lookup,ThumbKey,Thumbnails,THUMB_SIZE};
 use flamewm_explorer::columns::{Divider,Widths};
@@ -159,6 +159,8 @@ fn chooser_worker(rx: Receiver<ChooserJob>, result: Sender<WorkerResult>, mut wa
 }
 enum WorkerResult {
     Scanned {generation:u64,path:PathBuf,entries:std::io::Result<Vec<Entry>>},
+    /// One sorted batch of a local listing still being read; `first` restarts the rows of a fresh load.
+    ScanBatch {generation:u64,path:PathBuf,first:bool,entries:Vec<Entry>},
     /// One throttled job snapshot from the worker that owns the transfer.
     Progress(Box<progress::Snapshot>),
     /// Recursive size of a folder shown in Properties; `path` identifies the dialog it belongs to.
