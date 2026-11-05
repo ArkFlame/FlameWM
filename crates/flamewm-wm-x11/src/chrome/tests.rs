@@ -725,3 +725,33 @@ fn minimize_rest_raster_keeps_flame_default_scheme() {
     .expect("minimize expected");
     assert_eq!(raster.pixels, expected.pixels);
 }
+
+#[test]
+fn minimize_and_maximize_hover_rasters_invert_to_white_disk_with_dark_glyph() {
+    let edge = u32::from(WINDOW_CHROME.metrics.control_glyph_edge);
+    for role in [ControlRole::Minimize, ControlRole::Maximize] {
+        let raster =
+            control_glyph_raster(role, edge, ControlMaterial::Hover, ControlLook::default())
+                .expect("min/max hover raster");
+        let at = |x: u32, y: u32| {
+            let o = ((y * edge + x) * 4) as usize;
+            [
+                raster.pixels[o],
+                raster.pixels[o + 1],
+                raster.pixels[o + 2],
+                raster.pixels[o + 3],
+            ]
+        };
+        // Inside the disk, clear of the glyph: white fill (#f1f2f3), fully opaque.
+        assert_eq!(at(edge / 2, 2), [0xf1, 0xf2, 0xf3, 255], "{role:?} disk fill");
+        // Some glyph pixel must be dark, i.e. the glyph is not white-on-white.
+        let darkest = raster
+            .pixels
+            .chunks_exact(4)
+            .filter(|p| p[3] > 200)
+            .map(|p| u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]))
+            .min()
+            .unwrap_or(u32::MAX);
+        assert!(darkest < 0x180, "{role:?} hover glyph must be dark, darkest sum {darkest:#x}");
+    }
+}
