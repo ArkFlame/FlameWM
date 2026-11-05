@@ -146,6 +146,7 @@ use crate::StartupTiming;
 use crate::elapsed_ms;
 use crate::logind::{Event as LogindEvent, LogindSession, PauseKind};
 mod device;
+mod hotplug;
 mod input;
 
 use crate::render::{self, Elem};
@@ -429,18 +430,36 @@ fn init_backend(
         },
     )?;
 
+    // A hotplug is a burst of uevents: the first one arms a single settle timer, and the rescan
+    // runs once when the burst has been quiet for `HOTPLUG_SETTLE`. Events inside the burst cost
+    // nothing beyond the flag.
     let udev_drm = Rc::clone(&drm);
-    handle.insert_source(udev_backend, move |event, (), state| {
+    let udev_handle = handle.clone();
+    let burst = Rc::new(RefCell::new(hotplug::HotplugDebounce::default()));
+    handle.insert_source(udev_backend, move |event, (), _state| {
         if let UdevEvent::Changed { device_id } = event {
             let primary = udev_drm.borrow().primary_dev;
-            if device_id == primary {
-                if let Ok(mut d) = udev_drm.try_borrow_mut() {
-                    if let Err(error) = scan_connectors(&mut d, state) {
-                        eprintln!("flamewm-wayland: connector rescan failed: {error}");
-                    }
+            if device_id == primary && burst.borrow_mut().event() {
+                let settle_burst = Rc::clone(&burst);
+                let settle_drm = Rc::clone(&udev_drm);
+                let armed = udev_handle.insert_source(
+                    Timer::from_duration(hotplug::HOTPLUG_SETTLE),
+                    move |_, (), state| {
+                        settle_burst.borrow_mut().fire();
+                        if let Ok(mut d) = settle_drm.try_borrow_mut() {
+                            if let Err(error) = scan_connectors(&mut d, state) {
+                                eprintln!("flamewm-wayland: connector rescan failed: {error}");
+                            }
+                        }
+                        state.request_full_redraw();
+                        render_all(state, &settle_drm);
+                        TimeoutAction::Drop
+                    },
+                );
+                if let Err(error) = armed {
+                    eprintln!("flamewm-wayland: hotplug settle timer failed: {error}");
+                    burst.borrow_mut().fire();
                 }
-                state.request_full_redraw();
-                render_all(state, &udev_drm);
             }
         }
     })?;
