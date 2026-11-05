@@ -339,6 +339,7 @@ where
     x11.file_drag.clone_from(&file_drag);
     let press_drag = file_drag.clone();
     let reactor_drag = file_drag.clone();
+    let mut keyboard = KeyboardRouter::default();
     flamewm_render_x11::run_with_controller_events_with_reactor_geometry(
         runtime,
         x11,
@@ -350,7 +351,7 @@ where
             let event = controller_event(action);
             let events = if keyboard_focus {
                 let captured = keyboard_capture.as_ref().is_some_and(|capture| capture());
-                keyboard_events(document, event, captured)
+                keyboard.route(document, event, captured)
             } else {
                 vec![event]
             };
@@ -377,32 +378,62 @@ where
     )
 }
 
-/// The events a window handler receives for one controller event while keyboard focus is on.
-/// `captured` windows (an open text field, an armed recorder) keep every key. Focus activation
-/// becomes a press and release pair: archiver acts on press, Settings acts on release.
-fn keyboard_events(
-    document: &mut flamewm_render_core::RuntimeDocument,
-    event: UiControllerEvent,
-    captured: bool,
-) -> Vec<UiControllerEvent> {
-    if captured {
-        return vec![event];
-    }
-    match route_focus(document, event.clone()) {
-        None => Vec::new(),
-        Some(routed) if routed == event => vec![routed],
-        Some(UiControllerEvent::Action(press)) => {
-            let release = UiActionEvent {
-                phase: UiActionPhase::Release,
-                ..press.clone()
-            };
-            vec![
-                UiControllerEvent::Action(press),
-                UiControllerEvent::Action(release),
-            ]
+/// Text the X11 layer types for a key press, delivered as a `keyboard.input` action right after
+/// that press. Focus activation consumes the press, so this text must not reach a field the
+/// activation just focused.
+const KEYBOARD_INPUT_ACTION: &str = "keyboard.input";
+
+/// Turns controller events into the events a window handler receives while keyboard focus is on.
+/// Keeps one bit of state: whether the next typed text belongs to a key press that focus consumed.
+#[derive(Debug, Default)]
+struct KeyboardRouter {
+    text_of_activating_press: bool,
+}
+
+impl KeyboardRouter {
+    /// `captured` windows (an open text field, an armed recorder) keep every key. Focus activation
+    /// becomes a press and release pair: archiver acts on press, Settings acts on release.
+    fn route(
+        &mut self,
+        document: &mut flamewm_render_core::RuntimeDocument,
+        event: UiControllerEvent,
+        captured: bool,
+    ) -> Vec<UiControllerEvent> {
+        if matches!(event, UiControllerEvent::Key(_)) {
+            self.text_of_activating_press = false;
         }
-        Some(other) => vec![other],
+        if self.text_of_activating_press && is_keyboard_text(&event) {
+            self.text_of_activating_press = false;
+            return Vec::new();
+        }
+        if captured {
+            return vec![event];
+        }
+        match route_focus(document, event.clone()) {
+            None => Vec::new(),
+            Some(routed) if routed == event => vec![routed],
+            Some(UiControllerEvent::Action(press)) => {
+                self.text_of_activating_press = true;
+                let release = UiActionEvent {
+                    phase: UiActionPhase::Release,
+                    ..press.clone()
+                };
+                vec![
+                    UiControllerEvent::Action(press),
+                    UiControllerEvent::Action(release),
+                ]
+            }
+            Some(other) => vec![other],
+        }
     }
+}
+
+fn is_keyboard_text(event: &UiControllerEvent) -> bool {
+    matches!(
+        event,
+        UiControllerEvent::Action(action)
+            if action.action == KEYBOARD_INPUT_ACTION && action.text.is_some()
+    )
 }
 
 /// Routes one controller event through the window's keyboard focus. The focused node lives on
@@ -555,7 +586,7 @@ mod tests {
     };
 
     use super::{
-        keyboard_events, route_focus, UiActionEvent, UiActionPhase, UiControllerEvent, UiKeyEvent, UiKeyPhase,
+        route_focus, KeyboardRouter, UiActionEvent, UiActionPhase, UiControllerEvent, UiKeyEvent, UiKeyPhase,
     };
 
     fn button(action: &'static str) -> CompiledNode {
@@ -649,21 +680,49 @@ mod tests {
         })
     }
 
+    fn typed(text: &str) -> UiControllerEvent {
+        UiControllerEvent::Action(UiActionEvent {
+            action: super::KEYBOARD_INPUT_ACTION.to_owned(),
+            phase: UiActionPhase::Release,
+            inside: true,
+            button: 0,
+            modifiers: 0,
+            x: 0.0,
+            y: 0.0,
+            text: Some(text.to_owned()),
+        })
+    }
+
     #[test]
     fn activation_delivers_press_then_release_to_the_focused_control() {
         let mut document = window_document();
+        let mut router = KeyboardRouter::default();
         route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
         route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
         assert_eq!(
-            keyboard_events(&mut document, key("Space", UiKeyPhase::Press, &[], Some(" ")), false),
+            router.route(&mut document, key("Space", UiKeyPhase::Press, &[], Some(" ")), false),
             vec![press("ar.next"), release("ar.next")],
             "press first (archiver acts on press), then release (Settings acts on release)"
         );
         let space_release = key("Space", UiKeyPhase::Release, &[], Some(" "));
         assert_eq!(
-            keyboard_events(&mut document, space_release.clone(), false),
+            router.route(&mut document, space_release.clone(), false),
             vec![space_release]
         );
+    }
+
+    #[test]
+    fn text_typed_by_the_activating_press_never_reaches_the_focused_field() {
+        // X11 emits the press's text right after the press. Enter's "\r" would end the search
+        // field the activation just focused, and Space's " " would type into it.
+        let mut document = window_document();
+        let mut router = KeyboardRouter::default();
+        route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
+        assert!(!router.route(&mut document, key("Return", UiKeyPhase::Press, &[], Some("\r")), false).is_empty());
+        assert_eq!(router.route(&mut document, typed("\r"), false), Vec::new(), "activating text dropped");
+        assert_eq!(router.route(&mut document, typed("x"), false), vec![typed("x")], "later text flows");
+        assert!(!router.route(&mut document, key("Escape", UiKeyPhase::Press, &[], None), false).is_empty());
+        assert_eq!(router.route(&mut document, typed("y"), false), vec![typed("y")]);
     }
 
     #[test]
@@ -677,7 +736,7 @@ mod tests {
             key("Return", UiKeyPhase::Press, &[], Some("\r")),
             key("Space", UiKeyPhase::Press, &[], Some(" ")),
         ] {
-            assert_eq!(keyboard_events(&mut document, event.clone(), true), vec![event]);
+            assert_eq!(KeyboardRouter::default().route(&mut document, event.clone(), true), vec![event]);
         }
         assert_eq!(document.focus(), Some(1), "captured keys never move focus or activate");
     }
@@ -685,10 +744,10 @@ mod tests {
     #[test]
     fn uncaptured_window_routes_tab_and_escape_as_before() {
         let mut document = window_document();
-        assert!(keyboard_events(&mut document, key("Tab", UiKeyPhase::Press, &[], None), false).is_empty());
+        assert!(KeyboardRouter::default().route(&mut document, key("Tab", UiKeyPhase::Press, &[], None), false).is_empty());
         assert_eq!(document.focus(), Some(1));
         let escape = key("Escape", UiKeyPhase::Press, &[], None);
-        assert_eq!(keyboard_events(&mut document, escape.clone(), false), vec![escape]);
+        assert_eq!(KeyboardRouter::default().route(&mut document, escape.clone(), false), vec![escape]);
         assert_eq!(document.focus(), Some(1));
     }
 
