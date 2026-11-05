@@ -287,8 +287,9 @@ fn red_swatch_selects_red_not_the_default_blue() {
 
 #[test]
 fn default_accent_is_the_picker_blue_swatch() {
-    // Regression: DEFAULT_ACCENT (stored default) and the picker's blue swatch must agree.
+    // Regression: DEFAULT_ACCENT (stored default), the accent blue and the picker's preset row must agree.
     assert_eq!(accent_for_swatch("blue"), Some(DEFAULT_ACCENT));
+    assert!(tables::SURFACE_PRESETS.contains(&DEFAULT_ACCENT));
 }
 
 #[test]

@@ -113,7 +113,6 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .is-error { color:var(--accent); }
 
 .color-value { min-width:88px; }
-.pal-0 { background:#000000; }.pal-1 { background:#FFFFFF; }.pal-2 { background:#1E1E1E; }.pal-3 { background:#2D2D2D; }.pal-4 { background:#3DAEE9; }.pal-5 { background:#9B59B6; }.pal-6 { background:#1ABC9C; }.pal-7 { background:#539bff; }
 
 .theme-picker { width:100%; padding:10px 14px; display:flex; flex-direction:column; gap:6px; }
 .theme-picker-head { width:100%; display:flex; align-items:center; gap:8px; }
