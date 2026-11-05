@@ -9,19 +9,25 @@ def source(path):
     return (ROOT / path).read_text()
 
 
+def settings_src():
+    """Settings was split into app_impl_*.rs, sliders.rs, etc.; owners span the crate."""
+    base = ROOT / 'crates/flamewm-settings/src'
+    return '\n'.join(p.read_text() for p in sorted(base.rglob('*.rs')) if 'tests' not in p.relative_to(base).parts)
+
+
 class Pass50Integration(unittest.TestCase):
     def test_all_scale_steps_supported_without_five_presets_fallback(self):
         core = source('crates/flamewm-platform/src/scale.rs')
-        settings = source('crates/flamewm-settings/src/lib.rs')
+        settings = settings_src()
         self.assertIn('percent % 5 == 0', core)
         self.assertIn('display_scale_from_slider(text)?', settings)
-        self.assertIn('self.client.set_shell_scale(percent)', settings)
+        self.assertIn('.set_shell_scale(percent)', settings)
         self.assertIn('scale_drag: Option<(OutputId, u64, u16)>', settings)
         self.assertIn('current_generation != generation', settings)
 
     def test_slider_markup_and_ui_projector_exist(self):
         markup = source('ui/settings.html')
-        projection = source('crates/flamewm-settings/src/lib.rs')
+        projection = settings_src()
         for name in ('display-scale-track', 'display-scale-fill', 'display-scale-thumb', 'display-scale-value'):
             self.assertIn(f'id="{name}"', markup)
             if name != "display-scale-track":
@@ -35,7 +41,7 @@ class Pass50Integration(unittest.TestCase):
 
     def test_default_icon_preview_uses_catalog_resolution(self):
         picker = source('crates/flamewm-settings/src/theme_picker.rs')
-        settings = source('crates/flamewm-settings/src/lib.rs')
+        settings = settings_src()
         self.assertIn('pub fn selected_preview(', picker)
         self.assertIn('self.themes.selected_preview(kind, &value)', settings)
         self.assertIn('id="icon-theme-selected-preview"', source('ui/settings.html'))
@@ -43,7 +49,7 @@ class Pass50Integration(unittest.TestCase):
     def test_cursor_policy_preserves_fallback_and_curated_chooser(self):
         picker = source('crates/flamewm-settings/src/theme_picker.rs')
         session = source('crates/flamewm-session-core/src/lib.rs')
-        self.assertIn('with_curated_cursor_themes(', picker)
+        self.assertIn('with_installed_cursor_themes(', picker)
         self.assertIn('MACTAHOE_CURSOR_THEME_ID', session)
         self.assertIn('CursorThemeFamily::Oxygen', picker)
         self.assertIn('CURSOR_THEME_ID: &str = "FlameWM-Breeze-Dark"', session)
@@ -61,7 +67,8 @@ class Pass50Integration(unittest.TestCase):
         desktop_css = source('ui/desktop/desktop.css')
         self.assertIn('blur_radius', compiler)
         self.assertIn('blur_radius', painter)
-        self.assertIn('text-shadow:0px 1px 2px #000000b8', desktop_css)
+        # Desktop label shadow is now the shared --text-shadow token (ba51c1af).
+        self.assertIn('DEFAULT_TEXT_SHADOW: &str = "0px 1px 2px #00000059"', compiler)
 
 
 if __name__ == '__main__':
