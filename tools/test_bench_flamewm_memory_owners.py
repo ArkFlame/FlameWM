@@ -39,7 +39,7 @@ class OwnersTests(unittest.TestCase):
         desktop = (base/'crates/flamewm-desktop/src/wallpaper_loader.rs').read_text()
         self.assertIn('fn emit_region(', wallpaper)
         self.assertIn('pub fn compose_region_into(', wallpaper)
-        self.assertIn('compose_region_into(\n            natural, ow, oh', wallpaper)
+        self.assertRegex(wallpaper, r'compose_region_into\(\s*natural,\s*ow,\s*oh')  # rustfmt may wrap args
         fragment = desktop.split('fn compose_per_monitor(', 1)[1].split('\n#[cfg(test)]', 1)[0]
         self.assertIn('flamewm_image_core::wallpaper::compose_region_into(', fragment)
         self.assertNotIn('let image = wallpaper_fit::compose(natural, rect.width', fragment)
