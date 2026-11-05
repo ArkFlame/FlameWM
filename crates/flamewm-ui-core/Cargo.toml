@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
+flamewm-skin = { path = "../flamewm-skin" }
 
 [lints]
 workspace = true

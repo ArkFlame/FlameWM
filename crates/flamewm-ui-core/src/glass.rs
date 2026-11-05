@@ -12,6 +12,7 @@
 //! Light: clear glass `rgba(255,255,255,.045)`, 13px blur, saturate 155%, rim `.23`.
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_skin::palette::{LIGHT_PANEL, LIGHT_SURFACE};
 
 /// Tahoe corner radii (px at 1x). Consumers pick the one matching their surface.
 /// The window frame radius has a single owner: `flamewm_skin::recipes::decoration::ROUNDED_RADIUS`.
@@ -200,6 +201,8 @@ pub struct Appearance {
     pub taskbar_opacity_percent: u8,
     /// `taskbarCustomTint` RGB.
     pub taskbar_custom_tint: u32,
+    /// `appearance` is `light` (case-insensitive). `system` and `dark` resolve to the Dark palette.
+    pub light: bool,
 }
 
 impl Default for Appearance {
@@ -211,6 +214,7 @@ impl Default for Appearance {
             taskbar_mode: TaskbarMode::Inherit,
             taskbar_opacity_percent: 8,
             taskbar_custom_tint: 0x0058_79ee,
+            light: false,
         }
     }
 }
@@ -260,10 +264,19 @@ pub fn scale_px(logical: u16, output_scale_percent: u16) -> u16 {
     u16::try_from((scaled + 50) / 100).unwrap_or(u16::MAX)
 }
 
+/// Opaque standard chrome for the resolved appearance (`Palette::LIGHT.panel` in light mode).
+const fn standard_rgb(appearance: Appearance) -> u32 {
+    if appearance.light {
+        LIGHT_PANEL.0
+    } else {
+        STANDARD_RGB
+    }
+}
+
 /// Regular glass material from the glass opacity and blur settings.
 fn regular(appearance: Appearance) -> (u32, u16, u16) {
     (
-        GLASS_TINT_RGB,
+        glass_tint_rgb(appearance),
         u16::from(appearance.glass_opacity_percent) * 10,
         u16::from(appearance.glass_blur_px),
     )
@@ -271,6 +284,15 @@ fn regular(appearance: Appearance) -> (u32, u16, u16) {
 
 /// Glass tint is the Dark preset tint; regular glass uses the user opacity and blur.
 const GLASS_TINT_RGB: u32 = DARK.tint_rgb;
+
+/// Regular glass tint: the Dark preset tint, or `Palette::LIGHT.surface` in light mode.
+const fn glass_tint_rgb(appearance: Appearance) -> u32 {
+    if appearance.light {
+        LIGHT_SURFACE.0
+    } else {
+        GLASS_TINT_RGB
+    }
+}
 
 /// Taskbar blur: `max(16, glass_blur + 6)` logical px.
 #[must_use]
@@ -292,7 +314,7 @@ pub fn resolve(
             MaterialRole::Dock if appearance.taskbar_mode == TaskbarMode::CustomTint => {
                 appearance.taskbar_custom_tint
             }
-            _ => STANDARD_RGB,
+            _ => standard_rgb(appearance),
         };
         return ResolvedMaterial {
             tint_rgb: opaque,
@@ -301,7 +323,7 @@ pub fn resolve(
         };
     } else {
         match role {
-            MaterialRole::StandardContent => (STANDARD_RGB, 1000, 0),
+            MaterialRole::StandardContent => (standard_rgb(appearance), 1000, 0),
             MaterialRole::ContrastZone => (
                 CONTRAST_GLASS_RGB,
                 CONTRAST_GLASS_ALPHA_PERMILLE,
@@ -315,7 +337,11 @@ pub fn resolve(
                 (NEUTRAL_RGB, CLEAR_ALPHA_PERMILLE, CLEAR_BLUR_PX)
             }
             MaterialRole::WindowChrome => (
-                WINDOW_CHROME_RGB,
+                if appearance.light {
+                    LIGHT_PANEL.0
+                } else {
+                    WINDOW_CHROME_RGB
+                },
                 WINDOW_CHROME_ALPHA_PERMILLE,
                 WINDOW_CHROME_BLUR_PX,
             ),
@@ -393,6 +419,10 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
             .unwrap_or(defaults.taskbar_opacity_percent)
             .min(75),
         taskbar_custom_tint: custom_tint.unwrap_or(defaults.taskbar_custom_tint),
+        light: matches!(
+            snapshot.values.get("appearance"),
+            Some(SettingValue::Text(value)) if value.eq_ignore_ascii_case("light")
+        ),
     }
 }
 
@@ -615,5 +645,102 @@ mod resolver_tests {
                 assert!(m.blur_px <= 60);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod appearance_golden_tests {
+    use super::*;
+
+    fn snapshot_with_appearance(value: Option<&str>) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        if let Some(value) = value {
+            snapshot
+                .values
+                .insert("appearance".into(), SettingValue::Text(value.into()));
+        }
+        snapshot
+    }
+
+    fn regular_at(appearance: Appearance) -> ResolvedMaterial {
+        resolve(
+            MaterialRole::GlassRegular,
+            appearance,
+            100,
+            RendererCaps {
+                backdrop_blur: true,
+            },
+        )
+    }
+
+    /// Dark default output is bit-identical to the pre-light-mode resolver values.
+    #[test]
+    fn default_and_dark_materials_are_bit_identical() {
+        for snapshot in [
+            snapshot_with_appearance(None),
+            snapshot_with_appearance(Some("dark")),
+            snapshot_with_appearance(Some("system")),
+        ] {
+            let appearance = appearance_from_settings(&snapshot);
+            assert!(!appearance.light);
+            assert_eq!(
+                regular_at(appearance),
+                ResolvedMaterial {
+                    tint_rgb: 0x00ea_f4ff,
+                    alpha_permille: 120,
+                    blur_px: 28,
+                }
+            );
+            let standard = resolve(
+                MaterialRole::StandardContent,
+                appearance,
+                100,
+                RendererCaps {
+                    backdrop_blur: true,
+                },
+            );
+            assert_eq!(standard.tint_rgb, 0x0017_2135);
+            let chrome = resolve(
+                MaterialRole::WindowChrome,
+                appearance,
+                100,
+                RendererCaps {
+                    backdrop_blur: true,
+                },
+            );
+            assert_eq!(chrome.tint_rgb, 0x000f_1726);
+        }
+        assert_eq!(appearance_from_settings(&snapshot_with_appearance(None)), {
+            Appearance::default()
+        });
+    }
+
+    #[test]
+    fn light_appearance_uses_palette_light_tokens() {
+        let appearance = appearance_from_settings(&snapshot_with_appearance(Some("LIGHT")));
+        assert!(appearance.light);
+        assert_eq!(regular_at(appearance).tint_rgb, LIGHT_SURFACE.0);
+        let standard = resolve(
+            MaterialRole::StandardContent,
+            appearance,
+            100,
+            RendererCaps {
+                backdrop_blur: true,
+            },
+        );
+        assert_eq!(standard.tint_rgb, LIGHT_PANEL.0);
+        let opaque = resolve(
+            MaterialRole::GlassRegular,
+            Appearance {
+                reduce_transparency: true,
+                ..appearance
+            },
+            100,
+            RendererCaps {
+                backdrop_blur: true,
+            },
+        );
+        assert_eq!(opaque.tint_rgb, LIGHT_PANEL.0);
+        assert!(opaque.is_opaque());
     }
 }

@@ -62,3 +62,29 @@ Kept on purpose: `.is-selected`, `.is-current` (generated in `crates/flamewm-set
 ## Verification
 
 Listed in the final report with exact commands and exits.
+
+## Pass 2: appearance wiring and per-app literal inventory
+
+- `flamewm-ui-core/src/glass.rs`: `Appearance.light` parsed from `appearance` (case-insensitive
+  `light`; `dark`, `system` and absent resolve to Dark). Light selects `Palette::LIGHT` tokens:
+  regular glass tint `LIGHT_SURFACE`, opaque standard and reduce-transparency fill and window chrome
+  `LIGHT_PANEL`. ui-core now depends on flamewm-skin (no cycle; skin has no deps).
+- Golden: `appearance_golden_tests::default_and_dark_materials_are_bit_identical` pins the Dark
+  resolver output (tint `0x00eaf4ff`, alpha 120, blur 28; standard `0x172135`; chrome `0x0f1726`).
+- Not yet light-aware: `surface_fill` still honours an explicit `surfaceColor` setting, so a
+  user-saved dark tint overrides Light glass.
+
+### Hard-coded colour inventory (non-test literals)
+
+| Crate | Sites | Light-mode impact |
+| --- | --- | --- |
+| flamewm-desktop-core | `presentation.rs:275-277` selection accent/fill/border bases | dark-only fill base `0x111111` |
+| flamewm-task-manager | `lib.rs:48-53` graph colours, `DANGER_RGB` | graph colours are mid-tone, acceptable |
+| flamewm-shell | `projection.rs:122,146,170` atomic colour defaults | not verified |
+| flamewm-settings | `tables.rs:150` preset swatches | swatches only |
+| flamewm-explorer | `theme.rs:107` `surface: rgb(0)` default | black surface until projection sets it |
+| flamewm-terminal | `ui.rs:21` helper; palette values in `view.rs` | terminal keeps its own dark palette by design |
+| flamewm-lock | `settings.rs:74` `DEFAULT_ACCENT` | lock is dark by design |
+
+Not done: routing these literals through `Palette` tokens, rendered-bitmap light contrast checks,
+and the default-theme golden for each app crate.
