@@ -251,6 +251,27 @@ mod tests {
     }
 
     #[test]
+    fn laid_out_width_equals_caret_end_for_a_long_mixed_string() {
+        // Caret bars (`.caret` spans, Finder query, assistant input) are flex siblings placed at the
+        // laid-out width of the text before them. That width must equal the shared caret model's end.
+        let text = "Wi AVAST, Tofu: ilm 日本 Wa ff W./ VAT To ilm AVocado Search everything";
+        assert!(text.chars().count() >= 40);
+        for size in [13.0f32, 15.0] {
+            let layout = layout_text(text, size, 10_000.0, TextWrap::NoWrap, false);
+            let carets = glyphs::caret_positions(text, size);
+            let Some(carets) = carets else {
+                return; // no font installed on this machine
+            };
+            let end = *carets.last().expect("end");
+            assert!(
+                (layout.lines[0].width - end).abs() < 0.5,
+                "{size}px: layout width {} vs caret end {end}",
+                layout.lines[0].width
+            );
+        }
+    }
+
+    #[test]
     fn readme_txt_width_tracks_installed_plex_measurement() {
         // Measured: IBM Plex Sans Regular "readme.txt" at 13px = 63.6px (PIL).
         // Desktop label line box is 76px wide; estimate must fit with 4px slack.
