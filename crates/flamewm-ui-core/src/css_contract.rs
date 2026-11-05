@@ -62,7 +62,7 @@ fn strip_root_blocks(css: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::raw_colour_literals;
+    use super::{raw_colour_literals, strip_comments};
 
     const TASK_MANAGER_CSS: &str = include_str!("../../../ui/task-manager/task-manager.css");
     const EXPLORER_CSS: &str = include_str!("../../../ui/explorer/explorer.css");
@@ -118,6 +118,40 @@ mod tests {
             .filter(|token| !root.contains(&format!("{token}:")))
             .map(str::to_string)
             .collect()
+    }
+
+    /// Named single-line labels must ellipsize rather than clip mid-glyph.
+    #[test]
+    fn named_nowrap_labels_declare_text_overflow_ellipsis() {
+        let required: [(&str, &str, &[&str]); 2] = [
+            (
+                "finder",
+                include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui/finder/finder.css")),
+                &[".name", ".parent", ".tile-name", ".tile-meta", ".dup-name", ".dup-path"],
+            ),
+            (
+                "explorer",
+                EXPLORER_CSS,
+                &[".name-text", ".field-text", ".place-label", ".status-message"],
+            ),
+        ];
+        for (sheet, css, selectors) in required {
+            let css = strip_comments(css);
+            for selector in selectors {
+                let body = css
+                    .split('}')
+                    .filter_map(|block| block.split_once('{'))
+                    .filter(|(head, _)| head.trim() == *selector)
+                    .map(|(_, body)| body.to_string())
+                    .collect::<String>();
+                assert!(!body.is_empty(), "{sheet}: no rule for `{selector}`");
+                let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+                assert!(
+                    compact.contains("text-overflow:ellipsis"),
+                    "{sheet}: `{selector}` must declare text-overflow:ellipsis"
+                );
+            }
+        }
     }
 
     #[test]

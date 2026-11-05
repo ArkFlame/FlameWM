@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use flamewm_render_core::{
     fnv1a64, AlignItems, Color, ColorValue, ColorVariable, CompiledDocument, CompiledNode,
     CursorKind, Display, Edges, FlexDirection, ImageAsset, ImageTreatment, JustifyContent, Length,
-    NodeKind, Overflow, Position, Style, TextShadow, TextWrap,
+    NodeKind, Overflow, Position, Style, TextOverflow, TextShadow, TextWrap,
 };
 
 use crate::css::{parse_declarations, parse_stylesheet, Declaration, PseudoState, Rule};
@@ -547,6 +547,11 @@ impl<'a> Compiler<'a> {
                 }
                 other => return self.unsupported(format!("white-space: {other}")),
             },
+            "text-overflow" => match value {
+                "clip" => style.text_overflow = TextOverflow::Clip,
+                "ellipsis" => style.text_overflow = TextOverflow::Ellipsis,
+                other => return self.unsupported(format!("text-overflow: {other}")),
+            },
             "overflow-wrap" | "word-wrap" => match value {
                 "normal" => {
                     style.break_anywhere = false;
@@ -636,6 +641,7 @@ fn inherit_text_style(target: &mut Style, inherited: &Style) {
     target.text_shadow = inherited.text_shadow;
     target.text_wrap = inherited.text_wrap;
     target.break_anywhere = inherited.break_anywhere;
+    target.text_overflow = inherited.text_overflow;
     target.opacity = inherited.opacity;
 }
 
@@ -1077,6 +1083,16 @@ mod tests {
         assert_eq!(find("b").text_wrap, TextWrap::NoWrap);
         assert_eq!(find("c").text_wrap, TextWrap::Wrap);
         assert!(find("c").break_anywhere);
+    }
+
+    #[test]
+    fn compiles_text_overflow_ellipsis_and_inherits_it() {
+        use flamewm_render_core::TextOverflow;
+        let output = compile_body(
+            r#"<body><style>.d { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .e { white-space: nowrap; }</style><div class="d" id="d">x</div><div class="e" id="e">x</div></body>"#,
+        );
+        assert_eq!(style_of(&output, "d").text_overflow, TextOverflow::Ellipsis);
+        assert_eq!(style_of(&output, "e").text_overflow, TextOverflow::Clip);
     }
 
     #[test]

@@ -426,13 +426,14 @@ impl<'a> Engine<'a> {
         }
         if node.kind == NodeKind::Text {
             let text = self.document.text_for(index);
-            let laid = crate::text_layout::layout_text_weighted(
+            let laid = crate::text_layout::layout_styled(
                 text,
                 style.font_size,
                 style.font_weight,
                 avail_w,
                 style.text_wrap,
                 style.break_anywhere,
+                style.text_overflow,
             );
             return (
                 clamp_length(laid.width, style.min_width, style.max_width, avail_w),

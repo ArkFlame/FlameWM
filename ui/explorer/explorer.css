@@ -22,7 +22,7 @@ button:active { background:var(--pressed-fill); }
 .search { width:150px; min-width:0px; flex-grow:0; color:var(--muted); }
 .search-clear { width:22px; height:22px; flex-grow:0; border-radius:11px; color:var(--text); font-size:15px; }
 .field-ico { width:16px; height:16px; flex-grow:0; }
-.field-text { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; font-size:13px; }
+.field-text { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; font-size:13px; text-overflow:ellipsis; }
 .tabs { width:100%; height:36px; flex-grow:0; display:flex; flex-direction:row; align-items:center; padding-left:10px; gap:2px; }
 .tab { min-width:96px; max-width:164px; height:28px; padding:0 10px; white-space:nowrap; overflow:hidden; background:var(--card); border-radius:6px; }
 .tab-add,.tab-close { height:28px; width:30px; }
@@ -32,7 +32,7 @@ button:active { background:var(--pressed-fill); }
 .place-row { width:100%; height:30px; flex-grow:0; display:flex; flex-direction:row; align-items:center; }
 .place { justify-content:flex-start; flex-grow:1; min-width:0; height:30px; padding:0 8px; gap:10px; display:flex; flex-direction:row; align-items:center; overflow:hidden; white-space:nowrap; border-radius:6px; }
 .place-ico { width:16px; height:16px; flex-grow:0; }
-.place-label { flex-grow:1; min-width:0; overflow:hidden; white-space:nowrap; }
+.place-label { flex-grow:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .place-act { width:26px; height:26px; flex-grow:0; border-radius:5px; }
 .act-ico { width:14px; height:14px; flex-grow:0; }
 .sort-ico { width:10px; height:10px; flex-grow:0; margin-left:4px; }
@@ -49,7 +49,7 @@ button:active { background:var(--pressed-fill); }
 .row-ico { width:18px; height:18px; flex-grow:0; }
 /* Image-file thumbnail, shown in place of the type icon (see thumbs.rs). */
 .row-thumb { width:24px; height:24px; }
-.name-text { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; }
+.name-text { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 /* Dot-file names: a static dim colour, shown instead of .name-text (see main.rs row projection). */
 .name-dim { color:var(--muted); }
 /* Widths come from doc.size in main.rs (columns.rs), so the header and every row share one geometry. */
@@ -63,7 +63,7 @@ button:active { background:var(--pressed-fill); }
 /* The engine has no flex-shrink, so the activity message takes the slack from a zero base
    (the pattern `.address` uses) instead of reserving its measured width and pushing the
    job progress past the window edge. */
-.status-message { flex-grow:1; width:0; min-width:0; white-space:nowrap; overflow:hidden; color:var(--muted); }
+.status-message { flex-grow:1; width:0; min-width:0; white-space:nowrap; overflow:hidden; color:var(--muted); text-overflow:ellipsis; }
 .status-free { white-space:nowrap; overflow:hidden; flex-grow:0; color:var(--text); }
 /* Percent and current entry for a running transfer: fixed budget so the label can never
    claim the strip, and no shrink (the engine has none), so it always keeps its text width. */

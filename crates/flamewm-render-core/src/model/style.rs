@@ -186,6 +186,14 @@ pub enum TextWrap {
     Wrap,
 }
 
+/// CSS `text-overflow`: `Ellipsis` truncates a single-line overflowing run and appends U+2026.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextOverflow {
+    #[default]
+    Clip,
+    Ellipsis,
+}
+
 /// Bounded Gaussian alpha-mask shadow. Zero blur preserves the legacy offset glyph.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextShadow {
@@ -226,6 +234,7 @@ pub struct Style {
     pub text_shadow: Option<TextShadow>,
     pub text_wrap: TextWrap,
     pub break_anywhere: bool,
+    pub text_overflow: TextOverflow,
     pub opacity: f32,
     pub cursor: CursorKind,
     pub overflow_x: Overflow,
@@ -267,6 +276,7 @@ impl Default for Style {
             text_shadow: None,
             text_wrap: TextWrap::NoWrap,
             break_anywhere: false,
+            text_overflow: TextOverflow::Clip,
             opacity: 1.0,
             cursor: CursorKind::Default,
             overflow_x: Overflow::Visible,

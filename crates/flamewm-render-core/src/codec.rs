@@ -48,6 +48,7 @@ wire_enum!("cursor kind" CursorKind {
 wire_enum!("overflow" Overflow { Visible = 0, Hidden = 1, Auto = 2, Scroll = 3 });
 wire_enum!("image treatment" ImageTreatment { Original = 0, SymbolicForeground = 1 });
 wire_enum!("text wrap" TextWrap { NoWrap = 0, Wrap = 1 });
+wire_enum!("text overflow" TextOverflow { Clip = 0, Ellipsis = 1 });
 
 pub fn encode(document: &CompiledDocument) -> Result<Vec<u8>, String> {
     encode_version(document, FORMAT_VERSION)
@@ -124,6 +125,7 @@ fn decode_with(bytes: &[u8], borrow: Option<&'static [u8]>) -> Result<CompiledDo
     // rejected explicitly; no silent reinterpretation of pixel bytes.
     let bytes_per_pixel: u32 = match version {
         FORMAT_VERSION
+        | FORMAT_VERSION_OVERFLOW_LEGACY
         | FORMAT_VERSION_FOCUS_LEGACY
         | FORMAT_VERSION_BLUR_LEGACY
         | FORMAT_VERSION_SHADOW_LEGACY
@@ -373,6 +375,10 @@ impl Writer {
         self.tag(style.image_treatment);
         self.tag(style.text_wrap);
         self.u8(u8::from(style.break_anywhere));
+        // v10-only field: pre-v10 layouts have no text-overflow tag.
+        if version > FORMAT_VERSION_OVERFLOW_LEGACY {
+            self.tag(style.text_overflow);
+        }
         // v8-only field: pre-v8 documents have no hide-scrollbars byte.
         if version > FORMAT_VERSION_BLUR_LEGACY {
             self.u8(u8::from(style.hide_scrollbars));
@@ -590,6 +596,11 @@ impl<'a> Reader<'a> {
             } else {
                 false
             },
+            text_overflow: if version > FORMAT_VERSION_OVERFLOW_LEGACY {
+                self.tag()?
+            } else {
+                TextOverflow::Clip
+            },
             hide_scrollbars: if version > FORMAT_VERSION_BLUR_LEGACY {
                 self.flag("hide scrollbars")?
             } else {
@@ -756,10 +767,10 @@ mod tests {
     fn unknown_version_is_rejected_explicitly() {
         let document = roundtrip_node(ImageTreatment::Original);
         let mut bytes = encode(&document).unwrap();
-        bytes[4..6].copy_from_slice(&10u16.to_le_bytes());
-        let error = decode(&bytes).expect_err("version 10 must fail");
+        bytes[4..6].copy_from_slice(&11u16.to_le_bytes());
+        let error = decode(&bytes).expect_err("version 11 must fail");
         assert!(
-            error.contains("unsupported FlameWM Render format version 10"),
+            error.contains("unsupported FlameWM Render format version 11"),
             "unexpected: {error}"
         );
     }
@@ -842,7 +853,7 @@ mod tests {
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_RGBA8_LEGACY.to_le_bytes());
         // v6 adds one shadow-presence byte in addition to the v5
         // treatment+wrap+break fields. Strip four bytes for v3.
-        assert_eq!(FORMAT_VERSION, 9);
+        assert_eq!(FORMAT_VERSION, 10);
         let tail = bytes.len() - 6;
         bytes.drain(tail..tail + 4);
         let decoded = decode(&bytes).unwrap();
@@ -860,7 +871,7 @@ mod tests {
     fn v4_style_decodes_with_wrap_defaults() {
         let document = roundtrip_node(ImageTreatment::SymbolicForeground);
         let mut bytes = encode_pre_v8(&document);
-        assert_eq!(FORMAT_VERSION, 9);
+        assert_eq!(FORMAT_VERSION, 10);
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_TREATMENT_LEGACY.to_le_bytes());
         // Strip v5 wrap+break and v6 shadow flag after treatment.
         let tail = bytes.len() - 5;
@@ -931,7 +942,7 @@ mod tests {
     fn v2_style_decodes_with_original_treatment_and_overflow_defaults() {
         let document = roundtrip_node(ImageTreatment::Original);
         let mut bytes = encode_pre_v8(&document);
-        assert_eq!(FORMAT_VERSION, 9);
+        assert_eq!(FORMAT_VERSION, 10);
         // Convert to v2: strip treatment, wrap, break, shadow, and two
         // overflow bytes from the single-node style.
         let style_tail = bytes.len() - 8;

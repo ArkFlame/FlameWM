@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use crate::glyphs;
-use crate::model::TextWrap;
+use crate::model::{TextOverflow, TextWrap};
 
 /// One laid-out line: collapsed text plus its advance width in px.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -115,6 +115,9 @@ pub fn layout_text(
     layout_text_weighted(text, font_size, REGULAR_WEIGHT, avail_width, wrap, break_anywhere)
 }
 
+/// Single-line ellipsis character appended by [`TextOverflow::Ellipsis`].
+pub const ELLIPSIS: char = '\u{2026}';
+
 /// [`layout_text`] for a node's font weight, so the installed measure sees the weight paint uses.
 #[must_use]
 pub fn layout_text_weighted(
@@ -124,6 +127,29 @@ pub fn layout_text_weighted(
     avail_width: f32,
     wrap: TextWrap,
     break_anywhere: bool,
+) -> TextLayout {
+    layout_styled(
+        text,
+        font_size,
+        weight,
+        avail_width,
+        wrap,
+        break_anywhere,
+        TextOverflow::Clip,
+    )
+}
+
+/// [`layout_text_weighted`] plus CSS `text-overflow`. `Ellipsis` only affects a `NoWrap` run
+/// wider than `avail_width`; it is cut on char boundaries so the result plus `…` fits.
+#[must_use]
+pub fn layout_styled(
+    text: &str,
+    font_size: f32,
+    weight: u16,
+    avail_width: f32,
+    wrap: TextWrap,
+    break_anywhere: bool,
+    overflow: TextOverflow,
 ) -> TextLayout {
     let size = font_size.max(0.0);
     let line_h = line_height(size);
@@ -140,7 +166,11 @@ pub fn layout_text_weighted(
         if collapsed.is_empty() {
             lines.push(TextLine::default());
         } else if wrap == TextWrap::NoWrap && avail_ok {
-            push_measured(&mut lines, collapsed, size, weight);
+            if overflow == TextOverflow::Ellipsis {
+                push_ellipsized(&mut lines, &collapsed, size, avail_width, weight);
+            } else {
+                push_measured(&mut lines, collapsed, size, weight);
+            }
         } else if break_anywhere {
             push_chunks(&mut lines, &collapsed, size, avail_width, weight);
         } else {
@@ -195,6 +225,42 @@ pub fn layout_text_weighted(
         width,
         height,
         line_height: line_h,
+    }
+}
+
+/// Pushes `text` whole when it fits, else its longest char-boundary prefix plus `…` whose measured
+/// width (the exact string paint draws) fits `avail`. Nothing fits: pushes an empty line.
+fn push_ellipsized(lines: &mut Vec<TextLine>, text: &str, font_size: f32, avail: f32, weight: u16) {
+    if text_width(text, font_size, weight) <= avail {
+        push_measured(lines, text.to_owned(), font_size, weight);
+        return;
+    }
+    // Byte offsets of char boundaries, ascending; `cuts[k]` keeps `k` leading chars.
+    let cuts: Vec<usize> = std::iter::once(0)
+        .chain(text.char_indices().skip(1).map(|(index, _)| index))
+        .collect();
+    let candidate = |cut: usize| {
+        let mut out = String::with_capacity(cut + ELLIPSIS.len_utf8());
+        out.push_str(text[..cut].trim_end_matches(' '));
+        out.push(ELLIPSIS);
+        out
+    };
+    // Largest kept prefix whose candidate fits; width grows with length, so binary search applies.
+    let (mut lo, mut hi) = (0usize, cuts.len());
+    let mut best: Option<String> = None;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let out = candidate(cuts[mid]);
+        if text_width(&out, font_size, weight) <= avail {
+            best = Some(out);
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    match best {
+        Some(out) => push_measured(lines, out, font_size, weight),
+        None => lines.push(TextLine::default()),
     }
 }
 
@@ -265,6 +331,7 @@ fn char_chunks(text: &str, font_size: f32, avail_width: f32) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::TextOverflow;
 
     fn widths(layout: &TextLayout) -> Vec<f32> {
         layout.lines.iter().map(|line| line.width).collect()
@@ -441,5 +508,70 @@ mod tests {
         let joined: String = layout.lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(joined, "aa bb");
         assert!(layout.lines.len() > 1);
+    }
+
+    #[test]
+    fn ellipsis_truncates_overlong_nowrap_run_within_box() {
+        let text = "flamemc_vs_paper_160 2026-11-05 18-23-36.";
+        let avail = 90.0;
+        let laid = layout_styled(
+            text,
+            13.0,
+            REGULAR_WEIGHT,
+            avail,
+            TextWrap::NoWrap,
+            false,
+            TextOverflow::Ellipsis,
+        );
+        assert_eq!(laid.lines.len(), 1);
+        let line = &laid.lines[0];
+        assert!(line.text.ends_with(ELLIPSIS), "{:?}", line.text);
+        assert!(line.text.chars().count() < text.chars().count());
+        let kept = line.text.trim_end_matches(ELLIPSIS);
+        assert!(text.starts_with(kept), "kept prefix must be a prefix: {kept:?}");
+        assert!(line.width <= avail, "width {} exceeds box {avail}", line.width);
+        assert_eq!(line.width, text_width(&line.text, 13.0, REGULAR_WEIGHT));
+    }
+
+    #[test]
+    fn ellipsis_leaves_fitting_and_clip_text_unchanged() {
+        let fitting = layout_styled(
+            "readme",
+            13.0,
+            REGULAR_WEIGHT,
+            1000.0,
+            TextWrap::NoWrap,
+            false,
+            TextOverflow::Ellipsis,
+        );
+        assert_eq!(fitting.lines[0].text, "readme");
+        let clipped = layout_styled(
+            "flamemc_vs_paper_160",
+            13.0,
+            REGULAR_WEIGHT,
+            40.0,
+            TextWrap::NoWrap,
+            false,
+            TextOverflow::Clip,
+        );
+        assert_eq!(clipped.lines[0].text, "flamemc_vs_paper_160");
+    }
+
+    #[test]
+    fn ellipsis_cuts_on_char_boundaries_for_multibyte_text() {
+        let text = "日本語テキストのとても長い行";
+        let avail = 60.0;
+        let laid = layout_styled(
+            text,
+            13.0,
+            REGULAR_WEIGHT,
+            avail,
+            TextWrap::NoWrap,
+            false,
+            TextOverflow::Ellipsis,
+        );
+        let line = &laid.lines[0];
+        assert!(line.text.is_empty() || line.text.ends_with(ELLIPSIS));
+        assert!(line.width <= avail);
     }
 }

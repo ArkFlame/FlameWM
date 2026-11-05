@@ -284,7 +284,7 @@ input { cursor:text; }
 .launcher-highlight { position:absolute; left:0px; top:0px; width:100%; height:40px; background:var(--accent-soft); border-radius:6px; }
 .launcher-row { width:100%; height:40px; padding:0px 10px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border:0px solid transparent; border-radius:6px; cursor:default; }
 .launcher-row img { width:20px; height:20px; }
-.launcher-label { flex-grow:1; font-size:14px; white-space:nowrap; overflow:hidden; }
+.launcher-label { flex-grow:1; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .launcher-empty { height:40px; padding:0px 10px; display:flex; align-items:center; color:var(--muted); font-size:13px; }
 /* Alt+Tab switcher: the launcher's list rows and surface; only the card width and the accent selection differ. */
 .switcher-popup { width:420px; }

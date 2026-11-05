@@ -55,7 +55,7 @@ button.head:active { background:var(--pressed-fill); }
 .name, .name-head { width:220px; }
 .name { gap:9px; }
 .dot { width:8px; height:8px; flex-grow:0; border-radius:4px; background:var(--c-7f8389); }
-.name-text { flex-grow:1; min-width:0; overflow:hidden; white-space:nowrap; }
+.name-text { flex-grow:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .pid { width:76px; color:var(--muted); }
 .user { width:96px; color:var(--muted); }
 .state { width:88px; color:var(--muted); }
