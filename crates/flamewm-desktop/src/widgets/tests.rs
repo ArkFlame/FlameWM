@@ -267,13 +267,14 @@ fn settings_with(values: &[(&str, flamewm_api::settings::SettingValue)]) -> Sett
 fn inheriting_card_takes_the_global_surface_fill_blur_and_radius() {
     let widget = Widget::new(1, WidgetKind::Clock, Point::new(0, 0));
     let surface = widget_surface(&widget, &SettingsSnapshot::new(1));
-    // Dark glass tint at the regular glass alpha, blurred at the 28 px default (70%).
+    // Custom surface switch off: the Dark theme surface (#202326) at the regular glass alpha,
+    // blurred at the 28 px default (70%).
     assert_eq!(
         surface.fill,
         UiColor {
-            r: 234,
-            g: 244,
-            b: 255,
+            r: 32,
+            g: 35,
+            b: 38,
             a: 31
         }
     );
