@@ -34,9 +34,40 @@ pub fn char_width(font_size: f32) -> f32 {
     font_size.max(0.0) * 0.49
 }
 
-/// Layout width of `text`: the same fractional shaped advance that paint and caret use. Falls
-/// back to the per-char estimate only when no font is installed.
+/// Advance measure `(text, size_px, weight) -> px` supplied by the paint backend.
+pub type MeasureFn<'a> = &'a dyn Fn(&str, f32, u16) -> f32;
+
+thread_local! {
+    static MEASURE_HOOK: std::cell::Cell<Option<MeasureFn<'static>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with `measure` as the layout measure on this thread, then restores the previous one.
+///
+/// Backends (for example Xft on X11) install the measure that matches their paint. Outside any
+/// call, layout uses the render-core fontdue model.
+pub fn with_measure<R>(measure: MeasureFn<'_>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<MeasureFn<'static>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            MEASURE_HOOK.with(|slot| slot.set(self.0));
+        }
+    }
+    // SAFETY: the reference is stored only until `Restore` drops at the end of this call, and
+    // `f` runs strictly inside that span. Nothing reads the slot after the borrow ends.
+    let erased: MeasureFn<'static> = unsafe { std::mem::transmute(measure) };
+    let previous = MEASURE_HOOK.with(|slot| slot.replace(Some(erased)));
+    let _restore = Restore(previous);
+    f()
+}
+
+/// Layout width of `text` at `font_size`, measured by the installed hook when one is set, else by
+/// the render-core fontdue model, else by the per-char estimate.
 fn text_width(text: &str, font_size: f32) -> f32 {
+    // Layout does not know the node's weight yet; 400 is the regular weight the paint defaults to.
+    if let Some(measure) = MEASURE_HOOK.with(std::cell::Cell::get) {
+        return measure(text, font_size, 400);
+    }
     glyphs::advance_width(text, font_size)
         .unwrap_or_else(|| text.chars().count() as f32 * char_width(font_size))
 }
@@ -248,6 +279,21 @@ mod tests {
     fn nowrap_keeps_single_line_per_paragraph() {
         let layout = layout_text("a b c\nd e", 10.0, 1.0, TextWrap::NoWrap, false);
         assert_eq!(texts(&layout), vec!["a b c", "d e"]);
+    }
+
+    #[test]
+    fn layout_width_comes_from_the_installed_measure_and_is_restored_after() {
+        let fake = |text: &str, size: f32, weight: u16| {
+            assert_eq!(weight, 400);
+            text.chars().count() as f32 * size * 0.5
+        };
+        let inside = with_measure(&fake, || {
+            layout_text("abcd", 13.0, 1000.0, TextWrap::NoWrap, false).lines[0].width
+        });
+        assert!((inside - 26.0).abs() < 1e-4, "hook width used: {inside}");
+        // Restored: the same text measures with the render-core model again.
+        let outside = layout_text("abcd", 13.0, 1000.0, TextWrap::NoWrap, false).lines[0].width;
+        assert!((outside - 26.0).abs() > 1e-4 || glyphs::advance_width("abcd", 13.0).is_none());
     }
 
     #[test]
