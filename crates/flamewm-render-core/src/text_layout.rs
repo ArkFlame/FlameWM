@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use crate::glyphs;
 use crate::model::TextWrap;
 
 /// One laid-out line: collapsed text plus its advance width in px.
@@ -33,8 +34,11 @@ pub fn char_width(font_size: f32) -> f32 {
     font_size.max(0.0) * 0.49
 }
 
+/// Layout width of `text`: the same fractional shaped advance that paint and caret use. Falls
+/// back to the per-char estimate only when no font is installed.
 fn text_width(text: &str, font_size: f32) -> f32 {
-    text.chars().count() as f32 * char_width(font_size)
+    glyphs::advance_width(text, font_size)
+        .unwrap_or_else(|| text.chars().count() as f32 * char_width(font_size))
 }
 
 /// Lay out text to an available width.
@@ -74,7 +78,7 @@ pub fn layout_text(
             // Greedy word fill; overlong or degenerate-avail tokens char-split.
             let mut current = String::new();
             let mut current_w = 0.0f32;
-            let space_w = char_width(size);
+            let space_w = text_width(" ", size);
             let flush = |current: &mut String, current_w: &mut f32, lines: &mut Vec<TextLine>| {
                 if !current.is_empty() {
                     lines.push(TextLine {
@@ -155,16 +159,32 @@ fn collapse_whitespace(input: &str) -> String {
     out
 }
 
-/// Greedy char-level chunks; degenerate avail yields one char per chunk.
+/// Greedy char-level chunks by measured caret position; degenerate avail yields one char per chunk.
 fn char_chunks(text: &str, font_size: f32, avail_width: f32) -> Vec<String> {
-    let char_w = char_width(font_size);
-    let per_line = if !avail_width.is_finite() || avail_width <= 0.0 || char_w <= 0.0 {
-        1
-    } else {
-        ((avail_width / char_w).floor() as usize).max(1)
-    };
     let chars: Vec<char> = text.chars().collect();
-    chars.chunks(per_line).map(|c| c.iter().collect()).collect()
+    let boundaries = glyphs::caret_positions(text, font_size).unwrap_or_else(|| {
+        (0..=chars.len())
+            .map(|i| i as f32 * char_width(font_size))
+            .collect()
+    });
+    let usable = avail_width.is_finite() && avail_width > 0.0;
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    for end in 1..=chars.len() {
+        let fits = usable && boundaries[end] - boundaries[start] <= avail_width;
+        if !fits && end - start > 1 {
+            chunks.push(chars[start..end - 1].iter().collect());
+            start = end - 1;
+        } else if !fits {
+            // One char wider than the available width still gets its own line.
+            chunks.push(chars[start..end].iter().collect());
+            start = end;
+        }
+    }
+    if start < chars.len() {
+        chunks.push(chars[start..].iter().collect());
+    }
+    chunks
 }
 
 #[cfg(test)]

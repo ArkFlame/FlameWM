@@ -33,8 +33,8 @@ fn user_font_dir() -> Option<std::path::PathBuf> {
 /// A rasterized glyph and where its bitmap sits relative to the pen.
 #[derive(Clone, Debug)]
 pub struct GlyphMask {
-    /// Horizontal advance from the glyph origin.
-    pub advance: i32,
+    /// Unrounded horizontal advance from the glyph origin, in px.
+    pub advance: f32,
     /// Bitmap left edge relative to the pen.
     pub left: i32,
     /// Bitmap top edge relative to the baseline, positive upward.
@@ -112,11 +112,48 @@ fn find_font() -> Option<Font> {
     None
 }
 
-/// Runs `f` with a glyph lookup at `px` pixels, or returns `None` when no font is installed.
-fn with_glyphs<R>(
+/// One font at one pixel size: the only source of glyph advances and kerning.
+///
+/// Paint (`text_mask`), caret positions (`caret_positions`), hit-testing (`char_index_at`) and
+/// layout width (`advance_width`) all go through `shape`, so they cannot disagree.
+struct Run<'a> {
+    cache: &'a mut FontCache,
     px: f32,
-    f: impl FnOnce(&mut dyn FnMut(char) -> Arc<GlyphMask>) -> R,
-) -> Option<R> {
+}
+
+impl Run<'_> {
+    fn glyph(&mut self, c: char) -> Arc<GlyphMask> {
+        let key = (c, self.px.to_bits());
+        if let Some(hit) = self.cache.cache.get(&key) {
+            return Arc::clone(hit);
+        }
+        let (metrics, coverage) = self.cache.font.rasterize(c, self.px);
+        let glyph = Arc::new(GlyphMask {
+            advance: metrics.advance_width,
+            left: metrics.xmin,
+            top: metrics.height as i32 + metrics.ymin,
+            width: metrics.width,
+            height: metrics.height,
+            coverage,
+        });
+        if self.cache.cache.len() >= CACHE_LIMIT {
+            self.cache.cache.clear();
+        }
+        self.cache.cache.insert(key, Arc::clone(&glyph));
+        glyph
+    }
+
+    /// Kerning between `left` and `right`, in px; zero when the font has no pair.
+    fn kern(&self, left: char, right: char) -> f32 {
+        self.cache
+            .font
+            .horizontal_kern(left, right, self.px)
+            .unwrap_or(0.0)
+    }
+}
+
+/// Runs `f` with the font at `px` pixels, or returns `None` when no font is installed.
+fn with_run<R>(px: f32, f: impl FnOnce(&mut Run<'_>) -> R) -> Option<R> {
     let mut guard = FONT.lock().ok()?;
     if guard.is_none() {
         *guard = Some(find_font().map(|font| FontCache {
@@ -125,27 +162,67 @@ fn with_glyphs<R>(
         }));
     }
     let cache = guard.as_mut()?.as_mut()?;
-    let key_px = (px * 4.0).round() as u32;
-    let mut lookup = |c: char| {
-        if let Some(hit) = cache.cache.get(&(c, key_px)) {
-            return Arc::clone(hit);
+    Some(f(&mut Run { cache, px }))
+}
+
+/// Shapes `text`: the fractional pen origin of every char plus the run end (`len = chars + 1`),
+/// and the glyph of every char. The pen is accumulated in f32; nothing is rounded per glyph.
+fn shape(text: &str, run: &mut Run<'_>) -> (Vec<f32>, Vec<Arc<GlyphMask>>) {
+    let mut origins = Vec::with_capacity(text.len() + 1);
+    let mut glyphs = Vec::with_capacity(text.len());
+    let mut pen = 0.0f32;
+    let mut prev: Option<char> = None;
+    for character in text.chars() {
+        if let Some(left) = prev {
+            pen += run.kern(left, character);
         }
-        let (metrics, coverage) = cache.font.rasterize(c, px);
-        let glyph = Arc::new(GlyphMask {
-            advance: metrics.advance_width.round() as i32,
-            left: metrics.xmin,
-            top: metrics.height as i32 + metrics.ymin,
-            width: metrics.width,
-            height: metrics.height,
-            coverage,
-        });
-        if cache.cache.len() >= CACHE_LIMIT {
-            cache.cache.clear();
+        origins.push(pen);
+        let glyph = run.glyph(character);
+        pen += glyph.advance;
+        glyphs.push(glyph);
+        prev = Some(character);
+    }
+    origins.push(pen);
+    (origins, glyphs)
+}
+
+/// Advance width of `text` at `size` px, in fractional px. `None` when no font is installed.
+#[must_use]
+pub fn advance_width(text: &str, size: f32) -> Option<f32> {
+    if size <= 0.0 {
+        return None;
+    }
+    with_run(size, |run| shape(text, run).0.last().copied().unwrap_or(0.0))
+}
+
+/// Caret x of every char boundary in `text` at `size` px, relative to the run origin.
+///
+/// `result[i]` is where a caret before char `i` sits; `result[chars]` is the end of the run.
+/// `None` when no font is installed.
+#[must_use]
+pub fn caret_positions(text: &str, size: f32) -> Option<Vec<f32>> {
+    if size <= 0.0 {
+        return None;
+    }
+    with_run(size, |run| shape(text, run).0)
+}
+
+/// Char index whose caret boundary is nearest to `x` (run-relative px), clamped to the run.
+///
+/// Inverse of [`caret_positions`]: `char_index_at(t, s, caret_positions(t, s)[k])` is `k`.
+#[must_use]
+pub fn char_index_at(text: &str, size: f32, x: f32) -> Option<usize> {
+    let origins = caret_positions(text, size)?;
+    let mut best = 0usize;
+    let mut best_distance = f32::INFINITY;
+    for (index, origin) in origins.iter().enumerate() {
+        let distance = (origin - x).abs();
+        if distance < best_distance {
+            best = index;
+            best_distance = distance;
         }
-        cache.cache.insert((c, key_px), Arc::clone(&glyph));
-        glyph
-    };
-    Some(f(&mut lookup))
+    }
+    Some(best)
 }
 
 /// Rasterizes `text` at `size` pixels with its baseline at (`pen_x`, `baseline_y`).
@@ -157,15 +234,14 @@ pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<T
     if size <= 0.0 || text.is_empty() {
         return None;
     }
-    with_glyphs(size, |lookup| {
+    with_run(size, |run| {
+        let (origins, shaped) = shape(text, run);
         let mut glyphs = Vec::new();
-        let mut pen = 0i32;
-        for character in text.chars() {
-            let glyph = lookup(character);
+        for (origin, glyph) in origins.iter().zip(shaped) {
+            // Each origin rounds once on its own; the pen itself never accumulates rounding.
             if glyph.width > 0 && glyph.height > 0 {
-                glyphs.push((pen, Arc::clone(&glyph)));
+                glyphs.push((origin.round() as i32, glyph));
             }
-            pen += glyph.advance;
         }
         if glyphs.is_empty() {
             return TextMask {
@@ -267,6 +343,97 @@ mod tests {
             long.width,
             short.width
         );
+    }
+
+    /// Strings of 1..=200 chars mixing ASCII, spaces, kerning pairs and a wide non-Latin glyph.
+    fn sample_strings() -> Vec<String> {
+        const PIECES: &[&str] = &["AV", "To", "Wa", " ", "x", "ilm", "日", "W", "ff", "./"];
+        (1..=200)
+            .map(|len| {
+                (0..len)
+                    .map(|i| PIECES[(i * 7 + len) % PIECES.len()])
+                    .collect::<String>()
+                    .chars()
+                    .take(len)
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Unrounded advance plus kerning, summed straight from the font file, as an independent
+    /// reference for the shared pen model.
+    fn reference_advance(text: &str, px: f32) -> f32 {
+        let font = find_font().expect("font");
+        let chars: Vec<char> = text.chars().collect();
+        let mut sum = 0.0f32;
+        for (i, &c) in chars.iter().enumerate() {
+            if i > 0 {
+                sum += font.horizontal_kern(chars[i - 1], c, px).unwrap_or(0.0);
+            }
+            sum += font.metrics(c, px).advance_width;
+        }
+        sum
+    }
+
+    #[test]
+    fn caret_end_matches_unrounded_reference_within_half_px() {
+        if !any_font() {
+            return;
+        }
+        for size in [11.0f32, 13.0, 14.5, 20.0] {
+            for text in sample_strings() {
+                let carets = caret_positions(&text, size).expect("carets");
+                assert_eq!(carets.len(), text.chars().count() + 1);
+                let end = *carets.last().expect("end");
+                let expected = reference_advance(&text, size);
+                assert!(
+                    (end - expected).abs() < 0.5,
+                    "{size}px {} chars: caret end {end} vs reference {expected}",
+                    text.chars().count()
+                );
+                assert!(
+                    carets.windows(2).all(|pair| pair[0] <= pair[1]),
+                    "caret positions must not go backwards"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_glyph_run_does_not_drift_per_letter() {
+        if !any_font() {
+            return;
+        }
+        // Per-glyph rounding of the advance would drift linearly with the letter count.
+        let px = 13.0;
+        let one = advance_width("I", px).expect("advance");
+        let long = advance_width(&"I".repeat(200), px).expect("advance");
+        assert!(
+            (long - 200.0 * one).abs() < 0.5,
+            "200 I's: {long} vs 200 * {one}"
+        );
+    }
+
+    #[test]
+    fn caret_hit_test_round_trips_every_boundary() {
+        if !any_font() {
+            return;
+        }
+        for size in [13.0f32, 16.0] {
+            for text in sample_strings() {
+                let carets = caret_positions(&text, size).expect("carets");
+                for (index, &x) in carets.iter().enumerate() {
+                    assert_eq!(
+                        char_index_at(&text, size, x),
+                        Some(index),
+                        "{size}px boundary {index} of {text:?}"
+                    );
+                }
+                let end = *carets.last().expect("end");
+                assert_eq!(char_index_at(&text, size, end + 500.0), Some(text.chars().count()));
+                assert_eq!(char_index_at(&text, size, -500.0), Some(0));
+            }
+        }
     }
 
     #[test]
