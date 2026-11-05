@@ -13,7 +13,6 @@ use crate::widget_grid::{self, GridMetrics, Placement, Span};
 pub const MAX_WIDGETS: usize = 8;
 pub const MIN_WIDGET_SIZE: i32 = 64;
 pub const STATE_FILE_NAME: &str = "desktop-widgets.state";
-pub const CASCADE_STEP: i32 = 28;
 /// Per-card keys that override the global surface while `customSurface` is on.
 pub const SURFACE_OVERRIDE_KEYS: [&str; 2] = ["background", "backgroundOpacity"];
 
@@ -702,14 +701,6 @@ impl WidgetStore {
         self.widgets.iter_mut().find(|widget| widget.id == id)
     }
 
-    #[must_use]
-    pub fn count_of(&self, kind: WidgetKind) -> usize {
-        self.widgets
-            .iter()
-            .filter(|widget| widget.kind == kind)
-            .count()
-    }
-
     pub fn add(&mut self, kind: WidgetKind, bounds: Rect) -> Option<u32> {
         self.add_on_grid(kind, GridMetrics::for_work_area(bounds, 100))
     }
@@ -773,24 +764,6 @@ impl WidgetStore {
             widget.rect = metrics.rect_of(placement);
             widget.anchor = Some(EdgeAnchor::of(widget.rect, metrics.work));
         }
-    }
-
-    /// Fresh-profile store: the grid's default arrangement (`widget_grid::default_layout`).
-    #[must_use]
-    pub fn with_default_layout(metrics: GridMetrics) -> Self {
-        let mut store = Self::default();
-        for (kind, slot) in widget_grid::default_layout(metrics) {
-            let Some(placement) = slot else {
-                continue;
-            };
-            let mut widget = Widget::new(store.widgets.len() as u32 + 1, kind, Point::new(0, 0));
-            widget.grid = Some(placement);
-            widget.rect = metrics.rect_of(placement);
-            widget.anchor = Some(EdgeAnchor::of(widget.rect, metrics.work));
-            store.widgets.push(widget);
-        }
-        store.grid_size = Some((metrics.cols, metrics.rows));
-        store
     }
 
     /// Another unlocked widget of the same size whose cell is exactly `want`, when it is
@@ -879,46 +852,12 @@ impl WidgetStore {
         }
     }
 
-    /// Cell a resize to `span` would take, keeping the current cell when it is free.
-    #[must_use]
-    pub fn preview_resize(&self, id: u32, span: Span, metrics: GridMetrics) -> Option<Placement> {
-        let widget = self.get(id)?;
-        let current = widget.grid?;
-        let want = Placement {
-            span: widget_grid::fit_span(widget.kind, span),
-            ..current
-        };
-        metrics.nearest_free(want, &self.placements_except(id))
-    }
-
     fn placements_except(&self, id: u32) -> Vec<Placement> {
         self.widgets
             .iter()
             .filter(|widget| widget.id != id)
             .filter_map(|widget| widget.grid)
             .collect()
-    }
-
-    /// Changes a grid widget's span to the nearest size its kind allows, keeping its cell
-    /// when it still fits and is free, otherwise moving it to the nearest free cell.
-    pub fn resize_on_grid(&mut self, id: u32, span: Span, metrics: GridMetrics) -> bool {
-        let Some(widget) = self.get(id) else {
-            return false;
-        };
-        let Some(current) = widget.grid else {
-            return false;
-        };
-        let want = Placement {
-            span: widget_grid::fit_span(widget.kind, span),
-            ..current
-        };
-        if self.place_on_grid(id, want, metrics) {
-            return true;
-        }
-        match metrics.nearest_free(want, &self.placements_except(id)) {
-            Some(slot) => self.place_on_grid(id, slot, metrics),
-            None => false,
-        }
     }
 
     pub fn remove(&mut self, id: u32) -> bool {

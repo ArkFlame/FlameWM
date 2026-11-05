@@ -157,18 +157,6 @@ impl SurfaceRuntime {
             .map_err(UiBackendError::Renderer)
     }
 
-    /// Border-only ring bounding mask for one surface (see `SurfaceController::set_ring_mask`).
-    pub fn set_surface_ring_mask(
-        &mut self,
-        surface: SurfaceHandle,
-        border_px: u32,
-        radius_px: u32,
-    ) -> Result<(), UiBackendError> {
-        self.controller
-            .set_ring_mask(surface.0, border_px, radius_px)
-            .map_err(UiBackendError::Renderer)
-    }
-
     /// Apply the consumer-selected output scale to one retained surface.
     /// Call before first presentation and again when output assignment or
     /// output scale changes. Invalid scales fall back to 1.0; the document

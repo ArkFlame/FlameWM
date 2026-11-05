@@ -1,6 +1,6 @@
 use flamewm_api::workspace::{
-    GridDirection, WORKSPACE_ROWS, WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot, grid_index,
-    grid_neighbor, grid_position, workspace_columns,
+    GridDirection, WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot, grid_neighbor,
+    grid_position, workspace_columns,
 };
 use flamewm_api::{FlameError, FlameResult};
 
@@ -21,18 +21,6 @@ impl TwoRowTopology {
     pub fn index_to_position(index: usize, total: usize) -> GridPosition {
         grid_position(index.min(total.saturating_sub(1)), total)
             .unwrap_or(GridPosition { row: 0, column: 0 })
-    }
-
-    /// Index of cell `(row, column)` with both coordinates clamped into the topology; a cell
-    /// outside the filled grid (the odd tail column) falls back to the last workspace.
-    #[must_use]
-    pub fn position_to_index(row: usize, column: usize, total: usize) -> usize {
-        if total == 0 {
-            return 0;
-        }
-        let column = column.min(Self::columns_for(total) - 1);
-        let row = row.min(WORKSPACE_ROWS - 1);
-        grid_index(row, column, total).unwrap_or(total - 1)
     }
 
     /// Neighbour in `direction`, or `index` when the grid has no such neighbour.

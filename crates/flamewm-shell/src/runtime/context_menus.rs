@@ -89,16 +89,6 @@ impl ShellRuntime {
         );
     }
 
-    /// Taskbar-background context menu, anchored at the root-coordinate click.
-    pub fn open_taskbar_context_at(&mut self, pointer: Option<flamewm_api::Point>) {
-        self.push_context_menu(
-            ContextMenuKind::Taskbar,
-            self.snapshot.panels.revision,
-            pointer,
-            None,
-        );
-    }
-
     pub fn open_workspace_context_at_cell_scoped(
         &mut self,
         cell: usize,

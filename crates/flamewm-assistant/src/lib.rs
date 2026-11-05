@@ -11,8 +11,6 @@ pub mod osd;
 pub mod osd_host;
 mod popover;
 pub mod voice_background;
-/// Argument that runs the background voice setup instead of the window (see `voice_background`).
-pub const VOICE_SETUP_ARG: &str = "--voice-setup";
 mod voice_setup_ui;
 
 use osd::{Osd, OsdEvent, OsdInput, OsdState};

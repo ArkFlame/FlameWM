@@ -333,12 +333,6 @@ impl IconLoader {
         }
     }
 
-    /// Low-priority prewarm shim (counts only; same queue, no behavior change).
-    pub fn request_low(&mut self, target: IconTarget, name: &str, width: u32, height: u32) {
-        self.low_enqueued += 1;
-        self.request(target, name, width, height);
-    }
-
     /// Drain ready results; stale generations are dropped and counted.
     /// Ready keys leave the pending set so a later view change can re-queue.
     pub fn drain_ready(&mut self) -> Vec<IconResult> {

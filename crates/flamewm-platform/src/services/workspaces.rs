@@ -11,14 +11,6 @@ use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use crate::storage::write_atomic_text;
 use crate::workspace::WorkspacePlanner;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NavigationDirection {
-    Left,
-    Right,
-    Up,
-    Down,
-}
-
 /// Sibling of the settings file that stores the desired workspace count. It is a separate file
 /// because the settings store rewrites only its in-memory unknown keys, so a count stored there
 /// would be dropped by the next settings save from the same session.

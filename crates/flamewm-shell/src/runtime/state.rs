@@ -152,21 +152,4 @@ impl ShellRuntime {
     pub(super) fn selected_output(&self) -> Option<flamewm_api::OutputId> {
         self.shown_panel_output().cloned()
     }
-
-    /// Keyboard Start fallback when no root pointer output is available.
-    #[must_use]
-    pub fn focused_panel_output(&self) -> Option<flamewm_api::OutputId> {
-        self.snapshot
-            .windows
-            .iter()
-            .find(|window| window.focused)
-            .map(|window| window.output.clone())
-            .filter(|output| {
-                self.snapshot
-                    .panels
-                    .panels
-                    .iter()
-                    .any(|panel| &panel.output == output)
-            })
-    }
 }

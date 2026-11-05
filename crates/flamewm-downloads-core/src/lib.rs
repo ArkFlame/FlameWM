@@ -9,9 +9,6 @@ use std::path::{Path, PathBuf};
 /// Exact text of the one-time notice shown after the first real move.
 pub const NOTICE_TEXT: &str = "FlameWM organizes your downloads automatically into category folders. You can disable this in the settings.";
 
-/// Persisted boolean setting that enables the organizer.
-pub const SETTING_KEY: &str = "organizeDownloads";
-
 /// A file that stopped changing for this long is moved even without a close/rename signal.
 pub const STABLE_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
 

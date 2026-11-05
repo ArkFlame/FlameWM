@@ -59,15 +59,6 @@ pub fn open_terminal(program: &str, desktop: &Path) -> CommandIntent {
     }
 }
 
-#[must_use]
-pub fn desktop_settings() -> CommandIntent {
-    CommandIntent {
-        program: "flamewm-settings".to_owned(),
-        argv: vec!["--page".to_owned(), "desktop".to_owned()],
-        cwd: None,
-    }
-}
-
 pub const DEFAULT_TERMINAL: &str = "x-terminal-emulator";
 
 /// Terminal program without shell evaluation: `FlameWM` Terminal first (see `flamewm_applications::terminal`).

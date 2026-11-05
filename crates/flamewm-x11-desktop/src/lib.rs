@@ -145,12 +145,6 @@ impl X11Desktop {
         })
     }
 
-    #[must_use]
-    pub fn with_application_catalog(mut self, catalog: std::sync::Arc<ApplicationCatalog>) -> Self {
-        self.catalog = Some(catalog);
-        self
-    }
-
     pub fn set_application_catalog(&mut self, catalog: std::sync::Arc<ApplicationCatalog>) {
         self.catalog = Some(catalog);
     }

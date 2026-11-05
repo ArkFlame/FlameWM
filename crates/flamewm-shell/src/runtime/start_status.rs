@@ -62,19 +62,6 @@ impl ShellSurfaces {
         Ok(())
     }
 
-    /// outside release, Escape, or launch closes the unified surface, and
-    /// the grab is released exactly once through `close_transients`.
-    /// Already-open category switches resize transactionally: the surface
-    /// is re-measured and re-prepared before re-map, so no 0,0 or
-    /// half-resized frame is ever visible.
-    pub fn open_start_group(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
-        if self.transient == Some(Transient::StartGroup) {
-            return self.resize_start_group_measured(runtime);
-        }
-        self.close_transients(runtime)?;
-        self.open_start_group_measured(runtime)
-    }
-
     pub fn open_start_group_for_output(
         &mut self,
         runtime: &mut SurfaceRuntime,
@@ -115,17 +102,6 @@ impl ShellSurfaces {
         )
         .map_err(|error| error.to_string())?;
         self.map_raise(runtime, self.start, rect)
-    }
-
-    /// Transactional resize of the already-open unified Start surface
-    /// via the shared `start_surface::refit` (anchor -> measure -> fit);
-    /// prepared before re-map without dropping the group grab.
-    pub(super) fn resize_start_group_measured(
-        &mut self,
-        runtime: &mut SurfaceRuntime,
-    ) -> Result<(), String> {
-        let output = self.selected().placement.output.id.clone();
-        self.resize_start_group_for_output(runtime, &output)
     }
 
     #[must_use]
@@ -271,19 +247,6 @@ impl ShellSurfaces {
             .set_popup_backdrop(self.task_menu, Some(backdrop))
             .map_err(ui_error)?;
         self.show_grabbed(runtime, self.task_menu, rect, Transient::ContextMenu)
-    }
-
-    /// Retained-device anchor for a quick-control source id, with the
-    /// snapshot-geometry fallback used only pre-map. Mirrors the
-    /// in-process contract without regrowing native ownership.
-    pub fn quick_anchor(
-        &self,
-        runtime: &SurfaceRuntime,
-        fallback: &flamewm_api::Rect,
-        source_id: &str,
-    ) -> flamewm_api::Rect {
-        crate::runtime::retained_source_rect(runtime, self.selected().panel, source_id)
-            .unwrap_or(*fallback)
     }
 
     pub fn quick_anchor_for_output(

@@ -56,18 +56,6 @@ impl<'a> UiDocumentView<'a> {
 }
 
 impl UiDocumentView<'_> {
-    /// Root node of the document this view wraps.
-    #[must_use]
-    pub fn root_node(&self) -> u32 {
-        self.document.document.root
-    }
-
-    /// Read-only document, for measuring. Mutating callers use `runtime_document`.
-    #[must_use]
-    pub fn runtime_document_ref(&self) -> &RuntimeDocument {
-        self.document
-    }
-
     /// Replaces the window's document with `next` (for example a larger pool). The caller must rewrite every
     /// node it owns afterwards; the window keeps its size, input and drag state.
     pub fn replace_document(&mut self, next: UiDocument) {

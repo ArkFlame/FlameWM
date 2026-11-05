@@ -183,22 +183,6 @@ pub fn active_page(_snapshot: &NetworkSnapshot) -> usize {
 }
 
 #[must_use]
-pub fn paged_paths_for_page(snapshot: &NetworkSnapshot, page: usize) -> Vec<(usize, String)> {
-    let available = available_access_points(snapshot).count();
-    if available == 0 {
-        return Vec::new();
-    }
-    let pages = ceil_div(available, NETWORK_SLOT_COUNT);
-    let clamped = page.min(pages.saturating_sub(1));
-    available_access_points(snapshot)
-        .skip(clamped * NETWORK_SLOT_COUNT)
-        .take(NETWORK_SLOT_COUNT)
-        .enumerate()
-        .map(|(slot, access_point)| (slot, access_point.path.clone()))
-        .collect()
-}
-
-#[must_use]
 pub fn popover(snapshot: &SystemSnapshot) -> Option<NetworkPopoverModel> {
     if snapshot.network.availability != ServiceAvailability::Available {
         return None;

@@ -17,12 +17,6 @@ impl UiNode {
         }
     }
 
-    #[must_use]
-    pub fn with_children(mut self, children: impl IntoIterator<Item = Self>) -> Self {
-        self.children.extend(children);
-        self
-    }
-
     pub fn push(&mut self, child: Self) {
         self.children.push(child);
     }

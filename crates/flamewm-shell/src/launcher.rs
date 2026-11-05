@@ -136,17 +136,6 @@ impl LauncherState {
             .map(|&application| &applications[application])
     }
 
-    /// Application for a visible row slot (0-based within the window).
-    #[must_use]
-    pub fn app_for_slot<'a>(
-        &self,
-        model: &'a StartModel,
-        slot: usize,
-    ) -> Option<&'a DesktopApplication> {
-        self.app_at(model, self.first + slot)
-            .filter(|_| self.first + slot < self.count)
-    }
-
     /// Records a launch so it leads the empty-query list.
     pub fn note_launch(&mut self, id: &DesktopAppId) {
         self.recent.retain(|recent| recent != id);

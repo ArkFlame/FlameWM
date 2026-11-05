@@ -121,18 +121,6 @@ impl ShellSurfaces {
             .map(|record| record.panel)
     }
 
-    /// Snapshot geometry of the selected panel, used only before native layout exists.
-    #[must_use]
-    pub fn selected_panel_rect(&self) -> flamewm_api::Rect {
-        self.selected().placement.panel.geometry
-    }
-
-    /// Selected panel placement used by output-local popup transactions.
-    #[must_use]
-    pub fn selected_placement(&self) -> &PanelPlacementContext {
-        &self.selected().placement
-    }
-
     /// Native handle of the primary panel surface.
     #[must_use]
     pub fn panel(&self) -> SurfaceHandle {
@@ -391,12 +379,6 @@ impl ShellSurfaces {
         popup_context_unchanged(current, &next)
     }
 
-    /// F10: last-synced panel snapshot geometry.
-    #[must_use]
-    pub fn panel_geometry(&self) -> flamewm_api::Rect {
-        self.primary().placement.panel.geometry
-    }
-
     /// Detect changes in every output by stable ID, not the primary panel's
     /// position alone. `RandR` can change CRTC coordinates without a reliable
     /// panels revision/generation bump. This gate runs before every popup.
@@ -413,29 +395,6 @@ impl ShellSurfaces {
         self.panels
             .iter()
             .any(|record| !panel_context_is_current(&record.placement, snapshot))
-    }
-
-    /// F10: true when any panel output's shell scale differs from the scale
-    /// last synced into its panel document. A scale change keeps the logical
-    /// panel geometry, so geometry/generation alone cannot detect it.
-    #[must_use]
-    pub fn output_scale_drifted(&self, snapshot: &ShellSnapshot) -> bool {
-        self.panels.iter().any(|record| {
-            let id = &record.placement.output.id;
-            snapshot
-                .panels
-                .panels
-                .iter()
-                .any(|panel| panel.output == *id)
-                && snapshot
-                    .displays
-                    .outputs
-                    .iter()
-                    .find(|output| output.id == *id && output.connected)
-                    .is_some_and(|output| {
-                        output.shell_scale_percent != record.placement.output.shell_scale_percent
-                    })
-        })
     }
 
     /// F10: edge/geometry consistency gate for every panel record.

@@ -102,11 +102,6 @@ impl<T> Reply<T> {
             .recv()
             .unwrap_or(Err(Error::Io("worker stopped".into())))
     }
-
-    #[must_use]
-    pub fn try_take(&self) -> Option<Result<T, Error>> {
-        self.0.try_recv().ok()
-    }
 }
 
 pub(crate) struct Shared {

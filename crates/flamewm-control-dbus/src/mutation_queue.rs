@@ -10,12 +10,6 @@ use flamewm_dbus_reactor::BusKind;
 
 use super::ControlClient;
 
-/// Counter labels for the stale-revision bounded retry (F20).
-pub const STALE_REVISION_COUNTER: &str = "shell.action.stale_revision";
-pub const RETRY_COUNTER: &str = "shell.action.retry";
-pub const RETRY_SUCCESS_COUNTER: &str = "shell.action.retry_success";
-pub const RETRY_REJECTED_GENERATION_COUNTER: &str = "shell.action.retry_rejected_generation";
-
 static STALE_REVISION_COUNT: AtomicU64 = AtomicU64::new(0);
 static RETRY_COUNT: AtomicU64 = AtomicU64::new(0);
 static RETRY_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
