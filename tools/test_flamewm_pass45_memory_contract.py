@@ -35,7 +35,7 @@ class MemoryContract(unittest.TestCase):
         self.assertIn('full.crop(rect)?', src('crates/flamewm-screenshot/src/main.rs'))
 
     def test_oversized_raster_cannot_exceed_icon_cache_byte_budget(self):
-        text = src('crates/flamewm-integrations-linux/src/icons.rs')
+        text = src('crates/flamewm-integrations-linux/src/icons/mod.rs')
         insert = text.split('fn insert(&mut self, key: RasterKey', 1)[1].split('\n    fn memory_estimate_bytes', 1)[0]
         self.assertRegex(insert, r'if cost > self\.budget_bytes\s*\{\s*return;\s*\}')
         self.assertLess(insert.index('if cost > self.budget_bytes'), insert.index('while !self.entries.is_empty()'))

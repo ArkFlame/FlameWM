@@ -85,17 +85,24 @@ canonical_target = "crates/flamewm-desktop/src"
 remove_by = "0.3.0"
 
 [[exception]]
-path = "crates/flamewm-desktop/src/widgets.rs"
+path = "crates/flamewm-desktop/src/widgets/mod.rs"
 capability = "j11-g08-prefixed-env"
 reason = "The task-manager widget shows the login name taken from `USER`."
-canonical_target = "crates/flamewm-desktop/src/widgets.rs"
+canonical_target = "crates/flamewm-desktop/src/widgets/mod.rs"
 remove_by = "0.2.0"
 
 [[exception]]
-path = "crates/flamewm-desktop/src/widgets.rs"
+path = "crates/flamewm-desktop/src/widgets/mod.rs"
 capability = "j12-g12-wallpaper-not-cpu"
 reason = "The rule matches `cpu` to keep CPU cost out of the wallpaper projection, but this module is the widget sampler that reads `/proc/stat` for `WidgetKind::Cpu`; no wallpaper code is involved."
-canonical_target = "crates/flamewm-desktop/src/widgets.rs"
+canonical_target = "crates/flamewm-desktop/src/widgets/mod.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-shell-core/Cargo.toml"
+capability = "core-source-loc>2400"
+reason = "The shell core holds 2450 production lines (lib.rs, popup, weather, start menu); the 50-line overage is ratcheted until the next owner split moves a domain (e.g. weather) out of the core."
+canonical_target = "crates/flamewm-shell-core/src"
 remove_by = "0.2.0"
 
 [[exception]]

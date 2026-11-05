@@ -29,7 +29,7 @@ class BlurIconPass21Contracts(unittest.TestCase):
         self.assertIn("fn icon_cache_shares_name_storage_between_icon_sizes()", source_text)
 
     def test_rasterizer_already_decodes_to_requested_physical_size(self):
-        icons = source("crates/flamewm-integrations-linux/src/icons.rs")
+        icons = source("crates/flamewm-integrations-linux/src/icons/mod.rs")
         loader = source("crates/flamewm-shell/src/icon_loader.rs")
         self.assertIn("fn scale_to_physical(", icons)
         self.assertIn("natural.width == size.physical && natural.height == size.physical", icons)

@@ -283,7 +283,7 @@ J7_OWNER_PREFIXES = (
     "crates/flamewm-image-core/",
 )
 J7_FFI_DECLARATION = "crates/flamewm-render-x11/src/xlib.rs"
-J7_FALLBACK_OWNER = "crates/flamewm-integrations-linux/src/icons.rs"
+J7_FALLBACK_OWNER = "crates/flamewm-integrations-linux/src/icons/mod.rs"
 J7_TREATMENT_OWNER = "crates/flamewm-skin/src/icons.rs"
 J7_PAINT_OWNER = "crates/flamewm-render-core/src/paint.rs"
 J7_SURFACE_OWNER = "crates/flamewm-render-x11/src/native/target.rs"
@@ -291,7 +291,7 @@ J7_MAGENTA_KEY = re.compile(r"ff00ff|color[-_ ]?key|chromakey|chroma[-_ ]?key", 
 
 
 def _j7_is_test(path):
-    return "/tests/" in path.as_posix() or path.name.endswith("_test.rs")
+    return "/tests/" in path.as_posix() or path.name == "tests.rs" or path.name.endswith("_test.rs")
 
 
 @lru_cache(maxsize=None)
@@ -429,7 +429,7 @@ def j7_violations(root):
 # (printed to stderr) and never added to the violation set until migration.
 J6_SKIN_OWNER = "crates/flamewm-skin/src/icons.rs"
 J6_CHROME_FILE = "crates/flamewm-wm-x11/src/chrome.rs"
-J6_ICONS_FILE = "crates/flamewm-integrations-linux/src/icons.rs"
+J6_ICONS_FILE = "crates/flamewm-integrations-linux/src/icons/mod.rs"
 J6_MODEL_FILES = (
     "crates/flamewm-render-core/src/model/mod.rs",
     "crates/flamewm-render-core/src/model/style.rs",
