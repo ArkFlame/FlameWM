@@ -1,8 +1,7 @@
 # Cold-start latency: measurement and findings (2026-11-05)
 
-Status: harness landed; **no runtime code changed in this pass**. The top costs sit in crates owned by other
-workers (settings) or need a shared-index refactor that was not finished in this pass. Before/after medians are
-therefore identical by construction, and both are recorded below.
+Status: harness landed; one runtime change (settings icon scan, section "Change: shared directory listings"
+below). Settings mapped median drops about 11%; the other apps are not touched by the change.
 
 ## Harness
 
@@ -41,8 +40,43 @@ Limits:
 | task-manager | 166.7 | n/a | 292.0, 139.2, 157.5, 192.0, 166.7 |
 | finder | 106.3 | 136.2 | 171.6, 106.3, 91.7, 89.9, 194.3 |
 
-After: unchanged (no runtime change). Raw JSON from the run is kept under `/run/media/linsaftw/SDD/startup-before.json`
-(outside the repository).
+## Change: shared directory listings (settings icon scan)
+
+Cause: `flamewm-settings` `theme_picker::scan` builds one `IconLookupIndex` per installed icon theme. Each build
+also watches every installed theme tree (`watch_dirs`, depth 3) and re-reads the Breeze and hicolor fallback
+directories, so the same directories were read once per theme.
+
+Fix: `DirListings` (`crates/flamewm-integrations-linux/src/icon_theme.rs`) caches directory reads for one scan.
+`IconLookupIndex::build_shared` uses it; the scan creates one `DirListings` and passes it to every per-theme build.
+`build()` (desktop, WM, shell) keeps its previous fresh-read behaviour, and `needs_rebuild` always reads the disk.
+Lookup results are unchanged: golden test `shared_listings_select_same_paths_as_fresh_build`
+(`crates/flamewm-integrations-linux/src/icon_theme/tests.rs`) compares shared and fresh lookups over an inheritance
+chain, a scalable dir, a symbolic icon, a threshold dir and the hicolor fallback, and checks a second build reads
+no new directories.
+
+Measured in one batch (fast profile, 5 runs, median `mapped_ms`; baseline binaries built from `origin/main`
+`c3edfd3e`, new binaries from this change; raw JSON outside the repository):
+
+| app | before | after | delta |
+| --- | ---: | ---: | ---: |
+| settings | 320.1 | 283.3 | -11.5% |
+| finder | 45.3 | 48.9 | noise (not touched) |
+| explorer | 55.7 | 55.3 | noise (not touched) |
+| imageviewer | 44.6 | 47.1 | noise (not touched) |
+
+Not done in this change:
+
+- Lazy per-name lookup without a full file index (the XDG probe walk). It is not exact-equivalent to the current
+  per-theme best/exact-first ranking without a larger rewrite, so it is deferred.
+- Persistent on-disk icon index cache. Not needed for the settings win; deferred.
+- terminal `GetSettings` retry (`crates/flamewm-terminal/src/main.rs` `initial_settings`): not changed. The backdrop
+  is built once from the startup snapshot before the window exists, and the code comment states it cannot be
+  installed later. Making first paint non-blocking would change visible behaviour, so it needs a design decision.
+  The harness number (about 2.1 s) is a worst case with no control service; it returns on the first attempt on a
+  running desktop.
+
+Raw JSON from the baseline run is kept under `/run/media/linsaftw/SDD/iconperf-base.json` and the new run under
+`/run/media/linsaftw/SDD/iconperf-new.json` (outside the repository).
 
 ## Profiling (strace -f -tt, private bus, 8 s)
 
@@ -83,7 +117,8 @@ Two slowest: **terminal** and **settings**.
 
 ## Owner handoff (not edited in this pass)
 
-- settings: icon-theme scan on open; see above. Owner must confirm the picker's theme-list contract before changing it.
+- settings: icon-theme scan on open. Shared listings applied in `theme_picker::icon_previews` (3-line change); the
+  picker's theme list and fallback chain are unchanged.
 - task-manager: confirm the first paint content. The harness cannot detect it.
 - render-x11 / ui-x11: none of the profiled hot spots were in those crates.
 
