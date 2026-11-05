@@ -608,6 +608,9 @@ mod tests {
         );
         snapshot
             .values
+            .insert("surfaceCustom".to_owned(), SettingValue::Boolean(true));
+        snapshot
+            .values
             .insert("surfaceOpacity".to_owned(), SettingValue::Percent(50));
         snapshot.values.insert(
             "accent".to_owned(),
@@ -683,12 +686,13 @@ mod tests {
             doc.variables["--accent-strong"],
             UiColor { a: 0xdd, ..accent }
         );
+        // Custom surface switch off: the theme-follow Dark surface (#202326), not a custom tint.
         assert_eq!(
             doc.backgrounds["start-menu"],
             UiColor {
-                r: 0xea,
-                g: 0xf4,
-                b: 0xff,
+                r: 0x20,
+                g: 0x23,
+                b: 0x26,
                 a: 31
             }
         );
@@ -701,6 +705,9 @@ mod tests {
             "surfaceColor".to_owned(),
             SettingValue::Text("#102030".to_owned()),
         );
+        snapshot
+            .values
+            .insert("surfaceCustom".to_owned(), SettingValue::Boolean(true));
         snapshot
             .values
             .insert("surfaceOpacity".to_owned(), SettingValue::Percent(100));
@@ -720,12 +727,13 @@ mod tests {
                 a: 255
             }
         );
+        // Custom surface switch off: the theme-follow Dark surface (#202326), not a custom tint.
         assert_eq!(
             surface_background(&SettingsSnapshot::new(1)),
             UiColor {
-                r: 0xea,
-                g: 0xf4,
-                b: 0xff,
+                r: 0x20,
+                g: 0x23,
+                b: 0x26,
                 a: 31
             }
         );
@@ -766,6 +774,9 @@ mod tests {
             "surfaceColor".to_owned(),
             SettingValue::Text("#445566".to_owned()),
         );
+        snapshot
+            .values
+            .insert("surfaceCustom".to_owned(), SettingValue::Boolean(true));
         snapshot
             .values
             .insert("surfaceOpacity".to_owned(), SettingValue::Percent(10));

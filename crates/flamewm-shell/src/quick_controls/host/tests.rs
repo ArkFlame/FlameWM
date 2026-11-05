@@ -439,6 +439,9 @@ fn settings_change_between_opens_changes_menu_background() {
     let mut changed = SettingsSnapshot::new(1);
     changed
         .values
+        .insert("surfaceCustom".to_owned(), SettingValue::Boolean(true));
+    changed
+        .values
         .insert("surfaceOpacity".to_owned(), SettingValue::Percent(0));
     changed
         .values
