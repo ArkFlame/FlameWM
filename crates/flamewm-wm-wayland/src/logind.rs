@@ -492,6 +492,7 @@ impl LogindSession {
             session_id,
             expected_seat,
             ActiveWait::DEFAULT,
+            ActiveWait::AFTER_ACTIVATE,
             vt_number(),
         )
     }
@@ -503,6 +504,7 @@ impl LogindSession {
         session_id: Option<&str>,
         expected_seat: Option<&str>,
         wait: ActiveWait,
+        after_activate: ActiveWait,
         vt: Option<u32>,
     ) -> Result<Self, LogindError> {
         let session_path = resolve_session(bus.as_ref(), session_id)?;
@@ -541,7 +543,7 @@ impl LogindSession {
                 &session_path,
                 &validated.seat_path,
                 vt,
-                ActiveWait::AFTER_ACTIVATE,
+                after_activate,
             ) {
                 return Err(LogindError::rejected(
                     "inactive_after_activate",
@@ -1252,6 +1254,7 @@ mod tests {
             Some("5"),
             Some("seat0"),
             ActiveWait::IMMEDIATE,
+            ActiveWait::IMMEDIATE,
             None,
         )
         .expect("own inactive session is activated and taken over");
@@ -1297,6 +1300,7 @@ mod tests {
             Some("5"),
             None,
             ActiveWait::IMMEDIATE,
+            ActiveWait::IMMEDIATE,
             Some(2),
         )
         .expect("activated on VT 2");
@@ -1320,6 +1324,7 @@ mod tests {
             bus,
             Some("5"),
             Some("seat0"),
+            ActiveWait::IMMEDIATE,
             ActiveWait::IMMEDIATE,
             Some(3),
         )
