@@ -46,9 +46,9 @@ ACCEPTED_OWNERS: dict[str, dict[str, str]] = {
         "reason": "re-accepted 2026-11-05 after reviewing diff 09b1f337..HEAD: f5eeb330 (dead-code removal, test-only gating), d03292b3 (VisibilityNotify events for obscured desktop), ba51c1af (XCrossingEvent, X11 client typing, idle wakeups); previously re-accepted 2026-10-29. Build not run in this review (see report)",
     },
     "crates/flamewm-render-x11/src/xft.rs": {
-        "sha256": "b4ef7d0b7716d6d54ac9978aa5d7fe385dbd76d62fbcbd219cddfab138a49d4c",
+        "sha256": "b3400831194ded90156bba584c494ef25dc478c5597926cbab32eed4a6958841",
         "delta": "text_alpha_mask plus clip, scroll and backdrop support added since 0.0.9; scoped_text_measure (Xft-backed layout measurement) and an ignored per-call bench test",
-        "reason": "re-accepted 2026-11-05 after reviewing diff 270405f9..HEAD: 9667a7aa (layout and paint measure text with surface Xft extents; additive only). Known defect: the new fn sits between the xft_measure_estimate doc comment and its fn, so that doc comment now documents scoped_text_measure; not fixed here (outside tools/docs scope); previously re-accepted 2026-10-28",
+        "reason": "re-accepted 2026-11-05 after reviewing diff 270405f9..HEAD: 9667a7aa (layout and paint measure text with surface Xft extents; additive only). Doc comment of xft_measure_estimate moved back onto its fn (doc-only, 2026-11-05); previously re-accepted 2026-10-28",
     },
     "crates/flamewm-render-x11/src/xrender.rs": {
         "sha256": "7399150d9a44138f6ae0d88d659cf3583f0a5085b17665c95c9cd5972518cebb",

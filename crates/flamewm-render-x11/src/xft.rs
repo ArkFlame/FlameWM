@@ -656,8 +656,6 @@ fn normalize_weight(weight: u16) -> u16 {
     }
 }
 
-/// Pure estimate backing [`XftBackend::measure_text`]: 0.58em per char,
-/// 1.30em line height. Shared so the fallback path is unit-testable.
 /// Runs `f` with layout widths measured by `xft` (`XftTextExtentsUtf8` at the requested weight).
 /// With no Xft backend, layout falls back to the render-core model. Each call measures only the
 /// text layout asks for; nothing is cached across frames, so the cost scales with layout work.
@@ -676,6 +674,8 @@ pub(crate) fn scoped_text_measure<R>(xft: Option<&mut XftBackend>, f: impl FnOnc
     }
 }
 
+/// Pure estimate backing [`XftBackend::measure_text`]: 0.58em per char,
+/// 1.30em line height. Shared so the fallback path is unit-testable.
 pub(crate) fn xft_measure_estimate(text: &str, size: f32) -> (f32, f32) {
     let height = (size.max(1.0) * 1.30).round();
     ((text.chars().count() as f32 * size * 0.58).round(), height)
