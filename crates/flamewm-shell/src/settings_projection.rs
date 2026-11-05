@@ -63,7 +63,20 @@ pub fn project(
     )?;
     document.ui_text_shadow(bool_setting(snapshot, "textShadow", true))?;
     project_accent_tokens(document, snapshot)?;
-    project_surface_outline(document, root, snapshot)?;
+    // The classic/separate panel overwrites the root border with a transparent one below. Writing
+    // the contour first alternated two values on the same node every projection, dirtying the
+    // document (and repainting the Dock) each time with an identical final frame.
+    let panel_overrides_root = surface == SurfaceKind::Panel && {
+        let separate = bool_setting(snapshot, "taskbarSeparate", false);
+        let classic = !matches!(
+            snapshot.values.get("taskbarStyle"),
+            Some(SettingValue::Text(style)) if style == "floating"
+        );
+        separate || classic
+    };
+    if !panel_overrides_root {
+        project_surface_outline(document, root, snapshot)?;
+    }
 
     match surface {
         SurfaceKind::Panel => {

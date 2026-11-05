@@ -64,19 +64,23 @@ impl SurfaceController {
         let flight = self.slides.kind(id.get());
         let dock = self.dock_rect();
         let instance = self.instance_mut(id)?;
+        // Dirty-gated: a mutation that left the document and its damage unchanged paints nothing
+        // and presents nothing. Otherwise every reconcile at idle commits an identical frame.
         let result = unsafe {
             instance
                 .app
-                .redraw(&instance.document)
+                .redraw_if_dirty(&mut instance.document)
                 .inspect_err(|_| mark_x_error_seen())
         };
-        if result.is_ok() {
+        if let Ok(painted) = result {
             if let Some(active) = flight.filter(|_| instance.overlay.is_none() && instance.shown) {
                 Self::refresh_moving_mask(instance, dock, active.edge);
             }
-            flamewm_profiler::record_present();
+            if painted {
+                flamewm_profiler::record_present();
+            }
         }
-        result
+        result.map(|_| ())
     }
 
     pub fn redraw_dirty(&mut self) -> Result<(), String> {

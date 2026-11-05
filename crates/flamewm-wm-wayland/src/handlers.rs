@@ -23,7 +23,10 @@ use smithay::reexports::wayland_server::protocol::{
 use smithay::reexports::wayland_server::{Client, Resource};
 use smithay::utils::Serial;
 use smithay::wayland::buffer::BufferHandler;
-use smithay::wayland::compositor::{CompositorHandler, CompositorState};
+use smithay::wayland::compositor::{
+    CompositorHandler, CompositorState, SurfaceAttributes, TraversalAction,
+    with_surface_tree_upward,
+};
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
@@ -87,6 +90,8 @@ impl CompositorHandler for State {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
+        // Read before `on_commit_buffer_handler`, which takes the buffer and damage out of the state.
+        let visible = commit_changes_pixels(surface);
         on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
 
@@ -109,8 +114,33 @@ impl CompositorHandler for State {
                 layer.layer_surface().send_configure();
             }
         }
-        self.request_redraw();
+        // A commit that carries no new buffer, no damage and no frame request changes nothing on
+        // screen. Repainting for it is the idle wake storm this gate removes.
+        if visible {
+            self.request_redraw();
+        }
     }
+}
+
+/// True when this commit (or a subsurface in its tree) gives the output something to show: a new
+/// or removed buffer, surface damage, or a frame callback the client waits on. Must run before
+/// `on_commit_buffer_handler`, which drains the buffer and damage from the committed state.
+fn commit_changes_pixels(surface: &WlSurface) -> bool {
+    let mut visible = false;
+    with_surface_tree_upward(
+        surface,
+        (),
+        |_, _, _| TraversalAction::DoChildren(()),
+        |_, states, _| {
+            let mut guard = states.cached_state.get::<SurfaceAttributes>();
+            let attrs = guard.current();
+            visible |= attrs.buffer.is_some()
+                || !attrs.damage.is_empty()
+                || !attrs.frame_callbacks.is_empty();
+        },
+        |_, _, _| true,
+    );
+    visible
 }
 
 delegate_compositor!(State);
