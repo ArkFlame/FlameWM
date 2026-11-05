@@ -165,7 +165,7 @@ fn script() -> Vec<(&'static str, Step, bool)> {
             true,
         ),
         (
-            "translucent box b (not eligible)",
+            "translucent box b (no backdrop sampled)",
             |d| {
                 d.set_background_color(
                     "b",
@@ -177,10 +177,10 @@ fn script() -> Vec<(&'static str, Step, bool)> {
                     },
                 )
             },
-            false,
+            true,
         ),
-        // The previous frame held a translucent command, which is outside the opaque subset, so
-        // the diff has no bounds for its old form and the planner falls back to Full once.
+        // With no backdrop sampled, translucent commands are region-eligible in both the old and
+        // the new frame, so restoring the opaque box also takes Region.
         (
             "opaque box b restored (previous frame translucent)",
             |d| {
@@ -194,7 +194,7 @@ fn script() -> Vec<(&'static str, Step, bool)> {
                     },
                 )
             },
-            false,
+            true,
         ),
         (
             "1px move of opaque box b after restore",
