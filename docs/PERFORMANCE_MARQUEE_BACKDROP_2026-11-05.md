@@ -67,3 +67,28 @@ env-gated profiler.
 - `cargo test -p flamewm-wm-wayland`: exit 0, 203 passed, 0 failed.
 - `cargo check --workspace --all-targets`: see the final report.
 - Not run: `fm.sh idle`/`hover`, DRM backend, any runtime behavior beyond the marquee profile run.
+
+## Follow-up: texture reuse kept, single readback reverted (coordinator policy, 2026-11-05)
+
+Policy from the coordinator: do not trade CPU for RAM. A ~3 MB resident capture texture is accepted.
+Judged by the `BACKDROP_PHASE` median per-recapture total, alternating runs, `fm.sh marquee` with
+`FLAMEWM_BACKDROP_PROFILE=1`. Machine load moved between batches (`prof` ~12.2 ms, `tex` ~10.3 ms in batch 1; `tex` ~11.6 ms, `texr` ~11.9 ms in batch 2), so compare within a batch only.
+
+| Variant | Batch | Samples | Median total us | Median copy us | Median texture us | Verdict |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| `prof` = 5f53c437 (per-capture texture, 32-row strips) | 1 | 141 | 12187 | 4764 | 1868 | base |
+| `tex` = scratch texture reused across captures | 1 | 143 | 10286 | 4671 | 0 | **kept, -15.6%** |
+| `tex` | 2 | 138 | 11578 | 5082 | 0 | base |
+| `texr` = `tex` + one full-output readback | 2 | 139 | 11905 | 5813 | 0 | **reverted, +2.8%** (copy +14%) |
+
+Implementation of the kept change:
+- `Decorations::scratch` (`render/titlebar.rs`) holds `((w, h), GlesTexture)`, output-sized. It is reused while the size matches. It is replaced on resize, and it is kept across `drop_desktop`, so it stays resident while the decorations exist (~4 bytes per output pixel, about 3.3 MB at 1280x641).
+- `take_scratch` (`render/backdrop.rs`) takes the matching texture or drops a mismatched one. Unit test `scratch_tests::scratch_is_reused_only_for_the_same_output_size` covers the three cases.
+- The full output is still rendered with `CLEAR` and full damage, so a reused texture is fully overwritten. Output bits are unchanged.
+
+Sanity pair (`fm.sh marquee`, no profiler env, one pair): base 86.83% vs tex 87.92% compositor CPU, Anon 44.2 vs 47.7 MB. This is inside noise. The phase total implies a ~1.5-point CPU effect, which this pair cannot resolve.
+
+Single readback: reverted. Copy time rose because one 3.3 MB PBO readback was slower than 21 strips of 160 KB here. The strip loop stays.
+
+Verification: `cargo test -p flamewm-wm-wayland` exit 0 (204 passed, 0 failed). `cargo check --workspace --all-targets` exit 0, 0 warnings.
+Not run: `fm.sh idle`/`hover`, DRM path, repeated fm.sh pairs for CPU% (CPU% is too noisy at this effect size).

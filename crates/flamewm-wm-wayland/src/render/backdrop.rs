@@ -138,6 +138,15 @@ pub(super) fn desktop_elements(state: &State, renderer: &mut GlowRenderer) -> Ve
         .collect()
 }
 
+/// Takes the cached capture texture when it matches `dims`. A mismatched slot is cleared, so a
+/// resize frees the old texture here instead of keeping it alongside the new one.
+pub(super) fn take_scratch<T>(slot: &mut Option<((usize, usize), T)>, dims: (usize, usize)) -> Option<T> {
+    match slot.take() {
+        Some((size, texture)) if size == dims => Some(texture),
+        _ => None,
+    }
+}
+
 /// Arms one calloop timer that requests a redraw when the recapture throttle reopens. Idempotent
 /// while armed, so a burst of throttled frames costs one timer.
 pub(super) fn schedule_desktop_wake(state: &State, wait: Duration) {
@@ -198,7 +207,11 @@ pub(crate) fn refresh_desktop_backdrop(
         return Ok(());
     }
     let buffer_size: Size<i32, Buffer> = Size::from((size.w, size.h));
-    let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
+    let reused = take_scratch(&mut state.decorations.borrow_mut().scratch, dims);
+    let mut texture: GlesTexture = match reused {
+        Some(texture) => texture,
+        None => renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?,
+    };
     clock.split("texture");
     let mut tracker = OutputDamageTracker::from_output(&state.output);
     {
@@ -225,6 +238,8 @@ pub(crate) fn refresh_desktop_backdrop(
         clock.split("downscale");
         y0 += rows;
     }
+    drop(target);
+    state.decorations.borrow_mut().scratch = Some((dims, texture));
     let blur_percent = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_BLUR_PERCENT;
     let radius = MAX_BLUR_RADIUS_PX * f32::from(blur_percent) / 100.0 / DESKTOP_SCALE as f32;
     let source = RgbaImage {
@@ -251,4 +266,23 @@ pub(crate) fn refresh_desktop_backdrop(
     clock.split("store");
     clock.report(dims.1);
     Ok(())
+}
+
+#[cfg(test)]
+mod scratch_tests {
+    use super::take_scratch;
+
+    #[test]
+    fn scratch_is_reused_only_for_the_same_output_size() {
+        let mut slot = Some(((4, 3), 7u32));
+        assert_eq!(take_scratch(&mut slot, (4, 3)), Some(7));
+        assert!(slot.is_none(), "a taken texture leaves the slot empty until it is put back");
+
+        let mut slot = Some(((4, 3), 7u32));
+        assert_eq!(take_scratch(&mut slot, (8, 3)), None);
+        assert!(slot.is_none(), "a resize drops the old texture instead of keeping it");
+
+        let mut slot: Option<((usize, usize), u32)> = None;
+        assert_eq!(take_scratch(&mut slot, (4, 3)), None);
+    }
 }

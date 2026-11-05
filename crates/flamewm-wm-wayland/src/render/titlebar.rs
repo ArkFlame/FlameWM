@@ -10,6 +10,9 @@ pub struct Decorations {
     pub(super) desktop: Option<DesktopBackdrop>,
     /// True while a one-shot wake timer is armed to recapture the desktop after the throttle window.
     pub(super) desktop_wake_armed: bool,
+    /// Output-sized GL texture the desktop capture renders into, kept between captures and replaced
+    /// only when the output size changes. Resident while the decorations exist, about 4 bytes per output pixel.
+    pub(super) scratch: Option<((usize, usize), GlesTexture)>,
     /// Blurred desktop under override-redirect `XWayland` surfaces, keyed by their rect. Cleared
     /// with the desktop capture it was cropped from.
     pub(super) surfaces: HashMap<(i32, i32, i32, i32), MemoryRenderBuffer>,
