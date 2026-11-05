@@ -166,10 +166,12 @@ mod tests {
     #[test]
     fn hover_and_pressed_rules_read_overlay_tokens() {
         // Hover and pressed fills must come from the appearance overlays, never a white literal.
-        for css in [TASK_MANAGER_CSS, EXPLORER_CSS, MENU_CSS] {
+        const SETTINGS_CSS: &str = include_str!("../../../ui/settings.css");
+        for css in [TASK_MANAGER_CSS, EXPLORER_CSS, MENU_CSS, SETTINGS_CSS] {
             for line in css.lines().filter(|line| line.contains(":active {")) {
+                // Settings nav rows use `--nav-pressed`, which `project_nav_row_tokens` also inverts.
                 assert!(
-                    line.contains("var(--pressed-fill)"),
+                    line.contains("var(--pressed-fill)") || line.contains("var(--nav-pressed)"),
                     "pressed rule not overlay-driven: {line}"
                 );
             }

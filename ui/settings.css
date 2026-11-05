@@ -35,9 +35,9 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .setting-title { font-weight:500; }
 .setting-note { color:var(--text-secondary); font-size:11px; }
 .settings-button { min-width:88px; height:30px; padding:0 12px; display:flex; align-items:center; justify-content:center; white-space:nowrap; border:1px solid var(--control-edge); border-radius:11px; background:var(--control); }
-.settings-button:active { background:#ffffff26; border-color:var(--accent); }
+.settings-button:active { background:var(--pressed-fill); border-color:var(--accent); }
 .select-box { min-width:120px; height:30px; padding:0 12px; display:flex; align-items:center; justify-content:center; white-space:nowrap; border:1px solid var(--control-edge); border-radius:11px; background:var(--control); }
-.select-box:active { background:#ffffff26; }
+.select-box:active { background:var(--pressed-fill); }
 .selected-theme-preview { width:24px; height:24px; margin-right:8px; }
 .segment-control { display:flex; justify-content:flex-end; align-items:center; gap:4px; min-width:0; }
 .segment { min-width:64px; height:30px; padding:0 8px; display:flex; align-items:center; justify-content:center; white-space:nowrap; overflow:hidden; border:1px solid var(--control-edge); border-radius:11px; background:var(--control); }
@@ -97,8 +97,8 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .about-version { color:var(--muted); font-size:11px; }
 .about-actions { display:flex; align-items:center; justify-content:center; gap:10px; margin-top:10px; }
 .about-link { height:32px; display:flex; align-items:center; gap:8px; padding:0 13px; border:1px solid var(--control-edge); border-radius:11px; background:var(--control); }
-.about-link:hover { border-color:var(--accent); background:#ffffff1f; }
-.about-link:active { background:#ffffff26; border-color:var(--accent); }
+.about-link:hover { border-color:var(--accent); background:var(--hover-fill); }
+.about-link:active { background:var(--pressed-fill); border-color:var(--accent); }
 .about-link img { width:18px; height:18px; }
 .pager-row { width:100%; min-height:30px; display:flex; align-items:center; gap:6px; }
 .pager-block { flex-direction:column; align-items:stretch; gap:8px; }
