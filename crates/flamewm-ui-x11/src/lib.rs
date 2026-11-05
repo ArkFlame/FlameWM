@@ -9,6 +9,7 @@ mod popup;
 mod reconcile;
 mod surface_runtime;
 pub use flamewm_ui_document::surface_style;
+use flamewm_ui_document::focus::{action_for, FocusKey, FocusOwner};
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
@@ -330,7 +331,7 @@ where
     P: for<'a> FnMut(&RawPress, &mut UiDocumentView<'a>) -> Result<(), String>,
     R: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
 {
-    let (runtime, backdrop, drop_target) = document.into_parts();
+    let (runtime, backdrop, drop_target, keyboard_focus) = document.into_parts();
     let file_drag = drop_target.then(flamewm_render_x11::FileDragSlot::default);
     let mut x11 = x11_config(config, role);
     x11.backdrop = backdrop;
@@ -345,7 +346,13 @@ where
         press_watch,
         move |event, document| {
             let flamewm_render_core::ControllerEvent::Action(action) = event;
-            let event = controller_event(action);
+            let mut event = controller_event(action);
+            if keyboard_focus {
+                match route_focus(document, event) {
+                    Some(routed) => event = routed,
+                    None => return Ok(()),
+                }
+            }
             on_event(
                 &event,
                 &mut UiDocumentView::from_runtime(document, file_drag.clone()),
@@ -364,6 +371,48 @@ where
             ))
         },
     )
+}
+
+/// Routes one controller event through the window's keyboard focus. The focused node lives on
+/// the document, so the focus owner is rebuilt from it per key and the render path mirrors it
+/// into `InteractionState::focus`. `None` means focus consumed the key (Tab traversal). Enter and
+/// Space on a focused node return the synthesized press of its `data-action`. Any other event is
+/// returned unchanged for the window's handler.
+fn route_focus(
+    document: &mut flamewm_render_core::RuntimeDocument,
+    event: UiControllerEvent,
+) -> Option<UiControllerEvent> {
+    let UiControllerEvent::Key(key) = &event else {
+        return Some(event);
+    };
+    if key.phase != UiKeyPhase::Press {
+        return Some(event);
+    }
+    let traversal = matches!(key.key.as_str(), "Tab" | "ISO_Left_Tab");
+    let shift = key.modifiers.iter().any(|modifier| modifier == "Shift");
+    let mut owner = FocusOwner::default();
+    owner.set(&document.document, document.focus());
+    match owner.handle_key(&document.document, &key.key, shift) {
+        FocusKey::Moved => {
+            document.set_focus(owner.focus());
+            None
+        }
+        FocusKey::Ignored if traversal => None,
+        FocusKey::Ignored => Some(event),
+        FocusKey::Activate(index) => match action_for(&document.document, index) {
+            Some(action) => Some(UiControllerEvent::Action(UiActionEvent {
+                action: action.to_owned(),
+                phase: UiActionPhase::Press,
+                inside: true,
+                button: 1,
+                modifiers: 0,
+                x: 0.0,
+                y: 0.0,
+                text: None,
+            })),
+            None => Some(event),
+        },
+    }
 }
 
 /// Whether a caller-owned readable descriptor stays registered after one drain.
@@ -468,6 +517,116 @@ where
 
 #[cfg(test)]
 mod tests {
+    use flamewm_render_core::{CompiledDocument, CompiledNode, NodeKind, RuntimeDocument};
+
+    use super::{route_focus, UiActionEvent, UiActionPhase, UiControllerEvent, UiKeyEvent, UiKeyPhase};
+
+    fn button(action: &'static str) -> CompiledNode {
+        CompiledNode {
+            action: std::borrow::Cow::Borrowed(action),
+            ..crate::test_support::compiled_node("", NodeKind::Element)
+        }
+    }
+
+    /// 0 root, 1 button `ar.prev`, 2 label, 3 button `ar.next`.
+    fn window_document() -> RuntimeDocument {
+        RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![
+                button(""),
+                button("ar.prev"),
+                button(""),
+                button("ar.next"),
+            ],
+        })
+        .expect("fixture validates")
+    }
+
+    fn key(name: &str, phase: UiKeyPhase, modifiers: &[&str], text: Option<&str>) -> UiControllerEvent {
+        UiControllerEvent::Key(UiKeyEvent {
+            phase,
+            modifiers: modifiers.iter().map(|m| (*m).to_owned()).collect(),
+            key: name.to_owned(),
+            text: text.map(str::to_owned),
+        })
+    }
+
+    fn press(action: &str) -> UiControllerEvent {
+        UiControllerEvent::Action(UiActionEvent {
+            action: action.to_owned(),
+            phase: UiActionPhase::Press,
+            inside: true,
+            button: 1,
+            modifiers: 0,
+            x: 0.0,
+            y: 0.0,
+            text: None,
+        })
+    }
+
+    #[test]
+    fn tab_walks_focusable_controls_in_order_and_writes_document_focus() {
+        let mut document = window_document();
+        assert_eq!(route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)), None);
+        assert_eq!(document.focus(), Some(1));
+        assert_eq!(route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)), None);
+        assert_eq!(document.focus(), Some(3));
+        assert_eq!(route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)), None);
+        assert_eq!(document.focus(), Some(1), "wraps to the first control");
+        assert_eq!(route_focus(&mut document, key("ISO_Left_Tab", UiKeyPhase::Press, &["Shift"], None)), None);
+        assert_eq!(document.focus(), Some(3), "Shift+Tab wraps backwards");
+    }
+
+    #[test]
+    fn enter_and_space_activate_the_focused_control_only() {
+        let mut document = window_document();
+        assert_eq!(
+            route_focus(&mut document, key("Return", UiKeyPhase::Press, &[], None)),
+            Some(key("Return", UiKeyPhase::Press, &[], None)),
+            "nothing focused: Enter goes to the window"
+        );
+        route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
+        route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
+        assert_eq!(
+            route_focus(&mut document, key("Return", UiKeyPhase::Press, &[], None)),
+            Some(press("ar.next"))
+        );
+        assert_eq!(
+            route_focus(&mut document, key("Space", UiKeyPhase::Press, &[], Some(" "))),
+            Some(press("ar.next")),
+            "X11 canonical Space name activates"
+        );
+        assert_eq!(document.focus(), Some(3), "activation keeps focus in place");
+    }
+
+    #[test]
+    fn non_focus_keys_and_releases_pass_through_unchanged() {
+        let mut document = window_document();
+        route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
+        let escape = key("Escape", UiKeyPhase::Press, &[], None);
+        assert_eq!(route_focus(&mut document, escape.clone()), Some(escape));
+        let release = key("Tab", UiKeyPhase::Release, &[], None);
+        assert_eq!(route_focus(&mut document, release.clone()), Some(release));
+        assert_eq!(document.focus(), Some(1), "neither key moves focus");
+    }
+
+    #[test]
+    fn window_without_focusable_controls_consumes_tab_and_keeps_no_focus() {
+        let mut document = RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![button("")],
+        })
+        .expect("fixture validates");
+        assert_eq!(route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)), None);
+        assert_eq!(document.focus(), None);
+    }
+
     #[test]
     fn ctrl_a_arrives_as_key_a_with_ctrl_and_no_text() {
         let typed = flamewm_render_core::ActionEvent {

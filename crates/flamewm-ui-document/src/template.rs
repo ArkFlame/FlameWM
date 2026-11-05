@@ -13,6 +13,8 @@ pub struct UiDocument {
     window_backdrop: Option<flamewm_render_core::backdrop::WindowBackdrop>,
     /// Opt-in XDND (drop target + drag source) for the window created from this document.
     file_drop_target: bool,
+    /// Opt-in keyboard focus (Tab traversal, Enter/Space activation) for the window.
+    keyboard_focus: bool,
 }
 
 struct LayoutMemo {
@@ -36,8 +38,14 @@ impl UiDocument {
         RuntimeDocument,
         Option<flamewm_render_core::backdrop::WindowBackdrop>,
         bool,
+        bool,
     ) {
-        (self.document, self.window_backdrop, self.file_drop_target)
+        (
+            self.document,
+            self.window_backdrop,
+            self.file_drop_target,
+            self.keyboard_focus,
+        )
     }
 }
 
@@ -197,6 +205,7 @@ impl UiDocument {
             layout_memo: RefCell::new(None),
             window_backdrop: None,
             file_drop_target: false,
+            keyboard_focus: false,
         }
     }
 
@@ -206,6 +215,15 @@ impl UiDocument {
     #[must_use]
     pub fn with_file_drop_target(mut self) -> Self {
         self.file_drop_target = true;
+        self
+    }
+
+    /// Opts the window into keyboard focus: Tab / Shift+Tab move focus over elements with a
+    /// `data-action`, and Enter / Space dispatch the focused element's action. The focus ring
+    /// paints through `:focus-visible`. Windows without this keep every key unchanged.
+    #[must_use]
+    pub fn with_keyboard_focus(mut self) -> Self {
+        self.keyboard_focus = true;
         self
     }
 

@@ -649,6 +649,7 @@ impl X11App {
                         on_action,
                         &mut buffers,
                     )?;
+                    self.sync_keyboard_focus(document);
                     let ctrl = key.state & CONTROL_MASK != 0;
                     let alt = key.state & MOD1_MASK != 0;
                     let super_key = key.state & MOD4_MASK != 0;

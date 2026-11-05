@@ -160,6 +160,8 @@ pub struct RuntimeDocument {
     pub variable_values: Vec<Color>,
     pub text_overrides: FastMap<u32, String>,
     pub(super) hidden_nodes: FastSet<u32>,
+    /// Keyboard focus node; the render path mirrors it into `InteractionState::focus`.
+    pub(super) focus: Option<u32>,
     pub(super) image_revision: FastMap<u16, u64>,
     pub(super) node_image_overrides: FastMap<u32, RuntimeImageOverride>,
     pub(super) geometry_overrides: FastMap<u32, GeometryOverride>,
@@ -234,6 +236,7 @@ impl RuntimeDocument {
             variable_values,
             text_overrides: FastMap::default(),
             hidden_nodes: FastSet::default(),
+            focus: None,
             image_revision: FastMap::default(),
             node_image_overrides: FastMap::default(),
             geometry_overrides: FastMap::default(),
@@ -259,6 +262,16 @@ impl RuntimeDocument {
             ui_text_shadow: true,
             ui_scale: 1.0,
         })
+    }
+
+    /// Keyboard focus node owned by the window's focus owner (`None` when unfocused).
+    pub fn focus(&self) -> Option<u32> {
+        self.focus
+    }
+
+    /// Stores the keyboard focus node. Callers validate focusability; the render path only mirrors it.
+    pub fn set_focus(&mut self, focus: Option<u32>) {
+        self.focus = focus;
     }
 
     pub fn revision(&self) -> u64 {

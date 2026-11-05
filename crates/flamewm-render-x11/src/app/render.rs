@@ -1043,6 +1043,15 @@ impl X11App {
         self.input_repaint = true;
     }
 
+    /// Mirrors the document's keyboard focus into the interaction state. A change repaints
+    /// through the input path, so only the focus ring's damage region is redrawn.
+    pub(crate) fn sync_keyboard_focus(&mut self, document: &RuntimeDocument) {
+        if document.focus() != self.interaction.focus {
+            self.interaction.focus = document.focus();
+            self.mark_input_repaint();
+        }
+    }
+
     /// Paint only when damage is latched or the document revision moved
     /// past the retained cache; otherwise skip the frame.
     pub(crate) unsafe fn redraw_if_dirty(
