@@ -195,10 +195,7 @@ pub(crate) fn sync_menu(
                 .and_then(|id| state.model.items().find(|item| &item.id == id))
                 .map(|item| &item.path);
             set_wheel_slot_labels(document, state.wheel_mode, path.map(PathBuf::as_path))?;
-            document.text(
-                "convert-wheel-hub-text",
-                state.wheel_mode.label().to_owned(),
-            )?;
+            document.text_ref("convert-wheel-hub-text", state.wheel_mode.label())?;
             let size = (328, 328);
             let placed = clamp_menu_anchor(
                 menu_bounds,

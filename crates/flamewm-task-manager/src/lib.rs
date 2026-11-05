@@ -384,7 +384,7 @@ impl Application {
                 format!("{}  ×", self.query)
             },
         )?;
-        doc.text("status", self.message.clone())?;
+        doc.text_ref("status", &self.message)?;
         for (sort, id, label) in [
             (Sort::Name, "head-name-label", "Name"),
             (Sort::Pid, "head-pid-label", "PID"),
@@ -412,15 +412,15 @@ impl Application {
             doc.text(&id("name"), display_name(p))?;
             doc.background(&id("dot"), rgba(state_color(p.state), 255))?;
             doc.text(&id("pid"), p.pid.to_string())?;
-            doc.text(&id("user"), p.user.clone())?;
-            doc.text(&id("state"), state_name(p.state).to_owned())?;
+            doc.text_ref(&id("user"), &p.user)?;
+            doc.text_ref(&id("state"), state_name(p.state))?;
             doc.text(&id("threads"), p.threads.to_string())?;
             doc.text(&id("pri"), p.priority.to_string())?;
             doc.text(&id("nice"), p.nice.to_string())?;
             doc.text(&id("virt"), memory_text(p.virt_kib))?;
             doc.text(&id("cpu"), format!("{:.1}%", p.cpu))?;
             doc.text(&id("mem"), memory_text(p.rss_kib))?;
-            doc.text(&id("cmd"), p.command.clone())?;
+            doc.text_ref(&id("cmd"), &p.command)?;
             let memory_share = 100.0 * p.rss_kib as f64 / total as f64;
             doc.background(&id("cpu"), rgba(HEAT_RGB, heat_alpha(p.cpu / 50.0)))?;
             doc.background(&id("mem"), rgba(HEAT_RGB, heat_alpha(memory_share / 10.0)))?;

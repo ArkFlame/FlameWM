@@ -258,7 +258,7 @@ impl ExplorerApp {
                 doc.position(&row,SIDEBAR_WIDTH,y)?;
                 if !full {continue;}
                 doc.size(&row,self.window.0-SIDEBAR_WIDTH,ROW_HEIGHT)?;
-                doc.text(&format!("name-{slot}"),entry.name.clone())?;
+                doc.text_ref(&format!("name-{slot}"),&entry.name)?;
                 doc.text(&format!("size-{slot}"),entry.size_label())?;
                 doc.text(&format!("modified-{slot}"),entry.modified_label())?;
                 doc.text(&format!("kind-{slot}"),view::kind_name(entry))?;
@@ -271,7 +271,7 @@ impl ExplorerApp {
                 let dim=entry.name.starts_with('.');
                 doc.visible(&format!("name-{slot}"),!dim)?;
                 doc.visible(&format!("name-dim-{slot}"),dim)?;
-                doc.text(&format!("name-dim-{slot}"),entry.name.clone())?;
+                doc.text_ref(&format!("name-dim-{slot}"),&entry.name)?;
                 // Inline rename: the name cell shows the field with its caret; a selected stem is highlighted.
                 if matches!(self.edit,Some(EditMode::Rename)) && self.rename_target.as_ref()==Some(&entry.path) {
                     doc.visible(&format!("name-{slot}"),true)?;

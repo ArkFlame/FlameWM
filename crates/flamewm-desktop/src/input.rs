@@ -81,7 +81,7 @@ pub(crate) fn set_wheel_slot_labels(
         let label = labels.get(slot);
         document.visible(&id, label.is_some())?;
         if let Some(label) = label {
-            document.text(&id, label.clone())?;
+            document.text_ref(&id, label)?;
         }
     }
     Ok(())
@@ -108,7 +108,7 @@ pub(crate) fn set_wheel_mode(
     document.visible("convert-wheel-highlight", false)?;
     let path = wheel_path(state);
     set_wheel_slot_labels(document, mode, path.as_deref())?;
-    document.text("convert-wheel-hub-text", mode.label().to_owned())
+    document.text_ref("convert-wheel-hub-text", mode.label())
 }
 
 /// Runs a Tools or Actions segment. Convert segments are handled by the caller.

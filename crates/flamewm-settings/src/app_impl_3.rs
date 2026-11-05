@@ -597,7 +597,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 }
             }
         }
-        document.text("file-manager-value", self.file_manager_label.clone())?;
+        document.text_ref("file-manager-value", &self.file_manager_label)?;
         if let Some(value) = percent("surfaceOpacity") {
             document.text("surface-opacity-value", format!("{value}%"))?;
         }

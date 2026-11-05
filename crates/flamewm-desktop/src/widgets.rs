@@ -1065,8 +1065,8 @@ fn sync_clock(
             format!("{id}-clock-row-date"),
         ),
     ] {
-        document.text(&time_id, time_text.clone())?;
-        document.text(&date_id, date_text.clone())?;
+        document.text_ref(&time_id, &time_text)?;
+        document.text_ref(&date_id, &date_text)?;
         document.font_size(&time_id, time_size)?;
         document.font_size(&date_id, WIDGET_DATE_SIZE)?;
         document.font_weight(&time_id, weight)?;
@@ -1154,10 +1154,10 @@ fn sync_gauge(
         &format!("{id}-gauge-detail"),
         show_details && !detail.is_empty(),
     )?;
-    document.text(&format!("{id}-gauge-title"), title.to_owned())?;
-    document.text(&format!("{id}-gauge-caption"), title.to_owned())?;
-    document.text(&format!("{id}-gauge-value"), percent_text.clone())?;
-    document.text(&format!("{id}-gauge-percent"), percent_text)?;
+    document.text_ref(&format!("{id}-gauge-title"), title)?;
+    document.text_ref(&format!("{id}-gauge-caption"), title)?;
+    document.text_ref(&format!("{id}-gauge-value"), &percent_text)?;
+    document.text_ref(&format!("{id}-gauge-percent"), &percent_text)?;
     document.text(&format!("{id}-gauge-detail"), detail)?;
     document.font_size(
         &format!("{id}-gauge-percent"),
@@ -1359,12 +1359,9 @@ fn sync_weather(
         &format!("{id}-weather-city"),
         ellipsize(&view.location, 15.0, true, city_width),
     )?;
-    document.text(&format!("{id}-weather-temp"), view.temperature.clone())?;
-    document.text(
-        &format!("{id}-weather-condition"),
-        view.condition_text.clone(),
-    )?;
-    document.text(&format!("{id}-weather-range"), view.range.clone())?;
+    document.text_ref(&format!("{id}-weather-temp"), &view.temperature)?;
+    document.text_ref(&format!("{id}-weather-condition"), &view.condition_text)?;
+    document.text_ref(&format!("{id}-weather-range"), &view.range)?;
     document.foreground(&format!("{id}-weather-city"), text)?;
     document.foreground(&format!("{id}-weather-temp"), text)?;
     document.foreground(&format!("{id}-weather-condition"), text)?;
@@ -1383,7 +1380,7 @@ fn sync_weather(
             Some(day) => (day.weekday, day.high.clone()),
             None => (EMPTY_TEXT, EMPTY_TEXT.to_owned()),
         };
-        document.text(&format!("{id}-weather-hour-{hour}-time"), day.to_owned())?;
+        document.text_ref(&format!("{id}-weather-hour-{hour}-time"), day)?;
         document.text(&format!("{id}-weather-hour-{hour}-temp"), high)?;
         document.foreground(&format!("{id}-weather-hour-{hour}-time"), accent)?;
         document.foreground(&format!("{id}-weather-hour-{hour}-temp"), text)?;
@@ -1455,7 +1452,7 @@ fn sync_media(
     };
     document.text(&format!("{id}-media-player"), player)?;
     document.text(&format!("{id}-media-title"), title)?;
-    document.text(&format!("{id}-media-artist"), media.artist.clone())?;
+    document.text_ref(&format!("{id}-media-artist"), &media.artist)?;
     document.visible(&format!("{id}-media-player"), widget.flag("showPlayer"))?;
     document.visible(
         &format!("{id}-media-artist"),
@@ -1811,7 +1808,7 @@ pub(crate) fn place_config(
             continue;
         };
         let value = widget.value(spec.key);
-        document.text(&format!("{row_id}-label"), spec.label.to_owned())?;
+        document.text_ref(&format!("{row_id}-label"), spec.label)?;
         document.text(&format!("{row_id}-value"), spec.label_for(value))?;
         let is_color = matches!(
             spec.control,

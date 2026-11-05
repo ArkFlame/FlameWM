@@ -428,7 +428,7 @@ impl App {
         doc.visible("progress", busy)?;
         doc.size("progress-fill", TRACK_PX * fraction, 6.0)?;
         doc.text("progress-text", format!("{percent}%"))?;
-        doc.text("status", self.status.clone())
+        doc.text_ref("status", &self.status)
     }
 }
 

@@ -117,7 +117,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     continue;
                 };
                 document.visible(&row, true)?;
-                document.text(&format!("{node}-name-{slot}"), item.name.clone())?;
+                document.text_ref(&format!("{node}-name-{slot}"), &item.name)?;
                 let nodes = match kind {
                     theme_picker::PickerKind::Icon => theme_picker::ICON_ROW_IMAGES,
                     theme_picker::PickerKind::Cursor => 1,

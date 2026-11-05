@@ -66,7 +66,7 @@ pub(crate) fn sync_rename_editor(
     );
     document.position("desktop-rename", placed.x as f32, placed.y as f32)?;
     document.size("desktop-rename", placed.width as f32, placed.height as f32)?;
-    document.text("desktop-rename-value", rename.buffer.clone())?;
+    document.text_ref("desktop-rename-value", &rename.buffer)?;
     document.visible("desktop-rename", true)?;
     Ok(())
 }
