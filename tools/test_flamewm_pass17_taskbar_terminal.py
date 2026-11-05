@@ -5,13 +5,19 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 def read(p): return (ROOT / p).read_text()
 
+def read_projection():
+    """Shell projection is a module tree (projection.rs + projection/**); tests excluded."""
+    tree = ROOT / 'crates/flamewm-shell/src/projection'
+    return (ROOT / 'crates/flamewm-shell/src/projection.rs').read_text() + ''.join(
+        p.read_text() for p in sorted(tree.rglob('*.rs')) if not p.name.startswith('tests'))
+
 class Pass17Contracts(unittest.TestCase):
     def test_panel_root_clears_only_in_separate_mode(self):
         projection=read('crates/flamewm-shell/src/settings_projection.rs')
         self.assertIn('if separate || classic {\n                document.border("taskbar", UiColor { a: 0, ..fill })?', projection)
         self.assertIn('unified.borders["taskbar"], contour,', projection)
     def test_workspace_is_shared_capsule_and_child_buttons_remain_square(self):
-        panel=read('crates/flamewm-shell/src/projection.rs')
+        panel=read_projection()
         css=read('ui/shell/flamewm.css')
         for setter in ('background','border','corner_radius','node_backdrop'):
             self.assertIn(f'document.{setter}("workspace-pager",',panel)

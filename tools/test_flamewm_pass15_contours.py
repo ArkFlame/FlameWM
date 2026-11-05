@@ -7,6 +7,12 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 def read(path): return (ROOT/path).read_text()
 
+def read_projection():
+    """Shell projection is a module tree (projection.rs + projection/**); tests excluded."""
+    tree = ROOT / 'crates/flamewm-shell/src/projection'
+    return (ROOT / 'crates/flamewm-shell/src/projection.rs').read_text() + ''.join(
+        p.read_text() for p in sorted(tree.rglob('*.rs')) if not p.name.startswith('tests'))
+
 def inset(w, h, r, y):
     if r <= 1: return 0
     y = min(y, h - 1 - y)
@@ -23,7 +29,7 @@ class SourceContracts(unittest.TestCase):
         self.assertIn('visible_rows(*height)',app)
     def test_shared_contour_and_node_border_width(self):
         core=read('crates/flamewm-ui-core/src/surface.rs')
-        panel=read('crates/flamewm-shell/src/projection.rs')
+        panel=read_projection()
         style=read('ui/shell/flamewm.css')
         self.assertIn('pub fn inner_contour_coverage(',core)
         self.assertIn('set_taskbar_border(',panel)
