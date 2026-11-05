@@ -20,12 +20,15 @@ def project_item_call(source: str) -> list[str]:
 
 class DesktopScaleCallContract(unittest.TestCase):
     def test_sync_document_passes_the_actual_output_scale(self):
-        source = (ROOT / "crates/flamewm-desktop/src/main.rs").read_text()
+        # sync_document's project_item call moved from main.rs into slots.rs; the
+        # scale now comes from the per-output grid captured in the slot inputs.
+        source = (ROOT / "crates/flamewm-desktop/src/slots.rs").read_text()
         call = project_item_call(source)
         self.assertEqual(len(call), 8, f"project_item needs 8 arguments, got {call!r}")
-        self.assertEqual(call[6], "icon.as_deref()")
-        self.assertEqual(call[7], "output_grid.scale_percent")
+        self.assertEqual(call[6], "inputs.icon.as_deref()")
+        self.assertEqual(call[7], "inputs.scale")
         self.assertIn("let output_grid = grid_for_output(state, output);", source)
+        self.assertIn("let scale = output_grid.visual_scale_percent();", source)
         self.assertIn("state.icon_slots[index] = Some(key);", source)
 
     def test_callee_and_icon_cache_receive_the_same_scale(self):
