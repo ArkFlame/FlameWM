@@ -70,7 +70,7 @@ const TEXT_RGB: u32 = 0x00f5_f5f7;
 const MUTED_RGB: u32 = 0x00a1_a1a6;
 const SUBTLE_RGB: u32 = 0x0086_868b;
 /// Settings `accent` default; keep equal to `DEFAULT_ACCENT` in `flamewm-platform/src/settings.rs`.
-const ACCENT_RGB: u32 = 0x0053_9bff;
+const ACCENT_RGB: u32 = 0x003d_aee9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Overlay {

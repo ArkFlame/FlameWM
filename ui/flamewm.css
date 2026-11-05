@@ -1,4 +1,4 @@
-:root { --rim:#ffffff7f; --accent:#539bff; --accent-soft:#539bff38; --accent-strong:#539bffdd; --desktop-hover:#539bff26; --desktop-hover-border:#539bff4d; --desktop-selected:#539bff47; --desktop-selected-border:#539bffa6; --snap-fill:#539bff33; --preview-outline:#539bff; --sticky-bg:#ffe56b; --sticky-fg:#171717; --desktop:#0a1124; --panel:#0a1124; --surface:#172135; --sidebar:#1a2338; --text:#f7f9ff; --muted:#aeb9cc; }
+:root { --rim:#ffffff7f; --accent:#3daee9; --accent-soft:#3daee938; --accent-strong:#3daee9dd; --desktop-hover:#3daee926; --desktop-hover-border:#3daee94d; --desktop-selected:#3daee947; --desktop-selected-border:#3daee9a6; --snap-fill:#3daee933; --preview-outline:#3daee9; --sticky-bg:#ffe56b; --sticky-fg:#171717; --desktop:#0a1124; --panel:#0a1124; --surface:#172135; --sidebar:#1a2338; --text:#f7f9ff; --muted:#aeb9cc; }
 html { width:100%; height:100%; }
 body { width:100%; height:100%; margin:0; background:var(--desktop); color:var(--text); font-size:13px; position:relative; overflow:hidden; }
 button { padding:0; border-width:0px; border-color:transparent; background:transparent; color:var(--text); font-size:13px; cursor:pointer; }
