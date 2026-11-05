@@ -32,7 +32,7 @@ class Pass30CargoLayout(unittest.TestCase):
         self.assertFalse(manifest['package']['autobins'])
         binaries = {target['name']: target['path'] for target in manifest['bin']}
         self.assertEqual(binaries, {
-            'flamewm': 'src/main.rs',
+            'flamewm': 'src/bin/flamewm.rs',
             'flamewm-session': 'src/bin/flamewm-session.rs',
         })
 
