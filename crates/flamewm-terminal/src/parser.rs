@@ -68,9 +68,17 @@ impl Parser {
         }
     }
 
+    /// Keeps the first group's allocation for the next sequence, so SGR-heavy output does not allocate per sequence.
+    fn reset_params(&mut self) {
+        self.params.truncate(1);
+        match self.params.first_mut() {
+            Some(first) => first.clear(),
+            None => self.params.push(Vec::new()),
+        }
+    }
+
     fn clear_csi(&mut self) {
-        self.params.clear();
-        self.params.push(Vec::new());
+        self.reset_params();
         self.in_number = false;
         self.intermediates.clear();
         self.prefix = None;
@@ -327,9 +335,9 @@ impl Parser {
         if !self.in_number && self.params.last().is_none_or(Vec::is_empty) {
             self.finish_value();
         }
-        let params = std::mem::replace(&mut self.params, vec![Vec::new()]);
-        let intermediates = std::mem::take(&mut self.intermediates);
-        performer.csi(self.prefix.take(), &params, &intermediates, action);
+        performer.csi(self.prefix.take(), &self.params, &self.intermediates, action);
+        self.reset_params();
+        self.intermediates.clear();
         self.in_number = false;
         self.state = State::Ground;
     }
@@ -403,6 +411,17 @@ mod tests {
             (None, vec![vec![12], vec![0], vec![5]], vec![], b'H')
         );
         assert_eq!(recorder.csi[1], (None, vec![vec![0]], vec![], b'H'));
+    }
+
+    /// Reused parameter buffers must not leak groups or values from an earlier sequence.
+    #[test]
+    fn parameters_do_not_leak_between_sequences() {
+        let recorder = parse(b"\x1b[1;31;4m\x1b[7 q\x1b[m\x1b[?25l\x1b[2;3H");
+        assert_eq!(recorder.csi[0].1, vec![vec![1], vec![31], vec![4]]);
+        assert_eq!(recorder.csi[1], (None, vec![vec![7]], vec![b' '], b'q'));
+        assert_eq!(recorder.csi[2], (None, vec![vec![0]], vec![], b'm'));
+        assert_eq!(recorder.csi[3], (Some(b'?'), vec![vec![25]], vec![], b'l'));
+        assert_eq!(recorder.csi[4].1, vec![vec![2], vec![3]]);
     }
 
     #[test]

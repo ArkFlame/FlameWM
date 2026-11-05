@@ -28,7 +28,8 @@ impl History {
     /// Packs `line` (already compacted, see `compact_history`) into the smaller of the two forms.
     pub(super) fn pack(line: Line) -> Self {
         let mut text = String::with_capacity(line.len());
-        let mut runs: Vec<StyleRun> = Vec::new();
+        // Sized for the worst case (every cell its own run) so the scroll path does not regrow it per line.
+        let mut runs: Vec<StyleRun> = Vec::with_capacity(line.len());
         for cell in &line {
             text.push(cell.ch);
             match runs.last_mut() {
