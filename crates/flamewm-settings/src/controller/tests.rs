@@ -21,6 +21,7 @@ mod display_modes;
 mod display_paging;
 mod hotkey_seams;
 mod hotkeys;
+mod keyboard_capture;
 mod markup_errors;
 mod page_guards;
 mod segments_backgrounds;

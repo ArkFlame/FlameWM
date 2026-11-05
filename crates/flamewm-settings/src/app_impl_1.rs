@@ -260,6 +260,15 @@ impl<T: ControlTransport> SettingsApplication<T> {
             .map_or(true, |mode| mode == "inherit")
     }
 
+    /// Whether typed keys belong to an open text field or an armed shortcut recorder. Keyboard
+    /// focus yields then, so Space, Tab and Enter reach that owner rather than a focused control.
+    pub(crate) fn keyboard_captured(&self) -> bool {
+        self.hotkey_armed
+            || self.nav_search_focused
+            || self.api_key_draft.is_some()
+            || self.color_picker.is_some()
+    }
+
     pub fn handle_key_event(
         &mut self,
         event: &UiKeyEvent,

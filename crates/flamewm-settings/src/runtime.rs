@@ -56,10 +56,16 @@ pub fn run(options: SettingsLaunchOptions) -> Result<(), String> {
     application.start_theme_scan();
     let application = Rc::new(RefCell::new(application));
     let event_application = Rc::clone(&application);
+    let capture_application = Rc::clone(&application);
     let wake_application = Rc::clone(&application);
     let wake_queue = Rc::clone(&wakes);
     run_with_controller_events_role_and_two_readable_fds(
-        document,
+        // Focus yields to a text field or recorder. A busy application answers "captured".
+        document.with_keyboard_capture(move || {
+            capture_application
+                .try_borrow()
+                .map_or(true, |application| application.keyboard_captured())
+        }),
         {
             let (width, height) = options
                 .window_size

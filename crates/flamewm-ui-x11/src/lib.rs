@@ -331,7 +331,7 @@ where
     P: for<'a> FnMut(&RawPress, &mut UiDocumentView<'a>) -> Result<(), String>,
     R: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
 {
-    let (runtime, backdrop, drop_target, keyboard_focus) = document.into_parts();
+    let (runtime, backdrop, drop_target, keyboard_focus, keyboard_capture) = document.into_parts();
     let file_drag = drop_target.then(flamewm_render_x11::FileDragSlot::default);
     let mut x11 = x11_config(config, role);
     x11.backdrop = backdrop;
@@ -346,17 +346,20 @@ where
         press_watch,
         move |event, document| {
             let flamewm_render_core::ControllerEvent::Action(action) = event;
-            let mut event = controller_event(action);
-            if keyboard_focus {
-                match route_focus(document, event) {
-                    Some(routed) => event = routed,
-                    None => return Ok(()),
-                }
+            let event = controller_event(action);
+            let events = if keyboard_focus {
+                let captured = keyboard_capture.as_ref().is_some_and(|capture| capture());
+                keyboard_events(document, event, captured)
+            } else {
+                vec![event]
+            };
+            for event in &events {
+                on_event(
+                    event,
+                    &mut UiDocumentView::from_runtime(document, file_drag.clone()),
+                )?;
             }
-            on_event(
-                &event,
-                &mut UiDocumentView::from_runtime(document, file_drag.clone()),
-            )
+            Ok(())
         },
         move |press, document| {
             on_press(
@@ -371,6 +374,34 @@ where
             ))
         },
     )
+}
+
+/// The events a window handler receives for one controller event while keyboard focus is on.
+/// `captured` windows (an open text field, an armed recorder) keep every key. Focus activation
+/// becomes a press and release pair: archiver acts on press, Settings acts on release.
+fn keyboard_events(
+    document: &mut flamewm_render_core::RuntimeDocument,
+    event: UiControllerEvent,
+    captured: bool,
+) -> Vec<UiControllerEvent> {
+    if captured {
+        return vec![event];
+    }
+    match route_focus(document, event.clone()) {
+        None => Vec::new(),
+        Some(routed) if routed == event => vec![routed],
+        Some(UiControllerEvent::Action(press)) => {
+            let release = UiActionEvent {
+                phase: UiActionPhase::Release,
+                ..press.clone()
+            };
+            vec![
+                UiControllerEvent::Action(press),
+                UiControllerEvent::Action(release),
+            ]
+        }
+        Some(other) => vec![other],
+    }
 }
 
 /// Routes one controller event through the window's keyboard focus. The focused node lives on
@@ -522,7 +553,9 @@ mod tests {
         Color, ColorValue, CompiledDocument, CompiledNode, InteractionState, NodeKind, RuntimeDocument, Style,
     };
 
-    use super::{route_focus, UiActionEvent, UiActionPhase, UiControllerEvent, UiKeyEvent, UiKeyPhase};
+    use super::{
+        keyboard_events, route_focus, UiActionEvent, UiActionPhase, UiControllerEvent, UiKeyEvent, UiKeyPhase,
+    };
 
     fn button(action: &'static str) -> CompiledNode {
         CompiledNode {
@@ -603,6 +636,59 @@ mod tests {
             "X11 canonical Space name activates"
         );
         assert_eq!(document.focus(), Some(3), "activation keeps focus in place");
+    }
+
+    fn release(action: &str) -> UiControllerEvent {
+        let UiControllerEvent::Action(press) = press(action) else {
+            unreachable!("press helper builds an action");
+        };
+        UiControllerEvent::Action(UiActionEvent {
+            phase: UiActionPhase::Release,
+            ..press
+        })
+    }
+
+    #[test]
+    fn activation_delivers_press_then_release_to_the_focused_control() {
+        let mut document = window_document();
+        route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
+        route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
+        assert_eq!(
+            keyboard_events(&mut document, key("Space", UiKeyPhase::Press, &[], Some(" ")), false),
+            vec![press("ar.next"), release("ar.next")],
+            "press first (archiver acts on press), then release (Settings acts on release)"
+        );
+        let space_release = key("Space", UiKeyPhase::Release, &[], Some(" "));
+        assert_eq!(
+            keyboard_events(&mut document, space_release.clone(), false),
+            vec![space_release]
+        );
+    }
+
+    #[test]
+    fn captured_window_keeps_tab_space_and_enter_for_its_own_owner() {
+        let mut document = window_document();
+        route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
+        assert_eq!(document.focus(), Some(1));
+        for event in [
+            key("Tab", UiKeyPhase::Press, &[], None),
+            key("ISO_Left_Tab", UiKeyPhase::Press, &["Shift"], None),
+            key("Return", UiKeyPhase::Press, &[], Some("\r")),
+            key("Space", UiKeyPhase::Press, &[], Some(" ")),
+        ] {
+            assert_eq!(keyboard_events(&mut document, event.clone(), true), vec![event]);
+        }
+        assert_eq!(document.focus(), Some(1), "captured keys never move focus or activate");
+    }
+
+    #[test]
+    fn uncaptured_window_routes_tab_and_escape_as_before() {
+        let mut document = window_document();
+        assert!(keyboard_events(&mut document, key("Tab", UiKeyPhase::Press, &[], None), false).is_empty());
+        assert_eq!(document.focus(), Some(1));
+        let escape = key("Escape", UiKeyPhase::Press, &[], None);
+        assert_eq!(keyboard_events(&mut document, escape.clone(), false), vec![escape]);
+        assert_eq!(document.focus(), Some(1));
     }
 
     #[test]

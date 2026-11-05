@@ -4,6 +4,10 @@ use std::sync::Arc;
 use flamewm_render_core::RuntimeDocument;
 use flamewm_ui_core::style::UiLayer;
 
+/// Answers whether the window currently owns typed keys (a text field or a shortcut recorder).
+/// While it answers `true`, keyboard focus passes every key through unchanged.
+pub type KeyboardCapture = Box<dyn Fn() -> bool>;
+
 pub struct UiDocument {
     document: RuntimeDocument,
     /// Last whole-document layout, reused by `layout_box_by_id` while the
@@ -15,6 +19,8 @@ pub struct UiDocument {
     file_drop_target: bool,
     /// Opt-in keyboard focus (Tab traversal, Enter/Space activation) for the window.
     keyboard_focus: bool,
+    /// Optional owner-state gate consulted per key while keyboard focus is on.
+    keyboard_capture: Option<KeyboardCapture>,
 }
 
 struct LayoutMemo {
@@ -39,12 +45,14 @@ impl UiDocument {
         Option<flamewm_render_core::backdrop::WindowBackdrop>,
         bool,
         bool,
+        Option<KeyboardCapture>,
     ) {
         (
             self.document,
             self.window_backdrop,
             self.file_drop_target,
             self.keyboard_focus,
+            self.keyboard_capture,
         )
     }
 }
@@ -215,6 +223,7 @@ impl UiDocument {
             window_backdrop: None,
             file_drop_target: false,
             keyboard_focus: false,
+            keyboard_capture: None,
         }
     }
 
@@ -233,6 +242,15 @@ impl UiDocument {
     #[must_use]
     pub fn with_keyboard_focus(mut self) -> Self {
         self.keyboard_focus = true;
+        self
+    }
+
+    /// Installs the capture gate for keyboard focus. Return `true` while the window's own state
+    /// takes typed keys (an open text field, an armed shortcut recorder): focus then leaves Tab,
+    /// Enter and Space to that state. Without a gate, focus never yields.
+    #[must_use]
+    pub fn with_keyboard_capture(mut self, capture: impl Fn() -> bool + 'static) -> Self {
+        self.keyboard_capture = Some(Box::new(capture));
         self
     }
 
