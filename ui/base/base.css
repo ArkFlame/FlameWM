@@ -1,3 +1,5 @@
 :root { --rim:#ffffff7f; }
 * { box-sizing:border-box; }
 html { width:100%; height:100%; }
+/* Keyboard focus ring. --focus-ring is a built-in token derived from --accent (render-compiler). */
+button:focus-visible, .nav-row:focus-visible, .segment:focus-visible, .settings-button:focus-visible, .select-box:focus-visible, .step-button:focus-visible, .toggle:focus-visible, .accent-swatch:focus-visible, .hotkey-key:focus-visible, .mode-slot:focus-visible { border-width:1px; border-color:var(--focus-ring); }

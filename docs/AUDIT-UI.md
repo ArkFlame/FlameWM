@@ -10,7 +10,7 @@ Scope: `ui/**` HTML/CSS as compiled by `flamewm-render-compiler` (via `include_s
 
 ## Findings
 
-### F1. No keyboard focus state exists anywhere (open, needs compiler + runtime work)
+### F1. No keyboard focus state exists anywhere (partly fixed in Pass 5: compiler, codec, owner, ring; app wiring open)
 
 - `:focus`, `:focus-visible` and `:disabled` appear in zero UI stylesheets.
 - The render compiler accepts only `:hover`, `:active`, `:root` (`css.rs:323-326`). Any `:focus` rule would fail compilation with `unsupported pseudo-class`.
@@ -128,3 +128,30 @@ Scope: shell and task-manager neutral colours. Base: `origin/main` after `5bb113
 - Hover/pressed consistency with the titlebar inversion (item 4). The titlebar state lives in `crates/flamewm-wm-wayland` and `crates/flamewm-wm-x11`, which this pass did not touch. Not audited.
 - Explorer, finder, settings: no `--text`/`--muted` projection changed here. Their palette literals (see Pass 2 table) are open.
 - Not visually verified. No light or Dark screenshot was taken in this pass. Contrast of the new light text tokens on the shell glass is covered only by the existing `Palette::LIGHT` contrast tests in flamewm-skin, not by rendered output.
+
+## Pass 5: keyboard focus (partial)
+
+Scope: `:focus-visible` pseudo-state, shared focus owner, shared ring token. Base: `origin/main` after `c060e2ae`.
+
+### Fixed
+
+- `flamewm-render-compiler/src/css.rs`: `:focus` and `:focus-visible` parse to `PseudoState::Focus`. Other pseudo-classes still fail with `unsupported pseudo-class`.
+- `compile.rs`: each element computes a focus style and stores it in `CompiledNode::focus_style` only when it differs from base, like hover and active.
+- `flamewm-render-core`: `CompiledNode::focus_style: Option<Arc<Style>>` (about 45 construction sites, all `None` except the compiler). `InteractionState::focus: Option<u32>`. `style_for` precedence is active, focus, hover. `damage.rs` treats a focus style with non-absolute position as a geometry change, like hover and active.
+- Codec: `FORMAT_VERSION` 8 to 9. `FORMAT_VERSION_FOCUS_LEGACY = 8` decodes with `focus_style: None`. Legacy fixtures use `encode_version` at their own version. Stale `FORMAT_VERSION == 8` guards are now 9. The unknown-version test uses 10.
+- `flamewm-render-compiler` built-in token `--focus-ring` is derived from the accent (`tint(0xff)`), next to `--accent`.
+- `ui/base/base.css`: `button/.nav-row/.segment/.settings-button/.select-box/.step-button/.toggle/.accent-swatch/.hotkey-key/.mode-slot:focus-visible { border-width:1px; border-color:var(--focus-ring) }`. `button` sets `border-width:0` globally, so the width must be restated.
+- `flamewm-ui-document/src/focus.rs`: `FocusOwner` (one per document). `handle_key` takes Tab / Shift+Tab (`ISO_Left_Tab`) for document-order traversal with wrap-around, and Enter / Return / KP_Enter / space to return `FocusKey::Activate(index)`. The caller dispatches that node's `data-action`. `apply` writes into `InteractionState::focus`. A focusable node is an element with non-empty `data-action`.
+
+### Tests
+
+- `flamewm-render-compiler`: `focus_visible_and_focus_compile_to_focus_style`, `focus_ring_token_is_builtin_accent_derived`.
+- `flamewm-render-core` codec: `v9_roundtrip_preserves_focus_style`, `v8_document_decodes_without_focus_style`.
+- `flamewm-ui-document::focus`: traversal forward and backward, wrap, no-focusable documents, owner key handling, `set` rejecting non-focusable targets.
+
+### Not done (open)
+
+- App wiring (no app is end-to-end yet). The UI window runtime lays out with `InteractionState::default()` (`crates/flamewm-ui-x11/src/surface_runtime.rs:652,776,791`), so no interaction state reaches UI windows. `UiDocumentAccess` (`crates/flamewm-ui-document/src/template.rs:113`) exposes text and image setters only, not the compiled document. Keys reach `handle_key_event` as `UiKeyEvent` (`crates/flamewm-ui-x11/src/lib.rs:243`) without the document. Follow-up: store a `FocusOwner` and an `InteractionState` in the ui-x11 surface runtime, call `FocusOwner::handle_key` before the controller on `UiControllerEvent::Key`, dispatch `action_for` on `Activate`, and repaint when focus changes. Then wire `flamewm-settings` first.
+- `:disabled` (F1b) is still not a pseudo-class. It needs a second style slot plus an attribute match, so it was not cheap in this pass.
+- Focus visibility in `ui/shell`, `task-manager`, `explorer`, `finder` and `terminal` css: not added. Only `ui/base/base.css` (shared) and the settings selectors got the ring rule.
+- Visual result of the ring: unverified. No runtime or screenshot run was done.
