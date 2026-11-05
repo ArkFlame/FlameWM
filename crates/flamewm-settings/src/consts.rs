@@ -9,7 +9,7 @@ pub(crate) const WEBSITE_URI: &str = "https://wm.arkflame.com";
 /// Canonical product version: the workspace version inherited by this crate.
 pub(crate) const APP_VERSION: &str = env!("FLAMEWM_SETTINGS_VERSION");
 /// Authoritative accent for the native `FlameWM` preset.
-pub(crate) const DEFAULT_ACCENT: &str = "#539BFF";
+pub(crate) const DEFAULT_ACCENT: &str = flamewm_api::settings::DEFAULT_ACCENT;
 /// Nodes whose compiled colour is the accent and must follow live accent changes.
 /// Every `toggle-on` id in ui/settings.html must be listed here (checked by a test).
 pub(crate) const ACCENT_NODE_IDS: &[&str] = &[

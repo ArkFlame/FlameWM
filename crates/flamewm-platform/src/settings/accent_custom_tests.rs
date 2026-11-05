@@ -20,7 +20,7 @@ fn explicit_non_default_accent_migrates_to_custom() {
 
 #[test]
 fn default_accent_without_toggle_stays_off() {
-    let settings = parse("revision=1\naccent=#539BFF\n");
+    let settings = parse(&format!("revision=1\naccent={DEFAULT_ACCENT}\n"));
     assert!(!settings.accent_custom);
     assert_eq!(settings.accent, DEFAULT_ACCENT);
 }

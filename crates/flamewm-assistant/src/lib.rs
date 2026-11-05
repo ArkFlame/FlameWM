@@ -58,7 +58,7 @@ const HEIGHT: u32 = 780;
 /// Wheel notches move the viewport by this many messages.
 const WHEEL_STEP: isize = 3;
 /// Settings `accent` default; keep equal to `DEFAULT_ACCENT` in `flamewm-platform/src/settings.rs`.
-const ACCENT_RGB: u32 = 0x0053_9bff;
+const ACCENT_RGB: u32 = flamewm_api::settings::DEFAULT_ACCENT_RGB;
 const KEY_TINT: u32 = 0x00ff_ffff;
 
 /// Messages from worker threads to the window.
