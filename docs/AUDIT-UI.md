@@ -474,7 +474,21 @@ Task Manager Light (`scripts/ui/light_shots.sh light`, debug binaries, `/run/med
 
 Not done:
 
-- Light Wayland titlebar: the Wayland chrome has no appearance input and always paints `#333333` glass, so no Light titlebar reaches `titlebar_ink()` yet. Thread the appearance material into `render/mod.rs` `SURFACE` to finish.
 - Settings nav hover on Light: token and CSS are in place, but no screenshot of the hovered state was taken.
 - Task Manager Light muted contrast over dark wallpaper (above).
 - Dark Explorer dot-file names (`.agents`) use `.name-dim` = `--muted` by design (dot-file dimming), not a focus defect.
+
+### Pass 12 closure (coder-ui12b)
+
+Closed in code:
+
+| Defect | Owner | Fix |
+| --- | --- | --- |
+| Wayland titlebar painted fixed `#333333` Dark glass and Dark ink in Light. | `flamewm-wm-wayland/src/render/mod.rs` `set_titlebar_light`, `titlebar_material`, `ink_for_material`, `titlebar_ink`; `control.rs` `sync_chrome_settings` | The snapshot's `appearance` (`glass::appearance_from_settings`) picks the material: Dark keeps `DEFAULT_SURFACE_RGB`, Light paints `palette::LIGHT_PANEL`. Ink is `ink_palette_on(material)`, the shared owner. A change drops cached bars and rings (`Decorations::invalidate_bars`). |
+
+Tests: `render::decoration_tests::titlebar_ink_is_the_contrast_pick_for_the_painted_material` (Dark identity), `light_titlebar_paints_light_material_with_light_ink`. Runtime: no Light Wayland screenshot yet. Ink is picked against the material alone, as X11 does, so the translucent alpha over the wallpaper is not measured.
+
+Not closed (blocker, not a token bug):
+
+- Task Manager Light muted (`--muted` `#434a52`) on the sampled backdrop (`#5b6182` to `#716c87`): 1.5:1 to 1.8:1. Black reaches only 3.5:1 and 4.2:1 on those samples, so no dark ink token can reach 4.5:1 there. The backdrop is the cause: `glass::LIGHT` uses 5% glass opacity and a 5% tint, so Light glass over a dark wallpaper stays dark. The fix belongs to the Light glass/backdrop decision, which affects every Light surface. The Light muted token already meets 4.5:1 on the Light surfaces (`palette::light_text_tokens_meet_aa_on_every_surface`, 8.2:1 on `LIGHT_SURFACE`).
+

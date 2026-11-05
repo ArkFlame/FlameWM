@@ -1041,6 +1041,13 @@ impl Service {
         }
         // The window outline comes from the same shared owner X11 reads, so both backends show one
         // `windowOutlineColor` / `windowOutlineOpacity` / `outlines` ring style.
+        // Light titlebar material and its ink follow the same `appearance` the other surfaces use.
+        // Cached bars bake both in, so an appearance change drops them.
+        let light = flamewm_ui_core::glass::appearance_from_settings(&snapshot).light;
+        if crate::render::set_titlebar_light(light) {
+            state.decorations.borrow_mut().invalidate_bars();
+            state.request_redraw();
+        }
         let stroke = flamewm_ui_core::surface::window_outline_stroke(&snapshot);
         let outline_changed =
             state

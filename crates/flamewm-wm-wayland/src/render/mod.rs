@@ -52,15 +52,42 @@ render_elements! {
 
 const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
 // Shared Xephyr skin metrics and palette, never per-backend coloured-square placeholders.
-const SURFACE: u32 = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB.0;
 const SURFACE_ALPHA: u8 = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_ALPHA;
 /// Blur radius at 100% surface blur. Same value as the X11 `MAX_BLUR_RADIUS_PX` (render-x11).
 const MAX_BLUR_RADIUS_PX: f32 = 24.0;
-/// Title and control ink for the titlebar material this backend paints (`SURFACE`), picked by
-/// contrast like the X11 frame (`ChromeTokens::ink`). The material is the shipped Dark glass, so
-/// this is the Dark palette until a Light titlebar material reaches the Wayland chrome.
+
+/// `appearance=light` from the committed settings snapshot, written by `sync_chrome_settings`.
+/// Read by the titlebar paint path so the material and its ink follow one appearance.
+static TITLEBAR_LIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Records the snapshot's appearance. Returns whether it changed, so the caller drops cached bars.
+pub(crate) fn set_titlebar_light(light: bool) -> bool {
+    TITLEBAR_LIGHT.swap(light, std::sync::atomic::Ordering::Relaxed) != light
+}
+
+/// Titlebar material for one appearance: the shipped Dark glass, or the Light panel token.
+pub(crate) const fn titlebar_material(light: bool) -> u32 {
+    if light {
+        flamewm_skin::palette::LIGHT_PANEL.0
+    } else {
+        flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB.0
+    }
+}
+
+/// Title and control ink for one appearance's titlebar material, picked by contrast like the X11
+/// frame (`ChromeTokens::ink`).
+pub(crate) fn ink_for_material(light: bool) -> flamewm_skin::palette::Palette {
+    flamewm_skin::palette::ink_palette_on(flamewm_skin::palette::Rgb(titlebar_material(light)))
+}
+
+/// Material the bar paints right now.
+pub(crate) fn current_titlebar_material() -> u32 {
+    titlebar_material(TITLEBAR_LIGHT.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Title and control ink for the titlebar material this backend paints now.
 pub(crate) fn titlebar_ink() -> flamewm_skin::palette::Palette {
-    flamewm_skin::palette::ink_palette_on(flamewm_skin::palette::Rgb(SURFACE))
+    ink_for_material(TITLEBAR_LIGHT.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 const BORDER: u32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME.border.0;
@@ -447,13 +474,21 @@ mod decoration_tests {
 
     #[test]
     fn titlebar_ink_is_the_contrast_pick_for_the_painted_material() {
-        // The bar paints `SURFACE` (shipped Dark glass), so its title and control ink is the Dark
-        // palette, chosen by the same shared owner as the X11 frame.
+        // Dark keeps the shipped Dark glass and Dark ink, chosen by the shared owner.
         assert_eq!(
-            titlebar_ink(),
-            flamewm_skin::palette::ink_palette_on(flamewm_skin::palette::Rgb(SURFACE))
+            ink_for_material(false),
+            flamewm_skin::palette::ink_palette_on(flamewm_skin::palette::Rgb(
+                flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB.0
+            ))
         );
-        assert_eq!(titlebar_ink(), flamewm_skin::palette::Palette::RWR_0_0_9);
+        assert_eq!(ink_for_material(false), flamewm_skin::palette::Palette::RWR_0_0_9);
+    }
+
+    #[test]
+    fn light_titlebar_paints_light_material_with_light_ink() {
+        assert_eq!(titlebar_material(true), flamewm_skin::palette::LIGHT_PANEL.0);
+        assert_eq!(ink_for_material(true), flamewm_skin::palette::Palette::LIGHT);
+        assert_ne!(ink_for_material(true), ink_for_material(false));
     }
 
     #[test]

@@ -4,7 +4,8 @@
 - Light theme: Wayland ink, nav hover/pressed fills, `--text-secondary`/`--rim` projected per appearance.
 - Finder: placeholder tick moved onto the reactor deadline (idle wakes 0.40 to 0.20/s). Imageviewer: prefetch on its own thread, open latency during prefetch 1.1 s to 0.5 s.
 - Tests: wm-x11, shell, desktop and tools expectations follow the theme-follow surface default and shared accent constant.
-- Known: Task Manager muted columns low-contrast in Light over dark wallpaper; Wayland titlebar has no appearance input.
+- Wayland titlebar follows `appearance`: Light paints the Light panel material with contrast-picked ink (code and unit tests; no Light runtime screenshot yet).
+- Known: Task Manager muted columns low-contrast in Light over dark wallpaper (Light glass is 5% opacity, so no dark ink reaches 4.5:1 there; needs a glass/backdrop decision).
 
 ## 2026-11-05 — Version 0.1.6: deferral, wake and light-theme pass
 

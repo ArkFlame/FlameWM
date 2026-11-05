@@ -207,7 +207,7 @@ fn paint_background(
                 put(out, w, h, x, y, rgb, (255.0 * coverage).round() as u8);
             }
             let alpha = (f32::from(SURFACE_ALPHA) * coverage).round() as u8;
-            put(out, w, h, x, y, SURFACE, alpha);
+            put(out, w, h, x, y, current_titlebar_material(), alpha);
             if y == 0 || x == 0 || x == w as i32 - 1 {
                 put(out, w, h, x, y, BORDER, (63.0 * coverage).round() as u8);
             }
@@ -422,6 +422,13 @@ impl Decorations {
     pub(super) fn retain(&mut self, live: impl Fn(WindowId) -> bool) {
         self.parts.retain(|window, _| live(*window));
         self.rings.retain(|window, _| live(*window));
+    }
+
+    /// Drops every cached bar and outline ring. Used when the titlebar material or its ink changes,
+    /// since both are baked into the cached pixels.
+    pub fn invalidate_bars(&mut self) {
+        self.parts.clear();
+        self.rings.clear();
     }
 
     /// Records the resolved outline settings. Returns whether the value changed, so the caller
