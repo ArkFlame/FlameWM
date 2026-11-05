@@ -5,6 +5,7 @@ use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_skin::icons::IconRole;
 use flamewm_skin::palette::Rgb;
 use flamewm_skin::recipes::decoration::{ButtonShape, ButtonTokens, ChromeTokens, DecorationStyle};
+use flamewm_skin::recipes::window_control::{ControlKind, ControlState, control_colors};
 use flamewm_skin::recipes::window_chrome::{self as recipe, WINDOW_CHROME, WindowControlRole};
 
 /// Skin-owned titlebar height (flamewm-skin RWR 0.0.9 chrome titlebar).
@@ -366,26 +367,24 @@ fn control_glyph_scheme(
     look: ControlLook,
 ) -> flamewm_image_core::SvgColorScheme {
     let base = flamewm_image_core::SvgColorScheme::flame_default();
-    let mut scheme = match (role, material) {
-        (_, ControlMaterial::Rest) => base,
-        (ControlRole::Close, _) => flamewm_image_core::SvgColorScheme {
-            text: [0xf1, 0xf2, 0xf3, 255],
-            background: skin_rgba(WINDOW_CHROME.close_hover.0),
-            highlight: base.highlight,
-            negative_text: base.negative_text,
-        },
-        (_, ControlMaterial::Hover) => flamewm_image_core::SvgColorScheme {
-            text: [0x1b, 0x1e, 0x20, 255],
-            background: [0xf1, 0xf2, 0xf3, 255],
-            highlight: base.highlight,
-            negative_text: base.negative_text,
-        },
-        (_, ControlMaterial::Pressed) => flamewm_image_core::SvgColorScheme {
-            text: [0x1b, 0x1e, 0x20, 255],
-            background: [0xc7, 0xc9, 0xcb, 255],
-            highlight: base.highlight,
-            negative_text: base.negative_text,
-        },
+    // Colours come from the shared skin style (`flamewm_skin::recipes::window_control`), the
+    // same owner the Wayland chrome paints from.
+    let kind = match role {
+        ControlRole::Minimize => ControlKind::Minimize,
+        ControlRole::Maximize | ControlRole::Restore => ControlKind::Maximize,
+        ControlRole::Close => ControlKind::Close,
+    };
+    let state = match material {
+        ControlMaterial::Rest => ControlState::Rest,
+        ControlMaterial::Hover => ControlState::Hover,
+        ControlMaterial::Pressed => ControlState::Pressed,
+    };
+    let colors = control_colors(kind, state);
+    let mut scheme = flamewm_image_core::SvgColorScheme {
+        text: skin_rgba(colors.glyph.0),
+        background: colors.background.map_or(base.background, |fill| skin_rgba(fill.0)),
+        highlight: base.highlight,
+        negative_text: base.negative_text,
     };
     if let Some(glyph) = look.button.glyph {
         scheme.text = skin_rgba(glyph.0);

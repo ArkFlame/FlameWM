@@ -10,3 +10,4 @@ pub mod sticky;
 pub mod taskbar;
 pub mod toggle;
 pub mod window_chrome;
+pub mod window_control;
