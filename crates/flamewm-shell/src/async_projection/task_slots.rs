@@ -453,6 +453,34 @@ mod tests {
     }
 
     #[test]
+    fn task_progress_css_is_a_background_fill_behind_slot_content() {
+        let css = include_str!("../../../../ui/shell/flamewm.css");
+        let html = include_str!("../../../../ui/shell/panel.html");
+        let rule = css
+            .split('}')
+            .find(|rule| rule.contains(".task-progress {"))
+            .expect("task-progress rule");
+        assert!(!rule.contains("z-index"), "the shell CSS compiler has no stacking token");
+        assert!(rule.contains("height:100%"), "fill spans the slot height");
+        assert!(rule.contains("var(--accent-soft)"), "fill uses the accent tint token");
+        assert!(!rule.contains("bottom:"), "the old bottom track is gone");
+        let icon = css
+            .split('}')
+            .find(|rule| rule.contains(".task-slot-icon"))
+            .expect("task-slot icon rule");
+        assert!(icon.contains("position:relative"), "icon paints above the fill");
+        for index in 1..=8 {
+            let fill = html
+                .find(&format!("id=\"task-slot-{index}-progress\""))
+                .expect("fill node");
+            let icon = html
+                .find(&format!("id=\"task-slot-{index}-icon\""))
+                .expect("icon node");
+            assert!(fill < icon, "fill precedes icon in tree order");
+        }
+    }
+
+    #[test]
     fn task_progress_is_slot_identity_bound_scaled_and_cleared() {
         let _scale = crate::taskbar_scale::test_lock();
         crate::taskbar_scale::set_factor(1.0);
@@ -464,11 +492,12 @@ mod tests {
         let mut doc = FakeDoc::default();
         crate::projection::project_task_progress(&mut doc, 0, Some(&id), &[entry]).unwrap();
         assert_eq!(doc.visible.get("task-slot-1-progress"), Some(&true));
-        assert_eq!(doc.sizes.get("task-slot-1-progress"), Some(&(14.0, 2.0)));
+        let inner = crate::taskbar_scale::inner_node_height(1.0);
+        assert_eq!(doc.sizes.get("task-slot-1-progress"), Some(&(21.0, inner)));
 
         crate::projection::project_task_progress(&mut doc, 0, None, &[]).unwrap();
         assert_eq!(doc.visible.get("task-slot-1-progress"), Some(&false));
-        assert_eq!(doc.sizes.get("task-slot-1-progress"), Some(&(0.0, 2.0)));
+        assert_eq!(doc.sizes.get("task-slot-1-progress"), Some(&(0.0, inner)));
         assert_eq!(doc.visible.get("task-slot-2-progress"), None);
     }
 }

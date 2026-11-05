@@ -122,7 +122,7 @@ input { cursor:text; }
 .task-button:hover, .task-slot:hover, .tray-button:hover, .clock:hover, .media-control:hover { background:var(--hover-fill); border-radius:8px; }
 .task-button:active, .task-slot:active, .tray-button:active, .clock:active, .media-control:active { background:var(--pressed-fill); border-radius:8px; }
 .task-button.disabled:hover, .task-slot.disabled:hover, .tray-button.disabled:hover, .clock.disabled:hover, .workspace-button.disabled:hover, .task-button.disabled:active, .task-slot.disabled:active, .tray-button.disabled:active, .clock.disabled:active { background:transparent; }
-.task-start-icon, .task-slot-icon { width:25px; height:25px; display:block; }
+.task-start-icon, .task-slot-icon { width:25px; height:25px; display:block; position:relative; }
 .task-button img { width:25px; height:25px; }
 .task-slots { height:100%; display:flex; background:transparent; position:relative; }
 .task-slot-insert { position:absolute; left:0px; top:6px; width:0px; height:0px; background:var(--accent); }
@@ -131,7 +131,7 @@ input { cursor:text; }
 .task-slot.running .underline { background:var(--c-87919b); }
 .task-slot.focused .underline { height:3px; background:var(--accent); }
 .underline { position:absolute; left:7px; bottom:0px; width:28px; height:2px; }
-.task-progress { position:absolute; left:7px; bottom:4px; height:2px; width:0px; background:var(--accent); }
+.task-progress { position:absolute; left:0px; top:0px; height:100%; width:0px; border-radius:8px; background:var(--accent-soft); }
 .browser-line { background:var(--c-87919b); }.settings-line { background:var(--c-87919b); }.terminal-line { background:var(--c-87919b); }
 .show-desktop { width:10px; height:100%; box-sizing:border-box; display:flex; align-items:center; justify-content:flex-start; background:transparent; }
 .show-desktop-line { width:1px; height:100%; background:var(--rim); }

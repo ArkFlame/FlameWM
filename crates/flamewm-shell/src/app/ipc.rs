@@ -53,13 +53,81 @@ impl ShellLoop {
         }
     }
 
+    /// Unity LauncherEntry source. Same reactor-owned bus pump model as the KIO provider.
+    pub(crate) fn start_launcher_entry_provider(
+        &mut self,
+    ) -> Option<flamewm_dbus_reactor::BusWatch> {
+        use flamewm_integrations_linux::launcher_entry::LauncherEntryProvider;
+        let mut provider = match LauncherEntryProvider::connect() {
+            Ok(provider) => provider,
+            Err(error) => {
+                eprintln!("flamewm-shell: launcher progress unavailable: {error}");
+                return None;
+            }
+        };
+        if let Err(error) = provider.start() {
+            eprintln!("flamewm-shell: launcher progress start failed: {error}");
+            return None;
+        }
+        let watch = provider.watch();
+        self.launcher_entry_provider = Some(provider);
+        Some(watch)
+    }
+
+    pub(crate) fn launcher_entry_ready(&mut self) {
+        let Some(provider) = self.launcher_entry_provider.as_mut() else {
+            return;
+        };
+        if let Err(error) = provider.on_ready() {
+            eprintln!("flamewm-shell: launcher progress event failed: {error}");
+            self.launcher_entry_provider = None;
+            self.refresh_task_progress();
+            return;
+        }
+        if provider.take_changed() {
+            self.refresh_task_progress();
+        }
+    }
+
+    /// Recomputes the mapped progress list from every source. A repaint is requested only when the
+    /// mapped list differs, and the gate decides whether it may run now.
     pub(super) fn refresh_task_progress(&mut self) {
-        self.task_progress = self
+        let panels = &self.shell.snapshot().panels;
+        let mut next = self
             .job_view_provider
             .as_ref()
-            .map(|provider| provider.task_progress(&self.shell.snapshot().panels))
+            .map(|provider| provider.task_progress(panels))
             .unwrap_or_default();
-        self.task_progress_pending = true;
+        if let Some(provider) = self.launcher_entry_provider.as_ref() {
+            for entry in provider.task_progress(panels) {
+                if !next.iter().any(|known| known.task_id == entry.task_id) {
+                    next.push(entry);
+                }
+            }
+        }
+        if next != self.task_progress {
+            self.task_progress = next;
+            self.task_progress_pending = true;
+        }
+    }
+
+    /// Consumes a pending progress repaint when the gate admits it. A held change keeps its wake
+    /// deadline in the reactor slot, so the final value lands without polling.
+    pub(super) fn take_task_progress_due(&mut self, now: std::time::Instant) -> bool {
+        if !self.task_progress_pending {
+            return false;
+        }
+        match self.task_progress_gate.decide(now) {
+            progress_gate::PaintDecision::Now => {
+                self.task_progress_pending = false;
+                self.task_progress_deadline = None;
+                true
+            }
+            progress_gate::PaintDecision::Wait(deadline) => {
+                self.task_progress_deadline = Some(deadline);
+                false
+            }
+        }
     }
 
     pub(crate) fn note_signal(&mut self, signal: &flamewm_control_wire::ControlSignal) {

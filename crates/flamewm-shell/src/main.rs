@@ -369,6 +369,15 @@ fn execute() -> Result<(), String> {
             })
             .map_err(|error| format!("register KIO job progress source: {error}"))?;
     }
+    if let Some(watch) = state.borrow_mut().start_launcher_entry_provider() {
+        let launcher_state = Rc::clone(&state);
+        reactor
+            .register_raw_fd_with_action(watch.fd, signal_interest(watch.events), move |_, _| {
+                launcher_state.borrow_mut().launcher_entry_ready();
+                flamewm_reactor::FdAction::Continue
+            })
+            .map_err(|error| format!("register Unity launcher progress source: {error}"))?;
+    }
     if let Some(host) = notifications.as_ref() {
         let watch = host.borrow().watch();
         let notification_state = Rc::clone(host);

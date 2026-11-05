@@ -15,8 +15,6 @@ const TASK_SLOT_WIDTH: f32 = 42.0;
 const TASK_LINE_WIDTH: f32 = 28.0;
 const TASK_LINE_HEIGHT: f32 = 2.0;
 const TASK_LINE_FOCUSED_HEIGHT: f32 = 3.0;
-/// `.task-progress` bottom offset from the slot's content-box bottom, in CSS px.
-const TASK_PROGRESS_BOTTOM: f32 = 4.0;
 /// `.tray-button` width in CSS px.
 const TRAY_BUTTON_WIDTH: f32 = 30.0;
 /// `.tray-button img` edge in CSS px.
@@ -768,9 +766,9 @@ pub(crate) fn project_task_line(
     document.size(id, width, height)
 }
 
-/// Projects a determinate progress fill for one task slot, clearing stale fills when
-/// identity disappears or the provider no longer reports progress. The centered track and
-/// its height scale with the bar; only the fill width follows the reported percent.
+/// Projects a determinate background fill behind one task slot, clearing stale fills when
+/// identity disappears or no provider reports progress. The fill covers the slot's full height
+/// and grows left to right with the reported percent; CSS paints it behind the icon and label.
 pub(crate) fn project_task_progress(
     document: &mut impl UiDocumentAccess,
     index: usize,
@@ -781,21 +779,14 @@ pub(crate) fn project_task_progress(
     let percent = task_id
         .and_then(|id| progress.iter().find(|entry| &entry.task_id == id))
         .map(|entry| entry.progress.percent());
-    let height = scaled(TASK_LINE_HEIGHT);
     document.visible(&fill_id, percent.is_some())?;
-    document.position(
-        &fill_id,
-        (scaled(TASK_SLOT_WIDTH) - scaled(TASK_LINE_WIDTH)) / 2.0,
-        taskbar_scale::inner_node_height(taskbar_scale::factor())
-            - scaled(TASK_PROGRESS_BOTTOM)
-            - height,
-    )?;
+    document.position(&fill_id, 0.0, 0.0)?;
     document.size(
         &fill_id,
         percent.map_or(0.0, |percent| {
-            scaled(TASK_LINE_WIDTH) * f32::from(percent) / 100.0
+            scaled(TASK_SLOT_WIDTH) * f32::from(percent) / 100.0
         }),
-        height,
+        taskbar_scale::inner_node_height(taskbar_scale::factor()),
     )?;
     Ok(())
 }

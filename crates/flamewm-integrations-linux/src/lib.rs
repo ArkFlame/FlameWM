@@ -14,6 +14,7 @@ pub mod icon_service;
 pub mod icon_theme;
 pub mod icons;
 pub mod job_view;
+pub mod launcher_entry;
 pub mod media_store;
 pub mod mpris;
 pub mod network_manager;

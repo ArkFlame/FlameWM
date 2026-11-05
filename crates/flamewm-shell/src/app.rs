@@ -45,6 +45,7 @@ mod input;
 mod ipc;
 mod launcher_session;
 mod panels;
+mod progress_gate;
 mod popups;
 mod quick_popups;
 mod settings;
@@ -106,8 +107,11 @@ pub(crate) struct ShellLoop {
     pub(crate) quick_control: flamewm_shell::quick_controls::QuickControlSupervisor,
     pub(crate) popup_session: flamewm_shell_core::popup_session::PopupSession,
     job_view_provider: Option<flamewm_integrations_linux::job_view::KioJobViewProvider>,
+    launcher_entry_provider: Option<flamewm_integrations_linux::launcher_entry::LauncherEntryProvider>,
     task_progress: Vec<flamewm_api::panels::TaskProgressEntry>,
     task_progress_pending: bool,
+    task_progress_gate: progress_gate::ProgressPaintGate,
+    task_progress_deadline: Option<Instant>,
     /// Shell-side record that the audio popup was last opened and not yet
     /// closed by the shell. Drives the tray-volume toggle decision.
     pub(crate) quick_audio_open: bool,
@@ -193,8 +197,11 @@ impl ShellLoop {
             quick_control,
             popup_session: flamewm_shell_core::popup_session::PopupSession::default(),
             job_view_provider: None,
+            launcher_entry_provider: None,
             task_progress: Vec::new(),
             task_progress_pending: false,
+            task_progress_gate: progress_gate::ProgressPaintGate::default(),
+            task_progress_deadline: None,
             task_icon_prime_armed: true,
             icon_geometry: IconGeometryTracker::default(),
             osd: flamewm_shell::osd::OsdController::default(),

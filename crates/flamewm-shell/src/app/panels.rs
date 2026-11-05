@@ -58,7 +58,7 @@ impl ShellLoop {
         if changed.panels {
             self.refresh_task_progress();
         }
-        let progress_changed = std::mem::take(&mut self.task_progress_pending);
+        let progress_changed = self.take_task_progress_due(std::time::Instant::now());
         let mut projection_changed = changed;
         if progress_changed {
             projection_changed.windows = true;
