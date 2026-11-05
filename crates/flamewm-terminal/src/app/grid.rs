@@ -83,7 +83,7 @@ fn clip(run: &Run, from: usize, to: usize) -> Run {
 }
 
 impl App {
-    /// Cursor drawn for the terminal, from the `cursor_style` setting (programs cannot change it).
+    /// Default cursor shape from the `cursor_style` setting; a program's DECSCUSR overrides it per pane.
     pub fn cursor_shape(&self) -> CursorShape {
         match self.config.cursor_style.as_str() {
             "underline" => CursorShape::Underline,
@@ -146,7 +146,8 @@ impl App {
                     selection: pane.selection,
                     // The cursor belongs to the pane with the keyboard.
                     cursor: id == focused,
-                    cursor_shape,
+                    // A shape the program set with DECSCUSR wins over the configured default.
+                    cursor_shape: pane.session.screen.cursor_shape.unwrap_or(cursor_shape),
                 };
                 let entry = cache.entry(id).or_default();
                 for (offset, line) in entry

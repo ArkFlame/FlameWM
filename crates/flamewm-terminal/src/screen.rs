@@ -66,7 +66,8 @@ pub struct Screen {
     pub mouse: MouseMode,
     pub mouse_sgr: bool,
     tabs: Vec<bool>,
-    pub cursor_shape: CursorShape,
+    /// Shape the program chose with DECSCUSR; `None` keeps the configured `cursor_style`.
+    pub cursor_shape: Option<CursorShape>,
     g0_graphics: bool,
     g1_graphics: bool,
     use_g1: bool,
@@ -117,7 +118,7 @@ impl Screen {
             mouse: MouseMode::Off,
             mouse_sgr: false,
             tabs: default_tabs(cols),
-            cursor_shape: CursorShape::Block,
+            cursor_shape: None,
             g0_graphics: false,
             g1_graphics: false,
             use_g1: false,
@@ -808,11 +809,12 @@ impl Perform for Screen {
             (None, [], b'h' | b'l') => self.set_modes(false, params, action == b'h'),
             (Some(b'?'), [], b'h' | b'l') => self.set_modes(true, params, action == b'h'),
             (None, [b' '], b'q') => {
-                // Blink is not stored: the renderer draws the cursor from config, not from the program.
+                // Blink is not stored: the renderer draws a steady shape. 0 restores the configured default.
                 self.cursor_shape = match p(0) {
-                    0..=2 => CursorShape::Block,
-                    3 | 4 => CursorShape::Underline,
-                    5 | 6 => CursorShape::Bar,
+                    0 => None,
+                    1..=2 => Some(CursorShape::Block),
+                    3 | 4 => Some(CursorShape::Underline),
+                    5 | 6 => Some(CursorShape::Bar),
                     _ => return,
                 };
             }

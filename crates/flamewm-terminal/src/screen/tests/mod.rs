@@ -154,7 +154,22 @@ fn modes_and_title_are_tracked() {
     assert!(screen.bracketed_paste);
     assert!(!screen.cursor_visible);
     assert_eq!(screen.title.as_deref(), Some("vim"));
-    assert_eq!(screen.cursor_shape, CursorShape::Bar);
+    assert_eq!(screen.cursor_shape, Some(CursorShape::Bar));
+}
+
+#[test]
+fn decscusr_sets_and_resets_app_cursor_shape() {
+    let mut screen = Screen::new(10, 5, 0);
+    assert_eq!(screen.cursor_shape, None);
+    feed(&mut screen, b"\x1b[4 q");
+    assert_eq!(screen.cursor_shape, Some(CursorShape::Underline));
+    feed(&mut screen, b"\x1b[2 q");
+    assert_eq!(screen.cursor_shape, Some(CursorShape::Block));
+    // Unknown parameter leaves the shape alone.
+    feed(&mut screen, b"\x1b[9 q");
+    assert_eq!(screen.cursor_shape, Some(CursorShape::Block));
+    feed(&mut screen, b"\x1b[0 q");
+    assert_eq!(screen.cursor_shape, None);
 }
 
 #[test]
