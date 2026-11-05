@@ -122,7 +122,7 @@ fn shallow_watch_detects_nested_icon_directory_change() {
     let root = fixture_root("watch", line!());
     let nested = root.join("Theme/16x16/apps");
     fs::create_dir_all(&nested).expect("nested theme dirs");
-    let before = current_watch_mtime(std::slice::from_ref(&root), &[]);
+    let before = current_watch_mtime(std::slice::from_ref(&root), &[], None);
     // Force a distinct mtime on the nested directory so the check does
     // not depend on filesystem timestamp granularity.
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
@@ -130,7 +130,7 @@ fn shallow_watch_detects_nested_icon_directory_change() {
     fs::File::open(&nested)
         .and_then(|dir| dir.set_modified(later))
         .expect("set nested mtime");
-    let after = current_watch_mtime(std::slice::from_ref(&root), &[]);
+    let after = current_watch_mtime(std::slice::from_ref(&root), &[], None);
     let _ = fs::remove_dir_all(&root);
     assert_ne!(before, after);
     assert_eq!(after, Some(later));
@@ -146,7 +146,7 @@ fn watch_dirs_covers_depth_three_under_last_theme_past_cap() {
     // Last theme: a depth-3 category directory (theme/size/category).
     let category = root.join("B").join("16x16").join("apps");
     fs::create_dir_all(&category).expect("last theme category dir");
-    let watched = watch_dirs(std::slice::from_ref(&root), &[]);
+    let watched = watch_dirs(std::slice::from_ref(&root), &[], None);
     let _ = fs::remove_dir_all(&root);
     assert!(
         watched.contains(&category),
@@ -481,4 +481,62 @@ fn dump_host_icon_lookups() {
         }
     }
     fs::write(out_path, out).unwrap();
+}
+
+#[test]
+fn shared_listings_select_same_paths_as_fresh_build() {
+    let data = fixture_root("shared-listings", line!());
+    let mine = data.join("icons/FlameMine");
+    for dir in ["16x16/apps", "scalable/apps", "16x16/status", "32x32/apps"] {
+        fs::create_dir_all(mine.join(dir)).expect("mine dirs");
+    }
+    fs::write(
+        mine.join("index.theme"),
+        "[Icon Theme]\nName=FlameMine\nInherits=FlameBase\nDirectories=16x16/apps,scalable/apps,16x16/status,32x32/apps\n\n\
+         [16x16/apps]\nSize=16\nType=Fixed\n\n[scalable/apps]\nSize=48\nType=Scalable\nMinSize=8\nMaxSize=512\n\n\
+         [16x16/status]\nSize=16\nType=Fixed\nContext=Status\n\n[32x32/apps]\nSize=32\nType=Threshold\n",
+    )
+    .expect("mine index.theme");
+    fs::write(mine.join("16x16/apps/shared-app.png"), b"").expect("mine png");
+    fs::write(mine.join("16x16/apps/mine-only.png"), b"").expect("mine png");
+    fs::write(mine.join("scalable/apps/vector-app.svg"), b"").expect("mine svg");
+    fs::write(mine.join("16x16/status/flame-symbolic.svg"), b"").expect("mine symbolic");
+    fs::write(mine.join("32x32/apps/shared-app.png"), b"").expect("mine 32 png");
+    let base = data.join("icons/FlameBase");
+    fs::create_dir_all(base.join("16x16/apps")).expect("base dirs");
+    fs::create_dir_all(base.join("24x24/apps")).expect("base dirs");
+    fs::write(
+        base.join("index.theme"),
+        "[Icon Theme]\nName=FlameBase\nDirectories=16x16/apps,24x24/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n\n[24x24/apps]\nSize=24\nType=Fixed\n",
+    )
+    .expect("base index.theme");
+    fs::write(base.join("16x16/apps/shared-app.png"), b"").expect("base png");
+    fs::write(base.join("24x24/apps/base-only.png"), b"").expect("base png");
+    fs::write(base.join("24x24/apps/shared-app.png"), b"").expect("base png");
+
+    let roots = [data.clone()];
+    let names = ["FlameMine".to_owned()];
+    let fresh = IconLookupIndex::build(&names, &roots, 1);
+    let listings = Arc::new(DirListings::default());
+    let shared = IconLookupIndex::build_shared(&names, &roots, 1, &listings);
+    let lookups = [
+        "shared-app", "mine-only", "base-only", "vector-app", "flame-symbolic", "hicolor-only", "missing",
+    ];
+    let mut hits = 0;
+    for name in lookups {
+        for px in [1, 16, 24, 32, 48, 64, 256] {
+            let expected = fresh.lookup(name, px);
+            assert_eq!(shared.lookup(name, px), expected, "{name} at {px}px");
+            hits += usize::from(expected.1);
+        }
+    }
+    let read_dirs = listings.by_dir.lock().map(|map| map.len()).unwrap_or(0);
+    // A second one-shot build over the same listings must read nothing new.
+    let again = IconLookupIndex::build_shared(&names, &roots, 1, &listings);
+    assert_eq!(again.lookup("shared-app", 16), fresh.lookup("shared-app", 16));
+    let read_dirs_after = listings.by_dir.lock().map(|map| map.len()).unwrap_or(0);
+    let _ = fs::remove_dir_all(&data);
+    assert!(hits > 0, "fixture must resolve some icons");
+    assert!(read_dirs > 0, "shared scan must record its directory reads");
+    assert_eq!(read_dirs, read_dirs_after, "second build reuses listings");
 }

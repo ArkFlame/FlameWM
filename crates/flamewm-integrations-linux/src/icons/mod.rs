@@ -232,7 +232,7 @@ impl fmt::Display for IconError {
     }
 }
 
-pub use crate::icon_theme::{IconDir, IconDirType, IconLookupIndex, IconThemeIndex};
+pub use crate::icon_theme::{DirListings, IconDir, IconDirType, IconLookupIndex, IconThemeIndex};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct CacheKey {

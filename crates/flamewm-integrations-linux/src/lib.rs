@@ -29,7 +29,7 @@ pub mod themes;
 pub use icon_service::{
     IconJob, IconPriority, IconResult, IconService, IconSubmit, IconSubmitError,
 };
-pub use icon_theme::IconLookupIndex;
+pub use icon_theme::{DirListings, IconLookupIndex};
 pub use icons::{IconKey, IconMetricsSnapshot, IconResolver};
 
 pub use backlight::BacklightProvider;

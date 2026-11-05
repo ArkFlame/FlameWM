@@ -1,9 +1,10 @@
 //! Freedesktop `index.theme` parser and inheritance expansion (J2).
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IconDirType {
@@ -383,6 +384,62 @@ fn split_icon_filename(name: &str) -> Option<(String, String)> {
 /// Mirrors `themes::import::MAX_DEPTH`; bounds walks through symlinked dirs.
 const THEME_WALK_MAX_DEPTH: usize = 32;
 
+/// One directory entry as the index build needs it. `is_dir` follows symlinks,
+/// like `Path::is_dir`, but avoids a stat for entries the kernel already typed.
+#[derive(Debug)]
+struct DirItem {
+    name: OsString,
+    path: PathBuf,
+    is_dir: bool,
+}
+
+/// Directory reads shared by the index builds of one scan (see
+/// [`IconLookupIndex::build_shared`]). Each directory is read once per scan.
+/// Never used for rebuild checks, which must see the disk.
+#[derive(Debug, Default)]
+pub struct DirListings {
+    by_dir: std::sync::Mutex<HashMap<PathBuf, Arc<[DirItem]>>>,
+}
+
+impl DirListings {
+    fn items(&self, dir: &Path) -> Arc<[DirItem]> {
+        if let Some(hit) = self.by_dir.lock().ok().and_then(|map| map.get(dir).cloned()) {
+            return hit;
+        }
+        let items: Arc<[DirItem]> = read_dir_items(dir).into();
+        if let Ok(mut map) = self.by_dir.lock() {
+            map.insert(dir.to_path_buf(), Arc::clone(&items));
+        }
+        items
+    }
+}
+
+fn read_dir_items(dir: &Path) -> Vec<DirItem> {
+    let Ok(read) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    read.flatten()
+        .map(|item| {
+            let is_dir = match item.file_type() {
+                Ok(kind) if !kind.is_symlink() => kind.is_dir(),
+                _ => item.path().is_dir(),
+            };
+            DirItem {
+                name: item.file_name(),
+                path: item.path(),
+                is_dir,
+            }
+        })
+        .collect()
+}
+
+fn dir_items(dir: &Path, listings: Option<&DirListings>) -> Arc<[DirItem]> {
+    match listings {
+        Some(listings) => listings.items(dir),
+        None => read_dir_items(dir).into(),
+    }
+}
+
 fn walk_theme_dir(
     base: &Path,
     files: &mut IconFileBuilder,
@@ -504,7 +561,11 @@ static WATCH_CAP_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 /// `WATCH_LEVEL_CAP` dirs, interleaved round-robin across parents so every
 /// theme's shallow levels are covered before any one theme consumes a level.
 /// Data dirs are stat-only and not counted against the cap.
-fn watch_dirs(roots: &[PathBuf], data_dirs: &[PathBuf]) -> Vec<PathBuf> {
+fn watch_dirs(
+    roots: &[PathBuf],
+    data_dirs: &[PathBuf],
+    listings: Option<&DirListings>,
+) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = data_dirs.to_vec();
     let mut level: Vec<PathBuf> = roots.to_vec();
     let mut capped = false;
@@ -517,7 +578,10 @@ fn watch_dirs(roots: &[PathBuf], data_dirs: &[PathBuf]) -> Vec<PathBuf> {
             out.append(&mut level);
             break;
         }
-        let groups: Vec<Vec<PathBuf>> = level.iter().map(|dir| child_dirs(dir)).collect();
+        let groups: Vec<Vec<PathBuf>> = level
+            .iter()
+            .map(|dir| child_dirs(dir, listings))
+            .collect();
         out.append(&mut level);
         level = interleave_by_parent(&groups);
     }
@@ -527,14 +591,11 @@ fn watch_dirs(roots: &[PathBuf], data_dirs: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
-fn child_dirs(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
+fn child_dirs(dir: &Path, listings: Option<&DirListings>) -> Vec<PathBuf> {
+    dir_items(dir, listings)
+        .iter()
+        .filter(|item| item.is_dir)
+        .map(|item| item.path.clone())
         .collect()
 }
 
@@ -559,8 +620,12 @@ fn log_watch_cap_once() {
     }
 }
 
-fn current_watch_mtime(roots: &[PathBuf], data_dirs: &[PathBuf]) -> Option<std::time::SystemTime> {
-    watch_dirs(roots, data_dirs)
+fn current_watch_mtime(
+    roots: &[PathBuf],
+    data_dirs: &[PathBuf],
+    listings: Option<&DirListings>,
+) -> Option<std::time::SystemTime> {
+    watch_dirs(roots, data_dirs, listings)
         .iter()
         .filter_map(|top| fs::metadata(top).and_then(|m| m.modified()).ok())
         .max()
@@ -995,6 +1060,8 @@ pub struct IconLookupIndex {
     /// Build inputs needed for atomic rebuild on invalidation.
     pub theme_names: Vec<String>,
     pub data_dirs: Vec<PathBuf>,
+    /// Shared directory reads for the lazy scan; `None` reads the disk directly.
+    listings: Option<Arc<DirListings>>,
     memo: std::sync::Mutex<NameMemo>,
     /// Cap for the name memo (bounded legacy fallback below counts too).
     pub memo_cap: usize,
@@ -1063,6 +1130,7 @@ impl IconLookupIndex {
             last_mtime_check: std::sync::Mutex::new(None),
             theme_names,
             data_dirs,
+            listings: None,
             memo: std::sync::Mutex::new(NameMemo::default()),
             memo_cap: 2048,
             hits: std::sync::atomic::AtomicU64::new(0),
@@ -1073,6 +1141,28 @@ impl IconLookupIndex {
     /// Builds a snapshot from live theme state (does FS I/O once).
     #[must_use]
     pub fn build(theme_names: &[String], data_dirs: &[PathBuf], generation: u64) -> Self {
+        Self::build_with(theme_names, data_dirs, generation, None)
+    }
+
+    /// Like [`IconLookupIndex::build`], but directory reads go through `listings`, so
+    /// several one-shot builds in one scan (e.g. one per installed icon theme) read each
+    /// directory once. Use only for indexes that are not rebuilt by `needs_rebuild`.
+    #[must_use]
+    pub fn build_shared(
+        theme_names: &[String],
+        data_dirs: &[PathBuf],
+        generation: u64,
+        listings: &Arc<DirListings>,
+    ) -> Self {
+        Self::build_with(theme_names, data_dirs, generation, Some(Arc::clone(listings)))
+    }
+
+    fn build_with(
+        theme_names: &[String],
+        data_dirs: &[PathBuf],
+        generation: u64,
+        listings: Option<Arc<DirListings>>,
+    ) -> Self {
         INDEX_BUILD_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let roots = search_roots(data_dirs);
         let mut seeds: Vec<String> = theme_names
@@ -1137,7 +1227,9 @@ impl IconLookupIndex {
             generation,
         );
         index.scan = std::sync::OnceLock::new();
-        index.watch_mtime = current_watch_mtime(&index.roots, &index.data_dirs);
+        index.watch_mtime =
+            current_watch_mtime(&index.roots, &index.data_dirs, listings.as_deref());
+        index.listings = listings;
         index
     }
 
@@ -1166,16 +1258,13 @@ impl IconLookupIndex {
                         continue;
                     };
                     let dir_path = theme_path.join(dir);
-                    let Ok(read) = fs::read_dir(&dir_path) else {
-                        continue;
-                    };
-                    for item in read.flatten() {
+                    for item in dir_items(&dir_path, self.listings.as_deref()).iter() {
                         files.push(
                             theme_rank,
                             directory_rank,
                             Path::new(dir),
                             &dir_path,
-                            &item.file_name(),
+                            &item.name,
                         );
                     }
                 }
@@ -1368,7 +1457,7 @@ impl IconLookupIndex {
             }
         }
         *guard = Some(now);
-        let current = current_watch_mtime(&self.roots, &self.data_dirs);
+        let current = current_watch_mtime(&self.roots, &self.data_dirs, None);
         if current == self.watch_mtime {
             return None;
         }
