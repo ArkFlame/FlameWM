@@ -53,8 +53,10 @@ class ExplorerContract(unittest.TestCase):
         self.assertNotIn("border-bottom:", css)
 
     def test_worker_carries_generation_and_no_file_io_in_projection(self):
-        main = (ROOT / "crates/flamewm-explorer/src/main.rs").read_text()
-        model = (ROOT / "crates/flamewm-explorer/src/lib.rs").read_text()
+        # Explorer was split into submodules; owners span the crate.
+        base = ROOT / "crates/flamewm-explorer/src"
+        main = "\n".join(p.read_text() for p in sorted(base.rglob("*.rs")) if "tests" not in p.relative_to(base).parts)
+        model = (base / "lib.rs").read_text()
         self.assertIn("WorkerJob::Scan{generation,path,hidden,sort}", main)
         self.assertIn("generation!=self.generation", model)
         self.assertIn("UnixStream::pair()", main)
@@ -76,7 +78,7 @@ class ExplorerContract(unittest.TestCase):
         self.assertIn('defaults.insert("inode/directory"', session)
         self.assertIn('desktop_id_installed(data_dirs, "flamewm-explorer.desktop")', session)
         self.assertIn('data-action="settings.default-file-manager.cycle"', (ROOT / "ui/settings.html").read_text())
-        self.assertIn('SettingsAction::FileManagerCycle', (ROOT / "crates/flamewm-settings/src/lib.rs").read_text())
+        self.assertIn('SettingsAction::FileManagerCycle', (ROOT / "crates/flamewm-settings/src/actions.rs").read_text())
 
     def test_safe_operations_and_local_xdg_directory_handler(self):
         source = (ROOT / "crates/flamewm-explorer/src/lib.rs").read_text()
