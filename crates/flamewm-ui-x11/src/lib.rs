@@ -518,7 +518,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use flamewm_render_core::{CompiledDocument, CompiledNode, NodeKind, RuntimeDocument};
+    use flamewm_render_core::{
+        Color, ColorValue, CompiledDocument, CompiledNode, InteractionState, NodeKind, RuntimeDocument, Style,
+    };
 
     use super::{route_focus, UiActionEvent, UiActionPhase, UiControllerEvent, UiKeyEvent, UiKeyPhase};
 
@@ -626,6 +628,61 @@ mod tests {
         .expect("fixture validates");
         assert_eq!(route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)), None);
         assert_eq!(document.focus(), None);
+    }
+
+    /// Focusable control with the shared ring as its `:focus-visible` style, as the compiler emits.
+    fn ringed_button(id: &str, action: &'static str) -> CompiledNode {
+        CompiledNode {
+            action: std::borrow::Cow::Borrowed(action),
+            focus_style: Some(std::sync::Arc::new(Style {
+                border_width: 1.0,
+                border_color: ColorValue::Literal(RING),
+                ..Style::default()
+            })),
+            ..crate::test_support::compiled_node(id, NodeKind::Element)
+        }
+    }
+
+    const RING: Color = Color { r: 0x3d, g: 0xae, b: 0xe9, a: 0xff };
+
+    /// The style the render path resolves for `index` at the document's current focus.
+    fn painted_style(document: &RuntimeDocument, index: u32) -> Style {
+        let interaction = InteractionState {
+            focus: document.focus(),
+            ..InteractionState::default()
+        };
+        interaction
+            .style_for(index, &document.document.nodes[index as usize])
+            .clone()
+    }
+
+    #[test]
+    fn tab_paints_the_focus_ring_on_the_focused_control_and_skips_hidden_ones() {
+        let mut document = RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![
+                crate::test_support::compiled_node("root", NodeKind::Element),
+                ringed_button("first", "ar.first"),
+                ringed_button("hidden", "ar.hidden"),
+                ringed_button("last", "ar.last"),
+            ],
+        })
+        .expect("fixture validates");
+        document.set_visible("hidden", false).expect("hidden node exists");
+        assert_eq!(painted_style(&document, 1).border_width, 0.0, "no ring before Tab");
+
+        route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
+        assert_eq!(document.focus(), Some(1));
+        let ring = painted_style(&document, 1);
+        assert_eq!((ring.border_width, ring.border_color), (1.0, ColorValue::Literal(RING)));
+
+        route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
+        assert_eq!(document.focus(), Some(3), "the hidden control is skipped");
+        assert_eq!(painted_style(&document, 3).border_width, 1.0);
+        assert_eq!(painted_style(&document, 1).border_width, 0.0, "the ring moves off the old control");
     }
 
     #[test]

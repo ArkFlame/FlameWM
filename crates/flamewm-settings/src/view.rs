@@ -11,14 +11,16 @@ const COMPILED_UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-set
 pub const SETTINGS_DEFAULT_WIDTH: u32 = 820;
 pub const SETTINGS_DEFAULT_HEIGHT: u32 = 540;
 
+/// The shipped settings document. Keyboard focus is opted in, so Tab walks its `data-action`
+/// controls and paints the `:focus-visible` ring.
 pub fn document() -> Result<UiDocument, String> {
-    decode_document(COMPILED_UI)
+    Ok(decode_document(COMPILED_UI)?.with_keyboard_focus())
 }
 
 /// The settings document with the window-level wallpaper backdrop under its translucent body glass.
 /// Opacity is the resolved `GlassRegular` alpha, so Reduce transparency installs no backdrop.
 pub fn document_with_backdrop(snapshot: Option<&SettingsSnapshot>) -> Result<UiDocument, String> {
-    Ok(decode_document(COMPILED_UI)?.with_window_backdrop(window_backdrop(snapshot)))
+    Ok(document()?.with_window_backdrop(window_backdrop(snapshot)))
 }
 
 fn window_backdrop(snapshot: Option<&SettingsSnapshot>) -> WindowBackdrop {

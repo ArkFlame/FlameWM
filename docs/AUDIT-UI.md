@@ -317,3 +317,33 @@ Attention: an app launched outside the nested session uses the host D-Bus and sh
 - Explorer muted text (Pass 8 gap, confirmed in s09 and s24).
 - 28 focusable non-button classes without a focus ring (guard warnings). Desktop stickies and shell windows are Tab-reachable without a visible ring. Needs a pass per document.
 - Not checked: Dark Task Manager/Explorer hover and pressed states, Light Settings, two-monitor layouts, Wayland.
+
+## Pass 11: focus ring on screen (archiver, settings), root cause of the Pass 9 failure
+
+Base: `origin/main` `06f274c8`. Method: private `Xvfb :92` (no window manager, pointer-focus), archiver `test.tar` and `flamewm-settings` as debug builds from `target-focus11`, input by XTest helper `shots/pass9/tool/xin`, captures with `import -window root`. Screenshots: `/run/media/linsaftw/SDD/shots/pass11/`.
+
+### Root cause of the Pass 9 "no ring"
+
+- The Pass 9 binary was built from `c3814f8d`. That commit predates the focus wiring (`5df5e26d` ui-x11 `route_focus`, `e5a36fa0` archiver opt-in, `sync_keyboard_focus` in `flamewm-render-x11`). The Pass 9 build could not route Tab or paint the ring, so its "no ring" is stale evidence, not a defect of current main.
+- Current main is wired end to end, checked in code: `flamewm-render-x11/src/app/events.rs` `KEY_PRESS` calls `emit_typed_key` then `sync_keyboard_focus` (`render.rs`), which copies `RuntimeDocument::focus()` into `InteractionState::focus` and calls `mark_input_repaint`. `style_for` applies `focus_style` when `focus == index`. The compiler emits `focus_style` for `:focus-visible`.
+- No "focus-visible heuristic" exists. The ring shows exactly when `InteractionState::focus` is set, so it appears after Tab and never on click.
+
+### Fixed
+
+- `flamewm-settings/src/view.rs`: `document()` and `document_with_backdrop()` opt in with `with_keyboard_focus()`. Settings' existing `base.css` ring (`button:focus-visible`) covers its `<button data-action>` controls; no CSS change.
+- `flamewm-ui-x11/src/lib.rs` test `tab_paints_the_focus_ring_on_the_focused_control_and_skips_hidden_ones`: drives Tab through `route_focus` on a `RuntimeDocument` with `focus_style` rings, asserts `InteractionState::style_for` returns the ring (1px, `--focus-ring` literal) on the focused node, skips a `set_visible(false)` node, and moves the ring off the old node.
+
+### Screenshot verdicts
+
+| File (`shots/pass11/`) | State | Verdict |
+| --- | --- | --- |
+| `s15-crop.png` | Archiver, `test.tar`, after 2 Tab presses | PASS. Blue 1px ring on `[ ] b.txt` (second row). First Tab focused `c.txt`. |
+| `s31-crop.png` | Settings, fresh launch, after 1 Tab | PASS. Blue ring on the `Search` nav control. `s30-crop.png` (before Tab) differs only in that region (`compare` AE 3644). |
+| `s31-search.png` | 3x zoom of the Settings ring | Detail. |
+
+### Not done
+
+- Explorer and Task Manager not opted in. Both have modal key handling (search text, rename) that needs its own review before Tab / Enter / Space are consumed (`route_focus` consumes Press Tab/Enter/Space on focused windows).
+- Settings hotkey capture: `route_focus` consumes Press Tab/Enter/Space while a hotkey is armed (Release still reaches `handle_key_event`). Not runtime-tested.
+- Settings text fields: Space/Enter on a focused control now activates it instead of typing. Only reachable when focus sits on a `data-action` control. Not runtime-tested.
+- Not run: the full `Xvfb` settings flow inside the nested WM (`scripts/xephyr`), Light appearance focus colour, Wayland.
