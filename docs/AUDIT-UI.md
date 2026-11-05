@@ -184,3 +184,29 @@ Scope: the Pass 5 "App wiring" follow-up for one app. Archiver was chosen becaus
 
 - No runtime or screenshot run. The focus ring paint, the damage region size, and whether `border-width:1px` on focus changes button layout (base.css `button` sets `border-width:0`) are unverified. Run archiver under Xvfb, Tab through `ar.*` rows, and check the ring and the redraw region before claiming the visual result.
 - Other apps (task-manager, explorer, settings, finder) are not opted in. Each has modal key handling (task-manager search, settings hotkey and slider capture, terminal raw input) that needs its own review before Tab / Space routing is safe.
+
+## Pass 6: shell colour literals tokenised, overlays invert per appearance
+
+Scope: `ui/shell/flamewm.css` and the shell overlay projection. Base: `origin/main` after `4291828c`.
+No screenshot was taken in this pass. Every result below is from `cargo test` and the guards, not from a rendered frame.
+
+### Fixed
+
+- `ui/shell/flamewm.css`: every colour literal outside `:root` is now `var(--token)`. The `:root` block declares each fixed tone once. Names are `--c-<hex>` (the value is the name), so Dark rendering is byte-for-byte the same. `white`/`black` keywords became `--c-ffffff`/`--c-000000`. `white-space` is untouched.
+- Overlay tokens are one owner: `flamewm_skin::palette::Overlays::{DARK, LIGHT}` (`rim`, `hover`, `pressed`). `glass::overlays_from_settings` selects them with the same `appearance` value as `palette_from_settings`.
+- Light hover: the Dark `--hover-fill` white `#ffffff40` (invisible on light glass) becomes black `alpha 0x26` on Light. `--rim` inverts too (`#ffffff7f` to black `0x33`).
+- New `--pressed-fill` (Dark white `0x26`, Light black `0x40`). `settings_projection::project_palette_tokens` writes `--rim`, `--hover-fill`, `--pressed-fill` on every shell projection.
+- Pressed state: `.task-button`, `.task-slot`, `.tray-button`, `.clock`, `.media-control`, `.show-desktop` have `:active` rules on `--pressed-fill`. Disabled variants stay transparent on `:active`.
+
+### Tests
+
+- `flamewm-skin` `overlay_tests`: hover over the panel is at least 1.25:1 contrast in both appearances; pressed differs from hover by at least 1.15:1 in both; composite arithmetic.
+- `flamewm-ui-core` `context_menu::css_contract_tests`: `shell_css_has_no_raw_colour_outside_root` (no `#hex`, `rgb(`, `hsl(`, `white`, `black` outside `:root`); `shell_overlay_tokens_keep_shipped_dark_values`; `shell_pressed_state_uses_pressed_token`.
+- `flamewm-shell` `shell_css_has_no_hardcoded_default_red` allows the one `:root` definition of `--c-ef4048`.
+
+### Left open
+
+- Light projection of the neutral chrome tones (`#272a2d` titlebar, `#303438` controls, `#25314a` toasts, `#1c2740` start menu, and the rest of the `--c-*` tones). They stay Dark in `appearance=light`. Each needs a light value in `flamewm-skin` and a contrast test. Not started.
+- Other audited sheets not touched in this pass: `ui/task-manager/task-manager.css`, `ui/explorer/explorer.css` (`button:active`, `.tool:hover`, `.scroll-thumb:hover #ffffff70`), `ui/settings.css` (`#ffffff12/1f/26` hover and pressed rules), `ui/desktop/desktop.css` (`#ffffff40/1a/0d` widget hovers), `ui/shared/menu.css`, `ui/finder`, `ui/terminal`, `ui/archiver`. Their white-alpha hovers are still invisible on light. Not audited for pressed inversion.
+- Titlebar hover/pressed inversion in `flamewm-wm-wayland` and `flamewm-wm-x11`: not touched.
+- Render: the shell demo panels (`.browser-*`, `.code-*`, `.terminal-body`) keep their fixed Dark tones by design.

@@ -102,6 +102,48 @@ impl Palette {
     }
 }
 
+/// Translucent overlay tokens that invert per appearance. White overlays are the Dark values and
+/// vanish on light glass, so Light uses black overlays of the same role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Overlays {
+    pub rim: AlphaColor,
+    pub hover: AlphaColor,
+    pub pressed: AlphaColor,
+}
+
+impl Overlays {
+    pub const DARK: Self = Self {
+        rim: AlphaColor { color: Rgb(0x00ff_ffff), alpha: 0x7f },
+        hover: AlphaColor { color: Rgb(0x00ff_ffff), alpha: 0x40 },
+        pressed: AlphaColor { color: Rgb(0x00ff_ffff), alpha: 0x26 },
+    };
+    pub const LIGHT: Self = Self {
+        rim: AlphaColor { color: Rgb(0), alpha: 0x33 },
+        hover: AlphaColor { color: Rgb(0), alpha: 0x26 },
+        pressed: AlphaColor { color: Rgb(0), alpha: 0x40 },
+    };
+
+    #[must_use]
+    pub const fn for_appearance(appearance: Appearance) -> Self {
+        match appearance {
+            Appearance::Dark => Self::DARK,
+            Appearance::Light => Self::LIGHT,
+        }
+    }
+}
+
+/// Source-over composite of a translucent colour onto an opaque base.
+#[must_use]
+pub fn composite(over: AlphaColor, base: Rgb) -> Rgb {
+    let a = u32::from(over.alpha);
+    let mix = |shift: u32| {
+        let f = (over.color.0 >> shift) & 0xff;
+        let b = (base.0 >> shift) & 0xff;
+        ((f * a + b * (255 - a) + 127) / 255) << shift
+    };
+    Rgb(mix(16) | mix(8) | mix(0))
+}
+
 /// WCAG 2.x relative luminance of an opaque colour.
 #[must_use]
 pub fn relative_luminance(color: Rgb) -> f64 {
@@ -173,3 +215,51 @@ mod tests {
         assert!(relative_luminance(p.panel) > relative_luminance(p.muted));
     }
 }
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+
+    /// Minimum contrast of a hover fill against the bar it sits on (non-text state fill).
+    const HOVER_MIN: f64 = 1.25;
+    /// Minimum contrast between the hover and pressed fills, so pressed reads as a distinct state.
+    const PRESSED_VS_HOVER_MIN: f64 = 1.15;
+
+    #[test]
+    fn hover_fill_is_visible_on_each_appearance() {
+        for appearance in [Appearance::Dark, Appearance::Light] {
+            let base = Palette::for_appearance(appearance).panel;
+            let hover = composite(Overlays::for_appearance(appearance).hover, base);
+            let ratio = contrast_ratio(hover, base);
+            assert!(ratio >= HOVER_MIN, "{appearance:?} hover {ratio:.2} < {HOVER_MIN}");
+        }
+    }
+
+    #[test]
+    fn pressed_fill_differs_from_hover_on_each_appearance() {
+        for appearance in [Appearance::Dark, Appearance::Light] {
+            let base = Palette::for_appearance(appearance).panel;
+            let overlays = Overlays::for_appearance(appearance);
+            let hover = composite(overlays.hover, base);
+            let pressed = composite(overlays.pressed, base);
+            let ratio = contrast_ratio(hover, pressed);
+            assert!(ratio >= PRESSED_VS_HOVER_MIN, "{appearance:?} pressed/hover {ratio:.2}");
+        }
+    }
+
+    #[test]
+    fn dark_overlays_are_the_shipped_white_alphas() {
+        assert_eq!(Overlays::DARK.hover.alpha, 0x40);
+        assert_eq!(Overlays::DARK.pressed.alpha, 0x26);
+        assert_eq!(Overlays::DARK.rim.alpha, 0x7f);
+    }
+
+    #[test]
+    fn composite_at_full_and_zero_alpha() {
+        let white = AlphaColor { color: Rgb(0x00ff_ffff), alpha: 0xff };
+        assert_eq!(composite(white, Rgb(0)), Rgb(0x00ff_ffff));
+        let clear = AlphaColor { color: Rgb(0x00ff_ffff), alpha: 0 };
+        assert_eq!(composite(clear, Rgb(0x0012_3456)), Rgb(0x0012_3456));
+    }
+}
+

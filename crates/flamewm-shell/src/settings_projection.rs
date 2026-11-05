@@ -189,6 +189,14 @@ fn project_palette_tokens(
     ] {
         let _ = document.color_variable(name, rgb(color.0, 255));
     }
+    let overlays = flamewm_ui_core::glass::overlays_from_settings(snapshot);
+    for (name, overlay) in [
+        ("--rim", overlays.rim),
+        ("--hover-fill", overlays.hover),
+        ("--pressed-fill", overlays.pressed),
+    ] {
+        let _ = document.color_variable(name, rgb(overlay.color.0, overlay.alpha));
+    }
     Ok(())
 }
 
@@ -1212,7 +1220,7 @@ mod tests {
         let css = include_str!("../../../ui/shell/flamewm.css");
         for line in css.lines().filter(|line| line.contains("ef4048")) {
             assert!(
-                line.contains(".swatch-red"),
+                line.contains(".swatch-red") || line.contains("--c-ef4048:#ef4048"),
                 "hardcoded accent outside swatch: {line}"
             );
         }

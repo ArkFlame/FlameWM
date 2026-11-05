@@ -422,6 +422,54 @@ mod css_contract_tests {
         }
     }
 
+    /// Colour literals in `body`: `#hex` runs of 3/4/6/8 digits and CSS colour functions.
+    fn raw_colour_literals(body: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        for (index, _) in body.match_indices('#') {
+            let digits: String = body[index + 1..]
+                .chars()
+                .take_while(|c| c.is_ascii_hexdigit())
+                .collect();
+            if matches!(digits.len(), 3 | 4 | 6 | 8) {
+                found.push(format!("#{digits}"));
+            }
+        }
+        for function in ["rgb(", "rgba(", "hsl(", "hsla("] {
+            if body.contains(function) {
+                found.push(function.to_string());
+            }
+        }
+        for word in body.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
+            if word == "white" || word == "black" {
+                found.push(word.to_string());
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn shell_css_has_no_raw_colour_outside_root() {
+        // `:root` is the only place a colour value is written. Every rule uses `var(--token)`.
+        let body = SHELL_CSS.split_once('}').map_or("", |(_, rest)| rest);
+        let found = raw_colour_literals(body);
+        assert!(found.is_empty(), "raw colour outside :root: {found:?}");
+    }
+
+    #[test]
+    fn shell_overlay_tokens_keep_shipped_dark_values() {
+        use flamewm_skin::palette::Overlays;
+        let dark = |alpha: u8| format!("#ffffff{alpha:02x}");
+        assert_eq!(declared(SHELL_CSS, ":root", "--hover-fill"), Some(dark(Overlays::DARK.hover.alpha).as_str()));
+        assert_eq!(declared(SHELL_CSS, ":root", "--pressed-fill"), Some(dark(Overlays::DARK.pressed.alpha).as_str()));
+        assert_eq!(declared(SHELL_CSS, ":root", "--rim"), Some(dark(Overlays::DARK.rim.alpha).as_str()));
+    }
+
+    #[test]
+    fn shell_pressed_state_uses_pressed_token() {
+        assert_eq!(decl(SHELL_CSS, ".task-button:active", "background"), "var(--pressed-fill)");
+        assert_eq!(decl(SHELL_CSS, ".show-desktop:active", "background"), "var(--pressed-fill)");
+    }
+
     #[test]
     fn accent_soft_hover_token_is_identical_across_sheets() {
         // `--accent-soft` is a render-compiler built-in (collect_variables seeds it from

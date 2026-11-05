@@ -12,7 +12,7 @@
 //! Light: clear glass `rgba(255,255,255,.045)`, 13px blur, saturate 155%, rim `.23`.
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
-use flamewm_skin::palette::{Palette, LIGHT_PANEL, LIGHT_SURFACE};
+use flamewm_skin::palette::{Overlays, Palette, LIGHT_PANEL, LIGHT_SURFACE};
 
 /// Tahoe corner radii (px at 1x). Consumers pick the one matching their surface.
 /// The window frame radius has a single owner: `flamewm_skin::recipes::decoration::ROUNDED_RADIUS`.
@@ -423,6 +423,17 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
             snapshot.values.get("appearance"),
             Some(SettingValue::Text(value)) if value.eq_ignore_ascii_case("light")
         ),
+    }
+}
+
+/// Overlay tokens (`--rim`, `--hover-fill`, `--pressed-fill`) for the snapshot's appearance.
+/// Shares the selector with `palette_from_settings` so both follow one `appearance` value.
+#[must_use]
+pub fn overlays_from_settings(snapshot: &SettingsSnapshot) -> Overlays {
+    if appearance_from_settings(snapshot).light {
+        Overlays::LIGHT
+    } else {
+        Overlays::DARK
     }
 }
 
