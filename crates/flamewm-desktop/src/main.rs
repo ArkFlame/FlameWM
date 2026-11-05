@@ -96,7 +96,7 @@ use install_root::{installed_data_root, resolve_packaged_root};
 use output_layout::PROJECTED_CELLS_CALLS;
 use output_layout::{
     ProjectedCellsCache, desktop_surface_rect, grid_for_output, live_output, pointer_on_output,
-    projected_cells, refresh_output_layout, resolve_output_layout,
+    projected_cells, resolve_output_layout,
 };
 #[cfg(test)]
 use output_layout::{
@@ -406,7 +406,7 @@ pub fn main() -> Result<(), String> {
                 if panels_flag.replace(false) {
                     let mut state = flush_cell.borrow_mut();
                     let (next_outputs, next_grids, next_default) =
-                        refresh_output_layout(surface, state.entry_scale_percent);
+                        resolve_output_layout(surface, state.entry_scale_percent);
                     if next_outputs != state.output_geometries
                         || next_grids != state.output_grids
                         || next_default != state.default_output

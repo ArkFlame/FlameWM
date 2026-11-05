@@ -130,17 +130,6 @@ pub(super) fn normalize_outputs(
     (outputs, origin_x, origin_y)
 }
 
-pub(super) fn refresh_output_layout(
-    surface: Rect,
-    entry_scale_percent: u16,
-) -> (
-    Vec<(OutputId, Rect)>,
-    BTreeMap<OutputId, GridConfig>,
-    OutputId,
-) {
-    resolve_output_layout(surface, entry_scale_percent)
-}
-
 pub(super) fn grid_for_output(state: &DesktopState, output: &OutputId) -> GridConfig {
     state
         .output_grids

@@ -2,6 +2,7 @@ use flamewm_api::system::{
     AudioEndpointKind, AudioMuteAction, AudioSnapshot, AudioTarget, AudioVolumeAction,
     ServiceAvailability, SystemAction, SystemSnapshot,
 };
+use flamewm_api::system::MAX_VOLUME_PERCENT;
 use flamewm_control_core::ControlRequest;
 use flamewm_shell_core::{AudioPopoverModel, AudioView};
 
@@ -268,7 +269,7 @@ pub fn system_action_for_row(
         return None;
     };
     let action = match (percent, muted) {
-        (Some(percent), None) if percent <= 150 => SystemAction::SetVolume(AudioVolumeAction {
+        (Some(percent), None) if percent <= MAX_VOLUME_PERCENT => SystemAction::SetVolume(AudioVolumeAction {
             target,
             percent,
             generation: snapshot.audio.generation,

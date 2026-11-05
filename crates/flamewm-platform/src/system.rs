@@ -3,6 +3,7 @@ use flamewm_api::system::{
     BrightnessAction, BrightnessSnapshot, MediaSnapshot, NetworkSnapshot, PowerSnapshot,
     ServiceAvailability, SystemAction, SystemSnapshot,
 };
+pub use flamewm_api::system::{BASE_VOLUME_PERCENT, MAX_VOLUME_PERCENT, volume_cap_percent};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
 pub type SystemActionHandler = Box<dyn FnMut(SystemAction, SystemSnapshot) -> FlameResult<()>>;
@@ -13,23 +14,9 @@ pub const MEDIA_VOLUME_STEP: u8 = 5;
 pub const MEDIA_BRIGHTNESS_STEP: u8 = 5;
 /// Highest backlight percent a brightness action may carry.
 pub const MAX_BRIGHTNESS_PERCENT: u8 = 100;
-/// Highest volume the system action path accepts.
-pub const MAX_VOLUME_PERCENT: u8 = 150;
-/// Volume cap without "raise maximum volume" (over-amplification).
-pub const BASE_VOLUME_PERCENT: u8 = 100;
 /// Settings key of the "Raise maximum volume" toggle. The audio mixer, the volume OSD and
 /// the WM media keys all read this one key; it is the only owner of the name.
 pub const AUDIO_RAISE_MAXIMUM_KEY: &str = "audioRaiseMaximum";
-
-/// Volume cap for the shared "raise maximum volume" value: 150 when raised, else 100.
-#[must_use]
-pub fn volume_cap_percent(raise_maximum: bool) -> u8 {
-    if raise_maximum {
-        MAX_VOLUME_PERCENT
-    } else {
-        BASE_VOLUME_PERCENT
-    }
-}
 
 /// Media keys that adjust the default output endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

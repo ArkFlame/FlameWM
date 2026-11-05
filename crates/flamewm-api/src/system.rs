@@ -1,5 +1,21 @@
 //! Typed shell-facing state for optional host integrations.
 
+/// Highest volume any audio path accepts: the shell, the platform media keys, the helper
+/// protocol and the PulseAudio backend all clamp to this one bound.
+pub const MAX_VOLUME_PERCENT: u8 = 150;
+/// Volume cap without "raise maximum volume" (over-amplification).
+pub const BASE_VOLUME_PERCENT: u8 = 100;
+
+/// Volume cap for the shared "raise maximum volume" value: 150 when raised, else 100.
+#[must_use]
+pub fn volume_cap_percent(raise_maximum: bool) -> u8 {
+    if raise_maximum {
+        MAX_VOLUME_PERCENT
+    } else {
+        BASE_VOLUME_PERCENT
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ServiceAvailability {
     #[default]

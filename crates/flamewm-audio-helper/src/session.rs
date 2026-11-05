@@ -6,7 +6,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use flamewm_api::FlameResult;
-use flamewm_api::system::{AudioMuteAction, AudioSnapshot, AudioVolumeAction, ServiceAvailability};
+use flamewm_api::system::{
+    AudioMuteAction, AudioSnapshot, AudioVolumeAction, MAX_VOLUME_PERCENT, ServiceAvailability,
+};
 use flamewm_integrations_linux::audio_protocol::{AudioRequest, parse_request};
 
 /// How long the first request of a helper process waits for `PulseAudio` to become ready.
@@ -57,6 +59,13 @@ pub fn serve(
         }
         match parse_request(&line) {
             Ok(AudioRequest::Get) => publish(&backend.snapshot()),
+            Ok(AudioRequest::Volume(action)) if action.percent > MAX_VOLUME_PERCENT => {
+                eprintln!(
+                    "flamewm-audio-helper: volume {} is above the {MAX_VOLUME_PERCENT}% bound",
+                    action.percent
+                );
+                reconcile(backend, publish);
+            }
             Ok(AudioRequest::Volume(action)) => {
                 if let Err(error) = backend.set_volume(action) {
                     eprintln!("flamewm-audio-helper: volume rejected: {error}");
@@ -87,13 +96,18 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
 
+    use std::cell::Cell;
+
     use flamewm_api::FlameError;
+    use flamewm_integrations_linux::audio_protocol::{SnapshotDecoder, encode_snapshot};
 
     /// Fake backend: rejects writes until `ready`, like the real context does before Ready.
     #[derive(Default)]
     struct FakeBackend {
         ready: Arc<AtomicBool>,
         applied: RefCell<Vec<String>>,
+        /// The device sink level; only an accepted write changes it.
+        device_volume: Cell<u8>,
     }
 
     impl Backend for FakeBackend {
@@ -104,6 +118,7 @@ mod tests {
                 } else {
                     ServiceAvailability::Unavailable
                 },
+                volume_percent: self.device_volume.get(),
                 ..AudioSnapshot::default()
             }
         }
@@ -115,6 +130,7 @@ mod tests {
             self.applied
                 .borrow_mut()
                 .push(format!("volume {}", action.percent));
+            self.device_volume.set(action.percent);
             Ok(())
         }
 
@@ -246,6 +262,68 @@ mod tests {
             READY_WAIT,
         );
         assert_eq!(*published.borrow(), 0);
+    }
+
+    /// Runs `lines` through `serve`. Each published snapshot is encoded as the helper writes it and
+    /// decoded as the WM reads it, so the returned levels are what the shell observes.
+    fn observed_levels(
+        backend: &FakeBackend,
+        lines: &[&str],
+        ready_wait: Duration,
+    ) -> Vec<(ServiceAvailability, u8)> {
+        let requests = feed(lines);
+        let observed = RefCell::new(Vec::new());
+        serve(
+            backend,
+            &requests,
+            &|snapshot| {
+                let mut decoder = SnapshotDecoder::default();
+                let mut decoded = None;
+                for line in encode_snapshot(snapshot).lines() {
+                    if let Some(block) = decoder.push_line(line).expect("snapshot block decodes") {
+                        decoded = Some(block);
+                    }
+                }
+                let block = decoded.expect("snapshot block ends");
+                observed
+                    .borrow_mut()
+                    .push((block.availability, block.volume_percent));
+            },
+            Duration::from_secs(1),
+            ready_wait,
+        );
+        observed.into_inner()
+    }
+
+    #[test]
+    fn accepted_key_write_then_ack_publishes_the_device_level() {
+        // Key press -> helper write -> snapshot: the observed level is the device level after the
+        // write, not the level the key asked for and not the level before it.
+        let backend = FakeBackend::default();
+        backend.ready.store(true, Ordering::SeqCst);
+        backend.device_volume.set(40);
+        let levels = observed_levels(&backend, &[VOLUME_LINE, "get"], READY_WAIT);
+        assert_eq!(levels, vec![(ServiceAvailability::Available, 50)]);
+        assert_eq!(backend.device_volume.get(), 50);
+    }
+
+    #[test]
+    fn rejected_write_shows_the_unchanged_device_level_not_the_requested_one() {
+        let backend = FakeBackend::default();
+        backend.device_volume.set(40);
+        let levels = observed_levels(&backend, &[VOLUME_LINE], Duration::ZERO);
+        assert_eq!(levels, vec![(ServiceAvailability::Unavailable, 40)]);
+        assert_eq!(backend.device_volume.get(), 40);
+    }
+
+    #[test]
+    fn volume_above_the_shared_bound_is_refused_and_the_device_is_unchanged() {
+        let backend = FakeBackend::default();
+        backend.ready.store(true, Ordering::SeqCst);
+        backend.device_volume.set(40);
+        let levels = observed_levels(&backend, &["volume sink:1 151 1 1"], READY_WAIT);
+        assert_eq!(levels, vec![(ServiceAvailability::Available, 40)]);
+        assert!(backend.applied.borrow().is_empty());
     }
 
     #[test]

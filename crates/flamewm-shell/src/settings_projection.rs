@@ -1,6 +1,6 @@
 use chrono::Local;
 use flamewm_api::PanelEdge;
-use flamewm_api::settings::{DEFAULT_ACCENT_RGB, SettingValue, SettingsSnapshot};
+use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_image_core::scale::ScaleFilter;
 use flamewm_image_core::{ImageSourceFormat, decode_bytes_at};
 use flamewm_platform::chrome::ACCENT_SOFT_ALPHA;
@@ -517,6 +517,7 @@ fn rgb(value: u32, alpha: u8) -> UiColor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_api::settings::DEFAULT_ACCENT_RGB;
     use flamewm_ui_x11::test_support::RecordingUiDoc;
     use std::sync::Mutex;
 

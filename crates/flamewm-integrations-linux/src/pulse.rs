@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use flamewm_api::system::{
     AudioEndpointKind, AudioEndpointSnapshot, AudioMuteAction, AudioSnapshot, AudioStreamSnapshot,
-    AudioTarget, AudioVolumeAction, ServiceAvailability,
+    AudioTarget, AudioVolumeAction, MAX_VOLUME_PERCENT, ServiceAvailability,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use flamewm_integrations_core::pulse::{PulseController, PulseIntent};
@@ -252,8 +252,9 @@ impl PulseAdapter {
 
 impl PulseAdapter {
     /// Success callback for one queued write. `PulseAudio` reports the async
-    /// outcome only here, so a rejected write is diagnosed and reconciled
-    /// against the server instead of being silently treated as applied.
+    /// outcome here. Both outcomes reconcile against the server, so the published snapshot is the
+    /// device state after the write: the acknowledgement the OSD shows. A rejected write is
+    /// diagnosed first; the reconcile then reports the unchanged level, never the requested one.
     fn write_failure_callback(
         &self,
         generation: u64,
@@ -264,10 +265,9 @@ impl PulseAdapter {
         let on_snapshot = Arc::clone(&self.on_snapshot);
         let timer = Rc::downgrade(&self.timer);
         Box::new(move |succeeded| {
-            if succeeded {
-                return;
+            if !succeeded {
+                eprintln!("flamewm-integrations-linux: PulseAudio {what} write rejected; reconciling");
             }
-            eprintln!("flamewm-integrations-linux: PulseAudio {what} write rejected; reconciling");
             request_reconcile(&context, &controller, &on_snapshot, &timer, generation);
         })
     }
@@ -700,7 +700,7 @@ fn sanitize_stream_text(raw: Option<String>) -> Option<String> {
 fn pulse_volume(percent: u8) -> Volume {
     let normal = u64::from(Volume::NORMAL.0);
     let raw = (normal
-        .saturating_mul(u64::from(percent.min(150)))
+        .saturating_mul(u64::from(percent.min(MAX_VOLUME_PERCENT)))
         .saturating_add(50))
         / 100;
     Volume(raw.min(u64::from(Volume::MAX.0)) as u32)
@@ -712,7 +712,7 @@ fn volume_percent(volume: Volume) -> u8 {
         .saturating_mul(100)
         .saturating_add(normal / 2))
         / normal)
-        .min(150) as u8
+        .min(u64::from(MAX_VOLUME_PERCENT)) as u8
 }
 
 fn pulse_error(context: &str, error: impl std::fmt::Display) -> FlameError {
