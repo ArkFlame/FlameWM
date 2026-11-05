@@ -86,7 +86,24 @@ pub struct X11Desktop {
     atoms: BTreeMap<String, Atom>,
     next_transaction: u64,
     pending_mode: Option<PendingMode>,
-    catalog: Option<std::sync::Arc<ApplicationCatalog>>,
+    catalog: ApplicationCatalogCache,
+}
+
+/// Lazily discovers the application catalog once and reuses it for later launches.
+#[derive(Default)]
+struct ApplicationCatalogCache(std::cell::OnceCell<std::sync::Arc<ApplicationCatalog>>);
+
+impl ApplicationCatalogCache {
+    fn get_or_discover(
+        &self,
+        discover: impl FnOnce() -> FlameResult<ApplicationCatalog>,
+    ) -> FlameResult<std::sync::Arc<ApplicationCatalog>> {
+        if let Some(catalog) = self.0.get() {
+            return Ok(catalog.clone());
+        }
+        let catalog = std::sync::Arc::new(discover()?);
+        Ok(self.0.get_or_init(|| catalog).clone())
+    }
 }
 
 impl X11Desktop {
@@ -141,21 +158,12 @@ impl X11Desktop {
             atoms,
             next_transaction: 0,
             pending_mode: None,
-            catalog: None,
+            catalog: ApplicationCatalogCache::default(),
         })
-    }
-
-    pub fn set_application_catalog(&mut self, catalog: std::sync::Arc<ApplicationCatalog>) {
-        self.catalog = Some(catalog);
     }
 
     fn application_catalog(&self) -> FlameResult<std::sync::Arc<ApplicationCatalog>> {
-        self.catalog.clone().ok_or_else(|| {
-            FlameError::new(
-                ErrorCode::Unavailable,
-                "application catalog is not injected",
-            )
-        })
+        self.catalog.get_or_discover(ApplicationCatalog::discover)
     }
 
     fn atom(&self, name: &str) -> Atom {
@@ -1474,5 +1482,37 @@ mod session_logout_tests {
         request_session_logout();
         assert!(take_session_logout_request());
         assert!(!take_session_logout_request());
+    }
+}
+
+#[cfg(test)]
+mod catalog_cache_tests {
+    use super::*;
+
+    #[test]
+    fn application_catalog_is_discovered_once_and_reused() {
+        let cache = ApplicationCatalogCache::default();
+        let mut calls = 0;
+        let first = cache
+            .get_or_discover(|| {
+                calls += 1;
+                Ok(ApplicationCatalog::default())
+            })
+            .expect("discovered catalog");
+        let second = cache
+            .get_or_discover(|| panic!("cached catalog must not rediscover"))
+            .expect("cached catalog");
+        assert_eq!(calls, 1);
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn application_catalog_discovery_error_is_reported_not_cached() {
+        let cache = ApplicationCatalogCache::default();
+        let error = cache
+            .get_or_discover(|| Err(FlameError::invalid("no application dirs")))
+            .expect_err("discovery failure must surface");
+        assert!(format!("{error:?}").contains("no application dirs"));
+        assert!(cache.get_or_discover(|| Ok(ApplicationCatalog::default())).is_ok());
     }
 }
