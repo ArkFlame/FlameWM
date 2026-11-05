@@ -10,7 +10,7 @@ MANIFEST = ROOT / 'crates/flamewm-wm/Cargo.toml'
 
 def valid_targets(source: bytes) -> bool:
     parsed = tomllib.loads(source.decode())
-    expected = {'flamewm': 'src/main.rs', 'flamewm-session': 'src/bin/flamewm-session.rs'}
+    expected = {'flamewm': 'src/bin/flamewm.rs', 'flamewm-session': 'src/bin/flamewm-session.rs'}
     declared = {entry['name']: entry['path'] for entry in parsed.get('bin', [])}
     return parsed['package'].get('autobins') is False and declared == expected
 
@@ -29,7 +29,8 @@ class CargoSessionTargets(unittest.TestCase):
         self.assertIn('#[path = "../session_app_compat.rs"]', (root / 'src/bin/flamewm-session.rs').read_text())
         self.assertIn('finalize_pam_kwallet_login', (root / 'src/bin/flamewm-session.rs').read_text())
         package = (ROOT / 'scripts/package').read_text()
-        self.assertIn('for binary in flamewm flamewm-session ', package)
+        self.assertIn('flamewm-session ', package)
+        self.assertIn('for application in flamewm flamewm-desktop ', package)
 
     def test_guard_rejects_original_cargo_regression(self):
         original = MANIFEST.read_bytes()
