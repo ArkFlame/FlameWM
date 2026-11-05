@@ -95,3 +95,36 @@ pub(crate) fn project_accent_tokens(
     document.color_variable("--preview-outline", accent_color(snapshot))?;
     Ok(())
 }
+
+/// Progressive-disclosure switch keys (test-only contract list). A toggle of any of these changes which member values the
+/// snapshot resolves, so the desktop re-projects from the snapshot on every change; this list names
+/// them for the settings-change contract. Sourced from the one switch table in `flamewm-api`.
+#[cfg(test)]
+pub(crate) fn group_switch_keys() -> Vec<&'static str> {
+    flamewm_api::settings_groups::switch_keys().collect()
+}
+
+#[cfg(test)]
+mod group_switch_key_tests {
+    use super::group_switch_keys;
+
+    #[test]
+    fn desktop_key_list_names_every_switch_in_the_table() {
+        let keys = group_switch_keys();
+        assert_eq!(
+            keys.len(),
+            flamewm_api::settings_groups::SWITCH_GROUPS.len()
+        );
+        for switch in [
+            "accentCustom",
+            "customWindowOutline",
+            "surfaceCustom",
+            "fontsCustom",
+        ] {
+            assert!(
+                keys.contains(&switch),
+                "{switch} missing from desktop key list"
+            );
+        }
+    }
+}

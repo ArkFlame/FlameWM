@@ -42,6 +42,7 @@ pub struct TaskbarFrame {
 impl TaskbarFrame {
     #[must_use]
     pub fn from_settings(settings: &crate::settings::ProductSettings) -> Self {
+        let settings = settings.effective();
         Self {
             floating: settings.taskbar_style == crate::settings::TaskbarStyle::Floating,
             margin: settings.taskbar_floating_margin,

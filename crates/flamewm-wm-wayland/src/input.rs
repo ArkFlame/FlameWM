@@ -1008,7 +1008,7 @@ pub fn keyboard_layout_at(path: &std::path::Path) -> String {
         })
         .map_or_else(
             || DEFAULT_KEYBOARD_LAYOUT.to_owned(),
-            |settings| settings.keyboard_layout,
+            |settings| settings.effective().keyboard_layout,
         )
 }
 
@@ -1031,7 +1031,7 @@ pub fn focus_follows_mouse_at(path: &std::path::Path) -> bool {
 fn focus_follows_mouse_from(text: &str) -> bool {
     flamewm_platform::settings::ConfigStore::default()
         .parse_snapshot(text)
-        .is_ok_and(|settings| settings.focus_follows_mouse)
+        .is_ok_and(|settings| settings.effective().focus_follows_mouse)
 }
 
 /// `titlebars` and `windowMargin` saved in the settings file, for the model built at startup.
@@ -1056,7 +1056,10 @@ fn model_settings_from(text: &str) -> (bool, i32) {
         .parse_snapshot(text)
         .map_or_else(
             |_| default_model_settings(),
-            |settings| (settings.titlebars, i32::from(settings.window_margin)),
+            |settings| {
+                let settings = settings.effective();
+                (settings.titlebars, i32::from(settings.window_margin))
+            },
         )
 }
 

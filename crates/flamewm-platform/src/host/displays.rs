@@ -14,7 +14,7 @@ impl<E: EnginePorts> PlatformHost<E> {
         // to bottom/44px/classic after RandR hotplug or monitor rearrangement.
         self.seed_persisted_panel_edges();
         self.panels
-            .reconcile_taskbar_height(self.settings.current().taskbar_height);
+            .reconcile_taskbar_height(self.settings.current().effective().taskbar_height);
         self.panels
             .reconcile_taskbar_frame(TaskbarFrame::from_settings(self.settings.current()));
         Ok(self.panels.revision() != previous_revision)

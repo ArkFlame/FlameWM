@@ -91,6 +91,7 @@ pub fn pointer_input_at(path: &std::path::Path) -> PointerInput {
                 .ok()
         })
         .map_or((0, false), |settings| {
+            let settings = settings.effective();
             (settings.pointer_speed, settings.pointer_raw_input)
         })
 }

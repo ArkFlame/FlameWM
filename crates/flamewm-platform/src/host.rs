@@ -94,7 +94,7 @@ impl<E: EnginePorts> PlatformHost<E> {
         self.panels.sync_outputs(&displays);
         self.seed_persisted_panel_edges();
         self.panels
-            .reconcile_taskbar_height(self.settings.current().taskbar_height);
+            .reconcile_taskbar_height(self.settings.current().effective().taskbar_height);
         self.panels
             .reconcile_taskbar_frame(TaskbarFrame::from_settings(self.settings.current()));
         self.started = true;

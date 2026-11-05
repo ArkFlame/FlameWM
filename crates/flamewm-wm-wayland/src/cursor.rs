@@ -244,6 +244,7 @@ pub fn saved_appearance() -> (Option<String>, u32) {
                 .parse_snapshot(&text)
                 .ok()
         });
+    let parsed = parsed.map(|settings| settings.effective());
     let theme = parsed
         .as_ref()
         .map(|settings| settings.cursor_theme.clone());

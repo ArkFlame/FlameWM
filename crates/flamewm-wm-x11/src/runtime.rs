@@ -592,6 +592,7 @@ fn persisted_settings() -> Option<flamewm_platform::settings::ProductSettings> {
     flamewm_platform::settings::ConfigStore::default()
         .parse_snapshot(&text)
         .ok()
+        .map(|settings| settings.effective())
 }
 
 /// Single settings sync point: applies the WM-owned snapshot effects, then
