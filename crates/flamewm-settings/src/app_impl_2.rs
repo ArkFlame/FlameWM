@@ -671,6 +671,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         for (slug, label) in NAV_PAGES {
             document.visible(&format!("nav-{slug}"), nav_matches(label, &self.nav_query))?;
         }
+        let selected_slug = NAV_PAGES[self.nav_index()].0;
         document.visible("nav-selection", !filtering)?;
         let search_text = match (self.nav_search_focused, self.nav_query.is_empty()) {
             (false, true) => "Search".to_owned(),
@@ -681,6 +682,16 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(SettingValue::Text(accent)) = self.setting_value("accent") {
             document.background("nav-selection", solid_color(accent)?)?;
             sync_accent_nodes(document, accent)?;
+            // The selected row sits on the solid accent: its label takes the contrast-picked ink.
+            let ink = flamewm_ui_x11::on_accent_color(solid_color(accent)?);
+            for (slug, _) in NAV_PAGES {
+                let id = format!("nav-{slug}");
+                if slug == selected_slug && !filtering {
+                    document.foreground(&id, ink)?;
+                } else {
+                    document.foreground_clear(&id)?;
+                }
+            }
             for name in ["black", "white", "red", "blue", "purple", "teal"] {
                 let palette = accent_for_swatch(name);
                 document.visible(

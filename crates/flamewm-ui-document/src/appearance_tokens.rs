@@ -5,7 +5,7 @@
 //! white overlay never ends up invisible there.
 
 use flamewm_api::settings::SettingsSnapshot;
-use flamewm_skin::palette::{AlphaColor, Overlays, Palette, Rgb};
+use flamewm_skin::palette::{AlphaColor, Overlays, Palette, Rgb, on_accent};
 use flamewm_ui_core::glass;
 
 use crate::template::{UiColor, UiDocumentAccess};
@@ -40,6 +40,22 @@ pub fn text_token_values(palette: Palette) -> [(&'static str, UiColor); 2] {
         ("--text", color(palette.text, 255)),
         ("--muted", color(palette.muted, 255)),
     ]
+}
+
+/// Label ink for text drawn on the accent fill (`--on-accent`), chosen by contrast so the label stays
+/// readable for any accent. Selected segments and nav rows use the same value.
+#[must_use]
+pub fn on_accent_color(accent: UiColor) -> UiColor {
+    let rgb = Rgb((u32::from(accent.r) << 16) | (u32::from(accent.g) << 8) | u32::from(accent.b));
+    color(on_accent(rgb), 255)
+}
+
+/// Writes `--on-accent` for the given accent colour.
+pub fn project_on_accent_token(
+    document: &mut impl UiDocumentAccess,
+    accent: UiColor,
+) -> Result<(), String> {
+    document.color_variable("--on-accent", on_accent_color(accent))
 }
 
 /// Writes the overlay tokens. Surfaces with their own surface model call this alone.
@@ -147,6 +163,25 @@ mod tests {
         let palette = Palette::for_appearance(Appearance::Light);
         let values = text_token_values(palette);
         assert_eq!(value(&values, "--text"), color(palette.text, 255));
+    }
+
+    #[test]
+    fn on_accent_ink_follows_accent_contrast() {
+        let default_accent = UiColor {
+            r: 0x3d,
+            g: 0xae,
+            b: 0xe9,
+            a: 255,
+        };
+        let ink = on_accent_color(default_accent);
+        assert_eq!((ink.r, ink.g, ink.b, ink.a), (0x18, 0x1b, 0x1e, 255));
+        let black = UiColor {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        };
+        assert_eq!(on_accent_color(black).r, 255);
     }
 
     #[test]

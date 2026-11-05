@@ -218,6 +218,9 @@ mod tests {
 
     fn snapshot_with(key: &str, value: SettingValue) -> SettingsSnapshot {
         let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("surfaceCustom".to_owned(), SettingValue::Boolean(true));
         snapshot.values.insert(key.to_owned(), value);
         snapshot
     }
@@ -228,7 +231,7 @@ mod tests {
         assert_eq!(
             fill,
             SurfaceFill {
-                rgb: 0x00ea_f4ff,
+                rgb: 0x0020_2326,
                 alpha: 31,
                 width: 1,
             }
@@ -494,7 +497,7 @@ mod shared_row_tests {
         assert_eq!(
             rounded.fill,
             SurfaceFill {
-                rgb: 0x00ea_f4ff,
+                rgb: 0x0020_2326,
                 alpha: 31,
                 width: 1,
             }

@@ -49,9 +49,9 @@ mod tests {
         assert_eq!(
             surface_background(&snapshot),
             UiColor {
-                r: 234,
-                g: 244,
-                b: 255,
+                r: 32,
+                g: 35,
+                b: 38,
                 a: 31
             }
         );
@@ -69,6 +69,9 @@ mod tests {
     #[test]
     fn border_and_fill_are_independently_configurable() {
         let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("surfaceCustom".into(), SettingValue::Boolean(true));
         snapshot
             .values
             .insert("surfaceColor".into(), SettingValue::Text("#123456".into()));

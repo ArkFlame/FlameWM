@@ -209,10 +209,13 @@ pub(crate) fn highlight_segment(
     selected: bool,
     accent: UiColor,
 ) -> Result<(), String> {
+    // Accent fills carry the contrast-picked label ink (`--on-accent`), never the white text token.
     if selected {
-        document.background(id, accent)
+        document.background(id, accent)?;
+        document.foreground(id, flamewm_ui_x11::on_accent_color(accent))
     } else {
-        document.background_clear(id)
+        document.background_clear(id)?;
+        document.foreground_clear(id)
     }
 }
 

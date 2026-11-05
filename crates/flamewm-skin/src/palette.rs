@@ -211,6 +211,18 @@ pub fn contrast_ratio(a: Rgb, b: Rgb) -> f64 {
     (hi + 0.05) / (lo + 0.05)
 }
 
+/// Label ink for text drawn on an accent fill: white or the Light text ink, whichever has the higher
+/// WCAG contrast against `accent`. Dark text wins on light accents such as the shipped `#3DAEE9`.
+#[must_use]
+pub fn on_accent(accent: Rgb) -> Rgb {
+    const WHITE: Rgb = Rgb(0x00ff_ffff);
+    if contrast_ratio(accent, WHITE) >= contrast_ratio(accent, LIGHT_TEXT) {
+        WHITE
+    } else {
+        LIGHT_TEXT
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +309,24 @@ mod overlay_tests {
             alpha: 0,
         };
         assert_eq!(composite(clear, Rgb(0x0012_3456)), Rgb(0x0012_3456));
+    }
+
+    #[test]
+    fn on_accent_picks_the_higher_contrast_ink() {
+        // Shipped default accent: white is 2.5:1, dark ink is well above AA.
+        let default_accent = Rgb(0x003d_aee9);
+        assert_eq!(on_accent(default_accent), LIGHT_TEXT);
+        assert!(contrast_ratio(on_accent(default_accent), default_accent) >= 4.5);
+        assert_eq!(on_accent(Rgb(0)), Rgb(0x00ff_ffff));
+        assert_eq!(on_accent(Rgb(0x00ff_ffff)), LIGHT_TEXT);
+        for accent in [Rgb(0x00ef_4048), Rgb(0x0021_7bc0), Rgb(0x0090_ee40)] {
+            let ink = on_accent(accent);
+            let other = if ink == LIGHT_TEXT {
+                Rgb(0x00ff_ffff)
+            } else {
+                LIGHT_TEXT
+            };
+            assert!(contrast_ratio(ink, accent) >= contrast_ratio(other, accent));
+        }
     }
 }

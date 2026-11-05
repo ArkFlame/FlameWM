@@ -21,6 +21,7 @@ pub use flamewm_render_x11::{
     X11WindowIdentity, apply_cursor_appearance, apply_cursor_theme, release_free_heap,
     return_large_frees_to_system, safe_file_name, valid_bus_name, valid_object_path,
 };
+pub use flamewm_ui_document::appearance_tokens::{on_accent_color, project_on_accent_token};
 pub use flamewm_ui_document::{
     RuntimeImage, UiColor, UiDocument, UiDocumentAccess, UiDocumentView, UiTemplate,
     decode_document,

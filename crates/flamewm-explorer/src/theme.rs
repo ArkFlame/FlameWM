@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
-use flamewm_skin::palette::Overlays;
+use flamewm_skin::palette::{Overlays, Palette};
 use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::backdrop::WindowBackdrop;
 use flamewm_ui_x11::surface_style::surface_outline;
@@ -20,8 +20,6 @@ const WASH_ALPHA: u8 = 26;
 const SELECTION_ALPHA: u8 = 0x80;
 /// Menus and dialogs read as the surface, a little more opaque than the root for legibility.
 const MENU_MIN_ALPHA: u8 = 230;
-/// Secondary text: white at roughly 65%, so it stays legible over any surface colour.
-const MUTED_ALPHA: u8 = 166;
 const MAX_FONT_SIZE_OFFSET: i32 = 4;
 const MIN_FONT_SIZE_OFFSET: i32 = -2;
 
@@ -35,6 +33,8 @@ pub struct ExplorerTheme {
     font_size_offset: i32,
     font_bold: bool,
     overlays: Overlays,
+    /// Text and muted ink of the active appearance (Dark or Light palette).
+    ink: Palette,
 }
 impl Default for ExplorerTheme {
     fn default() -> Self {
@@ -111,6 +111,7 @@ impl ExplorerTheme {
             font_size_offset: 0,
             font_bold: false,
             overlays: Overlays::DARK,
+            ink: Palette::RWR_0_0_9,
         };
         if let Some(SettingValue::Text(name)) = snapshot.values.get("fontFamily") {
             let name = name.trim();
@@ -136,6 +137,7 @@ impl ExplorerTheme {
         };
         theme.stroke = surface_outline(snapshot);
         theme.overlays = flamewm_ui_core::glass::overlays_from_settings(snapshot);
+        theme.ink = flamewm_ui_core::glass::palette_from_settings(snapshot);
         theme
     }
     /// Root fill: the surface once, translucent when the window backdrop shows the wallpaper through it.
@@ -163,18 +165,9 @@ impl ExplorerTheme {
             ..self.surface
         }
     }
-    /// Secondary text. Text colour ignores alpha, so this is white blended over the surface, opaque.
+    /// Secondary text: the appearance's muted ink, opaque. Light theme gets dark ink, Dark gets light.
     pub fn muted(&self) -> UiColor {
-        let mix = |c: u8| -> u8 {
-            ((u16::from(c) * (255 - u16::from(MUTED_ALPHA)) + 255 * u16::from(MUTED_ALPHA)) / 255)
-                as u8
-        };
-        UiColor {
-            r: mix(self.surface.r),
-            g: mix(self.surface.g),
-            b: mix(self.surface.b),
-            a: 255,
-        }
+        rgb(self.ink.muted.0)
     }
     /// Selection and highlight fills use the accent at 50% opacity, blended over the surface.
     pub fn selection_fill(&self) -> UiColor {
@@ -212,7 +205,7 @@ impl ExplorerTheme {
             ("--line", self.card()),
             ("--menu", self.menu()),
             ("--muted", self.muted()),
-            ("--text", white(245)),
+            ("--text", rgb(self.ink.text.0)),
         ] {
             doc.color_variable(name, color)?;
         }
@@ -358,6 +351,9 @@ mod tests {
         let mut settings = SettingsSnapshot::new(1);
         settings
             .values
+            .insert("surfaceCustom".into(), SettingValue::Boolean(true));
+        settings
+            .values
             .insert("surfaceColor".into(), SettingValue::Text("#445566".into()));
         settings
             .values
@@ -380,6 +376,9 @@ mod tests {
     #[test]
     fn children_never_stack_a_second_surface_alpha() {
         let mut settings = SettingsSnapshot::new(1);
+        settings
+            .values
+            .insert("surfaceCustom".into(), SettingValue::Boolean(true));
         settings
             .values
             .insert("surfaceColor".into(), SettingValue::Text("#445566".into()));

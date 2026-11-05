@@ -114,6 +114,7 @@ pub(crate) fn sync_accent_nodes(
         document.background(id, color)?;
     }
     document.color_variable("--accent", color)?;
+    flamewm_ui_x11::project_on_accent_token(document, color)?;
     document.color_variable("--accent-soft", UiColor { a: 0x38, ..color })
 }
 

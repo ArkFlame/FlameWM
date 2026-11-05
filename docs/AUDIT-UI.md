@@ -347,3 +347,44 @@ Base: `origin/main` `c5288eec`. Method: private `Xvfb :92` (no window manager, p
 - Settings hotkey capture: `route_focus` consumes Press Tab/Enter/Space while a hotkey is armed (Release still reaches `handle_key_event`). Not runtime-tested.
 - Settings text fields: Space/Enter on a focused control now activates it instead of typing. Only reachable when focus sits on a `data-action` control. Not runtime-tested.
 - Not run: the full `Xvfb` settings flow inside the nested WM (`scripts/xephyr`), Light appearance focus colour, Wayland.
+
+## Pass 10: fixes for Pass 9 defects (code, tests, guards)
+
+Base: `origin/main` `c5288eec`. Worktree `/run/media/linsaftw/SDD/wt-ui-pass10`, `CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-ui-pass10`. Evidence folder `/run/media/linsaftw/SDD/shots/pass10/` (logs and `before/` copies of the Pass 9 captures).
+
+### Root causes and fixes
+
+| Pass 9 item | Root cause (source) | Fix |
+| --- | --- | --- |
+| Light taskbar bar stays dark (s06, s07) | `surface_fill` (`crates/flamewm-ui-core/src/surface.rs`) used the stored `surfaceColor` even when the `surfaceCustom` switch was off. The shipped stored default `#202326` is the Dark surface, so Light glass stayed dark. Inherit taskbar delegates to `surface_fill`. | Switch off returns `theme_surface_rgb(appearance)`: `Palette::LIGHT.surface` (`#f4f5f7`) in Light, `Palette::RWR_0_0_9.surface` (`#202326`) in Dark. Switch on keeps the stored colour in both themes. Reduce transparency unchanged. |
+| Explorer Light and Dark: Date modified, Size, Places low contrast (s09, s24) | `ExplorerTheme` hard-coded `--text` to white and built `--muted` as white blended over the surface, so Light got light text on light glass. | `ExplorerTheme` stores `ink: Palette` from `glass::palette_from_settings`; `--text` and `--muted` come from the appearance palette. |
+| Task Manager Dark summary and percents (s23) | Not traced to a separate writer. Task Manager projects `--muted` through `project_appearance_tokens`, and the summary and bar labels use `--muted`. Probable cause is the window fill (`surface_fill`) and the same stale-surface path. | Covered by the surface fix. Not verified at runtime (see Not verified). |
+| Task Manager Light Command and user labels faint (s08) | Same mechanism: the dark stored surface behind light ink. | Covered by the surface fix. Not verified at runtime. |
+| White label on accent `#3DAEE9`, about 2.5:1 (nav Theme, selected segments) | Selected segments and the selected nav row got the accent background but kept the default `--text` ink. | `flamewm_skin::palette::on_accent` picks white or the Light ink by WCAG contrast. `appearance_tokens::on_accent_color` and `project_on_accent_token` expose it (re-exported from `flamewm-ui-x11`). `sync_accent_nodes` writes `--on-accent`; `highlight_segment` and the nav projection set the label foreground. `ui/settings.css` declares `--on-accent:#181b1e`. The default accent `#3DAEE9` stays. Dark ink on the default accent is about 8:1. |
+
+### Tests added
+
+- `flamewm-skin` `palette::tests::on_accent_picks_the_higher_contrast_ink` (contrast calc, default accent, black, white).
+- `flamewm-ui-document` `appearance_tokens::tests::on_accent_ink_follows_accent_contrast`.
+- `flamewm-ui-core` `surface::surface_theme_default_tests` (Light default, Dark default, custom kept when on in both themes, reduce transparency still wins).
+- Existing fixtures that used a stored `surfaceColor` without the switch now enable `surfaceCustom`. Default expectations moved from the old `#eaf4ff`/`#333333` to the Dark surface `#202326`.
+
+### Verification
+
+- `cargo test -p flamewm-skin -p flamewm-ui-core -p flamewm-ui-document -p flamewm-explorer -p flamewm-settings -p flamewm-task-manager --no-fail-fast` exit 0 (log `shots/pass10/test6.log`).
+- `cargo check --workspace --all-targets` exit 0 (`shots/pass10/check.log`).
+- `cargo build --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-explorer -p flamewm-task-manager -p flamewm-x11-canary` exit 0 (`shots/pass10/release.log`).
+- `python3 -I tools/architecture_guard.py` exit 0.
+- `python3 -I tools/ui_contract_guard.py` exit 0.
+- `python3 -I -m unittest discover -s tools -p 'test_*.py'` exit 1: 2 failures, both outside this diff (`test_flamewm_pass24_regressions` drag-preview ink, `test_flamewm_pass34_release_memory_contract` source-archive executables). Neither test reads a file this pass changed. `flamewm-skin`, `ui-core`, `ui-document`, `explorer`, `settings`, `task-manager` tests pass.
+
+### Not verified
+
+- Runtime screenshots (before/after). The nested session did not apply `appearance=light` from `settings.toml` or from `FLAMEWM_APPEARANCE` in this harness: the taskbar and Task Manager stayed Dark. Those captures are kept in `shots/pass10/rejected-dark-applied/` and are not evidence. The Pass 9 Light captures remain the only "before" evidence. Pass 9 set Light through the Settings app, which needs an input helper; this pass did not drive it. Runtime proof for defects 1 to 4 is therefore pending.
+- Task Manager Dark summary and percent contrast (s23): fix is inferred, not shown.
+- Explorer hover and pressed states in both themes; two-monitor and Wayland layouts.
+
+### Open
+
+- Light taskbar text ink is still the Light palette. The default Light surface is at glass alpha (12%), so over a dark wallpaper the bar can remain dark. Check with a Light capture before closing defect 1.
+- The 28 focus-ring warnings from Pass 9 remain.

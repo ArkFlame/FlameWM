@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_api::settings_groups::is_group_custom;
+use flamewm_skin::palette::Palette;
 
 /// Shared Surfaces fill for desktop menus: `surfaceColor` RGB with the `surfaceOpacity` alpha.
 ///
@@ -38,6 +40,10 @@ pub fn surface_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
     );
     let rgb = if appearance.reduce_transparency {
         material.tint_rgb
+    } else if !is_group_custom(snapshot, "surface") {
+        // Custom surface off: the theme default. Dark is the Dark surface, Light the Light surface, so
+        // a stored colour from an earlier Dark session cannot pin dark glass into the Light theme.
+        theme_surface_rgb(appearance)
     } else {
         match snapshot.values.get("surfaceColor") {
             // Light keeps the Dark preset tint only as the untouched default: it is swapped for the
@@ -58,6 +64,17 @@ pub fn surface_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
         alpha: ((u32::from(material.alpha_permille) * 255 + 500) / 1000) as u8,
         width: 1,
     }
+}
+
+/// Surface colour the active theme uses when the Surfaces custom switch is off.
+#[must_use]
+pub fn theme_surface_rgb(appearance: crate::glass::Appearance) -> u32 {
+    let palette = if appearance.light {
+        Palette::LIGHT
+    } else {
+        Palette::RWR_0_0_9
+    };
+    palette.surface.0
 }
 
 /// Titlebar material fill from the shared Surfaces policy.
@@ -274,6 +291,9 @@ mod titlebar_fill_tests {
         snapshot
             .values
             .insert("glassOpacityPercent".into(), SettingValue::Percent(100));
+        snapshot
+            .values
+            .insert("surfaceCustom".into(), SettingValue::Boolean(true));
         let fill = titlebar_fill(&snapshot);
         assert_eq!((fill.rgb, fill.alpha), (0x0020_2326, 255));
         assert_eq!(fill, surface_fill(&snapshot));
@@ -619,7 +639,7 @@ mod glass_settings_contract_tests {
         )]));
         assert_eq!(
             (inherit.rgb, inherit.alpha),
-            (crate::glass::DARK.tint_rgb, 31)
+            (Palette::RWR_0_0_9.surface.0, 31)
         );
         let custom = dock_fill(&with(&[
             (
@@ -702,6 +722,9 @@ mod light_surface_tests {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot
             .values
+            .insert("surfaceCustom".into(), SettingValue::Boolean(true));
+        snapshot
+            .values
             .insert("appearance".into(), SettingValue::Text(appearance.into()));
         snapshot
             .values
@@ -714,5 +737,64 @@ mod light_surface_tests {
         assert_eq!(surface_fill(&with("light", "#eaf4ff")).rgb, 0x00f4_f5f7);
         assert_eq!(surface_fill(&with("light", "#123456")).rgb, 0x0012_3456);
         assert_eq!(surface_fill(&with("dark", "#eaf4ff")).rgb, 0x00ea_f4ff);
+    }
+}
+
+#[cfg(test)]
+mod surface_theme_default_tests {
+    use super::*;
+
+    fn snapshot_with(pairs: &[(&str, SettingValue)]) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        for (key, value) in pairs {
+            snapshot.values.insert((*key).into(), value.clone());
+        }
+        snapshot
+    }
+
+    #[test]
+    fn default_surface_follows_the_light_theme_when_custom_is_off() {
+        let snapshot = snapshot_with(&[
+            ("appearance", SettingValue::Text("light".into())),
+            ("glassOpacityPercent", SettingValue::Percent(100)),
+            ("surfaceColor", SettingValue::Text("#202326".into())),
+        ]);
+        assert_eq!(surface_fill(&snapshot).rgb, Palette::LIGHT.surface.0);
+        assert_eq!(dock_fill(&snapshot).rgb, Palette::LIGHT.surface.0);
+    }
+
+    #[test]
+    fn default_surface_is_the_dark_surface_when_custom_is_off() {
+        let snapshot = snapshot_with(&[
+            ("glassOpacityPercent", SettingValue::Percent(100)),
+            ("surfaceColor", SettingValue::Text("#f4f5f7".into())),
+        ]);
+        assert_eq!(surface_fill(&snapshot).rgb, Palette::RWR_0_0_9.surface.0);
+    }
+
+    #[test]
+    fn custom_surface_colour_is_kept_when_custom_is_on_in_either_theme() {
+        for appearance in ["light", "dark"] {
+            let snapshot = snapshot_with(&[
+                ("appearance", SettingValue::Text(appearance.into())),
+                ("glassOpacityPercent", SettingValue::Percent(100)),
+                ("surfaceCustom", SettingValue::Boolean(true)),
+                ("surfaceColor", SettingValue::Text("#336699".into())),
+            ]);
+            assert_eq!(surface_fill(&snapshot).rgb, 0x0033_6699, "{appearance}");
+        }
+    }
+
+    #[test]
+    fn reduce_transparency_still_wins_over_the_theme_default() {
+        let snapshot = snapshot_with(&[
+            ("appearance", SettingValue::Text("light".into())),
+            ("reduceTransparency", SettingValue::Boolean(true)),
+        ]);
+        let fill = surface_fill(&snapshot);
+        assert_eq!(
+            (fill.alpha, fill.rgb),
+            (255, flamewm_skin::palette::LIGHT_PANEL.0)
+        );
     }
 }
