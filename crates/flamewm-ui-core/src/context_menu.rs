@@ -412,6 +412,17 @@ mod css_contract_tests {
     }
 
     #[test]
+    fn shell_neutral_surfaces_use_palette_tokens() {
+        // The `:root` line keeps the shipped Dark values; every other use must be a token so
+        // `appearance=light` reaches the shell.
+        assert!(SHELL_CSS.starts_with(":root"));
+        let body = SHELL_CSS.split_once('}').map_or("", |(_, rest)| rest);
+        for literal in ["#202326", "#1b1e20", "#aeb4bb", "#f1f2f3"] {
+            assert!(!body.contains(literal), "{literal} must route through a palette token");
+        }
+    }
+
+    #[test]
     fn accent_soft_hover_token_is_identical_across_sheets() {
         // `--accent-soft` is a render-compiler built-in (collect_variables seeds it from
         // DEFAULT_ACCENT_RGB), so sheets either both omit it or both declare the same value.

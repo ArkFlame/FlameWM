@@ -216,6 +216,11 @@ impl Application {
         flamewm_ui_x11::surface_style::project_surface_outline(doc, "task-manager", &self.theme)?;
         doc.color_variable("--accent", rgba(accent, 255))?;
         doc.color_variable("--accent-soft", rgba(accent, 42))?;
+        // Text follows the appearance palette so light surfaces stay legible; the root defaults
+        // in task-manager.css are the Dark palette values.
+        let palette = flamewm_ui_core::glass::palette_from_settings(&self.theme);
+        doc.color_variable("--text", rgba(palette.text.0, 255))?;
+        doc.color_variable("--muted", rgba(palette.muted.0, 255))?;
         doc.color_variable(
             "--border",
             flamewm_ui_x11::surface_style::surface_outline(&self.theme),

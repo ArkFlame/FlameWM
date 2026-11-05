@@ -105,3 +105,26 @@ and the default-theme golden for each app crate.
 - Explorer `surface: rgb(0)` is only the initial sentinel. `surface_fill` always overwrites it, so
   Explorer inherits the light surface and no change was made.
 - Settings `tables.rs` swatches are user-selectable presets, not themed surfaces. Left unchanged.
+
+## Pass 4: neutral tokens route through the appearance palette
+
+Scope: shell and task-manager neutral colours. Base: `origin/main` after `5bb1133b`.
+
+### Fixed
+
+- `flamewm_ui_core::glass::palette_from_settings(snapshot)` is the single selector: `appearance=light` gives `Palette::LIGHT`, every other value gives `Palette::RWR_0_0_9`. Shell and task-manager both call it.
+- `ui/shell/flamewm.css`: 12 literal uses of `#202326`, `#1b1e20`, `#aeb4bb`, `#f1f2f3` (the surface, panel/sidebar, muted and text values) became `var(--surface|--panel|--muted|--text)`. The `:root` line keeps the shipped Dark values, so Dark output is unchanged.
+- `crates/flamewm-shell/src/settings_projection.rs` `project_palette_tokens` writes `--panel`, `--surface`, `--sidebar`, `--text`, `--muted` from the palette on every shell projection. Dark writes equal the `:root` defaults, and `set_color_variable` is a no-op when the value is unchanged, so no extra repaint. Tokens a surface does not compile are skipped.
+- `crates/flamewm-task-manager/src/lib.rs` `paint_theme` projects `--text` and `--muted` from the palette. Before this, light glass put light-on-light text in the task manager.
+- `ui/task-manager/task-manager.css` `:root` `--text` and `--muted` now equal `Palette::RWR_0_0_9` (`#f1f2f3`, `#aeb4bb`; was `#f2f3f5`, `#a9acb2`). This is a 1-step Dark change on those two tokens.
+- Tests: `glass::appearance_golden_tests::neutral_palette_tokens_follow_appearance`, `settings_projection::tests::neutral_tokens_project_light_palette_and_dark_defaults`, `context_menu::css_contract_tests::shell_neutral_surfaces_use_palette_tokens` (fails if any of the four literals returns outside `:root`).
+
+### Left open (with reason)
+
+- F1 `:focus` / `:focus-visible` (not fixed). The compiler accepts only `hover`, `active`, `root` (`css.rs`). Adding a focus state needs: a `PseudoState::Focus` and a `focus_style` field on `CompiledNode` (about 40 struct-literal sites across render-core, render-x11, lock, ui-document, ui-x11); a `FORMAT_VERSION` bump in `render-core/src/codec.rs` (v8 to v9, with a legacy decode path); a `focus` field in `InteractionState`; and a keyboard focus owner. No Tab traversal or focus model exists in the UI runtime for shell, settings, explorer, task-manager or finder, so the ring would have no trigger. Needs its own pass with runtime proof.
+- F1b `:disabled` (not fixed). Not a supported pseudo-class. `.is-disabled` is class-based (`.media-control.is-disabled` opacity 0.4 is the one case). A static `[disabled]` match is possible in the compiler, but it still needs a style slot and token set, so it is not started here.
+- Light hover fill. `--hover-fill:#ffffff40` (shell root) is white alpha, so it is nearly invisible on the light panel. Needs a light-token pair; not verified visually.
+- Remaining shell literals (about 60 sites: `#303438`, `#272a2d`, `#17191b`, accent-state colours, status colours). Not tokenised: each needs a semantic name and a light value.
+- Hover/pressed consistency with the titlebar inversion (item 4). The titlebar state lives in `crates/flamewm-wm-wayland` and `crates/flamewm-wm-x11`, which this pass did not touch. Not audited.
+- Explorer, finder, settings: no `--text`/`--muted` projection changed here. Their palette literals (see Pass 2 table) are open.
+- Not visually verified. No light or Dark screenshot was taken in this pass. Contrast of the new light text tokens on the shell glass is covered only by the existing `Palette::LIGHT` contrast tests in flamewm-skin, not by rendered output.

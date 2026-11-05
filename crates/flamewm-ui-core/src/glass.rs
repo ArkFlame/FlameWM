@@ -12,7 +12,7 @@
 //! Light: clear glass `rgba(255,255,255,.045)`, 13px blur, saturate 155%, rim `.23`.
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
-use flamewm_skin::palette::{LIGHT_PANEL, LIGHT_SURFACE};
+use flamewm_skin::palette::{Palette, LIGHT_PANEL, LIGHT_SURFACE};
 
 /// Tahoe corner radii (px at 1x). Consumers pick the one matching their surface.
 /// The window frame radius has a single owner: `flamewm_skin::recipes::decoration::ROUNDED_RADIUS`.
@@ -426,6 +426,18 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
     }
 }
 
+/// Neutral text and surface tokens for the snapshot's appearance. Dark returns the shipped
+/// palette; `appearance=light` returns `Palette::LIGHT`. Shared by every consumer that projects
+/// `--text`, `--muted`, `--panel`, `--surface` or `--sidebar` at runtime.
+#[must_use]
+pub fn palette_from_settings(snapshot: &SettingsSnapshot) -> Palette {
+    if appearance_from_settings(snapshot).light {
+        Palette::LIGHT
+    } else {
+        Palette::RWR_0_0_9
+    }
+}
+
 /// Glass-blur percent for backdrop consumers: `blur_px / BLUR_MAX_PX * 100`, capped at 100.
 #[must_use]
 pub fn blur_percent_from_px(blur_px: u16) -> u8 {
@@ -660,6 +672,18 @@ mod appearance_golden_tests {
                 .insert("appearance".into(), SettingValue::Text(value.into()));
         }
         snapshot
+    }
+
+    #[test]
+    fn neutral_palette_tokens_follow_appearance() {
+        assert_eq!(
+            palette_from_settings(&snapshot_with_appearance(None)),
+            Palette::RWR_0_0_9
+        );
+        assert_eq!(
+            palette_from_settings(&snapshot_with_appearance(Some("light"))),
+            Palette::LIGHT
+        );
     }
 
     fn regular_at(appearance: Appearance) -> ResolvedMaterial {

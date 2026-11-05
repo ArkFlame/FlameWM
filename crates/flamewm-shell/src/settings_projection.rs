@@ -172,6 +172,26 @@ pub fn project(
     Ok(())
 }
 
+/// Neutral tokens (`--panel`, `--surface`, `--sidebar`, `--text`, `--muted`) follow the
+/// appearance palette. The shell CSS `:root` keeps the shipped Dark values, so Dark writes are
+/// no-ops; tokens a surface does not compile are skipped.
+fn project_palette_tokens(
+    document: &mut impl UiDocumentAccess,
+    snapshot: &SettingsSnapshot,
+) -> Result<(), String> {
+    let palette = flamewm_ui_core::glass::palette_from_settings(snapshot);
+    for (name, color) in [
+        ("--panel", palette.panel),
+        ("--surface", palette.surface),
+        ("--sidebar", palette.sidebar),
+        ("--text", palette.text),
+        ("--muted", palette.muted),
+    ] {
+        let _ = document.color_variable(name, rgb(color.0, 255));
+    }
+    Ok(())
+}
+
 /// `ui/shell/flamewm.css` accent-derived tokens with the alpha each keeps in its `:root` default.
 const ACCENT_TOKEN_ALPHAS: [(&str, u8); 8] = [
     ("--accent", 0xff),
@@ -189,6 +209,7 @@ fn project_accent_tokens(
     document: &mut impl UiDocumentAccess,
     snapshot: &SettingsSnapshot,
 ) -> Result<(), String> {
+    project_palette_tokens(document, snapshot)?;
     for (name, alpha) in ACCENT_TOKEN_ALPHAS {
         document.color_variable(name, accent_tint(snapshot, alpha))?;
     }
@@ -1078,6 +1099,26 @@ mod tests {
             }
             assert_eq!(doc.variables["--preview-outline"], base);
         }
+    }
+
+    #[test]
+    fn neutral_tokens_project_light_palette_and_dark_defaults() {
+        let mut light = SettingsSnapshot::new(1);
+        light
+            .values
+            .insert("appearance".into(), SettingValue::Text("light".into()));
+        let mut doc = RecordingUiDoc::default();
+        project_accent_tokens(&mut doc, &light).expect("project light tokens");
+        let palette = flamewm_ui_core::glass::palette_from_settings(&light);
+        assert_eq!(doc.variables["--text"], rgb(palette.text.0, 255));
+        assert_eq!(doc.variables["--muted"], rgb(palette.muted.0, 255));
+        assert_eq!(doc.variables["--surface"], rgb(palette.surface.0, 255));
+
+        let mut dark = RecordingUiDoc::default();
+        project_accent_tokens(&mut dark, &SettingsSnapshot::new(1)).expect("project dark tokens");
+        let shipped = flamewm_ui_core::glass::palette_from_settings(&SettingsSnapshot::new(1));
+        assert_eq!(dark.variables["--text"], rgb(shipped.text.0, 255));
+        assert_eq!(dark.variables["--panel"], rgb(shipped.panel.0, 255));
     }
 
     #[test]
