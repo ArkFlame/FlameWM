@@ -2,9 +2,17 @@
 
 use flamewm_ui_x11::UiDocumentAccess;
 
-use super::MEDIA_TITLE_MAX_CHARS;
 use crate::ShellSnapshot;
 
+/// Char budget for the media popup title. The title box is 276px wide with
+/// 10px padding per side (256px usable) at 13px / weight 600; ~7.8px per glyph
+/// gives ~32 glyphs. The render compiler has no text-overflow, so the ellipsis
+/// is applied here. Counted with `chars()`, so multibyte text never splits.
+const MEDIA_TITLE_MAX_CHARS: usize = 32;
+
+/// Returns `title` unchanged when it fits `MEDIA_TITLE_MAX_CHARS`; otherwise
+/// keeps the leading chars, trims trailing whitespace and appends `…` so the
+/// total stays within the budget.
 #[must_use]
 fn fit_media_title(title: &str) -> String {
     if title.chars().count() <= MEDIA_TITLE_MAX_CHARS {
