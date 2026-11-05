@@ -75,7 +75,7 @@ class CpakContracts(unittest.TestCase):
 
     def test_session_supervisor_retains_restart_plans(self):
         src = (ROOT / 'crates/flamewm-wm/src/bin/flamewm-session.rs').read_text()
-        self.assertIn('let wm = role_plans[0].clone()', src)
+        self.assertIn('spawn(role_plans[0].clone())', src)
         self.assertIn('let plan = role_plans[index].clone()', src)
         self.assertIn('SHUTDOWN_SIGNAL => Ok(())', src)
 
