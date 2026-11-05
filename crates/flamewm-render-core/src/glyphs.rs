@@ -213,6 +213,11 @@ pub fn caret_positions(text: &str, size: f32) -> Option<Vec<f32>> {
 #[must_use]
 pub fn char_index_at(text: &str, size: f32, x: f32) -> Option<usize> {
     let origins = caret_positions(text, size)?;
+    Some(nearest_caret(&origins, x))
+}
+
+/// Index of the caret in `origins` nearest to `x`; ties keep the earlier caret.
+fn nearest_caret(origins: &[f32], x: f32) -> usize {
     let mut best = 0usize;
     let mut best_distance = f32::INFINITY;
     for (index, origin) in origins.iter().enumerate() {
@@ -222,7 +227,7 @@ pub fn char_index_at(text: &str, size: f32, x: f32) -> Option<usize> {
             best_distance = distance;
         }
     }
-    Some(best)
+    best
 }
 
 /// Rasterizes `text` at `size` pixels with its baseline at (`pen_x`, `baseline_y`).
@@ -302,8 +307,15 @@ pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<T
 mod tests {
     use super::*;
 
+    /// The font file is walked, read and parsed once per test binary. Every test asks for it, and
+    /// the reference sums ask once per sample string, so an uncached lookup dominated the run.
+    fn test_font() -> Option<&'static Font> {
+        static FONT: std::sync::OnceLock<Option<Font>> = std::sync::OnceLock::new();
+        FONT.get_or_init(find_font).as_ref()
+    }
+
     fn any_font() -> bool {
-        find_font().is_some()
+        test_font().is_some()
     }
 
     #[test]
@@ -363,7 +375,7 @@ mod tests {
     /// Unrounded advance plus kerning, summed straight from the font file, as an independent
     /// reference for the shared pen model.
     fn reference_advance(text: &str, px: f32) -> f32 {
-        let font = find_font().expect("font");
+        let font = test_font().expect("font");
         let chars: Vec<char> = text.chars().collect();
         let mut sum = 0.0f32;
         for (i, &c) in chars.iter().enumerate() {
@@ -446,15 +458,21 @@ mod tests {
         }
         for size in [13.0f32, 16.0] {
             for text in sample_strings() {
+                // Shaping once per string: `char_index_at` re-shapes the whole run on every call,
+                // which made this quadratic in debug builds (~10 s). Every boundary goes through the
+                // nearest-caret search that `char_index_at` uses; the public entry point is checked
+                // at the clamps and at the middle boundary.
                 let carets = caret_positions(&text, size).expect("carets");
                 for (index, &x) in carets.iter().enumerate() {
                     assert_eq!(
-                        char_index_at(&text, size, x),
-                        Some(index),
+                        nearest_caret(&carets, x),
+                        index,
                         "{size}px boundary {index} of {text:?}"
                     );
                 }
                 let end = *carets.last().expect("end");
+                let mid = carets.len() / 2;
+                assert_eq!(char_index_at(&text, size, carets[mid]), Some(mid));
                 assert_eq!(char_index_at(&text, size, end + 500.0), Some(text.chars().count()));
                 assert_eq!(char_index_at(&text, size, -500.0), Some(0));
             }
