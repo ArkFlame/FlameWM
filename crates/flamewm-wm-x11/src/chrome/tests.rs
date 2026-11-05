@@ -173,6 +173,9 @@ fn an_unset_surface_color_uses_the_shared_surface_fallback() {
 #[test]
 fn full_opacity_surface_color_wins_over_titlebar_color_setting() {
     let mut snapshot = SettingsSnapshot::new(1);
+    // A custom surface colour is only honoured when the Surfaces custom switch is on; off means
+    // the theme-follow default (1a5dbb4f).
+    put(&mut snapshot, "surfaceCustom", SettingValue::Boolean(true));
     put(
         &mut snapshot,
         "surfaceColor",

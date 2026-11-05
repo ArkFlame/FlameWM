@@ -278,9 +278,10 @@ mod tests {
 
     #[test]
     fn missing_accent_uses_the_shared_product_default() {
+        let default = flamewm_api::settings::DEFAULT_ACCENT_RGB;
         assert_eq!(
             accent_from_snapshot(&SettingsSnapshot::new(1)),
-            (0x53, 0x9b, 0xff)
+            ((default >> 16) as u8, (default >> 8) as u8, default as u8)
         );
     }
 
@@ -309,7 +310,10 @@ mod tests {
                 "accent",
                 SettingValue::Text("#GG0000".into())
             )])),
-            (0x53, 0x9b, 0xff)
+            {
+                let default = flamewm_api::settings::DEFAULT_ACCENT_RGB;
+                ((default >> 16) as u8, (default >> 8) as u8, default as u8)
+            }
         );
     }
 
