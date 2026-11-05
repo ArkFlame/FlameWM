@@ -1286,7 +1286,6 @@ mod default_measure_tests {
     #[test]
     #[ignore = "needs a live X display (DISPLAY)"]
     fn default_measure_matches_scoped_xft_for_caret_prefixes() {
-        assert!(std::env::var_os("DISPLAY").is_some(), "DISPLAY must name a live X display");
         let (Some(default), Some(scoped_owner)) = (open_default_xft(), open_default_xft()) else {
             panic!("Xft must open on $DISPLAY");
         };
