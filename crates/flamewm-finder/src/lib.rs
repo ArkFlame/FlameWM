@@ -13,7 +13,7 @@ mod palette;
 mod preview;
 mod search;
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::env;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -21,20 +21,21 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use calloop::Interest;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
 use flamewm_dbus_reactor::BusKind;
+use flamewm_reactor::{FdAction, Reactor};
 use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::{
-    UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess, UiKeyEvent,
-    UiKeyPhase, UiWakeDrain, UiWindowConfig, UiWindowRole, X11WindowIdentity, decode_document,
-    run_with_controller_events_role_and_two_readable_fds,
+    RawPressWatch, UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess,
+    UiKeyEvent, UiKeyPhase, UiWakeDrain, UiWindowConfig, UiWindowRole, WindowGeometrySlot,
+    X11WindowIdentity, decode_document,
+    run_with_controller_events_role_with_presses_and_reactor_geometry,
 };
 
 use index::{Entry, Index};
@@ -961,6 +962,11 @@ pub fn run() -> Result<(), String> {
     result
 }
 
+/// The next placeholder deadline when `now` has reached `due`; `None` while the tick is not due.
+fn placeholder_due(now: Instant, due: Instant) -> Option<Instant> {
+    (now >= due).then(|| now + PLACEHOLDER_INTERVAL)
+}
+
 fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), String> {
     let theme = initial_settings();
     let backdrop = window_backdrop(&theme);
@@ -970,7 +976,6 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
     app.paint(&mut document)?;
 
     let (mut index_reader, mut index_writer) = nonblocking_pair()?;
-    let (mut tick_reader, mut tick_writer) = nonblocking_pair()?;
     let (sender, receiver) = mpsc::sync_channel::<Index>(1);
     let walk_cache = cache_file.map(Path::to_path_buf);
     let roots = index::default_roots(env::var_os("HOME"));
@@ -989,30 +994,27 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
         }
     });
 
-    let running = Arc::new(AtomicBool::new(true));
-    let ticking = Arc::clone(&running);
-    std::thread::spawn(move || {
-        while ticking.load(Ordering::Relaxed) {
-            std::thread::sleep(PLACEHOLDER_INTERVAL);
-            if tick_writer
-                .write(&[1])
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::BrokenPipe)
-            {
-                break;
+    // One reactor owns both wake sources: the index-ready descriptor and the placeholder deadline.
+    // The deadline is a reactor timer, so the placeholder adds no thread and no extra wake.
+    let mut reactor = Reactor::new().map_err(|error| error.to_string())?;
+    let placeholder_deadline = reactor.owned_wake_deadline();
+    let mut next_placeholder = Instant::now() + PLACEHOLDER_INTERVAL;
+    placeholder_deadline.set(Some(next_placeholder));
+    let _index_registration = reactor
+        .register_raw_fd_with_action(index_reader.as_raw_fd(), Interest::READ, move |_, _| {
+            match drain(&mut index_reader) {
+                UiWakeDrain::Keep => FdAction::Continue,
+                UiWakeDrain::Retire => FdAction::Remove,
             }
-        }
-    });
+        })
+        .map_err(|error| error.to_string())?;
 
-    let ticked = Rc::new(Cell::new(false));
-    let ticked_drain = Rc::clone(&ticked);
     let window = Rc::new(RefCell::new(app));
     let event_window = Rc::clone(&window);
     let wake_window = Rc::clone(&window);
     let incoming: Rc<RefCell<Receiver<Index>>> = Rc::new(RefCell::new(receiver));
     let wake_incoming = Rc::clone(&incoming);
-    let fd = index_reader.as_raw_fd();
-    let tick_fd = tick_reader.as_raw_fd();
-    let outcome = run_with_controller_events_role_and_two_readable_fds(
+    let outcome = run_with_controller_events_role_with_presses_and_reactor_geometry(
         document,
         UiWindowConfig {
             width: WIDTH,
@@ -1026,15 +1028,10 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
             }),
         },
         UiWindowRole::Normal,
-        fd,
-        move || drain(&mut index_reader),
-        Some((
-            tick_fd,
-            Box::new(move || {
-                ticked_drain.set(true);
-                drain(&mut tick_reader)
-            }) as Box<dyn FnMut() -> UiWakeDrain>,
-        )),
+        &mut reactor,
+        WindowGeometrySlot::default(),
+        RawPressWatch::default(),
+        |_, _| Ok(()),
         move |event, doc| {
             let mut app = event_window.borrow_mut();
             match event {
@@ -1052,9 +1049,13 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
                 app.accept_index(fresh);
                 changed = true;
             }
-            if ticked.replace(false) && app.query.is_empty() {
-                app.placeholder = (app.placeholder + 1) % PLACEHOLDERS.len();
-                changed = true;
+            if let Some(next) = placeholder_due(Instant::now(), next_placeholder) {
+                next_placeholder = next;
+                placeholder_deadline.set(Some(next));
+                if app.query.is_empty() {
+                    app.placeholder = (app.placeholder + 1) % PLACEHOLDERS.len();
+                    changed = true;
+                }
             }
             if changed {
                 app.paint(doc)?;
@@ -1062,12 +1063,22 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
             Ok(())
         },
     );
-    running.store(false, Ordering::Relaxed);
     outcome
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn placeholder_tick_fires_once_per_interval_from_the_deadline() {
+        let start = Instant::now();
+        let due = start + PLACEHOLDER_INTERVAL;
+        assert_eq!(super::placeholder_due(start, due), None);
+        assert_eq!(
+            super::placeholder_due(due, due),
+            Some(due + PLACEHOLDER_INTERVAL)
+        );
+    }
+
     #[test]
     fn palette_accent_follows_the_settings_accent_key() {
         let mut theme = SettingsSnapshot::new(1);

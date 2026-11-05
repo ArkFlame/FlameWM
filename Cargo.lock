@@ -782,10 +782,12 @@ dependencies = [
 name = "flamewm-finder"
 version = "0.1.6"
 dependencies = [
+ "calloop 0.14.4",
  "flamewm-api",
  "flamewm-control-core",
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",
+ "flamewm-reactor",
  "flamewm-render-compiler",
  "flamewm-ui-core",
  "flamewm-ui-x11",

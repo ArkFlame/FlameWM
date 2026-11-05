@@ -302,3 +302,48 @@ steady-path code is identical). Live-app frame timing was not run.
 | `cargo check --workspace --all-targets` | 0 |
 
 Logs: `/run/media/linsaftw/SDD/swarm-logs/coder-archiver-test.log`, `coder-guard.log`, `coder-check-ws.log`.
+
+## Finder wakes and imageviewer prefetch (2026-11-05, coder pass, worktree `wt-finder-wakes`)
+
+### finder: idle wakes halved (changed)
+
+- Measured with `scripts/perf/app_wakes.sh` on a private `Xvfb :91`, empty `HOME` and `XDG_RUNTIME_DIR`/`XDG_CACHE_HOME` in scratch. Steady state (30 s windows, `/proc/<pid>/task/*/status` voluntary switches):
+  - before (HEAD debug build): 2 threads. Main 6 + placeholder tick thread 6 = 12 wakes / 30 s = 0.40 wakes/s.
+  - after: 1 thread, 6 wakes / 30 s = 0.20 wakes/s (`app_wakes.sh 30`: vol/s 0.23 in the final run).
+- Source of the wakes: `flamewm-finder` `PLACEHOLDER_INTERVAL` (5 s) tick thread, written to a pipe that the UI reactor drained. `strace -f -tt` (own child process, 14 s) showed only the 5 s `clock_nanosleep` → `sendto` → `epoll_pwait` cycle; no other periodic source in steady state.
+- Change: the tick is now a deadline on the finder's own `flamewm_reactor::Reactor` (`owned_wake_deadline`), serviced in the existing wake callback. Tick thread, pipe and `AtomicBool` removed. The placeholder rotation is unchanged (same 5 s, same paint rule, empty query only).
+- Not reproduced: the ~1 wake/s seen in the live Xephyr. Steady private-display measurement is 0.2–0.4 wakes/s. On a populated `HOME` (60 dirs × 300 files) the first 10 s after launch measured 0.80 voluntary/s (index walk and startup), then 0.45/s at 25 s. Not measured on the live Xephyr with its real home.
+- Not zero: the 5 s placeholder rotation is a timer by design. Literal zero-wake idle needs the rotation to stop when the window is hidden or unfocused. That is a behaviour change and was not made.
+- Test: `placeholder_tick_fires_once_per_interval_from_the_deadline` (`cargo test -p flamewm-finder`).
+
+### imageviewer: stale prefetch no longer blocks a Load (changed)
+
+- Before: one worker thread ran `Load`, `View` and `Prefetch` in turn. A `Load` that arrived while a prefetch decode was running waited for that whole decode. Stale neighbour prefetches also stayed queued after a navigation.
+- After: prefetches run on their own thread (`flamewm-imageviewer-prefetch`, spawned per viewer). It blocks on a condvar while idle (no wakes). `Load` clears queued prefetches (`Worker::activate`). A `Load` waits only for a decode of the same image it needs (`Worker::image`, no double decode).
+- Decoders are monolithic library calls (`flamewm-image-core` `decode_bytes`), so an in-flight decode is not interruptible. The change removes the wait rather than cancelling the decode. A stale decode runs to completion in the background; its result still enters the cache.
+- Measured (fixtures in `/run/media/linsaftw/SDD/scratch-finder-wakes/fixtures`: 6000×4000 PNG `big2.png` as prefetch, JPEG `big.jpg` as the Load). `Job::Prefetch` then `Job::Load` through `decode::run`, 50 ms apart, `--profile fast` (opt-level 1, no LTO), 3 runs each:
+  - before (HEAD `decode.rs`): Load → Loaded 1.006 s, 1.055 s, 1.147 s.
+  - after: 0.488 s, 0.492 s, 0.502 s.
+  - A solo decode of the same JPEG takes 0.43–0.46 s, so the after path is one decode with no wait. Latency about 2.1× lower in this scenario.
+- Cost: a Load and a prefetch can decode at the same time, so peak RAM rises by about one decoded image (6000×4000 RGBA is about 96 MB) for the overlap only. Not measured as RSS.
+- Debug-profile timing (`dev`, deps unoptimised) was 3.5–6.6 s per 24 MP decode. Not used for claims.
+- Tests (`cargo test -p flamewm-imageviewer`, 18 passed, incl. 3 new):
+  - `load_does_not_wait_behind_a_stale_prefetch_and_queued_stale_prefetches_are_dropped`: the Load returns while the stale decode is held open; the queued stale path is never decoded.
+  - `load_of_the_image_being_prefetched_waits_and_decodes_it_once`: the Load waits for the in-flight prefetch and decodes once.
+  - `cache_keeps_the_active_image_when_prefetching_past_capacity` (adapted to shared state).
+- Not measured: the live-window end-to-end latency (no live viewer run), release-profile numbers, RSS during overlap, and any gain for archives or other formats (only JPEG and PNG fixtures).
+
+### Checks (worktree `/run/media/linsaftw/SDD/wt-finder-wakes`, `CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1`)
+
+| command | exit |
+|---|---|
+| `cargo test -p flamewm-finder -p flamewm-imageviewer` | 0 (48 finder + 18 viewer passed; 3 new/adapted viewer tests) |
+| `cargo build -p flamewm-finder` | 0 |
+| `cargo check --workspace --all-targets` | 0 (one pre-existing `flamewm-explorer` `unused import: UiColor` warning, untouched) |
+| `python3 -I tools/architecture_guard.py` | 0 (77 ratified violations, unchanged) |
+| `python3 -I -m unittest discover -s tools -q` | 0 |
+| `rustfmt --edition 2024 --check` on the two changed files | 0 after formatting |
+
+Scratch logs: `/run/media/linsaftw/SDD/scratch-finder-wakes/` (`final-tests.log`, `check-ws2.log`, `guard.log`, `unittest.log`, `lat-old.log`, `lat-new.log`, `strace1.txt`).
+
+Risks: `Cargo.lock` gains `flamewm-finder` → `calloop`, `flamewm-reactor` edges. Finder now drives its own reactor (same pattern as the desktop and shell callers). Viewer prefetch threads are new per window.

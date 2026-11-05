@@ -7,8 +7,8 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use flamewm_image_core::scale::{ScaleFilter, scale_rgba};
 use flamewm_image_core::{ImageSourceFormat, RgbaImage, decode_bytes};
@@ -104,24 +104,42 @@ pub fn crop(base: &RgbaImage, display: (u32, u32), rect: Rect) -> Vec<u8> {
     out
 }
 
+/// Decodes one file. Injected so tests can hold a decode open.
+pub type Decode = fn(&Path) -> Result<RgbaImage, String>;
+
+/// Decoded images and the prefetch queue, shared by the view worker and its prefetch thread.
 #[derive(Default)]
-pub struct Worker {
+struct Shared {
     /// Most recently used last.
     cache: Vec<(PathBuf, Arc<RgbaImage>)>,
     active: Option<PathBuf>,
-    /// The source scaled to a zoom below 100%, keyed by path and display size.
-    reduced: Option<(PathBuf, (u32, u32), Arc<RgbaImage>)>,
+    /// Neighbour prefetches not started yet. A `Load` drops them: they belong to the old image.
+    queued: VecDeque<PathBuf>,
+    /// The prefetch decode in progress, if any.
+    decoding: Option<PathBuf>,
+    /// Set when the worker drops, so the prefetch thread exits.
+    closed: bool,
 }
 
-impl Worker {
-    fn image(&mut self, path: &Path) -> Result<Arc<RgbaImage>, String> {
-        if let Some(index) = self.cache.iter().position(|(cached, _)| cached == path) {
-            let entry = self.cache.remove(index);
-            let image = Arc::clone(&entry.1);
-            self.cache.push(entry);
-            return Ok(image);
+type SharedState = Arc<(Mutex<Shared>, Condvar)>;
+
+fn lock(state: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Shared {
+    fn touch(&mut self, path: &Path) -> Option<Arc<RgbaImage>> {
+        let index = self.cache.iter().position(|(cached, _)| cached == path)?;
+        let entry = self.cache.remove(index);
+        let image = Arc::clone(&entry.1);
+        self.cache.push(entry);
+        Some(image)
+    }
+
+    fn insert(&mut self, path: &Path, image: Arc<RgbaImage>) {
+        if self.cache.iter().any(|(cached, _)| cached == path) {
+            return;
         }
-        let image = Arc::new(decode_file(path)?);
         while self.cache.len() >= CACHE_SLOTS {
             let victim = self
                 .cache
@@ -134,7 +152,64 @@ impl Worker {
                 None => break,
             }
         }
-        self.cache.push((path.to_path_buf(), Arc::clone(&image)));
+        self.cache.push((path.to_path_buf(), image));
+    }
+}
+
+pub struct Worker {
+    shared: SharedState,
+    decode: Decode,
+    /// The source scaled to a zoom below 100%, keyed by path and display size.
+    reduced: Option<(PathBuf, (u32, u32), Arc<RgbaImage>)>,
+}
+
+impl Worker {
+    /// Starts the prefetch thread. It blocks on the queue while idle, so an idle viewer does no work.
+    #[must_use]
+    pub fn new(decode: Decode) -> Self {
+        let shared: SharedState = Arc::new((Mutex::new(Shared::default()), Condvar::new()));
+        let prefetch_state = Arc::clone(&shared);
+        // Without the thread, prefetch is skipped: a neighbour is then decoded when it is opened.
+        let _ = std::thread::Builder::new()
+            .name("flamewm-imageviewer-prefetch".into())
+            .spawn(move || prefetch_loop(&prefetch_state, decode));
+        Self {
+            shared,
+            decode,
+            reduced: None,
+        }
+    }
+
+    /// Makes `path` the active image and drops the prefetches queued for the previous one.
+    fn activate(&mut self, path: &Path) {
+        let (state, _) = &*self.shared;
+        let mut state = lock(state);
+        state.active = Some(path.to_path_buf());
+        state.queued.clear();
+    }
+
+    fn prefetch(&mut self, path: PathBuf) {
+        let (state, ready) = &*self.shared;
+        let mut state = lock(state);
+        if !state.queued.contains(&path) {
+            state.queued.push_back(path);
+            ready.notify_all();
+        }
+    }
+
+    fn image(&mut self, path: &Path) -> Result<Arc<RgbaImage>, String> {
+        let (state, ready) = &*self.shared;
+        let mut state = lock(state);
+        // The prefetch thread is decoding this image: wait for it instead of decoding it twice.
+        while state.decoding.as_deref() == Some(path) {
+            state = ready.wait(state).unwrap_or_else(PoisonError::into_inner);
+        }
+        if let Some(image) = state.touch(path) {
+            return Ok(image);
+        }
+        drop(state);
+        let image = Arc::new((self.decode)(path)?);
+        lock(&self.shared.0).insert(path, Arc::clone(&image));
         Ok(image)
     }
 
@@ -156,14 +231,52 @@ impl Worker {
     }
 }
 
+impl Drop for Worker {
+    fn drop(&mut self) {
+        let (state, ready) = &*self.shared;
+        lock(state).closed = true;
+        ready.notify_all();
+    }
+}
+
+/// Prefetch thread body. A decode runs to completion once started, so a `Load` never waits for a
+/// queued prefetch; it waits only for the decode of the very image it asks for.
+fn prefetch_loop(shared: &SharedState, decode: Decode) {
+    let (state, ready) = &**shared;
+    loop {
+        let mut guard = lock(state);
+        let path = loop {
+            if guard.closed {
+                return;
+            }
+            if let Some(path) = guard.queued.pop_front() {
+                break path;
+            }
+            guard = ready.wait(guard).unwrap_or_else(PoisonError::into_inner);
+        };
+        if guard.cache.iter().any(|(cached, _)| *cached == path) {
+            continue;
+        }
+        guard.decoding = Some(path.clone());
+        drop(guard);
+        // A prefetch that fails is silent: the image is simply decoded again when opened.
+        let decoded = decode(&path);
+        let mut guard = lock(state);
+        guard.decoding = None;
+        if let Ok(image) = decoded {
+            guard.insert(&path, Arc::new(image));
+        }
+        ready.notify_all();
+    }
+}
+
 /// Worker loop. Returns when the UI side drops its sender.
 pub fn run(jobs: &Receiver<Job>, replies: &Sender<Reply>, wake: &mut UnixStream) {
-    let mut worker = Worker::default();
+    let mut worker = Worker::new(decode_file);
     let mut loads: VecDeque<Job> = VecDeque::new();
     let mut view: Option<Job> = None;
-    let mut prefetch: VecDeque<PathBuf> = VecDeque::new();
     loop {
-        let nothing_queued = loads.is_empty() && view.is_none() && prefetch.is_empty();
+        let nothing_queued = loads.is_empty() && view.is_none();
         let mut next = if nothing_queued {
             match jobs.recv() {
                 Ok(job) => Some(job),
@@ -181,6 +294,9 @@ pub fn run(jobs: &Receiver<Job>, replies: &Sender<Reply>, wake: &mut UnixStream)
                     Err(TryRecvError::Disconnected) => return,
                 },
             };
+            if let Job::Load { path, .. } = &job {
+                worker.activate(path);
+            }
             match job {
                 Job::Load { .. } => {
                     // A new active image makes any queued viewport request for the old one stale.
@@ -188,15 +304,10 @@ pub fn run(jobs: &Receiver<Job>, replies: &Sender<Reply>, wake: &mut UnixStream)
                     loads.push_back(job);
                 }
                 Job::View { .. } => view = Some(job),
-                Job::Prefetch { path } => {
-                    if !prefetch.contains(&path) {
-                        prefetch.push_back(path);
-                    }
-                }
+                Job::Prefetch { path } => worker.prefetch(path),
             }
         }
         if let Some(Job::Load { generation, path }) = loads.pop_front() {
-            worker.active = Some(path.clone());
             let reply = match worker.image(&path) {
                 Ok(image) => Reply::Loaded {
                     generation,
@@ -224,9 +335,6 @@ pub fn run(jobs: &Receiver<Job>, replies: &Sender<Reply>, wake: &mut UnixStream)
                 Err(message) => Reply::ViewFailed { seq, message },
             };
             send(replies, wake, reply);
-        } else if let Some(path) = prefetch.pop_front() {
-            // A prefetch that fails is silent: the image is simply decoded again when opened.
-            let _ = worker.image(&path);
         }
     }
 }
@@ -241,6 +349,9 @@ fn send(replies: &Sender<Reply>, wake: &mut UnixStream, reply: Reply) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
 
     fn fixture(name: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -321,7 +432,7 @@ mod tests {
 
     #[test]
     fn zoomed_out_view_reduces_then_crops_exact_size() {
-        let mut worker = Worker::default();
+        let mut worker = Worker::new(decode_file);
         let path = fixture("baseline-16x16.jpg");
         let out = worker
             .view(
@@ -341,7 +452,7 @@ mod tests {
 
     #[test]
     fn cache_keeps_the_active_image_when_prefetching_past_capacity() {
-        let mut worker = Worker::default();
+        let mut worker = Worker::new(decode_file);
         // CMYK and progressive JPEGs are unsupported, so use four generated 1x1 PPM files.
         let dir = std::env::temp_dir().join(format!("imgv-cache-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
@@ -356,12 +467,132 @@ mod tests {
                 path
             })
             .collect();
-        worker.active = Some(paths[0].clone());
+        worker.activate(&paths[0]);
         for path in &paths {
             worker.image(path).expect("generated ppm decodes");
         }
-        assert!(worker.cache.len() <= CACHE_SLOTS);
-        assert!(worker.cache.iter().any(|(p, _)| *p == paths[0]));
+        let state = lock(&worker.shared.0);
+        assert!(state.cache.len() <= CACHE_SLOTS);
+        assert!(state.cache.iter().any(|(p, _)| *p == paths[0]));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    static GATE_ENTERED: AtomicBool = AtomicBool::new(false);
+    static GATE_OPEN: AtomicBool = AtomicBool::new(false);
+    static HELD_ENTERED: AtomicBool = AtomicBool::new(false);
+    static HELD_OPEN: AtomicBool = AtomicBool::new(false);
+    static HELD_DECODES: AtomicUsize = AtomicUsize::new(0);
+    static STALE_DECODES: AtomicUsize = AtomicUsize::new(0);
+
+    /// Decodes normally, but `gate.ppm` and `held.ppm` stay in progress until their gate opens.
+    fn gated_decode(path: &Path) -> Result<RgbaImage, String> {
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some("gate.ppm") => {
+                GATE_ENTERED.store(true, Ordering::SeqCst);
+                wait_for(&GATE_OPEN);
+            }
+            Some("held.ppm") => {
+                HELD_ENTERED.store(true, Ordering::SeqCst);
+                wait_for(&HELD_OPEN);
+                HELD_DECODES.fetch_add(1, Ordering::SeqCst);
+            }
+            Some("stale.ppm") => {
+                STALE_DECODES.fetch_add(1, Ordering::SeqCst);
+            }
+            _ => {}
+        }
+        decode_file(path)
+    }
+
+    fn wait_for(flag: &AtomicBool) {
+        let start = Instant::now();
+        while !flag.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn write_ppm(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, b"P6\n1 1\n255\n\x01\x02\x03").unwrap();
+        path
+    }
+
+    fn wait_until_idle(shared: &SharedState) {
+        let start = Instant::now();
+        while lock(&shared.0).decoding.is_some() && start.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn load_does_not_wait_behind_a_stale_prefetch_and_queued_stale_prefetches_are_dropped() {
+        let dir = std::env::temp_dir().join(format!("imgv-stale-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let (gate, stale, fast) = (
+            write_ppm(&dir, "gate.ppm"),
+            write_ppm(&dir, "stale.ppm"),
+            write_ppm(&dir, "fast.ppm"),
+        );
+        let mut worker = Worker::new(gated_decode);
+        let shared = Arc::clone(&worker.shared);
+        worker.activate(&gate);
+        worker.prefetch(gate.clone());
+        wait_for(&GATE_ENTERED);
+        assert!(GATE_ENTERED.load(Ordering::SeqCst), "gate prefetch started");
+        // Queued behind the held decode, so the next Load must drop it before it starts.
+        worker.prefetch(stale.clone());
+        worker.activate(&fast);
+        // The Load returns while the stale decode is still held open.
+        let (tx, rx) = mpsc::channel();
+        let loader = std::thread::spawn(move || {
+            let ok = worker.image(&fast).is_ok();
+            let _ = tx.send(ok);
+        });
+        let loaded = rx.recv_timeout(Duration::from_secs(5));
+        assert_eq!(
+            loaded,
+            Ok(true),
+            "Load finished without waiting for the stale decode"
+        );
+        assert!(!GATE_OPEN.load(Ordering::SeqCst));
+        GATE_OPEN.store(true, Ordering::SeqCst);
+        loader.join().unwrap();
+        wait_until_idle(&shared);
+        assert_eq!(
+            STALE_DECODES.load(Ordering::SeqCst),
+            0,
+            "stale prefetch was dropped"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_of_the_image_being_prefetched_waits_and_decodes_it_once() {
+        let dir = std::env::temp_dir().join(format!("imgv-held-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let held = write_ppm(&dir, "held.ppm");
+        let mut worker = Worker::new(gated_decode);
+        let shared = Arc::clone(&worker.shared);
+        worker.activate(&held);
+        worker.prefetch(held.clone());
+        wait_for(&HELD_ENTERED);
+        let loader_path = held.clone();
+        let (tx, rx) = mpsc::channel();
+        let loader = std::thread::spawn(move || {
+            let ok = worker.image(&loader_path).is_ok();
+            let _ = tx.send(ok);
+        });
+        // Still waiting on the in-flight prefetch: nothing is sent yet.
+        assert!(rx.recv_timeout(Duration::from_millis(150)).is_err());
+        HELD_OPEN.store(true, Ordering::SeqCst);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
+        loader.join().unwrap();
+        wait_until_idle(&shared);
+        assert_eq!(
+            HELD_DECODES.load(Ordering::SeqCst),
+            1,
+            "decoded exactly once"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }
