@@ -658,6 +658,24 @@ fn normalize_weight(weight: u16) -> u16 {
 
 /// Pure estimate backing [`XftBackend::measure_text`]: 0.58em per char,
 /// 1.30em line height. Shared so the fallback path is unit-testable.
+/// Runs `f` with layout widths measured by `xft` (`XftTextExtentsUtf8` at the requested weight).
+/// With no Xft backend, layout falls back to the render-core model. Each call measures only the
+/// text layout asks for; nothing is cached across frames, so the cost scales with layout work.
+pub(crate) fn scoped_text_measure<R>(xft: Option<&mut XftBackend>, f: impl FnOnce() -> R) -> R {
+    match xft {
+        None => f(),
+        Some(backend) => {
+            let cell = std::cell::RefCell::new(backend);
+            let measure = |text: &str, size: f32, weight: u16| {
+                // SAFETY: the backend's display, fonts and draw surface live as long as the
+                // surface, and `f` runs strictly inside this scope.
+                unsafe { cell.borrow_mut().measure_text(size, weight, text).0 }
+            };
+            flamewm_render_core::text_layout::with_measure(&measure, f)
+        }
+    }
+}
+
 pub(crate) fn xft_measure_estimate(text: &str, size: f32) -> (f32, f32) {
     let height = (size.max(1.0) * 1.30).round();
     ((text.chars().count() as f32 * size * 0.58).round(), height)
@@ -677,6 +695,38 @@ pub(crate) fn xrender_color_for(color: Color) -> (u16, u16, u16, u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Per-call cost of `XftBackend::measure_text` (XftTextExtentsUtf8) on a 40-char line.
+    /// Run: `FLAMEWM_TEST_DISPLAY=:0 cargo test -p flamewm-render-x11 xft_text_extents_per_call_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "bench: needs FLAMEWM_TEST_DISPLAY"]
+    fn xft_text_extents_per_call_bench() {
+        use crate::xlib::{XDefaultColormap, XDefaultScreen, XDefaultVisual, XOpenDisplay, XRootWindow};
+        let Some(name) = std::env::var_os("FLAMEWM_TEST_DISPLAY") else {
+            return;
+        };
+        let name = std::ffi::CString::new(name.to_string_lossy().as_bytes()).unwrap();
+        unsafe {
+            let display = XOpenDisplay(name.as_ptr());
+            assert!(!display.is_null(), "XOpenDisplay failed");
+            let screen = XDefaultScreen(display);
+            let root = XRootWindow(display, screen);
+            let visual = XDefaultVisual(display, screen);
+            let colormap = XDefaultColormap(display, screen);
+            let mut xft = XftBackend::new(display, screen, root, visual, colormap).expect("xft");
+            let line = "Wi AVAST, Tofu: ilm 日本 Wa ff W./ VAT To ilm AVocado";
+            const CALLS: u32 = 20_000;
+            let started = std::time::Instant::now();
+            let mut sink = 0.0f32;
+            for _ in 0..CALLS {
+                sink += xft.measure_text(13.0, 400, std::hint::black_box(line)).0;
+            }
+            let per_call = started.elapsed().as_nanos() as f64 / f64::from(CALLS);
+            std::hint::black_box(sink);
+            eprintln!("XftTextExtentsUtf8 bench: {per_call:.0} ns/call over {CALLS} calls");
+            assert!(per_call.is_finite());
+        }
+    }
 
     #[test]
     fn xglyph_info_matches_xrender_abi() {

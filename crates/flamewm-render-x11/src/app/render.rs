@@ -399,13 +399,14 @@ impl X11App {
         let backdrop_unchanged = self.window_backdrop_unchanged();
         let mut plan = RedrawPlan::Full;
         if !cache_valid {
+            self.ensure_xft();
             let layout = self.layout.as_mut().expect("layout retained above");
-            let fresh = super::scroll::build_scrolled_paint_cached(
-                document,
-                layout,
-                self.interaction,
-                &mut self.paint_nodes,
-            );
+            // Paint text widths (glyph runs and layout) come from the same Xft measure as layout.
+            let interaction = self.interaction;
+            let paint_nodes = &mut self.paint_nodes;
+            let fresh = super::xft::scoped_text_measure(self.xft.as_mut(), || {
+                super::scroll::build_scrolled_paint_cached(document, layout, interaction, paint_nodes)
+            });
             let previous = self.cached_paint.take();
             plan = plan_region_paint(RegionInput {
                 old: previous.as_ref().map(|cached| cached.commands.as_slice()),

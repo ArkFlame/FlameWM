@@ -681,10 +681,15 @@ impl SurfaceRuntime {
         let (max_logical_w, max_logical_h) =
             device_constraint_to_logical(max_device_w, max_device_h, scale)
                 .map_err(UiBackendError::Document)?;
-        let document = self.document_mut(surface)?;
-        let scale = document.ui_scale();
-        let (width, height) =
-            measure(document, max_logical_w, max_logical_h).map_err(UiBackendError::Document)?;
+        // Layout widths come from the surface's Xft backend, the same measure its paint uses.
+        let (scale, width, height) = self
+            .controller
+            .with_document_text_measure(surface.0, |document| {
+                let scale = document.ui_scale();
+                measure(document, max_logical_w, max_logical_h).map(|(w, h)| (scale, w, h))
+            })
+            .map_err(UiBackendError::Document)?
+            .map_err(UiBackendError::Document)?;
         logical_intrinsic_to_device(width, height, scale, max_device_w, max_device_h)
             .map_err(UiBackendError::Document)
     }

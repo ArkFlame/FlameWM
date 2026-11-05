@@ -905,6 +905,19 @@ impl SurfaceController {
         Ok(&mut self.instance_mut(id)?.document)
     }
 
+    /// Runs `f` with the surface's document while layout widths come from that surface's Xft
+    /// backend, so layout measures exactly what the surface paints. Loads Xft on first use.
+    pub fn with_document_text_measure<R>(
+        &mut self,
+        id: SurfaceId,
+        f: impl FnOnce(&mut RuntimeDocument) -> R,
+    ) -> Result<R, String> {
+        let instance = self.instance_mut(id)?;
+        instance.app.ensure_xft();
+        let SurfaceInstance { app, document, .. } = instance;
+        Ok(super::xft::scoped_text_measure(app.xft.as_mut(), || f(document)))
+    }
+
     /// Native root-space origin of a surface; (0, 0) when the surface is unknown.
     fn origin_of(&self, id: SurfaceId) -> (i32, i32) {
         self.surfaces
