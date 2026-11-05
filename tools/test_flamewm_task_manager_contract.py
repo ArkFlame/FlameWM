@@ -33,12 +33,14 @@ class TaskManagerSourceContract(unittest.TestCase):
             self.assertIn(action, root.actions)
     def test_shared_surfaces_and_compile_error_fields(self):
         ctx = (ROOT / "crates/flamewm-ui-core/src/context_menu.rs").read_text()
-        skin = (ROOT / "crates/flamewm-skin/src/recipes/decoration.rs").read_text()
+        # Border tokens moved from skin recipes to ui-core SurfaceFill (rgb/alpha/width).
+        surface = (ROOT / "crates/flamewm-ui-core/src/surface.rs").read_text()
         app = (ROOT / "crates/flamewm-task-manager/src/lib.rs").read_text()
         self.assertIn("surface_stroke", ctx)
-        self.assertIn("pub surface_border_rgb", skin)
-        self.assertIn("pub surface_border_alpha", skin)
-        self.assertIn("project_surface_border", app)
+        self.assertIn("pub fn surface_stroke(", surface)
+        self.assertIn("pub rgb: u32,", surface)
+        self.assertIn("pub alpha: u8,", surface)
+        self.assertIn("project_surface_outline", app)
     def test_priority_and_identity_are_from_procfs(self):
         model = (ROOT / "crates/flamewm-task-manager/src/model.rs").read_text()
         self.assertIn("priority: fields[15].parse()", model)
