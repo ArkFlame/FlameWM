@@ -164,8 +164,35 @@ fn parse_text_shadow(value: &str, variables: &HashMap<String, u16>) -> Result<Op
     }))
 }
 
+/// Built-in accent tokens, seeded before any sheet `:root` so a sheet can override them by name.
+/// The accent tints are derived once here instead of repeated as literals in every sheet. Live
+/// Settings overwrite `--accent` at runtime; the tints keep their default alpha steps.
+fn builtin_color_tokens() -> [(&'static str, Color); 9] {
+    let accent = flamewm_api::settings::DEFAULT_ACCENT_RGB;
+    let tint = |alpha: u8| Color {
+        r: (accent >> 16) as u8,
+        g: (accent >> 8) as u8,
+        b: accent as u8,
+        a: alpha,
+    };
+    [
+        ("--accent", tint(0xff)),
+        ("--accent-soft", tint(0x38)),
+        ("--accent-strong", tint(0xdd)),
+        ("--preview-outline", tint(0xff)),
+        ("--snap-fill", tint(0x33)),
+        ("--desktop-hover", tint(0x26)),
+        ("--desktop-hover-border", tint(0x4d)),
+        ("--desktop-selected", tint(0x47)),
+        ("--desktop-selected-border", tint(0xa6)),
+    ]
+}
+
 fn collect_variables(rules: &[Rule]) -> Result<(Vec<ColorVariable>, HashMap<String, u16>), String> {
-    let mut values: BTreeMap<String, Color> = BTreeMap::new();
+    let mut values: BTreeMap<String, Color> = builtin_color_tokens()
+        .into_iter()
+        .map(|(name, color)| (name.to_string(), color))
+        .collect();
     for rule in rules {
         if rule.selector.state != PseudoState::Root {
             continue;
@@ -1004,7 +1031,10 @@ mod tests {
 
     #[test]
     fn compiles_color_variable() {
-        assert_eq!(interactive_fixture().document.variables.len(), 1);
+        let variables = interactive_fixture().document.variables;
+        // Built-in tokens are always present; the sheet's `--accent` must not duplicate the built-in.
+        assert_eq!(variables.iter().filter(|v| v.name == "--accent").count(), 1);
+        assert_eq!(variables.iter().filter(|v| v.name == "--accent").next().unwrap().default, Color::rgb(0xef, 0x44, 0x44));
     }
 
     #[test]
@@ -1095,6 +1125,36 @@ mod tests {
         let plain = style_of(&result, "plain").text_shadow.expect("token applies");
         assert_eq!((plain.offset_x, plain.offset_y, plain.blur_radius), (1.0, 2.0, 0.0));
         assert_eq!(style_of(&result, "off").text_shadow, None);
+    }
+
+    #[test]
+    fn builtin_accent_tokens_resolve_without_root_and_root_overrides_them() {
+        let accent = flamewm_api::settings::DEFAULT_ACCENT_RGB;
+        let (r, g, b) = ((accent >> 16) as u8, (accent >> 8) as u8, accent as u8);
+        // Resolve a node's background to the default value of the token it references.
+        let token_default = |result: &CompileOutput, id: &str| {
+            let ColorValue::Variable(index) = style_of(result, id).background else {
+                panic!("#{id} must reference a token");
+            };
+            result.document.variables[index as usize].default
+        };
+        let css = "#a { background: var(--accent); } #b { background: var(--accent-soft); }";
+        let result = compile_str(
+            r#"<body><div id="a">x</div><div id="b">y</div></body>"#,
+            css,
+            CompileOptions::default(),
+        )
+        .expect("builtin tokens must compile without a :root declaration");
+        assert_eq!(token_default(&result, "a"), Color { r, g, b, a: 255 });
+        assert_eq!(token_default(&result, "b"), Color { r, g, b, a: 0x38 });
+        // A sheet `:root` declaration overrides the built-in default by name.
+        let overridden = compile_str(
+            r#"<body><div id="a">x</div></body>"#,
+            &format!("{css} :root {{ --accent: #ef4444; }}"),
+            CompileOptions::default(),
+        )
+        .expect("sheet override must compile");
+        assert_eq!(token_default(&overridden, "a"), Color::rgb(0xef, 0x44, 0x44));
     }
 
     #[test]

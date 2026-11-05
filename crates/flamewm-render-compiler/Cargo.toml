@@ -8,6 +8,7 @@ rust-version.workspace = true
 description = "Build-time HTML/CSS compiler for FlameWM Render"
 
 [dependencies]
+flamewm-api = { path = "../flamewm-api" }
 flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-render-core = { path = "../flamewm-render-core" }
 

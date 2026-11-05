@@ -1,4 +1,4 @@
-:root { --rim:#ffffff7f; --accent:#539bff; --accent-soft:#539bff38; --accent-strong:#539bffdd; --desktop-hover:#539bff26; --desktop-hover-border:#539bff4d; --desktop-selected:#539bff47; --desktop-selected-border:#539bffa6; --snap-fill:#539bff33; --preview-outline:#539bff; --glass-slot-outline:#ffffff1a; }
+:root { --rim:#ffffff7f; --glass-slot-outline:#ffffff1a; }
 html, body { width:100%; height:100%; margin:0; overflow:hidden; }
 body { position:relative; background:#000000; color:#f1f2f3; font-size:13px; }
 .wallpaper { position:absolute; left:0px; top:0px; width:100%; height:100%; }

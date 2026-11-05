@@ -880,6 +880,7 @@ version = "0.1.5"
 name = "flamewm-render-compiler"
 version = "0.1.5"
 dependencies = [
+ "flamewm-api",
  "flamewm-image-core",
  "flamewm-render-core",
 ]

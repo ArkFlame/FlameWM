@@ -1,4 +1,4 @@
-:root { --rim:#ffffff7f; --accent:#539bff; --accent-soft:#539bff38; --accent-strong:#539bffdd; --desktop-hover:#539bff26; --desktop-hover-border:#539bff4d; --desktop-selected:#539bff47; --desktop-selected-border:#539bffa6; --snap-fill:#539bff33; --preview-outline:#539bff; --sticky-bg:#ffe56b; --sticky-fg:#171717; --desktop:#000000; --panel:#1b1e20; --surface:#202326; --sidebar:#1b1e20; --text:#f1f2f3; --muted:#aeb4bb; --hover-fill:#ffffff40; }
+:root { --rim:#ffffff7f; --sticky-bg:#ffe56b; --sticky-fg:#171717; --desktop:#000000; --panel:#1b1e20; --surface:#202326; --sidebar:#1b1e20; --text:#f1f2f3; --muted:#aeb4bb; --hover-fill:#ffffff40; }
 html { width:100%; height:100%; }
 body { width:100%; height:100%; margin:0; background:transparent; color:var(--text); font-size:13px; position:relative; overflow:hidden; }
 .panel-body { background:transparent; }

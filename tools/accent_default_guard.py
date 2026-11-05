@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail when the default accent literal (#539BFF) is hardcoded outside its owners.
 
-The default lives once in `flamewm-platform` settings. The files below are the only
+The default lives once in `flamewm-api` settings. The files below are the only
 other copies allowed: per-app fallbacks used when the snapshot lacks `accent`, and
 CSS `:root` token defaults that the live Settings projection overwrites. Any other
 occurrence is a hardcoded accent that would ignore the Settings key.
@@ -17,6 +17,7 @@ SCANNED_SUFFIXES = (".rs", ".css", ".html", ".toml")
 SCANNED_ROOTS = ("crates", "ui")
 ALLOWED = frozenset(
     {
+        "crates/flamewm-api/src/settings.rs",
         "crates/flamewm-platform/src/settings.rs",
         "crates/flamewm-settings/src/lib.rs",
         "crates/flamewm-finder/src/lib.rs",
