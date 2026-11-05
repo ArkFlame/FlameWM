@@ -320,7 +320,7 @@ Attention: an app launched outside the nested session uses the host D-Bus and sh
 
 ## Pass 11: focus ring on screen (archiver, settings), root cause of the Pass 9 failure
 
-Base: `origin/main` `06f274c8`. Method: private `Xvfb :92` (no window manager, pointer-focus), archiver `test.tar` and `flamewm-settings` as debug builds from `target-focus11`, input by XTest helper `shots/pass9/tool/xin`, captures with `import -window root`. Screenshots: `/run/media/linsaftw/SDD/shots/pass11/`.
+Base: `origin/main` `c5288eec`. Method: private `Xvfb :92` (no window manager, pointer-focus), archiver `test.tar` and `flamewm-settings` as debug builds from `target-focus11`, input by XTest helper `shots/pass9/tool/xin`, captures with `import -window root`. Screenshots: `/run/media/linsaftw/SDD/shots/pass11/`.
 
 ### Root cause of the Pass 9 "no ring"
 
