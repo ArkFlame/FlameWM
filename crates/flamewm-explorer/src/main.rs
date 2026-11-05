@@ -35,7 +35,7 @@ use flamewm_control_dbus::{ControlClient,ControlSignal,ControlSignalClient};
 use flamewm_dbus_reactor::BusKind;
 use flamewm_api::settings::SettingsSnapshot;
 use flamewm_desktop_core::{file_actions::create_new_folder,trash::Trash};
-use flamewm_ui_x11::{UiActionEvent,UiActionPhase,UiColor,UiControllerEvent,UiDocumentAccess,UiDragEvent,UiKeyEvent,UiKeyPhase,UiWakeDrain,UiWindowConfig,UiWindowRole,run_with_controller_events_role_and_two_readable_fds,decode_document};
+use flamewm_ui_x11::{UiActionEvent,UiActionPhase,UiControllerEvent,UiDocumentAccess,UiDragEvent,UiKeyEvent,UiKeyPhase,UiWakeDrain,UiWindowConfig,UiWindowRole,run_with_controller_events_role_and_two_readable_fds,decode_document};
 
 const UI: &[u8]=include_bytes!(concat!(env!("OUT_DIR"),"/flamewm-explorer.rwr"));
 /// Menu commands that also work in remote folders; every other command is refused there until its remote path exists.
