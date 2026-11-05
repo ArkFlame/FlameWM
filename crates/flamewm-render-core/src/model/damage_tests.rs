@@ -309,3 +309,17 @@ fn stale_layout_revision_forces_full() {
         SurfaceDamage::Full
     );
 }
+
+#[test]
+fn unchanged_text_ref_keeps_revision_and_overrides() {
+    let mut doc = scene(0.0);
+    prime(&mut doc);
+    doc.set_text_ref("panel", "world").expect("change");
+    let revision = doc.revision();
+    let overrides = doc.text_overrides.len();
+    doc.set_text_ref("panel", "world").expect("same text");
+    assert_eq!(doc.revision(), revision, "equal text must not dirty");
+    assert_eq!(doc.text_overrides.len(), overrides, "equal text must not store");
+    doc.set_text_ref("panel", "again").expect("change again");
+    assert_ne!(doc.revision(), revision, "changed text still dirties");
+}

@@ -138,6 +138,8 @@ impl UiCache {
         let previous = previous.as_deref().map(|prev| fit(prev, pool.runs));
         // One id buffer per row: a row formats an id per slot, not an allocation per slot.
         let mut id = String::new();
+        // Reused text buffer: the no-break-space form of a run, filled per slot without allocating.
+        let mut text = String::new();
         for slot in 0..pool.runs {
             if previous
                 .as_ref()
@@ -147,7 +149,7 @@ impl UiCache {
             }
             run_id_into(&mut id, row, slot);
             match fitted.get(slot) {
-                Some(run) => Self::write_run(doc, cell, &id, run, row)?,
+                Some(run) => Self::write_run(doc, cell, &id, run, row, &mut text)?,
                 None => doc.visible(&id, false)?,
             }
         }
@@ -161,9 +163,12 @@ impl UiCache {
         id: &str,
         run: &Run,
         row: usize,
+        text: &mut String,
     ) -> Result<(), String> {
         // nowrap collapses ASCII spaces, so cells are written as no-break spaces to keep their width.
-        doc.text(id, run.text.replace(' ', "\u{a0}"))?;
+        text.clear();
+        text.extend(run.text.chars().map(|c| if c == ' ' { '\u{a0}' } else { c }));
+        doc.text_ref(id, text)?;
         let (cell_w, cell_h) = cell;
         let (x, y, w, h) = match run.shape {
             Some(arm) => (

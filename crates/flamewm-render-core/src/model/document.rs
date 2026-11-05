@@ -345,6 +345,12 @@ impl RuntimeDocument {
     }
 
     pub fn set_text(&mut self, id: &str, text: impl Into<String>) -> Result<(), String> {
+        self.set_text_ref(id, &text.into())
+    }
+
+    /// Like `set_text`, but compares before allocating: an unchanged text costs no allocation and
+    /// no dirty marking, and only a real change copies `text` into the document.
+    pub fn set_text_ref(&mut self, id: &str, text: &str) -> Result<(), String> {
         let index = self.require_node(id)?;
         let target = if self.document.nodes[index as usize].kind == NodeKind::Text {
             index
@@ -358,16 +364,15 @@ impl RuntimeDocument {
             }
             first
         };
-        let text = text.into();
         let current: &str = self
             .text_overrides
             .get(&target)
             .map(String::as_str)
             .unwrap_or(&self.document.nodes[target as usize].text);
-        if *current == text {
+        if current == text {
             return Ok(());
         }
-        self.text_overrides.insert(target, text);
+        self.text_overrides.insert(target, text.to_owned());
         if !self.touch_isolated_box(target, DirtyReason::Text) {
             self.touch_node(target, DirtyReason::Text, true);
         }

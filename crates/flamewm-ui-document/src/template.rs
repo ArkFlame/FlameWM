@@ -124,6 +124,10 @@ impl RuntimeImage {
 
 pub trait UiDocumentAccess {
     fn text(&mut self, id: &str, text: String) -> Result<(), String>;
+    /// Like `text`, but borrows: unchanged text costs no allocation. The default forwards to `text`.
+    fn text_ref(&mut self, id: &str, text: &str) -> Result<(), String> {
+        self.text(id, text.to_owned())
+    }
     fn image_rgb8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String>;
     fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String>;
     /// Like `image_rgba8`, but the document keeps `pixels` by shared handle instead of copying them.
@@ -362,6 +366,10 @@ macro_rules! document_access_methods {
     () => {
         fn text(&mut self, id: &str, text: String) -> Result<(), String> {
             self.document.set_text(id, text)
+        }
+
+        fn text_ref(&mut self, id: &str, text: &str) -> Result<(), String> {
+            self.document.set_text_ref(id, text)
         }
 
         fn image_rgb8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
