@@ -88,7 +88,13 @@ impl State {
         // not a shell-mirror rebuild, so it takes the cheaper request.
         let mut plain_motion = false;
         match event {
-            InputEvent::Keyboard { event } => self.on_key::<I>(&event),
+            InputEvent::Keyboard { event } => {
+                // A forwarded key changes no pixel by itself: the client repaints on its commit. Only a
+                // shortcut action (which may change the scene) asks the compositor for a frame.
+                if !self.on_key::<I>(&event) {
+                    return;
+                }
+            }
             InputEvent::PointerMotionAbsolute { event } => {
                 let location = event.position_transformed(self.output_size);
                 let hover_before = self.model.hit(self.pointer.x, self.pointer.y);
@@ -112,9 +118,10 @@ impl State {
         }
     }
 
-    fn on_key<I: InputBackend>(&mut self, event: &impl KeyboardKeyEvent<I>) {
+    /// Routes one key. Returns true when it ran a shortcut action, the only key outcome that needs a frame.
+    fn on_key<I: InputBackend>(&mut self, event: &impl KeyboardKeyEvent<I>) -> bool {
         let Some(keyboard) = self.seat.get_keyboard() else {
-            return;
+            return false;
         };
         let key_state = event.state();
         let keycode = event.key_code();
@@ -178,7 +185,9 @@ impl State {
         self.shortcuts = shortcuts;
         if let Some(Some(action)) = action {
             self.dispatch_action(&action);
+            return true;
         }
+        false
     }
 
     /// Runs one shortcut action. Actions are the shared `flamewm-api` names.
