@@ -508,6 +508,29 @@ impl Default for ProductSettings {
 }
 
 impl ProductSettings {
+    /// Every switch-group member resolved for readers: a member is its default while its group
+    /// switch is off, its stored value while on. Stored values are untouched, so turning a switch
+    /// off never loses data and turning it back on restores them. Idempotent.
+    #[must_use]
+    pub fn effective(&self) -> Self {
+        let defaults = Self::default();
+        let mut effective = self.clone();
+        for group in flamewm_api::settings_groups::SWITCH_GROUPS {
+            let switch_on = stable_setting(group.switch)
+                .is_some_and(|row| (row.get)(self) == SettingValue::Boolean(true));
+            if switch_on {
+                continue;
+            }
+            for (member, _) in group.members {
+                if let Some(row) = stable_setting(member) {
+                    let reset = (row.set)(&mut effective, &defaults, None, member);
+                    debug_assert!(reset.is_ok(), "{member} resets to its default");
+                }
+            }
+        }
+        effective
+    }
+
     /// Effective Start menu style. A disabled toggle or the `none` style both mean no animation.
     #[must_use]
     pub fn start_animation_style(&self) -> AnimationStyle {
@@ -748,6 +771,20 @@ pub struct ConfigStore {
     current: ProductSettings,
 }
 
+/// True when `switch` is a group switch and one of its members holds a non-default stored value.
+fn switch_guards_custom_values(snapshot: &ProductSettings, switch: &str) -> bool {
+    let defaults = ProductSettings::default();
+    flamewm_api::settings_groups::SWITCH_GROUPS
+        .iter()
+        .find(|group| group.switch == switch)
+        .is_some_and(|group| {
+            group.members.iter().any(|(member, _)| {
+                stable_setting(member)
+                    .is_some_and(|row| (row.get)(snapshot) != (row.get)(&defaults))
+            })
+        })
+}
+
 impl ConfigStore {
     #[must_use]
     pub fn current(&self) -> &ProductSettings {
@@ -857,9 +894,6 @@ impl ConfigStore {
         if !has_accent_custom {
             snapshot.accent_custom = snapshot.accent != DEFAULT_ACCENT;
         }
-        if !snapshot.accent_custom {
-            DEFAULT_ACCENT.clone_into(&mut snapshot.accent);
-        }
         if snapshot.decoration == "ios" {
             "rounded".clone_into(&mut snapshot.decoration);
         }
@@ -902,7 +936,12 @@ impl ConfigStore {
                 continue;
             }
             let value = (row.get)(snapshot);
-            if row.base || value != (row.get)(&defaults) {
+            // A switch is written while its group holds a non-default stored value, so turning it
+            // off never drops the saved members on reload.
+            if row.base
+                || value != (row.get)(&defaults)
+                || switch_guards_custom_values(snapshot, row.key)
+            {
                 lines.push(format!("{}={}", row.key, wire_text(&value, row.base)));
             }
         }

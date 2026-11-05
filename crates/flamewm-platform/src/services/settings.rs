@@ -186,9 +186,10 @@ impl SettingsService {
 
 #[must_use]
 pub fn to_api_snapshot(settings: &ProductSettings) -> SettingsSnapshot {
+    let effective = settings.effective();
     let mut values: BTreeMap<String, SettingValue> = STABLE_SETTINGS
         .iter()
-        .map(|row| (row.key.to_owned(), (row.get)(settings)))
+        .map(|row| (row.key.to_owned(), (row.get)(&effective)))
         .collect();
     values.extend(settings.per_output_scale.iter().map(|(output, scale)| {
         (
@@ -323,10 +324,9 @@ impl SettingEffects {
         if transaction.reset_section.is_some() {
             return Self::ALL;
         }
-        transaction
-            .changes
-            .iter()
-            .fold(Self::NONE, |acc, change| acc.union(Self::for_key(&change.key)))
+        transaction.changes.iter().fold(Self::NONE, |acc, change| {
+            acc.union(Self::for_key(&change.key))
+        })
     }
 
     #[must_use]
@@ -597,7 +597,11 @@ mod debounce_and_effect_tests {
                 ..SettingEffects::NONE
             }
         );
-        for key in ["taskbarStyle", "taskbarFloatingMargin", "taskbarFloatingRadius"] {
+        for key in [
+            "taskbarStyle",
+            "taskbarFloatingMargin",
+            "taskbarFloatingRadius",
+        ] {
             assert_eq!(
                 SettingEffects::for_key(key),
                 SettingEffects {
@@ -614,7 +618,12 @@ mod debounce_and_effect_tests {
                 ..SettingEffects::NONE
             }
         );
-        for key in ["glassOpacityPercent", "taskbarOpacityPercent", "animationSpeed", "hotkey.window.close"] {
+        for key in [
+            "glassOpacityPercent",
+            "taskbarOpacityPercent",
+            "animationSpeed",
+            "hotkey.window.close",
+        ] {
             assert_eq!(SettingEffects::for_key(key), SettingEffects::NONE, "{key}");
         }
         assert_eq!(SettingEffects::for_key("invented.key"), SettingEffects::ALL);
@@ -630,7 +639,10 @@ mod debounce_and_effect_tests {
             }],
             reset_section: None,
         };
-        assert_eq!(SettingEffects::for_transaction(&transaction), SettingEffects::NONE);
+        assert_eq!(
+            SettingEffects::for_transaction(&transaction),
+            SettingEffects::NONE
+        );
     }
 
     #[test]
@@ -694,7 +706,9 @@ mod debounce_and_effect_tests {
             }],
             reset_section: None,
         };
-        service.apply(&mut port, &transaction).expect("shortcut apply");
+        service
+            .apply(&mut port, &transaction)
+            .expect("shortcut apply");
         let persisted = std::fs::read_to_string(&path).expect("shortcut persisted without flush");
         assert!(persisted.contains("revision=2\n"));
         std::fs::remove_file(path).expect("remove test settings");

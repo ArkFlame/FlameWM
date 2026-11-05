@@ -10,6 +10,7 @@ fn glass_rows_form_their_own_reset_section() {
     assert_eq!(
         glass,
         [
+            "glassCustom",
             "reduceTransparency",
             "glassOpacityPercent",
             "glassBlurPx",

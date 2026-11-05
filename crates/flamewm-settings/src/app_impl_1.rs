@@ -616,10 +616,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 if enabled && SPEECH_TOGGLES.contains(&key) {
                     start_voice_setup()?;
                 }
-                // Custom accent off means the system accent everywhere: reset the stored value.
-                if key == "accentCustom" && !enabled {
-                    self.apply_text("accent", DEFAULT_ACCENT.to_owned())?;
-                }
+                // Switch-group off keeps stored member values; the snapshot resolves them to defaults.
             }
             SettingsAction::SelectionOpacity(direction) => {
                 self.step_percent("DesktopSelectionFillOpacity", direction, 60)?;

@@ -8,7 +8,20 @@ fn parse(text: &str) -> super::ProductSettings {
 fn accent_custom_defaults_off_and_uses_system_accent() {
     let settings = parse("revision=1\naccent=#112233\naccentCustom=false\n");
     assert!(!settings.accent_custom);
-    assert_eq!(settings.accent, DEFAULT_ACCENT);
+    // The stored custom accent is kept; readers see the system accent through `effective()`.
+    assert_eq!(settings.accent, "#112233");
+    assert_eq!(settings.effective().accent, DEFAULT_ACCENT);
+}
+
+#[test]
+fn switching_accent_off_keeps_the_stored_value_across_a_round_trip() {
+    let off = parse("revision=1\naccent=#112233\naccentCustom=false\n");
+    let text = ConfigStore::serialize(&off);
+    assert!(text.contains("accent=#112233"), "{text}");
+    let reloaded = parse(&text);
+    assert_eq!(reloaded.accent, "#112233");
+    let on = parse(&text.replace("accentCustom=false", "accentCustom=true"));
+    assert_eq!(on.effective().accent, "#112233");
 }
 
 #[test]
