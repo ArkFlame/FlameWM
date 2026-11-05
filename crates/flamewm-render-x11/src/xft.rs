@@ -976,6 +976,59 @@ mod tests {
         }
     }
 
+    /// Caret-vs-paint probe on a live display (`FLAMEWM_TEST_DISPLAY`). For each prefix length the
+    /// caret is `measure_text(prefix)`; the painted edge is the rightmost inked column of the real
+    /// Xft text mask of the same prefix. A growing `advance - ink_end` means the caret drifts.
+    #[test]
+    #[ignore = "live-display probe: FLAMEWM_TEST_DISPLAY=:99 cargo test -p flamewm-render-x11 --lib caret_x_tracks -- --ignored"]
+    fn caret_x_tracks_painted_glyph_edge_on_live_display() {
+        use crate::xlib::{XDefaultColormap, XDefaultScreen, XDefaultVisual, XOpenDisplay, XRootWindow};
+        let Some(name) = std::env::var_os("FLAMEWM_TEST_DISPLAY") else {
+            return;
+        };
+        let name = std::ffi::CString::new(name.to_string_lossy().as_bytes()).unwrap();
+        unsafe {
+            let display = XOpenDisplay(name.as_ptr());
+            assert!(!display.is_null(), "XOpenDisplay failed");
+            let screen = XDefaultScreen(display);
+            let root = XRootWindow(display, screen);
+            let visual = XDefaultVisual(display, screen);
+            let colormap = XDefaultColormap(display, screen);
+            let mut xft = XftBackend::new(display, screen, root, visual, colormap).expect("xft");
+            let text = &"I".repeat(60);
+            let pad = 8u32;
+            let mut worst_drift = f32::MIN;
+            let mut best_drift = f32::MAX;
+            for n in [10usize, 20, 30, 40, 50, 60] {
+                let prefix: String = text.chars().take(n).collect();
+                let caret = xft.measure_text(13.0, 400, &prefix).0;
+                let mut mask = Vec::new();
+                let (width, height) = xft
+                    .text_alpha_mask(13.0, 400, &prefix, pad, &mut mask)
+                    .expect("mask");
+                let mut ink_end: Option<u32> = None;
+                for row in 0..height as usize {
+                    let line = &mask[row * width as usize..(row + 1) * width as usize];
+                    if let Some(col) = line.iter().rposition(|&c| c > 0) {
+                        ink_end = Some(ink_end.map_or(col as u32, |e| e.max(col as u32)));
+                    }
+                }
+                let ink_end = ink_end.expect("prefix must ink") as f32 + 1.0 - pad as f32;
+                let drift = caret - ink_end;
+                eprintln!("caret probe n={n:2} caret={caret:7.2} ink_end={ink_end:7.2} gap={drift:6.2}");
+                worst_drift = worst_drift.max(drift);
+                best_drift = best_drift.min(drift);
+            }
+            // The last glyph's right side bearing is the only legitimate gap: it is at most a few px
+            // and must not grow with prefix length.
+            assert!(
+                worst_drift - best_drift < 4.0,
+                "caret-to-ink gap varies by {} px across prefix lengths",
+                worst_drift - best_drift
+            );
+        }
+    }
+
     #[test]
     fn xglyph_info_matches_xrender_abi() {
         assert_eq!(std::mem::size_of::<XGlyphInfo>(), 12);
