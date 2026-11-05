@@ -1027,9 +1027,13 @@ pub(crate) fn refresh_desktop_backdrop(
     renderer: &mut GlowRenderer,
     size: Size<i32, Physical>,
 ) -> Result<(), Box<dyn Error>> {
-    // The blur only shows under window chrome and override-redirect surfaces. On an idle desktop
-    // nothing reads it, so drop the output-sized capture instead of keeping it resident.
-    if state.toplevels.is_empty() && state.x11.is_empty() && state.unmanaged.is_empty() {
+    // The blur only shows under window chrome and override-redirect surfaces. Desktop-kind X11
+    // windows are `below` entries that never read it, so an idle desktop (or one with only its own
+    // menus open) must not recapture on every desktop commit: drop the capture instead.
+    let consumer = !state.toplevels.is_empty()
+        || !state.x11.is_empty()
+        || state.unmanaged.iter().any(|entry| !entry.below);
+    if !consumer {
         state.decorations.borrow_mut().drop_desktop();
         return Ok(());
     }
@@ -1105,6 +1109,7 @@ pub fn render_frame(state: &mut State) {
     let Some(mut backend) = state.backend.take() else {
         return;
     };
+    state.note_winit_frame();
     if let Err(error) = render_into(state, &mut backend) {
         eprintln!("flamewm-wayland: frame failed: {error}");
     }

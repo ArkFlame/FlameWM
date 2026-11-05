@@ -367,8 +367,17 @@ pub fn main() -> Result<(), String> {
             move |event, document| {
                 let state_cell = &event_cell;
                 let mut state = state_cell.borrow_mut();
-                if let Err(error) = refresh_all(document, &mut state) {
-                    eprintln!("desktop: refresh failed (continuing): {error}");
+                // Pointer hover arrives at input rate and every handler ignores it except the
+                // convert-wheel sector, which dedupes itself. A full refresh per motion event is
+                // pure cost, so hover skips it; any other event still refreshes first.
+                let hover = matches!(
+                    event,
+                    UiControllerEvent::Action(action) if action.phase == UiActionPhase::Hover
+                );
+                if !hover {
+                    if let Err(error) = refresh_all(document, &mut state) {
+                        eprintln!("desktop: refresh failed (continuing): {error}");
+                    }
                 }
                 let result = match event {
                     UiControllerEvent::Action(action) => {

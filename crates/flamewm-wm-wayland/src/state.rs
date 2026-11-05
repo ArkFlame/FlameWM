@@ -7,6 +7,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::Duration;
 
+/// Minimum spacing between nested-window paints (about one 60 Hz vblank).
+const WINIT_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
 use flamewm_platform::shortcuts::ShortcutRegistry;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::glow::GlowRenderer;
@@ -400,6 +403,9 @@ pub struct State {
     /// Set by anything that can change the scene below the cursor (windows, pixels, decorations,
     /// backdrop). A paint that finds it clear reuses the last scene and only swaps the cursor.
     scene_dirty: Cell<bool>,
+    /// Last nested-window paint, and whether a paced redraw timer is already armed for it.
+    winit_frame_at: Cell<Option<std::time::Instant>>,
+    winit_frame_armed: Cell<bool>,
     /// Set by any change that can alter the shell's mirror (windows, focus, settings): the control
     /// service rebuilds and publishes the mirror only then, so pointer motion never pays for it.
     mirror_dirty: Cell<bool>,
@@ -517,6 +523,8 @@ impl State {
             // The first frame is always painted.
             redraw_dirty: Cell::new(true),
             scene_dirty: Cell::new(true),
+            winit_frame_at: Cell::new(None),
+            winit_frame_armed: Cell::new(false),
             mirror_dirty: Cell::new(true),
             startup_failure: Cell::new(None),
             drm_waker: None,
@@ -770,9 +778,7 @@ impl State {
     /// cursor element. The caller guarantees nothing else it draws changed (hover included).
     pub fn request_cursor_paint(&self) {
         self.redraw_dirty.set(true);
-        if let Some(backend) = self.backend.as_ref() {
-            backend.window().request_redraw();
-        }
+        self.request_winit_frame();
         if let Some(waker) = self.drm_waker.as_ref() {
             // The ping coalesces in the kernel and a closed source only reports an error, which is
             // nothing the compositor can act on.
@@ -835,6 +841,45 @@ impl State {
 
     pub fn request_redraw(&self) {
         self.request_full_redraw();
+    }
+
+    /// Asks the nested window for a frame, at most one per [`WINIT_FRAME_INTERVAL`]. Pointer
+    /// motion arrives at input rate and every frame is a full software repaint, so a burst of
+    /// requests inside one interval collapses into a single timer-driven redraw.
+    fn request_winit_frame(&self) {
+        let Some(backend) = self.backend.as_ref() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let Some(last) = self.winit_frame_at.get() else {
+            return backend.window().request_redraw();
+        };
+        let elapsed = now.duration_since(last);
+        if elapsed >= WINIT_FRAME_INTERVAL {
+            return backend.window().request_redraw();
+        }
+        if self.winit_frame_armed.replace(true) {
+            return;
+        }
+        let armed = self.loop_handle.insert_source(
+            smithay::reexports::calloop::timer::Timer::from_duration(WINIT_FRAME_INTERVAL - elapsed),
+            |_, (), state| {
+                state.winit_frame_armed.set(false);
+                if let Some(backend) = state.backend.as_ref() {
+                    backend.window().request_redraw();
+                }
+                smithay::reexports::calloop::timer::TimeoutAction::Drop
+            },
+        );
+        if armed.is_err() {
+            self.winit_frame_armed.set(false);
+            backend.window().request_redraw();
+        }
+    }
+
+    /// Records that the nested window has just painted, starting the next pacing interval.
+    pub fn note_winit_frame(&self) {
+        self.winit_frame_at.set(Some(std::time::Instant::now()));
     }
 
     /// Starts a program. Once `XWayland` runs, children get `DISPLAY` and no `WAYLAND_DISPLAY`,

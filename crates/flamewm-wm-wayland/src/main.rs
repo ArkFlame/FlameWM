@@ -424,6 +424,7 @@ fn main() {
     // The `t=` field of every stage line is measured from here, so the timer covers argument
     // parsing, the seat, DRM init and the socket, not just the event loop.
     let _ = START.set(Instant::now());
+    tune_malloc();
     install_smithay_logger();
     // Parsed before anything else and exits 0: no event loop, no socket, no seat, no bus, no PATH.
     if std::env::args().any(|arg| arg == "--capabilities") {
@@ -445,6 +446,27 @@ fn main() {
             abort_startup(&format!("startup aborted: {error}"));
             std::process::exit(1);
         }
+    }
+}
+
+/// Pins glibc's mmap and trim thresholds to 128 KiB before any large buffer exists. Without this,
+/// glibc raises its dynamic mmap threshold after the first freed multi-megabyte capture, so the
+/// desktop backdrop and blur temporaries land in the brk heap, which fragments and keeps the
+/// freed pages resident. Measured on the nested session: `[heap]` anon 45 MB -> 24 MB and
+/// compositor anon 67 MB -> 49 MB, identical to `GLIBC_TUNABLES` with the same values.
+#[allow(unsafe_code)] // mallopt only sets allocator tunables; called once, before threads start.
+fn tune_malloc() {
+    const M_TRIM_THRESHOLD: i32 = -1;
+    const M_MMAP_THRESHOLD: i32 = -3;
+    const THRESHOLD: i32 = 128 * 1024;
+    unsafe extern "C" {
+        fn mallopt(param: i32, value: i32) -> i32;
+    }
+    // SAFETY: `mallopt` only reads and writes glibc's global tunables with plain integer
+    // arguments; it does not touch any pointer owned by Rust.
+    unsafe {
+        mallopt(M_MMAP_THRESHOLD, THRESHOLD);
+        mallopt(M_TRIM_THRESHOLD, THRESHOLD);
     }
 }
 
