@@ -288,6 +288,8 @@ pub(crate) struct X11App {
     pub(crate) pending_visibility: Option<bool>,
     /// When a throttled live window backdrop refresh is due.
     pub(crate) backdrop_deadline: Option<std::time::Instant>,
+    /// Reused ARGB upload target for text shadows: (pixmap, capacity width, capacity height, bytes).
+    pub(crate) shadow_pixmap: Option<(Pixmap, u32, u32, usize)>,
     /// Window backdrop generation the backbuffer was last painted over (`window_backdrop`).
     pub(crate) window_backdrop_painted: Option<u64>,
     pub(crate) node_backdrops: surface_backdrop::NodeBackdropCache,
@@ -731,6 +733,7 @@ impl X11App {
             pending_window_resize: None,
             pending_visibility: None,
             backdrop_deadline: None,
+            shadow_pixmap: None,
             window_backdrop_painted: None,
             window_backdrop: config
                 .backdrop
@@ -1119,6 +1122,9 @@ impl Drop for X11App {
         self.clear_surface_backdrop();
         self.clear_window_backdrop();
         self.clear_node_backdrops();
+        if let Some((pixmap, _, _, bytes)) = self.shadow_pixmap.take() {
+            self.free_pixmap_tracked(pixmap, bytes);
+        }
         unsafe {
             if self.pointer_grabbed {
                 XUngrabPointer(self.display, CURRENT_TIME);

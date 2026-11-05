@@ -175,6 +175,11 @@ impl TextMaskCache {
         }
     }
 
+    /// Whether a mask for `key` is cached (no copy, no recency update).
+    pub fn contains(&self, key: &dyn MaskKeyView) -> bool {
+        self.entries.contains_key(key)
+    }
+
     /// Copy a cached mask into `out` and return its dimensions.
     pub fn get_into(&mut self, key: &dyn MaskKeyView, out: &mut Vec<u8>) -> Option<(u32, u32)> {
         self.clock += 1;

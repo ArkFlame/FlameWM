@@ -142,6 +142,26 @@ struct FontKey {
     weight: u16,
 }
 
+/// Upper bound on rows per text-mask pixmap batch (bounds the batch to a few MB).
+const MAX_MASK_BATCH_HEIGHT: u32 = 4096;
+
+/// One text run to rasterize as an A8 coverage mask.
+#[derive(Clone, Copy, Debug)]
+pub struct AlphaMaskSpec<'a> {
+    pub size: f32,
+    pub weight: u16,
+    pub text: &'a str,
+    pub pad: u32,
+}
+
+/// A rendered A8 coverage mask, row-major, `width * height` bytes.
+#[derive(Debug)]
+pub(crate) struct AlphaMask {
+    pub width: u32,
+    pub height: u32,
+    pub bytes: Vec<u8>,
+}
+
 pub struct XftBackend {
     display: *mut Display,
     screen: c_int,
@@ -155,6 +175,8 @@ pub struct XftBackend {
     colors: HashMap<Color, XftColor>,
     preferred_family: String,
     text_masks: TextMaskCache,
+    /// Synchronous `XGetImage` readbacks issued for text masks (one per batch).
+    pub(crate) readbacks: u64,
 }
 
 impl XftBackend {
@@ -237,6 +259,7 @@ impl XftBackend {
             colors: HashMap::new(),
             preferred_family,
             text_masks: TextMaskCache::default(),
+            readbacks: 0,
         };
 
         // Fail early only if *no* usable Xft font exists. IBM Plex Sans remains
@@ -328,11 +351,236 @@ impl XftBackend {
         Ok(())
     }
 
+    /// Coverage of `text` as a bounded A8 mask (`pad` px margin), cached per (family, text, size,
+    /// weight, pad). A miss renders through the batched path. Paints should call
+    /// [`Self::prefetch_text_masks`] first so a whole paint costs one readback, not one per run.
+    /// # Safety
+    /// This backend must hold the live X display, font and Xft library.
+    pub unsafe fn text_alpha_mask(
+        &mut self,
+        size: f32,
+        weight: u16,
+        text: &str,
+        pad: u32,
+        mask: &mut Vec<u8>,
+    ) -> Result<(u32, u32), String> {
+        let key = TextMaskRef::new(&self.preferred_family, text, size, weight, pad);
+        if let Some(dims) = self.text_masks.get_into(&key, mask) {
+            return Ok(dims);
+        }
+        let spec = AlphaMaskSpec { size, weight, text, pad };
+        let rendered = unsafe { self.render_alpha_masks(&[spec]) }
+            .pop()
+            .unwrap_or_else(|| Err("text mask batch returned no entry".to_string()))?;
+        *mask = rendered.bytes;
+        Ok((rendered.width, rendered.height))
+    }
+
+    /// Renders every uncached run in `specs` with as few readbacks as possible (one per batch of
+    /// at most [`MAX_MASK_BATCH_HEIGHT`] rows). Results land in the mask cache; failures are left
+    /// uncached, and the per-run path retries them.
+    /// # Safety
+    /// This backend must hold the live X display, font and Xft library.
+    pub unsafe fn prefetch_text_masks(&mut self, specs: &[AlphaMaskSpec<'_>]) {
+        let mut seen = std::collections::HashSet::new();
+        let mut missing = Vec::new();
+        for spec in specs {
+            let key = TextMaskRef::new(&self.preferred_family, spec.text, spec.size, spec.weight, spec.pad);
+            if self.text_masks.contains(&key) {
+                continue;
+            }
+            let owned = TextMaskKey::new(&self.preferred_family, spec.text, spec.size, spec.weight, spec.pad);
+            if seen.insert(owned) {
+                missing.push(*spec);
+            }
+        }
+        if !missing.is_empty() {
+            let _ = unsafe { self.render_alpha_masks(&missing) };
+        }
+    }
+
+    /// Renders each spec into its own A8 mask and inserts successes into the cache. Specs are
+    /// laid out as horizontal bands of one pixmap, each clipped to its own band, so every mask
+    /// matches a standalone render pixel for pixel. One `XGetImage` covers each batch.
+    unsafe fn render_alpha_masks(&mut self, specs: &[AlphaMaskSpec<'_>]) -> Vec<Result<AlphaMask, String>> {
+        let mut out: Vec<Option<Result<AlphaMask, String>>> = specs.iter().map(|_| None).collect();
+        let dims: Vec<(u32, u32)> = specs
+            .iter()
+            .map(|spec| {
+                let (advance, _) = unsafe { self.measure_text(spec.size, spec.weight, spec.text) };
+                let width =
+                    ((advance.ceil().max(1.0) as u32).saturating_add(spec.pad * 2 + 8)).min(1024);
+                let height = ((spec.size.max(1.0).ceil() as u32)
+                    .saturating_mul(2)
+                    .saturating_add(spec.pad * 2))
+                .min(192);
+                (width, height)
+            })
+            .collect();
+        // Without XftDrawSetClipRectangles, bands could bleed into each other: one spec per batch.
+        let max_height = if self.api.draw_set_clip_rectangles.is_some() {
+            MAX_MASK_BATCH_HEIGHT
+        } else {
+            0
+        };
+        let mut start = 0;
+        while start < specs.len() {
+            let mut end = start;
+            let mut total = 0;
+            while end < specs.len() && (end == start || total + dims[end].1 <= max_height) {
+                total += dims[end].1;
+                end += 1;
+            }
+            match unsafe { self.render_mask_batch(&specs[start..end], &dims[start..end]) } {
+                Ok(masks) => {
+                    for (offset, mask) in masks.into_iter().enumerate() {
+                        let spec = specs[start + offset];
+                        self.text_masks.insert(
+                            TextMaskKey::new(&self.preferred_family, spec.text, spec.size, spec.weight, spec.pad),
+                            mask.width,
+                            mask.height,
+                            &mask.bytes,
+                        );
+                        out[start + offset] = Some(Ok(mask));
+                    }
+                }
+                Err(error) => {
+                    for slot in &mut out[start..end] {
+                        *slot = Some(Err(error.clone()));
+                    }
+                }
+            }
+            start = end;
+        }
+        out.into_iter()
+            .map(|slot| slot.unwrap_or_else(|| Err("text mask missing from batch".to_string())))
+            .collect()
+    }
+
+    /// One pixmap holding every band of `specs`, one `XGetImage`, then each band copied out.
+    unsafe fn render_mask_batch(
+        &mut self,
+        specs: &[AlphaMaskSpec<'_>],
+        dims: &[(u32, u32)],
+    ) -> Result<Vec<AlphaMask>, String> {
+        let create_alpha = self
+            .api
+            .draw_create_alpha
+            .ok_or("XftDrawCreateAlpha unavailable")?;
+        let set_clip = self
+            .api
+            .draw_set_clip_rectangles
+            .ok_or("XftDrawSetClipRectangles unavailable")?;
+        let total_width = dims.iter().map(|d| d.0).max().unwrap_or(1).max(1);
+        let total_height: u32 = dims.iter().map(|d| d.1).sum::<u32>().max(1);
+        let pixmap = unsafe {
+            XCreatePixmap(
+                self.display,
+                XRootWindow(self.display, self.screen),
+                total_width,
+                total_height,
+                8,
+            )
+        };
+        if pixmap == 0 {
+            return Err("Xft text shadow A8 pixmap unavailable".to_string());
+        }
+        let result = (|| {
+            let gc = unsafe { XCreateGC(self.display, pixmap, 0, ptr::null_mut()) };
+            if gc.is_null() {
+                return Err("text shadow A8 GC unavailable".to_string());
+            }
+            unsafe {
+                XSetForeground(self.display, gc, 0);
+                XFillRectangle(self.display, pixmap, gc, 0, 0, total_width, total_height);
+                XFreeGC(self.display, gc);
+            }
+            let draw = unsafe { create_alpha(self.display, pixmap, 8) };
+            if draw.is_null() {
+                return Err("XftDrawCreateAlpha returned NULL".to_string());
+            }
+            let draw_result = (|| {
+                let white = XftColor {
+                    pixel: 0,
+                    color: XRenderColor {
+                        red: 65535,
+                        green: 65535,
+                        blue: 65535,
+                        alpha: 65535,
+                    },
+                };
+                let mut band_top = 0u32;
+                let mut bands = Vec::with_capacity(specs.len());
+                for (spec, &(width, height)) in specs.iter().zip(dims) {
+                    let font = unsafe { self.font_for(spec.size, spec.weight) }?;
+                    let clip = XRectangle {
+                        x: 0,
+                        y: band_top as i16,
+                        width: width as u16,
+                        height: height as u16,
+                    };
+                    unsafe { set_clip(draw, 0, 0, &clip, 1) };
+                    let bytes = spec.text.as_bytes();
+                    unsafe {
+                        (self.api.draw_string_utf8)(
+                            draw,
+                            &white,
+                            font,
+                            spec.pad as c_int + 4,
+                            band_top as c_int + spec.pad as c_int + spec.size.ceil() as c_int,
+                            bytes.as_ptr(),
+                            bytes.len().min(c_int::MAX as usize) as c_int,
+                        );
+                    }
+                    bands.push(band_top);
+                    band_top += height;
+                }
+                self.readbacks += 1;
+                let image = unsafe {
+                    XGetImage(self.display, pixmap, 0, 0, total_width, total_height, !0, ZPIXMAP)
+                };
+                if image.is_null() {
+                    return Err("XGetImage of A8 text shadow failed".to_string());
+                }
+                let extracted = (|| {
+                    let head = unsafe { &*(image as *const XImageHead) };
+                    if head.bits_per_pixel != 8 {
+                        return Err("text shadow A8 image is not 8 bits per pixel".to_string());
+                    }
+                    let row_bytes = head.bytes_per_line as usize;
+                    let data = unsafe {
+                        std::slice::from_raw_parts(head.data as *const u8, row_bytes * total_height as usize)
+                    };
+                    Ok(dims
+                        .iter()
+                        .zip(&bands)
+                        .map(|(&(width, height), &top)| {
+                            let mut bytes = vec![0u8; width as usize * height as usize];
+                            for (y, row) in bytes.chunks_exact_mut(width as usize).enumerate() {
+                                let start = (top as usize + y) * row_bytes;
+                                row.copy_from_slice(&data[start..start + width as usize]);
+                            }
+                            AlphaMask { width, height, bytes }
+                        })
+                        .collect::<Vec<_>>())
+                })();
+                unsafe { XDestroyImage(image) };
+                extracted
+            })();
+            unsafe { (self.api.draw_destroy)(draw) };
+            draw_result
+        })();
+        unsafe { crate::native::xresource::free_pixmap_raw(self.display, pixmap) };
+        result
+    }
+
+    #[cfg(test)]
+    /// The original single-pixmap render, kept as the pixel reference for batching tests.
     /// Render a bounded antialiased A8 glyph coverage mask into `mask` (reused capacity), once per retained paint.
     /// A real alpha mask is blurred by the shared image engine; never overlay shifted glyphs.
     /// # Safety
     /// This backend must hold the live X display, font and Xft library.
-    pub unsafe fn text_alpha_mask(
+    pub unsafe fn reference_alpha_mask(
         &mut self,
         size: f32,
         weight: u16,
@@ -767,6 +1015,96 @@ mod tests {
         );
     }
 
+    /// Opens a private test display with Xft, or returns None (test skipped) without one.
+    #[cfg(test)]
+    fn open_test_xft() -> Option<(*mut crate::xlib::Display, XftBackend)> {
+        use crate::xlib::{
+            XDefaultColormap, XDefaultScreen, XDefaultVisual, XOpenDisplay, XRootWindow,
+        };
+        let name = std::env::var_os("FLAMEWM_TEST_DISPLAY")?;
+        let name = std::ffi::CString::new(name.to_string_lossy().as_bytes()).unwrap();
+        unsafe {
+            let display = XOpenDisplay(name.as_ptr());
+            assert!(!display.is_null(), "XOpenDisplay failed");
+            let screen = XDefaultScreen(display);
+            let root = XRootWindow(display, screen);
+            let visual = XDefaultVisual(display, screen);
+            let colormap = XDefaultColormap(display, screen);
+            let xft = XftBackend::new(display, screen, root, visual, colormap).expect("xft");
+            Some((display, xft))
+        }
+    }
+
+    /// Batched shadow masks must be byte-identical to the original single-pixmap render, for
+    /// every run, including when the batch mixes sizes, weights and pads.
+    #[cfg(test)]
+    #[test]
+    fn batched_masks_match_reference_render_pixel_for_pixel() {
+        let Some((display, mut xft)) = open_test_xft() else {
+            return;
+        };
+        let runs: [(f32, u16, u32, &str); 6] = [
+            (14.0, 400, 4, "Shadow"),
+            (11.0, 400, 10, "0 processes \u{b7} 0 threads"),
+            (13.0, 700, 6, "/usr/lib/jvm/zulu21/bin/java -Xmx1096m"),
+            (9.0, 400, 3, "CPU 12.5%"),
+            (14.0, 400, 4, "Shadow"),
+            (16.0, 400, 8, "Wi\u{66}i \u{2014} Aa"),
+        ];
+        let mut reference = Vec::new();
+        for &(size, weight, pad, text) in &runs {
+            xft.text_masks.clear();
+            let mut bytes = Vec::new();
+            let dims = unsafe { xft.reference_alpha_mask(size, weight, text, pad, &mut bytes) }
+                .expect("reference mask");
+            reference.push((dims, bytes));
+        }
+        xft.text_masks.clear();
+        let specs: Vec<AlphaMaskSpec<'_>> = runs
+            .iter()
+            .map(|&(size, weight, pad, text)| AlphaMaskSpec { size, weight, text, pad })
+            .collect();
+        unsafe { xft.prefetch_text_masks(&specs) };
+        for (index, &(size, weight, pad, text)) in runs.iter().enumerate() {
+            let mut batched = Vec::new();
+            let dims = unsafe { xft.text_alpha_mask(size, weight, text, pad, &mut batched) }
+                .expect("batched mask");
+            assert_eq!(dims, reference[index].0, "dims differ for {text:?}");
+            assert!(batched == reference[index].1, "pixels differ for {text:?}");
+        }
+        let libraries = unsafe { xft.into_deferred_libraries() };
+        unsafe { crate::xlib::XCloseDisplay(display) };
+        drop(libraries);
+    }
+
+    /// A paint's worth of uncached shadow runs costs one readback; the follow-up per-run calls
+    /// and a repeated prefetch cost none.
+    #[cfg(test)]
+    #[test]
+    fn prefetch_costs_one_readback_per_batch() {
+        let Some((display, mut xft)) = open_test_xft() else {
+            return;
+        };
+        let texts = ["one", "two two", "three", "four 4%", "five", "six 6.0%"];
+        let specs: Vec<AlphaMaskSpec<'_>> = texts
+            .iter()
+            .map(|text| AlphaMaskSpec { size: 12.0, weight: 400, text, pad: 6 })
+            .collect();
+        let before = xft.readbacks;
+        unsafe { xft.prefetch_text_masks(&specs) };
+        assert_eq!(xft.readbacks - before, 1, "six short runs must share one readback");
+        let mut out = Vec::new();
+        for text in texts {
+            unsafe { xft.text_alpha_mask(12.0, 400, text, 6, &mut out) }.expect("cached");
+        }
+        assert_eq!(xft.readbacks - before, 1, "cached runs must not read back");
+        unsafe { xft.prefetch_text_masks(&specs) };
+        assert_eq!(xft.readbacks - before, 1, "repeated prefetch must hit the cache");
+        let libraries = unsafe { xft.into_deferred_libraries() };
+        unsafe { crate::xlib::XCloseDisplay(display) };
+        drop(libraries);
+    }
+
     /// The text-mask cache must return the same coverage as a fresh A8 render, and
     /// a second identical request must be a hit (no new entry). Needs
     /// `FLAMEWM_TEST_DISPLAY` with Xft fonts; skipped otherwise.
@@ -802,7 +1140,7 @@ mod tests {
                 .expect("other size");
             assert_eq!(xft.text_masks.len(), 2, "size is part of the key");
             // Libraries stay loaded through XCloseDisplay, as in production.
-            let libraries = xft.into_deferred_libraries();
+            let libraries = unsafe { xft.into_deferred_libraries() };
             XCloseDisplay(display);
             drop(libraries);
         }

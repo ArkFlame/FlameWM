@@ -183,6 +183,74 @@ impl X11App {
         Ok(Some((dx, dy, w, h)))
     }
 
+    /// Batches every uncached text-shadow mask of this frame into one readback before the command
+    /// loop, so a frame costs one `XGetImage` instead of one per changed text run. Runs that are
+    /// not prefetched still render through [`Self::paint_text_shadow`].
+    pub(crate) unsafe fn prefetch_text_shadow_masks(
+        &mut self,
+        count: usize,
+        document: &RuntimeDocument,
+        scale: f32,
+    ) {
+        let mut runs: Vec<(f32, u16, u32, std::sync::Arc<str>)> = Vec::new();
+        for index in 0..count {
+            // SAFETY: index is below the retained count; no cache replacement happens here.
+            let command = unsafe { &*self.retained_command(index) };
+            if let PaintCommand::TextShadow {
+                size,
+                weight,
+                blur_radius,
+                text,
+                ..
+            } = command
+            {
+                let radius = (*blur_radius * scale).clamp(0.0, 8.0);
+                let pad = (radius * 3.0).ceil() as u32 + 4;
+                runs.push((*size * scale, *weight, pad, std::sync::Arc::clone(text)));
+            }
+        }
+        if runs.is_empty() {
+            return;
+        }
+        self.ensure_xft();
+        if self.xrender.is_none() {
+            return;
+        }
+        let family = document.ui_font_family();
+        let Some(xft) = self.xft.as_mut() else {
+            return;
+        };
+        unsafe { xft.set_preferred_family(family) };
+        let specs: Vec<crate::xft::AlphaMaskSpec<'_>> = runs
+            .iter()
+            .map(|(size, weight, pad, text)| crate::xft::AlphaMaskSpec {
+                size: *size,
+                weight: *weight,
+                text,
+                pad: *pad,
+            })
+            .collect();
+        unsafe { xft.prefetch_text_masks(&specs) };
+    }
+
+    /// The text-shadow upload target: one ARGB pixmap reused by every shadow (grown on demand,
+    /// never shrunk). Each shadow blits only its own `w x h` origin region, so reuse is
+    /// pixel-identical to a fresh pixmap per shadow, without a create, sync and free per run.
+    fn shadow_upload_pixmap(&mut self, root: Drawable, width: u32, height: u32) -> Result<Pixmap, String> {
+        if let Some((pixmap, cap_w, cap_h, _)) = self.shadow_pixmap {
+            if cap_w >= width && cap_h >= height {
+                return Ok(pixmap);
+            }
+        }
+        let (prev_w, prev_h) = self.shadow_pixmap.map_or((0, 0), |(_, cw, ch, _)| (cw, ch));
+        let (cap_w, cap_h) = (width.max(prev_w), height.max(prev_h));
+        let (pixmap, bytes) = self.alloc_pixmap(root, cap_w, cap_h, 32)?;
+        if let Some((old, _, _, old_bytes)) = self.shadow_pixmap.replace((pixmap, cap_w, cap_h, bytes)) {
+            self.free_pixmap_tracked(old, old_bytes);
+        }
+        Ok(pixmap)
+    }
+
     /// Soft alpha shadow uses the canonical Xft glyph coverage once, the shared
     /// bounded Gaussian blur, then a transient premultiplied ARGB32 XRender blit.
     #[allow(clippy::too_many_arguments)]
@@ -238,7 +306,7 @@ impl X11App {
             gx >= min_x && gy >= min_y && gx < max_x && gy < max_y
         });
         let root = unsafe { XRootWindow(self.display, self.screen) };
-        let (pixmap, bytes) = self.alloc_pixmap(root, w, h, 32)?;
+        let pixmap = self.shadow_upload_pixmap(root, w, h)?;
         let result = (|| {
             unsafe { self.upload_argb32_words(pixmap, visual, argb, w, h)? };
             if let Some(render) = self.xrender.as_mut() {
@@ -246,7 +314,6 @@ impl X11App {
             }
             Ok::<_, String>(())
         })();
-        self.free_pixmap_tracked(pixmap, bytes);
         SHADOW_SCRATCH.with(|slot| slot.replace(scratch));
         result.map(|()| true)
     }
@@ -860,6 +927,7 @@ impl X11App {
             .len();
         {
             let _draw_guard = flamewm_profiler::start("render.draw");
+            unsafe { self.prefetch_text_shadow_masks(count, document, scale) };
             for index in 0..count {
                 // SAFETY: index is below the cached count; `paint` does not replace the cache.
                 let command = unsafe { &*self.retained_command(index) };
