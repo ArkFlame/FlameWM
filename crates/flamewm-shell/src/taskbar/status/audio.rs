@@ -1,6 +1,6 @@
 use flamewm_api::system::{
-    AudioMuteAction, AudioSnapshot, AudioTarget, AudioVolumeAction, ServiceAvailability,
-    SystemAction, SystemSnapshot,
+    AudioEndpointKind, AudioMuteAction, AudioSnapshot, AudioTarget, AudioVolumeAction,
+    ServiceAvailability, SystemAction, SystemSnapshot,
 };
 use flamewm_control_core::ControlRequest;
 use flamewm_shell_core::{AudioPopoverModel, AudioView};
@@ -209,10 +209,12 @@ pub fn visible_rows(
 
 #[must_use]
 pub fn default_endpoint_row(snapshot: &AudioSnapshot) -> Option<RowSource> {
+    // The default *output* sink only: `is_default` is also set on the default source (microphone),
+    // and the media keys adjust the default sink, so the OSD must read that same endpoint.
     snapshot
         .endpoints()
         .iter()
-        .find(|endpoint| endpoint.is_default)
+        .find(|endpoint| endpoint.is_default && endpoint.kind == AudioEndpointKind::Sink)
         .map(RowSource::from_endpoint)
 }
 
@@ -390,6 +392,37 @@ fn ceil_div(total: usize, per_page: usize) -> usize {
 mod tests {
     use super::*;
     use flamewm_api::system::{AudioEndpointKind, AudioEndpointSnapshot, AudioStreamSnapshot};
+
+    #[test]
+    fn default_endpoint_row_is_the_default_sink_even_when_a_default_source_is_listed_first() {
+        let snapshot = AudioSnapshot {
+            availability: ServiceAvailability::Available,
+            endpoints: vec![
+                AudioEndpointSnapshot {
+                    id: 7,
+                    kind: AudioEndpointKind::Source,
+                    name: "mic".to_owned(),
+                    description: String::new(),
+                    volume_percent: 20,
+                    muted: false,
+                    is_default: true,
+                },
+                AudioEndpointSnapshot {
+                    id: 3,
+                    kind: AudioEndpointKind::Sink,
+                    name: "sink".to_owned(),
+                    description: String::new(),
+                    volume_percent: 60,
+                    muted: false,
+                    is_default: true,
+                },
+            ],
+            ..AudioSnapshot::default()
+        };
+        let row = default_endpoint_row(&snapshot).expect("default sink row");
+        assert_eq!(row.id, "endpoint:sink:3");
+        assert_eq!(row.volume_percent, 60);
+    }
 
     #[test]
     fn endpoint_row_maps_to_revision_fenced_volume_action() {

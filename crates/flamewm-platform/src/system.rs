@@ -227,7 +227,8 @@ impl SystemService {
 
     /// Applies a media key to the default output sink through `perform_action`,
     /// the same typed path the UI uses. The write is fenced by the current audio
-    /// generation. With no default sink there is nothing to adjust and this is a no-op.
+    /// generation. With no default sink the key cannot be applied: that is an error, so the
+    /// caller logs it instead of the key failing silently.
     /// `cap` is the live volume cap (`volume_cap_percent` of the shared setting).
     pub fn media_audio_key(&mut self, key: MediaAudioKey, cap: u8) -> FlameResult<()> {
         let revision = self.snapshot.revision;
@@ -240,7 +241,10 @@ impl SystemService {
             .iter()
             .find(|endpoint| endpoint.is_default && endpoint.kind == AudioEndpointKind::Sink)
         else {
-            return Ok(());
+            return Err(FlameError::new(
+                ErrorCode::Unavailable,
+                "no default audio output sink",
+            ));
         };
         let target = AudioTarget::Endpoint {
             id: endpoint.id,
@@ -692,14 +696,12 @@ mod media_key_tests {
     }
 
     #[test]
-    fn no_default_sink_is_a_noop_without_handler_call() {
+    fn no_default_sink_is_an_error_without_handler_call() {
         let (mut service, seen) = service_with(vec![sink(1, false, 40, false)]);
-        service
-            .media_audio_key(MediaAudioKey::VolumeUp, MAX_VOLUME_PERCENT)
-            .expect("no-op");
-        service
-            .media_audio_key(MediaAudioKey::VolumeMute, MAX_VOLUME_PERCENT)
-            .expect("no-op");
+        let up = service.media_audio_key(MediaAudioKey::VolumeUp, MAX_VOLUME_PERCENT);
+        let mute = service.media_audio_key(MediaAudioKey::VolumeMute, MAX_VOLUME_PERCENT);
+        assert_eq!(up.expect_err("no default sink").code, ErrorCode::Unavailable);
+        assert!(mute.is_err());
         assert!(seen.borrow().is_empty());
     }
 }
