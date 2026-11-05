@@ -10,7 +10,7 @@ use std::{
 };
 
 use super::protocol::{encode_command, Command, OpenRequest, OpenResult, OpenScope};
-use flamewm_desktop_core::weather::WeatherFeed;
+use flamewm_weather::weather::WeatherFeed;
 
 pub const DEFAULT_MAX_RESTARTS: u32 = 3;
 

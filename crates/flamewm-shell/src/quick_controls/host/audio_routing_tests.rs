@@ -53,7 +53,7 @@ fn weather_pick_is_accepted_by_real_settings_store_and_enables_feed() {
     let mut snapshot = quick(AudioTab::Devices, false);
     snapshot.settings = service.snapshot();
     snapshot.weather.settings.enabled = true;
-    snapshot.weather_search.results = vec![flamewm_desktop_core::weather::WeatherLocation::new(
+    snapshot.weather_search.results = vec![flamewm_weather::weather::WeatherLocation::new(
         "Berlin",
         52.52,
         13.405,
@@ -70,7 +70,7 @@ fn weather_pick_is_accepted_by_real_settings_store_and_enables_feed() {
         .expect("real store accepts the pick");
     let _ = std::fs::remove_dir_all(&dir);
 
-    let feed = flamewm_desktop_core::weather::WeatherSettings::from_snapshot(&applied);
+    let feed = flamewm_weather::weather::WeatherSettings::from_snapshot(&applied);
     assert!(feed.enabled);
     assert_eq!(
         feed.location.as_ref().map(|l| l.name.as_str()),

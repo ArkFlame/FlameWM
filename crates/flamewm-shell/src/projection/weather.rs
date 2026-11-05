@@ -6,10 +6,10 @@
 
 use super::*;
 use crate::weather_host::{LocationSearch, SearchStatus};
-use flamewm_desktop_core::weather::{
+use flamewm_weather::weather::{
     TemperatureUnit, WeatherCondition, WeatherSettings, WeatherState,
 };
-pub use flamewm_desktop_core::weather_view::{
+pub use flamewm_weather::weather_view::{
     condition_label, place_name, popup_view, tray_view, WEATHER_DAY_ROWS,
 };
 
@@ -162,10 +162,10 @@ pub fn project_weather_popup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flamewm_desktop_core::weather::{
+    use flamewm_weather::weather::{
         DayForecast, WeatherError, WeatherLocation, WeatherSnapshot,
     };
-    use flamewm_desktop_core::weather_view::weekday_label;
+    use flamewm_weather::weather_view::weekday_label;
 
     fn berlin() -> WeatherLocation {
         WeatherLocation::new("Berlin", 52.52, 13.41, Some("Germany")).unwrap()
@@ -417,7 +417,7 @@ mod tests {
 #[cfg(test)]
 mod panel_tray_tests {
     use super::*;
-    use flamewm_desktop_core::weather::{WeatherLocation, WeatherSnapshot};
+    use flamewm_weather::weather::{WeatherLocation, WeatherSnapshot};
     use flamewm_ui_x11::test_support::RecordingUiDoc;
 
     const PANEL_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel.rwr"));

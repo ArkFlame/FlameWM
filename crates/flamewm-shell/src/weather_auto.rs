@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_platform::settings::is_valid_time_zone_name;
-use flamewm_desktop_core::weather::{HttpGet, WeatherError, WeatherLocation, WeatherSettings};
+use flamewm_weather::weather::{HttpGet, WeatherError, WeatherLocation, WeatherSettings};
 
 use crate::weather_provider::{json, CurlFetcher};
 
@@ -422,7 +422,7 @@ mod tests {
         let current = WeatherSettings {
             enabled: true,
             location: None,
-            units: flamewm_desktop_core::weather::TemperatureUnit::Celsius,
+            units: flamewm_weather::weather::TemperatureUnit::Celsius,
         };
         let change = location_change(&current, &fix()).expect("location differs");
         assert_eq!(change.key, WeatherSettings::LOCATION_KEY);

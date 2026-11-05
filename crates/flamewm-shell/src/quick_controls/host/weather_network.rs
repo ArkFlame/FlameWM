@@ -39,7 +39,7 @@ pub(crate) fn weather_pick_for(
 }
 
 pub(crate) fn weather_pick(
-    settings: flamewm_desktop_core::weather::WeatherSettings,
+    settings: flamewm_weather::weather::WeatherSettings,
     revision: u64,
     attempt: u8,
 ) -> crate::control_actions::WeatherPick {
@@ -72,9 +72,9 @@ pub(crate) fn finish_weather_pick(
             }
             state.snapshot.weather.settings = outcome.pick.settings.clone();
             state.snapshot.weather.state = if outcome.pick.settings.enabled {
-                flamewm_desktop_core::weather::WeatherState::Loading
+                flamewm_weather::weather::WeatherState::Loading
             } else {
-                flamewm_desktop_core::weather::WeatherState::Disabled
+                flamewm_weather::weather::WeatherState::Disabled
             };
             state.system_reprojection_pending = true;
         }

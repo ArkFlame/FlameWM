@@ -721,6 +721,7 @@ dependencies = [
  "flamewm-session-core",
  "flamewm-ui-core",
  "flamewm-ui-x11",
+ "flamewm-weather",
  "inotify",
 ]
 
@@ -974,6 +975,7 @@ dependencies = [
  "flamewm-shell-core",
  "flamewm-ui-core",
  "flamewm-ui-x11",
+ "flamewm-weather",
  "rustix 1.1.4",
 ]
 
@@ -1058,6 +1060,13 @@ dependencies = [
  "flamewm-ui-core",
  "flamewm-ui-document",
  "x11rb 0.14.0",
+]
+
+[[package]]
+name = "flamewm-weather"
+version = "0.1.5"
+dependencies = [
+ "flamewm-api",
 ]
 
 [[package]]

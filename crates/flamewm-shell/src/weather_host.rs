@@ -9,7 +9,7 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use flamewm_desktop_core::weather::{
+use flamewm_weather::weather::{
     WeatherError, WeatherFeed, WeatherLocation, WeatherProvider, WeatherSettings, WeatherState,
 };
 
@@ -21,7 +21,7 @@ pub const WEATHER_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// so half a second keeps the wake rate low without a visible delay on the popup.
 pub const WEATHER_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-type WeatherResult = Result<flamewm_desktop_core::weather::WeatherSnapshot, WeatherError>;
+type WeatherResult = Result<flamewm_weather::weather::WeatherSnapshot, WeatherError>;
 
 /// Weather refresh scheduler. It never fetches while disabled or without a location,
 /// fetches once when the popup opens, then at most every [`WEATHER_REFRESH_INTERVAL`]
@@ -264,7 +264,7 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::answer;
     use super::*;
-    use flamewm_desktop_core::weather::{TemperatureUnit, WeatherCondition, WeatherSnapshot};
+    use flamewm_weather::weather::{TemperatureUnit, WeatherCondition, WeatherSnapshot};
     use std::cell::Cell;
 
     fn location() -> WeatherLocation {
@@ -502,7 +502,7 @@ mod flow_tests {
     use super::test_support::answer;
     use super::*;
     use crate::projection::{project_weather_popup, project_weather_tray};
-    use flamewm_desktop_core::weather::{
+    use flamewm_weather::weather::{
         DayForecast, TemperatureUnit, WeatherCondition, WeatherSnapshot,
     };
     use flamewm_ui_x11::test_support::RecordingUiDoc;

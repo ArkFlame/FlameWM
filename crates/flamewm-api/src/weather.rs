@@ -3,7 +3,7 @@
 //!
 //! The shell owns the fetch, the refresh schedule and the settings. The control host stores
 //! the last published payload and assigns its revision; it never interprets the payload.
-//! `payload` is the encoding owned by `flamewm_desktop_core::weather::WeatherFeed`; only that
+//! `payload` is the encoding owned by `flamewm_weather::weather::WeatherFeed`; only that
 //! crate encodes or decodes it.
 
 /// Upper bound for one published payload (seven forecast days fit well below this).

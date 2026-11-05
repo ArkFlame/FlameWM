@@ -16,7 +16,7 @@ impl ShellLoop {
         flamewm_ui_x11::apply_render_acceleration(&snapshot);
         self.cursor_theme.sync_snapshot(&snapshot);
         self.weather.apply_settings(
-            flamewm_desktop_core::weather::WeatherSettings::from_snapshot(&snapshot),
+            flamewm_weather::weather::WeatherSettings::from_snapshot(&snapshot),
         );
         self.weather_feed_pending = true;
         let theme = crate::entry::settings_projection::icon_theme_name(Some(&snapshot));
@@ -103,7 +103,7 @@ impl ShellLoop {
         if !auto::flag(&snapshot, auto::AUTO_LOCATION_KEY) {
             return;
         }
-        let current = flamewm_desktop_core::weather::WeatherSettings::from_snapshot(&snapshot);
+        let current = flamewm_weather::weather::WeatherSettings::from_snapshot(&snapshot);
         let mut changes: Vec<flamewm_api::settings::SettingsChange> =
             auto::location_change(&current, &fix).into_iter().collect();
         if let Some(zone) = fix.time_zone.as_ref() {

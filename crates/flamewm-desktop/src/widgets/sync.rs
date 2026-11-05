@@ -363,7 +363,7 @@ pub(super) fn sync_weather(
 ) -> Result<(), String> {
     let text = color(widget.color("textColor"), 255);
     let accent = color(widget.color_or_accent("accentColor", accent), 255);
-    let view = flamewm_desktop_core::weather_feed::weather_widget_view(weather);
+    let view = flamewm_weather::weather_feed::weather_widget_view(weather);
     // City name is one line at 15px semibold: ellipsise it to the card's inner width.
     // The width estimate reads semibold ~8% narrow, so keep a 10% margin.
     let city_width = (widget.rect.width as f32 - WIDGET_PADDING * 2.0) * 0.9;
@@ -386,7 +386,7 @@ pub(super) fn sync_weather(
     // Cards under 300 px wide (one 2x2 cell) have no room beside the city name.
     document.visible(&format!("{id}-weather-right"), widget.rect.width >= 300)?;
     document.visible(&format!("{id}-weather-hours"), widget.flag("showHourly"))?;
-    for slot in 0..flamewm_desktop_core::weather_feed::WEATHER_STRIP_DAYS {
+    for slot in 0..flamewm_weather::weather_feed::WEATHER_STRIP_DAYS {
         let hour = slot + 1;
         let (day, high) = match view.days.get(slot) {
             Some(day) => (day.weekday, day.high.clone()),
