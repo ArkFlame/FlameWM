@@ -178,6 +178,28 @@ pub struct ProductSettings {
     pub accent: String,
     /// When false the system accent (`DEFAULT_ACCENT`) applies everywhere; `accent` is ignored.
     pub accent_custom: bool,
+    /// Progressive-disclosure switch for the `surface` group (`surfaceCustom`); off resolves its members to defaults.
+    pub surface_custom: bool,
+    /// Progressive-disclosure switch for the `glass` group (`glassCustom`); off resolves its members to defaults.
+    pub glass_custom: bool,
+    /// Progressive-disclosure switch for the `cursor` group (`cursorCustom`); off resolves its members to defaults.
+    pub cursor_custom: bool,
+    /// Progressive-disclosure switch for the `minimizeMaximize` group (`minimizeMaximizeCustom`); off resolves its members to defaults.
+    pub minimize_maximize_custom: bool,
+    /// Progressive-disclosure switch for the `lockBackground` group (`lockBackgroundCustom`); off resolves its members to defaults.
+    pub lock_background_custom: bool,
+    /// Progressive-disclosure switch for the `lockClock` group (`lockClockCustom`); off resolves its members to defaults.
+    pub lock_clock_custom: bool,
+    /// Progressive-disclosure switch for the `screensaver` group (`screensaverCustom`); off resolves its members to defaults.
+    pub screensaver_custom: bool,
+    /// Progressive-disclosure switch for the `windows` group (`windowsCustom`); off resolves its members to defaults.
+    pub windows_custom: bool,
+    /// Progressive-disclosure switch for the `panel` group (`panelCustom`); off resolves its members to defaults.
+    pub panel_custom: bool,
+    /// Progressive-disclosure switch for the `items` group (`itemsCustom`); off resolves its members to defaults.
+    pub items_custom: bool,
+    /// Progressive-disclosure switch for the `fonts` group (`fontsCustom`); off resolves its members to defaults.
+    pub fonts_custom: bool,
     pub icon_theme: String,
     pub appearance: AppearanceMode,
     /// Saved custom wallpaper path; used only when `wallpaper_mode` is `Custom`.
@@ -353,6 +375,17 @@ impl Default for ProductSettings {
             revision: 1,
             accent: DEFAULT_ACCENT.to_owned(),
             accent_custom: false,
+            surface_custom: false,
+            glass_custom: false,
+            cursor_custom: false,
+            minimize_maximize_custom: false,
+            lock_background_custom: false,
+            lock_clock_custom: false,
+            screensaver_custom: false,
+            windows_custom: false,
+            panel_custom: false,
+            items_custom: false,
+            fonts_custom: false,
             icon_theme: "MacTahoe".to_owned(),
             appearance: AppearanceMode::Dark,
             wallpaper: String::new(),
@@ -1137,6 +1170,17 @@ macro_rules! stable_settings {
 stable_settings! {
     (true, appearance, "accent", accent),
     (false, appearance, "accentCustom", accent_custom),
+    (false, taskbar, "surfaceCustom", surface_custom),
+    (false, glass, "glassCustom", glass_custom),
+    (false, appearance, "cursorCustom", cursor_custom),
+    (false, windows, "minimizeMaximizeCustom", minimize_maximize_custom),
+    (false, lock, "lockBackgroundCustom", lock_background_custom),
+    (false, lock, "lockClockCustom", lock_clock_custom),
+    (false, screensaver, "screensaverCustom", screensaver_custom),
+    (false, windows, "windowsCustom", windows_custom),
+    (false, taskbar, "panelCustom", panel_custom),
+    (false, taskbar, "itemsCustom", items_custom),
+    (false, fonts, "fontsCustom", fonts_custom),
     (true, appearance, "appearance", appearance),
     (true, desktop, "wallpaper", wallpaper),
     (false, desktop, "wallpaperMode", wallpaper_mode),
@@ -1300,12 +1344,6 @@ fn parse_panel_edge(value: &str) -> Option<PanelEdge> {
     }
 }
 
-
-
-
-
-
-
 fn legacy_wallpaper_mode(snapshot: &ProductSettings) -> BackgroundMode {
     if snapshot.wallpaper.is_empty() {
         BackgroundMode::Default
@@ -1357,6 +1395,8 @@ mod glass_settings_tests;
 
 #[cfg(test)]
 mod accent_custom_tests;
+#[cfg(test)]
+mod switch_group_tests;
 
 #[cfg(test)]
 mod outline_default_tests {
