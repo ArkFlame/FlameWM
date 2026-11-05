@@ -31,10 +31,6 @@ impl SelectionModel {
         self.fill_opacity
     }
 
-    pub fn set_border_opacity(&mut self, opacity: u8) {
-        self.border_opacity = opacity.min(100);
-    }
-
     #[must_use]
     pub const fn border_opacity(&self) -> u8 {
         self.border_opacity

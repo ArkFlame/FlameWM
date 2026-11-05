@@ -59,8 +59,6 @@ pub fn open_terminal(program: &str, desktop: &Path) -> CommandIntent {
     }
 }
 
-pub const DEFAULT_TERMINAL: &str = "x-terminal-emulator";
-
 /// Terminal program without shell evaluation: `FlameWM` Terminal first (see `flamewm_applications::terminal`).
 #[must_use]
 pub fn terminal_program() -> String {

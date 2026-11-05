@@ -32,16 +32,8 @@ pub fn load(path: &Path) -> FlameResult<StickyNoteStore> {
     parse(&text)
 }
 
-pub fn load_from_xdg() -> FlameResult<StickyNoteStore> {
-    load(&state_path()?)
-}
-
 pub fn persist(path: &Path, store: &StickyNoteStore) -> FlameResult<()> {
     super::atomic_file::write_text(path, "sticky state", &serialize(store))
-}
-
-pub fn persist_to_xdg(store: &StickyNoteStore) -> FlameResult<()> {
-    persist(&state_path()?, store)
 }
 
 #[must_use]
