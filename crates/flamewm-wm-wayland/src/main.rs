@@ -797,9 +797,9 @@ fn init_winit(
     );
     state.output.set_preferred(mode);
     state.output_size = (size.w, size.h).into();
-    // The compositor draws the pointer the clients ask for, as the tty backend does.
-    backend.window().set_cursor_visible(false);
+    // The host window draws named pointers (no software frame per motion); surfaces stay software.
     state.backend = Some(backend);
+    state.sync_host_cursor();
     handle.insert_source(winit_source, |event, (), state| match event {
         WinitEvent::Resized { size, .. } => state.on_resized(size.w, size.h),
         WinitEvent::Input(event) => state.process_input(event),

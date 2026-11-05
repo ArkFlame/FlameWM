@@ -494,6 +494,32 @@ mod region_tests {
     /// hover style produces; repainting it would redraw the whole window to the same pixels.
     /// A document change or latched damage must still repaint, because equal command fields are not
     /// proof that the pixels behind a retained asset are current.
+    /// Menu hover changes one row's fill; the region must stay on that row (plus the 2px pad),
+    /// not the whole menu.
+    #[test]
+    fn menu_hover_row_repaints_only_that_row() {
+        let rows: Vec<_> = (0..10)
+            .map(|i| fill(0.0, i as f32 * 10.0, 100.0, 10.0, 255))
+            .collect();
+        let mut hovered = rows.clone();
+        hovered[3] = fill(0.0, 30.0, 100.0, 10.0, 128);
+        let region = diff_region(&rows, &hovered, VIEW).expect("hovered row");
+        assert_eq!(region.y, 28);
+        assert_eq!(region.y + region.height as i32, 42);
+        assert!(region.area() * 5 < (VIEW.0 * VIEW.1) as u64);
+    }
+
+    /// A marquee overlay that grows by one column per tick covers its old and new extent only.
+    #[test]
+    fn marquee_growth_repaints_old_and_new_extent_only() {
+        let old = vec![fill(10.0, 10.0, 20.0, 20.0, 128)];
+        let new = vec![fill(10.0, 10.0, 30.0, 20.0, 128)];
+        let region = diff_region(&old, &new, VIEW).expect("marquee growth");
+        assert_eq!(region.x, 8);
+        assert_eq!(region.x + region.width as i32, 42);
+        assert!(region.area() * 5 < (VIEW.0 * VIEW.1) as u64);
+    }
+
     #[test]
     fn identical_rebuild_plans_skip() {
         let list = vec![

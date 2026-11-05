@@ -786,6 +786,30 @@ impl State {
         }
     }
 
+    /// True when the host window draws the pointer itself: a named theme cursor (or none). Client
+    /// cursor surfaces stay software-drawn. Pointer motion then needs no frame at all.
+    pub fn host_draws_pointer_status(status: &CursorImageStatus) -> bool {
+        matches!(status, CursorImageStatus::Named(_) | CursorImageStatus::Hidden)
+    }
+
+    /// Nested winit only: mirrors the pointer image onto the host window. A surface or hidden
+    /// cursor hides the host pointer; the software cursor then draws the surface, if any.
+    pub fn sync_host_cursor(&self) {
+        let Some(backend) = self.backend.as_ref() else {
+            return;
+        };
+        let window = backend.window();
+        match &self.cursor_status {
+            CursorImageStatus::Named(icon) => {
+                window.set_cursor_visible(true);
+                window.set_cursor(*icon);
+            }
+            CursorImageStatus::Hidden | CursorImageStatus::Surface(_) => {
+                window.set_cursor_visible(false);
+            }
+        }
+    }
+
     /// Installs the tty wake pipe. Called once by `drm::init`; the nested backend never sets it.
     #[cfg_attr(not(feature = "drm"), allow(dead_code))]
     pub fn set_drm_waker(&mut self, waker: Ping) {
@@ -1061,6 +1085,17 @@ mod tests {
         SceneBuild, SyncWait, arm_retry, focus_needs_restack, pick_gpu, plan_frame, reserve_struts,
         retry_owed, scan_failed, scene_build, sync_wait_decision,
     };
+
+    /// Named and hidden pointers are drawn by the host window (no software frame per motion);
+    /// client cursor surfaces stay software-drawn.
+    #[test]
+    fn host_draws_named_and_hidden_pointers_only() {
+        use smithay::input::pointer::{CursorIcon, CursorImageStatus};
+        use super::State;
+        assert!(State::host_draws_pointer_status(&CursorImageStatus::default_named()));
+        assert!(State::host_draws_pointer_status(&CursorImageStatus::Named(CursorIcon::Pointer)));
+        assert!(State::host_draws_pointer_status(&CursorImageStatus::Hidden));
+    }
 
     /// Pointer motion over an unchanged scene reuses the cached elements; any scene change, or no
     /// cache yet, rebuilds them.

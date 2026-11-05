@@ -103,7 +103,10 @@ impl State {
             _ => {}
         }
         if plain_motion {
-            self.request_cursor_paint();
+            // Nested winit with a host-drawn pointer: the host moves its own cursor, so no frame.
+            if self.backend.is_none() || !Self::host_draws_pointer_status(&self.cursor_status) {
+                self.request_cursor_paint();
+            }
         } else {
             self.request_redraw();
         }

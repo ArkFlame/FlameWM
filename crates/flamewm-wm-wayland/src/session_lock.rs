@@ -80,6 +80,7 @@ impl SessionLockHandler for State {
         self.refocus();
         // A lock may have replaced the pointer; show the themed one again afterwards.
         self.cursor_status = CursorImageStatus::default_named();
+        self.sync_host_cursor();
     }
 
     fn new_surface(&mut self, surface: LockSurface, output: WlOutput) {

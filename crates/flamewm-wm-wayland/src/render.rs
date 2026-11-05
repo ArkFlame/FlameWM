@@ -146,7 +146,20 @@ fn premultiplied_argb_bytes(rgba: &[u8]) -> Vec<u8> {
 /// ([`schedule_desktop_wake`]) recaptures the final state once the burst settles.
 const DESKTOP_RECAPTURE_INTERVAL: Duration = Duration::from_millis(100);
 
+/// The blurred desktop is kept at 1/`DESKTOP_SCALE` linear size. It only shows as a soft tint under
+/// chrome, so the quarter-size copy is visually equivalent at 1/16 of the resident bytes.
+const DESKTOP_SCALE: usize = 4;
+/// Output rows read back and box-averaged per step, so the full-output readback is never resident.
+/// Must be a multiple of `DESKTOP_SCALE` so each strip covers whole stored rows.
+const DESKTOP_STRIP_ROWS: usize = 32;
+
+/// Stored (downscaled) size of a `size` output capture.
+fn stored_size(size: (usize, usize)) -> (usize, usize) {
+    (size.0.div_ceil(DESKTOP_SCALE).max(1), size.1.div_ceil(DESKTOP_SCALE).max(1))
+}
+
 struct DesktopBackdrop {
+    /// Output size the capture stands for; the pixels are stored at [`stored_size`] of it.
     width: usize,
     height: usize,
     /// Commit counter of every desktop-layer element the capture saw. A wallpaper repaint is a
@@ -154,6 +167,46 @@ struct DesktopBackdrop {
     commits: Vec<CommitCounter>,
     pixels: Vec<u8>,
     captured_at: Instant,
+}
+
+/// Bilinear sample of straight RGBA at stored-pixel coordinates (`fx`, `fy`), clamped to the edges.
+fn sample_bilinear(pixels: &[u8], (sw, sh): (usize, usize), fx: f32, fy: f32) -> [u8; 4] {
+    let (x0, y0) = (fx as usize, fy as usize);
+    let (x1, y1) = ((x0 + 1).min(sw - 1), (y0 + 1).min(sh - 1));
+    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+    let at = |x: usize, y: usize, c: usize| f32::from(pixels[(y * sw + x) * 4 + c]);
+    let mut out = [0u8; 4];
+    for (c, value) in out.iter_mut().enumerate() {
+        let top = at(x0, y0, c) + (at(x1, y0, c) - at(x0, y0, c)) * tx;
+        let bottom = at(x0, y1, c) + (at(x1, y1, c) - at(x0, y1, c)) * tx;
+        *value = (top + (bottom - top) * ty).round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
+/// Box-averages `rows` full-width readback rows starting at output row `y0` into the stored image.
+/// `y0` and the strip height are multiples of `DESKTOP_SCALE` except at the output bottom.
+fn downscale_strip(strip: &[u8], (width, y0, rows): (usize, usize, usize), stored: &mut [u8], (sw, sh): (usize, usize)) {
+    let end = y0 + rows;
+    for sy in (y0 / DESKTOP_SCALE)..end.div_ceil(DESKTOP_SCALE).min(sh) {
+        for sx in 0..sw {
+            let mut sum = [0u32; 4];
+            let mut count = 0u32;
+            for y in (sy * DESKTOP_SCALE).max(y0)..((sy + 1) * DESKTOP_SCALE).min(end) {
+                for x in (sx * DESKTOP_SCALE)..((sx + 1) * DESKTOP_SCALE).min(width) {
+                    let at = ((y - y0) * width + x) * 4;
+                    for (total, byte) in sum.iter_mut().zip(&strip[at..at + 4]) {
+                        *total += u32::from(*byte);
+                    }
+                    count += 1;
+                }
+            }
+            let at = (sy * sw + sx) * 4;
+            for (c, total) in sum.iter().enumerate() {
+                stored[at + c] = ((total + count / 2) / count.max(1)) as u8;
+            }
+        }
+    }
 }
 
 struct ChromeBuffer {
@@ -178,6 +231,8 @@ impl Decorations {
 
     /// Replaces the desktop capture. Titlebars and surface backdrops baked from the old one are rebuilt.
     fn set_desktop(&mut self, size: (usize, usize), commits: Vec<CommitCounter>, pixels: Vec<u8>) {
+        let (sw, sh) = stored_size(size);
+        debug_assert_eq!(pixels.len(), sw * sh * 4, "capture must be stored at the reduced size");
         self.parts.clear();
         self.surfaces.clear();
         self.desktop = Some(DesktopBackdrop {
@@ -204,13 +259,17 @@ impl Decorations {
     /// Blurred desktop under a `w` x `h` titlebar at `origin`, clamped to the output edges.
     fn crop(&self, origin: (i32, i32), w: usize, h: usize) -> Option<Vec<u8>> {
         let desktop = self.desktop.as_ref()?;
+        let stored = stored_size((desktop.width, desktop.height));
+        let scale = DESKTOP_SCALE as f32;
         let mut out = Vec::with_capacity(w * h * 4);
         for y in 0..h {
-            let sy = (origin.1 + y as i32).clamp(0, desktop.height as i32 - 1) as usize;
+            // Output pixel centre mapped into stored space, clamped to the output edges.
+            let oy = (origin.1 + y as i32).clamp(0, desktop.height as i32 - 1) as f32;
+            let fy = ((oy + 0.5) / scale - 0.5).clamp(0.0, (stored.1 - 1) as f32);
             for x in 0..w {
-                let sx = (origin.0 + x as i32).clamp(0, desktop.width as i32 - 1) as usize;
-                let at = (sy * desktop.width + sx) * 4;
-                out.extend_from_slice(&desktop.pixels[at..at + 4]);
+                let ox = (origin.0 + x as i32).clamp(0, desktop.width as i32 - 1) as f32;
+                let fx = ((ox + 0.5) / scale - 0.5).clamp(0.0, (stored.0 - 1) as f32);
+                out.extend_from_slice(&sample_bilinear(&desktop.pixels, stored, fx, fy));
             }
         }
         Some(out)
@@ -1059,24 +1118,36 @@ pub(crate) fn refresh_desktop_backdrop(
         let mut target = renderer.bind(&mut texture)?;
         tracker.render_output(renderer, &mut target, 0, &elements, CLEAR)?;
     }
+    // Read back and box-average one strip at a time: only the reduced image is ever resident.
+    let (sw, sh) = stored_size(dims);
+    let mut stored = vec![0u8; sw * sh * 4];
     let target = renderer.bind(&mut texture)?;
-    let mapping =
-        renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), Fourcc::Abgr8888)?;
-    let sharp = renderer.map_texture(&mapping)?.to_vec();
+    let mut y0 = 0;
+    while y0 < dims.1 {
+        let rows = DESKTOP_STRIP_ROWS.min(dims.1 - y0);
+        let region = Rectangle::<i32, Buffer>::new(
+            Point::from((0, y0 as i32)),
+            Size::from((dims.0 as i32, rows as i32)),
+        );
+        let mapping = renderer.copy_framebuffer(&target, region, Fourcc::Abgr8888)?;
+        let strip = renderer.map_texture(&mapping)?;
+        downscale_strip(strip, (dims.0, y0, rows), &mut stored, (sw, sh));
+        y0 += rows;
+    }
     let blur_percent = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_BLUR_PERCENT;
-    let radius = MAX_BLUR_RADIUS_PX * f32::from(blur_percent) / 100.0;
+    let radius = MAX_BLUR_RADIUS_PX * f32::from(blur_percent) / 100.0 / DESKTOP_SCALE as f32;
     let source = RgbaImage {
-        width: dims.0 as u32,
-        height: dims.1 as u32,
-        pixels: sharp,
+        width: sw as u32,
+        height: sh as u32,
+        pixels: stored,
     };
     let blurred = frosted_backdrop(
         &source,
         ImageRect {
             x: 0,
             y: 0,
-            width: dims.0 as u32,
-            height: dims.1 as u32,
+            width: sw as u32,
+            height: sh as u32,
         },
         radius,
         None,
@@ -1129,10 +1200,14 @@ fn render_into(
     let elements = if let Some(surface) = state.lock_surface() {
         surface_elements(backend.renderer(), surface.wl_surface(), 0, 0)
     } else {
-        let mut elements =
+        // The host window draws a named pointer itself (see `State::sync_host_cursor`).
+        let mut elements = if State::host_draws_pointer_status(&state.cursor_status) {
+            Vec::new()
+        } else {
             state
                 .cursors
-                .elements(backend.renderer(), &state.cursor_status, state.pointer);
+                .elements(backend.renderer(), &state.cursor_status, state.pointer)
+        };
         elements.extend(build_elements(state, backend.renderer()));
         elements
     };
@@ -1163,6 +1238,8 @@ fn render_into(
             0
         })
     };
+    // A retained texture + full blit was measured slower than direct window damage under llvmpipe
+    // (marquee 142% vs 89% CPU, one run each), so the window path stays the only one.
     let damage = {
         let (renderer, mut framebuffer) = backend.bind()?;
         let result =
@@ -1492,7 +1569,7 @@ mod decoration_tests {
         let commit = |n: usize| CommitCounter::from(n);
         let mut cache = Decorations::default();
         assert!(!cache.desktop_current((4, 3), &[]), "empty cache must miss");
-        cache.set_desktop((4, 3), vec![commit(1), commit(7)], vec![0; 4 * 3 * 4]);
+        cache.set_desktop((4, 3), vec![commit(1), commit(7)], vec![0; 4]);
         assert!(cache.desktop_current((4, 3), &[commit(1), commit(7)]));
         // Wallpaper repaint: same surfaces and size, one surface committed again.
         assert!(!cache.desktop_current((4, 3), &[commit(1), commit(8)]));
@@ -1506,7 +1583,7 @@ mod decoration_tests {
     fn idle_desktop_drops_the_output_sized_capture() {
         let commit = |n: usize| CommitCounter::from(n);
         let mut cache = Decorations::default();
-        cache.set_desktop((4, 3), vec![commit(1)], vec![0; 4 * 3 * 4]);
+        cache.set_desktop((4, 3), vec![commit(1)], vec![0; 4]);
         cache.drop_desktop();
         assert!(cache.desktop.is_none(), "idle capture must not stay resident");
         assert!(!cache.desktop_current((4, 3), &[commit(1)]), "next use recaptures");
@@ -1517,7 +1594,7 @@ mod decoration_tests {
         let mut cache = Decorations::default();
         let now = Instant::now();
         assert_eq!(cache.recapture_wait((4, 3), now), None, "no capture yet");
-        cache.set_desktop((4, 3), Vec::new(), vec![0; 4 * 3 * 4]);
+        cache.set_desktop((4, 3), Vec::new(), vec![0; 4]);
         let captured = cache.desktop.as_ref().expect("capture").captured_at;
         let early = captured + Duration::from_millis(40);
         assert_eq!(
@@ -1930,14 +2007,37 @@ mod surface_backdrop_tests {
     }
 
     #[test]
-    fn crop_clamps_to_the_output_and_keeps_desktop_pixels() {
-        // 2x2 desktop: pixel (x, y) has R = 10 * (2y + x) + 1.
+    fn crop_clamps_to_the_output_and_samples_the_reduced_capture() {
+        // Output 8x8 stored at 2x2: stored pixel (x, y) has R = 10 * (2y + x) + 1.
         let pixels: Vec<u8> = (0..4u8).flat_map(|i| [10 * i + 1, 0, 0, 255]).collect();
         let mut decorations = Decorations::default();
-        decorations.set_desktop((2, 2), Vec::new(), pixels);
-        // A 2x2 crop at (1, 1) reads (1,1), then clamps the rest to the bottom-right pixel.
-        let crop = decorations.crop((1, 1), 2, 2).expect("desktop set");
-        let reds: Vec<u8> = crop.chunks_exact(4).map(|px| px[0]).collect();
+        decorations.set_desktop((8, 8), Vec::new(), pixels);
+        // The top-left output pixel maps to the top-left stored pixel.
+        let corner = decorations.crop((0, 0), 1, 1).expect("desktop set");
+        assert_eq!(corner[0], 1);
+        // Past the bottom-right edge every sample clamps to the bottom-right stored pixel.
+        let clamped = decorations.crop((100, 100), 2, 2).expect("desktop set");
+        let reds: Vec<u8> = clamped.chunks_exact(4).map(|px| px[0]).collect();
         assert_eq!(reds, vec![31, 31, 31, 31]);
+    }
+
+    #[test]
+    fn desktop_capture_is_stored_at_reduced_size() {
+        assert_eq!(stored_size((1280, 800)), (320, 200));
+        assert_eq!(stored_size((1281, 801)), (321, 201), "partial blocks round up");
+        assert_eq!(stored_size((1, 1)), (1, 1));
+    }
+
+    #[test]
+    fn strip_downscale_box_averages_blocks_across_strips() {
+        // 4x8 output in two 4-row strips; the top block is 0, the bottom block is 200 (every channel).
+        let width = 4;
+        let top = vec![0u8; width * 4 * 4];
+        let bottom = vec![200u8; width * 4 * 4];
+        let mut stored = vec![0u8; 1 * 2 * 4];
+        downscale_strip(&top, (width, 0, 4), &mut stored, (1, 2));
+        downscale_strip(&bottom, (width, 4, 4), &mut stored, (1, 2));
+        assert_eq!(&stored[0..4], &[0, 0, 0, 0]);
+        assert_eq!(&stored[4..8], &[200, 200, 200, 200]);
     }
 }
