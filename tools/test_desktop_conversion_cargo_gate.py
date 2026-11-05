@@ -21,11 +21,12 @@ class BuildGateTests(unittest.TestCase):
             'Cargo.toml': '[workspace]\nmembers = ["crates/*"]\n',
             'crates/flamewm-desktop/Cargo.toml': '[package]\nname = "flamewm-desktop"\n',
             'crates/flamewm-desktop/src/main.rs':
-                'use flamewm_desktop_core::conversion::offered_formats;\nmod menu_actions;\nEntryMenuAction::Convert;\n',
+                'use flamewm_conversion_core::conversion::offered_formats;\nmod menu_actions;\nEntryMenuAction::Convert;\n',
             'crates/flamewm-desktop/src/menu_actions.rs':
                 'const ID: &str = "entry.convert";\nfn go() { offered_formats(); convert_file(); }\n',
             'crates/flamewm-desktop-core/Cargo.toml': '[package]\nname = "flamewm-desktop-core"\n',
-            'crates/flamewm-desktop-core/src/lib.rs': 'pub mod file_actions;\npub mod conversion;\n',
+            'crates/flamewm-desktop-core/src/lib.rs': 'pub mod file_actions;\n',
+            'crates/flamewm-conversion-core/src/lib.rs': 'pub mod conversion;\n',
             'crates/flamewm-desktop-core/src/file_actions.rs':
                 'pub enum EntryMenuAction { Convert, }\n'
                 'impl EntryMenuAction { fn label(self) -> &\'static str { match self { Self::Convert => "Convert" } } }\n'
@@ -40,7 +41,7 @@ class BuildGateTests(unittest.TestCase):
             'crates/flamewm-render-compiler/src/compile.rs': 'fn compile_file() {}',
             'crates/flamewm-render-compiler/src/html.rs': 'fn parse_html() {}',
             'crates/flamewm-render-compiler/src/css.rs': 'fn parse_css() {}',
-            'crates/flamewm-desktop-core/src/conversion.rs':
+            'crates/flamewm-conversion-core/src/conversion.rs':
                 'pub const FORMAT_CHOICES: [&str; 0] = [];\npub fn offered_formats() {}\npub fn convert_image() {}\npub fn convert_file() {}\npub fn predicted_destination() {}\n',
         }
         for rel, data in files.items():
@@ -83,7 +84,7 @@ class BuildGateTests(unittest.TestCase):
         self.assertEqual(stamp.read_text().strip(), content_digest(self.root))
 
     def test_same_content_with_archived_1970_mtimes_is_not_cleaned_twice(self):
-        provider = self.root/'crates/flamewm-desktop-core/src/conversion.rs'
+        provider = self.root/'crates/flamewm-conversion-core/src/conversion.rs'
         provider.touch()
         self.assertTrue(run(self.root, executor=self.execute))
         import os
@@ -92,7 +93,7 @@ class BuildGateTests(unittest.TestCase):
 
     def test_changed_content_invalidates_again_and_force_is_supported(self):
         self.assertTrue(run(self.root, executor=self.execute))
-        with (self.root/'crates/flamewm-desktop-core/src/conversion.rs').open('a') as f:
+        with (self.root/'crates/flamewm-conversion-core/src/conversion.rs').open('a') as f:
             f.write('// user source edit\n')
         self.assertTrue(run(self.root, executor=self.execute))
         self.assertTrue(run(self.root, force=True, executor=self.execute))
@@ -124,7 +125,7 @@ class BuildGateTests(unittest.TestCase):
         self.assertFalse((self.root/'.target/flamewm/desktop-core-release-cache-invalidated.sha256').exists())
 
     def test_missing_module_is_rejected_before_cargo(self):
-        (self.root/'crates/flamewm-desktop-core/src/lib.rs').write_text('pub mod file_actions;\n')
+        (self.root/'crates/flamewm-conversion-core/src/lib.rs').write_text('')  # conversion module no longer exported
         with self.assertRaisesRegex(BuildGateError, 'source API mismatch'):
             run(self.root, executor=self.execute)
         self.assertEqual(self.commands, [])
