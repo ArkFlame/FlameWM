@@ -97,14 +97,28 @@ fn hole_row_span(rect: RoundedRect, y: i32) -> Option<(i32, i32)> {
     Some((start, end.max(start)))
 }
 
-fn blend_span(span: &mut [u8], color: [u8; 4], alpha: f32) {
+/// Per-channel lookup tables for [`blend_span`]: entry `d` is the same f32 expression the
+/// per-pixel rule evaluates for destination value `d`, so the table path is bit-identical.
+fn blend_luts(color: [u8; 4], alpha: f32) -> [[u8; 256]; 4] {
     let inverse = 1.0 - alpha;
     let [cr, cg, cb, ca] = color.map(f32::from);
+    let mut luts = [[0u8; 256]; 4];
+    for d in 0..256 {
+        let v = d as f32;
+        luts[0][d] = (cr * alpha + v * inverse).round() as u8;
+        luts[1][d] = (cg * alpha + v * inverse).round() as u8;
+        luts[2][d] = (cb * alpha + v * inverse).round() as u8;
+        luts[3][d] = (ca + v * inverse).round() as u8;
+    }
+    luts
+}
+
+/// Source-over of the colour the tables were built for, one lookup per channel per pixel.
+fn blend_span(span: &mut [u8], luts: &[[u8; 256]; 4]) {
     for pixel in span.chunks_exact_mut(4) {
-        pixel[0] = (cr * alpha + f32::from(pixel[0]) * inverse).round() as u8;
-        pixel[1] = (cg * alpha + f32::from(pixel[1]) * inverse).round() as u8;
-        pixel[2] = (cb * alpha + f32::from(pixel[2]) * inverse).round() as u8;
-        pixel[3] = (ca + f32::from(pixel[3]) * inverse).round() as u8;
+        for (channel, lut) in pixel.iter_mut().zip(luts) {
+            *channel = lut[usize::from(*channel)];
+        }
     }
 }
 
@@ -126,6 +140,7 @@ pub fn fill_rounded_rect_cpu(
     let outer = outer.normalized();
     let hole = hole.map(RoundedRect::normalized);
     let alpha = f32::from(color[3]) / 255.0;
+    let luts = blend_luts(color, alpha);
     for row in 0..outer.height {
         let y = outer.y + row as i32;
         if !(0..height as i32).contains(&y) {
@@ -141,7 +156,7 @@ pub fn fill_rounded_rect_cpu(
         for (from, to) in [(start, hole_start.min(end)), (hole_end.max(start), end)] {
             if from < to {
                 let span = &mut pixels[row_base + from as usize * 4..row_base + to as usize * 4];
-                blend_span(span, color, alpha);
+                blend_span(span, &luts);
             }
         }
     }
@@ -151,6 +166,67 @@ pub fn fill_rounded_rect_cpu(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pre-table per-pixel rule, kept as the reference for the lookup-table path.
+    fn blend_span_reference(span: &mut [u8], color: [u8; 4], alpha: f32) {
+        let inverse = 1.0 - alpha;
+        let [cr, cg, cb, ca] = color.map(f32::from);
+        for pixel in span.chunks_exact_mut(4) {
+            pixel[0] = (cr * alpha + f32::from(pixel[0]) * inverse).round() as u8;
+            pixel[1] = (cg * alpha + f32::from(pixel[1]) * inverse).round() as u8;
+            pixel[2] = (cb * alpha + f32::from(pixel[2]) * inverse).round() as u8;
+            pixel[3] = (ca + f32::from(pixel[3]) * inverse).round() as u8;
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn lut_blend_ab() {
+        let color = [200, 10, 90, 180];
+        let alpha = f32::from(color[3]) / 255.0;
+        let luts = blend_luts(color, alpha);
+        let mut span: Vec<u8> = (0..1920 * 4).map(|i| (i * 7) as u8).collect();
+        for round in 0..2 {
+            for variant in ["per_pixel", "lut"] {
+                let start = std::time::Instant::now();
+                for _ in 0..2000 {
+                    if variant == "per_pixel" {
+                        blend_span_reference(std::hint::black_box(&mut span), color, alpha);
+                    } else {
+                        blend_span(std::hint::black_box(&mut span), &luts);
+                    }
+                }
+                println!("KLUT round {round} {variant}: {:.3} ns/px", start.elapsed().as_nanos() as f64 / (2000.0 * 1920.0));
+            }
+        }
+    }
+
+    #[test]
+    fn lut_blend_is_bit_identical_to_per_pixel_rule() {
+        let mut seed = 0xdead_beef_u32;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        for color in [[200, 10, 90, 255], [30, 200, 60, 128], [0, 0, 0, 1], [255, 255, 255, 0]] {
+            let alpha = f32::from(color[3]) / 255.0;
+            let luts = blend_luts(color, alpha);
+            let mut want: Vec<u8> = (0..256 * 4).map(|i| i as u8).collect();
+            let mut got = want.clone();
+            blend_span_reference(&mut want, color, alpha);
+            blend_span(&mut got, &luts);
+            assert_eq!(got, want, "colour {color:?}");
+            for _ in 0..200 {
+                let mut a: Vec<u8> = (0..64 * 4).map(|_| rnd() as u8).collect();
+                let mut b = a.clone();
+                blend_span_reference(&mut a, color, alpha);
+                blend_span(&mut b, &luts);
+                assert_eq!(a, b, "colour {color:?}");
+            }
+        }
+    }
 
     fn frame(width: u32, height: u32) -> Vec<u8> {
         vec![0u8; width as usize * height as usize * 4]
