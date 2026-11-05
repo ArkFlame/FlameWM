@@ -1227,6 +1227,12 @@ mod tests {
         let sources = [
             include_str!("projection.rs"),
             include_str!("async_projection.rs"),
+            include_str!("async_projection/icon_binding.rs"),
+            include_str!("async_projection/icon_cache.rs"),
+            include_str!("async_projection/metrics.rs"),
+            include_str!("async_projection/panel.rs"),
+            include_str!("async_projection/start_view.rs"),
+            include_str!("async_projection/task_slots.rs"),
             include_str!("projection/network.rs"),
             include_str!("projection/audio.rs"),
         ];
