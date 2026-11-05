@@ -221,3 +221,84 @@ regression risk to re-measure on a quiet host. Max per-frame stall on the UI thr
 - Finder ~1 wake/s: `scripts/perf/app_wakes.sh` was not run in this pass. No measurement.
 - Live-app frame timing (Xvfb scroll/navigate): not run.
 - Steady-view slowdown above: unresolved.
+
+## Explorer steady-view regression: resolved as host noise (2026-11-05, third pass)
+
+Re-measured the second pass's open item. Root-cause review of the steady path: `start_pass` on an
+empty queue is one mutex lock and an empty `retain` (no allocation); the in-view row lookups are
+identical to the old policy; the decode count is 30 in both. No lock, wake, or ordering difference
+exists on that path. The earlier 405/472 ms vs 378/392 ms gap came from one fixed run order on a
+loaded host.
+
+Fix to the bench, not the queue: `examples/thumb_bench.rs` now alternates policy order per iteration
+(old-new, new-old, ...), so host drift cannot favour the policy that runs first.
+
+### Measurements (same process, release, 300 PNG fixture, window 30, median)
+
+Build: `CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-coder-perf cargo build --release -p flamewm-explorer --example thumb_bench`
+exit=0. Run: `thumb_bench /run/media/linsaftw/SDD/perf-fixtures/thumb-bench 5` (run 1 and 2), then 7 iterations x3.
+Bench exit codes: runs 1 and 2 not captured as exit codes (`| tail` pipe). The 7-iteration runs printed
+complete results; the `PIPESTATUS` capture in that shell was empty, so the bench's own exit is unverified
+for those three runs.
+
+| Scenario | Metric | old | new | Result |
+|---|---|---|---|---|
+| steady, run A (5 it, old-first order) | settle ms | 273.5 | 244.7 | new 11% faster (noise-level) |
+| steady, run B (5 it, old-first order) | settle ms | 240.1 | 237.4 | equal |
+| steady, run 1 (7 it, alternating) | settle ms | 171.3 | 170.2 | equal |
+| steady, run 2 (7 it, alternating) | settle ms | 191.7 | 191.8 | equal |
+| steady, run 3 (7 it, alternating) | settle ms | 163.1 | 163.4 | equal |
+| scroll, run A | settle ms | 2246.6 | 296.3 | about 7.6x sooner |
+| scroll, run B | settle ms | 1873.2 | 261.2 | about 7.2x sooner |
+| scroll, run 1 | settle ms | 1048.4 | 183.5 | about 5.7x sooner |
+| scroll, run 2 | settle ms | 1002.8 | 171.4 | about 5.9x sooner |
+| scroll, run 3 | settle ms | 1104.2 | 175.7 | about 6.3x sooner |
+| scroll decodes | count | 268 | 86 to 120 | about 55 to 68% fewer |
+
+Load1 during runs: 20.5, 18.5, 13.4, 10.9, 8.2. Steady is equal within noise at every load level tested.
+The scroll win holds at every load level. Keep the change; no revert.
+
+Not measured: the queue lock and worker wake cost were not timed in isolation (not needed; the
+steady-path code is identical). Live-app frame timing was not run.
+
+## Imageviewer, archiver-app, finder (2026-11-05, third pass)
+
+### imageviewer: audited, no change
+
+- Decode already runs on `decode::run` (one worker thread). The worker drains `Load` before `View`
+  before `Prefetch`, so prefetch runs only when no load or view is queued (`decode.rs` `run`). Idle-only prefetch is in place.
+- A load keeps the previous frame on screen (`App::load` does not clear `PHOTO`) and shows "Loading…".
+- Remaining gap: one prefetch decode in flight is not preempted, so a `Load` arriving mid-prefetch waits up to one
+  full decode. Fixing that needs a cancellable decoder. Not measured (needs large fixtures and a live window). No change.
+
+### archiver-app: listing off the UI thread (changed)
+
+- Before: `window.rs` `App::open` ran `flamewm_archiver::list` on the UI thread before the first paint
+  (`run` called `app.open` synchronously). A large archive held the whole window.
+- After: `open` spawns `flamewm-archiver-list`, sets status "Reading archive", and the first paint shows at once. The
+  thread sends `Reply::Listed { archive, result }` and writes the wake byte. `reply` applies it only when
+  the archive is still the window's target (stale listings are dropped).
+- Progress throttling: not changed. Progress replies already coalesce per drain (one paint per wake, the wake byte
+  is gated by the `wake_pending` flag). No measured win, so no change (keep rule).
+- Tests: `cargo test -p flamewm-archiver-app` exit=0, 10 passed, including
+  `open_lists_on_a_worker_and_replies` (real zip), `listed_reply_applies_entries_for_the_open_archive`,
+  `stale_listing_is_ignored`.
+- Not measured: UI-thread stall before vs after (no large archive fixture was generated).
+
+### finder: audited, not measured
+
+- Placeholder tick thread writes one byte every `PLACEHOLDER_INTERVAL` = 5 s (`flamewm-finder/src/lib.rs`). That is
+  0.2 wakes/s, not the reported ~1/s, so the extra wakes come from another source.
+- `scripts/perf/app_wakes.sh` was NOT run: no live finder window was started (needs an isolated X display).
+  Source-level change: none. Open item.
+
+## Checks (2026-11-05, worktree `/run/media/linsaftw/SDD/wt-coder-perf`)
+
+| command | exit |
+|---|---|
+| `cargo test -p flamewm-archiver-app` | 0 (10 passed) |
+| `cargo build --release -p flamewm-explorer --example thumb_bench` | 0 |
+| `python3 -I tools/architecture_guard.py` | 0 (77 ratified violations, unchanged) |
+| `cargo check --workspace --all-targets` | 0 |
+
+Logs: `/run/media/linsaftw/SDD/swarm-logs/coder-archiver-test.log`, `coder-guard.log`, `coder-check-ws.log`.

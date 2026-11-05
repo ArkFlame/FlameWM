@@ -99,18 +99,23 @@ fn main() {
     // Scenario A: fast scroll, 120 passes of 6 rows each (the window sweeps most of the folder).
     // Scenario B: steady view, one pass, time until its window is cached.
     for (name, passes, step) in [("scroll", 120usize, 2usize), ("steady", 1usize, 0usize)] {
-        for (policy, new_policy) in [("old", false), ("new", true)] {
-            let mut settle = Vec::new();
-            let (mut decodes, mut visible) = (Vec::new(), true);
-            for _ in 0..iterations {
-                let r = run(&files, new_policy, passes, step);
-                settle.push(r.settle_ms);
-                decodes.push(r.decodes as f64);
-                visible &= r.ready_visible;
+        // Alternating order (old-new, new-old, ...) so host load drift does not favour whichever policy runs first.
+        let mut settle: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+        let mut decodes: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+        let mut visible = [true; 2];
+        for i in 0..iterations {
+            let order: [usize; 2] = if i % 2 == 0 { [0, 1] } else { [1, 0] };
+            for which in order {
+                let r = run(&files, which == 1, passes, step);
+                settle[which].push(r.settle_ms);
+                decodes[which].push(r.decodes as f64);
+                visible[which] &= r.ready_visible;
             }
+        }
+        for (which, policy) in [(0usize, "old"), (1, "new")] {
             println!(
-                "{name}.{policy} settle_ms={:.1} decodes={:.0} final_window_ready={visible}",
-                median(settle), median(decodes)
+                "{name}.{policy} settle_ms={:.1} decodes={:.0} final_window_ready={}",
+                median(std::mem::take(&mut settle[which])), median(std::mem::take(&mut decodes[which])), visible[which]
             );
         }
     }

@@ -47,6 +47,11 @@ type Work = Box<
 
 /// Messages from the worker thread to the window.
 enum Reply {
+    /// Result of the listing started by `App::open`.
+    Listed {
+        archive: PathBuf,
+        result: Result<Vec<Entry>, String>,
+    },
     Progress(Progress),
     Done {
         what: String,
@@ -102,7 +107,7 @@ pub fn run(start: Start) -> Result<(), String> {
         wake_pending: Arc::new(AtomicBool::new(false)),
     };
     match start {
-        Start::Browse(path) => app.open(&path),
+        Start::Browse(path) => app.open(&path)?,
         Start::Create { out, inputs } => app.start_create(out, inputs)?,
     }
     app.paint(&mut document)?;
@@ -156,19 +161,25 @@ pub fn run(start: Start) -> Result<(), String> {
 }
 
 impl App {
-    fn open(&mut self, path: &Path) {
+    /// Lists `path` on a worker thread: the window paints its first frame at once and the entries
+    /// arrive as a `Reply::Listed`, so a large archive never holds up the window.
+    fn open(&mut self, path: &Path) -> Result<(), String> {
         self.archive = Some(path.to_path_buf());
-        match list(path) {
-            Ok(entries) => {
-                self.status = if entries.is_empty() {
-                    String::from("Empty archive")
-                } else {
-                    format!("{} entries", entries.len())
-                };
-                self.entries = entries;
-            }
-            Err(error) => self.status = format!("Cannot open: {error}"),
-        }
+        self.status = String::from("Reading archive");
+        let wake = self.wake.try_clone().map_err(|error| error.to_string())?;
+        let tx = self.tx.clone();
+        let archive = path.to_path_buf();
+        std::thread::Builder::new()
+            .name("flamewm-archiver-list".into())
+            .spawn(move || {
+                let mut wake = wake;
+                let result = list(&archive).map_err(|error| error.to_string());
+                if tx.send(Reply::Listed { archive, result }).is_ok() {
+                    let _ = wake.write(&[1]);
+                }
+            })
+            .map(drop)
+            .map_err(|error| error.to_string())
     }
 
     fn start_create(&mut self, out: PathBuf, inputs: Vec<PathBuf>) -> Result<(), String> {
@@ -333,6 +344,23 @@ impl App {
     /// drains thousands of progress messages still paints once.
     fn reply(&mut self, reply: Reply) {
         match reply {
+            Reply::Listed { archive, result } => {
+                // A listing for an archive that is no longer the window's target is stale.
+                if self.archive.as_deref() != Some(archive.as_path()) {
+                    return;
+                }
+                match result {
+                    Ok(entries) => {
+                        self.status = if entries.is_empty() {
+                            String::from("Empty archive")
+                        } else {
+                            format!("{} entries", entries.len())
+                        };
+                        self.entries = entries;
+                    }
+                    Err(error) => self.status = format!("Cannot open: {error}"),
+                }
+            }
             Reply::Progress(progress) => self.progress = Some(progress),
             Reply::Done {
                 what,
@@ -565,5 +593,84 @@ mod tests {
     fn sizes_use_binary_units() {
         assert_eq!(human_size(12), "12 B");
         assert_eq!(human_size(2048), "2.0 KiB");
+    }
+
+    /// A window state with no archive open, plus the reply receiver the worker threads feed.
+    fn idle_app() -> (App, Receiver<Reply>) {
+        let (wake, _keep) = UnixStream::pair().expect("socket pair");
+        let (tx, rx) = mpsc::channel();
+        let app = App {
+            create: false,
+            archive: None,
+            entries: Vec::new(),
+            selected: BTreeSet::new(),
+            page: 0,
+            status: String::from("Ready"),
+            progress: None,
+            job: None,
+            tx,
+            rx: mpsc::channel().1,
+            wake,
+            wake_pending: Arc::new(AtomicBool::new(false)),
+        };
+        (app, rx)
+    }
+
+    #[test]
+    fn listed_reply_applies_entries_for_the_open_archive() {
+        let (mut app, _rx) = idle_app();
+        app.archive = Some(PathBuf::from("/x/a.zip"));
+        app.reply(Reply::Listed {
+            archive: PathBuf::from("/x/a.zip"),
+            result: Ok(vec![]),
+        });
+        assert_eq!(app.status, "Empty archive");
+        app.reply(Reply::Listed {
+            archive: PathBuf::from("/x/a.zip"),
+            result: Err("bad".into()),
+        });
+        assert_eq!(app.status, "Cannot open: bad");
+    }
+
+    #[test]
+    fn stale_listing_is_ignored() {
+        let (mut app, _rx) = idle_app();
+        app.archive = Some(PathBuf::from("/x/b.zip"));
+        app.status = String::from("Reading archive");
+        app.reply(Reply::Listed {
+            archive: PathBuf::from("/x/a.zip"),
+            result: Err("stale".into()),
+        });
+        assert_eq!(app.status, "Reading archive");
+    }
+
+    /// `open` returns before the archive is read: the listing arrives later as a `Reply::Listed`.
+    #[test]
+    fn open_lists_on_a_worker_and_replies() {
+        let dir = std::env::temp_dir().join(format!("flamewm-archiver-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let input = dir.join("note.txt");
+        std::fs::write(&input, b"hello").expect("input");
+        let archive = dir.join("open-test.zip");
+        flamewm_archiver::create(
+            &archive,
+            std::slice::from_ref(&input),
+            &flamewm_archiver::CancelToken::new(),
+            &mut |_| {},
+        )
+        .expect("create zip");
+
+        let (mut app, _unused) = idle_app();
+        let (tx, rx) = mpsc::channel();
+        app.tx = tx;
+        app.open(&archive).expect("open starts");
+        assert_eq!(app.status, "Reading archive");
+        let reply = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("listing reply");
+        app.reply(reply);
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.status, "1 entries");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
