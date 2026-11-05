@@ -1282,12 +1282,11 @@ mod default_measure_tests {
     use super::*;
 
     /// Layout width from the process-wide default must equal the scoped Xft measure (the paint
-    /// measure) for caret-length prefixes 1..=60. Skipped without `$DISPLAY`.
+    /// measure) for caret-length prefixes 1..=60. Needs a live display: run with `--ignored`.
     #[test]
+    #[ignore = "needs a live X display (DISPLAY)"]
     fn default_measure_matches_scoped_xft_for_caret_prefixes() {
-        if std::env::var_os("DISPLAY").is_none() {
-            return;
-        }
+        assert!(std::env::var_os("DISPLAY").is_some(), "DISPLAY must name a live X display");
         let (Some(default), Some(scoped_owner)) = (open_default_xft(), open_default_xft()) else {
             panic!("Xft must open on $DISPLAY");
         };

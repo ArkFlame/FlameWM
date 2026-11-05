@@ -335,6 +335,7 @@ where
     P: for<'a> FnMut(&RawPress, &mut UiDocumentView<'a>) -> Result<(), String>,
     R: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
 {
+    install_default_layout_measure();
     let (runtime, backdrop, drop_target, keyboard_focus, keyboard_capture) = document.into_parts();
     let file_drag = drop_target.then(flamewm_render_x11::FileDragSlot::default);
     let mut x11 = x11_config(config, role);
@@ -516,6 +517,7 @@ where
     W: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
     D: FnMut() -> UiWakeDrain + 'static,
 {
+    install_default_layout_measure();
     run_with_controller_events_role_two_readable_and_presses(
         document,
         config,
@@ -551,6 +553,7 @@ where
     W: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
     D: FnMut() -> UiWakeDrain + 'static,
 {
+    install_default_layout_measure();
     let mut reactor = Reactor::new().map_err(|error| error.to_string())?;
     // Level-triggered registration: a retired source is removed by the reactor, and the reactor
     // itself is dropped when this function returns, so no explicit removal is needed.
