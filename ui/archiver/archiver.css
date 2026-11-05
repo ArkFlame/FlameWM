@@ -11,6 +11,8 @@ body { position:relative; width:100%; height:100%; margin:0; overflow:hidden; fo
 .spacer { flex-grow:1; }
 .btn { height:26px; display:flex; align-items:center; padding:0px 12px; border-radius:8px; background-color:var(--key); white-space:nowrap; }
 .btn.primary { color:var(--accent); }
+/* Keyboard focus: spans with data-action get no focus ring from base.css (which lists buttons by class). */
+.btn:focus-visible, .row:focus-visible { border-width:1px; border-color:var(--focus-ring); }
 .progress { height:26px; display:flex; flex-direction:row; align-items:center; gap:10px; }
 .track { width:260px; height:6px; border-radius:3px; background-color:var(--key); }
 .fill { height:6px; width:0px; border-radius:3px; background-color:var(--accent); }

@@ -93,5 +93,37 @@ class UiContractGuardTests(unittest.TestCase):
         self.assertFalse(pattern.match("display-output-3"))
 
 
+
+class FocusVisibleCoverageTests(unittest.TestCase):
+    """Regression for archiver: `<span class="btn" data-action>` had no focus ring."""
+
+    def gaps(self, html, css):
+        root = Path(tempfile.mkdtemp(prefix="ui-focus-"))
+        (root / "ui").mkdir()
+        (root / "ui/doc.html").write_text(html, encoding="utf-8")
+        (root / "ui/doc.css").write_text(css, encoding="utf-8")
+        (root / "ui/base").mkdir()
+        (root / "ui/base/base.css").write_text("", encoding="utf-8")
+        return guard.find_focus_gaps(root, "ui/doc.html", ["ui/doc.css"])
+
+    def test_span_with_data_action_needs_focus_visible_rule(self):
+        html = '<span class="btn" data-action="ar.prev">Prev</span>'
+        self.assertEqual(self.gaps(html, ""), ["btn"])
+        self.assertEqual(self.gaps(html, ".btn:focus-visible { border-color: red; }"), [])
+
+    def test_button_elements_and_plain_spans_are_ignored(self):
+        self.assertEqual(self.gaps('<button class="x" data-action="a">x</button>', ""), [])
+        self.assertEqual(self.gaps('<span class="label">x</span>', ""), [])
+
+    def test_one_ring_rule_on_any_class_covers_the_element(self):
+        html = '<span class="btn primary" data-action="ar.all">Extract all</span>'
+        self.assertEqual(self.gaps(html, ".btn:focus-visible { border-width: 1px; }"), [])
+
+    def test_archiver_document_has_no_focus_gaps(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assertEqual(
+            guard.find_focus_gaps(root, "ui/archiver/archiver.html", ["ui/archiver/archiver.css"]), []
+        )
+
 if __name__ == "__main__":
     unittest.main()

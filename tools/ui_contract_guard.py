@@ -27,6 +27,11 @@ DOCUMENTS = {
     "ui/index.html": (None, ["ui/flamewm.css"]),
 }
 
+# Documents checked for keyboard focus coverage only (no document-call or action mapping yet).
+FOCUS_DOCUMENTS = {
+    "ui/archiver/archiver.html": ["ui/archiver/archiver.css"],
+}
+
 DOCUMENT_OPS = (
     "text|background|visible|border|position|size|toggle|foreground|font_size|font_weight|"
     "overflow|layer|image_rgb8|image_rgba8|image_reset|corner_radius|node_backdrop|"
@@ -171,6 +176,32 @@ RIM_PERCENT_RE = re.compile(r"pub const RIM_PERCENT:\s*u8\s*=\s*(\d+)")
 PLATFORM_OPACITY_RE = re.compile(r"surface_outline_opacity:\s*(\d+)")
 
 
+FOCUSABLE_TAG_RE = re.compile(r"<(?P<tag>\w+)\b[^>]*\bdata-action=\"[^\"]+\"[^>]*>")
+BASE_CSS = "ui/base/base.css"
+
+
+def find_focus_gaps(root, html_rel, css_rels):
+    """Return classes of focusable non-button elements with no `:focus-visible` rule. Every element with a data-action is focusable (ui-document focus.rs). Its class
+    must have a `:focus-visible` rule in the document's sheets or the shared base sheet, otherwise
+    keyboard focus is invisible."""
+    html = (root / html_rel).read_text(encoding="utf-8")
+    css_text = "".join(
+        (root / rel).read_text(encoding="utf-8") for rel in [*css_rels, BASE_CSS] if (root / rel).exists()
+    )
+    missing = set()
+    for match in FOCUSABLE_TAG_RE.finditer(html):
+        if match.group("tag").lower() == "button":
+            continue
+        classes = CLASS_ATTR_RE.search(match.group(0))
+        names = classes.group(1).split() if classes else []
+        # One ring rule on any class of the element is enough (`.btn:focus-visible` on `btn primary`).
+        if names and not any(
+            re.search(r"\." + re.escape(name) + r"\b[^{}]*:focus-visible", css_text) for name in names
+        ):
+            missing.update(names)
+    return sorted(missing)
+
+
 def check_rim_tokens(root, errors):
     """Shared rim contract: one `--rim` value across every glass sheet, no literal border colours
     in those sheets, and the platform border opacity equal to the ui-core owner value."""
@@ -224,6 +255,17 @@ def main(root=None):
             errors.append(f"missing document {html_rel}")
             continue
         check_document(root, html_rel, owner_dir, css_rels, errors, warnings)
+        gaps = find_focus_gaps(root, html_rel, css_rels)
+        if gaps:
+            # Warning, not error: pointer-first surfaces (desktop stickies, sliders) carry data-action and
+            # are Tab-reachable without a ring. Open work, tracked in docs/AUDIT-UI.md Pass 9.
+            warnings.append(f"{html_rel}: {len(gaps)} focusable non-button class(es) without :focus-visible: {', '.join(gaps)}")
+    for html_rel, css_rels in FOCUS_DOCUMENTS.items():
+        if not (root / html_rel).exists():
+            continue
+        gaps = find_focus_gaps(root, html_rel, css_rels)
+        if gaps:
+            errors.append(f"{html_rel}: focusable non-button class(es) without :focus-visible: {', '.join(gaps)}")
     check_rim_tokens(root, errors)
     for warning in warnings:
         print(f"warning: {warning}")
