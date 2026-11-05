@@ -1,3 +1,12 @@
+## 2026-11-05 — Version 0.1.6: deferral, wake and light-theme pass
+
+- Settings progressive disclosure: 13 "Custom ..." switches hide grouped options; off uses defaults; accent default #3DAEE9.
+- Startup: terminal first paint no longer waits on GetSettings (2.3 s to 0.25 s mapped); late backdrop install; explorer streams large directories (first rows in ~1.4 ms); thumbnail queue prioritises visible rows; archiver lists off the UI thread.
+- Wakes/CPU: task-manager wake storm fixed (470 to 28/s), sampler 2.5x cheaper; desktop skips no-op wallpaper repaints; debounced settings persistence; shell shortcut creation off the event loop.
+- UI: keyboard focus ring (archiver, Settings) with text-field/recorder capture; Light theme ink for Settings, Explorer, titlebar; contrast-picked on-accent labels; Light taskbar legibility.
+- Fixes: volume/brightness keys no longer report an unavailable device as success (issue #18 OSD path); render-x11 test fixes.
+- Known: Wayland titlebar still paints Dark ink in Light; three flamewm-wm-x11 tests fail on main (chrome surface colour, accent default).
+
 ## 2026-11-03 — Debian 12 / antiX runtime baseline
 
 - The released `flamewm_0.1.4_amd64.deb` could not install on Debian 12 "bookworm" or antiX 23: its payload binaries required `GLIBC_2.43` (and `flamewm-session`/`flamewm-screenshot` `GLIBC_2.39`) because they were compiled on a newer host, while the control file advertised `libc6 (>= 2.36)`.
