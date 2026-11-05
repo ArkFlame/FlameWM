@@ -348,8 +348,8 @@ for identity, active in [
     ("fn scale_rect", "crates/flamewm-render-x11/src/app/primitives.rs"),
     ("fn keyboard_text", "crates/flamewm-render-x11/src/app/events.rs"),
     ("fn cursor_shape", "crates/flamewm-render-x11/src/app/cursor.rs"),
-    ("fn root_background", "crates/flamewm-render-x11/src/app/color.rs"),
-    ("fn blend_over_black", "crates/flamewm-render-x11/src/app/color.rs"),
+    # fn root_background / fn blend_over_black removed by f5eeb330 (dead code: transparent
+    # ARGB clear replaced the root-background blend); anchors retired with that owner.
     ("fn rgb_to_pixel", "crates/flamewm-render-x11/src/app/color.rs"),
     ("fn channel_to_mask", "crates/flamewm-render-x11/src/app/color.rs"),
 ]:
