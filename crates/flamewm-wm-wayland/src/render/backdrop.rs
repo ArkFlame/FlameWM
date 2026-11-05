@@ -18,6 +18,49 @@ pub(super) fn stored_size(size: (usize, usize)) -> (usize, usize) {
     (size.0.div_ceil(DESKTOP_SCALE).max(1), size.1.div_ceil(DESKTOP_SCALE).max(1))
 }
 
+/// Whether `FLAMEWM_BACKDROP_PROFILE` is set. Read once; every profiling path checks it first.
+fn profile_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("FLAMEWM_BACKDROP_PROFILE").is_some())
+}
+
+/// Per-phase wall time of one recapture, printed as one stderr line when profiling is enabled.
+/// Disabled, it holds no clock and no buckets, so each `split` is a single branch.
+pub(super) struct PhaseClock {
+    last: Option<Instant>,
+    start: Option<Instant>,
+    phases: Vec<(&'static str, Duration)>,
+}
+
+impl PhaseClock {
+    pub(super) fn start() -> Self {
+        let now = profile_enabled().then(Instant::now);
+        Self { last: now, start: now, phases: Vec::new() }
+    }
+
+    /// Adds the time since the previous split to the `name` bucket. Repeated names accumulate.
+    pub(super) fn split(&mut self, name: &'static str) {
+        let Some(last) = self.last else { return };
+        let now = Instant::now();
+        let elapsed = now - last;
+        self.last = Some(now);
+        match self.phases.iter_mut().find(|(phase, _)| *phase == name) {
+            Some((_, total)) => *total += elapsed,
+            None => self.phases.push((name, elapsed)),
+        }
+    }
+
+    /// Emits the breakdown and restarts the clock, so time spent outside the split calls is not hidden.
+    pub(super) fn report(&self, rows: usize) {
+        let Some(start) = self.start else { return };
+        let mut line = format!("BACKDROP_PHASE total_us={} rows={rows}", start.elapsed().as_micros());
+        for (name, elapsed) in &self.phases {
+            line.push_str(&format!(" {name}_us={}", elapsed.as_micros()));
+        }
+        eprintln!("{line}");
+    }
+}
+
 pub(super) struct DesktopBackdrop {
     /// Output size the capture stands for; the pixels are stored at [`stored_size`] of it.
     pub(super) width: usize,
@@ -137,9 +180,11 @@ pub(crate) fn refresh_desktop_backdrop(
         state.decorations.borrow_mut().drop_desktop();
         return Ok(());
     }
+    let mut clock = PhaseClock::start();
     let dims = (size.w.max(1) as usize, size.h.max(1) as usize);
     let elements = desktop_elements(state, renderer);
     let commits: Vec<CommitCounter> = elements.iter().map(Element::current_commit).collect();
+    clock.split("elements");
     if state.decorations.borrow().desktop_current(dims, &commits) {
         return Ok(());
     }
@@ -154,11 +199,13 @@ pub(crate) fn refresh_desktop_backdrop(
     }
     let buffer_size: Size<i32, Buffer> = Size::from((size.w, size.h));
     let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
+    clock.split("texture");
     let mut tracker = OutputDamageTracker::from_output(&state.output);
     {
         let mut target = renderer.bind(&mut texture)?;
         tracker.render_output(renderer, &mut target, 0, &elements, CLEAR)?;
     }
+    clock.split("render");
     // Read back and box-average one strip at a time: only the reduced image is ever resident.
     let (sw, sh) = stored_size(dims);
     let mut stored = vec![0u8; sw * sh * 4];
@@ -171,8 +218,11 @@ pub(crate) fn refresh_desktop_backdrop(
             Size::from((dims.0 as i32, rows as i32)),
         );
         let mapping = renderer.copy_framebuffer(&target, region, Fourcc::Abgr8888)?;
+        clock.split("copy");
         let strip = renderer.map_texture(&mapping)?;
+        clock.split("map");
         downscale_strip(strip, (dims.0, y0, rows), &mut stored, (sw, sh));
+        clock.split("downscale");
         y0 += rows;
     }
     let blur_percent = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_BLUR_PERCENT;
@@ -193,9 +243,12 @@ pub(crate) fn refresh_desktop_backdrop(
         radius,
         None,
     );
+    clock.split("blur");
     state
         .decorations
         .borrow_mut()
         .set_desktop(dims, commits, blurred.pixels);
+    clock.split("store");
+    clock.report(dims.1);
     Ok(())
 }
