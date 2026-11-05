@@ -28,6 +28,7 @@ use smithay::wayland::shell::wlr_layer::Layer;
 
 mod backdrop;
 mod titlebar;
+pub(crate) use titlebar::put;
 
 pub use backdrop::*;
 pub use titlebar::*;
@@ -54,13 +55,8 @@ const SURFACE: u32 = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB.0;
 const SURFACE_ALPHA: u8 = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_ALPHA;
 /// Blur radius at 100% surface blur. Same value as the X11 `MAX_BLUR_RADIUS_PX` (render-x11).
 const MAX_BLUR_RADIUS_PX: f32 = 24.0;
-/// Light hover disk for minimize/maximize, matching the X11 control material.
-const LIGHT_HOVER: u32 = 0x00f1_f2f3;
 const GLYPH: u32 = flamewm_skin::palette::TEXT.0;
 const BORDER: u32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME.border.0;
-const CLOSE_HOVER: u32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME
-    .close_hover
-    .0;
 
 /// Keep one premultiplied ARGB bitmap per managed window. No raster work or allocations on
 /// steady-state frames: rebuilding happens only on resize/focus/hover/title changes.
@@ -1002,33 +998,7 @@ mod renderer_class_tests {
     }
 }
 
-/// Breeze control glyph rasterised from the same SVG asset X11 uses (cached per role/size).
-fn breeze_glyph(role: chrome::WindowControlRole, edge: u32, dark: bool) -> Option<Vec<u8>> {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-    type Cache = Mutex<HashMap<(u8, u32, bool), Option<Vec<u8>>>>;
-    static CACHE: OnceLock<Cache> = OnceLock::new();
-    let key = (role as u8, edge, dark);
-    let mut cache = CACHE.get_or_init(Default::default).lock().ok()?;
-    cache
-        .entry(key)
-        .or_insert_with(|| {
-            let rel = role.icon_role().source().path;
-            let bytes = std::fs::read(packaged_root().join(rel)).ok()?;
-            let mut scheme = flamewm_image_core::SvgColorScheme::flame_default();
-            scheme.text = if dark {
-                [0x1b, 0x1e, 0x20, 255]
-            } else {
-                [(GLYPH >> 16) as u8, (GLYPH >> 8) as u8, GLYPH as u8, 255]
-            };
-            flamewm_image_core::svg::render_with_color_scheme(&bytes, edge, edge, &scheme)
-                .ok()
-                .map(|image| image.pixels)
-        })
-        .clone()
-}
-
-fn packaged_root() -> std::path::PathBuf {
+pub(crate) fn packaged_root() -> std::path::PathBuf {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     std::env::current_exe()
         .ok()

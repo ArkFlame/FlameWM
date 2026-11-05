@@ -1,6 +1,7 @@
 //! Window chrome: decoration cache, titlebar and outline rasterisation, corner geometry.
 
 use super::*;
+use crate::chrome_buttons;
 
 #[derive(Default)]
 pub struct Decorations {
@@ -405,7 +406,7 @@ pub(super) fn blend(px: &mut [u8], rgb: u32, alpha: u8) {
     px[3] = (a + (u32::from(px[3]) * inv + 127) / 255) as u8;
 }
 
-pub(super) fn put(pixels: &mut [u8], width: usize, height: usize, x: i32, y: i32, rgb: u32, a: u8) {
+pub(crate) fn put(pixels: &mut [u8], width: usize, height: usize, x: i32, y: i32, rgb: u32, a: u8) {
     if x < 0 || y < 0 || x as usize >= width || y as usize >= height {
         return;
     }
@@ -633,50 +634,9 @@ pub(super) fn chrome_pixels_over(
         };
         let center = geometry.bounds.x + geometry.bounds.width / 2;
         let cy = geometry.bounds.height / 2;
-        let hovered = hover == Some(button);
-        if hovered {
-            // Hover is a disk like the X11 default; do not paint an opaque square over the
-            // rounded semi-transparent titlebar. The glyph stays legible on red.
-            let radius = glyph_edge as f32 / 2.0;
-            for y in
-                (cy - glyph_edge as i32 / 2).max(0)..(cy + glyph_edge as i32 / 2 + 1).min(h as i32)
-            {
-                for x in (center - glyph_edge as i32 / 2).max(0)
-                    ..(center + glyph_edge as i32 / 2 + 1).min(w as i32)
-                {
-                    let dx = x as f32 + 0.5 - center as f32;
-                    let dy = y as f32 + 0.5 - cy as f32;
-                    let coverage = (radius + 0.5 - (dx * dx + dy * dy).sqrt()).clamp(0.0, 1.0);
-                    if coverage > 0.0 {
-                        put(
-                            &mut out,
-                            w,
-                            h,
-                            x,
-                            y,
-                            if button == Button::Close {
-                                CLOSE_HOVER
-                            } else {
-                                LIGHT_HOVER
-                            },
-                            (coverage * 255.0).round() as u8,
-                        );
-                    }
-                }
-            }
-        }
-        if let Some(glyph) = breeze_glyph(role, glyph_edge, hovered && button != Button::Close) {
-            let start_x = center - glyph_edge as i32 / 2;
-            let start_y = cy - glyph_edge as i32 / 2;
-            for (index, rgba) in glyph.chunks_exact(4).enumerate() {
-                let alpha = rgba[3];
-                if alpha > 0 {
-                    let x = start_x + (index % glyph_edge as usize) as i32;
-                    let y = start_y + (index / glyph_edge as usize) as i32;
-                    put(&mut out, w, h, x, y, GLYPH, alpha);
-                }
-            }
-        }
+        chrome_buttons::paint_control(
+            &mut out, w, h, center, cy, glyph_edge, role, button, hover,
+        );
     }
     // Stable, centered title, ellipsized before reaching the controls. Rasterised only when
     // text/size changes. The source atlas is deliberately tiny for safe nested startup.
