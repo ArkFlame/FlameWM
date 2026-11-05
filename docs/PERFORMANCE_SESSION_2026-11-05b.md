@@ -81,3 +81,13 @@ flamewm-terminal CPU-s per 10 s burst, 3 runs:
 Result: no measurable change (under 1%). The coalescing gate sits in the wm-x11 render loop; the ~95% core cost is in flamewm-terminal's own loop, which this change does not touch. Not committed as a fix. Source: `/run/media/linsaftw/SDD/meas-flamewm/x11-after.json`, `x11-before-select.json`, `x11-baseline.json`.
 
 Open: terminal's own motion/paint path (crates/flamewm-terminal/src/app/pointer.rs) is the next target; not yet profiled per thread.
+
+## flamewm-terminal drag cost: where it is NOT
+
+- Thread split (`/proc/<tid>/stat`, `prof/threads.txt`): the main thread holds all CPU. Worker threads show 0 ticks. The sampler attached late, so this shows the tail of the burst only.
+- Per-event projection is not the cost. A temporary counter in `RunCache::update` (`crates/flamewm-terminal/src/view.rs`) recorded 2 updates and 64 rebuilt rows over a 10 s drag burst. The probe is removed; `view.rs` is unchanged.
+- `ui.rs` projection and `view.rs` row cache already diff and skip unchanged rows. `pointer.rs` motion handling is a few comparisons plus at most one selection write.
+- Stack sampling is blocked: `gdb -p` gets "Could not attach" (yama ptrace_scope). `strace -f -c` over the harness tree did not finish: the harness children stayed alive under strace, so the summary was never written. `FLAMEWM_PROFILE=1` wrote no span log for the terminal.
+- Conclusion: the ~9.5 CPU-s per burst is on the main thread, outside `RunCache`, `project`, and `pointer`. The hot spot is not yet identified. Candidates to check next: the per-motion event path in flamewm-ui-x11 / flamewm-render-x11 (hit-test, hover, window backdrop or blur work per input packet), and the event loop's spin on queued input.
+- No terminal fix was made. The render-x11 coalescing change was dropped because it cannot reduce this cost.
+- Infra: the harness leaves per-run `dbus-daemon` and app processes behind when a run is killed mid-way (`/tmp/flamewm-bursts.*`). Those were cleaned up for this session's runs.
