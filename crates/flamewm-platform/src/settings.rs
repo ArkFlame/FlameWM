@@ -1454,6 +1454,8 @@ mod accent_custom_tests;
 mod switch_group_tests;
 #[cfg(test)]
 mod switch_migration_tests;
+#[cfg(test)]
+mod switch_contract_tests;
 
 #[cfg(test)]
 mod outline_default_tests {

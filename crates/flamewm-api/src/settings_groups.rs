@@ -226,6 +226,9 @@ pub fn effective_value(snapshot: &SettingsSnapshot, key: &str) -> Option<Setting
 }
 
 #[cfg(test)]
+mod effective_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

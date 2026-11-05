@@ -53,7 +53,25 @@ Counts are the rows in each group, including a switch row where one exists.
 | assistant | Assistant | 6 | exempt (feature toggles and API key) | - |
 | hotkeys | Window navigation / Screenshots and lock | - | exempt (capture rows) | - |
 
-Proposed switch groups total: 9. Existing switches: `accentCustom`, `outlineCustom`.
+Switch groups total: 13 (11 proposed, 2 existing). Correction: the existing window-outline switch is
+`customWindowOutline` (there is no `outlineCustom` key). Members per group, the single source for the
+code, are in `crates/flamewm-api/src/settings_groups.rs` (`SWITCH_GROUPS`).
+
+| Group (`name`) | Switch | Members |
+| --- | --- | --- |
+| accent | `accentCustom` | accent |
+| outline | `customWindowOutline` | windowOutlineColor, windowOutlineOpacity, windowOutlineWidth |
+| surface | `surfaceCustom` | outlines, surfaceColor, surfaceOpacity, surfaceOutlineColor, surfaceOutlineOpacity, surfaceOutlineWidth |
+| glass | `glassCustom` | reduceTransparency, glassOpacityPercent, glassBlurPx |
+| cursor | `cursorCustom` | cursorTheme, keyboardLayout, cursorSize, pointerSpeed, pointerRawInput |
+| minimizeMaximize | `minimizeMaximizeCustom` | minimizeAnimation(+Enabled), maximizeAnimation(+Enabled) |
+| lockBackground | `lockBackgroundCustom` | lockBackgroundMode, lockBackgroundColor, lockBackgroundImage, lockBackgroundBlurPercent, lockBackgroundDimPercent |
+| lockClock | `lockClockCustom` | lockClockFormat, lockShowDate, lockShowUsername, avatarImage |
+| screensaver | `screensaverCustom` | screensaverMode, screensaverAfterLockMinutes, screensaverDisplayOffMinutes |
+| windows | `windowsCustom` | focusFollowsMouse, titlebars, showContentWhileDragging, windowMargin, snapPreviewEnabled |
+| panel | `panelCustom` | taskbarHeight, taskbarStyle, taskbarSeparate |
+| items | `itemsCustom` | taskbarShowWeather/Volume/Network/Battery, taskbarBatteryOnlyWhenRelevant, taskbarShowClock/Workspaces/DesktopButton |
+| fonts | `fontsCustom` | fontFamily, fontBold, textShadow, fontSizeOffset |
 
 ## Owners (from source)
 
@@ -74,9 +92,9 @@ Proposed switch groups total: 9. Existing switches: `accentCustom`, `outlineCust
 | --- | --- |
 | Inventory table | done (this file) |
 | Accent default = picker blue | done (Rust constant + test); CSS tokens pending |
-| Accent switch with data retained while off | NOT done: load still resets `accent` to default when off, and `app_impl_1.rs` resets the stored value on switch-off |
-| Central effective-value resolver per group | NOT done |
-| Switch rows + collapsible groups in UI | NOT done |
-| Settings search finds hidden keys and turns switch on | NOT done |
-| Migration for the 9 proposed groups | NOT done |
-| Contract test: every multi-control group has a switch | NOT done |
+| Accent switch with data retained while off | done: load keeps `accent`; `app_impl_1.rs` no longer clears it; `ProductSettings::effective()` resolves for readers |
+| Central effective-value resolver per group | done: `flamewm_api::settings_groups` (`group_of`, `is_group_custom`, `effective_value`) and `ProductSettings::effective()` |
+| Migration for the 11 proposed groups | done: `parse_snapshot` switches a group on when a member is non-default and the switch key is absent |
+| Contract test: every multi-control group has a switch | done: `switch_contract_tests.rs`, `switch_group_tests.rs` |
+| Switch rows + collapsible groups in UI | NOT done (UI worker) |
+| Settings search finds hidden keys and turns switch on | NOT done (UI worker) |

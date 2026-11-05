@@ -3,7 +3,8 @@ use super::*;
 #[test]
 fn desktop_tokens_follow_live_accent_and_fall_back_to_product_default() {
     let mut snapshot = SettingsSnapshot::new(1);
-    assert_eq!(accent_color(&snapshot).r, 0x53);
+    // Product default is the picker blue #3DAEE9 (DEFAULT_ACCENT), red channel 0x3d.
+    assert_eq!(accent_color(&snapshot).r, 0x3d);
     snapshot.values.insert(
         "accent".to_owned(),
         SettingValue::Text("#9b59b6".to_owned()),
