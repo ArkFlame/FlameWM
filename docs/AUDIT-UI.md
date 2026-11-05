@@ -155,3 +155,32 @@ Scope: `:focus-visible` pseudo-state, shared focus owner, shared ring token. Bas
 - `:disabled` (F1b) is still not a pseudo-class. It needs a second style slot plus an attribute match, so it was not cheap in this pass.
 - Focus visibility in `ui/shell`, `task-manager`, `explorer`, `finder` and `terminal` css: not added. Only `ui/base/base.css` (shared) and the settings selectors got the ring rule.
 - Visual result of the ring: unverified. No runtime or screenshot run was done.
+
+## Pass 6: keyboard focus wired end-to-end (archiver)
+
+Scope: the Pass 5 "App wiring" follow-up for one app. Archiver was chosen because its only keys are Up/Down/PageUp/PageDown/Escape, it has no text input, and its controls are `data-action` buttons that already handle `Press`.
+
+### Fixed
+
+- `flamewm-render-core` `RuntimeDocument`: `focus: Option<u32>` with `focus()` / `set_focus()`. The document is the single store; the focus owner is rebuilt from it per key.
+- `flamewm-ui-document` `UiDocument::with_keyboard_focus()`: opt-in per window. `into_parts` now returns a fourth flag. Windows without the flag keep every key unchanged.
+- `flamewm-ui-x11` `route_focus`: when opted in, Tab / Shift+Tab move focus and are consumed (also when focus does not move, so Tab never reaches the window). Enter / Return / Space on a focused control deliver a synthesized `Press` of its `data-action`. Other keys and all releases pass through unchanged.
+- `flamewm-render-x11` `sync_keyboard_focus`: after the typed-key action fires, `InteractionState::focus` is copied from the document. A change calls `mark_input_repaint`, the same input path hover uses, so the damage planner redraws the focus ring region only. No timers and no idle wakes are added.
+- `flamewm-ui-document::focus`: `handle_key` now also matches `"Space"`. X11 canonical naming (`events.rs` `canonical_key_name`) sends `Space`, so the owner previously missed the key.
+- `flamewm-archiver-app` opts in with `with_keyboard_focus()`.
+- Architecture guard: `focus.rs` named `flamewm_render_core` paths directly (`renderer-symbol`, from Pass 5, failing `tools/architecture_guard.py` on `main`). It now imports the types from the `flamewm-ui-document` crate root, which re-exports them under the existing `lib.rs` exception. No exception entry was added. Commit `0f608421`.
+
+### Deliberately unchanged
+
+- `surface_runtime.rs` intrinsic measures (`measure_node_outer_intrinsic_device_size`, `document_space_extent`, `default_layout`) keep `InteractionState::default()`. Focus must not change intrinsic size. Otherwise Tab could resize the window, which would then re-measure and loop. Paint and the render layout path do receive focus.
+- `:disabled` (F1b) is not started. It needs `PseudoState` support, a second style slot on `CompiledNode` (about 45 construction sites), a codec version bump, and an attribute value carried into the compiled node. That is too large for this pass. It stays open.
+
+### Tests
+
+- `flamewm-ui-x11` `route_focus` tests: `tab_walks_focusable_controls_in_order_and_writes_document_focus`, `enter_and_space_activate_the_focused_control_only`, `non_focus_keys_and_releases_pass_through_unchanged`, `window_without_focusable_controls_consumes_tab_and_keeps_no_focus`.
+- `flamewm-ui-document::focus`: `owner_moves_activates_and_writes_interaction_focus` now also asserts `Space`.
+
+### Not run
+
+- No runtime or screenshot run. The focus ring paint, the damage region size, and whether `border-width:1px` on focus changes button layout (base.css `button` sets `border-width:0`) are unverified. Run archiver under Xvfb, Tab through `ar.*` rows, and check the ring and the redraw region before claiming the visual result.
+- Other apps (task-manager, explorer, settings, finder) are not opted in. Each has modal key handling (task-manager search, settings hotkey and slider capture, terminal raw input) that needs its own review before Tab / Space routing is safe.

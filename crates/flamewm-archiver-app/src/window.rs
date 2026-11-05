@@ -78,7 +78,7 @@ struct App {
 
 /// Opens the window and runs until it is closed or Escape is pressed.
 pub fn run(start: Start) -> Result<(), String> {
-    let mut document = decode_document(UI)?;
+    let mut document = decode_document(UI)?.with_keyboard_focus();
     let (mut reader, writer) = UnixStream::pair().map_err(|error| error.to_string())?;
     reader
         .set_nonblocking(true)
