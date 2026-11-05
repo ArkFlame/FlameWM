@@ -39,16 +39,17 @@ class XephyrPanelStartup(unittest.TestCase):
         self.assertIn("fn shell_bootstrap_reconciles_display_and_panels_before_reply()", tests)
 
     def test_hotplug_restores_persisted_panel_presentation(self):
-        src = read("crates/flamewm-platform/src/host.rs")
+        # resync_panels_for_displays moved from host.rs into host/displays.rs.
+        src = read("crates/flamewm-platform/src/host.rs") + read("crates/flamewm-platform/src/host/displays.rs")
         body = src.split("pub fn resync_panels_for_displays(", 1)[1].split("pub fn begin_display_mode(", 1)[0]
         self.assertIn("self.seed_persisted_panel_edges();", body)
         self.assertIn("self.panels.revision() != previous_revision", body)
         self.assertIn("reconcile_taskbar_height", body)
         self.assertIn("reconcile_taskbar_frame", body)
-        self.assertIn("fn panel_edge_persists_across_output_disconnect_reconnect()", src)
+        self.assertIn("fn panel_edge_persists_across_output_disconnect_reconnect()", read("crates/flamewm-platform/src/host/tests.rs"))
 
     def test_shell_failure_reports_output_state(self):
-        src = read("crates/flamewm-shell/src/runtime.rs")
+        src = read("crates/flamewm-shell/src/runtime/lifecycle.rs")
         self.assertIn("GetPanels returned no panel (displays: [{outputs}])", src)
 
 
