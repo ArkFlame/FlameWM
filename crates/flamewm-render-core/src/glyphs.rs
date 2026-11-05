@@ -400,6 +400,31 @@ mod tests {
     }
 
     #[test]
+    fn caret_after_each_prefix_matches_the_next_glyph_origin_within_half_px() {
+        if !any_font() {
+            return;
+        }
+        // 40+ chars: mixed widths (wide CJK, narrow i/l, spaces) and kerned pairs (AV, To, Wa).
+        let text = "Wi AVAST, Tofu: ilm 日本 Wa ff W./ VAT To ilm AVocado";
+        assert!(text.chars().count() >= 40);
+        for size in [13.0f32, 15.0] {
+            let carets = caret_positions(text, size).expect("carets");
+            let chars: Vec<char> = text.chars().collect();
+            for k in 1..=chars.len() {
+                // The glyph origin the paint path uses for char k is origins[k]; a caret before
+                // it must sit at the same x, as must the advance of the prefix that precedes it.
+                let prefix: String = chars[..k].iter().collect();
+                let prefix_end = advance_width(&prefix, size).expect("advance");
+                assert!(
+                    (carets[k] - prefix_end).abs() < 0.5,
+                    "{size}px prefix {k}: caret {} vs prefix advance {prefix_end}",
+                    carets[k]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn repeated_glyph_run_does_not_drift_per_letter() {
         if !any_font() {
             return;
