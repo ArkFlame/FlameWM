@@ -1053,7 +1053,6 @@ dependencies = [
  "flamewm-reactor",
  "flamewm-render-core",
  "flamewm-render-x11",
- "flamewm-skin",
  "flamewm-ui",
  "flamewm-ui-core",
  "flamewm-ui-document",
