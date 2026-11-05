@@ -58,6 +58,8 @@ optdepends=(
   'xdg-desktop-portal-kde: preferred OpenURI and FileChooser portal backend'
   'libxkbcommon-x11: nested --backend=nested compositor inside an X11 session'
   'ttf-ibm-plex: default interface font (falls back to Noto Sans or DejaVu Sans)'
+  'kwallet6: existing KDE wallet and Secret Service for browsers, git, NetworkManager'
+  'kwallet-pam: unlock the existing KWallet at login (pam_kwallet_init)'
 )
 provides=("flamewm=${pkgver%%.r*}")
 conflicts=('flamewm' 'mcmojave-cursors' 'mcmojave-cursors-git')
