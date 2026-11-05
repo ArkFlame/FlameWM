@@ -33,6 +33,7 @@ pub(crate) use titlebar::put;
 pub(crate) use backdrop::*;
 pub use titlebar::*;
 
+use crate::chrome_buttons::Feedback;
 use crate::clip::RoundedSurfaceElement;
 use crate::model::{Button, Hit, Managed, Mode, Rect, TITLEBAR_HEIGHT, WindowId};
 use crate::state::State;
@@ -191,6 +192,13 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                         Some(Hit::Button(hit, button)) if hit == id => Some(button),
                         _ => None,
                     };
+                    // Pressed only while the pointer is still on the control that was pressed.
+                    let pressed = match state.pressed_hit {
+                        Some(hit) if state.model.hit(state.pointer.x, state.pointer.y) == Some(hit) => {
+                            hovered
+                        }
+                        _ => None,
+                    };
                     let title = state.window_title(id);
                     if let Some(element) = decorations.element(
                         renderer,
@@ -201,7 +209,7 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                             managed.mode == Mode::Maximized,
                             managed.mode.rounded_frame(),
                         ),
-                        hovered,
+                        Feedback { hover: hovered, pressed },
                         title,
                     ) {
                         out.push(element);

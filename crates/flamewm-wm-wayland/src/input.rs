@@ -99,6 +99,12 @@ impl State {
                 let location = event.position_transformed(self.output_size);
                 let hover_before = self.model.hit(self.pointer.x, self.pointer.y);
                 self.on_motion(location, event.time_msec());
+                // Leaving the held control cancels its pressed look; re-entering does not restore it.
+                if self.pressed_hit.is_some()
+                    && self.model.hit(self.pointer.x, self.pointer.y) != self.pressed_hit
+                {
+                    self.pressed_hit = None;
+                }
                 // A hit change can move a titlebar button's hover, which the scene draws.
                 plain_motion = self.grab.is_none()
                     && !self.focus_follows_mouse
@@ -652,9 +658,13 @@ impl State {
             }
         }
 
+        if !pressed {
+            self.pressed_hit = None;
+        }
         if pressed && !consumed && button == BTN_LEFT {
             match target.managed_hit {
                 Some(Hit::Button(id, action)) => {
+                    self.pressed_hit = Some(Hit::Button(id, action));
                     self.set_focus(Some(id));
                     self.run_titlebar_button(id, action);
                     consumed = true;

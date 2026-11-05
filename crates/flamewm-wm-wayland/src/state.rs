@@ -39,7 +39,7 @@ use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xwayland_shell::XWaylandShellState;
 use smithay::xwayland::{X11Surface, X11Wm};
 
-use crate::model::{Managed, Mode, Rect, ResizeEdge, Shortcuts, WindowId, WindowModel};
+use crate::model::{Hit, Managed, Mode, Rect, ResizeEdge, Shortcuts, WindowId, WindowModel};
 use crate::xwayland::{Props, Unmanaged};
 
 /// Per-client data required by `CompositorState`.
@@ -382,6 +382,8 @@ pub struct State {
     /// Server-side titlebar fills, stable across frames (see `render::Decorations`).
     pub decorations: RefCell<crate::render::Decorations>,
     pub grab: Option<Grab>,
+    /// Titlebar control held down by the primary button: shown pressed while the pointer stays on it.
+    pub pressed_hit: Option<Hit>,
     /// Window whose resize configure a grab deferred; sent once at the next paint.
     pub pending_configure: Option<WindowId>,
     /// Outline-move preview frame; contents stay put until release, like X11.
@@ -513,6 +515,7 @@ impl State {
             cursors: crate::cursor::Cursors::from_env(),
             decorations: RefCell::default(),
             grab: None,
+            pressed_hit: None,
             pending_configure: None,
             move_outline: None,
             last_title_click: None,

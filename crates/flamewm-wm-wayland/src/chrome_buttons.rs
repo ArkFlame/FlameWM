@@ -10,6 +10,13 @@ use flamewm_skin::recipes::window_control::{ControlKind, ControlState, control_c
 use crate::model::Button;
 use crate::render::{packaged_root, put};
 
+/// Pointer feedback for the titlebar controls: the button under the pointer, and the one held down.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Feedback {
+    pub hover: Option<Button>,
+    pub pressed: Option<Button>,
+}
+
 #[must_use]
 pub(crate) const fn control_kind(button: Button) -> ControlKind {
     match button {
@@ -31,9 +38,12 @@ pub(crate) fn paint_control(
     edge: u32,
     role: WindowControlRole,
     button: Button,
-    hover: Option<Button>,
+    feedback: Feedback,
 ) {
-    let state = ControlState::from_pointer(hover == Some(button), false);
+    let state = ControlState::from_pointer(
+        feedback.hover == Some(button),
+        feedback.pressed == Some(button),
+    );
     let colors = control_colors(control_kind(button), state);
     let half = edge as i32 / 2;
     if let Some(fill) = colors.background {
@@ -125,7 +135,7 @@ mod tests {
             16,
             WindowControlRole::Minimize,
             Button::Minimize,
-            Some(Button::Minimize),
+            Feedback { hover: Some(Button::Minimize), pressed: None },
         );
         // Top-centre of the disk sits above the glyph strokes.
         let disk = px(&pixels, 40, 13);
@@ -143,6 +153,45 @@ mod tests {
         assert!(darkest < 0x60, "hovered minimize glyph must be dark (darkest red channel {darkest:#x})");
     }
 
+    fn paint_at(role: WindowControlRole, button: Button, feedback: Feedback) -> Vec<u8> {
+        let mut pixels = vec![0u8; W * H * 4];
+        paint_control(&mut pixels, W, H, 40, 20, 16, role, button, feedback);
+        pixels
+    }
+
+    #[test]
+    fn pressed_minimize_uses_pressed_fill_not_hover_fill() {
+        let pressed = paint_at(
+            WindowControlRole::Minimize,
+            Button::Minimize,
+            Feedback { hover: Some(Button::Minimize), pressed: Some(Button::Minimize) },
+        );
+        // #c7c9cb stored as BGRA [0xcb, 0xc9, 0xc7]; distinct from the #f1f2f3 hover fill.
+        assert_eq!(&px(&pressed, 40, 13)[..3], &[0xcb, 0xc9, 0xc7]);
+    }
+
+    #[test]
+    fn pressed_close_is_darker_red_than_hover() {
+        let pressed = paint_at(
+            WindowControlRole::Close,
+            Button::Close,
+            Feedback { hover: Some(Button::Close), pressed: Some(Button::Close) },
+        );
+        // #c42b1c stored as BGRA [0x1c, 0x2b, 0xc4].
+        assert_eq!(&px(&pressed, 40, 13)[..3], &[0x1c, 0x2b, 0xc4]);
+    }
+
+    #[test]
+    fn press_on_other_button_does_not_change_this_control() {
+        let rest = paint_at(WindowControlRole::Minimize, Button::Minimize, Feedback::default());
+        let other = paint_at(
+            WindowControlRole::Minimize,
+            Button::Minimize,
+            Feedback { hover: None, pressed: Some(Button::Close) },
+        );
+        assert_eq!(rest, other);
+    }
+
     #[test]
     fn hovered_close_paints_red_disk() {
         let mut pixels = vec![0u8; W * H * 4];
@@ -155,7 +204,7 @@ mod tests {
             16,
             WindowControlRole::Close,
             Button::Close,
-            Some(Button::Close),
+            Feedback { hover: Some(Button::Close), pressed: None },
         );
         let disk = px(&pixels, 40, 13);
         // #e81123 stored as BGRA [0x23, 0x11, 0xe8].
@@ -174,7 +223,7 @@ mod tests {
             16,
             WindowControlRole::Minimize,
             Button::Minimize,
-            None,
+            Feedback::default(),
         );
         // Corner of the control cell is outside the disk and outside the glyph.
         assert_eq!(px(&pixels, 40 - 8, 20 - 8), [0, 0, 0, 0]);

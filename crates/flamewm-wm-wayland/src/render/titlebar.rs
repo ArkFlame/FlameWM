@@ -1,7 +1,7 @@
 //! Window chrome: decoration cache, titlebar and outline rasterisation, corner geometry.
 
 use super::*;
-use crate::chrome_buttons;
+use crate::chrome_buttons::{self, Feedback};
 
 #[derive(Default)]
 pub struct Decorations {
@@ -93,9 +93,154 @@ pub(super) struct ChromeBuffer {
     pub(super) maximized: bool,
     /// Corner-radius eligibility of the window's placement mode (see `Mode::rounded_frame`).
     pub(super) rounded: bool,
-    pub(super) hover: Option<Button>,
+    /// Pointer feedback the cached pixels were drawn with.
+    pub(super) feedback: Feedback,
     pub(super) title: String,
+    /// Blurred desktop under the bar, kept so one control can be repainted without a new crop.
+    pub(super) backdrop: Option<Vec<u8>>,
     pub(super) buffer: MemoryRenderBuffer,
+}
+
+impl ChromeBuffer {
+    /// Repaints the controls whose hover or pressed state differs from the cached bar. Only those
+    /// button rects are damaged; the rest of the bitmap and its damage bag are untouched.
+    pub(super) fn repaint_feedback(&mut self, feedback: Feedback) {
+        if self.feedback == feedback {
+            return;
+        }
+        let (w, h) = (self.width.max(1).min(32767) as usize, TITLEBAR_HEIGHT as usize);
+        let slots = control_slots(self.width, self.maximized);
+        let changed = [self.feedback.hover, self.feedback.pressed, feedback.hover, feedback.pressed];
+        let rounded = self.rounded;
+        let ChromeBuffer { buffer, backdrop, .. } = self;
+        let mut ctx = buffer.render();
+        for (index, target) in changed.iter().enumerate() {
+            let Some(button) = *target else { continue };
+            if changed[..index].contains(target) {
+                continue;
+            }
+            let Some(slot) = slots.iter().find(|slot| slot.button == button) else {
+                continue;
+            };
+            let rect = Rectangle::<i32, Buffer>::new(
+                (slot.x0, 0).into(),
+                ((slot.x1 - slot.x0).max(0), TITLEBAR_HEIGHT).into(),
+            );
+            let _ = ctx.draw(|mem| {
+                repaint_slot(mem, w, h, rounded, backdrop.as_deref(), slot, feedback);
+                Ok::<_, std::convert::Infallible>(vec![rect])
+            });
+        }
+        drop(ctx);
+        self.feedback = feedback;
+    }
+}
+
+/// One titlebar control: its button, glyph role and horizontal span in the bar.
+pub(super) struct ControlSlot {
+    pub(super) button: Button,
+    role: WindowControlRole,
+    x0: i32,
+    x1: i32,
+    center: i32,
+    cy: i32,
+}
+
+pub(super) fn control_slots(width: i32, maximized: bool) -> Vec<ControlSlot> {
+    chrome::control_button_geometries(chrome::SceneRect::new(0, 0, width, TITLEBAR_HEIGHT))
+        .into_iter()
+        .map(|geometry| {
+            let role = match geometry.role {
+                WindowControlRole::Maximize if maximized => WindowControlRole::Restore,
+                role => role,
+            };
+            let button = match role {
+                WindowControlRole::Close => Button::Close,
+                WindowControlRole::Minimize => Button::Minimize,
+                WindowControlRole::Maximize | WindowControlRole::Restore => Button::Maximize,
+            };
+            ControlSlot {
+                button,
+                role,
+                x0: geometry.bounds.x,
+                x1: geometry.bounds.x + geometry.bounds.width,
+                center: geometry.bounds.x + geometry.bounds.width / 2,
+                cy: geometry.bounds.height / 2,
+            }
+        })
+        .collect()
+}
+
+/// Opaque-over-backdrop titlebar background for columns `x0..x1` of a `w` x `h` bar.
+#[allow(clippy::too_many_arguments)]
+fn paint_background(
+    out: &mut [u8],
+    w: usize,
+    h: usize,
+    rounded: bool,
+    backdrop: Option<&[u8]>,
+    x0: i32,
+    x1: i32,
+) {
+    // Rounded top corners use alpha, not an opaque bounding rectangle. The actual pixels
+    // underneath remain visible via Smithay's compositor.
+    let radius = titlebar_corner_radius(rounded, w as i32, h as i32);
+    for y in 0..h as i32 {
+        for x in x0.max(0)..x1.min(w as i32) {
+            let corner = if y < radius && x < radius {
+                Some((radius - 1 - x, radius - 1 - y))
+            } else if y < radius && x >= w as i32 - radius {
+                Some((x - (w as i32 - radius), radius - 1 - y))
+            } else {
+                None
+            };
+            let coverage = corner.map_or(1.0, |(dx, dy)| {
+                let distance = ((dx as f32 + 0.5).powi(2) + (dy as f32 + 0.5).powi(2)).sqrt();
+                (radius as f32 + 0.5 - distance).clamp(0.0, 1.0)
+            });
+            if let Some(back) = backdrop {
+                let at = (y as usize * w + x as usize) * 4;
+                let rgb = u32::from_be_bytes([0, back[at], back[at + 1], back[at + 2]]);
+                put(out, w, h, x, y, rgb, (255.0 * coverage).round() as u8);
+            }
+            let alpha = (f32::from(SURFACE_ALPHA) * coverage).round() as u8;
+            put(out, w, h, x, y, SURFACE, alpha);
+            if y == 0 || x == 0 || x == w as i32 - 1 {
+                put(out, w, h, x, y, BORDER, (63.0 * coverage).round() as u8);
+            }
+        }
+    }
+}
+
+/// Rebuilds one control's columns: clears them, lays the background, then draws the control.
+/// Only these columns change; the rest of the bar is left as it was.
+#[allow(clippy::too_many_arguments)]
+fn repaint_slot(
+    out: &mut [u8],
+    w: usize,
+    h: usize,
+    rounded: bool,
+    backdrop: Option<&[u8]>,
+    slot: &ControlSlot,
+    feedback: Feedback,
+) {
+    for y in 0..h {
+        let row = y * w * 4;
+        out[row + slot.x0 as usize * 4..row + slot.x1 as usize * 4].fill(0);
+    }
+    paint_background(out, w, h, rounded, backdrop, slot.x0, slot.x1);
+    let glyph_edge = u32::from(chrome::WINDOW_CHROME.metrics.icon).clamp(4, 128);
+    chrome_buttons::paint_control(
+        out,
+        w,
+        h,
+        slot.center,
+        slot.cy,
+        glyph_edge,
+        slot.role,
+        slot.button,
+        feedback,
+    );
 }
 
 impl Decorations {
@@ -165,7 +310,7 @@ impl Decorations {
         window: WindowId,
         rect: Rect,
         (active, maximized, rounded): (bool, bool, bool),
-        hover: Option<Button>,
+        feedback: Feedback,
         title: &str,
     ) -> Option<Elem> {
         // GL texture dimensions must match the allocated CPU surface, even for narrow frames.
@@ -174,16 +319,20 @@ impl Decorations {
             return None;
         }
         let origin = (rect.x, rect.y);
-        let stale = self.parts.get(&window).is_none_or(|part| {
-            part.origin != origin
-                || part.width != rect.w
-                || part.active != active
-                || part.maximized != maximized
-                || part.rounded != rounded
-                || part.hover != hover
-                || part.title != title
+        let same_geometry = self.parts.get(&window).is_some_and(|part| {
+            part.origin == origin
+                && part.width == rect.w
+                && part.active == active
+                && part.maximized == maximized
+                && part.rounded == rounded
+                && part.title == title
         });
-        if stale {
+        if same_geometry {
+            // Only pointer feedback moved: repaint the affected controls in place.
+            if let Some(part) = self.parts.get_mut(&window) {
+                part.repaint_feedback(feedback);
+            }
+        } else {
             // The blurred desktop is cropped at the titlebar origin, so a moved titlebar is rebuilt.
             let backdrop = self.crop(origin, rect.w as usize, TITLEBAR_HEIGHT as usize);
             let pixels = chrome_pixels_over(
@@ -191,7 +340,7 @@ impl Decorations {
                 active,
                 maximized,
                 rounded,
-                hover,
+                feedback,
                 title,
                 backdrop.as_deref(),
             );
@@ -211,8 +360,9 @@ impl Decorations {
                     active,
                     maximized,
                     rounded,
-                    hover,
+                    feedback,
                     title: title.to_owned(),
+                    backdrop,
                     buffer,
                 },
             );
@@ -560,7 +710,7 @@ pub(super) fn chrome_pixels(
         active,
         mode == Mode::Maximized,
         mode.rounded_frame(),
-        hover,
+        Feedback { hover, pressed: None },
         title,
         None,
     )
@@ -575,71 +725,31 @@ pub(super) fn chrome_pixels_over(
     active: bool,
     maximized: bool,
     rounded: bool,
-    hover: Option<Button>,
+    feedback: Feedback,
     title: &str,
     backdrop: Option<&[u8]>,
 ) -> Vec<u8> {
     let w = width.max(1).min(32767) as usize;
     let h = TITLEBAR_HEIGHT as usize;
     let mut out = vec![0u8; w * h * 4];
-    // Rounded top corners use alpha, not an opaque bounding rectangle. The actual pixels
-    // underneath remain visible via Smithay's compositor.
-    let radius = titlebar_corner_radius(rounded, w as i32, h as i32);
-    for y in 0..h as i32 {
-        for x in 0..w as i32 {
-            let corner = if y < radius && x < radius {
-                Some((radius - 1 - x, radius - 1 - y))
-            } else if y < radius && x >= w as i32 - radius {
-                Some((x - (w as i32 - radius), radius - 1 - y))
-            } else {
-                None
-            };
-            let coverage = corner.map_or(1.0, |(dx, dy)| {
-                let distance = ((dx as f32 + 0.5).powi(2) + (dy as f32 + 0.5).powi(2)).sqrt();
-                (radius as f32 + 0.5 - distance).clamp(0.0, 1.0)
-            });
-            if let Some(back) = backdrop {
-                let at = (y as usize * w + x as usize) * 4;
-                let rgb = u32::from_be_bytes([0, back[at], back[at + 1], back[at + 2]]);
-                put(&mut out, w, h, x, y, rgb, (255.0 * coverage).round() as u8);
-            }
-            let alpha = (f32::from(SURFACE_ALPHA) * coverage).round() as u8;
-            put(&mut out, w, h, x, y, SURFACE, alpha);
-            if y == 0 || x == 0 || x == w as i32 - 1 {
-                put(
-                    &mut out,
-                    w,
-                    h,
-                    x,
-                    y,
-                    BORDER,
-                    (63.0 * coverage).round() as u8,
-                );
-            }
-        }
-    }
-    let slot = chrome::controls_width();
+    paint_background(&mut out, w, h, rounded, backdrop, 0, w as i32);
     let glyph_edge = u32::from(chrome::WINDOW_CHROME.metrics.icon).clamp(4, 128);
-    for geometry in
-        chrome::control_button_geometries(chrome::SceneRect::new(0, 0, width, TITLEBAR_HEIGHT))
-    {
-        let role = match geometry.role {
-            WindowControlRole::Maximize if maximized => WindowControlRole::Restore,
-            role => role,
-        };
-        let button = match role {
-            WindowControlRole::Close => Button::Close,
-            WindowControlRole::Minimize => Button::Minimize,
-            WindowControlRole::Maximize | WindowControlRole::Restore => Button::Maximize,
-        };
-        let center = geometry.bounds.x + geometry.bounds.width / 2;
-        let cy = geometry.bounds.height / 2;
+    for slot in control_slots(width, maximized) {
         chrome_buttons::paint_control(
-            &mut out, w, h, center, cy, glyph_edge, role, button, hover,
+            &mut out,
+            w,
+            h,
+            slot.center,
+            slot.cy,
+            glyph_edge,
+            slot.role,
+            slot.button,
+            feedback,
         );
     }
     // Stable, centered title, ellipsized before reaching the controls. Rasterised only when
     // text/size changes. The source atlas is deliberately tiny for safe nested startup.
+    let slot = chrome::controls_width();
     let right_occupied = width.saturating_sub(slot);
     let available = chrome::title_available_width(0, right_occupied, chrome::TITLE_PAD);
     let alpha = if active { 230 } else { 166 };
@@ -695,4 +805,89 @@ pub(super) fn chrome_pixels_over(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod hover_repaint_tests {
+    use super::*;
+
+    const W: i32 = 400;
+    const H: usize = TITLEBAR_HEIGHT as usize;
+
+    fn bar(feedback: Feedback) -> Vec<u8> {
+        chrome_pixels_over(W, true, false, false, feedback, "Terminal", None)
+    }
+
+    #[test]
+    fn hover_repaint_touches_only_the_button_rect() {
+        let rest = bar(Feedback::default());
+        let slot = control_slots(W, false)
+            .into_iter()
+            .find(|slot| slot.button == Button::Minimize)
+            .expect("minimize slot");
+        let hover = Feedback { hover: Some(Button::Minimize), pressed: None };
+
+        let mut partial = rest.clone();
+        repaint_slot(&mut partial, W as usize, H, false, None, &slot, hover);
+
+        // Same result as a full rebuild with the hover state...
+        assert_eq!(partial, bar(hover));
+        // ...and every pixel outside the button's columns is byte-identical to the rest bar.
+        for y in 0..H {
+            for x in 0..W as usize {
+                if (slot.x0..slot.x1).contains(&(x as i32)) {
+                    continue;
+                }
+                let at = (y * W as usize + x) * 4;
+                assert_eq!(partial[at..at + 4], rest[at..at + 4], "pixel ({x},{y}) changed");
+            }
+        }
+    }
+
+    #[test]
+    fn moving_hover_between_buttons_repaints_both_back_to_match_full_rebuild() {
+        let mut pixels = bar(Feedback::default());
+        let slots = control_slots(W, false);
+        let step = |pixels: &mut Vec<u8>, from: Feedback, to: Feedback| {
+            for slot in &slots {
+                if [from.hover, from.pressed, to.hover, to.pressed].contains(&Some(slot.button)) {
+                    repaint_slot(pixels, W as usize, H, false, None, slot, to);
+                }
+            }
+        };
+        let min = Feedback { hover: Some(Button::Minimize), pressed: None };
+        let close = Feedback { hover: Some(Button::Close), pressed: Some(Button::Close) };
+        step(&mut pixels, Feedback::default(), min);
+        step(&mut pixels, min, close);
+        assert_eq!(pixels, bar(close));
+    }
+
+    #[test]
+    fn repaint_feedback_on_cached_bar_skips_unchanged_bar() {
+        let rest = Feedback::default();
+        let mut buffer = ChromeBuffer {
+            origin: (0, 0),
+            width: W,
+            active: true,
+            maximized: false,
+            rounded: false,
+            feedback: rest,
+            title: "Terminal".to_owned(),
+            backdrop: None,
+            buffer: MemoryRenderBuffer::from_slice(
+                &bar(rest),
+                Fourcc::Argb8888,
+                (W, TITLEBAR_HEIGHT),
+                1,
+                Transform::Normal,
+                None,
+            ),
+        };
+        // Same feedback: no-op, feedback stays put.
+        buffer.repaint_feedback(rest);
+        assert_eq!(buffer.feedback, rest);
+        let hover = Feedback { hover: Some(Button::Close), pressed: None };
+        buffer.repaint_feedback(hover);
+        assert_eq!(buffer.feedback, hover);
+    }
 }
