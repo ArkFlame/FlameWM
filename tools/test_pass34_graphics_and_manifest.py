@@ -8,6 +8,11 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def wayland_render_source():
+    """wm-wayland render owner, split from render.rs into render/*.rs."""
+    base = ROOT / 'crates/flamewm-wm-wayland/src/render'
+    return '\n'.join(p.read_text() for p in sorted(base.glob('*.rs')))
+
 
 class GraphicsBackendIntegration(unittest.TestCase):
     def test_both_x11_render_owners_use_same_negotiation(self):
@@ -16,7 +21,7 @@ class GraphicsBackendIntegration(unittest.TestCase):
         for source in (scene, chrome):
             self.assertIn(re.sub(r'\s+', '', 'choose_provider('), re.sub(r'\s+', '', source))
             self.assertIn(re.sub(r'\s+', '', 'DisplayProtocol::X11'), re.sub(r'\s+', '', source))
-            self.assertIn(re.sub(r'\s+', '', 'FLAMEWM_X11_RENDER_PROVIDER'), re.sub(r'\s+', '', source))
+            self.assertIn(re.sub(r'\s+', '', 'X11_PROVIDER_VARIABLE'), re.sub(r'\s+', '', source))
             self.assertIn(re.sub(r'\s+', '', 'if provider == GraphicsProvider::XCore'), re.sub(r'\s+', '', source))
         self.assertIn('xrender = None;', chrome)
         self.assertIn('xrender = None;', scene)
@@ -29,9 +34,9 @@ class GraphicsBackendIntegration(unittest.TestCase):
 
     def test_wayland_real_startup_uses_negotiator_and_gl_backend(self):
         main = (ROOT / "crates/flamewm-wm-wayland/src/main.rs").read_text()
-        render = (ROOT / "crates/flamewm-wm-wayland/src/render.rs").read_text()
+        render = wayland_render_source()
         self.assertIn('choose_provider(DisplayProtocol::Wayland', main)
-        self.assertIn('FLAMEWM_WAYLAND_RENDER_PROVIDER', main)
+        self.assertIn('WAYLAND_PROVIDER_VARIABLE', main)
         self.assertIn('WinitGraphicsBackend<GlowRenderer>', render)
         self.assertIn('backend.submit(', render)
         self.assertIn('backend.bind()', render)
@@ -39,7 +44,7 @@ class GraphicsBackendIntegration(unittest.TestCase):
     def test_elision_shared_and_used_by_live_x11_and_wayland_paths(self):
         skin = (ROOT / 'crates/flamewm-skin/src/recipes/window_chrome.rs').read_text()
         x11 = (ROOT / 'crates/flamewm-wm-x11/src/frame/chrome.rs').read_text()
-        wayland = (ROOT / 'crates/flamewm-wm-wayland/src/render.rs').read_text()
+        wayland = wayland_render_source()
         self.assertIn('pub fn elide_title(', skin)
         self.assertIn('pub fn title_available_width(', skin)
         self.assertLess(x11.index('::elide_title('), x11.index('let title_width ='))
