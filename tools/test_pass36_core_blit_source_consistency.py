@@ -57,7 +57,7 @@ class X11FallbackDepthSafety(unittest.TestCase):
         self.assertIn('XGetGeometry(display,drawable', re.sub(r'\s+', '', source))
         self.assertIn(re.sub(r'\s+', '', 'unsafe { external_drawable_depth(view_display, drawable)? }'), re.sub(r'\s+', '', source))
         self.assertIn(re.sub(r'\s+', '', 'upload_opaque_argb32_image(view_display, view_screen, fresh, depth, &words, w, h,)'), re.sub(r'\s+', '', source))
-        self.assertIn(re.sub(r'\s+', '', 'create_pixmap(view_display, drawable, w, h, depth, root_w, root_h)'), re.sub(r'\s+', '', source))
+        self.assertIn(re.sub(r'\s+', '', 'create_pixmap(view_display, drawable, w, h, depth, root_w, root_h,)'), re.sub(r'\s+', '', source))
         self.assertIn('self.invalidate_image_cache();', source[source.index('pub unsafe fn retarget('):source.index('fn session_view(')])
         self.assertNotIn('built = Some(words);\n                self.image_cache.insert(', source)
 
