@@ -73,7 +73,7 @@ remove_by = "0.3.0"
 [[exception]]
 path = "crates/flamewm-desktop-core/Cargo.toml"
 capability = "core-source-loc>2400"
-reason = "The core holds file actions, file-manager policy, sticky persistence and drag state at 4925 production lines, so the 2400-line core budget only fits after the file-operations owner is split out."
+reason = "The core holds file actions, file-manager policy, sticky persistence and drag state at 5422 production lines (including the weather feed data and view layer moved from flamewm-shell-core), so the 2400-line core budget only fits after the file-operations owner is split out."
 canonical_target = "crates/flamewm-desktop-core/src"
 remove_by = "0.3.0"
 
@@ -96,13 +96,6 @@ path = "crates/flamewm-desktop/src/widgets/mod.rs"
 capability = "j12-g12-wallpaper-not-cpu"
 reason = "The rule matches `cpu` to keep CPU cost out of the wallpaper projection, but this module is the widget sampler that reads `/proc/stat` for `WidgetKind::Cpu`; no wallpaper code is involved."
 canonical_target = "crates/flamewm-desktop/src/widgets/mod.rs"
-remove_by = "0.2.0"
-
-[[exception]]
-path = "crates/flamewm-shell-core/Cargo.toml"
-capability = "core-source-loc>2400"
-reason = "The shell core holds 2450 production lines (lib.rs, popup, weather, start menu); the 50-line overage is ratcheted until the next owner split moves a domain (e.g. weather) out of the core."
-canonical_target = "crates/flamewm-shell-core/src"
 remove_by = "0.2.0"
 
 [[exception]]

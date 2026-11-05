@@ -14,7 +14,7 @@ use flamewm_api::error::ErrorCode;
 use flamewm_api::settings::SettingsSnapshot as ApiSettingsSnapshot;
 use flamewm_control_core::{ControlMutationQueue, ControlRequest, MutationLane};
 use flamewm_control_dbus::MutationDispatcher;
-use flamewm_shell_core::weather::WeatherSettings;
+use flamewm_desktop_core::weather::WeatherSettings;
 
 /// Result of a Start-menu launch, correlated back to the app that was asked
 /// to start. `app` is the user-visible application name.

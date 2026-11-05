@@ -12,12 +12,12 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use flamewm_shell_core::weather::{
+use flamewm_desktop_core::weather::{
     DayForecast, HttpGet, WeatherCondition, WeatherError, WeatherLocation, WeatherProvider,
     WeatherSnapshot,
 };
 
-pub use flamewm_shell_core::weather::OPEN_METEO_ATTRIBUTION;
+pub use flamewm_desktop_core::weather::OPEN_METEO_ATTRIBUTION;
 pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 pub const MAX_FORECAST_DAYS: usize = 7;
 const SEARCH_RESULTS: usize = 5;

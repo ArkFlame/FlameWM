@@ -4,13 +4,9 @@
 //! [`WeatherFeed`] payload the tray reads and projects it through the shared `weather_view`
 //! rules, so temperature, units, status text and attribution cannot drift from the tray.
 
+use crate::weather::{OPEN_METEO_ATTRIBUTION, WeatherCondition, WeatherFeed, WeatherState};
+use crate::weather_view::{condition_label, popup_view, range_label, tray_view, weekday_label};
 use flamewm_api::weather::WeatherFeedSnapshot;
-use flamewm_shell_core::weather::{
-    OPEN_METEO_ATTRIBUTION, WeatherCondition, WeatherFeed, WeatherState,
-};
-use flamewm_shell_core::weather_view::{
-    condition_label, popup_view, range_label, tray_view, weekday_label,
-};
 
 /// Days shown in the widget strip (its fixed slot count).
 pub const WEATHER_STRIP_DAYS: usize = 6;
@@ -101,7 +97,7 @@ pub fn weather_widget_view(feed: &WeatherFeedSnapshot) -> WeatherWidgetView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flamewm_shell_core::weather::{
+    use crate::weather::{
         DayForecast, OPEN_METEO_ATTRIBUTION, TemperatureUnit, WeatherLocation, WeatherSettings,
         WeatherSnapshot,
     };

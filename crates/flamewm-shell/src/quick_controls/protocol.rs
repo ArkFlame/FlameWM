@@ -5,7 +5,7 @@
 //! secret field, and unit tests assert encoded lines never echo a secret token.
 
 use flamewm_api::{OutputId, PanelEdge, Rect};
-use flamewm_shell_core::weather::WeatherFeed;
+use flamewm_desktop_core::weather::WeatherFeed;
 
 pub const MAX_LINE_LEN: usize = 4096;
 
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn weather_feed_round_trips_as_one_line() {
-        use flamewm_shell_core::weather::{
+        use flamewm_desktop_core::weather::{
             TemperatureUnit, WeatherFeed, WeatherSettings, WeatherState,
         };
         let cmd = Command::Weather(WeatherFeed {
