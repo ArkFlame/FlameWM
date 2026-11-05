@@ -135,7 +135,8 @@ pub fn layout_text_weighted(
             // Greedy word fill; overlong or degenerate-avail tokens char-split.
             let mut current = String::new();
             let mut current_w = 0.0f32;
-            let space_w = text_width(" ", size, weight);
+            // Candidate lines are measured as whole strings, never summed from per-word widths:
+            // a backend's measure rounds per call, so sums drift from the painted line.
             let flush = |current: &mut String, current_w: &mut f32, lines: &mut Vec<TextLine>| {
                 if !current.is_empty() {
                     lines.push(TextLine {
@@ -152,16 +153,15 @@ pub fn layout_text_weighted(
                     push_chunks(&mut lines, word, size, avail_width, weight);
                     continue;
                 }
-                let candidate = if current.is_empty() {
-                    word_w
-                } else {
-                    current_w + space_w + word_w
-                };
-                if candidate <= avail_width {
-                    if !current.is_empty() {
-                        current.push(' ');
-                    }
+                if current.is_empty() {
                     current.push_str(word);
+                    current_w = word_w;
+                    continue;
+                }
+                let candidate_text = format!("{current} {word}");
+                let candidate = text_width(&candidate_text, size, weight);
+                if candidate <= avail_width {
+                    current = candidate_text;
                     current_w = candidate;
                 } else {
                     flush(&mut current, &mut current_w, &mut lines);
@@ -393,6 +393,33 @@ mod tests {
         assert!(
             width <= 76.0 - 4.0,
             "estimated width {width} exceeds label box minus 4px"
+        );
+    }
+
+    #[test]
+    fn wrapped_line_width_is_one_measure_of_the_whole_line() {
+        // Xft reports whole-string advances rounded to whole px per call. Summing per-word
+        // measures rounds every word and space separately, so a long line drifts from the width
+        // its paint (and the caret placed after it) uses.
+        let fake = |text: &str, _: f32, _: u16| {
+            let advance: f32 = text
+                .chars()
+                .map(|c| if c == ' ' { 3.4 } else { 5.2 })
+                .sum();
+            advance.round()
+        };
+        let text = (0..30).map(|_| "abcd").collect::<Vec<_>>().join(" ");
+        let layout = with_measure(&fake, || {
+            layout_text(&text, 13.0, 10_000.0, TextWrap::Wrap, false)
+        });
+        assert_eq!(layout.lines.len(), 1);
+        let line = &layout.lines[0];
+        assert_eq!(line.text, text);
+        assert!(
+            (line.width - fake(&line.text, 13.0, 400)).abs() < 0.5,
+            "line width {} vs whole-line measure {}",
+            line.width,
+            fake(&line.text, 13.0, 400)
         );
     }
 
