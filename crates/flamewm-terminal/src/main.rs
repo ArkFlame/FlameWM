@@ -1,12 +1,12 @@
 //! `flamewm-terminal [--working-directory DIR] [-e CMD [ARGS...]]`. Without `-e` the user's shell starts.
 use std::cell::RefCell;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
 use flamewm_api::settings::SettingsSnapshot;
@@ -21,6 +21,7 @@ use flamewm_ui_x11::{
 use flamewm_terminal::app::App;
 use flamewm_terminal::pty::Launch;
 use flamewm_terminal::session::SessionEvent;
+use flamewm_terminal::settings_cache;
 use flamewm_terminal::store::{self, TerminalConfig, ThemeStore};
 use flamewm_terminal::theme;
 use flamewm_terminal::wake::{self, ALL_TABS_CLOSED};
@@ -121,7 +122,14 @@ fn run() -> Result<(), String> {
     reader
         .set_nonblocking(true)
         .map_err(|error| error.to_string())?;
-    let snapshot = initial_settings();
+    // First paint never waits on the desktop: it uses the last-known snapshot (or defaults on a first run). The live
+    // `GetSettings` answer arrives on a worker thread and is applied from the wake socket.
+    let cache_path = settings_cache::cache_path();
+    let cached = settings_cache::load(&cache_path);
+    let snapshot = cached.clone();
+    let (settings_tx, settings_rx) = mpsc::channel::<SettingsSnapshot>();
+    let settings_wake = writer.try_clone().map_err(|error| error.to_string())?;
+    spawn_settings_fetch(cache_path, cached, settings_tx, settings_wake);
     let mut app = App::new(
         config,
         config_path,
@@ -247,10 +255,11 @@ fn run() -> Result<(), String> {
         move |document| {
             let mut app = wake_app.borrow_mut();
             let mut settings_changed = false;
+            if let Ok(snapshot) = settings_rx.try_recv() {
+                settings_changed |= apply_settings(&mut app, snapshot);
+            }
             if let Some(snapshot) = wake_snapshot.borrow_mut().take() {
-                app.snapshot = Some(snapshot);
-                app.reload_themes();
-                settings_changed = true;
+                settings_changed |= apply_settings(&mut app, snapshot);
             }
             let _wake = flamewm_profiler::start("terminal.wake");
             wake::drain_and_commit(&mut app, &events, settings_changed, |app| {
@@ -261,11 +270,73 @@ fn run() -> Result<(), String> {
     )
 }
 
-/// The window backdrop is built once from the startup snapshot and cannot be installed later, so a miss leaves the
-/// terminal opaque for its whole life. Startup retries `GetSettings` in short attempts within a bounded budget.
+/// Startup fetches `GetSettings` off the main thread, in short attempts within a bounded budget.
 const SETTINGS_ATTEMPT: Duration = Duration::from_millis(300);
 const SETTINGS_BUDGET: Duration = Duration::from_millis(2_000);
 const SETTINGS_RETRY_PAUSE: Duration = Duration::from_millis(100);
+
+/// Fetches the live snapshot on a worker thread. A changed snapshot is persisted to the cache, sent to the UI loop and
+/// announced on the wake socket; an unchanged one is only sent (the UI loop skips the repaint).
+fn spawn_settings_fetch(
+    cache_path: PathBuf,
+    cached: Option<SettingsSnapshot>,
+    tx: Sender<SettingsSnapshot>,
+    mut wake: UnixStream,
+) {
+    std::thread::spawn(move || {
+        let Some(snapshot) = initial_settings() else {
+            return;
+        };
+        if cached.as_ref() != Some(&snapshot) {
+            let _ = settings_cache::store(&cache_path, &snapshot);
+        }
+        if tx.send(snapshot).is_ok() {
+            let _ = wake.write(&[1]);
+        }
+    });
+}
+
+/// Whether `next` changes any value the view reads. A snapshot with the same values (a new revision only) is not a
+/// change, so an unchanged live answer does not repaint the terminal.
+fn settings_differ(current: Option<&SettingsSnapshot>, next: &SettingsSnapshot) -> bool {
+    current.map(|current| &current.values) != Some(&next.values)
+}
+
+/// Installs a snapshot. Returns whether the palette inputs changed, so the caller repaints only then.
+fn apply_settings(app: &mut App, snapshot: SettingsSnapshot) -> bool {
+    let changed = settings_differ(app.snapshot.as_ref(), &snapshot);
+    app.snapshot = Some(snapshot);
+    if changed {
+        app.reload_themes();
+    }
+    changed
+}
+
+#[cfg(test)]
+mod settings_apply_tests {
+    use flamewm_api::settings::SettingValue;
+
+    use super::*;
+
+    #[test]
+    fn same_values_under_a_new_revision_do_not_repaint() {
+        let mut current = SettingsSnapshot::new(1);
+        current.values.insert("accent".into(), SettingValue::Rgb(1));
+        let mut next = current.clone();
+        next.revision = 2;
+        assert!(!settings_differ(Some(&current), &next));
+    }
+
+    #[test]
+    fn a_changed_value_or_a_first_arrival_repaints() {
+        let mut current = SettingsSnapshot::new(1);
+        current.values.insert("accent".into(), SettingValue::Rgb(1));
+        let mut next = current.clone();
+        next.values.insert("accent".into(), SettingValue::Rgb(2));
+        assert!(settings_differ(Some(&current), &next));
+        assert!(settings_differ(None, &next));
+    }
+}
 
 fn initial_settings() -> Option<SettingsSnapshot> {
     let deadline = Instant::now() + SETTINGS_BUDGET;

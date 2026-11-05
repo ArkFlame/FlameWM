@@ -69,14 +69,63 @@ Not done in this change:
 - Lazy per-name lookup without a full file index (the XDG probe walk). It is not exact-equivalent to the current
   per-theme best/exact-first ranking without a larger rewrite, so it is deferred.
 - Persistent on-disk icon index cache. Not needed for the settings win; deferred.
-- terminal `GetSettings` retry (`crates/flamewm-terminal/src/main.rs` `initial_settings`): not changed. The backdrop
-  is built once from the startup snapshot before the window exists, and the code comment states it cannot be
-  installed later. Making first paint non-blocking would change visible behaviour, so it needs a design decision.
-  The harness number (about 2.1 s) is a worst case with no control service; it returns on the first attempt on a
-  running desktop.
+- terminal `GetSettings` retry: resolved in the next section (first paint no longer waits on it).
 
 Raw JSON from the baseline run is kept under `/run/media/linsaftw/SDD/iconperf-base.json` and the new run under
 `/run/media/linsaftw/SDD/iconperf-new.json` (outside the repository).
+
+## Change: terminal first paint does not wait on settings
+
+Cause: `flamewm-terminal` `initial_settings()` retried `GetSettings` on the main thread for up to 2 s before the
+window was built, so a missing or slow control service delayed the first paint by the whole budget.
+
+Fix (`crates/flamewm-terminal/src/main.rs`, `crates/flamewm-terminal/src/settings_cache.rs`):
+
+- First paint uses the last-known snapshot from `$XDG_CACHE_HOME/flamewm/terminal/settings.snapshot` (fallback
+  `~/.cache`), or defaults on a first run. The file is a plain line format (no new dependency), hex-encodes text,
+  and is written to a temp file then renamed, so a reader sees the old or the new snapshot.
+- `GetSettings` runs on a worker thread with the same attempt/budget. A fresh answer is stored when it differs from
+  the cache, sent over a channel and announced by one byte on a clone of the wake socket. The UI loop applies it
+  through `apply_settings`, which repaints only when the snapshot values differ (a new revision alone does not).
+- Live `SettingsSnapshotChanged` signals use the same `apply_settings` path.
+
+Limit (not changed here): the window backdrop is installed once at window creation from the snapshot available then
+(`ui-document` `with_window_backdrop` -> `ui-x11` `run_with_controller_events_role_and_two_readable_fds` ->
+`render-x11` `WindowBackdropState::spec`). A backdrop that changes after the window exists is not re-installed; the
+cache makes the next launch use the new value. Installing a backdrop on a live window needs a `render-x11` hook, which
+is outside this change's owner list (report to the render-x11 owner).
+
+Measured (fast profile, `scripts/perf/startup.sh --runs 5 --warmups 1 terminal`, no control service in the harness,
+so the cache is empty and the defaults path is measured; host load 18 to 25):
+
+| app | run | mapped median ms | painted median ms | mapped runs ms |
+| --- | --- | ---: | ---: | --- |
+| terminal | before (origin/main 6d0caa60) | 2310.8 | 2464.8 | 2310.8, 2253.1, 2377.8, 2334.5, 2250.2 |
+| terminal | after | 249.7 | 438.4 | 249.7, 270.6, 230.4, 310.3, 222.5 |
+
+Delta: mapped -89.2 %, painted -82.2 %. Baseline binaries: `/run/media/linsaftw/SDD/startup-bin-base`; new build:
+`/run/media/linsaftw/SDD/target-startup-defer/fast`.
+
+Tests: `cargo test -p flamewm-terminal` exit 0 (167 passed, 0 failed, 3 ignored), including the cache codec and
+`settings_apply` repaint rules. `cargo check --workspace` exit 0. `python3 -I tools/architecture_guard.py` exit 0
+(77 ratified violations, no new ones).
+
+Not covered by runtime evidence: the live-answer path with a running control service (the harness has none), and
+the cache-hit paint. Both are covered only by unit tests and code reading.
+
+## Audit: other apps' startup sequences (not changed in this pass)
+
+- `flamewm-imageviewer` (`src/lib.rs` `initial_settings`, called in `run()` before first paint) and
+  `flamewm-assistant` (`src/lib.rs` `initial_settings`, before first paint): one `GetSettings` with a 250 ms call
+  timeout. Connect failure returns at once, so the cost is only a hung control service (up to 250 ms). Measured
+  imageviewer mapped median 133 ms (baseline), so the win is small. Same cache pattern applies if a hung service is
+  seen in practice.
+- `flamewm-shell` (`src/main.rs` ~line 233): synchronous `GetSettings` before `SurfaceRuntime::new`. The comment says
+  the first projection applies saved presentation values. Deferring it changes first-frame font, accent and taskbar
+  colour, so it needs a visible-behaviour decision (owner: shell).
+- `flamewm-lock` (`src/session.rs` `fetch_snapshot`, 2 s timeout, plus `GetDisplays`): lock appearance and PAM/
+  timeout settings are read before the lock is shown. Deferring them is a security-relevant decision; not changed.
+- `flamewm-archiver-app`: no settings fetch; mapped median 93.8 ms (baseline). No change needed from this audit.
 
 ## Profiling (strace -f -tt, private bus, 8 s)
 
