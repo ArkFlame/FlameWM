@@ -6,7 +6,7 @@
 //! plans skin-exact values (J06 freeze) and describes effects.
 
 use flamewm_render_core::outline::OutlineStrip;
-use flamewm_skin::palette::{Rgb, TEXT};
+use flamewm_skin::palette::Rgb;
 use flamewm_skin::recipes::decoration::ChromeTokens;
 use flamewm_skin::recipes::window_chrome::WINDOW_CHROME;
 use flamewm_skin::typography::{FontWeight, Typography};
@@ -107,7 +107,7 @@ pub fn plan_scene_with_titlebar(
 ) -> ChromeScene {
     let title_style = Typography::RWR_0_0_9.title;
     let bg = tokens.titlebar_bg;
-    let text = TEXT;
+    let text = tokens.ink().text;
     let radius =
         super::geometry_shape::scaled_corner_radius(floating, tokens.style, titlebar_height);
     let logical_h = u32::from(WINDOW_CHROME.metrics.titlebar);
@@ -921,7 +921,7 @@ mod tests {
         assert_eq!(px.len(), scene.frame_w as usize * 2 * 4);
         assert!(px.chunks_exact(4).all(|p| p[3] == 255));
         assert_eq!(PANEL.0, 0x001b_1e20);
-        assert_eq!(TEXT.0, 0x00f1_f2f3);
+        assert_eq!(flamewm_skin::palette::TEXT.0, 0x00f1_f2f3);
         assert_eq!(scene.title_color, (0xf1, 0xf2, 0xf3));
         assert_eq!(scene.title_family, "IBM Plex Sans");
         assert_eq!(scene.title_family, Typography::RWR_0_0_9.family);

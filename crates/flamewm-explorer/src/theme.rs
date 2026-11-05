@@ -165,6 +165,10 @@ impl ExplorerTheme {
             ..self.surface
         }
     }
+    /// Primary text ink of the active appearance, opaque (Dark light text, Light dark text).
+    pub fn text(&self) -> UiColor {
+        rgb(self.ink.text.0)
+    }
     /// Secondary text: the appearance's muted ink, opaque. Light theme gets dark ink, Dark gets light.
     pub fn muted(&self) -> UiColor {
         rgb(self.ink.muted.0)

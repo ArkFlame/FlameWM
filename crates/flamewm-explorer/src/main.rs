@@ -307,7 +307,6 @@ mod app {
     mod projection;
 }
 
-const WHITE:UiColor=UiColor{r:240,g:242,b:245,a:255};
 
 /// Live settings at startup; `None` when the control service is unavailable (defaults apply).
 fn initial_settings()->Option<SettingsSnapshot> {

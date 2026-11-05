@@ -815,7 +815,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 "sticky-toggle-off",
             ),
             ("fontBold", "font-toggle-on", "font-toggle-off"),
-            ("textShadow", "font-shadow-toggle-on", "font-shadow-toggle-off"),
+            (
+                "textShadow",
+                "font-shadow-toggle-on",
+                "font-shadow-toggle-off",
+            ),
             ("animationsEnabled", "anim-global-on", "anim-global-off"),
             ("startAnimationEnabled", "anim-start-on", "anim-start-off"),
             (
@@ -893,6 +897,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             optional_text(document, "theme-install-status", status.clone());
         }
         self.sync_appearance(document)?;
+        // Settings is its own document: it projects the appearance's text and overlay tokens here,
+        // the same owner the desktop, Explorer and Task Manager use.
+        if let Some(snapshot) = self.client.settings() {
+            flamewm_ui_x11::project_appearance_tokens(document, snapshot)?;
+        }
         self.sync_option_setting(
             document,
             "decoration",

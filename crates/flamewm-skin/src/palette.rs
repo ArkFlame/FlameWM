@@ -223,12 +223,34 @@ pub fn on_accent(accent: Rgb) -> Rgb {
     }
 }
 
+/// Text palette for ink drawn on a neutral `surface`: Dark or Light, whichever has the higher WCAG
+/// contrast. Dark glass keeps the shipped Dark palette; light glass gets the Light text and panel.
+#[must_use]
+pub fn ink_palette_on(surface: Rgb) -> Palette {
+    if contrast_ratio(surface, Palette::RWR_0_0_9.text)
+        >= contrast_ratio(surface, Palette::LIGHT.text)
+    {
+        Palette::RWR_0_0_9
+    } else {
+        Palette::LIGHT
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// WCAG AA for normal text.
     const AA_TEXT: f64 = 4.5;
+    /// Shipped Dark titlebar material (`DEFAULT_SURFACE_RGB`).
+    const DESKTOP_DARK_SURFACE: Rgb = Rgb(0x0033_3333);
+
+    #[test]
+    fn ink_follows_the_surface_it_sits_on() {
+        assert_eq!(ink_palette_on(DESKTOP_DARK_SURFACE), Palette::RWR_0_0_9);
+        assert_eq!(ink_palette_on(LIGHT_SURFACE), Palette::LIGHT);
+        assert_eq!(ink_palette_on(LIGHT_PANEL), Palette::LIGHT);
+    }
 
     #[test]
     fn default_palette_is_the_shipped_dark_palette() {

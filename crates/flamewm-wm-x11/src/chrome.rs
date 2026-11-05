@@ -5,8 +5,8 @@ use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_skin::icons::IconRole;
 use flamewm_skin::palette::Rgb;
 use flamewm_skin::recipes::decoration::{ButtonShape, ButtonTokens, ChromeTokens, DecorationStyle};
-use flamewm_skin::recipes::window_control::{ControlKind, ControlState, control_colors};
 use flamewm_skin::recipes::window_chrome::{self as recipe, WINDOW_CHROME, WindowControlRole};
+use flamewm_skin::recipes::window_control::{ControlKind, ControlState, control_colors};
 
 /// Skin-owned titlebar height (flamewm-skin RWR 0.0.9 chrome titlebar).
 pub const TITLEBAR_HEIGHT: u16 = WINDOW_CHROME.metrics.titlebar;
@@ -379,10 +379,16 @@ fn control_glyph_scheme(
         ControlMaterial::Hover => ControlState::Hover,
         ControlMaterial::Pressed => ControlState::Pressed,
     };
-    let colors = control_colors(kind, state);
+    let colors = control_colors(
+        kind,
+        state,
+        flamewm_skin::palette::ink_palette_on(look.titlebar),
+    );
     let mut scheme = flamewm_image_core::SvgColorScheme {
         text: skin_rgba(colors.glyph.0),
-        background: colors.background.map_or(base.background, |fill| skin_rgba(fill.0)),
+        background: colors
+            .background
+            .map_or(base.background, |fill| skin_rgba(fill.0)),
         highlight: base.highlight,
         negative_text: base.negative_text,
     };

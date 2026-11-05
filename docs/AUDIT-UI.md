@@ -430,3 +430,36 @@ Base: `origin/main` `19f9af3a` (Settings opted into focus). Commits: `fd0cae7f` 
 - Hotkey recorder: the capture gate is unit-tested only. Runtime is unverified because the Settings control bus (`com.arkflame.FlameWM1`) is unavailable in the private session, so no hotkey can be armed.
 - Switch activation (Space or Enter toggles a switch) is unverified at runtime for the same reason. The activation path is the same one the search button used in the screenshots.
 - Light appearance focus colour, Wayland, and the full nested session (`scripts/xephyr`) not run.
+
+## Pass 12: Light legibility, one owner per ink
+
+Screenshots (`scripts/ui/light_shots.sh`, private Xvfb and nested session) at `/run/media/linsaftw/SDD/shots/pass12/`. Pass 12 started from the Light `light-apps.png` where Settings, Explorer sidebar and titlebars were near-invisible.
+
+### Root causes and owners
+
+| Defect | Owner | Fix |
+| --- | --- | --- |
+| Settings never projected text ink. `flamewm-settings` wrote no `--text`, so Light Settings kept the Dark `:root` `#f7f9ff`. | `flamewm-settings/src/app_impl_2.rs` `sync` | Calls `flamewm_ui_x11::project_appearance_tokens` (the shared `flamewm-ui-document` owner). |
+| `--text-secondary` was never projected by any surface. | `flamewm-ui-document/src/appearance_tokens.rs` `text_token_values` | Emits `--text-secondary` as text ink at 85% alpha. |
+| Settings compiled document lacked `--hover-fill` and `--pressed-fill`, so the projection was rejected. | `flamewm-settings/ui/settings.css` `:root` | Declares the Dark overlay values (`#ffffff40`, `#ffffff26`), the same as `Overlays::DARK`. |
+| Explorer nav arrows and place labels used a hard `WHITE` (`#f0f2f5`), not the theme ink. | `flamewm-explorer/src/app/projection.rs`, `theme.rs` | `theme.text()` (the appearance's text ink). Constant removed. |
+| Titlebar title and window-control glyphs were fixed to the Dark `TEXT`, invisible on light glass. | `flamewm-skin/src/palette.rs` `ink_palette_on`, `recipes/decoration.rs` `ChromeTokens::ink`, `recipes/window_control.rs` `control_colors(kind, state, ink)` | Ink is picked by WCAG contrast against the titlebar material. Dark glass keeps the shipped Dark palette. Light glass gets dark ink, and minimize/maximize hover inverts against it. |
+
+Consumers: `flamewm-wm-x11/src/frame/chrome.rs` (title), `flamewm-wm-x11/src/chrome.rs` (control glyphs). `flamewm-wm-wayland/src/chrome_buttons.rs` still passes the Dark palette (see Not done).
+
+### Dark
+
+Dark values are unchanged in the default case: `ChromeTokens::ink()` on the shipped `#333333` surface picks `Palette::RWR_0_0_9`; Explorer's theme text is `#f1f2f3`, which was `WHITE` `#f0f2f5` before. Settings `--text` moves from `#f7f9ff` to the palette's `#f1f2f3`, and `--text-secondary` is the palette text at 85% alpha (was `#f7f9ffd9`). No clean pixel A/B: the Settings glass samples the windows behind it, and those differ between runs. Dark identity is shown from the token values, not a pixel diff.
+
+### Verification
+
+- `cargo test --no-fail-fast -p flamewm-skin -p flamewm-ui-document -p flamewm-ui-core -p flamewm-ui-x11 -p flamewm-explorer -p flamewm-settings -p flamewm-wm-wayland`: all pass except the 3 pre-existing `flamewm-wm-x11` failures below.
+- `cargo test -p flamewm-settings` exit 0 (189 tests).
+- `cargo test -p flamewm-wm-x11`: 494 pass, 3 fail. The same 3 tests fail on clean `origin/main` (`chrome::tests::full_opacity_surface_color_wins_over_titlebar_color_setting`, `live_settings::tests::{missing,invalid}_accent_*`). They are not caused by Pass 12.
+- New regression tests: `palette::ink_follows_the_surface_it_sits_on`, `window_control::light_ink_inverts_min_and_max_against_dark_text`, `appearance_tokens::light_text_secondary_follows_the_light_ink`.
+
+### Not done
+
+- Wayland titlebar (`flamewm-wm-wayland/src/render/titlebar.rs`, `GLYPH` `TEXT` and `chrome_buttons.rs`) still paints Dark ink. It does not receive the titlebar material, so the same `ChromeTokens::ink()` needs threading there. Light titlebars under Wayland stay unfixed.
+- `settings.css` `.nav-row:hover` and `:active` keep hard-coded white overlays (`#ffffff12`, `#ffffff1f`). On Light glass they are invisible. The `--hover-fill` token exists now and can replace them, but that changes Dark.
+- Dark Explorer dot-file names (`.agents`) use `.name-dim` = `--muted` by design (dot-file dimming), not a focus defect.

@@ -33,11 +33,13 @@ pub fn overlay_token_values(overlays: Overlays) -> [(&'static str, UiColor); 3] 
     ]
 }
 
-/// `--text` and `--muted` for one appearance's palette.
+/// `--text`, `--text-secondary` and `--muted` for one appearance's palette. `--text-secondary` is
+/// the text ink at 85% alpha, the value the stylesheets' Dark `:root` already used.
 #[must_use]
-pub fn text_token_values(palette: Palette) -> [(&'static str, UiColor); 2] {
+pub fn text_token_values(palette: Palette) -> [(&'static str, UiColor); 3] {
     [
         ("--text", color(palette.text, 255)),
+        ("--text-secondary", color(palette.text, 0xd9)),
         ("--muted", color(palette.muted, 255)),
     ]
 }
@@ -163,6 +165,15 @@ mod tests {
         let palette = Palette::for_appearance(Appearance::Light);
         let values = text_token_values(palette);
         assert_eq!(value(&values, "--text"), color(palette.text, 255));
+    }
+
+    #[test]
+    fn light_text_secondary_follows_the_light_ink() {
+        let palette = Palette::for_appearance(Appearance::Light);
+        let values = text_token_values(palette);
+        let secondary = value(&values, "--text-secondary");
+        assert_eq!((secondary.r, secondary.g, secondary.b), (0x18, 0x1b, 0x1e));
+        assert_eq!(secondary.a, 0xd9);
     }
 
     #[test]

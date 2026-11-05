@@ -44,7 +44,11 @@ pub(crate) fn paint_control(
         feedback.hover == Some(button),
         feedback.pressed == Some(button),
     );
-    let colors = control_colors(control_kind(button), state);
+    let colors = control_colors(
+        control_kind(button),
+        state,
+        flamewm_skin::palette::Palette::RWR_0_0_9,
+    );
     let half = edge as i32 / 2;
     if let Some(fill) = colors.background {
         let radius = edge as f32 / 2.0;

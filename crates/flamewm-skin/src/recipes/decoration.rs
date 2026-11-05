@@ -3,7 +3,7 @@
 //! Eligibility: `Floating` and snapped (layout) windows get the rounded mask.
 //! Maximized and fullscreen windows are rectangular.
 
-use crate::palette::Rgb;
+use crate::palette::{Palette, Rgb, ink_palette_on};
 
 /// Corner radius of the `Rounded` style for floating windows.
 pub const ROUNDED_RADIUS: u16 = 12;
@@ -60,6 +60,15 @@ pub struct ChromeTokens {
     /// Bumped when the backdrop source (wallpaper) changes so frames repaint.
     pub backdrop_revision: u32,
     pub buttons: [ButtonTokens; 3],
+}
+
+impl ChromeTokens {
+    /// Text and glyph ink for chrome drawn on this titlebar material: Dark on dark glass, Light on
+    /// light glass. The shipped Dark surface resolves to the Dark palette.
+    #[must_use]
+    pub fn ink(&self) -> Palette {
+        ink_palette_on(self.titlebar_bg)
+    }
 }
 
 impl Default for ChromeTokens {

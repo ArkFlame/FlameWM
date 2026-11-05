@@ -37,8 +37,8 @@ impl ExplorerApp {
         doc.text("menu-connect-label","Connect to Server…".to_string())?;
         doc.text("menu-hidden-label",format!("Show Hidden Files: {}",if self.model.hidden {"On"} else {"Off"}))?;
         doc.text("menu-showtype-label",format!("Show Type Column: {}",if self.show_type {"On"} else {"Off"}))?;
-        doc.foreground("nav-back",if tab.can_back(){WHITE}else{self.theme.muted()})?;
-        doc.foreground("nav-forward",if tab.can_forward(){WHITE}else{self.theme.muted()})?;
+        doc.foreground("nav-back",if tab.can_back(){self.theme.text()}else{self.theme.muted()})?;
+        doc.foreground("nav-forward",if tab.can_forward(){self.theme.text()}else{self.theme.muted()})?;
         // Native Finder-style chrome: a single tab has no visible tab strip.
         let tab_strip=self.model.tabs.len()>1;
         doc.visible("tabs",tab_strip)?;
@@ -72,7 +72,7 @@ impl ExplorerApp {
                     // Inline place rename: the label becomes the field.
                     let label=if matches!(self.edit,Some(EditMode::PlaceName)) && self.rename_target.as_ref()==Some(&place.path) {self.field.display()} else {place.name.clone()};
                     doc.text(&format!("place-label-{slot}"),label)?;
-                    doc.foreground(&format!("place-label-{slot}"),if unmounted && place.device.is_some() {self.theme.muted()} else {WHITE})?;
+                    doc.foreground(&format!("place-label-{slot}"),if unmounted && place.device.is_some() {self.theme.muted()} else {self.theme.text()})?;
                     doc.background(&format!("place-{slot}"),if selected {self.theme.selected()} else {self.theme.clear()})?;
                     // Device rows get a Dolphin-style button: eject while mounted, mount while not.
                     let device=place.device.is_some();
