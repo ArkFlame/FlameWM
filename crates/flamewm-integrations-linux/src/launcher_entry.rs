@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use dbus::arg::messageitem::MessageItem;
 use dbus::{Message, MessageType};
-use flamewm_api::panels::{PanelsSnapshot, TaskProgress, TaskProgressEntry};
+use flamewm_api::applications::DesktopApplication;
+use flamewm_api::panels::{PanelsSnapshot, TaskEntryKind, TaskProgress, TaskProgressEntry};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use flamewm_dbus_reactor::{BusKind, BusPump, BusWatch, MessageDisposition};
 
@@ -91,12 +92,16 @@ impl LauncherEntryProvider {
         Ok(count)
     }
 
-    /// Maps visible launcher progress onto task entries by desktop id. Each desktop id selects the
-    /// first task with that app id; Unity carries no window identity, so multiple windows of one
-    /// application share one bar on the first task.
+    /// Maps visible launcher progress onto running task entries. Each desktop id selects the first
+    /// running task whose app id matches its desktop id or `StartupWMClass`; Unity carries no window
+    /// identity, so multiple windows of one application share one bar on the first task.
     #[must_use]
-    pub fn task_progress(&self, panels: &PanelsSnapshot) -> Vec<TaskProgressEntry> {
-        task_progress_for_entries(&self.entries, panels)
+    pub fn task_progress(
+        &self,
+        panels: &PanelsSnapshot,
+        applications: &[DesktopApplication],
+    ) -> Vec<TaskProgressEntry> {
+        task_progress_for_entries(&self.entries, panels, applications)
     }
 
     /// Whether the most recent reactor turn changed visible launcher progress.
@@ -191,9 +196,36 @@ fn visible_progress(state: &LauncherState) -> Option<u8> {
     state.visible.then_some(state.progress).flatten()
 }
 
+/// Names a launcher desktop id may appear as in a task `app_id`: the id itself, and the desktop
+/// file's `StartupWMClass` (for example `TelegramDesktop`). Unresolved windows carry the lowercased
+/// WM_CLASS as their app id, so every name is compared case-insensitively in lowercase.
+fn match_names(desktop_id: &str, applications: &[DesktopApplication]) -> Vec<String> {
+    let mut names = vec![desktop_id.to_ascii_lowercase()];
+    if let Some(app) = applications
+        .iter()
+        .find(|app| app.id.as_str() == desktop_id)
+    {
+        let class = app.startup_wm_class.trim();
+        if !class.is_empty() {
+            names.push(class.to_ascii_lowercase());
+        }
+    }
+    names
+}
+
+/// A task is running when it is a window, or a pinned slot whose window is alive. A pinned slot
+/// with no window never shows progress, so the fill clears once the owning window closes.
+fn is_running(kind: &TaskEntryKind) -> bool {
+    match kind {
+        TaskEntryKind::Window { .. } => true,
+        TaskEntryKind::PinnedSlot { window } => window.is_some(),
+    }
+}
+
 fn task_progress_for_entries(
     entries: &BTreeMap<(String, String), LauncherState>,
     panels: &PanelsSnapshot,
+    applications: &[DesktopApplication],
 ) -> Vec<TaskProgressEntry> {
     let mut by_app: BTreeMap<&str, u8> = BTreeMap::new();
     for state in entries.values() {
@@ -205,9 +237,12 @@ fn task_progress_for_entries(
     by_app
         .into_iter()
         .filter_map(|(desktop_id, progress)| {
+            let names = match_names(desktop_id, applications);
             let task = panels.tasks.iter().find(|task| {
-                let app = task.app_id.as_str();
-                app == desktop_id || app.eq_ignore_ascii_case(desktop_id)
+                is_running(&task.kind)
+                    && names
+                        .iter()
+                        .any(|name| task.app_id.as_str().eq_ignore_ascii_case(name))
             })?;
             Some(TaskProgressEntry {
                 task_id: task.id.clone(),
@@ -278,8 +313,44 @@ fn unwrap_variant(item: MessageItem) -> MessageItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flamewm_api::panels::{TaskEntry, TaskEntryKind};
-    use flamewm_api::{DesktopAppId, TaskEntryId};
+    use flamewm_api::panels::TaskEntry;
+    use flamewm_api::{DesktopAppId, TaskEntryId, WindowRef};
+
+    fn app(id: &str, startup_wm_class: &str) -> DesktopApplication {
+        DesktopApplication {
+            id: DesktopAppId::new(id),
+            name: id.into(),
+            generic_name: String::new(),
+            comment: String::new(),
+            startup_wm_class: startup_wm_class.into(),
+            argv: Vec::new(),
+            keywords: Vec::new(),
+            icon_name: String::new(),
+            categories: Vec::new(),
+        }
+    }
+
+    /// One running window task per app id, window ids starting at 1.
+    fn window_tasks(apps: &[&str]) -> PanelsSnapshot {
+        PanelsSnapshot {
+            revision: 1,
+            panels: Vec::new(),
+            tasks: apps
+                .iter()
+                .enumerate()
+                .map(|(index, app)| {
+                    let window = WindowRef::new(index as u64 + 1, 1);
+                    TaskEntry {
+                        id: TaskEntryId::window(window),
+                        app_id: DesktopAppId::new(*app),
+                        kind: TaskEntryKind::Window { window },
+                        order_index: index,
+                    }
+                })
+                .collect(),
+            pinned_apps: Vec::new(),
+        }
+    }
 
     fn props(progress: Option<f64>, visible: Option<bool>) -> MessageItem {
         let mut entries = Vec::new();
@@ -304,24 +375,6 @@ mod tests {
 
     fn body(uri: &str, progress: Option<f64>, visible: Option<bool>) -> Vec<MessageItem> {
         vec![MessageItem::Str(uri.into()), props(progress, visible)]
-    }
-
-    fn panels(apps: &[&str]) -> PanelsSnapshot {
-        PanelsSnapshot {
-            revision: 1,
-            panels: Vec::new(),
-            tasks: apps
-                .iter()
-                .enumerate()
-                .map(|(index, app)| TaskEntry {
-                    id: TaskEntryId::pinned(&DesktopAppId::new(*app)),
-                    app_id: DesktopAppId::new(*app),
-                    kind: TaskEntryKind::PinnedSlot { window: None },
-                    order_index: index,
-                })
-                .collect(),
-            pinned_apps: Vec::new(),
-        }
     }
 
     #[test]
@@ -372,9 +425,9 @@ mod tests {
     fn update_maps_to_visible_progress_on_the_matching_task() {
         let mut entries = BTreeMap::new();
         assert!(apply_update(&mut entries, ":1.5", "application://org.kde.dolphin.desktop", parse_update(&body("application://org.kde.dolphin.desktop", Some(0.5), Some(true))).unwrap().1));
-        let mapped = task_progress_for_entries(&entries, &panels(&["org.kde.dolphin", "other"]));
+        let mapped = task_progress_for_entries(&entries, &window_tasks(&["org.kde.dolphin", "other"]), &[]);
         assert_eq!(mapped.len(), 1);
-        assert_eq!(mapped[0].task_id, TaskEntryId::pinned(&DesktopAppId::new("org.kde.dolphin")));
+        assert_eq!(mapped[0].task_id, TaskEntryId::window(WindowRef::new(1, 1)));
         assert_eq!(mapped[0].progress.percent(), 50);
     }
 
@@ -382,11 +435,43 @@ mod tests {
     fn hidden_or_unmatched_progress_is_not_mapped() {
         let mut entries = BTreeMap::new();
         apply_update(&mut entries, ":1.5", "application://a.desktop", LauncherUpdate { progress: Some(40), progress_visible: Some(false) });
-        assert!(task_progress_for_entries(&entries, &panels(&["a"])).is_empty());
+        assert!(task_progress_for_entries(&entries, &window_tasks(&["a"]), &[]).is_empty());
         apply_update(&mut entries, ":1.5", "application://a.desktop", LauncherUpdate { progress: None, progress_visible: Some(true) });
-        assert!(task_progress_for_entries(&entries, &panels(&["zzz"])).is_empty());
-        let mapped = task_progress_for_entries(&entries, &panels(&["A"]));
+        assert!(task_progress_for_entries(&entries, &window_tasks(&["zzz"]), &[]).is_empty());
+        let mapped = task_progress_for_entries(&entries, &window_tasks(&["A"]), &[]);
         assert_eq!(mapped.len(), 1, "app ids compare case-insensitively");
+    }
+
+    #[test]
+    fn pinned_slot_without_window_never_shows_progress() {
+        let mut entries = BTreeMap::new();
+        apply_update(&mut entries, ":1.5", "application://a.desktop", LauncherUpdate { progress: Some(40), progress_visible: Some(true) });
+        let pinned = PanelsSnapshot {
+            revision: 1,
+            panels: Vec::new(),
+            tasks: vec![TaskEntry {
+                id: TaskEntryId::pinned(&DesktopAppId::new("a")),
+                app_id: DesktopAppId::new("a"),
+                kind: TaskEntryKind::PinnedSlot { window: None },
+                order_index: 0,
+            }],
+            pinned_apps: Vec::new(),
+        };
+        assert!(task_progress_for_entries(&entries, &pinned, &[]).is_empty());
+    }
+
+    #[test]
+    fn startup_wm_class_maps_telegram_and_wm_class_fallback_maps_firefox() {
+        let mut entries = BTreeMap::new();
+        apply_update(&mut entries, ":1.5", "application://org.telegram.desktop.desktop", LauncherUpdate { progress: Some(30), progress_visible: Some(true) });
+        let apps = [app("org.telegram.desktop", "TelegramDesktop")];
+        let mapped = task_progress_for_entries(&entries, &window_tasks(&["telegramdesktop"]), &apps);
+        assert_eq!(mapped.len(), 1, "StartupWMClass maps the unresolved WM_CLASS app id");
+
+        let mut firefox = BTreeMap::new();
+        apply_update(&mut firefox, ":1.6", "application://firefox.desktop", LauncherUpdate { progress: Some(10), progress_visible: Some(true) });
+        let mapped = task_progress_for_entries(&firefox, &window_tasks(&["Firefox"]), &[]);
+        assert_eq!(mapped.len(), 1, "desktop id matches the WM_CLASS case-insensitively");
     }
 
     #[test]

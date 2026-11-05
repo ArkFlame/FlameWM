@@ -92,14 +92,14 @@ impl ShellLoop {
     /// Recomputes the mapped progress list from every source. A repaint is requested only when the
     /// mapped list differs, and the gate decides whether it may run now.
     pub(super) fn refresh_task_progress(&mut self) {
-        let panels = &self.shell.snapshot().panels;
+        let snapshot = self.shell.snapshot();
         let mut next = self
             .job_view_provider
             .as_ref()
-            .map(|provider| provider.task_progress(panels))
+            .map(|provider| provider.task_progress(&snapshot.panels))
             .unwrap_or_default();
         if let Some(provider) = self.launcher_entry_provider.as_ref() {
-            for entry in provider.task_progress(panels) {
+            for entry in provider.task_progress(&snapshot.panels, &snapshot.applications) {
                 if !next.iter().any(|known| known.task_id == entry.task_id) {
                     next.push(entry);
                 }
