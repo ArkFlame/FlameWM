@@ -7,6 +7,11 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
+def wayland_render_source():
+    """wm-wayland render owner, split from render.rs into render/*.rs."""
+    base = ROOT / 'crates/flamewm-wm-wayland/src/render'
+    return '\n'.join(p.read_text() for p in sorted(base.glob('*.rs')))
+
 
 def manifest(name):
     return tomllib.loads((ROOT / 'crates' / name / 'Cargo.toml').read_text())
@@ -42,12 +47,12 @@ class AudioDependencyContract(unittest.TestCase):
 
 class RenderSafetyContract(unittest.TestCase):
     def test_smithay_api_result_is_converted_to_option(self):
-        src = (ROOT / 'crates/flamewm-wm-wayland/src/render.rs').read_text()
+        src = wayland_render_source()
         self.assertIn(').ok().map(Elem::Memory)', re.sub(r'\s+', '', src))
         self.assertIn(re.sub(r'\s+', '', 'chrome::control_button_geometries'), re.sub(r'\s+', '', src))
         self.assertIn(re.sub(r'\s+', '', 'chrome::center_title_x'), re.sub(r'\s+', '', src))
         self.assertIn(re.sub(r'\s+', '', 'managed.mode == Mode::Maximized'), re.sub(r'\s+', '', src))
-        self.assertIn(re.sub(r'\s+', '', 'part.maximized != maximized'), re.sub(r'\s+', '', src))
+        self.assertIn(re.sub(r'\s+', '', 'part.maximized == maximized'), re.sub(r'\s+', '', src))
         self.assertIn(re.sub(r'\s+', '', 'if rect.w <= 0 || rect.w > 32_767'), re.sub(r'\s+', '', src))
 
     def test_xwayland_selection_owner_timestamp_is_correct_type(self):
