@@ -15,14 +15,14 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
 BINARIES = ("flamewm-apps", "flamewm-assistant", "flamewm-audio-helper", "flamewm", "flamewm-session", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
-            "flamewm-screenshot", "flamewm-explorer", "flamewm-task-manager", "flamewm-render-x11", "flamewm-render-compile",
+            "flamewm-screenshot", "flamewm-explorer", "flamewm-task-manager", "flamewm-imageviewer", "flamewm-archiver", "flamewm-render-x11", "flamewm-render-compile",
             "flamewm-render-inspect", "flamewm-lock", "flamewm-terminal", "flamewm-wayland")
 # Stub for the --capabilities contract: key=value lines, exit 0, no device access.
 CAPABILITY_STUB = "#!/bin/sh\nprintf 'backend=native\\ndrm_compiled=true\\n'\nexit 0\n"
 PKG_CONFIG_STUB = "#!/bin/sh\nexit \"${FLAMEWM_FAKE_PKGCONFIG_EXIT:-0}\"\n"
 
 
-@unittest.skipUnless(shutil.which("dpkg-deb") and shutil.which("dpkg") and shutil.which("tar") and
+@unittest.skipUnless(shutil.which("dpkg-deb") and shutil.which("dpkg") and shutil.which("tar") and shutil.which("cc") and
                      subprocess.run(["dpkg", "--print-architecture"], capture_output=True, text=True).stdout.strip() == "amd64",
                      "native amd64 dpkg-deb and GNU tar required")
 class DebianReleasePipelineTests(unittest.TestCase):
@@ -34,14 +34,14 @@ class DebianReleasePipelineTests(unittest.TestCase):
         for file in ("Cargo.toml", "LICENSE", "README.md", "packaging/flamewm.desktop",
                      "packaging/flamewm-session.desktop", "packaging/flamewm-screenshot.desktop",
                      "packaging/flamewm-explorer.desktop", "packaging/flamewm-terminal.desktop", "packaging/flamewm-task-manager.desktop",
-                     "packaging/flamewm-finder.desktop", "packaging/flamewm-assistant.desktop", "packaging/icons/flamewm-finder.svg",
+                     "packaging/flamewm-finder.desktop", "packaging/flamewm-archiver.desktop", "packaging/flamewm-imageviewer.desktop", "packaging/flamewm-mimeapps.list", "packaging/icons/flamewm-archiver.svg", "packaging/icons/flamewm-imageviewer.svg", "packaging/flamewm-assistant.desktop", "packaging/icons/flamewm-finder.svg",
                      "packaging/pam.d/flamewm-lock",
                      "packaging/menus/flamewm-applications.menu", "packaging/notifications/dunstrc",
-                     "packaging/install-manifest.txt", "packaging/debian/control.in",
+                     "packaging/install-manifest.txt", "packaging/debian/control.in", "packaging/target-baseline.toml",
                      "packaging/debian/copyright", "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/build-deb", "scripts/check-cargo", "scripts/package", "scripts/dist-checksums",
                      "scripts/package-source-archive", "scripts/flamewm-session-wrapper",
                      "scripts/flamewm-wayland-session", "packaging/flamewm-wayland.desktop",
-                     "tools/flamewm_desktop_services.py"):
+                     "tools/flamewm_desktop_services.py", "tools/flamewm_glibc_baseline.py"):
             src = ROOT / file
             dest = self.root / file
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -69,6 +69,10 @@ class DebianReleasePipelineTests(unittest.TestCase):
             stub.write_text(CAPABILITY_STUB if binary == "flamewm-wayland"
                             else "#!/bin/sh\necho FlameWM fixture\n", encoding="utf-8")
             stub.chmod(0o755)
+        # The glibc gate inspects ELF payloads and fails with "no ELF files"; one static stub gives it a real ELF.
+        elf_source = Path(self.temp.name) / "stub.c"
+        elf_source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+        subprocess.run(["cc", "-static", "-O2", "-o", str(release / "flamewm-render-x11"), str(elf_source)], check=True)
         self.manifest = self.root / "packaging/source-manifest.txt"
         self.manifest.write_text("scripts/\ntools/\nassets/\n@exec scripts/version\n@exec scripts/build-deb\n@exec scripts/check-cargo\n@exec scripts/package\n@exec scripts/dist-checksums\n@exec scripts/package-source-archive\n@exec scripts/flamewm-session-wrapper\n@exec scripts/flamewm-wayland-session\n@exec tools/flamewm_desktop_services.py\n", encoding="utf-8")
 
@@ -105,7 +109,8 @@ class DebianReleasePipelineTests(unittest.TestCase):
             env['FLAMEWM_FAKE_GATE_FAIL'] = '1'
         if cargo_target_dir is not None:
             env['CARGO_TARGET_DIR'] = str(cargo_target_dir)
-        return subprocess.run([str(self.root / "scripts/build-deb")], cwd=self.root,
+        # --native: the fixture host is not the pinned glibc baseline; skip the container hop (no docker in tests).
+        return subprocess.run([str(self.root / "scripts/build-deb"), "--native"], cwd=self.root,
                               capture_output=True, text=True, timeout=90, env=env)
 
     def test_build_deb_is_fresh_and_installable(self):
