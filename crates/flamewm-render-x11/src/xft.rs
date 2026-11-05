@@ -1140,7 +1140,7 @@ mod tests {
                 .expect("other size");
             assert_eq!(xft.text_masks.len(), 2, "size is part of the key");
             // Libraries stay loaded through XCloseDisplay, as in production.
-            let libraries = unsafe { xft.into_deferred_libraries() };
+            let libraries = xft.into_deferred_libraries();
             XCloseDisplay(display);
             drop(libraries);
         }
