@@ -71,13 +71,6 @@ canonical_target = "crates/flamewm-clipboard/src/owner.rs"
 remove_by = "0.3.0"
 
 [[exception]]
-path = "crates/flamewm-desktop-core/Cargo.toml"
-capability = "core-source-loc>2400"
-reason = "The core holds file actions, file-manager policy, sticky persistence and drag state at 5422 production lines (including the weather feed data and view layer moved from flamewm-shell-core), so the 2400-line core budget only fits after the file-operations owner is split out."
-canonical_target = "crates/flamewm-desktop-core/src"
-remove_by = "0.3.0"
-
-[[exception]]
 path = "crates/flamewm-desktop/Cargo.toml"
 capability = "facade-source-loc>5000"
 reason = "8882 production lines: the desktop facade still owns widgets, projection, Convert and rename UI in one crate."

@@ -7,6 +7,16 @@ use flamewm_api::{FlameResult, OutputId};
 use crate::atomic_file::io_error;
 use crate::layout::{Cell, GridConfig};
 
+/// Prefix of the converter's in-progress files. Temporary converter files are never
+/// desktop icons; only the final atomic rename produces a visible entry.
+pub const TEMP_CONVERT_PREFIX: &str = ".flamewm-convert-";
+
+#[must_use]
+pub fn is_temporary_convert_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|text| text.starts_with(TEMP_CONVERT_PREFIX))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesktopItemKind {
     Directory,
@@ -85,7 +95,7 @@ impl DesktopModel {
             .map_err(|error| io_error("read desktop entry", error))?;
         // The converter publishes atomically; suppress only its private
         // in-progress files, not user-created dotfiles in general.
-        entries.retain(|entry| !crate::conversion::is_temporary_convert_name(&entry.file_name()));
+        entries.retain(|entry| !is_temporary_convert_name(&entry.file_name()));
         entries.sort_by_key(std::fs::DirEntry::file_name);
 
         // Stored cells are reserved before any unstored entry is placed, so a

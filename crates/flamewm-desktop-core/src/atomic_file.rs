@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
-pub(crate) fn write_text(path: &Path, owner: &str, text: &str) -> FlameResult<()> {
+pub fn write_text(path: &Path, owner: &str, text: &str) -> FlameResult<()> {
     let parent = path
         .parent()
         .ok_or_else(|| FlameError::invalid(format!("{owner} path has no parent")))?;
@@ -37,7 +37,7 @@ pub(crate) fn write_text(path: &Path, owner: &str, text: &str) -> FlameResult<()
     Ok(())
 }
 
-pub(crate) fn io_error(operation: &str, error: std::io::Error) -> FlameError {
+pub fn io_error(operation: &str, error: std::io::Error) -> FlameError {
     FlameError::new(ErrorCode::IoFailure, format!("{operation}: {error}"))
 }
 

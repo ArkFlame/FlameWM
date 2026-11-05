@@ -73,11 +73,11 @@ impl LayoutStore {
 }
 
 #[must_use]
-pub(super) fn hex(bytes: &[u8]) -> String {
+pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-pub(super) fn unhex(
+pub fn unhex(
     value: &str,
     odd_length_error: &str,
     invalid_digit_error: &str,

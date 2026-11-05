@@ -1,4 +1,4 @@
-use crate::sticky::Rgb;
+use flamewm_desktop_core::sticky::Rgb;
 
 pub const MAX_TEMPLATE_LINES: usize = 6;
 pub const MAX_LINE_SPANS: usize = 6;

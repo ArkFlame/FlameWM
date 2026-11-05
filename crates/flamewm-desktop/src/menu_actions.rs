@@ -106,7 +106,7 @@ pub(crate) fn handle_menu_action(
                     // At most one visible prediction. The worker is independent;
                     // previous conversions keep running without a synthetic tile.
                     let predicted =
-                        flamewm_desktop_core::conversion::predicted_destination(&path, format);
+                        flamewm_conversion_core::conversion::predicted_destination(&path, format);
                     let source = state
                         .model
                         .items()

@@ -4,8 +4,7 @@
 //! watcher reconciliation, filesystem actions and Freedesktop Trash semantics are real Rust code
 //! and can be exercised without a running window manager.
 
-mod atomic_file;
-pub mod conversion;
+pub mod atomic_file;
 pub mod file_actions;
 pub mod layout;
 pub mod model;
@@ -16,6 +15,3 @@ pub mod sticky;
 pub mod sticky_persistence;
 pub mod trash;
 pub mod watcher;
-pub mod widget_grid;
-pub mod widget_text;
-pub mod widgets;

@@ -686,6 +686,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-conversion-core"
+version = "0.1.5"
+dependencies = [
+ "flamewm-desktop-core",
+]
+
+[[package]]
 name = "flamewm-dbus-reactor"
 version = "0.1.5"
 dependencies = [
@@ -709,6 +716,7 @@ dependencies = [
  "flamewm-control-core",
  "flamewm-control-dbus",
  "flamewm-control-wire",
+ "flamewm-conversion-core",
  "flamewm-dbus-reactor",
  "flamewm-debug",
  "flamewm-desktop-core",
@@ -722,6 +730,7 @@ dependencies = [
  "flamewm-ui-core",
  "flamewm-ui-x11",
  "flamewm-weather",
+ "flamewm-widgets-core",
  "inotify",
 ]
 
@@ -1067,6 +1076,14 @@ name = "flamewm-weather"
 version = "0.1.5"
 dependencies = [
  "flamewm-api",
+]
+
+[[package]]
+name = "flamewm-widgets-core"
+version = "0.1.5"
+dependencies = [
+ "flamewm-api",
+ "flamewm-desktop-core",
 ]
 
 [[package]]

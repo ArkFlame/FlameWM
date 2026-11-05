@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 
 use flamewm_api::{FlameError, FlameResult, Point, Rect};
 
-use crate::atomic_file::io_error;
-use crate::persistence::{hex, unhex};
-use crate::sticky::Rgb;
+use flamewm_desktop_core::atomic_file::io_error;
+use flamewm_desktop_core::persistence::{hex, unhex};
+use flamewm_desktop_core::sticky::Rgb;
 use crate::widget_grid::{self, GridMetrics, Placement, Span};
 
 pub const MAX_WIDGETS: usize = 8;
@@ -979,7 +979,7 @@ pub fn load(path: &Path) -> FlameResult<WidgetStore> {
 }
 
 pub fn persist(path: &Path, store: &WidgetStore) -> FlameResult<()> {
-    crate::atomic_file::write_text(path, "desktop widgets", &serialize(store))
+    flamewm_desktop_core::atomic_file::write_text(path, "desktop widgets", &serialize(store))
 }
 
 #[must_use]

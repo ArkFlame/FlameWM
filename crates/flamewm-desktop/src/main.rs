@@ -17,7 +17,7 @@ use flamewm_applications::DesktopEntry;
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::{ControlClient, ControlSignalClient, MutationDispatcher};
 use flamewm_dbus_reactor::BusKind;
-use flamewm_desktop_core::conversion::{
+use flamewm_conversion_core::conversion::{
     active_conversions, cancel_conversions, convert_file, offered_formats, offered_tools, run_tool,
 };
 use flamewm_desktop_core::file_actions::{
@@ -178,11 +178,11 @@ pub fn main() -> Result<(), String> {
     let sticky_path = sticky_persistence::state_path().map_err(|error| format!("{error:?}"))?;
     let sticky = sticky_persistence::load(&sticky_path).map_err(|error| format!("{error:?}"))?;
     let widget_path =
-        flamewm_desktop_core::widgets::state_path().map_err(|error| format!("{error:?}"))?;
+        flamewm_widgets_core::widgets::state_path().map_err(|error| format!("{error:?}"))?;
     // A fresh profile starts with an empty desktop: widgets are opt-in through Add Widgets.
-    let widget_store = flamewm_desktop_core::widgets::load(&widget_path).unwrap_or_else(|error| {
+    let widget_store = flamewm_widgets_core::widgets::load(&widget_path).unwrap_or_else(|error| {
         eprintln!("desktop: widget state unreadable, starting empty: {error:?}");
-        flamewm_desktop_core::widgets::WidgetStore::default()
+        flamewm_widgets_core::widgets::WidgetStore::default()
     });
     let dirty = Arc::new(AtomicBool::new(false));
     let icons_pending = Arc::new(AtomicBool::new(false));

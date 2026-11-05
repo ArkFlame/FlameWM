@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::file_actions::rename_entry_no_replace;
+use flamewm_desktop_core::file_actions::rename_entry_no_replace;
+use flamewm_desktop_core::model::TEMP_CONVERT_PREFIX;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_CONVERSIONS: AtomicUsize = AtomicUsize::new(0);
@@ -123,14 +124,6 @@ fn wait_for_converter_with_timeout(
             }
         }
     }
-}
-
-/// Temporary converter files are never desktop icons; only the final atomic
-/// rename produces a visible entry.
-#[must_use]
-pub fn is_temporary_convert_name(name: &std::ffi::OsStr) -> bool {
-    name.to_str()
-        .is_some_and(|text| text.starts_with(".flamewm-convert-"))
 }
 
 pub const FORMAT_CHOICES: [&str; 13] = [
@@ -267,7 +260,7 @@ pub fn convert_image(source: &Path, format: &str) -> Result<PathBuf, String> {
     let mut reserved = None;
     for _ in 0..64 {
         let seq = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let name = format!(".flamewm-convert-{}-{seq}.{format}", std::process::id());
+        let name = format!("{TEMP_CONVERT_PREFIX}{}-{seq}.{format}", std::process::id());
         let temp = directory.join(name);
         match OpenOptions::new().write(true).create_new(true).open(&temp) {
             Ok(_) => {
@@ -402,7 +395,7 @@ fn reserve_temporary(directory: &Path, format: &str) -> Result<PathBuf, String> 
     for _ in 0..64 {
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let temp = directory.join(format!(
-            ".flamewm-convert-{}-{sequence}.{format}",
+            "{TEMP_CONVERT_PREFIX}{}-{sequence}.{format}",
             std::process::id()
         ));
         match OpenOptions::new().create_new(true).write(true).open(&temp) {
@@ -524,7 +517,7 @@ pub fn convert_file(source: &Path, format: &str) -> Result<PathBuf, String> {
     for _ in 0..64 {
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let temp = directory.join(format!(
-            ".flamewm-convert-{}-{sequence}.{format}",
+            "{TEMP_CONVERT_PREFIX}{}-{sequence}.{format}",
             std::process::id()
         ));
         match OpenOptions::new().create_new(true).write(true).open(&temp) {
@@ -1062,6 +1055,7 @@ pub fn run_tool(source: &Path, tool: Tool) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_desktop_core::model::is_temporary_convert_name;
     /// Tests that take conversion slots share one global budget; serialise them.
     pub(super) static SLOT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
     #[test]

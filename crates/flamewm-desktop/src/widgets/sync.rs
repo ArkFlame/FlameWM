@@ -423,7 +423,7 @@ pub(super) fn sync_calendar(
         document.text(&cell, (*initial).to_owned())?;
         document.foreground(&cell, text)?;
     }
-    let weeks = flamewm_desktop_core::widgets::calendar_weeks(time.year, u32::from(time.month));
+    let weeks = flamewm_widgets_core::widgets::calendar_weeks(time.year, u32::from(time.month));
     for (row, days) in weeks.iter().enumerate() {
         for (column, day) in days.iter().enumerate() {
             let cell = format!("{id}-cal-{row}-{column}");

@@ -9,14 +9,14 @@ use flamewm_api::system::{MediaSnapshot, PlaybackState, ServiceAvailability, Sys
 use flamewm_api::weather::WeatherFeedSnapshot;
 use flamewm_api::{Point, Rect};
 use flamewm_desktop_core::sticky::Rgb;
-use flamewm_desktop_core::widget_grid::{self, Edges, GridMetrics, Placement, Span};
-use flamewm_desktop_core::widget_text::{
+use flamewm_widgets_core::widget_grid::{self, Edges, GridMetrics, Placement, Span};
+use flamewm_widgets_core::widget_text::{
     CpuTimes, MAX_LINE_SPANS, MAX_TEMPLATE_CHARS, MAX_TEMPLATE_LINES, MemoryUsage, Placeholders,
     SpanStyle, WallTime, count_cpus, cpu_percent, display_text, estimate_text_width,
     expand_placeholders, fit_lines, format_date, format_gib, format_time, format_uptime,
     parse_cpu_times, parse_markup, parse_meminfo,
 };
-use flamewm_desktop_core::widgets::{
+use flamewm_widgets_core::widgets::{
     MAX_WIDGETS, OptionControl, TextAlign, Widget, WidgetKind, WidgetStore, move_widget_rect,
     palette_color,
 };
@@ -436,7 +436,7 @@ impl WidgetState {
     }
 
     pub(crate) fn persist(&self) {
-        if let Err(error) = flamewm_desktop_core::widgets::persist(&self.path, &self.store) {
+        if let Err(error) = flamewm_widgets_core::widgets::persist(&self.path, &self.store) {
             eprintln!("desktop: widget state save failed: {error:?}");
         }
     }
@@ -1230,7 +1230,7 @@ pub(crate) fn place_config(
         );
         document.visible(&format!("{row_id}-swatch"), is_color)?;
         if is_color {
-            let swatch = if value == flamewm_desktop_core::widgets::ACCENT_COLOR {
+            let swatch = if value == flamewm_widgets_core::widgets::ACCENT_COLOR {
                 projection_accent(state)
             } else {
                 palette_color(value)
