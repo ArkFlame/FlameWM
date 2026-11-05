@@ -22,6 +22,101 @@ pub(crate) fn icon_theme_changed(previous: &str, snapshot: &SettingsSnapshot) ->
     setting_text(snapshot, "iconTheme") != previous
 }
 
+/// Keys that the wallpaper request reads (`refresh::request_wallpaper`).
+pub(crate) const DESKTOP_WALLPAPER_KEYS: [&str; 5] = [
+    "wallpaperMode",
+    "wallpaper",
+    "wallpaperColor",
+    "wallpaperFit",
+    "shareWallpaper",
+];
+
+/// Single keys the desktop reads or projects, directly or through shared projection crates
+/// (`ui-document` appearance and surface tokens, widgets, weather, the render acceleration gate).
+pub(crate) const DESKTOP_CONSUMED_KEYS: &[&str] = &[
+    "accentOpacity",
+    "appearance",
+    "backdropBlur",
+    "backgroundOpacity",
+    "cpuColor",
+    "dateSize",
+    "DesktopEntryScalePercent",
+    "DesktopSelectionFillOpacity",
+    "fontBold",
+    "fontSizeOffset",
+    "iconTheme",
+    "cursorTheme",
+    "inheritSurface",
+    "memoryColor",
+    "organizeDownloads",
+    "reduceTransparency",
+    "ringColor",
+    "rxColor",
+    "stickyNotesEnabled",
+    "surfaceBlurPercent",
+    "surfaceColor",
+    "surfaceOpacity",
+    "surfaceOutlineColor",
+    "surfaceOutlineOpacity",
+    "textColor",
+    "textShadow",
+    "textSize",
+    "timeSize",
+    "trackColor",
+    "txColor",
+    "weatherEnabled",
+    "weatherLocation",
+    "weatherUnits",
+];
+
+/// Switch groups whose switch and members the desktop consumes. The glass, panel, lock and
+/// screensaver groups are shell or lock owned and never change a desktop projection.
+pub(crate) const DESKTOP_CONSUMED_GROUPS: [&str; 6] =
+    ["accent", "outline", "surface", "cursor", "fonts", "items"];
+
+/// Every key whose effective value can change a desktop projection, wallpaper keys included.
+pub(crate) fn desktop_consumed_keys() -> Vec<&'static str> {
+    let mut keys: Vec<&'static str> = DESKTOP_CONSUMED_KEYS.to_vec();
+    keys.extend(DESKTOP_WALLPAPER_KEYS);
+    for group in flamewm_api::settings_groups::SWITCH_GROUPS
+        .iter()
+        .filter(|group| DESKTOP_CONSUMED_GROUPS.contains(&group.name))
+    {
+        keys.push(group.switch);
+        keys.extend(group.members.iter().map(|(member, _)| *member));
+    }
+    keys
+}
+
+/// True when any key in `keys` resolves to a different effective value in `previous` and `next`.
+/// Compares `effective_value`, so a group member hidden behind an off switch counts as unchanged.
+pub(crate) fn effective_keys_changed(
+    previous: &SettingsSnapshot,
+    next: &SettingsSnapshot,
+    keys: &[&str],
+) -> bool {
+    keys.iter().any(|key| {
+        flamewm_api::settings_groups::effective_value(previous, key)
+            != flamewm_api::settings_groups::effective_value(next, key)
+    })
+}
+
+/// True when the wallpaper request must be re-issued for `next`.
+pub(crate) fn wallpaper_settings_changed(
+    previous: &SettingsSnapshot,
+    next: &SettingsSnapshot,
+) -> bool {
+    effective_keys_changed(previous, next, &DESKTOP_WALLPAPER_KEYS)
+}
+
+/// True when `next` changes anything the desktop projects, so the visual pass must run.
+pub(crate) fn desktop_visual_settings_changed(
+    previous: &SettingsSnapshot,
+    next: &SettingsSnapshot,
+) -> bool {
+    effective_keys_changed(previous, next, &desktop_consumed_keys())
+}
+
 pub(crate) fn setting_percent(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
     match snapshot.values.get(key) {
         Some(SettingValue::Percent(value)) => *value,
@@ -127,5 +222,88 @@ mod group_switch_key_tests {
                 "{switch} missing from desktop key list"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod settings_change_tests {
+    use super::{desktop_visual_settings_changed, wallpaper_settings_changed};
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+    use std::collections::BTreeMap;
+
+    fn snapshot(entries: &[(&str, SettingValue)]) -> SettingsSnapshot {
+        SettingsSnapshot {
+            revision: 0,
+            values: entries
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), value.clone()))
+                .collect::<BTreeMap<_, _>>(),
+        }
+    }
+
+    #[test]
+    fn identical_values_at_a_new_revision_change_nothing() {
+        let before = snapshot(&[("surfaceOpacity", SettingValue::Percent(40))]);
+        let mut after = before.clone();
+        after.revision = 9;
+        assert!(!wallpaper_settings_changed(&before, &after));
+        assert!(!desktop_visual_settings_changed(&before, &after));
+    }
+
+    #[test]
+    fn glass_slider_motion_is_not_desktop_visual() {
+        let before = snapshot(&[
+            ("glassOpacityPercent", SettingValue::Integer(20)),
+            ("glassBlurPx", SettingValue::Integer(28)),
+            ("taskbarOpacityPercent", SettingValue::Integer(30)),
+        ]);
+        let after = snapshot(&[
+            ("glassOpacityPercent", SettingValue::Integer(21)),
+            ("glassBlurPx", SettingValue::Integer(29)),
+            ("taskbarOpacityPercent", SettingValue::Integer(31)),
+        ]);
+        assert!(!wallpaper_settings_changed(&before, &after));
+        assert!(!desktop_visual_settings_changed(&before, &after));
+    }
+
+    #[test]
+    fn wallpaper_key_change_requests_wallpaper_and_repaints() {
+        let before = snapshot(&[("wallpaperFit", SettingValue::Text("fill".into()))]);
+        let after = snapshot(&[("wallpaperFit", SettingValue::Text("fit".into()))]);
+        assert!(wallpaper_settings_changed(&before, &after));
+        assert!(desktop_visual_settings_changed(&before, &after));
+    }
+
+    #[test]
+    fn consumed_key_change_repaints_without_wallpaper_request() {
+        let before = snapshot(&[("textSize", SettingValue::Percent(50))]);
+        let after = snapshot(&[("textSize", SettingValue::Percent(51))]);
+        assert!(!wallpaper_settings_changed(&before, &after));
+        assert!(desktop_visual_settings_changed(&before, &after));
+    }
+
+    #[test]
+    fn group_member_behind_off_switch_is_unchanged() {
+        // accentCustom off: accent resolves to its default whatever is stored.
+        let before = snapshot(&[("accent", SettingValue::Text("#111111".into()))]);
+        let after = snapshot(&[("accent", SettingValue::Text("#222222".into()))]);
+        assert!(!desktop_visual_settings_changed(&before, &after));
+        // Switch on: the stored member now resolves, so the change counts.
+        let before_on = snapshot(&[
+            ("accentCustom", SettingValue::Boolean(true)),
+            ("accent", SettingValue::Text("#111111".into())),
+        ]);
+        let after_on = snapshot(&[
+            ("accentCustom", SettingValue::Boolean(true)),
+            ("accent", SettingValue::Text("#222222".into())),
+        ]);
+        assert!(desktop_visual_settings_changed(&before_on, &after_on));
+    }
+
+    #[test]
+    fn switch_toggle_counts_as_desktop_visual() {
+        let before = snapshot(&[("surfaceCustom", SettingValue::Boolean(false))]);
+        let after = snapshot(&[("surfaceCustom", SettingValue::Boolean(true))]);
+        assert!(desktop_visual_settings_changed(&before, &after));
     }
 }

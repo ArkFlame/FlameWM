@@ -111,8 +111,8 @@ use rubber::{
 #[cfg(test)]
 use settings_values::{ACCENT_TOKEN_ALPHAS, accent_token_values};
 use settings_values::{
-    accent_color, desktop_entry_scale, icon_theme_changed, project_accent_tokens, setting_bool,
-    setting_text,
+    accent_color, desktop_entry_scale, desktop_visual_settings_changed, icon_theme_changed,
+    project_accent_tokens, setting_bool, setting_text, wallpaper_settings_changed,
 };
 use slots::{SlotInputs, apply_pending_icon_results, apply_ready_icons, project_slots};
 
@@ -552,18 +552,28 @@ fn register_workspace_signals(
                                 snapshot,
                             } => {
                                 let mut state = state_cell.borrow_mut();
-                                let monitors = monitor_rects(&state.output_geometries);
-                                if let Err(error) = request_wallpaper(
-                                    &mut state.wallpaper_loader,
-                                    &snapshot,
-                                    &monitors,
-                                ) {
-                                    eprintln!(
-                                        "desktop: wallpaper settings request failed: {error:?}"
-                                    );
+                                // Slider motion re-sends the whole snapshot; only a change to a key
+                                // the desktop consumes re-requests the wallpaper or repaints.
+                                let wallpaper_changed =
+                                    wallpaper_settings_changed(&state.settings, &snapshot);
+                                let visual_changed =
+                                    desktop_visual_settings_changed(&state.settings, &snapshot);
+                                if wallpaper_changed {
+                                    let monitors = monitor_rects(&state.output_geometries);
+                                    if let Err(error) = request_wallpaper(
+                                        &mut state.wallpaper_loader,
+                                        &snapshot,
+                                        &monitors,
+                                    ) {
+                                        eprintln!(
+                                            "desktop: wallpaper settings request failed: {error:?}"
+                                        );
+                                    }
                                 }
                                 state.settings = snapshot;
-                                state.settings_visual_dirty = true;
+                                if visual_changed {
+                                    state.settings_visual_dirty = true;
+                                }
                             }
                             flamewm_control_wire::ControlSignal::WorkspacesSnapshotChanged {
                                 snapshot,
