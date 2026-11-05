@@ -10,10 +10,15 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def wayland_render_source():
+    """wm-wayland render owner, split from render.rs into render/*.rs."""
+    base = ROOT / 'crates/flamewm-wm-wayland/src/render'
+    return '\n'.join(p.read_text() for p in sorted(base.glob('*.rs')))
+
 
 class SharedWindowControls(unittest.TestCase):
     def test_both_native_backends_render_the_breeze_svgs(self):
-        wayland = (ROOT / "crates/flamewm-wm-wayland/src/render.rs").read_text()
+        wayland = wayland_render_source() + (ROOT / "crates/flamewm-wm-wayland/src/chrome_buttons.rs").read_text()
         self.assertIn("render_with_color_scheme", wayland)
         self.assertIn("WindowControlRole::Maximize if maximized => WindowControlRole::Restore", wayland)
 
