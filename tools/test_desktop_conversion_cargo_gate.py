@@ -21,7 +21,9 @@ class BuildGateTests(unittest.TestCase):
             'Cargo.toml': '[workspace]\nmembers = ["crates/*"]\n',
             'crates/flamewm-desktop/Cargo.toml': '[package]\nname = "flamewm-desktop"\n',
             'crates/flamewm-desktop/src/main.rs':
-                'use flamewm_desktop_core::conversion::offered_formats;\nEntryMenuAction::Convert;\n',
+                'use flamewm_desktop_core::conversion::offered_formats;\nmod menu_actions;\nEntryMenuAction::Convert;\n',
+            'crates/flamewm-desktop/src/menu_actions.rs':
+                'const ID: &str = "entry.convert";\nfn go() { offered_formats(); convert_file(); }\n',
             'crates/flamewm-desktop-core/Cargo.toml': '[package]\nname = "flamewm-desktop-core"\n',
             'crates/flamewm-desktop-core/src/lib.rs': 'pub mod file_actions;\npub mod conversion;\n',
             'crates/flamewm-desktop-core/src/file_actions.rs':
