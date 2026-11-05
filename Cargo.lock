@@ -1033,6 +1033,7 @@ name = "flamewm-ui-core"
 version = "0.1.5"
 dependencies = [
  "flamewm-api",
+ "flamewm-skin",
 ]
 
 [[package]]
