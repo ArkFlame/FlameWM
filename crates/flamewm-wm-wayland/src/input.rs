@@ -411,8 +411,14 @@ impl State {
                 } => {
                     let dx = (location.x - pointer.0).round() as i32;
                     let dy = (location.y - pointer.1).round() as i32;
-                    self.model.set_rect(id, edge.resized(start, dx, dy));
-                    self.apply_geometry(id);
+                    let rect = edge.resized(start, dx, dy);
+                    // Sub-step pointer motion leaves the rectangle unchanged: skip the client configure
+                    // (an X11 configure also re-sends activated/maximized/fullscreen).
+                    let unchanged = self.model.get(id).is_some_and(|m| m.rect == rect);
+                    self.model.set_rect(id, rect);
+                    if !unchanged {
+                        self.apply_geometry(id);
+                    }
                 }
             }
         }
