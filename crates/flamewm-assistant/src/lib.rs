@@ -24,7 +24,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Duration;
 
@@ -932,16 +932,10 @@ fn probe_proxy_off_thread(cancel: &CancelToken) -> Option<Vec<String>> {
     thread::spawn(move || {
         let _ = tx.send(proxy_models(&probe_cancel));
     });
-    loop {
-        if cancel.is_cancelled() {
-            return None;
-        }
-        match rx.recv_timeout(Duration::from_millis(20)) {
-            Ok(found) => return found,
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return None,
-        }
-    }
+    // Blocks until the probe thread reports. The probe honours `cancel` and its own
+    // PROBE_LIMIT, so this wait is bounded without a 50 Hz poll.
+    let found = rx.recv().ok().flatten();
+    if cancel.is_cancelled() { None } else { found }
 }
 
 /// One streamed reply. A selected Hermes proxy is probed first (300 ms limit, cancellable); when it
@@ -1209,6 +1203,13 @@ fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::Win
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_proxy_probe_yields_nothing_without_polling() {
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        assert_eq!(probe_proxy_off_thread(&cancel), None);
+    }
 
     #[test]
     fn api_key_comes_from_settings_or_the_public_default() {
