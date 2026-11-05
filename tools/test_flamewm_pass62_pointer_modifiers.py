@@ -4,6 +4,16 @@ import re
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
+
+_EXPL_BASE = ROOT / 'crates/flamewm-explorer/src'
+
+
+def _explorer_crate():
+    """Explorer was split into submodules; owners span the crate (tests excluded)."""
+    return '\n'.join(p.read_text() for p in sorted(_EXPL_BASE.rglob('*.rs'))
+                     if 'tests' not in p.relative_to(_EXPL_BASE).parts)
+
+
 def src(path): return (ROOT/path).read_text()
 
 class PointerSelectionContracts(unittest.TestCase):
@@ -21,11 +31,12 @@ class PointerSelectionContracts(unittest.TestCase):
         self.assertIn('modifiers: action.modifiers,',facade)
         self.assertIn('pub const fn ctrl_down(&self)',facade)
         self.assertIn('pub const fn shift_down(&self)',facade)
-        for fixture in ('crates/flamewm-settings/src/controller.rs','crates/flamewm-settings/src/ui_contract.rs'):
+        # controller.rs is now `mod tests;`; its fixture lives in controller/tests.rs.
+        for fixture in ('crates/flamewm-settings/src/controller/tests.rs','crates/flamewm-settings/src/ui_contract.rs'):
             self.assertIn('modifiers: 0,',src(fixture))
 
     def test_explorer_has_event_time_mouse_gestures_and_non_destructive_context_click(self):
-        app=src('crates/flamewm-explorer/src/main.rs')
+        app=_explorer_crate()
         self.assertIn('e.shift_down()',app)
         self.assertIn('e.ctrl_down()',app)
         self.assertIn('self.model.tab_mut().toggle_selection(path)',app)
@@ -35,7 +46,7 @@ class PointerSelectionContracts(unittest.TestCase):
         self.assertIn('self.model.tab_mut().clear_selection();',app)
 
     def test_selection_anchor_preserved_through_repeated_shift_ranges(self):
-        model=src('crates/flamewm-explorer/src/lib.rs')
+        model=_explorer_crate()
         block=model.split('pub fn select_range_to_with_mode(',1)[1].split('    pub fn select_all_filtered',1)[0]
         self.assertIn('self.anchor.as_deref()',block)
         self.assertIn('if !additive {self.selected_paths.clear();}',block)
