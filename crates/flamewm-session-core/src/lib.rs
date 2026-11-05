@@ -538,11 +538,6 @@ impl ProcessSupervisorPolicy {
         SupervisorDecision::StopCleanly
     }
 
-    pub fn parent_died(&mut self) -> SupervisorDecision {
-        self.stopping = true;
-        SupervisorDecision::StopCleanly
-    }
-
     pub fn child_exited(&mut self, _exit: ChildExit) -> SupervisorDecision {
         if self.stopping {
             return SupervisorDecision::StopCleanly;
