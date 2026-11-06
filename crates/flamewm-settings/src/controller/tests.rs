@@ -143,10 +143,12 @@ struct ProbeDocument {
     texts: BTreeMap<String, String>,
     visible: BTreeMap<String, bool>,
     highlighted: BTreeMap<String, bool>,
+    variables: BTreeMap<String, UiColor>,
 }
 
 impl UiDocumentAccess for ProbeDocument {
-    fn color_variable(&mut self, _name: &str, _color: UiColor) -> Result<(), String> {
+    fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {
+        self.variables.insert(name.to_owned(), color);
         Ok(())
     }
 

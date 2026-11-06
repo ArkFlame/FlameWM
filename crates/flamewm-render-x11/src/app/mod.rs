@@ -347,8 +347,7 @@ impl X11App {
         // validated by native/surface_format; fall back to the default visual
         // (opaque or shape-backed) only when no real alpha channel exists.
         let argb_visual = match_argb32_visual(display, screen);
-        // Genuine desktop-through-panel alpha requires a compositing manager.
-        // Other surface roles continue using their prior presentation contract.
+        // Genuine per-pixel alpha requires a compositing manager for Dock and Overlay surfaces.
         let compositor = {
             let name = CString::new(format!("_NET_WM_CM_S{screen}"))
                 .expect("static compositor atom without NUL");
@@ -369,27 +368,22 @@ impl X11App {
             flamewm_api::graphics::LEGACY_PROVIDER_VARIABLE,
         );
         let core_requested = provider_request.as_deref() == Some("core");
-        let (visual, depth, mut alpha_mode) =
-            if config.role == X11WindowRole::Dock && compositor && !core_requested {
-                supported_argb.map_or_else(
-                    || unsafe {
-                        (
-                            XDefaultVisual(display, screen),
-                            XDefaultDepth(display, screen),
-                            fallback_mode(shape_available(display)),
-                        )
-                    },
-                    |(visual, mode)| (visual, 32, mode),
+        let supported_argb = composited_argb_for_surface(
+            config.role,
+            compositor,
+            core_requested,
+            supported_argb,
+        );
+        let (visual, depth, mut alpha_mode) = supported_argb.map_or_else(
+            || unsafe {
+                (
+                    XDefaultVisual(display, screen),
+                    XDefaultDepth(display, screen),
+                    fallback_mode(shape_available(display)),
                 )
-            } else {
-                unsafe {
-                    (
-                        XDefaultVisual(display, screen),
-                        XDefaultDepth(display, screen),
-                        fallback_mode(shape_available(display)),
-                    )
-                }
-            };
+            },
+            |(visual, mode)| (visual, 32, mode),
+        );
         if visual.is_null() {
             return Err("no usable visual for native surface".to_string());
         }
@@ -816,6 +810,22 @@ fn shape_available(display: *mut Display) -> bool {
     unsafe { XShapeBridge::new(display).is_ok() }
 }
 
+fn composited_argb_for_surface<T>(
+    role: X11WindowRole,
+    compositor: bool,
+    core_requested: bool,
+    supported_argb: Option<T>,
+) -> Option<T> {
+    if compositor
+        && !core_requested
+        && matches!(role, X11WindowRole::Dock | X11WindowRole::Overlay)
+    {
+        supported_argb
+    } else {
+        None
+    }
+}
+
 /// Root window size of `screen`, clamped to at least 1x1.
 fn display_extent(display: *mut Display, screen: i32) -> (u32, u32) {
     unsafe {
@@ -1229,6 +1239,45 @@ mod original_alpha_tests {
         assert_eq!(
             original_argb32(&opaque_white, 1, 1, 1, 1, Some(full)),
             vec![0xffff_ffff]
+        );
+    }
+}
+
+#[cfg(test)]
+mod surface_visual_selection_tests {
+    use super::*;
+
+    #[test]
+    fn overlay_uses_argb_only_with_compositor_supported_visual_and_non_core_provider() {
+        let supported_visual = Some(());
+        assert_eq!(
+            composited_argb_for_surface(X11WindowRole::Overlay, true, false, supported_visual),
+            supported_visual
+        );
+        assert_eq!(
+            composited_argb_for_surface(X11WindowRole::Overlay, false, false, supported_visual),
+            None,
+            "without a compositor, keep the existing fallback"
+        );
+        assert_eq!(
+            composited_argb_for_surface(X11WindowRole::Overlay, true, true, supported_visual),
+            None,
+            "the core-provider request must keep the existing fallback"
+        );
+        assert_eq!(
+            composited_argb_for_surface(X11WindowRole::Overlay, true, false, None::<()>),
+            None,
+            "without a validated ARGB visual, keep the existing fallback"
+        );
+        assert_eq!(
+            composited_argb_for_surface(X11WindowRole::Dock, true, false, supported_visual),
+            supported_visual,
+            "preserve Dock ARGB selection"
+        );
+        assert_eq!(
+            composited_argb_for_surface(X11WindowRole::Normal, true, false, supported_visual),
+            None,
+            "other roles keep the existing default visual"
         );
     }
 }

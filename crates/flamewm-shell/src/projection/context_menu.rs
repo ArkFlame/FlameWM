@@ -60,3 +60,21 @@ pub fn project_context_menu(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    const TASK_MENU_HTML: &str = include_str!("../../../../ui/shell/task-menu.html");
+    const SHELL_CSS: &str = include_str!("../../../../ui/shell/flamewm.css");
+
+    #[test]
+    fn favorite_context_icons_use_the_yellow_symbolic_foreground() {
+        assert_eq!(
+            TASK_MENU_HTML
+                .matches("class=\"symbolic-icon favorite-icon\"")
+                .count(),
+            2
+        );
+        assert!(SHELL_CSS.contains(".favorite-icon { color:var(--sticky-bg); }"));
+        assert!(SHELL_CSS.contains("--sticky-bg:#ffe56b"));
+    }
+}

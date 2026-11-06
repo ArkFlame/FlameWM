@@ -45,6 +45,59 @@ fn decoration_option_buttons_write_exact_values_and_highlight_the_snapshot() {
     );
 }
 
+fn titlebar_button_snapshot(revision: u64, style: &str) -> SettingsSnapshot {
+    let mut snapshot = SettingsSnapshot::new(revision);
+    snapshot.values.insert(
+        "titlebarButtonStyle".to_owned(),
+        SettingValue::Text(style.to_owned()),
+    );
+    snapshot
+}
+
+#[test]
+fn titlebar_button_style_actions_write_and_highlight_circle_and_square() {
+    let (requests, mut transport) = recording_transport();
+    transport.responses.extend([
+        Ok(ControlResponse::Settings(titlebar_button_snapshot(
+            1, "circle",
+        ))),
+        Ok(ControlResponse::Settings(titlebar_button_snapshot(
+            2, "square",
+        ))),
+        Ok(ControlResponse::Settings(titlebar_button_snapshot(
+            3, "circle",
+        ))),
+    ]);
+    let mut application = settings_application(transport);
+    let mut document = ProbeDocument::default();
+
+    application
+        .handle_action(
+            &release("settings.titlebar.button-style.square"),
+            &mut document,
+        )
+        .expect("square option");
+    assert!(document.highlighted["titlebar-button-style-square"]);
+    assert!(!document.highlighted["titlebar-button-style-circle"]);
+
+    application
+        .handle_action(
+            &release("settings.titlebar.button-style.circle"),
+            &mut document,
+        )
+        .expect("circle option");
+    assert!(document.highlighted["titlebar-button-style-circle"]);
+    assert!(!document.highlighted["titlebar-button-style-square"]);
+
+    assert_eq!(
+        written_values(&requests, "titlebarButtonStyle"),
+        vec![
+            SettingValue::Text("square".to_owned()),
+            SettingValue::Text("circle".to_owned()),
+        ],
+    );
+}
+
 fn appearance_snapshot(revision: u64, appearance: Option<&str>) -> SettingsSnapshot {
     let mut snapshot = SettingsSnapshot::new(revision);
     if let Some(appearance) = appearance {
@@ -106,4 +159,47 @@ fn application_appearance_highlights_nothing_without_an_authoritative_value() {
         .expect("sync snapshot without appearance");
     assert!(!document.highlighted["appearance-apps-dark"]);
     assert!(!document.highlighted["appearance-apps-light"]);
+}
+
+#[test]
+fn selector_text_ink_tracks_dark_and_light_appearance() {
+    for (mode, expected) in [
+        (
+            "dark",
+            UiColor {
+                r: 0xf1,
+                g: 0xf2,
+                b: 0xf3,
+                a: 0xff,
+            },
+        ),
+        (
+            "light",
+            UiColor {
+                r: 0x18,
+                g: 0x1b,
+                b: 0x1e,
+                a: 0xff,
+            },
+        ),
+    ] {
+        let (_, mut transport) = recording_transport();
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(appearance_snapshot(
+                1,
+                Some(mode),
+            ))));
+        let application = settings_application(transport);
+        let mut document = ProbeDocument::default();
+
+        application
+            .sync(&mut document)
+            .expect("sync theme text tokens");
+
+        assert_eq!(
+            document.variables["--text"], expected,
+            "{mode} selector ink"
+        );
+    }
 }

@@ -303,6 +303,37 @@ mod tests {
     }
 
     #[test]
+    fn surface_and_titlebar_selectors_inherit_appearance_text_ink() {
+        let surfaces = page_between(HTML, "page-surfaces", "page-animations");
+        let button_rule = css_rule(CSS, "button");
+        assert_eq!(css_value(button_rule, "color"), Some("var(--text)"));
+        for id in [
+            "taskbar-material-blur-only",
+            "taskbar-material-inherit",
+            "taskbar-material-custom-tint",
+            "decoration-rounded",
+            "decoration-squared",
+            "titlebar-button-style-circle",
+            "titlebar-button-style-square",
+        ] {
+            let position = surfaces
+                .find(&format!("id=\"{id}\""))
+                .unwrap_or_else(|| panic!("selector {id} must be on the Surfaces page"));
+            let button_start = surfaces[..position]
+                .rfind("<button")
+                .unwrap_or_else(|| panic!("selector {id} must be a button"));
+            let button_end = surfaces[position..]
+                .find("</button>")
+                .map(|end| position + end + "</button>".len())
+                .unwrap_or_else(|| panic!("selector {id} must have a closing button"));
+            assert!(
+                surfaces[button_start..button_end].contains("class=\"segment"),
+                "selector {id} must inherit the shared button text token"
+            );
+        }
+    }
+
+    #[test]
     fn glass_rows_bind_their_controls_on_the_surfaces_page() {
         let surfaces = page_between(HTML, "page-surfaces", "page-animations");
         for (id, action) in [

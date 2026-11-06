@@ -97,6 +97,22 @@ fn context_menu_size_shrinks_to_visible_rows() {
 }
 
 #[test]
+fn start_app_context_menu_preserves_start_but_other_menus_close_transients() {
+    use super::start_status::should_close_transients_for_context_menu;
+
+    assert!(!should_close_transients_for_context_menu(
+        &ContextMenuKind::StartApp(flamewm_api::DesktopAppId::new("org.example.calc"))
+    ));
+    for kind in [
+        ContextMenuKind::Task(flamewm_api::TaskEntryId::new("win:7:1")),
+        ContextMenuKind::Workspace { index: 0 },
+        ContextMenuKind::Taskbar,
+    ] {
+        assert!(should_close_transients_for_context_menu(&kind), "{kind:?}");
+    }
+}
+
+#[test]
 fn absent_pointer_falls_back_to_output_origin() {
     let size = context_menu_size(2);
     let rect = context_menu_rect(test_output_id(), test_output_rect(), None, size);

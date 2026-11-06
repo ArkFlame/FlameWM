@@ -123,6 +123,19 @@ impl ShellSurfaces {
         Ok(())
     }
 
+    /// Close only the context-menu surface; the control owner decides whether an underlying
+    /// popup should be restored afterward.
+    pub fn close_context_menu(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+        if dismiss_animates(false, self.start_motion, self.popup_slide.is_some()) {
+            runtime.hide(self.task_menu).map_err(ui_error)?;
+        } else {
+            runtime.close_surface(self.task_menu).map_err(ui_error)?;
+        }
+        self.transient = None;
+        self.transient_output = None;
+        Ok(())
+    }
+
     /// Sets whether Start toggles animate out (a Start slide, fade, or lamp is configured).
     pub fn set_start_motion(&mut self, configured: bool) {
         self.start_motion = configured;

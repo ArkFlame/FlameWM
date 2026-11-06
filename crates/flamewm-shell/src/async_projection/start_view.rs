@@ -60,7 +60,6 @@ pub fn project_start_unified(
         .get(first..last.min(applications.len()))
         .unwrap_or_default();
     let (mut button_id, mut label_id, mut icon_id) = (String::new(), String::new(), String::new());
-    let (mut star_id, mut box_id) = (String::new(), String::new());
     for index in 0..START_APP_SLOT_COUNT {
         let slot = index + 1;
         button_id.clear();
@@ -69,17 +68,7 @@ pub fn project_start_unified(
         write!(label_id, "start-app-slot-{slot}-label").expect("write to String is infallible");
         icon_id.clear();
         write!(icon_id, "start-app-slot-{slot}-icon").expect("write to String is infallible");
-        star_id.clear();
-        write!(star_id, "start-fav-slot-{slot}").expect("write to String is infallible");
-        box_id.clear();
-        write!(box_id, "start-fav-box-{slot}").expect("write to String is infallible");
         if let Some(application) = window.get(index) {
-            let favorite = model
-                .favorites()
-                .iter()
-                .any(|id| id.as_str() == application.id.as_str());
-            document.visible(&box_id, true)?;
-            document.visible(&star_id, favorite)?;
             document.text_ref(&label_id, &application.name)?;
             document.visible(&button_id, true)?;
             document.visible(&icon_id, true)?;
@@ -96,8 +85,6 @@ pub fn project_start_unified(
             document.text(&label_id, String::new())?;
             document.visible(&button_id, false)?;
             document.visible(&icon_id, false)?;
-            document.visible(&box_id, false)?;
-            document.visible(&star_id, false)?;
         }
     }
     let show_session = query.trim().is_empty()
@@ -261,6 +248,8 @@ mod start_selection_tests {
 mod start_scroll_tests {
     use super::*;
     use crate::async_projection::tests::*;
+
+    const START_HTML: &str = include_str!("../../../../ui/shell/start.html");
     use crate::projection::{start_application_name_for_slot, start_scroll_max, start_scroll_step};
 
     fn numbered_apps(count: usize, category: &str) -> StartModel {
@@ -389,7 +378,7 @@ mod start_scroll_tests {
     }
 
     #[test]
-    fn favorite_flag_drives_the_left_star_of_each_row() {
+    fn favorite_rows_have_no_star_slot_and_keep_their_launch_action() {
         let _guard = icon_test_lock().lock();
         let mut model = StartModel::new(vec![
             start_test_app("org.example.calc", "Calculator", "Utility"),
@@ -397,26 +386,11 @@ mod start_scroll_tests {
         ]);
         model.set_favorites(vec!["org.example.chess".into()]);
         let doc = project_start_doc(&model, StartCategory::All, "");
-        assert_eq!(
-            doc.visible.get("start-fav-slot-1"),
-            Some(&false),
-            "Calculator is not starred"
-        );
-        assert_eq!(
-            doc.visible.get("start-fav-slot-2"),
-            Some(&true),
-            "Chess is starred"
-        );
-        assert_eq!(
-            doc.visible.get("start-fav-box-1"),
-            Some(&true),
-            "non-favorite keeps the star box"
-        );
-        assert_eq!(
-            doc.visible.get("start-fav-box-3"),
-            Some(&false),
-            "empty slot has no star box"
-        );
+        assert_eq!(doc.visible.get("start-app-slot-1"), Some(&true));
+        assert_eq!(doc.visible.get("start-app-slot-2"), Some(&true));
+        assert!(!doc.visible.contains_key("start-fav-slot-1"));
+        assert!(!START_HTML.contains("start-fav-"));
+        assert!(START_HTML.contains("data-action=\"start.app.1\""));
     }
 
     #[test]

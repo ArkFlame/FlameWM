@@ -46,6 +46,61 @@ fn animation_snapshot(revision: u64, key: &str, value: &str) -> SettingsSnapshot
     snapshot
 }
 
+fn animations_enabled_snapshot(revision: u64, enabled: bool) -> SettingsSnapshot {
+    let mut snapshot = SettingsSnapshot::new(revision);
+    snapshot.values.insert(
+        "animationsEnabled".to_owned(),
+        SettingValue::Boolean(enabled),
+    );
+    snapshot
+}
+
+#[test]
+fn global_animation_switch_hides_subordinate_settings_but_stays_visible() {
+    let (requests, mut transport) = recording_transport();
+    transport.responses.extend([
+        Ok(ControlResponse::Settings(animations_enabled_snapshot(
+            1, false,
+        ))),
+        Ok(ControlResponse::Settings(animations_enabled_snapshot(
+            2, true,
+        ))),
+    ]);
+    let mut application = settings_application(transport);
+    let mut document = ProbeDocument::default();
+    let subordinate = [
+        "animation-speed-setting",
+        "animation-start-settings",
+        "animation-window-settings",
+        "animation-minmax-settings",
+    ];
+
+    application
+        .sync(&mut document)
+        .expect("sync animations disabled");
+    assert!(document.visible["anim-global-off"]);
+    assert!(!document.visible["anim-global-on"]);
+    for id in subordinate {
+        assert!(
+            !document.visible[id],
+            "{id} is hidden while animations are off"
+        );
+    }
+
+    application
+        .handle_action(&release("settings.toggle.animationsEnabled"), &mut document)
+        .expect("enable animations");
+    assert!(document.visible["anim-global-on"]);
+    assert!(!document.visible["anim-global-off"]);
+    for id in subordinate {
+        assert!(document.visible[id], "{id} returns when animations are on");
+    }
+    assert_eq!(
+        written_values(&requests, "animationsEnabled"),
+        vec![SettingValue::Boolean(true)]
+    );
+}
+
 #[test]
 fn animation_style_segments_write_exact_values_and_highlight_the_snapshot() {
     let (requests, mut transport) = recording_transport();

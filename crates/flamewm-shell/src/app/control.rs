@@ -344,7 +344,64 @@ impl ShellLoop {
                 }
                 ShellControl::CloseContextMenu => {
                     let _close = shell_stage!("shell.context.open.close");
-                    self.close_transients(runtime)?;
+                    let restore_start = should_restore_start_after_context_menu(
+                        self.start_open,
+                        self.context_menu.as_ref(),
+                    );
+                    let start_context = if restore_start {
+                        self.context_menu.as_ref()
+                    } else {
+                        None
+                    };
+                    let start_output = start_context.and_then(|menu| menu.output.clone());
+                    let start_target = start_context
+                        .and_then(|menu| menu.interaction.as_ref())
+                        .map(
+                            |interaction| flamewm_shell_core::popup_session::PopupTarget {
+                                output: interaction.output.clone(),
+                                topology_generation: interaction.display_generation,
+                                panels_revision: interaction.panels_revision,
+                            },
+                        );
+                    let active_lease = self.popup_session.active().cloned();
+                    let close_transition = active_lease
+                        .as_ref()
+                        .map(|lease| self.popup_session.close(lease.sequence));
+                    let start_transition = start_target.and_then(|target| {
+                        self.popup_session
+                            .open(flamewm_shell_core::popup_session::PopupKind::Start, target)
+                            .ok()
+                    });
+                    self.surfaces
+                        .close_context_menu(runtime)
+                        .map_err(UiBackendError::Renderer)?;
+                    self.context_menu = None;
+                    let start_reopened = if let Some(output) = start_output {
+                        match self.open_start_surface(runtime, &output, Instant::now()) {
+                            Ok(opened) => opened,
+                            Err(error) => {
+                                self.start_open = false;
+                                self.end_start_session();
+                                if let Some(transition) = close_transition.as_ref() {
+                                    self.popup_session.commit(transition);
+                                }
+                                return Err(error);
+                            }
+                        }
+                    } else {
+                        false
+                    };
+                    if restore_start && !start_reopened {
+                        self.start_open = false;
+                        self.end_start_session();
+                    }
+                    if let Some(transition) = if start_reopened {
+                        start_transition.or(close_transition)
+                    } else {
+                        close_transition
+                    } {
+                        self.popup_session.commit(&transition);
+                    }
                 }
                 ShellControl::SessionAction(action) => {
                     self.submit(ControlRequest::SessionAction(action));
@@ -500,8 +557,47 @@ pub(super) fn active_output_target(
     }
 }
 
+fn should_restore_start_after_context_menu(
+    start_open: bool,
+    context_menu: Option<&flamewm_shell::ContextMenuState>,
+) -> bool {
+    start_open
+        && context_menu
+            .is_some_and(|menu| matches!(&menu.kind, flamewm_shell::ContextMenuKind::StartApp(_)))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn favorite_context_menu_restores_only_an_open_start_menu() {
+        let start_menu = flamewm_shell::ContextMenuState {
+            kind: flamewm_shell::ContextMenuKind::StartApp(flamewm_api::DesktopAppId::new(
+                "org.example.calc",
+            )),
+            revision: 0,
+            output: None,
+            interaction: None,
+            anchor: None,
+        };
+        assert!(super::should_restore_start_after_context_menu(
+            true,
+            Some(&start_menu)
+        ));
+        assert!(!super::should_restore_start_after_context_menu(
+            false,
+            Some(&start_menu)
+        ));
+        assert!(!super::should_restore_start_after_context_menu(true, None));
+        let other_menu = flamewm_shell::ContextMenuState {
+            kind: flamewm_shell::ContextMenuKind::Workspace { index: 0 },
+            ..start_menu
+        };
+        assert!(!super::should_restore_start_after_context_menu(
+            true,
+            Some(&other_menu)
+        ));
+    }
+
     #[test]
     fn control_output_prefers_keyboard_focus_and_rejects_invalid_explicit_targets() {
         use flamewm_api::OutputId;

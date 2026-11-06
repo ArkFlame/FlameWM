@@ -870,6 +870,18 @@ impl<T: ControlTransport> SettingsApplication<T> {
             document.visible(on_id, enabled == Some(true))?;
             document.visible(off_id, enabled == Some(false))?;
         }
+        let animations_enabled = !matches!(
+            self.setting_value("animationsEnabled"),
+            Some(SettingValue::Boolean(false))
+        );
+        for id in [
+            "animation-speed-setting",
+            "animation-start-settings",
+            "animation-window-settings",
+            "animation-minmax-settings",
+        ] {
+            document.visible(id, animations_enabled)?;
+        }
         for (key, on_id, off_id, default) in SETTING_TWINS {
             let enabled = match self.setting_value(key) {
                 Some(SettingValue::Boolean(value)) => *value,

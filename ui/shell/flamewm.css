@@ -98,10 +98,6 @@ input { cursor:text; }
 .start-category { width:280px; height:37px; padding:0px 9px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:9px; cursor:default; }
 .start-category:hover { background:var(--accent-soft); }.start-category div { flex-grow:1; }
 .start-category .chevron { width:12px; height:12px; }
-.start-row { width:100%; display:flex; align-items:center; gap:4px; }
-.start-row .start-app { width:216px; flex-grow:0; }
-.start-fav-slot { width:28px; height:36px; display:flex; align-items:center; justify-content:center; }
-.start-fav-slot img { width:14px; height:14px; }
 .start-empty { box-sizing:border-box; width:100%; padding:8px 9px; color:var(--text); font-size:12px; white-space:normal; }
 /* Just the bar: no outer card behind or around the search field. */
 .start-search { height:45px; margin:0px 6px 6px 6px; padding:0px 7px; display:flex; align-items:center; background:transparent; color:var(--text); border:0px solid transparent; cursor:default; }
@@ -276,6 +272,7 @@ input { cursor:text; }
 
 /* J6 symbolic shell controls: recolor monochrome glyphs with inherited foreground. */
 .symbolic-icon { -flamewm-image-treatment: symbolic; }
+.favorite-icon { color:var(--sticky-bg); }
 
 /* A09 weather tray: condition icon with the integer temperature directly under it. */
 .tray-weather { flex-direction:column; }

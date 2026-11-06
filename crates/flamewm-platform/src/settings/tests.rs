@@ -620,6 +620,7 @@ fn older_settings_without_new_fields_keep_defaults() {
 #[test]
 fn new_appearance_keys_default_and_stay_unwritten_when_unchanged() {
     let defaults = ProductSettings::default();
+    assert!(!defaults.surface_custom);
     assert_eq!(defaults.taskbar_opacity, 50);
     assert_eq!(defaults.accent_opacity, 100);
     assert_eq!(defaults.decoration, "rounded");

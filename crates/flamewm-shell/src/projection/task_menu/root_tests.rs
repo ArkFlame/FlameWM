@@ -102,39 +102,33 @@ fn task_menu_projection_never_writes_a_border() {
         "task menu frame comes from the shared sheet; projection must not paint a border: {:?}",
         recorder.writes
     );
+}
 
-    #[test]
-    fn start_app_menu_shows_the_row_matching_the_favorite_state() {
-        let state = crate::ContextMenuState {
-            kind: crate::ContextMenuKind::StartApp(flamewm_api::DesktopAppId::new(
-                "org.example.calc",
-            )),
-            revision: 0,
-            output: None,
-            interaction: None,
-            anchor: None,
-        };
-        let mut recorder = Recorder::default();
-        project_context_menu(
-            &mut recorder,
-            &ShellSnapshot::default(),
-            &SettingsSnapshot::new(0),
-            Some(&state),
-            &["org.example.calc".to_owned()],
-        )
-        .expect("projection");
-        // Favorited app: the remove row is projected, the add row is hidden.
-        assert!(
-            recorder
-                .writes
-                .contains(&("visible", "context-start-remove".to_owned()))
-        );
-        assert!(
-            recorder
-                .writes
-                .contains(&("visible", "context-start-add".to_owned()))
-        );
-        assert!(TASK_MENU_HTML.contains("id=\"context-start-add\""));
-        assert!(TASK_MENU_HTML.contains("id=\"context-start-remove\""));
-    }
+#[test]
+fn start_app_menu_shows_the_row_matching_the_favorite_state() {
+    let state = crate::ContextMenuState {
+        kind: crate::ContextMenuKind::StartApp(flamewm_api::DesktopAppId::new("org.example.calc")),
+        revision: 0,
+        output: None,
+        interaction: None,
+        anchor: None,
+    };
+    let mut recorder = Recorder::default();
+    project_context_menu(
+        &mut recorder,
+        &ShellSnapshot::default(),
+        &SettingsSnapshot::new(0),
+        Some(&state),
+        &["org.example.calc".to_owned()],
+    )
+    .expect("projection");
+    // Favorited app: the remove row is projected, the add row is hidden.
+    assert!(recorder
+        .writes
+        .contains(&("visible", "context-start-remove".to_owned())));
+    assert!(recorder
+        .writes
+        .contains(&("visible", "context-start-add".to_owned())));
+    assert!(TASK_MENU_HTML.contains("id=\"context-start-add\""));
+    assert!(TASK_MENU_HTML.contains("id=\"context-start-remove\""));
 }

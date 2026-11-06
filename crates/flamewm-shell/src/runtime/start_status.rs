@@ -1,5 +1,9 @@
 use super::*;
 
+pub(super) fn should_close_transients_for_context_menu(kind: &ContextMenuKind) -> bool {
+    !matches!(kind, ContextMenuKind::StartApp(_))
+}
+
 impl ShellSurfaces {
     pub fn toggle_start(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
         if self.transient == Some(Transient::StartGroup) {
@@ -219,7 +223,11 @@ impl ShellSurfaces {
             return Err(format!("context menu output {output} is unavailable"));
         }
         self.select_panel_output(output);
-        self.close_transients(runtime)?;
+        // The StartApp context menu is layered over the still-open Start menu.
+        // Other context menus keep replacing existing transients as before.
+        if should_close_transients_for_context_menu(&state.kind) {
+            self.close_transients(runtime)?;
+        }
         // Shrink the native surface to its visible content rows so no
         // spare (black) area remains for the shape mask to cover.
         let rows = crate::taskbar::context_menu::visible_row_count_for_kind(

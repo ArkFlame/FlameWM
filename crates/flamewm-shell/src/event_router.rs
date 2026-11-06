@@ -536,7 +536,7 @@ impl ShellLoop {
                 {
                     self.toggle_start_favorite(runtime, &app)?;
                 }
-                self.shell.dispatch("popover.close");
+                self.shell.dispatch("context.menu.close");
                 return self.apply_controls(runtime);
             }
             if let Some(request) = self

@@ -43,6 +43,7 @@ impl ShellRuntime {
                     interaction,
                 }),
                 "popover.close" => Some(ShellControl::ClosePopovers),
+                "context.menu.close" => Some(ShellControl::CloseContextMenu),
                 "session.lock" => Some(ShellControl::SessionAction(SessionAction::Lock)),
                 "session.logout" => Some(ShellControl::SessionAction(SessionAction::Logout)),
                 "session.suspend" => Some(ShellControl::SessionAction(SessionAction::Suspend)),
@@ -73,5 +74,36 @@ impl ShellRuntime {
     /// Takes the pending Alt+Tab switcher snapshot, if one arrived since the last tick.
     pub fn take_switcher_frame(&mut self) -> Option<crate::switcher::SwitcherFrame> {
         self.switcher.take()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn favorite_context_close_is_scoped_and_start_launch_is_unchanged() {
+        let mut runtime = ShellRuntime::new(ShellSnapshot::default());
+
+        runtime.dispatch("context.menu.close");
+        assert_eq!(
+            runtime.drain_controls().collect::<Vec<_>>(),
+            vec![ShellControl::CloseContextMenu]
+        );
+
+        runtime.dispatch("popover.close");
+        assert_eq!(
+            runtime.drain_controls().collect::<Vec<_>>(),
+            vec![ShellControl::ClosePopovers]
+        );
+
+        runtime.dispatch("start.menu.favorite");
+        assert_eq!(runtime.drain_controls().next(), None);
+
+        runtime.dispatch("start.app.1");
+        assert_eq!(
+            runtime.drain_controls().collect::<Vec<_>>(),
+            vec![ShellControl::Launch("app.1".to_owned())]
+        );
     }
 }
