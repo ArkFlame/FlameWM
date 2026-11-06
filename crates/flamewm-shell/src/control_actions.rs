@@ -55,6 +55,14 @@ pub struct NetworkSecretOutcome {
     pub result: Result<(), ()>,
 }
 
+/// Result of one popup network action (Scan, Connect, Disconnect, Wi-Fi toggle). `message` is the
+/// user-facing failure text ("Scan failed: ...") so the popup can show it instead of dropping it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkActionOutcome {
+    pub id: u64,
+    pub result: Result<(), String>,
+}
+
 thread_local! {
     // Reactor-thread only: enqueue and drain both run on the shell loop.
     // Queue ids correlate replies; invocation ids fence replies from older
@@ -63,6 +71,8 @@ thread_local! {
     static LAUNCH_OUTCOMES: RefCell<VecDeque<StartLaunchOutcome>> = const { RefCell::new(VecDeque::new()) };
     static PENDING_NETWORK_SECRETS: RefCell<Vec<(u64, (u64, u64))>> = const { RefCell::new(Vec::new()) };
     static NETWORK_SECRET_OUTCOMES: RefCell<VecDeque<NetworkSecretOutcome>> = const { RefCell::new(VecDeque::new()) };
+    static PENDING_NETWORK_ACTIONS: RefCell<Vec<(u64, String)>> = const { RefCell::new(Vec::new()) };
+    static NETWORK_ACTION_OUTCOMES: RefCell<VecDeque<NetworkActionOutcome>> = const { RefCell::new(VecDeque::new()) };
     static PENDING_WEATHER_PICKS: RefCell<Vec<(u64, WeatherPick)>> = const { RefCell::new(Vec::new()) };
     static WEATHER_PICK_OUTCOMES: RefCell<VecDeque<WeatherPickOutcome>> = const { RefCell::new(VecDeque::new()) };
 }
@@ -98,6 +108,33 @@ pub fn enqueue_network_secret(
 #[must_use]
 pub fn take_network_secret_outcomes() -> Vec<NetworkSecretOutcome> {
     NETWORK_SECRET_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
+}
+
+/// Enqueue a popup network action. `label` names the action in the failure text. A refused enqueue
+/// is reported as an immediate failed outcome so the popup never drops it silently.
+pub fn enqueue_network_action(
+    dispatcher: Option<&Arc<MutationDispatcher>>,
+    label: &str,
+    request: ControlRequest,
+) {
+    match enqueue_action(dispatcher, request) {
+        Some(id) => {
+            PENDING_NETWORK_ACTIONS
+                .with(|pending| pending.borrow_mut().push((id, label.to_owned())));
+        }
+        None => NETWORK_ACTION_OUTCOMES.with(|outcomes| {
+            outcomes.borrow_mut().push_back(NetworkActionOutcome {
+                id: 0,
+                result: Err(format!("{label} failed: control queue refused the request")),
+            });
+        }),
+    }
+}
+
+/// Take the network action results recorded since the last call, oldest first.
+#[must_use]
+pub fn take_network_action_outcomes() -> Vec<NetworkActionOutcome> {
+    NETWORK_ACTION_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
 }
 
 /// Enqueue a Start-menu launch and remember the app name against the queue
@@ -220,6 +257,23 @@ pub fn drain_results_with_settings(
             let position = pending.iter().position(|(id, _)| *id == result.id)?;
             Some(pending.swap_remove(position).1)
         });
+        let network_action = PENDING_NETWORK_ACTIONS.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            let position = pending.iter().position(|(id, _)| *id == result.id)?;
+            Some(pending.swap_remove(position).1)
+        });
+        if let Some(label) = network_action {
+            NETWORK_ACTION_OUTCOMES.with(|outcomes| {
+                outcomes.borrow_mut().push_back(NetworkActionOutcome {
+                    id: result.id,
+                    result: result
+                        .outcome
+                        .as_ref()
+                        .map(|_| ())
+                        .map_err(|error| format!("{label} failed: {}", error.message)),
+                });
+            });
+        }
         let weather_pick = PENDING_WEATHER_PICKS.with(|pending| {
             let mut pending = pending.borrow_mut();
             let position = pending.iter().position(|(id, _)| *id == result.id)?;
@@ -326,6 +380,25 @@ mod tests {
         }
     }
 
+    // FAILURE PATH: with no control dispatcher the popup action is not dropped; it becomes a
+    // visible failed outcome naming the action.
+    #[test]
+    fn network_action_without_dispatcher_reports_failure_outcome() {
+        let _ = take_network_action_outcomes();
+        enqueue_network_action(
+            None,
+            "Scan",
+            ControlRequest::SystemAction {
+                action: flamewm_api::system::SystemAction::Scan,
+                expected_revision: 0,
+            },
+        );
+        let outcomes = take_network_action_outcomes();
+        assert_eq!(outcomes.len(), 1);
+        let message = outcomes[0].result.as_ref().expect_err("must be a failure");
+        assert!(message.starts_with("Scan failed"), "{message}");
+    }
+
     #[test]
     fn enqueue_returns_immediately_and_full_is_nonfatal() {
         let queue = Arc::new(ControlMutationQueue::new(1));
@@ -405,14 +478,16 @@ mod tests {
             current,
             StartLaunchOutcome::Started { invocation: 2, .. }
         ));
-        assert!(matching_launch_outcome(
-            vec![StartLaunchOutcome::Failed {
-                invocation: 1,
-                app: "Old app".to_owned(),
-                message: "old failure".to_owned(),
-            }],
-            2,
-        )
-        .is_none());
+        assert!(
+            matching_launch_outcome(
+                vec![StartLaunchOutcome::Failed {
+                    invocation: 1,
+                    app: "Old app".to_owned(),
+                    message: "old failure".to_owned(),
+                }],
+                2,
+            )
+            .is_none()
+        );
     }
 }

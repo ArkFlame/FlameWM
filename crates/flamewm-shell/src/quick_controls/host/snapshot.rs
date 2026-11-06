@@ -22,6 +22,10 @@ pub struct QuickControlSnapshot {
     pub network_filter_focused: bool,
     pub network_secret_error: bool,
     pub network_secret_submit_id: Option<u64>,
+    /// Last failed popup network action, shown in the popup until the next success.
+    pub network_action_error: Option<String>,
+    /// Access point whose ">" details row is expanded (AP path identity).
+    pub network_details_path: Option<String>,
     /// Presentation settings for the shared menu background and popup backdrop.
     pub settings: SettingsSnapshot,
     /// Clock calendar view state; changed only by `calendar.*` actions.
@@ -54,6 +58,8 @@ impl QuickControlSnapshot {
             network_filter_focused: false,
             network_secret_error: false,
             network_secret_submit_id: None,
+            network_action_error: None,
+            network_details_path: None,
             settings: SettingsSnapshot::new(0),
         }
     }

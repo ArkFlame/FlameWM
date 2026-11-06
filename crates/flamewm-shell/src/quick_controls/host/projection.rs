@@ -54,6 +54,17 @@ pub(crate) fn project_snapshot(
                         &query,
                         snapshot.network_scroll_offset,
                     )?;
+                    crate::projection::project_network_details(
+                        document,
+                        &shell,
+                        &query,
+                        snapshot.network_scroll_offset,
+                        snapshot.network_details_path.as_deref(),
+                    )?;
+                    crate::projection::project_network_status(
+                        document,
+                        snapshot.network_action_error.as_deref(),
+                    )?;
                     crate::projection::project_network_secret(
                         document,
                         &"*".repeat(snapshot.network_secret_masked_len),

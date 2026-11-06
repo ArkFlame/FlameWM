@@ -118,6 +118,25 @@ fn header_label_never_claims_connection_when_disconnected() {
     assert_eq!(header_label_for(Some(&connected), true), "FlameNet");
 }
 
+// REGRESSION: the header must name the connected SSID once the active path is known, even when
+// the scan was published before the primary connection arrived (live host: wlan0 connected to
+// "LinsaFTW Guest" while the popup read "Connected to Not connected").
+// MUTATION: recomputing the label only on AP publish keeps "Not connected" after the path arrives.
+#[test]
+fn header_label_follows_active_path_when_it_arrives_after_scan() {
+    let scan = vec![AccessPoint {
+        path: "/nm/ap/7".to_owned(),
+        ssid: "LinsaFTW Guest".to_owned(),
+        strength_percent: 97,
+        secured: true,
+        known: true,
+    }];
+    assert_eq!(header_label_for_active("", &scan), "Not connected");
+    assert_eq!(header_label_for_active("/nm/ap/7", &scan), "LinsaFTW Guest");
+    assert_eq!(header_label_for_active("/nm/ap/9", &scan), "");
+    assert_eq!(header_label_for_active("", &[]), "Not connected");
+}
+
 #[test]
 fn header_label_keeps_placeholder_free_when_active_ap_absent_from_scan() {
     // Active AP path set but no matching scan entry: no name is known, so the

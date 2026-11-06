@@ -185,6 +185,29 @@ pub fn route_helper_event(
                 value["network.filter.".len()..].clone_into(&mut snapshot.network_query.filter);
                 snapshot.network_scroll_offset = 0;
             }
+            value if value.starts_with("network.details.") => {
+                // ">" toggles the expanded row by AP path; the list itself is unchanged.
+                if let Ok(slot) = value["network.details.".len()..].parse::<usize>() {
+                    let path = slot.checked_sub(1).and_then(|slot| {
+                        crate::taskbar::status::network::project_visible_rows(
+                            &snapshot.system,
+                            &snapshot.network_query,
+                            snapshot.network_scroll_offset,
+                        )
+                        .get(slot)
+                        .map(|row| row.path.clone())
+                    });
+                    if let Some(path) = path {
+                        snapshot.network_details_path =
+                            if snapshot.network_details_path.as_ref() == Some(&path) {
+                                None
+                            } else {
+                                Some(path)
+                            };
+                    }
+                }
+                *reprojection = true;
+            }
             value if value.starts_with("calendar.") => {
                 snapshot
                     .calendar
@@ -193,8 +216,35 @@ pub fn route_helper_event(
             _ => {}
         }
         if let Some(request) = helper_control_request(action, snapshot) {
-            crate::control_actions::enqueue_action(dispatcher, request);
+            if let Some(label) = network_action_label(action) {
+                crate::control_actions::enqueue_network_action(dispatcher, label, request);
+            } else {
+                crate::control_actions::enqueue_action(dispatcher, request);
+            }
+        } else if network_action_label(action).is_some() {
+            // Unresolvable target (stale row, offline adapter): say so instead of doing nothing.
+            snapshot.network_action_error = Some(format!(
+                "{} unavailable: network is not ready",
+                network_action_label(action).unwrap_or("Network")
+            ));
+            *reprojection = true;
         }
     }
     true
+}
+
+/// User-facing name of a popup network action that talks to the provider, or `None` for
+/// presentation-only actions (filter, details, secret entry).
+fn network_action_label(action: &str) -> Option<&'static str> {
+    if action == "network.scan" {
+        Some("Scan")
+    } else if action == "network.disconnect" {
+        Some("Disconnect")
+    } else if action == "network.wifi.toggle" {
+        Some("Wi-Fi change")
+    } else if action.starts_with("network.connect.") {
+        Some("Connect")
+    } else {
+        None
+    }
 }

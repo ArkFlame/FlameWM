@@ -29,7 +29,7 @@ use flamewm_api::ports::{
 };
 use flamewm_api::session::{SessionAction, SessionCapabilities};
 use flamewm_api::shortcuts::KeyBinding;
-use flamewm_api::system::{SystemAction, SystemSnapshot};
+use flamewm_api::system::{AudioSnapshot, ServiceAvailability, SystemAction, SystemSnapshot};
 use flamewm_api::window::{WindowSnapshot, WindowState};
 use flamewm_api::workspace::{WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot};
 use flamewm_api::{
@@ -38,12 +38,13 @@ use flamewm_api::{
 };
 use flamewm_control_dbus::{ControlServer, ControlSignal};
 use flamewm_control_wire::SwitcherEntry;
+use flamewm_integrations_linux::NetworkManagerSlot;
 use flamewm_integrations_linux::audio_helper::AudioHelper;
 use flamewm_integrations_linux::backlight::BacklightProvider;
 use flamewm_platform::host::PlatformHost;
 use flamewm_platform::system::{MediaAudioKey, MediaBrightnessKey};
-use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::RegistrationToken;
+use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::ping::Ping;
 use smithay::reexports::calloop::{Interest, Mode, PostAction};
 use smithay::wayland::compositor;
@@ -619,6 +620,8 @@ pub struct Service {
     _audio_ping: Option<Ping>,
     /// Panel backlight owner shared with the system action handler.
     backlight: Rc<RefCell<BacklightProvider>>,
+    /// NetworkManager system-bus provider; an absent bus publishes `Unavailable`, never devices.
+    network: Rc<RefCell<NetworkManagerSlot>>,
     /// Monotonic workspace revision. X11 advances one per switch; the shell's pager expects the
     /// same discipline, because the activation it sends is revision-fenced.
     workspace_revision: std::cell::Cell<u64>,
@@ -767,6 +770,14 @@ impl Service {
         // Read the panel backlight before the host starts so the shell bootstrap already carries
         // the current level: its first OSD observation is a baseline, not a card.
         let backlight = Rc::new(RefCell::new(BacklightProvider::connect()));
+        // Same owner the X11 runtime uses. A missing bus is an `Unavailable` slot, not an error.
+        let network = Rc::new(RefCell::new(
+            NetworkManagerSlot::connect().map_err(|error| format!("{error}"))?,
+        ));
+        network
+            .borrow_mut()
+            .start()
+            .map_err(|error| format!("NetworkManager start failed: {error}"))?;
         let audio_updates = Arc::new(Mutex::new(Vec::new()));
         let audio_link = match smithay::reexports::calloop::ping::make_ping() {
             Ok((ping, source)) => {
@@ -797,15 +808,22 @@ impl Service {
         }
         host.system_mut()
             .update_brightness(backlight.borrow_mut().snapshot());
-        if let Some((helper, _, _)) = &audio_link {
-            // Best effort: one eager request so the first volume key steps from a real snapshot.
-            if let Err(error) = helper.request_snapshot() {
-                eprintln!("flamewm-wayland: audio snapshot request failed: {error}");
+        // Audio that cannot be reached is published as `Unavailable`, so the shell shows the
+        // absence instead of an empty device list that looks like a working system.
+        match &audio_link {
+            Some((helper, _, _)) => {
+                // Best effort: one eager request so the first volume key steps from a real snapshot.
+                if let Err(error) = helper.request_snapshot() {
+                    eprintln!("flamewm-wayland: audio snapshot request failed: {error}");
+                    mark_audio_unavailable(&mut host);
+                }
             }
+            None => mark_audio_unavailable(&mut host),
         }
         let backlight_for_actions = Rc::clone(&backlight);
+        let network_for_actions = Rc::clone(&network);
         let audio_for_actions = audio_link.as_ref().map(|(helper, _, _)| Rc::clone(helper));
-        host.set_system_action_handler(Box::new(move |action, _snapshot| match action {
+        host.set_system_action_handler(Box::new(move |action, snapshot| match action {
             SystemAction::SetBrightness(action) => backlight_for_actions
                 .borrow_mut()
                 .set_percent(action.percent, action.generation),
@@ -827,8 +845,15 @@ impl Service {
                 },
                 |pulse| pulse.set_mute(action),
             ),
+            SystemAction::SetWifiEnabled(_)
+            | SystemAction::ConnectKnown { .. }
+            | SystemAction::ConnectWifi { .. }
+            | SystemAction::SubmitNetworkSecret { .. }
+            | SystemAction::CancelNetworkSecret { .. }
+            | SystemAction::Disconnect
+            | SystemAction::Scan => network_action(&network_for_actions, action, &snapshot),
             _ => Err(unsupported(
-                "the Wayland compositor does not integrate network or media providers yet",
+                "the Wayland compositor does not integrate media providers yet",
             )),
         }));
         host.start()
@@ -863,6 +888,7 @@ impl Service {
             audio_updates,
             _audio_ping: audio_ping,
             backlight,
+            network,
             workspace_revision: std::cell::Cell::new(1),
             popup_focus: RefCell::new(None),
             switcher: RefCell::new(None),
@@ -935,6 +961,24 @@ impl Service {
             changed
         };
         if changed {
+            self.publish_system();
+        }
+    }
+
+    /// Dispatches NetworkManager bus traffic and publishes its snapshot when it changed. Runs from
+    /// the provider's own fd readiness, and once at install for the initial reconcile.
+    fn drain_network(&self) {
+        let snapshot = {
+            let mut network = self.network.borrow_mut();
+            if let Err(error) = network.on_ready() {
+                eprintln!("flamewm-wayland: NetworkManager dispatch failed: {error}");
+            }
+            if let Err(error) = network.reconcile() {
+                eprintln!("flamewm-wayland: NetworkManager reconcile failed: {error}");
+            }
+            network.snapshot()
+        };
+        if self.host.borrow_mut().system_mut().update_network(snapshot) {
             self.publish_system();
         }
     }
@@ -1329,10 +1373,33 @@ impl Service {
 /// Installs the service: connects and turns it on every bus read wake. Outbound bytes that libdbus
 /// could not flush are driven by a write-readiness source armed in `after_dispatch`, so an idle
 /// compositor has no bus timer at all.
+/// Routes one network action to the NetworkManager slot. An absent or unreachable provider answers
+/// with its own `Unavailable` error; no device is ever fabricated for the shell.
+fn network_action(
+    network: &RefCell<NetworkManagerSlot>,
+    action: SystemAction,
+    snapshot: &SystemSnapshot,
+) -> FlameResult<()> {
+    network
+        .borrow_mut()
+        .perform_action(action, &snapshot.network)
+}
+
+/// Publishes the audio service as unavailable so the shell shows the absence, not an empty list.
+fn mark_audio_unavailable(host: &mut PlatformHost<WaylandDesktop>) {
+    host.system_mut().update_audio(AudioSnapshot {
+        availability: ServiceAvailability::Unavailable,
+        ..AudioSnapshot::default()
+    });
+}
+
 pub fn install(state: &mut State) -> Result<(), Box<dyn Error>> {
     let service = Rc::new(Service::connect(state)?);
     let bus = flamewm_reactor::BorrowedRawFd(service.server.watch().fd);
-    state.control = Some(service);
+    // The NetworkManager fd is fixed for the provider's lifetime (owner changes arrive as bus
+    // messages on it), so one level-triggered source is enough.
+    let network = flamewm_reactor::BorrowedRawFd(service.network.borrow().watch().fd);
+    state.control = Some(service.clone());
     state.loop_handle.insert_source(
         Generic::new(bus, Interest::READ, Mode::Level),
         |_, _, state| {
@@ -1342,6 +1409,17 @@ pub fn install(state: &mut State) -> Result<(), Box<dyn Error>> {
             Ok(PostAction::Continue)
         },
     )?;
+    state.loop_handle.insert_source(
+        Generic::new(network, Interest::READ, Mode::Level),
+        |_, _, state| {
+            if let Some(service) = state.control.clone() {
+                service.drain_network();
+            }
+            Ok(PostAction::Continue)
+        },
+    )?;
+    // Starts the first reconcile, which publishes the initial network state.
+    service.drain_network();
     Ok(())
 }
 
@@ -1419,17 +1497,44 @@ fn apply_command(state: &mut State, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, Mirror, WaylandDesktop, chrome_settings, managed_logout, shell_scales_at,
-        shell_scales_from, system_change, volume_cap,
+        Command, Mirror, WaylandDesktop, chrome_settings, managed_logout, network_action,
+        shell_scales_at, shell_scales_from, system_change, volume_cap,
     };
     use flamewm_api::settings::{SettingValue, SettingsSnapshot};
     use flamewm_api::shortcuts::KeyBinding;
-    use flamewm_api::system::{BrightnessSnapshot, ServiceAvailability, SystemSnapshot};
+    use flamewm_api::system::{
+        BrightnessSnapshot, ServiceAvailability, SystemAction, SystemSnapshot,
+    };
     use flamewm_api::window::WindowSnapshot;
-    use flamewm_api::{DesktopAppId, OutputId, WindowRef};
+    use flamewm_api::{DesktopAppId, ErrorCode, FlameError, OutputId, WindowRef};
+    use flamewm_integrations_linux::NetworkManagerSlot;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::rc::Rc;
+
+    /// Without NetworkManager on the system bus every network action fails `Unavailable`, and the
+    /// published snapshot stays unavailable: the shell never receives a fabricated network.
+    #[test]
+    fn network_actions_fail_unavailable_without_networkmanager() {
+        let network = RefCell::new(
+            NetworkManagerSlot::connect_with(|| Err(FlameError::unavailable("system bus absent")))
+                .expect("an absent bus is an unavailable slot, not a constructor error"),
+        );
+        let snapshot = SystemSnapshot::default();
+        for action in [
+            SystemAction::Scan,
+            SystemAction::Disconnect,
+            SystemAction::SetWifiEnabled(true),
+        ] {
+            let error =
+                network_action(&network, action, &snapshot).expect_err("no provider to act on");
+            assert_eq!(error.code, ErrorCode::Unavailable);
+        }
+        assert_eq!(
+            network.borrow().snapshot().availability,
+            ServiceAvailability::Unavailable
+        );
+    }
 
     /// The shell's OSD treats its first observation as a baseline, so the media-key path must only
     /// announce a system snapshot that actually differs from the one already published.
@@ -1709,6 +1814,11 @@ mod tests {
             chrome_settings(&snapshot).1,
             i32::from(defaults.window_margin)
         );
+        // 0 is a real value (no margin), not a fallback to the default.
+        snapshot
+            .values
+            .insert("windowMargin".to_owned(), SettingValue::Integer(0));
+        assert_eq!(chrome_settings(&snapshot).1, 0);
 
         // An ill-typed value must not be trusted either.
         snapshot

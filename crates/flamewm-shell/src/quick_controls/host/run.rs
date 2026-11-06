@@ -121,6 +121,15 @@ pub fn run_quick_control_host(packaged_root: std::path::PathBuf) -> Result<(), H
                 for outcome in crate::control_actions::take_weather_pick_outcomes() {
                     finish_weather_pick(&mut outcome_state.borrow_mut(), outcome);
                 }
+                // Popup network actions: a failure becomes the visible status line; a success clears it.
+                let action_outcomes = crate::control_actions::take_network_action_outcomes();
+                if !action_outcomes.is_empty() {
+                    let mut state = outcome_state.borrow_mut();
+                    for outcome in action_outcomes {
+                        state.snapshot.network_action_error = outcome.result.err();
+                        state.system_reprojection_pending = true;
+                    }
+                }
                 let outcomes = crate::control_actions::take_network_secret_outcomes();
                 if !outcomes.is_empty() {
                     let mut state = outcome_state.borrow_mut();

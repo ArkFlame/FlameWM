@@ -356,6 +356,18 @@ impl NetworkManagerProvider {
                 .find(|wifi| wifi.active_connection == active_connection)
                 .map_or_else(String::new, |wifi| wifi.active_access_point.clone())
         };
+        // The header depends on the connected AP, so it must follow every change to the active
+        // path. Recomputing it only when access points publish left "Not connected" stuck when the
+        // primary connection arrived after the last AP reply.
+        self.refresh_header_label();
+    }
+
+    /// Header label from the connected AP in the last published scan.
+    fn refresh_header_label(&mut self) {
+        self.status.snapshot.label = header_label_for_active(
+            &self.status.snapshot.active_access_point_path,
+            &self.status.visible_access_points,
+        );
     }
 
     /// Report a degraded (not absent) `NetworkManager` state: the shell treats
@@ -391,6 +403,7 @@ impl NetworkManagerProvider {
                 .then_with(|| left.path.cmp(&right.path))
         });
         self.status.visible_access_points = access_points;
+        self.refresh_header_label();
         let active = self.status.snapshot.active_access_point_path.clone();
         let connected = (!active.is_empty())
             .then(|| {
@@ -400,7 +413,6 @@ impl NetworkManagerProvider {
                     .find(|ap| ap.path == active)
             })
             .flatten();
-        self.status.snapshot.label = header_label_for(connected, !active.is_empty());
         // Nothing connected: the strongest AP stays in the list; the header makes no claim.
         self.status.snapshot.strength_percent = connected
             .or_else(|| self.status.visible_access_points.first())
@@ -519,6 +531,15 @@ pub(crate) fn unwrap_variant(item: MessageItem) -> MessageItem {
         MessageItem::Variant(value) => unwrap_variant(*value),
         item => item,
     }
+}
+
+/// Header label for the active AP path against the published scan. Empty path means nothing is
+/// connected; a path absent from the scan keeps the header free of a made-up name.
+pub(crate) fn header_label_for_active(active: &str, visible: &[AccessPoint]) -> String {
+    let connected = (!active.is_empty())
+        .then(|| visible.iter().find(|ap| ap.path == active))
+        .flatten();
+    header_label_for(connected, !active.is_empty())
 }
 
 /// Header label for the network snapshot: the connected SSID, or a neutral label when no AP is connected.

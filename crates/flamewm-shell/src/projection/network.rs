@@ -7,6 +7,72 @@ pub fn project_network_secret(
     document.text("network-secret-value", "*".repeat(secret.chars().count()))
 }
 
+/// The truthful connection sentence for the popup subtitle. The template carries no fixed prefix,
+/// so every state reads as a full phrase ("Connected to X", "Not connected", ...).
+#[must_use]
+pub fn connection_sentence(system: &flamewm_api::system::SystemSnapshot) -> String {
+    let network = &system.network;
+    if !network.wifi_enabled && network.kind != flamewm_api::system::NetworkKind::Wired {
+        return "Wi-Fi is off".to_owned();
+    }
+    match network.kind {
+        flamewm_api::system::NetworkKind::Connecting => "Connecting".to_owned(),
+        flamewm_api::system::NetworkKind::Wired if !network.active_path.is_empty() => {
+            "Connected (wired)".to_owned()
+        }
+        flamewm_api::system::NetworkKind::Disconnected
+        | flamewm_api::system::NetworkKind::Unavailable => "Not connected".to_owned(),
+        _ => crate::taskbar::status::network::connected_row(system).map_or_else(
+            || "Not connected".to_owned(),
+            |row| format!("Connected to {}", row.label),
+        ),
+    }
+}
+
+/// Shows a failed or pending popup network action as one status line. `None` clears it.
+pub fn project_network_status(
+    document: &mut impl UiDocumentAccess,
+    error: Option<&str>,
+) -> Result<(), String> {
+    document.text("network-action-error", error.unwrap_or_default().to_owned())
+}
+
+/// Expands the `>` details of the visible row whose AP path is `expanded`: its status line lists
+/// the real model fields (signal, security, saved state, AP object). Rows not on this page are
+/// left as projected. Only model values are shown; nothing is fabricated.
+pub fn project_network_details(
+    document: &mut impl UiDocumentAccess,
+    snapshot: &ShellSnapshot,
+    query: &flamewm_shell_core::status::NetworkQuery,
+    scroll_offset: u32,
+    expanded: Option<&str>,
+) -> Result<(), String> {
+    let Some(path) = expanded else {
+        return Ok(());
+    };
+    let rows = crate::taskbar::status::network::project_visible_rows(
+        &snapshot.system,
+        query,
+        scroll_offset,
+    );
+    let Some(row) = rows.iter().find(|row| row.path == path) else {
+        return Ok(());
+    };
+    let access_point = row.path.rsplit('/').next().unwrap_or_default();
+    let details = format!(
+        "Signal {}% · {} · {} · AP {}",
+        row.strength_percent,
+        if row.secured { "secured" } else { "open" },
+        if row.known {
+            "saved profile"
+        } else {
+            "not saved"
+        },
+        access_point,
+    );
+    document.text(&format!("network-slot-{}-status", row.slot + 1), details)
+}
+
 pub fn project_network(
     document: &mut impl UiDocumentAccess,
     snapshot: &ShellSnapshot,
@@ -51,7 +117,7 @@ pub fn project_network_full(
     document.visible("network-connected-row", connected.is_some())?;
     document.visible("network-connected", connected.is_some())?;
     if let Some(popover) = popover {
-        document.text("wifi-connected-name", popover.connected_label)?;
+        document.text("wifi-connected-name", connection_sentence(&snapshot.system))?;
         // The label stays static; the query lives inside the input box so the
         // layout never shifts while typing.
         let filter_empty = query.filter.trim().is_empty();
@@ -108,7 +174,7 @@ pub fn project_network_full(
             document.text(&format!("network-slot-{}-status", slot + 1), status)?;
         }
     } else {
-        document.text("wifi-connected-name", view.label)?;
+        document.text("wifi-connected-name", connection_sentence(&snapshot.system))?;
         for slot in 0..crate::taskbar::status::network::NETWORK_SLOT_COUNT {
             document.visible(&format!("network-slot-{}", slot + 1), false)?;
             document.text(&format!("network-slot-{}-name", slot + 1), String::new())?;
@@ -149,6 +215,7 @@ mod network_template_tests {
             "wifi-connected-name".to_owned(),
             "network-filter-value".to_owned(),
             "network-secret-value".to_owned(),
+            "network-action-error".to_owned(),
         ];
         for slot in 1..=8 {
             ids.push(format!("network-slot-{slot}-name"));
@@ -277,6 +344,96 @@ mod network_template_tests {
         assert_eq!(recorder.texts["network-slot-2-name"], "");
     }
 
+    // REGRESSION: the subtitle is a full sentence per state; the template has no fixed "Connected to"
+    // prefix, so a disconnected label can never read "Connected to Not connected".
+    // MUTATION: restoring the static prefix or writing the raw label "Not connected" fails below.
+    #[test]
+    fn connection_subtitle_is_truthful_for_each_state() {
+        let mut document = network_document();
+        let connected = network_snapshot("/ap/1", "LinsaFTW", vec![("/ap/1", "LinsaFTW", 72)]);
+        let mut recorder = NetworkRecorder::new(&mut document);
+        project_network(&mut recorder, &connected).expect("projection must succeed");
+        assert_eq!(
+            recorder.texts["wifi-connected-name"],
+            "Connected to LinsaFTW"
+        );
+
+        let mut disconnected =
+            network_snapshot("", "Not connected", vec![("/ap/2", "Neighbor", 40)]);
+        disconnected.system.network.kind = flamewm_api::system::NetworkKind::Disconnected;
+        project_network(&mut recorder, &disconnected).expect("projection must succeed");
+        assert_eq!(recorder.texts["wifi-connected-name"], "Not connected");
+
+        let mut off = network_snapshot("", "", vec![]);
+        off.system.network.wifi_enabled = false;
+        project_network(&mut recorder, &off).expect("projection must succeed");
+        assert_eq!(recorder.texts["wifi-connected-name"], "Wi-Fi is off");
+
+        let mut connecting = network_snapshot("", "", vec![]);
+        connecting.system.network.kind = flamewm_api::system::NetworkKind::Connecting;
+        project_network(&mut recorder, &connecting).expect("projection must succeed");
+        assert_eq!(recorder.texts["wifi-connected-name"], "Connecting");
+    }
+
+    // REGRESSION: ">" on an Available row expands that row's details from model fields only.
+    // MUTATION: expanding the wrong slot or inventing a value fails the assertions.
+    #[test]
+    fn expanded_row_status_lists_model_details_for_that_slot() {
+        let mut document = network_document();
+        let snapshot = network_snapshot(
+            "/ap/1",
+            "LinsaFTW",
+            vec![("/ap/1", "LinsaFTW", 72), ("/ap/2", "StubNeighbor", 42)],
+        );
+        let mut recorder = NetworkRecorder::new(&mut document);
+        let snapshot_ref = &snapshot;
+        super::project_network_details(
+            &mut recorder,
+            snapshot_ref,
+            &flamewm_shell_core::status::NetworkQuery::default(),
+            0,
+            Some("/ap/2"),
+        )
+        .expect("details projection must succeed");
+        assert_eq!(
+            recorder.texts["network-slot-1-status"],
+            "Signal 42% · secured · not saved · AP 2"
+        );
+        assert!(!recorder.texts.contains_key("network-slot-2-status"));
+    }
+
+    // FAILURE PATH: a details request for an AP that is not on this page changes nothing.
+    #[test]
+    fn details_for_unknown_path_projects_nothing() {
+        let mut document = network_document();
+        let snapshot = network_snapshot("/ap/1", "LinsaFTW", vec![("/ap/2", "StubNeighbor", 42)]);
+        let mut recorder = NetworkRecorder::new(&mut document);
+        super::project_network_details(
+            &mut recorder,
+            &snapshot,
+            &flamewm_shell_core::status::NetworkQuery::default(),
+            0,
+            Some("/ap/404"),
+        )
+        .expect("details projection must succeed");
+        assert!(recorder.texts.is_empty());
+    }
+
+    // FAILURE PATH: a failed popup action is shown as text, and a later success clears it.
+    #[test]
+    fn action_error_is_projected_then_cleared() {
+        let mut document = network_document();
+        let mut recorder = NetworkRecorder::new(&mut document);
+        super::project_network_status(&mut recorder, Some("Scan failed: NetworkManager busy"))
+            .expect("status projection must succeed");
+        assert_eq!(
+            recorder.texts["network-action-error"],
+            "Scan failed: NetworkManager busy"
+        );
+        super::project_network_status(&mut recorder, None).expect("status projection must succeed");
+        assert_eq!(recorder.texts["network-action-error"], "");
+    }
+
     fn network_snapshot(
         active_ap: &str,
         label: &str,
@@ -287,6 +444,7 @@ mod network_template_tests {
         snapshot.system.network.wifi_enabled = true;
         snapshot.system.network.networking_enabled = true;
         snapshot.system.network.label = label.to_owned();
+        snapshot.system.network.kind = flamewm_api::system::NetworkKind::Wireless;
         snapshot.system.network.strength_percent = 72;
         snapshot.system.network.active_access_point_path = active_ap.to_owned();
         snapshot.system.network.access_points = access_points

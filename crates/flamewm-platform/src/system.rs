@@ -348,6 +348,45 @@ mod tests {
         )));
     }
 
+    // REGRESSION: a Scan issued from a popup whose revision is stale must reach the
+    // provider instead of failing with "stale system snapshot revision".
+    // MUTATION: removing Scan from bypasses_revision_fence fails this test.
+    #[test]
+    fn scan_and_connect_bypass_revision_fence_and_reach_handler() {
+        let mut service = SystemService::default();
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(0_u32));
+        let seen = std::rc::Rc::clone(&calls);
+        service.set_action_handler(Box::new(move |action, _| {
+            assert!(matches!(action, SystemAction::Scan));
+            *seen.borrow_mut() += 1;
+            Ok(())
+        }));
+        let stale = service.snapshot().revision.wrapping_add(7);
+        service
+            .perform_action(SystemAction::Scan, stale)
+            .expect("scan is not revision-fenced");
+        assert_eq!(*calls.borrow(), 1);
+    }
+
+    // FAILURE PATH: a revision-fenced action (SetWifiEnabled) still rejects a stale revision
+    // and never reaches the provider, so the fence itself is not removed.
+    #[test]
+    fn wifi_toggle_stays_revision_fenced() {
+        let mut service = SystemService::default();
+        let reached = std::rc::Rc::new(std::cell::Cell::new(false));
+        let flag = std::rc::Rc::clone(&reached);
+        service.set_action_handler(Box::new(move |_, _| {
+            flag.set(true);
+            Ok(())
+        }));
+        let stale = service.snapshot().revision.wrapping_add(7);
+        let error = service
+            .perform_action(SystemAction::SetWifiEnabled(true), stale)
+            .expect_err("stale wifi toggle must fail");
+        assert_eq!(error.code, ErrorCode::StaleRevision);
+        assert!(!reached.get());
+    }
+
     #[test]
     fn power_update_bumps_revision_only_on_change() {
         let mut service = SystemService::default();
@@ -410,7 +449,7 @@ mod tests {
     fn action_rejects_stale_revision_before_missing_provider() {
         let mut service = SystemService::default();
         let error = service
-            .perform_action(SystemAction::Scan, 1)
+            .perform_action(SystemAction::SetWifiEnabled(true), 1)
             .expect_err("stale action must fail");
         assert_eq!(error.code, ErrorCode::StaleRevision);
     }
@@ -525,6 +564,10 @@ mod tests {
 /// are idempotent and must not be rejected because power or CPU samples moved the revision.
 #[must_use]
 fn bypasses_revision_fence(action: &SystemAction) -> bool {
+    // Network actions resolve their target from the provider's current snapshot (handed to the
+    // handler below) or from the access-point path, and ConnectWifi keeps its own generation
+    // fence. Rejecting them on the whole-snapshot revision made Scan/Connect/Disconnect fail
+    // silently whenever any unrelated field (signal strength, power, audio) had moved.
     matches!(
         action,
         SystemAction::SetVolume(_)
@@ -532,6 +575,10 @@ fn bypasses_revision_fence(action: &SystemAction) -> bool {
             | SystemAction::SetBrightness(_)
             | SystemAction::BatteryMenuOpened
             | SystemAction::BatteryMenuClosed
+            | SystemAction::Scan
+            | SystemAction::Disconnect
+            | SystemAction::ConnectKnown { .. }
+            | SystemAction::ConnectWifi { .. }
     )
 }
 
@@ -691,7 +738,10 @@ mod media_key_tests {
     fn backend_rejection_reaches_the_caller_as_an_error() {
         let (mut service, _seen) = service_with(vec![sink(2, true, 40, false)]);
         service.set_action_handler(Box::new(|_, _| {
-            Err(FlameError::new(ErrorCode::IoFailure, "helper rejected write"))
+            Err(FlameError::new(
+                ErrorCode::IoFailure,
+                "helper rejected write",
+            ))
         }));
         let up = service.media_audio_key(MediaAudioKey::VolumeUp, MAX_VOLUME_PERCENT);
         let mute = service.media_audio_key(MediaAudioKey::VolumeMute, MAX_VOLUME_PERCENT);
@@ -704,7 +754,10 @@ mod media_key_tests {
         let (mut service, seen) = service_with(vec![sink(1, false, 40, false)]);
         let up = service.media_audio_key(MediaAudioKey::VolumeUp, MAX_VOLUME_PERCENT);
         let mute = service.media_audio_key(MediaAudioKey::VolumeMute, MAX_VOLUME_PERCENT);
-        assert_eq!(up.expect_err("no default sink").code, ErrorCode::Unavailable);
+        assert_eq!(
+            up.expect_err("no default sink").code,
+            ErrorCode::Unavailable
+        );
         assert!(mute.is_err());
         assert!(seen.borrow().is_empty());
     }

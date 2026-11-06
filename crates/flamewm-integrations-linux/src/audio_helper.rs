@@ -11,8 +11,9 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::thread;
+use std::thread::{self, JoinHandle};
 
 use flamewm_api::system::{AudioMuteAction, AudioSnapshot, AudioVolumeAction};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
@@ -37,12 +38,23 @@ struct Process {
     session: Option<Session>,
 }
 
-/// Lazily spawned audio helper; holds no libpulse state in the WM process.
-pub struct AudioHelper {
+/// Helper process state shared by the writer thread and the reader threads it starts.
+struct Core {
     program: PathBuf,
     args: Vec<String>,
     on_snapshot: Arc<Mutex<SnapshotCallback>>,
     process: Arc<Mutex<Process>>,
+}
+
+/// Lazily spawned audio helper; holds no libpulse state in the WM process.
+///
+/// Requests are queued to one writer thread, so a caller (the WM control thread) never blocks on
+/// spawning the helper or on a full helper stdin pipe. FIFO order is preserved, so requests reach
+/// the helper in the order they were made.
+pub struct AudioHelper {
+    core: Arc<Core>,
+    requests: Option<Sender<String>>,
+    writer: Option<JoinHandle<()>>,
 }
 
 impl AudioHelper {
@@ -51,20 +63,31 @@ impl AudioHelper {
     where
         F: FnMut(AudioSnapshot) + Send + 'static,
     {
-        Ok(Self::new(
-            helper_program(),
-            Vec::new(),
-            Box::new(on_snapshot),
-        ))
+        Self::new(helper_program(), Vec::new(), Box::new(on_snapshot))
     }
 
-    fn new(program: PathBuf, args: Vec<String>, on_snapshot: SnapshotCallback) -> Self {
-        Self {
+    fn new(
+        program: PathBuf,
+        args: Vec<String>,
+        on_snapshot: SnapshotCallback,
+    ) -> FlameResult<Self> {
+        let core = Arc::new(Core {
             program,
             args,
             on_snapshot: Arc::new(Mutex::new(on_snapshot)),
             process: Arc::new(Mutex::new(Process::default())),
-        }
+        });
+        let (sender, receiver) = mpsc::channel::<String>();
+        let writer_core = Arc::clone(&core);
+        let writer = thread::Builder::new()
+            .name("flamewm-audio-writer".to_owned())
+            .spawn(move || writer_core.run_writer(&receiver))
+            .map_err(|error| FlameError::new(ErrorCode::IoFailure, error.to_string()))?;
+        Ok(Self {
+            core,
+            requests: Some(sender),
+            writer: Some(writer),
+        })
     }
 
     /// Ask the helper for its current snapshot, starting it if needed.
@@ -80,8 +103,47 @@ impl AudioHelper {
         self.send(&AudioRequest::Mute(action))
     }
 
+    /// Queue one request for the writer thread. Never blocks on the helper; fails only when the
+    /// writer has stopped.
     fn send(&self, request: &AudioRequest) -> FlameResult<()> {
-        let line = encode_request(request);
+        self.requests
+            .as_ref()
+            .ok_or_else(writer_stopped)?
+            .send(encode_request(request))
+            .map_err(|_| writer_stopped())
+    }
+
+    #[cfg(test)]
+    fn child_pid(&self) -> Option<u32> {
+        lock(&self.core.process)
+            .session
+            .as_ref()
+            .map(|session| session.child.id())
+    }
+}
+
+fn writer_stopped() -> FlameError {
+    FlameError::new(
+        ErrorCode::Unavailable,
+        "audio helper writer thread is not running",
+    )
+}
+
+impl Core {
+    /// Writer thread body: delivers queued lines in order until the queue is closed.
+    fn run_writer(&self, receiver: &Receiver<String>) {
+        for line in receiver {
+            if let Err(error) = self.deliver(&line) {
+                eprintln!("flamewm-integrations-linux: audio request dropped: {error}");
+            }
+        }
+        if let Some(session) = lock(&self.process).session.take() {
+            retire(session.child);
+        }
+    }
+
+    /// Write one encoded request, spawning or respawning the helper as needed.
+    fn deliver(&self, line: &str) -> FlameResult<()> {
         let mut process = lock(&self.process);
         for _attempt in 0..2 {
             reap_exited(&mut process);
@@ -142,20 +204,18 @@ impl AudioHelper {
         process.session = Some(Session { id, child, stdin });
         Ok(())
     }
-
-    #[cfg(test)]
-    fn child_pid(&self) -> Option<u32> {
-        lock(&self.process)
-            .session
-            .as_ref()
-            .map(|session| session.child.id())
-    }
 }
 
 impl Drop for AudioHelper {
     fn drop(&mut self) {
-        if let Some(session) = lock(&self.process).session.take() {
+        // Kill the live helper first so a writer blocked on its stdin wakes with an error, then
+        // close the queue and join the writer.
+        if let Some(session) = lock(&self.core.process).session.take() {
             retire(session.child);
+        }
+        self.requests.take();
+        if let Some(writer) = self.writer.take() {
+            let _ = writer.join();
         }
     }
 }
@@ -240,8 +300,9 @@ mod tests {
 
     /// Fake helper: answers the first request with one snapshot block, then exits like an idle
     /// helper would. Runs over real stdin/stdout pipes; never touches `PulseAudio`.
+    /// The short sleep keeps the child alive long enough for a poll to observe its pid.
     const ONE_SHOT_HELPER: &str =
-        "read _line; printf 'snapshot available 1 1 50 0 x\\nend\\n'; exit 0";
+        "read _line; printf 'snapshot available 1 1 50 0 x\\nend\\n'; sleep 0.2; exit 0";
 
     fn recorder() -> (Arc<Mutex<Vec<AudioSnapshot>>>, AudioHelper) {
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -250,7 +311,8 @@ mod tests {
             PathBuf::from("/bin/sh"),
             vec!["-c".to_owned(), ONE_SHOT_HELPER.to_owned()],
             Box::new(move |snapshot| lock(&sink).push(snapshot)),
-        );
+        )
+        .expect("writer thread starts");
         (seen, helper)
     }
 
@@ -277,12 +339,21 @@ mod tests {
         }
     }
 
+    /// Waits for the writer thread to spawn a child and returns its pid once the child exits.
+    fn wait_for_spawn_and_exit(helper: &AudioHelper) -> u32 {
+        let mut pid = None;
+        wait_for(|| {
+            pid = pid.or_else(|| helper.child_pid());
+            pid.is_some() && helper.child_pid().is_none()
+        });
+        pid.expect("spawned child pid")
+    }
+
     #[test]
     fn exited_helper_is_reaped_without_waiting_for_next_request() {
         let (seen, helper) = recorder();
-        helper.request_snapshot().expect("first spawn");
-        let pid = helper.child_pid().expect("running child");
-        wait_for(|| helper.child_pid().is_none());
+        helper.request_snapshot().expect("queue first request");
+        let pid = wait_for_spawn_and_exit(&helper);
         assert_eq!(lock(&seen).len(), 1);
         assert!(
             !Path::new(&format!("/proc/{pid}")).exists(),
@@ -293,12 +364,12 @@ mod tests {
     #[test]
     fn respawns_after_helper_exit_and_applies_next_request() {
         let (seen, helper) = recorder();
-        helper.request_snapshot().expect("first spawn");
-        let first = helper.child_pid().expect("running child");
-        wait_for(|| helper.child_pid().is_none());
+        helper.request_snapshot().expect("queue first request");
+        let first = wait_for_spawn_and_exit(&helper);
         helper
             .set_volume(volume_action())
-            .expect("respawn for volume");
+            .expect("queue respawn for volume");
+        wait_for(|| helper.child_pid().is_some());
         let second = helper.child_pid().expect("respawned child");
         assert_ne!(first, second);
         wait_for(|| lock(&seen).len() == 2);
@@ -333,5 +404,44 @@ mod tests {
         assert_eq!(status.code(), Some(3));
         assert!(process.session.is_none());
         assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    }
+
+    // REGRESSION: a helper that never reads stdin must not block the caller once its pipe is full
+    // (the raise-maximum freeze). Requests queue to the writer thread, so every send returns at once.
+    // MUTATION: writing synchronously on the caller thread makes this test hang past its budget.
+    #[test]
+    fn requests_to_a_helper_that_never_reads_do_not_block_the_caller() {
+        let helper = AudioHelper::new(
+            PathBuf::from("/bin/sh"),
+            vec!["-c".to_owned(), "sleep 30".to_owned()],
+            Box::new(|_| {}),
+        )
+        .expect("writer thread starts");
+        let started = Instant::now();
+        for _ in 0..2000 {
+            helper.set_volume(volume_action()).expect("request queued");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "queueing 2000 requests blocked the caller for {:?}",
+            started.elapsed()
+        );
+    }
+
+    // REGRESSION: a queued request after the writer has stopped reports Unavailable instead of
+    // being silently dropped.
+    #[test]
+    fn send_after_writer_stop_reports_unavailable() {
+        let mut helper = AudioHelper::new(
+            PathBuf::from("/bin/sh"),
+            vec!["-c".to_owned(), "exit 0".to_owned()],
+            Box::new(|_| {}),
+        )
+        .expect("writer thread starts");
+        helper.requests.take();
+        let error = helper
+            .request_snapshot()
+            .expect_err("stopped writer must refuse requests");
+        assert_eq!(error.code, ErrorCode::Unavailable);
     }
 }
