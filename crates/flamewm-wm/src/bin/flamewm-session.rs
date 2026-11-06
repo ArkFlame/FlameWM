@@ -24,8 +24,8 @@ use flamewm_session_core::diagnostics::{
 };
 use flamewm_session_core::{
     ChildExit, ProcessPlan, ProcessSupervisorPolicy, SessionRole, SupervisorDecision,
-    build_launch_plan, default_paths_from_home, installed_kwallet_generations,
-    resolve_kwallet_version,
+    Keyring, build_launch_plan, default_paths_from_home, gnome_keyring_installed,
+    installed_kwallet_generations, resolve_kwallet_version, select_keyring,
 };
 use rustix::process::{Pid, Signal, getppid, kill_process, set_parent_process_death_signal};
 use signal_hook::consts::signal::{SIGCHLD, SIGHUP, SIGINT, SIGTERM};
@@ -169,6 +169,13 @@ fn execute() -> Result<(), String> {
     let activation_environment = plan.processes[0].environment.clone();
     let activation_restore = sync_activation_environment(&activation_environment);
     session_app_compat::finalize_pam_kwallet_login(&activation_environment);
+    let (installed5, installed6) = installed_kwallet_generations();
+    start_session_keyring(select_keyring(
+        &existing,
+        installed5,
+        installed6,
+        gnome_keyring_installed(),
+    ));
     for process in &mut plan.processes {
         clear_kde_session_identity(&mut process.environment);
     }
@@ -212,6 +219,34 @@ fn add_app_compatibility_environment(
             process
                 .environment
                 .insert("KDE_SESSION_VERSION".to_owned(), version.to_owned());
+        }
+    }
+}
+
+/// KWallet is unlocked by the PAM handoff above. Without it, start gnome-keyring the way
+/// cosmic-session does so libsecret clients find a Secret Service. Never touches wallets.
+fn start_session_keyring(keyring: Keyring) {
+    match keyring {
+        Keyring::KWallet(version) => {
+            eprintln!("{SESSION_LOG_PREFIX}: keyring: KWallet {version} (PAM handoff only)");
+        }
+        Keyring::GnomeKeyring => {
+            match Command::new("gnome-keyring-daemon")
+                .args(["--start", "--components=pkcs11,secrets,ssh"])
+                .stdout(std::process::Stdio::null())
+                .status()
+            {
+                Ok(status) if status.success() => {
+                    eprintln!("{SESSION_LOG_PREFIX}: keyring: gnome-keyring started");
+                }
+                Ok(status) => {
+                    eprintln!("{SESSION_LOG_PREFIX}: keyring: gnome-keyring failed: {status}");
+                }
+                Err(error) => eprintln!("{SESSION_LOG_PREFIX}: keyring: gnome-keyring: {error}"),
+            }
+        }
+        Keyring::Absent => {
+            eprintln!("{SESSION_LOG_PREFIX}: keyring: none installed; browsers use their own store");
         }
     }
 }
