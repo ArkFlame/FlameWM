@@ -668,6 +668,14 @@ mod tests {
     }
 
     #[test]
+    fn keyring_prefers_kwallet_and_follows_installed_generation() {
+        let empty = BTreeMap::new();
+        assert_eq!(select_keyring(&empty, false, true, true), Keyring::KWallet("6"));
+        assert_eq!(select_keyring(&empty, true, false, true), Keyring::KWallet("5"));
+        assert_eq!(select_keyring(&empty, true, true, false), Keyring::KWallet("6"));
+    }
+
+    #[test]
     fn kwallet_service_alias_does_not_count_as_a_five_install() {
         // Real Plasma 6 service file.
         let alias = "[D-BUS Service]\nName=org.kde.kwalletd5\nExec=/usr/bin/kwalletd6\n";
