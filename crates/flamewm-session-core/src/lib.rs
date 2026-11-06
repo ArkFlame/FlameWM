@@ -338,6 +338,48 @@ pub fn service_text_runs(text: &str, daemon: &str) -> bool {
     })
 }
 
+/// The secret store a FlameWM session shares with the browsers it launches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Keyring {
+    KWallet(&'static str),
+    GnomeKeyring,
+    Absent,
+}
+
+/// Pick the keyring whose backend a Plasma login would have used, so Chromium
+/// derivatives decrypt the same cookies in both sessions. KWallet wins over
+/// gnome-keyring when both exist, matching `resolve_kwallet_version`. An explicit
+/// `FLAMEWM_BRAVE_PASSWORD_STORE` of `basic` or `none` opts out entirely.
+#[must_use]
+pub fn select_keyring(
+    existing_env: &BTreeMap<String, String>,
+    installed5: bool,
+    installed6: bool,
+    gnome_keyring: bool,
+) -> Keyring {
+    let preset = existing_env
+        .get("FLAMEWM_BRAVE_PASSWORD_STORE")
+        .map(String::as_str);
+    if matches!(preset, Some("basic" | "none")) {
+        return Keyring::Absent;
+    }
+    if let Some(version) = resolve_kwallet_version(existing_env, installed5, installed6) {
+        return Keyring::KWallet(version);
+    }
+    if gnome_keyring {
+        Keyring::GnomeKeyring
+    } else {
+        Keyring::Absent
+    }
+}
+
+#[must_use]
+pub fn gnome_keyring_installed() -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| dir.join("gnome-keyring-daemon").is_file())
+    })
+}
+
 fn flame_environment(
     paths: &SessionPaths,
     existing_env: &BTreeMap<String, String>,
