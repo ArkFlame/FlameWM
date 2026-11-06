@@ -1,6 +1,9 @@
 //! Start menu projection: unified start view, highlight and view notes.
 use super::*;
 
+/// Pixel height of one Start application row in the virtual list.
+const START_APP_ROW_HEIGHT: u32 = 36;
+
 #[derive(Debug, Default)]
 pub struct StartViewNote {
     last_category: Option<StartCategory>,
@@ -31,6 +34,7 @@ pub fn project_start_unified(
     query: &str,
     session: &SessionCapabilities,
     mut loader: Option<&mut IconLoader>,
+    scroll_rows: usize,
 ) -> Result<(), String> {
     bump_start_view_epoch(); // Canonical indexed path: borrowed query view from the precomputed
     // index, then the single presentation-bucket filter. No clone, no
@@ -38,11 +42,25 @@ pub fn project_start_unified(
     // seam; core filter_view takes the core category type.)
     let applications = crate::projection::start_visible_results(model, category, query);
     document.visible("start-applications", !applications.is_empty())?;
-    let (first, last) = flamewm_shell_core::status::visible_window(applications.len(), 36, 320, 0);
+    // Clamp here so the rows painted always match `start_scroll_rows` for slot mapping.
+    let scroll_rows = crate::projection::start_scroll_step(
+        scroll_rows,
+        0,
+        crate::projection::start_scroll_max(applications.len()),
+    );
+    let scroll_px = u32::try_from(scroll_rows.saturating_mul(START_APP_ROW_HEIGHT as usize))
+        .unwrap_or(u32::MAX);
+    let (first, last) = flamewm_shell_core::status::visible_window(
+        applications.len(),
+        START_APP_ROW_HEIGHT,
+        320,
+        scroll_px,
+    );
     let window = applications
         .get(first..last.min(applications.len()))
         .unwrap_or_default();
     let (mut button_id, mut label_id, mut icon_id) = (String::new(), String::new(), String::new());
+    let mut star_id = String::new();
     for index in 0..START_APP_SLOT_COUNT {
         let slot = index + 1;
         button_id.clear();
@@ -51,7 +69,18 @@ pub fn project_start_unified(
         write!(label_id, "start-app-slot-{slot}-label").expect("write to String is infallible");
         icon_id.clear();
         write!(icon_id, "start-app-slot-{slot}-icon").expect("write to String is infallible");
+        star_id.clear();
+        write!(star_id, "start-fav-slot-{slot}").expect("write to String is infallible");
         if let Some(application) = window.get(index) {
+            let favorite = model
+                .favorites()
+                .iter()
+                .any(|id| id.as_str() == application.id.as_str());
+            document.text(
+                &format!("{star_id}-label"),
+                if favorite { "\u{2605}" } else { "\u{2606}" }.to_owned(),
+            )?;
+            document.visible(&star_id, true)?;
             document.text_ref(&label_id, &application.name)?;
             document.visible(&button_id, true)?;
             document.visible(&icon_id, true)?;
@@ -68,8 +97,13 @@ pub fn project_start_unified(
             document.text(&label_id, String::new())?;
             document.visible(&button_id, false)?;
             document.visible(&icon_id, false)?;
+            document.visible(&star_id, false)?;
         }
     }
+    // Favorites with no entries: an empty-state line instead of a blank list.
+    let favorites_empty =
+        category == StartCategory::Favorites && query.trim().is_empty() && applications.is_empty();
+    document.visible("start-favorites-empty", favorites_empty)?;
     let show_session = query.trim().is_empty()
         && category == StartCategory::Power
         && crate::projection::session_available(*session);
@@ -224,5 +258,137 @@ mod start_selection_tests {
         assert_eq!(state.highlighted(), Some(2));
         state.step(-1, 0);
         assert_eq!(state.highlighted(), None, "empty list clears the highlight");
+    }
+}
+
+#[cfg(test)]
+mod start_scroll_tests {
+    use super::*;
+    use crate::async_projection::tests::*;
+    use crate::projection::{start_application_name_for_slot, start_scroll_max, start_scroll_step};
+
+    fn numbered_apps(count: usize, category: &str) -> StartModel {
+        StartModel::new(
+            (1..=count)
+                .map(|n| {
+                    start_test_app(
+                        &format!("org.example.app{n:02}"),
+                        &format!("App{n:02}"),
+                        category,
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn scroll_offset_clamps_to_row_range() {
+        assert_eq!(start_scroll_max(0), 0);
+        assert_eq!(start_scroll_max(8), 0);
+        assert_eq!(start_scroll_max(11), 3);
+        assert_eq!(start_scroll_step(0, -3, 3), 0, "wheel up at top stays at 0");
+        assert_eq!(start_scroll_step(1, 3, 3), 3, "wheel down clamps to max");
+        assert_eq!(
+            start_scroll_step(3, 3, 3),
+            3,
+            "wheel down at bottom stays at max"
+        );
+        assert_eq!(
+            start_scroll_step(5, 0, 2),
+            2,
+            "stale offset after list shrinks"
+        );
+    }
+
+    #[test]
+    fn projected_rows_and_slot_mapping_follow_the_offset() {
+        let _guard = icon_test_lock().lock();
+        let model = numbered_apps(12, "Utility");
+        let doc = {
+            let mut doc = FakeDoc::default();
+            project_start_unified(
+                &mut doc,
+                &model,
+                StartCategory::All,
+                "",
+                &SessionCapabilities::default(),
+                None,
+                3,
+            )
+            .expect("projects");
+            doc
+        };
+        for slot in 0..START_APP_SLOT_COUNT {
+            let label = format!("start-app-slot-{}-label", slot + 1);
+            let expected =
+                start_application_name_for_slot(&model, StartCategory::All, "", slot + 3);
+            assert_eq!(
+                doc.texts.get(&label).cloned(),
+                expected,
+                "slot {slot} at offset 3"
+            );
+        }
+        assert_eq!(
+            start_application_name_for_slot(&model, StartCategory::All, "", 3).as_deref(),
+            Some("App04")
+        );
+    }
+
+    #[test]
+    fn oversized_offset_is_clamped_when_projected() {
+        let _guard = icon_test_lock().lock();
+        let model = numbered_apps(12, "Utility");
+        let mut doc = FakeDoc::default();
+        project_start_unified(
+            &mut doc,
+            &model,
+            StartCategory::All,
+            "",
+            &SessionCapabilities::default(),
+            None,
+            99,
+        )
+        .expect("projects");
+        assert_eq!(
+            doc.texts.get("start-app-slot-1-label").map(String::as_str),
+            Some("App05"),
+            "offset 99 clamps to 12 - 8 = 4 rows"
+        );
+        assert_eq!(
+            doc.texts.get("start-app-slot-8-label").map(String::as_str),
+            Some("App12")
+        );
+    }
+
+    #[test]
+    fn favorites_offset_maps_to_the_favorite_row() {
+        let _guard = icon_test_lock().lock();
+        let mut model = numbered_apps(12, "Utility");
+        model.set_favorites((1..=10).map(|n| format!("org.example.app{n:02}")).collect());
+        let mut doc = FakeDoc::default();
+        project_start_unified(
+            &mut doc,
+            &model,
+            StartCategory::Favorites,
+            "",
+            &SessionCapabilities::default(),
+            None,
+            2,
+        )
+        .expect("projects");
+        let projected = doc.texts.get("start-app-slot-1-label").cloned();
+        assert_eq!(
+            start_application_name_for_slot(&model, StartCategory::Favorites, "", 2),
+            projected
+        );
+        let app =
+            crate::projection::start_application_for_slot(&model, StartCategory::Favorites, "", 2)
+                .expect("third favorite");
+        assert!(model.favorites().iter().any(|id| id == app.as_str()));
+        assert_ne!(
+            projected.as_deref(),
+            Some("App01"),
+            "offset skips the first favorite"
+        );
     }
 }

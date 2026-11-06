@@ -15,9 +15,10 @@ impl ShellLoop {
         self.settings_revision = snapshot.revision;
         flamewm_ui_x11::apply_render_acceleration(&snapshot);
         self.cursor_theme.sync_snapshot(&snapshot);
-        self.weather.apply_settings(
-            flamewm_weather::weather::WeatherSettings::from_snapshot(&snapshot),
-        );
+        self.weather
+            .apply_settings(flamewm_weather::weather::WeatherSettings::from_snapshot(
+                &snapshot,
+            ));
         self.weather_feed_pending = true;
         let theme = crate::entry::settings_projection::icon_theme_name(Some(&snapshot));
         if let Some(loader) = self.icon_loader.as_mut() {
@@ -42,6 +43,10 @@ impl ShellLoop {
             self.close_quick_control_nonfatal();
         }
         let desired_zone = flamewm_shell::weather_auto::desired_time_zone(&snapshot);
+        self.start_model
+            .set_favorites(crate::entry::settings_projection::start_favorites(Some(
+                &snapshot,
+            )));
         self.settings_cache = Some(snapshot);
         self.settings_projection_pending = true;
         self.set_auto_time_zone(desired_zone);
@@ -221,6 +226,10 @@ impl ShellLoop {
             let _ = runtime.redraw(self.surfaces.media);
         }
         self.settings_projection_pending = false;
+        // Favorites live in the Start model, so an open Start menu reprojects them now.
+        if self.start_open {
+            self.project_start(runtime)?;
+        }
         self.apply_taskbar_frame(runtime);
         Ok(())
     }

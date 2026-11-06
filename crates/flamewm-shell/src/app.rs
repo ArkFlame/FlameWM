@@ -13,7 +13,7 @@ use flamewm_shell::start::StartCategory;
 use flamewm_shell::taskbar::tasks::icon_geometry::{
     self, IconGeometrySink, IconGeometryTracker, IconRect,
 };
-use flamewm_shell::{projection, ShellControl, ShellRuntime, ShellSnapshot, ShellSurfaces};
+use flamewm_shell::{ShellControl, ShellRuntime, ShellSnapshot, ShellSurfaces, projection};
 use flamewm_shell_core::clock::ClockDateTracker;
 use flamewm_shell_core::popup::PopupRefusal;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
@@ -45,8 +45,8 @@ mod input;
 mod ipc;
 mod launcher_session;
 mod panels;
-mod progress_gate;
 mod popups;
+mod progress_gate;
 mod quick_popups;
 mod settings;
 mod slow_op;
@@ -56,18 +56,17 @@ mod timers;
 mod weather;
 
 use helpers::{
-    clear_transient_state_fields, earliest_wake, end_start_session_fields,
-    interaction_target_is_current, media_popup_must_close, media_system_request,
-    pager_cell_window_rect, panel_projection_needed, resolve_control_output,
-    start_icon_refresh_due, take_context_menu_for_popup, taskbar_frame, RuntimeIconGeometrySink,
-    ZONE_SETTLE,
+    RuntimeIconGeometrySink, ZONE_SETTLE, clear_transient_state_fields, earliest_wake,
+    end_start_session_fields, interaction_target_is_current, media_popup_must_close,
+    media_system_request, pager_cell_window_rect, panel_projection_needed, resolve_control_output,
+    start_icon_refresh_due, take_context_menu_for_popup, taskbar_frame,
 };
 use quick_popups::{
-    apply_quick_open_result, is_quick_popup_kind, quick_popup_kind, QuickOpenResolution,
+    QuickOpenResolution, apply_quick_open_result, is_quick_popup_kind, quick_popup_kind,
 };
 pub(crate) use slow_op::{is_popup_refusal, shell_slow_note};
 use start_session::{
-    start_launch_session_matches, start_toggle_action, StartLaunchContext, StartToggleAction,
+    StartLaunchContext, StartToggleAction, start_launch_session_matches, start_toggle_action,
 };
 
 pub(crate) struct ShellLoop {
@@ -78,6 +77,8 @@ pub(crate) struct ShellLoop {
     pub(crate) start_category: StartCategory,
     pub(crate) start_query: String,
     pub(crate) start_selection: flamewm_shell_core::selection::ListSelection,
+    /// First visible Start application row (rows, not pixels); clamped at use.
+    pub(crate) start_scroll: usize,
     pub(crate) desktop_hidden: Vec<flamewm_api::WindowRef>,
     pub(crate) launcher: flamewm_shell::launcher::LauncherState,
     pub(crate) task_drag: Option<flamewm_shell::taskbar::tasks::drag::TaskDrag>,
@@ -107,7 +108,8 @@ pub(crate) struct ShellLoop {
     pub(crate) quick_control: flamewm_shell::quick_controls::QuickControlSupervisor,
     pub(crate) popup_session: flamewm_shell_core::popup_session::PopupSession,
     job_view_provider: Option<flamewm_integrations_linux::job_view::KioJobViewProvider>,
-    launcher_entry_provider: Option<flamewm_integrations_linux::launcher_entry::LauncherEntryProvider>,
+    launcher_entry_provider:
+        Option<flamewm_integrations_linux::launcher_entry::LauncherEntryProvider>,
     task_progress: Vec<flamewm_api::panels::TaskProgressEntry>,
     task_progress_pending: bool,
     task_progress_gate: progress_gate::ProgressPaintGate,
@@ -167,6 +169,7 @@ impl ShellLoop {
             start_category: StartCategory::All,
             start_query: String::new(),
             start_selection: flamewm_shell_core::selection::ListSelection::default(),
+            start_scroll: 0,
             desktop_hidden: Vec::new(),
             launcher: Default::default(),
             task_drag: None,

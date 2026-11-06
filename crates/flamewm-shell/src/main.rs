@@ -6,8 +6,8 @@ use flamewm_shell::settings_projection;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flamewm_api::ports::FdEvents;
@@ -20,8 +20,8 @@ use flamewm_shell::projection;
 use flamewm_shell::start;
 use flamewm_shell::{ShellSnapshot, ShellSurfaces};
 use flamewm_ui_x11::{
-    decode_document, run_surface_runtime_with_reactor_access, SurfaceConfig, SurfaceEvent,
-    SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiDocumentAccess, UiTemplate,
+    SurfaceConfig, SurfaceEvent, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime,
+    UiDocumentAccess, UiTemplate, decode_document, run_surface_runtime_with_reactor_access,
 };
 
 use app::ShellLoop;
@@ -258,7 +258,10 @@ fn execute() -> Result<(), String> {
         let _s = scope.start();
         ShellSurfaces::create(&mut runtime, &snapshot)?
     };
-    let start_model = start::state(snapshot.applications.clone());
+    let mut start_model = start::state(snapshot.applications.clone());
+    start_model.set_favorites(settings_projection::start_favorites(
+        startup_settings.as_ref(),
+    ));
     {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.panel_project");
         let _s = scope.start();
@@ -561,6 +564,7 @@ fn project_panel_critical(
                 "",
                 &snapshot.session,
                 None,
+                0,
             )
         })
         .map_err(|error| format!("project start: {error:?}"))?;

@@ -4,9 +4,9 @@ use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_image_core::scale::ScaleFilter;
 use flamewm_image_core::{ImageSourceFormat, decode_bytes_at};
 use flamewm_platform::chrome::ACCENT_SOFT_ALPHA;
+use flamewm_platform::settings::ClockFormat;
 use flamewm_skin::palette::Appearance;
 use flamewm_skin::shell_tones::FIXED_TONES;
-use flamewm_platform::settings::ClockFormat;
 use flamewm_ui_core::context_menu::shape_radius;
 use flamewm_ui_x11::surface_style::{
     project_surface_outline, surface_background as shared_surface_background,
@@ -429,6 +429,19 @@ pub fn icon_theme_name(snapshot: Option<&SettingsSnapshot>) -> String {
         || default.clone(),
         |snapshot| text_setting(snapshot, "iconTheme", &default),
     )
+}
+
+/// Start Favorites from the settings snapshot; absent or non-text values mean no favorites.
+#[must_use]
+pub fn start_favorites(snapshot: Option<&SettingsSnapshot>) -> Vec<String> {
+    match snapshot.and_then(|settings| {
+        settings
+            .values
+            .get(flamewm_platform::settings::START_FAVORITES_KEY)
+    }) {
+        Some(SettingValue::Text(text)) => flamewm_shell_core::start_menu::decode_favorites(text),
+        _ => Vec::new(),
+    }
 }
 
 fn text_setting(snapshot: &SettingsSnapshot, key: &str, default: &str) -> String {

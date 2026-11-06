@@ -120,6 +120,7 @@ pub(super) fn project_start_doc(
         query,
         &SessionCapabilities::default(),
         None,
+        0,
     )
     .expect("projects");
     doc

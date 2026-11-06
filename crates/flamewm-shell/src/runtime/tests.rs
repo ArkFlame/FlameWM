@@ -1132,9 +1132,11 @@ fn context_menu_near_bottom_panel_clamps_above_the_panel_strip() {
 fn secondary_monitor_swap_with_unchanged_generation_is_detected() {
     let previous = two_output_snapshot();
     let contexts = panel_contexts_for_snapshot(&previous, PanelEdge::Bottom);
-    assert!(contexts
-        .iter()
-        .all(|ctx| panel_context_is_current(ctx, &previous)));
+    assert!(
+        contexts
+            .iter()
+            .all(|ctx| panel_context_is_current(ctx, &previous))
+    );
     let mut moved = previous.clone();
     // KDE or xrandr may deliver CRTC geometry before changing the
     // generation/revision: secondary placement must not stay cached.
@@ -1201,6 +1203,24 @@ fn hotplug_removal_of_one_output_removes_only_its_panel_surface() {
     assert_eq!(stale, vec![flamewm_api::OutputId::new("HDMI-2")]);
     let kept = panel_surface_outputs_to_remove(&existing[..1], &snapshot);
     assert!(kept.is_empty());
+}
+
+// TRIGGER: panel_reconciliation_plan edge-switch branch (artifact differs by edge).
+// MUTATION: restore the update arm for an edge change, which keeps the horizontal artifact.
+#[test]
+fn panel_reconciliation_replaces_surface_on_edge_switch() {
+    let snapshot = two_output_snapshot();
+    let current = panel_contexts_for_snapshot(&snapshot, PanelEdge::Bottom);
+    let existing = current
+        .iter()
+        .map(|context| (context.output.id.clone(), context.clone()))
+        .collect::<Vec<_>>();
+    let mut switched = current[0].clone();
+    switched.panel.edge = PanelEdge::Left;
+    let plan = panel_reconciliation_plan(&existing, &[switched, current[1].clone()]);
+    assert_eq!(plan.update, Vec::<flamewm_api::OutputId>::new());
+    assert_eq!(plan.remove, vec![current[0].output.id.clone()]);
+    assert_eq!(plan.create, vec![current[0].output.id.clone()]);
 }
 
 #[test]

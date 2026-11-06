@@ -8,6 +8,8 @@ use crate::popup::work_area_for_panel;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartCategory {
     All,
+    /// Persisted user picks (`startFavorites`), matched by desktop application id.
+    Favorites,
     Accessories,
     Development,
     Education,
@@ -65,8 +67,13 @@ impl StartCategory {
     }
 
     #[must_use]
-    fn accepts(self, category: StartCategory) -> bool {
-        self == StartCategory::All || self == category
+    /// `favorite` is whether the application is in the persisted favorites list.
+    fn accepts(self, category: StartCategory, favorite: bool) -> bool {
+        match self {
+            StartCategory::All => true,
+            StartCategory::Favorites => favorite,
+            _ => self == category,
+        }
     }
 }
 
@@ -101,6 +108,36 @@ pub fn bucket_for_application(application: &DesktopApplication) -> StartBucket {
 #[must_use]
 pub fn start_category(application: &DesktopApplication) -> StartCategory {
     StartCategory::from_application(application)
+}
+
+/// Separator for the persisted `startFavorites` value: desktop ids never contain `;`.
+const FAVORITES_SEPARATOR: char = ';';
+
+/// Encodes the Favorites list for `startFavorites`: order kept, duplicates and ids that cannot
+/// round-trip (empty, containing `;` or a newline) dropped.
+#[must_use]
+pub fn encode_favorites(ids: &[String]) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    for id in ids {
+        let id = id.trim();
+        if id.is_empty() || id.contains([FAVORITES_SEPARATOR, '\n', '\r']) || kept.contains(&id) {
+            continue;
+        }
+        kept.push(id);
+    }
+    kept.join(&FAVORITES_SEPARATOR.to_string())
+}
+
+/// Decodes `startFavorites`: the inverse of [`encode_favorites`], tolerant of blanks and repeats.
+#[must_use]
+pub fn decode_favorites(text: &str) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for id in text.split(FAVORITES_SEPARATOR).map(str::trim) {
+        if !id.is_empty() && !ids.iter().any(|known| known == id) {
+            ids.push(id.to_owned());
+        }
+    }
+    ids
 }
 
 #[must_use]
@@ -175,6 +212,8 @@ pub struct StartModel {
     entries: Vec<StartEntry>,
     /// Indices into `applications`, sorted by (name, id) with stable ties.
     sorted: Vec<usize>,
+    /// Desktop application ids in the Favorites category, in the persisted order.
+    favorites: Vec<String>,
     query: String,
     /// Bumped on every application-set replacement so callers can key caches on it.
     generation: u64,
@@ -187,6 +226,7 @@ impl StartModel {
             applications,
             entries: Vec::new(),
             sorted: Vec::new(),
+            favorites: Vec::new(),
             query: String::new(),
             generation: 0,
         };
@@ -208,6 +248,35 @@ impl StartModel {
         self.query = query.into();
     }
 
+    /// Replaces the Favorites list by application id and bumps the generation so caches refresh.
+    /// Ids that name no known application and repeated ids are dropped; order is kept.
+    pub fn set_favorites(&mut self, ids: Vec<String>) {
+        let mut kept: Vec<String> = Vec::new();
+        for id in ids {
+            let known = self
+                .applications
+                .iter()
+                .any(|application| application.id.as_str() == id);
+            if known && !kept.contains(&id) {
+                kept.push(id);
+            }
+        }
+        self.favorites = kept;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    #[must_use]
+    pub fn favorites(&self) -> &[String] {
+        &self.favorites
+    }
+
+    /// Whether application `index` is listed in `category`, using the stored favorites.
+    fn admits(&self, category: StartCategory, index: usize) -> bool {
+        let id = self.applications[index].id.as_str();
+        let favorite = self.favorites.iter().any(|favorite| favorite == id);
+        category.accepts(self.entries[index].category, favorite)
+    }
+
     /// Borrowed generation view: all applications in alpha order, no clone.
     #[must_use]
     pub fn results_view(&self) -> Vec<&DesktopApplication> {
@@ -222,7 +291,7 @@ impl StartModel {
     pub fn category_view(&self, category: StartCategory) -> Vec<&DesktopApplication> {
         self.sorted
             .iter()
-            .filter(|&&index| category.accepts(self.entries[index].category))
+            .filter(|&&index| self.admits(category, index))
             .map(|&index| &self.applications[index])
             .collect()
     }
@@ -239,7 +308,7 @@ impl StartModel {
         let needle = query.trim().to_lowercase();
         self.sorted
             .iter()
-            .filter(|&&index| category.accepts(self.entries[index].category))
+            .filter(|&&index| self.admits(category, index))
             .filter(|&&index| self.entries[index].matches(&needle))
             .map(|&index| &self.applications[index])
             .collect()
@@ -305,7 +374,7 @@ impl StartModel {
         self.sorted
             .iter()
             .copied()
-            .filter(|&index| category.accepts(self.entries[index].category))
+            .filter(|&index| self.admits(category, index))
             .filter(|&index| self.entries[index].matches(&needle))
             .collect()
     }
@@ -321,7 +390,7 @@ impl StartModel {
         let entries: Vec<StartEntry> = applications.iter().map(StartEntry::build).collect();
         sorted_indices(&entries)
             .into_iter()
-            .filter(|&index| category.accepts(entries[index].category))
+            .filter(|&index| category.accepts(entries[index].category, false))
             .filter(|&index| entries[index].matches(&needle))
             .map(|index| &applications[index])
             .collect()
@@ -484,5 +553,96 @@ mod tests {
         assert_eq!(bucket_for_application(&app), StartBucket::System);
         let fallback = application("Plain");
         assert_eq!(bucket_for_application(&fallback), StartBucket::Utilities);
+    }
+
+    fn named(id: &str, name: &str, categories: &[&str]) -> DesktopApplication {
+        let mut app = application(name);
+        app.id = DesktopAppId::new(id);
+        app.categories = categories.iter().map(|c| (*c).to_owned()).collect();
+        app
+    }
+
+    #[test]
+    fn favorites_accepts_only_listed_applications_in_any_category() {
+        assert!(StartCategory::Favorites.accepts(StartCategory::Games, true));
+        assert!(!StartCategory::Favorites.accepts(StartCategory::Games, false));
+        assert!(StartCategory::All.accepts(StartCategory::Games, false));
+        assert!(!StartCategory::Games.accepts(StartCategory::Office, true));
+    }
+
+    #[test]
+    fn favorites_view_lists_only_starred_apps_sorted_by_name() {
+        let mut model = StartModel::new(vec![
+            named("b.desktop", "Calc", &["Utility"]),
+            named("a.desktop", "beta", &["Game"]),
+            named("c.desktop", "Alpha", &["Graphics"]),
+        ]);
+        model.set_favorites(vec!["a.desktop".into(), "c.desktop".into()]);
+        let names: Vec<&str> = model
+            .category_view(StartCategory::Favorites)
+            .iter()
+            .map(|app| app.name.as_str())
+            .collect();
+        assert_eq!(names, ["Alpha", "beta"]);
+    }
+
+    #[test]
+    fn all_applications_sort_case_insensitively_by_name() {
+        let model = StartModel::new(vec![
+            named("z.desktop", "zeta", &[]),
+            named("m.desktop", "Mail", &[]),
+            named("a.desktop", "alpha", &[]),
+        ]);
+        let names: Vec<&str> = model
+            .results_view()
+            .iter()
+            .map(|app| app.name.as_str())
+            .collect();
+        assert_eq!(names, ["alpha", "Mail", "zeta"]);
+    }
+
+    #[test]
+    fn search_respects_favorites_and_category_filters() {
+        let mut model = StartModel::new(vec![
+            named("calc.desktop", "Calculator", &["Utility"]),
+            named("gimp.desktop", "GIMP", &["Graphics"]),
+        ]);
+        model.set_favorites(vec!["gimp.desktop".into()]);
+        assert_eq!(model.filter_view(StartCategory::Favorites, "calc").len(), 0);
+        assert_eq!(model.filter_view(StartCategory::Favorites, "gim").len(), 1);
+        assert_eq!(model.filter_view(StartCategory::All, "calc").len(), 1);
+        assert_eq!(model.filter_view(StartCategory::Graphics, "gim").len(), 1);
+    }
+
+    #[test]
+    fn set_favorites_drops_unknown_and_repeated_ids_and_keeps_order() {
+        let mut model = StartModel::new(vec![
+            named("calc.desktop", "Calculator", &[]),
+            named("gimp.desktop", "GIMP", &[]),
+        ]);
+        model.set_favorites(vec![
+            "ghost.desktop".into(),
+            "gimp.desktop".into(),
+            "calc.desktop".into(),
+            "gimp.desktop".into(),
+        ]);
+        assert_eq!(model.favorites(), ["gimp.desktop", "calc.desktop"]);
+        model.set_favorites(vec!["ghost.desktop".into()]);
+        assert!(model.favorites().is_empty());
+        assert!(model.category_view(StartCategory::Favorites).is_empty());
+    }
+
+    #[test]
+    fn favorites_round_trip_through_the_setting_text() {
+        let ids: Vec<String> = vec!["gimp.desktop".into(), "org.calc.desktop".into()];
+        let text = encode_favorites(&ids);
+        assert_eq!(text, "gimp.desktop;org.calc.desktop");
+        assert_eq!(decode_favorites(&text), ids);
+        assert_eq!(decode_favorites(" a.desktop ;; a.desktop;"), ["a.desktop"]);
+        assert_eq!(
+            encode_favorites(&["x;y".into(), "".into(), "ok".into()]),
+            "ok"
+        );
+        assert_eq!(decode_favorites(""), Vec::<String>::new());
     }
 }

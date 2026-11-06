@@ -177,6 +177,7 @@ impl ShellLoop {
                         if self.open_start_surface(runtime, &target_output, started)? {
                             self.start_open = true;
                             self.start_selection.reset();
+                            self.start_scroll = 0;
                             self.popup_session.commit(&transition);
                         }
                     }
@@ -202,6 +203,7 @@ impl ShellLoop {
                     self.start_category = category;
                     self.start_open = true;
                     self.start_selection.reset();
+                    self.start_scroll = 0;
                     // F10: read current context generation; refuse when
                     // edge/geometry is inconsistent.
                     self.note_popup_generation("start");

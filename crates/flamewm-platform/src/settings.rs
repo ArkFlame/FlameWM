@@ -172,6 +172,10 @@ impl AnimationStyle {
 /// System accent used everywhere while `accentCustom` is off.
 pub const DEFAULT_ACCENT: &str = flamewm_api::settings::DEFAULT_ACCENT;
 
+/// Settings key of the Start Favorites list (`;`-joined desktop ids). Same string as the
+/// `stable_settings!` row for `ProductSettings::start_favorites`.
+pub const START_FAVORITES_KEY: &str = "startFavorites";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductSettings {
     pub revision: u64,
@@ -343,6 +347,8 @@ pub struct ProductSettings {
     pub avatar_image: String,
     /// Terminal for `FlameWM` launches: a bare command name or absolute path. Empty selects `FlameWM` Terminal.
     pub default_terminal: String,
+    /// `startFavorites`: desktop application ids pinned to the launcher Favorites category, joined by `;`.
+    pub start_favorites: String,
     /// `assistant.enabled`: allows the assistant and grabs its chords (Super+C, Ctrl+Alt+C).
     pub assistant_enabled: bool,
     /// `assistant.taskbarIcon`: shows the assistant button in the taskbar; on by default.
@@ -484,6 +490,7 @@ impl Default for ProductSettings {
             lock_background_dim_percent: 25,
             avatar_image: String::new(),
             default_terminal: String::new(),
+            start_favorites: String::new(),
             assistant_enabled: true,
             assistant_taskbar_icon: true,
             assistant_speech_to_text: false,
@@ -626,7 +633,6 @@ impl ConfigStore {
     pub fn adopt_panel_edges(&mut self, snapshot: &ProductSettings) {
         self.current.panel_edges.clone_from(&snapshot.panel_edges);
     }
-
 
     /// Linux-first tmp+fsync+rename persistence matching the native `ConfigStore` contract.
     pub fn persist(path: &Path, snapshot: &ProductSettings) -> FlameResult<()> {
@@ -867,6 +873,7 @@ stable_settings! {
     (false, desktop, "wallpaperColor", wallpaper_color),
     (false, desktop, "shareWallpaper", share_wallpaper),
     (false, desktop, "defaultTerminal", default_terminal),
+    (false, desktop, "startFavorites", start_favorites),
     (false, assistant, "assistant.enabled", assistant_enabled),
     (false, assistant, "assistant.taskbarIcon", assistant_taskbar_icon),
     (false, assistant, "assistant.speechToText", assistant_speech_to_text),
@@ -1079,11 +1086,11 @@ mod glass_settings_tests;
 #[cfg(test)]
 mod accent_custom_tests;
 #[cfg(test)]
+mod switch_contract_tests;
+#[cfg(test)]
 mod switch_group_tests;
 #[cfg(test)]
 mod switch_migration_tests;
-#[cfg(test)]
-mod switch_contract_tests;
 
 #[cfg(test)]
 mod outline_default_tests {

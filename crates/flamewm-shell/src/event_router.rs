@@ -5,9 +5,9 @@ use flamewm_ui_x11::{
     ActionPhase, PointerButton, SurfaceEvent, SurfaceRuntime, UiBackendError, UiDocumentAccess,
 };
 
-use crate::entry::app::{is_popup_refusal, shell_slow_note, ShellLoop};
-use flamewm_shell::quick_controls::host::is_quick_popup_title;
+use crate::entry::app::{ShellLoop, is_popup_refusal, shell_slow_note};
 use flamewm_shell::quick_controls::QuickControlKind;
+use flamewm_shell::quick_controls::host::is_quick_popup_title;
 use flamewm_shell::runtime::InteractionContext;
 
 /// C07 stage helper: open a static profiler span. Static labels only.
@@ -383,7 +383,36 @@ impl ShellLoop {
         ) {
             self.task_press_target = None;
         }
+        if matches!(button, PointerButton::WheelUp | PointerButton::WheelDown)
+            && event.action.phase == ActionPhase::Press
+            && self.start_open
+            && (slot_of(action, "start.app.").is_some()
+                || slot_of(action, "start.favorite.").is_some())
+        {
+            // Start application list: 3 rows per tick, clamped by the list itself.
+            let delta = if button == PointerButton::WheelUp {
+                -crate::projection::START_WHEEL_ROWS
+            } else {
+                crate::projection::START_WHEEL_ROWS
+            };
+            self.wheel_start_list(runtime, delta)?;
+            return Ok(());
+        }
         if matches!(button, PointerButton::WheelUp | PointerButton::WheelDown) {
+            // One step per wheel tick (press only: X sends press and release per tick). The
+            // request is enqueued on the control dispatcher; the OSD follows the snapshot change.
+            if event.action.phase == ActionPhase::Press && action == TRAY_VOLUME_ACTION {
+                let cap = self.audio_settings.max_percent();
+                let up = button == PointerButton::WheelUp;
+                let snapshot = self.shell.snapshot();
+                if let Some(request) = flamewm_shell::taskbar::status::audio::wheel_volume_request(
+                    &snapshot.system,
+                    cap,
+                    up,
+                ) {
+                    self.submit(request);
+                }
+            }
             return Ok(());
         }
         if self.route_start_app_drag(&event, runtime)? {
@@ -415,6 +444,7 @@ impl ShellLoop {
                 }
                 self.clear_network_secret(runtime)?;
                 self.start_query.clear();
+                self.start_scroll = 0;
                 self.close_quick_control_nonfatal();
                 return self.close_transients(runtime);
             }
@@ -521,6 +551,7 @@ impl ShellLoop {
             }
             self.start_open = true;
             self.start_selection.reset();
+            self.start_scroll = 0;
             let started = Instant::now();
             let _total = shell_stage!("shell.start.open.total");
             self.project_start(runtime)?;
@@ -598,6 +629,7 @@ impl ShellLoop {
                 "\u{8}" => {
                     self.start_query.pop();
                     self.start_selection.reset();
+                    self.start_scroll = 0;
                     self.project_start(runtime)?;
                 }
                 "\u{1b}" => {
@@ -606,6 +638,7 @@ impl ShellLoop {
                     } else {
                         self.start_query.clear();
                         self.start_selection.reset();
+                        self.start_scroll = 0;
                         self.project_start(runtime)?;
                     }
                 }
@@ -614,6 +647,7 @@ impl ShellLoop {
                 value if !value.is_empty() => {
                     self.start_query.push_str(value);
                     self.start_selection.reset();
+                    self.start_scroll = 0;
                     self.project_start(runtime)?;
                 }
                 _ => {}
@@ -635,6 +669,12 @@ impl ShellLoop {
             return Ok(());
         }
 
+        if let Some(slot) = slot_of(action, "start.favorite.") {
+            if event.action.inside && event.action.phase == ActionPhase::Release {
+                self.toggle_start_favorite(runtime, slot)?;
+            }
+            return Ok(());
+        }
         if let Some(slot) = slot_of(action, "start.app.") {
             if event.action.inside {
                 match event.action.phase {
@@ -693,6 +733,7 @@ impl ShellLoop {
             if !self.start_view.note_start_view(target, &self.start_query) {
                 return Ok(());
             }
+            self.start_scroll = 0;
             let transition = flamewm_profiler::ProfilePoint::new("shell.category_transition");
             let _s = transition.start();
             self.shell
@@ -716,7 +757,7 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         event_output: &flamewm_api::OutputId,
     ) -> bool {
-        use flamewm_shell::taskbar::tasks::drag::{TaskDrag, TaskDragRelease};
+        use flamewm_shell::taskbar::tasks::drag::{TaskDrag, TaskDragRelease, along_strip};
         let action = event.action.action.as_str();
         if self.task_drag.is_some()
             && action == "keyboard.input"
@@ -750,7 +791,14 @@ impl ShellLoop {
                                 event_output,
                             )
                     })
-                    .map(|slot| TaskDrag::press(slot, event.action.x));
+                    .map(|slot| {
+                        let vertical = self.task_strip_is_vertical(event_output);
+                        TaskDrag::press_on_axis(
+                            slot,
+                            along_strip(vertical, event.action.x, event.action.y),
+                            vertical,
+                        )
+                    });
                 false
             }
             ActionPhase::Motion => {
@@ -758,9 +806,11 @@ impl ShellLoop {
                 let Some(drag) = self.task_drag.as_mut() else {
                     return false;
                 };
-                if drag.motion(event.action.x) {
-                    let target = drag.target(event.action.x, count);
-                    self.set_task_insert_marker(runtime, event_output, Some(target));
+                let vertical = drag.is_vertical();
+                let pos = along_strip(vertical, event.action.x, event.action.y);
+                if drag.motion(pos) {
+                    let target = drag.target(pos, count);
+                    self.set_task_insert_marker(runtime, event_output, Some(target), vertical);
                 }
                 true
             }
@@ -768,7 +818,7 @@ impl ShellLoop {
                 let Some(drag) = self.task_drag.take() else {
                     return false;
                 };
-                self.set_task_insert_marker(runtime, event_output, None);
+                self.set_task_insert_marker(runtime, event_output, None, drag.is_vertical());
                 let count = self.shell.task_slot_count();
                 match drag.release_on_strip(event.action.x, event.action.y, count) {
                     TaskDragRelease::Click => false,
@@ -811,7 +861,7 @@ impl ShellLoop {
                             &self.start_model,
                             self.start_category,
                             &self.start_query,
-                            slot,
+                            self.start_index_for_slot(slot),
                         )
                     })
                     .map(|app_id| StartAppDrag::press(app_id, event.action.x, event.action.y));
@@ -894,10 +944,21 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         output: &flamewm_api::OutputId,
         target: Option<usize>,
+        vertical: bool,
     ) {
         if let Some(panel) = self.surfaces.panel_for_output(output) {
-            self.set_task_insert_marker_on_panel(runtime, panel, target);
+            self.set_task_insert_marker_on_panel(runtime, panel, target, vertical);
         }
+    }
+
+    /// True when the taskbar on `output` runs down a Left/Right edge.
+    fn task_strip_is_vertical(&self, output: &flamewm_api::OutputId) -> bool {
+        self.shell
+            .snapshot()
+            .panels
+            .panels
+            .iter()
+            .any(|panel| &panel.output == output && !panel.edge.is_horizontal())
     }
 
     fn cancel_task_drag(&mut self, runtime: &mut SurfaceRuntime) {
@@ -909,7 +970,7 @@ impl ShellLoop {
         self.task_drag = None;
         self.task_press_target = None;
         if let Some(panel) = panel {
-            self.set_task_insert_marker_on_panel(runtime, panel, None);
+            self.set_task_insert_marker_on_panel(runtime, panel, None, false);
         }
     }
 
@@ -918,9 +979,14 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         panel: flamewm_ui_x11::SurfaceHandle,
         target: Option<usize>,
+        vertical: bool,
     ) {
         use flamewm_shell::taskbar::tasks::drag::insertion_marker_left;
         let result = runtime.with_document(panel, |document| match target {
+            Some(index) if vertical => {
+                document.position("task-slot-insert", 6.0, insertion_marker_left(index))?;
+                document.size("task-slot-insert", 32.0, 2.0)
+            }
             Some(index) => {
                 document.position("task-slot-insert", insertion_marker_left(index), 6.0)?;
                 document.size("task-slot-insert", 2.0, 32.0)
@@ -939,7 +1005,10 @@ impl ShellLoop {
         interaction: &InteractionContext,
     ) -> Result<(), UiBackendError> {
         let action = event.action.action.as_str();
-        if action == "start.search" || action.starts_with("start.app.") {
+        if action == "start.search"
+            || action.starts_with("start.app.")
+            || action.starts_with("start.favorite.")
+        {
             return Ok(());
         }
         if let Some(slot) = slot_of(action, "task.slot.") {

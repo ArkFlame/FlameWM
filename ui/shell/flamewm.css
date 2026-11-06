@@ -98,6 +98,11 @@ input { cursor:text; }
 .start-category { width:280px; height:37px; padding:0px 9px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:9px; cursor:default; }
 .start-category:hover { background:var(--accent-soft); }.start-category div { flex-grow:1; }
 .start-category .chevron { width:12px; height:12px; }
+.start-row { width:100%; display:flex; align-items:center; gap:4px; }
+.start-row .start-app { flex-grow:1; }
+.start-fav { width:28px; height:36px; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--text); border-radius:9px; cursor:default; }
+.start-fav:hover { background:var(--accent-soft); }
+.start-empty { padding:8px 9px; color:var(--text); font-size:12px; }
 /* Just the bar: no outer card behind or around the search field. */
 .start-search { height:45px; margin:0px 6px 6px 6px; padding:0px 7px; display:flex; align-items:center; background:transparent; color:var(--text); border:0px solid transparent; cursor:default; }
 .start-search-field { flex-grow:1; height:32px; padding-left:10px; display:flex; align-items:center; gap:8px; color:var(--c-9ca3a9); background:transparent; border:1px solid var(--rim); border-radius:12px; }
@@ -290,3 +295,24 @@ input { cursor:text; }
 .switcher-popup { width:420px; }
 .switcher-highlight { background:var(--accent); }
 .switcher-row { color:var(--text); }
+
+/* Vertical taskbar (panel-vertical.html, Left/Right edges). The bar is one column of the
+   thickness-wide panel window; every rule is scoped to .panel-vertical so Top/Bottom are unchanged.
+   The workspace pager is hidden here: its absolute 9-cell horizontal grid has no vertical layout yet. */
+.panel-vertical .taskbar { flex-direction:column; align-items:stretch; justify-content:flex-start; padding:2px 1px; }
+.panel-vertical #taskbar > * { margin:2px 0px; }
+.panel-vertical #taskbar > .show-desktop { width:100%; height:10px; margin:0px; flex-direction:column; }
+.panel-vertical .show-desktop-line { width:100%; height:1px; }
+.panel-vertical .capsule, .panel-vertical .task-slots, .panel-vertical .tray-group { width:100%; height:auto; flex-direction:column; }
+.panel-vertical .capsule { align-items:center; justify-content:center; }
+.panel-vertical .task-button, .panel-vertical .task-slot { width:100%; height:42px; }
+.panel-vertical .task-button img, .panel-vertical .task-slot-icon { margin:0px; }
+.panel-vertical .underline { left:0px; bottom:auto; top:7px; width:2px; height:28px; }
+.panel-vertical .task-slot.focused .underline { width:3px; height:28px; }
+.panel-vertical .task-progress { left:0px; top:0px; width:100%; height:0px; }
+.panel-vertical .taskbar-spacer { flex-grow:1; width:100%; height:auto; }
+.panel-vertical .workspace-pager { display:none; }
+.panel-vertical .tray-button { width:100%; height:30px; }
+.panel-vertical .clock { width:100%; height:auto; padding:4px 0px; }
+.panel-vertical .clock-time { width:100%; font-size:12px; }
+.panel-vertical .date { width:100%; font-size:9px; }

@@ -18,6 +18,9 @@ pub fn start_visible_results<'a>(
     match category {
         StartCategory::All => base,
         StartCategory::Power => Vec::new(),
+        StartCategory::Favorites => {
+            model.category_view(flamewm_shell_core::start_menu::StartCategory::Favorites)
+        }
         _ => base
             .into_iter()
             .filter(|application| application_matches_category(application, category))
@@ -40,6 +43,8 @@ pub fn project_start(
     for (name, value) in PRESENTATION_CATEGORIES {
         let visible = match value {
             StartCategory::Power => session_available(*session),
+            // Favorites is a persistent entry, shown even when empty (empty-state in the list).
+            StartCategory::Favorites => true,
             _ if value == category => true,
             _ if searching => !results.is_empty(),
             _ => !start_visible_results(model, value, query).is_empty(),
@@ -100,10 +105,26 @@ pub fn start_application_name_for_slot(
         .map(|application| application.name.clone())
 }
 
+/// Rows the Start application list moves per wheel tick.
+pub const START_WHEEL_ROWS: isize = 3;
+
+/// Largest Start list offset: the list shows `START_APP_SLOT_COUNT` rows at a time.
+#[must_use]
+pub fn start_scroll_max(total_rows: usize) -> usize {
+    total_rows.saturating_sub(crate::async_projection::START_APP_SLOT_COUNT)
+}
+
+/// `offset` moved by `delta` rows, clamped to `0..=max`.
+#[must_use]
+pub fn start_scroll_step(offset: usize, delta: isize, max: usize) -> usize {
+    offset.saturating_add_signed(delta).min(max)
+}
+
 fn application_matches_category(application: &DesktopApplication, category: StartCategory) -> bool {
     let bucket = match category {
         StartCategory::All => return true,
-        StartCategory::Power => return false,
+        // Favorites membership comes from the model, not the presentation bucket.
+        StartCategory::Power | StartCategory::Favorites => return false,
         StartCategory::Development => StartBucket::Development,
         StartCategory::Games => StartBucket::Games,
         StartCategory::Graphics => StartBucket::Graphics,

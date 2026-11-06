@@ -67,3 +67,44 @@ fn application_matches_category_is_the_oracle_table_for_every_selectable_categor
         assert!(!application_matches_category(&app, StartCategory::Power));
     }
 }
+
+fn named(id: &str, name: &str) -> DesktopApplication {
+    let mut app = application(&["Utility"]);
+    app.id = DesktopAppId::new(id);
+    app.name = name.to_owned();
+    app
+}
+
+#[test]
+fn favorites_entry_is_empty_without_favorites_and_ignores_unknown_ids() {
+    let mut model = StartModel::new(vec![named("calc.desktop", "Calculator")]);
+    assert!(start_visible_results(&model, StartCategory::Favorites, "").is_empty());
+    model.set_favorites(vec!["ghost.desktop".to_owned()]);
+    assert!(start_visible_results(&model, StartCategory::Favorites, "").is_empty());
+    model.set_favorites(vec!["ghost.desktop".to_owned(), "calc.desktop".to_owned()]);
+    let names: Vec<&str> = start_visible_results(&model, StartCategory::Favorites, "")
+        .iter()
+        .map(|app| app.name.as_str())
+        .collect();
+    assert_eq!(names, ["Calculator"]);
+}
+
+#[test]
+fn favorites_round_trip_through_settings_snapshot() {
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+    let ids = vec!["gimp.desktop".to_owned(), "calc.desktop".to_owned()];
+    let mut snapshot = SettingsSnapshot::new(7);
+    snapshot.values.insert(
+        flamewm_platform::settings::START_FAVORITES_KEY.to_owned(),
+        SettingValue::Text(flamewm_shell_core::start_menu::encode_favorites(&ids)),
+    );
+    let read = crate::settings_projection::start_favorites(Some(&snapshot));
+    assert_eq!(read, ids);
+    assert!(crate::settings_projection::start_favorites(None).is_empty());
+    assert!(
+        crate::settings_projection::start_favorites(Some(&SettingsSnapshot::new(1))).is_empty()
+    );
+    let mut model = StartModel::new(vec![named("calc.desktop", "Calculator")]);
+    model.set_favorites(read);
+    assert_eq!(model.favorites(), ["calc.desktop"]);
+}

@@ -41,6 +41,9 @@ impl ShellLoop {
         let query = self.start_query.clone();
         let session = self.shell.snapshot().session;
         self.ensure_loader();
+        // Keep the stored offset in range (favorites removal can shrink the list).
+        self.start_scroll = self.start_scroll_rows();
+        let scroll_rows = self.start_scroll;
         let loader = self.icon_loader.as_mut();
         // ONE unified document on the single Start surface: categories +
         // search + app rows + power rows project in one pass, so one
@@ -53,6 +56,7 @@ impl ShellLoop {
                 &query,
                 &session,
                 loader,
+                scroll_rows,
             )
         })?;
         self.project_start_error_line(runtime);
@@ -60,16 +64,80 @@ impl ShellLoop {
     }
 
     /// Moves the keyboard selection through the visible Start rows (clamped, no wrap).
+    /// At the top/bottom visible row, keyboard movement scrolls the list one row instead.
     pub(crate) fn move_start_selection(
         &mut self,
         runtime: &mut SurfaceRuntime,
         delta: isize,
     ) -> Result<(), UiBackendError> {
         let count = self.start_visible_count();
+        if let Some(cursor) = self.start_selection.highlighted() {
+            let at_edge = if delta > 0 {
+                cursor + 1 >= count
+            } else {
+                cursor == 0
+            };
+            if at_edge && self.scroll_start_list(runtime, delta.signum())? {
+                return Ok(());
+            }
+        }
         if self.start_selection.step(delta, count) {
             self.project_start_selection(runtime)?;
         }
         Ok(())
+    }
+
+    /// Wheel over the Start application list: moves it by `delta` rows and clears the highlight.
+    pub(crate) fn wheel_start_list(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        delta: isize,
+    ) -> Result<(), UiBackendError> {
+        let highlight_cleared = self.start_selection.reset();
+        if !self.scroll_start_list(runtime, delta)? && highlight_cleared {
+            self.project_start_selection(runtime)?;
+        }
+        Ok(())
+    }
+
+    /// Moves the Start list by `delta` rows, clamped to the live row range. Reprojects only
+    /// when the offset changed; returns whether it did.
+    pub(crate) fn scroll_start_list(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        delta: isize,
+    ) -> Result<bool, UiBackendError> {
+        let current = self.start_scroll_rows();
+        let total = projection::start_visible_results(
+            &self.start_model,
+            self.start_category,
+            &self.start_query,
+        )
+        .len();
+        let next =
+            projection::start_scroll_step(current, delta, projection::start_scroll_max(total));
+        if next == current {
+            return Ok(false);
+        }
+        self.start_scroll = next;
+        self.project_start(runtime)?;
+        Ok(true)
+    }
+
+    /// Current Start list offset in rows, clamped to the live application count.
+    pub(crate) fn start_scroll_rows(&self) -> usize {
+        let total = projection::start_visible_results(
+            &self.start_model,
+            self.start_category,
+            &self.start_query,
+        )
+        .len();
+        projection::start_scroll_step(self.start_scroll, 0, projection::start_scroll_max(total))
+    }
+
+    /// Absolute application index for the visible Start row `slot` (0-based).
+    pub(crate) fn start_index_for_slot(&self, slot: usize) -> usize {
+        self.start_scroll_rows() + slot
     }
 
     /// Pointer over Start app row `slot` (0-based): hover replaces the keyboard highlight.
@@ -100,6 +168,7 @@ impl ShellLoop {
     pub(super) fn start_visible_count(&self) -> usize {
         projection::start_visible_results(&self.start_model, self.start_category, &self.start_query)
             .len()
+            .saturating_sub(self.start_scroll_rows())
             .min(async_projection::START_APP_SLOT_COUNT)
     }
 
@@ -121,11 +190,12 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         slot: usize,
     ) -> Result<(), UiBackendError> {
+        let index = self.start_index_for_slot(slot);
         let Some(app_id) = projection::start_application_for_slot(
             &self.start_model,
             self.start_category,
             &self.start_query,
-            slot,
+            index,
         ) else {
             return Ok(());
         };
@@ -133,7 +203,7 @@ impl ShellLoop {
             &self.start_model,
             self.start_category,
             &self.start_query,
-            slot,
+            index,
         )
         .unwrap_or_else(|| "application".to_owned());
         self.start_error = None;
@@ -165,6 +235,36 @@ impl ShellLoop {
         Ok(())
     }
 
+    /// Adds or removes the application in `slot` from Favorites. The list is applied locally
+    /// at once and persisted as `startFavorites` through the dispatcher worker (never blocks).
+    pub(crate) fn toggle_start_favorite(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        slot: usize,
+    ) -> Result<(), UiBackendError> {
+        let Some(app_id) = projection::start_application_for_slot(
+            &self.start_model,
+            self.start_category,
+            &self.start_query,
+            self.start_index_for_slot(slot),
+        ) else {
+            return Ok(());
+        };
+        let ids = toggled_favorites(self.start_model.favorites(), app_id.as_str());
+        let encoded = flamewm_shell_core::start_menu::encode_favorites(&ids);
+        self.start_model.set_favorites(ids);
+        self.project_start(runtime)?;
+        self.submit(ControlRequest::ApplySettings(SettingsTransaction {
+            expected_revision: self.settings_revision,
+            changes: vec![flamewm_api::settings::SettingsChange {
+                key: flamewm_platform::settings::START_FAVORITES_KEY.to_owned(),
+                value: Some(SettingValue::Text(encoded)),
+            }],
+            reset_section: None,
+        }));
+        Ok(())
+    }
+
     /// Apply Start launch results drained from the mutation result source.
     /// A failure sets the Start error line and keeps the menu open; a success
     /// clears the line and closes the menu that launched it.
@@ -172,7 +272,7 @@ impl ShellLoop {
         &mut self,
         runtime: &mut SurfaceRuntime,
     ) -> Result<(), UiBackendError> {
-        use flamewm_shell::control_actions::{start_error_after_launch, StartLaunchOutcome};
+        use flamewm_shell::control_actions::{StartLaunchOutcome, start_error_after_launch};
         let outcomes = flamewm_shell::control_actions::take_launch_outcomes();
         let Some(context) = self.active_start_launch.clone() else {
             return Ok(());
@@ -262,6 +362,37 @@ impl ShellLoop {
         if let Err(error) = runtime.set_popup_backdrop(self.surfaces.start, Some(percents)) {
             eprintln!("flamewm-shell: start backdrop failed (nonfatal): {error:?}");
         }
+    }
+}
+
+/// Favorites after toggling `app_id`: removed when present, appended when absent.
+#[must_use]
+pub(crate) fn toggled_favorites(current: &[String], app_id: &str) -> Vec<String> {
+    let mut ids = current.to_vec();
+    match ids.iter().position(|id| id == app_id) {
+        Some(index) => {
+            ids.remove(index);
+        }
+        None => ids.push(app_id.to_owned()),
+    }
+    ids
+}
+
+#[cfg(test)]
+mod favorite_tests {
+    use super::toggled_favorites;
+
+    #[test]
+    fn toggle_appends_then_removes_and_keeps_order() {
+        let ids = toggled_favorites(&["a.desktop".to_owned()], "b.desktop");
+        assert_eq!(ids, ["a.desktop", "b.desktop"]);
+        let ids = toggled_favorites(&ids, "a.desktop");
+        assert_eq!(ids, ["b.desktop"]);
+        assert_eq!(toggled_favorites(&[], "x.desktop"), ["x.desktop"]);
+        assert_eq!(
+            toggled_favorites(&["x.desktop".to_owned()], "x.desktop"),
+            Vec::<String>::new()
+        );
     }
 }
 

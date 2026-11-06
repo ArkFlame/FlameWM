@@ -6,6 +6,7 @@ pub type StartState = StartModel;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartCategory {
     All,
+    Favorites,
     Development,
     Games,
     Graphics,
@@ -16,7 +17,8 @@ pub enum StartCategory {
     Power,
 }
 
-pub const PRESENTATION_CATEGORIES: [(&str, StartCategory); 8] = [
+pub const PRESENTATION_CATEGORIES: [(&str, StartCategory); 9] = [
+    ("favorites", StartCategory::Favorites),
     ("development", StartCategory::Development),
     ("games", StartCategory::Games),
     ("graphics", StartCategory::Graphics),
