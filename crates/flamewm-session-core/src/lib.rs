@@ -676,6 +676,28 @@ mod tests {
     }
 
     #[test]
+    fn keyring_falls_back_to_gnome_and_honors_opt_out() {
+        let empty = BTreeMap::new();
+        assert_eq!(select_keyring(&empty, false, false, true), Keyring::GnomeKeyring);
+        assert_eq!(select_keyring(&empty, false, false, false), Keyring::Absent);
+        let basic = BTreeMap::from([(
+            "FLAMEWM_BRAVE_PASSWORD_STORE".to_owned(),
+            "basic".to_owned(),
+        )]);
+        assert_eq!(select_keyring(&basic, true, true, true), Keyring::Absent);
+        let libsecret = BTreeMap::from([(
+            "FLAMEWM_BRAVE_PASSWORD_STORE".to_owned(),
+            "gnome-libsecret".to_owned(),
+        )]);
+        assert_eq!(select_keyring(&libsecret, true, true, true), Keyring::GnomeKeyring);
+        let pinned = BTreeMap::from([(
+            "FLAMEWM_BRAVE_PASSWORD_STORE".to_owned(),
+            "kwallet5".to_owned(),
+        )]);
+        assert_eq!(select_keyring(&pinned, true, true, true), Keyring::KWallet("5"));
+    }
+
+    #[test]
     fn kwallet_service_alias_does_not_count_as_a_five_install() {
         // Real Plasma 6 service file.
         let alias = "[D-BUS Service]\nName=org.kde.kwalletd5\nExec=/usr/bin/kwalletd6\n";
