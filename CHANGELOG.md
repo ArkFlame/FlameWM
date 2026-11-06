@@ -1,3 +1,12 @@
+## Unreleased — translucent black by default
+
+- Defaults: `reduceTransparency` now defaults off. Every surface (taskbar, Start, popups and menus, window titlebars and chrome, app windows, OSD, desktop widgets) is translucent black at 75% (`surfaceOpacity` 75, `surfaceColor` `#000000`, `glassOpacityPercent` 75). Blur keeps its existing default (70%). One owner: `flamewm-api` `settings_groups` (`DEFAULT_SURFACE_COLOR`, `DEFAULT_SURFACE_OPACITY`, `DEFAULT_GLASS_OPACITY`), read by `flamewm-platform` `ProductSettings::default`, the glass and surface groups, and the shared consumers.
+- Tint: the regular glass tint follows `surfaceColor` only when the Surfaces custom switch is on; otherwise it is neutral black with zero chroma. Light text stays on black glass.
+- Glass opacity range widened to `glassOpacityPercent` 4..=100 (was 4..=42) so the default 75% reaches the regular glass and the taskbar.
+- `reduceTransparency=true` remains the flat toggle: opaque, no blur. Saved user values are kept.
+- Liquid Glass presets are unchanged and still write their own tint and opacity.
+- Tests: default expectations moved to 75% black; flat paths opt in explicitly with `reduceTransparency=true`.
+
 ## 2026-11-05 — Version 0.1.7: volume ack, finder/imageviewer, test repairs
 
 - Audio: one volume-cap owner; audio helper bounds writes and PulseAudio acknowledges success; desktop dedupes output-layout refresh.

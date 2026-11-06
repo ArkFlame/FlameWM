@@ -12,7 +12,7 @@ use flamewm_ui_x11::surface_style::surface_outline;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
 /// Shared defaults (flamewm-ui-core `DEFAULT_SURFACE_OPACITY`, shell/desktop `surfaceBlurPercent`).
-const DEFAULT_SURFACE_OPACITY: u8 = 50;
+const DEFAULT_SURFACE_OPACITY: u8 = flamewm_api::settings_groups::DEFAULT_SURFACE_OPACITY;
 const DEFAULT_BLUR_PERCENT: u8 = 80;
 /// Light wash over the surface for rows, headers, fields and cards (10%).
 const WASH_ALPHA: u8 = 26;
@@ -80,8 +80,18 @@ pub fn window_backdrop(snapshot: &SettingsSnapshot, packaged_root: &Path) -> Win
             fit
         },
         packaged_root: packaged_root.to_path_buf(),
-        opacity_percent: surface_opacity_percent(snapshot),
-        blur_percent: blur,
+        opacity_percent: flamewm_ui_core::glass::window_backdrop_material(
+            snapshot,
+            surface_opacity_percent(snapshot),
+            blur,
+        )
+        .0,
+        blur_percent: flamewm_ui_core::glass::window_backdrop_material(
+            snapshot,
+            surface_opacity_percent(snapshot),
+            blur,
+        )
+        .1,
     }
 }
 const fn rgb(value: u32) -> UiColor {
@@ -241,6 +251,15 @@ impl ExplorerTheme {
 }
 #[cfg(test)]
 mod tests {
+    /// Liquid Glass opt-in: these cases pin the translucent surface mapping, so they turn `reduceTransparency` off.
+    fn glass_snapshot(revision: u64) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(revision);
+        snapshot
+            .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(false));
+        snapshot
+    }
+
     use super::*;
     use flamewm_ui_x11::test_support::RecordingUiDoc;
     #[test]
@@ -251,7 +270,7 @@ mod tests {
     }
     #[test]
     fn unknown_values_preserve_defaults() {
-        let mut settings = SettingsSnapshot::new(1);
+        let mut settings = glass_snapshot(1);
         settings
             .values
             .insert("surfaceColor".into(), SettingValue::Text("oops".into()));
@@ -268,12 +287,12 @@ mod tests {
     #[test]
     fn accent_defaults_to_flamewm_default_and_follows_snapshot() {
         // No snapshot (or no accent key) keeps FlameWM's real default accent, never a private literal.
-        let defaults = ExplorerTheme::from_snapshot(&SettingsSnapshot::new(1));
+        let defaults = ExplorerTheme::from_snapshot(&glass_snapshot(1));
         assert_eq!(
             (defaults.accent.r, defaults.accent.g, defaults.accent.b),
             default_accent()
         );
-        let mut settings = SettingsSnapshot::new(2);
+        let mut settings = glass_snapshot(2);
         settings
             .values
             .insert("accent".into(), SettingValue::Text("#3DAEE9".into()));
@@ -295,7 +314,7 @@ mod tests {
 
     #[test]
     fn preview_outline_projects_the_live_accent_as_an_opaque_two_pixel_stroke() {
-        let mut settings = SettingsSnapshot::new(1);
+        let mut settings = glass_snapshot(1);
         settings
             .values
             .insert("accent".into(), SettingValue::Text("#123456".into()));
@@ -321,7 +340,7 @@ mod tests {
 
     #[test]
     fn surface_opacity_font_and_size_offset_map_from_snapshot() {
-        let mut settings = SettingsSnapshot::new(1);
+        let mut settings = glass_snapshot(1);
         settings
             .values
             .insert("surfaceOpacity".into(), SettingValue::Percent(50));
@@ -345,14 +364,14 @@ mod tests {
         let low = ExplorerTheme::from_snapshot(&settings);
         assert_eq!(low.font_size_offset, -2);
         assert_eq!(low.font_family, None);
-        // Missing surfaceOpacity/glassOpacityPercent uses the shared glass default (12%), not an opaque literal.
-        let defaults = ExplorerTheme::from_snapshot(&SettingsSnapshot::new(1));
-        assert_eq!(defaults.surface_alpha, 31);
+        // Missing surfaceOpacity/glassOpacityPercent uses the shared default (75%), not an opaque literal.
+        let defaults = ExplorerTheme::from_snapshot(&glass_snapshot(1));
+        assert_eq!(defaults.surface_alpha, 191);
     }
 
     #[test]
     fn root_alpha_follows_shared_surface_fill_and_100_is_opaque() {
-        let mut settings = SettingsSnapshot::new(1);
+        let mut settings = glass_snapshot(1);
         settings
             .values
             .insert("surfaceCustom".into(), SettingValue::Boolean(true));
@@ -379,7 +398,7 @@ mod tests {
 
     #[test]
     fn children_never_stack_a_second_surface_alpha() {
-        let mut settings = SettingsSnapshot::new(1);
+        let mut settings = glass_snapshot(1);
         settings
             .values
             .insert("surfaceCustom".into(), SettingValue::Boolean(true));
@@ -411,13 +430,13 @@ mod tests {
     #[test]
     fn window_backdrop_mirrors_surface_opacity_blur_and_wallpaper_keys() {
         let root = Path::new("/packaged");
-        let defaults = window_backdrop(&SettingsSnapshot::new(1), root);
-        assert_eq!((defaults.opacity_percent, defaults.blur_percent), (50, 80));
+        let defaults = window_backdrop(&glass_snapshot(1), root);
+        assert_eq!((defaults.opacity_percent, defaults.blur_percent), (75, 80));
         assert_eq!(
             (defaults.fit.as_str(), defaults.wallpaper.as_str()),
             ("fill", "")
         );
-        let mut settings = SettingsSnapshot::new(2);
+        let mut settings = glass_snapshot(2);
         settings
             .values
             .insert("surfaceOpacity".into(), SettingValue::Percent(70));

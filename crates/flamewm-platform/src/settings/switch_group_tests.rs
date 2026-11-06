@@ -48,7 +48,7 @@ fn switch_off_keeps_stored_members_through_save_and_reload() {
     assert_eq!(off.surface_opacity, 10, "stored value kept while off");
     assert_eq!(
         off.effective().surface_opacity,
-        65,
+        75,
         "readers see the default"
     );
 
@@ -79,7 +79,11 @@ fn effective_is_idempotent_and_leaves_stored_values_alone() {
 fn keyboard_layout_survives_a_cursor_switch_off() {
     let off = parse("revision=1\ncursorCustom=0\nkeyboardLayout=fr\n");
     assert_eq!(off.keyboard_layout, "fr");
-    assert_eq!(off.effective().keyboard_layout, "fr", "switch must not reset it");
+    assert_eq!(
+        off.effective().keyboard_layout,
+        "fr",
+        "switch must not reset it"
+    );
     let on = parse("revision=1\ncursorCustom=1\ncursorSize=48\nkeyboardLayout=fr\n");
     assert_eq!(on.effective().keyboard_layout, "fr");
     assert_eq!(on.effective().cursor_size, 48);

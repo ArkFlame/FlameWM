@@ -852,6 +852,10 @@ mod tests {
 
     fn menu_snapshot(decoration: Option<&str>, opacity: Option<u8>) -> SettingsSnapshot {
         let mut snapshot = SettingsSnapshot::new(1);
+        // These cases pin the translucent glass path, so they opt out of the flat default.
+        snapshot
+            .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(false));
         if let Some(value) = decoration {
             snapshot
                 .values

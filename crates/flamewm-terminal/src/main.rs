@@ -348,6 +348,10 @@ mod settings_apply_tests {
     fn an_equal_snapshot_requests_an_equal_backdrop_and_a_blur_change_a_new_one() {
         let root = Path::new("/share");
         let mut current = SettingsSnapshot::new(1);
+        // Glass opt-in: a blur change only makes a new backdrop when the surface is translucent.
+        current
+            .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(false));
         current
             .values
             .insert("wallpaper".into(), SettingValue::Text("/w.png".into()));

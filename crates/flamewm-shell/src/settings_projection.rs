@@ -24,7 +24,7 @@ const MAX_START_ICON_BYTES: u64 = 8 * 1024 * 1024;
 
 const DEFAULT_ANIMATION_SPEED: i64 = 100;
 const DEFAULT_START_ANIMATION: &str = "none";
-const DEFAULT_SURFACE_OPACITY: u8 = 50;
+const DEFAULT_SURFACE_OPACITY: u8 = flamewm_api::settings_groups::DEFAULT_SURFACE_OPACITY;
 const DEFAULT_SURFACE_BLUR_PERCENT: u8 = flamewm_ui_core::glass::DARK.blur_percent;
 const DEFAULT_ACCENT_OPACITY: u8 = 100;
 const DEFAULT_FONT_FAMILY: &str = "IBM Plex Sans";
@@ -597,6 +597,10 @@ mod tests {
     #[test]
     fn osd_projection_applies_surface_fill_and_accent_token() {
         let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "reduceTransparency".to_owned(),
+            SettingValue::Boolean(false),
+        );
         snapshot
             .values
             .insert("surfaceOpacity".to_owned(), SettingValue::Percent(40));
@@ -615,6 +619,10 @@ mod tests {
     #[test]
     fn start_projection_applies_background_and_accent_tokens() {
         let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "reduceTransparency".to_owned(),
+            SettingValue::Boolean(false),
+        );
         snapshot.values.insert(
             "surfaceColor".to_owned(),
             SettingValue::Text("#102030".to_owned()),
@@ -659,6 +667,10 @@ mod tests {
     #[test]
     fn start_projection_search_field_does_not_reapply_surface_opacity() {
         let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "reduceTransparency".to_owned(),
+            SettingValue::Boolean(false),
+        );
         snapshot
             .values
             .insert("surfaceOpacity".to_owned(), SettingValue::Percent(0));
@@ -682,8 +694,15 @@ mod tests {
 
     #[test]
     fn default_projection_uses_the_shared_product_accent() {
+        // Glass path: the flat default (`reduceTransparency` on) is covered by
+        // `flat_default_projects_opaque_surfaces`.
+        let mut glass = SettingsSnapshot::new(1);
+        glass.values.insert(
+            "reduceTransparency".to_owned(),
+            SettingValue::Boolean(false),
+        );
         let mut doc = RecordingUiDoc::default();
-        project(&mut doc, &SettingsSnapshot::new(1), SurfaceKind::Start).expect("start projection");
+        project(&mut doc, &glass, SurfaceKind::Start).expect("start projection");
         let accent = UiColor {
             r: (DEFAULT_ACCENT_RGB >> 16) as u8,
             g: (DEFAULT_ACCENT_RGB >> 8) as u8,
@@ -699,14 +718,14 @@ mod tests {
             doc.variables["--accent-strong"],
             UiColor { a: 0xdd, ..accent }
         );
-        // Custom surface switch off: the theme-follow Dark surface (#202326), not a custom tint.
+        // Custom surface switch off: the theme-follow default surface (#000000 at 75%), not a custom tint.
         assert_eq!(
             doc.backgrounds["start-menu"],
             UiColor {
-                r: 0x20,
-                g: 0x23,
-                b: 0x26,
-                a: 31
+                r: 0x00,
+                g: 0x00,
+                b: 0x00,
+                a: 191
             }
         );
     }
@@ -714,6 +733,10 @@ mod tests {
     #[test]
     fn surface_background_uses_surface_keys_and_ignores_legacy_taskbar_keys() {
         let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "reduceTransparency".to_owned(),
+            SettingValue::Boolean(false),
+        );
         snapshot.values.insert(
             "surfaceColor".to_owned(),
             SettingValue::Text("#102030".to_owned()),
@@ -740,16 +763,34 @@ mod tests {
                 a: 255
             }
         );
-        // Custom surface switch off: the theme-follow Dark surface (#202326), not a custom tint.
+        // Custom surface switch off: the theme-follow default surface (#000000 at 75%), not a custom tint.
+        let mut glass_default = SettingsSnapshot::new(1);
+        glass_default.values.insert(
+            "reduceTransparency".to_owned(),
+            SettingValue::Boolean(false),
+        );
         assert_eq!(
-            surface_background(&SettingsSnapshot::new(1)),
+            surface_background(&glass_default),
             UiColor {
-                r: 0x20,
-                g: 0x23,
-                b: 0x26,
-                a: 31
+                r: 0x00,
+                g: 0x00,
+                b: 0x00,
+                a: 191
             }
         );
+    }
+
+    #[test]
+    fn flat_default_projects_opaque_surfaces() {
+        // Explicit `reduceTransparency` on: every shared surface is opaque.
+        let mut defaults = SettingsSnapshot::new(1);
+        defaults
+            .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(true));
+        assert_eq!(surface_background(&defaults).a, 255);
+        let mut doc = RecordingUiDoc::default();
+        project(&mut doc, &defaults, SurfaceKind::Start).expect("start projection");
+        assert_eq!(doc.backgrounds["start-menu"].a, 255);
     }
 
     #[test]
@@ -784,6 +825,10 @@ mod tests {
         let _accent = lock_task_accent();
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot.values.insert(
+            "reduceTransparency".to_owned(),
+            SettingValue::Boolean(false),
+        );
+        snapshot.values.insert(
             "surfaceColor".to_owned(),
             SettingValue::Text("#445566".to_owned()),
         );
@@ -815,6 +860,10 @@ mod tests {
     fn taskbar_projection_and_backdrop_follow_surface_keys() {
         let _accent = lock_task_accent();
         let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "reduceTransparency".to_owned(),
+            SettingValue::Boolean(false),
+        );
         snapshot.values.insert(
             "surfaceColor".to_owned(),
             SettingValue::Text("#445566".to_owned()),
@@ -1098,7 +1147,7 @@ mod tests {
     fn opacity_percent_maps_to_alpha_bounds() {
         assert_eq!(opacity_alpha(0), 0);
         assert_eq!(opacity_alpha(100), 255);
-        assert_eq!(opacity_alpha(DEFAULT_SURFACE_OPACITY), 127);
+        assert_eq!(opacity_alpha(DEFAULT_SURFACE_OPACITY), 191);
     }
 
     #[test]

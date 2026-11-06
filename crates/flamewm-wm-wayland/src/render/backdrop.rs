@@ -15,7 +15,10 @@ pub(super) const DESKTOP_STRIP_ROWS: usize = 32;
 
 /// Stored (downscaled) size of a `size` output capture.
 pub(super) fn stored_size(size: (usize, usize)) -> (usize, usize) {
-    (size.0.div_ceil(DESKTOP_SCALE).max(1), size.1.div_ceil(DESKTOP_SCALE).max(1))
+    (
+        size.0.div_ceil(DESKTOP_SCALE).max(1),
+        size.1.div_ceil(DESKTOP_SCALE).max(1),
+    )
 }
 
 /// Whether `FLAMEWM_BACKDROP_PROFILE` is set. Read once; every profiling path checks it first.
@@ -35,7 +38,11 @@ pub(super) struct PhaseClock {
 impl PhaseClock {
     pub(super) fn start() -> Self {
         let now = profile_enabled().then(Instant::now);
-        Self { last: now, start: now, phases: Vec::new() }
+        Self {
+            last: now,
+            start: now,
+            phases: Vec::new(),
+        }
     }
 
     /// Adds the time since the previous split to the `name` bucket. Repeated names accumulate.
@@ -53,7 +60,10 @@ impl PhaseClock {
     /// Emits the breakdown and restarts the clock, so time spent outside the split calls is not hidden.
     pub(super) fn report(&self, rows: usize) {
         let Some(start) = self.start else { return };
-        let mut line = format!("BACKDROP_PHASE total_us={} rows={rows}", start.elapsed().as_micros());
+        let mut line = format!(
+            "BACKDROP_PHASE total_us={} rows={rows}",
+            start.elapsed().as_micros()
+        );
         for (name, elapsed) in &self.phases {
             line.push_str(&format!(" {name}_us={}", elapsed.as_micros()));
         }
@@ -73,7 +83,12 @@ pub(super) struct DesktopBackdrop {
 }
 
 /// Bilinear sample of straight RGBA at stored-pixel coordinates (`fx`, `fy`), clamped to the edges.
-pub(super) fn sample_bilinear(pixels: &[u8], (sw, sh): (usize, usize), fx: f32, fy: f32) -> [u8; 4] {
+pub(super) fn sample_bilinear(
+    pixels: &[u8],
+    (sw, sh): (usize, usize),
+    fx: f32,
+    fy: f32,
+) -> [u8; 4] {
     let (x0, y0) = (fx as usize, fy as usize);
     let (x1, y1) = ((x0 + 1).min(sw - 1), (y0 + 1).min(sh - 1));
     let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
@@ -89,7 +104,12 @@ pub(super) fn sample_bilinear(pixels: &[u8], (sw, sh): (usize, usize), fx: f32, 
 
 /// Box-averages `rows` full-width readback rows starting at output row `y0` into the stored image.
 /// `y0` and the strip height are multiples of `DESKTOP_SCALE` except at the output bottom.
-pub(super) fn downscale_strip(strip: &[u8], (width, y0, rows): (usize, usize, usize), stored: &mut [u8], (sw, sh): (usize, usize)) {
+pub(super) fn downscale_strip(
+    strip: &[u8],
+    (width, y0, rows): (usize, usize, usize),
+    stored: &mut [u8],
+    (sw, sh): (usize, usize),
+) {
     let end = y0 + rows;
     for sy in (y0 / DESKTOP_SCALE)..end.div_ceil(DESKTOP_SCALE).min(sh) {
         for sx in 0..sw {
@@ -140,7 +160,10 @@ pub(super) fn desktop_elements(state: &State, renderer: &mut GlowRenderer) -> Ve
 
 /// Takes the cached capture texture when it matches `dims`. A mismatched slot is cleared, so a
 /// resize frees the old texture here instead of keeping it alongside the new one.
-pub(super) fn take_scratch<T>(slot: &mut Option<((usize, usize), T)>, dims: (usize, usize)) -> Option<T> {
+pub(super) fn take_scratch<T>(
+    slot: &mut Option<((usize, usize), T)>,
+    dims: (usize, usize),
+) -> Option<T> {
     match slot.take() {
         Some((size, texture)) if size == dims => Some(texture),
         _ => None,
@@ -185,7 +208,9 @@ pub(crate) fn refresh_desktop_backdrop(
     let consumer = !state.toplevels.is_empty()
         || !state.x11.is_empty()
         || state.unmanaged.iter().any(|entry| !entry.below);
-    if !consumer {
+    // Flat (`reduceTransparency`, the default) no material is translucent: nothing reads the blur,
+    // so the capture, its readback and the blur are skipped entirely.
+    if !consumer || glass_flat() {
         state.decorations.borrow_mut().drop_desktop();
         return Ok(());
     }
@@ -240,7 +265,7 @@ pub(crate) fn refresh_desktop_backdrop(
     }
     drop(target);
     state.decorations.borrow_mut().scratch = Some((dims, texture));
-    let blur_percent = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_BLUR_PERCENT;
+    let blur_percent = DESKTOP_BLUR_PERCENT.load(std::sync::atomic::Ordering::Relaxed);
     let radius = MAX_BLUR_RADIUS_PX * f32::from(blur_percent) / 100.0 / DESKTOP_SCALE as f32;
     let source = RgbaImage {
         width: sw as u32,
@@ -276,11 +301,17 @@ mod scratch_tests {
     fn scratch_is_reused_only_for_the_same_output_size() {
         let mut slot = Some(((4, 3), 7u32));
         assert_eq!(take_scratch(&mut slot, (4, 3)), Some(7));
-        assert!(slot.is_none(), "a taken texture leaves the slot empty until it is put back");
+        assert!(
+            slot.is_none(),
+            "a taken texture leaves the slot empty until it is put back"
+        );
 
         let mut slot = Some(((4, 3), 7u32));
         assert_eq!(take_scratch(&mut slot, (8, 3)), None);
-        assert!(slot.is_none(), "a resize drops the old texture instead of keeping it");
+        assert!(
+            slot.is_none(),
+            "a resize drops the old texture instead of keeping it"
+        );
 
         let mut slot: Option<((usize, usize), u32)> = None;
         assert_eq!(take_scratch(&mut slot, (4, 3)), None);

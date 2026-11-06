@@ -36,7 +36,10 @@ fn resetting_glass_section_keeps_unrelated_appearance_and_taskbar_values() {
     }
     assert_eq!(settings.glass_blur_px, 28);
     assert_eq!(settings.taskbar_opacity_percent, 8);
-    assert!(!settings.reduce_transparency);
+    assert!(
+        !settings.reduce_transparency,
+        "reset returns the translucent default"
+    );
     assert_eq!(settings.accent, "#123456");
 }
 
@@ -45,8 +48,11 @@ fn glass_keys_absent_from_the_file_read_as_defaults() {
     let settings = ConfigStore::default()
         .parse_snapshot("revision=2\n")
         .expect("legacy file without glass keys");
-    assert!(!settings.reduce_transparency);
-    assert_eq!(settings.glass_opacity_percent, 12);
+    assert!(
+        !settings.reduce_transparency,
+        "unset glass keys default to translucent"
+    );
+    assert_eq!(settings.glass_opacity_percent, 75);
     assert_eq!(settings.glass_blur_px, 28);
     assert_eq!(settings.taskbar_material_mode, "inherit");
     assert_eq!(settings.taskbar_opacity_percent, 8);
@@ -87,7 +93,7 @@ fn glass_bounds_are_enforced_by_validate() {
     assert!(ProductSettings::default().validate().is_ok());
     for mutate in [
         |s: &mut ProductSettings| s.glass_opacity_percent = 3,
-        |s: &mut ProductSettings| s.glass_opacity_percent = 43,
+        |s: &mut ProductSettings| s.glass_opacity_percent = 101,
         |s: &mut ProductSettings| s.glass_blur_px = 55,
         |s: &mut ProductSettings| s.taskbar_opacity_percent = 76,
         |s: &mut ProductSettings| s.taskbar_material_mode = "glassy".to_owned(),
@@ -97,4 +103,34 @@ fn glass_bounds_are_enforced_by_validate() {
         mutate(&mut settings);
         assert!(settings.validate().is_err());
     }
+}
+
+#[test]
+fn explicit_saved_glass_values_survive_load_and_serialize() {
+    // Users who saved Liquid Glass values keep them: only unset keys take the flat default.
+    let text = "revision=2\nreduceTransparency=0\nglassOpacityPercent=30\nglassBlurPx=40\n";
+    let settings = ConfigStore::default()
+        .parse_snapshot(text)
+        .expect("saved glass values");
+    assert!(!settings.reduce_transparency);
+    assert_eq!(settings.glass_opacity_percent, 30);
+    assert_eq!(settings.glass_blur_px, 40);
+    let written = ConfigStore::serialize(&settings);
+    assert!(written.contains("glassOpacityPercent=30\n"));
+    assert!(written.contains("glassBlurPx=40\n"));
+    let reloaded = ConfigStore::default()
+        .parse_snapshot(&written)
+        .expect("reload saved glass");
+    assert!(
+        !reloaded.reduce_transparency,
+        "saved opt-out survives reload"
+    );
+    assert_eq!(reloaded.glass_opacity_percent, 30);
+}
+
+#[test]
+fn flat_default_is_not_written_so_existing_files_are_not_rewritten() {
+    // Optional rows are written only when they differ from the default, so the flat default adds no line.
+    let written = ConfigStore::serialize(&ProductSettings::default());
+    assert!(!written.contains("reduceTransparency"), "{written}");
 }

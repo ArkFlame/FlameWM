@@ -106,7 +106,13 @@ fn settings_map_to_skin_tokens_and_bad_values_fall_back() {
     );
     let text = |value: &str| SettingValue::Text(value.to_owned());
     put(&mut snapshot, "decoration", text("squared"));
+    put(
+        &mut snapshot,
+        "reduceTransparency",
+        SettingValue::Boolean(false),
+    );
     put(&mut snapshot, "surfaceColor", text("#202326"));
+    put(&mut snapshot, "surfaceCustom", SettingValue::Boolean(true));
     put(&mut snapshot, "surfaceOpacity", SettingValue::Percent(50));
     put(&mut snapshot, "titlebarButtonStyle", text("square"));
     let tokens = chrome_tokens_from_settings(&snapshot);
@@ -180,6 +186,11 @@ fn full_opacity_surface_color_wins_over_titlebar_color_setting() {
         &mut snapshot,
         "surfaceColor",
         SettingValue::Text("#333333".to_owned()),
+    );
+    put(
+        &mut snapshot,
+        "reduceTransparency",
+        SettingValue::Boolean(false),
     );
     put(
         &mut snapshot,
@@ -743,7 +754,11 @@ fn minimize_and_maximize_hover_rasters_invert_to_white_disk_with_dark_glyph() {
             ]
         };
         // Inside the disk, clear of the glyph: white fill (#f1f2f3), fully opaque.
-        assert_eq!(at(edge / 2, 2), [0xf1, 0xf2, 0xf3, 255], "{role:?} disk fill");
+        assert_eq!(
+            at(edge / 2, 2),
+            [0xf1, 0xf2, 0xf3, 255],
+            "{role:?} disk fill"
+        );
         // Some glyph pixel must be dark, i.e. the glyph is not white-on-white.
         let darkest = raster
             .pixels
@@ -752,6 +767,9 @@ fn minimize_and_maximize_hover_rasters_invert_to_white_disk_with_dark_glyph() {
             .map(|p| u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]))
             .min()
             .unwrap_or(u32::MAX);
-        assert!(darkest < 0x180, "{role:?} hover glyph must be dark, darkest sum {darkest:#x}");
+        assert!(
+            darkest < 0x180,
+            "{role:?} hover glyph must be dark, darkest sum {darkest:#x}"
+        );
     }
 }

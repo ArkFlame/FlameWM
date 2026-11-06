@@ -94,7 +94,7 @@ mod tests {
         for kind in [ControlKind::Minimize, ControlKind::Maximize] {
             let hover = control_colors(kind, ControlState::Hover, Palette::RWR_0_0_9);
             assert_eq!(hover.background, Some(Rgb(0x00f1_f2f3)));
-            assert_eq!(hover.glyph, Rgb(0x001b_1e20));
+            assert_eq!(hover.glyph, Rgb(0x001c_1c1c));
         }
     }
 

@@ -913,14 +913,14 @@ mod tests {
             true,
             &flamewm_skin::recipes::decoration::ChromeTokens::default(),
         );
-        assert_eq!(scene.bg, (0x33, 0x33, 0x33));
-        assert_eq!(scene.bg_alpha, 165);
+        assert_eq!(scene.bg, (0x00, 0x00, 0x00));
+        assert_eq!(scene.bg_alpha, 191);
         assert_eq!(scene.tokens.titlebar_blur_percent, 80);
         // Unavailable renderer (no XRender, no display): flat opaque fill, no error.
         let px = titlebar_fill_pixels(&scene, 2, (0, 0), (800, 600));
         assert_eq!(px.len(), scene.frame_w as usize * 2 * 4);
         assert!(px.chunks_exact(4).all(|p| p[3] == 255));
-        assert_eq!(PANEL.0, 0x001b_1e20);
+        assert_eq!(PANEL.0, 0x001c_1c1c);
         assert_eq!(flamewm_skin::palette::TEXT.0, 0x00f1_f2f3);
         assert_eq!(scene.title_color, (0xf1, 0xf2, 0xf3));
         assert_eq!(scene.title_family, "IBM Plex Sans");

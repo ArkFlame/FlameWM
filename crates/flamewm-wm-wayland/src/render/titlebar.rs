@@ -111,11 +111,21 @@ impl ChromeBuffer {
         if self.feedback == feedback {
             return;
         }
-        let (w, h) = (self.width.max(1).min(32767) as usize, TITLEBAR_HEIGHT as usize);
+        let (w, h) = (
+            self.width.max(1).min(32767) as usize,
+            TITLEBAR_HEIGHT as usize,
+        );
         let slots = control_slots(self.width, self.maximized);
-        let changed = [self.feedback.hover, self.feedback.pressed, feedback.hover, feedback.pressed];
+        let changed = [
+            self.feedback.hover,
+            self.feedback.pressed,
+            feedback.hover,
+            feedback.pressed,
+        ];
         let rounded = self.rounded;
-        let ChromeBuffer { buffer, backdrop, .. } = self;
+        let ChromeBuffer {
+            buffer, backdrop, ..
+        } = self;
         let mut ctx = buffer.render();
         for (index, target) in changed.iter().enumerate() {
             let Some(button) = *target else { continue };
@@ -188,6 +198,9 @@ fn paint_background(
     // Rounded top corners use alpha, not an opaque bounding rectangle. The actual pixels
     // underneath remain visible via Smithay's compositor.
     let radius = titlebar_corner_radius(rounded, w as i32, h as i32);
+    // Flat glass takes no blurred desktop under the fill: the opaque solid covers it anyway.
+    let backdrop = if glass_flat() { None } else { backdrop };
+    let (_, fill_alpha) = titlebar_fill();
     for y in 0..h as i32 {
         for x in x0.max(0)..x1.min(w as i32) {
             let corner = if y < radius && x < radius {
@@ -206,7 +219,7 @@ fn paint_background(
                 let rgb = u32::from_be_bytes([0, back[at], back[at + 1], back[at + 2]]);
                 put(out, w, h, x, y, rgb, (255.0 * coverage).round() as u8);
             }
-            let alpha = (f32::from(SURFACE_ALPHA) * coverage).round() as u8;
+            let alpha = (f32::from(fill_alpha) * coverage).round() as u8;
             put(out, w, h, x, y, current_titlebar_material(), alpha);
             if y == 0 || x == 0 || x == w as i32 - 1 {
                 put(out, w, h, x, y, BORDER, (63.0 * coverage).round() as u8);
@@ -255,9 +268,18 @@ impl Decorations {
     }
 
     /// Replaces the desktop capture. Titlebars and surface backdrops baked from the old one are rebuilt.
-    pub(super) fn set_desktop(&mut self, size: (usize, usize), commits: Vec<CommitCounter>, pixels: Vec<u8>) {
+    pub(super) fn set_desktop(
+        &mut self,
+        size: (usize, usize),
+        commits: Vec<CommitCounter>,
+        pixels: Vec<u8>,
+    ) {
         let (sw, sh) = stored_size(size);
-        debug_assert_eq!(pixels.len(), sw * sh * 4, "capture must be stored at the reduced size");
+        debug_assert_eq!(
+            pixels.len(),
+            sw * sh * 4,
+            "capture must be stored at the reduced size"
+        );
         self.parts.clear();
         self.surfaces.clear();
         self.desktop = Some(DesktopBackdrop {
@@ -385,7 +407,11 @@ impl Decorations {
 
     /// Blurred desktop under an override-redirect surface at `rect`. Placed beneath the surface,
     /// so only its translucent pixels show it; opaque pixels cover it.
-    pub(super) fn surface_backdrop(&mut self, renderer: &mut GlowRenderer, rect: Rect) -> Option<Elem> {
+    pub(super) fn surface_backdrop(
+        &mut self,
+        renderer: &mut GlowRenderer,
+        rect: Rect,
+    ) -> Option<Elem> {
         if rect.w <= 0 || rect.h <= 0 || rect.w > 32_767 || rect.h > 32_767 {
             return None;
         }
@@ -446,7 +472,12 @@ impl Decorations {
 
     /// Ring strips for `window`, rebuilt only when the frame, the radius or the outline settings
     /// changed. `None` when outlines are off (`outlines=false` or zero opacity).
-    pub(super) fn ring_strips(&mut self, window: WindowId, frame: Rect, radius: u8) -> Option<&OutlineRing> {
+    pub(super) fn ring_strips(
+        &mut self,
+        window: WindowId,
+        frame: Rect,
+        radius: u8,
+    ) -> Option<&OutlineRing> {
         let paint = self.outline?;
         // GL texture bound, the same one the titlebar buffer is limited to.
         if paint.alpha == 0
@@ -635,7 +666,11 @@ pub(super) fn titlebar_corner_radius(rounded: bool, width: i32, height: i32) -> 
 /// Skin radius in physical pixels: the logical radius scaled from the logical titlebar metric to
 /// a physical titlebar `physical_height` pixels tall, the same rounding as the X11 frame shape.
 /// Zero for a squared decoration style and for windows outside the rounded-eligible set.
-pub(super) fn scaled_corner_radius(floating: bool, style: DecorationStyle, physical_height: i32) -> i32 {
+pub(super) fn scaled_corner_radius(
+    floating: bool,
+    style: DecorationStyle,
+    physical_height: i32,
+) -> i32 {
     let logical = u32::from(flamewm_skin::recipes::decoration::corner_radius(
         floating, style,
     ));
@@ -720,7 +755,10 @@ pub(super) fn chrome_pixels(
         active,
         mode == Mode::Maximized,
         mode.rounded_frame(),
-        Feedback { hover, pressed: None },
+        Feedback {
+            hover,
+            pressed: None,
+        },
         title,
         None,
     )
@@ -836,7 +874,10 @@ mod hover_repaint_tests {
             .into_iter()
             .find(|slot| slot.button == Button::Minimize)
             .expect("minimize slot");
-        let hover = Feedback { hover: Some(Button::Minimize), pressed: None };
+        let hover = Feedback {
+            hover: Some(Button::Minimize),
+            pressed: None,
+        };
 
         let mut partial = rest.clone();
         repaint_slot(&mut partial, W as usize, H, false, None, &slot, hover);
@@ -850,7 +891,11 @@ mod hover_repaint_tests {
                     continue;
                 }
                 let at = (y * W as usize + x) * 4;
-                assert_eq!(partial[at..at + 4], rest[at..at + 4], "pixel ({x},{y}) changed");
+                assert_eq!(
+                    partial[at..at + 4],
+                    rest[at..at + 4],
+                    "pixel ({x},{y}) changed"
+                );
             }
         }
     }
@@ -866,8 +911,14 @@ mod hover_repaint_tests {
                 }
             }
         };
-        let min = Feedback { hover: Some(Button::Minimize), pressed: None };
-        let close = Feedback { hover: Some(Button::Close), pressed: Some(Button::Close) };
+        let min = Feedback {
+            hover: Some(Button::Minimize),
+            pressed: None,
+        };
+        let close = Feedback {
+            hover: Some(Button::Close),
+            pressed: Some(Button::Close),
+        };
         step(&mut pixels, Feedback::default(), min);
         step(&mut pixels, min, close);
         assert_eq!(pixels, bar(close));
@@ -897,7 +948,10 @@ mod hover_repaint_tests {
         // Same feedback: no-op, feedback stays put.
         buffer.repaint_feedback(rest);
         assert_eq!(buffer.feedback, rest);
-        let hover = Feedback { hover: Some(Button::Close), pressed: None };
+        let hover = Feedback {
+            hover: Some(Button::Close),
+            pressed: None,
+        };
         buffer.repaint_feedback(hover);
         assert_eq!(buffer.feedback, hover);
     }

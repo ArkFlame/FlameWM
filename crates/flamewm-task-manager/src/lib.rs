@@ -855,15 +855,16 @@ fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::Win
     };
     let opacity = match snapshot.values.get("surfaceOpacity") {
         Some(SettingValue::Percent(value)) => (*value).min(100),
-        _ => 50,
+        _ => flamewm_api::settings_groups::DEFAULT_SURFACE_OPACITY,
     };
     let fit = text("wallpaperFit");
     flamewm_ui_x11::backdrop::WindowBackdrop {
         wallpaper: text("wallpaper"),
         fit: if fit.is_empty() { "fill".into() } else { fit },
         packaged_root: packaged_root(),
-        opacity_percent: opacity,
-        blur_percent: blur,
+        opacity_percent: flamewm_ui_core::glass::window_backdrop_material(snapshot, opacity, blur)
+            .0,
+        blur_percent: flamewm_ui_core::glass::window_backdrop_material(snapshot, opacity, blur).1,
     }
 }
 
@@ -1067,7 +1068,8 @@ mod tests {
     fn default_accent_and_surface_match_flamewm_settings() {
         let snap = SettingsSnapshot::new(0);
         assert_eq!(accent_color(&snap), 0x003d_aee9);
-        assert_eq!(surface_fill(&snap).alpha, 31);
+        // Translucent default: the surface is 75% alpha.
+        assert_eq!(surface_fill(&snap).alpha, 191);
     }
     #[test]
     fn load_colors_run_from_teal_through_amber_to_red() {

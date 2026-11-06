@@ -295,9 +295,9 @@ pub struct ProductSettings {
     pub outlines: bool,
     /// `surfaceSaturationPercent` (0..=200): backdrop saturation, 100 is identity.
     pub surface_saturation_percent: u8,
-    /// `reduceTransparency`: all materials opaque with no blur. Default off.
+    /// `reduceTransparency`: all materials opaque with no blur. Default off: surfaces are translucent black at 75%.
     pub reduce_transparency: bool,
-    /// `glassOpacityPercent` (4..=42): `GlassRegular` tint alpha.
+    /// `glassOpacityPercent` (4..=100): `GlassRegular` tint alpha, default 75.
     pub glass_opacity_percent: u8,
     /// `glassBlurPx` (0..=54): `GlassRegular` backdrop blur in logical px.
     pub glass_blur_px: u8,
@@ -437,8 +437,8 @@ impl Default for ProductSettings {
             auto_location_enabled: true,
             auto_time_zone_enabled: true,
             auto_time_zone: String::new(),
-            surface_color: "#333333".to_owned(),
-            surface_opacity: 65,
+            surface_color: flamewm_api::settings_groups::DEFAULT_SURFACE_COLOR.to_owned(),
+            surface_opacity: flamewm_api::settings_groups::DEFAULT_SURFACE_OPACITY,
             surface_blur_percent: 70,
             blue_light_filter: flamewm_api::blue_light::DEFAULT_INTENSITY,
             night_shift: false,
@@ -455,7 +455,7 @@ impl Default for ProductSettings {
             outlines: true,
             surface_saturation_percent: 165,
             reduce_transparency: false,
-            glass_opacity_percent: 12,
+            glass_opacity_percent: flamewm_api::settings_groups::DEFAULT_GLASS_OPACITY,
             glass_blur_px: 28,
             taskbar_material_mode: "inherit".to_owned(),
             taskbar_opacity_percent: 8,

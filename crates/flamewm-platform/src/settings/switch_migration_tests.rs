@@ -18,7 +18,7 @@ fn a_non_default_outline_toggle_migrates_the_surface_group_on() {
 
 #[test]
 fn a_clean_legacy_config_keeps_every_switch_off() {
-    let clean = parse("revision=1\nsurfaceOpacity=65\nlockShowDate=1\n");
+    let clean = parse("revision=1\nsurfaceOpacity=75\nlockShowDate=1\n");
     assert!(!clean.surface_custom && !clean.lock_clock_custom);
 }
 

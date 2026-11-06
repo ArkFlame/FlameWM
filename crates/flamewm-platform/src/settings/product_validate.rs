@@ -21,8 +21,8 @@ impl ProductSettings {
         if self.surface_saturation_percent > 200 {
             return invalid("surfaceSaturationPercent must be 0..200");
         }
-        if !(4..=42).contains(&self.glass_opacity_percent) {
-            return invalid("glassOpacityPercent must be 4..42");
+        if !(4..=100).contains(&self.glass_opacity_percent) {
+            return invalid("glassOpacityPercent must be 4..100");
         }
         if self.glass_blur_px > 54 {
             return invalid("glassBlurPx must be 0..54");

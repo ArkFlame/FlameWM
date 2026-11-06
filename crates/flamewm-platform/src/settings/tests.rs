@@ -460,7 +460,7 @@ fn taskbar_style_and_backdrop_defaults_write_nothing() {
     assert_eq!(defaults.taskbar_blur_percent, 80);
     assert_eq!(defaults.surface_blur_percent, 70);
     let taskbar = defaults.taskbar_backdrop();
-    assert_eq!(taskbar.opacity_percent, 65);
+    assert_eq!(taskbar.opacity_percent, 75);
     assert_eq!(taskbar.blur_percent, 70);
     assert!((taskbar.radius_px - 28.0).abs() < 1e-4);
     let text = ConfigStore::serialize(&defaults);
@@ -701,8 +701,8 @@ fn new_appearance_keys_round_trip_when_set() {
 #[test]
 fn surface_defaults_and_legacy_taskbar_surface_promotes() {
     let defaults = ProductSettings::default();
-    assert_eq!(defaults.surface_color, "#333333");
-    assert_eq!(defaults.surface_opacity, 65);
+    assert_eq!(defaults.surface_color, "#000000");
+    assert_eq!(defaults.surface_opacity, 75);
     assert_eq!(defaults.surface_blur_percent, 70);
     assert!(!ConfigStore::serialize(&defaults).contains("surface"));
 

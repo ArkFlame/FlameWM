@@ -12,10 +12,14 @@
 //! Light: clear glass `rgba(255,255,255,.045)`, 13px blur, saturate 155%, rim `.23`.
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_api::settings_groups::is_group_custom;
 use flamewm_skin::palette::{
     BODY_MIN_CONTRAST, LIGHT_PANEL, LIGHT_SURFACE, Overlays, Palette, Rgb, contrast_ratio,
     effective_backdrop, glass_ink, scrim_alpha_floor_with,
 };
+
+/// Default `surfaceColor` RGB (neutral black, chroma zero), parsed from the single owner.
+pub const DEFAULT_SURFACE_RGB: u32 = 0x0000_0000;
 
 /// Tahoe corner radii (px at 1x). Consumers pick the one matching their surface.
 /// The window frame radius has a single owner: `flamewm_skin::recipes::decoration::ROUNDED_RADIUS`.
@@ -41,7 +45,7 @@ pub struct GlassPreset {
     pub rim_percent: u8,
     /// `surfaceSaturationPercent`: backdrop saturation, 100 is identity.
     pub saturation_percent: u8,
-    /// `glassOpacityPercent` (4..=42): `GlassRegular` tint alpha. Same value as `tint_percent`,
+    /// `glassOpacityPercent` (4..=100): `GlassRegular` tint alpha. Same value as `tint_percent`,
     /// because the surface tint and the glass regular tint come from one CSS token.
     pub glass_opacity_percent: u8,
     /// `glassBlurPx` (0..=54): `GlassRegular` blur in logical px. Derived from `blur_percent`
@@ -78,8 +82,10 @@ pub const LIGHT: GlassPreset = GlassPreset {
 impl GlassPreset {
     /// Settings keys and values this preset writes, in one fixed order.
     #[must_use]
-    pub fn settings_values(self) -> [(&'static str, SettingValue); 8] {
+    pub fn settings_values(self) -> [(&'static str, SettingValue); 9] {
         [
+            // Liquid Glass is opt-in: the preset must lift the flat default, or it would stay opaque.
+            ("reduceTransparency", SettingValue::Boolean(false)),
             (
                 "surfaceColor",
                 SettingValue::Text(format!("#{:06x}", self.tint_rgb)),
@@ -152,6 +158,7 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "reduceTransparency",
                 "surfaceColor",
                 "surfaceOpacity",
                 "surfaceBlurPercent",
@@ -163,8 +170,13 @@ mod tests {
             ]
         );
         assert_eq!(
-            LIGHT.settings_values()[0].1,
+            LIGHT.settings_values()[1].1,
             SettingValue::Text("#ffffff".into())
+        );
+        assert_eq!(
+            DARK.settings_values()[0].1,
+            SettingValue::Boolean(false),
+            "a preset turns the flat default off"
         );
     }
 }
@@ -194,8 +206,11 @@ pub enum TaskbarMode {
 pub struct Appearance {
     /// `reduceTransparency`.
     pub reduce_transparency: bool,
-    /// `glassOpacityPercent` (4..=42).
+    /// `glassOpacityPercent` (4..=100).
     pub glass_opacity_percent: u8,
+    /// Regular glass tint RGB: the `surfaceColor` when the Surfaces custom switch is on, else the
+    /// shared default (neutral black). Chroma zero by default, so the translucent base is not blue.
+    pub tint_rgb: u32,
     /// `glassBlurPx` (0..=54).
     pub glass_blur_px: u8,
     /// `taskbarMaterialMode`.
@@ -215,7 +230,8 @@ impl Default for Appearance {
     fn default() -> Self {
         Self {
             reduce_transparency: false,
-            glass_opacity_percent: 12,
+            glass_opacity_percent: flamewm_api::settings_groups::DEFAULT_GLASS_OPACITY,
+            tint_rgb: DEFAULT_SURFACE_RGB,
             glass_blur_px: 28,
             taskbar_mode: TaskbarMode::Inherit,
             taskbar_opacity_percent: 8,
@@ -259,6 +275,22 @@ fn ink_for(appearance: Appearance) -> Option<Palette> {
     Some(glass_ink(tint, alpha, backdrop, BODY_MIN_CONTRAST).palette)
 }
 
+/// Window backdrop `(opacity_percent, blur_percent)` for an app whose surfaces follow
+/// `surfaceOpacity` / `surfaceBlurPercent`. Flat (`reduceTransparency`, the default) is opaque with no
+/// blur, so the wallpaper capture is never requested for it.
+#[must_use]
+pub fn window_backdrop_material(
+    snapshot: &SettingsSnapshot,
+    opacity_percent: u8,
+    blur_percent: u8,
+) -> (u8, u8) {
+    if appearance_from_settings(snapshot).reduce_transparency {
+        (100, 0)
+    } else {
+        (opacity_percent, blur_percent)
+    }
+}
+
 /// Derived `wallpaperMeanRgb` as a packed rgb value.
 fn wallpaper_mean_rgb(snapshot: &SettingsSnapshot) -> Option<u32> {
     match snapshot.values.get("wallpaperMeanRgb") {
@@ -291,13 +323,13 @@ impl ResolvedMaterial {
 }
 
 /// Dark-theme solid chrome and the opaque fallback color.
-pub const STANDARD_RGB: u32 = 0x0017_2135;
+pub const STANDARD_RGB: u32 = 0x0020_2020;
 const CONTRAST_GLASS_RGB: u32 = 0x0018_253e;
 const CONTRAST_GLASS_ALPHA_PERMILLE: u16 = 280;
 const CONTRAST_GLASS_BLUR_PX: u16 = 26;
 const CLEAR_ALPHA_PERMILLE: u16 = 45;
 const CLEAR_BLUR_PX: u16 = 13;
-const WINDOW_CHROME_RGB: u32 = 0x000f_1726;
+const WINDOW_CHROME_RGB: u32 = 0x001c_1c1c;
 const WINDOW_CHROME_ALPHA_PERMILLE: u16 = 600;
 const WINDOW_CHROME_BLUR_PX: u16 = 17;
 const NEUTRAL_RGB: u32 = 0x00ff_ffff;
@@ -346,15 +378,13 @@ fn regular(appearance: Appearance) -> (u32, u16, u16) {
     }
 }
 
-/// Glass tint is the Dark preset tint; regular glass uses the user opacity and blur.
-const GLASS_TINT_RGB: u32 = DARK.tint_rgb;
-
-/// Regular glass tint: the Dark preset tint, or `Palette::LIGHT.surface` in light mode.
+/// Regular glass tint: the resolved `surfaceColor` (neutral black by default), or
+/// `Palette::LIGHT.surface` in light mode.
 const fn glass_tint_rgb(appearance: Appearance) -> u32 {
     if appearance.light {
         LIGHT_SURFACE.0
     } else {
-        GLASS_TINT_RGB
+        appearance.tint_rgb
     }
 }
 
@@ -474,9 +504,17 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
         Some(SettingValue::Text(value)) => parse_hex(value),
         _ => None,
     };
+    // Same rule as `surface_fill`: the stored colour applies only with the Surfaces custom switch on.
+    let tint_rgb = match snapshot.values.get("surfaceColor") {
+        Some(SettingValue::Text(value)) if is_group_custom(snapshot, "surface") => {
+            parse_hex(value).unwrap_or(defaults.tint_rgb)
+        }
+        _ => defaults.tint_rgb,
+    };
     Appearance {
         reduce_transparency: flag("reduceTransparency", defaults.reduce_transparency),
         glass_opacity_percent,
+        tint_rgb,
         glass_blur_px,
         taskbar_mode: mode,
         taskbar_opacity_percent: percent("taskbarOpacityPercent")
@@ -542,8 +580,18 @@ fn parse_hex(text: &str) -> Option<u32> {
     u32::from_str_radix(hex, 16).ok()
 }
 
+/// Translucent glass material: the Liquid Glass opt-in (`reduceTransparency` off). Test-only.
+#[cfg(test)]
+fn glass_on() -> Appearance {
+    Appearance {
+        reduce_transparency: false,
+        ..Appearance::default()
+    }
+}
+
 #[cfg(test)]
 mod resolver_tests {
+
     use super::*;
 
     const ALL_ROLES: [MaterialRole; 7] = [
@@ -568,15 +616,78 @@ mod resolver_tests {
         Appearance {
             reduce_transparency: reduce,
             taskbar_mode: mode,
-            ..Appearance::default()
+            ..glass_on()
         }
     }
 
     #[test]
-    fn defaults_match_handoff() {
+    fn defaults_are_translucent_black_at_75_percent() {
         let a = Appearance::default();
-        assert!(!a.reduce_transparency);
-        assert_eq!((a.glass_opacity_percent, a.glass_blur_px), (12, 28));
+        assert!(!a.reduce_transparency, "translucent is the default");
+        assert_eq!(a.glass_opacity_percent, 75);
+        assert_eq!(a.tint_rgb, 0x0000_0000, "black base, chroma zero");
+        assert_eq!(a.glass_blur_px, 28, "blur stays at the existing default");
+        assert_eq!(
+            Some(DEFAULT_SURFACE_RGB),
+            parse_hex(flamewm_api::settings_groups::DEFAULT_SURFACE_COLOR),
+            "the glass default must match the settings owner"
+        );
+        assert_eq!(
+            a.glass_opacity_percent,
+            flamewm_api::settings_groups::DEFAULT_SURFACE_OPACITY
+        );
+    }
+
+    #[test]
+    fn reduce_transparency_true_stays_opaque_with_default_tint() {
+        let flat = Appearance {
+            reduce_transparency: true,
+            ..Appearance::default()
+        };
+        let m = resolve(MaterialRole::GlassRegular, flat, 100, CAPS);
+        assert_eq!((m.alpha_permille, m.blur_px), (1000, 0));
+    }
+
+    #[test]
+    fn default_glass_uses_black_tint_and_light_ink_on_dark_backdrop() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        assert_eq!(appearance_from_settings(&snapshot).tint_rgb, 0);
+        snapshot.values.insert(
+            "wallpaperMeanRgb".into(),
+            SettingValue::Integer(0x0010_1010),
+        );
+        let ink = palette_from_settings(&snapshot);
+        assert_eq!(
+            ink.text,
+            Palette::RWR_0_0_9.text,
+            "light text on black glass"
+        );
+    }
+
+    #[test]
+    fn surface_color_applies_only_with_surface_custom_on() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("surfaceColor".into(), SettingValue::Text("#eaf4ff".into()));
+        assert_eq!(
+            appearance_from_settings(&snapshot).tint_rgb,
+            0,
+            "custom off: default"
+        );
+        snapshot
+            .values
+            .insert("surfaceCustom".into(), SettingValue::Boolean(true));
+        assert_eq!(
+            appearance_from_settings(&snapshot).tint_rgb,
+            0x00ea_f4ff,
+            "custom on: stored colour"
+        );
+    }
+
+    #[test]
+    fn taskbar_defaults_are_unchanged() {
+        let a = Appearance::default();
         assert_eq!(a.taskbar_mode, TaskbarMode::Inherit);
         assert_eq!(
             (a.taskbar_opacity_percent, a.taskbar_custom_tint),
@@ -644,7 +755,7 @@ mod resolver_tests {
         let base = Appearance {
             glass_opacity_percent: 30,
             glass_blur_px: 4,
-            ..Appearance::default()
+            ..glass_on()
         };
         let regular_ = resolve(MaterialRole::GlassRegular, base, 100, CAPS);
         let inherit = resolve(
@@ -709,17 +820,17 @@ mod resolver_tests {
 
     #[test]
     fn blur_scales_with_output_scale_and_drops_without_caps() {
-        let m = resolve(MaterialRole::GlassRegular, Appearance::default(), 150, CAPS);
+        let m = resolve(MaterialRole::GlassRegular, glass_on(), 150, CAPS);
         assert_eq!(m.blur_px, 42);
         let no = resolve(
             MaterialRole::GlassRegular,
-            Appearance::default(),
+            glass_on(),
             150,
             RendererCaps {
                 backdrop_blur: false,
             },
         );
-        assert_eq!((no.blur_px, no.alpha_permille), (0, 120));
+        assert_eq!((no.blur_px, no.alpha_permille), (0, 750));
     }
 
     #[test]
@@ -787,13 +898,17 @@ mod appearance_golden_tests {
             snapshot_with_appearance(Some("dark")),
             snapshot_with_appearance(Some("system")),
         ] {
-            let appearance = appearance_from_settings(&snapshot);
+            // Translucent default golden: black base at 75%, blur 28px, no tint chroma.
+            let appearance = Appearance {
+                reduce_transparency: false,
+                ..appearance_from_settings(&snapshot)
+            };
             assert!(!appearance.light);
             assert_eq!(
                 regular_at(appearance),
                 ResolvedMaterial {
-                    tint_rgb: 0x00ea_f4ff,
-                    alpha_permille: 120,
+                    tint_rgb: 0x0000_0000,
+                    alpha_permille: 750,
                     blur_px: 28,
                 }
             );
@@ -805,7 +920,7 @@ mod appearance_golden_tests {
                     backdrop_blur: true,
                 },
             );
-            assert_eq!(standard.tint_rgb, 0x0017_2135);
+            assert_eq!(standard.tint_rgb, 0x0020_2020);
             let chrome = resolve(
                 MaterialRole::WindowChrome,
                 appearance,
@@ -814,16 +929,20 @@ mod appearance_golden_tests {
                     backdrop_blur: true,
                 },
             );
-            assert_eq!(chrome.tint_rgb, 0x000f_1726);
+            assert_eq!(chrome.tint_rgb, 0x001c_1c1c);
         }
-        assert_eq!(appearance_from_settings(&snapshot_with_appearance(None)), {
+        assert_eq!(
+            appearance_from_settings(&snapshot_with_appearance(None)),
             Appearance::default()
-        });
+        );
     }
 
     #[test]
     fn light_appearance_uses_palette_light_tokens() {
-        let appearance = appearance_from_settings(&snapshot_with_appearance(Some("LIGHT")));
+        let appearance = Appearance {
+            reduce_transparency: false,
+            ..appearance_from_settings(&snapshot_with_appearance(Some("LIGHT")))
+        };
         assert!(appearance.light);
         assert_eq!(regular_at(appearance).tint_rgb, LIGHT_SURFACE.0);
         let standard = resolve(
@@ -870,7 +989,7 @@ mod backdrop_ink_tests {
             light,
             backdrop_rgb: Some(rgb),
             glass_opacity_percent: opacity,
-            ..Appearance::default()
+            ..glass_on()
         }
     }
 
@@ -987,5 +1106,88 @@ mod backdrop_ink_tests {
         assert_eq!(permille_to_alpha(1000), 255);
         assert_eq!(alpha_to_permille(255), 1000);
         assert!(alpha_to_permille(permille_to_alpha(500)) >= 500);
+    }
+}
+
+#[cfg(test)]
+mod translucent_default_gate_tests {
+    use super::*;
+
+    #[test]
+    fn unset_settings_resolve_every_material_translucent_black_with_blur() {
+        let snapshot = SettingsSnapshot::new(1);
+        let appearance = appearance_from_settings(&snapshot);
+        assert!(!appearance.reduce_transparency);
+        for role in [MaterialRole::GlassRegular, MaterialRole::Dock] {
+            let material = resolve(
+                role,
+                appearance,
+                100,
+                RendererCaps {
+                    backdrop_blur: true,
+                },
+            );
+            assert_eq!(material.tint_rgb, 0, "{role:?} black base");
+            assert_eq!(material.alpha_permille, 750, "{role:?} 75%");
+            assert_eq!(material.blur_px, 28, "{role:?} keeps the existing blur");
+        }
+    }
+
+    #[test]
+    fn reduce_transparency_true_keeps_every_material_opaque_without_blur() {
+        let snapshot = {
+            let mut s = SettingsSnapshot::new(1);
+            s.values
+                .insert("reduceTransparency".into(), SettingValue::Boolean(true));
+            s
+        };
+        let appearance = appearance_from_settings(&snapshot);
+        for role in [
+            MaterialRole::GlassRegular,
+            MaterialRole::Dock,
+            MaterialRole::WindowChrome,
+        ] {
+            let material = resolve(
+                role,
+                appearance,
+                100,
+                RendererCaps {
+                    backdrop_blur: true,
+                },
+            );
+            assert!(material.is_opaque(), "{role:?}");
+            assert_eq!(material.blur_px, 0, "{role:?}");
+        }
+    }
+
+    #[test]
+    fn window_backdrop_is_translucent_by_default_and_opaque_only_when_flat() {
+        let translucent = SettingsSnapshot::new(1);
+        assert_eq!(window_backdrop_material(&translucent, 75, 70), (75, 70));
+        let flat = {
+            let mut s = SettingsSnapshot::new(1);
+            s.values
+                .insert("reduceTransparency".into(), SettingValue::Boolean(true));
+            s
+        };
+        assert_eq!(window_backdrop_material(&flat, 75, 70), (100, 0));
+    }
+
+    #[test]
+    fn explicit_glass_opt_in_keeps_translucent_material() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(false));
+        let material = resolve(
+            MaterialRole::GlassRegular,
+            appearance_from_settings(&snapshot),
+            100,
+            RendererCaps {
+                backdrop_blur: true,
+            },
+        );
+        assert!(!material.is_opaque());
+        assert_eq!(material.blur_px, 28);
     }
 }

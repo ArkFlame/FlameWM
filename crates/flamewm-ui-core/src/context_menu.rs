@@ -220,6 +220,9 @@ mod tests {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot
             .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(false));
+        snapshot
+            .values
             .insert("surfaceCustom".to_owned(), SettingValue::Boolean(true));
         snapshot.values.insert(key.to_owned(), value);
         snapshot
@@ -231,8 +234,8 @@ mod tests {
         assert_eq!(
             fill,
             SurfaceFill {
-                rgb: 0x0020_2326,
-                alpha: 31,
+                rgb: 0x0000_0000,
+                alpha: 191,
                 width: 1,
             }
         );
@@ -263,7 +266,7 @@ mod tests {
         assert_eq!(
             surface_fill(&snapshot),
             SurfaceFill {
-                rgb: 0x0017_2135,
+                rgb: 0x0020_2020,
                 alpha: 255,
                 width: 1,
             }
@@ -275,7 +278,7 @@ mod tests {
         let bare = snapshot_with("surfaceColor", SettingValue::Text("ef4048".into()));
         assert_eq!(surface_fill(&bare).rgb, 0x00ef_4048);
         let invalid = snapshot_with("surfaceColor", SettingValue::Text("#zzzzzz".into()));
-        assert_eq!(surface_fill(&invalid).rgb, 0x00ea_f4ff);
+        assert_eq!(surface_fill(&invalid).rgb, 0x0000_0000);
     }
 
     #[test]
@@ -283,7 +286,7 @@ mod tests {
         let snapshot = snapshot_with("glassOpacityPercent", SettingValue::Percent(42));
         let fill = surface_fill(&snapshot);
         assert_eq!(fill.alpha, 107);
-        assert_eq!(fill.rgb, 0x00ea_f4ff);
+        assert_eq!(fill.rgb, 0x0000_0000);
     }
 }
 
@@ -420,7 +423,7 @@ mod css_contract_tests {
         // `appearance=light` reaches the shell.
         assert!(SHELL_CSS.starts_with(":root"));
         let body = SHELL_CSS.split_once('}').map_or("", |(_, rest)| rest);
-        for literal in ["#202326", "#1b1e20", "#aeb4bb", "#f1f2f3"] {
+        for literal in ["#202020", "#1c1c1c", "#aeb4bb", "#f1f2f3"] {
             assert!(
                 !body.contains(literal),
                 "{literal} must route through a palette token"
@@ -497,8 +500,8 @@ mod shared_row_tests {
         assert_eq!(
             rounded.fill,
             SurfaceFill {
-                rgb: 0x0020_2326,
-                alpha: 31,
+                rgb: 0x0000_0000,
+                alpha: 191,
                 width: 1,
             }
         );

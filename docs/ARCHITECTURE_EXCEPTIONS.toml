@@ -253,13 +253,6 @@ canonical_target = "crates/flamewm-shell/src/runtime/start_status.rs"
 remove_by = "0.2.0"
 
 [[exception]]
-path = "crates/flamewm-skin/src/palette.rs"
-capability = "j12h-g14-panel-1b1e20"
-reason = "`PANEL` is `Rgb(0x001b_1e20)`: the canonical #1b1e20 value is present but zero-padded and underscore-grouped, which the guard's literal `0x1b1e20` match does not accept."
-canonical_target = "crates/flamewm-skin/src/palette.rs"
-remove_by = "0.2.0"
-
-[[exception]]
 path = "crates/flamewm-terminal/Cargo.toml"
 capability = "facade-source-loc>5000"
 reason = "8232 production lines: the terminal keeps VT parsing, pty, flamefetch and settings surfaces in one facade."

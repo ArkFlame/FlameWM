@@ -38,6 +38,12 @@ pub struct SwitchGroup {
 
 use GroupDefault::{Boolean as B, Integer as I, Percent as P, Text as T};
 
+/// Single owner of the default translucent surface: neutral black, 75% opacity, no tint. Every
+/// `surfaceColor` / `surfaceOpacity` / `glassOpacityPercent` default reads these.
+pub const DEFAULT_SURFACE_COLOR: &str = "#000000";
+pub const DEFAULT_SURFACE_OPACITY: u8 = 75;
+pub const DEFAULT_GLASS_OPACITY: u8 = 75;
+
 /// Every switch group. Key names are the persisted registry keys; a key appears in at most one
 /// group. `customWindowOutline` is the existing window-outline switch.
 pub static SWITCH_GROUPS: &[SwitchGroup] = &[
@@ -60,8 +66,8 @@ pub static SWITCH_GROUPS: &[SwitchGroup] = &[
         switch: "surfaceCustom",
         members: &[
             ("outlines", B(true)),
-            ("surfaceColor", T("#333333")),
-            ("surfaceOpacity", P(65)),
+            ("surfaceColor", T(DEFAULT_SURFACE_COLOR)),
+            ("surfaceOpacity", P(DEFAULT_SURFACE_OPACITY)),
             ("surfaceOutlineColor", T("#999999")),
             ("surfaceOutlineOpacity", P(50)),
             ("surfaceOutlineWidth", I(1)),
@@ -72,7 +78,7 @@ pub static SWITCH_GROUPS: &[SwitchGroup] = &[
         switch: "glassCustom",
         members: &[
             ("reduceTransparency", B(false)),
-            ("glassOpacityPercent", P(12)),
+            ("glassOpacityPercent", P(DEFAULT_GLASS_OPACITY)),
             ("glassBlurPx", P(28)),
         ],
     },
@@ -274,7 +280,7 @@ mod tests {
             .insert("surfaceOpacity".into(), SettingValue::Percent(10));
         assert_eq!(
             effective_value(&snapshot, "surfaceOpacity"),
-            Some(SettingValue::Percent(65))
+            Some(SettingValue::Percent(DEFAULT_SURFACE_OPACITY))
         );
         snapshot
             .values
@@ -285,5 +291,45 @@ mod tests {
         );
         assert!(is_group_custom(&snapshot, "surface"));
         assert!(!is_group_custom(&snapshot, "glass"));
+    }
+}
+
+#[cfg(test)]
+mod translucent_default_tests {
+    use super::*;
+
+    /// The translucent default is one owner: black at 75%, reduceTransparency off, and the glass
+    /// members follow the same table so hidden groups resolve to the same translucent material.
+    #[test]
+    fn surface_defaults_are_black_75_percent_translucent() {
+        assert_eq!(
+            member_default("surfaceColor"),
+            Some(SettingValue::Text("#000000".to_owned()))
+        );
+        assert_eq!(
+            member_default("surfaceOpacity"),
+            Some(SettingValue::Percent(75))
+        );
+        assert_eq!(
+            member_default("glassOpacityPercent"),
+            Some(SettingValue::Percent(75))
+        );
+        assert_eq!(
+            member_default("reduceTransparency"),
+            Some(SettingValue::Boolean(false))
+        );
+    }
+
+    #[test]
+    fn glass_group_defaults_to_translucent_and_members_resolve_when_hidden() {
+        let snapshot = SettingsSnapshot::new(1);
+        assert_eq!(
+            effective_value(&snapshot, "reduceTransparency"),
+            Some(SettingValue::Boolean(false))
+        );
+        assert_eq!(
+            effective_value(&snapshot, "surfaceOpacity"),
+            Some(SettingValue::Percent(75))
+        );
     }
 }

@@ -1087,8 +1087,17 @@ impl Service {
         // `windowOutlineColor` / `windowOutlineOpacity` / `outlines` ring style.
         // Light titlebar material and its ink follow the same `appearance` the other surfaces use.
         // Cached bars bake both in, so an appearance change drops them.
-        let light = flamewm_ui_core::glass::appearance_from_settings(&snapshot).light;
-        if crate::render::set_titlebar_light(light) {
+        let appearance = flamewm_ui_core::glass::appearance_from_settings(&snapshot);
+        let fill = flamewm_ui_core::surface::titlebar_fill(&snapshot);
+        let blur = flamewm_ui_core::surface::surface_blur_percent(&snapshot);
+        let light_changed = crate::render::set_titlebar_light(appearance.light);
+        let fill_changed = crate::render::set_glass_fill(
+            fill.rgb,
+            fill.alpha,
+            blur,
+            appearance.reduce_transparency,
+        );
+        if light_changed || fill_changed {
             state.decorations.borrow_mut().invalidate_bars();
             state.request_redraw();
         }

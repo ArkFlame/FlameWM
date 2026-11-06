@@ -267,15 +267,14 @@ fn settings_with(values: &[(&str, flamewm_api::settings::SettingValue)]) -> Sett
 fn inheriting_card_takes_the_global_surface_fill_blur_and_radius() {
     let widget = Widget::new(1, WidgetKind::Clock, Point::new(0, 0));
     let surface = widget_surface(&widget, &SettingsSnapshot::new(1));
-    // Custom surface switch off: the Dark theme surface (#202326) at the regular glass alpha,
-    // blurred at the 28 px default (70%).
+    // Translucent default: black at 75% with the regular glass blur (70%).
     assert_eq!(
         surface.fill,
         UiColor {
-            r: 32,
-            g: 35,
-            b: 38,
-            a: 31
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 191
         }
     );
     assert_eq!(surface.blur, Some(70));
@@ -288,8 +287,12 @@ fn card_without_custom_surface_ignores_its_own_colour_and_opacity() {
     assert!(widget.inherits_surface());
     assert!(widget.set_value("backgroundOpacity", 90));
     let inherited = widget_surface(&widget, &SettingsSnapshot::new(1));
-    assert_eq!(inherited.blur, Some(70));
-    assert_eq!(inherited.fill.a, 31);
+    assert_eq!(
+        inherited.blur,
+        Some(70),
+        "translucent default keeps the glass blur"
+    );
+    assert_eq!(inherited.fill.a, 191, "translucent default is 75%");
 }
 
 #[test]
@@ -298,7 +301,12 @@ fn custom_surface_uses_its_own_colour_and_opacity_with_global_blur() {
     assert!(widget.set_value("customSurface", 1));
     assert!(widget.set_value("background", 0));
     assert!(widget.set_value("backgroundOpacity", 70));
-    let surface = widget_surface(&widget, &settings_with(&[]));
+    // Glass opt-in: the global blur and the card's own opacity only show with reduceTransparency off.
+    let glass = settings_with(&[(
+        "reduceTransparency",
+        flamewm_api::settings::SettingValue::Boolean(false),
+    )]);
+    let surface = widget_surface(&widget, &glass);
     assert_eq!(surface.fill.a, 179);
     assert_eq!(surface.blur, Some(70));
     assert_eq!(surface.radius, WIDGET_RADIUS);

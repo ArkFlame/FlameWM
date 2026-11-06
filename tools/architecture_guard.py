@@ -1055,9 +1055,9 @@ def j12h_violations(root):
             found.add((relative_path(root, deco), "j12h-g13-no-legacy-title"))
     if (root / "crates/flamewm-wm-x11/src/decoration/paint.rs").is_file() and "title_drawn = true" not in paint_decor:
         found.add(("crates/flamewm-wm-x11/src/decoration/paint.rs", "j12h-g13-measured-title-intent"))
-    # J12H-G14: PANEL #1b1e20.
-    if "0x1b1e20" not in palette.lower():
-        found.add(("crates/flamewm-skin/src/palette.rs", "j12h-g14-panel-1b1e20"))
+    # J12H-G14: PANEL #1c1c1c (neutral dark chrome).
+    if "0x001c_1c1c" not in palette.lower():
+        found.add(("crates/flamewm-skin/src/palette.rs", "j12h-g14-panel-1c1c1c"))
     # J12H-G15: scoped profiler spans.
     span_all = span + _live(root, "crates/flamewm-profiler/src/point.rs") + _live(root, "crates/flamewm-profiler/src/lib.rs")
     if span_all and "&'static str" not in span_all:

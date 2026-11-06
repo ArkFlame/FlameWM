@@ -69,12 +69,11 @@ pub fn surface_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
 /// Surface colour the active theme uses when the Surfaces custom switch is off.
 #[must_use]
 pub fn theme_surface_rgb(appearance: crate::glass::Appearance) -> u32 {
-    let palette = if appearance.light {
-        Palette::LIGHT
+    if appearance.light {
+        Palette::LIGHT.surface.0
     } else {
-        Palette::RWR_0_0_9
-    };
-    palette.surface.0
+        crate::glass::DEFAULT_SURFACE_RGB
+    }
 }
 
 /// Titlebar material fill from the shared Surfaces policy.
@@ -297,6 +296,9 @@ mod titlebar_fill_tests {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot
             .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(false));
+        snapshot
+            .values
             .insert("surfaceColor".into(), SettingValue::Text("#202326".into()));
         snapshot
             .values
@@ -316,7 +318,7 @@ mod titlebar_fill_tests {
             .values
             .insert("reduceTransparency".into(), SettingValue::Boolean(true));
         let fill = titlebar_fill(&snapshot);
-        assert_eq!((fill.rgb, fill.alpha), (0x0017_2135, 255));
+        assert_eq!((fill.rgb, fill.alpha), (0x0020_2020, 255));
     }
 }
 
@@ -630,6 +632,9 @@ mod glass_settings_contract_tests {
 
     fn with(pairs: &[(&str, SettingValue)]) -> SettingsSnapshot {
         let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(false));
         for (key, value) in pairs {
             snapshot.values.insert((*key).into(), value.clone());
         }
@@ -649,7 +654,7 @@ mod glass_settings_contract_tests {
         )]));
         assert_eq!(
             (inherit.rgb, inherit.alpha),
-            (Palette::RWR_0_0_9.surface.0, 31)
+            (crate::glass::DEFAULT_SURFACE_RGB, 191)
         );
         let custom = dock_fill(&with(&[
             (
@@ -680,14 +685,41 @@ mod glass_settings_contract_tests {
         }
     }
 
+    fn channel_spread(rgb: u32) -> u32 {
+        let channels = [(rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff];
+        channels.iter().max().unwrap() - channels.iter().min().unwrap()
+    }
+
+    #[test]
+    fn default_flat_and_glass_surfaces_are_neutral_for_every_accent() {
+        for appearance in ["dark", "light"] {
+            for accent in ["red", "blue", "#22c55e"] {
+                for reduce in [true, false] {
+                    let snapshot = with(&[
+                        ("appearance", SettingValue::Text(appearance.into())),
+                        ("accent", SettingValue::Text(accent.into())),
+                        ("reduceTransparency", SettingValue::Boolean(reduce)),
+                    ]);
+                    let fill = surface_fill(&snapshot);
+                    let spread = channel_spread(fill.rgb);
+                    assert!(
+                        spread <= 4,
+                        "{appearance}/{accent}/reduce={reduce}: default surface {:06x} has chroma spread {spread}",
+                        fill.rgb
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn reduce_transparency_makes_every_fill_and_dock_opaque_without_blur() {
         let reduced = with(&[("reduceTransparency", SettingValue::Boolean(true))]);
         let menu = surface_fill(&reduced);
-        assert_eq!((menu.rgb, menu.alpha), (0x0017_2135, 255));
+        assert_eq!((menu.rgb, menu.alpha), (0x0020_2020, 255));
         assert_eq!(surface_blur_percent(&reduced), 0);
         let dock = dock_fill(&reduced);
-        assert_eq!((dock.rgb, dock.alpha), (0x0017_2135, 255));
+        assert_eq!((dock.rgb, dock.alpha), (0x0020_2020, 255));
         let custom_dock = dock_fill(&with(&[
             ("reduceTransparency", SettingValue::Boolean(true)),
             (
@@ -702,7 +734,12 @@ mod glass_settings_contract_tests {
     #[test]
     fn menu_blur_is_regular_glass_blur_as_percent() {
         // Default glassBlurPx 28 over 40 px is 70%.
-        assert_eq!(surface_blur_percent(&SettingsSnapshot::new(1)), 70);
+        assert_eq!(
+            surface_blur_percent(&SettingsSnapshot::new(1)),
+            70,
+            "translucent default keeps the regular glass blur"
+        );
+        assert_eq!(surface_blur_percent(&with(&[])), 70);
     }
 
     #[test]
@@ -732,6 +769,9 @@ mod light_surface_tests {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot
             .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(false));
+        snapshot
+            .values
             .insert("surfaceCustom".into(), SettingValue::Boolean(true));
         snapshot
             .values
@@ -756,6 +796,9 @@ mod surface_theme_default_tests {
 
     fn snapshot_with(pairs: &[(&str, SettingValue)]) -> SettingsSnapshot {
         let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(false));
         for (key, value) in pairs {
             snapshot.values.insert((*key).into(), value.clone());
         }
@@ -789,12 +832,15 @@ mod surface_theme_default_tests {
     }
 
     #[test]
-    fn default_surface_is_the_dark_surface_when_custom_is_off() {
+    fn default_surface_is_black_when_custom_is_off() {
         let snapshot = snapshot_with(&[
             ("glassOpacityPercent", SettingValue::Percent(100)),
             ("surfaceColor", SettingValue::Text("#f4f5f7".into())),
         ]);
-        assert_eq!(surface_fill(&snapshot).rgb, Palette::RWR_0_0_9.surface.0);
+        assert_eq!(
+            surface_fill(&snapshot).rgb,
+            crate::glass::DEFAULT_SURFACE_RGB
+        );
     }
 
     #[test]

@@ -11,9 +11,9 @@ pub struct AlphaColor {
 
 pub const ACCENT: Rgb = Rgb(0x00ef_4048);
 pub const DESKTOP: Rgb = Rgb(0x0000_0000);
-pub const PANEL: Rgb = Rgb(0x001b_1e20);
-pub const SURFACE: Rgb = Rgb(0x0020_2326);
-pub const SIDEBAR: Rgb = Rgb(0x001b_1e20);
+pub const PANEL: Rgb = Rgb(0x001c_1c1c);
+pub const SURFACE: Rgb = Rgb(0x0020_2020);
+pub const SIDEBAR: Rgb = Rgb(0x001c_1c1c);
 pub const TEXT: Rgb = Rgb(0x00f1_f2f3);
 pub const MUTED: Rgb = Rgb(0x00ae_b4bb);
 pub const STICKY_BACKGROUND: Rgb = Rgb(0x00ff_e56b);
@@ -75,7 +75,7 @@ pub enum Appearance {
 /// Light-mode counterparts of the dark text and surface tokens. Each text token is checked
 /// against the surfaces it sits on by the `contrast` tests below.
 pub const LIGHT_SURFACE: Rgb = Rgb(0x00f4_f5f7);
-pub const LIGHT_PANEL: Rgb = Rgb(0x00e4_e7eb);
+pub const LIGHT_PANEL: Rgb = Rgb(0x00e4_e6e8);
 pub const LIGHT_TEXT: Rgb = Rgb(0x0018_1b1e);
 pub const LIGHT_MUTED: Rgb = Rgb(0x0043_4a52);
 
@@ -357,7 +357,7 @@ mod tests {
             Palette::RWR_0_0_9
         );
         assert_eq!(Palette::RWR_0_0_9.text, Rgb(0x00f1_f2f3));
-        assert_eq!(Palette::RWR_0_0_9.surface, Rgb(0x0020_2326));
+        assert_eq!(Palette::RWR_0_0_9.surface, Rgb(0x0020_2020));
     }
 
     #[test]

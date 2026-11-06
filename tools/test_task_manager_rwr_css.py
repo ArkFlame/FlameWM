@@ -17,7 +17,7 @@ SUPPORTED = frozenset((
     "margin-bottom margin-left padding padding-top padding-right padding-bottom padding-left "
     "gap flex-grow flex background background-color color border-color border-width "
     "border-radius border font-size font-weight text-shadow opacity cursor white-space "
-    "overflow-wrap word-wrap box-sizing overflow overflow-x overflow-y scrollbar-width "
+    "overflow-wrap word-wrap box-sizing overflow overflow-x overflow-y scrollbar-width text-overflow "
     "user-select -flamewm-image-treatment"
 ).split())
 

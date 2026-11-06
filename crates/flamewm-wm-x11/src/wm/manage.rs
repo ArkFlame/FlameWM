@@ -276,7 +276,7 @@ impl<C: Connection> Wm<'_, C> {
             WindowClass::INPUT_OUTPUT,
             0,
             &CreateWindowAux::new()
-                .background_pixel(0x001b_1e20)
+                .background_pixel(0x001c_1c1c)
                 .border_pixel(crate::chrome::frame_border_pixel(&self.decoration_tokens))
                 .event_mask(
                     EventMask::EXPOSURE

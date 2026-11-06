@@ -108,8 +108,18 @@ pub fn window_backdrop(
             fit
         },
         packaged_root: packaged_root.to_path_buf(),
-        opacity_percent: opacity.min(100),
-        blur_percent: blur,
+        opacity_percent: flamewm_ui_core::glass::window_backdrop_material(
+            snapshot,
+            opacity.min(100),
+            blur,
+        )
+        .0,
+        blur_percent: flamewm_ui_core::glass::window_backdrop_material(
+            snapshot,
+            opacity.min(100),
+            blur,
+        )
+        .1,
     })
 }
 
@@ -121,11 +131,24 @@ mod tests {
     fn opacity_percent_scales_to_alpha() {
         assert_eq!(surface_alpha(100), 255);
         assert_eq!(surface_alpha(80), 204);
-        let snapshot = SettingsSnapshot::new(1);
+        let mut flat = SettingsSnapshot::new(1);
+        flat.values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(true));
         assert!(
-            window_backdrop(&snapshot, Path::new("/x"), 100).is_none(),
+            window_backdrop(&flat, Path::new("/x"), 100).is_none(),
             "opaque surfaces install no backdrop"
         );
+        // Flat (reduceTransparency on): the surfaceOpacity setting does not make the window translucent.
+        assert_eq!(
+            window_backdrop(&flat, Path::new("/x"), 80)
+                .map(|spec| (spec.opacity_percent, spec.blur_percent)),
+            Some((100, 0)),
+            "flat: opaque spec, which the renderer drops as not translucent"
+        );
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("reduceTransparency".into(), SettingValue::Boolean(false));
         assert_eq!(
             window_backdrop(&snapshot, Path::new("/x"), 80).map(|spec| spec.opacity_percent),
             Some(80)

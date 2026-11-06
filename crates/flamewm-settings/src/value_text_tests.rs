@@ -594,10 +594,10 @@ fn animation_speed_slider_maps_pointer_percent_to_snapped_hundredths() {
 fn glass_sliders_map_track_percent_into_their_inclusive_ranges() {
     let opacity = glass_slider("slider.glass-opacity").expect("opacity slider");
     assert_eq!(glass_slider_value("0", opacity), Ok(4));
-    assert_eq!(glass_slider_value("100", opacity), Ok(42));
-    assert_eq!(glass_slider_value("50", opacity), Ok(23));
+    assert_eq!(glass_slider_value("100", opacity), Ok(100));
+    assert_eq!(glass_slider_value("50", opacity), Ok(52));
     assert_eq!(glass_slider_value("-5", opacity), Ok(4));
-    assert_eq!(glass_slider_value("140", opacity), Ok(42));
+    assert_eq!(glass_slider_value("140", opacity), Ok(100));
     let blur = glass_slider("slider.glass-blur").expect("blur slider");
     assert_eq!(glass_slider_value("0", blur), Ok(0));
     assert_eq!(glass_slider_value("100", blur), Ok(54));

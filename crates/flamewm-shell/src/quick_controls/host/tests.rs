@@ -437,6 +437,10 @@ fn settings_change_between_opens_changes_menu_background() {
     let mut snapshot = blank_snapshot();
     let first = background_for(&snapshot.settings);
     let mut changed = SettingsSnapshot::new(1);
+    changed.values.insert(
+        "reduceTransparency".to_owned(),
+        SettingValue::Boolean(false),
+    );
     changed
         .values
         .insert("surfaceCustom".to_owned(), SettingValue::Boolean(true));

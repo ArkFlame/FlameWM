@@ -770,7 +770,10 @@ impl Finder {
         };
         doc.visible("preview-empty", lines.is_empty())?;
         for slot in 0..PREVIEW_SLOTS {
-            doc.text_ref(&format!("preview-line-{slot}"), lines.get(slot).map_or("", String::as_str))?;
+            doc.text_ref(
+                &format!("preview-line-{slot}"),
+                lines.get(slot).map_or("", String::as_str),
+            )?;
         }
         Ok(())
     }
@@ -915,8 +918,9 @@ fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::Win
         wallpaper: text("wallpaper"),
         fit: if fit.is_empty() { "fill".into() } else { fit },
         packaged_root: packaged_root(),
-        opacity_percent: opacity,
-        blur_percent: blur,
+        opacity_percent: flamewm_ui_core::glass::window_backdrop_material(snapshot, opacity, blur)
+            .0,
+        blur_percent: flamewm_ui_core::glass::window_backdrop_material(snapshot, opacity, blur).1,
     }
 }
 

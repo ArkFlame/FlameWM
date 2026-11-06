@@ -33,7 +33,8 @@ class Pass24Contracts(unittest.TestCase):
         self.assertIn('--c-ffffff80:#ffffff80', css)
 
     def test_file_opening_uses_shared_mime_provider(self):
-        apps = self.read('crates/flamewm-applications/src/lib.rs')
+        # open_target and its spawn path moved from lib.rs into opener.rs.
+        apps = self.read('crates/flamewm-applications/src/lib.rs') + self.read('crates/flamewm-applications/src/opener.rs')
         self.assertIn('pub fn open_target', apps)
         self.assertIn('"kioclient6", &["exec"]', apps)
         # File opening shares the canonical startup-notified, child-reaping launcher.

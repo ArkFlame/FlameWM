@@ -35,10 +35,11 @@ pub struct ButtonTokens {
     pub pressed: Option<Rgb>,
 }
 
-/// Settings default for `surfaceColor` (shared Surfaces RGB).
-pub const DEFAULT_SURFACE_RGB: Rgb = Rgb(0x0033_3333);
-/// Settings default for `surfaceOpacity` 65% (Tahoe dark) as an 8-bit alpha (`65 * 255 / 100`).
-pub const DEFAULT_SURFACE_ALPHA: u8 = 165;
+/// Settings default for `surfaceColor` (shared Surfaces RGB): neutral black. Mirrors
+/// `flamewm_api::settings_groups::DEFAULT_SURFACE_COLOR`, the owner; skin has no api dependency.
+pub const DEFAULT_SURFACE_RGB: Rgb = Rgb(0x0000_0000);
+/// Settings default for `surfaceOpacity` 75% as an 8-bit alpha (`75 * 255 / 100`).
+pub const DEFAULT_SURFACE_ALPHA: u8 = 191;
 /// Settings default for `surfaceBlurPercent`.
 pub const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
 

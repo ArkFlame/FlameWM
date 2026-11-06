@@ -52,7 +52,15 @@ render_elements! {
 
 const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
 // Shared Xephyr skin metrics and palette, never per-backend coloured-square placeholders.
-const SURFACE_ALPHA: u8 = flamewm_skin::recipes::decoration::DEFAULT_SURFACE_ALPHA;
+/// Titlebar fill from `surface::titlebar_fill`, packed as `alpha << 24 | rgb`. The default is the
+/// flat opaque solid (`reduceTransparency` defaults on), so nothing paints translucent before settings arrive.
+static TITLEBAR_FILL: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0xff00_0000 | flamewm_ui_core::glass::STANDARD_RGB);
+/// Desktop blur percent from `surface::surface_blur_percent`; 0 when flat.
+static DESKTOP_BLUR_PERCENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+/// `reduceTransparency` as last committed. When set, no desktop blur is captured and no surface
+/// takes a backdrop: every material is opaque, so the blur has nothing to show.
+static GLASS_FLAT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 /// Blur radius at 100% surface blur. Same value as the X11 `MAX_BLUR_RADIUS_PX` (render-x11).
 const MAX_BLUR_RADIUS_PX: f32 = 24.0;
 
@@ -82,7 +90,27 @@ pub(crate) fn ink_for_material(light: bool) -> flamewm_skin::palette::Palette {
 
 /// Material the bar paints right now.
 pub(crate) fn current_titlebar_material() -> u32 {
-    titlebar_material(TITLEBAR_LIGHT.load(std::sync::atomic::Ordering::Relaxed))
+    titlebar_fill().0
+}
+
+/// Records the shared glass fill and flat flag. Returns whether the titlebar fill changed.
+pub(crate) fn set_glass_fill(rgb: u32, alpha: u8, blur_percent: u8, flat: bool) -> bool {
+    let packed = (u32::from(alpha) << 24) | (rgb & 0x00ff_ffff);
+    let changed = TITLEBAR_FILL.swap(packed, std::sync::atomic::Ordering::Relaxed) != packed;
+    DESKTOP_BLUR_PERCENT.store(blur_percent, std::sync::atomic::Ordering::Relaxed);
+    GLASS_FLAT.store(flat, std::sync::atomic::Ordering::Relaxed);
+    changed
+}
+
+/// Titlebar `(rgb, alpha)` as committed by `set_glass_fill`.
+pub(crate) fn titlebar_fill() -> (u32, u8) {
+    let packed = TITLEBAR_FILL.load(std::sync::atomic::Ordering::Relaxed);
+    (packed & 0x00ff_ffff, (packed >> 24) as u8)
+}
+
+/// Whether `reduceTransparency` (the flat default) is in effect.
+pub(crate) fn glass_flat() -> bool {
+    GLASS_FLAT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Title and control ink for the titlebar material this backend paints now.
@@ -164,7 +192,7 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                     ));
                     // Translucent X11 menus and tooltips blur the desktop beneath them. Docks
                     // (struts) are excluded: they are not glass and the taskbar is opaque.
-                    if !entry.below && entry.strut.is_none() {
+                    if !entry.below && entry.strut.is_none() && !glass_flat() {
                         let rect = Rect::new(
                             geometry.loc.x,
                             geometry.loc.y,
@@ -227,7 +255,9 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                     };
                     // Pressed only while the pointer is still on the control that was pressed.
                     let pressed = match state.pressed_hit {
-                        Some(hit) if state.model.hit(state.pointer.x, state.pointer.y) == Some(hit) => {
+                        Some(hit)
+                            if state.model.hit(state.pointer.x, state.pointer.y) == Some(hit) =>
+                        {
                             hovered
                         }
                         _ => None,
@@ -242,7 +272,10 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                             managed.mode == Mode::Maximized,
                             managed.mode.rounded_frame(),
                         ),
-                        Feedback { hover: hovered, pressed },
+                        Feedback {
+                            hover: hovered,
+                            pressed,
+                        },
                         title,
                     ) {
                         out.push(element);
@@ -481,13 +514,22 @@ mod decoration_tests {
                 flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB.0
             ))
         );
-        assert_eq!(ink_for_material(false), flamewm_skin::palette::Palette::RWR_0_0_9);
+        assert_eq!(
+            ink_for_material(false),
+            flamewm_skin::palette::Palette::RWR_0_0_9
+        );
     }
 
     #[test]
     fn light_titlebar_paints_light_material_with_light_ink() {
-        assert_eq!(titlebar_material(true), flamewm_skin::palette::LIGHT_PANEL.0);
-        assert_eq!(ink_for_material(true), flamewm_skin::palette::Palette::LIGHT);
+        assert_eq!(
+            titlebar_material(true),
+            flamewm_skin::palette::LIGHT_PANEL.0
+        );
+        assert_eq!(
+            ink_for_material(true),
+            flamewm_skin::palette::Palette::LIGHT
+        );
         assert_ne!(ink_for_material(true), ink_for_material(false));
     }
 
@@ -528,13 +570,13 @@ mod decoration_tests {
         let partial = (0..12).any(|y| {
             (0..12).any(|x| {
                 let a = alpha(x, y);
-                a > 0 && a < SURFACE_ALPHA
+                a > 0 && a < titlebar_fill().1
             })
         });
         assert!(partial, "the 12px arc has partially covered pixels");
         assert_eq!(
             alpha(24, 1),
-            SURFACE_ALPHA,
+            titlebar_fill().1,
             "straight top edge past the radius is full"
         );
     }
@@ -708,8 +750,14 @@ mod decoration_tests {
         let mut cache = Decorations::default();
         cache.set_desktop((4, 3), vec![commit(1)], vec![0; 4]);
         cache.drop_desktop();
-        assert!(cache.desktop.is_none(), "idle capture must not stay resident");
-        assert!(!cache.desktop_current((4, 3), &[commit(1)]), "next use recaptures");
+        assert!(
+            cache.desktop.is_none(),
+            "idle capture must not stay resident"
+        );
+        assert!(
+            !cache.desktop_current((4, 3), &[commit(1)]),
+            "next use recaptures"
+        );
     }
 
     #[test]
@@ -1121,7 +1169,11 @@ mod surface_backdrop_tests {
     #[test]
     fn desktop_capture_is_stored_at_reduced_size() {
         assert_eq!(stored_size((1280, 800)), (320, 200));
-        assert_eq!(stored_size((1281, 801)), (321, 201), "partial blocks round up");
+        assert_eq!(
+            stored_size((1281, 801)),
+            (321, 201),
+            "partial blocks round up"
+        );
         assert_eq!(stored_size((1, 1)), (1, 1));
     }
 
@@ -1136,5 +1188,26 @@ mod surface_backdrop_tests {
         downscale_strip(&bottom, (width, 4, 4), &mut stored, (1, 2));
         assert_eq!(&stored[0..4], &[0, 0, 0, 0]);
         assert_eq!(&stored[4..8], &[200, 200, 200, 200]);
+    }
+}
+
+#[cfg(test)]
+mod flat_default_tests {
+    use super::*;
+
+    /// Process-wide statics: this test restores the flat default it changes.
+    #[test]
+    fn flat_glass_commits_opaque_fill_and_no_desktop_blur() {
+        set_glass_fill(0x0017_2135, 255, 0, true);
+        assert!(glass_flat());
+        assert_eq!(titlebar_fill(), (0x0017_2135, 255));
+        assert_eq!(
+            DESKTOP_BLUR_PERCENT.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        set_glass_fill(0x0033_3333, 165, 80, false);
+        assert!(!glass_flat());
+        assert_eq!(titlebar_fill(), (0x0033_3333, 165));
+        set_glass_fill(0x0017_2135, 255, 0, true);
     }
 }

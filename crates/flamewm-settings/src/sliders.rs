@@ -17,7 +17,7 @@ pub(crate) static GLASS_SLIDERS: [GlassSlider; 3] = [
         action: "slider.glass-opacity",
         key: "glassOpacityPercent",
         minimum: 4,
-        maximum: 42,
+        maximum: 100,
         slug: "glass-opacity",
     },
     GlassSlider {

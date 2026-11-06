@@ -496,7 +496,7 @@ fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::Win
     };
     let opacity = match snapshot.values.get("surfaceOpacity") {
         Some(SettingValue::Percent(value)) => (*value).min(100),
-        _ => 50,
+        _ => flamewm_api::settings_groups::DEFAULT_SURFACE_OPACITY,
     };
     let fit = text("wallpaperFit");
     flamewm_ui_x11::backdrop::WindowBackdrop {
