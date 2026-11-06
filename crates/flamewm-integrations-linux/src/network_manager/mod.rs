@@ -111,6 +111,10 @@ enum PendingRequest {
         generation: u64,
         device: String,
     },
+    WirelessProperties {
+        generation: u64,
+        device: String,
+    },
     AccessPoints {
         generation: u64,
     },

@@ -214,6 +214,23 @@ impl NetworkManagerProvider {
         )
     }
 
+    /// `ActiveAccessPoint` lives on `Device.Wireless`, not on `Device`, so it needs its own read.
+    pub(super) fn queue_wireless_properties(
+        &mut self,
+        generation: u64,
+        device: String,
+    ) -> FlameResult<()> {
+        let message = get_all_message(
+            NETWORK_MANAGER_SERVICE,
+            &device,
+            "org.freedesktop.NetworkManager.Device.Wireless",
+        )?;
+        self.queue(
+            message,
+            PendingRequest::WirelessProperties { generation, device },
+        )
+    }
+
     pub(super) fn queue_access_points(
         &mut self,
         generation: u64,

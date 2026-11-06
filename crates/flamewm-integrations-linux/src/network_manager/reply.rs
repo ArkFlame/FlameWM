@@ -382,32 +382,44 @@ pub(super) fn parse_property_dict(
 pub(super) struct DeviceProperties {
     pub(super) is_wifi: bool,
     pub(super) active_connection: String,
-    pub(super) active_access_point: String,
 }
 
+/// Parses the `org.freedesktop.NetworkManager.Device` GetAll dict. `ActiveAccessPoint` is not on
+/// this interface; see [`parse_wireless_active_access_point`].
 pub(super) fn parse_device_properties(item: Option<&MessageItem>) -> FlameResult<DeviceProperties> {
     let mut is_wifi = false;
     let mut active_connection = String::new();
-    let mut active_access_point = String::new();
     for (key, value) in dict_entries(item, "NetworkManager device properties")? {
         let key = item_string(&key, "NetworkManager device property name")?;
         let value = unwrap_variant(value);
         match key.as_str() {
             "DeviceType" => is_wifi = item_u32(&value, &key)? == 2,
             "ActiveConnection" => active_connection = item_object_path(&value, &key)?,
-            "ActiveAccessPoint" => active_access_point = item_object_path(&value, &key)?,
             _ => {}
         }
-    }
-    // NetworkManager reports "/" when no access point is active.
-    if active_access_point == "/" {
-        active_access_point.clear();
     }
     Ok(DeviceProperties {
         is_wifi,
         active_connection,
-        active_access_point,
     })
+}
+
+/// Parses `ActiveAccessPoint` from the `org.freedesktop.NetworkManager.Device.Wireless` GetAll
+/// dict. NetworkManager reports "/" when no access point is active, mapped to empty.
+pub(super) fn parse_wireless_active_access_point(
+    item: Option<&MessageItem>,
+) -> FlameResult<String> {
+    let mut active_access_point = String::new();
+    for (key, value) in dict_entries(item, "NetworkManager wireless device properties")? {
+        let key = item_string(&key, "NetworkManager wireless device property name")?;
+        if key == "ActiveAccessPoint" {
+            active_access_point = item_object_path(&unwrap_variant(value), &key)?;
+        }
+    }
+    if active_access_point == "/" {
+        active_access_point.clear();
+    }
+    Ok(active_access_point)
 }
 
 pub(super) fn parse_access_point_properties(
@@ -587,6 +599,7 @@ impl NetworkManagerProvider {
                 }
                 PendingRequest::Devices { generation }
                 | PendingRequest::DeviceProperties { generation, .. }
+                | PendingRequest::WirelessProperties { generation, .. }
                 | PendingRequest::AccessPoints { generation }
                 | PendingRequest::AccessPointProperties { generation, .. }
                 | PendingRequest::Profiles { generation }
@@ -691,15 +704,16 @@ impl NetworkManagerProvider {
                 }
                 let properties = parse_device_properties(items.first())?;
                 if properties.is_wifi {
-                    let last_scan = self
+                    let (last_scan, active_access_point) = self
                         .wifi_devices
                         .get(&device)
-                        .and_then(|wifi| wifi.last_scan);
+                        .map(|wifi| (wifi.last_scan, wifi.active_access_point.clone()))
+                        .unwrap_or_default();
                     self.wifi_devices.insert(
                         device.clone(),
                         WifiDevice {
                             active_connection: properties.active_connection,
-                            active_access_point: properties.active_access_point,
+                            active_access_point,
                             last_scan,
                         },
                     );
@@ -711,8 +725,20 @@ impl NetworkManagerProvider {
                     {
                         self.status.snapshot.kind = NetworkKind::Wireless;
                     }
+                    self.queue_wireless_properties(generation, device.clone())?;
                     self.queue_access_points(generation, device)?;
                 }
+                Ok(())
+            }
+            PendingRequest::WirelessProperties { generation, device } => {
+                if generation != self.controller.generation() {
+                    return Ok(());
+                }
+                let active_access_point = parse_wireless_active_access_point(items.first())?;
+                if let Some(wifi) = self.wifi_devices.get_mut(&device) {
+                    wifi.active_access_point = active_access_point;
+                }
+                self.publish_access_points();
                 Ok(())
             }
             PendingRequest::AccessPoints { generation } => {

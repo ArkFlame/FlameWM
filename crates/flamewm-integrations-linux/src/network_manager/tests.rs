@@ -249,47 +249,53 @@ fn failed_scan_queue_does_not_block_next_scan() {
     ));
 }
 
-#[test]
-fn device_parser_reads_active_access_point_and_treats_slash_as_none() {
-    let build = |active_ap: &str| {
-        MessageItem::from_dict(
-            vec![
-                ("DeviceType".to_owned(), MessageItem::UInt32(2)),
-                (
-                    "ActiveConnection".to_owned(),
-                    MessageItem::ObjectPath(
-                        object_path(
-                            "/org/freedesktop/NetworkManager/ActiveConnection/3".to_owned(),
-                        )
-                        .expect("valid path"),
-                    ),
-                ),
-                (
-                    "ActiveAccessPoint".to_owned(),
-                    MessageItem::ObjectPath(object_path(active_ap.to_owned()).expect("valid path")),
-                ),
-            ]
+/// Builds a GetAll dict from `(key, value)` pairs; object-path values use `ObjectPath`.
+fn dict_item(entries: Vec<(&str, MessageItem)>) -> MessageItem {
+    MessageItem::from_dict(
+        entries
             .into_iter()
-            .map(Ok::<_, FlameError>),
-        )
-        .expect("valid device properties")
-    };
-    let item = build("/org/freedesktop/NetworkManager/AccessPoint/7");
-    let parsed = parse_device_properties(Some(&item)).expect("valid device");
+            .map(|(key, value)| Ok::<_, FlameError>((key.to_owned(), value))),
+    )
+    .expect("valid properties dict")
+}
+
+fn path_item(path: &str) -> MessageItem {
+    MessageItem::ObjectPath(object_path(path.to_owned()).expect("valid path"))
+}
+
+/// Real shapes (captured from NetworkManager 1.4x on wlan0): `ActiveAccessPoint` is served by
+/// `Device.Wireless` only; the `Device` GetAll carries no such key.
+#[test]
+fn wireless_active_access_point_comes_from_device_wireless_not_device() {
+    let device = dict_item(vec![
+        ("DeviceType", MessageItem::UInt32(2)),
+        (
+            "ActiveConnection",
+            path_item("/org/freedesktop/NetworkManager/ActiveConnection/8"),
+        ),
+    ]);
+    let parsed = parse_device_properties(Some(&device)).expect("valid device");
     assert!(parsed.is_wifi);
     assert_eq!(
         parsed.active_connection,
-        "/org/freedesktop/NetworkManager/ActiveConnection/3"
+        "/org/freedesktop/NetworkManager/ActiveConnection/8"
     );
+
+    let connected = dict_item(vec![(
+        "ActiveAccessPoint",
+        path_item("/org/freedesktop/NetworkManager/AccessPoint/98"),
+    )]);
     assert_eq!(
-        parsed.active_access_point,
-        "/org/freedesktop/NetworkManager/AccessPoint/7"
+        parse_wireless_active_access_point(Some(&connected)).expect("valid wireless"),
+        "/org/freedesktop/NetworkManager/AccessPoint/98"
     );
-    let none = build("/");
+}
+
+#[test]
+fn wireless_active_access_point_slash_means_disconnected() {
+    let disconnected = dict_item(vec![("ActiveAccessPoint", path_item("/"))]);
     assert_eq!(
-        parse_device_properties(Some(&none))
-            .expect("valid device")
-            .active_access_point,
+        parse_wireless_active_access_point(Some(&disconnected)).expect("valid wireless"),
         ""
     );
 }
