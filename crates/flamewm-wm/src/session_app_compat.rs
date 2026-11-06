@@ -675,6 +675,16 @@ mod tests {
     }
 
     #[test]
+    fn chromium_overlay_ids_are_unique_desktop_files_including_chromium() {
+        let mut ids = CHROMIUM_DESKTOP_IDS.to_vec();
+        assert!(ids.contains(&"chromium.desktop"));
+        assert!(ids.iter().all(|id| id.ends_with(".desktop")));
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), CHROMIUM_DESKTOP_IDS.len());
+    }
+
+    #[test]
     fn missing_pam_socket_does_not_initiate_wallet_handshake() {
         let path = std::env::temp_dir().join(format!("flamewm-missing-pam-{}", std::process::id()));
         assert!(!pam_socket_ready(&path));
