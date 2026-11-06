@@ -308,6 +308,7 @@ pub fn resolve_kwallet_version(
 #[must_use]
 pub fn installed_kwallet_generations() -> (bool, bool) {
     let installed6 = Path::new("/usr/bin/kwalletd6").is_file()
+        || Path::new("/usr/bin/ksecretd").is_file()
         || service_runs(
             "/usr/share/dbus-1/services/org.kde.kwalletd6.service",
             "kwalletd6",
