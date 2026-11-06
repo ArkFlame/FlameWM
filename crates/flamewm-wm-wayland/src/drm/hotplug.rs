@@ -28,6 +28,7 @@ impl HotplugDebounce {
     }
 
     /// Whether a settle timer is armed.
+    #[cfg(test)]
     pub fn is_armed(&self) -> bool {
         self.armed
     }
@@ -52,7 +53,10 @@ mod tests {
         assert!(burst.event());
         burst.fire();
         assert!(!burst.is_armed());
-        assert!(burst.event(), "an event after the settle starts a new burst");
+        assert!(
+            burst.event(),
+            "an event after the settle starts a new burst"
+        );
     }
 
     #[test]
