@@ -1,3 +1,9 @@
+## Unreleased — session keyring for Chromium-family browsers
+
+- Fix: browsers lost cookies and logins when switching between Plasma and FlameWM, because Chromium chose a different password store (basic-text under `XDG_CURRENT_DESKTOP=FlameWM`, KWallet under Plasma). Root cause and design in `docs/SESSION_KEYRING.md`.
+- The session overlay now gives Brave, Chromium, Chrome, Vivaldi, Edge and Opera launchers the KWallet identity; `ksecretd` counts as KWallet 6; gnome-keyring is started when no KWallet exists; a missing keyring is logged once.
+- Known: Electron apps and hand-started browsers still need `--password-store=kwallet6`.
+
 ## Unreleased — translucent black by default
 
 - Defaults: `reduceTransparency` now defaults off. Every surface (taskbar, Start, popups and menus, window titlebars and chrome, app windows, OSD, desktop widgets) is translucent black at 75% (`surfaceOpacity` 75, `surfaceColor` `#000000`, `glassOpacityPercent` 75). Blur keeps its existing default (70%). One owner: `flamewm-api` `settings_groups` (`DEFAULT_SURFACE_COLOR`, `DEFAULT_SURFACE_OPACITY`, `DEFAULT_GLASS_OPACITY`), read by `flamewm-platform` `ProductSettings::default`, the glass and surface groups, and the shared consumers.

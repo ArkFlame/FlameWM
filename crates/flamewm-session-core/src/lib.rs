@@ -308,6 +308,7 @@ pub fn resolve_kwallet_version(
 #[must_use]
 pub fn installed_kwallet_generations() -> (bool, bool) {
     let installed6 = Path::new("/usr/bin/kwalletd6").is_file()
+        || Path::new("/usr/bin/ksecretd").is_file()
         || service_runs(
             "/usr/share/dbus-1/services/org.kde.kwalletd6.service",
             "kwalletd6",
@@ -334,6 +335,95 @@ pub fn service_text_runs(text: &str, daemon: &str) -> bool {
                 Path::new(arg).file_name().and_then(|name| name.to_str()) == Some(daemon)
             })
         })
+    })
+}
+
+/// The secret store a FlameWM session shares with the browsers it launches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Keyring {
+    KWallet(&'static str),
+    GnomeKeyring,
+    Absent,
+}
+
+/// Parse the environment emitted by `gnome-keyring-daemon --start` without
+/// evaluating shell syntax or accepting assignments outside the session contract.
+#[must_use]
+pub fn parse_gnome_keyring_environment(output: &str) -> Option<BTreeMap<String, String>> {
+    const ALLOWED_KEYS: [&str; 4] = [
+        "GNOME_KEYRING_CONTROL",
+        "GPG_AGENT_INFO",
+        "SSH_AUTH_SOCK",
+        "SSH_AGENT_PID",
+    ];
+    let mut environment = BTreeMap::new();
+    for assignment in output.lines().filter(|line| !line.is_empty()) {
+        let (key, value) = assignment.split_once('=')?;
+        let valid_value = match key {
+            "GNOME_KEYRING_CONTROL" | "SSH_AUTH_SOCK" => Path::new(value).is_absolute(),
+            "SSH_AGENT_PID" => {
+                value.bytes().all(|byte| byte.is_ascii_digit())
+                    && value.parse::<u32>().is_ok_and(|pid| pid > 0)
+            }
+            "GPG_AGENT_INFO" => {
+                let mut fields = value.rsplitn(3, ':');
+                let (Some(protocol), Some(pid), Some(socket)) =
+                    (fields.next(), fields.next(), fields.next())
+                else {
+                    return None;
+                };
+                Path::new(socket).is_absolute()
+                    && !pid.is_empty()
+                    && pid.bytes().all(|byte| byte.is_ascii_digit())
+                    && !protocol.is_empty()
+                    && protocol.bytes().all(|byte| byte.is_ascii_digit())
+            }
+            _ => false,
+        };
+        if !ALLOWED_KEYS.contains(&key)
+            || environment.contains_key(key)
+            || value.is_empty()
+            || value.chars().any(char::is_control)
+            || !valid_value
+        {
+            return None;
+        }
+        environment.insert(key.to_owned(), value.to_owned());
+    }
+    Some(environment)
+}
+
+/// Pick the keyring whose backend a Plasma login would have used, so Chromium
+/// derivatives decrypt the same cookies in both sessions. KWallet wins over
+/// gnome-keyring when both exist, matching `resolve_kwallet_version`. An explicit
+/// `FLAMEWM_BRAVE_PASSWORD_STORE` of `basic` or `none` opts out entirely.
+#[must_use]
+pub fn select_keyring(
+    existing_env: &BTreeMap<String, String>,
+    installed5: bool,
+    installed6: bool,
+    gnome_keyring: bool,
+) -> Keyring {
+    let preset = existing_env
+        .get("FLAMEWM_BRAVE_PASSWORD_STORE")
+        .map(String::as_str);
+    if matches!(preset, Some("basic" | "none")) {
+        return Keyring::Absent;
+    }
+    if let Some(version) = resolve_kwallet_version(existing_env, installed5, installed6) {
+        return Keyring::KWallet(version);
+    }
+    if gnome_keyring {
+        Keyring::GnomeKeyring
+    } else {
+        Keyring::Absent
+    }
+}
+
+#[must_use]
+pub fn gnome_keyring_installed() -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| dir.join("gnome-keyring-daemon").is_file())
     })
 }
 
@@ -622,6 +712,95 @@ mod tests {
             "gnome-libsecret".into(),
         )]);
         assert_eq!(resolve_kwallet_version(&libsecret, true, false), None);
+    }
+
+    #[test]
+    fn keyring_prefers_kwallet_and_follows_installed_generation() {
+        let empty = BTreeMap::new();
+        assert_eq!(
+            select_keyring(&empty, false, true, true),
+            Keyring::KWallet("6")
+        );
+        assert_eq!(
+            select_keyring(&empty, true, false, true),
+            Keyring::KWallet("5")
+        );
+        assert_eq!(
+            select_keyring(&empty, true, true, false),
+            Keyring::KWallet("6")
+        );
+    }
+
+    #[test]
+    fn keyring_falls_back_to_gnome_and_honors_opt_out() {
+        let empty = BTreeMap::new();
+        assert_eq!(
+            select_keyring(&empty, false, false, true),
+            Keyring::GnomeKeyring
+        );
+        assert_eq!(select_keyring(&empty, false, false, false), Keyring::Absent);
+        let basic = BTreeMap::from([(
+            "FLAMEWM_BRAVE_PASSWORD_STORE".to_owned(),
+            "basic".to_owned(),
+        )]);
+        assert_eq!(select_keyring(&basic, true, true, true), Keyring::Absent);
+        let libsecret = BTreeMap::from([(
+            "FLAMEWM_BRAVE_PASSWORD_STORE".to_owned(),
+            "gnome-libsecret".to_owned(),
+        )]);
+        assert_eq!(
+            select_keyring(&libsecret, true, true, true),
+            Keyring::GnomeKeyring
+        );
+        let pinned = BTreeMap::from([(
+            "FLAMEWM_BRAVE_PASSWORD_STORE".to_owned(),
+            "kwallet5".to_owned(),
+        )]);
+        assert_eq!(
+            select_keyring(&pinned, true, true, true),
+            Keyring::KWallet("5")
+        );
+    }
+
+    #[test]
+    fn gnome_keyring_start_environment_accepts_only_validated_assignments() {
+        assert_eq!(
+            parse_gnome_keyring_environment(
+                "GNOME_KEYRING_CONTROL=/run/user/1000/keyring\nGPG_AGENT_INFO=/run/user/1000/keyring/gpg:0:1\nSSH_AUTH_SOCK=/run/user/1000/keyring/ssh\nSSH_AGENT_PID=1234\n"
+            ),
+            Some(BTreeMap::from([
+                (
+                    "GNOME_KEYRING_CONTROL".to_owned(),
+                    "/run/user/1000/keyring".to_owned()
+                ),
+                (
+                    "GPG_AGENT_INFO".to_owned(),
+                    "/run/user/1000/keyring/gpg:0:1".to_owned()
+                ),
+                (
+                    "SSH_AUTH_SOCK".to_owned(),
+                    "/run/user/1000/keyring/ssh".to_owned()
+                ),
+                ("SSH_AGENT_PID".to_owned(), "1234".to_owned())
+            ]))
+        );
+
+        for malformed in [
+            "not-an-assignment",
+            "LD_PRELOAD=/tmp/untrusted",
+            "SSH_AUTH_SOCK=relative/socket",
+            "GPG_AGENT_INFO=relative/gpg:123:1",
+            "GPG_AGENT_INFO=/run/user/1000/keyring/gpg:pid:1",
+            "SSH_AGENT_PID=0",
+            "SSH_AGENT_PID=-1",
+            "SSH_AGENT_PID=+1234",
+            "SSH_AGENT_PID=12x",
+            "SSH_AGENT_PID=4294967296",
+            "SSH_AUTH_SOCK=/tmp/socket\nSSH_AUTH_SOCK=/tmp/other",
+            "SSH_AUTH_SOCK=/tmp/socket\0suffix",
+        ] {
+            assert_eq!(parse_gnome_keyring_environment(malformed), None);
+        }
     }
 
     #[test]

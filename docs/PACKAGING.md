@@ -211,3 +211,18 @@ Use `./scripts/check-cargo` for a quick development check and `./scripts/build-d
 release. Both validate the source contract and forcibly clean only the desktop core + desktop
 Cargo outputs in their own profiles before compiling. `build-deb` cleans the old named `.deb`
 before doing anything and never prints `FLAMEWM-DEB-READY` on failure.
+
+## KWallet unlock needs kwallet-pam in the display manager
+
+For Chromium-family browsers to keep their cookies across Plasma and FlameWM sessions the wallet
+must be unlocked at login. `flamewm-session` only finishes the handoff (`pam_kwallet_init`); the
+socket it needs exists only when the display manager PAM stack loads kwallet-pam, for example in
+`/etc/pam.d/sddm`:
+
+```
+auth     optional  pam_kwallet5.so
+session  optional  pam_kwallet5.so auto_start
+```
+
+Packages should depend on or recommend `kwallet-pam` (or `libpam-kwallet5`) and `socat`
+(used by `pam_kwallet_init`). See `docs/SESSION_KEYRING.md`.

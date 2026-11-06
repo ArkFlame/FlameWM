@@ -10,7 +10,7 @@ use std::io::{ErrorKind, Read};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -23,9 +23,10 @@ use flamewm_session_core::diagnostics::{
     CHECK_EXIT_FATAL, Severity, check_exit_code, describe_exit, fallback_plan, format_report,
 };
 use flamewm_session_core::{
-    ChildExit, ProcessPlan, ProcessSupervisorPolicy, SessionRole, SupervisorDecision,
-    build_launch_plan, default_paths_from_home, installed_kwallet_generations,
-    resolve_kwallet_version,
+    ChildExit, Keyring, ProcessPlan, ProcessSupervisorPolicy, SessionRole, SupervisorDecision,
+    build_launch_plan, default_paths_from_home, gnome_keyring_installed,
+    installed_kwallet_generations, parse_gnome_keyring_environment, resolve_kwallet_version,
+    select_keyring,
 };
 use rustix::process::{Pid, Signal, getppid, kill_process, set_parent_process_death_signal};
 use signal_hook::consts::signal::{SIGCHLD, SIGHUP, SIGINT, SIGTERM};
@@ -162,6 +163,14 @@ fn execute() -> Result<(), String> {
             "session launch plan does not contain WM, Desktop, Shell in required order".to_owned(),
         );
     }
+    let (installed5, installed6) = installed_kwallet_generations();
+    let keyring_environment = start_session_keyring(select_keyring(
+        &existing,
+        installed5,
+        installed6,
+        gnome_keyring_installed(),
+    ));
+    add_keyring_environment(&mut plan.processes, &keyring_environment);
     // D-Bus/systemd user activation runs outside the process supervisor.
     // Without updating it, a portal or KWallet service activated after login
     // can inherit stale KDE identity, DISPLAY and desktop id.
@@ -212,6 +221,69 @@ fn add_app_compatibility_environment(
             process
                 .environment
                 .insert("KDE_SESSION_VERSION".to_owned(), version.to_owned());
+        }
+    }
+}
+
+fn add_keyring_environment(
+    processes: &mut [ProcessPlan],
+    keyring_environment: &BTreeMap<String, String>,
+) {
+    for process in processes {
+        process.environment.extend(keyring_environment.clone());
+    }
+}
+
+/// `KWallet` is unlocked by the PAM handoff above. Without it, start gnome-keyring the way
+/// cosmic-session does so libsecret clients find a Secret Service. Never touches wallets.
+fn start_session_keyring(keyring: Keyring) -> BTreeMap<String, String> {
+    start_session_keyring_with(keyring, || {
+        Command::new("gnome-keyring-daemon")
+            .args(["--start", "--components=pkcs11,secrets,ssh"])
+            .output()
+    })
+}
+
+fn start_session_keyring_with(
+    keyring: Keyring,
+    start: impl FnOnce() -> std::io::Result<Output>,
+) -> BTreeMap<String, String> {
+    match keyring {
+        Keyring::KWallet(version) => {
+            eprintln!("{SESSION_LOG_PREFIX}: keyring: KWallet {version} (PAM handoff only)");
+            BTreeMap::new()
+        }
+        Keyring::GnomeKeyring => match start() {
+            Ok(output) if output.status.success() => {
+                let environment = std::str::from_utf8(&output.stdout)
+                    .ok()
+                    .and_then(parse_gnome_keyring_environment);
+                if let Some(environment) = environment {
+                    eprintln!("{SESSION_LOG_PREFIX}: keyring: gnome-keyring started");
+                    return environment;
+                }
+                eprintln!(
+                    "{SESSION_LOG_PREFIX}: keyring: gnome-keyring returned invalid startup environment"
+                );
+                BTreeMap::new()
+            }
+            Ok(output) => {
+                eprintln!(
+                    "{SESSION_LOG_PREFIX}: keyring: gnome-keyring failed: {}",
+                    output.status
+                );
+                BTreeMap::new()
+            }
+            Err(error) => {
+                eprintln!("{SESSION_LOG_PREFIX}: keyring: gnome-keyring: {error}");
+                BTreeMap::new()
+            }
+        },
+        Keyring::Absent => {
+            eprintln!(
+                "{SESSION_LOG_PREFIX}: keyring: none installed; browsers use their own store"
+            );
+            BTreeMap::new()
         }
     }
 }
@@ -287,6 +359,10 @@ fn activation_assignments(
         "KDE_FULL_SESSION",
         "KDE_SESSION_VERSION",
         "KDE_SESSION_UID",
+        "GNOME_KEYRING_CONTROL",
+        "GPG_AGENT_INFO",
+        "SSH_AUTH_SOCK",
+        "SSH_AGENT_PID",
     ];
     KEYS.iter()
         .filter_map(|key| {
@@ -1055,15 +1131,16 @@ fn child_error(child: &Running, action: &str, error: std::io::Error) -> String {
 mod tests {
     use super::{
         ActivationEnvironmentSnapshot, ProcessPlan, Running, WAKEUP, activation_assignment_keys,
-        activation_assignments, add_app_compatibility_environment, allocator_tuning_defaults,
-        apply_session_environment, clean_wm_exit, clear_kde_session_identity,
-        combine_activation_restore_result, scan_exits, stop_all, supporting_wm_check_is_valid,
+        activation_assignments, add_app_compatibility_environment, add_keyring_environment,
+        allocator_tuning_defaults, apply_session_environment, clean_wm_exit,
+        clear_kde_session_identity, combine_activation_restore_result, scan_exits,
+        start_session_keyring_with, stop_all, supporting_wm_check_is_valid,
     };
-    use flamewm_session_core::{ProcessSupervisorPolicy, SessionRole, SupervisorPolicy};
+    use flamewm_session_core::{Keyring, ProcessSupervisorPolicy, SessionRole, SupervisorPolicy};
     use std::collections::BTreeMap;
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::ExitStatusExt;
-    use std::process::{Command, ExitStatus};
+    use std::process::{Command, ExitStatus, Output};
 
     #[test]
     fn successful_wm_exit_stops_session_without_restarting_it() {
@@ -1172,6 +1249,43 @@ mod tests {
     }
 
     #[test]
+    fn keyring_start_stdout_reaches_children_and_activation_assignments() {
+        let mut start_called = false;
+        let keyring_environment = start_session_keyring_with(Keyring::GnomeKeyring, || {
+            start_called = true;
+            Ok(Output {
+                status: ExitStatus::from_raw(0),
+                stdout: b"GNOME_KEYRING_CONTROL=/run/user/1000/keyring\nGPG_AGENT_INFO=/run/user/1000/keyring/gpg:0:1\nSSH_AUTH_SOCK=/run/user/1000/keyring/ssh\nSSH_AGENT_PID=1234\n".to_vec(),
+                stderr: Vec::new(),
+            })
+        });
+        assert!(start_called);
+        let make_plan = |role| ProcessPlan {
+            role,
+            program: "/bin/true".into(),
+            arguments: Vec::new(),
+            environment: BTreeMap::new(),
+            required: true,
+        };
+        let mut processes = [
+            make_plan(SessionRole::WindowManager),
+            make_plan(SessionRole::Desktop),
+            make_plan(SessionRole::Shell),
+        ];
+
+        add_keyring_environment(&mut processes, &keyring_environment);
+
+        for process in &processes {
+            assert_eq!(process.environment, keyring_environment);
+        }
+        let activation = activation_assignments(&processes[0].environment, &BTreeMap::new());
+        assert!(activation.contains(&"GNOME_KEYRING_CONTROL=/run/user/1000/keyring".to_owned()));
+        assert!(activation.contains(&"GPG_AGENT_INFO=/run/user/1000/keyring/gpg:0:1".to_owned()));
+        assert!(activation.contains(&"SSH_AUTH_SOCK=/run/user/1000/keyring/ssh".to_owned()));
+        assert!(activation.contains(&"SSH_AGENT_PID=1234".to_owned()));
+    }
+
+    #[test]
     fn session_child_environment_removes_inherited_kde_markers_but_keeps_explicit_app_env() {
         let inherited = BTreeMap::from([
             ("KDE_FULL_SESSION".to_owned(), "true".to_owned()),
@@ -1240,10 +1354,14 @@ mod tests {
             "KDE_FULL_SESSION".to_owned(),
             "KDE_SESSION_VERSION".to_owned(),
             "KDE_SESSION_UID".to_owned(),
+            "GNOME_KEYRING_CONTROL".to_owned(),
+            "GPG_AGENT_INFO".to_owned(),
+            "SSH_AUTH_SOCK".to_owned(),
+            "SSH_AGENT_PID".to_owned(),
         ];
         let mut snapshot = ActivationEnvironmentSnapshot::from_show_environment(
             keys.clone(),
-            "DISPLAY=:8\nKDE_FULL_SESSION=true\nKDE_SESSION_VERSION=5\nUNRELATED=value\n",
+            "DISPLAY=:8\nKDE_FULL_SESSION=true\nKDE_SESSION_VERSION=5\nGNOME_KEYRING_CONTROL=/run/user/1000/old-keyring\nGPG_AGENT_INFO=/run/user/1000/old-keyring/gpg:321:1\nSSH_AUTH_SOCK=/run/user/1000/old-keyring/ssh\nSSH_AGENT_PID=9876\nUNRELATED=value\n",
         );
         snapshot.restored = true;
         assert_eq!(snapshot.keys, keys);
@@ -1252,7 +1370,11 @@ mod tests {
             vec![
                 "DISPLAY=:8".to_owned(),
                 "KDE_FULL_SESSION=true".to_owned(),
-                "KDE_SESSION_VERSION=5".to_owned()
+                "KDE_SESSION_VERSION=5".to_owned(),
+                "GNOME_KEYRING_CONTROL=/run/user/1000/old-keyring".to_owned(),
+                "GPG_AGENT_INFO=/run/user/1000/old-keyring/gpg:321:1".to_owned(),
+                "SSH_AUTH_SOCK=/run/user/1000/old-keyring/ssh".to_owned(),
+                "SSH_AGENT_PID=9876".to_owned()
             ]
         );
         assert_eq!(
@@ -1261,15 +1383,19 @@ mod tests {
                 "DISPLAY=:8".to_owned(),
                 "KDE_FULL_SESSION=true".to_owned(),
                 "KDE_SESSION_VERSION=5".to_owned(),
-                "KDE_SESSION_UID=".to_owned()
+                "KDE_SESSION_UID=".to_owned(),
+                "GNOME_KEYRING_CONTROL=/run/user/1000/old-keyring".to_owned(),
+                "GPG_AGENT_INFO=/run/user/1000/old-keyring/gpg:321:1".to_owned(),
+                "SSH_AUTH_SOCK=/run/user/1000/old-keyring/ssh".to_owned(),
+                "SSH_AGENT_PID=9876".to_owned()
             ]
         );
         let args = snapshot.busctl_arguments();
         assert_eq!(args[5], "UnsetAndSetEnvironment");
         assert_eq!(args[6], "as");
-        assert_eq!(args[7], "4");
-        assert_eq!(args[12], "as");
-        assert_eq!(args[13], "3");
+        assert_eq!(args[7], "8");
+        assert_eq!(args[16], "as");
+        assert_eq!(args[17], "7");
         assert!(args.contains(&"KDE_SESSION_VERSION=5".to_owned()));
         assert!(!args.contains(&"UNRELATED=value".to_owned()));
     }
