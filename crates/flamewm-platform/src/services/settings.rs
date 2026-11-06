@@ -9,13 +9,22 @@ use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
 use crate::services::settings_persist::SettingsWriter;
 use crate::services::shortcuts::effective_registry;
-use crate::settings::{ConfigStore, ProductSettings, STABLE_SETTINGS, stable_setting};
+use crate::settings::{stable_setting, ConfigStore, ProductSettings, STABLE_SETTINGS};
+
+/// Derived keys: published by the owner of a runtime value (the desktop wallpaper), held in memory
+/// only, never persisted, and never part of the revision. A transaction may only carry derived keys.
+pub const DERIVED_SETTING_KEYS: [&str; 1] = ["wallpaperMeanRgb"];
+
+fn is_derived_key(key: &str) -> bool {
+    DERIVED_SETTING_KEYS.contains(&key)
+}
 
 #[derive(Debug)]
 pub struct SettingsService {
     store: ConfigStore,
     path: PathBuf,
     writer: SettingsWriter,
+    derived: BTreeMap<String, SettingValue>,
 }
 
 impl SettingsService {
@@ -26,7 +35,41 @@ impl SettingsService {
             store: ConfigStore::default(),
             path,
             writer,
+            derived: BTreeMap::new(),
         }
+    }
+
+    /// Stores derived values. A `None` value removes the key. An unchanged value returns the
+    /// current snapshot without changing it, so repeated publishes are no-ops.
+    fn apply_derived(
+        &mut self,
+        changes: &[flamewm_api::settings::SettingsChange],
+    ) -> FlameResult<SettingsSnapshot> {
+        for change in changes {
+            if change.key == "wallpaperMeanRgb" {
+                match change.value.as_ref() {
+                    Some(SettingValue::Integer(rgb)) if (0..=0x00ff_ffff).contains(rgb) => {}
+                    None => {}
+                    _ => {
+                        return Err(FlameError::new(
+                            ErrorCode::InvalidArgument,
+                            "wallpaperMeanRgb must be an rgb integer",
+                        ));
+                    }
+                }
+            }
+        }
+        for change in changes {
+            match change.value.as_ref() {
+                Some(value) => {
+                    self.derived.insert(change.key.clone(), value.clone());
+                }
+                None => {
+                    self.derived.remove(&change.key);
+                }
+            }
+        }
+        Ok(self.snapshot())
     }
 
     /// Writes any debounced live state to disk before returning.
@@ -41,7 +84,9 @@ impl SettingsService {
 
     #[must_use]
     pub fn snapshot(&self) -> SettingsSnapshot {
-        to_api_snapshot(self.store.current())
+        let mut snapshot = to_api_snapshot(self.store.current());
+        snapshot.values.extend(self.derived.clone());
+        snapshot
     }
 
     pub fn load_text(&mut self, text: &str) -> FlameResult<()> {
@@ -60,6 +105,20 @@ impl SettingsService {
         shortcut_port: &mut P,
         transaction: &SettingsTransaction,
     ) -> FlameResult<SettingsSnapshot> {
+        let derived_count = transaction
+            .changes
+            .iter()
+            .filter(|change| is_derived_key(&change.key))
+            .count();
+        if derived_count > 0 {
+            if derived_count != transaction.changes.len() || transaction.reset_section.is_some() {
+                return Err(FlameError::new(
+                    ErrorCode::InvalidArgument,
+                    "derived settings must be applied in a transaction of their own",
+                ));
+            }
+            return self.apply_derived(&transaction.changes);
+        }
         if transaction.expected_revision != self.store.current().revision {
             return Err(FlameError::new(
                 ErrorCode::StaleRevision,
@@ -469,6 +528,68 @@ mod tests {
         assert_eq!(service.current().revision, 1);
         assert_eq!(service.current().animation_speed, 100);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn derived_wallpaper_mean_is_held_in_memory_and_never_persisted() {
+        let path = temp_settings_path("flamewm-settings-derived-mean");
+        let _ = std::fs::remove_file(&path);
+        let mut service = SettingsService::new(path.clone());
+        let mut shortcut_port = UnsupportedShortcutPort;
+        let revision = service.snapshot().revision;
+        let publish = |value| SettingsTransaction {
+            expected_revision: 0,
+            changes: vec![flamewm_api::settings::SettingsChange {
+                key: "wallpaperMeanRgb".to_owned(),
+                value: Some(value),
+            }],
+            reset_section: None,
+        };
+        let snapshot = service
+            .apply(
+                &mut shortcut_port,
+                &publish(SettingValue::Integer(0x0012_3456)),
+            )
+            .expect("derived publish applies without a revision check");
+        assert_eq!(
+            snapshot.values.get("wallpaperMeanRgb"),
+            Some(&SettingValue::Integer(0x0012_3456))
+        );
+        assert_eq!(
+            snapshot.revision, revision,
+            "derived publish is not a revision"
+        );
+        assert!(
+            service
+                .apply(
+                    &mut shortcut_port,
+                    &publish(SettingValue::Integer(0x0100_0000))
+                )
+                .is_err(),
+            "out-of-range rgb is rejected"
+        );
+        let mixed = SettingsTransaction {
+            expected_revision: revision,
+            changes: vec![
+                flamewm_api::settings::SettingsChange {
+                    key: "wallpaperMeanRgb".to_owned(),
+                    value: Some(SettingValue::Integer(1)),
+                },
+                flamewm_api::settings::SettingsChange {
+                    key: "accentOpacity".to_owned(),
+                    value: Some(SettingValue::Percent(40)),
+                },
+            ],
+            reset_section: None,
+        };
+        assert!(service.apply(&mut shortcut_port, &mixed).is_err());
+        service.flush().expect("flush");
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            !text.contains("wallpaperMeanRgb"),
+            "derived key must not persist"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -12,7 +12,10 @@
 //! Light: clear glass `rgba(255,255,255,.045)`, 13px blur, saturate 155%, rim `.23`.
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
-use flamewm_skin::palette::{Overlays, Palette, LIGHT_PANEL, LIGHT_SURFACE};
+use flamewm_skin::palette::{
+    glass_ink, scrim_alpha_floor_with, Overlays, Palette, Rgb, BODY_MIN_CONTRAST, LIGHT_PANEL,
+    LIGHT_SURFACE,
+};
 
 /// Tahoe corner radii (px at 1x). Consumers pick the one matching their surface.
 /// The window frame radius has a single owner: `flamewm_skin::recipes::decoration::ROUNDED_RADIUS`.
@@ -203,6 +206,9 @@ pub struct Appearance {
     pub taskbar_custom_tint: u32,
     /// `appearance` is `light` (case-insensitive). `system` and `dark` resolve to the Dark palette.
     pub light: bool,
+    /// Derived `wallpaperMeanRgb`: the backdrop glass shows. `None` until the desktop publishes it,
+    /// which keeps the material-only ink and no scrim.
+    pub backdrop_rgb: Option<u32>,
 }
 
 impl Default for Appearance {
@@ -215,7 +221,49 @@ impl Default for Appearance {
             taskbar_opacity_percent: 8,
             taskbar_custom_tint: 0x0058_79ee,
             light: false,
+            backdrop_rgb: None,
         }
+    }
+}
+
+/// Permille (0..=1000) to a tint alpha byte (0..=255), rounded to nearest.
+fn permille_to_alpha(permille: u16) -> u8 {
+    ((u32::from(permille.min(1000)) * 255 + 500) / 1000) as u8
+}
+
+/// Tint alpha byte to permille, rounded up so a floor is never undershot.
+fn alpha_to_permille(alpha: u8) -> u16 {
+    ((u32::from(alpha) * 1000 + 254) / 255) as u16
+}
+
+/// Scrim that keeps the body and muted ink at 4.5:1 over the published backdrop: the scrim colour
+/// and the least permille that reaches it. `None` without a backdrop or when no scrim can reach it.
+fn scrim_for(appearance: Appearance) -> Option<(u32, u16)> {
+    let backdrop = Rgb(appearance.backdrop_rgb?);
+    let palette = ink_for(appearance)?;
+    let scrim = if palette == Palette::RWR_0_0_9 {
+        Rgb(0)
+    } else {
+        Rgb(0x00ff_ffff)
+    };
+    let text = scrim_alpha_floor_with(palette.text, backdrop, scrim, BODY_MIN_CONTRAST)?;
+    let muted = scrim_alpha_floor_with(palette.muted, backdrop, scrim, BODY_MIN_CONTRAST)?;
+    Some((scrim.0, alpha_to_permille(text.max(muted))))
+}
+
+/// Ink palette for the glass over the published backdrop; `None` without one.
+fn ink_for(appearance: Appearance) -> Option<Palette> {
+    let backdrop = Rgb(appearance.backdrop_rgb?);
+    let tint = Rgb(glass_tint_rgb(appearance));
+    let alpha = permille_to_alpha(u16::from(appearance.glass_opacity_percent) * 10);
+    Some(glass_ink(tint, alpha, backdrop, BODY_MIN_CONTRAST).palette)
+}
+
+/// Derived `wallpaperMeanRgb` as a packed rgb value.
+fn wallpaper_mean_rgb(snapshot: &SettingsSnapshot) -> Option<u32> {
+    match snapshot.values.get("wallpaperMeanRgb") {
+        Some(SettingValue::Integer(rgb)) if (0..=0x00ff_ffff).contains(rgb) => Some(*rgb as u32),
+        _ => None,
     }
 }
 
@@ -275,11 +323,14 @@ const fn standard_rgb(appearance: Appearance) -> u32 {
 
 /// Regular glass material from the glass opacity and blur settings.
 fn regular(appearance: Appearance) -> (u32, u16, u16) {
-    (
-        glass_tint_rgb(appearance),
-        u16::from(appearance.glass_opacity_percent) * 10,
-        u16::from(appearance.glass_blur_px),
-    )
+    let tint = glass_tint_rgb(appearance);
+    let alpha = u16::from(appearance.glass_opacity_percent) * 10;
+    let blur = u16::from(appearance.glass_blur_px);
+    // The user opacity stays the floor: a scrim only replaces it where it needs more coverage.
+    match scrim_for(appearance) {
+        Some((rgb, floor)) if floor > alpha => (rgb, floor, blur),
+        _ => (tint, alpha, blur),
+    }
 }
 
 /// Glass tint is the Dark preset tint; regular glass uses the user opacity and blur.
@@ -423,6 +474,7 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
             snapshot.values.get("appearance"),
             Some(SettingValue::Text(value)) if value.eq_ignore_ascii_case("light")
         ),
+        backdrop_rgb: wallpaper_mean_rgb(snapshot),
     }
 }
 
@@ -442,7 +494,13 @@ pub fn overlays_from_settings(snapshot: &SettingsSnapshot) -> Overlays {
 /// `--text`, `--muted`, `--panel`, `--surface` or `--sidebar` at runtime.
 #[must_use]
 pub fn palette_from_settings(snapshot: &SettingsSnapshot) -> Palette {
-    if appearance_from_settings(snapshot).light {
+    let appearance = appearance_from_settings(snapshot);
+    if !appearance.reduce_transparency {
+        if let Some(palette) = ink_for(appearance) {
+            return palette;
+        }
+    }
+    if appearance.light {
         Palette::LIGHT
     } else {
         Palette::RWR_0_0_9
@@ -777,5 +835,105 @@ mod appearance_golden_tests {
         );
         assert_eq!(opaque.tint_rgb, LIGHT_PANEL.0);
         assert!(opaque.is_opaque());
+    }
+}
+
+#[cfg(test)]
+mod backdrop_ink_tests {
+    use super::*;
+    use flamewm_skin::palette::{composite, contrast_ratio, AlphaColor};
+
+    const BODY: f64 = 4.5;
+    /// Bright pink wallpaper under Settings Dark sidebar labels (measured 2.0 to 2.2:1 before).
+    const BRIGHT_PINK: u32 = 0x00ff_b6c1;
+    /// Measured Task Manager Light backdrop sample (upper end).
+    const MID_VIOLET: u32 = 0x0071_6c87;
+    const CAPS: RendererCaps = RendererCaps {
+        backdrop_blur: true,
+    };
+
+    fn with_backdrop(light: bool, rgb: u32, opacity: u8) -> Appearance {
+        Appearance {
+            light,
+            backdrop_rgb: Some(rgb),
+            glass_opacity_percent: opacity,
+            ..Appearance::default()
+        }
+    }
+
+    #[test]
+    fn no_published_backdrop_keeps_the_material_only_ink() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("appearance".into(), SettingValue::Text("light".into()));
+        assert_eq!(palette_from_settings(&snapshot), Palette::LIGHT);
+        assert_eq!(appearance_from_settings(&snapshot).backdrop_rgb, None);
+    }
+
+    #[test]
+    fn published_backdrop_is_read_from_the_derived_key() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "wallpaperMeanRgb".into(),
+            SettingValue::Integer(0x00ff_b6c1),
+        );
+        assert_eq!(
+            appearance_from_settings(&snapshot).backdrop_rgb,
+            Some(BRIGHT_PINK)
+        );
+        snapshot
+            .values
+            .insert("wallpaperMeanRgb".into(), SettingValue::Integer(-1));
+        assert_eq!(appearance_from_settings(&snapshot).backdrop_rgb, None);
+    }
+
+    #[test]
+    fn bright_wallpaper_flips_dark_appearance_to_dark_ink() {
+        assert_eq!(
+            ink_for(with_backdrop(false, BRIGHT_PINK, 12)),
+            Some(Palette::LIGHT)
+        );
+    }
+
+    #[test]
+    fn dark_wallpaper_keeps_shipped_ink_and_needs_no_scrim() {
+        let appearance = with_backdrop(false, 0, 12);
+        assert_eq!(ink_for(appearance), Some(Palette::RWR_0_0_9));
+        assert_eq!(scrim_for(appearance), Some((0, 0)));
+        let material = resolve(MaterialRole::GlassRegular, appearance, 100, CAPS);
+        assert_eq!(material.alpha_permille, 120);
+        assert_eq!(material.tint_rgb, glass_tint_rgb(appearance));
+    }
+
+    #[test]
+    fn mid_wallpaper_gets_a_scrim_that_reaches_body_contrast() {
+        let appearance = with_backdrop(true, MID_VIOLET, 5);
+        let material = resolve(MaterialRole::GlassRegular, appearance, 100, CAPS);
+        assert!(material.alpha_permille > 50, "{material:?}");
+        let palette = ink_for(appearance).expect("backdrop present");
+        let surface = composite(
+            AlphaColor {
+                color: Rgb(material.tint_rgb),
+                alpha: permille_to_alpha(material.alpha_permille),
+            },
+            Rgb(MID_VIOLET),
+        );
+        assert!(contrast_ratio(palette.text, surface) >= BODY);
+        assert!(contrast_ratio(palette.muted, surface) >= BODY);
+    }
+
+    #[test]
+    fn user_opacity_above_the_floor_is_kept() {
+        let appearance = with_backdrop(true, MID_VIOLET, 42);
+        let material = resolve(MaterialRole::GlassRegular, appearance, 100, CAPS);
+        assert!(material.alpha_permille >= 420, "{material:?}");
+    }
+
+    #[test]
+    fn alpha_conversions_round_so_a_floor_is_not_undershot() {
+        assert_eq!(permille_to_alpha(1000), 255);
+        assert_eq!(alpha_to_permille(255), 1000);
+        assert!(alpha_to_permille(permille_to_alpha(500)) >= 500);
     }
 }

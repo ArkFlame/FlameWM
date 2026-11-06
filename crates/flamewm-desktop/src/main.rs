@@ -82,6 +82,7 @@ mod sticky;
 #[path = "../ui_contract.rs"]
 mod ui_contract;
 mod wallpaper_fit;
+mod wallpaper_mean;
 #[allow(clippy::duplicate_mod)]
 mod wallpaper_loader;
 mod wallpaper_stamp;
@@ -260,6 +261,9 @@ pub fn main() -> Result<(), String> {
             icon_theme: String::new(),
             icon_theme_pending: false,
             wallpaper_loader,
+            mutations: None,
+            wallpaper_mean_generation: None,
+            published_wallpaper_mean: None,
         };
         refresh_launchers(&mut state);
         update_gauges(&state);
@@ -310,6 +314,7 @@ pub fn main() -> Result<(), String> {
             None
         }
     };
+    state_cell.borrow_mut().mutations = workspace_mutations.clone();
     if let Some(dispatcher) = workspace_mutations.as_ref() {
         let dispatcher = Arc::clone(dispatcher);
         let registration = reactor.register_raw_fd_with_action(

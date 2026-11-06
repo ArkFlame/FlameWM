@@ -113,6 +113,12 @@ pub(crate) struct DesktopState {
     /// Set when `iconTheme` changed; cleared once the new theme generation is installed.
     pub(crate) icon_theme_pending: bool,
     pub(crate) wallpaper_loader: wallpaper_loader::WallpaperLoader,
+    /// Non-blocking control queue for derived settings (`wallpaperMeanRgb`). `None` when degraded.
+    pub(crate) mutations: Option<std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>,
+    /// Loader generation whose mean was last computed; the mean is recomputed only on change.
+    pub(crate) wallpaper_mean_generation: Option<u64>,
+    /// Mean last published to the settings owner.
+    pub(crate) published_wallpaper_mean: Option<u32>,
 }
 
 #[derive(Clone)]

@@ -236,6 +236,103 @@ pub fn ink_palette_on(surface: Rgb) -> Palette {
     }
 }
 
+/// WCAG AA contrast for body text.
+pub const BODY_MIN_CONTRAST: f64 = 4.5;
+/// WCAG AA contrast for large text and non-text ink.
+pub const LARGE_MIN_CONTRAST: f64 = 3.0;
+
+/// Mean colour of backdrop samples (for example a 16x16 wallpaper downsample), averaged per
+/// sRGB channel. Empty input returns black. Computed once per backdrop change, never per frame.
+#[must_use]
+pub fn mean_backdrop(samples: &[Rgb]) -> Rgb {
+    if samples.is_empty() {
+        return Rgb(0);
+    }
+    let count = samples.len() as u64;
+    let channel = |shift: u32| {
+        let sum: u64 = samples
+            .iter()
+            .map(|s| u64::from((s.0 >> shift) & 0xff))
+            .sum();
+        (((sum + count / 2) / count) as u32) << shift
+    };
+    Rgb(channel(16) | channel(8) | channel(0))
+}
+
+/// Colour a glass surface shows: `tint` at `alpha` (0..=255) over the backdrop sample.
+#[must_use]
+pub fn effective_backdrop(tint: Rgb, alpha: u8, backdrop: Rgb) -> Rgb {
+    composite(AlphaColor { color: tint, alpha }, backdrop)
+}
+
+/// Least scrim alpha (0..=255) that lets `ink` reach `target` over `base`. The scrim is black when
+/// `ink` is lighter than `base` and white otherwise, so it always pushes the base away from the ink.
+/// Contrast only grows with scrim alpha, so a binary search finds the floor. `Some(0)` when `ink`
+/// already meets `target`; `None` when even a full scrim cannot.
+#[must_use]
+pub fn scrim_alpha_floor(ink: Rgb, base: Rgb, target: f64) -> Option<u8> {
+    let scrim = if relative_luminance(ink) > relative_luminance(base) {
+        Rgb(0)
+    } else {
+        Rgb(0x00ff_ffff)
+    };
+    scrim_alpha_floor_with(ink, base, scrim, target)
+}
+
+/// [`scrim_alpha_floor`] with the scrim colour fixed by the caller, so several inks share one scrim.
+#[must_use]
+pub fn scrim_alpha_floor_with(ink: Rgb, base: Rgb, scrim: Rgb, target: f64) -> Option<u8> {
+    let meets = |alpha: u8| {
+        contrast_ratio(
+            ink,
+            composite(
+                AlphaColor {
+                    color: scrim,
+                    alpha,
+                },
+                base,
+            ),
+        ) >= target
+    };
+    if !meets(u8::MAX) {
+        return None;
+    }
+    let (mut lo, mut hi) = (0_u8, u8::MAX);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if meets(mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    Some(lo)
+}
+
+/// Ink for one glass surface: the text palette chosen against the effective backdrop, and the scrim
+/// floor each ink colour needs to reach `target` over that backdrop. The caller raises the surface
+/// tint to `max(user_alpha, scrim)`, so the opacity setting still applies above the floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlassInk {
+    pub palette: Palette,
+    /// Scrim floor for the body text colour.
+    pub text_scrim: Option<u8>,
+    /// Scrim floor for the muted colour, which is the least contrasting token.
+    pub muted_scrim: Option<u8>,
+}
+
+/// Single owner for legible glass ink: polarity from the effective backdrop, then scrim floors.
+#[must_use]
+pub fn glass_ink(tint: Rgb, alpha: u8, backdrop: Rgb, target: f64) -> GlassInk {
+    let effective = effective_backdrop(tint, alpha, backdrop);
+    let palette = ink_palette_on(effective);
+    GlassInk {
+        palette,
+        text_scrim: scrim_alpha_floor(palette.text, effective, target),
+        muted_scrim: scrim_alpha_floor(palette.muted, effective, target),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,5 +447,131 @@ mod overlay_tests {
             };
             assert!(contrast_ratio(ink, accent) >= contrast_ratio(other, accent));
         }
+    }
+}
+
+#[cfg(test)]
+mod glass_ink_tests {
+    use super::*;
+
+    /// `glass::LIGHT`: white tint at 5%, alpha 13/255.
+    const LIGHT_TINT: Rgb = Rgb(0x00ff_ffff);
+    const LIGHT_ALPHA: u8 = 13;
+    /// `glass::DARK`: `#eaf4ff` tint at 12%, alpha 31/255.
+    const DARK_TINT: Rgb = Rgb(0x00ea_f4ff);
+    const DARK_ALPHA: u8 = 31;
+    /// Measured Task Manager Light backdrop samples under the rows.
+    const TM_LOW: Rgb = Rgb(0x005b_6182);
+    const TM_HIGH: Rgb = Rgb(0x0071_6c87);
+    /// Measured bright pink wallpaper under Settings Dark sidebar labels.
+    const PINK: Rgb = Rgb(0x00ff_b6c1);
+    /// Bright Light wallpaper stand-in for Finder tiles. Not a captured sample.
+    const BRIGHT: Rgb = Rgb(0x00f0_f0f0);
+
+    /// Contrast of `ink` over `base` after `floor` of the scrim `ink` was given.
+    fn contrast_with_floor(ink: Rgb, base: Rgb, floor: u8) -> f64 {
+        let scrim = if relative_luminance(ink) > relative_luminance(base) {
+            Rgb(0)
+        } else {
+            Rgb(0x00ff_ffff)
+        };
+        contrast_ratio(
+            ink,
+            composite(
+                AlphaColor {
+                    color: scrim,
+                    alpha: floor,
+                },
+                base,
+            ),
+        )
+    }
+
+    #[test]
+    fn mean_backdrop_averages_per_channel_and_handles_empty() {
+        assert_eq!(mean_backdrop(&[]), Rgb(0));
+        assert_eq!(
+            mean_backdrop(&[Rgb(0x0000_0000), Rgb(0x00ff_ffff)]),
+            Rgb(0x0080_8080)
+        );
+        assert_eq!(mean_backdrop(&[Rgb(0x0012_3456)]), Rgb(0x0012_3456));
+    }
+
+    #[test]
+    fn effective_backdrop_is_the_backdrop_at_zero_and_the_tint_at_full_alpha() {
+        assert_eq!(effective_backdrop(LIGHT_TINT, 0, TM_LOW), TM_LOW);
+        assert_eq!(effective_backdrop(LIGHT_TINT, 255, TM_LOW), LIGHT_TINT);
+    }
+
+    #[test]
+    fn task_manager_light_muted_was_1_5_to_1_8_before_the_owner() {
+        // Before: the Light palette was chosen from the material alone, so muted was #434a52.
+        let before_low = contrast_ratio(LIGHT_MUTED, TM_LOW);
+        let before_high = contrast_ratio(LIGHT_MUTED, TM_HIGH);
+        assert!((before_low - 1.49).abs() < 0.02, "{before_low}");
+        assert!((before_high - 1.79).abs() < 0.02, "{before_high}");
+    }
+
+    #[test]
+    fn task_manager_light_glass_gets_dark_ink_and_a_scrim_floor() {
+        for backdrop in [TM_LOW, TM_HIGH] {
+            let ink = glass_ink(LIGHT_TINT, LIGHT_ALPHA, backdrop, BODY_MIN_CONTRAST);
+            let effective = effective_backdrop(LIGHT_TINT, LIGHT_ALPHA, backdrop);
+            assert_eq!(ink.palette, Palette::RWR_0_0_9, "{backdrop:?}");
+            for (token, floor) in [
+                (ink.palette.text, ink.text_scrim),
+                (ink.palette.muted, ink.muted_scrim),
+            ] {
+                let floor = floor.expect("a scrim reaches 4.5:1 on this backdrop");
+                assert!(contrast_with_floor(token, effective, floor) >= BODY_MIN_CONTRAST);
+                if floor > 0 {
+                    assert!(contrast_with_floor(token, effective, floor - 1) < BODY_MIN_CONTRAST);
+                }
+            }
+        }
+        // The upper sample needs scrim for body text: Dark ink alone is 4.04:1 there.
+        let high = glass_ink(LIGHT_TINT, LIGHT_ALPHA, TM_HIGH, BODY_MIN_CONTRAST);
+        assert!(high.text_scrim.is_some_and(|floor| floor > 0));
+    }
+
+    #[test]
+    fn settings_dark_sidebar_on_pink_flips_to_dark_ink() {
+        // Before: Dark ink #f1f2f3 was 1.41:1 on the pink glass.
+        let effective = effective_backdrop(DARK_TINT, DARK_ALPHA, PINK);
+        assert!(contrast_ratio(Palette::RWR_0_0_9.text, effective) < 2.0);
+        let ink = glass_ink(DARK_TINT, DARK_ALPHA, PINK, BODY_MIN_CONTRAST);
+        assert_eq!(ink.palette, Palette::LIGHT);
+        assert_eq!(ink.text_scrim, Some(0));
+    }
+
+    #[test]
+    fn finder_bright_backdrop_takes_dark_ink() {
+        let ink = glass_ink(LIGHT_TINT, LIGHT_ALPHA, BRIGHT, BODY_MIN_CONTRAST);
+        assert_eq!(ink.palette, Palette::LIGHT);
+    }
+
+    #[test]
+    fn scrim_floor_is_zero_when_ink_already_reaches_target() {
+        assert_eq!(
+            scrim_alpha_floor(LIGHT_TEXT, Rgb(0x00ff_ffff), BODY_MIN_CONTRAST),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn scrim_floor_is_none_when_no_scrim_can_reach_target() {
+        // Mid grey ink over mid grey base: even a full white or black scrim stays below 21:1.
+        assert_eq!(
+            scrim_alpha_floor(Rgb(0x0077_7777), Rgb(0x0077_7777), 21.0),
+            None
+        );
+    }
+
+    #[test]
+    fn scrim_floor_is_the_least_alpha_that_reaches_target() {
+        let floor = scrim_alpha_floor(Rgb(0x00ae_b4bb), TM_LOW, BODY_MIN_CONTRAST).unwrap();
+        assert!(floor > 0);
+        assert!(contrast_with_floor(Rgb(0x00ae_b4bb), TM_LOW, floor) >= BODY_MIN_CONTRAST);
+        assert!(contrast_with_floor(Rgb(0x00ae_b4bb), TM_LOW, floor - 1) < BODY_MIN_CONTRAST);
     }
 }

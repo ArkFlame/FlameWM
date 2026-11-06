@@ -100,6 +100,35 @@ pub(crate) fn warn_degraded<T, E: std::fmt::Display>(subscription: &str, result:
     }
 }
 
+/// Publishes the wallpaper mean as the in-memory `wallpaperMeanRgb` derived setting. The mean is
+/// computed only when the loader generation changes, and a publish is sent only when the value
+/// differs from the last one accepted. Without a control queue the mean is simply not published.
+pub(crate) fn publish_wallpaper_mean(state: &mut DesktopState) {
+    let generation = state.wallpaper_loader.state().generation;
+    if state.wallpaper_mean_generation == Some(generation) {
+        return;
+    }
+    state.wallpaper_mean_generation = Some(generation);
+    let rgb = wallpaper_mean::presentation_mean(&state.wallpaper_loader.state().presentation);
+    if state.published_wallpaper_mean == Some(rgb) {
+        return;
+    }
+    let Some(dispatcher) = state.mutations.as_ref() else {
+        return;
+    };
+    let request = ControlRequest::ApplySettings(flamewm_api::settings::SettingsTransaction {
+        expected_revision: 0,
+        changes: vec![flamewm_api::settings::SettingsChange {
+            key: "wallpaperMeanRgb".to_owned(),
+            value: Some(flamewm_api::settings::SettingValue::Integer(i64::from(rgb))),
+        }],
+        reset_section: None,
+    });
+    if dispatcher.submit(request).is_ok() {
+        state.published_wallpaper_mean = Some(rgb);
+    }
+}
+
 /// Resolves wallpaper settings and requests a root canvas fitted independently per output unless
 /// the user opts into the legacy shared canvas.
 pub(crate) fn request_wallpaper(
@@ -190,6 +219,7 @@ pub(crate) fn refresh_settings_projection(
             | wallpaper_loader::PollOutcome::Stale { .. } => {}
         }
     }
+    publish_wallpaper_mean(state);
     if icon_theme_changed(&state.icon_theme, &state.settings) {
         state.icon_theme = setting_text(&state.settings, "iconTheme");
         state.icon_theme_pending = true;
