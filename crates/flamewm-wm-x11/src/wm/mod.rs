@@ -329,6 +329,8 @@ impl WmConfig {
 }
 
 #[cfg(test)]
+mod margin_rehome_tests;
+#[cfg(test)]
 mod workspace_count_tests;
 
 fn env_u16(name: &str, default: u16, min: u16, max: u16) -> u16 {
@@ -469,6 +471,9 @@ pub(crate) struct Wm<'a, C: Connection> {
     decoration_tokens: flamewm_skin::recipes::decoration::ChromeTokens,
     /// `titlebars` value the frames were last reflowed for; a change resizes every Server frame.
     titlebars_applied: bool,
+    /// `windowMargin` the maximized and placed frames were last laid out for; a change re-homes
+    /// every frame so a stale inset (for example 2 px kept after setting 0) is not left behind.
+    window_margin_applied: i32,
     /// Clients whose bottom corners were clipped to a rounded frame; used to
     /// restore the unshaped client when the decoration turns square.
     rounded_clients: HashSet<Window>,

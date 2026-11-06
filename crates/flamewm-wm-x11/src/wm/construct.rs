@@ -129,6 +129,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             chrome_runtimes: HashMap::new(),
             decoration_tokens: flamewm_skin::recipes::decoration::ChromeTokens::default(),
             titlebars_applied: crate::live_settings::titlebars(),
+            window_margin_applied: crate::live_settings::window_margin(),
             rounded_clients: HashSet::new(),
             changes: WmChangeSet::default(),
             super_tap: SuperTap::default(),

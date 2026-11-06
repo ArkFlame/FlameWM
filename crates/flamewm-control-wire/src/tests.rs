@@ -887,3 +887,48 @@ fn t05_system_snapshot_changed_round_trips_exact_snapshot_through_wire() {
     let legacy = ControlSignal::SystemChanged { revision: 12 };
     assert_eq!(decode_signal(&encode_signal(&legacy)), Ok(legacy));
 }
+
+/// Every `GlassPreset` value goes through the real Settings wire path (encode, then the Platform
+/// decode) and must come back with its declared type; `surfaceOutlineOpacity` used to decode as an
+/// integer and failed the Platform `Percent` slot with `setting requires percent`.
+#[test]
+fn every_glass_preset_round_trips_through_the_settings_apply_wire() {
+    use flamewm_ui_core::glass::{DARK, LIGHT};
+    for preset in [DARK, LIGHT] {
+        let changes: Vec<_> = preset
+            .settings_values()
+            .into_iter()
+            .map(|(key, value)| SettingsChange {
+                key: key.to_owned(),
+                value: Some(value),
+            })
+            .collect();
+        let request = ControlRequest::ApplySettings(SettingsTransaction {
+            expected_revision: 1,
+            changes: changes.clone(),
+            reset_section: None,
+        });
+        let call = encode_call(&request).expect("encode preset");
+        // The wire dict is keyed (sorted), so compare changes by key rather than by position.
+        let ControlRequest::ApplySettings(mut decoded) = decode_call(&call).expect("decode preset")
+        else {
+            panic!("wrong request");
+        };
+        let mut expected = changes;
+        expected.sort_by(|a, b| a.key.cmp(&b.key));
+        decoded.changes.sort_by(|a, b| a.key.cmp(&b.key));
+        assert_eq!(decoded.changes, expected, "{}", preset.glass_blur_px);
+    }
+}
+
+#[test]
+fn outline_and_blue_light_percent_keys_keep_percent_type_on_the_wire() {
+    for key in [
+        "surfaceOutlineOpacity",
+        "windowOutlineOpacity",
+        "blueLightFilter",
+    ] {
+        let value = setting_value_for_key(key, &WireValue::U32(40)).expect("percent key");
+        assert_eq!(value, SettingValue::Percent(40), "{key}");
+    }
+}

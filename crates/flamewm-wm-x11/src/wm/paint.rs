@@ -88,13 +88,19 @@ impl<C: Connection> Wm<'_, C> {
     ) -> Result<(), ReplyError> {
         let titlebars = crate::live_settings::titlebars();
         let titlebars_changed = titlebars != self.titlebars_applied;
-        if tokens == self.decoration_tokens && !titlebars_changed {
+        let window_margin = crate::live_settings::window_margin();
+        let margin_changed = window_margin != self.window_margin_applied;
+        if tokens == self.decoration_tokens && !titlebars_changed && !margin_changed {
             return Ok(());
         }
         self.decoration_tokens = tokens;
         if titlebars_changed {
             self.titlebars_applied = titlebars;
             self.reflow_titlebars(titlebars)?;
+        }
+        if margin_changed {
+            self.window_margin_applied = window_margin;
+            self.reconcile_work_area()?;
         }
         let clients: Vec<Window> = self.clients.keys().copied().collect();
         for client in clients {

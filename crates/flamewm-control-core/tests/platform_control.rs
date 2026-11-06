@@ -501,12 +501,23 @@ fn system_action_reports_explicit_stale_and_unsupported_errors() {
         .dispatch(
             &mut host,
             ControlRequest::SystemAction {
-                action: flamewm_api::system::SystemAction::Scan,
+                action: flamewm_api::system::SystemAction::SetWifiEnabled(true),
                 expected_revision: 1,
             },
         )
         .expect_err("stale revision");
     assert_eq!(stale.code, flamewm_api::ErrorCode::StaleRevision);
+    // Scan is exempt from the revision fence: a stale Scan reaches the provider.
+    let scan_stale = dispatcher
+        .dispatch(
+            &mut host,
+            ControlRequest::SystemAction {
+                action: flamewm_api::system::SystemAction::Scan,
+                expected_revision: 1,
+            },
+        )
+        .expect_err("no provider installed");
+    assert_eq!(scan_stale.code, flamewm_api::ErrorCode::Unsupported);
     let unsupported = dispatcher
         .dispatch(
             &mut host,

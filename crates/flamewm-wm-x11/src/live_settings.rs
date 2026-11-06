@@ -195,6 +195,14 @@ mod show_content_tests {
         assert_eq!(window_margin_from_snapshot(&snapshot), 8);
         snapshot
             .values
+            .insert("windowMargin".into(), SettingValue::Integer(0));
+        assert_eq!(
+            window_margin_from_snapshot(&snapshot),
+            0,
+            "0 means no margin"
+        );
+        snapshot
+            .values
             .insert("windowMargin".into(), SettingValue::Integer(99));
         assert_eq!(window_margin_from_snapshot(&snapshot), 2);
         snapshot

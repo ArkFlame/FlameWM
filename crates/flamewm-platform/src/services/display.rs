@@ -146,8 +146,10 @@ impl DisplayService {
             ));
         }
         if selected.current_mode == mode {
+            // A distinct Conflict, not InvalidArgument: the request is well-formed, the output
+            // already runs this mode, and nothing was applied.
             return Err(FlameError::new(
-                ErrorCode::InvalidArgument,
+                ErrorCode::Conflict,
                 "display mode is already active",
             ));
         }
@@ -489,6 +491,27 @@ mod tests {
             service.cached().map(|s| s.outputs[0].current_mode),
             Some(ModeId(2))
         );
+    }
+
+    #[test]
+    fn fake_two_mode_same_mode_is_a_clear_conflict_and_applies_nothing() {
+        let mut port = TwoModePort::new();
+        let mut service = DisplayService::default();
+        let generation = service.refresh(&mut port).expect("snapshot").generation;
+        let error = service
+            .begin_mode(
+                &mut port,
+                &OutputId::new("fake"),
+                ModeId(1),
+                generation,
+                100,
+            )
+            .expect_err("current mode is a no-op");
+        assert_eq!(error.code, ErrorCode::Conflict);
+        assert_eq!(error.message, "display mode is already active");
+        assert_eq!(port.mode, ModeId(1), "nothing applied");
+        assert_eq!(port.generation, generation, "no mode change happened");
+        assert!(service.cached().and_then(|s| s.pending.as_ref()).is_none());
     }
 
     #[test]

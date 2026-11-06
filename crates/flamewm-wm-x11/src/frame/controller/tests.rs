@@ -425,6 +425,13 @@ fn window_margin_insets_snapped_and_maximized_frames() {
 }
 
 #[test]
+fn window_margin_zero_maximizes_to_the_full_work_area() {
+    let s0 = floating_state().with_window_margin(0);
+    let (maximized, _) = reduce(&s0, FrameEvent::ToggleMax);
+    assert_eq!(maximized.placement.current, WA);
+}
+
+#[test]
 fn max_restore_returns_to_floating() {
     let s0 = floating_state();
     let (s1, _) = reduce(&s0, FrameEvent::ToggleMax);
