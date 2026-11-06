@@ -108,14 +108,16 @@ pub(crate) fn publish_wallpaper_mean(state: &mut DesktopState) {
     if state.wallpaper_mean_generation == Some(generation) {
         return;
     }
+    // Mark the generation only once a dispatcher exists, so a mean computed before the control
+    // queue is up is still published on a later frame instead of being dropped for good.
+    let Some(dispatcher) = state.mutations.as_ref() else {
+        return;
+    };
     state.wallpaper_mean_generation = Some(generation);
     let rgb = wallpaper_mean::presentation_mean(&state.wallpaper_loader.state().presentation);
     if state.published_wallpaper_mean == Some(rgb) {
         return;
     }
-    let Some(dispatcher) = state.mutations.as_ref() else {
-        return;
-    };
     let request = ControlRequest::ApplySettings(flamewm_api::settings::SettingsTransaction {
         expected_revision: 0,
         changes: vec![flamewm_api::settings::SettingsChange {
@@ -126,6 +128,9 @@ pub(crate) fn publish_wallpaper_mean(state: &mut DesktopState) {
     });
     if dispatcher.submit(request).is_ok() {
         state.published_wallpaper_mean = Some(rgb);
+    } else {
+        // Queue full or closed: retry on the next frame rather than leaving the backdrop unpublished.
+        state.wallpaper_mean_generation = None;
     }
 }
 

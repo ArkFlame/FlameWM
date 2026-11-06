@@ -13,8 +13,8 @@
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_skin::palette::{
-    glass_ink, scrim_alpha_floor_with, Overlays, Palette, Rgb, BODY_MIN_CONTRAST, LIGHT_PANEL,
-    LIGHT_SURFACE,
+    BODY_MIN_CONTRAST, LIGHT_PANEL, LIGHT_SURFACE, Overlays, Palette, Rgb, contrast_ratio,
+    effective_backdrop, glass_ink, scrim_alpha_floor_with,
 };
 
 /// Tahoe corner radii (px at 1x). Consumers pick the one matching their surface.
@@ -326,10 +326,23 @@ fn regular(appearance: Appearance) -> (u32, u16, u16) {
     let tint = glass_tint_rgb(appearance);
     let alpha = u16::from(appearance.glass_opacity_percent) * 10;
     let blur = u16::from(appearance.glass_blur_px);
-    // The user opacity stays the floor: a scrim only replaces it where it needs more coverage.
+    // Legibility is judged on the surface actually drawn: the user tint at the user alpha over the
+    // backdrop. The ink palette is chosen on that same surface, so only a failing surface takes the
+    // scrim, and the scrim floor is solved over the raw backdrop it replaces the tint on.
+    let Some(palette) = ink_for(appearance) else {
+        return (tint, alpha, blur);
+    };
+    let backdrop = Rgb(appearance.backdrop_rgb.unwrap_or_default());
+    let drawn = effective_backdrop(Rgb(tint), permille_to_alpha(alpha), backdrop);
+    let legible = contrast_ratio(palette.text, drawn) >= BODY_MIN_CONTRAST
+        && contrast_ratio(palette.muted, drawn) >= BODY_MIN_CONTRAST;
+    if legible {
+        return (tint, alpha, blur);
+    }
+    // The scrim never drops below the user opacity, so the setting still applies above the floor.
     match scrim_for(appearance) {
-        Some((rgb, floor)) if floor > alpha => (rgb, floor, blur),
-        _ => (tint, alpha, blur),
+        Some((rgb, floor)) => (rgb, floor.max(alpha), blur),
+        None => (tint, alpha, blur),
     }
 }
 
@@ -841,7 +854,7 @@ mod appearance_golden_tests {
 #[cfg(test)]
 mod backdrop_ink_tests {
     use super::*;
-    use flamewm_skin::palette::{composite, contrast_ratio, AlphaColor};
+    use flamewm_skin::palette::{AlphaColor, composite, contrast_ratio};
 
     const BODY: f64 = 4.5;
     /// Bright pink wallpaper under Settings Dark sidebar labels (measured 2.0 to 2.2:1 before).
@@ -928,6 +941,45 @@ mod backdrop_ink_tests {
         let appearance = with_backdrop(true, MID_VIOLET, 42);
         let material = resolve(MaterialRole::GlassRegular, appearance, 100, CAPS);
         assert!(material.alpha_permille >= 420, "{material:?}");
+    }
+
+    #[test]
+    fn drawn_regular_glass_meets_body_contrast_over_appearance_and_backdrop_grid() {
+        const LEVELS: [u32; 6] = [0x00, 0x33, 0x66, 0x99, 0xcc, 0xff];
+        for light in [false, true] {
+            for opacity in [4_u8, 8, 12, 22, 33, 42] {
+                for r in LEVELS {
+                    for g in LEVELS {
+                        for b in LEVELS {
+                            let rgb = (r << 16) | (g << 8) | b;
+                            let appearance = with_backdrop(light, rgb, opacity);
+                            let material =
+                                resolve(MaterialRole::GlassRegular, appearance, 100, CAPS);
+                            let palette = ink_for(appearance).expect("backdrop present");
+                            let surface = composite(
+                                AlphaColor {
+                                    color: Rgb(material.tint_rgb),
+                                    alpha: permille_to_alpha(material.alpha_permille),
+                                },
+                                Rgb(rgb),
+                            );
+                            assert!(
+                                contrast_ratio(palette.text, surface) >= BODY,
+                                "text light={light} opacity={opacity} rgb={rgb:06x} {material:?}"
+                            );
+                            assert!(
+                                contrast_ratio(palette.muted, surface) >= BODY,
+                                "muted light={light} opacity={opacity} rgb={rgb:06x} {material:?}"
+                            );
+                            assert!(
+                                material.alpha_permille >= u16::from(opacity) * 10,
+                                "user opacity is the floor: {material:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
