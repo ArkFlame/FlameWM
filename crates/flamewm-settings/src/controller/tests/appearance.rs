@@ -162,44 +162,40 @@ fn application_appearance_highlights_nothing_without_an_authoritative_value() {
 }
 
 #[test]
-fn selector_text_ink_tracks_dark_and_light_appearance() {
-    for (mode, expected) in [
-        (
-            "dark",
-            UiColor {
-                r: 0xf1,
-                g: 0xf2,
-                b: 0xf3,
-                a: 0xff,
-            },
-        ),
-        (
-            "light",
-            UiColor {
-                r: 0x18,
-                g: 0x1b,
-                b: 0x1e,
-                a: 0xff,
-            },
-        ),
-    ] {
-        let (_, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(appearance_snapshot(
-                1,
-                Some(mode),
-            ))));
-        let application = settings_application(transport);
-        let mut document = ProbeDocument::default();
+fn appearance_selectors_keep_text_ink_in_selected_and_unselected_states() {
+    for (mode, expected) in appearance_text_inks() {
+        for decoration in ["rounded", "squared"] {
+            for titlebar_style in ["circle", "square"] {
+                let mut snapshot = appearance_snapshot(1, Some(mode));
+                snapshot.values.insert(
+                    "decoration".to_owned(),
+                    SettingValue::Text(decoration.to_owned()),
+                );
+                snapshot.values.insert(
+                    "titlebarButtonStyle".to_owned(),
+                    SettingValue::Text(titlebar_style.to_owned()),
+                );
+                let (_, mut transport) = recording_transport();
+                transport
+                    .responses
+                    .push_back(Ok(ControlResponse::Settings(snapshot)));
+                let application = settings_application(transport);
+                let mut document = ProbeDocument::default();
 
-        application
-            .sync(&mut document)
-            .expect("sync theme text tokens");
+                application
+                    .sync(&mut document)
+                    .expect("sync selector theme text tokens");
 
-        assert_eq!(
-            document.variables["--text"], expected,
-            "{mode} selector ink"
-        );
+                for (id, selected) in [
+                    ("decoration-rounded", decoration == "rounded"),
+                    ("decoration-squared", decoration == "squared"),
+                    ("titlebar-button-style-circle", titlebar_style == "circle"),
+                    ("titlebar-button-style-square", titlebar_style == "square"),
+                ] {
+                    assert_eq!(document.highlighted[id], selected, "{mode} {id} state");
+                    assert_selector_inherits_theme_text(&document, id, expected);
+                }
+            }
+        }
     }
 }

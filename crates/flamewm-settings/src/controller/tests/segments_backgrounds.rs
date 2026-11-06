@@ -46,6 +46,46 @@ fn taskbar_style_segment_writes_floating_and_shows_only_its_floating_steppers() 
 }
 
 #[test]
+fn taskbar_material_selectors_keep_text_ink_in_selected_and_unselected_states() {
+    let options = [
+        ("blur-only", "taskbar-material-blur-only"),
+        ("inherit", "taskbar-material-inherit"),
+        ("custom-tint", "taskbar-material-custom-tint"),
+    ];
+    for (mode, expected) in appearance_text_inks() {
+        for (selected, _) in options {
+            let mut snapshot = SettingsSnapshot::new(1);
+            snapshot
+                .values
+                .insert("appearance".to_owned(), SettingValue::Text(mode.to_owned()));
+            snapshot.values.insert(
+                "taskbarMaterialMode".to_owned(),
+                SettingValue::Text(selected.to_owned()),
+            );
+            let (_, mut transport) = recording_transport();
+            transport
+                .responses
+                .push_back(Ok(ControlResponse::Settings(snapshot)));
+            let application = settings_application(transport);
+            let mut document = ProbeDocument::default();
+
+            application
+                .sync(&mut document)
+                .expect("sync taskbar material selector text tokens");
+
+            for (value, id) in options {
+                assert_eq!(
+                    document.highlighted[id],
+                    value == selected,
+                    "{mode} {id} state"
+                );
+                assert_selector_inherits_theme_text(&document, id, expected);
+            }
+        }
+    }
+}
+
+#[test]
 fn cursor_size_segments_write_exact_pixels_and_highlight_the_snapshot() {
     let (requests, mut transport) = recording_transport();
     transport.responses.extend([

@@ -202,21 +202,19 @@ pub(crate) fn highlight_options(
     Ok(())
 }
 
-/// Paints one segment with the accent when selected, and clears its highlight otherwise.
+/// Keeps the selected background on the accent and lets every segment inherit `--text`.
 pub(crate) fn highlight_segment(
     document: &mut impl UiDocumentAccess,
     id: &str,
     selected: bool,
     accent: UiColor,
 ) -> Result<(), String> {
-    // Accent fills carry the contrast-picked label ink (`--on-accent`), never the white text token.
     if selected {
         document.background(id, accent)?;
-        document.foreground(id, flamewm_ui_x11::on_accent_color(accent))
     } else {
         document.background_clear(id)?;
-        document.foreground_clear(id)
     }
+    document.foreground_clear(id)
 }
 
 /// Parses `<target>.preset.<0..5>`, the rest after `settings.color.`.

@@ -143,6 +143,7 @@ struct ProbeDocument {
     texts: BTreeMap<String, String>,
     visible: BTreeMap<String, bool>,
     highlighted: BTreeMap<String, bool>,
+    foregrounds: BTreeMap<String, Option<UiColor>>,
     variables: BTreeMap<String, UiColor>,
 }
 
@@ -195,8 +196,10 @@ impl UiDocumentAccess for ProbeDocument {
         crate::ui_contract::require_markup_id(_id)
     }
 
-    fn foreground(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
-        crate::ui_contract::require_markup_id(_id)
+    fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+        crate::ui_contract::require_markup_id(id)?;
+        self.foregrounds.insert(id.to_owned(), Some(color));
+        Ok(())
     }
 
     fn background_clear(&mut self, id: &str) -> Result<(), String> {
@@ -209,8 +212,10 @@ impl UiDocumentAccess for ProbeDocument {
         crate::ui_contract::require_markup_id(_id)
     }
 
-    fn foreground_clear(&mut self, _id: &str) -> Result<(), String> {
-        crate::ui_contract::require_markup_id(_id)
+    fn foreground_clear(&mut self, id: &str) -> Result<(), String> {
+        crate::ui_contract::require_markup_id(id)?;
+        self.foregrounds.insert(id.to_owned(), None);
+        Ok(())
     }
 
     fn font_size(&mut self, _id: &str, _size_px: f32) -> Result<(), String> {
@@ -233,6 +238,42 @@ impl UiDocumentAccess for ProbeDocument {
     fn layer(&mut self, _id: &str, _layer: flamewm_ui_core::style::UiLayer) -> Result<(), String> {
         crate::ui_contract::require_markup_id(_id)
     }
+}
+
+fn appearance_text_inks() -> [(&'static str, UiColor); 2] {
+    [
+        (
+            "dark",
+            UiColor {
+                r: 0xf1,
+                g: 0xf2,
+                b: 0xf3,
+                a: 0xff,
+            },
+        ),
+        (
+            "light",
+            UiColor {
+                r: 0x18,
+                g: 0x1b,
+                b: 0x1e,
+                a: 0xff,
+            },
+        ),
+    ]
+}
+
+fn assert_selector_inherits_theme_text(document: &ProbeDocument, id: &str, expected: UiColor) {
+    assert_eq!(
+        document.foregrounds.get(id),
+        Some(&None),
+        "{id} must inherit its foreground instead of overriding --text"
+    );
+    assert_eq!(
+        document.variables.get("--text"),
+        Some(&expected),
+        "{id} must inherit the current theme's --text token"
+    );
 }
 
 fn release(action: &str) -> UiActionEvent {
