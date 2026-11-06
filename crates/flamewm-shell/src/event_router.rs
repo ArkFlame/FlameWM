@@ -385,8 +385,9 @@ impl ShellLoop {
         ) {
             self.task_press_target = None;
         }
+        // Wheel ticks arrive as the hit node's action name plus the wheel button (any phase);
+        // the separate "scroll" event for the same tick matches neither branch below.
         if matches!(button, PointerButton::WheelUp | PointerButton::WheelDown)
-            && event.action.phase == ActionPhase::Press
             && self.start_open
             && slot_of(action, "start.app.").is_some()
         {
@@ -400,9 +401,9 @@ impl ShellLoop {
             return Ok(());
         }
         if matches!(button, PointerButton::WheelUp | PointerButton::WheelDown) {
-            // One step per wheel tick (press only: X sends press and release per tick). The
-            // request is enqueued on the control dispatcher; the OSD follows the snapshot change.
-            if event.action.phase == ActionPhase::Press && action == TRAY_VOLUME_ACTION {
+            // One step per wheel tick: the node-targeted event is delivered once per X tick.
+            // The request is enqueued on the control dispatcher; the OSD follows the snapshot.
+            if action == TRAY_VOLUME_ACTION {
                 let cap = self.audio_settings.max_percent();
                 let up = button == PointerButton::WheelUp;
                 let snapshot = self.shell.snapshot();

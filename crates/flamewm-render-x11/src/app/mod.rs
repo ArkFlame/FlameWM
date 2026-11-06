@@ -211,6 +211,8 @@ pub(crate) struct X11App {
     /// Floating dock corner radius in window px. Non-zero keeps the coverage refresh from
     /// replacing the rounded dock mask; zero leaves the coverage mask in charge.
     pub(crate) dock_corner_radius: u32,
+    /// Opt-in (shell only): a wheel tick also reaches the node under the pointer.
+    pub(crate) node_wheel_targets: bool,
     /// Border-only ring (`border_px`, `radius_px`) in window px. When set, the coverage refresh
     /// keeps only the ring so the interior stays see-through.
     pub(crate) ring_mask: Option<(u32, u32)>,
@@ -686,6 +688,7 @@ impl X11App {
             xrender,
             xshape,
             dock_corner_radius: 0,
+            node_wheel_targets: false,
             ring_mask: None,
             shape_override: None,
             visual,
@@ -1184,7 +1187,12 @@ mod window_event_mask_tests {
     fn every_window_selects_visibility_changes_and_keeps_the_input_masks() {
         let mask = window_event_mask();
         assert_ne!(mask & VISIBILITY_CHANGE_MASK, 0);
-        for required in [EXPOSURE_MASK, STRUCTURE_NOTIFY_MASK, BUTTON_PRESS_MASK, KEY_PRESS_MASK] {
+        for required in [
+            EXPOSURE_MASK,
+            STRUCTURE_NOTIFY_MASK,
+            BUTTON_PRESS_MASK,
+            KEY_PRESS_MASK,
+        ] {
             assert_eq!(mask & required, required);
         }
     }

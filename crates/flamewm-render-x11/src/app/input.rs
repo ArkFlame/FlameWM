@@ -23,6 +23,12 @@ pub(crate) fn wheel_scroll_delta(button: PointerButton) -> Option<(f32, f32)> {
     }
 }
 
+/// Node that also receives a wheel tick: only for opted-in surfaces, and only when a node with
+/// an action sits under the pointer.
+pub(crate) fn wheel_node_target(enabled: bool, hit: Option<u32>) -> Option<u32> {
+    if enabled { hit } else { None }
+}
+
 /// Topmost node under the pointer whose overflow-y is user-scrollable
 /// (Auto/Scroll). Walks the cached z-order in reverse like hit testing, but
 /// does not require an action, so plain scroll containers are targets.
@@ -147,6 +153,16 @@ mod tests {
             nodes: vec![node(None, Some(1), root), node(Some(0), None, content)],
         })
         .expect("wheel fixture is a valid document")
+    }
+
+    #[test]
+    fn wheel_reaches_hit_node_only_on_opted_in_surfaces() {
+        // Shell (opted in): the tray/Start node under the pointer gets the tick.
+        assert_eq!(wheel_node_target(true, Some(7)), Some(7));
+        // Other apps (default off): only the existing "scroll" action; no node event.
+        assert_eq!(wheel_node_target(false, Some(7)), None);
+        // Opted in over empty space: nothing to target.
+        assert_eq!(wheel_node_target(true, None), None);
     }
 
     #[test]

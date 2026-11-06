@@ -251,7 +251,11 @@ fn execute() -> Result<(), String> {
     let mut runtime = {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.runtime_create");
         let _s = scope.start();
-        SurfaceRuntime::new().map_err(|error| format!("create UI runtime: {error:?}"))?
+        let mut runtime =
+            SurfaceRuntime::new().map_err(|error| format!("create UI runtime: {error:?}"))?;
+        // The shell owns the taskbar, Start and volume tray targets for wheel ticks.
+        runtime.set_node_wheel_targets(true);
+        runtime
     };
     let surfaces = {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.surface_create");

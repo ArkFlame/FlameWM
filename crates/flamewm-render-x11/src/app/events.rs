@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::os::raw::{c_char, c_int, c_uint, c_ulong};
 
-use super::input::apply_wheel_scroll;
+use super::input::{apply_wheel_scroll, wheel_node_target};
 use super::xdnd::SELECTION_NOTIFY;
 use super::*;
 use crate::WindowGeometrySlot;
@@ -796,6 +796,11 @@ impl X11App {
                             button.state,
                         );
                         fire_static(on_action, document, &mut buffers, "scroll", &mut event)?;
+                        // Same tick, same event shape, under the hit node's action name.
+                        let hit = self.hit_test(document, button.x as f32, button.y as f32);
+                        if let Some(index) = wheel_node_target(self.node_wheel_targets, hit) {
+                            fire_node(on_action, document, &mut buffers, index, &mut event)?;
+                        }
                         self.mark_input_repaint();
                         // A wheel burst shares one paint: defer while more input is queued.
                         if self.single_event && !self.input_backlog() {

@@ -133,6 +133,13 @@ impl SurfaceRuntime {
             scroll_offsets: HashMap::new(),
         })
     }
+    /// Opt-in for surfaces created afterwards: wheel ticks also reach the node under the
+    /// pointer as a `Motion`-phase action event with the wheel button. Call before creating
+    /// surfaces; only the shell enables it.
+    pub fn set_node_wheel_targets(&mut self, enabled: bool) {
+        self.controller.set_node_wheel_targets(enabled);
+    }
+
     pub fn create_surface(
         &mut self,
         template: UiTemplate,
@@ -537,7 +544,10 @@ impl SurfaceRuntime {
     ) -> Result<flamewm_render_core::Rect, UiBackendError> {
         self.controller
             .with_document_text_measure(surface.0, |document| {
-                default_layout(document).boxes.get(node as usize).map(|entry| entry.rect)
+                default_layout(document)
+                    .boxes
+                    .get(node as usize)
+                    .map(|entry| entry.rect)
             })
             .map_err(UiBackendError::Document)?
             .ok_or_else(|| UiBackendError::Document(format!("node {node} has no layout box")))

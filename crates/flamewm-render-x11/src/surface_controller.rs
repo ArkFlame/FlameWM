@@ -153,6 +153,8 @@ pub struct SurfaceController {
     display: *mut Display,
     screen: i32,
     next_id: u64,
+    /// Applied to surfaces created afterwards; see `set_node_wheel_targets`.
+    node_wheel_targets: bool,
     surfaces: HashMap<SurfaceId, SurfaceInstance>,
     windows: HashMap<Window, SurfaceId>,
     /// Dynamic Xft/XRender/XShape/Xcursor handles outlive all apps and
@@ -199,6 +201,7 @@ impl SurfaceController {
                 screen: XDefaultScreen(display),
                 display,
                 next_id: 1,
+                node_wheel_targets: false,
                 surfaces: HashMap::new(),
                 windows: HashMap::new(),
                 deferred_native_libraries: Vec::new(),
@@ -247,6 +250,13 @@ impl SurfaceController {
         }
     }
 
+    /// Opt-in for surfaces created afterwards: wheel ticks over a node with an action also
+    /// reach that node as a `Motion`-phase event carrying the wheel button and `dx,dy` text.
+    /// Off by default so other apps keep only the `scroll` action.
+    pub fn set_node_wheel_targets(&mut self, enabled: bool) {
+        self.node_wheel_targets = enabled;
+    }
+
     pub fn create_surface(
         &mut self,
         document: RuntimeDocument,
@@ -256,8 +266,9 @@ impl SurfaceController {
         self.next_id = self.next_id.checked_add(1).ok_or("surface id exhausted")?;
         let (role, input) = (config.role, config.input);
         let x11_config = X11Config::from(config.clone());
-        let app =
+        let mut app =
             unsafe { X11App::new_surface(self.display, &x11_config, config.x, config.y, false)? };
+        app.node_wheel_targets = self.node_wheel_targets;
         let window = app.window;
         let mut instance = SurfaceInstance {
             app,
