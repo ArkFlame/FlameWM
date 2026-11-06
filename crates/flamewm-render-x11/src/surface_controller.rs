@@ -98,6 +98,16 @@ pub(crate) fn raise_above_taskbars(
     }
 }
 
+/// Taskbar windows a surface's raise may lift above it. An OSD (`Overlay`) raises only itself:
+/// lifting the docks too pulled the taskbar above fullscreen clients whenever an OSD appeared.
+pub(crate) fn raise_targets(role: SurfaceRole, taskbars: &[Window]) -> &[Window] {
+    if role == SurfaceRole::Overlay {
+        &[]
+    } else {
+        taskbars
+    }
+}
+
 /// DEBUG-ONLY pure stack-order predicate (no X): bottom-to-top roles must
 /// satisfy desktop < normal < popup (menu/dropdown/overlay) < dock. The taskbar
 /// stays above flyouts. Test/canary use only.
@@ -326,7 +336,11 @@ impl SurfaceController {
         unsafe {
             XMapWindow(self.display, window);
             if surface_role_needs_popup_raise(role) {
-                raise_above_taskbars(self.display, window, &self.taskbar_windows());
+                raise_above_taskbars(
+                    self.display,
+                    window,
+                    raise_targets(role, &self.taskbar_windows()),
+                );
             }
             instance.app.present_scene().map_err(mark_x_error)?;
             XFlush(self.display);
@@ -437,7 +451,7 @@ impl SurfaceController {
         // before any early return so every show call restores the popup-above-frame invariant.
         // The first-show path raises again after the map, where the taskbars must stay above it.
         if shown && surface_role_needs_popup_raise(role) {
-            raise_above_taskbars(display, window, &taskbars);
+            raise_above_taskbars(display, window, raise_targets(role, &taskbars));
         }
         if !shown {
             // Before any paint or map: the root under the unmapped popup is still clean.
@@ -524,7 +538,7 @@ impl SurfaceController {
             XMapWindow(display, window);
             // Slides stack above application windows; the panel clip keeps the emerging part hidden.
             if emerging.is_some() || surface_role_needs_popup_raise(role) {
-                raise_above_taskbars(display, window, &taskbars);
+                raise_above_taskbars(display, window, raise_targets(role, &taskbars));
             }
         }
         cycle.advance("map_raise")?;
@@ -915,7 +929,9 @@ impl SurfaceController {
         let instance = self.instance_mut(id)?;
         instance.app.ensure_xft();
         let SurfaceInstance { app, document, .. } = instance;
-        Ok(super::xft::scoped_text_measure(app.xft.as_mut(), || f(document)))
+        Ok(super::xft::scoped_text_measure(app.xft.as_mut(), || {
+            f(document)
+        }))
     }
 
     /// Native root-space origin of a surface; (0, 0) when the surface is unknown.
@@ -1197,7 +1213,11 @@ impl SurfaceController {
                     // Map and present the real popup, then drop the overlay: same turn, no gap.
                     // SAFETY: the window is this controller's live child of the root.
                     unsafe { XMapWindow(display, instance.app.window) };
-                    raise_above_taskbars(display, instance.app.window, &taskbars);
+                    raise_above_taskbars(
+                        display,
+                        instance.app.window,
+                        raise_targets(instance.role, &taskbars),
+                    );
                     let _ = unsafe { instance.app.present_scene() };
                     instance.shown = true;
                     if std::mem::take(&mut instance.grab_pending) {
@@ -1232,7 +1252,7 @@ impl SurfaceController {
             if active.opening {
                 // The full mask is visible only at the anchored, fully opened position.
                 unsafe { instance.app.refresh_shape_mask(&instance.document) };
-                raise_above_taskbars(display, window, &taskbars);
+                raise_above_taskbars(display, window, raise_targets(instance.role, &taskbars));
             } else {
                 // Never restore the full shape while still mapped: that exposes a final
                 // un-clipped frame in front of the dock for one X server composite.

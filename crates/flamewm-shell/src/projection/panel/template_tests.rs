@@ -25,8 +25,8 @@ fn separate_mode_nodes_share_one_top_and_height() {
         taskbar_scale::set_factor(factor);
         let (bar_w, bar_h) = (1350.0_f32, taskbar_css_height(logical));
         doc.size("taskbar", bar_w, bar_h).expect("taskbar sizes");
-        project_taskbar_metrics(&mut doc).expect("metrics project");
-        project_task_slots_extent(&mut doc, 3).expect("slots extent");
+        project_taskbar_metrics(&mut doc, false).expect("metrics project");
+        project_task_slots_extent(&mut doc, 3, false).expect("slots extent");
         project_pager(&mut doc, Some(&pager_snapshot(4, 0))).expect("pager projects");
         doc.visible("workspace-pager", true).expect("pager visible");
         project_element_backgrounds(&mut doc, TaskbarItems::default(), 3, true, true)
@@ -129,8 +129,8 @@ fn task_line_is_centered_under_its_icon_at_every_scale_and_height() {
             let width = taskbar_css_width(device_width, percent);
             let height = taskbar_css_height(logical);
             doc.size("taskbar", width, height).expect("taskbar sizes");
-            project_taskbar_metrics(&mut doc).expect("metrics project");
-            project_task_slots_extent(&mut doc, 1).expect("slots extent");
+            project_taskbar_metrics(&mut doc, false).expect("metrics project");
+            project_task_slots_extent(&mut doc, 1, false).expect("slots extent");
             doc.visible("task-slot-1", true).expect("slot visible");
             project_task_line(&mut doc, "task-slot-1-line", false).expect("line projects");
             let rect = |id: &str| {
@@ -747,4 +747,63 @@ fn full_panel_projection_succeeds_on_real_artifact() {
         &mut Default::default(),
     )
     .unwrap_or_else(|error| panic!("full panel projection refused: {error}"));
+}
+
+// TRIGGER: taskbar_css_size edge branches or project_taskbar_height sizing.
+#[test]
+fn taskbar_size_fills_panel_window_on_every_edge() {
+    use flamewm_api::PanelEdge;
+    use flamewm_api::panels::PanelSnapshot;
+    let panel = |edge, width, height| PanelSnapshot {
+        output: flamewm_api::OutputId::new("default"),
+        edge,
+        logical_size: 44,
+        visible: true,
+        geometry: flamewm_api::Rect::new(0, 0, width, height),
+    };
+    // Bottom/Top: width spans the window, height is the bar thickness.
+    assert_eq!(
+        taskbar_css_size(&panel(PanelEdge::Bottom, 1350, 44), 100),
+        (1350.0, 44.0)
+    );
+    assert_eq!(
+        taskbar_css_size(&panel(PanelEdge::Top, 1350, 44), 100),
+        (1350.0, 44.0)
+    );
+    // Left/Right: thickness is the width, length spans the full window height.
+    assert_eq!(
+        taskbar_css_size(&panel(PanelEdge::Left, 44, 900), 100),
+        (44.0, 900.0)
+    );
+    assert_eq!(
+        taskbar_css_size(&panel(PanelEdge::Right, 44, 900), 100),
+        (44.0, 900.0)
+    );
+    // Device px divide by the UI scale on a vertical edge too: 125% of 1125 device px is 900 CSS px.
+    assert_eq!(
+        taskbar_css_size(&panel(PanelEdge::Left, 55, 1125), 125),
+        (44.0, 900.0)
+    );
+}
+
+// TRIGGER: taskbar vertical axis swap in project_taskbar_metrics / project_task_slots_extent.
+// MUTATION: pass `false` to the slot extent on a Left/Right panel, or swap the cross/run args.
+#[test]
+fn vertical_taskbar_stacks_task_slots_on_the_vertical_axis() {
+    let _scale = taskbar_scale::test_lock();
+    let mut doc = decode_panel();
+    taskbar_scale::set_factor(taskbar_scale::scale_for_height(44));
+    let (width, height) = (44.0_f32, 900.0_f32);
+    doc.size("taskbar", width, height).expect("taskbar sizes");
+    project_taskbar_metrics(&mut doc, true).expect("metrics project");
+    project_task_slots_extent(&mut doc, 2, true).expect("slots extent");
+    doc.visible("task-slot-1", true).expect("slot visible");
+    doc.visible("task-slot-2", true).expect("slot visible");
+    let (_, _, slots_w, slots_h) = doc
+        .layout_box_by_id("task-slots", (width, height))
+        .expect("task-slots has a box");
+    assert!(
+        slots_w <= width && slots_h > slots_w,
+        "vertical task-slots must run down the bar: {slots_w}x{slots_h} in {width}x{height}"
+    );
 }

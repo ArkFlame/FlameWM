@@ -1,8 +1,8 @@
+use flamewm_api::system::MAX_VOLUME_PERCENT;
 use flamewm_api::system::{
     AudioEndpointKind, AudioMuteAction, AudioSnapshot, AudioTarget, AudioVolumeAction,
     ServiceAvailability, SystemAction, SystemSnapshot,
 };
-use flamewm_api::system::MAX_VOLUME_PERCENT;
 use flamewm_control_core::ControlRequest;
 use flamewm_shell_core::{AudioPopoverModel, AudioView};
 
@@ -269,12 +269,14 @@ pub fn system_action_for_row(
         return None;
     };
     let action = match (percent, muted) {
-        (Some(percent), None) if percent <= MAX_VOLUME_PERCENT => SystemAction::SetVolume(AudioVolumeAction {
-            target,
-            percent,
-            generation: snapshot.audio.generation,
-            server_generation: snapshot.audio.server_generation,
-        }),
+        (Some(percent), None) if percent <= MAX_VOLUME_PERCENT => {
+            SystemAction::SetVolume(AudioVolumeAction {
+                target,
+                percent,
+                generation: snapshot.audio.generation,
+                server_generation: snapshot.audio.server_generation,
+            })
+        }
         (None, Some(muted)) => SystemAction::SetMute(AudioMuteAction {
             target,
             muted,
@@ -287,6 +289,24 @@ pub fn system_action_for_row(
         action,
         expected_revision: snapshot.revision,
     })
+}
+
+/// One wheel tick over the volume tray: moves the default output sink by one media step and
+/// clamps it to `0..=cap` (the live "raise maximum" cap). `None` when no default sink is
+/// available or the step leaves the volume unchanged, so a clamped tick sends nothing.
+#[must_use]
+pub fn wheel_volume_request(
+    snapshot: &SystemSnapshot,
+    cap: u8,
+    up: bool,
+) -> Option<ControlRequest> {
+    let row = default_endpoint_row(&snapshot.audio)?;
+    let current = row.volume_percent;
+    let percent = flamewm_platform::system::stepped_volume(current, up, cap);
+    if percent == current {
+        return None;
+    }
+    system_action_for_row(snapshot, &row.id, Some(percent), None)
 }
 
 /// Trimmed candidate text, or `None` when absent or blank.
@@ -589,6 +609,74 @@ mod tests {
         );
         let scrolled = visible_rows(&snapshot, AudioTab::Applications, AUDIO_ROW_HEIGHT);
         assert_eq!(scrolled[0].id, "stream:2");
+    }
+
+    fn wheel_percent(request: Option<ControlRequest>) -> Option<u8> {
+        match request? {
+            ControlRequest::SystemAction {
+                action: SystemAction::SetVolume(AudioVolumeAction { percent, .. }),
+                ..
+            } => Some(percent),
+            other => panic!("wheel must send SetVolume, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wheel_steps_default_sink_by_one_media_step_each_tick() {
+        let snapshot = sink_fixture(ServiceAvailability::Available);
+        assert_eq!(
+            wheel_percent(wheel_volume_request(&snapshot, 100, true)),
+            Some(55)
+        );
+        assert_eq!(
+            wheel_percent(wheel_volume_request(&snapshot, 100, false)),
+            Some(45)
+        );
+    }
+
+    #[test]
+    fn wheel_up_clamps_to_live_cap_and_sends_nothing_at_cap() {
+        let mut snapshot = sink_fixture(ServiceAvailability::Available);
+        snapshot.audio.endpoints[0].volume_percent = 98;
+        assert_eq!(
+            wheel_percent(wheel_volume_request(&snapshot, 100, true)),
+            Some(100)
+        );
+        snapshot.audio.endpoints[0].volume_percent = 100;
+        assert_eq!(wheel_volume_request(&snapshot, 100, true), None);
+        // Raise-maximum on: the same tick may pass 100 but never the 150 cap.
+        snapshot.audio.endpoints[0].volume_percent = 148;
+        assert_eq!(
+            wheel_percent(wheel_volume_request(&snapshot, 150, true)),
+            Some(150)
+        );
+    }
+
+    #[test]
+    fn wheel_down_clamps_at_zero_and_above_cap_follows_the_cap() {
+        let mut snapshot = sink_fixture(ServiceAvailability::Available);
+        snapshot.audio.endpoints[0].volume_percent = 3;
+        assert_eq!(
+            wheel_percent(wheel_volume_request(&snapshot, 100, false)),
+            Some(0)
+        );
+        snapshot.audio.endpoints[0].volume_percent = 0;
+        assert_eq!(wheel_volume_request(&snapshot, 100, false), None);
+        // Lowering the cap below the current level clamps the step down to the cap.
+        snapshot.audio.endpoints[0].volume_percent = 140;
+        assert_eq!(
+            wheel_percent(wheel_volume_request(&snapshot, 100, false)),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn wheel_sends_nothing_without_default_sink_or_audio() {
+        let mut snapshot = sink_fixture(ServiceAvailability::Available);
+        snapshot.audio.endpoints.clear();
+        assert_eq!(wheel_volume_request(&snapshot, 100, true), None);
+        let unavailable = sink_fixture(ServiceAvailability::Unavailable);
+        assert_eq!(wheel_volume_request(&unavailable, 100, true), None);
     }
 
     #[test]

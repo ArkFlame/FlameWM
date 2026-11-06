@@ -164,6 +164,7 @@ impl ShellLoop {
                     &self.start_query,
                     &snapshot.session,
                     loader,
+                    self.start_scroll,
                 )
             });
             if projected.is_ok() {

@@ -221,6 +221,7 @@ pub fn project_task_slots_async(
     crate::projection::project_task_slots_extent(
         document,
         crate::projection::task_slots_rendered(states.len(), view.items),
+        crate::projection::taskbar_is_vertical(&view),
     )?;
     document.visible("task-slot-insert", view.items.activities)?;
     Ok(())
@@ -460,15 +461,24 @@ mod tests {
             .split('}')
             .find(|rule| rule.contains(".task-progress {"))
             .expect("task-progress rule");
-        assert!(!rule.contains("z-index"), "the shell CSS compiler has no stacking token");
+        assert!(
+            !rule.contains("z-index"),
+            "the shell CSS compiler has no stacking token"
+        );
         assert!(rule.contains("height:100%"), "fill spans the slot height");
-        assert!(rule.contains("var(--accent-soft)"), "fill uses the accent tint token");
+        assert!(
+            rule.contains("var(--accent-soft)"),
+            "fill uses the accent tint token"
+        );
         assert!(!rule.contains("bottom:"), "the old bottom track is gone");
         let icon = css
             .split('}')
             .find(|rule| rule.contains(".task-slot-icon"))
             .expect("task-slot icon rule");
-        assert!(icon.contains("position:relative"), "icon paints above the fill");
+        assert!(
+            icon.contains("position:relative"),
+            "icon paints above the fill"
+        );
         for index in 1..=8 {
             let fill = html
                 .find(&format!("id=\"task-slot-{index}-progress\""))

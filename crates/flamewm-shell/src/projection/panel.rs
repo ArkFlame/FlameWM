@@ -423,17 +423,46 @@ pub(crate) fn project_taskbar_height(
         return Ok(());
     };
     let scale_percent = view.output.map_or(100, |output| output.shell_scale_percent);
-    document.size(
-        "taskbar",
-        taskbar_css_width(panel.geometry.width, scale_percent),
-        taskbar_css_height(panel.logical_size),
-    )?;
-    project_taskbar_metrics(document)
+    let (width, height) = taskbar_css_size(panel, scale_percent);
+    document.size("taskbar", width, height)?;
+    project_taskbar_metrics(document, !panel.edge.is_horizontal())
+}
+
+/// True when the taskbar runs down a Left/Right edge: its slots, clock and spacer stack on the
+/// vertical axis and their fixed sizes swap axes.
+#[must_use]
+pub(crate) fn taskbar_is_vertical(view: &PanelView<'_>) -> bool {
+    view.panel.is_some_and(|panel| !panel.edge.is_horizontal())
+}
+
+/// `#taskbar` border-box size in CSS px for `panel`. A horizontal edge spans the window width
+/// with `logical_size` as its height. A vertical edge (Left/Right) spans the window height with
+/// `logical_size` as its width, so the bar fills the whole panel window on every edge.
+#[must_use]
+pub fn taskbar_css_size(
+    panel: &flamewm_api::panels::PanelSnapshot,
+    scale_percent: u16,
+) -> (f32, f32) {
+    let thickness = taskbar_css_height(panel.logical_size);
+    if panel.edge.is_horizontal() {
+        (
+            taskbar_css_width(panel.geometry.width, scale_percent),
+            thickness,
+        )
+    } else {
+        (
+            thickness,
+            taskbar_css_width(panel.geometry.height, scale_percent),
+        )
+    }
 }
 
 /// Sizes the fixed-px taskbar nodes and fonts by the taskbar factor, so the contents track the
 /// `taskbarHeight` setting along with the bar itself.
-fn project_taskbar_metrics(document: &mut impl UiDocumentAccess) -> Result<(), String> {
+fn project_taskbar_metrics(
+    document: &mut impl UiDocumentAccess,
+    vertical: bool,
+) -> Result<(), String> {
     let factor = taskbar_scale::factor();
     let icon = scaled(TASK_ICON_LOGICAL_PX);
     let node = taskbar_scale::node_height(factor);
@@ -444,13 +473,24 @@ fn project_taskbar_metrics(document: &mut impl UiDocumentAccess) -> Result<(), S
     document.size("start-capsule", node, node)?;
     document.size("task-start", start, start)?;
     document.size("task-start-icon", icon, icon)?;
-    document.size("taskbar-spacer", 0.0, node)?;
-    document.size("clock-button", scaled(CLOCK_WIDTH), inner)?;
+    if vertical {
+        // Vertical bar: the cross axis (width) is the bar thickness; the main axis stacks.
+        document.size("taskbar-spacer", node, 0.0)?;
+        document.size("clock-button", inner, scaled(CLOCK_WIDTH))?;
+    } else {
+        document.size("taskbar-spacer", 0.0, node)?;
+        document.size("clock-button", scaled(CLOCK_WIDTH), inner)?;
+    }
     document.font_size("clock-time", scaled(CLOCK_TIME_FONT))?;
     document.font_size("clock-date", scaled(CLOCK_DATE_FONT))?;
     document.font_size("tray-weather-temp", scaled(TRAY_WEATHER_FONT))?;
     for slot in 1..=TASK_SLOT_COUNT {
-        document.size(&format!("task-slot-{slot}"), scaled(TASK_SLOT_WIDTH), inner)?;
+        let slot_size = if vertical {
+            (inner, scaled(TASK_SLOT_WIDTH))
+        } else {
+            (scaled(TASK_SLOT_WIDTH), inner)
+        };
+        document.size(&format!("task-slot-{slot}"), slot_size.0, slot_size.1)?;
         document.size(&format!("task-slot-{slot}-icon"), icon, icon)?;
     }
     let glyph = scaled(TRAY_ICON_LOGICAL_PX);
@@ -687,7 +727,11 @@ pub fn project_panel(
             view.items.activities && states.get(index).is_some(),
         )?;
     }
-    project_task_slots_extent(document, task_slots_rendered(states.len(), view.items))?;
+    project_task_slots_extent(
+        document,
+        task_slots_rendered(states.len(), view.items),
+        taskbar_is_vertical(&view),
+    )?;
     document.visible("task-slot-insert", view.items.activities)?;
 
     project_pager(document, snapshot.workspaces.as_ref())?;
@@ -721,13 +765,16 @@ pub(crate) fn task_slots_rendered(states: usize, items: TaskbarItems) -> usize {
 pub(crate) fn project_task_slots_extent(
     document: &mut impl UiDocumentAccess,
     rendered: usize,
+    vertical: bool,
 ) -> Result<(), String> {
     let factor = taskbar_scale::factor();
-    document.size(
-        "task-slots",
-        taskbar_scale::task_slots_width(rendered, TASK_SLOT_WIDTH, factor),
-        taskbar_scale::node_height(factor),
-    )
+    let run = taskbar_scale::task_slots_width(rendered, TASK_SLOT_WIDTH, factor);
+    let cross = taskbar_scale::node_height(factor);
+    if vertical {
+        document.size("task-slots", cross, run)
+    } else {
+        document.size("task-slots", run, cross)
+    }
 }
 
 /// Collapses a hidden tray button so the grouped tray capsule encloses only the icons that render.

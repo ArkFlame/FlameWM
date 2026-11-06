@@ -12,8 +12,15 @@ pub const SLOT_PITCH_PX: f32 = 42.0;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TaskDrag {
     source: usize,
-    origin_x: f32,
+    origin: f32,
     dragging: bool,
+    vertical: bool,
+}
+
+/// Coordinate along the task strip: `x` on a horizontal edge, `y` on a Left/Right edge.
+#[must_use]
+pub const fn along_strip(vertical: bool, x: f32, y: f32) -> f32 {
+    if vertical { y } else { x }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,48 +34,64 @@ pub enum TaskDragRelease {
 }
 
 impl TaskDrag {
+    /// Horizontal-edge gesture; `x` is the press position along the strip.
     #[must_use]
     pub const fn press(source: usize, x: f32) -> Self {
+        Self::press_on_axis(source, x, false)
+    }
+
+    /// Gesture whose `origin` is already projected onto the strip axis (see `along_strip`).
+    #[must_use]
+    pub const fn press_on_axis(source: usize, origin: f32, vertical: bool) -> Self {
         Self {
             source,
-            origin_x: x,
+            origin,
             dragging: false,
+            vertical,
         }
     }
 
-    /// Returns true once the gesture is a drag.
-    pub fn motion(&mut self, x: f32) -> bool {
-        if !self.dragging && (x - self.origin_x).abs() > DRAG_THRESHOLD_PX {
+    /// Returns true once the gesture is a drag. `pos` is along the strip axis.
+    pub fn motion(&mut self, pos: f32) -> bool {
+        if !self.dragging && (pos - self.origin).abs() > DRAG_THRESHOLD_PX {
             self.dragging = true;
         }
         self.dragging
     }
 
-    /// Final insertion index for a pointer at `x`, clamped to the slot range.
+    /// Final insertion index for a pointer at `pos` along the strip, clamped to the slot range.
     #[must_use]
-    pub fn target(&self, x: f32, slot_count: usize) -> usize {
+    pub fn target(&self, pos: f32, slot_count: usize) -> usize {
         let last = slot_count.saturating_sub(1);
-        let shift = ((x - self.origin_x) / SLOT_PITCH_PX).round();
+        let shift = ((pos - self.origin) / SLOT_PITCH_PX).round();
         (self.source as f32 + shift).clamp(0.0, last as f32) as usize
     }
 
-    /// Release that lands off the task strip (outside `0..TASK_STRIP_HEIGHT_PX` vertically)
-    /// cancels an active drag. `y` is in panel-surface coordinates.
+    /// Release that lands off the task strip cancels an active drag. `x`/`y` are in
+    /// panel-surface coordinates; the strip is `TASK_STRIP_HEIGHT_PX` across the bar.
     #[must_use]
     pub fn release_on_strip(self, x: f32, y: f32, slot_count: usize) -> TaskDragRelease {
-        let on_strip = (0.0..TASK_STRIP_HEIGHT_PX).contains(&y);
+        let cross = if self.vertical { x } else { y };
+        let on_strip = (0.0..TASK_STRIP_HEIGHT_PX).contains(&cross);
         if self.dragging && !on_strip {
             return TaskDragRelease::Noop;
         }
-        self.release(x, slot_count)
+        self.release(along_strip(self.vertical, x, y), slot_count)
+    }
+
+    /// Release at `pos` along the strip axis.
+    /// True when the strip runs down a Left/Right edge (axis is y).
+    #[must_use]
+    pub const fn is_vertical(&self) -> bool {
+        self.vertical
     }
 
     #[must_use]
-    pub fn release(self, x: f32, slot_count: usize) -> TaskDragRelease {
+    pub fn release(self, pos: f32, slot_count: usize) -> TaskDragRelease {
         if !self.dragging {
             return TaskDragRelease::Click;
         }
-        let to = self.target(x, slot_count);
+        let to = self.target(pos, slot_count);
         if to == self.source || slot_count == 0 {
             return TaskDragRelease::Noop;
         }
@@ -89,6 +112,35 @@ pub fn insertion_marker_left(index: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vertical_strip_drag_uses_y_axis() {
+        // Left/Right edge: a pure-y drag reorders, pure-x movement never starts a drag.
+        let mut drag = TaskDrag::press_on_axis(0, along_strip(true, 10.0, 20.0), true);
+        assert!(!drag.motion(along_strip(true, 200.0, 20.0)));
+        assert!(drag.motion(along_strip(true, 10.0, 80.0)));
+        assert_eq!(
+            drag.release_on_strip(10.0, 20.0 + 2.0 * SLOT_PITCH_PX, 3),
+            TaskDragRelease::Reorder { from: 0, to: 2 }
+        );
+    }
+
+    #[test]
+    fn vertical_strip_release_is_cancelled_off_the_bar_width() {
+        let mut drag = TaskDrag::press_on_axis(0, 20.0, true);
+        assert!(drag.motion(120.0));
+        // Past the bar's 44 px width on x: cancels even though y moved a lot.
+        assert_eq!(
+            drag.release_on_strip(200.0, 120.0, 3),
+            TaskDragRelease::Noop
+        );
+        let mut drag = TaskDrag::press_on_axis(0, 20.0, true);
+        assert!(drag.motion(120.0));
+        assert_eq!(
+            drag.release_on_strip(20.0, 120.0, 3),
+            TaskDragRelease::Reorder { from: 0, to: 2 }
+        );
+    }
 
     #[test]
     fn insertion_marker_sits_on_the_slot_boundary() {

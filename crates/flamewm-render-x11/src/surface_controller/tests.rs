@@ -1079,3 +1079,25 @@ mod slide_exit_shape_regression {
         );
     }
 }
+
+mod raise_targets_tests {
+    use super::*;
+
+    #[test]
+    fn osd_raise_never_lifts_taskbars() {
+        let bars = [11, 12];
+        assert!(raise_targets(SurfaceRole::Overlay, &bars).is_empty());
+    }
+
+    #[test]
+    fn popup_and_menu_raises_keep_taskbars_above() {
+        let bars = [11, 12];
+        for role in [
+            SurfaceRole::PopupMenu,
+            SurfaceRole::DropdownMenu,
+            SurfaceRole::Normal,
+        ] {
+            assert_eq!(raise_targets(role, &bars), &bars[..], "{role:?}");
+        }
+    }
+}
