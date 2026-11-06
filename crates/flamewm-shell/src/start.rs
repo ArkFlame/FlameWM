@@ -37,7 +37,39 @@ pub fn category_for_action(action: &str) -> Option<StartCategory> {
         .map(|(_, category)| *category)
 }
 
+/// Category to show after the Favorites list changed: with no favorites the Favorites entry is
+/// hidden, so that view falls back to All.
+#[must_use]
+pub fn category_after_favorites(category: StartCategory, favorites_empty: bool) -> StartCategory {
+    if category == StartCategory::Favorites && favorites_empty {
+        StartCategory::All
+    } else {
+        category
+    }
+}
+
 #[must_use]
 pub fn state(applications: Vec<DesktopApplication>) -> StartState {
     StartModel::new(applications)
+}
+
+#[cfg(test)]
+mod category_fallback_tests {
+    use super::{StartCategory, category_after_favorites};
+
+    #[test]
+    fn empty_favorites_view_falls_back_to_all() {
+        assert_eq!(
+            category_after_favorites(StartCategory::Favorites, true),
+            StartCategory::All
+        );
+        assert_eq!(
+            category_after_favorites(StartCategory::Favorites, false),
+            StartCategory::Favorites
+        );
+        assert_eq!(
+            category_after_favorites(StartCategory::Games, true),
+            StartCategory::Games
+        );
+    }
 }

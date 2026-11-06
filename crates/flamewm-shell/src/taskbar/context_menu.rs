@@ -1,12 +1,12 @@
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::window::WindowSnapshot;
 use flamewm_api::workspace::WorkspaceSnapshot;
-use flamewm_ui_core::context_menu::{settings_row, MenuRow, MenuRowKind};
 use flamewm_ui_core::MenuEntry;
+use flamewm_ui_core::context_menu::{MenuRow, MenuRowKind, settings_row};
 
 pub use flamewm_shell_core::menu_policy::{
-    task_menu_for_entry, TASK_ROW_ACTIVATE, TASK_ROW_CLOSE, TASK_ROW_PIN, TASK_ROW_UNPIN,
-    WORKSPACE_ROW_ACTIVATE, WORKSPACE_ROW_INSERT_AFTER, WORKSPACE_ROW_REMOVE,
+    TASK_ROW_ACTIVATE, TASK_ROW_CLOSE, TASK_ROW_PIN, TASK_ROW_UNPIN, WORKSPACE_ROW_ACTIVATE,
+    WORKSPACE_ROW_INSERT_AFTER, WORKSPACE_ROW_REMOVE, task_menu_for_entry,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,6 +172,8 @@ pub fn visible_row_count_for_kind(
             workspaces.map_or(0, |snapshot| workspace_menu(snapshot, *index).len())
         }
         crate::ContextMenuKind::Taskbar => taskbar_menu().len(),
+        // Two rows, one shown: "Add to favorites" or "Remove from favorites".
+        crate::ContextMenuKind::StartApp(_) => 1,
     }
 }
 
@@ -183,7 +185,7 @@ mod taskbar_menu_tests {
     use super::*;
     use flamewm_shell_core::popup::context_menu_size;
     use flamewm_ui_core::context_menu::{
-        settings_row, MenuRowKind, MENU_MIN_WIDTH, MENU_PADDING, ROW_HEIGHT, ROW_ICON_SIZE,
+        MENU_MIN_WIDTH, MENU_PADDING, MenuRowKind, ROW_HEIGHT, ROW_ICON_SIZE, settings_row,
     };
 
     const TASK_MENU_HTML: &str = include_str!("../../../../ui/shell/task-menu.html");
@@ -206,7 +208,7 @@ mod taskbar_menu_tests {
     #[test]
     fn every_markup_menu_row_has_canonical_icon_size_and_action() {
         let rows = menu_rows(TASK_MENU_HTML);
-        assert_eq!(rows.len(), 9);
+        assert_eq!(rows.len(), 11);
         for line in rows {
             assert!(
                 line.contains(&format!(

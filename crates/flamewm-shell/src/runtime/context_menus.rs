@@ -98,6 +98,22 @@ impl ShellRuntime {
         self.push_workspace_context(cell, pointer, Some(interaction));
     }
 
+    /// Start application row context menu (add/remove favorite). Start is a popup, so the
+    /// menu opens on the same output with the pointer anchor of the release.
+    pub fn open_start_app_context_scoped(
+        &mut self,
+        app: flamewm_api::DesktopAppId,
+        pointer: Option<flamewm_api::Point>,
+        interaction: InteractionContext,
+    ) {
+        self.push_context_menu(
+            ContextMenuKind::StartApp(app),
+            self.snapshot.panels.revision,
+            pointer,
+            Some(interaction),
+        );
+    }
+
     pub fn open_taskbar_context_at_scoped(
         &mut self,
         pointer: Option<flamewm_api::Point>,

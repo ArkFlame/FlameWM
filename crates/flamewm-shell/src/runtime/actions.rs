@@ -76,7 +76,7 @@ impl ShellRuntime {
                     _ => None,
                 }
             }
-            ContextMenuKind::Taskbar => None,
+            ContextMenuKind::Taskbar | ContextMenuKind::StartApp(_) => None,
             ContextMenuKind::Workspace { index } => {
                 let row = action.strip_prefix("workspace.menu.")?;
                 let snapshot = self.snapshot.workspaces.as_ref()?;

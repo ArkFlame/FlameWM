@@ -323,6 +323,7 @@ impl ShellLoop {
                                 self.shell.snapshot(),
                                 &settings,
                                 Some(&state),
+                                self.start_model.favorites(),
                             )
                         })?;
                     }

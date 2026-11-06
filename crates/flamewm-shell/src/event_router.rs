@@ -22,6 +22,8 @@ const OUTSIDE_RELEASE_ACTION: &str = "surface.outside.release";
 /// Tray volume source node; its release toggles the audio popup.
 const TRAY_VOLUME_ACTION: &str = "volume.open";
 const TASKBAR_SURFACE_ACTION: &str = "taskbar.surface";
+/// Row action of the Start application context menu (add/remove favorite).
+const START_MENU_FAVORITE_ACTION: &str = "start.menu.favorite";
 const TASKBAR_MENU_SETTINGS_ACTION: &str = "taskbar.menu.settings";
 const TASKBAR_MENU_TASK_MANAGER_ACTION: &str = "taskbar.menu.task-manager";
 const GENERAL_SETTINGS_PROGRAM: &str = "flamewm-settings";
@@ -386,8 +388,7 @@ impl ShellLoop {
         if matches!(button, PointerButton::WheelUp | PointerButton::WheelDown)
             && event.action.phase == ActionPhase::Press
             && self.start_open
-            && (slot_of(action, "start.app.").is_some()
-                || slot_of(action, "start.favorite.").is_some())
+            && slot_of(action, "start.app.").is_some()
         {
             // Start application list: 3 rows per tick, clamped by the list itself.
             let delta = if button == PointerButton::WheelUp {
@@ -527,6 +528,15 @@ impl ShellLoop {
                     self.clear_network_secret(runtime)?;
                 }
                 return Ok(());
+            }
+            if action == START_MENU_FAVORITE_ACTION {
+                if let Some(flamewm_shell::ContextMenuKind::StartApp(app)) =
+                    self.context_menu.as_ref().map(|menu| menu.kind.clone())
+                {
+                    self.toggle_start_favorite(runtime, &app)?;
+                }
+                self.shell.dispatch("popover.close");
+                return self.apply_controls(runtime);
             }
             if let Some(request) = self
                 .shell
@@ -669,12 +679,6 @@ impl ShellLoop {
             return Ok(());
         }
 
-        if let Some(slot) = slot_of(action, "start.favorite.") {
-            if event.action.inside && event.action.phase == ActionPhase::Release {
-                self.toggle_start_favorite(runtime, slot)?;
-            }
-            return Ok(());
-        }
         if let Some(slot) = slot_of(action, "start.app.") {
             if event.action.inside {
                 match event.action.phase {
@@ -1005,10 +1009,28 @@ impl ShellLoop {
         interaction: &InteractionContext,
     ) -> Result<(), UiBackendError> {
         let action = event.action.action.as_str();
-        if action == "start.search"
-            || action.starts_with("start.app.")
-            || action.starts_with("start.favorite.")
-        {
+        if let Some(slot) = slot_of(action, "start.app.") {
+            // Start application row: Secondary opens the favorite toggle menu.
+            if !self.start_open {
+                return Ok(());
+            }
+            // The event is local to the Start popup surface, not to the panel.
+            let Ok(origin) = runtime.surface_device_rect(event.surface) else {
+                return Ok(());
+            };
+            let pointer = flamewm_api::Point::new(
+                origin.x as i32 + event.action.x as i32,
+                origin.y as i32 + event.action.y as i32,
+            );
+            if let Some(app) = self.start_app_for_slot(slot) {
+                self.shell
+                    .open_start_app_context_scoped(app, Some(pointer), interaction.clone());
+                self.close_quick_control_nonfatal();
+                return self.apply_controls(runtime);
+            }
+            return Ok(());
+        }
+        if action == "start.search" {
             return Ok(());
         }
         if let Some(slot) = slot_of(action, "task.slot.") {

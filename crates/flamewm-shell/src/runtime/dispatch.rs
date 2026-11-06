@@ -48,8 +48,8 @@ impl ShellRuntime {
                 "session.suspend" => Some(ShellControl::SessionAction(SessionAction::Suspend)),
                 "session.reboot" => Some(ShellControl::SessionAction(SessionAction::Reboot)),
                 "session.shutdown" => Some(ShellControl::SessionAction(SessionAction::Shutdown)),
-                // Routed to `toggle_start_favorite` by the event router, never a launch.
-                value if value.starts_with("start.favorite.") => None,
+                // Routed to the Start favorite toggle by the event router, never a launch.
+                "start.menu.favorite" => None,
                 value if value.starts_with("start.") => {
                     Some(ShellControl::Launch(value[6..].to_owned()))
                 }

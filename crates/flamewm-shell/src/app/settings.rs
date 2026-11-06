@@ -47,6 +47,7 @@ impl ShellLoop {
             .set_favorites(crate::entry::settings_projection::start_favorites(Some(
                 &snapshot,
             )));
+        self.leave_empty_favorites_category();
         self.settings_cache = Some(snapshot);
         self.settings_projection_pending = true;
         self.set_auto_time_zone(desired_zone);

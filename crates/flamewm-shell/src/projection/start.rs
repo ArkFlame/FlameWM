@@ -43,8 +43,8 @@ pub fn project_start(
     for (name, value) in PRESENTATION_CATEGORIES {
         let visible = match value {
             StartCategory::Power => session_available(*session),
-            // Favorites is a persistent entry, shown even when empty (empty-state in the list).
-            StartCategory::Favorites => true,
+            // The Favorites entry exists only while at least one application is starred.
+            StartCategory::Favorites => !model.favorites().is_empty(),
             _ if value == category => true,
             _ if searching => !results.is_empty(),
             _ => !start_visible_results(model, value, query).is_empty(),

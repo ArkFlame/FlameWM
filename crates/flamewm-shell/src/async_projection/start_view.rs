@@ -60,7 +60,7 @@ pub fn project_start_unified(
         .get(first..last.min(applications.len()))
         .unwrap_or_default();
     let (mut button_id, mut label_id, mut icon_id) = (String::new(), String::new(), String::new());
-    let mut star_id = String::new();
+    let (mut star_id, mut box_id) = (String::new(), String::new());
     for index in 0..START_APP_SLOT_COUNT {
         let slot = index + 1;
         button_id.clear();
@@ -71,16 +71,15 @@ pub fn project_start_unified(
         write!(icon_id, "start-app-slot-{slot}-icon").expect("write to String is infallible");
         star_id.clear();
         write!(star_id, "start-fav-slot-{slot}").expect("write to String is infallible");
+        box_id.clear();
+        write!(box_id, "start-fav-box-{slot}").expect("write to String is infallible");
         if let Some(application) = window.get(index) {
             let favorite = model
                 .favorites()
                 .iter()
                 .any(|id| id.as_str() == application.id.as_str());
-            document.text(
-                &format!("{star_id}-label"),
-                if favorite { "\u{2605}" } else { "\u{2606}" }.to_owned(),
-            )?;
-            document.visible(&star_id, true)?;
+            document.visible(&box_id, true)?;
+            document.visible(&star_id, favorite)?;
             document.text_ref(&label_id, &application.name)?;
             document.visible(&button_id, true)?;
             document.visible(&icon_id, true)?;
@@ -97,13 +96,10 @@ pub fn project_start_unified(
             document.text(&label_id, String::new())?;
             document.visible(&button_id, false)?;
             document.visible(&icon_id, false)?;
+            document.visible(&box_id, false)?;
             document.visible(&star_id, false)?;
         }
     }
-    // Favorites with no entries: an empty-state line instead of a blank list.
-    let favorites_empty =
-        category == StartCategory::Favorites && query.trim().is_empty() && applications.is_empty();
-    document.visible("start-favorites-empty", favorites_empty)?;
     let show_session = query.trim().is_empty()
         && category == StartCategory::Power
         && crate::projection::session_available(*session);
@@ -390,5 +386,51 @@ mod start_scroll_tests {
             Some("App01"),
             "offset skips the first favorite"
         );
+    }
+
+    #[test]
+    fn favorite_flag_drives_the_left_star_of_each_row() {
+        let _guard = icon_test_lock().lock();
+        let mut model = StartModel::new(vec![
+            start_test_app("org.example.calc", "Calculator", "Utility"),
+            start_test_app("org.example.chess", "Chess", "Game"),
+        ]);
+        model.set_favorites(vec!["org.example.chess".into()]);
+        let doc = project_start_doc(&model, StartCategory::All, "");
+        assert_eq!(
+            doc.visible.get("start-fav-slot-1"),
+            Some(&false),
+            "Calculator is not starred"
+        );
+        assert_eq!(
+            doc.visible.get("start-fav-slot-2"),
+            Some(&true),
+            "Chess is starred"
+        );
+        assert_eq!(
+            doc.visible.get("start-fav-box-1"),
+            Some(&true),
+            "non-favorite keeps the star box"
+        );
+        assert_eq!(
+            doc.visible.get("start-fav-box-3"),
+            Some(&false),
+            "empty slot has no star box"
+        );
+    }
+
+    #[test]
+    fn favorites_category_is_listed_only_while_it_has_favorites() {
+        let _guard = icon_test_lock().lock();
+        let mut model = StartModel::new(vec![start_test_app(
+            "org.example.calc",
+            "Calculator",
+            "Utility",
+        )]);
+        let doc = project_start_doc(&model, StartCategory::All, "");
+        assert_eq!(doc.visible.get("start-category-favorites"), Some(&false));
+        model.set_favorites(vec!["org.example.calc".into()]);
+        let doc = project_start_doc(&model, StartCategory::All, "");
+        assert_eq!(doc.visible.get("start-category-favorites"), Some(&true));
     }
 }

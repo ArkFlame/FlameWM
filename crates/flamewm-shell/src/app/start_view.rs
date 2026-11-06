@@ -235,24 +235,27 @@ impl ShellLoop {
         Ok(())
     }
 
-    /// Adds or removes the application in `slot` from Favorites. The list is applied locally
-    /// at once and persisted as `startFavorites` through the dispatcher worker (never blocks).
-    pub(crate) fn toggle_start_favorite(
-        &mut self,
-        runtime: &mut SurfaceRuntime,
-        slot: usize,
-    ) -> Result<(), UiBackendError> {
-        let Some(app_id) = projection::start_application_for_slot(
+    /// Application in the Start row `slot` (0-based), for the row context menu.
+    pub(crate) fn start_app_for_slot(&self, slot: usize) -> Option<flamewm_api::DesktopAppId> {
+        projection::start_application_for_slot(
             &self.start_model,
             self.start_category,
             &self.start_query,
             self.start_index_for_slot(slot),
-        ) else {
-            return Ok(());
-        };
+        )
+    }
+
+    /// Adds or removes `app_id` from Favorites. The list is applied locally at once and
+    /// persisted as `startFavorites` through the dispatcher worker (never blocks).
+    pub(crate) fn toggle_start_favorite(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        app_id: &flamewm_api::DesktopAppId,
+    ) -> Result<(), UiBackendError> {
         let ids = toggled_favorites(self.start_model.favorites(), app_id.as_str());
         let encoded = flamewm_shell_core::start_menu::encode_favorites(&ids);
         self.start_model.set_favorites(ids);
+        self.leave_empty_favorites_category();
         self.project_start(runtime)?;
         self.submit(ControlRequest::ApplySettings(SettingsTransaction {
             expected_revision: self.settings_revision,
@@ -263,6 +266,14 @@ impl ShellLoop {
             reset_section: None,
         }));
         Ok(())
+    }
+
+    /// The Favorites view has no entry without favorites: it falls back to All.
+    pub(crate) fn leave_empty_favorites_category(&mut self) {
+        self.start_category = crate::start::category_after_favorites(
+            self.start_category,
+            self.start_model.favorites().is_empty(),
+        );
     }
 
     /// Apply Start launch results drained from the mutation result source.

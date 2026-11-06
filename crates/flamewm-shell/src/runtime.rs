@@ -160,6 +160,8 @@ pub enum ContextMenuKind {
     },
     /// Taskbar background (Secondary on `taskbar.surface`); one settings row.
     Taskbar,
+    /// Start application row (Secondary on `start.app.N`); one favorite toggle row.
+    StartApp(flamewm_api::DesktopAppId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
