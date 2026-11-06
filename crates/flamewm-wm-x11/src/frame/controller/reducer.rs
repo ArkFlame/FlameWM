@@ -310,7 +310,12 @@ pub(super) fn toggle_max(state: ControllerState) -> (ControllerState, Vec<FrameE
     toggle_placement(state, PlacementMode::Maximized, work_area)
 }
 
-pub(super) fn toggle_fullscreen(state: ControllerState) -> (ControllerState, Vec<FrameEffect>) {
+pub(super) fn toggle_fullscreen(mut state: ControllerState) -> (ControllerState, Vec<FrameEffect>) {
     let screen_rect = state.screen_rect;
+    // Entering fullscreen drops the chrome inset the caller computed for the old mode, so the
+    // client covers the whole output. Leaving keeps the caller's decoration extents.
+    if state.placement.mode != PlacementMode::Fullscreen {
+        state.extents = FrameExtents::new(0, 0);
+    }
     toggle_placement(state, PlacementMode::Fullscreen, screen_rect)
 }

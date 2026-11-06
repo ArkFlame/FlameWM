@@ -80,12 +80,16 @@ impl<C: Connection> Wm<'_, C> {
                 Rc::clone(&geometry.outputs),
             )
         };
-        let screen_rect = RootRect::new(
+        // Fullscreen covers the whole output holding the client, not the combined root.
+        let root_rect = RootRect::new(
             0,
             0,
             i32::from(self.screen().width_in_pixels),
             i32::from(self.screen().height_in_pixels),
         );
+        let screen_rect = self
+            .output_for_rect(state.outer)
+            .map_or(root_rect, |output| to_root_rect(output.geometry));
         let last_title_click = self
             .sessions
             .get(&client)
@@ -98,7 +102,8 @@ impl<C: Connection> Wm<'_, C> {
                 to_root_rect(self.work_area_for_rect(state.outer)),
                 screen_rect,
                 state.hints,
-                self.extents_for(client),
+                // Decoration extents only: the reducer drops them when entering fullscreen.
+                self.extents_for_decoration(state.decoration),
                 session,
                 region_map,
             )

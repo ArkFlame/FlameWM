@@ -88,9 +88,10 @@ fn frame_extents_follow_effective_border_per_mode() {
         frame_extents_for_mode(PlacementMode::Maximized, border, titlebar, 0),
         snapped
     );
+    // Fullscreen has no chrome, even with a band: the client covers the whole output.
     assert_eq!(
-        frame_extents_for_mode(PlacementMode::Fullscreen, border, titlebar, 0),
-        snapped
+        frame_extents_for_mode(PlacementMode::Fullscreen, border, titlebar, 2),
+        [0, 0, 0, 0]
     );
     // Unsnap returns to the floating border and titlebar extents.
     assert_eq!(
@@ -135,6 +136,12 @@ fn client_interior_matches_effective_border_per_mode() {
     ];
     for mode in modes {
         let border = frame_border_for_mode(mode, configured);
+        // Fullscreen has no titlebar either; every other mode keeps it.
+        let titlebar = if matches!(mode, PlacementMode::Fullscreen) {
+            0
+        } else {
+            titlebar
+        };
         // No outline band: the client keeps the full frame width below the titlebar.
         let [left, right, top, bottom] = frame_extents_for_mode(mode, configured, titlebar, 0);
         assert_eq!(left, u32::from(border), "{mode:?} left extent");

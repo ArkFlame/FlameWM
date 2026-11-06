@@ -40,11 +40,12 @@ impl<C: Connection> Wm<'_, C> {
     }
 
     pub(super) fn extents_for(&self, client: Window) -> FrameExtents {
-        let decoration = self
-            .clients
-            .get(&client)
-            .map_or(Decoration::Server, |state| state.decoration);
-        self.extents_for_decoration(decoration)
+        match self.clients.get(&client) {
+            // Fullscreen has no chrome: the client is placed at the full frame size.
+            Some(state) if state.is_fullscreen() => FrameExtents::new(0, 0),
+            Some(state) => self.extents_for_decoration(state.decoration),
+            None => self.extents_for_decoration(Decoration::Server),
+        }
     }
 
     /// Reads `_MOTIF_WM_HINTS` and `_GTK_FRAME_EXTENTS` and decides who draws

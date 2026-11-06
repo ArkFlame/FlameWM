@@ -302,6 +302,23 @@ fn fullscreen_uses_screen_rect_and_restores_exact_snapshot() {
 }
 
 #[test]
+fn fullscreen_entry_drops_chrome_extents_and_exit_keeps_decoration_extents() {
+    let mut s0 = floating_state();
+    s0.extents = FrameExtents::new(31, 1);
+    s0.screen_rect = RootRect::new(0, 0, 1366, 760);
+    let (s1, e1) = reduce(&s0, FrameEvent::ToggleFullscreen);
+    assert_eq!(s1.extents, FrameExtents::new(0, 0));
+    assert_eq!(s1.placement.current, RootRect::new(0, 0, 1366, 760));
+    assert!(has_frame(&e1, 0, 0));
+    // The caller re-derives decoration extents for each event, so leaving restores them.
+    let mut exit = s1.clone();
+    exit.extents = FrameExtents::new(31, 1);
+    let (s3, _) = reduce(&exit, FrameEvent::ToggleFullscreen);
+    assert_eq!(s3.placement.mode, PlacementMode::Floating);
+    assert_eq!(s3.extents, FrameExtents::new(31, 1));
+}
+
+#[test]
 fn eight_edges_hold_opposite_anchor() {
     use super::super::geometry::{GeometryReason, GeometryRequest, plan_resize};
     use super::super::model::PlacementSnapshot;

@@ -57,18 +57,22 @@ impl<C: Connection> Wm<'_, C> {
         Ok(classify(&self.atoms, &types, override_redirect))
     }
 
-    /// Keeps every dock above a normal client that was just raised to the top of the stack.
-    /// Fullscreen clients keep their existing stacking, so they are not raised over docks here.
+    /// Keeps every dock above a normal client that was just raised to the top of the stack,
+    /// unless a fullscreen layer must stay above the docks (see `docks_may_rise`).
     pub(super) fn raise_docks_above_normal(
         &self,
         client: Window,
         frame: Window,
     ) -> Result<(), ReplyError> {
-        let fullscreen = match self.clients.get(&client) {
-            Some(state) => state.is_fullscreen(),
-            None => return Ok(()),
+        let Some(state) = self.clients.get(&client) else {
+            return Ok(());
         };
-        if fullscreen {
+        let fullscreen_elsewhere = self.clients.iter().any(|(&other, other_state)| {
+            other != client
+                && other_state.is_fullscreen()
+                && other_state.visible_on(self.current_workspace)
+        });
+        if !docks_may_rise(state.is_fullscreen(), fullscreen_elsewhere) {
             return Ok(());
         }
         for dock in self.dock_struts.keys() {

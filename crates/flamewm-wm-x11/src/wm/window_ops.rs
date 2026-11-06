@@ -270,6 +270,18 @@ impl<C: Connection> Wm<'_, C> {
         if !enable {
             self.note_client_gone_for_desktop_mode();
         }
+        if let Some(frame) = self.clients.get(&client).map(|state| state.frame) {
+            if enable {
+                // Fullscreen covers docks: raise the frame to the top of the stack.
+                self.conn.configure_window(
+                    frame,
+                    &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+                )?;
+            } else {
+                // Leaving fullscreen restores the taskbar above the restored frame.
+                self.raise_docks_above_normal(client, frame)?;
+            }
+        }
         self.mark_windows();
         self.publish_window_state(client)?;
         Ok(())

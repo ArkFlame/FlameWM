@@ -354,6 +354,10 @@ fn frame_extents_for_mode(
     titlebar: u16,
     band: u16,
 ) -> [u32; 4] {
+    // Fullscreen has no titlebar, border or band: the client covers the whole output.
+    if matches!(mode, PlacementMode::Fullscreen) {
+        return [0; 4];
+    }
     let border = u32::from(frame_border_for_mode(mode, configured_border));
     let band = u32::from(band);
     [
@@ -630,6 +634,34 @@ fn dock_above_frame_aux(frame: Window) -> ConfigureWindowAux {
     ConfigureWindowAux::new()
         .sibling(frame)
         .stack_mode(StackMode::ABOVE)
+}
+
+/// Docks may be restacked above a raised frame only when that frame is not fullscreen and no
+/// other visible fullscreen client exists. Otherwise the dock would rise over the fullscreen layer
+/// (the taskbar showing over a fullscreen client, or over an OSD raised above it).
+const fn docks_may_rise(frame_fullscreen: bool, fullscreen_elsewhere: bool) -> bool {
+    !frame_fullscreen && !fullscreen_elsewhere
+}
+
+#[cfg(test)]
+mod dock_stacking_tests {
+    use super::docks_may_rise;
+
+    #[test]
+    fn normal_frame_without_fullscreen_lets_docks_rise() {
+        assert!(docks_may_rise(false, false));
+    }
+
+    #[test]
+    fn fullscreen_frame_never_lets_docks_rise() {
+        assert!(!docks_may_rise(true, false));
+        assert!(!docks_may_rise(true, true));
+    }
+
+    #[test]
+    fn osd_or_normal_raise_over_fullscreen_keeps_docks_below() {
+        assert!(!docks_may_rise(false, true));
+    }
 }
 
 fn resolve_frame_event_source(registry: &FrameRegistry, event: Window, child: Window) -> Window {
