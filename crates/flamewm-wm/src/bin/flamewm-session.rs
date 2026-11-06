@@ -23,8 +23,8 @@ use flamewm_session_core::diagnostics::{
     CHECK_EXIT_FATAL, Severity, check_exit_code, describe_exit, fallback_plan, format_report,
 };
 use flamewm_session_core::{
-    ChildExit, ProcessPlan, ProcessSupervisorPolicy, SessionRole, SupervisorDecision,
-    Keyring, build_launch_plan, default_paths_from_home, gnome_keyring_installed,
+    ChildExit, Keyring, ProcessPlan, ProcessSupervisorPolicy, SessionRole, SupervisorDecision,
+    build_launch_plan, default_paths_from_home, gnome_keyring_installed,
     installed_kwallet_generations, resolve_kwallet_version, select_keyring,
 };
 use rustix::process::{Pid, Signal, getppid, kill_process, set_parent_process_death_signal};
@@ -223,7 +223,7 @@ fn add_app_compatibility_environment(
     }
 }
 
-/// KWallet is unlocked by the PAM handoff above. Without it, start gnome-keyring the way
+/// `KWallet` is unlocked by the PAM handoff above. Without it, start gnome-keyring the way
 /// cosmic-session does so libsecret clients find a Secret Service. Never touches wallets.
 fn start_session_keyring(keyring: Keyring) {
     match keyring {
@@ -246,7 +246,9 @@ fn start_session_keyring(keyring: Keyring) {
             }
         }
         Keyring::Absent => {
-            eprintln!("{SESSION_LOG_PREFIX}: keyring: none installed; browsers use their own store");
+            eprintln!(
+                "{SESSION_LOG_PREFIX}: keyring: none installed; browsers use their own store"
+            );
         }
     }
 }

@@ -670,15 +670,27 @@ mod tests {
     #[test]
     fn keyring_prefers_kwallet_and_follows_installed_generation() {
         let empty = BTreeMap::new();
-        assert_eq!(select_keyring(&empty, false, true, true), Keyring::KWallet("6"));
-        assert_eq!(select_keyring(&empty, true, false, true), Keyring::KWallet("5"));
-        assert_eq!(select_keyring(&empty, true, true, false), Keyring::KWallet("6"));
+        assert_eq!(
+            select_keyring(&empty, false, true, true),
+            Keyring::KWallet("6")
+        );
+        assert_eq!(
+            select_keyring(&empty, true, false, true),
+            Keyring::KWallet("5")
+        );
+        assert_eq!(
+            select_keyring(&empty, true, true, false),
+            Keyring::KWallet("6")
+        );
     }
 
     #[test]
     fn keyring_falls_back_to_gnome_and_honors_opt_out() {
         let empty = BTreeMap::new();
-        assert_eq!(select_keyring(&empty, false, false, true), Keyring::GnomeKeyring);
+        assert_eq!(
+            select_keyring(&empty, false, false, true),
+            Keyring::GnomeKeyring
+        );
         assert_eq!(select_keyring(&empty, false, false, false), Keyring::Absent);
         let basic = BTreeMap::from([(
             "FLAMEWM_BRAVE_PASSWORD_STORE".to_owned(),
@@ -689,12 +701,18 @@ mod tests {
             "FLAMEWM_BRAVE_PASSWORD_STORE".to_owned(),
             "gnome-libsecret".to_owned(),
         )]);
-        assert_eq!(select_keyring(&libsecret, true, true, true), Keyring::GnomeKeyring);
+        assert_eq!(
+            select_keyring(&libsecret, true, true, true),
+            Keyring::GnomeKeyring
+        );
         let pinned = BTreeMap::from([(
             "FLAMEWM_BRAVE_PASSWORD_STORE".to_owned(),
             "kwallet5".to_owned(),
         )]);
-        assert_eq!(select_keyring(&pinned, true, true, true), Keyring::KWallet("5"));
+        assert_eq!(
+            select_keyring(&pinned, true, true, true),
+            Keyring::KWallet("5")
+        );
     }
 
     #[test]
