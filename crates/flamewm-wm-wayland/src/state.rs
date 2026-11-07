@@ -468,6 +468,7 @@ impl State {
         let data_device = DataDeviceState::new::<State>(&display);
         let compat = crate::compat::CompatState::new(&display);
         let _viewporter = ViewporterState::new::<State>(&display);
+        crate::presentation_scale::init(&display);
         let foreign_toplevels = ForeignToplevelListState::new::<State>(&display);
         let xwayland_shell = XWaylandShellState::new::<State>(&display);
 

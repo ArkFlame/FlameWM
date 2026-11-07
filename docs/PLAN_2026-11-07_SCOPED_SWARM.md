@@ -155,3 +155,12 @@ Harness: `/tmp/claude-1000/fw-p2/` (display `:88`, WM only). Probes: `probe_p2.p
 - Checks: `cargo test -p flamewm-clipboard -p flamewm-wm-x11` exit 0 (17 + 2 + 544 passed, 0 warning lines). Keeper unit tests: 3 (step mapping, 1 MiB cap boundary). `cargo build -p flamewm-wm` exit 0, 0 warnings.
 - Limits: the 1 MiB cap applies after receipt. The transfer is bounded only by the 500 ms `get_text` timeout, so a large owner can be transferred in full before it is dropped. The keeper caches all CLIPBOARD text in WM memory until replaced (password-manager copies included). Text already on the clipboard before WM start is not kept until the next copy. WM restart drops the kept text.
 - Task B, SKIPPED: `wm/ping.rs` already exposes `PingState::is_unresponsive`, but it is set only after a close-triggered ping misses its pong. Showing it in the pager/task list needs a snapshot field, control-wire encode/decode, and the shell projection, which is over the 3-file cap. No UI change made.
+
+Results: CB2
+- Change: `keeper.rs` skips keeping text when CLIPBOARD TARGETS contains `x-kde-passwordManagerHint` (presence, not value) or TARGETS is unanswered. Decision: pure `keepable()`, unit test `password_hint_or_unanswered_targets_are_never_kept`.
+- Xvfb `:92`, `flamewm` built from `target-swarm-cb` (`cargo build --bin flamewm`, exit 0, 0 warnings). Probes run with the default Python path, not `-I`, since `Xlib` is installed in user site.
+- (1) Regression, normal owner then close: reader `'keeper-probe é hello'`, so text kept and re-served.
+- (2) Owner advertising `x-kde-passwordManagerHint` in TARGETS, then close: reader `NONE`, so not kept. The NONE result depends on the TARGETS decode, which is confirmed by this run.
+- Unit tests: `cargo test -p flamewm-clipboard -p flamewm-wm-x11` exit 0, 0 warning lines.
+- Not done: session-lock drop (no cheap hook). Value check for `secret` not implemented.
+- Probe PIDs (Xvfb, flamewm) killed. No commit.

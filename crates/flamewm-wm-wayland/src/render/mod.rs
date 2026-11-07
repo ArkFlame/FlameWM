@@ -369,7 +369,9 @@ fn render_into(
                 .render_output(renderer, &mut framebuffer, age, &elements, CLEAR)?;
         result.damage.cloned()
     };
+    let feedback = crate::presentation_scale::collect_feedback(state, &state.output);
     backend.submit(damage.as_deref())?;
+    crate::presentation_scale::presented(feedback, &state.output);
     send_frame_callbacks(state);
     Ok(())
 }

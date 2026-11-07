@@ -81,6 +81,7 @@ mod lock_global;
 mod logind;
 mod model;
 mod output_layout;
+mod presentation_scale;
 mod probe;
 mod render;
 mod scene;
