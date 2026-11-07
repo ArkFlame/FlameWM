@@ -470,6 +470,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     escape_pending: Option<(Window, std::time::Instant)>,
     /// `_NET_WM_PING` deadlines for closing clients and the unresponsive set.
     pings: ping::PingState,
+    /// Last user input seen by the WM; gates unrequested focus changes (`focus_guard`).
+    focus_guard: focus_guard::FocusGuard,
     /// `_NET_WM_STATE_ABOVE` / `BELOW` layer per client; absent is the normal layer.
     stack_layers: HashMap<Window, stack_layer::StackLayer>,
     /// Alt+Tab session state and the focus history that orders it.
@@ -523,6 +525,7 @@ mod manage;
 mod outputs;
 mod overlay;
 mod paint;
+mod focus_guard;
 mod ping;
 mod pointer;
 mod probes;
@@ -536,6 +539,8 @@ mod super_tap;
 mod switcher;
 mod trace;
 mod transition;
+mod take_focus;
+mod transient_placement;
 mod window_ops;
 mod window_state;
 mod workspace;

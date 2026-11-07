@@ -202,6 +202,11 @@ impl<C: Connection> Wm<'_, C> {
         let (wm_instance, wm_class) = self.wm_identity(window);
         let (icon, icon_fallback) = self.read_native_frame_icon(window);
         let transient_for = self.read_transient_for(window)?;
+        // A transient normal window centres over its parent instead of the pointer/cascade policy.
+        let centre_over = transient_for
+            .filter(|_| !adopt && kind == WindowKind::Normal)
+            .and_then(|owner| self.clients.get(&owner))
+            .map(|parent| parent.placement.current);
         let hints = self.read_hints(window);
         let rule = self
             .window_config
@@ -258,6 +263,16 @@ impl<C: Connection> Wm<'_, C> {
                 rect,
                 work_root.to_legacy(),
             ))
+        } else if let Some(parent) = centre_over {
+            let base = crate::frame::geometry::plan_initial_map(&initial_req, origin, size).frame;
+            let (cx, cy) = (
+                parent.x.saturating_add(parent.w / 2),
+                parent.y.saturating_add(parent.h / 2),
+            );
+            let work = self
+                .output_for_point(cx, cy, Rect::new(cx, cy, 1, 1))
+                .map_or(work_root, |output| RootRect::from_legacy(output.work_area));
+            transient_placement::centre_over_parent(parent, base.w, base.h, work)
         } else if adopt {
             crate::frame::geometry::plan_adopt(origin, size, extents)
         } else {
@@ -513,7 +528,14 @@ impl<C: Connection> Wm<'_, C> {
         self.conn.map_window(frame)?;
         self.mark_windows();
         self.publish_client_list()?;
-        self.focus(window)?;
+        let recent_input = self.focus_guard.recent_input(std::time::Instant::now());
+        if focus_guard::map_may_take_focus(
+            recent_input,
+            self.active.is_some(),
+            transient_for.is_some(),
+        ) {
+            self.focus(window)?;
+        }
         // EWMH: a client may request fullscreen before mapping; honor it at manage time.
         if self.initial_state_fullscreen(window)? {
             self.set_fullscreen(window, true)?;

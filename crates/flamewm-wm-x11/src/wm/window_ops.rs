@@ -36,8 +36,17 @@ impl<C: Connection> Wm<'_, C> {
         if !state.visible_on(self.current_workspace) {
             return Ok(());
         }
-        self.conn
-            .set_input_focus(FOCUS_REVERT_TO, client, CURRENT_TIME)?;
+        let has_take_focus = self.supports_protocol(client, self.atoms.wm_take_focus)?;
+        let delivery = take_focus::focus_delivery(
+            has_take_focus
+                .then(|| self.read_input_hint(client))
+                .flatten(),
+            has_take_focus,
+        );
+        if delivery.set_input_focus {
+            self.conn
+                .set_input_focus(FOCUS_REVERT_TO, client, CURRENT_TIME)?;
+        }
         if raise && (state.kind != WindowKind::Utility || state.transient_for.is_some()) {
             self.conn.configure_window(
                 state.frame,
@@ -46,7 +55,7 @@ impl<C: Connection> Wm<'_, C> {
             self.raise_docks_above_normal(client, state.frame)?;
             self.enforce_stack_layers()?;
         }
-        if self.supports_protocol(client, self.atoms.wm_take_focus)? {
+        if delivery.send_take_focus {
             self.send_protocol(client, self.atoms.wm_take_focus)?;
         }
         self.active = Some(client);

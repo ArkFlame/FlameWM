@@ -86,6 +86,8 @@ impl<C: Connection> Wm<'_, C> {
     /// Dispatches a passive-grab `KeyPress` to the bound action. Only actions
     /// with an existing WM path are executed; the rest are logged once.
     pub(super) fn handle_key_press(&mut self, event: KeyPressEvent) -> Result<(), ReplyError> {
+        self.focus_guard
+            .note_user_activity(std::time::Instant::now());
         // The raw feed may already have dispatched this key while a client held the keyboard.
         if self.raw_claimed(event.time, event.detail) {
             return Ok(());
@@ -651,7 +653,10 @@ impl<C: Connection> Wm<'_, C> {
                 self.move_to_workspace(event.window, data[0] as usize)?;
             }
         } else if event.type_ == self.atoms.net_active_window {
-            if self.clients.contains_key(&event.window) {
+            let recent_input = self.focus_guard.recent_input(std::time::Instant::now());
+            if self.clients.contains_key(&event.window)
+                && focus_guard::active_request_may_focus(data[0], recent_input)
+            {
                 if self
                     .clients
                     .get(&event.window)

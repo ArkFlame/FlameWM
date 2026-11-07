@@ -255,6 +255,11 @@ impl<C: Connection> Wm<'_, C> {
         };
         let before = raw.modifiers.held();
         let state = raw.modifiers.apply(key);
+        if key.press {
+            // Raw key records reach the root whatever client holds focus: typing counts as input.
+            self.focus_guard
+                .note_user_activity(std::time::Instant::now());
+        }
         // The raw feed owns the bare Start-bound Super tap: no passive grab reports that key.
         if key.press {
             let start_binding = is_bare_state(before)

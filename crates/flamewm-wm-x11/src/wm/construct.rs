@@ -125,6 +125,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             show_desktop: show_desktop::ShowDesktop::default(),
             escape_pending: None,
             pings: Default::default(),
+            focus_guard: Default::default(),
             stack_layers: HashMap::new(),
             switcher: switcher::Switcher::default(),
             mru: switcher::Mru::default(),
