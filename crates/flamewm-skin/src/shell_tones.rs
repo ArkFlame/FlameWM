@@ -224,6 +224,12 @@ pub const FIXED_TONES: &[FixedTone] = &[
         a(0x007f_878e, 0x26),
         a(0x0000_0000, 0x26),
     ),
+    t(
+        "--c-ffffff1f",
+        ToneRole::Hover,
+        a(0x00ff_ffff, 0x1f),
+        a(0x0000_0000, 0x1f),
+    ),
     t("--c-569cd6", ToneRole::Ink, o(0x0056_9cd6), o(0x001d_5a94)),
     t("--c-8f969c", ToneRole::Ink, o(0x008f_969c), o(0x0052_5b64)),
     t("--c-949ca3", ToneRole::Ink, o(0x0094_9ca3), o(0x004e_5760)),

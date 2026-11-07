@@ -260,6 +260,10 @@ impl NotificationHistory {
                             body: unescape(body),
                             urgency,
                             progress: None,
+                            actions: Vec::new(),
+                            default_action: false,
+                            image: None,
+                            icon_name: None,
                         },
                         received_at_ms,
                     );
@@ -359,6 +363,10 @@ mod tests {
             body: String::new(),
             urgency,
             progress: None,
+            actions: Vec::new(),
+            default_action: false,
+            image: None,
+            icon_name: None,
         }
     }
 
@@ -514,6 +522,10 @@ mod tests {
                 body: "tab\there\r".to_owned(),
                 urgency: NotificationUrgency::Critical,
                 progress: Some(40),
+                actions: Vec::new(),
+                default_action: false,
+                image: None,
+                icon_name: None,
             },
             1234,
         );

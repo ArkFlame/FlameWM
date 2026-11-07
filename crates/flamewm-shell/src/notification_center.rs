@@ -227,6 +227,10 @@ mod tests {
                 body: String::new(),
                 urgency: NotificationUrgency::Normal,
                 progress: None,
+                actions: Vec::new(),
+                default_action: false,
+                image: None,
+                icon_name: None,
             },
             0,
         );

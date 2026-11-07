@@ -24,9 +24,18 @@ const MAX_NOTIFICATIONS: usize = 64;
 const MAX_UI_UPDATES: usize = 256;
 const MAX_TEXT_BYTES: usize = 8192;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(6);
+const LOW_URGENCY_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const HISTORY_CAPACITY: usize = 200;
 const HISTORY_FILE: &str = "flamewm/notification-history.tsv";
+/// Action buttons shown per toast or row; the `default` action is not counted here.
+pub const MAX_VISIBLE_ACTIONS: usize = 3;
+pub const DEFAULT_ACTION_KEY: &str = "default";
+/// Image hints above these caps are ignored before any pixel data is decoded.
+const MAX_IMAGE_EDGE: i32 = 512;
+const MAX_IMAGE_BYTES: usize = 1024 * 1024;
+/// Largest edge of a decoded notification icon; larger images are downscaled once on receipt.
+pub const NOTIFICATION_ICON_EDGE: u32 = 48;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationUrgency {
@@ -37,19 +46,34 @@ pub enum NotificationUrgency {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationCloseReason {
+    /// The timeout elapsed (spec reason 1).
     Expired,
+    /// Dismissed by the user, or closed after an action was invoked (spec reason 2).
     Dismissed,
+    /// Closed by a `CloseNotification` call (spec reason 3).
     Closed,
+    /// Closed by the server for an undefined reason (spec reason 4).
+    Undefined,
 }
 
 impl NotificationCloseReason {
-    const fn wire_value(self) -> u32 {
+    #[must_use]
+    pub const fn wire_value(self) -> u32 {
         match self {
             Self::Expired => 1,
             Self::Dismissed => 2,
             Self::Closed => 3,
+            Self::Undefined => 4,
         }
     }
+}
+
+/// One `(key, label)` pair from the `actions` argument. `default` is carried by
+/// `NotificationView::default_action` instead of appearing in the visible button list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationAction {
+    pub key: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +84,22 @@ pub struct NotificationView {
     pub body: String,
     pub urgency: NotificationUrgency,
     pub progress: Option<u8>,
+    /// At most `MAX_VISIBLE_ACTIONS` non-default actions, in client order.
+    pub actions: Vec<NotificationAction>,
+    /// True when the client sent a `default` action, invoked by clicking the toast body.
+    pub default_action: bool,
+    /// Decoded `image-data` hint, already downscaled to `NOTIFICATION_ICON_EDGE`.
+    pub image: Option<NotificationImage>,
+    /// Icon-theme name from `image-path`, `app_icon`, or `desktop-entry`, in that order.
+    pub icon_name: Option<String>,
+}
+
+/// Straight RGBA8 pixels, row-major, `width * height * 4` bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +116,8 @@ pub enum NotificationUiUpdate {
 struct Notification {
     view: NotificationView,
     expires_at: Option<Instant>,
+    /// Resident notifications stay on screen after one of their actions is invoked.
+    resident: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,7 +253,7 @@ impl NotificationProvider {
         for id in ids {
             self.push_update(NotificationUiUpdate::Close {
                 id,
-                reason: NotificationCloseReason::Closed,
+                reason: NotificationCloseReason::Undefined,
             });
         }
         if !owned {
@@ -300,6 +342,30 @@ impl NotificationProvider {
         Ok(true)
     }
 
+    /// Invokes `key` on an active notification from the UI. Emits `ActionInvoked`, then closes
+    /// the notification with reason 2 unless it is resident. Returns false for unknown ids and
+    /// keys that the notification did not advertise.
+    pub fn invoke_action(&mut self, id: u32, key: &str) -> FlameResult<bool> {
+        let Some(notification) = self.notifications.get(&id) else {
+            return Ok(false);
+        };
+        if !action_advertised(&notification.view, key) {
+            return Ok(false);
+        }
+        let resident = notification.resident;
+        self.pump.send(action_invoked_signal(id, key))?;
+        if !resident {
+            self.notifications.remove(&id);
+            self.push_update(NotificationUiUpdate::Close {
+                id,
+                reason: NotificationCloseReason::Dismissed,
+            });
+            self.pump
+                .send(closed_signal(id, NotificationCloseReason::Dismissed))?;
+        }
+        Ok(true)
+    }
+
     #[must_use]
     pub fn next_deadline(&self) -> Option<Instant> {
         self.notifications
@@ -360,7 +426,13 @@ fn handle_message(
     }
     match message.member().map(|member| member.to_string()).as_deref() {
         Some("GetCapabilities") if message.get_items().is_empty() => {
-            MessageDisposition::Reply(message.method_return().append1(vec!["body".to_owned()]))
+            // Only what is implemented: body text is plain (markup stripped), and the shell
+            // renders action buttons. No `body-markup`, `icon-static` or `persistence`.
+            MessageDisposition::Reply(
+                message
+                    .method_return()
+                    .append1(vec!["actions".to_owned(), "body".to_owned()]),
+            )
         }
         Some("GetServerInformation") if message.get_items().is_empty() => {
             MessageDisposition::Reply(
@@ -368,8 +440,8 @@ fn handle_message(
                     .method_return()
                     .append1("FlameWM")
                     .append1("ArkFlame Studios")
-                    .append1("FlameWM")
-                    .append1("1.0"),
+                    .append1(env!("CARGO_PKG_VERSION"))
+                    .append1("1.2"),
             )
         }
         Some("Notify") => notify(message, notifications, updates, next_id, history, now),
@@ -399,10 +471,10 @@ fn notify(
     let [
         MessageItem::Str(app_name),
         MessageItem::UInt32(replaces_id),
-        MessageItem::Str(_app_icon),
+        MessageItem::Str(app_icon),
         MessageItem::Str(summary),
         MessageItem::Str(body),
-        MessageItem::Array(_actions),
+        MessageItem::Array(actions),
         MessageItem::Dict(hints),
         MessageItem::Int32(timeout),
     ] = items.as_slice()
@@ -420,7 +492,9 @@ fn notify(
             "notification text exceeds the supported limit",
         );
     }
-    let (urgency, progress) = parse_hints(hints);
+    let parsed = parse_hints(hints);
+    let urgency = parsed.urgency;
+    let (actions, default_action) = parse_actions(actions);
     // Replacing an active toast keeps it on screen and is not a new history entry.
     let replacing = *replaces_id != 0 && notifications.contains_key(replaces_id);
     let decision = if replacing {
@@ -450,12 +524,21 @@ fn notify(
     let view = NotificationView {
         id,
         app_name: app_name.clone(),
-        summary: summary.clone(),
-        body: body.clone(),
+        summary: sanitize_markup(summary),
+        body: sanitize_markup(body),
         urgency,
-        progress,
+        progress: parsed.progress,
+        actions,
+        default_action,
+        image: parsed.image.clone(),
+        icon_name: if parsed.image.is_some() {
+            None
+        } else {
+            icon_name_for(&parsed, app_icon)
+        },
     };
-    if !replacing {
+    // Transient notifications never enter history; a replacement is not a new history entry.
+    if !replacing && !parsed.transient {
         history.record(view.clone(), epoch_millis());
     }
     if decision == PopupDecision::Show {
@@ -463,7 +546,8 @@ fn notify(
             id,
             Notification {
                 view: view.clone(),
-                expires_at: expiration(*timeout).map(|duration| now + duration),
+                expires_at: expiration(*timeout, urgency).map(|duration| now + duration),
+                resident: parsed.resident,
             },
         );
         push_update(updates, notifications, NotificationUiUpdate::Upsert(view));
@@ -525,25 +609,186 @@ fn push_update(
     }
 }
 
-fn parse_hints(
-    hints: &dbus::arg::messageitem::MessageItemDict,
-) -> (NotificationUrgency, Option<u8>) {
-    let mut urgency = NotificationUrgency::Normal;
-    let mut progress = None;
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Hints {
+    urgency: NotificationUrgency,
+    progress: Option<u8>,
+    transient: bool,
+    resident: bool,
+    image: Option<NotificationImage>,
+    image_path: Option<String>,
+    desktop_entry: Option<String>,
+}
+
+fn parse_hints(hints: &dbus::arg::messageitem::MessageItemDict) -> Hints {
+    let mut parsed = Hints {
+        urgency: NotificationUrgency::Normal,
+        progress: None,
+        transient: false,
+        resident: false,
+        image: None,
+        image_path: None,
+        desktop_entry: None,
+    };
     for (key, value) in hints.clone().into_vec() {
         let MessageItem::Str(key) = key else { continue };
         let value = unwrap_variant(value);
         match (key.as_str(), value) {
-            ("urgency", MessageItem::Byte(0)) => urgency = NotificationUrgency::Low,
-            ("urgency", MessageItem::Byte(1)) => urgency = NotificationUrgency::Normal,
-            ("urgency", MessageItem::Byte(2)) => urgency = NotificationUrgency::Critical,
+            ("urgency", MessageItem::Byte(0)) => parsed.urgency = NotificationUrgency::Low,
+            ("urgency", MessageItem::Byte(1)) => parsed.urgency = NotificationUrgency::Normal,
+            ("urgency", MessageItem::Byte(2)) => parsed.urgency = NotificationUrgency::Critical,
             ("value", MessageItem::Int32(value)) if (0..=100).contains(&value) => {
-                progress = Some(value as u8);
+                parsed.progress = Some(value as u8);
             }
+            ("transient", MessageItem::Bool(value)) => parsed.transient = value,
+            ("resident", MessageItem::Bool(value)) => parsed.resident = value,
+            ("image-data" | "image_data" | "icon_data", value @ MessageItem::Struct(_)) => {
+                parsed.image = image_data_hint(&value);
+            }
+            ("image-path" | "image_path", MessageItem::Str(path)) => {
+                parsed.image_path = Some(path);
+            }
+            ("desktop-entry", MessageItem::Str(entry)) => parsed.desktop_entry = Some(entry),
+            // `x-canonical-private-synchronous`, `sound-*`, and unknown hints are ignored.
             _ => {}
         }
     }
-    (urgency, progress)
+    parsed
+}
+
+/// Parses the flat `(key, label, key, label, ...)` array. Returns at most
+/// `MAX_VISIBLE_ACTIONS` visible actions and whether a `default` action was present.
+fn parse_actions(items: &[MessageItem]) -> (Vec<NotificationAction>, bool) {
+    let mut actions = Vec::new();
+    let mut default_action = false;
+    for pair in items.chunks_exact(2) {
+        let (MessageItem::Str(key), MessageItem::Str(label)) = (&pair[0], &pair[1]) else {
+            continue;
+        };
+        if key == DEFAULT_ACTION_KEY {
+            default_action = true;
+        } else if actions.len() < MAX_VISIBLE_ACTIONS && !key.is_empty() {
+            actions.push(NotificationAction {
+                key: key.clone(),
+                label: sanitize_markup(label),
+            });
+        }
+    }
+    (actions, default_action)
+}
+
+/// True when a client-advertised action key may be invoked on this notification.
+fn action_advertised(view: &NotificationView, key: &str) -> bool {
+    if key == DEFAULT_ACTION_KEY {
+        view.default_action
+    } else {
+        view.actions.iter().any(|action| action.key == key)
+    }
+}
+
+/// Plain text for a body or summary: spec markup tags are removed, entities are decoded, and
+/// the result is only ever shown as text nodes, so it cannot inject markup or links.
+#[must_use]
+pub fn sanitize_markup(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find('<') {
+        push_decoded(&mut out, &rest[..start]);
+        let tag = &rest[start..];
+        let is_tag = tag[1..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '/' | '!' | '?'));
+        match tag.find('>') {
+            Some(end) if is_tag => {
+                if tag[1..end].trim().eq_ignore_ascii_case("br")
+                    || tag[1..end].trim().eq_ignore_ascii_case("br/")
+                {
+                    out.push('\n');
+                }
+                rest = &tag[end + 1..];
+            }
+            _ => {
+                // A lone `<` or an unterminated tag is text.
+                out.push('<');
+                rest = &tag[1..];
+            }
+        }
+    }
+    push_decoded(&mut out, rest);
+    out
+}
+
+fn push_decoded(out: &mut String, text: &str) {
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp..];
+        let Some(semi) = after.find(';').filter(|&semi| semi <= 10) else {
+            out.push('&');
+            rest = &after[1..];
+            continue;
+        };
+        let name = &after[1..semi];
+        let decoded = match name {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => name
+                .strip_prefix('#')
+                .and_then(|number| {
+                    number
+                        .strip_prefix(['x', 'X'])
+                        .map_or_else(|| number.parse().ok(), |hex| u32::from_str_radix(hex, 16).ok())
+                })
+                .and_then(char::from_u32)
+                .filter(|c| !c.is_control() || *c == '\n' || *c == '\t'),
+        };
+        match decoded {
+            Some(c) => {
+                out.push(c);
+                rest = &after[semi + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &after[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+}
+
+/// Image hint caps, checked from the `(iiibiiay)` header before any pixel bytes are read.
+/// Rejects non-8-bit or non RGB/RGBA data, edges over `MAX_IMAGE_EDGE`, a rowstride or byte
+/// count that does not match the declared size, and payloads over `MAX_IMAGE_BYTES`.
+#[must_use]
+pub fn image_data_within_caps(
+    width: i32,
+    height: i32,
+    rowstride: i32,
+    bits_per_sample: i32,
+    channels: i32,
+    byte_len: usize,
+) -> bool {
+    if !(1..=MAX_IMAGE_EDGE).contains(&width) || !(1..=MAX_IMAGE_EDGE).contains(&height) {
+        return false;
+    }
+    if bits_per_sample != 8 || !matches!(channels, 3 | 4) {
+        return false;
+    }
+    let (Ok(width), Ok(height), Ok(stride)) = (
+        usize::try_from(width),
+        usize::try_from(height),
+        usize::try_from(rowstride),
+    ) else {
+        return false;
+    };
+    let min_stride = width * usize::try_from(channels).unwrap_or(4);
+    stride >= min_stride
+        && byte_len <= MAX_IMAGE_BYTES
+        && byte_len == stride.saturating_mul(height)
 }
 
 fn unwrap_variant(value: MessageItem) -> MessageItem {
@@ -553,14 +798,19 @@ fn unwrap_variant(value: MessageItem) -> MessageItem {
     }
 }
 
-fn expiration(timeout_ms: i32) -> Option<Duration> {
-    if timeout_ms == 0 {
+/// Spec `expire_timeout`: 0 never expires, -1 uses the server default, otherwise milliseconds.
+/// Critical notifications never auto-expire; low urgency uses a shorter default.
+fn expiration(timeout_ms: i32, urgency: NotificationUrgency) -> Option<Duration> {
+    if timeout_ms == 0 || urgency == NotificationUrgency::Critical {
         return None;
     }
     let duration = if timeout_ms < 0 {
-        DEFAULT_TIMEOUT
+        match urgency {
+            NotificationUrgency::Low => LOW_URGENCY_TIMEOUT,
+            _ => DEFAULT_TIMEOUT,
+        }
     } else {
-        Duration::from_millis(timeout_ms as u64)
+        Duration::from_millis(u64::from(timeout_ms.unsigned_abs()))
     };
     Some(duration.min(MAX_TIMEOUT))
 }
@@ -584,6 +834,94 @@ fn closed_signal(id: u32, reason: NotificationCloseReason) -> Message {
     )
     .expect("constant notification signal identifiers are valid")
     .append2(id, reason.wire_value())
+}
+
+/// Validates the `(iiibiiay)` header and payload type before copying any bytes, then
+/// downscales. Invalid or oversized images are dropped without an error.
+fn image_data_hint(value: &MessageItem) -> Option<NotificationImage> {
+    let MessageItem::Struct(fields) = value else {
+        return None;
+    };
+    let [MessageItem::Int32(width), MessageItem::Int32(height), MessageItem::Int32(rowstride), MessageItem::Bool(_), MessageItem::Int32(bits), MessageItem::Int32(channels), MessageItem::Array(data)] =
+        fields.as_slice()
+    else {
+        return None;
+    };
+    if !image_data_within_caps(*width, *height, *rowstride, *bits, *channels, data.len()) {
+        return None;
+    }
+    let bytes = data
+        .iter()
+        .map(|item| match item {
+            MessageItem::Byte(byte) => Some(*byte),
+            _ => None,
+        })
+        .collect::<Option<Vec<u8>>>()?;
+    downscale_to_icon(
+        u32::try_from(*width).ok()?,
+        u32::try_from(*height).ok()?,
+        usize::try_from(*channels).ok()?,
+        usize::try_from(*rowstride).ok()?,
+        &bytes,
+    )
+}
+
+/// Nearest-neighbour downscale of a validated buffer so that neither edge exceeds
+/// `NOTIFICATION_ICON_EDGE`. Output is always RGBA with alpha 255 when the source has none.
+#[must_use]
+pub fn downscale_to_icon(
+    width: u32,
+    height: u32,
+    channels: usize,
+    rowstride: usize,
+    data: &[u8],
+) -> Option<NotificationImage> {
+    if width == 0 || height == 0 || !(3..=4).contains(&channels) {
+        return None;
+    }
+    let step = width.max(height).div_ceil(NOTIFICATION_ICON_EDGE).max(1);
+    let out_width = width.div_ceil(step);
+    let out_height = height.div_ceil(step);
+    let mut rgba = Vec::with_capacity((out_width * out_height * 4) as usize);
+    for out_y in 0..out_height {
+        let src_y = (out_y * step) as usize;
+        for out_x in 0..out_width {
+            let offset = src_y * rowstride + (out_x * step) as usize * channels;
+            let pixel = data.get(offset..offset + channels)?;
+            rgba.extend_from_slice(&[
+                pixel[0],
+                pixel[1],
+                pixel[2],
+                if channels == 4 { pixel[3] } else { 255 },
+            ]);
+        }
+    }
+    Some(NotificationImage {
+        width: out_width,
+        height: out_height,
+        rgba,
+    })
+}
+
+/// Icon-theme names are plain names; absolute paths and URIs are not decoded here.
+fn icon_name_hint(name: &str) -> Option<String> {
+    let name = name.trim();
+    (!name.is_empty() && !name.contains('/') && name.len() <= 255).then(|| name.to_owned())
+}
+
+fn icon_name_for(parsed: &Hints, app_icon: &str) -> Option<String> {
+    parsed
+        .image_path
+        .as_deref()
+        .and_then(icon_name_hint)
+        .or_else(|| icon_name_hint(app_icon))
+        .or_else(|| parsed.desktop_entry.as_deref().and_then(icon_name_hint))
+}
+
+fn action_invoked_signal(id: u32, key: &str) -> Message {
+    Message::new_signal(NOTIFICATIONS_PATH, NOTIFICATIONS_INTERFACE, "ActionInvoked")
+        .expect("constant notification signal identifiers are valid")
+        .append2(id, key.to_owned())
 }
 
 fn error_reply(message: &Message, name: &str, text: &str) -> MessageDisposition {
@@ -616,16 +954,184 @@ mod tests {
         let dict = hints(vec![
             ("urgency".to_owned(), MessageItem::Byte(2)),
             ("value".to_owned(), MessageItem::Int32(55)),
+            ("transient".to_owned(), MessageItem::Bool(true)),
+            ("resident".to_owned(), MessageItem::Bool(true)),
         ]);
         assert_eq!(
             parse_hints(&dict),
-            (NotificationUrgency::Critical, Some(55))
+            Hints {
+                urgency: NotificationUrgency::Critical,
+                progress: Some(55),
+                transient: true,
+                resident: true,
+                image: None,
+                image_path: None,
+                desktop_entry: None,
+            }
         );
-        assert_eq!(expiration(-1), Some(DEFAULT_TIMEOUT));
-        assert_eq!(expiration(i32::MAX), Some(MAX_TIMEOUT));
-        assert_eq!(expiration(0), None);
-        assert_eq!(expiration(-1), Some(DEFAULT_TIMEOUT));
-        assert_eq!(expiration(500), Some(Duration::from_millis(500)));
+        let out_of_range = hints(vec![("value".to_owned(), MessageItem::Int32(101))]);
+        assert_eq!(parse_hints(&out_of_range).progress, None);
+        assert_eq!(expiration(i32::MAX, NotificationUrgency::Normal), Some(MAX_TIMEOUT));
+        assert_eq!(expiration(0, NotificationUrgency::Normal), None);
+        assert_eq!(expiration(-1, NotificationUrgency::Normal), Some(DEFAULT_TIMEOUT));
+        assert_eq!(expiration(500, NotificationUrgency::Normal), Some(Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn image_data_is_downscaled_once_to_icon_edge() {
+        // 96x2 RGB: step 2 gives 48x1, sampling every other column.
+        let mut data = Vec::new();
+        for x in 0..96u32 {
+            data.extend_from_slice(&[x as u8, 0, 0]);
+        }
+        let image = downscale_to_icon(96, 1, 3, 96 * 3, &data).expect("valid image");
+        assert_eq!((image.width, image.height), (48, 1));
+        assert_eq!(image.rgba.len(), 48 * 4);
+        assert_eq!(&image.rgba[..4], &[0, 0, 0, 255]);
+        assert_eq!(&image.rgba[4..8], &[2, 0, 0, 255]);
+
+        // Small RGBA images are kept at native size and keep their alpha.
+        let small = downscale_to_icon(1, 1, 4, 4, &[9, 8, 7, 6]).expect("valid image");
+        assert_eq!(small.rgba, [9, 8, 7, 6]);
+        assert!(downscale_to_icon(0, 1, 4, 4, &[]).is_none());
+        assert!(downscale_to_icon(1, 1, 2, 2, &[0, 0]).is_none());
+    }
+
+    #[test]
+    fn image_data_hint_rejects_oversized_and_mismatched_payloads() {
+        let image = |width: i32, height: i32, stride: i32, bytes: usize| {
+            MessageItem::Struct(vec![
+                MessageItem::Int32(width),
+                MessageItem::Int32(height),
+                MessageItem::Int32(stride),
+                MessageItem::Bool(true),
+                MessageItem::Int32(8),
+                MessageItem::Int32(4),
+                MessageItem::new_array(
+                    (0..bytes).map(|_| MessageItem::Byte(0)).collect(),
+                )
+                .expect("bytes"),
+            ])
+        };
+        let accepted = image_data_hint(&image(2, 2, 8, 16)).expect("2x2 RGBA");
+        assert_eq!((accepted.width, accepted.height, accepted.rgba.len()), (2, 2, 16));
+        assert!(image_data_hint(&image(513, 1, 2052, 2052)).is_none());
+        assert!(image_data_hint(&image(2, 2, 8, 15)).is_none());
+        assert!(image_data_hint(&MessageItem::Str("x".to_owned())).is_none());
+    }
+
+    #[test]
+    fn icon_name_precedence_is_image_path_then_app_icon_then_desktop_entry() {
+        let base = Hints {
+            urgency: NotificationUrgency::Normal,
+            progress: None,
+            transient: false,
+            resident: false,
+            image: None,
+            image_path: None,
+            desktop_entry: Some("org.example.App".to_owned()),
+        };
+        assert_eq!(icon_name_for(&base, "mail").as_deref(), Some("mail"));
+        let with_path = Hints {
+            image_path: Some("camera-photo".to_owned()),
+            ..base.clone()
+        };
+        assert_eq!(icon_name_for(&with_path, "mail").as_deref(), Some("camera-photo"));
+        assert_eq!(icon_name_for(&base, "").as_deref(), Some("org.example.App"));
+        let absolute = Hints {
+            image_path: Some("/tmp/x.png".to_owned()),
+            ..base.clone()
+        };
+        assert_eq!(icon_name_for(&absolute, "mail").as_deref(), Some("mail"));
+    }
+
+    #[test]
+    fn expire_timeout_follows_urgency_policy() {
+        // Critical never auto-expires, even with an explicit timeout.
+        assert_eq!(expiration(-1, NotificationUrgency::Critical), None);
+        assert_eq!(expiration(4000, NotificationUrgency::Critical), None);
+        // Low urgency defaults shorter than normal; an explicit timeout is honored.
+        assert_eq!(expiration(-1, NotificationUrgency::Low), Some(LOW_URGENCY_TIMEOUT));
+        assert_eq!(expiration(9000, NotificationUrgency::Low), Some(Duration::from_secs(9)));
+    }
+
+    #[test]
+    fn close_reason_codes_match_the_spec() {
+        assert_eq!(NotificationCloseReason::Expired.wire_value(), 1);
+        assert_eq!(NotificationCloseReason::Dismissed.wire_value(), 2);
+        assert_eq!(NotificationCloseReason::Closed.wire_value(), 3);
+        assert_eq!(NotificationCloseReason::Undefined.wire_value(), 4);
+    }
+
+    #[test]
+    fn actions_parse_pairs_with_default_and_visible_cap() {
+        let items = [
+            MessageItem::Str("default".to_owned()),
+            MessageItem::Str("Open".to_owned()),
+            MessageItem::Str("reply".to_owned()),
+            MessageItem::Str("Reply".to_owned()),
+            MessageItem::Str("a".to_owned()),
+            MessageItem::Str("A".to_owned()),
+            MessageItem::Str("b".to_owned()),
+            MessageItem::Str("B".to_owned()),
+            MessageItem::Str("c".to_owned()),
+            MessageItem::Str("C".to_owned()),
+            MessageItem::Str("dangling".to_owned()),
+        ];
+        let (actions, default_action) = parse_actions(&items);
+        assert!(default_action);
+        let keys: Vec<_> = actions.iter().map(|action| action.key.as_str()).collect();
+        assert_eq!(keys, ["reply", "a", "b"]);
+        assert_eq!(actions[0].label, "Reply");
+
+        let view = NotificationView {
+            id: 1,
+            app_name: String::new(),
+            summary: String::new(),
+            body: String::new(),
+            urgency: NotificationUrgency::Normal,
+            progress: None,
+            actions,
+            default_action,
+            image: None,
+            icon_name: None,
+        };
+        assert!(action_advertised(&view, "default"));
+        assert!(action_advertised(&view, "b"));
+        assert!(!action_advertised(&view, "c"), "hidden fourth action is not invokable");
+        assert!(!action_advertised(&view, "missing"));
+    }
+
+    #[test]
+    fn markup_is_reduced_to_safe_plain_text() {
+        assert_eq!(sanitize_markup("<b>bold</b> <i>it</i> <u>u</u>"), "bold it u");
+        assert_eq!(
+            sanitize_markup(r#"<a href="javascript:alert(1)">link</a>"#),
+            "link"
+        );
+        assert_eq!(sanitize_markup("<img src=x onerror=y>x"), "x");
+        assert_eq!(sanitize_markup("a &amp; b &lt;c&gt; &quot;q&quot; &#65;&#x42;"), "a & b <c> \"q\" AB");
+        // Entities decode to text only; decoded markup is never re-parsed.
+        assert_eq!(sanitize_markup("&lt;script&gt;"), "<script>");
+        assert_eq!(sanitize_markup("1 < 2 and 3 > 2"), "1 < 2 and 3 > 2");
+        assert_eq!(sanitize_markup("line<br>two"), "line\ntwo");
+        assert_eq!(sanitize_markup("unterminated <b"), "unterminated <b");
+        // Control characters and unknown names stay literal instead of decoding.
+        assert_eq!(sanitize_markup("&#0;&unknown;"), "&#0;&unknown;");
+    }
+
+    #[test]
+    fn image_hint_caps_are_checked_before_decode() {
+        // 2x2 RGBA with a matching rowstride and byte count is accepted.
+        assert!(image_data_within_caps(2, 2, 8, 8, 4, 16));
+        assert!(!image_data_within_caps(513, 1, 2052, 8, 4, 2052));
+        assert!(!image_data_within_caps(2, 2, 8, 16, 4, 16), "only 8-bit samples");
+        assert!(!image_data_within_caps(2, 2, 8, 8, 2, 16), "only RGB or RGBA");
+        assert!(!image_data_within_caps(2, 2, 8, 8, 4, 15), "byte count mismatch");
+        assert!(!image_data_within_caps(2, 2, 7, 8, 4, 14), "rowstride too small");
+        assert!(!image_data_within_caps(512, 512, 2048, 8, 4, 512 * 2048 + 1));
+        assert!(image_data_within_caps(512, 512, 2048, 8, 4, 512 * 2048));
+        assert!(!image_data_within_caps(0, 2, 8, 8, 4, 0));
     }
 
     #[test]
@@ -641,8 +1147,13 @@ mod tests {
                     body: String::new(),
                     urgency: NotificationUrgency::Normal,
                     progress: None,
+                    actions: Vec::new(),
+                    default_action: false,
+                    image: None,
+                    icon_name: None,
                 },
                 expires_at: None,
+                resident: false,
             },
         );
         let mut next = u32::MAX;
@@ -662,8 +1173,13 @@ mod tests {
                     body: "one file".to_owned(),
                     urgency: NotificationUrgency::Normal,
                     progress: Some(50),
+                    actions: Vec::new(),
+                    default_action: false,
+                    image: None,
+                    icon_name: None,
                 },
                 expires_at: None,
+                resident: false,
             },
         )]);
         let mut updates = VecDeque::from(vec![
@@ -801,5 +1317,54 @@ mod tests {
             inbox.history.entries().next().unwrap().view.summary,
             "hello"
         );
+    }
+
+    #[test]
+    fn transient_skips_history_and_markup_is_stripped_on_notify() {
+        let mut inbox = Inbox::new(NotificationHistory::new(10));
+        let transient = MessageItem::from_dict(
+            vec![
+                Ok::<_, ()>(("transient".to_owned(), MessageItem::Bool(true))),
+                Ok(("resident".to_owned(), MessageItem::Bool(true))),
+            ]
+            .into_iter(),
+        )
+        .expect("hints");
+        let mut call = Message::new_method_call(
+            NOTIFICATIONS_SERVICE,
+            NOTIFICATIONS_PATH,
+            NOTIFICATIONS_INTERFACE,
+            "Notify",
+        )
+        .expect("notify call");
+        call.set_serial(1);
+        call.append_items(&[
+            MessageItem::Str("chat".to_owned()),
+            MessageItem::UInt32(0),
+            MessageItem::Str(String::new()),
+            MessageItem::Str("<b>hi</b>".to_owned()),
+            MessageItem::Str(String::new()),
+            MessageItem::new_array(vec![MessageItem::Str("default".to_owned()), MessageItem::Str("Open".to_owned())])
+                .expect("actions"),
+            transient,
+            MessageItem::Int32(-1),
+        ]);
+        assert!(matches!(
+            handle_message(
+                &call,
+                true,
+                &mut inbox.notifications,
+                &mut inbox.updates,
+                &mut inbox.next_id,
+                &mut inbox.history,
+                &mut Vec::new(),
+                Instant::now(),
+            ),
+            MessageDisposition::Reply(_)
+        ));
+        assert_eq!(inbox.history.len(), 0, "transient is not recorded");
+        let view = &inbox.notifications[&1].view;
+        assert_eq!(view.summary, "hi");
+        assert!(inbox.notifications[&1].resident);
     }
 }

@@ -1,6 +1,6 @@
 @import "../base/tokens.css";
 :root {
-  --rim:#ffffff7f; --sticky-bg:#ffe56b; --sticky-fg:#171717; --desktop:#000000; --panel:#000000bf; --surface:#000000bf; --sidebar:#000000bf; --text:#f1f2f3; --muted:#aeb4bb; --hover-fill:#ffffff40; --pressed-fill:#ffffff26; --strong:#ffffff;
+  --rim:#ffffff7f; --sticky-bg:#ffe56b; --sticky-fg:#171717; --desktop:#000000; --panel:#000000bf; --surface:#000000bf; --sidebar:#000000bf; --text:#f1f2f3; --muted:#aeb4bb; --hover-fill:#ffffff40; --pressed-fill:#ffffff26; --strong:#ffffff; --c-ffffff1f:#ffffff1f;
   --c-00000080:#00000080; --c-050607:#050607; --c-0c0d0e:#0c0d0e; --c-111315:#111315; --c-151719:#151719; --c-17191b:#17191b;
   --c-181a1c:#181a1c; --c-191b1d:#191b1d; --c-1abc9c:#1abc9c; --c-1c2740:#1c2740; --c-1e1e1e:#1e1e1e; --c-202224:#202224;
   --c-232629:#232629; --c-24272a:#24272a; --c-25282b:#25282b; --c-25314a:#25314a; --c-27292b:#27292b; --c-272a2d:#272a2d;
@@ -260,7 +260,10 @@ input { cursor:text; }
 .notification-card { position:absolute; left:0px; top:0px; width:360px; height:148px; padding:14px; display:flex; flex-direction:column; align-items:flex-start; gap:var(--space-sm); background:var(--c-25314a); color:var(--text); border:1px solid var(--rim); border-radius:12px; }
 .notification-app { width:100%; color:var(--c-aeb9cc); font-size:var(--font-sm); }
 .notification-summary { width:100%; font-size:var(--font-lg); font-weight:600; }
-.notification-copy { width:100%; color:var(--c-d2d6da); font-size:var(--font-base); }
+.notification-copy { display:block; width:100%; max-height:36px; overflow:hidden; color:var(--c-d2d6da); font-size:var(--font-base); }
+.notification-actions { position:absolute; left:0px; right:0px; bottom:20px; height:26px; display:flex; flex-direction:row; gap:var(--space-sm); }
+.notification-action { height:26px; padding:0px 12px; display:flex; align-items:center; justify-content:center; background:var(--c-ffffff1f); border-width:0px; border-radius:999px; font-size:var(--font-sm); font-weight:600; color:var(--text); }
+.notification-icon { position:absolute; right:0px; top:0px; width:40px; height:40px; }
 .notification-progress { position:absolute; left:14px; right:14px; bottom:10px; height:4px; display:flex; background:var(--c-44494e); border-radius:2px; }
 .notification-progress-fill { height:4px; background:var(--c-df703e); border-radius:2px; }
 

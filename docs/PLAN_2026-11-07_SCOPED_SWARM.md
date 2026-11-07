@@ -86,3 +86,28 @@ Harness: `/tmp/claude-1000/fw-p2/` (display `:88`, WM only). Probes: `probe_p2.p
 - Not done: the desktop cursor path (`flamewm-desktop/src/refresh.rs:301`) has the same retry-per-snapshot shape. The file was modified by another worker during this run, so I did not edit it. Settings binary (`flamewm-settings/src/app_impl_1.rs:397`) also unchanged.
 - Flakiness: two early runs (noicons, lang) lost wm/shell/desktop at 20 s with no panic or exit message. Later reruns of the same scenarios were all alive. Cause unknown; a `pgrep -f flamewm$` showed 2 processes outside this harness, so another worker may kill by name. Treat these scenarios as single-sample.
 - Risk: per-process banners are now logged once, so a provider change mid-run is not re-reported. Harness: `/tmp/claude-1000/fw-c` is a copy of `fw-o` runtime scripts only; the repo itself was built in place.
+
+- Results: WF (CODER, wm-x11 focus/placement; scope `crates/flamewm-wm-x11` only, not committed).
+  - WF1 WM_TAKE_FOCUS: `src/wm/take_focus.rs` (`focus_delivery`, `parse_input_hint`, `read_input_hint`). `focus_with_stacking` (`window_ops.rs`) skips `SetInputFocus` for no-input/globally-active clients that list WM_TAKE_FOCUS unless WM_HINTS input is true; sends WM_TAKE_FOCUS for any listed protocol. Input-false clients without the protocol keep the old behaviour.
+  - WF2 placement: `src/wm/transient_placement.rs` (`centre_over_parent`). `manage.rs` centres a transient `WindowKind::Normal` over its parent frame, clamped to that output's work area. Pointer/cascade policy unchanged for others. "Dialog" is not a distinct WindowKind; any transient normal window is treated as a dialog.
+  - WF3 focus stealing: `src/wm/focus_guard.rs`. Button presses (`pointer.rs`) and WM key presses (`events.rs`) note user activity; 2 s window. Map-time focus is skipped after recent input unless no active window or transient. `_NET_ACTIVE_WINDOW` with source != 2 (pager) is ignored after recent input. DEMANDS_ATTENTION: NOT done (needs state writes in 4+ files).
+  - Checks: `cargo test -p flamewm-wm-x11 --no-run` exit 0, 0 warnings. `cargo test -p flamewm-wm-x11` exit 0, 542 passed (534 + 8 new), 0 warning lines. Log: `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/wf-test.log`.
+  - Unverified: X wiring (WM_HINTS read, real map/focus/placement under Xvfb) has no runtime probe. Typed keys inside client windows are not seen by the WM, so the recent-input window only covers clicks and WM-bound keys.
+  - WF addendum (Xvfb :88 probe, `/tmp/claude-1000/fw-wf/run.sh`, binary rebuilt, `probe.out` ALL_PASS, 0 panics): (a) dialog frame centre delta (0,0) over parent; (b) WM_TAKE_FOCUS received by globally-active and no-input clients, globally-active focus on pager activation; (c) first map focuses, background map after key press keeps focus, app activation after input blocked, pager activation focuses, map after 2.5 s quiet focuses. Negative control without key press: background map steals focus (`probe_ctrl.py`). Typing now counts: `raw_keys.rs` `handle_raw_event` notes key presses from the XI2 raw feed, which sees keys regardless of client focus.
+  - WF addendum checks: `cargo test -p flamewm-wm-x11` exit 0, 542 passed, 0 warnings (after raw-key change).
+  - Harness note: the first managed window takes about 5.5 s after WM start (startup cost, not measured further); probe waits up to 15 s per window.
+
+- Results: NF notifications (CODER, supersedes the BLOCKED line above; not committed).
+  - Checks (actual exits): `CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-q cargo test -p flamewm-integrations-linux -p flamewm-shell` exit 0; 856 passed, 0 failed, 0 warning lines. Log: `.agents/runtime/nf-test3.log`.
+  - Live (display :87, fresh binaries, `/tmp/claude-1000/fw-nf/`): wm.log, shell4.log, desktop.log, explorer.log, mon2.log each 0 warn/error/panic lines.
+  - Actions: toast action click confirmed `ActionInvoked` then `NotificationClosed` (reason 2) in `mon2.log`. Screenshots `toast-actions2.png`, `center2.png`.
+  - Default body click: `ActionInvoked "default"` then `NotificationClosed` (reason 2).
+  - Close reasons: expire = 1, CloseNotification = 3 (monitored).
+  - Critical: no expiry, still visible at 9 s (`toast-critical.png`).
+  - Transient: absent from center history.
+  - Image-data: icon rendered top-right (`toast-image2.png`).
+  - Long body: clipped to max-height 36px, does not overlap actions (`toast-long2.png`). It does not wrap.
+  - Markup: tags stripped in summary and body.
+  - Layout: 14px parent-padding inset fixed in CSS (left/right/top 0); verified by screenshot.
+  - Not done: center-row action buttons (item 3). Absolute `image-path` files are not decoded (name-based icon lookup only). Long body does not wrap.
+  - Processes: all harness PIDs (Xvfb :87, dbus, flamewm, shell, desktop, dbus-monitor) killed by verified cmdline; none remaining.

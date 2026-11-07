@@ -14,6 +14,8 @@ use flamewm_api::ports::FdEvents;
 use flamewm_control_dbus::{ControlClient, ControlSignalClient};
 use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::{BusKind, BusWatch};
+use flamewm_integrations_linux::notifications;
+use flamewm_shell::icon_loader::{IconLoader, IconTarget};
 use flamewm_reactor::{Reactor, SystemWallClock};
 use flamewm_shell::async_projection;
 use flamewm_shell::notification_center;
@@ -21,8 +23,9 @@ use flamewm_shell::projection;
 use flamewm_shell::start;
 use flamewm_shell::{ShellSnapshot, ShellSurfaces};
 use flamewm_ui_x11::{
-    decode_document, run_surface_runtime_with_reactor_access, SurfaceConfig, SurfaceEvent,
-    SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiDocumentAccess, UiTemplate,
+    decode_document, run_surface_runtime_with_reactor_access, RuntimeImage, SurfaceConfig,
+    SurfaceEvent, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiDocumentAccess,
+    UiTemplate,
 };
 
 use app::ShellLoop;
@@ -52,12 +55,18 @@ struct NotificationHost {
     center_revision: Option<u64>,
     /// Set when an outside press closed the centre; consumes the same click's opener release.
     closed_by_press: Option<Instant>,
+    /// Loads toast icons by theme name; spawned on the first named icon.
+    icons: Option<IconLoader>,
+    icon_root: PathBuf,
+    /// True while an icon request for the visible toast is outstanding.
+    icon_wait: bool,
 }
 
 impl NotificationHost {
     fn connect(
         runtime: &mut SurfaceRuntime,
         snapshot: &ShellSnapshot,
+        icon_root: PathBuf,
     ) -> Result<Option<Self>, String> {
         let mut provider =
             flamewm_integrations_linux::notifications::NotificationProvider::connect()
@@ -138,6 +147,9 @@ impl NotificationHost {
             center_view: notification_center::CenterView::default(),
             center_revision: None,
             closed_by_press: None,
+            icons: None,
+            icon_root,
+            icon_wait: false,
         }))
     }
 
@@ -193,16 +205,30 @@ impl NotificationHost {
             }
             return true;
         }
-        if event.surface != self.surface || event.action.action != "notification.dismiss" {
+        if event.surface != self.surface {
             return false;
         }
-        if let Some(notification) = &self.visible {
-            if let Err(error) = self.provider.dismiss(notification.id) {
-                eprintln!(
-                    "flamewm-shell: notification dismiss failed: {}",
-                    error.message
-                );
+        if let Some(notification) = self.visible.clone() {
+            // Body click invokes `default` when the client sent one, else dismisses.
+            let outcome = match event.action.action.as_str() {
+                "notification.dismiss" if notification.default_action => self
+                    .provider
+                    .invoke_action(notification.id, notifications::DEFAULT_ACTION_KEY),
+                "notification.dismiss" => self.provider.dismiss(notification.id),
+                action => match action
+                    .strip_prefix("notification.action.")
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .and_then(|index| notification.actions.get(index.wrapping_sub(1)))
+                {
+                    Some(button) => self.provider.invoke_action(notification.id, &button.key),
+                    None => return false,
+                },
+            };
+            if let Err(error) = outcome {
+                eprintln!("flamewm-shell: notification action failed: {}", error.message);
             }
+        } else if event.action.action != "notification.dismiss" {
+            return false;
         }
         if let Err(error) = self.tick(runtime, None) {
             eprintln!("flamewm-shell: notification update failed: {error}");
@@ -306,6 +332,105 @@ impl NotificationHost {
         Ok(())
     }
 
+    /// Shows the toast icon for a newly visible notification: `image-data` pixels are already
+    /// downscaled; a named icon is requested from the loader and shown when it arrives.
+    fn project_icon(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        notification: Option<&notifications::NotificationView>,
+    ) -> Result<(), String> {
+        self.icon_wait = false;
+        let Some(notification) = notification else {
+            return self.set_icon(runtime, None);
+        };
+        if let Some(image) = &notification.image {
+            let icon = RuntimeImage {
+                source: format!("notification-icon-{}", notification.id),
+                width: image.width,
+                height: image.height,
+                pixels: image.rgba.clone(),
+            };
+            return self.set_icon(runtime, Some(icon));
+        }
+        let Some(name) = notification.icon_name.as_deref() else {
+            return self.set_icon(runtime, None);
+        };
+        let root = self.icon_root.clone();
+        let loader = self
+            .icons
+            .get_or_insert_with(|| IconLoader::spawn(root, String::new()));
+        loader.request(
+            IconTarget::TaskSlot(0),
+            name,
+            notifications::NOTIFICATION_ICON_EDGE,
+            notifications::NOTIFICATION_ICON_EDGE,
+        );
+        self.icon_wait = true;
+        self.set_icon(runtime, None)
+    }
+
+    /// Applies a finished named icon when it belongs to the visible toast. While a request is
+    /// outstanding, the reactor is woken again shortly to collect it.
+    fn poll_icon(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        wake: Option<&flamewm_reactor::WakeDeadline>,
+    ) -> Result<(), String> {
+        if !self.icon_wait {
+            return Ok(());
+        }
+        let wanted = self.visible.as_ref().and_then(|notification| notification.icon_name.clone());
+        let Some(loader) = self.icons.as_mut() else {
+            self.icon_wait = false;
+            return Ok(());
+        };
+        let mut arrived = None;
+        for result in loader.drain_ready() {
+            let matches = result.target == IconTarget::TaskSlot(0)
+                && Some(&result.name) == wanted.as_ref()
+                && result.width == notifications::NOTIFICATION_ICON_EDGE
+                && result.height == notifications::NOTIFICATION_ICON_EDGE;
+            if matches {
+                arrived = Some(result.raster);
+            }
+        }
+        match arrived {
+            Some(raster) => {
+                self.icon_wait = false;
+                let icon = raster.map(|raster| RuntimeImage {
+                    source: raster.source,
+                    width: raster.width,
+                    height: raster.height,
+                    pixels: raster.pixels,
+                });
+                self.set_icon(runtime, icon)
+            }
+            None => {
+                if let Some(wake) = wake {
+                    let deadline = Instant::now() + Duration::from_millis(15);
+                    wake.set(Some(wake.get().map_or(deadline, |old| old.min(deadline))));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn set_icon(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        icon: Option<RuntimeImage>,
+    ) -> Result<(), String> {
+        runtime
+            .with_document(self.surface, |document| match icon {
+                Some(icon) => {
+                    document.image_rgba8("notification-icon", icon)?;
+                    document.visible("notification-icon", true)
+                }
+                None => document.visible("notification-icon", false),
+            })
+            .map_err(|error| format!("project notification icon: {error:?}"))
+    }
+
     fn tick(
         &mut self,
         runtime: &mut SurfaceRuntime,
@@ -317,6 +442,7 @@ impl NotificationHost {
         let _ = self.provider.drain_ui_updates();
         self.refresh_center(runtime)?;
         let next = self.provider.active().into_iter().last();
+        self.poll_icon(runtime, wake)?;
         if self.visible == next {
             if let Some(deadline) = self.provider.next_deadline() {
                 if let Some(wake) = wake {
@@ -326,6 +452,7 @@ impl NotificationHost {
             return Ok(());
         }
         self.visible.clone_from(&next);
+        self.project_icon(runtime, next.as_ref())?;
         if let Some(notification) = next {
             runtime
                 .with_document(self.surface, |document| {
@@ -335,6 +462,17 @@ impl NotificationHost {
                         display_text(&notification.summary, 120),
                     )?;
                     document.text("notification-body", display_text(&notification.body, 500))?;
+                    document.visible("notification-actions", !notification.actions.is_empty())?;
+                    for index in 0..notifications::MAX_VISIBLE_ACTIONS {
+                        let id = format!("notification-action-{}", index + 1);
+                        match notification.actions.get(index) {
+                            Some(action) => {
+                                document.visible(&id, true)?;
+                                document.text(&id, display_text(&action.label, 24))?;
+                            }
+                            None => document.visible(&id, false)?,
+                        }
+                    }
                     document.visible("notification-progress", notification.progress.is_some())?;
                     if let Some(progress) = notification.progress {
                         document.size(
@@ -480,7 +618,7 @@ fn execute() -> Result<(), String> {
             None
         }
     };
-    let notifications = match NotificationHost::connect(&mut runtime, &snapshot) {
+    let notifications = match NotificationHost::connect(&mut runtime, &snapshot, loader_root.clone()) {
         Ok(Some(host)) => Some(Rc::new(RefCell::new(host))),
         Ok(None) => None,
         Err(error) => {

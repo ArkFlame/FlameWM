@@ -7,11 +7,17 @@
   <link rel="stylesheet" href="flamewm.css">
 </head>
 <body class="notification-body">
-  <button id="notification-card" class="notification-card" data-action="notification.dismiss">
+  <div id="notification-card" class="notification-card" data-action="notification.dismiss">
+    <img id="notification-icon" class="notification-icon" src="assets/breeze/applications-utilities.svg" width="40" height="40">
     <span id="notification-app" class="notification-app">&#8203;</span>
     <span id="notification-summary" class="notification-summary">&#8203;</span>
     <span id="notification-body" class="notification-copy">&#8203;</span>
+    <span id="notification-actions" class="notification-actions">
+      <button id="notification-action-1" class="notification-action" data-action="notification.action.1">&#8203;</button>
+      <button id="notification-action-2" class="notification-action" data-action="notification.action.2">&#8203;</button>
+      <button id="notification-action-3" class="notification-action" data-action="notification.action.3">&#8203;</button>
+    </span>
     <span id="notification-progress" class="notification-progress"><span id="notification-progress-fill" class="notification-progress-fill"></span></span>
-  </button>
+  </div>
 </body>
 </html>
