@@ -69,12 +69,13 @@ impl Service {
     /// switch, the compositor switches, and no client is ever told, so the click looks like a no-op.
     /// `last_index` is `None` because the compositor has no "previous workspace" source of its own.
     pub(super) fn publish_workspaces(&self) {
-        let (revision, count, active_index) = {
+        let (revision, count, active_index, occupancy) = {
             let mirror = self.mirror.borrow();
             (
                 mirror.workspace_revision,
                 mirror.workspace_count,
                 mirror.active_workspace,
+                mirror.workspace_occupancy(),
             )
         };
         let snapshot = WorkspaceSnapshot {
@@ -83,6 +84,7 @@ impl Service {
             active_index,
             last_index: None,
             names: (1..=count).map(|index| index.to_string()).collect(),
+            occupancy,
         };
         if self.published_workspaces.borrow().as_ref() == Some(&snapshot) {
             return;

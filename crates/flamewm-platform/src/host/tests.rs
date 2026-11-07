@@ -16,6 +16,8 @@ use super::*;
 struct FakeEngine {
     display: DisplaySnapshot,
     reverted: Vec<TransactionId>,
+    windows: Vec<WindowSnapshot>,
+    workspace_count: Option<usize>,
 }
 
 impl WindowPort for FakeEngine {
@@ -23,7 +25,7 @@ impl WindowPort for FakeEngine {
         Err(FlameError::new(ErrorCode::NotFound, "no windows"))
     }
     fn snapshot(&self) -> FlameResult<Vec<WindowSnapshot>> {
-        Ok(Vec::new())
+        Ok(self.windows.clone())
     }
     fn activate(&mut self, _window: WindowRef) -> FlameResult<()> {
         Ok(())
@@ -53,7 +55,17 @@ impl WindowPort for FakeEngine {
 
 impl WorkspacePort for FakeEngine {
     fn workspace_snapshot(&self) -> FlameResult<WorkspaceSnapshot> {
-        Err(FlameError::new(ErrorCode::Unsupported, "fake workspace"))
+        let Some(count) = self.workspace_count else {
+            return Err(FlameError::new(ErrorCode::Unsupported, "fake workspace"));
+        };
+        Ok(WorkspaceSnapshot {
+            revision: 1,
+            count,
+            active_index: 0,
+            last_index: None,
+            names: Vec::new(),
+            occupancy: Vec::new(),
+        })
     }
     fn activate_workspace(&mut self, _index: usize, _expected_revision: u64) -> FlameResult<()> {
         Err(FlameError::new(ErrorCode::Unsupported, "fake workspace"))
@@ -391,6 +403,8 @@ fn host_with_display(path: &std::path::Path, display: DisplaySnapshot) -> Platfo
         FakeEngine {
             display,
             reverted: Vec::new(),
+            windows: Vec::new(),
+            workspace_count: None,
         },
         path.to_path_buf(),
     )
@@ -593,4 +607,36 @@ fn failed_hotkey_persistence_rolls_back_the_shortcut_mutation() {
     assert_ne!(error.code, ErrorCode::StaleRevision);
     assert_eq!(host.shortcut_snapshot(), before);
     let _ = std::fs::remove_file(&dir);
+}
+
+// REGRESSION: the snapshot's occupancy is filled from the cached window list (sticky windows excluded),
+// so the pager and GetWorkspaces agree with the window state the WM refreshed.
+#[test]
+fn workspace_snapshot_fills_occupancy_from_cached_windows() {
+    use flamewm_api::ids::{DesktopAppId, WindowRef, WorkspaceRef};
+    use flamewm_api::window::WindowState;
+
+    fn window_on(index: i32, id: u64) -> WindowSnapshot {
+        WindowSnapshot {
+            reference: WindowRef::new(id, 1),
+            title: String::new(),
+            app_id: DesktopAppId::default(),
+            outer_geometry: Rect::new(0, 0, 10, 10),
+            restore_geometry: Rect::new(0, 0, 10, 10),
+            state: WindowState::Normal,
+            sticky: index < 0,
+            focused: false,
+            workspace: WorkspaceRef::new(index, 1),
+            output: OutputId::new("default"),
+            state_generation: 1,
+        }
+    }
+
+    let path = fixture_path("workspace-occupancy");
+    let mut host = host_at(&path, 100);
+    host.engine_mut().workspace_count = Some(3);
+    host.engine_mut().windows = vec![window_on(0, 1), window_on(2, 2), window_on(2, 3), window_on(-1, 4)];
+    assert!(host.refresh_windows().expect("refresh"));
+    let snapshot = host.workspace_snapshot().expect("snapshot");
+    assert_eq!(snapshot.occupancy, vec![1, 0, 2]);
 }

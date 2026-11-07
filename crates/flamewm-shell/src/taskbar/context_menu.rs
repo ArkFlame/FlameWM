@@ -280,6 +280,7 @@ mod taskbar_menu_tests {
             count: 2,
             active_index: 0,
             last_index: None,
+            occupancy: Vec::new(),
             names: vec!["1".to_owned(), "2".to_owned()],
         };
         let rows = workspace_menu(&snapshot, 0);

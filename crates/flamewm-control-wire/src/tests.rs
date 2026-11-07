@@ -235,6 +235,7 @@ fn workspace_snapshot_round_trips_through_client_codec() {
         count: 3,
         active_index: 1,
         last_index: Some(0),
+        occupancy: Vec::new(),
         names: vec!["1".to_owned(), "2".to_owned(), "3".to_owned()],
     };
     assert_reply_round_trip(&call, &ControlResponse::Workspaces(source.clone()));
@@ -297,6 +298,7 @@ fn shell_bootstrap_round_trips_aggregate_snapshots() {
             count: 2,
             active_index: 0,
             last_index: None,
+            occupancy: Vec::new(),
             names: vec!["1".to_owned(), "2".to_owned()],
         },
         panels: PanelsSnapshot {
@@ -740,6 +742,7 @@ fn snapshot_signals_round_trip_revision_and_snapshot() {
             count: 2,
             active_index: 1,
             last_index: Some(0),
+            occupancy: Vec::new(),
             names: vec!["1".to_owned(), "2".to_owned()],
         },
     };

@@ -285,6 +285,15 @@ const PAGER_IDLE_FILL: UiColor = UiColor {
     a: 128,
 };
 
+/// Idle cell that holds windows: the same idle cell lifted to a lighter tint, so occupancy reads
+/// without a new element or class (the projection has no class toggle).
+const PAGER_OCCUPIED_FILL: UiColor = UiColor {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 40,
+};
+
 /// Projected workspaces paired with the pager cell each one occupies, using the
 /// count-dependent two-row topology (`cell = 2 * column + row + 1`).
 fn pager_cells(
@@ -379,6 +388,8 @@ pub(crate) fn project_pager(
         document.text_ref(&cell_id, &workspace.label)?;
         let fill = if workspace.active {
             pager_active_fill()
+        } else if workspace.occupied {
+            PAGER_OCCUPIED_FILL
         } else {
             PAGER_IDLE_FILL
         };

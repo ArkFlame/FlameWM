@@ -50,6 +50,7 @@ mod tests {
             count,
             active_index,
             last_index: None,
+            occupancy: Vec::new(),
             names: Vec::new(),
         }
     }

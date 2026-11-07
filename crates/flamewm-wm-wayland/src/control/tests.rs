@@ -407,3 +407,34 @@ fn carrying_a_window_switches_to_the_target_workspace() {
         "one command carries both halves"
     );
 }
+
+// REGRESSION: Wayland occupancy counts the mirror's windows per workspace, excluding sticky windows,
+// so the pager and GetWorkspaces agree with the compositor window model.
+#[test]
+fn mirror_occupancy_counts_windows_per_workspace() {
+    use flamewm_api::WorkspaceRef;
+    use flamewm_api::window::WindowState;
+
+    fn window_on(index: i32, id: u64) -> WindowSnapshot {
+        WindowSnapshot {
+            reference: WindowRef::new(id, 1),
+            title: String::new(),
+            app_id: DesktopAppId::default(),
+            outer_geometry: flamewm_api::Rect::new(0, 0, 10, 10),
+            restore_geometry: flamewm_api::Rect::new(0, 0, 10, 10),
+            state: WindowState::Normal,
+            sticky: index < 0,
+            focused: false,
+            workspace: WorkspaceRef::new(index, 1),
+            output: OutputId::new("wayland-0"),
+            state_generation: 1,
+        }
+    }
+
+    let mirror = Mirror {
+        windows: vec![window_on(1, 1), window_on(1, 2), window_on(-1, 3)],
+        workspace_count: 3,
+        ..Mirror::default()
+    };
+    assert_eq!(mirror.workspace_occupancy(), vec![0, 2, 0]);
+}

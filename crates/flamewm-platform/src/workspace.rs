@@ -182,6 +182,7 @@ mod tests {
             count,
             active_index: active,
             last_index: Some(0),
+            occupancy: Vec::new(),
             names: (1..=count).map(|n| format!("Workspace {n}")).collect(),
         }
     }

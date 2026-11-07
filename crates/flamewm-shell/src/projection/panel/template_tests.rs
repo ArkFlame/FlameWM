@@ -323,6 +323,7 @@ fn pager_snapshot(count: usize, active_index: usize) -> WorkspaceSnapshot {
         count,
         active_index,
         last_index: None,
+        occupancy: Vec::new(),
         names: Vec::new(),
     }
 }

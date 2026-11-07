@@ -13,12 +13,32 @@ pub struct WorkspaceSnapshot {
     pub active_index: usize,
     pub last_index: Option<usize>,
     pub names: Vec<String>,
+    /// Managed-window count per workspace; empty when the producer reports no occupancy.
+    pub occupancy: Vec<usize>,
+}
+
+/// Managed-window count per workspace from each window's workspace index. Sticky or
+/// unassigned windows (negative index) and indexes outside `count` are counted nowhere.
+#[must_use]
+pub fn occupancy_counts(window_indexes: impl IntoIterator<Item = i32>, count: usize) -> Vec<usize> {
+    let mut counts = vec![0; count];
+    for index in window_indexes {
+        if let Some(slot) = usize::try_from(index).ok().and_then(|i| counts.get_mut(i)) {
+            *slot += 1;
+        }
+    }
+    counts
 }
 
 impl WorkspaceSnapshot {
     pub fn validate(&self) -> FlameResult<()> {
         if self.count == 0 {
             return Err(FlameError::invalid("workspace count must be at least one"));
+        }
+        if !self.occupancy.is_empty() && self.occupancy.len() != self.count {
+            return Err(FlameError::invalid(
+                "workspace occupancy must be empty or match count",
+            ));
         }
         if self.active_index >= self.count {
             return Err(FlameError::invalid(
@@ -189,6 +209,23 @@ pub fn remapped_desktop(plan: &WorkspacePlan, desktop: u32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // REGRESSION: occupancy counts per-workspace windows; sticky (-1) and out-of-range windows count nowhere.
+    #[test]
+    fn occupancy_counts_windows_per_workspace_and_validates_length() {
+        assert_eq!(occupancy_counts([0, 2, 2, -1, 9], 3), vec![1, 0, 2]);
+        let mut snapshot = WorkspaceSnapshot {
+            revision: 1,
+            count: 2,
+            active_index: 0,
+            last_index: None,
+            names: Vec::new(),
+            occupancy: vec![1, 0],
+        };
+        assert!(snapshot.validate().is_ok());
+        snapshot.occupancy = vec![1];
+        assert!(snapshot.validate().is_err());
+    }
 
     fn plan(kind: WorkspacePlanKind, old_to_new: Vec<usize>, new_count: usize) -> WorkspacePlan {
         WorkspacePlan {

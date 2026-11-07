@@ -224,6 +224,7 @@ fn workspace_snapshot_signal_updates_model_without_fetch() {
         count: 2,
         active_index: 1,
         last_index: Some(0),
+        occupancy: Vec::new(),
         names: vec!["one".to_owned(), "two".to_owned()],
     };
     runtime.mark_signal(&ControlSignal::WorkspacesSnapshotChanged {
@@ -823,6 +824,7 @@ fn switching_workspaces_changes_task_click_targets_without_a_panel_update() {
         count: 2,
         active_index: 0,
         last_index: None,
+        occupancy: Vec::new(),
         names: Vec::new(),
     });
     let mut runtime = ShellRuntime::new(snapshot);
@@ -834,6 +836,7 @@ fn switching_workspaces_changes_task_click_targets_without_a_panel_update() {
         count: 2,
         active_index: 1,
         last_index: Some(0),
+        occupancy: Vec::new(),
         names: Vec::new(),
     };
     runtime.mark_signal(&ControlSignal::WorkspacesSnapshotChanged { snapshot: next });
@@ -856,6 +859,7 @@ fn workspace_snapshot(
         count,
         active_index,
         last_index: None,
+        occupancy: Vec::new(),
         names: Vec::new(),
     }
 }
@@ -944,6 +948,7 @@ fn global_workspace_snapshot_refreshes_task_views_on_each_output() {
             count: 2,
             active_index: 1,
             last_index: Some(0),
+            occupancy: Vec::new(),
             names: Vec::new(),
         },
     });

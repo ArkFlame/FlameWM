@@ -85,6 +85,8 @@ pub fn workspace_snapshot(
         active_index: active_index.min(count - 1),
         last_index: None,
         names,
+        // Filled by the platform host, which owns the window cache.
+        occupancy: Vec::new(),
     }
 }
 

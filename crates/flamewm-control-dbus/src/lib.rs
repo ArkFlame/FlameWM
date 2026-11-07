@@ -414,10 +414,15 @@ fn to_item(value: &WireValue) -> Result<MessageItem, String> {
             v.iter().map(|v| MessageItem::Str(v.clone())).collect(),
             "as",
         ),
-        WireValue::Array(v) => array(
-            v.iter().map(to_item).collect::<Result<Vec<_>, _>>()?,
-            "aa{sv}",
-        ),
+        WireValue::Array(v) => {
+            let items = v.iter().map(to_item).collect::<Result<Vec<_>, _>>()?;
+            // The element signature follows the items (dict rows, or `u` for occupancy counts);
+            // an empty array keeps the dict-row default.
+            let element = items
+                .first()
+                .map_or_else(|| "a{sv}".to_owned(), |item| item.signature().to_string());
+            array(items, &format!("a{element}"))
+        }
         WireValue::Dict(v) => {
             MessageItem::from_dict(v.iter().map(|(k, v)| to_item(v).map(|v| (k.clone(), v))))
                 .map_err(|error| error.to_string())
@@ -593,6 +598,7 @@ mod tests {
                     count: 1,
                     active_index: 0,
                     last_index: None,
+                    occupancy: vec![2],
                     names: vec!["1".to_owned()],
                 },
             },

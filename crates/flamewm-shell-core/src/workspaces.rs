@@ -19,6 +19,8 @@ pub struct WorkspaceView {
     /// Preserved protocol name from the snapshot (`""` when unnamed).
     pub name: String,
     pub active: bool,
+    /// Holds at least one managed window (`WorkspaceSnapshot::occupancy`).
+    pub occupied: bool,
     /// Row of the two-row product topology ([`flamewm_api::workspace::grid_position`]).
     pub row: usize,
     /// Column of the two-row product topology; the column count follows the
@@ -127,6 +129,7 @@ pub fn project(snapshot: Option<&WorkspaceSnapshot>) -> Vec<WorkspaceView> {
                 label,
                 name,
                 active: index == snapshot.active_index,
+                occupied: snapshot.occupancy.get(index).is_some_and(|count| *count > 0),
                 row: position.row,
                 column: position.column,
             }
@@ -145,6 +148,7 @@ mod tests {
             active_index,
             last_index: None,
             names: Vec::new(),
+            occupancy: Vec::new(),
         }
     }
 
@@ -211,6 +215,21 @@ mod tests {
 
     // The view column follows the live count (row-major), so six workspaces
     // read `1 2 3 / 4 5 6` rather than one flat page of two columns.
+    // REGRESSION: the occupied flag follows the per-workspace window count, and an empty occupancy
+    // (producer reports none) marks nothing occupied.
+    #[test]
+    fn occupied_flag_follows_window_counts() {
+        let mut counted = snapshot(3, 0);
+        counted.occupancy = vec![2, 0, 1];
+        let flags: Vec<bool> = project(Some(&counted)).iter().map(|view| view.occupied).collect();
+        assert_eq!(flags, vec![true, false, true]);
+        let uncounted: Vec<bool> = project(Some(&snapshot(3, 0)))
+            .iter()
+            .map(|view| view.occupied)
+            .collect();
+        assert_eq!(uncounted, vec![false, false, false]);
+    }
+
     #[test]
     fn six_workspaces_read_two_rows_of_three() {
         let views = project(Some(&snapshot(6, 5)));

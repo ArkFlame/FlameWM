@@ -258,7 +258,15 @@ impl<E: EnginePorts> PlatformHost<E> {
     }
 
     pub fn workspace_snapshot(&self) -> FlameResult<WorkspaceSnapshot> {
-        self.workspaces.snapshot(&self.engine)
+        let mut snapshot = self.workspaces.snapshot(&self.engine)?;
+        snapshot.occupancy = flamewm_api::workspace::occupancy_counts(
+            self.windows
+                .cached()
+                .iter()
+                .map(|window| window.workspace.index),
+            snapshot.count,
+        );
+        Ok(snapshot)
     }
 
     /// The persisted workspace count, when the session has one.

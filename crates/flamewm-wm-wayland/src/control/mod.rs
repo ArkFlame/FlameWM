@@ -87,6 +87,17 @@ pub struct Mirror {
     pub pointer: (i32, i32),
 }
 
+impl Mirror {
+    /// Managed-window count per workspace, as the shared pager occupancy contract expects.
+    #[must_use]
+    pub fn workspace_occupancy(&self) -> Vec<usize> {
+        flamewm_api::workspace::occupancy_counts(
+            self.windows.iter().map(|window| window.workspace.index),
+            self.workspace_count,
+        )
+    }
+}
+
 /// Writes queued by the engine during a D-Bus turn and applied to `State` afterwards.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {

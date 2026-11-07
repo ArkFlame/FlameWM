@@ -38,6 +38,7 @@ impl FakeDesktop {
                 count: 2,
                 active_index: 0,
                 last_index: None,
+                occupancy: Vec::new(),
                 names: vec!["Workspace 1".to_owned(), "Workspace 2".to_owned()],
             },
             display: DisplaySnapshot {
@@ -171,6 +172,7 @@ impl WorkspacePort for FakeDesktop {
             count: plan.new_count,
             active_index: plan.new_active,
             last_index: plan.new_last,
+            occupancy: Vec::new(),
             names: plan.new_names.clone(),
         };
         Ok(())

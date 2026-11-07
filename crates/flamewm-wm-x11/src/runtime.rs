@@ -696,6 +696,7 @@ where
     let mut signals = Vec::new();
     if changes.windows {
         let panels_before = host.panels_snapshot();
+        let occupancy_before = host.workspace_snapshot()?.occupancy;
         if host.refresh_windows()? {
             let windows = host.engine().snapshot()?;
             let revision = windows
@@ -705,6 +706,13 @@ where
                 .unwrap_or(0);
             signals.push(ControlSignal::WindowsSnapshotChanged { revision, windows });
             signals.push(ControlSignal::WindowsChanged { revision });
+            // Occupancy is window state, so the pager only hears about it when a count moves.
+            let workspaces = host.workspace_snapshot()?;
+            if workspaces.occupancy != occupancy_before {
+                signals.push(ControlSignal::WorkspacesSnapshotChanged {
+                    snapshot: workspaces,
+                });
+            }
         }
         let panels = host.panels_snapshot();
         if panels != panels_before {
@@ -1094,6 +1102,7 @@ mod tests {
                     count: 2,
                     active_index: 0,
                     last_index: None,
+                    occupancy: Vec::new(),
                     names: Vec::new(),
                 },
             }
@@ -1311,8 +1320,10 @@ mod tests {
         assert!(signals.is_empty());
     }
 
+    // REGRESSION: a managed window changes its workspace occupancy, so the workspace snapshot is
+    // announced once in the same turn as the window list.
     #[test]
-    fn manage_window_emits_windows_plus_panels_once() {
+    fn manage_window_emits_windows_panels_and_occupancy_once() {
         let mut host = FakeEngine::new().host();
         let _ = collect_wm_signals(&mut host, change(true, false, false)).expect("seed");
         host.engine_mut().windows.push(fake_window(2, 2));
@@ -1322,6 +1333,7 @@ mod tests {
             vec![
                 "WindowsSnapshotChanged",
                 "WindowsChanged",
+                "WorkspacesSnapshotChanged",
                 "PanelsSnapshotChanged"
             ]
         );

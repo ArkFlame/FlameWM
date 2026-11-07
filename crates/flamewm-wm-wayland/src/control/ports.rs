@@ -90,6 +90,7 @@ impl WorkspacePort for WaylandDesktop {
             names: (1..=mirror.workspace_count)
                 .map(|index| index.to_string())
                 .collect(),
+            occupancy: mirror.workspace_occupancy(),
         })
     }
 

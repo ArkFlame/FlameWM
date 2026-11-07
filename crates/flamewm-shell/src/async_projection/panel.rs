@@ -252,6 +252,7 @@ mod tests {
             count: 1,
             active_index: 0,
             last_index: None,
+            occupancy: Vec::new(),
             names: Vec::new(),
         });
         assert_eq!(
@@ -289,6 +290,7 @@ mod tests {
                 count: 6,
                 active_index: 3,
                 last_index: None,
+                occupancy: Vec::new(),
                 names: Vec::new(),
             }),
             ..ShellSnapshot::default()

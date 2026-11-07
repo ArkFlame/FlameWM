@@ -77,12 +77,21 @@ pub(crate) fn workspace_snapshot(dict: &WireDict) -> Result<WorkspaceSnapshot, C
         Some(usize::try_from(last_raw).map_err(|_| invalid("last workspace does not fit usize"))?)
     };
     let names = dict_string_array(dict, "names")?.to_vec();
+    let occupancy = required_array(dict_value(dict, "occupancy")?, "occupancy")?
+        .iter()
+        .map(|value| {
+            required_u32(value, "occupancy").and_then(|count| {
+                usize::try_from(count).map_err(|_| invalid("occupancy does not fit usize"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let snapshot = WorkspaceSnapshot {
         revision: dict_u64(dict, "revision")?,
         count,
         active_index: active,
         last_index,
         names,
+        occupancy,
     };
     snapshot.validate().map_err(ControlError::from)?;
     Ok(snapshot)

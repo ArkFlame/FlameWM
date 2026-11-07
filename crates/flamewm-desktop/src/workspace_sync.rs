@@ -161,6 +161,7 @@ mod tests {
             active_index,
             last_index,
             names: (1..=count).map(|index| index.to_string()).collect(),
+            occupancy: Vec::new(),
         }
     }
 

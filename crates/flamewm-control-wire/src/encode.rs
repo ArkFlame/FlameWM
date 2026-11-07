@@ -24,6 +24,16 @@ pub fn workspace_dict(snapshot: &WorkspaceSnapshot) -> WireDict {
             WireValue::I32(snapshot.last_index.map_or(-1, i32_saturating)),
         ),
         ("names", WireValue::StringArray(snapshot.names.clone())),
+        (
+            "occupancy",
+            WireValue::Array(
+                snapshot
+                    .occupancy
+                    .iter()
+                    .map(|count| WireValue::U32(u32_saturating(*count)))
+                    .collect(),
+            ),
+        ),
     ])
 }
 

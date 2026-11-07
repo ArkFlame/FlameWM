@@ -417,6 +417,7 @@ mod tests {
             count: 2,
             active_index: 0,
             last_index: None,
+            occupancy: Vec::new(),
             names: vec![],
         });
         let changed = crate::runtime::ChangedDomains {
