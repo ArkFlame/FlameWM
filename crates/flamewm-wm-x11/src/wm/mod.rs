@@ -552,6 +552,7 @@ use controllers::*;
 use counters::{bump, emit_resize_summary, move_counters, read, resize_counters};
 use drag_edge::*;
 pub(crate) use event_loop::{next_wait_timeout, run_with_hook};
+pub(crate) use ping::UnresponsiveClients;
 #[cfg(test)]
 use icons::{icon_completion_matches, retain_deferred_icon_job};
 use outputs::*;

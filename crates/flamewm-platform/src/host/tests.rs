@@ -629,6 +629,7 @@ fn workspace_snapshot_fills_occupancy_from_cached_windows() {
             workspace: WorkspaceRef::new(index, 1),
             output: OutputId::new("default"),
             state_generation: 1,
+            unresponsive: false,
         }
     }
 

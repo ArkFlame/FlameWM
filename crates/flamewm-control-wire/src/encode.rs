@@ -493,6 +493,7 @@ pub(crate) fn window_wire_value(window: &WindowSnapshot) -> WireValue {
             WireValue::String(window.output.as_str().to_owned()),
         ),
         ("stateGeneration", WireValue::U64(window.state_generation)),
+        ("unresponsive", WireValue::Bool(window.unresponsive)),
     ]))
 }
 

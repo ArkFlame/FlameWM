@@ -86,6 +86,7 @@ impl FakeDesktop {
                 workspace: flamewm_api::WorkspaceRef::new(0, 1),
                 output: output.clone(),
                 state_generation: 1,
+                unresponsive: false,
             },
             closed_windows: Vec::new(),
         }

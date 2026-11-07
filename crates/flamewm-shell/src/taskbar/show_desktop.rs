@@ -51,6 +51,7 @@ mod tests {
             workspace: WorkspaceRef::new(0, 1),
             output: OutputId::new("A"),
             state_generation: 1,
+            unresponsive: false,
         }
     }
 

@@ -199,3 +199,27 @@ Results: SP2 (update 2)
 - Checks: `cargo test -p flamewm-wm-wayland` exit 0 (12, 258, 0 passed, 0 warnings). `cargo check -p flamewm-wm-wayland --features drm` exit 0, 0 warnings. `python3 -I tools/architecture_guard.py` exit 0 (77 ratified). `flamewm-platform` not touched; `flamewm-wm-x11` not touched.
 - Screenshots: `/tmp/claude-1000/sp2/outline_hold.png`, `/tmp/claude-1000/sp2/outline_after_release.png`, `/tmp/claude-1000/sp2/content_hold.png`, `/tmp/claude-1000/sp2/content_edge_hold.png`, `/tmp/claude-1000/sp2/live162.png`, `/tmp/claude-1000/sp2/live162_after.png`.
 - No commit. Debug hooks reverted; `rg SP2DBG|SP2TEMP` is empty.
+
+### Results: NR (CODER, X11 not-responding task mark)
+
+- Scope: `_NET_WM_PING` liveness shown on the shell task list. `WindowSnapshot.unresponsive: bool` (default false) is set from wm-x11 ping state, encoded as `unresponsive` in `flamewm-control-wire` (missing key decodes false), and drives the task status line tint (`--c-ef4048`, existing token; no layout change).
+- Root cause of "stale" marks: the ping expiry only changed WM state; it did not mark windows dirty, so the snapshot and shell were not refreshed until another event. Fixed: `Wm::expire_pings` runs before `take_changes`, and a pong marks windows dirty.
+- Live check (Xvfb :181, isolated session, fresh binaries from `target-swarm-nr`; harness `/tmp/claude-1000/nr-live/`):
+  - HungApp (never answers `_NET_WM_PING`): close request, WM sent ping and WM_DELETE; after the 5 s timeout its task underline turned red. Screenshot `/tmp/claude-1000/nr-live/after_timeout.png`, crop `taskbar_after.png`.
+  - HungTwo (control, timed): 1.6 s after close request, slot 3 red pixels 0 (`hung2_t1.png`); after timeout, red (`hung2_late.png`, crop `hung2_late_tb.png`).
+  - GoodApp (answers ping, ignores WM_DELETE): pong received; after timeout its slot shows no tint (red 0; accent/idle colour only).
+  - No panics in `wm.log`, `shell.log`, `desktop.log`.
+- Checks: `cargo test -p flamewm-api -p flamewm-control-wire -p flamewm-control-dbus -p flamewm-shell -p flamewm-shell-core -p flamewm-wm-x11 -p flamewm-platform` EXIT 0 (1670 passed, 0 failed, 0 warnings). `cargo build -p flamewm-wm -p flamewm-desktop -p flamewm-shell` EXIT 0. `cargo check -p flamewm-wm-wayland` EXIT 0. `python3 -I tools/architecture_guard.py` EXIT 0 (77 ratified, no new).
+- Not verified: Wayland (out of scope); the tint at the exact timeout instant (screenshots at 1.6 s and after the timeout only); D-Bus/control consumers of `unresponsive`; the chosen red is distinct from the focus accent only in this theme.
+- Processes: all own PIDs (Xvfb :181, dbus session, flamewm, flamewm-shell, flamewm-desktop, python clients) killed; `/proc` check shows none with `DISPLAY=:181`.
+- No commit.
+
+Results: S3 (CODER, Wayland drag feedback and X11 edge dwell; not committed)
+- Task 1, `snapPreviewEnabled` on Wayland: done. `control/settings.rs::snap_preview_enabled` (default on, same as X11 `live_settings`), mirrored in `control/mirror.rs`; `input/pointer.rs` Move drops the zone ring when off. Release snapping is unchanged.
+- Task 2, root cause: `state.rs` initialised `show_content_while_dragging: false` and only refreshed it in `Service::turn` (bus-driven, `control/mirror.rs` `sync_chrome_settings`). `titlebars`, `windowMargin` and `focusFollowsMouse` are read from the file at startup, but this key was not, so a file value stayed unapplied until a bus turn. `windowsCustom` gating is correct (`effective()` resolves members). Key names are exact-match; a mis-cased key is kept as an unknown key and ignored. Fix: `input/settings.rs::saved_drag_feedback` read at startup for both keys.
+- Task 3 (X11), fix: `wm/pointer.rs` snap-zone branch sets `edge_drag = None` instead of arming the dwell while a zone is held. The zone owns the edge, so no workspace switch hides the preview.
+- Task 4 (Meta+drag, outline, nested Wayland): verified. The window stays and the ring follows the pointer at the would-be frame; titlebar to left edge shows the zone ring. Focus is needed first (`XSetInputFocus`).
+- Checks (actual exits): `cargo test -p flamewm-wm-wayland -p flamewm-wm-x11` exit 0 (12 + 262 + 545 passed, 0 warnings); `cargo check -p flamewm-wm-wayland --features drm` exit 0, 0 warnings; `python3 -I tools/architecture_guard.py` exit 0 (77 ratified).
+- Live evidence, `/tmp/claude-1000/s3/`: `content_mid_c.png` (file-only content drag moves the window live), `nopreview_edge_c.png` (snapPreviewEnabled=false, no ring), `outline_meta_c.png`, `outline_edge_c.png`, `x11_before_late.png` (pre-fix: xterm jumps to bottom row, ring gone), `x11_edge_late.png` (fixed: ring kept, no switch).
+- Side change outside task scope: another worker added `WindowSnapshot.unresponsive`; `control/mirror.rs` and `control/tests.rs` set `unresponsive: false` (3 sites) so the Wayland crate compiles.
+- Not done: no unit test for the X11 edge-dwell change (`Wm` needs an X connection); covered by the live Xvfb run only. Pre-fix nested Wayland baseline for task 2 not re-run.

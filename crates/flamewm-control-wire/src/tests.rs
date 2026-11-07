@@ -264,6 +264,7 @@ fn window_fixture() -> WindowSnapshot {
         workspace: flamewm_api::WorkspaceRef::new(1, 8),
         output: OutputId::new("HDMI-1"),
         state_generation: 9,
+        unresponsive: false,
     }
 }
 
@@ -954,6 +955,35 @@ fn workspace_snapshot_without_occupancy_key_decodes_as_empty_occupancy() {
         decoded,
         WorkspaceSnapshot {
             occupancy: Vec::new(),
+            ..source
+        }
+    );
+}
+
+// REGRESSION: `unresponsive` is additive on the window dict: it round-trips when set, and an older
+// sender that omits the key decodes as responsive instead of failing the whole window list.
+#[test]
+fn window_unresponsive_round_trips_and_defaults_false_when_key_is_missing() {
+    let source = WindowSnapshot {
+        unresponsive: true,
+        ..window_fixture()
+    };
+    let WireValue::Dict(dict) = window_wire_value(&source) else {
+        panic!("window encodes as a dict");
+    };
+    assert_eq!(dict.get("unresponsive"), Some(&WireValue::Bool(true)));
+    assert_eq!(
+        window_snapshot(&WireValue::Dict(dict.clone())).expect("decodes"),
+        source
+    );
+
+    let mut legacy = dict;
+    legacy.remove("unresponsive");
+    let decoded = window_snapshot(&WireValue::Dict(legacy)).expect("legacy dict decodes");
+    assert_eq!(
+        decoded,
+        WindowSnapshot {
+            unresponsive: false,
             ..source
         }
     );

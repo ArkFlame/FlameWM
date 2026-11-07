@@ -6,33 +6,42 @@
 //! its next close request kills it (`XKillClient`).
 
 use super::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 /// How long a closing client has to answer its `_NET_WM_PING`.
 pub(super) const PING_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Shared unresponsive set: the WM writes it, the window snapshot reads it.
+pub(crate) type UnresponsiveClients = Rc<RefCell<HashSet<Window>>>;
 
 #[derive(Default)]
 pub(super) struct PingState {
     /// Clients awaiting a pong, with the instant the ping deadline expires.
     pending: HashMap<Window, Instant>,
     /// Clients that missed their pong; the next close request force-kills them.
-    unresponsive: HashSet<Window>,
+    unresponsive: UnresponsiveClients,
 }
 
 impl PingState {
     pub(super) fn is_unresponsive(&self, client: Window) -> bool {
-        self.unresponsive.contains(&client)
+        self.unresponsive.borrow().contains(&client)
+    }
+
+    pub(super) fn handle(&self) -> UnresponsiveClients {
+        Rc::clone(&self.unresponsive)
     }
 
     /// Records a pong: the client is alive, so it is neither pending nor unresponsive.
     pub(super) fn pong(&mut self, client: Window) {
         self.pending.remove(&client);
-        self.unresponsive.remove(&client);
+        self.unresponsive.borrow_mut().remove(&client);
     }
 
     pub(super) fn forget(&mut self, client: Window) {
         self.pending.remove(&client);
-        self.unresponsive.remove(&client);
+        self.unresponsive.borrow_mut().remove(&client);
     }
 
     /// Arms the deadline for `client`. A ping already pending keeps its earlier deadline.
@@ -51,7 +60,7 @@ impl PingState {
             .collect();
         for client in expired {
             self.pending.remove(&client);
-            self.unresponsive.insert(client);
+            self.unresponsive.borrow_mut().insert(client);
         }
         self.pending
             .values()
@@ -73,6 +82,21 @@ impl<C: Connection> Wm<'_, C> {
             .send_event(false, client, EventMask::NO_EVENT, event)?;
         self.pings.arm(client, Instant::now());
         Ok(())
+    }
+
+    /// Shared unresponsive set for the X11 window snapshot.
+    pub(crate) fn unresponsive_clients(&self) -> UnresponsiveClients {
+        self.pings.handle()
+    }
+
+    /// Expires overdue pings before the change set is drained, so a newly unresponsive client
+    /// reaches the window snapshot on this turn.
+    pub(crate) fn expire_pings(&mut self, now: Instant) {
+        let before = self.pings.handle().borrow().len();
+        self.pings.expire(now);
+        if self.pings.handle().borrow().len() != before {
+            self.mark_windows();
+        }
     }
 
     /// Hook for the reactor: expires overdue pings and returns the wait until the next one.
@@ -114,6 +138,20 @@ mod ping_tests {
         state.arm(7, t0 + Duration::from_secs(3));
         assert_eq!(state.expire(t0 + PING_TIMEOUT), None);
         assert!(state.is_unresponsive(7));
+    }
+
+    // REGRESSION: the snapshot reads the same set the ping state writes, so an expired ping is
+    // visible through the shared handle and a pong clears it there.
+    #[test]
+    fn shared_handle_tracks_expiry_and_pong() {
+        let mut state = PingState::default();
+        let shared = state.handle();
+        let t0 = Instant::now();
+        state.arm(7, t0);
+        state.expire(t0 + PING_TIMEOUT);
+        assert!(shared.borrow().contains(&7));
+        state.pong(7);
+        assert!(!shared.borrow().contains(&7));
     }
 
     #[test]

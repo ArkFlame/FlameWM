@@ -132,6 +132,7 @@ fn test_window(reference: flamewm_api::WindowRef) -> flamewm_api::window::Window
         workspace: flamewm_api::WorkspaceRef::new(0, 1),
         output: test_output_id(),
         state_generation: 1,
+        unresponsive: false,
     }
 }
 
@@ -520,6 +521,7 @@ fn task_slot_snapshot(outputs: &[&str]) -> ShellSnapshot {
         },
         output: OutputId::new(output),
         state_generation: 1,
+        unresponsive: false,
     };
     let task = |id: u64, output: &str| {
         let window = WindowRef::new(id, 1);

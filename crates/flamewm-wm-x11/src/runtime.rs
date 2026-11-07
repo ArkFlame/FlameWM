@@ -369,6 +369,7 @@ fn run_session(
                         conn.clone(),
                         screen,
                         std::sync::Arc::clone(&catalog_for_hook),
+                        wm.unresponsive_clients(),
                     )?,
                     settings_path.clone(),
                 );
@@ -1114,6 +1115,7 @@ mod tests {
             workspace: flamewm_api::WorkspaceRef::new(0, 0),
             output: OutputId::new("eDP-1"),
             state_generation: generation,
+            unresponsive: false,
         }
     }
 

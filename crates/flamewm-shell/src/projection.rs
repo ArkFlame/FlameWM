@@ -60,6 +60,7 @@ pub(crate) use panel::{
     project_element_backgrounds, project_pager, project_pager_visibility, project_status_tray,
     project_task_line, project_task_progress, project_task_slots_extent, project_taskbar_height,
     project_tray_button, set_taskbar_border, task_accent, task_slots_rendered, taskbar_is_vertical,
+    TASK_NOT_RESPONDING,
     tray_any_visible, workspace_pager_visible,
 };
 pub use start::{

@@ -608,6 +608,8 @@ pub struct TaskVisualState {
     pub running: bool,
     pub focused: bool,
     pub minimized: bool,
+    /// The task's window missed its `_NET_WM_PING`; the shell marks the task as not responding.
+    pub unresponsive: bool,
 }
 
 fn entry_window(entry: &TaskEntry) -> Option<WindowRef> {
@@ -687,6 +689,7 @@ pub fn task_visual_states_on_output_and_workspace(
                 running: window.is_some(),
                 focused: snapshot.is_some_and(|item| item.focused),
                 minimized: snapshot.is_some_and(|item| item.state == WindowState::Minimized),
+                unresponsive: snapshot.is_some_and(|item| item.unresponsive),
             })
         })
         .collect()
@@ -825,6 +828,7 @@ mod tests {
                 },
                 output: OutputId::new(output),
                 state_generation: 1,
+                unresponsive: false,
             }
         }
 
@@ -859,6 +863,18 @@ mod tests {
 
         fn ids(states: &[TaskVisualState]) -> Vec<TaskEntryId> {
             states.iter().map(|state| state.id.clone()).collect()
+        }
+
+        // REGRESSION: a task carries its window's unresponsive flag; a pinned slot with no window does not.
+        #[test]
+        fn unresponsive_window_marks_its_task_only() {
+            let tasks = panels(vec![running(1), pinned("term", None)]);
+            let mut hung = window(1, "A", WindowState::Normal);
+            hung.unresponsive = true;
+            let states = task_visual_states_on_output(&tasks, &[hung], &[], None);
+            assert_eq!(states.len(), 2);
+            assert!(states[0].unresponsive);
+            assert!(!states[1].unresponsive);
         }
 
         #[test]

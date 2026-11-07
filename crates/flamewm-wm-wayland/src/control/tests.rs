@@ -390,6 +390,7 @@ fn carrying_a_window_switches_to_the_target_workspace() {
         workspace: flamewm_api::WorkspaceRef::default(),
         output: OutputId::new("wayland-0"),
         state_generation: 1,
+        unresponsive: false,
     });
     desktop
         .switch_workspace_with_window(
@@ -428,6 +429,7 @@ fn mirror_occupancy_counts_windows_per_workspace() {
             workspace: WorkspaceRef::new(index, 1),
             output: OutputId::new("wayland-0"),
             state_generation: 1,
+            unresponsive: false,
         }
     }
 

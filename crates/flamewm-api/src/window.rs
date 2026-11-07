@@ -22,6 +22,9 @@ pub struct WindowSnapshot {
     pub workspace: WorkspaceRef,
     pub output: OutputId,
     pub state_generation: u64,
+    /// The client missed its `_NET_WM_PING` after a close request; `false` when the producer
+    /// does not track liveness or the sender predates the field.
+    pub unresponsive: bool,
 }
 
 impl WindowSnapshot {

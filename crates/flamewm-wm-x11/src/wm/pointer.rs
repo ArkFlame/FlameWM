@@ -397,7 +397,9 @@ impl<C: Connection> Wm<'_, C> {
                     crate::live_settings::snap_preview_enabled(),
                 ) {
                     self.update_snap_preview(target, work, client_id);
-                    self.evaluate_edge_drag(client_id, pointer, std::time::Instant::now())?;
+                    // A held snap zone owns the edge: a dwell here would switch workspace and hide
+                    // the zone preview the user is aiming at, so the edge dwell does not arm.
+                    self.edge_drag = None;
                     return Ok(());
                 }
             }

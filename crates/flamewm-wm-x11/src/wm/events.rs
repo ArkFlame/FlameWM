@@ -642,6 +642,7 @@ impl<C: Connection> Wm<'_, C> {
             && data[0] == self.atoms.net_wm_ping
         {
             self.pings.pong(data[2]);
+            self.mark_windows();
             return Ok(());
         }
         if event.type_ == self.atoms.net_current_desktop {

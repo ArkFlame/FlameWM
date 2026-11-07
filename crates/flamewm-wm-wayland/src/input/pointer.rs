@@ -118,7 +118,8 @@ impl State {
                     );
                     let titlebars = self.model.titlebars();
                     let target = snap_target_at(self, location, activated);
-                    let zone = (target != SnapTarget::None).then(|| {
+                    // `snapPreviewEnabled` off hides the zone ring only; release still snaps.
+                    let zone = (self.snap_preview_enabled && target != SnapTarget::None).then(|| {
                         self.model
                             .snap_client_geometry(id, target, self.work_area())
                             .map_or_else(

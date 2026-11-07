@@ -82,6 +82,7 @@ pub(super) fn build_mirror(state: &State, workspace_revision: u64) -> Mirror {
                 },
                 output: WaylandDesktop::output_id(),
                 state_generation: 1,
+                unresponsive: false,
             }
         })
         .collect();
@@ -135,6 +136,7 @@ impl Service {
         }
         let (edge_snap, edge_px) = edge_snap_settings(&snapshot);
         state.show_content_while_dragging = show_content_while_dragging(&snapshot);
+        state.snap_preview_enabled = snap_preview_enabled(&snapshot);
         if state.model.edge_snap() != (edge_snap, edge_px) {
             state.model.configure_edge_snap(edge_snap, edge_px);
         }

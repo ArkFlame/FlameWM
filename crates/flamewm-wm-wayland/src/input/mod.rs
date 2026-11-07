@@ -94,6 +94,6 @@ mod snap;
 mod tests;
 pub use self::buttons::TitleClick;
 pub use self::keyboard::saved_xkb_config;
-pub use self::settings::{saved_focus_follows_mouse, saved_model_settings};
+pub use self::settings::{saved_drag_feedback, saved_focus_follows_mouse, saved_model_settings};
 use self::move_feedback::*;
 use self::snap::*;

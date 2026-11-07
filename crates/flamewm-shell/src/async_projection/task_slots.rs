@@ -200,7 +200,9 @@ pub fn project_task_slots_async(
             )?;
             document.visible(&line_id, state.running)?;
             document.background_clear(&slot_id)?;
-            let line = if state.focused {
+            let line = if state.unresponsive {
+                crate::projection::TASK_NOT_RESPONDING
+            } else if state.focused {
                 crate::projection::task_accent()
             } else {
                 TASK_LINE_IDLE
@@ -318,6 +320,90 @@ mod tests {
         );
     }
 
+    // REGRESSION: an unresponsive task's status line takes the not-responding tone; its neighbours keep
+    // the idle line. The tone is the existing `--c-ef4048` token, pinned against the skin table.
+    #[test]
+    fn unresponsive_task_line_takes_not_responding_tone() {
+        use flamewm_api::panels::{
+            PanelEdge, PanelSnapshot, PanelsSnapshot, TaskEntry, TaskEntryKind,
+        };
+        use flamewm_api::window::{WindowSnapshot, WindowState};
+        use flamewm_api::{DesktopAppId, OutputId, Rect, TaskEntryId, WindowRef, WorkspaceRef};
+        let _guard = icon_test_lock().lock();
+        let window = |id: u64, unresponsive: bool| WindowSnapshot {
+            reference: WindowRef::new(id, 1),
+            title: String::new(),
+            app_id: DesktopAppId::new("term"),
+            outer_geometry: Rect::new(0, 0, 10, 10),
+            restore_geometry: Rect::new(0, 0, 10, 10),
+            state: WindowState::Normal,
+            sticky: false,
+            focused: false,
+            workspace: WorkspaceRef {
+                index: 0,
+                revision: 1,
+            },
+            output: OutputId::new("A"),
+            state_generation: 1,
+            unresponsive,
+        };
+        let task = |id: u64| {
+            let window = WindowRef::new(id, 1);
+            TaskEntry {
+                id: TaskEntryId::window(window),
+                app_id: DesktopAppId::new("term"),
+                kind: TaskEntryKind::Window { window },
+                order_index: id as usize,
+            }
+        };
+        let snapshot = ShellSnapshot {
+            panels: PanelsSnapshot {
+                revision: 1,
+                panels: vec![PanelSnapshot {
+                    output: OutputId::new("A"),
+                    edge: PanelEdge::Bottom,
+                    logical_size: 40,
+                    visible: true,
+                    geometry: Rect::new(0, 760, 1000, 40),
+                }],
+                tasks: vec![task(1), task(2)],
+                pinned_apps: Vec::new(),
+            },
+            windows: vec![window(1, true), window(2, false)],
+            ..ShellSnapshot::default()
+        };
+        let changed = crate::runtime::ChangedDomains {
+            windows: true,
+            ..Default::default()
+        };
+        let doc = project_changed(PanelView::first(&snapshot), changed);
+        assert_eq!(
+            doc.fills.get("task-slot-1-line"),
+            Some(&crate::projection::TASK_NOT_RESPONDING)
+        );
+        assert_eq!(doc.fills.get("task-slot-2-line"), Some(&TASK_LINE_IDLE));
+    }
+
+    #[test]
+    fn not_responding_tone_is_the_existing_shell_token() {
+        use flamewm_skin::palette::Appearance;
+        let token = flamewm_skin::shell_tones::FIXED_TONES
+            .iter()
+            .find(|tone| tone.name == "--c-ef4048")
+            .expect("--c-ef4048 is a shell chrome token");
+        let rgb = token.for_appearance(Appearance::Dark).color.0;
+        let tone = crate::projection::TASK_NOT_RESPONDING;
+        assert_eq!(
+            (tone.r, tone.g, tone.b, tone.a),
+            (
+                (rgb >> 16) as u8,
+                (rgb >> 8) as u8,
+                rgb as u8,
+                0xff
+            )
+        );
+    }
+
     #[test]
     fn task_slots_list_only_windows_on_the_shown_panel_output() {
         use flamewm_api::panels::{
@@ -341,6 +427,7 @@ mod tests {
             },
             output: OutputId::new(output),
             state_generation: 1,
+            unresponsive: false,
         };
         let task = |id: u64| {
             let window = WindowRef::new(id, 1);

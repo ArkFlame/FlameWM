@@ -38,6 +38,11 @@ pub(crate) fn window_snapshot(value: &WireValue) -> Result<WindowSnapshot, Contr
         ),
         output: OutputId::new(dict_string(dict, "output")?),
         state_generation: dict_u64(dict, "stateGeneration")?,
+        // Older senders omit `unresponsive`; a missing key means "not reported unresponsive".
+        unresponsive: dict
+            .get("unresponsive")
+            .and_then(WireValue::as_bool)
+            .unwrap_or(false),
     })
 }
 

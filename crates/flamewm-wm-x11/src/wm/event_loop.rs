@@ -97,6 +97,7 @@ where
         wm.tick_hot_corner()?;
         // Drain once per reactor turn: semantic owners marked facets above;
         // the hook flushes them to snapshots/signals exactly once.
+        wm.expire_pings(std::time::Instant::now());
         let changes = wm.take_changes();
         wm.pump_transitions(std::time::Instant::now())?;
         wm.flush_deferred_chrome(std::time::Instant::now())?;

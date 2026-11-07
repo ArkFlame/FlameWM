@@ -398,6 +398,7 @@ mod tests {
             workspace: flamewm_api::WorkspaceRef::new(0, 0),
             output: flamewm_api::OutputId::new("eDP-1"),
             state_generation: generation,
+            unresponsive: false,
         }
     }
 

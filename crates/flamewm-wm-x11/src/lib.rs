@@ -83,6 +83,8 @@ pub struct X11Desktop {
     pending_mode: Option<PendingMode>,
     generations: RefCell<BTreeMap<Window, u64>>,
     next_generation: Cell<u64>,
+    /// Clients that missed their `_NET_WM_PING`, shared with the WM loop.
+    unresponsive: crate::wm::UnresponsiveClients,
 }
 
 impl X11Desktop {
@@ -90,6 +92,7 @@ impl X11Desktop {
         conn: Rc<RustConnection>,
         screen: usize,
         catalog: std::sync::Arc<ApplicationCatalog>,
+        unresponsive: crate::wm::UnresponsiveClients,
     ) -> FlameResult<Self> {
         let root = conn.setup().roots[screen].root;
         let names = [
@@ -148,6 +151,7 @@ impl X11Desktop {
             pending_mode: None,
             generations: RefCell::new(BTreeMap::new()),
             next_generation: Cell::new(1),
+            unresponsive,
         })
     }
 
@@ -488,6 +492,7 @@ impl X11Desktop {
             workspace: WorkspaceRef::new(signed(desktop) as i32, workspace.revision),
             output,
             state_generation: self.generation_of(window),
+            unresponsive: self.unresponsive.borrow().contains(&window),
         })
     }
 }

@@ -400,6 +400,8 @@ pub struct State {
     pub snap_preview: crate::snap_preview::SnapPreview,
     /// `showContentWhileDragging`: live window move (true) or a landing outline only (false).
     pub show_content_while_dragging: bool,
+    /// `snapPreviewEnabled`: draw the snap-zone ring while a move targets a zone (X11 default on).
+    pub snap_preview_enabled: bool,
     /// Title release that moved nothing, awaiting a possible double click (see `TitleClick`).
     pub last_title_click: Option<crate::input::TitleClick>,
     /// `focusFollowsMouse`, read once at startup: pointer entry focuses the window under it.
@@ -498,6 +500,8 @@ impl State {
         // `titlebars` and `windowMargin` are saved settings; without this the model draws a
         // titlebar and ignores the margin no matter what Settings holds.
         let (titlebars, window_margin) = crate::input::saved_model_settings();
+        let (show_content_while_dragging, snap_preview_enabled) =
+            crate::input::saved_drag_feedback();
         let mut model = WindowModel::new(4);
         model.configure(titlebars, window_margin);
 
@@ -537,7 +541,8 @@ impl State {
             pressed_hit: None,
             pending_configure: None,
             snap_preview: Default::default(),
-            show_content_while_dragging: false,
+            show_content_while_dragging,
+            snap_preview_enabled,
             last_title_click: None,
             focus_follows_mouse: crate::input::saved_focus_follows_mouse(),
             super_tap: false,

@@ -93,6 +93,15 @@ pub fn set_task_accent(color: UiColor) {
     TASK_ACCENT_ARGB.store(packed, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Status-line tint for a task whose window missed its ping: the existing `--c-ef4048` fixed tone
+/// (`flamewm_skin::shell_tones::FIXED_TONES`), not a new colour. Pinned by a test.
+pub(crate) const TASK_NOT_RESPONDING: UiColor = UiColor {
+    r: 0xef,
+    g: 0x40,
+    b: 0x48,
+    a: 0xff,
+};
+
 pub(crate) fn task_accent() -> UiColor {
     let packed = TASK_ACCENT_ARGB.load(std::sync::atomic::Ordering::Relaxed);
     UiColor {
@@ -716,7 +725,9 @@ pub fn project_panel(
             document.text_ref(&label_id, label)?;
             document.visible(&line_id, state.running)?;
             document.background_clear(&slot_id)?;
-            if state.focused {
+            if state.unresponsive {
+                document.background(&line_id, TASK_NOT_RESPONDING)?;
+            } else if state.focused {
                 document.background(&line_id, task_accent())?;
             } else {
                 document.background(

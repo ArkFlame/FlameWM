@@ -373,6 +373,7 @@ impl X11Desktop {
             workspace: WorkspaceRef::new(desktop as i32, frame.workspace.revision),
             output,
             state_generation: 0,
+            unresponsive: false,
         };
         Ok((snapshot, named))
     }

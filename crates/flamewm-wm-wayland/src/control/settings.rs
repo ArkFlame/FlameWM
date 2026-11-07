@@ -12,6 +12,37 @@ pub(super) fn show_content_while_dragging(snapshot: &flamewm_api::settings::Sett
     )
 }
 
+/// `snapPreviewEnabled`: the snap-zone ring while a move targets a zone. On by default, as on X11
+/// `live_settings`; only an explicit `false` hides it.
+pub(super) fn snap_preview_enabled(snapshot: &flamewm_api::settings::SettingsSnapshot) -> bool {
+    use flamewm_api::settings::SettingValue;
+    match snapshot.values.get("snapPreviewEnabled") {
+        Some(SettingValue::Boolean(value)) => *value,
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod snap_preview_tests {
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+    use std::collections::BTreeMap;
+
+    fn snapshot(value: Option<SettingValue>) -> SettingsSnapshot {
+        let mut values = BTreeMap::new();
+        if let Some(value) = value {
+            values.insert("snapPreviewEnabled".to_owned(), value);
+        }
+        SettingsSnapshot { revision: 1, values }
+    }
+
+    #[test]
+    fn preview_is_on_by_default_and_only_false_hides_it() {
+        assert!(super::snap_preview_enabled(&snapshot(None)));
+        assert!(super::snap_preview_enabled(&snapshot(Some(SettingValue::Boolean(true)))));
+        assert!(!super::snap_preview_enabled(&snapshot(Some(SettingValue::Boolean(false)))));
+    }
+}
+
 #[cfg(test)]
 mod content_drag_tests {
     use flamewm_api::settings::{SettingValue, SettingsSnapshot};
