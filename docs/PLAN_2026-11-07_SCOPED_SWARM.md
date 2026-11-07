@@ -375,3 +375,30 @@ Pure-move splits. Public paths kept via re-exports; tests moved with their code.
 - Not verified: live X11 behaviour (no Xvfb run); the wm-x11 attention write/clear path has compile coverage only.
 - Scope note: `runtime.rs` was not edited by this job. Its `WindowSnapshot` test literal already carries the two fields (another worker's change in the same file, `+9` lines, MPRIS retry included).
 - No commit.
+
+### Results: B6 (CODER, quick-popup open latency; debug; not committed)
+
+- Scope: `crates/flamewm-render-x11/src/backdrop/blur.rs`, `surface_controller/backdrop_shape.rs`, `app/surface_backdrop.rs`. Shell threshold restored to 50 ms. No change to `flamewm-render-core`, `BLUR_DOWNSCALE`, radii, or look.
+- Split (debug, temporary timers, 160 popup installs): capture+blur 39.8 ms median; inside blur: box downscale 15.1 ms, image-core blur kernel 8.6 ms, bilinear upscale 17.7 ms; rounding 1.5 ms; `set_surface_backdrop` 13.2 ms; redraw 0.04 ms.
+- Changes (exact-output, no tolerance used):
+  - `blur.rs`: `box_downscale` sums per block with chunked slices; `bilinear_argb_words` computes each small row's horizontal blend once (integers identical to the per-pixel path).
+  - `backdrop_shape.rs`: `round_backdrop_words` skips pixels whose coverage is provably 1 (no square root in the interior).
+  - `surface_backdrop.rs`: GPU-frame RGBA copy is preallocated (same bytes).
+- Not changed: the blur kernel is `flamewm-image-core::blur::gaussian_blur_rgba_with`, already a separable running-sum with scratch reuse and a 4x downscale above r=12. It is outside the allowed scope, so it is unchanged. `flamewm-render-core` `pixels.rs` and `soft.rs` hold only the trait and dispatch, not a kernel.
+- Measured, debug, `shell.quick.open.total` / `present` medians, 40 opens per kind, interleaved at equal load (machine load 17-18):
+
+| kind | base total | final total | base present | final present |
+| --- | --- | --- | --- | --- |
+| network | 157.5 ms | 141.5 ms | 154.2 ms | 140.3 ms |
+| battery | 17.2 ms | 15.3 ms | 16.5 ms | 14.7 ms |
+| calendar | 131.5 ms | 122.5 ms | 128.8 ms | 117.3 ms |
+| weather | 51.7 ms | 50.7 ms | 49.9 ms | 48.0 ms |
+
+- Earlier base run at lower load (not comparable): network 99.1, battery 14.6, calendar 88.4, weather 38.7 ms.
+- Same-process micro bench (debug, min of 40): box downscale about 17 to 30 percent faster, bilinear upscale about 10 percent faster.
+- Visual: calendar popup on isolated Xvfb `:200`, base vs final, crop 580x470+1340+553: `compare -metric AE` = 0, RMSE = 0 (pixel-identical). Full PNGs in `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/b6/popup_base.png` and `popup_final.png`.
+- Tests added: `blur::tests` (downscale exact vs reference; upscale and end-to-end pipeline within 2 levels; actual result exact), `backdrop_shape::round_backdrop_tests` (exact vs per-pixel).
+- Checks: `cargo test -p flamewm-render-core -p flamewm-render-x11 -p flamewm-shell` exit 0 (1169 passed, 0 failed); build warnings 0; `python3 -I tools/architecture_guard.py` exit 0 (77 ratified); `unittest test_architecture_guard` exit 0; `rustfmt --check` on edited files exit 0.
+- Target not met: about 7 to 11 percent on debug open totals. Likely cause (inferred, not measured): debug codegen of the blur and upscale loops. Unmeasured next step: a `[profile.dev.package.flamewm-image-core]` (and render-x11) `opt-level` override in root `Cargo.toml`, which needs an owner decision. Release-build numbers were not measured.
+- Input gap: the plan has no `Results: B5` section (only B4), so the B5 harness pattern (`/tmp/claude-1000/fw-b5`) was reused with new click coordinates for this screen. Harness: `/tmp/claude-1000/fw-b6/<label>/`, Xvfb `:200`, scripts in the scratchpad `b6/` directory.
+- No commit.

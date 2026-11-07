@@ -29,12 +29,20 @@ pub(super) fn rounded_coverage(px: u32, py: u32, width: u32, height: u32, radius
 /// Masks an opaque ARGB snapshot (0xAARRGGBB, row-major) to the rounded shape, writing
 /// premultiplied words so corners outside the arc are transparent in every channel.
 pub(super) fn round_backdrop_words(words: &mut [u32], width: u32, height: u32, radius: u32) {
-    if width == 0 {
+    if width == 0 || radius == 0 {
         return;
     }
+    // The clamped arc radius is at most `radius`, so a pixel whose centre is at least `margin`
+    // pixels inside every edge has coverage 1. Skipping those keeps the result exact and avoids the
+    // square root for the interior.
+    let margin = radius.min(width).min(height).saturating_add(2);
     for (index, word) in words.iter_mut().enumerate() {
         let index = index as u32;
-        let coverage = rounded_coverage(index % width, index / width, width, height, radius);
+        let (x, y) = (index % width, index / width);
+        if x >= margin && x + margin < width && y >= margin && y + margin < height {
+            continue;
+        }
+        let coverage = rounded_coverage(x, y, width, height, radius);
         if coverage >= 1.0 {
             continue;
         }
@@ -202,5 +210,49 @@ impl SurfaceController {
             }
         }
         self.redraw(id)
+    }
+}
+
+#[cfg(test)]
+mod round_backdrop_tests {
+    use super::*;
+
+    /// The pre-optimisation per-pixel rounding, kept as the reference.
+    fn round_reference(words: &mut [u32], width: u32, height: u32, radius: u32) {
+        if width == 0 {
+            return;
+        }
+        for (index, word) in words.iter_mut().enumerate() {
+            let index = index as u32;
+            let coverage = rounded_coverage(index % width, index / width, width, height, radius);
+            if coverage >= 1.0 {
+                continue;
+            }
+            let alpha = (coverage * 255.0).round() as u32;
+            let premul = |shift: u32| ((*word >> shift) & 0xff) * alpha / 255;
+            *word = (alpha << 24) | (premul(16) << 16) | (premul(8) << 8) | premul(0);
+        }
+    }
+
+    #[test]
+    fn interior_skip_matches_the_per_pixel_rounding_exactly() {
+        for (width, height, radius) in [
+            (300u32, 320u32, 14u32),
+            (301, 133, 9),
+            (7, 5, 3),
+            (1, 40, 12),
+            (40, 1, 12),
+            (61, 61, 200),
+            (120, 44, 0),
+        ] {
+            let source: Vec<u32> = (0..width * height)
+                .map(|i| 0xff00_0000 | (i.wrapping_mul(2_654_435) & 0x00ff_ffff))
+                .collect();
+            let mut fast = source.clone();
+            let mut reference = source;
+            round_backdrop_words(&mut fast, width, height, radius);
+            round_reference(&mut reference, width, height, radius);
+            assert_eq!(fast, reference, "{width}x{height} r={radius}");
+        }
     }
 }

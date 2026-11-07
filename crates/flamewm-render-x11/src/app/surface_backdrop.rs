@@ -53,10 +53,10 @@ impl X11App {
         }
         let pixmap = unsafe { self.upload_argb_pixmap(argb, width, height)? };
         self.clear_surface_backdrop();
-        let rgba = argb
-            .iter()
-            .flat_map(|&w| [(w >> 16) as u8, (w >> 8) as u8, w as u8, (w >> 24) as u8])
-            .collect();
+        let mut rgba = vec![0u8; argb.len() * 4];
+        for (dst, &w) in rgba.chunks_exact_mut(4).zip(argb) {
+            dst.copy_from_slice(&[(w >> 16) as u8, (w >> 8) as u8, w as u8, (w >> 24) as u8]);
+        }
         self.surface_backdrop = Some(SurfaceBackdrop {
             pixmap,
             width,
