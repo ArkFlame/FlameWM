@@ -1053,6 +1053,7 @@ version = "0.1.7"
 dependencies = [
  "flamewm-api",
  "flamewm-skin",
+ "flamewm-ui-layout-core",
 ]
 
 [[package]]
@@ -1063,6 +1064,13 @@ dependencies = [
  "flamewm-render-core",
  "flamewm-skin",
  "flamewm-ui-core",
+]
+
+[[package]]
+name = "flamewm-ui-layout-core"
+version = "0.1.7"
+dependencies = [
+ "flamewm-api",
 ]
 
 [[package]]

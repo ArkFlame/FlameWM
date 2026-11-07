@@ -1,12 +1,12 @@
 //! Renderer-neutral `FlameWM` visual design contracts.
 
 pub mod context_menu;
-pub mod css_contract;
 pub mod controls;
+pub mod css_contract;
 pub mod glass;
 pub mod icons;
 pub mod image;
-pub mod layout;
+pub use flamewm_ui_layout_core as layout;
 pub mod menu;
 pub mod popover;
 pub mod range;
