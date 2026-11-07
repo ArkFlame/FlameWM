@@ -134,5 +134,6 @@ where
             return Ok(());
         }
         wm.drain_catalog_icon_results();
+        wm.refresh_titlebar_backdrop()?;
     }
 }

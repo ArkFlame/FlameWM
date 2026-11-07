@@ -283,6 +283,23 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
+    /// Repaint every frame once a titlebar backdrop canvas has been built off the loop. The
+    /// titlebars painted flat while it built; this is a single atomic check per turn otherwise.
+    pub(super) fn refresh_titlebar_backdrop(&mut self) -> Result<(), ReplyError> {
+        if !crate::frame::titlebar_backdrop::take_canvas_ready() {
+            return Ok(());
+        }
+        let clients: Vec<Window> = self.clients.keys().copied().collect();
+        for client in clients {
+            self.chrome_runtimes.entry(client).or_default().invalidate();
+            self.paint_chrome(client)?;
+        }
+        if let Some(renderer) = self.renderer.as_ref() {
+            renderer.borrow().flush();
+        }
+        Ok(())
+    }
+
     /// The client's own edge pixels, read back so the outline ring composites over the colour the
     /// window actually drew. The client window is placed inside the ring band, so its outermost
     /// painted column/row is its own first/last pixel. `None` when the client cannot be read

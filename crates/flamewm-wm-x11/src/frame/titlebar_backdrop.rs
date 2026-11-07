@@ -11,8 +11,11 @@
 //! Memory: one canvas at 1/16 of the root (about half a megabyte at 1080p) for blurs of at least
 //! 8px; nothing per window.
 
+use std::io::Write;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use flamewm_api::background::WallpaperFit;
 use flamewm_image_core::wallpaper::DEFAULT_WALLPAPER_PATH;
@@ -49,11 +52,80 @@ struct State {
     generation: u32,
     /// Desktop canvas for its key; `None` image means the wallpaper could not be composed.
     canvas: Option<(CanvasKey, Option<BlurredCanvas>)>,
+    /// Key of the canvas a worker is building; a result for any other key is dropped.
+    pending: Option<CanvasKey>,
     /// Output rects (root `x, y, w, h`) published by the WM.
     outputs: Vec<(i32, i32, u32, u32)>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
+/// Set by a canvas worker once its canvas is stored; the WM clears it and repaints chrome.
+static CANVAS_READY: AtomicBool = AtomicBool::new(false);
+/// Write end of the reactor wake pair; a worker writes one byte per stored canvas.
+static CANVAS_WAKE: Mutex<Option<UnixStream>> = Mutex::new(None);
+
+/// Register the write end of the wake pair the reactor watches for canvas readiness.
+pub fn set_canvas_wake(writer: UnixStream) {
+    if let Ok(mut guard) = CANVAS_WAKE.lock() {
+        *guard = Some(writer);
+    }
+}
+
+/// Consume the ready flag set by a finished canvas build.
+#[must_use]
+pub fn take_canvas_ready() -> bool {
+    CANVAS_READY.swap(false, Ordering::AcqRel)
+}
+
+/// Store a worker's canvas when it is still the one pending. Returns `false` for a stale key.
+fn store_built_canvas(state: &mut State, key: CanvasKey, canvas: Option<BlurredCanvas>) -> bool {
+    if state.pending != Some(key) {
+        return false;
+    }
+    state.pending = None;
+    state.canvas = Some((key, canvas));
+    true
+}
+
+/// Decode and blur the desktop canvas on a worker thread, then store it and wake the reactor.
+fn spawn_canvas_build(
+    key: CanvasKey,
+    path: PathBuf,
+    fit: WallpaperFit,
+    outputs: Vec<(i32, i32, u32, u32)>,
+    root: (u32, u32),
+    blur_percent: u8,
+) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("flamewm-titlebar-canvas".to_owned())
+        .spawn(move || {
+            let _guard = flamewm_profiler::start("wm.chrome.backdrop.canvas");
+            let canvas = desktop_canvas(&path, fit, &outputs, root, blur_percent)
+                .map_err(|error| {
+                    eprintln!("flamewm-wm-x11: titlebar desktop layer unavailable: {error}");
+                })
+                .ok();
+            let stored = STATE
+                .lock()
+                .ok()
+                .and_then(|mut guard| {
+                    guard
+                        .as_mut()
+                        .map(|state| store_built_canvas(state, key, canvas))
+                })
+                .unwrap_or(false);
+            if stored {
+                CANVAS_READY.store(true, Ordering::Release);
+                if let Ok(guard) = CANVAS_WAKE.lock() {
+                    if let Some(writer) = guard.as_ref() {
+                        // A full wake buffer already holds a pending wake; the drop is harmless.
+                        let _ = (&*writer).write(&[1]);
+                    }
+                }
+            }
+        })
+        .map(drop)
+}
 
 /// Layout the wallpaper is composed for: one copy per WM output, as the desktop draws it, or one
 /// wallpaper over the root when `shareWallpaper` is on (read from the live settings sync).
@@ -286,7 +358,7 @@ fn titlebar_in(
     if !is_translucent(alpha) {
         return flat_pixels(width, height, rgb, alpha);
     }
-    let image = match state.source.as_ref() {
+    let (path, fit, outputs) = match state.source.as_ref() {
         Some(WallpaperSource::Solid(color)) => {
             return compose_flat(*color, width, height, rgb, alpha);
         }
@@ -304,14 +376,18 @@ fn titlebar_in(
         blur_percent,
     };
     if state.canvas.as_ref().is_none_or(|(built, _)| *built != key) {
-        let (path, fit, outputs) = image;
-        let _guard = flamewm_profiler::start("wm.chrome.backdrop.canvas");
-        let canvas = desktop_canvas(&wallpaper_file(path), fit, outputs, root, blur_percent)
-            .map_err(|error| {
-                eprintln!("flamewm-wm-x11: titlebar desktop layer unavailable: {error}");
-            })
-            .ok();
-        state.canvas = Some((key, canvas));
+        // The canvas is decoded and blurred off the event loop. Until it is stored the titlebar
+        // paints flat; the builder raises the ready flag and the WM repaints the chrome.
+        if state.pending != Some(key) {
+            let (path, fit, outputs) = (wallpaper_file(path), fit, outputs.clone());
+            state.pending = Some(key);
+            if let Err(error) = spawn_canvas_build(key, path, fit, outputs, root, blur_percent) {
+                eprintln!("flamewm-wm-x11: titlebar canvas worker unavailable: {error}");
+                state.pending = None;
+                state.canvas = Some((key, None));
+            }
+        }
+        return flat_pixels(width, height, rgb, alpha);
     }
     match state
         .canvas
@@ -412,6 +488,51 @@ mod tests {
         );
         let px = titlebar_in(&mut state, (0, 0), (16, 8), (3, 2), (0, 0, 0), 127, 80, 0);
         assert_eq!(px, flat_pixels(3, 2, (0, 0, 0), 127));
+    }
+
+    #[test]
+    fn cold_image_titlebar_paints_flat_and_leaves_the_canvas_to_a_worker() {
+        let mut state = State::default();
+        set_source_in(
+            &mut state,
+            WallpaperSource::Image {
+                path: "/nonexistent/flamewm-test-wallpaper.png".to_owned(),
+                fit: WallpaperFit::Fill,
+                outputs: Vec::new(),
+            },
+        );
+        let px = titlebar_in(&mut state, (0, 0), (16, 8), (3, 2), (0, 0, 0), 127, 80, 0);
+        assert_eq!(px, flat_pixels(3, 2, (0, 0, 0), 127));
+        assert!(
+            state.canvas.is_none(),
+            "no inline build on the event loop"
+        );
+        assert!(state.pending.is_some(), "one worker build is in flight");
+        let again = titlebar_in(&mut state, (0, 0), (16, 8), (3, 2), (0, 0, 0), 127, 80, 0);
+        assert_eq!(again, px);
+    }
+
+    #[test]
+    fn worker_result_is_stored_once_and_a_stale_key_is_dropped() {
+        let mut state = State::default();
+        let key = |generation| CanvasKey {
+            generation,
+            root: (64, 32),
+            blur_percent: 80,
+        };
+        state.pending = Some(key(2));
+        assert!(
+            !store_built_canvas(&mut state, key(1), None),
+            "a stale key is dropped"
+        );
+        assert!(state.canvas.is_none());
+        assert!(store_built_canvas(&mut state, key(2), None));
+        assert_eq!(state.pending, None);
+        assert!(matches!(state.canvas, Some((built, None)) if built == key(2)));
+        assert!(
+            !store_built_canvas(&mut state, key(2), None),
+            "a second result for the same key is ignored"
+        );
     }
 
     #[test]

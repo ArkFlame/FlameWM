@@ -273,6 +273,26 @@ fn run_session(
             FdAction::Continue
         },
     )?;
+    // Titlebar backdrop canvas readiness: a worker writes one byte per stored canvas, and the
+    // reactor turn ends so the WM repaints the chrome that painted flat while it built.
+    let (backdrop_reader, backdrop_writer) = UnixStream::pair()?;
+    backdrop_reader.set_nonblocking(true)?;
+    backdrop_writer.set_nonblocking(true)?;
+    crate::frame::titlebar_backdrop::set_canvas_wake(backdrop_writer);
+    let _backdrop_wake_registration = reactor
+        .borrow_mut()
+        .register_fd_with_source_action(backdrop_reader, Interest::READ, move |_, source, _| {
+            let mut wake_buffer = [0_u8; 64];
+            loop {
+                match source.read(&mut wake_buffer) {
+                    Ok(0) => return FdAction::Remove,
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(_) => return FdAction::Remove,
+                }
+            }
+            FdAction::Continue
+        })?;
     let _heap_trim_registration = reactor
         .borrow_mut()
         .register_timer(
