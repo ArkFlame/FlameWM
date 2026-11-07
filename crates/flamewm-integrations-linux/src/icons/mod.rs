@@ -112,11 +112,7 @@ pub type Rgb8Raster = Rgba8Raster;
 impl Rgba8Raster {
     #[must_use]
     pub fn alpha_at(&self, x: u32, y: u32) -> Option<u8> {
-        if x >= self.width || y >= self.height {
-            return None;
-        }
-        let index = (y as usize * self.width as usize + x as usize) * 4 + 3;
-        self.pixels.get(index).copied()
+        flamewm_image_core::rgba8_alpha_at(&self.pixels, self.width, self.height, x, y)
     }
 
     /// Legacy opaque projection with black-background compositing semantics.

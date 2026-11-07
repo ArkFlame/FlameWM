@@ -192,17 +192,29 @@ impl RgbaImage {
 
     #[must_use]
     pub fn is_fully_opaque(&self) -> bool {
-        self.pixels.chunks_exact(4).all(|pixel| pixel[3] == 255)
+        rgba8_fully_opaque(&self.pixels)
     }
 
     #[must_use]
     pub fn alpha_at(&self, x: u32, y: u32) -> Option<u8> {
-        if x >= self.width || y >= self.height {
-            return None;
-        }
-        let index = (y as usize * self.width as usize + x as usize) * 4 + 3;
-        self.pixels.get(index).copied()
+        rgba8_alpha_at(&self.pixels, self.width, self.height, x, y)
     }
+}
+
+/// True when every RGBA8 pixel in `pixels` has alpha 255.
+#[must_use]
+pub fn rgba8_fully_opaque(pixels: &[u8]) -> bool {
+    pixels.chunks_exact(4).all(|pixel| pixel[3] == 255)
+}
+
+/// Alpha of the pixel at (`x`, `y`) in a `width` x `height` RGBA8 buffer, or `None` when out of bounds.
+#[must_use]
+pub fn rgba8_alpha_at(pixels: &[u8], width: u32, height: u32, x: u32, y: u32) -> Option<u8> {
+    if x >= width || y >= height {
+        return None;
+    }
+    let index = (y as usize * width as usize + x as usize) * 4 + 3;
+    pixels.get(index).copied()
 }
 
 pub fn check_size_limits(width: u32, height: u32) -> Result<(), String> {

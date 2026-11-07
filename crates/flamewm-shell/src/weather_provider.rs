@@ -10,7 +10,6 @@
 
 use std::io::Read;
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use flamewm_weather::weather::{
     DayForecast, HttpGet, WeatherCondition, WeatherError, WeatherLocation, WeatherProvider,
@@ -33,7 +32,7 @@ pub struct OpenMeteo<H: HttpGet>(pub H);
 impl<H: HttpGet> WeatherProvider for OpenMeteo<H> {
     fn forecast(&self, location: &WeatherLocation) -> Result<WeatherSnapshot, WeatherError> {
         let body = self.0.get(&forecast_url(location))?;
-        parse_forecast(&body, location.clone(), now_unix())
+        parse_forecast(&body, location.clone(), flamewm_api::clock::unix_seconds())
     }
 
     fn search(&self, query: &str) -> Result<Vec<WeatherLocation>, WeatherError> {
@@ -198,12 +197,6 @@ fn valid_date(s: &str) -> bool {
     shape
         && (1..=12).contains(&s[5..7].parse::<u32>().unwrap_or(0))
         && (1..=31).contains(&s[8..10].parse::<u32>().unwrap_or(0))
-}
-
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs())
 }
 
 /// Runs the system curl binary directly (no shell), bounded by curl's own

@@ -223,3 +223,32 @@ Results: S3 (CODER, Wayland drag feedback and X11 edge dwell; not committed)
 - Live evidence, `/tmp/claude-1000/s3/`: `content_mid_c.png` (file-only content drag moves the window live), `nopreview_edge_c.png` (snapPreviewEnabled=false, no ring), `outline_meta_c.png`, `outline_edge_c.png`, `x11_before_late.png` (pre-fix: xterm jumps to bottom row, ring gone), `x11_edge_late.png` (fixed: ring kept, no switch).
 - Side change outside task scope: another worker added `WindowSnapshot.unresponsive`; `control/mirror.rs` and `control/tests.rs` set `unresponsive: false` (3 sites) so the Wayland crate compiles.
 - Not done: no unit test for the X11 edge-dwell change (`Wm` needs an X connection); covered by the live Xvfb run only. Pre-fix nested Wayland baseline for task 2 not re-run.
+
+### Results: QC (CODER, quick-control popup soak and cold-open timing; no source change; not committed)
+- Build: `CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-qc CARGO_BUILD_JOBS=3 cargo build -p flamewm-wm -p flamewm-shell -p flamewm-desktop --bins` exit 0, 9m12s, 0 warnings (dev profile, host load ~40).
+- Harness: Xvfb :94 (own PID), `dbus-run-session`, flamewm, flamewm-shell, flamewm-desktop; state `/tmp/claude-1000/fw-qc/`. Trigger: xtest click on panel buttons (1600x44 panel at y=856) from a fresh screenshot. No dbus open method exists in `flamewm-control-wire`. Script: `/tmp/claude-1000/fw-qc/soak.py 50`; samples `/tmp/claude-1000/fw-qc/soak.jsonl`; summary `/tmp/claude-1000/fw-qc/soak_summary.json`.
+- Soak: 50 open/close cycles each for weather, network, battery, calendar. Open confirmed by window title in all 200 cycles. Close = outside click on the desktop.
+- Not exercised: audio. No PulseAudio in the harness (`pulseaudio` not installed), so the tray volume item is absent. Panel button at x=1404 opens "FlameWM Assistant", not audio.
+- Samples (shell main pid, start -> end): RSS 27460 -> 26892 kB, PSS 13114 -> 12534 kB, fd 20 -> 20, threads 4 -> 4 (one transient 5 mid-run).
+- Samples (quick-control host child, PPid = shell, start -> end): RSS 27760 -> 28740 kB, PSS 12981 -> 13953 kB, fd 12 -> 12, threads 2 -> 2. Mid-kind samples fluctuate by about +/-0.9 MB.
+- Slope: about +4.9 kB per open/close cycle on the host (about +1 MB over 200 cycles, noisy, single run). Below the 2 MB threshold. No fd or thread growth. No fix made.
+- Cold-open timing: `slow open` lines (threshold 50 ms, hard-coded in `quick_controls/host/timings.rs`, not env-gated). 191 lines logged, including one smoke-run cycle per kind. Opens under 50 ms are not logged.
+  - Median open.total (p90, max): weather 300 ms (721, 1154); network 1100 ms (2057, 3236); battery 141 ms (307, 373); calendar 781 ms (1598, 2327).
+  - Median stages (ms): `present` 272 / 1063 / 122 / 704; `settings_refresh` 24 / 24 / 31 / 26; `measure` under 1; `project` under 1; `ensure` about 1 µs when cached (9 to 248 ms on first use).
+- Culprit for the >30 ms open: `shell.quick.present` (`quick_controls/popup.rs:98` -> `flamewm-ui-x11` `surface_runtime.rs:195` -> `flamewm-render-x11` `surface_controller.rs:440` `show()`). It repaints the popup on every open. Outside this task's scope, so not changed. Not profiled, so the cause is inferred from stage timings.
+- Cold-open fix: not applied. `settings_refresh` (about 24 ms) is a fresh `ControlClient::connect` plus `GetSettings` per open, deliberately live (`host/scoped.rs:83`). Caching the connection is a lifecycle change with no measured gain, so I did not make it.
+- Checks: `cargo test -p flamewm-shell` (same target dir, CARGO_BUILD_JOBS=3, RUST_TEST_THREADS=2) exit 0; 574 passed in the lib, 0 failed; 0 warnings. `python3 -I tools/architecture_guard.py` exit 0 (77 ratified violations, 3 WARN TODO lines). `python3 -I -m unittest discover -s tools -p test_architecture_guard.py` exit 0 (6 tests).
+- Changed paths: none. `git diff -- crates/flamewm-shell/src/quick_controls` is empty.
+- Risks and gaps: debug build under load ~40, so absolute latencies are inflated. No release-profile measurement. Audio popup not soaked. Single soak run; slope not statistically established. Harness processes stopped; Xvfb :94 gone.
+
+### Results: IDLE (CODER, scoped idle audit; no code changed)
+Probe: `scratchpad/idle_probe.py` (own Xvfb, own dbus, binaries `target-swarm-id/debug`, debug profile). Per-thread `/proc` utime+stime and voluntary/nonvoluntary ctxt switches over the window.
+- STEADY (settle 30 s, window 15 s): total 0.0% CPU, 2.9 wakes/s. Shell and desktop at 0. Only WM main thread: 2.7 voluntary wakes/s (WM is outside this worker's scope). Evidence: `scratchpad/steady_before/idle_samples.json`.
+- SPEC PROBE (settle 10 s, window 15 s): total 31.5% CPU, 195.7 wakes/s. Top rows: desktop `flamewm-wallpaper-loader` 25.0% CPU, 142.9 wakes/s (vol 0.07/s); shell main 4.8% CPU, 34.1/s (vol 3.3/s); desktop main 1.3% CPU, 13.4/s; WM main 0.3% CPU, 3.1/s. Evidence: `scratchpad/timeline_a/idle_samples.json`.
+- Wallpaper worker is a one-time startup cost, not an idle loop. strace shows one `openat` of `assets/wallpapers/fitz-roy-dawn.webp` (2560x1707 WebP) per desktop start. It was idle at the 20-25 s sample. The 5-50 s window totals 4.9 s CPU (`scratchpad/sample_run/idle_samples.json`). A live /proc sample at 20-25 s showed it in `futex_do_wait` with no CPU.
+- Wake counts are mostly nonvoluntary preemptions. Host load average was 46-54 on 12 cores during the runs, so use the voluntary column as the true wake metric.
+- `strace -p` attach is blocked (`/proc/sys/kernel/yama/ptrace_scope=1`, EPERM). Launch-mode `strace -f -c` covers startup as well as idle, so its counts are not idle-only. Evidence: `scratchpad/strace_run/strace_*.txt`.
+- Culprit ranking: (1) desktop wallpaper decode at startup, one-time, debug-build cost; (2) shell startup-phase wakes, about 3 voluntary/s at 10-25 s, 0 by 30-45 s; source not isolated.
+- FIXED: nothing. No steady-state idle culprit reproduced in the in-scope crates, so no root fix was made. A fix without before/after movement would be unproven.
+- Checks: `cargo build -p flamewm-wm -p flamewm-shell -p flamewm-desktop --bins` exit 0, 0 warnings (`CARGO_TARGET_DIR=target-swarm-id`, jobs 3). `python3 -I tools/architecture_guard.py` exit 0. No crate edited, so no crate tests were run.
+- Risk: debug profile inflates decode CPU. Release probe under low host load is the next step. Other agents' uncommitted edits are present in the tree and were not touched.
