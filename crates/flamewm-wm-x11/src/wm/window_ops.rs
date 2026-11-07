@@ -44,6 +44,7 @@ impl<C: Connection> Wm<'_, C> {
                 &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
             )?;
             self.raise_docks_above_normal(client, state.frame)?;
+            self.enforce_stack_layers()?;
         }
         if self.supports_protocol(client, self.atoms.wm_take_focus)? {
             self.send_protocol(client, self.atoms.wm_take_focus)?;
@@ -92,8 +93,20 @@ impl<C: Connection> Wm<'_, C> {
     /// Client close request from the keyboard, frame button or `_NET_CLOSE_WINDOW`. The afterimage
     /// is captured first; the close request is sent right after and is never delayed by it.
     pub(super) fn request_close(&mut self, client: Window) -> Result<(), ReplyError> {
+        // A second close for a client that missed its ping is the force-kill path.
+        if self.pings.is_unresponsive(client) {
+            self.pings.forget(client);
+            self.conn.kill_client(client)?;
+            return Ok(());
+        }
         self.begin_close_overlay(client);
-        self.close(client)
+        self.close(client)?;
+        if self.supports_protocol(client, self.atoms.wm_delete_window)?
+            && self.supports_protocol(client, self.atoms.net_wm_ping)?
+        {
+            self.send_ping(client)?;
+        }
+        Ok(())
     }
 
     /// Starts the close fade for `client` while its pixels still exist. Skipped without ARGB

@@ -171,7 +171,8 @@ use crate::event_pump::WmEventPump;
 use crate::frame::controller::{ControllerState, FrameEffect, FrameEvent};
 use crate::frame::coords::{RootPoint, RootRect};
 use crate::frame::geometry::{
-    FrameExtents, GeometryReason, GeometryRequest, frame_to_client_root, plan_client_configure,
+    FrameExtents, GeometryReason, GeometryRequest, frame_to_client_root,
+    plan_client_configure_explicit,
 };
 use crate::frame::model::{
     FrameControl, FrameRegion, PlacementMode, PlacementSnapshot, PlacementState, ResizeEdges,
@@ -467,6 +468,10 @@ pub(crate) struct Wm<'a, C: Connection> {
     show_desktop: show_desktop::ShowDesktop,
     /// Fullscreen client broken out by the last escape press, killed if a second press follows.
     escape_pending: Option<(Window, std::time::Instant)>,
+    /// `_NET_WM_PING` deadlines for closing clients and the unresponsive set.
+    pings: ping::PingState,
+    /// `_NET_WM_STATE_ABOVE` / `BELOW` layer per client; absent is the normal layer.
+    stack_layers: HashMap<Window, stack_layer::StackLayer>,
     /// Alt+Tab session state and the focus history that orders it.
     switcher: switcher::Switcher,
     mru: switcher::Mru,
@@ -518,6 +523,7 @@ mod manage;
 mod outputs;
 mod overlay;
 mod paint;
+mod ping;
 mod pointer;
 mod probes;
 mod publish;
@@ -525,6 +531,7 @@ mod raw_keys;
 mod rects;
 mod release;
 mod show_desktop;
+mod stack_layer;
 mod super_tap;
 mod switcher;
 mod trace;

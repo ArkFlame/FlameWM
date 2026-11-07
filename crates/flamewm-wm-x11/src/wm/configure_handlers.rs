@@ -251,7 +251,8 @@ impl<C: Connection> Wm<'_, C> {
             hints: controller.hints,
             frame_extents: extents,
         };
-        let plan = plan_client_configure(&req, req_origin, req_size);
+        let origin_requested = mask.contains(ConfigWindow::X) || mask.contains(ConfigWindow::Y);
+        let plan = plan_client_configure_explicit(&req, req_origin, req_size, origin_requested);
         if !plan.noop {
             configure_bump!(request_accepted, request_accepted_total);
             let mode = controller.placement.mode;
@@ -277,6 +278,31 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
+    /// EWMH `_NET_MOVERESIZE_WINDOW`: `data[0]` gravity/flags (bits 8-11 select x, y, width,
+    /// height), `data[1..=4]` values. Re-enters the ConfigureRequest owner so geometry policy
+    /// stays single. Gravity is ignored (shortcut: static gravity only; revisit when a client needs it).
+    pub(super) fn handle_moveresize_window(
+        &mut self,
+        client: Window,
+        data: [u32; 5],
+    ) -> Result<(), ReplyError> {
+        let event = ConfigureRequestEvent {
+            response_type: 23,
+            stack_mode: StackMode::ABOVE,
+            sequence: 0,
+            parent: self.screen().root,
+            window: client,
+            sibling: 0,
+            x: data[1] as i16,
+            y: data[2] as i16,
+            width: data[3] as u16,
+            height: data[4] as u16,
+            border_width: 0,
+            value_mask: moveresize_value_mask(data[0]),
+        };
+        self.handle_configure_request(event)
+    }
+
     pub(super) fn restack(
         &self,
         window: Window,
@@ -289,5 +315,34 @@ impl<C: Connection> Wm<'_, C> {
         }
         self.conn.configure_window(window, &aux)?;
         Ok(())
+    }
+}
+
+/// Value mask for `_NET_MOVERESIZE_WINDOW` flags: bits 8, 9, 10, 11 select x, y, width, height.
+fn moveresize_value_mask(flags: u32) -> ConfigWindow {
+    [
+        (8, ConfigWindow::X),
+        (9, ConfigWindow::Y),
+        (10, ConfigWindow::WIDTH),
+        (11, ConfigWindow::HEIGHT),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| flags & (1 << bit) != 0)
+    .fold(ConfigWindow::default(), |mask, (_, flag)| mask | flag)
+}
+
+#[cfg(test)]
+mod moveresize_tests {
+    use super::*;
+
+    #[test]
+    fn moveresize_flags_select_geometry_axes() {
+        assert_eq!(
+            moveresize_value_mask(0x0F00),
+            ConfigWindow::X | ConfigWindow::Y | ConfigWindow::WIDTH | ConfigWindow::HEIGHT
+        );
+        assert_eq!(moveresize_value_mask(0x0300), ConfigWindow::X | ConfigWindow::Y);
+        assert_eq!(moveresize_value_mask(0x0000), ConfigWindow::default());
+        assert_eq!(moveresize_value_mask(0x0007), ConfigWindow::default(), "gravity bits are not axes");
     }
 }

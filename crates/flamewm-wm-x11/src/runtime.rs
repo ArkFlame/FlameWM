@@ -546,6 +546,10 @@ fn run_session(
             ) {
                 wait = Some(wait.map_or(delay, |current| current.min(delay)));
             }
+            // Armed only by a close request: the one ping deadline, never a periodic timer.
+            if let Some(delay) = wm.ping_wait_timeout(std::time::Instant::now()) {
+                wait = Some(wait.map_or(delay, |current| current.min(delay)));
+            }
             drop(host_guard);
             wm.set_output_work_areas(areas)?;
             // Wake the reactor at the pending display revert deadline; None when nothing is pending.

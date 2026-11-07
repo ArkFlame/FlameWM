@@ -124,6 +124,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             raw_keys: None,
             show_desktop: show_desktop::ShowDesktop::default(),
             escape_pending: None,
+            pings: Default::default(),
+            stack_layers: HashMap::new(),
             switcher: switcher::Switcher::default(),
             mru: switcher::Mru::default(),
             switcher_signal: None,

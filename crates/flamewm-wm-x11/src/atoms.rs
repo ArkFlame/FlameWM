@@ -61,6 +61,11 @@ pub struct Atoms {
     pub net_wm_action_close: Atom,
     pub net_wm_action_change_desktop: Atom,
     pub net_wm_moveresize: Atom,
+    pub net_moveresize_window: Atom,
+    pub net_wm_ping: Atom,
+    pub net_wm_state_above: Atom,
+    pub net_wm_state_below: Atom,
+    pub net_wm_state_demands_attention: Atom,
     pub wm_change_state: Atom,
     /// Frames the WM redirects (`flamewm_render_x11::backdrop::REDIRECTED_FRAMES_PROPERTY`).
     pub redirected_frames: Atom,
@@ -71,7 +76,7 @@ pub struct Atoms {
 impl Atoms {
     pub fn new<C: Connection>(conn: &C) -> Result<Self, AnyError> {
         // Send every InternAtom before reading any reply: one round trip for all names.
-        let names: [&str; 55] = [
+        let names: [&str; 60] = [
             "UTF8_STRING",
             "WM_PROTOCOLS",
             "WM_DELETE_WINDOW",
@@ -124,6 +129,11 @@ impl Atoms {
             "_NET_WM_ACTION_CLOSE",
             "_NET_WM_ACTION_CHANGE_DESKTOP",
             "_NET_WM_MOVERESIZE",
+            "_NET_MOVERESIZE_WINDOW",
+            "_NET_WM_PING",
+            "_NET_WM_STATE_ABOVE",
+            "_NET_WM_STATE_BELOW",
+            "_NET_WM_STATE_DEMANDS_ATTENTION",
             "WM_CHANGE_STATE",
             flamewm_render_x11::backdrop::REDIRECTED_FRAMES_PROPERTY,
             flamewm_render_x11::backdrop::WALLPAPER_OUTPUTS_PROPERTY,
@@ -189,10 +199,15 @@ impl Atoms {
             net_wm_action_close,
             net_wm_action_change_desktop,
             net_wm_moveresize,
+            net_moveresize_window,
+            net_wm_ping,
+            net_wm_state_above,
+            net_wm_state_below,
+            net_wm_state_demands_attention,
             wm_change_state,
             redirected_frames,
             wallpaper_outputs,
-        ]: [Atom; 55] = replies.try_into().map_err(|_| "atom count mismatch")?;
+        ]: [Atom; 60] = replies.try_into().map_err(|_| "atom count mismatch")?;
         Ok(Self {
             utf8_string,
             wm_protocols,
@@ -246,6 +261,11 @@ impl Atoms {
             net_wm_action_close,
             net_wm_action_change_desktop,
             net_wm_moveresize,
+            net_moveresize_window,
+            net_wm_ping,
+            net_wm_state_above,
+            net_wm_state_below,
+            net_wm_state_demands_attention,
             wm_change_state,
             redirected_frames,
             wallpaper_outputs,
@@ -297,6 +317,10 @@ impl Atoms {
             self.net_wm_action_close,
             self.net_wm_action_change_desktop,
             self.net_wm_moveresize,
+            self.net_moveresize_window,
+            self.net_wm_state_above,
+            self.net_wm_state_below,
+            self.net_wm_state_demands_attention,
         ]
     }
 }

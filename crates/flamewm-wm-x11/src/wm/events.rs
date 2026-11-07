@@ -634,6 +634,14 @@ impl<C: Connection> Wm<'_, C> {
             return self.restore_minimized(event.window);
         }
         let data = event.data.as_data32();
+        // `_NET_WM_PING` pong: the client answers on the root window with its own id in data[2].
+        if event.window == self.screen().root
+            && event.type_ == self.atoms.wm_protocols
+            && data[0] == self.atoms.net_wm_ping
+        {
+            self.pings.pong(data[2]);
+            return Ok(());
+        }
         if event.type_ == self.atoms.net_current_desktop {
             self.switch_workspace(data[0] as usize)?;
         } else if event.type_ == self.atoms.net_number_of_desktops {
@@ -661,6 +669,10 @@ impl<C: Connection> Wm<'_, C> {
         {
             let pointer = RootPoint::new(data[0] as i32, data[1] as i32);
             self.begin_client_moveresize(event.window, pointer, data[2])?;
+        } else if event.type_ == self.atoms.net_moveresize_window
+            && self.clients.contains_key(&event.window)
+        {
+            self.handle_moveresize_window(event.window, data)?;
         } else if event.type_ == self.atoms.net_close_window {
             if self.clients.contains_key(&event.window) {
                 self.request_close(event.window)?;
@@ -715,6 +727,26 @@ impl<C: Connection> Wm<'_, C> {
         let wants_maximize = atoms.iter().any(|&atom| self.is_maximize_atom(atom));
         let wants_fullscreen = atoms.contains(&self.atoms.net_wm_state_fullscreen);
         let wants_hidden = atoms.contains(&self.atoms.net_wm_state_hidden);
+        let wants_above = atoms.contains(&self.atoms.net_wm_state_above);
+        let wants_below = atoms.contains(&self.atoms.net_wm_state_below);
+        if wants_above || wants_below {
+            let target = if wants_above {
+                super::stack_layer::StackLayer::Above
+            } else {
+                super::stack_layer::StackLayer::Below
+            };
+            let currently = self.stack_layers.get(&client).copied();
+            let next = if net_wm_state_enable(action, currently == Some(target)) {
+                Some(target)
+            } else if currently == Some(target) {
+                None
+            } else {
+                currently
+            };
+            if next != currently {
+                self.set_stack_layer(client, next)?;
+            }
+        }
         if wants_hidden {
             trace_restore("restore.trace.wm.net_wm_state_hidden", || {
                 format!("window={client} action={action}")

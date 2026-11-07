@@ -517,11 +517,26 @@ pub fn frame_to_client_root(frame: RootRect, extents: FrameExtents) -> ClientRoo
 ///
 /// Maximized/Fullscreen frames are never corrupted by client requests: the
 /// start rect is returned verbatim with `noop = true`.
+/// Origin-gravity form used by tests: a position-only request keeps the requested origin.
+#[cfg(test)]
 #[must_use]
 pub fn plan_client_configure(
     req: &GeometryRequest,
     req_client_origin: RootPoint,
     req_client_size: Option<(u32, u32)>,
+) -> GeometryPlan {
+    plan_client_configure_explicit(req, req_client_origin, req_client_size, false)
+}
+
+/// [`plan_client_configure`] with `origin_requested`: the request carried X or Y. An explicit
+/// origin is honoured even when a size is also requested (ICCCM 4.1.5, `_NET_MOVERESIZE_WINDOW`);
+/// without it, gravity places the origin on a size change.
+#[must_use]
+pub fn plan_client_configure_explicit(
+    req: &GeometryRequest,
+    req_client_origin: RootPoint,
+    req_client_size: Option<(u32, u32)>,
+    origin_requested: bool,
 ) -> GeometryPlan {
     if matches!(
         req.start.mode,
@@ -542,7 +557,7 @@ pub fn plan_client_configure(
     };
     // Gravity moves the requested origin only when the size changed; a bare
     // position request (no size) honors the requested origin.
-    let origin = if req_client_size.is_some() {
+    let origin = if req_client_size.is_some() && !origin_requested {
         gravity_adjust_origin(prev_origin, prev_size, new_size, gravity)
     } else {
         req_client_origin
@@ -1304,6 +1319,16 @@ mod tests {
         // NW gravity: origin pinned to previous client origin (100,131).
         assert_eq!(p.client_size, (500, 400));
         assert_eq!(p.frame, RootRect::new(100, 100, 500, 431));
+    }
+
+    #[test]
+    fn client_configure_explicit_origin_wins_over_gravity_on_resize() {
+        let r = client_configure(free());
+        let gravity_only = plan_client_configure(&r, RootPoint::new(300, 300), Some((500, 400)));
+        let explicit = plan_client_configure_explicit(&r, RootPoint::new(300, 300), Some((500, 400)), true);
+        assert_eq!(explicit.client_size, (500, 400));
+        assert_eq!(explicit.frame, client_rect_to_frame(RootPoint::new(300, 300), (500, 400), EXT));
+        assert_ne!(gravity_only.frame, explicit.frame);
     }
 
     #[test]
