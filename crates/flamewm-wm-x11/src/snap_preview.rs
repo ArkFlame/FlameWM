@@ -41,8 +41,36 @@ fn checked_size(value: i32) -> Option<u16> {
     u16::try_from(value).ok().filter(|size| *size > 0)
 }
 
-/// The ring as up to four window-local rectangles: top, bottom, left, right. A size thinner than
-/// two borders is one filled rectangle.
+/// Corner radius of the ring, matching `.desktop-selection { border-radius: 8px }`.
+const RING_RADIUS_PX: u16 = 8;
+
+/// Horizontal extent `[x0, x1)` of a rounded rectangle `w`×`h` with radius `r` on row `y`
+/// (sampled at the row centre), or `None` when the row misses the shape.
+fn rounded_span(w: f32, h: f32, r: f32, y: u16) -> Option<(f32, f32)> {
+    let cy = f32::from(y) + 0.5;
+    if cy < 0.0 || cy > h || w <= 0.0 {
+        return None;
+    }
+    let r = r.clamp(0.0, w.min(h) / 2.0);
+    let dy = if cy < r {
+        r - cy
+    } else if cy > h - r {
+        cy - (h - r)
+    } else {
+        0.0
+    };
+    let inset = if dy > 0.0 {
+        r - (r * r - dy * dy).max(0.0).sqrt()
+    } else {
+        0.0
+    };
+    Some((inset, w - inset))
+}
+
+/// The ring as window-local rectangles: an accent border with rounded outer and inner corners,
+/// the same shape as the desktop selection rectangle. Rows outside the corner zones are two
+/// straight strips, so the list stays short. A size thinner than two borders is one filled
+/// rectangle.
 #[must_use]
 pub(crate) fn ring_rectangles(width: u16, height: u16) -> Vec<Rectangle> {
     let border = RING_BORDER_PX;
@@ -54,33 +82,59 @@ pub(crate) fn ring_rectangles(width: u16, height: u16) -> Vec<Rectangle> {
             height,
         }];
     }
-    let inner = height - 2 * border;
-    vec![
-        Rectangle {
-            x: 0,
-            y: 0,
-            width,
-            height: border,
-        },
-        Rectangle {
-            x: 0,
-            y: (height - border) as i16,
-            width,
-            height: border,
-        },
-        Rectangle {
-            x: 0,
-            y: border as i16,
-            width: border,
-            height: inner,
-        },
-        Rectangle {
-            x: (width - border) as i16,
-            y: border as i16,
-            width: border,
-            height: inner,
-        },
-    ]
+    let (w, h, b) = (f32::from(width), f32::from(height), f32::from(border));
+    let radius = f32::from(RING_RADIUS_PX).min(w.min(h) / 2.0);
+    let corner = radius.ceil() as u16;
+    let mut out = Vec::new();
+    let push = |out: &mut Vec<Rectangle>, y: u16, x0: f32, x1: f32| {
+        let (x0, x1) = (x0.round().max(0.0) as i32, x1.round().min(w) as i32);
+        if x1 > x0 {
+            out.push(Rectangle {
+                x: x0 as i16,
+                y: y as i16,
+                width: (x1 - x0) as u16,
+                height: 1,
+            });
+        }
+    };
+    let mut y = 0;
+    while y < height {
+        let middle = y >= corner.max(border) && y < height - corner.max(border);
+        if middle {
+            // One tall pair of straight strips for every row between the corner zones.
+            let end = height - corner.max(border);
+            let rows = end - y;
+            for x in [0, width - border] {
+                out.push(Rectangle {
+                    x: x as i16,
+                    y: y as i16,
+                    width: border,
+                    height: rows,
+                });
+            }
+            y = end;
+            continue;
+        }
+        let Some((o0, o1)) = rounded_span(w, h, radius, y) else {
+            y += 1;
+            continue;
+        };
+        let inner = rounded_span(
+            w - 2.0 * b,
+            h - 2.0 * b,
+            (radius - b).max(0.0),
+            y.wrapping_sub(border),
+        );
+        match inner.filter(|_| y >= border && y < height - border) {
+            Some((i0, i1)) => {
+                push(&mut out, y, o0, b + i0);
+                push(&mut out, y, b + i1, o1);
+            }
+            None => push(&mut out, y, o0, o1),
+        }
+        y += 1;
+    }
+    out
 }
 
 /// Preview ring: hidden until a drag candidate or outline arrives.
@@ -292,21 +346,20 @@ mod tests {
     }
 
     #[test]
-    fn ring_is_four_border_strips_covering_only_the_edges() {
+    fn ring_is_a_rounded_border_with_a_clear_centre() {
         let rects = ring_rectangles(100, 50);
-        assert_eq!(rects.len(), 4);
-        let area: u32 = rects
-            .iter()
-            .map(|r| u32::from(r.width) * u32::from(r.height))
-            .sum();
-        assert_eq!(area, 100 * 50 - 96 * 46);
         let inside = |x: i16, y: i16| {
             rects.iter().any(|r| {
                 x >= r.x && y >= r.y && x < r.x + r.width as i16 && y < r.y + r.height as i16
             })
         };
-        assert!(inside(0, 0) && inside(99, 49) && inside(1, 25) && inside(98, 25));
+        assert!(
+            !inside(0, 0) && !inside(99, 49),
+            "outer corners are rounded off"
+        );
+        assert!(inside(50, 0) && inside(50, 49) && inside(1, 25) && inside(98, 25));
         assert!(!inside(50, 25), "the ring centre is clear");
+        assert!(!inside(5, 5), "inner corner is clear");
     }
 
     #[test]

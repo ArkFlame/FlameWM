@@ -975,6 +975,18 @@ impl X11App {
         scale: f32,
     ) -> Result<u64, String> {
         let _region_guard = flamewm_profiler::start("render.region");
+        // Validate before touching the backbuffer: bailing out after the clear below would leave
+        // the region blank, so an unsupported command must fall back with the pixels intact.
+        {
+            let viewport = (self.width, self.height);
+            let cached = self.cached_paint.as_ref().ok_or("region paint has no cached scene")?;
+            if cached.commands.iter().any(|command| {
+                !super::damage_plan::no_pixel_command(command)
+                    && command_bounds(command, viewport).is_none()
+            }) {
+                return Err("unsupported command in region paint".to_string());
+            }
+        }
         // Same depth-aware clear as `clear_scene`: a depth-24 backbuffer has no alpha, so 0 would
         // be opaque black in the repainted corners.
         unsafe { XSetForeground(self.display, self.gc, scene_clear_pixel(self.depth)) };
