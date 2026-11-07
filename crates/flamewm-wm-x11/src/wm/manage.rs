@@ -203,8 +203,19 @@ impl<C: Connection> Wm<'_, C> {
         let (icon, icon_fallback) = self.read_native_frame_icon(window);
         let transient_for = self.read_transient_for(window)?;
         let hints = self.read_hints(window);
+        let rule = self
+            .window_config
+            .borrow()
+            .rule_for(&wm_class)
+            .filter(|_| transient_for.is_none());
         let workspace = transient_for
             .and_then(|owner| self.clients.get(&owner).map(|state| state.workspace))
+            .or_else(|| {
+                rule.as_ref()
+                    .and_then(|rule| rule.workspace)
+                    .and_then(|number| (number as usize).checked_sub(1))
+                    .filter(|index| *index < self.workspace_count)
+            })
             .unwrap_or(self.current_workspace);
 
         let screen = self.screen();
@@ -228,11 +239,26 @@ impl<C: Connection> Wm<'_, C> {
             frame_extents: extents,
         };
         let origin = RootPoint::new(i32::from(geometry.x), i32::from(geometry.y));
-        let size = (
-            u32::from(geometry.width).max(1),
-            u32::from(geometry.height).max(1),
+        // A rule size wins; otherwise a plain window restores its remembered frame rect.
+        let rule_size = rule.as_ref().and_then(|rule| rule.size);
+        let size = rule_size.map_or(
+            (
+                u32::from(geometry.width).max(1),
+                u32::from(geometry.height).max(1),
+            ),
+            |size| (size.width.unsigned_abs(), size.height.unsigned_abs()),
         );
-        let frame_rect = if adopt {
+        let remembered = self
+            .window_config
+            .borrow()
+            .recall(&wm_class)
+            .filter(|_| rule_size.is_none() && transient_for.is_none() && !adopt);
+        let frame_rect = if let Some(rect) = remembered {
+            crate::frame::coords::RootRect::from_legacy(crate::window_config::fit_to(
+                rect,
+                work_root.to_legacy(),
+            ))
+        } else if adopt {
             crate::frame::geometry::plan_adopt(origin, size, extents)
         } else {
             // One best-effort pointer snapshot per eligible first map; never poll or
@@ -423,6 +449,9 @@ impl<C: Connection> Wm<'_, C> {
             self.frame_to_client.insert(xid, window);
         }
         self.clients.insert(window, client);
+        if rule.as_ref().and_then(|rule| rule.floating) == Some(false) {
+            self.toggle_maximize(window)?;
+        }
         self.next_client_lifetime = self.next_client_lifetime.saturating_add(1);
         self.chrome_runtimes
             .insert(window, chrome_runtime::ChromeRuntime::new());
@@ -503,6 +532,15 @@ impl<C: Connection> Wm<'_, C> {
         window: Window,
         restore_to_root: bool,
     ) -> Result<(), ReplyError> {
+        // Remember the normal (non-snapped, non-maximized) frame for the next window of this app.
+        if let Some(client) = self.clients.get(&window) {
+            let rect = client.placement.floating_restore.to_legacy();
+            self.window_config.borrow_mut().remember(
+                &client.wm_class,
+                rect,
+                std::time::Instant::now(),
+            );
+        }
         self.snap_preview.hide(self.conn);
         // The client is leaving: drop its flight and overlay without applying an end state. A
         // running close keeps its afterimage, which finishes on its own timeline.

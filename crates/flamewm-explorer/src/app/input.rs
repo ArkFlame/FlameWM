@@ -460,10 +460,14 @@ impl ExplorerApp {
                 }
             }
             WorkerResult::PasteResolved(resolved)=>self.apply_paste(resolved),
-            WorkerResult::OpenResolved{path,result}=>match result {
-                Ok(true)=>{},
-                Ok(false)=>self.request_open_with(path),
-                Err(e)=>self.model.status=format!("Open failed: {e}"),
+            WorkerResult::OpenResolved{path,result}=>{
+                // The "Opening…" status set by navigation is only ever cleared here.
+                if self.model.status=="Opening…" {self.model.status.clear();}
+                match result {
+                    Ok(true)=>{},
+                    Ok(false)=>self.request_open_with(path),
+                    Err(e)=>self.model.status=format!("Open failed: {e}"),
+                }
             },
             WorkerResult::Completed(result)=>{
                 self.busy=false;

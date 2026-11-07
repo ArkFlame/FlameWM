@@ -155,6 +155,13 @@ impl Service {
             state.decorations.borrow_mut().invalidate_bars();
             state.request_redraw();
         }
+        // The snap preview borrows the desktop-selection accent, the same `accent` setting.
+        if state
+            .snap_preview
+            .set_accent(flamewm_api::settings::accent_rgb(&snapshot))
+        {
+            state.request_redraw();
+        }
         let stroke = flamewm_ui_core::surface::window_outline_stroke(&snapshot);
         let outline_changed =
             state

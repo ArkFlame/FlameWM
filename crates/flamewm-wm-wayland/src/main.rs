@@ -85,6 +85,7 @@ mod probe;
 mod render;
 mod scene;
 mod session_lock;
+mod snap_preview;
 #[cfg_attr(not(feature = "drm"), allow(dead_code))]
 // The native backend's first-frame gate; pure, so it is compiled (and tested) without a GPU.
 mod startup;

@@ -28,7 +28,7 @@ use smithay::wayland::shell::wlr_layer::Layer;
 
 mod backdrop;
 mod titlebar;
-pub(crate) use titlebar::put;
+pub(crate) use titlebar::{premultiplied_argb_bytes, put};
 
 pub(crate) use backdrop::*;
 pub use titlebar::*;
@@ -151,25 +151,8 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
     let mut out: Vec<Elem> = Vec::new();
     let mut decorations = state.decorations.borrow_mut();
     decorations.retain(|window| state.model.get(window).is_some());
-    if let Some((_, frame)) = state.move_outline {
-        let (x, y, w, h) = (frame.x, frame.y, frame.w, frame.h);
-        let edge = |x, y, w, h| {
-            Elem::Solid(SolidColorRenderElement::new(
-                smithay::backend::renderer::element::Id::new(),
-                Rectangle::new((x, y).into(), (w, h).into()),
-                smithay::backend::renderer::utils::CommitCounter::default(),
-                [0.95, 0.95, 0.96, 0.9],
-                Kind::Unspecified,
-            ))
-        };
-        let t = 2;
-        out.extend([
-            edge(x, y, w, t),
-            edge(x, y + h - t, w, t),
-            edge(x, y, t, h),
-            edge(x + w - t, y, t, h),
-        ]);
-    }
+    // Topmost: the snap preview is drawn over every window while a move grab targets a snap.
+    out.extend(state.snap_preview.elements(renderer));
     let hovered_button = state.model.hit(state.pointer.x, state.pointer.y);
     for item in crate::scene::front_to_back(state) {
         match item {

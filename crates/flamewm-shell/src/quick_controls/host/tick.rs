@@ -52,7 +52,9 @@ pub(crate) fn tick_host(
                     }
                 }
                 // Live menu settings: re-read the current settings on every open (no timers).
+                let refresh_start = std::time::Instant::now();
                 refresh_settings_for_open(state);
+                let settings_refresh = refresh_start.elapsed();
                 let mut guard = state.borrow_mut();
                 let guard = &mut *guard;
                 // One helper popup at a time: close the current one first,
@@ -66,6 +68,7 @@ pub(crate) fn tick_host(
                     &guard.snapshot,
                     &request,
                     close_elapsed,
+                    settings_refresh,
                 ) {
                     eprintln!("flamewm-quick-control: open refused: {error}");
                     send_open_result(scoped_result(

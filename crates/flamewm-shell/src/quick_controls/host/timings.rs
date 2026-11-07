@@ -37,14 +37,20 @@ pub struct OpenStageTimings {
     pub present: Duration,
     pub pointer_grab: Duration,
     pub close: Duration,
+    /// First-use surface creation (decode + create) inside `ensure`; zero when cached.
+    pub ensure: Duration,
+    /// Settings fetch that ran on the open path just before `open_request`.
+    pub settings_refresh: Duration,
 }
 
 impl OpenStageTimings {
     #[must_use]
     pub fn render(&self, kind: QuickControlKind) -> String {
         format!(
-            "flamewm-quick-control: slow open kind={kind:?} open.total={:?} project={:?} measure={:?} place={:?} prepare/commit_geometry={:?} present={:?} pointer_grab={:?} close/ungrab/unmap={:?}",
+            "flamewm-quick-control: slow open kind={kind:?} open.total={:?} ensure={:?} settings_refresh={:?} project={:?} measure={:?} place={:?} prepare/commit_geometry={:?} present={:?} pointer_grab={:?} close/ungrab/unmap={:?}",
             self.total,
+            self.ensure,
+            self.settings_refresh,
             self.project,
             self.measure,
             self.place,

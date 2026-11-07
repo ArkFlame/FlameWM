@@ -524,6 +524,10 @@ mod internal_drag_tests;
 #[path = "tests/window_frame_tests.rs"]
 mod window_frame_tests;
 
+#[cfg(test)]
+#[path = "tests/open_status_tests.rs"]
+mod open_status_tests;
+
 /// Which image fills a row's icon slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowIcon {

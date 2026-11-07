@@ -450,6 +450,8 @@ impl WindowModel {
     /// Nearest visible window to `from` on the `direction` side, scored like the X11
     /// `directional_target` search: the distance along the axis costs four times the drift across
     /// it, and windows that do not lie on that side are skipped.
+    // Unreachable from a key until `Focus*` gets its own action id (Super+arrows tile); kept for it.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn focus_direction(&self, from: WindowId, direction: GridDirection) -> Option<WindowId> {
         let origin = self.get(from)?.frame();
         let (origin_x, origin_y) = centre(origin);
@@ -633,6 +635,17 @@ impl WindowModel {
             window.restore = rect;
             window.maximize_restore_mode = Mode::Normal;
             window.maximize_restore_rect = rect;
+        }
+    }
+
+    /// Commits one snapped layout while retaining its floating restore geometry.
+    /// Leaves a snapped layout for the floating rect it was snapped from (keyboard tiling Down).
+    pub fn restore_floating(&mut self, id: WindowId) {
+        if let Some(window) = self.get_mut(id) {
+            if let Mode::Snapped(_) = window.mode {
+                window.mode = Mode::Normal;
+                window.rect = window.restore;
+            }
         }
     }
 

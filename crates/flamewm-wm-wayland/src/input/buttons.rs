@@ -81,7 +81,7 @@ impl State {
                 let dx = (location.x - pointer.0).round() as i32;
                 let dy = (location.y - pointer.1).round() as i32;
                 let moved = move_activated(dx, dy);
-                self.move_outline = None;
+                self.snap_preview.hide();
                 if moved {
                     let candidate = clamp_move_candidate(
                         move_candidate(

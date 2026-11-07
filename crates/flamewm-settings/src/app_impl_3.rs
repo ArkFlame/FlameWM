@@ -544,6 +544,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         };
         let integer = |key: &str| match self.setting_value(key) {
             Some(SettingValue::Integer(value)) => Some(*value),
+            Some(SettingValue::Percent(value)) => Some(i64::from(*value)),
             _ => None,
         };
         let text = |key: &str| match self.setting_value(key) {

@@ -16,6 +16,7 @@ mod outline_tune;
 mod runtime;
 mod size_hints;
 pub(crate) mod snap_preview;
+mod window_config;
 mod wm;
 
 pub use flamewm_render_x11::{apply_cursor_appearance, apply_cursor_theme};

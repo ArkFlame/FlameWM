@@ -947,7 +947,7 @@ fn profile_report_interval() -> std::time::Duration {
 /// then `FLAMEWM_CONFIG_DIR/settings.toml`, then the XDG default
 /// (`XDG_CONFIG_HOME` or `$HOME/.config`, `/flamewm/settings.toml`). The
 /// last fallback never depends on the current working directory.
-fn settings_path() -> (PathBuf, &'static str) {
+pub(crate) fn settings_path() -> (PathBuf, &'static str) {
     if let Some(path) = env::var_os("FLAMEWM_SETTINGS_PATH").filter(|value| !value.is_empty()) {
         return (PathBuf::from(path), "FLAMEWM_SETTINGS_PATH");
     }

@@ -6,6 +6,7 @@ pub(crate) fn open_request(
     snapshot: &QuickControlSnapshot,
     request: &OpenRequest,
     close_elapsed: Duration,
+    settings_refresh: Duration,
 ) -> Result<(), OpenFailure> {
     let total_start = std::time::Instant::now();
     let _total = crate::runtime::shell_span("shell.quick.open.total").start();
@@ -15,9 +16,11 @@ pub(crate) fn open_request(
             request.kind, request.anchor, request.work_area, request.panel_edge,
         )
     });
+    let ensure_start = std::time::Instant::now();
     let surface = surfaces
         .ensure(runtime, request.kind)
         .map_err(OpenFailure::refused)?;
+    let ensure_elapsed = ensure_start.elapsed();
     let project_start = std::time::Instant::now();
     let _project = crate::runtime::shell_span("shell.quick.project").start();
     project_snapshot(runtime, surface, snapshot, request.kind).map_err(OpenFailure::refused)?;
@@ -144,6 +147,8 @@ pub(crate) fn open_request(
                 present: present_elapsed,
                 pointer_grab: grab_elapsed,
                 close: close_elapsed,
+                ensure: ensure_elapsed,
+                settings_refresh,
             }
             .render(request.kind)
         );

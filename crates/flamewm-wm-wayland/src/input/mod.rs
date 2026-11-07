@@ -19,8 +19,8 @@ use flamewm_api::shortcuts::{
     ACTION_SHOW_DESKTOP_CTRL_ALT, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE,
     ACTION_WINDOW_CYCLE_NEXT, ACTION_WINDOW_CYCLE_PREV, ACTION_WINDOW_FLOAT,
     ACTION_WINDOW_FULLSCREEN, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
-    ACTION_WINDOW_RESIZE_GROW, ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH, focus_direction,
-    move_direction, workspace_activate_index, workspace_direction, workspace_move_index,
+    ACTION_WINDOW_RESIZE_GROW, ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH, move_direction,
+    workspace_activate_index, workspace_direction, workspace_move_index,
 };
 use flamewm_platform::shortcuts::{
     ACTION_BRIGHTNESS_DOWN, ACTION_BRIGHTNESS_UP, ACTION_OPEN_ASSISTANT_CTRL_ALT,
@@ -84,6 +84,7 @@ fn name_candidates<'a>(raw: &'a str, modified: &'a str) -> impl Iterator<Item = 
 
 mod buttons;
 mod keyboard;
+mod keyboard_tile;
 mod pointer;
 mod settings;
 mod shortcuts;

@@ -537,9 +537,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
     ) -> Result<(), String> {
         let current = self.integer_setting(key)?;
         let next = (current + delta).clamp(minimum, maximum);
-        self.client
-            .apply_setting(key, SettingValue::Integer(next))
-            .map_err(control_error)
+        let value = stepped_setting(self.setting_value(key), next)?;
+        self.client.apply_setting(key, value).map_err(control_error)
     }
 
     pub(crate) fn set_taskbar_size(&mut self, direction: i8) -> Result<(), String> {
@@ -616,6 +615,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
     pub(crate) fn integer_setting(&self, key: &str) -> Result<i64, String> {
         match self.setting_value(key) {
             Some(SettingValue::Integer(value)) => Ok(*value),
+            Some(SettingValue::Percent(value)) => Ok(i64::from(*value)),
             _ => Err(format!(
                 "setting '{key}' has no authoritative integer value"
             )),
@@ -952,5 +952,19 @@ impl<T: ControlTransport> SettingsApplication<T> {
         );
         self.sync_error(document);
         Ok(())
+    }
+}
+
+/// Value written back by an integer stepper. Keys the snapshot stores as `Percent` (for example
+/// `blueLightFilter`) must be written as `Percent`: the control wire rejects an `Integer` for them.
+pub(crate) fn stepped_setting(
+    stored: Option<&SettingValue>,
+    next: i64,
+) -> Result<SettingValue, String> {
+    match stored {
+        Some(SettingValue::Percent(_)) => u8::try_from(next)
+            .map(SettingValue::Percent)
+            .map_err(|_| format!("percent step {next} out of range")),
+        _ => Ok(SettingValue::Integer(next)),
     }
 }

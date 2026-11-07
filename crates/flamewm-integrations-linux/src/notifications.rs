@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use dbus::arg::messageitem::MessageItem;
@@ -9,6 +10,8 @@ use dbus::strings::ErrorName;
 use dbus::{Message, MessageType};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use flamewm_dbus_reactor::{BusKind, BusPump, BusWatch, MessageDisposition};
+
+use crate::notification_history::{NotificationHistory, PopupDecision};
 
 pub const NOTIFICATIONS_SERVICE: &str = "org.freedesktop.Notifications";
 pub const NOTIFICATIONS_PATH: &str = "/org/freedesktop/Notifications";
@@ -22,6 +25,8 @@ const MAX_UI_UPDATES: usize = 256;
 const MAX_TEXT_BYTES: usize = 8192;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(6);
 const MAX_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+const HISTORY_CAPACITY: usize = 200;
+const HISTORY_FILE: &str = "flamewm/notification-history.tsv";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationUrgency {
@@ -88,17 +93,82 @@ pub struct NotificationProvider {
     notifications: BTreeMap<u32, Notification>,
     updates: VecDeque<NotificationUiUpdate>,
     next_id: u32,
+    history: NotificationHistory,
+    history_path: Option<PathBuf>,
+    persisted_revision: u64,
+}
+
+/// `$XDG_STATE_HOME/flamewm/notification-history.tsv`, falling back to `~/.local/state`.
+fn history_path() -> Option<PathBuf> {
+    flamewm_api::paths::xdg_dir("XDG_STATE_HOME", ".local/state")
+        .map(|base| base.join(HISTORY_FILE))
 }
 
 impl NotificationProvider {
     pub fn connect() -> FlameResult<Self> {
+        let history_path = history_path();
+        let history = history_path.as_deref().map_or_else(
+            || NotificationHistory::new(HISTORY_CAPACITY),
+            |path| NotificationHistory::load_file(path, HISTORY_CAPACITY),
+        );
+        let persisted_revision = history.revision();
         Ok(Self {
             pump: BusPump::connect(BusKind::Session)?,
             state: ProviderState::Stopped,
             notifications: BTreeMap::new(),
             updates: VecDeque::new(),
             next_id: 1,
+            history,
+            history_path,
+            persisted_revision,
         })
+    }
+
+    /// Recorded notifications, grouped and bounded, for the notification center.
+    #[must_use]
+    pub const fn history(&self) -> &NotificationHistory {
+        &self.history
+    }
+
+    pub fn set_dnd(&mut self, enabled: bool) {
+        self.history.set_dnd(enabled);
+        self.persist_history();
+    }
+
+    /// Returns false when the mute set is full and `app_name` cannot be added.
+    pub fn set_app_muted(&mut self, app_name: &str, muted: bool) -> bool {
+        let applied = self.history.set_app_muted(app_name, muted);
+        self.persist_history();
+        applied
+    }
+
+    pub fn remove_history_entry(&mut self, seq: u64) -> bool {
+        let removed = self.history.remove(seq);
+        self.persist_history();
+        removed
+    }
+
+    pub fn clear_history(&mut self) {
+        self.history.clear();
+        self.persist_history();
+    }
+
+    /// Saves history when it changed since the last save. Failure is reported, never fatal.
+    fn persist_history(&mut self) {
+        let revision = self.history.revision();
+        if revision == self.persisted_revision {
+            return;
+        }
+        let Some(path) = self.history_path.as_deref() else {
+            self.persisted_revision = revision;
+            return;
+        };
+        match self.history.save_file(path) {
+            Ok(()) => self.persisted_revision = revision,
+            Err(error) => {
+                eprintln!("flamewm-notifications: saving notification history failed: {error}")
+            }
+        }
     }
 
     /// Owns the name only if no existing notification server is present.
@@ -172,6 +242,7 @@ impl NotificationProvider {
         let notifications = &mut self.notifications;
         let updates = &mut self.updates;
         let next_id = &mut self.next_id;
+        let history = &mut self.history;
         let count = self.pump.on_ready(|message| {
             handle_message(
                 message,
@@ -179,6 +250,7 @@ impl NotificationProvider {
                 notifications,
                 updates,
                 next_id,
+                history,
                 &mut signals,
                 Instant::now(),
             )
@@ -186,6 +258,7 @@ impl NotificationProvider {
         for signal in signals {
             self.pump.send(signal)?;
         }
+        self.persist_history();
         Ok(count)
     }
 
@@ -259,12 +332,14 @@ impl NotificationProvider {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_message(
     message: &Message,
     owned: bool,
     notifications: &mut BTreeMap<u32, Notification>,
     updates: &mut VecDeque<NotificationUiUpdate>,
     next_id: &mut u32,
+    history: &mut NotificationHistory,
     signals: &mut Vec<Message>,
     now: Instant,
 ) -> MessageDisposition {
@@ -297,7 +372,7 @@ fn handle_message(
                     .append1("1.0"),
             )
         }
-        Some("Notify") => notify(message, notifications, updates, next_id, now),
+        Some("Notify") => notify(message, notifications, updates, next_id, history, now),
         Some("CloseNotification") => close_notification(message, notifications, updates, signals),
         Some(_) => error_reply(
             message,
@@ -317,6 +392,7 @@ fn notify(
     notifications: &mut BTreeMap<u32, Notification>,
     updates: &mut VecDeque<NotificationUiUpdate>,
     next_id: &mut u32,
+    history: &mut NotificationHistory,
     now: Instant,
 ) -> MessageDisposition {
     let items = message.get_items();
@@ -345,9 +421,23 @@ fn notify(
         );
     }
     let (urgency, progress) = parse_hints(hints);
-    let id = if *replaces_id != 0 && notifications.contains_key(replaces_id) {
+    // Replacing an active toast keeps it on screen and is not a new history entry.
+    let replacing = *replaces_id != 0 && notifications.contains_key(replaces_id);
+    let decision = if replacing {
+        PopupDecision::Show
+    } else {
+        history.popup_decision(app_name, urgency)
+    };
+    if decision == PopupDecision::Show && !replacing && notifications.len() >= MAX_NOTIFICATIONS {
+        return error_reply(
+            message,
+            "org.freedesktop.DBus.Error.LimitsExceeded",
+            "too many active notifications",
+        );
+    }
+    let id = if replacing {
         *replaces_id
-    } else if notifications.len() < MAX_NOTIFICATIONS {
+    } else {
         let Some(id) = allocate_id(notifications, next_id) else {
             return error_reply(
                 message,
@@ -356,12 +446,6 @@ fn notify(
             );
         };
         id
-    } else {
-        return error_reply(
-            message,
-            "org.freedesktop.DBus.Error.LimitsExceeded",
-            "too many active notifications",
-        );
     };
     let view = NotificationView {
         id,
@@ -371,15 +455,28 @@ fn notify(
         urgency,
         progress,
     };
-    notifications.insert(
-        id,
-        Notification {
-            view: view.clone(),
-            expires_at: expiration(*timeout).map(|duration| now + duration),
-        },
-    );
-    push_update(updates, notifications, NotificationUiUpdate::Upsert(view));
+    if !replacing {
+        history.record(view.clone(), epoch_millis());
+    }
+    if decision == PopupDecision::Show {
+        notifications.insert(
+            id,
+            Notification {
+                view: view.clone(),
+                expires_at: expiration(*timeout).map(|duration| now + duration),
+            },
+        );
+        push_update(updates, notifications, NotificationUiUpdate::Upsert(view));
+    }
     MessageDisposition::Reply(message.method_return().append1(id))
+}
+
+fn epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 fn close_notification(
@@ -598,6 +695,111 @@ mod tests {
         assert_eq!(
             signal.get_items(),
             vec![MessageItem::UInt32(42), MessageItem::UInt32(1)]
+        );
+    }
+
+    fn notify_call(app: &str, summary: &str, urgency: u8) -> Message {
+        let mut call = Message::new_method_call(
+            NOTIFICATIONS_SERVICE,
+            NOTIFICATIONS_PATH,
+            NOTIFICATIONS_INTERFACE,
+            "Notify",
+        )
+        .expect("notify call");
+        let hints = MessageItem::from_dict(
+            vec![Ok::<_, ()>((
+                "urgency".to_owned(),
+                MessageItem::Byte(urgency),
+            ))]
+            .into_iter(),
+        )
+        .expect("hints");
+        // Replies need a non-zero serial, which a real bus assigns on send.
+        call.set_serial(1);
+        call.append_items(&[
+            MessageItem::Str(app.to_owned()),
+            MessageItem::UInt32(0),
+            MessageItem::Str(String::new()),
+            MessageItem::Str(summary.to_owned()),
+            MessageItem::Str(String::new()),
+            MessageItem::new_array(vec![MessageItem::Str("default".to_owned())]).expect("actions"),
+            hints,
+            MessageItem::Int32(-1),
+        ]);
+        call
+    }
+
+    struct Inbox {
+        notifications: BTreeMap<u32, Notification>,
+        updates: VecDeque<NotificationUiUpdate>,
+        next_id: u32,
+        history: NotificationHistory,
+    }
+
+    impl Inbox {
+        fn new(history: NotificationHistory) -> Self {
+            Self {
+                notifications: BTreeMap::new(),
+                updates: VecDeque::new(),
+                next_id: 1,
+                history,
+            }
+        }
+
+        fn notify(&mut self, app: &str, summary: &str, urgency: u8) -> MessageDisposition {
+            handle_message(
+                &notify_call(app, summary, urgency),
+                true,
+                &mut self.notifications,
+                &mut self.updates,
+                &mut self.next_id,
+                &mut self.history,
+                &mut Vec::new(),
+                Instant::now(),
+            )
+        }
+    }
+
+    #[test]
+    fn dnd_records_but_does_not_toast_until_critical() {
+        let mut inbox = Inbox::new(NotificationHistory::new(10));
+        inbox.history.set_dnd(true);
+
+        assert!(matches!(
+            inbox.notify("chat", "quiet", 1),
+            MessageDisposition::Reply(_)
+        ));
+        assert!(inbox.notifications.is_empty());
+        assert!(inbox.updates.is_empty());
+        assert_eq!(inbox.history.len(), 1);
+
+        inbox.notify("chat", "alarm", 2);
+        assert_eq!(inbox.notifications.len(), 1);
+        assert_eq!(inbox.updates.len(), 1);
+        assert_eq!(inbox.history.len(), 2);
+    }
+
+    #[test]
+    fn muted_app_is_recorded_without_toast_even_when_critical() {
+        let mut history = NotificationHistory::new(10);
+        history.set_app_muted("spam", true);
+        let mut inbox = Inbox::new(history);
+
+        inbox.notify("spam", "urgent", 2);
+        assert!(inbox.notifications.is_empty());
+        assert_eq!(inbox.history.len(), 1);
+        assert!(inbox.history.groups()[0].muted);
+    }
+
+    #[test]
+    fn normal_notification_toasts_and_is_recorded_once() {
+        let mut inbox = Inbox::new(NotificationHistory::new(10));
+        inbox.notify("mail", "hello", 1);
+        assert_eq!(inbox.notifications.len(), 1);
+        assert_eq!(inbox.history.len(), 1);
+        assert_eq!(
+            inbox.history.entries().next().unwrap().view.summary,
+            "hello"
         );
     }
 }

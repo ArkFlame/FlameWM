@@ -16,6 +16,7 @@ use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::{BusKind, BusWatch};
 use flamewm_reactor::{Reactor, SystemWallClock};
 use flamewm_shell::async_projection;
+use flamewm_shell::notification_center;
 use flamewm_shell::projection;
 use flamewm_shell::start;
 use flamewm_shell::{ShellSnapshot, ShellSurfaces};
@@ -30,6 +31,12 @@ const NOTIFICATION_ARTIFACT: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-notification.rwr"));
 const NOTIFICATION_WIDTH: u32 = 360;
 const NOTIFICATION_HEIGHT: u32 = 148;
+const NOTIFICATION_CENTER_ARTIFACT: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-notification-center.rwr"));
+const NOTIFICATION_CENTER_WIDTH: u32 = 380;
+const NOTIFICATION_CENTER_HEIGHT: u32 = 520;
+/// Gap between the center and the bottom panel it opens above (`.taskbar` is 44px tall).
+const NOTIFICATION_CENTER_CLEARANCE: i32 = 44 + 16;
 /// Once the startup burst (icon loads, backdrop decode, first paints) has settled, its freed
 /// heap is handed back; later churn is trimmed on the minute clock tick.
 const STARTUP_HEAP_TRIM_DELAY: Duration = Duration::from_secs(10);
@@ -38,6 +45,11 @@ struct NotificationHost {
     provider: flamewm_integrations_linux::notifications::NotificationProvider,
     surface: SurfaceHandle,
     visible: Option<flamewm_integrations_linux::notifications::NotificationView>,
+    center: SurfaceHandle,
+    center_open: bool,
+    center_view: notification_center::CenterView,
+    /// History revision the center was last projected from; `None` forces a projection.
+    center_revision: Option<u64>,
 }
 
 impl NotificationHost {
@@ -84,10 +96,45 @@ impl NotificationHost {
                 },
             )
             .map_err(|error| format!("create notification surface: {error:?}"))?;
+        let center_width = i32::try_from(NOTIFICATION_CENTER_WIDTH).unwrap_or(i32::MAX);
+        let center_height = i32::try_from(NOTIFICATION_CENTER_HEIGHT).unwrap_or(i32::MAX);
+        let center_x = output
+            .geometry
+            .x
+            .saturating_add(output.geometry.width)
+            .saturating_sub(center_width)
+            .saturating_sub(16);
+        let center_y = output
+            .geometry
+            .y
+            .saturating_add(output.geometry.height)
+            .saturating_sub(center_height)
+            .saturating_sub(NOTIFICATION_CENTER_CLEARANCE);
+        let center_document = decode_document(NOTIFICATION_CENTER_ARTIFACT)
+            .map_err(|error| format!("decode notification center UI: {error:?}"))?;
+        let center = runtime
+            .create_surface(
+                UiTemplate::new(center_document),
+                SurfaceConfig {
+                    width: NOTIFICATION_CENTER_WIDTH,
+                    height: NOTIFICATION_CENTER_HEIGHT,
+                    title: "FlameWM notification center".to_owned(),
+                    role: SurfaceRole::Overlay,
+                    input: SurfaceInputMode::Interactive,
+                    initially_visible: false,
+                    x: center_x,
+                    y: center_y,
+                },
+            )
+            .map_err(|error| format!("create notification center surface: {error:?}"))?;
         Ok(Some(Self {
             provider,
             surface,
             visible: None,
+            center,
+            center_open: false,
+            center_view: notification_center::CenterView::default(),
+            center_revision: None,
         }))
     }
 
@@ -103,11 +150,20 @@ impl NotificationHost {
     }
 
     fn handle_event(&mut self, event: &SurfaceEvent, runtime: &mut SurfaceRuntime) -> bool {
-        if event.surface != self.surface
-            || event.action.action != "notification.dismiss"
-            || event.action.phase != flamewm_ui_x11::ActionPhase::Release
-            || !event.action.inside
-        {
+        if event.action.phase != flamewm_ui_x11::ActionPhase::Release || !event.action.inside {
+            return false;
+        }
+        if event.surface == self.center {
+            if let Some(command) = notification_center::Command::parse(&event.action.action) {
+                self.apply_center_command(command, runtime);
+            }
+            return true;
+        }
+        if event.action.action == notification_center::OPEN_ACTION {
+            self.toggle_center(runtime);
+            return true;
+        }
+        if event.surface != self.surface || event.action.action != "notification.dismiss" {
             return false;
         }
         if let Some(notification) = &self.visible {
@@ -124,6 +180,92 @@ impl NotificationHost {
         true
     }
 
+    fn toggle_center(&mut self, runtime: &mut SurfaceRuntime) {
+        self.center_open = !self.center_open;
+        self.center_revision = None;
+        let shown = if self.center_open {
+            runtime.show(self.center)
+        } else {
+            runtime.hide(self.center)
+        };
+        if let Err(error) = shown {
+            eprintln!("flamewm-shell: notification center toggle failed: {error:?}");
+            self.center_open = false;
+            return;
+        }
+        if let Err(error) = self.refresh_center(runtime) {
+            eprintln!("flamewm-shell: notification center update failed: {error}");
+        }
+    }
+
+    fn apply_center_command(
+        &mut self,
+        command: notification_center::Command,
+        runtime: &mut SurfaceRuntime,
+    ) {
+        use notification_center::Command;
+        match command {
+            Command::Clear => self.provider.clear_history(),
+            Command::ToggleDnd => {
+                let enabled = !self.provider.history().dnd();
+                self.provider.set_dnd(enabled);
+            }
+            Command::ToggleGroupMute(index) => {
+                if let Some(group) = self.center_view.groups.get(index).cloned() {
+                    if !self.provider.set_app_muted(&group.app_name, !group.muted) {
+                        eprintln!("flamewm-shell: notification mute list is full");
+                    }
+                }
+            }
+            Command::DismissItem { group, item } => {
+                let seq = self
+                    .center_view
+                    .groups
+                    .get(group)
+                    .and_then(|group| group.items.get(item))
+                    .map(|item| item.seq);
+                if let Some(seq) = seq {
+                    self.provider.remove_history_entry(seq);
+                }
+            }
+        }
+        self.center_revision = None;
+        if let Err(error) = self.refresh_center(runtime) {
+            eprintln!("flamewm-shell: notification center update failed: {error}");
+        }
+    }
+
+    /// Re-projects the center only when it is open and history changed since the last projection.
+    fn refresh_center(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+        if !self.center_open {
+            return Ok(());
+        }
+        let revision = self.provider.history().revision();
+        if self.center_revision == Some(revision) {
+            return Ok(());
+        }
+        let view = notification_center::view(self.provider.history());
+        let nodes = notification_center::nodes(&view);
+        runtime
+            .with_document(self.center, |document| {
+                for node in &nodes {
+                    match node {
+                        notification_center::Node::Text { id, value } => {
+                            document.text(id, value.clone())?;
+                        }
+                        notification_center::Node::Visible { id, shown } => {
+                            document.visible(id, *shown)?;
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .map_err(|error| format!("project notification center: {error:?}"))?;
+        self.center_view = view;
+        self.center_revision = Some(revision);
+        Ok(())
+    }
+
     fn tick(
         &mut self,
         runtime: &mut SurfaceRuntime,
@@ -133,6 +275,7 @@ impl NotificationHost {
             .expire(std::time::Instant::now())
             .map_err(|error| error.message)?;
         let _ = self.provider.drain_ui_updates();
+        self.refresh_center(runtime)?;
         let next = self.provider.active().into_iter().last();
         if self.visible == next {
             if let Some(deadline) = self.provider.next_deadline() {

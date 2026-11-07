@@ -47,6 +47,14 @@ impl<'a, C: Connection> Wm<'a, C> {
         )?;
 
         let workspace_count = config.workspaces.max(1);
+        let window_config = std::rc::Rc::new(std::cell::RefCell::new(
+            crate::window_config::WindowConfig::load(
+                crate::runtime::settings_path()
+                    .0
+                    .parent()
+                    .map(std::path::Path::to_path_buf),
+            ),
+        ));
         let renderer = flamewm_render_x11::ExternalDecorationRenderer::open("IBM Plex Sans")
             .ok()
             .map(flamewm_render_x11::ExternalDecorationRenderer::into_cursor_shared);
@@ -101,6 +109,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             open_gate: OpenGate::default(),
             current_workspace: 0,
             workspace_count,
+            window_config,
             active: None,
             workspace_focus: vec![None; workspace_count],
             screen_rect: Rect::new(

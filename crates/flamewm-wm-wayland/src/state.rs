@@ -393,9 +393,8 @@ pub struct State {
     pub pressed_hit: Option<Hit>,
     /// Window whose resize configure a grab deferred; sent once at the next paint.
     pub pending_configure: Option<WindowId>,
-    /// Outline-move preview frame; contents stay put until release, like X11.
-    /// Snap previews use the final committed dimensions here too.
-    pub move_outline: Option<(WindowId, Rect)>,
+    /// Rounded snap-target preview, shown only while a move grab targets a snap; hidden on release.
+    pub snap_preview: crate::snap_preview::SnapPreview,
     /// Title release that moved nothing, awaiting a possible double click (see `TitleClick`).
     pub last_title_click: Option<crate::input::TitleClick>,
     /// `focusFollowsMouse`, read once at startup: pointer entry focuses the window under it.
@@ -529,7 +528,7 @@ impl State {
             grab: None,
             pressed_hit: None,
             pending_configure: None,
-            move_outline: None,
+            snap_preview: Default::default(),
             last_title_click: None,
             focus_follows_mouse: crate::input::saved_focus_follows_mouse(),
             super_tap: false,

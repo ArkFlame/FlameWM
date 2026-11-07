@@ -445,6 +445,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     renderer: Option<Rc<RefCell<flamewm_render_x11::ExternalDecorationRenderer>>>,
     current_workspace: usize,
     workspace_count: usize,
+    /// Window rules and remembered geometry; shared with the inotify reload callback.
+    pub(super) window_config: crate::window_config::SharedWindowConfig,
     active: Option<Window>,
     /// Last focused window per workspace, recorded when leaving that workspace.
     workspace_focus: Vec<Option<Window>>,

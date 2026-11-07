@@ -78,6 +78,9 @@ where
         calloop::Interest::READ,
         |_, _| flamewm_reactor::FdAction::Continue,
     )?;
+    if let Err(error) = crate::window_config::watch_rules(reactor, Rc::clone(&wm.window_config)) {
+        eprintln!("flamewm: window rules hot reload unavailable: {error}");
+    }
     loop {
         // Buffered drain before block: one pump collapses contiguous
         // same event+child MotionNotify; order vs Button/Key/Configure/
@@ -94,6 +97,9 @@ where
         let changes = wm.take_changes();
         wm.pump_transitions(std::time::Instant::now())?;
         wm.flush_deferred_chrome(std::time::Instant::now())?;
+        wm.window_config
+            .borrow_mut()
+            .flush_due(std::time::Instant::now());
         // INTERNAL: dev-only live outline tuning; remove or keep behind the env gate.
         wm.poll_outline_tune()?;
         let wait = hook(&mut wm, &conn, screen_num, changes)?;
@@ -111,6 +117,10 @@ where
             std::time::Instant::now(),
             wait,
         );
+        let wait = wm
+            .window_config
+            .borrow()
+            .cap_wait(std::time::Instant::now(), wait);
         emit_resize_summary();
         emit_move_summary();
         // Flush once per reactor turn.

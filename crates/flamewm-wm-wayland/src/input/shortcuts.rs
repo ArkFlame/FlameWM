@@ -39,12 +39,9 @@ impl State {
             }
             return;
         }
-        if let Some(direction) = focus_direction(action) {
-            if let Some(id) = self.focused {
-                if let Some(target) = self.model.focus_direction(id, direction) {
-                    self.set_focus(Some(target));
-                }
-            }
+        // Super+arrows are keyboard tiling, as on X11: the tile state machine replaces directional focus.
+        if let Some(direction) = keyboard_tile::tile_action(action) {
+            self.keyboard_tile(direction);
             return;
         }
         if let Some(direction) = move_direction(action) {

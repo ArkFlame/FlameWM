@@ -351,6 +351,8 @@ fn slow_open_gate_and_stage_render_are_pure() {
         present: Duration::from_millis(5),
         pointer_grab: Duration::from_millis(6),
         close: Duration::from_millis(7),
+        ensure: Duration::from_millis(8),
+        settings_refresh: Duration::from_millis(9),
     };
     let line = timings.render(QuickControlKind::Audio);
     for stage in [
@@ -362,6 +364,8 @@ fn slow_open_gate_and_stage_render_are_pure() {
         "present",
         "pointer_grab",
         "close/ungrab/unmap",
+        "ensure",
+        "settings_refresh",
     ] {
         assert!(line.contains(stage), "slow line must carry {stage}");
     }

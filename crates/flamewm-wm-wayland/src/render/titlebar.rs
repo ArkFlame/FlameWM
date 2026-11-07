@@ -79,7 +79,7 @@ pub(super) fn opaque_argb_bytes(rgba: &[u8]) -> Vec<u8> {
 /// Premultiplied ARGB8888 bytes (little-endian B, G, R, A) from straight RGBA pixels. The memory
 /// element's texture is premultiplied, so a straight-alpha outline would show a bright fringe on
 /// its antialiased arc.
-pub(super) fn premultiplied_argb_bytes(rgba: &[u8]) -> Vec<u8> {
+pub(crate) fn premultiplied_argb_bytes(rgba: &[u8]) -> Vec<u8> {
     rgba.chunks_exact(4)
         .flat_map(|px| {
             let alpha = u32::from(px[3]);

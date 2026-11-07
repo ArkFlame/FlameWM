@@ -116,7 +116,11 @@ impl State {
                                 |client| frame_for_client(client, self.model.titlebars()),
                             )
                     };
-                    self.move_outline = Some((id, frame));
+                    if target == SnapTarget::None {
+                        self.snap_preview.hide();
+                    } else {
+                        self.snap_preview.show(frame);
+                    }
                 }
                 Grab::Resize {
                     id,

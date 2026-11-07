@@ -682,3 +682,18 @@ fn keyboard_layout_segments_target_the_setting_and_reject_unknown_layouts() {
     // A layout outside the supported set is an error, never a silent no-op.
     assert!(parse_action("settings.keyboard.layout.not-a-layout").is_err());
 }
+
+#[test]
+fn integer_stepper_writes_percent_keys_back_as_percent() {
+    use crate::app_impl_2::stepped_setting;
+    // blueLightFilter is stored as Percent; an Integer write is rejected by the control wire.
+    assert!(matches!(
+        stepped_setting(Some(&SettingValue::Percent(40)), 45),
+        Ok(SettingValue::Percent(45))
+    ));
+    assert!(matches!(
+        stepped_setting(Some(&SettingValue::Integer(7)), 12),
+        Ok(SettingValue::Integer(12))
+    ));
+    assert!(stepped_setting(Some(&SettingValue::Percent(0)), -5).is_err());
+}

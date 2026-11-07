@@ -7,6 +7,7 @@ pub mod control_actions;
 pub mod cursor_theme;
 pub mod icon_loader;
 pub mod launcher;
+pub mod notification_center;
 pub mod osd;
 pub mod panel;
 pub mod popovers;

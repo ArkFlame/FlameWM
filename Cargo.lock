@@ -1190,6 +1190,7 @@ dependencies = [
  "flamewm-ui-core",
  "flamewm-window-core",
  "flamewm-x11-desktop",
+ "inotify",
  "x11rb 0.14.0",
 ]
 

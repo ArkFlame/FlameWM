@@ -10,6 +10,7 @@ pub const EDGE_THRESHOLD: i32 = 16;
 /// Corner zones are twice the edge zone; this is the default `EDGE_THRESHOLD` expansion.
 pub const CORNER_THRESHOLD: i32 = 2 * EDGE_THRESHOLD;
 
+pub mod geometry_memory;
 pub mod keyboard_tile;
 pub mod window_rules;
 
