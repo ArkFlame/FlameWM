@@ -25,17 +25,31 @@ struct Strip {
     buffer: MemoryRenderBuffer,
 }
 
-/// Visible preview state: the frame it outlines and the accent it was rasterised with.
+/// Visible preview state: the landing frame. Only its origin changes during a translation.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Shown {
     frame: Rect,
+}
+
+/// What the cached strips were rasterised for. Translation never changes it, so a moving ring
+/// keeps its buffers (and their GL textures) and only its element location moves.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RingKey {
+    w: i32,
+    h: i32,
     rgb: u32,
+    radius: u32,
 }
 
 pub struct SnapPreview {
     accent: u32,
     shown: Option<Shown>,
+    /// Key of `strips`; `None` while no ring is cached.
+    key: Option<RingKey>,
     strips: Vec<Strip>,
+    /// Raster passes performed; the tests assert that a translation-only drag costs none.
+    #[cfg(test)]
+    rasters: u32,
 }
 
 impl Default for SnapPreview {
@@ -43,7 +57,10 @@ impl Default for SnapPreview {
         Self {
             accent: flamewm_api::settings::DEFAULT_ACCENT_RGB,
             shown: None,
+            key: None,
             strips: Vec::new(),
+            #[cfg(test)]
+            rasters: 0,
         }
     }
 }
@@ -57,25 +74,18 @@ impl SnapPreview {
         }
         self.accent = rgb;
         if let Some(shown) = self.shown {
-            self.strips = ring_strips(shown.frame, rgb);
-            self.shown = Some(Shown { rgb, ..shown });
+            self.ensure_ring((shown.frame.w, shown.frame.h));
         }
         true
     }
 
-    /// Shows the preview around `frame`. Rasterises only when the frame or accent changed, so a
-    /// steady drag costs no allocation. Returns whether the preview changed.
+    /// Shows the preview around `frame`. Re-rasterises only when the size or accent changed; a
+    /// pure move reuses the cached strips. Returns whether the visible preview changed.
     pub fn show(&mut self, frame: Rect) -> bool {
-        let next = Shown {
-            frame,
-            rgb: self.accent,
-        };
-        if self.shown == Some(next) {
-            return false;
-        }
-        self.strips = ring_strips(frame, self.accent);
-        self.shown = Some(next);
-        true
+        let before = (self.shown, self.key);
+        self.ensure_ring((frame.w, frame.h));
+        self.shown = Some(Shown { frame });
+        before != (self.shown, self.key)
     }
 
     /// Hides the preview and drops its buffers. Returns whether it was visible.
@@ -84,7 +94,35 @@ impl SnapPreview {
             return false;
         }
         self.strips.clear();
+        self.key = None;
         true
+    }
+
+    /// Rasterises the ring only when its key (size, accent, radius) differs from the cache.
+    fn ensure_ring(&mut self, (w, h): (i32, i32)) {
+        let key = RingKey {
+            w,
+            h,
+            rgb: self.accent,
+            radius: PREVIEW_RADIUS,
+        };
+        if self.key == Some(key) {
+            return;
+        }
+        self.strips = ring_strips(
+            Rect {
+                x: 0,
+                y: 0,
+                w,
+                h,
+            },
+            self.accent,
+        );
+        self.key = Some(key);
+        #[cfg(test)]
+        {
+            self.rasters += 1;
+        }
     }
 
     /// The cached ring as overlay elements at the shown frame. Empty while hidden.
@@ -156,12 +194,33 @@ mod tests {
     };
 
     #[test]
-    fn show_rasterises_once_per_frame_and_accent() {
+    fn show_rasterises_once_per_size_and_accent() {
         let mut preview = SnapPreview::default();
         assert!(preview.show(FRAME));
         assert!(!preview.show(FRAME), "same frame is a cache hit");
-        assert!(preview.show(Rect { x: 11, ..FRAME }));
+        assert!(preview.show(Rect { x: 11, ..FRAME }), "a move is a visible change");
+        assert_eq!(preview.rasters, 1, "a move with the same size re-rasterises nothing");
         assert!(!preview.strips.is_empty());
+        assert!(preview.show(Rect { w: 301, ..FRAME }));
+        assert_eq!(preview.rasters, 2, "a resize re-rasterises once");
+    }
+
+    #[test]
+    fn hundred_translation_motions_rasterise_once() {
+        let mut preview = SnapPreview::default();
+        preview.show(FRAME);
+        let strips_before = preview.strips.len();
+        for step in 1..=100 {
+            let moved = Rect {
+                x: FRAME.x + step,
+                y: FRAME.y + step / 2,
+                ..FRAME
+            };
+            assert!(preview.show(moved), "step {step} moves the visible ring");
+        }
+        assert_eq!(preview.rasters, 1, "100 translations: one raster, zero buffer rebuilds");
+        assert_eq!(preview.strips.len(), strips_before);
+        assert_eq!(preview.shown.map(|s| s.frame.x), Some(FRAME.x + 100));
     }
 
     #[test]
@@ -172,6 +231,7 @@ mod tests {
         assert!(preview.hide());
         assert!(preview.strips.is_empty());
         assert!(preview.shown.is_none());
+        assert!(preview.key.is_none());
     }
 
     #[test]
@@ -182,8 +242,10 @@ mod tests {
         assert!(preview.set_accent(0x00ef_4048));
         assert!(preview.shown.is_none());
         preview.show(FRAME);
+        let rasters = preview.rasters;
         assert!(preview.set_accent(0x0011_2233));
-        assert_eq!(preview.shown.map(|shown| shown.rgb), Some(0x0011_2233));
+        assert_eq!(preview.rasters, rasters + 1);
+        assert_eq!(preview.key.map(|k| k.rgb), Some(0x0011_2233));
         assert!(!preview.strips.is_empty());
     }
 

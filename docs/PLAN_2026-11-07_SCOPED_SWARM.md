@@ -252,3 +252,18 @@ Probe: `scratchpad/idle_probe.py` (own Xvfb, own dbus, binaries `target-swarm-id
 - FIXED: nothing. No steady-state idle culprit reproduced in the in-scope crates, so no root fix was made. A fix without before/after movement would be unproven.
 - Checks: `cargo build -p flamewm-wm -p flamewm-shell -p flamewm-desktop --bins` exit 0, 0 warnings (`CARGO_TARGET_DIR=target-swarm-id`, jobs 3). `python3 -I tools/architecture_guard.py` exit 0. No crate edited, so no crate tests were run.
 - Risk: debug profile inflates decode CPU. Release probe under low host load is the next step. Other agents' uncommitted edits are present in the tree and were not touched.
+
+## Results: LAG
+
+- Symptom: nested Wayland (winit, Intel GL) window-move preview rectangle lags heavily while dragging.
+- Root cause (static, from code reading): `SnapPreview::show` compared the whole landing frame, so every pointer motion in outline mode re-rasterised the 2 px rounded ring (`outline::outline_strips` plus new `MemoryRenderBuffer::from_slice`, i.e. a new buffer and GL upload) and forced a scene rebuild. Content mode also re-marked every motion through `set_rect`/`pending_configure`.
+- Fix: `crates/flamewm-wm-wayland/src/snap_preview.rs` caches ring strips keyed on `RingKey { w, h, rgb, radius }`. A pure translation changes only the element origin. `hide` clears strips and key. `show`/`set_accent` report a visible change only on a real change. `pointer.rs` already gates `request_paint` on `needs_scene_rebuild(ring_changed, rect_changed)` and `pending_configure` on `!unchanged`, so no edit there.
+- Coalescing: `request_paint` goes through `request_cursor_paint` to `request_winit_frame`, which throttles at `WINIT_FRAME_INTERVAL` (16 ms). No extra throttle added.
+- Counter evidence (deterministic): `snap_preview::tests::hundred_translation_motions_rasterise_once` moves the preview 100 times and asserts `rasters == 1` and an unchanged strip count. `show_rasterises_once_per_size_and_accent` and `accent_change_re_rasterises_a_visible_preview_only` cover resize and accent. `hide_clears_buffers_and_reports_only_real_changes` covers hide.
+- Checks (CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-lag, CARGO_BUILD_JOBS=3, RUST_TEST_THREADS=2):
+  - `cargo test -p flamewm-wm-wayland`: EXIT=0, 263 lib tests passed, 0 failed (the 5 snap_preview tests among them).
+  - `cargo check -p flamewm-wm-wayland --features drm`: EXIT=0, 0 warnings, 0 errors.
+  - `python3 -I tools/architecture_guard.py`: EXIT=0 (77 ratified violations, pre-existing TODO warnings only).
+- Before/after timing: UNVERIFIED. No same-revision debug build was available and the release build did not finish under host load (50 to 62). The per-motion raster and buffer-creation counts are proven by the tests above. Frame time and CPU are not measured.
+- Not checked: nested Wayland runtime drag, the `lag_run.py` probe. The dead line in `scratchpad/lag/lag_run.py` is not deleted. No commit.
+- Risk: the fix removes per-motion re-raster and buffer churn, but the 16 ms throttle and any remaining per-frame element build in `render/mod.rs` are unmeasured at runtime.
