@@ -13,8 +13,8 @@ use crate::ffi::dynamic_library::DynamicLibrary;
 use crate::text_mask_cache::{TextMaskCache, TextMaskKey, TextMaskRef};
 use crate::xlib::{
     Colormap, Display, Drawable, Visual, XCloseDisplay, XCreateGC, XCreatePixmap, XDefaultColormap,
-    XDefaultScreen, XDefaultVisual, XDestroyImage, XFillRectangle, XOpenDisplay,
-    XFreeGC, XGetImage, XImageHead, XRectangle, XRootWindow, XSetForeground, ZPIXMAP,
+    XDefaultScreen, XDefaultVisual, XDestroyImage, XFillRectangle, XFreeGC, XGetImage, XImageHead,
+    XOpenDisplay, XRectangle, XRootWindow, XSetForeground, ZPIXMAP,
 };
 
 #[repr(C)]
@@ -192,7 +192,11 @@ impl XftBackend {
         visual: *mut Visual,
         colormap: Colormap,
     ) -> Result<Self, String> {
-        let xft_library = DynamicLibrary::open(&["libXft.so.2", "libXft.so"])?;
+        // Xft and XRender register Xlib close-display hooks. Keep both DSOs mapped so
+        // XCloseDisplay can safely run those hooks even when initialization returns Err.
+        let xft_library = DynamicLibrary::open_nodelete(&["libXft.so.2", "libXft.so"])?;
+        let _xrender_library =
+            DynamicLibrary::open_nodelete(&["libXrender.so.1", "libXrender.so"])?;
         // SAFETY: each name is a static NUL-terminated symbol and `T` is the exact
         // function-pointer type declared in `XftApi`, matching the C ABI.
         let api = XftApi {
@@ -369,7 +373,12 @@ impl XftBackend {
         if let Some(dims) = self.text_masks.get_into(&key, mask) {
             return Ok(dims);
         }
-        let spec = AlphaMaskSpec { size, weight, text, pad };
+        let spec = AlphaMaskSpec {
+            size,
+            weight,
+            text,
+            pad,
+        };
         let rendered = unsafe { self.render_alpha_masks(&[spec]) }
             .pop()
             .unwrap_or_else(|| Err("text mask batch returned no entry".to_string()))?;
@@ -386,11 +395,23 @@ impl XftBackend {
         let mut seen = std::collections::HashSet::new();
         let mut missing = Vec::new();
         for spec in specs {
-            let key = TextMaskRef::new(&self.preferred_family, spec.text, spec.size, spec.weight, spec.pad);
+            let key = TextMaskRef::new(
+                &self.preferred_family,
+                spec.text,
+                spec.size,
+                spec.weight,
+                spec.pad,
+            );
             if self.text_masks.contains(&key) {
                 continue;
             }
-            let owned = TextMaskKey::new(&self.preferred_family, spec.text, spec.size, spec.weight, spec.pad);
+            let owned = TextMaskKey::new(
+                &self.preferred_family,
+                spec.text,
+                spec.size,
+                spec.weight,
+                spec.pad,
+            );
             if seen.insert(owned) {
                 missing.push(*spec);
             }
@@ -403,7 +424,10 @@ impl XftBackend {
     /// Renders each spec into its own A8 mask and inserts successes into the cache. Specs are
     /// laid out as horizontal bands of one pixmap, each clipped to its own band, so every mask
     /// matches a standalone render pixel for pixel. One `XGetImage` covers each batch.
-    unsafe fn render_alpha_masks(&mut self, specs: &[AlphaMaskSpec<'_>]) -> Vec<Result<AlphaMask, String>> {
+    unsafe fn render_alpha_masks(
+        &mut self,
+        specs: &[AlphaMaskSpec<'_>],
+    ) -> Vec<Result<AlphaMask, String>> {
         let mut out: Vec<Option<Result<AlphaMask, String>>> = specs.iter().map(|_| None).collect();
         let dims: Vec<(u32, u32)> = specs
             .iter()
@@ -437,7 +461,13 @@ impl XftBackend {
                     for (offset, mask) in masks.into_iter().enumerate() {
                         let spec = specs[start + offset];
                         self.text_masks.insert(
-                            TextMaskKey::new(&self.preferred_family, spec.text, spec.size, spec.weight, spec.pad),
+                            TextMaskKey::new(
+                                &self.preferred_family,
+                                spec.text,
+                                spec.size,
+                                spec.weight,
+                                spec.pad,
+                            ),
                             mask.width,
                             mask.height,
                             &mask.bytes,
@@ -538,7 +568,16 @@ impl XftBackend {
                 }
                 self.readbacks += 1;
                 let image = unsafe {
-                    XGetImage(self.display, pixmap, 0, 0, total_width, total_height, !0, ZPIXMAP)
+                    XGetImage(
+                        self.display,
+                        pixmap,
+                        0,
+                        0,
+                        total_width,
+                        total_height,
+                        !0,
+                        ZPIXMAP,
+                    )
                 };
                 if image.is_null() {
                     return Err("XGetImage of A8 text shadow failed".to_string());
@@ -550,7 +589,10 @@ impl XftBackend {
                     }
                     let row_bytes = head.bytes_per_line as usize;
                     let data = unsafe {
-                        std::slice::from_raw_parts(head.data as *const u8, row_bytes * total_height as usize)
+                        std::slice::from_raw_parts(
+                            head.data as *const u8,
+                            row_bytes * total_height as usize,
+                        )
                     };
                     Ok(dims
                         .iter()
@@ -561,7 +603,11 @@ impl XftBackend {
                                 let start = (top as usize + y) * row_bytes;
                                 row.copy_from_slice(&data[start..start + width as usize]);
                             }
-                            AlphaMask { width, height, bytes }
+                            AlphaMask {
+                                width,
+                                height,
+                                bytes,
+                            }
                         })
                         .collect::<Vec<_>>())
                 })();
@@ -1021,12 +1067,64 @@ pub(crate) fn xrender_color_for(color: Color) -> (u16, u16, u16, u16) {
 mod tests {
     use super::*;
 
+    struct DisplayGuard(*mut crate::xlib::Display);
+
+    impl Drop for DisplayGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: the guard owns this display and closes it at most once.
+                unsafe { crate::xlib::XCloseDisplay(self.0) };
+            }
+        }
+    }
+
+    /// Reproduce the init-error/display-close lifetime path without requiring fonts.
+    /// Run: `FLAMEWM_TEST_DISPLAY=:91 cargo test -p flamewm-render-x11 --lib xft::tests::xft_init_failure_closes_display_safely -- --ignored --exact --test-threads=1`
+    #[test]
+    #[ignore = "requires a live FLAMEWM_TEST_DISPLAY with XRender but no usable font installed (Arch Xvfb package test environment)"]
+    fn xft_init_failure_closes_display_safely() {
+        use crate::xlib::{
+            XCloseDisplay, XDefaultColormap, XDefaultScreen, XDefaultVisual, XOpenDisplay,
+            XRootWindow,
+        };
+
+        let name = std::env::var_os("FLAMEWM_TEST_DISPLAY")
+            .expect("requires FLAMEWM_TEST_DISPLAY pointing to the no-font Xvfb");
+        let name = std::ffi::CString::new(name.to_string_lossy().as_bytes()).unwrap();
+        let display = unsafe { XOpenDisplay(name.as_ptr()) };
+        let mut display_guard = DisplayGuard(display);
+        assert!(!display.is_null(), "XOpenDisplay failed");
+
+        let screen = unsafe { XDefaultScreen(display) };
+        let root = unsafe { XRootWindow(display, screen) };
+        let visual = unsafe { XDefaultVisual(display, screen) };
+        let colormap = unsafe { XDefaultColormap(display, screen) };
+        let error = match unsafe { XftBackend::new(display, screen, root, visual, colormap) } {
+            Err(error) => error,
+            Ok(backend) => {
+                drop(backend);
+                panic!("expected Xft initialization to fail because no usable font is installed");
+            }
+        };
+        assert!(
+            error.starts_with("Xft could not open a UI font"),
+            "expected the no-font initialization error, got: {error}"
+        );
+
+        // The error is now gone; close the display after Xft's failed initialization path.
+        drop(error);
+        display_guard.0 = std::ptr::null_mut();
+        unsafe { XCloseDisplay(display) };
+    }
+
     /// Per-call cost of `XftBackend::measure_text` (XftTextExtentsUtf8) on a 40-char line.
     /// Run: `FLAMEWM_TEST_DISPLAY=:0 cargo test -p flamewm-render-x11 xft_text_extents_per_call_bench -- --ignored --nocapture`
     #[test]
     #[ignore = "bench: needs FLAMEWM_TEST_DISPLAY"]
     fn xft_text_extents_per_call_bench() {
-        use crate::xlib::{XDefaultColormap, XDefaultScreen, XDefaultVisual, XOpenDisplay, XRootWindow};
+        use crate::xlib::{
+            XDefaultColormap, XDefaultScreen, XDefaultVisual, XOpenDisplay, XRootWindow,
+        };
         let Some(name) = std::env::var_os("FLAMEWM_TEST_DISPLAY") else {
             return;
         };
@@ -1059,7 +1157,9 @@ mod tests {
     #[test]
     #[ignore = "live-display probe: FLAMEWM_TEST_DISPLAY=:99 cargo test -p flamewm-render-x11 --lib caret_x_tracks -- --ignored"]
     fn caret_x_tracks_painted_glyph_edge_on_live_display() {
-        use crate::xlib::{XDefaultColormap, XDefaultScreen, XDefaultVisual, XOpenDisplay, XRootWindow};
+        use crate::xlib::{
+            XDefaultColormap, XDefaultScreen, XDefaultVisual, XOpenDisplay, XRootWindow,
+        };
         let Some(name) = std::env::var_os("FLAMEWM_TEST_DISPLAY") else {
             return;
         };
@@ -1092,7 +1192,9 @@ mod tests {
                 }
                 let ink_end = ink_end.expect("prefix must ink") as f32 + 1.0 - pad as f32;
                 let drift = caret - ink_end;
-                eprintln!("caret probe n={n:2} caret={caret:7.2} ink_end={ink_end:7.2} gap={drift:6.2}");
+                eprintln!(
+                    "caret probe n={n:2} caret={caret:7.2} ink_end={ink_end:7.2} gap={drift:6.2}"
+                );
                 worst_drift = worst_drift.max(drift);
                 best_drift = best_drift.min(drift);
             }
@@ -1192,7 +1294,12 @@ mod tests {
         xft.text_masks.clear();
         let specs: Vec<AlphaMaskSpec<'_>> = runs
             .iter()
-            .map(|&(size, weight, pad, text)| AlphaMaskSpec { size, weight, text, pad })
+            .map(|&(size, weight, pad, text)| AlphaMaskSpec {
+                size,
+                weight,
+                text,
+                pad,
+            })
             .collect();
         unsafe { xft.prefetch_text_masks(&specs) };
         for (index, &(size, weight, pad, text)) in runs.iter().enumerate() {
@@ -1218,18 +1325,31 @@ mod tests {
         let texts = ["one", "two two", "three", "four 4%", "five", "six 6.0%"];
         let specs: Vec<AlphaMaskSpec<'_>> = texts
             .iter()
-            .map(|text| AlphaMaskSpec { size: 12.0, weight: 400, text, pad: 6 })
+            .map(|text| AlphaMaskSpec {
+                size: 12.0,
+                weight: 400,
+                text,
+                pad: 6,
+            })
             .collect();
         let before = xft.readbacks;
         unsafe { xft.prefetch_text_masks(&specs) };
-        assert_eq!(xft.readbacks - before, 1, "six short runs must share one readback");
+        assert_eq!(
+            xft.readbacks - before,
+            1,
+            "six short runs must share one readback"
+        );
         let mut out = Vec::new();
         for text in texts {
             unsafe { xft.text_alpha_mask(12.0, 400, text, 6, &mut out) }.expect("cached");
         }
         assert_eq!(xft.readbacks - before, 1, "cached runs must not read back");
         unsafe { xft.prefetch_text_masks(&specs) };
-        assert_eq!(xft.readbacks - before, 1, "repeated prefetch must hit the cache");
+        assert_eq!(
+            xft.readbacks - before,
+            1,
+            "repeated prefetch must hit the cache"
+        );
         let libraries = unsafe { xft.into_deferred_libraries() };
         unsafe { crate::xlib::XCloseDisplay(display) };
         drop(libraries);
@@ -1305,7 +1425,10 @@ mod default_measure_tests {
                     .width
             });
             let painted = default.measure(13.0, 400, &text);
-            assert!((scoped - painted).abs() < 0.01, "{chars} chars: {scoped} vs {painted}");
+            assert!(
+                (scoped - painted).abs() < 0.01,
+                "{chars} chars: {scoped} vs {painted}"
+            );
         }
     }
 }

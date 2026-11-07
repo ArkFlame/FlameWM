@@ -3,19 +3,36 @@ use std::mem;
 use std::os::raw::{c_char, c_int, c_void};
 
 const RTLD_NOW: c_int = 2;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const RTLD_NODELETE: c_int = 0x1000;
 
 pub(crate) struct DynamicLibrary {
     handle: *mut c_void,
+    close_on_drop: bool,
 }
 
 impl DynamicLibrary {
     pub(crate) fn open(names: &[&str]) -> Result<Self, String> {
+        let (flags, close_on_drop) = loader_options(false);
+        Self::open_with_flags(names, flags, close_on_drop)
+    }
+
+    /// Keep a library mapped for process lifetime, including after its handle is dropped.
+    pub(crate) fn open_nodelete(names: &[&str]) -> Result<Self, String> {
+        let (flags, close_on_drop) = loader_options(true);
+        Self::open_with_flags(names, flags, close_on_drop)
+    }
+
+    fn open_with_flags(names: &[&str], flags: c_int, close_on_drop: bool) -> Result<Self, String> {
         for name in names {
             let c_name = CString::new(*name).expect("library name is static and NUL-free");
-            // `c_name` remains alive for the call; `RTLD_NOW` is a valid dlopen flag.
-            let handle = unsafe { dlopen(c_name.as_ptr(), RTLD_NOW) };
+            // `c_name` remains alive for the call; `flags` are valid dlopen flags.
+            let handle = unsafe { dlopen(c_name.as_ptr(), flags) };
             if !handle.is_null() {
-                return Ok(Self { handle });
+                return Ok(Self {
+                    handle,
+                    close_on_drop,
+                });
             }
         }
         Err(format!("unable to load any of: {}", names.join(", ")))
@@ -56,7 +73,7 @@ impl DynamicLibrary {
 
 impl Drop for DynamicLibrary {
     fn drop(&mut self) {
-        if !self.handle.is_null() {
+        if self.close_on_drop && !self.handle.is_null() {
             // Handle was returned by `dlopen` and remains owned until this drop.
             unsafe {
                 dlclose(self.handle);
@@ -71,4 +88,44 @@ unsafe extern "C" {
     fn dlclose(handle: *mut c_void) -> c_int;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     fn dlerror() -> *const c_char;
+}
+
+fn loader_options(nodelete: bool) -> (c_int, bool) {
+    if !nodelete {
+        return (RTLD_NOW, true);
+    }
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        (RTLD_NOW | RTLD_NODELETE, true)
+    }
+    // RTLD_NODELETE is a GNU/Linux extension. On other targets retain the handle instead.
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    {
+        (RTLD_NOW, false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nodelete_load_flags_are_limited_to_nodelete_loads() {
+        assert_eq!(RTLD_NOW, 2);
+        assert_eq!(loader_options(false), (RTLD_NOW, true));
+        let (flags, close_on_drop) = loader_options(true);
+
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        {
+            assert_eq!(RTLD_NODELETE, 0x1000);
+            assert_eq!(flags, RTLD_NOW | RTLD_NODELETE);
+            assert!(close_on_drop);
+        }
+        #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+        {
+            // Without the GNU extension, open_nodelete retains the handle rather than dlclosing.
+            assert_eq!(flags, RTLD_NOW);
+            assert!(!close_on_drop);
+        }
+    }
 }
