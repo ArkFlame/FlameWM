@@ -13,8 +13,9 @@ pub(super) fn handle_input(
         InputEvent::PointerMotion { event } => {
             // Relative motion: the same absolute path the nested backend uses, clamped to the output.
             let size = state.output_size;
-            let x = (state.pointer.x + event.delta_x()).clamp(0.0, f64::from((size.w - 1).max(0)));
-            let y = (state.pointer.y + event.delta_y()).clamp(0.0, f64::from((size.h - 1).max(0)));
+            let base = state.relative_base();
+            let x = (base.x + event.delta_x()).clamp(0.0, f64::from((size.w - 1).max(0)));
+            let y = (base.y + event.delta_y()).clamp(0.0, f64::from((size.h - 1).max(0)));
             state.on_motion((x, y).into(), event.time_msec());
             state.request_redraw();
         }

@@ -1,6 +1,8 @@
 //! Pointer input: motion, hit routing, focus-follows-mouse, and axis scrolling.
 
 use super::*;
+use smithay::input::pointer::{PointerHandle, RelativeMotionEvent};
+use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint};
 
 /// Pick the first owner that actually contains the point. The same helper makes front-to-back
 /// semantics explicit in tests using foreground Dock/Desktop, popup, layer, and managed fixtures.
@@ -80,6 +82,15 @@ pub(super) fn unmanaged_focus(
 
 impl State {
     pub(crate) fn on_motion(&mut self, location: Point<f64, Logical>, time: u32) {
+        // Backends report the host or device position in `raw_pointer`; the cursor (`pointer`) may
+        // stay put while a lock is active, so the relative delta is taken from the raw position.
+        let delta = relative_delta(self.raw_pointer, location);
+        self.raw_pointer = location;
+        if let Some(surface) = self.locked_focus() {
+            self.send_relative_motion(&surface, delta, time);
+            return;
+        }
+        let location = self.confined_location(self.pointer, location);
         self.pointer = location;
         if let Some(grab) = self.grab {
             match grab {
@@ -162,6 +173,8 @@ impl State {
         time: u32,
     ) {
         if let Some(pointer) = self.seat.get_pointer() {
+            let previous = pointer.current_focus();
+            let next = focus.clone();
             pointer.motion(
                 self,
                 focus,
@@ -171,7 +184,113 @@ impl State {
                     time,
                 },
             );
+            self.sync_pointer_constraints(&pointer, previous, next.as_ref(), location);
             pointer.frame(self);
+        }
+    }
+
+    /// The focused surface when its pointer lock is active: motion then stays relative only.
+    /// Origin for the next device-relative move. Only a lock keeps the cursor still while the device
+    /// keeps moving, so only then is the raw device position the base; otherwise the cursor is.
+    #[cfg_attr(not(feature = "drm"), allow(dead_code))]
+    pub(crate) fn relative_base(&self) -> Point<f64, Logical> {
+        pick_relative_base(self.locked_focus().is_some(), self.pointer, self.raw_pointer)
+    }
+
+    fn locked_focus(&self) -> Option<WlSurface> {
+        let pointer = self.seat.get_pointer()?;
+        let surface = pointer.current_focus()?;
+        let locked = with_pointer_constraint(&surface, &pointer, |c| {
+            c.is_some_and(|c| c.is_active() && matches!(*c, PointerConstraint::Locked(_)))
+        });
+        locked.then_some(surface)
+    }
+
+    fn send_relative_motion(&mut self, surface: &WlSurface, delta: Point<f64, Logical>, time: u32) {
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
+        // The origin of the focus is not used by the relative path; the cursor location stands in.
+        let focus = Some((surface.clone(), self.pointer));
+        let event = RelativeMotionEvent {
+            delta,
+            // No pointer acceleration is applied on this path, so both vectors are the same delta.
+            delta_unaccel: delta,
+            utime: u64::from(time) * 1000,
+        };
+        pointer.relative_motion(self, focus, &event);
+        pointer.frame(self);
+    }
+
+    /// Clamps a candidate position for a confined pointer: it keeps `previous` when the candidate
+    /// would leave the confining region (or the focused surface).
+    fn confined_location(
+        &self,
+        previous: Point<f64, Logical>,
+        candidate: Point<f64, Logical>,
+    ) -> Point<f64, Logical> {
+        let Some(pointer) = self.seat.get_pointer() else {
+            return candidate;
+        };
+        let Some(surface) = pointer.current_focus() else {
+            return candidate;
+        };
+        let confined = with_pointer_constraint(&surface, &pointer, |c| {
+            c.is_some_and(|c| c.is_active() && matches!(*c, PointerConstraint::Confined(_)))
+        });
+        if !confined {
+            return candidate;
+        }
+        let inside = match self.pointer_target(candidate).focus {
+            Some((hit, origin)) if hit == surface => {
+                let local = candidate - origin;
+                let contains = with_pointer_constraint(&surface, &pointer, |c| {
+                    c.and_then(|c| c.region().map(|r| region_hit(r, local)))
+                });
+                constraint_wanted(true, contains)
+            }
+            _ => false,
+        };
+        confined_step(previous, candidate, inside)
+    }
+
+    /// Activates or deactivates the pointer constraints of the surfaces the pointer left or entered.
+    /// Smithay sends `locked`/`confined` only when asked, so the compositor owns this policy.
+    fn sync_pointer_constraints(
+        &self,
+        pointer: &PointerHandle<Self>,
+        previous: Option<WlSurface>,
+        next: Option<&(WlSurface, Point<f64, Logical>)>,
+        location: Point<f64, Logical>,
+    ) {
+        if let Some(old) = previous.filter(|old| next.is_none_or(|(new, _)| new != old)) {
+            with_pointer_constraint(&old, pointer, |c| {
+                if let Some(c) = c.filter(|c| c.is_active()) {
+                    c.deactivate();
+                }
+            });
+        }
+        let Some((surface, origin)) = next else {
+            return;
+        };
+        let local = location - *origin;
+        let Some((active, contains)) = with_pointer_constraint(surface, pointer, |c| {
+            c.map(|c| (c.is_active(), c.region().map(|r| region_hit(r, local))))
+        }) else {
+            return;
+        };
+        match constraint_transition(active, constraint_wanted(true, contains)) {
+            Some(true) => with_pointer_constraint(surface, pointer, |c| {
+                if let Some(c) = c {
+                    c.activate();
+                }
+            }),
+            Some(false) => with_pointer_constraint(surface, pointer, |c| {
+                if let Some(c) = c {
+                    c.deactivate();
+                }
+            }),
+            None => {}
         }
     }
 
@@ -268,5 +387,101 @@ impl State {
         self.update_pointer_focus(location, target.focus, event.time_msec());
         pointer.axis(self, frame);
         pointer.frame(self);
+    }
+}
+
+/// A constraint is wanted while the pointer is over its surface and, when it has a region, inside.
+pub(super) fn constraint_wanted(over_surface: bool, region_contains: Option<bool>) -> bool {
+    over_surface && region_contains.unwrap_or(true)
+}
+
+/// The activation change a constraint needs, or `None` when it already matches the wanted state.
+pub(super) fn constraint_transition(active: bool, wanted: bool) -> Option<bool> {
+    (active != wanted).then_some(wanted)
+}
+
+/// A confined pointer keeps its previous position when the candidate would leave the region.
+pub(super) fn confined_step(
+    previous: Point<f64, Logical>,
+    candidate: Point<f64, Logical>,
+    inside: bool,
+) -> Point<f64, Logical> {
+    if inside { candidate } else { previous }
+}
+
+/// The base of a device-relative move: the raw position when locked, the cursor otherwise.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
+pub(super) fn pick_relative_base(
+    locked: bool,
+    pointer: Point<f64, Logical>,
+    raw: Point<f64, Logical>,
+) -> Point<f64, Logical> {
+    if locked { raw } else { pointer }
+}
+
+/// Relative motion is the raw position change; with no acceleration the unaccelerated delta matches it.
+pub(super) fn relative_delta(
+    raw_previous: Point<f64, Logical>,
+    raw_next: Point<f64, Logical>,
+) -> Point<f64, Logical> {
+    raw_next - raw_previous
+}
+
+/// Surface-local region test; the protocol region is in integer surface coordinates.
+fn region_hit(
+    region: &smithay::wayland::compositor::RegionAttributes,
+    local: Point<f64, Logical>,
+) -> bool {
+    region.contains(Point::<i32, Logical>::from((
+        local.x.round() as i32,
+        local.y.round() as i32,
+    )))
+}
+
+#[cfg(test)]
+mod pointer_constraint_tests {
+    use super::*;
+
+    #[test]
+    fn wanted_requires_surface_and_region() {
+        assert!(constraint_wanted(true, None));
+        assert!(constraint_wanted(true, Some(true)));
+        assert!(!constraint_wanted(true, Some(false)));
+        assert!(!constraint_wanted(false, None));
+        assert!(!constraint_wanted(false, Some(true)));
+    }
+
+    #[test]
+    fn transition_only_when_state_differs() {
+        assert_eq!(constraint_transition(false, true), Some(true));
+        assert_eq!(constraint_transition(true, false), Some(false));
+        assert_eq!(constraint_transition(true, true), None);
+        assert_eq!(constraint_transition(false, false), None);
+    }
+
+    #[test]
+    fn confined_keeps_previous_position_outside() {
+        let previous = Point::<f64, Logical>::from((10.0, 10.0));
+        let candidate = Point::<f64, Logical>::from((500.0, 10.0));
+        assert_eq!(confined_step(previous, candidate, true), candidate);
+        assert_eq!(confined_step(previous, candidate, false), previous);
+    }
+
+    #[test]
+    fn relative_base_is_raw_only_when_locked() {
+        let pointer = Point::<f64, Logical>::from((10.0, 10.0));
+        let raw = Point::<f64, Logical>::from((50.0, 60.0));
+        assert_eq!(pick_relative_base(false, pointer, raw), pointer);
+        assert_eq!(pick_relative_base(true, pointer, raw), raw);
+        // Without any constraint the raw position equals the cursor, so both bases agree.
+        assert_eq!(pick_relative_base(false, pointer, pointer), pick_relative_base(true, pointer, pointer));
+    }
+
+    #[test]
+    fn relative_delta_is_raw_change() {
+        let a = Point::<f64, Logical>::from((100.0, 40.0));
+        let b = Point::<f64, Logical>::from((103.5, 37.0));
+        assert_eq!(relative_delta(a, b), Point::from((3.5, -3.0)));
+        assert_eq!(relative_delta(b, b), Point::from((0.0, 0.0)));
     }
 }

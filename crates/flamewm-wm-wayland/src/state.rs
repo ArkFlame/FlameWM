@@ -382,6 +382,9 @@ pub struct State {
     pub focused: Option<WindowId>,
     pub shortcuts: Shortcuts,
     pub pointer: Point<f64, Logical>,
+    /// Last position a backend reported. Equals `pointer` unless a pointer lock keeps the cursor
+    /// still; relative motion is measured from here so locked deltas are not lost or doubled.
+    pub raw_pointer: Point<f64, Logical>,
     /// What clients asked the pointer to show (`wl_pointer.set_cursor`, `XWayland` included).
     pub cursor_status: CursorImageStatus,
     /// Session xcursor theme and the cursors decoded from it.
@@ -468,6 +471,7 @@ impl State {
         let data_device = DataDeviceState::new::<State>(&display);
         let compat = crate::compat::CompatState::new(&display);
         let _viewporter = ViewporterState::new::<State>(&display);
+        crate::handlers::init_pointer_protocols(&display);
         crate::presentation_scale::init(&display);
         let foreign_toplevels = ForeignToplevelListState::new::<State>(&display);
         let xwayland_shell = XWaylandShellState::new::<State>(&display);
@@ -523,6 +527,7 @@ impl State {
             foreign_toplevel_handles: HashMap::new(),
             shortcuts,
             pointer: Point::from((0.0, 0.0)),
+            raw_pointer: Point::from((0.0, 0.0)),
             cursor_status: CursorImageStatus::default_named(),
             cursors: crate::cursor::Cursors::from_env(),
             decorations: RefCell::default(),

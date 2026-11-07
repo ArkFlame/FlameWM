@@ -6,6 +6,8 @@ use smithay::delegate_compositor;
 use smithay::delegate_data_device;
 use smithay::delegate_layer_shell;
 use smithay::delegate_output;
+use smithay::delegate_pointer_constraints;
+use smithay::delegate_relative_pointer;
 use smithay::delegate_seat;
 use smithay::delegate_session_lock;
 use smithay::delegate_shm;
@@ -15,13 +17,13 @@ use smithay::delegate_xdg_shell;
 use smithay::desktop::{
     LayerSurface as DesktopLayer, PopupKind, WindowSurfaceType, layer_map_for_output,
 };
-use smithay::input::pointer::CursorImageStatus;
+use smithay::input::pointer::{CursorImageStatus, PointerHandle};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1;
 use smithay::reexports::wayland_server::protocol::{
     wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface,
 };
-use smithay::reexports::wayland_server::{Client, Resource};
+use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource};
 use smithay::utils::Serial;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
@@ -32,6 +34,10 @@ use smithay::wayland::foreign_toplevel_list::{
     ForeignToplevelListHandler, ForeignToplevelListState,
 };
 use smithay::wayland::output::OutputHandler;
+use smithay::wayland::pointer_constraints::{
+    PointerConstraintsHandler, PointerConstraintsState, with_pointer_constraint,
+};
+use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
     set_data_device_focus,
@@ -428,6 +434,40 @@ impl SeatHandler for State {
 }
 
 delegate_seat!(State);
+
+impl PointerConstraintsHandler for State {
+    fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
+        // A constraint created on the focused surface takes effect at once; its region is checked
+        // on the next motion, when the compositor syncs constraints with the pointer position.
+        if pointer.current_focus().as_ref() != Some(surface) {
+            return;
+        }
+        with_pointer_constraint(surface, pointer, |c| {
+            if let Some(c) = c.filter(|c| !c.is_active()) {
+                c.activate();
+            }
+        });
+    }
+
+    fn cursor_position_hint(
+        &mut self,
+        _surface: &WlSurface,
+        _pointer: &PointerHandle<Self>,
+        _location: smithay::utils::Point<f64, smithay::utils::Logical>,
+    ) {
+        // Warping the cursor to the hint on unlock is not implemented; the cursor stays put.
+    }
+}
+
+delegate_pointer_constraints!(State);
+delegate_relative_pointer!(State);
+
+/// Registers `zwp_pointer_constraints_v1` and `zwp_relative_pointer_manager_v1`. Both managers only
+/// own their globals, so they are not kept.
+pub(crate) fn init_pointer_protocols(display: &DisplayHandle) {
+    let _constraints = PointerConstraintsState::new::<State>(display);
+    let _relative = RelativePointerManagerState::new::<State>(display);
+}
 
 impl SelectionHandler for State {
     type SelectionUserData = ();
