@@ -122,7 +122,6 @@ const BORDER: u32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME.border.0
 
 /// Keep one premultiplied ARGB bitmap per managed window. No raster work or allocations on
 /// steady-state frames: rebuilding happens only on resize/focus/hover/title changes.
-
 fn surface_elements(
     renderer: &mut GlowRenderer,
     surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -146,7 +145,6 @@ fn surface_elements(
 /// Front-to-back element list: Smithay draws the first element on top. Input consumes the same
 /// `scene::front_to_back` traversal, so every surface that can visually cover another is tested
 /// before the covered owner receives pointer input.
-
 pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
     use crate::scene::SceneItem;
 
@@ -206,7 +204,7 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                 }
             }
             SceneItem::Popup { surface, origin } => {
-                out.extend(surface_elements(renderer, &surface, origin.x, origin.y))
+                out.extend(surface_elements(renderer, &surface, origin.x, origin.y));
             }
             SceneItem::Managed(id) => {
                 let Some(managed) = state.model.get(id).cloned() else {
@@ -333,6 +331,8 @@ fn render_into(
     state: &mut State,
     backend: &mut WinitGraphicsBackend<GlowRenderer>,
 ) -> Result<(), Box<dyn Error>> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static BUFFER_AGE_REFUSED: AtomicBool = AtomicBool::new(false);
     let size = backend.window_size();
     refresh_desktop_backdrop(state, backend.renderer(), size)?;
     // While locked, the lock client owns the screen: painting the desktop behind it would put
@@ -370,8 +370,6 @@ fn render_into(
     // Measured: the nested winit EGL surface answers EGL_BAD_SURFACE to every BUFFER_AGE query
     // (smithay logs one ERROR per frame, gdb: render_into -> WinitGraphicsBackend::buffer_age).
     // The refusal is a driver property, so latch it and repaint in full instead of re-asking.
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static BUFFER_AGE_REFUSED: AtomicBool = AtomicBool::new(false);
     let age = if BUFFER_AGE_REFUSED.load(Ordering::Relaxed) {
         0
     } else {
@@ -807,6 +805,9 @@ mod decoration_tests {
 
     #[test]
     fn proportional_title_renders_unicode_inside_the_title_region_only() {
+        let _guard = GLASS_STATICS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let width = 320;
         let blank = chrome_pixels(width, true, Mode::Normal, None, "");
         let titled = chrome_pixels(
@@ -1183,13 +1184,17 @@ mod surface_backdrop_tests {
         let width = 4;
         let top = vec![0u8; width * 4 * 4];
         let bottom = vec![200u8; width * 4 * 4];
-        let mut stored = vec![0u8; 1 * 2 * 4];
+        let mut stored = vec![0u8; 2 * 4];
         downscale_strip(&top, (width, 0, 4), &mut stored, (1, 2));
         downscale_strip(&bottom, (width, 4, 4), &mut stored, (1, 2));
         assert_eq!(&stored[0..4], &[0, 0, 0, 0]);
         assert_eq!(&stored[4..8], &[200, 200, 200, 200]);
     }
 }
+
+/// Serializes tests that mutate or compare frames against the process-wide glass statics.
+#[cfg(test)]
+static GLASS_STATICS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod flat_default_tests {
@@ -1198,6 +1203,9 @@ mod flat_default_tests {
     /// Process-wide statics: this test restores the flat default it changes.
     #[test]
     fn flat_glass_commits_opaque_fill_and_no_desktop_blur() {
+        let _guard = GLASS_STATICS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         set_glass_fill(0x0017_2135, 255, 0, true);
         assert!(glass_flat());
         assert_eq!(titlebar_fill(), (0x0017_2135, 255));
