@@ -53,6 +53,8 @@ struct NotificationHost {
     center_view: notification_center::CenterView,
     /// History revision the center was last projected from; `None` forces a projection.
     center_revision: Option<u64>,
+    /// Active notification ids the center was last projected with; toast expiry changes them.
+    center_active: Vec<u32>,
     /// Set when an outside press closed the centre; consumes the same click's opener release.
     closed_by_press: Option<Instant>,
     /// Loads toast icons by theme name; spawned on the first named icon.
@@ -146,6 +148,7 @@ impl NotificationHost {
             center_open: false,
             center_view: notification_center::CenterView::default(),
             center_revision: None,
+            center_active: Vec::new(),
             closed_by_press: None,
             icons: None,
             icon_root,
@@ -294,6 +297,39 @@ impl NotificationHost {
                     self.provider.remove_history_entry(seq);
                 }
             }
+            Command::InvokeItemAction {
+                group,
+                item,
+                action,
+            } => {
+                let target = self
+                    .center_view
+                    .groups
+                    .get(group)
+                    .and_then(|group| group.items.get(item))
+                    .and_then(|item| {
+                        item.actions
+                            .get(action)
+                            .map(|action| (item.seq, item.notification_id, action.key.clone()))
+                    });
+                if let Some((seq, id, key)) = target {
+                    match self.provider.invoke_action(id, &key) {
+                        // The invoke emits ActionInvoked and closes the toast; the row closes too.
+                        Ok(true) => {
+                            self.provider.remove_history_entry(seq);
+                            if let Err(error) = self.tick(runtime, None) {
+                                eprintln!("flamewm-shell: notification update failed: {error}");
+                            }
+                        }
+                        Ok(false) => {
+                            eprintln!("flamewm-shell: notification {id} is no longer active");
+                        }
+                        Err(error) => {
+                            eprintln!("flamewm-shell: notification action failed: {}", error.message);
+                        }
+                    }
+                }
+            }
         }
         self.center_revision = None;
         if let Err(error) = self.refresh_center(runtime) {
@@ -307,10 +343,12 @@ impl NotificationHost {
             return Ok(());
         }
         let revision = self.provider.history().revision();
-        if self.center_revision == Some(revision) {
+        let active: Vec<u32> = self.provider.active().iter().map(|active| active.id).collect();
+        if self.center_revision == Some(revision) && self.center_active == active {
             return Ok(());
         }
-        let view = notification_center::view(self.provider.history());
+        let mut view = notification_center::view(self.provider.history());
+        notification_center::hide_inactive_actions(&mut view, |id| active.contains(&id));
         let nodes = notification_center::nodes(&view);
         runtime
             .with_document(self.center, |document| {
@@ -329,6 +367,7 @@ impl NotificationHost {
             .map_err(|error| format!("project notification center: {error:?}"))?;
         self.center_view = view;
         self.center_revision = Some(revision);
+        self.center_active = active;
         Ok(())
     }
 

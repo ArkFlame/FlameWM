@@ -111,3 +111,40 @@ Harness: `/tmp/claude-1000/fw-p2/` (display `:88`, WM only). Probes: `probe_p2.p
   - Layout: 14px parent-padding inset fixed in CSS (left/right/top 0); verified by screenshot.
   - Not done: center-row action buttons (item 3). Absolute `image-path` files are not decoded (name-based icon lookup only). Long body does not wrap.
   - Processes: all harness PIDs (Xvfb :87, dbus, flamewm, shell, desktop, dbus-monitor) killed by verified cmdline; none remaining.
+
+- Results: NC (CODER, notifications; not committed; live verification NOT run).
+  - Checks (actual exits): `CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-nc CARGO_BUILD_JOBS=3 cargo test -p flamewm-shell -p flamewm-integrations-linux -p flamewm-ui-core -p flamewm-skin` exit 0; 571 + 262 + 104 + 38 + 16 + others passed, 0 failed, 0 `warning:` lines. Log: `/tmp/claude-1000/nc-test1.log`.
+  - Done: (1) center rows show up to 2 client action buttons (`nc-item-G-I-action-K`, `#ffffff1f` like `.nc-clear`, no new colours, no shell_tones change); click invokes `provider.invoke_action` (ActionInvoked, then close) and removes the row; buttons hidden once the toast is gone. (2) absolute PNG `image-path` (plain path or `file://`), regular file <=1 MiB, IHDR edge <=512, decoded via `flamewm_image_core::png`, downscaled once by `downscale_to_icon`; falls back to named icon. (3) toast body `white-space:normal`, `max-height:32px` (2 lines at 12px/1.3).
+  - Changed: `crates/flamewm-integrations-linux/src/notifications.rs`, `crates/flamewm-shell/src/notification_center.rs`, `crates/flamewm-shell/src/main.rs` (out of listed scope: the host owns the provider call), `ui/shell/notification-center.html`, `ui/shell/flamewm.css`.
+  - Not verified: live Xvfb run, screenshots, dbus-monitor, body wrap rendering, center button click. No `cargo clippy` run.
+  - Risks: center action visibility updates only when history revision changes, so a toast expiring while the center is open keeps its buttons until the next change; a click then returns "no longer active" and does nothing.
+
+### Results: LK (leak soak, partial, not accepted)
+- Build: cold `cargo build -p flamewm-wm -p flamewm-shell -p flamewm-desktop --bins` with CARGO_TARGET_DIR=target-swarm-lk, CARGO_BUILD_JOBS=3, exit 0, 2m43s.
+- Run: Xvfb :90, flamewm and flamewm-desktop up. flamewm-shell exited (GetShellBootstrap: com.arkflame.FlameWM1 not provided, needs session service). Soak reached cycle 30 of 60, then timed out. Quick-control popup not exercised (no trigger identified).
+- Samples (RSS kB / PSS kB / fd): wm start 29592/20187/25, mid(30) 29592/20093/25; desk start 36672/26886/18, mid 36480/26574/18. No end sample.
+- Slope: not established (one mid point). No fd growth observed. No fix made.
+- Rerun (supersedes partial above): Xvfb :91, wm+shell+desktop started with staged delays (3 s/2 s) as in fw-nf start.sh. 40 cycles (xterm open/close 0.25 s + dbus Notify with 5 s cap), elapsed 10.2 s, notify_errors 0. Popup: no trigger/flamewm-ctl present, not exercised.
+  - wm: RSS 29896 -> 29896 kB, PSS 20064 -> 20062, fd 27 -> 27 (slope ~0).
+  - shell: RSS 31500 -> 31604 kB (one-time +1.1 MB at start, flat start->mid->end at 31604), PSS 21730 -> 21834, fd 18 -> 18.
+  - desk: RSS 36232 -> 36232 kB, PSS 26157 -> 26153, fd 18 -> 19 (+1, single sample; not a trend).
+  - Under 2 MB threshold; no real growth; no fix made. Single run, not statistically established.
+
+### Results: ST (CODER, startup first-window latency)
+- Culprit: the titlebar backdrop canvas (`crates/flamewm-wm-x11/src/frame/titlebar_backdrop.rs`). The first managed frame's chrome paint built the wallpaper canvas (decode, compose, blur) synchronously on the WM event loop. The cache under `$XDG_CACHE_HOME` is empty on a cold start, so the first window waited on that build. The WM's own catalog scan (`wm.startup.catalog`, about 22-33 ms) and the audio helper (`PulseAudio not ready after 2s`, helper process) are not on the critical path.
+- Fix: canvas build moved to a `flamewm-titlebar-canvas` worker. The first paint is flat until the canvas is stored, then the worker wakes the reactor (`runtime.rs` wake pair), and `wm/paint.rs::refresh_titlebar_backdrop` repaints chrome once per ready canvas (called after dispatch in `wm/event_loop.rs`). Stale keys are dropped; a failed worker spawn falls back to flat.
+- Probe: `scratchpad/st/run.sh <tag>` (Xvfb `:87`, `timeout 15` WM with `FLAMEWM_PROFILE=1`, Xlib client mapping at t=0, debug binary `target-swarm-st/debug/flamewm`).
+  - BEFORE (base3/base4): client managed and viewable at 3.08 s. WM log `wm.resize.motion.drain max_wall=2938-3061 ms`, `wm.chrome.backdrop.canvas` on the loop.
+  - AFTER (after1/after2): managed and viewable at 0.17 s. `wm.loop max_wall=15.33 ms`, `wm.resize.motion.drain max_wall=25.92 ms`, canvas CPU (`3638 ms`) on the worker.
+  - Repaint check (after4): titlebar mid-row at map time `distinct=1` (flat `1c1c1c`), 4 s later `distinct=5` (translucent, `332838ff`).
+- Tests: `cargo test -p flamewm-wm-x11 -p flamewm-wm` exit 0 (16 + 20 + 544 passed, 0 failed), 0 `warning` lines. New tests: `cold_image_titlebar_paints_flat_and_leaves_the_canvas_to_a_worker`, `worker_result_is_stored_once_and_a_stale_key_is_dropped`.
+- Not run: the `/tmp/claude-1000/fw-wf/run.sh` harness itself (display `:88` is held by another WM, pid 2709987; not killed). Probe used `:87` with a single client, not the 10-window `probe.py` suite. Release build not measured.
+- Risk: the first window's titlebar is flat for the cold canvas build (about 3.6 s CPU in debug, on a worker), then repaints. Wallpaper change rebuilds the canvas off-loop, so the old flat/canvas state shows for that period.
+  - NC live addendum (Xvfb :89, harness `/tmp/claude-1000/fw-nf2`, fresh binaries from `target-swarm-nc`): VERIFIED.
+    - Toast `nc-toast.png`: image-path PNG icon top-right; long body wraps to 2 lines; Reply/Later row below, no overlap.
+    - Center `nc-center3.png`: action buttons labelled; empty slots hidden; inactive (pre-restart) row has no buttons.
+    - Click Reply on live row: `dbus-monitor` shows `ActionInvoked uint32 3 "reply"` then `NotificationClosed 3 reason 2`; row removed (`nc-verify-pair.png`).
+    - Stale-button fix: timed notification with actions in open center; after expiry buttons are gone (`nc-stale-fixed-crop.png`).
+    - Defect found and fixed live: empty action button made `set_text` fail ("node has no text child"), aborting the whole center projection. Fixed by a zero-width text child plus a regression test. Both the log and screenshots confirmed it.
+    - Engine risk (outside scope, not fixed): a leaf `visible(false)` under a visible row did not repaint. Worked around by toggling a per-row `nc-item-G-I-actions` wrapper.
+    - Processes: all own PIDs killed (verified by cmdline and `/proc` check). Logs: `/tmp/claude-1000/fw-nf2/`.

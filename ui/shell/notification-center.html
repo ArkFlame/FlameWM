@@ -25,6 +25,8 @@
     .nc-item-body { display:block; font-size:12px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .nc-item-dismiss { position:absolute; right:-28px; top:6px; width:22px; height:22px; padding:0px; background:transparent; border-width:0px; border-radius:999px; }
     .nc-item-dismiss .symbolic-icon { width:14px; height:14px; }
+    .nc-item-actions { display:flex; flex-direction:row; align-items:center; gap:6px; }
+    .nc-item-action { height:24px; padding:0px 10px; display:flex; align-items:center; justify-content:center; background:#ffffff1f; border-width:0px; border-radius:999px; font-size:12px; font-weight:600; color:var(--text); }
   </style>
 </head>
 <body class="popup-body">
@@ -47,16 +49,19 @@
         <div id="nc-item-1-1" class="nc-item">
           <span id="nc-item-1-1-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-1-1-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-1-1-actions" class="nc-item-actions"><button id="nc-item-1-1-action-1" class="nc-item-action" data-action="notification.center.item.1.1.action.1">&#8203;</button><button id="nc-item-1-1-action-2" class="nc-item-action" data-action="notification.center.item.1.1.action.2">&#8203;</button></div>
           <button id="nc-item-1-1-dismiss" class="nc-item-dismiss" data-action="notification.center.item.1.1.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <div id="nc-item-1-2" class="nc-item">
           <span id="nc-item-1-2-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-1-2-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-1-2-actions" class="nc-item-actions"><button id="nc-item-1-2-action-1" class="nc-item-action" data-action="notification.center.item.1.2.action.1">&#8203;</button><button id="nc-item-1-2-action-2" class="nc-item-action" data-action="notification.center.item.1.2.action.2">&#8203;</button></div>
           <button id="nc-item-1-2-dismiss" class="nc-item-dismiss" data-action="notification.center.item.1.2.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <div id="nc-item-1-3" class="nc-item">
           <span id="nc-item-1-3-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-1-3-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-1-3-actions" class="nc-item-actions"><button id="nc-item-1-3-action-1" class="nc-item-action" data-action="notification.center.item.1.3.action.1">&#8203;</button><button id="nc-item-1-3-action-2" class="nc-item-action" data-action="notification.center.item.1.3.action.2">&#8203;</button></div>
           <button id="nc-item-1-3-dismiss" class="nc-item-dismiss" data-action="notification.center.item.1.3.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <span id="nc-group-1-more" class="nc-group-count">&#8203;</span>
@@ -70,16 +75,19 @@
         <div id="nc-item-2-1" class="nc-item">
           <span id="nc-item-2-1-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-2-1-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-2-1-actions" class="nc-item-actions"><button id="nc-item-2-1-action-1" class="nc-item-action" data-action="notification.center.item.2.1.action.1">&#8203;</button><button id="nc-item-2-1-action-2" class="nc-item-action" data-action="notification.center.item.2.1.action.2">&#8203;</button></div>
           <button id="nc-item-2-1-dismiss" class="nc-item-dismiss" data-action="notification.center.item.2.1.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <div id="nc-item-2-2" class="nc-item">
           <span id="nc-item-2-2-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-2-2-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-2-2-actions" class="nc-item-actions"><button id="nc-item-2-2-action-1" class="nc-item-action" data-action="notification.center.item.2.2.action.1">&#8203;</button><button id="nc-item-2-2-action-2" class="nc-item-action" data-action="notification.center.item.2.2.action.2">&#8203;</button></div>
           <button id="nc-item-2-2-dismiss" class="nc-item-dismiss" data-action="notification.center.item.2.2.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <div id="nc-item-2-3" class="nc-item">
           <span id="nc-item-2-3-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-2-3-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-2-3-actions" class="nc-item-actions"><button id="nc-item-2-3-action-1" class="nc-item-action" data-action="notification.center.item.2.3.action.1">&#8203;</button><button id="nc-item-2-3-action-2" class="nc-item-action" data-action="notification.center.item.2.3.action.2">&#8203;</button></div>
           <button id="nc-item-2-3-dismiss" class="nc-item-dismiss" data-action="notification.center.item.2.3.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <span id="nc-group-2-more" class="nc-group-count">&#8203;</span>
@@ -93,16 +101,19 @@
         <div id="nc-item-3-1" class="nc-item">
           <span id="nc-item-3-1-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-3-1-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-3-1-actions" class="nc-item-actions"><button id="nc-item-3-1-action-1" class="nc-item-action" data-action="notification.center.item.3.1.action.1">&#8203;</button><button id="nc-item-3-1-action-2" class="nc-item-action" data-action="notification.center.item.3.1.action.2">&#8203;</button></div>
           <button id="nc-item-3-1-dismiss" class="nc-item-dismiss" data-action="notification.center.item.3.1.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <div id="nc-item-3-2" class="nc-item">
           <span id="nc-item-3-2-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-3-2-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-3-2-actions" class="nc-item-actions"><button id="nc-item-3-2-action-1" class="nc-item-action" data-action="notification.center.item.3.2.action.1">&#8203;</button><button id="nc-item-3-2-action-2" class="nc-item-action" data-action="notification.center.item.3.2.action.2">&#8203;</button></div>
           <button id="nc-item-3-2-dismiss" class="nc-item-dismiss" data-action="notification.center.item.3.2.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <div id="nc-item-3-3" class="nc-item">
           <span id="nc-item-3-3-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-3-3-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-3-3-actions" class="nc-item-actions"><button id="nc-item-3-3-action-1" class="nc-item-action" data-action="notification.center.item.3.3.action.1">&#8203;</button><button id="nc-item-3-3-action-2" class="nc-item-action" data-action="notification.center.item.3.3.action.2">&#8203;</button></div>
           <button id="nc-item-3-3-dismiss" class="nc-item-dismiss" data-action="notification.center.item.3.3.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <span id="nc-group-3-more" class="nc-group-count">&#8203;</span>
@@ -116,16 +127,19 @@
         <div id="nc-item-4-1" class="nc-item">
           <span id="nc-item-4-1-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-4-1-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-4-1-actions" class="nc-item-actions"><button id="nc-item-4-1-action-1" class="nc-item-action" data-action="notification.center.item.4.1.action.1">&#8203;</button><button id="nc-item-4-1-action-2" class="nc-item-action" data-action="notification.center.item.4.1.action.2">&#8203;</button></div>
           <button id="nc-item-4-1-dismiss" class="nc-item-dismiss" data-action="notification.center.item.4.1.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <div id="nc-item-4-2" class="nc-item">
           <span id="nc-item-4-2-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-4-2-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-4-2-actions" class="nc-item-actions"><button id="nc-item-4-2-action-1" class="nc-item-action" data-action="notification.center.item.4.2.action.1">&#8203;</button><button id="nc-item-4-2-action-2" class="nc-item-action" data-action="notification.center.item.4.2.action.2">&#8203;</button></div>
           <button id="nc-item-4-2-dismiss" class="nc-item-dismiss" data-action="notification.center.item.4.2.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <div id="nc-item-4-3" class="nc-item">
           <span id="nc-item-4-3-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-4-3-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-4-3-actions" class="nc-item-actions"><button id="nc-item-4-3-action-1" class="nc-item-action" data-action="notification.center.item.4.3.action.1">&#8203;</button><button id="nc-item-4-3-action-2" class="nc-item-action" data-action="notification.center.item.4.3.action.2">&#8203;</button></div>
           <button id="nc-item-4-3-dismiss" class="nc-item-dismiss" data-action="notification.center.item.4.3.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <span id="nc-group-4-more" class="nc-group-count">&#8203;</span>
@@ -139,16 +153,19 @@
         <div id="nc-item-5-1" class="nc-item">
           <span id="nc-item-5-1-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-5-1-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-5-1-actions" class="nc-item-actions"><button id="nc-item-5-1-action-1" class="nc-item-action" data-action="notification.center.item.5.1.action.1">&#8203;</button><button id="nc-item-5-1-action-2" class="nc-item-action" data-action="notification.center.item.5.1.action.2">&#8203;</button></div>
           <button id="nc-item-5-1-dismiss" class="nc-item-dismiss" data-action="notification.center.item.5.1.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <div id="nc-item-5-2" class="nc-item">
           <span id="nc-item-5-2-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-5-2-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-5-2-actions" class="nc-item-actions"><button id="nc-item-5-2-action-1" class="nc-item-action" data-action="notification.center.item.5.2.action.1">&#8203;</button><button id="nc-item-5-2-action-2" class="nc-item-action" data-action="notification.center.item.5.2.action.2">&#8203;</button></div>
           <button id="nc-item-5-2-dismiss" class="nc-item-dismiss" data-action="notification.center.item.5.2.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <div id="nc-item-5-3" class="nc-item">
           <span id="nc-item-5-3-summary" class="nc-item-summary">&#8203;</span>
           <span id="nc-item-5-3-body" class="nc-item-body">&#8203;</span>
+          <div id="nc-item-5-3-actions" class="nc-item-actions"><button id="nc-item-5-3-action-1" class="nc-item-action" data-action="notification.center.item.5.3.action.1">&#8203;</button><button id="nc-item-5-3-action-2" class="nc-item-action" data-action="notification.center.item.5.3.action.2">&#8203;</button></div>
           <button id="nc-item-5-3-dismiss" class="nc-item-dismiss" data-action="notification.center.item.5.3.dismiss" aria-label="Dismiss">&#215;</button>
         </div>
         <span id="nc-group-5-more" class="nc-group-count">&#8203;</span>

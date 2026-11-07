@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
+use std::io::Read;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -34,6 +35,8 @@ pub const DEFAULT_ACTION_KEY: &str = "default";
 /// Image hints above these caps are ignored before any pixel data is decoded.
 const MAX_IMAGE_EDGE: i32 = 512;
 const MAX_IMAGE_BYTES: usize = 1024 * 1024;
+/// Largest PNG file read for an absolute `image-path`; the same edge cap as `image-data`.
+const MAX_IMAGE_PATH_BYTES: u64 = 1024 * 1024;
 /// Largest edge of a decoded notification icon; larger images are downscaled once on receipt.
 pub const NOTIFICATION_ICON_EDGE: u32 = 48;
 
@@ -521,6 +524,10 @@ fn notify(
         };
         id
     };
+    let image = parsed
+        .image
+        .clone()
+        .or_else(|| parsed.image_path.as_deref().and_then(image_path_hint));
     let view = NotificationView {
         id,
         app_name: app_name.clone(),
@@ -530,8 +537,8 @@ fn notify(
         progress: parsed.progress,
         actions,
         default_action,
-        image: parsed.image.clone(),
-        icon_name: if parsed.image.is_some() {
+        image: image.clone(),
+        icon_name: if image.is_some() {
             None
         } else {
             icon_name_for(&parsed, app_icon)
@@ -903,6 +910,63 @@ pub fn downscale_to_icon(
     })
 }
 
+/// Decodes an absolute PNG `image-path` (plain path or `file://` URI) into a toast icon. The file
+/// must be a regular file within `MAX_IMAGE_PATH_BYTES`, and its IHDR edges must fit
+/// `MAX_IMAGE_EDGE`, before pixels are decoded. The result is downscaled once, as `image-data` is.
+/// Anything else returns `None`, and the named-icon fallback applies.
+fn image_path_hint(reference: &str) -> Option<NotificationImage> {
+    let reference = reference.trim();
+    let path = match reference.strip_prefix("file://") {
+        Some(rest) => percent_decode(rest)?,
+        None => reference.to_owned(),
+    };
+    if !path.starts_with('/') || !path.to_ascii_lowercase().ends_with(".png") {
+        return None;
+    }
+    let metadata = std::fs::metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_IMAGE_PATH_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path)
+        .ok()?
+        .take(MAX_IMAGE_PATH_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if u64::try_from(bytes.len()).ok()? > MAX_IMAGE_PATH_BYTES {
+        return None;
+    }
+    // A PNG's IHDR carries big-endian width and height at offsets 16 and 20.
+    let header = bytes.get(16..24)?;
+    let width = u32::from_be_bytes(header[..4].try_into().ok()?);
+    let height = u32::from_be_bytes(header[4..].try_into().ok()?);
+    if width == 0 || height == 0 || i64::from(width.max(height)) > i64::from(MAX_IMAGE_EDGE) {
+        return None;
+    }
+    let decoded = flamewm_image_core::png::decode(&bytes).ok()?;
+    let stride = usize::try_from(decoded.width).ok()?.checked_mul(4)?;
+    downscale_to_icon(decoded.width, decoded.height, 4, stride, &decoded.pixels)
+}
+
+/// Decodes `%XX` escapes of a `file://` URI path. Malformed escapes or non-UTF-8 results are
+/// rejected.
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// Icon-theme names are plain names; absolute paths and URIs are not decoded here.
 fn icon_name_hint(name: &str) -> Option<String> {
     let name = name.trim();
@@ -1043,6 +1107,77 @@ mod tests {
             ..base.clone()
         };
         assert_eq!(icon_name_for(&absolute, "mail").as_deref(), Some("mail"));
+    }
+
+    /// Stored-deflate RGBA PNG whose pixels are all opaque grey, for `image-path` tests.
+    fn png_fixture(width: u32, height: u32) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = 0xffff_ffffu32;
+            for byte in bytes {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xedb8_8320 & (crc & 1).wrapping_neg());
+                }
+            }
+            !crc
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            let mut body = kind.to_vec();
+            body.extend_from_slice(data);
+            out.extend_from_slice(&body);
+            out.extend_from_slice(&crc32(&body).to_be_bytes());
+        }
+        let mut raw = Vec::new();
+        for _ in 0..height {
+            raw.push(0);
+            raw.extend(std::iter::repeat_n(0x80u8, width as usize * 4));
+        }
+        let mut encoder = flate2::write::ZlibEncoder::new(
+            Vec::new(),
+            flate2::Compression::none(),
+        );
+        std::io::Write::write_all(&mut encoder, &raw).unwrap();
+        let idat = encoder.finish().unwrap();
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        chunk(&mut out, b"IHDR", &ihdr);
+        chunk(&mut out, b"IDAT", &idat);
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    #[test]
+    fn image_path_decodes_a_bounded_png_downscaled_once() {
+        let dir = std::env::temp_dir().join(format!("flamewm-nf-image-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wide = dir.join("wide.png");
+        std::fs::write(&wide, png_fixture(96, 2)).unwrap();
+        let image = image_path_hint(wide.to_str().unwrap()).expect("96x2 png decodes");
+        assert_eq!((image.width, image.height), (48, 1), "one step of 2 per axis");
+        assert_eq!(image.rgba.len(), 48 * 4);
+        assert!(image_path_hint(&format!("file://{}", wide.display())).is_some());
+        assert!(image_path_hint("camera-photo").is_none(), "names use the icon theme");
+        assert!(image_path_hint("relative/x.png").is_none());
+        assert!(image_path_hint("/dev/null").is_none(), "only regular files are read");
+        assert!(image_path_hint(dir.join("missing.png").to_str().unwrap()).is_none());
+        let text = dir.join("text.png");
+        std::fs::write(&text, b"plain text that is not a png file at all").unwrap();
+        assert!(image_path_hint(text.to_str().unwrap()).is_none());
+        let too_wide = dir.join("too-wide.png");
+        std::fs::write(&too_wide, png_fixture(513, 1)).unwrap();
+        assert!(image_path_hint(too_wide.to_str().unwrap()).is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn percent_decode_handles_file_uri_escapes() {
+        assert_eq!(percent_decode("/a%20b/c.png").as_deref(), Some("/a b/c.png"));
+        assert_eq!(percent_decode("/a%2"), None);
+        assert_eq!(percent_decode("/a%zz"), None);
     }
 
     #[test]

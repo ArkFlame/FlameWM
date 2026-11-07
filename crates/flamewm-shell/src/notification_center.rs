@@ -6,6 +6,7 @@
 use std::time::{Duration, Instant};
 
 use flamewm_integrations_linux::notification_history::NotificationHistory;
+use flamewm_integrations_linux::notifications::NotificationAction;
 
 /// Action the panel status cluster dispatches to toggle the center.
 pub const OPEN_ACTION: &str = "notification.center.open";
@@ -41,6 +42,8 @@ pub fn is_escape_key(action: &str, text: Option<&str>) -> bool {
 /// Fixed template slots. Extra groups and items are counted, not shown.
 pub const MAX_GROUP_SLOTS: usize = 5;
 pub const MAX_ITEM_SLOTS: usize = 3;
+/// Action buttons per item row. Clients may send more; the extra actions are not offered here.
+pub const MAX_ITEM_ACTION_SLOTS: usize = 2;
 const MAX_TEXT_CHARS: usize = 160;
 
 /// A user command from the center surface. Indices are zero-based slots in the last projection.
@@ -50,6 +53,7 @@ pub enum Command {
     ToggleDnd,
     ToggleGroupMute(usize),
     DismissItem { group: usize, item: usize },
+    InvokeItemAction { group: usize, item: usize, action: usize },
 }
 
 impl Command {
@@ -69,6 +73,11 @@ impl Command {
                 group: slot(group, MAX_GROUP_SLOTS)?,
                 item: slot(item, MAX_ITEM_SLOTS)?,
             }),
+            ["item", group, item, "action", action] => Some(Self::InvokeItemAction {
+                group: slot(group, MAX_GROUP_SLOTS)?,
+                item: slot(item, MAX_ITEM_SLOTS)?,
+                action: slot(action, MAX_ITEM_ACTION_SLOTS)?,
+            }),
             _ => None,
         }
     }
@@ -82,8 +91,12 @@ fn slot(text: &str, slots: usize) -> Option<usize> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CenterItem {
     pub seq: u64,
+    /// D-Bus id of the notification; only meaningful while that notification is active.
+    pub notification_id: u32,
     pub summary: String,
     pub body: String,
+    /// Client actions, at most [`MAX_ITEM_ACTION_SLOTS`]. Empty once the toast is gone.
+    pub actions: Vec<NotificationAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,8 +133,16 @@ pub fn view(history: &NotificationHistory) -> CenterView {
                         .find(|entry| entry.seq == *seq)
                         .map(|entry| CenterItem {
                             seq: entry.seq,
+                            notification_id: entry.view.id,
                             summary: clip(&entry.view.summary),
                             body: clip(&entry.view.body),
+                            actions: entry
+                                .view
+                                .actions
+                                .iter()
+                                .take(MAX_ITEM_ACTION_SLOTS)
+                                .cloned()
+                                .collect(),
                         })
                 })
                 .collect();
@@ -136,6 +157,16 @@ pub fn view(history: &NotificationHistory) -> CenterView {
     CenterView {
         dnd: history.dnd(),
         groups,
+    }
+}
+
+/// Drops action buttons of items whose notification is no longer active, since the client can
+/// no longer be answered for them.
+pub fn hide_inactive_actions(view: &mut CenterView, is_active: impl Fn(u32) -> bool) {
+    for item in view.groups.iter_mut().flat_map(|group| group.items.iter_mut()) {
+        if !is_active(item.notification_id) {
+            item.actions.clear();
+        }
     }
 }
 
@@ -192,6 +223,18 @@ pub fn nodes(view: &CenterView) -> Vec<Node> {
                 out.push(text(format!("{i}-summary"), item.summary.clone()));
                 out.push(text(format!("{i}-body"), item.body.clone()));
             }
+            // The row wrapper is toggled as a whole: a leaf button hidden under a visible row
+            // is not repainted by the document, so the wrapper carries the transition.
+            let has_actions = item.is_some_and(|item| !item.actions.is_empty());
+            out.push(visible(format!("{i}-actions"), has_actions));
+            for action_slot in 1..=MAX_ITEM_ACTION_SLOTS {
+                let action = item.and_then(|item| item.actions.get(action_slot - 1));
+                let id = format!("{i}-action-{action_slot}");
+                out.push(visible(&id, action.is_some()));
+                if let Some(action) = action {
+                    out.push(text(&id, clip(&action.label)));
+                }
+            }
         }
         let hidden = group.count.saturating_sub(group.items.len());
         out.push(visible(format!("{g}-more"), hidden > 0));
@@ -214,7 +257,9 @@ fn clip(value: &str) -> String {
 mod tests {
     use super::*;
     use flamewm_integrations_linux::notification_history::NotificationHistory;
-    use flamewm_integrations_linux::notifications::{NotificationUrgency, NotificationView};
+    use flamewm_integrations_linux::notifications::{
+        NotificationAction, NotificationUrgency, NotificationView,
+    };
 
     const TEMPLATE: &str = include_str!("../../../ui/shell/notification-center.html");
 
@@ -254,6 +299,15 @@ mod tests {
             Command::parse("notification.center.item.5.3.dismiss"),
             Some(Command::DismissItem { group: 4, item: 2 })
         );
+        assert_eq!(
+            Command::parse("notification.center.item.2.3.action.2"),
+            Some(Command::InvokeItemAction {
+                group: 1,
+                item: 2,
+                action: 1
+            })
+        );
+        assert_eq!(Command::parse("notification.center.item.2.3.action.3"), None);
         assert_eq!(Command::parse("notification.center.group.6.mute"), None);
         assert_eq!(Command::parse("notification.center.item.1.4.dismiss"), None);
         assert_eq!(Command::parse("notification.center.group.0.mute"), None);
@@ -341,6 +395,48 @@ mod tests {
     }
 
     #[test]
+    fn action_buttons_project_and_hide_once_the_toast_is_gone() {
+        let mut history = NotificationHistory::new(10);
+        let action = |key: &str, label: &str| NotificationAction {
+            key: key.to_owned(),
+            label: label.to_owned(),
+        };
+        history.record(
+            NotificationView {
+                id: 7,
+                app_name: "chat".to_owned(),
+                summary: "hi".to_owned(),
+                body: String::new(),
+                urgency: NotificationUrgency::Normal,
+                progress: None,
+                actions: vec![
+                    action("reply", "Reply"),
+                    action("later", "Later"),
+                    action("extra", "Extra"),
+                ],
+                default_action: false,
+                image: None,
+                icon_name: None,
+            },
+            0,
+        );
+        let mut center = view(&history);
+        assert_eq!(center.groups[0].items[0].notification_id, 7);
+        assert_eq!(center.groups[0].items[0].actions.len(), MAX_ITEM_ACTION_SLOTS);
+        let projected = nodes(&center);
+        assert!(projected.contains(&text("nc-item-1-1-action-1", "Reply")));
+        assert!(projected.contains(&text("nc-item-1-1-action-2", "Later")));
+        assert!(projected.contains(&visible("nc-item-1-1-action-2", true)));
+        assert!(projected.contains(&visible("nc-item-1-1-actions", true)));
+        assert!(projected.contains(&visible("nc-item-1-2-action-1", false)));
+
+        hide_inactive_actions(&mut center, |_| false);
+        assert!(center.groups[0].items[0].actions.is_empty());
+        assert!(nodes(&center).contains(&visible("nc-item-1-1-action-1", false)));
+        assert!(nodes(&center).contains(&visible("nc-item-1-1-actions", false)));
+    }
+
+    #[test]
     fn every_projected_id_exists_in_template() {
         let mut history = NotificationHistory::new(10);
         record(&mut history, "chat", "hi");
@@ -363,6 +459,7 @@ mod tests {
             "notification.center.dnd",
             "notification.center.group.1.mute",
             "notification.center.item.1.1.dismiss",
+            "notification.center.item.1.1.action.1",
         ] {
             assert!(TEMPLATE.contains(action), "template lacks {action}");
         }
@@ -393,6 +490,22 @@ mod tests {
             assert!(body.contains("align-items:center"), "{selector}: {body}");
         }
         assert!(rule(TEMPLATE, ".nc-toggle").contains("justify-content:space-between"));
+    }
+
+    #[test]
+    fn action_buttons_carry_a_text_child_for_projection() {
+        // The document rejects text writes to an element without a text child, which would
+        // abort the whole projection. Every action button therefore carries a zero-width text.
+        for row in 1..=MAX_GROUP_SLOTS {
+            for item in 1..=MAX_ITEM_SLOTS {
+                for action in 1..=MAX_ITEM_ACTION_SLOTS {
+                    let open = format!("<button id=\"nc-item-{row}-{item}-action-{action}\"");
+                    let start = TEMPLATE.find(&open).unwrap_or_else(|| panic!("missing {open}"));
+                    let end = start + TEMPLATE[start..].find("</button>").expect("button end");
+                    assert!(TEMPLATE[start..end].ends_with("&#8203;"), "{open} has no text child");
+                }
+            }
+        }
     }
 
     #[test]
