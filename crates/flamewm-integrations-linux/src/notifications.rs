@@ -121,6 +121,9 @@ impl NotificationProvider {
                 Ok(true)
             }
             Ok(_) => {
+                eprintln!(
+                    "flamewm-notifications: org.freedesktop.Notifications is owned by another daemon; toasts are disabled"
+                );
                 self.state = ProviderState::Unavailable;
                 Ok(false)
             }

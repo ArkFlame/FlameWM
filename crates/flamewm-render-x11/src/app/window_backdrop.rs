@@ -81,6 +81,15 @@ pub(crate) fn backdrop_replacement(
     (installed != requested.as_ref()).then_some(requested)
 }
 
+/// Loop wake-up for a recapture deferred behind queued events: due at once (the loop drains the
+/// queue, then recaptures), or sooner if an earlier wake-up is already pending.
+pub(crate) fn deferred_recapture_deadline(
+    pending: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> Option<std::time::Instant> {
+    Some(pending.map_or(now, |at| at.min(now)))
+}
+
 impl WindowBackdropState {
     pub(crate) fn new(spec: WindowBackdrop) -> Self {
         Self {
@@ -151,6 +160,10 @@ impl X11App {
             .map(|b| (b.width, b.height));
         let queued = unsafe { XEventsQueued(self.display, crate::xlib::QUEUED_AFTER_READING) } > 0;
         if !recapture_due(snapshot_size, (self.width, self.height), queued) {
+            // Events are queued behind a resize. Nothing else wakes the loop once they drain, so
+            // the stale snapshot would stay until an unrelated event repaints the window.
+            let now = std::time::Instant::now();
+            self.backdrop_deadline = deferred_recapture_deadline(self.backdrop_deadline, now);
             return;
         }
         let last_live = self
@@ -438,6 +451,30 @@ mod tests {
     fn crop_replicates_the_root_edge_off_root() {
         let crop = grey_canvas().crop((-1, 1), (3, 2));
         assert_eq!(crop, [4, 4, 5, 8, 8, 9].map(grey).to_vec());
+    }
+}
+
+#[cfg(test)]
+mod deferred_recapture_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_deferred_recapture_wakes_the_loop_at_once_when_nothing_is_pending() {
+        let now = Instant::now();
+        assert_eq!(deferred_recapture_deadline(None, now), Some(now));
+    }
+
+    #[test]
+    fn a_deferred_recapture_keeps_an_earlier_pending_wake_up() {
+        let now = Instant::now();
+        let earlier = now - Duration::from_millis(5);
+        assert_eq!(
+            deferred_recapture_deadline(Some(earlier), now),
+            Some(earlier)
+        );
+        let later = now + Duration::from_millis(40);
+        assert_eq!(deferred_recapture_deadline(Some(later), now), Some(now));
     }
 }
 

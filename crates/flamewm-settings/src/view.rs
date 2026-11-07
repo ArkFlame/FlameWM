@@ -804,6 +804,17 @@ mod tests {
         assert_eq!(css_value(scroll, "overflow-y"), Some("auto"));
         assert!(HTML.contains("id=\"page-displays\" class=\"settings-page page-scroll\""));
     }
+
+    #[test]
+    fn inline_error_footer_truncates_long_messages_with_an_ellipsis() {
+        // Raw D-Bus errors are long single-line strings; without ellipsis the nowrap run spills
+        // past the window edge in the X11 renderer.
+        let footer = css_rule(CSS, ".settings-inline-error");
+        assert_eq!(css_value(footer, "white-space"), Some("nowrap"));
+        assert_eq!(css_value(footer, "overflow"), Some("hidden"));
+        assert_eq!(css_value(footer, "text-overflow"), Some("ellipsis"));
+    }
+
     #[test]
     fn every_keyboard_layout_segment_is_offered_and_dispatchable() {
         // The HTML segment list and the platform allow-list must agree: a segment with no allowed
