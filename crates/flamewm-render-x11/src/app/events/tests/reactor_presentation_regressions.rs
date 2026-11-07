@@ -132,3 +132,30 @@ fn t21_requested_window_backdrop_is_applied_in_the_reactor_turn_before_the_paint
         "a requested backdrop must be installed before the paint gate, so it repaints once with no extra wake"
     );
 }
+
+#[test]
+fn t21_settled_resize_is_delivered_on_the_reactor_turn_that_drains_the_queue() {
+    // An early-return event (foreign window, backdrop, mapping) can drain the X queue without
+    // reaching the event loop's own flush. The reactor must flush the settled size itself, and must
+    // not block on the fd while that size is still pending, or the resize waits for unrelated input.
+    let source = reactor_loop_source();
+    let flush = source
+        .find("self.flush_pending_window_resize(document, on_action)?")
+        .expect("reactor turn delivers the settled window size");
+    let gate = source
+        .find("redraw_if_dirty(document)?")
+        .expect("reactor turn keeps the retained redraw gate");
+    assert!(
+        flush < gate,
+        "the settled size must reach the explorer before the paint that shows it"
+    );
+    assert!(
+        source.contains("!self.pending_damage.is_empty() || self.pending_window_resize.is_some()"),
+        "a pending settled size must keep the reactor wait at zero timeout"
+    );
+    let events = include_str!("../../events.rs");
+    assert!(
+        !events.contains("if self.pending_window_resize.is_some()"),
+        "the flush lives in one helper, not duplicated inline"
+    );
+}

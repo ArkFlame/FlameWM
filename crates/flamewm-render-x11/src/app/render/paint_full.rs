@@ -1,11 +1,34 @@
 use super::*;
 
+/// Destination clip covering the whole window at `width` x `height` device pixels.
+pub(crate) fn window_clip_rect(width: u32, height: u32) -> XRectangle {
+    XRectangle {
+        x: 0,
+        y: 0,
+        width: width as u16,
+        height: height as u16,
+    }
+}
+
 impl X11App {
+    /// Restores the XRender destination clip to the whole current window. A region paint narrows the
+    /// clip to its own rect and resets it to the window extent of that moment; after a grow that extent
+    /// is stale, and XRender fills stop at it while Xft text does not. Every frame that fills through
+    /// XRender must start from the current window.
+    pub(crate) fn reset_destination_clip(&mut self) -> Result<(), String> {
+        let clip = window_clip_rect(self.width, self.height);
+        match self.xrender.as_mut() {
+            Some(xrender) => unsafe { xrender.set_destination_clip(clip) },
+            None => Ok(()),
+        }
+    }
+
     pub(super) unsafe fn paint_full(
         &mut self,
         document: &RuntimeDocument,
         scale: f32,
     ) -> Result<u64, String> {
+        self.reset_destination_clip()?;
         // Counts every whole-frame attempt; the `render.clear` count is the XRender frames.
         let gpu = {
             let _gpu_guard = flamewm_profiler::start("render.gpu_frame");
@@ -65,5 +88,41 @@ impl X11App {
         self.mark_full();
         unsafe { self.redraw_if_dirty(document)? };
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::window_clip_rect;
+
+    #[test]
+    fn destination_clip_covers_the_grown_window_not_the_region_extent() {
+        // Regression: a region paint at the old 1250x726 left the XRender clip there; a grown
+        // 1594x820 window must still be filled to its full extent.
+        let grown = window_clip_rect(1594, 820);
+        assert_eq!((grown.x, grown.y), (0, 0));
+        assert_eq!((grown.width, grown.height), (1594, 820));
+    }
+
+    #[test]
+    fn full_paint_resets_the_destination_clip_before_any_fill() {
+        let source = include_str!("paint_full.rs");
+        let body = &source[source
+            .find("pub(super) unsafe fn paint_full(")
+            .expect("full paint entry remains")..];
+        let reset = body
+            .find("self.reset_destination_clip()?;")
+            .expect("full paint resets the clip");
+        let first_fill = body
+            .find("paint_full_gpu")
+            .expect("full paint has a GPU/XRender fill path");
+        assert!(
+            reset < first_fill,
+            "the clip must be restored before the first XRender fill of the frame"
+        );
+        assert!(
+            include_str!("paint_region.rs").contains("self.reset_destination_clip()"),
+            "region paint and full paint share one clip reset owner"
+        );
     }
 }

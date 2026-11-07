@@ -59,18 +59,7 @@ impl X11App {
         let painted = unsafe { self.paint_region_commands(region, document, scale) };
         // Reset on every path, error or not: the clips must never leak into a later frame.
         self.region_text_clip = None;
-        let (width, height) = (self.width, self.height);
-        let reset = match self.xrender.as_mut() {
-            Some(xrender) => unsafe {
-                xrender.set_destination_clip(XRectangle {
-                    x: 0,
-                    y: 0,
-                    width: width as u16,
-                    height: height as u16,
-                })
-            },
-            None => Ok(()),
-        };
+        let reset = self.reset_destination_clip();
         let visits = painted?;
         reset?;
         unsafe { XSetClipMask(self.display, self.gc, 0) };

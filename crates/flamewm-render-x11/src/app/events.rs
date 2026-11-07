@@ -344,6 +344,44 @@ fn note_foreign_event_dropped(event: &XEvent) {
 }
 
 impl X11App {
+    /// Delivers the latest settled client size once the X queue is empty. Called from both the
+    /// event loop and the reactor turn: an early-return event (foreign window, backdrop, mapping)
+    /// can drain the queue without reaching the event loop's own check, and the reactor then blocks
+    /// until unrelated input, so the resize would otherwise stay unapplied.
+    pub(crate) unsafe fn flush_pending_window_resize<F>(
+        &mut self,
+        document: &mut RuntimeDocument,
+        on_action: &mut F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
+    {
+        if unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } > 0 {
+            return Ok(());
+        }
+        let Some((width, height)) = self.pending_window_resize.take() else {
+            return Ok(());
+        };
+        let resize = ActionEvent {
+            action: WINDOW_RESIZE_ACTION.to_string(),
+            phase: flamewm_render_core::ActionPhase::Release,
+            button: 0,
+            modifiers: 0,
+            x: width as f32,
+            y: height as f32,
+            inside: true,
+            time_ms: 0,
+            text: None,
+        };
+        on_action(&resize, document)?;
+        // The resize hand-off relayouts the document after the paint above. Repaint
+        // now, so a shrink shows the new layout (status strip) without waiting for
+        // the next event.
+        // SAFETY: the display and retained scene belong to this app's event loop.
+        unsafe { self.repaint_full(document)? };
+        Ok(())
+    }
+
     pub(crate) unsafe fn event_loop_once<F>(
         &mut self,
         document: &mut RuntimeDocument,
@@ -981,27 +1019,8 @@ impl X11App {
                 unsafe { self.redraw_if_dirty(document)? };
             }
             // Size reports coalesce: the latest settled size is delivered once the queue is empty.
-            if self.pending_window_resize.is_some()
-                && unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } <= 0
-                && let Some((width, height)) = self.pending_window_resize.take()
-            {
-                let resize = ActionEvent {
-                    action: WINDOW_RESIZE_ACTION.to_string(),
-                    phase: flamewm_render_core::ActionPhase::Release,
-                    button: 0,
-                    modifiers: 0,
-                    x: width as f32,
-                    y: height as f32,
-                    inside: true,
-                    time_ms: 0,
-                    text: None,
-                };
-                on_action(&resize, document)?;
-                // The resize hand-off relayouts the document after the paint above. Repaint
-                // now, so a shrink shows the new layout (status strip) without waiting for
-                // the next event.
-                // SAFETY: the display and retained scene belong to this app's event loop.
-                unsafe { self.repaint_full(document)? };
+            if unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } <= 0 {
+                unsafe { self.flush_pending_window_resize(document, on_action)? };
             }
             if let Some(obscured) = self.pending_visibility.take() {
                 let visibility = ActionEvent {
@@ -1051,7 +1070,7 @@ impl X11App {
                 .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()));
             let timeout = reactor_wait_timeout(
                 unsafe { XEventsQueued(self.display, 0) } > 0,
-                !self.pending_damage.is_empty(),
+                !self.pending_damage.is_empty() || self.pending_window_resize.is_some(),
                 backdrop_wait,
             );
             reactor
@@ -1076,6 +1095,7 @@ impl X11App {
             // mutation once and skips no-op wakes. Queued X events paint first.
             // SAFETY: self.display is the live display owned by this app.
             if unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } <= 0 {
+                unsafe { self.flush_pending_window_resize(document, on_action)? };
                 unsafe { self.redraw_if_dirty(document)? };
                 if self.close_requested {
                     return Ok(());
