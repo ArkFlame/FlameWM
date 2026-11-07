@@ -2,12 +2,14 @@
 //! live in the thread-local registry of the thread that created the windows, so `sync_snapshot`
 //! must run on that thread.
 
+use flamewm_api::repeat_log::RepeatLog;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
 /// Applied-theme memory for one thread's cursor owners.
 #[derive(Debug, Default)]
 pub struct CursorThemeSync {
     applied: Option<String>,
+    error_log: RepeatLog,
 }
 
 impl CursorThemeSync {
@@ -39,8 +41,13 @@ impl CursorThemeSync {
         };
         let search_path = std::env::var("XCURSOR_PATH").unwrap_or_default();
         let errors = self.reload_theme(requested, &search_path, flamewm_ui_x11::apply_cursor_theme);
-        for error in errors {
-            eprintln!("flamewm-shell: cursor theme reload failed: {error}");
+        // A failed reload is retried at every snapshot; a persisting failure logs once.
+        if errors.is_empty() {
+            self.error_log.clear();
+        } else if self.error_log.should_emit(&errors.join("; ")) {
+            for error in errors {
+                eprintln!("flamewm-shell: cursor theme reload failed: {error}");
+            }
         }
     }
 }
@@ -80,6 +87,7 @@ mod tests {
         let search_path = root.display().to_string();
         let mut sync = CursorThemeSync {
             applied: Some("Old".to_owned()),
+            ..Default::default()
         };
         let mut attempts = 0;
         let errors = sync.reload_theme("New", &search_path, |_| {

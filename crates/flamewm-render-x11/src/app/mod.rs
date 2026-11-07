@@ -557,10 +557,14 @@ impl X11App {
             // selected provider has no compositing backend. Shape masks still work.
             alpha_mode = SurfaceAlphaMode::OpaqueFallback;
         }
-        eprintln!(
-            "FLAMEWM_RENDER_PROVIDER {} paint=cpu-side (GPU only for blur via renderAcceleration=gpu)",
-            provider.name()
-        );
+        // Banners describe process-wide configuration; every app repeats them, so log once.
+        static PROVIDER_LOG: std::sync::Once = std::sync::Once::new();
+        PROVIDER_LOG.call_once(|| {
+            eprintln!(
+                "FLAMEWM_RENDER_PROVIDER {} paint=cpu-side (GPU only for blur via renderAcceleration=gpu)",
+                provider.name()
+            );
+        });
         // Shape bridge is render-owned: popup/menu rounded corners. Failure is
         // explicit degraded-rectangle mode, never a silent transparency claim.
         let xshape = match unsafe { XShapeBridge::new(display) } {
@@ -611,17 +615,20 @@ impl X11App {
             let backend = unsafe { XcursorBackend::with_theme(display, theme.as_deref(), size) };
             let uses_xcursor = backend.uses_xcursor();
             let session = NativeCursorSession::wrap(backend);
-            eprintln!(
-                "FLAMEWM_RENDER_CURSOR_THEME theme={} size={} backend={}",
-                theme.as_deref().unwrap_or("unset"),
-                size.map(|size| size.to_string())
-                    .unwrap_or_else(|| "unset".to_string()),
-                if uses_xcursor {
-                    "xcursor"
-                } else {
-                    "core-font-cursor"
-                },
-            );
+            static CURSOR_THEME_LOG: std::sync::Once = std::sync::Once::new();
+            CURSOR_THEME_LOG.call_once(|| {
+                eprintln!(
+                    "FLAMEWM_RENDER_CURSOR_THEME theme={} size={} backend={}",
+                    theme.as_deref().unwrap_or("unset"),
+                    size.map(|size| size.to_string())
+                        .unwrap_or_else(|| "unset".to_string()),
+                    if uses_xcursor {
+                        "xcursor"
+                    } else {
+                        "core-font-cursor"
+                    },
+                );
+            });
             share_surface_cursor(
                 SurfaceCursor {
                     session,
@@ -764,10 +771,18 @@ impl X11App {
             )
         } {
             Ok(backend) => {
-                eprintln!("FLAMEWM_RENDER_TEXT_BACKEND xft preferred=IBM_Plex_Sans");
+                static TEXT_BACKEND_LOG: std::sync::Once = std::sync::Once::new();
+                TEXT_BACKEND_LOG.call_once(|| {
+                    eprintln!("FLAMEWM_RENDER_TEXT_BACKEND xft preferred=IBM_Plex_Sans");
+                });
                 self.xft = Some(backend);
             }
-            Err(error) => eprintln!("FLAMEWM_RENDER_TEXT_BACKEND core-x11 reason={error}"),
+            Err(error) => {
+                static TEXT_FALLBACK_LOG: std::sync::Once = std::sync::Once::new();
+                TEXT_FALLBACK_LOG.call_once(|| {
+                    eprintln!("FLAMEWM_RENDER_TEXT_BACKEND core-x11 reason={error}");
+                });
+            }
         }
     }
 

@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Mutex;
 
+use flamewm_api::repeat_log::RepeatLog;
 use flamewm_api::settings::{AppearanceMode, SettingValue, SettingsSnapshot};
 use flamewm_session_core::{
     AppearancePlan, AppearanceProbe, SessionPaths, build_launch_plan_with_appearance,
@@ -339,11 +341,22 @@ fn cursor_only_observer() -> SettingsObserver {
 fn apply_live_cursor(input: &XSettingsInput) -> Vec<String> {
     let errors = apply_cursor_appearance(&input.cursor_theme, Some(input.cursor_size));
     flamewm_session_core::apply_current_process_env(&cursor_environment(input));
-    for error in &errors {
-        eprintln!("flamewm: cursor theme reload failed: {error}");
+    // Settings sync points re-run this on every change; a persisting failure logs once.
+    let mut log = CURSOR_RELOAD_LOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if errors.is_empty() {
+        log.clear();
+    } else if log.should_emit(&errors.join("; ")) {
+        for error in &errors {
+            eprintln!("flamewm: cursor theme reload failed: {error}");
+        }
     }
     errors
 }
+
+/// Last cursor reload failure emitted by this process.
+static CURSOR_RELOAD_LOG: Mutex<RepeatLog> = Mutex::new(RepeatLog::new());
 
 /// `XCURSOR_THEME` and `XCURSOR_SIZE` for the WM's children, from the published input.
 fn cursor_environment(input: &XSettingsInput) -> BTreeMap<String, String> {

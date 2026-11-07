@@ -20,6 +20,7 @@ pub mod input;
 pub mod panels;
 pub mod paths;
 pub mod ports;
+pub mod repeat_log;
 pub mod session;
 pub mod settings;
 pub mod settings_groups;
