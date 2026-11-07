@@ -96,6 +96,7 @@ impl Cursors {
         renderer: &mut GlowRenderer,
         status: &CursorImageStatus,
         pointer: Point<f64, Logical>,
+        scale: f64,
     ) -> Vec<Elem> {
         let icon = match status {
             CursorImageStatus::Hidden => return Vec::new(),
@@ -107,12 +108,13 @@ impl Cursors {
                         .and_then(|data| data.lock().ok().map(|attributes| attributes.hotspot))
                         .unwrap_or_default()
                 });
-                let origin = (pointer.to_i32_round() - hotspot).to_physical(1);
+                let logical = pointer.to_i32_round() - hotspot;
+                let origin = crate::render::physical_point(logical.x, logical.y, scale);
                 return render_elements_from_surface_tree(
                     renderer,
                     surface,
                     origin,
-                    1.0,
+                    scale,
                     1.0,
                     Kind::Cursor,
                 )
@@ -126,7 +128,7 @@ impl Cursors {
         let named = self.named(icon);
         let origin: Point<f64, Physical> = (pointer.to_i32_round() - named.hotspot)
             .to_f64()
-            .to_physical(1.0);
+            .to_physical(scale);
         MemoryRenderBufferRenderElement::from_buffer(
             renderer,
             origin,

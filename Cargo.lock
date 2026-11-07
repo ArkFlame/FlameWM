@@ -1075,6 +1075,7 @@ name = "flamewm-ui-document"
 version = "0.1.7"
 dependencies = [
  "flamewm-api",
+ "flamewm-image-core",
  "flamewm-render-core",
  "flamewm-skin",
  "flamewm-ui-core",

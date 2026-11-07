@@ -108,6 +108,8 @@ pub(crate) struct DesktopState {
     pub(crate) downloads: downloads::Organizer,
     /// Resolved cursor theme last loaded into the live cursor owners.
     pub(crate) applied_cursor_theme: Option<String>,
+    /// Pending backoff for a failed cursor theme reload; `None` after a success.
+    pub(crate) cursor_theme_failure: Option<refresh::CursorThemeFailure>,
     /// Last `iconTheme` applied from the settings snapshot.
     pub(crate) icon_theme: String,
     /// Set when `iconTheme` changed; cleared once the new theme generation is installed.

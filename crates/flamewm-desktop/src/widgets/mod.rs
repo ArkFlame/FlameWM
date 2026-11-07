@@ -325,7 +325,7 @@ impl WidgetState {
 
     pub(crate) fn persist(&self) {
         if let Err(error) = flamewm_widgets_core::widgets::persist(&self.path, &self.store) {
-            eprintln!("desktop: widget state save failed: {error:?}");
+            super::log_limit::emit("widget state save failed", format_args!("desktop: widget state save failed: {error:?}"));
         }
     }
 
@@ -1391,11 +1391,11 @@ fn media_action(control: &str, state: &mut DesktopState) {
         return;
     };
     if let Err(error) = provider.perform_action(action, &snapshot) {
-        eprintln!("desktop: media widget action failed: {}", error.message);
+        super::log_limit::emit("media widget action failed", format_args!("desktop: media widget action failed: {}", error.message));
         return;
     }
     if let Err(error) = provider.on_ready() {
-        eprintln!("desktop: media widget flush failed: {}", error.message);
+        super::log_limit::emit("media widget flush failed", format_args!("desktop: media widget flush failed: {}", error.message));
     }
 }
 
@@ -1404,7 +1404,7 @@ pub(crate) fn refresh_media(state: &mut DesktopState) {
         return;
     };
     if let Err(error) = provider.on_ready() {
-        eprintln!("desktop: media widget update failed: {}", error.message);
+        super::log_limit::emit("media widget update failed", format_args!("desktop: media widget update failed: {}", error.message));
     }
     provider.reconcile();
     let snapshot = provider.snapshot();

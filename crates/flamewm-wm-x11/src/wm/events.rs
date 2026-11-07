@@ -550,6 +550,12 @@ impl<C: Connection> Wm<'_, C> {
         {
             return self.refresh_decoration(window);
         }
+        if (atom == self.atoms.net_wm_state || atom == self.atoms.net_wm_window_type)
+            && self.clients.contains_key(&window)
+        {
+            // The snapshot reads skip-taskbar and attention from these properties.
+            self.mark_windows();
+        }
         let Some(client_id) = self.client_for(window) else {
             return Ok(());
         };
@@ -612,6 +618,52 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
+    /// The `_NET_WM_STATE` atoms `client` currently carries.
+    pub(super) fn read_net_wm_state(&self, client: Window) -> Result<Vec<Atom>, ReplyError> {
+        let reply = self
+            .conn
+            .get_property(
+                false,
+                client,
+                self.atoms.net_wm_state,
+                AtomEnum::ATOM,
+                0,
+                u32::MAX,
+            )?
+            .reply()?;
+        Ok(reply.value32().map_or_else(Vec::new, Iterator::collect))
+    }
+
+    /// Sets `_NET_WM_STATE_DEMANDS_ATTENTION` to `next(current)`. The property and the window
+    /// snapshot are rewritten only when the flag changes.
+    pub(super) fn update_demands_attention(
+        &mut self,
+        client: Window,
+        next: impl FnOnce(bool) -> bool,
+    ) -> Result<(), ReplyError> {
+        let atom = self.atoms.net_wm_state_demands_attention;
+        let mut atoms = self.read_net_wm_state(client)?;
+        let currently = atoms.contains(&atom);
+        let wanted = next(currently);
+        if wanted == currently {
+            return Ok(());
+        }
+        if wanted {
+            atoms.push(atom);
+        } else {
+            atoms.retain(|&held| held != atom);
+        }
+        self.conn.change_property32(
+            PropMode::REPLACE,
+            client,
+            self.atoms.net_wm_state,
+            AtomEnum::ATOM,
+            &atoms,
+        )?;
+        self.mark_windows();
+        Ok(())
+    }
+
     fn read_first_cardinal(&self, window: Window, atom: Atom) -> Option<u32> {
         self.read_cardinals(window, atom, 1)
             .and_then(|values| values.first().copied())
@@ -670,6 +722,9 @@ impl<C: Connection> Wm<'_, C> {
                 } else {
                     self.focus(event.window)?;
                 }
+            } else if self.clients.contains_key(&event.window) {
+                // A blocked activation asks for attention instead of taking focus.
+                self.update_demands_attention(event.window, |_| true)?;
             }
         } else if event.type_ == self.atoms.net_wm_moveresize
             && self.clients.contains_key(&event.window)
@@ -731,6 +786,9 @@ impl<C: Connection> Wm<'_, C> {
         second: Atom,
     ) -> Result<(), ReplyError> {
         let atoms = [first, second];
+        if atoms.contains(&self.atoms.net_wm_state_demands_attention) {
+            self.update_demands_attention(client, |held| net_wm_state_enable(action, held))?;
+        }
         let wants_maximize = atoms.iter().any(|&atom| self.is_maximize_atom(atom));
         let wants_fullscreen = atoms.contains(&self.atoms.net_wm_state_fullscreen);
         let wants_hidden = atoms.contains(&self.atoms.net_wm_state_hidden);

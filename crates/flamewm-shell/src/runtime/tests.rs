@@ -133,6 +133,8 @@ fn test_window(reference: flamewm_api::WindowRef) -> flamewm_api::window::Window
         output: test_output_id(),
         state_generation: 1,
         unresponsive: false,
+        skip_taskbar: false,
+        attention: false,
     }
 }
 
@@ -522,6 +524,8 @@ fn task_slot_snapshot(outputs: &[&str]) -> ShellSnapshot {
         output: OutputId::new(output),
         state_generation: 1,
         unresponsive: false,
+        skip_taskbar: false,
+        attention: false,
     };
     let task = |id: u64, output: &str| {
         let window = WindowRef::new(id, 1);

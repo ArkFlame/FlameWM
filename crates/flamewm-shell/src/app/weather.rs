@@ -26,11 +26,11 @@ impl ShellLoop {
                 projection::project_weather_tray(document, &feed.state, units, shown)
             });
             if let Err(error) = &projected {
-                eprintln!("flamewm-shell: weather tray projection failed: {error:?}");
+                crate::log_limit::emit("weather tray projection failed", format_args!("flamewm-shell: weather tray projection failed: {error:?}"));
                 tray_ok = false;
             }
             if let Err(error) = runtime.redraw(panel) {
-                eprintln!("flamewm-shell: weather tray redraw failed: {error:?}");
+                crate::log_limit::emit("weather tray redraw failed", format_args!("flamewm-shell: weather tray redraw failed: {error:?}"));
                 tray_ok = false;
             }
         }
@@ -57,7 +57,7 @@ impl ShellLoop {
             Err(flamewm_shell::quick_controls::SupervisorError::WouldBlock) => {
                 self.weather_feed_pending = true;
             }
-            Err(error) => eprintln!("flamewm-shell: weather feed not sent (nonfatal): {error}"),
+            Err(error) => crate::log_limit::emit("weather feed not sent", format_args!("flamewm-shell: weather feed not sent (nonfatal): {error}")),
         }
     }
 }

@@ -97,7 +97,7 @@ pub(crate) fn monitor_rects(geometries: &[(OutputId, Rect)]) -> Vec<Rect> {
 /// Logs a best-effort subscription or registration that failed; the desktop keeps running without it.
 pub(crate) fn warn_degraded<T, E: std::fmt::Display>(subscription: &str, result: Result<T, E>) {
     if let Err(error) = result {
-        eprintln!("desktop: degraded {subscription} subscription: {error}");
+        super::log_limit::emit("degraded subscription", format_args!("desktop: degraded {subscription} subscription: {error}"));
     }
 }
 
@@ -255,7 +255,7 @@ pub(crate) fn refresh_settings_projection(
     projection::project_background(document, &state.wallpaper_loader.state().presentation)?;
     if let Err(error) = project_accent_tokens(document, &state.settings) {
         // Optional visual tokens must never terminate the desktop at startup.
-        eprintln!("desktop: accent tokens not projected: {error}");
+        super::log_limit::emit("accent tokens not projected", format_args!("desktop: accent tokens not projected: {error}"));
     }
     sync_selection_visuals(document, state)?;
     sticky::sync_sticky(document, state)?;
@@ -278,9 +278,49 @@ pub(crate) fn refresh_settings_projection(
     Ok(())
 }
 
+const CURSOR_RETRY_INITIAL: std::time::Duration = std::time::Duration::from_secs(5);
+const CURSOR_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// A failed cursor theme reload: the theme that failed, its message, and the backoff window.
+#[derive(Debug, Clone)]
+pub(crate) struct CursorThemeFailure {
+    theme: String,
+    message: String,
+    retry_at: std::time::Instant,
+    delay: std::time::Duration,
+}
+
+/// `None` while the failed theme is inside its backoff window; otherwise the delay to apply if
+/// this attempt fails again (doubling per consecutive failure of the same theme, capped).
+fn cursor_retry_delay(
+    failure: Option<&CursorThemeFailure>,
+    theme: &str,
+    now: std::time::Instant,
+) -> Option<std::time::Duration> {
+    match failure {
+        Some(failure) if failure.theme == theme => {
+            if now < failure.retry_at {
+                return None;
+            }
+            Some((failure.delay * 2).min(CURSOR_RETRY_MAX))
+        }
+        _ => Some(CURSOR_RETRY_INITIAL),
+    }
+}
+
+/// Logs a failure once per distinct (theme, message); repeats of the same failure stay silent.
+fn cursor_failure_is_new(failure: Option<&CursorThemeFailure>, theme: &str, message: &str) -> bool {
+    !matches!(failure, Some(f) if f.theme == theme && f.message == message)
+}
+
 /// Reloads the live cursor owners when the resolved `cursorTheme` changed. A failed reload
-/// keeps the previous theme (rollback) and is retried at the next settings snapshot.
+/// keeps the previous theme (rollback), is retried with exponential backoff, and logs once per
+/// distinct failure.
 pub(crate) fn sync_cursor_theme(state: &mut DesktopState) {
+    sync_cursor_theme_at(state, std::time::Instant::now());
+}
+
+fn sync_cursor_theme_at(state: &mut DesktopState, now: std::time::Instant) {
     if !state.settings.values.contains_key("cursorTheme") {
         return;
     }
@@ -291,14 +331,84 @@ pub(crate) fn sync_cursor_theme(state: &mut DesktopState) {
         &requested,
         &search_path,
     ) else {
+        state.cursor_theme_failure = None;
+        return;
+    };
+    let Some(delay) = cursor_retry_delay(state.cursor_theme_failure.as_ref(), &theme, now) else {
         return;
     };
     let errors = flamewm_ui_x11::apply_cursor_theme(&theme);
     if errors.is_empty() {
         state.applied_cursor_theme = Some(theme);
+        state.cursor_theme_failure = None;
+        return;
     }
-    for error in errors {
-        eprintln!("desktop: cursor theme reload failed: {error}");
+    let message = errors.join("; ");
+    if cursor_failure_is_new(state.cursor_theme_failure.as_ref(), &theme, &message) {
+        eprintln!("desktop: cursor theme reload failed: {message}");
+    }
+    state.cursor_theme_failure = Some(CursorThemeFailure {
+        theme,
+        message,
+        retry_at: now + delay,
+        delay,
+    });
+}
+
+#[cfg(test)]
+mod cursor_retry_tests {
+    use super::*;
+
+    fn failure(theme: &str, message: &str, now: std::time::Instant) -> CursorThemeFailure {
+        CursorThemeFailure {
+            theme: theme.to_owned(),
+            message: message.to_owned(),
+            retry_at: now + CURSOR_RETRY_INITIAL,
+            delay: CURSOR_RETRY_INITIAL,
+        }
+    }
+
+    #[test]
+    fn failed_theme_is_not_retried_inside_its_backoff_window() {
+        let now = std::time::Instant::now();
+        let f = failure("broken", "x", now);
+        assert_eq!(cursor_retry_delay(Some(&f), "broken", now), None);
+        assert_eq!(
+            cursor_retry_delay(Some(&f), "broken", f.retry_at),
+            Some(CURSOR_RETRY_INITIAL * 2)
+        );
+    }
+
+    #[test]
+    fn a_different_theme_is_attempted_immediately() {
+        let now = std::time::Instant::now();
+        let f = failure("broken", "x", now);
+        assert_eq!(
+            cursor_retry_delay(Some(&f), "other", now),
+            Some(CURSOR_RETRY_INITIAL)
+        );
+        assert_eq!(cursor_retry_delay(None, "broken", now), Some(CURSOR_RETRY_INITIAL));
+    }
+
+    #[test]
+    fn backoff_doubles_and_is_capped() {
+        let now = std::time::Instant::now();
+        let mut f = failure("broken", "x", now);
+        f.delay = CURSOR_RETRY_MAX;
+        assert_eq!(
+            cursor_retry_delay(Some(&f), "broken", now + CURSOR_RETRY_MAX),
+            Some(CURSOR_RETRY_MAX)
+        );
+    }
+
+    #[test]
+    fn same_failure_logs_once_and_new_failure_logs_again() {
+        let now = std::time::Instant::now();
+        let f = failure("broken", "reload broken failed", now);
+        assert!(!cursor_failure_is_new(Some(&f), "broken", "reload broken failed"));
+        assert!(cursor_failure_is_new(Some(&f), "broken", "other error"));
+        assert!(cursor_failure_is_new(Some(&f), "other", "reload broken failed"));
+        assert!(cursor_failure_is_new(None, "broken", "reload broken failed"));
     }
 }
 

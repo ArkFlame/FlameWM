@@ -391,6 +391,8 @@ fn carrying_a_window_switches_to_the_target_workspace() {
         output: OutputId::new("wayland-0"),
         state_generation: 1,
         unresponsive: false,
+        skip_taskbar: false,
+        attention: false,
     });
     desktop
         .switch_workspace_with_window(
@@ -430,6 +432,8 @@ fn mirror_occupancy_counts_windows_per_workspace() {
             output: OutputId::new("wayland-0"),
             state_generation: 1,
             unresponsive: false,
+            skip_taskbar: false,
+            attention: false,
         }
     }
 

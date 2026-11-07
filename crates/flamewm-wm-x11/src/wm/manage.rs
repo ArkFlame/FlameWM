@@ -566,6 +566,8 @@ impl<C: Connection> Wm<'_, C> {
             transient_for.is_some(),
         ) {
             self.focus(window)?;
+        } else {
+            self.update_demands_attention(window, |_| true)?;
         }
         // EWMH: a client may request fullscreen before mapping; honor it at manage time.
         if self.initial_state_fullscreen(window)? {

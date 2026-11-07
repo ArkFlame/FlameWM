@@ -26,7 +26,7 @@ use smithay::reexports::calloop::{
 };
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::{Client, DisplayHandle, protocol::wl_surface::WlSurface};
-use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial, Size};
+use smithay::utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Serial, Size};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
 use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState};
@@ -598,7 +598,10 @@ impl State {
         self.output
             .change_current_state(Some(mode), None, None, None);
         self.output.set_preferred(mode);
-        self.output_size = Size::from((width, height));
+        // Layout is logical: the mode is physical, so divide by the output scale.
+        let percent = (self.output_scale() * 100.0).round() as u16;
+        let (w, h) = crate::output_layout::logical_size((width, height), percent);
+        self.output_size = Size::from((w, h));
         // Includes fullscreen and maximized windows on inactive workspaces, and keeps the
         // fullscreen restore rect in step with the output and current layer/dock reservations.
         self.reflow_if_work_area_changed();
@@ -680,6 +683,18 @@ impl State {
 
     pub fn output_rect(&self) -> Rect {
         Rect::new(0, 0, self.output_size.w, self.output_size.h)
+    }
+
+    /// Output scale factor (1.0 by default). Layout is logical; rendering multiplies by this.
+    pub fn output_scale(&self) -> f64 {
+        self.output.current_scale().fractional_scale()
+    }
+
+    /// Physical pixels of the scanned-out mode, the size desktop captures and offscreen targets use.
+    pub fn physical_output_size(&self) -> Size<i32, Physical> {
+        self.output
+            .current_mode()
+            .map_or_else(|| (self.output_size.w, self.output_size.h).into(), |mode| mode.size)
     }
 
     /// Usable area: the output minus layer-shell exclusive zones (panels).

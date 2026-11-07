@@ -265,6 +265,8 @@ fn window_fixture() -> WindowSnapshot {
         output: OutputId::new("HDMI-1"),
         state_generation: 9,
         unresponsive: false,
+        skip_taskbar: false,
+        attention: false,
     }
 }
 
@@ -984,6 +986,39 @@ fn window_unresponsive_round_trips_and_defaults_false_when_key_is_missing() {
         decoded,
         WindowSnapshot {
             unresponsive: false,
+            ..source
+        }
+    );
+}
+
+// REGRESSION: `skipTaskbar` and `attention` are additive on the window dict: both round-trip when
+// set, and an older sender that omits them decodes as not set.
+#[test]
+fn window_skip_taskbar_and_attention_round_trip_and_default_false_when_keys_are_missing() {
+    let source = WindowSnapshot {
+        skip_taskbar: true,
+        attention: true,
+        ..window_fixture()
+    };
+    let WireValue::Dict(dict) = window_wire_value(&source) else {
+        panic!("window encodes as a dict");
+    };
+    assert_eq!(dict.get("skipTaskbar"), Some(&WireValue::Bool(true)));
+    assert_eq!(dict.get("attention"), Some(&WireValue::Bool(true)));
+    assert_eq!(
+        window_snapshot(&WireValue::Dict(dict.clone())).expect("decodes"),
+        source
+    );
+
+    let mut legacy = dict;
+    legacy.remove("skipTaskbar");
+    legacy.remove("attention");
+    let decoded = window_snapshot(&WireValue::Dict(legacy)).expect("legacy dict decodes");
+    assert_eq!(
+        decoded,
+        WindowSnapshot {
+            skip_taskbar: false,
+            attention: false,
             ..source
         }
     );

@@ -52,6 +52,8 @@ mod tests {
             output: OutputId::new("A"),
             state_generation: 1,
             unresponsive: false,
+            skip_taskbar: false,
+            attention: false,
         }
     }
 

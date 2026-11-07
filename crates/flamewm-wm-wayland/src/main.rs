@@ -850,16 +850,18 @@ fn init_winit(
         size,
         refresh: 60_000,
     };
+    let percent = control::nested_output_scale_percent();
     // The winit/EGL window surface is y-inverted: the output transform carries the flip and
     // cancels the renderer's own y-flip. Upstream's winit backend uses the same transform.
     state.output.change_current_state(
         Some(mode),
         Some(Transform::Flipped180),
-        Some(presentation_scale::output_scale(control::nested_output_scale_percent())),
+        Some(presentation_scale::output_scale(percent)),
         Some((0, 0).into()),
     );
     state.output.set_preferred(mode);
-    state.output_size = (size.w, size.h).into();
+    let (w, h) = presentation_scale::logical_output_size((size.w, size.h), percent);
+    state.output_size = (w, h).into();
     // The host window draws named pointers (no software frame per motion); surfaces stay software.
     state.backend = Some(backend);
     state.sync_host_cursor();

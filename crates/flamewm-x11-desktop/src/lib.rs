@@ -374,6 +374,8 @@ impl X11Desktop {
             output,
             state_generation: 0,
             unresponsive: false,
+            skip_taskbar: false,
+            attention: false,
         };
         Ok((snapshot, named))
     }

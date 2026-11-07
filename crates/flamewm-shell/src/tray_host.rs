@@ -265,7 +265,7 @@ impl TrayHost {
     /// Sends the dbusmenu `clicked` event for an open popup row, nonfatal on bus failure.
     pub fn send_menu_event(&self, key: &ItemKey, menu_path: &str, id: i32) {
         if let Err(error) = self.watcher.send_menu_event(key, menu_path, id) {
-            eprintln!("flamewm-shell: tray menu event failed: {}", error.message);
+            crate::log_limit::emit("tray menu event failed", format_args!("flamewm-shell: tray menu event failed: {}", error.message));
         }
     }
 
@@ -274,7 +274,7 @@ impl TrayHost {
             .watcher
             .invoke(key, ItemAction::ContextMenu, pointer.x, pointer.y)
         {
-            eprintln!("flamewm-shell: tray item call failed: {}", error.message);
+            crate::log_limit::emit("tray item call failed", format_args!("flamewm-shell: tray item call failed: {}", error.message));
         }
     }
 
@@ -329,12 +329,12 @@ impl TrayHost {
                     return true;
                 }
                 Err(error) => {
-                    eprintln!("flamewm-shell: tray layout request failed: {}", error.message);
+                    crate::log_limit::emit("tray layout request failed", format_args!("flamewm-shell: tray layout request failed: {}", error.message));
                 }
             }
         }
         if let Err(error) = self.watcher.invoke(&key, method, x, y) {
-            eprintln!("flamewm-shell: tray item call failed: {}", error.message);
+            crate::log_limit::emit("tray item call failed", format_args!("flamewm-shell: tray item call failed: {}", error.message));
         }
         true
     }

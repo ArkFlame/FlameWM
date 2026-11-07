@@ -43,6 +43,15 @@ pub(crate) fn window_snapshot(value: &WireValue) -> Result<WindowSnapshot, Contr
             .get("unresponsive")
             .and_then(WireValue::as_bool)
             .unwrap_or(false),
+        // Older senders omit these keys; a missing key means the flag is not set.
+        skip_taskbar: dict
+            .get("skipTaskbar")
+            .and_then(WireValue::as_bool)
+            .unwrap_or(false),
+        attention: dict
+            .get("attention")
+            .and_then(WireValue::as_bool)
+            .unwrap_or(false),
     })
 }
 

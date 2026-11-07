@@ -494,6 +494,8 @@ pub(crate) fn window_wire_value(window: &WindowSnapshot) -> WireValue {
         ),
         ("stateGeneration", WireValue::U64(window.state_generation)),
         ("unresponsive", WireValue::Bool(window.unresponsive)),
+        ("skipTaskbar", WireValue::Bool(window.skip_taskbar)),
+        ("attention", WireValue::Bool(window.attention)),
     ]))
 }
 

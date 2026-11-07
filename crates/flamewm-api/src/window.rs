@@ -25,6 +25,11 @@ pub struct WindowSnapshot {
     /// The client missed its `_NET_WM_PING` after a close request; `false` when the producer
     /// does not track liveness or the sender predates the field.
     pub unresponsive: bool,
+    /// `_NET_WM_STATE_SKIP_TASKBAR`, or a utility/dock/splash window type: not listed as a task.
+    pub skip_taskbar: bool,
+    /// `_NET_WM_STATE_DEMANDS_ATTENTION`: set by the client or by a blocked focus request, and
+    /// cleared when the window takes focus.
+    pub attention: bool,
 }
 
 impl WindowSnapshot {

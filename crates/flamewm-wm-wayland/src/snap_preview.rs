@@ -126,7 +126,7 @@ impl SnapPreview {
     }
 
     /// The cached ring as overlay elements at the shown frame. Empty while hidden.
-    pub fn elements(&self, renderer: &mut GlowRenderer) -> Vec<Elem> {
+    pub fn elements(&self, renderer: &mut GlowRenderer, scale: f64) -> Vec<Elem> {
         let Some(shown) = self.shown else {
             return Vec::new();
         };
@@ -137,8 +137,8 @@ impl SnapPreview {
                 MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
                     Point::from((
-                        f64::from(frame.x.saturating_add(strip.offset.0)),
-                        f64::from(frame.y.saturating_add(strip.offset.1)),
+                        f64::from(frame.x.saturating_add(strip.offset.0)) * scale,
+                        f64::from(frame.y.saturating_add(strip.offset.1)) * scale,
                     )),
                     &strip.buffer,
                     None,

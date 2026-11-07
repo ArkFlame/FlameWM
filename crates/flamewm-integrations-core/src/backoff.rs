@@ -3,7 +3,7 @@
 /// Advances `attempts` and clears `pending` once `maximum_attempts` is reached or the
 /// reconnect is no longer pending. Returns the delay for this attempt, or `None` when
 /// no further attempt is allowed.
-pub(crate) fn next_reconnect_delay_ms(
+pub fn next_reconnect_delay_ms(
     initial_ms: u64,
     maximum_ms: u64,
     maximum_attempts: u8,

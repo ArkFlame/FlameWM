@@ -94,9 +94,11 @@ mod tests {
     fn process_cpu_clock_counts_other_threads() {
         let process_start = now_process_cpu_ns();
         let thread_start = crate::clock_ns(rustix::time::ClockId::ThreadCPUTime);
+        // Spin on this thread's own CPU clock, not wall time: under host contention a wall-timed
+        // spin can be descheduled for most of its window and burn far less than 20 ms of CPU.
         std::thread::spawn(|| {
-            let start = std::time::Instant::now();
-            while start.elapsed() < std::time::Duration::from_millis(30) {
+            let start = crate::clock_ns(rustix::time::ClockId::ThreadCPUTime);
+            while crate::clock_ns(rustix::time::ClockId::ThreadCPUTime) - start < 30_000_000 {
                 std::hint::black_box(());
             }
         })

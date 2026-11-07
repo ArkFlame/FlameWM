@@ -1263,9 +1263,13 @@ mod tests {
         let mut icons = ParallelIconService::spawn(
             std::env::temp_dir().join("flamewm-projection-apply-theme-no-such-root"),
         );
-        let before = THEME_GENERATION.load(Ordering::Acquire);
+        // Generations number per service, while the mirror is process-wide and keeps the value
+        // left by whichever test ran before. Compare against this service's own generation.
+        let before = icons.service.shared_index().generation;
         await_icon_theme(&mut icons, "flame-apply-no-such-theme");
-        assert!(THEME_GENERATION.load(Ordering::Acquire) > before);
+        let installed = icons.service.shared_index().generation;
+        assert!(installed > before);
+        assert_eq!(THEME_GENERATION.load(Ordering::Acquire), installed);
         assert_eq!(
             icons.service.shared_index().theme_names,
             flamewm_integrations_linux::icons::theme_chain(Some("flame-apply-no-such-theme"))

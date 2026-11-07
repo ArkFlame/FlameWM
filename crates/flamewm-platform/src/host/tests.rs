@@ -630,6 +630,8 @@ fn workspace_snapshot_fills_occupancy_from_cached_windows() {
             output: OutputId::new("default"),
             state_generation: 1,
             unresponsive: false,
+            skip_taskbar: false,
+            attention: false,
         }
     }
 

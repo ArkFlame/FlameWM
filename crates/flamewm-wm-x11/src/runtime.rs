@@ -581,6 +581,13 @@ fn run_session(
             ) {
                 wait = Some(wait.map_or(delay, |current| current.min(delay)));
             }
+            // An offline MPRIS bus is retried on backoff; wake at that deadline with no polling.
+            if let Some(delay) = integrations_for_hook
+                .borrow()
+                .next_retry_in(Instant::now())
+            {
+                wait = Some(wait.map_or(delay, |current| current.min(delay)));
+            }
             // Armed only by a close request: the one ping deadline, never a periodic timer.
             if let Some(delay) = wm.ping_wait_timeout(std::time::Instant::now()) {
                 wait = Some(wait.map_or(delay, |current| current.min(delay)));
@@ -1219,6 +1226,8 @@ mod tests {
             output: OutputId::new("eDP-1"),
             state_generation: generation,
             unresponsive: false,
+            attention: false,
+            skip_taskbar: false,
         }
     }
 

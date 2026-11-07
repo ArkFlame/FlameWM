@@ -69,6 +69,7 @@ macro_rules! point_fn {
 mod convert_wheel;
 use convert_wheel::{WheelAction, WheelMode};
 mod downloads;
+mod log_limit;
 mod drag;
 mod icon_names;
 mod icon_raster;
@@ -256,6 +257,7 @@ pub fn main() -> Result<(), String> {
             weather_visual_dirty: true,
             downloads,
             applied_cursor_theme: None,
+            cursor_theme_failure: None,
             icon_theme: String::new(),
             icon_theme_pending: false,
             wallpaper_loader,

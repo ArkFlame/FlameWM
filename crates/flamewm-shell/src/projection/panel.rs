@@ -102,6 +102,15 @@ pub(crate) const TASK_NOT_RESPONDING: UiColor = UiColor {
     a: 0xff,
 };
 
+/// Status-line tint for a task whose window asked for attention: the existing `--c-f39c12` amber
+/// (`flamewm_skin::shell_tones::FIXED_TONES`, already the `swatch-amber` token). Pinned by a test.
+pub(crate) const TASK_ATTENTION: UiColor = UiColor {
+    r: 0xf3,
+    g: 0x9c,
+    b: 0x12,
+    a: 0xff,
+};
+
 pub(crate) fn task_accent() -> UiColor {
     let packed = TASK_ACCENT_ARGB.load(std::sync::atomic::Ordering::Relaxed);
     UiColor {
@@ -727,6 +736,8 @@ pub fn project_panel(
             document.background_clear(&slot_id)?;
             if state.unresponsive {
                 document.background(&line_id, TASK_NOT_RESPONDING)?;
+            } else if state.attention {
+                document.background(&line_id, TASK_ATTENTION)?;
             } else if state.focused {
                 document.background(&line_id, task_accent())?;
             } else {

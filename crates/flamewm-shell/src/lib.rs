@@ -9,6 +9,7 @@ pub mod icon_loader;
 pub mod launcher;
 pub mod notification_center;
 pub mod osd;
+mod log_limit;
 pub mod panel;
 pub mod popovers;
 pub mod popup_controller;

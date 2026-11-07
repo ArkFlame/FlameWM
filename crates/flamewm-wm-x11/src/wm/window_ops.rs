@@ -30,6 +30,14 @@ impl<C: Connection> Wm<'_, C> {
         client: Window,
         raise: bool,
     ) -> Result<(), ReplyError> {
+        // Taking focus answers any attention request. Checked before `state` is borrowed.
+        if self
+            .clients
+            .get(&client)
+            .is_some_and(|state| state.visible_on(self.current_workspace))
+        {
+            self.update_demands_attention(client, |_| false)?;
+        }
         let Some(state) = self.clients.get(&client) else {
             return Ok(());
         };

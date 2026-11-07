@@ -149,7 +149,13 @@ pub(super) fn desktop_elements(state: &State, renderer: &mut GlowRenderer) -> Ve
                 let entry = &state.unmanaged[index];
                 entry.surface.wl_surface().map(|surface| {
                     let geometry = entry.surface.geometry();
-                    surface_elements(renderer, &surface, geometry.loc.x, geometry.loc.y)
+                    surface_elements(
+                        renderer,
+                        &surface,
+                        geometry.loc.x,
+                        geometry.loc.y,
+                        state.output_scale(),
+                    )
                 })
             }
             _ => None,

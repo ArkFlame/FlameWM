@@ -219,8 +219,8 @@ impl Geometry {
 pub struct RoundedSurfaceElement {
     inner: WaylandSurfaceRenderElement<GlowRenderer>,
     program: GlesTexProgram,
-    /// Physical pixels per corner, `corner_radius` uniform order. The element is built for the
-    /// compositor's single output scale (1.0), the same scale its geometry is placed at.
+    /// Physical pixels per corner, `corner_radius` uniform order. The caller converts the logical
+    /// radii with the output scale before building the element, the same scale its geometry uses.
     radii: [u8; 4],
 }
 

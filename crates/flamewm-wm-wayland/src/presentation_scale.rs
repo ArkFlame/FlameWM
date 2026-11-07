@@ -47,6 +47,11 @@ pub fn output_scale(percent: u16) -> Scale {
     }
 }
 
+/// Logical size of a physical mode at the output scale given in percent (see [`output_scale`]).
+pub fn logical_output_size(physical: (i32, i32), percent: u16) -> (i32, i32) {
+    crate::output_layout::logical_size(physical, percent)
+}
+
 /// Frame period for an output mode given in millihertz; a zero rate is treated as 1 mHz.
 pub fn refresh_period(millihertz: i32) -> Duration {
     Duration::from_nanos(1_000_000_000_000 / u64::from(millihertz.max(1).unsigned_abs()))

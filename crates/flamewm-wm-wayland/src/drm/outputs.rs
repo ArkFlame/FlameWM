@@ -187,6 +187,9 @@ pub(super) fn build_output(
         size: (i32::from(width), i32::from(height)).into(),
         refresh: i32::try_from(mode.vrefresh()).unwrap_or(60) * 1000,
     };
+    // Same saved scale as the nested output; the mode stays physical and layout stays logical.
+    let percent = crate::control::nested_output_scale_percent();
+    let output_scale = crate::presentation_scale::output_scale(percent);
     // The first output is `State::output`, which already has a global; later ones get their own.
     let (output, global) = if d.surfaces.iter().any(|out| out.global.is_none()) {
         let name = format!("{}-{}", info.interface().as_str(), info.interface_id());
@@ -206,7 +209,7 @@ pub(super) fn build_output(
         output.change_current_state(
             Some(mode),
             Some(Transform::Normal),
-            Some(Scale::Integer(1)),
+            Some(output_scale),
             None,
         );
         output.set_preferred(mode);
@@ -216,11 +219,15 @@ pub(super) fn build_output(
         state.output.change_current_state(
             Some(mode),
             Some(Transform::Normal),
-            Some(Scale::Integer(1)),
+            Some(output_scale),
             Some((0, 0).into()),
         );
         state.output.set_preferred(mode);
-        state.output_size = Size::from((mode.size.w, mode.size.h));
+        let (w, h) = presentation_scale::logical_output_size(
+            (mode.size.w, mode.size.h),
+            percent,
+        );
+        state.output_size = Size::from((w, h));
         (state.output.clone(), None)
     };
     let allocator = GbmAllocator::new(

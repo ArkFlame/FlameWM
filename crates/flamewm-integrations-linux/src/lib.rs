@@ -139,6 +139,13 @@ impl LinuxIntegrationRuntime {
         }
     }
 
+    /// Time until the next lazy MPRIS reconnect attempt; `None` while connected. The WM arms this
+    /// as a reactor wake so an idle session picks up a bus that appears later.
+    #[must_use]
+    pub fn next_retry_in(&self, now: std::time::Instant) -> Option<std::time::Duration> {
+        self.mpris.next_retry_in(now)
+    }
+
     /// Reconcile event-coalesced provider state without polling.
     pub fn reconcile(&mut self) -> FlameResult<bool> {
         let network_changed = self.network_manager.reconcile()?;

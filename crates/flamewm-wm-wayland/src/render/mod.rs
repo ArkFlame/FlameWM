@@ -122,18 +122,33 @@ const BORDER: u32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME.border.0
 
 /// Keep one premultiplied ARGB bitmap per managed window. No raster work or allocations on
 /// steady-state frames: rebuilding happens only on resize/focus/hover/title changes.
+/// Physical pixel of a logical coordinate at `scale`; identity at 1.0.
+pub(crate) fn physical_point(x: i32, y: i32, scale: f64) -> Point<i32, Physical> {
+    (
+        (f64::from(x) * scale).round() as i32,
+        (f64::from(y) * scale).round() as i32,
+    )
+        .into()
+}
+
+/// A logical corner radius in physical pixels at `scale`; identity at 1.0.
+fn physical_radius(radius: u8, scale: f64) -> u8 {
+    (f64::from(radius) * scale).round().min(f64::from(u8::MAX)) as u8
+}
+
 fn surface_elements(
     renderer: &mut GlowRenderer,
     surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     x: i32,
     y: i32,
+    scale: f64,
 ) -> Vec<Elem> {
-    let location: Point<i32, Physical> = Point::from((x, y));
+    let location = physical_point(x, y, scale);
     render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlowRenderer>>(
         renderer,
         surface,
         location,
-        1.0,
+        scale,
         1.0,
         Kind::Unspecified,
     )
@@ -148,11 +163,12 @@ fn surface_elements(
 pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
     use crate::scene::SceneItem;
 
+    let scale = state.output_scale();
     let mut out: Vec<Elem> = Vec::new();
     let mut decorations = state.decorations.borrow_mut();
     decorations.retain(|window| state.model.get(window).is_some());
     // Topmost: the snap preview is drawn over every window while a move grab targets a snap.
-    out.extend(state.snap_preview.elements(renderer));
+    out.extend(state.snap_preview.elements(renderer, scale));
     let hovered_button = state.model.hit(state.pointer.x, state.pointer.y);
     for item in crate::scene::front_to_back(state) {
         match item {
@@ -170,6 +186,7 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                         &surface,
                         geometry.loc.x,
                         geometry.loc.y,
+                        scale,
                     ));
                     // Translucent X11 menus and tooltips blur the desktop beneath them. Docks
                     // (struts) are excluded: they are not glass and the taskbar is opaque.
@@ -180,14 +197,14 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                             geometry.size.w,
                             geometry.size.h,
                         );
-                        if let Some(backdrop) = decorations.surface_backdrop(renderer, rect) {
+                        if let Some(backdrop) = decorations.surface_backdrop(renderer, rect, scale) {
                             out.push(backdrop);
                         }
                     }
                 }
             }
             SceneItem::Popup { surface, origin } => {
-                out.extend(surface_elements(renderer, &surface, origin.x, origin.y));
+                out.extend(surface_elements(renderer, &surface, origin.x, origin.y, scale));
             }
             SceneItem::Managed(id) => {
                 let Some(managed) = state.model.get(id).cloned() else {
@@ -203,8 +220,10 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                     id,
                     managed.frame(),
                     outline_radius(&managed),
+                    scale,
                 ));
-                let radii = client_corner_radii(&managed, managed.titlebars);
+                let radii = client_corner_radii(&managed, managed.titlebars)
+                    .map(|radius| physical_radius(radius, scale));
                 let program = if radii.iter().any(|radius| *radius > 0) {
                     decorations.clip_program(renderer)
                 } else {
@@ -214,7 +233,7 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                 // clipped by its parent's rounded edge, not by arcs around its own smaller rect.
                 let root = Id::from_wayland_resource(&surface);
                 out.extend(
-                    surface_elements(renderer, &surface, managed.rect.x, managed.rect.y)
+                    surface_elements(renderer, &surface, managed.rect.x, managed.rect.y, scale)
                         .into_iter()
                         .map(|element| match (element, &program) {
                             (Elem::Surface(inner), Some(program))
@@ -258,6 +277,7 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                             pressed,
                         },
                         title,
+                        scale,
                     ) {
                         out.push(element);
                     }
@@ -270,7 +290,7 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
         // compositor draws, including docks and XWayland clients. This is the Wayland stand-in for
         // the X11 gamma ramp: Smithay exposes no DRM gamma, and an overlay is the only honest
         // cross-backend option (see `flamewm_api::blue_light::overlay_rgba`).
-        let size = state.output_rect();
+        let size = state.physical_output_size();
         out.push(Elem::Solid(SolidColorRenderElement::new(
             smithay::backend::renderer::element::Id::new(),
             Rectangle::new((0, 0).into(), (size.w, size.h).into()),
@@ -295,6 +315,7 @@ fn layer_elements(
         layer.layer_surface().wl_surface(),
         geometry.loc.x,
         geometry.loc.y,
+        state.output_scale(),
     )
 }
 
@@ -321,15 +342,18 @@ fn render_into(
     // A locker that crashed mid-lock must not keep the screen covered forever.
     crate::session_lock::prune_dead_locks(state);
     let elements = if let Some(surface) = state.lock_surface() {
-        surface_elements(backend.renderer(), surface.wl_surface(), 0, 0)
+        surface_elements(backend.renderer(), surface.wl_surface(), 0, 0, state.output_scale())
     } else {
         // The host window draws a named pointer itself (see `State::sync_host_cursor`).
         let mut elements = if State::host_draws_pointer_status(&state.cursor_status) {
             Vec::new()
         } else {
-            state
-                .cursors
-                .elements(backend.renderer(), &state.cursor_status, state.pointer)
+            state.cursors.elements(
+                backend.renderer(),
+                &state.cursor_status,
+                state.pointer,
+                state.output_scale(),
+            )
         };
         elements.extend(build_elements(state, backend.renderer()));
         elements
@@ -1190,10 +1214,10 @@ mod surface_backdrop_tests {
         let mut decorations = Decorations::default();
         decorations.set_desktop((8, 8), Vec::new(), pixels);
         // The top-left output pixel maps to the top-left stored pixel.
-        let corner = decorations.crop((0, 0), 1, 1).expect("desktop set");
+        let corner = decorations.crop((0, 0), 1, 1, 1.0).expect("desktop set");
         assert_eq!(corner[0], 1);
         // Past the bottom-right edge every sample clamps to the bottom-right stored pixel.
-        let clamped = decorations.crop((100, 100), 2, 2).expect("desktop set");
+        let clamped = decorations.crop((100, 100), 2, 2, 1.0).expect("desktop set");
         let reds: Vec<u8> = clamped.chunks_exact(4).map(|px| px[0]).collect();
         assert_eq!(reds, vec![31, 31, 31, 31]);
     }
@@ -1248,5 +1272,26 @@ mod flat_default_tests {
         assert!(!glass_flat());
         assert_eq!(titlebar_fill(), (0x0033_3333, 165));
         set_glass_fill(0x0017_2135, 255, 0, true);
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::{physical_point, physical_radius};
+
+    #[test]
+    fn default_scale_is_identity_for_points_and_radii() {
+        assert_eq!(physical_point(-7, 1366, 1.0), (-7, 1366).into());
+        for radius in [0_u8, 1, 12, 255] {
+            assert_eq!(physical_radius(radius, 1.0), radius);
+        }
+    }
+
+    #[test]
+    fn fractional_scale_rounds_points_and_radii_to_physical_pixels() {
+        assert_eq!(physical_point(1000, 500, 1.25), (1250, 625).into());
+        assert_eq!(physical_point(3, 3, 1.25), (4, 4).into());
+        assert_eq!(physical_radius(12, 1.25), 15);
+        assert_eq!(physical_radius(250, 2.0), 255);
     }
 }

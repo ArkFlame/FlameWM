@@ -87,6 +87,8 @@ impl FakeDesktop {
                 output: output.clone(),
                 state_generation: 1,
                 unresponsive: false,
+                skip_taskbar: false,
+                attention: false,
             },
             closed_windows: Vec::new(),
         }

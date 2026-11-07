@@ -27,6 +27,14 @@ impl<C: Connection> Wm<'_, C> {
         if state.is_fullscreen() {
             values.push(self.atoms.net_wm_state_fullscreen);
         }
+        // Client-owned flags the WM reads back (`skip_taskbar`, `attention`) survive this rewrite.
+        for atom in self.read_net_wm_state(client)? {
+            let kept = atom == self.atoms.net_wm_state_skip_taskbar
+                || atom == self.atoms.net_wm_state_demands_attention;
+            if kept && !values.contains(&atom) {
+                values.push(atom);
+            }
+        }
         self.conn.change_property32(
             PropMode::REPLACE,
             client,

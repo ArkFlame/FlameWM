@@ -315,3 +315,63 @@ Pure-move splits. Public paths kept via re-exports; tests moved with their code.
 | `crates/flamewm-wm/src/bin/flamewm-session.rs` | 1507 | `flamewm-session.rs` 259, `flamewm-session/readiness.rs` 201, `session_env.rs` 365, `supervision.rs` 326, `tests.rs` 369 |
 
 `packaged_root` wrappers removed; call sites use `flamewm_api::paths::workspace_packaged_root()` (new in `crates/flamewm-api/src/paths.rs`). `flamewm-desktop/src/install_root.rs` deleted.
+
+### Results: B4 (CODER, cache bounds, cursor backoff, dedupe, flaky tests, idle log noise; not committed)
+- (1) Wallpaper decode cache bounded: `crates/flamewm-image-core/src/decode_cache.rs`. Entry name `<path hash>-<key hash>.rgba`. A write removes older entries of the same source path, then evicts least recently used (mtime, refreshed on hit) to `MAX_CACHE_BYTES` = 64 MiB. The written entry is never evicted. Tests: `write_removes_older_entries_for_the_same_source_path`, `budget_evicts_least_recently_used_first`, `written_entry_is_never_evicted_even_when_it_alone_exceeds_budget`.
+- (2) Cursor retry: `crates/flamewm-desktop/src/refresh.rs` (`sync_cursor_theme`, `CursorThemeFailure`), state field in `state.rs`, init in `main.rs`. A failed theme retries with backoff 5 s doubling to 300 s, and logs once per distinct (theme, message). A different requested theme is attempted at once. Tests in `refresh.rs` `cursor_retry_tests`.
+- (3) Dedupe: `crates/flamewm-ui-document/src/template.rs` `RuntimeImage::is_fully_opaque` now calls `flamewm_image_core::rgba8_fully_opaque`. Same semantics. Added dep in `crates/flamewm-ui-document/Cargo.toml`.
+- (4a) Profiler flake: `crates/flamewm-profiler/src/process.rs` test spun on wall time (`Instant`), so host contention could give under 20 ms CPU. Now spins on the thread CPU clock until 30 ms CPU. Not reproduced on this host (passed 3/3); cause by code reading.
+- (4b) Icon theme flake: `crates/flamewm-desktop/src/projection.rs` test compared against process-wide `THEME_GENERATION` while generations are per service. Now compares against the service's own generation and asserts the mirror equals it. Not reproduced (passed 3/3); cause by code reading.
+- (5) Idle noise: 22 `eprintln!` sites on tick/event paths now go through `log_limit::emit` (60 s window, prints suppressed count). Files: `crates/flamewm-shell/src/log_limit.rs` (new), `crates/flamewm-desktop/src/log_limit.rs` (new), shell `lib.rs`, `app/weather.rs`, `app/timers.rs`, `app/panels.rs`, `app/ipc.rs`, `tray_host.rs`; desktop `main.rs`, `widgets/mod.rs`, `refresh.rs`. Left unlimited: user-action and one-shot messages (e.g. `shell/quick_controls/host/tick.rs:73`, `desktop/downloads.rs`, `refresh.rs:217` wallpaper failure).
+- Checks (CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-b4, CARGO_BUILD_JOBS=3, RUST_TEST_THREADS=2):
+  - `cargo build -p flamewm-shell -p flamewm-desktop --bins`: exit 0, 0 warnings.
+  - `cargo test -p flamewm-image-core -p flamewm-profiler -p flamewm-ui-document -p flamewm-desktop`: exit 0.
+  - `process::tests::process_cpu_clock_counts_other_threads` 3/3 exit 0. `projection::tests` 3/3 exit 0.
+  - `python3 -I tools/architecture_guard.py`: exit 0 (77 ratified).
+- BLOCKED: `cargo test -p flamewm-shell` does not compile (lib test). `async_projection/task_slots.rs:335` builds `WindowSnapshot` without `attention` and `skip_taskbar`, added to `flamewm-api` by another worker (uncommitted). Not introduced here; not fixed (outside scope). Shell test result: UNVERIFIED.
+- Risks: cache hit touches mtime (write-open; fails silently on read-only entries). Flake causes are by reading, not reproduced. Runtime cursor/idle log behaviour not run.
+
+### Results: B3 (CODER, nested + DRM output scale; scope `crates/flamewm-wm-wayland`; not committed)
+- Change: layout stays logical; render elements, pointer/cursor, backdrop capture, snap preview, titlebar crop and clip radii convert at the boundary by `output_scale()`. Output size comes from `current_mode` (physical). Setting: `scale.wayland-0` (nested) and the DRM `build_output` now uses the same `presentation_scale::output_scale(percent)`.
+- Files: `src/state.rs`, `src/presentation_scale.rs`, `src/main.rs`, `src/drm/mod.rs`, `src/drm/outputs.rs`, `src/render/mod.rs`, `src/render/titlebar.rs`, `src/render/backdrop.rs`, `src/clip.rs`, `src/snap_preview.rs`, `src/cursor.rs`.
+- Checks (CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-b3, CARGO_BUILD_JOBS=3, RUST_TEST_THREADS=2):
+  - `cargo test -p flamewm-wm-wayland`: exit 0, 12/12 and 269/269, 0 warnings (run before and after the DRM fixes).
+  - `cargo check -p flamewm-wm-wayland --features drm`: exit 0, 0 warnings. Fixed: E0061 `cursors.elements` missing scale arg (`drm/mod.rs`), unused `Scale`, `Physical` imports.
+  - `python3 tools/architecture_guard.py`: exit 0 (77 ratified).
+- Runtime (isolated Xvfb `:91`, 1600x1000, own PIDs only; winit nested; xterm autostarted; `FLAMEWM_SETTINGS_PATH` per run):
+  - Output: 1350x640 physical at both scales. Logical output 1350x640 at 100 and 1080x512 at 125.
+  - xterm at 100: 484x347 at (60,60). At 125: 605x434 at (75,75). Ratio 1.25 on both axes, so the logical geometry is identical (484x347 at (60,60)).
+  - Fixed-size window fraction: 35.9% of width at 100, 44.8% at 125. This differs by design: the logical screen is smaller, so a fixed logical window covers more of it. The "same fraction" holds only for output-relative windows, which is what the maximize test covers.
+  - Pointer hit-test at 125: XTEST click on the maximize button (609,94) maximized the window to the full output (glyph changed to restore). Pass.
+  - Cursor size: NOT verified. `import -window root` does not capture the pointer.
+  - Scale 100 pointer click and DRM runtime: not run.
+- Probe: `examples/fractional_probe.rs` built but not run (the screenshot path was used instead).
+- Risks: DRM path has no tty test. Titlebar chrome is 1x logical buffer upscaled. X11 clients are not HiDPI-aware. Cursor size unverified.
+
+### Results: B1 (CODER, lazy session-bus integrations; not committed)
+- Fixed: `MprisProvider::connect()` never fails on an absent session bus. It starts offline (`pump: None`, dormant fd, `watch()` never ready), `start()` defers the subscription, and `on_ready`/`perform_action` degrade to no-op or `Unavailable`. A lost bus drops to offline instead of exiting the WM.
+- Retry: `reconcile()` retries when due. Backoff reuses `flamewm_integrations_core::backoff::next_reconnect_delay_ms` (made `pub`), 1 s doubling to a 30 s cap, cap held after the attempt budget. `LinuxIntegrationRuntime::next_retry_in()` feeds a reactor wake deadline in the WM hook (`crates/flamewm-wm-x11/src/runtime.rs`), so an idle WM retries without polling. On connect it re-subscribes and publishes the media snapshot via `changed_pending`.
+- Changed: `crates/flamewm-integrations-core/src/{backoff.rs,lib.rs}`, `crates/flamewm-integrations-linux/src/{mpris.rs,lib.rs}`, `crates/flamewm-wm-x11/src/runtime.rs` (hook wake; test fixture `fake_window` gained `attention`/`skip_taskbar` to match another worker's `WindowSnapshot` change, which blocked the test build).
+- Unit tests (new): `mpris::tests::reconnect_backoff_*` (3), `retry_is_due_only_after_scheduled_instant`, `absent_session_bus_starts_offline_without_error` (subprocess with `DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/...`).
+- Checks (CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-b1, CARGO_BUILD_JOBS=3, RUST_TEST_THREADS=2):
+  - `cargo build --bin flamewm`: exit 0, 0 errors, 0 warnings.
+  - `cargo test -p flamewm-integrations-core -p flamewm-integrations-linux -p flamewm-wm-x11`: exit 0; 16, 267 (+2 ignored), 548 passed, 0 failed, 0 warnings.
+  - `python3 -I tools/architecture_guard.py`: exit 0 (77 ratified).
+  - rustfmt `--check` on `mpris.rs`: exit 0 (after format).
+- Runtime (Xvfb :90, own PIDs, killed after run; `/tmp/claude-1000/b1/accept.sh`):
+  - Dead bus (`DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent`): WM alive at 10 s; xterm client in `_NET_CLIENT_LIST` and `_NET_ACTIVE_WINDOW`. Log shows backoff retries only. PASS.
+  - Live bus (`dbus-run-session`): WM alive at 10 s, client managed, no D-Bus errors. PASS.
+  - Bus appears later (`/tmp/claude-1000/b1/late.sh`): WM started offline, `dbus-daemon` started 6 s later on the socket; WM alive, `control D-Bus connected` logged once, no further MPRIS-unavailable lines. PASS.
+- Not done / risks: NetworkManager and Power are fail-soft at startup but never retry; they stay unavailable until restart if the system bus was absent at launch (out of scope: mpris and runtime connect only). MPRIS reconnect after the bus appears is shown by log and session behaviour, not by an MPRIS player probe. Shared tree had another worker's in-progress breakage (`atoms.rs` array length, `WindowSnapshot` fields) during this run; both now compile.
+
+### Results: B2 (CODER, skip-taskbar and demands-attention task marks; not committed)
+- Fields: `WindowSnapshot.skip_taskbar` and `WindowSnapshot.attention` (`flamewm-api/src/window.rs`, default false). Wire keys `skipTaskbar` and `attention` in `flamewm-control-wire` encode/decode; a missing key decodes false.
+- wm-x11: the snapshot (`lib.rs` `snapshot_window`, a construction site, not `runtime.rs`) reads live properties. `skip_taskbar` = `_NET_WM_STATE_SKIP_TASKBAR` or a utility/dock/splash `_NET_WM_WINDOW_TYPE`. `attention` = `_NET_WM_STATE_DEMANDS_ATTENTION`. Property changes of `_NET_WM_STATE` and `_NET_WM_WINDOW_TYPE` mark windows dirty (`events.rs` `handle_property`).
+- Attention is written to `_NET_WM_STATE` by: a client ClientMessage (`apply_net_wm_state`), a blocked map focus (`manage.rs`), and a blocked `_NET_ACTIVE_WINDOW` request (`events.rs`). It is cleared in `focus_with_stacking` (`window_ops.rs`). `publish_window_state` keeps the skip-taskbar and attention atoms when it rewrites the list. New atom `_NET_WM_STATE_SKIP_TASKBAR` in `atoms.rs`.
+- shell-core: a skip-taskbar window is not a task; a pinned launcher stays without its window. `TaskVisualState.attention` is added.
+- shell: attention tone `TASK_ATTENTION` = existing `--c-f39c12` amber (already in `ui/shell/flamewm.css` `:root` and `shell_tones.rs` FIXED_TONES; no new token). Priority: unresponsive > attention > focused. Used in `projection/panel.rs` and `async_projection/task_slots.rs`.
+- Tests added: wire round-trip and missing-key (`flamewm-control-wire/src/tests.rs`), shell-core skip/attention (`flamewm-shell-core/src/lib.rs`), shell projection fills and token pin (`task_slots.rs`). The wm-x11 focus/property paths have no new unit tests.
+- Checks: `cargo test --workspace --no-fail-fast` (CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-b2, CARGO_BUILD_JOBS=3, RUST_TEST_THREADS=2) EXIT 0, 5021 `ok` lines, 0 failed, 0 `warning:` lines. `python3 -I tools/architecture_guard.py` EXIT 0 (77 ratified).
+- Not verified: live X11 behaviour (no Xvfb run); the wm-x11 attention write/clear path has compile coverage only.
+- Scope note: `runtime.rs` was not edited by this job. Its `WindowSnapshot` test literal already carries the two fields (another worker's change in the same file, `+9` lines, MPRIS retry included).
+- No commit.

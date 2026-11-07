@@ -610,6 +610,8 @@ pub struct TaskVisualState {
     pub minimized: bool,
     /// The task's window missed its `_NET_WM_PING`; the shell marks the task as not responding.
     pub unresponsive: bool,
+    /// The task's window asked for attention (`_NET_WM_STATE_DEMANDS_ATTENTION`) and has not focused.
+    pub attention: bool,
 }
 
 fn entry_window(entry: &TaskEntry) -> Option<WindowRef> {
@@ -666,7 +668,9 @@ pub fn task_visual_states_on_output_and_workspace(
                         !item.sticky && usize::try_from(item.workspace.index) != Ok(index)
                     })
             });
-            if elsewhere {
+            // A skip-taskbar window is never a task; a pinned launcher stays, without its window.
+            let skipped = snapshot.is_some_and(|item| item.skip_taskbar);
+            if elsewhere || skipped {
                 if matches!(entry.kind, TaskEntryKind::PinnedSlot { .. }) {
                     // A pinned item stays in every workspace as an inert launcher.
                     window = None;
@@ -690,6 +694,7 @@ pub fn task_visual_states_on_output_and_workspace(
                 focused: snapshot.is_some_and(|item| item.focused),
                 minimized: snapshot.is_some_and(|item| item.state == WindowState::Minimized),
                 unresponsive: snapshot.is_some_and(|item| item.unresponsive),
+                attention: snapshot.is_some_and(|item| item.attention),
             })
         })
         .collect()
@@ -829,6 +834,8 @@ mod tests {
                 output: OutputId::new(output),
                 state_generation: 1,
                 unresponsive: false,
+                skip_taskbar: false,
+                attention: false,
             }
         }
 
@@ -875,6 +882,32 @@ mod tests {
             assert_eq!(states.len(), 2);
             assert!(states[0].unresponsive);
             assert!(!states[1].unresponsive);
+        }
+
+        // REGRESSION: a skip-taskbar window is not listed as a task; a pinned launcher stays but loses
+        // its window, and an attention flag marks only its own task.
+        #[test]
+        fn skip_taskbar_window_is_not_a_task_and_attention_marks_its_task() {
+            let tasks = panels(vec![
+                running(1),
+                running(2),
+                pinned("term", Some(WindowRef::new(3, 1))),
+            ]);
+            let mut skipped = window(1, "A", WindowState::Normal);
+            skipped.skip_taskbar = true;
+            let mut asking = window(2, "A", WindowState::Normal);
+            asking.attention = true;
+            let mut pinned_skipped = window(3, "A", WindowState::Normal);
+            pinned_skipped.skip_taskbar = true;
+            let states =
+                task_visual_states_on_output(&tasks, &[skipped, asking, pinned_skipped], &[], None);
+            assert_eq!(states.len(), 2);
+            assert_eq!(states[0].window, Some(WindowRef::new(2, 1)));
+            assert!(states[0].attention);
+            assert!(states[0].running);
+            assert_eq!(states[1].window, None);
+            assert!(!states[1].running);
+            assert!(!states[1].attention);
         }
 
         #[test]

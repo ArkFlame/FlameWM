@@ -399,6 +399,8 @@ mod tests {
             output: flamewm_api::OutputId::new("eDP-1"),
             state_generation: generation,
             unresponsive: false,
+            skip_taskbar: false,
+            attention: false,
         }
     }
 

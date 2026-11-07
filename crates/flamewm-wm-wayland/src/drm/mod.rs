@@ -125,7 +125,7 @@ use smithay::backend::session::Session;
 use smithay::backend::udev::{self, UdevBackend, UdevEvent};
 use smithay::desktop::utils::{OutputPresentationFeedback, send_frames_surface_tree};
 use smithay::desktop::{PopupManager, layer_map_for_output};
-use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
+use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::calloop::generic::Generic;
@@ -139,7 +139,7 @@ use smithay::reexports::drm::control::{
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_server::backend::GlobalId;
-use smithay::utils::{DeviceFd, Physical, Size, Transform};
+use smithay::utils::{DeviceFd, Size, Transform};
 
 use crate::Stage;
 use crate::StageStatus;
@@ -325,7 +325,7 @@ impl Drm {
         let cursor =
             state
                 .cursors
-                .elements(&mut self.renderer, &state.cursor_status, state.pointer);
+                .elements(&mut self.renderer, &state.cursor_status, state.pointer, state.output_scale());
         let scene_dirty = state.take_scene_dirty();
         let cached = self.scene.take();
         let scene = if let (SceneBuild::CursorOnly, Some(mut scene)) =
@@ -342,8 +342,7 @@ impl Drm {
             scene
         } else {
             // Same blurred desktop capture as the winit path, so DRM menus and titlebars match.
-            let output_size =
-                Size::<i32, Physical>::from((state.output_size.w, state.output_size.h));
+            let output_size = state.physical_output_size();
             if let Err(error) =
                 render::refresh_desktop_backdrop(state, &mut self.renderer, output_size)
             {
@@ -362,7 +361,7 @@ impl Drm {
         // `FLAMEWM_WAYLAND_DUMP`: one readback of the primary output. Taking the path makes a set
         // request be consumed exactly once, and `state.dumped` stops main.rs's re-arming timer.
         if let Some(path) = state.dump.take() {
-            let size = Size::<i32, Physical>::from((state.output_size.w, state.output_size.h));
+            let size = state.physical_output_size();
             match render::dump_offscreen(
                 &mut self.renderer,
                 &self.surfaces[0].output,

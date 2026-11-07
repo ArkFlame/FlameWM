@@ -119,6 +119,8 @@ impl X11Desktop {
             "_NET_WM_STATE_DEMANDS_ATTENTION",
             "_NET_WM_WINDOW_TYPE",
             "_NET_WM_WINDOW_TYPE_DOCK",
+            "_NET_WM_WINDOW_TYPE_UTILITY",
+            "_NET_WM_WINDOW_TYPE_SPLASH",
             "_NET_CLOSE_WINDOW",
             "_NET_WM_NAME",
             "_NET_WM_STRUT",
@@ -407,6 +409,17 @@ impl X11Desktop {
                 u32::MAX,
             )
             .map_err(FlameError::io)?;
+        let types_cookie = self
+            .conn
+            .get_property(
+                false,
+                window,
+                self.atom("_NET_WM_WINDOW_TYPE"),
+                AtomEnum::ATOM,
+                0,
+                u32::MAX,
+            )
+            .map_err(FlameError::io)?;
         let desktop_cookie = self
             .conn
             .get_property(
@@ -448,6 +461,11 @@ impl X11Desktop {
             .map_err(FlameError::io)?
             .value32()
             .map_or_else(Vec::new, Iterator::collect);
+        let types: Vec<u32> = types_cookie
+            .reply()
+            .map_err(FlameError::io)?
+            .value32()
+            .map_or_else(Vec::new, Iterator::collect);
         let desktop = desktop_cookie
             .reply()
             .map_err(FlameError::io)?
@@ -471,6 +489,10 @@ impl X11Desktop {
         let output = output_for_window_rect(&display.outputs, outer)
             .unwrap_or_else(|| OutputId::new("default"));
         let has = |name: &str| states.contains(&self.atom(name));
+        // Utility, dock and splash windows are never tasks, whatever their state says.
+        let untasked_type = ["_NET_WM_WINDOW_TYPE_DOCK", "_NET_WM_WINDOW_TYPE_UTILITY", "_NET_WM_WINDOW_TYPE_SPLASH"]
+            .iter()
+            .any(|name| types.contains(&self.atom(name)));
         let state = if has("_NET_WM_STATE_FULLSCREEN") {
             flamewm_api::window::WindowState::Fullscreen
         } else if has("_NET_WM_STATE_HIDDEN") {
@@ -493,6 +515,8 @@ impl X11Desktop {
             output,
             state_generation: self.generation_of(window),
             unresponsive: self.unresponsive.borrow().contains(&window),
+            skip_taskbar: has("_NET_WM_STATE_SKIP_TASKBAR") || untasked_type,
+            attention: has("_NET_WM_STATE_DEMANDS_ATTENTION"),
         })
     }
 }

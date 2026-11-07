@@ -83,6 +83,8 @@ pub(super) fn build_mirror(state: &State, workspace_revision: u64) -> Mirror {
                 output: WaylandDesktop::output_id(),
                 state_generation: 1,
                 unresponsive: false,
+                skip_taskbar: false,
+                attention: false,
             }
         })
         .collect();

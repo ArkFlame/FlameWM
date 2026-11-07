@@ -315,18 +315,28 @@ impl Decorations {
     }
 
     /// Blurred desktop under a `w` x `h` titlebar at `origin`, clamped to the output edges.
-    pub(super) fn crop(&self, origin: (i32, i32), w: usize, h: usize) -> Option<Vec<u8>> {
+    /// `origin` and `w`/`h` are logical; each logical pixel samples the physical capture at `scale`.
+    pub(super) fn crop(
+        &self,
+        origin: (i32, i32),
+        w: usize,
+        h: usize,
+        scale: f64,
+    ) -> Option<Vec<u8>> {
         let desktop = self.desktop.as_ref()?;
         let stored = stored_size((desktop.width, desktop.height));
-        let scale = DESKTOP_SCALE as f32;
+        let stored_scale = DESKTOP_SCALE as f32;
+        let scale = scale as f32;
         let mut out = Vec::with_capacity(w * h * 4);
         for y in 0..h {
             // Output pixel centre mapped into stored space, clamped to the output edges.
-            let oy = (origin.1 + y as i32).clamp(0, desktop.height as i32 - 1) as f32;
-            let fy = ((oy + 0.5) / scale - 0.5).clamp(0.0, (stored.1 - 1) as f32);
+            let oy = ((origin.1 + y as i32) as f32 * scale)
+                .clamp(0.0, (desktop.height as i32 - 1) as f32);
+            let fy = ((oy + 0.5) / stored_scale - 0.5).clamp(0.0, (stored.1 - 1) as f32);
             for x in 0..w {
-                let ox = (origin.0 + x as i32).clamp(0, desktop.width as i32 - 1) as f32;
-                let fx = ((ox + 0.5) / scale - 0.5).clamp(0.0, (stored.0 - 1) as f32);
+                let ox = ((origin.0 + x as i32) as f32 * scale)
+                    .clamp(0.0, (desktop.width as i32 - 1) as f32);
+                let fx = ((ox + 0.5) / stored_scale - 0.5).clamp(0.0, (stored.0 - 1) as f32);
                 out.extend_from_slice(&sample_bilinear(&desktop.pixels, stored, fx, fy));
             }
         }
@@ -348,6 +358,7 @@ impl Decorations {
         (active, maximized, rounded): (bool, bool, bool),
         feedback: Feedback,
         title: &str,
+        scale: f64,
     ) -> Option<Elem> {
         // GL texture dimensions must match the allocated CPU surface, even for narrow frames.
         if rect.w <= 0 || rect.w > 32_767 {
@@ -370,7 +381,7 @@ impl Decorations {
             }
         } else {
             // The blurred desktop is cropped at the titlebar origin, so a moved titlebar is rebuilt.
-            let backdrop = self.crop(origin, rect.w as usize, TITLEBAR_HEIGHT as usize);
+            let backdrop = self.crop(origin, rect.w as usize, TITLEBAR_HEIGHT as usize, scale);
             let pixels = chrome_pixels_over(
                 rect.w,
                 active,
@@ -405,7 +416,7 @@ impl Decorations {
         }
         MemoryRenderBufferRenderElement::from_buffer(
             renderer,
-            Point::from((f64::from(rect.x), f64::from(rect.y))),
+            Point::from((f64::from(rect.x) * scale, f64::from(rect.y) * scale)),
             &self.parts.get(&window)?.buffer,
             None,
             None,
@@ -422,6 +433,7 @@ impl Decorations {
         &mut self,
         renderer: &mut GlowRenderer,
         rect: Rect,
+        scale: f64,
     ) -> Option<Elem> {
         if rect.w <= 0 || rect.h <= 0 || rect.w > 32_767 || rect.h > 32_767 {
             return None;
@@ -432,7 +444,7 @@ impl Decorations {
             if self.surfaces.len() >= 32 {
                 self.surfaces.clear();
             }
-            let pixels = self.crop((rect.x, rect.y), rect.w as usize, rect.h as usize)?;
+            let pixels = self.crop((rect.x, rect.y), rect.w as usize, rect.h as usize, scale)?;
             let buffer = MemoryRenderBuffer::from_slice(
                 &opaque_argb_bytes(&pixels),
                 Fourcc::Argb8888,
@@ -445,7 +457,7 @@ impl Decorations {
         }
         MemoryRenderBufferRenderElement::from_buffer(
             renderer,
-            Point::from((f64::from(rect.x), f64::from(rect.y))),
+            Point::from((f64::from(rect.x) * scale, f64::from(rect.y) * scale)),
             self.surfaces.get(&key)?,
             None,
             None,
@@ -556,6 +568,7 @@ impl Decorations {
         window: WindowId,
         frame: Rect,
         radius: u8,
+        scale: f64,
     ) -> Vec<Elem> {
         let Some(ring) = self.ring_strips(window, frame, radius) else {
             return Vec::new();
@@ -566,8 +579,8 @@ impl Decorations {
                 MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
                     Point::from((
-                        f64::from(frame.x.saturating_add(strip.offset.0)),
-                        f64::from(frame.y.saturating_add(strip.offset.1)),
+                        f64::from(frame.x.saturating_add(strip.offset.0)) * scale,
+                        f64::from(frame.y.saturating_add(strip.offset.1)) * scale,
                     )),
                     &strip.buffer,
                     None,

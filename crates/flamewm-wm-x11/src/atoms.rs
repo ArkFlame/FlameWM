@@ -66,6 +66,7 @@ pub struct Atoms {
     pub net_wm_state_above: Atom,
     pub net_wm_state_below: Atom,
     pub net_wm_state_demands_attention: Atom,
+    pub net_wm_state_skip_taskbar: Atom,
     pub wm_change_state: Atom,
     /// Frames the WM redirects (`flamewm_render_x11::backdrop::REDIRECTED_FRAMES_PROPERTY`).
     pub redirected_frames: Atom,
@@ -76,7 +77,7 @@ pub struct Atoms {
 impl Atoms {
     pub fn new<C: Connection>(conn: &C) -> Result<Self, AnyError> {
         // Send every InternAtom before reading any reply: one round trip for all names.
-        let names: [&str; 60] = [
+        let names: [&str; 61] = [
             "UTF8_STRING",
             "WM_PROTOCOLS",
             "WM_DELETE_WINDOW",
@@ -134,6 +135,7 @@ impl Atoms {
             "_NET_WM_STATE_ABOVE",
             "_NET_WM_STATE_BELOW",
             "_NET_WM_STATE_DEMANDS_ATTENTION",
+            "_NET_WM_STATE_SKIP_TASKBAR",
             "WM_CHANGE_STATE",
             flamewm_render_x11::backdrop::REDIRECTED_FRAMES_PROPERTY,
             flamewm_render_x11::backdrop::WALLPAPER_OUTPUTS_PROPERTY,
@@ -204,10 +206,11 @@ impl Atoms {
             net_wm_state_above,
             net_wm_state_below,
             net_wm_state_demands_attention,
+            net_wm_state_skip_taskbar,
             wm_change_state,
             redirected_frames,
             wallpaper_outputs,
-        ]: [Atom; 60] = replies.try_into().map_err(|_| "atom count mismatch")?;
+        ]: [Atom; 61] = replies.try_into().map_err(|_| "atom count mismatch")?;
         Ok(Self {
             utf8_string,
             wm_protocols,
@@ -266,6 +269,7 @@ impl Atoms {
             net_wm_state_above,
             net_wm_state_below,
             net_wm_state_demands_attention,
+            net_wm_state_skip_taskbar,
             wm_change_state,
             redirected_frames,
             wallpaper_outputs,

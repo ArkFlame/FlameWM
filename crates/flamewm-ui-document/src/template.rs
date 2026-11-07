@@ -144,7 +144,7 @@ pub struct RuntimeImage {
 impl RuntimeImage {
     #[must_use]
     pub fn is_fully_opaque(&self) -> bool {
-        self.pixels.chunks_exact(4).all(|pixel| pixel[3] == 255)
+        flamewm_image_core::rgba8_fully_opaque(&self.pixels)
     }
 }
 
