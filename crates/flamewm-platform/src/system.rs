@@ -138,6 +138,18 @@ impl SystemService {
         if update.availability == ServiceAvailability::Available {
             self.pulse_backoff.reset();
         }
+        // Each failed reconnect bumps the Pulse generations while the server stays unreachable.
+        // Nothing observable changed, so that churn must not republish the snapshot on every retry.
+        let unchanged_while_unavailable = update.availability != ServiceAvailability::Available
+            && self.snapshot.audio.availability != ServiceAvailability::Available
+            && AudioSnapshot {
+                generation: self.snapshot.audio.generation,
+                server_generation: self.snapshot.audio.server_generation,
+                ..update.clone()
+            } == self.snapshot.audio;
+        if unchanged_while_unavailable {
+            return false;
+        }
         self.apply(|s| &mut s.audio, update)
     }
 
@@ -325,6 +337,28 @@ mod tests {
             ..AudioSnapshot::default()
         });
         assert!(!accepted);
+    }
+
+    #[test]
+    fn failed_pulse_retries_do_not_republish_the_audio_snapshot() {
+        let mut service = SystemService::default();
+        let unavailable = |generation, server_generation| AudioSnapshot {
+            availability: ServiceAvailability::Unavailable,
+            generation,
+            server_generation,
+            ..AudioSnapshot::default()
+        };
+        assert!(service.update_audio(unavailable(1, 1)));
+        let revision = service.snapshot.revision;
+        assert!(!service.update_audio(unavailable(2, 2)));
+        assert_eq!(service.snapshot.revision, revision);
+        assert!(service.update_audio(AudioSnapshot {
+            availability: ServiceAvailability::Available,
+            generation: 3,
+            server_generation: 3,
+            volume_percent: 40,
+            ..AudioSnapshot::default()
+        }));
     }
 
     #[test]
