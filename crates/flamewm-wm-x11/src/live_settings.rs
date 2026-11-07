@@ -17,7 +17,14 @@ const DEFAULT_TASKBAR_ACTIVITIES: bool = true;
 const DEFAULT_WINDOW_MARGIN: u32 = 2;
 const MAX_WINDOW_MARGIN: u32 = 32;
 
+/// `edgeSnap.enabled`: pointer edge and corner zones produce snap targets.
+const DEFAULT_EDGE_SNAP_ENABLED: bool = true;
+/// `edgeSnap.thresholdPx` default; the valid range is 4..=64 (see `flamewm-platform` settings).
+const DEFAULT_EDGE_SNAP_THRESHOLD_PX: i32 = flamewm_window_core::EDGE_THRESHOLD;
+
 static SNAP_PREVIEW_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_SNAP_PREVIEW_ENABLED);
+static EDGE_SNAP_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_EDGE_SNAP_ENABLED);
+static EDGE_SNAP_THRESHOLD_PX: AtomicU32 = AtomicU32::new(DEFAULT_EDGE_SNAP_THRESHOLD_PX as u32);
 static FOCUS_FOLLOWS_MOUSE: AtomicBool = AtomicBool::new(DEFAULT_FOCUS_FOLLOWS_MOUSE);
 static SHOW_CONTENT_WHILE_DRAGGING: AtomicBool =
     AtomicBool::new(DEFAULT_SHOW_CONTENT_WHILE_DRAGGING);
@@ -82,6 +89,33 @@ fn accent_from_snapshot(snapshot: &SettingsSnapshot) -> (u8, u8, u8) {
     ((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
 
+/// Pure mapping from a settings snapshot to `(edgeSnap.enabled, edgeSnap.thresholdPx)`. An
+/// out-of-range or ill-typed threshold keeps the default, matching `ProductSettings` validation.
+fn edge_snap_from_snapshot(snapshot: &SettingsSnapshot) -> (bool, i32) {
+    let threshold = match snapshot.values.get("edgeSnap.thresholdPx") {
+        Some(SettingValue::Integer(value)) if (4..=64).contains(value) => *value as i32,
+        _ => DEFAULT_EDGE_SNAP_THRESHOLD_PX,
+    };
+    (
+        boolean_setting(snapshot, "edgeSnap.enabled", DEFAULT_EDGE_SNAP_ENABLED),
+        threshold,
+    )
+}
+
+/// Snap target for a pointer at `pointer`, honouring `edgeSnap.enabled` and `thresholdPx`.
+#[must_use]
+pub(crate) fn snap_target_in_output(
+    pointer: flamewm_api::Point,
+    output: flamewm_api::Rect,
+    work: flamewm_api::Rect,
+) -> flamewm_window_core::SnapTarget {
+    if !EDGE_SNAP_ENABLED.load(Ordering::Relaxed) {
+        return flamewm_window_core::SnapTarget::None;
+    }
+    let edge = EDGE_SNAP_THRESHOLD_PX.load(Ordering::Relaxed) as i32;
+    flamewm_window_core::snap_target_in_output_with(pointer, output, work, edge)
+}
+
 fn window_margin_from_snapshot(snapshot: &SettingsSnapshot) -> u32 {
     match snapshot.values.get("windowMargin") {
         Some(SettingValue::Integer(value)) => u32::try_from(*value)
@@ -96,6 +130,9 @@ fn window_margin_from_snapshot(snapshot: &SettingsSnapshot) -> u32 {
 pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     let (snap_preview, focus_follows_mouse) = window_behaviour_from_snapshot(snapshot);
     SNAP_PREVIEW_ENABLED.store(snap_preview, Ordering::Relaxed);
+    let (edge_snap, edge_threshold) = edge_snap_from_snapshot(snapshot);
+    EDGE_SNAP_ENABLED.store(edge_snap, Ordering::Relaxed);
+    EDGE_SNAP_THRESHOLD_PX.store(edge_threshold as u32, Ordering::Relaxed);
     FOCUS_FOLLOWS_MOUSE.store(focus_follows_mouse, Ordering::Relaxed);
     SHOW_CONTENT_WHILE_DRAGGING.store(show_content_from_snapshot(snapshot), Ordering::Relaxed);
     TITLEBARS.store(
@@ -184,6 +221,31 @@ pub(crate) fn taskbar_activities() -> bool {
 #[cfg(test)]
 mod show_content_tests {
     use super::*;
+
+    #[test]
+    fn edge_snap_defaults_and_threshold_range_follow_settings() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        assert_eq!(edge_snap_from_snapshot(&snapshot), (true, 16));
+        snapshot
+            .values
+            .insert("edgeSnap.enabled".into(), SettingValue::Boolean(false));
+        snapshot
+            .values
+            .insert("edgeSnap.thresholdPx".into(), SettingValue::Integer(4));
+        assert_eq!(edge_snap_from_snapshot(&snapshot), (false, 4));
+        snapshot
+            .values
+            .insert("edgeSnap.thresholdPx".into(), SettingValue::Integer(64));
+        assert_eq!(edge_snap_from_snapshot(&snapshot), (false, 64));
+        snapshot
+            .values
+            .insert("edgeSnap.thresholdPx".into(), SettingValue::Integer(3));
+        assert_eq!(edge_snap_from_snapshot(&snapshot).1, 16);
+        snapshot
+            .values
+            .insert("edgeSnap.thresholdPx".into(), SettingValue::Integer(65));
+        assert_eq!(edge_snap_from_snapshot(&snapshot).1, 16);
+    }
 
     #[test]
     fn window_margin_defaults_to_two_and_rejects_out_of_range_values() {

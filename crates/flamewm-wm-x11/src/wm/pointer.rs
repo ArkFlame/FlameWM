@@ -344,7 +344,7 @@ impl<C: Connection> Wm<'_, C> {
                     .get(&client_id)
                     .map_or(self.work_area(), |s| s.outer);
                 let (output, work) = self.snap_zones_at(event.root_x, event.root_y, fallback);
-                let target = core_snap_target_in_output(
+                let target = crate::live_settings::snap_target_in_output(
                     flamewm_api::Point::new(i32::from(event.root_x), i32::from(event.root_y)),
                     to_core_rect(output),
                     to_core_rect(work),

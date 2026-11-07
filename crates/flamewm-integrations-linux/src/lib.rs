@@ -19,6 +19,7 @@ pub mod media_store;
 pub mod mpris;
 pub mod network_manager;
 pub mod network_slot;
+pub mod notification_history;
 pub mod notifications;
 pub mod portal_file_chooser;
 pub mod power;

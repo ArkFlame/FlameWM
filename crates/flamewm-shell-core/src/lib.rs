@@ -1,7 +1,9 @@
 //! Flame Shell view models. No X11 widget/window owns product state here.
 
 pub mod clock;
+pub mod hot_corner;
 pub mod menu_policy;
+pub mod overview;
 pub mod popup;
 pub mod popup_session;
 pub mod quickswitch;

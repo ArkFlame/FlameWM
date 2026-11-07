@@ -1,0 +1,6 @@
+/* Accessibility tokens for the settings page: :root custom properties only. */
+:root {
+  --a11y-border-width: 1px;
+  --a11y-border-color: #808080;
+  --a11y-focus-ring-color: #0a84ff;
+}

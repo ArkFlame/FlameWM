@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>FlameWM notification center</title>
+  <link rel="stylesheet" href="flamewm.css">
+  <style>
+    body { margin:0px; }
+    .tray-popup.notification-center-popup { position:absolute; left:0px; top:0px; width:380px; height:520px; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:24px; background:var(--surface); }
+    .nc-header { position:relative; height:48px; display:flex; flex-direction:row; align-items:center; padding:0px 16px; gap:10px; }
+    .nc-title { flex-grow:1; font-size:15px; font-weight:600; color:var(--text); }
+    .nc-clear { height:28px; padding:0px 12px; background:#ffffff1f; border-width:0px; border-radius:999px; font-size:12px; font-weight:600; color:var(--text); }
+    .nc-toggles { height:52px; padding:6px 16px; display:flex; flex-direction:row; align-items:center; gap:10px; }
+    .nc-toggle { flex:1; height:36px; display:flex; flex-direction:row; align-items:center; padding:0px 12px; background:#ffffff14; border-width:0px; border-radius:12px; font-size:13px; color:var(--text); }
+    .nc-toggle-state { font-size:12px; font-weight:600; color:var(--text); }
+    .nc-list { position:relative; height:400px; overflow-y:auto; }
+    .nc-empty { position:relative; padding:32px 16px; font-size:13px; color:var(--text); }
+    .nc-group { position:relative; margin:0px 16px 10px 16px; padding:10px 12px; background:#ffffff14; border-radius:16px; }
+    .nc-group-header { height:24px; display:flex; flex-direction:row; align-items:center; gap:8px; }
+    .nc-group-app { flex-grow:1; font-size:12px; font-weight:600; color:var(--text); }
+    .nc-group-count { font-size:11px; color:var(--text); }
+    .nc-group-mute { height:24px; padding:0px 10px; background:#ffffff1f; border-width:0px; border-radius:999px; font-size:11px; color:var(--text); }
+    .nc-item { position:relative; padding:6px 0px; display:flex; flex-direction:column; gap:2px; }
+    .nc-item-summary { font-size:13px; font-weight:600; color:var(--text); }
+    .nc-item-body { font-size:12px; color:var(--text); }
+    .nc-item-dismiss { position:absolute; right:0px; top:6px; width:22px; height:22px; padding:0px; background:transparent; border-width:0px; border-radius:999px; }
+    .nc-item-dismiss .symbolic-icon { width:14px; height:14px; }
+  </style>
+</head>
+<body class="popup-body">
+  <section id="notification-center" class="tray-popup notification-center-popup" data-action="popup.surface">
+    <div class="nc-header">
+      <div id="nc-title" class="nc-title">Notifications</div>
+      <button id="nc-clear" class="nc-clear" data-action="notification.center.clear">Clear all</button>
+    </div>
+    <div class="nc-toggles">
+      <button id="nc-dnd" class="nc-toggle" data-action="notification.center.dnd"><span class="nc-toggle-label">Do Not Disturb</span><span id="nc-dnd-state" class="nc-toggle-state">Off</span></button>
+    </div>
+    <div id="nc-list" class="nc-list" data-scroll="nc-list">
+      <div id="nc-empty" class="nc-empty">No notifications</div>
+      <div id="nc-group-1" class="nc-group">
+        <div class="nc-group-header">
+          <span id="nc-group-1-app" class="nc-group-app">&#8203;</span>
+          <span id="nc-group-1-count" class="nc-group-count">&#8203;</span>
+          <button id="nc-group-1-mute" class="nc-group-mute" data-action="notification.center.group.1.mute">Mute</button>
+        </div>
+        <div id="nc-item-1-1" class="nc-item">
+          <span id="nc-item-1-1-summary" class="nc-item-summary">&#8203;</span>
+          <span id="nc-item-1-1-body" class="nc-item-body">&#8203;</span>
+          <button id="nc-item-1-1-dismiss" class="nc-item-dismiss" data-action="notification.center.item.1.1.dismiss" aria-label="Dismiss">&#215;</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</body>
+</html>

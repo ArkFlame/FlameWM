@@ -1,0 +1,14 @@
+[package]
+name = "flamewm-tray"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flamewm-api = { path = "../flamewm-api" }
+flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
+
+[lints]
+workspace = true

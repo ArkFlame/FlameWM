@@ -27,6 +27,16 @@ fn main() {
     fs::copy(&css, staged.join("explorer.css")).expect("stage CSS");
     fs::create_dir_all(dest.join("base")).expect("stage base dir");
     fs::copy(root.join("ui/base/base.css"), dest.join("base/base.css")).expect("stage base CSS");
+    // base.css imports tokens.css, which must sit beside it in the staged tree.
+    fs::copy(
+        root.join("ui/base/tokens.css"),
+        dest.join("base/tokens.css"),
+    )
+    .expect("stage token CSS");
+    println!(
+        "cargo:rerun-if-changed={}",
+        root.join("ui/base/tokens.css").display()
+    );
     // Images resolve relative to the staged HTML, so the bundled SVG icons ship beside it.
     let staged_icons = staged.join("icons");
     fs::create_dir_all(&staged_icons).expect("stage icons");

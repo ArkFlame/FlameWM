@@ -7,8 +7,9 @@
 
 use std::time::Duration;
 
-use dbus::Message;
+pub use dbus::arg::messageitem::{MessageItem, MessageItemArray};
 use dbus::channel::{BusType, Channel, Watch, default_reply};
+pub use dbus::{Message, MessageType, Signature};
 use flamewm_api::ports::FdEvents;
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use flamewm_integrations_core::dispatcher::MAX_DISPATCH_PER_TURN;

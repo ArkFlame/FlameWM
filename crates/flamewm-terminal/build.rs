@@ -32,6 +32,16 @@ fn main() {
     fs::copy(&css, staged.join("terminal.css")).expect("stage CSS");
     fs::create_dir_all(dest.join("base")).expect("stage base dir");
     fs::copy(root.join("ui/base/base.css"), dest.join("base/base.css")).expect("stage base CSS");
+    // base.css imports tokens.css, which must sit beside it in the staged tree.
+    fs::copy(
+        root.join("ui/base/tokens.css"),
+        dest.join("base/tokens.css"),
+    )
+    .expect("stage token CSS");
+    println!(
+        "cargo:rerun-if-changed={}",
+        root.join("ui/base/tokens.css").display()
+    );
     let template = fs::read_to_string(&template).expect("read terminal.html");
     for (tier, pool) in TIERS.iter().enumerate() {
         let mut runs = String::new();

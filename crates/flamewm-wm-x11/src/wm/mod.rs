@@ -136,10 +136,7 @@ use flamewm_platform::shortcuts::{
     ACTION_OPEN_TERMINAL_SUPER, ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP,
 };
 use flamewm_platform::system::{MediaAudioKey, MediaBrightnessKey};
-use flamewm_window_core::{
-    SnapTarget, snap_geometry as core_snap_geometry,
-    snap_target_in_output as core_snap_target_in_output,
-};
+use flamewm_window_core::{SnapTarget, snap_geometry as core_snap_geometry};
 use x11rb::connection::Connection;
 use x11rb::errors::{ReplyError, ReplyOrIdError};
 use x11rb::protocol::damage::{self};

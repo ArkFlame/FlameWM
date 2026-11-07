@@ -5,8 +5,13 @@
 
 use flamewm_api::{Point, Rect, Size};
 
+/// Default `edgeSnap.thresholdPx`; the settings default is the same value.
 pub const EDGE_THRESHOLD: i32 = 16;
-pub const CORNER_THRESHOLD: i32 = 32;
+/// Corner zones are twice the edge zone; this is the default `EDGE_THRESHOLD` expansion.
+pub const CORNER_THRESHOLD: i32 = 2 * EDGE_THRESHOLD;
+
+pub mod keyboard_tile;
+pub mod window_rules;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum SnapTarget {
@@ -68,11 +73,26 @@ pub fn keep_visible(rect: Rect, bounds: Rect) -> Rect {
 /// output edge so a pointer over a bottom/right dock band still reaches the physical corner.
 #[must_use]
 pub fn snap_target_in_output(pointer: Point, output: Rect, work_area: Rect) -> SnapTarget {
-    let left = pointer.x >= work_area.x && pointer.x < work_area.x + EDGE_THRESHOLD;
-    let right = pointer.x >= work_area.right() - EDGE_THRESHOLD
+    snap_target_in_output_with(pointer, output, work_area, EDGE_THRESHOLD)
+}
+
+/// [`snap_target_in_output`] with an explicit `edgeSnap.thresholdPx`. The edge zone is `edge_px`
+/// (clamped to at least 1) and the corner zone is twice that, so `EDGE_THRESHOLD` reproduces the
+/// default behaviour exactly.
+#[must_use]
+pub fn snap_target_in_output_with(
+    pointer: Point,
+    output: Rect,
+    work_area: Rect,
+    edge_px: i32,
+) -> SnapTarget {
+    let edge = edge_px.max(1);
+    let corner = edge.saturating_mul(2);
+    let left = pointer.x >= work_area.x && pointer.x < work_area.x.saturating_add(edge);
+    let right = pointer.x >= work_area.right().saturating_sub(edge)
         && pointer.x < work_area.right().max(output.right());
-    let top = pointer.y >= work_area.y && pointer.y < work_area.y + CORNER_THRESHOLD;
-    let bottom = pointer.y >= work_area.bottom() - CORNER_THRESHOLD
+    let top = pointer.y >= work_area.y && pointer.y < work_area.y.saturating_add(corner);
+    let bottom = pointer.y >= work_area.bottom().saturating_sub(corner)
         && pointer.y < work_area.bottom().max(output.bottom());
     match (left, right, top, bottom) {
         (true, _, true, _) => SnapTarget::TopLeftQuarter,
@@ -237,6 +257,70 @@ mod tests {
         assert_eq!(
             snap_geometry(SnapTarget::BottomLeftQuarter, work, Size::new(800, 600)),
             Rect::new(0, 376, 640, 376)
+        );
+    }
+
+    #[test]
+    fn default_threshold_matches_the_legacy_constants() {
+        let samples = [
+            Point::new(0, 0),
+            Point::new(15, 31),
+            Point::new(16, 32),
+            Point::new(1279, 799),
+            Point::new(1263, 767),
+            Point::new(640, 400),
+        ];
+        for p in samples {
+            assert_eq!(
+                snap_target_in_output(p, area(), area()),
+                snap_target_in_output_with(p, area(), area(), EDGE_THRESHOLD),
+            );
+        }
+        assert_eq!(CORNER_THRESHOLD, 32);
+    }
+
+    #[test]
+    fn edge_threshold_widens_side_and_corner_zones() {
+        let work = area();
+        // Default 16: x=20 is outside the left edge zone.
+        assert_eq!(
+            snap_target_in_output_with(Point::new(20, 540), work, work, 16),
+            SnapTarget::None
+        );
+        // 32 px: the same point is inside the left edge zone.
+        assert_eq!(
+            snap_target_in_output_with(Point::new(20, 540), work, work, 32),
+            SnapTarget::LeftHalf
+        );
+        // Corner zone is 2 * edge: the top band is 32 px at the default, 64 px at 32.
+        assert_eq!(
+            snap_target_in_output_with(Point::new(10, 50), work, work, 16),
+            SnapTarget::LeftHalf
+        );
+        assert_eq!(
+            snap_target_in_output_with(Point::new(10, 50), work, work, 32),
+            SnapTarget::TopLeftQuarter
+        );
+        assert_eq!(
+            snap_target_in_output_with(Point::new(10, 50), work, work, 4),
+            SnapTarget::None
+        );
+    }
+
+    #[test]
+    fn edge_threshold_is_clamped_to_at_least_one_pixel() {
+        let work = area();
+        assert_eq!(
+            snap_target_in_output_with(Point::new(0, 540), work, work, 0),
+            SnapTarget::LeftHalf
+        );
+        assert_eq!(
+            snap_target_in_output_with(Point::new(0, 540), work, work, -50),
+            SnapTarget::LeftHalf
+        );
+        assert_eq!(
+            snap_target_in_output_with(Point::new(1, 540), work, work, 0),
+            SnapTarget::None
         );
     }
 

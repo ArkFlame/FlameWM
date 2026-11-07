@@ -95,6 +95,9 @@ impl ProductSettings {
         if self.night_shift_end >= minutes_per_day {
             return invalid("nightShiftEnd must be 0..1439");
         }
+        if !(100..=200).contains(&self.text_scale_percent) {
+            return invalid("textScalePercent must be 100..200");
+        }
         if !matches!(self.cursor_size, 24 | 32 | 48 | 64) {
             return invalid("cursorSize must be 24, 32, 48 or 64");
         }

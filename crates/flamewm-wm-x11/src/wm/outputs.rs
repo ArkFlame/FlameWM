@@ -195,7 +195,7 @@ impl<C: Connection> Wm<'_, C> {
     /// docks do not hide the corners from the pointer.
     pub(super) fn snap_target_at(&self, root_x: i16, root_y: i16, fallback: Rect) -> SnapTarget {
         let (output, work) = self.snap_zones_at(root_x, root_y, fallback);
-        core_snap_target_in_output(
+        crate::live_settings::snap_target_in_output(
             flamewm_api::Point::new(i32::from(root_x), i32::from(root_y)),
             to_core_rect(output),
             to_core_rect(work),

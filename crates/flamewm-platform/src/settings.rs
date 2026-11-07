@@ -54,6 +54,17 @@ pub enum ScreensaverMode {
 
 wire_enum!(ScreensaverMode { Ribbons => "ribbons", None => "none" });
 
+/// Night Light timing (`nightShiftMode`). `Manual` uses `nightShiftStart`..`nightShiftEnd`;
+/// `Sunset` follows local sunset to sunrise at the weather location (`flamewm_api::blue_light_sun`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NightShiftMode {
+    #[default]
+    Manual,
+    Sunset,
+}
+
+wire_enum!(NightShiftMode { Manual => "manual", Sunset => "sunset" });
+
 /// Taskbar layout (`taskbarStyle`). `Floating` insets the bar and rounds its corners.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskbarStyle {
@@ -294,6 +305,18 @@ pub struct ProductSettings {
     /// than the end wraps over midnight, so 21:00..07:00 is a valid night window.
     pub night_shift_start: u16,
     pub night_shift_end: u16,
+    /// `nightShiftMode`: `manual` (default) uses the start/end minutes; `sunset` follows the sun.
+    pub night_shift_mode: NightShiftMode,
+    /// `highContrast`: stronger borders and text contrast for the shared surfaces. Default off.
+    pub high_contrast: bool,
+    /// `reducedMotion`: the shell skips decorative motion such as launch feedback. Default off.
+    pub reduced_motion: bool,
+    /// `textScalePercent` (100..=200): UI text scale. `100` is the default size.
+    pub text_scale_percent: u16,
+    /// `stickyKeys`: modifier keys latch for one keystroke instead of being held. Default off.
+    pub sticky_keys: bool,
+    /// `slowKeys`: keys must be held briefly before they register. Default off.
+    pub slow_keys: bool,
     pub surface_outline_color: String,
     pub surface_outline_opacity: u8,
     /// `surfaceOutlineWidth` in px (1..=4); default 1.
@@ -468,6 +491,12 @@ impl Default for ProductSettings {
             night_shift_schedule: false,
             night_shift_start: 21 * 60,
             night_shift_end: 7 * 60,
+            night_shift_mode: NightShiftMode::Manual,
+            high_contrast: false,
+            reduced_motion: false,
+            text_scale_percent: 100,
+            sticky_keys: false,
+            slow_keys: false,
             surface_outline_color: "#999999".to_owned(),
             surface_outline_opacity: 50,
             surface_outline_width: 1,
@@ -819,7 +848,8 @@ text_enum_slot!(
     BackgroundMode,
     WallpaperFit,
     ScreensaverMode,
-    HotCornerAction
+    HotCornerAction,
+    NightShiftMode
 );
 
 impl Slot for AppearanceMode {
@@ -927,6 +957,12 @@ stable_settings! {
     (false, taskbar, "nightShiftSchedule", night_shift_schedule),
     (false, taskbar, "nightShiftStart", night_shift_start),
     (false, taskbar, "nightShiftEnd", night_shift_end),
+    (false, taskbar, "nightShiftMode", night_shift_mode),
+    (false, accessibility, "highContrast", high_contrast),
+    (false, accessibility, "reducedMotion", reduced_motion),
+    (false, accessibility, "textScalePercent", text_scale_percent),
+    (false, accessibility, "stickyKeys", sticky_keys),
+    (false, accessibility, "slowKeys", slow_keys),
     (false, taskbar, "surfaceBlurPercent", surface_blur_percent),
     (false, taskbar, "surfaceOutlineColor", surface_outline_color),
     (false, taskbar, "surfaceOutlineOpacity", surface_outline_opacity),
@@ -1121,6 +1157,8 @@ mod glass_settings_tests;
 
 #[cfg(test)]
 mod accent_custom_tests;
+#[cfg(test)]
+mod accessibility_night_tests;
 #[cfg(test)]
 mod edge_hot_corner_tests;
 #[cfg(test)]

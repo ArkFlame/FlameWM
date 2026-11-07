@@ -8,8 +8,11 @@ use flamewm_render_core::{
     NodeKind, Overflow, Position, Style, TextOverflow, TextShadow, TextWrap,
 };
 
+use crate::cache;
+use crate::calc::{eval_calc, CalcUnit};
 use crate::css::{parse_declarations, parse_stylesheet, Declaration, PseudoState, Rule};
 use crate::html::{parse_html, HtmlNodeKind, ParsedHtml};
+use crate::imports::expand_imports;
 
 #[derive(Clone, Copy, Debug)]
 pub struct CompileOptions {
@@ -46,11 +49,27 @@ pub fn compile_file(
     extra_css_paths: &[PathBuf],
     options: CompileOptions,
 ) -> Result<CompileOutput, String> {
+    compile_file_in(
+        html_path,
+        extra_css_paths,
+        options,
+        cache::default_dir().as_deref(),
+    )
+}
+
+/// Compiles a page from disk. With `cache_dir`, a previous compile of identical inputs is reused.
+/// Outputs with warnings are never cached, so a hit always has an empty warning list.
+fn compile_file_in(
+    html_path: &Path,
+    extra_css_paths: &[PathBuf],
+    options: CompileOptions,
+    cache_dir: Option<&Path>,
+) -> Result<CompileOutput, String> {
     let html_source = fs::read_to_string(html_path)
         .map_err(|error| format!("failed to read {}: {error}", html_path.display()))?;
     let html = parse_html(&html_source)?;
     let base = html_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut css = html.embedded_css.clone();
+    let mut css = expand_imports(html_path, &html.embedded_css)?;
     let mut sheets = Vec::with_capacity(html.linked_css.len() + extra_css_paths.len());
     for href in &html.linked_css {
         if href.contains("://") || href.starts_with("data:") {
@@ -61,13 +80,57 @@ pub fn compile_file(
     sheets.extend_from_slice(extra_css_paths);
     for path in &sheets {
         css.push('\n');
-        css.push_str(
-            &fs::read_to_string(path).map_err(|error| {
-                format!("failed to read stylesheet {}: {error}", path.display())
-            })?,
-        );
+        let source = fs::read_to_string(path)
+            .map_err(|error| format!("failed to read stylesheet {}: {error}", path.display()))?;
+        css.push_str(&expand_imports(path, &source)?);
     }
-    compile_parsed(&html_source, &css, html, options, Some(base))
+    let key = cache_dir.and_then(|_| cache_key(&html_source, &css, base, &html, options));
+    if let (Some(dir), Some(key)) = (cache_dir, key) {
+        if let Some(document) = cache::load(dir, key) {
+            return Ok(CompileOutput {
+                document,
+                warnings: Vec::new(),
+            });
+        }
+    }
+    let output = compile_parsed(&html_source, &css, html, options, Some(base))?;
+    if let (Some(dir), Some(key)) = (cache_dir, key) {
+        if output.warnings.is_empty() {
+            cache::store(dir, key, &output.document);
+        }
+    }
+    Ok(output)
+}
+
+/// Hashes every input that changes the compiled output: compiler version, options, page HTML,
+/// expanded CSS, and the bytes of each `src` image. `None` when an image cannot be read, so the
+/// compile reports that error rather than caching around it.
+fn cache_key(
+    html_source: &str,
+    css: &str,
+    base: &Path,
+    html: &ParsedHtml,
+    options: CompileOptions,
+) -> Option<u64> {
+    let mut input = Vec::with_capacity(html_source.len() + css.len() + 64);
+    input.extend_from_slice(env!("CARGO_PKG_VERSION").as_bytes());
+    input.push(0);
+    input.push(options.strict as u8);
+    input.push(0);
+    input.extend_from_slice(html_source.as_bytes());
+    input.push(0);
+    input.extend_from_slice(css.as_bytes());
+    input.push(0);
+    for node in &html.nodes {
+        if let Some(src) = node.attrs.get("src") {
+            let bytes = fs::read(base.join(src)).ok()?;
+            input.extend_from_slice(src.as_bytes());
+            input.push(0);
+            input.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            input.extend_from_slice(&bytes);
+        }
+    }
+    Some(fnv1a64(&input))
 }
 
 fn compile_parsed(
@@ -291,7 +354,8 @@ fn resolve_length_vars(input: &str, lengths: &HashMap<String, String>) -> Result
 fn takes_length_var(name: &str) -> bool {
     matches!(
         name,
-        "width"
+        "inset"
+            | "width"
             | "height"
             | "min-width"
             | "min-height"
@@ -581,6 +645,13 @@ impl<'a> Compiler<'a> {
             "min-height" => style.min_height = parse_length(value)?,
             "max-width" => style.max_width = parse_length(value)?,
             "max-height" => style.max_height = parse_length(value)?,
+            "inset" => {
+                let [top, right, bottom, left] = parse_inset(value)?;
+                style.top = top;
+                style.right = right;
+                style.bottom = bottom;
+                style.left = left;
+            }
             "top" => style.top = parse_length(value)?,
             "right" => style.right = parse_length(value)?,
             "bottom" => style.bottom = parse_length(value)?,
@@ -743,6 +814,14 @@ fn parse_length(input: &str) -> Result<Length, String> {
     if value == "auto" {
         return Ok(Length::Auto);
     }
+    if value.starts_with("calc(") {
+        let calc = eval_calc(value)?;
+        return match calc.unit {
+            CalcUnit::Px => Ok(Length::Px(calc.value)),
+            CalcUnit::Percent => Ok(Length::Percent(calc.value / 100.0)),
+            CalcUnit::Number => Err(format!("calc() length '{value}' needs px or %")),
+        };
+    }
     if let Some(number) = value.strip_suffix("px") {
         return Ok(Length::Px(parse_number(number)?));
     }
@@ -762,6 +841,13 @@ fn parse_px(input: &str) -> Result<f32, String> {
     if value == "0" {
         return Ok(0.0);
     }
+    if value.starts_with("calc(") {
+        let calc = eval_calc(value)?;
+        if calc.unit != CalcUnit::Px {
+            return Err(format!("expected px length, found '{value}'"));
+        }
+        return Ok(calc.value);
+    }
     let Some(number) = value.strip_suffix("px") else {
         return Err(format!("expected px length, found '{value}'"));
     };
@@ -769,6 +855,13 @@ fn parse_px(input: &str) -> Result<f32, String> {
 }
 
 fn parse_number(input: &str) -> Result<f32, String> {
+    if input.trim().starts_with("calc(") {
+        let calc = eval_calc(input.trim())?;
+        if calc.unit != CalcUnit::Number {
+            return Err(format!("expected a number, found '{}'", input.trim()));
+        }
+        return Ok(calc.value);
+    }
     let value: f32 = input
         .trim()
         .parse()
@@ -779,9 +872,52 @@ fn parse_number(input: &str) -> Result<f32, String> {
     Ok(value)
 }
 
+/// Splits a value list on whitespace outside parentheses, so `calc(1px + 2px)` stays one value.
+fn split_values(input: &str) -> Vec<&str> {
+    let mut values = Vec::new();
+    let mut depth = 0i32;
+    let mut start = None;
+    for (index, ch) in input.char_indices() {
+        match ch {
+            c if c.is_ascii_whitespace() && depth == 0 => {
+                if let Some(begin) = start.take() {
+                    values.push(&input[begin..index]);
+                }
+            }
+            _ => {
+                if ch == '(' {
+                    depth += 1;
+                } else if ch == ')' {
+                    depth -= 1;
+                }
+                start.get_or_insert(index);
+            }
+        }
+    }
+    if let Some(begin) = start {
+        values.push(&input[begin..]);
+    }
+    values
+}
+
+/// `inset` shorthand: one to four lengths for top, right, bottom, left.
+fn parse_inset(input: &str) -> Result<[Length; 4], String> {
+    let values = split_values(input)
+        .into_iter()
+        .map(parse_length)
+        .collect::<Result<Vec<_>, _>>()?;
+    match values.as_slice() {
+        [all] => Ok([*all; 4]),
+        [vertical, horizontal] => Ok([*vertical, *horizontal, *vertical, *horizontal]),
+        [top, horizontal, bottom] => Ok([*top, *horizontal, *bottom, *horizontal]),
+        [top, right, bottom, left] => Ok([*top, *right, *bottom, *left]),
+        _ => Err(format!("invalid inset shorthand '{input}'")),
+    }
+}
+
 fn parse_edges(input: &str) -> Result<Edges, String> {
-    let values: Vec<f32> = input
-        .split_ascii_whitespace()
+    let values: Vec<f32> = split_values(input)
+        .into_iter()
         .map(parse_px)
         .collect::<Result<_, _>>()?;
     match values.as_slice() {
@@ -1671,6 +1807,7 @@ mod tests {
 #[cfg(test)]
 mod ui_pages_tests {
     use super::*;
+    use flamewm_render_core::encode;
 
     fn html_pages(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(dir).expect("read ui dir") {
@@ -1707,8 +1844,13 @@ mod ui_pages_tests {
         // Shared tokens live in base.css, which pages load alongside their own sheet.
         let base = ui.join("base/base.css");
         for sheet in &sheets {
-            let mut source = fs::read_to_string(&base).expect("read base CSS");
-            source.push_str(&fs::read_to_string(sheet).expect("read ui CSS"));
+            let mut source =
+                expand_imports(&base, &fs::read_to_string(&base).expect("read base CSS"))
+                    .expect("expand base CSS");
+            source.push_str(
+                &expand_imports(sheet, &fs::read_to_string(sheet).expect("read ui CSS"))
+                    .unwrap_or_else(|error| panic!("{}: {error}", sheet.display())),
+            );
             let rules = parse_stylesheet(&source)
                 .unwrap_or_else(|error| panic!("{}: {error}", sheet.display()));
             let (_, _, lengths) = collect_variables(&rules)
@@ -1721,6 +1863,93 @@ mod ui_pages_tests {
                 }
             }
         }
+    }
+
+    /// Replaces each `var(--name)` whose `name` is a length token with the token's literal text.
+    fn inline_length_tokens(css: &str, lengths: &HashMap<String, String>) -> String {
+        let mut output = String::with_capacity(css.len());
+        let mut rest = css;
+        while let Some(start) = rest.find("var(--") {
+            output.push_str(&rest[..start]);
+            let after = &rest[start + "var(".len()..];
+            let end = after.find(')').expect("closed var()");
+            match lengths.get(&after[..end]) {
+                Some(literal) => output.push_str(literal),
+                None => output.push_str(&rest[start..start + "var(".len() + end + 1]),
+            }
+            rest = &after[end + 1..];
+        }
+        output.push_str(rest);
+        output
+    }
+
+    /// Encoded document with the source fingerprint (header bytes 8..16) zeroed, since the
+    /// fingerprint hashes source text and the token rewrite changes that text on purpose.
+    fn encoded_without_fingerprint(document: &CompiledDocument) -> Vec<u8> {
+        let mut bytes = encode(document).expect("encode document");
+        bytes[8..16].fill(0);
+        bytes
+    }
+
+    #[test]
+    fn token_references_compile_to_the_same_document_as_their_literals() {
+        let ui = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui"));
+        let tokens = expand_imports(
+            &ui.join("base/tokens.css"),
+            &fs::read_to_string(ui.join("base/tokens.css")).expect("read tokens"),
+        )
+        .expect("expand tokens");
+        let (_, _, lengths) = collect_variables(&parse_stylesheet(&tokens).unwrap()).unwrap();
+        assert!(lengths.len() >= 15, "token sheet defines the length tokens");
+
+        let mut pages = Vec::new();
+        html_pages(ui, &mut pages);
+        let (mut compared, mut skipped, mut found) = (0, 0, 0);
+        for page in pages {
+            let source = fs::read_to_string(&page).expect("read page");
+            if !source.contains("tokens.css") {
+                continue;
+            }
+            found += 1;
+            // Same inputs as compile_file: embedded CSS, then each linked sheet with its imports.
+            let html = parse_html(&source).expect("parse page");
+            let base = page.parent().expect("page parent");
+            let mut css = expand_imports(&page, &html.embedded_css).expect("embedded CSS");
+            for href in &html.linked_css {
+                let path = base.join(href);
+                css.push('\n');
+                let text = fs::read_to_string(&path).expect("read linked sheet");
+                css.push_str(&expand_imports(&path, &text).expect("expand linked sheet"));
+            }
+            let literal_css = inline_length_tokens(&css, &lengths);
+            let compile = |css: &str| {
+                compile_parsed(
+                    &source,
+                    css,
+                    parse_html(&source).unwrap(),
+                    CompileOptions::default(),
+                    Some(base),
+                )
+            };
+            let (with_tokens, with_literals) = match (compile(&css), compile(&literal_css)) {
+                (Ok(a), Ok(b)) => (a, b),
+                // Missing image files are checked out separately; the other test reports them.
+                (Err(error), _) | (_, Err(error)) if error.starts_with("failed to read image") => {
+                    skipped += 1;
+                    continue;
+                }
+                (Err(error), _) | (_, Err(error)) => panic!("{}: {error}", page.display()),
+            };
+            assert_eq!(
+                encoded_without_fingerprint(&with_tokens.document),
+                encoded_without_fingerprint(&with_literals.document),
+                "{} differs between tokens and literals",
+                page.display()
+            );
+            compared += 1;
+        }
+        assert!(found > 0, "no page links the token sheet");
+        eprintln!("token compile-diff: {compared} compared, {skipped} skipped (missing images)");
     }
 
     #[test]
@@ -1749,5 +1978,173 @@ mod ui_pages_tests {
             "UI pages failed to compile:\n{}",
             failures.join("\n")
         );
+    }
+}
+
+#[cfg(test)]
+mod css_feature_tests {
+    use super::*;
+    use flamewm_render_core::encode;
+
+    fn fixture_dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("flamewm-compile-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sheets")).expect("create fixture dir");
+        dir
+    }
+
+    fn style_of_id(output: &CompileOutput, id: &str) -> Style {
+        output
+            .document
+            .nodes
+            .iter()
+            .find(|node| node.id == id)
+            .unwrap_or_else(|| panic!("no node with id {id}"))
+            .style
+            .as_ref()
+            .clone()
+    }
+
+    #[test]
+    fn calc_resolves_px_percent_and_number_values_in_length_contexts() {
+        assert_eq!(
+            parse_length("calc(50% * 0.5)").unwrap(),
+            Length::Percent(0.25)
+        );
+        assert_eq!(
+            parse_length("calc(100% / 4)").unwrap(),
+            Length::Percent(0.25)
+        );
+        assert_eq!(parse_length("calc(4px * 3)").unwrap(), Length::Px(12.0));
+        assert_eq!(parse_px("calc((4px + 2px) / 2)").unwrap(), 3.0);
+        assert_eq!(parse_number("calc(1 / 4)").unwrap(), 0.25);
+        assert_eq!(parse_edges("calc(2px * 3) 1px").unwrap().top, 6.0);
+    }
+
+    #[test]
+    fn calc_rejects_wrong_units_and_mixed_units_per_property() {
+        assert!(parse_length("calc(10px + 5%)").is_err(), "mixed units");
+        assert!(parse_length("calc(2)").is_err(), "unitless is not a length");
+        assert!(parse_px("calc(50%)").is_err(), "percent is not px");
+        assert!(parse_px("calc(2px + 1)").is_err(), "mixed px and number");
+        assert!(parse_number("calc(1px)").is_err(), "length is not a number");
+        assert!(
+            parse_edges("calc(2px * 2px) 1px").is_err(),
+            "length squared"
+        );
+    }
+
+    #[test]
+    fn calc_in_declarations_compiles_and_bad_calc_fails_the_compile() {
+        let source = "<body><style>:root { --gap: 3px; } #a { padding: calc(var(--gap) * 2); width: calc(100% / 2); gap: calc((4px + 2px) / 2); }</style><div id=\"a\"></div></body>";
+        let output = compile_str(source, "", CompileOptions::default()).unwrap();
+        assert!(output.warnings.is_empty());
+        let style = style_of_id(&output, "a");
+        assert_eq!(style.padding.top, 6.0, "var() inside calc()");
+        assert_eq!(style.width, Length::Percent(0.5));
+        assert_eq!(style.gap, 3.0);
+        for bad in [
+            "width: calc(10px + 5%)",
+            "padding: calc(2px * 2px)",
+            "gap: calc(4px + 2)",
+            "width: calc(1px",
+        ] {
+            let source = format!("<body><style>#a {{ {bad}; }}</style><div id=\"a\"></div></body>");
+            assert!(
+                compile_str(&source, "", CompileOptions::default()).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn inset_shorthand_expands_to_four_sides_and_rejects_bad_counts() {
+        let inset = parse_inset("calc(1px + 1px) 3px").unwrap();
+        assert_eq!(
+            inset,
+            [
+                Length::Px(2.0),
+                Length::Px(3.0),
+                Length::Px(2.0),
+                Length::Px(3.0)
+            ]
+        );
+        assert_eq!(parse_inset("auto").unwrap(), [Length::Auto; 4]);
+        assert!(parse_inset("1px 2px 3px 4px 5px").is_err());
+        assert!(parse_inset("").is_err());
+    }
+
+    #[test]
+    fn at_import_in_inline_style_is_rejected_without_a_base_directory() {
+        let source = "<body><style>@import \"x.css\";</style></body>";
+        assert!(compile_str(source, "", CompileOptions::default()).is_err());
+    }
+
+    #[test]
+    fn linked_sheet_imports_are_expanded_relative_to_the_sheet() {
+        let dir = fixture_dir("import");
+        fs::write(
+            dir.join("page.html"),
+            "<body><link rel=\"stylesheet\" href=\"sheets/main.css\"><div id=\"a\"></div></body>",
+        )
+        .unwrap();
+        fs::write(dir.join("sheets/main.css"), "@import \"partial.css\";").unwrap();
+        fs::write(dir.join("sheets/partial.css"), "#a { width: 7px; }").unwrap();
+        let output = compile_file_in(&dir.join("page.html"), &[], CompileOptions::default(), None)
+            .expect("imports compile");
+        assert_eq!(style_of_id(&output, "a").width, Length::Px(7.0));
+    }
+
+    fn count_entries(dir: &Path) -> usize {
+        fs::read_dir(dir).map(Iterator::count).unwrap_or(0)
+    }
+
+    #[test]
+    fn cache_hit_matches_fresh_compile_and_corrupt_entries_recompile() {
+        let dir = fixture_dir("cache");
+        let cache_dir = dir.join("cache");
+        let page = dir.join("page.html");
+        let source = "<body><style>#a { width: 9px; }</style><div id=\"a\"></div></body>";
+        fs::write(&page, source).unwrap();
+        let fresh = compile_file_in(&page, &[], CompileOptions::default(), None).unwrap();
+        let stored =
+            compile_file_in(&page, &[], CompileOptions::default(), Some(&cache_dir)).unwrap();
+        assert_eq!(count_entries(&cache_dir), 1);
+        let hit = compile_file_in(&page, &[], CompileOptions::default(), Some(&cache_dir)).unwrap();
+        let fresh_bytes = encode(&fresh.document).unwrap();
+        assert_eq!(encode(&stored.document).unwrap(), fresh_bytes);
+        assert_eq!(encode(&hit.document).unwrap(), fresh_bytes);
+
+        for entry in fs::read_dir(&cache_dir).unwrap() {
+            fs::write(entry.unwrap().path(), b"corrupt").unwrap();
+        }
+        let recovered =
+            compile_file_in(&page, &[], CompileOptions::default(), Some(&cache_dir)).unwrap();
+        assert_eq!(encode(&recovered.document).unwrap(), fresh_bytes);
+
+        fs::write(&page, source.replace("9px", "11px")).unwrap();
+        let edited =
+            compile_file_in(&page, &[], CompileOptions::default(), Some(&cache_dir)).unwrap();
+        assert_eq!(style_of_id(&edited, "a").width, Length::Px(11.0));
+        assert_eq!(
+            count_entries(&cache_dir),
+            2,
+            "edited source gets its own key"
+        );
+    }
+
+    #[test]
+    fn compile_errors_are_never_cached() {
+        let dir = fixture_dir("cache-error");
+        let cache_dir = dir.join("cache");
+        let page = dir.join("page.html");
+        fs::write(
+            &page,
+            "<body><style>#a { width: calc(1px + 5%); }</style><div id=\"a\"></div></body>",
+        )
+        .unwrap();
+        assert!(compile_file_in(&page, &[], CompileOptions::default(), Some(&cache_dir)).is_err());
+        assert_eq!(count_entries(&cache_dir), 0);
     }
 }

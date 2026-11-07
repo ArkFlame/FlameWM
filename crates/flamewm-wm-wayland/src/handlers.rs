@@ -1,5 +1,6 @@
 //! Smithay protocol handlers and delegate registrations for `State`.
 
+use flamewm_wm_wayland::protocols::toplevel::ToplevelFacts;
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::delegate_compositor;
 use smithay::delegate_data_device;
@@ -24,8 +25,11 @@ use smithay::reexports::wayland_server::{Client, Resource};
 use smithay::utils::Serial;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
-    CompositorHandler, CompositorState, SurfaceAttributes, TraversalAction,
+    CompositorHandler, CompositorState, SurfaceAttributes, TraversalAction, with_states,
     with_surface_tree_upward,
+};
+use smithay::wayland::foreign_toplevel_list::{
+    ForeignToplevelListHandler, ForeignToplevelListState,
 };
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::selection::data_device::{
@@ -37,6 +41,7 @@ use smithay::wayland::shell::wlr_layer::{
     Layer, LayerSurface as WlrLayerSurface, LayerSurfaceConfigure, WlrLayerShellHandler,
     WlrLayerShellState,
 };
+use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ShellClient, ToplevelSurface, XdgShellHandler, XdgShellState,
@@ -170,7 +175,16 @@ impl XdgShellHandler for State {
         let rect = self.model.cascade_rect(workspace);
         self.model.add(id, rect, workspace);
         self.toplevels.push((id, surface));
+        self.foreign_toplevel_open(id, ToplevelFacts::default());
         self.set_focus(Some(id));
+    }
+
+    fn title_changed(&mut self, surface: ToplevelSurface) {
+        self.foreign_toplevel_refresh(&surface);
+    }
+
+    fn app_id_changed(&mut self, surface: ToplevelSurface) {
+        self.foreign_toplevel_refresh(&surface);
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
@@ -277,6 +291,7 @@ impl XdgShellHandler for State {
             return;
         };
         self.toplevels.retain(|(wid, _)| *wid != id);
+        self.foreign_toplevel_close(id);
         self.model.remove(id);
         if self.grab.is_some_and(
             |grab| matches!(grab, Grab::Move { id: g, .. } | Grab::Resize { id: g, .. } if g == id),
@@ -291,6 +306,12 @@ impl XdgShellHandler for State {
 }
 
 impl State {
+    fn foreign_toplevel_refresh(&mut self, surface: &ToplevelSurface) {
+        if let Some(id) = self.window_for_surface(surface.wl_surface()) {
+            self.foreign_toplevel_sync(id, toplevel_facts(surface));
+        }
+    }
+
     /// Maximize or restore by explicit request, idempotent in both directions.
     pub fn set_maximized(&mut self, surface: &WlSurface, on: bool) {
         let Some(id) = self.window_for_surface(surface) else {
@@ -458,6 +479,31 @@ delegate_output!(State);
 delegate_session_lock!(State);
 
 delegate_viewporter!(State);
+
+smithay::delegate_foreign_toplevel_list!(State);
+
+impl ForeignToplevelListHandler for State {
+    fn foreign_toplevel_list_state(&mut self) -> &mut ForeignToplevelListState {
+        &mut self.foreign_toplevels
+    }
+}
+
+/// The title and app id a toplevel surface currently holds, read from its xdg role data.
+fn toplevel_facts(surface: &ToplevelSurface) -> ToplevelFacts {
+    with_states(surface.wl_surface(), |states| {
+        states
+            .data_map
+            .get::<XdgToplevelSurfaceData>()
+            .map(|data| {
+                let data = data.lock().unwrap();
+                ToplevelFacts {
+                    title: data.title.clone().unwrap_or_default(),
+                    app_id: data.app_id.clone().unwrap_or_default(),
+                }
+            })
+            .unwrap_or_default()
+    })
+}
 
 #[cfg(test)]
 mod tests {

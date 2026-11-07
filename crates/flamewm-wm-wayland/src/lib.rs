@@ -7,3 +7,5 @@
 //! global) is testable without a seat, a GPU or a running compositor.
 
 pub mod lock_global;
+/// Pure policy for the external protocols (toplevel listing, gamma ramps).
+pub mod protocols;

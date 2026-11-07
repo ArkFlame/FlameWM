@@ -34,7 +34,7 @@ use crate::model::{
     Button, Hit, Mode, Mods, Rect, ResizeEdge, TITLEBAR_HEIGHT, WindowId, resize_edge_at,
 };
 use crate::state::{Grab, State, next_serial};
-use flamewm_window_core::{SnapTarget, keep_visible, snap_target_in_output};
+use flamewm_window_core::{SnapTarget, keep_visible};
 
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
@@ -841,24 +841,48 @@ fn frame_for_client(client: Rect, titlebar: bool) -> Rect {
 fn snap_target_at(state: &State, pointer: Point<f64, Logical>, activated: bool) -> SnapTarget {
     let output = state.output_rect();
     let work = state.work_area();
-    snap_target_for_move(
+    let (edge_snap, edge_px) = state.model.edge_snap();
+    if !edge_snap {
+        return SnapTarget::None;
+    }
+    snap_target_for_move_with(
         activated,
         flamewm_api::Point::new(pointer.x.round() as i32, pointer.y.round() as i32),
         flamewm_api::Rect::new(output.x, output.y, output.w, output.h),
         flamewm_api::Rect::new(work.x, work.y, work.w, work.h),
+        edge_px,
     )
 }
 
+/// Default-threshold fixture used by the snap tests; the live path passes `edgeSnap.thresholdPx`.
+#[cfg(test)]
 fn snap_target_for_move(
     activated: bool,
     pointer: flamewm_api::Point,
     output: flamewm_api::Rect,
     work: flamewm_api::Rect,
 ) -> SnapTarget {
+    snap_target_for_move_with(
+        activated,
+        pointer,
+        output,
+        work,
+        flamewm_window_core::EDGE_THRESHOLD,
+    )
+}
+
+/// Snap target for a move with an explicit `edgeSnap.thresholdPx`.
+fn snap_target_for_move_with(
+    activated: bool,
+    pointer: flamewm_api::Point,
+    output: flamewm_api::Rect,
+    work: flamewm_api::Rect,
+    edge_px: i32,
+) -> SnapTarget {
     if !activated {
         return SnapTarget::None;
     }
-    snap_target_in_output(pointer, output, work)
+    flamewm_window_core::snap_target_in_output_with(pointer, output, work, edge_px)
 }
 
 /// Pick the first owner that actually contains the point. The same helper makes front-to-back

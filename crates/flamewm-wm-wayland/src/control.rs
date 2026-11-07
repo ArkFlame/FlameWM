@@ -213,6 +213,22 @@ fn chrome_settings(snapshot: &flamewm_api::settings::SettingsSnapshot) -> (bool,
     (titlebars, window_margin)
 }
 
+/// `(edgeSnap.enabled, edgeSnap.thresholdPx)` from a committed snapshot. Mirrors X11
+/// `live_settings`: a missing or out-of-range threshold keeps the default.
+fn edge_snap_settings(snapshot: &flamewm_api::settings::SettingsSnapshot) -> (bool, i32) {
+    use flamewm_api::settings::SettingValue;
+
+    let enabled = match snapshot.values.get("edgeSnap.enabled") {
+        Some(SettingValue::Boolean(value)) => *value,
+        _ => true,
+    };
+    let threshold = match snapshot.values.get("edgeSnap.thresholdPx") {
+        Some(SettingValue::Integer(value)) if (4..=64).contains(value) => *value as i32,
+        _ => flamewm_window_core::EDGE_THRESHOLD,
+    };
+    (enabled, threshold)
+}
+
 /// Reads per-output scales from `path`. Split from `settings_path` so tests read a real file.
 fn shell_scales_at(path: &std::path::Path) -> BTreeMap<String, u16> {
     std::fs::read_to_string(path)
@@ -1083,6 +1099,10 @@ impl Service {
             state.model.configure(titlebars, window_margin);
             state.request_redraw();
         }
+        let (edge_snap, edge_px) = edge_snap_settings(&snapshot);
+        if state.model.edge_snap() != (edge_snap, edge_px) {
+            state.model.configure_edge_snap(edge_snap, edge_px);
+        }
         // The window outline comes from the same shared owner X11 reads, so both backends show one
         // `windowOutlineColor` / `windowOutlineOpacity` / `outlines` ring style.
         // Light titlebar material and its ink follow the same `appearance` the other surfaces use.
@@ -1506,8 +1526,8 @@ fn apply_command(state: &mut State, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, Mirror, WaylandDesktop, chrome_settings, managed_logout, network_action,
-        shell_scales_at, shell_scales_from, system_change, volume_cap,
+        Command, Mirror, WaylandDesktop, chrome_settings, edge_snap_settings, managed_logout,
+        network_action, shell_scales_at, shell_scales_from, system_change, volume_cap,
     };
     use flamewm_api::settings::{SettingValue, SettingsSnapshot};
     use flamewm_api::shortcuts::KeyBinding;
@@ -1783,6 +1803,37 @@ mod tests {
     /// `titlebars` and `windowMargin` are read out of the committed snapshot the way X11 reads its
     /// live copies: a missing value keeps the product default, and an out-of-range margin falls back
     /// instead of being applied.
+    #[test]
+    fn edge_snap_settings_default_and_clamp_like_x11() {
+        use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+
+        let mut snapshot = SettingsSnapshot {
+            revision: 1,
+            values: BTreeMap::new(),
+        };
+        assert_eq!(edge_snap_settings(&snapshot), (true, 16));
+        snapshot
+            .values
+            .insert("edgeSnap.enabled".into(), SettingValue::Boolean(false));
+        snapshot
+            .values
+            .insert("edgeSnap.thresholdPx".into(), SettingValue::Integer(40));
+        assert_eq!(edge_snap_settings(&snapshot), (false, 40));
+        snapshot
+            .values
+            .insert("edgeSnap.thresholdPx".into(), SettingValue::Integer(500));
+        assert_eq!(
+            edge_snap_settings(&snapshot),
+            (false, 16),
+            "out of range keeps the default"
+        );
+        snapshot.values.insert(
+            "edgeSnap.thresholdPx".into(),
+            SettingValue::Text("wide".into()),
+        );
+        assert_eq!(edge_snap_settings(&snapshot), (false, 16));
+    }
+
     #[test]
     fn chrome_settings_follow_the_committed_snapshot() {
         use flamewm_api::settings::{SettingValue, SettingsSnapshot};

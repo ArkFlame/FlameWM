@@ -11,6 +11,7 @@ use std::time::Duration;
 const WINIT_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
 use flamewm_platform::shortcuts::ShortcutRegistry;
+use flamewm_wm_wayland::protocols::toplevel::{ToplevelFacts, diff as diff_toplevel_facts};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::winit::WinitGraphicsBackend;
@@ -28,6 +29,7 @@ use smithay::reexports::wayland_server::{Client, DisplayHandle, protocol::wl_sur
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial, Size};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
+use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState};
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::selection::data_device::DataDeviceState;
 use smithay::wayland::shell::wlr_layer::LayerSurfaceData;
@@ -358,6 +360,8 @@ pub struct State {
     pub shm: ShmState,
     pub seat_state: SeatState<State>,
     pub data_device: DataDeviceState,
+    /// Primary selection, xdg-activation and idle-inhibit state (see `compat`).
+    pub compat: crate::compat::CompatState,
     pub popups: PopupManager,
     pub seat: Seat<State>,
     pub output: Output,
@@ -371,6 +375,9 @@ pub struct State {
     pub blue_light_intensity: u8,
     /// Smithay toplevels keyed by the model identifier.
     pub toplevels: Vec<(WindowId, ToplevelSurface)>,
+    /// `ext-foreign-toplevel-list-v1` global; one handle per window, with the facts last sent.
+    pub foreign_toplevels: ForeignToplevelListState,
+    pub foreign_toplevel_handles: HashMap<WindowId, (ForeignToplevelHandle, ToplevelFacts)>,
     pub next_id: WindowId,
     pub focused: Option<WindowId>,
     pub shortcuts: Shortcuts,
@@ -460,7 +467,9 @@ impl State {
         let _outputs = OutputManagerState::new_with_xdg_output::<State>(&display);
         let mut seat_state = SeatState::new();
         let data_device = DataDeviceState::new::<State>(&display);
+        let compat = crate::compat::CompatState::new(&display);
         let _viewporter = ViewporterState::new::<State>(&display);
+        let foreign_toplevels = ForeignToplevelListState::new::<State>(&display);
         let xwayland_shell = XWaylandShellState::new::<State>(&display);
 
         let output = Output::new(
@@ -498,6 +507,7 @@ impl State {
             shm,
             seat_state,
             data_device,
+            compat,
             popups: PopupManager::default(),
             seat,
             output,
@@ -509,6 +519,8 @@ impl State {
             toplevels: Vec::new(),
             next_id: 1,
             focused: None,
+            foreign_toplevels,
+            foreign_toplevel_handles: HashMap::new(),
             shortcuts,
             pointer: Point::from((0.0, 0.0)),
             cursor_status: CursorImageStatus::default_named(),
@@ -595,6 +607,41 @@ impl State {
             .iter()
             .find(|(wid, _)| *wid == id)
             .map(|(_, surface)| surface)
+    }
+
+    /// Announces a new window to `ext-foreign-toplevel-list` clients.
+    pub fn foreign_toplevel_open(&mut self, id: WindowId, facts: ToplevelFacts) {
+        let handle = self
+            .foreign_toplevels
+            .new_toplevel::<State>(facts.title.as_str(), facts.app_id.as_str());
+        handle.send_done();
+        self.foreign_toplevel_handles.insert(id, (handle, facts));
+    }
+
+    /// Sends only the fields that changed since the last announcement, then one `done`.
+    pub fn foreign_toplevel_sync(&mut self, id: WindowId, facts: ToplevelFacts) {
+        let Some((handle, sent)) = self.foreign_toplevel_handles.get_mut(&id) else {
+            return;
+        };
+        let delta = diff_toplevel_facts(sent, &facts);
+        if delta.is_empty() {
+            return;
+        }
+        if delta.title {
+            handle.send_title(&facts.title);
+        }
+        if delta.app_id {
+            handle.send_app_id(&facts.app_id);
+        }
+        handle.send_done();
+        *sent = facts;
+    }
+
+    /// Tells `ext-foreign-toplevel-list` clients that a window is gone.
+    pub fn foreign_toplevel_close(&mut self, id: WindowId) {
+        if let Some((handle, _)) = self.foreign_toplevel_handles.remove(&id) {
+            self.foreign_toplevels.remove_toplevel(&handle);
+        }
     }
 
     pub fn window_for_surface(&self, surface: &WlSurface) -> Option<WindowId> {

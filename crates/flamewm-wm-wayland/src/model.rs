@@ -164,6 +164,9 @@ pub struct WindowModel {
     titlebars: bool,
     /// `windowMargin` (`DEFAULT_WINDOW_MARGIN` until [`WindowModel::configure`] says otherwise).
     window_margin: i32,
+    /// `edgeSnap.enabled` and `edgeSnap.thresholdPx`; the defaults match X11 `live_settings`.
+    edge_snap: bool,
+    edge_snap_px: i32,
     /// Work area of the last maximize or refit, so a settings change can reflow without the caller
     /// repeating it. `None` until the shell first reports one.
     work_area: Option<Rect>,
@@ -184,8 +187,21 @@ impl WindowModel {
             show_desktop_hidden: Vec::new(),
             titlebars: DEFAULT_TITLEBARS,
             window_margin: DEFAULT_WINDOW_MARGIN,
+            edge_snap: true,
+            edge_snap_px: flamewm_window_core::EDGE_THRESHOLD,
             work_area: None,
         }
+    }
+
+    /// Applies `edgeSnap.enabled` and `edgeSnap.thresholdPx` (already validated to 4..=64).
+    pub fn configure_edge_snap(&mut self, enabled: bool, threshold_px: i32) {
+        self.edge_snap = enabled;
+        self.edge_snap_px = threshold_px;
+    }
+
+    /// `(edgeSnap.enabled, edgeSnap.thresholdPx)` currently applied to pointer snap zones.
+    pub const fn edge_snap(&self) -> (bool, i32) {
+        (self.edge_snap, self.edge_snap_px)
     }
 
     /// Applies the `titlebars` and `windowMargin` settings, the two the compositor reads instead

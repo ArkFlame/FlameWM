@@ -145,6 +145,7 @@ use crate::StageStatus;
 use crate::StartupTiming;
 use crate::elapsed_ms;
 use crate::logind::{Event as LogindEvent, LogindSession, PauseKind};
+use crate::output_layout::{ModeCandidate, select_mode};
 mod device;
 mod hotplug;
 mod input;
@@ -1146,13 +1147,18 @@ fn scan_connectors(d: &mut Drm, state: &mut State) -> Result<(), Box<dyn Error>>
             skip_connector(&d.device, conn, "no-crtc");
             continue;
         };
-        let Some(mode) = info
+        // Preferred resolution at its highest refresh rate; see `output_layout::select_mode`.
+        let candidates: Vec<ModeCandidate> = info
             .modes()
             .iter()
-            .find(|mode| mode.mode_type().contains(ModeTypeFlags::PREFERRED))
-            .or(info.modes().first())
-            .copied()
-        else {
+            .map(|mode| ModeCandidate {
+                width: i32::from(mode.size().0),
+                height: i32::from(mode.size().1),
+                refresh_mhz: i32::try_from(mode.vrefresh()).unwrap_or(60) * 1000,
+                preferred: mode.mode_type().contains(ModeTypeFlags::PREFERRED),
+            })
+            .collect();
+        let Some(mode) = select_mode(&candidates).map(|index| info.modes()[index]) else {
             skip_connector(&d.device, conn, "no-mode");
             continue;
         };

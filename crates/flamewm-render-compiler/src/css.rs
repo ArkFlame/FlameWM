@@ -52,48 +52,211 @@ pub struct Rule {
 pub fn parse_stylesheet(input: &str) -> Result<Vec<Rule>, String> {
     let css = strip_comments(input)?;
     let mut rules = Vec::new();
-    let mut cursor = 0usize;
     let mut order = 0u32;
+    for item in split_items(&css)? {
+        match item {
+            Item::Declaration(text) if !text.trim().is_empty() => {
+                return Err(format!(
+                    "CSS declaration '{}' must be inside a rule",
+                    text.trim()
+                ));
+            }
+            Item::Declaration(_) => {}
+            Item::Block { prelude, body } => {
+                if prelude.starts_with('@') {
+                    return Err(format!(
+                        "unsupported CSS at-rule '{prelude}'; FlameWM Render 0.0.9 accepts no at-rules"
+                    ));
+                }
+                let selectors = resolve_selectors(prelude, None)?;
+                emit_rule_block(&selectors, body, &mut rules, &mut order)?;
+            }
+        }
+    }
+    Ok(rules)
+}
 
-    while cursor < css.len() {
-        cursor = skip_ascii_ws(&css, cursor);
-        if cursor >= css.len() {
-            break;
+/// One top-level or nested item: a `;`-terminated declaration (or trailing text) or a `prelude { body }` block.
+enum Item<'a> {
+    Declaration(&'a str),
+    Block { prelude: &'a str, body: &'a str },
+}
+
+fn split_items(source: &str) -> Result<Vec<Item<'_>>, String> {
+    let mut items = Vec::new();
+    let mut start = 0usize;
+    while let Some((at, delimiter)) = find_unquoted_any(source, start, &[';', '{']) {
+        if delimiter == ';' {
+            items.push(Item::Declaration(&source[start..at]));
+            start = at + 1;
+        } else {
+            let close = find_matching_brace(source, at)?;
+            items.push(Item::Block {
+                prelude: source[start..at].trim(),
+                body: &source[at + 1..close],
+            });
+            start = close + 1;
         }
-        if css.as_bytes()[cursor] == b'@' {
-            let remainder = &css[cursor..];
-            let end = match (remainder.find('{'), remainder.find(';')) {
-                (Some(a), Some(b)) => cursor + a.min(b),
-                (Some(a), None) => cursor + a,
-                (None, Some(b)) => cursor + b,
-                (None, None) => css.len(),
-            };
-            return Err(format!(
-                "unsupported CSS at-rule '{}'; FlameWM Render 0.0.9 accepts no at-rules",
-                css[cursor..end].trim()
-            ));
+    }
+    if !source[start..].trim().is_empty() {
+        if source[start..].contains(':') {
+            items.push(Item::Declaration(&source[start..]));
+        } else {
+            return Err("CSS rule is missing '{'".to_string());
         }
-        let open = find_unquoted(&css, cursor, '{')
-            .ok_or_else(|| "CSS rule is missing '{'".to_string())?;
-        let close = find_matching_brace(&css, open)?;
-        let selector_source = css[cursor..open].trim();
-        let body = &css[open + 1..close];
-        if selector_source.is_empty() {
-            return Err("empty CSS selector".to_string());
+    }
+    Ok(items)
+}
+
+/// Emits one rule per selector alternative for `body`, then recurses into its nested blocks.
+fn emit_rule_block(
+    selectors: &[String],
+    body: &str,
+    rules: &mut Vec<Rule>,
+    order: &mut u32,
+) -> Result<(), String> {
+    let mut declarations = Vec::new();
+    let mut nested = Vec::new();
+    for item in split_items(body)? {
+        match item {
+            Item::Declaration(text) => declarations.extend(parse_declarations(text)?),
+            Item::Block { prelude, body } => nested.push((prelude, body)),
         }
-        let declarations = parse_declarations(body)?;
-        for selector_text in split_top_level(selector_source, ',')? {
-            let selector = parse_selector(selector_text.trim())?;
+    }
+    for selector_text in selectors {
+        for (matched, specificity_text) in expand_pseudo(selector_text)? {
+            let mut selector = parse_selector(&matched)?;
+            if specificity_text != matched {
+                let fallback = if specificity_text.is_empty() {
+                    "*"
+                } else {
+                    &specificity_text
+                };
+                selector.specificity = parse_selector(fallback)?.specificity;
+            }
             rules.push(Rule {
                 selector,
                 declarations: declarations.clone(),
-                order,
+                order: *order,
             });
-            order = order.wrapping_add(1);
+            *order = order.wrapping_add(1);
         }
-        cursor = close + 1;
     }
-    Ok(rules)
+    for (prelude, inner) in nested {
+        let child = resolve_selectors(prelude, Some(selectors))?;
+        emit_rule_block(&child, inner, rules, order)?;
+    }
+    Ok(())
+}
+
+/// Turns a selector list in a nested prelude into full selectors: `&` is replaced by each parent
+/// selector, otherwise the nested selector is a descendant of each parent.
+fn resolve_selectors(prelude: &str, parents: Option<&[String]>) -> Result<Vec<String>, String> {
+    let mut result = Vec::new();
+    for selector in split_top_level(prelude, ',')? {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return Err("empty CSS selector".to_string());
+        }
+        match (selector.contains('&'), parents) {
+            (true, None) => {
+                return Err(format!("'&' in '{selector}' requires an enclosing rule"));
+            }
+            (true, Some(parents)) => {
+                result.extend(parents.iter().map(|parent| selector.replace('&', parent)));
+            }
+            (false, None) => result.push(selector.to_string()),
+            (false, Some(parents)) => {
+                result.extend(parents.iter().map(|parent| format!("{parent} {selector}")));
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Upper bound on the selectors one `:is()`/`:where()` list may expand into.
+const MAX_PSEUDO_ALTERNATIVES: usize = 64;
+
+/// Expands `:is(...)` and `:where(...)` into plain selectors. Each alternative yields the text to
+/// match and the text used for specificity: `:is` keeps its argument's specificity, `:where` adds none.
+fn expand_pseudo(selector: &str) -> Result<Vec<(String, String)>, String> {
+    let found = [(":is(", false), (":where(", true)]
+        .into_iter()
+        .filter_map(|(pattern, zero)| selector.find(pattern).map(|at| (at, pattern.len(), zero)))
+        .min_by_key(|&(at, _, _)| at);
+    let Some((at, pattern_len, is_where)) = found else {
+        return Ok(vec![(selector.to_string(), selector.to_string())]);
+    };
+    let open = at + pattern_len - 1;
+    let close = find_matching_paren(selector, open)?;
+    let args = &selector[open + 1..close];
+    if args.trim().is_empty() {
+        return Err(format!("empty pseudo-class argument in '{selector}'"));
+    }
+    let prefix = &selector[..at];
+    let mut arguments = Vec::new();
+    for argument in split_top_level(args, ',')? {
+        let argument = argument.trim();
+        if argument.is_empty() {
+            return Err(format!("empty selector in pseudo-class list '{selector}'"));
+        }
+        arguments.extend(expand_pseudo(argument)?);
+    }
+    let suffixes = expand_pseudo(&selector[close + 1..])?;
+    let mut result = Vec::with_capacity(arguments.len() * suffixes.len());
+    for (argument, argument_spec) in &arguments {
+        for (suffix, suffix_spec) in &suffixes {
+            if result.len() >= MAX_PSEUDO_ALTERNATIVES {
+                return Err(format!(
+                    "selector '{selector}' expands to more than {MAX_PSEUDO_ALTERNATIVES} alternatives"
+                ));
+            }
+            // `:where` adds no specificity, but a `*` keeps a leading combinator or an empty
+            // compound valid for the specificity re-parse.
+            let spec_middle = match (is_where, prefix.is_empty() || prefix.ends_with(' ')) {
+                (false, _) => argument_spec.as_str(),
+                (true, true) => "*",
+                (true, false) => "",
+            };
+            result.push((
+                format!("{prefix}{argument}{suffix}"),
+                format!("{prefix}{spec_middle}{suffix_spec}"),
+            ));
+        }
+    }
+    Ok(result)
+}
+
+fn find_matching_paren(input: &str, open: usize) -> Result<usize, String> {
+    let mut depth = 0i32;
+    for (offset, ch) in input[open..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(open + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    Err(format!("unterminated pseudo-class in '{input}'"))
+}
+
+/// Finds the first unquoted occurrence of any target character at or after `start`.
+fn find_unquoted_any(input: &str, start: usize, targets: &[char]) -> Option<(usize, char)> {
+    let mut quote: Option<char> = None;
+    for (offset, ch) in input[start..].char_indices() {
+        match quote {
+            Some(active) if ch == active => quote = None,
+            Some(_) => {}
+            None if ch == '\'' || ch == '"' => quote = Some(ch),
+            None if targets.contains(&ch) => return Some((start + offset, ch)),
+            None => {}
+        }
+    }
+    None
 }
 
 pub fn parse_declarations(input: &str) -> Result<Vec<Declaration>, String> {
@@ -364,7 +527,7 @@ fn matches_compound(html: &ParsedHtml, index: usize, compound: &CompoundSelector
     })
 }
 
-fn strip_comments(input: &str) -> Result<String, String> {
+pub(crate) fn strip_comments(input: &str) -> Result<String, String> {
     let mut output = String::with_capacity(input.len());
     let mut cursor = 0usize;
     while let Some(start_rel) = input[cursor..].find("/*") {
@@ -449,13 +612,6 @@ fn find_matching_brace(input: &str, open: usize) -> Result<usize, String> {
     Err("CSS rule has no matching '}'".to_string())
 }
 
-fn skip_ascii_ws(input: &str, mut cursor: usize) -> usize {
-    while cursor < input.len() && input.as_bytes()[cursor].is_ascii_whitespace() {
-        cursor += 1;
-    }
-    cursor
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,5 +629,125 @@ mod tests {
             .position(|node| node.attrs.get("id").map(String::as_str) == Some("start"))
             .unwrap();
         assert!(rules[0].selector.matches(&html, button));
+    }
+
+    fn selector_count(css: &str) -> usize {
+        parse_stylesheet(css).unwrap().len()
+    }
+
+    #[test]
+    fn nested_rules_flatten_with_descendant_and_ampersand_parents() {
+        let html = parse_html(
+            "<body><div class='panel'><button id='go' class='primary'>Go</button></div></body>",
+        )
+        .unwrap();
+        let rules = parse_stylesheet(
+            ".panel { width: 1px; button { height: 2px; } &.wide { height: 3px; } & > .x { color: red; } }",
+        )
+        .unwrap();
+        // .panel, .panel button, .panel.wide, .panel > .x
+        assert_eq!(rules.len(), 4);
+        assert_eq!(rules[0].declarations.len(), 1);
+        let button = html
+            .nodes
+            .iter()
+            .position(|node| node.attrs.get("id").map(String::as_str) == Some("go"))
+            .unwrap();
+        assert!(rules[1].selector.matches(&html, button));
+        assert_eq!(rules[1].declarations[0].name, "height");
+        assert!(!rules[2].selector.matches(&html, button));
+    }
+
+    #[test]
+    fn nested_hover_state_stays_on_the_rightmost_compound() {
+        // `.row` (empty), `.row button`, `.row button:hover`
+        let rules = parse_stylesheet(".row { button { &:hover { color: red; } } }").unwrap();
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[2].selector.state, PseudoState::Hover);
+        assert!(parse_stylesheet(".row { &:hover button { color: red; } }").is_err());
+    }
+
+    #[test]
+    fn nesting_error_cases_are_rejected() {
+        assert!(
+            parse_stylesheet("& { color: red; }").is_err(),
+            "& needs a parent"
+        );
+        assert!(
+            parse_stylesheet("color: red;").is_err(),
+            "top-level declaration"
+        );
+        assert!(parse_stylesheet(".a { @media x { color: red; } }").is_err());
+        assert!(
+            parse_stylesheet(".a { .b { color: red; }").is_err(),
+            "unclosed block"
+        );
+        assert!(
+            parse_stylesheet(".a, { color: red; }").is_err(),
+            "empty selector"
+        );
+    }
+
+    #[test]
+    fn is_and_where_expand_into_alternatives() {
+        assert_eq!(selector_count(".a :is(.b, .c) { width: 1px; }"), 2);
+        assert_eq!(selector_count(":is(.a, .b):is(.c, .d) { width: 1px; }"), 4);
+        assert_eq!(selector_count(":where(.a, .b) button { width: 1px; }"), 2);
+        assert_eq!(
+            selector_count("button:is(:hover, :focus) { width: 1px; }"),
+            2
+        );
+    }
+
+    #[test]
+    fn is_takes_argument_specificity_and_where_contributes_none() {
+        let is_rules = parse_stylesheet(":is(#a, .b) { width: 1px; }").unwrap();
+        assert_eq!(is_rules[0].selector.specificity, (1, 0, 0));
+        assert_eq!(is_rules[1].selector.specificity, (0, 1, 0));
+        let where_rules = parse_stylesheet("div:where(#a, .b) { width: 1px; }").unwrap();
+        assert_eq!(where_rules[0].selector.specificity, (0, 0, 1));
+        assert_eq!(where_rules[1].selector.specificity, (0, 0, 1));
+        let bare = parse_stylesheet(":where(.a) { width: 1px; }").unwrap();
+        assert_eq!(bare[0].selector.specificity, (0, 0, 0));
+    }
+
+    #[test]
+    fn is_where_match_like_their_expanded_selectors() {
+        let html =
+            parse_html("<body><div class='panel'><button id='start'>Start</button></div></body>")
+                .unwrap();
+        let button = html
+            .nodes
+            .iter()
+            .position(|node| node.attrs.get("id").map(String::as_str) == Some("start"))
+            .unwrap();
+        let rules =
+            parse_stylesheet(":where(.panel, .other) > :is(button, span) { width: 1px; }").unwrap();
+        assert!(rules
+            .iter()
+            .any(|rule| rule.selector.matches(&html, button)));
+    }
+
+    #[test]
+    fn is_where_error_cases_are_rejected() {
+        for bad in [
+            ":is() { width: 1px; }",
+            ":is(.a, ) { width: 1px; }",
+            ":where(.a { width: 1px; }",
+            ":is(.a { width: 1px; }",
+            ".a:is(.b) .c { width: 1px; } :is(:hover .x) { width: 1px; }",
+        ] {
+            assert!(parse_stylesheet(bad).is_err(), "{bad} must be rejected");
+        }
+        let many: Vec<String> = (0..9).map(|i| format!(".c{i}")).collect();
+        let long = format!(
+            ":is({}) :is({}) {{ width: 1px; }}",
+            many.join(","),
+            many.join(",")
+        );
+        assert!(
+            parse_stylesheet(&long).is_err(),
+            "81 alternatives exceed the bound"
+        );
     }
 }

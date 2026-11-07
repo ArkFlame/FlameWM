@@ -26,6 +26,7 @@ fn main() {
         "battery.html",
         "weather.html",
         "notification.html",
+        "notification-center.html",
         "launcher.html",
         "switcher.html",
     ];
@@ -43,6 +44,10 @@ fn main() {
         ("flamewm-battery.rwr", "battery.html"),
         ("flamewm-weather.rwr", "weather.html"),
         ("flamewm-notification.rwr", "notification.html"),
+        (
+            "flamewm-notification-center.rwr",
+            "notification-center.html",
+        ),
         ("flamewm-launcher.rwr", "launcher.html"),
         ("flamewm-switcher.rwr", "switcher.html"),
     ];
@@ -68,6 +73,11 @@ fn main() {
         fs::copy(&path, staged_ui.join(source)).expect("stage shell UI source");
     }
     fs::copy(&css, staged_ui.join("flamewm.css")).expect("stage shell CSS");
+    // Shell pages and flamewm.css reference ../base/tokens.css relative to OUT_DIR/shell.
+    let tokens = root.join("ui/base/tokens.css");
+    println!("cargo:rerun-if-changed={}", tokens.display());
+    fs::create_dir_all(out_dir.join("base")).expect("create staged base dir");
+    fs::copy(&tokens, out_dir.join("base/tokens.css")).expect("stage token CSS");
     // Keyed PPM refs are retired: stage true-alpha SVG/Breeze + branding
     // paths so compiled templates resolve local build inputs only.
     stage_tree(

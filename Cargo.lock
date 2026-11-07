@@ -1042,6 +1042,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-tray"
+version = "0.1.7"
+dependencies = [
+ "flamewm-api",
+ "flamewm-dbus-reactor",
+]
+
+[[package]]
 name = "flamewm-ui"
 version = "0.1.7"
 dependencies = [
