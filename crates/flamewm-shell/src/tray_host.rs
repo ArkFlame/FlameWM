@@ -9,8 +9,12 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use flamewm_api::Point;
 use flamewm_dbus_reactor::BusWatch;
-use flamewm_tray::{IconPixmap, ItemAction, ItemKey, ItemProps, TrayWatcher, plan_overflow};
+use flamewm_tray::{
+    IconPixmap, ItemAction, ItemKey, ItemProps, LayoutReply, TrayMenuRow, TrayWatcher,
+    parse_layout, plan_overflow, top_level_rows,
+};
 use flamewm_ui_x11::{
     ActionPhase, PointerButton, RuntimeImage, SurfaceEvent, SurfaceRuntime, UiDocumentAccess,
 };
@@ -26,6 +30,10 @@ pub const SLOT_COUNT: usize = 6;
 pub const SLOT_ACTION_PREFIX: &str = "tray.sni.";
 /// Action of the overflow chevron.
 pub const OVERFLOW_ACTION: &str = "tray.sni.overflow";
+/// Rows the flat dbusmenu popup can show; the task-menu markup carries this many `tray.menu.<n>`.
+pub const TRAY_MENU_ROWS: usize = 10;
+/// Action prefix of the dbusmenu popup rows.
+pub const TRAY_MENU_ACTION_PREFIX: &str = "tray.menu.";
 /// Tray image edge in CSS px (`.tray-button img`).
 const ICON_CSS_PX: f32 = 17.0;
 /// Generic glyph for an item with neither a name nor a pixmap.
@@ -42,6 +50,12 @@ pub struct TrayWindow {
     pub pages: usize,
     /// True when the chevron is visible.
     pub chevron: bool,
+}
+
+/// Next page after `page`, wrapping to page 0 after the last of `pages` pages.
+#[must_use]
+pub const fn next_page(page: usize, pages: usize) -> usize {
+    (page + 1) % if pages == 0 { 1 } else { pages }
 }
 
 /// Pure paging policy: everything fits in `SLOT_COUNT`, or one slot goes to the chevron and
@@ -88,6 +102,47 @@ pub fn best_pixmap(pixmaps: &[IconPixmap], edge: u32) -> Option<&IconPixmap> {
         })
 }
 
+/// Dbusmenu popup row `action` (`tray.menu.<n>`) of an open tray menu, as the `Event` target.
+/// `None` for other menus, other actions, out-of-range rows, and disabled rows.
+#[must_use]
+pub fn menu_row_target(
+    kind: &crate::ContextMenuKind,
+    action: &str,
+) -> Option<(ItemKey, String, i32)> {
+    let crate::ContextMenuKind::TrayItem {
+        key,
+        menu_path,
+        rows,
+    } = kind
+    else {
+        return None;
+    };
+    let index = action
+        .strip_prefix(TRAY_MENU_ACTION_PREFIX)?
+        .parse::<usize>()
+        .ok()
+        .filter(|index| *index < TRAY_MENU_ROWS)?;
+    let row = rows.get(index).filter(|row| row.enabled)?;
+    Some((key.clone(), menu_path.clone(), row.id))
+}
+
+/// A dbusmenu layout that is ready to show as the flat popup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrayMenuOpen {
+    pub key: ItemKey,
+    pub menu_path: String,
+    pub rows: Vec<TrayMenuRow>,
+    /// Root-coordinate device pixels of the click.
+    pub pointer: Point,
+}
+
+/// A right-click waiting for its item's `GetLayout` reply.
+struct MenuRequest {
+    key: ItemKey,
+    menu_path: String,
+    pointer: Point,
+}
+
 /// Converts one `ARGB32` (network order) pixmap to straight RGBA8 for the UI document.
 #[must_use]
 pub fn pixmap_to_image(pixmap: &IconPixmap) -> RuntimeImage {
@@ -117,6 +172,7 @@ pub struct TrayHost {
     revision: Option<u64>,
     page: usize,
     dirty: bool,
+    menu_request: Option<MenuRequest>,
 }
 
 impl TrayHost {
@@ -131,6 +187,7 @@ impl TrayHost {
                 revision: None,
                 page: 0,
                 dirty: true,
+                menu_request: None,
             }),
             Err(error) => {
                 eprintln!("flamewm-shell: StatusNotifier tray disabled: {}", error.message);
@@ -179,9 +236,46 @@ impl TrayHost {
     }
 
     fn cycle_page(&mut self) {
-        let pages = self.window().pages;
-        self.page = (self.page + 1) % pages.max(1);
+        self.page = next_page(self.page, self.window().pages);
         self.dirty = true;
+    }
+
+    /// Takes the layout of a pending right-click. A malformed or empty layout, or a failed
+    /// `GetLayout`, falls back to the item's own `ContextMenu` call.
+    pub fn take_menu_ready(&mut self) -> Option<TrayMenuOpen> {
+        let key = self.menu_request.as_ref()?.key.clone();
+        let reply = self.watcher.take_layout(&key)?;
+        let request = self.menu_request.take()?;
+        let rows = match reply {
+            LayoutReply::Menu(node) => top_level_rows(&parse_layout(&node)),
+            LayoutReply::Failed => Vec::new(),
+        };
+        if rows.is_empty() {
+            self.invoke_context_menu(&request.key, request.pointer);
+            return None;
+        }
+        Some(TrayMenuOpen {
+            key: request.key,
+            menu_path: request.menu_path,
+            rows,
+            pointer: request.pointer,
+        })
+    }
+
+    /// Sends the dbusmenu `clicked` event for an open popup row, nonfatal on bus failure.
+    pub fn send_menu_event(&self, key: &ItemKey, menu_path: &str, id: i32) {
+        if let Err(error) = self.watcher.send_menu_event(key, menu_path, id) {
+            eprintln!("flamewm-shell: tray menu event failed: {}", error.message);
+        }
+    }
+
+    fn invoke_context_menu(&self, key: &ItemKey, pointer: Point) {
+        if let Err(error) = self
+            .watcher
+            .invoke(key, ItemAction::ContextMenu, pointer.x, pointer.y)
+        {
+            eprintln!("flamewm-shell: tray item call failed: {}", error.message);
+        }
     }
 
     /// Routes a tray button release. Returns `true` when the event belongs to the tray and
@@ -205,21 +299,41 @@ impl TrayHost {
         else {
             return false;
         };
-        let method = match PointerButton::from_raw_x(event.action.button) {
+        let button = PointerButton::from_raw_x(event.action.button);
+        let method = match button {
             PointerButton::Primary => ItemAction::Activate,
             PointerButton::Middle => ItemAction::SecondaryActivate,
             PointerButton::Secondary => ItemAction::ContextMenu,
             _ => return true,
         };
-        let Some((key, _)) = self.item_for_slot(slot) else {
+        let Some((key, props)) = self.item_for_slot(slot) else {
             return true;
         };
+        let key = key.clone();
+        let menu_path = props.menu_path.clone();
         let Ok(origin) = runtime.surface_device_rect(event.surface) else {
             return true;
         };
         let x = origin.x as i32 + event.action.x as i32;
         let y = origin.y as i32 + event.action.y as i32;
-        if let Err(error) = self.watcher.invoke(key, method, x, y) {
+        // An item with a dbusmenu object shows its entries in the panel popup; its own
+        // ContextMenu call is the fallback when the layout is unavailable.
+        if let (PointerButton::Secondary, Some(path)) = (button, menu_path) {
+            match self.watcher.request_layout(&key, &path) {
+                Ok(()) => {
+                    self.menu_request = Some(MenuRequest {
+                        key,
+                        menu_path: path,
+                        pointer: Point { x, y },
+                    });
+                    return true;
+                }
+                Err(error) => {
+                    eprintln!("flamewm-shell: tray layout request failed: {}", error.message);
+                }
+            }
+        }
+        if let Err(error) = self.watcher.invoke(&key, method, x, y) {
             eprintln!("flamewm-shell: tray item call failed: {}", error.message);
         }
         true
@@ -308,6 +422,49 @@ mod tests {
         assert_eq!(pages[2].shown, 3);
         assert!(pages.iter().all(|window| window.chevron && window.pages == 3));
         assert_eq!(pages[3].first, 0, "page wraps to the first page");
+    }
+
+    #[test]
+    fn page_cycle_wraps_back_to_the_first_page() {
+        let mut page = 0;
+        let mut visited = Vec::new();
+        for _ in 0..4 {
+            visited.push(tray_window(13, page).first);
+            page = next_page(page, tray_window(13, page).pages);
+        }
+        assert_eq!(visited, vec![0, 5, 10, 0], "three pages, then page 1 again");
+        assert_eq!(next_page(0, 0), 0, "no pages stays on page 0");
+    }
+
+    #[test]
+    fn menu_row_target_resolves_only_enabled_rows_of_tray_menus() {
+        let key = ItemKey::new(":1.9", "/StatusNotifierItem").expect("key");
+        let kind = crate::ContextMenuKind::TrayItem {
+            key: key.clone(),
+            menu_path: "/MenuBar".to_owned(),
+            rows: vec![
+                TrayMenuRow {
+                    id: 4,
+                    label: "Open".into(),
+                    enabled: true,
+                },
+                TrayMenuRow {
+                    id: 5,
+                    label: "Quit".into(),
+                    enabled: false,
+                },
+            ],
+        };
+        assert_eq!(
+            menu_row_target(&kind, "tray.menu.0"),
+            Some((key, "/MenuBar".to_owned(), 4))
+        );
+        assert_eq!(menu_row_target(&kind, "tray.menu.1"), None, "disabled");
+        assert_eq!(menu_row_target(&kind, "tray.menu.2"), None, "no such row");
+        assert_eq!(menu_row_target(&kind, "tray.menu.x"), None, "not an index");
+        assert_eq!(menu_row_target(&kind, "tray.sni.1"), None, "other prefix");
+        let other = crate::ContextMenuKind::Taskbar;
+        assert_eq!(menu_row_target(&other, "tray.menu.0"), None, "other menu");
     }
 
     #[test]

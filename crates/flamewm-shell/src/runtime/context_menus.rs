@@ -38,6 +38,26 @@ impl ShellRuntime {
         }
     }
 
+    /// Opens the flat dbusmenu popup for a tray item at a root-coordinate pointer anchor.
+    pub fn open_tray_menu(
+        &mut self,
+        key: flamewm_tray::ItemKey,
+        menu_path: String,
+        rows: Vec<flamewm_tray::TrayMenuRow>,
+        pointer: flamewm_api::Point,
+    ) {
+        self.push_context_menu(
+            ContextMenuKind::TrayItem {
+                key,
+                menu_path,
+                rows,
+            },
+            self.snapshot.panels.revision,
+            Some(pointer),
+            None,
+        );
+    }
+
     pub(super) fn push_context_menu(
         &mut self,
         kind: ContextMenuKind,

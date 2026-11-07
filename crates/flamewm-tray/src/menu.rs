@@ -96,6 +96,36 @@ fn int_prop(node: &MenuNode, key: &str) -> Option<i32> {
     }
 }
 
+/// One row of the flat tray popup: a top-level, visible item of a dbusmenu layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrayMenuRow {
+    pub id: i32,
+    pub label: String,
+    pub enabled: bool,
+}
+
+/// Top-level items of a parsed layout in order. Separators are dropped; submenu bodies are not
+/// flattened, so a click on a submenu parent sends that parent's id.
+#[must_use]
+pub fn top_level_rows(entries: &[MenuEntry]) -> Vec<TrayMenuRow> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            MenuEntry::Item {
+                id,
+                label,
+                enabled,
+                ..
+            } => Some(TrayMenuRow {
+                id: *id,
+                label: label.clone(),
+                enabled: *enabled,
+            }),
+            MenuEntry::Separator => None,
+        })
+        .collect()
+}
+
 /// dbusmenu mnemonics: a single `_` marks the next character and is dropped; `__` is a literal `_`.
 #[must_use]
 pub fn clean_label(raw: &str) -> String {
@@ -224,6 +254,41 @@ mod tests {
                     submenu: vec![],
                 }],
             }]
+        );
+    }
+
+    #[test]
+    fn top_level_rows_keep_visible_items_in_order() {
+        let root = node(
+            0,
+            &[],
+            vec![
+                node(1, &[("label", label("_Open"))], vec![]),
+                node(2, &[("type", label("separator"))], vec![]),
+                node(
+                    3,
+                    &[
+                        ("label", label("Quit")),
+                        ("enabled", MenuValue::Bool(false)),
+                    ],
+                    vec![],
+                ),
+            ],
+        );
+        assert_eq!(
+            top_level_rows(&parse_layout(&root)),
+            vec![
+                TrayMenuRow {
+                    id: 1,
+                    label: "Open".into(),
+                    enabled: true
+                },
+                TrayMenuRow {
+                    id: 3,
+                    label: "Quit".into(),
+                    enabled: false
+                },
+            ]
         );
     }
 

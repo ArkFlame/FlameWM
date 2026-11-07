@@ -162,6 +162,12 @@ pub enum ContextMenuKind {
     Taskbar,
     /// Start application row (Secondary on `start.app.N`); one favorite toggle row.
     StartApp(flamewm_api::DesktopAppId),
+    /// Flat dbusmenu popup of one StatusNotifier item; row N is action `tray.menu.N`.
+    TrayItem {
+        key: flamewm_tray::ItemKey,
+        menu_path: String,
+        rows: Vec<flamewm_tray::TrayMenuRow>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

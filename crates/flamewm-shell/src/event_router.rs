@@ -539,6 +539,16 @@ impl ShellLoop {
                 self.shell.dispatch("context.menu.close");
                 return self.apply_controls(runtime);
             }
+            if action.starts_with(flamewm_shell::tray_host::TRAY_MENU_ACTION_PREFIX) {
+                let target = self.context_menu.as_ref().and_then(|menu| {
+                    flamewm_shell::tray_host::menu_row_target(&menu.kind, action)
+                });
+                if let (Some((key, menu_path, id)), Some(tray)) = (target, self.tray.as_ref()) {
+                    tray.borrow().send_menu_event(&key, &menu_path, id);
+                    self.shell.dispatch("context.menu.close");
+                    return self.apply_controls(runtime);
+                }
+            }
             if let Some(request) = self
                 .shell
                 .context_menu_request_for_action(action, self.context_menu.as_ref())

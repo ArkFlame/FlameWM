@@ -32,6 +32,9 @@ pub fn project_context_menu(
     ] {
         document.visible(id, false)?;
     }
+    for index in 0..crate::tray_host::TRAY_MENU_ROWS {
+        document.visible(&format!("context-tray-{index}"), false)?;
+    }
     let Some(state) = state else {
         return Ok(());
     };
@@ -49,6 +52,16 @@ pub fn project_context_menu(
         crate::ContextMenuKind::Taskbar => {
             for row in crate::taskbar::context_menu::taskbar_menu() {
                 document.visible(&format!("context-{}", row.id), true)?;
+            }
+        }
+        crate::ContextMenuKind::TrayItem { rows, .. } => {
+            for (index, row) in rows
+                .iter()
+                .take(crate::tray_host::TRAY_MENU_ROWS)
+                .enumerate()
+            {
+                document.text(&format!("context-tray-{index}-label"), row.label.clone())?;
+                document.visible(&format!("context-tray-{index}"), true)?;
             }
         }
         crate::ContextMenuKind::StartApp(app) => {

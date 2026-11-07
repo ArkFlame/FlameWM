@@ -1,17 +1,35 @@
-//! Tray projection tick: re-projects the panel item slots after a tray change.
+//! Tray tick: opens a pending dbusmenu popup and re-projects the panel item slots after a
+//! tray change.
 
 use super::*;
 
 impl ShellLoop {
-    /// Projects tray items into every panel when the tray host reports a change. The D-Bus
-    /// source only records the change; the reactor tick does the panel writes.
+    /// Reactor tick for the tray. The D-Bus source only records changes; the panel writes and
+    /// the popup open happen here.
     pub(crate) fn tick_tray(&mut self, runtime: &mut SurfaceRuntime) {
         let Some(tray) = self.tray.clone() else {
             return;
         };
+        let opened = tray.borrow_mut().take_menu_ready();
+        if let Some(menu) = opened {
+            self.shell.open_tray_menu(menu.key, menu.menu_path, menu.rows, menu.pointer);
+            if let Err(error) = self.apply_controls(runtime) {
+                eprintln!("flamewm-shell: tray menu open failed: {error:?}");
+            }
+        }
         if !tray.borrow_mut().take_dirty() {
             return;
         }
+        self.project_tray_panels(runtime);
+    }
+
+    /// Projects the tray items into every panel. Called on tray change and after a panel
+    /// surface is created or resynced, so a new panel shows the items already in the tray.
+    /// Returns `false` when a panel refused the projection; the host is then marked dirty.
+    pub(crate) fn project_tray_panels(&mut self, runtime: &mut SurfaceRuntime) -> bool {
+        let Some(tray) = self.tray.clone() else {
+            return true;
+        };
         self.ensure_loader();
         let host = tray.borrow();
         let loader = &mut self.icon_loader;
@@ -26,8 +44,9 @@ impl ShellLoop {
             if !redrawn {
                 drop(host);
                 tray.borrow_mut().mark_dirty();
-                return;
+                return false;
             }
         }
+        true
     }
 }

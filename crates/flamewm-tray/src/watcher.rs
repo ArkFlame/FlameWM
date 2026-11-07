@@ -2,6 +2,7 @@
 //! `flamewm-dbus-reactor` pump. Owns no thread and no timer: all work happens in `on_ready`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use flamewm_api::FlameResult;
 use flamewm_dbus_reactor::{
@@ -10,6 +11,7 @@ use flamewm_dbus_reactor::{
 };
 
 use crate::item::{IconPixmap, ITEM_INTERFACE, ItemKey, ItemProps, PropValue, parse_registration};
+use crate::menu::{MenuNode, MenuValue};
 use crate::registry::{Registration, Registry};
 
 pub const WATCHER_NAME: &str = "org.kde.StatusNotifierWatcher";
@@ -26,6 +28,10 @@ const MAX_PENDING: usize = 256;
 /// Bounds on one `IconPixmap` property: entries per item and bytes per entry.
 const MAX_PIXMAPS: usize = 8;
 const MAX_PIXMAP_BYTES: usize = 256 * 256 * 4;
+/// `com.canonical.dbusmenu`, the interface an item's `Menu` object path serves.
+const MENU_INTERFACE: &str = "com.canonical.dbusmenu";
+/// Nesting bound while decoding a `GetLayout` reply; `parse_layout` applies the display bound.
+const MAX_LAYOUT_WIRE_DEPTH: usize = 32;
 
 /// `org.kde.StatusNotifierItem` methods the tray forwards on user input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,16 +51,26 @@ impl ItemAction {
     }
 }
 
+/// Outcome of one `GetLayout` call, held until the caller takes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LayoutReply {
+    Menu(MenuNode),
+    /// The item returned an error or a malformed layout; callers fall back to `ContextMenu`.
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Pending {
     Props(ItemKey),
     Owner(ItemKey),
+    Layout(ItemKey),
 }
 
 #[derive(Default)]
 struct WatcherState {
     registry: Registry,
     pending: HashMap<u32, Pending>,
+    layouts: BTreeMap<ItemKey, LayoutReply>,
 }
 
 pub struct TrayWatcher {
@@ -116,6 +132,43 @@ impl TrayWatcher {
         self.state.registry.revision()
     }
 
+    /// Starts a dbusmenu `GetLayout` for the item's menu object. The reply arrives through
+    /// `on_ready`; collect it with `take_layout`. A new request drops any earlier reply.
+    pub fn request_layout(&mut self, key: &ItemKey, menu_path: &str) -> FlameResult<()> {
+        let call = Message::new_method_call(key.service(), menu_path, MENU_INTERFACE, "GetLayout")
+            .map_err(|error| {
+                flamewm_api::FlameError::new(flamewm_api::ErrorCode::InvalidArgument, error)
+            })?
+            .append3(0i32, -1i32, Vec::<String>::new());
+        let serial = self.pump.send(call)?;
+        self.state.layouts.remove(key);
+        self.state.pending.insert(serial, Pending::Layout(key.clone()));
+        Ok(())
+    }
+
+    /// Takes the reply to the last `request_layout` for this item, if it has arrived.
+    pub fn take_layout(&mut self, key: &ItemKey) -> Option<LayoutReply> {
+        self.state.layouts.remove(key)
+    }
+
+    /// Reports a click on dbusmenu entry `id` (`Event(id, "clicked", 0, time)`).
+    pub fn send_menu_event(&self, key: &ItemKey, menu_path: &str, id: i32) -> FlameResult<()> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs() as u32);
+        let mut call = Message::new_method_call(key.service(), menu_path, MENU_INTERFACE, "Event")
+            .map_err(|error| {
+                flamewm_api::FlameError::new(flamewm_api::ErrorCode::InvalidArgument, error)
+            })?;
+        call.append_items(&[
+            MessageItem::Int32(id),
+            MessageItem::Str("clicked".to_owned()),
+            MessageItem::Variant(Box::new(MessageItem::Int32(0))),
+            MessageItem::UInt32(timestamp),
+        ]);
+        self.pump.send(call).map(|_| ())
+    }
+
     /// Fire-and-forget method call on an item at the given screen position. The reply, if any,
     /// is ignored; no thread or timer is involved.
     pub fn invoke(
@@ -145,8 +198,11 @@ impl WatcherState {
                 self.method_return(message);
                 MessageDisposition::Handled
             }
+            MessageType::Error => {
+                self.method_error(message);
+                MessageDisposition::Handled
+            }
             MessageType::Signal => self.signal(pump, message),
-            _ => MessageDisposition::Unhandled,
         }
     }
 
@@ -240,7 +296,20 @@ impl WatcherState {
                     self.registry.set_owner(&key, owner);
                 }
             }
+            Some(Pending::Layout(key)) => {
+                let reply = layout_reply(&items).map_or(LayoutReply::Failed, LayoutReply::Menu);
+                self.layouts.insert(key, reply);
+            }
             None => {}
+        }
+    }
+
+    fn method_error(&mut self, message: &Message) {
+        let Some(serial) = message.get_reply_serial() else {
+            return;
+        };
+        if let Some(Pending::Layout(key)) = self.pending.remove(&serial) {
+            self.layouts.insert(key, LayoutReply::Failed);
         }
     }
 
@@ -295,6 +364,7 @@ impl WatcherState {
         let registry = &self.registry;
         self.pending
             .retain(|_, pending| registry.get(pending.key()).is_some());
+        self.layouts.retain(|key, _| registry.get(key).is_some());
     }
 
     fn request_props(&mut self, pump: &BusPump, key: &ItemKey) {
@@ -331,9 +401,63 @@ impl WatcherState {
 impl Pending {
     fn key(&self) -> &ItemKey {
         match self {
-            Self::Props(key) | Self::Owner(key) => key,
+            Self::Props(key) | Self::Owner(key) | Self::Layout(key) => key,
         }
     }
+}
+
+/// Decodes a `GetLayout` reply `(u revision, (ia{sv}av) root)`.
+fn layout_reply(items: &[MessageItem]) -> Option<MenuNode> {
+    let [MessageItem::UInt32(_), root] = items else {
+        return None;
+    };
+    menu_node(root, 0)
+}
+
+fn menu_node(item: &MessageItem, depth: usize) -> Option<MenuNode> {
+    if depth > MAX_LAYOUT_WIRE_DEPTH {
+        return None;
+    }
+    let MessageItem::Struct(fields) = unwrap_variant(item) else {
+        return None;
+    };
+    let [MessageItem::Int32(id), props, children] = fields.as_slice() else {
+        return None;
+    };
+    let children = match unwrap_variant(children) {
+        MessageItem::Array(array) => array
+            .iter()
+            .map(|child| menu_node(child, depth + 1))
+            .collect::<Option<Vec<_>>>()?,
+        _ => Vec::new(),
+    };
+    Some(MenuNode {
+        id: *id,
+        props: menu_props(props),
+        children,
+    })
+}
+
+/// Keeps the `a{sv}` properties the menu reducer reads; other value types are dropped.
+fn menu_props(item: &MessageItem) -> BTreeMap<String, MenuValue> {
+    let MessageItem::Dict(entries) = unwrap_variant(item) else {
+        return BTreeMap::new();
+    };
+    entries
+        .iter()
+        .filter_map(|(key, value)| {
+            let MessageItem::Str(name) = key else {
+                return None;
+            };
+            let value = match unwrap_variant(value) {
+                MessageItem::Str(text) => MenuValue::Str(text.clone()),
+                MessageItem::Bool(flag) => MenuValue::Bool(*flag),
+                MessageItem::Int32(number) => MenuValue::Int(*number),
+                _ => return None,
+            };
+            Some((name.clone(), value))
+        })
+        .collect()
 }
 
 fn single_string(message: &Message) -> Option<String> {
@@ -562,5 +686,48 @@ mod tests {
         assert_eq!(item.tooltip_title, "Network connected");
         assert_eq!(item.icon_pixmaps.len(), 1);
         assert_eq!(item.icon_name, "network-wired");
+    }
+
+    #[test]
+    fn layout_reply_decodes_nested_menu_and_rejects_malformed_root() {
+        let props = |pairs: Vec<(&str, MessageItem)>| {
+            if pairs.is_empty() {
+                return array("a{sv}", vec![]);
+            }
+            MessageItem::new_dict(
+                pairs
+                    .into_iter()
+                    .map(|(key, value)| {
+                        (
+                            MessageItem::Str(key.to_owned()),
+                            MessageItem::Variant(Box::new(value)),
+                        )
+                    })
+                    .collect(),
+            )
+            .expect("dict")
+        };
+        let child = MessageItem::Variant(Box::new(MessageItem::Struct(vec![
+            MessageItem::Int32(7),
+            props(vec![("label", MessageItem::Str("_Quit".to_owned()))]),
+            array("av", vec![]),
+        ])));
+        let root = MessageItem::Struct(vec![
+            MessageItem::Int32(0),
+            props(vec![]),
+            array("av", vec![child]),
+        ]);
+        let node = layout_reply(&[MessageItem::UInt32(3), root]).expect("layout decodes");
+        assert_eq!(node.children.len(), 1);
+        assert_eq!(node.children[0].id, 7);
+        assert_eq!(
+            node.children[0].props.get("label"),
+            Some(&MenuValue::Str("_Quit".to_owned()))
+        );
+        assert_eq!(layout_reply(&[MessageItem::UInt32(3)]), None);
+        assert_eq!(
+            layout_reply(&[MessageItem::UInt32(3), MessageItem::Int32(1)]),
+            None
+        );
     }
 }

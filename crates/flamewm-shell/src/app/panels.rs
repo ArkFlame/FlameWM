@@ -312,6 +312,8 @@ impl ShellLoop {
             ..Default::default()
         };
         self.project_panels_partial(runtime, snapshot, changed, "resync-partial");
+        // A panel created or resynced here starts from the template: project the tray again.
+        self.project_tray_panels(runtime);
         flamewm_debug::emit(
             flamewm_debug::DebugEventId("shell.panel.resync"),
             Duration::from_millis(500),

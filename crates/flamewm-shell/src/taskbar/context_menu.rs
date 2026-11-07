@@ -174,6 +174,9 @@ pub fn visible_row_count_for_kind(
         crate::ContextMenuKind::Taskbar => taskbar_menu().len(),
         // Two rows, one shown: "Add to favorites" or "Remove from favorites".
         crate::ContextMenuKind::StartApp(_) => 1,
+        crate::ContextMenuKind::TrayItem { rows, .. } => {
+            rows.len().min(crate::tray_host::TRAY_MENU_ROWS)
+        }
     }
 }
 
@@ -207,8 +210,12 @@ mod taskbar_menu_tests {
 
     #[test]
     fn every_markup_menu_row_has_canonical_icon_size_and_action() {
-        let rows = menu_rows(TASK_MENU_HTML);
+        // Tray rows are text-only: their labels come from the item's dbusmenu layout.
+        let (tray, rows): (Vec<&str>, Vec<&str>) = menu_rows(TASK_MENU_HTML)
+            .into_iter()
+            .partition(|line| line.contains("data-action=\"tray.menu."));
         assert_eq!(rows.len(), 11);
+        assert_eq!(tray.len(), crate::tray_host::TRAY_MENU_ROWS);
         for line in rows {
             assert!(
                 line.contains(&format!(
@@ -346,11 +353,13 @@ mod taskbar_menu_tests {
         const DESKTOP_HTML: &str = include_str!("../../../../ui/desktop/index.html");
         for (name, html) in [("task", TASK_MENU_HTML), ("desktop", DESKTOP_HTML)] {
             // `confirm.*`/`downloads.notice.*` rows live in the text-only `.desktop-confirm` notice dialogs, not icon menus.
+            // `tray.menu.*` rows are text-only: their labels come from the tray item's dbusmenu layout.
             let rows: Vec<&str> = menu_rows(html)
                 .into_iter()
                 .filter(|line| {
                     !line.contains("data-action=\"confirm.")
                         && !line.contains("data-action=\"downloads.notice.")
+                        && !line.contains("data-action=\"tray.menu.")
                 })
                 .collect();
             assert!(!rows.is_empty(), "{name} menu has rows");
