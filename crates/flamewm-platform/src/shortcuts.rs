@@ -5,12 +5,13 @@ use flamewm_api::shortcuts::{
     ACTION_FULLSCREEN_ESCAPE, ACTION_LAUNCHER, ACTION_MOVE_WINDOW_DOWN, ACTION_MOVE_WINDOW_LEFT,
     ACTION_MOVE_WINDOW_RIGHT, ACTION_MOVE_WINDOW_UP, ACTION_SCREENSHOT_FULL,
     ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW, ACTION_SESSION_LOCK, ACTION_SHOW_DESKTOP,
-    ACTION_SHOW_DESKTOP_CTRL_ALT, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE,
-    ACTION_WINDOW_CYCLE_NEXT, ACTION_WINDOW_CYCLE_PREV, ACTION_WINDOW_FLOAT,
-    ACTION_WINDOW_FULLSCREEN, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
-    ACTION_WINDOW_RESIZE_GROW, ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH,
-    ACTION_WORKSPACE_ACTIVATE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_MOVE,
-    ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP, KeyBinding,
+    ACTION_SHOW_DESKTOP_CTRL_ALT, ACTION_TILE_DOWN, ACTION_TILE_LEFT, ACTION_TILE_RIGHT,
+    ACTION_TILE_UP, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_CYCLE_NEXT,
+    ACTION_WINDOW_CYCLE_PREV, ACTION_WINDOW_FLOAT, ACTION_WINDOW_FULLSCREEN,
+    ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_RESIZE_GROW,
+    ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH, ACTION_WORKSPACE_ACTIVATE,
+    ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_MOVE, ACTION_WORKSPACE_RIGHT,
+    ACTION_WORKSPACE_UP, KeyBinding,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
@@ -36,7 +37,7 @@ pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
 pub const ACTION_BRIGHTNESS_UP: &str = "BrightnessUp";
 pub const ACTION_BRIGHTNESS_DOWN: &str = "BrightnessDown";
 
-pub const ACTIONS: [&str; 62] = [
+pub const ACTIONS: [&str; 66] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_LAUNCHER,
     ACTION_WORKSPACE_LEFT,
@@ -61,6 +62,10 @@ pub const ACTIONS: [&str; 62] = [
     "MoveToWorkspace7",
     "MoveToWorkspace8",
     "MoveToWorkspace9",
+    ACTION_TILE_LEFT,
+    ACTION_TILE_RIGHT,
+    ACTION_TILE_UP,
+    ACTION_TILE_DOWN,
     ACTION_FOCUS_LEFT,
     ACTION_FOCUS_RIGHT,
     ACTION_FOCUS_UP,
@@ -203,18 +208,35 @@ impl Default for ShortcutRegistry {
                 ACTION_WORKSPACE_MOVE[8].to_owned(),
                 KeyBinding::assigned("Super+Shift+9"),
             ),
+            // Super+arrow tiles the active window; directional focus moves to Super+Alt+arrow.
             (
-                ACTION_FOCUS_LEFT.to_owned(),
+                ACTION_TILE_LEFT.to_owned(),
                 KeyBinding::assigned("Super+Left"),
             ),
             (
-                ACTION_FOCUS_RIGHT.to_owned(),
+                ACTION_TILE_RIGHT.to_owned(),
                 KeyBinding::assigned("Super+Right"),
             ),
-            (ACTION_FOCUS_UP.to_owned(), KeyBinding::assigned("Super+Up")),
+            (ACTION_TILE_UP.to_owned(), KeyBinding::assigned("Super+Up")),
+            (
+                ACTION_TILE_DOWN.to_owned(),
+                KeyBinding::assigned("Super+Down"),
+            ),
+            (
+                ACTION_FOCUS_LEFT.to_owned(),
+                KeyBinding::assigned("Super+Alt+Left"),
+            ),
+            (
+                ACTION_FOCUS_RIGHT.to_owned(),
+                KeyBinding::assigned("Super+Alt+Right"),
+            ),
+            (
+                ACTION_FOCUS_UP.to_owned(),
+                KeyBinding::assigned("Super+Alt+Up"),
+            ),
             (
                 ACTION_FOCUS_DOWN.to_owned(),
-                KeyBinding::assigned("Super+Down"),
+                KeyBinding::assigned("Super+Alt+Down"),
             ),
             (
                 ACTION_MOVE_WINDOW_LEFT.to_owned(),
@@ -471,6 +493,27 @@ pub fn normalize(raw: &str) -> String {
         .join("+")
 }
 
+/// Focus actions whose default moved from `Super+arrow` (now tiling) to `Super+Alt+arrow`, with
+/// the superseded default. Only a stored value that still equals the old default is migrated.
+const LEGACY_FOCUS_DEFAULTS: [(&str, &str, &str); 4] = [
+    (ACTION_FOCUS_LEFT, "Super+Left", "Super+Alt+Left"),
+    (ACTION_FOCUS_RIGHT, "Super+Right", "Super+Alt+Right"),
+    (ACTION_FOCUS_UP, "Super+Up", "Super+Alt+Up"),
+    (ACTION_FOCUS_DOWN, "Super+Down", "Super+Alt+Down"),
+];
+
+/// Rewrites persisted `Focus*` bindings that still hold the retired `Super+arrow` default to the
+/// new `Super+Alt+arrow` default. Any other stored value is a deliberate choice and is kept.
+pub fn migrate_legacy_focus_hotkeys(persisted: &mut BTreeMap<String, String>) {
+    for (action, old, new) in LEGACY_FOCUS_DEFAULTS {
+        if let Some(value) = persisted.get_mut(action) {
+            if normalize(value).eq_ignore_ascii_case(old) {
+                *value = new.to_owned();
+            }
+        }
+    }
+}
+
 /// Normalizes and validates a raw binding; `None` means the action is cleared.
 fn checked_binding(action: &str, raw: &str) -> FlameResult<Option<String>> {
     let normalized = normalize(raw);
@@ -550,7 +593,7 @@ mod tests {
 
     #[test]
     fn launcher_is_a_registered_action_with_super_space_default() {
-        assert_eq!(ACTIONS.len(), 62);
+        assert_eq!(ACTIONS.len(), 66);
         assert!(ACTIONS.contains(&ACTION_LAUNCHER));
         let defaults = ShortcutRegistry::default();
         assert_eq!(
@@ -691,6 +734,60 @@ mod tests {
         assert_eq!(
             registry.binding(ACTION_WINDOW_CLOSE),
             Some(&KeyBinding::assigned("Super+Q"))
+        );
+    }
+
+    #[test]
+    fn super_arrows_tile_and_directional_focus_moves_to_super_alt_arrows() {
+        let registry = ShortcutRegistry::default();
+        for (tile, focus, arrow) in [
+            (ACTION_TILE_LEFT, ACTION_FOCUS_LEFT, "Left"),
+            (ACTION_TILE_RIGHT, ACTION_FOCUS_RIGHT, "Right"),
+            (ACTION_TILE_UP, ACTION_FOCUS_UP, "Up"),
+            (ACTION_TILE_DOWN, ACTION_FOCUS_DOWN, "Down"),
+        ] {
+            assert_eq!(
+                registry.binding(tile),
+                Some(&KeyBinding::assigned(format!("Super+{arrow}")))
+            );
+            assert_eq!(
+                registry.binding(focus),
+                Some(&KeyBinding::assigned(format!("Super+Alt+{arrow}")))
+            );
+            assert!(ACTIONS.contains(&tile) && ACTIONS.contains(&focus));
+        }
+        // Every default is distinct, so no grab is shadowed by another action.
+        let mut keys: Vec<String> = registry
+            .bindings()
+            .values()
+            .filter_map(|binding| binding.0.as_ref().map(|v| v.to_ascii_lowercase()))
+            .collect();
+        let total = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), total, "default bindings must not collide");
+    }
+
+    #[test]
+    fn legacy_focus_on_super_arrow_migrates_but_custom_focus_is_kept() {
+        let persisted = BTreeMap::from([
+            (ACTION_FOCUS_LEFT.to_owned(), "super+left".to_owned()),
+            (ACTION_FOCUS_UP.to_owned(), "Ctrl+Super+K".to_owned()),
+        ]);
+        let effective = crate::services::shortcuts::effective_registry(&persisted, false)
+            .expect("legacy config is valid");
+        assert_eq!(
+            effective.binding(ACTION_FOCUS_LEFT),
+            Some(&KeyBinding::assigned("Super+Alt+Left"))
+        );
+        assert_eq!(
+            effective.binding(ACTION_FOCUS_UP),
+            Some(&KeyBinding::assigned("Ctrl+Super+K"))
+        );
+        // Tiling keeps Super+Left: the migrated focus no longer collides with it.
+        assert_eq!(
+            effective.binding(ACTION_TILE_LEFT),
+            Some(&KeyBinding::assigned("Super+Left"))
         );
     }
 

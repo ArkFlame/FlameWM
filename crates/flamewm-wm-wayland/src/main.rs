@@ -396,6 +396,62 @@ fn detail_tokens(detail: &str) -> String {
 /// every one of them is discarded, which is how a failed hardware start can leave no trace beyond
 /// this crate's own stage lines. Warnings and errors only: smithay logs per-frame detail at
 /// info/debug, and the `eprintln!` stage lines above stay the canonical startup record.
+/// Receives smithay's `tracing` output. Without a subscriber, `tracing` forwards every span open
+/// to the `log` facade at the span's own level: smithay's `warn_span!("output_bind")` then printed
+/// as WARN on every client bind. This subscriber keeps events at WARN and above and records no spans.
+struct StderrSubscriber;
+
+/// Whether the `tracing` subscriber prints a callsite: warnings and errors that are events.
+fn subscriber_wants(level: tracing::Level, is_span: bool) -> bool {
+    !is_span && level <= tracing::Level::WARN
+}
+
+struct MessageVisitor(String);
+
+impl tracing::field::Visit for MessageVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        use std::fmt::Write;
+        if field.name() == "message" {
+            let _ = write!(self.0, "{value:?}");
+        } else {
+            let _ = write!(self.0, " {}={value:?}", field.name());
+        }
+    }
+}
+
+impl tracing::Subscriber for StderrSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        subscriber_wants(*metadata.level(), metadata.is_span())
+    }
+
+    fn new_span(&self, _attributes: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let metadata = event.metadata();
+        if !self.enabled(metadata) {
+            return;
+        }
+        let mut visitor = MessageVisitor(String::new());
+        event.record(&mut visitor);
+        eprintln!(
+            "flamewm-wayland: {}: {}:{}",
+            metadata.level(),
+            metadata.target(),
+            visitor.0
+        );
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
 fn install_smithay_logger() {
     struct StderrLogger;
 
@@ -423,6 +479,8 @@ fn install_smithay_logger() {
     if log::set_logger(&LOGGER).is_ok() {
         log::set_max_level(log::LevelFilter::Warn);
     }
+    // Replaces `tracing`'s log fallback, which forwarded span opens as WARN records.
+    let _ = tracing::subscriber::set_global_default(StderrSubscriber);
 }
 
 fn main() {
@@ -840,8 +898,19 @@ fn explicit_window_size() -> Option<(u32, u32)> {
 mod tests {
     use super::{
         BACKEND_STAGES, Backend, MAX_DETAIL, Stage, StageStatus, StartupTiming, capabilities_text,
-        detail_tokens, select_backend, stage_text, xwayland_unavailable_detail,
+        detail_tokens, select_backend, stage_text, subscriber_wants, xwayland_unavailable_detail,
     };
+
+    #[test]
+    fn subscriber_prints_warn_events_and_never_spans() {
+        use tracing::Level;
+        // smithay's `warn_span!("output_bind")` is a WARN span: it must not print.
+        assert!(!subscriber_wants(Level::WARN, true));
+        assert!(!subscriber_wants(Level::ERROR, true));
+        assert!(subscriber_wants(Level::WARN, false));
+        assert!(subscriber_wants(Level::ERROR, false));
+        assert!(!subscriber_wants(Level::INFO, false));
+    }
 
     #[test]
     fn capabilities_lines_are_exact() {

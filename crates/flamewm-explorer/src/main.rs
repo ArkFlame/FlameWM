@@ -333,6 +333,9 @@ fn run()->Result<(),String>{
         let interval=std::time::Duration::from_secs(flamewm_profiler::profile_interval_secs());
         std::thread::spawn(move||loop{std::thread::sleep(interval);let _=flamewm_profiler::report_window();});
     }
+    // One-shot: startup's scan and decode temporaries stay free-but-resident in the malloc arena.
+    // A single sleeping thread hands them back; no periodic wake is added.
+    std::thread::spawn(||{std::thread::sleep(std::time::Duration::from_secs(10));flamewm_ui_x11::release_free_heap();});
     let args=std::env::args_os().skip(1).collect::<Vec<_>>();
     if args.iter().any(|a|matches!(a.to_string_lossy().as_ref(),"--help"|"-h")) {println!("FlameWM Explorer — usage: flamewm-explorer [DIRECTORY]");return Ok(());}
     let path=args.first().map_or_else(home_dir, PathBuf::from);

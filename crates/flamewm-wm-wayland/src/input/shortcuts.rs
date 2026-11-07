@@ -39,9 +39,20 @@ impl State {
             }
             return;
         }
-        // Super+arrows are keyboard tiling, as on X11: the tile state machine replaces directional focus.
+        // Super+arrows are keyboard tiling, as on X11.
         if let Some(direction) = keyboard_tile::tile_action(action) {
             self.keyboard_tile(direction);
+            return;
+        }
+        // Super+Alt+arrows: focus the nearest visible window on that side, raised as X11 does.
+        if let Some(direction) = focus_direction(action) {
+            if let Some(target) = self
+                .focused
+                .and_then(|id| self.model.focus_direction(id, direction))
+            {
+                self.model.raise(target);
+                self.set_focus(Some(target));
+            }
             return;
         }
         if let Some(direction) = move_direction(action) {

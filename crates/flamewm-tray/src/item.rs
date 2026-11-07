@@ -145,11 +145,23 @@ impl Status {
     }
 }
 
+/// One `IconPixmap` entry: `ARGB32`, network byte order, row-major, `width * height * 4` bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IconPixmap {
+    pub width: u32,
+    pub height: u32,
+    pub argb: Vec<u8>,
+}
+
 /// A property value as received from `GetAll`, reduced to what the tray consumes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PropValue {
     Str(String),
     Bool(bool),
+    /// `ToolTip` `(sa(iiay)ss)`: only the title (element 2) is kept.
+    Tooltip(String),
+    /// `IconPixmap` `a(iiay)` with malformed or oversized entries already dropped.
+    Pixmaps(Vec<IconPixmap>),
     Other,
 }
 
@@ -163,6 +175,7 @@ pub struct ItemProps {
     pub tooltip_title: String,
     pub menu_path: Option<String>,
     pub item_is_menu: bool,
+    pub icon_pixmaps: Vec<IconPixmap>,
 }
 
 impl ItemProps {
@@ -178,14 +191,23 @@ impl ItemProps {
         };
         let menu_path = Some(text("Menu")).filter(|path| !path.is_empty() && path != "/");
         let item_is_menu = matches!(props.get("ItemIsMenu"), Some(PropValue::Bool(true)));
+        let tooltip_title = match props.get("ToolTip") {
+            Some(PropValue::Tooltip(title)) => title.clone(),
+            _ => String::new(),
+        };
+        let icon_pixmaps = match props.get("IconPixmap") {
+            Some(PropValue::Pixmaps(pixmaps)) => pixmaps.clone(),
+            _ => Vec::new(),
+        };
         Self {
             id: text("Id"),
             title: text("Title"),
             status,
             icon_name: text("IconName"),
-            tooltip_title: text("ToolTip"),
+            tooltip_title,
             menu_path,
             item_is_menu,
+            icon_pixmaps,
         }
     }
 }

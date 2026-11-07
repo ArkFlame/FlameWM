@@ -25,6 +25,7 @@ flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-debug = { path = "../flamewm-debug" }
 flamewm-session-core = { path = "../flamewm-session-core" }
 flamewm-shell-core = { path = "../flamewm-shell-core" }
+flamewm-tray = { path = "../flamewm-tray" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-skin = { path = "../flamewm-skin" }
 flamewm-ui-document = { path = "../flamewm-ui-document" }

@@ -7,6 +7,7 @@ pub(super) fn target_in_range(target: IconTarget) -> bool {
         IconTarget::StartSlot(n) => u32::from(n) < START_APP_SLOT_COUNT as u32,
         IconTarget::LauncherSlot(n) => usize::from(n) < crate::launcher::LAUNCHER_ROWS,
         IconTarget::TaskSlot(n) => u32::from(n) < TASK_SLOT_COUNT as u32,
+        IconTarget::TraySlot(n) => usize::from(n) < crate::tray_host::SLOT_COUNT,
     }
 }
 
@@ -52,7 +53,7 @@ pub(super) fn epoch_for_target(target: IconTarget) -> u64 {
         IconTarget::StartSlot(_) | IconTarget::LauncherSlot(_) => {
             START_EPOCH.load(Ordering::SeqCst)
         }
-        IconTarget::TaskSlot(_) => TASK_EPOCH.load(Ordering::SeqCst),
+        IconTarget::TaskSlot(_) | IconTarget::TraySlot(_) => TASK_EPOCH.load(Ordering::SeqCst),
     }
 }
 
@@ -63,6 +64,7 @@ pub fn icon_node_id_for_target(target: IconTarget) -> String {
         IconTarget::StartSlot(n) => format!("start-app-slot-{}-icon", u32::from(n) + 1),
         IconTarget::LauncherSlot(n) => format!("launcher-row-{}-icon", u32::from(n) + 1),
         IconTarget::TaskSlot(n) => format!("task-slot-{}-icon", u32::from(n) + 1),
+        IconTarget::TraySlot(n) => format!("tray-sni-{}-icon", u32::from(n) + 1),
     }
 }
 

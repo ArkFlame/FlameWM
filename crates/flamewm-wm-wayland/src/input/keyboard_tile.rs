@@ -1,9 +1,9 @@
 //! Super+arrow keyboard tiling. `flamewm_window_core::keyboard_tile::next_tile` owns the
 //! transition; this module applies it through the model's snap, maximize and restore paths. The
-//! `Focus*` actions carry the Super+arrow bindings, so they tile here exactly as the X11 engine does.
+//! `Tile*` actions carry the Super+arrow bindings, as on the X11 engine.
 
 use flamewm_api::shortcuts::{
-    ACTION_FOCUS_DOWN, ACTION_FOCUS_LEFT, ACTION_FOCUS_RIGHT, ACTION_FOCUS_UP,
+    ACTION_TILE_DOWN, ACTION_TILE_LEFT, ACTION_TILE_RIGHT, ACTION_TILE_UP,
 };
 use flamewm_window_core::SnapTarget;
 use flamewm_window_core::keyboard_tile::{Direction, next_tile};
@@ -14,10 +14,10 @@ use crate::model::Mode;
 /// Tile direction for a shortcut action, or `None` for any other action.
 pub(super) fn tile_action(action: &str) -> Option<Direction> {
     match action {
-        ACTION_FOCUS_LEFT => Some(Direction::Left),
-        ACTION_FOCUS_RIGHT => Some(Direction::Right),
-        ACTION_FOCUS_UP => Some(Direction::Up),
-        ACTION_FOCUS_DOWN => Some(Direction::Down),
+        ACTION_TILE_LEFT => Some(Direction::Left),
+        ACTION_TILE_RIGHT => Some(Direction::Right),
+        ACTION_TILE_UP => Some(Direction::Up),
+        ACTION_TILE_DOWN => Some(Direction::Down),
         _ => None,
     }
 }
@@ -80,14 +80,17 @@ impl State {
 mod tests {
     use super::*;
     use crate::model::Rect;
+    use flamewm_api::shortcuts::{ACTION_FOCUS_LEFT, ACTION_FOCUS_UP};
     use flamewm_window_core::keyboard_tile::Direction as D;
 
     #[test]
-    fn only_focus_actions_map_to_tile_directions() {
-        assert_eq!(tile_action(ACTION_FOCUS_LEFT), Some(D::Left));
-        assert_eq!(tile_action(ACTION_FOCUS_RIGHT), Some(D::Right));
-        assert_eq!(tile_action(ACTION_FOCUS_UP), Some(D::Up));
-        assert_eq!(tile_action(ACTION_FOCUS_DOWN), Some(D::Down));
+    fn only_tile_actions_map_to_tile_directions() {
+        assert_eq!(tile_action(ACTION_TILE_LEFT), Some(D::Left));
+        assert_eq!(tile_action(ACTION_TILE_RIGHT), Some(D::Right));
+        assert_eq!(tile_action(ACTION_TILE_UP), Some(D::Up));
+        assert_eq!(tile_action(ACTION_TILE_DOWN), Some(D::Down));
+        assert_eq!(tile_action(ACTION_FOCUS_LEFT), None);
+        assert_eq!(tile_action(ACTION_FOCUS_UP), None);
         assert_eq!(tile_action("MoveWindowLeft"), None);
         assert_eq!(tile_action("WorkspaceLeft"), None);
     }

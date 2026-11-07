@@ -205,11 +205,15 @@ impl<C: Connection> Wm<'_, C> {
             ACTION_WINDOW_CYCLE_PREV => self.cycle_window(-1)?,
             ACTION_WINDOW_RESIZE_GROW => self.resize_active(true)?,
             ACTION_WINDOW_RESIZE_SHRINK => self.resize_active(false)?,
-            // Super+arrows are keyboard tiling; the tile state machine replaces directional focus.
-            ACTION_FOCUS_LEFT => self.keyboard_tile(Direction::Left)?,
-            ACTION_FOCUS_RIGHT => self.keyboard_tile(Direction::Right)?,
-            ACTION_FOCUS_UP => self.keyboard_tile(Direction::Up)?,
-            ACTION_FOCUS_DOWN => self.keyboard_tile(Direction::Down)?,
+            // Super+arrows tile the active window; Super+Alt+arrows move directional focus.
+            ACTION_TILE_LEFT => self.keyboard_tile(Direction::Left)?,
+            ACTION_TILE_RIGHT => self.keyboard_tile(Direction::Right)?,
+            ACTION_TILE_UP => self.keyboard_tile(Direction::Up)?,
+            ACTION_TILE_DOWN => self.keyboard_tile(Direction::Down)?,
+            ACTION_FOCUS_LEFT => self.focus_direction(GridDirection::Left)?,
+            ACTION_FOCUS_RIGHT => self.focus_direction(GridDirection::Right)?,
+            ACTION_FOCUS_UP => self.focus_direction(GridDirection::Up)?,
+            ACTION_FOCUS_DOWN => self.focus_direction(GridDirection::Down)?,
             other => {
                 if !self.dispatch_hyprland_binding(other)? {
                     log_unhandled_shortcut_once(other);

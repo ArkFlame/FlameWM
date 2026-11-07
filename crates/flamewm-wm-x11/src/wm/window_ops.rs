@@ -325,6 +325,37 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
+    /// Focuses the nearest visible window in `direction` from the active window's centre.
+    /// No candidate on that side is a no-op.
+    pub(super) fn focus_direction(&mut self, direction: GridDirection) -> Result<(), ReplyError> {
+        match self.directional_target(direction) {
+            Some(target) => self.focus(target),
+            None => Ok(()),
+        }
+    }
+
+    fn directional_target(&self, direction: GridDirection) -> Option<Window> {
+        let active = self.active?;
+        let origin = self.clients.get(&active)?.outer;
+        let origin_centre = rect_centre(origin);
+        let mut best: Option<(i64, Window)> = None;
+        for (&client, state) in &self.clients {
+            if client == active
+                || state.kind != WindowKind::Normal
+                || !state.visible_on(self.current_workspace)
+            {
+                continue;
+            }
+            let score = directional_score(origin_centre, rect_centre(state.outer), direction);
+            if let Some(score) = score {
+                if best.is_none_or(|(best_score, _)| score < best_score) {
+                    best = Some((score, client));
+                }
+            }
+        }
+        best.map(|(_, client)| client)
+    }
+
     /// Keyboard move of the active floating window (`Super+Shift+arrows`).
     pub(super) fn move_active(
         &mut self,
@@ -519,5 +550,71 @@ impl<C: Connection> Wm<'_, C> {
         // ConfigureNotify churn under SUBSTRUCTURE_NOTIFY. Full relayout stays
         // on manage / WM_NORMAL_HINTS / final resize release.
         Ok(())
+    }
+}
+
+/// Centre of a frame outer rect, in root coordinates.
+fn rect_centre(outer: Rect) -> (i32, i32) {
+    (
+        outer.x + i32::try_from(outer.width).unwrap_or(0) / 2,
+        outer.y + i32::try_from(outer.height).unwrap_or(0) / 2,
+    )
+}
+
+/// Search score of a candidate centre from `origin` in `direction`, or `None` when it is not on
+/// that side. Distance along the axis costs four times the drift across it, so a window straight
+/// ahead beats a nearer one far off-axis.
+fn directional_score(
+    origin: (i32, i32),
+    candidate: (i32, i32),
+    direction: GridDirection,
+) -> Option<i64> {
+    let (dx, dy) = (
+        i64::from(candidate.0) - i64::from(origin.0),
+        i64::from(candidate.1) - i64::from(origin.1),
+    );
+    let (along, across) = match direction {
+        GridDirection::Left => (-dx, dy.abs()),
+        GridDirection::Right => (dx, dy.abs()),
+        GridDirection::Up => (-dy, dx.abs()),
+        GridDirection::Down => (dy, dx.abs()),
+    };
+    (along > 0).then(|| along * 4 + across)
+}
+
+#[cfg(test)]
+mod directional_focus_tests {
+    use super::*;
+
+    #[test]
+    fn score_prefers_the_window_straight_ahead_and_skips_the_other_side() {
+        let origin = (100, 100);
+        // Straight right and near beats far-off-axis and nearer.
+        let near = directional_score(origin, (200, 100), GridDirection::Right).unwrap();
+        let drifted = directional_score(origin, (150, 400), GridDirection::Right).unwrap();
+        assert!(near < drifted);
+        assert_eq!(
+            directional_score(origin, (50, 100), GridDirection::Right),
+            None
+        );
+        assert_eq!(
+            directional_score(origin, (100, 100), GridDirection::Left),
+            None
+        );
+        assert_eq!(
+            directional_score(origin, (100, 300), GridDirection::Down),
+            Some(800)
+        );
+    }
+
+    #[test]
+    fn rect_centre_uses_the_outer_rect_midpoint() {
+        let outer = Rect {
+            x: 10,
+            y: 20,
+            width: 100,
+            height: 60,
+        };
+        assert_eq!(rect_centre(outer), (60, 50));
     }
 }

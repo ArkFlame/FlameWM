@@ -15,8 +15,10 @@ pub fn effective_registry(
     persisted: &BTreeMap<String, String>,
     assistant_enabled: bool,
 ) -> FlameResult<ShortcutRegistry> {
+    let mut persisted = persisted.clone();
+    crate::shortcuts::migrate_legacy_focus_hotkeys(&mut persisted);
     let mut desired = ShortcutRegistry::default().bindings().clone();
-    for (action, binding) in persisted {
+    for (action, binding) in &persisted {
         desired.insert(action.clone(), KeyBinding::assigned(binding.clone()));
     }
     for (action, chord) in ASSISTANT_CHORDS {

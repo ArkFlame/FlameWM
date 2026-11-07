@@ -314,8 +314,6 @@ fn render_into(
     state: &mut State,
     backend: &mut WinitGraphicsBackend<GlowRenderer>,
 ) -> Result<(), Box<dyn Error>> {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static BUFFER_AGE_REFUSED: AtomicBool = AtomicBool::new(false);
     let size = backend.window_size();
     refresh_desktop_backdrop(state, backend.renderer(), size)?;
     // While locked, the lock client owns the screen: painting the desktop behind it would put
@@ -350,14 +348,14 @@ fn render_into(
     // touches the rectangles that changed (the pointer is the common case), instead of clearing
     // and redrawing the full output on every motion event. Some nested software-EGL drivers return
     // no age; zero remains the safe full-repaint fallback.
-    // Measured: the nested winit EGL surface answers EGL_BAD_SURFACE to every BUFFER_AGE query
-    // (smithay logs one ERROR per frame, gdb: render_into -> WinitGraphicsBackend::buffer_age).
-    // The refusal is a driver property, so latch it and repaint in full instead of re-asking.
-    let age = if BUFFER_AGE_REFUSED.load(Ordering::Relaxed) {
+    // Software renderers are latched at startup (see `log_gl_renderer`): the nested winit EGL
+    // surface answers EGL_BAD_SURFACE to BUFFER_AGE, which smithay logs as an ERROR per query.
+    // A refusal from any other driver is latched on its first answer and repainted in full.
+    let age = if BUFFER_AGE_REFUSED.load(std::sync::atomic::Ordering::Relaxed) {
         0
     } else {
         backend.buffer_age().unwrap_or_else(|| {
-            BUFFER_AGE_REFUSED.store(true, Ordering::Relaxed);
+            BUFFER_AGE_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
             0
         })
     };
@@ -1064,6 +1062,14 @@ pub fn is_software_renderer(name: &str) -> bool {
         .any(|soft| lower.contains(soft))
 }
 
+/// Set once a driver refuses `EGL_BUFFER_AGE_EXT`: every later frame repaints in full.
+static BUFFER_AGE_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the buffer-age probe is skipped from the start: a software renderer never answers it.
+pub fn buffer_age_unsupported(renderer_name: &str) -> bool {
+    is_software_renderer(renderer_name)
+}
+
 /// Logs the real GL driver once, so "gles" is never mistaken for hardware acceleration.
 #[allow(unsafe_code)] // glGetString is a read-only query on the current context.
 pub fn log_gl_renderer(renderer: &mut GlowRenderer, backend: &str) {
@@ -1076,12 +1082,15 @@ pub fn log_gl_renderer(renderer: &mut GlowRenderer, backend: &str) {
     } else {
         "hardware"
     };
+    if buffer_age_unsupported(&name) {
+        BUFFER_AGE_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     eprintln!("FLAMEWM_GL_RENDERER backend={backend} renderer=\"{name}\" class={class}");
 }
 
 #[cfg(test)]
 mod renderer_class_tests {
-    use super::is_software_renderer;
+    use super::{buffer_age_unsupported, is_software_renderer};
 
     #[test]
     fn mesa_cpu_rasterizers_are_software() {
@@ -1090,6 +1099,13 @@ mod renderer_class_tests {
         assert!(!is_software_renderer(
             "Mesa Intel(R) UHD Graphics (TGL GT1)"
         ));
+    }
+
+    #[test]
+    fn software_renderer_skips_buffer_age_probe() {
+        // The nested llvmpipe surface answers EGL_BAD_SURFACE to BUFFER_AGE (one ERROR per start).
+        assert!(buffer_age_unsupported("llvmpipe (LLVM 21.1.8, 256 bits)"));
+        assert!(!buffer_age_unsupported("Mesa Intel(R) UHD Graphics (TGL GT1)"));
     }
 }
 

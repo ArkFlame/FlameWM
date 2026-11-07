@@ -9,7 +9,7 @@ use flamewm_dbus_reactor::{
     MessageType, Signature,
 };
 
-use crate::item::{ITEM_INTERFACE, ItemKey, PropValue, parse_registration};
+use crate::item::{IconPixmap, ITEM_INTERFACE, ItemKey, ItemProps, PropValue, parse_registration};
 use crate::registry::{Registration, Registry};
 
 pub const WATCHER_NAME: &str = "org.kde.StatusNotifierWatcher";
@@ -23,6 +23,27 @@ const NAME_OWNER_CHANGED: &str = "NameOwnerChanged";
 const PROTOCOL_VERSION: i32 = 0;
 /// Outstanding property/owner requests. Replies from dead peers never arrive, so this bounds them.
 const MAX_PENDING: usize = 256;
+/// Bounds on one `IconPixmap` property: entries per item and bytes per entry.
+const MAX_PIXMAPS: usize = 8;
+const MAX_PIXMAP_BYTES: usize = 256 * 256 * 4;
+
+/// `org.kde.StatusNotifierItem` methods the tray forwards on user input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemAction {
+    Activate,
+    SecondaryActivate,
+    ContextMenu,
+}
+
+impl ItemAction {
+    const fn member(self) -> &'static str {
+        match self {
+            Self::Activate => "Activate",
+            Self::SecondaryActivate => "SecondaryActivate",
+            Self::ContextMenu => "ContextMenu",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Pending {
@@ -77,6 +98,42 @@ impl TrayWatcher {
     #[must_use]
     pub fn registered_items(&self) -> Vec<String> {
         self.state.registry.registered_strings()
+    }
+
+    /// Current items in key order with their reduced properties.
+    #[must_use]
+    pub fn entries(&self) -> Vec<(ItemKey, ItemProps)> {
+        self.state
+            .registry
+            .items()
+            .map(|(key, item)| (key.clone(), item.props.clone()))
+            .collect()
+    }
+
+    /// Changes whenever the item set or an item's props change.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.state.registry.revision()
+    }
+
+    /// Fire-and-forget method call on an item at the given screen position. The reply, if any,
+    /// is ignored; no thread or timer is involved.
+    pub fn invoke(
+        &self,
+        key: &ItemKey,
+        action: ItemAction,
+        x: i32,
+        y: i32,
+    ) -> FlameResult<()> {
+        let call = Message::new_method_call(
+            key.service(),
+            key.path(),
+            ITEM_INTERFACE,
+            action.member(),
+        )
+        .map_err(|error| flamewm_api::FlameError::new(flamewm_api::ErrorCode::InvalidArgument, error))?
+        .append2(x, y);
+        self.pump.send(call).map(|_| ())
     }
 }
 
@@ -290,20 +347,70 @@ fn props_from_entries(entries: &[(MessageItem, MessageItem)]) -> BTreeMap<String
     entries
         .iter()
         .filter_map(|(key, value)| match key {
-            MessageItem::Str(name) => Some((name.clone(), prop_value(value))),
+            MessageItem::Str(name) => Some((name.clone(), prop_value(name, value))),
             _ => None,
         })
         .collect()
 }
 
-fn prop_value(item: &MessageItem) -> PropValue {
-    match item {
-        MessageItem::Variant(inner) => prop_value(inner),
-        MessageItem::Str(value) => PropValue::Str(value.clone()),
-        MessageItem::ObjectPath(path) => PropValue::Str(path.to_string()),
-        MessageItem::Bool(value) => PropValue::Bool(*value),
+fn prop_value(name: &str, item: &MessageItem) -> PropValue {
+    let item = unwrap_variant(item);
+    match (name, item) {
+        ("ToolTip", MessageItem::Struct(fields)) => PropValue::Tooltip(match fields.get(2) {
+            Some(MessageItem::Str(title)) => title.clone(),
+            _ => String::new(),
+        }),
+        ("IconPixmap", MessageItem::Array(array)) => {
+            PropValue::Pixmaps(pixmaps(array.clone().into_vec()))
+        }
+        (_, MessageItem::Str(value)) => PropValue::Str(value.clone()),
+        (_, MessageItem::ObjectPath(path)) => PropValue::Str(path.to_string()),
+        (_, MessageItem::Bool(value)) => PropValue::Bool(*value),
         _ => PropValue::Other,
     }
+}
+
+fn unwrap_variant(item: &MessageItem) -> &MessageItem {
+    match item {
+        MessageItem::Variant(inner) => unwrap_variant(inner),
+        other => other,
+    }
+}
+
+/// Decodes `a(iiay)`, dropping malformed entries (non-positive size, byte count mismatch, or
+/// over the per-entry bound) and capping the entry count.
+fn pixmaps(entries: Vec<MessageItem>) -> Vec<IconPixmap> {
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let MessageItem::Struct(fields) = entry else {
+                return None;
+            };
+            let [MessageItem::Int32(width), MessageItem::Int32(height), MessageItem::Array(bytes)] =
+                fields.as_slice()
+            else {
+                return None;
+            };
+            let (width, height) = (u32::try_from(*width).ok()?, u32::try_from(*height).ok()?);
+            let argb: Vec<u8> = bytes
+                .clone()
+                .into_vec()
+                .into_iter()
+                .map(|item| match item {
+                    MessageItem::Byte(value) => Some(value),
+                    _ => None,
+                })
+                .collect::<Option<_>>()?;
+            let expected = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+            (width > 0 && height > 0 && expected == argb.len() && argb.len() <= MAX_PIXMAP_BYTES)
+                .then_some(IconPixmap {
+                    width,
+                    height,
+                    argb,
+                })
+        })
+        .take(MAX_PIXMAPS)
+        .collect()
 }
 
 fn watcher_property(registry: &Registry, name: &str) -> Option<MessageItem> {
@@ -393,4 +500,67 @@ fn add_match(pump: &BusPump, rule: &str) -> FlameResult<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Array with an explicit full signature, so empty arrays are representable.
+    fn array(signature: &str, items: Vec<MessageItem>) -> MessageItem {
+        MessageItem::Array(
+            MessageItemArray::new(items, Signature::new(signature).expect("signature"))
+                .expect("array"),
+        )
+    }
+
+    fn pixmap_item(width: i32, height: i32, bytes: Vec<u8>) -> MessageItem {
+        MessageItem::Struct(vec![
+            MessageItem::Int32(width),
+            MessageItem::Int32(height),
+            array("ay", bytes.into_iter().map(MessageItem::Byte).collect()),
+        ])
+    }
+
+    #[test]
+    fn icon_pixmap_decodes_valid_entries_and_drops_malformed_ones() {
+        let valid = pixmap_item(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        let short = pixmap_item(2, 2, vec![0; 8]);
+        let zero = pixmap_item(0, 0, Vec::new());
+        let decoded = pixmaps(vec![valid, short, zero, MessageItem::Int32(7)]);
+        assert_eq!(
+            decoded,
+            vec![IconPixmap {
+                width: 2,
+                height: 1,
+                argb: vec![1, 2, 3, 4, 5, 6, 7, 8],
+            }]
+        );
+    }
+
+    #[test]
+    fn tooltip_keeps_title_and_pixmap_property_reaches_item_props() {
+        let tooltip = MessageItem::Variant(Box::new(MessageItem::Struct(vec![
+            MessageItem::Str("icon".into()),
+            array("a(iiay)", Vec::new()),
+            MessageItem::Str("Network connected".into()),
+            MessageItem::Str("body".into()),
+        ])));
+        let pixmaps_value = MessageItem::Variant(Box::new(array(
+            "a(iiay)",
+            vec![pixmap_item(1, 1, vec![9, 9, 9, 9])],
+        )));
+        let props = props_from_entries(&[
+            (MessageItem::Str("ToolTip".into()), tooltip),
+            (MessageItem::Str("IconPixmap".into()), pixmaps_value),
+            (
+                MessageItem::Str("IconName".into()),
+                MessageItem::Variant(Box::new(MessageItem::Str("network-wired".into()))),
+            ),
+        ]);
+        let item = ItemProps::from_props(&props);
+        assert_eq!(item.tooltip_title, "Network connected");
+        assert_eq!(item.icon_pixmaps.len(), 1);
+        assert_eq!(item.icon_name, "network-wired");
+    }
 }

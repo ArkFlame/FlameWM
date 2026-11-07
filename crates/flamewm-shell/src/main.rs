@@ -485,6 +485,10 @@ fn execute() -> Result<(), String> {
         loader_root,
         current_exe_program(),
     )));
+    // StatusNotifier host: shares this reactor's bus source, no thread or timer.
+    let tray_host = flamewm_shell::tray_host::TrayHost::connect()
+        .map(|host| Rc::new(RefCell::new(host)));
+    state.borrow_mut().tray = tray_host.clone();
     if let Some(snapshot) = startup_settings {
         // Same entry point as the live SettingsSnapshotChanged path.
         state.borrow_mut().apply_settings_snapshot(snapshot);
@@ -528,6 +532,21 @@ fn execute() -> Result<(), String> {
             })
             .map_err(|error| format!("register Unity launcher progress source: {error}"))?;
     }
+    if let Some(host) = tray_host.as_ref() {
+        let watch = host.borrow().watch();
+        let tray_state = Rc::clone(host);
+        reactor
+            .register_raw_fd_with_action(watch.fd, signal_interest(watch.events), move |_, _| {
+                match tray_state.borrow_mut().on_ready() {
+                    Ok(()) => flamewm_reactor::FdAction::Continue,
+                    Err(error) => {
+                        eprintln!("flamewm-shell: tray D-Bus source failed: {error}");
+                        flamewm_reactor::FdAction::Remove
+                    }
+                }
+            })
+            .map_err(|error| format!("register tray source: {error}"))?;
+    }
     if let Some(host) = notifications.as_ref() {
         let watch = host.borrow().watch();
         let notification_state = Rc::clone(host);
@@ -544,6 +563,7 @@ fn execute() -> Result<(), String> {
             .map_err(|error| format!("register notification source: {error}"))?;
     }
     let event_state = Rc::clone(&state);
+    let tray_events = tray_host.clone();
     let tick_state = Rc::clone(&state);
     let signal_state = Rc::clone(&state);
     // Signal subscription into the same Reactor: snapshot signals apply
@@ -617,6 +637,12 @@ fn execute() -> Result<(), String> {
         {
             let notification_state = notifications.clone();
             move |event: SurfaceEvent, runtime| {
+                if tray_events
+                    .as_ref()
+                    .is_some_and(|host| host.borrow_mut().handle_event(&event, runtime))
+                {
+                    return Ok(());
+                }
                 if notification_state
                     .as_ref()
                     .is_some_and(|host| host.borrow_mut().handle_event(&event, runtime))
@@ -642,6 +668,7 @@ fn execute() -> Result<(), String> {
                 };
                 tick_state.borrow_mut().set_output_pointer(pointer);
                 tick_state.borrow_mut().tick(runtime, &clock_due)?;
+                tick_state.borrow_mut().tick_tray(runtime);
                 if let Some(host) = notifications.as_ref() {
                     if let Err(error) = host.borrow_mut().tick(runtime, Some(&shared_wake)) {
                         eprintln!("flamewm-shell: notification UI update failed: {error}");

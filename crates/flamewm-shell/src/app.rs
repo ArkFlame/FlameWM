@@ -53,6 +53,7 @@ mod slow_op;
 mod start_session;
 mod start_view;
 mod timers;
+mod tray;
 mod weather;
 
 use helpers::{
@@ -124,6 +125,8 @@ pub(crate) struct ShellLoop {
     pub(crate) dismiss_latch: Option<crate::entry::event_router::DismissLatch>,
     /// One-shot: task-slot icons re-requested once the loader exists.
     pub(crate) task_icon_prime_armed: bool,
+    /// StatusNotifier tray host; `None` when another watcher owns the bus name.
+    pub(crate) tray: Option<std::rc::Rc<std::cell::RefCell<flamewm_shell::tray_host::TrayHost>>>,
     /// Last `_NET_WM_ICON_GEOMETRY` written per task client window. Per shell
     /// run: a restart starts empty.
     pub(crate) icon_geometry: IconGeometryTracker,
@@ -207,6 +210,7 @@ impl ShellLoop {
             task_progress_gate: progress_gate::ProgressPaintGate::default(),
             task_progress_deadline: None,
             task_icon_prime_armed: true,
+            tray: None,
             icon_geometry: IconGeometryTracker::default(),
             osd: flamewm_shell::osd::OsdController::default(),
             switcher: flamewm_shell::switcher::SwitcherController::default(),

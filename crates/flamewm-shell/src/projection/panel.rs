@@ -245,6 +245,7 @@ pub(crate) fn tray_any_visible(
         )
         // Weather is projected by its own provider; the setting is the only signal here.
         || items.weather
+        || crate::tray_host::sni_shown()
 }
 
 /// Window buttons the last element projection rendered; a settings change reuses it so the

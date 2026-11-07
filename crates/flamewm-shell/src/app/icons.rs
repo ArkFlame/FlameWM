@@ -104,15 +104,20 @@ impl ShellLoop {
                 DependentSurface::Panel => {
                     // Each panel projects its own icon edge; only panels at
                     // this result's edge may take it (no cross-scale paint).
-                    for (handle, edge) in &panel_edges {
-                        if *edge != res.width {
+                    for (handle, task_edge) in &panel_edges {
+                        // Tray slots project at the tray edge, not the task-slot edge.
+                        let edge = match res.target {
+                            IconTarget::TraySlot(_) => flamewm_shell::tray_host::icon_device_px(),
+                            _ => *task_edge,
+                        };
+                        if edge != res.width {
                             continue;
                         }
                         let applied = runtime.with_document(*handle, |document| {
                             if apply(document)? {
                                 Ok(true)
                             } else {
-                                async_projection::apply_cached_binding(document, res.target, *edge)
+                                async_projection::apply_cached_binding(document, res.target, edge)
                             }
                         });
                         if matches!(applied, Ok(true)) {

@@ -98,6 +98,7 @@ pub enum IconTarget {
     StartSlot(u8),
     TaskSlot(u8),
     LauncherSlot(u8),
+    TraySlot(u8),
 }
 
 #[derive(Debug, Clone)]
@@ -373,13 +374,13 @@ impl IconLoader {
     }
 
     /// Dependent surfaces for one icon result: Start slots repaint the
-    /// submenu, task slots repaint the panel. Callers reproject only these.
+    /// submenu, task and tray slots repaint the panel. Callers reproject only these.
     #[must_use]
     pub fn dependent_surface(target: IconTarget) -> DependentSurface {
         match target {
             IconTarget::StartSlot(_) => DependentSurface::Start,
             IconTarget::LauncherSlot(_) => DependentSurface::Launcher,
-            IconTarget::TaskSlot(_) => DependentSurface::Panel,
+            IconTarget::TaskSlot(_) | IconTarget::TraySlot(_) => DependentSurface::Panel,
         }
     }
 }

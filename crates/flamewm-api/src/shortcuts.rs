@@ -42,6 +42,12 @@ pub const ACTION_WORKSPACE_MOVE: [&str; 9] = [
     "MoveToWorkspace8",
     "MoveToWorkspace9",
 ];
+/// Keyboard tiling, `Super+arrow` by default. Owned by the WM tile state machine, not focus.
+pub const ACTION_TILE_LEFT: &str = "TileLeft";
+pub const ACTION_TILE_RIGHT: &str = "TileRight";
+pub const ACTION_TILE_UP: &str = "TileUp";
+pub const ACTION_TILE_DOWN: &str = "TileDown";
+/// Directional focus, `Super+Alt+arrow` by default.
 pub const ACTION_FOCUS_LEFT: &str = "FocusLeft";
 pub const ACTION_FOCUS_RIGHT: &str = "FocusRight";
 pub const ACTION_FOCUS_UP: &str = "FocusUp";

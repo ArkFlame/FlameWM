@@ -22,6 +22,7 @@ pub mod status;
 pub mod surface_backdrop;
 pub mod switcher;
 pub mod taskbar_scale;
+pub mod tray_host;
 pub mod weather_auto;
 pub mod weather_host;
 mod weather_provider;

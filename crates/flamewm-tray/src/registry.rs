@@ -30,6 +30,8 @@ pub enum RegistryError {
 pub struct Registry {
     items: BTreeMap<ItemKey, ItemState>,
     hosts: BTreeSet<String>,
+    /// Bumped on every change a panel projection can show (item set, props).
+    revision: u64,
 }
 
 impl Registry {
@@ -42,6 +44,7 @@ impl Registry {
             return Err(RegistryError::Full);
         }
         self.items.insert(key, ItemState::default());
+        self.revision += 1;
         Ok(Registration::Added)
     }
 
@@ -58,7 +61,10 @@ impl Registry {
     pub fn set_props(&mut self, key: &ItemKey, props: ItemProps) -> bool {
         match self.items.get_mut(key) {
             Some(state) => {
-                state.props = props;
+                if state.props != props {
+                    state.props = props;
+                    self.revision += 1;
+                }
                 true
             }
             None => false,
@@ -76,6 +82,9 @@ impl Registry {
         for key in &gone {
             self.items.remove(key);
         }
+        if !gone.is_empty() {
+            self.revision += 1;
+        }
         gone
     }
 
@@ -90,6 +99,11 @@ impl Registry {
             })
             .map(|(key, _)| key.clone())
             .collect()
+    }
+
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
+        self.revision
     }
 
     #[must_use]
@@ -142,6 +156,27 @@ mod tests {
         assert_eq!(registry.register_item(key(":1.5")), Ok(Registration::Added));
         assert_eq!(registry.register_item(key(":1.5")), Ok(Registration::Known));
         assert_eq!(registry.registered_strings(), [":1.5/StatusNotifierItem"]);
+    }
+
+    #[test]
+    fn revision_moves_only_on_visible_changes() {
+        let mut registry = Registry::default();
+        let start = registry.revision();
+        registry.register_item(key(":1.7")).unwrap();
+        let added = registry.revision();
+        assert!(added > start);
+        registry.register_item(key(":1.7")).unwrap();
+        assert_eq!(registry.revision(), added, "known item changes nothing");
+        let mut titled = BTreeMap::new();
+        titled.insert("Title".to_owned(), PropValue::Str("Clock".into()));
+        let props = ItemProps::from_props(&titled);
+        registry.set_props(&key(":1.7"), props.clone());
+        let after_props = registry.revision();
+        assert!(after_props > added);
+        registry.set_props(&key(":1.7"), props);
+        assert_eq!(registry.revision(), after_props, "identical props change nothing");
+        registry.remove_for_name(":1.7");
+        assert!(registry.revision() > after_props);
     }
 
     #[test]

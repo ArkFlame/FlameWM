@@ -96,6 +96,12 @@ fn run() -> Result<(), String> {
         return Ok(());
     };
     flamewm_profiler::init_process("flamewm-terminal");
+    // One-shot: startup's font and config temporaries stay free-but-resident in the malloc arena.
+    // A single sleeping thread hands them back; no periodic wake is added.
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_secs(10));
+        flamewm_ui_x11::release_free_heap();
+    });
     if flamewm_profiler::enabled() {
         // No reactor timer here: a plain thread drains the span window every interval, as the explorer does.
         let interval = Duration::from_secs(flamewm_profiler::profile_interval_secs());
