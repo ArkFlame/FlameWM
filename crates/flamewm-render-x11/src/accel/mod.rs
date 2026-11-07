@@ -161,7 +161,32 @@ thread_local! {
     static CPU: RefCell<CpuPixels> = RefCell::default();
 }
 
+/// Environment override for the saved setting: `FLAMEWM_GPU=0` forces the CPU path (the opt-out),
+/// `FLAMEWM_GPU=1` forces the GPU path. Any other value is ignored.
+pub const GPU_ENV: &str = "FLAMEWM_GPU";
+
+fn apply_env_override(mode: RenderAcceleration) -> RenderAcceleration {
+    resolve_env_override(std::env::var(GPU_ENV).ok().as_deref(), mode)
+}
+
+fn resolve_env_override(value: Option<&str>, mode: RenderAcceleration) -> RenderAcceleration {
+    match value.map(str::trim) {
+        Some("0") => RenderAcceleration::Cpu,
+        Some("1") => RenderAcceleration::Gpu,
+        _ => mode,
+    }
+}
+
+/// Software GL drivers (Mesa llvmpipe/softpipe, swrast) are slower than the CPU path.
+fn is_software_renderer(renderer: &str) -> bool {
+    let lower = renderer.to_ascii_lowercase();
+    ["llvmpipe", "softpipe", "swrast"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
 pub fn set_render_acceleration(mode: RenderAcceleration) {
+    let mode = apply_env_override(mode);
     let previous = REQUESTED.swap(mode as u8, Ordering::Relaxed);
     if previous != mode as u8 && mode == RenderAcceleration::Gpu {
         GPU.with(|slot| {
@@ -223,6 +248,14 @@ fn try_gpu(op: &mut dyn FnMut(&mut dyn PixelBackend) -> Result<(), String>) -> b
         let mut slot = slot.borrow_mut();
         if matches!(*slot, GpuSlot::Untried) {
             *slot = match gles::GpuBlur::new() {
+                Ok(gpu) if is_software_renderer(gpu.renderer()) => {
+                    let error = format!("software GL renderer {}", gpu.renderer());
+                    eprintln!(
+                        "flamewm-render-x11: GPU acceleration unavailable, using CPU: {error}"
+                    );
+                    record(None, Some(error));
+                    GpuSlot::Failed
+                }
                 Ok(gpu) => {
                     eprintln!("flamewm-render-x11: GPU acceleration on {}", gpu.renderer());
                     record(Some(gpu.renderer().to_owned()), None);
@@ -282,12 +315,12 @@ pub fn fill_rounded_rect(
 ) -> Result<(), String> {
     let outer = outer.normalized();
     let hole = hole.map(RoundedRect::normalized);
+    // Per-op fills stay on the CPU: every GPU call pays a full upload and readback, which measured
+    // 2.5x to 170x slower than the CPU fill (`pixel_bench`, RTX 3050 Ti). GPU wins are blur and
+    // `paint_batch`, which amortise one upload over many ops.
     let mut op = |backend: &mut dyn PixelBackend| {
         backend.fill_rounded_rect(pixels, width, height, outer, hole, color)
     };
-    if try_gpu(&mut op) {
-        return Ok(());
-    }
     CPU.with(|cpu| op(&mut *cpu.borrow_mut()))
 }
 
@@ -460,6 +493,22 @@ mod tests {
                 .expect("fill");
             assert_eq!(got, expected, "outer {outer:?} hole {hole:?}");
         }
+    }
+
+    #[test]
+    fn env_override_wins_only_for_zero_or_one_and_software_gl_is_detected() {
+        use RenderAcceleration::{Cpu, Gpu};
+        assert_eq!(resolve_env_override(Some("0"), Gpu), Cpu);
+        assert_eq!(resolve_env_override(Some(" 1 "), Cpu), Gpu);
+        assert_eq!(resolve_env_override(Some("yes"), Cpu), Cpu);
+        assert_eq!(resolve_env_override(Some("yes"), Gpu), Gpu);
+        assert_eq!(resolve_env_override(None, Gpu), Gpu);
+        assert!(is_software_renderer("llvmpipe (LLVM 17.0.6, 256 bits)"));
+        assert!(is_software_renderer("softpipe"));
+        assert!(is_software_renderer("SWRast"));
+        assert!(!is_software_renderer(
+            "NVIDIA GeForce RTX 3050 Ti Laptop GPU/PCIe/SSE2"
+        ));
     }
 
     #[test]

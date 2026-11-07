@@ -775,6 +775,12 @@ fn render_acceleration_defaults_to_cpu_and_accepts_only_cpu_or_gpu() {
         "cpu"
     );
     assert_eq!(
+        load("revision=2\nrenderAcceleration=cpu\n")
+            .expect("cpu opt-out")
+            .render_acceleration,
+        "cpu"
+    );
+    assert_eq!(
         load("revision=2\nrenderAcceleration=gpu\n")
             .expect("gpu")
             .render_acceleration,

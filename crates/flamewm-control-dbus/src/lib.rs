@@ -620,6 +620,74 @@ mod tests {
     // OBSERVABLE: the decoded signal re-encodes to the identical wire payload.
     // GAP: the current D-Bus decoder admits only legacy SettingsChanged for settings.
     // MUTATION: omit the SettingsSnapshotChanged decoder arm; this test must fail.
+    // Empty `occupancy` must marshal through the real D-Bus append/decode path (empty array
+    // signature) and decode back exactly, for both the workspace signal and the bootstrap reply.
+    #[test]
+    fn empty_occupancy_workspace_snapshot_round_trips_through_bus_message() {
+        assert_bus_round_trip(ControlSignal::WorkspacesSnapshotChanged {
+            snapshot: flamewm_api::workspace::WorkspaceSnapshot {
+                revision: 5,
+                count: 2,
+                active_index: 1,
+                last_index: Some(0),
+                occupancy: Vec::new(),
+                names: vec!["1".to_owned(), "2".to_owned()],
+            },
+        });
+    }
+
+    #[test]
+    fn shell_bootstrap_with_empty_occupancy_round_trips_through_bus_message() {
+        use flamewm_api::display::DisplaySnapshot;
+        use flamewm_api::panels::PanelsSnapshot;
+        use flamewm_api::session::SessionCapabilities;
+        use flamewm_api::shell_bootstrap::ShellBootstrapSnapshot;
+        use flamewm_api::system::SystemSnapshot;
+        use flamewm_api::workspace::WorkspaceSnapshot;
+        let call = WireCall::new(flamewm_control_core::IFACE_ROOT, "GetShellBootstrap", Vec::new());
+        let source = ShellBootstrapSnapshot {
+            windows_revision: 1,
+            windows: Vec::new(),
+            workspaces: WorkspaceSnapshot {
+                revision: 2,
+                count: 1,
+                active_index: 0,
+                last_index: None,
+                occupancy: Vec::new(),
+                names: Vec::new(),
+            },
+            panels: PanelsSnapshot {
+                revision: 1,
+                panels: Vec::new(),
+                tasks: Vec::new(),
+                pinned_apps: Vec::new(),
+            },
+            applications: Vec::new(),
+            session: SessionCapabilities {
+                lock: false,
+                logout: false,
+                suspend: false,
+                reboot: false,
+                shutdown: false,
+            },
+            displays: DisplaySnapshot {
+                generation: 1,
+                outputs: Vec::new(),
+                pending: None,
+            },
+            system: SystemSnapshot::default(),
+        };
+        let reply = encode_reply(&call, &ControlResponse::ShellBootstrap(source.clone()))
+            .expect("encode reply");
+        let mut message = Message::new_signal(OBJECT_PATH, "org.flamewm.Test", "Bootstrap")
+            .expect("signal");
+        append_wire_values(&mut message, &reply.values).expect("append");
+        let values = wire_args(message.get_items()).expect("decode items");
+        let decoded = flamewm_control_wire::decode_reply(&call, &WireReply { values })
+            .expect("decode reply");
+        assert_eq!(decoded, ControlResponse::ShellBootstrap(source));
+    }
+
     #[test]
     fn t11_settings_snapshot_changed_round_trips_exactly_through_bus_message() {
         let mut snapshot = flamewm_api::settings::SettingsSnapshot::new(11);

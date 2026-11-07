@@ -935,3 +935,41 @@ fn outline_and_blue_light_percent_keys_keep_percent_type_on_the_wire() {
         assert_eq!(value, SettingValue::Percent(40), "{key}");
     }
 }
+
+#[test]
+fn workspace_snapshot_without_occupancy_key_decodes_as_empty_occupancy() {
+    use flamewm_api::workspace::WorkspaceSnapshot;
+    let source = WorkspaceSnapshot {
+        revision: 3,
+        count: 2,
+        active_index: 1,
+        last_index: Some(0),
+        occupancy: vec![4, 0],
+        names: vec!["1".to_owned(), "2".to_owned()],
+    };
+    let mut legacy = workspace_dict(&source);
+    legacy.remove("occupancy");
+    let decoded = workspace_snapshot(&legacy).expect("legacy dict decodes");
+    assert_eq!(
+        decoded,
+        WorkspaceSnapshot {
+            occupancy: Vec::new(),
+            ..source
+        }
+    );
+}
+
+#[test]
+fn workspace_snapshot_with_zero_count_is_rejected_not_panicking() {
+    use flamewm_api::workspace::WorkspaceSnapshot;
+    let mut dict = workspace_dict(&WorkspaceSnapshot {
+        revision: 1,
+        count: 1,
+        active_index: 0,
+        last_index: None,
+        occupancy: Vec::new(),
+        names: Vec::new(),
+    });
+    dict.insert("count".to_owned(), WireValue::U32(0));
+    assert!(workspace_snapshot(&dict).is_err());
+}

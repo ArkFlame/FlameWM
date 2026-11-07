@@ -55,6 +55,7 @@ pub fn apply_render_acceleration(snapshot: &flamewm_api::settings::SettingsSnaps
         Some(flamewm_api::settings::SettingValue::Text(value)) => {
             RenderAcceleration::from_setting(value)
         }
+        // Missing key: the product default (`renderAcceleration` defaults to `cpu`).
         _ => RenderAcceleration::Cpu,
     };
     flamewm_render_x11::set_render_acceleration(mode);
