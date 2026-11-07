@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use chrono::{Datelike, Local, Timelike};
 use flamewm_api::settings::SettingsSnapshot;
@@ -268,9 +268,7 @@ impl WidgetState {
         });
         self.sample_due = sampling.then(|| self.sample_due.unwrap_or(now));
         self.due = self.tick_rate().map(|rate| {
-            let epoch_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |elapsed| elapsed.as_millis() as u64);
+            let epoch_ms = (flamewm_api::clock::unix_nanos() / 1_000_000) as u64;
             now + Duration::from_millis(
                 wall_clock_delay_ms(epoch_ms, rate == TickRate::Second).max(1),
             )

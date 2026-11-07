@@ -132,10 +132,10 @@ impl X11Desktop {
             .iter()
             .map(|name| conn.intern_atom(false, name.as_bytes()))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         let mut atoms = BTreeMap::new();
         for (name, cookie) in names.into_iter().zip(cookies) {
-            let atom = cookie.reply().map_err(io_error)?.atom;
+            let atom = cookie.reply().map_err(FlameError::io)?.atom;
             atoms.insert(name.to_owned(), atom);
         }
         Ok(Self {
@@ -156,14 +156,14 @@ impl X11Desktop {
     }
 
     fn flush(&self) -> FlameResult<()> {
-        self.conn.flush().map_err(io_error)
+        self.conn.flush().map_err(FlameError::io)
     }
     fn fetch_property(&self, window: Window, name: &str) -> FlameResult<xproto::GetPropertyReply> {
         self.conn
             .get_property(false, window, self.atom(name), AtomEnum::ANY, 0, u32::MAX)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)
+            .map_err(FlameError::io)
     }
     fn property32(&self, window: Window, name: &str) -> FlameResult<Vec<u32>> {
         Ok(self
@@ -186,7 +186,7 @@ impl X11Desktop {
                 0,
                 u32::MAX,
             )
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         let list_cookie = self
             .conn
             .get_property(
@@ -197,15 +197,15 @@ impl X11Desktop {
                 0,
                 u32::MAX,
             )
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         let support_window = support_cookie
             .reply()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .value32()
             .and_then(|mut values| values.next());
         let clients: Vec<Window> = list_cookie
             .reply()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .value32()
             .map_or_else(Vec::new, Iterator::collect);
         let candidates: Vec<Window> = clients
@@ -300,10 +300,6 @@ impl X11Desktop {
     }
 }
 
-fn io_error<E: std::fmt::Display>(error: E) -> FlameError {
-    FlameError::new(ErrorCode::IoFailure, error.to_string())
-}
-
 /// EWMH states removed by the control plane's `RestoreWindow`.
 ///
 /// Restore is unminimize only; a maximized window stays maximized. Unmaximize has its own
@@ -395,7 +391,7 @@ impl X11Desktop {
         workspace: &WorkspaceSnapshot,
         active: Option<Window>,
     ) -> FlameResult<flamewm_api::window::WindowSnapshot> {
-        let tree_cookie = self.conn.query_tree(window).map_err(io_error)?;
+        let tree_cookie = self.conn.query_tree(window).map_err(FlameError::io)?;
         let states_cookie = self
             .conn
             .get_property(
@@ -406,7 +402,7 @@ impl X11Desktop {
                 0,
                 u32::MAX,
             )
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         let desktop_cookie = self
             .conn
             .get_property(
@@ -417,7 +413,7 @@ impl X11Desktop {
                 0,
                 u32::MAX,
             )
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         let name_cookie = self
             .conn
             .get_property(
@@ -439,18 +435,18 @@ impl X11Desktop {
                 0,
                 u32::MAX,
             )
-            .map_err(io_error)?;
-        let parent = tree_cookie.reply().map_err(io_error)?.parent;
+            .map_err(FlameError::io)?;
+        let parent = tree_cookie.reply().map_err(FlameError::io)?.parent;
         let geometry_window = if parent == self.root { window } else { parent };
-        let geometry_cookie = self.conn.get_geometry(geometry_window).map_err(io_error)?;
+        let geometry_cookie = self.conn.get_geometry(geometry_window).map_err(FlameError::io)?;
         let states: Vec<u32> = states_cookie
             .reply()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .value32()
             .map_or_else(Vec::new, Iterator::collect);
         let desktop = desktop_cookie
             .reply()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .value32()
             .and_then(|mut values| values.next())
             .unwrap_or(0);
@@ -459,9 +455,9 @@ impl X11Desktop {
             None => self.property_bytes(window, "WM_NAME")?,
         };
         let title = shared::text_from_bytes(&title_bytes);
-        let wm_class_bytes = class_cookie.reply().map_err(io_error)?.value;
+        let wm_class_bytes = class_cookie.reply().map_err(FlameError::io)?.value;
         let (wm_instance, wm_class) = parse_wm_class(&wm_class_bytes);
-        let geometry = geometry_cookie.reply().map_err(io_error)?;
+        let geometry = geometry_cookie.reply().map_err(FlameError::io)?;
         let outer = Rect::new(
             i32::from(geometry.x),
             i32::from(geometry.y),
@@ -578,9 +574,9 @@ impl WindowPort for X11Desktop {
         self.bump_generation(window);
         self.conn
             .configure_window(window, &geometry)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .check()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         self.flush()
     }
     fn work_area(&self, _w: WindowRef) -> FlameResult<Rect> {
@@ -711,7 +707,7 @@ impl ApplicationPort for X11Desktop {
             .arg(uri)
             .spawn()
             .map(|_| ())
-            .map_err(io_error)
+            .map_err(FlameError::io)
     }
 }
 
@@ -749,7 +745,7 @@ impl SessionPort for X11Desktop {
         Command::new(program)
             .args(args)
             .status()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .success()
             .then_some(())
             .ok_or_else(|| {
@@ -929,9 +925,9 @@ impl DisplayPort for X11Desktop {
         let resources = self
             .conn
             .randr_get_screen_resources_current(self.root)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         // Stable physical output identity: never infer primary from RandR
         // resource enumeration order (it can change after hotplug/rotation).
         let primary_output = self
@@ -948,9 +944,9 @@ impl DisplayPort for X11Desktop {
             let info = self
                 .conn
                 .randr_get_output_info(output, resources.config_timestamp)
-                .map_err(io_error)?
+                .map_err(FlameError::io)?
                 .reply()
-                .map_err(io_error)?;
+                .map_err(FlameError::io)?;
             // X lists any output scanning out from a CRTC as a monitor, even when the
             // driver cannot sense a sink (virtual heads, some docks). Follow that rule.
             if u8::from(info.connection) != u8::from(randr::Connection::CONNECTED) && info.crtc == 0
@@ -963,9 +959,9 @@ impl DisplayPort for X11Desktop {
                 let c = self
                     .conn
                     .randr_get_crtc_info(crtc, resources.config_timestamp)
-                    .map_err(io_error)?
+                    .map_err(FlameError::io)?
                     .reply()
-                    .map_err(io_error)?;
+                    .map_err(FlameError::io)?;
                 (
                     Rect::new(
                         i32::from(c.x),
@@ -1063,9 +1059,9 @@ impl DisplayPort for X11Desktop {
         let resources = self
             .conn
             .randr_get_screen_resources_current(self.root)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         let status = self
             .conn
             .randr_set_crtc_config(
@@ -1078,9 +1074,9 @@ impl DisplayPort for X11Desktop {
                 pending.old_rotation,
                 &[pending.output],
             )
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .status;
         if u8::from(status) != u8::from(randr::SetConfig::SUCCESS) {
             return Err(FlameError::new(

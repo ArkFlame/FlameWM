@@ -23,6 +23,9 @@ use smithay::reexports::x11rb::protocol::xproto::{
 use smithay::reexports::x11rb::rust_connection::RustConnection;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::selection::SelectionTarget;
+use smithay::wayland::selection::primary_selection::{
+    clear_primary_selection, request_primary_client_selection, set_primary_selection,
+};
 use smithay::wayland::selection::data_device::{
     clear_data_device_selection, request_data_device_client_selection, set_data_device_selection,
 };
@@ -312,6 +315,15 @@ impl State {
             .iter()
             .find(|(wid, _)| *wid == id)
             .map(|(_, window)| window)
+    }
+
+    /// Whether `surface` belongs to a managed or unmanaged X11 window.
+    pub fn is_x11_surface(&self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> bool {
+        self.x11.iter().any(|(_, window)| window.wl_surface().as_ref() == Some(surface))
+            || self
+                .unmanaged
+                .iter()
+                .any(|entry| entry.surface.wl_surface().as_ref() == Some(surface))
     }
 
     pub fn x11_id(&self, window: &X11Surface) -> Option<WindowId> {
@@ -781,26 +793,38 @@ impl XwmHandler for State {
         mime_type: String,
         fd: OwnedFd,
     ) {
-        if matches!(selection, SelectionTarget::Clipboard) {
-            if let Err(error) = request_data_device_client_selection(&self.seat, mime_type, fd) {
-                eprintln!("flamewm-wayland: clipboard request from X11 failed: {error}");
+        let result = match selection {
+            SelectionTarget::Clipboard => {
+                request_data_device_client_selection(&self.seat, mime_type, fd).map_err(|e| e.to_string())
             }
+            SelectionTarget::Primary => {
+                request_primary_client_selection(&self.seat, mime_type, fd).map_err(|e| e.to_string())
+            }
+        };
+        if let Err(error) = result {
+            eprintln!("flamewm-wayland: {selection:?} request from X11 failed: {error}");
         }
     }
 
     fn allow_selection_access(&mut self, _xwm: XwmId, selection: SelectionTarget) -> bool {
-        x11_may_read_selection(selection)
+        let focused = self.seat.get_keyboard().and_then(|keyboard| keyboard.current_focus());
+        let focused_x11 = focused.is_some_and(|surface| self.is_x11_surface(&surface));
+        x11_may_read_selection(selection, focused_x11)
     }
 
     fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
-        if matches!(selection, SelectionTarget::Clipboard) {
-            set_data_device_selection(&self.display, &self.seat, mime_types, ());
+        match selection {
+            SelectionTarget::Clipboard => {
+                set_data_device_selection(&self.display, &self.seat, mime_types, ());
+            }
+            SelectionTarget::Primary => set_primary_selection(&self.display, &self.seat, mime_types, ()),
         }
     }
 
     fn cleared_selection(&mut self, _xwm: XwmId, selection: SelectionTarget) {
-        if matches!(selection, SelectionTarget::Clipboard) {
-            clear_data_device_selection(&self.display, &self.seat);
+        match selection {
+            SelectionTarget::Clipboard => clear_data_device_selection(&self.display, &self.seat),
+            SelectionTarget::Primary => clear_primary_selection(&self.display, &self.seat),
         }
     }
 
@@ -812,11 +836,13 @@ impl XwmHandler for State {
     }
 }
 
-/// X11 clients may read only the clipboard: it is the one selection bridged to Wayland (`send_selection`
-/// and `new_selection` above). Smithay denies every X11 read unless this returns true, so answering
-/// `false` for `CLIPBOARD` leaves X11 apps unable to paste Wayland clipboard content.
-const fn x11_may_read_selection(selection: SelectionTarget) -> bool {
-    matches!(selection, SelectionTarget::Clipboard)
+/// Whether an X11 client may read a Wayland-owned selection. Smithay asks this for every X11 read of
+/// a selection proxied from Wayland (`CLIPBOARD` and `PRIMARY`, both bridged above). Smithay 0.7 does
+/// not pass the requesting X window, so the gate uses the only identity available: the keyboard
+/// focus. Reads are allowed only while an X11 surface holds keyboard focus. Selections owned by an X
+/// client never reach this callback: X server routes those reads directly between X clients.
+const fn x11_may_read_selection(selection: SelectionTarget, focused_x11: bool) -> bool {
+    matches!(selection, SelectionTarget::Clipboard | SelectionTarget::Primary) && focused_x11
 }
 
 /// Edge flags for an XWM `_NET_WM_MOVERESIZE` resize request.
@@ -845,9 +871,11 @@ mod selection_tests {
     use smithay::wayland::selection::SelectionTarget;
 
     #[test]
-    fn x11_reads_are_allowed_only_for_the_bridged_clipboard() {
-        assert!(x11_may_read_selection(SelectionTarget::Clipboard));
-        assert!(!x11_may_read_selection(SelectionTarget::Primary));
+    fn x11_reads_need_an_x11_focused_surface_for_clipboard_and_primary() {
+        for selection in [SelectionTarget::Clipboard, SelectionTarget::Primary] {
+            assert!(x11_may_read_selection(selection, true), "{selection:?} focused X11 read");
+            assert!(!x11_may_read_selection(selection, false), "{selection:?} unfocused read");
+        }
     }
 }
 

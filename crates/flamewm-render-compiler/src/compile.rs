@@ -312,10 +312,7 @@ mod tests {
         std::env::temp_dir().join(format!(
             "flamewm-{tag}-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|v| v.as_nanos())
-                .unwrap_or(0)
+            flamewm_api::clock::unix_nanos()
         ))
     }
 

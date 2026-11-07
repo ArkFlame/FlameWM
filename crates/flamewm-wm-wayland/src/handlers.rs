@@ -36,6 +36,7 @@ use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
     set_data_device_focus,
 };
+use smithay::wayland::selection::primary_selection::set_primary_focus;
 use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::shell::wlr_layer::{
     Layer, LayerSurface as WlrLayerSurface, LayerSurfaceConfigure, WlrLayerShellHandler,
@@ -413,7 +414,8 @@ impl SeatHandler for State {
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         let client = focused.and_then(|surface| self.display.get_client(surface.id()).ok());
-        set_data_device_focus(&self.display, seat, client);
+        set_data_device_focus(&self.display, seat, client.clone());
+        set_primary_focus(&self.display, seat, client);
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {

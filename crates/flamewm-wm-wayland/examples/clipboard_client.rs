@@ -5,6 +5,9 @@
 //!   as the clipboard selection, and answers `send` requests until `hold_ms` elapses.
 //! - `clipboard_client reader <timeout_ms>`: maps a window, waits for the selection offer, receives
 //!   `text/plain;charset=utf-8` through a pipe and prints it as `CLIPBOARD-READ <text>`.
+//! - `clipboard_client primary-writer <text> <hold_ms>` / `primary-reader <timeout_ms>`: the same pair
+//!   over the PRIMARY selection (`zwp_primary_selection_device_manager_v1`), printing `PRIMARY-WRITE` /
+//!   `PRIMARY-READ`.
 //!
 //! Both need the compositor to grant keyboard focus (the selection is only accepted from the focused
 //! client), so each maps a window with a solid `wl_shm` buffer like `test_client`.
@@ -21,6 +24,10 @@ use wayland_client::protocol::{
     wl_data_source, wl_keyboard, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
+use wayland_protocols::wp::primary_selection::zv1::client::{
+    zwp_primary_selection_device_manager_v1 as pdm, zwp_primary_selection_device_v1 as pdev,
+    zwp_primary_selection_offer_v1 as poffer, zwp_primary_selection_source_v1 as psource,
+};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 const MIME: &str = "text/plain;charset=utf-8";
@@ -33,6 +40,10 @@ struct App {
     seat: Option<wl_seat::WlSeat>,
     ddm: Option<wl_data_device_manager::WlDataDeviceManager>,
     ddev: Option<wl_data_device::WlDataDevice>,
+    pm: Option<pdm::ZwpPrimarySelectionDeviceManagerV1>,
+    pdevice: Option<pdev::ZwpPrimarySelectionDeviceV1>,
+    /// Current PRIMARY selection offer (`None` when cleared).
+    primary_offer: Option<poffer::ZwpPrimarySelectionOfferV1>,
     pending_serial: Option<u32>,
     key_serial: Option<u32>,
     /// MIME types announced per offer, keyed by the offer's protocol id.
@@ -68,6 +79,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 "wl_seat" => state.seat = Some(registry.bind(name, version.min(5), qh, ())),
                 "wl_data_device_manager" => {
                     state.ddm = Some(registry.bind(name, version.min(3), qh, ()));
+                }
+                "zwp_primary_selection_device_manager_v1" => {
+                    state.pm = Some(registry.bind(name, 1, qh, ()));
                 }
                 _ => {}
             }
@@ -168,6 +182,64 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for App {
     }
 }
 
+impl Dispatch<pdev::ZwpPrimarySelectionDeviceV1, ()> for App {
+    fn event(
+        state: &mut Self,
+        _: &pdev::ZwpPrimarySelectionDeviceV1,
+        event: pdev::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let pdev::Event::Selection { id } = event {
+            state.primary_offer = id;
+        }
+    }
+
+    wayland_client::event_created_child!(App, pdev::ZwpPrimarySelectionDeviceV1, [
+        pdev::EVT_DATA_OFFER_OPCODE => (poffer::ZwpPrimarySelectionOfferV1, ()),
+    ]);
+}
+
+impl Dispatch<poffer::ZwpPrimarySelectionOfferV1, ()> for App {
+    fn event(
+        state: &mut Self,
+        offer: &poffer::ZwpPrimarySelectionOfferV1,
+        event: poffer::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let poffer::Event::Offer { mime_type } = event {
+            state
+                .offer_mimes
+                .entry(offer.id().protocol_id())
+                .or_default()
+                .push(mime_type);
+        }
+    }
+}
+
+impl Dispatch<psource::ZwpPrimarySelectionSourceV1, ()> for App {
+    fn event(
+        state: &mut Self,
+        _: &psource::ZwpPrimarySelectionSourceV1,
+        event: psource::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            psource::Event::Send { mime_type, fd } if mime_type == MIME => {
+                let mut file = std::fs::File::from(fd);
+                let _ = file.write_all(state.text.as_bytes());
+            }
+            psource::Event::Cancelled => state.cancelled = true,
+            _ => {}
+        }
+    }
+}
+
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for App {
     fn event(
         _: &mut Self,
@@ -212,7 +284,8 @@ ignore_events!(
     wl_buffer::WlBuffer,
     wl_surface::WlSurface,
     xdg_toplevel::XdgToplevel,
-    wl_data_device_manager::WlDataDeviceManager
+    wl_data_device_manager::WlDataDeviceManager,
+    pdm::ZwpPrimarySelectionDeviceManagerV1
 );
 
 /// Maps a 64x64 solid window with focus-eligible state; returns once the first buffer is committed.
@@ -263,6 +336,68 @@ fn map_window(
     Ok(())
 }
 
+/// Blocks until the compositor sends keyboard enter; returns its serial, needed to set a selection.
+fn await_keyboard_serial(
+    queue: &mut EventQueue<App>,
+    app: &mut App,
+) -> Result<u32, Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while app.key_serial.is_none() {
+        if Instant::now() > deadline {
+            return Err("no keyboard focus (enter) from compositor".into());
+        }
+        queue.roundtrip(app)?;
+    }
+    Ok(app.key_serial.unwrap_or_default())
+}
+
+/// Reads `MIME` from the offer that `selection` currently holds, failing after `timeout`.
+fn read_offer(
+    conn: &Connection,
+    queue: &mut EventQueue<App>,
+    app: &mut App,
+    primary: bool,
+    timeout: Duration,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let id = if primary {
+            app.primary_offer.as_ref().map(|o| o.id().protocol_id())
+        } else {
+            app.selection.as_ref().map(|o| o.id().protocol_id())
+        };
+        let has_text = id.is_some_and(|id| {
+            app.offer_mimes
+                .get(&id)
+                .is_some_and(|m| m.iter().any(|t| t == MIME))
+        });
+        if has_text {
+            break;
+        }
+        if Instant::now() > deadline {
+            return Err("no text selection offered within timeout".into());
+        }
+        queue.roundtrip(app)?;
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (mut rd, wr): (std::io::PipeReader, OwnedFd) = {
+        let (r, w) = std::io::pipe()?;
+        (r, w.into())
+    };
+    if primary {
+        let offer = app.primary_offer.clone().ok_or("primary selection vanished")?;
+        offer.receive(MIME.into(), wr.as_fd());
+    } else {
+        let offer = app.selection.clone().ok_or("selection vanished")?;
+        offer.receive(MIME.into(), wr.as_fd());
+    }
+    conn.flush()?;
+    drop(wr);
+    let mut text = String::new();
+    rd.read_to_string(&mut text)?;
+    Ok(text)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let conn = Connection::connect_to_env()?;
@@ -274,6 +409,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seat = app.seat.clone().ok_or("no wl_seat")?;
     let ddm = app.ddm.clone().ok_or("no wl_data_device_manager")?;
     app.ddev = Some(ddm.get_data_device(&seat, &qh, ()));
+    if let Some(pm) = app.pm.clone() {
+        app.pdevice = Some(pm.get_device(&seat, &qh, ()));
+    }
     queue.roundtrip(&mut app)?;
 
     match args.get(1).map(String::as_str) {
@@ -334,7 +472,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rd.read_to_string(&mut text)?;
             println!("CLIPBOARD-READ {text}");
         }
-        _ => return Err("usage: clipboard_client writer <text> [hold_ms] | reader [timeout_ms]".into()),
+        Some("primary-writer") => {
+            app.text = args.get(2).cloned().ok_or("primary-writer needs <text>")?;
+            let hold = Duration::from_millis(args.get(3).and_then(|v| v.parse().ok()).unwrap_or(15_000));
+            map_window(&mut queue, &mut app, "FlameWM primary writer")?;
+            let serial = await_keyboard_serial(&mut queue, &mut app)?;
+            let pm = app.pm.clone().ok_or("no zwp_primary_selection_device_manager_v1")?;
+            let source = pm.create_source(&qh, ());
+            source.offer(MIME.into());
+            let device = app.pdevice.clone().ok_or("no primary selection device")?;
+            device.set_selection(Some(&source), serial);
+            queue.roundtrip(&mut app)?;
+            println!("PRIMARY-WRITE set text={:?}", app.text);
+            let end = Instant::now() + hold;
+            while Instant::now() < end && !app.cancelled {
+                queue.roundtrip(&mut app)?;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            println!("PRIMARY-WRITE done cancelled={}", app.cancelled);
+        }
+        Some("primary-reader") => {
+            let timeout = Duration::from_millis(args.get(2).and_then(|v| v.parse().ok()).unwrap_or(10_000));
+            map_window(&mut queue, &mut app, "FlameWM primary reader")?;
+            match read_offer(&conn, &mut queue, &mut app, true, timeout) {
+                Ok(text) => println!("PRIMARY-READ {text}"),
+                Err(error) => {
+                    println!("PRIMARY-READ none selection={}", app.primary_offer.is_some());
+                    return Err(error);
+                }
+            }
+        }
+        _ => return Err("usage: clipboard_client writer <text> [hold_ms] | reader [timeout_ms] | primary-writer <text> [hold_ms] | primary-reader [timeout_ms]".into()),
     }
     Ok(())
 }

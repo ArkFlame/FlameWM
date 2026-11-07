@@ -341,17 +341,7 @@ fn wallpaper_file(path: &str) -> PathBuf {
 /// Installed data root (`<prefix>/usr/share/flamewm`) when present, else the source tree; the
 /// same resolution the desktop wallpaper owner uses for the bundled default.
 pub(crate) fn packaged_root() -> PathBuf {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| {
-            let bin = exe.parent()?;
-            let usr = bin.parent()?;
-            (bin.file_name()? == "bin" && usr.file_name()? == "usr")
-                .then(|| usr.join("share/flamewm"))
-        })
-        .filter(|root| root.join("assets").is_dir())
-        .unwrap_or(manifest)
+    flamewm_api::paths::packaged_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
 }
 
 #[cfg(test)]

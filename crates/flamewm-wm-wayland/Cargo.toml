@@ -73,7 +73,7 @@ drm = [
 
 [dev-dependencies]
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 
 # The workspace forbids unsafe code; this crate denies it so the drm module (feature `drm`) can allow it
 # for smithay's EGL initialisation. A module-level allow cannot override `forbid`.

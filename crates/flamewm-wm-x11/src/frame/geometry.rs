@@ -247,7 +247,20 @@ pub fn plan_move(req: &GeometryRequest<'_>) -> GeometryPlan {
     let x = s.x.saturating_add(req.pointer_delta.0);
     let y = s.y.saturating_add(req.pointer_delta.1);
     let frame = keep_on_outputs(RootRect::new(x, y, s.w, s.h), req.outputs, req.work_area);
+    let frame = keep_titlebar_above_work_bottom(frame, req.work_area, req.frame_extents.titlebar_h);
     GeometryPlan::of(req, frame)
+}
+
+/// Keeps the titlebar band above the work area's bottom edge (the panel reserve). A quarter of a
+/// window shorter than 176 px is under the 44 px panel, so `keep_on_outputs` alone let such a
+/// window's whole titlebar sit under the panel with no grab handle left. Only the bottom bound
+/// applies: a window may still be dragged above the top edge, as `plan_move` documents.
+fn keep_titlebar_above_work_bottom(frame: RootRect, work: RootRect, titlebar_h: i32) -> RootRect {
+    if titlebar_h <= 0 {
+        return frame;
+    }
+    let max_y = work.y.saturating_add(work.h).saturating_sub(titlebar_h);
+    RootRect::new(frame.x, frame.y.min(max_y.max(work.y)), frame.w, frame.h)
 }
 
 /// Interactive resize with a fixed opposite-edge invariant.
@@ -871,6 +884,23 @@ mod tests {
         assert_eq!(move_by((-5000, 0)), RootRect::new(-300, 100, 400, 300));
         assert_eq!(move_by((0, -5000)), RootRect::new(100, -225, 400, 300));
         assert_eq!(move_by((0, 5000)), RootRect::new(100, 1005, 400, 300));
+    }
+
+    #[test]
+    fn short_window_titlebar_stays_above_panel_reserve() {
+        // 1600x900 screen, 44 px panel: work area bottom at 856. A 150 px tall window dragged
+        // down used to park its titlebar (y 856..887) fully under the panel.
+        let outs = [RootRect::new(0, 0, 1600, 900)];
+        let work = RootRect::new(0, 0, 1600, 856);
+        let mut r = req(ResizeEdges::none(), (0, 700), free());
+        r.reason = GeometryReason::InteractiveMove;
+        r.start.rect = RootRect::new(719, 285, 300, 150);
+        r.work_area = work;
+        r.outputs = &outs;
+        assert_eq!(plan_move(&r).frame, RootRect::new(719, 825, 300, 150));
+        // A titlebar already above the panel is untouched.
+        r.pointer_delta = (0, 100);
+        assert_eq!(plan_move(&r).frame, RootRect::new(719, 385, 300, 150));
     }
 
     #[test]

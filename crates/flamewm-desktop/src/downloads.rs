@@ -314,9 +314,7 @@ mod tests {
 
     impl Harness {
         fn new(name: &str, enabled: bool) -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map_or(0, |duration| duration.as_nanos());
+            let nanos = flamewm_api::clock::unix_nanos();
             let root = std::env::temp_dir()
                 .join(format!("flamewm-dl-{name}-{}-{nanos}", std::process::id()));
             fs::create_dir_all(&root).expect("create temp downloads");

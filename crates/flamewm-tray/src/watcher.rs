@@ -2,7 +2,6 @@
 //! `flamewm-dbus-reactor` pump. Owns no thread and no timer: all work happens in `on_ready`.
 
 use std::collections::{BTreeMap, HashMap};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use flamewm_api::FlameResult;
 use flamewm_dbus_reactor::{
@@ -153,9 +152,7 @@ impl TrayWatcher {
 
     /// Reports a click on dbusmenu entry `id` (`Event(id, "clicked", 0, time)`).
     pub fn send_menu_event(&self, key: &ItemKey, menu_path: &str, id: i32) -> FlameResult<()> {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs() as u32);
+        let timestamp = flamewm_api::clock::unix_seconds() as u32;
         let mut call = Message::new_method_call(key.service(), menu_path, MENU_INTERFACE, "Event")
             .map_err(|error| {
                 flamewm_api::FlameError::new(flamewm_api::ErrorCode::InvalidArgument, error)
