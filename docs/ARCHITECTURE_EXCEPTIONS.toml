@@ -71,6 +71,13 @@ canonical_target = "crates/flamewm-clipboard/src/owner.rs"
 remove_by = "0.3.0"
 
 [[exception]]
+path = "crates/flamewm-clipboard/src/keeper.rs"
+capability = "x11rb-symbol"
+reason = "The keeper thread watches CLIPBOARD owner changes through XFixes on its own x11rb connection so text survives its owner window closing."
+canonical_target = "crates/flamewm-clipboard/src/owner.rs"
+remove_by = "0.3.0"
+
+[[exception]]
 path = "crates/flamewm-desktop/Cargo.toml"
 capability = "facade-source-loc>5000"
 reason = "8882 production lines: the desktop facade still owns widgets, projection, Convert and rename UI in one crate."

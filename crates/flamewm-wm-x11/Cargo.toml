@@ -10,6 +10,7 @@ repository.workspace = true
 calloop.workspace = true
 inotify.workspace = true
 flamewm-api = { path = "../flamewm-api" }
+flamewm-clipboard = { path = "../flamewm-clipboard" }
 chrono.workspace = true
 flamewm-applications = { path = "../flamewm-applications" }
 flamewm-image-core = { path = "../flamewm-image-core" }

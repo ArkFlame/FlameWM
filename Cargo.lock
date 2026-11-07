@@ -1178,6 +1178,7 @@ dependencies = [
  "chrono",
  "flamewm-api",
  "flamewm-applications",
+ "flamewm-clipboard",
  "flamewm-control-dbus",
  "flamewm-control-wire",
  "flamewm-debug",

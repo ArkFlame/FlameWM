@@ -55,6 +55,9 @@ where
     let conn = Rc::new(conn);
     let screen = &conn.setup().roots[screen_num];
     become_wm(conn.as_ref(), screen)?;
+    if let Err(error) = flamewm_clipboard::spawn_keeper(None) {
+        eprintln!("flamewm: clipboard keeper unavailable: {error}");
+    }
 
     let mut wm = Wm::new(
         conn.as_ref(),

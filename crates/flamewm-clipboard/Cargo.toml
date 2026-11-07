@@ -8,7 +8,7 @@ repository.workspace = true
 
 [dependencies]
 rustix = { workspace = true, features = ["event", "time"] }
-x11rb = { workspace = true }
+x11rb = { workspace = true, features = ["xfixes"] }
 
 [lints]
 workspace = true
