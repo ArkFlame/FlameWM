@@ -107,7 +107,7 @@ impl<T> Reply<T> {
 pub(crate) struct Shared {
     transport: Transport,
     pool: Pool<SshConnector>,
-    cache: Mutex<ListCache>,
+    cache: Arc<Mutex<ListCache>>,
     keyscan: PathBuf,
     keygen: PathBuf,
     idle: Duration,
@@ -119,6 +119,7 @@ type Job = Box<dyn FnOnce(&Shared) + Send>;
 #[derive(Clone)]
 pub struct RemoteFs {
     tx: Sender<Job>,
+    cache: Arc<Mutex<ListCache>>,
 }
 
 impl RemoteFs {
@@ -133,10 +134,11 @@ impl RemoteFs {
             transport: transport.clone(),
             idle: config.idle_timeout,
         };
+        let cache = Arc::new(Mutex::new(ListCache::new(config.cache_ttl)));
         let shared = Arc::new(Shared {
             transport,
             pool: Pool::new(connector, config.verify_after, config.pool_idle),
-            cache: Mutex::new(ListCache::new(config.cache_ttl)),
+            cache: Arc::clone(&cache),
             keyscan: config.keyscan,
             keygen: config.keygen,
             idle: config.idle_timeout,
@@ -163,7 +165,7 @@ impl RemoteFs {
                 })
                 .expect("spawn flamewm-rfs worker");
         }
-        Self { tx }
+        Self { tx, cache }
     }
 
     fn submit<T: Send + 'static>(
@@ -308,11 +310,11 @@ impl RemoteFs {
         self.submit(move |_| trust_host_key(&prompt))
     }
 
+    /// Synchronous: once this returns, no later call can observe the invalidated listing.
     pub fn invalidate(&self, url: &Url) {
-        let url = url.clone();
-        let _ = self
-            .tx
-            .send(Box::new(move |sh: &Shared| invalidate_both(sh, &url)));
+        if let Ok(mut c) = self.cache.lock() {
+            invalidate_locked(&mut c, url);
+        }
     }
 }
 
@@ -335,10 +337,14 @@ fn on_err<T>(sh: &Shared, key: &ConnKey, r: Result<T, Error>) -> Result<T, Error
 
 fn invalidate_both(sh: &Shared, url: &Url) {
     if let Ok(mut c) = sh.cache.lock() {
-        c.invalidate(&url.to_string());
-        if let Some(p) = url.parent() {
-            c.invalidate(&p.to_string());
-        }
+        invalidate_locked(&mut c, url);
+    }
+}
+
+fn invalidate_locked(c: &mut ListCache, url: &Url) {
+    c.invalidate(&url.to_string());
+    if let Some(p) = url.parent() {
+        c.invalidate(&p.to_string());
     }
 }
 
@@ -390,7 +396,10 @@ fn stat_entry(sh: &Shared, url: &Url) -> Result<Entry, Error> {
 
 fn list_job(sh: &Shared, url: &Url, cancel: &Cancel, tx: &Sender<ListEvent>) {
     let cache_key = url.to_string();
-    let hit = sh.cache.lock().ok().and_then(|mut c| c.get(&cache_key));
+    let (hit, generation) = match sh.cache.lock() {
+        Ok(mut c) => (c.get(&cache_key), c.generation()),
+        Err(_) => (None, 0),
+    };
     if let Some(all) = hit {
         for chunk in all.chunks(PAGE) {
             let _ = tx.send(ListEvent::Chunk(chunk.to_vec()));
@@ -402,7 +411,7 @@ fn list_job(sh: &Shared, url: &Url, cancel: &Cancel, tx: &Sender<ListEvent>) {
         Ok(all) => {
             let total = all.len();
             if let Ok(mut c) = sh.cache.lock() {
-                c.put(cache_key, all);
+                c.put(cache_key, all, generation);
             }
             let _ = tx.send(ListEvent::Done { total });
         }
