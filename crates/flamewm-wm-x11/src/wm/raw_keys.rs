@@ -14,7 +14,7 @@ use std::io::IoSlice;
 use super::*;
 use flamewm_api::shortcuts::{
     ACTION_FULLSCREEN_ESCAPE, ACTION_SHOW_DESKTOP, ACTION_SHOW_DESKTOP_CTRL_ALT,
-    ACTION_TOGGLE_START_MENU, ACTION_WINDOW_SWITCH,
+    ACTION_TOGGLE_START_MENU, ACTION_WINDOW_SWITCH, ACTION_WINDOW_SWITCH_PREV,
 };
 use flamewm_x11_desktop::shortcuts::MOD_ALT;
 
@@ -148,6 +148,7 @@ pub(crate) fn is_escape_chord(action: &str) -> bool {
     matches!(
         action,
         ACTION_WINDOW_SWITCH
+            | ACTION_WINDOW_SWITCH_PREV
             | ACTION_SHOW_DESKTOP
             | ACTION_SHOW_DESKTOP_CTRL_ALT
             | ACTION_FULLSCREEN_ESCAPE
@@ -487,6 +488,7 @@ mod tests {
     #[test]
     fn only_escape_chords_use_the_raw_feed() {
         assert!(is_escape_chord(ACTION_WINDOW_SWITCH));
+        assert!(is_escape_chord(ACTION_WINDOW_SWITCH_PREV));
         assert!(is_escape_chord(ACTION_SHOW_DESKTOP));
         assert!(is_escape_chord(ACTION_SHOW_DESKTOP_CTRL_ALT));
         assert!(is_escape_chord(ACTION_FULLSCREEN_ESCAPE));

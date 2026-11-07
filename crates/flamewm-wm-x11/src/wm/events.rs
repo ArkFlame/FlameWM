@@ -254,6 +254,8 @@ impl<C: Connection> Wm<'_, C> {
             // Without the raw feed there is no release to commit on, so keep the direct switch.
             ACTION_WINDOW_SWITCH if self.raw_keys.is_none() => self.switch_window(),
             ACTION_WINDOW_SWITCH => self.switcher_step(switcher::Step::Next),
+            ACTION_WINDOW_SWITCH_PREV if self.raw_keys.is_none() => self.switch_window(),
+            ACTION_WINDOW_SWITCH_PREV => self.switcher_step(switcher::Step::Prev),
             ACTION_SHOW_DESKTOP | ACTION_SHOW_DESKTOP_CTRL_ALT => self.toggle_show_desktop(),
             ACTION_FULLSCREEN_ESCAPE => self.fullscreen_escape(),
             _ => Ok(()),

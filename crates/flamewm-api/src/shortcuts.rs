@@ -10,6 +10,8 @@ pub const ACTION_WINDOW_CLOSE: &str = "WindowClose";
 pub const ACTION_WINDOW_MINIMIZE: &str = "WindowMinimize";
 pub const ACTION_WINDOW_MAXIMIZE: &str = "WindowMaximize";
 pub const ACTION_WINDOW_SWITCH: &str = "WindowSwitch";
+/// Alt+Shift+Tab: the same switcher, opened or stepped backward.
+pub const ACTION_WINDOW_SWITCH_PREV: &str = "WindowSwitchPrev";
 pub const ACTION_SHOW_DESKTOP: &str = "ShowDesktop";
 pub const ACTION_SHOW_DESKTOP_CTRL_ALT: &str = "ShowDesktopCtrlAlt";
 pub const ACTION_FULLSCREEN_ESCAPE: &str = "FullscreenEscape";

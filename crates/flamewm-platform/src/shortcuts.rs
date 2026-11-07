@@ -9,9 +9,9 @@ use flamewm_api::shortcuts::{
     ACTION_TILE_UP, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_CYCLE_NEXT,
     ACTION_WINDOW_CYCLE_PREV, ACTION_WINDOW_FLOAT, ACTION_WINDOW_FULLSCREEN,
     ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_RESIZE_GROW,
-    ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH, ACTION_WORKSPACE_ACTIVATE,
-    ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_MOVE, ACTION_WORKSPACE_RIGHT,
-    ACTION_WORKSPACE_UP, KeyBinding,
+    ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH, ACTION_WINDOW_SWITCH_PREV,
+    ACTION_WORKSPACE_ACTIVATE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_MOVE,
+    ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP, KeyBinding,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
@@ -37,7 +37,7 @@ pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
 pub const ACTION_BRIGHTNESS_UP: &str = "BrightnessUp";
 pub const ACTION_BRIGHTNESS_DOWN: &str = "BrightnessDown";
 
-pub const ACTIONS: [&str; 66] = [
+pub const ACTIONS: [&str; 67] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_LAUNCHER,
     ACTION_WORKSPACE_LEFT,
@@ -84,6 +84,7 @@ pub const ACTIONS: [&str; 66] = [
     ACTION_WINDOW_CYCLE_NEXT,
     ACTION_WINDOW_CYCLE_PREV,
     ACTION_WINDOW_SWITCH,
+    ACTION_WINDOW_SWITCH_PREV,
     ACTION_SHOW_DESKTOP,
     ACTION_SHOW_DESKTOP_CTRL_ALT,
     ACTION_FULLSCREEN_ESCAPE,
@@ -302,6 +303,10 @@ impl Default for ShortcutRegistry {
             (
                 ACTION_WINDOW_SWITCH.to_owned(),
                 KeyBinding::assigned("Alt+Tab"),
+            ),
+            (
+                ACTION_WINDOW_SWITCH_PREV.to_owned(),
+                KeyBinding::assigned("Alt+Shift+Tab"),
             ),
             (
                 ACTION_SHOW_DESKTOP.to_owned(),
@@ -593,8 +598,12 @@ mod tests {
 
     #[test]
     fn launcher_is_a_registered_action_with_super_space_default() {
-        assert_eq!(ACTIONS.len(), 66);
+        assert_eq!(ACTIONS.len(), 67);
         assert!(ACTIONS.contains(&ACTION_LAUNCHER));
+        assert_eq!(
+            ShortcutRegistry::default().binding(ACTION_WINDOW_SWITCH_PREV),
+            Some(&KeyBinding::assigned("Alt+Shift+Tab")),
+        );
         let defaults = ShortcutRegistry::default();
         assert_eq!(
             defaults.binding(ACTION_LAUNCHER),

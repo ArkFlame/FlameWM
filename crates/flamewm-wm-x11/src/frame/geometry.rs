@@ -247,20 +247,68 @@ pub fn plan_move(req: &GeometryRequest<'_>) -> GeometryPlan {
     let x = s.x.saturating_add(req.pointer_delta.0);
     let y = s.y.saturating_add(req.pointer_delta.1);
     let frame = keep_on_outputs(RootRect::new(x, y, s.w, s.h), req.outputs, req.work_area);
-    let frame = keep_titlebar_above_work_bottom(frame, req.work_area, req.frame_extents.titlebar_h);
+    let frame = keep_titlebar_in_work_area(
+        frame,
+        req.work_area,
+        req.outputs,
+        req.frame_extents.titlebar_h,
+    );
     GeometryPlan::of(req, frame)
 }
 
-/// Keeps the titlebar band above the work area's bottom edge (the panel reserve). A quarter of a
-/// window shorter than 176 px is under the 44 px panel, so `keep_on_outputs` alone let such a
-/// window's whole titlebar sit under the panel with no grab handle left. Only the bottom bound
-/// applies: a window may still be dragged above the top edge, as `plan_move` documents.
-fn keep_titlebar_above_work_bottom(frame: RootRect, work: RootRect, titlebar_h: i32) -> RootRect {
+/// Keeps the titlebar band reachable against each panel reserve of the output holding `work`.
+///
+/// - Bottom: the band stays above the work area's bottom edge. A quarter of a window shorter than
+///   176 px is under the 44 px panel, so `keep_on_outputs` alone let its whole titlebar sit under
+///   the panel with no grab handle left. Applied on every output, reserve or not.
+/// - Top, left, right: only when the work area is inset from that output's edge (a top, side or
+///   stacked panel). The top band stays fully below the reserve; on a side, at least a quarter of
+///   the frame width stays inside the work area. Without a reserve a window may still be dragged
+///   past that edge, as `plan_move` documents.
+///
+/// The output is the one with the largest overlap with `work`, never the outputs' bounding box,
+/// so a secondary monitor's work area is not mistaken for a reserve against its neighbour.
+fn keep_titlebar_in_work_area(
+    frame: RootRect,
+    work: RootRect,
+    outputs: &[RootRect],
+    titlebar_h: i32,
+) -> RootRect {
     if titlebar_h <= 0 {
         return frame;
     }
+    let (mut x, mut y) = (frame.x, frame.y);
     let max_y = work.y.saturating_add(work.h).saturating_sub(titlebar_h);
-    RootRect::new(frame.x, frame.y.min(max_y.max(work.y)), frame.w, frame.h)
+    y = y.min(max_y.max(work.y));
+    let home = outputs
+        .iter()
+        .copied()
+        .max_by_key(|output| overlap_area(*output, work))
+        .filter(|output| overlap_area(*output, work) > 0);
+    if let Some(output) = home {
+        let visible = min_visible(frame.w);
+        let work_right = work.x.saturating_add(work.w);
+        let out_right = output.x.saturating_add(output.w);
+        if work.y > output.y {
+            y = y.max(work.y);
+        }
+        if work.x > output.x {
+            x = x.max(work.x.saturating_add(visible).saturating_sub(frame.w));
+        }
+        if work_right < out_right {
+            x = x.min(work_right.saturating_sub(visible));
+        }
+    }
+    RootRect::new(x, y, frame.w, frame.h)
+}
+
+/// Intersection area of two rects, 0 when disjoint.
+fn overlap_area(a: RootRect, b: RootRect) -> i64 {
+    let w =
+        i64::from(a.x.saturating_add(a.w).min(b.x.saturating_add(b.w))) - i64::from(a.x.max(b.x));
+    let h =
+        i64::from(a.y.saturating_add(a.h).min(b.y.saturating_add(b.h))) - i64::from(a.y.max(b.y));
+    if w <= 0 || h <= 0 { 0 } else { w * h }
 }
 
 /// Interactive resize with a fixed opposite-edge invariant.
@@ -901,6 +949,54 @@ mod tests {
         // A titlebar already above the panel is untouched.
         r.pointer_delta = (0, 100);
         assert_eq!(plan_move(&r).frame, RootRect::new(719, 385, 300, 150));
+    }
+
+    #[test]
+    fn top_panel_reserve_keeps_titlebar_below_it() {
+        // 1920x1080 output, 30 px top panel. A window dragged up must keep its titlebar at y 30.
+        let outs = [RootRect::new(0, 0, 1920, 1080)];
+        let mut r = req(ResizeEdges::none(), (0, -900), free());
+        r.reason = GeometryReason::InteractiveMove;
+        r.start.rect = RootRect::new(200, 300, 400, 300);
+        r.work_area = RootRect::new(0, 30, 1920, 1050);
+        r.outputs = &outs;
+        assert_eq!(plan_move(&r).frame, RootRect::new(200, 30, 400, 300));
+        // Without a top reserve the drag may pass the top edge; keep_on_outputs keeps a quarter.
+        r.work_area = RootRect::new(0, 0, 1920, 1080);
+        assert_eq!(plan_move(&r).frame, RootRect::new(200, -225, 400, 300));
+    }
+
+    #[test]
+    fn side_panel_reserves_keep_a_quarter_of_the_titlebar_in_work_area() {
+        // 1920x1080 output with a 64 px panel on the left, then on the right.
+        let outs = [RootRect::new(0, 0, 1920, 1080)];
+        let mut r = req(ResizeEdges::none(), (-1000, 0), free());
+        r.reason = GeometryReason::InteractiveMove;
+        r.start.rect = RootRect::new(300, 200, 400, 300);
+        r.outputs = &outs;
+        r.work_area = RootRect::new(64, 0, 1856, 1080);
+        // visible strip >= quarter of 400 (100 px): x = 64 + 100 - 400 = -236.
+        assert_eq!(plan_move(&r).frame, RootRect::new(-236, 200, 400, 300));
+        r.pointer_delta = (2000, 0);
+        r.work_area = RootRect::new(0, 0, 1856, 1080);
+        // visible strip >= 100 px inside the work area: x <= 1856 - 100 = 1756.
+        assert_eq!(plan_move(&r).frame, RootRect::new(1756, 200, 400, 300));
+    }
+
+    #[test]
+    fn secondary_monitor_work_area_is_not_a_reserve_against_its_neighbour() {
+        // Two 1920x1080 outputs side by side; the window lives on the second one.
+        let outs = [
+            RootRect::new(0, 0, 1920, 1080),
+            RootRect::new(1920, 0, 1920, 1080),
+        ];
+        let mut r = req(ResizeEdges::none(), (-500, 0), free());
+        r.reason = GeometryReason::InteractiveMove;
+        r.start.rect = RootRect::new(2000, 200, 400, 300);
+        r.outputs = &outs;
+        r.work_area = RootRect::new(1920, 0, 1920, 1080);
+        // Dragged onto the first monitor: the second output's work area must not clamp it.
+        assert_eq!(plan_move(&r).frame, RootRect::new(1500, 200, 400, 300));
     }
 
     #[test]
