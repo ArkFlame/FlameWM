@@ -1086,6 +1086,14 @@ pub fn buffer_age_unsupported(renderer_name: &str) -> bool {
     is_software_renderer(renderer_name)
 }
 
+/// Whether the buffer-age probe is skipped from the start on this backend. The nested winit EGL
+/// surface answers EGL_BAD_SURFACE to BUFFER_AGE on real Intel GL too (reproduced on
+/// `Mesa Intel(R) UHD Graphics (TGL GT1)`, one ERROR per first redraw), so nested sessions always
+/// repaint in full: age 0 is the always-correct fallback.
+pub fn buffer_age_unsupported_on(backend: &str, renderer_name: &str) -> bool {
+    backend == "winit" || buffer_age_unsupported(renderer_name)
+}
+
 /// Logs the real GL driver once, so "gles" is never mistaken for hardware acceleration.
 #[allow(unsafe_code)] // glGetString is a read-only query on the current context.
 pub fn log_gl_renderer(renderer: &mut GlowRenderer, backend: &str) {
@@ -1098,7 +1106,7 @@ pub fn log_gl_renderer(renderer: &mut GlowRenderer, backend: &str) {
     } else {
         "hardware"
     };
-    if buffer_age_unsupported(&name) {
+    if buffer_age_unsupported_on(backend, &name) {
         BUFFER_AGE_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     eprintln!("FLAMEWM_GL_RENDERER backend={backend} renderer=\"{name}\" class={class}");
@@ -1129,6 +1137,14 @@ mod renderer_class_tests {
         // The nested llvmpipe surface answers EGL_BAD_SURFACE to BUFFER_AGE (one ERROR per start).
         assert!(buffer_age_unsupported("llvmpipe (LLVM 21.1.8, 256 bits)"));
         assert!(!buffer_age_unsupported("Mesa Intel(R) UHD Graphics (TGL GT1)"));
+    }
+
+    #[test]
+    fn nested_winit_skips_buffer_age_probe_on_hardware_too() {
+        // Real Intel GL on the nested winit surface: EGL_BAD_SURFACE on every age query.
+        assert!(super::buffer_age_unsupported_on("winit", "Mesa Intel(R) UHD Graphics (TGL GT1)"));
+        assert!(!super::buffer_age_unsupported_on("drm", "Mesa Intel(R) UHD Graphics (TGL GT1)"));
+        assert!(super::buffer_age_unsupported_on("drm", "llvmpipe (LLVM 21.1.8, 256 bits)"));
     }
 }
 

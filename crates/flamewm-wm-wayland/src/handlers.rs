@@ -1,7 +1,9 @@
 //! Smithay protocol handlers and delegate registrations for `State`.
 
 use flamewm_wm_wayland::protocols::toplevel::ToplevelFacts;
-use smithay::backend::renderer::utils::on_commit_buffer_handler;
+use smithay::backend::renderer::utils::{
+    import_surface, on_commit_buffer_handler, with_renderer_surface_state,
+};
 use smithay::delegate_compositor;
 use smithay::delegate_data_device;
 use smithay::delegate_layer_shell;
@@ -104,7 +106,11 @@ impl CompositorHandler for State {
     fn commit(&mut self, surface: &WlSurface) {
         // Read before `on_commit_buffer_handler`, which takes the buffer and damage out of the state.
         let visible = commit_changes_pixels(surface);
+        let before = buffer_geometry(surface);
         on_commit_buffer_handler::<Self>(surface);
+        if reimports_on_resize(before, buffer_geometry(surface)) {
+            self.import_resized_buffer(surface);
+        }
         self.popups.commit(surface);
 
         if let Some(PopupKind::Xdg(xdg)) = self.popups.find_popup(surface) {
@@ -132,6 +138,40 @@ impl CompositorHandler for State {
             self.request_redraw();
         }
     }
+}
+
+impl State {
+    /// Imports a just-resized buffer now, while the renderer is at hand. Nested sessions only:
+    /// the DRM path has no renderer in the commit handler and keeps the render-time import.
+    fn import_resized_buffer(&mut self, surface: &WlSurface) {
+        let Some(backend) = self.backend.as_mut() else {
+            return;
+        };
+        let renderer = backend.renderer();
+        if let Err(error) = with_states(surface, |states| import_surface(renderer, states)) {
+            eprintln!("flamewm-wayland: eager import of resized buffer failed: {error}");
+        }
+    }
+}
+
+/// Logical buffer size and scale of a surface, or `None` before its first buffer.
+fn buffer_geometry(surface: &WlSurface) -> Option<(i32, i32, i32)> {
+    with_renderer_surface_state(surface, |state| {
+        let size = state.buffer_size()?;
+        Some((size.w, size.h, state.buffer_scale()))
+    })
+    .flatten()
+}
+
+/// True when a commit changed an existing buffer's geometry. Smithay's damage bag keeps damage
+/// from commits since the last import, clipped to each commit's own buffer; a resize between
+/// imports would leave wider damage that the old texture cannot take (GL_INVALID_VALUE in
+/// glTexSubImage2D). Importing at the resize commit drops that stale damage.
+pub(crate) fn reimports_on_resize(
+    before: Option<(i32, i32, i32)>,
+    after: Option<(i32, i32, i32)>,
+) -> bool {
+    matches!((before, after), (Some(b), Some(a)) if b != a)
 }
 
 /// True when this commit (or a subsurface in its tree) gives the output something to show: a new
@@ -549,6 +589,22 @@ fn toplevel_facts(surface: &ToplevelSurface) -> ToplevelFacts {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn eager_import_only_when_an_existing_buffer_changes_geometry() {
+        use super::reimports_on_resize;
+        // First buffer: no earlier import to go stale.
+        assert!(!reimports_on_resize(None, Some((10, 31, 1))));
+        // Same geometry: the normal render-time import is correct.
+        assert!(!reimports_on_resize(Some((32, 31, 1)), Some((32, 31, 1))));
+        // Shrink or grow: earlier damage is wider or narrower than this buffer.
+        assert!(reimports_on_resize(Some((32, 31, 1)), Some((10, 31, 1))));
+        assert!(reimports_on_resize(Some((10, 31, 1)), Some((32, 31, 1))));
+        // Scale change alone also changes the texture mapping.
+        assert!(reimports_on_resize(Some((32, 31, 1)), Some((32, 31, 2))));
+        // Buffer removed: nothing to import.
+        assert!(!reimports_on_resize(Some((32, 31, 1)), None));
+    }
+
     use super::model_edges;
     use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge as E;
 
