@@ -34,13 +34,16 @@ pub fn reduce_owned(
                             );
                             (
                                 PlacementMode::Floating,
-                                maximized_restore_rect(
-                                    state.placement.floating_restore,
-                                    pointer,
-                                    visible_anchor.frac_num,
-                                    visible_anchor.frac_den,
-                                    pointer.y.saturating_sub(state.placement.current.y),
-                                    state.extents.titlebar_h,
+                                fit_restore_rect(
+                                    maximized_restore_rect(
+                                        state.placement.floating_restore,
+                                        pointer,
+                                        visible_anchor.frac_num,
+                                        visible_anchor.frac_den,
+                                        pointer.y.saturating_sub(state.placement.current.y),
+                                        state.extents.titlebar_h,
+                                    ),
+                                    state.work_area,
                                 ),
                             )
                         }
@@ -287,7 +290,12 @@ pub(super) fn toggle_placement(
             rect: state.placement.floating_restore,
         });
         state.placement.mode = snap.mode;
-        state.placement.current = snap.rect;
+        // A floating restore never leaves the work area, whatever it was saved from.
+        state.placement.current = if snap.mode == PlacementMode::Floating {
+            fit_restore_rect(snap.rect, state.work_area)
+        } else {
+            snap.rect
+        };
         state.placement.resume = None;
     } else {
         state.placement.resume = Some(PlacementSnapshot {

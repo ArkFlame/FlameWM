@@ -7,6 +7,12 @@ use flamewm_integrations_linux::notification_history::NotificationHistory;
 
 /// Action the panel status cluster dispatches to toggle the center.
 pub const OPEN_ACTION: &str = "notification.center.open";
+
+/// True for the Escape key release, which closes the open center whichever surface had focus.
+#[must_use]
+pub fn is_escape_key(action: &str, text: Option<&str>) -> bool {
+    action == "keyboard.input" && text == Some("\u{1b}")
+}
 /// Fixed template slots. Extra groups and items are counted, not shown.
 pub const MAX_GROUP_SLOTS: usize = 5;
 pub const MAX_ITEM_SLOTS: usize = 3;
@@ -224,6 +230,14 @@ mod tests {
         assert_eq!(Command::parse("notification.center.group.0.mute"), None);
         assert_eq!(Command::parse("notification.center.bogus"), None);
         assert_eq!(Command::parse("start.toggle"), None);
+    }
+
+    #[test]
+    fn only_the_escape_key_text_closes_the_center() {
+        assert!(is_escape_key("keyboard.input", Some("\u{1b}")));
+        assert!(!is_escape_key("keyboard.input", Some("a")));
+        assert!(!is_escape_key("keyboard.input", None));
+        assert!(!is_escape_key("notification.center.open", Some("\u{1b}")));
     }
 
     #[test]

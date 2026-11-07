@@ -1,12 +1,14 @@
-//! `hotCorner.*` dispatch. Root pointer motion feeds the pure dwell state from `flamewm-shell-core`.
-//! The only timer is the one pending dwell deadline, which the event loop folds into its wait.
-//! No polling runs while idle, and root motion is selected only while a corner has an action.
+//! `hotCorner.*` dispatch. Pointer position feeds the pure dwell state from `flamewm-shell-core`.
+//! The pointer is sampled on XInput2 raw motion selected on the root, because core pointer motion
+//! is not delivered to the root while a client window covers the corner. The only timer is the one
+//! pending dwell deadline, which the event loop folds into its wait. Raw motion is selected only
+//! while a corner has an action, and no polling runs while idle.
 
 use std::time::{Duration, Instant};
 
 use flamewm_platform::settings::HotCornerAction;
 use flamewm_shell_core::hot_corner::{Corner, CornerDwell, Dwell};
-use x11rb::protocol::xproto::{ConnectionExt as _, EventMask};
+use x11rb::protocol::xproto::EventMask;
 
 use super::*;
 use crate::live_settings;
@@ -20,8 +22,8 @@ pub(super) struct HotCornerState {
     epoch: Instant,
     /// Wake-up for a pending dwell. `None` while no dwell is pending.
     pub(super) deadline: Option<Instant>,
-    /// Whether the root window currently selects `POINTER_MOTION`.
-    root_motion: bool,
+    /// Whether the root currently selects `XI_RawMotion` (hot corners configured).
+    pub(super) root_motion: bool,
 }
 
 impl HotCornerState {
@@ -68,31 +70,34 @@ pub(super) fn hot_corner_wait(
     Some(wait.map_or(remaining, |other| other.min(remaining)))
 }
 
-/// Root event mask: the base mask, plus pointer motion while a hot corner is configured.
-pub(super) fn root_event_mask(pointer_motion: bool) -> EventMask {
-    let base = EventMask::SUBSTRUCTURE_REDIRECT
+/// Root event mask. Pointer motion is not in it: hot corners read raw motion instead.
+pub(super) fn root_event_mask() -> EventMask {
+    EventMask::SUBSTRUCTURE_REDIRECT
         | EventMask::SUBSTRUCTURE_NOTIFY
         | EventMask::PROPERTY_CHANGE
         | EventMask::KEY_PRESS
-        | EventMask::KEY_RELEASE;
-    if pointer_motion {
-        base | EventMask::POINTER_MOTION
-    } else {
-        base
-    }
+        | EventMask::KEY_RELEASE
 }
 
 impl<C: Connection> Wm<'_, C> {
-    /// Root pointer motion: update the dwell for the corner under the pointer.
-    pub(super) fn hot_corner_motion(&mut self, x: i16, y: i16) -> Result<(), ReplyError> {
-        let fallback = self.work_area();
-        let (output, _) = self.snap_zones_at(x, y, fallback);
-        let corner = corner_at(i32::from(x), i32::from(y), output);
+    /// Samples the pointer and updates the dwell for the corner under it. Runs on every raw
+    /// motion record and on a due dwell, since a resting pointer sends no motion.
+    pub(super) fn hot_corner_sample(&mut self) -> Result<(), ReplyError> {
+        if !self.hot_corner.root_motion {
+            return Ok(());
+        }
+        let reply = self.conn.query_pointer(self.screen().root)?.reply()?;
+        let corner = if reply.same_screen {
+            let fallback = self.work_area();
+            let (output, _) = self.snap_zones_at(reply.root_x, reply.root_y, fallback);
+            corner_at(i32::from(reply.root_x), i32::from(reply.root_y), output)
+        } else {
+            None
+        };
         self.hot_corner_update(corner)
     }
 
-    /// Per-turn upkeep: follow `hotCorner.*` changes and collect a due dwell. A due dwell
-    /// re-reads the pointer, since a resting pointer sends no motion.
+    /// Per-turn upkeep: follow `hotCorner.*` changes and collect a due dwell.
     pub(super) fn tick_hot_corner(&mut self) -> Result<(), ReplyError> {
         let enabled = live_settings::hot_corners_enabled();
         if enabled != self.hot_corner.root_motion {
@@ -100,26 +105,17 @@ impl<C: Connection> Wm<'_, C> {
             if !enabled {
                 self.hot_corner = HotCornerState::new();
             }
-            let root = self.screen().root;
-            self.conn.change_window_attributes(
-                root,
-                &ChangeWindowAttributesAux::new().event_mask(root_event_mask(enabled)),
-            )?;
+            // Without XInput there is no raw feed, and hot corners stay inert.
+            if let Some(opcode) = self.raw_keys.as_ref().map(|raw| raw.opcode) {
+                self.send_root_xi_select(opcode, enabled)?;
+            }
         }
         let due = self
             .hot_corner
             .deadline
             .is_some_and(|deadline| Instant::now() >= deadline);
         if due {
-            let reply = self.conn.query_pointer(self.screen().root)?.reply()?;
-            let corner = if reply.same_screen {
-                let fallback = self.work_area();
-                let (output, _) = self.snap_zones_at(reply.root_x, reply.root_y, fallback);
-                corner_at(i32::from(reply.root_x), i32::from(reply.root_y), output)
-            } else {
-                None
-            };
-            self.hot_corner_update(corner)?;
+            self.hot_corner_sample()?;
         }
         Ok(())
     }
@@ -207,9 +203,22 @@ mod tests {
     }
 
     #[test]
-    fn root_mask_adds_pointer_motion_only_when_requested() {
-        assert!(root_event_mask(true).contains(EventMask::POINTER_MOTION));
-        assert!(!root_event_mask(false).contains(EventMask::POINTER_MOTION));
-        assert!(root_event_mask(false).contains(EventMask::SUBSTRUCTURE_REDIRECT));
+    fn root_mask_never_selects_core_pointer_motion() {
+        assert!(!root_event_mask().contains(EventMask::POINTER_MOTION));
+        assert!(root_event_mask().contains(EventMask::SUBSTRUCTURE_REDIRECT));
+    }
+
+    #[test]
+    fn raw_motion_record_is_recognised_by_type_and_opcode() {
+        // GenericEvent header: type 35, XInput opcode, sequence, length, then evtype at byte 8.
+        let mut record = [0u8; 32];
+        record[0] = 35;
+        record[1] = 131;
+        record[8..10].copy_from_slice(&17u16.to_ne_bytes());
+        assert!(super::super::raw_keys::is_raw_motion(&record, 131));
+        assert!(!super::super::raw_keys::is_raw_motion(&record, 130));
+        record[8..10].copy_from_slice(&13u16.to_ne_bytes());
+        assert!(!super::super::raw_keys::is_raw_motion(&record, 131));
+        assert!(!super::super::raw_keys::is_raw_motion(&record[..9], 131));
     }
 }

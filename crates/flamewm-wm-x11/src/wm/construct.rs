@@ -2,8 +2,7 @@
 use super::*;
 
 pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), ReplyError> {
-    let attrs =
-        ChangeWindowAttributesAux::new().event_mask(super::hot_corner::root_event_mask(false));
+    let attrs = ChangeWindowAttributesAux::new().event_mask(super::hot_corner::root_event_mask());
     let result = conn.change_window_attributes(screen.root, &attrs)?.check();
     conn.randr_select_input(
         screen.root,

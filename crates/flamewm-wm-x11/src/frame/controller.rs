@@ -14,8 +14,8 @@ use super::coords::{ClientRootRect, RootPoint, RootRect};
 #[cfg(test)]
 use super::geometry::plan_client_configure;
 use super::geometry::{
-    FrameExtents, GeometryReason, GeometryRequest, frame_to_client_local, frame_to_client_root,
-    plan_move, plan_resize,
+    FrameExtents, GeometryReason, GeometryRequest, fit_restore_rect, frame_to_client_local,
+    frame_to_client_root, plan_move, plan_resize,
 };
 use super::input::target_for_xid;
 use super::model::{

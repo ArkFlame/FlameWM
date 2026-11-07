@@ -153,6 +153,16 @@ impl NotificationHost {
         if event.action.phase != flamewm_ui_x11::ActionPhase::Release || !event.action.inside {
             return false;
         }
+        if self.center_open
+            && notification_center::is_escape_key(
+                &event.action.action,
+                event.action.text.as_deref(),
+            )
+        {
+            self.toggle_center(runtime);
+            // Escape still reaches the shell's own popups unless the center had focus.
+            return event.surface == self.center;
+        }
         if event.surface == self.center {
             if let Some(command) = notification_center::Command::parse(&event.action.action) {
                 self.apply_center_command(command, runtime);
@@ -184,8 +194,18 @@ impl NotificationHost {
         self.center_open = !self.center_open;
         self.center_revision = None;
         let shown = if self.center_open {
-            runtime.show(self.center)
+            let shown = runtime.show(self.center);
+            // The pointer grab hands the override-redirect centre keyboard focus, so Escape
+            // reaches it. A refused grab leaves the centre open without that focus.
+            if shown.is_ok() {
+                if let Err(error) = runtime.grab_pointer(self.center) {
+                    eprintln!("flamewm-shell: notification center focus grab failed: {error:?}");
+                }
+            }
+            shown
         } else {
+            // Releases the focus handoff; a centre that never took it has nothing to restore.
+            let _ = runtime.ungrab_pointer(self.center);
             runtime.hide(self.center)
         };
         if let Err(error) = shown {

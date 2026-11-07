@@ -21,6 +21,8 @@ use flamewm_x11_desktop::shortcuts::MOD_ALT;
 const GE_GENERIC_EVENT: u8 = 35;
 const XI_RAW_KEY_PRESS: u16 = 13;
 const XI_RAW_KEY_RELEASE: u16 = 14;
+/// Raw pointer motion; delivered to the root whatever window covers the pointer.
+pub(crate) const XI_RAW_MOTION: u16 = 17;
 const XI_ALL_MASTER_DEVICES: u16 = 1;
 const XI_SELECT_EVENTS: u8 = 46;
 
@@ -30,6 +32,14 @@ pub(crate) struct RawKey {
     pub press: bool,
     pub keycode: u8,
     pub time: u32,
+}
+
+/// True for an `XInput2` `XIRawMotion` `GenericEvent` from the `XInput` `opcode`.
+pub(crate) fn is_raw_motion(bytes: &[u8], opcode: u8) -> bool {
+    bytes.len() >= 10
+        && bytes[0] & 0x7f == GE_GENERIC_EVENT
+        && bytes[1] == opcode
+        && u16::from_ne_bytes([bytes[8], bytes[9]]) == XI_RAW_MOTION
 }
 
 /// Parses an `XInput2` `XIRawKeyPress`/`XIRawKeyRelease` `GenericEvent`. `opcode` is the `XInput`
@@ -184,21 +194,10 @@ impl<C: Connection> Wm<'_, C> {
         // No XIQueryVersion: a client that negotiates XI2 this way stops receiving raw key
         // records while another client holds a keyboard grab (verified live in Xephyr).
 
-        let mask = (1u32 << XI_RAW_KEY_PRESS) | (1u32 << XI_RAW_KEY_RELEASE);
-        let mut select_body = Vec::new();
-        select_body.extend_from_slice(&self.screen().root.to_ne_bytes());
-        select_body.extend_from_slice(&1u16.to_ne_bytes()); // num_masks
-        select_body.extend_from_slice(&0u16.to_ne_bytes()); // pad
-        select_body.extend_from_slice(&XI_ALL_MASTER_DEVICES.to_ne_bytes());
-        select_body.extend_from_slice(&1u16.to_ne_bytes()); // mask_len in words
-        select_body.extend_from_slice(&mask.to_ne_bytes());
-        let select = request(opcode, XI_SELECT_EVENTS, 5, &select_body);
-        self.conn
-            .send_request_without_reply(&[IoSlice::new(&select)], Vec::new())?
-            .check()?;
+        self.send_root_xi_select(opcode, self.hot_corner.root_motion)?;
 
         if super::key_diag_enabled() {
-            eprintln!("flamewm: raw keys selected opcode={opcode} select={select:02x?}");
+            eprintln!("flamewm: raw keys selected opcode={opcode}");
         }
         let mapping = self.conn.get_modifier_mapping()?.reply()?;
         let mut modifiers = ModifierState::from_mapping(
@@ -215,9 +214,38 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
-    /// Handles one raw record. Only press records that resolve to an escape chord dispatch.
+    /// Replaces the root's raw selection on all master devices: key press/release always, raw
+    /// motion when `motion`. XISelectEvents replaces the mask per client, so every caller sends
+    /// the full set.
+    pub(super) fn send_root_xi_select(&self, opcode: u8, motion: bool) -> Result<(), ReplyError> {
+        let mut mask = (1u32 << XI_RAW_KEY_PRESS) | (1u32 << XI_RAW_KEY_RELEASE);
+        if motion {
+            mask |= 1u32 << XI_RAW_MOTION;
+        }
+        let mut select_body = Vec::new();
+        select_body.extend_from_slice(&self.screen().root.to_ne_bytes());
+        select_body.extend_from_slice(&1u16.to_ne_bytes()); // num_masks
+        select_body.extend_from_slice(&0u16.to_ne_bytes()); // pad
+        select_body.extend_from_slice(&XI_ALL_MASTER_DEVICES.to_ne_bytes());
+        select_body.extend_from_slice(&1u16.to_ne_bytes()); // mask_len in words
+        select_body.extend_from_slice(&mask.to_ne_bytes());
+        let select = request(opcode, XI_SELECT_EVENTS, 5, &select_body);
+        self.conn
+            .send_request_without_reply(&[IoSlice::new(&select)], Vec::new())?
+            .check()?;
+        Ok(())
+    }
+
+    /// Handles one raw record. Raw motion feeds the hot corner; key press records that resolve
+    /// to an escape chord dispatch.
     pub(super) fn handle_raw_event(&mut self, bytes: &[u8]) -> Result<(), ReplyError> {
         let root = self.screen().root;
+        let Some(opcode) = self.raw_keys.as_ref().map(|raw| raw.opcode) else {
+            return Ok(());
+        };
+        if is_raw_motion(bytes, opcode) {
+            return self.hot_corner_sample();
+        }
         let Some(raw) = self.raw_keys.as_mut() else {
             return Ok(());
         };

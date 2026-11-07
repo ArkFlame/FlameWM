@@ -309,10 +309,17 @@ impl<C: Connection> Wm<'_, C> {
 
     /// Leaves snap/maximize/fullscreen at the floating restore rect, without a pointer drag.
     pub(super) fn return_to_floating(&mut self, client: Window) -> Result<(), ReplyError> {
+        let Some(saved) = self.clients.get(&client).map(|s| s.placement.floating_restore) else {
+            return Ok(());
+        };
+        let work = self.work_area_for_rect(saved.to_legacy());
+        let restore = crate::frame::geometry::fit_restore_rect(
+            saved,
+            crate::frame::coords::RootRect::from_legacy(work),
+        );
         let Some(state) = self.clients.get_mut(&client) else {
             return Ok(());
         };
-        let restore = state.placement.floating_restore;
         state.placement.mode = PlacementMode::Floating;
         state.placement.current = restore;
         state.placement.resume = None;

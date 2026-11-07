@@ -193,6 +193,25 @@ pub fn keep_on_outputs(rect: RootRect, outputs: &[RootRect], fallback: RootRect)
     }
 }
 
+/// Brings a restored floating rect fully inside `work_area`: the size is capped to the work area,
+/// then the rect slides back in from the edge it crosses. Restores reappear where they were saved,
+/// so they take this stricter rule instead of the quarter-visible drag rule of [`keep_on_outputs`].
+#[must_use]
+pub fn fit_restore_rect(rect: RootRect, work_area: RootRect) -> RootRect {
+    let w = rect.w.min(work_area.w).max(1);
+    let h = rect.h.min(work_area.h).max(1);
+    let fit = |start: i32, len: i32, lo: i32, span: i32| {
+        let hi = lo.saturating_add(span.saturating_sub(len)).max(lo);
+        start.clamp(lo, hi)
+    };
+    RootRect::new(
+        fit(rect.x, w, work_area.x, work_area.w),
+        fit(rect.y, h, work_area.y, work_area.h),
+        w,
+        h,
+    )
+}
+
 /// Valid `[lo, hi]` for a left edge at `x` while the right edge `right` is fixed, against `[b0, b1)`.
 /// Visible width must stay >= a quarter of the width (ceil); derived from `4 * visible >= width`.
 fn left_edge_range(right: i32, b0: i32, b1: i32) -> (i32, i32) {
@@ -878,6 +897,30 @@ mod tests {
         let outs = [left, WA];
         r.outputs = &outs;
         assert_eq!(plan_move(&r).frame, RootRect::new(-2220, 100, 400, 300));
+    }
+
+    #[test]
+    fn restored_rect_slides_fully_inside_work_area() {
+        // 900px screen with a 40px taskbar: work area y 0..860.
+        let wa = RootRect::new(0, 0, 1600, 860);
+        // The reported case: a 540px restore at y=789 must end inside the work area.
+        assert_eq!(
+            fit_restore_rect(RootRect::new(100, 789, 800, 540), wa),
+            RootRect::new(100, 320, 800, 540)
+        );
+        // Off the top/left edges slides back to the origin.
+        assert_eq!(
+            fit_restore_rect(RootRect::new(-50, -20, 300, 200), wa),
+            RootRect::new(0, 0, 300, 200)
+        );
+        // Larger than the work area: size is capped, then placed at the origin.
+        assert_eq!(
+            fit_restore_rect(RootRect::new(1200, 700, 2000, 1000), wa),
+            RootRect::new(0, 0, 1600, 860)
+        );
+        // Already inside: untouched.
+        let inside = RootRect::new(200, 150, 400, 300);
+        assert_eq!(fit_restore_rect(inside, wa), inside);
     }
 
     #[test]

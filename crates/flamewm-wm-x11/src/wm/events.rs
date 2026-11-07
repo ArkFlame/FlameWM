@@ -53,10 +53,9 @@ impl<C: Connection> Wm<'_, C> {
             Event::KeyPress(event) => self.handle_key_press(event)?,
             Event::KeyRelease(event) => self.handle_key_release(event)?,
             Event::FocusOut(_) => self.super_tap.focus_lost(),
-            // Root motion exists only for hot corners; it must not enter the client drag routing.
-            Event::MotionNotify(event) if event.event == self.screen().root => {
-                self.hot_corner_motion(event.root_x, event.root_y)?;
-            }
+            // The root never selects core motion (hot corners use XI raw motion); a root motion
+            // record from another client's selection must not enter the client drag routing.
+            Event::MotionNotify(event) if event.event == self.screen().root => {}
             Event::MotionNotify(event) => self.handle_motion(event)?,
             Event::PropertyNotify(event) => self.handle_property(event.window, event.atom)?,
             // The WM owns the client's corner mask; a client that shapes itself must not keep it.
