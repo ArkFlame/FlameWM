@@ -414,7 +414,7 @@ impl App {
 
     fn paint(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let surface = surface_fill(&SettingsSnapshot::new(0));
-        doc.background("archiver", rgba(surface.rgb, surface.alpha))?;
+        doc.background("archiver", UiColor::from_rgb(surface.rgb, surface.alpha))?;
         let name = self
             .archive
             .as_deref()
@@ -520,15 +520,6 @@ fn free_destination(archive: &Path) -> PathBuf {
         number += 1;
     }
     candidate
-}
-
-fn rgba(rgb: u32, alpha: u8) -> UiColor {
-    UiColor {
-        r: ((rgb >> 16) & 0xff) as u8,
-        g: ((rgb >> 8) & 0xff) as u8,
-        b: (rgb & 0xff) as u8,
-        a: alpha,
-    }
 }
 
 #[cfg(test)]

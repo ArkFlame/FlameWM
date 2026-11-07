@@ -1,5 +1,4 @@
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use flamewm_api::ports::WorkspacePort;
@@ -32,11 +31,7 @@ pub fn load_persisted_count(path: &Path) -> Option<usize> {
 }
 
 fn persist_count(path: &Path, count: usize) -> FlameResult<()> {
-    write_atomic_text(path, &format!("{WORKSPACE_COUNT_KEY}={count}\n")).map_err(io_error)
-}
-
-fn io_error(error: io::Error) -> FlameError {
-    FlameError::new(ErrorCode::IoFailure, error.to_string())
+    write_atomic_text(path, &format!("{WORKSPACE_COUNT_KEY}={count}\n")).map_err(FlameError::io)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

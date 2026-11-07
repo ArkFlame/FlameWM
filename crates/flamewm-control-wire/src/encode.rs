@@ -530,7 +530,7 @@ pub(crate) fn panel_wire_value(panel: &PanelSnapshot) -> WireValue {
     );
     item.insert(
         "edge".to_owned(),
-        WireValue::String(edge_name(panel.edge).to_owned()),
+        WireValue::String(panel.edge.as_str().to_owned()),
     );
     item.insert(
         "size".to_owned(),

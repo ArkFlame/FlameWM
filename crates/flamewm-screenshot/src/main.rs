@@ -10,7 +10,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use x11rb::connection::Connection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,21 +171,13 @@ fn pictures_dir() -> PathBuf {
     }
     home.join("Pictures/Screenshots")
 }
-
-fn now_nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos())
-}
 fn default_output(extension: &str) -> Result<PathBuf, String> {
     let dir = pictures_dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join(format!(
         "FlameWM-{}-{n}.{extension}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-        n = now_nanos() % 1_000_000_000
+        flamewm_api::clock::unix_seconds(),
+        n = flamewm_api::clock::unix_nanos() % 1_000_000_000
     )))
 }
 
@@ -357,7 +349,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let p = std::env::temp_dir().join(format!(
                 "flamewm-clipboard-{}-{}.png",
                 std::process::id(),
-                now_nanos()
+                flamewm_api::clock::unix_nanos()
             ));
             new_file(&p, &bytes)?;
             p

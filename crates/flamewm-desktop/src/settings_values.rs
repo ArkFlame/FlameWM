@@ -1,5 +1,6 @@
 //! Typed readers over the settings snapshot and the accent-token projection for the desktop.
 
+pub(crate) use flamewm_api::settings::{setting_bool, setting_integer, setting_percent};
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
@@ -7,13 +8,6 @@ pub(crate) fn setting_text(snapshot: &SettingsSnapshot, key: &str) -> String {
     match snapshot.values.get(key) {
         Some(SettingValue::Text(value)) => value.clone(),
         _ => String::new(),
-    }
-}
-
-pub(crate) fn setting_bool(snapshot: &SettingsSnapshot, key: &str, default: bool) -> bool {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Boolean(value)) => *value,
-        _ => default,
     }
 }
 
@@ -115,20 +109,6 @@ pub(crate) fn desktop_visual_settings_changed(
     next: &SettingsSnapshot,
 ) -> bool {
     effective_keys_changed(previous, next, &desktop_consumed_keys())
-}
-
-pub(crate) fn setting_percent(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Percent(value)) => *value,
-        _ => default,
-    }
-}
-
-fn setting_integer(snapshot: &SettingsSnapshot, key: &str, default: i64) -> i64 {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Integer(value)) => *value,
-        _ => default,
-    }
 }
 
 pub(crate) fn desktop_entry_scale(snapshot: &SettingsSnapshot) -> u16 {

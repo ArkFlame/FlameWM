@@ -3,10 +3,35 @@
 //! Pure functions only. The notification host owns the surface and the provider, and applies
 //! the nodes produced here to `ui/shell/notification-center.html`.
 
+use std::time::{Duration, Instant};
+
 use flamewm_integrations_linux::notification_history::NotificationHistory;
 
 /// Action the panel status cluster dispatches to toggle the center.
 pub const OPEN_ACTION: &str = "notification.center.open";
+
+/// Action the render layer sends the grabbed surface for a root press outside it. The press is
+/// only observed, never consumed, so it still reaches the window beneath.
+pub const OUTSIDE_RELEASE_ACTION: &str = "surface.outside.release";
+
+/// Window in which the opener release that follows an outside-press close is the same click.
+pub const CLOSE_LATCH_TTL: Duration = Duration::from_millis(300);
+
+/// True when an outside-press release closes the open center. Matches the quick popups' rule.
+#[must_use]
+pub fn outside_press_closes(action: &str, inside: bool, open: bool) -> bool {
+    open && !inside && action == OUTSIDE_RELEASE_ACTION
+}
+
+/// Consumes the opener release that is the same click as an outside-press close, so the bell
+/// does not reopen the center it just dismissed. The latch is single-use and expires.
+#[must_use]
+pub fn latch_consumes_open(closed_at: &mut Option<Instant>, now: Instant) -> bool {
+    let Some(at) = closed_at.take() else {
+        return false;
+    };
+    now.saturating_duration_since(at) <= CLOSE_LATCH_TTL
+}
 
 /// True for the Escape key release, which closes the open center whichever surface had focus.
 #[must_use]
@@ -230,6 +255,30 @@ mod tests {
         assert_eq!(Command::parse("notification.center.group.0.mute"), None);
         assert_eq!(Command::parse("notification.center.bogus"), None);
         assert_eq!(Command::parse("start.toggle"), None);
+    }
+
+    #[test]
+    fn outside_press_closes_only_an_open_center_on_an_outside_release() {
+        assert!(outside_press_closes(OUTSIDE_RELEASE_ACTION, false, true));
+        assert!(!outside_press_closes(OUTSIDE_RELEASE_ACTION, true, true));
+        assert!(!outside_press_closes(OUTSIDE_RELEASE_ACTION, false, false));
+        assert!(!outside_press_closes("keyboard.input", false, true));
+    }
+
+    #[test]
+    fn close_latch_consumes_one_opener_release_inside_the_window() {
+        let now = Instant::now();
+        let mut latch = Some(now);
+        assert!(latch_consumes_open(&mut latch, now + Duration::from_millis(40)));
+        assert_eq!(latch, None, "the latch is single-use");
+        assert!(!latch_consumes_open(&mut latch, now));
+
+        let mut stale = Some(now);
+        assert!(!latch_consumes_open(
+            &mut stale,
+            now + CLOSE_LATCH_TTL + Duration::from_millis(1)
+        ));
+        assert_eq!(stale, None, "an expired latch is dropped");
     }
 
     #[test]

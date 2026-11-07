@@ -92,8 +92,6 @@ mod workspace_sync;
 use drag::{commit_item_drag, hide_drag_ghost, show_drag_ghost, sync_drag_ghost};
 use install_root::packaged_root;
 #[cfg(test)]
-use install_root::{installed_data_root, resolve_packaged_root};
-#[cfg(test)]
 use output_layout::PROJECTED_CELLS_CALLS;
 use output_layout::{
     ProjectedCellsCache, desktop_surface_rect, grid_for_output, live_output, pointer_on_output,
@@ -776,10 +774,6 @@ use menus::*;
 #[cfg(test)]
 #[path = "tests/work_area_tests.rs"]
 mod work_area_tests;
-
-#[cfg(test)]
-#[path = "tests/packaged_root_tests.rs"]
-mod packaged_root_tests;
 
 #[cfg(test)]
 #[path = "tests/general_settings_tests.rs"]

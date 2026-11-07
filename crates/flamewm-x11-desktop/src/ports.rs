@@ -6,9 +6,9 @@ impl WindowPort for X11Desktop {
         let tree = self
             .conn
             .query_tree(window)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         let atoms = self.window_atoms();
         let reads = self.send_window_reads(window, tree.parent, &atoms);
         let frame = self.frame(&atoms)?;
@@ -85,9 +85,9 @@ impl WindowPort for X11Desktop {
         let geometry = shared::window_geometry_aux(geometry)?;
         self.conn
             .configure_window(self.check_window(w)?, &geometry)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .check()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         self.flush()
     }
     fn work_area(&self, _w: WindowRef) -> FlameResult<Rect> {
@@ -166,7 +166,7 @@ impl WorkspacePort for X11Desktop {
         _target: usize,
         _revision: u64,
     ) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "X11 EWMH has no atomic workspace-and-window transaction",
         ))
     }
@@ -231,7 +231,7 @@ impl SessionPort for X11Desktop {
         Command::new(program)
             .args(args)
             .status()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .success()
             .then_some(())
             .ok_or_else(|| {
@@ -247,7 +247,7 @@ impl MainLoopPort for X11Desktop {
         _events: FdEvents,
         _callback: FdCallback,
     ) -> FlameResult<FdHandle> {
-        Err(unsupported("desktop host owns X11 event loop"))
+        Err(FlameError::unsupported("desktop host owns X11 event loop"))
     }
     fn remove_poll(&mut self, _handle: FdHandle) {}
     fn add_timer(
@@ -256,38 +256,38 @@ impl MainLoopPort for X11Desktop {
         _callback: TimerCallback,
         _repeat: bool,
     ) -> FlameResult<TimerHandle> {
-        Err(unsupported("desktop host owns timers"))
+        Err(FlameError::unsupported("desktop host owns timers"))
     }
     fn remove_timer(&mut self, _handle: TimerHandle) {}
     fn defer(&mut self, _callback: TimerCallback) -> FlameResult<TimerHandle> {
-        Err(unsupported("desktop host owns deferred callbacks"))
+        Err(FlameError::unsupported("desktop host owns deferred callbacks"))
     }
 }
 impl BackgroundPort for X11Desktop {
     fn project_background(&mut self, _state: &BackgroundState) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "X11 desktop adapter does not own wallpaper rendering",
         ))
     }
     fn reload_background(&mut self) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "X11 desktop adapter does not own wallpaper rendering",
         ))
     }
 }
 impl TrayPort for X11Desktop {
     fn set_tray_owner(&mut self, _output: &OutputId) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "X11 desktop adapter does not implement system tray ownership",
         ))
     }
     fn clear_tray_owner(&mut self) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "X11 desktop adapter does not implement system tray ownership",
         ))
     }
     fn tray_owner(&self) -> FlameResult<Option<OutputId>> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "X11 desktop adapter does not implement system tray ownership",
         ))
     }
@@ -299,7 +299,7 @@ impl WorkAreaPort for X11Desktop {
         Ok(shared::base_work_areas(work_area, &outputs.outputs))
     }
     fn apply_flame_reservations(&mut self, _reservations: &[(OutputId, Rect)]) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "X11 desktop adapter does not own work-area reservations",
         ))
     }
@@ -311,9 +311,9 @@ impl DisplayPort for X11Desktop {
         let resources = self
             .conn
             .randr_get_screen_resources_current(self.root)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         // Stable physical output identity: never infer primary from RandR
         // resource enumeration order (it can change after hotplug/rotation).
         let primary_output = self
@@ -327,9 +327,9 @@ impl DisplayPort for X11Desktop {
             let info = self
                 .conn
                 .randr_get_output_info(output, resources.config_timestamp)
-                .map_err(io_error)?
+                .map_err(FlameError::io)?
                 .reply()
-                .map_err(io_error)?;
+                .map_err(FlameError::io)?;
             // X lists any output scanning out from a CRTC as a monitor, even when the
             // driver cannot sense a sink (virtual heads, some docks). Follow that rule.
             if u8::from(info.connection) != u8::from(randr::Connection::CONNECTED) && info.crtc == 0
@@ -341,9 +341,9 @@ impl DisplayPort for X11Desktop {
                 let c = self
                     .conn
                     .randr_get_crtc_info(crtc, resources.config_timestamp)
-                    .map_err(io_error)?
+                    .map_err(FlameError::io)?
                     .reply()
-                    .map_err(io_error)?;
+                    .map_err(FlameError::io)?;
                 (
                     Rect::new(
                         i32::from(c.x),
@@ -414,9 +414,9 @@ impl DisplayPort for X11Desktop {
         let resources = self
             .conn
             .randr_get_screen_resources_current(self.root)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         let status = self
             .conn
             .randr_set_crtc_config(
@@ -429,9 +429,9 @@ impl DisplayPort for X11Desktop {
                 pending.old_rotation,
                 &[pending.output],
             )
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .status;
         if u8::from(status) != u8::from(randr::SetConfig::SUCCESS) {
             return Err(FlameError::new(

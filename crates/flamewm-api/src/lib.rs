@@ -7,6 +7,7 @@ pub mod applications;
 pub mod background;
 pub mod blue_light;
 pub mod blue_light_sun;
+pub mod clock;
 pub mod capabilities;
 pub mod color;
 pub mod display;

@@ -31,10 +31,6 @@ pub struct PendingMode {
     pub old_rotation: randr::Rotation,
 }
 
-fn io_error<E: std::fmt::Display>(error: E) -> FlameError {
-    FlameError::new(ErrorCode::IoFailure, error.to_string())
-}
-
 fn signed(value: u32) -> i32 {
     value as i32
 }
@@ -149,10 +145,10 @@ pub fn client_message(
         EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
         event,
     )
-    .map_err(io_error)?
+    .map_err(FlameError::io)?
     .check()
-    .map_err(io_error)?;
-    conn.flush().map_err(io_error)
+    .map_err(FlameError::io)?;
+    conn.flush().map_err(FlameError::io)
 }
 
 pub fn send_state(
@@ -206,9 +202,9 @@ pub fn root_pointer(
 ) -> FlameResult<PointerPosition> {
     let reply = conn
         .query_pointer(root)
-        .map_err(io_error)?
+        .map_err(FlameError::io)?
         .reply()
-        .map_err(io_error)?;
+        .map_err(FlameError::io)?;
     let point = Point::new(i32::from(reply.root_x), i32::from(reply.root_y));
     Ok(PointerPosition {
         root: point,
@@ -236,15 +232,15 @@ pub fn apply_mode(
     }
     let resources = conn
         .randr_get_screen_resources_current(root)
-        .map_err(io_error)?
+        .map_err(FlameError::io)?
         .reply()
-        .map_err(io_error)?;
+        .map_err(FlameError::io)?;
     for output in resources.outputs {
         let info = conn
             .randr_get_output_info(output, resources.config_timestamp)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         if u8::from(info.connection) != u8::from(randr::Connection::CONNECTED)
             || String::from_utf8_lossy(&info.name) != output_name.as_str()
         {
@@ -259,9 +255,9 @@ pub fn apply_mode(
         }
         let old = conn
             .randr_get_crtc_info(crtc, resources.config_timestamp)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         let reply = conn
             .randr_set_crtc_config(
                 crtc,
@@ -273,9 +269,9 @@ pub fn apply_mode(
                 old.rotation,
                 &old.outputs,
             )
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         if u8::from(reply.status) != u8::from(randr::SetConfig::SUCCESS) {
             return Err(FlameError::new(
                 ErrorCode::EngineRejected,
@@ -293,7 +289,7 @@ pub fn apply_mode(
             old_y: old.y,
             old_rotation: old.rotation,
         });
-        conn.flush().map_err(io_error)?;
+        conn.flush().map_err(FlameError::io)?;
         return Ok(transaction);
     }
     Err(FlameError::not_found("RandR output not found"))

@@ -349,20 +349,8 @@ fn initial_settings() -> Option<SettingsSnapshot> {
 }
 
 /// Packaged asset root for the default wallpaper: the installed share directory, else the source tree.
-fn packaged_root() -> PathBuf {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    let installed = std::env::current_exe().ok().and_then(|exe| {
-        let bin = exe.parent()?;
-        let usr = bin.parent()?;
-        (bin.file_name()? == "bin" && usr.file_name()? == "usr").then(|| usr.join("share/flamewm"))
-    });
-    installed
-        .filter(|root| root.join("assets").is_dir())
-        .unwrap_or(source)
+fn packaged_root() -> std::path::PathBuf {
+    flamewm_api::paths::packaged_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
 }
 
 #[cfg(test)]

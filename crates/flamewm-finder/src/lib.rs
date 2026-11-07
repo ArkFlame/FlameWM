@@ -108,7 +108,7 @@ impl Palette {
                 .map_or(ACCENT_RGB, |rgb| rgb & 0x00ff_ffff),
             _ => ACCENT_RGB,
         };
-        if luminance(surface_fill(theme).rgb) > 150 {
+        if flamewm_api::color::luminance(surface_fill(theme).rgb) > 150 {
             Self {
                 text: 0x001d_1d1f,
                 muted: 0x0051_5154,
@@ -124,10 +124,6 @@ impl Palette {
             }
         }
     }
-}
-
-fn luminance(rgb: u32) -> u32 {
-    (((rgb >> 16) & 0xff) * 299 + ((rgb >> 8) & 0xff) * 587 + (rgb & 0xff) * 114) / 1000
 }
 
 /// Merges pieces past `max` into the last slot, so every name fits the document's segment nodes.
@@ -172,15 +168,6 @@ fn now_secs() -> i64 {
         .ok()
         .and_then(|since| i64::try_from(since.as_secs()).ok())
         .unwrap_or(0)
-}
-
-fn rgba(rgb: u32, alpha: u8) -> UiColor {
-    UiColor {
-        r: ((rgb >> 16) & 0xff) as u8,
-        g: ((rgb >> 8) & 0xff) as u8,
-        b: (rgb & 0xff) as u8,
-        a: alpha,
-    }
 }
 
 /// Short mark for the type column: the extension in capitals, or `DIR` / `FILE`.
@@ -549,22 +536,22 @@ impl Finder {
 
     fn paint_theme(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let surface = surface_fill(&self.theme);
-        doc.background("finder", rgba(surface.rgb, surface.alpha))?;
+        doc.background("finder", UiColor::from_rgb(surface.rgb, surface.alpha))?;
         flamewm_ui_x11::surface_style::project_surface_outline(doc, "finder", &self.theme)?;
-        doc.color_variable("--accent", rgba(self.palette.accent, 255))?;
-        doc.color_variable("--text", rgba(self.palette.text, 255))?;
-        doc.color_variable("--muted", rgba(self.palette.muted, 255))?;
-        doc.color_variable("--subtle", rgba(self.palette.subtle, 255))
+        doc.color_variable("--accent", UiColor::from_rgb(self.palette.accent, 255))?;
+        doc.color_variable("--text", UiColor::from_rgb(self.palette.text, 255))?;
+        doc.color_variable("--muted", UiColor::from_rgb(self.palette.muted, 255))?;
+        doc.color_variable("--subtle", UiColor::from_rgb(self.palette.subtle, 255))
     }
 
     fn paint_query(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let typing = !self.query.is_empty();
         if typing {
             doc.text("query", self.query.clone())?;
-            doc.foreground("query", rgba(self.palette.text, 255))?;
+            doc.foreground("query", UiColor::from_rgb(self.palette.text, 255))?;
         } else {
             doc.text("query", PLACEHOLDERS[self.placeholder].to_owned())?;
-            doc.foreground("query", rgba(self.palette.subtle, 255))?;
+            doc.foreground("query", UiColor::from_rgb(self.palette.subtle, 255))?;
         }
         doc.visible("clear", typing)?;
         let items = self.items().len();
@@ -596,7 +583,7 @@ impl Finder {
             Mode::Scopes(_) => "Folders",
         };
         doc.text("section", label.to_owned())?;
-        doc.foreground("section", rgba(self.palette.subtle, 255))
+        doc.foreground("section", UiColor::from_rgb(self.palette.subtle, 255))
     }
 
     fn paint_items(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -640,7 +627,7 @@ impl Finder {
             return doc.visible(&row, false);
         };
         doc.visible(&row, true)?;
-        doc.background(&row, rgba(0x00ff_ffff, if selected { 36 } else { 0 }))?;
+        doc.background(&row, UiColor::from_rgb(0x00ff_ffff, if selected { 36 } else { 0 }))?;
         let (kind, pieces, parent, meta) = match item {
             Item::Entry(position) => {
                 let entry = &self.index.entries[*position];
@@ -684,7 +671,7 @@ impl Finder {
         };
         let entry = &self.index.entries[*position];
         doc.visible(&tile, true)?;
-        doc.background(&tile, rgba(0x00ff_ffff, if selected { 36 } else { 0 }))?;
+        doc.background(&tile, UiColor::from_rgb(0x00ff_ffff, if selected { 36 } else { 0 }))?;
         self.paint_icon(doc, &format!("tile-{slot}-ico"), Kind::of(entry))?;
         doc.text_ref(&format!("tile-name-{slot}"), entry.name())?;
         doc.text(&format!("tile-meta-{slot}"), meta_line(entry, now))
@@ -721,7 +708,7 @@ impl Finder {
                     } else {
                         self.palette.text
                     };
-                    doc.foreground(&id, rgba(color, 255))?;
+                    doc.foreground(&id, UiColor::from_rgb(color, 255))?;
                 }
                 None => doc.visible(&id, false)?,
             }
@@ -884,20 +871,8 @@ fn initial_settings() -> SettingsSnapshot {
         .unwrap_or_else(|| SettingsSnapshot::new(0))
 }
 
-fn packaged_root() -> PathBuf {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    let installed = env::current_exe().ok().and_then(|exe| {
-        let bin = exe.parent()?;
-        let usr = bin.parent()?;
-        (bin.file_name()? == "bin" && usr.file_name()? == "usr").then(|| usr.join("share/flamewm"))
-    });
-    installed
-        .filter(|root| root.join("assets").is_dir())
-        .unwrap_or(source)
+fn packaged_root() -> std::path::PathBuf {
+    flamewm_api::paths::packaged_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
 }
 
 fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::WindowBackdrop {
@@ -1124,7 +1099,7 @@ mod tests {
     #[test]
     fn rgba_splits_channels() {
         assert_eq!(
-            rgba(0x0012_3456, 7),
+            UiColor::from_rgb(0x0012_3456, 7),
             UiColor {
                 r: 0x12,
                 g: 0x34,

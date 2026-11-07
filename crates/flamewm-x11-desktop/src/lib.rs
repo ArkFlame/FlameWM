@@ -73,7 +73,7 @@ impl ApplicationCatalogCache {
 
 impl X11Desktop {
     pub fn connect() -> FlameResult<Self> {
-        let (conn, screen) = x11rb::connect(None).map_err(io_error)?;
+        let (conn, screen) = x11rb::connect(None).map_err(FlameError::io)?;
         let root = conn.setup().roots[screen].root;
         let names = [
             "_NET_ACTIVE_WINDOW",
@@ -111,9 +111,9 @@ impl X11Desktop {
         for name in names {
             let atom = conn
                 .intern_atom(false, name.as_bytes())
-                .map_err(io_error)?
+                .map_err(FlameError::io)?
                 .reply()
-                .map_err(io_error)?
+                .map_err(FlameError::io)?
                 .atom;
             atoms.insert(name.to_owned(), atom);
         }
@@ -135,24 +135,24 @@ impl X11Desktop {
         self.atoms[name]
     }
     fn flush(&self) -> FlameResult<()> {
-        self.conn.flush().map_err(io_error)
+        self.conn.flush().map_err(FlameError::io)
     }
     fn property32(&self, window: Window, name: &str) -> FlameResult<Vec<u32>> {
         let reply = self
             .conn
             .get_property(false, window, self.atom(name), AtomEnum::ANY, 0, u32::MAX)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         Ok(reply.value32().map_or_else(Vec::new, Iterator::collect))
     }
     fn property_bytes(&self, window: Window, name: &str) -> FlameResult<Vec<u8>> {
         Ok(self
             .conn
             .get_property(false, window, self.atom(name), AtomEnum::ANY, 0, u32::MAX)
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .value)
     }
     /// Returns `(window, parent)` for every descendant of the root in DFS
@@ -166,7 +166,7 @@ impl X11Desktop {
                 .iter()
                 .map(|&parent| self.conn.query_tree(parent))
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(io_error)?;
+                .map_err(FlameError::io)?;
             let mut next = Vec::new();
             for (parent, cookie) in level.iter().zip(cookies) {
                 // A child destroyed mid-walk fails its own query; it has no children
@@ -174,7 +174,7 @@ impl X11Desktop {
                 let tree = match cookie.reply() {
                     Ok(tree) => tree,
                     Err(_) if *parent != self.root => continue,
-                    Err(error) => return Err(io_error(error)),
+                    Err(error) => return Err(FlameError::io(error)),
                 };
                 next.extend_from_slice(&tree.children);
                 children.insert(*parent, tree.children);
@@ -246,9 +246,9 @@ impl X11Desktop {
                 0,
                 u32::MAX,
             )
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .value32()
             .and_then(|mut values| values.next());
         Ok(Frame {
@@ -291,14 +291,14 @@ impl X11Desktop {
         let window = reads.window;
         let class_bytes = reads
             .class
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .value;
         let name_reply = reads
             .net_name
-            .map_err(io_error)
-            .and_then(|cookie| cookie.reply().map_err(io_error));
+            .map_err(FlameError::io)
+            .and_then(|cookie| cookie.reply().map_err(FlameError::io));
         let (title, name_named) = match name_reply {
             Ok(reply) => (
                 shared::text_from_bytes(&reply.value),
@@ -312,7 +312,7 @@ impl X11Desktop {
             .nth(1)
             .unwrap_or_default()
             .to_owned();
-        let states = reads.states.map_err(io_error)?.reply().map_err(io_error)?;
+        let states = reads.states.map_err(FlameError::io)?.reply().map_err(FlameError::io)?;
         let (mut fullscreen, mut hidden, mut max_vert, mut max_horz, mut sticky) =
             (false, false, false, false, false);
         for state in states.value32().into_iter().flatten() {
@@ -324,17 +324,17 @@ impl X11Desktop {
         }
         let desktop = reads
             .desktop
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .value32()
             .and_then(|mut values| values.next())
             .unwrap_or(0);
         let geometry = reads
             .geometry
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         let state = if fullscreen {
             flamewm_api::window::WindowState::Fullscreen
         } else if hidden {
@@ -426,14 +426,6 @@ fn push_preorder(
     }
 }
 
-fn io_error<E: std::fmt::Display>(error: E) -> FlameError {
-    FlameError::new(ErrorCode::IoFailure, error.to_string())
-}
-
-fn unsupported(message: &'static str) -> FlameError {
-    FlameError::new(ErrorCode::Unsupported, message)
-}
-
 /// Applies an insert/remove plan as one server-grabbed batch: `_NET_WM_DESKTOP` of every
 /// managed window is remapped first, then `_NET_NUMBER_OF_DESKTOPS`, `_NET_DESKTOP_NAMES`
 /// and `_NET_CURRENT_DESKTOP` are rewritten. Shared by both X11 workspace backends.
@@ -447,9 +439,9 @@ pub fn apply_workspace_plan_to_root(
     let intern = |name: &str| -> FlameResult<Atom> {
         Ok(conn
             .intern_atom(false, name.as_bytes())
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .reply()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .atom)
     };
     let client_list = intern("_NET_CLIENT_LIST")?;
@@ -461,9 +453,9 @@ pub fn apply_workspace_plan_to_root(
 
     let windows: Vec<Window> = conn
         .get_property(false, root, client_list, AtomEnum::WINDOW, 0, u32::MAX)
-        .map_err(io_error)?
+        .map_err(FlameError::io)?
         .reply()
-        .map_err(io_error)?
+        .map_err(FlameError::io)?
         .value32()
         .map_or_else(Vec::new, Iterator::collect);
     let mut names = Vec::new();
@@ -476,9 +468,9 @@ pub fn apply_workspace_plan_to_root(
         for &window in &windows {
             let reply = conn
                 .get_property(false, window, desktop, AtomEnum::CARDINAL, 0, 1)
-                .map_err(io_error)?
+                .map_err(FlameError::io)?
                 .reply()
-                .map_err(io_error)?;
+                .map_err(FlameError::io)?;
             let Some(value) = reply.value32().and_then(|mut values| values.next()) else {
                 continue;
             };
@@ -490,7 +482,7 @@ pub fn apply_workspace_plan_to_root(
                     AtomEnum::CARDINAL,
                     &[next],
                 )
-                .map_err(io_error)?;
+                .map_err(FlameError::io)?;
             }
         }
         conn.change_property32(
@@ -500,9 +492,9 @@ pub fn apply_workspace_plan_to_root(
             AtomEnum::CARDINAL,
             &[plan.new_count as u32],
         )
-        .map_err(io_error)?;
+        .map_err(FlameError::io)?;
         conn.change_property8(xproto::PropMode::REPLACE, root, names_atom, utf8, &names)
-            .map_err(io_error)?;
+            .map_err(FlameError::io)?;
         conn.change_property32(
             xproto::PropMode::REPLACE,
             root,
@@ -510,14 +502,14 @@ pub fn apply_workspace_plan_to_root(
             AtomEnum::CARDINAL,
             &[plan.new_active as u32],
         )
-        .map_err(io_error)?;
+        .map_err(FlameError::io)?;
         Ok(())
     };
-    conn.grab_server().map_err(io_error)?;
+    conn.grab_server().map_err(FlameError::io)?;
     let result = writes();
-    conn.ungrab_server().map_err(io_error)?;
+    conn.ungrab_server().map_err(FlameError::io)?;
     result?;
-    conn.flush().map_err(io_error)
+    conn.flush().map_err(FlameError::io)
 }
 
 #[cfg(test)]

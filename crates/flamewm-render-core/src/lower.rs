@@ -63,10 +63,14 @@ pub fn blur_radius_px(opacity_percent: u8, blur_percent: u8) -> f32 {
     f32::from(blur_percent.min(100)) / 100.0 * MAX_BLUR_RADIUS_PX
 }
 
-/// How much of a rect survives the clip stack.
-enum Visible {
+/// Visible part of one primitive under the active clip stack.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Visible {
+    /// Entirely inside every clip: draw unchanged.
     Whole,
+    /// Entirely outside at least one clip: draw nothing.
     Hidden,
+    /// Cut by a clip: draw only this device rect.
     Part(Rect),
 }
 
@@ -102,7 +106,8 @@ pub fn stack_bounds(stack: &[Rect]) -> Option<Rect> {
     iter.try_fold(first, intersect)
 }
 
-fn visible_under(rect: Rect, stack: &[Rect]) -> Visible {
+/// Classifies `rect` against the clip stack. An empty stack leaves it whole.
+pub fn visible_under(rect: Rect, stack: &[Rect]) -> Visible {
     if stack.is_empty() {
         return Visible::Whole;
     }

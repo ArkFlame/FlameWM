@@ -1,5 +1,4 @@
 use std::env;
-use std::path::{Path, PathBuf};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_ui_core::glass::{self, MaterialRole, RendererCaps};
@@ -49,20 +48,8 @@ fn window_backdrop(snapshot: Option<&SettingsSnapshot>) -> WindowBackdrop {
 }
 
 /// Packaged asset root for the default wallpaper: the install prefix, else the source checkout.
-fn packaged_root() -> PathBuf {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    let installed = env::current_exe().ok().and_then(|exe| {
-        let bin = exe.parent()?;
-        let usr = bin.parent()?;
-        (bin.file_name()? == "bin" && usr.file_name()? == "usr").then(|| usr.join("share/flamewm"))
-    });
-    installed
-        .filter(|root| root.join("assets").is_dir())
-        .unwrap_or(source)
+fn packaged_root() -> std::path::PathBuf {
+    flamewm_api::paths::packaged_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
 }
 
 #[cfg(test)]

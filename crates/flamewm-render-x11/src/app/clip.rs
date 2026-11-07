@@ -3,34 +3,9 @@
 //! The XRender and Xft draws do not inherit the GC clip, so each primitive is
 //! clipped here against the retained `PushClip` stack before it is drawn.
 
+#[cfg(test)]
 use flamewm_render_core::Rect;
-pub(crate) use flamewm_render_core::lower::{intersect, same_rect, stack_bounds};
-
-/// Visible part of one primitive under the active clip stack.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum Visible {
-    /// Entirely inside every clip: draw unchanged.
-    Whole,
-    /// Entirely outside at least one clip: draw nothing.
-    Hidden,
-    /// Cut by a clip: draw only this device rect.
-    Part(Rect),
-}
-
-/// Classifies `rect` against the clip stack. An empty stack leaves it whole.
-pub(crate) fn visible_under(rect: Rect, stack: &[Rect]) -> Visible {
-    if stack.is_empty() {
-        return Visible::Whole;
-    }
-    let Some(bounds) = stack_bounds(stack) else {
-        return Visible::Hidden;
-    };
-    match intersect(rect, bounds) {
-        None => Visible::Hidden,
-        Some(part) if same_rect(part, rect) => Visible::Whole,
-        Some(part) => Visible::Part(part),
-    }
-}
+pub(crate) use flamewm_render_core::lower::{intersect, stack_bounds, visible_under, Visible};
 
 /// The four edge bands of a `width`-thick border inside `rect`: top, bottom, left, right.
 /// Bands overlap at the corners only when `width` exceeds half the smaller side.

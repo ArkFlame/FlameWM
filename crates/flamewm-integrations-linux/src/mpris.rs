@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::network_manager::{item_bool, item_string, one_string, unsupported, unwrap_variant};
+use crate::network_manager::{item_bool, item_string, one_string, unwrap_variant};
 use dbus::arg::messageitem::MessageItem;
 use dbus::{Message, MessageType};
 use flamewm_api::system::{MediaSnapshot, PlaybackState, SystemAction};
@@ -183,7 +183,7 @@ impl MprisProvider {
             }
             SystemAction::Next { bus_name } => (MediaIntent::Next { bus_name }, "Next"),
             SystemAction::Previous { bus_name } => (MediaIntent::Previous { bus_name }, "Previous"),
-            _ => return Err(unsupported("system action is not an MPRIS action")),
+            _ => return Err(FlameError::unsupported("system action is not an MPRIS action")),
         };
         let intent = self.controller.request(intent, snapshot.generation)?;
         let bus_name = match intent {

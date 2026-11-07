@@ -107,7 +107,7 @@ impl Service {
             | SystemAction::CancelNetworkSecret { .. }
             | SystemAction::Disconnect
             | SystemAction::Scan => network_action(&network_for_actions, action, &snapshot),
-            _ => Err(unsupported(
+            _ => Err(FlameError::unsupported(
                 "the Wayland compositor does not integrate media providers yet",
             )),
         }));

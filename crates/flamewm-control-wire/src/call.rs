@@ -373,7 +373,7 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
             "SetEdge",
             vec![
                 WireValue::String(output.as_str().to_owned()),
-                WireValue::String(edge_name(*edge).to_owned()),
+                WireValue::String(edge.as_str().to_owned()),
                 WireValue::U64(*expected_revision),
             ],
         ),

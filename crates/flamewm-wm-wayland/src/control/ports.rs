@@ -155,19 +155,19 @@ impl DisplayPort for WaylandDesktop {
     }
 
     fn apply_mode(&mut self, _output: &OutputId, _mode: ModeId) -> FlameResult<TransactionId> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "nested compositor output mode is fixed by the host window",
         ))
     }
 
     fn keep_mode(&mut self, _transaction: TransactionId) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "nested compositor output mode is fixed by the host window",
         ))
     }
 
     fn revert_mode(&mut self, _transaction: TransactionId) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "nested compositor output mode is fixed by the host window",
         ))
     }
@@ -221,7 +221,7 @@ impl MainLoopPort for WaylandDesktop {
         _events: FdEvents,
         _callback: FdCallback,
     ) -> FlameResult<FdHandle> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "extra descriptors are driven by the compositor loop, not the engine",
         ))
     }
@@ -234,7 +234,7 @@ impl MainLoopPort for WaylandDesktop {
         _callback: TimerCallback,
         _repeat: bool,
     ) -> FlameResult<TimerHandle> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "engine timers are driven by the compositor loop, not the engine",
         ))
     }
@@ -242,7 +242,7 @@ impl MainLoopPort for WaylandDesktop {
     fn remove_timer(&mut self, _handle: TimerHandle) {}
 
     fn defer(&mut self, _callback: TimerCallback) -> FlameResult<TimerHandle> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "engine deferred callbacks are not available on the Wayland compositor",
         ))
     }
@@ -327,7 +327,7 @@ impl SessionPort for WaylandDesktop {
             }
             SessionAction::Lock
             | SessionAction::LockPreview
-            | SessionAction::ScreensaverPreview => Err(unsupported(
+            | SessionAction::ScreensaverPreview => Err(FlameError::unsupported(
                 "the Wayland compositor has no session lock or screensaver yet",
             )),
         }
@@ -336,13 +336,13 @@ impl SessionPort for WaylandDesktop {
 
 impl BackgroundPort for WaylandDesktop {
     fn project_background(&mut self, _state: &BackgroundState) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "the Wayland compositor does not project wallpapers yet",
         ))
     }
 
     fn reload_background(&mut self) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "the Wayland compositor does not project wallpapers yet",
         ))
     }
@@ -350,13 +350,13 @@ impl BackgroundPort for WaylandDesktop {
 
 impl TrayPort for WaylandDesktop {
     fn set_tray_owner(&mut self, _output: &OutputId) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "the Wayland compositor does not implement system tray ownership yet",
         ))
     }
 
     fn clear_tray_owner(&mut self) -> FlameResult<()> {
-        Err(unsupported(
+        Err(FlameError::unsupported(
             "the Wayland compositor does not implement system tray ownership yet",
         ))
     }

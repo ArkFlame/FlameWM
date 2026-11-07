@@ -8,7 +8,6 @@ use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -217,10 +216,10 @@ impl Application {
     }
     fn paint_theme(&self, doc: &mut impl UiDocumentAccess, accent: u32) -> Result<(), String> {
         let surface = surface_fill(&self.theme);
-        doc.background("task-manager", rgba(surface.rgb, surface.alpha))?;
+        doc.background("task-manager", UiColor::from_rgb(surface.rgb, surface.alpha))?;
         flamewm_ui_x11::surface_style::project_surface_outline(doc, "task-manager", &self.theme)?;
-        doc.color_variable("--accent", rgba(accent, 255))?;
-        doc.color_variable("--accent-soft", rgba(accent, 42))?;
+        doc.color_variable("--accent", UiColor::from_rgb(accent, 255))?;
+        doc.color_variable("--accent-soft", UiColor::from_rgb(accent, 42))?;
         // Text and overlay tokens follow the appearance; the root defaults in task-manager.css are Dark.
         flamewm_ui_document::appearance_tokens::project_appearance_tokens(doc, &self.theme)?;
         doc.color_variable(
@@ -229,10 +228,10 @@ impl Application {
         )?;
         let menu = menu_surface(&self.theme);
         for id in ["context", "confirm"] {
-            doc.background(id, rgba(menu.fill.rgb, menu.fill.alpha.max(242)))?;
+            doc.background(id, UiColor::from_rgb(menu.fill.rgb, menu.fill.alpha.max(242)))?;
             doc.corner_radius(id, menu.radius as f32)?;
         }
-        doc.foreground("menu-end-text", rgba(DANGER_RGB, 255))
+        doc.foreground("menu-end-text", UiColor::from_rgb(DANGER_RGB, 255))
     }
     fn paint_metrics(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let snapshot = &self.snapshot;
@@ -269,7 +268,7 @@ impl Application {
             doc.text(&format!("core-pct-{i}"), format!("{value:.0}%"))?;
             let fill = format!("cpu-fill-{i}");
             doc.size(&fill, track * value as f32 / 100.0, 7.0)?;
-            doc.background(&fill, rgba(load_color(value), 255))?;
+            doc.background(&fill, UiColor::from_rgb(load_color(value), 255))?;
         }
         doc.text("cores-count", format!("{count} threads"))?;
         doc.text("cpu-total", format!("{:.0}%", snapshot.cpu_total))?;
@@ -417,7 +416,7 @@ impl Application {
             self.rows.push((p.pid, p.start));
             let id = |name: &str| format!("r-{slot}-{name}");
             doc.text(&id("name"), display_name(p))?;
-            doc.background(&id("dot"), rgba(state_color(p.state), 255))?;
+            doc.background(&id("dot"), UiColor::from_rgb(state_color(p.state), 255))?;
             doc.text(&id("pid"), p.pid.to_string())?;
             doc.text_ref(&id("user"), &p.user)?;
             doc.text_ref(&id("state"), state_name(p.state))?;
@@ -429,13 +428,13 @@ impl Application {
             doc.text(&id("mem"), memory_text(p.rss_kib))?;
             doc.text_ref(&id("cmd"), &p.command)?;
             let memory_share = 100.0 * p.rss_kib as f64 / total as f64;
-            doc.background(&id("cpu"), rgba(HEAT_RGB, heat_alpha(p.cpu / 50.0)))?;
-            doc.background(&id("mem"), rgba(HEAT_RGB, heat_alpha(memory_share / 10.0)))?;
+            doc.background(&id("cpu"), UiColor::from_rgb(HEAT_RGB, heat_alpha(p.cpu / 50.0)))?;
+            doc.background(&id("mem"), UiColor::from_rgb(HEAT_RGB, heat_alpha(memory_share / 10.0)))?;
             let row = format!("row-{slot}");
             if self.selected == Some((p.pid, p.start)) {
-                doc.background(&row, rgba(accent, 60))?;
+                doc.background(&row, UiColor::from_rgb(accent, 60))?;
             } else if self.hovered == Some(slot) {
-                doc.background(&row, rgba(accent, 32))?;
+                doc.background(&row, UiColor::from_rgb(accent, 32))?;
             } else {
                 doc.background_clear(&row)?;
             }
@@ -524,9 +523,9 @@ impl Application {
                     let id = format!("row-{slot}");
                     if let Some((pid, start)) = self.rows.get(slot).copied() {
                         if self.selected == Some((pid, start)) {
-                            doc.background(&id, rgba(accent, 60))?;
+                            doc.background(&id, UiColor::from_rgb(accent, 60))?;
                         } else if next == Some(slot) {
-                            doc.background(&id, rgba(accent, 32))?;
+                            doc.background(&id, UiColor::from_rgb(accent, 32))?;
                         } else {
                             doc.background_clear(&id)?;
                         }
@@ -786,16 +785,7 @@ fn fraction_width(used: u64, total: u64, width: u32) -> f32 {
     } else {
         (used.min(total) as f64 / total as f64 * f64::from(width)) as f32
     }
-}
-fn rgba(rgb: u32, alpha: u8) -> UiColor {
-    UiColor {
-        r: (rgb >> 16) as u8,
-        g: (rgb >> 8) as u8,
-        b: rgb as u8,
-        a: alpha,
-    }
-}
-fn accent_color(snapshot: &SettingsSnapshot) -> u32 {
+}fn accent_color(snapshot: &SettingsSnapshot) -> u32 {
     let name = match snapshot.values.get("accent") {
         Some(SettingValue::Text(text)) => text.as_str(),
         _ => "#3daee9",
@@ -829,20 +819,8 @@ fn initial_settings() -> SettingsSnapshot {
         .unwrap_or_else(|| SettingsSnapshot::new(0))
 }
 
-fn packaged_root() -> PathBuf {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    let installed = std::env::current_exe().ok().and_then(|exe| {
-        let bin = exe.parent()?;
-        let usr = bin.parent()?;
-        (bin.file_name()? == "bin" && usr.file_name()? == "usr").then(|| usr.join("share/flamewm"))
-    });
-    installed
-        .filter(|root| root.join("assets").is_dir())
-        .unwrap_or(source)
+fn packaged_root() -> std::path::PathBuf {
+    flamewm_api::paths::packaged_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
 }
 fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::WindowBackdrop {
     let text = |key: &str| match snapshot.values.get(key) {

@@ -96,6 +96,31 @@ pub fn accent_rgb(snapshot: &SettingsSnapshot) -> u32 {
     }
 }
 
+/// Typed readers: the stored value when its variant matches, else `default`.
+#[must_use]
+pub fn setting_bool(snapshot: &SettingsSnapshot, key: &str, default: bool) -> bool {
+    match snapshot.values.get(key) {
+        Some(SettingValue::Boolean(value)) => *value,
+        _ => default,
+    }
+}
+
+#[must_use]
+pub fn setting_percent(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
+    match snapshot.values.get(key) {
+        Some(SettingValue::Percent(value)) => *value,
+        _ => default,
+    }
+}
+
+#[must_use]
+pub fn setting_integer(snapshot: &SettingsSnapshot, key: &str, default: i64) -> i64 {
+    match snapshot.values.get(key) {
+        Some(SettingValue::Integer(value)) => *value,
+        _ => default,
+    }
+}
+
 #[cfg(test)]
 mod accent_tests {
     use super::{DEFAULT_ACCENT_RGB, SettingValue, SettingsSnapshot, accent_rgb};

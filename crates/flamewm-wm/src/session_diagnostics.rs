@@ -10,7 +10,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use flamewm_session_core::SessionPaths;
 use flamewm_session_core::diagnostics::{
@@ -77,7 +76,7 @@ fn open_log(path: &Path) -> std::io::Result<File> {
 
 /// Writes one line to the session log and to stderr (which the display manager captures).
 pub fn log(component: &str, message: &str) {
-    let line = log_line(unix_seconds(), component, message);
+    let line = log_line(flamewm_api::clock::unix_seconds(), component, message);
     eprintln!("{line}");
     if let Some(session_log) = SESSION_LOG.get() {
         let mut file: &File = &session_log.file;
@@ -102,12 +101,6 @@ pub fn log_location() -> Option<(PathBuf, bool)> {
     SESSION_LOG
         .get()
         .map(|log| (log.path.clone(), log.fallback))
-}
-
-fn unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs())
 }
 
 /// An executable regular file.

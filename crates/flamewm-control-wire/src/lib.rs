@@ -47,7 +47,7 @@ pub use encode::*;
 mod system;
 use system::*;
 mod action;
-pub use action::*;
+pub(crate) use action::*;
 #[cfg(test)]
 mod tests;
 

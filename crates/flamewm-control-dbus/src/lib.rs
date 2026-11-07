@@ -107,11 +107,11 @@ fn handle_call<E: EnginePorts>(
 ) -> FlameResult<(Option<Message>, Vec<ControlSignal>)> {
     let interface = message
         .interface()
-        .ok_or_else(|| invalid("missing interface"))?
+        .ok_or_else(|| FlameError::invalid("missing interface"))?
         .to_string();
     let member = message
         .member()
-        .ok_or_else(|| invalid("missing member"))?
+        .ok_or_else(|| FlameError::invalid("missing member"))?
         .to_string();
     let args = wire_args(message.get_items())?;
     let call = WireCall::new(interface, member, args).with_now_ms(now_ms);
@@ -275,7 +275,7 @@ fn name_owner_lost(message: &Message) -> Option<String> {
 fn send_signal(pump: &BusPump, signal: &ControlSignal) -> FlameResult<()> {
     let signal = encode_signal(signal);
     let mut message = Message::new_signal(OBJECT_PATH, &signal.interface, &signal.member)
-        .map_err(|error| invalid(&error))?;
+        .map_err(|error| FlameError::invalid(&error))?;
     append_wire_values(&mut message, &signal.args)?;
     pump.send(message).map(|_| ())
 }
@@ -310,7 +310,7 @@ impl ControlClient {
             &call.interface,
             &call.member,
         )
-        .map_err(|error| invalid(&error))?;
+        .map_err(|error| FlameError::invalid(&error))?;
         append_wire_values(&mut message, &call.args)?;
         let reply = self
             .pump
@@ -364,7 +364,7 @@ fn add_match_rule(pump: &BusPump, rule: &str) -> FlameResult<()> {
         "org.freedesktop.DBus",
         "AddMatch",
     )
-    .map_err(|error| invalid(&error))?;
+    .map_err(|error| FlameError::invalid(&error))?;
     let call = call.append1(rule);
     pump.send_with_reply(call, Duration::from_secs(5))
         .map(|_| ())
@@ -397,7 +397,7 @@ fn append_wire_values(message: &mut Message, values: &[WireValue]) -> FlameResul
         .iter()
         .map(to_item)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| invalid(&error))?;
+        .map_err(|error| FlameError::invalid(&error))?;
     message.append_items(&items);
     Ok(())
 }
@@ -472,13 +472,13 @@ fn from_item(item: MessageItem) -> Result<WireValue, FlameError> {
             let mut out = std::collections::BTreeMap::new();
             for (key, value) in values.into_vec() {
                 let MessageItem::Str(key) = key else {
-                    return Err(invalid("D-Bus dictionary key must be string"));
+                    return Err(FlameError::invalid("D-Bus dictionary key must be string"));
                 };
                 out.insert(key, from_item(value)?);
             }
             Ok(WireValue::Dict(out))
         }
-        _ => Err(invalid("unsupported D-Bus value")),
+        _ => Err(FlameError::invalid("unsupported D-Bus value")),
     }
 }
 
@@ -486,9 +486,6 @@ fn wire_args(items: Vec<MessageItem>) -> FlameResult<Vec<WireValue>> {
     items.into_iter().map(from_item).collect()
 }
 
-fn invalid(message: &str) -> FlameError {
-    FlameError::new(ErrorCode::InvalidArgument, message)
-}
 fn to_flame_error(error: ControlError) -> FlameError {
     FlameError::new(error.code, error.message)
 }

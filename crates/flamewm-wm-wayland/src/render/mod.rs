@@ -1110,17 +1110,7 @@ mod renderer_class_tests {
 }
 
 pub(crate) fn packaged_root() -> std::path::PathBuf {
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| {
-            let bin = exe.parent()?;
-            let usr = bin.parent()?;
-            (bin.file_name()? == "bin" && usr.file_name()? == "usr")
-                .then(|| usr.join("share/flamewm"))
-        })
-        .filter(|root| root.join("assets").is_dir())
-        .unwrap_or(manifest)
+    flamewm_api::paths::packaged_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
 }
 
 #[cfg(test)]

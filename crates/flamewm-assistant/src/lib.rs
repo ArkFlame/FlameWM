@@ -156,15 +156,6 @@ impl model::Pager for ChatStore {
     }
 }
 
-fn rgba(rgb: u32, alpha: u8) -> UiColor {
-    UiColor {
-        r: ((rgb >> 16) & 0xff) as u8,
-        g: ((rgb >> 8) & 0xff) as u8,
-        b: (rgb & 0xff) as u8,
-        a: alpha,
-    }
-}
-
 fn fallback_models() -> Vec<String> {
     FALLBACK_MODELS.iter().map(|id| (*id).to_owned()).collect()
 }
@@ -768,9 +759,9 @@ impl Assistant {
 
     fn paint(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let surface = surface_fill(&self.theme);
-        doc.background("assistant", rgba(surface.rgb, surface.alpha))?;
+        doc.background("assistant", UiColor::from_rgb(surface.rgb, surface.alpha))?;
         flamewm_ui_x11::surface_style::project_surface_outline(doc, "assistant", &self.theme)?;
-        doc.color_variable("--accent", rgba(accent(&self.theme), 255))?;
+        doc.color_variable("--accent", UiColor::from_rgb(accent(&self.theme), 255))?;
         self.paint_chat(doc)
     }
 
@@ -855,9 +846,9 @@ impl Assistant {
         doc.visible("stop", self.working)?;
         doc.visible("tts", self.speech_out)?;
         let tts = if self.tts_on {
-            rgba(accent(&self.theme), 255)
+            UiColor::from_rgb(accent(&self.theme), 255)
         } else {
-            rgba(KEY_TINT, 36)
+            UiColor::from_rgb(KEY_TINT, 36)
         };
         doc.background("tts", tts)?;
         doc.text("notice", or_blank(self.notice.clone()))
@@ -1161,20 +1152,8 @@ fn initial_settings() -> SettingsSnapshot {
         .unwrap_or_else(|| SettingsSnapshot::new(0))
 }
 
-fn packaged_root() -> PathBuf {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    let installed = env::current_exe().ok().and_then(|exe| {
-        let bin = exe.parent()?;
-        let usr = bin.parent()?;
-        (bin.file_name()? == "bin" && usr.file_name()? == "usr").then(|| usr.join("share/flamewm"))
-    });
-    installed
-        .filter(|root| root.join("assets").is_dir())
-        .unwrap_or(source)
+fn packaged_root() -> std::path::PathBuf {
+    flamewm_api::paths::packaged_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
 }
 
 fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::WindowBackdrop {

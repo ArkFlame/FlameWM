@@ -50,6 +50,17 @@ impl FlameError {
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Unavailable, message)
     }
+
+    #[must_use]
+    pub fn unsupported(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Unsupported, message)
+    }
+
+    /// Wraps any displayable I/O or protocol failure as `IoFailure`.
+    #[must_use]
+    pub fn io(error: impl fmt::Display) -> Self {
+        Self::new(ErrorCode::IoFailure, error.to_string())
+    }
 }
 
 impl fmt::Display for FlameError {

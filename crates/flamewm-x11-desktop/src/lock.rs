@@ -115,17 +115,17 @@ pub(super) fn supervise_lock(program: PathBuf, mut child: Child) {
 pub fn start_lock_screen() -> FlameResult<()> {
     match current_lock_program() {
         LockProgram::Screen(program) => {
-            let child = spawn_lock_process(&program, &[]).map_err(io_error)?;
+            let child = spawn_lock_process(&program, &[]).map_err(FlameError::io)?;
             thread::Builder::new()
                 .name("flamewm-lock-supervisor".to_owned())
                 .spawn(move || supervise_lock(program, child))
                 .map(|_| ())
-                .map_err(io_error)
+                .map_err(FlameError::io)
         }
         LockProgram::Loginctl => Command::new("loginctl")
             .arg("lock-session")
             .status()
-            .map_err(io_error)?
+            .map_err(FlameError::io)?
             .success()
             .then_some(())
             .ok_or_else(|| {
@@ -174,7 +174,7 @@ pub(super) fn start_preview(slot: &Mutex<Option<Child>>, args: &[&str]) -> Flame
     match current_lock_program() {
         LockProgram::Screen(program) => {
             let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
-            spawn_preview_once(&mut slot, &program, args).map_err(io_error)
+            spawn_preview_once(&mut slot, &program, args).map_err(FlameError::io)
         }
         LockProgram::Loginctl => Err(FlameError::new(
             ErrorCode::NotFound,

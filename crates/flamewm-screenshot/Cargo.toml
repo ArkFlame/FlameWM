@@ -11,6 +11,7 @@ name = "flamewm-screenshot"
 path = "src/main.rs"
 
 [dependencies]
+flamewm-api = { path = "../flamewm-api" }
 x11rb = { workspace = true, features = ["randr", "xfixes"] }
 png = "=0.18.1"
 

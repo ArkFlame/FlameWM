@@ -933,6 +933,7 @@ version = "0.1.7"
 name = "flamewm-screenshot"
 version = "0.1.7"
 dependencies = [
+ "flamewm-api",
  "png",
  "x11rb 0.14.0",
 ]

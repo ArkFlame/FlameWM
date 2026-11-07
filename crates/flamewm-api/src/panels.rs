@@ -14,6 +14,17 @@ impl PanelEdge {
     pub const fn is_horizontal(self) -> bool {
         matches!(self, Self::Bottom | Self::Top)
     }
+
+    /// Lowercase config name (`bottom`, `top`, `left`, `right`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bottom => "bottom",
+            Self::Top => "top",
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

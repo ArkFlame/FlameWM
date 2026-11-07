@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::io;
 use std::path::Path;
 use std::time::Duration;
 
@@ -701,7 +700,7 @@ impl ConfigStore {
                 "settings persistence path is empty",
             ));
         }
-        write_atomic_text(path, &Self::serialize(snapshot)).map_err(io_error)
+        write_atomic_text(path, &Self::serialize(snapshot)).map_err(FlameError::io)
     }
 }
 
@@ -1083,16 +1082,6 @@ fn parse<T: std::str::FromStr>(value: &str, name: &str) -> FlameResult<T> {
         .map_err(|_| FlameError::new(ErrorCode::InvalidArgument, format!("bad {name}")))
 }
 
-#[must_use]
-pub const fn panel_edge_name(edge: PanelEdge) -> &'static str {
-    match edge {
-        PanelEdge::Bottom => "bottom",
-        PanelEdge::Top => "top",
-        PanelEdge::Left => "left",
-        PanelEdge::Right => "right",
-    }
-}
-
 fn parse_panel_edge(value: &str) -> Option<PanelEdge> {
     match value {
         "bottom" => Some(PanelEdge::Bottom),
@@ -1137,10 +1126,6 @@ fn invalid<T>(message: &'static str) -> FlameResult<T> {
 
 fn invalid_owned<T>(message: String) -> FlameResult<T> {
     Err(FlameError::new(ErrorCode::InvalidArgument, message))
-}
-
-fn io_error(error: io::Error) -> FlameError {
-    FlameError::new(ErrorCode::IoFailure, error.to_string())
 }
 
 mod product_validate;

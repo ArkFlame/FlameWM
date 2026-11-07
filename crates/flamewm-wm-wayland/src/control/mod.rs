@@ -115,10 +115,6 @@ pub enum Command {
     Logout,
 }
 
-fn unsupported(message: &'static str) -> FlameError {
-    FlameError::new(ErrorCode::Unsupported, message)
-}
-
 /// The desktop engine behind `PlatformHost`. It holds only shared handles, never `State`.
 pub struct WaylandDesktop {
     mirror: Rc<RefCell<Mirror>>,

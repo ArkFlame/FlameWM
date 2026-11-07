@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flamewm_api::ports::FdEvents;
 use flamewm_control_dbus::{ControlClient, ControlSignalClient};
@@ -50,6 +50,8 @@ struct NotificationHost {
     center_view: notification_center::CenterView,
     /// History revision the center was last projected from; `None` forces a projection.
     center_revision: Option<u64>,
+    /// Set when an outside press closed the centre; consumes the same click's opener release.
+    closed_by_press: Option<Instant>,
 }
 
 impl NotificationHost {
@@ -135,6 +137,7 @@ impl NotificationHost {
             center_open: false,
             center_view: notification_center::CenterView::default(),
             center_revision: None,
+            closed_by_press: None,
         }))
     }
 
@@ -150,6 +153,19 @@ impl NotificationHost {
     }
 
     fn handle_event(&mut self, event: &SurfaceEvent, runtime: &mut SurfaceRuntime) -> bool {
+        if event.action.phase == flamewm_ui_x11::ActionPhase::Release
+            && event.surface == self.center
+            && notification_center::outside_press_closes(
+                &event.action.action,
+                event.action.inside,
+                self.center_open,
+            )
+        {
+            // Observed root press: the centre closes and the click still reaches the window under it.
+            self.closed_by_press = Some(Instant::now());
+            self.toggle_center(runtime);
+            return true;
+        }
         if event.action.phase != flamewm_ui_x11::ActionPhase::Release || !event.action.inside {
             return false;
         }
@@ -170,7 +186,11 @@ impl NotificationHost {
             return true;
         }
         if event.action.action == notification_center::OPEN_ACTION {
-            self.toggle_center(runtime);
+            // The bell release that closed the centre by outside press is the same click.
+            if !notification_center::latch_consumes_open(&mut self.closed_by_press, Instant::now())
+            {
+                self.toggle_center(runtime);
+            }
             return true;
         }
         if event.surface != self.surface || event.action.action != "notification.dismiss" {
@@ -781,42 +801,7 @@ fn profile_interval_secs() -> u64 {
 }
 
 fn packaged_root() -> PathBuf {
-    let manifest_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .expect("flamewm workspace root");
-    resolve_packaged_root(
-        std::env::current_exe().ok().as_deref(),
-        &manifest_root,
-        |root| root.join("assets").is_dir(),
-    )
-}
-
-// Mirrors flamewm-desktop's resolve_packaged_root: an installed
-// /usr/bin/flamewm-shell resolves to /usr/share/flamewm when it has assets/,
-// otherwise the checkout manifest root is used.
-fn resolve_packaged_root(
-    executable: Option<&Path>,
-    manifest_root: &Path,
-    assets_available: impl FnOnce(&Path) -> bool,
-) -> PathBuf {
-    executable
-        .and_then(installed_data_root)
-        .filter(|root| assets_available(root))
-        .unwrap_or_else(|| manifest_root.to_path_buf())
-}
-
-fn installed_data_root(executable: &Path) -> Option<PathBuf> {
-    let bin_dir = executable.parent()?;
-    if bin_dir.file_name()? != "bin" {
-        return None;
-    }
-    let usr_dir = bin_dir.parent()?;
-    if usr_dir.file_name()? != "usr" {
-        return None;
-    }
-    Some(usr_dir.join("share/flamewm"))
+    flamewm_api::paths::packaged_root(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
 }
 
 #[cfg(test)]

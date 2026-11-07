@@ -364,16 +364,6 @@ pub(crate) fn parse_edge(value: &str) -> Result<PanelEdge, ControlError> {
     }
 }
 
-#[must_use]
-pub const fn edge_name(edge: PanelEdge) -> &'static str {
-    match edge {
-        PanelEdge::Bottom => "bottom",
-        PanelEdge::Top => "top",
-        PanelEdge::Left => "left",
-        PanelEdge::Right => "right",
-    }
-}
-
 pub(crate) fn nullary(
     call: &WireCall,
     request: ControlRequest,

@@ -118,6 +118,19 @@ pub struct UiColor {
     pub a: u8,
 }
 
+impl UiColor {
+    /// Colour from `0xRRGGBB` with the given alpha.
+    #[must_use]
+    pub const fn from_rgb(rgb: u32, alpha: u8) -> Self {
+        Self {
+            r: ((rgb >> 16) & 0xff) as u8,
+            g: ((rgb >> 8) & 0xff) as u8,
+            b: (rgb & 0xff) as u8,
+            a: alpha,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeImage {
     pub source: String,

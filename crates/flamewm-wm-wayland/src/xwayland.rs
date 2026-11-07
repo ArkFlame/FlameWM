@@ -788,6 +788,10 @@ impl XwmHandler for State {
         }
     }
 
+    fn allow_selection_access(&mut self, _xwm: XwmId, selection: SelectionTarget) -> bool {
+        x11_may_read_selection(selection)
+    }
+
     fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
         if matches!(selection, SelectionTarget::Clipboard) {
             set_data_device_selection(&self.display, &self.seat, mime_types, ());
@@ -808,6 +812,13 @@ impl XwmHandler for State {
     }
 }
 
+/// X11 clients may read only the clipboard: it is the one selection bridged to Wayland (`send_selection`
+/// and `new_selection` above). Smithay denies every X11 read unless this returns true, so answering
+/// `false` for `CLIPBOARD` leaves X11 apps unable to paste Wayland clipboard content.
+const fn x11_may_read_selection(selection: SelectionTarget) -> bool {
+    matches!(selection, SelectionTarget::Clipboard)
+}
+
 /// Edge flags for an XWM `_NET_WM_MOVERESIZE` resize request.
 fn xwm_edge(edge: ResizeEdge) -> Edge {
     let (left, right, top, bottom) = match edge {
@@ -825,6 +836,18 @@ fn xwm_edge(edge: ResizeEdge) -> Edge {
         right,
         top,
         bottom,
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::x11_may_read_selection;
+    use smithay::wayland::selection::SelectionTarget;
+
+    #[test]
+    fn x11_reads_are_allowed_only_for_the_bridged_clipboard() {
+        assert!(x11_may_read_selection(SelectionTarget::Clipboard));
+        assert!(!x11_may_read_selection(SelectionTarget::Primary));
     }
 }
 

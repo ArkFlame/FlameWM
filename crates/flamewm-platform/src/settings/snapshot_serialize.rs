@@ -45,7 +45,7 @@ impl ConfigStore {
             snapshot
                 .panel_edges
                 .iter()
-                .map(|(output, edge)| format!("panel.edge.{output}={}", panel_edge_name(*edge))),
+                .map(|(output, edge)| format!("panel.edge.{output}={}", edge.as_str())),
         );
         lines.extend(
             snapshot
