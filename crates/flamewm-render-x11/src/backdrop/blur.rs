@@ -1,14 +1,4 @@
-/// Blur radius at 100 percent (`blur / 100 * 24`), shared by every pseudo-transparency surface.
-pub const MAX_BLUR_RADIUS_PX: f32 = 24.0;
-
-/// Radius for a blur percent. Blur only applies below 100% opacity, so 100% never blurs.
-#[must_use]
-pub fn blur_radius_px(opacity_percent: u8, blur_percent: u8) -> f32 {
-    if opacity_percent >= 100 {
-        return 0.0;
-    }
-    f32::from(blur_percent.min(100)) / 100.0 * MAX_BLUR_RADIUS_PX
-}
+pub use flamewm_render_core::lower::{MAX_BLUR_RADIUS_PX, blur_radius_px};
 
 /// Blur runs on a snapshot shrunk by this factor once the radius is large: the blur cost falls with
 /// the pixel count, and the soft result is upscaled bilinearly. Below twice the factor the blur is

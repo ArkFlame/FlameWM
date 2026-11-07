@@ -4,6 +4,7 @@
 //! clipped here against the retained `PushClip` stack before it is drawn.
 
 use flamewm_render_core::Rect;
+pub(crate) use flamewm_render_core::lower::{intersect, same_rect, stack_bounds};
 
 /// Visible part of one primitive under the active clip stack.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -14,40 +15,6 @@ pub(crate) enum Visible {
     Hidden,
     /// Cut by a clip: draw only this device rect.
     Part(Rect),
-}
-
-/// Overlap of two rects, or `None` when they do not share area.
-pub(crate) fn intersect(a: Rect, b: Rect) -> Option<Rect> {
-    let x1 = a.x.max(b.x);
-    let y1 = a.y.max(b.y);
-    let x2 = (a.x + a.width).min(b.x + b.width);
-    let y2 = (a.y + a.height).min(b.y + b.height);
-    (x2 > x1 && y2 > y1).then_some(Rect {
-        x: x1,
-        y: y1,
-        width: x2 - x1,
-        height: y2 - y1,
-    })
-}
-
-/// Intersection of every clip in the stack; `None` when the stack is empty
-/// or the clips share no area.
-pub(crate) fn stack_bounds(stack: &[Rect]) -> Option<Rect> {
-    let mut iter = stack.iter().copied();
-    let first = iter.next()?;
-    iter.try_fold(first, intersect)
-}
-
-/// Sub-pixel slack for edge equality: a child that fills its clip exactly (a hover
-/// fill inside a capsule) can differ by float rounding after device scaling. Treating
-/// that as `Part` would drop the fill's corner radius and paint a square hover.
-const EDGE_EPSILON: f32 = 0.01;
-
-fn same_rect(a: Rect, b: Rect) -> bool {
-    (a.x - b.x).abs() <= EDGE_EPSILON
-        && (a.y - b.y).abs() <= EDGE_EPSILON
-        && (a.width - b.width).abs() <= EDGE_EPSILON
-        && (a.height - b.height).abs() <= EDGE_EPSILON
 }
 
 /// Classifies `rect` against the clip stack. An empty stack leaves it whole.

@@ -174,8 +174,10 @@ pub fn layout_styled(
         let collapsed = collapse_whitespace(paragraph);
         if collapsed.is_empty() {
             lines.push(TextLine::default());
-        } else if wrap == TextWrap::NoWrap && avail_ok {
-            if overflow == TextOverflow::Ellipsis {
+        } else if wrap == TextWrap::NoWrap {
+            // A degenerate width (0 from an explicit `width:0`) must still measure one line:
+            // the greedy path below would split the run into one line per character.
+            if overflow == TextOverflow::Ellipsis && avail_ok {
                 push_ellipsized(&mut lines, &collapsed, size, avail_width, weight);
             } else {
                 push_measured(&mut lines, collapsed, size, weight);
@@ -399,6 +401,21 @@ mod tests {
     fn nowrap_keeps_single_line_per_paragraph() {
         let layout = layout_text("a b c\nd e", 10.0, 1.0, TextWrap::NoWrap, false);
         assert_eq!(texts(&layout), vec!["a b c", "d e"]);
+    }
+
+    #[test]
+    fn nowrap_zero_width_measures_one_line_not_one_per_char() {
+        let layout = layout_styled(
+            "Renamed",
+            12.0,
+            400,
+            0.0,
+            TextWrap::NoWrap,
+            false,
+            TextOverflow::Clip,
+        );
+        assert_eq!(layout.lines.len(), 1);
+        assert_eq!(layout.height, layout.line_height);
     }
 
     #[test]

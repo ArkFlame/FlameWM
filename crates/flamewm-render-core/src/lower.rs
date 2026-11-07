@@ -74,7 +74,7 @@ enum Visible {
 /// rounding after device scaling. Treating that as a partial cut would drop its corner radius.
 const EDGE_EPSILON: f32 = 0.01;
 
-fn same_rect(a: Rect, b: Rect) -> bool {
+pub fn same_rect(a: Rect, b: Rect) -> bool {
     (a.x - b.x).abs() <= EDGE_EPSILON
         && (a.y - b.y).abs() <= EDGE_EPSILON
         && (a.width - b.width).abs() <= EDGE_EPSILON
@@ -82,7 +82,7 @@ fn same_rect(a: Rect, b: Rect) -> bool {
 }
 
 /// Overlap of two rects, or `None` when they do not share area.
-fn intersect(a: Rect, b: Rect) -> Option<Rect> {
+pub fn intersect(a: Rect, b: Rect) -> Option<Rect> {
     let x1 = a.x.max(b.x);
     let y1 = a.y.max(b.y);
     let x2 = (a.x + a.width).min(b.x + b.width);
@@ -96,7 +96,7 @@ fn intersect(a: Rect, b: Rect) -> Option<Rect> {
 }
 
 /// Intersection of every clip on the stack.
-fn stack_bounds(stack: &[Rect]) -> Option<Rect> {
+pub fn stack_bounds(stack: &[Rect]) -> Option<Rect> {
     let mut iter = stack.iter().copied();
     let first = iter.next()?;
     iter.try_fold(first, intersect)
