@@ -398,6 +398,8 @@ pub struct State {
     pub pending_configure: Option<WindowId>,
     /// Rounded snap-target preview, shown only while a move grab targets a snap; hidden on release.
     pub snap_preview: crate::snap_preview::SnapPreview,
+    /// `showContentWhileDragging`: live window move (true) or a landing outline only (false).
+    pub show_content_while_dragging: bool,
     /// Title release that moved nothing, awaiting a possible double click (see `TitleClick`).
     pub last_title_click: Option<crate::input::TitleClick>,
     /// `focusFollowsMouse`, read once at startup: pointer entry focuses the window under it.
@@ -535,6 +537,7 @@ impl State {
             pressed_hit: None,
             pending_configure: None,
             snap_preview: Default::default(),
+            show_content_while_dragging: false,
             last_title_click: None,
             focus_follows_mouse: crate::input::saved_focus_follows_mouse(),
             super_tap: false,

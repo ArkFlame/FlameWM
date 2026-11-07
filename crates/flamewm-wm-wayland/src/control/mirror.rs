@@ -134,6 +134,7 @@ impl Service {
             state.request_redraw();
         }
         let (edge_snap, edge_px) = edge_snap_settings(&snapshot);
+        state.show_content_while_dragging = show_content_while_dragging(&snapshot);
         if state.model.edge_snap() != (edge_snap, edge_px) {
             state.model.configure_edge_snap(edge_snap, edge_px);
         }

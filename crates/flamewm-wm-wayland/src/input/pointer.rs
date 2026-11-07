@@ -116,21 +116,37 @@ impl State {
                         self.output_rect(),
                         self.model.titlebars(),
                     );
+                    let titlebars = self.model.titlebars();
                     let target = snap_target_at(self, location, activated);
-                    let frame = if target == SnapTarget::None {
-                        frame_for_client(floating, self.model.titlebars())
-                    } else {
+                    let zone = (target != SnapTarget::None).then(|| {
                         self.model
                             .snap_client_geometry(id, target, self.work_area())
                             .map_or_else(
-                                || frame_for_client(floating, self.model.titlebars()),
-                                |client| frame_for_client(client, self.model.titlebars()),
+                                || frame_for_client(floating, titlebars),
+                                |client| frame_for_client(client, titlebars),
                             )
+                    });
+                    let feedback = move_feedback(
+                        self.show_content_while_dragging,
+                        zone,
+                        floating,
+                        frame_for_client(floating, titlebars),
+                    );
+                    // Content mode moves the real window; outline mode leaves it until release.
+                    let rect_changed = feedback.live.is_some_and(|rect| {
+                        let unchanged = self.model.get(id).is_some_and(|m| m.rect == rect);
+                        self.model.set_rect(id, rect);
+                        !unchanged
+                    });
+                    if rect_changed {
+                        self.pending_configure = Some(id);
+                    }
+                    let ring_changed = match feedback.ring {
+                        Some(ring) => self.snap_preview.show(ring),
+                        None => self.snap_preview.hide(),
                     };
-                    if target == SnapTarget::None {
-                        self.snap_preview.hide();
-                    } else {
-                        self.snap_preview.show(frame);
+                    if needs_scene_rebuild(ring_changed, rect_changed) {
+                        self.request_paint();
                     }
                 }
                 Grab::Resize {

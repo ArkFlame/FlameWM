@@ -164,3 +164,38 @@ Results: CB2
 - Unit tests: `cargo test -p flamewm-clipboard -p flamewm-wm-x11` exit 0, 0 warning lines.
 - Not done: session-lock drop (no cheap hook). Value check for `secret` not implemented.
 - Probe PIDs (Xvfb, flamewm) killed. No commit.
+
+Results: SP
+- Task: snap/move preview invisible. Status: UNVERIFIED (no code change; root cause for the reported default-config case not reproduced).
+- Live repro (Xvfb :150, flamewm + flamewm-desktop, xterm, python-xlib xtest, screenshots under the scratchpad `base/shots`):
+  - Default outline mode, titlebar drag to top-left corner, top-centre and screen centre, and Meta+drag to corner: ring window mapped, accent, 2px, rounded, at the zone (797x425 / 1596x852) or frame size for a free move. Visible in screenshots.
+  - showContentWhileDragging=true, titlebar drag to top edge: ring is visible on arrival, then unmapped after the 220 ms edge dwell. Debug trace: the dwell fires a workspace switch (`move_native` to the bottom row, pointer warped to the bottom edge), and `workspace.rs` hides the preview.
+  - Outline mode, same edge dwell: switch is refused by `drag_edge.rs::defer_drag_arrival_paint` (commit carries a non-move effect), so no hide. Edge workspace switching is effectively dead in outline mode (separate defect).
+- Not changed: `snap_preview.rs`, `pointer.rs` (temporary instrumentation reverted, `git diff` empty for flamewm-wm-x11), `workspace.rs`.
+- Build: `CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-sp CARGO_BUILD_JOBS=3 cargo build -p flamewm-wm -p flamewm-wm-x11` exit 0.
+- Open: which exact visual the user lost (fill vs border, or a hidden-on-dwell case) is not confirmed. Wayland `crates/flamewm-wm-wayland/src/snap_preview.rs` not tested.
+- No commit.
+
+Results: SP2
+- Status: UNVERIFIED for the user-reported Wayland case. No product code changed (`git diff` of snap_preview.rs, input/*.rs empty; render/mod.rs diff is another worker's 25 lines). Debug hooks were reverted.
+- Harness: debug build `CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-sp2`, nested winit `WINIT_UNIX_BACKEND=x11` on Xvfb `:161`, `FLAMEWM_WAYLAND_SOCKET=sp2-flame`, probe client `examples/pointer_probe`. Host GL: Mesa Intel (hardware), same as the user log.
+- Snap ring on Wayland: titlebar drag to left edge, held: ring drawn at LeftHalf (accent 2px, 8px radius). Also with forced buffer age 1 (temporary env hack, reverted). After release the window snaps and no stale ring remains.
+- Meta+drag: works. Earlier "did not move" was a harness artifact: the nested window needed keyboard focus (`XSetInputFocus`) before XTest Super key events reached the compositor. With focus, `state.logo` is true and Meta+drag moves the window and shows the ring. No code bug found in `input/buttons.rs:129` or the modifier path.
+- Not reproduced: no partial-repaint (age>0) defect in show/move/hide.
+- Open: the user's "no preview at all" on release Intel hardware is not reproduced. Untested: winit under a Wayland host (user log shows `FLAMEWM_GL_RENDERER backend=winit`, host session is Wayland).
+- Side observation: the ring was red in one run and blue in others; sampled pixels 0xef4048 vs 0x3daee9. Likely the shared accent setting changed between runs (other worker's tests write settings). Not investigated.
+- X11 items (dwell hide, outline refusal): not started.
+- Checks: `cargo test -p flamewm-wm-wayland -p flamewm-wm-x11` EXIT 0 (12+253+544 passed, 0 warnings); `python3 -I tools/architecture_guard.py` EXIT 0 (77 ratified violations, no new).
+- Screenshots: `/tmp/claude-1000/sp2/dbg_edge_hold.png`, `/tmp/claude-1000/sp2/age1_edge_hold.png`, `/tmp/claude-1000/sp2/meta_focus_hold2.png`, `/tmp/claude-1000/sp2/after_release_meta_age1.png`.
+- No commit.
+
+Results: SP2 (update 2)
+- Root cause (Wayland, verified nested): a free move never moved the window or drew any outline. The Move grab only drew the snap ring on snap targets. The window committed only on release, in both modes.
+- Fix: `showContentWhileDragging` is read in `control/settings.rs` (same key and default as wm-x11 `live_settings.rs`) and mirrored into `State`. `input/move_feedback.rs` is a pure function: content mode sets the live client rect, and rings only snap zones; outline mode keeps the window and rings the snap zone or else the free frame. `input/pointer.rs` Move branch applies it and reuses `SnapPreview`. Motion calls `request_paint()` when the ring or rect changes, so the DRM cached scene is rebuilt (`needs_scene_rebuild`, unit-tested).
+- Verified nested (Xvfb :162, debug build, Intel GL): outline mode titlebar drag shows accent ring at would-be frame, window stays; release commits to new place, ring gone. Content mode (temporary forced default, reverted) moves the window live; left-edge drag shows the snap ring with the window following.
+- Not verified: content mode through the real settings file. Writing `showContentWhileDragging=true` (with `windowsCustom=true`) to a `FLAMEWM_SETTINGS_PATH` file did not change behaviour in the nested run. Cause unknown; the sync runs in `control/service.rs`.
+- Not verified: Meta+drag in outline mode (the key path is the same `Move` grab).
+- Known gap: Wayland ignores `snapPreviewEnabled`, which X11 honours. Not changed.
+- Checks: `cargo test -p flamewm-wm-wayland` exit 0 (12, 258, 0 passed, 0 warnings). `cargo check -p flamewm-wm-wayland --features drm` exit 0, 0 warnings. `python3 -I tools/architecture_guard.py` exit 0 (77 ratified). `flamewm-platform` not touched; `flamewm-wm-x11` not touched.
+- Screenshots: `/tmp/claude-1000/sp2/outline_hold.png`, `/tmp/claude-1000/sp2/outline_after_release.png`, `/tmp/claude-1000/sp2/content_hold.png`, `/tmp/claude-1000/sp2/content_edge_hold.png`, `/tmp/claude-1000/sp2/live162.png`, `/tmp/claude-1000/sp2/live162_after.png`.
+- No commit. Debug hooks reverted; `rg SP2DBG|SP2TEMP` is empty.

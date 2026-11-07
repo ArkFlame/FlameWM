@@ -137,15 +137,12 @@ impl ChromeBuffer {
             };
             // Narrow bars place controls past their right edge; damage and clear only the columns
             // the buffer owns, or the GL upload exceeds the texture.
-            slot.x0 = slot.x0.clamp(0, w as i32);
-            slot.x1 = slot.x1.clamp(0, w as i32);
-            if slot.x1 <= slot.x0 {
+            let Some((x0, x1)) = owned_span(slot.x0, slot.x1, w as i32) else {
                 continue;
-            }
-            let rect = Rectangle::<i32, Buffer>::new(
-                (slot.x0, 0).into(),
-                ((slot.x1 - slot.x0).max(0), TITLEBAR_HEIGHT).into(),
-            );
+            };
+            slot.x0 = x0;
+            slot.x1 = x1;
+            let rect = Rectangle::<i32, Buffer>::new((x0, 0).into(), ((x1 - x0), TITLEBAR_HEIGHT).into());
             let _ = ctx.draw(|mem| {
                 repaint_slot(mem, w, h, rounded, backdrop.as_deref(), &slot, feedback);
                 Ok::<_, std::convert::Infallible>(vec![rect])
@@ -154,6 +151,12 @@ impl ChromeBuffer {
         drop(ctx);
         self.feedback = feedback;
     }
+}
+
+/// Columns `x0..x1` clipped to a `w`-wide bar, or `None` when the bar owns none of them.
+fn owned_span(x0: i32, x1: i32, w: i32) -> Option<(i32, i32)> {
+    let (x0, x1) = (x0.clamp(0, w), x1.clamp(0, w));
+    (x1 > x0).then_some((x0, x1))
 }
 
 /// One titlebar control: its button, glyph role and horizontal span in the bar.
@@ -1008,5 +1011,19 @@ mod hover_repaint_tests {
             buffer.repaint_feedback(rest);
         }
         assert_eq!(buffer.feedback, rest);
+    }
+
+    #[test]
+    fn owned_span_never_leaves_the_bar_texture() {
+        // Every control on every narrow bar: the damaged columns must stay inside the texture.
+        for w in 1..=64 {
+            for slot in control_slots(w, false) {
+                if let Some((x0, x1)) = owned_span(slot.x0, slot.x1, w) {
+                    assert!(0 <= x0 && x0 < x1 && x1 <= w, "w={w} span={x0}..{x1}");
+                }
+            }
+        }
+        assert_eq!(owned_span(-22, 10, 10), Some((0, 10)));
+        assert_eq!(owned_span(12, 40, 10), None);
     }
 }

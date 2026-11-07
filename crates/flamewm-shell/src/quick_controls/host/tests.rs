@@ -340,8 +340,8 @@ fn stage_labels_pass_shell_span_allow_list() {
 
 #[test]
 fn slow_open_gate_and_stage_render_are_pure() {
-    assert!(!is_slow_open(Duration::from_micros(16_669)));
-    assert!(is_slow_open(Duration::from_micros(16_670)));
+    assert!(!is_slow_open(Duration::from_micros(49_999)));
+    assert!(is_slow_open(Duration::from_millis(50)));
     let timings = OpenStageTimings {
         total: Duration::from_millis(20),
         project: Duration::from_millis(1),

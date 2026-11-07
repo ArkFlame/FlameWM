@@ -351,7 +351,12 @@ fn render_into(
     // Software renderers are latched at startup (see `log_gl_renderer`): the nested winit EGL
     // surface answers EGL_BAD_SURFACE to BUFFER_AGE, which smithay logs as an ERROR per query.
     // A refusal from any other driver is latched on its first answer and repainted in full.
-    let age = if BUFFER_AGE_REFUSED.load(std::sync::atomic::Ordering::Relaxed) {
+    // The first frame is never queried: before its first submit the nested EGL surface is not
+    // yet bound and presented, so the query answers EGL_BAD_SURFACE and latches a full repaint.
+    let age = if !buffer_age_probe_allowed(
+        FIRST_FRAME_SUBMITTED.load(std::sync::atomic::Ordering::Relaxed),
+        BUFFER_AGE_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
+    ) {
         0
     } else {
         backend.buffer_age().unwrap_or_else(|| {
@@ -371,6 +376,7 @@ fn render_into(
     };
     let feedback = crate::presentation_scale::collect_feedback(state, &state.output);
     backend.submit(damage.as_deref())?;
+    FIRST_FRAME_SUBMITTED.store(true, std::sync::atomic::Ordering::Relaxed);
     crate::presentation_scale::presented(feedback, &state.output);
     send_frame_callbacks(state);
     Ok(())
@@ -1067,6 +1073,14 @@ pub fn is_software_renderer(name: &str) -> bool {
 /// Set once a driver refuses `EGL_BUFFER_AGE_EXT`: every later frame repaints in full.
 static BUFFER_AGE_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Set after the first successful submit, when the window surface is bound and presented.
+static FIRST_FRAME_SUBMITTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the buffer-age query may run: only once a frame was submitted and no driver refused it.
+pub(crate) const fn buffer_age_probe_allowed(first_frame_submitted: bool, refused: bool) -> bool {
+    first_frame_submitted && !refused
+}
+
 /// Whether the buffer-age probe is skipped from the start: a software renderer never answers it.
 pub fn buffer_age_unsupported(renderer_name: &str) -> bool {
     is_software_renderer(renderer_name)
@@ -1092,7 +1106,14 @@ pub fn log_gl_renderer(renderer: &mut GlowRenderer, backend: &str) {
 
 #[cfg(test)]
 mod renderer_class_tests {
-    use super::{buffer_age_unsupported, is_software_renderer};
+    use super::{buffer_age_probe_allowed, buffer_age_unsupported, is_software_renderer};
+
+    #[test]
+    fn buffer_age_is_not_queried_before_first_submit() {
+        assert!(!buffer_age_probe_allowed(false, false));
+        assert!(buffer_age_probe_allowed(true, false));
+        assert!(!buffer_age_probe_allowed(true, true));
+    }
 
     #[test]
     fn mesa_cpu_rasterizers_are_software() {

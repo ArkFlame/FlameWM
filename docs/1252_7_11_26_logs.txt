@@ -1,0 +1,158 @@
+linsaftw /run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender: ./scripts/wayland
+FLAMEWM-CARGO-MANIFEST: PASS (58 manifests)
+Compiling flamewm-api v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-api)
+Compiling flamewm-skin v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-skin)
+Compiling x11rb-protocol v0.14.0
+Compiling flamewm-image-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-image-core)
+Compiling flamewm-ui-layout-core v0.1.7(/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-ui-layout-core)
+Compiling flamewm-platform v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-platform)
+Compiling flamewm-integrations-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-integrations-core)
+Compiling flamewm-session-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-session-core)
+Compiling flamewm-weather v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-weather)
+Compiling flamewm-remote-fs v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-remote-fs)
+Compiling flamewm-window-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-window-core)
+Compiling flamewm-ui-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-ui-core)
+Compiling flamewm-dbus-reactor v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-dbus-reactor)
+Compiling flamewm-tray v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-tray)
+Compiling flamewm-ui v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-ui)
+Compiling flamewm-render-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-render-core)
+Compiling flamewm-integrations-linux v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-integrations-linux)
+Compiling flamewm-control-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-control-core)
+Compiling flamewm-shell-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-shell-core)
+Compiling flamewm-control-wire v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-control-wire)
+Compiling flamewm-render-compiler v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-render-compiler)
+Compiling flamewm-control-dbus v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-control-dbus)
+Compiling flamewm-ui-document v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-ui-document)
+Compiling flamewm-render-x11 v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-render-x11)
+Compiling flamewm-settings-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-settings-core)
+Compiling flamewm-terminal v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-terminal)
+Compiling flamewm-task-manager v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-task-manager)
+Compiling flamewm-shell v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-shell)
+Compiling flamewm-finder v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-finder)
+Compiling flamewm-settings v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-settings)
+Compiling flamewm-desktop v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-desktop)
+Compiling flamewm-explorer v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-explorer)
+Compiling x11rb v0.14.0
+Compiling flamewm-ui-x11 v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-ui-x11)
+Compiling flamewm-applications v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-applications)
+Compiling flamewm-clipboard v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-clipboard)
+Compiling flamewm-desktop-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-desktop-core)
+Compiling flamewm-wm-wayland v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-wm-wayland)
+Compiling flamewm-widgets-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-widgets-core)
+Compiling flamewm-conversion-core v0.1.7 (/run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender/crates/flamewm-conversion-core)
+Finished `release` profile [optimized]target(s) in 4m 13s
+FLAMEWM_RENDER_PROVIDER gles (real GL driver reported as FLAMEWM_GL_RENDERER)
+FLAMEWM_RENDER_ACCELERATION cpu pixel-backends=x11-only
+flamewm-wayland: cursor theme=Breeze_Lightsize=24
+FLAMEWM-WAYLAND-STARTUP stage=seat status=skip code=0 detail=nested_backend t=12ms
+FLAMEWM-WAYLAND-STARTUP stage=drm status=skip code=1 detail=nested_backend t=12ms
+FLAMEWM_GL_RENDERER backend=winit renderer="Mesa Intel(R) UHD Graphics (TGL GT1)" class=hardware
+FLAMEWM-WAYLAND-STARTUP stage=outputs status=ok code=2 detail=winit_window t=76ms
+FLAMEWM-WAYLAND-STARTUP stage=libinput status=skip code=3 detail=host_input t=76ms
+FLAMEWM-WAYLAND-STARTUP stage=socket status=ok code=4 detail=wayland-flame t=77ms
+FLAMEWM-WAYLAND-STARTUP stage=xwayland status=ok code=5 detail=spawned t=80ms
+FLAMEWM-WAYLAND-STARTUP stage=ready status=ok code=6 detail=backend_init t=81ms
+flamewm-wayland: ERROR: smithay::backend::egl::ffi:[EGL] 0x300d (BAD_SURFACE) eglQuerySurface: eglQuerySurface
+Xwayland glamor: GBM Wayland interfaces not available
+Failed to initialize glamor, falling back to sw
+(II) IGLX: Loaded and initialized swrast
+(II) GLX: Initialized DRISWRAST GL provider for screen 0
+flamewm-wayland: XWayland compositor selection already owned
+flamewm-wayland: XWayland ready on DISPLAY=:1
+The XKEYBOARD keymap compiler (xkbcomp) reports:
+> Warning:          Unsupported maximum keycode 708, clipping.
+>                   X11 cannot support keycodes above 255.
+> Warning:          Virtual modifier Hypermultiply defined
+>                   Using 0, ignoring 0
+> Warning:          Virtual modifier ScrollLock multiply defined
+>                   Using 0, ignoring 0
+Errors from xkbcomp are not fatal to the Xserver
+FLAMEWM_RENDER_PROVIDER xrender paint=cpu-side (GPU only for blur via renderAcceleration=gpu)
+FLAMEWM_RENDER_CURSOR_BACKEND xcursor
+FLAMEWM_RENDER_CURSOR_THEME theme=Breeze_Light size=24 backend=xcursor
+flamewm-integrations-linux: icon watch setcapped at 512 dirs per depth (total cap 2048); deeper icon dir changes may not trigger a refresh
+FLAMEWM_RENDER_TEXT_BACKEND xft preferred=IBM_Plex_Sans
+FLAMEWM_RENDER_PROVIDER xrender paint=cpu-side (GPU only for blur via renderAcceleration=gpu)
+FLAMEWM_RENDER_CURSOR_BACKEND xcursor
+FLAMEWM_RENDER_CURSOR_THEME theme=Breeze_Light size=24 backend=xcursor
+flamewm-integrations-linux: icon watch setcapped at 512 dirs per depth (total cap 2048); deeper icon dir changes may not trigger a refresh
+FLAMEWM_RENDER_TEXT_BACKEND xft preferred=IBM_Plex_Sans
+debug render.overlay.capture reason=xgetimage-null
+flamewm-wayland: ERROR: smithay::backend::renderer::gles:[GL] GL_INVALID_VALUE in glTexSubImage2D(xoffset 0 + width 32 > 10)
+FLAMEWM_RENDER_PROVIDER xrender paint=cpu-side (GPU only for blur via renderAcceleration=gpu)
+FLAMEWM_RENDER_CURSOR_BACKEND xcursor
+FLAMEWM_RENDER_CURSOR_THEME theme=Breeze_Light size=24 backend=xcursor
+FLAMEWM_RENDER_TEXT_BACKEND xft preferred=IBM_Plex_Sans
+flamewm-shell: task icon prime ran (stage=task-slots, states=1, ok=true)
+debug render.overlay.capture reason=xgetimage-null
+FLAMEWM_RENDER_PROVIDER xrender paint=cpu-side (GPU only for blur via renderAcceleration=gpu)
+FLAMEWM_RENDER_CURSOR_BACKEND xcursor
+FLAMEWM_RENDER_CURSOR_THEME theme=Breeze_Light size=24 backend=xcursor
+FLAMEWM_RENDER_TEXT_BACKEND xft preferred=IBM_Plex_Sans
+debug render.overlay.capture reason=xgetimage-null
+flamewm-quick-control: slow open kind=Weather open.total=21.964339ms ensure=1.642046ms settings_refresh=1.120836ms project=112.565µs measure=9.437245ms place=3.377µs prepare/commit_geometry=7.409905ms present=2.940093ms pointer_grab=376.839µs close/ungrab/unmap=288ns
+FLAMEWM_RENDER_PROVIDER xrender paint=cpu-side (GPU only for blur via renderAcceleration=gpu)
+FLAMEWM_RENDER_CURSOR_BACKEND xcursor
+FLAMEWM_RENDER_CURSOR_THEME theme=Breeze_Light size=24 backend=xcursor
+FLAMEWM_RENDER_TEXT_BACKEND xft preferred=IBM_Plex_Sans
+debug render.overlay.capture reason=xgetimage-null
+flamewm-quick-control: slow open kind=Network open.total=20.408863ms ensure=997.64µssettings_refresh=1.258881ms project=94.395µs measure=5.240976ms place=1.716µs prepare/commit_geometry=7.003072ms present=6.076691ms pointer_grab=975.46µs close/ungrab/unmap=288ns
+debug render.overlay.capture reason=xgetimage-null
+debug render.overlay.capture reason=xgetimage-null
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Activating service name='org.gtk.vfs.Daemon' requested by ':1.29'(uid=1000 pid=2842236 comm="/opt/helium/helium" label="helium-bin (unconfined)")
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Successfully activated service 'org.gtk.vfs.Daemon'
+[2842236:2842274:1107/125107.850604:ERROR:components/segmentation_platform/internal/database/ukm_database_backend.cc:142] Failed to open UKM database: 0 database is locked
+[2842234:2842287:1107/125107.853013:ERROR:components/segmentation_platform/internal/database/ukm_database_backend.cc:142] Failed to open UKM database: 0 database is locked
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Activating service name='org.a11y.Bus' requested by ':1.34' (uid=1000 pid=2842234 comm="/opt/helium/helium"label="helium-bin (unconfined)")
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Successfully activated service 'org.a11y.Bus'
+[2842234:2842335:1107/125108.101443:ERROR:components/history/core/browser/top_sites_backend.cc:77] Failed to initialize database.
+[2842236:2842323:1107/125108.108186:ERROR:components/history/core/browser/top_sites_backend.cc:77] Failed to initialize database.
+dbus-daemon[2842440]: Activating service name='org.a11y.atspi.Registry' requested by':1.1' (uid=1000 pid=2842236 comm="/opt/helium/helium" label="helium-bin (unconfined)")
+[2842328:2842421:1107/125108.188976:ERROR:gpu/command_buffer/service/gpu_persistent_cache.cc:137] Persistent cache error: 1
+dbus-daemon[2842440]: Successfully activated service 'org.a11y.atspi.Registry'
+SpiRegistry daemon is running with well-known name - org.a11y.atspi.Registry
+[2842340:2842430:1107/125108.188101:ERROR:gpu/command_buffer/service/gpu_persistent_cache.cc:137] Persistent cache error: 1
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Activating service name='org.kde.kwalletd6' requested by ':1.32' (uid=1000 pid=2842236 comm="/opt/helium/helium" label="helium-bin (unconfined)")
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Activating service name='org.freedesktop.portal.Desktop' requested by ':1.32' (uid=1000 pid=2842236 comm="/opt/helium/helium" label="helium-bin (unconfined)")
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Activating service name='org.freedesktop.impl.portal.PermissionStore' requested by ':1.40' (uid=1000 pid=2842579 comm="/usr/libexec/xdg-desktop-portal" label="unconfined")
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.PermissionStore'
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Activating service name='org.freedesktop.portal.Documents' requested by ':1.40' (uid=1000 pid=2842579 comm="/usr/libexec/xdg-desktop-portal" label="unconfined")
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Successfully activated service 'org.freedesktop.portal.Documents'
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gtk'requested by ':1.40' (uid=1000 pid=2842579 comm="/usr/libexec/xdg-desktop-portal" label="unconfined")
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Activating service name='org.kde.secretservicecompat' requested by ':1.45' (uid=1000 pid=2842574 comm="/usr/bin/kwalletd6" label="unconfined")
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gtk'
+kf.wallet.ksecretd: Lacking a socket, pipe: 0 env: 0
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.kde'requested by ':1.40' (uid=1000 pid=2842579 comm="/usr/libexec/xdg-desktop-portal" label="unconfined")
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Successfully activated service 'org.kde.secretservicecompat'
+[2842236:2842236:1107/125108.952611:ERROR:extensions/browser/service_worker/service_worker_task_queue.cc:1080] Failed to unregister service worker for extension id: eimadpbcbfnmbkopoojfekhnkhdbieeh error statuswas: 2
+[2842236:2842236:1107/125108.952716:ERROR:extensions/browser/extension_registrar.cc:1231] Failed to unregister service worker for extension eimadpbcbfnmbkopoojfekhnkhdbieeh
+[2842234:2842234:1107/125108.970821:ERROR:extensions/browser/service_worker/service_worker_task_queue.cc:1080] Failed to unregister service worker for extension id: eimadpbcbfnmbkopoojfekhnkhdbieeh error statuswas: 2
+[2842234:2842234:1107/125108.970904:ERROR:extensions/browser/extension_registrar.cc:1231] Failed to unregister service worker for extension eimadpbcbfnmbkopoojfekhnkhdbieeh
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.kde'
+[2842236:2842443:1107/125109.033381:ERROR:net/disk_cache/blockfile/backend_impl.cc:1030] Critical error found -8
+
+(process:2842574): GLib-GIO-CRITICAL **: 12:51:09.079: g_dbus_proxy_get_object_path:assertion 'G_IS_DBUS_PROXY (proxy)' failed
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Successfully activated service 'org.kde.kwalletd6'
+qt.dbus.integration: QDBusConnection: name'org.kde.secretservicecompat' had owner '' but we thought it was ':1.46'
+Secret Service availability changed: Available
+dbus-daemon[2838370]: [session uid=1000 pid=2838370 pidfd=5] Successfully activated service 'org.freedesktop.portal.Desktop'
+qt.qpa.services: Failed to register with host portal QDBusError("org.freedesktop.portal.Error.Failed", "Could not register appID: Connection already associated with anapplication ID")
+Using kwallet without parent window!
+qt.qpa.services: Failed to register with host portal QDBusError("org.freedesktop.portal.Error.Failed", "Could not register appID: Connection already associated with anapplication ID")
+[2842236:2842392:1107/125109.807722:ERROR:storage/browser/file_system/sandbox_origin_database.cc:198] SandboxOriginDatabase failed at: Init@storage/browser/file_system/sandbox_origin_database.cc:95 with error: IO error: /home/linsaftw/.config/net.imput.helium/Default/File System/Origins/LOCK: Access denied. (ChromeMethodBFE: 15::LockFile::5)
+[2842236:2842321:1107/125109.955331:ERROR:components/services/storage/service_worker/service_worker_storage.cc:1814] Failed todelete the database: Database IO error
+[2842234:2842287:1107/125109.983192:ERROR:components/services/storage/service_worker/service_worker_storage.cc:1814] Failed todelete the database: Database IO error
+[2842236:2842392:1107/125110.815488:ERROR:storage/browser/file_system/sandbox_origin_database.cc:198] SandboxOriginDatabase failed at: Init@storage/browser/file_system/sandbox_origin_database.cc:95 with error: IO error: /home/linsaftw/.config/net.imput.helium/Default/File System/Origins/LOCK: Access denied. (ChromeMethodBFE: 15::LockFile::5)
+qt.qpa.services: Failed to register with host portal QDBusError("org.freedesktop.portal.Error.Failed", "Could not register appID: App info not found for 'org.kde.kwalletd'")
+qt.qpa.services: Failed to register with host portal QDBusError("org.freedesktop.portal.Error.Failed", "Could not register appID: App info not found for 'org.kde.kwalletd'")
+[2842234:2842334:1107/125113.305575:ERROR:components/password_manager/core/browser/password_store/login_database.cc:1128] Unable to open the password store database.
+[2842236:2842321:1107/125113.305575:ERROR:components/password_manager/core/browser/password_store/login_database.cc:1128] Unable to open the password store database.
+[2842236:2842321:1107/125113.305671:ERROR:components/password_manager/core/browser/password_store/login_database_async_helper.cc:78] Could not create/open login database.
+[2842234:2842334:1107/125113.305677:ERROR:components/password_manager/core/browser/password_store/login_database_async_helper.cc:78] Could not create/open login database.
+[2842236:2842321:1107/125113.305846:ERROR:components/password_manager/core/browser/password_store/login_database.cc:1128] Unable to open the password store database.
+[2842236:2842321:1107/125113.307222:ERROR:components/password_manager/core/browser/password_store/login_database_async_helper.cc:78] Could not create/open login database.
+[2842234:2842333:1107/125113.309787:ERROR:components/password_manager/core/browser/password_store/login_database.cc:1128] Unable to open the password store database.
+[2842234:2842333:1107/125113.311256:ERROR:components/password_manager/core/browser/password_store/login_database_async_helper.cc:78] Could not create/open login database.
+(EE) failed to read Wayland events: Connection reset by peer
+A connection to the bus can't be made
+linsaftw /run/media/linsaftw/SDD/GitHub/ArkFlame/flamewm-webrender:

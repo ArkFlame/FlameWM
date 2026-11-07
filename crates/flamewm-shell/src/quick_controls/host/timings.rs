@@ -15,8 +15,8 @@ pub const QUICK_STAGE_LABELS: &[&str] = &[
     "shell.quick.close/ungrab/unmap",
 ];
 
-/// Slow-open threshold: one 60Hz frame (16.67ms).
-pub const SLOW_OPEN_THRESHOLD: Duration = Duration::from_micros(16_670);
+/// Slow-open threshold: a visibly late open (50ms), not a normal frame-sized open.
+pub const SLOW_OPEN_THRESHOLD: Duration = Duration::from_millis(50);
 
 /// Pure seam: slow-open predicate shared by the log gate.
 #[must_use]

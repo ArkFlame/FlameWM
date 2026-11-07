@@ -85,6 +85,7 @@ fn name_candidates<'a>(raw: &'a str, modified: &'a str) -> impl Iterator<Item = 
 mod buttons;
 mod keyboard;
 mod keyboard_tile;
+mod move_feedback;
 mod pointer;
 mod settings;
 mod shortcuts;
@@ -94,4 +95,5 @@ mod tests;
 pub use self::buttons::TitleClick;
 pub use self::keyboard::saved_xkb_config;
 pub use self::settings::{saved_focus_follows_mouse, saved_model_settings};
+use self::move_feedback::*;
 use self::snap::*;

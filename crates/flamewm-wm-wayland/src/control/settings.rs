@@ -2,6 +2,38 @@
 
 use super::*;
 
+/// `showContentWhileDragging`: true moves the live window during a drag; false (the default, as on
+/// X11) keeps the window in place and draws an outline of where it would land.
+pub(super) fn show_content_while_dragging(snapshot: &flamewm_api::settings::SettingsSnapshot) -> bool {
+    use flamewm_api::settings::SettingValue;
+    matches!(
+        snapshot.values.get("showContentWhileDragging"),
+        Some(SettingValue::Boolean(true))
+    )
+}
+
+#[cfg(test)]
+mod content_drag_tests {
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+    use std::collections::BTreeMap;
+
+    fn snapshot(value: Option<SettingValue>) -> SettingsSnapshot {
+        let mut values = BTreeMap::new();
+        if let Some(value) = value {
+            values.insert("showContentWhileDragging".to_owned(), value);
+        }
+        SettingsSnapshot { revision: 1, values }
+    }
+
+    #[test]
+    fn outline_is_the_default_and_content_needs_true() {
+        assert!(!super::show_content_while_dragging(&snapshot(None)));
+        assert!(!super::show_content_while_dragging(&snapshot(Some(SettingValue::Boolean(false)))));
+        assert!(!super::show_content_while_dragging(&snapshot(Some(SettingValue::Text("true".into())))));
+        assert!(super::show_content_while_dragging(&snapshot(Some(SettingValue::Boolean(true)))));
+    }
+}
+
 /// Live media-key volume cap: the shared `audioRaiseMaximum` toggle, off unless explicitly set.
 pub(super) fn volume_cap(snapshot: &flamewm_api::settings::SettingsSnapshot) -> u8 {
     use flamewm_api::settings::SettingValue;

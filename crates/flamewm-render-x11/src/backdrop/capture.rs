@@ -1,4 +1,19 @@
 use super::*;
+use flamewm_api::repeat_log::RepeatLog;
+use std::sync::{Mutex, PoisonError};
+
+/// Last capture diagnostic printed; an unchanged reason stays silent until it changes.
+static CAPTURE_LOG: Mutex<RepeatLog> = Mutex::new(RepeatLog::new());
+
+fn capture_log(reason: &str) {
+    if CAPTURE_LOG
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .should_emit(reason)
+    {
+        eprintln!("render.overlay.capture reason={reason}");
+    }
+}
 
 /// Straight RGBA8 capture plus the server format it was decoded from.
 #[derive(Debug, Clone)]
@@ -15,13 +30,40 @@ pub(crate) fn capture_drawable_rect(
     drawable: u64,
     rect: (i32, i32, u32, u32),
 ) -> Result<BackdropCapture, String> {
-    use std::os::raw::{c_int, c_ulong};
+    use std::os::raw::{c_int, c_uint, c_ulong};
     let (x, y, width, height) = rect;
     if width == 0 || height == 0 {
         return Err("backdrop capture: empty rect".to_string());
     }
     if display.is_null() || drawable == 0 {
         return Err("backdrop capture: no display/root".to_string());
+    }
+    // XGetImage answers NULL with a BadMatch for any rect that leaves the drawable; reject that
+    // here so the caller falls back quietly instead of raising an X error.
+    let (mut root, mut gx, mut gy) = (0 as c_ulong, 0 as c_int, 0 as c_int);
+    let (mut dw, mut dh, mut border, mut depth) = (0 as c_uint, 0 as c_uint, 0 as c_uint, 0 as c_uint);
+    let known = unsafe {
+        crate::xlib_ext::XGetGeometry(
+            display,
+            drawable as c_ulong,
+            &mut root,
+            &mut gx,
+            &mut gy,
+            &mut dw,
+            &mut dh,
+            &mut border,
+            &mut depth,
+        )
+    } != 0;
+    if known
+        && (x < 0
+            || y < 0
+            || i64::from(x) + i64::from(width) > i64::from(dw)
+            || i64::from(y) + i64::from(height) > i64::from(dh))
+    {
+        return Err(format!(
+            "backdrop capture rect {rect:?} outside drawable {dw}x{dh}"
+        ));
     }
     let image = unsafe {
         XGetImage(
@@ -36,21 +78,18 @@ pub(crate) fn capture_drawable_rect(
         )
     };
     if image.is_null() {
-        eprintln!("debug render.overlay.capture reason=xgetimage-null");
+        capture_log("xgetimage-null");
         return Err("backdrop capture unsupported (XGetImage returned NULL)".to_string());
     }
     let head = unsafe { &*(image as *const XImageHead) };
     if head.depth != 24 && head.depth != 32 {
         unsafe { XDestroyImage(image) };
-        eprintln!(
-            "debug render.overlay.capture reason=unsupported-depth depth={}",
-            head.depth
-        );
+        capture_log(&format!("unsupported-depth depth={}", head.depth));
         return Err(format!("backdrop capture unsupported depth {}", head.depth));
     }
     if head.width <= 0 || head.height <= 0 || head.data.is_null() {
         unsafe { XDestroyImage(image) };
-        eprintln!("debug render.overlay.capture reason=invalid-image");
+        capture_log("invalid-image");
         return Err("backdrop capture produced an invalid XImage".to_string());
     }
     let width_px = head.width as u32;
@@ -76,7 +115,7 @@ pub(crate) fn capture_drawable_rect(
         16 => 2usize,
         _ => {
             unsafe { XDestroyImage(image) };
-            eprintln!("debug render.overlay.capture reason=unsupported-bpp bpp={bits_per_pixel}");
+            capture_log(&format!("unsupported-bpp bpp={bits_per_pixel}"));
             return Err(format!("backdrop capture unsupported bpp {bits_per_pixel}"));
         }
     };
@@ -107,7 +146,7 @@ pub(crate) fn capture_drawable_rect(
             let off = row_base.saturating_add(col.saturating_mul(bytes_per_pixel));
             if off + bytes_per_pixel > data.len() {
                 unsafe { XDestroyImage(image) };
-                eprintln!("debug render.overlay.capture reason=short-row");
+                capture_log("short-row");
                 return Err("backdrop capture row overrun".to_string());
             }
             let word: u64 = match bytes_per_pixel {
