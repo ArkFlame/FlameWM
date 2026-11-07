@@ -12,6 +12,7 @@ use flamewm_window_core::{SnapTarget, apply_window_margin, snap_geometry};
 
 mod geometry;
 mod shortcuts;
+pub(crate) use geometry::clamp_point_into;
 use geometry::*;
 pub use geometry::{ResizeEdge, resize_edge_at};
 #[cfg(test)]
@@ -683,6 +684,41 @@ impl WindowModel {
             }
             Mode::Fullscreen => {}
         }
+    }
+
+    /// Pulls floating windows whose frame left `output` (an unplugged or shrunk output) back inside
+    /// it. Returns the ids that moved so the caller can send them a configure.
+    pub fn clamp_floating_into(&mut self, output: Rect) -> Vec<WindowId> {
+        let mut moved = Vec::new();
+        for window in self
+            .windows
+            .iter_mut()
+            .filter(|window| window.mode == Mode::Normal)
+        {
+            // The client rect sits below the titlebar band, so the frame starts `band` pixels above it.
+            let band = if window.decorated() {
+                TITLEBAR_HEIGHT
+            } else {
+                0
+            };
+            let frame = Rect::new(
+                window.rect.x,
+                window.rect.y - band,
+                window.rect.w,
+                window.rect.h + band,
+            );
+            let fitted = clamp_into_output(frame, output);
+            if fitted != frame {
+                window.rect = Rect::new(
+                    fitted.x,
+                    fitted.y + band,
+                    fitted.w,
+                    (fitted.h - band).max(0),
+                );
+                moved.push(window.id);
+            }
+        }
+        moved
     }
 
     /// Refit output-sized placements without overwriting a floating window's restore geometry.

@@ -132,15 +132,22 @@ impl ChromeBuffer {
             if changed[..index].contains(target) {
                 continue;
             }
-            let Some(slot) = slots.iter().find(|slot| slot.button == button) else {
+            let Some(mut slot) = slots.iter().find(|slot| slot.button == button).copied() else {
                 continue;
             };
+            // Narrow bars place controls past their right edge; damage and clear only the columns
+            // the buffer owns, or the GL upload exceeds the texture.
+            slot.x0 = slot.x0.clamp(0, w as i32);
+            slot.x1 = slot.x1.clamp(0, w as i32);
+            if slot.x1 <= slot.x0 {
+                continue;
+            }
             let rect = Rectangle::<i32, Buffer>::new(
                 (slot.x0, 0).into(),
                 ((slot.x1 - slot.x0).max(0), TITLEBAR_HEIGHT).into(),
             );
             let _ = ctx.draw(|mem| {
-                repaint_slot(mem, w, h, rounded, backdrop.as_deref(), slot, feedback);
+                repaint_slot(mem, w, h, rounded, backdrop.as_deref(), &slot, feedback);
                 Ok::<_, std::convert::Infallible>(vec![rect])
             });
         }
@@ -150,6 +157,7 @@ impl ChromeBuffer {
 }
 
 /// One titlebar control: its button, glyph role and horizontal span in the bar.
+#[derive(Clone, Copy)]
 pub(super) struct ControlSlot {
     pub(super) button: Button,
     role: WindowControlRole,
@@ -869,6 +877,9 @@ mod hover_repaint_tests {
 
     #[test]
     fn hover_repaint_touches_only_the_button_rect() {
+        let _guard = crate::render::GLASS_STATICS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let rest = bar(Feedback::default());
         let slot = control_slots(W, false)
             .into_iter()
@@ -902,6 +913,9 @@ mod hover_repaint_tests {
 
     #[test]
     fn moving_hover_between_buttons_repaints_both_back_to_match_full_rebuild() {
+        let _guard = crate::render::GLASS_STATICS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut pixels = bar(Feedback::default());
         let slots = control_slots(W, false);
         let step = |pixels: &mut Vec<u8>, from: Feedback, to: Feedback| {
@@ -926,6 +940,9 @@ mod hover_repaint_tests {
 
     #[test]
     fn repaint_feedback_on_cached_bar_skips_unchanged_bar() {
+        let _guard = crate::render::GLASS_STATICS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let rest = Feedback::default();
         let mut buffer = ChromeBuffer {
             origin: (0, 0),
@@ -954,5 +971,42 @@ mod hover_repaint_tests {
         };
         buffer.repaint_feedback(hover);
         assert_eq!(buffer.feedback, hover);
+    }
+
+    #[test]
+    fn repaint_feedback_on_narrow_bar_stays_inside_buffer() {
+        let _guard = crate::render::GLASS_STATICS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Narrower than the three controls: their spans start left of 0 or end past the bar.
+        let narrow = 10;
+        let rest = Feedback::default();
+        let mut buffer = ChromeBuffer {
+            origin: (0, 0),
+            width: narrow,
+            active: true,
+            maximized: false,
+            rounded: false,
+            feedback: rest,
+            title: String::new(),
+            backdrop: None,
+            buffer: MemoryRenderBuffer::from_slice(
+                &chrome_pixels_over(narrow, true, false, false, rest, "", None),
+                Fourcc::Argb8888,
+                (narrow, TITLEBAR_HEIGHT),
+                1,
+                Transform::Normal,
+                None,
+            ),
+        };
+        for button in [Button::Close, Button::Minimize, Button::Maximize] {
+            let feedback = Feedback {
+                hover: Some(button),
+                pressed: Some(button),
+            };
+            buffer.repaint_feedback(feedback);
+            buffer.repaint_feedback(rest);
+        }
+        assert_eq!(buffer.feedback, rest);
     }
 }

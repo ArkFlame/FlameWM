@@ -481,3 +481,41 @@ fn a_window_backdrop_request_is_taken_once_by_the_render_loop() {
     assert_eq!(document.take_window_backdrop(), Some(None));
     assert_eq!(document.take_window_backdrop(), None);
 }
+
+#[test]
+fn explicit_px_width_overflows_parent_but_max_width_percent_clamps_to_it() {
+    let wide = Style {
+        width: Length::Px(300.0),
+        ..Style::default()
+    };
+    let clamped = Style {
+        width: Length::Px(300.0),
+        max_width: Length::Percent(1.0),
+        ..Style::default()
+    };
+    let nodes = vec![
+        geometry_node(
+            NodeKind::Element,
+            None,
+            Some(1),
+            None,
+            "root",
+            Style::default(),
+        ),
+        geometry_node(NodeKind::Element, Some(0), None, Some(2), "wide", wide),
+        geometry_node(NodeKind::Element, Some(0), None, None, "clamped", clamped),
+    ];
+    let document = RuntimeDocument::new(CompiledDocument {
+        source_fingerprint: 0,
+        root: 0,
+        variables: Vec::new(),
+        assets: Vec::new(),
+        nodes,
+    })
+    .expect("width document validates");
+
+    let layout = LayoutEngine::compute(&document, 200.0, 200.0, InteractionState::default());
+    // CSS parity: an explicit px width is not clamped by its parent; max-width:100% is.
+    assert_eq!(layout.boxes[1].rect.width, 300.0);
+    assert_eq!(layout.boxes[2].rect.width, 200.0);
+}

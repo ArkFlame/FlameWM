@@ -63,6 +63,22 @@ pub enum TaskbarStyle {
 
 wire_enum!(TaskbarStyle { Classic => "classic", Floating => "floating" });
 
+/// Action run when the pointer rests in a screen corner (`hotCorner.*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotCornerAction {
+    None,
+    Overview,
+    ShowDesktop,
+    Lock,
+}
+
+wire_enum!(HotCornerAction {
+    None => "none",
+    Overview => "overview",
+    ShowDesktop => "show-desktop",
+    Lock => "lock",
+});
+
 /// Clock notation on the taskbar (`taskbarClockFormat`). Same `24h`/`12h` wire values as the lock
 /// screen, so both keys share one type.
 pub type ClockFormat = LockClockFormat;
@@ -371,6 +387,13 @@ pub struct ProductSettings {
     pub screensaver_display_off_minutes: u16,
     pub per_output_scale: BTreeMap<String, u16>,
     pub panel_edges: BTreeMap<String, PanelEdge>,
+    pub hot_corner_top_left: HotCornerAction,
+    pub hot_corner_top_right: HotCornerAction,
+    pub hot_corner_bottom_left: HotCornerAction,
+    pub hot_corner_bottom_right: HotCornerAction,
+    pub edge_snap_enabled: bool,
+    /// Edge-snap distance in px; file values are clamped to 4..=64 on load, API values must be in range.
+    pub edge_snap_threshold_px: u16,
     pub hotkeys: BTreeMap<String, String>,
     pub unknown_keys: BTreeMap<String, String>,
 }
@@ -508,6 +531,12 @@ impl Default for ProductSettings {
             screensaver_display_off_minutes: 20,
             per_output_scale: BTreeMap::new(),
             panel_edges: BTreeMap::new(),
+            hot_corner_top_left: HotCornerAction::None,
+            hot_corner_top_right: HotCornerAction::None,
+            hot_corner_bottom_left: HotCornerAction::None,
+            hot_corner_bottom_right: HotCornerAction::None,
+            edge_snap_enabled: true,
+            edge_snap_threshold_px: 16,
             hotkeys: BTreeMap::new(),
             unknown_keys: BTreeMap::new(),
         }
@@ -789,7 +818,8 @@ text_enum_slot!(
     TaskbarStyle,
     BackgroundMode,
     WallpaperFit,
-    ScreensaverMode
+    ScreensaverMode,
+    HotCornerAction
 );
 
 impl Slot for AppearanceMode {
@@ -978,6 +1008,12 @@ stable_settings! {
     (false, screensaver, "screensaverRibbonWidthTenths", screensaver_ribbon_width_tenths),
     (false, screensaver, "screensaverSpanMonitors", screensaver_span_monitors),
     (false, screensaver, "screensaverDisplayOffMinutes", screensaver_display_off_minutes),
+    (false, hotCorner, "hotCorner.topLeft", hot_corner_top_left),
+    (false, hotCorner, "hotCorner.topRight", hot_corner_top_right),
+    (false, hotCorner, "hotCorner.bottomLeft", hot_corner_bottom_left),
+    (false, hotCorner, "hotCorner.bottomRight", hot_corner_bottom_right),
+    (false, edgeSnap, "edgeSnap.enabled", edge_snap_enabled),
+    (false, edgeSnap, "edgeSnap.thresholdPx", edge_snap_threshold_px),
 }
 
 #[must_use]
@@ -1085,6 +1121,8 @@ mod glass_settings_tests;
 
 #[cfg(test)]
 mod accent_custom_tests;
+#[cfg(test)]
+mod edge_hot_corner_tests;
 #[cfg(test)]
 mod switch_contract_tests;
 #[cfg(test)]

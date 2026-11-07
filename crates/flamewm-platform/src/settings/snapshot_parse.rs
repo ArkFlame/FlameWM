@@ -123,6 +123,8 @@ impl ConfigStore {
         if snapshot.decoration == "ios" {
             "rounded".clone_into(&mut snapshot.decoration);
         }
+        // Files clamp an out-of-range edge-snap distance instead of rejecting the whole file.
+        snapshot.edge_snap_threshold_px = snapshot.edge_snap_threshold_px.clamp(4, 64);
         snapshot.validate()?;
         Ok(snapshot)
     }

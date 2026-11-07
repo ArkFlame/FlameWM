@@ -451,6 +451,9 @@ fn init_backend(
                                 eprintln!("flamewm-wayland: connector rescan failed: {error}");
                             }
                         }
+                        // An unplugged or resized output changes the usable area: pull windows that
+                        // now sit off-screen back in, the same way a nested host resize does.
+                        state.reflow_if_work_area_changed();
                         state.request_full_redraw();
                         render_all(state, &settle_drm);
                         TimeoutAction::Drop

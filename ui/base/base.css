@@ -1,4 +1,4 @@
-:root { --rim:#ffffff7f; }
+:root { --rim:#ffffff7f; --radius-sm:3px; --radius-md:6px; --radius-lg:9px; --radius-xl:11px; --font-xs:10px; --font-sm:11px; --font-base:12px; --font-md:13px; --font-lg:14px; --font-xl:16px; --space-xs:4px; --space-sm:6px; --space-md:8px; --space-lg:10px; --space-xl:12px; }
 * { box-sizing:border-box; }
 html { width:100%; height:100%; }
 /* Keyboard focus ring. --focus-ring is a built-in token derived from --accent (render-compiler). */

@@ -261,10 +261,22 @@ fn next_event(
                 return Ok(Some(event));
             }
         }
-        if Instant::now() >= deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             return Ok(None);
         }
-        std::thread::sleep(Duration::from_millis(2));
+        // Block on the X socket until a reply arrives or the deadline passes, instead of a 2 ms poll.
+        // Events already buffered by `poll_for_event` are drained at the top of the loop.
+        let timeout = rustix::time::Timespec::try_from(remaining).map_err(err)?;
+        let mut fds = [rustix::event::PollFd::new(
+            conn.stream(),
+            rustix::event::PollFlags::IN,
+        )];
+        match rustix::event::poll(&mut fds, Some(&timeout)) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(err(error)),
+        }
     }
 }
 

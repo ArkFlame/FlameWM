@@ -654,6 +654,7 @@ dependencies = [
 name = "flamewm-clipboard"
 version = "0.1.7"
 dependencies = [
+ "rustix 1.1.4",
  "x11rb 0.14.0",
 ]
 

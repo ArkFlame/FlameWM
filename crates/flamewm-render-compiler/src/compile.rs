@@ -78,7 +78,7 @@ fn compile_parsed(
     asset_base: Option<&Path>,
 ) -> Result<CompileOutput, String> {
     let rules = parse_stylesheet(css_source)?;
-    let (variables, variable_map) = collect_variables(&rules)?;
+    let (variables, variable_map, length_map) = collect_variables(&rules)?;
     let mut fingerprint_input = Vec::with_capacity(html_source.len() + css_source.len() + 1);
     fingerprint_input.extend_from_slice(html_source.as_bytes());
     fingerprint_input.push(0);
@@ -88,6 +88,7 @@ fn compile_parsed(
         html: &html,
         rules: &rules,
         variable_map: &variable_map,
+        length_map: &length_map,
         options,
         asset_base,
         warnings: Vec::new(),
@@ -202,11 +203,20 @@ fn builtin_color_tokens() -> [(&'static str, Color); 10] {
     ]
 }
 
-fn collect_variables(rules: &[Rule]) -> Result<(Vec<ColorVariable>, HashMap<String, u16>), String> {
+/// Custom properties split by kind: colors are runtime-overridable indices,
+/// lengths are resolved to their literal text at compile time.
+type CustomProperties = (
+    Vec<ColorVariable>,
+    HashMap<String, u16>,
+    HashMap<String, String>,
+);
+
+fn collect_variables(rules: &[Rule]) -> Result<CustomProperties, String> {
     let mut values: BTreeMap<String, Color> = builtin_color_tokens()
         .into_iter()
         .map(|(name, color)| (name.to_string(), color))
         .collect();
+    let mut lengths = HashMap::new();
     for rule in rules {
         if rule.selector.state != PseudoState::Root {
             continue;
@@ -216,15 +226,21 @@ fn collect_variables(rules: &[Rule]) -> Result<(Vec<ColorVariable>, HashMap<Stri
                 continue;
             }
             if !declaration.name.starts_with("--") {
-                return Err(format!("FlameWM Render 0.0.9 reserves :root for typed custom color properties; unsupported declaration '{}: {}'", declaration.name, declaration.value));
+                return Err(format!("FlameWM Render 0.0.9 reserves :root for typed custom properties; unsupported declaration '{}: {}'", declaration.name, declaration.value));
             }
-            let color = parse_color_literal(&declaration.value).ok_or_else(|| {
-                format!(
-                    "custom property '{}' must be a literal color in FlameWM Render 0.0.9",
+            if let Some(color) = parse_color_literal(&declaration.value) {
+                values.insert(declaration.name.clone(), color);
+            } else if parse_length(&declaration.value).is_ok() {
+                lengths.insert(
+                    declaration.name.clone(),
+                    declaration.value.trim().to_string(),
+                );
+            } else {
+                return Err(format!(
+                    "custom property '{}' must be a literal color or length in FlameWM Render 0.0.9",
                     declaration.name
-                )
-            })?;
-            values.insert(declaration.name.clone(), color);
+                ));
+            }
         }
     }
     let variables: Vec<ColorVariable> = values
@@ -242,13 +258,71 @@ fn collect_variables(rules: &[Rule]) -> Result<(Vec<ColorVariable>, HashMap<Stri
         .enumerate()
         .map(|(index, variable)| (variable.name.to_string(), index as u16))
         .collect();
-    Ok((variables, variable_map))
+    Ok((variables, variable_map, lengths))
+}
+
+/// Replaces `var(--name[, fallback])` in a length-valued declaration with the
+/// token's literal text, or the fallback when the token is not a length.
+fn resolve_length_vars(input: &str, lengths: &HashMap<String, String>) -> Result<String, String> {
+    let mut output = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find("var(") {
+        output.push_str(&rest[..start]);
+        let after = &rest[start + "var(".len()..];
+        let end = after
+            .find(')')
+            .ok_or_else(|| format!("unterminated var() in '{input}'"))?;
+        let (name, fallback) = match after[..end].split_once(',') {
+            Some((name, fallback)) => (name.trim(), Some(fallback.trim())),
+            None => (after[..end].trim(), None),
+        };
+        match (lengths.get(name), fallback) {
+            (Some(value), _) => output.push_str(value),
+            (None, Some(fallback)) => output.push_str(fallback),
+            (None, None) => return Err(format!("unknown CSS length variable '{name}'")),
+        }
+        rest = &after[end + 1..];
+    }
+    output.push_str(rest);
+    Ok(output)
+}
+
+/// Properties whose values are lengths, so `var()` resolves through `lengths`.
+fn takes_length_var(name: &str) -> bool {
+    matches!(
+        name,
+        "width"
+            | "height"
+            | "min-width"
+            | "min-height"
+            | "max-width"
+            | "max-height"
+            | "top"
+            | "right"
+            | "bottom"
+            | "left"
+            | "margin"
+            | "margin-top"
+            | "margin-right"
+            | "margin-bottom"
+            | "margin-left"
+            | "padding"
+            | "padding-top"
+            | "padding-right"
+            | "padding-bottom"
+            | "padding-left"
+            | "gap"
+            | "font-size"
+            | "border-width"
+            | "border-radius"
+    )
 }
 
 struct Compiler<'a> {
     html: &'a ParsedHtml,
     rules: &'a [Rule],
     variable_map: &'a HashMap<String, u16>,
+    length_map: &'a HashMap<String, String>,
     options: CompileOptions,
     asset_base: Option<&'a Path>,
     warnings: Vec<String>,
@@ -453,7 +527,13 @@ impl<'a> Compiler<'a> {
                 declaration.name, declaration.value
             ));
         }
-        let value = declaration.value.trim();
+        let resolved = if takes_length_var(&declaration.name) && declaration.value.contains("var(")
+        {
+            resolve_length_vars(declaration.value.trim(), self.length_map)?
+        } else {
+            declaration.value.trim().to_string()
+        };
+        let value = resolved.as_str();
         match declaration.name.as_str() {
             "display" => {
                 style.display = match value {
@@ -779,12 +859,19 @@ fn parse_color_value(input: &str, variables: &HashMap<String, u16>) -> Result<Co
         .strip_prefix("var(")
         .and_then(|rest| rest.strip_suffix(')'))
     {
-        let name = inner.trim();
-        let index = variables
-            .get(name)
-            .copied()
-            .ok_or_else(|| format!("unknown CSS color variable '{name}'"))?;
-        return Ok(ColorValue::Variable(index));
+        let (name, fallback) = match inner.split_once(',') {
+            Some((name, fallback)) => (name.trim(), Some(fallback.trim())),
+            None => (inner.trim(), None),
+        };
+        match (variables.get(name).copied(), fallback) {
+            (Some(index), _) => return Ok(ColorValue::Variable(index)),
+            (None, Some(fallback)) => {
+                return parse_color_literal(fallback)
+                    .map(ColorValue::Literal)
+                    .ok_or_else(|| format!("unsupported var() fallback '{fallback}'"));
+            }
+            (None, None) => return Err(format!("unknown CSS color variable '{name}'")),
+        }
     }
     parse_color_literal(value)
         .map(ColorValue::Literal)
@@ -1054,6 +1141,21 @@ mod tests {
     }
 
     #[test]
+    fn var_color_uses_fallback_only_when_variable_is_unknown() {
+        let variables: HashMap<String, u16> = HashMap::from([("--accent".to_string(), 3)]);
+        assert_eq!(
+            parse_color_value("var(--accent, #ff0000)", &variables),
+            Ok(ColorValue::Variable(3))
+        );
+        assert_eq!(
+            parse_color_value("var(--missing, #ff0000)", &variables),
+            Ok(ColorValue::Literal(Color::rgb(255, 0, 0)))
+        );
+        assert!(parse_color_value("var(--missing, nope)", &variables).is_err());
+        assert!(parse_color_value("var(--missing)", &variables).is_err());
+    }
+
+    #[test]
     fn compiles_color_variable() {
         let variables = interactive_fixture().document.variables;
         // Built-in tokens are always present; the sheet's `--accent` must not duplicate the built-in.
@@ -1066,6 +1168,48 @@ mod tests {
                 .default,
             Color::rgb(0xef, 0x44, 0x44)
         );
+    }
+
+    #[test]
+    fn length_custom_properties_resolve_with_fallback() {
+        let css = ":root { --gap: 6px; --w: 40px; } #a { padding: var(--gap) 4px; gap: var(--gap); border-radius: var(--missing, 3px); width: var(--w); max-width: var(--nope, 90%); }";
+        let output = compile_str(
+            r#"<body><div id="a">x</div></body>"#,
+            css,
+            CompileOptions::default(),
+        )
+        .unwrap();
+        let style = style_of(&output, "a");
+        assert_eq!(style.padding.top, 6.0);
+        assert_eq!(style.padding.right, 4.0);
+        assert_eq!(style.gap, 6.0);
+        assert_eq!(style.border_radius, 3.0);
+        assert_eq!(style.width, Length::Px(40.0));
+        assert_eq!(style.max_width, Length::Percent(0.9));
+        assert!(output.document.variables.iter().all(|v| v.name != "--gap"));
+    }
+
+    #[test]
+    fn length_var_rejects_unknown_without_fallback_and_color_tokens() {
+        let lengths = HashMap::from([("--gap".to_string(), "6px".to_string())]);
+        assert_eq!(
+            resolve_length_vars("var(--gap) var(--gap)", &lengths).unwrap(),
+            "6px 6px"
+        );
+        assert!(resolve_length_vars("var(--accent)", &lengths).is_err());
+        assert!(resolve_length_vars("var(--gap", &lengths).is_err());
+        let err = compile_str(
+            r#"<body><div id="a">x</div></body>"#,
+            "#a { width: var(--accent); }",
+            CompileOptions::default(),
+        );
+        assert!(err.is_err());
+        let color_ok = compile_str(
+            r#"<body><div id="a">x</div></body>"#,
+            "#a { background: var(--accent, red); }",
+            CompileOptions::default(),
+        );
+        assert!(color_ok.is_ok());
     }
 
     #[test]
@@ -1521,5 +1665,89 @@ mod tests {
             .variables
             .iter()
             .any(|variable| variable.name == "--focus-ring"));
+    }
+}
+
+#[cfg(test)]
+mod ui_pages_tests {
+    use super::*;
+
+    fn html_pages(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).expect("read ui dir") {
+            let path = entry.expect("ui entry").path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name != "assets") {
+                    html_pages(&path, out);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "html") {
+                out.push(path);
+            }
+        }
+    }
+
+    fn css_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).expect("read ui dir") {
+            let path = entry.expect("ui entry").path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name != "assets") {
+                    css_files(&path, out);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "css") {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn every_ui_stylesheet_resolves_length_variables() {
+        let ui = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui"));
+        let mut sheets = Vec::new();
+        css_files(ui, &mut sheets);
+        assert!(!sheets.is_empty());
+        // Shared tokens live in base.css, which pages load alongside their own sheet.
+        let base = ui.join("base/base.css");
+        for sheet in &sheets {
+            let mut source = fs::read_to_string(&base).expect("read base CSS");
+            source.push_str(&fs::read_to_string(sheet).expect("read ui CSS"));
+            let rules = parse_stylesheet(&source)
+                .unwrap_or_else(|error| panic!("{}: {error}", sheet.display()));
+            let (_, _, lengths) = collect_variables(&rules)
+                .unwrap_or_else(|error| panic!("{}: {error}", sheet.display()));
+            for declaration in rules.iter().flat_map(|rule| &rule.declarations) {
+                if takes_length_var(&declaration.name) && declaration.value.contains("var(") {
+                    resolve_length_vars(declaration.value.trim(), &lengths).unwrap_or_else(
+                        |error| panic!("{}: {}: {error}", sheet.display(), declaration.name),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_ui_page_compiles_with_its_linked_css() {
+        let ui = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui"));
+        let mut pages = Vec::new();
+        html_pages(ui, &mut pages);
+        assert!(
+            !pages.is_empty(),
+            "no UI pages found under {}",
+            ui.display()
+        );
+        let mut failures = Vec::new();
+        for page in &pages {
+            if let Err(error) = compile_file(page, &[], CompileOptions::default()) {
+                // Image bytes are not checked out in every workspace; CSS errors still fail.
+                if error.starts_with("failed to read image") {
+                    eprintln!("skipped (missing image asset): {error}");
+                } else {
+                    failures.push(format!("{}: {error}", page.display()));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "UI pages failed to compile:\n{}",
+            failures.join("\n")
+        );
     }
 }

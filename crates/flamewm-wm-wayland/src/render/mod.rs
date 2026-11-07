@@ -876,6 +876,9 @@ mod decoration_tests {
 
     #[test]
     fn chrome_stable_and_buttons_are_glyphs_not_coloured_squares() {
+        let _guard = GLASS_STATICS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let first = chrome_pixels(400, true, Mode::Normal, None, "FlameWM Terminal");
         assert_eq!(
             first,
@@ -1194,7 +1197,7 @@ mod surface_backdrop_tests {
 
 /// Serializes tests that mutate or compare frames against the process-wide glass statics.
 #[cfg(test)]
-static GLASS_STATICS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static GLASS_STATICS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod flat_default_tests {

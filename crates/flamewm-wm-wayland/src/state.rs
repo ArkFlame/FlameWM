@@ -642,7 +642,15 @@ impl State {
         let work = self.work_area();
         let previous = std::mem::replace(&mut self.cached_work_area, work);
         let output = self.output_rect();
-        let fitted = refit_model_placements(&mut self.model, output, previous, work);
+        // A shrunk or unplugged output can leave the pointer past its edge; keep it on screen.
+        let (px, py) = crate::model::clamp_point_into(self.pointer.x, self.pointer.y, output);
+        self.pointer = Point::from((px, py));
+        let mut fitted = refit_model_placements(&mut self.model, output, previous, work);
+        // Floating windows only need pulling back when the usable area itself changed (an output
+        // resize, unplug or panel change); otherwise they keep the spot the user put them.
+        if previous != work {
+            fitted.extend(self.model.clamp_floating_into(output));
+        }
         for id in fitted {
             self.apply_geometry(id);
         }

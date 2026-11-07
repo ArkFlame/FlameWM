@@ -1109,3 +1109,93 @@ fn a_live_count_is_clamped_to_the_product_range() {
         flamewm_api::workspace::MAX_WORKSPACES
     );
 }
+
+/// Unplugging or shrinking an output pulls floating windows that now sit off-screen back inside,
+/// and leaves windows that are still visible where the user put them.
+#[test]
+fn clamp_floating_into_pulls_offscreen_windows_back_after_an_output_shrink() {
+    let mut model = model_with(&[1, 2]);
+    model.configure(true, 0);
+    model.get_mut(1).unwrap().rect = Rect::new(900, 100, 300, 200);
+    model.get_mut(2).unwrap().rect = Rect::new(10, 100, 200, 200);
+
+    let output = Rect::new(0, 0, 1000, 700);
+    let moved = model.clamp_floating_into(output);
+    assert_eq!(moved, vec![1], "only the window past the right edge moves");
+    assert_eq!(
+        model.get(1).unwrap().rect.x,
+        700,
+        "right edge sits on the output edge"
+    );
+    assert_eq!(model.get(2).unwrap().rect, Rect::new(10, 100, 200, 200));
+}
+
+/// A floating window larger than a shrunk output is shrunk to fit, with the titlebar band kept.
+#[test]
+fn clamp_floating_into_shrinks_a_window_larger_than_the_output() {
+    let mut model = model_with(&[1]);
+    model.configure(true, 0);
+    model.get_mut(1).unwrap().rect = Rect::new(0, 0, 800, 600);
+
+    let output = Rect::new(0, 0, 500, 400);
+    assert_eq!(model.clamp_floating_into(output), vec![1]);
+    let frame = model.get(1).unwrap().frame();
+    assert!(
+        frame.x >= 0 && frame.y >= 0 && frame.x + frame.w <= 500 && frame.y + frame.h <= 400,
+        "frame {frame:?} must fit the output"
+    );
+    assert_eq!(frame.w, 500);
+}
+
+/// Maximized and fullscreen windows are owned by the refit path, not this clamp.
+#[test]
+fn clamp_floating_into_leaves_maximized_windows_alone() {
+    let mut model = model_with(&[1]);
+    model.configure(true, 0);
+    model.toggle_maximize(1, WORK);
+    let before = model.get(1).unwrap().rect;
+    assert!(
+        model
+            .clamp_floating_into(Rect::new(0, 0, 100, 100))
+            .is_empty()
+    );
+    assert_eq!(model.get(1).unwrap().rect, before);
+}
+
+/// A zero or negative output has no usable area: nothing moves and nothing panics.
+#[test]
+fn clamp_floating_into_ignores_zero_sized_outputs() {
+    let mut model = model_with(&[1]);
+    model.get_mut(1).unwrap().rect = Rect::new(40, 40, 300, 200);
+    assert!(model.clamp_floating_into(Rect::new(0, 0, 0, 0)).is_empty());
+    assert!(
+        model
+            .clamp_floating_into(Rect::new(0, 0, -5, 300))
+            .is_empty()
+    );
+    assert_eq!(model.get(1).unwrap().rect, Rect::new(40, 40, 300, 200));
+}
+
+/// A pointer left past a shrunk or unplugged output lands on that output's last pixel.
+#[test]
+fn clamp_point_into_pulls_pointer_onto_shrunk_output() {
+    let shrunk = Rect::new(0, 0, 800, 600);
+    assert_eq!(clamp_point_into(1900.0, 1000.0, shrunk), (799.0, 599.0));
+    assert_eq!(clamp_point_into(-5.0, -3.0, shrunk), (0.0, 0.0));
+    assert_eq!(clamp_point_into(120.5, 40.0, shrunk), (120.5, 40.0));
+    let offset = Rect::new(1920, 0, 1280, 1024);
+    assert_eq!(clamp_point_into(100.0, 2000.0, offset), (1920.0, 1023.0));
+    let empty = Rect::new(0, 0, 0, 0);
+    assert_eq!(clamp_point_into(7.0, 9.0, empty), (7.0, 9.0));
+}
+
+/// Odd-sized outputs (1px, non-even dimensions) clamp without an inverted range.
+#[test]
+fn clamp_into_output_handles_one_pixel_and_odd_outputs() {
+    let one = clamp_into_output(Rect::new(50, 50, 30, 30), Rect::new(0, 0, 1, 1));
+    assert_eq!(one, Rect::new(0, 0, 1, 1));
+    let odd = clamp_into_output(Rect::new(1000, -20, 333, 333), Rect::new(0, 0, 1921, 1081));
+    assert_eq!(odd, Rect::new(1000, 0, 333, 333));
+    let inside = Rect::new(3, 4, 5, 6);
+    assert_eq!(clamp_into_output(inside, Rect::new(0, 0, 999, 999)), inside);
+}

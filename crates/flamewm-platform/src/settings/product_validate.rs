@@ -63,6 +63,9 @@ impl ProductSettings {
         if !(34..=72).contains(&self.taskbar_height) {
             return invalid("taskbarHeight must be 34..72");
         }
+        if !(4..=64).contains(&self.edge_snap_threshold_px) {
+            return invalid("edgeSnap.thresholdPx must be 4..64");
+        }
         if self.window_margin > 32 {
             return invalid("windowMargin must be 0..32");
         }

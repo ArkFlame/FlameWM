@@ -11,6 +11,34 @@ pub(super) fn client_from_frame(frame: flamewm_api::Rect, titlebars: bool) -> Re
     Rect::new(frame.x, frame.y + band, frame.width, frame.height - band)
 }
 
+/// Moves `rect` fully inside `output`, shrinking it only when it is larger than the output.
+///
+/// A zero or negative output has no usable area, so the rect is returned unchanged rather than
+/// clamped into an empty range.
+pub(super) fn clamp_into_output(rect: Rect, output: Rect) -> Rect {
+    if output.w <= 0 || output.h <= 0 {
+        return rect;
+    }
+    let w = rect.w.clamp(0, output.w);
+    let h = rect.h.clamp(0, output.h);
+    let x = rect.x.clamp(output.x, output.x + output.w - w);
+    let y = rect.y.clamp(output.y, output.y + output.h - h);
+    Rect::new(x, y, w, h)
+}
+
+/// Keeps a pointer position on the last pixel row and column of `output`.
+///
+/// An output with no usable area leaves the point unchanged, like `clamp_into_output`.
+pub(crate) fn clamp_point_into(x: f64, y: f64, output: Rect) -> (f64, f64) {
+    if output.w <= 0 || output.h <= 0 {
+        return (x, y);
+    }
+    let (min_x, min_y) = (f64::from(output.x), f64::from(output.y));
+    let max_x = f64::from(output.x + output.w - 1);
+    let max_y = f64::from(output.y + output.h - 1);
+    (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
+}
+
 /// Client rect of a window maximized into `work`: the frame fills the shared-margin work area.
 pub(super) fn maximized_client(work: Rect, titlebars: bool, margin: i32) -> Rect {
     let work = api_rect(work);
