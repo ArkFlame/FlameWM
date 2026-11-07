@@ -108,6 +108,7 @@ mod tests {
         "keyboard-layout-pt",
         "keyboard-layout-br",
         "window-margin-value",
+        "text-scale-value",
         "taskbar-floating-margin-value",
         "taskbar-floating-radius-value",
         "wallpaper-fit-value",
@@ -164,6 +165,7 @@ mod tests {
         "taskbar",
         "displays",
         "fonts",
+        "accessibility",
         "hotkeys",
         "assistant",
         "about",
@@ -413,6 +415,23 @@ mod tests {
             .split_once("Window frame")
             .map_or(rest, |(glass, _)| glass);
         assert!(!glass.contains("shadow"), "glass rows must not use shadows");
+    }
+
+    #[test]
+    fn sidebar_empty_state_is_one_hidden_status_node_under_the_rows() {
+        assert_eq!(HTML.matches("id=\"nav-empty\"").count(), 1);
+        let node = HTML
+            .split_once("id=\"nav-empty\"")
+            .and_then(|(_, rest)| rest.split_once("</div>"))
+            .map(|(body, _)| body)
+            .expect("nav-empty node");
+        assert!(node.contains("No settings match"), "{node}");
+        assert!(node.contains("role=\"status\""), "{node}");
+        let about = HTML.find("id=\"nav-about\"").expect("about row");
+        assert!(HTML.find("id=\"nav-empty\"").expect("empty node") > about);
+        let rule = css_rule(CSS, ".nav-empty");
+        assert_eq!(css_value(rule, "color"), Some("var(--text-secondary)"));
+        assert_eq!(css_value(rule, "height"), Some("30px"));
     }
 
     #[test]

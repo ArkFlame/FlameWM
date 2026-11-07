@@ -189,6 +189,7 @@ pub(crate) fn page(value: &str) -> Option<SettingsPage> {
         "taskbar" => Some(SettingsPage::Taskbar),
         "displays" => Some(SettingsPage::Displays),
         "fonts" => Some(SettingsPage::Fonts),
+        "accessibility" => Some(SettingsPage::Accessibility),
         "hotkeys" => Some(SettingsPage::Hotkeys),
         "assistant" => Some(SettingsPage::Assistant),
         "about" => Some(SettingsPage::About),
@@ -279,7 +280,11 @@ pub(crate) fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-pub(crate) const TOGGLE_KEYS: [&str; 52] = [
+pub(crate) const TOGGLE_KEYS: [&str; 56] = [
+    "highContrast",
+    "reducedMotion",
+    "stickyKeys",
+    "slowKeys",
     "reduceTransparency",
     "showContentWhileDragging",
     "stickyNotesEnabled",

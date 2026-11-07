@@ -178,7 +178,7 @@ input { cursor:text; }
 .wifi-row:hover { background:var(--accent-soft); }.wifi-status { color:var(--c-9fa6ac); font-size:var(--font-xs); margin-top:2px; }
 .network-slots { width:100%; display:flex; flex-direction:column; gap:2px; }
 .audio-row { width:100%; display:flex; align-items:center; gap:var(--space-sm); }
-.audio-list { width:100%; max-height:220px; display:flex; flex-direction:column; gap:2px; overflow-x:hidden; overflow-y:auto; }
+.audio-list { width:100%; display:flex; flex-direction:column; gap:2px; overflow-x:hidden; overflow-y:auto; }
 .network-slots { width:100%; max-height:180px; display:flex; flex-direction:column; gap:2px; overflow-x:hidden; overflow-y:auto; }
 .network-connected { width:100%; display:flex; flex-direction:column; gap:2px; }
 .start-list { width:100%; max-height:320px; display:flex; flex-direction:column; overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }

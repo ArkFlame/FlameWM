@@ -301,6 +301,33 @@ mod tests {
         }
     }
 
+    /// Declarations of the first `{ ... }` rule whose selector is exactly `selector`.
+    fn rule(css: &str, selector: &str) -> String {
+        let start = css
+            .find(&format!("{selector} {{"))
+            .unwrap_or_else(|| panic!("template lacks rule {selector}"));
+        let body = &css[start..];
+        body[..body.find('}').expect("rule end")].to_owned()
+    }
+
+    #[test]
+    fn center_text_ellipsizes_and_button_labels_center() {
+        for selector in [".nc-item-summary", ".nc-item-body", ".nc-group-app"] {
+            let body = rule(TEMPLATE, selector);
+            assert!(body.contains("white-space:nowrap"), "{selector}: {body}");
+            assert!(
+                body.contains("text-overflow:ellipsis"),
+                "{selector}: {body}"
+            );
+        }
+        for selector in [".nc-clear", ".nc-group-mute"] {
+            let body = rule(TEMPLATE, selector);
+            assert!(body.contains("display:flex"), "{selector}: {body}");
+            assert!(body.contains("align-items:center"), "{selector}: {body}");
+        }
+        assert!(rule(TEMPLATE, ".nc-toggle").contains("justify-content:space-between"));
+    }
+
     #[test]
     fn clip_truncates_on_character_boundaries() {
         assert_eq!(clip("short"), "short");

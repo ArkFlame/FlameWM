@@ -13,6 +13,7 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .nav-row:hover { background:var(--nav-hover); }
 .nav-row:active { background:var(--nav-pressed); }
 .nav-row img { width:20px; height:20px; }
+.nav-empty { width:171px; margin:0 8px; padding:0 10px; height:30px; display:flex; align-items:center; color:var(--text-secondary); font-size:var(--font-base); white-space:nowrap; }
 .settings-main { flex:1; width:auto; height:100%; min-width:0; position:relative; overflow:hidden; }
 .settings-page { position:absolute; left:0; top:0; width:100%; bottom:0; }
 .page-scroll { padding:28px 30px; padding-bottom:44px; display:flex; flex-direction:column; gap:16px; overflow-x:hidden; overflow-y:auto; }

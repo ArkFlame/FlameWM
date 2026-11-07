@@ -300,7 +300,7 @@ fn every_static_node_the_controller_writes_is_declared_in_markup() {
         assert!(ids.contains(*on), "{key} ON twin missing: {on}");
         assert!(ids.contains(*off), "{key} OFF twin missing: {off}");
     }
-    for node in ["nav-selection", "settings-error"] {
+    for node in ["nav-selection", "nav-empty", "settings-error"] {
         assert!(ids.contains(node), "missing node {node}");
     }
     for slot in 0..OUTPUT_PAGE_SLOTS {

@@ -7,7 +7,7 @@ pub(crate) const NAV_ROW_PITCH_PX: f32 = 30.0;
 /// Search field block (30 px field plus 6 px bottom margin) between the brand and the rows.
 pub(crate) const NAV_SEARCH_BLOCK_PX: f32 = 36.0;
 /// Sidebar pages in row order, with the labels the search filters on.
-pub(crate) const NAV_PAGES: [(&str, &str); 13] = [
+pub(crate) const NAV_PAGES: [(&str, &str); 14] = [
     ("theme", "Theme"),
     ("start-menu", "Start Menu"),
     ("surfaces", "Surfaces"),
@@ -18,6 +18,7 @@ pub(crate) const NAV_PAGES: [(&str, &str); 13] = [
     ("taskbar", "Taskbar"),
     ("displays", "Displays"),
     ("fonts", "Fonts"),
+    ("accessibility", "Accessibility"),
     ("hotkeys", "Hotkeys"),
     ("assistant", "Assistant"),
     ("about", "About"),
@@ -26,6 +27,11 @@ pub(crate) const NAV_PAGES: [(&str, &str); 13] = [
 /// Case-insensitive contains match; an empty query shows every page.
 pub(crate) fn nav_matches(label: &str, query: &str) -> bool {
     query.is_empty() || label.to_lowercase().contains(&query.to_lowercase())
+}
+
+/// True when at least one sidebar page label matches `query`; an empty query matches every page.
+pub(crate) fn nav_has_matches(query: &str) -> bool {
+    NAV_PAGES.iter().any(|(_, label)| nav_matches(label, query))
 }
 
 /// Top of the active-row indicator for sidebar index `index`, from the same layout as the CSS rows.

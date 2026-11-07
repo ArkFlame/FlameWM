@@ -16,6 +16,10 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "nav-selection-accent",
     "reduce-transparency-on",
     "anim-global-on",
+    "a11y-high-contrast-on",
+    "a11y-reduced-motion-on",
+    "a11y-sticky-keys-on",
+    "a11y-slow-keys-on",
     "anim-start-on",
     "anim-window-on",
     "anim-minimize-on",
@@ -68,6 +72,25 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
 ];
 /// Boolean ON/OFF twins: (setting key, ON id, OFF id, default when the key is absent).
 pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
+    (
+        "highContrast",
+        "a11y-high-contrast-on",
+        "a11y-high-contrast-off",
+        false,
+    ),
+    (
+        "reducedMotion",
+        "a11y-reduced-motion-on",
+        "a11y-reduced-motion-off",
+        false,
+    ),
+    (
+        "stickyKeys",
+        "a11y-sticky-keys-on",
+        "a11y-sticky-keys-off",
+        false,
+    ),
+    ("slowKeys", "a11y-slow-keys-on", "a11y-slow-keys-off", false),
     (
         "shareWallpaper",
         "wallpaper-share-on",

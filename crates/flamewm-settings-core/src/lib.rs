@@ -23,6 +23,7 @@ pub enum SettingsPage {
     Taskbar,
     Displays,
     Fonts,
+    Accessibility,
     Hotkeys,
     Assistant,
     About,

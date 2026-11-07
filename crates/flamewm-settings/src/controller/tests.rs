@@ -13,6 +13,7 @@ use flamewm_ui_x11::{RuntimeImage, UiActionEvent, UiActionPhase, UiColor, UiDocu
 use crate::SettingsApplication;
 
 mod accent_color;
+mod accessibility;
 mod animation_lock;
 mod api_key;
 mod appearance;
@@ -23,6 +24,7 @@ mod hotkey_seams;
 mod hotkeys;
 mod keyboard_capture;
 mod markup_errors;
+mod nav_search;
 mod page_guards;
 mod segments_backgrounds;
 mod stepper_controls;

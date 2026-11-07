@@ -673,6 +673,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         let selected_slug = NAV_PAGES[self.nav_index()].0;
         document.visible("nav-selection", !filtering)?;
+        document.visible("nav-empty", !nav_has_matches(&self.nav_query) && filtering)?;
         let search_text = match (self.nav_search_focused, self.nav_query.is_empty()) {
             (false, true) => "Search".to_owned(),
             (true, _) => format!("{}|", self.nav_query),
@@ -711,6 +712,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("taskbar", SettingsPage::Taskbar),
             ("displays", SettingsPage::Displays),
             ("fonts", SettingsPage::Fonts),
+            ("accessibility", SettingsPage::Accessibility),
             ("hotkeys", SettingsPage::Hotkeys),
             ("assistant", SettingsPage::Assistant),
             ("about", SettingsPage::About),
@@ -820,6 +822,18 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 "font-shadow-toggle-on",
                 "font-shadow-toggle-off",
             ),
+            (
+                "highContrast",
+                "a11y-high-contrast-on",
+                "a11y-high-contrast-off",
+            ),
+            (
+                "reducedMotion",
+                "a11y-reduced-motion-on",
+                "a11y-reduced-motion-off",
+            ),
+            ("stickyKeys", "a11y-sticky-keys-on", "a11y-sticky-keys-off"),
+            ("slowKeys", "a11y-slow-keys-on", "a11y-slow-keys-off"),
             ("animationsEnabled", "anim-global-on", "anim-global-off"),
             ("startAnimationEnabled", "anim-start-on", "anim-start-off"),
             (

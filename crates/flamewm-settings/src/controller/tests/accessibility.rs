@@ -1,0 +1,91 @@
+use super::*;
+
+fn accessibility_snapshot(revision: u64, key: &str, value: SettingValue) -> SettingsSnapshot {
+    let mut snapshot = SettingsSnapshot::new(revision);
+    snapshot.values.insert(key.to_owned(), value);
+    snapshot
+}
+
+#[test]
+fn sidebar_row_opens_the_accessibility_page_only() {
+    let (_requests, mut transport) = recording_transport();
+    transport
+        .responses
+        .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(1))));
+    let mut application = settings_application(transport);
+    let mut document = ProbeDocument::default();
+    application
+        .handle_action(&release("settings.page.accessibility"), &mut document)
+        .expect("open accessibility page");
+    application.sync(&mut document).expect("sync page");
+    assert!(document.visible["page-accessibility"]);
+    assert!(!document.visible["page-fonts"]);
+    assert!(!document.visible["page-hotkeys"]);
+    assert_eq!(application.nav_index(), 10);
+}
+
+#[test]
+fn accessibility_toggles_write_booleans() {
+    for key in ["highContrast", "reducedMotion", "stickyKeys", "slowKeys"] {
+        let (requests, mut transport) = recording_transport();
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(accessibility_snapshot(
+                1,
+                key,
+                SettingValue::Boolean(false),
+            ))),
+            Ok(ControlResponse::Settings(accessibility_snapshot(
+                2,
+                key,
+                SettingValue::Boolean(true),
+            ))),
+        ]);
+        let mut application = settings_application(transport);
+        let mut document = ProbeDocument::default();
+        application
+            .handle_action(&release(&format!("settings.toggle.{key}")), &mut document)
+            .expect("toggle accessibility key");
+        assert_eq!(
+            written_values(&requests, key),
+            vec![SettingValue::Boolean(true)],
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn text_scale_steps_write_integer_five_percent_steps_within_100_to_200() {
+    for (start, action, expected, label) in [
+        (100, "settings.text-scale.up", 105, "105%"),
+        (105, "settings.text-scale.down", 100, "100%"),
+        (100, "settings.text-scale.down", 100, "100%"),
+        (198, "settings.text-scale.up", 200, "200%"),
+    ] {
+        let (requests, mut transport) = recording_transport();
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(accessibility_snapshot(
+                1,
+                "textScalePercent",
+                SettingValue::Integer(start),
+            ))),
+            Ok(ControlResponse::Settings(accessibility_snapshot(
+                2,
+                "textScalePercent",
+                SettingValue::Integer(expected),
+            ))),
+        ]);
+        let mut application = settings_application(transport);
+        let mut document = ProbeDocument::default();
+        application
+            .handle_action(&release(action), &mut document)
+            .expect("text scale step");
+        let written = written_values(&requests, "textScalePercent");
+        assert_eq!(
+            written,
+            vec![SettingValue::Integer(expected)],
+            "{action} from {start}"
+        );
+        application.sync(&mut document).expect("sync label");
+        assert_eq!(document.texts["text-scale-value"], label, "{action} label");
+    }
+}

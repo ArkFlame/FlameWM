@@ -11,9 +11,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsPage::Taskbar => 7,
             SettingsPage::Displays => 8,
             SettingsPage::Fonts => 9,
-            SettingsPage::Hotkeys => 10,
-            SettingsPage::Assistant => 11,
-            SettingsPage::About => 12,
+            SettingsPage::Accessibility => 10,
+            SettingsPage::Hotkeys => 11,
+            SettingsPage::Assistant => 12,
+            SettingsPage::About => 13,
         }
     }
 
@@ -610,7 +611,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 } else if matches!(row.key, "nightShiftStart" | "nightShiftEnd") {
                     // Both are minutes after midnight, shown as the clock time the schedule uses.
                     flamewm_api::blue_light::format_minutes(u32::try_from(value).unwrap_or(0))
-                } else if row.key == "blueLightFilter" {
+                } else if matches!(row.key, "blueLightFilter" | "textScalePercent") {
                     format!("{value}%")
                 } else {
                     value.to_string()

@@ -91,6 +91,7 @@ fn parse_page(value: &str) -> Option<(SettingsPage, AppearanceTab)> {
         "taskbar" => Some((SettingsPage::Taskbar, AppearanceTab::Theme)),
         "displays" => Some((SettingsPage::Displays, AppearanceTab::Theme)),
         "fonts" => Some((SettingsPage::Fonts, AppearanceTab::Theme)),
+        "accessibility" => Some((SettingsPage::Accessibility, AppearanceTab::Theme)),
         "hotkeys" => Some((SettingsPage::Hotkeys, AppearanceTab::Theme)),
         "assistant" => Some((SettingsPage::Assistant, AppearanceTab::Theme)),
         "about" => Some((SettingsPage::About, AppearanceTab::Theme)),
@@ -143,6 +144,7 @@ mod tests {
             ("taskbar", SettingsPage::Taskbar),
             ("displays", SettingsPage::Displays),
             ("fonts", SettingsPage::Fonts),
+            ("accessibility", SettingsPage::Accessibility),
             ("hotkeys", SettingsPage::Hotkeys),
             ("assistant", SettingsPage::Assistant),
         ] {

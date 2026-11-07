@@ -559,3 +559,18 @@ mod audio_template_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod audio_list_css_tests {
+    /// The device list must keep the template's 336px height: a stale shared `max-height`
+    /// would clip the third row and leave a dead band above the footer.
+    #[test]
+    fn audio_list_is_not_capped_below_its_template_height() {
+        let css = include_str!("../../../../ui/shell/flamewm.css");
+        let start = css.find(".audio-list {").expect("audio-list rule");
+        let body = &css[start..start + css[start..].find('}').expect("rule end")];
+        assert!(!body.contains("max-height"), "{body}");
+        assert!(include_str!("../../../../ui/shell/audio.html")
+            .contains(".audio-list { position:relative; height:336px;"));
+    }
+}

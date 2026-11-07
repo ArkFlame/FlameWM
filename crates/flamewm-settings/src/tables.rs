@@ -43,7 +43,14 @@ pub(crate) struct IntegerStepper {
     pub(crate) maximum: i64,
 }
 
-pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 14] = [
+pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 15] = [
+    IntegerStepper {
+        slug: "text-scale",
+        key: "textScalePercent",
+        step: 5,
+        minimum: 100,
+        maximum: 200,
+    },
     IntegerStepper {
         slug: "window-margin",
         key: "windowMargin",
