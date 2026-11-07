@@ -11,6 +11,7 @@ use std::time::Duration;
 const WINIT_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
 use flamewm_platform::shortcuts::ShortcutRegistry;
+use flamewm_window_core::dock_reserve::{self, ReserveEdge};
 use flamewm_wm_wayland::protocols::toplevel::{ToplevelFacts, diff as diff_toplevel_facts};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::glow::GlowRenderer;
@@ -368,6 +369,8 @@ pub struct State {
     pub output_size: Size<i32, Logical>,
     /// Last work area used to place snapped/maximized/fullscreen windows.
     cached_work_area: Rect,
+    /// Dock cut from the work area, from `dock.*` settings; `None` while the dock is hidden.
+    pub(crate) dock_reserve: Option<(ReserveEdge, i32)>,
     pub damage: OutputDamageTracker,
     pub model: WindowModel,
     /// Resolved blue-light intensity (0..=100). The compositor has no output gamma ramp through
@@ -523,6 +526,7 @@ impl State {
             output,
             output_size: Size::from((1280, 800)),
             cached_work_area: Rect::new(0, 0, 1280, 800),
+            dock_reserve: None,
             damage,
             model,
             blue_light_intensity: 0,
@@ -706,10 +710,12 @@ impl State {
         map.arrange();
         let zone: Rectangle<i32, Logical> = map.non_exclusive_zone();
         let struts = self.unmanaged.iter().filter_map(|entry| entry.strut);
-        reserve_struts(
+        let work = reserve_struts(
             Rect::new(zone.loc.x, zone.loc.y, zone.size.w, zone.size.h),
             struts,
-        )
+        );
+        // The Dock cuts after the taskbar's zone, so a Dock on the same edge stacks beyond it.
+        cut_dock(work, self.dock_reserve)
     }
 
     /// Refit output-sized placements once, and only once, for each effective work-area change.
@@ -1118,6 +1124,50 @@ pub fn reserve_struts(area: Rect, struts: impl Iterator<Item = [i32; 4]>) -> Rec
     let x1 = (area.x + area.w - right).max(x0);
     let y1 = (area.y + area.h - bottom).max(y0);
     Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+#[cfg(test)]
+mod dock_work_area_tests {
+    use super::*;
+    use flamewm_window_core::dock_reserve::{ReserveEdge, dock_extent};
+
+    const OUTPUT: Rect = Rect::new(0, 0, 1280, 800);
+
+    /// The `work_area()` pipeline with the layer zone already reduced by `zone_struts`.
+    fn work_area(zone: Rect, struts: &[[i32; 4]], dock: Option<(ReserveEdge, i32)>) -> Rect {
+        cut_dock(reserve_struts(zone, struts.iter().copied()), dock)
+    }
+
+    #[test]
+    fn dock_stacks_above_a_bottom_taskbar() {
+        let taskbar = [[0, 0, 0, 44]];
+        let work = work_area(OUTPUT, &taskbar, Some((ReserveEdge::Bottom, dock_extent(48))));
+        assert_eq!(work, Rect::new(0, 0, 1280, 800 - 44 - dock_extent(48)));
+    }
+
+    #[test]
+    fn dock_alone_cuts_only_its_edge() {
+        let work = work_area(OUTPUT, &[], Some((ReserveEdge::Left, dock_extent(48))));
+        assert_eq!(work, Rect::new(dock_extent(48), 0, 1280 - dock_extent(48), 800));
+    }
+
+    #[test]
+    fn hidden_dock_and_no_taskbar_leave_the_output_whole() {
+        assert_eq!(work_area(OUTPUT, &[], None), OUTPUT);
+    }
+}
+
+/// Cuts the Dock's reserve from a work area; `None` (dock hidden) returns it unchanged.
+fn cut_dock(work: Rect, dock: Option<(ReserveEdge, i32)>) -> Rect {
+    let Some((edge, extent)) = dock else {
+        return work;
+    };
+    let cut = dock_reserve::reserve_edge(
+        flamewm_api::Rect::new(work.x, work.y, work.w, work.h),
+        edge,
+        extent,
+    );
+    Rect::new(cut.x, cut.y, cut.width, cut.height)
 }
 
 /// Refit every output-sized placement only when the effective work area changes.

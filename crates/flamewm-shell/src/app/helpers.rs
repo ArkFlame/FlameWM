@@ -44,6 +44,11 @@ pub(super) fn interaction_target_is_current(
 
 /// Flat `taskbarStyle` / `taskbarFloating*` keys as the platform reads them (defaults match
 /// `ProductSettings::default()`).
+/// `taskbar.enabled`; a missing key keeps the spec default (enabled).
+pub(super) fn taskbar_enabled(settings: &SettingsSnapshot) -> bool {
+    !matches!(settings.values.get("taskbar.enabled"), Some(SettingValue::Boolean(false)))
+}
+
 pub(super) fn taskbar_frame(settings: &SettingsSnapshot) -> TaskbarFrame {
     let floating = matches!(
         settings.values.get("taskbarStyle"),

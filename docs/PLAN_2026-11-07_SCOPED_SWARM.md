@@ -402,3 +402,89 @@ Pure-move splits. Public paths kept via re-exports; tests moved with their code.
 - Target not met: about 7 to 11 percent on debug open totals. Likely cause (inferred, not measured): debug codegen of the blur and upscale loops. Unmeasured next step: a `[profile.dev.package.flamewm-image-core]` (and render-x11) `opt-level` override in root `Cargo.toml`, which needs an owner decision. Release-build numbers were not measured.
 - Input gap: the plan has no `Results: B5` section (only B4), so the B5 harness pattern (`/tmp/claude-1000/fw-b5`) was reused with new click coordinates for this screen. Harness: `/tmp/claude-1000/fw-b6/<label>/`, Xvfb `:200`, scripts in the scratchpad `b6/` directory.
 - No commit.
+
+## Results: DOCK (in progress, not complete)
+
+Status: PARTIAL. Settings keys, pure model and specs are done and tested. The shell surface, work-area hook, click/drag/menu wiring and visual verification are NOT done.
+
+Done:
+- Platform keys (flamewm-platform settings.rs + dock_settings_tests.rs): dock.enabled/position/iconSize/pinned/showRunning, taskbar.enabled/fill/gradientEdge. Decision applied: existing taskbarStyle unchanged; taskbar.fill added.
+  - cargo test -p flamewm-platform: 310 passed, exit 0.
+- API mirror (flamewm-api settings_groups.rs): cargo test -p flamewm-api: 60 passed, exit 0.
+- Pure dock model (flamewm-shell-core dock.rs, 8 tests) and gradient geometry: cargo test -p flamewm-shell-core: 114 passed, exit 0, no warnings.
+- architecture_guard: exit 0 (77 ratified violations, none new) - last run before platform edits; rerun pending.
+- docs/DOCK_DESIGN.md, docs/DOCK_SETTINGS_SPEC.md (READY).
+
+Not done (remaining, in order):
+- (2) Tokens: none needed so far; the gradient uses var(--surface).
+- (3) ui/shell/dock.html + vertical variant; build.rs entries; flamewm-shell surface creation gated by dock.enabled; projection of pinned/running; launch/focus via taskbar logic; running dot; context menu; drag reorder/remove; hover label; pinned persistence. The panel pipeline (runtime.rs create_panel_surface, app/panels.rs reconciliation, placement contexts) is large and was not yet read in depth.
+- (4) taskbar.enabled=false hiding the taskbar panel and taskbar.fill gradient rendering in panel.html/flamewm.css.
+- (5) work-area/strut hook in flamewm-wm-x11 / flamewm-wm-wayland.
+- (6) Xvfb screenshots (bottom/left/right/top, gradient, dock-only) and xtest click/reorder check.
+- (7) cargo test --workspace --no-fail-fast; zero warnings; architecture_guard rerun.
+- Logs: /tmp/claude-1000/dock-*.log (written to /tmp, against the scratchpad rule).
+
+### Results: DOCK, pass 2 (CODER, shell-core logic slice)
+
+Status: PARTIAL. Only the pure logic layer was added. Surface, template, settings wiring, click/drag/menu wiring, gradient fill, work-area hook and visual verification are NOT done.
+
+Done:
+- `crates/flamewm-shell-core/src/dock.rs`: added `slot_at` (drop index from pointer), `drag_off_removes` (unpin threshold), `DockMenuAction` + `menu_items` (right-click entries), with 3 new tests. Existing public signatures unchanged.
+- `cd flamewm-webrender && CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-dock cargo test -p flamewm-shell-core`: 117 passed, exit 0, 0 warnings (log: /run/media/linsaftw/SDD/target-swarm-dock/shell-core-test.log).
+- `cargo test -p flamewm-shell -p flamewm-shell-core -p flamewm-skin`: exit 0, 0 warnings, 578 + 117 + 38 + 3 passed (log: /run/media/linsaftw/SDD/target-swarm-dock/shell-test.log).
+- `python3 -I tools/architecture_guard.py`: exit 0, 77 ratified (log: /run/media/linsaftw/SDD/target-swarm-dock/arch-guard.log).
+
+Not done (remaining, in order):
+- `ui/shell/dock.html` (single template, orientation) and build.rs registration (`crates/flamewm-shell/build.rs` `sources` and `artifacts` lists).
+- Surface lifecycle: create only when `dock.enabled` (model on `create_panel_surface`, `runtime.rs:609`, and `runtime/panels.rs` `panel_handles`/`panel_outputs`); hot reload on settings change.
+- Projection of `merge_dock` into the template; running dot and separator; hover label; icon cache use.
+- Interactions: click launch/focus, context menu, drag reorder via `slot_at`, drag-off via `drag_off_removes`, `dock.pinned` persistence through the settings service.
+- `taskbar.enabled=false` (no taskbar panel surface, no work area). `taskbar.fill=gradient`: `gradient_background` exists but CSS/renderer support for `linear-gradient` is unverified.
+- Visual checks (Xvfb screenshots) and xtest click/drag: none run. No screenshots exist.
+- Skill loading: the `flamewm-*` route skills in `.opencode/ROUTES.md` were not available to the CODER and were not loaded.
+
+### Results: DOCK, pass 3 (CODER, shell surface M1-M4)
+
+Status: PASS for M1-M4 shell scope (screenshots and xtest below). Work-area reserve is verified by the WM worker (see Results: DOCKWM).
+
+Done and verified:
+- M1 static `ui/shell/dock.html` (single template, all edges), surface created when `dock.enabled`, bottom-centred. Screenshot `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m2-icons-bound.png`.
+- M2 projection from window snapshots: icons via shared catalog fallback plus `bind_icon_request`/`DOCK_EPOCH`; running dot and separator on running slots only; hover label `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m2-hover-label.png`; click launch (sleep count 0 to 1); click focus changed `_NET_ACTIVE_WINDOW` 0x140000a to 0x200024 (`/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m2-focus.png`).
+- M3 drag reorder persisted `dock.pinned` (`/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m3-drag-reorder.png`); drag-off removal persisted (`/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m3-drag-off.png`).
+- M3 right-click menu opens on secondary release (the backend emits press only for button 1). Both rows visible (`/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m3-menu3.png`). Hover label is hidden while the menu is open. "Remove from dock" pick removed `fx-clock.desktop`: `dock.pinned` went from `fx-clock.desktop,fx-term.desktop,fx-edit.desktop` to `fx-term.desktop,fx-edit.desktop` (`/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m3-menu-pick.png`).
+- M4 orientation: `dock.position=left` (`/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m4-orient-left.png`), `top` (`/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m4-orient-top.png`) and `right` (`/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m4-orient-right.png`) render.
+- M4 `taskbar.enabled=0`: bottom taskbar panel is hidden, dock remains (`/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m4-taskbar-off.png`). `ShellSurfaces::apply_taskbar_enabled` (runtime/panels.rs) runs from `apply_taskbar_frame`. The platform worker already skips creating the taskbar panel when disabled, so this is a safety net and may be a no-op.
+
+Not done or blocked:
+- M4 `taskbar.fill=gradient` (done without a renderer API). Option (a) failed: no `linear-gradient` support anywhere in `crates/flamewm-render-compiler`, `ui/**`, or the ui-document path (grep empty). Option (c) used: a 32-step RGBA alpha ramp (`flamewm_shell_core::dock::gradient_ramp`, tested) painted into an absolutely positioned `img#taskbar-gradient` in `ui/shell/panel.html` and `panel-vertical.html` (CSS `.taskbar-gradient` in `flamewm.css`). Colour is the bar's surface colour (`projection::taskbar_surface`), alpha from its opacity. Built per panel by `ShellSurfaces::apply_taskbar_gradient` from the panel's edge, or `taskbar.gradientEdge` when set. Built only on settings projection, no animation. Solid hides the image.
+  - Screenshots: `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m4-grad-top.png` (top gradient, fade visible from the top edge), `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m4-grad-bottom.png` and `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m4-solid-bottom.png`. Pixel probe at x=300: gradient y=765 `#202126`, y=790 `#0F0F11`; solid y=765 `#0A0A0B`, y=790 `#090A0B`. The gradient fades upward from the bottom edge, so it differs from solid.
+- Menu outside-click and Escape dismissal: DONE. On open the menu takes `runtime.grab_pointer`; a press outside arrives as `surface.outside.release` and closes it, and Escape (`is_escape_key`) closes it. Released on close. Xtest: rclick slot 1, then click at (300,300): menu closed (`/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m3-menu-after-outside.png`). Rclick again, then Escape: menu closed (`/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m3-menu-after-escape.png`). Open-menu capture: `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/dock/m3-menu-open-dismiss.png`. Pixel probe at the menu rect: open `#090A0A`, dismissed `#2A334E`.
+- 24-slot cap. Transparent area above the bar takes clicks.
+- Dock-only sizing with taskbar off and the work-area reserve are owned by the WM worker (see Results: DOCKWM).
+- Hot reload through the settings service was exercised by restarting the session with edited settings, not at runtime.
+
+Checks (actual exits, zero warnings):
+- `cargo build -p flamewm-shell` (CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-dock, CARGO_BUILD_JOBS=3): exit 0, 0 warnings (log: /run/media/linsaftw/SDD/target-swarm-dock/final-build.log).
+- `cargo test -p flamewm-shell -p flamewm-shell-core -p flamewm-skin` (RUST_TEST_THREADS=2): exit 0; 584 + 118 + 38 + 3 passed, 0 failed, 0 warnings (log: /run/media/linsaftw/SDD/target-swarm-dock/final-test.log).
+- `python3 -I tools/architecture_guard.py`: exit 0, 77 ratified violations, none new (log: /run/media/linsaftw/SDD/target-swarm-dock/arch-guard.log).
+- Processes: test sessions and Xvfb :300 stopped (own PIDs only).
+- Known limits: the 24-slot cap, the transparent area above the bar taking clicks, the 32-step gradient (stepped, not smooth), and the session-parent xmessage dialog (harness artefact, not chased).
+- `grep -rn 'DBG_' crates/flamewm-shell/src`: 0 hits.
+- `dock::` public signatures in `crates/flamewm-shell/src/dock.rs` unchanged; only additions (`menu_label`, app-level `DockDrag`, `dock_menu` fields).
+
+Results: DOCKWM
+- Done: shared pure reserve `crates/flamewm-window-core/src/dock_reserve.rs` (`dock_extent`, `reserve_edge`, `dock_reserve_from_snapshot`). X11 cuts the primary output work area and global `work_area()` via `live_settings::dock_reserve()`; `set_output_work_areas` now re-applies on Dock change (`applied_dock`) and republishes `_NET_WORKAREA` (`publish_workspace_metadata`). Wayland cuts after the layer zone in `State::work_area()` via `State.dock_reserve`, refreshed from `control/mirror.rs` `sync_chrome_settings`.
+- Stacking: Dock is cut after the taskbar reserve, so a bottom Dock above a bottom taskbar stacks.
+- Platform: `taskbar.enabled=false` now removes the taskbar strut and work-area reserve and is not created on `sync_outputs` (`crates/flamewm-platform/src/panel.rs` `taskbar_enabled`, `services/panels.rs` `reconcile_taskbar_enabled`, wired in `host.rs`/`host/displays.rs`, key in `services/settings.rs`). Tests: `disabled_taskbar_reserves_no_strut_or_work_area`, `disabled_taskbar_drops_the_reserve_and_survives_display_sync`.
+- Gates (fresh, real exits, zero warnings): `cargo test -p flamewm-wm-x11 -p flamewm-wm-wayland -p flamewm-window-core` exit 0; `cargo check -p flamewm-wm-wayland --features drm` exit 0; `python3 -I tools/architecture_guard.py` exit 0.
+- Runtime X11 (Xvfb :99, `flamewm` binary, xterm maximized via `_NET_WM_STATE`), `_NET_WORKAREA` / xwininfo frame:
+  - default (no dock): 0,0,1280,800 / frame 1276x752+2+2
+  - dock bottom: 0,0,1280,724 / frame 1276x676+2+2 (clear of 76 px strip)
+  - dock bottom + taskbar off: 0,0,1280,724 / frame 1276x720+2+2
+  - dock left: 76,0,1204,800 / frame 1200x752+78+2 (clear of strip)
+- Hot reload via settings-file edit: NOT a valid test. The WM reads the settings file only at startup (`flamewm-platform/src/host.rs:82`); runtime changes arrive via the in-process settings service. Dock-change re-apply is covered by code path only, not runtime-verified.
+- Wayland nested: `flamewm-wayland` (winit, `WINIT_UNIX_BACKEND=x11` on Xvfb :95, dock bottom) ran 15 s without crash (`timeout` exit 124), reached "XWayland ready". Work-area geometry on Wayland NOT measured.
+- Shell double-reserve: `crates/flamewm-shell/src/dock.rs`, `ui/shell/dock.html`, `crates/flamewm-shell-core/src/dock.rs` contain no `_NET_WM_STRUT` or exclusive zone. No double reserve.
+- DOCK_PADDING/DOCK_GAP: left as WM-local constants (8, 6). `dock.rs` exports no padding/gap/extent functions, so no switch.
+- Not verified: taskbar-on (44 px) reserve at runtime (requires flamewm-shell running; platform unit tests only); Wayland work-area geometry; hot reload at runtime through the settings service.
+- Risk: xterm maximize height varied across runs (644 vs 688) with identical `_NET_WORKAREA`; the workarea value is authoritative.

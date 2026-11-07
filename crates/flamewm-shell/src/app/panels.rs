@@ -359,6 +359,12 @@ impl ShellLoop {
         if let Err(error) = self.surfaces.apply_dock_frame(runtime, frame) {
             crate::log_limit::emit("panel error passthrough", format_args!("flamewm-shell: {error}"));
         }
+        if let Err(error) = self.surfaces.apply_taskbar_enabled(runtime, taskbar_enabled(settings)) {
+            crate::log_limit::emit("taskbar visibility", format_args!("flamewm-shell: {error}"));
+        }
+        if let Err(error) = self.surfaces.apply_taskbar_gradient(runtime, settings) {
+            crate::log_limit::emit("taskbar gradient", format_args!("flamewm-shell: {error}"));
+        }
     }
 }
 

@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_platform::settings::HotCornerAction;
 use flamewm_shell_core::hot_corner::Corner;
+use flamewm_window_core::dock_reserve::{ReserveEdge, dock_reserve_from_snapshot};
 
 const DEFAULT_SNAP_PREVIEW_ENABLED: bool = true;
 const DEFAULT_FOCUS_FOLLOWS_MOUSE: bool = false;
@@ -27,6 +28,9 @@ const DEFAULT_EDGE_SNAP_THRESHOLD_PX: i32 = flamewm_window_core::EDGE_THRESHOLD;
 /// `hotCorner.*` actions in top-left, top-right, bottom-left, bottom-right order.
 static HOT_CORNERS: std::sync::Mutex<[HotCornerAction; 4]> =
     std::sync::Mutex::new([HotCornerAction::None; 4]);
+
+/// `dock.*`: the edge and thickness the Dock cuts from the work area; `None` while it is hidden.
+static DOCK_RESERVE: std::sync::Mutex<Option<(ReserveEdge, i32)>> = std::sync::Mutex::new(None);
 
 static SNAP_PREVIEW_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_SNAP_PREVIEW_ENABLED);
 static EDGE_SNAP_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_EDGE_SNAP_ENABLED);
@@ -180,6 +184,9 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     if let Ok(mut actions) = HOT_CORNERS.lock() {
         *actions = hot_corners_from_snapshot(snapshot);
     }
+    if let Ok(mut reserve) = DOCK_RESERVE.lock() {
+        *reserve = dock_reserve_from_snapshot(snapshot);
+    }
     FOCUS_FOLLOWS_MOUSE.store(focus_follows_mouse, Ordering::Relaxed);
     SHOW_CONTENT_WHILE_DRAGGING.store(show_content_from_snapshot(snapshot), Ordering::Relaxed);
     TITLEBARS.store(
@@ -261,6 +268,10 @@ pub(crate) fn titlebars() -> bool {
 }
 
 /// `taskbarActivities` (default `true`): the shell lists running windows, so minimize is allowed.
+pub(crate) fn dock_reserve() -> Option<(ReserveEdge, i32)> {
+    DOCK_RESERVE.lock().ok().and_then(|reserve| *reserve)
+}
+
 pub(crate) fn taskbar_activities() -> bool {
     TASKBAR_ACTIVITIES.load(Ordering::Relaxed)
 }

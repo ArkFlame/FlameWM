@@ -456,6 +456,9 @@ pub(crate) struct Wm<'a, C: Connection> {
     workspace_focus: Vec<Option<Window>>,
     screen_rect: Rect,
     output_work_areas: Vec<OutputWorkArea>,
+    /// Dock reserve the work area was last reconciled with; a change re-lays out windows even when
+    /// no host output area moved.
+    applied_dock: Option<(flamewm_window_core::dock_reserve::ReserveEdge, i32)>,
     /// Region map and output bounds for the last controller build; see `ControllerGeometryCache`.
     controller_geometry: ControllerGeometryCache,
     /// Set by `RandR` notifications; the runtime refreshes the display snapshot on the next turn.

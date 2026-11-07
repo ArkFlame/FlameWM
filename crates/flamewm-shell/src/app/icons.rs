@@ -125,6 +125,13 @@ impl ShellLoop {
                         }
                     }
                 }
+                DependentSurface::Dock => {
+                    if let Some(surface) = self.dock_surface {
+                        if matches!(runtime.with_document(surface, apply), Ok(true)) {
+                            let _ = runtime.redraw(surface);
+                        }
+                    }
+                }
                 DependentSurface::Start => {
                     if matches!(runtime.with_document(self.surfaces.start, apply), Ok(true)) {
                         need_submenu = true;

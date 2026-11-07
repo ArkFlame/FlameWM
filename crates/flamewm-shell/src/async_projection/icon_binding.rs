@@ -7,6 +7,7 @@ pub(super) fn target_in_range(target: IconTarget) -> bool {
         IconTarget::StartSlot(n) => u32::from(n) < START_APP_SLOT_COUNT as u32,
         IconTarget::LauncherSlot(n) => usize::from(n) < crate::launcher::LAUNCHER_ROWS,
         IconTarget::TaskSlot(n) => u32::from(n) < TASK_SLOT_COUNT as u32,
+        IconTarget::DockSlot(n) => usize::from(n) < crate::dock::MAX_SLOTS,
         IconTarget::TraySlot(n) => usize::from(n) < crate::tray_host::SLOT_COUNT,
     }
 }
@@ -38,6 +39,15 @@ pub(super) static START_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 pub(super) static TASK_EPOCH: AtomicU64 = AtomicU64::new(0);
 
+/// Dock slot epoch. Separate from `TASK_EPOCH`: panel task projections bump
+/// that counter on every reprojection, which must not drop dock icon results.
+pub(super) static DOCK_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// Bump the dock epoch: the dock re-requested its slot icons.
+pub fn bump_dock_view_epoch() -> u64 {
+    DOCK_EPOCH.fetch_add(1, Ordering::SeqCst) + 1
+}
+
 /// Bump the start view epoch: category, search query, or model rebuild.
 pub fn bump_start_view_epoch() -> u64 {
     START_EPOCH.fetch_add(1, Ordering::SeqCst) + 1
@@ -54,6 +64,7 @@ pub(super) fn epoch_for_target(target: IconTarget) -> u64 {
             START_EPOCH.load(Ordering::SeqCst)
         }
         IconTarget::TaskSlot(_) | IconTarget::TraySlot(_) => TASK_EPOCH.load(Ordering::SeqCst),
+        IconTarget::DockSlot(_) => DOCK_EPOCH.load(Ordering::SeqCst),
     }
 }
 
@@ -64,6 +75,7 @@ pub fn icon_node_id_for_target(target: IconTarget) -> String {
         IconTarget::StartSlot(n) => format!("start-app-slot-{}-icon", u32::from(n) + 1),
         IconTarget::LauncherSlot(n) => format!("launcher-row-{}-icon", u32::from(n) + 1),
         IconTarget::TaskSlot(n) => format!("task-slot-{}-icon", u32::from(n) + 1),
+        IconTarget::DockSlot(n) => format!("dock-slot-{}-icon", u32::from(n) + 1),
         IconTarget::TraySlot(n) => format!("tray-sni-{}-icon", u32::from(n) + 1),
     }
 }
@@ -159,6 +171,12 @@ pub fn apply_cached_binding(
     };
     paint_raster(document, &icon_node_id_for_target(target), raster)?;
     Ok(true)
+}
+
+/// Binds a node to one requested icon key and generation, so only the
+/// matching completion may paint it. Used by surfaces that request directly.
+pub fn bind_icon_request(target: IconTarget, name: &str, w: u32, h: u32, generation: u64) {
+    record_binding(target, name, w, h, generation);
 }
 
 #[cfg(test)]

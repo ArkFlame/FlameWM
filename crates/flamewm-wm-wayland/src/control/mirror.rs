@@ -139,6 +139,11 @@ impl Service {
         let (edge_snap, edge_px) = edge_snap_settings(&snapshot);
         state.show_content_while_dragging = show_content_while_dragging(&snapshot);
         state.snap_preview_enabled = snap_preview_enabled(&snapshot);
+        let dock = flamewm_window_core::dock_reserve::dock_reserve_from_snapshot(&snapshot);
+        if state.dock_reserve != dock {
+            state.dock_reserve = dock;
+            state.reflow_if_work_area_changed();
+        }
         if state.model.edge_snap() != (edge_snap, edge_px) {
             state.model.configure_edge_snap(edge_snap, edge_px);
         }

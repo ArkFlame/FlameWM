@@ -60,6 +60,14 @@ impl ProductSettings {
         if self.taskbar_opacity > 100 {
             return invalid("taskbarOpacity must be 0..100");
         }
+        if !(24..=96).contains(&self.dock_icon_size) {
+            return invalid("dock.iconSize must be 24..96");
+        }
+        if self.dock_pinned.len() > DOCK_PINNED_MAX
+            || self.dock_pinned.iter().any(|id| !is_valid_dock_app_id(id))
+        {
+            return invalid("dock.pinned must hold at most 32 valid app ids");
+        }
         if !(34..=72).contains(&self.taskbar_height) {
             return invalid("taskbarHeight must be 34..72");
         }

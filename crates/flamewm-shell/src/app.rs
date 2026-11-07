@@ -39,6 +39,7 @@ macro_rules! shell_stage {
 }
 
 mod control;
+mod dock;
 mod helpers;
 mod icons;
 mod input;
@@ -60,7 +61,8 @@ use helpers::{
     clear_transient_state_fields, earliest_wake, end_start_session_fields,
     interaction_target_is_current, media_popup_must_close, media_system_request,
     pager_cell_window_rect, panel_projection_needed, resolve_control_output,
-    start_icon_refresh_due, take_context_menu_for_popup, taskbar_frame, RuntimeIconGeometrySink,
+    start_icon_refresh_due, take_context_menu_for_popup, taskbar_enabled, taskbar_frame,
+    RuntimeIconGeometrySink,
     ZONE_SETTLE,
 };
 use quick_popups::{
@@ -102,6 +104,15 @@ pub(crate) struct ShellLoop {
     pub(crate) network_query: NetworkQuery,
     pub(crate) settings_revision: u64,
     pub(crate) settings_cache: Option<SettingsSnapshot>,
+    pub(crate) dock_surface: Option<flamewm_ui_x11::SurfaceHandle>,
+    pub(crate) dock_entries: Vec<flamewm_shell_core::dock::DockEntry>,
+    pub(crate) dock_hover: Option<usize>,
+    pub(crate) dock_last: Option<dock::DockSync>,
+    pub(crate) dock_catalog: Option<Vec<flamewm_api::applications::DesktopApplication>>,
+    pub(crate) dock_drag: Option<dock::DockDrag>,
+    pub(crate) dock_menu: Option<flamewm_ui_x11::SurfaceHandle>,
+    pub(crate) dock_menu_slot: Option<usize>,
+    pub(crate) dock_menu_items: Vec<flamewm_shell_core::dock::DockMenuAction>,
     pub(crate) settings_projection_pending: bool,
     pub(crate) icon_loader: Option<IconLoader>,
     pub(crate) task_icon_cache: async_projection::TaskIconCache,
@@ -196,6 +207,15 @@ impl ShellLoop {
             network_query: NetworkQuery::default(),
             settings_revision: 0,
             settings_cache: None,
+            dock_surface: None,
+            dock_entries: Vec::new(),
+            dock_hover: None,
+            dock_last: None,
+            dock_catalog: None,
+            dock_drag: None,
+            dock_menu: None,
+            dock_menu_slot: None,
+            dock_menu_items: Vec::new(),
             settings_projection_pending: false,
             icon_loader: None,
             task_icon_cache: Default::default(),

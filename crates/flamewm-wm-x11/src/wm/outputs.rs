@@ -1,5 +1,17 @@
 //! Output and work-area bookkeeping for the Wm.
 use super::*;
+use flamewm_window_core::dock_reserve::{ReserveEdge, reserve_edge};
+
+/// Cuts the Dock from a work area. The taskbar strut is already out of `work_area`, so a Dock on
+/// the same edge stacks beyond it.
+pub(super) fn with_dock_reserve(work_area: Rect, dock: Option<(ReserveEdge, i32)>) -> Rect {
+    match dock {
+        Some((edge, extent)) => {
+            from_core_rect(reserve_edge(to_core_rect(work_area), edge, extent))
+        }
+        None => work_area,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OutputWorkArea {
@@ -42,6 +54,39 @@ impl TopologyDirty {
 
     pub(super) fn is_pending(&self) -> bool {
         self.0
+    }
+}
+
+#[cfg(test)]
+mod dock_work_area_tests {
+    use super::*;
+
+    fn output() -> Rect {
+        Rect::new(0, 0, 1280, 800)
+    }
+
+    #[test]
+    fn dock_above_a_bottom_taskbar_stacks_on_the_remaining_area() {
+        let after_taskbar = Rect::new(0, 0, 1280, 756);
+        let dock = Some((ReserveEdge::Bottom, 72));
+        assert_eq!(
+            with_dock_reserve(after_taskbar, dock),
+            Rect::new(0, 0, 1280, 684)
+        );
+    }
+
+    #[test]
+    fn dock_without_taskbar_cuts_only_its_edge() {
+        assert_eq!(
+            with_dock_reserve(output(), Some((ReserveEdge::Left, 72))),
+            Rect::new(72, 0, 1208, 800)
+        );
+    }
+
+    #[test]
+    fn hidden_dock_leaves_the_taskbar_area_untouched() {
+        let after_taskbar = Rect::new(0, 0, 1280, 756);
+        assert_eq!(with_dock_reserve(after_taskbar, None), after_taskbar);
     }
 }
 
@@ -107,15 +152,18 @@ impl<C: Connection> Wm<'_, C> {
         let right = strut[1].min(self.screen_rect.width.saturating_sub(left + 1));
         let top = strut[2].min(self.screen_rect.height.saturating_sub(1));
         let bottom = strut[3].min(self.screen_rect.height.saturating_sub(top + 1));
-        Rect::new(
-            self.screen_rect
-                .x
-                .saturating_add(i32::try_from(left).unwrap_or(i32::MAX)),
-            self.screen_rect
-                .y
-                .saturating_add(i32::try_from(top).unwrap_or(i32::MAX)),
-            self.screen_rect.width.saturating_sub(left + right).max(1),
-            self.screen_rect.height.saturating_sub(top + bottom).max(1),
+        with_dock_reserve(
+            Rect::new(
+                self.screen_rect
+                    .x
+                    .saturating_add(i32::try_from(left).unwrap_or(i32::MAX)),
+                self.screen_rect
+                    .y
+                    .saturating_add(i32::try_from(top).unwrap_or(i32::MAX)),
+                self.screen_rect.width.saturating_sub(left + right).max(1),
+                self.screen_rect.height.saturating_sub(top + bottom).max(1),
+            ),
+            crate::live_settings::dock_reserve(),
         )
     }
 
@@ -133,11 +181,19 @@ impl<C: Connection> Wm<'_, C> {
             bool,
         )>,
     ) -> Result<(), ReplyError> {
+        let dock = crate::live_settings::dock_reserve();
         let next = areas
             .into_iter()
             .map(OutputWorkArea::from_host)
+            .map(|mut output| {
+                if output.primary {
+                    output.work_area = with_dock_reserve(output.work_area, dock);
+                }
+                output
+            })
             .collect::<Vec<_>>();
-        if self.output_work_areas != next {
+        let dock_changed = std::mem::replace(&mut self.applied_dock, dock) != dock;
+        if self.output_work_areas != next || dock_changed {
             self.finish_all_transitions()?;
             self.output_work_areas = next;
             // The wallpaper behind titlebars is laid out per output, as the desktop draws it.
@@ -152,6 +208,8 @@ impl<C: Connection> Wm<'_, C> {
             crate::frame::titlebar_backdrop::set_wallpaper_outputs(&geometries);
             self.publish_wallpaper_layout()?;
             self.reconcile_work_area()?;
+            // `_NET_WORKAREA` is published from `work_area()`, so it must follow the Dock reserve too.
+            self.publish_workspace_metadata()?;
         }
         Ok(())
     }

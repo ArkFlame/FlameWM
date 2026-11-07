@@ -97,6 +97,8 @@ impl<E: EnginePorts> PlatformHost<E> {
             .reconcile_taskbar_height(self.settings.current().effective().taskbar_height);
         self.panels
             .reconcile_taskbar_frame(TaskbarFrame::from_settings(self.settings.current()));
+        self.panels
+            .reconcile_taskbar_enabled(self.settings.current().effective().taskbar_enabled);
         self.started = true;
         self.generation = self.generation.saturating_add(1).max(1);
         Ok(())
@@ -371,6 +373,8 @@ impl<E: EnginePorts> PlatformHost<E> {
         if effects.taskbar_frame {
             self.panels
                 .reconcile_taskbar_frame(TaskbarFrame::from_settings(self.settings.current()));
+            self.panels
+                .reconcile_taskbar_enabled(self.settings.current().effective().taskbar_enabled);
         }
         Ok(snapshot)
     }

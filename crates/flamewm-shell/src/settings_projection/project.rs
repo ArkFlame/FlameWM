@@ -89,6 +89,7 @@ pub fn project(
                     UiColor { a: 0, ..fill }
                 },
             )?;
+            project_taskbar_gradient(document, snapshot, fill)?;
             crate::projection::set_task_accent(accent);
             // A settings change must also re-apply (or clear) the per-element capsules, so
             // disabling `taskbarSeparate` cannot leave the last projected fills behind.
@@ -134,4 +135,22 @@ pub fn project(
         }
     }
     Ok(())
+}
+
+/// Gradient taskbar fill (`taskbar.fill=gradient`): the bar background goes transparent here.
+/// The fading image is built per panel edge by the shell (`ShellSurfaces::apply_taskbar_gradient`),
+/// because placement is service-owned and absent from settings. Solid hides that image.
+fn project_taskbar_gradient(
+    document: &mut impl UiDocumentAccess,
+    snapshot: &SettingsSnapshot,
+    fill: UiColor,
+) -> Result<(), String> {
+    let gradient = matches!(
+        snapshot.values.get("taskbar.fill"),
+        Some(SettingValue::Text(fill_mode)) if fill_mode == "gradient"
+    );
+    if !gradient {
+        return document.visible("taskbar-gradient", false);
+    }
+    document.background("taskbar", UiColor { a: 0, ..fill })
 }

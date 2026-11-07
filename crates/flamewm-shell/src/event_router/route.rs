@@ -25,6 +25,12 @@ impl ShellLoop {
         event: SurfaceEvent,
         runtime: &mut SurfaceRuntime,
     ) -> Result<(), UiBackendError> {
+        if Some(event.surface) == self.dock_surface {
+            return self.route_dock_event(runtime, &event);
+        }
+        if Some(event.surface) == self.dock_menu {
+            return self.route_dock_menu_event(runtime, &event);
+        }
         let output = match resolve_interaction_origin(self.surfaces.input_output(event.surface)) {
             InteractionOrigin::Ignore => return Ok(()),
             InteractionOrigin::Output(output) => output,

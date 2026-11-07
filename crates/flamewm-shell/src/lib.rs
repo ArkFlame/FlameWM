@@ -5,6 +5,7 @@ pub mod async_projection;
 pub mod calendar;
 pub mod control_actions;
 pub mod cursor_theme;
+pub mod dock;
 pub mod icon_loader;
 pub mod launcher;
 pub mod notification_center;

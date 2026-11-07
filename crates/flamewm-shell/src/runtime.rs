@@ -33,6 +33,9 @@ use flamewm_ui_x11::{
 const PANEL_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel.rwr"));
 const PANEL_VERTICAL_ARTIFACT: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel-vertical.rwr"));
+const DOCK_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-dock.rwr"));
+const DOCK_MENU_ARTIFACT: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-dock-menu.rwr"));
 const START_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-start.rwr"));
 const TASK_MENU_ARTIFACT: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-task-menu.rwr"));
@@ -650,6 +653,62 @@ fn create_panel_surface(
     })
 }
 
+/// Native dock surface at `rect` (device px), hidden until projected. Mirrors `create_panel_surface`.
+/// Right-click menu for a dock slot. Starts hidden; `rect` is device px.
+pub fn create_dock_menu_surface(
+    runtime: &mut SurfaceRuntime,
+    rect: (i32, i32, u32, u32),
+) -> Result<SurfaceHandle, String> {
+    create_surface(
+        runtime,
+        DOCK_MENU_ARTIFACT,
+        popup_config(
+            "FlameWM dock menu",
+            SurfaceRole::DropdownMenu,
+            flamewm_api::Rect::new(rect.0, rect.1, rect.2 as i32, rect.3 as i32),
+        ),
+    )
+}
+
+pub fn create_dock_surface(
+    runtime: &mut SurfaceRuntime,
+    rect: (i32, i32, u32, u32),
+    scale: f32,
+) -> Result<SurfaceHandle, String> {
+    let surface = create_surface(
+        runtime,
+        DOCK_ARTIFACT,
+        SurfaceConfig {
+            width: rect.2,
+            height: rect.3,
+            title: "FlameWM dock".to_owned(),
+            role: SurfaceRole::Dock,
+            input: SurfaceInputMode::Interactive,
+            initially_visible: false,
+            x: rect.0,
+            y: rect.1,
+        },
+    )?;
+    let mut cleanup_error = None;
+    finish_scaled_surface(
+        surface,
+        runtime
+            .apply_output_scale(surface, scale)
+            .map(|_| ())
+            .map_err(|error| format!("dock ui scale: {error:?}")),
+        |surface| {
+            cleanup_error = runtime
+                .destroy(surface)
+                .err()
+                .map(|error| format!("dock cleanup after scale failure: {error:?}"));
+        },
+    )
+    .map_err(|error| match cleanup_error {
+        Some(cleanup) => format!("{error}; {cleanup}"),
+        None => error,
+    })
+}
+
 fn finish_scaled_surface<T, E>(
     surface: T,
     scale: Result<(), E>,
@@ -716,7 +775,7 @@ fn checked_size(value: i32) -> Result<u32, String> {
 /// Document UI scale for the panel surface. Must match the physical thickness
 /// rule in `flamewm_platform::panel` (supported scales only; others fall back
 /// to 100%) so the CSS-sized bar fills the whole panel window.
-pub(crate) fn panel_ui_scale(scale_percent: u16) -> f32 {
+pub fn panel_ui_scale(scale_percent: u16) -> f32 {
     let percent = if (100..=200).contains(&scale_percent) && scale_percent % 5 == 0 {
         scale_percent
     } else {

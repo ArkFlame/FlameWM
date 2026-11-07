@@ -1,0 +1,307 @@
+//! Dock model: pinned-app list mutation, pinned/running merge order, and
+//! gradient-edge geometry for the taskbar surface. Pure logic; no X11 or CSS
+//! output lives here.
+
+/// Screen edge a dock or gradient surface sits on or fades from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl Edge {
+    pub fn is_vertical(self) -> bool {
+        matches!(self, Edge::Left | Edge::Right)
+    }
+
+    /// CSS `linear-gradient` direction that starts opaque at this screen edge
+    /// and ends transparent toward the screen interior.
+    pub fn gradient_direction(self) -> &'static str {
+        match self {
+            Edge::Top => "to bottom",
+            Edge::Bottom => "to top",
+            Edge::Left => "to right",
+            Edge::Right => "to left",
+        }
+    }
+}
+
+/// Maximum pinned entries kept; bounds the persisted `dock.pinned` list.
+pub const MAX_PINNED: usize = 32;
+
+/// Adds `app_id` at the end unless already pinned (dedupe). Returns `false`
+/// when nothing changed (duplicate, empty id, or list full).
+pub fn pin_app(pinned: &mut Vec<String>, app_id: &str) -> bool {
+    if app_id.is_empty() || pinned.iter().any(|id| id == app_id) || pinned.len() >= MAX_PINNED {
+        return false;
+    }
+    pinned.push(app_id.to_owned());
+    true
+}
+
+/// Removes `app_id` if present. Returns whether it was removed.
+pub fn unpin_app(pinned: &mut Vec<String>, app_id: &str) -> bool {
+    let before = pinned.len();
+    pinned.retain(|id| id != app_id);
+    pinned.len() != before
+}
+
+/// Moves the entry at `from` so it lands at index `to` (clamped to the end).
+/// Returns `false` for an out-of-range source.
+pub fn move_pinned(pinned: &mut Vec<String>, from: usize, to: usize) -> bool {
+    if from >= pinned.len() {
+        return false;
+    }
+    let item = pinned.remove(from);
+    let to = to.min(pinned.len());
+    pinned.insert(to, item);
+    true
+}
+
+/// One dock slot. `running` drives the activity dot; `pinned` decides which
+/// side of the separator it sits on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DockEntry {
+    pub app_id: String,
+    pub pinned: bool,
+    pub running: bool,
+}
+
+/// Merged dock layout: pinned apps in stored order, then (when enabled)
+/// running-but-unpinned apps in first-seen order. `separator_after` is the
+/// index after which a separator is drawn, present only when both groups are
+/// non-empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DockLayout {
+    pub entries: Vec<DockEntry>,
+    pub separator_after: Option<usize>,
+}
+
+/// Builds the dock layout. Running apps that are also pinned are shown once,
+/// in their pinned position. Duplicate running ids are ignored. Unpinned
+/// running apps are omitted entirely when `show_running` is false.
+pub fn merge_dock(pinned: &[String], running: &[String], show_running: bool) -> DockLayout {
+    let mut entries: Vec<DockEntry> = Vec::with_capacity(pinned.len() + running.len());
+    for id in pinned {
+        if id.is_empty() || entries.iter().any(|e| &e.app_id == id) {
+            continue;
+        }
+        entries.push(DockEntry {
+            app_id: id.clone(),
+            pinned: true,
+            running: running.iter().any(|r| r == id),
+        });
+    }
+    let pinned_count = entries.len();
+    if show_running {
+        for id in running {
+            if id.is_empty() || entries.iter().any(|e| &e.app_id == id) {
+                continue;
+            }
+            entries.push(DockEntry {
+                app_id: id.clone(),
+                pinned: false,
+                running: true,
+            });
+        }
+    }
+    let separator_after = (pinned_count > 0 && entries.len() > pinned_count)
+        .then(|| pinned_count - 1);
+    DockLayout {
+        entries,
+        separator_after,
+    }
+}
+
+/// Slot index under a pointer position along the dock strip. `along` is the
+/// pointer offset from the strip start in device px, `slot_extent` one slot
+/// (icon plus gap). Clamped to `0..count`; `count == 0` yields 0.
+pub fn slot_at(along: f32, slot_extent: f32, count: usize) -> usize {
+    if count == 0 || slot_extent <= 0.0 || along.is_nan() || along < 0.0 {
+        return 0;
+    }
+    ((along / slot_extent) as usize).min(count - 1)
+}
+
+/// Whether a pinned icon released at `cross` px from the dock's inner edge
+/// should be unpinned (dragged off the bar). The bar is removed when the
+/// pointer leaves it by more than `threshold` px on the cross axis.
+pub fn drag_off_removes(cross: f32, bar_extent: f32, threshold: f32) -> bool {
+    cross < -threshold || cross > bar_extent + threshold
+}
+
+/// Right-click menu entries for one dock slot, in display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DockMenuAction {
+    KeepInDock,
+    RemoveFromDock,
+    Open,
+    CloseWindows,
+}
+
+/// Menu entries for a slot. Pinned slots offer Remove, unpinned offer Keep.
+/// Open always shows; Close windows only when the app has a running window.
+pub fn menu_items(pinned: bool, running: bool) -> Vec<DockMenuAction> {
+    let mut items = Vec::with_capacity(3);
+    items.push(if pinned {
+        DockMenuAction::RemoveFromDock
+    } else {
+        DockMenuAction::KeepInDock
+    });
+    items.push(DockMenuAction::Open);
+    if running {
+        items.push(DockMenuAction::CloseWindows);
+    }
+    items
+}
+
+/// Inline CSS `background-image` for a taskbar surface using the gradient
+/// style. `surface` must be a `var(--token)` reference, never a raw colour, so
+/// the fill keeps following the surface colour token. The gradient is opaque at
+/// `edge` and fades to transparent toward the interior.
+pub fn gradient_background(edge: Edge, surface: &str) -> String {
+    format!(
+        "linear-gradient({}, {surface} 0%, transparent 100%)",
+        edge.gradient_direction()
+    )
+}
+
+/// Straight RGBA8 ramp for a gradient taskbar: `steps` samples from `alpha` (opaque) at the
+/// fade origin down to 0 at the far end. `from_start` puts the origin at index 0 (top or left).
+#[must_use]
+pub fn gradient_ramp(rgb: [u8; 3], alpha: u8, steps: usize, from_start: bool) -> Vec<u8> {
+    let steps = steps.max(2);
+    let mut pixels = Vec::with_capacity(steps * 4);
+    for index in 0..steps {
+        let along = if from_start { index } else { steps - 1 - index };
+        let t = along as f32 / (steps - 1) as f32;
+        let a = (f32::from(alpha) * (1.0 - t)).round() as u8;
+        pixels.extend_from_slice(&[rgb[0], rgb[1], rgb[2], a]);
+    }
+    pixels
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| (*id).to_owned()).collect()
+    }
+
+    #[test]
+    fn pin_dedupes_and_rejects_empty() {
+        let mut p = s(&["a"]);
+        assert!(!pin_app(&mut p, "a"));
+        assert!(!pin_app(&mut p, ""));
+        assert!(pin_app(&mut p, "b"));
+        assert_eq!(p, s(&["a", "b"]));
+    }
+
+    #[test]
+    fn pin_respects_cap() {
+        let mut p: Vec<String> = (0..MAX_PINNED).map(|i| format!("app{i}")).collect();
+        assert!(!pin_app(&mut p, "extra"));
+        assert_eq!(p.len(), MAX_PINNED);
+    }
+
+    #[test]
+    fn unpin_removes_only_match() {
+        let mut p = s(&["a", "b", "c"]);
+        assert!(unpin_app(&mut p, "b"));
+        assert!(!unpin_app(&mut p, "b"));
+        assert_eq!(p, s(&["a", "c"]));
+    }
+
+    #[test]
+    fn move_reorders_and_clamps() {
+        let mut p = s(&["a", "b", "c"]);
+        assert!(move_pinned(&mut p, 0, 2));
+        assert_eq!(p, s(&["b", "c", "a"]));
+        assert!(move_pinned(&mut p, 2, 99));
+        assert_eq!(p, s(&["b", "c", "a"]));
+        assert!(move_pinned(&mut p, 2, 0));
+        assert_eq!(p, s(&["a", "b", "c"]));
+        assert!(!move_pinned(&mut p, 3, 0));
+    }
+
+    #[test]
+    fn merge_orders_pinned_then_running_with_separator() {
+        let layout = merge_dock(&s(&["term", "web"]), &s(&["mail", "web"]), true);
+        let ids: Vec<&str> = layout.entries.iter().map(|e| e.app_id.as_str()).collect();
+        assert_eq!(ids, ["term", "web", "mail"]);
+        assert!(layout.entries[1].running && layout.entries[1].pinned);
+        assert!(!layout.entries[0].running);
+        assert_eq!(layout.entries[2].pinned, false);
+        assert_eq!(layout.separator_after, Some(1));
+    }
+
+    #[test]
+    fn merge_hides_unpinned_running_when_disabled() {
+        let layout = merge_dock(&s(&["term"]), &s(&["mail"]), false);
+        assert_eq!(layout.entries.len(), 1);
+        assert_eq!(layout.separator_after, None);
+    }
+
+    #[test]
+    fn merge_no_separator_without_both_groups() {
+        assert_eq!(merge_dock(&[], &s(&["mail"]), true).separator_after, None);
+        assert_eq!(merge_dock(&s(&["term"]), &[], true).separator_after, None);
+    }
+
+    #[test]
+    fn slot_at_maps_pointer_to_clamped_index() {
+        assert_eq!(slot_at(0.0, 60.0, 3), 0);
+        assert_eq!(slot_at(59.9, 60.0, 3), 0);
+        assert_eq!(slot_at(60.0, 60.0, 3), 1);
+        assert_eq!(slot_at(500.0, 60.0, 3), 2);
+        assert_eq!(slot_at(-5.0, 60.0, 3), 0);
+        assert_eq!(slot_at(10.0, 60.0, 0), 0);
+        assert_eq!(slot_at(f32::NAN, 60.0, 3), 0);
+    }
+
+    #[test]
+    fn drag_off_only_past_threshold() {
+        // Bar spans 0..48 on the cross axis; threshold 24.
+        assert!(!drag_off_removes(20.0, 48.0, 24.0));
+        assert!(!drag_off_removes(-20.0, 48.0, 24.0));
+        assert!(drag_off_removes(-30.0, 48.0, 24.0));
+        assert!(drag_off_removes(80.0, 48.0, 24.0));
+    }
+
+    #[test]
+    fn menu_items_follow_pin_and_running_state() {
+        use DockMenuAction::*;
+        assert_eq!(menu_items(true, true), [RemoveFromDock, Open, CloseWindows]);
+        assert_eq!(menu_items(true, false), [RemoveFromDock, Open]);
+        assert_eq!(menu_items(false, true), [KeepInDock, Open, CloseWindows]);
+    }
+
+    #[test]
+    fn gradient_fades_from_each_edge() {
+        assert_eq!(
+            gradient_background(Edge::Top, "var(--surface)"),
+            "linear-gradient(to bottom, var(--surface) 0%, transparent 100%)"
+        );
+        assert_eq!(
+            gradient_background(Edge::Bottom, "var(--surface)"),
+            "linear-gradient(to top, var(--surface) 0%, transparent 100%)"
+        );
+        assert!(gradient_background(Edge::Left, "x").starts_with("linear-gradient(to right"));
+        assert!(gradient_background(Edge::Right, "x").starts_with("linear-gradient(to left"));
+        assert!(Edge::Left.is_vertical() && !Edge::Top.is_vertical());
+    }
+
+    #[test]
+    fn gradient_ramp_is_opaque_at_origin_and_clear_at_far_end() {
+        let start = gradient_ramp([1, 2, 3], 200, 4, true);
+        assert_eq!(&start[..4], &[1, 2, 3, 200]);
+        assert_eq!(&start[12..], &[1, 2, 3, 0]);
+        let end = gradient_ramp([1, 2, 3], 200, 4, false);
+        assert_eq!(&end[..4], &[1, 2, 3, 0]);
+        assert_eq!(&end[12..], &[1, 2, 3, 200]);
+        assert_eq!(gradient_ramp([0, 0, 0], 255, 1, true).len(), 8, "steps clamp to two samples");
+    }
+}

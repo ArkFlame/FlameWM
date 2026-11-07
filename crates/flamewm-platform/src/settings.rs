@@ -73,6 +73,41 @@ pub enum TaskbarStyle {
 
 wire_enum!(TaskbarStyle { Classic => "classic", Floating => "floating" });
 
+/// Taskbar surface fill (`taskbar.fill`). Independent of the layout `taskbarStyle`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskbarFill {
+    Solid,
+    Gradient,
+}
+
+wire_enum!(TaskbarFill { Solid => "solid", Gradient => "gradient" });
+
+/// Edge a gradient taskbar fades from (`taskbar.gradientEdge`). `Auto` follows the taskbar edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskbarGradientEdge {
+    Auto,
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+wire_enum!(TaskbarGradientEdge { Auto => "auto", Top => "top", Bottom => "bottom", Left => "left", Right => "right" });
+
+/// Dock placement (`dock.position`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DockPosition {
+    Bottom,
+    Left,
+    Right,
+    Top,
+}
+
+wire_enum!(DockPosition { Bottom => "bottom", Left => "left", Right => "right", Top => "top" });
+
+/// Maximum pinned dock apps (`dock.pinned`).
+pub const DOCK_PINNED_MAX: usize = 32;
+
 /// Action run when the pointer rests in a screen corner (`hotCorner.*`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotCornerAction {
@@ -260,6 +295,14 @@ pub struct ProductSettings {
     pub taskbar_opacity: u8,
     pub taskbar_height: u16,
     pub taskbar_style: TaskbarStyle,
+    pub taskbar_enabled: bool,
+    pub taskbar_fill: TaskbarFill,
+    pub taskbar_gradient_edge: TaskbarGradientEdge,
+    pub dock_enabled: bool,
+    pub dock_position: DockPosition,
+    pub dock_icon_size: u16,
+    pub dock_pinned: Vec<String>,
+    pub dock_show_running: bool,
     pub taskbar_floating_margin: u16,
     pub taskbar_floating_radius: u16,
     pub taskbar_blur_percent: u8,
@@ -460,6 +503,14 @@ impl Default for ProductSettings {
             taskbar_opacity: 50,
             taskbar_height: 44,
             taskbar_style: TaskbarStyle::Classic,
+            taskbar_enabled: true,
+            taskbar_fill: TaskbarFill::Solid,
+            taskbar_gradient_edge: TaskbarGradientEdge::Auto,
+            dock_enabled: false,
+            dock_position: DockPosition::Bottom,
+            dock_icon_size: 48,
+            dock_pinned: Vec::new(),
+            dock_show_running: true,
             taskbar_floating_margin: 4,
             taskbar_floating_radius: 12,
             taskbar_blur_percent: 80,
@@ -844,12 +895,50 @@ macro_rules! text_enum_slot {
 text_enum_slot!(
     LockClockFormat,
     TaskbarStyle,
+    TaskbarFill,
+    TaskbarGradientEdge,
+    DockPosition,
     BackgroundMode,
     WallpaperFit,
     ScreensaverMode,
     HotCornerAction,
     NightShiftMode
 );
+
+/// Comma-separated app ids. Each id is validated; duplicates are dropped; capped at `DOCK_PINNED_MAX`.
+impl Slot for Vec<String> {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Text(self.join(","))
+    }
+
+    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+        let mut ids: Vec<String> = Vec::new();
+        for raw in text.split(',').map(str::trim).filter(|id| !id.is_empty()) {
+            if !is_valid_dock_app_id(raw) {
+                return invalid_owned(format!("bad {key} app id"));
+            }
+            if !ids.iter().any(|id| id == raw) && ids.len() < DOCK_PINNED_MAX {
+                ids.push(raw.to_owned());
+            }
+        }
+        Ok(ids)
+    }
+
+    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+        match value {
+            SettingValue::Text(text) => Self::from_text(text, key),
+            _ => invalid("setting requires text"),
+        }
+    }
+}
+
+/// Desktop-entry ids: ASCII letters, digits, `.`, `-`, `_`; 1..=128 bytes.
+#[must_use]
+pub fn is_valid_dock_app_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
 
 impl Slot for AppearanceMode {
     fn to_value(&self) -> SettingValue {
@@ -947,6 +1036,14 @@ stable_settings! {
     (true, fonts, "fontSizeOffset", font_size_offset),
     (true, taskbar, "taskbarHeight", taskbar_height),
     (false, taskbar, "taskbarStyle", taskbar_style),
+    (false, taskbar, "taskbar.enabled", taskbar_enabled),
+    (false, taskbar, "taskbar.fill", taskbar_fill),
+    (false, taskbar, "taskbar.gradientEdge", taskbar_gradient_edge),
+    (false, dock, "dock.enabled", dock_enabled),
+    (false, dock, "dock.position", dock_position),
+    (false, dock, "dock.iconSize", dock_icon_size),
+    (false, dock, "dock.pinned", dock_pinned),
+    (false, dock, "dock.showRunning", dock_show_running),
     (false, taskbar, "taskbarFloatingMargin", taskbar_floating_margin),
     (false, taskbar, "taskbarFloatingRadius", taskbar_floating_radius),
     (false, taskbar, "surfaceColor", surface_color),
@@ -1146,6 +1243,8 @@ mod accent_custom_tests;
 mod accessibility_night_tests;
 #[cfg(test)]
 mod edge_hot_corner_tests;
+#[cfg(test)]
+mod dock_settings_tests;
 #[cfg(test)]
 mod switch_contract_tests;
 #[cfg(test)]

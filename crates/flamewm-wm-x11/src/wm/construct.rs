@@ -118,6 +118,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 u32::from(screen.height_in_pixels),
             ),
             output_work_areas: Vec::new(),
+            applied_dock: None,
             controller_geometry: ControllerGeometryCache::default(),
             display_topology_dirty: TopologyDirty::default(),
             desktop_mode: desktop_mode::DesktopModeTracker::default(),

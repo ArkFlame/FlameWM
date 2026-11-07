@@ -395,7 +395,7 @@ impl SettingEffects {
                 taskbar_height: true,
                 ..Self::NONE
             },
-            "taskbarStyle" | "taskbarFloatingMargin" | "taskbarFloatingRadius" => Self {
+            "taskbarStyle" | "taskbarFloatingMargin" | "taskbarFloatingRadius" | "taskbar.enabled" => Self {
                 taskbar_frame: true,
                 ..Self::NONE
             },

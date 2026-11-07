@@ -59,6 +59,8 @@ pub struct OutputPanel {
     pub scale_percent: u16,
     pub logical_size: u16,
     pub frame: TaskbarFrame,
+    /// `taskbar.enabled`. False: the bar reserves no strut or work area.
+    pub taskbar_enabled: bool,
 }
 
 impl OutputPanel {
@@ -71,6 +73,7 @@ impl OutputPanel {
             scale_percent: effective_scale(scale_percent),
             logical_size: DEFAULT_PANEL_LOGICAL_SIZE,
             frame: TaskbarFrame::default(),
+            taskbar_enabled: true,
         }
     }
 
@@ -141,8 +144,12 @@ impl OutputPanel {
     }
 
     /// Screen space reserved on the anchored edge: bar thickness plus the floating margin.
+    /// Zero while `taskbar.enabled` is false.
     #[must_use]
     fn reserved(&self) -> i32 {
+        if !self.taskbar_enabled {
+            return 0;
+        }
         self.thickness() + self.inset()
     }
 
@@ -342,6 +349,14 @@ mod tests {
             PanelEdge::Bottom,
             scale,
         )
+    }
+
+    #[test]
+    fn disabled_taskbar_reserves_no_strut_or_work_area() {
+        let mut panel = fhd_bottom("eDP-1", 100);
+        panel.taskbar_enabled = false;
+        assert_eq!(panel.strut(), Strut::default());
+        assert_eq!(panel.work_area(), Rect::new(0, 0, 1920, 1080));
     }
 
     #[test]

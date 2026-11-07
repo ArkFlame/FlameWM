@@ -76,11 +76,11 @@ impl PanelService {
             }
         }
         for output in &connected {
-            let (edge, logical_size, frame) = self
+            let (edge, logical_size, frame, taskbar_enabled) = self
                 .manager
                 .panel(&output.id)
-                .map_or((PanelEdge::Bottom, 44, TaskbarFrame::default()), |panel| {
-                    (panel.edge, panel.logical_size, panel.frame)
+                .map_or((PanelEdge::Bottom, 44, TaskbarFrame::default(), true), |panel| {
+                    (panel.edge, panel.logical_size, panel.frame, panel.taskbar_enabled)
                 });
             let mut panel = OutputPanel::new(
                 output.id.clone(),
@@ -90,6 +90,7 @@ impl PanelService {
             );
             panel.set_logical_size(logical_size);
             panel.frame = frame;
+            panel.taskbar_enabled = taskbar_enabled;
             self.manager.upsert_output(panel);
         }
 
@@ -161,6 +162,11 @@ impl PanelService {
     /// Reconcile every live output with the persisted taskbar style, margin and radius.
     pub fn reconcile_taskbar_frame(&mut self, frame: TaskbarFrame) -> bool {
         self.reconcile_panels(|panel| panel.frame = frame)
+    }
+
+    /// Reconcile every live output with `taskbar.enabled`. False drops the taskbar's reserve.
+    pub fn reconcile_taskbar_enabled(&mut self, enabled: bool) -> bool {
+        self.reconcile_panels(|panel| panel.taskbar_enabled = enabled)
     }
 
     fn reconcile_panels(&mut self, mut apply: impl FnMut(&mut OutputPanel)) -> bool {
@@ -495,6 +501,39 @@ mod tests {
         assert_eq!(panel.work_area(), Rect::new(0, 0, 1920, 1028));
         assert_eq!(panel.panel_rect(), Rect::new(8, 1028, 1904, 44));
     }
+
+    #[test]
+    fn disabled_taskbar_drops_the_reserve_and_survives_display_sync() {
+        let displays = DisplaySnapshot {
+            generation: 1,
+            outputs: vec![OutputSnapshot {
+                id: OutputId::new("eDP-1"),
+                connector: "eDP-1".to_owned(),
+                edid_identity: "panel".to_owned(),
+                connected: true,
+                primary: true,
+                geometry: Rect::new(0, 0, 1920, 1080),
+                current_mode: ModeId(1),
+                modes: Vec::new(),
+                shell_scale_percent: 100,
+            }],
+            pending: None,
+        };
+        let mut service = PanelService::default();
+        service.sync_outputs(&displays);
+        assert!(service.reconcile_taskbar_enabled(false));
+        assert!(!service.reconcile_taskbar_enabled(false));
+        service.sync_outputs(&displays);
+        let output = OutputId::new("eDP-1");
+        let panel = service.manager().panel(&output).expect("panel exists");
+        assert!(!panel.taskbar_enabled);
+        assert_eq!(panel.strut().bottom, 0);
+        assert_eq!(service.work_area_view()[0].2, Rect::new(0, 0, 1920, 1080));
+        assert!(service.reconcile_taskbar_enabled(true));
+        let panel = service.manager().panel(&output).expect("panel exists");
+        assert_eq!(panel.strut().bottom, 44);
+    }
+
     #[test]
     fn unequal_output_swap_updates_every_panel_and_work_area() {
         use flamewm_api::PanelEdge;
