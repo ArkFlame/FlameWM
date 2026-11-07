@@ -30,7 +30,7 @@ impl<C: Connection> Wm<'_, C> {
         use flamewm_integrations_linux::icon_service::{IconSubmit, IconSubmitError};
         match self.icon_service.borrow().submit(job) {
             Ok(IconSubmit::Enqueued | IconSubmit::Coalesced) => false,
-            Ok(IconSubmit::DroppedLow) => unreachable!("catalog icons are HIGH priority"),
+            Ok(IconSubmit::DroppedLow) => false,
             Err(IconSubmitError::HighQueueFull(job)) => {
                 retain_deferred_icon_job(&mut self.deferred_icon_jobs, client_id, token, job);
                 false

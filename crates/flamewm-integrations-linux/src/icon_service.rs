@@ -13,7 +13,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 
 use crate::icon_theme::IconLookupIndex;
@@ -436,8 +436,7 @@ impl<R: IconResolve> IconService<R> {
         let submitted = self
             .shared
             .queue
-            .lock()
-            .expect("icon queue poisoned")
+            .lock().unwrap_or_else(PoisonError::into_inner)
             .submit(job);
         match &submitted {
             Ok(IconSubmit::Enqueued) => {
@@ -493,8 +492,7 @@ impl<R: IconResolve> IconService<R> {
     fn finish(&self, result: &IconResult) {
         self.shared
             .queue
-            .lock()
-            .expect("icon queue poisoned")
+            .lock().unwrap_or_else(PoisonError::into_inner)
             .pending
             .remove(&result.key);
         if let Ok(mut cache) = self.result_cache.lock() {
@@ -720,8 +718,7 @@ impl<R> Drop for IconService<R> {
     fn drop(&mut self) {
         self.shared
             .queue
-            .lock()
-            .expect("icon queue poisoned")
+            .lock().unwrap_or_else(PoisonError::into_inner)
             .stopped = true;
         self.shared.ready.notify_all();
         // Wake blocked result sends before waiting for worker termination.
@@ -750,9 +747,9 @@ fn worker_loop<R: IconResolve>(
             Resolve(Arc<IconKey>),
         }
         let next: Option<Next> = {
-            let mut queue = shared.queue.lock().expect("icon queue poisoned");
+            let mut queue = shared.queue.lock().unwrap_or_else(PoisonError::into_inner);
             while !queue.stopped && queue.high.is_empty() && queue.low.is_empty() {
-                queue = shared.ready.wait(queue).expect("icon queue poisoned");
+                queue = shared.ready.wait(queue).unwrap_or_else(PoisonError::into_inner);
             }
             if queue.stopped {
                 return;
@@ -1373,6 +1370,25 @@ mod tests {
         assert_eq!(
             first_non_fallback_elapsed(origin, second_at, true, &recorded),
             None
+        );
+    }
+
+    #[test]
+    fn poisoned_queue_lock_keeps_submit_and_worker_alive() {
+        let (service, _calls) = fake_service(1);
+        let shared = Arc::clone(&service.shared);
+        let poisoner = thread::spawn(move || {
+            let _guard = shared.queue.lock().expect("fresh queue lock");
+            panic!("poison the icon queue");
+        });
+        assert!(poisoner.join().is_err());
+        assert!(service.shared.queue.is_poisoned());
+        assert_eq!(
+            service.submit(IconJob {
+                key: key("poisoned-queue"),
+                priority: IconPriority::High,
+            }),
+            Ok(IconSubmit::Enqueued)
         );
     }
 }

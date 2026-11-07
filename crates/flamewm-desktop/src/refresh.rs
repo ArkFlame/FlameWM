@@ -316,10 +316,10 @@ pub(crate) fn selected_deletable_paths(state: &DesktopState) -> Vec<PathBuf> {
 }
 
 pub(crate) fn state_path(name: &str) -> Result<PathBuf, String> {
-    let base = env::var_os("XDG_STATE_HOME").map_or_else(
-        || PathBuf::from(env::var_os("HOME").unwrap()).join(".local/state"),
-        PathBuf::from,
-    );
+    let base = match env::var_os("XDG_STATE_HOME") {
+        Some(state) => PathBuf::from(state),
+        None => PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?).join(".local/state"),
+    };
     Ok(base.join(name))
 }
 
