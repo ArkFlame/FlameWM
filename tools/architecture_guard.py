@@ -900,7 +900,10 @@ J18_FRAME_OWNER = "crates/flamewm-wm-x11"
 J18_GEOMETRY_OWNER_FILES = (
     "crates/flamewm-wm-x11/src/client.rs",
     "crates/flamewm-wm-x11/src/frame/controller.rs",
-    "crates/flamewm-wm-x11/src/frame/geometry.rs",
+    "crates/flamewm-wm-x11/src/frame/geometry/mod.rs",
+    "crates/flamewm-wm-x11/src/frame/geometry/bounds.rs",
+    "crates/flamewm-wm-x11/src/frame/geometry/configure.rs",
+    "crates/flamewm-wm-x11/src/frame/geometry/moves.rs",
     "crates/flamewm-wm-x11/src/frame/model.rs",
     "crates/flamewm-wm-x11/src/wm/configure_handlers.rs",
     "crates/flamewm-wm-x11/src/wm/effects.rs",
@@ -941,7 +944,7 @@ def j18_violations(root):
     if geo_count != 1:
         found.add(("crates/flamewm-wm-x11/src/frame/model.rs", "j18-g02-single-geometry-owner"))
     if plan_count != 1:
-        found.add(("crates/flamewm-wm-x11/src/frame/geometry.rs", "j18-g02-single-geometry-owner"))
+        found.add(("crates/flamewm-wm-x11/src/frame/geometry/mod.rs", "j18-g02-single-geometry-owner"))
     # J18-G03: single pointer-hit owner. A second hit resolver
     # (resolve_pointer_intent / target_for_xid / pointer_intent_at definition)
     # outside the hit owner is rejected.

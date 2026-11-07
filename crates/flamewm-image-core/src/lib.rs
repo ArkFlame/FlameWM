@@ -8,6 +8,7 @@
 use std::path::Path;
 
 pub mod blur;
+pub mod decode_cache;
 pub use blur::{
     BlurError, BlurScratch, Rect, frosted_backdrop, gaussian_blur_rgba, gaussian_blur_rgba_with,
 };

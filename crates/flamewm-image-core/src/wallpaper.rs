@@ -30,8 +30,14 @@ pub fn parse(value: &str) -> WallpaperFit {
     }
 }
 
-/// Decodes the wallpaper file at `path` to straight RGBA8 at natural size.
+/// Decodes the wallpaper file at `path` to straight RGBA8 at natural size, reusing the on-disk
+/// decode cache when the file is unchanged.
 pub fn decode_file(path: &Path) -> Result<RgbaImage, String> {
+    crate::decode_cache::decode_file_cached(path)
+}
+
+/// Decodes `path` without consulting the decode cache.
+pub fn decode_file_uncached(path: &Path) -> Result<RgbaImage, String> {
     let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
     let format = ImageSourceFormat::from_extension(path)
         .ok_or_else(|| format!("unsupported wallpaper format: {}", path.display()))?;

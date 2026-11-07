@@ -11,7 +11,7 @@ use smithay::delegate_fractional_scale;
 use smithay::delegate_presentation;
 use smithay::desktop::utils::{OutputPresentationFeedback, take_presentation_feedback_surface_tree};
 use smithay::desktop::{PopupManager, layer_map_for_output};
-use smithay::output::Output;
+use smithay::output::{Output, Scale};
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -33,6 +33,18 @@ static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub fn init(display: &DisplayHandle) {
     let _fractional = FractionalScaleManagerState::new::<State>(display);
     let _presentation = PresentationState::new::<State>(display, PRESENTATION_CLOCK_ID);
+}
+
+/// The output scale for a saved percent (100..=200 in 5% steps, validated by the settings parser).
+///
+/// 100 keeps the integer scale, so the default output is unchanged. Surfaces learn the scale
+/// through `new_fractional_scale`, which reads it from the output.
+pub fn output_scale(percent: u16) -> Scale {
+    if percent == 100 {
+        Scale::Integer(1)
+    } else {
+        Scale::Fractional(f64::from(percent) / 100.0)
+    }
 }
 
 /// Frame period for an output mode given in millihertz; a zero rate is treated as 1 mHz.
@@ -81,24 +93,70 @@ pub fn collect_feedback(state: &State, output: &Output) -> OutputPresentationFee
     feedback
 }
 
-/// Reports the collected feedback as presented now, at the output's current mode rate.
-pub fn presented(mut feedback: OutputPresentationFeedback, output: &Output) {
+/// Reports the collected feedback as presented now (nested host: no hardware timestamp).
+pub fn presented(feedback: OutputPresentationFeedback, output: &Output) {
+    let seq = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    report(feedback, output, monotonic_now(), seq, wp_presentation_feedback::Kind::empty());
+}
+
+fn monotonic_now() -> Duration {
+    Clock::<Monotonic>::new().now().into()
+}
+
+#[cfg(feature = "drm")]
+/// Reports the collected feedback as presented at the DRM vblank that completed its flip.
+///
+/// `time` is the kernel's `CLOCK_MONOTONIC` flip time; a realtime-stamped device has none, so the
+/// clock is read instead. `sequence` is the kernel's vblank counter for the CRTC.
+pub fn presented_on_vblank(
+    feedback: OutputPresentationFeedback,
+    output: &Output,
+    time: Option<Duration>,
+    sequence: u32,
+) {
+    let time = vblank_time(time, monotonic_now());
+    let kind = wp_presentation_feedback::Kind::Vsync
+        | wp_presentation_feedback::Kind::HwClock
+        | wp_presentation_feedback::Kind::HwCompletion;
+    report(feedback, output, time, u64::from(sequence), kind);
+}
+
+#[cfg(feature = "drm")]
+/// The timestamp a vblank is reported at: the kernel flip time, or `now` when there is none.
+fn vblank_time(kernel: Option<Duration>, now: Duration) -> Duration {
+    kernel.unwrap_or(now)
+}
+
+fn report(
+    mut feedback: OutputPresentationFeedback,
+    output: &Output,
+    time: Duration,
+    seq: u64,
+    kind: wp_presentation_feedback::Kind,
+) {
     let refresh = output
         .current_mode()
         .map_or(Duration::from_millis(16), |mode| refresh_period(mode.refresh));
-    let now = Clock::<Monotonic>::new().now();
-    let seq = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    feedback.presented::<_, Monotonic>(
-        now,
-        Refresh::Fixed(refresh),
-        seq,
-        wp_presentation_feedback::Kind::empty(),
-    );
+    feedback.presented::<_, Monotonic>(time, Refresh::Fixed(refresh), seq, kind);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "drm")]
+    #[test]
+    fn vblank_uses_kernel_flip_time_when_monotonic() {
+        let flip = Duration::from_millis(5_000);
+        assert_eq!(vblank_time(Some(flip), Duration::from_millis(9_999)), flip);
+    }
+
+    #[cfg(feature = "drm")]
+    #[test]
+    fn vblank_falls_back_to_now_without_kernel_time() {
+        let now = Duration::from_millis(42);
+        assert_eq!(vblank_time(None, now), now);
+    }
 
     #[test]
     fn refresh_period_matches_sixty_hertz_mode() {
@@ -108,6 +166,19 @@ mod tests {
     #[test]
     fn zero_refresh_does_not_divide_by_zero() {
         assert_eq!(refresh_period(0), Duration::from_nanos(1_000_000_000_000));
+    }
+
+    #[test]
+    fn default_scale_stays_integer_one() {
+        assert!(matches!(output_scale(100), Scale::Integer(1)));
+    }
+
+    #[test]
+    fn saved_percent_becomes_fractional_scale() {
+        match output_scale(125) {
+            Scale::Fractional(scale) => assert!((scale - 1.25).abs() < f64::EPSILON),
+            other => panic!("expected fractional scale, got {other:?}"),
+        }
     }
 
     #[test]

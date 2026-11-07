@@ -162,8 +162,8 @@ pub(super) fn init_backend(
     );
 
     let drm_events = Rc::clone(&drm);
-    handle.insert_source(drm_notifier, move |event, _, state| {
-        on_drm_event(state, &drm_events, event);
+    handle.insert_source(drm_notifier, move |event, metadata, state| {
+        on_drm_event(state, &drm_events, event, metadata.take());
     })?;
 
     // logind signals (VT pause and resume) arrive on the system bus. The bus fd wakes the loop only

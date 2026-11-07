@@ -338,7 +338,7 @@ impl ShellLoop {
             crate::entry::settings_projection::taskbar_backdrop_percents(settings);
         let source = flamewm_shell::surface_backdrop::desktop_source(
             settings,
-            &crate::entry::packaged_root(),
+            &flamewm_api::paths::workspace_packaged_root(),
         );
         runtime.set_desktop_source(Some(source.clone()));
         let separate = crate::settings_projection::taskbar_items(Some(settings)).separate;

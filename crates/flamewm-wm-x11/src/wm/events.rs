@@ -370,6 +370,7 @@ impl<C: Connection> Wm<'_, C> {
         )?;
         match kind {
             WindowKind::Popup => {
+                self.centre_splash(event.window)?;
                 self.map_unframed(event.window, StackMode::ABOVE)?;
                 return Ok(());
             }

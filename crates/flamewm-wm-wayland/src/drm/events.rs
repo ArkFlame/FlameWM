@@ -71,14 +71,19 @@ pub(super) fn on_first_frame_deadline(state: &mut State, drm: &Rc<RefCell<Drm>>)
     TimeoutAction::Drop
 }
 
-pub(super) fn on_drm_event(state: &mut State, drm: &Rc<RefCell<Drm>>, event: DrmEvent) {
+pub(super) fn on_drm_event(
+    state: &mut State,
+    drm: &Rc<RefCell<Drm>>,
+    event: DrmEvent,
+    vblank: Option<DrmEventMetadata>,
+) {
     match event {
         DrmEvent::VBlank(crtc) => {
             let Ok(mut d) = drm.try_borrow_mut() else {
                 // A paint is in flight and replans this output itself.
                 return;
             };
-            d.on_vblank(state, crtc, drm);
+            d.on_vblank(state, crtc, drm, vblank);
         }
         DrmEvent::Error(error) => eprintln!("flamewm-wayland: drm error: {error}"),
     }

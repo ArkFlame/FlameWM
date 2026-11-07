@@ -141,7 +141,7 @@ fn run() -> Result<(), String> {
         config_path,
         store,
         snapshot.clone(),
-        packaged_root(),
+        flamewm_api::paths::workspace_packaged_root(),
         events_tx,
         writer,
         DEFAULT_WINDOW,
@@ -166,7 +166,7 @@ fn run() -> Result<(), String> {
         launch
     };
     app.open_tab(launch)?;
-    let root = packaged_root();
+    let root = flamewm_api::paths::workspace_packaged_root();
     let backdrop = backdrop_for(snapshot.as_ref(), &root, app.config.background_opacity);
     let mut tier = app.pool_tier;
     let mut doc = decode_document(UI[tier])?;
@@ -349,10 +349,6 @@ fn initial_settings() -> Option<SettingsSnapshot> {
 }
 
 /// Packaged asset root for the default wallpaper: the installed share directory, else the source tree.
-fn packaged_root() -> std::path::PathBuf {
-    flamewm_api::paths::packaged_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
-}
-
 #[cfg(test)]
 mod settings_apply_tests {
     use flamewm_api::settings::SettingValue;

@@ -1152,10 +1152,6 @@ fn initial_settings() -> SettingsSnapshot {
         .unwrap_or_else(|| SettingsSnapshot::new(0))
 }
 
-fn packaged_root() -> std::path::PathBuf {
-    flamewm_api::paths::packaged_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
-}
-
 fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::WindowBackdrop {
     let text = |key: &str| match snapshot.values.get(key) {
         Some(SettingValue::Text(value)) => value.clone(),
@@ -1173,7 +1169,7 @@ fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::Win
     flamewm_ui_x11::backdrop::WindowBackdrop {
         wallpaper: text("wallpaper"),
         fit: if fit.is_empty() { "fill".into() } else { fit },
-        packaged_root: packaged_root(),
+        packaged_root: flamewm_api::paths::workspace_packaged_root(),
         opacity_percent: opacity,
         blur_percent: blur,
     }

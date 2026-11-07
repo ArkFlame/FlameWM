@@ -85,6 +85,11 @@ pub(super) fn saved_shell_scales() -> BTreeMap<String, u16> {
     shell_scales_at(&settings_path())
 }
 
+/// The saved scale of the nested output in percent (100 when none is saved), read at startup.
+pub(crate) fn nested_output_scale_percent() -> u16 {
+    saved_shell_scales().get(OUTPUT_NAME).copied().unwrap_or(100)
+}
+
 /// `titlebars` and `windowMargin` from a committed settings snapshot.
 ///
 /// Read the way X11 `live_settings` reads them: a missing or ill-typed value keeps the product

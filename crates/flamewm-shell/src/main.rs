@@ -4,7 +4,7 @@ mod launch_feedback;
 use flamewm_shell::settings_projection;
 
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -557,7 +557,7 @@ pub fn main() {
     // audio/network/calendar surfaces); otherwise the normal shell role
     // (profiler `flamewm-shell`, owns panel/start/task menu/media).
     if std::env::args().any(|arg| arg == "--quick-control-host") {
-        if let Err(error) = flamewm_shell::quick_controls::run_quick_control_host(packaged_root()) {
+        if let Err(error) = flamewm_shell::quick_controls::run_quick_control_host(flamewm_api::paths::workspace_packaged_root()) {
             eprintln!("flamewm-quick-control: {error}");
             std::process::exit(1);
         }
@@ -646,7 +646,7 @@ fn execute() -> Result<(), String> {
                 .map_err(|e| format!("show panel: {e:?}"))?;
         }
     }
-    let loader_root = packaged_root();
+    let loader_root = flamewm_api::paths::workspace_packaged_root();
     // Separate X connection observes freedesktop startup notifications from
     // Flame launchers *and* compliant external launchers (Dolphin/xdg-open).
     // Failure is nonfatal: a missing X observer must not stop the desktop.
@@ -975,10 +975,6 @@ fn signal_interest(events: FdEvents) -> calloop::Interest {
 
 fn profile_interval_secs() -> u64 {
     flamewm_profiler::profile_interval_secs()
-}
-
-fn packaged_root() -> PathBuf {
-    flamewm_api::paths::packaged_root(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
 }
 
 #[cfg(test)]

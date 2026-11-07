@@ -82,6 +82,37 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
+    /// EWMH leaves splash placement to the client; the WM centres a splash window once on the work
+    /// area before its first map. Other popup types keep their requested position.
+    pub(super) fn centre_splash(&self, window: Window) -> Result<(), ReplyError> {
+        let reply = self
+            .conn
+            .get_property(
+                false,
+                window,
+                self.atoms.net_wm_window_type,
+                AtomEnum::ATOM,
+                0,
+                16,
+            )?
+            .reply()?;
+        let types: Vec<Atom> = reply.value32().map_or_else(Vec::new, Iterator::collect);
+        if !types.contains(&self.atoms.net_wm_window_type_splash) {
+            return Ok(());
+        }
+        let geometry = self.conn.get_geometry(window)?.reply()?;
+        let work = self.work_root();
+        let frame = super::transient_placement::centre_over_parent(
+            work,
+            i32::from(geometry.width),
+            i32::from(geometry.height),
+            work,
+        );
+        self.conn
+            .configure_window(window, &ConfigureWindowAux::new().x(frame.x).y(frame.y))?;
+        Ok(())
+    }
+
     pub(super) fn map_unframed(
         &self,
         window: Window,

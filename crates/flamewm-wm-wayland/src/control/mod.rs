@@ -69,6 +69,7 @@ use self::media::*;
 use self::mirror::*;
 use self::session::*;
 use self::settings::*;
+pub(crate) use self::settings::nested_output_scale_percent;
 use self::switcher::*;
 
 /// Output name the compositor advertises to the shell; the nested compositor has one output.

@@ -109,7 +109,8 @@ use smithay::backend::drm::compositor::{
 };
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::{
-    DrmDevice, DrmDeviceFd, DrmDeviceNotifier, DrmError, DrmEvent, Framebuffer,
+    DrmDevice, DrmDeviceFd, DrmDeviceNotifier, DrmError, DrmEvent, DrmEventMetadata, DrmEventTime,
+    Framebuffer,
 };
 use smithay::backend::egl::fence::EGLFence;
 use smithay::backend::egl::{EGLContext, EGLDisplay};
@@ -122,7 +123,7 @@ use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::session::Session;
 use smithay::backend::udev::{self, UdevBackend, UdevEvent};
-use smithay::desktop::utils::send_frames_surface_tree;
+use smithay::desktop::utils::{OutputPresentationFeedback, send_frames_surface_tree};
 use smithay::desktop::{PopupManager, layer_map_for_output};
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::calloop::LoopHandle;
@@ -146,6 +147,7 @@ use crate::StartupTiming;
 use crate::elapsed_ms;
 use crate::logind::{Event as LogindEvent, LogindSession, PauseKind};
 use crate::output_layout::{ModeCandidate, select_mode};
+use crate::presentation_scale;
 mod init;
 pub use init::*;
 mod sync;
@@ -169,8 +171,13 @@ use crate::state::{
     retry_owed, scan_failed, scene_build, sync_wait_decision,
 };
 
-type Compositor =
-    DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
+/// The feedback of the frame a flip carries, handed back by `frame_submitted` on its vblank.
+type Compositor = DrmCompositor<
+    GbmAllocator<DrmDeviceFd>,
+    GbmFramebufferExporter<DrmDeviceFd>,
+    Option<OutputPresentationFeedback>,
+    DrmDeviceFd,
+>;
 
 const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
 /// Delay of the retry armed only for a real sync or buffer error.
@@ -373,7 +380,7 @@ impl Drm {
             }
         }
 
-        if self.draw_pass(elements, has_callback) {
+        if self.draw_pass(state, elements, has_callback) {
             // The kernel rejected an atomic state. That is a leftover from whoever owned the CRTCs
             // before us rather than an unusable output, so the device state is reset and the pass
             // is repeated once, exactly like anvil's `render_surface`. It cannot loop: the second
@@ -390,7 +397,7 @@ impl Drm {
                             );
                         }
                     }
-                    self.draw_pass(elements, has_callback);
+                    self.draw_pass(state, elements, has_callback);
                 }
                 Err(error) => eprintln!("flamewm-wayland: device reset failed: {error}"),
             }
@@ -446,7 +453,7 @@ impl Drm {
     /// Returns true when the kernel rejected an atomic state for one of them (`DrmError::TestFailed`
     /// inside the render error): that output stays dirty instead of being handed to the retry timer,
     /// because `paint` resets the device state and repeats the pass once.
-    fn draw_pass(&mut self, elements: &[Elem], has_callback: bool) -> bool {
+    fn draw_pass(&mut self, state: &State, elements: &[Elem], has_callback: bool) -> bool {
         let mut test_failed = false;
         // One entry per flip handed to KMS in this pass: the queue boundary, recorded after the loop
         // so the gate is never mutated while an output is borrowed.
@@ -485,7 +492,12 @@ impl Drm {
                     // of step and the kernel starts reporting buffer/IO errors.
                     let (decision, waited) = frame_sync_wait(&result, already_waited);
                     match decision {
-                        SyncWait::Wait => match out.compositor.queue_frame(()) {
+                        SyncWait::Wait => match out
+                            .compositor
+                            .queue_frame(Some(presentation_scale::collect_feedback(
+                                state,
+                                &out.output,
+                            ))) {
                             Ok(()) => {
                                 out.frames.queue();
                                 queued.push(u32::from(out.crtc));
@@ -689,26 +701,45 @@ impl Drm {
     /// calling `queue_frame`"). `None` means no flip of ours was pending, so this event is not
     /// evidence that anything was presented and must not satisfy the gate. The vblank also releases
     /// the output, so the next plan sees requests that arrived while the frame was in flight.
-    fn on_vblank(&mut self, state: &mut State, crtc: crtc::Handle, drm: &Rc<RefCell<Drm>>) {
+    fn on_vblank(
+        &mut self,
+        state: &mut State,
+        crtc: crtc::Handle,
+        drm: &Rc<RefCell<Drm>>,
+        vblank: Option<DrmEventMetadata>,
+    ) {
         let Some(index) = self.surfaces.iter().position(|out| out.crtc == crtc) else {
             return;
         };
-        let presented = {
+        let (presented, feedback) = {
             let out = &mut self.surfaces[index];
             out.frames.presented();
             match out.compositor.frame_submitted() {
-                Ok(submitted) => submitted.is_some(),
+                Ok(submitted) => (submitted.is_some(), submitted.flatten()),
                 Err(error) => {
                     out.frames.fail();
                     eprintln!(
                         "flamewm-wayland: frame_submitted failed on {}: {error}",
                         out.output.name()
                     );
-                    false
+                    (false, None)
                 }
             }
         };
         if presented {
+            if let Some(feedback) = feedback {
+                let time = match vblank.map(|m| m.time) {
+                    Some(DrmEventTime::Monotonic(time)) => Some(time),
+                    _ => None,
+                };
+                let sequence = vblank.map_or(0, |m| m.sequence);
+                presentation_scale::presented_on_vblank(
+                    feedback,
+                    &self.surfaces[index].output,
+                    time,
+                    sequence,
+                );
+            }
             self.note_presented(u32::from(crtc));
         }
         self.paint(state, drm);

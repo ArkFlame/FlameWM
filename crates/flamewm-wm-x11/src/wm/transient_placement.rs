@@ -43,6 +43,15 @@ mod tests {
     }
 
     #[test]
+    fn splash_is_centred_on_work_area() {
+        // Splash has no parent: its work area stands in as the parent (manage path: centre_splash).
+        assert_eq!(
+            centre_over_parent(WORK, 220, 130, WORK),
+            RootRect::new(690, 40 + (860 - 130) / 2, 220, 130)
+        );
+    }
+
+    #[test]
     fn oversize_dialog_anchors_to_work_area_origin() {
         let parent = RootRect::new(100, 100, 50, 50);
         assert_eq!(

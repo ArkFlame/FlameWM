@@ -147,7 +147,7 @@ fn chooser_worker(rx: Receiver<ChooserJob>, result: Sender<WorkerResult>, mut wa
     for job in rx {
         match job {
             ChooserJob::Discover { request, path } => {
-                let chooser = mime::discover(path, &packaged_root());
+                let chooser = mime::discover(path, &flamewm_api::paths::workspace_packaged_root());
                 send_wake(&mut wake, &result, WorkerResult::ChooserReady { request, chooser });
             }
             ChooserJob::SetDefault { mime, desktop_id } => {
@@ -317,9 +317,6 @@ fn initial_settings()->Option<SettingsSnapshot> {
     }
 }
 /// Packaged asset root for the default wallpaper: the installed share directory, else the source tree (same rule as the desktop).
-fn packaged_root() -> std::path::PathBuf {
-    flamewm_api::paths::packaged_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
-}
 pub fn main(){if let Err(error)=run(){eprintln!("flamewm-explorer: {error}");std::process::exit(1);}}
 fn run()->Result<(),String>{
     flamewm_profiler::init_process("flamewm-explorer");
@@ -371,7 +368,7 @@ fn run()->Result<(),String>{
         app.search=Some(search);
         let settings=initial_settings();
         app.theme=settings.as_ref().map_or_else(ExplorerTheme::default,ExplorerTheme::from_snapshot);
-        backdrop=settings.as_ref().map(|snapshot|theme::window_backdrop(snapshot,&packaged_root()));
+        backdrop=settings.as_ref().map(|snapshot|theme::window_backdrop(snapshot,&flamewm_api::paths::workspace_packaged_root()));
         let saved=prefs::load(&prefs::config_dir());
         app.model.hidden=saved.show_hidden;
         app.show_type=saved.show_type;

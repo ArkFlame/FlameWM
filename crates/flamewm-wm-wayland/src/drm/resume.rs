@@ -121,8 +121,8 @@ pub(super) fn rebuild(
     let again = Rc::clone(drm);
     // The replacement device needs its own event source; the old one watches a dead descriptor and
     // stays registered (calloop has no cheap removal) but never reports again.
-    handle.insert_source(notifier, move |event, _, state| {
-        on_drm_event(state, &again, event);
+    handle.insert_source(notifier, move |event, metadata, state| {
+        on_drm_event(state, &again, event, metadata.take());
     })?;
     scan_connectors(&mut d, state)?;
     // Same rule as the kept-fd resume: the session is ours again, so the startup deadline starts over.

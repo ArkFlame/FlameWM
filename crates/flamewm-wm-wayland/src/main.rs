@@ -106,7 +106,6 @@ use flamewm_api::graphics::{DisplayProtocol, choose_provider};
 use flamewm_render_core::RenderAcceleration;
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::winit::{WinitEvent, init_from_attributes};
-use smithay::output::Scale;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction};
@@ -856,7 +855,7 @@ fn init_winit(
     state.output.change_current_state(
         Some(mode),
         Some(Transform::Flipped180),
-        Some(Scale::Integer(1)),
+        Some(presentation_scale::output_scale(control::nested_output_scale_percent())),
         Some((0, 0).into()),
     );
     state.output.set_preferred(mode);

@@ -38,6 +38,12 @@ pub fn packaged_root(manifest_root: &Path) -> PathBuf {
         .unwrap_or_else(|| manifest_root.to_path_buf())
 }
 
+/// [`packaged_root`] for a workspace binary, with the checkout at `crates/<name>/../..`.
+#[must_use]
+pub fn workspace_packaged_root() -> PathBuf {
+    packaged_root(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

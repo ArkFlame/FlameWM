@@ -72,7 +72,6 @@ mod downloads;
 mod drag;
 mod icon_names;
 mod icon_raster;
-mod install_root;
 mod output_layout;
 mod projection;
 mod rubber;
@@ -90,7 +89,6 @@ mod widgets;
 mod workspace_sync;
 
 use drag::{commit_item_drag, hide_drag_ghost, show_drag_ghost, sync_drag_ghost};
-use install_root::packaged_root;
 #[cfg(test)]
 use output_layout::PROJECTED_CELLS_CALLS;
 use output_layout::{
@@ -152,7 +150,7 @@ pub fn main() -> Result<(), String> {
     let mut wallpaper_loader = wallpaper_loader::WallpaperLoader::new(
         surface.width as u32,
         surface.height as u32,
-        packaged_root(),
+        flamewm_api::paths::workspace_packaged_root(),
     )?;
     request_wallpaper(
         &mut wallpaper_loader,
@@ -217,7 +215,7 @@ pub fn main() -> Result<(), String> {
             entry_scale_percent,
             output_geometries,
             default_output,
-            icons: projection::ParallelIconService::spawn(packaged_root()),
+            icons: projection::ParallelIconService::spawn(flamewm_api::paths::workspace_packaged_root()),
             icon_slots: vec![None; SLOT_COUNT],
             slot_inputs: vec![None; SLOT_COUNT],
             projected_cache: None,

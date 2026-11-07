@@ -137,7 +137,10 @@ fn run_session(
         "flamewm-wm: settings path={} source={settings_source}",
         settings_path.display()
     );
-    let control = Rc::new(ControlServer::connect_session()?);
+    // The session bus is optional at start: windows and keys do not depend on it. A missing bus
+    // is retried lazily with capped backoff from the hook (see `refresh_control`).
+    let mut control_retry = BusRetry::new();
+    let control: ControlSlot = Rc::new(RefCell::new(connect_control_session(&mut control_retry)));
     let reactor = Rc::new(RefCell::new(Reactor::new()?));
     let integrations = Rc::new(RefCell::new(LinuxIntegrationRuntime::connect()?));
     if let Err(error) = integrations.borrow_mut().start() {
@@ -204,20 +207,30 @@ fn run_session(
     let settings_observer: SharedSettingsObserver = Rc::new(RefCell::new(settings_observer));
     let control_now_ms = Rc::new(Cell::new(0_u64));
     let control_error = Rc::new(RefCell::new(None::<AnyError>));
-    let mut control_registration = match register_control(
-        &reactor,
-        &control,
-        &host,
-        &control_now_ms,
-        &control_error,
-        &settings_observer,
-    ) {
-        Ok(registration) => registration,
-        Err(error) => {
-            drop(pulse);
-            integrations.borrow_mut().stop();
-            return Err(error);
-        }
+    let initial_control = control.borrow().clone();
+    let control_registration = match initial_control {
+        Some(server) => match register_control(
+            &reactor,
+            &server,
+            &control,
+            &host,
+            &control_now_ms,
+            &control_error,
+            &settings_observer,
+        ) {
+            Ok(registration) => Some(registration),
+            Err(error) => {
+                drop(pulse);
+                integrations.borrow_mut().stop();
+                return Err(error);
+            }
+        },
+        None => None,
+    };
+    let mut control_link = ControlLink {
+        slot: Rc::clone(&control),
+        registration: control_registration,
+        retry: control_retry,
     };
     // Profiler report timer on the reactor; interval from
     // `FLAMEWM_PROFILE_INTERVAL` (floored at 10s, default 60s), never
@@ -351,8 +364,7 @@ fn run_session(
             }
             refresh_control(
                 &reactor_for_hook,
-                &mut control_registration,
-                &control_for_hook,
+                &mut control_link,
                 &host_for_hook,
                 &control_now_ms_for_hook,
                 &control_error_for_hook,
@@ -428,7 +440,7 @@ fn run_session(
                 let mut audio_updates = audio_updates_for_hook.borrow_mut();
                 for snapshot in audio_updates.drain(..) {
                     if host.system_mut().update_audio(snapshot) {
-                        emit_system_signals(host, control_for_hook.as_ref())?;
+                        emit_system_signals(host, &control_for_hook);
                     }
                 }
             }
@@ -445,20 +457,20 @@ fn run_session(
                 // turn; `update_network` dedupes, so unchanged state emits nothing.
                 let network = integrations.network_snapshot();
                 if host.system_mut().update_network(network) {
-                    emit_system_signals(host, control_for_hook.as_ref())?;
+                    emit_system_signals(host, &control_for_hook);
                 }
                 let power = integrations.power_snapshot();
                 if host.system_mut().update_power(power) {
-                    emit_system_signals(host, control_for_hook.as_ref())?;
+                    emit_system_signals(host, &control_for_hook);
                 }
                 let brightness = integrations.brightness_snapshot();
                 if host.system_mut().update_brightness(brightness) {
-                    emit_system_signals(host, control_for_hook.as_ref())?;
+                    emit_system_signals(host, &control_for_hook);
                 }
                 if reconciled {
                     let media = integrations.media_snapshot();
                     if host.system_mut().update_media(media) {
-                        emit_system_signals(host, control_for_hook.as_ref())?;
+                        emit_system_signals(host, &control_for_hook);
                     }
                 }
             }
@@ -494,7 +506,7 @@ fn run_session(
                     .system_mut()
                     .update_power(integrations_for_hook.borrow().power_snapshot())
             {
-                emit_system_signals(host, control_for_hook.as_ref())?;
+                emit_system_signals(host, &control_for_hook);
             }
             let now_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
             control_now_ms_for_hook.set(now_ms);
@@ -533,8 +545,7 @@ fn run_session(
                     if let Err(error) = host.resync_panels_for_displays(&snapshot) {
                         eprintln!("flamewm: panel resync after mode transaction failed: {error}");
                     }
-                    control_for_hook
-                        .emit_signal(&ControlSignal::DisplaysSnapshotChanged { snapshot })?;
+                    emit_control(&control_for_hook, &ControlSignal::DisplaysSnapshotChanged { snapshot });
                 }
             }
             // The panel service is changed by resync_panels_for_displays(), not
@@ -542,17 +553,20 @@ fn run_session(
             // when the only change was an XRandR output-coordinate swap.
             let panels_after = host.panels_snapshot();
             if panels_after != panels_before {
-                control_for_hook.emit_signal(&ControlSignal::PanelsSnapshotChanged {
-                    snapshot: panels_after,
-                })?;
+                emit_control(
+                    &control_for_hook,
+                    &ControlSignal::PanelsSnapshotChanged {
+                        snapshot: panels_after,
+                    },
+                );
             }
             // Alt+Tab overlay snapshot: queued by the switcher on each change, emitted once here.
             if let Some(signal) = wm.take_switcher_signal() {
-                control_for_hook.emit_signal(&signal)?;
+                emit_control(&control_for_hook, &signal);
             }
             flush_wm_changes(
                 host,
-                control_for_hook.as_ref(),
+                &control_for_hook,
                 &integrations_for_hook,
                 changes,
             )?;
@@ -583,18 +597,23 @@ fn run_session(
     result
 }
 
-fn emit_system_signals<E>(host: &PlatformHost<E>, control: &ControlServer) -> Result<(), AnyError>
+fn emit_system_signals<E>(host: &PlatformHost<E>, control: &ControlSlot)
 where
     E: flamewm_api::ports::EnginePorts,
 {
     let snapshot = host.system_snapshot();
-    control.emit_signal(&ControlSignal::SystemSnapshotChanged {
-        snapshot: snapshot.clone(),
-    })?;
-    control.emit_signal(&ControlSignal::SystemChanged {
-        revision: snapshot.revision,
-    })?;
-    Ok(())
+    emit_control(
+        control,
+        &ControlSignal::SystemSnapshotChanged {
+            snapshot: snapshot.clone(),
+        },
+    );
+    emit_control(
+        control,
+        &ControlSignal::SystemChanged {
+            revision: snapshot.revision,
+        },
+    );
 }
 
 /// Persisted `cursorTheme` from the settings file at startup, before the session
@@ -664,7 +683,7 @@ fn sync_snap_preview_opacity(snapshot: &SettingsSnapshot) {
 /// WORKSPACE SWITCH -> Workspaces+Panels. `work_area`-only turns emit nothing.
 fn flush_wm_changes<E>(
     host: &mut PlatformHost<E>,
-    control: &ControlServer,
+    control: &ControlSlot,
     integrations: &RefCell<LinuxIntegrationRuntime>,
     mut changes: WmChangeSet,
 ) -> Result<(), AnyError>
@@ -678,17 +697,13 @@ where
     let media_audio_key = changes.media_audio_key.take();
     let media_brightness_key = changes.media_brightness_key.take();
     for signal in collect_wm_signals(host, changes).map_err(any_from_flame)? {
-        control.emit_signal(&signal).map_err(any_from_flame)?;
+        emit_control(control, &signal);
     }
     if start_menu_toggle {
-        control
-            .emit_signal(&ControlSignal::StartMenuToggleRequested)
-            .map_err(any_from_flame)?;
+        emit_control(control, &ControlSignal::StartMenuToggleRequested);
     }
     if launcher_toggle {
-        control
-            .emit_signal(&ControlSignal::LauncherToggleRequested)
-            .map_err(any_from_flame)?;
+        emit_control(control, &ControlSignal::LauncherToggleRequested);
     }
     if let Some(key) = media_audio_key {
         // A rejected write (stale generation, no sink, Pulse down) must not stop the WM.
@@ -702,7 +717,7 @@ where
             Ok(()) => {
                 let brightness = integrations.borrow_mut().brightness_snapshot();
                 if host.system_mut().update_brightness(brightness) {
-                    emit_system_signals(host, control)?;
+                    emit_system_signals(host, control);
                 }
             }
             Err(error) => eprintln!("flamewm: brightness key {key:?} was not applied: {error:?}"),
@@ -773,22 +788,96 @@ fn any_from_flame(error: flamewm_api::FlameError) -> AnyError {
     Box::new(std::io::Error::other(error.to_string()))
 }
 
+/// Shared session-bus control link. `None` while the bus is unreachable or after it dropped.
+type ControlSlot = Rc<RefCell<Option<Rc<ControlServer>>>>;
+
+const BUS_RETRY_MIN: std::time::Duration = std::time::Duration::from_secs(1);
+const BUS_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Capped exponential backoff for reconnecting an optional session-bus link.
+struct BusRetry {
+    next_at: Instant,
+    delay: std::time::Duration,
+}
+
+impl BusRetry {
+    fn new() -> Self {
+        Self {
+            next_at: Instant::now(),
+            delay: BUS_RETRY_MIN,
+        }
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        now >= self.next_at
+    }
+
+    fn reset(&mut self, now: Instant) {
+        self.next_at = now;
+        self.delay = BUS_RETRY_MIN;
+    }
+
+    fn failed(&mut self, now: Instant) {
+        self.next_at = now + self.delay;
+        self.delay = (self.delay * 2).min(BUS_RETRY_MAX);
+    }
+}
+
+struct ControlLink {
+    slot: ControlSlot,
+    registration: Option<ControlRegistration>,
+    retry: BusRetry,
+}
+
 struct ControlRegistration {
     fd: i32,
     events: FdEvents,
     token: RegistrationToken,
 }
 
+/// One connect attempt. A failure is logged and scheduled, never fatal.
+fn connect_control_session(retry: &mut BusRetry) -> Option<Rc<ControlServer>> {
+    let now = Instant::now();
+    match ControlServer::connect_session() {
+        Ok(server) => {
+            retry.reset(now);
+            Some(Rc::new(server))
+        }
+        Err(error) => {
+            retry.failed(now);
+            eprintln!(
+                "flamewm: control D-Bus unavailable, windows and keys stay active, retrying: {error}"
+            );
+            None
+        }
+    }
+}
+
+/// Emits one control signal when the bus is connected. A failed write drops the link so the
+/// backoff reconnects it; it never stops the WM.
+fn emit_control(control: &ControlSlot, signal: &ControlSignal) {
+    let server = control.borrow().clone();
+    let Some(server) = server else {
+        return;
+    };
+    if let Err(error) = server.emit_signal(signal) {
+        eprintln!("flamewm: control D-Bus emit failed, reconnecting: {error}");
+        *control.borrow_mut() = None;
+    }
+}
+
 fn register_control(
     reactor: &Rc<RefCell<Reactor>>,
-    control: &Rc<ControlServer>,
+    server: &Rc<ControlServer>,
+    slot: &ControlSlot,
     host: &Rc<RefCell<Option<PlatformHost<X11Desktop>>>>,
     now_ms: &Rc<Cell<u64>>,
     control_error: &Rc<RefCell<Option<AnyError>>>,
     settings_observer: &SharedSettingsObserver,
 ) -> Result<ControlRegistration, AnyError> {
-    let watch = control.watch();
-    let control = Rc::clone(control);
+    let watch = server.watch();
+    let server = Rc::clone(server);
+    let slot = Rc::clone(slot);
     let host = Rc::clone(host);
     let now_ms = Rc::clone(now_ms);
     let control_error = Rc::clone(control_error);
@@ -798,13 +887,8 @@ fn register_control(
         interest_for(watch.events),
         move |_, readiness| {
             if readiness.error || readiness.hangup {
-                keep_first_error(
-                    &control_error,
-                    Box::new(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "control D-Bus FD closed",
-                    )),
-                );
+                eprintln!("flamewm: control D-Bus connection closed, retrying");
+                *slot.borrow_mut() = None;
                 return FdAction::Remove;
             }
             if !(readiness.readable || readiness.writable) {
@@ -816,8 +900,7 @@ fn register_control(
             };
             let panels_before = host.panels_snapshot();
             let displays_before = host.cached_display_snapshot();
-            let result = control.on_ready(host, now_ms.get());
-            if let Err(error) = result {
+            if let Err(error) = server.on_ready(host, now_ms.get()) {
                 keep_first_error(&control_error, Box::new(error));
                 FdAction::Remove
             } else {
@@ -835,10 +918,7 @@ fn register_control(
                     signals.push(ControlSignal::PanelsSnapshotChanged { snapshot: panels });
                 }
                 for signal in &signals {
-                    if let Err(error) = control.emit_signal(signal) {
-                        keep_first_error(&control_error, Box::new(error));
-                        return FdAction::Remove;
-                    }
+                    emit_control(&slot, signal);
                 }
                 FdAction::Continue
             }
@@ -851,28 +931,51 @@ fn register_control(
     })
 }
 
+/// Keeps the control link current each turn: drops a stale registration, reconnects a missing
+/// link once its backoff is due, and re-registers when the bus fd changes.
 fn refresh_control(
     reactor: &Rc<RefCell<Reactor>>,
-    registration: &mut ControlRegistration,
-    control: &Rc<ControlServer>,
+    link: &mut ControlLink,
     host: &Rc<RefCell<Option<PlatformHost<X11Desktop>>>>,
     now_ms: &Rc<Cell<u64>>,
     control_error: &Rc<RefCell<Option<AnyError>>>,
     settings_observer: &SharedSettingsObserver,
 ) -> Result<(), AnyError> {
-    let watch = control.watch();
-    if watch.fd == registration.fd && watch.events == registration.events {
-        return Ok(());
+    let mut server = link.slot.borrow().clone();
+    if server.is_none() {
+        if let Some(registration) = link.registration.take() {
+            // Already removed by the reactor when the bus closed; a stale token is ignored.
+            let _ = reactor.borrow_mut().remove(registration.token);
+        }
+        if !link.retry.due(Instant::now()) {
+            return Ok(());
+        }
+        server = connect_control_session(&mut link.retry);
+        if server.is_some() {
+            eprintln!("flamewm: control D-Bus connected");
+        }
+        *link.slot.borrow_mut() = server.clone();
     }
-    reactor.borrow_mut().remove(registration.token)?;
-    *registration = register_control(
+    let Some(server) = server else {
+        return Ok(());
+    };
+    let watch = server.watch();
+    if let Some(registration) = link.registration.take() {
+        if watch.fd == registration.fd && watch.events == registration.events {
+            link.registration = Some(registration);
+            return Ok(());
+        }
+        reactor.borrow_mut().remove(registration.token)?;
+    }
+    link.registration = Some(register_control(
         reactor,
-        control,
+        &server,
+        &link.slot,
         host,
         now_ms,
         control_error,
         settings_observer,
-    )?;
+    )?);
     Ok(())
 }
 
@@ -1477,5 +1580,36 @@ mod power_cpu_sampling_tests {
             advance_power_cpu_sampling(true, Some(due), due),
             (true, Some(due + POWER_CPU_SAMPLE_INTERVAL))
         );
+    }
+}
+
+#[cfg(test)]
+mod bus_retry_tests {
+    use super::*;
+
+    #[test]
+    fn failed_connects_back_off_and_cap() {
+        let start = Instant::now();
+        let mut retry = BusRetry::new();
+        retry.failed(start);
+        assert!(!retry.due(start));
+        assert!(retry.due(start + BUS_RETRY_MIN));
+        let mut now = start;
+        for _ in 0..10 {
+            retry.failed(now);
+            now += BUS_RETRY_MAX;
+        }
+        assert_eq!(retry.delay, BUS_RETRY_MAX);
+    }
+
+    #[test]
+    fn reset_after_connect_is_immediately_due_at_minimum_delay() {
+        let start = Instant::now();
+        let mut retry = BusRetry::new();
+        retry.failed(start);
+        retry.failed(start);
+        retry.reset(start);
+        assert_eq!(retry.delay, BUS_RETRY_MIN);
+        assert!(retry.due(start));
     }
 }

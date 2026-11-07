@@ -267,3 +267,51 @@ Probe: `scratchpad/idle_probe.py` (own Xvfb, own dbus, binaries `target-swarm-id
 - Before/after timing: UNVERIFIED. No same-revision debug build was available and the release build did not finish under host load (50 to 62). The per-motion raster and buffer-creation counts are proven by the tests above. Frame time and CPU are not measured.
 - Not checked: nested Wayland runtime drag, the `lag_run.py` probe. The dead line in `scratchpad/lag/lag_run.py` is not deleted. No commit.
 - Risk: the fix removes per-motion re-raster and buffer churn, but the 16 ms throttle and any remaining per-frame element build in `render/mod.rs` are unmeasured at runtime.
+
+### Results: P1 (CODER, startup/open latency; not committed)
+- Probe: release `decode_file` on `assets/wallpapers/fitz-roy-dawn.webp` (2560x1707), best of 5, temp test (removed). Before 214.0 ms uncached; after 6.4 ms warm cache hit.
+- Culprit: every wallpaper decode (desktop loader and WM titlebar canvas on miss) re-decodes the full natural-size webp.
+- Fix: `crates/flamewm-image-core/src/decode_cache.rs` (new), `wallpaper::decode_file` now cached; `decode_file_uncached` kept. Key = FNV(path, byte len, mtime ns); cache `$XDG_CACHE_HOME/flamewm/decoded/<hash>.rgba` (raw RGBA8, 16-byte header); atomic temp+rename; any failure falls back to decode.
+- Deviation: cache stores natural-size raster, not output-size. Compose depends on fit and outputs, so output-size downscale would need a compose-path change.
+- Not done: wallpaper decode on loader thread with nice (already on a worker thread); 25% CPU claim not reproduced (release decode is ~0.2 s once per start).
+- `open.total` (quick-control show): no change. `show()` `redraw` is dirty-gated; no double paint found. Candidates per open are `popup_backdrop_for` and `present_scene`; needs runtime `slow open` timings, not measured.
+- Checks: `cargo test -p flamewm-image-core` exit 0 (74 passed, 5 ignored, new test included); `cargo check -p flamewm-desktop -p flamewm-render-x11` exit 0, 0 warnings; `python3 -I tools/architecture_guard.py` exit 1 (`expected owner file missing: crates/flamewm-wm-x11/src/frame/geometry.rs`, uncommitted deletion by another worker, not this change).
+
+### Results: X2 (CODER, WM bus optionality, window-type probe; not committed)
+- (1) Session bus, PARTIAL. Done: `ControlServer` link is optional with capped backoff (1 s to 30 s), `crates/flamewm-wm-x11/src/runtime.rs` (`ControlSlot`, `BusRetry`, `connect_control_session`, `emit_control`, `refresh_control`). Bus loss or emit failure drops the link and reconnects instead of exiting. Not done: `LinuxIntegrationRuntime::connect()` (runtime.rs ~142) still needs the session bus (`MprisProvider::connect`, `flamewm-integrations-linux/src/mpris.rs:99`), so a dead bus still exits 1 (`Unavailable: D-Bus connection failed`). Fix needs lazy integrations in wm-x11 (about 15 sites) and is not done.
+- (1) Probe: dead bus before the change exits at runtime.rs:140. After the change it exits at the integrations connect (same message), so the start-without-bus acceptance is NOT met. Live bus (`dbus-run-session`) runs: no error, timeout 124 is the kill.
+- (3) Window types, Xvfb :95, probe `/tmp/claude-1000/fw-x2/probe_types.py`, WM from `target-swarm-x2`, output `/tmp/claude-1000/fw-x2/probe4.out`:
+  - dock, tooltip, notification: unframed, not in `_NET_CLIENT_LIST`, not active, focus unchanged. PASS.
+  - splash: was not centred (classified Popup, client-placed). Fix: `wm/manage.rs` `centre_splash`, called from `wm/events.rs` Popup map. After: centre_delta (0,0). PASS. The pre-fix delta was not re-measured with the corrected probe math, so the "before" is from code reading only.
+  - utility: framed, in `_NET_CLIENT_LIST`, takes focus on map. NOT FIXED: the shell task list never reads `_NET_WM_STATE_SKIP_TASKBAR` (only `flamewm-shell-core/src/quickswitch.rs` does), so "utility not in taskbar" needs a flamewm-shell change, out of scope.
+  - dialog, menu, normal: framed, listed. Menu is framed; not in the acceptance list, left as is.
+- (2) `_NET_WM_STATE_DEMANDS_ATTENTION` attention flag: SKIPPED (needs `WindowSnapshot.attention` across constructors, wire, and shell projection).
+- Checks: `cargo build --bin flamewm` (CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-x2) exit 0, 0 warnings. `cargo test -p flamewm-wm-x11` exit 0, 548 passed, 0 failed, 0 warnings (includes `runtime::bus_retry_tests::*`, `wm::transient_placement::tests::splash_is_centred_on_work_area`). `python3 -I tools/architecture_guard.py` exit 0 (77 ratified). `flamewm-wm` not touched, not tested.
+- Processes: Xvfb :95 (PID 3720037) left running; WM probe processes killed by exact cmdline. Remove with `kill 3720037` when done.
+- Risks: integrations still bus-hard; reconnect does not re-publish the system snapshot (shell pulls on demand, not verified); the splash centre uses the whole work area, not the output under the pointer.
+
+### Results: W2 (CODER, WL outputs: presentation, fractional scale, pager occupancy; not committed)
+- (1) wp_presentation on DRM, DONE (compile + unit only). `drm/init.rs`, `drm/resume.rs` and `drm/events.rs` now pass the `DrmEventMetadata` through. `drm/mod.rs` `on_vblank` calls `presentation_scale::presented_on_vblank` with the kernel flip time (`DrmEventTime::Monotonic`) and the vblank sequence. The feedback is `Vsync|HwClock|HwCompletion`. A realtime-stamped device falls back to the monotonic clock. The `Compositor` alias carries `Option<OutputPresentationFeedback>`, and `queue_frame` collects feedback via `collect_feedback`.
+- (2) wp_fractional_scale, DONE. `presentation_scale::output_scale(percent)` maps 100 to `Scale::Integer(1)` and other values to `Scale::Fractional`. `control::nested_output_scale_percent()` reads `scale.wayland-0` from settings. The nested winit output uses it. `FractionalScaleHandler::new_fractional_scale` reads the output scale, so preferred_scale follows it.
+- (3) Pager occupancy, live check PASS, no fix needed. Nested Xvfb `:61`, XWayland `:1`. Three xclock windows: two on ws1, one on ws2 (after `Workspaces.Activate uint32 1, uint64 1`). `gdbus ... Workspaces.GetSnapshot` returned `occupancy [2, 1, 0, 0]`, `revision 2`, `activeIndex 1`. Correct.
+- Checks (CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-swarm-w2, CARGO_BUILD_JOBS=3, RUST_TEST_THREADS=2):
+  - `cargo test -p flamewm-wm-wayland`: exit 0, 267 lib tests + 12 bin tests passed, 0 failed, 0 warnings (`.agents/runtime/w2-test2.log`). The first run (`w2-test1.log`) had one dead-code warning for `presented_on_vblank` in the non-drm build. That is fixed by gating the vblank helper, its helper and its two tests on `feature = "drm"`.
+  - `cargo check -p flamewm-wm-wayland --features drm`: exit 0, 0 warnings (`w2-check3.log`).
+  - `cargo build -p flamewm-wm-wayland --bin flamewm-wayland --example fractional_probe`: exit 0, 0 warnings (`w2-build-nested.log`).
+  - `python3 tools/architecture_guard.py`: exit 0 (77 ratified violations, pre-existing TODO warnings only).
+- Nested fractional check (`examples/fractional_probe.rs`, new): `scale.wayland-0=125` gives `preferred_scale numerator=150 denominator=120`, probe exit 0. Default (no setting) gives `numerator=120 denominator=120`, probe exit 0.
+- Processes: all stopped (own PIDs only). Xvfb `:61`, nested compositor, and the three xclock probes. The `:0` and `:1` XWayland instances owned by other sessions were not touched.
+- Not checked: DRM runtime feedback (no tty run); the DRM output scale is still `Scale::Integer(1)` in `drm/outputs.rs`, so only the nested output takes the setting. Nothing was committed.
+- Risks: at a non-1.0 scale the layout is not scale-aware (output size is physical px used as logical), so windows render oversized on the nested output. shortcut: layout not scale-aware; revisit when output layout converts logical/physical px. Presentation feedback on real hardware is unverified.
+
+## Results: R2
+
+Pure-move splits. Public paths kept via re-exports; tests moved with their code.
+
+| File | Before (lines) | After (files, lines) |
+|---|---|---|
+| `crates/flamewm-wm-x11/src/frame/geometry.rs` | 1628 | `frame/geometry/mod.rs` 123, `bounds.rs` 188, `configure.rs` 221, `moves.rs` 144, `tests/mod.rs` 89, `tests/bounds.rs` 578, `tests/configure.rs` 302 |
+| `crates/flamewm-shell/src/event_router.rs` | 1502 | `event_router/mod.rs` 51, `drag.rs` 82, `helpers.rs` 104, `dismiss.rs` 104, `route.rs` 537, `taskdrag.rs` 252, `tests.rs` 395 |
+| `crates/flamewm-wm/src/bin/flamewm-session.rs` | 1507 | `flamewm-session.rs` 259, `flamewm-session/readiness.rs` 201, `session_env.rs` 365, `supervision.rs` 326, `tests.rs` 369 |
+
+`packaged_root` wrappers removed; call sites use `flamewm_api::paths::workspace_packaged_root()` (new in `crates/flamewm-api/src/paths.rs`). `flamewm-desktop/src/install_root.rs` deleted.

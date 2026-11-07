@@ -41,17 +41,13 @@ fn window_backdrop(snapshot: Option<&SettingsSnapshot>) -> WindowBackdrop {
     WindowBackdrop {
         wallpaper: text("wallpaper"),
         fit: if fit.is_empty() { "fill".into() } else { fit },
-        packaged_root: packaged_root(),
+        packaged_root: flamewm_api::paths::workspace_packaged_root(),
         opacity_percent: u8::try_from(u32::from(body.alpha_permille.min(1000)) / 10).unwrap_or(100),
         blur_percent: glass::blur_percent_from_px(body.blur_px),
     }
 }
 
 /// Packaged asset root for the default wallpaper: the install prefix, else the source checkout.
-fn packaged_root() -> std::path::PathBuf {
-    flamewm_api::paths::packaged_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

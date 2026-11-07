@@ -309,7 +309,7 @@ canonical_target = "crates/flamewm-wm-x11/src"
 remove_by = "0.3.0"
 
 [[exception]]
-path = "crates/flamewm-wm/src/bin/flamewm-session.rs"
+path = "crates/flamewm-wm/src/bin/flamewm-session/readiness.rs"
 capability = "x11rb-symbol"
 reason = "Explicit native EWMH readiness validation is needed before dependent session processes start."
 canonical_target = "crates/flamewm-wm-x11/src"
