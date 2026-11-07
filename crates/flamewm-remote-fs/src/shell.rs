@@ -4,17 +4,7 @@
 /// Single-quote for POSIX sh.
 #[must_use]
 pub fn quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('\'');
-    for c in s.chars() {
-        if c == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('\'');
-    out
+    flamewm_api::shell::single_quote(s)
 }
 
 /// Shell word for a remote path. `~` and `~/x` expand against `$HOME` on the remote side.

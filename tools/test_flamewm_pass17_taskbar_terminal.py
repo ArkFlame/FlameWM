@@ -11,9 +11,14 @@ def read_projection():
     return (ROOT / 'crates/flamewm-shell/src/projection.rs').read_text() + ''.join(
         p.read_text() for p in sorted(tree.rglob('*.rs')) if not p.name.startswith('tests'))
 
+def read_settings_projection():
+    """Settings projection is a module tree (settings_projection/*.rs), read whole."""
+    tree = ROOT / 'crates/flamewm-shell/src/settings_projection'
+    return ''.join(p.read_text() for p in sorted(tree.rglob('*.rs')))
+
 class Pass17Contracts(unittest.TestCase):
     def test_panel_root_clears_only_in_separate_mode(self):
-        projection=read('crates/flamewm-shell/src/settings_projection.rs')
+        projection=read_settings_projection()
         self.assertIn('if separate || classic {\n                document.border("taskbar", UiColor { a: 0, ..fill })?', projection)
         self.assertIn('unified.borders["taskbar"], contour,', projection)
     def test_workspace_is_shared_capsule_and_child_buttons_remain_square(self):

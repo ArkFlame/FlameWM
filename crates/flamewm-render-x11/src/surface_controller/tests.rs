@@ -1054,7 +1054,7 @@ mod popup_backdrop_selection_tests {
 mod slide_exit_shape_regression {
     #[test]
     fn clipped_and_full_shapes_share_mask_owner() {
-        let render = include_str!("../app/render.rs");
+        let render = include_str!("../app/render/shape.rs");
         assert!(render.contains(
             "let spans = self.base_shape_spans(&cached.commands, 1.0, backdrop_radius);"
         ));

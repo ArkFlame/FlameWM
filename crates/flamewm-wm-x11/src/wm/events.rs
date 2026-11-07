@@ -53,6 +53,10 @@ impl<C: Connection> Wm<'_, C> {
             Event::KeyPress(event) => self.handle_key_press(event)?,
             Event::KeyRelease(event) => self.handle_key_release(event)?,
             Event::FocusOut(_) => self.super_tap.focus_lost(),
+            // Root motion exists only for hot corners; it must not enter the client drag routing.
+            Event::MotionNotify(event) if event.event == self.screen().root => {
+                self.hot_corner_motion(event.root_x, event.root_y)?;
+            }
             Event::MotionNotify(event) => self.handle_motion(event)?,
             Event::PropertyNotify(event) => self.handle_property(event.window, event.atom)?,
             // The WM owns the client's corner mask; a client that shapes itself must not keep it.
@@ -201,6 +205,11 @@ impl<C: Connection> Wm<'_, C> {
             ACTION_WINDOW_CYCLE_PREV => self.cycle_window(-1)?,
             ACTION_WINDOW_RESIZE_GROW => self.resize_active(true)?,
             ACTION_WINDOW_RESIZE_SHRINK => self.resize_active(false)?,
+            // Super+arrows are keyboard tiling; the tile state machine replaces directional focus.
+            ACTION_FOCUS_LEFT => self.keyboard_tile(Direction::Left)?,
+            ACTION_FOCUS_RIGHT => self.keyboard_tile(Direction::Right)?,
+            ACTION_FOCUS_UP => self.keyboard_tile(Direction::Up)?,
+            ACTION_FOCUS_DOWN => self.keyboard_tile(Direction::Down)?,
             other => {
                 if !self.dispatch_hyprland_binding(other)? {
                     log_unhandled_shortcut_once(other);
@@ -225,10 +234,6 @@ impl<C: Connection> Wm<'_, C> {
                     self.move_to_workspace(client, index)?;
                 }
             }
-            return Ok(true);
-        }
-        if let Some(direction) = focus_direction(action) {
-            self.focus_direction(direction)?;
             return Ok(true);
         }
         if let Some(direction) = move_direction(action) {

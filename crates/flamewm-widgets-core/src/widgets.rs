@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -960,13 +959,8 @@ pub fn move_widget_rect(original: Rect, dx: i32, dy: i32, bounds: Rect) -> Rect 
 }
 
 pub fn state_path() -> FlameResult<PathBuf> {
-    let base = match env::var_os("XDG_STATE_HOME") {
-        Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => PathBuf::from(
-            env::var_os("HOME").ok_or_else(|| FlameError::invalid("HOME is not set"))?,
-        )
-        .join(".local/state"),
-    };
+    let base = flamewm_api::paths::xdg_dir("XDG_STATE_HOME", ".local/state")
+        .ok_or_else(|| FlameError::invalid("HOME is not set"))?;
     Ok(base.join(STATE_FILE_NAME))
 }
 

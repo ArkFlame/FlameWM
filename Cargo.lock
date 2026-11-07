@@ -891,6 +891,9 @@ dependencies = [
 [[package]]
 name = "flamewm-remote-fs"
 version = "0.1.7"
+dependencies = [
+ "flamewm-api",
+]
 
 [[package]]
 name = "flamewm-render-compiler"
@@ -1182,6 +1185,7 @@ dependencies = [
  "flamewm-reactor",
  "flamewm-render-core",
  "flamewm-render-x11",
+ "flamewm-shell-core",
  "flamewm-skin",
  "flamewm-ui-core",
  "flamewm-window-core",

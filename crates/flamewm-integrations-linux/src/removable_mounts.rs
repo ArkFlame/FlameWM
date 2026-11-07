@@ -9,7 +9,6 @@
 //!
 //! An explicit user eject or unmount forgets the UUID before the action runs.
 use std::collections::BTreeSet;
-use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -49,10 +48,7 @@ pub struct Memory {
 
 /// `$XDG_STATE_HOME/flamewm/removable-mounts`, else `~/.local/state/flamewm/removable-mounts`.
 pub fn state_path() -> PathBuf {
-    let base = env::var_os("XDG_STATE_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+    let base = flamewm_api::paths::xdg_dir("XDG_STATE_HOME", ".local/state")
         .unwrap_or_else(|| PathBuf::from(".local/state"));
     base.join("flamewm").join("removable-mounts")
 }

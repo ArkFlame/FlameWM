@@ -46,7 +46,7 @@ fn t19_noop_reactor_wakes_use_the_dirty_skip_not_an_unconditional_paint() {
         !source.contains("self.redraw("),
         "reactor wake must not become an unconditional full repaint loop"
     );
-    let render = include_str!("../../render.rs");
+    let render = include_str!("../../render/frame.rs");
     assert!(render.contains("if self.pending_damage.is_empty() && !stale"));
     assert!(render.contains("return Ok(false);"));
 }

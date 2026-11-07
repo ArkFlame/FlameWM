@@ -127,17 +127,8 @@ impl ChromePolicy {
 /// Alpha of the derived `--accent-soft` token at full `accentOpacity`.
 pub const ACCENT_SOFT_ALPHA: u8 = 0x38;
 
-/// Strict `#RRGGBB`: `#` then exactly six ASCII hex digits. Signs, `0x`,
-/// and non-ASCII input are rejected.
-#[must_use]
-pub fn parse_hex_rgb(value: &str) -> Option<(u8, u8, u8)> {
-    let digits = value.strip_prefix('#')?;
-    if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    let rgb = u32::from_str_radix(digits, 16).ok()?;
-    Some(((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8))
-}
+/// Strict `#RRGGBB`; the owner is `flamewm_api::color`.
+pub use flamewm_api::color::parse_hex_rgb;
 
 #[cfg(test)]
 mod tests {

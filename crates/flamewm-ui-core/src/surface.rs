@@ -48,13 +48,15 @@ pub fn surface_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
         match snapshot.values.get("surfaceColor") {
             // Light keeps the Dark preset tint only as the untouched default: it is swapped for the
             // light token. Any other saved colour is an explicit user choice and wins.
-            Some(SettingValue::Text(value)) => parse_rgb(value).map(|rgb| {
-                if appearance.light && rgb == crate::glass::DARK.tint_rgb {
-                    material.tint_rgb
-                } else {
-                    rgb
-                }
-            }),
+            Some(SettingValue::Text(value)) => {
+                flamewm_api::color::parse_hex_u32(value).map(|rgb| {
+                    if appearance.light && rgb == crate::glass::DARK.tint_rgb {
+                        material.tint_rgb
+                    } else {
+                        rgb
+                    }
+                })
+            }
             _ => None,
         }
         .unwrap_or(material.tint_rgb)
@@ -150,7 +152,7 @@ fn outline_width(snapshot: &SettingsSnapshot, key: &str) -> u32 {
 
 fn outline_fill(snapshot: &SettingsSnapshot, prefix: &str) -> SurfaceFill {
     let rgb = match snapshot.values.get(&format!("{prefix}Color")) {
-        Some(SettingValue::Text(value)) => parse_rgb(value),
+        Some(SettingValue::Text(value)) => flamewm_api::color::parse_hex_u32(value),
         _ => None,
     }
     .unwrap_or(0x0099_9999);
@@ -615,15 +617,6 @@ mod rounded_contour_tests {
             }
         }
     }
-}
-
-/// Parses `#rrggbb` or bare `rrggbb` into 0xRRGGBB.
-fn parse_rgb(text: &str) -> Option<u32> {
-    let hex = text.strip_prefix('#').unwrap_or(text);
-    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    u32::from_str_radix(hex, 16).ok()
 }
 
 #[cfg(test)]

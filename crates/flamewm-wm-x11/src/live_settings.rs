@@ -5,6 +5,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_platform::settings::HotCornerAction;
+use flamewm_shell_core::hot_corner::Corner;
 
 const DEFAULT_SNAP_PREVIEW_ENABLED: bool = true;
 const DEFAULT_FOCUS_FOLLOWS_MOUSE: bool = false;
@@ -21,6 +23,10 @@ const MAX_WINDOW_MARGIN: u32 = 32;
 const DEFAULT_EDGE_SNAP_ENABLED: bool = true;
 /// `edgeSnap.thresholdPx` default; the valid range is 4..=64 (see `flamewm-platform` settings).
 const DEFAULT_EDGE_SNAP_THRESHOLD_PX: i32 = flamewm_window_core::EDGE_THRESHOLD;
+
+/// `hotCorner.*` actions in top-left, top-right, bottom-left, bottom-right order.
+static HOT_CORNERS: std::sync::Mutex<[HotCornerAction; 4]> =
+    std::sync::Mutex::new([HotCornerAction::None; 4]);
 
 static SNAP_PREVIEW_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_SNAP_PREVIEW_ENABLED);
 static EDGE_SNAP_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_EDGE_SNAP_ENABLED);
@@ -116,6 +122,44 @@ pub(crate) fn snap_target_in_output(
     flamewm_window_core::snap_target_in_output_with(pointer, output, work, edge)
 }
 
+/// Pure mapping from `hotCorner.*` wire values to actions; unknown values mean `none`.
+fn hot_corners_from_snapshot(snapshot: &SettingsSnapshot) -> [HotCornerAction; 4] {
+    const KEYS: [&str; 4] = [
+        "hotCorner.topLeft",
+        "hotCorner.topRight",
+        "hotCorner.bottomLeft",
+        "hotCorner.bottomRight",
+    ];
+    KEYS.map(|key| match snapshot.values.get(key) {
+        Some(SettingValue::Text(value)) => {
+            HotCornerAction::parse(value).unwrap_or(HotCornerAction::None)
+        }
+        _ => HotCornerAction::None,
+    })
+}
+
+/// Action configured for `corner`.
+pub(crate) fn hot_corner_action(corner: Corner) -> HotCornerAction {
+    let index = match corner {
+        Corner::TopLeft => 0,
+        Corner::TopRight => 1,
+        Corner::BottomLeft => 2,
+        Corner::BottomRight => 3,
+    };
+    HOT_CORNERS
+        .lock()
+        .map_or(HotCornerAction::None, |actions| actions[index])
+}
+
+/// True when any corner has an action, so the WM must receive root pointer motion.
+pub(crate) fn hot_corners_enabled() -> bool {
+    HOT_CORNERS.lock().is_ok_and(|actions| {
+        actions
+            .iter()
+            .any(|action| *action != HotCornerAction::None)
+    })
+}
+
 fn window_margin_from_snapshot(snapshot: &SettingsSnapshot) -> u32 {
     match snapshot.values.get("windowMargin") {
         Some(SettingValue::Integer(value)) => u32::try_from(*value)
@@ -133,6 +177,9 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     let (edge_snap, edge_threshold) = edge_snap_from_snapshot(snapshot);
     EDGE_SNAP_ENABLED.store(edge_snap, Ordering::Relaxed);
     EDGE_SNAP_THRESHOLD_PX.store(edge_threshold as u32, Ordering::Relaxed);
+    if let Ok(mut actions) = HOT_CORNERS.lock() {
+        *actions = hot_corners_from_snapshot(snapshot);
+    }
     FOCUS_FOLLOWS_MOUSE.store(focus_follows_mouse, Ordering::Relaxed);
     SHOW_CONTENT_WHILE_DRAGGING.store(show_content_from_snapshot(snapshot), Ordering::Relaxed);
     TITLEBARS.store(
@@ -216,6 +263,33 @@ pub(crate) fn titlebars() -> bool {
 /// `taskbarActivities` (default `true`): the shell lists running windows, so minimize is allowed.
 pub(crate) fn taskbar_activities() -> bool {
     TASKBAR_ACTIVITIES.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod hot_corner_settings_tests {
+    use super::*;
+
+    #[test]
+    fn hot_corner_wire_values_map_per_corner_and_unknown_is_none() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "hotCorner.topRight".into(),
+            SettingValue::Text("show-desktop".into()),
+        );
+        snapshot.values.insert(
+            "hotCorner.bottomLeft".into(),
+            SettingValue::Text("Lock".into()),
+        );
+        assert_eq!(
+            hot_corners_from_snapshot(&snapshot),
+            [
+                HotCornerAction::None,
+                HotCornerAction::ShowDesktop,
+                HotCornerAction::None,
+                HotCornerAction::None,
+            ]
+        );
+    }
 }
 
 #[cfg(test)]

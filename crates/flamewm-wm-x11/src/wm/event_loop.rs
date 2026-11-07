@@ -88,6 +88,7 @@ where
         // partner (same timestamp) had the chance to cancel it.
         wm.commit_super_tap();
         wm.tick_edge_drag()?;
+        wm.tick_hot_corner()?;
         // Drain once per reactor turn: semantic owners marked facets above;
         // the hook flushes them to snapshots/signals exactly once.
         let changes = wm.take_changes();
@@ -102,6 +103,8 @@ where
         // After the drain: an effect begun by a drained event (e.g. try_start_open) must cap the wait.
         let wait = wm.transition_wait(wait);
         let wait = wm.deferred_chrome_wait(wait);
+        let wait =
+            hot_corner::hot_corner_wait(wm.hot_corner.deadline, std::time::Instant::now(), wait);
         let wait = drag_edge_wait(
             wm.edge_drag,
             wm.mouse_workspace_cooldowns,

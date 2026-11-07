@@ -501,13 +501,13 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
         .unwrap_or(defaults.glass_opacity_percent)
         .min(100);
     let custom_tint = match snapshot.values.get("taskbarCustomTint") {
-        Some(SettingValue::Text(value)) => parse_hex(value),
+        Some(SettingValue::Text(value)) => flamewm_api::color::parse_hex_u32(value),
         _ => None,
     };
     // Same rule as `surface_fill`: the stored colour applies only with the Surfaces custom switch on.
     let tint_rgb = match snapshot.values.get("surfaceColor") {
         Some(SettingValue::Text(value)) if is_group_custom(snapshot, "surface") => {
-            parse_hex(value).unwrap_or(defaults.tint_rgb)
+            flamewm_api::color::parse_hex_u32(value).unwrap_or(defaults.tint_rgb)
         }
         _ => defaults.tint_rgb,
     };
@@ -572,14 +572,6 @@ fn percent_u8_key(snapshot: &SettingsSnapshot, key: &str) -> Option<u8> {
     }
 }
 
-fn parse_hex(text: &str) -> Option<u32> {
-    let hex = text.strip_prefix('#').unwrap_or(text);
-    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    u32::from_str_radix(hex, 16).ok()
-}
-
 /// Translucent glass material: the Liquid Glass opt-in (`reduceTransparency` off). Test-only.
 #[cfg(test)]
 fn glass_on() -> Appearance {
@@ -629,7 +621,7 @@ mod resolver_tests {
         assert_eq!(a.glass_blur_px, 28, "blur stays at the existing default");
         assert_eq!(
             Some(DEFAULT_SURFACE_RGB),
-            parse_hex(flamewm_api::settings_groups::DEFAULT_SURFACE_COLOR),
+            flamewm_api::color::parse_hex_u32(flamewm_api::settings_groups::DEFAULT_SURFACE_COLOR),
             "the glass default must match the settings owner"
         );
         assert_eq!(

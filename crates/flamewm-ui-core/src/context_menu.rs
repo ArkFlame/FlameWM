@@ -308,7 +308,10 @@ mod css_contract_tests {
         let mut rest = css;
         while let Some(open) = rest.find('{') {
             let close = rest[open..].find('}').map_or(rest.len(), |i| open + i);
-            if rest[..open].split(',').any(|item| item.trim() == selector) {
+            if rest[..open]
+                .split(',')
+                .any(|item| item.rsplit(';').next().unwrap_or(item).trim() == selector)
+            {
                 return &rest[open + 1..close];
             }
             rest = &rest[(close + 1).min(rest.len())..];
@@ -421,7 +424,12 @@ mod css_contract_tests {
     fn shell_neutral_surfaces_use_palette_tokens() {
         // The `:root` line keeps the shipped Dark values; every other use must be a token so
         // `appearance=light` reaches the shell.
-        assert!(SHELL_CSS.starts_with(":root"));
+        assert!(
+            SHELL_CSS
+                .lines()
+                .find(|line| !line.starts_with("@import"))
+                .is_some_and(|line| line.starts_with(":root"))
+        );
         let body = SHELL_CSS.split_once('}').map_or("", |(_, rest)| rest);
         for literal in ["#202020", "#1c1c1c", "#aeb4bb", "#f1f2f3"] {
             assert!(

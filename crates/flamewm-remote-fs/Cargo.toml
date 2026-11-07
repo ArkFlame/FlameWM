@@ -8,6 +8,7 @@ repository.workspace = true
 description = "FlameWM remote filesystem client (sftp, fish, ssh) over multiplexed system OpenSSH"
 
 [dependencies]
+flamewm-api = { path = "../flamewm-api" }
 
 [lints]
 workspace = true

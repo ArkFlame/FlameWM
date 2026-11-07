@@ -125,10 +125,7 @@ const BUILTIN: &[(&str, &str)] = &[
 /// Parses a `#rrggbb` or `rrggbb` string.
 #[must_use]
 pub fn parse_hex(value: &str) -> Option<u32> {
-    let digits = value.trim().strip_prefix('#').unwrap_or(value.trim());
-    (digits.len() == 6 && digits.bytes().all(|b| b.is_ascii_hexdigit()))
-        .then(|| u32::from_str_radix(digits, 16).ok())
-        .flatten()
+    flamewm_api::color::parse_hex_u32(value.trim())
 }
 
 #[must_use]

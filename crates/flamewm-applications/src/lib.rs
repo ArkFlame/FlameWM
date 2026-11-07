@@ -336,11 +336,7 @@ impl ApplicationCatalog {
 #[must_use]
 pub fn xdg_application_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let data_home = std::env::var_os("XDG_DATA_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| home.map(|path| path.join(".local/share")));
+    let data_home = flamewm_api::paths::xdg_dir("XDG_DATA_HOME", ".local/share");
     if let Some(path) = data_home {
         dirs.push(path.join("applications"));
     }

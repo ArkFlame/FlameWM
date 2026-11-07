@@ -54,7 +54,7 @@ fn preview_outline_uses_the_shared_opaque_accent_and_two_pixel_css_style() {
     let desktop_css = include_str!("../../../../ui/desktop/desktop.css");
     let explorer_css = include_str!("../../../../ui/explorer/explorer.css");
     assert!(desktop_css.contains(
-        ".selection { position:absolute; display:block; border:2px solid var(--preview-outline); }"
+        ".selection { position:absolute; display:block; border:2px solid var(--preview-outline); border-radius:8px; }"
     ));
     assert!(desktop_css.contains(".sticky-move-preview { position:absolute; left:0px; top:0px; width:0px; height:0px; box-sizing:border-box; background:transparent; border:2px solid var(--preview-outline); border-radius:5px; }"));
     assert!(explorer_css.contains(".selection-rectangle { position:absolute; background:transparent; border:2px solid var(--preview-outline); border-radius:3px; }"));

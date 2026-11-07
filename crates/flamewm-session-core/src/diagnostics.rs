@@ -323,7 +323,7 @@ pub fn describe_exit(exit: ChildExit) -> String {
 /// POSIX single-quote escaping so `text` is one literal word in `sh -c`.
 #[must_use]
 pub fn shell_quote(text: &str) -> String {
-    format!("'{}'", text.replace('\'', "'\\''"))
+    flamewm_api::shell::single_quote(text)
 }
 
 /// Script run by the replacement for a missing desktop or shell component. It paints a plain

@@ -325,54 +325,6 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
-    /// Focus the nearest visible window in `direction` from the active window's centre.
-    pub(super) fn focus_direction(
-        &mut self,
-        direction: flamewm_api::workspace::GridDirection,
-    ) -> Result<(), ReplyError> {
-        match self.directional_target(direction) {
-            Some(target) => self.focus(target),
-            None => Ok(()),
-        }
-    }
-
-    fn directional_target(
-        &self,
-        direction: flamewm_api::workspace::GridDirection,
-    ) -> Option<Window> {
-        use flamewm_api::workspace::GridDirection;
-        let active = self.active?;
-        let origin = self.clients.get(&active)?.outer;
-        let ox = origin.x + i32::try_from(origin.width).unwrap_or(0) / 2;
-        let oy = origin.y + i32::try_from(origin.height).unwrap_or(0) / 2;
-        let mut best: Option<(i64, Window)> = None;
-        for (&client, state) in &self.clients {
-            if client == active
-                || state.kind != WindowKind::Normal
-                || !state.visible_on(self.current_workspace)
-            {
-                continue;
-            }
-            let cx = state.outer.x + i32::try_from(state.outer.width).unwrap_or(0) / 2;
-            let cy = state.outer.y + i32::try_from(state.outer.height).unwrap_or(0) / 2;
-            let (dx, dy) = (cx - ox, cy - oy);
-            let (along, across) = match direction {
-                GridDirection::Left => (-dx, dy.abs()),
-                GridDirection::Right => (dx, dy.abs()),
-                GridDirection::Up => (-dy, dx.abs()),
-                GridDirection::Down => (dy, dx.abs()),
-            };
-            if along <= 0 {
-                continue;
-            }
-            let score = i64::from(along) * 4 + i64::from(across);
-            if best.is_none_or(|(best_score, _)| score < best_score) {
-                best = Some((score, client));
-            }
-        }
-        best.map(|(_, client)| client)
-    }
-
     /// Keyboard move of the active floating window (`Super+Shift+arrows`).
     pub(super) fn move_active(
         &mut self,

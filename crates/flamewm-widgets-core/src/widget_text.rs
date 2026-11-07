@@ -196,17 +196,9 @@ fn named_color(name: &str) -> Option<Rgb> {
         .map(|(_, rgb)| *rgb)
 }
 
-fn hex_color(value: &str) -> Option<Rgb> {
-    let digits = value.strip_prefix('#')?;
-    if digits.len() != 6 || !digits.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return None;
-    }
-    let channel = |index: usize| u8::from_str_radix(&digits[index..index + 2], 16).ok();
-    Some(Rgb::new(channel(0)?, channel(2)?, channel(4)?))
-}
-
 fn color_value(value: &str) -> Option<Rgb> {
-    named_color(value).or_else(|| hex_color(value))
+    named_color(value)
+        .or_else(|| flamewm_api::color::parse_hex_rgb(value).map(|(r, g, b)| Rgb::new(r, g, b)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

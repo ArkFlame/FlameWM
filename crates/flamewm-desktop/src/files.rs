@@ -66,9 +66,8 @@ pub(crate) fn move_entry_to_trash(path: &Path) -> Result<(), String> {
     let uid = fs::metadata(&home)
         .map_err(|error| format!("stat HOME: {error}"))?
         .uid();
-    let data_home = env::var_os("XDG_DATA_HOME")
-        .filter(|value| !value.is_empty())
-        .map_or_else(|| home.join(".local/share"), PathBuf::from);
+    let data_home = flamewm_api::paths::xdg_dir("XDG_DATA_HOME", ".local/share")
+        .unwrap_or_else(|| home.join(".local/share"));
     Trash::move_to_trash(path, &home, &data_home, uid)
         .map(|_| ())
         .map_err(|error| format!("{error:?}"))
@@ -76,9 +75,8 @@ pub(crate) fn move_entry_to_trash(path: &Path) -> Result<(), String> {
 
 pub(crate) fn empty_home_trash() -> Result<(), String> {
     let home = PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?);
-    let data_home = env::var_os("XDG_DATA_HOME")
-        .filter(|value| !value.is_empty())
-        .map_or_else(|| home.join(".local/share"), PathBuf::from);
+    let data_home = flamewm_api::paths::xdg_dir("XDG_DATA_HOME", ".local/share")
+        .unwrap_or_else(|| home.join(".local/share"));
     let location = TrashLocation {
         scope: TrashScope::Home,
         top_directory: None,

@@ -47,19 +47,12 @@ const DEFAULT_SOLID: [u8; 3] = [0x23, 0x26, 0x29];
 #[must_use]
 pub fn source_for_settings(mode: &str, custom_path: &str, color: &str) -> WallpaperSource {
     match mode {
-        "solid" => WallpaperSource::Solid(parse_rgb(color).unwrap_or(DEFAULT_SOLID)),
+        "solid" => WallpaperSource::Solid(
+            flamewm_api::color::parse_hex_rgb(color).map_or(DEFAULT_SOLID, |(r, g, b)| [r, g, b]),
+        ),
         "custom" => WallpaperSource::Image(PathBuf::from(custom_path)),
         _ => WallpaperSource::Image(PathBuf::new()),
     }
-}
-
-fn parse_rgb(value: &str) -> Option<[u8; 3]> {
-    let digits = value.strip_prefix('#')?;
-    if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    let rgb = u32::from_str_radix(digits, 16).ok()?;
-    Some([(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8])
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

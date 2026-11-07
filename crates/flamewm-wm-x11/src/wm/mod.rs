@@ -119,6 +119,7 @@ impl<C: Connection> Wm<'_, C> {
 }
 
 use flamewm_api::shortcuts::{
+    ACTION_FOCUS_DOWN, ACTION_FOCUS_LEFT, ACTION_FOCUS_RIGHT, ACTION_FOCUS_UP,
     ACTION_FULLSCREEN_ESCAPE, ACTION_LAUNCHER, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION,
     ACTION_SCREENSHOT_WINDOW, ACTION_SESSION_LOCK, ACTION_SHOW_DESKTOP,
     ACTION_SHOW_DESKTOP_CTRL_ALT, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE,
@@ -126,7 +127,7 @@ use flamewm_api::shortcuts::{
     ACTION_WINDOW_FULLSCREEN, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
     ACTION_WINDOW_RESIZE_GROW, ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH,
     ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
-    focus_direction, move_direction, workspace_activate_index, workspace_move_index,
+    move_direction, workspace_activate_index, workspace_move_index,
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{
@@ -136,6 +137,7 @@ use flamewm_platform::shortcuts::{
     ACTION_OPEN_TERMINAL_SUPER, ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP,
 };
 use flamewm_platform::system::{MediaAudioKey, MediaBrightnessKey};
+use flamewm_window_core::keyboard_tile::Direction;
 use flamewm_window_core::{SnapTarget, snap_geometry as core_snap_geometry};
 use x11rb::connection::Connection;
 use x11rb::errors::{ReplyError, ReplyOrIdError};
@@ -484,6 +486,7 @@ pub(crate) struct Wm<'a, C: Connection> {
     pointer_ingress_probe: PointerIngressProbe,
     resize_probe: Option<ResizeProbe>,
     edge_drag: Option<EdgeDragPending>,
+    hot_corner: hot_corner::HotCornerState,
     mouse_workspace_cooldowns: MouseWorkspaceCooldowns,
     /// Client whose titlebar repaint is paced to the frame interval during a move.
     chrome_deferred: Option<Window>,
@@ -503,7 +506,9 @@ mod drag_edge;
 mod effects;
 mod event_loop;
 mod events;
+mod hot_corner;
 mod icons;
+mod keyboard_tile;
 mod manage;
 mod outputs;
 mod overlay;

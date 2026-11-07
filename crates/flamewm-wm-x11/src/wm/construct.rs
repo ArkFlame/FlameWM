@@ -2,13 +2,8 @@
 use super::*;
 
 pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), ReplyError> {
-    let attrs = ChangeWindowAttributesAux::new().event_mask(
-        EventMask::SUBSTRUCTURE_REDIRECT
-            | EventMask::SUBSTRUCTURE_NOTIFY
-            | EventMask::PROPERTY_CHANGE
-            | EventMask::KEY_PRESS
-            | EventMask::KEY_RELEASE,
-    );
+    let attrs =
+        ChangeWindowAttributesAux::new().event_mask(super::hot_corner::root_event_mask(false));
     let result = conn.change_window_attributes(screen.root, &attrs)?.check();
     conn.randr_select_input(
         screen.root,
@@ -136,6 +131,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             pointer_ingress_probe: PointerIngressProbe::default(),
             resize_probe: None,
             edge_drag: None,
+            hot_corner: super::hot_corner::HotCornerState::new(),
             mouse_workspace_cooldowns: MouseWorkspaceCooldowns::default(),
             chrome_deferred: None,
             chrome_paint_at: None,
