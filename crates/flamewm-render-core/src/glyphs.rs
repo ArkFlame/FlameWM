@@ -192,7 +192,9 @@ pub fn advance_width(text: &str, size: f32) -> Option<f32> {
     if size <= 0.0 {
         return None;
     }
-    with_run(size, |run| shape(text, run).0.last().copied().unwrap_or(0.0))
+    with_run(size, |run| {
+        shape(text, run).0.last().copied().unwrap_or(0.0)
+    })
 }
 
 /// Caret x of every char boundary in `text` at `size` px, relative to the run origin.
@@ -473,7 +475,10 @@ mod tests {
                 let end = *carets.last().expect("end");
                 let mid = carets.len() / 2;
                 assert_eq!(char_index_at(&text, size, carets[mid]), Some(mid));
-                assert_eq!(char_index_at(&text, size, end + 500.0), Some(text.chars().count()));
+                assert_eq!(
+                    char_index_at(&text, size, end + 500.0),
+                    Some(text.chars().count())
+                );
                 assert_eq!(char_index_at(&text, size, -500.0), Some(0));
             }
         }

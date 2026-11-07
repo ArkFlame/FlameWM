@@ -66,7 +66,7 @@ impl State {
     /// Re-read the tune file only when its identity changed.
     fn sync(&mut self, path: &str) {
         if self.path != path {
-            self.path = path.to_owned();
+            path.clone_into(&mut self.path);
             self.stamp = None;
             // The overrides belong to the previous file; a new path starts from the defaults.
             self.tune = OutlineTune::default();

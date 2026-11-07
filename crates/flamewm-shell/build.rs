@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use flamewm_render_compiler::{CompileOptions, compile_file, encode};
+use flamewm_render_compiler::{compile_file, encode, CompileOptions};
 
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));

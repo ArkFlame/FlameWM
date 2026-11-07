@@ -101,6 +101,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use flamewm_reactor::BorrowedRawFd;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Buffer, Format, Fourcc};
 use smithay::backend::drm::compositor::{
@@ -126,9 +127,8 @@ use smithay::desktop::{PopupManager, layer_map_for_output};
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::calloop::RegistrationToken;
-use smithay::reexports::calloop::ping::make_ping;
-use flamewm_reactor::BorrowedRawFd;
 use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::ping::make_ping;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, PostAction};
 use smithay::reexports::drm::Device as _;
@@ -591,34 +591,33 @@ impl Drm {
                 .elements(&mut self.renderer, &state.cursor_status, state.pointer);
         let scene_dirty = state.take_scene_dirty();
         let cached = self.scene.take();
-        let scene = match (scene_build(cached.is_some(), scene_dirty), cached) {
-            (SceneBuild::CursorOnly, Some(mut scene)) => {
-                // Pointer motion: the window, decoration and backdrop elements are still valid, so
-                // only the cursor slice of the cached list is swapped.
-                let count = cursor.len();
-                scene
-                    .elements
-                    .splice(0..scene.cursor_len, cursor)
-                    .for_each(drop);
-                scene.cursor_len = count;
-                scene
+        let scene = if let (SceneBuild::CursorOnly, Some(mut scene)) =
+            (scene_build(cached.is_some(), scene_dirty), cached)
+        {
+            // Pointer motion: the window, decoration and backdrop elements are still valid, so
+            // only the cursor slice of the cached list is swapped.
+            let count = cursor.len();
+            scene
+                .elements
+                .splice(0..scene.cursor_len, cursor)
+                .for_each(drop);
+            scene.cursor_len = count;
+            scene
+        } else {
+            // Same blurred desktop capture as the winit path, so DRM menus and titlebars match.
+            let output_size =
+                Size::<i32, Physical>::from((state.output_size.w, state.output_size.h));
+            if let Err(error) =
+                render::refresh_desktop_backdrop(state, &mut self.renderer, output_size)
+            {
+                eprintln!("flamewm-wayland: desktop backdrop failed: {error}");
             }
-            _ => {
-                // Same blurred desktop capture as the winit path, so DRM menus and titlebars match.
-                let output_size =
-                    Size::<i32, Physical>::from((state.output_size.w, state.output_size.h));
-                if let Err(error) =
-                    render::refresh_desktop_backdrop(state, &mut self.renderer, output_size)
-                {
-                    eprintln!("flamewm-wayland: desktop backdrop failed: {error}");
-                }
-                let cursor_len = cursor.len();
-                let mut elements = cursor;
-                elements.extend(render::build_elements(state, &mut self.renderer));
-                SceneCache {
-                    elements,
-                    cursor_len,
-                }
+            let cursor_len = cursor.len();
+            let mut elements = cursor;
+            elements.extend(render::build_elements(state, &mut self.renderer));
+            SceneCache {
+                elements,
+                cursor_len,
             }
         };
         let elements = &scene.elements;

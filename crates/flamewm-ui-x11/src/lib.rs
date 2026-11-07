@@ -8,8 +8,8 @@ pub use startup_protocol::{StartupX11Event, StartupX11Observer};
 mod popup;
 mod reconcile;
 mod surface_runtime;
+use flamewm_ui_document::focus::{FocusKey, FocusOwner, action_for};
 pub use flamewm_ui_document::surface_style;
-use flamewm_ui_document::focus::{action_for, FocusKey, FocusOwner};
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
@@ -588,11 +588,13 @@ where
 #[cfg(test)]
 mod tests {
     use flamewm_render_core::{
-        Color, ColorValue, CompiledDocument, CompiledNode, InteractionState, NodeKind, RuntimeDocument, Style,
+        Color, ColorValue, CompiledDocument, CompiledNode, InteractionState, NodeKind,
+        RuntimeDocument, Style,
     };
 
     use super::{
-        route_focus, KeyboardRouter, UiActionEvent, UiActionPhase, UiControllerEvent, UiKeyEvent, UiKeyPhase,
+        KeyboardRouter, UiActionEvent, UiActionPhase, UiControllerEvent, UiKeyEvent, UiKeyPhase,
+        route_focus,
     };
 
     fn button(action: &'static str) -> CompiledNode {
@@ -609,17 +611,17 @@ mod tests {
             root: 0,
             variables: Vec::new(),
             assets: Vec::new(),
-            nodes: vec![
-                button(""),
-                button("ar.prev"),
-                button(""),
-                button("ar.next"),
-            ],
+            nodes: vec![button(""), button("ar.prev"), button(""), button("ar.next")],
         })
         .expect("fixture validates")
     }
 
-    fn key(name: &str, phase: UiKeyPhase, modifiers: &[&str], text: Option<&str>) -> UiControllerEvent {
+    fn key(
+        name: &str,
+        phase: UiKeyPhase,
+        modifiers: &[&str],
+        text: Option<&str>,
+    ) -> UiControllerEvent {
         UiControllerEvent::Key(UiKeyEvent {
             phase,
             modifiers: modifiers.iter().map(|m| (*m).to_owned()).collect(),
@@ -644,13 +646,28 @@ mod tests {
     #[test]
     fn tab_walks_focusable_controls_in_order_and_writes_document_focus() {
         let mut document = window_document();
-        assert_eq!(route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)), None);
+        assert_eq!(
+            route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)),
+            None
+        );
         assert_eq!(document.focus(), Some(1));
-        assert_eq!(route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)), None);
+        assert_eq!(
+            route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)),
+            None
+        );
         assert_eq!(document.focus(), Some(3));
-        assert_eq!(route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)), None);
+        assert_eq!(
+            route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)),
+            None
+        );
         assert_eq!(document.focus(), Some(1), "wraps to the first control");
-        assert_eq!(route_focus(&mut document, key("ISO_Left_Tab", UiKeyPhase::Press, &["Shift"], None)), None);
+        assert_eq!(
+            route_focus(
+                &mut document,
+                key("ISO_Left_Tab", UiKeyPhase::Press, &["Shift"], None)
+            ),
+            None
+        );
         assert_eq!(document.focus(), Some(3), "Shift+Tab wraps backwards");
     }
 
@@ -669,7 +686,10 @@ mod tests {
             Some(press("ar.next"))
         );
         assert_eq!(
-            route_focus(&mut document, key("Space", UiKeyPhase::Press, &[], Some(" "))),
+            route_focus(
+                &mut document,
+                key("Space", UiKeyPhase::Press, &[], Some(" "))
+            ),
             Some(press("ar.next")),
             "X11 canonical Space name activates"
         );
@@ -706,7 +726,11 @@ mod tests {
         route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
         route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
         assert_eq!(
-            router.route(&mut document, key("Space", UiKeyPhase::Press, &[], Some(" ")), false),
+            router.route(
+                &mut document,
+                key("Space", UiKeyPhase::Press, &[], Some(" ")),
+                false
+            ),
             vec![press("ar.next"), release("ar.next")],
             "press first (archiver acts on press), then release (Settings acts on release)"
         );
@@ -724,11 +748,38 @@ mod tests {
         let mut document = window_document();
         let mut router = KeyboardRouter::default();
         route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
-        assert!(!router.route(&mut document, key("Return", UiKeyPhase::Press, &[], Some("\r")), false).is_empty());
-        assert_eq!(router.route(&mut document, typed("\r"), false), Vec::new(), "activating text dropped");
-        assert_eq!(router.route(&mut document, typed("x"), false), vec![typed("x")], "later text flows");
-        assert!(!router.route(&mut document, key("Escape", UiKeyPhase::Press, &[], None), false).is_empty());
-        assert_eq!(router.route(&mut document, typed("y"), false), vec![typed("y")]);
+        assert!(
+            !router
+                .route(
+                    &mut document,
+                    key("Return", UiKeyPhase::Press, &[], Some("\r")),
+                    false
+                )
+                .is_empty()
+        );
+        assert_eq!(
+            router.route(&mut document, typed("\r"), false),
+            Vec::new(),
+            "activating text dropped"
+        );
+        assert_eq!(
+            router.route(&mut document, typed("x"), false),
+            vec![typed("x")],
+            "later text flows"
+        );
+        assert!(
+            !router
+                .route(
+                    &mut document,
+                    key("Escape", UiKeyPhase::Press, &[], None),
+                    false
+                )
+                .is_empty()
+        );
+        assert_eq!(
+            router.route(&mut document, typed("y"), false),
+            vec![typed("y")]
+        );
     }
 
     #[test]
@@ -742,18 +793,36 @@ mod tests {
             key("Return", UiKeyPhase::Press, &[], Some("\r")),
             key("Space", UiKeyPhase::Press, &[], Some(" ")),
         ] {
-            assert_eq!(KeyboardRouter::default().route(&mut document, event.clone(), true), vec![event]);
+            assert_eq!(
+                KeyboardRouter::default().route(&mut document, event.clone(), true),
+                vec![event]
+            );
         }
-        assert_eq!(document.focus(), Some(1), "captured keys never move focus or activate");
+        assert_eq!(
+            document.focus(),
+            Some(1),
+            "captured keys never move focus or activate"
+        );
     }
 
     #[test]
     fn uncaptured_window_routes_tab_and_escape_as_before() {
         let mut document = window_document();
-        assert!(KeyboardRouter::default().route(&mut document, key("Tab", UiKeyPhase::Press, &[], None), false).is_empty());
+        assert!(
+            KeyboardRouter::default()
+                .route(
+                    &mut document,
+                    key("Tab", UiKeyPhase::Press, &[], None),
+                    false
+                )
+                .is_empty()
+        );
         assert_eq!(document.focus(), Some(1));
         let escape = key("Escape", UiKeyPhase::Press, &[], None);
-        assert_eq!(KeyboardRouter::default().route(&mut document, escape.clone(), false), vec![escape]);
+        assert_eq!(
+            KeyboardRouter::default().route(&mut document, escape.clone(), false),
+            vec![escape]
+        );
         assert_eq!(document.focus(), Some(1));
     }
 
@@ -778,7 +847,10 @@ mod tests {
             nodes: vec![button("")],
         })
         .expect("fixture validates");
-        assert_eq!(route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)), None);
+        assert_eq!(
+            route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)),
+            None
+        );
         assert_eq!(document.focus(), None);
     }
 
@@ -795,7 +867,12 @@ mod tests {
         }
     }
 
-    const RING: Color = Color { r: 0x3d, g: 0xae, b: 0xe9, a: 0xff };
+    const RING: Color = Color {
+        r: 0x3d,
+        g: 0xae,
+        b: 0xe9,
+        a: 0xff,
+    };
 
     /// The style the render path resolves for `index` at the document's current focus.
     fn painted_style(document: &RuntimeDocument, index: u32) -> Style {
@@ -823,18 +900,31 @@ mod tests {
             ],
         })
         .expect("fixture validates");
-        document.set_visible("hidden", false).expect("hidden node exists");
-        assert_eq!(painted_style(&document, 1).border_width, 0.0, "no ring before Tab");
+        document
+            .set_visible("hidden", false)
+            .expect("hidden node exists");
+        assert_eq!(
+            painted_style(&document, 1).border_width,
+            0.0,
+            "no ring before Tab"
+        );
 
         route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
         assert_eq!(document.focus(), Some(1));
         let ring = painted_style(&document, 1);
-        assert_eq!((ring.border_width, ring.border_color), (1.0, ColorValue::Literal(RING)));
+        assert_eq!(
+            (ring.border_width, ring.border_color),
+            (1.0, ColorValue::Literal(RING))
+        );
 
         route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
         assert_eq!(document.focus(), Some(3), "the hidden control is skipped");
         assert_eq!(painted_style(&document, 3).border_width, 1.0);
-        assert_eq!(painted_style(&document, 1).border_width, 0.0, "the ring moves off the old control");
+        assert_eq!(
+            painted_style(&document, 1).border_width,
+            0.0,
+            "the ring moves off the old control"
+        );
     }
 
     #[test]

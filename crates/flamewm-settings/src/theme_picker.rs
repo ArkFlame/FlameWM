@@ -9,7 +9,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
-use flamewm_integrations_linux::{DirListings, IconLookupIndex};
 use flamewm_integrations_linux::PortalFileChooser;
 use flamewm_integrations_linux::icons::{self, IconSize, Rgba8Raster, rasterize_path};
 use flamewm_integrations_linux::themes::cursor::{self, CursorPreview};
@@ -17,6 +16,7 @@ use flamewm_integrations_linux::themes::import::{
     ImportError, InstallOptions, InstalledTheme, install_theme,
 };
 use flamewm_integrations_linux::themes::{ThemeCatalog, ThemeKind};
+use flamewm_integrations_linux::{DirListings, IconLookupIndex};
 use flamewm_session_core::{CursorThemeFamily, cursor_theme_family};
 
 use crate::file_chooser::publish_background_completion;
@@ -268,7 +268,11 @@ pub fn scan(data_dirs: &[PathBuf]) -> ThemeRegistry {
 
 /// One small raster per example name that the theme resolves. The lookup index is
 /// built once per theme and each example is decoded once per scan, on the scan thread.
-fn icon_previews(theme: &str, data_dirs: &[PathBuf], listings: &Arc<DirListings>) -> Vec<PreviewImage> {
+fn icon_previews(
+    theme: &str,
+    data_dirs: &[PathBuf],
+    listings: &Arc<DirListings>,
+) -> Vec<PreviewImage> {
     let index = IconLookupIndex::build_shared(&[theme.to_owned()], data_dirs, 0, listings);
     let size = IconSize::new(ICON_PREVIEW_PX, ICON_PREVIEW_PX);
     ICON_PREVIEW_NAMES

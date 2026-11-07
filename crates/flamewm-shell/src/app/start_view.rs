@@ -283,7 +283,7 @@ impl ShellLoop {
         &mut self,
         runtime: &mut SurfaceRuntime,
     ) -> Result<(), UiBackendError> {
-        use flamewm_shell::control_actions::{StartLaunchOutcome, start_error_after_launch};
+        use flamewm_shell::control_actions::{start_error_after_launch, StartLaunchOutcome};
         let outcomes = flamewm_shell::control_actions::take_launch_outcomes();
         let Some(context) = self.active_start_launch.clone() else {
             return Ok(());

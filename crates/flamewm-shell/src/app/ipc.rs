@@ -53,7 +53,7 @@ impl ShellLoop {
         }
     }
 
-    /// Unity LauncherEntry source. Same reactor-owned bus pump model as the KIO provider.
+    /// Unity `LauncherEntry` source. Same reactor-owned bus pump model as the KIO provider.
     pub(crate) fn start_launcher_entry_provider(
         &mut self,
     ) -> Option<flamewm_dbus_reactor::BusWatch> {

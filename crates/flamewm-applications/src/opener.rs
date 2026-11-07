@@ -115,7 +115,9 @@ pub(super) fn short_command_output(program: &str, args: &[&std::ffi::OsStr]) -> 
         .filter(|text| !text.is_empty())
 }
 
-pub(super) fn startup_identity_for_target(target: &std::ffi::OsStr) -> Option<(String, String, String)> {
+pub(super) fn startup_identity_for_target(
+    target: &std::ffi::OsStr,
+) -> Option<(String, String, String)> {
     use std::sync::{Mutex, OnceLock};
     static DEFAULTS: OnceLock<Mutex<std::collections::BTreeMap<String, Option<String>>>> =
         OnceLock::new();

@@ -413,8 +413,10 @@ impl State {
                     } else {
                         self.model
                             .snap_client_geometry(id, target, self.work_area())
-                            .map(|client| frame_for_client(client, self.model.titlebars()))
-                            .unwrap_or_else(|| frame_for_client(floating, self.model.titlebars()))
+                            .map_or_else(
+                                || frame_for_client(floating, self.model.titlebars()),
+                                |client| frame_for_client(client, self.model.titlebars()),
+                            )
                     };
                     self.move_outline = Some((id, frame));
                 }
@@ -601,11 +603,11 @@ impl State {
                     // at commit, after the motion hot path has kept its cached work area.
                     self.refresh_dock_struts();
                     let target = snap_target_at(self, location, true);
-                    if target != SnapTarget::None {
+                    if target == SnapTarget::None {
+                        self.model.commit_move(id, candidate);
+                    } else {
                         let work = self.work_area();
                         commit_move_snap(&mut self.model, id, target, work, candidate);
-                    } else {
-                        self.model.commit_move(id, candidate);
                     }
                     self.apply_geometry(id);
                     // A real drag never counts as either half of a double click.
@@ -754,6 +756,7 @@ fn move_activated(dx: i32, dy: i32) -> bool {
         || dy.unsigned_abs() >= MOVE_ACTIVATION_THRESHOLD_PX
 }
 
+#[allow(clippy::too_many_arguments)]
 fn move_candidate(
     start: Rect,
     start_mode: Mode,
@@ -862,9 +865,9 @@ fn snap_target_for_move(
 /// semantics explicit in tests using foreground Dock/Desktop, popup, layer, and managed fixtures.
 fn first_hit<I, T>(
     items: impl IntoIterator<Item = I>,
-    mut hit: impl FnMut(I) -> Option<T>,
+    hit: impl FnMut(I) -> Option<T>,
 ) -> Option<T> {
-    items.into_iter().find_map(|item| hit(item))
+    items.into_iter().find_map(hit)
 }
 
 #[derive(Default)]

@@ -6,8 +6,8 @@ use flamewm_shell::settings_projection;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use flamewm_api::ports::FdEvents;
@@ -20,8 +20,8 @@ use flamewm_shell::projection;
 use flamewm_shell::start;
 use flamewm_shell::{ShellSnapshot, ShellSurfaces};
 use flamewm_ui_x11::{
-    SurfaceConfig, SurfaceEvent, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime,
-    UiDocumentAccess, UiTemplate, decode_document, run_surface_runtime_with_reactor_access,
+    decode_document, run_surface_runtime_with_reactor_access, SurfaceConfig, SurfaceEvent,
+    SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiDocumentAccess, UiTemplate,
 };
 
 use app::ShellLoop;

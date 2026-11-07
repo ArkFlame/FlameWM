@@ -7,7 +7,12 @@ use flamewm_render_core::text_layout::unscoped_measure_count;
 use flamewm_render_core::{CompiledDocument, CompiledNode, NodeKind, RuntimeDocument, Style};
 use flamewm_render_x11::{SurfaceConfig, SurfaceController, SurfaceInputMode, SurfaceRole};
 
-fn node(kind: NodeKind, parent: Option<u32>, first_child: Option<u32>, text: &'static str) -> CompiledNode {
+fn node(
+    kind: NodeKind,
+    parent: Option<u32>,
+    first_child: Option<u32>,
+    text: &'static str,
+) -> CompiledNode {
     CompiledNode {
         kind,
         parent,
@@ -41,7 +46,10 @@ fn text_document() -> RuntimeDocument {
 #[test]
 #[ignore = "needs a live X display (DISPLAY)"]
 fn real_xft_paint_measures_no_text_unscoped() {
-    assert!(std::env::var_os("DISPLAY").is_some(), "DISPLAY must name a live X display");
+    assert!(
+        std::env::var_os("DISPLAY").is_some(),
+        "DISPLAY must name a live X display"
+    );
     let mut controller = SurfaceController::new().expect("open controller");
     let before = unscoped_measure_count();
     let id = controller
@@ -60,5 +68,9 @@ fn real_xft_paint_measures_no_text_unscoped() {
         )
         .expect("create surface");
     controller.show(id).expect("paint surface");
-    assert_eq!(unscoped_measure_count(), before, "paint measured text outside the Xft scope");
+    assert_eq!(
+        unscoped_measure_count(),
+        before,
+        "paint measured text outside the Xft scope"
+    );
 }

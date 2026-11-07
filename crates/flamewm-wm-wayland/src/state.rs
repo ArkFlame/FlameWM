@@ -803,7 +803,10 @@ impl State {
     /// True when the host window draws the pointer itself: a named theme cursor (or none). Client
     /// cursor surfaces stay software-drawn. Pointer motion then needs no frame at all.
     pub fn host_draws_pointer_status(status: &CursorImageStatus) -> bool {
-        matches!(status, CursorImageStatus::Named(_) | CursorImageStatus::Hidden)
+        matches!(
+            status,
+            CursorImageStatus::Named(_) | CursorImageStatus::Hidden
+        )
     }
 
     /// Nested winit only: mirrors the pointer image onto the host window. A surface or hidden
@@ -900,7 +903,9 @@ impl State {
             return;
         }
         let armed = self.loop_handle.insert_source(
-            smithay::reexports::calloop::timer::Timer::from_duration(WINIT_FRAME_INTERVAL - elapsed),
+            smithay::reexports::calloop::timer::Timer::from_duration(
+                WINIT_FRAME_INTERVAL - elapsed,
+            ),
             |_, (), state| {
                 state.winit_frame_armed.set(false);
                 if let Some(backend) = state.backend.as_ref() {
@@ -1104,10 +1109,14 @@ mod tests {
     /// client cursor surfaces stay software-drawn.
     #[test]
     fn host_draws_named_and_hidden_pointers_only() {
-        use smithay::input::pointer::{CursorIcon, CursorImageStatus};
         use super::State;
-        assert!(State::host_draws_pointer_status(&CursorImageStatus::default_named()));
-        assert!(State::host_draws_pointer_status(&CursorImageStatus::Named(CursorIcon::Pointer)));
+        use smithay::input::pointer::{CursorIcon, CursorImageStatus};
+        assert!(State::host_draws_pointer_status(
+            &CursorImageStatus::default_named()
+        ));
+        assert!(State::host_draws_pointer_status(&CursorImageStatus::Named(
+            CursorIcon::Pointer
+        )));
         assert!(State::host_draws_pointer_status(&CursorImageStatus::Hidden));
     }
 

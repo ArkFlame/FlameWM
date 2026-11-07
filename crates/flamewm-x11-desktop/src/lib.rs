@@ -1513,6 +1513,10 @@ mod catalog_cache_tests {
             .get_or_discover(|| Err(FlameError::invalid("no application dirs")))
             .expect_err("discovery failure must surface");
         assert!(format!("{error:?}").contains("no application dirs"));
-        assert!(cache.get_or_discover(|| Ok(ApplicationCatalog::default())).is_ok());
+        assert!(
+            cache
+                .get_or_discover(|| Ok(ApplicationCatalog::default()))
+                .is_ok()
+        );
     }
 }

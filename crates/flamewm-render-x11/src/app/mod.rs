@@ -368,12 +368,8 @@ impl X11App {
             flamewm_api::graphics::LEGACY_PROVIDER_VARIABLE,
         );
         let core_requested = provider_request.as_deref() == Some("core");
-        let supported_argb = composited_argb_for_surface(
-            config.role,
-            compositor,
-            core_requested,
-            supported_argb,
-        );
+        let supported_argb =
+            composited_argb_for_surface(config.role, compositor, core_requested, supported_argb);
         let (visual, depth, mut alpha_mode) = supported_argb.map_or_else(
             || unsafe {
                 (
@@ -816,9 +812,7 @@ fn composited_argb_for_surface<T>(
     core_requested: bool,
     supported_argb: Option<T>,
 ) -> Option<T> {
-    if compositor
-        && !core_requested
-        && matches!(role, X11WindowRole::Dock | X11WindowRole::Overlay)
+    if compositor && !core_requested && matches!(role, X11WindowRole::Dock | X11WindowRole::Overlay)
     {
         supported_argb
     } else {

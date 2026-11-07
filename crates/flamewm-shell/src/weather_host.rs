@@ -502,11 +502,11 @@ mod flow_tests {
     use super::test_support::answer;
     use super::*;
     use crate::projection::{project_weather_popup, project_weather_tray};
+    use flamewm_ui_x11::test_support::RecordingUiDoc;
+    use flamewm_ui_x11::UiColor;
     use flamewm_weather::weather::{
         DayForecast, TemperatureUnit, WeatherCondition, WeatherSnapshot,
     };
-    use flamewm_ui_x11::test_support::RecordingUiDoc;
-    use flamewm_ui_x11::UiColor;
     use std::cell::Cell;
 
     const VEIL: UiColor = UiColor {

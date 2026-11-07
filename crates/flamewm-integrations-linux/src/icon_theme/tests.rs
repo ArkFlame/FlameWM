@@ -1,8 +1,7 @@
 use super::*;
 
 fn fixture_root(tag: &str, line: u32) -> PathBuf {
-    let root =
-        std::env::temp_dir().join(format!("flamewm-{tag}-{}-{line}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("flamewm-{tag}-{}-{line}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     root
 }
@@ -31,8 +30,7 @@ fn inherits_only_parse_matches_full_parse() {
     ];
     for text in texts {
         let full = IconThemeIndex::parse("T", text);
-        let light =
-            IconThemeIndex::parse_inherits("T", text.as_bytes()).expect("in-memory read");
+        let light = IconThemeIndex::parse_inherits("T", text.as_bytes()).expect("in-memory read");
         assert_eq!(light.inherits, full.inherits, "{text:?}");
         assert_eq!(light.name, full.name);
     }
@@ -520,7 +518,13 @@ fn shared_listings_select_same_paths_as_fresh_build() {
     let listings = Arc::new(DirListings::default());
     let shared = IconLookupIndex::build_shared(&names, &roots, 1, &listings);
     let lookups = [
-        "shared-app", "mine-only", "base-only", "vector-app", "flame-symbolic", "hicolor-only", "missing",
+        "shared-app",
+        "mine-only",
+        "base-only",
+        "vector-app",
+        "flame-symbolic",
+        "hicolor-only",
+        "missing",
     ];
     let mut hits = 0;
     for name in lookups {
@@ -533,7 +537,10 @@ fn shared_listings_select_same_paths_as_fresh_build() {
     let read_dirs = listings.by_dir.lock().map(|map| map.len()).unwrap_or(0);
     // A second one-shot build over the same listings must read nothing new.
     let again = IconLookupIndex::build_shared(&names, &roots, 1, &listings);
-    assert_eq!(again.lookup("shared-app", 16), fresh.lookup("shared-app", 16));
+    assert_eq!(
+        again.lookup("shared-app", 16),
+        fresh.lookup("shared-app", 16)
+    );
     let read_dirs_after = listings.by_dir.lock().map(|map| map.len()).unwrap_or(0);
     let _ = fs::remove_dir_all(&data);
     assert!(hits > 0, "fixture must resolve some icons");

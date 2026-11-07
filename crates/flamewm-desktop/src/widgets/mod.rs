@@ -9,6 +9,13 @@ use flamewm_api::system::{MediaSnapshot, PlaybackState, ServiceAvailability, Sys
 use flamewm_api::weather::WeatherFeedSnapshot;
 use flamewm_api::{Point, Rect};
 use flamewm_desktop_core::sticky::Rgb;
+use flamewm_integrations_linux::MprisProvider;
+use flamewm_reactor::{WakeDeadline, wall_clock_delay_ms};
+use flamewm_ui_core::Color;
+use flamewm_ui_core::style::UiLayer;
+use flamewm_ui_x11::{
+    PointerButton, RuntimeImage, UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess,
+};
 use flamewm_widgets_core::widget_grid::{self, Edges, GridMetrics, Placement, Span};
 use flamewm_widgets_core::widget_text::{
     CpuTimes, MAX_LINE_SPANS, MAX_TEMPLATE_CHARS, MAX_TEMPLATE_LINES, MemoryUsage, Placeholders,
@@ -19,13 +26,6 @@ use flamewm_widgets_core::widget_text::{
 use flamewm_widgets_core::widgets::{
     MAX_WIDGETS, OptionControl, TextAlign, Widget, WidgetKind, WidgetStore, move_widget_rect,
     palette_color,
-};
-use flamewm_integrations_linux::MprisProvider;
-use flamewm_reactor::{WakeDeadline, wall_clock_delay_ms};
-use flamewm_ui_core::Color;
-use flamewm_ui_core::style::UiLayer;
-use flamewm_ui_x11::{
-    PointerButton, RuntimeImage, UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess,
 };
 
 use crate::entry::projection;

@@ -22,7 +22,7 @@ impl SampleGate {
         // A poisoned flag still holds a valid bool; keep the gate usable.
         self.visible
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Records the window state and wakes a sleeping sampler when it becomes visible.
@@ -42,7 +42,7 @@ impl SampleGate {
             visible = self
                 .changed
                 .wait(visible)
-                .unwrap_or_else(|poison| poison.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         keep_running()
     }

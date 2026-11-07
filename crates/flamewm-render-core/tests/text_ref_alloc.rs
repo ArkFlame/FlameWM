@@ -55,7 +55,13 @@ fn allocations_during(body: impl FnOnce()) -> usize {
     ALLOCS.with(|n| n.get())
 }
 
-fn node(kind: NodeKind, id: &str, text: &str, parent: Option<u32>, first_child: Option<u32>) -> CompiledNode {
+fn node(
+    kind: NodeKind,
+    id: &str,
+    text: &str,
+    parent: Option<u32>,
+    first_child: Option<u32>,
+) -> CompiledNode {
     CompiledNode {
         kind,
         parent,
@@ -102,7 +108,11 @@ fn unchanged_set_text_ref_allocates_nothing() {
     });
 
     assert_eq!(allocs, 0, "unchanged set_text_ref must not allocate");
-    assert_eq!(doc.revision(), revision, "unchanged set_text_ref must not dirty");
+    assert_eq!(
+        doc.revision(),
+        revision,
+        "unchanged set_text_ref must not dirty"
+    );
 }
 
 #[test]
@@ -116,5 +126,8 @@ fn changed_set_text_ref_allocates_and_control_counts_owned_path() {
     // Control: the owned `set_text` path allocates on an unchanged call, so the counter
     // is observing real allocations and the zero above is not vacuous.
     let owned = allocations_during(|| doc.set_text("label", String::from("moved")).expect("owned"));
-    assert!(owned > 0, "owned set_text with an unchanged value must allocate its argument");
+    assert!(
+        owned > 0,
+        "owned set_text with an unchanged value must allocate its argument"
+    );
 }

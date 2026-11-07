@@ -266,7 +266,9 @@ impl PulseAdapter {
         let timer = Rc::downgrade(&self.timer);
         Box::new(move |succeeded| {
             if !succeeded {
-                eprintln!("flamewm-integrations-linux: PulseAudio {what} write rejected; reconciling");
+                eprintln!(
+                    "flamewm-integrations-linux: PulseAudio {what} write rejected; reconciling"
+                );
             }
             request_reconcile(&context, &controller, &on_snapshot, &timer, generation);
         })

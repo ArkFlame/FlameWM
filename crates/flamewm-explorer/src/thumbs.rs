@@ -322,24 +322,36 @@ pub struct ThumbQueue {
 
 impl ThumbQueue {
     pub fn push(&self, key: ThumbKey) {
-        self.jobs.lock().unwrap_or_else(|e| e.into_inner()).push_back(key);
+        self.jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(key);
         self.ready.notify_one();
     }
 
     /// Blocks until a job is queued, then takes the oldest one.
     pub fn pop(&self) -> ThumbKey {
-        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        let mut jobs = self
+            .jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if let Some(key) = jobs.pop_front() {
                 return key;
             }
-            jobs = self.ready.wait(jobs).unwrap_or_else(|e| e.into_inner());
+            jobs = self
+                .ready
+                .wait(jobs)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
     /// Keeps the queued jobs `keep` accepts and returns the rest, in queue order.
     pub fn retain(&self, mut keep: impl FnMut(&ThumbKey) -> bool) -> Vec<ThumbKey> {
-        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        let mut jobs = self
+            .jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut dropped = Vec::new();
         jobs.retain(|key| {
             let kept = keep(key);

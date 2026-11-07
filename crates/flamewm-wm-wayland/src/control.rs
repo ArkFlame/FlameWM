@@ -620,7 +620,7 @@ pub struct Service {
     _audio_ping: Option<Ping>,
     /// Panel backlight owner shared with the system action handler.
     backlight: Rc<RefCell<BacklightProvider>>,
-    /// NetworkManager system-bus provider; an absent bus publishes `Unavailable`, never devices.
+    /// `NetworkManager` system-bus provider; an absent bus publishes `Unavailable`, never devices.
     network: Rc<RefCell<NetworkManagerSlot>>,
     /// Monotonic workspace revision. X11 advances one per switch; the shell's pager expects the
     /// same discipline, because the activation it sends is revision-fenced.
@@ -868,7 +868,7 @@ impl Service {
         // updates to the next bus turn; startup never depends on the helper being installed.
         let audio_ping = audio_link.as_ref().map(|(_, ping, _)| ping.clone());
         if let Some((_, _, source)) = audio_link {
-            let inserted = state.loop_handle.insert_source(source, |(), _, state| {
+            let inserted = state.loop_handle.insert_source(source, |(), (), state| {
                 if let Some(service) = state.control.clone() {
                     service.drain_audio();
                 }
@@ -965,7 +965,7 @@ impl Service {
         }
     }
 
-    /// Dispatches NetworkManager bus traffic and publishes its snapshot when it changed. Runs from
+    /// Dispatches `NetworkManager` bus traffic and publishes its snapshot when it changed. Runs from
     /// the provider's own fd readiness, and once at install for the initial reconcile.
     fn drain_network(&self) {
         let snapshot = {
@@ -1382,7 +1382,7 @@ impl Service {
 /// Installs the service: connects and turns it on every bus read wake. Outbound bytes that libdbus
 /// could not flush are driven by a write-readiness source armed in `after_dispatch`, so an idle
 /// compositor has no bus timer at all.
-/// Routes one network action to the NetworkManager slot. An absent or unreachable provider answers
+/// Routes one network action to the `NetworkManager` slot. An absent or unreachable provider answers
 /// with its own `Unavailable` error; no device is ever fabricated for the shell.
 fn network_action(
     network: &RefCell<NetworkManagerSlot>,
@@ -1521,7 +1521,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
-    /// Without NetworkManager on the system bus every network action fails `Unavailable`, and the
+    /// Without `NetworkManager` on the system bus every network action fails `Unavailable`, and the
     /// published snapshot stays unavailable: the shell never receives a fabricated network.
     #[test]
     fn network_actions_fail_unavailable_without_networkmanager() {

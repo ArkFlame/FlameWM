@@ -249,7 +249,7 @@ fn failed_scan_queue_does_not_block_next_scan() {
     ));
 }
 
-/// Builds a GetAll dict from `(key, value)` pairs; object-path values use `ObjectPath`.
+/// Builds a `GetAll` dict from `(key, value)` pairs; object-path values use `ObjectPath`.
 fn dict_item(entries: Vec<(&str, MessageItem)>) -> MessageItem {
     MessageItem::from_dict(
         entries
@@ -263,8 +263,8 @@ fn path_item(path: &str) -> MessageItem {
     MessageItem::ObjectPath(object_path(path.to_owned()).expect("valid path"))
 }
 
-/// Real shapes (captured from NetworkManager 1.4x on wlan0): `ActiveAccessPoint` is served by
-/// `Device.Wireless` only; the `Device` GetAll carries no such key.
+/// Real shapes (captured from `NetworkManager` 1.4x on wlan0): `ActiveAccessPoint` is served by
+/// `Device.Wireless` only; the `Device` `GetAll` carries no such key.
 #[test]
 fn wireless_active_access_point_comes_from_device_wireless_not_device() {
     let device = dict_item(vec![

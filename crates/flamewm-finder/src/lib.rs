@@ -1018,7 +1018,8 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
     let wake_window = Rc::clone(&window);
     let incoming: Rc<RefCell<Receiver<Index>>> = Rc::new(RefCell::new(receiver));
     let wake_incoming = Rc::clone(&incoming);
-    let outcome = run_with_controller_events_role_with_presses_and_reactor_geometry(
+
+    run_with_controller_events_role_with_presses_and_reactor_geometry(
         document,
         UiWindowConfig {
             width: WIDTH,
@@ -1066,8 +1067,7 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
             }
             Ok(())
         },
-    );
-    outcome
+    )
 }
 
 #[cfg(test)]

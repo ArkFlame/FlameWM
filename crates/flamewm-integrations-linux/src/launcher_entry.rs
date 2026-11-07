@@ -85,9 +85,9 @@ impl LauncherEntryProvider {
     pub fn on_ready(&mut self) -> FlameResult<usize> {
         let mut changed = false;
         let entries = &mut self.entries;
-        let count = self.pump.on_ready(|message| {
-            handle_message(message, entries, &mut changed)
-        })?;
+        let count = self
+            .pump
+            .on_ready(|message| handle_message(message, entries, &mut changed))?;
         self.changed |= changed;
         Ok(count)
     }
@@ -108,10 +108,10 @@ impl LauncherEntryProvider {
     pub fn take_changed(&mut self) -> bool {
         std::mem::take(&mut self.changed)
     }
-
 }
 
 /// Parses `(s app_uri, a{sv} props)` from an `Update` body.
+#[allow(clippy::result_unit_err)]
 pub fn parse_update(items: &[MessageItem]) -> Result<(String, LauncherUpdate), ()> {
     let [MessageItem::Str(app_uri), MessageItem::Dict(properties)] = items else {
         return Err(());
@@ -150,10 +150,8 @@ pub fn desktop_id_from_app_uri(app_uri: &str) -> Option<String> {
     let rest = app_uri.strip_prefix(APP_URI_PREFIX)?;
     let file = rest.rsplit('/').next()?;
     let id = file.strip_suffix(DESKTOP_SUFFIX)?;
-    (!id.is_empty()
-        && !id.starts_with('.')
-        && id.chars().all(|c| !c.is_control() && c != '\\'))
-    .then(|| id.to_owned())
+    (!id.is_empty() && !id.starts_with('.') && id.chars().all(|c| !c.is_control() && c != '\\'))
+        .then(|| id.to_owned())
 }
 
 /// Applies one update to the keyed state. Returns `true` when visible progress changed.
@@ -198,7 +196,7 @@ fn visible_progress(state: &LauncherState) -> Option<u8> {
 
 /// Names a launcher desktop id may appear as in a task `app_id`: the id itself, and the desktop
 /// file's `StartupWMClass` (for example `TelegramDesktop`). Unresolved windows carry the lowercased
-/// WM_CLASS as their app id, so every name is compared case-insensitively in lowercase.
+/// `WM_CLASS` as their app id, so every name is compared case-insensitively in lowercase.
 fn match_names(desktop_id: &str, applications: &[DesktopApplication]) -> Vec<String> {
     let mut names = vec![desktop_id.to_ascii_lowercase()];
     if let Some(app) = applications
@@ -298,7 +296,9 @@ fn add_match(pump: &BusPump, rule: &str) -> FlameResult<()> {
         .append1(rule.to_owned());
     let reply = pump.send_with_reply(call, Duration::from_secs(2))?;
     if reply.msg_type() == MessageType::Error {
-        return Err(FlameError::unavailable("cannot watch launcher entry signals"));
+        return Err(FlameError::unavailable(
+            "cannot watch launcher entry signals",
+        ));
     }
     Ok(())
 }
@@ -379,8 +379,12 @@ mod tests {
 
     #[test]
     fn parses_progress_and_visibility_and_ignores_count() {
-        let (uri, update) = parse_update(&body("application://org.kde.x.desktop", Some(0.425), Some(true)))
-            .expect("valid update");
+        let (uri, update) = parse_update(&body(
+            "application://org.kde.x.desktop",
+            Some(0.425),
+            Some(true),
+        ))
+        .expect("valid update");
         assert_eq!(uri, "application://org.kde.x.desktop");
         assert_eq!(update.progress, Some(43));
         assert_eq!(update.progress_visible, Some(true));
@@ -411,9 +415,13 @@ mod tests {
 
     #[test]
     fn desktop_id_accepts_name_and_path_forms_only() {
-        assert_eq!(desktop_id_from_app_uri("application://firefox.desktop").as_deref(), Some("firefox"));
         assert_eq!(
-            desktop_id_from_app_uri("application:///usr/share/applications/telegram.desktop").as_deref(),
+            desktop_id_from_app_uri("application://firefox.desktop").as_deref(),
+            Some("firefox")
+        );
+        assert_eq!(
+            desktop_id_from_app_uri("application:///usr/share/applications/telegram.desktop")
+                .as_deref(),
             Some("telegram")
         );
         assert_eq!(desktop_id_from_app_uri("file:///x.desktop"), None);
@@ -424,8 +432,20 @@ mod tests {
     #[test]
     fn update_maps_to_visible_progress_on_the_matching_task() {
         let mut entries = BTreeMap::new();
-        assert!(apply_update(&mut entries, ":1.5", "application://org.kde.dolphin.desktop", parse_update(&body("application://org.kde.dolphin.desktop", Some(0.5), Some(true))).unwrap().1));
-        let mapped = task_progress_for_entries(&entries, &window_tasks(&["org.kde.dolphin", "other"]), &[]);
+        assert!(apply_update(
+            &mut entries,
+            ":1.5",
+            "application://org.kde.dolphin.desktop",
+            parse_update(&body(
+                "application://org.kde.dolphin.desktop",
+                Some(0.5),
+                Some(true)
+            ))
+            .unwrap()
+            .1
+        ));
+        let mapped =
+            task_progress_for_entries(&entries, &window_tasks(&["org.kde.dolphin", "other"]), &[]);
         assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].task_id, TaskEntryId::window(WindowRef::new(1, 1)));
         assert_eq!(mapped[0].progress.percent(), 50);
@@ -434,9 +454,25 @@ mod tests {
     #[test]
     fn hidden_or_unmatched_progress_is_not_mapped() {
         let mut entries = BTreeMap::new();
-        apply_update(&mut entries, ":1.5", "application://a.desktop", LauncherUpdate { progress: Some(40), progress_visible: Some(false) });
+        apply_update(
+            &mut entries,
+            ":1.5",
+            "application://a.desktop",
+            LauncherUpdate {
+                progress: Some(40),
+                progress_visible: Some(false),
+            },
+        );
         assert!(task_progress_for_entries(&entries, &window_tasks(&["a"]), &[]).is_empty());
-        apply_update(&mut entries, ":1.5", "application://a.desktop", LauncherUpdate { progress: None, progress_visible: Some(true) });
+        apply_update(
+            &mut entries,
+            ":1.5",
+            "application://a.desktop",
+            LauncherUpdate {
+                progress: None,
+                progress_visible: Some(true),
+            },
+        );
         assert!(task_progress_for_entries(&entries, &window_tasks(&["zzz"]), &[]).is_empty());
         let mapped = task_progress_for_entries(&entries, &window_tasks(&["A"]), &[]);
         assert_eq!(mapped.len(), 1, "app ids compare case-insensitively");
@@ -445,7 +481,15 @@ mod tests {
     #[test]
     fn pinned_slot_without_window_never_shows_progress() {
         let mut entries = BTreeMap::new();
-        apply_update(&mut entries, ":1.5", "application://a.desktop", LauncherUpdate { progress: Some(40), progress_visible: Some(true) });
+        apply_update(
+            &mut entries,
+            ":1.5",
+            "application://a.desktop",
+            LauncherUpdate {
+                progress: Some(40),
+                progress_visible: Some(true),
+            },
+        );
         let pinned = PanelsSnapshot {
             revision: 1,
             panels: Vec::new(),
@@ -463,37 +507,95 @@ mod tests {
     #[test]
     fn startup_wm_class_maps_telegram_and_wm_class_fallback_maps_firefox() {
         let mut entries = BTreeMap::new();
-        apply_update(&mut entries, ":1.5", "application://org.telegram.desktop.desktop", LauncherUpdate { progress: Some(30), progress_visible: Some(true) });
+        apply_update(
+            &mut entries,
+            ":1.5",
+            "application://org.telegram.desktop.desktop",
+            LauncherUpdate {
+                progress: Some(30),
+                progress_visible: Some(true),
+            },
+        );
         let apps = [app("org.telegram.desktop", "TelegramDesktop")];
-        let mapped = task_progress_for_entries(&entries, &window_tasks(&["telegramdesktop"]), &apps);
-        assert_eq!(mapped.len(), 1, "StartupWMClass maps the unresolved WM_CLASS app id");
+        let mapped =
+            task_progress_for_entries(&entries, &window_tasks(&["telegramdesktop"]), &apps);
+        assert_eq!(
+            mapped.len(),
+            1,
+            "StartupWMClass maps the unresolved WM_CLASS app id"
+        );
 
         let mut firefox = BTreeMap::new();
-        apply_update(&mut firefox, ":1.6", "application://firefox.desktop", LauncherUpdate { progress: Some(10), progress_visible: Some(true) });
+        apply_update(
+            &mut firefox,
+            ":1.6",
+            "application://firefox.desktop",
+            LauncherUpdate {
+                progress: Some(10),
+                progress_visible: Some(true),
+            },
+        );
         let mapped = task_progress_for_entries(&firefox, &window_tasks(&["Firefox"]), &[]);
-        assert_eq!(mapped.len(), 1, "desktop id matches the WM_CLASS case-insensitively");
+        assert_eq!(
+            mapped.len(),
+            1,
+            "desktop id matches the WM_CLASS case-insensitively"
+        );
     }
 
     #[test]
     fn repeated_identical_updates_report_no_change() {
         let mut entries = BTreeMap::new();
-        let on = LauncherUpdate { progress: Some(10), progress_visible: Some(true) };
-        assert!(apply_update(&mut entries, ":1.2", "application://a.desktop", on));
-        assert!(!apply_update(&mut entries, ":1.2", "application://a.desktop", on));
+        let on = LauncherUpdate {
+            progress: Some(10),
+            progress_visible: Some(true),
+        };
+        assert!(apply_update(
+            &mut entries,
+            ":1.2",
+            "application://a.desktop",
+            on
+        ));
+        assert!(!apply_update(
+            &mut entries,
+            ":1.2",
+            "application://a.desktop",
+            on
+        ));
     }
 
     #[test]
     fn owner_scoped_entries_are_removed_with_owner_and_entry_cap_holds() {
-        let on = LauncherUpdate { progress: Some(1), progress_visible: Some(true) };
+        let on = LauncherUpdate {
+            progress: Some(1),
+            progress_visible: Some(true),
+        };
         let mut entries = BTreeMap::new();
         for index in 0..MAX_ENTRIES - 1 {
-            apply_update(&mut entries, ":1.9", &format!("application://a{index}.desktop"), on);
+            apply_update(
+                &mut entries,
+                ":1.9",
+                &format!("application://a{index}.desktop"),
+                on,
+            );
         }
-        assert!(apply_update(&mut entries, ":1.10", "application://b.desktop", on));
+        assert!(apply_update(
+            &mut entries,
+            ":1.10",
+            "application://b.desktop",
+            on
+        ));
         assert_eq!(entries.len(), MAX_ENTRIES);
-        assert!(!apply_update(&mut entries, ":1.10", "application://c.desktop", on), "cap refuses new keys once full");
+        assert!(
+            !apply_update(&mut entries, ":1.10", "application://c.desktop", on),
+            "cap refuses new keys once full"
+        );
         assert_eq!(entries.len(), MAX_ENTRIES);
         entries.retain(|(owner, _), _| owner != ":1.9");
-        assert_eq!(entries.len(), 1, "owner exit removes only that owner's entries");
+        assert_eq!(
+            entries.len(),
+            1,
+            "owner exit removes only that owner's entries"
+        );
     }
 }

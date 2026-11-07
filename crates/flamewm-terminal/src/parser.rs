@@ -335,7 +335,12 @@ impl Parser {
         if !self.in_number && self.params.last().is_none_or(Vec::is_empty) {
             self.finish_value();
         }
-        performer.csi(self.prefix.take(), &self.params, &self.intermediates, action);
+        performer.csi(
+            self.prefix.take(),
+            &self.params,
+            &self.intermediates,
+            action,
+        );
         self.reset_params();
         self.intermediates.clear();
         self.in_number = false;

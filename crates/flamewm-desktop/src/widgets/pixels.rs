@@ -37,7 +37,13 @@ pub(super) fn hand_turns(time: WallTime) -> HandTurns {
 }
 
 /// Distance-based anti-aliased coverage of a capsule from `from` to `to`.
-pub(super) fn segment_coverage(px: f32, py: f32, from: (f32, f32), to: (f32, f32), half: f32) -> f32 {
+pub(super) fn segment_coverage(
+    px: f32,
+    py: f32,
+    from: (f32, f32),
+    to: (f32, f32),
+    half: f32,
+) -> f32 {
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
     let len_sq = (dx * dx + dy * dy).max(f32::EPSILON);
     let t = (((px - from.0) * dx + (py - from.1) * dy) / len_sq).clamp(0.0, 1.0);
@@ -137,7 +143,6 @@ pub(super) fn color(rgb: Rgb, alpha: u8) -> UiColor {
 pub(super) fn percent_to_alpha(percent: i64) -> u8 {
     ((percent.clamp(0, 100) * 255 + 50) / 100) as u8
 }
-
 
 pub(crate) fn ring_pixels(
     size: u32,

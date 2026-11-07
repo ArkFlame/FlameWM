@@ -6,9 +6,7 @@
 
 use super::*;
 use crate::weather_host::{LocationSearch, SearchStatus};
-use flamewm_weather::weather::{
-    TemperatureUnit, WeatherCondition, WeatherSettings, WeatherState,
-};
+use flamewm_weather::weather::{TemperatureUnit, WeatherCondition, WeatherSettings, WeatherState};
 pub use flamewm_weather::weather_view::{
     condition_label, place_name, popup_view, tray_view, WEATHER_DAY_ROWS,
 };
@@ -108,10 +106,7 @@ pub fn project_weather_popup(
     let picker = picker_open(search);
     document.text("weather-location", view.location)?;
     document.text("weather-temp", view.temperature)?;
-    document.text_ref(
-        "weather-condition",
-        condition_label(view.condition),
-    )?;
+    document.text_ref("weather-condition", condition_label(view.condition))?;
     document.text("weather-state", view.status)?;
     set_icons(document, "weather-icon-", Some(view.condition), true)?;
     for row in 1..=WEATHER_DAY_ROWS {
@@ -162,9 +157,7 @@ pub fn project_weather_popup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flamewm_weather::weather::{
-        DayForecast, WeatherError, WeatherLocation, WeatherSnapshot,
-    };
+    use flamewm_weather::weather::{DayForecast, WeatherError, WeatherLocation, WeatherSnapshot};
     use flamewm_weather::weather_view::weekday_label;
 
     fn berlin() -> WeatherLocation {
@@ -417,8 +410,8 @@ mod tests {
 #[cfg(test)]
 mod panel_tray_tests {
     use super::*;
-    use flamewm_weather::weather::{WeatherLocation, WeatherSnapshot};
     use flamewm_ui_x11::test_support::RecordingUiDoc;
+    use flamewm_weather::weather::{WeatherLocation, WeatherSnapshot};
 
     const PANEL_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel.rwr"));
 

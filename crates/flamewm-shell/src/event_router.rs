@@ -5,9 +5,9 @@ use flamewm_ui_x11::{
     ActionPhase, PointerButton, SurfaceEvent, SurfaceRuntime, UiBackendError, UiDocumentAccess,
 };
 
-use crate::entry::app::{ShellLoop, is_popup_refusal, shell_slow_note};
-use flamewm_shell::quick_controls::QuickControlKind;
+use crate::entry::app::{is_popup_refusal, shell_slow_note, ShellLoop};
 use flamewm_shell::quick_controls::host::is_quick_popup_title;
+use flamewm_shell::quick_controls::QuickControlKind;
 use flamewm_shell::runtime::InteractionContext;
 
 /// C07 stage helper: open a static profiler span. Static labels only.
@@ -762,7 +762,7 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         event_output: &flamewm_api::OutputId,
     ) -> bool {
-        use flamewm_shell::taskbar::tasks::drag::{TaskDrag, TaskDragRelease, along_strip};
+        use flamewm_shell::taskbar::tasks::drag::{along_strip, TaskDrag, TaskDragRelease};
         let action = event.action.action.as_str();
         if self.task_drag.is_some()
             && action == "keyboard.input"

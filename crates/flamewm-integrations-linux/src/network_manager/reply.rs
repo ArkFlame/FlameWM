@@ -384,7 +384,7 @@ pub(super) struct DeviceProperties {
     pub(super) active_connection: String,
 }
 
-/// Parses the `org.freedesktop.NetworkManager.Device` GetAll dict. `ActiveAccessPoint` is not on
+/// Parses the `org.freedesktop.NetworkManager.Device` `GetAll` dict. `ActiveAccessPoint` is not on
 /// this interface; see [`parse_wireless_active_access_point`].
 pub(super) fn parse_device_properties(item: Option<&MessageItem>) -> FlameResult<DeviceProperties> {
     let mut is_wifi = false;
@@ -404,8 +404,8 @@ pub(super) fn parse_device_properties(item: Option<&MessageItem>) -> FlameResult
     })
 }
 
-/// Parses `ActiveAccessPoint` from the `org.freedesktop.NetworkManager.Device.Wireless` GetAll
-/// dict. NetworkManager reports "/" when no access point is active, mapped to empty.
+/// Parses `ActiveAccessPoint` from the `org.freedesktop.NetworkManager.Device.Wireless` `GetAll`
+/// dict. `NetworkManager` reports "/" when no access point is active, mapped to empty.
 pub(super) fn parse_wireless_active_access_point(
     item: Option<&MessageItem>,
 ) -> FlameResult<String> {

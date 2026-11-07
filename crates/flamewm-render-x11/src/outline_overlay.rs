@@ -276,7 +276,7 @@ impl Drop for OutlineOverlay {
 /// A compositing manager blends ARGB window contents as premultiplied alpha, so the straight-alpha
 /// ring strips must be premultiplied here; the alpha byte itself is carried unchanged.
 fn premultiplied_pixels(rgba: &[u8], lsb_first: bool) -> Result<Vec<u8>, String> {
-    if rgba.chunks_exact(4).remainder().len() != 0 {
+    if !rgba.chunks_exact(4).remainder().is_empty() {
         return Err("outline overlay: pixel buffer is not RGBA8".to_string());
     }
     let mut out = Vec::with_capacity(rgba.len());

@@ -8,7 +8,7 @@
 use flamewm_api::{OutputId, Rect, Size};
 use flamewm_ui_x11::SurfaceRuntime;
 
-use super::{ShellSurfaces, panel_ui_scale, ui_error};
+use super::{panel_ui_scale, ui_error, ShellSurfaces};
 use crate::popup_controller;
 use crate::popup_role::PopupRole;
 

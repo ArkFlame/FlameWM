@@ -23,11 +23,11 @@ use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::BusKind;
 use flamewm_debug::DebugEventId;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
-use flamewm_weather::weather::WeatherFeed;
 use flamewm_ui_x11::{
     decode_document, ActionPhase, SlideConfig, SurfaceConfig, SurfaceHandle, SurfaceInputMode,
     SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
 };
+use flamewm_weather::weather::WeatherFeed;
 
 use self::popup::{
     arm_slide, close_helper, fit_helper, grab, measure_helper, popup_slide, prepare_commit, present,

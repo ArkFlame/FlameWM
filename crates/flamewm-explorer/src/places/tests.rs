@@ -3,8 +3,7 @@ use flamewm_integrations_linux::removable_mounts::{removable_devices, udisks_arg
 
 #[test]
 fn bookmark_round_trip_preserves_labels_and_rejects_non_file_uris() {
-    let items =
-        parse_bookmarks("file:///home/u/My%20Docs Work\nsftp://host/x\nfile:///tmp/a\n");
+    let items = parse_bookmarks("file:///home/u/My%20Docs Work\nsftp://host/x\nfile:///tmp/a\n");
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].path, PathBuf::from("/home/u/My Docs"));
     assert_eq!(items[0].display_name(), "Work");
@@ -146,8 +145,7 @@ fn mountinfo_selects_media_mounts_and_unescapes_names() {
 
 #[test]
 fn removable_flag_is_read_from_device_or_parent_disk() {
-    let root =
-        std::env::temp_dir().join(format!("flamewm-sysblock-test-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("flamewm-sysblock-test-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("sdb/sdb1")).unwrap();
     // Mirror /sys/class/block: the entry is a symlink into the parent disk's directory.

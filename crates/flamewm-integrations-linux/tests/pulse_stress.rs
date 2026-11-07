@@ -25,10 +25,7 @@ fn wait_ready(adapter: &PulseAdapter) -> Option<AudioSnapshot> {
 
 /// Polls the snapshot until `done` holds or the deadline passes; returns the last snapshot seen.
 /// Waits on the observed state instead of a fixed sleep, so a fast server does not pay the sleep.
-fn wait_until(
-    adapter: &PulseAdapter,
-    done: impl Fn(&AudioSnapshot) -> bool,
-) -> AudioSnapshot {
+fn wait_until(adapter: &PulseAdapter, done: impl Fn(&AudioSnapshot) -> bool) -> AudioSnapshot {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         let snap = adapter.snapshot();

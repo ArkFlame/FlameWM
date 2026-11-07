@@ -216,9 +216,9 @@ impl RevisionServer {
 impl ControlTransport for RevisionServer {
     fn call(&mut self, request: ControlRequest) -> Result<ControlResponse, ControlError> {
         match request {
-            ControlRequest::GetSettings => Ok(ControlResponse::Settings(
-                SettingsSnapshot::new(self.settings_revision),
-            )),
+            ControlRequest::GetSettings => Ok(ControlResponse::Settings(SettingsSnapshot::new(
+                self.settings_revision,
+            ))),
             ControlRequest::GetShortcuts => Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
                 revision: self.shortcut_revision,
                 bindings: self.bindings.clone(),
@@ -757,18 +757,17 @@ fn two_output_display_snapshot() -> DisplaySnapshot {
         refresh_millihz: 60_000,
         preferred: false,
     };
-    let output =
-        |id: &str, primary: bool, current: u64, modes: Vec<DisplayMode>| OutputSnapshot {
-            id: OutputId::new(id),
-            connector: id.to_owned(),
-            edid_identity: format!("edid-{id}"),
-            connected: true,
-            primary,
-            geometry: Rect::new(0, 0, 1920, 1080),
-            current_mode: ModeId(current),
-            modes,
-            shell_scale_percent: 100,
-        };
+    let output = |id: &str, primary: bool, current: u64, modes: Vec<DisplayMode>| OutputSnapshot {
+        id: OutputId::new(id),
+        connector: id.to_owned(),
+        edid_identity: format!("edid-{id}"),
+        connected: true,
+        primary,
+        geometry: Rect::new(0, 0, 1920, 1080),
+        current_mode: ModeId(current),
+        modes,
+        shell_scale_percent: 100,
+    };
     DisplaySnapshot {
         generation: 5,
         outputs: vec![

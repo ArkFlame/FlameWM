@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(mapped.surface.r, (surface_fill(&settings).rgb >> 16) as u8);
     }
 
-    /// FlameWM's product default accent, as the (r, g, b) triple the theme reports.
+    /// `FlameWM`'s product default accent, as the (r, g, b) triple the theme reports.
     fn default_accent() -> (u8, u8, u8) {
         let rgb = flamewm_api::settings::DEFAULT_ACCENT_RGB;
         ((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)

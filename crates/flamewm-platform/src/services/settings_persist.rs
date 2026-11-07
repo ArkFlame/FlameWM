@@ -180,9 +180,7 @@ fn run(rx: &Receiver<Command>, idle: Duration, max_defer: Duration, mut sink: Si
                 };
                 let result = match (result, background_error.take()) {
                     (Err(error), _) => Err(error),
-                    (Ok(()), Some(message)) => {
-                        Err(FlameError::new(ErrorCode::IoFailure, message))
-                    }
+                    (Ok(()), Some(message)) => Err(FlameError::new(ErrorCode::IoFailure, message)),
                     (Ok(()), None) => Ok(()),
                 };
                 let _ = reply.send(result);

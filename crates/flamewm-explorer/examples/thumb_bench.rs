@@ -1,16 +1,16 @@
 //! Thumbnail scheduling bench for `scripts/perf/explorer_thumbs.sh`. Same process, A/B per iteration:
 //! `old` = FIFO handoff, every window row requested each pass (pre-change policy);
 //! `new` = pass-start cancellation, in-view requests only.
-//! Usage: thumb_bench <fixture_dir> <iterations>
+//! Usage: `thumb_bench` <`fixture_dir`> <iterations>
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use flamewm_explorer::thumbs::{render_thumbnail, Lookup, ThumbKey, ThumbQueue, Thumbnails};
+use flamewm_explorer::thumbs::{Lookup, ThumbKey, ThumbQueue, Thumbnails, render_thumbnail};
 
 const WINDOW: usize = 30;
 const FRAME: Duration = Duration::from_millis(4);
@@ -33,14 +33,20 @@ fn run(files: &[PathBuf], new_policy: bool, passes: usize, step: usize) -> Run {
     let decodes = Arc::new(AtomicU64::new(0));
     {
         let (queue, decodes) = (Arc::clone(&queue), Arc::clone(&decodes));
-        thread::spawn(move || loop {
-            let key = queue.pop();
-            let pixels = render_thumbnail(&key);
-            decodes.fetch_add(1, Ordering::Relaxed);
-            let _ = tx.send((key, pixels));
+        thread::spawn(move || {
+            loop {
+                let key = queue.pop();
+                let pixels = render_thumbnail(&key);
+                decodes.fetch_add(1, Ordering::Relaxed);
+                let _ = tx.send((key, pixels));
+            }
         });
     }
-    let key_of = |path: &PathBuf| ThumbKey { path: path.clone(), modified: None, size: 0 };
+    let key_of = |path: &PathBuf| ThumbKey {
+        path: path.clone(),
+        modified: None,
+        size: 0,
+    };
     let mut cache = Thumbnails::default();
     let max_start = files.len().saturating_sub(WINDOW);
     let mut last_window: Vec<ThumbKey> = Vec::new();
@@ -71,7 +77,9 @@ fn run(files: &[PathBuf], new_policy: bool, passes: usize, step: usize) -> Run {
         while let Ok((key, pixels)) = rx.try_recv() {
             cache.complete(key, pixels);
         }
-        let ready = last_window.iter().all(|key| !matches!(cache.lookup(key), Lookup::Missing));
+        let ready = last_window
+            .iter()
+            .all(|key| !matches!(cache.lookup(key), Lookup::Missing));
         if ready || Instant::now() > deadline {
             let ready_visible = ready;
             return Run {
@@ -87,15 +95,30 @@ fn run(files: &[PathBuf], new_policy: bool, passes: usize, step: usize) -> Run {
 fn main() {
     let mut args = std::env::args().skip(1);
     let dir = PathBuf::from(args.next().expect("fixture dir"));
-    let iterations: usize = args.next().unwrap_or_else(|| "3".into()).parse().expect("iterations");
+    let iterations: usize = args
+        .next()
+        .unwrap_or_else(|| "3".into())
+        .parse()
+        .expect("iterations");
     let mut files: Vec<PathBuf> = fs::read_dir(&dir)
         .expect("read fixture")
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "png"))
         .collect();
     files.sort();
-    println!("fixture={} files={} window={WINDOW} iterations={iterations}", dir.display(), files.len());
-    println!("load1={}", fs::read_to_string("/proc/loadavg").unwrap_or_default().split(' ').next().unwrap_or("?"));
+    println!(
+        "fixture={} files={} window={WINDOW} iterations={iterations}",
+        dir.display(),
+        files.len()
+    );
+    println!(
+        "load1={}",
+        fs::read_to_string("/proc/loadavg")
+            .unwrap_or_default()
+            .split(' ')
+            .next()
+            .unwrap_or("?")
+    );
     // Scenario A: fast scroll, 120 passes of 6 rows each (the window sweeps most of the folder).
     // Scenario B: steady view, one pass, time until its window is cached.
     for (name, passes, step) in [("scroll", 120usize, 2usize), ("steady", 1usize, 0usize)] {
@@ -115,7 +138,9 @@ fn main() {
         for (which, policy) in [(0usize, "old"), (1, "new")] {
             println!(
                 "{name}.{policy} settle_ms={:.1} decodes={:.0} final_window_ready={}",
-                median(std::mem::take(&mut settle[which])), median(std::mem::take(&mut decodes[which])), visible[which]
+                median(std::mem::take(&mut settle[which])),
+                median(std::mem::take(&mut decodes[which])),
+                visible[which]
             );
         }
     }

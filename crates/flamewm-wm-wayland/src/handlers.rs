@@ -130,15 +130,15 @@ fn commit_changes_pixels(surface: &WlSurface) -> bool {
     with_surface_tree_upward(
         surface,
         (),
-        |_, _, _| TraversalAction::DoChildren(()),
-        |_, states, _| {
+        |_, _, ()| TraversalAction::DoChildren(()),
+        |_, states, ()| {
             let mut guard = states.cached_state.get::<SurfaceAttributes>();
             let attrs = guard.current();
             visible |= attrs.buffer.is_some()
                 || !attrs.damage.is_empty()
                 || !attrs.frame_callbacks.is_empty();
         },
-        |_, _, _| true,
+        |_, _, ()| true,
     );
     visible
 }

@@ -236,7 +236,12 @@ impl X11App {
     /// The text-shadow upload target: one ARGB pixmap reused by every shadow (grown on demand,
     /// never shrunk). Each shadow blits only its own `w x h` origin region, so reuse is
     /// pixel-identical to a fresh pixmap per shadow, without a create, sync and free per run.
-    fn shadow_upload_pixmap(&mut self, root: Drawable, width: u32, height: u32) -> Result<Pixmap, String> {
+    fn shadow_upload_pixmap(
+        &mut self,
+        root: Drawable,
+        width: u32,
+        height: u32,
+    ) -> Result<Pixmap, String> {
         if let Some((pixmap, cap_w, cap_h, _)) = self.shadow_pixmap {
             if cap_w >= width && cap_h >= height {
                 return Ok(pixmap);
@@ -245,7 +250,9 @@ impl X11App {
         let (prev_w, prev_h) = self.shadow_pixmap.map_or((0, 0), |(_, cw, ch, _)| (cw, ch));
         let (cap_w, cap_h) = (width.max(prev_w), height.max(prev_h));
         let (pixmap, bytes) = self.alloc_pixmap(root, cap_w, cap_h, 32)?;
-        if let Some((old, _, _, old_bytes)) = self.shadow_pixmap.replace((pixmap, cap_w, cap_h, bytes)) {
+        if let Some((old, _, _, old_bytes)) =
+            self.shadow_pixmap.replace((pixmap, cap_w, cap_h, bytes))
+        {
             self.free_pixmap_tracked(old, old_bytes);
         }
         Ok(pixmap)
@@ -476,7 +483,12 @@ impl X11App {
             let interaction = self.interaction;
             let paint_nodes = &mut self.paint_nodes;
             let fresh = super::xft::scoped_text_measure(self.xft.as_mut(), || {
-                super::scroll::build_scrolled_paint_cached(document, layout, interaction, paint_nodes)
+                super::scroll::build_scrolled_paint_cached(
+                    document,
+                    layout,
+                    interaction,
+                    paint_nodes,
+                )
             });
             let previous = self.cached_paint.take();
             plan = plan_region_paint(RegionInput {
@@ -1154,7 +1166,7 @@ impl X11App {
         Ok(true)
     }
 
-/// Transparent ARGB scene clear: 0x00000000, never root_background/BLACK.
+    /// Transparent ARGB scene clear: 0x00000000, never root_background/BLACK.
     pub(crate) fn clear_scene(&mut self) -> Result<(), String> {
         // Depth-32 ARGB scene: pixel 0 == 0x00000000 transparent clear.
         // Depth-24 has no alpha: 0x00000000 would be opaque black under the panel corners.
@@ -2262,7 +2274,10 @@ mod partial_fill_clip_tests {
 }
 
 /// Cached root origin to reuse for a publish, or `None` when a fresh query is required.
-pub(crate) fn root_origin_reuse(cached: Option<(i32, i32)>, events_pending: bool) -> Option<(i32, i32)> {
+pub(crate) fn root_origin_reuse(
+    cached: Option<(i32, i32)>,
+    events_pending: bool,
+) -> Option<(i32, i32)> {
     if events_pending {
         return None;
     }
@@ -2276,7 +2291,15 @@ mod root_origin_tests {
     #[test]
     fn cached_origin_is_reused_only_when_no_events_are_pending() {
         assert_eq!(root_origin_reuse(Some((3, 4)), false), Some((3, 4)));
-        assert_eq!(root_origin_reuse(Some((3, 4)), true), None, "pending events force a query");
-        assert_eq!(root_origin_reuse(None, false), None, "no cache forces a query");
+        assert_eq!(
+            root_origin_reuse(Some((3, 4)), true),
+            None,
+            "pending events force a query"
+        );
+        assert_eq!(
+            root_origin_reuse(None, false),
+            None,
+            "no cache forces a query"
+        );
     }
 }

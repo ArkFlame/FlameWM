@@ -8,15 +8,15 @@ use flamewm_api::settings::SettingsSnapshot;
 use flamewm_integrations_linux::icons::{IconResolver, IconSize, Rgb8Raster};
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
-use crate::ShellSnapshot;
-use crate::start::{PRESENTATION_CATEGORIES, StartCategory};
+use crate::start::{StartCategory, PRESENTATION_CATEGORIES};
 use crate::taskbar::workspaces::{
-    PAGER_CELL_GAP, PAGER_CELL_HEIGHT, PAGER_CELL_WIDTH, PAGER_CELLS, PAGER_COLUMNS, WorkspaceView,
     cell_left, pager_cell, pager_columns, pager_width, project as project_workspaces,
+    WorkspaceView, PAGER_CELLS, PAGER_CELL_GAP, PAGER_CELL_HEIGHT, PAGER_CELL_WIDTH, PAGER_COLUMNS,
 };
 use crate::taskbar_scale::{self, scaled};
-use flamewm_shell_core::start_menu::{StartBucket, bucket_for_application};
-use flamewm_shell_core::{StartModel, task_visual_states_on_output_and_workspace};
+use crate::ShellSnapshot;
+use flamewm_shell_core::start_menu::{bucket_for_application, StartBucket};
+use flamewm_shell_core::{task_visual_states_on_output_and_workspace, StartModel};
 
 #[cfg(test)]
 macro_rules! forward {
@@ -41,7 +41,7 @@ mod weather;
 pub use audio::{project_audio, project_audio_full};
 pub use calendar::project_calendar;
 use clock::month_name;
-pub use clock::{ClockDisplay, clock_time_text, local_date, project_clock, project_clock_at};
+pub use clock::{clock_time_text, local_date, project_clock, project_clock_at, ClockDisplay};
 pub use context_menu::project_context_menu;
 pub use media::project_media;
 pub use network::{
@@ -51,10 +51,10 @@ pub use network::{
 #[cfg(test)]
 pub(crate) use panel::pager_active_fill;
 pub use panel::{
-    BATTERY_PROGRESS_HEIGHT, PanelView, TaskbarItems, for_each_panel_record, project,
-    project_battery_menu, project_battery_tray, project_panel, reapply_element_backgrounds,
-    set_task_accent, set_taskbar_surface, task_icon_device_px, task_icon_px, taskbar_css_height,
-    taskbar_css_width,
+    for_each_panel_record, project, project_battery_menu, project_battery_tray, project_panel,
+    reapply_element_backgrounds, set_task_accent, set_taskbar_surface, task_icon_device_px,
+    task_icon_px, taskbar_css_height, taskbar_css_width, PanelView, TaskbarItems,
+    BATTERY_PROGRESS_HEIGHT,
 };
 pub(crate) use panel::{
     project_element_backgrounds, project_pager, project_pager_visibility, project_status_tray,
@@ -63,9 +63,9 @@ pub(crate) use panel::{
     tray_any_visible, workspace_pager_visible,
 };
 pub use start::{
-    START_STATUS_NODE, START_WHEEL_ROWS, project_start, project_start_error,
-    start_application_for_slot, start_application_name_for_slot, start_scroll_max,
-    start_scroll_step, start_visible_results,
+    project_start, project_start_error, start_application_for_slot,
+    start_application_name_for_slot, start_scroll_max, start_scroll_step, start_visible_results,
+    START_STATUS_NODE, START_WHEEL_ROWS,
 };
 pub use weather::{project_weather_popup, project_weather_tray};
 

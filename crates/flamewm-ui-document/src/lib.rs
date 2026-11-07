@@ -6,7 +6,9 @@ pub mod focus;
 pub mod surface_style;
 mod template;
 
-pub use flamewm_render_core::{CompiledDocument, CompiledNode, InteractionState, NodeKind, Overflow, Style};
+pub use flamewm_render_core::{
+    CompiledDocument, CompiledNode, InteractionState, NodeKind, Overflow, Style,
+};
 pub use template::{
     KeyboardCapture, RuntimeImage, UiColor, UiDocument, UiDocumentAccess, UiDocumentView,
     UiTemplate, decode_document,

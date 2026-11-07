@@ -167,7 +167,11 @@ impl UiCache {
     ) -> Result<(), String> {
         // nowrap collapses ASCII spaces, so cells are written as no-break spaces to keep their width.
         text.clear();
-        text.extend(run.text.chars().map(|c| if c == ' ' { '\u{a0}' } else { c }));
+        text.extend(
+            run.text
+                .chars()
+                .map(|c| if c == ' ' { '\u{a0}' } else { c }),
+        );
         doc.text_ref(id, text)?;
         let (cell_w, cell_h) = cell;
         let (x, y, w, h) = match run.shape {
@@ -184,15 +188,15 @@ impl UiCache {
                 cell_h,
             ),
         };
-        doc.position(&id, x, y)?;
-        doc.size(&id, w, h)?;
-        doc.foreground(&id, rgb(run.fg))?;
+        doc.position(id, x, y)?;
+        doc.size(id, w, h)?;
+        doc.foreground(id, rgb(run.fg))?;
         match run.bg {
-            Some(bg) => doc.background(&id, rgb(bg))?,
-            None => doc.background_clear(&id)?,
+            Some(bg) => doc.background(id, rgb(bg))?,
+            None => doc.background_clear(id)?,
         }
-        doc.font_weight(&id, if run.bold { 700 } else { 400 })?;
-        doc.visible(&id, true)
+        doc.font_weight(id, if run.bold { 700 } else { 400 })?;
+        doc.visible(id, true)
     }
 }
 
@@ -432,10 +436,19 @@ mod bench {
         }
 
         let plain: Vec<u8> = (0..60_000)
-            .flat_map(|n| format!("row {n:6} the quick brown fox jumps over the lazy dog\r\n").into_bytes())
+            .flat_map(|n| {
+                format!("row {n:6} the quick brown fox jumps over the lazy dog\r\n").into_bytes()
+            })
             .collect();
         let sgr: Vec<u8> = (0..60_000)
-            .flat_map(|n| format!("\x1b[1;3{}m{n:6}\x1b[0m \x1b[38;5;{}mjumps over\x1b[0m the lazy dog\r\n", n % 7, n % 256).into_bytes())
+            .flat_map(|n| {
+                format!(
+                    "\x1b[1;3{}m{n:6}\x1b[0m \x1b[38;5;{}mjumps over\x1b[0m the lazy dog\r\n",
+                    n % 7,
+                    n % 256
+                )
+                .into_bytes()
+            })
             .collect();
         let linefeeds = vec![b'\n'; 60_000];
         let palette = builtin_themes()[0].palette.clone();
@@ -512,23 +525,73 @@ mod bench {
         let paint_full = best(|| {
             secs(|| {
                 let mut ui = UiCache::default();
-                ui.project_rows(&mut Recorder::default(), crate::pool::TIERS[1], (8.0, 16.0), &rows)
-                    .expect("project");
+                ui.project_rows(
+                    &mut Recorder::default(),
+                    crate::pool::TIERS[1],
+                    (8.0, 16.0),
+                    &rows,
+                )
+                .expect("project");
             })
         });
 
         let per = |total: f64, n: f64| total * 1e9 / n;
         let bytes_plain = plain.len() as f64;
         let bytes_sgr = sgr.len() as f64;
-        rows_out.push(("parse (plain)", per(parse_plain, bytes_plain), plain.len(), "ns/byte"));
-        rows_out.push(("parse (sgr)", per(parse_sgr, bytes_sgr), sgr.len(), "ns/byte"));
-        rows_out.push(("apply = total-parse (plain)", per(total_plain - parse_plain, bytes_plain), plain.len(), "ns/byte"));
-        rows_out.push(("apply = total-parse (sgr)", per(total_sgr - parse_sgr, bytes_sgr), sgr.len(), "ns/byte"));
-        rows_out.push(("scroll (linefeed, full screen)", per(scroll, 60_000.0), 60_000, "ns/linefeed"));
-        rows_out.push(("shape: cold RunCache, 40 rows", per(shape_full, 40.0), 40, "ns/row"));
-        rows_out.push(("dirty: typed char + update", typing * 1e9, 2000, "ns/update"));
-        rows_out.push(("cursor blink repaint update", blink * 1e9, 2000, "ns/update"));
-        rows_out.push(("paint: UI projection, 40 rows", per(paint_full, 40.0), 40, "ns/row"));
+        rows_out.push((
+            "parse (plain)",
+            per(parse_plain, bytes_plain),
+            plain.len(),
+            "ns/byte",
+        ));
+        rows_out.push((
+            "parse (sgr)",
+            per(parse_sgr, bytes_sgr),
+            sgr.len(),
+            "ns/byte",
+        ));
+        rows_out.push((
+            "apply = total-parse (plain)",
+            per(total_plain - parse_plain, bytes_plain),
+            plain.len(),
+            "ns/byte",
+        ));
+        rows_out.push((
+            "apply = total-parse (sgr)",
+            per(total_sgr - parse_sgr, bytes_sgr),
+            sgr.len(),
+            "ns/byte",
+        ));
+        rows_out.push((
+            "scroll (linefeed, full screen)",
+            per(scroll, 60_000.0),
+            60_000,
+            "ns/linefeed",
+        ));
+        rows_out.push((
+            "shape: cold RunCache, 40 rows",
+            per(shape_full, 40.0),
+            40,
+            "ns/row",
+        ));
+        rows_out.push((
+            "dirty: typed char + update",
+            typing * 1e9,
+            2000,
+            "ns/update",
+        ));
+        rows_out.push((
+            "cursor blink repaint update",
+            blink * 1e9,
+            2000,
+            "ns/update",
+        ));
+        rows_out.push((
+            "paint: UI projection, 40 rows",
+            per(paint_full, 40.0),
+            40,
+            "ns/row",
+        ));
         for (name, value, n, unit) in &rows_out {
             eprintln!("pipeline {name}: {value:.0} {unit} (n={n}, best of 5)");
         }

@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(e.mode, 0o4000 | 0o1000 | 0o755);
     }
 
-    /// A tree protected by an ACL or SELinux label must still list: `ls` appends the marker after
+    /// A tree protected by an ACL or `SELinux` label must still list: `ls` appends the marker after
     /// the nine permission bits, and a strict 10-character mode check would reject every entry.
     #[test]
     fn acl_and_xattr_markers_after_the_mode_are_not_part_of_it() {

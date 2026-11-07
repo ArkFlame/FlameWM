@@ -13,7 +13,7 @@ use flamewm_shell::start::StartCategory;
 use flamewm_shell::taskbar::tasks::icon_geometry::{
     self, IconGeometrySink, IconGeometryTracker, IconRect,
 };
-use flamewm_shell::{ShellControl, ShellRuntime, ShellSnapshot, ShellSurfaces, projection};
+use flamewm_shell::{projection, ShellControl, ShellRuntime, ShellSnapshot, ShellSurfaces};
 use flamewm_shell_core::clock::ClockDateTracker;
 use flamewm_shell_core::popup::PopupRefusal;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
@@ -56,17 +56,18 @@ mod timers;
 mod weather;
 
 use helpers::{
-    RuntimeIconGeometrySink, ZONE_SETTLE, clear_transient_state_fields, earliest_wake,
-    end_start_session_fields, interaction_target_is_current, media_popup_must_close,
-    media_system_request, pager_cell_window_rect, panel_projection_needed, resolve_control_output,
-    start_icon_refresh_due, take_context_menu_for_popup, taskbar_frame,
+    clear_transient_state_fields, earliest_wake, end_start_session_fields,
+    interaction_target_is_current, media_popup_must_close, media_system_request,
+    pager_cell_window_rect, panel_projection_needed, resolve_control_output,
+    start_icon_refresh_due, take_context_menu_for_popup, taskbar_frame, RuntimeIconGeometrySink,
+    ZONE_SETTLE,
 };
 use quick_popups::{
-    QuickOpenResolution, apply_quick_open_result, is_quick_popup_kind, quick_popup_kind,
+    apply_quick_open_result, is_quick_popup_kind, quick_popup_kind, QuickOpenResolution,
 };
 pub(crate) use slow_op::{is_popup_refusal, shell_slow_note};
 use start_session::{
-    StartLaunchContext, StartToggleAction, start_launch_session_matches, start_toggle_action,
+    start_launch_session_matches, start_toggle_action, StartLaunchContext, StartToggleAction,
 };
 
 pub(crate) struct ShellLoop {

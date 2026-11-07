@@ -943,9 +943,15 @@ mod tests {
     /// selection marquee repaint every pixel; other surfaces keep the opt-in that protects them.
     #[test]
     fn translucent_gate_admits_desktop_without_window_backdrop() {
-        assert!(region_translucent(false, false, false), "no backdrop: desktop marquee");
+        assert!(
+            region_translucent(false, false, false),
+            "no backdrop: desktop marquee"
+        );
         assert!(region_translucent(true, true, false), "unchanged backdrop");
-        assert!(!region_translucent(true, false, false), "changed backdrop samples outside");
+        assert!(
+            !region_translucent(true, false, false),
+            "changed backdrop samples outside"
+        );
         assert!(!region_translucent(false, false, true), "surface backdrop");
     }
 

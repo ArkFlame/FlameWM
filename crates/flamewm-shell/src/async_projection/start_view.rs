@@ -37,9 +37,9 @@ pub fn project_start_unified(
     scroll_rows: usize,
 ) -> Result<(), String> {
     bump_start_view_epoch(); // Canonical indexed path: borrowed query view from the precomputed
-    // index, then the single presentation-bucket filter. No clone, no
-    // set_query-on-temporary. (Shell StartCategory is the presentation
-    // seam; core filter_view takes the core category type.)
+                             // index, then the single presentation-bucket filter. No clone, no
+                             // set_query-on-temporary. (Shell StartCategory is the presentation
+                             // seam; core filter_view takes the core category type.)
     let applications = crate::projection::start_visible_results(model, category, query);
     document.visible("start-applications", !applications.is_empty())?;
     // Clamp here so the rows painted always match `start_scroll_rows` for slot mapping.

@@ -254,7 +254,8 @@ fn node_row_span(
     if py < node_y || py > node_y + node_h as i32 {
         return None;
     }
-    let first = (0..clip_w).find(|&col| inside_node_shape(clip_x + col as i32, py, node, radius))?;
+    let first =
+        (0..clip_w).find(|&col| inside_node_shape(clip_x + col as i32, py, node, radius))?;
     let last = (first..clip_w)
         .rev()
         .find(|&col| inside_node_shape(clip_x + col as i32, py, node, radius))?;
@@ -831,7 +832,13 @@ mod kernel_bench {
                 black_box(&mut fill_frame),
                 1920,
                 1080,
-                RoundedRect { x: 0, y: 0, width: 1920, height: 1080, radius: 12 },
+                RoundedRect {
+                    x: 0,
+                    y: 0,
+                    width: 1920,
+                    height: 1080,
+                    radius: 12,
+                },
                 None,
                 color,
             )
@@ -845,7 +852,11 @@ mod node_row_span_golden {
     use super::*;
 
     /// Old per-pixel loop, kept as the reference the row-span path must match.
-    fn reference_spans(clip: (i32, i32, u32, u32), node: (i32, i32, u32, u32), corner: u32) -> Vec<(i32, i32)> {
+    fn reference_spans(
+        clip: (i32, i32, u32, u32),
+        node: (i32, i32, u32, u32),
+        corner: u32,
+    ) -> Vec<(i32, i32)> {
         let (x, y, w, h) = clip;
         let mut out = Vec::new();
         for row in 0..h as i32 {
@@ -858,7 +869,11 @@ mod node_row_span_golden {
         out
     }
 
-    fn fast_spans(clip: (i32, i32, u32, u32), node: (i32, i32, u32, u32), corner: u32) -> Vec<(i32, i32)> {
+    fn fast_spans(
+        clip: (i32, i32, u32, u32),
+        node: (i32, i32, u32, u32),
+        corner: u32,
+    ) -> Vec<(i32, i32)> {
         let (x, y, w, h) = clip;
         let mut out = Vec::new();
         for row in 0..h as i32 {
@@ -888,7 +903,12 @@ mod node_row_span_golden {
                 1 + rnd(180),
             );
             let corner = rnd(120);
-            let clip = (rnd(120) as i32 - 20, rnd(120) as i32 - 20, 1 + rnd(150), 1 + rnd(150));
+            let clip = (
+                rnd(120) as i32 - 20,
+                rnd(120) as i32 - 20,
+                1 + rnd(150),
+                1 + rnd(150),
+            );
             assert_eq!(
                 fast_spans(clip, node, corner),
                 reference_spans(clip, node, corner),

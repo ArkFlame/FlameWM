@@ -4,8 +4,7 @@ use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputSnapshot};
 use flamewm_api::geometry::{Rect, Size};
 use flamewm_api::input::PointerPosition;
 use flamewm_api::ports::{
-    ApplicationPort, DisplayPort, InputPort, SessionPort, ShortcutPort, WindowPort,
-    WorkspacePort,
+    ApplicationPort, DisplayPort, InputPort, SessionPort, ShortcutPort, WindowPort, WorkspacePort,
 };
 use flamewm_api::settings::{SettingValue, SettingsChange, SettingsTransaction};
 use flamewm_api::shortcuts::{ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE};
@@ -56,18 +55,10 @@ impl WorkspacePort for FakeEngine {
     fn workspace_snapshot(&self) -> FlameResult<WorkspaceSnapshot> {
         Err(FlameError::new(ErrorCode::Unsupported, "fake workspace"))
     }
-    fn activate_workspace(
-        &mut self,
-        _index: usize,
-        _expected_revision: u64,
-    ) -> FlameResult<()> {
+    fn activate_workspace(&mut self, _index: usize, _expected_revision: u64) -> FlameResult<()> {
         Err(FlameError::new(ErrorCode::Unsupported, "fake workspace"))
     }
-    fn move_window_to_workspace(
-        &mut self,
-        _window: WindowRef,
-        _target: usize,
-    ) -> FlameResult<()> {
+    fn move_window_to_workspace(&mut self, _window: WindowRef, _target: usize) -> FlameResult<()> {
         Err(FlameError::new(ErrorCode::Unsupported, "fake workspace"))
     }
     fn switch_workspace_with_window(
@@ -100,10 +91,7 @@ impl DisplayPort for FakeEngine {
 }
 
 impl ShortcutPort for FakeEngine {
-    fn prepare_shortcuts(
-        &mut self,
-        _desired: &BTreeMap<String, KeyBinding>,
-    ) -> FlameResult<()> {
+    fn prepare_shortcuts(&mut self, _desired: &BTreeMap<String, KeyBinding>) -> FlameResult<()> {
         Ok(())
     }
     fn commit_shortcuts(&mut self) -> FlameResult<()> {
@@ -398,10 +386,7 @@ fn fixture_path(name: &str) -> PathBuf {
     path
 }
 
-fn host_with_display(
-    path: &std::path::Path,
-    display: DisplaySnapshot,
-) -> PlatformHost<FakeEngine> {
+fn host_with_display(path: &std::path::Path, display: DisplaySnapshot) -> PlatformHost<FakeEngine> {
     PlatformHost::new(
         FakeEngine {
             display,

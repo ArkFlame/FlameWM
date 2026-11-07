@@ -1,7 +1,7 @@
 //! Typed shell-facing state for optional host integrations.
 
 /// Highest volume any audio path accepts: the shell, the platform media keys, the helper
-/// protocol and the PulseAudio backend all clamp to this one bound.
+/// protocol and the `PulseAudio` backend all clamp to this one bound.
 pub const MAX_VOLUME_PERCENT: u8 = 150;
 /// Volume cap without "raise maximum volume" (over-amplification).
 pub const BASE_VOLUME_PERCENT: u8 = 100;

@@ -1148,11 +1148,9 @@ fn context_menu_near_bottom_panel_clamps_above_the_panel_strip() {
 fn secondary_monitor_swap_with_unchanged_generation_is_detected() {
     let previous = two_output_snapshot();
     let contexts = panel_contexts_for_snapshot(&previous, PanelEdge::Bottom);
-    assert!(
-        contexts
-            .iter()
-            .all(|ctx| panel_context_is_current(ctx, &previous))
-    );
+    assert!(contexts
+        .iter()
+        .all(|ctx| panel_context_is_current(ctx, &previous)));
     let mut moved = previous.clone();
     // KDE or xrandr may deliver CRTC geometry before changing the
     // generation/revision: secondary placement must not stay cached.

@@ -45,7 +45,7 @@ impl History {
             }
         }
         let packed = text.len() + runs.len() * size_of::<StyleRun>();
-        if packed < line.len() * size_of::<Cell>() {
+        if packed < std::mem::size_of_val(line) {
             Self::Packed {
                 text: text.into_boxed_str(),
                 runs: runs.into_boxed_slice(),

@@ -200,7 +200,7 @@ pub fn gamma_ramp(size: usize, intensity: u8) -> (Vec<u16>, Vec<u16>, Vec<u16>) 
         (0..size)
             .map(|index| {
                 let full = u64::from(u16::MAX) * index as u64 / (size as u64 - 1).max(1);
-                u16::try_from(u64::from(full) * u64::from(permille) / 1000).unwrap_or(u16::MAX)
+                u16::try_from(full * u64::from(permille) / 1000).unwrap_or(u16::MAX)
             })
             .collect()
     };

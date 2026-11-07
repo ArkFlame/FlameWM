@@ -868,7 +868,7 @@ mod tests {
         );
         assert_eq!(document.positions["sticky-move-preview"], (42.0, 60.0));
         assert_eq!(document.sizes["sticky-move-preview"], (190.0, 190.0));
-        assert_eq!(document.visible["sticky-move-preview"], true);
+        assert!(document.visible["sticky-move-preview"]);
 
         motion.phase = UiActionPhase::Release;
         motion.x = 52.0;
@@ -889,7 +889,7 @@ mod tests {
             document.texts["sticky-1-text"],
             "keep this here while dragging"
         );
-        assert_eq!(document.visible["sticky-move-preview"], false);
+        assert!(!document.visible["sticky-move-preview"]);
     }
 
     #[test]
@@ -923,7 +923,7 @@ mod tests {
         assert!(sticky.persist_pending, "cancelling commits the active edit");
         let mut document = RecordingUiDoc::default();
         sync_sticky_move_preview(&mut document, None).expect("hide cancelled outline");
-        assert_eq!(document.visible["sticky-move-preview"], false);
+        assert!(!document.visible["sticky-move-preview"]);
     }
 
     #[test]

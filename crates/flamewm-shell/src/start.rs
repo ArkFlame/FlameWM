@@ -55,7 +55,7 @@ pub fn state(applications: Vec<DesktopApplication>) -> StartState {
 
 #[cfg(test)]
 mod category_fallback_tests {
-    use super::{StartCategory, category_after_favorites};
+    use super::{category_after_favorites, StartCategory};
 
     #[test]
     fn empty_favorites_view_falls_back_to_all() {

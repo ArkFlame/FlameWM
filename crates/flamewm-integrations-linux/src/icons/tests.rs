@@ -1,6 +1,5 @@
 use super::*;
 
-
 const HICOLOR_16_INDEX: &str =
     "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
 
@@ -446,8 +445,7 @@ fn live_theme_switch_a_b_a_never_serves_stale_image() {
     );
     let size = IconSize::new(16, 16);
     let data = vec![dir.clone()];
-    let mut resolver =
-        IconResolver::new(dir.clone(), vec!["ThemeA".to_owned()], data.clone(), 1);
+    let mut resolver = IconResolver::new(dir.clone(), vec!["ThemeA".to_owned()], data.clone(), 1);
     let first = resolver
         .prepare_application("c3-switch", size)
         .expect("theme A");

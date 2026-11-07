@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::view::{self, Column, ColumnSort};
-use crate::{list_directory, list_directory_streamed, sort_listing, Entry, SortBy, FIRST_BATCH};
+use crate::{Entry, FIRST_BATCH, SortBy, list_directory, list_directory_streamed, sort_listing};
 
 struct Scratch(PathBuf);
 impl Scratch {
@@ -12,14 +12,21 @@ impl Scratch {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("flamewm-listing-{tag}-{}-{nanos}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "flamewm-listing-{tag}-{}-{nanos}",
+            std::process::id()
+        ));
         fs::create_dir_all(&dir).unwrap();
         Self(dir)
     }
-    fn path(&self) -> &Path { &self.0 }
+    fn path(&self) -> &Path {
+        &self.0
+    }
 }
 impl Drop for Scratch {
-    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Mixed folders, hidden files, case variants and sizes so every sort key is exercised.
@@ -28,7 +35,11 @@ fn populate(dir: &Path, files: usize) {
     fs::create_dir_all(dir.join("folder-a")).unwrap();
     fs::write(dir.join(".hidden"), b"h").unwrap();
     for index in 0..files {
-        let name = if index % 3 == 0 { format!("File-{index:05}.TXT") } else { format!("file-{index:05}.log") };
+        let name = if index % 3 == 0 {
+            format!("File-{index:05}.TXT")
+        } else {
+            format!("file-{index:05}.log")
+        };
         fs::write(dir.join(name), vec![b'x'; (index * 37) % 911]).unwrap();
     }
 }
@@ -54,9 +65,16 @@ fn streamed_batches_sort_to_the_bulk_listing_order() {
             .unwrap();
             assert!(finished);
             assert_eq!(sizes.iter().sum::<usize>(), bulk.len());
-            assert_eq!(sizes[0], FIRST_BATCH, "first rows must come from a small first batch");
+            assert_eq!(
+                sizes[0], FIRST_BATCH,
+                "first rows must come from a small first batch"
+            );
             sort_listing(&mut streamed, sort);
-            assert_eq!(paths(&streamed), paths(&bulk), "sort={sort:?} hidden={show_hidden}");
+            assert_eq!(
+                paths(&streamed),
+                paths(&bulk),
+                "sort={sort:?} hidden={show_hidden}"
+            );
             assert_eq!(streamed, bulk, "sort={sort:?} hidden={show_hidden}");
         }
     }
@@ -77,7 +95,13 @@ fn small_directory_is_one_batch_and_empty_directory_emits_nothing() {
 
     let empty = Scratch::new("empty");
     let mut emitted = 0;
-    assert!(list_directory_streamed(empty.path(), false, |_| { emitted += 1; true }).unwrap());
+    assert!(
+        list_directory_streamed(empty.path(), false, |_| {
+            emitted += 1;
+            true
+        })
+        .unwrap()
+    );
     assert_eq!(emitted, 0);
 }
 
@@ -100,9 +124,18 @@ fn ui_sort_check_agrees_with_sort_entries() {
     let scratch = Scratch::new("check");
     populate(scratch.path(), 400);
     let mut entries = list_directory(scratch.path(), true, SortBy::Name).unwrap();
-    let by_name = ColumnSort { column: Column::Name, descending: false };
-    let by_size = ColumnSort { column: Column::Size, descending: false };
-    assert!(view::is_sorted_by(&entries, by_name), "worker order is the default column order");
+    let by_name = ColumnSort {
+        column: Column::Name,
+        descending: false,
+    };
+    let by_size = ColumnSort {
+        column: Column::Size,
+        descending: false,
+    };
+    assert!(
+        view::is_sorted_by(&entries, by_name),
+        "worker order is the default column order"
+    );
     view::sort_entries(&mut entries, by_size);
     assert!(view::is_sorted_by(&entries, by_size));
 }

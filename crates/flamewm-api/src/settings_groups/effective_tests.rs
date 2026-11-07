@@ -8,7 +8,7 @@ fn stored_value(default: &SettingValue) -> SettingValue {
         SettingValue::Integer(value) => SettingValue::Integer(value + 1),
         SettingValue::Percent(value) => SettingValue::Percent(value.wrapping_add(1)),
         SettingValue::Text(value) => SettingValue::Text(format!("{value}-stored")),
-        other => other.clone(),
+        other @ SettingValue::Rgb(_) => other.clone(),
     }
 }
 

@@ -15,12 +15,19 @@ fn installed_default_measure_drives_unscoped_layout_without_counting() {
     let before = unscoped_measure_count();
     let width = layout_text("abc", 13.0, 1000.0, TextWrap::NoWrap, false).lines[0].width;
     assert!((width - 30.0).abs() < 1e-4, "width {width}");
-    assert_eq!(unscoped_measure_count(), before, "default measure is not an unscoped measure");
+    assert_eq!(
+        unscoped_measure_count(),
+        before,
+        "default measure is not an unscoped measure"
+    );
 
     let scoped = |text: &str, _: f32, _: u16| text.chars().count() as f32;
     let width = with_measure(&scoped, || {
         layout_text("abc", 13.0, 1000.0, TextWrap::NoWrap, false).lines[0].width
     });
-    assert!((width - 3.0).abs() < 1e-4, "scoped override must win, got {width}");
+    assert!(
+        (width - 3.0).abs() < 1e-4,
+        "scoped override must win, got {width}"
+    );
     assert!(!set_default_measure(&DEFAULT), "first install wins");
 }

@@ -3,19 +3,19 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use flamewm_api::DesktopAppId;
 use flamewm_api::session::SessionCapabilities;
+use flamewm_api::DesktopAppId;
 use flamewm_shell_core::StartModel;
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
-use crate::ShellSnapshot;
 use crate::icon_loader::{IconLoader, IconTarget};
 use crate::projection::{PanelView, TaskbarItems};
 use crate::start::StartCategory;
+use crate::ShellSnapshot;
 
 mod icon_binding;
 mod icon_cache;

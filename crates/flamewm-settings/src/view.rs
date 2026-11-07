@@ -322,10 +322,10 @@ mod tests {
             let button_start = surfaces[..position]
                 .rfind("<button")
                 .unwrap_or_else(|| panic!("selector {id} must be a button"));
-            let button_end = surfaces[position..]
-                .find("</button>")
-                .map(|end| position + end + "</button>".len())
-                .unwrap_or_else(|| panic!("selector {id} must have a closing button"));
+            let button_end = surfaces[position..].find("</button>").map_or_else(
+                || panic!("selector {id} must have a closing button"),
+                |end| position + end + "</button>".len(),
+            );
             assert!(
                 surfaces[button_start..button_end].contains("class=\"segment"),
                 "selector {id} must inherit the shared button text token"

@@ -752,8 +752,8 @@ fn full_panel_projection_succeeds_on_real_artifact() {
 // TRIGGER: taskbar_css_size edge branches or project_taskbar_height sizing.
 #[test]
 fn taskbar_size_fills_panel_window_on_every_edge() {
-    use flamewm_api::PanelEdge;
     use flamewm_api::panels::PanelSnapshot;
+    use flamewm_api::PanelEdge;
     let panel = |edge, width, height| PanelSnapshot {
         output: flamewm_api::OutputId::new("default"),
         edge,

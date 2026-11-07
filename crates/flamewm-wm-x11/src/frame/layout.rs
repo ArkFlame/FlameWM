@@ -66,7 +66,7 @@ pub fn controls_width_for_titlebar(titlebar_h: i32) -> i32 {
 
 /// Corner resize grip side for the physical titlebar height.
 ///
-/// Measured on Xvfb with XTest: a parent's Shape Bounding region clips a child's input region, so
+/// Measured on Xvfb with `XTest`: a parent's Shape Bounding region clips a child's input region, so
 /// an `InputOnly` grip only receives presses where the rounded mask still covers the pixel. A
 /// 16 px square at a radius-24 corner still covers the visible arc triangle (~133 px² of grab area
 /// over rows 2..15), so it feels like Wayland's unclipped 16 px `CORNER_GRIP` square.

@@ -17,7 +17,11 @@ pub fn is_focusable(node: &CompiledNode) -> bool {
 /// Next focusable node after `current` in document order (before it when `reverse`).
 /// With no current focus, Tab picks the first node and Shift+Tab the last.
 #[must_use]
-pub fn next_focusable(document: &CompiledDocument, current: Option<u32>, reverse: bool) -> Option<u32> {
+pub fn next_focusable(
+    document: &CompiledDocument,
+    current: Option<u32>,
+    reverse: bool,
+) -> Option<u32> {
     next_focusable_where(document, current, reverse, |_| true)
 }
 
@@ -34,12 +38,20 @@ pub fn next_focusable_where(
         return None;
     }
     let focusable = |index: usize| is_focusable(&document.nodes[index]) && visible(index as u32);
-    match current.map(|index| index as usize).filter(|index| *index < count) {
+    match current
+        .map(|index| index as usize)
+        .filter(|index| *index < count)
+    {
         None => {
             if reverse {
-                (0..count).rev().find(|&index| focusable(index)).map(|index| index as u32)
+                (0..count)
+                    .rev()
+                    .find(|&index| focusable(index))
+                    .map(|index| index as u32)
             } else {
-                (0..count).find(|&index| focusable(index)).map(|index| index as u32)
+                (0..count)
+                    .find(|&index| focusable(index))
+                    .map(|index| index as u32)
             }
         }
         Some(current) => {
@@ -49,7 +61,10 @@ pub fn next_focusable_where(
             } else {
                 Box::new(steps.map(move |step| (current + step) % count))
             };
-            order.filter(|&index| focusable(index)).map(|index| index as u32).next()
+            order
+                .filter(|&index| focusable(index))
+                .map(|index| index as u32)
+                .next()
         }
     }
 }
@@ -79,12 +94,8 @@ impl FocusOwner {
 
     /// Focus `index` when it is a focusable node, otherwise clear focus.
     pub fn set(&mut self, document: &CompiledDocument, index: Option<u32>) -> bool {
-        let next = index.filter(|&index| {
-            document
-                .nodes
-                .get(index as usize)
-                .is_some_and(is_focusable)
-        });
+        let next =
+            index.filter(|&index| document.nodes.get(index as usize).is_some_and(is_focusable));
         let changed = next != self.focus;
         self.focus = next;
         changed
@@ -113,7 +124,11 @@ impl FocusOwner {
                 let next = next_focusable_where(document, self.focus, shift, visible);
                 let changed = next != self.focus;
                 self.focus = next;
-                if changed { FocusKey::Moved } else { FocusKey::Ignored }
+                if changed {
+                    FocusKey::Moved
+                } else {
+                    FocusKey::Ignored
+                }
             }
             "Return" | "Enter" | "KP_Enter" | "space" | "Space" | " " => match self.focus {
                 Some(index) => FocusKey::Activate(index),
@@ -141,7 +156,7 @@ mod tests {
 
     use crate::{CompiledDocument, CompiledNode, InteractionState, NodeKind, Style};
 
-    use super::{action_for, next_focusable, next_focusable_where, FocusKey, FocusOwner};
+    use super::{FocusKey, FocusOwner, action_for, next_focusable, next_focusable_where};
 
     fn node(kind: NodeKind, action: &'static str) -> CompiledNode {
         CompiledNode {
@@ -198,20 +213,45 @@ mod tests {
     fn tab_skips_hidden_controls() {
         let doc = document();
         let hidden_three = |index: u32| index != 3;
-        assert_eq!(next_focusable_where(&doc, Some(1), false, hidden_three), Some(4));
-        assert_eq!(next_focusable_where(&doc, Some(4), true, hidden_three), Some(1));
+        assert_eq!(
+            next_focusable_where(&doc, Some(1), false, hidden_three),
+            Some(4)
+        );
+        assert_eq!(
+            next_focusable_where(&doc, Some(4), true, hidden_three),
+            Some(1)
+        );
         let mut owner = FocusOwner::default();
-        assert_eq!(owner.handle_key_where(&doc, "Tab", false, hidden_three), FocusKey::Moved);
+        assert_eq!(
+            owner.handle_key_where(&doc, "Tab", false, hidden_three),
+            FocusKey::Moved
+        );
         assert_eq!(owner.focus(), Some(1));
-        assert_eq!(owner.handle_key_where(&doc, "Tab", false, hidden_three), FocusKey::Moved);
+        assert_eq!(
+            owner.handle_key_where(&doc, "Tab", false, hidden_three),
+            FocusKey::Moved
+        );
         assert_eq!(owner.focus(), Some(4), "the hidden node at 3 is skipped");
     }
 
     #[test]
     fn document_without_focusables_has_no_focus() {
-        let doc = CompiledDocument { nodes: vec![node(NodeKind::Element, "")], ..document() };
+        let doc = CompiledDocument {
+            nodes: vec![node(NodeKind::Element, "")],
+            ..document()
+        };
         assert_eq!(next_focusable(&doc, None, false), None);
-        assert_eq!(next_focusable(&CompiledDocument { nodes: vec![], ..document() }, None, false), None);
+        assert_eq!(
+            next_focusable(
+                &CompiledDocument {
+                    nodes: vec![],
+                    ..document()
+                },
+                None,
+                false
+            ),
+            None
+        );
     }
 
     #[test]
@@ -221,9 +261,15 @@ mod tests {
         assert_eq!(owner.handle_key(&doc, "Return", false), FocusKey::Ignored);
         assert_eq!(owner.handle_key(&doc, "Tab", false), FocusKey::Moved);
         assert_eq!(owner.focus(), Some(1));
-        assert_eq!(owner.handle_key(&doc, "space", false), FocusKey::Activate(1));
+        assert_eq!(
+            owner.handle_key(&doc, "space", false),
+            FocusKey::Activate(1)
+        );
         // X11 canonical name for the Space keysym (events.rs canonical_key_name).
-        assert_eq!(owner.handle_key(&doc, "Space", false), FocusKey::Activate(1));
+        assert_eq!(
+            owner.handle_key(&doc, "Space", false),
+            FocusKey::Activate(1)
+        );
         assert_eq!(owner.handle_key(&doc, "Tab", true), FocusKey::Moved);
         assert_eq!(owner.focus(), Some(4));
         assert_eq!(action_for(&doc, 4), Some("close"));

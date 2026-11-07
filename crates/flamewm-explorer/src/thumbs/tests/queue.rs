@@ -12,7 +12,12 @@ fn pop_is_fifo_for_one_pass() {
         queue.push(key_at(index));
     }
     let order: Vec<PathBuf> = (0..4).map(|_| queue.pop().path).collect();
-    assert_eq!(order, (0..4).map(|i| PathBuf::from(format!("img-{i:03}.png"))).collect::<Vec<_>>());
+    assert_eq!(
+        order,
+        (0..4)
+            .map(|i| PathBuf::from(format!("img-{i:03}.png")))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -29,7 +34,10 @@ fn pass_start_drops_queued_jobs_and_frees_their_keys() {
     assert_eq!(cache.start_pass(&queue), 4);
     // The queue is empty and no stale key is pending, so a visible row can request again.
     assert!(queue.retain(|_| true).is_empty());
-    assert!(cache.begin(&key_at(0)), "a dropped key is requestable again");
+    assert!(
+        cache.begin(&key_at(0)),
+        "a dropped key is requestable again"
+    );
     assert!(cache.begin(&key_at(2)), "pass 2 re-requests visible row 2");
 }
 
@@ -43,7 +51,10 @@ fn in_flight_decode_keeps_its_pending_mark_until_complete() {
     // The decoder takes the job: it is no longer queued, so a pass start does not touch it.
     assert_eq!(queue.pop(), key);
     assert_eq!(cache.start_pass(&queue), 0);
-    assert!(!cache.begin(&key), "an in-flight decode is not requested twice");
+    assert!(
+        !cache.begin(&key),
+        "an in-flight decode is not requested twice"
+    );
     cache.complete(key.clone(), None);
     assert!(matches!(cache.lookup(&key), Lookup::Failed));
 }
@@ -54,7 +65,10 @@ fn retain_keeps_matching_jobs_in_order() {
     for index in 0..6 {
         queue.push(key_at(index));
     }
-    let dropped = queue.retain(|key| key.path.to_string_lossy().ends_with("0.png") || key.path.to_string_lossy().ends_with("2.png"));
+    let dropped = queue.retain(|key| {
+        key.path.to_string_lossy().ends_with("0.png")
+            || key.path.to_string_lossy().ends_with("2.png")
+    });
     assert_eq!(dropped.len(), 4);
     assert_eq!(queue.pop().path, PathBuf::from("img-000.png"));
     assert_eq!(queue.pop().path, PathBuf::from("img-002.png"));

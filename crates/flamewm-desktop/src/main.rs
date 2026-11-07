@@ -16,10 +16,10 @@ use flamewm_api::{OutputId, Point, Rect};
 use flamewm_applications::DesktopEntry;
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::{ControlClient, ControlSignalClient, MutationDispatcher};
-use flamewm_dbus_reactor::BusKind;
 use flamewm_conversion_core::conversion::{
     active_conversions, cancel_conversions, convert_file, offered_formats, offered_tools, run_tool,
 };
+use flamewm_dbus_reactor::BusKind;
 use flamewm_desktop_core::file_actions::{
     CommandIntent, EntryMenuAction, LauncherOpen, create_new_folder, entry_context_menu,
     launcher_open_kind, open_terminal, rename_entry_no_replace, shortcut_destination,
@@ -82,9 +82,9 @@ mod sticky;
 #[path = "../ui_contract.rs"]
 mod ui_contract;
 mod wallpaper_fit;
-mod wallpaper_mean;
 #[allow(clippy::duplicate_mod)]
 mod wallpaper_loader;
+mod wallpaper_mean;
 mod wallpaper_stamp;
 mod widgets;
 mod workspace_sync;
@@ -314,7 +314,10 @@ pub fn main() -> Result<(), String> {
             None
         }
     };
-    state_cell.borrow_mut().mutations = workspace_mutations.clone();
+    state_cell
+        .borrow_mut()
+        .mutations
+        .clone_from(&workspace_mutations);
     if let Some(dispatcher) = workspace_mutations.as_ref() {
         let dispatcher = Arc::clone(dispatcher);
         let registration = reactor.register_raw_fd_with_action(

@@ -640,7 +640,7 @@ mod tests {
         assert_eq!(decode_favorites(&text), ids);
         assert_eq!(decode_favorites(" a.desktop ;; a.desktop;"), ["a.desktop"]);
         assert_eq!(
-            encode_favorites(&["x;y".into(), "".into(), "ok".into()]),
+            encode_favorites(&["x;y".into(), String::new(), "ok".into()]),
             "ok"
         );
         assert_eq!(decode_favorites(""), Vec::<String>::new());

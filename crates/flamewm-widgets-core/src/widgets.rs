@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 
 use flamewm_api::{FlameError, FlameResult, Point, Rect};
 
+use crate::widget_grid::{self, GridMetrics, Placement, Span};
 use flamewm_desktop_core::atomic_file::io_error;
 use flamewm_desktop_core::persistence::{hex, unhex};
 use flamewm_desktop_core::sticky::Rgb;
-use crate::widget_grid::{self, GridMetrics, Placement, Span};
 
 pub const MAX_WIDGETS: usize = 8;
 pub const MIN_WIDGET_SIZE: i32 = 64;

@@ -127,17 +127,30 @@ fn compile_parsed(
 const TEXT_SHADOW_TOKEN: &str = "--text-shadow";
 const DEFAULT_TEXT_SHADOW: &str = "0px 1px 2px #00000059";
 
-fn root_text_shadow(rules: &[Rule], variables: &HashMap<String, u16>) -> Result<Option<TextShadow>, String> {
+fn root_text_shadow(
+    rules: &[Rule],
+    variables: &HashMap<String, u16>,
+) -> Result<Option<TextShadow>, String> {
     let mut token = DEFAULT_TEXT_SHADOW;
-    for rule in rules.iter().filter(|rule| rule.selector.state == PseudoState::Root) {
-        for declaration in rule.declarations.iter().filter(|d| d.name == TEXT_SHADOW_TOKEN) {
+    for rule in rules
+        .iter()
+        .filter(|rule| rule.selector.state == PseudoState::Root)
+    {
+        for declaration in rule
+            .declarations
+            .iter()
+            .filter(|d| d.name == TEXT_SHADOW_TOKEN)
+        {
             token = declaration.value.as_str();
         }
     }
     parse_text_shadow(token, variables)
 }
 
-fn parse_text_shadow(value: &str, variables: &HashMap<String, u16>) -> Result<Option<TextShadow>, String> {
+fn parse_text_shadow(
+    value: &str,
+    variables: &HashMap<String, u16>,
+) -> Result<Option<TextShadow>, String> {
     if value == "none" {
         return Ok(None);
     }
@@ -1045,7 +1058,14 @@ mod tests {
         let variables = interactive_fixture().document.variables;
         // Built-in tokens are always present; the sheet's `--accent` must not duplicate the built-in.
         assert_eq!(variables.iter().filter(|v| v.name == "--accent").count(), 1);
-        assert_eq!(variables.iter().filter(|v| v.name == "--accent").next().unwrap().default, Color::rgb(0xef, 0x44, 0x44));
+        assert_eq!(
+            variables
+                .iter()
+                .find(|v| v.name == "--accent")
+                .unwrap()
+                .default,
+            Color::rgb(0xef, 0x44, 0x44)
+        );
     }
 
     #[test]
@@ -1142,9 +1162,15 @@ mod tests {
             r#"<body><div id="plain">x</div><div id="off">y</div></body>"#,
             ":root { --text-shadow: 1px 2px #000000ff; } #off { text-shadow: none; }",
             CompileOptions::default(),
-        ).expect("token must compile");
-        let plain = style_of(&result, "plain").text_shadow.expect("token applies");
-        assert_eq!((plain.offset_x, plain.offset_y, plain.blur_radius), (1.0, 2.0, 0.0));
+        )
+        .expect("token must compile");
+        let plain = style_of(&result, "plain")
+            .text_shadow
+            .expect("token applies");
+        assert_eq!(
+            (plain.offset_x, plain.offset_y, plain.blur_radius),
+            (1.0, 2.0, 0.0)
+        );
         assert_eq!(style_of(&result, "off").text_shadow, None);
     }
 
@@ -1175,7 +1201,10 @@ mod tests {
             CompileOptions::default(),
         )
         .expect("sheet override must compile");
-        assert_eq!(token_default(&overridden, "a"), Color::rgb(0xef, 0x44, 0x44));
+        assert_eq!(
+            token_default(&overridden, "a"),
+            Color::rgb(0xef, 0x44, 0x44)
+        );
     }
 
     #[test]

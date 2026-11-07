@@ -196,7 +196,10 @@ mod tests {
                         blend_span(std::hint::black_box(&mut span), &luts);
                     }
                 }
-                println!("KLUT round {round} {variant}: {:.3} ns/px", start.elapsed().as_nanos() as f64 / (2000.0 * 1920.0));
+                println!(
+                    "KLUT round {round} {variant}: {:.3} ns/px",
+                    start.elapsed().as_nanos() as f64 / (2000.0 * 1920.0)
+                );
             }
         }
     }
@@ -210,7 +213,12 @@ mod tests {
             seed ^= seed << 5;
             seed
         };
-        for color in [[200, 10, 90, 255], [30, 200, 60, 128], [0, 0, 0, 1], [255, 255, 255, 0]] {
+        for color in [
+            [200, 10, 90, 255],
+            [30, 200, 60, 128],
+            [0, 0, 0, 1],
+            [255, 255, 255, 0],
+        ] {
             let alpha = f32::from(color[3]) / 255.0;
             let luts = blend_luts(color, alpha);
             let mut want: Vec<u8> = (0..256 * 4).map(|i| i as u8).collect();

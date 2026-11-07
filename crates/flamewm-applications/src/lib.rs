@@ -1,18 +1,18 @@
+mod browser_secrets;
 mod directory_open;
 pub mod launch_feedback;
-pub mod terminal;
-mod browser_secrets;
 mod opener;
+pub mod terminal;
 use browser_secrets::*;
-#[cfg(test)]
-use opener::*;
-pub use opener::{open_target, preferred_file_opener};
 pub use directory_open::{
     DirectoryHandler, DirectorySpawner, decide_directory_handler, open_directory, route_directory,
 };
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
 use flamewm_api::{DesktopAppId, ErrorCode, FlameError, FlameResult};
 use flamewm_session_core::{installed_kwallet_generations, resolve_kwallet_version};
+#[cfg(test)]
+use opener::*;
+pub use opener::{open_target, preferred_file_opener};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -473,7 +473,6 @@ fn expand_exec_with_path(
 
 /// Select a desktop's native MIME opener once, without depending on `FlameWM`
 /// pretending to be another desktop or modifying the user's MIME database.
-
 #[must_use]
 fn is_brave_program(program: &str) -> bool {
     matches!(
@@ -492,7 +491,6 @@ fn is_helium_program(program: &str) -> bool {
         Some("helium-browser" | "helium" | "helium-bin" | "net.imput.helium")
     )
 }
-
 
 pub fn launch_argv(argv: &[String], options: &ApplicationLaunchOptions) -> FlameResult<()> {
     let program = argv
@@ -860,10 +858,22 @@ mod tests {
         .unwrap();
         // Invalid UTF-8 makes read_to_string fail; discovery must skip it, not abort.
         fs::write(dir.join("broken.desktop"), [0xff_u8, 0xfe, 0x00]).unwrap();
-        let handlers = ApplicationCatalog::from_dirs_with_visibility(std::slice::from_ref(&dir), true).unwrap();
-        assert!(handlers.entries().iter().any(|e| e.application.name == "Viewer"));
+        let handlers =
+            ApplicationCatalog::from_dirs_with_visibility(std::slice::from_ref(&dir), true)
+                .unwrap();
+        assert!(
+            handlers
+                .entries()
+                .iter()
+                .any(|e| e.application.name == "Viewer")
+        );
         let start_menu = ApplicationCatalog::from_dirs(std::slice::from_ref(&dir)).unwrap();
-        assert!(start_menu.entries().iter().all(|e| e.application.name != "Viewer"));
+        assert!(
+            start_menu
+                .entries()
+                .iter()
+                .all(|e| e.application.name != "Viewer")
+        );
     }
 
     #[test]

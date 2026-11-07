@@ -1,4 +1,4 @@
-//! Blue light filter on X11: one RandR gamma upload per output.
+//! Blue light filter on X11: one `RandR` gamma upload per output.
 //!
 //! X11 exposes the gamma ramp through `RandR` `SetCrtcGamma`, so the filter is a real output
 //! calibration: every pixel the server scans out is warmed. The schedule needs a wake when its
@@ -25,7 +25,7 @@ struct Applied {
 thread_local! {
     static APPLIED: RefCell<Option<Applied>> = const { RefCell::new(None) };
     /// Committed configuration, refreshed at the single settings sync point.
-    static CONFIG: Cell<BlueLightConfig> = Cell::new(DEFAULTS);
+    static CONFIG: Cell<BlueLightConfig> = const { Cell::new(DEFAULTS) };
 }
 
 /// The product defaults, restated as a `const` so the thread-local starts without a call.
@@ -90,8 +90,8 @@ pub(crate) fn apply_at(
         let (red, green, blue) = flamewm_api::blue_light::gamma_ramp(size, intensity);
         let uploaded = conn
             .randr_set_crtc_gamma(crtc, &red, &green, &blue)
-            .map_err(|error| x11rb::errors::ReplyError::ConnectionError(error));
-        let uploaded = uploaded.and_then(|cookie| cookie.check());
+            .map_err(x11rb::errors::ReplyError::ConnectionError);
+        let uploaded = uploaded.and_then(x11rb::cookie::VoidCookie::check);
         if let Err(error) = uploaded {
             // A read-only gamma is a property of the server, not a WM failure.
             eprintln!("flamewm: blue light filter not applied to crtc {crtc}: {error}");
@@ -146,8 +146,8 @@ pub(crate) fn next_refresh_delay(config: BlueLightConfig, now_minutes: u32) -> O
     if !config.night_shift || !config.schedule {
         return None;
     }
-    let start = u32::from(config.start_minutes);
-    let end = u32::from(config.end_minutes);
+    let start = config.start_minutes;
+    let end = config.end_minutes;
     if start == end {
         return None;
     }

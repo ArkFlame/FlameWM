@@ -403,7 +403,12 @@ pub struct DirListings {
 
 impl DirListings {
     fn items(&self, dir: &Path) -> Arc<[DirItem]> {
-        if let Some(hit) = self.by_dir.lock().ok().and_then(|map| map.get(dir).cloned()) {
+        if let Some(hit) = self
+            .by_dir
+            .lock()
+            .ok()
+            .and_then(|map| map.get(dir).cloned())
+        {
             return hit;
         }
         let items: Arc<[DirItem]> = read_dir_items(dir).into();
@@ -578,10 +583,7 @@ fn watch_dirs(
             out.append(&mut level);
             break;
         }
-        let groups: Vec<Vec<PathBuf>> = level
-            .iter()
-            .map(|dir| child_dirs(dir, listings))
-            .collect();
+        let groups: Vec<Vec<PathBuf>> = level.iter().map(|dir| child_dirs(dir, listings)).collect();
         out.append(&mut level);
         level = interleave_by_parent(&groups);
     }
@@ -1154,7 +1156,12 @@ impl IconLookupIndex {
         generation: u64,
         listings: &Arc<DirListings>,
     ) -> Self {
-        Self::build_with(theme_names, data_dirs, generation, Some(Arc::clone(listings)))
+        Self::build_with(
+            theme_names,
+            data_dirs,
+            generation,
+            Some(Arc::clone(listings)),
+        )
     }
 
     fn build_with(

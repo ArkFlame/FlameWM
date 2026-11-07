@@ -66,8 +66,8 @@ pub fn with_measure<R>(measure: MeasureFn<'_>, f: impl FnOnce() -> R) -> R {
 }
 
 /// Process-wide layout measure, used on any thread without a scoped [`with_measure`].
-static DEFAULT_MEASURE: std::sync::OnceLock<&'static (dyn Fn(&str, f32, u16) -> f32 + Sync)> =
-    std::sync::OnceLock::new();
+type SyncMeasureFn = &'static (dyn Fn(&str, f32, u16) -> f32 + Sync);
+static DEFAULT_MEASURE: std::sync::OnceLock<SyncMeasureFn> = std::sync::OnceLock::new();
 
 /// Installs the process-wide layout measure. The first install wins; `false` means one was already set.
 pub fn set_default_measure(measure: &'static (dyn Fn(&str, f32, u16) -> f32 + Sync)) -> bool {
@@ -77,9 +77,11 @@ pub fn set_default_measure(measure: &'static (dyn Fn(&str, f32, u16) -> f32 + Sy
 /// Layout width of `text` at `font_size`, measured by the scoped hook, else the process-wide
 /// default, else by the render-core fontdue model, else by the per-char estimate.
 fn text_width(text: &str, font_size: f32, weight: u16) -> f32 {
-    let hook = MEASURE_HOOK
-        .with(std::cell::Cell::get)
-        .or_else(|| DEFAULT_MEASURE.get().map(|measure| *measure as MeasureFn<'static>));
+    let hook = MEASURE_HOOK.with(std::cell::Cell::get).or_else(|| {
+        DEFAULT_MEASURE
+            .get()
+            .map(|measure| *measure as MeasureFn<'static>)
+    });
     if let Some(measure) = hook {
         return measure(text, font_size, weight);
     }
@@ -112,7 +114,14 @@ pub fn layout_text(
     wrap: TextWrap,
     break_anywhere: bool,
 ) -> TextLayout {
-    layout_text_weighted(text, font_size, REGULAR_WEIGHT, avail_width, wrap, break_anywhere)
+    layout_text_weighted(
+        text,
+        font_size,
+        REGULAR_WEIGHT,
+        avail_width,
+        wrap,
+        break_anywhere,
+    )
 }
 
 /// Single-line ellipsis character appended by [`TextOverflow::Ellipsis`].
@@ -403,7 +412,11 @@ mod tests {
             layout_text_weighted("Save", 13.0, 700, 1000.0, TextWrap::NoWrap, false).lines[0].width
         });
         assert!((bold - 13.0).abs() < 1e-4);
-        assert!(seen.borrow().iter().all(|&weight| weight == 700), "{:?}", seen.borrow());
+        assert!(
+            seen.borrow().iter().all(|&weight| weight == 700),
+            "{:?}",
+            seen.borrow()
+        );
     }
 
     #[test]
@@ -413,10 +426,17 @@ mod tests {
         with_measure(&fake, || {
             let _ = layout_text("scoped text", 13.0, 1000.0, TextWrap::NoWrap, false);
         });
-        assert_eq!(unscoped_measure_count(), before, "scoped layout must not count as unscoped");
+        assert_eq!(
+            unscoped_measure_count(),
+            before,
+            "scoped layout must not count as unscoped"
+        );
         if glyphs::advance_width("x", 13.0).is_some() {
             let _ = layout_text("unscoped text", 13.0, 1000.0, TextWrap::NoWrap, false);
-            assert!(unscoped_measure_count() > before, "unscoped layout must be counted");
+            assert!(
+                unscoped_measure_count() > before,
+                "unscoped layout must be counted"
+            );
         }
     }
 
@@ -481,10 +501,7 @@ mod tests {
         // measures rounds every word and space separately, so a long line drifts from the width
         // its paint (and the caret placed after it) uses.
         let fake = |text: &str, _: f32, _: u16| {
-            let advance: f32 = text
-                .chars()
-                .map(|c| if c == ' ' { 3.4 } else { 5.2 })
-                .sum();
+            let advance: f32 = text.chars().map(|c| if c == ' ' { 3.4 } else { 5.2 }).sum();
             advance.round()
         };
         let text = (0..30).map(|_| "abcd").collect::<Vec<_>>().join(" ");
@@ -528,8 +545,15 @@ mod tests {
         assert!(line.text.ends_with(ELLIPSIS), "{:?}", line.text);
         assert!(line.text.chars().count() < text.chars().count());
         let kept = line.text.trim_end_matches(ELLIPSIS);
-        assert!(text.starts_with(kept), "kept prefix must be a prefix: {kept:?}");
-        assert!(line.width <= avail, "width {} exceeds box {avail}", line.width);
+        assert!(
+            text.starts_with(kept),
+            "kept prefix must be a prefix: {kept:?}"
+        );
+        assert!(
+            line.width <= avail,
+            "width {} exceeds box {avail}",
+            line.width
+        );
         assert_eq!(line.width, text_width(&line.text, 13.0, REGULAR_WEIGHT));
     }
 

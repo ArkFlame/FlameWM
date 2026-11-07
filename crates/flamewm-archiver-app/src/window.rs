@@ -647,7 +647,8 @@ mod tests {
     /// `open` returns before the archive is read: the listing arrives later as a `Reply::Listed`.
     #[test]
     fn open_lists_on_a_worker_and_replies() {
-        let dir = std::env::temp_dir().join(format!("flamewm-archiver-open-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("flamewm-archiver-open-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let input = dir.join("note.txt");
         std::fs::write(&input, b"hello").expect("input");

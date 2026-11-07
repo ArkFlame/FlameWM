@@ -73,7 +73,9 @@ pub fn sort_entries(entries: &mut [Entry], sort: ColumnSort) {
 /// of a listing the worker already sorted in the same order (the common case: Name ascending).
 #[must_use]
 pub fn is_sorted_by(entries: &[Entry], sort: ColumnSort) -> bool {
-    entries.windows(2).all(|pair| column_order(&pair[0], &pair[1], sort) != std::cmp::Ordering::Greater)
+    entries
+        .windows(2)
+        .all(|pair| column_order(&pair[0], &pair[1], sort) != std::cmp::Ordering::Greater)
 }
 
 fn column_order(a: &Entry, b: &Entry, sort: ColumnSort) -> std::cmp::Ordering {
@@ -110,7 +112,9 @@ pub fn typeahead_match(names: &[&str], prefix: &str, from: usize) -> Option<usiz
 /// `prefix` must already be lowercase. Typeahead runs this over the whole listing on each keystroke.
 fn starts_with_lowercase(name: &str, prefix: &str) -> bool {
     let mut lowered = name.chars().flat_map(char::to_lowercase);
-    prefix.chars().all(|expected| lowered.next() == Some(expected))
+    prefix
+        .chars()
+        .all(|expected| lowered.next() == Some(expected))
 }
 
 /// Byte count as a short label with binary units (B, KiB, MiB, ...).

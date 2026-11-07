@@ -6,7 +6,6 @@ pub mod start_surface;
 pub mod status_surface;
 use crate::popup_controller::POPUP_GAP;
 use crate::start::{self, StartCategory};
-use flamewm_api::PanelEdge;
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
 use flamewm_api::display::DisplaySnapshot;
 use flamewm_api::panels::PanelsSnapshot;
@@ -14,20 +13,21 @@ use flamewm_api::session::{SessionAction, SessionCapabilities};
 use flamewm_api::system::{SystemAction, SystemSnapshot};
 use flamewm_api::window::WindowSnapshot;
 use flamewm_api::workspace::WorkspaceSnapshot;
+use flamewm_api::PanelEdge;
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
 use flamewm_control_wire::ControlSignal;
 use flamewm_platform::panel::{OutputPanel, TaskbarFrame};
 use flamewm_shell_core::popup::{
-    PopupRefusal, anchor_popover_rect, context_menu_rect, context_menu_size, panel_anchor,
-    work_area_for_panel,
+    anchor_popover_rect, context_menu_rect, context_menu_size, panel_anchor, work_area_for_panel,
+    PopupRefusal,
 };
 use flamewm_shell_core::start_surface_layout;
 use flamewm_ui_core::style::ShellMetrics;
 use flamewm_ui_x11::backdrop::DesktopSource;
 use flamewm_ui_x11::{
-    DockEdge, GeometryTrace, SlideConfig, SurfaceConfig, SurfaceHandle, SurfaceInputMode,
-    SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate, decode_document,
+    decode_document, DockEdge, GeometryTrace, SlideConfig, SurfaceConfig, SurfaceHandle,
+    SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
 };
 
 const PANEL_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel.rwr"));
@@ -586,7 +586,11 @@ struct PanelBackdrop {
 /// Start follows the Start motion; the task menu and media follow the popup slide.
 #[must_use]
 pub fn dismiss_animates(is_start: bool, start_motion: bool, popup_slide: bool) -> bool {
-    if is_start { start_motion } else { popup_slide }
+    if is_start {
+        start_motion
+    } else {
+        popup_slide
+    }
 }
 
 /// Whether a Start toggle-close animates out through `hide` (a configured motion) instead of

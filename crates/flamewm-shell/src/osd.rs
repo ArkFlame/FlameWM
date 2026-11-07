@@ -6,11 +6,11 @@
 
 use std::time::{Duration, Instant};
 
-use flamewm_api::Rect;
 use flamewm_api::settings::SettingsSnapshot;
+use flamewm_api::Rect;
 use flamewm_ui_x11::{
-    SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError,
-    UiDocumentAccess, UiTemplate, decode_document,
+    decode_document, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime,
+    UiBackendError, UiDocumentAccess, UiTemplate,
 };
 
 use crate::settings_projection::{self, SurfaceKind};
@@ -570,7 +570,7 @@ mod tests {
         let source = include_str!("../../../ui/shell/osd.html");
         assert!(source.contains(r#"id="osd-icon-brightness""#));
         assert!(source.contains("assets/breeze/video-display-brightness.svg"));
-        assert!(source.contains(r#"<title>FlameWM OSD</title>"#));
+        assert!(source.contains(r"<title>FlameWM OSD</title>"));
     }
 
     #[test]

@@ -9,7 +9,7 @@ use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
 use crate::services::settings_persist::SettingsWriter;
 use crate::services::shortcuts::effective_registry;
-use crate::settings::{stable_setting, ConfigStore, ProductSettings, STABLE_SETTINGS};
+use crate::settings::{ConfigStore, ProductSettings, STABLE_SETTINGS, stable_setting};
 
 /// Derived keys: published by the owner of a runtime value (the desktop wallpaper), held in memory
 /// only, never persisted, and never part of the revision. A transaction may only carry derived keys.

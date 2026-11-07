@@ -20,7 +20,11 @@ pub struct TaskDrag {
 /// Coordinate along the task strip: `x` on a horizontal edge, `y` on a Left/Right edge.
 #[must_use]
 pub const fn along_strip(vertical: bool, x: f32, y: f32) -> f32 {
-    if vertical { y } else { x }
+    if vertical {
+        y
+    } else {
+        x
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -65,7 +65,7 @@ pub(crate) fn scan_worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, m
             true
         });
         match streamed {
-            Ok(false)=>continue,
+            Ok(false)=>{},
             Ok(true)=>{
                 sort_listing(&mut all,sort);
                 send_wake(&mut wake,&result,WorkerResult::Scanned{generation,entries:Ok(all),path});

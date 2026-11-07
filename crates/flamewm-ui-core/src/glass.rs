@@ -249,7 +249,7 @@ fn permille_to_alpha(permille: u16) -> u8 {
 
 /// Tint alpha byte to permille, rounded up so a floor is never undershot.
 fn alpha_to_permille(alpha: u8) -> u16 {
-    ((u32::from(alpha) * 1000 + 254) / 255) as u16
+    (u32::from(alpha) * 1000).div_ceil(255) as u16
 }
 
 /// Scrim that keeps the body and muted ink at 4.5:1 over the published backdrop: the scrim colour

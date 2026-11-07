@@ -135,7 +135,10 @@ mod tests {
             16,
             WindowControlRole::Minimize,
             Button::Minimize,
-            Feedback { hover: Some(Button::Minimize), pressed: None },
+            Feedback {
+                hover: Some(Button::Minimize),
+                pressed: None,
+            },
         );
         // Top-centre of the disk sits above the glyph strokes.
         let disk = px(&pixels, 40, 13);
@@ -150,7 +153,10 @@ mod tests {
             .map(|(dx, dy)| px(&pixels, 40 - 8 + dx, 20 - 8 + dy)[2])
             .min()
             .unwrap_or(255);
-        assert!(darkest < 0x60, "hovered minimize glyph must be dark (darkest red channel {darkest:#x})");
+        assert!(
+            darkest < 0x60,
+            "hovered minimize glyph must be dark (darkest red channel {darkest:#x})"
+        );
     }
 
     fn paint_at(role: WindowControlRole, button: Button, feedback: Feedback) -> Vec<u8> {
@@ -164,7 +170,10 @@ mod tests {
         let pressed = paint_at(
             WindowControlRole::Minimize,
             Button::Minimize,
-            Feedback { hover: Some(Button::Minimize), pressed: Some(Button::Minimize) },
+            Feedback {
+                hover: Some(Button::Minimize),
+                pressed: Some(Button::Minimize),
+            },
         );
         // #c7c9cb stored as BGRA [0xcb, 0xc9, 0xc7]; distinct from the #f1f2f3 hover fill.
         assert_eq!(&px(&pressed, 40, 13)[..3], &[0xcb, 0xc9, 0xc7]);
@@ -175,7 +184,10 @@ mod tests {
         let pressed = paint_at(
             WindowControlRole::Close,
             Button::Close,
-            Feedback { hover: Some(Button::Close), pressed: Some(Button::Close) },
+            Feedback {
+                hover: Some(Button::Close),
+                pressed: Some(Button::Close),
+            },
         );
         // #c42b1c stored as BGRA [0x1c, 0x2b, 0xc4].
         assert_eq!(&px(&pressed, 40, 13)[..3], &[0x1c, 0x2b, 0xc4]);
@@ -183,11 +195,18 @@ mod tests {
 
     #[test]
     fn press_on_other_button_does_not_change_this_control() {
-        let rest = paint_at(WindowControlRole::Minimize, Button::Minimize, Feedback::default());
+        let rest = paint_at(
+            WindowControlRole::Minimize,
+            Button::Minimize,
+            Feedback::default(),
+        );
         let other = paint_at(
             WindowControlRole::Minimize,
             Button::Minimize,
-            Feedback { hover: None, pressed: Some(Button::Close) },
+            Feedback {
+                hover: None,
+                pressed: Some(Button::Close),
+            },
         );
         assert_eq!(rest, other);
     }
@@ -204,7 +223,10 @@ mod tests {
             16,
             WindowControlRole::Close,
             Button::Close,
-            Feedback { hover: Some(Button::Close), pressed: None },
+            Feedback {
+                hover: Some(Button::Close),
+                pressed: None,
+            },
         );
         let disk = px(&pixels, 40, 13);
         // #e81123 stored as BGRA [0x23, 0x11, 0xe8].

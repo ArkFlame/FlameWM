@@ -233,7 +233,12 @@ fn linefeed_scroll_moves_rows_and_blanks_the_new_bottom_with_pen_background() {
     assert_eq!(screen.scrollback_len(), 1);
     assert_eq!(text(&screen, 0), "cd");
     assert_eq!(text(&screen, 1), "");
-    assert!(screen.line(1).iter().all(|cell| cell.bg == Color::Indexed(4)));
+    assert!(
+        screen
+            .line(1)
+            .iter()
+            .all(|cell| cell.bg == Color::Indexed(4))
+    );
 }
 
 #[test]
@@ -301,10 +306,19 @@ fn block_art_row_stays_within_the_run_pool() {
 fn throughput_probe() {
     use std::time::Instant;
     let plain: Vec<u8> = (0..60_000)
-        .flat_map(|n| format!("row {n:6} the quick brown fox jumps over the lazy dog\r\n").into_bytes())
+        .flat_map(|n| {
+            format!("row {n:6} the quick brown fox jumps over the lazy dog\r\n").into_bytes()
+        })
         .collect();
     let sgr: Vec<u8> = (0..60_000)
-        .flat_map(|n| format!("\x1b[1;3{}m{n:6}\x1b[0m \x1b[38;5;{}mjumps over\x1b[0m the lazy dog\r\n", n % 7, n % 256).into_bytes())
+        .flat_map(|n| {
+            format!(
+                "\x1b[1;3{}m{n:6}\x1b[0m \x1b[38;5;{}mjumps over\x1b[0m the lazy dog\r\n",
+                n % 7,
+                n % 256
+            )
+            .into_bytes()
+        })
         .collect();
     for (name, bytes) in [("plain", &plain), ("sgr", &sgr)] {
         let mut best = f64::MAX;
@@ -316,7 +330,10 @@ fn throughput_probe() {
             best = best.min(started.elapsed().as_secs_f64());
             std::hint::black_box(&screen);
         }
-        eprintln!("throughput {name}: {:.1} MB/s, ({} bytes, best of 5)", bytes.len() as f64 / best / 1e6, bytes.len());
+        eprintln!(
+            "throughput {name}: {:.1} MB/s, ({} bytes, best of 5)",
+            bytes.len() as f64 / best / 1e6,
+            bytes.len()
+        );
     }
 }
-

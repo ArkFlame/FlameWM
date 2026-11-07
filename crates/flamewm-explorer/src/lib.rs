@@ -104,9 +104,8 @@ pub fn list_directory_streamed(dir: &Path, show_hidden: bool, mut emit: impl FnM
         batch.push(Entry::new(path, name, directory, symlink, meta.len(), meta.modified().ok()));
         total += 1;
         let limit = if total <= FIRST_BATCH { FIRST_BATCH } else { LATER_BATCH };
-        if batch.len() >= limit {
-            if !emit(std::mem::replace(&mut batch, Vec::with_capacity(LATER_BATCH))) { return Ok(false); }
-        }
+        if batch.len() >= limit
+            && !emit(std::mem::replace(&mut batch, Vec::with_capacity(LATER_BATCH))) { return Ok(false); }
         if total >= MAX_LISTED_ENTRIES { break; }
     }
     if !batch.is_empty() && !emit(batch) { return Ok(false); }

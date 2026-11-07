@@ -1,8 +1,8 @@
 use chrono::Local;
-use flamewm_api::PanelEdge;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_api::PanelEdge;
 use flamewm_image_core::scale::ScaleFilter;
-use flamewm_image_core::{ImageSourceFormat, decode_bytes_at};
+use flamewm_image_core::{decode_bytes_at, ImageSourceFormat};
 use flamewm_platform::chrome::ACCENT_SOFT_ALPHA;
 use flamewm_platform::settings::ClockFormat;
 use flamewm_skin::palette::Appearance;
@@ -13,7 +13,7 @@ use flamewm_ui_x11::surface_style::{
 };
 use flamewm_ui_x11::{RuntimeImage, SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
 
-use crate::projection::{ClockDisplay, TaskbarItems, project_clock_at};
+use crate::projection::{project_clock_at, ClockDisplay, TaskbarItems};
 
 /// Panel image node that carries the custom Start icon (`ui/shell/panel.html`).
 const START_ICON_ID: &str = "task-start-icon";

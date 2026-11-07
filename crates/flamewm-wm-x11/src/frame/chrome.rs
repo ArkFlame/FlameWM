@@ -800,8 +800,10 @@ mod tests {
 
     #[test]
     fn outline_emits_nothing_when_disabled_or_degenerate() {
-        let mut tokens = ChromeTokens::default();
-        tokens.surface_outline_alpha = 0;
+        let tokens = ChromeTokens {
+            surface_outline_alpha: 0,
+            ..ChromeTokens::default()
+        };
         let scene = plan_scene(
             120, 100, "app", true, None, None, false, false, true, &tokens,
         );
@@ -870,8 +872,10 @@ mod tests {
 
     #[test]
     fn titlebar_fill_no_longer_bakes_a_contour() {
-        let mut tokens = ChromeTokens::default();
-        tokens.surface_outline_alpha = 255;
+        let tokens = ChromeTokens {
+            surface_outline_alpha: 255,
+            ..ChromeTokens::default()
+        };
         let scene = plan_scene(
             120, 100, "app", true, None, None, false, false, true, &tokens,
         );

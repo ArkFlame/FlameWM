@@ -12,7 +12,7 @@ pub fn raw_colour_literals(css: &str) -> Vec<String> {
     for (index, _) in body.match_indices('#') {
         let digits: String = body[index + 1..]
             .chars()
-            .take_while(|c| c.is_ascii_hexdigit())
+            .take_while(char::is_ascii_hexdigit)
             .collect();
         if matches!(digits.len(), 3 | 4 | 6 | 8) {
             found.push(format!("#{digits}"));
@@ -126,13 +126,28 @@ mod tests {
         let required: [(&str, &str, &[&str]); 2] = [
             (
                 "finder",
-                include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui/finder/finder.css")),
-                &[".name", ".parent", ".tile-name", ".tile-meta", ".dup-name", ".dup-path"],
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../ui/finder/finder.css"
+                )),
+                &[
+                    ".name",
+                    ".parent",
+                    ".tile-name",
+                    ".tile-meta",
+                    ".dup-name",
+                    ".dup-path",
+                ],
             ),
             (
                 "explorer",
                 EXPLORER_CSS,
-                &[".name-text", ".field-text", ".place-label", ".status-message"],
+                &[
+                    ".name-text",
+                    ".field-text",
+                    ".place-label",
+                    ".status-message",
+                ],
             ),
         ];
         for (sheet, css, selectors) in required {
@@ -188,7 +203,10 @@ mod tests {
             ("desktop", DESKTOP_CSS),
             ("settings", SETTINGS_CSS),
         ] {
-            let root = css.lines().find(|line| line.starts_with(":root")).unwrap_or("");
+            let root = css
+                .lines()
+                .find(|line| line.starts_with(":root"))
+                .unwrap_or("");
             let missing: Vec<&str> = PROJECTED
                 .into_iter()
                 .filter(|token| !root.contains(&format!("{token}:")))

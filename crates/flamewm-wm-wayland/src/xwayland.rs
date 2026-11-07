@@ -80,7 +80,7 @@ impl Props {
         Ok(props)
     }
 
-    /// X-side keyboard focus: XWayland does not derive it from Wayland keyboard focus while we are
+    /// X-side keyboard focus: `XWayland` does not derive it from Wayland keyboard focus while we are
     /// the WM, so without this X clients receive no key events. Reuses the long-lived connection.
     pub fn set_input_focus(&self, window: X11Window) {
         let focus = self.conn.set_input_focus(
@@ -325,7 +325,7 @@ impl State {
     ///
     /// Keyboard focus on the `wl_surface` alone does not reach the X client: `XWayland` leaves X
     /// input focus where it is when a WM owns the window, so keys go to `PointerRoot`. The WM must
-    /// SetInputFocus itself, which any client connection may do. A second connection keeps this
+    /// `SetInputFocus` itself, which any client connection may do. A second connection keeps this
     /// independent of the XWM connection smithay owns.
     pub fn set_x11_input_focus(&self, window: &X11Surface) {
         if let Some(props) = self.props.as_ref() {
@@ -386,7 +386,7 @@ impl State {
                     }
                 }
                 Err(error) => {
-                    eprintln!("flamewm-wayland: X11 Dock property watcher unavailable: {error}")
+                    eprintln!("flamewm-wayland: X11 Dock property watcher unavailable: {error}");
                 }
             }
         }
@@ -504,7 +504,7 @@ impl State {
         }
     }
 
-    /// Keep XWayland's stack in the same relative order as the compositor scene: desktop, managed
+    /// Keep `XWayland`'s stack in the same relative order as the compositor scene: desktop, managed
     /// windows bottom-to-top, then override-redirect docks/menus bottom-to-top. Smithay synchronizes
     /// its internal stack in `raise_window`; failures are reported with the affected XID so input
     /// routing cannot silently drift from the scene order.

@@ -37,6 +37,7 @@ pub fn write_text(path: &Path, owner: &str, text: &str) -> FlameResult<()> {
     Ok(())
 }
 
+#[must_use]
 pub fn io_error(operation: &str, error: std::io::Error) -> FlameError {
     FlameError::new(ErrorCode::IoFailure, format!("{operation}: {error}"))
 }

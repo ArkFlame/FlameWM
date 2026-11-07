@@ -267,11 +267,10 @@ impl<C: Connection> Wm<'_, C> {
         }
         let clients: Vec<Window> = self.clients.keys().copied().collect();
         for client in clients {
-            if let Some(state) = self.clients.get_mut(&client) {
-                state.shaped = None;
-            } else {
+            let Some(state) = self.clients.get_mut(&client) else {
                 continue;
-            }
+            };
+            state.shaped = None;
             self.chrome_runtimes.entry(client).or_default().invalidate();
             self.refresh_outline_overlay(client);
             // A tuned width moves the client window edge as well as the ring band.
@@ -287,7 +286,7 @@ impl<C: Connection> Wm<'_, C> {
     /// The client's own edge pixels, read back so the outline ring composites over the colour the
     /// window actually drew. The client window is placed inside the ring band, so its outermost
     /// painted column/row is its own first/last pixel. `None` when the client cannot be read
-    /// (unmapped, obscured, or a driver that refuses GetImage); the ring then falls back to the
+    /// (unmapped, obscured, or a driver that refuses `GetImage`); the ring then falls back to the
     /// frame's material.
     fn client_edge_pixels(&self, client: Window) -> Option<crate::frame::chrome::ClientEdges> {
         let state = self.clients.get(&client)?;
@@ -567,7 +566,7 @@ mod chrome_pacing_tests {
     }
 }
 
-/// Server ZPixmap bytes (BGRX on a little-endian server) to straight RGB triples kept in RGBA
+/// Server `ZPixmap` bytes (BGRX on a little-endian server) to straight RGB triples kept in RGBA
 /// stride so the frame-band ring can index a pixel uniformly.
 fn bgrx_to_rgb(data: &[u8]) -> Vec<u8> {
     data.chunks_exact(4)

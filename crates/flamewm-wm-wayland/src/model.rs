@@ -12,11 +12,11 @@ use flamewm_window_core::{SnapTarget, apply_window_margin, snap_geometry};
 
 mod geometry;
 mod shortcuts;
-pub use geometry::{ResizeEdge, resize_edge_at};
-pub use shortcuts::{Mods, Shortcuts};
 use geometry::*;
+pub use geometry::{ResizeEdge, resize_edge_at};
 #[cfg(test)]
 use shortcuts::{Chord, parse_chord};
+pub use shortcuts::{Mods, Shortcuts};
 
 pub const TITLEBAR_HEIGHT: i32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME
     .metrics
@@ -523,7 +523,7 @@ impl WindowModel {
                 }
             }
             Some(Mode::Normal | Mode::Snapped(_) | Mode::Maximized) => {
-                self.toggle_maximize(id, work)
+                self.toggle_maximize(id, work);
             }
             None => {}
         }

@@ -121,7 +121,10 @@ pub(super) fn auto_wallet_version() -> FlameResult<Option<&'static str>> {
 /// The single secret-storage policy for FlameWM-owned browser launches.
 /// Brave gets the existing `KWallet` generation; Helium is left untouched unless
 /// its original backend is explicitly opted in. Explicit user flags always win.
-pub(super) fn browser_secret_version(program: &str, args: &[String]) -> FlameResult<Option<&'static str>> {
+pub(super) fn browser_secret_version(
+    program: &str,
+    args: &[String],
+) -> FlameResult<Option<&'static str>> {
     let brave = is_brave_program(program);
     let helium = is_helium_program(program);
     if !brave && !helium {

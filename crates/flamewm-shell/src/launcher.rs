@@ -148,9 +148,7 @@ impl LauncherState {
     /// query and model generation still match; otherwise filters again without caching.
     fn order<'c>(&'c self, model: &StartModel) -> Cow<'c, [usize]> {
         match &self.order {
-            Some(cache)
-                if cache.generation == model.generation() && cache.query == self.query =>
-            {
+            Some(cache) if cache.generation == model.generation() && cache.query == self.query => {
                 Cow::Borrowed(cache.indices.as_slice())
             }
             _ => Cow::Owned(ordered_indices(model, &self.query, &self.recent)),
@@ -432,7 +430,11 @@ mod tests {
         let mut state = LauncherState::default();
         state.open(&model);
         assert_eq!(state.count(), 3);
-        assert_eq!(state.app_at(&model, 0).unwrap().name, "Alpha", "alpha order");
+        assert_eq!(
+            state.app_at(&model, 0).unwrap().name,
+            "Alpha",
+            "alpha order"
+        );
 
         assert!(state.type_text(&model, "ed"));
         assert_eq!(state.count(), 1);
@@ -452,7 +454,11 @@ mod tests {
         state.open(&model);
         let before = model.generation();
         model.replace_applications(vec![app("zeta.desktop", "Zeta")]);
-        assert_ne!(model.generation(), before, "replacement bumps the generation");
+        assert_ne!(
+            model.generation(),
+            before,
+            "replacement bumps the generation"
+        );
         assert_eq!(
             state.app_at(&model, 0).unwrap().name,
             "Zeta",

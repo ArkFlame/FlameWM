@@ -478,16 +478,14 @@ mod tests {
             current,
             StartLaunchOutcome::Started { invocation: 2, .. }
         ));
-        assert!(
-            matching_launch_outcome(
-                vec![StartLaunchOutcome::Failed {
-                    invocation: 1,
-                    app: "Old app".to_owned(),
-                    message: "old failure".to_owned(),
-                }],
-                2,
-            )
-            .is_none()
-        );
+        assert!(matching_launch_outcome(
+            vec![StartLaunchOutcome::Failed {
+                invocation: 1,
+                app: "Old app".to_owned(),
+                message: "old failure".to_owned(),
+            }],
+            2,
+        )
+        .is_none());
     }
 }

@@ -139,7 +139,7 @@ pub fn parse_stat(pid: u32, text: &str, page_bytes: u64) -> Option<Process> {
         ..Process::default()
     })
 }
-/// Page size from the auxiliary vector (AT_PAGESZ): no libc call and no extra crate.
+/// Page size from the auxiliary vector (`AT_PAGESZ)`: no libc call and no extra crate.
 fn page_size_bytes() -> u64 {
     const AT_PAGESZ: u64 = 6;
     let Ok(auxv) = fs::read("/proc/self/auxv") else {
@@ -543,7 +543,7 @@ mod tests {
 #[cfg(test)]
 mod bench {
     use super::*;
-    /// utime + stime of this process in clock ticks (CLK_TCK is 100 on Linux targets FlameWM ships for).
+    /// utime + stime of this process in clock ticks (`CLK_TCK` is 100 on Linux targets `FlameWM` ships for).
     fn self_cpu_ticks() -> u64 {
         let text = fs::read_to_string("/proc/self/stat").unwrap_or_default();
         let fields: Vec<&str> = text
@@ -555,7 +555,7 @@ mod bench {
             _ => 0,
         }
     }
-    /// cargo test -p flamewm-task-manager --release bench_sampler -- --ignored --nocapture
+    /// cargo test -p flamewm-task-manager --release `bench_sampler` -- --ignored --nocapture
     #[test]
     #[ignore = "measurement only"]
     fn bench_sampler_cpu_per_sample() {

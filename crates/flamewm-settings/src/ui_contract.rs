@@ -20,7 +20,10 @@ use flamewm_ui_x11::{
     Overflow, RuntimeImage, UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess,
 };
 
-use crate::{ACCENT_NODE_IDS, OUTPUT_PAGE_SLOTS, SETTING_TWINS, SWITCH_BODIES, SettingsAction, SettingsApplication};
+use crate::{
+    ACCENT_NODE_IDS, OUTPUT_PAGE_SLOTS, SETTING_TWINS, SWITCH_BODIES, SettingsAction,
+    SettingsApplication,
+};
 use flamewm_api::settings_groups::SWITCH_GROUPS;
 
 const MARKUP: &str = include_str!("../../../ui/settings.html");
@@ -412,7 +415,9 @@ fn div_end(markup: &str, start: usize) -> usize {
     let mut index = start;
     while let Some(offset) = markup[index..].find('<') {
         let at = index + offset;
-        if markup[at..].starts_with("<div") && !markup[at + 4..].starts_with(|c: char| c.is_alphanumeric()) {
+        if markup[at..].starts_with("<div")
+            && !markup[at + 4..].starts_with(|c: char| c.is_alphanumeric())
+        {
             depth += 1;
         } else if markup[at..].starts_with("</div>") {
             depth -= 1;
@@ -427,8 +432,12 @@ fn div_end(markup: &str, start: usize) -> usize {
 
 /// Byte span of the element whose opening tag carries `needle` (an `id="..."` attribute).
 fn element_span(markup: &str, needle: &str) -> std::ops::Range<usize> {
-    let at = markup.find(needle).unwrap_or_else(|| panic!("markup lacks {needle}"));
-    let start = markup[..at].rfind("<div").expect("element opens with a div");
+    let at = markup
+        .find(needle)
+        .unwrap_or_else(|| panic!("markup lacks {needle}"));
+    let start = markup[..at]
+        .rfind("<div")
+        .expect("element opens with a div");
     start..div_end(markup, start)
 }
 
@@ -461,7 +470,10 @@ fn every_group_member_control_lives_inside_its_body_and_singles_stay_outside() {
                 continue;
             }
             let rows = setting_rows(MARKUP, member);
-            assert!(!rows.is_empty(), "{member} has no data-setting control in the markup");
+            assert!(
+                !rows.is_empty(),
+                "{member} has no data-setting control in the markup"
+            );
             for row in rows {
                 assert!(
                     span.start < row && row < span.end,
@@ -470,9 +482,14 @@ fn every_group_member_control_lives_inside_its_body_and_singles_stay_outside() {
             }
         }
     }
-    for row in setting_rows(MARKUP, "accent").into_iter().chain(setting_rows(MARKUP, "keyboardLayout")) {
+    for row in setting_rows(MARKUP, "accent")
+        .into_iter()
+        .chain(setting_rows(MARKUP, "keyboardLayout"))
+    {
         assert!(
-            bodies.iter().all(|span| row < span.start || row >= span.end),
+            bodies
+                .iter()
+                .all(|span| row < span.start || row >= span.end),
             "single setting at byte {row} must not sit under a switch body"
         );
     }
@@ -513,8 +530,15 @@ fn toggling_a_switch_sends_only_the_switch_and_keeps_member_values() {
     let (mut app, requests) = application_recording(snapshot, display_fixtures().remove(0));
     // The scripted transport answers the write with a wrong-shape reply; only the request matters.
     let _ = app.execute(SettingsAction::Toggle("surfaceCustom"));
-    let sent: Vec<String> = requests.borrow().iter().map(|request| format!("{request:?}")).collect();
-    let writes: Vec<&String> = sent.iter().filter(|text| text.contains("surfaceCustom")).collect();
+    let sent: Vec<String> = requests
+        .borrow()
+        .iter()
+        .map(|request| format!("{request:?}"))
+        .collect();
+    let writes: Vec<&String> = sent
+        .iter()
+        .filter(|text| text.contains("surfaceCustom"))
+        .collect();
     assert_eq!(writes.len(), 1, "one switch write: {sent:?}");
     assert!(writes[0].contains("true"), "switch turns on: {}", writes[0]);
     assert!(

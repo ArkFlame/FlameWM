@@ -329,6 +329,36 @@ fn apply_settings(app: &mut App, snapshot: SettingsSnapshot) -> bool {
     changed
 }
 
+fn initial_settings() -> Option<SettingsSnapshot> {
+    let deadline = Instant::now() + SETTINGS_BUDGET;
+    loop {
+        // A fresh connection per attempt, so a late reply to an abandoned call cannot be read as the next answer.
+        let client = ControlClient::connect(BusKind::Session).ok()?;
+        match client.call_with_timeout(&ControlRequest::GetSettings, SETTINGS_ATTEMPT) {
+            Ok(ControlResponse::Settings(snapshot)) => return Some(snapshot),
+            _ if Instant::now() >= deadline => return None,
+            _ => std::thread::sleep(SETTINGS_RETRY_PAUSE),
+        }
+    }
+}
+
+/// Packaged asset root for the default wallpaper: the installed share directory, else the source tree.
+fn packaged_root() -> PathBuf {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let installed = std::env::current_exe().ok().and_then(|exe| {
+        let bin = exe.parent()?;
+        let usr = bin.parent()?;
+        (bin.file_name()? == "bin" && usr.file_name()? == "usr").then(|| usr.join("share/flamewm"))
+    });
+    installed
+        .filter(|root| root.join("assets").is_dir())
+        .unwrap_or(source)
+}
+
 #[cfg(test)]
 mod settings_apply_tests {
     use flamewm_api::settings::SettingValue;
@@ -381,34 +411,4 @@ mod settings_apply_tests {
         assert!(settings_differ(Some(&current), &next));
         assert!(settings_differ(None, &next));
     }
-}
-
-fn initial_settings() -> Option<SettingsSnapshot> {
-    let deadline = Instant::now() + SETTINGS_BUDGET;
-    loop {
-        // A fresh connection per attempt, so a late reply to an abandoned call cannot be read as the next answer.
-        let client = ControlClient::connect(BusKind::Session).ok()?;
-        match client.call_with_timeout(&ControlRequest::GetSettings, SETTINGS_ATTEMPT) {
-            Ok(ControlResponse::Settings(snapshot)) => return Some(snapshot),
-            _ if Instant::now() >= deadline => return None,
-            _ => std::thread::sleep(SETTINGS_RETRY_PAUSE),
-        }
-    }
-}
-
-/// Packaged asset root for the default wallpaper: the installed share directory, else the source tree.
-fn packaged_root() -> PathBuf {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    let installed = std::env::current_exe().ok().and_then(|exe| {
-        let bin = exe.parent()?;
-        let usr = bin.parent()?;
-        (bin.file_name()? == "bin" && usr.file_name()? == "usr").then(|| usr.join("share/flamewm"))
-    });
-    installed
-        .filter(|root| root.join("assets").is_dir())
-        .unwrap_or(source)
 }
