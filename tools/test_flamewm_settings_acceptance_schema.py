@@ -817,9 +817,11 @@ class FakeNativeRunnerTests(unittest.TestCase):
     STUCK_DISPLAYS = BEFORE_DISPLAYS
     MODE_LIST_ONE = "'modes': <[{'id': <'1'>, 'width': <uint32 1280>}]>"
     MODE_LIST_TWO = "'modes': <[{'id': <'1'>, 'width': <uint32 1280>}, {'id': <'2'>, 'width': <uint32 1024>}]>"
-    MODED_DISPLAYS = BEFORE_DISPLAYS.replace("'modes': <[]>", MODE_LIST_ONE)
+    # The harness scrolls only when more than one mode is listed, so the "listed modes" fixtures use two.
+    MODED_DISPLAYS = BEFORE_DISPLAYS.replace("'modes': <[]>", MODE_LIST_TWO)
     MODED_CHANGED = MODED_DISPLAYS.replace("uint32 100", "uint32 125")
-    MODED_TWO_MODES_AT_125 = MODED_CHANGED.replace(MODE_LIST_ONE, MODE_LIST_TWO)
+    MODE_LIST_THREE = MODE_LIST_TWO.replace("]>", ", {'id': <'3'>, 'width': <uint32 800>}]>")
+    MODED_MODES_CHANGED = MODED_CHANGED.replace(MODE_LIST_TWO, MODE_LIST_THREE)
     BEFORE_FONTS = "({'fontFamily': <'IBM Plex Sans'>, 'fontSizeOffset': <int64 0>, 'revision': <uint64 3>},)"
     FAMILY_FONTS = "({'fontFamily': <'Noto Sans'>, 'fontSizeOffset': <int64 0>, 'revision': <uint64 4>},)"
     SIZED_FONTS = "({'fontFamily': <'Noto Sans'>, 'fontSizeOffset': <int64 1>, 'revision': <uint64 5>},)"
@@ -866,13 +868,25 @@ class FakeNativeRunnerTests(unittest.TestCase):
         self.assertEqual(self.send_input.call_args.args[1], "600,300")
 
     def test_ss10_with_listed_modes_is_not_run_and_never_clicks(self) -> None:
-        modes = self.BEFORE_DISPLAYS.replace("'modes': <[]>", "'modes': <[{'id': <'1'>, 'width': <uint32 1280>}]>")
+        modes = self.BEFORE_DISPLAYS.replace("'modes': <[]>", self.MODE_LIST_TWO)
         self._patch("flamewm_settings_acceptance.dbus_displays_snapshot", return_value=(modes, "q"))
         self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
         entry = acc.run_ss10(self.ctx, self._args("--ss10-scale-click", "600,300"))
         self.assertEqual(entry["status"], "NOT_RUN", entry["reason"])
         self.assertIn("below the fold", entry["details"]["reason"])
         self.send_input.assert_not_called()
+
+    def test_ss10_single_mode_clicks_unscrolled_slider_without_scrolling(self) -> None:
+        single = self.BEFORE_DISPLAYS.replace("'modes': <[]>", self.MODE_LIST_ONE)
+        self._patch("flamewm_settings_acceptance.dbus_displays_snapshot",
+                    side_effect=[(single, "q"), (single.replace("uint32 100", "uint32 125"), "q"),
+                                 (single.replace("uint32 100", "uint32 125"), "q")])
+        self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
+        entry = acc.run_ss10(self.ctx, self._args())
+        self.assertNotEqual(entry["status"], "NOT_RUN", entry["reason"])
+        self.assertIsNone(entry["details"].get("scroll"))
+        self.assertEqual(self.send_input.call_args.args[1], "725,580")
+        self.assertEqual(self.send_input.call_count, 1)
 
     def test_ss10_listed_modes_scrolled_then_125_with_unchanged_modes_passes(self) -> None:
         self._patch("flamewm_settings_acceptance.dbus_displays_snapshot",
@@ -898,9 +912,11 @@ class FakeNativeRunnerTests(unittest.TestCase):
     def test_ss10_listed_modes_without_scrolled_click_is_not_run_and_never_scrolls_or_clicks(self) -> None:
         self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
         self._patch("flamewm_settings_acceptance.dbus_displays_snapshot", return_value=(self.MODED_DISPLAYS, "q"))
-        entry = acc.run_ss10(self.ctx, self._args("--ss10-wheel-steps", "3"))
+        args = self._args("--ss10-wheel-steps", "3")
+        args.ss10_scrolled_click = ""  # the flag defaults to the measured point; clear it to model "not supplied"
+        entry = acc.run_ss10(self.ctx, args)
         self.assertEqual(entry["status"], "NOT_RUN", entry["reason"])
-        self.assertIn("--ss10-scrolled-click", entry["details"]["reason"])
+        self.assertIn("--ss10-wheel-steps and --ss10-scrolled-click", entry["details"]["reason"])
         self.send_input.assert_not_called()
 
     def test_ss10_failed_wheel_input_is_not_run_and_skips_the_click(self) -> None:
@@ -918,8 +934,8 @@ class FakeNativeRunnerTests(unittest.TestCase):
     def test_ss10_listed_modes_change_after_scrolled_click_fails(self) -> None:
         self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
         self._patch("flamewm_settings_acceptance.dbus_displays_snapshot",
-                    side_effect=[(self.MODED_DISPLAYS, "q"), (self.MODED_TWO_MODES_AT_125, "q"),
-                                 (self.MODED_TWO_MODES_AT_125, "q")])
+                    side_effect=[(self.MODED_DISPLAYS, "q"), (self.MODED_MODES_CHANGED, "q"),
+                                 (self.MODED_MODES_CHANGED, "q")])
         entry = acc.run_ss10(self.ctx, self._args("--ss10-wheel-steps", "3", "--ss10-scrolled-click", "600,300"))
         self.assertEqual(entry["status"], "FAIL", entry["reason"])
         self.assertIn("mode_list_unchanged", entry["reason"])
