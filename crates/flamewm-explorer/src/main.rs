@@ -16,7 +16,7 @@ use std::time::{Duration,Instant};
 
 use flamewm_clipboard::{Clipboard,FileOp};
 use flamewm_explorer::clipboard::{resolve_paste,settle_cut};
-use flamewm_explorer::{prefs,AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,SortBy,sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory_streamed,sort_listing,parse_address,places};
+use flamewm_explorer::{prefs,AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,SortBy,sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory_streamed_cancellable,sort_listing,parse_address,places};
 use flamewm_explorer::view::{self,Column,ColumnSort};
 use flamewm_explorer::thumbs::{self,Lookup,ThumbKey,Thumbnails,THUMB_SIZE};
 use flamewm_explorer::columns::{Divider,Widths};
@@ -43,6 +43,21 @@ const REMOTE_ACTIONS: [&str;7]=["open","showtype","hidden","copy","paste","renam
 const MENU_ITEMS: [&str;26]=["connect","showtype","open","openwith","setwallpaper","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject","hidden"];
 /// Sidebar rows (group headings plus places) that the template provides; extra rows are not drawn.
 const SIDEBAR_SLOTS:usize=32;
+const BREADCRUMB_SLOTS:usize=6;
+
+// Keep the deepest ancestors when the fixed template cannot show the whole path.
+fn breadcrumbs(path:&Path)->Vec<(String,PathBuf)> {
+    if remote::is_remote(path) {return Vec::new();}
+    let mut result=Vec::new();
+    let mut ancestor=PathBuf::new();
+    for component in path.components() {
+        ancestor.push(component.as_os_str());
+        result.push((component.as_os_str().to_string_lossy().into_owned(),ancestor.clone()));
+    }
+    let skip=result.len().saturating_sub(BREADCRUMB_SLOTS);
+    result.drain(..skip);
+    result
+}
 // Canonical geometry: paint (project) and hit-testing (cell_rect, folder_at, select bands) all derive from these.
 const TOOLBAR_HEIGHT:f32=45.0;
 const TABBAR_HEIGHT:f32=36.0;
@@ -254,6 +269,8 @@ enum Dialog {
 enum EditMode { Path, Search, Rename, PlaceName, Mode }
 struct ExplorerApp {
     model:Explorer, tx:Sender<WorkerJob>, scan_tx:Sender<WorkerJob>,
+    pending_navigation:Option<(u64,usize,flamewm_explorer::Tab)>,
+    pending_directory_dirty:bool,
     chooser_tx:Sender<ChooserJob>, chooser:Option<OpenWithChooser>,
     // Row thumbnails: the cache and the image id each row slot currently shows. `project` takes `&self`, hence the cells.
     thumbs:RefCell<Thumbnails>, thumb_queue:Option<Arc<thumbs::ThumbQueue>>, thumb_bound:RefCell<[Option<u64>;ROW_SLOTS]>,
@@ -523,6 +540,10 @@ mod window_frame_tests;
 #[path = "tests/open_status_tests.rs"]
 mod open_status_tests;
 
+#[cfg(test)]
+#[path = "tests/navigation_worker_tests.rs"]
+mod navigation_worker_tests;
+
 /// Which image fills a row's icon slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowIcon {
@@ -599,4 +620,3 @@ fn forward_download(local:PathBuf,transfers:Receiver<TransferEvent>,tx:Sender<Wo
     };
     send_wake(&mut wake,&tx,WorkerResult::RemoteDownloaded(result));
 }
-

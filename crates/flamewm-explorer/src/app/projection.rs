@@ -21,6 +21,12 @@ impl ExplorerApp {
         // The path bar always shows the folder; search text belongs to the search field only.
         let address=match self.edit {Some(EditMode::Path)=>self.field.display(),Some(EditMode::Mode)=>format!("Permissions: {}|",self.field.text),_=>display_location(tab.path(),&home_dir())};
         doc.text("address-text",address)?;
+        let crumbs=if self.edit.is_none() {breadcrumbs(tab.path())} else {Vec::new()};
+        for slot in 0..BREADCRUMB_SLOTS {
+            doc.visible(&format!("breadcrumb-{slot}"),slot<crumbs.len())?;
+            if let Some((label,_))=crumbs.get(slot) {doc.text(&format!("breadcrumb-{slot}"),label.clone())?;}
+        }
+        doc.visible("address-text",crumbs.is_empty())?;
         doc.background("address-text",if matches!(self.edit,Some(EditMode::Path)) && self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
         // Toolbar fields have fixed widths (the layout engine cannot shrink them): drop the path bar first, then search, so they never overlap.
         doc.visible("address",self.window.0>=480.0)?;

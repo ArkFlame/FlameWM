@@ -18,6 +18,9 @@ button:active { background:var(--pressed-fill); }
 .field { height:30px; padding:0 9px; gap:8px; border-radius:6px; background:var(--card); border:1px solid var(--line); justify-content:flex-start; display:flex; flex-direction:row; align-items:center; overflow:hidden; }
 .field:hover { border-color:var(--accent); background:var(--hover-fill); }
 .address { flex-grow:1; width:0; min-width:0px; }
+.address-edit, .breadcrumb { background:transparent; border:0; padding:0; }
+.breadcrumb { white-space:nowrap; font-size:13px; }
+.breadcrumb:hover { color:var(--accent); }
 /* The layout engine has no flex-shrink, so the toolbar fields have fixed widths; main.rs hides them when the window is too narrow. */
 .search { width:150px; min-width:0px; flex-grow:0; color:var(--muted); }
 .search-clear { width:22px; height:22px; flex-grow:0; border-radius:11px; color:var(--text); font-size:15px; }

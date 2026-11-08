@@ -121,6 +121,12 @@ impl ExplorerApp {
             return;
         }
         if e.phase!=UiActionPhase::Release || !e.inside {return;}
+        if let Some(slot)=action.strip_prefix("explorer.breadcrumb.").and_then(|v|v.parse::<usize>().ok()) {
+            if e.button==1 && self.edit.is_none() {
+                if let Some((_,path))=breadcrumbs(self.model.tab().path()).get(slot) {self.navigate(path.clone());}
+            }
+            return;
+        }
         if let Some(slot)=action.strip_prefix("explorer.row.").and_then(|v|v.parse::<usize>().ok()) {
             if let Some(entry)=self.row_entry(slot).cloned() {
                 let path=entry.path;
@@ -175,9 +181,9 @@ impl ExplorerApp {
         }
         if let Some(action)=action.strip_prefix("explorer.menu.") {self.action_menu(action);return;}
         match action {
-            "explorer.back"=>{if self.model.tab_mut().back(){self.scan();}},
-            "explorer.forward"=>{if self.model.tab_mut().forward(){self.scan();}},
-            "explorer.up"=>{if self.model.tab_mut().up(){self.scan();}},
+            "explorer.back"=>self.history_navigation(flamewm_explorer::Tab::back),
+            "explorer.forward"=>self.history_navigation(flamewm_explorer::Tab::forward),
+            "explorer.up"=>self.history_navigation(flamewm_explorer::Tab::up),
             "explorer.reload"=>{self.reload_places();self.refresh_devices();self.scan();},
             "explorer.hidden"=>self.toggle_hidden(),
             "explorer.search"=>{if !matches!(self.edit,Some(EditMode::Search)){let text=self.model.tab().search.clone();self.begin_edit(EditMode::Search,text,None);}},
@@ -286,11 +292,11 @@ impl ExplorerApp {
             "delete" if shift || remote::is_remote(self.model.tab().path())=>self.confirm_delete(),
             "delete"=>self.action_menu("trash"),
             "return"|"enter" if alt=>if let Some(path)=self.selected(){self.open_properties(path)},
-            "backspace"=>{if self.model.tab_mut().up(){self.scan();}},
+            "backspace"=>self.history_navigation(flamewm_explorer::Tab::up),
             "escape"=>{if self.busy {self.cancel_job();return;}if self.search_rows.is_some() {self.clear_search();self.model.status="Search cleared".into();return;}self.context=None;self.rubber=None;self.row_drag=None;self.drop_folder=None;self.last_click=None;self.model.tab_mut().clear_selection();},
             "return"|"enter"=>if let Some(path)=self.selected(){self.open(&path)},
-            "left" if alt=>{if self.model.tab_mut().back(){self.scan();}},
-            "right" if alt=>{if self.model.tab_mut().forward(){self.scan();}},
+            "left" if alt=>self.history_navigation(flamewm_explorer::Tab::back),
+            "right" if alt=>self.history_navigation(flamewm_explorer::Tab::forward),
             "l" if ctrl=>{let text=self.model.tab().path().to_string_lossy().into_owned();self.begin_edit(EditMode::Path,text,None);},
             "f" if ctrl=>{let text=self.model.tab().search.clone();self.begin_edit(EditMode::Search,text,None);},
             "t" if ctrl=>{if self.model.tabs.len()<5{self.model.new_tab();self.scan();}},
@@ -349,21 +355,41 @@ impl ExplorerApp {
             },
             WorkerResult::ScanBatch{generation,path,first,entries}=>{
                 // Rows of a load in progress; the final `Scanned` replaces them with the complete sorted listing.
-                self.model.append_scan(generation,&path,first,entries);
+                if self.pending_navigation.is_none() {self.model.append_scan(generation,&path,first,entries);}
             },
             WorkerResult::Scanned{generation,path,entries}=>{
-                let vanished=entries.is_err() && !path.exists();
-                if self.model.apply_listing(generation,&path,entries) {
+                if self.pending_navigation.as_ref().is_some_and(|(g,tab,candidate)|*g==generation && *tab==self.model.active && candidate.path()==path) {
+                    let (_,_,candidate)=self.pending_navigation.take().expect("matching candidate");
+                    match entries {
+                        Ok(items)=>{
+                            self.clear_search();
+                            *self.model.tab_mut()=candidate;
+                            self.model.apply_listing(generation,&path,Ok(items));
+                            if !view::is_sorted_by(&self.model.tab().entries,self.column_sort) {view::sort_entries(&mut self.model.tab_mut().entries,self.column_sort);}
+                            self.request_listing();
+                        },
+                        Err(error)=>{
+                            self.model.tab_mut().loading=false;
+                            if self.pending_directory_dirty {self.request_listing();}
+                            self.model.status=format!("Cannot read directory: {error}");
+                        },
+                    }
+                    return;
+                }
+                let vanished=entries.as_ref().is_err_and(|error|error.kind()==std::io::ErrorKind::NotFound);
+                let applied=self.model.apply_listing(generation,&path,entries);
+                if applied {
                     // The worker sorted by name; re-sort on this thread only when another column is active.
                     let tab=self.model.tab_mut();
                     if !view::is_sorted_by(&tab.entries,self.column_sort) {view::sort_entries(&mut tab.entries,self.column_sort);}
                 }
                 // A removed device or folder falls back to Home with a visible notice.
-                if vanished && path==*self.model.tab().path() {
+                if applied && vanished && path==*self.model.tab().path() && path!=home_dir() {
                     let home=home_dir();
+                    let mut candidate=self.model.tab().clone();
+                    candidate.replace_current(home);
+                    self.scan_candidate(candidate);
                     self.activity=Some(format!("{} is no longer available; opened Home",path.display()));
-                    self.model.tab_mut().visit(home);
-                    self.scan();
                 }
             },
             WorkerResult::RemoteRows{generation,path,mut rows}=>{
@@ -408,7 +434,8 @@ impl ExplorerApp {
                 Err(message)=>self.model.status=message,
             },
             WorkerResult::DirChanged=>{
-                if !self.busy && self.dialog.is_none() {self.request_listing();}
+                if self.pending_navigation.is_some() {self.pending_directory_dirty=true;}
+                else if !self.busy && self.dialog.is_none() {self.request_listing();}
             },
             WorkerResult::ScrollTick=>self.step_scroll(),
             WorkerResult::ResizeFlush=>self.flush_resize(),

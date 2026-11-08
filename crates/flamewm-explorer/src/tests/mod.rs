@@ -1,5 +1,28 @@
     use std::time::UNIX_EPOCH;
     use super::*;
+    #[test] fn streamed_scan_survives_children_removed_after_first_batch() {
+        let dir=std::env::temp_dir().join(format!("flamewm-vanished-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&dir).unwrap();
+        for i in 0..FIRST_BATCH+64 {fs::write(dir.join(format!("file-{i}")),b"").unwrap();}
+        let mut rows=0;
+        assert!(list_directory_streamed(&dir,true,|batch|{
+            rows+=batch.len();
+            for entry in fs::read_dir(&dir).unwrap() {fs::remove_file(entry.unwrap().path()).unwrap();}
+            true
+        }).unwrap());
+        assert_eq!(rows,FIRST_BATCH);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test] fn streamed_scan_cancels_even_when_every_entry_is_hidden() {
+        let dir=std::env::temp_dir().join(format!("flamewm-hidden-cancel-{}",std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..130 {std::fs::write(dir.join(format!(".hidden-{i}")),b"").unwrap();}
+        let mut checks=0;
+        let completed=list_directory_streamed_cancellable(&dir,false,|_| panic!("hidden entries emitted"),||{checks+=1;checks==2}).unwrap();
+        assert!(!completed);
+        assert_eq!(checks,2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test] fn row_slot_index_matches_paint_mapping() {
         // Slot 1 is the first window row; slot 0 is the glide buffer above it.
         assert_eq!(row_slot_index(0, 1), 0);

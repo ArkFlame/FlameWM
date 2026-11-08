@@ -127,6 +127,8 @@ impl ExplorerApp {
 
     /// Lists the current folder without clearing transient feedback (used by live refresh).
     pub(crate) fn request_listing(&mut self) {
+        self.pending_navigation=None;
+        self.pending_directory_dirty=false;
         let generation=self.model.next_generation();
         let path=self.model.tab().path().to_path_buf();
         if let Some(previous)=self.remote_cancel.take() {previous.cancel();}
@@ -203,8 +205,37 @@ impl ExplorerApp {
                 return;
             }
         }
-        if path.is_dir() {self.clear_search();self.model.tab_mut().visit(path);self.scan();} else {self.model.status="Directory does not exist".into();}
+        // Let the scan worker validate the path; stat here can block the UI on slow mounts.
+        let mut candidate=self.model.tab().clone();
+        candidate.visit(path);
+        self.scan_candidate(candidate);
         self.context=None;
+    }
+
+    pub(crate) fn scan_candidate(&mut self,candidate:flamewm_explorer::Tab) {
+        let path=candidate.path().to_path_buf();
+        if remote::is_remote(&path) {
+            self.clear_search();
+            *self.model.tab_mut()=candidate;
+            self.scan();
+            return;
+        }
+        let generation=self.model.next_generation();
+        if let Some(cancel)=self.remote_cancel.take() {cancel.cancel();}
+        self.pending_navigation=Some((generation,self.model.active,candidate));
+        self.model.status="Loading directory…".into();
+        if self.scan_tx.send(WorkerJob::Scan{generation,path,hidden:self.model.hidden,sort:self.model.sort}).is_err() {
+            self.pending_navigation=None;
+            if self.pending_directory_dirty {self.request_listing();}
+            self.model.tab_mut().loading=false;
+            self.model.status="File worker unavailable".into();
+        }
+    }
+
+    pub(crate) fn history_navigation(&mut self, action:fn(&mut flamewm_explorer::Tab)->bool) {
+        let mut candidate=self.pending_navigation.as_ref().filter(|(_,tab,_)|*tab==self.model.active)
+            .map_or_else(||self.model.tab().clone(),|(_,_,candidate)|candidate.clone());
+        if action(&mut candidate) {self.scan_candidate(candidate);}
     }
 
     /// Entry behind DOM row `explorer.row.<slot>`. Paint places slot k at window row k-1 (the

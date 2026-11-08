@@ -91,14 +91,24 @@ fn listing_order(a: &Entry, b: &Entry, sort: SortBy) -> std::cmp::Ordering {
 /// `emit` returns false to stop early (a newer request superseded this one); the call then returns `Ok(false)`.
 /// Concatenating the batches and sorting with `sort_listing` gives exactly `list_directory`'s result.
 pub fn list_directory_streamed(dir: &Path, show_hidden: bool, mut emit: impl FnMut(Vec<Entry>) -> bool) -> io::Result<bool> {
+    list_directory_streamed_cancellable(dir, show_hidden, &mut emit, || false)
+}
+
+/// Like `list_directory_streamed`, but checks for cancellation even when all entries are hidden.
+pub fn list_directory_streamed_cancellable(dir: &Path, show_hidden: bool, mut emit: impl FnMut(Vec<Entry>) -> bool, mut cancelled: impl FnMut() -> bool) -> io::Result<bool> {
     let mut batch = Vec::with_capacity(FIRST_BATCH);
     let mut total = 0usize;
-    for item in fs::read_dir(dir)? {
+    for (index, item) in fs::read_dir(dir)?.enumerate() {
+        if index % 64 == 0 && cancelled() { return Ok(false); }
         let item = item?;
         let name = item.file_name().to_string_lossy().into_owned();
         if !show_hidden && name.starts_with('.') { continue; }
         let path = item.path();
-        let meta = fs::symlink_metadata(&path)?;
+        let meta = match fs::symlink_metadata(&path) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
         let symlink = meta.file_type().is_symlink();
         let directory = meta.is_dir() || (symlink && path.is_dir());
         batch.push(Entry::new(path, name, directory, symlink, meta.len(), meta.modified().ok()));
@@ -149,6 +159,8 @@ impl Tab {
     /// Frees the listing of a hidden tab (capacity included). Path, selection and scroll are kept.
     pub fn release_entries(&mut self) { self.entries=Vec::new(); self.revision+=1; }
     pub fn path(&self) -> &Path { &self.history[self.cursor] }
+    /// Replace a vanished current directory without retaining it in history.
+    pub fn replace_current(&mut self, path: PathBuf) { self.history[self.cursor]=path; self.reset(); }
     pub fn visit(&mut self, path: PathBuf) {
         self.history.truncate(self.cursor + 1);
         self.history.push(path); self.cursor += 1; self.reset();

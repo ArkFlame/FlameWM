@@ -43,7 +43,7 @@ pub(crate) fn run_transfer(
     report
 }
 /// Streams each listing as sorted batches (first rows paint early), then sends the complete sorted listing.
-/// A newer queued scan abandons the current one between batches: its rows are never sent as final.
+/// A newer queued scan abandons the current one while reading, including hidden-only directories.
 pub(crate) fn scan_worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStream) {
     let mut next:Option<WorkerJob>=None;
     loop {
@@ -56,13 +56,14 @@ pub(crate) fn scan_worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, m
         let WorkerJob::Scan{generation,path,hidden,sort}=job else {continue};
         let mut all=Vec::new();
         let mut first=true;
-        let streamed=list_directory_streamed(&path,hidden,|mut batch|{
-            if let Ok(newer)=rx.try_recv() { next=Some(newer); return false; }
+        let streamed=list_directory_streamed_cancellable(&path,hidden,|mut batch|{
             sort_listing(&mut batch,sort);
             all.extend(batch.iter().cloned());
             send_wake(&mut wake,&result,WorkerResult::ScanBatch{generation,path:path.clone(),first,entries:batch});
             first=false;
             true
+        },||{
+            if let Ok(newer)=rx.try_recv() { next=Some(newer); true } else { false }
         });
         match streamed {
             Ok(false)=>{},
