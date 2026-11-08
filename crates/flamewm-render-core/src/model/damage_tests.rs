@@ -328,3 +328,74 @@ fn unchanged_text_ref_keeps_revision_and_overrides() {
     doc.set_text_ref("panel", "again").expect("change again");
     assert_ne!(doc.revision(), revision, "changed text still dirties");
 }
+
+/// Track(1) -> one empty fill(2), like a task-manager CPU bar. `fill_absolute` picks the
+/// placement under test: an absolutely positioned fill is an isolated box.
+fn bar_scene(fill_absolute: bool) -> RuntimeDocument {
+    let root = Style {
+        width: Length::Px(VIEW_W),
+        height: Length::Px(VIEW_H),
+        ..Style::default()
+    };
+    let track = Style {
+        width: Length::Px(200.0),
+        height: Length::Px(11.0),
+        ..Style::default()
+    };
+    let fill = Style {
+        position: if fill_absolute {
+            Position::Absolute
+        } else {
+            Position::Flow
+        },
+        left: Length::Px(0.0),
+        top: Length::Px(0.0),
+        width: Length::Px(0.0),
+        height: Length::Px(7.0),
+        ..Style::default()
+    };
+    let nodes = vec![
+        node(NodeKind::Element, "root", "", None, Some(1), None, root),
+        node(
+            NodeKind::Element,
+            "track",
+            "",
+            Some(0),
+            Some(2),
+            None,
+            track,
+        ),
+        node(NodeKind::Element, "fill", "", Some(1), None, None, fill),
+    ];
+    RuntimeDocument::new(CompiledDocument {
+        source_fingerprint: 0,
+        root: 0,
+        variables: Vec::new(),
+        assets: Vec::new(),
+        nodes,
+    })
+    .expect("bar scene validates")
+}
+
+#[test]
+fn one_bar_width_update_is_region_damage_only_when_fill_is_isolated() {
+    // Flow-placed fill: its width write is a non-isolated geometry change, which latches Full.
+    let mut flow = bar_scene(false);
+    let old = prime(&mut flow);
+    flow.set_size_px("fill", 60.0, 7.0).expect("flow width");
+    assert_eq!(
+        damage(&mut flow, &old),
+        SurfaceDamage::Full,
+        "flow fill width write is the Full-damage cause"
+    );
+    // Absolutely placed fill: the same write stays node-scoped and damages only the bar.
+    let mut isolated = bar_scene(true);
+    let old = prime(&mut isolated);
+    isolated
+        .set_size_px("fill", 60.0, 7.0)
+        .expect("isolated width");
+    assert!(
+        matches!(damage(&mut isolated, &old), SurfaceDamage::Region(_)),
+        "isolated fill width write must not be Full"
+    );
+}
