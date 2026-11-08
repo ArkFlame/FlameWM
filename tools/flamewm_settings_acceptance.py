@@ -1788,9 +1788,6 @@ def run_ss15(ctx: Ctx, args: argparse.Namespace) -> dict:
         prev_hash = image_region_digest(prev_path, mode_label_rect)
         mode_endpoint_ok = mode_endpoint_ok and code == 0 and after_text == before_text and prev_hash == label_hash
         page = 0
-        # The disabled-prev click and the first next click land ~0.4 s apart. In the full run the first
-        # next click was dropped (label unchanged) while later, further-apart clicks paged. Keep them apart.
-        time.sleep(1.0)
         for next_page in range(1, mode_pages):
             coordinate = settings_relative_point(ctx, geometry, (760, 497))
             code, command = send_input(ctx, coordinate, None)
