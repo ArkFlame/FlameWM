@@ -2264,6 +2264,46 @@ def restart_owned_wm(ctx: Ctx, args: argparse.Namespace, name: str) -> bool:
     return False
 
 
+ISOLATION_KEEP = ("xephyr",)
+PRIVATE_TREE_DIRS = ("home", "xdg-config", "xdg-data", "xdg-cache", "xdg-runtime")
+
+
+def wipe_private_tree(run: Path) -> None:
+    """Empty the private HOME/XDG tree so the next scenario starts from the product defaults."""
+    for name in PRIVATE_TREE_DIRS:
+        target = run / name
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True)
+        if name == "xdg-runtime":
+            os.chmod(target, 0o700)
+
+
+def reset_scenario_state(ctx: Ctx, args: argparse.Namespace, sid: str) -> bool:
+    """Give one scenario a clean session on the shared owned display.
+
+    Stops every owned child except Xephyr (settings clients, desktop/shell, xterm fixtures, monitors),
+    wipes the private config/data tree, and starts a fresh WM. Returns False when the WM does not come up.
+    """
+    keep = [o for o in ctx.owned if o.name in ISOLATION_KEEP]
+    for owned in reversed(ctx.owned):
+        if owned.name not in ISOLATION_KEEP:
+            ctx.stop(owned)
+    ctx.owned = keep
+    ctx.wm = None
+    wipe_private_tree(ctx.run)
+    ctx.wm = ctx.spawn(f"flamewm-{sid.lower()}", [args.wm_bin], ctx.app_env)
+    time.sleep(args.settle_seconds)
+    return ctx.wm.proc.poll() is None
+
+
+def isolated(ctx: Ctx, args: argparse.Namespace, sid: str, runner) -> dict:
+    """Run one scenario runner after a reset; a failed reset is an environment block, never a product PASS."""
+    if not reset_scenario_state(ctx, args, sid):
+        return blocked(sid, f"{sid}: isolation reset could not start a fresh flamewm WM")
+    return runner(ctx, args)
+
+
 GTK_ICON_CONSUMER = """
 import json, sys, time, gi
 gi.require_version("Gtk", "3.0")
@@ -4431,7 +4471,7 @@ def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) 
                                            [c for s in all_shots for c in s["commands"]])
 
     if wanted("SS03"):
-        results["SS03"] = run_ss03(ctx, args)
+        results["SS03"] = isolated(ctx, args, "SS03", run_ss03)
 
     # NATIVE_ONE_OUTPUT (legacy, was labelled SS03): Displays page with one connected output.
     # It covers only the single-output case of canonical SS08, so it never makes SS08 PASS.
@@ -4454,28 +4494,28 @@ def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) 
 
     # NATIVE_HOTKEY_INPUT (legacy, was labelled SS06): PASS only on a measured effect (see run_ss06).
     if wanted("NATIVE_HOTKEY_INPUT"):
-        results["NATIVE_HOTKEY_INPUT"] = run_ss06(ctx, args)
+        results["NATIVE_HOTKEY_INPUT"] = isolated(ctx, args, "NATIVE_HOTKEY_INPUT", run_ss06)
     if wanted("SS04"):
-        results["SS04"] = run_ss04(ctx, args)
+        results["SS04"] = isolated(ctx, args, "SS04", run_ss04)
     if wanted("SS05"):
-        results["SS05"] = run_ss05(ctx, args)
+        results["SS05"] = isolated(ctx, args, "SS05", run_ss05)
     if wanted("SS06"):
-        results["SS06"] = run_ss06_desktop(ctx, args)
+        results["SS06"] = isolated(ctx, args, "SS06", run_ss06_desktop)
     if wanted("SS07"):
-        results["SS07"] = run_ss07(ctx, args)
+        results["SS07"] = isolated(ctx, args, "SS07", run_ss07)
     if wanted("SS10"):
-        results["SS10"] = run_ss10(ctx, args)
+        results["SS10"] = isolated(ctx, args, "SS10", run_ss10)
     if wanted("SS11"):
-        results["SS11"] = run_ss11(ctx, args)
+        results["SS11"] = isolated(ctx, args, "SS11", run_ss11)
     # SS12 is stricter than pixel-based capture smoke: verify lease method ownership,
     # authoritative shortcut state, normal Start replay, owner-loss restoration, and
     # Escape clear / Reset persistence.
     if wanted("SS12"):
-        results["SS12"] = run_ss12(ctx, args)
+        results["SS12"] = isolated(ctx, args, "SS12", run_ss12)
     if wanted("SS13"):
-        results["SS13"] = run_ss13(ctx, args)
+        results["SS13"] = isolated(ctx, args, "SS13", run_ss13)
     if wanted("SS15"):
-        results["SS15"] = run_ss15(ctx, args)
+        results["SS15"] = isolated(ctx, args, "SS15", run_ss15)
     # SS14 currently exercises only Settings.accent: full status remains NOT_RUN until
     # independent panels, shortcuts, display rollback and signal-loss scenarios exist.
     if wanted("SS14"):
