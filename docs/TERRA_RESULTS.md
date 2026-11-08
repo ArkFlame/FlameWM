@@ -200,3 +200,22 @@
   - Xvfb before/after (HEAD binary vs fixed binary, Ctrl+L then empty-list click, and Ctrl+F then the same click): HEAD keeps the path caret and the search caret; fixed build shows breadcrumbs and an unfocused search field. Screenshots: `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/iv-driver/ex-before/2-after-empty-click.png`, `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/iv-driver/ex-after/2-after-empty-click.png`, `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/iv-driver/ex-search-before/2-after-empty-click.png`, `/tmp/claude-1000/-run-media-linsaftw-SDD-GitHub-ArkFlame-flamewm-webrender/84cf5e3a-57bb-4dfd-9c4b-adc66fab352b/scratchpad/iv-driver/ex-search-after/2-after-empty-click.png`.
 - Not verified: wheel-driven zoom on HEAD vs fixed in the same run (baseline wheel frames were not sampled mid-burst); pointer-drag pan; the viewer in a real WM session.
 - Risk: `01e84c4e` (another worker's explorer commit) already contained the `mod input_focus_tests;` line; HEAD builds only after the test file lands with this commit.
+
+## G6 Settings: Startup, Default Applications, Keyboard Shortcuts — PARTIAL
+
+- Startup Applications: `488ccaf9`. Rows list, toggle (`Hidden` / `X-GNOME-Autostart-enabled`), and remove (system entries masked). Tests: `startup_page.rs` (2), backend `xdg_applications` (21 in settings-core). Live Xvfb screenshot verified. Not done: add from installed apps, custom command, per-entry delay.
+- Default Applications: `9677dc4e`, `a40eddcd`. Seven MIME-group rows cycle through installed handlers and write only the group MIME types each handler declares, into `<desktop>-mimeapps.list` under `XDG_CURRENT_DESKTOP`. The File manager row was removed because the Desktop page's "Default file manager" control already owns `inode/directory`. Tests: `default_apps_page.rs` (3). Live Xvfb click verified: `$R/home/.config/flamewm-mimeapps.list` gained `image/png` and `image/jpeg` lines.
+- Keyboard Shortcuts: no code change. Existing Hotkeys page already lists every binding, captures edits, rejects a duplicate inline with the owner's name (`duplicate_hotkey_is_rejected_inline_without_a_service_write`), and resets via Backspace and per-row Reset (`backspace_restores_the_default_hotkey_and_ends_capture`, `hotkey_reset_button_restores_default_through_the_service`).
+- Gates: `cargo test -p flamewm-settings-core -p flamewm-settings --lib` → exit 0 (213 + 21), no warnings. `python3 -I tools/architecture_guard.py` → exit 1 from `crates/flamewm-shell` (`renderer-dependency` in `Cargo.toml`, `renderer-symbol` in `projection/audio.rs`). The cause is another worker's uncommitted `audio.rs` edit, not the settings slices.
+- Not verified: Startup extras; `flamewm-settings` in a live WM for the Default Applications page after removing the File manager row.
+
+## Settings acceptance triage run 1 (clean worktree 488ccaf9) — FAIL, partial triage
+
+- Build: `cargo build -p flamewm-wm -p flamewm-shell -p flamewm-desktop -p flamewm-settings` in `scratchpad/clean` with `CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-g6-clean` → exit 0.
+- Run: `DISPLAY=:97 scripts/settings-acceptance --run-dir <scratch>/accept-run1 --display :102 --wm-bin …/flamewm --settings-bin …/flamewm-settings --shell-bin …/flamewm-shell --desktop-bin …/flamewm-desktop` → exit 1, verdict FAIL.
+- Results: PASS SS00, SS01, SS04, SS12. FAIL SS02, SS03, SS05, SS06, SS07, SS09, SS11, SS13, SS14, SS15, SS16 (pre-existing, excluded), SS19. NOT_RUN SS10, SS17, SS18. ENVIRONMENT_BLOCKED SS08.
+- SS01 unlocked by the correct WM binary (`flamewm`, not `flamewm-session`).
+- SS02 root cause, narrowed: `launch.rs` parses `--window-size` and `runtime.rs` passes it to `normal_window_config`, yet live windows measure 820x540 for 760x500/960x640 requests. The gap lies in the window sizing or layout path, not the page parser. Not yet fixed.
+- SS03 (accent `selected_visuals`, `reset_persisted_after_restart`) and SS05 (wallpaper chooser `success_applied_without_input`, `cancel_preserved_without_error`) are not yet investigated.
+- Not verified: SS06, SS07, SS09, SS11, SS13, SS14, SS15, SS19 causes; SS10/17/18 NOT_RUN reasons.
+- Risk: the matrix is still FAIL, so the acceptance gate is not met.
